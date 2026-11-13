@@ -89,6 +89,13 @@ describe('session executor: validate', () => {
     expect(out).toEqual({ ok: true, config: { target: 'task-1', prompt: 'read them', instructions: 'read them' } });
   });
 
+  it('preserves declared portable work and required capabilities through the real config validator', () => {
+    const out = exec.validate({ target: 'task-1', prompt: 'Read server notes', placement: { portable: true, capabilities: ['always-on'] } });
+    expect(out.ok && out.config.placement).toEqual({ portable: true, capabilities: ['always-on'] });
+    expect(exec.validate({ target: 'task-1', prompt: 'x', placement: { portable: false } })).toEqual({ ok: true, config: { target: 'task-1', prompt: 'x', instructions: 'x' } });
+    expect(exec.validate({ target: 'task-1', prompt: 'x', placement: { portable: false, capabilities: ['linux'] } }).ok).toBe(false);
+  });
+
   it('accepts a legacy payload edit that only set `instructions`', () => {
     const out = exec.validate({ target: 'task-1', instructions: 'from the legacy payload' });
     expect(out.ok && out.config.prompt).toBe('from the legacy payload');

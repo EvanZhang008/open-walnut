@@ -20,6 +20,13 @@
  * on as before. Nothing here starts a session: the host gate, credentials and the engine's own
  * checks still run in quickStartSession, on the host chosen.
  *
+ * A named host that is asleep or unreachable (its link down for 30 s of awake time, sourceDownReason) is unavailable
+ * the same way, for an automatic run: it is never admitted on there (a spawn there would only
+ * fail), portable work takes the same search with placement told that host cannot keep it and
+ * goes only to a host tagged always-on (this Mac too only when its card says so), and
+ * a run kept there gets a HostsFullError with that reason (no slot words): its capacity wait holds
+ * it until the host is back. A person's start is exempt, as from the slots.
+ *
  * What may move: server API work, done through Walnut's tools in Walnut's home. A routine says
  * so itself (`placement: { portable: true, capabilities }` on its claude-code config, carried on
  * the launch: RoutinePlacement), and console agents registered in PORTABLE_AGENT_WORK are
@@ -149,6 +156,11 @@ export interface RunPlacementDeps {
   ensureDir(dir: string, host: string): Promise<void>;
   /** This server's Walnut home. */
   localHome(): Promise<string>;
+  /**
+   * Why a remote host cannot take work now (asleep or unreachable: its link was lost), with its
+   * name, or null when it can or that is not known (a link never made here may be dialled).
+   */
+  unavailable(host: string): Promise<{ label: string; reason: string } | null>;
 }
 
 export interface RoutineAdmission {
@@ -285,36 +297,69 @@ async function bounded<T>(work: Promise<T>, deadline: number, what: string, late
   }
 }
 
+/** How long a lost link may be down before its host counts as unavailable: a moment's drop is likely reconnecting. */
+export const SOURCE_DOWN_AFTER_MS = 30_000;
+const SOURCE_DOWN_REASON = 'it is not connected (asleep or unreachable)';
+/** The fleet tag of a host that stays up (hosts/capabilities.ts). */
+const ALWAYS_ON_TAG = 'always-on';
+
 /**
- * Admit a routine's run: on the host its launch names, else (that host full, the work
- * portable) on the host placement picks that passes hostBlocker and admits it. Throws what
- * the named host's admission threw when nothing else takes it, or when the search ran past
+ * Why a remote host whose link is not up counts as unavailable, by this machine's AWAKE time its
+ * link that was up has been down (daemon-connection.ts getDaemonDisconnectedAwakeMs), or null.
+ * Never wall-clock time: a Mac that slept 8 h and has not relinked yet is no proof the host is
+ * gone. 0 (a link never made here, which the start may dial; one up now) and a drop under
+ * SOURCE_DOWN_AFTER_MS (likely reconnecting) are not known to be down. Words without live
+ * numbers: a waiting entry keeps them.
+ */
+export function sourceDownReason(awakeDownMs: number): string | null {
+  return Number.isFinite(awakeDownMs) && awakeDownMs >= SOURCE_DOWN_AFTER_MS ? SOURCE_DOWN_REASON : null;
+}
+
+/**
+ * Admit a routine's run: on the host its launch names, else (that host full, or for an
+ * automatic run unavailable, and the work portable) on the host placement picks that passes
+ * hostBlocker and admits it. An unavailable host is never admitted on, so a run kept there is
+ * refused with a HostsFullError saying why (no slot words) and waits like one on a full host.
+ * Throws the named host's refusal when nothing else takes it, or when the search ran past
  * placementBudgetMs (a slot taken after that is given back).
  */
 export async function admitRoutineLaunch(
   launch: RoutineLaunch, opts: AdmitRoutineOpts, deps: RunPlacementDeps = defaultRunPlacementDeps(),
 ): Promise<RoutineAdmission> {
   const from = keyOf(launch.host);
+  // A person's start goes to the host it names whatever it is doing (its errors are theirs to read).
+  let deadline = Date.now() + placementBudgetMs();
+  const down = opts.admit.automatic && from !== LOCAL_HOST
+    ? await bounded(deps.unavailable(from), deadline, 'reading whether its host answers').catch((err: unknown) => {
+      // Not known: the start goes on as before.
+      log.cron.debug('routine placement: whether its host answers is not known', { host: from, error: err instanceof Error ? err.message : String(err) });
+      return null;
+    })
+    : null;
   let refused: HostsFullError;
-  try {
-    return { launch, release: await deps.admit(opts.admissionId, from, opts.admit), host: from, moved: false };
-  } catch (err) {
-    if (!(err instanceof HostsFullError)) throw err;
-    refused = err;
+  if (down) {
+    refused = new HostsFullError(`Not started: ${down.label} cannot take it (${down.reason}).`, { taskId: opts.admissionId, host: from, label: down.label, reason: down.reason });
+  } else {
+    try {
+      return { launch, release: await deps.admit(opts.admissionId, from, opts.admit), host: from, moved: false };
+    } catch (err) {
+      if (!(err instanceof HostsFullError)) throw err;
+      refused = err;
+    }
+    deadline = Date.now() + placementBudgetMs();
   }
   if (opts.keepHost) throw refused;
-  const deadline = Date.now() + placementBudgetMs();
   try {
-    return await searchElsewhere(launch, opts, deps, from, refused, deadline);
+    return await searchElsewhere(launch, opts, deps, from, refused, !!down, deadline);
   } catch (err) {
     if (!(err instanceof PlacementTimeout)) throw err;
-    log.cron.warn('routine placement: the search for another host ran out of time; the run keeps its full host', { host: from, jobId: launch.jobId, error: err.message });
+    log.cron.warn('routine placement: the search for another host ran out of time; the run keeps its host', { host: from, jobId: launch.jobId, why: refused.detail.reason, error: err.message });
     throw refused;
   }
 }
 
 async function searchElsewhere(
-  launch: RoutineLaunch, opts: AdmitRoutineOpts, deps: RunPlacementDeps, from: string, refused: HostsFullError, deadline: number,
+  launch: RoutineLaunch, opts: AdmitRoutineOpts, deps: RunPlacementDeps, from: string, refused: HostsFullError, unavailable: boolean, deadline: number,
 ): Promise<RoutineAdmission> {
   // A task that has a session keeps its host: its conversation is there, or a spawn whose outcome is unknown.
   if (opts.existingTaskId && await bounded(deps.hasSession(opts.existingTaskId), deadline, 'reading its sessions').catch((e: unknown) => {
@@ -323,14 +368,21 @@ async function searchElsewhere(
   })) throw refused;
   const portable = await bounded(portableWorkOf(launch, from, deps), deadline, 'reading what the run needs');
   if ('stays' in portable) {
-    log.cron.debug('routine placement: the run keeps its full host', { host: from, jobId: launch.jobId, why: portable.stays });
+    log.cron.debug('routine placement: the run keeps its host', { host: from, jobId: launch.jobId, refused: refused.detail.reason, why: portable.stays });
     throw refused;
   }
-  const tried = new Map<string, string>([[from, 'it is the full host']]);
+  // Work leaving a host that is asleep goes only to a host that stays up (fleet tag always-on,
+  // hosts/capabilities.ts): a laptop could sleep the same way. A full host's work goes anywhere it fits.
+  const work: PortableWork = unavailable
+    ? { ...portable.work, tags: [...new Set([...portable.work.tags, ALWAYS_ON_TAG])] }
+    : portable.work;
+  const tried = new Map<string, string>([[from, unavailable ? refused.detail.reason : 'it is the full host']]);
   for (let round = 0; round < MAX_TRIES; round++) {
     const decision = await bounded(deps.place({
       defaultHost: from === LOCAL_HOST ? '' : from, text: portable.text, cwd: launch.cwd, toolsOnly: true,
-      eligible: async (host) => tried.get(host) ?? hostBlocker(host, portable.work, launch, opts, deps),
+      // Placement never keeps the work on a host that cannot take it now.
+      ...(unavailable ? { unavailable: refused.detail.reason } : {}),
+      eligible: async (host) => tried.get(host) ?? hostBlocker(host, work, launch, opts, deps),
     }), deadline, 'choosing a host').catch((err: unknown) => {
       if (err instanceof PlacementTimeout) throw err;
       log.cron.warn('routine placement: no host could be chosen', { error: err instanceof Error ? err.message : String(err) });
@@ -383,9 +435,9 @@ async function searchElsewhere(
     if (to === LOCAL_HOST) delete placed.host;
     else placed.host = to;
     const view = decision.hosts.find((h) => h.host === to);
-    const reason = `${refused.detail.label ?? from} has no room (${refused.detail.reason}); ${view?.label ?? to} has room`
+    const reason = `${refused.detail.label ?? from} ${unavailable ? 'cannot take it' : 'has no room'} (${refused.detail.reason}); ${view?.label ?? (to === LOCAL_HOST ? 'this Mac' : to)} has room`
       + (view ? ` (${view.running} of ${view.runningLimit} slots taken)` : '');
-    log.cron.info('routine placement: a full host\'s run starts on another host', { from, to, jobId: launch.jobId, what: portable.work.what, cwd, reason });
+    log.cron.info('routine placement: the run starts on another host', { from, to, jobId: launch.jobId, what: work.what, cwd, reason });
     return { launch: placed, release, host: to, moved: true, reason };
   }
   throw refused;
@@ -476,5 +528,14 @@ function realDeps(): RunPlacementDeps {
       await ensureCwd(dir, host === LOCAL_HOST ? undefined : host);
     },
     localHome: async () => (await import('../../constants.js')).WALNUT_HOME,
+    async unavailable(host) {
+      // Only the link facts this server holds: nothing is dialled to ask (the start itself would dial).
+      if (host === LOCAL_HOST || await conn(host)) return null;
+      const { getDaemonDisconnectedAwakeMs } = await import('../../providers/daemon-connection.js');
+      const reason = sourceDownReason(getDaemonDisconnectedAwakeMs(host));
+      if (!reason) return null;
+      const [{ getConfig }, { hostDisplayName }] = await Promise.all([import('../config-manager.js'), import('../hosts/host-display-name.js')]);
+      return { label: hostDisplayName(host, (await getConfig()).hosts?.[host]?.label), reason };
+    },
   };
 }

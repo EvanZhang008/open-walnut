@@ -3872,6 +3872,27 @@ passthrough). The natural-language draft endpoint is deliberately NOT in v1
   Inbox Triage's existing configuration is portable without being saved again.
   Host-bound routines take the next automatic slot before ordinary queued starts;
   a person's Start remains immediate.
+  A named host that has been unreachable for 30 seconds of awake time is handled
+  before slot admission. Portable work can use an always-on alternative; a brief
+  reconnect or the Mac's own sleep does not establish that the host is unavailable.
+- While the primary is awake, eligible portable routines may hand their clocks to
+  a connected, capable, always-on daemon with room. This uses the existing
+  `clock-routine-v1` and `clock-host-start-v1` capabilities and respects the
+  `cloud_bridge.backup_leader` switch. The daemon keeps time and starts the run
+  while the primary is asleep. The routine's configured host stays unchanged.
+  A host that already accepted a start keeps that clock across a lost link;
+  recovery records and adopts its result once, without running the slot again.
+  The primary never takes an autonomous clock back merely because it is unreachable.
+- Task-targeted `session` routines may also declare `placement.portable`.
+  Organization Main and lead routines whose instructions need only Walnut's API
+  can run as a separate routine task while their owner's machine sleeps. The owner
+  keeps their conversation and role. The run carries a dated, bounded sample of the
+  owner's recent conversation, retaining whole messages and marking omissions.
+  Memory appends are saved in the host's journal and merged after the primary's
+  current memory at recovery. Replacing memory or writing memory-folder files still
+  requires the primary. The organization switch also gates these separate runs. Local files, Mac tools, init processors,
+  checks, unsupported schedules and missing capabilities keep work on its original
+  path; slots due there are merged and caught up when it can run again.
 - `PATCH /api/v1/routines/:id` → `{ "job" }`.
 - `DELETE /api/v1/routines/:id` → `204`; unknown id → `404 not_found`
   (unlike the tolerant legacy web route — a phone delete fails loudly).

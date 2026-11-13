@@ -488,6 +488,8 @@ export async function choosePlacement(input: {
   eligible?: (host: string, why: { forFiles: boolean }) => Promise<string | null>;
   paths?: readonly string[];
   checkPaths?: (host: string, paths: string[]) => Promise<PathsOnHost | null>;
+  /** Why the default host cannot take the work now (asleep, unreachable): it is never kept there. */
+  unavailable?: string;
 }): Promise<PlacementDecision | null> {
   if (process.env.WALNUT_PLACE_BY_LOAD === '0') return null;
   const from = input.defaultHost || LOCAL;
@@ -503,6 +505,11 @@ export async function choosePlacement(input: {
   if (candidates.length < 2) return null;
   const hosts = await hostLoads({ hosts: candidates });
   const here = hosts.find((h) => h.host === from)!;
+  // A host that cannot take it reads as busy, whatever its last load reading said.
+  if (input.unavailable) {
+    here.busy = true;
+    here.reasons.push(input.unavailable);
+  }
   const name = (h: HostLoadView) => h.label;
   if (pinned) {
     return from === LOCAL ? { host: '', moved: false, from, reason: `stays on this Mac: ${pinned}`, hosts } : null;
@@ -551,7 +558,7 @@ export async function choosePlacement(input: {
       if (h !== here && !keeps(h)) h.reasons.push(`it does not have ${pathList(files.lacks(h.host, fromHas))}, which the task names`);
     }
   }
-  if (!here.busy || !here.known) {
+  if (!input.unavailable && (!here.busy || !here.known)) {
     return { host: input.defaultHost, moved: false, from, reason: here.known ? `${name(here)} has room` : `${name(here)}'s load is unknown; it stays there`, hosts };
   }
   // Weight 0 ("never") is no place to go; the Mac stays a candidate only above it.

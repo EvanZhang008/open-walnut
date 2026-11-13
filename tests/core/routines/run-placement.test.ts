@@ -18,6 +18,16 @@ import path from 'node:path'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-run-placement'))
+/** The pool's link facts a test names (unset: the real pool's answer). */
+const link = vi.hoisted(() => ({ awakeDownMs: null as number | null, lostSince: null as number | null }))
+vi.mock('../../../src/providers/daemon-connection.js', async (orig) => {
+  const real = await orig<typeof import('../../../src/providers/daemon-connection.js')>()
+  return {
+    ...real,
+    getDaemonDisconnectedAwakeMs: (host: string) => link.awakeDownMs ?? real.getDaemonDisconnectedAwakeMs(host),
+    daemonLinkLostSince: (host: string) => link.lostSince ?? real.daemonLinkLostSince(host),
+  }
+})
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { updateConfig } from '../../../src/core/config-manager.js'
@@ -28,7 +38,7 @@ import {
 } from '../../../src/core/sessions/host-admission.js'
 import {
   __setRunPlacementDepsForTesting, admitRoutineLaunch, defaultRunPlacementDeps, mapWalnutHomeCwd, portableWorkOf,
-  routineLaunchPlacement, routinePlacementOf, type AdmitOptions, type RunPlacementDeps,
+  routineLaunchPlacement, routinePlacementOf, sourceDownReason, type AdmitOptions, type RunPlacementDeps,
 } from '../../../src/core/routines/run-placement.js'
 import { createClaudeCodeExecutor } from '../../../src/core/routines/executors/claude-code.js'
 import { TRIAGE_RUN_INSTRUCTIONS, triageInstructionsFor } from '../../../src/core/triage/bootstrap.js'
@@ -72,6 +82,8 @@ interface HostFact {
   mkdirFails?: boolean
   /** Disconnects as soon as its folder is made. */
   dropsAfterMkdir?: boolean
+  /** Asleep or unreachable: its link was lost (the unavailable fact). Default: it answers. */
+  down?: boolean
 }
 
 /**
@@ -84,6 +96,7 @@ function fleet(hosts: Record<string, HostFact>, opts: { order?: string[]; placeT
   const asked: string[] = []
   const mkdirs: string[] = []
   const placements: number[] = []
+  const unavailableAsked: string[] = []
   const deps: RunPlacementDeps = {
     async admit(id, host, o) {
       expect(o).toEqual(ADMIT)
@@ -104,7 +117,8 @@ function fleet(hosts: Record<string, HostFact>, opts: { order?: string[]; placeT
       }
       return { host: input.defaultHost, moved: false, from, reason: 'no other host has room', hosts: [] } as PlacementDecision
     },
-    connected: async (h) => hosts[h]?.connected !== false,
+    unavailable: async (h) => (unavailableAsked.push(h), hosts[h]?.down ? { label: h, reason: 'it is not connected (asleep or unreachable)' } : null),
+    connected: async (h) => hosts[h]?.connected !== false && !hosts[h]?.down,
     hasDaemonCap: async (h, cap) => (hosts[h]?.connected === false ? null : (hosts[h]?.caps ?? ['walnut-mcp-v1']).includes(cap)),
     remoteHome: async (h) => (hosts[h] && 'home' in hosts[h] ? hosts[h].home! : CLOUD_HOME),
     closed: async (h) => !!hosts[h]?.closed,
@@ -120,7 +134,7 @@ function fleet(hosts: Record<string, HostFact>, opts: { order?: string[]; placeT
     },
     localHome: async () => MAC_HOME,
   }
-  return { deps, admitted, released, asked, mkdirs, placements }
+  return { deps, admitted, released, asked, mkdirs, placements, unavailableAsked }
 }
 
 const run = (launch: RoutineLaunch, deps: RunPlacementDeps, extra: Partial<Parameters<typeof admitRoutineLaunch>[1]> = {}) =>
@@ -314,6 +328,194 @@ describe('races: a slot taken on a host the run leaves is given back', () => {
   })
 })
 
+/**
+ * A routine whose named host is asleep or unreachable (its link was lost): an automatic run is
+ * never admitted on it and never spawned there to fail. Portable work goes to a connected host
+ * with room that can take it, chosen the same way as for a full host; anything else is refused
+ * with an honest reason (no slot words), so the caller records the capacity wait and the queue
+ * holds it until the host is back.
+ */
+describe('an unreachable named host is unavailable, the same as a full one', () => {
+  const DOWN = 'it is not connected (asleep or unreachable)'
+  const onCloud = (over: Partial<RoutineLaunch> = {}) => triage({ host: CLOUD, cwd: `${CLOUD_HOME}/.open-walnut`, ...over })
+
+  it('portable Triage on an asleep clouddev starts on this Mac when its card says always-on, in its Walnut home, nothing admitted on clouddev', async () => {
+    const f = fleet({ __local__: { tags: ['macos', 'always-on'] }, [CLOUD]: { down: true } })
+    const got = await run(onCloud(), f.deps)
+    expect(got).toMatchObject({ moved: true, host: '__local__' })
+    expect(got.launch.cwd).toBe(MAC_HOME)
+    expect('host' in got.launch).toBe(false)
+    expect(got.reason).toBe(`clouddev cannot take it (${DOWN}); this Mac has room`)
+    expect(f.admitted).toEqual(['__local__'])
+    got.release()
+    expect(f.released).toEqual(['__local__'])
+  })
+
+  it('a host that is not always-on (this Mac, a laptop) or whose card was never read never takes work off an asleep host', async () => {
+    for (const tags of [['macos', 'local'], null]) {
+      const f = fleet({ __local__: { tags }, [CLOUD]: { down: true }, laptop: { tags: ['linux'] } }, { order: ['__local__', 'laptop'] })
+      const err = await run(onCloud(), f.deps).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(HostsFullError)
+      expect((err as HostsFullError).detail).toMatchObject({ host: CLOUD, reason: DOWN })
+      expect(f.asked).toEqual(['__local__', 'laptop'])
+      expect(f.admitted).toEqual([])
+    }
+  })
+
+  it('a full host\'s work still goes to a host that is not always-on (only an asleep host\'s work needs one)', async () => {
+    const f = fleet({ __local__: { tags: ['macos', 'local'] }, [CLOUD]: { full: true } })
+    expect((await run(onCloud(), f.deps)).host).toBe('__local__')
+  })
+
+  it('the routine\'s own capabilities are required alongside always-on', async () => {
+    const launch: RoutineLaunch = { message: 'Digest', cwd: `${CLOUD_HOME}/.open-walnut`, host: CLOUD, source: 'routine', placement: { portable: true, capabilities: ['docker'] } }
+    const f = fleet({ [CLOUD]: { down: true }, box2: { tags: ['always-on'] }, box3: { tags: ['docker'] }, box4: { tags: ['docker', 'always-on'] } }, { order: ['box2', 'box3', 'box4'] })
+    expect((await run(launch, f.deps)).host).toBe('box4')
+  })
+
+  it('the host it moves to must still be connected and pass every check: the next capable one takes it', async () => {
+    const on = ['linux', 'always-on']
+    const f = fleet({ [CLOUD]: { down: true }, __local__: { full: true, tags: on }, box2: { connected: false, tags: on }, box3: { caps: [], tags: on }, box4: { tags: on } }, { order: ['__local__', 'box2', 'box3', 'box4'] })
+    const got = await run(onCloud(), f.deps)
+    expect(got.host).toBe('box4')
+    expect(got.launch).toMatchObject({ host: 'box4', cwd: `${CLOUD_HOME}/.open-walnut` })
+    expect(f.admitted).toEqual(['box4'])
+  })
+
+  it('no other host can take it: the unavailable refusal (its host, honest words, no slot numbers), nothing held', async () => {
+    const f = fleet({ [CLOUD]: { down: true }, __local__: { full: true, tags: ['always-on'] } })
+    const err = await run(onCloud(), f.deps).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(HostsFullError)
+    const detail = (err as HostsFullError).detail
+    expect(detail).toEqual({ taskId: 'routine-run:sid-1', host: CLOUD, label: CLOUD, reason: DOWN })
+    expect((err as Error).message).toBe(`Not started: clouddev cannot take it (${DOWN}).`)
+    expect(f.admitted).toEqual([])
+    expect(f.released).toEqual([])
+  })
+
+  // Class guard: every launch shape that keeps its host stays pending on an unavailable host,
+  // never admitted (so never spawned) there, and the refusal never claims full slots.
+  const pinned: Array<[string, RoutineLaunch, Partial<Parameters<typeof admitRoutineLaunch>[1]>?]> = [
+    ['an ordinary claude-code routine in a repository', { message: 'Write the nightly report', cwd: '/home/me/repo', host: CLOUD, source: 'routine', project: 'Routines' }],
+    ['another console agent\'s run', onCloud({ agentId: 'mentor' })],
+    ['a run whose instructions need the Mac\'s tools', onCloud(needs('Then run xcodebuild test.'))],
+    ['an org start', onCloud({ source: 'org-autostart' })],
+    ['a spawn retry the caller pins', onCloud(), { keepHost: true }],
+    ['a task whose spawn outcome is unknown (it has a session)', onCloud(), { existingTaskId: 'task-with-session' }],
+  ]
+  for (const [name, launch, extra] of pinned) {
+    it(`stays pending: ${name}`, async () => {
+      const f = fleet({ [CLOUD]: { down: true }, __local__: {} })
+      const err = await run(launch, f.deps, extra).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(HostsFullError)
+      const detail = (err as HostsFullError).detail
+      expect(detail).toMatchObject({ host: CLOUD, reason: DOWN })
+      expect(detail.running).toBeUndefined()
+      expect(detail.cap).toBeUndefined()
+      expect(detail.reason).not.toMatch(/slot/)
+      expect(f.admitted).toEqual([])
+      expect(f.mkdirs).toEqual([])
+    })
+  }
+
+  it('a person\'s start is exempt: it is admitted on the host it names and the unavailable fact is not read', async () => {
+    const f = fleet({ [CLOUD]: { down: true }, __local__: {} })
+    const admit = f.deps.admit
+    f.deps.admit = (id, host) => admit(id, host, ADMIT)
+    const got = await run(onCloud(), f.deps, { admit: { automatic: false, respectWaiting: false, routine: true } })
+    expect(got).toMatchObject({ moved: false, host: CLOUD })
+    expect(f.unavailableAsked).toEqual([])
+  })
+
+  it('this Mac (the server itself) is never asked whether it is unavailable', async () => {
+    const f = fleet({ __local__: {}, [CLOUD]: {} })
+    await run(triage(), f.deps)
+    expect(f.unavailableAsked).toEqual([])
+  })
+
+  it('a connected clouddev with room admits the run there as before', async () => {
+    const f = fleet({ __local__: {}, [CLOUD]: {} })
+    const got = await run(onCloud(), f.deps)
+    expect(got).toMatchObject({ moved: false, host: CLOUD })
+    expect(f.unavailableAsked).toEqual([CLOUD])
+  })
+
+  it('an unavailable fact that fails or never answers counts as available: admitted on its host as before, within the budget', async () => {
+    const f = fleet({ __local__: {}, [CLOUD]: {} })
+    f.deps.unavailable = async () => { throw new Error('pool closed') }
+    expect((await run(onCloud(), f.deps)).host).toBe(CLOUD)
+    process.env.WALNUT_ROUTINE_PLACE_MS = '50'
+    try {
+      const g = fleet({ __local__: {}, [CLOUD]: {} })
+      g.deps.unavailable = () => new Promise(() => {})
+      const t0 = Date.now()
+      expect((await run(onCloud(), g.deps)).host).toBe(CLOUD)
+      expect(Date.now() - t0).toBeLessThan(2_000)
+    } finally {
+      delete process.env.WALNUT_ROUTINE_PLACE_MS
+    }
+  })
+
+  it('the search from an unavailable host is bounded too: past the budget, the unavailable refusal', async () => {
+    process.env.WALNUT_ROUTINE_PLACE_MS = '50'
+    try {
+      const f = fleet({ [CLOUD]: { down: true }, __local__: {} })
+      f.deps.place = () => new Promise(() => {})
+      await expect(run(onCloud(), f.deps)).rejects.toMatchObject({ detail: { host: CLOUD, reason: DOWN } })
+      expect(f.admitted).toEqual([])
+    } finally {
+      delete process.env.WALNUT_ROUTINE_PLACE_MS
+    }
+  })
+
+  it('placement is told the named host is unavailable (it never keeps the work there)', async () => {
+    const f = fleet({ [CLOUD]: { down: true }, __local__: {} })
+    const seen: Array<string | undefined> = []
+    const place = f.deps.place
+    f.deps.place = async (input) => { seen.push(input.unavailable); return place(input) }
+    await run(onCloud(), f.deps).catch(() => undefined)
+    expect(seen).toEqual([DOWN])
+    const g = fleet({ __local__: { full: true }, [CLOUD]: {} })
+    const seenFull: Array<string | undefined> = []
+    const placeG = g.deps.place
+    g.deps.place = async (input) => { seenFull.push(input.unavailable); return placeG(input) }
+    await run(triage(), g.deps)
+    expect(seenFull).toEqual([undefined])
+  })
+})
+
+describe('sourceDownReason: when a remote host counts as unavailable (awake time its link has been down)', () => {
+  afterEach(() => { link.awakeDownMs = null; link.lostSince = null })
+
+  it('0 (never linked, or up) and a drop under 30 s of awake time are not known to be down; 30 s or more is', () => {
+    expect(sourceDownReason(0)).toBeNull()
+    expect(sourceDownReason(29_999)).toBeNull()
+    expect(sourceDownReason(Number.NaN)).toBeNull()
+    expect(sourceDownReason(30_000)).toBe('it is not connected (asleep or unreachable)')
+    expect(sourceDownReason(10 * 60_000)).toBe('it is not connected (asleep or unreachable)')
+  })
+
+  it('the real fact for a host this server never linked to (no pool entry, none in the direct pool) is null', async () => {
+    expect(await defaultRunPlacementDeps().unavailable('never-linked-host')).toBeNull()
+  })
+
+  it('a Mac that slept 8 h: lost 8 h ago by the wall clock but down under 30 s awake is still available, and the run is not moved', async () => {
+    link.lostSince = Date.now() - 8 * 60 * 60_000
+    link.awakeDownMs = 10_000
+    const deps = defaultRunPlacementDeps()
+    expect(await deps.unavailable(CLOUD)).toBeNull()
+    const f = fleet({ __local__: {}, [CLOUD]: {} })
+    f.deps.unavailable = deps.unavailable
+    expect(await run(triage({ host: CLOUD, cwd: `${CLOUD_HOME}/.open-walnut` }), f.deps)).toMatchObject({ moved: false, host: CLOUD })
+  })
+
+  it('down 10 minutes of awake time: unavailable, with its name', async () => {
+    link.awakeDownMs = 10 * 60_000
+    expect(await defaultRunPlacementDeps().unavailable(CLOUD)).toEqual({ label: expect.any(String), reason: 'it is not connected (asleep or unreachable)' })
+    expect(await defaultRunPlacementDeps().unavailable('__local__')).toBeNull()
+  })
+})
+
 describe('mapWalnutHomeCwd: the same place in the other host\'s Walnut home', () => {
   const deps = { localHome: async () => `${MAC_HOME}/`, remoteHome: async (h: string) => (h === CLOUD ? `${CLOUD_HOME}/` : h === 'rootless' ? '/' : null) }
   it('maps the home and a folder in it, either way, and nothing else', async () => {
@@ -395,6 +597,37 @@ describe('on the real placement and admission (choosePlacement over hostLoads, t
     expect(await hasSession('task-failed')).toBe(false)
     expect(await hasSession('task-unknown')).toBe(true)
     expect(await hasSession('task-ran')).toBe(true)
+  })
+
+  it('an asleep clouddev (its last load reading says room): the real placement moves the run to an always-on Mac only, never back to clouddev', async () => {
+    const reason = 'it is not connected (asleep or unreachable)'
+    const asleep = (macTags: string[] | null): RunPlacementDeps => ({
+      ...deps(),
+      unavailable: async (h) => (h === CLOUD ? { label: 'clouddev', reason } : null),
+      connected: async (h) => h !== CLOUD,
+      capabilities: async (h) => (h === '__local__' && macTags ? { tags: macTags } as never : null),
+    })
+    const onCloud = () => triage({ host: CLOUD, cwd: `${CLOUD_HOME}/.open-walnut` })
+    const got = await admitRoutineLaunch(onCloud(), opts('routine-run:a'), asleep(['macos', 'always-on']))
+    expect(got).toMatchObject({ moved: true, host: '__local__', launch: { cwd: WALNUT_HOME } })
+    expect('host' in got.launch).toBe(false)
+    expect(startsAdmittedOn(CLOUD)).toBe(0)
+    expect(startsAdmittedOn('__local__')).toBe(1)
+    got.release()
+    // A Mac that is not always-on (a laptop), or whose card was not read: the unavailable refusal, nothing held.
+    for (const tags of [['macos', 'local'], null]) {
+      await expect(admitRoutineLaunch(onCloud(), opts('routine-run:c'), asleep(tags)))
+        .rejects.toMatchObject({ code: 'hosts_full', detail: { host: CLOUD, reason } })
+      expect(startsAdmittedOn('__local__')).toBe(0)
+      expect(startsAdmittedOn(CLOUD)).toBe(0)
+    }
+    // An always-on Mac that is full too: the unavailable refusal on clouddev, nothing held anywhere.
+    const other = await admitHostStart('task-on-mac', '__local__', { automatic: true })
+    await expect(admitRoutineLaunch(onCloud(), opts('routine-run:b'), asleep(['always-on'])))
+      .rejects.toMatchObject({ code: 'hosts_full', detail: { host: CLOUD, reason } })
+    expect(startsAdmittedOn(CLOUD)).toBe(0)
+    expect(startsAdmittedOn('__local__')).toBe(1)
+    other()
   })
 
   it('a clouddev weighted "never" is no place to go', async () => {

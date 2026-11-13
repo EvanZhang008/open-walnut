@@ -229,6 +229,11 @@ export type OfflineRecordV2 =
   | { kind: 'task-move'; taskId: string; anchor: { after?: string; before?: string } | null; tier?: string; base?: unknown }
   | { kind: 'board'; op: string; args: Record<string, unknown>; postId?: string }
   | { kind: 'note'; path: string; noteId?: string; mode: 'put' | 'create' | 'delete'; baseHash: string | null; baseBlob: string | null; oursBlob: string | null }
+  /**
+   * A task's MEMORY.md append while away (offline-merge/apply-agent-memory.ts), for a Mac that drains
+   * `agent-memory`: an older Mac's drain never asks for the kind, so its records wait here, never lost.
+   */
+  | { kind: 'agent-memory'; taskId: string; mode: 'append'; content: string }
   /** A paired device removed itself while the Mac was away (WP10): the Mac revokes it on drain. */
   | { kind: 'device-revoke'; deviceId: string; name?: string }
   /**
@@ -554,10 +559,18 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return !!deps.triggers && typeof deps.triggers.validate === 'function' && drainsKind(home, 'trigger-create')
   }
   /** The ops this host answers for `home` (tools.list, walnut_status): a letter or a new trigger only when the leading Mac drains it. */
+  /** A task's MEMORY.md append while away: for a Mac that drains `agent-memory` (offline-merge/apply-agent-memory.ts). */
+  const AGENT_MEMORY_OP = {
+    name: 'agent_memory_write', title: 'Append to a task\'s MEMORY.md (saved here, applied later)',
+    description: 'mode append only: the entry is saved on this host and added to the task\'s MEMORY.md, after what it holds then, when the Walnut server is back. replace and memory folder files need the server.',
+    readonly: false, signature: 'content [task] [mode=append]',
+  }
+
   function awayOps(home: string): typeof OFFLINE_OPS {
     const extra = [
       ...(deps.letters && drainsKind(home, 'letter') ? [LETTER_OP] : []),
       ...(createsTriggers(home) ? [TRIGGER_CREATE_OP] : []),
+      ...(drainsKind(home, 'agent-memory') ? [AGENT_MEMORY_OP] : []),
     ]
     return extra.length ? OFFLINE_OPS.concat(extra) : OFFLINE_OPS
   }
@@ -1852,6 +1865,66 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     })
   }
 
+  /** The longest MEMORY.md (sessions/agent-memory.ts AGENT_MEMORY_MAX_CHARS): an entry past it can never land. */
+  const AGENT_MEMORY_MAX = 20_000
+  /** A task id as Walnut mints them (a task this host's copy does not hold is checked by the Mac at replay). */
+  const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{5,79}$/
+
+  /**
+   * The op id the Mac's own route gets for this call's MEMORY.md write (src/lib/op-call-id.ts
+   * writeOpId of `PUT /tasks/<task as named>/agent-memory`, the call's first write there), so the
+   * Mac's applied-ops ledger sees one write whichever lands first: this record drained, or the
+   * same call retried straight at the Mac. Inlined (the factory references nothing at module
+   * scope); tests/providers/offline-agent-memory.test.ts holds it equal to writeOpId.
+   */
+  function memoryWriteOpId(callId: string, taskRef: string): string {
+    const route = 'PUT /tasks/' + encodeURIComponent(taskRef) + '/agent-memory'
+    let h = 0x811c9dc5
+    for (let i = 0; i < route.length; i++) { h ^= route.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0 }
+    return callId + '-' + h.toString(16).padStart(8, '0') + '-0'
+  }
+
+  /**
+   * agent_memory_write while away: an append only, as an `agent-memory` record that carries the
+   * entry (offline-merge/apply-agent-memory.ts). The Mac adds it to the file as it stands at
+   * replay, so whatever was written there meanwhile is kept. A replace needs the file this host
+   * does not hold to be safe, so it is refused here, nothing saved; so is a memory folder file.
+   * Each append is its own record.
+   */
+  function opAgentMemoryWrite(home: string, callerSid: string, args: Record<string, unknown>, callId?: unknown): GatewayResult {
+    if (args.file !== undefined) return needsServer('A memory folder file (agent_memory_write file)', home)
+    const mode = args.mode === undefined ? 'append' : args.mode
+    if (mode !== 'append' && mode !== 'replace') return fail('bad_request', 'mode must be append or replace')
+    if (mode === 'replace') {
+      return fail('needs_leader', 'A replace of MEMORY.md can only be made while the Walnut server answers (this host does not hold the file it would replace); nothing was saved. An append is saved here.', { detail: { why: 'agent-memory-replace' } })
+    }
+    const content = typeof args.content === 'string' ? args.content : null
+    if (content === null || !content.trim()) return fail('bad_request', 'content must be a non-empty string')
+    if (content.length > AGENT_MEMORY_MAX) return fail('agent_memory_too_long', `the entry is ${content.length} characters, over the ${AGENT_MEMORY_MAX}-character limit of MEMORY.md; nothing was saved`)
+    const named = typeof args.task === 'string' && args.task.trim() ? args.task.trim() : ''
+    const ref = named || (sessionOf(home, callerSid)?.taskId ?? '')
+    if (!ref) return fail('bad_request', 'task is required (this session has no task here)')
+    const { task, error } = resolveTask(home, ref)
+    if (error) return error
+    const taskId = task ? task.id : TASK_ID_RE.test(ref) ? ref : ''
+    if (!taskId) return needsServer(`Task ${ref} is not in this host's offline copy; writing its MEMORY.md`, home)
+    if (task && task.phase === 'COMPLETE') return fail('task_complete', `"${task.title}" is complete: its MEMORY.md is kept as it was.`)
+    const record: OfflineRecordV2 & Record<string, unknown> = { kind: 'agent-memory', taskId, mode: 'append', content }
+    // Under the op id the Mac's route gives the same call (memoryWriteOpId): a retry of it is this
+    // record here, and one entry at the Mac whether the record drains first or the retry reaches
+    // the Mac first. Two calls with the same words are two entries.
+    const opId = typeof callId === 'string' && /^oc-[A-Za-z0-9_-]{8,48}$/.test(callId) ? memoryWriteOpId(callId, ref) : undefined
+    const saved = append(home, record, false, { actor: { kind: 'session', sid: callerSid }, ...(opId ? { opId } : {}), coalesce: false, admit: () => admitWrite(callerSid) ?? roomFor(home) })
+    const no = refusal(saved)
+    if (no) return no
+    deps.log('info', 'offline host: write queued', { home, op: 'agent_memory_write', taskId, callerSid, kind: 'agent-memory', seq: saved.ok ? saved.seq : undefined })
+    return ok({
+      queued: true, offline: true, task_id: taskId, mode: 'append', ...(saved.ok && saved.duplicate ? { duplicate: true } : {}),
+      outcome: 'Saved on this host; Walnut adds this entry to the task\'s MEMORY.md, after what it holds then, when the server reconnects.',
+      next: 'Nothing else is required. Do not repeat the call.',
+    })
+  }
+
   /**
    * A task write as a `task-fields` record: every field with the value this host shows
    * now as its base (copy plus what is queued here), `'unknown'` where the copy lacks the
@@ -2506,6 +2579,10 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
           // Notes turned off for this host: kept only on the Mac (4f).
           if (deps.replica && typeof deps.replica.isOff === 'function' && deps.replica.isOff(home, 'notes')) return notesNotKept()
           return needsServer(`"${name}"`, home)
+        // A MEMORY.md append, when the leading Mac drains `agent-memory`; an older one: as before.
+        case 'agent_memory_write':
+          if (drainsKind(home, 'agent-memory')) return whenUnlocked(home, name, () => opAgentMemoryWrite(home, callerSid, args, payload.callId))
+          return needsServer('"agent_memory_write"', home)
         // A letter to the user, when the leading Mac drains letters; an older one: as before.
         case 'human_inbox_send':
           if (deps.letters && drainsKind(home, 'letter')) return whenUnlocked(home, name, () => opLetter(home, callerSid, args))

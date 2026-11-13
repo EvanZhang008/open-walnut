@@ -22,7 +22,7 @@ import { WALNUT_HOME } from '../../../src/constants.js'
 import * as ops from '../../../src/core/cron/ops.js'
 import { onTimer } from '../../../src/core/cron/timer.js'
 import {
-  appendRun, catchUpNote, missedRuns, routineOwnerTaskId, runEntry, runFailed, judgesSlots,
+  appendRun, catchUpNote, missedRuns, routineOwnerTaskId, runEntry, runFailed, runSlots, judgesSlots,
   MISSED_GRACE_MS, NO_RUN_REASON, RUN_LOG_MAX, SLOT_RETRIES,
 } from '../../../src/core/cron/run-log.js'
 import { applyClockRun } from '../../../src/core/cron/clock-fire.js'
@@ -38,6 +38,16 @@ const DAY = 24 * HOUR
 const BASE = Date.UTC(2026, 10, 8, 7, 0, 0)
 const SLOT1 = Date.UTC(2026, 10, 8, 8, 0, 0)
 const NO_ROOM = 'Not started: this Mac had no room for 1 minute (4 of 4 starts running).'
+
+it.each([10_000, 5 * MIN, HOUR])('a clock at %i ms merges sleep slots independently of missed-notice frequency', gap => {
+  const first = BASE + gap
+  const job = { id: 'sleep-slots', enabled: true, createdAtMs: BASE,
+    schedule: { kind: 'every', everyMs: gap, anchorMs: BASE },
+    state: { nextRunAtMs: first } } as CronJob
+  expect(runSlots(job, first + 3 * gap + 1)).toEqual({ slotMs: first + 3 * gap, firstSlotMs: first, late: true })
+  expect(runSlots(job, first + 1)).toEqual({ slotMs: first })
+  expect(runSlots(job, first + 2_000 * gap + 1)).toEqual({ slotMs: first + 2_000 * gap, firstSlotMs: first, late: true })
+})
 
 let dir: string
 let counter = 0

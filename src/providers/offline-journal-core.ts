@@ -123,7 +123,7 @@ export interface OfflineJournalDeps {
 /** v1 kinds: every Mac drains these. 'op' is v1 only. */
 export const JOURNAL_V1_KINDS = ['row', 'settle', 'delivery', 'settings', 'stop', 'resume', 'op']
 /** v2 kinds a new Mac lists in `leader.configure {drains}` (device-actor and routine-run are capabilities, not kinds). */
-export const JOURNAL_V2_DRAINS = ['task-fields', 'task-create', 'task-move', 'board', 'note', 'session', 'device-actor', 'device-revoke', 'letter', 'routine-run']
+export const JOURNAL_V2_DRAINS = ['task-fields', 'task-create', 'task-move', 'board', 'note', 'session', 'device-actor', 'device-revoke', 'letter', 'routine-run', 'agent-memory']
 
 /** Options of one append (a type only: the factory below stays self-contained as text). */
 export interface AppendOpts {

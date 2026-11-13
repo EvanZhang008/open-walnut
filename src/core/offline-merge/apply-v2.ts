@@ -34,11 +34,12 @@ export { RefusedWrite };
  * The v2 kinds this Mac applies (`offline.drain {kinds}`); `note` since WP11 (offline-merge/notes.ts);
  * `letter`, a session's letter to the user a host saved while away (apply-letter.ts);
  * `session-meta`, `inbox-state`, `chat-turn`, `memory`, `note-move`, `note-attachment`,
+ * `agent-memory`, a task's MEMORY.md append a host saved while away (apply-agent-memory.ts);
  * `conversation-edit`, `inbox-reply` and `inbox-reply-pictures` only the cloud companion writes (apply-session-meta.ts,
  * apply-inbox-state.ts, apply-chat-turn.ts, apply-memory.ts, apply-note-move.ts,
  * apply-note-attachment.ts, apply-conversation-edit.ts, apply-inbox-reply.ts).
  */
-export const APPLIED_V2_KINDS = ['task-fields', 'task-create', 'task-move', 'board', 'device-revoke', 'note', 'session', 'session-meta', 'inbox-state', 'chat-turn', 'memory', 'note-move', 'note-attachment', 'conversation-edit', 'letter', 'inbox-reply', 'inbox-reply-pictures'] as const;
+export const APPLIED_V2_KINDS = ['task-fields', 'task-create', 'task-move', 'board', 'device-revoke', 'note', 'session', 'session-meta', 'inbox-state', 'chat-turn', 'memory', 'note-move', 'note-attachment', 'conversation-edit', 'letter', 'inbox-reply', 'inbox-reply-pictures', 'agent-memory'] as const;
 /**
  * What `leader.configure {drains}` names: the kinds, plus device actors this Mac checks, plus
  * `routine-run` (a `session` record with `routine` is adopted as a routine's run, not an ask:
@@ -444,6 +445,8 @@ export async function applyV2(ctx: V2Context, record: V2Record): Promise<void> {
     case 'conversation-edit': return (await import('./apply-conversation-edit.js')).applyConversationEdit(ctx, record);
     // A session's letter to the user a host saved while this Mac was away.
     case 'letter': return (await import('./apply-letter.js')).applyLetter(ctx, record);
+    // A task's MEMORY.md write a host saved while away: merged onto the file as it stands (apply-agent-memory.ts).
+    case 'agent-memory': return (await import('./apply-agent-memory.js')).applyAgentMemoryWrite(ctx, record, v2TaskIdOf(record, ctx.remap, ctx.hostKey) ?? '');
     // The human's reply to a letter, or the option picked on it, on the cloud companion while away.
     case 'inbox-reply':
     case 'inbox-reply-pictures': return (await import('./apply-inbox-reply.js')).applyInboxReply(ctx, record);

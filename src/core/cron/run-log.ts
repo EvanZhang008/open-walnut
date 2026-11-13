@@ -189,18 +189,29 @@ export interface RunSlots {
  * (Dismiss) is never run for.
  *
  * undefined: the run stands for no slot (a trigger, no next run). null: every slot it would
- * stand for was set aside, so there is nothing to run. A routine not judged slot by slot (a
- * frequent one, a one-shot) stands for its next run only, as before.
+ * stand for was set aside, so there is nothing to run. Frequent clocks merge downtime too;
+ * judgesSlots limits missed-run notices, not which due slots a catch-up covers.
+ * A one-shot still stands for its next run only.
  */
 export function runSlots(job: CronJob, nowMs: number): RunSlots | null | undefined {
   if (job.check) return undefined;
   const base = job.state.retrySlotMs ?? job.state.nextRunAtMs;
   if (typeof base !== 'number' || !Number.isFinite(base)) return undefined;
-  if (!judgesSlots(job, nowMs)) return { slotMs: base };
+  if (!job.enabled || job.schedule.kind === 'at') return { slotMs: base };
   const owed = job.state.owedFromMs;
   const from = Math.max(typeof owed === 'number' ? Math.min(owed, base) : base, nowMs - MISSED_LOOKBACK_MS);
   const dismissed = new Set(job.state.missedDismissedMs ?? []);
-  const slots = [...new Set([base, ...slotsBetween(job, from, nowMs, 1_000)])]
+  const due = slotsBetween(job, from, nowMs, 1_000);
+  // A frequent every-clock may have many more than 1,000 sleep slots. Its
+  // newest slot is arithmetic, so one catch-up covers the whole range without
+  // walking thousands of entries or leaving another backlog at the next tick.
+  if (job.schedule.kind === 'every' && nowMs >= base && job.schedule.everyMs > 0) {
+    const gap = job.schedule.everyMs;
+    let last = base + Math.floor((nowMs - base) / gap) * gap;
+    while (last > base && dismissed.has(last)) last -= gap;
+    due.push(last);
+  }
+  const slots = [...new Set([base, ...due])]
     .filter((s) => !dismissed.has(s))
     .sort((a, b) => a - b);
   if (!slots.length) return null;

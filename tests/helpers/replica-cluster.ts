@@ -181,7 +181,7 @@ export interface ReplicaCluster {
   macData: string
   ids: ClusterIds
   /** A request to the Mac on its own loopback (the person at the Mac). */
-  mac(method: string, p: string, body?: unknown): Promise<{ status: number; json: any; headers: http.IncomingHttpHeaders }>
+  mac(method: string, p: string, body?: unknown, headers?: Record<string, string>): Promise<{ status: number; json: any; headers: http.IncomingHttpHeaders }>
   /** A request to the replica's public port, as a paired phone or browser. */
   replica(method: string, p: string, opts?: { token?: string; body?: unknown; headers?: Record<string, string> }): Promise<{ status: number; json: any; text: string; headers: http.IncomingHttpHeaders }>
   /** A device token made on the Mac (its copy reaches the replica in the device round). */
@@ -368,7 +368,7 @@ const windowEnv = (): Record<string, string> => ({
  * The host daemon: a minimal env of its own (no variable of the runner leaks into it, or into the replica it starts).
  * Also tests/e2e/replica-old-mac-e2e.test.ts (an old Mac in front of the same daemon).
  */
-export async function startHostDaemon(twin: Twin, dir: string, home: string, bin: string): Promise<{ proc: ChildProcess; pid: number; port: number }> {
+export async function startHostDaemon(twin: Twin, dir: string, home: string, bin: string, built = false): Promise<{ proc: ChildProcess; pid: number; port: number }> {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   const env: Record<string, string> = {
     PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`, HOME: home, TMPDIR: os.tmpdir(),
@@ -390,7 +390,11 @@ export async function startHostDaemon(twin: Twin, dir: string, home: string, bin
     proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
   } else {
     if (!BUN) throw new Error('the standalone twin needs bun (BUN_INSTALL, ~/.bun/bin/bun)')
-    proc = spawn(BUN, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
+    const binary = path.join(ROOT, 'dist', 'daemon-binaries', `daemon-${process.platform}-${process.arch}`)
+    if (built && !fs.existsSync(binary)) throw new Error(`the built standalone twin is missing: ${binary}`)
+    proc = built
+      ? spawn(binary, ['--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
+      : spawn(BUN, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
   }
   if (process.env.DEBUG_CLUSTER) proc.stderr?.on('data', (b) => process.stderr.write(`[host-daemon] ${b}`))
   else proc.stderr?.resume()
@@ -481,6 +485,10 @@ const direct = async () => {
   return conn
 }
 await direct()
+// A test may name only external host facts before it exercises the real clock
+// handover. The file is supplied by seedMac inside this cluster's own folder.
+const clockFacts = process.env.WALNUT_CLUSTER_CLOCK_FACTS
+if (clockFacts && clockFacts.startsWith(${JSON.stringify(path.dirname(o.macData))} + '/')) await import(clockFacts)
 // The ssh path redials a link the host closed (a Mac asleep past the daemon's
 // keepalive); a link dialled straight to the URL never does, so the test
 // transport redials it here, once a second, the same way.
@@ -531,7 +539,7 @@ async function bootMac(script: string, file: string, env: Record<string, string>
  */
 export type SeedMac = (o: { base: string; macData: string; env: Record<string, string> }) => void | Promise<void>
 
-export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; seedMac?: SeedMac }): Promise<ReplicaCluster> {
+export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; daemonBuilt?: boolean; seedMac?: SeedMac }): Promise<ReplicaCluster> {
   assertWindows(WINDOWS)
   const app: ClusterApp = opts.app ?? 'source'
   if (app === 'built') {
@@ -639,7 +647,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
   process.once('exit', onExit)
 
   try {
-    hostDaemon = await startHostDaemon(opts.twin, d.hostDaemon, d.hostHome, d.bin)
+    hostDaemon = await startHostDaemon(opts.twin, d.hostDaemon, d.hostHome, d.bin, opts.daemonBuilt === true)
     seedHostStream(path.join(d.hostDaemon, 'streams'))
     seedHostTranscript(d.hostHome, d.hostCwd)
     const macEnv: Record<string, string> = {
@@ -674,8 +682,8 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
   }
   const replicaDataNow = (): string => path.join(walnutDir(), 'data')
 
-  const macCall: ReplicaCluster['mac'] = async (method, p, body) => {
-    const r = await request(macPort, method, p, body === undefined ? {} : { body })
+  const macCall: ReplicaCluster['mac'] = async (method, p, body, headers = {}) => {
+    const r = await request(macPort, method, p, { ...(body === undefined ? {} : { body }), headers })
     return { status: r.status, json: parse(r.text), headers: r.headers }
   }
   let replicaPort = 0

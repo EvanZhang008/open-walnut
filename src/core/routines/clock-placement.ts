@@ -16,6 +16,11 @@
  *    is unknown, one with a check, a wake counter or an init action, and a
  *    schedule only croner reads (clock-schedule-core.ts `supports`).
  *
+ * A portable routine (clock-portable.ts) is the exception to "a routine runs where its work
+ * runs": it has no host, so while this Mac is awake its clock may go to a connected, free,
+ * always-on host that starts the run itself when the Mac is asleep. The routine's own host
+ * setting stays as configured; a routine bound to a host keeps today's placement.
+ *
  * This file decides which routines belong to which host; the handover itself
  * (who ticks, never twice) is cron/clock-handover.ts. Three guards keep a clock
  * from moving on bad information: a config that could not be read names no
@@ -28,7 +33,7 @@ import { WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import { MIN_EVERY_MS } from '../../providers/trigger-check-core.js';
 import type { TriggerDef } from '../../providers/trigger-check-core.js';
-import { START_TASK_TOKEN, validateClockStartSpec, type ClockStartSpec } from '../../providers/trigger-clock-core.js';
+import type { ClockStartSpec } from '../../providers/trigger-clock-core.js';
 import type { ClockScheduleSpec } from '../../providers/clock-schedule-core.js';
 import { clockSchedule, serverTimeZone } from '../cron/schedule.js';
 import { cloudModeSkipsJob, resolveEveryAnchorMs } from '../cron/jobs.js';
@@ -36,6 +41,16 @@ import type { ClockReply } from '../cron/clock-handover.js';
 import type { CronJob } from '../cron/types.js';
 import { pickDeliverySession, type DeliverySessionCandidate } from './session-target.js';
 import { deliverSpecOf, promptOf } from './trigger-push.js';
+import {
+  _ownerWatchForTest, _resetClockWatchForTest, dropOwner, OWNER_REFRESH_MS, ownerJobIds, scheduleClockPlacement, setOwner, setWatchedTasks,
+  startClockPlacementWatch, watchTask,
+} from './clock-placement-watch.js';
+import { routineStartOf } from './clock-routine-start.js';
+import { isOfflinePortable, offlineOwnerIdOf, offlineRoutineStartOf } from './offline-run.js';
+import {
+  defaultPortableClockEnv, portableBudgetMs, portableClaudeConfigOf, portableSeatOf, withinBudget,
+  type OfflineClockWork, type PortableClockEnv, type PortableKind,
+} from './clock-portable.js';
 
 /** Executors whose work runs on one host, and so whose clock can live there. */
 const CLOCK_EXECUTORS = new Set(['session', 'claude-code']);
@@ -52,15 +67,25 @@ export function wireScheduleOf(job: CronJob): ClockScheduleSpec | null {
   return null;
 }
 
-/** Everything about a routine that decides it, except where its work runs. */
-export function clockCandidate(job: CronJob): boolean {
+/**
+ * What every clock routine shares, whoever's work it is: enabled, nothing that needs this
+ * Mac in front of the run (a check, a wake counter, an init action: an init processor
+ * builds the run's input on this Mac, so such a routine never moves), and a schedule a
+ * host's daemon reads the way croner does.
+ */
+function clockBaseOk(job: CronJob): boolean {
   if (!job.enabled || job.check || job.wake || job.initProcessor) return false;
-  if (!CLOCK_EXECUTORS.has(job.executor?.type ?? '')) return false;
-  if (!promptOf(job).trim()) return false;
   if (cloudModeSkipsJob(job)) return false;
   const wire = wireScheduleOf(job);
   if (!wire || !clockSchedule.supports(wire)) return false;
-  if (wire.kind === 'every' && wire.everyMs < MIN_EVERY_MS) return false;
+  return !(wire.kind === 'every' && wire.everyMs < MIN_EVERY_MS);
+}
+
+/** Everything about a routine that decides it, except where its work runs. */
+export function clockCandidate(job: CronJob): boolean {
+  if (!clockBaseOk(job)) return false;
+  if (!CLOCK_EXECUTORS.has(job.executor?.type ?? '')) return false;
+  if (!promptOf(job).trim()) return false;
   // A session routine is delivered on the host; one whose prompt cannot ride the def stays here.
   if (job.executor?.type === 'session' && !deliverSpecOf(job)) return false;
   return true;
@@ -74,10 +99,41 @@ export interface PlacementDeps {
   /** Whether that host's daemon is connected now. */
   connected?(host: string): Promise<boolean>;
   /** What that host may start a claude-code routine's run from (routineStartOf); absent: never. */
-  routineStart?(job: CronJob, host: string): Promise<ClockStartSpec | null>;
+  routineStart?(job: CronJob, host: string, at?: { cwd: string }): Promise<ClockStartSpec | null>;
+  /**
+   * The facts a portable routine's clock host is judged by (clock-portable.ts); absent: no
+   * routine is portable, every clock stays bound to its work's host.
+   */
+  portable?: PortableClockEnv;
+  /** Routines other than claude-code runs that a detached worker may run offline (offline-run.ts); absent: none. */
+  offline?: OfflineClockWork;
 }
 
+/**
+ * Whether a routine's clock may be delegated to an always-on host, and as which kind of
+ * work. Sync: the same shape test a claude-code routine's own config passes, or the
+ * offline-run seam's. `allowed` is the switch read for this push (backup leader on).
+ */
+export function portableKindOf(job: CronJob, deps: Pick<PlacementDeps, 'portable' | 'offline'>, allowed: boolean): PortableKind | null {
+  if (!allowed || !deps.portable || !clockBaseOk(job)) return null;
+  if (clockCandidate(job) && portableClaudeConfigOf(job) && promptOf(job).trim()) return 'claude';
+  return deps.offline?.portable(job) ? 'offline' : null;
+}
+
+/** A routine this layer ever places: bound to its work's host, or portable. */
+function placeable(job: CronJob, deps: PlacementDeps, allowed: boolean): boolean {
+  return clockCandidate(job) || portableKindOf(job, deps, allowed) !== null;
+}
+
+/** Test seam: external facts a test names in place of the real readers, merged over the real wiring. */
+let depsOverride: Partial<PlacementDeps> | null = null;
+export function __setClockPlacementDepsForTesting(next: Partial<PlacementDeps> | null): void { depsOverride = next; }
+
 export function defaultPlacementDeps(): PlacementDeps {
+  return { ...realPlacementDeps(), ...(depsOverride ?? {}) };
+}
+
+function realPlacementDeps(): PlacementDeps {
   return {
     async hosts() {
       const { getConfig, isFallbackConfig } = await import('../config-manager.js');
@@ -97,70 +153,10 @@ export function defaultPlacementDeps(): PlacementDeps {
       const { getSessionsForTask } = await import('../session-tracker.js');
       return await getSessionsForTask(taskId).catch(() => []);
     },
-    routineStart: (job, host) => routineStartOf(job, host),
+    routineStart: (job, host, at) => routineStartOf(job, host, WALNUT_HOME, at),
+    portable: defaultPortableClockEnv(),
+    offline: { portable: (job) => isOfflinePortable(job), startOf: (job, host) => offlineRoutineStartOf(job, host), ownerOf: (job) => offlineOwnerIdOf(job) },
   };
-}
-
-/**
- * What a host starts a claude-code routine's run from while this Mac is away
- * (clock-host-start-v1), or null when the run stays this Mac's to start. Every field
- * is the one this Mac's claude-code executor would use (executors/claude-code.ts,
- * quickStartSession): the instructions as the first message, the routine's folder,
- * model and title ("Routine: <name>" unless it names one, sent as the literal text),
- * its project ("Routines" unless it names one), the mode this Mac runs a routine in
- * (none named: the engine setting, else Auto when supported), the configured session effort, and the session
- * context this Mac would append, built for the run's task with START_TASK_TOKEN where
- * the id goes (the host mints it).
- *
- * Eligible only when the host can do what this Mac would do: an ordinary routine (no
- * console agent, no title template), instructions short enough to go inline (the Mac
- * spills longer ones to a file here) and naming no task or project pill (the Mac adds
- * their cards), an absolute folder, the Claude Code engine for that host, and no SDK
- * session server (which would run it another way).
- */
-export async function routineStartOf(job: CronJob, host: string, home: string = WALNUT_HOME): Promise<ClockStartSpec | null> {
-  if (job.executor?.type !== 'claude-code' || !host || host === '__local__') return null;
-  const c = (job.executor.config ?? {}) as Record<string, unknown>;
-  if ((typeof c.host === 'string' ? c.host.trim() : '') !== host) return null;
-  if (c.walnutAgent === true || (typeof c.agentId === 'string' && c.agentId.trim()) || (typeof c.titleTemplate === 'string' && c.titleTemplate.trim())) return null;
-  const message = promptOf(job);
-  const cwd = typeof c.cwd === 'string' ? c.cwd.trim() : '';
-  if (!message.trim() || !cwd.startsWith('/')) return null;
-  const [{ QUICK_START_MESSAGE_SPILL_LIMIT }, { listEntityRefs }, { readTriageCountHint }] = await Promise.all([
-    import('../../constants.js'), import('../../utils/entity-refs.js'), import('./executors/claude-code.js'),
-  ]);
-  if (message.length > QUICK_START_MESSAGE_SPILL_LIMIT || listEntityRefs(message).length > 0 || readTriageCountHint(message) !== undefined) return null;
-  const [{ getConfig, isFallbackConfig }, { resolveDefaultEngine }, { normalizeEngine }, { VALID_SESSION_EFFORT_IDS }] = await Promise.all([
-    import('../config-manager.js'), import('../agents/default-engine.js'), import('../agents/engine-registry.js'), import('../types.js'),
-  ]);
-  const config = await getConfig();
-  if (isFallbackConfig(config) || !config.hosts?.[host] || config.session_server?.enabled) return null;
-  if (normalizeEngine(resolveDefaultEngine(config, { host })) !== undefined) return null;
-  const title = (typeof c.taskTitle === 'string' && c.taskTitle.trim()) || `Routine: ${job.name}`;
-  const project = (typeof c.project === 'string' && c.project.trim()) || 'Routines';
-  const model = typeof c.model === 'string' && c.model.trim() ? c.model.trim() : undefined;
-  const effort = config.agent?.session_effort && VALID_SESSION_EFFORT_IDS.has(config.agent.session_effort) ? config.agent.session_effort : undefined;
-  let context = '';
-  try {
-    const { buildSessionContext } = await import('../sessions/session-context.js');
-    const task = { id: START_TASK_TOKEN, title, project } as unknown as import('../types.js').Task;
-    context = (await buildSessionContext(START_TASK_TOKEN, cwd, host, { task })).systemPrompt;
-  } catch (err) {
-    // A run without its context would differ from this Mac's: it stays here.
-    log.cron.warn('clock placement: no session context for a routine run on its host; it stays the Mac\'s to start', { host, jobId: job.id, error: err instanceof Error ? err.message : String(err) });
-    return null;
-  }
-  const spec = validateClockStartSpec({
-    home, host, title, project, cwd,
-    message: (await import('../sessions/send-frame.js')).frameAsWalnut(message, 'routine', `routine:${job.id}:${job.name}`),
-    mode: (await (await import('../../providers/claude-launch-mode.js')).resolveClaudeLaunchMode(host, cwd)).mode, modeNamed: false,
-    ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(context ? { context } : {}),
-  });
-  if (!spec.ok) {
-    log.cron.debug('clock placement: a routine run cannot start on its host', { host, jobId: job.id, error: spec.error });
-    return null;
-  }
-  return spec.spec;
 }
 
 /**
@@ -202,11 +198,14 @@ export async function workHostOf(
  * the daemon runs no slot at or before it, also one this server (or an older
  * Mac that did not know the clock had moved) already ran.
  */
-export function clockDefOf(job: CronJob, taskId: string | undefined, home: string = WALNUT_HOME, start?: ClockStartSpec | null): TriggerDef | null {
+export function clockDefOf(
+  job: CronJob, taskId: string | undefined, home: string = WALNUT_HOME, start?: ClockStartSpec | null, withDeliver = true,
+): TriggerDef | null {
   const wire = wireScheduleOf(job);
   const fromMs = job.state.clockFromMs;
   if (!wire || typeof fromMs !== 'number') return null;
-  const deliver = deliverSpecOf(job, home);
+  // A portable routine's work is no session on this host: nothing is delivered, the host starts it.
+  const deliver = withDeliver ? deliverSpecOf(job, home) : null;
   const last = job.state.lastRunAtMs;
   return {
     id: job.id,
@@ -263,44 +262,127 @@ export async function placeClocksForHost(
   const refusedHere = refusedClocks.get(host);
   const wanted = new Set<string>();
   const taskOf = new Map<string, string>();
+  // Portable routines placed here (clock-portable.ts), and what the host starts for each.
+  const portableStart = new Map<string, ClockStartSpec | null>();
+  // Starts the daemon accepted earlier, sent again as they were where this push cannot rebuild them.
+  const retained = new Map<string, ClockStartSpec>();
+  // Read once per push, and before any candidate is judged: off means no portable clock is placed, and a held one is given back.
+  const allowed = deps.portable ? await deps.portable.allowed().catch(() => false) : false;
+  const deadlineMs = Date.now() + portableBudgetMs();
   if (!hosts) {
     // The config could not be read: every clock stays where it is, and none moves.
     for (const job of jobs) {
       if (job.state?.clockHost !== host) continue;
+      // A pause must disarm even if the host config cannot be read. An accepted
+      // start is retained only for this enabled routine. After a server restart
+      // with no cached start, leave it out and wait for the daemon's release reply.
+      if (!job.enabled) continue;
+      if (job.state.clockStarts === true) {
+        const kept = acceptedStarts.get(acceptedKey(host, job.id));
+        if (kept) retained.set(job.id, kept);
+        else continue;
+      }
       wanted.add(job.id);
       const work = await workHostOf(job, deps, new Set([host]), host).catch(() => null);
       if (work?.taskId) taskOf.set(job.id, work.taskId);
+      // An offline routine's def is its start alone: with none it would be empty, so it is left out (the push gives it back).
+      if (portableKindOf(job, deps, allowed) === 'claude' && !work) portableStart.set(job.id, null);
     }
     log.cron.warn('clock placement: hosts unknown (config unreadable), clocks stay where they are', { host });
   } else if (host !== '__local__' && hosts.has(host)) {
     for (const job of jobs) {
-      if (!clockCandidate(job)) continue;
+      const kind = portableKindOf(job, deps, allowed);
+      if (!clockCandidate(job) && !kind) continue;
       // Held by another host: it moves only after that host gives it back.
       if (job.state?.clockHost && job.state.clockHost !== host) continue;
-      const work = await workHostOf(job, deps, hosts, host).catch(() => null);
+      const work = clockCandidate(job) ? await workHostOf(job, deps, hosts, host).catch(() => null) : null;
       // The task a transfer moved the work to is watched too: its session starts later.
-      if (work?.taskId) watchedTasks.add(work.taskId);
-      if (work?.host !== host) continue;
-      if (!job.state?.clockHost && refusedHere?.get(job.id) === refusalKeyOf(job, work.taskId)) continue;
+      if (work?.taskId) watchTask(work.taskId);
+      let bound = work;
+      if (work && work.host !== host) {
+        // A routine that declares itself portable (placement.portable) is not tied to the host it names:
+        // an always-on host takes its clock while no host holds it, and its configured host is left as it is.
+        // A clock this host holds already stays until a daemon's reply gives it back; one another host
+        // holds (its own named host included) is never taken.
+        const free = !job.state?.clockHost || job.state.clockHost === host;
+        if (!(kind === 'claude' && free)) continue;
+        bound = null;
+      }
+      // Its own host takes the clock of a routine that declares itself portable only as any host does: always-on and
+      // fit, and only while no host holds it. Held by this host already, it stays (conservative: no reshuffle).
+      if (bound && kind === 'claude' && !job.state?.clockHost) bound = null;
+      if (bound) {
+        if (!job.state?.clockHost && refusedHere?.get(job.id) === refusalKeyOf(job, bound.taskId)) continue;
+        wanted.add(job.id);
+        if (bound.taskId) taskOf.set(job.id, bound.taskId);
+        continue;
+      }
+      // No host of its own: a portable routine goes to a host that stays up.
+      if (!kind) continue;
+      const held = job.state?.clockHost === host;
+      if (!held && (capability !== 'yes' || refusedHere?.get(job.id) === refusalKeyOf(job, undefined))) continue;
+      const seat = await portableSeatOf(job, kind, host, deps.portable!, { held, deadlineMs }).catch((err: unknown) => ({
+        ok: false as const, unknown: true, why: err instanceof Error ? err.message : String(err),
+      }));
+      if (!seat.ok) {
+        noteSeatVerdict(host, job.id, seat.why, { held, unknown: seat.unknown });
+        // A fact not known (its capabilities, its home) keeps a clock where it is; a plain no gives it back.
+        if (!held || !seat.unknown) continue;
+      }
+      // The host starts the run itself while this Mac is away, or the clock gains nothing: a new handover needs that.
+      // undefined: it cannot be told now (a fact not known, a start that did not answer in time).
+      let start: ClockStartSpec | null | undefined = capability === 'yes' && opts.hostStart && seat.ok
+        ? await withinBudget(kind === 'claude'
+          ? (seat.cwd ? deps.routineStart?.(job, host, { cwd: seat.cwd }) : null)
+          : deps.offline?.startOf(job, host), deadlineMs)
+        : held ? undefined : null;
+      if (start === undefined && held && job.state?.clockStarts === true) {
+        // The daemon holds a start this server accepted: keep exactly that one (only this routine's def), and the
+        // rest of the set goes on as it is, a pause or a delete elsewhere in it included. None on record: it goes back.
+        start = acceptedStarts.get(acceptedKey(host, job.id)) ?? null;
+        if (!start) continue;
+        retained.set(job.id, start);
+      }
+      start ??= null;
+      // A routine the host cannot start stays on its own path (its delivery, or the server timer): a new
+      // handover needs the start, and an offline routine's def is nothing without one.
+      if (!start && (!held || kind === 'offline')) continue;
+      if (kind === 'offline') await noteOwner(job, deps, deadlineMs);
       wanted.add(job.id);
-      if (work.taskId) taskOf.set(job.id, work.taskId);
+      portableStart.set(job.id, start);
     }
   }
-  const placed = await service.placeClocks(host, { wanted, handover: capability === 'yes' && hosts !== null, knownHosts: hosts, eligible: clockCandidate });
+  const placed = await service.placeClocks(host, {
+    wanted, handover: capability === 'yes' && hosts !== null, knownHosts: hosts,
+    eligible: (job) => placeable(job, deps, allowed),
+  });
+  // An offline routine this host no longer holds is no longer watched through its owner.
+  for (const id of ownerJobIds()) if (!placed.owned.some((j) => j.id === id) && !jobs.some((j) => j.id === id && j.state?.clockHost && j.state.clockHost !== host)) dropOwner(id);
   // A daemon that has not said it holds clocks gets none: an older one refuses
   // the whole set over a def it cannot read.
   const defs: TriggerDef[] = [];
   const starts: string[] = [];
+  const sentStarts = new Map<string, ClockStartSpec>();
   if (capability === 'yes') {
     for (const job of placed.owned) {
-      // A claude-code run the host may start itself while this Mac is away
-      // (clock-host-start-v1): only for a daemon that can, holding the routine template.
-      const start = opts.hostStart && job.executor?.type === 'claude-code' && deps.routineStart
-        ? await deps.routineStart(job, host).catch(() => null)
-        : null;
-      const def = clockDefOf(job, taskOf.get(job.id), WALNUT_HOME, start);
+      let def: TriggerDef | null;
+      if (portableStart.has(job.id)) {
+        def = clockDefOf(job, undefined, WALNUT_HOME, retained.get(job.id) ?? portableStart.get(job.id), false);
+      } else if (retained.has(job.id)) {
+        def = clockDefOf(job, taskOf.get(job.id), WALNUT_HOME, retained.get(job.id));
+      } else {
+        // A claude-code run the host may start itself while this Mac is away
+        // (clock-host-start-v1): only for a daemon that can, holding the routine template.
+        const start = opts.hostStart && job.executor?.type === 'claude-code' && deps.routineStart
+          ? await deps.routineStart(job, host).catch(() => null)
+          : null;
+        def = clockDefOf(job, taskOf.get(job.id), WALNUT_HOME, start);
+      }
       if (def) defs.push(def);
-      if (def?.start) starts.push(job.id);
+      if (def?.start) {
+        starts.push(job.id);
+        sentStarts.set(job.id, def.start);
+      }
     }
   }
   const handed = placed.handed;
@@ -317,12 +399,42 @@ export async function placeClocksForHost(
       };
       rememberRefused(host, placed.owned, taskOf, refused);
       const back = await service.settleClocks(host, clockReply);
+      // What the daemon accepted: the start it holds for each clock it reported (kept to send again where it cannot be rebuilt).
+      const held = new Set((Array.isArray(reply.clocks) ? reply.clocks as Array<{ id?: string }> : []).map((c) => c.id));
+      for (const id of new Set([...sentStarts.keys(), ...placed.owned.map((j) => j.id)])) {
+        const spec = sentStarts.get(id);
+        if (spec && held.has(id)) acceptedStarts.set(acceptedKey(host, id), spec);
+        else acceptedStarts.delete(acceptedKey(host, id));
+      }
       if (back.length > 0) log.cron.info('clock routines back on the server timer', { host, jobIds: back });
     },
     rejected: async () => {
       await service.revertClocks(host, handed);
     },
   };
+}
+
+/**
+ * An offline routine's owner is watched, as a session routine's target is (its start carries a
+ * sample of that conversation, so the def armed on the host goes stale as it moves).
+ * Per routine, kept across pushes; a routine that is no longer placed forgets it (the loop in placeClocksForHost).
+ */
+async function noteOwner(job: CronJob, deps: PlacementDeps, deadlineMs: number): Promise<void> {
+  const owner = await withinBudget(deps.offline?.ownerOf?.(job), deadlineMs);
+  if (owner) setOwner(job.id, owner);
+}
+
+/** The start each daemon accepted for each clock (host and routine), as sent: this server's record of what the daemon holds. */
+const acceptedStarts = new Map<string, ClockStartSpec>();
+const acceptedKey = (host: string, jobId: string): string => `${host}\u0000${jobId}`;
+
+/** Why a portable routine was not seated on a host, told at info once per change (a push repeats the same verdict). */
+const seatVerdicts = new Map<string, string>();
+function noteSeatVerdict(host: string, jobId: string, why: string, extra: { held: boolean; unknown: boolean }): void {
+  const key = `${host}\u0000${jobId}`;
+  if (seatVerdicts.get(key) === why) return;
+  seatVerdicts.set(key, why);
+  log.cron.info('clock placement: a portable routine is not placed on this host', { host, jobId, why, ...extra });
 }
 
 /** Remember the clock defs a daemon refused, so the next push does not hand them over again. */
@@ -346,6 +458,15 @@ function rememberRefused(
 }
 
 /**
+ * What belongsOn says of a held portable claude-code clock on a host that is not connected: `unknown`,
+ * it stays. An unreachable host may still be running its own clock, and taking it back without a
+ * lease or epoch from that daemon could start a slot on both sides. (A clock the daemon accepted a start
+ * for is `unknown` before this is asked, whatever the routine is now; a clock that is only a delivery
+ * follows its session's own rules, offline seam or not.) The cost is a missed slot while the host is away, never a second run.
+ */
+const PORTABLE_STRANDED = 'unknown' as const;
+
+/**
  * Whether a routine still belongs to `host`, judged without asking that host
  * (it is not connected). `unknown` keeps the clock where it is: a session that
  * reads as gone because its host is unreachable says nothing about the routine.
@@ -358,9 +479,17 @@ export async function belongsOn(
 ): Promise<'yes' | 'no' | 'unknown'> {
   // A paused clock keeps its host (clock-handover.ts).
   if (!job.enabled) return 'yes';
-  if (!clockCandidate(job)) return 'no';
+  // The daemon accepted a start for it (clockStarts): it may start runs on its own while this Mac is away, and
+  // a lost link says nothing of that. Whatever the routine looks like now, only the daemon's reply gives the clock back.
+  if (job.state?.clockStarts === true) return 'unknown';
+  const allowed = deps.portable ? await deps.portable.allowed().catch(() => false) : false;
+  const kind = portableKindOf(job, deps, allowed);
+  if (!clockCandidate(job) && !kind) return 'no';
   const config = (job.executor?.config ?? {}) as Record<string, unknown>;
-  if (job.executor?.type === 'claude-code') return typeof config.host === 'string' && config.host.trim() === host ? 'yes' : 'no';
+  if (job.executor?.type === 'claude-code') {
+    if (typeof config.host === 'string' && config.host.trim() === host) return 'yes';
+    return kind ? PORTABLE_STRANDED : 'no';
+  }
   let taskId = typeof config.target === 'string' ? config.target.trim() : '';
   let task = taskId ? await deps.getTask(taskId) : null;
   for (let hop = 0; hop < 8 && task?.phase === 'COMPLETE' && task.transferred_to; hop++) {
@@ -400,34 +529,7 @@ export async function takeBackStrandedClocks(
   return out;
 }
 
-// ── keep placement fresh: a routine's session can appear on a host later ──
-
-let watchStarted = false;
-let timer: ReturnType<typeof setTimeout> | null = null;
-/** Task ids a session routine targets (and the tasks they moved to), refreshed on each schedule. */
-let watchedTasks = new Set<string>();
-const REPLACE_DEBOUNCE_MS = 3_000;
-
-/** Re-place every connected host's clocks soon (a burst becomes one push per host). */
-export function scheduleClockPlacement(): void {
-  if (timer) return;
-  timer = setTimeout(() => {
-    timer = null;
-    void import('../../providers/daemon-connection.js')
-      .then(({ pushTriggersToAllHosts }) => pushTriggersToAllHosts())
-      .catch((err) => log.cron.warn('clock placement: re-push failed', { error: err instanceof Error ? err.message : String(err) }));
-    void strandedSweep().catch((err) => log.cron.warn('clock placement: stranded sweep failed', { error: err instanceof Error ? err.message : String(err) }));
-  }, REPLACE_DEBOUNCE_MS);
-  timer.unref?.();
-}
-
-async function strandedSweep(): Promise<void> {
-  const { getCronService } = await import('../../web/routes/cron.js');
-  const service = getCronService();
-  if (!service) return;
-  const back = await takeBackStrandedClocks(service, await service.list({ includeDisabled: true, recompute: false }));
-  if (back.length > 0) log.cron.info('clock routines back on the server timer: they left their unreachable host', { jobIds: back });
-}
+// ── keep placement fresh: watch state and the throttled re-push live in clock-placement-watch.ts ──
 
 /** Remember which tasks matter, so the bus watch can ignore every other task. */
 export function noteWatchedTasks(jobs: readonly CronJob[]): void {
@@ -437,34 +539,18 @@ export function noteWatchedTasks(jobs: readonly CronJob[]): void {
     const target = (job.executor.config as { target?: unknown } | undefined)?.target;
     if (typeof target === 'string' && target) next.add(target);
   }
-  watchedTasks = next;
-}
-
-function taskIdOf(data: unknown): string | undefined {
-  if (!data || typeof data !== 'object') return undefined;
-  const d = data as { taskId?: unknown; task?: { id?: unknown }; id?: unknown };
-  if (typeof d.taskId === 'string') return d.taskId;
-  if (d.task && typeof d.task.id === 'string') return d.task.id;
-  return typeof d.id === 'string' ? d.id : undefined;
-}
-
-/** Started once at boot: a session that starts on a watched task, or a task that moves, re-places its routine. */
-export function startClockPlacementWatch(): void {
-  if (watchStarted) return;
-  watchStarted = true;
-  void import('../event-bus.js').then(({ bus }) => {
-    bus.subscribe('clock-placement', (event) => {
-      if (watchedTasks.size === 0) return;
-      const taskId = taskIdOf(event.data);
-      if (taskId && watchedTasks.has(taskId)) scheduleClockPlacement();
-    }, { global: true, interest: ['session:started', 'task:updated', 'task:completed', 'task:deleted'] });
-  });
+  setWatchedTasks(next);
 }
 
 /** Tests: forget the watch state. */
 export function _resetClockPlacementForTest(): void {
-  if (timer) clearTimeout(timer);
-  timer = null;
-  watchedTasks = new Set();
+  _resetClockWatchForTest();
   refusedClocks.clear();
+  seatVerdicts.clear();
+  acceptedStarts.clear();
 }
+
+// The watch's exports stay reachable from here (callers and tests import them from this file).
+export { _ownerWatchForTest, OWNER_REFRESH_MS, scheduleClockPlacement, startClockPlacementWatch };
+
+export { routineStartOf };

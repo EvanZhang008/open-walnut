@@ -29,6 +29,7 @@ import {
   isLiveSessionStatus, pickDeliverySession, type DeliveryPickOptions, type DeliverySessionCandidate,
 } from '../session-target.js';
 import { clearHostGateNotices, noteHostGateRefusal } from '../host-gate-notice.js';
+import { routinePlacementOf } from '../run-placement.js';
 
 export interface SessionExecutorConfig {
   /** Task the session belongs to. Resolved from `session: 'this'` at create time. */
@@ -259,7 +260,9 @@ export function createSessionExecutor(deps: SessionExecutorDeps = {}): ExecutorD
       // engine's legacy pipeline (executeJobCore's non-empty check, the derived
       // payload) only knows that name — without it a plain scheduled `session`
       // routine would skip every run with "requires non-empty instructions".
-      return { ok: true, config: { target, prompt, instructions: prompt } };
+      const placement = routinePlacementOf(c.placement);
+      if (!placement.ok) return placement;
+      return { ok: true, config: { target, prompt, instructions: prompt, ...(placement.placement ? { placement: placement.placement } : {}) } };
     },
 
     async run(job: CronJob, executor, message: string) {

@@ -338,6 +338,7 @@ const TWIN_HELPERS: Record<string, RegExp> = {
 const TWIN_SCRIPTS = ['test:source-twin-node', 'test:source-twin-node-suites']
 /** Twin suites node-side leaves out, each for a reason. */
 const TWIN_ELSEWHERE: Record<string, string> = {
+  'tests/e2e/routine-sleep-fallback.test.ts': 'uses only the standalone twin: portable API work requires walnut-mcp-v1, which the source twin does not advertise; refusal is covered by clock-portable.test.ts',
   'tests/e2e/session-budget.test.ts': 'needs the full daemon build and the budget-e2e-manifest.json scripts/build-daemon.sh writes beside it; it runs in the e2e tier, which builds',
   'tests/e2e/session-budget-acp.test.ts': 'needs the full daemon build and the budget-e2e-manifest.json scripts/build-daemon.sh writes beside it; it runs in the e2e tier, which builds',
   'tests/providers/daemon-startup-failure-twins.live.test.ts': 'needs a real Claude Code binary (WALNUT_TEST_REAL_CLAUDE_BIN), so it runs in the live tier; its stand-in twin, daemon-startup-failure-twins-e2e.test.ts, runs node-side',

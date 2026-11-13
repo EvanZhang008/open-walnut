@@ -80,6 +80,15 @@ function stripInputDecorations(text) {
   return body === '' ? text.trim() : body
 }
 
+// Keep the actual launch context for fixture acceptance, regardless of whether
+// the trusted template passed it inline or by file. This mock never runs outside
+// the cluster's private HOME and PATH.
+const contextFile = flag('--append-system-prompt-file')
+const context = flag('--append-system-prompt') || (contextFile ? fs.readFileSync(contextFile, 'utf8') : '')
+const launchDir = path.join(configDir, 'fixture-launches')
+fs.mkdirSync(launchDir, { recursive: true, mode: 0o700 })
+fs.writeFileSync(path.join(launchDir, `${sid}.json`), JSON.stringify({ context, cwd: process.cwd() }), { mode: 0o600 })
+
 out({ type: 'system', subtype: 'init', cwd: process.cwd(), model: 'mock-model', tools: [], mcp_servers: [], permissionMode: 'default' })
 
 const queue = []

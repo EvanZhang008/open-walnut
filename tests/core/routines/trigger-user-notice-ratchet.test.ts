@@ -16,8 +16,12 @@ import path from 'node:path'
 const root = path.resolve(import.meta.dirname, '../../..')
 const DIRS = ['src/core/routines', 'src/core/cron']
 
-/** What reaches the user: the bell feed, the inbox, a push. */
-const USER_NOTICE = /\b(addNotification|upsertNotification|sendLetter|sendLetterOnce|sendWalnutLetter|notifyUser|sendPushNotification)\s*\(|human-inbox\/|human_inbox_send/g
+/**
+ * What reaches the user: the bell feed, the inbox, a push. The letter tool counts where code
+ * names it as a tool (the whole string `'human_inbox_send'`, an op call's name); a prompt's
+ * sentence that tells an agent about the tool (offline-run.ts) sends nothing.
+ */
+const USER_NOTICE = /\b(addNotification|upsertNotification|sendLetter|sendLetterOnce|sendWalnutLetter|notifyUser|sendPushNotification)\s*\(|human-inbox\/|(['"`])human_inbox_send\2/g
 
 /**
  * The user's own routines, which no task owns: the user made them, so the user hears
@@ -73,6 +77,15 @@ describe('trigger notices never go to the user', () => {
       if (n) found[file] = n
     }
     expect(found).toEqual(Object.fromEntries(Object.entries(ALLOWED).map(([f, a]) => [f, a.count])))
+  })
+
+  it('the letter tool named as a tool counts, a sentence about it does not', () => {
+    const count = (src: string) => (code(src).match(USER_NOTICE) ?? []).length
+    expect(count("await call('human_inbox_send', { subject })")).toBe(1)
+    expect(count('const op = { name: "human_inbox_send" }')).toBe(1)
+    expect(count('tools.call(`human_inbox_send`, args)')).toBe(1)
+    expect(count("const rule = 'a letter to the user with human_inbox_send.'")).toBe(0)
+    expect(count("import { sendLetter } from '../human-inbox/letters.js'")).toBe(1)
   })
 
   it('a stopped trigger hands its waiting task back without a bell', () => {
