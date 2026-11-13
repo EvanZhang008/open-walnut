@@ -8,6 +8,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { SessionSupervision } from '@/api/sessions';
+import { UNREACHABLE_READ_MESSAGE } from '@/utils/operation-error-words';
 
 const api = vi.hoisted(() => ({
   fetchSessionSupervision: vi.fn<(sid: string) => Promise<SessionSupervision>>(),
@@ -469,7 +470,8 @@ describe('session-supervision store \u2014 a server restart', () => {
     await vi.advanceTimersByTimeAsync(READ_FAILURE_GRACE_MS + 1_600);
     await flush();
     expect(r.snap.unavailable).toBe(true);
-    expect(r.snap.error).toBe('Failed to fetch');
+    // The browser's raw "Failed to fetch" reads as words a person can act on (operation-error-words.ts).
+    expect(r.snap.error).toBe(UNREACHABLE_READ_MESSAGE);
   });
 
   // 2026-11-03: a host that did not answer made every poll a 500. The server now sends the last

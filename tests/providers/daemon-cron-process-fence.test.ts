@@ -989,7 +989,7 @@ function buildProcessStopTwin(kind: 'standalone' | 'template') {
   const source = kind === 'standalone'
     ? nodeFs.readFileSync(nodePath.join(REPO_ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')
     : getDaemonSource()
-  const js = ts.transpileModule(sliceTopLevelFn(source, 'stopSessionProcess') + '\nreturn stopSessionProcess;', {
+  const js = ts.transpileModule(sliceTopLevelFn(source, 'leaderGoneWithGroup') + '\n' + sliceTopLevelFn(source, 'stopSessionProcess') + '\nreturn stopSessionProcess;', {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText
   const stop = new Function(...Object.keys(env), js)(...Object.values(env)) as (ws: unknown, id: number, sid: string) => Promise<void>

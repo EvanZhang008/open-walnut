@@ -888,9 +888,9 @@ describe('Linux sweep', () => {
 
   it('a kept older generation sharing the root never blocks; the root alone stays unknown', async () => {
     const { deps } = linuxDeps([[
-      { pid: 24, environ: `WALNUT_DEMO_ROOT=${ROOT} WALNUT_DEMO_GENERATION=gen-2 `, cwd: `${ROOT}/task-dirs/gen-2/t` },
-      { pid: 25, environ: `WALNUT_DEMO_ROOT=${ROOT} WALNUT_DEMO_GENERATION=gen-1 ` },
-      { pid: 26, environ: `WALNUT_DEMO_ROOT=${ROOT} ` },
+      { pid: 24, environ: `WALNUT_DEMO_ROOT=${ROOT}\u0000WALNUT_DEMO_GENERATION=gen-2\u0000`, cwd: `${ROOT}/task-dirs/gen-2/t` },
+      { pid: 25, environ: `WALNUT_DEMO_ROOT=${ROOT}\u0000WALNUT_DEMO_GENERATION=gen-1\u0000` },
+      { pid: 26, environ: `WALNUT_DEMO_ROOT=${ROOT}\u0000` },
     ]])
     expect(await sweepDemoResidualProcesses(paths, deps)).toMatchObject({ complete: true, matched: 1, unknown: 1, why: { rootNoGeneration: 1 } })
   })

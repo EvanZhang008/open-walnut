@@ -35,7 +35,7 @@ async function acpTask() {
   const { task } = await addTask({ title: PLACEHOLDER })
   await updateTask(task.id, { cwd: CWD }, { source: 'test' })
   await createSessionRecord(sid, task.id, 'Quick Start', CWD, { title: PLACEHOLDER })
-  const fake = { sessionId: sid, runtimeId: `rt-${sid}`, activity: 'idle', requestTurnCompleteSelfReport: vi.fn(async () => 'Session title') }
+  const fake = { sessionId: sid, runtimeId: `rt-${sid}`, activity: 'idle', requestTurnCompleteSelfReport: vi.fn(async () => 'Fix the word count in count.py') }
   ;(sessionRunner as unknown as { acpSessions: Map<string, unknown> }).acpSessions.set(sid, fake)
   const run = () => sessionAutoTitleHook.handler({
     sessionId: sid, taskId: task.id, task: taskRef(task.id), timestamp: new Date().toISOString(), traceId: 't',
@@ -81,7 +81,7 @@ describe('ACP session title on a local model', () => {
     const { taskId, fake, run } = await acpTask()
     await run()
     expect(fake.requestTurnCompleteSelfReport).toHaveBeenCalledTimes(1)
-    expect((await getTask(taskId)).title).toBe('Session title')
+    expect((await getTask(taskId)).title).toBe('Fix the word count in count.py')
   })
 
   it('a cloud setup asks the session first, as before', async () => {
@@ -89,6 +89,6 @@ describe('ACP session title on a local model', () => {
     await run()
     expect(fake.requestTurnCompleteSelfReport).toHaveBeenCalledTimes(1)
     expect(backendTitle).not.toHaveBeenCalled()
-    expect((await getTask(taskId)).title).toBe('Session title')
+    expect((await getTask(taskId)).title).toBe('Fix the word count in count.py')
   })
 })
