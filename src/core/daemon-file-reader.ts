@@ -10,6 +10,7 @@ import { log } from '../logging/index.js'
 import { link, linkTarget } from './hosts/link.js'
 import { isSelfHost } from '../replica/self-host.js'
 import { getConfig } from './config-manager.js'
+import { byteCeilingError, isByteCeilingError } from './byte-ceiling.js'
 import { claudeProjectsSearchRoots, TRANSCRIPT_FIND_DEPTH } from './claude-config-dir.js'
 import { encodeProjectPath, isSafeForProjectEncoding, type SessionFileReader } from './session-file-reader.js'
 import type { FileGitCommit } from './file-history-git.js'
@@ -171,7 +172,7 @@ export class DaemonFileReader implements SessionFileReader {
         // A byte-ceiling rejection MUST propagate: falling through to the plain
         // fs.read below would perform the very unbounded whole-file read the
         // ceiling exists to prevent (and blow the ws maxPayload besides).
-        if (err instanceof Error && err.message.includes('byte ceiling')) throw err
+        if (isByteCeilingError(err)) throw err
         return this.readFilePlain(conn, remotePath) // no fs.readRange (old daemon): plain read
       }
     })
@@ -557,10 +558,7 @@ export class DaemonFileReader implements SessionFileReader {
           log.session.warn('DaemonFileReader: read exceeded the byte ceiling — refusing', {
             host: this.host, path: remotePath, start, fileSize, limit, readSoFar: totalBytes,
           })
-          throw new Error(
-            `file read exceeded the ${limit}-byte ceiling (path=${remotePath}, size=${fileSize}); ` +
-            'read a bounded window instead (see readSessionHistoryTail)',
-          )
+          throw byteCeilingError(limit, remotePath, fileSize)
         }
       }
       if (res.eof || bytesRead === 0) break
@@ -604,13 +602,14 @@ export class DaemonFileReader implements SessionFileReader {
     // concurrency slot and 32 MB of transfer on a read that cannot complete.
     const limit = DaemonFileReader.maxReadBytes()
     if (size > limit) {
-      log.session.warn('DaemonFileReader: whole-file read exceeds the byte ceiling — refusing', {
+      // Debug, not warn: a refusal known from the size alone is the designed
+      // answer, not a fault. Every whole-file caller of a transcript degrades on
+      // it (a bounded tail, a host-local probe) and logs that choice itself; as a
+      // warn it ran 1,500 to 2,200 times a day for a few long sessions (2026-11-13).
+      log.session.debug('DaemonFileReader: whole-file read exceeds the byte ceiling — refusing', {
         host: this.host, path: remotePath, fileSize: size, limit,
       })
-      throw new Error(
-        `file read exceeded the ${limit}-byte ceiling (path=${remotePath}, size=${size}); ` +
-        'read a bounded window instead (see readSessionHistoryTail)',
-      )
+      throw byteCeilingError(limit, remotePath, size)
     }
     await DaemonFileReader.acquireFullReadSlot()
     try {

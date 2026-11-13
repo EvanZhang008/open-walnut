@@ -97,6 +97,7 @@ import { bus, EventNames } from '../event-bus.js';
 import { log } from '../../logging/index.js';
 import type { SessionHistoryMessage } from '../session-history.js';
 import { engineCaps } from '../agents/engine-registry.js';
+import { isByteCeilingError } from '../byte-ceiling.js';
 
 /** File-rewind outcome as the CLI reports it (SDKControlRewindFilesResponse). */
 export interface RewindFilesReport {
@@ -296,8 +297,7 @@ export async function probeRewindViaDaemon(
  *  it means this host's daemon is too old to answer host-locally, and it fixes
  *  itself on the next auto-deploy. Returns null for any other error. */
 function tooLargeForTheTunnel(err: unknown): SessionControlError | null {
-  const msg = err instanceof Error ? err.message : String(err);
-  if (!msg.includes('byte ceiling')) return null;
+  if (!isByteCeilingError(err)) return null;
   return new SessionControlError(
     'This transcript is too large to validate over the tunnel; the session host needs the current daemon (auto-upgrades on the next message you send it)',
     503,

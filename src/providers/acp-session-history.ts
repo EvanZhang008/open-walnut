@@ -7,6 +7,7 @@ import type { SessionRecord } from '../core/types.js'
 import { AcpHistoryFold, projectAcpJournalHistory } from './acp-journal-projector.js'
 import type { JournalRecord } from './acp-worker/protocol.js'
 import { isProductionDaemonDir } from '../lib/daemon-dir.js'
+import { isByteCeilingError } from '../core/byte-ceiling.js'
 
 interface JournalReader {
   readFile(filePath: string): Promise<string | null>
@@ -542,8 +543,7 @@ async function readJournalWholeFile(
   } catch (err) {
     // Whole-file read refused for size (byte ceiling) — degrade to a bounded
     // tail window instead of failing the request.
-    const msg = err instanceof Error ? err.message : String(err)
-    if (!msg.includes('byte ceiling')) throw err
+    if (!isByteCeilingError(err)) throw err
     const tail = await readAcpJournalTail(reader, journalPath)
     if (tail === null) return null
     log.session.info('acp history: journal over byte ceiling — projected tail window', {

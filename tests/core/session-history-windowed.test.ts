@@ -27,9 +27,14 @@ import { mockLocalDaemonReader } from '../helpers/mock-local-daemon-reader.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
 const delayedRanges = vi.hoisted(() => ({ small: false, entered: undefined as (() => void) | undefined, release: undefined as Promise<void> | undefined }));
+const wholeReads = vi.hoisted(() => [] as string[]);
 vi.mock('../../src/core/daemon-file-reader.js', () => {
   const actual = mockLocalDaemonReader();
   class Reader extends actual.DaemonFileReader {
+    async readFile(remotePath: string) {
+      wholeReads.push(remotePath);
+      return super.readFile(remotePath);
+    }
     async readFileRange(remotePath: string, start: number) {
       const result = await super.readFileRange(remotePath, start);
       if (delayedRanges.small && result && result.fileSize - start <= 2048) {
@@ -51,6 +56,7 @@ import {
   _resetHistoryCacheForTesting,
 } from '../../src/core/session-history.js';
 import { registerEchoClaims, _resetEchoClaimsForTest } from '../../src/core/echo-claims.js';
+import { log } from '../../src/logging/index.js';
 
 const tmpBase = CLAUDE_HOME as string;
 const CWD = '/tmp/windowed-test-project';
@@ -64,12 +70,14 @@ beforeEach(async () => {
   delayedRanges.small = false;
   delayedRanges.entered = undefined;
   delayedRanges.release = undefined;
+  wholeReads.length = 0;
 });
 
 afterEach(async () => {
   await fsp.rm(tmpBase, { recursive: true, force: true }).catch(() => {});
   if (prevLimit === undefined) delete process.env.WALNUT_MAX_FILE_READ_BYTES;
   else process.env.WALNUT_MAX_FILE_READ_BYTES = prevLimit;
+  vi.restoreAllMocks();
 });
 
 function jsonlPath(sessionId: string): string {
@@ -116,6 +124,24 @@ describe('whale-session bounded tail', () => {
     // what made the count-based cursor lossy.
     expect(messages.length).toBeLessThan(120);
     expect(isWindowedHistory(messages)).toBe(true);
+  });
+
+  it('a stat over the ceiling goes straight to the tail: no whole-file read, no warn', async () => {
+    // 2026-11-13: every open of a long session first asked for the whole file,
+    // was refused on its size, and only then read the tail: three warn lines per
+    // read, about 2,000 a day, which raised a chronic log alarm. The stat already
+    // knows the size, so the doomed read must never be attempted.
+    const sid = 'whale-precheck';
+    await writeLines(sid, [...padding(60), userLine('latest question', '2026-01-02T00:00:00.000Z')]);
+    process.env.WALNUT_MAX_FILE_READ_BYTES = '4096';
+    const warn = vi.spyOn(log.session, 'warn');
+
+    const messages = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+
+    expect(isWindowedHistory(messages)).toBe(true);
+    expect(messages.map(m => m.text)).toContain('latest question');
+    expect(wholeReads.filter(p => p.endsWith(`${sid}.jsonl`))).toEqual([]);
+    expect(warn.mock.calls.map(c => c[0])).toEqual([]);
   });
 
   it('a full read is NOT marked windowed (the flag is not sticky per session)', async () => {

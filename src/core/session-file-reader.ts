@@ -13,6 +13,7 @@ import path from 'node:path';
 import { claudeProjectsDir, localClaudeProjectsDir } from './claude-config-dir.js';
 import { log } from '../logging/index.js';
 import { sortedNames } from '../lib/dir-order.js';
+import { isByteCeilingError } from './byte-ceiling.js';
 
 // ── Path helpers ──
 
@@ -368,10 +369,6 @@ export async function readSessionJsonlContent(
       if (result) return result;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      log.session.warn('JSONL read via daemon failed', {
-        host: daemonHost, sessionId,
-        error: errMsg,
-      });
       // A byte-ceiling refusal is NOT a transport failure and must propagate for
       // BOTH local and remote. The fallbacks below (streams capture, then the
       // outputFile) are the SAME oversized transcript, so they either blow the
@@ -379,8 +376,13 @@ export async function readSessionJsonlContent(
       // because the caller (readSessionHistory) has a real answer for this case:
       // degrade to a bounded 4 MB tail. Swallowing it here served an EMPTY
       // history for a 197 MB session (observed: 200 with respBytes=49) while the
-      // tail degradation sat unreachable.
-      if (errMsg.includes('byte ceiling')) throw err;
+      // tail degradation sat unreachable. Not a failure, so not warned here: the
+      // caller logs the degrade it chooses.
+      if (isByteCeilingError(err)) throw err;
+      log.session.warn('JSONL read via daemon failed', {
+        host: daemonHost, sessionId,
+        error: errMsg,
+      });
       // For remote this is fatal (no local fallback exists). For local, fall
       // through to the streams-capture fallback below (steps 2-3) rather than
       // throwing — the local daemon may be mid-restart while the streams file

@@ -37,6 +37,7 @@ import { REMOTE_IMAGES_DIR } from '../constants.js';
 import { backfillMirrorSidecar, resolveSessionMirrorPath, looksAlreadyMirrored, startMirrorDownload } from './remote-image-mirror.js';
 import { noteMessageBlockTypes, noteTranscriptLineType } from './transcript-line-types.js';
 import { _resetTailWindowsForTesting, dropTailWindows, setTailWindowShedding } from './history-tail-window.js';
+import { isByteCeilingError } from './byte-ceiling.js';
 
 // The parser itself (parseSessionMessages and the row types) lives in history-parse.ts, pure, so
 // the session daemon can bundle it; this module re-exports all of it and gives it the logger.
@@ -1666,27 +1667,21 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
     // Window read failed — fall through to the normal full read.
   }
 
-  // A file over the reader's hard byte ceiling throws instead of materializing
-  // (DaemonFileReader.maxReadBytes). Degrade to the BOUNDED tail window rather than
-  // surfacing a load error: a very long transcript still renders its recent history,
-  // which is what the UI shows anyway. Only this specific ceiling error degrades —
-  // transport failures keep their existing contract.
-  let result: Awaited<ReturnType<typeof readSessionJsonlContent>>;
-  try {
-    result = await readSessionJsonlContent(sessionId, cwd, host, outputFile, {
-      throwOnReadFailure: true, localDaemonError: localDaemonDown,
-      knownPath: getResolvedRemotePath(sessionId, host ?? '__local__'),
+  // A file over the reader's hard byte ceiling (DaemonFileReader.maxReadBytes)
+  // cannot be read whole. Degrade to the BOUNDED tail window rather than surfacing
+  // a load error: a very long transcript still renders its recent history, which
+  // is what the UI shows anyway. Only this specific ceiling degrades; transport
+  // failures keep their existing contract. A designed answer, not a fault, so it
+  // is logged at info (as a warn chain it ran ~2,000 times a day, 2026-11-13).
+  const { DaemonFileReader } = await import('./daemon-file-reader.js');
+  const serveOverCeilingTail = async (fileSize: number | undefined): Promise<SessionHistoryMessage[]> => {
+    log.session.info('history over the byte ceiling — serving a bounded tail', {
+      sessionId, host: host ?? '__local__', fileSize, limit: DaemonFileReader.maxReadBytes(),
     });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!msg.includes('byte ceiling')) throw err;
-    log.session.warn('history read hit the byte ceiling — serving a bounded tail instead', {
-      sessionId, host: host ?? '__local__', error: msg,
-    });
-    // A byte-ceiling rejection is itself proof the file exists (and is huge).
+    // Over the ceiling is itself proof the file exists (and is huge).
     sourceFound = true;
-    // Resolving the cut anchors needs the WHOLE file, which this transport just
-    // refused — but the session's HOST can read it. Ask its daemon for the dead
+    // Resolving the cut anchors needs the WHOLE file, which this transport
+    // cannot read — but the session's HOST can read it. Ask its daemon for the dead
     // set (transcript.rewindProbe: only uuids cross the tunnel, memoized on the
     // file's identity, bounded by its own short deadline) and apply it to the
     // bounded tail. No answer, an answer past the probe's cap, or an answer whose
@@ -1722,6 +1717,22 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
     if (tail) return handOff(tail);
     // Tail unavailable too — last resort is the previous parse, else empty.
     return handOff(getCachedSessionHistory(sessionId, host) ?? []);
+  };
+  // The stat already says the whole read would be refused: go straight to the
+  // tail instead of spending a round trip on a read that cannot complete.
+  if (statPath && statSize !== undefined && statSize > DaemonFileReader.maxReadBytes()) {
+    return serveOverCeilingTail(statSize);
+  }
+  let result: Awaited<ReturnType<typeof readSessionJsonlContent>>;
+  try {
+    result = await readSessionJsonlContent(sessionId, cwd, host, outputFile, {
+      throwOnReadFailure: true, localDaemonError: localDaemonDown,
+      knownPath: getResolvedRemotePath(sessionId, host ?? '__local__'),
+    });
+  } catch (err) {
+    // No stat, or the file grew past the ceiling after it: the read refused it.
+    if (!isByteCeilingError(err)) throw err;
+    return serveOverCeilingTail(undefined);
   }
   // Raw JSONL length — the cache's byte-budget proxy for the parsed messages.
   const sourceChars = result?.content.length ?? 0;
@@ -1972,10 +1983,9 @@ export async function extractPlanContent(sessionId: string, cwd?: string, host?:
   try {
     result = await readSessionJsonlContent(sessionId, cwd, host);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!msg.includes('byte ceiling')) throw err;
-    log.session.warn('plan extraction hit the byte ceiling — scanning the transcript tail instead', {
-      sessionId, host: host ?? '__local__', error: msg,
+    if (!isByteCeilingError(err)) throw err;
+    log.session.info('plan extraction over the byte ceiling — scanning the transcript tail instead', {
+      sessionId, host: host ?? '__local__', error: err instanceof Error ? err.message : String(err),
     });
     return extractPlanFromTranscriptTail(sessionId, cwd, host);
   }

@@ -29,6 +29,7 @@ vi.mock('../../src/core/config-manager.js', () => ({
 }))
 
 import { DaemonFileReader } from '../../src/core/daemon-file-reader.js'
+import { log } from '../../src/logging/index.js'
 
 const CHUNK_SIZE = (DaemonFileReader as unknown as { CHUNK_SIZE: number }).CHUNK_SIZE
 const CHUNK_THRESHOLD = (DaemonFileReader as unknown as { CHUNK_THRESHOLD: number }).CHUNK_THRESHOLD
@@ -244,12 +245,17 @@ describe('DaemonFileReader byte ceiling (guardrail)', () => {
     const fileBuf = Buffer.alloc(6 * 1024 * 1024, 'a')
     serveFile(fileBuf)
 
+    const warn = vi.spyOn(log.session, 'warn')
     await withLimit(4 * 1024 * 1024, async () => {
       const reader = new DaemonFileReader('__local__')
       await expect(reader.readFile('/whale.jsonl')).rejects.toThrow(/byte ceiling/)
       // stat told us the size; nothing should have been pulled over the wire.
       expect(callsFor('fs.readRange')).toHaveLength(0)
     })
+    // A refusal on the known size is the designed answer every caller degrades
+    // on; as a warn it raised a chronic log alarm (2026-11-13).
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
   })
 
   it('a file UNDER the ceiling still reads completely and byte-exactly', async () => {

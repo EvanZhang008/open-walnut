@@ -63,6 +63,7 @@ import {
 import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
 import { noteSessionChangesComputed } from './session-git-status.js';
+import { isByteCeilingError } from './byte-ceiling.js';
 
 // The compute PRIMITIVES (op parse, reverse-apply reconstruction, grouping
 // policy) live in providers/session-changes-core.ts, shared verbatim with the
@@ -465,10 +466,6 @@ function lastLineOf(complete: string): string {
 }
 
 // ── Streaming full parse (bounded memory) ──
-
-function isByteCeilingError(err: unknown): boolean {
-  return err instanceof Error && err.message.includes('byte ceiling');
-}
 
 /** Reader surface for the streaming parse (DaemonFileReader satisfies it). */
 interface RangeByteReader {
