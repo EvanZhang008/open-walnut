@@ -549,9 +549,45 @@ export const homeColumns = (page: Page): Locator =>
 
 /** Land on the app and wait for the task panel (every scenario needs a "+"). */
 export async function loadHome(page: Page): Promise<void> {
+  const primed = requestSettles(page, /\/api\/sessions\/working-dirs/)
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
+  await waitForBoardList(page)
+  // Home warms the working-dirs cache on mount (MainPage), through the page's own request
+  // queue. A main thread blocked for over half a second reads as network idle to Playwright
+  // while that queue still holds the request, so it left after the load, inside a draft's
+  // zero-network open path (2026-11-13: draft-session-column, every CI run).
+  await primed()
+}
+
+/** Resolves once a request matching `url` (made from now on) has finished or failed. */
+function requestSettles(page: Page, url: RegExp): () => Promise<void> {
+  let settled = false
+  const done = (req: { url(): string }) => { if (url.test(req.url())) settled = true }
+  page.on('requestfinished', done)
+  page.on('requestfailed', done)
+  return async () => {
+    try {
+      await expect.poll(() => settled, { message: `the page's ${url} request settles`, timeout: 30_000 }).toBe(true)
+    } finally {
+      page.off('requestfinished', done)
+      page.off('requestfailed', done)
+    }
+  }
+}
+
+/**
+ * The board's task list is in the page. useTasks adopts its first answer in a transition
+ * (hooks/useTasks.ts), and a busy main thread holds that transition back well after the
+ * columns have drawn their chats: on a 4-CPU CI runner the answer had come and the page still
+ * held no task 2 s later, so a complete in a column found no task and the advance an empty
+ * Needs you queue (2026-11-13: keyboard-triage and column-complete-close, every CI run). A spec
+ * that acts on the list (complete, go on to the next task, locate a row) starts once it is in.
+ * The list's loading spinner goes in the same commit that brings the rows.
+ */
+export async function waitForBoardList(page: Page): Promise<void> {
+  await expect(page.locator('.todo-panel-list > .empty-state .spinner')).toHaveCount(0, { timeout: 30_000 })
 }
 
 /** Seed the home column queue so `sids` panels mount on load. Call BEFORE goto. */

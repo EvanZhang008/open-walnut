@@ -19,6 +19,7 @@
 import fs from 'node:fs/promises'
 import { test, expect } from '@playwright/test'
 import { presetPanelView } from './todo-panel-helpers'
+import { waitForBoardList } from './draft-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
@@ -67,6 +68,7 @@ test('Codex cold attach does not block the durable session title', async ({ page
   await presetPanelView(page)
   await page.goto('/')
   await page.waitForLoadState('networkidle')
+  await waitForBoardList(page)
 
   const task = page.locator('.todo-panel-item[data-task-id="pw-task-codex-cold-detail"]')
   await expect(task).toBeVisible({ timeout: 10_000 })
