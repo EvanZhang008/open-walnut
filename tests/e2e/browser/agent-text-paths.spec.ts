@@ -169,7 +169,11 @@ test('video asks to play after a pointer click; missing files recover without a 
   const plays = () => page.evaluate(() => (window as unknown as { __walnutAudio?: { plays: number } }).__walnutAudio?.plays ?? -1);
   const before = await plays();
   expect(before, 'the page silencer runs').toBeGreaterThanOrEqual(0);
-  await click(page, video);
+  // The person presses the controls' Play: Chromium's headless build draws its controls as a
+  // row of buttons and a click on the picture asks nothing (nightly 43447259774); WebKit has
+  // no such button, and its picture takes the click.
+  const playButton = page.locator('.file-viewer-overlay').getByRole('button', { name: /^Play( video)?$/ });
+  await click(page, (await playButton.count()) ? playButton.first() : video);
   await expect.poll(plays).toBeGreaterThan(before);
   expect(await video.evaluate((el: HTMLVideoElement) => el.paused)).toBe(true);
   await page.waitForTimeout(750);
