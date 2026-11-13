@@ -36,6 +36,7 @@ const KNOWN: Record<string, { count: number; why: string }> = {
   },
   'src/providers/daemon-net-update.ts': { count: 1, why: 'a skip reason for logs; a Demo host is not a host-network member' },
   'src/providers/acp-session.ts': { count: 1, why: 'readOnlyRemote only: the Demo\'s hosts run its own isolated daemon' },
+  'src/providers/light-subagent-acp.ts': { count: 1, why: 'readOnlyRemote only, as acp-session.ts: the Demo\'s hosts run its own isolated daemon' },
   'src/providers/daemon-source.ts': {
     count: 2,
     why: 'daemon twins: session_other_walnut is mapped to delivery-failure.ts words (thisServer) before a person reads it; the other refuses a developer\'s misconfigured start',
