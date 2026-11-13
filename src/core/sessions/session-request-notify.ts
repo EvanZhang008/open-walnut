@@ -114,6 +114,49 @@ export function lastTurnOf(
   return { words, openedBy };
 }
 
+/**
+ * Whether the last turn of a transcript wrote words for the user: true when a reply of that turn
+ * has text beyond the agent-ack line; false when it wrote only the agent-ack line or nothing, or when
+ * the session was compacted after it (`compactedAt`, SessionRecord.lastCompactAt: a compaction is a
+ * turn of its own that writes nothing, and the transcript folds its summary onto the row before it);
+ * undefined when that cannot be told (no transcript, a turn of tool calls with no text). Unlike
+ * {@link lastTurnOf} it never falls back to an earlier turn's words.
+ */
+export function lastTurnWroteWords(
+  messages: ReadonlyArray<TranscriptRow & { timestamp?: string }> | undefined, opts: { compactedAt?: string } = {},
+): boolean | undefined {
+  if (!messages?.length) return undefined;
+  const lastAt = Date.parse(messages[messages.length - 1]!.timestamp ?? '');
+  if (Number.isFinite(lastAt) && lastAt < Date.parse(opts.compactedAt ?? '')) return false;
+  let acked = false;
+  let tools = false;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.role === 'user' && !INTERRUPT_MARKER.test(m.text.trim())) break;
+    if (m.role !== 'assistant') continue;
+    if (m.kind === 'tool') tools = true;
+    else if (!m.kind) {
+      const words = noticeWordsOf(m.text);
+      if (words?.text.trim()) return true;
+      if (words?.ack) acked = true;
+    }
+  }
+  return acked || !tools ? false : undefined;
+}
+
+/** {@link lastTurnWroteWords} of the session's live transcript, bounded; undefined when it could not be read. */
+export async function readLastTurnWroteWords(sessionId: string, opts: { compactedAt?: string } = {}): Promise<boolean | undefined> {
+  try {
+    const projection = await import('../session-projection.js');
+    const read = projection.buildSessionTranscript(sessionId);
+    read.catch(() => undefined);
+    const live = await withinReadBudget(read);
+    return live === TIMED_OUT ? undefined : lastTurnWroteWords(live?.messages, opts);
+  } catch {
+    return undefined;
+  }
+}
+
 function lastWordsOfTurn(
   messages: ReadonlyArray<TranscriptRow>,
   start: number,

@@ -216,8 +216,10 @@ describe('a reworded ask is the same decision on every path', () => {
     const first = turn(answer(REWORDINGS[0]!.asks[0]!), null, NOW - 5 * 3_600_000)
     const working = turn('FOR_USER_STATE: working\nFOR_USER_NOW: checking it again', first, NOW - 4 * 3_600_000)
     expect(working.last_ask?.id).toBe(first.ask_id)
-    // The status question still shows it its decision after the break, so it names it.
-    expect(askDecisionQuestion(working, NOW - 4 * 3_600_000)).toContain(first.ask_id!)
+    // The status question names only a decision it still asks: after the break it shows none, so a
+    // session cannot be led into asking it again (2026-11-13, turn-end-ask.ts). Named by the session, or
+    // asked in words that still say the same, it keeps its id.
+    expect(askDecisionQuestion(working)).toBe('')
     const said = turn(answer(REWORDINGS[0]!.asks[2]!, [`FOR_USER_ASK_ID: ${first.ask_id}`]), working, NOW - 3 * 3_600_000)
     expect(said.ask_id).toBe(first.ask_id)
     // Unsaid after a break, only words that still say the same keep it (a related new decision may follow a break).
@@ -234,11 +236,11 @@ describe('a reworded ask is the same decision on every path', () => {
 
   it('the status question shows the session its decision id', () => {
     const first = turn(answer(REWORDINGS[0]!.asks[0]!), null, NOW - 3_600_000)
-    const q = askDecisionQuestion(first, NOW)
+    const q = askDecisionQuestion(first)
     expect(q).toContain(first.ask_id!)
     expect(q).toContain('FOR_USER_ASK_ID:')
     expect(q).toContain('FOR_USER_ASK_NEW:')
-    expect(askDecisionQuestion(null, NOW)).toBe('')
+    expect(askDecisionQuestion(null)).toBe('')
   })
 })
 

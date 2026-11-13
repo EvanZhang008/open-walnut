@@ -24,7 +24,7 @@ function walk(dir: string): string[] {
 const SEES_QUIET_TURNS: Record<string, string> = {
   'src/core/event-bus.ts': 'defines the event name',
   'src/core/event-types.ts': 'defines the payload',
-  'src/core/phase.ts': 'applySessionPhase itself refuses a quiet turn\'s session edges',
+  'src/core/phase.ts': 'applySessionPhase itself refuses a quiet turn\'s session edges, and handBackTaskOnSessionEnd its clean end',
   'src/core/session-hooks/dispatcher.ts': 'hands the event to derive/session.ts, which skips a quiet turn',
   'src/core/session-health-monitor.ts': 'only names the phase trigger; applySessionPhase gates it',
   'src/providers/claude-code-session.ts': 'the runner: drains the queue and settles the turn, quiet or not',

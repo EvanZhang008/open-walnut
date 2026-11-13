@@ -845,6 +845,10 @@ export async function handBackTaskOnSessionEnd(
   opts?: { shouldApply?: (current: Readonly<Task>) => boolean; turnEnd?: boolean },
 ): Promise<boolean> {
   if (!taskId) return false
+  // The clean end of a quiet turn (Walnut's idle compaction) hands nothing back: it was no work of
+  // the task's (2026-11-13: a daemon snapshot of a compaction's end moved a task to Needs you, and the
+  // restart after it asked that "turn" for a status).
+  if (opts?.turnEnd && isQuietTurn(sessionId)) return false
   try {
     const { getTask } = await import('./task-manager.js')
     const task = await getTask(taskId)

@@ -312,11 +312,16 @@ export function readDeclared(idWord: string | undefined, newWord: string | undef
   return out;
 }
 
-/** The turn-end status question's part on the task's own decision: '' when it asks none. */
-export function askDecisionQuestion(prev: StatusReport | null | undefined, nowMs = Date.now()): string {
+/**
+ * The turn-end status question's part on the task's own decision: '' when it asks none now. A
+ * decision it stopped asking is never named as its ask (2026-11-13: a compacted session read an
+ * answered decision from here and asked it again); asked again in its words, stamping still keeps
+ * its id (stampAskDecision, ASK_MEMORY_MS).
+ */
+export function askDecisionQuestion(prev: StatusReport | null | undefined): string {
+  if (prev?.state !== 'needs') return '';
   const memory = memoryOf(prev);
   if (!memory) return '';
-  if (prev?.state !== 'needs' && nowMs - Date.parse(memory.at) > ASK_MEMORY_MS) return '';
   const words = memory.ask.replace(/\s+/g, ' ').slice(0, 200);
   const last = memory.new ? ` The last new thing you named about it: "${memory.new.replace(/\s+/g, ' ').slice(0, 160)}".` : '';
   return `\n\nYour ask to the user is decision ${memory.id}: "${words}".${last}\n`
