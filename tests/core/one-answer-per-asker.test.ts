@@ -60,6 +60,27 @@ describe('every answer instruction names one call for one asker', () => {
     expect(text).toContain('2 are from Walnut VP: answer them in ONE task_send, in_reply_to ["rq-111111","rq-333333"]')
   })
 
+  it('every reply line Walnut builds under a new request is given the asker\'s other open requests', () => {
+    // A call with the request alone (`buildReplyTrailer(row)`) tells the target to answer each one apart.
+    const ROOT = path.resolve(__dirname, '../../src')
+    const bare: string[] = []
+    let calls = 0
+    const walk = (dir: string) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name)
+        if (e.isDirectory()) walk(p)
+        else if (e.name.endsWith('.ts')) {
+          const src = fs.readFileSync(p, 'utf8')
+          calls += (src.match(/buildReplyTrailer\((?!request: )/g) ?? []).length
+          for (const m of src.matchAll(/buildReplyTrailer\(\s*[\w.]+\s*\)/g)) bare.push(`${path.relative(ROOT, p)}: ${m[0]}`)
+        }
+      }
+    }
+    walk(ROOT)
+    expect(bare).toEqual([])
+    expect(calls).toBeGreaterThan(3)
+  })
+
   it('no other builder of an answer instruction exists in src/ (add it here with its grouping)', () => {
     const ROOT = path.resolve(__dirname, '../../src')
     const KNOWN = new Set([
@@ -68,6 +89,9 @@ describe('every answer instruction names one call for one asker', () => {
       'core/sessions/open-items-text.ts', // oneAnswerLines
       // A letter about a task's own request: it names the one request the letter would have answered.
       'core/human-inbox/reply-instead.ts',
+      // A list answer that could not settle some: it names exactly those, in one list.
+      'ops/work.ts',
+      'providers/offline-host-core.ts',
     ])
     const found: string[] = []
     const walk = (dir: string) => {

@@ -144,6 +144,9 @@ defineOp({
         + (Array.isArray(b.answered) && b.answered.length > 1
           ? ` This one answer settled ${b.answered.length} requests (${b.answered.join(', ')}); each asker reads it once. Do not answer them again one by one.`
           : '')
+        + (Array.isArray(b.notAnswered) && b.notAnswered.length
+          ? ` It did NOT settle ${b.notAnswered.join(', ')}${b.notAnsweredWhy ? ` (${b.notAnsweredWhy})` : ''}: send the answer again with in_reply_to ${JSON.stringify(b.notAnswered)} only.`
+          : '')
         + (Array.isArray(b.answeredFor) && b.answeredFor.length
           ? ` It answered ${b.answeredFor.join(', ')} too, so it went straight to the original asker (${b.targetTaskId || target}); the task that handed it to you got one line saying so.`
           : '')

@@ -66,6 +66,17 @@ describe('offline handover: writes a host held for the server', () => {
     expect(acks).toEqual([3])
   })
 
+  it('a write held under its caller\'s call id replays under that id, so the caller\'s own retry meets it', async () => {
+    executeOp.mockResolvedValue({ ok: true, result: {} })
+    const rec = { ...held(6, 'agent_memory_write', { content: 'land tonight', task: 'mtaskaaa-0001' }), callId: 'oc-abcdef12_3456' } as OfflineRecord
+    await replay([rec])
+    expect(executeOp.mock.calls[0][2].callId).toBe('oc-abcdef12_3456')
+    // A board write with a call id on it still goes under the journal's own (only held writes carry one).
+    executeOp.mockClear()
+    await replay([{ ...held(7, 'board_edit', { task: 'mtaskaaa-0001' }), callId: 'oc-abcdef12_3456' } as OfflineRecord])
+    expect(executeOp.mock.calls[0][2].callId).not.toBe('oc-abcdef12_3456')
+  })
+
   it('a server that cannot take it now keeps it for a retry; a refusal is told to the caller and names no target task', async () => {
     executeOp.mockResolvedValue({ ok: false, unreachable: true, message: 'fetch failed' })
     expect((await replay([held(4, 'task_send', { task: 'msjfj3no', message: 'hi' })])).acks).toEqual([])

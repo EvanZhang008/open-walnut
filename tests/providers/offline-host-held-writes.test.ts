@@ -38,7 +38,8 @@ describe('offline host: a write nothing could take is held for the server', () =
     expect(again).toMatchObject({ ok: true, result: { queued: true, messageId: 'qm-host-abcdef12-3456' } })
     const held = h.journal.records(JHOME).filter((r) => r.kind === 'op')
     expect(held).toHaveLength(1)
-    expect(held[0]).toMatchObject({ op: 'task_send', callerSid: SID_A, opId: 'held-abcdef12-3456', args: { task: 'msjfj3no', messageId: 'qm-host-abcdef12-3456' } })
+    // The caller's call id, verbatim: the Mac replays under it, so the caller's own retry meets it.
+    expect(held[0]).toMatchObject({ op: 'task_send', callerSid: SID_A, opId: 'held-abcdef12-3456', callId: 'oc-abcdef12_3456', args: { task: 'msjfj3no', messageId: 'qm-host-abcdef12-3456' } })
     // Another call is another message.
     expect(h.host.holdWrite(JHOME, SID_A, 'tools.call', send({ task: 'msjfj3no', message: 'And merged' }, 'oc-99999999_0000'))).toMatchObject({ ok: true })
     expect(h.journal.records(JHOME).filter((r) => r.kind === 'op')).toHaveLength(2)

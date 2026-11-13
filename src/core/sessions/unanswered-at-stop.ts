@@ -48,7 +48,8 @@ export function unansweredStopReason(
     byAsker.set(r.fromSessionId, g);
   }
   const shared = [...byAsker.values()].filter((g) => g.ids.length > 1);
-  const firstIds = shared[0]?.ids ?? [open[0]?.request.id ?? '<request id>'];
+  // One call takes at most 20 (MAX_ANSWERED_AT_ONCE): a bigger group answers in several.
+  const firstIds = shared[0]?.ids.slice(0, 20) ?? [open[0]?.request.id ?? '<request id>'];
   const replyTo = firstIds.length > 1 ? `[${firstIds.map((id) => `"${id}"`).join(',')}]` : `"${firstIds[0]}"`;
   return [
     `Walnut: before this turn ends, you hold ${open.length === 1 ? 'a request' : `${open.length} requests`} that waits for your reply, still unanswered:`,

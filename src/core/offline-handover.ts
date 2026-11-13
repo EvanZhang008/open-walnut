@@ -27,7 +27,7 @@ import type { SessionRequest } from './session-requests.js';
 import { VALID_SESSION_EFFORT_IDS, VALID_SESSION_MODE_IDS, type SessionEffort, type SessionMode } from './types.js';
 import { APPLIED_V2_KINDS, RefusedWrite, applyV2, devicePaired, v2TaskIdOf, type V2Record } from './offline-merge/apply-v2.js';
 import { recordRemap } from './offline-merge/ledger.js';
-import { journalCallId } from '../lib/op-call-id.js';
+import { isCallId, journalCallId } from '../lib/op-call-id.js';
 
 /** What the handover needs from a daemon connection. */
 export interface HandoverConnection {
@@ -415,6 +415,10 @@ function scheduleRetry(conn: HandoverConnection, ms: number): void {
  * answer was lost meets that try's writes instead of applying them twice.
  */
 function recordCall(host: string, record: OfflineRecord): { callId?: string } {
+  // A write a host held for the server (holdWrite) carries the call id its caller sent: replayed
+  // under it, a retry of that call meets the replay's writes, and op_result finds it.
+  const own = record.kind === 'op' && HELD_OPS.has(record.op) ? record.callId : undefined;
+  if (isCallId(own)) return { callId: own };
   const opId = recordOpId(record);
   return opId ? { callId: journalCallId(host, opId, Number((record as { rev?: unknown }).rev) || 1) } : {};
 }

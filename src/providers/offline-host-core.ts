@@ -196,7 +196,7 @@ export type OfflineRecord =
    * runs it, so a resume here can arm it again (the server's set no longer carries a paused
    * trigger) and a trigger created here runs before the server has it.
    */
-  | { seq: number; at: number; online?: true; kind: 'op'; op: string; args: Record<string, unknown>; callerSid: string; base?: string; trigger?: OfflineTrigger }
+  | { seq: number; at: number; online?: true; kind: 'op'; op: string; args: Record<string, unknown>; callerSid: string; base?: string; trigger?: OfflineTrigger; callId?: string }
   /**
    * A model, effort or permission mode the cloud companion applied to a live
    * session here while it led (leader.settings, leader.control): the server
@@ -1265,6 +1265,23 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return copy ? { copy } : {}
   }
 
+  /**
+   * The reply line under a new request, naming the same asker's other open requests to the same
+   * target (the server's sameAskerOpen): one answer settles all, read once. From what this host
+   * holds: its own rows, and the copy's still unsettled ones.
+   */
+  function replyTrailer(home: string, row: OfflineRequestRow): string {
+    const j = journalOf(home)
+    const same = (r: { id: string; fromSessionId: string; toSessionId?: string; toTaskId?: string; status: string }) =>
+      r.id !== row.id && r.status === 'pending' && r.fromSessionId === row.fromSessionId
+      && ((!!r.toSessionId && r.toSessionId === row.toSessionId) || (!!row.toTaskId && r.toTaskId === row.toTaskId))
+    const open = new Map<string, string>()
+    for (const r of Object.values(j.rows)) if (same(r)) open.set(r.id, r.createdAt)
+    for (const r of slices.get(home)?.requests ?? []) if (same(r) && !j.settledCopies.includes(r.id) && !open.has(r.id)) open.set(r.id, r.createdAt)
+    const alsoOpen = [...open.entries()].sort((a, b) => a[1].localeCompare(b[1])).map(([id]) => id)
+    return kit.buildReplyTrailer(row, alsoOpen.length ? { alsoOpen } : undefined)
+  }
+
   function opRequestGet(home: string, args: Record<string, unknown>): GatewayResult {
     const id = typeof args.id === 'string' ? args.id : ''
     if (!/^rq-[a-f0-9]{6,}$/.test(id)) return fail('bad_request', 'request_get needs an rq-… id')
@@ -1448,15 +1465,36 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       byAsker.set(row.fromSessionId, [...(byAsker.get(row.fromSessionId) ?? []), id])
     }
     let first: GatewayResult | undefined
+    let firstFailure: GatewayResult | undefined
+    const answered: string[] = []
+    const notAnswered: string[] = []
+    // One message id per asker's delivery: a queue that dedups by message id must not take the
+    // second asker's answer for a retry of the first's.
+    const mid = messageId(args.messageId)
+    let n = 0
     for (const group of byAsker.values()) {
       const [lead, ...rest] = group
       const named = rest.length ? `${text}\n\n(This one answer also settles ${rest.join(', ')}: nothing more comes for ${rest.length === 1 ? 'it' : 'them'}.)` : text
-      const sent = await opReply(home, callerSid, { ...args, in_reply_to: lead }, named)
-      if (!sent.ok) return first ?? sent
+      const sent = await opReply(home, callerSid, { ...args, in_reply_to: lead, messageId: n++ ? `qm-${mid.slice(3, 63)}-${n}` : mid }, named)
+      // Nothing sent yet: the whole call goes on as it is (to the companion or the server, or held).
+      if (!sent.ok && !first) return sent
+      if (!sent.ok) {
+        // Not hidden behind an earlier group's success: told below, by id.
+        firstFailure ??= sent
+        notAnswered.push(...group)
+        continue
+      }
       first ??= sent
+      answered.push(...group)
       for (const id of rest) settleHere(home, id, findRequest(home, id).own, me.taskId, args.score)
     }
-    return first!.ok ? ok({ ...first!.result, answered: [...ids], next: 'Nothing else is required. Do not answer them again one by one.' }) : first!
+    if (!first || !first.ok) return fail('internal', 'nothing answered')
+    if (!notAnswered.length) return ok({ ...first.result, answered, next: 'Nothing else is required. Do not answer them again one by one.' })
+    const why = !firstFailure || firstFailure.ok ? '' : firstFailure.error.message
+    return ok({
+      ...first.result, answered, notAnswered, notAnsweredWhy: why.slice(0, 300),
+      next: `It did NOT settle ${notAnswered.join(', ')}${why ? ` (${why.slice(0, 160)})` : ''}: send the answer again with in_reply_to ${JSON.stringify(notAnswered)} only. The others are settled: do not answer them again.`,
+    })
   }
 
   async function opReply(home: string, callerSid: string, args: Record<string, unknown>, text: string): Promise<GatewayResult> {
@@ -1606,7 +1644,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       title: me.title, shortId: callerSid.slice(0, 8), sessionId: callerSid, taskId: me.taskId,
       host: slice.host, ...(row ? { requestId: row.id } : {}),
     }, { title: typeof args.title === 'string' ? args.title : undefined })
-    if (row) envelope = `${envelope}\n${kit.buildReplyTrailer(row)}`
+    if (row) envelope = `${envelope}\n${replyTrailer(home, row)}`
     const mid = messageId(args.messageId)
     // The row exists before the envelope that names it can be read.
     if (row) journalOf(home).rows[row.id] = row
@@ -1758,7 +1796,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       title: me.title, shortId: callerSid.slice(0, 8), sessionId: callerSid, taskId: me.taskId,
       host: slice.host, ...(row ? { requestId: row.id } : {}),
     }, { title: typeof args.title === 'string' ? args.title : undefined })
-    if (row) envelope = `${envelope}\n${kit.buildReplyTrailer(row)}`
+    if (row) envelope = `${envelope}\n${replyTrailer(home, row)}`
     if (row) journalOf(home).rows[row.id] = row
     const delivered = await deliverWithTaskRouting(home, target.sid, envelope, mid)
     if (!delivered.ok) {
@@ -2284,7 +2322,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       let size = 0
       try { size = JSON.stringify(args).length } catch { return fail('bad_request', 'arguments are not JSON') }
       if (size > MAX_ARGS_BYTES) return fail('bad_request', `arguments are too large to hold on this host (${size} bytes, limit ${MAX_ARGS_BYTES})`)
-      const saved = append(home, { kind: 'op', op: name, args, callerSid }, false, {
+      // The caller's own call id rides along, verbatim: the Mac replays under it, so the caller's
+      // retry of the same call after the server is back meets the replay instead of running again.
+      const saved = append(home, { kind: 'op', op: name, args, callerSid, ...(callId ? { callId } : {}) }, false, {
         ...(stable ? { opId: `held-${stable}` } : {}), limit: true, admit: () => admitWrite(callerSid) ?? roomFor(home),
       })
       const no = refusal(saved)
@@ -2894,7 +2934,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
         title: typeof from.title === 'string' ? from.title : '', shortId: from.sid.slice(0, 8), sessionId: from.sid,
         taskId: fromTaskId, host: from.host, ...(row ? { requestId: row.id } : {}),
       }, { title: typeof d.title === 'string' ? d.title : undefined })
-      if (row) envelope = `${envelope}\n${kit.buildReplyTrailer(row)}`
+      if (row) envelope = `${envelope}\n${replyTrailer(home, row)}`
       const mid = messageId(d.messageId)
       if (row) journalOf(home).rows[row.id] = row
       const delivered = await deliverWithTaskRouting(home, targetSid, envelope, mid)

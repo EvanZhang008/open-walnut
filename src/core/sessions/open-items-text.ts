@@ -52,7 +52,7 @@ export function createOpenItemsText() {
     const byAsker = new Map<string, string[]>();
     for (const r of asked) byAsker.set(r.from, [...(byAsker.get(r.from) ?? []), r.id]);
     return [...byAsker.entries()].filter(([, ids]) => ids.length > 1).map(([from, ids]) =>
-      `  ${ids.length} are from ${from}: answer them in ONE task_send, in_reply_to [${ids.map((id) => `"${id}"`).join(',')}], so it reads the answer once.`);
+      `  ${ids.length} are from ${from}: answer them in ONE task_send, in_reply_to [${ids.slice(0, 20).map((id) => `"${id}"`).join(',')}]${ids.length > 20 ? ' (at most 20 in one call: the rest in a second)' : ''}, so it reads the answer once.`);
   }
 
   /** The cut at or before `index` that never splits a surrogate pair (src/core/text-cut.ts cutEnd). */

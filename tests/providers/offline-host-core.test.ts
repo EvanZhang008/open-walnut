@@ -422,6 +422,45 @@ describe('offline host: messages between sessions on this host', () => {
     expect(!bad.ok && bad.error.code).toBe('bad_request')
   })
 
+  it('a second request from the same asker names the first in its reply line: one answer settles both', async () => {
+    const h = harness()
+    h.host.configure(slice())
+    const first = await call(h, A, 'task_send', { to: B, text: 'What is the status?' })
+    const second = await call(h, A, 'task_send', { to: B, text: 'And the footer?' })
+    const [r1, r2] = [first, second].map((x) => (x.ok ? String(x.result.requestId) : ''))
+    expect(h.delivered[0].text).toContain(`"in_reply_to":"${r1}"`)
+    expect(h.delivered[1].text).toContain(`"in_reply_to":["${r2}","${r1}"]`)
+    // Answered, it is no longer named.
+    await call(h, B, 'task_send', { in_reply_to: [r1, r2], text: 'Both done.' })
+    await call(h, A, 'task_send', { to: B, text: 'One more?' })
+    expect(h.delivered[h.delivered.length - 1].text).not.toContain(r1)
+  })
+
+  it('a list naming two askers: each gets its own message id, and one that fails is named, not hidden behind the other', async () => {
+    const h = harness()
+    h.live.add(C)
+    h.host.configure(slice())
+    const fromA = await call(h, A, 'task_send', { to: B, text: 'Status?' })
+    const fromC = await call(h, C, 'task_send', { to: B, text: 'Status for me too?' })
+    const ids = [fromA, fromC].map((x) => (x.ok ? String(x.result.requestId) : ''))
+    const before = h.delivered.length
+    const both = await call(h, B, 'task_send', { in_reply_to: ids, text: 'Done.' })
+    expect(both.ok && both.result.answered).toEqual(ids)
+    const mids = h.delivered.slice(before).map((d) => d.messageId)
+    expect(mids).toHaveLength(2)
+    expect(new Set(mids).size).toBe(2)
+    // Again, with C stopped before the answer: A's answer goes, C's request is named as not settled.
+    const againA = await call(h, A, 'task_send', { to: B, text: 'Status 2?' })
+    const againC = await call(h, C, 'task_send', { to: B, text: 'Status 2 for me?' })
+    const ids2 = [againA, againC].map((x) => (x.ok ? String(x.result.requestId) : ''))
+    h.live.delete(C)
+    const partial = await call(h, B, 'task_send', { in_reply_to: ids2, text: 'Done 2.' })
+    expect(partial.ok).toBe(true)
+    expect(partial.ok && partial.result.answered).toEqual([ids2[0]])
+    expect(partial.ok && partial.result.notAnswered).toEqual([ids2[1]])
+    expect(partial.ok && String(partial.result.next)).toContain(`did NOT settle ${ids2[1]}`)
+  })
+
   it('a reply\'s review score is journalled with the replied row, normalized, so the server keeps it on the replier\'s task', async () => {
     const h = harness()
     h.host.configure(slice())

@@ -669,7 +669,7 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
         const startBody = launch.message;
         let replyTrailer = '';
         if (callerSessionId) {
-          const { createSessionRequest, buildReplyTrailer } = await import('../session-requests.js');
+          const { createSessionRequest, buildReplyTrailer, sameAskerOpen } = await import('../session-requests.js');
           const request = await createSessionRequest({
             fromSessionId: callerSessionId, ...(callerTaskId ? { fromTaskId: callerTaskId } : {}), ...(sid ? { toSessionId: sid } : {}),
             toTaskId: task.id, text: launch.message, replyTimeoutSecs: params.replyTimeoutSecs,
@@ -682,7 +682,7 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
           if (request.handOnRefused?.length) result.handOnRefused = request.handOnRefused;
           requestId = request.id;
           result.requestId = request.id;
-          replyTrailer = buildReplyTrailer(request);
+          replyTrailer = buildReplyTrailer(request, await sameAskerOpen(request));
           launch.message += `\n${replyTrailer}`;
         }
         if (sid) {

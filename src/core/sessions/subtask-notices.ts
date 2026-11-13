@@ -434,12 +434,14 @@ export async function queueSubtaskNotice(n: SubtaskNotice): Promise<void> {
       log.session.info('subtask notice skipped: its turn was only an agent-ack', { parentTaskId: n.parentTaskId, childTaskId: n.child.id });
       return;
     }
-    if (n.kind === 'completed' && (completionTold(n, Date.now()) || completionSending(n))) {
+    const toldAlready = () => {
+      if (n.kind !== 'completed' || !(completionTold(n, Date.now()) || completionSending(n))) return false;
       log.session.info('subtask notice skipped: this completion was already told', {
         parentTaskId: n.parentTaskId, childTaskId: n.child.id, completedAt: n.completedAt,
       });
-      return;
-    }
+      return true;
+    };
+    if (toldAlready()) return;
     const { getTask } = await import('../task-manager.js');
     const parent = await getTask(n.parentTaskId).catch(() => null);
     if (!parent) return;
@@ -454,6 +456,8 @@ export async function queueSubtaskNotice(n: SubtaskNotice): Promise<void> {
     }
     n = await attachCardLine(n);
     if (n.queuedAt === undefined) n = { ...n, queuedAt: Date.now() };
+    // Again after the reads above: another edge's flush may have told it meanwhile.
+    if (toldAlready()) return;
     const sid = dest.claudeSessionId;
     const slot = pending.get(sid);
     if (slot) {
@@ -502,9 +506,12 @@ async function flush(parentSid: string): Promise<void> {
   const slot = pending.get(parentSid);
   pending.delete(parentSid);
   if (!slot) return;
-  let notices = coalesce(slot.notices);
-  const sending = notices.filter((n) => n.kind === 'completed').map((n) => `${n.parentTaskId}/${n.child.id}`);
-  notices.forEach((n) => { if (n.kind === 'completed') completionsSending.set(`${n.parentTaskId}/${n.child.id}`, n.completedAt ?? ''); });
+  // A completion another flush told, or is telling now, is dropped here, before any await; the
+  // rest are claimed, and only this flush's own claims are released when it ends.
+  let notices = coalesce(slot.notices).filter((n) => n.kind !== 'completed' || !(completionTold(n, Date.now()) || completionSending(n)));
+  if (!notices.length) return;
+  const sending: [string, string][] = notices.filter((n) => n.kind === 'completed').map((n) => [`${n.parentTaskId}/${n.child.id}`, n.completedAt ?? '']);
+  for (const [key, at] of sending) completionsSending.set(key, at);
   try {
     const { getSessionByClaudeId } = await import('../session-tracker.js');
     const target = await getSessionByClaudeId(parentSid);
@@ -586,7 +593,7 @@ async function flush(parentSid: string): Promise<void> {
       error: err instanceof Error ? err.message : String(err),
     });
   } finally {
-    for (const key of sending) completionsSending.delete(key);
+    for (const [key, at] of sending) if (completionsSending.get(key) === at) completionsSending.delete(key);
   }
 }
 

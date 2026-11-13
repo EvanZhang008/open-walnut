@@ -1030,6 +1030,19 @@ describe('performSessionSend — in_reply_to', () => {
       for (const r of [a, b, other]) expect((await getSessionRequest(r.id))?.status).toBe('replied');
     });
 
+    it('an asker that cannot be reached is named as not settled, never hidden behind the one that was', async () => {
+      const { createSessionRequest } = await import('../../src/core/session-requests.js');
+      const a = await armRequest({ toTaskId: 'task-target' });
+      const gone = await createSessionRequest({ fromSessionId: 'sess-gone-1', toSessionId: TARGET, toTaskId: 'task-target', text: 'status?' });
+      const res = await performSessionSend({ text: ANSWER, inReplyTo: a.id, alsoAnswers: [gone.id], callerSid: TARGET });
+      expect(res.answered).toEqual([a.id]);
+      expect(res.notAnswered).toEqual([gone.id]);
+      expect(res.notAnsweredWhy).toContain('gone');
+      expect((await getSessionRequest(gone.id))?.status).toBe('pending');
+      // Nothing reached anyone: the failure itself is the answer.
+      await expectSendError(performSessionSend({ text: ANSWER, inReplyTo: gone.id, alsoAnswers: [], callerSid: TARGET }), 'origin_session_gone', 410);
+    });
+
     it('an id that is unknown or not this session\'s refuses the whole call before anything is sent', async () => {
       const a = await armRequest({ toTaskId: 'task-target' });
       await expectSendError(
@@ -1115,6 +1128,22 @@ describe('performSessionSend — an answer to a handed-on request goes to the or
     expect(note?.text).toContain('Nothing to relay');
     expect(note?.text).not.toContain('412 rows');
     note?.markTold();
+  });
+
+  // Review 2026-11-13: one list answering two handed-on requests delivered the answer to Main twice.
+  it('one list answering two requests handed on from the same asker reaches it once, naming the ids it knows', async () => {
+    const one = await chain();
+    const two = await chain();
+    const result = await performSessionSend({ text: 'Done: 412 rows, 9 columns.', inReplyTo: one.b.id, alsoAnswers: [two.b.id], callerSid: WORKER });
+    expect(result.answered).toEqual([one.b.id, two.b.id]);
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+    expect(dispatched(0).sid).toBe(MAIN);
+    // Main is told which of ITS requests the answer also settles.
+    expect(deliveredText(0)).toContain(`also settles your request ${two.a.id}`);
+    for (const r of [one.a, one.b, two.a, two.b]) expect((await getSessionRequest(r.id))?.status).toBe('replied');
+    // The lead still reads its line for each of its own.
+    const { pendingStatusNote } = await import('../../src/core/sessions/status-push.js');
+    expect(pendingStatusNote(LEAD)?.text ?? '').toContain(two.b.id);
   });
 
   it('a lead whose turn runs hears the line now, as a status note, not the answer', async () => {

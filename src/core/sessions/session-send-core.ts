@@ -169,6 +169,9 @@ export interface SessionSendResult {
   sameAnswerAs?: string;
   /** in_reply_to as a list: every request this one answer settled (performReplies). */
   answered?: string[];
+  /** in_reply_to as a list: the requests it could not settle (their answer failed), and why. */
+  notAnswered?: string[];
+  notAnsweredWhy?: string;
   /** The target's open ask of the user, sent by a task above it without answers_ask (openAskBelow). */
   openAsk?: string;
   /** A line of a task's message (or reply) that asks someone to decide, sent to a task not below it (decisionAskedIn). */
@@ -1105,9 +1108,11 @@ export const MAX_ANSWERED_AT_ONCE = 20;
  * (2026-11-13, the org reflection: a task holding three requests from its lead answered each, three
  * nearly identical replies in three seconds; another sent its completion twice). Checked whole
  * before anything is sent: an id that is unknown, or not this session's to answer, refuses the call.
- * Per asker, its first request carries the answer and names the others; the rest settle with those
- * same words (sameAnswerOf) and send that asker nothing more. A request of another asker in the list
- * gets the answer delivered there too.
+ * Grouped by where each answer goes (a handed-on request's answer goes past its asker to the
+ * original one, reply-handoff.ts): per destination, its first request carries the answer and names
+ * the others (by the ids that asker knows), which then settle and deliver nothing (quietRepeat).
+ * A group that fails after another was delivered is not hidden: the answer lists what it did not
+ * settle (notAnswered) so the caller sends again for those only.
  */
 async function performReplies(
   input: SessionSendInput,
@@ -1126,23 +1131,47 @@ async function performReplies(
     if (!answersRequest(caller, request)) throw new SendError('not_request_target', `request ${id} was not addressed to this session`, 403);
     requests.push(request);
   }
-  const byAsker = new Map<string, string[]>();
-  for (const r of requests) byAsker.set(r.fromSessionId, [...(byAsker.get(r.fromSessionId) ?? []), r.id]);
+  const sid = caller.record.claudeSessionId;
+  const { onwardAnswer } = await import('./reply-handoff.js');
+  const byDestination = new Map<string, { id: string; known: string }[]>();
+  for (const r of requests) {
+    const onward = await onwardAnswer(r, sid).catch(() => null);
+    const dest = onward?.destination.session.claudeSessionId ?? (await replyDestinationOf(r, sid).catch(() => undefined))?.claudeSessionId ?? r.fromSessionId;
+    byDestination.set(dest, [...(byDestination.get(dest) ?? []), { id: r.id, known: onward?.final.id ?? r.id }]);
+  }
   let first: DeliveredSendResult | undefined;
-  const repeats: string[] = [];
-  for (const group of byAsker.values()) {
+  let firstError: unknown;
+  const answered: string[] = [];
+  const notAnswered: string[] = [];
+  let failure = '';
+  for (const group of byDestination.values()) {
     const [lead, ...rest] = group;
-    const sent = await performReply({ ...input, inReplyTo: lead, alsoAnswers: undefined, ...(first ? { messageId: undefined } : {}) }, caller, text, fields, { covers: rest });
+    let sent: DeliveredSendResult;
+    try {
+      sent = await performReply({ ...input, inReplyTo: lead.id, alsoAnswers: undefined, ...(first ? { messageId: undefined } : {}) }, caller, text, fields, { covers: [...new Set(rest.map((r) => r.known))] });
+    } catch (err) {
+      firstError ??= err;
+      failure ||= err instanceof Error ? err.message : String(err);
+      notAnswered.push(...group.map((r) => r.id));
+      continue;
+    }
     first ??= sent;
-    for (const id of rest) {
-      const settled = await performReply({ ...input, inReplyTo: id, alsoAnswers: undefined, messageId: undefined }, caller, text, fields, { quietRepeat: true });
-      if (settled.sameAnswerAs) repeats.push(id);
+    answered.push(lead.id);
+    for (const r of rest) {
+      try {
+        await performReply({ ...input, inReplyTo: r.id, alsoAnswers: undefined, messageId: undefined }, caller, text, fields, { quietRepeat: true });
+        answered.push(r.id);
+      } catch (err) {
+        failure ||= err instanceof Error ? err.message : String(err);
+        notAnswered.push(r.id);
+      }
     }
   }
+  if (!first) throw firstError;
   log.session.info('one reply settled several requests', {
-    requestIds: ids, askers: byAsker.size, settledQuietly: repeats, fromSessionId: caller.record.claudeSessionId,
+    requestIds: ids, destinations: byDestination.size, answered, notAnswered, fromSessionId: sid,
   });
-  return { ...first!, answered: [...ids] };
+  return { ...first, answered, ...(notAnswered.length ? { notAnswered, notAnsweredWhy: failure.slice(0, 300) } : {}) };
 }
 
 /**
@@ -1156,7 +1185,7 @@ async function performReply(
   text: string,
   fields: import('../peers/structured-reply.js').StructuredReply | null = null,
   /** `covers`: the asker's other requests this answer settles too (named in it, performReplies).
-   *  `quietRepeat`: one of those: when it settles with words the asker already has, it reads nothing more. */
+   *  `quietRepeat`: one of those, after the answer naming it reached the same asker: it settles, and nothing more is delivered. */
   many: { covers?: readonly string[]; quietRepeat?: boolean } = {},
 ): Promise<DeliveredSendResult> {
   const id = String(input.inReplyTo);
@@ -1262,7 +1291,7 @@ async function performReply(
     }
 
     replierTitle = await senderTitleOf(caller.record);
-    if (sameAs && many.quietRepeat) {
+    if (many.quietRepeat) {
       // Named in the one answer the asker just got (performReplies): nothing more to read.
       log.session.info('session reply settled with the answer it named — nothing more delivered', {
         requestId: id, sameAnswerAs: sameAs, fromSessionId: caller.record.claudeSessionId, toSessionId: origin.claudeSessionId,

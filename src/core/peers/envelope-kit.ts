@@ -307,7 +307,8 @@ export function createEnvelopeKit(): EnvelopeKit {
    * nearly identical replies to one lead in three seconds).
    */
   function buildReplyTrailer(request: { id: string }, opts?: { alsoOpen?: readonly string[] }): string {
-    const others = (opts?.alsoOpen ?? []).filter((id) => id !== request.id)
+    // At most 20 in one list (task_send's own limit, MAX_ANSWERED_AT_ONCE): this one and 19 others.
+    const others = (opts?.alsoOpen ?? []).filter((id) => id !== request.id).slice(0, 19)
     const ids = others.length ? `[${[request.id, ...others].map((id) => `"${id}"`).join(',')}]` : `"${request.id}"`
     // The MCP tool first, the CLI its stand-in (2026-11-10, the user: MCP whenever it is there).
     return `Reply when done: mcp__walnut__task_send `

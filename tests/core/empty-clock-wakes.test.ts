@@ -140,6 +140,33 @@ describe('the wait_until clock', () => {
     expect(sendMessageToSession).toHaveBeenCalledTimes(2)
   })
 
+  it('two sweeps that overlap while the first looks the session up wake it once', async () => {
+    const until = new Date(NOW - 1_000).toISOString()
+    tasks.set('vp-3', parked('vp-3', until))
+    let open!: () => void
+    const gate = new Promise<void>((r) => { open = r })
+    let calls = 0
+    sessionsOf.set('vp-3', [{ claudeSessionId: 'vp3-sid', taskId: 'vp-3', process_status: 'idle' }])
+    const tracker = await import('../../src/core/session-tracker.js')
+    const spy = vi.spyOn(tracker, 'getSessionsForTask').mockImplementation(async (id: string) => {
+      if (calls++ === 0) await gate
+      return (sessionsOf.get(id) ?? []) as never
+    })
+    try {
+      await loadWaitUntilDeadlines()
+      const a = sweepWaitUntil(NOW)
+      await new Promise((r) => setTimeout(r, 5))
+      // The task is written meanwhile (unchanged clock), and the next sweep runs.
+      bus.emit(EventNames.TASK_UPDATED, { task: tasks.get('vp-3') }, ['*'], { source: 'test' })
+      await loadWaitUntilDeadlines()
+      const b = await sweepWaitUntil(NOW + 1_000)
+      open()
+      await a
+      expect(b).toEqual([])
+      expect(sendMessageToSession).toHaveBeenCalledTimes(1)
+    } finally { spy.mockRestore() }
+  })
+
   it('a wake whose turn answered only with the ack is not parked again; any other answer, or an armed trigger, is', async () => {
     const until = new Date(NOW - 1_000).toISOString()
     tasks.set('w-9', { ...parked('w-9', until), org_role: undefined })

@@ -46,6 +46,8 @@ let live = false;
  */
 const woken = new Map<string, { until: string; atMs: number; sessionId?: string }>();
 const WOKEN_KEEP_MS = 24 * 3_600_000;
+/** taskId → the wait_until a sweep is waking right now (claimed before its first await). */
+const waking = new Map<string, string>();
 const RECHECK_MS = 3_600_000;
 
 export const WAIT_UNTIL_SUBSCRIBER = 'task-wait-until';
@@ -146,7 +148,7 @@ async function wakeMessage(task: Task, nowMs: number): Promise<string> {
 }
 
 async function wake(taskId: string, nowMs: number): Promise<boolean> {
-  const { getTask, updateTaskRaw } = await import('./task-manager.js');
+  const { getTask } = await import('./task-manager.js');
   const task = await getTask(taskId).catch(() => null);
   if (!task) return false;
   const at = waitUntilAt(task);
@@ -156,8 +158,20 @@ async function wake(taskId: string, nowMs: number): Promise<boolean> {
   }
 
   // This clock already woke the session (a task event tracked it again before the wake's own
-  // phase move cleared it): never a second wake for it.
-  if (woken.get(task.id)?.until === task.wait_until) return false;
+  // phase move cleared it), or another sweep is waking it now: never a second wake for it.
+  // Checked and claimed with no await between, so two overlapping sweeps cannot both pass.
+  const until = task.wait_until!;
+  if (woken.get(task.id)?.until === until || waking.get(task.id) === until) return false;
+  waking.set(task.id, until);
+  try {
+    return await wakeClaimed(task, nowMs);
+  } finally {
+    if (waking.get(task.id) === until) waking.delete(task.id);
+  }
+}
+
+async function wakeClaimed(task: Task, nowMs: number): Promise<boolean> {
+  const { updateTaskRaw } = await import('./task-manager.js');
   const { getSessionsForTask } = await import('./session-tracker.js');
   const { pickDeliverySession } = await import('./routines/session-target.js');
   const sessions = await getSessionsForTask(task.id).catch(() => []);
@@ -327,6 +341,7 @@ export function stopWaitUntilWatch(): void {
   live = false;
   deadlines.clear();
   woken.clear();
+  waking.clear();
   inherited = null;
   scanned = false;
   arm();

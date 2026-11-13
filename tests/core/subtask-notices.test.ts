@@ -708,6 +708,26 @@ describe('what is left of the team (2026-10-28: count what is open, wake an idle
       expect(sendMessageToSession).toHaveBeenCalledTimes(2);
     });
 
+    // Review of the fix above: a second edge already past its first check, still reading the
+    // parent while the first one's flush told the completion, queued it again afterwards.
+    it('a second edge still being admitted when the first was told sends nothing', async () => {
+      getChildTasks.mockResolvedValue([child('a', 'COMPLETE')]);
+      await queueSubtaskNotice({ ...completed('a'), completedAt: at });
+      const base = getTask.getMockImplementation()!;
+      let open!: () => void;
+      const gate = new Promise<void>((r) => { open = r; });
+      getTask.mockImplementationOnce(async (id: string) => { await gate; return base(id); });
+      const second = queueSubtaskNotice({ ...completed('a'), completedAt: at, lastWords: { text: 'Closed.' } });
+      await flushNow();
+      expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+      open();
+      await second;
+      await flushNow();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await flushNow();
+      expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+    });
+
     it('a team list that never arrived is not counted as seen', async () => {
       getChildTasks.mockResolvedValue([child('a', 'COMPLETE'), child('b', 'COMPLETE'), child('d', 'IN_PROGRESS', { state: 'working' })]);
       sendMessageToSession.mockRejectedValueOnce(new Error('daemon unreachable'));
