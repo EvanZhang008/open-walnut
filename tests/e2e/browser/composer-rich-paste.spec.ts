@@ -63,11 +63,25 @@ async function paste(page: Page, selector: string, flavours: Record<string, stri
   }, { selector, flavours, withImageFile });
 }
 
+/**
+ * Home with a composer to paste into. Home opens on the task list with no chat beside it, so
+ * the Quick question slot is opened from the side bar when no composer shows: its panel is the
+ * regular session composer, the one every paste below goes through.
+ */
+async function openComposer(page: Page) {
+  await page.goto('/');
+  await page.waitForLoadState('networkidle');
+  const textarea = page.locator('.chat-input-textarea').first();
+  if ((await textarea.count()) === 0) {
+    await page.getByRole('group', { name: 'Home panels' }).getByRole('button', { name: 'Quick question', exact: true }).click();
+  }
+  await expect(textarea).toBeVisible({ timeout: 30_000 });
+  return textarea;
+}
+
 test.describe('Composer: rich paste keeps list structure', () => {
   test('nested numbered list from a wiki editor pastes as markdown, and undo removes it', async ({ page }) => {
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
-    const textarea = page.locator('.chat-input-textarea').first();
+    const textarea = await openComposer(page);
     await expect(textarea).toBeVisible();
     await textarea.click();
 
@@ -82,9 +96,7 @@ test.describe('Composer: rich paste keeps list structure', () => {
   });
 
   test('prose-only HTML is left to the native paste', async ({ page }) => {
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
-    const textarea = page.locator('.chat-input-textarea').first();
+    const textarea = await openComposer(page);
     await textarea.click();
 
     const result = await paste(page, '.chat-input-textarea', {
@@ -96,9 +108,7 @@ test.describe('Composer: rich paste keeps list structure', () => {
   });
 
   test('typing after the paste appends at the caret', async ({ page }) => {
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
-    const textarea = page.locator('.chat-input-textarea').first();
+    const textarea = await openComposer(page);
     await textarea.click();
     await paste(page, '.chat-input-textarea', { 'text/html': '<ul><li>one</li><li>two</li></ul>', 'text/plain': 'one\ntwo' });
     await expect(textarea).toHaveValue('- one\n- two');
@@ -118,9 +128,7 @@ test.describe('Composer: Excel cells paste as text, not a picture', () => {
     + `<tr><td class=xl65>Region</td><td class=xl65>Cost</td></tr><tr><td>us-west-2</td><td>412</td></tr></table></body></html>`;
 
   test('an Excel range becomes a markdown table and attaches no image', async ({ page }) => {
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
-    const textarea = page.locator('.chat-input-textarea').first();
+    const textarea = await openComposer(page);
     await expect(textarea).toBeVisible();
     await textarea.click();
 
@@ -135,9 +143,7 @@ test.describe('Composer: Excel cells paste as text, not a picture', () => {
   });
 
   test('a plain screenshot (image only, no Office HTML) still attaches as an image', async ({ page }) => {
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
-    const textarea = page.locator('.chat-input-textarea').first();
+    const textarea = await openComposer(page);
     await textarea.click();
 
     await paste(page, '.chat-input-textarea', {}, true);
