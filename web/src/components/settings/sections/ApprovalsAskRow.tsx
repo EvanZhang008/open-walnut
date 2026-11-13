@@ -69,7 +69,7 @@ export function ApprovalsAskRow({ config, save }: { config: Config; save: Save }
         label="Ask me before Walnut's own steps"
         help={offWaiting
           ? 'Approve “Turn approvals off” with Face ID or Touch ID to finish. Until then agents still ask you.'
-          : 'Posts, mail, browser steps, saved passwords and a first command on another host. Off: they go ahead, each listed below. A walnut approve in your own script always asks you.'}
+          : 'Posts, mail, browser steps, passwords, a first command on a host. Off: they go ahead, listed below. A walnut approve in your own script always asks you.'}
         htmlFor="settings-approvals-ask-me"
         error={setting.error ?? offError}
         data-testid="settings-approvals-ask-me-row"
