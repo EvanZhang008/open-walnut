@@ -27,6 +27,18 @@ export function reportNamesOutsideWait(
   return !waitWordsNameUser(report.waiting_on, true);
 }
 
+/**
+ * A lead (an org VP) parks only on a trigger of its own, never on a clock alone (2026-11-13, the
+ * org reflection: a VP whose turn reported "waiting on my teams" was parked WAITING with the
+ * default 4-hour clock; the clock woke it with "No trigger watches it", it acknowledged, and it was
+ * parked again: 19 such wakes in one night, 7 answered with only an ack). Like Main
+ * (org/main-stays-active.ts), a lead is woken by what it waits on: its teams' news, their replies,
+ * the user's messages. Its open subtasks, its requests out or a wait it only names never park it.
+ */
+export function parksOnlyOnTrigger(task: Pick<Task, 'org_role'> | null | undefined): boolean {
+  return task?.org_role === 'lead';
+}
+
 /** What makes a task's wait outside the user, as facts Walnut holds. */
 export interface OutsideWaitEvidence {
   kind: 'trigger' | 'request' | 'subtask' | 'lead';
@@ -41,11 +53,12 @@ export interface OutsideWaitEvidence {
  * on that lead). `sessionIds`: the sessions whose sent requests count (default: the task's).
  */
 export async function outsideWaitEvidence(
-  task: Pick<Task, 'id' | 'parent_task_id' | 'session_id'>,
+  task: Pick<Task, 'id' | 'parent_task_id' | 'session_id'> & Partial<Pick<Task, 'org_role'>>,
   opts: { callerTaskId?: string; sessionIds?: readonly string[]; parentTaskId?: string } = {},
 ): Promise<OutsideWaitEvidence | null> {
   const parent = opts.parentTaskId ?? task.parent_task_id;
-  if (opts.callerTaskId && opts.callerTaskId !== task.id && opts.callerTaskId === parent) {
+  const triggerOnly = parksOnlyOnTrigger(task);
+  if (!triggerOnly && opts.callerTaskId && opts.callerTaskId !== task.id && opts.callerTaskId === parent) {
     return { kind: 'lead', detail: 'its lead parked it' };
   }
   try {
@@ -53,6 +66,7 @@ export async function outsideWaitEvidence(
     const armed = (await triggersWatching(task.id)).find((t) => t.state === 'armed' && !t.watchesUser);
     if (armed) return { kind: 'trigger', detail: `trigger ${armed.name ?? armed.id} is armed` };
   } catch { /* absent */ }
+  if (triggerOnly) return null;
   try {
     const sids = [...new Set([...(opts.sessionIds ?? []), task.session_id].filter((s): s is string => !!s))];
     if (sids.length) {
@@ -81,6 +95,12 @@ export const WAIT_ON_USER_MESSAGE =
   + 'is the user\'s (their input, review or decision), set phase=NEED_ACTION. When you wait on an outside thing '
   + '(a pipeline, a build, a deploy, a CR or PR review, a Slack or mail reply, another task), arm a trigger on it '
   + '(trigger_create with wait:true parks the task), or pass waiting_on naming it, with a short wait_until.';
+
+/** The refusal a lead's park without a trigger of its own gets (parksOnlyOnTrigger). */
+export const LEAD_PARK_MESSAGE =
+  'A lead is not parked on a clock: no trigger of its own is armed, and its teams\' news, their replies and the '
+  + 'user\'s messages wake it on their own. Leave the phase as it is. To be woken by something outside Walnut '
+  + '(a pipeline, a review, a reply), arm a trigger on it (trigger_create with wait:true parks the task).';
 
 /** Shortest `waiting_on` that names a wait (the `project_reason` floor). */
 export const WAITING_ON_MIN = 10;
@@ -113,6 +133,7 @@ export async function admitSessionPark(
     ...(parentTaskId ? { parentTaskId } : {}),
   });
   if (evidence) return { ok: true, evidence };
+  if (parksOnlyOnTrigger(task)) return { ok: false, code: 'wait_on_user', message: LEAD_PARK_MESSAGE };
   if (words.length >= WAITING_ON_MIN) return { ok: true, evidence: 'named' };
   return { ok: false, code: 'wait_on_user', message: WAIT_ON_USER_MESSAGE };
 }

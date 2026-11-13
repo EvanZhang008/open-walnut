@@ -38,6 +38,14 @@ let inherited: Map<string, string> | null = null;
 let scanned = false;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let live = false;
+/**
+ * taskId -> the clock (wait_until) whose passing already woke its session, and when. One clock
+ * wakes its task once: a task event between the send and the phase move it makes tracked the same
+ * clock again, and it woke a VP twice in one message (2026-11-13 14:36:26 and 14:36:31).
+ * The send's own phase move clears the clock; until then the same value is never tracked again.
+ */
+const woken = new Map<string, { until: string; atMs: number; sessionId?: string }>();
+const WOKEN_KEEP_MS = 24 * 3_600_000;
 const RECHECK_MS = 3_600_000;
 
 export const WAIT_UNTIL_SUBSCRIBER = 'task-wait-until';
@@ -57,7 +65,9 @@ function isInherited(task: Pick<Task, 'id' | 'wait_until'>): boolean {
 }
 
 function track(task: Task): void {
-  const at = isInherited(task) ? null : waitUntilAt(task);
+  const done = woken.get(task.id);
+  if (done && done.until !== task.wait_until && task.phase === 'WAITING' && task.wait_until) woken.delete(task.id);
+  const at = isInherited(task) || (done && done.until === task.wait_until) ? null : waitUntilAt(task);
   if (at === null) deadlines.delete(task.id);
   else deadlines.set(task.id, at);
   arm();
@@ -130,7 +140,7 @@ async function wakeMessage(task: Task, nowMs: number): Promise<string> {
   const until = new Date(task.wait_until!).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
   return buildWalnutMessage({
     kind: 'trigger',
-    attrs: { from: 'Walnut: wait until', note: 'the time this task was waiting for has passed' },
+    attrs: { from: WAIT_WAKE_FROM, note: 'the time this task was waiting for has passed' },
     body: buildWaitWakeBody({ until, nowMs, triggers: await triggersWatching(task.id) }),
   });
 }
@@ -145,6 +155,9 @@ async function wake(taskId: string, nowMs: number): Promise<boolean> {
     return false;
   }
 
+  // This clock already woke the session (a task event tracked it again before the wake's own
+  // phase move cleared it): never a second wake for it.
+  if (woken.get(task.id)?.until === task.wait_until) return false;
   const { getSessionsForTask } = await import('./session-tracker.js');
   const { pickDeliverySession } = await import('./routines/session-target.js');
   const sessions = await getSessionsForTask(task.id).catch(() => []);
@@ -152,6 +165,8 @@ async function wake(taskId: string, nowMs: number): Promise<boolean> {
   if (target) {
     try {
       const { sendMessageToSession } = await import('./session-message-queue.js');
+      // Marked before the send: a task event during it must not track this clock again.
+      noteWoken(task.id, task.wait_until!, nowMs, target.claudeSessionId);
       // The send itself moves the task: session:input → IN_PROGRESS, and the
       // turn's end → NEED_ACTION, the same path a trigger fire takes.
       await sendMessageToSession(target.claudeSessionId, await wakeMessage(task, nowMs), {
@@ -162,6 +177,7 @@ async function wake(taskId: string, nowMs: number): Promise<boolean> {
       });
       return true;
     } catch (err) {
+      woken.delete(task.id);
       log.task.warn('wait_until passed: session wake failed, handing the task back instead', {
         taskId: task.id, sessionId: target.claudeSessionId, error: errText(err),
       });
@@ -193,6 +209,26 @@ async function wake(taskId: string, nowMs: number): Promise<boolean> {
   }
   return true;
 }
+
+function noteWoken(taskId: string, until: string, atMs: number, sessionId?: string): void {
+  for (const [id, w] of woken) if (atMs - w.atMs > WOKEN_KEEP_MS) woken.delete(id);
+  woken.set(taskId, { until, atMs, ...(sessionId ? { sessionId } : {}) });
+}
+
+/**
+ * When the wait_until clock last woke this task's session (ms), if it did within the last day
+ * and no later than `byMs`: the turn ending at `byMs` may be that wake's turn. In memory: a
+ * restart forgets, and that turn then parks as any other.
+ */
+export function clockWokeAt(taskId: string, byMs: number, sessionId?: string): number | null {
+  const w = woken.get(taskId);
+  if (!w || w.atMs > byMs || byMs - w.atMs > WOKEN_KEEP_MS) return null;
+  if (sessionId && w.sessionId && w.sessionId !== sessionId) return null;
+  return w.atMs;
+}
+
+/** The sender name the clock's wake carries (wakeMessage): how a turn opened by it is told apart. */
+export const WAIT_WAKE_FROM = 'Walnut: wait until';
 
 /**
  * A trigger that delivers to a WAITING task was switched off by the server (five
@@ -264,6 +300,9 @@ function onTaskEvent(event: BusEvent): void {
     return;
   }
   if (deadlines.has(task.id) || waitUntilAt(task) !== null) track(task);
+  // Out of WAITING, the clock that woke it is gone with the wait (applyPhase); a later park is a new wait.
+  // The wake's own turn still asks clockWokeAt when it ends, so the mark is kept, only no longer a block.
+  else if (task.phase !== 'WAITING' && woken.has(task.id)) woken.set(task.id, { ...woken.get(task.id)!, until: '' });
 }
 
 /** Start the timer and its one subscriber (server boot, primary only). Idempotent: the name is overwritten. */
@@ -287,6 +326,7 @@ export function stopWaitUntilWatch(): void {
   bus.unsubscribe(WAIT_UNTIL_SUBSCRIBER);
   live = false;
   deadlines.clear();
+  woken.clear();
   inherited = null;
   scanned = false;
   arm();

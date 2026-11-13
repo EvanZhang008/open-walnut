@@ -30,7 +30,7 @@ import { log } from '../../logging/index.js';
 import type { Task, TaskPhase } from '../types.js';
 import type { StatusReport } from '../user-status.js';
 import { openOwed } from '../peers/structured-reply.js';
-import { OUTSIDE_WAIT_KINDS, outsideWaitEvidence, reportNamesOutsideWait, waitWordsNameUser } from './outside-wait.js';
+import { OUTSIDE_WAIT_KINDS, outsideWaitEvidence, parksOnlyOnTrigger, reportNamesOutsideWait, waitWordsNameUser } from './outside-wait.js';
 
 /** Clock slack between the turn's end (this process) and the phase write (the same process, later). */
 const SLACK_MS = 5_000;
@@ -57,6 +57,9 @@ export function phaseForReport(
   // list until that is settled, whatever a later turn says, except while its own work runs.
   if (!task.org_role && openOwed(task.result_report)) return report.state === 'working' && alive ? 'IN_PROGRESS' : 'NEED_ACTION';
   const phase = individualPhase(report, task, alive, armed, onUser);
+  // A lead parks only on a trigger of its own (outside-wait.ts parksOnlyOnTrigger): with none, its
+  // turn's wait leaves the phase as it is, so no clock wakes it for nothing.
+  if (phase === 'WAITING' && parksOnlyOnTrigger(task) && armed === false) return null;
   return task.org_role && phase === 'NEED_ACTION' ? null : phase;
 }
 
@@ -99,7 +102,9 @@ export function turnAnsweredPerson(
 }
 
 /** Whether a report's WAITING rests on facts the task must have (the caller looks them up). */
-export function reportNeedsEvidence(report: Pick<StatusReport, 'state' | 'waiting_kind' | 'waiting_on'>, task: Pick<Task, 'parent_task_id'>): boolean {
+export function reportNeedsEvidence(report: Pick<StatusReport, 'state' | 'waiting_kind' | 'waiting_on'>, task: Pick<Task, 'parent_task_id'> & Partial<Pick<Task, 'org_role'>>): boolean {
+  // A lead's park always rests on its own trigger, whatever its report names (parksOnlyOnTrigger).
+  if (parksOnlyOnTrigger(task)) return report.state === 'waiting' || report.state === 'done';
   return report.state === 'waiting' && !reportNamesOutsideWait(report, task);
 }
 
@@ -132,6 +137,10 @@ export async function applyReportPhase(
     next = phaseForReport(report, task, alive, !!evidence);
     if (!evidence) log.session.info('status report waits on nothing outside: handed back to the user', { taskId, sessionId, waitingKind: report.waiting_kind });
   }
+  if (next === 'WAITING' && await clockWakeOnlyAcked(task, sessionId, turnEndedAt)) {
+    log.session.info('a wait_until wake answered with only an ack: not parked again', { taskId, sessionId });
+    next = task.org_role ? null : 'NEED_ACTION';
+  }
   if (!next || next === task.phase || !reportMayMovePhase(task, turnEndedAt, next, report.state)) return null;
   const { readMarkerForPhase } = await import('../phase.js');
   const res = await updateTaskRaw(taskId, { phase: next, ...readMarkerForPhase(next) }, {
@@ -141,6 +150,27 @@ export async function applyReportPhase(
   if (!res?.changed) return null;
   log.session.info('status report moved the phase', { taskId, sessionId, from: task.phase, to: next, state: report.state });
   return next;
+}
+
+/**
+ * The turn that just ended was the wait_until clock's wake (task-wait-until.ts), the task has no
+ * trigger of its own armed, and the turn's whole answer was the agent-ack line: parking it again
+ * would only set the next 4-hour clock to the same empty wake (2026-11-13, the org reflection: 19
+ * clock wakes in one night, 7 answered with only an ack, each parked again). It goes back to its
+ * lead or the user instead, who see that nothing will move it. Never throws: unknown reads as no.
+ */
+export async function clockWakeOnlyAcked(task: Pick<Task, 'id'>, sessionId: string, turnEndedAt: number): Promise<boolean> {
+  try {
+    const { clockWokeAt, triggersWatching, WAIT_WAKE_FROM } = await import('../task-wait-until.js');
+    if (clockWokeAt(task.id, turnEndedAt + SLACK_MS, sessionId) === null) return false;
+    if ((await triggersWatching(task.id)).some((t) => t.state === 'armed' && !t.watchesUser)) return false;
+    const { readLastTurn } = await import('./session-request-notify.js');
+    const turn = await readLastTurn(sessionId);
+    if (!turn?.openedBy?.text.includes(`from="${WAIT_WAKE_FROM}"`)) return false;
+    return turn.words?.ack === true && !turn.words.text.trim();
+  } catch {
+    return false;
+  }
 }
 
 /**
