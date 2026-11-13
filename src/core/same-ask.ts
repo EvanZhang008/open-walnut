@@ -604,8 +604,8 @@ export function answersOf(t: { ask_answered?: AskAnswer | null; asks_answered?: 
   return list;
 }
 
-/** Ask kinds only the user may approve: an answer in their place quotes their words (user_words). */
-export const APPROVAL_KINDS: ReadonlySet<string> = new Set(['outward', 'spending', 'credentials', 'permissions', 'cloud_delete', 'irreversible']);
+/** Ask kinds only the user may approve (approval-kinds.ts, one list with the Approvals switch). */
+export { APPROVAL_KINDS } from './approval-kinds.js';
 
 /** Walnut's line at the head of the answering message: the one time the asker is told. */
 export function askAnswerLine(ask: string, byTitle: string): string {

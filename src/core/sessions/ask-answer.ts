@@ -22,6 +22,8 @@
  * it passes them back in user_words (user-spoke.ts).
  */
 import { log } from '../../logging/index.js';
+import { needsUsersWords } from '../approval-kinds.js';
+import { asksPerson } from '../approvals/ask-me.js';
 import { isLocalDraftAsk, isTeamCodeAsk } from '../org/user-kind.js';
 import { ambiguousIdMessage, matchIdRef, missingIdMessage } from '../../lib/id-ref.js';
 import type { SessionRecord, Task } from '../types.js';
@@ -29,7 +31,7 @@ import { isLiveSessionStatus } from '../routines/session-target.js';
 import { briefTeam } from '../user-status.js';
 import { settleCheck, type UserSaid } from './user-spoke.js';
 import { reportDecision } from '../ask-decision.js';
-import { APPROVAL_KINDS, askAnswerLine, askKey, keptAnswers, type AskAnswer, type SameAskFold } from '../same-ask.js';
+import { askAnswerLine, askKey, keptAnswers, type AskAnswer, type SameAskFold } from '../same-ask.js';
 
 export class AskAnswerError extends Error {
   constructor(readonly code: 'not_above' | 'no_open_ask' | 'user_words' | 'user_spoke_since' | 'bad_request', message: string, readonly status = 409) {
@@ -180,6 +182,8 @@ export async function prepareAskAnswer(
   const { ask } = open;
   // An ask of a kind only the user approves (an outward send, spending, credentials...) is answered in
   // their place only on their own words (2026-11-04 review: Main could otherwise approve a spend).
+  // With approvals off an outward step is no longer his (approval-kinds.ts, the same list the
+  // prompt's approvals-off line reads); spending, credentials and the rest stay his.
   const kind = target.status_report?.ask_own?.kind;
   const words = (userWords ?? '').replace(/\s+/g, ' ').trim();
   // Older reports may label owned code work or an unpublished local draft outward. Correct
@@ -188,7 +192,7 @@ export async function prepareAskAnswer(
   const localWork = kind === 'outward' && askKey(report?.ask) === askKey(ask) && !report?.ask_options?.length
     && (!report?.ask_kind || report.ask_kind === 'yes_no' || report.ask_kind === 'text')
     && (isLocalDraftAsk(ask, report?.ask_more) || isTeamCodeAsk(ask, report?.ask_own?.why, report?.ask_more));
-  if (caller && kind && APPROVAL_KINDS.has(kind) && !localWork && words.length < 10) {
+  if (caller && kind && !localWork && words.length < 10 && needsUsersWords(kind, await asksPerson())) {
     throw new AskAnswerError('user_words',
       `Not sent: "${target.title}" asks the user to approve a step of kind ${kind}, which only the user decides. `
       + 'Answer it in their place only with their own words: pass user_words quoting what they said (task_history rows with sentBy "person", or their thread message). Otherwise leave it for them.');

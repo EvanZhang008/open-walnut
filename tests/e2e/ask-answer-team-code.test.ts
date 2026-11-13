@@ -14,6 +14,8 @@ import { ensureProjectLead } from '../../src/core/org/org-store.js';
 import { APPROVAL_KINDS } from '../../src/core/same-ask.js';
 import { refuseSameAsk } from '../../src/core/same-ask-tree.js';
 import { LOCAL_DRAFT_ASKS, PROTECTED_DRAFT_ASKS } from '../helpers/local-draft-asks.js';
+import { setAskMe } from '../../src/core/approvals/ask-me.js';
+import { SWITCH_OFF_SETTLES } from '../../src/core/approval-kinds.js';
 
 const PROJECT = 'Orchid';
 const LEAD_SID = 'ffffffff-3333-4bbb-8ccc-dddddddddddd';
@@ -198,6 +200,36 @@ describe('answers_ask for the team own code', () => {
     for (const kind of APPROVAL_KINDS) {
       if (kind === 'outward') continue;
       const id = await asking(`Open the ${kind} CR in our own repo?`, kind);
+      const refused = await answer(id);
+      expect(refused.status, `${kind}: ${JSON.stringify(refused.body)}`).toBe(409);
+      expect(JSON.stringify(refused.body)).toContain('user_words');
+      expect((await getTask(id)).ask_answered).toBeUndefined();
+    }
+  });
+});
+
+// 2026-11-12, two VPs: with approvals off the prompt told leads an outward step is
+// no longer the user's decision, yet answers_ask refused each outward ask with user_words (a reply
+// reply mail, a post) and it stayed on his Needs you.
+describe('answers_ask with approvals off', () => {
+  beforeAll(async () => { await setAskMe(false, { unsigned: 'test' }); });
+  afterAll(async () => { await setAskMe(true, { person: true }); });
+
+  it.each([
+    'Send the follow-up mail to the vendor?',
+    'Post the release notes to the public channel?',
+  ])('a lead settles an outward ask without the user\'s words: %s', async (ask) => {
+    const id = await asking(ask, 'outward', 'It sends a message outside the team.');
+    const r = await answer(id);
+    expect(r.status, JSON.stringify(r.body)).toBe(202);
+    expect((await getTask(id)).ask_answered).toMatchObject({ by: lead, ask });
+    expect((await getTask(id)).ask_answered?.userWords).toBeUndefined();
+  });
+
+  it('every kind the switch does not settle still needs the user\'s words', async () => {
+    for (const kind of APPROVAL_KINDS) {
+      if (SWITCH_OFF_SETTLES.has(kind)) continue;
+      const id = await asking(`Pay the ${kind} invoice?`, kind, 'It spends or changes access.');
       const refused = await answer(id);
       expect(refused.status, `${kind}: ${JSON.stringify(refused.body)}`).toBe(409);
       expect(JSON.stringify(refused.body)).toContain('user_words');

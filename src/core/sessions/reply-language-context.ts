@@ -10,6 +10,7 @@
  */
 
 import { createHash } from 'node:crypto'
+import { STILL_THE_USERS } from '../approval-kinds.js'
 import { replyLanguageText } from './output-mode.js'
 
 const SYNC_STALE_MS = 5_000
@@ -74,10 +75,12 @@ export function currentApprovalsAsk(): boolean {
  */
 export function approvalsLine(ask: boolean): string {
   if (ask) return ''
+  const still = Object.values(STILL_THE_USERS)
   return 'Approvals are off (the user\'s setting, Settings \u203a General): Walnut no longer stops a post, a mail, '
-    + 'a browser step, a script\'s `walnut approve` or a command on another host for the user\'s yes; it records '
-    + 'each. An outward message or post is not the user\'s decision now: do it and say what you did. Still ask the '
-    + 'user before spending money, changing credentials or permissions, or deleting cloud resources or data.\n\n'
+    + 'a browser step or a command on another host for the user\'s yes; it records each (a `walnut approve` in a '
+    + 'script still asks the user). An outward message or post is not the user\'s decision now: do it, or settle '
+    + 'a teammate\'s outward ask (task_send answers_ask) without user_words, and say what you did. Still ask the '
+    + `user before ${still.slice(0, -1).join(', ')} or ${still[still.length - 1]}.\n\n`
 }
 
 /** Tests: forget the copy. */

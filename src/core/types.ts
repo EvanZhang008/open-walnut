@@ -1462,9 +1462,9 @@ export interface Config {
    *  org's own messages; org-enabled.ts). Absent = on, so an install that never set it keeps it. */
   org?: { name?: string; founder_title?: string; enabled?: boolean };
   /** Whether an agent's step waits for the person's yes (core/approvals/ask-me.ts). `ask_me`
-   *  absent or false: no step waits (a post, a send, a browser step, a script's `walnut approve`),
-   *  each is recorded as done without asking; true: every one asks, as before 2026-11-12. Only a
-   *  person changes it (routes/config.ts). */
+   *  absent or false: none of Walnut's own steps waits (a post, a send, a browser step), each is
+   *  recorded as done without asking; true: every one asks. A script's `walnut approve` asks
+   *  either way. Only a person changes it (routes/config.ts). */
   approvals?: { ask_me?: boolean };
   /** Passwords (core/vault/). `unlock_for`: "Keep Passwords unlocked" (core/vault/unlock-length.ts:
    *  idle, 1h, 12h, 48h (default), restart, always). `auto_lock_minutes`: the idle choice's minutes
