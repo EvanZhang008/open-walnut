@@ -469,7 +469,12 @@ async function inheritPlan(page: Page, writer: string): Promise<void> {
 }
 
 async function planCard(page: Page, panel: Locator, words: string): Promise<Locator> {
-  const card = panel.locator('.session-plan-card').filter({ hasText: words }).first()
+  // A plan card starts folded (SessionMessage.tsx PlanCard): its words show once it is opened,
+  // as the person opens it, with its own toggle.
+  const cards = panel.locator('.session-plan-card')
+  await expect(cards.first()).toBeVisible({ timeout: 20_000 })
+  for (const toggle of await cards.locator('.session-plan-card-toggle[aria-expanded="false"]').all()) await click(page, toggle)
+  const card = cards.filter({ hasText: words }).first()
   await expect(card).toBeVisible({ timeout: 20_000 })
   return card
 }
