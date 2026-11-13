@@ -559,11 +559,15 @@ test('words typed on after Enter go with the message: the auto-send waits for a 
 
 test('a send made while a dropped picture is still being read waits for it', async ({ page }) => {
   const h = await open(page)
-  // A slow read (a big photo, a HEIC conversion): the picture is not in the strip yet.
+  // A slow read (a big photo, a HEIC conversion): the picture is not in the strip yet. The read
+  // waits for the test, not for a clock: a 2 s delay ended before the send on a loaded runner,
+  // where the fill and the Enter alone took that long (2026-11-13, every CI run).
   await page.evaluate(() => {
+    const w = window as unknown as { __releaseRead?: () => void }
+    const gate = new Promise<void>((resolve) => { w.__releaseRead = resolve })
     const orig = FileReader.prototype.readAsDataURL
     FileReader.prototype.readAsDataURL = function (this: FileReader, blob: Blob) {
-      setTimeout(() => orig.call(this, blob), 2000)
+      void gate.then(() => orig.call(this, blob))
     }
   })
   await pasteFile(page, 'slow-read.png', 'image/png', PNG.toString('base64'))
@@ -572,6 +576,7 @@ test('a send made while a dropped picture is still being read waits for it', asy
   await input.press('Enter')
   await page.waitForTimeout(800)
   expect(await h.sent()).toHaveLength(0)
+  await page.evaluate(() => (window as unknown as { __releaseRead: () => void }).__releaseRead())
   await expect.poll(async () => (await h.sent()).length, { timeout: 20_000 }).toBe(1)
   const [msg] = await h.sent()
   expect(msg.imageRefs).toEqual([{ filename: '1-abc.png' }])
