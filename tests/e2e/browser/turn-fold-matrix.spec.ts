@@ -400,3 +400,49 @@ for (const live of [false, true]) {
     if (!live) await expect(history.getByText('MX_OWN_THOUGHT')).toBeHidden();
   });
 }
+
+// F2: a turn of calls only, with no words and no answer, is the turn's ONE fold while it runs,
+// and stays that fold (same row, open if the reader opened it) once it ends with no answer:
+// never a bare run row (2026-11-13, the user's rule: "event one shoudol be collpesed").
+// Opened by the person's words, by a received notice, and in Conversation Mode; one call and several.
+for (const opener of ['person', 'notice', 'conversation'] as const) {
+  for (const calls of [1, 3]) {
+    test(`F2 · a calls-only turn is one fold live and after it ends with no answer · ${opener} · ${calls} call${calls > 1 ? 's' : ''}`, async ({ page }) => {
+      const steps = Array.from({ length: calls }, (_, i) => KINDS.command(i + 1));
+      const live = { type: 'tool_call', toolUseId: 'mx-live', name: 'Bash', input: { command: 'sample-cmd --last' }, status: 'calling', msgId: 'mx-mlast' };
+      const start: Row = opener === 'notice' ? { role: 'user', text: notice(1), timestamp: at(10), msgId: 'queue-n1', walnutMessageId: 'sn-1' } : ASK;
+      const before = opener === 'conversation' ? [...PRIOR, ...QUESTION] : PRIOR;
+      const messages: Row[] = [...before, start];
+      await mockSession(page, messages, 'running', { blocks: [...steps.flatMap((s) => s.blocks), live], isStreaming: true }, opener === 'conversation' ? QUESTION_RECORD : {});
+      const history = await open(page);
+      await waitForWs(page);
+      if (opener === 'conversation') await expect(history.locator('[data-thread-fold]')).toHaveCount(1, { timeout: 10000 });
+      const fold = history.locator('[data-testid="turn-fold"]');
+      await expect(fold).toHaveCount(1, { timeout: 15000 });
+      await expect(fold.locator(':scope > .tool-run-toggle')).toContainText(/^Working/);
+      // No run row, card or call of the turn outside its fold.
+      const loose = () => history.evaluate((h) => Array.from(h.querySelectorAll('.tool-run-row, .session-tool-call, [data-testid="session-step-group-row"]'))
+        .filter((e) => (e as HTMLElement).offsetParent !== null && !e.closest('[data-testid="turn-fold"]') && !e.closest('[data-thread-fold]') && !e.querySelector('[data-testid="turn-fold"]'))
+        .map((e) => (e as HTMLElement).innerText.slice(0, 80)));
+      expect(await loose(), 'live: a step outside the fold').toEqual([]);
+      const key = await fold.getAttribute('data-fold-id');
+      await fold.locator(':scope > .tool-run-toggle').click();
+      await expect(fold.locator(':scope > .process-fold-body')).toBeVisible();
+      // The turn ends on its last call: saved with no answer after it.
+      messages.push(...steps.map((s) => s.row), { role: 'assistant', text: '', msgId: 'mx-mlast', timestamp: at(85), tools: [{ name: 'Bash', toolUseId: 'mx-live', input: { command: 'sample-cmd --last' }, result: 'ok' }] });
+      await setMockStream(page, { blocks: [], isStreaming: false });
+      await injectEvent(page, 'session:tool-result', { sessionId: MOCK_SESSION_ID, toolUseId: 'mx-live', result: 'ok' });
+      await injectEvent(page, 'session:result', { sessionId: MOCK_SESSION_ID, result: '', isError: false });
+      await injectEvent(page, 'session:batch-completed', { sessionId: MOCK_SESSION_ID, count: 1 });
+      await expect(fold.locator(':scope > .tool-run-toggle')).not.toContainText(/^Working/, { timeout: 10000 });
+      await page.waitForTimeout(800);
+      await expect(fold).toHaveCount(1);
+      expect(await fold.getAttribute('data-fold-id'), 'the saved fold is the live one').toBe(key);
+      await expect(fold.locator(':scope > .process-fold-body')).toBeVisible();
+      expect(await loose(), 'saved: a step outside the fold').toEqual([]);
+      const body = fold.locator(':scope > .process-fold-body');
+      await expect(body).toContainText('sample-cmd --last');
+      for (let i = 1; i <= calls; i++) await expect(body).toContainText(`sample-cmd --step ${i}`);
+    });
+  }
+}
