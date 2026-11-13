@@ -490,6 +490,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   const IMPLICIT_REPLY_SECS = 6 * 3_600
   const DRAIN_BATCH = 200
   const QUEUED_OPS = ['task_update', 'task_complete']
+  /** Held while nothing can take them (holdWrite); the Mac's twin list: offline-handover.ts HELD_OPS. */
+  const HELD_OPS = ['task_send', 'session_send', 'agent_memory_write']
   /**
    * Inputs task_update retired (its `retiredInput` in src/ops/tasks.ts): dropped, never a
    * reason to refuse, as the server's executor drops them (an older session still sends
@@ -2240,6 +2242,69 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     })
   }
 
+  // ── writes held for the server: nothing else could take them (holdWrite) ──
+
+  /**
+   * A message (task_send, session_send) or a memory write (agent_memory_write) that neither this
+   * host nor the cloud companion can carry out while the Walnut server is away is held here, and
+   * the caller hears "queued", not an error (2026-11-13, the org reflection: a VP's sends to another
+   * host's task and to its own lead, and its memory writes, failed with hub_unreachable at 04:01,
+   * 04:08 and 05:30 UTC and were resent by hand). The gateway asks only after this host's own answer
+   * and the companion both said hub_unreachable (daemon-standalone.ts sendGatewayRequest, its twin).
+   * Journaled as an `op` record under the call's own id: a retry of the same call is answered, never
+   * written twice, and the Mac replays it once through the op (offline-handover.ts, the call-id
+   * ledger), as the session that made it. Only for a Mac that drains `held-op` (MAC_DRAINS); never a
+   * call outside a known session, nor one whose arguments ride in a file. Null: not held.
+   */
+  function holdWrite(home: string, rawCallerSid: string, capability: string, payload: Record<string, unknown>): GatewayResult | null {
+    try {
+      const name = typeof payload.name === 'string' ? payload.name : ''
+      if (capability !== 'tools.call' || HELD_OPS.indexOf(name) === -1 || typeof payload.argsFile === 'string') return null
+      if (!hasHome(home) || !drainsKind(home, 'held-op')) return null
+      const callerSid = callerSidOf(home, rawCallerSid)
+      if (!callerSid || !sessionOf(home, callerSid)) return null
+      const raw = (payload.args && typeof payload.args === 'object' && !Array.isArray(payload.args) ? payload.args : {}) as Record<string, unknown>
+      const args: Record<string, unknown> = { ...raw }
+      const me = callerIdentity(home, callerSid)
+      if (name === 'agent_memory_write') {
+        // Its own task by default (GET /me online): pinned now, so the replay writes the same one.
+        if (typeof args.task !== 'string' || !args.task.trim()) {
+          if (!me.taskId) return null
+          args.task = me.taskId
+        }
+      }
+      // The caller's call id (src/lib/op-call-id.ts) keys the record: a retry of the same call is
+      // answered from the first one, never written twice. Without one, each call is its own.
+      const callId = typeof payload.callId === 'string' && /^oc-[A-Za-z0-9_-]{8,48}$/.test(payload.callId) ? payload.callId : ''
+      const stable = callId ? callId.slice(3).split('_').join('-') : ''
+      if (name !== 'agent_memory_write' && (typeof args.messageId !== 'string' || !/^qm-[A-Za-z0-9-]{1,64}$/.test(args.messageId))) {
+        // The server's own retry fence for a message (send-queue.ts), from the call id when given.
+        args.messageId = stable ? `qm-host-${stable}` : messageId(undefined)
+      }
+      let size = 0
+      try { size = JSON.stringify(args).length } catch { return fail('bad_request', 'arguments are not JSON') }
+      if (size > MAX_ARGS_BYTES) return fail('bad_request', `arguments are too large to hold on this host (${size} bytes, limit ${MAX_ARGS_BYTES})`)
+      const saved = append(home, { kind: 'op', op: name, args, callerSid }, false, {
+        ...(stable ? { opId: `held-${stable}` } : {}), limit: true, admit: () => admitWrite(callerSid) ?? roomFor(home),
+      })
+      const no = refusal(saved)
+      if (no || !saved.ok) return no ?? fail('internal', 'not saved')
+      deps.log('info', 'offline host: write held for the server', { home, op: name, callerSid, seq: saved.seq, opId: saved.opId, duplicate: saved.duplicate === true })
+      const message = name !== 'agent_memory_write'
+      return ok({
+        queued: true, offline: true, held: true, op: name, seq: saved.seq,
+        ...(message ? { messageId: args.messageId } : {}),
+        outcome: `Queued on this host: the Walnut server is away, and when it is back it ${message ? 'delivers this message' : 'makes this write'}, once. ${offlineNote(home)} Do NOT resend.`,
+        next: message
+          ? (raw.in_reply_to !== undefined ? 'Nothing else is required.' : 'A reply you asked for arrives in your session once it is delivered; do not poll.')
+          : 'Nothing else is required.',
+      })
+    } catch (err) {
+      deps.log('warn', 'offline host: a write could not be held', { home, error: (err as Error).message })
+      return null
+    }
+  }
+
   // ── triggers: the checks this host runs (walnut-trigger) ──
 
   /**
@@ -3193,7 +3258,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   return {
     /** The slices on disk again (the boot migration copied some here). */
     reloadSlices: load,
-    configure, holdsSlice, hasHome, ownerOf, pendingHandover, hasRecords, drain, ack, noteSettings, noteStop, handle, handleLocal, handleFollower,
+    configure, holdsSlice, hasHome, ownerOf, pendingHandover, hasRecords, drain, ack, noteSettings, noteStop, handle, handleLocal, handleFollower, holdWrite,
     /** handleFollower, waiting out another process's journal lock (whenUnlocked): the twins' follower.op. */
     handleFollowerWaiting: (home: string, req: Parameters<typeof handleFollower>[1]) => whenUnlocked(home, String(req.op ?? ''), () => handleFollower(home, req)),
     /** noteSession, waiting out another process's journal lock (whenUnlocked): the twins' host ask. */

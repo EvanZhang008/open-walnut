@@ -5532,14 +5532,19 @@ function sendGatewayRequest(
       return
     }
     logMsg('info', 'gateway: answered offline', { capability, callerSid, op: typeof payload.name === 'string' ? payload.name : undefined, serverConnected: !!target })
+    // Nothing could take it (this host, the companion, a server within the call's time): a
+    // message or a memory write is held here for the server, and the caller hears "queued"
+    // (offline-host-core.ts holdWrite). Any other answer goes back as it is.
+    const unreachable = (r: GatewayResponse) => !r.ok && r.error.code === 'hub_unreachable' && !target
+    const heldOr = (r: GatewayResponse) => respond(unreachable(r) ? (offlineHost.holdWrite(home, callerSid, capability, payload) as GatewayResponse | null) ?? r : r)
     void offlineHost.handle(home, callerSid, capability, payload).then((r) => {
       // What this host cannot answer itself goes to the companion while it
       // leads (a message to another host, a task outside the copy).
-      if (!r.ok && r.error.code === 'hub_unreachable' && !target
-        && forwardToBackup(home, capability, callerSid, payload, respond)) return
+      if (unreachable(r as GatewayResponse)
+        && forwardToBackup(home, capability, callerSid, payload, (b) => { if (unreachable(b) && waitHere()) return; heldOr(b) })) return
       // Not this host's to answer, and no server now: wait for one while the call has time.
-      if (!r.ok && r.error.code === 'hub_unreachable' && !target && waitHere()) return
-      respond(r as GatewayResponse)
+      if (unreachable(r as GatewayResponse) && waitHere()) return
+      heldOr(r as GatewayResponse)
     })
     return
   }

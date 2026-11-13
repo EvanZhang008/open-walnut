@@ -6825,13 +6825,16 @@ function sendGatewayRequest(capability, callerSid, payload, respond, plan) {
       return;
     }
     logMsg('info', 'gateway: answered offline', { capability: capability, callerSid: callerSid, op: typeof payload.name === 'string' ? payload.name : undefined, serverConnected: !!target });
+    // Nothing could take it: a message or a memory write is held here for the server (holdWrite).
+    var unreachable = function (r) { return !r.ok && r.error.code === 'hub_unreachable' && !target; };
+    var heldOr = function (r) { respond(unreachable(r) ? offlineHost.holdWrite(home, callerSid, capability, payload) || r : r); };
     offlineHost.handle(home, callerSid, capability, payload).then(function (r) {
       // What this host cannot answer itself goes to the companion while it leads.
-      if (!r.ok && r.error.code === 'hub_unreachable' && !target
-        && forwardToBackup(home, capability, callerSid, payload, respond)) return;
+      if (unreachable(r)
+        && forwardToBackup(home, capability, callerSid, payload, function (b) { if (unreachable(b) && waitHere()) return; heldOr(b); })) return;
       // Not this host's to answer, and no server now: wait for one while the call has time.
-      if (!r.ok && r.error.code === 'hub_unreachable' && !target && waitHere()) return;
-      respond(r);
+      if (unreachable(r) && waitHere()) return;
+      heldOr(r);
     });
     return;
   }

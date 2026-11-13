@@ -340,6 +340,8 @@ interface Batch {
   notesAcked?: boolean;
 }
 
+/** The ops a host holds while nothing can take them (offline-host-core.ts holdWrite, MAC_DRAINS `held-op`). */
+const HELD_OPS: ReadonlySet<string> = new Set(['task_send', 'session_send', 'agent_memory_write']);
 /** v1 kinds keep their meaning; v2 kinds the Mac applies are APPLIED_V2_KINDS. */
 const V1_KINDS = new Set(['row', 'settle', 'delivery', 'settings', 'stop', 'resume', 'op']);
 /** Retries of a record that threw, on the same connection, before it is given up (section 5). */
@@ -417,6 +419,15 @@ function recordCall(host: string, record: OfflineRecord): { callId?: string } {
   return opId ? { callId: journalCallId(host, opId, Number((record as { rev?: unknown }).rev) || 1) } : {};
 }
 
+/**
+ * The task an op record writes. A trigger's id is a routine's, and a held message's `id` is the
+ * task it was sent to, not one it writes: neither names a task.
+ */
+function opTask(record: Extract<OfflineRecord, { kind: 'op' }>): string | undefined {
+  if (record.op.startsWith('trigger_') || record.op === 'task_send' || record.op === 'session_send') return undefined;
+  return String(record.args?.id ?? record.args?.task ?? '') || undefined;
+}
+
 function recordOpId(record: OfflineRecord): string | undefined {
   const id = (record as { opId?: unknown }).opId;
   return typeof id === 'string' && id ? id : undefined;
@@ -424,7 +435,7 @@ function recordOpId(record: OfflineRecord): string | undefined {
 
 /** The task a record writes (v1 op or v2 kinds), for give-up and the letter. */
 function recordTask(batch: Batch, record: OfflineRecord): string | undefined {
-  if (record.kind === 'op') return record.op.startsWith('trigger_') ? undefined : String(record.args?.id ?? record.args?.task ?? '') || undefined;
+  if (record.kind === 'op') return opTask(record);
   if (V1_KINDS.has(record.kind)) return undefined;
   return v2TaskIdOf(record as unknown as V2Record, batch.remap, batch.conn.hostKey);
 }
@@ -1007,7 +1018,9 @@ async function applyRecord(
       // stored once however often it is replayed). There is no updated_at race to
       // judge here: nobody writes a board's html, or switches a host's trigger, on
       // this side while that host's sessions are away.
-      if (record.op.startsWith('board_') || record.op.startsWith('trigger_')) {
+      // A message or a memory write a host held while neither this Mac nor the companion could take
+      // it (offline-host-core.ts holdWrite) goes the same way: once, under the record's own call id.
+      if (record.op.startsWith('board_') || record.op.startsWith('trigger_') || HELD_OPS.has(record.op)) {
         const { executeOp } = await import('../ops/index.js');
         const { hostOrigin } = await import('../lib/caller-origin.js');
         const r = await executeOp(record.op, record.args, { callerSid: record.callerSid, callerHost: host, origin: hostOrigin(host), ...recordCall(host, record) });
@@ -1018,8 +1031,10 @@ async function applyRecord(
         result.replayed++;
         if (record.op.startsWith('board_')) {
           log.session.info('offline handover: board write applied', { host, op: record.op, boardTaskId: String(record.args.task ?? ''), callerSid: record.callerSid });
-        } else {
+        } else if (record.op.startsWith('trigger_')) {
           log.session.info('offline handover: trigger change applied', { host, op: record.op, triggerId: String(record.args.id ?? ''), callerSid: record.callerSid });
+        } else {
+          log.session.info('offline handover: a held write was delivered', { host, op: record.op, callerSid: record.callerSid, seq: record.seq });
         }
         return;
       }
@@ -1145,7 +1160,7 @@ const resumesToRescue = new Map<string, Set<string>>();
 async function recordScope(record: OfflineRecord): Promise<{ sessionId?: string; taskId?: string }> {
   switch (record.kind) {
     // A trigger's id is a routine's, not a task's.
-    case 'op': return { sessionId: record.callerSid, taskId: record.op.startsWith('trigger_') ? undefined : String(record.args?.id ?? record.args?.task ?? '') || undefined };
+    case 'op': return { sessionId: record.callerSid, taskId: opTask(record) };
     case 'row': return { sessionId: record.row.fromSessionId };
     case 'delivery': return { sessionId: record.toSessionId };
     case 'settings': return { sessionId: record.sid };
