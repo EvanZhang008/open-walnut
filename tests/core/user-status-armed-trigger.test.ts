@@ -111,3 +111,44 @@ describe('an armed trigger of its own wakes the task', () => {
     expect(deriveUserStatus(outside, NOW)).toMatchObject({ state: 'waiting', waitingOn: 'A watch: Sign-in watch' })
   })
 })
+
+// 2026-11-13, the org reflection: a worker's watch on its full test run fired at 17:16, the turn it
+// woke acked at 17:25 and the session stopped; its status (a report from 16:46) kept saying its
+// tests still ran, waiting on that watch, so its lead was never woken and heard nothing all night.
+describe('a trigger that already did its one job wakes nothing', () => {
+  const FIRED = NOW - 9 * 60_000
+  const facts = (trigger: { fires: number; firedAtMs?: number }, processStatus = 'stopped') => ({
+    sessions: new Map([['sid-a', { processStatus, taskId: 't1' }]]), letters: new Map(), choices: new Map(),
+    requestsFrom: new Map(), triggers: new Map([['t1', [{ id: 'job-1', name: 'Full test run done', ...trigger }]]]), schedules: new Map(), titles: new Map(),
+    sessionsOf: new Map([['t1', ['sid-a']]]),
+  }) as unknown as import('../../src/core/user-status-sync.js').StatusFacts
+  const task = (phase: string, reportAt: number) => ({
+    id: 't1', title: 'Fix the first message label', phase, session_id: 'sid-a', parent_task_id: 'lead',
+    // The fire's turn ended after the fire: the phase moved then.
+    phase_changed_at: ago(30_000),
+    status_report: { state: 'working', at: new Date(reportAt).toISOString(), now: 'Full tests and review still running.' },
+  }) as unknown as import('../../src/core/types.js').Task
+
+  it('stopped after its one fire with no report since: its lead is the one to look (handed back) or it is stuck (in progress)', async () => {
+    const { statusInputOf, triggerSpent } = await import('../../src/core/user-status-sync.js')
+    const stale = NOW - 40 * 60_000
+    expect(triggerSpent({ fires: 1, firedAtMs: FIRED }, task('NEED_ACTION', stale))).toBe(true)
+    expect(deriveUserStatus(statusInputOf(task('NEED_ACTION', stale), facts({ fires: 1, firedAtMs: FIRED })), NOW))
+      .toMatchObject({ state: 'waiting', kind: 'lead' })
+    expect(deriveUserStatus(statusInputOf(task('IN_PROGRESS', stale), facts({ fires: 1, firedAtMs: FIRED })), NOW))
+      .toMatchObject({ state: 'waiting', kind: 'stuck' })
+  })
+
+  it('still a watch: never fired, a standing one (two fires or more), a report after the fire names it again, or the fire\'s turn runs', async () => {
+    const { statusInputOf } = await import('../../src/core/user-status-sync.js')
+    const stale = NOW - 40 * 60_000
+    const watch = { state: 'waiting', kind: 'other', waitingOn: 'A watch: Full test run done' }
+    expect(deriveUserStatus(statusInputOf(task('IN_PROGRESS', stale), facts({ fires: 0 })), NOW)).toMatchObject(watch)
+    expect(deriveUserStatus(statusInputOf(task('IN_PROGRESS', stale), facts({ fires: 2, firedAtMs: FIRED })), NOW)).toMatchObject(watch)
+    expect(deriveUserStatus(statusInputOf(task('IN_PROGRESS', FIRED + 60_000), facts({ fires: 1, firedAtMs: FIRED })), NOW).waitingOn).not.toBe('It stopped, and nothing will wake it')
+    expect(deriveUserStatus(statusInputOf(task('IN_PROGRESS', stale), facts({ fires: 1, firedAtMs: FIRED }, 'running')), NOW).state).toBe('working')
+    // The fire came after the phase last moved: its turn has not run yet.
+    expect(deriveUserStatus(statusInputOf(task('IN_PROGRESS', stale), facts({ fires: 1, firedAtMs: NOW - 10_000 })), NOW)).toMatchObject(watch)
+  })
+})
+

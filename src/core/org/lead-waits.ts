@@ -4,7 +4,8 @@
  * for a child's turn end (subtask-notices.ts), and the team note (team-note.ts) only rode the
  * lead's next message.
  *
- * A task whose own status (user-status.ts) says it waits on its leader, kind `lead`, when that
+ * A task whose own status (user-status.ts) says it waits on its leader, kind `lead`, or that is
+ * stuck (it meant to carry on and nothing will wake it, after STUCK_SETTLE_MS), when that
  * leader is an org lead (a VP), is that lead's work. After SETTLE_MS (the lead may be answering
  * already), the lead's team note is delivered to its session, which wakes it, with those tasks
  * under "Waiting on you" and whatever else moved. The note's own state means each wait is told
@@ -35,11 +36,14 @@ const SETTLE_MS = 60_000;
 const MIN_GAP_MS = 5 * 60_000;
 const SWEEP_MS = 10 * 60_000;
 const UNREPORTED_MS = 10 * 60_000;
+/** How long a worker stays stuck before it wakes its lead (stuckUnderLead). */
+export const STUCK_SETTLE_MS = 20 * 60_000;
 /** The phase write and the report stamp come from different processes (user-status.ts). */
 const CLOCK_SLACK_MS = 5_000;
 
 let settleMs = SETTLE_MS;
 let gapMs = MIN_GAP_MS;
+let stuckSettleMs = STUCK_SETTLE_MS;
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 const lastWake = new Map<string, number>();
 let sweep: ReturnType<typeof setInterval> | null = null;
@@ -51,6 +55,16 @@ let bootedAt: number | null = null;
 // not stop the team's own work (a lead's start date snoozes every worker under it that has none).
 const waitsOnItsLead = (t: Pick<Task, 'parent_task_id' | 'phase' | 'user_status'>) =>
   !!t.parent_task_id && t.phase !== 'COMPLETE' && t.user_status?.state === 'waiting' && t.user_status.kind === 'lead';
+/**
+ * Stuck: it meant to carry on and nothing will wake it (user-status.ts: a turn that said it works on,
+ * a trigger that already did its one job). Its lead is the one to unblock it, so it wakes the lead
+ * too, once it has stayed so STUCK_SETTLE_MS: Walnut's own recovery (a restart, a host that comes
+ * back) may still bring it back first (2026-11-13, the org reflection: a worker stopped at 17:25
+ * with its status saying its tests still ran, and its lead heard nothing all night).
+ */
+const stuckUnderLead = (t: Pick<Task, 'parent_task_id' | 'phase' | 'user_status'>) =>
+  !!t.parent_task_id && t.phase !== 'COMPLETE' && t.user_status?.state === 'waiting' && t.user_status.kind === 'stuck';
+const leadsWork = (t: Pick<Task, 'parent_task_id' | 'phase' | 'user_status'>) => waitsOnItsLead(t) || stuckUnderLead(t);
 
 type WaitFacts = Pick<Task, 'status_report' | 'phase_changed_at' | 'last_session_update' | 'updated_at'>;
 
@@ -69,6 +83,14 @@ export function wakeAt(t: WaitFacts): number {
   if (current && (r!.state === 'done' || (r!.state === 'waiting' && r!.waiting_kind === 'lead'))) return 0;
   const since = Date.parse(t.last_session_update ?? t.phase_changed_at ?? t.updated_at ?? '');
   return Number.isFinite(since) ? Math.max(since, Number.isFinite(movedAt) ? movedAt : 0) + UNREPORTED_MS : 0;
+}
+
+/** When a stuck worker may wake its lead (ms): once it has stayed stuck STUCK_SETTLE_MS. */
+export function stuckWakeAt(t: WaitFacts): number {
+  const since = Math.max(
+    ...[t.phase_changed_at, t.last_session_update].map((v) => Date.parse(v ?? '')).filter(Number.isFinite),
+  );
+  return Number.isFinite(since) ? since + stuckSettleMs : 0;
 }
 
 function schedule(leadId: string, delay = settleMs): void {
@@ -91,7 +113,7 @@ export async function tellLead(leadId: string, nowMs = Date.now()): Promise<bool
     const { getTask, listTasks } = await import('../task-manager.js');
     const lead = await getTask(leadId).catch(() => undefined);
     if (!lead || lead.org_role !== 'lead' || lead.phase === 'COMPLETE') return false;
-    const waiting = (await listTasks()).filter((t) => t.parent_task_id === lead.id && waitsOnItsLead(t)
+    const waiting = (await listTasks()).filter((t) => t.parent_task_id === lead.id && leadsWork(t)
       && (bootedAt === null || waitBegan(t) >= bootedAt));
     if (!waiting.length) return false;
     const { leadSession } = await import('./org-store.js');
@@ -101,7 +123,7 @@ export async function tellLead(leadId: string, nowMs = Date.now()): Promise<bool
     const note = await pendingTeamNote(lead, target.claudeSessionId, nowMs);
     if (!note) return false;
     // Only what the lead was not told yet decides the wake; a wait told earlier is its already.
-    const fresh = waiting.filter((t) => note.waitIds.includes(t.id));
+    const fresh = waiting.filter((t) => (waitsOnItsLead(t) ? note.waitIds : note.stuckIds).includes(t.id));
     const { getSessionsForTask } = await import('../session-tracker.js');
     const { repliedRecently } = await import('../session-requests.js');
     const leadSids = (await getSessionsForTask(lead.id).catch(() => [])).map((s) => s.claudeSessionId);
@@ -111,7 +133,7 @@ export async function tellLead(leadId: string, nowMs = Date.now()): Promise<bool
       // It answered the lead's request after its wait began: the reply was the news.
       const answered = Number.isFinite(began)
         && await repliedRecently(leadSids, t.id, nowMs - began + CLOCK_SLACK_MS, nowMs).catch(() => false);
-      due.push(answered ? Infinity : wakeAt(t));
+      due.push(answered ? Infinity : waitsOnItsLead(t) ? wakeAt(t) : stuckWakeAt(t));
     }
     if (!due.some((at) => at <= nowMs)) {
       note.release(); // the rest rides its next message
@@ -148,7 +170,7 @@ async function scan(): Promise<void> {
     const { listTasks } = await import('../task-manager.js');
     const tasks = await listTasks();
     const leads = new Set(tasks.filter((t) => t.org_role === 'lead' && t.phase !== 'COMPLETE').map((t) => t.id));
-    for (const t of tasks) if (waitsOnItsLead(t) && leads.has(t.parent_task_id!)) schedule(t.parent_task_id!);
+    for (const t of tasks) if (leadsWork(t) && leads.has(t.parent_task_id!)) schedule(t.parent_task_id!);
   } catch (err) {
     log.session.debug('lead waits: sweep failed', { error: err instanceof Error ? err.message : String(err) });
   }
@@ -158,7 +180,7 @@ export function startLeadWaits(opts: { ephemeral?: boolean } = {}): void {
   bootedAt = (opts.ephemeral ?? IS_EPHEMERAL) ? Date.now() : null;
   bus.subscribe(SUBSCRIBER, (event) => {
     const task = (event.data as { task?: Task } | undefined)?.task;
-    if (!task || !waitsOnItsLead(task)) return;
+    if (!task || !leadsWork(task)) return;
     // Only a VP: checked when the timer fires (the parent may have just become one).
     schedule(task.parent_task_id!);
   }, { global: true, interest: [EventNames.TASK_UPDATED, EventNames.TASK_CREATED] });
@@ -182,8 +204,9 @@ export function stopLeadWaits(): void {
 }
 
 /** Tests: shorten the clocks (no argument restores them), and forget the wakes. */
-export function _setLeadWaitClocksForTesting(settle?: number, gap?: number): void {
+export function _setLeadWaitClocksForTesting(settle?: number, gap?: number, stuck?: number): void {
   settleMs = settle ?? SETTLE_MS;
   gapMs = gap ?? MIN_GAP_MS;
+  stuckSettleMs = stuck ?? STUCK_SETTLE_MS;
   lastWake.clear();
 }

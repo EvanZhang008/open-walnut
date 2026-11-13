@@ -257,6 +257,35 @@ describe('what reaches the lead without a message from anyone', () => {
     _setLeadWaitClocksForTesting()
   })
 
+  // 2026-11-13, the org reflection: a worker stopped with its status saying its tests still ran
+  // (the watch it waited on had fired), and its lead heard nothing all night.
+  it('a stuck worker wakes the lead once it stayed stuck, once', async () => {
+    _setLeadWaitClocksForTesting(10 * 60_000, 0, 60_000)
+    const sid = '44444444-5555-4666-8777-888888888888'
+    const worker = (await addTask({ title: 'Fix the first message label', project: 'Garden', parent_task_id: leadId })).task.id
+    await createSessionRecord(sid, worker, 'Garden', WALNUT_HOME)
+    await updateSessionRecord(sid, { process_status: 'stopped' })
+    await updateTask(worker, { phase: 'IN_PROGRESS' }, { source: 'api' })
+    await updateTaskRaw(worker, {
+      session_id: sid,
+      status_report: { state: 'working', now: 'Full tests and review still running.', at: new Date(Date.now() - 60 * 60_000).toISOString() },
+    }, { emitEvent: true, source: 'status-report' })
+    await until('the worker reads stuck', async () => (await getTask(worker)).user_status?.kind === 'stuck')
+    _resetTeamNoteClaimsForTesting()
+    // Stuck for less than the settle time: Walnut's own recovery may still bring it back.
+    expect(await tellLead(leadId)).toBe(false)
+    expect(await tellLead(leadId, Date.now() + 2 * 60_000)).toBe(true)
+    const row = (await getQueue(LEAD_SID)).find((m) => m.message.includes('Fix the first message label'))
+    // Under the later notes' "Stuck" heading, or marked stuck on a first note's line.
+    expect(row?.message).toMatch(/Stuck \(nothing will wake it\):\n- "Fix the first message label"|"Fix the first message label" \(stuck: it stopped, and nothing will wake it/)
+    // Told: the same stop wakes it no more.
+    _resetTeamNoteClaimsForTesting()
+    expect(await tellLead(leadId, Date.now() + 4 * 60_000)).toBe(false)
+    for (const m of await getQueue(LEAD_SID)) await deleteMessage(LEAD_SID, m.id)
+    await completeTask(worker)
+    _setLeadWaitClocksForTesting()
+  })
+
   it('a wait the worker told the lead in its own message is no news; one after the lead wrote back is', async () => {
     _setLeadWaitClocksForTesting(10 * 60_000, 0)
     const gate = (await addTask({ title: 'Paint the gate', project: 'Garden', parent_task_id: leadId })).task.id

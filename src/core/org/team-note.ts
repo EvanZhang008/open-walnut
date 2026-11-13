@@ -7,9 +7,10 @@
  * Same shape as the main agent's org update (org-store.ts pendingOrgDigest): it rides the next
  * message that goes into the lead anyway, in the same row, so it never costs a turn. What needs
  * the user is the user's to see (the Org page shows it the moment the status says so,
- * team-news.ts); the lead hears it with its next message. One thing does wake the lead: a task
- * whose own status says it waits on this lead is the lead's work, so lead-waits.ts delivers the
- * note then (2026-10-26: three workers waited 21 hours on a lead that never heard).
+ * team-news.ts); the lead hears it with its next message. Two things do wake the lead: a task
+ * whose own status says it waits on this lead, or one that is stuck, is the lead's work, so
+ * lead-waits.ts delivers the note then (2026-10-26: three workers waited 21 hours on a lead that
+ * never heard; 2026-11-13: a stopped worker whose status still said its tests ran).
  *
  *   first message   where its teams stand now: the projects it leads, what needs the user,
  *                   what waits on it, the newest news
@@ -251,7 +252,7 @@ function splitSeen(v: string | undefined): [string | undefined, string | undefin
 const clean = (text: string | undefined) => (text ?? '').replace(/\s+/g, ' ').trim();
 
 /** Stuck: it meant to carry on and nothing will wake it, so it is its lead's to unblock. */
-function isStuck(t: TeamNewsTask): boolean {
+export function isStuck(t: TeamNewsTask): boolean {
   return t.user_status?.state === 'waiting' && t.user_status.kind === 'stuck';
 }
 
@@ -334,6 +335,7 @@ export function planTeamNote(
   const news = teamNews(open).filter((i) => !ctx.told?.has(i.taskId));
   const byId = new Map(open.map((t) => [t.id, t] as const));
   const waitOf = (i: TeamNewsItem): LeadWait => ({ ...i, waitingOn: clean(byId.get(i.taskId)?.user_status?.waitingOn) });
+  const markStuck = (i: TeamNewsItem): TeamNewsItem => (isStuck(byId.get(i.taskId)!) ? { ...i, stuck: true } : i);
   const waiting = (i: TeamNewsItem) => waitsOnLead(byId.get(i.taskId)!, ctx.leadId);
   const stopped = (i: TeamNewsItem) => isMachineStop(byId.get(i.taskId)!);
   const asks = groupTeamAsks(ctx.asks ?? []);
@@ -342,7 +344,10 @@ export function planTeamNote(
     const needs = news.filter((i) => i.state === 'needs');
     const waits = news.filter((i) => i.state !== 'needs' && waiting(i)).map(waitOf);
     const machine = news.filter((i) => i.state !== 'needs' && !waiting(i) && stopped(i)).map(waitOf);
-    const moved = news.filter((i) => i.state !== 'needs' && !waiting(i) && !stopped(i) && i.reported).slice(0, 5);
+    // A stuck task is the lead's to unblock: always listed, and said to be stuck, whatever its old words claim.
+    const stuckFirst = (a: TeamNewsItem, b: TeamNewsItem) => Number(isStuck(byId.get(b.taskId)!)) - Number(isStuck(byId.get(a.taskId)!));
+    const moved = news.filter((i) => i.state !== 'needs' && !waiting(i) && !stopped(i) && (i.reported || isStuck(byId.get(i.taskId)!)))
+      .sort(stuckFirst).slice(0, 5).map(markStuck);
     const any = needs.length + waits.length + machine.length + moved.length + asks.length + owed.length > 0;
     return { kind: any ? 'now' : 'none', needs, waits, machine, moved, asks, led, ...none, ...owedPart, next };
   }
@@ -396,6 +401,9 @@ function ago(at: number, nowMs: number): string {
 const STATE_WORD: Record<TeamNewsItem['state'], string> = { needs: 'needs the user', read: 'for the user to read', working: 'working', waiting: 'waiting', done: 'done' };
 
 /** The note's text, inside a Walnut notification the lead reads as background. */
+/** How a stuck task's line names its state: its own words may still claim work that has stopped. */
+const STUCK_WORDS = 'stuck: it stopped, and nothing will wake it';
+
 export function buildTeamNoteText(
   lead: Pick<Task, 'id' | 'title'>, plan: TeamNotePlan, prevAt: string | undefined, nowMs: number,
   projectOf: (taskId: string) => string = () => '',
@@ -405,7 +413,7 @@ export function buildTeamNoteText(
     return `${project ? `[${project}] ` : ''}"${shortTitle(i.title, 80)}"`;
   };
   const words = (i: TeamNewsItem) => (i.words ? `: ${shortTitle(i.words, WORDS_MAX)}` : '');
-  const when = (i: TeamNewsItem) => [STATE_WORD[i.state], ago(i.at, nowMs)].filter(Boolean).join(', ');
+  const when = (i: TeamNewsItem) => [i.stuck ? STUCK_WORDS : STATE_WORD[i.state], ago(i.at, nowMs)].filter(Boolean).join(', ');
   const section = (head: string, items: readonly TeamNewsItem[], max: number, line: (i: TeamNewsItem) => string) => {
     if (!items.length) return '';
     const shown = items.slice(0, max).map((i) => `- ${line(i)}`);
@@ -462,6 +470,9 @@ export function buildTeamNoteText(
     + doneLine
     + (plan.machine?.length
       ? 'A task the machine stopped is yours to bring back, not the user\'s: once its cause clears (the host answers, the disk has room), check it (task_get) and restart it (task_restart) or send it a message if Walnut has not. Tell the user only what you cannot fix yourself (a sign-in or a payment only they can give). '
+      : '')
+    + ((plan.kind === 'moved' && plan.moved.length) || plan.moved.some((i) => i.stuck)
+      ? 'A stuck task stopped while its status still says it carries on, so nothing brings it back by itself: check it (task_get, task_history) and restart it (task_restart) or send it what it needs. '
       : '')
     + (plan.waits.length
       ? 'The tasks under "Waiting on you" wait for you: read each (task_get) and answer or close it. The rest is background. The user sees the same on the Org page.'
@@ -533,6 +544,9 @@ export interface PendingTeamNote {
   waits: number;
   /** Those tasks' ids. */
   waitIds: string[];
+  /** Team tasks in it that are newly stuck (meant to carry on, nothing will wake them): lead-waits.ts
+   *  wakes the lead for those too. */
+  stuckIds: string[];
   markTold(): Promise<void>;
   /** Not delivered after all: the next message may carry it. */
   release(): void;
@@ -609,6 +623,9 @@ export async function pendingTeamNote(lead: Task, sessionId: string, nowMs = Dat
       text: buildTeamNoteText(lead, plan, prev?.at, nowMs, (id) => (named ? projectById.get(id) || 'Inbox' : '')),
       waits: plan.waits.length,
       waitIds: plan.waits.map((w) => w.taskId),
+      // A first note tells every stuck task where things stand; a later one only those newly stuck.
+      stuckIds: plan.kind === 'now' ? open.filter((t) => isStuck(t)).map((t) => t.id)
+        : plan.moved.map((m) => m.taskId).filter((id) => open.some((t) => t.id === id && isStuck(t))),
       markTold: async () => {
         await writeState(lead.id, plan.next).catch((err) => log.session.warn('team note: state not recorded', {
           sessionId, taskId: lead.id, error: err instanceof Error ? err.message : String(err),

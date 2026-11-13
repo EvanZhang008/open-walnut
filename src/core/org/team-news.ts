@@ -40,6 +40,8 @@ export interface TeamNewsItem {
   reported: boolean;
   /** When the session wrote its words, else when the task last moved (ms); 0 = unknown. */
   at: number;
+  /** Stuck (team-note.ts isStuck): its line says so, whatever its old words claim. */
+  stuck?: boolean;
 }
 
 function ms(iso: string | undefined): number {

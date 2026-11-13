@@ -85,8 +85,8 @@ export interface StatusFacts {
   choices: Map<string, ChoiceFact[]>;
   /** Session id -> target task ids it waits on for a reply. */
   requestsFrom: Map<string, string[]>;
-  /** Task id -> armed triggers that deliver into it. */
-  triggers: Map<string, { id: string; name: string }[]>;
+  /** Task id -> armed triggers that deliver into it; `fires` and `firedAtMs` (its newest fire) where read. */
+  triggers: Map<string, { id: string; name: string; fires?: number; firedAtMs?: number }[]>;
   /** Task id -> enabled scheduled routines that run in its session, with their next run. */
   schedules: Map<string, { name: string; nextAt?: string }[]>;
   /** Task id -> when an armed trigger of it last ran its check (ISO, to CHECK_STAMP_MS), absent
@@ -256,6 +256,38 @@ async function readChoices(allIds: readonly string[]): Promise<StatusFacts['choi
  *  every minute: "checked 10 minutes ago" is all a reader needs. */
 const CHECK_STAMP_MS = 10 * 60_000;
 
+/** When a trigger last fired (ms): its newest fire in the audit trail, else its last check's. */
+function lastFireAtMs(job: import('./cron/types.js').CronJob): number | undefined {
+  const logged = job.state?.fireLog?.find((e) => e.outcome === 'fired')?.atMs;
+  if (typeof logged === 'number') return logged;
+  const check = job.state?.lastCheck;
+  return check?.outcome === 'fired' && typeof check.atMs === 'number' ? check.atMs : undefined;
+}
+
+/** Slack between a fire's time (the daemon's clock) and the phase move its delivery makes (this server's). */
+const FIRE_CLOCK_SLACK_MS = 5_000;
+
+/**
+ * A trigger that already did its one job: it fired once, a turn of the task took that fire and
+ * ended (the phase moved after it), and no report of the task's has spoken since. A wait the
+ * task's status still claims on it is a claim from before the fire, and nothing new is coming
+ * from it, so it no longer keeps the task from reading stopped or stuck (2026-11-13, the org
+ * reflection: a worker whose watch fired acknowledged and stopped; its status kept saying its
+ * tests ran and its lead heard nothing all night). A trigger that fired twice or more is a
+ * standing watch (task-wait-resume.ts triggersStanding) and always counts; so does any trigger
+ * once a report after its fire names the wait again.
+ */
+export function triggerSpent(
+  t: { fires?: number; firedAtMs?: number },
+  task: Pick<Task, 'phase_changed_at' | 'status_report'>,
+): boolean {
+  if (t.fires !== 1 || typeof t.firedAtMs !== 'number') return false;
+  const moved = Date.parse(task.phase_changed_at ?? '');
+  if (!Number.isFinite(moved) || moved < t.firedAtMs + FIRE_CLOCK_SLACK_MS) return false;
+  const reported = Date.parse(task.status_report?.at ?? '');
+  return !(Number.isFinite(reported) && reported >= t.firedAtMs);
+}
+
 /** The routines that run in a task's session: armed triggers (a check), or plain scheduled runs;
  *  `checks`: when an armed trigger of the task last ran its check. */
 async function readRoutines(kind: 'triggers' | 'schedules' | 'checks'): Promise<Map<string, any>> {
@@ -285,7 +317,8 @@ async function readRoutines(kind: 'triggers' | 'schedules' | 'checks'): Promise<
         const next = job.state?.nextRunAtMs;
         list.push({ name: job.name, ...(typeof next === 'number' ? { nextAt: new Date(next).toISOString() } : {}) });
       } else if (!schedules && job.check && triggerRunState(job) === 'armed') {
-        list.push({ id: job.id, name: wakeWordsOf(job) });
+        const firedAtMs = lastFireAtMs(job);
+        list.push({ id: job.id, name: wakeWordsOf(job), fires: job.state?.fireCount ?? 0, ...(firedAtMs !== undefined ? { firedAtMs } : {}) });
       } else continue;
       out.set(target, list);
     }
@@ -517,8 +550,11 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
     waitingOnTasks: [...new Set(waitingOnTasks)],
     // A trigger on the user's own ask or letter (trigger_create `watches`) is no outside watch:
     // the task still needs the user (sessions/outside-wait.ts, 2026-10-30).
+    // Nor a trigger that already did its one job (triggerSpent) while no turn runs: the wait it
+    // carried is over, and the task reads stopped or stuck, so its lead hears (org/lead-waits.ts).
     triggers: (facts.triggers.get(task.id) ?? [])
-      .filter((t) => !(task.recheck_watch ?? []).some((w) => w.trigger === t.id)).map((t) => t.name),
+      .filter((t) => !(task.recheck_watch ?? []).some((w) => w.trigger === t.id))
+      .filter((t) => anyRunning || !triggerSpent(t, task)).map((t) => t.name),
     schedules: facts.schedules.get(task.id) ?? [],
     waitUntil: task.wait_until ?? null,
     hasLeader: !!task.parent_task_id,
