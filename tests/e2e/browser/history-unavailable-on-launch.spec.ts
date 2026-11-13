@@ -119,7 +119,11 @@ test.describe('History unavailable card on a freshly launched session', () => {
 
     const history = page.locator('.session-history');
     await expect(history).toContainText('Working on the mode list.', { timeout: 15000 });
-    expect(fullFetches, 'the full fetch must have run (otherwise this proves nothing)').toBeGreaterThan(0);
+    // The full fetch follows the local streams' answer: on a loaded runner it leaves after that
+    // content is on screen (2026-11-13: CI read the count at 0 every run), so wait for its
+    // answer, then let the page draw what it said.
+    await expect.poll(() => fullFetches, { message: 'the full fetch must have run (otherwise this proves nothing)', timeout: 30_000 }).toBeGreaterThan(0);
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 
     await expect(page.locator(UNAVAILABLE_CARD)).toHaveCount(0);
     await expect(page.locator('body')).not.toContainText('HISTORY_UNAVAILABLE');
