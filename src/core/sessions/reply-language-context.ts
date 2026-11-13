@@ -80,7 +80,7 @@ export function approvalsLine(ask: boolean): string {
     + 'a browser step or a command on another host for the user\'s yes; it records each (a `walnut approve` in a '
     + 'script still asks the user). An outward message or post is not the user\'s decision now: do it, or settle '
     + 'a teammate\'s outward ask (task_send answers_ask) without user_words, and say what you did. Still ask the '
-    + `user before ${still.slice(0, -1).join(', ')} or ${still[still.length - 1]}.\n\n`
+    + `user before ${still.slice(0, -1).join(', ')}, or ${still[still.length - 1]}.\n\n`
 }
 
 /** Tests: forget the copy. */

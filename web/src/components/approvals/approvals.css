@@ -508,9 +508,9 @@ button.approval-line-more { border: 0; cursor: pointer; font: inherit; font-size
 
 /* The dialog's body (approval-context.tsx): Task and Repo (or Folder) as two label/value lines, the
    request's sentence when it says more, then one Details fold (command, asker's line, signed detail). */
-.approval-row { display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: baseline; gap: 10px; font-size: 14px; line-height: 1.45; }
-.approval-row-label { color: var(--fg-muted); font-size: 12px; font-weight: 600; }
-.approval-row-value { min-width: 0; overflow-wrap: anywhere; color: var(--fg); }
+.approval-field { display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: baseline; gap: 10px; font-size: 14px; line-height: 1.45; }
+.approval-field-label { color: var(--fg-muted); font-size: 12px; font-weight: 600; }
+.approval-field-value { min-width: 0; overflow-wrap: anywhere; color: var(--fg); }
 .approval-where { font-family: var(--font-mono); font-size: 13px; }
 .approval-details summary { font-size: 13px; }
 .approval-details-body { display: grid; gap: 10px; margin-top: 8px; }

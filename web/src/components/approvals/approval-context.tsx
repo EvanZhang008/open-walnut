@@ -66,7 +66,7 @@ export function prettyJson(text: string): string {
 
 
 /** A signed Git operation's own fields (the Git gate's context, `walnut-git-operation-v1`), when the request carries one. */
-export interface GitOperation { repository: string; operation?: string; branch?: string; commitSha?: string }
+export interface GitOperation { repository: string; operation?: string; remote?: string; branch?: string; commitSha?: string }
 
 export function gitOperation(a: Approval): GitOperation | null {
   const { text, signed } = detailText(a);
@@ -78,6 +78,7 @@ export function gitOperation(a: Approval): GitOperation | null {
     return {
       repository: c.repository,
       operation: typeof c.operation === 'string' ? c.operation : undefined,
+      remote: typeof c.remote === 'string' ? c.remote : undefined,
       branch: ref ? ref.replace(/^refs\/heads\//, '') : undefined,
       commitSha: typeof c.commitSha === 'string' ? c.commitSha : undefined,
     };
@@ -86,12 +87,23 @@ export function gitOperation(a: Approval): GitOperation | null {
 
 /** A path with its home folder said as `~` (`/Users/u`, `/home/u`, `/local/home/u`): the rest is what tells folders apart. */
 export function shortPath(p: string): string {
-  return p.replace(/^(?:\/local)?\/home\/[^/]+(?=\/|$)|^\/Users\/[^/]+(?=\/|$)|^\/root(?=\/|$)/, '~');
+  // Not a person's home: macOS's shared and guest folders, Homebrew's Linux prefix.
+  return p.replace(/^(?:\/local)?\/home\/(?!linuxbrew(?:\/|$))[^/]+(?=\/|$)|^\/Users\/(?!(?:Shared|Guest)(?:\/|$))[^/]+(?=\/|$)|^\/root(?=\/|$)/, '~');
+}
+
+/** The machine a request came from, said for the person: this one is "this computer", another by its display name. */
+export function hostWords(a: Approval, hostName: string): string {
+  return a.requester.local ? 'this computer' : hostName;
+}
+
+/** The sentence the Git gate writes for a push (its own words for what the Repo line shows). */
+function gatePushSentence(git: GitOperation): string {
+  return `Push commit ${(git.commitSha ?? '').slice(0, 7)} to ${git.remote ?? ''} ${git.branch ?? ''} in ${git.repository.split('/').pop() ?? ''}`;
 }
 
 /** The second line: where it acts, said as a path (the repository and the branch it pushes to, else the folder it ran in) and the machine. */
 function whereLine(a: Approval, git: GitOperation | null, hostName: string): { label: string; text: string } {
-  const host = a.requester.local ? 'this computer' : hostName;
+  const host = hostWords(a, hostName);
   if (git) return { label: 'Repo', text: `${shortPath(git.repository)}${git.branch ? ` → ${git.branch}` : ''} (${host})` };
   if (a.requester.cwd) return { label: 'Folder', text: `${shortPath(a.requester.cwd)} (${host})` };
   return { label: 'Host', text: host };
@@ -113,27 +125,31 @@ export function ApprovalContextRows({ a, hostName }: { a: Approval; hostName: st
   const command = r.command || r.ranBy;
   const outside = [r.process ? `run by ${r.process}` : '', r.user ? `as ${r.user}` : ''].filter(Boolean).join(' ');
   const detail = detailText(a);
-  // A Git push's sentence ("Push commit … to origin mainline in meta-fresh") says again what the Repo line says.
-  const asks = git && git.operation === 'push' && git.branch ? '' : a.what;
+  // The Git gate's own push sentence ("Push commit … to origin mainline in meta-fresh") says again what the
+  // Repo line says; any other sentence (a force push, a tag, words of the asker's own) is shown.
+  const asks = git && git.operation === 'push' && git.branch && a.what === gatePushSentence(git) ? '' : a.what;
+  // What Walnut read from the process table, when it differs from the command the asker named: a sign
+  // of who really asks, so it stays above the fold (a signed approval binds the real operation instead).
+  const ranByDiffers = !a.singleUse && !!r.command && !!r.ranBy && r.ranBy !== r.command;
   const why = c.why && c.whyFrom !== 'session' ? c.why : '';
   return (
     <div className="approval-context" data-testid="approval-context">
-      <div className="approval-row" data-testid="approval-task">
-        <span className="approval-row-label">Task</span>
-        <span className="approval-row-value">
+      <div className="approval-field" data-testid="approval-task">
+        <span className="approval-field-label">Task</span>
+        <span className="approval-field-value">
           {r.taskId
             ? <AskerLink a={a} label={r.taskTitle || 'Its task'} />
             : <span className="approval-unknown">{`A script with no task${outside ? `, ${outside}` : ''}`}</span>}
         </span>
       </div>
-      <div className="approval-row" data-testid="approval-where">
-        <span className="approval-row-label">{where.label}</span>
-        <span className="approval-row-value approval-where" title={git?.repository ?? r.cwd}>{where.text}</span>
+      <div className="approval-field" data-testid="approval-where">
+        <span className="approval-field-label">{where.label}</span>
+        <span className="approval-field-value approval-where" title={git?.repository ?? r.cwd}>{where.text}</span>
       </div>
       {asks ? (
-        <div className="approval-row">
-          <span className="approval-row-label">Asks</span>
-          <span className="approval-row-value approval-asks" data-testid="approval-asks">{asks}</span>
+        <div className="approval-field">
+          <span className="approval-field-label">Asks</span>
+          <span className="approval-field-value approval-asks" data-testid="approval-asks">{asks}</span>
         </div>
       ) : null}
       {r.taskId && r.identity === 'unverified' ? (r.check === 'outside' ? (
@@ -145,6 +161,12 @@ export function ApprovalContextRows({ a, hostName }: { a: Approval; hostName: st
           Walnut could not check that this came from the task’s session.
         </div>
       )) : null}
+      {ranByDiffers ? (
+        <div className="approval-warn approval-ran-by" data-testid="approval-ran-by" role="note" title="Read by Walnut from this machine’s process list">
+          Started by <code>{r.ranBy}</code>, not by the command it names.
+        </div>
+      ) : null}
+      {a.downgraded ? <div className="approval-note" data-testid="approval-downgraded">{a.downgraded}</div> : null}
       {command || why || detail.text ? (
         <details className="approval-detail approval-details" data-testid="approval-detail">
           <summary>Details</summary>
@@ -155,11 +177,6 @@ export function ApprovalContextRows({ a, hostName }: { a: Approval; hostName: st
               <div className="approval-part">
                 <div className="approval-part-label">Command</div>
                 <code className="approval-command" data-testid="approval-command">{command}</code>
-                {/* What Walnut read from the process table, when it differs from the command the asker named
-                    (a signed approval binds the real operation in its detail). */}
-                {!a.singleUse && r.command && r.ranBy && r.ranBy !== r.command
-                  ? <div className="approval-ran-by" data-testid="approval-ran-by" title="Read by Walnut from this machine’s process list">Started by <code>{r.ranBy}</code></div>
-                  : null}
               </div>
             ) : null}
             {detail.text ? (

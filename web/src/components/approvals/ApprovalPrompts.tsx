@@ -34,7 +34,7 @@ import {
 } from './approvals-store';
 import { ApprovalUnlock } from './ApprovalUnlock';
 import { askNoticePermission, nativeNoticeStatus, noticeAccess, openNoticeSettings, OPEN_APPROVAL_EVENT, takeClickedApproval, type NoticeAccess } from './approval-notify';
-import { ApprovalContextRows, AskerLink, detailText } from './approval-context';
+import { ApprovalContextRows, AskerLink, detailText, hostWords } from './approval-context';
 import './approvals.css';
 
 export function useNow(ms: number): number {
@@ -57,7 +57,7 @@ export function requesterText(a: Approval, hostName: string): string {
   const r = a.requester;
   const who = r.taskTitle ? `Task "${r.taskTitle}"` : r.command ? r.command : 'A script';
   // This machine is "this computer": its host name (a container's is a hash) tells the person nothing.
-  return `${who} on ${r.local ? 'this computer' : hostName}`;
+  return `${who} on ${hostWords(a, hostName)}`;
 }
 
 /** The time left, said as such; the last minute is marked (a warning colour). */
@@ -162,7 +162,7 @@ function ApprovalBody({ a, s, now, onOpen, onMinimize, total = 0 }: { a: Approva
       {onOpen ? (<>
         <div className="approval-who">
           <span className="approval-who-text">{asker
-            ? <><AskerLink a={a} label={a.requester.taskTitle || 'Its task'} />{' '}<span className="approval-who-host">{a.requester.local ? 'on this computer' : `on ${hostName}`}</span></>
+            ? <><AskerLink a={a} label={a.requester.taskTitle || 'Its task'} />{' '}<span className="approval-who-host">{`on ${hostWords(a, hostName)}`}</span></>
             : <span className="approval-who-host">{requesterText(a, hostName)}</span>}</span>
         </div>
         <ApprovalDetail a={a} />

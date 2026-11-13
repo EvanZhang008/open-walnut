@@ -113,11 +113,22 @@ describe('the approval dialog leads with the task and the path', () => {
     expect(glance(render(approval({}, { identity: 'unverified', check: 'outside' })))).toContain('data-testid="approval-outside"');
   });
 
-  it('shows what really started it beside a command the asker named, unless the detail is signed', () => {
+  it('a push whose sentence is not the gate\'s own keeps it in sight (a force push, words of the asker\'s own)', () => {
+    const forced = glance(render(gitPush({ what: 'Force push commit da21d9c to origin mainline in meta-fresh' })));
+    expect(forced).toContain('data-testid="approval-asks"');
+    expect(forced).toContain('Force push commit da21d9c');
+    expect(forced).toContain('>Repo<');
+  });
+
+  it('shows what really started it beside a command the asker named, above the fold, unless the detail is signed', () => {
     const plain = render(approval({ singleUse: false }, { command: 'git status' }));
-    expect(plain).toContain('data-testid="approval-ran-by"');
+    expect(glance(plain)).toContain('data-testid="approval-ran-by"');
     expect(plain).toContain('gate_hook.py');
     expect(render(approval({}, { command: 'git status' }))).not.toContain('approval-ran-by');
+  });
+
+  it('a downgraded request says so in the dialog', () => {
+    expect(glance(render(approval({ downgraded: 'No device signs approvals yet, so this one is a tap.' })))).toContain('data-testid="approval-downgraded"');
   });
 
   it('this computer is said as such, and a request with no folder names only the machine', () => {
@@ -136,10 +147,14 @@ describe('the paths read short and the Git fields come only from a signed Git co
     expect(shortPath('/root/x')).toBe('~/x');
     expect(shortPath('/srv/u/x')).toBe('/srv/u/x');
     expect(shortPath('/home/u')).toBe('~');
+    // Not a person's home.
+    expect(shortPath('/Users/Shared/x')).toBe('/Users/Shared/x');
+    expect(shortPath('/Users/Guest/x')).toBe('/Users/Guest/x');
+    expect(shortPath('/home/linuxbrew/.linuxbrew/bin')).toBe('/home/linuxbrew/.linuxbrew/bin');
   });
 
   it('reads repository, branch and commit from the Git gate\'s context, nothing from plain text', () => {
-    expect(gitOperation(gitPush())).toEqual({ repository: '/local/home/u/.local/state/open-walnut/tasks/t-9/meta-fresh', operation: 'push', branch: 'mainline', commitSha: 'da21d9c6ebf95b2d1003c6af76bb17894603c207' });
+    expect(gitOperation(gitPush())).toEqual({ repository: '/local/home/u/.local/state/open-walnut/tasks/t-9/meta-fresh', operation: 'push', remote: 'origin', branch: 'mainline', commitSha: 'da21d9c6ebf95b2d1003c6af76bb17894603c207' });
     // Unsigned, or not the Git gate's version: no Repo line.
     expect(gitOperation(gitPush({ singleUse: false }))).toBeNull();
     expect(gitOperation(approval({ detail: JSON.stringify({ version: 'walnut-single-use-v1', context: '{"repository":"/x"}' }) }))).toBeNull();
