@@ -161,13 +161,24 @@ export type ExecutorRunResult = {
   delivered?: { sessionId?: string; text?: string };
 };
 
+/**
+ * What the cron engine tells an executor beside the message.
+ * `runForMs`: a catch-up run stands for this missed slot (run-log.ts); a title dates by it.
+ * `parts`: the pieces the message was joined from (`lead + initOutput + "\n\n" + instructions`), so
+ * an executor can keep a fence Walnut built (a triage batch) as it is and frame only Walnut's own
+ * words beside it, instead of splitting the joined text again.
+ */
+export interface ExecutorRunContext {
+  runForMs?: number;
+  parts?: { lead: string; initOutput: string; instructions: string };
+}
+
 /** Injected by the server: dispatches a due job to its executor implementation. */
 export type RunExecutorFn = (
   job: CronJob,
   executor: RoutineExecutorRef,
   message: string,
-  /** `runForMs`: a catch-up run stands for this missed slot (run-log.ts); a title dates by it. */
-  ctx?: { runForMs?: number },
+  ctx?: ExecutorRunContext,
 ) => Promise<ExecutorRunResult>;
 
 // ── Wake mode ──

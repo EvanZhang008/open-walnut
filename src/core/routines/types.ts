@@ -16,6 +16,7 @@ import type {
   RoutineExecutorRef,
   ExecutorRunResult,
   RunExecutorFn,
+  ExecutorRunContext,
 } from '../cron/types.js';
 
 export type { RoutineExecutorRef, ExecutorRunResult, RunExecutorFn };
@@ -101,6 +102,6 @@ export interface ExecutorDefinition {
    * instructions, with any init-processor output already prepended by the
    * cron engine) — use it instead of config.instructions.
    */
-  /** `ctx.runForMs`: a catch-up run stands for this missed slot (cron/run-log.ts). */
-  run(job: CronJob, executor: RoutineExecutorRef, message: string, ctx?: { runForMs?: number }): Promise<ExecutorRunResult>;
+  /** `ctx`: a catch-up run's slot and the parts the message was joined from (cron/types.ts). */
+  run(job: CronJob, executor: RoutineExecutorRef, message: string, ctx?: ExecutorRunContext): Promise<ExecutorRunResult>;
 }

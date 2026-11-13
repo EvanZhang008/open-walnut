@@ -22,6 +22,7 @@
 import { getConfig } from '../../config-manager.js';
 import type { RoutineRunStarter } from '../run-start.js';
 import type { ExecutorDefinition } from '../types.js';
+import type { CronJob } from '../../cron/types.js';
 import { clearHostGateNotices, noteHostGateRefusal, resetHostGateNotices } from '../host-gate-notice.js';
 import { routineLaunchPlacement, routinePlacementOf } from '../run-placement.js';
 
@@ -61,6 +62,35 @@ export function readTriageCountHint(message: string): number | undefined {
     if (m) return Number(m[1]);
   }
   return undefined;
+}
+
+/**
+ * The run's first message as the session gets it: never as the person's typing (send-frame.ts).
+ *
+ * The whole text is framed as Walnut's, escaping any envelope inside it, unless the cron engine
+ * says the message was joined from an init output that is a fence Walnut built (nothing in it
+ * reads as a person's: a triage batch's trigger, triage/batch.ts) and the run's own words. Then
+ * the fence stays byte-identical and only the catch-up note and the instructions are framed, each
+ * on its own, so the fence is not nested in a peer note (where escaping would turn it into words).
+ * The parts must join back to exactly `message`; anything else is framed whole.
+ */
+export async function routineSessionMessage(
+  job: Pick<CronJob, 'id' | 'name'>,
+  message: string,
+  parts: { lead: string; initOutput: string; instructions: string } | undefined,
+): Promise<string> {
+  const { frameAsWalnut, readsAsPerson } = await import('../../sessions/send-frame.js');
+  const frame = (text: string) => frameAsWalnut(text, 'routine', `routine:${job.id}:${job.name}`);
+  const whole = () => frame(stripTriageCountHint(message));
+  if (!parts || `${parts.lead}${parts.initOutput}\n\n${parts.instructions}` !== message) return whole();
+  const fence = stripTriageCountHint(parts.initOutput).trim();
+  if (!fence || readsAsPerson(fence)) return whole();
+  const out = [parts.lead.trim(), fence, parts.instructions.trim()]
+    .map((text, i) => (i === 1 || !text ? text : frame(text)))
+    .filter(Boolean)
+    .join('\n\n');
+  // A part framing leaves raw (a slash command) would make the whole read as the person's.
+  return readsAsPerson(out) ? whole() : out;
 }
 
 /** The message with the hint line removed (unchanged when there is none). */
@@ -222,8 +252,7 @@ export function createClaudeCodeExecutor(opts: { notify?: RoutineGateNotify; sta
       // The count hint is consumed here, not forwarded: it is bookkeeping
       // between the init processor and this executor.
       const count = readTriageCountHint(message);
-      const { frameAsWalnut } = await import('../../sessions/send-frame.js');
-      const sessionMessage = frameAsWalnut(stripTriageCountHint(message), 'routine', `routine:${job.id}:${job.name}`);
+      const sessionMessage = await routineSessionMessage(job, message, ctx?.parts);
 
       let started;
       try {

@@ -8,7 +8,7 @@
  *   - the dynamic executor section of the routine form (GET /api/routines/executors).
  */
 
-import type { CronJob, RoutineExecutorRef, ExecutorRunResult } from '../cron/types.js';
+import type { CronJob, RoutineExecutorRef, ExecutorRunResult, ExecutorRunContext } from '../cron/types.js';
 import type { ExecutorDefinition } from './types.js';
 
 const executors = new Map<string, ExecutorDefinition>();
@@ -38,7 +38,7 @@ export async function runExecutor(
   job: CronJob,
   executor: RoutineExecutorRef,
   message: string,
-  ctx?: { runForMs?: number },
+  ctx?: ExecutorRunContext,
 ): Promise<ExecutorRunResult> {
   const def = executors.get(executor.type);
   if (!def) {

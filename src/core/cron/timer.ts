@@ -614,7 +614,11 @@ async function executeJobCore(
       return { status: 'skipped', error: `executor '${executor.type}' requires non-empty instructions` };
     }
     const message = lead + (initOutput ? `${initOutput}\n\n${instructions}` : instructions);
-    const res = await state.deps.runExecutor(job, executor, message, catchUp ? { runForMs: catchUp.fromMs } : undefined);
+    const ctx = {
+      ...(catchUp ? { runForMs: catchUp.fromMs } : {}),
+      ...(initOutput ? { parts: { lead, initOutput, instructions } } : {}),
+    };
+    const res = await state.deps.runExecutor(job, executor, message, Object.keys(ctx).length > 0 ? ctx : undefined);
     // `delivered.text` is the exact text a session received when the executor
     // knows it (the session executor does); otherwise the message we dispatched
     // is the honest answer to "what did this run inject".
