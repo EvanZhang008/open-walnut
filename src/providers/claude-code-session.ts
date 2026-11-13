@@ -5490,6 +5490,14 @@ export class ClaudeCodeSession {
   private _spawnLineRow: Promise<string | null> | null = null
   /** The death error this process's offer kept quiet (startRecovery): reported plainly if the offer is withdrawn. */
   private _quietDeathError: string | null = null
+  /**
+   * The words of this turn's failure (emitStatusChanged): every later status write of the same turn
+   * keeps them, until the next turn runs. 2026-11-13: a CLI that exited right after its failed turn
+   * (Walnut's retry of an overloaded turn, failing again) had its process end write the error away,
+   * so its lead read only "its session failed", and an error that is the user's, like a sign-in,
+   * stopped reaching him.
+   */
+  private _failedTurn: { gen: number; text: string } | undefined
 
   /**
    * Does this process still hold a first line it never read, its death not yet
@@ -6556,6 +6564,8 @@ export class ClaudeCodeSession {
     this._transport?.stopTail()
 
     this._active = false
+    // Read before the 'stopped' below: a death between turns keeps a failed turn failed.
+    const failedLastTurn = this._processStatus === 'error'
     this._processStatus = 'stopped'
     // A line delivered to the dead process opens no later turn (a cold resume starts its own).
     this._clearTurnOpenLine(true)
@@ -6743,7 +6753,9 @@ export class ClaudeCodeSession {
       // Died between turns: the result saw the CLI still up and published 'idle',
       // and no result follows this death. Publish 'stopped' (and drop the dead
       // pid) the way the result handler does for a CLI already gone, or the
-      // record keeps describing a live idle process.
+      // record keeps describing a live idle process. A turn that failed stays failed (the process
+      // ending is no new verdict), as handleQuietProcessExit keeps it.
+      if (failedLastTurn) this._processStatus = 'error'
       this._activity = undefined
       this.emitStatusChanged('NEED_ACTION')
       const sid = this.claudeSessionId
@@ -6871,7 +6883,8 @@ export class ClaudeCodeSession {
     if (!cleanStderr && stderr && suppressibleExit && !unreadFirstLine) {
       this.reclaimUntakenLines('exit', true)
       this._active = false
-      this._processStatus = 'stopped'
+      // A turn that failed before this exit stays failed.
+      if (this._processStatus !== 'error') this._processStatus = 'stopped'
       this._activity = undefined
       this.pid = null
       log.session.warn('remote session exited with only CLI startup advisories', {
@@ -9131,10 +9144,11 @@ export class ClaudeCodeSession {
           // the UI's "Streaming" badge stays stuck until the next writeMessage.
           this.emitStatusChanged('NEED_ACTION')
         } else {
-          // Process is exiting (SSH, interrupted, or natural exit)
+          // Process is exiting (SSH, interrupted, or natural exit). A failed turn stays failed:
+          // the CLI ending after its error result is no new verdict.
           this.resultEmitted = true
           this._active = false
-          this._processStatus = 'stopped'
+          this._processStatus = effectiveIsError ? 'error' : 'stopped'
           this._activity = undefined
           this._teamActive = false  // Safety: clear team flag on process exit
           if (this._teamIdleTimer) { clearTimeout(this._teamIdleTimer); this._teamIdleTimer = null }
@@ -9879,6 +9893,11 @@ export class ClaudeCodeSession {
       this._live.end()
       reportLiveActivity(sessionId, this.taskId, this._backgroundLive())
     }
+    // A failure's words stay with its turn: a later write of the same turn without words of its
+    // own (its process ending, a stop) keeps them; the next turn running drops them (_failedTurn).
+    if (this._processStatus === 'running') this._failedTurn = undefined
+    else if (errorMessage) this._failedTurn = { gen: this._turnGen, text: errorMessage }
+    else if (this._failedTurn?.gen === this._turnGen) errorMessage = this._failedTurn.text
     const updates = {
       process_status: this._processStatus,
       activity: this._activity,

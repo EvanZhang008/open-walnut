@@ -4391,6 +4391,37 @@ describe('handleProcessDeath — init failure vs ordinary shutdown', () => {
     expect(published).toHaveBeenCalledTimes(1);
   });
 
+  // 2026-11-13: a CLI that exited after its failed turn had the process end write the error away,
+  // so the task read "its session failed" and an error that is the user's (a sign-in) no longer
+  // reached him. The failure, and its words, stay until the next turn runs.
+  it('a death between turns after a failed turn keeps the failure, in its words, until a turn runs', async () => {
+    const { createSessionRecord, getSessionByClaudeId } = await import('../../src/core/session-tracker.js');
+    const id = 'death-after-failed-turn';
+    await createSessionRecord(id, `task-${id}`, 'proj');
+    const session = makeDeadSession(id, { initialized: true });
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const s = session as any;
+    // The turn ended on an error result, the CLI still up.
+    s._turnResultEmitted = true;
+    s.resultEmitted = false;
+    s._processStatus = 'error';
+    s.emitStatusChanged('NEED_ACTION', 'API Error: 529 Overloaded');
+
+    die(session);
+    await s._statusCommit;
+
+    expect(session.processStatus).toBe('error');
+    expect(await getSessionByClaudeId(id)).toMatchObject({ process_status: 'error', errorMessage: 'API Error: 529 Overloaded' });
+    // The next turn runs and ends well: no word of the old failure is left.
+    s._processStatus = 'running';
+    s.emitStatusChanged('IN_PROGRESS');
+    s._processStatus = 'idle';
+    s.emitStatusChanged('NEED_ACTION');
+    await s._statusCommit;
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    expect((await getSessionByClaudeId(id))?.errorMessage).toBeUndefined();
+  });
+
   it('never quotes the CLI managed-settings advisory as a death cause', () => {
     // Same noise, but on the genuine init-failure path — the message is a startup
     // advisory the CLI prints while continuing normally, so it explains nothing.
@@ -4764,6 +4795,24 @@ describe('handleRemoteProcessExit — daemon-reported exit is not always an erro
     expect(errors).toEqual([]);
     expect(busErrors).toEqual([]);
     expect(warns).toContain('remote session exited with only CLI startup advisories');
+  });
+
+  it('a quiet exit after a failed turn keeps the failure, in its words', async () => {
+    const { createSessionRecord, getSessionByClaudeId } = await import('../../src/core/session-tracker.js');
+    const id = 'remote-noise-after-failed-turn';
+    await createSessionRecord(id, `task-${id}`, 'proj');
+    const session = makeRemoteSession(id);
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const s = session as any;
+    s._processStatus = 'error';
+    s.emitStatusChanged('NEED_ACTION', 'API Error: 529 Overloaded');
+
+    exit(session, 0, MANAGED_SETTINGS_NOISE);
+    await s._statusCommit;
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+
+    expect(session.processStatus).toBe('error');
+    expect(await getSessionByClaudeId(id)).toMatchObject({ process_status: 'error', errorMessage: 'API Error: 529 Overloaded' });
   });
 
   it('a REAL remote failure still raises an error', () => {
