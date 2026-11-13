@@ -57,6 +57,11 @@ export default defineConfig({
   // twice ran out of 30 s with nothing wrong (2026-11-01: about 9 of 21 failures of one
   // shard). Assertions keep their own timeouts; this is only the test's ceiling.
   timeout: process.env.CI ? 60_000 : 30_000,
+  // The assertions' own window scales the same way: on the runner a save round trip, a drop or
+  // a reload takes several times as long as on the machines the specs were written on, and 30 of
+  // the 74 failures only CI showed were a default 5 s assertion running out (2026-11-13, run
+  // 43379795380). Explicit timeouts stay as they are.
+  expect: { timeout: process.env.CI ? 15_000 : 5_000 },
 
   use: {
     baseURL: `http://localhost:${testPort}`,
