@@ -61,11 +61,14 @@ async function injectEvent(page: Page, name: string, data: unknown) {
   );
 }
 
+// Two tests enter through a link, so this wait holds the app's whole cold boot, which took
+// 12 to 20 s on a 4-CPU CI runner (playwright.config.ts): 10 s ran out on every CI run
+// (2026-11-13). The others wait for the load first and pass here at once.
 async function waitForWs(page: Page) {
   await page.waitForFunction(() => {
     const ws = (window as any).__capturedWs as WebSocket | undefined;
     return ws && ws.readyState === WebSocket.OPEN;
-  }, null, { timeout: 10000 });
+  }, null, { timeout: 45_000 });
 }
 
 async function mockHistory(page: Page, base: unknown[]) {
