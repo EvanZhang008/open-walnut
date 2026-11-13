@@ -70,7 +70,7 @@ describe('the SPA\'s /ws handshake', () => {
     await initDemoGeneration()
     stored['walnut.demo.generation'] = 'second'
     const { url } = await connect()
-    expect(url).toBe('ws://127.0.0.1:3458/ws?demo-generation=first')
+    expect(url).toBe(`ws://127.0.0.1:3458/ws?demo-generation=first&lean=${LEAN_SIGNATURE}`)
   })
 
   it('a reset detected on socket close reloads before retrying its refused old generation', async () => {

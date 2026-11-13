@@ -18,6 +18,7 @@ import { startServer, stopServer } from '../../src/web/server.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
 import { LeanFrameCache } from '../../web/src/api/ws-lean.js';
 import { LEAN_SIGNATURE } from '../../src/lib/ws-lean-protocol.js';
+import { broadcastEvent, registerMethod, sendToClient } from '../../src/web/ws/handler.js';
 
 let server: HttpServer;
 let port: number;
@@ -64,6 +65,45 @@ afterAll(async () => {
 });
 
 describe('lean event frames through the server', () => {
+  it('lightweight filtering and targeted sends share exactly the same socket baseline', async () => {
+    const lean = await listen(`/ws?lean=${LEAN_SIGNATURE}`, true);
+    const note = 'dense note '.repeat(2000);
+    const data = (phase: string) => ({ taskId: 'interested-task', task: { id: 'interested-task', note, phase } });
+    let nextRpc = 0;
+    const rpc = (method: string, payload: unknown) => new Promise<void>((resolve, reject) => {
+      const id = `probe-${++nextRpc}`;
+      const read = (raw: import('ws').RawData) => {
+        const frame = JSON.parse(raw.toString());
+        if (frame.type !== 'res' || frame.id !== id) return;
+        lean.ws.off('message', read);
+        if (frame.ok) resolve(); else reject(new Error(frame.error));
+      };
+      lean.ws.on('message', read);
+      lean.ws.send(JSON.stringify({ type: 'req', id, method, payload }));
+    });
+    registerMethod('lean-test-target', (_payload, ws) => { sendToClient(ws, 'task:updated', data('targeted')); return {}; });
+    try {
+      await rpc('set-interest', { mode: 'lightweight', ids: [] });
+      broadcastEvent('task:updated', data('filtered'));
+      await rpc('set-interest', { mode: 'lightweight', ids: ['interested-task'] });
+      broadcastEvent('task:updated', data('first'));
+      await until(() => lean.seen.length === 1);
+      expect(lean.seen[0].data).toEqual(data('first'));
+      expect(lean.seen[0].bytes).toBeGreaterThan(note.length);
+      await rpc('lean-test-target', {});
+      await until(() => lean.seen.length === 2);
+      expect(lean.seen[1].data).toEqual(data('targeted'));
+      expect(lean.seen[1].bytes).toBeLessThan(1000);
+      await rpc('set-interest', { mode: 'lightweight', ids: [] });
+      broadcastEvent('task:updated', data('filtered-again'));
+      await rpc('set-interest', { mode: 'global' });
+      broadcastEvent('task:updated', data('global'));
+      await until(() => lean.seen.length === 3);
+      expect(lean.seen[2].data).toEqual(data('global'));
+      expect(lean.seen[2].bytes).toBeLessThan(1000);
+    } finally { lean.ws.close(); }
+  });
+
   it('the lean socket reads what the older socket reads, carrying only what changed', async () => {
     const lean = await listen(`/ws?lean=${LEAN_SIGNATURE}`, true);
     const plain = await listen('/ws', false);

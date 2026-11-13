@@ -136,6 +136,19 @@ describe('lean frames rebuild to the whole payload', () => {
     expect(JSON.stringify(second)).toBe(JSON.stringify(ledger()));
   });
 
+  it('listeners cannot mutate kept or omitted task objects in the socket cache', () => {
+    const state = newLeanState();
+    const cache = new LeanFrameCache();
+    const task = { id: 'x', subtasks: Array.from({ length: 40 }, (_, i) => ({ i, text: 'dense field '.repeat(5) })) };
+    for (let i = 0; i < 3; i++) {
+      const data = { task: { ...task, phase: `phase-${i}` } };
+      const rebuilt = pipe(state, cache, 'task:updated', data).rebuilt as typeof data;
+      expect(rebuilt).toEqual(data);
+      rebuilt.task.subtasks.reverse();
+      rebuilt.task.subtasks[0].text = 'mutated by a listener';
+    }
+  });
+
   it('a frame the cache cannot rebuild asks for a resync instead of guessing', () => {
     const state = newLeanState();
     const sent = new LeanFrameCache();
@@ -145,8 +158,9 @@ describe('lean frames rebuild to the whole payload', () => {
     // A cache that never saw the first frame (a reconnect the server did not see).
     expect(new LeanFrameCache().rebuild('task:updated', JSON.parse(JSON.stringify(shaped)))).toBeNull();
     expect(new LeanFrameCache().rebuild('task:updated', { task, lean: { v: 99, kind: 'task', omit: [], keep: [] } })).toBeNull();
-    // A lean block on an event this page does not lean (a newer server's rules).
-    expect(new LeanFrameCache().rebuild('session:new-thing', { sessionId: 's', rows: null, lean: { v: 1 } })).toBeNull();
+    // Unknown event names are not negotiated; a plugin's own lean field is data.
+    const plugin = { sessionId: 's', lean: { v: 1 } };
+    expect(new LeanFrameCache().rebuild('plugin:new-thing', plugin)).toBe(plugin);
     // A ledger frame with no rows array rides whole on both sides.
     const s2 = newLeanState(); const c2 = new LeanFrameCache();
     pipe(s2, c2, 'session:background-tasks', { sessionId: 's', tasks: [{ taskId: 'a', status: 'x' }] });

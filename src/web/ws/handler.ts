@@ -19,6 +19,7 @@ import { configChangedForClients } from '../../core/config-broadcast.js'
 import { selectWsProtocol } from '../../lib/ws-bearer-protocol.js'
 import { upgradeCredential } from './upgrade-credential.js'
 import { leanShaper, newLeanState, wantsLean, type LeanState } from './lean-frames.js'
+import { SocketTraffic } from './traffic.js'
 import { authenticateFeatureNode, upgradeFeatureNode, startFeatureNodes, closeFeatureNodes } from './feature-node-runtime.js'
 import { BRIDGE_SESSION_STREAM_PATH, closeAllBridgeSessionStreams, handleBridgeSessionStreamUpgrade } from './bridge-session-stream.js'
 
@@ -46,6 +47,8 @@ interface Client {
   device?: string
   /** Set when the socket asked for lean frames (`/ws?lean=<signature>`): what it was sent (lean-frames.ts). */
   lean?: LeanState
+  traffic: SocketTraffic
+  socketId: string
 }
 
 /** Close code of a socket whose device was signed out (revoked) while it was open. */
@@ -67,6 +70,18 @@ const rpcMethods = new OwnedRegistry<RpcHandler>()
 const PING_INTERVAL_MS = 30_000
 
 let pingTimer: ReturnType<typeof setInterval> | null = null
+let socketCounter = 0
+
+function logTraffic(client: Client, closing = false): void {
+  const sample = client.traffic.sample(Date.now(), closing)
+  if (sample) log.ws.info('socket traffic', { socketId: client.socketId, lean: !!client.lean, ...sample })
+}
+
+/** Count encoded bytes at the one send boundary, not rebuilt client payloads. */
+function sendFrame(client: Client, json: string, plainBytes?: number, name?: string): void {
+  client.ws.send(json)
+  client.traffic.record(Buffer.byteLength(json), plainBytes, name)
+}
 
 /** Callbacks invoked when a client socket disconnects (close or error). */
 const disconnectListeners = new Set<(ws: WebSocket) => void>()
@@ -184,6 +199,7 @@ export function broadcastEvent(name: string, data: unknown): void {
   // Shared work for lean sockets, done once and only when one is connected.
   let shaper: ReturnType<typeof leanShaper> | undefined
   let fullJson: string | undefined
+  let fullBytes = 0
 
   for (const client of clients) {
     if (client.ws.readyState !== WebSocket.OPEN) continue
@@ -191,21 +207,23 @@ export function broadcastEvent(name: string, data: unknown): void {
     // opted into. Default "global" clients are never filtered — unchanged firehose.
     if (client.mode === 'lightweight' && !clientWantsEvent(client, sessionId, taskId)) continue
     client.seq++
-    if (client.lean) {
-      if (shaper === undefined) shaper = leanShaper(name, data)
-      if (shaper) {
-        const frame: WsFrame = { type: 'event', name, data: shaper(client.lean), seq: client.seq }
-        client.ws.send(JSON.stringify(frame))
-        continue
-      }
-    }
-    // One serialization for every socket that gets the frame as it is; only seq differs.
-    // (byte for byte what JSON.stringify of the whole frame gave, an undefined data left out).
-    if (fullJson === undefined) {
+    if (client.lean && shaper === undefined) shaper = leanShaper(name, data)
+    const shaping = !!client.lean && !!shaper
+    // Only old sockets or the first minute of a comparison need the full serialization.
+    if (fullJson === undefined && (!shaping || client.traffic.compare)) {
       const json = JSON.stringify(data)
-      fullJson = `{"type":"event","name":${JSON.stringify(name)}${json === undefined ? '' : `,"data":${json}`},"seq":`
+      const eventName = JSON.stringify(name)
+      fullJson = `{"type":"event"${eventName === undefined ? '' : `,"name":${eventName}`}${json === undefined ? '' : `,"data":${json}`},"seq":`
+      fullBytes = Buffer.byteLength(fullJson)
     }
-    client.ws.send(`${fullJson}${client.seq}}`)
+    if (client.lean && shaper) {
+      const frame: WsFrame = { type: 'event', name, data: shaper(client.lean), seq: client.seq }
+      const plainBytes = client.traffic.compare ? fullBytes + String(client.seq).length + 1 : undefined
+      sendFrame(client, JSON.stringify(frame), plainBytes, name)
+    } else {
+      const plainBytes = fullBytes + String(client.seq).length + 1
+      sendFrame(client, `${fullJson}${client.seq}}`, plainBytes, name)
+    }
   }
 }
 
@@ -237,7 +255,8 @@ export function sendToClient(ws: WebSocket, name: string, data: unknown): void {
       client.seq++
       const shaper = client.lean ? leanShaper(name, data) : null
       const frame: WsFrame = { type: 'event', name, data: shaper && client.lean ? shaper(client.lean) : data, seq: client.seq }
-      ws.send(JSON.stringify(frame))
+      const plainBytes = shaper && client.traffic.compare ? Buffer.byteLength(JSON.stringify({ type: 'event', name, data, seq: client.seq })) : undefined
+      sendFrame(client, JSON.stringify(frame), plainBytes, name)
       return
     }
   }
@@ -259,7 +278,10 @@ function sendResponse(ws: WebSocket, id: string, ok: boolean, payload?: unknown,
   const frame: WsFrame = ok
     ? { type: 'res', id, ok: true, payload }
     : { type: 'res', id, ok: false, error }
-  ws.send(JSON.stringify(frame))
+  const client = findClient(ws)
+  const json = JSON.stringify(frame)
+  if (client) sendFrame(client, json)
+  else ws.send(json)
 }
 
 /**
@@ -274,6 +296,7 @@ async function handleMessage(client: Client, raw: string): Promise<void> {
   }
 
   if (frame.type !== 'req') return // only handle RPC requests from clients
+  if (frame.method === 'browser:logs') client.traffic.identify(frame.payload)
 
   const own = rpcAnswer?.(frame.method, frame.payload, typeof frame.opId === 'string' ? frame.opId : undefined) ?? null
   if (own) {
@@ -629,9 +652,10 @@ export function attachWss(server: HttpServer): WebSocketServer {
     const device = (request as DeviceUpgrade | undefined)?.walnutDevice
     let lean = false
     try { lean = wantsLean(new URL(request?.url ?? '/', 'http://ws.local')) } catch { /* a bad URL asks for nothing */ }
-    const client: Client = { ws, seq: 0, alive: true, mode: 'global', interest: new Set(), ...(device ? { device } : {}), ...(lean ? { lean: newLeanState() } : {}) }
+    const socketId = `${process.pid}-${++socketCounter}`
+    const client: Client = { ws, seq: 0, alive: true, mode: 'global', interest: new Set(), socketId, traffic: new SocketTraffic(), ...(device ? { device } : {}), ...(lean ? { lean: newLeanState() } : {}) }
     clients.add(client)
-    log.ws.info('client connected', { clientCount: clients.size, lean })
+    log.ws.info('client connected', { clientCount: clients.size, lean, socketId })
     // A browser's socket ends with its access token: the page renews and comes back (WS_RENEW_SIGN_IN).
     const accessUntil = (request as DeviceUpgrade | undefined)?.walnutAccessUntil
     const renewTimer = accessUntil === undefined ? null : setTimeout(() => {
@@ -662,6 +686,7 @@ export function attachWss(server: HttpServer): WebSocketServer {
 
     ws.on('close', () => {
       if (renewTimer) clearTimeout(renewTimer)
+      logTraffic(client, true)
       clients.delete(client)
       for (const l of disconnectListeners) { try { l(ws) } catch { /* listener error ignored */ } }
       log.ws.info('client disconnected', { clientCount: clients.size })
@@ -669,6 +694,7 @@ export function attachWss(server: HttpServer): WebSocketServer {
 
     ws.on('error', () => {
       if (renewTimer) clearTimeout(renewTimer)
+      logTraffic(client, true)
       clients.delete(client)
       for (const l of disconnectListeners) { try { l(ws) } catch { /* listener error ignored */ } }
       log.ws.warn('client error, removing', { clientCount: clients.size })
@@ -678,6 +704,7 @@ export function attachWss(server: HttpServer): WebSocketServer {
   // Ping/pong heartbeat
   pingTimer = setInterval(() => {
     for (const client of clients) {
+      logTraffic(client)
       if (!client.alive) {
         client.ws.terminate()
         clients.delete(client)

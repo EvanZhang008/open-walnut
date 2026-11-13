@@ -279,7 +279,7 @@ class WsClient {
         if (frame.type === 'event') {
           if (ws !== this.ws) return; // a frame of a socket already replaced: its cache is gone
           const data = this.lean.rebuild(frame.name, frame.data);
-          if (data === null) {
+          if (data === null && frame.data !== null) {
             // A lean frame this cache cannot rebuild: start both sides over.
             // Three in five minutes: this page reads whole frames from now on, never a reconnect loop.
             const now = Date.now();

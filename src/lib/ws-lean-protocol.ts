@@ -3,9 +3,13 @@
  * (src/web/ws/lean-frames.ts) and the web client's cache (web/src/api/ws-lean.ts).
  * Pure and isomorphic, like ws-bearer-protocol.ts.
  */
+export { deletedTaskId } from '../core/task-deleted-id.js';
 
 /** Protocol version, carried in every `lean` block. */
 export const LEAN_VERSION = 1;
+
+/** Ends what both sides keep for a task. */
+export const LEAN_FORGET_EVENT = 'task:deleted';
 
 /** A task field whose JSON is at least this long is left out while unchanged; smaller ones always ride. */
 export const LEAN_FIELD_MIN_BYTES = 512;
@@ -43,7 +47,7 @@ export const LEAN_MAX_SESSIONS = 100;
  * older page never meets a lean frame it does not know how to rebuild.
  */
 export const LEAN_SIGNATURE: string = (() => {
-  const text = [LEAN_VERSION, LEAN_FIELD_MIN_BYTES, LEAN_MAX_TASKS, LEAN_MAX_SESSIONS, LEAN_BACKGROUND_EVENT, ...LEAN_TASK_EVENTS].join('|');
+  const text = [LEAN_VERSION, LEAN_FIELD_MIN_BYTES, LEAN_MAX_TASKS, LEAN_MAX_SESSIONS, LEAN_BACKGROUND_EVENT, LEAN_FORGET_EVENT, ...LEAN_TASK_EVENTS].join('|');
   let h = 0x811c9dc5; // FNV-1a, 32 bits
   for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
   return `${LEAN_VERSION}-${h.toString(36)}`;
@@ -54,13 +58,4 @@ export function touchLru<K, V>(map: Map<K, V>, key: K, value: V, max: number): v
   map.delete(key);
   map.set(key, value);
   while (map.size > max) map.delete(map.keys().next().value as K);
-}
-
-/** Ends what both sides keep for a task. */
-export const LEAN_FORGET_EVENT = 'task:deleted';
-
-/** The id a task:deleted names. */
-export function deletedTaskId(data: unknown): string | undefined {
-  const d = data as { id?: unknown; taskId?: unknown; task?: { id?: unknown } | null } | null;
-  return [d?.id, d?.taskId, d?.task?.id].find((x): x is string => typeof x === 'string' && x.length > 0);
 }

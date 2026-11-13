@@ -46,8 +46,7 @@ export class LeanFrameCache {
       const id = deletedTaskId(data);
       if (id) this.task.delete(id);
     }
-    // A lean block on an event this page does not know: never hand a listener its nulls.
-    if (data !== null && typeof data === 'object' && 'lean' in data) return null;
+    // Only negotiated event names carry the transport block; plugin data stays untouched.
     return data;
   }
 
@@ -119,7 +118,10 @@ export class LeanFrameCache {
       full[field] = copy(had.get(field));
       next.set(field, had.get(field));
     }
-    for (const field of lean.keep) next.set(field, task[field]);
+    for (const field of lean.keep) {
+      next.set(field, task[field]);
+      full[field] = copy(task[field]);
+    }
     touchLru(this.task, id, next, LEAN_MAX_TASKS);
     const { lean: _lean, ...rest } = d;
     return { ...rest, task: full };
