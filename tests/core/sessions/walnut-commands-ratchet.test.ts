@@ -72,7 +72,8 @@ describe('the raw passes of the send framing', () => {
     expect(returns('frameStartText')).toEqual([
       'if (!readsAsPerson(text)) return text;',
       'return buildPeerWrapper(text, {',
-      "if (opts.callerSid?.trim()) return frameAsWalnut(text, 'task start');",
+      'if (opts.callerSid?.trim()) return frameAsWalnut(text, `caller:${opts.callerSid.trim()}`);',
+      "if (opts.source?.startsWith('automation:')) return buildPeerWrapper(text, {",
       'return frameForSource(text, opts.source);',
     ]);
   });

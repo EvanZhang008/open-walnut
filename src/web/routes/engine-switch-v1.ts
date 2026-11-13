@@ -17,6 +17,7 @@ import { isKnownEngine } from '../../core/agents/engine-registry.js'
 import { isFollower } from '../../core/server-role.js'
 import type { SessionEffort, SessionEngine, SessionMode, SessionRecord } from '../../core/types.js'
 import { missingIsNull } from '../../lib/id-ref.js'
+import { startRouteSource } from '../../core/sessions/send-sent-by.js'
 
 export const engineSwitchV1Router = Router()
 
@@ -113,7 +114,7 @@ engineSwitchV1Router.post('/tasks/:id/switch-engine', async (req: Request, res: 
       ...(typeof body.model === 'string' && body.model ? { model: body.model } : {}),
       ...(typeof body.effort === 'string' ? { effort: body.effort as SessionEffort } : {}),
       ...(typeof body.permission_mode === 'string' ? { permissionMode: body.permission_mode as SessionMode } : {}),
-      callerSid: callerSid(req), source: 'api',
+      callerSid: callerSid(req), source: startRouteSource('api-v1', req.headers),
     })
     let timer: ReturnType<typeof setTimeout> | undefined
     const outcome = await Promise.race([

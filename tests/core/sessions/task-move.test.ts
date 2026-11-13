@@ -344,7 +344,10 @@ describe('task_move', () => {
     expect(message).toContain('This task moved from this Mac to cloud');
     expect(message).toContain('the word is HERON');
     expect(message).toContain(`-> ${dest}`);
-    expect(message.trimEnd().endsWith('Carry on.')).toBe(true);
+    expect(message).toContain('Carry on.');
+    const { parseHinted } = await import('../../../src/core/hints/hint-format.js');
+    const { transcriptSentBy } = await import('../../../src/core/sessions/transcript-sent-by.js');
+    expect(transcriptSentBy({ role: 'user', text: parseHinted(message).text })).toBe('agent');
     expect(res.moved?.join(' ')).toMatch(/1 commit no remote has, uncommitted changes, 1 untracked file/);
 
     // Exactly the task's own work on the cloud host.
@@ -1028,7 +1031,10 @@ describe('task_move from a host that cannot be reached', () => {
     expect(message).toContain('cloud could not be reached');
     expect(message).toContain('the word is PETREL');
     expect(message).toContain('Walnut\'s own copy');
-    expect(message.trimEnd().endsWith('Carry on.')).toBe(true);
+    expect(message).toContain('Carry on.');
+    const { parseHinted } = await import('../../../src/core/hints/hint-format.js');
+    const { transcriptSentBy } = await import('../../../src/core/sessions/transcript-sent-by.js');
+    expect(transcriptSentBy({ role: 'user', text: parseHinted(message).text })).toBe('agent');
     // The old session was stopped (here: the stubbed stop) and is the task's history now.
     expect(W.stops).toEqual([sid]);
     expect(await getSessionByClaudeId(sid)).toMatchObject({ archived: true, supersededBy: res.sessionId });

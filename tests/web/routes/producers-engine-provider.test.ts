@@ -209,12 +209,14 @@ describe('cron runIsolatedAgentJob', () => {
 
     expect(res.status).toBe('ok')
     expect(started).toHaveLength(1)
-    expect(started[0].message).toBe('Summarize the week.')
+    expect(started[0].message).toContain('Summarize the week.')
+    const { transcriptSentBy } = await import('../../../src/core/sessions/transcript-sent-by.js')
+    expect(transcriptSentBy({ role: 'user', text: String(started[0].message) })).toBe('agent')
     // Not the conversation's lane: an isolated job never joins the main chat.
     expect(started[0].lane).toBeUndefined()
     // walnutAgent: true → the spawn carries the Personal AI's own profile.
     expect(started[0].profile).toBeTruthy()
-    expect(startedSources).toEqual(['cron-isolated'])
+    expect(startedSources).toEqual(['automation:routine:job-iso:weekly digest'])
 
     const { listTasks } = await import('../../../src/core/task-manager.js')
     const tasks = await listTasks()

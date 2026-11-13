@@ -931,6 +931,7 @@ async function resolveLane(
       message: personaPrefix + (viaMessage?.message ?? firstMessage),
       // The caller framed `firstMessage` for its source (lane-turn.ts); the persona and recap around it are Walnut's.
       attributed: true,
+      attributionSource: 'lane-turn:framed-message',
       cwd: WALNUT_HOME,
       title,
       lane,
@@ -1028,6 +1029,7 @@ async function resolveLane(
     message,
     // The caller framed `firstMessage` for its source (lane-turn.ts); the recap around it is Walnut's.
     attributed: true,
+    attributionSource: 'lane-turn:framed-message',
     cwd: WALNUT_HOME,
     title,
     profile,

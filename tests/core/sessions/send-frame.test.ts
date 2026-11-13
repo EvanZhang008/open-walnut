@@ -4,7 +4,7 @@
  * (sessions/send-frame.ts) and the transcript reads the frame back (transcript-sent-by.ts).
  */
 import { describe, it, expect } from 'vitest';
-import { frameAsWalnut, frameForSource, frameStartText, readsAsPerson } from '../../../src/core/sessions/send-frame.js';
+import { frameAsWalnut, frameForSource, frameStartData, frameStartText, readsAsPerson } from '../../../src/core/sessions/send-frame.js';
 import { transcriptSentBy } from '../../../src/core/sessions/transcript-sent-by.js';
 import { buildWalnutMessage } from '../../../src/core/peers/walnut-message-tag.js';
 import { buildPeerWrapper } from '../../../src/core/peers/peer-wrapper.js';
@@ -69,6 +69,20 @@ describe('what a framed line reads as', () => {
 
 describe('the first line of a started task', () => {
   const caller = { title: 'Release lead', claudeSessionId: '11111111-2222-3333-4444-555555555555', taskId: 't-lead', host: '__local__' };
+
+  it('a copied attribution boolean without a named author cannot bypass the runner net', () => {
+    const first = frameStartData({ message: 'Investigate this ticket.', attributed: true as const }, 'ticket-import');
+    expect(sentBy(first.message)).toBe('agent');
+    expect(first.message).toContain('ticket import');
+    expect(first.namingMessage).toBe('Investigate this ticket.');
+  });
+
+  it('named stored rows and typed starts survive the runner net without rewrapping', () => {
+    for (const message of ['My typed words.', frameAsWalnut('Go on.', 'trigger:poll')]) {
+      const first = { message, attributed: true as const, attributionSource: 'retry:stored-message' };
+      expect(frameStartData(first)).toBe(first);
+    }
+  });
 
   it('a task started by a session is that session\'s peer note, with its reply trailer after the envelope', () => {
     const first = frameStartText('Build the thing.', { source: 'ui', callerSid: caller.claudeSessionId, caller, requestId: 'rq-abc123def456' });

@@ -343,6 +343,7 @@ async function resolveCloudChatLane(
     message,
     // The companion's chat: a person typed it.
     attributed: true,
+    attributionSource: 'cloud-chat:typed-message',
     cwd,
     title,
     profile,

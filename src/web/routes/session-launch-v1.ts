@@ -59,7 +59,7 @@ import {
 } from '../../core/sessions/mobile-launch.js'
 import { QuickStartError } from '../../core/sessions/quick-start.js'
 import { log } from '../../logging/index.js'
-import { routeSource } from '../../core/sessions/send-sent-by.js'
+import { startRouteSource } from '../../core/sessions/send-sent-by.js'
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
 
 export const sessionLaunchV1Router = Router()
@@ -405,7 +405,8 @@ sessionLaunchV1Router.post('/sessions', async (req: Request, res: Response, next
           // createSessionManager routes to this box's daemon). No new branch in
           // the session core, so the generic local path cannot regress here.
           const result = await performMobileLaunch(
-            { ...input, host: launchHostForCore(input.host) }, 'cloud-exec-launch',
+            { ...input, host: launchHostForCore(input.host) }, startRouteSource('cloud-exec-launch', req.headers),
+            { callerSid: req.get('x-walnut-caller-sid')?.trim() || undefined },
           )
           // Seed id→host so this box's OWN subsequent stream/send/transcript
           // calls resolve to the cloud host instead of missing the (Mac-owned)
@@ -430,13 +431,20 @@ sessionLaunchV1Router.post('/sessions', async (req: Request, res: Response, next
         }
         return
       }
-      await relayLaunchAction(res, 'launch', (req.body ?? {}) as Record<string, unknown>, 201)
+      const { frameStartText, framingCallerOf } = await import('../../core/sessions/send-frame.js')
+      const callerSid = req.get('x-walnut-caller-sid')?.trim() || undefined
+      const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
+      const caller = callerSid ? await getSessionByClaudeId(callerSid).catch(() => null) : null
+      const message = frameStartText(input.message, { source: startRouteSource('mobile-launch-bridge', req.headers), callerSid,
+        ...(caller ? { caller: await framingCallerOf(caller) } : {}) })
+      // The envelope crosses older bridges too: no new protocol field is needed to keep its author.
+      await relayLaunchAction(res, 'launch', { ...req.body, message }, 201)
       return
     }
 
     try {
       const callerSid = req.get('x-walnut-caller-sid')?.trim() || undefined
-      const result = await performMobileLaunch(input, routeSource('mobile-launch', req.headers), callerSid ? { callerSid } : {})
+      const result = await performMobileLaunch(input, startRouteSource('mobile-launch', req.headers), callerSid ? { callerSid } : {})
       res.status(201).json(result)
     } catch (err) {
       if (err instanceof QuickStartError) {

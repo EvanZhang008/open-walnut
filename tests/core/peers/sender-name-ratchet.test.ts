@@ -109,6 +109,8 @@ describe('ratchet: every envelope names its sender by the task', () => {
         const line = text.slice(0, m.index).split('\n').length
         // The daemon twin's start-up self check builds one with a literal title.
         if (rel === 'src/providers/daemon-source.ts' && /title: 't'/.test(args)) continue
+        // A named automation has no task title; its shared anonymous envelope names the script.
+        if (rel === 'src/core/sessions/send-frame.ts' && /anonymous: true/.test(args) && /automation: opts\.source/.test(args)) continue
         sites.push(`${rel}:${line}`)
         if (/record\.title/.test(args) || !NAMED_BY_TASK.test(args)) bad.push(`${rel}:${line}`)
       }

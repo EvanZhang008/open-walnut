@@ -232,6 +232,7 @@ export async function forkSideThreadSession(
     message: opts?.message ?? '',
     // The person's side question.
     attributed: true,
+    attributionSource: 'side-thread:typed-message',
     cwd: parent.cwd,
     project: parent.project ?? '',
     title,

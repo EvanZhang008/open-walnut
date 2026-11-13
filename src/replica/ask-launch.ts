@@ -261,7 +261,11 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
     if (deps.capabilities()?.includes(REPLICA_START_CAP) !== true) return needsLeaderAnswer('daemon_needs_upgrade', 'This host\'s Walnut daemon cannot start an ask yet; it updates on your Mac\'s next connect.')
     const actor = deps.actorOf(req)
     if (!actor) return needsLeaderAnswer('device_changes_need_mac', 'This device is not known to this host by its id yet; it needs your Mac.')
-    const message = typeof b.message === 'string' ? b.message : ''
+    const { frameStartText } = await import('../core/sessions/send-frame.js')
+    const { startRouteSource } = await import('../core/sessions/send-sent-by.js')
+    const message = frameStartText(typeof b.message === 'string' ? b.message : '', {
+      source: startRouteSource('quick-start', req.headers), callerSid: req.get('x-walnut-caller-sid')?.trim() || undefined,
+    })
     if (message.length > 200_000) return refusalAnswer('bad_request', 'The message is too long to start an ask here.')
     const meta = createMeta(b.taskMeta, v1)
     if (!meta) return refusalAnswer('bad_request', 'taskMeta names a tier or a priority that is not one.')

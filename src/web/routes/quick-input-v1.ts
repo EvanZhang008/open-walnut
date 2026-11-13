@@ -43,7 +43,7 @@ import { log } from '../../logging/index.js'
 import type { SessionRecord, Task } from '../../core/types.js'
 import { withImagePaths, type SessionImage } from '../../core/sessions/cloud-images.js'
 import { extractValidImages } from './session-send-v1.js'
-import { routeSource } from '../../core/sessions/send-sent-by.js'
+import { routeSource, startRouteSource } from '../../core/sessions/send-sent-by.js'
 
 export const quickInputV1Router = Router()
 
@@ -265,10 +265,10 @@ quickInputV1Router.post('/quick/session', async (req: Request, res: Response, ne
         return
       }
       const cliText = await withSavedImages(text, images)
-      await sendAndFollow(async () => sendToTaskSession(task, await taskSessionRecord(task), text, cliText, false, quickSource(req)), res)
+      await sendAndFollow(async () => sendToTaskSession(task, await taskSessionRecord(task), text, cliText, false, quickSource(req), startRouteSource('api-v1', req.headers), startingSid(req)), res)
       return
     }
-    await sendAndFollow(() => startAsk(text, images, quickSource(req) === 'ui' ? 'quick-input' : 'api-agent', startingSid(req)), res)
+    await sendAndFollow(() => startAsk(text, images, startRouteSource('quick-input', req.headers), startingSid(req)), res)
   } catch (err) {
     next(err)
   }
@@ -299,7 +299,7 @@ quickInputV1Router.post('/quick/task-message', async (req: Request, res: Respons
       res.status(404).json({ error: `No task ${taskId}`, code: 'task_not_found' })
       return
     }
-    const answer = await sendToTaskSession(task, await taskSessionRecord(task), text, await withSavedImages(text, images), false, quickSource(req))
+    const answer = await sendToTaskSession(task, await taskSessionRecord(task), text, await withSavedImages(text, images), false, quickSource(req), startRouteSource('api-v1', req.headers), startingSid(req))
     delete answer.midTurn
     res.json(answer)
   } catch (err) {
@@ -365,7 +365,7 @@ function startingSid(req: Request): string | undefined {
   return req.get('x-walnut-caller-sid')?.trim() || undefined
 }
 
-async function sendToTaskSession(task: Task, record: SessionRecord | null, text: string, cliText: string, startedOnce = false, source: string = 'ui'): Promise<QuickMainResult> {
+async function sendToTaskSession(task: Task, record: SessionRecord | null, text: string, cliText: string, startedOnce = false, source: string = 'ui', firstSource = source, callerSid?: string): Promise<QuickMainResult> {
   if (record) {
     const sessionId = record.claudeSessionId
     if (record.pendingPermission && (record.process_status === 'running' || record.process_status === 'idle')) {
@@ -389,13 +389,13 @@ async function sendToTaskSession(task: Task, record: SessionRecord | null, text:
   const { startSessionForTask, SessionExistsError } = await import('../../core/sessions/task-start.js')
   let started
   try {
-    started = await startSessionForTask({ taskIdPrefix: task.id, message: cliText, source: source === 'ui' ? 'api-v1' : source })
+    started = await startSessionForTask({ taskIdPrefix: task.id, message: cliText, source: firstSource === 'ui' ? 'api-v1' : firstSource, callerSid })
   } catch (err) {
     // A session the task row did not name (a start that won the race): the message goes to it.
     if (err instanceof SessionExistsError && err.existingSessionId && !startedOnce) {
       const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
       const existing = await getSessionByClaudeId(err.existingSessionId)
-      if (existing) return sendToTaskSession(task, existing, text, cliText, true, source)
+      if (existing) return sendToTaskSession(task, existing, text, cliText, true, source, firstSource, callerSid)
     }
     throw err
   }

@@ -590,6 +590,7 @@ export async function rewindSessionToMessage(
     message: input.message?.trim() ?? '',
     // The earlier message resubmitted as stored: its own frame, if any, rides with it.
     attributed: true,
+    attributionSource: 'rewind:stored-message',
     cwd: record.cwd,
     project: record.project ?? '',
     ...(record.mode && record.mode !== 'default' ? { mode: record.mode } : {}),

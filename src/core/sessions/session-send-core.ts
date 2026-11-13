@@ -1028,7 +1028,9 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
           : walnutSends ? 'local' : 'unknown',
         anonymous: true,
         ...(caller.kind === 'external' && caller.app ? { app: caller.app }
-          : input.callerLabel ? { automation: input.callerLabel } : walnutSends ? { automation: `Walnut (${input.source})` } : {}),
+          : input.callerLabel ? { automation: input.callerLabel } : walnutSends ? {
+            automation: input.source?.startsWith('automation:') ? input.source.slice('automation:'.length) : `Walnut (${input.source})`,
+          } : {}),
       }, { title: input.title });
   }
   // One `\n`, one line, and only when a request exists to answer.

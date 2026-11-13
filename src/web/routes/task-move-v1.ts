@@ -13,6 +13,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { isFollower } from '../../core/server-role.js'
 import type { SessionEngine, Task } from '../../core/types.js'
 import { log } from '../../logging/index.js'
+import { startRouteSource } from '../../core/sessions/send-sent-by.js'
 
 export const taskMoveV1Router = Router()
 
@@ -60,7 +61,10 @@ taskMoveV1Router.post('/tasks/:id/move', async (req: Request, res: Response, nex
     }
     const { normalizeHost } = await import('../../core/transfer/planner.js')
     const host = normalizeHost(body.host.trim())
-    const text = typeof body.text === 'string' && body.text.trim() ? body.text : DEFAULT_TEXT
+    const typed = typeof body.text === 'string' && !!body.text.trim()
+    const text = typed ? body.text as string : DEFAULT_TEXT
+    // Clicking Move did not type the default handoff. Its author is Walnut.
+    const source = typed ? startRouteSource('api-v1', req.headers) : 'task-move'
     const { getTask } = await import('../../core/task-manager.js')
     const task = await getTask(String(req.params.id)).catch(() => null)
     if (!task) { res.status(404).json({ error: 'Task not found', code: 'not_found' }); return }
@@ -79,7 +83,7 @@ taskMoveV1Router.post('/tasks/:id/move', async (req: Request, res: Response, nex
     const ask = (id: string) => requestEngineSwitch({
       taskId: id, engine, host, message: text, ...(userWords ? { userWords } : {}), ...(waitFor === 0 ? { detach: true } : {}),
       ...(typeof body.model === 'string' && body.model ? { model: body.model } : {}),
-      callerSid: caller, source: 'api',
+      callerSid: caller, source,
     })
     const team = body.team === true ? await teamToMove(task, host) : []
     const work = normalizeHost(conversation.host) === host && team.length > 0 ? null : ask(task.id)
@@ -94,7 +98,7 @@ taskMoveV1Router.post('/tasks/:id/move', async (req: Request, res: Response, nex
         try {
           const r = await requestEngineSwitch({
             taskId: t.id, engine: resolveEngine((await taskConversation(t.id))?.engine), host, message: text,
-            ...(userWords ? { userWords } : {}), callerSid: caller, source: 'api',
+            ...(userWords ? { userWords } : {}), callerSid: caller, source,
           })
           results.push({ taskId: t.id, state: r.state })
         } catch (err) {

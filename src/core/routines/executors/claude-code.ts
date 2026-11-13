@@ -222,7 +222,8 @@ export function createClaudeCodeExecutor(opts: { notify?: RoutineGateNotify; sta
       // The count hint is consumed here, not forwarded: it is bookkeeping
       // between the init processor and this executor.
       const count = readTriageCountHint(message);
-      const sessionMessage = stripTriageCountHint(message);
+      const { frameAsWalnut } = await import('../../sessions/send-frame.js');
+      const sessionMessage = frameAsWalnut(stripTriageCountHint(message), 'routine', `routine:${job.id}:${job.name}`);
 
       let started;
       try {

@@ -1231,6 +1231,7 @@ export async function retrySession(sessionId: string): Promise<RetryResult> {
     message: retryMessage,
     // The first message again, as stored: an agent's start kept its frame, a person's is theirs.
     attributed: true,
+    attributionSource: 'retry:stored-message',
     cwd: record.cwd,
     project: task.project ?? '',
     mode: record.mode !== 'default' ? record.mode : undefined,

@@ -18,7 +18,6 @@ const MODE_CHANGES = ['patchSession', 'applySessionControl']
 /** file -> why its uncapped start calls need no caller's ceiling (one reason per file, with the count). */
 const NOT_A_SESSIONS_START: Record<string, { count: number; why: string }> = {
   'src/core/org/org-autostart.ts': { count: 1, why: 'Walnut starts Main or a VP by itself; no session asks for it' },
-  'src/core/workspaces/manager.ts': { count: 1, why: 'replays a start whose mode the asking route already capped (pending.mode)' },
   'src/core/routines/run-start-deps.ts': { count: 2, why: 'a routine or watcher run names no mode; the engine settings decide it' },
   'src/core/sessions/mobile-launch.ts': { count: 1, why: 'the companion relay: the primary sees no calling session across the bridge' },
   'src/core/sessions/engine-switch.ts': { count: 1, why: 'runs a switch whose mode requestEngineSwitch already capped (capSwitchMode)' },
@@ -26,15 +25,12 @@ const NOT_A_SESSIONS_START: Record<string, { count: number; why: string }> = {
   'src/core/transfer/transfer.ts': { count: 1, why: 'the native fork of a transfer, whose mode transferTask capped when it planned it' },
   'src/core/health-monitor/fix-task.ts': { count: 2, why: 'Walnut\'s own repair task, named no mode' },
   'src/core/router/wake.ts': { count: 1, why: 'the router runtime wakes its own task, named no mode' },
-  'src/web/routes/session-launch-v1.ts': { count: 1, why: 'the companion box runs a launch here for a phone; no session asks' },
   'src/web/routes/session-control-v1.ts': { count: 1, why: 'a fork names no mode: it keeps the mode its source session already runs in' },
   'src/web/routes/sessions.ts': { count: 1, why: 'a fork names no mode: it keeps the mode its source session already runs in' },
-  'src/web/routes/quick-input-v1.ts': { count: 1, why: 'a quick input into a task with no session names no mode; the task and engine settings decide it' },
   'src/web/routes/triage-rules-v1.ts': { count: 1, why: 'starts the task a person or Main named in a routing rule, with no mode' },
   'src/web/routes/notifications.ts': { count: 1, why: 'the person\'s Fix button on a notification' },
   'src/web/routes/session-chat.ts': { count: 1, why: 'the person\'s engine picker over the browser socket; sessions never use it' },
   'src/providers/subagent-runner.ts': { count: 1, why: 'the Personal AI\'s subagent, named no mode' },
-  'src/commands/direct-commands.ts': { count: 1, why: 'the CLI\'s in-process start names no mode; a session\'s walnut call goes through task_start, which is capped' },
 }
 
 /** file -> why its SESSION_START emits need no ceiling of their own. */

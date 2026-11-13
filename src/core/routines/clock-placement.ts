@@ -151,7 +151,8 @@ export async function routineStartOf(job: CronJob, host: string, home: string = 
     return null;
   }
   const spec = validateClockStartSpec({
-    home, host, title, project, cwd, message,
+    home, host, title, project, cwd,
+    message: (await import('../sessions/send-frame.js')).frameAsWalnut(message, 'routine', `routine:${job.id}:${job.name}`),
     mode: (await (await import('../../providers/claude-launch-mode.js')).resolveClaudeLaunchMode(host, cwd)).mode, modeNamed: false,
     ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(context ? { context } : {}),
   });

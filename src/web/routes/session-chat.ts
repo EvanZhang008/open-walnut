@@ -95,6 +95,7 @@ export function registerSessionChatRpc(): void {
       message: data.message,
       // The console's composer: a person typed it.
       attributed: true,
+      attributionSource: 'ui:typed-message',
       cwd: typeof data.cwd === 'string' ? data.cwd : undefined,
       project: typeof data.project === 'string' ? data.project : undefined,
       mode: typeof data.mode === 'string' ? data.mode : undefined,

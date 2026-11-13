@@ -30,6 +30,8 @@ import express from 'express'
 import request from 'supertest'
 import { taskV1Router } from '../../../src/web/routes/task-v1.js'
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
+import { frameStartText } from '../../../src/core/sessions/send-frame.js'
+import { transcriptSentBy } from '../../../src/core/sessions/transcript-sent-by.js'
 
 function createApp() {
   const app = express()
@@ -54,6 +56,27 @@ beforeEach(() => {
   startSessionForTaskMock.mockReset()
   startSessionForTaskMock.mockResolvedValue({
     taskId: 'task-1', title: 'Fix the flake', sessionId: 'sess-new-1', requestId: 'rq-0123456789ab', started: true,
+  })
+})
+
+describe('first-message sender at the task start boundary', () => {
+  it('an automation keeps its name and never becomes a person without a caller session', async () => {
+    const res = await request(createApp()).post('/api/v1/tasks/task-1/start')
+      .set('x-walnut-caller-kind', 'automation').set('x-walnut-sender', 'ticket-import')
+      .send({ message: 'Investigate this ticket.' })
+    expect(res.status).toBe(202)
+    const p = coreParams() as { source: string; callerSid?: string }
+    const text = frameStartText('Investigate this ticket.', p)
+    expect(transcriptSentBy({ role: 'user', text })).toBe('agent')
+    expect(text).toContain('ticket-import')
+  })
+
+  it('a person\'s typed first message is still theirs', async () => {
+    await postStart({ message: 'Please investigate this ticket.' })
+    const p = coreParams() as { source: string; callerSid?: string }
+    const text = frameStartText('Please investigate this ticket.', p)
+    expect(text).toBe('Please investigate this ticket.')
+    expect(transcriptSentBy({ role: 'user', text })).toBe('person')
   })
 })
 

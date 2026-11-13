@@ -177,7 +177,7 @@ describe('claude-code run() — ordinary routines are unchanged', () => {
     expect(res.status).toBe('ok');
     expect(quickStartSession).toHaveBeenCalledTimes(1);
     expect(quickStartSession.mock.calls[0][0]).toEqual({
-      message: 'go',
+      message: expect.stringContaining('go'),
       cwd: '/repo',
       host: undefined,
       model: undefined,
@@ -188,6 +188,9 @@ describe('claude-code run() — ordinary routines are unchanged', () => {
       // Minted so the record exists before the spawn and its failure lands on it (run-start.ts).
       preassignedSessionId: expect.stringMatching(/^[0-9a-f-]{36}$/),
     });
+    const { transcriptSentBy } = await import('../../src/core/sessions/transcript-sent-by.js');
+    expect(transcriptSentBy({ role: 'user', text: quickStartSession.mock.calls[0][0].message })).toBe('agent');
+    expect(quickStartSession.mock.calls[0][0].message).toContain('Nightly');
     expect(res.summary).toContain('Started Claude Code session for task task-1');
     expect(res.delivered?.sessionId).toBe((quickStartSession.mock.calls[0][0] as { preassignedSessionId: string }).preassignedSessionId);
   });
@@ -313,7 +316,8 @@ describe('claude-code titleTemplate + the count hint', () => {
     }, 'WALNUT_TRIAGE_COUNT: 7\n\nbatch body');
 
     const params = quickStartSession.mock.calls[0][0] as Record<string, unknown>;
-    expect(params.message).toBe('batch body');
+    expect(params.message).toContain('batch body');
+    expect(params.message).not.toContain('WALNUT_TRIAGE_COUNT');
     expect(String(params.taskTitle)).toMatch(/^Triage · \d{2}:\d{2} · 7 items$/);
   });
 

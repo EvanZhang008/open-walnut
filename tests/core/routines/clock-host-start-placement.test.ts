@@ -53,8 +53,11 @@ describe('routineStartOf: the run the Mac would start, or none', () => {
     const spec = await routineStartOf(job({ model: 'opus' }), HOST)
     expect(spec).toMatchObject({
       home: WALNUT_HOME, host: HOST, title: 'Routine: Nightly report', project: 'Routines', cwd: '/srv/repo',
-      message: 'Write the nightly report', mode: 'auto', modeNamed: false, model: 'opus',
+      message: expect.stringContaining('Write the nightly report'), mode: 'auto', modeNamed: false, model: 'opus',
     })
+    const { transcriptSentBy } = await import('../../../src/core/sessions/transcript-sent-by.js')
+    expect(transcriptSentBy({ role: 'user', text: spec!.message })).toBe('agent')
+    expect(spec!.message).toContain('Nightly report')
     expect(spec!.effort).toBeUndefined()
     // The context this Mac appends, for the task the host will make: its id is the token.
     expect(spec!.context).toContain(`You are working on the task "Routine: Nightly report" (id ${START_TASK_TOKEN}, project "Routines")`)

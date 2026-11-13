@@ -20,7 +20,6 @@ import { resolveDefaultEngine } from '../agents/default-engine.js';
 import type { FallbackDecision } from '../agents/fallback-engine.js';
 import type { LaunchSourceRecord } from './project-launch-defaults.js';
 import { buildAskProfilePrefix } from './ask-profile-prefix.js';
-import { isPersonSource } from './send-sent-by.js';
 import { heuristicShortTitle } from './task-title-brake.js';
 import { ownWordsOf } from './own-words.js';
 import { ASK_WALNUT_PROJECT, GENERAL_AGENT_ID, askProjectFor, resolveAskAgent, stampedAgentId, type AskAgentRef } from './ask-agent.js';
@@ -522,6 +521,8 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
 
   // Spill-to-disk: messages above the inline limit are saved to a temp file and
   // replaced with a short pointer prompt so Claude reads the full context via the Read tool.
+  const { readsAsPerson, frameAsWalnut } = await import('./send-frame.js');
+  const alreadyAgent = !!message.trim() && !readsAsPerson(message);
   let sessionMessage = message;
   let largePromptFile: { localPath: string; originalLength: number } | undefined;
   const spill = spillLargePromptToFile(message);
@@ -623,7 +624,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
       const { refuseDifferentPlace, moveFromLostHost } = await import('./task-start.js');
       // Its session's host cannot be reached: the launch moves the task there (host-lost.ts).
       const moved = host !== undefined
-        ? await moveFromLostHost(updatedTask, { taskIdPrefix: updatedTask.id, host, message: sessionMessage, source, ...(params.engine ? { engine: params.engine } : {}) })
+        ? await moveFromLostHost(updatedTask, { taskIdPrefix: updatedTask.id, host, message: sessionMessage, source, callerSid: params.callerSid, ...(params.engine ? { engine: params.engine } : {}) })
         : null;
       if (moved) {
         const movedTask = await getTask(updatedTask.id);
@@ -631,7 +632,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
         return movedTask;
       }
       refuseDifferentPlace(updatedTask, conversation, { ...(host !== undefined ? { host } : {}), ...(params.engine ? { engine: params.engine } : {}) });
-      await continueTaskConversation(conversation, { text: sessionMessage, source });
+      await continueTaskConversation(conversation, { text: sessionMessage, source, callerSid: params.callerSid });
       const continuedTask = await getTask(updatedTask.id);
       continuedSessions.set(continuedTask, conversation.claudeSessionId);
       return continuedTask;
@@ -872,15 +873,23 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     }
   }
 
-  // Emit SESSION_START event (sessionMessage includes image path annotations if the caller prepended them)
+  const { frameStartText, framingCallerOf } = await import('./send-frame.js');
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const caller = params.callerSid ? await getSessionByClaudeId(params.callerSid).catch(() => null) : null;
+  const firstMessage = alreadyAgent && readsAsPerson(sessionMessage)
+    ? frameAsWalnut(sessionMessage, `start:${source}`, 'forwarded first message')
+    : frameStartText(sessionMessage, { source, callerSid: params.callerSid,
+      ...(caller ? { caller: await framingCallerOf(caller) } : {}) });
+  // Emit SESSION_START with its author's envelope; names keep reading the unframed words.
   bus.emit(EventNames.SESSION_START, {
     taskId: updatedTask.id,
-    message: sessionMessage,
-    // A person's own words are attributed; the runner frames anything else as Walnut's (send-frame.ts).
-    ...(isPersonSource(source) ? { attributed: true as const } : {}),
+    message: firstMessage,
+    // frameStartText attributed the first message before the runner.
+    attributed: true,
+    attributionSource: params.callerSid ? `caller:${params.callerSid}` : source,
     // Only when a prefix was actually applied, so the payload every other
     // launcher emits stays byte-identical.
-    ...(namingMessage !== sessionMessage ? { namingMessage } : {}),
+    ...(namingMessage !== firstMessage ? { namingMessage } : {}),
     ...(params.sessionTitle?.trim() ? { title: params.sessionTitle.trim() } : {}),
     cwd,
     project,

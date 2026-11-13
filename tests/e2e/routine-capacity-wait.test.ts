@@ -68,7 +68,9 @@ describe('a routine run with no capacity', () => {
     const state = await (await fetch(root + `/api/routines/${created.job.id}`)).json()
     expect(JSON.stringify(state.job.state)).toContain('waiting for a free slot')
     const task = (await listTasks()).find(t => t.title === 'Capacity run')!
-    expect(task.start_queue).toMatchObject({ wait_for_slot: true, routine: { message: 'Check the original batch. '.repeat(100).trim() } })
+    expect(task.start_queue).toMatchObject({ wait_for_slot: true, routine: { message: expect.stringContaining('Check the original batch. '.repeat(100).trim()) } })
+    const { transcriptSentBy } = await import('../../src/core/sessions/transcript-sent-by.js')
+    expect(transcriptSentBy({ role: 'user', text: task.start_queue!.routine!.message })).toBe('agent')
     expect(starts).toEqual([])
     expect(_runStartWatchesForTesting().size).toBe(0)
     // The accepted wait is older than the spawn deadline: no timeout may discard this run.

@@ -39,6 +39,7 @@
  * (engine-switch-restart.ts). Every catch below throws what fail() answers.
  */
 import { turnHold, type TurnHold } from './turn-end-wait.js';
+import { isPersonSource } from './send-sent-by.js';
 import { randomUUID } from 'node:crypto';
 import { log } from '../../logging/index.js';
 import type { EngineSwitchState, SessionEffort, SessionEngine, SessionMode, SessionRecord, Task } from '../types.js';
@@ -127,8 +128,9 @@ export const SWITCH_TURN_STOP_MS = 10_000;
 export const TURN_CUT_NOTE = 'The previous session was in the middle of a turn when the user switched engines; that turn was stopped, '
   + 'so its last step may not have finished. Check before relying on it.';
 
-function by(callerSid: string | undefined, callerTaskId: string | undefined): string {
-  return callerSid ? `task:${callerTaskId ?? 'unknown'}` : 'human';
+function by(callerSid: string | undefined, callerTaskId: string | undefined, source: string): string {
+  return callerSid ? (callerTaskId ? `task:${callerTaskId}` : `caller:${callerSid}`)
+    : isPersonSource(source) ? 'human' : source.startsWith('automation:') ? source : `automation:${source}`;
 }
 
 /**
@@ -327,6 +329,12 @@ async function switchFrom(req: EngineSwitchRequest, task: Task): Promise<EngineS
   }
   const { resolveCaller } = await import('./session-send-core.js');
   const caller = await resolveCaller(req.callerSid);
+  const { frameStartText, framingCallerOf } = await import('./send-frame.js');
+  // Freeze the message's author before it waits or a restart replaces the caller's session.
+  const firstMessage = frameStartText(message, {
+    source: req.source, callerSid: req.callerSid,
+    ...(caller.kind === 'session' ? { caller: await framingCallerOf(caller.record) } : {}),
+  });
   const state: EngineSwitchState = {
     id: switchId, state: 'pending', at: new Date().toISOString(),
     from_session_id: old.claudeSessionId, ...(old.engine ? { from_engine: old.engine } : {}),
@@ -337,8 +345,8 @@ async function switchFrom(req: EngineSwitchRequest, task: Task): Promise<EngineS
     ...(move ? { move: true, from_host: oldHost, ...(old.cwd ? { from_cwd: old.cwd } : {}) } : {}),
     ...(lost ? { from_host_lost: lost } : {}),
     ...(req.userWords?.trim() ? { user_words: req.userWords.trim().slice(0, 2000) } : {}),
-    ...(message ? { message } : {}), ...(req.displayText && req.displayText !== message ? { display_text: req.displayText } : {}),
-    by: by(req.callerSid, caller.kind === 'session' ? caller.record.taskId : undefined),
+    ...(message ? { message: firstMessage, display_text: req.displayText ?? message } : {}),
+    by: by(req.callerSid, caller.kind === 'session' ? caller.record.taskId : undefined, req.source),
     ...(carry ? { message: carry.message, ...(carry.display_text ? { display_text: carry.display_text } : {}), by: carry.by } : {}),
   };
   if (busy && !now) {
@@ -379,7 +387,7 @@ export async function cancelPendingSwitch(taskId: string, opts: { deliver?: bool
   if (opts.deliver && held.message) {
     const { sendMessageToSession } = await import('../session-message-queue.js');
     await sendMessageToSession(held.from_session_id, held.display_text ?? held.message, {
-      source: 'ui', taskId, enqueueMessage: held.message,
+      source: held.by === 'human' ? 'ui' : 'engine-switch', taskId, enqueueMessage: held.message,
     });
     return { cancelled: true, delivered: true };
   }
@@ -845,9 +853,9 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
  * agent's peer note, and none without a message.
  */
 async function switchWords(state: EngineSwitchState): Promise<string> {
-  const { frameAsWalnut, frameStartText, framingCallerOf } = await import('./send-frame.js');
+  const { frameAsWalnut, frameStartText, framingCallerOf, readsAsPerson } = await import('./send-frame.js');
   if (!state.message?.trim()) return '';
-  if (state.by === 'human') return state.message;
+  if (state.by === 'human' || !readsAsPerson(state.message)) return state.message;
   const callerTaskId = state.by?.startsWith('task:') ? state.by.slice('task:'.length) : undefined;
   try {
     if (callerTaskId && callerTaskId !== 'unknown') {
@@ -861,7 +869,7 @@ async function switchWords(state: EngineSwitchState): Promise<string> {
       }
     }
   } catch { /* framed as Walnut's below */ }
-  return frameAsWalnut(state.message, 'engine-switch');
+  return frameAsWalnut(state.message, state.by ?? 'engine-switch');
 }
 
 /**

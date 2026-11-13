@@ -1836,7 +1836,15 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
     // send no images keep the exact 400-on-empty-text behavior.
     const images = extractValidImages(req.body?.images)
     const rawText = req.body?.text
-    const text = typeof rawText === 'string' ? rawText : ''
+    const { frameStartText, framingCallerOf } = await import('../../core/sessions/send-frame.js')
+    const { startRouteSource } = await import('../../core/sessions/send-sent-by.js')
+    const callerSid = req.get('x-walnut-caller-sid')?.trim() || undefined
+    const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
+    const caller = callerSid ? await getSessionByClaudeId(callerSid).catch(() => null) : null
+    const text = frameStartText(typeof rawText === 'string' ? rawText : '', {
+      source: startRouteSource('api-v1', req.headers), callerSid,
+      ...(caller ? { caller: await framingCallerOf(caller) } : {}),
+    })
     if (text.trim().length === 0 && images.length === 0) {
       sendError(res, 400, 'bad_request', 'text (non-empty string) is required')
       return
@@ -2600,9 +2608,10 @@ async function runApiV1Turn(
     //
     // The CLI takes plain text on stdin, not content blocks — images ride as
     // readable file paths (the shape session chat uses), never base64.
-    const sessionMessage = savedImages.length > 0
-      ? buildSessionImageContext(savedImages) + text
-      : text
+    const { readsAsPerson, frameAsWalnut } = await import('../../core/sessions/send-frame.js')
+    const annotated = savedImages.length > 0 ? buildSessionImageContext(savedImages) + text : text
+    const sessionMessage = !readsAsPerson(text) && readsAsPerson(annotated)
+      ? frameAsWalnut(annotated, 'forwarded-message') : annotated
     await runApiV1LaneTurn(agentId, conversationId, sessionMessage, turnId)
   })
 }

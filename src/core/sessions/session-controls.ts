@@ -882,6 +882,7 @@ export async function forkSessionToTask(
     message: forkMessage,
     // A person's fork carries their words; a transfer or another task's fork is framed by the runner.
     ...(isPersonSource(source) ? { attributed: true as const } : {}),
+    attributionSource: source,
     cwd: forkCwd,
     project: task.project ?? '',
     mode: forkMode,

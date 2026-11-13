@@ -13071,6 +13071,7 @@ export class SessionRunner {
     namingMessage?: string
     /** `message` is already attributed (see SessionStartEvent.attributed). */
     attributed?: true
+    attributionSource?: string
   }, framedBy?: string): Promise<{ claudeSessionId: string; title: string }> {
     // Text no caller attributed is framed as Walnut's before any engine reads it (sessions/send-frame.ts).
     data = frameStartData(data, framedBy)

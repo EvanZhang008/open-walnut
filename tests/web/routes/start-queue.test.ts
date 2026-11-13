@@ -443,6 +443,19 @@ describe('the starts an older Walnut queued', () => {
     expect(spawned).not.toContain(orphan)
   })
 
+  it('Start now preserves the automation name rather than becoming the clicking person', async () => {
+    const { task } = await addTask({ title: 'Queued imported alert', project: 'queue' })
+    await updateTaskRaw(task.id, { start_queue: {
+      at: new Date().toISOString(), parent_id: task.id, caller_sid: '', source: 'automation:ticket-import',
+      params: { message: 'Investigate this ticket.', expectReply: false },
+    } } as never)
+    expect((await startQueuedNow(task.id))?.started).toBe(true)
+    const call = vi.mocked(sessionRunner.startSession).mock.calls.find(([data]) => data.taskId === task.id)![0]
+    const { transcriptSentBy } = await import('../../../src/core/sessions/transcript-sent-by.js')
+    expect(transcriptSentBy({ role: 'user', text: call.message })).toBe('agent')
+    expect(call.message).toContain('automation: ticket-import')
+  })
+
   it("Start now runs one as the user's own on a full host; the user's Cancel says so on the task; a run after a cancel starts nothing", async () => {
     const { parent, sid } = await worker('Lead the user overrides from the page')
     const [now, cancelled] = await children(parent.id, ['TODO', 'TODO'])

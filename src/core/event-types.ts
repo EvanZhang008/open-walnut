@@ -210,6 +210,8 @@ export interface SessionStartEvent {
    * so a new emitter that forgets to say who wrote the text is framed, never trusted.
    */
   attributed?: true;
+  /** Required with attributed: the path that typed, framed or replayed this first message. */
+  attributionSource?: string;
   /**
    * This session runs a Walnut console agent ("Ask Walnut"), rather than a plain
    * coding session.

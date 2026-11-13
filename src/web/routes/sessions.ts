@@ -50,7 +50,7 @@ import { sessionRunner } from '../../providers/claude-code-session.js'
 import { readAcpSessionHistoryState } from '../../providers/acp-session-history.js'
 import type { ImagePayload } from './images.js'
 import { quickStartSession, QuickStartError } from '../../core/sessions/quick-start.js'
-import { routeSource } from '../../core/sessions/send-sent-by.js'
+import { routeSource, startRouteSource } from '../../core/sessions/send-sent-by.js'
 import { workspaceLaunchPlan } from '../../core/workspaces/launch.js'
 import {
   ASK_HOST_REFUSAL,
@@ -783,7 +783,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         ...(inOwnTaskDir ? { ownTaskDir: true } : {}),
         existingTaskId, taskMeta: isWalnutAgent ? walnutTaskMeta : fixWalnutTaskMeta,
         // A session that makes this request is not a person: its first line is framed (sessions/send-frame.ts).
-        source: routeSource('quick-start', req.headers), requestTs,
+        source: startRouteSource('quick-start', req.headers), requestTs,
         engine: effectiveEngine,
         ...(fallback ? { fallback } : {}),
         ...(decidesFallback ? { fallbackDecided: true } : {}),
@@ -853,7 +853,8 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
           message: sessionMessage, ...(messagePrefix ? { messagePrefix } : {}), ...(model ? { model } : {}), ...(launchMode ? { mode: launchMode } : {}),
           ...(launchEffort ? { effort: launchEffort } : {}),
           ...(effectiveEngine ? { engine: effectiveEngine } : {}), engine_decided: true, ...(preassignedSessionId ? { session_id: preassignedSessionId } : {}),
-          source: routeSource('quick-start', req.headers), at: new Date(requestTs).toISOString(),
+          source: startRouteSource('quick-start', req.headers), at: new Date(requestTs).toISOString(),
+          ...(startedBySid ? { caller_sid: startedBySid } : {}),
         }))
         return
       }
@@ -3133,7 +3134,17 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
     }
 
     // Build message with plan content + file path reference (survives compaction via re-read).
-    const planMessage = buildPlanExecutionMessage(planResult.planFile, planResult.content, instructions)
+    const { frameStartText, framingCallerOf } = await import('../../core/sessions/send-frame.js')
+    const caller = execBySid ? await getSessionByClaudeId(execBySid).catch(() => null) : null
+    const generated = frameStartText(buildPlanExecutionMessage(planResult.planFile, planResult.content, typeof instructions === 'string' && instructions.trim() ? '' : undefined), {
+      source: 'execute-plan', callerSid: execBySid,
+      ...(caller ? { caller: await framingCallerOf(caller) } : {}),
+    })
+    const typedInstructions = typeof instructions === 'string' && instructions.trim() ? frameStartText(instructions, {
+      source: startRouteSource('web-api', req.headers), callerSid: execBySid,
+      ...(caller ? { caller: await framingCallerOf(caller) } : {}),
+    }) : ''
+    const planMessage = typedInstructions ? `${generated}\n\n${typedInstructions}` : generated
 
     // Use host from request body, or inherit from the plan session
     const execHost = host ?? sourceRecord?.host
@@ -3234,8 +3245,9 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
     bus.emit(EventNames.SESSION_START, {
       taskId: taskId ?? '',
       message: planMessage,
-      // The "execute plan" button a person pressed.
+      // Generated text is framed separately from instructions the person actually typed.
       attributed: true,
+      attributionSource: 'execute-plan:framed-message',
       cwd,
       project: sourceRecord?.project ?? '',
       mode: execMode,

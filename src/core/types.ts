@@ -3453,7 +3453,7 @@ export interface EngineSwitchState {
   trimmed_turns?: number;
   transcript_path?: string;
   error?: string;
-  /** Who asked: 'human' or 'task:<id>'. */
+  /** Who asked: 'human', 'task:<id>', 'caller:<id>' or 'automation:<source>'. */
   by?: string;
   /** It ran over background work the old session's finished turn left running (engine-switch-watch.ts). */
   background_cut?: boolean;

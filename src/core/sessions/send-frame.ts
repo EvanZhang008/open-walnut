@@ -29,7 +29,7 @@ const NOTE_WALNUT_SEND = 'automatic message from Walnut: carry it out as its tex
 function sourceLabel(source: string | undefined): string {
   const s = (source ?? '').trim();
   if (!s) return 'unknown source';
-  return s.replace(/[_-]+/g, ' ').slice(0, 60);
+  return /^(automation:|caller:)/.test(s) ? s.slice(0, 120) : s.replace(/[_-]+/g, ' ').slice(0, 60);
 }
 
 /** True when the text, as stored, would read as a person's own message (no envelope frames all of it). */
@@ -99,19 +99,23 @@ export function frameStartText(
     });
   }
   // A caller that named itself but did not resolve (a session id Walnut no longer knows) is still not a person.
-  if (opts.callerSid?.trim()) return frameAsWalnut(text, 'task start');
+  if (opts.callerSid?.trim()) return frameAsWalnut(text, `caller:${opts.callerSid.trim()}`);
+  if (opts.source?.startsWith('automation:')) return buildPeerWrapper(text, {
+    title: '', shortId: '', host: 'unknown', anonymous: true, automation: opts.source.slice('automation:'.length),
+  });
   return frameForSource(text, opts.source);
 }
 
 /**
  * The one net under every way a task's first message is started (the bus event and the direct start
- * both pass it, claude-code-session.ts): unless the emitter says the text is attributed, text that
- * would read as a person's is framed as Walnut's. The words the session is named from stay the
+ * both pass it, claude-code-session.ts): unless the emitter says the text is attributed AND names
+ * its source, text that would read as a person's is framed as Walnut's. The words the session is named from stay the
  * unframed ones (`namingMessage`), so a title never shows envelope markup.
  */
-export function frameStartData<T extends { message?: string; namingMessage?: string; attributed?: true }>(data: T, source?: string): T {
-  if (data.attributed || !data.message) return data;
-  const framed = frameAsWalnut(data.message, source);
+export function frameStartData<T extends { message?: string; namingMessage?: string; attributed?: true; attributionSource?: string }>(data: T, source?: string): T {
+  // A boolean alone names nobody. A new path cannot opt out of framing by copying it.
+  if ((data.attributed && data.attributionSource?.trim()) || !data.message) return data;
+  const framed = frameAsWalnut(data.message, data.attributionSource ?? source);
   if (framed === data.message) return data;
   return { ...data, message: framed, namingMessage: data.namingMessage ?? data.message };
 }

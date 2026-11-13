@@ -144,11 +144,14 @@ export function installDirect(): void {
       sessionRunner.init();
 
       try {
+        const { cliOpCaller } = await import('../lib/cli-sender.js');
+        const caller = cliOpCaller();
+        const cliSource = 'callerSid' in caller ? 'api-agent' : 'sender' in caller ? `automation:${caller.sender}` : 'cli';
         const result = await startSessionForTask({
           taskIdPrefix,
           ...(options.message !== undefined ? { message: options.message } : {}),
-          // Run inside a session (its id in the env), the start is that session's, not a person's.
-          source: (process.env.WALNUT_SESSION_ID ?? '').trim() ? 'api-agent' : 'cli',
+          source: cliSource,
+          ...('callerSid' in caller ? { callerSid: caller.callerSid } : {}),
         });
         printStart(result, globals);
       } catch (err) {

@@ -163,7 +163,7 @@ export async function startQueuedNow(taskId: string): Promise<SessionStartResult
     return { taskId, title: result.task.title, started: true, ...(entry.routine_session_id ? { sessionId: entry.routine_session_id } : {}) };
   }
   const { startSessionForTask } = await import('./task-start.js');
-  return await startSessionForTask({ ...entry.params, taskIdPrefix: taskId, callerSid: entry.caller_sid, source: START_QUEUE_SOURCE, byPerson: true, queuedAt: entry.at });
+  return await startSessionForTask({ ...entry.params, taskIdPrefix: taskId, callerSid: entry.caller_sid, source: entry.source ?? START_QUEUE_SOURCE, byPerson: true, queuedAt: entry.at });
 }
 
 /**

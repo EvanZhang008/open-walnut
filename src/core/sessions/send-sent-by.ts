@@ -3,6 +3,7 @@
  * or an agent's (another task, Walnut's notices, triggers, routines, hooks).
  * Pure and dependency-free, so callers that mock the queue still get the rule.
  */
+import { CALLER_KIND_HEADER, SENDER_LABEL_HEADER, senderLabel } from '../../lib/cli-sender.js';
 
 /**
  * Send sources a person typed into the session (phase.ts REOPENING_SEND_SOURCES
@@ -56,6 +57,16 @@ const headerOf = (headers: HeaderBag, name: string): string => {
  * (`x-walnut-caller-kind`, cli-sender.ts). Either one reaching a person's route is not a person.
  */
 export function routeSource(personSource: string, headers: HeaderBag): string {
-  return headerOf(headers, 'x-walnut-caller-sid') || headerOf(headers, 'x-walnut-caller-kind') === 'automation'
+  return headerOf(headers, 'x-walnut-caller-sid') || headerOf(headers, CALLER_KIND_HEADER) === 'automation'
     ? 'api-agent' : personSource;
+}
+
+/** A first message needs the automation's name as well as its sender class. */
+export function startRouteSource(personSource: string, headers: HeaderBag): string {
+  if (headerOf(headers, 'x-walnut-caller-sid')) return 'api-agent';
+  const kind = headerOf(headers, CALLER_KIND_HEADER).toLowerCase();
+  if (kind && !['person', 'human'].includes(kind)) {
+    return `automation:${senderLabel(headerOf(headers, SENDER_LABEL_HEADER))}`;
+  }
+  return personSource;
 }

@@ -401,6 +401,7 @@ async function startFresh(record: SessionRecord, from: string, to: string, by: s
       message,
       // A notice, then the rows that waited as they were stored (a task's rows kept their frame).
       attributed: true,
+      attributionSource: 'folder-gone:stored-rows',
       cwd: to,
       project: task.project ?? '',
       ...(record.mode && record.mode !== 'default' ? { mode: record.mode } : {}),

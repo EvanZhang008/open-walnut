@@ -25,6 +25,7 @@ vi.mock('../../src/core/sessions/session-request-notify.js', () => ({ notifyRequ
 
 import { startSessionForTask, SessionExistsError, isTaskStarting } from '../../src/core/sessions/task-start.js';
 import { frameAsWalnut } from '../../src/core/sessions/send-frame.js';
+import { transcriptSentBy } from '../../src/core/sessions/transcript-sent-by.js';
 import { buildPeerWrapper } from '../../src/core/peers/peer-wrapper.js';
 import { REQUESTS_FILE, getSessionRequest } from '../../src/core/session-requests.js';
 
@@ -57,6 +58,14 @@ function lastPatch(current: Record<string, unknown>): Record<string, unknown> {
 }
 
 describe('task start confirmation and reply contract', () => {
+  it('a description fallback is Walnut\'s instruction, not words the starter typed', async () => {
+    mocks.resolveCaller.mockResolvedValue({ kind: 'human' });
+    mocks.getTask.mockResolvedValue({ ...task, description: 'Generated imported ticket instruction.' });
+    await startSessionForTask({ ...params, message: undefined, source: 'api-v1' });
+    const first = mocks.startSession.mock.calls[0][0];
+    expect(transcriptSentBy({ role: 'user', text: first.message })).toBe('agent');
+    expect(first.message).toContain('task description');
+  });
   it('seeds the record before invoking the runner and waits for confirmation', async () => {
     let finish!: (value: unknown) => void;
     mocks.startSession.mockImplementation((data) => new Promise((resolve) => {

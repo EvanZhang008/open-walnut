@@ -49,6 +49,7 @@ import { isKnownEngine } from '../../core/agents/engine-registry.js'
 import { PIN_TIER_POLICY, SESSION_ENGINE_IDS, migrateFocusTier } from '../../core/types.js'
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
 import { logRouteError } from './route-error-log.js'
+import { startRouteSource } from '../../core/sessions/send-sent-by.js'
 
 export const taskV1Router = Router()
 
@@ -574,7 +575,7 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
         handsOn: str('hands_on'),
         callerSid,
         startAttemptId: str('start_attempt_id'),
-        source: 'api-v1',
+        source: startRouteSource('api-v1', req.headers),
         // An agent's start answers once its session is up or the start failed (a sync call,
         // 2026-11-06, the user): never a start left to come up later unseen.
         ...(callerSid ? { answerWithinMs: AGENT_START_ANSWER_MS } : {}),

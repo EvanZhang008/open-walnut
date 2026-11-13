@@ -179,7 +179,7 @@ const START_EMITTERS: Record<string, boolean[]> = {
   'src/core/sessions/session-rewind.ts': [true],   // the earlier message again, as stored
   'src/core/sessions/side-thread-fork.ts': [true], // the person's side question
   'src/web/routes/session-chat.ts': [true],        // the console's composer
-  'src/web/routes/sessions.ts': [true],            // the "execute plan" button
+  'src/web/routes/sessions.ts': [true],            // generated plan framed separately from the person's typed instructions
 };
 
 /** The sources a person passes. Pinned: a new one is a decision, not a side effect. */
@@ -196,7 +196,7 @@ const SOURCE_SENDER: Record<string, 'person' | 'agent'> = {
   ...Object.fromEntries(PERSON_SOURCES_PINNED.map((s) => [s, 'person' as const])),
   peer: 'agent', 'walnut-notify': 'agent', transfer: 'agent', 'engine-switch': 'agent', 'start-queue': 'agent',
   'routine-trigger': 'agent', 'routine-watcher': 'agent', 'router-runtime': 'agent', 'brief-refresh': 'agent', 'side-thread-digest': 'agent',
-  'app-state': 'agent', subagent: 'agent', 'notification-fix': 'agent', 'session-start': 'agent',
+  'app-state': 'agent', subagent: 'agent', 'notification-fix': 'agent', 'session-start': 'agent', 'task-description': 'agent',
   'api-agent': 'agent', 'board-reminder': 'agent', 'auto-continue': 'agent', 'hook:abc': 'agent',
   'brand-new-source': 'agent', 'background-work-ended': 'agent', 'idle-compact': 'agent', 'context-compact': 'agent', 'context-recovery': 'agent', 'safeguard-switch': 'agent', 'pr-watch': 'agent',
   // Bus tags of emits that are attributed on their own (START_EMITTERS), not send sources a person types into.
@@ -287,7 +287,7 @@ describe('every way a line reaches a session', () => {
 
   it('a route a person uses reports `api-agent` when a session made the request', () => {
     for (const f of ['web/routes/session-send-v1.ts', 'web/routes/quick-input-v1.ts', 'web/routes/sessions.ts', 'web/routes/session-launch-v1.ts']) {
-      expect(fs.readFileSync(path.join(SRC, f), 'utf8'), f).toMatch(/routeSource\(/);
+      expect(fs.readFileSync(path.join(SRC, f), 'utf8'), f).toMatch(/(?:routeSource|startRouteSource)\(/);
     }
   });
 });

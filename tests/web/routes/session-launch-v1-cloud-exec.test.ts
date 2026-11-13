@@ -93,6 +93,27 @@ afterEach(async () => {
 });
 
 describe('POST /sessions with cloud.exec enabled', () => {
+  it('a run-here automation keeps its name instead of the person launch source', async () => {
+    await writeConfig(EXEC_ON);
+    const res = await request(createApp()).post('/api/v1/sessions')
+      .set('x-walnut-caller-kind', 'automation').set('x-walnut-sender', 'ticket-import')
+      .send({ cwd: EXEC_ROOT, host: CLOUD_HOST_ALIAS, message: 'Investigate this ticket.' });
+    expect(res.status).toBe(201);
+    expect(performMobileLaunchMock.mock.calls[0][1]).toBe('automation:ticket-import');
+  });
+
+  it('a relayed automation first message carries its author across an older bridge', async () => {
+    await writeConfig(EXEC_ON);
+    bridgeRequestMock.mockResolvedValue({ ok: true, result: { sessionId: 'mac-1', taskId: 't' } });
+    const res = await request(createApp()).post('/api/v1/sessions')
+      .set('x-walnut-caller-kind', 'automation').set('x-walnut-sender', 'ticket-import')
+      .send({ cwd: EXEC_ROOT, message: 'Investigate this ticket.' });
+    expect(res.status).toBe(201);
+    const text = bridgeRequestMock.mock.calls[0][2].params.message;
+    const { transcriptSentBy } = await import('../../../src/core/sessions/transcript-sent-by.js');
+    expect(transcriptSentBy({ role: 'user', text })).toBe('agent');
+    expect(text).toContain('automation: ticket-import');
+  });
   it('runs a CLOUD-alias launch on this box and never touches the bridge', async () => {
     await writeConfig(EXEC_ON);
     const res = await request(createApp()).post('/api/v1/sessions').send({

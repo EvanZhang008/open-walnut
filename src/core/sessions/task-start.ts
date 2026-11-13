@@ -545,7 +545,7 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
       }
       const sent = await continueTaskConversation(conversation, {
         text: params.message?.trim() || task.description || `Working on task: ${task.title}`,
-        callerSid: params.callerSid, source: params.source, expectReply: params.expectReply, replyTimeoutSecs: params.replyTimeoutSecs,
+        callerSid: params.callerSid, source: params.message?.trim() ? params.source : 'task-description', expectReply: params.expectReply, replyTimeoutSecs: params.replyTimeoutSecs,
         ...(params.handsOn ? { handsOn: params.handsOn } : {}),
       }).then((r) => { resumeSlot?.(SLOT_HOLD_MS); return r; }, (e: unknown) => { resumeSlot?.(0); throw e; });
       return {
@@ -716,7 +716,7 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
         // An engine switch attributes its own first line (engine-switch.ts prepare): the person's words as
         // theirs, an agent's framed, and Walnut's carried context as a hint block a display takes off.
         let firstMessage = params.source === 'engine-switch' ? startBody : frameStartText(startBody, {
-          source: params.source, ...(params.callerSid ? { callerSid: params.callerSid } : {}),
+          source: params.message?.trim() ? params.source : 'task-description', ...(params.callerSid ? { callerSid: params.callerSid } : {}),
           ...(caller?.kind === 'session' ? { caller: await framingCallerOf(caller.record) } : {}), ...(requestId ? { requestId } : {}),
         }) + (replyTrailer ? `\n${replyTrailer}` : '');
         // The reply trailer after an envelope that is not the request's own reads as typed words: frame the whole.
@@ -728,7 +728,7 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
         const { pendingAppState } = await import('./app-state.js');
         const appState = !area && firstMessage.trim() ? await pendingAppState(runtimeId, firstMessage, Date.now(), { taskId: task.id }) : null;
         if (appState) firstMessage = `${appState.text}\n\n${firstMessage}`;
-        const starting = spawnStill = sessionRunner.startSession({ ...launch, message: firstMessage, namingMessage: startBody, attributed: true, preassignedSessionId: sid, runtimeId: sid ? undefined : runtimeId, waitForSpawn: true }).then(async (ready) => {
+        const starting = spawnStill = sessionRunner.startSession({ ...launch, message: firstMessage, namingMessage: startBody, attributed: true, attributionSource: params.source, preassignedSessionId: sid, runtimeId: sid ? undefined : runtimeId, waitForSpawn: true }).then(async (ready) => {
           appState?.markTold(ready.claudeSessionId);
           await settle({ state: 'started', session_id: ready.claudeSessionId });
           return { ...result, sessionId: ready.claudeSessionId, started: true };
@@ -874,7 +874,7 @@ export async function moveFromLostHost(task: Task, params: SessionStartParams): 
   }
   const sent = await continueTaskConversation(record, {
     text: params.message?.trim() || task.description || `Working on task: ${task.title}`,
-    callerSid: params.callerSid, source: params.source, expectReply: params.expectReply, replyTimeoutSecs: params.replyTimeoutSecs,
+    callerSid: params.callerSid, source: params.message?.trim() ? params.source : 'task-description', expectReply: params.expectReply, replyTimeoutSecs: params.replyTimeoutSecs,
     ...(params.handsOn ? { handsOn: params.handsOn } : {}),
   });
   return {

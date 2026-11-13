@@ -1984,7 +1984,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
             walnutAgent: true,
             taskTitle: `Routine: ${job.name}`,
             project: 'Routines',
-            source: 'cron-isolated',
+            source: `automation:routine:${job.id}:${job.name}`,
             ...routineLaunchPlacement(job.executor?.config ?? {}, message),
           },
         })
