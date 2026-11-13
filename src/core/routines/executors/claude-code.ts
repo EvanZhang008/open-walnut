@@ -247,7 +247,7 @@ export function createClaudeCodeExecutor(opts: { notify?: RoutineGateNotify; sta
             ...(config.walnutAgent ? { walnutAgent: true } : {}),
             ...(config.agentId ? { agentId: config.agentId } : {}),
             // Whether it may start elsewhere when its host is full, and the instructions its needs are read from.
-            ...routineLaunchPlacement(config, sessionMessage),
+            ...routineLaunchPlacement(config, stripTriageCountHint(message)),
           },
         });
       } catch (err) {
