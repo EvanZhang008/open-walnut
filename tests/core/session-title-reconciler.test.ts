@@ -182,11 +182,13 @@ describe('sweepPlaceholderTitles', () => {
     await updateTask(task.id, { cwd: CWD }, { source: 'test' });
     await createSessionRecord(sid, task.id, 'Ask Walnut', CWD, { title: 'Ask Walnut' });
     historyTailMock.mockResolvedValue(userHistory('where is my interview prep?'));
+    // An answer read off these words: one sharing none of them is refused (title-answer.ts).
+    sendMessageMock.mockResolvedValue(modelAnswer('Interview prep location'));
 
     const stats = await sweepPlaceholderTitles();
 
     expect(stats).toEqual({ candidates: 1, attempted: 1, retitled: 1, errors: 0 });
-    expect((await getTask(task.id)).title).toBe('Docx preview support');
+    expect((await getTask(task.id)).title).toBe('Interview prep location');
   });
 
   it('leaves an ordinary task the user titled exactly "Ask Walnut" alone (no flag)', async () => {
