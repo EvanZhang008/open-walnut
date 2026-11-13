@@ -413,11 +413,17 @@ describe('specs that open a gated Settings pane', () => {
   // while its server fact is false, and the macOS Access pane's (`macAccess`) is false
   // on every Linux runner: permissions-session-access clicked an entry that was never
   // drawn and timed out on all of CI's runs (2026-11-01). A spec that opens such a pane
-  // sets the fact itself, as that spec stubs the rest of a Mac.
+  // sets the fact itself, as that spec stubs the rest of a Mac (for macAccess, the shared
+  // route in mac-console-route.ts). 2026-11-13: two specs opened the pane through a
+  // `clickNav(page, 'permissions')` helper this guard did not read, and timed out the same way.
   // `primary` (Tailscale and Browser link under Phones & Cloud) is closed only on a cloud
   // companion's own console: every fixture server is a primary, so no spec sets a fact for it,
   // and a spec that stubs `cloud: true` does so to see those entries gone.
   const FACT_OF_GATE: Record<string, string | null> = { 'mac-access': 'macAccess', primary: null }
+  /** A shared helper that sets the gate's fact for the spec that calls it. */
+  const HELPER_OF_GATE: Record<string, string> = { 'mac-access': 'routeMacConsole(' }
+  const opens = (text: string, id: string) => text.includes(`settings-nav-${id}'`)
+    || new RegExp(`clickNav\\(\\s*page\\s*,\\s*['"]${id}['"]`).test(text)
   const registry = fs.readFileSync(path.resolve(__dirname, '../../web/src/components/settings/core-settings-registry.tsx'), 'utf8')
   const gated = [...registry.matchAll(/\bid: '([\w-]+)'[^{}]*?\brequires: '([\w-]+)'/g)].map((m) => ({ id: m[1]!, gate: m[2]! }))
 
@@ -428,9 +434,16 @@ describe('specs that open a gated Settings pane', () => {
 
   it('every spec that clicks a gated pane\'s nav entry sets its fact', () => {
     const offenders = gated.filter((g) => FACT_OF_GATE[g.gate] !== null).flatMap((g) => sources
-      .filter(({ text }) => text.includes(`settings-nav-${g.id}'`) && !new RegExp(`\\b${FACT_OF_GATE[g.gate]}: true`).test(text))
+      .filter(({ text }) => opens(text, g.id) && !new RegExp(`\\b${FACT_OF_GATE[g.gate]}: true`).test(text)
+        && !(HELPER_OF_GATE[g.gate] && text.includes(HELPER_OF_GATE[g.gate]!)))
       .map(({ file }) => `${file}: opens ${g.id} without ${FACT_OF_GATE[g.gate]}: true`))
     expect(offenders).toEqual([])
+  })
+
+  it('reads a pane opened through a nav helper too', () => {
+    expect(opens("await clickNav(page, 'permissions')", 'permissions')).toBe(true)
+    expect(opens("page.getByTestId('settings-nav-permissions')", 'permissions')).toBe(true)
+    expect(opens("await clickNav(page, 'general')", 'permissions')).toBe(false)
   })
 })
 

@@ -7,6 +7,7 @@
 import { devices, test, expect, type Page, type Request } from '@playwright/test'
 import { openApps } from './apps-store-helpers'
 import { backToDevices, openWay } from './devices-ways-helpers'
+import { routeMacConsole } from './mac-console-route'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
@@ -183,6 +184,7 @@ const PERMS = {
 
 test('N21 N26: macOS Access help is a real sentence and every state tag ends on one column', async ({ page }) => {
   await recordWrites(page)
+  await routeMacConsole(page)
   await page.route((url) => url.pathname === '/api/permissions', (route) =>
     route.request().method() === 'GET' ? route.fulfill({ json: PERMS }) : route.fallback())
   await openSettings(page)

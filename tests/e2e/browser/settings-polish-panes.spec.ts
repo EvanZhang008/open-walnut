@@ -9,6 +9,7 @@ import { devices, test, expect, type Page, type Request } from '@playwright/test
 import { backToApps, openApps, openPluginDetail } from './apps-store-helpers'
 import { backToDevices } from './devices-ways-helpers'
 import { dropFakes } from './route-teardown'
+import { routeMacConsole } from './mac-console-route'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
@@ -359,6 +360,7 @@ test('N3-27: Jev without a key: short placeholder, Test connection disabled, one
 
 test('N3-28: macOS Access puts the state first, then a named action', async ({ page }) => {
   await recordWrites(page)
+  await routeMacConsole(page)
   await page.route((url) => url.pathname === '/api/permissions', (route) => route.request().method() !== 'GET' ? route.fallback() : route.fulfill({
     json: {
       applicable: true, launcher: { kind: 'mac-app', name: 'Walnut' },
