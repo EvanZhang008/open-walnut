@@ -20,6 +20,7 @@ import { resolveDefaultEngine } from '../agents/default-engine.js';
 import type { FallbackDecision } from '../agents/fallback-engine.js';
 import type { LaunchSourceRecord } from './project-launch-defaults.js';
 import { buildAskProfilePrefix } from './ask-profile-prefix.js';
+import { isPersonSource } from './send-sent-by.js';
 import { heuristicShortTitle } from './task-title-brake.js';
 import { ownWordsOf } from './own-words.js';
 import { ASK_WALNUT_PROJECT, GENERAL_AGENT_ID, askProjectFor, resolveAskAgent, stampedAgentId, type AskAgentRef } from './ask-agent.js';

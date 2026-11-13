@@ -9,6 +9,11 @@ const STARTS = new Set(['startSessionForTask', 'quickStartSession', 'requestEngi
 function property(object: ts.Expression | undefined, name: string, variables = new Map<string, ts.Expression>(), depth = 0): ts.Expression | undefined {
   if (!object || depth > 8) return undefined;
   if (ts.isIdentifier(object)) return property(variables.get(object.text), name, variables, depth + 1);
+  if (ts.isParenthesizedExpression(object)) return property(object.expression, name, variables, depth + 1);
+  if (ts.isCallExpression(object) && ts.isIdentifier(object.expression)) {
+    const factory = variables.get(object.expression.text);
+    if (factory && ts.isArrowFunction(factory) && !ts.isBlock(factory.body)) return property(factory.body, name, variables, depth + 1);
+  }
   if (!ts.isObjectLiteralExpression(object)) return undefined;
   for (const p of [...object.properties].reverse()) {
     if (ts.isSpreadAssignment(p)) {
@@ -114,7 +119,11 @@ describe('every first-message start names its source', () => {
       requestEngineSwitch({ message: 'first' });
       bus.emit(EventNames.SESSION_START, payload, ['session-runner']);
       startSessionForTask({ message: 'second', source: 'routine:daily' });
+      const named = () => ({ source: 'routine' });
+      quickStartSession({ ...named(), message: 'third' });
+      const unnamed = () => ({ message: 'fourth' });
+      quickStartSession({ ...unnamed() });
     `);
-    expect(sites.map(s => s.named)).toEqual([false, false, false, false, false, true]);
+    expect(sites.map(s => s.named)).toEqual([false, false, false, false, false, true, true, false]);
   });
 });
