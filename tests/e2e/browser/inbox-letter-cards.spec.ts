@@ -10,7 +10,7 @@ let htmlId = '';
 const evidence = process.env.PW_EVIDENCE_DIR;
 
 test.describe.configure({ mode: 'serial' });
-test.use({ video: process.env.PW_VIDEO ? { mode: 'on', size: { width: 1100, height: 800 } } : 'off' });
+test.use({ video: process.env.PW_VIDEO ? 'on' : 'off' });
 test.beforeAll(async ({ request }) => {
   test.setTimeout(180_000);
   const body = '**From:** coordinator@example.invalid\n**Subject:** Interview reminder\n\n**Why it is yours:** Please confirm the interview time.\n\n## Details\n\n- Join at 10:00\n- Bring your notes\n\n' + 'A longer paragraph with preparation details.\n\n'.repeat(60) + 'End of the letter.';
