@@ -17,6 +17,7 @@
  *   - no shell placeholder (`$f`) reaches the screen.
  */
 import { test, expect, type Locator, type Page } from '@playwright/test';
+import { findChord } from './page-find-helpers';
 import { mockSession, open, waitForWs, waitForStream, injectEvent, setMockStream, MOCK_SESSION_ID } from './mock-session-harness';
 
 test.describe.configure({ mode: 'parallel', timeout: 90_000 });
@@ -444,5 +445,61 @@ for (const opener of ['person', 'notice', 'conversation'] as const) {
       await expect(body).toContainText('sample-cmd --last');
       for (let i = 1; i <= calls; i++) await expect(body).toContainText(`sample-cmd --step ${i}`);
     });
+  }
+}
+
+// Find in a shut turn fold: one Enter opens the fold AND the card inside it, and lands on the
+// match (2026-11-13, found on live prod in a lead's chat: a match in a received message inside
+// a shut fold took two presses, the first only opened the fold). Each kind of received card,
+// the word in its folded body or on its title line, stepping forward and back.
+const peerNote = (k: number, word: string, inTitle: boolean) => `<walnut-message kind="peer-note" from="Sample lead [abcd1234]" from-session="abcd1234-0000-4000-8000-00000000000${k}" from-task="t1" host="local" title="Next step ${k}${inTitle ? ` ${word}` : ''}">\nPlease recount the nests${inTitle ? '' : `, ${word}`}.\n</walnut-message>`;
+const noticeWith = (k: number, word: string) => `<walnut-message kind="notification" from="Walnut" about="Sample canary [c82${k}]" about-task="eeee555${k}" outcome="waiting" note="automated Walnut status notice">\nYour subtask set itself to WAITING, ${word}.\n</walnut-message>`;
+for (const kind of ['notification', 'peer-note'] as const) {
+  // A notice's words show on its folded line; a peer note's body only once the card opens.
+  for (const where of kind === 'peer-note' ? ['body', 'title'] as const : ['body'] as const) {
+    for (const dir of ['Enter', 'Shift+Enter'] as const) {
+      test(`find · one ${dir} opens a shut fold and lands on a match in a received ${kind}'s ${where}`, async ({ page }) => {
+        const WORDX = 'quokkafind';
+        const rec: Row = { role: 'user', text: kind === 'peer-note' ? peerNote(2, WORDX, where === 'title') : noticeWith(2, WORDX), timestamp: at(22), msgId: 'queue-n2', walnutMessageId: 'sn-2' };
+        const messages: Row[] = [...PRIOR, ASK, KINDS.command(1).row, rec, KINDS.command(3).row, FINAL];
+        await mockSession(page, messages, 'idle');
+        await page.route(`**/api/sessions/${MOCK_SESSION_ID}/find**`, (route) => route.fulfill({
+          json: { matches: [{ id: 'queue-n2', role: 'user', timestamp: at(22), count: 1 }], total: 1, capped: false },
+        }));
+        const history = await open(page);
+        await expect(history).toContainText('MX_FINAL', { timeout: 15000 });
+        const fold = history.locator('[data-testid="turn-fold"]');
+        await expect(fold).toHaveCount(1);
+        await expect(fold).toHaveAttribute('data-open', 'false');
+        await history.getByText('MX_FINAL').click();
+        await findChord(page);
+        await page.keyboard.type(WORDX);
+        const label = page.locator('.page-find .fv-search-count');
+        await expect(label).toHaveText(/^1 match/, { timeout: 10000 });
+        await page.keyboard.press(dir);
+        await expect(page.locator('.page-find')).toHaveAttribute('data-revealing', 'false', { timeout: 10000 });
+        // Landed on it with that one press: numbered, painted, on screen, in the received row.
+        await expect(label).toHaveText('1/1', { timeout: 5000 });
+        const active = await history.evaluate((el) => {
+          const reg = (window as unknown as { CSS: { highlights: Map<string, Set<AbstractRange>> } }).CSS.highlights;
+          const h = reg.get('walnut-find-active')?.size ? reg.get('walnut-find-active') : reg.get('walnut-find-solid-active');
+          if (!h?.size) return null;
+          const s = [...h][0]!;
+          const live = document.createRange();
+          live.setStart(s.startContainer, s.startOffset);
+          live.setEnd(s.endContainer, s.endOffset);
+          const r = live.getBoundingClientRect();
+          const box = el.getBoundingClientRect();
+          const node = s.startContainer;
+          const at = node instanceof Element ? node : node.parentElement;
+          return { text: live.toString(), inView: r.height > 0 && r.top >= box.top && r.bottom <= box.top + el.clientHeight, inFold: !!at?.closest('[data-testid="turn-fold"]') };
+        });
+        expect(active, 'the press selected a match').not.toBeNull();
+        expect(active!.text.toLowerCase()).toBe(WORDX);
+        expect(active!.inView, 'the match is on screen').toBe(true);
+        expect(active!.inFold, 'the match is inside the turn fold').toBe(true);
+        await expect(fold).toHaveAttribute('data-open', 'true');
+      });
+    }
   }
 }

@@ -86,8 +86,10 @@ interface Reveal {
   skip: number;
   /** The row is on screen and only words in its folded cards are hidden. */
   folded: boolean;
-  /** When its folded cards were asked to open (0: not asked). */
+  /** When its folded cards were last asked to open (0: not asked). */
   foldsAsked: number;
+  /** Rounds of opening that opened something: a shut turn fold, then a card inside it. */
+  rounds: number;
   dir: 1 | -1;
   at: number;
   /** Ask the chat to show the row (again). */
@@ -183,6 +185,16 @@ function openRunsOf(root: Element, id: string): boolean {
     }
   }
   return opened;
+}
+
+/** Levels of shut disclosures one step opens on the way to a match (a turn fold, a card in it, a run in that). */
+const OPEN_ROUNDS = 3;
+
+/** Open row `id`'s folded cards and shut runs in one round. True when anything opened. */
+function openAround(bridge: SessionFindBridge, root: Element, id: string): boolean {
+  const cards = bridge.openFolds(id);
+  const runs = openRunsOf(root, id);
+  return cards || runs;
 }
 
 const pagePositions = (ranges: readonly StaticRange[]): number[] => pageRows(ranges).pos;
@@ -503,18 +515,24 @@ export function PageFind() {
           // Its words may be in a folded card or a closed tool run: open them
           // first and land once they render (the MutationObserver's recount
           // comes back, or the watch below after FOLD_WAIT_MS).
+          // Opening goes in rounds: the row's words can sit a level down (a received
+          // card inside the turn fold the last round opened), so while they are still
+          // short, each recount opens what now shows shut.
           const need = want.dir === -1 ? want.fromEnd : want.skip + want.occurrence;
           const short = matchesOfRow(ctrl.matchRanges(), want.id).length <= need;
-          if (!want.foldsAsked && (want.folded || short)) {
-            const cards = bridge.openFolds(want.id);
-            const runs = openRunsOf(s.root, want.id);
-            want.foldsAsked = cards || runs ? Date.now() : -1;
-            waiting = want.foldsAsked > 0;
+          const tryOpen = want.rounds < OPEN_ROUNDS && (short || (want.rounds === 0 && want.folded && !want.foldsAsked));
+          if (tryOpen && openAround(bridge, s.root, want.id)) {
+            want.rounds++;
+            want.foldsAsked = Date.now();
+            waiting = true;
           } else if (want.foldsAsked > 0 && short && Date.now() - want.foldsAsked < FOLD_WAIT_MS) {
             waiting = true;
+          } else if (!want.foldsAsked) {
+            want.foldsAsked = -1;
           }
-        } else if (!want.foldsAsked && openRunsOf(s.root, want.id)) {
+        } else if (want.rounds < OPEN_ROUNDS && openRunsOf(s.root, want.id)) {
           // Its tools merged into a run that is shut: the run opens, its members draw.
+          want.rounds++;
           want.foldsAsked = Date.now();
           waiting = true;
         }
@@ -1013,7 +1031,7 @@ export function PageFind() {
     const folded = !!root && rowElements(root, row.id).some(visible);
     const ask: Reveal = {
       id: row.id, occurrence: to.occurrence, fromEnd: row.count - 1 - to.occurrence,
-      skip: folded ? matchesOfRow(ctrl.matchRanges(), row.id).length : 0, folded, foldsAsked: 0, dir, at: Date.now(),
+      skip: folded ? matchesOfRow(ctrl.matchRanges(), row.id).length : 0, folded, foldsAsked: 0, rounds: 0, dir, at: Date.now(),
       asked: Date.now(),
       again: () => bridge.reveal(row.id, () => {
         if (revealRef.current !== ask) return;
