@@ -75,9 +75,11 @@ function extractCmdSkillsSync(): (homeDir: string, daemonDir: string, prodDir: s
     // eslint-disable-next-line @typescript-eslint/no-implied-eval
     const bound = new Function(
       'path', 'fs', 'HOME_DIR', 'DAEMON_DIR', 'PROD_DAEMON_DIR', 'IS_PROD_DAEMON_DIR', 'sendOk', 'sendError', 'logMsg', 'SKILL_SYNC_MARKER', 'CMD',
+      // What the held skills keep on disk (held-pushes.json) is the twins tests' to cover.
+      'loadHeldPushes', 'persistHeldPushes',
       fnSrc + '\nreturn cmdSkillsSync(null, 1, CMD);',
     ) as (...a: unknown[]) => void
-    bound(path, fs, homeDir, daemonDir, prodDir, isProd, sendOk, sendError, () => {}, 'walnut-managed v1', cmd)
+    bound(path, fs, homeDir, daemonDir, prodDir, isProd, sendOk, sendError, () => {}, 'walnut-managed v1', cmd, () => {}, () => {})
     return reply
   }
 }
@@ -106,6 +108,60 @@ const agentsLink = () => path.join(tmp, '.agents', 'skills', 'walnut')
 const geminiLink = () => path.join(tmp, '.gemini', 'skills', 'walnut')
 const codexAgentsMd = () => path.join(tmp, '.codex', 'AGENTS.md')
 const run = (cmd: Record<string, unknown> = PAYLOAD) => cmdSkillsSync(tmp, '/tmp/open-walnut', '/tmp/open-walnut', cmd)
+
+/**
+ * The held skills kept on disk (held-pushes.json), as one daemon process after another runs
+ * them: each call to `process()` is a new daemon (its held state starts empty), sharing the
+ * same files. 2026-11-13: a daemon update held nothing and the server sent ~360 KB again.
+ */
+function heldSkillsProcess(): (homeDir: string, offlineDir: string, cmd: Record<string, unknown>) => Reply {
+  const src = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf-8')
+  const start = src.indexOf('const DAEMON_SOURCE = `')
+  const body = src.slice(src.indexOf('`', start) + 1, src.lastIndexOf('`'))
+  // eslint-disable-next-line no-eval
+  const twin = eval('`' + body + '`') as string
+  const from = twin.indexOf('var heldSkills = null;')
+  const to = twin.indexOf('function cmdSkillsSync(')
+  const fnEnd = twin.indexOf('\n}', to)
+  expect(from).toBeGreaterThan(-1)
+  expect(to).toBeGreaterThan(from)
+  const block = twin.slice(from, to) + twin.slice(to, fnEnd + 2)
+  // One daemon process: its own module state, the block run once.
+  let reply: Reply = {}
+  let run: ((cmd: Record<string, unknown>) => void) | null = null
+  return (homeDir, offlineDir, cmd) => {
+    if (!run) {
+      // eslint-disable-next-line @typescript-eslint/no-implied-eval
+      run = new Function(
+        'path', 'fs', 'crypto', 'HOME_DIR', 'OFFLINE_HOST_DIR', 'IS_PROD_DAEMON_DIR', 'sendOk', 'sendError', 'logMsg', 'SKILL_SYNC_MARKER',
+        block + '\nreturn function (CMD) { return cmdSkillsSync(null, 1, CMD); };',
+      )(path, fs, crypto, homeDir, offlineDir, true,
+        (_ws: unknown, _id: unknown, data: Reply) => { reply = { ok: true, ...data } },
+        (_ws: unknown, _id: unknown, error: string) => { reply = { ok: false, error } },
+        () => {}, 'walnut-managed v1') as (cmd: Record<string, unknown>) => void
+    }
+    run(cmd)
+    return reply
+  }
+}
+
+describe('node twin: the skills held outlive the daemon process', () => {
+  it('a new daemon holds what the last one wrote under that hash, and not once the copy changed on disk', () => {
+    const offline = path.join(tmp, 'offline-host')
+    const first = heldSkillsProcess()
+    expect(first(tmp, offline, PAYLOAD)).toMatchObject({ ok: true })
+    expect(first(tmp, offline, { probe: true, hash: 'h1' }).held).not.toBe(false)
+    // A daemon update: a new process, the same disk.
+    const updated = heldSkillsProcess()
+    const held = updated(tmp, offline, { probe: true, hash: 'h1' })
+    expect(held.ok).toBe(true)
+    expect(held.held).not.toBe(false)
+    expect(heldSkillsProcess()(tmp, offline, { probe: true, hash: 'h2' })).toMatchObject({ ok: true, held: false })
+    // Someone edited the copy since: not held, so the server sends the skills again.
+    fs.writeFileSync(canonical(), SKILL + 'edited\n')
+    expect(heldSkillsProcess()(tmp, offline, { probe: true, hash: 'h1' })).toMatchObject({ ok: true, held: false })
+  })
+})
 
 describe('node twin cmdSkillsSync (v2: canonical copy + engine symlinks)', () => {
   it('fresh install: canonical file + claude symlink; no ~/.codex → no ~/.agents', () => {

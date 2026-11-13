@@ -118,11 +118,14 @@ async function stopDaemon(d: Daemon): Promise<void> {
 class FakeServer {
   private nextId = 1
   private waiters = new Map<number, (m: Record<string, unknown>) => void>()
+  /** Every message that answers no command (events). */
+  readonly events: Array<Record<string, unknown>> = []
   private constructor(readonly ws: WebSocket) {
     ws.on('message', (raw) => {
       const msg = JSON.parse(raw.toString()) as Record<string, unknown>
       const w = typeof msg.id === 'number' ? this.waiters.get(msg.id) : undefined
       if (w) { this.waiters.delete(msg.id as number); w(msg) }
+      else this.events.push(msg)
     })
   }
   static async connect(port: number): Promise<FakeServer> {
@@ -312,5 +315,46 @@ describe.each(twins)('trigger ops on the real %s daemon while its Walnut is away
     expect((await s2.cmd({ cmd: 'offline.ack', home: HOME, seqs: records.map((x) => x.seq) })).ok).toBe(true)
     await s2.close()
     expect(await armedNow([id, T_PR])).toEqual([id, T_PR])
+  }, 90_000)
+  it('triggers-probe-v1: a set pushed under a name is held for a probe of that name across a restart, configured as a push (unacked fires replay); a refusal or an unnamed push holds none', async () => {
+    // 2026-11-13: every connection sent the whole set again, 90 to 350 KB on the session link.
+    const T_FIRE = 'mtrigfi0-0004'
+    const fires = path.join(d.dir, 'fires.sh')
+    // A new item every run, so each run fires.
+    fs.writeFileSync(fires, 'printf \'{"fire":true,"items":[{"id":"f-%s"}]}\\n\' "$(date +%s%N)"\n')
+    const fireDef = { ...def(T_FIRE), check: { run: `sh ${fires}`, timeoutSeconds: 10 } }
+    const set = { version: 1, triggers: [def(T_PR), def(T_CI), fireDef] }
+    const a = await FakeServer.connect(d.port)
+    expect((await a.cmd({ cmd: 'hello' })).capabilities as string[]).toContain('triggers-probe-v1')
+    expect((await a.cmd({ cmd: 'triggers.configure', config: set, home: HOME, pushHash: 'ph-1' })).ok).toBe(true)
+    expect(await a.cmd({ cmd: 'triggers.configure', probe: true, hash: 'ph-1', home: HOME })).toMatchObject({ ok: true, applied: true, held: true, count: 3 })
+    expect(await a.cmd({ cmd: 'triggers.configure', probe: true, hash: 'ph-2', home: HOME })).toMatchObject({ ok: true, held: false })
+    // A fire the server never acks stays pending on the host.
+    expect((await a.cmd({ cmd: 'triggers.run', triggerId: T_FIRE, home: HOME })).ok).toBe(true)
+    await waitFor(() => a.events.some((e) => e.ev === 'trigger.fired' && (e as { id?: string }).id === T_FIRE), 15_000, 'the fire')
+    await a.close()
+    // A restart of the daemon keeps the name and the set as it came, on disk.
+    await stopDaemon(d)
+    d = await spawnDaemon(twin, d.dir)
+    await sleep(300)
+    const b = await FakeServer.connect(d.port)
+    await b.cmd({ cmd: 'hello' })
+    const held = await b.cmd({ cmd: 'triggers.configure', probe: true, hash: 'ph-1', home: HOME })
+    expect(held).toMatchObject({ ok: true, applied: true, held: true, count: 3 })
+    expect(Array.isArray(held.clocks)).toBe(true)
+    // As a push: this socket now gets the Walnut's fires, the unacked one replayed.
+    await waitFor(() => b.events.some((e) => e.ev === 'trigger.fired' && (e as { id?: string; replay?: boolean }).id === T_FIRE && (e as { replay?: boolean }).replay === true), 15_000, 'the replayed fire')
+    // A set with a def this daemon refuses is held too, and its probe answers the refusal as the push did.
+    const refusing = await b.cmd({ cmd: 'triggers.configure', config: { version: 1, triggers: [def(T_PR), { id: 'mtrigbad-0009', name: 'No check' }] }, home: HOME, pushHash: 'ph-3' })
+    expect(refusing.ok).toBe(true)
+    expect(refusing.refused).toBeTruthy()
+    const heldRefusing = await b.cmd({ cmd: 'triggers.configure', probe: true, hash: 'ph-3', home: HOME })
+    expect(heldRefusing).toMatchObject({ ok: true, held: true, count: 1 })
+    expect(heldRefusing.refused).toEqual(refusing.refused)
+    // A push that names no set (an older server) leaves nothing held under the old name.
+    expect((await b.cmd({ cmd: 'triggers.configure', config: set, home: HOME, pushHash: 'ph-1' })).ok).toBe(true)
+    expect((await b.cmd({ cmd: 'triggers.configure', config: set, home: HOME })).ok).toBe(true)
+    expect(await b.cmd({ cmd: 'triggers.configure', probe: true, hash: 'ph-1', home: HOME })).toMatchObject({ ok: true, held: false })
+    await b.close()
   }, 90_000)
 })

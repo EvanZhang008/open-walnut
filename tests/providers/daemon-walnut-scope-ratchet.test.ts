@@ -67,6 +67,7 @@ const FILES: Record<string, string> = {
   WORKSPACE_STATE_DIR: 'walnut: workspace adapters per scope (workspace-core scopeDir)',
   LEADER_BOOK_DIR: 'walnut: leader-<keyOf(home)>.json',
   OFFLINE_HOST_DIR: 'walnut: offline host slices and journal keyed by home',
+  HELD_PUSHES_FILE: 'host: the account\'s skill copies by hash (skills.sync is host-wide)',
   JOURNAL_ROOT: 'walnut: parent of the per-home journal dirs',
   JOURNAL_ON_PROD_DIR: 'walnut: where JOURNAL_ROOT is on the production daemon',
   JOURNAL_PROD_STATE_DIR: 'walnut: where JOURNAL_ROOT is on the production daemon',

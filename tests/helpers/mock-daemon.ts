@@ -156,6 +156,11 @@ export class MockDaemon {
   private _commandHistory: Array<{ cmd: string; payload: Record<string, unknown>; timestamp: number; connIndex: number; wireBytes?: number; wireArgs?: unknown[] }> = []
   /** Copies of start arguments, by hash, as a real daemon keeps them (start-arg-refs-v1). */
   private _argRefs = new Map<string, string>()
+  private _triggersPushHash: string | null = null
+  private _triggersCount = 0
+  private _triggersOn = false
+  /** Answer triggers.configure (and its probe) instead of "unknown command". */
+  enableTriggers(): void { this._triggersOn = true }
   /** Capabilities `hello` leaves out (a test models an older daemon). */
   private _omitCapabilities = new Set<string>()
   omitCapabilities(caps: string[]): void { this._omitCapabilities = new Set(caps) }
@@ -432,6 +437,20 @@ export class MockDaemon {
       // REQUIRED only, every MockDaemon-backed connection had
       // capabilitiesKnown=true + supportsSnapshots=false, i.e. it modelled a
       // ROLLED-BACK daemon and the C2 snapshot flow was gated off.
+      // triggers-probe-v1, as the real daemon answers it, once a test turns it on (enableTriggers):
+      // the set pushed under a name is held for a probe of that name. Off, the command is unknown, as always.
+      case 'triggers.configure': {
+        if (!this._triggersOn) return this.sendError(ws, id, `unknown command: ${cmd.cmd}`)
+        if (cmd.probe === true) {
+          const held = typeof cmd.hash === 'string' && cmd.hash === this._triggersPushHash
+          return this.sendOk(ws, id, held ? { held: true, applied: true, changed: false, count: this._triggersCount, clocks: [], released: [] } : { held: false })
+        }
+        const triggers = (cmd.config as { triggers?: unknown[] } | undefined)?.triggers
+        if (!Array.isArray(triggers)) return this.sendError(ws, id, 'triggers.configure: invalid config')
+        this._triggersPushHash = typeof cmd.pushHash === 'string' ? cmd.pushHash : null
+        this._triggersCount = triggers.length
+        return this.sendOk(ws, id, { applied: true, changed: true, count: triggers.length, clocks: [], released: [] })
+      }
       case 'hello': return this.sendOk(ws, id, {
         version: 'mock',
         capabilities: ADVERTISED_DAEMON_CAPABILITIES.filter((c) => !this._omitCapabilities.has(c)),

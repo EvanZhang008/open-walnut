@@ -369,9 +369,19 @@ for (const twin of ['source', 'standalone'] as const) {
       } finally { other.close() }
       // The skills: this test daemon writes none (not the production dir), so none are held.
       expect(await cmd(mac, { cmd: 'skills.sync', probe: true, hash: 'h-skills-1' })).toMatchObject({ ok: true, held: false })
+      // A daemon update or restart keeps what it holds (2026-11-13: each update sent about 1 MB again).
+      expect((await cmd(mac, { cmd: 'leader.spawnTemplate', home: HOME, template: template(m.mock, m.cwd), hash: 'h-ask-3' })).ok).toBe(true)
       mac.close()
       await stopDaemon(d)
-    }, 60_000)
+      for (const f of ['daemon.port', 'daemon.pid']) fs.rmSync(path.join(d.dir, f), { force: true })
+      const restarted = await spawnDaemon(`${twin}-probe`, twin)
+      mac = await macConnects(restarted)
+      expect(await probe('ask', 'h-ask-3')).toMatchObject({ ok: true, held: true })
+      expect(await probe('ask', 'h-ask-1')).toMatchObject({ ok: true, held: false })
+      expect(await probe('routine', 'h-ask-3')).toMatchObject({ ok: true, held: false })
+      mac.close()
+      await stopDaemon(restarted)
+    }, 90_000)
   })
 
   describe.skipIf(twin === 'standalone' && !BUN)(`${twin} twin: a new ask on the host while the Mac is away`, () => {

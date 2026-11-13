@@ -5047,29 +5047,21 @@ const hostStart = createHostStart({
  * `use: 'routine'` (clock-host-start-v1): the template a routine run starts from, kept
  * apart from the ask template.
  */
-/**
- * The hash the server named with each template this process holds (push-probe-v1), per Walnut
- * and use: a server that restarted asks `{probe: true, hash}` and sends the template (about
- * 200 KB) only when this process does not hold it. A new process holds none. Keep in sync with
- * daemon-source.ts.
- */
-const heldTemplateHashes = new Map<string, string>()
-
 function cmdLeaderSpawnTemplate(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   if (!isServerClient(ws)) return sendError(ws, id, 'leader.spawnTemplate: the leader only')
   const home = typeof cmd.home === 'string' ? cmd.home : ''
   if (!home || gatewayClientHomes.get(ws) !== home) return sendError(ws, id, 'leader.spawnTemplate: send leader.configure for this Walnut first')
   if (cmd.use !== undefined && cmd.use !== 'ask' && cmd.use !== 'routine') return sendError(ws, id, 'leader.spawnTemplate: use must be ask or routine')
   const use = cmd.use === 'routine' ? 'routine' : 'ask'
-  const key = JSON.stringify([home, use])
+  // push-probe-v1: a server asks `{probe: true, hash}` and sends the template (about 200 KB)
+  // only when this host does not hold it under that hash. The hash is kept with the template in
+  // its file (host-start-core.ts), so a daemon update or restart still holds it (2026-11-13).
   const hash = typeof cmd.hash === 'string' && cmd.hash.length > 0 && cmd.hash.length <= 128 ? cmd.hash : ''
   if (cmd.probe === true) {
-    return sendOk(ws, id, { held: !!hash && heldTemplateHashes.get(key) === hash && hostStart.templateOf(home, use) !== null })
+    return sendOk(ws, id, { held: !!hash && hostStart.pushHashOf(home, use) === hash })
   }
   try {
-    const t = hostStart.setTemplate(home, cmd.template, use)
-    if (hash) heldTemplateHashes.set(key, hash)
-    else heldTemplateHashes.delete(key)
+    const t = hostStart.setTemplate(home, cmd.template, use, hash || undefined)
     sendOk(ws, id, { builtAt: t.builtAt })
   } catch (err) {
     sendError(ws, id, (err as Error).message)
@@ -7571,7 +7563,13 @@ const triggerChecksRunning = new Set<ArmedTrigger>()
  * an older daemon wrote (no `scoped` marker), the one global set of whichever Walnut
  * pushed last; the first named push takes over its triggers (takeInheritedTriggers).
  */
-interface TriggerScope { configured: TriggerDef[]; hash: string | null; inherited?: boolean }
+/**
+ * `push`: the hash the server named with the set it last pushed (triggers-probe-v1) and that set
+ * as it came, kept on disk. A probe with that name configures it again from the copy, checked by
+ * this daemon's own rules as a push would be, so a reconnect or a restart or update of either
+ * side sends no set (90 to 350 KB a connection, 2026-11-13).
+ */
+interface TriggerScope { configured: TriggerDef[]; hash: string | null; inherited?: boolean; push?: { hash: string; raw: unknown[] } }
 const triggerScopes = new Map<string, TriggerScope>()
 function triggerScopeOf(home: string): TriggerScope {
   let scope = triggerScopes.get(home)
@@ -7838,7 +7836,7 @@ function persistTriggersFile(home: string): void {
     if (home) fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
     const draining = fireHolders(home).filter((e) => drainingTriggers.get(triggerKey(home, e.def.id)) === e).map((e) => e.def)
     const mark = home ? { home } : scope?.inherited ? {} : { scoped: 1 }
-    fs.writeFileSync(tmp, JSON.stringify({ version: 1, ...mark, triggers: scope?.configured ?? [], ...(draining.length ? { draining } : {}) }), { mode: 0o600 })
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, ...mark, triggers: scope?.configured ?? [], ...(draining.length ? { draining } : {}), ...(scope?.push ? { push: scope.push } : {}) }), { mode: 0o600 })
     fs.renameSync(tmp, file)
   } catch (err) {
     logMsg('warn', 'triggers persist failed (in-memory only)', { scope: walnutScope.label(home), error: (err as Error).message })
@@ -7851,7 +7849,7 @@ function persistTriggersFile(home: string): void {
  * ids another copy of the set runs instead (loadTriggersAtBoot), left out here.
  */
 function loadTriggerScope(home: string, file: string, raw: unknown, now: number, skip: ReadonlySet<string> = new Set()): void {
-  const parsedFile = raw as { version?: unknown; triggers?: unknown; draining?: unknown; scoped?: unknown }
+  const parsedFile = raw as { version?: unknown; triggers?: unknown; draining?: unknown; scoped?: unknown; push?: { hash?: unknown; raw?: unknown } }
   if (!parsedFile || parsedFile.version !== 1 || !Array.isArray(parsedFile.triggers)) {
     logMsg('warn', 'triggers file ignored: unexpected shape', { file })
     return
@@ -7882,6 +7880,8 @@ function loadTriggerScope(home: string, file: string, raw: unknown, now: number,
     if (state.pendingFires.length > 0) drainingTriggers.set(triggerKey(home, parsed.def.id), drainingEntry(home, parsed.def, state, now))
   }
   scope.hash = triggersSetHash(defs)
+  const push = parsedFile.push
+  if (push && typeof push.hash === 'string' && Array.isArray(push.raw)) scope.push = { hash: push.hash, raw: push.raw }
   logMsg('info', 'triggers loaded from disk', {
     scope: walnutScope.label(home), count: defs.length, draining: fireHolders(home).length - armedOf(home).length,
     hash: scope.hash, ...(scope.inherited ? { inherited: true } : {}),
@@ -8418,7 +8418,19 @@ function cmdTriggersConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Reco
 }
 
 async function configureTriggers(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
-  const payload = cmd.config as { version?: unknown; triggers?: unknown } | undefined
+  // triggers-probe-v1: the server names the set it would push. Held (this host kept the set it
+  // pushed under that name), that set is configured again as if it had come now, with every
+  // effect a push has (this socket gets the fires, unacked fires replay), and nothing crosses.
+  const probe = cmd.probe === true
+  let payload = cmd.config as { version?: unknown; triggers?: unknown } | undefined
+  if (probe) {
+    const asked = walnutScope.resolve(cmd, gatewayClientHomes.get(ws), 'triggers.configure')
+    if (!asked.ok) return sendError(ws, id, asked.error)
+    const held = triggerScopes.get(asked.home)
+    const name = typeof cmd.hash === 'string' ? cmd.hash : ''
+    if (!name || !held || held.inherited || !held.push || held.push.hash !== name) return sendOk(ws, id, { held: false })
+    payload = { version: 1, triggers: held.push.raw }
+  }
   if (!payload || typeof payload !== 'object' || payload.version !== 1 || !Array.isArray(payload.triggers)) {
     return sendError(ws, id, 'triggers.configure: invalid config: version must be 1 with a triggers array')
   }
@@ -8449,7 +8461,15 @@ async function configureTriggers(ws: ServerWebSocket<WsData>, id: number, cmd: R
   scope.configured = defs
   const released = armTriggerSet(home, effectiveTriggerDefs(home, defs), now)
   scope.hash = hash
-  if (changed || claimed || taken.length) persistTriggersFile(home)
+  // The name the server gave this set and the set as it came, kept for its next probe. A held
+  // probe answers as this push does, its refusals too (the server keeps those as it would).
+  const push = probe ? scope.push
+    : typeof cmd.pushHash === 'string' && cmd.pushHash.length > 0 && cmd.pushHash.length <= 128
+      ? { hash: cmd.pushHash, raw: payload.triggers as unknown[] } : undefined
+  const pushMoved = (push?.hash ?? null) !== (scope.push?.hash ?? null)
+  if (push) scope.push = push
+  else delete scope.push
+  if (changed || claimed || taken.length || pushMoved) persistTriggersFile(home)
   settleTakenTriggers(home, taken)
   // Fires of this Walnut's set go to this socket from now on.
   if (ws.data) ws.data.triggerScope = home
@@ -8459,7 +8479,7 @@ async function configureTriggers(ws: ServerWebSocket<WsData>, id: number, cmd: R
     scope: walnutScope.label(home), hash, count: defs.length, changed, clocks: clocks.length,
     released: released.map((r) => r.id), draining: fireHolders(home).length - armedOf(home).length,
   })
-  sendOk(ws, id, { applied: true, changed, count: defs.length, clocks, released, ...(refused.length ? { refused } : {}) })
+  sendOk(ws, id, { applied: true, changed, count: defs.length, clocks, released, ...(probe ? { held: true } : {}), ...(refused.length ? { refused } : {}) })
 
   // At-least-once replay: a fire the server never acked (Mac asleep, tunnel
   // down) is redelivered now that a trusted client is provably here. The server
@@ -8711,12 +8731,61 @@ const SKILL_SYNC_MARKER = 'walnut-managed v1'
  */
 let heldSkills: { hash: string; entries: Array<{ name: string; body: string }> } | null = null
 
+/**
+ * The skills held outlive this process: a daemon update or restart otherwise held nothing, and
+ * the server sent the skills (about 360 KB) and both templates again on the session link, which
+ * the relay on the SSH path ended (2026-11-13). Kept by the sha256 of each copy, so a copy
+ * changed on disk since is not held. Mirror daemon-source.ts.
+ */
+const HELD_PUSHES_FILE = path.join(OFFLINE_HOST_DIR, 'held-pushes.json')
+let heldPushesLoaded = false
+const skillCopyPath = (name: string) => path.join(HOME_DIR, '.open-walnut', 'distributed-skills', name, 'SKILL.md')
+const sha256Of = (text: string) => crypto.createHash('sha256').update(text, 'utf8').digest('hex')
+
+function loadHeldPushes(): void {
+  if (heldPushesLoaded) return
+  heldPushesLoaded = true
+  let raw: { v?: unknown; skills?: { hash?: unknown; entries?: unknown } }
+  try { raw = JSON.parse(fs.readFileSync(HELD_PUSHES_FILE, 'utf-8')) } catch { return }
+  if (!raw || raw.v !== 1) return
+  const skills = raw.skills
+  if (heldSkills === null && skills && typeof skills.hash === 'string' && Array.isArray(skills.entries)) {
+    const entries: Array<{ name: string; body: string }> = []
+    for (const e of skills.entries as Array<{ name?: unknown; sha?: unknown }>) {
+      if (typeof e?.name !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(e.name) || typeof e.sha !== 'string') return
+      let body: string
+      try { body = fs.readFileSync(skillCopyPath(e.name), 'utf-8') } catch { return }
+      if (sha256Of(body) !== e.sha) return
+      entries.push({ name: e.name, body })
+    }
+    heldSkills = { hash: skills.hash, entries }
+  }
+}
+
+function persistHeldPushes(): void {
+  // Its own temp name: an updated daemon and the one it replaces may both write for a moment.
+  const tmp = HELD_PUSHES_FILE + '.' + process.pid + '.' + Date.now() + '.tmp'
+  try {
+    const body = {
+      v: 1,
+      ...(heldSkills ? { skills: { hash: heldSkills.hash, entries: heldSkills.entries.map((e) => ({ name: e.name, sha: sha256Of(e.body) })) } } : {}),
+    }
+    fs.mkdirSync(OFFLINE_HOST_DIR, { recursive: true, mode: 0o700 })
+    fs.writeFileSync(tmp, JSON.stringify(body), { mode: 0o600 })
+    fs.renameSync(tmp, HELD_PUSHES_FILE)
+  } catch (err) {
+    logMsg('warn', 'held pushes: could not keep them; the next server sends them again', { error: (err as Error).message })
+    try { fs.unlinkSync(tmp) } catch {}
+  }
+}
+
 function cmdSkillsSync(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const entries: Array<{ name: string; body: string }> = []
   // Held: every canonical copy on disk is still what was sent. The engine links are then put
   // right from those copies as a push would (an engine installed since, a link removed), and
   // nothing more crosses the link.
   let probeHeld = false
+  loadHeldPushes()
   if (cmd.probe === true) {
     const hash = typeof cmd.hash === 'string' ? cmd.hash : ''
     const held = !!hash && heldSkills !== null && heldSkills.hash === hash && heldSkills.entries.every((e) => {
@@ -8826,6 +8895,7 @@ function cmdSkillsSync(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
   if (!probeHeld) {
     heldSkills = typeof cmd.hash === 'string' && cmd.hash.length > 0 && cmd.hash.length <= 128 && !canonicalFailed
       ? { hash: cmd.hash, entries } : null
+    persistHeldPushes()
   }
   const walnutCanonicalDir = path.join(HOME_DIR, '.open-walnut', 'distributed-skills', 'walnut')
   // 2b. v2.0 migration: remove the marker'd SKILL.md that briefly lived in

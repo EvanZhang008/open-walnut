@@ -22,6 +22,9 @@
 
 import { sendStartWithRefs, START_ARG_REFS_CAPABILITY } from './start-arg-refs.js'
 import { HOOK_FILES_CAPABILITY } from './hook-files.js'
+
+/** triggers.configure answers a probe for the set it holds (daemon-capabilities.ts). */
+const TRIGGERS_PROBE_CAPABILITY = 'triggers-probe-v1'
 import { ACP_HOST_FILES } from './acp-host-artifacts.js'
 import { statusReplyAlive } from './daemon-status-reply.js'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -1944,10 +1947,18 @@ export class DaemonConnection {
           const compiled = await provider(this.hostKey, { clock, fresh: this.lastTriggersPushHash === null, hostStart })
           if (!compiled) return
           if (compiled.hash === this.lastTriggersPushHash) continue
+          // A daemon that still holds this set under its name configures it from its copy
+          // (triggers-probe-v1): a reconnect or restart sends no set. Else the set goes, named.
+          const probes = this.hasCapability(TRIGGERS_PROBE_CAPABILITY)
+          // Only the first push on a connection can be held: later ones are changes.
+          const probe = probes && this.lastTriggersPushHash === null
+            ? await this.send('triggers.configure', { probe: true, hash: compiled.hash, home: WALNUT_HOME })
+            : null
           // `home`: the daemon keeps one set per Walnut (walnut-scope-core.ts).
-          const reply = await this.send('triggers.configure', {
+          const reply = probe?.ok === true && probe.held === true ? probe : await this.send('triggers.configure', {
             config: compiled.payload as unknown as Record<string, unknown>,
             home: WALNUT_HOME,
+            ...(probes ? { pushHash: compiled.hash } : {}),
           })
           if (reply.ok !== true) {
             log.session.warn('DaemonConnection: triggers push rejected', {
@@ -1964,7 +1975,7 @@ export class DaemonConnection {
             host: this.hostKey, error: err instanceof Error ? err.message : String(err),
           }))
           log.session.info('DaemonConnection: triggers pushed', {
-            host: this.hostKey, hash: compiled.hash, triggers: compiled.payload.triggers.length,
+            host: this.hostKey, hash: compiled.hash, triggers: compiled.payload.triggers.length, held: reply === probe,
           })
         } while (this.triggersPushRerun)
       } catch (err) {

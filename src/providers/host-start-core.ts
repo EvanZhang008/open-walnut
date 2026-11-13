@@ -206,8 +206,10 @@ export interface PendingStart {
 
 export interface HostStart {
   /** The Mac's template for a Walnut (trusted socket only; the twin checks). Throws on a bad one. `use`: 'ask' when absent. */
-  setTemplate(home: string, raw: unknown, use?: TemplateUse): SpawnTemplate
+  setTemplate(home: string, raw: unknown, use?: TemplateUse, pushHash?: string): SpawnTemplate
   templateOf(home: string, use?: TemplateUse): SpawnTemplate | null
+  /** The hash the server named with the template held for that Walnut and use (push-probe-v1), kept with it on disk. */
+  pushHashOf(home: string, use?: TemplateUse): string | null
   /** Validate and fill: the plan the twin spawns, or a refusal. Never throws. */
   plan(home: string, raw: unknown, hostKey: string): { ok: true; plan: HostStartPlan } | HostStartRefusal
   /** The same fill for a routine run, from the routine template (its own folder, no persona, no tool lists). Never throws. */
@@ -260,6 +262,7 @@ export function createHostStart(deps: HostStartDeps): HostStart {
   const MAX_PER_HOUR = 10
   const HOUR_MS = 60 * 60 * 1000
   const templates = new Map<string, SpawnTemplate>()
+  const pushHashes = new Map<string, string>()
   const startedAt = new Map<string, number[]>()
   /** Starts by session id: the Walnut, the answer, and when it started a CLI. */
   const firstStarts = new Map<string, { home: string; answer: Promise<HostStartAnswer>; doneAt?: number }>()
@@ -378,15 +381,24 @@ export function createHostStart(deps: HostStartDeps): HostStart {
     fs.renameSync(tmp, file)
   }
 
-  function setTemplate(home: string, raw: unknown, use: TemplateUse = 'ask'): SpawnTemplate {
+  function setTemplate(home: string, raw: unknown, use: TemplateUse = 'ask', pushHash?: string): SpawnTemplate {
     if (typeof home !== 'string' || !home) throw new Error('spawn template: missing home')
     if (use !== 'ask' && use !== 'routine') throw new Error('spawn template: use must be ask or routine')
     const t = checkTemplate(home, raw, use)
     templates.set(slotOf(home, use), t)
-    // Kept on disk too: a daemon restarted while the Mac sleeps still starts asks.
+    if (pushHash) pushHashes.set(slotOf(home, use), pushHash)
+    else pushHashes.delete(slotOf(home, use))
+    // Kept on disk too: a daemon restarted while the Mac sleeps still starts asks. As the server
+    // sent it, so a later daemon checks it with its own rules as a push would (2026-11-13: the
+    // template is held across a daemon update now, and a checked copy would drop a field a newer
+    // daemon reads), with the hash the server named, kept in the same file as the template.
     const hookFiles = carriesHookFiles(t)
+    // A pushHash inside the template itself is never taken for the name the server gave it.
+    const body: Record<string, unknown> = isRecord(raw) ? { ...raw } : {}
+    delete body.pushHash
+    const saved = isRecord(raw) ? { ...body, builtAt: t.builtAt, ...(pushHash ? { pushHash: pushHash } : {}) } : t
     try {
-      writeAtomic(fileOf(home, use, hookFiles), JSON.stringify(t))
+      writeAtomic(fileOf(home, use, hookFiles), JSON.stringify(saved))
       try { fs.unlinkSync(fileOf(home, use, !hookFiles)) } catch { /* none */ }
     } catch (err) {
       deps.log('warn', 'host start: the spawn template was not saved', { home, use, error: (err as Error).message })
@@ -403,8 +415,10 @@ export function createHostStart(deps: HostStartDeps): HostStart {
       try { text = fs.readFileSync(fileOf(home, use), 'utf8') } catch { return null }
     }
     try {
-      const t = checkTemplate(home, JSON.parse(text), use)
+      const saved = JSON.parse(text)
+      const t = checkTemplate(home, saved, use)
       templates.set(slotOf(home, use), t)
+      if (isRecord(saved) && typeof saved.pushHash === 'string' && saved.pushHash) pushHashes.set(slotOf(home, use), saved.pushHash)
       return t
     } catch (err) {
       deps.log('warn', 'host start: the saved spawn template does not read back', { home, use, error: (err as Error).message })
@@ -757,5 +771,11 @@ export function createHostStart(deps: HostStartDeps): HostStart {
     return out
   }
 
-  return { setTemplate, templateOf, plan, planRoutine, precheck, begin, once, firstStart, holdPending, releasePending, pendingStarts }
+  /** The hash named with the template held (memory, else its file): null when none, or the template does not read. */
+  function pushHashOf(home: string, use: TemplateUse = 'ask'): string | null {
+    if (!templateOf(home, use)) return null
+    return pushHashes.get(slotOf(home, use)) ?? null
+  }
+
+  return { setTemplate, templateOf, pushHashOf, plan, planRoutine, precheck, begin, once, firstStart, holdPending, releasePending, pendingStarts }
 }

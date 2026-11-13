@@ -6369,8 +6369,6 @@ var hostStart = (__CREATE_HOST_START__)({
 
 // use: 'routine' (clock-host-start-v1): the template a routine run starts from, kept
 // apart from the ask template. Twin of daemon-standalone.ts.
-// The hash the server named with each template this process holds (push-probe-v1). Mirror daemon-standalone.ts.
-var heldTemplateHashes = new Map();
 
 function cmdLeaderSpawnTemplate(ws, id, cmd) {
   if (!isServerClient(ws)) return sendError(ws, id, 'leader.spawnTemplate: the leader only');
@@ -6378,15 +6376,14 @@ function cmdLeaderSpawnTemplate(ws, id, cmd) {
   if (!home || gatewayClientHomes.get(ws) !== home) return sendError(ws, id, 'leader.spawnTemplate: send leader.configure for this Walnut first');
   if (cmd.use !== undefined && cmd.use !== 'ask' && cmd.use !== 'routine') return sendError(ws, id, 'leader.spawnTemplate: use must be ask or routine');
   var use = cmd.use === 'routine' ? 'routine' : 'ask';
-  var key = JSON.stringify([home, use]);
+  // push-probe-v1: the hash is kept with the template in its file (host-start-core.ts), so a
+  // daemon update or restart still holds it. Mirror daemon-standalone.ts.
   var hash = typeof cmd.hash === 'string' && cmd.hash.length > 0 && cmd.hash.length <= 128 ? cmd.hash : '';
   if (cmd.probe === true) {
-    return sendOk(ws, id, { held: !!hash && heldTemplateHashes.get(key) === hash && hostStart.templateOf(home, use) !== null });
+    return sendOk(ws, id, { held: !!hash && hostStart.pushHashOf(home, use) === hash });
   }
   try {
-    var t = hostStart.setTemplate(home, cmd.template, use);
-    if (hash) heldTemplateHashes.set(key, hash);
-    else heldTemplateHashes.delete(key);
+    var t = hostStart.setTemplate(home, cmd.template, use, hash || undefined);
     sendOk(ws, id, { builtAt: t.builtAt });
   } catch (err) {
     sendError(ws, id, err.message);
@@ -9267,6 +9264,7 @@ function persistTriggersFile(home) {
     file.triggers = scope ? scope.configured : [];
     var draining = fireHolders(home).filter(function (e) { return drainingTriggers.get(triggerKey(home, e.def.id)) === e; }).map(function (e) { return e.def; });
     if (draining.length) file.draining = draining;
+    if (scope && scope.push) file.push = scope.push;
     fs.writeFileSync(tmp, JSON.stringify(file), { mode: 0o600 });
     fs.renameSync(tmp, target);
   } catch (err) {
@@ -9311,6 +9309,8 @@ function loadTriggerScope(home, file, raw, now, skip) {
     if (heldState.pendingFires.length > 0) drainingTriggers.set(triggerKey(home, held.def.id), drainingEntry(home, held.def, heldState, now));
   }
   scope.hash = triggerCheckCore.triggersSetHash(defs);
+  var push = raw.push;
+  if (push && typeof push.hash === 'string' && Array.isArray(push.raw)) scope.push = { hash: push.hash, raw: push.raw };
   var line = { scope: walnutScope.label(home), count: defs.length, draining: fireHolders(home).length - armedOf(home).length, hash: scope.hash };
   if (scope.inherited) line.inherited = true;
   logMsg('info', 'triggers loaded from disk', line);
@@ -9806,7 +9806,19 @@ function cmdTriggersConfigure(ws, id, cmd) {
 }
 
 async function configureTriggers(ws, id, cmd) {
+  // triggers-probe-v1: the server names the set it would push. Held (this host kept the set it
+  // pushed under that name), that set is configured again as if it had come now, with every
+  // effect a push has, and nothing crosses. Mirror daemon-standalone.ts.
+  var probe = cmd.probe === true;
   var payload = cmd.config;
+  if (probe) {
+    var asked = walnutScope.resolve(cmd, gatewayClientHomes.get(ws), 'triggers.configure');
+    if (!asked.ok) return sendError(ws, id, asked.error);
+    var heldScope = triggerScopes.get(asked.home);
+    var name = typeof cmd.hash === 'string' ? cmd.hash : '';
+    if (!name || !heldScope || heldScope.inherited || !heldScope.push || heldScope.push.hash !== name) return sendOk(ws, id, { held: false });
+    payload = { version: 1, triggers: heldScope.push.raw };
+  }
   if (!payload || typeof payload !== 'object' || payload.version !== 1 || !Array.isArray(payload.triggers)) {
     return sendError(ws, id, 'triggers.configure: invalid config: version must be 1 with a triggers array');
   }
@@ -9840,7 +9852,13 @@ async function configureTriggers(ws, id, cmd) {
   scope.configured = defs;
   var released = armTriggerSet(home, effectiveTriggerDefs(home, defs), now);
   scope.hash = hash;
-  if (changed || claimed || taken.length) persistTriggersFile(home);
+  // The name the server gave this set and the set as it came, kept for its next probe. A held
+  // probe answers as this push does, its refusals too. Mirror daemon-standalone.ts.
+  var push = probe ? scope.push
+    : (typeof cmd.pushHash === 'string' && cmd.pushHash.length > 0 && cmd.pushHash.length <= 128 ? { hash: cmd.pushHash, raw: payload.triggers } : undefined);
+  var pushMoved = (push ? push.hash : null) !== (scope.push ? scope.push.hash : null);
+  if (push) scope.push = push; else delete scope.push;
+  if (changed || claimed || taken.length || pushMoved) persistTriggersFile(home);
   settleTakenTriggers(home, taken);
   // Fires of this Walnut's set go to this socket from now on.
   ws.triggerScope = home;
@@ -9851,6 +9869,7 @@ async function configureTriggers(ws, id, cmd) {
     released: released.map(function (r) { return r.id; }), draining: fireHolders(home).length - armedOf(home).length,
   });
   var reply = { applied: true, changed: changed, count: defs.length, clocks: clocks, released: released };
+  if (probe) reply.held = true;
   if (refused.length) reply.refused = refused;
   sendOk(ws, id, reply);
 
@@ -10098,12 +10117,55 @@ var SKILL_SYNC_MARKER = 'walnut-managed v1';
 // The skills this process last wrote, by the hash the server named (push-probe-v1). Mirror daemon-standalone.ts.
 var heldSkills = null;
 
+// The skills held outlive this process: a daemon update otherwise held nothing, and the server
+// sent them again (2026-11-13). Kept by the sha256 of each copy. Mirror daemon-standalone.ts.
+var HELD_PUSHES_FILE = path.join(OFFLINE_HOST_DIR, 'held-pushes.json');
+var heldPushesLoaded = false;
+function skillCopyPath(name) { return path.join(HOME_DIR, '.open-walnut', 'distributed-skills', name, 'SKILL.md'); }
+function sha256Of(text) { return crypto.createHash('sha256').update(text, 'utf8').digest('hex'); }
+
+function loadHeldPushes() {
+  if (heldPushesLoaded) return;
+  heldPushesLoaded = true;
+  var raw;
+  try { raw = JSON.parse(fs.readFileSync(HELD_PUSHES_FILE, 'utf-8')); } catch (err) { return; }
+  if (!raw || raw.v !== 1) return;
+  var skills = raw.skills;
+  if (heldSkills === null && skills && typeof skills.hash === 'string' && Array.isArray(skills.entries)) {
+    var entries = [];
+    for (var i = 0; i < skills.entries.length; i++) {
+      var e = skills.entries[i];
+      if (!e || typeof e.name !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(e.name) || typeof e.sha !== 'string') return;
+      var body;
+      try { body = fs.readFileSync(skillCopyPath(e.name), 'utf-8'); } catch (err) { return; }
+      if (sha256Of(body) !== e.sha) return;
+      entries.push({ name: e.name, body: body });
+    }
+    heldSkills = { hash: skills.hash, entries: entries };
+  }
+}
+
+function persistHeldPushes() {
+  var tmp = HELD_PUSHES_FILE + '.' + process.pid + '.' + Date.now() + '.tmp';
+  try {
+    var body = { v: 1 };
+    if (heldSkills) body.skills = { hash: heldSkills.hash, entries: heldSkills.entries.map(function (e) { return { name: e.name, sha: sha256Of(e.body) }; }) };
+    fs.mkdirSync(OFFLINE_HOST_DIR, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(tmp, JSON.stringify(body), { mode: 0o600 });
+    fs.renameSync(tmp, HELD_PUSHES_FILE);
+  } catch (err) {
+    logMsg('warn', 'held pushes: could not keep them; the next server sends them again', { error: err && err.message });
+    try { fs.unlinkSync(tmp); } catch (e2) {}
+  }
+}
+
 function cmdSkillsSync(ws, id, cmd) {
   var NL = String.fromCharCode(10);
   var entries = [];
   // Held: every canonical copy on disk is still what was sent; the engine links are put right
   // from those copies, nothing more crosses the link. Mirror daemon-standalone.ts.
   var probeHeld = false;
+  loadHeldPushes();
   if (cmd.probe === true) {
     var probeHash = typeof cmd.hash === 'string' ? cmd.hash : '';
     var held = !!probeHash && heldSkills !== null && heldSkills.hash === probeHash && heldSkills.entries.every(function (e) {
@@ -10204,6 +10266,7 @@ function cmdSkillsSync(ws, id, cmd) {
   if (!probeHeld) {
     heldSkills = typeof cmd.hash === 'string' && cmd.hash.length > 0 && cmd.hash.length <= 128 && !canonicalFailed
       ? { hash: cmd.hash, entries: entries } : null;
+    persistHeldPushes();
   }
   var walnutCanonicalDir = path.join(HOME_DIR, '.open-walnut', 'distributed-skills', 'walnut');
   // 2b. v2.0 migration: remove the marker'd SKILL.md that briefly lived in

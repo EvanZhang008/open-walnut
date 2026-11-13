@@ -343,6 +343,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // minutes and the relay ended it). Both twins (cli-argv-files-core.ts). Optional: without it
   // every start sends its arguments in full.
   'start-arg-refs-v1',
+  // 'triggers-probe-v1': `triggers.configure {probe: true, hash, home}` names the set the server
+  // would push; a daemon whose set for that Walnut is still the one pushed under that name
+  // (kept on disk, so a restart of either side keeps it) configures it again from its copy and
+  // answers as a push, with `held: true`; else `{held: false}` and the server sends the set with
+  // `pushHash` (2026-11-13: every connection sent the set again, 90 to 350 KB on the session
+  // link). Both twins. Optional: without it every connection sends the set.
+  'triggers-probe-v1',
   // 'host-slice-gz-v1': `host.slice {sliceGz}` carries the copy gzipped, base64 (about a
   // tenth of 1.5 MB). Whole copies were in flight in 74 of 95 deaths of the shared SSH
   // master (2026-10-30/31): a relay on the SSH path drops the link on an upload burst, and
