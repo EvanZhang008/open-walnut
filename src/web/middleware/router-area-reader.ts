@@ -7,6 +7,10 @@ import { pendingRuleAreas, readPendingRuleMatches, type PendingRuleMatch } from 
 import { resolveRouterItem } from '../../core/router/source-registry.js';
 import { mailRouterKey } from '../../integrations/mail/router-source.js';
 import type { SessionRecord, Task } from '../../core/types.js';
+import { orgNodesAbove, orgPlaces, type FollowTask } from '../../core/org/thread-follow.js';
+
+const VISIBILITY_NOTE = 'Incoming-item area isolation is active. Rows and counts include only work this caller may read.';
+const TASK_PAGE = 'walnutAreaTaskPage';
 
 /** The adapter key an item was classified under (optional: older registries have none). */
 const keyOf = (item: RouterAreaItem): string => {
@@ -43,7 +47,24 @@ export function scopeAllows(caller: AreaScopes, target: AreaScopes): boolean {
   return c === t && c !== NO_AREA_ROUTER;
 }
 
-export type ScopedTask = Pick<Task, 'id'> & { router_area_id?: string | null; org_role?: string | null };
+export type ScopedTask = Pick<Task, 'id'> & { router_area_id?: string | null; org_role?: string | null }
+  & Partial<Pick<FollowTask, 'title' | 'parent_task_id' | 'project' | 'org_leads' | 'phase' | 'status' | 'created_at' | 'org_name'>>;
+
+/** Reuse the org's reporting chain, not project-name guesses or a blanket role bypass.
+ * An area-scoped caller never acquires broader reads from a stale org role. */
+async function supervisedTasks(caller: AreaCaller, scopes: AreaScopes, tasks: readonly ScopedTask[], file: RouterAreasFile): Promise<Set<string>> {
+  if (!('sid' in caller) || scopes.size) return new Set();
+  const { getSessionByClaudeId } = await import('../../core/session-tracker.js');
+  const record = await getSessionByClaudeId(caller.sid);
+  const me = tasks.find((t) => t.id === record?.taskId);
+  if (!me || me.phase === 'COMPLETE' || (me.org_role !== 'main' && me.org_role !== 'lead')) return new Set();
+  const places = orgPlaces(tasks as readonly FollowTask[]);
+  // Routers process the original incoming item; their own notes and transcripts
+  // are not the downstream work a supervisor follows.
+  const routers = new Set(file.routers.map((r) => r.taskId));
+  return new Set(tasks.filter((t) => t.org_role !== 'router' && !routers.has(t.id)
+    && orgNodesAbove(t as FollowTask, places).has(me.id)).map((t) => t.id));
+}
 
 /** Every scope a task carries: its mark, its registry area, its router assignment. */
 export function taskScopes(task: ScopedTask, file: RouterAreasFile | undefined, out = new Set<string>()): Set<string> {
@@ -131,6 +152,8 @@ export interface AreaDenials {
   /** The judged snapshot: a task or session row outside it (made or marked after it) is left out until the next read. */
   knownTasks?: ReadonlySet<string>;
   knownSessions?: ReadonlySet<string>;
+  supervisedTasks?: ReadonlySet<string>;
+  supervisedSessions?: ReadonlySet<string>;
 }
 
 /** Top-level keys whose array rows are filtered, by what a row's own `id` means. */
@@ -169,7 +192,8 @@ export function rowDenied(row: unknown, kind: RowKind, d: AreaDenials): boolean 
       || newSession(str(r.sessionId) || (r.type === 'session' ? str(r.id) : '')))) return true;
   }
   if (task(r.taskId) || task(r.task_id) || task(r.legacyTaskId) || task(obj(r.task)?.id)) return true;
-  if (session(r.sessionId) || session(r.session_id) || session(r.claudeSessionId)) return true;
+  if ((session(r.sessionId) || session(r.session_id) || session(r.claudeSessionId))
+    && !(kind === 'task' && d.supervisedTasks?.has(str(r.id)))) return true;
   for (const who of [obj(r.sender), obj(r.requester), obj(r.answeredBy), obj(r.awayThread)]) {
     if (who && (task(who.taskId) || session(who.sessionId))) return true;
   }
@@ -188,12 +212,32 @@ export function rowDenied(row: unknown, kind: RowKind, d: AreaDenials): boolean 
     sender || undefined, typeof r.subject === 'string' ? r.subject : undefined);
 }
 
+/** Supervised work stays a task row, but its isolated transcript references never leak. */
+function redactTaskSessions(row: unknown, d: AreaDenials): unknown {
+  const r = obj(row);
+  if (!r || !d.supervisedTasks?.has(str(r.id))) return row;
+  const out = { ...r };
+  let changed = false;
+  for (const [key, status] of [['session_id', 'session_status'], ['plan_session_id', 'plan_session_status'],
+    ['exec_session_id', 'exec_session_status'], ['sessionId', 'session_status'], ['claudeSessionId', 'session_status']]) {
+    const id = str(out[key]);
+    if (id && (d.sessions.has(id) || (d.knownSessions && !d.knownSessions.has(id)))) {
+      delete out[key]; delete out[status]; changed = true;
+    }
+  }
+  if (Array.isArray(r.session_ids)) {
+    const ids = r.session_ids.filter((id) => !d.sessions.has(str(id)) && (!d.knownSessions || d.knownSessions.has(str(id))));
+    if (ids.length !== r.session_ids.length) { out.session_ids = ids; changed = true; }
+  }
+  return changed ? out : row;
+}
+
 /** Rows of denied areas removed (never mutating `body`); `denied` when the answer is one denied object. */
 export function filterAreaPayload(body: unknown, d: AreaDenials, rootKind?: RowKind): { body: unknown; denied?: true } {
   if (Array.isArray(body)) {
     if (!rootKind) return { body };
-    const kept = body.filter((row) => !rowDenied(row, rootKind, d));
-    return { body: kept.length === body.length ? body : kept };
+    const kept = body.filter((row) => !rowDenied(row, rootKind, d)).map((row) => rootKind === 'task' ? redactTaskSessions(row, d) : row);
+    return { body: kept.every((row, i) => row === body[i]) && kept.length === body.length ? body : kept };
   }
   const top = obj(body);
   if (!top) return { body };
@@ -201,12 +245,30 @@ export function filterAreaPayload(body: unknown, d: AreaDenials, rootKind?: RowK
   const set = (key: string, value: unknown) => { (out ??= { ...top })[key] = value; };
   for (const [key, kind] of Object.entries(AREA_SINGLE_KEYS)) {
     if (obj(top[key]) && rowDenied(top[key], kind, d)) return { body: undefined, denied: true };
+    if (kind === 'task') {
+      const safe = redactTaskSessions(top[key], d);
+      if (safe !== top[key]) set(key, safe);
+    }
   }
   for (const [key, kind] of Object.entries(AREA_LIST_KEYS)) {
     const rows = top[key];
     if (!Array.isArray(rows)) continue;
-    const kept = rows.filter((row) => !rowDenied(row, kind, d));
-    if (kept.length !== rows.length) set(key, kept);
+    const kept = rows.filter((row) => !rowDenied(row, kind, d)).map((row) => kind === 'task' ? redactTaskSessions(row, d) : row);
+    if (kept.length !== rows.length || kept.some((row, i) => row !== rows[i])) set(key, kept);
+  }
+  if (rootKind === 'task' && Array.isArray(top.tasks) && typeof top.count === 'number') {
+    const kept = (out?.tasks ?? top.tasks) as unknown[];
+    set('count', kept.length);
+    if (typeof top.errors === 'number') set('errors', kept.filter((row) => typeof obj(row)?.error === 'string').length);
+  }
+  // Task list routes hand us the UNLIMITED match set. Both snapshots judge this
+  // same set before its count and page are produced, so a denied first page
+  // cannot hide an allowed row on the next one or leave a phantom total.
+  if (rootKind === 'task' && Array.isArray(top.tasks) && typeof top.total === 'number') {
+    const kept = (out?.tasks ?? top.tasks) as unknown[];
+    set('total', kept.length);
+    set('truncated', false);
+    if (typeof top.count === 'number') set('count', kept.length);
   }
   for (const [key, kind] of Object.entries(AREA_DICT_KEYS)) {
     const dict = obj(top[key]);
@@ -386,7 +448,7 @@ const callerScopesOf = (caller: AreaCaller, file: RouterAreasFile | undefined): 
   'sid' in caller ? sessionIdScopes(caller.sid, file) : Promise.resolve(new Set());
 
 /** Whether `caller` may read `target` (`body`: a mail op's input; bad input throws AreaBadInput); reusable by WS or the op gateway. */
-export async function judgeAreaRead(caller: AreaCaller | undefined, target: AreaTarget, body?: unknown): Promise<AreaReadVerdict> {
+export async function judgeAreaRead(caller: AreaCaller | undefined, target: AreaTarget, body?: unknown, allowSupervisor = false): Promise<AreaReadVerdict> {
   if (!caller || ('sid' in caller && !caller.sid.trim())) return 'pass';
   if ('sid' in caller && target.kind === 'session' && target.id === caller.sid.trim()) return 'pass';
   // Bad mail-op input throws AreaBadInput here, before the registry or any adapter is read.
@@ -406,7 +468,22 @@ export async function judgeAreaRead(caller: AreaCaller | undefined, target: Area
   }
   const scopes = await targetScopes(target, file);
   if (scopes === undefined) return 'pass';
-  if (scopes.size > 0 && !scopeAllows(await callerScopesOf(caller, file), scopes)) return 'deny';
+  const denied = scopes.size > 0 && !scopeAllows(await callerScopesOf(caller, file), scopes);
+  // Supervisors may READ their team's work, never write it through this exception
+  // or read the raw incoming mail. Only a denied object needs the org snapshot.
+  if (denied && allowSupervisor && file && (target.kind === 'task' || target.kind === 'session')) {
+    const built = await buildAreaDenials(caller);
+    if (!built) return 'unverifiable';
+    if (target.kind === 'task') {
+      const task = await findTask(target.id);
+      if (task && built.denials.supervisedTasks?.has(task.id)) return 'pass';
+    } else {
+      const { resolveSessionByIdOrPrefix } = await import('../../core/session-tracker.js');
+      const found = await resolveSessionByIdOrPrefix(target.id);
+      if (found.status === 'found' && built.denials.supervisedSessions?.has(found.session.claudeSessionId)) return 'pass';
+    }
+  }
+  if (denied) return 'deny';
   // Marks and profiles already denied above; past them an unreadable registry fails closed.
   return file ? 'pass' : 'unverifiable';
 }
@@ -431,20 +508,25 @@ export async function buildAreaDenials(
   for (const area of file.areas) for (const id of area.taskIds) add(id, area.id);
   for (const r of file.routers) add(r.taskId, r.areaId);
   for (const s of sessions) { const area = profileArea(s); if (area && s.taskId) add(s.taskId, area); }
+  const supervised = await supervisedTasks(who, caller, tasks, file);
+  const supervisedSessions = new Set<string>();
   const deniedTasks = new Set<string>();
-  for (const [id, scopes] of byTask) if (!scopeAllows(caller, scopes)) deniedTasks.add(id);
+  for (const [id, scopes] of byTask) if (!scopeAllows(caller, scopes) && !supervised.has(id)) deniedTasks.add(id);
   const deniedSessions = new Set<string>();
   for (const s of sessions) {
     const scopes = new Set<string>();
     const area = profileArea(s);
     if (area) scopes.add(area);
     for (const id of [s.taskId, s.legacyTaskId]) if (id) for (const x of byTask.get(id) ?? []) scopes.add(x);
-    if (!scopeAllows(caller, scopes)) deniedSessions.add(s.claudeSessionId);
+    const owners = [s.taskId, s.legacyTaskId].filter((id): id is string => !!id);
+    if (!area && owners.length && owners.every((id) => supervised.has(id))) supervisedSessions.add(s.claudeSessionId);
+    if (!scopeAllows(caller, scopes) && !supervisedSessions.has(s.claudeSessionId)) deniedSessions.add(s.claudeSessionId);
   }
   const mail = mailDenial(file, caller, pending);
   return {
     denials: {
       tasks: deniedTasks, sessions: deniedSessions, mail: mail.denied,
+      supervisedTasks: supervised, supervisedSessions,
       knownTasks: new Set(tasks.map((t) => t.id)),
       knownSessions: new Set(sessions.map((s) => s.claudeSessionId)),
     },
@@ -494,6 +576,35 @@ export async function deniedTasksNow(caller: AreaCaller, ids: readonly string[])
   if (!fresh) return undefined;
   const { tasks, knownTasks } = fresh.denials;
   return new Set(ids.filter((id) => tasks.has(id) || !knownTasks?.has(id)));
+}
+
+/** Both search routes apply the request's judged visibility before their search limit. */
+export function areaSearchVisibility(res: Response): import('../../core/search.js').SearchOptions['visibility'] {
+  const denials = res.locals.walnutAreaDenials as AreaDenials | undefined;
+  return denials && (denials.tasks.size || denials.sessions.size) ? {
+    allows: (row) => !rowDenied(row, 'result', denials),
+    excludedCount: denials.tasks.size + denials.sessions.size,
+  } : undefined;
+}
+
+/** The task route validates the limit, then defers pagination to its two visibility checks. */
+export function deferAreaTaskPage(res: Response, limit?: number, completedWithinDays?: number): boolean {
+  if (!res.locals[TASK_PAGE]) return false;
+  res.locals[TASK_PAGE] = { limit, completedWithinDays };
+  return true;
+}
+
+async function finishTaskPage(body: unknown, page: { limit?: number; completedWithinDays?: number }): Promise<unknown> {
+  const top = obj(body);
+  if (!top || !Array.isArray(top.tasks)) return body;
+  const { taskMatchPage } = await import('../../core/task-query-page.js');
+  const matched = taskMatchPage(top.tasks as Task[], page.limit, page.completedWithinDays);
+  const { enrichTasksWithSessionStatus } = await import('../routes/tasks.js');
+  // Only the final visible page pays for session enrichment. Keep this original
+  // page alongside it so the caller can recheck permissions on any added keys.
+  const tasks = await enrichTasksWithSessionStatus(matched.tasks);
+  return { ...top, ...matched, tasks,
+    ...(typeof top.count === 'number' ? { count: tasks.length } : {}) };
 }
 
 /** Holds the route's one JSON answer until `decide` has judged it; a second res.json is ignored. */
@@ -562,7 +673,7 @@ export async function routerAreaReader(req: Request, res: Response, next: NextFu
     if (target) {
       let verdict: AreaReadVerdict;
       try {
-        verdict = await judgeAreaRead(caller, target, req.body);
+        verdict = await judgeAreaRead(caller, target, req.body, req.method === 'GET');
       } catch (error) {
         if (!(error instanceof AreaBadInput)) throw error;
         res.status(400).json({ error: error.message, code: error.code });
@@ -572,13 +683,13 @@ export async function routerAreaReader(req: Request, res: Response, next: NextFu
       if (verdict === 'unverifiable') { res.status(503).json(UNVERIFIABLE); return; }
       // Judged again when the route answers: the object may have been classified meanwhile.
       deferJson(res, next, async (body) => {
-        const again = await judgeAreaRead(caller, target, req.body);
+        const again = await judgeAreaRead(caller, target, req.body, req.method === 'GET');
         if (again === 'deny') return { status: 403, body: FORBIDDEN };
         if (again === 'unverifiable') return { status: 503, body: UNVERIFIABLE };
-        if (target.kind === 'mail') {
+        if (target.kind === 'mail' || (target.kind === 'task' && req.method === 'GET')) {
           const built = await buildAreaDenials(caller);
           if (!built) return { status: 503, body: UNVERIFIABLE };
-          const judged = filterAreaPayload(body, built.denials, 'mail');
+          const judged = filterAreaPayload(body, built.denials, target.kind);
           if (judged.denied) return { status: 403, body: FORBIDDEN };
           return { body: judged.body };
         }
@@ -589,13 +700,40 @@ export async function routerAreaReader(req: Request, res: Response, next: NextFu
     }
     const built = await buildAreaDenials(caller);
     if (!built) { res.status(503).json(UNVERIFIABLE); return; }
+    res.locals.walnutAreaDenials = built.denials;
+    if (/^\/tasks\/?$/.test(req.path)) res.locals[TASK_PAGE] = {};
     // The snapshot drops rows made after it; the recheck catches a row it judged that was classified since.
     deferJson(res, next, async (body) => {
       const first = filterAreaPayload(body, built.denials, listKind);
       if (first.denied) return { status: 403, body: FORBIDDEN };
-      const again = await recheckAreaPayload(caller, first.body, listKind);
-      if (!again) return { status: 503, body: UNVERIFIABLE };
-      return again.denied ? { status: 403, body: FORBIDDEN } : { body: again.body };
+      const fresh = await buildAreaDenials(caller);
+      if (!fresh) return { status: 503, body: UNVERIFIABLE };
+      const again = filterAreaPayload(first.body, fresh.denials, listKind);
+      if (again.denied) return { status: 403, body: FORBIDDEN };
+      let visible = res.locals[TASK_PAGE] ? await finishTaskPage(again.body, res.locals[TASK_PAGE]) : again.body;
+      if (res.locals[TASK_PAGE]) {
+        const final = await buildAreaDenials(caller);
+        if (!final) return { status: 503, body: UNVERIFIABLE };
+        const enriched = filterAreaPayload(visible, final.denials, listKind);
+        const all = filterAreaPayload(again.body, final.denials, listKind);
+        // A classification during async enrichment invalidates even an off-page
+        // row's contribution to total. Retry instead of returning stale counters.
+        if (enriched.denied || all.denied || obj(all.body)?.total !== obj(again.body)?.total
+          || (obj(enriched.body)?.tasks as unknown[] | undefined)?.length
+          !== (obj(visible)?.tasks as unknown[] | undefined)?.length) return { status: 503, body: UNVERIFIABLE };
+        const safe = obj(enriched.body);
+        // Keep pre-page counters; the final pass only redacts added session keys.
+        if (safe) visible = { ...obj(visible), tasks: safe.tasks };
+      }
+      let top = obj(visible);
+      if (top?.board && Array.isArray(top.tasks)) {
+        // Board counters describe the whole visible board, even when q, a
+        // tier filter or limit narrows the page. Both snapshots must allow it.
+        const { getBoardCounts } = await import('../../core/task-manager.js');
+        top = { ...top, board: await getBoardCounts((t) => !rowDenied(t, 'task', built.denials)
+          && !rowDenied(t, 'task', fresh.denials)) };
+      }
+      return { body: top ? { ...top, ...(!built.none ? { visibility_note: VISIBILITY_NOTE } : {}) } : visible };
     });
     next();
   } catch (error) {

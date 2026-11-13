@@ -40,6 +40,8 @@ export interface SearchOptions {
    *  seconds-long budget of its own (the AI search) passes more, since that
    *  lane is what finds a paraphrase or a misspelling no keyword shares. */
   semanticDeadlineMs?: number;
+  /** Request-local visibility, applied before any result limit. Never memoized across callers. */
+  visibility?: { allows: (row: SearchResult) => boolean; excludedCount: number };
 }
 
 export function extractSnippet(
@@ -761,7 +763,7 @@ export async function search(
   try {
     // Memo INSIDE the timer: a cache hit is still an /api/search latency, and
     // hiding it would make search.global look better than the app feels.
-    const memoable = resultCacheEnabled() && query.trim().length > 0;
+    const memoable = !options.visibility && resultCacheEnabled() && query.trim().length > 0;
     const key = memoable ? searchResultCacheKey(query, types, limit) : '';
     if (memoable) {
       const hit = resultCache.get(key);
@@ -881,7 +883,8 @@ async function searchInner(
     const searchV2Lane = await loadSearchV2Lane();
     return searchV2Lane(normalizedQuery, {
       kinds,
-      limit,
+      // Denied task/session rows must not consume a lane's candidate budget.
+      limit: limit + (options.visibility?.excludedCount ?? 0),
       semanticDeadlineMs: options.semanticDeadlineMs,
       onSemantic: (state) => { if (INCOMPLETE_SEMANTIC.has(state)) run.semanticIncomplete = true; },
     });
@@ -933,13 +936,19 @@ async function searchInner(
   // looks identical to a tail spent in the index.
   let tasks: Task[] | null = null;
   async function getTasks(): Promise<Task[]> {
-    if (!tasks) tasks = await timed('search.stores.tasks', () => listTasks());
+    if (!tasks) {
+      tasks = await timed('search.stores.tasks', () => listTasks());
+      if (options.visibility) tasks = tasks.filter((t) => options.visibility!.allows({ type: 'task', taskId: t.id } as SearchResult));
+    }
     return tasks;
   }
 
   let sessions: SessionRecord[] | null = null;
   async function getSessions(): Promise<SessionRecord[]> {
-    if (!sessions) sessions = await timed('search.stores.sessions', () => listSessions());
+    if (!sessions) {
+      sessions = await timed('search.stores.sessions', () => listSessions());
+      if (options.visibility) sessions = sessions.filter((s) => options.visibility!.allows({ type: 'session', sessionId: s.claudeSessionId, taskId: s.taskId } as SearchResult));
+    }
     return sessions;
   }
 
@@ -1335,6 +1344,9 @@ async function searchInner(
       const id = results[i].taskId;
       if (id && hiddenTaskIds.has(id)) results.splice(i, 1);
     }
+  }
+  if (options.visibility) {
+    for (let i = results.length - 1; i >= 0; i--) if (!options.visibility.allows(results[i])) results.splice(i, 1);
   }
   const sliced = results.slice(0, limit);
   if (types.length > 1) {

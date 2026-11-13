@@ -32,6 +32,7 @@ import {
   AreaBadInput, areaCallerOf, areaTargetOf, judgeAreaRead, rowDenied, recheckAreaPayload, isMentionSearchPath, isAreaAggregatePath, buildAreaDenials, filterAreaPayload, isAreaListPath, scopeAllows, taskScopes, type AreaDenials,
 } from '../../src/web/middleware/router-area-reader.js';
 import { snapshotTask } from '../../src/web/routes/org-v1.js';
+import { executeOp } from '../../src/ops/index.js';
 import { routerRuleRevision } from '../../src/core/router/rules.js';
 import { routingRulesPath, setRoutingRule } from '../../src/core/triage/routing-rules.js';
 import type { Task } from '../../src/core/types.js';
@@ -567,8 +568,15 @@ describe('an ordinary session reading lists', () => {
   it('GET /api/tasks/bulk drops the area row and keeps the ordinary one', async () => {
     const response = await call('GET', `/api/tasks/bulk?ids=${personalId},${ordinaryId}`, ordinarySid);
     expect(response.status).toBe(200);
-    const rows = idsOf((await response.json()).tasks, 'id');
+    const body = await response.json();
+    const rows = idsOf(body.tasks, 'id');
     expect(rows).toEqual([ordinaryId]);
+    expect(body.count).toBe(rows.length);
+    expect(body.errors).toBe(0);
+    const hidden = await (await call('GET', `/api/tasks/bulk?ids=${personalId}`, ordinarySid)).json();
+    expect(hidden.tasks).toEqual([]);
+    expect(hidden.count).toBe(0);
+    expect(hidden.errors).toBe(0);
   });
 
   for (const [p, idKey] of [['/api/sessions', 'claudeSessionId'], ['/api/sessions/mention-index', 'id']] as const) {
@@ -622,6 +630,145 @@ describe('an ordinary session reading lists', () => {
     } finally {
       // A mark is never cleared through the store; restore the fixture the way it was planted.
       patchLegacyTask(same, { router_area_id: null as never });
+    }
+  });
+});
+
+describe('visible task pages and supervisor reads', () => {
+  beforeAll(ensureAreas);
+
+  it('counts exactly the visible match set before every limit and projection', async () => {
+    const ids = [personalId, workId, ordinaryId].join(',');
+    for (const fields of ['', '&slim=1', '&fields=list']) {
+      for (const who of [ordinarySid, AUTOMATION, undefined] as const) {
+        for (const limit of [1, 2, 5]) {
+          const response = await call('GET', `/api/tasks?ids=${ids}&sort=title_asc&limit=${limit}${fields}`, who);
+          expect(response.status).toBe(200);
+          const page = await response.json();
+          const expected = who ? 1 : 3;
+          expect(page.total).toBe(expected);
+          expect(page.tasks).toHaveLength(Math.min(expected, limit));
+          expect(page.truncated).toBe(expected > limit);
+          if (who) expect(page.visibility_note).toContain('area isolation');
+        }
+      }
+    }
+    for (const q of ['Personal desk', 'Work desk', 'Ordinary chores', 'missing task']) {
+      const outcome = await executeOp('task_list', { q, scope: 'all', limit: 5 }, { apiBase: base, callerSid: ordinarySid });
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) throw new Error(outcome.message);
+      const page = outcome.result as { count: number; total: number; truncated: boolean; tasks: Array<{ id: string }>; hint?: string };
+      expect(page.total).toBe(q === 'Ordinary chores' ? 1 : 0);
+      expect(page.count).toBe(page.total);
+      expect(page.tasks).toHaveLength(page.total);
+      expect(page.truncated).toBe(false);
+      expect(page.hint).toContain('area isolation');
+    }
+  });
+
+  it('the archive window counts only visible rows before the page, for every caller', async () => {
+    const open = (await addTask({ title: 'Window canary visible', project: 'Pantry' })).task;
+    const old = (await addTask({ title: 'Window canary old', project: 'Pantry' })).task;
+    const denied = (await addTask({ title: 'Window canary area', project: 'Garden' })).task;
+    const ancient = '2000-01-01T00:00:00Z';
+    await mark(old.id, { phase: 'COMPLETE', status: 'done', completed_at: ancient });
+    await mark(denied.id, { phase: 'COMPLETE', status: 'done', completed_at: ancient, router_area_id: 'personal' });
+    for (const who of [ordinarySid, AUTOMATION, undefined] as const) {
+      const page = await (await call('GET', '/api/tasks?q=Window%20canary&sort=title_asc&limit=1&fields=list&completedWithinDays=7', who)).json();
+      expect(page.tasks.map((t: { id: string }) => t.id)).toEqual([open.id]);
+      expect(page.total).toBe(1);
+      expect(page.truncated).toBe(false);
+      expect(page.completedHidden).toBe(who ? 1 : 2);
+    }
+  });
+
+  it('does not let denied early matches consume the page or leak board counts', async () => {
+    const hidden = [];
+    for (let i = 0; i < 24; i++) {
+      const t = (await addTask({ title: `Page canary A ${i}`, project: 'Garden', pinned: true })).task;
+      await mark(t.id, { router_area_id: 'personal' });
+      hidden.push(t.id);
+    }
+    const visible = [];
+    for (let i = 0; i < 7; i++) visible.push((await addTask({ title: `Page canary Z ${i}`, project: 'Pantry', pinned: true })).task.id);
+    for (const limit of [1, 3, 7, 20]) {
+      const page = await (await call('GET', `/api/tasks?q=Page%20canary&sort=title_asc&limit=${limit}&fields=list&working_set=true`, ordinarySid)).json();
+      expect(page.total).toBe(7);
+      expect(page.tasks.map((t: { id: string }) => t.id)).toEqual(visible.slice(0, limit));
+      expect(page.truncated).toBe(limit < 7);
+      expect(page.board.pinned_total).toBe(7);
+      expect(JSON.stringify(page)).not.toContain(hidden[0]);
+    }
+    for (const route of ['/api/search', '/api/v1/search']) {
+      const hits = await (await call('GET', `${route}?q=Page%20canary&types=task&limit=3`, ordinarySid)).json();
+      expect(hits.results).toHaveLength(3);
+      expect(hits.results.every((r: { taskId: string }) => visible.includes(r.taskId))).toBe(true);
+    }
+  });
+
+  it('Main and the current project lead can read and search their work, but peers and retired leads cannot', async () => {
+    const main = (await addTask({ title: 'Company owner', org_role: 'main' })).task;
+    const lead = (await addTask({ title: 'Garden owner', project: 'Garden', org_role: 'lead' })).task;
+    const peer = (await addTask({ title: 'Pantry owner', project: 'Pantry', org_role: 'lead' })).task;
+    const retired = (await addTask({ title: 'Former garden owner', project: 'Garden', org_role: 'lead' })).task;
+    await mark(retired.id, { phase: 'COMPLETE', status: 'done' });
+    const downstream = (await addTask({ title: 'Classified garden work', project: 'Garden' })).task;
+    await mark(downstream.id, { router_area_id: 'personal' });
+    const workSid = randomUUID();
+    await seedLegacySession(workSid, downstream.id, '', WALNUT_HOME, { mode: 'dontAsk', initialProcessStatus: 'stopped' });
+    const isolatedWorkSid = randomUUID();
+    const isolatedWork = (await addTask({ title: 'Classified isolated garden work', project: 'Garden' })).task;
+    await mark(isolatedWork.id, { router_area_id: 'personal' });
+    await createSessionRecord(isolatedWorkSid, isolatedWork.id, '', WALNUT_HOME, { profile: routerAreaProfile('personal', 'work'), mode: 'dontAsk' });
+    await mark(isolatedWork.id, { session_id: isolatedWorkSid, exec_session_id: isolatedWorkSid, session_ids: [isolatedWorkSid] });
+    await updateSessionRecord(isolatedWorkSid, { process_status: 'stopped' });
+    const sids = new Map<string, string>();
+    for (const node of [main, lead, peer, retired]) {
+      const sid = randomUUID();
+      sids.set(node.id, sid);
+      await createSessionRecord(sid, node.id, '', WALNUT_HOME, { mode: 'dontAsk' });
+      await updateSessionRecord(sid, { process_status: 'stopped' });
+      const allowed = node.id === main.id || node.id === lead.id;
+      const detail = await call('GET', `/api/tasks/${downstream.id}`, sid);
+      expect(detail.status).toBe(allowed ? 200 : 403);
+      const listed = await (await call('GET', '/api/tasks?q=Classified%20garden%20work&limit=1&fields=list', sid)).json();
+      expect(listed.total).toBe(allowed ? 1 : 0);
+      expect(listed.tasks.map((t: { id: string }) => t.id)).toEqual(allowed ? [downstream.id] : []);
+      const searched = await (await call('GET', `/api/search?q=${downstream.id}&types=task&slim=1`, sid)).json();
+      expect(searched.results.map((r: { id: string }) => r.id)).toEqual(allowed ? [downstream.id] : []);
+      expect((await call('GET', `/api/sessions/${workSid}/history`, sid)).status).toBe(allowed ? 200 : 403);
+      // Router source notes and isolated profiles may carry the original mail.
+      expect((await call('GET', `/api/tasks/${personalId}`, sid)).status).toBe(403);
+      expect((await call('GET', `/api/sessions/${personalSid}/history`, sid)).status).toBe(403);
+      const rawHits = await (await call('GET', `/api/search?q=${personalSid}&types=session`, sid)).json();
+      expect(rawHits.results).toEqual([]);
+      const isolatedPage = await (await call('GET', `/api/tasks?ids=${isolatedWork.id}&limit=1`, sid)).json();
+      expect(isolatedPage.total).toBe(allowed ? 1 : 0);
+      expect(isolatedPage.tasks.map((t: { id: string }) => t.id)).toEqual(allowed ? [isolatedWork.id] : []);
+      expect(JSON.stringify(isolatedPage)).not.toContain(isolatedWorkSid);
+      const isolatedDetail = await call('GET', `/api/tasks/${isolatedWork.id}`, sid);
+      expect(isolatedDetail.status).toBe(allowed ? 200 : 403);
+      expect(await isolatedDetail.text()).not.toContain(isolatedWorkSid);
+      expect((await call('GET', `/api/sessions/${isolatedWorkSid}/history`, sid)).status).toBe(403);
+      // Read access never becomes a write grant or raw mail access.
+      expect((await call('PATCH', `/api/tasks/${personalId}`, sid, { title: 'Changed by supervisor' })).status).toBe(403);
+      expect((await call('GET', mailPath(account, personalMail.message), sid)).status).toBe(403);
+    }
+    // Transferring this project also transfers the read grant, even if an old parent remains.
+    await mark(downstream.id, { parent_task_id: lead.id });
+    await mark(peer.id, { org_leads: ['Garden'] });
+    const oldSid = sids.get(lead.id)!;
+    const newSid = sids.get(peer.id)!;
+    expect(await judgeAreaRead({ sid: oldSid }, { kind: 'task', id: downstream.id }, undefined, true)).toBe('deny');
+    expect(await judgeAreaRead({ sid: newSid }, { kind: 'task', id: downstream.id }, undefined, true)).toBe('pass');
+    expect(await judgeAreaRead({ sid: newSid }, { kind: 'task', id: downstream.id })).toBe('deny');
+    await mark(peer.id, { org_leads: [] });
+    // Lost org_role never turns a registered source router into downstream work.
+    patchLegacyTask(personalId, { org_role: null as never });
+    try {
+      expect((await call('GET', `/api/tasks/${personalId}`, sids.get(main.id)!)).status).toBe(403);
+    } finally {
+      patchLegacyTask(personalId, { org_role: 'router' });
     }
   });
 });

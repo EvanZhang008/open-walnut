@@ -5,7 +5,7 @@
  * are in tests/e2e/thread-follow.test.ts.
  */
 import { describe, it, expect } from 'vitest'
-import { orgPlaces, ownerNodeOf, ownersKey, planThreadFollows, handOffLine, type FollowTask } from '../../../src/core/org/thread-follow.js'
+import { orgNodesAbove, orgPlaces, ownerNodeOf, ownersKey, planThreadFollows, handOffLine, type FollowTask } from '../../../src/core/org/thread-follow.js'
 import { addMovedMessages, emptyThreads, enteredNeeds, fileMessage, movedAway, moveThreadIn, moveThreadOut, normalizeThreads, setAnswers, updateThread, ThreadError, type OrgThread } from '../../../src/core/org/threads-model.js'
 
 const at = (min: number) => new Date(Date.UTC(2026, 10, 8, 4, min)).toISOString()
@@ -83,6 +83,20 @@ describe('which threads move (planThreadFollows)', () => {
     expect(plan([threadListing(['t1'])], [task('t1', { parent_task_id: marina.id, project: 'Marina' })])).toEqual([])
     expect(plan([threadListing(['t1'])], [task('t1', { parent_task_id: marina.id, project: 'Nowhere' })])).toEqual([])
   })
+
+  it('a project delegated to another VP no longer grants its former lead ownership through an old parent', () => {
+    const vp = { ...walnut, org_leads: ['Marina'] };
+    const made = task('t1', { parent_task_id: marina.id, project: 'Marina' });
+    expect(ownerNodeOf(made, orgPlaces([main, marina, vp, made]))?.id).toBe(vp.id);
+  });
+
+  it('a duplicate same-project lead does not take work from its actual parent during handover', () => {
+    const newer = { ...marina, id: 'lead-newer', created_at: at(5) };
+    const made = task('t1', { parent_task_id: newer.id, project: 'Marina' });
+    const places = orgPlaces([main, marina, newer, made]);
+    expect(ownerNodeOf(made, places)?.id).toBe(newer.id);
+    expect(orgNodesAbove(made, places)).toEqual(new Set([newer.id, main.id]));
+  });
 
   it('a thread handed here on purpose is never pulled back by its old tasks; the rule may still move it on', () => {
     const handed = { ...threadListing(['t1']), movedFrom: { task: walnut.id, title: 'Walnut VP', at: at(3), by: 'human' as const, kind: 'hand' as const } }

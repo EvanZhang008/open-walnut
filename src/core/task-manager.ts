@@ -3717,8 +3717,10 @@ async function runTaskQuery(
   query: TaskQuery,
   projection: 'full' | 'slim' | 'minimal',
   /** Leave out the tasks a plugin keeps to its own view (Task.plugin_only), before the sort
-   *  and the limit, so a capped page still fills and `total` counts only what it may show. */
-  opts: { hidePluginOnly?: boolean } = {},
+   *  and the limit, so a capped page still fills and `total` counts only what it may show.
+   *  deferLimit validates the query's limit but leaves its slice to the request's
+   *  final visibility and archive filters. */
+  opts: { hidePluginOnly?: boolean; deferLimit?: boolean } = {},
 ): Promise<TaskQueryPage<Task> | TaskQueryPage<SlimTask>> {
   // A test run's own window sees its test tasks, unmarked (test-run.ts); everyone else does not.
   const testViewer = ambientTestRun() !== undefined;
@@ -3783,9 +3785,8 @@ async function runTaskQuery(
   // captured BEFORE the slice so every caller can tell a complete answer from a
   // capped one — a silent cap once made a board review report 13 satellite
   // tasks out of 36 and conclude the rest had vanished.
-  const total = matched.length;
-  const limited = normalized.limit !== undefined ? matched.slice(0, normalized.limit) : matched;
-  const page = { tasks: limited, total, truncated: limited.length < total };
+  const { taskMatchPage } = await import('./task-query-page.js');
+  const page = taskMatchPage(matched, opts.deferLimit ? undefined : normalized.limit);
   return projection === 'full'
     ? page as TaskQueryPage<Task>
     : page as unknown as TaskQueryPage<SlimTask>;
@@ -3804,7 +3805,7 @@ export async function queryTasks(query: TaskQuery): Promise<Task[]> {
  * tell the caller their answer was capped (the REST list route and the
  * `task_list` op both report `total` / `truncated` from this).
  */
-export async function queryTasksPage(query: TaskQuery, opts: { hidePluginOnly?: boolean } = {}): Promise<TaskQueryPage<Task>> {
+export async function queryTasksPage(query: TaskQuery, opts: { hidePluginOnly?: boolean; deferLimit?: boolean } = {}): Promise<TaskQueryPage<Task>> {
   return await runTaskQuery(query, 'full', opts) as TaskQueryPage<Task>;
 }
 
@@ -3843,9 +3844,9 @@ export async function listOpenTaskViews(max: number): Promise<ReadonlyArray<Read
 /** queryTasksSlim plus the pre-limit `total` / `truncated` pair. */
 export async function queryTasksSlimPage(
   query: TaskQuery,
-  opts: { minimal?: boolean; hidePluginOnly?: boolean } = {},
+  opts: { minimal?: boolean; hidePluginOnly?: boolean; deferLimit?: boolean } = {},
 ): Promise<TaskQueryPage<SlimTask>> {
-  return await runTaskQuery(query, opts.minimal ? 'minimal' : 'slim', { hidePluginOnly: opts.hidePluginOnly }) as TaskQueryPage<SlimTask>;
+  return await runTaskQuery(query, opts.minimal ? 'minimal' : 'slim', opts) as TaskQueryPage<SlimTask>;
 }
 
 // ── Dependency helpers (used inside withWriteLock) ──
@@ -7750,9 +7751,9 @@ export interface BoardCounts {
  * 'next', a stale id of a deleted custom tier), so the counts add up to
  * `pinned_total` exactly.
  */
-export async function getBoardCounts(): Promise<BoardCounts> {
+export async function getBoardCounts(visible: (task: Task) => boolean = () => true): Promise<BoardCounts> {
   const store = await readStoreView();
-  const pinned = store.tasks.filter((t) => t.pinned && !isRetiredSentinelTitle(t.title));
+  const pinned = store.tasks.filter((t) => t.pinned && !isRetiredSentinelTitle(t.title) && visible(t));
   const customTiers = store.custom_tiers ?? [];
   const customTierIds = new Set(customTiers.map((t) => t.id));
   const entries: { tier: string; label: string }[] = [

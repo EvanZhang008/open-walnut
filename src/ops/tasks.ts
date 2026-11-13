@@ -338,7 +338,7 @@ defineOp({
     }
     const fetchList = async () => {
       const { path } = materializeBinding(TASK_LIST_BINDING, effective)
-      return await call('GET', path) as { tasks?: unknown[]; total?: unknown; board?: unknown } | undefined
+      return await call('GET', path) as { tasks?: unknown[]; total?: unknown; board?: unknown; visibility_note?: string } | undefined
     }
     let body = await fetchList()
     // A lookup nobody scoped (a title search, a tag) starts near and WIDENS on no
@@ -374,6 +374,7 @@ defineOp({
       : tasks.map(leanTaskRow)
     const hints = [
       scopeNote ?? '',
+      body?.visibility_note ?? '',
       widenedFrom
         ? `Nothing in your ${widenedFrom} matched ${lookupLabel(args)}, so this searched ${appliedScope === 'all' ? 'the whole board' : 'your whole project'}.`
         : defaulted ? scopeDefaultHint(appliedScope as string | undefined, you) : '',

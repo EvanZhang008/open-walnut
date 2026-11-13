@@ -28,7 +28,7 @@
  */
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
-import { orgDisplayTitle, pickLead, pickMain, successorOf } from './org-tree.js';
+import { leadsAlso, orgDisplayTitle, pickLead, pickMain, successorOf } from './org-tree.js';
 import { isOpen, type MoveEnd, type OrgThread, type ThreadMoveKind, type ThreadWriter } from './threads-model.js';
 
 /** Every route that hands work to another task, and so may hand a thread on with it (guard test). */
@@ -59,19 +59,14 @@ export function orgPlaces(all: readonly FollowTask[]): OrgPlaces {
   return { byId, leadOf: (project) => ((project ?? '').trim() ? pickLead(openLeads as Task[], project!.trim()) : undefined), main, all };
 }
 
-/** Does this lead answer for the project (its own, or one put under it)? */
-function leads(lead: FollowTask, project: string | undefined): boolean {
-  const key = (project ?? '').trim().toLowerCase();
-  return !!key && [lead.project, ...(lead.org_leads ?? [])].some((x) => (x ?? '').trim().toLowerCase() === key);
-}
-
 /**
  * The Org node whose team does a task's work: the task itself when it is one, else its nearest
  * node above it in the parent chain (the order statusFollowersOf in sessions/status-push.ts
  * follows), else the lead of its top task's project, else Main. One exception: a task a lead filed
  * that now sits in a project another open lead answers for, and this lead does not, is that lead's
  * work (2026-11-08, the user: moving the task into a project under the other VP is the whole
- * handoff), though its parent link still names the lead that made it.
+ * handoff), though its parent link still names the lead that made it. The current project
+ * assignment also wins when that same project was delegated to another VP.
  */
 export function ownerNodeOf(task: FollowTask, p: OrgPlaces): FollowTask | undefined {
   if (isNode(task)) return task;
@@ -82,9 +77,11 @@ export function ownerNodeOf(task: FollowTask, p: OrgPlaces): FollowTask | undefi
     const parent = p.byId.get(id);
     if (!parent) break;
     if (isNode(parent)) {
-      if (parent.org_role === 'lead' && !leads(parent, top.project)) {
+      if (parent.org_role === 'lead') {
         const there = p.leadOf(top.project);
-        if (there && there.id !== parent.id) return there;
+        if (there && there.id !== parent.id && (leadsAlso(there, top.project ?? '')
+          || ![parent.project, ...(parent.org_leads ?? [])].some((project) =>
+            (project ?? '').trim().toLowerCase() === (top.project ?? '').trim().toLowerCase()))) return there;
       }
       return parent;
     }
@@ -95,12 +92,15 @@ export function ownerNodeOf(task: FollowTask, p: OrgPlaces): FollowTask | undefi
 }
 
 /** The nodes a task reports up through: its owner, the VP leading that owner's project, Main. */
-function chainOf(task: FollowTask, p: OrgPlaces): Set<string> {
+export function orgNodesAbove(task: FollowTask, p: OrgPlaces): Set<string> {
   const out = new Set<string>();
   const owner = ownerNodeOf(task, p);
   if (owner) {
     out.add(owner.id);
-    if (owner.org_role === 'lead') { const vp = p.leadOf(owner.project); if (vp) out.add(vp.id); }
+    if (owner.org_role === 'lead') {
+      const vp = p.leadOf(owner.project);
+      if (vp && leadsAlso(vp, owner.project ?? '')) out.add(vp.id);
+    }
   }
   if (p.main) out.add(p.main.id);
   return out;
@@ -155,7 +155,7 @@ export function planThreadFollows(nodes: ReadonlyArray<{ node: FollowTask; threa
         continue;
       }
       const listed = (t.tasks ?? []).map((id) => p.byId.get(id)).filter((x): x is FollowTask => !!x);
-      if (!listed.length || listed.some((x) => chainOf(x, p).has(node.id))) continue;
+      if (!listed.length || listed.some((x) => orgNodesAbove(x, p).has(node.id))) continue;
       const owners = [...new Map(listed.map((x) => ownerNodeOf(x, p)).filter((o): o is FollowTask => !!o).map((o) => [o.id, o] as const)).values()];
       const to = owners.length === 1 ? owners[0] : undefined;
       if (!to || to.id === node.id || to.org_role !== 'lead' || !openTask(to)) continue;

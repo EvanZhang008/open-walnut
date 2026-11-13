@@ -293,8 +293,13 @@ describe('GET /api/tasks — canonical query params', () => {
     expect(new Set((res.body.tasks as { id: string }[]).map((t) => t.id)))
       .toEqual(new Set([open.id, recent.id, oldPinned.id]));
     expect(res.body.completedHidden).toBe(1);
-    // `total` still counts what the query matched.
-    expect(res.body.total).toBe(4);
+    // `total` counts only rows this filtered list can return.
+    expect(res.body.total).toBe(3);
+    expect(res.body.truncated).toBe(false);
+    const capped = await request(createApp()).get('/api/tasks?fields=list&completedWithinDays=7&sort=title_asc&limit=2');
+    expect(capped.body.total).toBe(3);
+    expect(capped.body.tasks).toHaveLength(2);
+    expect(capped.body.truncated).toBe(true);
 
     // Without the window the whole list comes back and the field is absent.
     const all = await request(createApp()).get('/api/tasks?fields=list');
@@ -320,7 +325,8 @@ describe('GET /api/tasks — canonical query params', () => {
     expect(res.status).toBe(200);
     expect(res.body.tasks).toEqual([]);
     expect(res.body.completedHidden).toBe(1);
-    expect(res.body.total).toBe(3);
+    expect(res.body.total).toBe(0);
+    expect(res.body.truncated).toBe(false);
   });
 
   it('completedWithinDays keeps old completed asks: the Ask drawer lists every ask', async () => {
