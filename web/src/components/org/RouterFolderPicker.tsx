@@ -14,7 +14,8 @@
  * the mail sync refreshes from the provider. A folder nests under another listed folder of the same
  * account whose id prefixes its own (`Projects/Alpha` under `Projects`).
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { listMailboxes, type MailboxDto } from '@/api/mail';
 import '@/styles/router-settings.css';
 
@@ -134,7 +135,7 @@ export function RouterFolderPicker({ accounts, value, onChange, disabled, testId
   const live = useRef(true);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
   const accountKey = accounts.map((a) => a.account).join('\n');
-  const load = useCallback((ids: readonly string[]) => {
+  const load = useLeanCallback((ids: readonly string[]) => {
     if (!ids.length) return;
     setLoads((prev) => ({ ...prev, ...Object.fromEntries(ids.map((id) => [id, { state: 'loading' } as Load])) }));
     for (const id of ids) {
