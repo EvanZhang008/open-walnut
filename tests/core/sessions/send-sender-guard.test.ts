@@ -154,7 +154,7 @@ const CALL_SITES: Record<string, number> = {
   'src/core/pull-requests/pr-watch.ts': 1,       // pull request news: a Walnut envelope, source pr-watch
   'src/core/task-wait-until.ts': 1,
   'src/core/transfer/transfer.ts': 1,
-  'src/core/workspaces/manager.ts': 2,
+  'src/core/workspaces/manager.ts': 3,              // workspace launch and its folder fallback keep the start's original source
   // an ACP session's first line (framed by its start); a textless kick for rows a late init put back;
   // a refused start's first line kept for Retry (Claude Code not installed), as its start framed it
   'src/providers/claude-code-session.ts': 3,
