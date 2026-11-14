@@ -37,6 +37,8 @@ import { isDiskWriteBlocked } from '../../core/disk-watermark.js'
 import { validateBearerCredential } from '../middleware/auth.js'
 import { recordAuthFailure, isAuthRateLimited } from '../middleware/auth-rate-limit.js'
 import { gitBundlePushRouter } from './git-bundle-push.js'
+import { bootPolicy } from '../../core/boot-policy.js'
+import { ensureHubHookGuard, hubHookEnv } from '../../integrations/git-hub-hook.js'
 import { log } from '../../logging/index.js'
 
 /** Fixed repo name inside the hub dir — one data repo per companion box. */
@@ -194,7 +196,7 @@ function findHeaderEnd(buf: Buffer): { idx: number; sepLen: number } | null {
  *   req body (gunzipped if needed) → stdin
  *   stdout → parse `Status:`/header lines until blank line → stream body to res
  */
-function runHttpBackend(req: Request, res: Response, pathInfo: string): void {
+function runHttpBackend(req: Request, res: Response, pathInfo: string, skipMaterialize?: boolean): void {
   const repoRoot = hubDir()
   if (!fs.existsSync(path.join(repoRoot, HUB_REPO_NAME))) {
     res.status(404).type('text/plain').send('data hub repo not found')
@@ -220,6 +222,9 @@ function runHttpBackend(req: Request, res: Response, pathInfo: string): void {
     // in scripts/cloud/setup.sh as belt and braces).
     REMOTE_USER: remoteUser,
     REMOTE_ADDR: requestIp(req),
+    // Set for every backend, never inherited: the hub's post-receive reads it
+    // to skip its pull on a replica (src/integrations/git-hub-hook.ts).
+    ...hubHookEnv(skipMaterialize),
   }
   const contentType = req.headers['content-type']
   if (typeof contentType === 'string') env.CONTENT_TYPE = contentType
@@ -394,5 +399,28 @@ gitHttpRouter.post('/git-receive-pack', (req, res) => {
     res.status(503).type('text/plain').send('data hub disk critically full — push refused until space is freed')
     return
   }
-  runHttpBackend(req, res, '/git-receive-pack')
+  // A replica does not materialize a push (stage 4d): an older managed
+  // post-receive gets its guard before the push starts, and a guard that cannot
+  // be added refuses the push (the next sync tick retries) rather than letting
+  // the old pull run inside this request.
+  const skip = !bootPolicy('git-pull')
+  if (!skip) {
+    runHttpBackend(req, res, '/git-receive-pack', skip)
+    return
+  }
+  ensureHubHookGuard(path.join(hubDir(), HUB_REPO_NAME))
+    .then(
+      () => {
+        if (req.socket.destroyed || res.destroyed) return
+        runHttpBackend(req, res, '/git-receive-pack', skip)
+      },
+      (err: unknown) => {
+        log.web.error('git-http: refusing push, the hub post-receive could not be guarded', { error: err instanceof Error ? err.message : String(err) })
+        if (!res.headersSent) res.status(503).type('text/plain').send('data hub post-receive hook could not be updated; push refused, retry later')
+      },
+    )
+    .catch((err: unknown) => {
+      log.web.error('git-http: receive-pack failed to start', { error: err instanceof Error ? err.message : String(err) })
+      if (!res.headersSent) res.status(500).type('text/plain').send('git http-backend unavailable')
+    })
 })

@@ -137,7 +137,7 @@ function isStale(p: string, now: number): boolean {
  * in-flight fetch/push and must be left alone.
  * Exported for tests.
  */
-export function sweepGitDebris(gitDir: string, now = Date.now()): number {
+export function sweepGitDebris(gitDir: string, now = Date.now(), opts: { scanLoose?: boolean } = {}): number {
   let swept = 0;
   const rm = (p: string, recursive = false): void => {
     try {
@@ -168,7 +168,7 @@ export function sweepGitDebris(gitDir: string, now = Date.now()): number {
       else if (e.isFile() && e.name.startsWith('tmp_obj')) { if (isStale(p, now)) rm(p); }
     }
     // Loose-object fan-out dirs can also hold tmp_obj_* (crashed object writes).
-    for (const e of fs.readdirSync(objDir)) {
+    for (const e of opts.scanLoose === false ? [] : fs.readdirSync(objDir)) {
       if (!/^[0-9a-f]{2}$/.test(e)) continue;
       const fanout = path.join(objDir, e);
       let entries: string[] = [];
@@ -622,6 +622,16 @@ export function startGitMaintenance(
       log.git.warn('git-maintenance worktree pass failed', {
         error: err instanceof Error ? err.message : String(err),
       });
+    }
+    // A copy-reading box no longer gcs the legacy worktree, but interrupted
+    // pulls from before the upgrade still left debris there. Sweep only the
+    // age-gated temporary files, never refs, reflogs, or unique history.
+    if (!bootPolicy('git-auto-commit') && hasCapability('bridge-door')) {
+      const legacyGitDir = path.join(WALNUT_HOME, '.git');
+      // The old clone can hold hundreds of thousands of loose objects. It no
+      // longer writes them, so do not walk its fan-out dirs on the event loop.
+      const sweptFiles = sweepGitDebris(legacyGitDir, Date.now(), { scanLoose: false });
+      if (sweptFiles) log.git.info('git-maintenance swept retired worktree debris', { repo: WALNUT_HOME, sweptFiles });
     }
     const hub = hubRepoDir();
     if (hub) {

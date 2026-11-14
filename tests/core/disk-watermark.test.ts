@@ -102,6 +102,33 @@ describe('nextLevel thresholds + hysteresis', () => {
 });
 
 describe('pollDiskWatermarkOnce side effects', () => {
+  it('warns before refusing uploads on a 100 GiB hub and retires both cards after cleanup', async () => {
+    const notify = vi.fn();
+    const recovered = vi.fn();
+    const resumed = vi.fn();
+    const free = (gib: number) => _setStatfsForTest(async () => ({
+      bsize: GiB, blocks: 100, bfree: gib, bavail: gib,
+    }));
+    free(10);
+    await pollDiskWatermarkOnce(notify, undefined, recovered, resumed);
+    expect(getDiskWatermarkState().level).toBe('warn');
+    expect(isDiskWriteBlocked()).toBe(false);
+    expect(notify.mock.calls.map((c) => c[2])).toEqual(['disk:warn']);
+    free(5);
+    await pollDiskWatermarkOnce(notify, undefined, recovered, resumed);
+    expect(isDiskWriteBlocked()).toBe(true);
+    expect(notify.mock.calls.map((c) => c[2])).toEqual(['disk:warn', 'disk:critical']);
+    free(35);
+    await pollDiskWatermarkOnce(notify, undefined, recovered, resumed);
+    expect(isDiskWriteBlocked()).toBe(false);
+    expect(isDiskPullOnly()).toBe(false);
+    expect(recovered).toHaveBeenCalledTimes(1);
+    expect(resumed).toHaveBeenCalledTimes(1);
+    await pollDiskWatermarkOnce(notify, undefined, recovered, resumed);
+    expect(notify).toHaveBeenCalledTimes(2);
+    expect(recovered).toHaveBeenCalledTimes(1);
+  });
+
   it('fires ONE warn notification at 81% and none again while warn holds', async () => {
     const notify = vi.fn();
     stubUsedPct(81);

@@ -92,9 +92,21 @@ git -C ~/.open-walnut push cloud main    # publish local data to the companion
 git -C ~/.open-walnut pull cloud main    # pick up changes made on the companion
 ```
 
-A push lands in the bare hub repo; its `post-receive` hook immediately
-fast-forwards the companion's working tree (`/var/lib/walnut/.open-walnut`),
-so the running cloud server sees new data within a second — no restart needed.
+A push lands in the bare hub repo. A server that reads replica copies uses the
+hub only as a private backup: its HTTP backend sets `WALNUT_HUB_SKIP_MATERIALIZE=1`
+so the generated `post-receive` hook does not fetch into the old working tree.
+The HTTP route upgrades that generated hook on existing installs, but leaves
+custom hooks alone. A previous server version or a direct git push does not set
+this variable, so the hook still fast-forwards the legacy working tree
+(`/var/lib/walnut/.open-walnut`). No history is rewritten or deleted.
+
+The disk monitor warns while at least 5 GiB separate the warning from the write
+pause (10 GiB and 5 GiB free respectively, also subject to the percent gates).
+These cards reach the primary server through the companion notification outbox,
+not through git sync, and retire when space recovers. An interrupted legacy pull
+must never be required for a copy-reading server to accept a backup push.
+Maintenance still sweeps age-gated transfer debris from the retired working
+tree, but does not gc it or expire its backup refs. Its unique history remains.
 
 **The Human Inbox while the Mac is away.** Letters live on the Mac (an answer
 has to reach the session that asked), so the companion asks the Mac first for

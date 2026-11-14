@@ -1527,6 +1527,10 @@ describe('setup.sh root-side blocks, run for real', () => {
       expect(fs.lstatSync(hook).isFile()).toBe(true)
       expect(fs.statSync(hook).mode & 0o777).toBe(0o755)
       expect(fs.readFileSync(hook, 'utf-8')).toContain(`/usr/bin/git -C "${path.join(dir, 'data')}" pull --ff-only origin main`)
+      expect(fs.readFileSync(hook, 'utf-8')).toContain('if [ "${WALNUT_HUB_SKIP_MATERIALIZE:-}" = 1 ]; then exit 0; fi')
+      // The copy-reading server skips the old worktree before taking a lock or running git.
+      const skipped = spawnSync('bash', [hook], { env: { ...process.env, WALNUT_HUB_SKIP_MATERIALIZE: '1' }, encoding: 'utf8' })
+      expect(skipped.status, skipped.stderr).toBe(0)
       expect(setup).not.toMatch(/cat > "\$HUB_REPO\/hooks/)
       expect(setup).not.toMatch(/(chown|chmod)[^\n]*\$HUB_REPO\/hooks/)
     })
