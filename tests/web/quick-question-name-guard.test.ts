@@ -30,7 +30,11 @@ describe('quick question and CEO display names', () => {
   it('no web source introduces the retired feature name outside stored project keys', () => {
     const found: string[] = [];
     for (const file of ['web/src', 'packages/browser-extension/src'].flatMap(files)) {
-      const source = ts.createSourceFile(file, readFileSync(path.join(root, file), 'utf8'), ts.ScriptTarget.Latest, true,
+      const text = readFileSync(path.join(root, file), 'utf8');
+      // Only a file whose text holds either word can hold such a string: parsing every file took
+      // 47 s on a loaded Mac (past the test's limit) for the few that do.
+      if (!/ask walnut/i.test(text) && !/\bMain\b/.test(text)) continue;
+      const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true,
         file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
       const visit = (node: ts.Node): void => {
         if (ts.isStringLiteralLike(node) || ts.isJsxText(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) {
