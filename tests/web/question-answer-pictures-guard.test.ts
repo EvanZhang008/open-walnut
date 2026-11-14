@@ -65,10 +65,20 @@ describe('a question answer and its pictures are one message', () => {
     expect(read('ios-native/Walnut/Stores/SessionLifecycleController.swift')).toMatch(/answers: answers, images: images/)
   })
 
+  /** Callers whose answer can carry no pictures, each with why (a new one is named here, never skipped). */
+  const WORDS_ONLY: Record<string, string> = {
+    'src/core/sessions/ask-settle.ts': 'an answer a lead gives in the user\'s place (task_send answers_ask) is words only: task_send takes no pictures',
+  }
+
   it('every server caller of respondSessionPermission hands it the pictures', () => {
     const callers = walk('src', /\.ts$/).filter((f) => f !== 'src/core/sessions/session-lifecycle.ts' && /respondSessionPermission\(/.test(read(f)))
     expect(callers.length).toBeGreaterThanOrEqual(3)
-    for (const f of callers) {
+    for (const [f, why] of Object.entries(WORDS_ONLY)) {
+      expect(callers, `${f} is listed as words only (${why}) but no longer answers a prompt`).toContain(f)
+      // Still true: the op that reaches it has no pictures to hand on.
+      expect(read('src/ops/work.ts'), f).not.toMatch(/\bimage/i)
+    }
+    for (const f of callers.filter((c) => !WORDS_ONLY[c])) {
       const src = read(f)
       const at = [...src.matchAll(/respondSessionPermission\(/g)].map((m) => m.index!)
       for (const i of at) expect(src.slice(i, i + 260), `${f} drops the pictures`).toMatch(/imageRefs/)

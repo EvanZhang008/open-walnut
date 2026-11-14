@@ -164,7 +164,10 @@ async function letterSettler(input: SettleInput): Promise<() => Promise<SettledV
   return async () => {
     try {
       if (input.withdraw) {
-        await settleLetter(letter.id, { reason: `Withdrawn by ${input.byTitle} for the user: ${words}`, ...(by ? { by } : {}) });
+        const { walnutLetterLanguage } = await import('../human-inbox/walnut-letters/languages.js')
+        const { ASK_WITHDRAWN_FOR_USER_WORDS } = await import('../human-inbox/walnut-letters/thread-words.js')
+        const reason = ASK_WITHDRAWN_FOR_USER_WORDS[await walnutLetterLanguage()](input.byTitle, words)
+        await settleLetter(letter.id, { reason, ...(by ? { by } : {}) });
         return { via: 'letter', letterId: letter.id, settled: true, tell: true };
       }
       await answerLetterAndDeliver(letter.id, { actionId: action!, ...(by ? { by } : {}) });
