@@ -117,7 +117,7 @@ function computeLog(daemonDir: string, sid: string): Array<{ resumed: boolean; r
       if (rec.msg === 'changes.compute done' && rec.sid === sid) out.push(rec)
     }
   }
-  return out
+  return out.sort((a, b) => String((a as unknown as { ts: string }).ts).localeCompare(String((b as unknown as { ts: string }).ts)))
 }
 
 const L = (o: unknown) => JSON.stringify(o) + '\n'
@@ -163,6 +163,43 @@ describe.skipIf(TWINS.length === 0)('changes parse memos outlive the output LRU 
       expect(log).toHaveLength(2)
       expect(log[0]).toMatchObject({ resumed: false, readBytes: fs.statSync(transcript(whale)).size - Buffer.byteLength(appended) })
       expect(log[1]).toMatchObject({ resumed: true, readBytes: Buffer.byteLength(appended), files: 2 })
+    }, 90_000)
+
+    it(`${twin.name}: a restart reads only appended bytes from a dense transcript`, async () => {
+      root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-changes-restart-')))
+      const home = path.join(root, 'home')
+      const daemonDir = path.join(root, 'daemon')
+      const repo = path.join(root, 'repo')
+      fs.mkdirSync(repo, { recursive: true })
+      const projectDir = path.join(home, '.claude', 'projects', encodeProjectPathCore(repo))
+      fs.mkdirSync(projectDir, { recursive: true })
+      const sid = 'restart-whale'
+      const transcript = path.join(projectDir, `${sid}.jsonl`)
+      const chat = L({ type: 'assistant', cwd: repo, message: { content: [{ type: 'text', text: 'x'.repeat(1500) }] } })
+      fs.writeFileSync(transcript, writeLine(repo, 'a.ts', 'first\n') + chat.repeat(20000))
+      fs.writeFileSync(path.join(repo, 'a.ts'), 'first\n')
+      await boot(twin, home, daemonDir)
+      const start = Date.now()
+      expect((await rpc({ cmd: 'changes.compute', sid, cwd: repo })).ok).toBe(true)
+      const coldMs = Date.now() - start
+      ws!.close(); ws = null
+      const child = proc!
+      const exited = new Promise<void>(resolve => child.once('exit', () => resolve()))
+      child.kill('SIGKILL')
+      await exited
+      proc = null
+      const append = writeLine(repo, 'b.ts', 'second\n')
+      fs.appendFileSync(transcript, append)
+      fs.writeFileSync(path.join(repo, 'b.ts'), 'second\n')
+      await boot(twin, home, daemonDir)
+      const secondStart = Date.now()
+      const result = await rpc({ cmd: 'changes.compute', sid, cwd: repo })
+      expect(result.ok).toBe(true)
+      const records = computeLog(daemonDir, sid)
+      console.log(`[changes-restart-cost] ${JSON.stringify({ twin: twin.name, coldMs, restartMs: Date.now() - secondStart, appendBytes: Buffer.byteLength(append), records })}`)
+      expect((result.result as { fileCount: number }).fileCount).toBe(2)
+      expect(records).toHaveLength(2)
+      expect(records[1]).toMatchObject({ resumed: true, readBytes: Buffer.byteLength(append), files: 2 })
     }, 90_000)
 
     // The same sweep, seen from a session that did not change: its full output
@@ -246,14 +283,15 @@ describe.skipIf(TWINS.length === 0)('changes parse memos outlive the output LRU 
       await new Promise((r) => setTimeout(r, 5000))
       expect((await rpc({ cmd: 'changes.compute', sid, cwd: repo })).result).toEqual(first.result)
       expect(computeLog(daemonDir, sid)).toHaveLength(1)
-      // ...and after a resume appends, the transcript is read from the start once.
-      fs.appendFileSync(transcript, writeLine(repo, 'b.ts', 'b1\n'))
+      // ...and after a resume appends, the disk checkpoint restores the released parse.
+      const appended = writeLine(repo, 'b.ts', 'b1\n')
+      fs.appendFileSync(transcript, appended)
       fs.writeFileSync(path.join(repo, 'b.ts'), 'b1\n')
       const moved = await rpc({ cmd: 'changes.compute', sid, cwd: repo })
       expect((moved.result as { fileCount: number }).fileCount).toBe(2)
       const log = computeLog(daemonDir, sid)
       expect(log).toHaveLength(2)
-      expect(log[1]).toMatchObject({ resumed: false, readBytes: fs.statSync(transcript).size })
+      expect(log[1]).toMatchObject({ resumed: true, readBytes: Buffer.byteLength(appended) })
     }, 90_000)
   }
 })

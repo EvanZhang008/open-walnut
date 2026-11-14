@@ -14674,6 +14674,9 @@ async function computeChangesCached(sid, cwd, refresh) {
         subCache: memo.subCache,
         gitRootByDir: memo.gitRootByDir,
         mainParse: memo.mainParse,
+        checkpointDir: path.join(SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR, 'changes-checkpoints'),
+        checkpointVersion: DAEMON_VERSION,
+        reparse: refresh,
         // Files whose ops, stat and HEAD content are unchanged reuse their last
         // reconstruction; it lives and dies with the cached output.
         // Refresh ("re-read the data") rebuilds every file and asks git again.
@@ -14691,7 +14694,7 @@ async function computeChangesCached(sid, cwd, refresh) {
       const stats = output.parseStats || {};
       logMsg('info', 'changes.compute done', {
         sid: sid, ms: memo.lastUsed - startedAt, resumed: stats.resumed === true,
-        readBytes: stats.readBytes, size: output.size, files: output.result.fileCount,
+        readBytes: stats.readBytes, subReadBytes: stats.subReadBytes || 0, size: output.size, files: output.result.fileCount,
         reconstructed: output.computeStats ? output.computeStats.reconstructed : undefined,
         reused: output.computeStats ? output.computeStats.reused : undefined,
         gitSpawns: output.computeStats ? output.computeStats.gitSpawns : undefined,
