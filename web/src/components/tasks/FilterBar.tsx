@@ -15,7 +15,8 @@
  * pointer leaves it (G30), so a quick second click never lands on a list row
  * that moved up.
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { ICON_CHECK } from '../common/Icons';
 import '@/styles/filter-bar-row.css';
 import type { FilterBarController, FilterChip, FilterDim } from './filter-bar-types';
@@ -69,6 +70,7 @@ interface ChipMenuState {
 }
 
 export function FilterBar({ controller: c }: FilterBarProps) {
+  const routeShown = useContext(RouteShownContext) !== false;
   const chips = c.chips;
   const w = useFilterWriter(c);
   const [chipMenu, setChipMenu] = useState<ChipMenuState | null>(null);
@@ -112,11 +114,11 @@ export function FilterBar({ controller: c }: FilterBarProps) {
   // width too ("Loading completed" -> "37 tasks"), and the fit must follow.
   useEffect(() => {
     const el = chipsRef.current;
-    if (!visible || !el || typeof ResizeObserver === 'undefined') return;
+    if (!routeShown || !visible || !el || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver((entries) => setWidth(Math.round(entries[0]?.contentRect.width ?? 0)));
     ro.observe(el);
     return () => ro.disconnect();
-  }, [visible]);
+  }, [visible, routeShown]);
 
   // Shrink `fit` until the box wraps into at most `maxLines` lines (F02: the row
   // wraps the whole set and overflows only when space is really gone). The menu
@@ -128,6 +130,7 @@ export function FilterBar({ controller: c }: FilterBarProps) {
   const sig = `${maxLines}#${chips.map((ch) => `${ch.dim}=${ch.value}`).join('|')}#${width}#${c.search.active}#${c.viewItem?.label ?? ''}#${c.archiveLoading}#${c.count}`;
   const lastSig = useRef('');
   useLayoutEffect(() => {
+    if (!routeShown) return;
     if (lastSig.current !== sig) {
       lastSig.current = sig;
       if (fit !== Infinity) { setFit(Infinity); return; }
@@ -164,8 +167,12 @@ export function FilterBar({ controller: c }: FilterBarProps) {
   // scrolling it by the row's height slid it under the stuck headings (2026-10-04:
   // "N Waiting hidden" revealed a pinned card that the Pinned heading covered).
   const scrollerRef = useRef<HTMLElement | null>(null);
-  scrollerRef.current = listScroller(c.listScrollRef.current) ?? scrollerRef.current;
+  const wasShown = useRef(routeShown);
+  // On return the DOM is still hidden until commit. Keep the last actual scroll box.
+  if (routeShown && wasShown.current) scrollerRef.current = listScroller(c.listScrollRef.current) ?? scrollerRef.current;
+  wasShown.current = routeShown;
   useLayoutEffect(() => {
+    if (!routeShown) return;
     const h = !visible ? 0 : c.rowRef.current?.offsetHeight ?? 0;
     const delta = h - inFlowHeight.current;
     inFlowHeight.current = h;
@@ -222,7 +229,7 @@ export function FilterBar({ controller: c }: FilterBarProps) {
   const outsideRef = useRef(outsideHoldArea);
   outsideRef.current = outsideHoldArea;
   useEffect(() => {
-    if ((!linger && holdHeight === null) || collapsing) return;
+    if (!routeShown || (!linger && holdHeight === null) || collapsing) return;
     const onMove = (e: PointerEvent) => {
       if (outsideRef.current(e.clientX, e.clientY)) leaveRef.current();
     };
@@ -239,7 +246,7 @@ export function FilterBar({ controller: c }: FilterBarProps) {
       window.removeEventListener('click', onClick, true);
       window.removeEventListener('wheel', onWheel);
     };
-  }, [linger, holdHeight, collapsing, c.rowRef]);
+  }, [linger, holdHeight, collapsing, c.rowRef, routeShown]);
   const openChipMenu = (dim: FilterDim, anchor: HTMLElement) =>
     setChipMenu((cur) => (cur?.dim === dim ? null : { dim, anchor }));
   const chipMenuAnchor = useMemo(() => ({ current: chipMenu?.anchor ?? null }), [chipMenu]);

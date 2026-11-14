@@ -38,13 +38,18 @@ async function mockSession(page: Page) {
   })
   // Count layout reads made inside the hidden home page.
   await page.addInitScript(() => {
-    const w = window as unknown as { __hiddenReads: number }
+    const w = window as unknown as { __hiddenReads: number; __hiddenReadStacks: Record<string, number> }
     w.__hiddenReads = 0
+    w.__hiddenReadStacks = {}
     const desc = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollHeight')!
     Object.defineProperty(Element.prototype, 'scrollHeight', {
       ...desc,
       get(this: Element) {
-        if (this.closest('.main-page-wrapper-hidden')) w.__hiddenReads++
+        if (this.closest('.main-page-wrapper-hidden')) {
+          w.__hiddenReads++
+          const stack = new Error().stack ?? 'unknown'
+          w.__hiddenReadStacks[stack] = (w.__hiddenReadStacks[stack] ?? 0) + 1
+        }
         return desc.get!.call(this)
       },
     })
@@ -71,6 +76,7 @@ async function awayOnOrg(page: Page, ms: number): Promise<number> {
   const before = await hiddenReads(page)
   await page.waitForTimeout(ms)
   const reads = (await hiddenReads(page)) - before
+  if (reads > 2) console.log('[hidden-layout-stacks]', await page.evaluate(() => (window as unknown as { __hiddenReadStacks: unknown }).__hiddenReadStacks))
   await page.getByTestId('sidebar-core-app-home').click()
   await expect(page.locator('.main-page-wrapper-hidden')).toHaveCount(0)
   await page.waitForTimeout(1200)
