@@ -1,45 +1,41 @@
 /**
- * A router node's own settings, folded inline under its header on the Org page (OrgNodeDetail).
- * A router is its own Org node (Task.org_role 'router'): not a VP and not a task under one. Only a
- * router's detail draws this section; a VP never gets any of it.
+ * A router node's settings. On the Org page (OrgNodeDetail) a router shows one line under its
+ * header (its area, Paused or Ready for new items, how many VPs it works with) and a button that
+ * opens the settings in their own dialog (RouterSettingsDialog, 2026-11-14, the user: a popup
+ * window, not a drawer). Apps › Mail opens the same dialog for each mailbox's router, so there is
+ * one form and one saved value.
  *
- *   folded   one line: its area, Paused or Ready for new items, how many VPs it works with
- *   open     its area (set at creation, read only here), its name, Paused, and the VPs it works
- *            with first; Save sends PATCH /api/v1/org/routers/:id with the changed fields only
+ * The dialog shows the area (set at creation, read only), the mailboxes it reads, the folders it
+ * watches (picked from the mailboxes' own folder lists, RouterFolderPicker), its name, Paused, and
+ * the VPs it works with first; Save sends PATCH /api/v1/org/routers/:id with the changed fields only.
  *
  * A link is preferred collaboration, never ownership and never access to a VP's data. A link that
  * names a task which is no longer an open VP (closed, no longer a VP, or not found) is shown as such,
  * still checked, so the user sees it and can drop it.
  *
- * Inline, never a menu or popover (web/src/AGENTS.md "Menus & overlays"): the section grows in the
- * page, so nothing has to be placed against the viewport. The edits are a draft (useDraftValue,
- * per router), so a failed save or a reload keeps what was typed; whether the section is open is a
- * kept view (usePageViewOf, per router). A save that answers after the page moved to another router
- * writes nothing onto that router: its state is keyed by the router it was sent for.
+ * The edits are a draft (useDraftValue, per router), so closing the dialog, a failed save or a reload
+ * keeps what was typed. A save that answers after the dialog moved to another router writes nothing
+ * onto that router: its state is keyed by the router it was sent for.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useInRouterContext } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
 import type { Task } from '@open-walnut/core';
-import { apiPatch } from '@/api/client';
-import { refreshRouterAreas, routerAreaFolders, routerAreaSources, useRouterAreaNames } from './router-area-names';
+import { routerAreaFolders, useRouterAreaNames } from './router-area-names';
 import { setRouterSettingsOpen } from './router-settings-open';
-import { listMailAccounts } from '@/api/mail';
-import { useDraftValue } from '@/hooks/useDraft';
-import { draftKey } from '@/utils/drafts';
-import { isBoolean, usePageViewOf } from '@/utils/view-memory';
 import { areaIdWords, routerStateWord, vpLinkCount } from './org-channels-model';
-import { RouterFoldersField, folderList, sameFolders } from './RouterFoldersField';
+import { RouterFolderPicker, ROUTER_NO_FOLDER_LINE, folderList, sameFolders } from './RouterFolderPicker';
+import { RouterSettingsDialog } from './RouterSettingsDialog';
 
 
 export interface RouterSettingsValue {
   name: string;
   links: string[];
   paused: boolean;
-  /** The watched folders as typed: names separated by commas ('' = the Inbox, the plugin's default); unset in a draft saved before. */
-  folders?: string;
-  /** The saved folders when the person first typed in the field; unset while it is untouched, so
-   *  an untouched field follows the saved value (a save in Apps › Mail included) and is never sent back. */
-  foldersFrom?: string;
+  /** The watched folders (a role or a folder id each; the default is the Inbox). A draft saved
+   *  before the picker may hold them as one comma-separated string. */
+  folders?: string[] | string;
+  /** Set once the person changed the folders; while unset the folders follow the saved value (a
+   *  save made in the other place included) and are never sent back. */
+  foldersFrom?: string[] | string;
 }
 
 export interface RouterSettingsPatch {
@@ -71,7 +67,8 @@ export const ROUTER_LINK_NOTE = 'Links name the VPs it works with first. A link 
 
 /** The router's saved settings, as the form's baseline. */
 export function routerBaseline(task: Pick<Task, 'org_name' | 'title' | 'router_links' | 'router_paused'>, folders: readonly string[] = []): RouterSettingsValue {
-  return { name: task.org_name || task.title, links: [...(task.router_links ?? [])], paused: task.router_paused !== false, folders: folders.join(', ') };
+  // Nothing saved means the plugin's default, the Inbox: shown as the Inbox ticked.
+  return { name: task.org_name || task.title, links: [...(task.router_links ?? [])], paused: task.router_paused !== false, folders: folders.length ? folderList(folders) : ['inbox'] };
 }
 
 /** Only the fields that changed (null: nothing to save). Links compare as a set. */
@@ -83,21 +80,22 @@ export function routerPatch(saved: RouterSettingsValue, edited: RouterSettingsVa
   const b = [...new Set(edited.links)].sort();
   if (a.length !== b.length || a.some((id, i) => id !== b[i])) patch.links = [...new Set(edited.links)];
   if (edited.paused !== saved.paused) patch.paused = edited.paused;
-  if (!sameFolders(saved.folders ?? '', edited.folders ?? '')) patch.folders = folderList(edited.folders ?? '');
+  if (!sameFolders(folderList(saved.folders ?? []), folderList(edited.folders ?? []))) patch.folders = folderList(edited.folders ?? []);
   return Object.keys(patch).length ? patch : null;
 }
 
 /** The form as shown: a draft holds the folders only once they were typed; untouched, they are
  *  the saved ones (a save in Apps › Mail included), so an older draft never sends them back. */
 export function shownRouterValue(draft: RouterSettingsValue, saved: RouterSettingsValue): RouterSettingsValue {
-  return draft.foldersFrom === undefined ? { ...draft, folders: saved.folders } : draft;
+  return draft.foldersFrom === undefined ? { ...draft, folders: saved.folders } : { ...draft, folders: folderList(draft.folders ?? []) };
 }
 
 /** One edit of the draft; the first change to the folders marks them typed. */
 export function editRouterValue(draft: RouterSettingsValue, saved: RouterSettingsValue, next: (v: RouterSettingsValue) => RouterSettingsValue): RouterSettingsValue {
   const shown = shownRouterValue(draft, saved);
   const edited = next(shown);
-  return shown.foldersFrom === undefined && edited.folders !== shown.folders ? { ...edited, foldersFrom: saved.folders ?? '' } : edited;
+  return shown.foldersFrom === undefined && !sameFolders(folderList(edited.folders ?? []), folderList(shown.folders ?? []))
+    ? { ...edited, foldersFrom: folderList(saved.folders ?? []) } : edited;
 }
 
 /** Why the form cannot be sent as it is ('' = it can). */
@@ -105,6 +103,7 @@ export function routerFormProblem(edited: RouterSettingsValue): string {
   const name = edited.name.trim();
   if (!name) return 'Give the router a name.';
   if (name.length > ROUTER_NAME_MAX) return `A router name is at most ${ROUTER_NAME_MAX} characters.`;
+  if (edited.folders !== undefined && folderList(edited.folders).length === 0) return ROUTER_NO_FOLDER_LINE;
   return '';
 }
 
@@ -149,124 +148,48 @@ interface Props {
   tasksLoading?: boolean;
 }
 
-export function OrgRouterSettings({ router, tasks, tasksLoading = false }: Props) {
-  const id = router.id;
-  // The VP finder's words: a typed search, so it starts empty for each router.
-  const [vpQuery, setVpQuery] = useState('');
-  useEffect(() => { setVpQuery(''); }, [id]);
-  const [expanded, setExpanded] = usePageViewOf<boolean>('org', 'router.settings', id, false, isBoolean);
-  /** The router as the last save here answered it, until the task list catches up. */
-  const [saved, setSaved] = useState<Task | null>(null);
-  /** Which router a save is on its way for (null: none). */
-  const [pendingFor, setPendingFor] = useState<string | null>(null);
-  const [failure, setFailure] = useState<{ id: string; text: string } | null>(null);
-  const [savedAt, setSavedAt] = useState<{ id: string; at: number } | null>(null);
-  const currentId = useRef(id);
-  currentId.current = id;
-  const seq = useRef(0);
-  useEffect(() => () => { seq.current++; }, []);
-
-  const fresh = saved && saved.id === id && (saved.updated_at ?? '') >= (router.updated_at ?? '') ? saved : router;
-  const area = fresh.router_area_id || '';
+/** The saved settings of a router as the page knows them, and the links that no longer name an open VP. */
+export function useRouterSaved(router: Task, tasks: readonly Task[], tasksLoading: boolean) {
+  const area = router.router_area_id || '';
   // The area's own name ("Personal"), never its id; the id stays until the areas list answers.
   const areaNames = useRouterAreaNames([area]);
   const savedFolders = (routerAreaFolders()[area] ?? []).join('\n');
-  const baseline = useMemo(() => routerBaseline(fresh, savedFolders ? savedFolders.split('\n') : []), [fresh, savedFolders, areaNames]);
-  const form = useDraftValue<RouterSettingsValue>(draftKey('org-router-settings', id), baseline);
-  const value = shownRouterValue(form.value, baseline);
-  const busy = pendingFor === id;
-  const error = failure?.id === id ? failure.text : '';
-  const patch = routerPatch(baseline, value);
-  const problem = routerFormProblem(value);
-
-  const leads = useMemo(() => tasks.filter(isOpenVp), [tasks]);
-  // Links that no longer name an open VP: the saved ones, and any still checked in the draft. While
-  // the list loads, a link not found yet is not called removed.
-  const stale = routerLinkRows([...baseline.links, ...value.links], tasks)
-    .filter((r) => r.state !== 'open' && !(tasksLoading && r.state === 'missing'));
-  const savedStale = stale.filter((r) => baseline.links.includes(r.id)).length;
-
-  const edit = (next: (v: RouterSettingsValue) => RouterSettingsValue) => form.setValue((v) => editRouterValue(v, baseline, next));
-  const toggleLink = (linkId: string) => edit((v) => ({
-    ...v, links: v.links.includes(linkId) ? v.links.filter((x) => x !== linkId) : [...v.links, linkId],
-  }));
-
-  const save = async () => {
-    if (busy || !patch || problem) return;
-    const forId = id;
-    const sentKey = form.key;
-    const sentText = JSON.stringify(form.value);
-    const mine = ++seq.current;
-    setPendingFor(forId);
-    setFailure(null);
-    try {
-      const res = await apiPatch<{ task?: Task }>(`/api/v1/org/routers/${encodeURIComponent(forId)}`, patch);
-      // The draft was saved whatever is on screen now; clear only that router's copy (useDraft's
-      // sentKey rule leaves another router's words alone).
-      // New folders are read back first, so the cleared field shows them, not the old ones.
-      if (patch.folders) await refreshRouterAreas();
-      form.clear(sentKey, sentText);
-      if (mine !== seq.current || currentId.current !== forId) return;
-      if (res?.task && res.task.id === forId) setSaved(res.task);
-      setSavedAt({ id: forId, at: Date.now() });
-    } catch (err) {
-      if (mine !== seq.current || currentId.current !== forId) return;
-      setFailure({ id: forId, text: err instanceof Error ? err.message : 'The router settings were not saved.' });
-    } finally {
-      if (mine === seq.current && currentId.current === forId) setPendingFor(null);
-    }
-  };
-
-  // Opening the settings reads the areas again: choosing this area for a message in Mail or Slack
-  // adds its account on the server, and "Reads from" must show it without a reload.
-  useEffect(() => { if (expanded) refreshRouterAreas(); }, [expanded, id]);
-  useEffect(() => { setRouterSettingsOpen(id, expanded); return () => setRouterSettingsOpen(id, false); }, [expanded, id]);
-  // "Reads from" names a mail account by its address, the way Mail shows it, never by its id.
-  const [mailNames, setMailNames] = useState<Record<string, string>>({});
-  useEffect(() => {
-    if (!expanded) return;
-    let live = true;
-    listMailAccounts()
-      .then((r) => { if (live) setMailNames(mailAccountNames(r?.accounts ?? [])); })
-      .catch(() => { /* the id stays */ });
-    return () => { live = false; };
-  }, [expanded]);
-  // The idle router's "Open settings" (OrgNodeStart) opens this section.
-  useEffect(() => {
-    const open = (event: Event) => { if ((event as CustomEvent<string>).detail === id) setExpanded(true); };
-    window.addEventListener(ROUTER_SETTINGS_OPEN_EVENT, open);
-    return () => window.removeEventListener(ROUTER_SETTINGS_OPEN_EVENT, open);
-  }, [id, setExpanded]);
+  const baseline = useMemo(() => routerBaseline(router, savedFolders ? savedFolders.split('\n') : []), [router, savedFolders, areaNames]);
   const areaLabel = (area && (areaNames[area] || areaIdWords(area))) || area;
-  const regionId = `org-router-settings-${id}`;
-  const justSaved = savedAt?.id === id && !patch;
+  const savedStale = routerLinkRows(baseline.links, tasks).filter((r) => r.state !== 'open' && !(tasksLoading && r.state === 'missing')).length;
+  return { area, areaLabel, baseline, savedStale };
+}
+
+export function OrgRouterSettings({ router, tasks, tasksLoading = false }: Props) {
+  const id = router.id;
+  const [open, setOpen] = useState(false);
+  const { areaLabel, baseline, savedStale } = useRouterSaved(router, tasks, tasksLoading);
+  useEffect(() => { setOpen(false); }, [id]);
+  useEffect(() => { setRouterSettingsOpen(id, open); return () => setRouterSettingsOpen(id, false); }, [open, id]);
+  // The idle router's "Open settings" (OrgNodeStart) and Mail's From Mail line open the dialog.
+  useEffect(() => {
+    const show = (event: Event) => { if ((event as CustomEvent<string>).detail === id) setOpen(true); };
+    window.addEventListener(ROUTER_SETTINGS_OPEN_EVENT, show);
+    return () => window.removeEventListener(ROUTER_SETTINGS_OPEN_EVENT, show);
+  }, [id]);
 
   return (
-    <section className={`org-router-settings${expanded ? ' is-open' : ''}`} data-testid="org-router-settings" data-router-id={id} aria-label="Router settings">
+    <section className="org-router-settings" data-testid="org-router-settings" data-router-id={id} aria-label="Router settings">
       <button
         type="button"
         className="org-router-settings-head"
         data-testid="org-router-settings-toggle"
-        aria-expanded={expanded}
-        aria-controls={regionId}
-        onClick={() => setExpanded(!expanded)}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => setOpen(true)}
       >
-        <span className="org-router-settings-caret" aria-hidden="true">{expanded ? '▾' : '▸'}</span>
         <span className="org-router-settings-title">Router settings</span>
         <span className="org-router-settings-summary" data-testid="org-router-summary">
           {routerSummary(areaLabel, baseline, savedStale)}
         </span>
+        <span className="org-router-settings-open" aria-hidden="true">Open</span>
       </button>
-      {expanded && (
-        <div className="org-router-settings-scroll">
-          <RouterSettingsBody
-            id={regionId} draftKey={form.key} area={areaLabel} sources={routerAreaSources()[area] ?? []} sourceNames={mailNames} value={value} leads={leads} stale={stale}
-            busy={busy} error={error} problem={problem} dirty={!!patch} justSaved={justSaved} tasksLoading={tasksLoading}
-            linkFilter={vpQuery} onLinkFilter={setVpQuery}
-            onEdit={edit} onToggleLink={toggleLink} onSave={() => { void save(); }} onDiscard={() => { form.clear(); setFailure(null); }}
-          />
-        </div>
-      )}
+      {open && <RouterSettingsDialog router={router} tasks={tasks} tasksLoading={tasksLoading} onClose={() => setOpen(false)} />}
     </section>
   );
 }
@@ -319,14 +242,7 @@ export function linkFilterMatches(leads: readonly Task[], linked: readonly strin
   return leads.filter((lead) => linked.includes(lead.id) || (lead.org_name || lead.title || '').toLowerCase().includes(words));
 }
 
-/** Apps › Mail, where the same folders are set (a plain link where no router is mounted, as in a static render). */
-function MailSettingsLink() {
-  const routed = useInRouterContext();
-  const props = { className: 'org-router-link-out', 'data-testid': 'org-router-folders-in-mail' };
-  return routed ? <Link to="/apps?plugin=mail" {...props}>Apps › Mail</Link> : <a href="/apps?plugin=mail" {...props}>Apps › Mail</a>;
-}
-
-/** The open section: no hooks and no fetch of its own, so it renders from its props alone. */
+/** The dialog's form: no hooks and no fetch of its own (the folder picker reads its folder lists), so it renders from its props. */
 export function RouterSettingsBody({ id, draftKey: key, area, sources = [], value, leads, stale, busy, error, problem, dirty, justSaved, tasksLoading, onEdit, onToggleLink, onSave, onDiscard, linkFilter = '', onLinkFilter, sourceNames = {} }: RouterSettingsBodyProps) {
   const draftAttr = key ?? undefined;
   const staleChecked = stale.filter((r) => value.links.includes(r.id)).length;
@@ -354,20 +270,20 @@ export function RouterSettingsBody({ id, draftKey: key, area, sources = [], valu
           <span className="org-router-hint">{ROUTER_SOURCES_NOTE}</span>
         </div>
       </div>
-      <div className="org-router-row">
-        <label className="org-router-label" htmlFor={`${id}-folders`}>Watches folders</label>
-        <div className="org-router-value">
-          <RouterFoldersField
-            inputId={`${id}-folders`}
-            value={value.folders ?? ''}
-            draftKey={key}
-            testId="org-router-folders"
-            disabled={busy}
-            note={sources.some((src) => src.kind === 'mail') ? <>Also set in <MailSettingsLink />.</> : null}
-            onChange={(folders) => onEdit((v) => ({ ...v, folders }))}
-          />
+      {sources.some((src) => src.kind === 'mail') && (
+        <div className="org-router-row" role="group" aria-labelledby={`${id}-folders`}>
+          <span className="org-router-label" id={`${id}-folders`}>Watches folders</span>
+          <div className="org-router-value">
+            <RouterFolderPicker
+              accounts={sources.filter((src) => src.kind === 'mail').map((src) => ({ account: src.account, label: sourceNames[src.account] || src.account }))}
+              value={folderList(value.folders ?? [])}
+              testId="org-router-folders"
+              disabled={busy}
+              onChange={(folders) => onEdit((v) => ({ ...v, folders }))}
+            />
+          </div>
         </div>
-      </div>
+      )}
       <div className="org-router-row">
         <label className="org-router-label" htmlFor={`${id}-name`}>Name</label>
         <div className="org-router-value">
@@ -417,6 +333,7 @@ export function RouterSettingsBody({ id, draftKey: key, area, sources = [], valu
             value={linkFilter}
             disabled={busy}
             onChange={(e) => onLinkFilter(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}
           />
         )}
         <div className="org-router-link-list">

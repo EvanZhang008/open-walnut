@@ -1,7 +1,7 @@
 /**
- * Which routers have their settings section open in this tab, so the page's other "Open settings"
+ * Which routers have their settings dialog open in this tab, so the page's other "Open settings"
  * buttons (the paused router's idle line, Mail's From Mail line) show only while it is folded.
- * OrgRouterSettings writes it; the open state itself stays kept by usePageViewOf there.
+ * OrgRouterSettings writes it while its settings dialog is open.
  */
 import { useSyncExternalStore } from 'react';
 

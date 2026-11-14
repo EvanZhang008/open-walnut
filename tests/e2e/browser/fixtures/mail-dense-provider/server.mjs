@@ -60,6 +60,9 @@ const B = 'dense:marina';
 const authRequired = process.env.PW_MAIL_DENSE_AUTH === '1';
 const noProviderDrafts = process.env.PW_MAIL_DENSE_NO_DRAFTS === '1';
 const tailOne = process.env.PW_MAIL_DENSE_TAIL_ONE === '1';
+// Nested folders on account B (a parent and its children, two levels deep), as an IMAP LIST answers
+// them: the id is the whole path and the name its last part. For the router folder picker.
+const nested = process.env.PW_MAIL_DENSE_NESTED === '1';
 
 /** Where a send is recorded, exactly as the other mail fixture does it. */
 const OUTBOX = path.join(process.env.OPEN_WALNUT_HOME || os.tmpdir(), 'mail-dense-sends.json');
@@ -179,6 +182,14 @@ function mailboxesB() {
     { mailboxId: 'junk', name: 'Junk', role: 'spam', declared: { total: 60, unread: 37 } },
     { mailboxId: 'bin', name: 'Bin', role: 'trash', declared: { total: 3_200, unread: 2_609 } },
     ...(tailOne ? [{ mailboxId: 'marina/label/berths', name: 'Berths', role: 'other', declared: { total: 9, unread: 4 } }] : []),
+    ...(nested ? [
+      { mailboxId: 'Projects', name: 'Projects', role: 'other' },
+      { mailboxId: 'Projects/Alpha', name: 'Alpha', role: 'other' },
+      { mailboxId: 'Projects/Beta', name: 'Beta', role: 'other' },
+      { mailboxId: 'Clients', name: 'Clients', role: 'other' },
+      { mailboxId: 'Clients/Acme', name: 'Acme', role: 'other' },
+      { mailboxId: 'Clients/Acme/Invoices', name: 'Invoices', role: 'other' },
+    ] : []),
   ];
 }
 

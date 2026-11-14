@@ -41,6 +41,7 @@ const OWN_WORDS: Record<string, string> = {
   'components/org/OrgRouterSetup.tsx#lead.org_name || lead.title': 'a VP in the router\'s collaboration picker: taken only by Create router',
   'components/org/OrgRouterSettings.tsx#lead.org_name || lead.title': 'a VP in the router\'s collaboration picker: taken only by Save',
   'components/org/OrgRouterSettings.tsx#staleLinkLabel(row)': 'a closed or missing VP still linked, in the same picker: taken only by Save',
+  'components/org/RouterFolderPicker.tsx#option.label': 'a mail folder in the router\'s folder picker: taken only by Save',
   'components/passwords/GeneratorPanel.tsx#label': 'a character class the password generator uses (A-Z, 0-9): the option\'s own name',
   'components/sessions/SessionRewindDialog.tsx#fileStats': 'how many files the option restores, part of its sentence; taken only by Rewind',
   'components/sessions/SessionRewindDialog.tsx#filesReason': 'why the option is off, part of its sentence',

@@ -4,19 +4,17 @@
  * router, and the folders that router watches are set here, the Inbox by default.
  *
  * One router can read several mailboxes, so each router is one block: its name and state, the
- * mailboxes it reads, and its folders. The folders are the router's own saved list, the same one
- * its Org settings edit (RouterFoldersField): Save here sends PATCH /api/v1/org/routers/:id with
- * `folders` only, and both pages read it back from GET /api/v1/router/areas.
+ * mailboxes it reads, and the folders it watches. Settings opens the router's one settings dialog
+ * (RouterSettingsDialog), the same one its Org node opens, where the folders are picked from the
+ * mailboxes' own folder lists: one form and one saved value.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useInRouterContext } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
-import { apiPatch } from '@/api/client';
 import { listMailAccounts, type MailAccountDto } from '@/api/mail';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
-import { useDraftValue } from '@/hooks/useDraft';
-import { draftKey } from '@/utils/drafts';
-import { RouterFoldersField, folderList, sameFolders } from '@/components/org/RouterFoldersField';
+import { folderList } from '@/components/org/RouterFolderPicker';
+import { RouterSettingsDialog } from '@/components/org/RouterSettingsDialog';
 import { areaIdWords } from '@/components/org/org-channels-model';
 import {
   accountAreaKey, refreshRouterAreas, routerAccountAreas, routerAreaFolders, routerAreaRouters, useRouterAreaNames, useRouterAreasReadState,
@@ -31,8 +29,8 @@ export interface MailRouterBlock {
   /** Paused or Ready from its task; Closed for a router that was completed; null while its task is not loaded. */
   state: 'Paused' | 'Ready' | 'Closed' | null;
   accounts: Array<{ accountId: string; label: string }>;
-  /** The saved folders, as the field shows them ('' = the Inbox). */
-  folders: string;
+  /** The saved folders ([] = the Inbox). */
+  folders: string[];
 }
 
 /** Each router that reads a mailbox, with its mailboxes, in the accounts' order; then the mailboxes no router reads. */
@@ -61,7 +59,7 @@ export function mailRouterBlocks(
         name: (task && (task.org_name || task.title)) || `${area} router`,
         state: !task ? null : task.phase === 'COMPLETE' ? 'Closed' : task.router_paused !== false ? 'Paused' : 'Ready',
         accounts: [],
-        folders: (areaFolders[areaId] ?? []).join(', '),
+        folders: [...(areaFolders[areaId] ?? [])],
       };
       blocks.set(areaId, block);
     }
@@ -97,9 +95,9 @@ export function MailRouterSettings() {
   if (!accounts || areasRead === 'pending') return <p className="mail-router-empty" data-testid="mail-router-settings">Reading the mailboxes…</p>;
   return (
     <div className="mail-router-settings" data-testid="mail-router-settings">
-      <p className="mail-router-lead">Each mailbox comes with a router. It reads the new mail in the folders below and hands each one to the task or VP that owns it.</p>
+      <p className="mail-router-lead">Each mailbox comes with a router. It reads the new mail in the folders it watches and hands each one to the task or VP that owns it.</p>
       {blocks.length === 0 && unrouted.length === 0 && <p className="mail-router-empty">No mailbox yet. Add one in Mail.</p>}
-      {blocks.map((block) => <MailRouterBlockView key={block.routerId} block={block} />)}
+      {blocks.map((block) => <MailRouterBlockView key={block.routerId} block={block} router={(tasks ?? []).find((t) => t.id === block.routerId)} tasks={tasks ?? []} tasksLoading={!tasks} />)}
       {unrouted.length > 0 && (
         <div className="mail-router-block is-unrouted" data-testid="mail-router-unrouted">
           <div className="mail-router-head"><span className="mail-router-name">No router yet</span></div>
@@ -118,71 +116,30 @@ function OrgLink({ routerId }: { routerId: string }) {
   return routed ? <Link to={to} {...props}>Open in Org</Link> : <a href={to} {...props}>Open in Org</a>;
 }
 
-function MailRouterBlockView({ block }: { block: MailRouterBlock }) {
-  const form = useDraftValue<string>(draftKey('mail-router-folders', block.routerId), block.folders);
-  const value = form.value;
-  const dirty = !sameFolders(block.folders, value);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [saved, setSaved] = useState(false);
-  // Set on every mount: React's development double mount runs the cleanup once before the real mount.
-  const live = useRef(true);
-  useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
+/** The saved folders in words: a role by its name, a folder by the last part of its id. */
+export function foldersInWords(entries: readonly string[]): string {
+  const ROLE: Record<string, string> = { inbox: 'Inbox', archive: 'Archive', sent: 'Sent', drafts: 'Drafts', spam: 'Spam', trash: 'Trash' };
+  const list = entries.length ? entries : ['inbox'];
+  return list.map((one) => ROLE[one.trim().toLowerCase()] ?? one.split(/[/.]/).filter(Boolean).pop() ?? one).join(', ');
+}
 
-  const save = async () => {
-    if (busy || !dirty) return;
-    const sentKey = form.key;
-    const sentText = JSON.stringify(value);
-    setBusy(true);
-    setError('');
-    setSaved(false);
-    try {
-      await apiPatch(`/api/v1/org/routers/${encodeURIComponent(block.routerId)}`, { folders: folderList(value) });
-      // Read back first, so the cleared field shows the folders just saved, not the old ones.
-      await refreshRouterAreas();
-      form.clear(sentKey, sentText);
-      if (live.current) setSaved(true);
-    } catch (err) {
-      if (live.current) setError(err instanceof Error ? err.message : 'The folders were not saved.');
-    } finally {
-      if (live.current) setBusy(false);
-    }
-  };
-
-  const fieldId = `mail-router-folders-${block.routerId}`;
+function MailRouterBlockView({ block, router, tasks, tasksLoading }: { block: MailRouterBlock; router: Task | undefined; tasks: readonly Task[]; tasksLoading: boolean }) {
+  const [open, setOpen] = useState(false);
   return (
-    <form
-      className="mail-router-block"
-      data-testid="mail-router-block"
-      data-router-id={block.routerId}
-      aria-label={block.name}
-      onSubmit={(e) => { e.preventDefault(); void save(); }}
-    >
+    <div className="mail-router-block" data-testid="mail-router-block" data-router-id={block.routerId}>
       <div className="mail-router-head">
         <span className="mail-router-name">{block.name}</span>
         {block.state && <span className={`mail-router-state is-${block.state.toLowerCase()}`} data-testid="mail-router-state">{block.state}</span>}
-        <OrgLink routerId={block.routerId} />
+        <span className="mail-router-actions">
+          <OrgLink routerId={block.routerId} />
+          <button type="button" className="btn btn-sm" data-testid="mail-router-open-settings" aria-haspopup="dialog" aria-expanded={open} disabled={!router} onClick={() => setOpen(true)}>Settings</button>
+        </span>
       </div>
       <ul className="mail-router-accounts" data-testid="mail-router-accounts">
         {block.accounts.map((a) => <li key={a.accountId} data-account={a.accountId}>{a.label}</li>)}
       </ul>
-      <label className="mail-router-label" htmlFor={fieldId}>Watches folders</label>
-      <RouterFoldersField
-        inputId={fieldId}
-        value={value}
-        draftKey={form.key}
-        testId="mail-router-folders"
-        disabled={busy}
-        note={block.accounts.length > 1 ? 'Applies to every mailbox above.' : null}
-        onChange={(next) => { setSaved(false); form.setValue(next); }}
-      />
-      {error && <p className="mail-router-error" role="alert" data-testid="mail-router-error">{error}</p>}
-      <div className="mail-router-actions" hidden={!dirty && !saved}>
-        {dirty && <button type="submit" className="btn btn-sm btn-primary" data-testid="mail-router-save" disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>}
-        {dirty && <button type="button" className="btn btn-sm" data-testid="mail-router-discard" disabled={busy} onClick={() => { form.clear(); setError(''); }}>Discard</button>}
-        {/* Always mounted, so a screen reader announces the word when it appears. */}
-        <span className="mail-router-hint" role="status" aria-live="polite" data-testid="mail-router-saved">{!dirty && saved ? 'Saved.' : ''}</span>
-      </div>
-    </form>
+      <p className="mail-router-hint" data-testid="mail-router-folders-line">Watches {folderList(block.folders).length ? foldersInWords(folderList(block.folders)) : 'Inbox'}</p>
+      {open && router && <RouterSettingsDialog router={router} tasks={tasks} tasksLoading={tasksLoading} onClose={() => setOpen(false)} />}
+    </div>
   );
 }

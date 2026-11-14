@@ -31,8 +31,8 @@ describe('router settings', () => {
   } as Parameters<typeof RouterSettingsBody>[0]))
 
   it('read the areas again whenever they open, so an account Mail added shows', () => {
-    const src = code(read('web/src/components/org/OrgRouterSettings.tsx'))
-    expect(src).toMatch(/useEffect\(\(\) => \{ if \(expanded\) refreshRouterAreas\(\); \}, \[expanded, id\]\)/)
+    const src = code(read('web/src/components/org/RouterSettingsDialog.tsx'))
+    expect(src).toMatch(/useEffect\(\(\) => \{\s*void refreshRouterAreas\(\);/)
     expect(code(read('web/src/components/org/router-area-names.ts'))).toMatch(/export function refreshRouterAreas\(\): Promise<void> \{\s*queueRead\(\);/)
   })
 
@@ -73,7 +73,7 @@ describe("Mail's Open router", () => {
     for (const rel of ['web/src/components/org/OrgRouterFromMail.tsx', 'web/src/components/org/OrgNodeStart.tsx']) {
       expect(code(read(rel)), rel).toContain('new CustomEvent(ROUTER_SETTINGS_OPEN_EVENT')
     }
-    expect(code(read('web/src/components/org/OrgRouterSettings.tsx'))).toContain('window.addEventListener(ROUTER_SETTINGS_OPEN_EVENT, open)')
+    expect(code(read('web/src/components/org/OrgRouterSettings.tsx'))).toContain('window.addEventListener(ROUTER_SETTINGS_OPEN_EVENT, show)')
     expect(ROUTER_SETTINGS_OPEN_EVENT).toBe('org:router-settings-open')
   })
 
@@ -83,7 +83,7 @@ describe("Mail's Open router", () => {
     expect(detail.indexOf('<OrgRouterFromMail')).toBeLessThan(detail.indexOf('<OrgRouterSettings key'))
     expect(code(read('web/src/components/org/OrgRouterFromMail.tsx'))).toContain('paused && !settingsOpen')
     expect(code(read('web/src/components/org/OrgNodeStart.tsx'))).toContain("contact.router_paused !== false && !settingsOpen")
-    expect(code(read('web/src/components/org/OrgRouterSettings.tsx'))).toContain('setRouterSettingsOpen(id, expanded)')
+    expect(code(read('web/src/components/org/OrgRouterSettings.tsx'))).toContain('setRouterSettingsOpen(id, open)')
   })
 
   it('puts the step in one foot under the reader line', () => {

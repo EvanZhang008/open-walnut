@@ -177,7 +177,7 @@ const {
   OrgRouterSettings, RouterSettingsBody, routerBaseline, routerPatch, routerFormProblem, routerLinkRows,
   staleLinkLabel, staleNote, routerSummary, ROUTER_READY_LINE, ROUTER_PAUSED_LINE, ROUTER_LINK_NOTE,
 } = settingsMod
-const { folderList, foldersSkipInbox } = await import('../../web/src/components/org/RouterFoldersField')
+const { folderList, foldersSkipInbox } = await import('../../web/src/components/org/RouterFolderPicker')
 const model = await import('../../web/src/components/org/org-channels-model.js')
 const names = await import('../../web/src/components/org/router-area-names')
 const orgPage = read('web/src/pages/OrgPage.tsx')
@@ -239,23 +239,26 @@ describe('router settings: what a save sends and what the form says', () => {
   })
 
   it('reads its baseline from the task: org_name first, Paused only when set', () => {
-    expect(routerBaseline(task('r', { org_name: 'Named', router_links: ['a'], router_paused: true }))).toEqual({ name: 'Named', links: ['a'], paused: true, folders: '' })
-    expect(routerBaseline(task('r'))).toEqual({ name: 'r title', links: [], paused: true, folders: '' })
-    expect(routerBaseline(task('r'), ['inbox', 'Receipts']).folders).toBe('inbox, Receipts')
+    // Nothing saved is the plugin's default, shown as the Inbox ticked.
+    expect(routerBaseline(task('r', { org_name: 'Named', router_links: ['a'], router_paused: true }))).toEqual({ name: 'Named', links: ['a'], paused: true, folders: ['inbox'] })
+    expect(routerBaseline(task('r'))).toEqual({ name: 'r title', links: [], paused: true, folders: ['inbox'] })
+    expect(routerBaseline(task('r'), ['inbox', 'Receipts']).folders).toEqual(['inbox', 'Receipts'])
   })
 
-  it('sends the watched folders only when they changed, as a clean list ([] goes back to the Inbox)', () => {
-    const base = { name: 'n', links: [], paused: false, folders: 'inbox' }
-    expect(routerPatch(base, { ...base, folders: ' inbox ,' })).toBeNull()
-    expect(routerPatch(base, { ...base, folders: 'inbox, Receipts, Receipts' })).toEqual({ folders: ['inbox', 'Receipts'] })
-    expect(routerPatch(base, { ...base, folders: '' })).toEqual({ folders: [] })
+  it('sends the watched folders only when they changed, as a clean list, and never an empty one', () => {
+    const base = { name: 'n', links: [], paused: false, folders: ['inbox'] }
+    expect(routerPatch(base, { ...base, folders: ['INBOX', ' inbox '] })).toBeNull()
+    expect(routerPatch(base, { ...base, folders: ['inbox', 'Receipts', 'receipts'] })).toEqual({ folders: ['inbox', 'Receipts'] })
+    // A draft from before the picker held one comma-separated string.
+    expect(routerPatch(base, { ...base, folders: 'inbox, Receipts' })).toEqual({ folders: ['inbox', 'Receipts'] })
+    expect(routerFormProblem({ ...base, folders: [] })).toBe('Pick at least one folder.')
     expect(folderList(' a, ,b ,a')).toEqual(['a', 'b'])
   })
 
-  it('warns when the watched folders leave the Inbox out (empty means the Inbox)', () => {
-    expect(foldersSkipInbox('')).toBe(false)
-    expect(foldersSkipInbox(' INBOX, Receipts')).toBe(false)
-    expect(foldersSkipInbox('Receipts')).toBe(true)
+  it('warns when the watched folders leave the Inbox out', () => {
+    expect(foldersSkipInbox([])).toBe(false)
+    expect(foldersSkipInbox([' INBOX', 'Receipts'])).toBe(false)
+    expect(foldersSkipInbox(['Receipts'])).toBe(true)
   })
 
   it('names each link that is no longer an open VP for what it is now', () => {
@@ -291,7 +294,7 @@ describe('router settings render', () => {
   const noop = () => {}
   const body = (extra: Record<string, unknown> = {}) => renderToStaticMarkup(createElement(RouterSettingsBody, {
     id: 'org-router-settings-router-1', draftKey: 'draft:org-router-settings:router-1', area: 'support',
-    value: { name: 'Support router', links: ['lead', 'closed'], paused: true, folders: '' }, leads: [lead],
+    value: { name: 'Support router', links: ['lead', 'closed'], paused: true, folders: ['inbox'] }, leads: [lead],
     stale: routerLinkRows(['closed'], [closed]), busy: false, error: '', problem: '', dirty: false, justSaved: false,
     tasksLoading: false, onEdit: noop, onToggleLink: noop, onSave: noop, onDiscard: noop, ...extra,
   } as Parameters<typeof RouterSettingsBody>[0]))
@@ -301,15 +304,16 @@ describe('router settings render', () => {
     expect(none).toContain('data-testid="org-router-sources"')
     expect(none).toContain('No account yet. The Mail plugin adds each mailbox here.')
     expect(none).toContain('It reads every new mail of these accounts in the folders it watches.')
-    expect(none).toContain('data-testid="org-router-folders"')
+    // No mailbox: no folders to pick.
+    expect(none).not.toContain('data-testid="org-router-folders"')
     const some = body({ sources: [{ kind: 'mail', account: 'desk@example.invalid' }, { kind: 'slack', account: 'T0FIXTURE' }] })
     expect(some).toContain('desk@example.invalid')
     expect(some).toContain('<span class="org-router-kind">Mail</span>')
     expect(some).toContain('T0FIXTURE')
     expect(some).toContain('<span class="org-router-kind">Slack</span>')
-    // A mail account's folders are set in Apps › Mail too; a Slack-only area has no such link.
-    expect(some).toContain('data-testid="org-router-folders-in-mail"')
-    expect(none).not.toContain('data-testid="org-router-folders-in-mail"')
+    // A mail account's folders are picked from its folder list, which the picker starts reading.
+    expect(some).toContain('data-testid="org-router-folders"')
+    expect(some).toContain('Reading the folders…')
     expect(names.areaSourcesOf({ areas: [{ id: 'personal', sources: [{ kind: 'mail', account: 'a@example.invalid' }, { kind: 'mail' }, 'x'] }, { id: 'work' }] }))
       .toEqual({ personal: [{ kind: 'mail', account: 'a@example.invalid' }], work: [] })
   })
@@ -318,6 +322,7 @@ describe('router settings render', () => {
     const html = renderToStaticMarkup(createElement(OrgRouterSettings, { router, tasks: [lead, closed, router] }))
     expect(html).toContain('data-testid="org-router-settings"')
     expect(html).toContain('aria-expanded="false"')
+    expect(html).toContain('aria-haspopup="dialog"')
     expect(html).toContain('Support · Paused · 2 VP links · 1 not an open VP')
     expect(html).not.toContain('data-testid="org-router-settings-body"')
   })
@@ -357,14 +362,15 @@ describe('router settings render', () => {
 
 describe('router settings in the page (source guards)', () => {
   const settings = code(read('web/src/components/org/OrgRouterSettings.tsx'))
+  const dialog = code(read('web/src/components/org/RouterSettingsDialog.tsx'))
   const detail = code(read('web/src/components/org/OrgNodeDetail.tsx'))
   const list = code(read('web/src/components/org/OrgChannelList.tsx'))
   const setup = code(read('web/src/components/org/OrgRouterSetup.tsx'))
 
   it('saves through PATCH /api/v1/org/routers/:id and nothing else; area names come from the shared read', () => {
-    expect(settings).toContain('apiPatch<')
-    expect(settings).toContain('`/api/v1/org/routers/${encodeURIComponent(forId)}`')
-    expect(settings).not.toMatch(/\bapiGet\b|\bapiPost\b|\bfetch\(/)
+    expect(dialog).toContain('apiPatch<')
+    expect(dialog).toContain('`/api/v1/org/routers/${encodeURIComponent(id)}`')
+    for (const src of [settings, dialog]) expect(src).not.toMatch(/\bapiGet\b|\bapiPost\b|\bfetch\(/)
     expect(settings).toContain('useRouterAreaNames([area])')
   })
 
@@ -379,26 +385,29 @@ describe('router settings in the page (source guards)', () => {
     expect(namesCode).toContain("'/api/v1/router/areas'")
   })
 
-  it('is inline: no menu, popover or portal', () => {
+  it('opens in its own centered dialog (2026-11-14, the user: a popup window, not a drawer), never a menu or popover', () => {
     expect(settings).not.toMatch(/createPortal|useMenuPlacement|ContextMenu|popover/i)
+    expect(settings).toMatch(/\{open && <RouterSettingsDialog router=\{router\}/)
+    expect(dialog).toContain('createPortal(')
+    expect(dialog).toContain('useModalOverlay(onClose)')
+    expect(dialog).toMatch(/role="dialog"\s+aria-modal="true"/)
+    expect(dialog).not.toMatch(/useMenuPlacement|ContextMenu|popover|drawer/i)
   })
 
-  it('keeps its edits as a draft per router and its fold as a kept view per router', () => {
-    expect(settings).toMatch(/useDraftValue<RouterSettingsValue>\(draftKey\('org-router-settings', id\)/)
-    expect(settings).toMatch(/usePageViewOf<boolean>\('org', 'router\.settings', id,/)
+  it('keeps its edits as a draft per router, so closing the dialog loses nothing', () => {
+    expect(dialog).toMatch(/useDraftValue<RouterSettingsValue>\(draftKey\('org-router-settings', id\)/)
     expect(setup).toMatch(/useDraftValue\(SETUP_KEY/)
     expect(setup).toContain('data-draft-key=')
   })
 
-  it('a save that answers after the page moved writes nothing onto the other router', () => {
-    expect(settings).toContain('form.clear(sentKey, sentText)')
-    const guard = settings.indexOf('if (mine !== seq.current || currentId.current !== forId) return;')
+  it('a save that answers after the dialog closed or moved writes nothing onto another router', () => {
+    expect(dialog).toContain('form.clear(sentKey, sentText)')
+    const guard = dialog.indexOf('if (!live.current) return;')
     expect(guard).toBeGreaterThan(-1)
-    expect(settings.indexOf('setSaved(res.task)')).toBeGreaterThan(guard)
-    expect(settings).toMatch(/res\.task\.id === forId/)
-    // Busy and the error belong to the router they were for.
-    expect(settings).toContain('const busy = pendingFor === id;')
-    expect(settings).toContain("const error = failure?.id === id ? failure.text : '';")
+    expect(dialog.indexOf('setSaved(res.task)')).toBeGreaterThan(guard)
+    expect(dialog).toMatch(/res\.task\.id === id/)
+    // A dialog is for one router: another router's settings mount a new one.
+    expect(settings).toContain('useEffect(() => { setOpen(false); }, [id]);')
   })
 
   it('only a router node draws it, keyed by the router, outside the chat\'s split', () => {
@@ -500,7 +509,7 @@ describe('New router reuses the router an area already has', () => {
 describe('router settings', () => {
   it('keep no per-message area rules: a mailbox is bound to its router as a whole', () => {
     const settings = code(read('web/src/components/org/OrgRouterSettings.tsx'))
-    expect(settings).toContain('className="org-router-settings-scroll"')
+    expect(code(read('web/src/components/org/RouterSettingsDialog.tsx'))).toContain('className="router-settings-dialog-body"')
     expect(settings).not.toMatch(/OrgRouterRules|router\/rules|router\/assign/)
     expect(fs.existsSync(path.join(ROOT, 'web/src/components/org/OrgRouterRules.tsx'))).toBe(false)
   })
