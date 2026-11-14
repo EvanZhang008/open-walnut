@@ -302,7 +302,7 @@ export function SessionsSection({ config, onSave }: Props) {
         />
       </SettingsGroup>
 
-      <MessageHintsGroup />
+      <MessageHintsGroup replyLanguage={config.session?.reply_language ?? ''} />
 
       <SettingsGroup heading="Files">
         <SettingsRow

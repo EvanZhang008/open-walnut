@@ -99,6 +99,7 @@ const CALL_SITES: Record<string, number> = {
   'src/core/human-inbox/letter-ops.ts': 2,         // the user's letter answer; a task's answer is framed
   'src/core/offline-handover.ts': 2,
   'src/core/org/lead-waits.ts': 1,
+  'src/core/hints/reply-language-drift.ts': 1,     // the mid-turn reply-language correction, as Walnut (walnut-notify)
   'src/core/org/org-autostart.ts': 1,             // Main uses the shared routine launch gate
   'src/core/org/org-store.ts': 2,
   'src/core/org/thread-recheck.ts': 1,

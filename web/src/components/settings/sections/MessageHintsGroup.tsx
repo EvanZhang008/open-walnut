@@ -191,7 +191,8 @@ function HintEditor({ hint, onSave, onReset }: {
   );
 }
 
-export function MessageHintsGroup() {
+/** `replyLanguage`: the Reply language row's value on this page, so the correction's "What it sends" follows an edit there. */
+export function MessageHintsGroup({ replyLanguage }: { replyLanguage?: string } = {}) {
   const alwaysShowAdded = useShowWalnutAdditions();
   const [hints, setHints] = useState<HintRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -210,7 +211,7 @@ export function MessageHintsGroup() {
       setError(err instanceof Error ? err.message : String(err));
     }
   }, []);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); }, [load, replyLanguage]);
 
   /** True once stored; a refusal keeps the words in the box (and its draft). */
   const put = async (kind: string, patch: Record<string, unknown>): Promise<boolean> => {

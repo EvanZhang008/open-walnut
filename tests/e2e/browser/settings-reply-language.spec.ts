@@ -36,8 +36,14 @@ test('the reply language saves on blur, reloads, keeps other session settings, a
   await input.fill(RULE)
   await input.blur()
   await expect.poll(async () => (await readSession(page)).reply_language, { timeout: 10_000 }).toBe(RULE)
-  // No message hint carries it: it goes into the system prompt.
-  await expect(page.getByTestId('message-hint-reply-language')).toHaveCount(0)
+  // The rule is a line of the system prompt; the one message hint with it is the correction after a
+  // drift (hints/reply-language-drift.ts), and its "What it sends" follows the edit.
+  const langHint = page.getByTestId('message-hint-reply-language')
+  await expect(langHint).toHaveCount(1)
+  await langHint.getByRole('button', { name: /Reply language/ }).click()
+  const sends = page.getByTestId('message-hint-sends-reply-language')
+  await expect(sends.locator('mark.message-hint-yours')).toHaveText(RULE, { timeout: 10_000 })
+  await expect(sends).toContainText('Your last reply the user read was not in this language')
   const after = await readSession(page)
   // Saving this row must not drop any other session setting. Presence, not
   // values: parallel specs flip some of them on the same fixture server.
