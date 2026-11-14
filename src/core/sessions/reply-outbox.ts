@@ -63,8 +63,8 @@ function defaultDeps(): OwedReplyDeps {
       // Any session's queue: a row moves with its session (a fork, a resume, an engine switch).
       const { findQueuedMessage } = await import('../session-message-queue.js');
       if (await findQueuedMessage(messageId)) return true;
-      const { settledLineUuid } = await import('../session-queue-lines.js');
-      return !!(await settledLineUuid(messageId));
+      const { wentOutAsLine } = await import('../session-queue-lines.js');
+      return wentOutAsLine(messageId);
     },
     deliver: async (req, owed) => {
       const { resolveReplyDestination } = await import('./reply-routing.js');

@@ -41,7 +41,7 @@ vi.mock('../../../src/core/session-message-queue.js', () => ({
   findQueuedMessage: async (id: string) => (queued.has(id) ? { id } : null),
 }));
 vi.mock('../../../src/core/session-queue-lines.js', () => ({
-  settledLineUuid: async (id: string) => settledLines.get(id),
+  wentOutAsLine: async (id: string) => settledLines.has(id),
 }));
 
 import { performSessionSend } from '../../../src/core/sessions/session-send-core.js';
