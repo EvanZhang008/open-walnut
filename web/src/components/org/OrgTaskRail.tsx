@@ -57,7 +57,6 @@ import type { ImageAttachment } from '@/api/chat';
 import { completeTask } from '@/api/tasks';
 import { AgentText } from '@/components/common/AgentText';
 import { taskTextSource } from '@/utils/agent-text-source';
-import { useOpenTask } from '@/hooks/useOpenTask';
 
 /** What the rows need from the page to answer in place. */
 export interface OrgAnswers {
@@ -132,9 +131,7 @@ export function OrgWatchToggle({ task, className = '' }: { task: Task; className
 
 /** A section other than Needs you: one row per task, its own line, when it last moved, its eye. On
  *  Watching each row wears the dot and the line of its own state. */
-function TaskTabList({ tasks, tab, now }: { tasks: readonly Task[]; tab: Exclude<OrgRailTab, 'needs'>; now: number }) {
-  // A row is a task reference: it opens on Home, wherever the rail is hosted.
-  const onOpen = useOpenTask();
+function TaskTabList({ tasks, tab, onOpen, now }: { tasks: readonly Task[]; tab: Exclude<OrgRailTab, 'needs'>; onOpen: (id: string) => void; now: number }) {
   return (
     <ul className="org-task-list" data-testid="org-task-list" data-tab={tab}>
       {tasks.map((t) => {
@@ -290,7 +287,7 @@ function AskList({ alerts, tasks, vpOf, ownId, ownName, onOpen, onQuote, canQuot
 }
 
 /** Every task of the node's work in one list, a section per state (allTasksSections). */
-function AllTasks({ tabs, alerts, approvals, flipped, onFlip, focus, onFocused, renderAsks, now }: {
+function AllTasks({ tabs, alerts, approvals, flipped, onFlip, focus, onFocused, renderAsks, onOpenTask, now }: {
   tabs: OrgTaskTabs;
   alerts: readonly OrgAlertView[];
   approvals: readonly Approval[];
@@ -299,6 +296,7 @@ function AllTasks({ tabs, alerts, approvals, flipped, onFlip, focus, onFocused, 
   focus: { tab: OrgRailTab; n: number } | null;
   onFocused: () => void;
   renderAsks: () => ReactNode;
+  onOpenTask: (id: string) => void;
   now: number;
 }) {
   const sections = useMemo(() => allTasksSections(tabs, alerts, approvals.length), [tabs, alerts, approvals.length]);
@@ -323,7 +321,7 @@ function AllTasks({ tabs, alerts, approvals, flipped, onFlip, focus, onFocused, 
               <ApprovalRows list={approvals} variant="org" />
               {sec.alerts.length > 0 && renderAsks()}
             </>) : (
-              <TaskTabList tasks={sec.tasks} tab={sec.tab} now={now} />
+              <TaskTabList tasks={sec.tasks} tab={sec.tab} onOpen={onOpenTask} now={now} />
             ))}
           </section>
         );
@@ -336,7 +334,7 @@ function AllTasks({ tabs, alerts, approvals, flipped, onFlip, focus, onFocused, 
   );
 }
 
-export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped, onFlip, focus, onFocused, view, onView, keepsBrief, briefNew, threadsNew, threadsCount, onClose, mode, onMode, renderBoard, briefFolded, onBriefFolded, briefFresh, briefUpdating, threads, onThreadFollowUp, contact, title, onOpenAlert, onQuote, canQuote, answers, now, placement, width }: {
+export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped, onFlip, focus, onFocused, view, onView, keepsBrief, briefNew, threadsNew, threadsCount, onClose, mode, onMode, renderBoard, briefFolded, onBriefFolded, briefFresh, briefUpdating, threads, onThreadFollowUp, contact, title, onOpenAlert, onQuote, canQuote, answers, onOpenTask, now, placement, width }: {
   row: ChannelRow;
   rows: readonly ChannelRow[];
   tasks: readonly Task[];
@@ -380,6 +378,7 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped
   onQuote: (a: OrgAlertView) => void;
   canQuote: boolean;
   answers: OrgAnswers;
+  onOpenTask: (id: string) => void;
   now: number;
   /** Beside the chat (a wide page), or above it. */
   placement: 'side' | 'top';
@@ -439,11 +438,11 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped
       </div>
       {view === 'brief' ? (
         <div className="org-rail-body">
-          <OrgBrief owner={contact} tasks={tasks} name={title} now={now} folded={briefFolded} fresh={briefFresh} updating={briefUpdating} />
+          <OrgBrief owner={contact} tasks={tasks} name={title} onOpenTask={onOpenTask} now={now} folded={briefFolded} fresh={briefFresh} updating={briefUpdating} />
         </div>
       ) : view === 'threads' ? (
         <div className="org-rail-body">
-          <OrgThreads name={title} owner={contact} state={threads} tasks={tasks} onFollowUp={onThreadFollowUp} now={now} />
+          <OrgThreads name={title} owner={contact} state={threads} tasks={tasks} onOpenTask={onOpenTask} onFollowUp={onThreadFollowUp} now={now} />
         </div>
       ) : (
         <div className="org-task-view" data-testid="org-task-view" data-mode={shownMode}>
@@ -455,7 +454,7 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped
             <AllTasks
               tabs={tabs} alerts={alerts} approvals={approvals} flipped={flipped} onFlip={onFlip} focus={focus} onFocused={onFocused}
               renderAsks={() => <AskList alerts={alerts} tasks={tasks} vpOf={(id) => vpByTask.get(id)} ownId={contact?.id} ownName={title} onOpen={onOpenAlert} onQuote={onQuote} canQuote={canQuote} answers={answers} />}
-              now={now}
+              onOpenTask={onOpenTask} now={now}
             />
           )}
         </div>

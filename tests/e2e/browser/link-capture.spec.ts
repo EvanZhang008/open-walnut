@@ -4,7 +4,6 @@ import net from 'node:net'
 import { expect, test, type BrowserContext, type Locator, type Page } from '@playwright/test'
 import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { showCustomBoard } from './board-view-helpers'
-import { leaveFullscreen } from './draft-helpers'
 
 /**
  * Plugin link handlers (`walnut.ui.link`, web/src/plugins/link-handlers.ts and
@@ -138,7 +137,7 @@ async function openColumn(page: Page): Promise<Locator> {
   await modal.locator(`.todo-detail-session-item[data-session-id="${fixture.sessionId}"]`).click()
   const col = page.locator(`.main-page-session-column[data-column-id="${fixture.sessionId}"]`)
   await expect(col).toBeVisible({ timeout: 30_000 })
-  // The details close on the open (a task reference, useOpenTask).
+  await page.keyboard.press('Escape')
   await expect(page.locator('.task-detail-modal')).toHaveCount(0)
   await expect(col.getByText('link capture answer').first()).toBeVisible({ timeout: 30_000 })
   return col
@@ -170,9 +169,6 @@ async function backHome(page: Page): Promise<void> {
     await page.keyboard.press('Escape')
     await expect(modal).toHaveCount(0)
   }
-  // The Board's full-screen sheet comes back with it too (the details close on a session open
-  // now, so nothing else stood over it): leave it, so the task list takes the next click.
-  await leaveFullscreen(page)
 }
 
 /** The SPA's own address (Playwright's page.url() can trail a pushState). */

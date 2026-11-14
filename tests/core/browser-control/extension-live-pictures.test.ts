@@ -856,30 +856,3 @@ describe('view_grant: an agent cannot keep putting the page back after the perso
     expect(fake.tabUpdates).toEqual([])
   })
 })
-
-// The Browser replay (agent-replay.ts, 2026-11-14): a step's picture in a covered agent window
-// comes the screenshot's way, through the debugger, with nothing switched or raised.
-describe('a replay step\'s picture of a covered window', () => {
-  it('comes through Page.captureScreenshot, posted with the token; the hold goes after', async () => {
-    const { replayStep } = await import('../../../packages/browser-extension/src/agent-replay')
-    fake.captureError = COVERED
-    const posts: Array<Record<string, unknown>> = []
-    await replayStep('tok', 7, { ok: true, result: { clicked: 'button "Pay"' } }, allow.walnut, async (b) => { posts.push(b) })
-    expect(posts).toHaveLength(1)
-    expect(posts[0]).toMatchObject({ token: 'tok', tab: 7, said: 'button "Pay"', image: 'data:image/jpeg;base64,LIVE' })
-    expect(fake.sent.filter((s) => s.m === 'Page.captureScreenshot')).toHaveLength(1)
-    expect(holdersOf(7)).not.toContain('shot')
-    expect(fake.windowUpdates).toEqual([])
-    expect(fake.tabUpdates).toEqual([])
-  })
-
-  it('live pictures off: no attach, the step goes with no picture', async () => {
-    const { replayStep } = await import('../../../packages/browser-extension/src/agent-replay')
-    fake.captureError = COVERED
-    fake.local.livePictures = false
-    const posts: Array<Record<string, unknown>> = []
-    await replayStep('tok', 7, { ok: true }, allow.walnut, async (b) => { posts.push(b) })
-    expect(fake.attaches).toEqual([])
-    expect(posts[0].image).toBeUndefined()
-  })
-})

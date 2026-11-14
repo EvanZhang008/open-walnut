@@ -65,7 +65,7 @@ afterEach(() => {
   fs.rmSync(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
 });
 
-/** A survivor with no session, three ordinary victims; the second becomes a router at the first relink. */
+/** A survivor with no session, three ordinary victims; the second is marked at the first relink. */
 async function setup() {
   const { task: survivor } = await addTask({ title: 'Survivor', project: '', source: 'local' });
   const victims = [];
@@ -77,8 +77,7 @@ async function setup() {
   barrier.onRelink = async (from) => {
     if (from !== v1.id || marked) return;
     marked = true;
-    // Only a router is area work since 2026-11-14: the second copy becomes one mid-batch.
-    await updateTaskRaw(v2.id, { org_role: 'router', router_area_id: 'personal' }, { source: 'router-areas' });
+    await updateTaskRaw(v2.id, { router_area_id: 'personal' }, { source: 'router-areas' });
   };
   return { survivor, v1, v2, v3, wasMarked: () => marked };
 }

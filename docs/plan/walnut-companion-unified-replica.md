@@ -969,7 +969,7 @@ capability row, read from configuration the box sets for itself:
 | `public-door` | setup token banner, pairing and claim routes, push, voice, revoke queue |
 | `bridge-door` | `/bridge` for daemons, `/daemon-tunnel`, the `/bridge/*` HTTPS routes, the hub's upkeep (`git-maintenance`, since 4d) |
 | `cloud-exec` | the box's own session daemons, stream file cleanup, send path canary |
-| `backup-leader` | takeover (it answers the gateway calls of the hosts it leads), and the box's own routine engine, which runs only its git sync and backup jobs; the Mac's routines, the overview and project summaries never run on the box |
+| `backup-leader` | takeover, and while it leads: cron, routines, overview, project summary |
 
 The front is the host replica's route table, with the companion's kept routes as
 rows of it, and `v1-forward` and the stream forward are deleted. The boot policy
@@ -1009,12 +1009,7 @@ The capability rows as built in 5a:
 | `public-door` | `setup-token-banner`, `revoke-queue`, `stt-auto-setup`, `expose-runtime` | |
 | `bridge-door` | `companion-ingest-routes` (`/bridge/*`, `/git/data`, the trial build's confirm), `git-maintenance` (the hub, since 4d) | the `/bridge`, `/daemon-tunnel` and bridge session stream upgrades |
 | `cloud-exec` | `cloud-exec`, `local-daemon`, `stream-file-cleanup`, `send-path-canary` | `cloudExecActive`, the tunnel daemon's exec check, the canary's own start |
-| `backup-leader` | `backup-leader`, `cron`, `routine-wake` | `getBackupLeader`, `canStandIn` |
-
-Since 2026-11-14 each capability is a manifest in `src/core/capabilities/`: its rows are the manifest's
-`jobs`, and its socket doors, its HTTP routes outside the `/api` token check and the files that read it
-are listed there too; a row no longer carries a `capability` field (docs/reference/session-daemon.md,
-"Adding a capability").
+| `backup-leader` | `backup-leader`, `cron`, `routine-wake`, `project-summary` | `getBackupLeader`, `canStandIn` |
 
 `expose-runtime` is a public door too (the tunnel in front of the box), so it joined
 `public-door`. The pairing, claim, push and voice routes are mounted on every server
@@ -1022,13 +1017,9 @@ already, so `public-door` gates no mount yet. Inside the core modules those rout
 call (device auth and adoption, the push relay and revokes, the voice archive), and
 in the cron allowlist, the plugin relay and the `/ws` token check, a read that means
 "this box is the companion, its leader is over the bridge" became `isCompanion()`:
-that is the follower kind, not a door. `cron` and `routine-wake` start at boot whenever
-the box has `backup-leader`, and run there only the box's own git sync and backup jobs
-(`cloudModeSkipsJob`), leading or not: leading a host hands the box that host's gateway
-calls, never the Mac's routines, so no routine runs on both. `project-summary` left
-`backup-leader` on 2026-11-14 and is leader-only: on the box it summarised into its copy
-of the project row, a model call the Mac's own summary replaces once the Mac holds the task.
-`overview-maintainer` was a `backup-leader` row until 4d, which made
+that is the follower kind, not a door. `cron`, `routine-wake` and `project-summary`
+still start at boot whenever the box has `backup-leader`; running them only while it
+leads is later work. `overview-maintainer` was a `backup-leader` row until 4d, which made
 it leader-only. 4d also made `git-pull` and `git-auto-commit` leader-only and
 `git-maintenance` a `bridge-door` row (the hub's upkeep).
 

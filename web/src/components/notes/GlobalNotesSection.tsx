@@ -23,6 +23,7 @@ function readHeight(): number {
 interface GlobalNotesSectionProps extends UseGlobalNotesReturn {
   tasks?: Task[];
   focusedTaskId?: string;
+  onTaskClick?: (taskId: string) => void;
   /** Own the full height of the parent panel (the todo panel's Notes tab) instead of
    *  sitting at the bottom as a fixed-height, collapsible drawer. In fill mode the
    *  collapse chevron and the drag handle are dropped — there's nothing to collapse
@@ -35,7 +36,7 @@ interface GlobalNotesSectionProps extends UseGlobalNotesReturn {
 }
 
 export function GlobalNotesSection(props: GlobalNotesSectionProps) {
-  const { content, onEditorUpdate, saving, saveError, loaded, loadError, retryLoad, collapsed: collapsedProp, toggleCollapse, popupOpen, openPopup, closePopup, tasks, focusedTaskId, fill, title, onClose } = props;
+  const { content, onEditorUpdate, saving, saveError, loaded, loadError, retryLoad, collapsed: collapsedProp, toggleCollapse, popupOpen, openPopup, closePopup, tasks, focusedTaskId, onTaskClick, fill, title, onClose } = props;
   // Fill mode can't honor the persisted collapse flag: this IS the visible section,
   // so a stale `collapsed` from the drawer era would render an empty Notes tab.
   const collapsed = fill ? false : collapsedProp;
@@ -128,6 +129,7 @@ export function GlobalNotesSection(props: GlobalNotesSectionProps) {
                 className="global-notes-editor-inline"
                 tasks={tasks}
                 focusedTaskId={focusedTaskId}
+                onTaskClick={onTaskClick}
               />
             ) : (
               // No editor before the note is read: typing into an empty one would save over it.
@@ -151,6 +153,7 @@ export function GlobalNotesSection(props: GlobalNotesSectionProps) {
           onClose={closePopup}
           tasks={tasks}
           focusedTaskId={focusedTaskId}
+          onTaskClick={onTaskClick}
         />
       )}
     </>

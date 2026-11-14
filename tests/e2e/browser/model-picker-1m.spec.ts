@@ -309,14 +309,12 @@ test.describe('ModelPicker CLI catalog', () => {
     await expect(names.nth(0)).toHaveText('Fable 5')
     await expect(names.nth(1)).toHaveText('Opus 4.8 1M')
 
-    // Active row = Fable (resolvedModel match on the non-default row), shown by colour, no checkmark.
+    // Active row = Fable (resolvedModel match on the non-default row), ✓-marked.
     // Scoped to the Model column: the Effort column marks its own active row.
     const active = picker.locator('.model-picker-col-models .model-picker-row-active')
     await expect(active).toHaveCount(1)
     await expect(active.locator('.model-picker-row-name')).toHaveText('Fable 5')
-    await expect(active).toHaveClass(/picker-row-current/)
-    await expect(page.locator('.model-picker-row-check')).toHaveCount(0)
-    expect(await active.innerText()).not.toMatch(/[✓✔]/)
+    await expect(active.locator('.model-picker-row-check')).toHaveText('✓')
 
     // Disabled row: greyed and not clickable.
     const disabled = picker.locator('.model-picker-row-disabled')

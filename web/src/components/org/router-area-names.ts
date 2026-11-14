@@ -9,26 +9,12 @@ import { apiGet } from '@/api/client';
 export type RouterAreaNames = Readonly<Record<string, string>>;
 /** The accounts an area lists as its sources (`kind`: mail or slack), in the order the file keeps them. */
 export type RouterAreaSources = Readonly<Record<string, ReadonlyArray<{ kind: string; account: string }>>>;
-/** The folders or labels each area's router watches; an area with none watches the plugin's default (the Inbox). */
-export type RouterAreaFolders = Readonly<Record<string, readonly string[]>>;
-
-export function areaFoldersOf(body: unknown): Record<string, string[]> {
-  const out: Record<string, string[]> = {};
-  const list = (body as { areas?: unknown } | null)?.areas;
-  if (!Array.isArray(list)) return out;
-  for (const a of list as Array<{ id?: unknown; folders?: unknown }>) {
-    if (typeof a?.id !== 'string' || !a.id) continue;
-    out[a.id] = Array.isArray(a.folders) ? a.folders.filter((one): one is string => typeof one === 'string' && !!one.trim()) : [];
-  }
-  return out;
-}
 
 // Read once for each area id first seen without a name (a router made for a new area included), so a
 // name is never more than one read away and an id the list lacks is not asked about again. Every
 // mounted caller hears each read, whichever caller asked for it.
 let names: RouterAreaNames = {};
 let sources: RouterAreaSources = {};
-let folders: RouterAreaFolders = {};
 let queue: Promise<void> = Promise.resolve();
 const askedFor = new Set<string>();
 const listeners = new Set<(next: RouterAreaNames) => void>();
@@ -61,7 +47,7 @@ export function areaNamesOf(body: unknown): Record<string, string> {
 // older one that predates it.
 function queueRead(): void {
   queue = queue.then(() => apiGet<unknown>('/api/v1/router/areas')
-    .then((body) => { names = areaNamesOf(body); sources = areaSourcesOf(body); folders = areaFoldersOf(body); for (const l of listeners) l(names); })
+    .then((body) => { names = areaNamesOf(body); sources = areaSourcesOf(body); for (const l of listeners) l(names); })
     .catch(() => { /* callers keep showing the id */ }));
 }
 
@@ -93,12 +79,7 @@ export function routerAreaSources(): RouterAreaSources {
   return sources;
 }
 
-/** The watched folders of the areas read so far (the same read). */
-export function routerAreaFolders(): RouterAreaFolders {
-  return folders;
-}
-
 /** Test seam: forget what was read. */
 export function _resetRouterAreaNames(): void {
-  names = {}; sources = {}; folders = {}; queue = Promise.resolve(); askedFor.clear(); listeners.clear();
+  names = {}; sources = {}; queue = Promise.resolve(); askedFor.clear(); listeners.clear();
 }

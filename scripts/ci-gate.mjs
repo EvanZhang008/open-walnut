@@ -19,7 +19,6 @@
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { isTransientGhFailure } from './lib/gh-transient.mjs'
 
 export const CI_WORKFLOW = 'ci.yml'
 export const GATE_JOB = 'CI OK'
@@ -85,7 +84,9 @@ export function pickLastGreen(shas, verdictFor) {
  * 2026-10-13: one 502 on a run's jobs failed that night's nightly
  * (run 38465126267). A 4xx that is not a 429 (signed out, no such run) is an answer.
  */
-export { isTransientGhFailure }
+export function isTransientGhFailure(text) {
+  return /HTTP (5\d\d|429)|Server Error|Bad Gateway|Service Unavailable|Gateway Time-?out|connection (refused|reset)|unexpected EOF|TLS handshake timeout|i\/o timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED/i.test(String(text))
+}
 
 const GH_ATTEMPTS = 4
 const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)

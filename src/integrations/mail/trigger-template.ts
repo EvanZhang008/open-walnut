@@ -11,9 +11,11 @@
  * from before the trigger was armed ever fires: the first run only records the
  * time, and the lookback never reaches behind it. A date in the future (the
  * sender sets it) counts as now, so it cannot push the cursor past real mail.
+ * Mail of an incoming-item area is dropped before any match (`filterIncoming`),
+ * and the cursor moves past it like delivered mail, so it never replays.
  */
 import type { MailStore } from './store.js'
-import type { MailAccountDto } from './contract.js'
+import type { MailAccountDto, MailMessageDto } from './contract.js'
 import { toDto } from './service-dto.js'
 
 /** How far behind the cursor each run looks; repeats inside it are dropped by item id. */
@@ -24,7 +26,14 @@ const MAX_ITEMS = 50
 export interface MailTriggerDeps {
   store: Pick<MailStore, 'listMessages' | 'mailboxesByRole'>
   listAccounts(): Promise<MailAccountDto[]>
+  /**
+   * Keeps the rows the watching session may see (production: unassigned mail only). Rows it
+   * drops are skipped for good: the cursor still moves past them, so they never replay.
+   */
+  filterIncoming?(rows: MailMessageDto[]): Promise<MailMessageDto[]>
 }
+
+const keyOf = (m: MailMessageDto) => `${m.accountId}\u0000${m.messageId}`
 
 interface Cursor {
   /** When the trigger was armed: nothing older fires. */
@@ -117,8 +126,14 @@ export function createMailTriggerTemplate(deps: MailTriggerDeps) {
         return { m, at: Math.min(m.receivedAt ?? m.sentAt, nowMs) }
       })
       const floorOf = (account: string) => Math.max((cursor.since[account] ?? cursor.armedAt) - LOOKBACK_MS, cursor.armedAt)
-      const fresh = arrivals
-        .filter(({ m, at }) => at > floorOf(m.accountId))
+      const incoming = arrivals.filter(({ m, at }) => at > floorOf(m.accountId))
+      // Filtering before cursor advancement keeps failed checks recoverable.
+      let deliverable = incoming
+      if (deps.filterIncoming && incoming.length) {
+        const kept = new Set((await deps.filterIncoming(incoming.map(({ m }) => m))).map((m) => keyOf(m)))
+        deliverable = incoming.filter(({ m }) => kept.has(keyOf(m)))
+      }
+      const fresh = deliverable
         .filter(({ m }) => {
           const from = `${m.from?.name ?? ''} <${m.from?.address ?? ''}>`
           return matches(from, params.from ?? '') && matches(m.subject ?? '', params.subject ?? '')

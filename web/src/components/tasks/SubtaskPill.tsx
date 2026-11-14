@@ -2,12 +2,13 @@ import { resolveTaskToken, subscribeEntityLabels, getEntityLabelsVersion } from 
 import { matchParentRef } from '../../../../src/lib/id-ref';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { binaryPhaseIcon } from '@/components/common/Icons';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useKeyboardOpenFocus } from '@/hooks/useKeyboardOpenFocus';
-import { useOpenTask } from '@/hooks/useOpenTask';
+import { locateTaskOnHome } from '@/utils/open-session';
 import { resolveTaskSessionId, taskCircleClass, taskStatusLabel, taskUserState } from '@/utils/session-status';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { openSubtasksOf, subtaskPlaceLabel } from './subtask-index';
@@ -40,7 +41,7 @@ export function subtaskPillTitle(parentTitle: string | undefined): string {
 }
 
 export function SubtaskPill({ task, className }: { task: { id?: string; parent_task_id?: string }; className?: string }) {
-  const openTask = useOpenTask();
+  const navigate = useNavigate();
   const store = useTasksContextSafe();
   useSyncExternalStore(subscribeEntityLabels, getEntityLabelsVersion, getEntityLabelsVersion);
   const [open, setOpen] = useState(false);
@@ -98,7 +99,7 @@ export function SubtaskPill({ task, className }: { task: { id?: string; parent_t
   const goTo = (id: string, t: Task | null | undefined) => {
     close(false);
     const sid = t ? resolveTaskSessionId(t) : null;
-    openTask(id, sid ? { sessionId: sid } : undefined);
+    locateTaskOnHome(id, navigate, sid ? { sessionId: sid } : undefined);
   };
 
   const row = (t: Task, role: 'leader' | 'worker') => {

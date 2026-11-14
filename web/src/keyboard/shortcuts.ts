@@ -7,15 +7,9 @@
  * Cmd+Shift+[ / ] switch tabs in Chrome and Safari on a Mac, and Ctrl+1..9 does on Windows
  * and Linux. So the session-switching chords take the modifier the place leaves free:
  * Cmd in the Mac app (its menus take neither), Ctrl in a Mac browser, Alt elsewhere.
- *
- * The shortcuts a person can change (New task, Close the current column, ...) live in
- * commands.ts; the sheet lists them in the chords they answer to now.
  */
 import { isMacPlatform } from '@/hooks/usePanelKeyRouter';
 import { MAX_PANELS } from '@/hooks/session-panel-limits';
-import { chordKeys } from './chords';
-import { chordsFor, commandDef, type CommandId, type Overrides } from './commands';
-import { inMacApp } from '@/utils/mac-app';
 
 const ORDINAL = ['', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th'];
 
@@ -23,7 +17,9 @@ export type KeyEnv = 'mac-app' | 'mac-browser' | 'other';
 
 export function detectKeyEnv(): KeyEnv {
   if (!isMacPlatform()) return 'other';
-  return inMacApp() ? 'mac-app' : 'mac-browser';
+  // The Mac app's web view carries its own message handlers (desktop/main.swift).
+  const handlers = (window as unknown as { webkit?: { messageHandlers?: Record<string, unknown> } }).webkit?.messageHandlers;
+  return handlers && ('walnutUpdate' in handlers || 'walnutChrome' in handlers) ? 'mac-app' : 'mac-browser';
 }
 
 type KeyLike = Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>;
@@ -59,28 +55,25 @@ export function cycleDir(e: KeyLike, env: KeyEnv): -1 | 0 | 1 {
   return 0;
 }
 
+/** mod+i, or the session modifier's i (Alt+I elsewhere, beside Alt+1..9). */
+export function isFocusComposerChord(e: KeyLike, env: KeyEnv): boolean {
+  return !e.shiftKey && (modOnly(e, env) || switchMod(e, env)) && (e.code === 'KeyI' || e.key.toLowerCase() === 'i');
+}
+
+export function isCompleteNextChord(e: KeyLike, env: KeyEnv): boolean {
+  return e.shiftKey && modOnly(e, env) && (e.code === 'KeyD' || e.key.toLowerCase() === 'd');
+}
+
 /** `?` (outside a text box) or mod+/ (anywhere). */
 export function isHelpChord(e: KeyLike, env: KeyEnv, typing: boolean): boolean {
   if (modOnly(e, env) && !e.shiftKey && (e.code === 'Slash' || e.key === '/')) return true;
   return !typing && e.key === '?' && !e.metaKey && !e.ctrlKey && !e.altKey;
 }
 
-/** Is the modifier that shows the column numbers held alone? */
-export function isJumpHintModifier(e: KeyLike, env: KeyEnv): boolean {
-  if (e.shiftKey) return false;
-  switch (env) {
-    case 'mac-app': return e.key === 'Meta' && e.metaKey && !e.ctrlKey && !e.altKey;
-    case 'mac-browser': return e.key === 'Control' && e.ctrlKey && !e.metaKey && !e.altKey;
-    default: return e.key === 'Alt' && e.altKey && !e.ctrlKey && !e.metaKey;
-  }
-}
-
 // ── The sheet ──
 
 export interface ShortcutRow {
   id: string;
-  /** A row for a command a person can change (commands.ts). */
-  command?: CommandId;
   /** Each entry is one chord as its keys, e.g. ['⌘', '⇧', 'D']; several = alternatives. */
   keys: string[][];
   label: string;
@@ -103,22 +96,8 @@ function names(env: KeyEnv) {
   };
 }
 
-/** The keys the column number badges show: "⌘1". */
-export function jumpBadgeLabel(n: number, env: KeyEnv): string {
-  const k = names(env).sw;
-  return env === 'other' ? `${k}+${n}` : `${k}${n}`;
-}
-
-function commandRow(id: CommandId, env: KeyEnv, overrides: Overrides): ShortcutRow {
-  const c = commandDef(id);
-  const keys = [...chordsFor(id, env, overrides).map((ch) => chordKeys(ch, env !== 'other')), ...(c.alsoKeys ?? [])];
-  return { id, command: id, keys, label: c.label };
-}
-
-/** The sheet, in the keys of `env`; a command row in the chord the person gave it (`overrides`). */
-export function shortcutGroups(env: KeyEnv, overrides: Overrides = {}): ShortcutGroup[] {
+export function shortcutGroups(env: KeyEnv): ShortcutGroup[] {
   const k = names(env);
-  const cmd = (id: CommandId) => commandRow(id, env, overrides);
   return [
     {
       title: 'Sessions',
@@ -126,51 +105,31 @@ export function shortcutGroups(env: KeyEnv, overrides: Overrides = {}): Shortcut
         // As many as the strip can hold (Settings > General > Session panels).
         { id: 'session.jump', keys: [[k.sw, '1'], [k.sw, String(MAX_PANELS)]], label: `Go to the 1st to ${ORDINAL[MAX_PANELS]} session column`, sep: 'to' },
         { id: 'session.last', keys: [[k.sw, '9']], label: 'Go to the last session column' },
-        { id: 'session.numbers', keys: [[k.sw]], label: 'Hold to show each column\'s number and the keys of the buttons' },
         { id: 'session.cycle', keys: [[k.sw, k.shift, '['], [k.sw, k.shift, ']']], label: 'Previous / next session column', sep: '/' },
-        cmd('session.close'),
-        cmd('composer.focus'),
-        cmd('session.find'),
-        cmd('session.new'),
+        { id: 'composer.focus', keys: [[k.sw, 'I']], label: 'Type in the current session' },
+        { id: 'session.find', keys: [[k.mod, k.shift, 'O']], label: 'Find a session' },
+        { id: 'session.new', keys: [[k.mod, k.shift, k.enter]], label: 'New session column' },
         { id: 'session.drawer', keys: [[k.mod, k.shift, 'E']], label: 'Show or hide the questions drawer' },
       ],
     },
     {
       title: 'Tasks',
       rows: [
-        cmd('task.new'),
-        cmd('task.completeNext'),
+        { id: 'task.completeNext', keys: [[k.mod, k.shift, 'D']], label: 'Complete the current task and go to the next one that needs you' },
         { id: 'undo', keys: [[k.mod, 'Z']], label: 'Undo the last task action (for 5 seconds)' },
-        cmd('task.search'),
+        { id: 'task.search', keys: [[k.mod, 'K'], ['/']], label: 'Search tasks' },
         { id: 'task.filter', keys: [['F']], label: 'Filter the task list' },
       ],
     },
     {
       title: 'General',
       rows: [
-        cmd('panel.tasks'),
         { id: 'page.find', keys: [[k.mod, 'F']], label: 'Find on the page' },
         { id: 'help', keys: [['?'], [k.mod, '/']], label: 'Show these shortcuts' },
         { id: 'escape', keys: [['Esc']], label: 'Close a menu or dialog, or clear the selected task' },
       ],
     },
   ];
-}
-
-/** The fixed rows' chords (every one a command may not take), with the row's words. */
-export function fixedChords(env: KeyEnv): Map<string, string> {
-  const sw = env === 'mac-app' ? 'Cmd' : env === 'mac-browser' ? 'Ctrl' : 'Alt';
-  const mod = env === 'other' ? 'Ctrl' : 'Cmd';
-  const rows = new Map(shortcutGroups(env).flatMap((g) => g.rows).map((r) => [r.id, r.label]));
-  const out = new Map<string, string>();
-  for (let n = 1; n <= 9; n++) out.set(`${sw}+${n}`, rows.get(n === 9 ? 'session.last' : 'session.jump')!);
-  out.set(`${sw}+Shift+[`, rows.get('session.cycle')!);
-  out.set(`${sw}+Shift+]`, rows.get('session.cycle')!);
-  out.set(`${mod}+Shift+E`, rows.get('session.drawer')!);
-  out.set(`${mod}+Z`, rows.get('undo')!);
-  out.set(`${mod}+F`, rows.get('page.find')!);
-  out.set(`${mod}+/`, rows.get('help')!);
-  return out;
 }
 
 /** A note under the sheet for a browser, where some chords differ from the Mac app's. */

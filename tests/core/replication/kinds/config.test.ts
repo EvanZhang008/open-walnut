@@ -197,10 +197,8 @@ describe('config writes on the replica', () => {
 
   it('on the leader the same writers write as before', async () => {
     setReplica(false)
-    const before = (yaml.load(fs.readFileSync(CONFIG_FILE, 'utf8')) as { ui?: Record<string, unknown> }).ui
     await cm.updateConfig({ ui: { session_panels: '3' } } as never)
-    // A section write merges (core/config-section-write.ts): the rest of `ui` stays.
-    expect((yaml.load(fs.readFileSync(CONFIG_FILE, 'utf8')) as { ui: unknown }).ui).toEqual({ ...before, session_panels: '3' })
+    expect((yaml.load(fs.readFileSync(CONFIG_FILE, 'utf8')) as { ui: unknown }).ui).toEqual({ session_panels: '3' })
   })
 })
 

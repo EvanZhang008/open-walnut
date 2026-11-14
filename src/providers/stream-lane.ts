@@ -21,26 +21,12 @@ import type { Duplex } from 'node:stream'
 import { WebSocket } from '#ws'
 import { createStreamEndpoint, type StreamEndpoint, type StreamEndpointOptions, type StreamPeer } from '../lib/link-stream.js'
 import { log } from '../logging/index.js'
-import type { UploadPacer } from '../lib/upload-pacer.js'
-import { PACED_STREAM_PURPOSES } from './ssh-upload-budget.js'
-import { fixedPace, uploadPaceFor, type PaceSource } from './upload-pace.js'
+import { createUploadPacer, type UploadPacer } from '../lib/upload-pacer.js'
+import { PACED_STREAM_PURPOSES, RELAY_UPLOAD_BURST_BYTES, RELAY_UPLOAD_BYTES_PER_SEC } from './ssh-upload-budget.js'
 import { exitControlMaster, MASTER_CONTROL_TIMEOUT_MS, MAX_SOCKET_PATH, masterLogFile, ownedMuxClientArgs, startControlMaster, type SshRunner } from './ssh-control-master.js'
 
 /** What a forward that this side stopped says when it ends. */
 export const STOPPED = 'stopped'
-
-/** ssh's own word when its ServerAlive probes went unanswered (ServerAliveCountMax). */
-const SERVER_ALIVE_TIMEOUT = /Timeout, server .* not responding/i
-
-/**
- * Whether a forward's end is a cut that teaches the upload pace (upload-pace.ts): ssh ended by
- * itself, and not on its ServerAlive timeout. A relay's cut ends the connection at once; a silent
- * stall (sleep, a network that stopped answering) ends it through ServerAlive, as the lane's
- * own heartbeat would at about the same time, and says nothing about the upload's rate.
- */
-export function forwardEndIsCut(why: string): boolean {
-  return why !== STOPPED && !SERVER_ALIVE_TIMEOUT.test(why)
-}
 
 /** A local port that reaches the daemon's port on the host. */
 export interface LaneForward {
@@ -66,12 +52,7 @@ export interface StreamLaneOptions {
   maxRetryMs?: number
   /** Wait before dialing again after a lane that was up dropped. */
   redialMs?: number
-  /** How long a forward whose socket closed is watched for its SSH exiting too (a cut) before it is stopped. */
-  sshExitGraceMs?: number
-  /**
-   * The pace of a background stream's upload: by default the one this host's lane learned
-   * (upload-pace.ts, unpaced until a cut teaches it); tests set a fixed one, null is unpaced.
-   */
+  /** The pace of a background stream's upload (ssh-upload-budget.ts); tests set their own. */
   pace?: { bytesPerSec: number; burstBytes: number } | null
 }
 
@@ -86,19 +67,6 @@ const MAX_RETRY_MS = 5 * 60_000
  * the streams wait for the lane meanwhile (waitReady).
  */
 const REDIAL_MS = 300
-/**
- * A relay's cut ends the SSH connection at once: ssh exits within moments of the socket closing.
- * A daemon that closes the lane (its update, its swap) leaves the SSH forward up. Only the first
- * teaches the lane's upload pace (upload-pace.ts).
- */
-const SSH_EXIT_GRACE_MS = 3_000
-
-/**
- * How a lane connection ended: Walnut closed it; its SSH forward exited by itself; its socket
- * closed (a cut only if the SSH exits too); its beats, or ssh's ServerAlive probes, went
- * unanswered (a stall, not a cut: forwardEndIsCut); a dial that never came up.
- */
-type LaneEnd = 'walnut' | 'ssh' | 'socket' | 'beats' | 'dial'
 
 export class StreamLane {
   private wanted = false
@@ -118,16 +86,12 @@ export class StreamLane {
   private waiters: Array<(up: boolean) => void> = []
   /** This connection's pacer for background streams; a new one per connection. */
   private pacer: UploadPacer | null = null
-  private readonly paceSource: PaceSource
   /** Frame bytes this connection's streams sent, by purpose; logged when it drops. */
   private sentByPurpose = new Map<string, number>()
   private upAt = 0
-  /** Forwards whose socket closed, watched a moment for their SSH exiting (SSH_EXIT_GRACE_MS). */
-  private lingering = new Set<LaneForward>()
 
   constructor(private readonly opts: StreamLaneOptions) {
     this.retryMs = opts.retryMs ?? RETRY_MS
-    this.paceSource = opts.pace === undefined ? uploadPaceFor(opts.hostKey, 'lane') : fixedPace(opts.pace)
   }
 
   get ready(): boolean { return this._ready }
@@ -162,9 +126,7 @@ export class StreamLane {
   stop(): void {
     this.wanted = false
     if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = null }
-    this.teardown('the lane was closed', 'walnut')
-    for (const fwd of this.lingering) fwd.stop()
-    this.lingering.clear()
+    this.teardown('the lane was closed')
     this.settle(false)
   }
 
@@ -178,20 +140,17 @@ export class StreamLane {
     this.dialing = true
     const gen = this.gen
     try {
-      await this.paceSource.ready?.()
       const fwd = await this.opts.forward()
       if (gen !== this.gen || !this.wanted) { fwd.stop(); return }
       this.fwd = fwd
       fwd.onExit((why) => {
-        if (this.fwd === fwd) {
-          this.dropped(`its SSH connection ended (${why})`, why === STOPPED ? 'walnut' : forwardEndIsCut(why) ? 'ssh' : 'beats')
-        }
+        if (this.fwd === fwd) this.dropped(`its SSH connection ended (${why})`)
         // The socket often closes first; why the connection ended is still worth a line.
         else if (why !== STOPPED) log.session.warn('stream lane: its SSH connection ended', { host: this.opts.hostKey, why })
       })
       await this.connect(fwd.port, gen)
     } catch (err) {
-      if (gen === this.gen) this.dropped(err instanceof Error ? err.message : String(err), 'dial')
+      if (gen === this.gen) this.dropped(err instanceof Error ? err.message : String(err))
     } finally {
       this.dialing = false
     }
@@ -201,7 +160,9 @@ export class StreamLane {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}`, { handshakeTimeout: 10_000 })
       this.ws = ws
-      const pacer = this.paceSource.pacer()
+      const paceOpts = this.opts.pace === undefined
+        ? { bytesPerSec: RELAY_UPLOAD_BYTES_PER_SEC, burstBytes: RELAY_UPLOAD_BURST_BYTES } : this.opts.pace
+      const pacer = paceOpts ? createUploadPacer(paceOpts) : null
       this.pacer = pacer
       this.sentByPurpose = new Map()
       const sentByPurpose = this.sentByPurpose
@@ -212,7 +173,7 @@ export class StreamLane {
         },
         accept: this.opts.accept,
         // A background stream's upload is paced: a relay ends a connection that bursts (ssh-upload-budget.ts).
-        pace: (purpose) => (PACED_STREAM_PURPOSES.has(purpose) ? pacer : null),
+        pace: (purpose) => (pacer && PACED_STREAM_PURPOSES.has(purpose) ? pacer : null),
         sent: (purpose, bytes) => { sentByPurpose.set(purpose || 'none', (sentByPurpose.get(purpose || 'none') ?? 0) + bytes) },
       })
       this.endpoint = endpoint
@@ -238,7 +199,7 @@ export class StreamLane {
       ws.on('error', () => { /* close follows */ })
       ws.on('close', () => {
         reject(new Error('the daemon closed the lane'))
-        if (this.ws === ws) this.dropped('the daemon closed it', 'socket')
+        if (this.ws === ws) this.dropped('the daemon closed it')
       })
       ws.on('open', () => {
         void (async () => {
@@ -257,7 +218,7 @@ export class StreamLane {
           this.heardAt = Date.now()
           this.startBeat(ws)
           this.upAt = Date.now()
-          log.session.info('stream lane: up', { host: this.opts.hostKey, port, ...paceForLog(this.paceSource) })
+          log.session.info('stream lane: up', { host: this.opts.hostKey, port })
           this.settle(true)
           resolve()
         })().catch((err: Error) => {
@@ -272,7 +233,7 @@ export class StreamLane {
     const beat = this.opts.beatMs ?? BEAT_MS
     this.beatTimer = setInterval(() => {
       if (Date.now() - this.heardAt > beat * MISSED_BEATS) {
-        this.dropped(`no answer for ${MISSED_BEATS} beats`, 'beats')
+        this.dropped(`no answer for ${MISSED_BEATS} beats`)
         return
       }
       try { ws.ping() } catch { /* close follows */ }
@@ -280,8 +241,7 @@ export class StreamLane {
     this.beatTimer.unref?.()
   }
 
-  /** `end`: how it ended; only an SSH forward that exited by itself teaches the pace (LaneEnd). */
-  private teardown(reason: string, end: LaneEnd): void {
+  private teardown(reason: string): void {
     this.gen += 1
     this._ready = false
     if (this.beatTimer) { clearInterval(this.beatTimer); this.beatTimer = null }
@@ -290,31 +250,16 @@ export class StreamLane {
     const ws = this.ws
     this.ws = null
     if (ws) { try { ws.terminate() } catch { /* gone */ } }
+    this.pacer?.drop(reason)
+    this.pacer = null
     const fwd = this.fwd
     this.fwd = null
-    const pacer = this.pacer
-    this.pacer = null
-    if (end === 'socket' && fwd) {
-      // The socket closed first: a cut only if its SSH exits too, within a moment.
-      const lingering = this.lingering
-      lingering.add(fwd)
-      const cut = new Promise<boolean>((resolve) => {
-        const timer = setTimeout(() => { lingering.delete(fwd); resolve(false); fwd.stop() }, this.opts.sshExitGraceMs ?? SSH_EXIT_GRACE_MS)
-        timer.unref?.()
-        fwd.onExit((why) => { clearTimeout(timer); lingering.delete(fwd); resolve(forwardEndIsCut(why)) })
-      })
-      if (pacer) this.paceSource.ended(pacer, { byWalnut: cut.then((c) => !c) })
-    } else {
-      if (pacer) this.paceSource.ended(pacer, { byWalnut: end !== 'ssh' })
-      fwd?.stop()
-    }
-    pacer?.drop(reason)
+    fwd?.stop()
   }
 
-  private dropped(why: string, end: LaneEnd): void {
+  private dropped(why: string): void {
     const wasUp = this._ready
-    // A lane closed by Walnut, or one that never came up, carried nothing to learn from.
-    this.teardown(`the stream lane to ${this.opts.hostKey} closed`, !this.wanted ? 'walnut' : wasUp ? end : 'dial')
+    this.teardown(`the stream lane to ${this.opts.hostKey} closed`)
     if (!wasUp) {
       // A dial that did not come up: nobody waits for this lane until one does.
       this.failing = true
@@ -333,11 +278,6 @@ export class StreamLane {
     this.retryTimer = setTimeout(() => { this.retryTimer = null; void this.dial() }, wait)
     this.retryTimer.unref?.()
   }
-}
-
-/** The learned pace of a lane, for its log line (a fixed one says nothing). */
-function paceForLog(src: PaceSource): Record<string, unknown> {
-  return 'describe' in src ? (src as { describe(): Record<string, unknown> }).describe() : {}
 }
 
 /** What a lane that dropped had sent up, by stream purpose, for its log line. */

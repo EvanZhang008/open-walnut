@@ -8,7 +8,6 @@ import { isHiddenFromTaskLists } from '@open-walnut/org-tree';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { useFullscreen } from '@/hooks/useFullscreen';
-import { useOpenTask } from '@/hooks/useOpenTask';
 import { usePageView } from '@/utils/view-memory';
 import { taskStatusLabel, taskUserState } from '@/utils/session-status';
 import { ICON_CLOSE, ICON_CHEVRON_DOWN, ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
@@ -74,8 +73,7 @@ function BoardColumn({ column, mode, doneLimit, onMoreDone, ...props }: { column
   </section>;
 }
 
-export function HomeBoardSheet() {
-  const openTask = useOpenTask();
+export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => void }) {
   const { tasks, loading, error, refetch, ensureAllTasks, completedHidden, update, setPhase } = useTasksContext();
   const focus = useFocusBarContext();
   const fullscreen = useFullscreen({ keepAcrossRoutes: true, place: 'home-board|tasks' });
@@ -262,8 +260,7 @@ export function HomeBoardSheet() {
     const tier = event.over?.data.current?.tier as string | undefined;
     if (!dragCancelled.current && shown && fullscreen.isFullscreen && family && tier && mode === 'pin') move(family, tier);
   };
-  // A card is a task reference: the sheet's full screen first, so Home's column shows.
-  const onOpen = (task: Task) => { fullscreen.exitFullscreen(); openTask(task.id); };
+  const onOpen = (task: Task) => { fullscreen.exitFullscreen(); onOpenTask(task); };
   const onMove = (task: Task, origin: HTMLElement) => {
     if (moveInFlight.current) return;
     const box = origin.getBoundingClientRect();
@@ -341,7 +338,7 @@ export function HomeBoardSheet() {
             onPickDate={() => { picker.close(); datePicker.open(task, point, origin); }}
             onClear={snoozedNow(task) && task.start_date ? () => { snoozeFromMenu(task, null); picker.close(); } : undefined} />
           <button type="button" className="task-kebab-project-opt snooze-row board-move-done" data-board-done onClick={e => { e.stopPropagation(); setPhase(task.id, 'COMPLETE'); picker.close(); }}>
-            <span className="task-kebab-project-opt-name">Mark done</span>
+            <span className="task-kebab-project-check" /><span className="task-kebab-project-opt-name">Mark done</span>
           </button>
         </>;
       })()} />}

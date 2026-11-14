@@ -522,11 +522,8 @@ test('custom tiers, live completion, completed batches and opening a task', asyn
     await page.getByRole('textbox', { name: 'Search board tasks' }).fill('Board completed 0');
     await expect(card(page, completed[0])).toBeVisible();
     await page.getByRole('textbox', { name: 'Search board tasks' }).fill('Board leader');
-    // A card is a task reference (useOpenTask): the sheet goes and, the task having no session,
-    // Home's list has it selected; no details popup.
     await card(page, ids.leader).getByRole('button', { name: 'Board leader', exact: true }).click();
     await expect(page.getByTestId('home-board')).toHaveCount(0);
-    await expect(page.locator(`#home-task-navigation [data-task-id="${ids.leader}"]`).and(page.locator('.task-focused, .todo-pinned-card-active'))).toHaveCount(1, { timeout: 15_000 });
-    await expect(page.locator('.task-detail-modal')).toHaveCount(0);
+    await expect(page.locator(`.todo-detail-pane[data-task-id="${ids.leader}"]`)).toBeVisible();
   } finally { await request.delete(`/api/focus/tiers/${custom.id}`); }
 });

@@ -31,7 +31,7 @@ import { useTaskCircle } from '@/hooks/useSessionStatus';
 import { visibleInterval } from '@/utils/page-visibility';
 import * as ICONS from '../common/Icons';
 import '@/styles/walnut-agent.css';
-import { useOpenTask } from '@/hooks/useOpenTask';
+import { openTaskOnHome } from '@/utils/open-session';
 import { projectDisplayName } from '@/utils/project-display';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 
@@ -67,6 +67,7 @@ interface TasksPageTableProps {
   collapsed: Set<string>;
   onToggleGroup: (project: string) => void;
   projectOrder: string[];
+  onOpenTask?: (taskId: string) => void;
 }
 
 /** One entry in the flattened render list — the scroller's children, in order. */
@@ -376,13 +377,20 @@ export function TasksPageTable({
   collapsed,
   onToggleGroup,
   projectOrder,
+  onOpenTask,
 }: TasksPageTableProps) {
   const navigate = useNavigate();
   // ONE registry read for the whole table (see ProjectCell).
   const { projectNames } = useProjectRegistry();
-  const openTask = useOpenTask();
+  const openTask = useCallback((taskId: string) => {
+    if (onOpenTask) onOpenTask(taskId);
+    else openTaskOnHome(taskId, navigate);
+  }, [navigate, onOpenTask]);
   // The row menu's "Details": the task on Home with its details popup open.
-  const openTaskDetail = (taskId: string) => openTask(taskId, { detail: true });
+  const openTaskDetail = useCallback((taskId: string) => {
+    if (onOpenTask) onOpenTask(taskId);
+    else openTaskOnHome(taskId, navigate, { detail: true });
+  }, [navigate, onOpenTask]);
   const isAll = activeProject === null;
   const showGroups = isAll && grouped;
   const showPriority = useShowPriority();

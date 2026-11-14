@@ -32,17 +32,14 @@ describe('routerAreaProfile', () => {
     expect(Object.keys(profile.mcpServers ?? {})).toEqual(['walnut'])
   })
 
-  it('is the only isolated profile: a legacy work profile is no router session', () => {
-    expect(routerAreaProfile('personal').areaRole).toBe('router')
-    const legacy = { ...structuredClone(routerAreaProfile('personal')), areaRole: 'work' } as unknown as SessionProfile
-    expect(isRouterAreaSession(record({ profile: legacy }), PERSONAL)).toBe(false)
-  })
-
-  it('tells the router it is the triage and never creates tasks', () => {
-    const prompt = routerAreaProfile('personal').systemPrompt ?? ''
-    expect(prompt).toMatch(/you are the triage/)
-    expect(prompt).toMatch(/you never create tasks/)
-    expect(prompt).not.toMatch(/new_task_title/)
+  it('separates routing from processing without enabling generic tools', () => {
+    const profile = routerAreaProfile('personal', 'work');
+    expect(profile.areaRole).toBe('work');
+    expect(profile.tools).toEqual(['']);
+    expect(profile.allowedTools).toEqual(['mcp__walnut__router_item', 'mcp__walnut__router_work']);
+    expect(isRouterAreaSession(record({ profile }), PERSONAL, 'work')).toBe(true);
+    expect(isRouterAreaSession(record({ profile }), PERSONAL, 'router')).toBe(false);
+    expect(isRouterAreaSession(record(), PERSONAL, 'work')).toBe(false);
   })
 
   it('names the area in its prompt, so two areas never share one profile', () => {

@@ -138,24 +138,6 @@ from the list), and the command prints the one line that makes it the live data.
 `WALNUT_BACKUP_SECRET_ACCESS_KEY` and `WALNUT_BACKUP_RECOVERY_KEY` keep the secrets out of
 the shell history. The `restore-backup` skill walks a Claude Code session through it.
 
-## Earlier versions of config.yaml
-
-Apart from the backup, Walnut keeps copies of `config.yaml` on this computer, so a bad
-write never leaves only a bad file behind (`src/core/config-history.ts`):
-
-- `config.yaml.bak`: the last write. Walnut puts it back by itself when `config.yaml` goes
-  missing or empty.
-- `config.yaml.history/`: dated copies, named `config-<UTC time>-<hash>.yaml`. A copy is
-  saved after every write that changes the file (and an outside edit Walnut accepts); the
-  first write after an upgrade also saves what the file held before. Walnut keeps the 10
-  newest, plus the oldest and the newest of each of the last 7 days (UTC) that have one, so
-  the version a day started from outlasts any number of writes later that day.
-
-To go back to an earlier version, copy the file you want over `config.yaml`; a running
-Walnut takes it up like any edit of the file. Both copies hold the same keys as `config.yaml`: owner only, never
-synced (the data repo's `/config.yaml.*` rule covers the folder), and left out of the
-encrypted backup, which already has `config.yaml` and its own history of it.
-
 ## The older S3 copy
 
 Installs that set up the earlier S3 backup (`backup.bucket` in config.yaml) keep it,

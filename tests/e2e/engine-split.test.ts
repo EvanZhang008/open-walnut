@@ -190,8 +190,8 @@ describe('the engine split', () => {
       expect((await getSessionsForTask(moved.id))[0]?.cliModel ?? '').not.toMatch(/sonnet/i)
     } finally {
       const now = await getConfig()
-      // A section write merges (core/config-section-write.ts): undefined removes the key.
-      await updateConfig({ defaults: { ...now.defaults, engine_split_projects: undefined } as typeof now.defaults })
+      const { engine_split_projects: _p, ...rest } = now.defaults as typeof now.defaults & { engine_split_projects?: string[] }
+      await updateConfig({ defaults: rest })
     }
   }, 60_000)
 

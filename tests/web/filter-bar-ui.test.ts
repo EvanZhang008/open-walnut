@@ -26,7 +26,6 @@ import { FilterHome, takeHomeSnapshot } from '../../web/src/components/tasks/Fil
 import { FilterValuesPage } from '../../web/src/components/tasks/FilterValuesPage'
 import { clickMode, filterOptions, type FilterWriter } from '../../web/src/components/tasks/FilterValueList'
 import { FilterBar } from '../../web/src/components/tasks/FilterBar'
-import { RouteShownContext } from '../../web/src/contexts/RouteShownContext'
 import { FilterSearchResults, addFromSearch, type SearchItem } from '../../web/src/components/tasks/FilterSearchResults'
 import { STATUS_OPTIONS } from '../../web/src/components/tasks/TaskStatusControl'
 
@@ -364,17 +363,6 @@ describe('FilterValuesPage: the second page', () => {
 })
 
 describe('FilterBar: the filter row', () => {
-  it('a hidden task panel never reads its list geometry while rendering', () => {
-    const root = dom('<div></div>').querySelector('div')! as HTMLElement
-    let reads = 0
-    Object.defineProperty(root, 'scrollHeight', { get: () => { reads++; return 1000 } })
-    Object.defineProperty(root, 'clientHeight', { get: () => { reads++; return 300 } })
-    const c = controller({ listScrollRef: { current: root } })
-    renderToStaticMarkup(createElement(RouteShownContext.Provider, { value: false }, createElement(FilterBar, { controller: c })))
-    expect(reads).toBe(0)
-    renderToStaticMarkup(createElement(RouteShownContext.Provider, { value: true }, createElement(FilterBar, { controller: c })))
-    expect(reads).toBeGreaterThan(0)
-  })
   it('renders nothing with no chip, menu closed, no view item, no search', () => {
     expect(renderToStaticMarkup(createElement(FilterBar, { controller: controller() }))).toBe('')
   })

@@ -25,8 +25,6 @@ export interface RouterNodePatch {
   name?: string;
   links?: string[];
   paused?: boolean;
-  /** The folders or labels it watches (names, or the role "inbox"); [] goes back to the plugin's default. */
-  folders?: string[];
 }
 
 const NAME_MAX = 60;
@@ -138,7 +136,7 @@ export async function createRouterNode(input: RouterNodeInput): Promise<RouterNo
     // An existing task converts only with no conversation, or with every one already in this
     // area's router profile: starts and wakes refuse any other, so it would be stuck for good.
     const scope = { id: input.areaId, host: input.host };
-    if (prior) await assertIsolatedHistory(prior, scope);
+    if (prior) await assertIsolatedHistory(prior, scope, 'router');
     const next = normalizeRouterAreas({
       ...file,
       areas: area ? file.areas.map((one) => one.id === area.id ? { ...one, taskIds: [...new Set([...one.taskIds, taskId])] } : one)
@@ -153,7 +151,7 @@ export async function createRouterNode(input: RouterNodeInput): Promise<RouterNo
       }
     }
     // The final preflight helps diagnostics; the synchronous row guard closes the registration race.
-    await assertIsolatedHistory(await getTask(taskId), scope);
+    await assertIsolatedHistory(await getTask(taskId), scope, 'router');
     await updateTaskRaw(taskId, {
       org_role: 'router', org_name: name, router_area_id: input.areaId, router_links: links,
       router_paused: same?.paused ?? true,
@@ -175,7 +173,7 @@ export async function createRouterNode(input: RouterNodeInput): Promise<RouterNo
 }
 
 /**
- * Edit a router's name, VP links, watched folders or pause. Pausing changes only this router's own
+ * Edit a router's name, VP links or pause. Pausing changes only this router's own
  * assignment and its task's router_paused: no area, item or task moves, and nothing is
  * started or delivered. A pause turns the assignment off first and a resume marks the
  * task first, so an interrupted edit always leaves the router paused where it counts.
@@ -195,21 +193,6 @@ export async function updateRouterNode(taskId: string, patch: RouterNodePatch, o
     }
     if (opts?.expectedPaused !== undefined && (assignment.paused !== opts.expectedPaused || (task.router_paused !== false) !== opts.expectedPaused)) {
       throw new OrgError('router_task_changed', 409, 'The router pause changed elsewhere. Read it before changing it.');
-    }
-    if (patch.folders !== undefined) {
-      // Its own filter (2026-11-14, the user: "each router can define its own filters"): only the
-      // area's folder list changes; the wake reads it at the next arrival.
-      await updateRouterAreas(WALNUT_HOME, (current) => {
-        const area = current.areas.find((one) => one.id === assignment.areaId);
-        if (!area) throw new OrgError('router_unassigned', 409, 'This router has no area assignment. Finish its setup first.');
-        const folders = [...new Set(patch.folders!.map((one) => one.trim()).filter(Boolean))];
-        if (folders.length) area.folders = folders;
-        else delete area.folders;
-        return current;
-      }).catch((error: unknown) => {
-        if (error instanceof OrgError) throw error;
-        throw new OrgError('bad_folders', 400, error instanceof Error ? error.message : String(error));
-      });
     }
     const links = patch.links === undefined ? undefined : await openLeadLinks(patch.links);
     const fields: Partial<Task> = {};

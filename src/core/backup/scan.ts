@@ -29,9 +29,6 @@ export const EXCLUDED_DIRS = new Set([
   'places',
   // Downloaded components (src/core/components/): platform binaries, fetched again on demand.
   'components',
-  // Older copies of config.yaml (src/core/config-history.ts): config.yaml itself is
-  // backed up, and the backup keeps its own dated history of it.
-  'config.yaml.history',
 ]);
 
 const EXCLUDED_FILE_RE = [

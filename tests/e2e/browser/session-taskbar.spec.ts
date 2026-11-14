@@ -137,7 +137,7 @@ test('a column pushed out by a full strip never makes a chip: it goes to Recent'
 test('the bar is the same on every page: Minimize on the Org side panel shows there and on Home, and a chip opens it where you are', async ({ page }) => {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
-  // In-app navigation, the way a session link on the Org page opens its panel.
+  // In-app navigation, the way a click on a task on the Org page opens its panel.
   await page.evaluate((sid) => { history.pushState({}, '', `/org?open=session:${sid}`); dispatchEvent(new PopStateEvent('popstate')) }, SESSION_ID)
   const side = page.locator(`[data-testid="org-side"][data-session-id="${SESSION_ID}"]`)
   await expect(side).toBeVisible({ timeout: 20_000 })

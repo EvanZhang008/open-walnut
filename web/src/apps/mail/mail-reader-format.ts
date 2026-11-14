@@ -1,10 +1,9 @@
 /**
- * The small decisions the reader's header and body make about a message, kept pure so they can be
- * read (and graded) without a DOM: who the sender's mark is, what an attachment IS and what a click
- * on it does, and whether a plain-text body is prose or a printout.
+ * The three small decisions the reader's header and body make about a message, kept pure so they
+ * can be read (and graded) without a DOM: who the sender's mark is, what an attachment IS, and
+ * whether a plain-text body is prose or a printout.
  */
 import type { MailAddress, MailAttachmentMeta } from '@/api/mail';
-import { attachmentName } from './mail-format';
 
 /**
  * The sender's mark: one letter and one hue.
@@ -74,31 +73,8 @@ export function attachmentKind(attachment: MailAttachmentMeta): AttachmentKind {
   if (mime.includes('spreadsheet') || mime === 'text/csv') return 'sheet';
   if (mime.includes('word') || mime.startsWith('text/')) return 'doc';
   if (mime.includes('zip') || mime.includes('compressed') || mime.includes('tar')) return 'archive';
-  const extension = /\.([a-z0-9]{1,6})$/i.exec(attachmentName(attachment))?.[1]?.toLowerCase();
+  const extension = /\.([a-z0-9]{1,6})$/i.exec(attachment.filename ?? '')?.[1]?.toLowerCase();
   return (extension && EXTENSION_KIND[extension]) || 'file';
-}
-
-export type AttachmentViewer = 'pdf' | 'image' | 'download';
-
-/** Raster formats a browser draws with no code of their own: the server serves only these inline. */
-const VIEWABLE_IMAGES = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/pjpeg', 'image/gif', 'image/webp']);
-
-/**
- * What a click on an attachment does: Walnut's PDF viewer, its image viewer, or a plain download.
- *
- * The same short list the server shows inline (attachments.ts), read off the DECLARED type, so the
- * viewer never asks for a file the server would send as a download. A PDF is the one exception that
- * reads the extension too: providers that label everything `application/octet-stream` still send
- * PDFs, and the PDF viewer reads the bytes itself, whatever the response's type says. SVG is an image
- * that can carry script, so it downloads; so does html, and so does anything unknown.
- */
-export function attachmentViewer(attachment: MailAttachmentMeta): AttachmentViewer {
-  const mime = (attachment.mimeType ?? '').split(';')[0]!.trim().toLowerCase();
-  if (mime === 'application/pdf') return 'pdf';
-  if (VIEWABLE_IMAGES.has(mime)) return 'image';
-  const generic = !mime || mime === 'application/octet-stream';
-  if (generic && /\.pdf$/i.test(attachmentName(attachment))) return 'pdf';
-  return 'download';
 }
 
 /** Box-drawing and block characters: a printout drawn with them needs its columns kept. */

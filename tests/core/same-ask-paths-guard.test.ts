@@ -63,6 +63,8 @@ describe('every write that asks the user is checked', () => {
     const writers = filesWith(/[{,]\s*status_report\s*:/)
     const CHECKED: Record<string, RegExp> = {
       'src/core/sessions/report-set.ts': /refuseSameAsk\(/,
+      // A receiving task saving its findings with a NEED_ACTION ask runs the same check first.
+      'src/core/router/processing.ts': /refuseSameAsk\(/,
       // The turn-end report is the task's own words: the question lists its tree's asks first, and
       // the shown status folds whatever it still asks twice.
       'src/core/sessions/status-question.ts': /sameAskQuestionFor\(/,
@@ -90,7 +92,7 @@ describe('every write that asks the user is checked', () => {
       'src/core/plugins/server-api.ts': 'a plugin\'s letter (a plugin sender is never a task)',
       'src/core/usage/session-budget.ts': 'Walnut\'s own budget alert',
       'src/core/router/service.ts': 'a router\'s per-item letter: what arrived for the person to act on, once per item; no task\'s decision ask',
-      'src/core/router/account-intake.ts': 'Walnut\'s own letter: no router reads a mailbox (one per episode under its op key), no task asks it',
+      'src/integrations/git-sync-secrets.ts': 'Walnut\'s own letter: a credential held out of git sync',
     }
     expect(callers, 'a new letter sender: send through sendLetterAsCaller (which runs the same-ask check) or list it here with why').toEqual(Object.keys(SENDERS).sort())
     expect(code('src/core/human-inbox/letter-ops.ts')).toMatch(/async function sendLetterAsCallerOnce[\s\S]*?refuseSameAsk\([\s\S]*?sendLetterOnce\(/)

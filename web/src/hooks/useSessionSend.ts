@@ -17,7 +17,6 @@ import { useQueueSync, type QueueSyncState } from './useQueueSync';
 import { queuedChangeResult, type QueuedChangeAnswer, type QueuedChangeKind } from '@/components/sessions/queued-change-words';
 import { adoptFailedDraft, bindDraftOrigin, forgetFailedDraft, settleRetriedDraft, type DraftOrigin } from '@/utils/drafts';
 import { newUserUuid } from '@/utils/thread-tree';
-import type { RowWithSendUuids } from '@/utils/send-uuids';
 import { onKept, sendSessionMessage, type SendAck } from '@/api/session-send';
 import { applyLateKept, shownSendError, type SendErrorState } from '@/components/sessions/send-acceptance';
 
@@ -70,7 +69,7 @@ interface UseSessionSendReturn {
   handleDeleteQueued: (sessionId: string, queueId: string) => void;
   addExternalQueued: (msg: { queueId: string; text: string; enqueuedAt?: string; sentBy?: 'person' | 'agent'; queuedText?: string }) => void;
   /** History shows these rows: a bubble whose uuid one carries was delivered (a send whose acknowledgement was lost). */
-  settleShownInHistory: (rows: ReadonlyArray<RowWithSendUuids & { text: string }>) => void;
+  settleShownInHistory: (rows: ReadonlyArray<{ role: string; text: string; msgId?: string; sourceUuid?: string }>) => void;
   clearOptimistic: () => void;
   /** The panel's last read of the server's queue (useQueueSync): its time, or why it failed. */
   queueSync: QueueSyncState;
@@ -741,7 +740,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     });
   }, []);
 
-  const settleShownInHistory = useCallback((rows: ReadonlyArray<RowWithSendUuids & { text: string }>) => {
+  const settleShownInHistory = useCallback((rows: ReadonlyArray<{ role: string; text: string; msgId?: string; sourceUuid?: string }>) => {
     const next = settleShownByUuid(msgsRef.current, rows);
     if (next === msgsRef.current) return;
     const settled = next.filter((m, i) => m !== msgsRef.current[i]);

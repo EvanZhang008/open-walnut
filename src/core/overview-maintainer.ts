@@ -394,14 +394,14 @@ async function applyMaintainerAnswer(
 }
 
 const NOT_FOUND = /^(No task found|Ambiguous ID prefix)/;
-// Only a router is area work (2026-11-14); a mark an older build left on routed work is not read.
-const markedForArea = (t: Pick<Task, 'router_area_id' | 'org_role'> | undefined): boolean => t?.org_role === 'router';
+const markedForArea = (t: Pick<Task, 'router_area_id' | 'org_role'> | undefined): boolean =>
+  !!(typeof t?.router_area_id === 'string' && t.router_area_id.trim()) || t?.org_role === 'router';
 
 /** Area work (event copy, stored task, registry, session profiles) never reaches this model or a shared skill; an unreadable scope counts as area. */
 export async function areaScoped(taskId: string, seen?: Pick<Task, 'router_area_id' | 'org_role'>): Promise<boolean> {
   if (markedForArea(seen)) return true;
   try {
-    const [{ getTask }, { getSessionsForTask }, { readRouterAreas }] = await Promise.all([
+    const [{ getTask }, { getSessionsForTask }, { readRouterAreas, taskArea }] = await Promise.all([
       import('./task-manager.js'), import('./session-tracker.js'), import('./router/areas.js'),
     ]);
     const stored = await getTask(taskId).catch((err: unknown) => {
@@ -410,8 +410,8 @@ export async function areaScoped(taskId: string, seen?: Pick<Task, 'router_area_
     });
     if (markedForArea(stored)) return true;
     const file = await readRouterAreas(WALNUT_HOME);
-    if (file.routers.some((r) => r.taskId === taskId)) return true;
-    return (await getSessionsForTask(taskId)).some((r) => r.profile?.areaRole === 'router');
+    if (taskArea(file, taskId) || file.routers.some((r) => r.taskId === taskId)) return true;
+    return (await getSessionsForTask(taskId)).some((r) => typeof r.profile?.areaId === 'string' && !!r.profile.areaId.trim());
   } catch (err) {
     log.agent.warn('overview-maintainer: area scope unreadable, skipping', {
       taskId, error: err instanceof Error ? err.message : String(err),

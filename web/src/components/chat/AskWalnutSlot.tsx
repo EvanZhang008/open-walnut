@@ -147,6 +147,7 @@ export interface AskWalnutSlotProps {
   /** Reported on every selection change, so the owner can point the context
    *  inspector at the session actually on screen. */
   onSelectionChange?: (selection: { taskId: string | null; sessionId: string | null }) => void;
+  onTaskClick?: (taskId: string) => void;
   /** The embedded panel's Locate button (see SessionPanel.onLocateTask). */
   onLocateTask?: (taskId: string) => void;
   onOpenTaskDetail?: (taskId: string) => void;
@@ -178,7 +179,7 @@ function initialDraftMeta(): QuickStartTaskMeta {
 export function AskWalnutSlot({
   tasks, tasksLoading, setupReady, setup, banner, inspectorPanel,
   inspectorOpen, onToggleInspector, onFixWalnut, onCloseChat, onOpenOrg, onSelectionChange, phoneOpen,
-  onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft,
+  onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft,
 }: AskWalnutSlotProps) {
   // The console agents, from the shared agent store (the /agents page writes to
   // the same store, so a rename lands here without a reload). Walnut is always
@@ -813,6 +814,7 @@ export function AskWalnutSlot({
               headerLeading={inlineMenuButton}
               onClose={phoneChat.phone && phoneOpen && phoneChat.registered ? phoneChat.close : hideSlot}
               {...(phoneChat.phone && phoneOpen && phoneChat.registered ? { phoneHostSlot: 'chat' } : {})}
+              {...(onTaskClick ? { onTaskClick } : {})}
               {...(onLocateTask ? { onLocateTask } : {})}
               {...(onOpenTaskDetail ? { onOpenTaskDetail } : {})}
               {...(onSessionClick ? { onSessionClick } : {})}

@@ -111,15 +111,14 @@ export async function routerScopedStatus(taskId: string, sessionId: string): Pro
   try {
     const { getSessionByClaudeId } = await import('../session-tracker.js');
     const profile = (await getSessionByClaudeId(sessionId))?.profile;
-    // Only a router is scoped (2026-11-14): a mark or receiver profile an older build left on routed work is not read.
-    if (profile?.areaRole === 'router') return true;
+    if (profile?.areaId || profile?.areaRole) return true;
     const { getTask } = await import('../task-manager.js');
     const task = await getTask(taskId);
-    if (!task || task.org_role === 'router') return true;
+    if (!task || task.router_area_id || task.org_role === 'router') return true;
     const { WALNUT_HOME } = await import('../../constants.js');
-    const { readRouterAreas } = await import('../router/areas.js');
+    const { readRouterAreas, taskArea } = await import('../router/areas.js');
     const file = await readRouterAreas(WALNUT_HOME);
-    return file.routers.some((r) => r.taskId === taskId);
+    return !!taskArea(file, taskId) || file.routers.some((r) => r.taskId === taskId);
   } catch {
     return true;
   }

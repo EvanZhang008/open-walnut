@@ -47,8 +47,7 @@ describe('Recent human touches', () => {
     const storage = ['src/core/task-manager.ts', 'src/core/integration-types.ts', 'src/core/task-create-idempotency.ts']
     // Automatic imports, routing, system nodes and scheduled repairs never count as a person.
     const automatic = [
-      // The router makes no task since 2026-11-14 (it hands each item to its owner), so router/service.ts is not here.
-      'src/integrations/jira/index.ts', 'src/integrations/ms-todo/index.ts',
+      'src/integrations/jira/index.ts', 'src/integrations/ms-todo/index.ts', 'src/core/router/service.ts',
       'src/core/router/nodes.ts', 'src/core/org/org-store.ts', 'src/core/sessions/lane-ask-link.ts',
       'src/core/routines/executors/watcher.ts', 'src/core/sessions/external-session-import.ts',
       'src/core/sessions/personal-ai-lane.ts', 'src/web/routes/content-v1.ts', 'src/core/health-monitor/fix-task.ts',

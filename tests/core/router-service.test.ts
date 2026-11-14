@@ -4,8 +4,8 @@
  * Areas config written and read back through `updateRouterAreas` / `readRouterAreas`.
  *
  * Only the outside world is faked: `resolve` stands in for the source adapter's message cache,
- * `getTask` for the task store and `send` for session delivery (so no test here writes a task or
- * an areas file outside its own temp home). Each fake records its calls, so
+ * `getTask` for the task store, `send` for session delivery, and `ensureNewWork` for making new
+ * work (so no test here writes a task or an areas file outside its own temp home). Each fake records its calls, so
  * a test can say that a refused route never resolved the item, never looked at a target, and
  * never delivered anything.
  *
@@ -19,10 +19,11 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
-import { readRouterAreas, updateRouterAreas, type RouterAreasFile } from '../../src/core/router/areas.js'
+import { readRouterAreas, updateRouterAreas, RouterAreaError, type RouterAreasFile } from '../../src/core/router/areas.js'
 import {
-  noiseActionPrefix, RETRY_FAILED_PREFIX, routeItem, RouterError, type RouteItemInput, type RouterDeliveryDeps,
+  noiseActionPrefix, RETRY_FAILED_PREFIX, routeItem, routerNewWorkId, RouterError, type RouteItemInput, type RouterDeliveryDeps, type RouterNewWorkRequest,
 } from '../../src/core/router/service.js'
+import { taskIdForKey } from '../../src/core/task-create-idempotency.js'
 import { RouterStore, routerKey, routerMessageId } from '../../src/core/router/store.js'
 import { registerRouterSource } from '../../src/core/router/source-registry.js'
 import type { RouterItem, RouterRoute, RouterSource } from '../../src/core/router/types.js'
@@ -197,12 +198,19 @@ describe('who may route an item', () => {
 })
 
 describe('which target a route may name', () => {
-  // Any open task, VP or Main may own an item (router-direct-owner.test.ts covers those); only a
-  // router (a loop) and complete or gone work are refused.
+  it('refuses a target in another Area before any claim or send', async () => {
+    const f = fakes()
+    const d = deps(f)
+    await expectRefusal(() => routeItem(input({ taskId: 'task-w-worker', byTaskId: 'task-p-router' }), d), 'cross_area', 403)
+    expect(f.send).not.toHaveBeenCalled()
+    expect(await d.store!.get(routerKey(P_ITEM))).toBeUndefined()
+  })
+
   const refusals: Array<[string, Partial<RouteItemInput>, string, number]> = [
+    ['open work that belongs to no Area', { taskId: 'task-loose' }, 'task_unassigned', 403],
     ['the active router itself', { taskId: 'task-p-router', byTaskId: 'task-p-router' }, 'router_loop', 409],
     ['another router of the Area (paused)', { taskId: 'task-p-router-paused', byTaskId: 'task-p-router' }, 'router_loop', 409],
-    ['the router of another Area', { taskId: 'task-w-router' }, 'router_loop', 409],
+    ['Main', { taskId: 'task-p-main' }, 'router_loop', 409],
     ['a completed task', { taskId: 'task-p-done' }, 'target_unavailable', 409],
     ['a task that does not exist', { taskId: 'task-gone' }, 'target_unavailable', 409],
   ]
@@ -224,7 +232,7 @@ describe('which target a route may name', () => {
     await expectRefusal(() => routeItem(input({ text: 'b'.repeat(20001) }), d), 'text_too_large', 400)
     await expectRefusal(() => routeItem(input({ taskId: undefined }), d), 'task_required', 400)
     await expectRefusal(() => routeItem(input({ text: '  ' }), d), 'text_required', 400)
-    for (const extra of [{ retry: true }, { taskId: 'task-p-worker' }]) {
+    for (const extra of [{ retry: true }, { taskId: 'task-p-worker' }, { newTaskTitle: 'Dock task' }]) {
       await expectRefusal(() => routeItem({ source: P_ITEM, reason: 'No action', notRouted: true, ...extra }, d), 'bad_decision', 400)
     }
     expect(f.resolve).not.toHaveBeenCalled()
@@ -237,12 +245,12 @@ describe('a route inside one Area', () => {
     const f = fakes()
     const d = deps(f)
     const key = routerKey(P_ITEM)
-    const result = await routeItem(input({ byTaskId: 'task-p-router' }), d)
+    const result = await routeItem(input({ byTaskId: 'task-p-router', ruleId: 'rule-dock' }), d)
 
     expect(result.fresh).toBe(true)
     expect(result.route).toMatchObject({
       areaId: 'personal', key, status: 'routed', taskId: 'task-p-worker',
-      byTaskId: 'task-p-router', reason: 'Dock requests go to the dock task',
+      byTaskId: 'task-p-router', ruleId: 'rule-dock', reason: 'Dock requests go to the dock task',
       messageId: routerMessageId('personal', key, 'task-p-worker'),
     })
     expect(f.send).toHaveBeenCalledTimes(1)
@@ -289,12 +297,12 @@ describe('a route inside one Area', () => {
     expect(f.send).not.toHaveBeenCalled()
   })
 
-  it('a letter to the person names no target or retry, and needs its brief', async () => {
+  it('a letter to the person names no target, rule or retry, and needs its brief', async () => {
     const f = fakes()
     const letter = vi.fn(async () => undefined)
     const d = deps(f, { letter })
     const base = { source: P_ITEM, forUser: true, reason: 'Only the person', text: 'Reply to the dock.' }
-    for (const extra of [{ retry: true }, { taskId: 'task-p-worker' }]) {
+    for (const extra of [{ retry: true }, { taskId: 'task-p-worker' }, { newTaskTitle: 'Dock task' }, { ruleId: 'rule-dock' }]) {
       await expectRefusal(() => routeItem({ ...base, ...extra }, d), 'bad_decision', 400)
     }
     await expectRefusal(() => routeItem({ ...base, text: '  ' }, d), 'text_required', 400)
@@ -381,7 +389,7 @@ describe('a delivery that did not go through', () => {
   it('a retry keeps the original target, whatever task the retry names', async () => {
     const f = fakes()
     const d = deps(f)
-    f.send.mockRejectedValueOnce(new RouterError('target_unavailable', 'The target is moving', 409))
+    f.send.mockRejectedValueOnce(new RouterError('receiver_not_isolated', 'No receiver', 409))
     const first = await routeItem(input(), d)
     expect(first.route.status).toBe('failed')
     const again = await routeItem(input({ retry: true, taskId: 'task-p-worker-2' }), d)
@@ -419,6 +427,164 @@ describe('a delivery that did not go through', () => {
     await expectRefusal(() => routeItem(input({ retry: true }), d), 'retry_not_safe', 409)
     await routeItem(input({ source: P_ITEM_2, notRouted: true, taskId: undefined, text: undefined }), d)
     await expectRefusal(() => routeItem(input({ source: P_ITEM_2, retry: true }), d), 'retry_not_safe', 409)
+    expect(f.send).not.toHaveBeenCalled()
+  })
+})
+
+describe('new work named by a route', () => {
+  const KEY = routerKey(P_ITEM)
+  let newId = ''
+  beforeEach(async () => { newId = await routerNewWorkId('personal', KEY) })
+
+  /** Makes the task in the fake store and returns a copy of the areas file that lists it. */
+  function newWork(f: Fakes): Mock<(request: RouterNewWorkRequest) => Promise<RouterAreasFile>> {
+    return vi.fn(async (request: RouterNewWorkRequest): Promise<RouterAreasFile> => {
+      if (!f.tasks.has(request.taskId)) {
+        f.tasks.set(request.taskId, task(request.taskId, { title: request.title, source: 'local', router_area_id: request.areaId }))
+      }
+      const listed = structuredClone(areas)
+      const area = listed.areas.find((one) => one.id === request.areaId)!
+      if (!area.taskIds.includes(request.taskId)) area.taskIds.push(request.taskId)
+      return listed
+    })
+  }
+  const fresh = (extra: Partial<RouteItemInput> = {}) => input({ taskId: undefined, newTaskTitle: 'Dock follow-up', ...extra })
+
+  it('names the work by the area and the item, the same id every time', () => {
+    expect(newId).toBe(taskIdForKey(`router-work:personal:${KEY}`))
+    expect(newId).not.toBe(taskIdForKey(`router-work:work:${KEY}`))
+  })
+
+  it('makes one task when two new-work decisions race, and never touches the caller\'s snapshot', async () => {
+    const f = fakes()
+    const ensureNewWork = newWork(f)
+    const snapshot = structuredClone(areas)
+    const ledgerA = store()
+    const ledgerB = store()
+    await Promise.all([ledgerA.get('warm-up'), ledgerB.get('warm-up')])
+    const results = await Promise.all([
+      routeItem(fresh(), deps(f, { store: ledgerA, ensureNewWork })),
+      routeItem(fresh({ newTaskTitle: 'Dock reply' }), deps(f, { store: ledgerB, ensureNewWork })),
+    ])
+    expect(results.filter((r) => r.fresh)).toHaveLength(1)
+    expect(ensureNewWork).toHaveBeenCalledTimes(1)
+    expect(ensureNewWork.mock.calls[0]![0]).toMatchObject({ areaId: 'personal', source: P_ITEM, key: KEY, taskId: newId, brief: BRIEF })
+    expect(f.send).toHaveBeenCalledTimes(1)
+    expect(f.send.mock.calls[0]![0]).toMatchObject({ taskId: newId, messageId: routerMessageId('personal', KEY, newId) })
+    expect(await store().get(KEY)).toMatchObject({ status: 'routed', taskId: newId })
+    const winner = results.find((r) => r.fresh)!
+    expect(f.tasks.get(newId)?.title).toBe(winner === results[0] ? 'Dock follow-up' : 'Dock reply')
+    expect(areas).toEqual(snapshot)
+  })
+
+  it('makes no task when existing work wins the race, and exactly one when the new work wins', async () => {
+    const f = fakes()
+    const ensureNewWork = newWork(f)
+    const ledgerA = store()
+    const ledgerB = store()
+    await Promise.all([ledgerA.get('warm-up'), ledgerB.get('warm-up')])
+    const results = await Promise.all([
+      routeItem(fresh(), deps(f, { store: ledgerA, ensureNewWork })),
+      routeItem(input({ taskId: 'task-p-worker-2' }), deps(f, { store: ledgerB, ensureNewWork })),
+    ])
+    expect(results.filter((r) => r.fresh)).toHaveLength(1)
+    const winner = results.find((r) => r.fresh)!.route
+    const newWon = winner.taskId === newId
+    expect(winner.taskId).toBe(newWon ? newId : 'task-p-worker-2')
+    expect(ensureNewWork).toHaveBeenCalledTimes(newWon ? 1 : 0)
+    expect(f.tasks.has(newId)).toBe(newWon)
+    expect(f.send).toHaveBeenCalledTimes(1)
+    expect(f.send.mock.calls[0]![0].taskId).toBe(winner.taskId)
+  })
+
+  it('a new-work decision after existing work claimed the item makes nothing, and the reverse moves nothing', async () => {
+    const f = fakes()
+    const ensureNewWork = newWork(f)
+    const d = deps(f, { ensureNewWork })
+    expect((await routeItem(input(), d)).route).toMatchObject({ status: 'routed', taskId: 'task-p-worker' })
+    expect(await routeItem(fresh(), d)).toMatchObject({ fresh: false, route: { taskId: 'task-p-worker' } })
+    expect(ensureNewWork).not.toHaveBeenCalled()
+    expect(f.tasks.has(newId)).toBe(false)
+
+    const second = routerKey(P_ITEM_2)
+    const secondId = await routerNewWorkId('personal', second)
+    expect((await routeItem(fresh({ source: P_ITEM_2 }), d)).route).toMatchObject({ status: 'routed', taskId: secondId })
+    expect(await routeItem(input({ source: P_ITEM_2 }), d)).toMatchObject({ fresh: false, route: { taskId: secondId } })
+    expect(ensureNewWork).toHaveBeenCalledTimes(1)
+    expect(f.send).toHaveBeenCalledTimes(2)
+  })
+
+  it('a repeated new-work decision returns the row and makes nothing again', async () => {
+    const f = fakes()
+    const ensureNewWork = newWork(f)
+    const d = deps(f, { ensureNewWork })
+    const first = await routeItem(fresh(), d)
+    expect(first).toMatchObject({ fresh: true, route: { status: 'routed', taskId: newId } })
+    for (const again of [fresh(), fresh({ newTaskTitle: 'Another title' })]) {
+      expect(await routeItem(again, d)).toMatchObject({ fresh: false, route: { status: 'routed', taskId: newId, at: first.route.at } })
+    }
+    expect(ensureNewWork).toHaveBeenCalledTimes(1)
+    expect(f.send).toHaveBeenCalledTimes(1)
+    expect(f.tasks.get(newId)?.title).toBe('Dock follow-up')
+  })
+
+  it('a refused creation records failed, sends nothing, and only a new-work retry of the same id makes it', async () => {
+    const f = fakes()
+    const ensureNewWork = newWork(f)
+    const d = deps(f, { ensureNewWork })
+    const messageId = routerMessageId('personal', KEY, newId)
+    ensureNewWork.mockRejectedValueOnce(new RouterAreaError('cross_area', 403, 'The incoming item changed area'))
+    const first = await routeItem(fresh(), d)
+    expect(first.route).toMatchObject({ status: 'failed', taskId: newId, messageId, error: 'The incoming item changed area' })
+    expect(f.send).not.toHaveBeenCalled()
+    expect(f.tasks.has(newId)).toBe(false)
+
+    // A retry naming existing work, or no new work, keeps the original target, which is not made yet.
+    await expectRefusal(() => routeItem(input({ retry: true }), d), 'target_unavailable', 409)
+    await expectRefusal(() => routeItem(input({ retry: true, taskId: 'task-p-worker-2' }), d), 'target_unavailable', 409)
+    expect(ensureNewWork).toHaveBeenCalledTimes(1)
+    expect(await store().get(KEY)).toMatchObject({ status: 'failed', taskId: newId })
+
+    const again = await routeItem(fresh({ retry: true, newTaskTitle: 'Dock retry' }), d)
+    expect(again).toMatchObject({ fresh: true, route: { status: 'routed', taskId: newId, messageId } })
+    expect(ensureNewWork).toHaveBeenCalledTimes(2)
+    expect(f.send).toHaveBeenCalledTimes(1)
+    expect(f.send.mock.calls[0]![0]).toMatchObject({ taskId: newId, messageId })
+  })
+
+  it('a new-work retry of a row that went to existing work makes nothing and keeps that target', async () => {
+    const f = fakes()
+    const ensureNewWork = newWork(f)
+    const d = deps(f, { ensureNewWork })
+    f.send.mockRejectedValueOnce(Object.assign(new Error('queue is full'), { code: 'queue_full' }))
+    expect((await routeItem(input(), d)).route).toMatchObject({ status: 'failed', taskId: 'task-p-worker' })
+    const again = await routeItem(fresh({ retry: true }), d)
+    expect(again.route).toMatchObject({ status: 'routed', taskId: 'task-p-worker' })
+    expect(ensureNewWork).not.toHaveBeenCalled()
+    expect(f.tasks.has(newId)).toBe(false)
+  })
+
+  it('a creation that may have half-happened records unknown and is never retried or redone', async () => {
+    const f = fakes()
+    const ensureNewWork = newWork(f)
+    const d = deps(f, { ensureNewWork })
+    ensureNewWork.mockRejectedValueOnce(new Error('the task store did not answer'))
+    expect((await routeItem(fresh(), d)).route).toMatchObject({ status: 'unknown', taskId: newId })
+    await expectRefusal(() => routeItem(fresh({ retry: true }), d), 'retry_not_safe', 409)
+    expect(await routeItem(fresh(), d)).toMatchObject({ fresh: false, route: { status: 'unknown' } })
+    expect(ensureNewWork).toHaveBeenCalledTimes(1)
+    expect(f.send).not.toHaveBeenCalled()
+  })
+
+  it('new work the creator returns outside the item\'s area is refused before any send', async () => {
+    const f = fakes()
+    // A creator that made the task but listed it nowhere: the target check reads its file, not the snapshot.
+    const ensureNewWork = vi.fn(async (request: RouterNewWorkRequest) => {
+      f.tasks.set(request.taskId, task(request.taskId))
+      return structuredClone(areas)
+    })
+    const result = await routeItem(fresh(), deps(f, { ensureNewWork }))
+    expect(result.route).toMatchObject({ status: 'failed', taskId: newId })
     expect(f.send).not.toHaveBeenCalled()
   })
 })
@@ -513,6 +679,7 @@ describe('an item its source no longer has', () => {
     const d = deps(f)
     f.resolve.mockRejectedValue(missingError())
     await expect(routeItem(input(), d)).rejects.toMatchObject({ code: 'source_missing' })
+    await expect(routeItem(input({ newTaskTitle: 'Dock follow-up', taskId: undefined }), d)).rejects.toMatchObject({ code: 'source_missing' })
     await expect(routeItem(skip({ retry: true }), d)).rejects.toMatchObject({ code: 'bad_decision' })
     for (const code of ['source_timeout', 'source_unavailable', 'identity_incompatible', undefined]) {
       f.resolve.mockRejectedValueOnce(Object.assign(new Error('not a confirmed miss'), code ? { code } : {}))
@@ -646,11 +813,11 @@ describe('the one automatic retry of a refused delivery', () => {
   it('a retry the receiver refuses again is final, and its error says so', async () => {
     const f = fakes()
     const d = deps(f)
-    f.send.mockRejectedValue(Object.assign(new Error('The target queue is full.'), { code: 'queue_full' }))
+    f.send.mockRejectedValue(Object.assign(new Error('No isolated receiver is ready in this area.'), { code: 'queue_full' }))
     const first = await routeItem(input(), d)
-    expect(first.route).toMatchObject({ status: 'failed', error: 'The target queue is full.' })
+    expect(first.route).toMatchObject({ status: 'failed', error: 'No isolated receiver is ready in this area.' })
     const retried = await routeItem(input({ retry: true }), d)
-    expect(retried.route).toMatchObject({ status: 'failed', error: `${RETRY_FAILED_PREFIX}The target queue is full.` })
+    expect(retried.route).toMatchObject({ status: 'failed', error: `${RETRY_FAILED_PREFIX}No isolated receiver is ready in this area.` })
     expect(f.send).toHaveBeenCalledTimes(2)
   })
 })

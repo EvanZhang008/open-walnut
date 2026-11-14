@@ -115,8 +115,6 @@ import { nextLine, useColumnCompleteClose, type AdvanceResult } from './useColum
 import { focusColumnComposer, focusTaskRow, noteKeyboardMove, personMovedSince, useHomeKeyboard } from './useHomeKeyboard';
 import { afterStrip } from './after-strip';
 import { COLUMN_FADE_MS, columnElement, holdStripAnimation, keepScrollWhileFading, prefersReducedMotion } from './hold-strip-animation';
-import { jumpBadgeLabel } from '@/keyboard/shortcuts';
-import { isCommand } from '@/keyboard/shortcut-overrides';
 import { phaseSnapshot, useTaskUndo } from '@/undo/TaskUndoContext';
 import { nextAfterCompleteNow, useNextAfterComplete } from '@/hooks/useNextAfterComplete';
 import { needsYouQueue, nextNeedsYou } from '@/components/tasks/next-needs-you';
@@ -1888,8 +1886,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     openSession: (sid) => openSessionOrToast(sid, { restore: true }),
   });
 
-  // ⌘⇧O (the session.find command, keyboard/commands.ts) opens the session finder from
-  // anywhere on the home page (no mouse needed). Plain ⌘K stays with the task search (TodoSearchBar) — don't
+  // ⌘⇧O opens the session finder from anywhere on the home page (no mouse
+  // needed). Plain ⌘K stays with the task search (TodoSearchBar) — don't
   // collide. Shortcut choice: ⌘⇧K is Firefox's Web Console, ⌘J is Chrome's
   // Downloads, ⌘⇧S is Firefox's screenshot — ⌘⇧O is free in this app (only
   // ⌘K / ⌘E / ⌘S are taken) and browsers let pages intercept it. Gated on
@@ -1898,7 +1896,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   useEffect(() => {
     if (!visible) return;
     const handler = (e: KeyboardEvent) => {
-      if (isCommand(e, 'session.find')) {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'o' || e.key === 'O')) {
         // Match the file's other shortcut guards: never hijack the combo while
         // the user is typing in an input/textarea/contentEditable.
         const active = document.activeElement;
@@ -1911,7 +1909,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     return () => window.removeEventListener('keydown', handler);
   }, [visible]);
 
-  // ⌘⇧Enter (the session.new command) opens a new draft session column — the keyboard twin of "+".
+  // ⌘⇧Enter opens a new draft session column — the keyboard twin of "+".
   // NOT ⌘N / ⌘⇧N: those are reserved by the browser (new window / new private
   // window) and cannot be preventDefault'd from a page, so binding them would
   // "work" in tests and silently lose to the browser for real users. Same
@@ -1919,7 +1917,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   useEffect(() => {
     if (!visible) return;
     const handler = (e: KeyboardEvent) => {
-      if (isCommand(e, 'session.new')) {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'Enter') {
         const active = document.activeElement;
         if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable)) return;
         e.preventDefault();
@@ -2517,6 +2515,21 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     handleFocusTask(task, { openDetail: false, fromOutside: true });
   }, [handleFocusTask]);
 
+  // Unified task-click: select + scroll + open session (if any). Never open detail panel.
+  // Used by chat refs, session panels, triage — must behave identically to TodoPanel/PinnedCard clicks.
+  const handleFocusTaskById = useLeanCallback((taskId: string) => {
+    const task = taskMapRef.current.get(taskId);
+    if (!task) return;
+    const sid = resolveTaskSessionId(task);
+    if (sid) handleToggleSession(sid);
+    handleLocateTaskById(taskId);
+  }, [handleLocateTaskById, handleToggleSession]);
+
+  const handleFocusTaskByIdFromBoard = useLeanCallback((task: Task) => {
+    if (resolveTaskSessionId(task)) handleFocusTaskById(task.id);
+    else { setTodoVisible(true); handleFocusTask(task, { openDetail: true, fromOutside: true }); }
+  }, [handleFocusTaskById, handleFocusTask]);
+
   // `locateTaskOnHome` (utils/open-session.ts): a session panel off Home asked to be found. Its task
   // may be seconds old and not in this page's list yet (an ask started from Mail), so the locate is
   // held until the task arrives, for a bounded while, rather than dropped on the first miss. The panel
@@ -2550,27 +2563,22 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const loadingRef = useCommittedRef(loading);
   const sessionToOpen = (task: Task, sessionId?: string, openSession?: boolean) =>
     sessionId ?? (openSession ? resolveTaskSessionId(task) ?? undefined : undefined);
-  // A task's session on Home. The slot's own rule (`agentOfTask` over the agents it lists): a task it
-  // would not show goes to a column rather than to a slot that would drop the selection.
-  const openTaskSession = useLeanCallback((task: Task, sessionId: string) => {
-    if (agentOfTask(task, slotAgents(getAgentsSnapshot().agents))) {
-      showAskInSlot(task.id);
-      setChatVisible(true);
-    } else {
-      openSessionOrToast(sessionId);
-    }
-  }, [openSessionOrToast]);
   const revealOnHome = useLeanCallback((task: Task, sessionId?: string, openDetail?: boolean) => {
-    if (sessionId) openTaskSession(task, sessionId);
-    // Whatever details popup was open goes (2026-11-13, the user: a task-ref click is "go to taht
-    // sesison in home that is it"): the focused task's through the locate below, which suppresses
-    // its detail, and one from outside the list here.
-    if (!openDetail) setOutsideTask(null);
+    if (sessionId) {
+      // The slot's own rule (`agentOfTask` over the agents it lists): a task it would not show goes to a
+      // column rather than to a slot that would drop the selection.
+      if (agentOfTask(task, slotAgents(getAgentsSnapshot().agents))) {
+        showAskInSlot(task.id);
+        setChatVisible(true);
+      } else {
+        openSessionOrToast(sessionId);
+      }
+    }
     handleLocateTaskById(task.id);
-    // A finished task has no row in the panel's views to show, so with no session to open its
-    // details popup opens instead of a selection nobody can see.
-    if (openDetail || (task.status === 'done' && !sessionId)) setSuppressDetail(false);
-  }, [handleLocateTaskById, openTaskSession]);
+    // A finished task has no row in the panel's views to show, so its details popup opens instead
+    // of a selection nobody can see.
+    if (openDetail || task.status === 'done') setSuppressDetail(false);
+  }, [handleLocateTaskById, openSessionOrToast]);
   // The full-screen task detail for a listed task, touching neither the session columns nor the locate.
   const openDetailOf = useLeanCallback((task: Task) => {
     recordTaskOpened(task.id);
@@ -2602,14 +2610,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     }
     const showOutside = () => {
       pendingLocateRef.current = null;
-      pending.recordOpen?.(full.id);
-      // A task-ref click on a task the list does not carry still opens its session, and only that;
-      // the details popup is for one with no session, or a "Details" asked for by name.
-      const sid = pending.detailOnly || pending.openDetail ? undefined : sessionToOpen(full as Task, pending.sessionId, pending.openSession);
-      if (sid) { openTaskSession(full as Task, sid); return; }
       setTodoVisible(true);
       yieldFullscreen('locate-task');
       setOutsideTask(full as Task);
+      pending.recordOpen?.(full.id);
     };
     // Only a task made in the last minute may still be on its way to the list; any other opens now.
     const fresh = !!full.created_at && Date.now() - Date.parse(full.created_at) < 60_000 && full.status !== 'done';
@@ -2617,7 +2621,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     const waiting: PendingLocate = { ...reading, taskId: full.id, until: Date.now() + 3_000 };
     pendingLocateRef.current = waiting;
     setTimeout(() => { if (pendingLocateRef.current === waiting) showOutside(); }, 3_000);
-  }, [revealPending, showOperationError, openTaskSession]);
+  }, [revealPending, showOperationError]);
   const revealFetchedRef = useRef(revealFetched);
   revealFetchedRef.current = revealFetched;
   useEffect(() => {
@@ -2659,7 +2663,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, []);
 
   // Open the full-screen task detail modal for a taskId (used by the Session panel
-  // kebab "Details"). Unlike a task-ref click (openTaskOnHome) this OPENS the detail (no
+  // kebab "Details"). Unlike handleFocusTaskById this OPENS the detail (no
   // suppressDetail) and does not touch the session panel rotation. The menu reads the
   // session's own task, so Details can be tapped before Home's list has it (a cold deep
   // link on a slow link) or for a task the list never carries: held like a locate and
@@ -2880,7 +2884,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setSuppressDetail(true);
     setFocusedTask(task); // the list follows a column already open: no new open for Recent
   };
-  const { jumpHints, env: keyEnv, current: currentColumn } = useHomeKeyboard({
+  const { current: currentColumn } = useHomeKeyboard({
     visible: visible && !phoneLayout,
     columnsRef: sessionColumnsRef,
     completeColumn: completeColumnTask,
@@ -3024,7 +3028,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       /** "Start anyway": skip the outdated / not-signed-in gate. */
       overrideReadiness?: boolean;
       /** Isolated workspace: the task is filed now, its session starts once the host made it. */
-      workspace?: { provider: string; inputs: Record<string, unknown> } | { auto: true };
+      workspace?: { provider: string; inputs: Record<string, unknown> };
       /** The user picked Claude Code over a default that is not (utils/launch-source.ts
        *  draftLaunchPayload): the launch names it, or the server would start that default. */
       namesClaude?: boolean;
@@ -3727,7 +3731,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             both components remain (fix-walnut + the chat "+" pills). */}
       </div>
 
-      <HomeBoardSheet />
+      <HomeBoardSheet onOpenTask={handleFocusTaskByIdFromBoard} />
 
       {/* Todo Resize Handle — only shown when todo is visible */}
       {todoShown && <div className="todo-resize-handle" {...todoPanel.handleProps} />}
@@ -3746,6 +3750,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onCloseScratchpad={closeScratchpad}
           tasks={tasks}
           focusedTaskId={focusedTask?.id}
+          onTaskClick={handleFocusTaskById}
           overlayLeft={todoShown ? todoPanel.width : undefined}
         />
       )}
@@ -3803,6 +3808,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onOpenOrg={openOrg}
           // The inspector describes the session actually on screen.
           onSelectionChange={setAskSlotSelection}
+          onTaskClick={handleFocusTaskById}
           onLocateTask={handleLocateTaskById}
           onOpenTaskDetail={handleOpenTaskDetailById}
           onSessionClick={handleSessionClick}
@@ -3871,6 +3877,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             <TriagePanel
               onClose={handleCloseTriage}
               taskId={triageTaskId ?? undefined}
+              onTaskClick={handleFocusTaskById}
               onSessionClick={handleSessionClick}
             />
           </div>
@@ -3909,13 +3916,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               data-column-id={sid}
               style={colStyle}
             >
-              {jumpHints && idx < 9 && (
-                <JumpBadge
-                  label={jumpBadgeLabel(idx + 1, keyEnv)}
-                  // The last column is also mod+9's, as in a browser's tabs.
-                  alsoLast={idx > 0 && idx < 8 && idx === sessionColumns.length - 1 ? jumpBadgeLabel(9, keyEnv) : undefined}
-                />
-              )}
               {isDraft ? (
                 // A `draft:` id resolves to NOTHING server-side, so it must never
                 // reach SessionPanel (which would fetch it and render "session not
@@ -3988,9 +3988,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                   onTaskCompleted={columnComplete.onTaskCompleted}
                   onClose={handleClosePanel}
                   {...(restoredColumnIdsRef.current.has(sid) ? { onRestoredGone: handleRestoredGone } : {})}
+                  onTaskClick={handleFocusTaskById}
                   onLocateTask={handleLocateTaskById}
                   onOpenTaskDetail={handleOpenTaskDetailById}
-              onSessionClick={handleSessionClick}
+                  onSessionClick={handleSessionClick}
                   onSessionReplaced={handleSessionReplaced}
                   onOpenForkDraft={handleOpenForkDraft}
                   phoneLayer={phoneLayout && idx === mobileActiveIdx}
@@ -4017,6 +4018,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           key={outsideTask.id}
           task={outsideTask}
           onClose={() => setOutsideTask(null)}
+          onOpenSession={handleToggleSession}
+          onFocusChild={(t) => { setOutsideTask(null); window.dispatchEvent(new CustomEvent('main:locate-task', { detail: { taskId: t.id, openDetail: true } })); }}
         />
       )}
       {focusedTask && !suppressDetail && (
@@ -4024,7 +4027,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           task={focusedTask}
           allTasks={tasks}
           onClose={handleClearFocus}
+          onOpenSession={handleToggleSession}
           onOpenTriageForTask={handleOpenTriageForTask}
+          onFocusChild={handleFocusTask}
         />
       )}
 
@@ -4038,23 +4043,5 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
     </div>
     </>
-  );
-}
-
-/** A column's number while the jump modifier is held: just under its header (whose rows are
- *  all buttons), at the top of the transcript, for the moment the key is held. */
-function JumpBadge({ label, alsoLast }: { label: string; alsoLast?: string }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [top, setTop] = useState<number | null>(null);
-  useLayoutEffect(() => {
-    const column = ref.current?.parentElement;
-    const header = column?.querySelector<HTMLElement>('.session-panel-header');
-    setTop(column && header ? header.getBoundingClientRect().bottom - column.getBoundingClientRect().top + 6 : 6);
-  }, []);
-  return (
-    <div ref={ref} className="session-jump-badge" aria-hidden="true" style={top === null ? { visibility: 'hidden' } : { top }}>
-      <kbd>{label}</kbd>
-      {alsoLast && <kbd className="session-jump-badge-last">{alsoLast}</kbd>}
-    </div>
   );
 }

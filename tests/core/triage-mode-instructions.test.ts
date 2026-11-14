@@ -21,6 +21,7 @@ import {
   triageInstructionsFor,
 } from '../../src/core/triage/bootstrap.js';
 import { readTriageConfig } from '../../src/core/triage/config.js';
+import { TRIAGE_MARK_READ_RULE, TRIAGE_NO_REMOVAL } from '../../src/core/triage/letter-rules.js';
 import type { CronJob } from '../../src/core/cron/types.js';
 import type { TriageConfig } from '../../src/core/triage/types.js';
 
@@ -71,9 +72,7 @@ describe('the run instructions carry the mode', () => {
       // The fixed half, then the budget, then the mode.
       expect(text).toContain('You are running one Inbox Triage batch');
       expect(text).toContain('at most 3 decision letters');
-      expect(text).toContain('slack_request_post');
-      // No mail op at all: the mail router owns mail since 2026-11-14.
-      expect(text).not.toMatch(/\bmail_[a-z_]+/);
+      expect(text).toContain('mail_request_send');
     }
     expect(ask).toContain('Mode: ask');
     expect(assist).toContain('Mode: assist');
@@ -107,14 +106,30 @@ describe('changing the mode re-patches the routine', () => {
     expect(layer.patchRoutine).toHaveBeenCalledTimes(1);
   });
 
-  it('an old auto_mark_read moves nothing: no run marks mail read', async () => {
+  it('auto_mark_read moves the instructions too — it is a permission, not a display flag', async () => {
+    const layer = spyLayer();
+    const assist: TriageConfig = { ...ASK, mode: 'assist' };
+    await ensureTriageRoutine({ ...layer.deps, getConfig: cfg(assist) });
+    expect(instructionsOf(layer.jobs[0])).toContain('may NOT mark mail as read');
+
+    const patched = await ensureTriageRoutine({
+      ...layer.deps, getConfig: cfg({ ...assist, auto_mark_read: true }),
+    });
+    expect(patched.outcome).toBe('patched');
+    expect(instructionsOf(layer.jobs[0])).toContain(TRIAGE_MARK_READ_RULE);
+  });
+
+  it('auto_mark_read moves ask mode as well: promotional mail may be marked read there too', async () => {
     const layer = spyLayer();
     await ensureTriageRoutine({ ...layer.deps, getConfig: cfg(ASK) });
+    const before = instructionsOf(layer.jobs[0]);
+    expect(before).not.toContain('mail_mark_read');
     const again = await ensureTriageRoutine({
-      ...layer.deps, getConfig: cfg({ ...ASK, auto_mark_read: true } as TriageConfig),
+      ...layer.deps, getConfig: cfg({ ...ASK, auto_mark_read: true }),
     });
-    expect(again.outcome).toBe('unchanged');
-    expect(instructionsOf(layer.jobs[0])).not.toContain('mark mail read');
+    expect(again.outcome).toBe('patched');
+    expect(instructionsOf(layer.jobs[0])).toContain('Mode: ask');
+    expect(instructionsOf(layer.jobs[0])).toContain(TRIAGE_MARK_READ_RULE);
   });
 });
 
@@ -127,13 +142,19 @@ describe('what a run does with each item', () => {
   });
 
   it('does the homework before it asks the user', () => {
-    expect(text).toContain('do the homework before you ask');
+    expect(text).toContain('mail_draft');
     expect(text).toContain('the user only decides');
   });
 
-  it('works only the items the batch shows, never the state file', () => {
-    // 2026-10-06: two runs pulled Slack items out of triage-state.json's git history.
-    expect(text).toContain('Work only the items it shows');
+  it('works only the inboxes the batch shows, never the state file', () => {
+    // 2026-10-06: two mail-only runs pulled Slack items out of triage-state.json's git history.
+    expect(text).toContain('Work only the inboxes it shows');
     expect(text).toContain('never dig items out of Walnut\'s own files (triage-state.json, its git history)');
+  });
+
+  it('never removes mail, in either mode', () => {
+    for (const mode of ['ask', 'assist'] as const) {
+      expect(triageInstructionsFor(readTriageConfig({ triage: { ...ASK, mode } }))).toContain(TRIAGE_NO_REMOVAL);
+    }
   });
 });

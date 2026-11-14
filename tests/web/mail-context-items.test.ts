@@ -98,7 +98,7 @@ function actions() {
     onForward: (message: MailMessageDto) => acted.push(`forward ${message.accountId} ${message.messageId}`),
     onTalkToCeo: (message: MailMessageDto) => acted.push(`ceo ${message.accountId} ${message.messageId}`),
     onNewTask: (message: MailMessageDto) => acted.push(`new-task ${message.accountId} ${message.messageId}`),
-    openTask: (taskId: string) => { acted.push(`open-task ${taskId}`); },
+    onOpenTask: (taskId: string) => acted.push(`open-task ${taskId}`),
     onSearchSender: (address: string) => acted.push(`search ${address}`),
     onCopyLink: (message: MailMessageDto) => acted.push(`copy ${message.accountId} ${message.messageId}`),
     onSummarize: (message: MailMessageDto) => acted.push(`summarize ${message.accountId} ${message.messageId}`),

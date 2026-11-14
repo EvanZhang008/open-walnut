@@ -74,9 +74,8 @@ beforeEach(async () => {
   stubAnswers = { check: { type: 'choice', choice: 'yes', probabilities: { yes: 1 }, confidence: 1 } };
   // Deleting config.yaml is NOT a reset: the config reader is backup-aware and
   // restores the previous file, so a prior test's api_key would survive.
-  // Clear the section explicitly instead: a top-level null clears it (a section
-  // object merges into the stored one, core/config-section-write.ts).
-  await updateConfig({ jev: null as never, providers: {} as never });
+  // Clear the section explicitly instead.
+  await updateConfig({ jev: {}, providers: {} as never });
   await fs.rm(KEY_FILE, { force: true });
   await fs.rm(OPENROUTER_KEY_FILE, { force: true });
 });

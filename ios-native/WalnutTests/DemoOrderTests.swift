@@ -62,13 +62,8 @@ final class DemoOrderTests: XCTestCase {
         // Wait out a full refetch: the same bundle the board's poll runs.
         await store.refreshBoard(origin: .pullToRefresh)
         XCTAssertEqual(satelliteRows(store), placed, "a refetch must not move a row the app already placed")
-        // The wire keeps the retired Backlog and Wait buckets; the board shows them in
-        // Satellite by pin order (PinTierPolicy), so the server's split, read as the
-        // phone reads it, is the band the app placed.
         let refetched = try await api.focusTasks()
-        XCTAssertEqual(TasksStore.tierOrder(from: refetched)["satellite"], placed)
-        XCTAssertEqual(Array((refetched.satelliteTasks ?? []).suffix(2)), [first.id, second.id],
-                       "the server pins each new task at the foot of its Satellite bucket")
+        XCTAssertEqual(refetched.satelliteTasks, placed)
         let listed = try await api.tasks().tasks.map(\.id)
         XCTAssertEqual(Array(listed.suffix(2)), [first.id, second.id], "the task list appends, as the server does")
 

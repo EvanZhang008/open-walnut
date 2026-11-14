@@ -734,10 +734,8 @@ same list the app shows, checked by `tests/web/keyboard-shortcuts.test.ts`.
 |---|---|---|---|
 | Go to the 1st to 5th session column | `⌘1` to `⌘5` | `⌃1` to `⌃5` | `Alt+1` to `Alt+5` |
 | Go to the last session column | `⌘9` | `⌃9` | `Alt+9` |
-| Hold to show each column's number and the keys of the buttons | `⌘` | `⌃` | `Alt` |
 | Previous / next session column | `⌘⇧[` / `⌘⇧]` | `⌃⇧[` / `⌃⇧]` | `Alt+Shift+[` / `Alt+Shift+]` |
-| Close the current session column | `⌘W` | `⌃W` | `Alt+W` |
-| Type in the current session | `⌘I` | `⌃I` or `⌘I` | `Alt+I` or `Ctrl+I` |
+| Type in the current session | `⌘I` | `⌃I` | `Alt+I` |
 | Find a session | `⌘⇧O` | `⌘⇧O` | `Ctrl+Shift+O` |
 | New session column | `⌘⇧↩` | `⌘⇧↩` | `Ctrl+Shift+Enter` |
 | Show or hide the questions drawer | `⌘⇧E` | `⌘⇧E` | `Ctrl+Shift+E` |
@@ -746,7 +744,6 @@ same list the app shows, checked by `tests/web/keyboard-shortcuts.test.ts`.
 
 | Action | Mac app | Browser on a Mac | Windows and Linux |
 |---|---|---|---|
-| New task | `⌘N` | `⌃N` | `Alt+N` |
 | Complete the current task and go to the next one that needs you | `⌘⇧D` | `⌘⇧D` | `Ctrl+Shift+D` |
 | Undo the last task action (for 5 seconds) | `⌘Z` | `⌘Z` | `Ctrl+Z` |
 | Search tasks | `⌘K` or `/` | `⌘K` or `/` | `Ctrl+K` or `/` |
@@ -756,7 +753,6 @@ same list the app shows, checked by `tests/web/keyboard-shortcuts.test.ts`.
 
 | Action | Mac app | Browser on a Mac | Windows and Linux |
 |---|---|---|---|
-| Show or hide the task panel | `⌘\` | `⌃\` | `Alt+\` |
 | Find on the page | `⌘F` | `⌘F` | `Ctrl+F` |
 | Show these shortcuts | `?` or `⌘/` | `?` or `⌘/` | `?` or `Ctrl+/` |
 | Close a menu or dialog, or clear the selected task | `Esc` | `Esc` | `Esc` |

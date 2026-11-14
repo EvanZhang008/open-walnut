@@ -132,6 +132,7 @@ export interface KanbanHeaderProps {
   ownerId: string;
   onJumpToLane(laneId: string): void;
   onRevealCard(taskId: string): void;
+  onOpenTask(taskId: string): void;
   searchRef?: RefObject<HTMLInputElement | null>;
 }
 
@@ -163,6 +164,7 @@ export interface KanbanCardPromptProps {
 
 export interface KanbanLeaderRowProps {
   leader: KanbanLeaderVM;
+  onOpenTask(taskId: string): void;
 }
 
 export interface KanbanCardEditorProps {

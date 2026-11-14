@@ -320,7 +320,7 @@ export type OrgChannelsLike = Omit<OrgChannels, 'routers'> & { routers?: readonl
 /** A router's state in a word or two. Never claims collection runs: an unpaused router is only
  *  ready for the items routed to its area (some source accounts may not be readable yet). */
 export function routerStateWord(paused: boolean, short = false): string {
-  return paused ? 'Paused' : short ? 'Ready' : 'Ready for new items';
+  return paused ? 'Paused' : short ? 'Ready' : 'Ready for assigned items';
 }
 
 export function vpLinkCount(n: number): string {

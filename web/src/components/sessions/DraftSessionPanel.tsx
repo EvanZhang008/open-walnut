@@ -96,7 +96,6 @@ import { repairHint, type WalnutRepairTarget } from '@/pages/repair-target';
 /** Files attached before the session exists (api/file-upload.ts). */
 const NO_SESSION_YET = {} as const;
 import { orgDisplayTitle } from '@open-walnut/org-tree';
-import { ShortcutHint } from '@/keyboard/ShortcutHint';
 
 const PLACEHOLDER = 'What should this session do?';
 const HINT = 'Nothing runs yet: send to start, or save it as a todo.';
@@ -917,7 +916,6 @@ export function DraftSessionPanel({
             aria-label="Discard draft session"
           >
             {ICONS.ICON_CLOSE}
-            <ShortcutHint command="session.close" />
           </button>
         </div>
       </div>}

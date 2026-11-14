@@ -396,7 +396,8 @@
   cursor: pointer;
 }
 .notes-format-block-item:hover { background: var(--bg-hover, #2d3038); }
-.notes-format-block-item.active { color: var(--accent, #6366f1); font-weight: 600; }
+.notes-format-block-item.active { color: var(--accent, #6366f1); }
+.notes-format-block-check { font-size: 12px; }
 /* Each row previews its own style, so the picker reads without trying it. */
 .notes-format-block-sample.sample-h1 { font-size: 17px; font-weight: 700; }
 .notes-format-block-sample.sample-h2 { font-size: 15px; font-weight: 650; }

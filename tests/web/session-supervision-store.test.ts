@@ -24,7 +24,6 @@ import {
   refreshSessionSupervision,
   changeSessionSupervision,
   stopSupervisedSession,
-  holdSessionSupervision,
   READ_FAILURE_GRACE_MS,
 } from '@/stores/session-supervision-store';
 
@@ -282,40 +281,6 @@ describe('session-supervision store — subscription lifecycle', () => {
     await vi.advanceTimersByTimeAsync(15_000);
     await flush();
     expect(api.fetchSessionSupervision).toHaveBeenCalledTimes(3);
-  });
-
-  it('a hold (a reader off its page) keeps the last state but runs no poll, and never stops a live reader', async () => {
-    const SID = 'sess-hold';
-    serveGet(sup({ enabled: true, generation: 1 }));
-    const live = reader(SID);
-    await flush();
-    const unhold = holdSessionSupervision(SID);
-    live.off();
-    await vi.advanceTimersByTimeAsync(60_000);
-    await flush();
-    // Only the live reader's first read: the hold alone asks nothing, and keeps what was read.
-    expect(api.fetchSessionSupervision).toHaveBeenCalledTimes(1);
-    expect(getSessionSupervision(SID).value?.supervision?.generation).toBe(1);
-
-    // Back on its page: a reader asks at once and polls again.
-    serveGet(sup({ enabled: true, generation: 2 }));
-    const back = reader(SID);
-    expect(api.fetchSessionSupervision).toHaveBeenCalledTimes(2);
-    expect(back.snap.value?.supervision?.generation).toBe(1);
-    await flush();
-    expect(back.snap.value?.supervision?.generation).toBe(2);
-
-    // A second hold coming and going leaves the live reader's poll running.
-    const other = holdSessionSupervision(SID);
-    other();
-    other(); // a second release of the same hold is a no-op
-    await vi.advanceTimersByTimeAsync(15_000);
-    await flush();
-    expect(api.fetchSessionSupervision).toHaveBeenCalledTimes(3);
-
-    back.off();
-    unhold();
-    expect(getSessionSupervision(SID).value).toBeNull();
   });
 });
 

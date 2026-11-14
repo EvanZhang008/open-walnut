@@ -11,7 +11,8 @@
 .session-panel-chat-col.is-reader-side > .session-reader-divider {
   margin-top: var(--sp-first-flow-top, calc(var(--sp-header-h, 76px) + 2px));
 }
-.session-panel-split.is-changed-open .session-panel-chat-col.has-reader > :is(.session-reader-pane, .session-reader-divider) { margin-top: 0; }
+.session-panel-split.is-changed-open .session-panel-chat-col.has-reader > :is(.session-reader-pane, .session-reader-divider),
+.session-panel-chat-col.has-reader.has-peek-bar > :is(.session-reader-pane, .session-reader-divider) { margin-top: 0; }
 .session-panel-chat-col.is-reader-stack > .session-panel-body {
   --sp-header-h: 0px;
   --sp-first-flow-top: 0px;

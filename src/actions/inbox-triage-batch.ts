@@ -22,10 +22,6 @@
  * hence `status: 'skipped'`, which the engine turns into a skipped run (no error
  * backoff, no red card, the next slot computed as usual).
  *
- * NO MAIL. Since 2026-11-14 every new mail goes to its mailbox's router, which does
- * the triage, so a batch carries Slack only and a config left with no source runs
- * no batch (tests/core/triage-no-mail.test.ts).
- *
  * PATHS COME FROM `ctx`. An action module is its own tsup bundle, so its copy of
  * `constants.ts` is not the server's. `ctx.WALNUT_HOME` is the server's value, and
  * everything this action touches is derived from it.
@@ -37,6 +33,7 @@ import type { ActionDescriptor, ActionContext, ActionResult } from './types.js';
 import { readTriageConfig, isTriageWithinActiveHours } from '../core/triage/config.js';
 import { ackTriageClaimForTask, claimTriageBatch, loadTriageState, releaseTriageClaimHeldBy, triageRunHold, type TriageRunTaskView } from '../core/triage/state.js';
 import { buildTriageBatch, TRIAGE_STATE_NOTE } from '../core/triage/batch.js';
+import { keepTriageMailOutsideAreas } from '../core/triage/router-mail.js';
 import { TRIAGE_ACTION_ID } from '../core/triage/types.js';
 import { readRoutingRules, type TriageRoutingRule } from '../core/triage/routing-rules.js';
 
@@ -45,7 +42,7 @@ export function describe(): ActionDescriptor {
     id: TRIAGE_ACTION_ID,
     name: 'Inbox Triage batch',
     description:
-      'Collect the new Slack messages that arrived since the last Inbox Triage run and build '
+      'Collect the new mail and Slack that arrived since the last Inbox Triage run and build '
       + 'the batch its session starts with. Pure file I/O — no model call, no network.',
   };
 }
@@ -98,18 +95,6 @@ export async function run(ctx: ActionContext): Promise<ActionResult> {
   const { getConfig } = await import('../core/config-manager.js');
   const resolved = readTriageConfig(await getConfig());
 
-  // Off, or no source left (an old mail-only config): no batch, so no task is made. The
-  // config watcher turns the routine off too; this covers a fire that beats it.
-  if (!resolved.enabled) {
-    return {
-      invoke: false,
-      status: 'skipped',
-      content: resolved.disabledReason === 'no-sources'
-        ? 'Inbox Triage has no source to read (new mail goes to the mail router) — no batch this run.'
-        : 'Inbox Triage is off — no batch this run.',
-    };
-  }
-
   // Active hours are enforced HERE, the one point before a session exists.
   if (!isTriageWithinActiveHours(resolved)) {
     return {
@@ -121,7 +106,7 @@ export async function run(ctx: ActionContext): Promise<ActionResult> {
 
   // The standing routing rules ride every batch (routing-rules.ts), read before anything is
   // claimed: a rules file that cannot be read is not "no rules" (every item a rule covers would
-  // go to triage as unrouted), so the run waits and the items stay for the next one.
+  // go to triage as unrouted mail), so the run waits and the items stay for the next one.
   let allRules: TriageRoutingRule[];
   try {
     allRules = await readRoutingRules(home);
@@ -145,16 +130,20 @@ export async function run(ctx: ActionContext): Promise<ActionResult> {
     };
   }
   const claimed = await claimTriageBatch(nowMs, home);
+  const mail = await keepTriageMailOutsideAreas(claimed.mail, home);
   const stateDoc = await readStateNote(home);
   // A rule whose task is complete or gone sits out: it must not win the first match and keep a
   // later rule (to open work) from routing the item.
   const rules = await liveRules(allRules);
 
   const batch = buildTriageBatch({
+    mail,
     slack: claimed.slack,
+    droppedMail: claimed.claim.droppedMail,
     droppedSlack: claimed.claim.droppedSlack,
     sinceMs: claimed.sinceMs,
     nowMs: claimed.claim.atMs,
+    sources: resolved.sources,
     ...(stateDoc ? { stateDoc } : {}),
     ...(claimed.lastJournalLine ? { previousJournalLine: claimed.lastJournalLine } : {}),
     ...(claimed.stateStale ? { stateStale: true } : {}),

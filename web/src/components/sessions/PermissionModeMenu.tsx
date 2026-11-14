@@ -6,7 +6,7 @@ import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 /**
  * The permission-mode pill of a Claude Code composer (session panel, side
  * threads, the new-task draft): one click opens a menu of every mode, safest
- * first, the current one in the accent colour, and a pick switches to it (Evan, 2026-11-12:
+ * first, the current one checked, and a pick switches to it (Evan, 2026-11-12:
  * "make it drop down menu can select"). Shift+Tab in the box still steps
  * through the enabled cycle; the pill no longer prints that hint.
  */
@@ -109,13 +109,14 @@ export function PermissionModeMenu({ mode, onPick, title, heading = 'Permission 
               aria-selected={active}
               data-mode={option.id}
               title={option.description}
-              className={`model-picker-row${active ? ' model-picker-row-active' : ''}${option.id === 'bypass' ? ' permission-mode-danger' : ''}${active ? ' picker-row-current' : ''}`}
+              className={`model-picker-row${active ? ' model-picker-row-active' : ''}${option.id === 'bypass' ? ' permission-mode-danger' : ''}`}
               onClick={() => {
                 setOpen(false);
                 triggerRef.current?.focus({ preventScroll: true });
                 if (!active) onPick(option.id);
               }}
             >
+              <span className="model-picker-row-check" aria-hidden>{active ? '✓' : ''}</span>
               <span className="model-picker-row-name permission-mode-name">{option.label}</span>
             </button>
           );

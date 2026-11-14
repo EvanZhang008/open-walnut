@@ -24,6 +24,7 @@ const ASKERS: Record<string, string> = {
   'src/core/diff-summary.ts': 'asked through the sessions route when a person opens a diff summary',
   'src/providers/acp-session.ts': 'the ACP transport\'s own method (an ACP engine is never asked by the schedulers above)',
   // Same name, not a side question.
+  'src/core/router/handoff-approval.ts': 'a local askStatus that reads an approval record, no model call',
   'src/core/sessions/session-extras.ts': 'a person\'s own side question (the session menu)',
   'src/providers/claude-code-session.ts': 'the transport itself',
 }

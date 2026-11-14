@@ -35,7 +35,6 @@ import {
 import { ApprovalUnlock } from './ApprovalUnlock';
 import { askNoticePermission, nativeNoticeStatus, noticeAccess, openNoticeSettings, OPEN_APPROVAL_EVENT, takeClickedApproval, type NoticeAccess } from './approval-notify';
 import { ApprovalContextRows, AskerLink, detailText, hostWords } from './approval-context';
-import { useYieldsToTaskOpen } from '@/hooks/useOpenTask';
 import './approvals.css';
 
 export function useNow(ms: number): number {
@@ -276,8 +275,6 @@ function ApprovalDialog({ s, now }: { s: ApprovalsState; now: number }) {
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, [id]);
-  // A task opening (its AskerLink, or any task link) takes the screen: the dialog yields to it.
-  useYieldsToTaskOpen(closeApproval, !!id);
   if (!id) return null;
   const a = s.items.get(id);
   const settled = s.done[id];

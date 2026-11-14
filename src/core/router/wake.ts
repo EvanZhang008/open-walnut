@@ -23,11 +23,6 @@ export const ROUTER_WAKE_INPUT = 'Confirmed incoming items await this area route
 export const ROUTER_WAKE_INSTRUCTIONS = 'Read each listed item with router_context and record its route with router_route.';
 /** Rides each wake message beside the fixed instructions: a refused delivery is listed for its one retry. */
 export const ROUTER_WAKE_RETRY_NOTE = 'An item whose route shows failed (its delivery was refused) is routed once more: router_route with retry: true and its brief.';
-/**
- * Rides each wake message: a router session started by an older build still holds its old prompt,
- * which told it to create tasks (2026-11-14: the router is the triage and creates none).
- */
-export const ROUTER_WAKE_OWNER_NOTE = 'You are the triage: hand each item straight to its owner with task_id (the open task that owns its thread or subject, else the VP of its project from router_context owners, else Main), with your brief. Never create a task: new_task_title is refused.';
 export const ROUTER_WAKE_BATCH = 50;
 export const ROUTER_WAKE_EVERY_MS = 5 * 60_000;
 const LOOKUP_BATCH = 200;
@@ -55,6 +50,8 @@ export interface RouterWakeDeps {
   /** An idle start: no first message, no turn; the wake's message follows through the grant. */
   start(taskId: string): Promise<{ sessionId?: string }>;
   nonce(): string;
+  /** Sources (by `routerKey`) waiting on the person's answer to a handoff ask: not pending until it can go on. */
+  waitingSources?(areaId: string, sources: readonly RouterSource[], routerTaskId: string): Promise<Set<string>>;
   /** Cache-only batch check of which sources are still the current delivery; absent = the registry's. */
   currentSources?(sources: readonly RouterSource[]): Promise<RouterSource[]>;
   /** Moves the area's unsettled open arrivals to their mail's current copy (account-intake.ts); absent = none. */
@@ -105,6 +102,10 @@ function defaultDeps(): RouterWakeDeps {
       const routes = await store.getSources(sources);
       await store.offerRetry([...new Set([...routes.values()].filter((route) => retryOwed(route)).map((route) => route.key))]);
     },
+    async waitingSources(_areaId, sources, routerTaskId) {
+      const { handoffWaitingSources } = await import('./handoff-approval.js');
+      return await handoffWaitingSources(sources, routerTaskId);
+    },
   };
 }
 
@@ -142,9 +143,10 @@ export async function routerWakeGate(areaId: string, deps: RouterWakeDeps, targe
 // A refused delivery is handed back to its router once (types.ts); an uncertain one (unknown) never is.
 export { retryOwed };
 
-/** This area's confirmed items still current in the cache with no ledger row, or a refused delivery owed its one retry, in file order; unknown rows are not pending. */
-export async function pendingSources(file: RouterAreasFile, area: RouterArea, deps: Pick<RouterWakeDeps, 'routesFor' | 'currentSources'>,
+/** This area's confirmed items still current in the cache with no ledger row, or a refused delivery owed its one retry, in file order; unknown rows and held asks are not pending. */
+export async function pendingSources(file: RouterAreasFile, area: RouterArea, deps: Pick<RouterWakeDeps, 'routesFor' | 'waitingSources' | 'currentSources'>,
   opts: { first?: boolean } = {}): Promise<RouterSource[]> {
+  const routerTaskId = activeRouter(file, area.id)?.taskId;
   const allowed = new Set(area.sources.map((source) => JSON.stringify([source.kind, source.account])));
   // Confirmed items, then a bound account's open arrivals.
   const mine = allAreaItems(file).filter((item) => item.areaId === area.id
@@ -160,7 +162,9 @@ export async function pendingSources(file: RouterAreasFile, area: RouterArea, de
     });
     // A confirmed snapshot a later delivery replaced never gets a ledger row, so it must not wake forever.
     const open = ledgerless.length ? await (deps.currentSources ? deps.currentSources(ledgerless) : currentRouterSources(ledgerless)) : [];
+    const held = open.length && routerTaskId && deps.waitingSources ? await deps.waitingSources(area.id, open, routerTaskId) : new Set<string>();
     for (const source of open) {
+      if (held.has(routerKey(source))) continue;
       pending.push(source);
       if (opts.first) return pending;
     }
@@ -193,7 +197,7 @@ export function wakeWindow<T>(pending: readonly T[], cursor: number, size = ROUT
 
 export function routerWakeMessage(areaId: string, items: readonly RouterSource[], more: number): string {
   return JSON.stringify({
-    instructions: ROUTER_WAKE_INSTRUCTIONS, owners: ROUTER_WAKE_OWNER_NOTE, retry: ROUTER_WAKE_RETRY_NOTE, areaId,
+    instructions: ROUTER_WAKE_INSTRUCTIONS, retry: ROUTER_WAKE_RETRY_NOTE, areaId,
     items: items.map((source) => ({ ...source })), more,
   });
 }
@@ -288,7 +292,7 @@ const newestFirst = (a: WakeSession, b: WakeSession) => (b.lastActiveAt ?? '').l
 async function wake(gate: Extract<RouterWakeGate, { ready: true }>, target: string, deps: RouterWakeDeps): Promise<ExecutorRunResult> {
   // Archived rows too: a start may continue any of them, and an old full-profile one is never resumed.
   const records = await deps.sessionsForTask(target);
-  if (records.some((record) => !isRouterAreaSession(record, gate.area))) {
+  if (records.some((record) => !isRouterAreaSession(record, gate.area, 'router'))) {
     return { status: 'error', error: 'The router task has a session outside its isolated router profile; it was not woken or restarted.' };
   }
   const open = records.filter((record) => !record.archived);
@@ -309,7 +313,7 @@ async function wake(gate: Extract<RouterWakeGate, { ready: true }>, target: stri
   const fresh = await routerWakeGate(gate.area.id, deps, target);
   if (!fresh.ready) return { status: 'ok', summary: `${fresh.reason} Nothing was sent.` };
   const record = (await deps.sessionsForTask(target)).find((one) => one.claudeSessionId === sessionId);
-  if (!record || record.archived || !isRouterAreaSession(record, fresh.area)) {
+  if (!record || record.archived || !isRouterAreaSession(record, fresh.area, 'router')) {
     return { status: 'error', error: 'The router session is not its isolated router session; nothing was sent.' };
   }
   if (!started && record.process_status === 'running') return { status: 'ok', summary: 'The router is already processing.' };

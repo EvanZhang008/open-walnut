@@ -1,7 +1,7 @@
 /**
  * Working through many sessions from the keyboard (web/src/pages/useHomeKeyboard.ts and
  * web/src/undo/): mod+1..9 and mod+shift+[ / ] move the caret between the columns, mod+i puts
- * it in the current one, holding the modifier shows each column's number, mod+shift+D
+ * it in the current one (holding the modifier alone shows nothing), mod+shift+D
  * completes the current task and goes on to the next one that needs the person, and every
  * complete, snooze, pin and delete has an Undo for 5 seconds, on its toast and on mod+z.
  *
@@ -201,42 +201,39 @@ test('jumping away and back keeps the caret where the person left it in the box'
   await composer(page, 'a').fill('')
 })
 
-test('holding Cmd shows each column its number', async ({ page }) => {
+// 2026-11-13: holding Cmd once showed a number badge on every column ("i press "command" and this
+// show"); the person never asked for them. Held alone, Cmd draws nothing; Cmd+digit still jumps.
+test('holding Cmd alone shows nothing on the columns, and Cmd+1 / Cmd+2 still jump', async ({ page }) => {
   await asMacApp(page)
   await resetTasks(page)
   await openColumns(page, ['a', 'b', 'c'])
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  const strip = page.locator('.main-page-session-column')
+  const keyCaps = () => strip.evaluateAll((cols) => cols.flatMap((c) =>
+    [...c.querySelectorAll('kbd, .session-jump-badge')].map((el) => el.textContent ?? '')).filter((t) => /[\u2318\u2303]|Alt\+/.test(t)))
+  const before = await keyCaps()
   await page.keyboard.down('Meta')
-  const badges = page.locator('.session-jump-badge')
-  await expect(badges).toHaveCount(3, { timeout: 3_000 })
-  await expect(col(page, 'a').locator('.session-jump-badge')).toHaveText('\u23181')
-  await expect(col(page, 'c').locator('.session-jump-badge kbd').first()).toHaveText('\u23183')
-  // The last column is also Cmd+9's.
-  await expect(col(page, 'c').locator('.session-jump-badge-last')).toHaveText('\u23189')
-  await expect(page.locator('.session-jump-badge-last')).toHaveCount(1)
-  // Just under the header, over none of the header's buttons.
-  for (const k of ['a', 'b', 'c'] as const) {
-    const badge = (await col(page, k).locator('.session-jump-badge').boundingBox())!
-    const header = (await col(page, k).locator('.session-panel-header').first().boundingBox())!
-    expect(badge.y, `${k} badge`).toBeGreaterThanOrEqual(header.y + header.height)
-    expect(badge.y, `${k} badge`).toBeLessThan(header.y + header.height + 20)
-    const buttons = await col(page, k).locator('.session-panel-header button:visible').evaluateAll((els) =>
-      els.map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, name: el.getAttribute('aria-label') ?? el.textContent ?? '' } }))
-    for (const b of buttons.filter((b) => b.w > 0 && b.h > 0)) {
-      const overlaps = badge.x < b.x + b.w && b.x < badge.x + badge.width && badge.y < b.y + b.h && b.y < badge.y + badge.height
-      expect(overlaps, `${k} badge over the "${b.name}" button`).toBe(false)
-    }
-  }
-  await page.screenshot({ path: `${SHOTS}/jump-badges.png`, clip: { x: 300, y: 0, width: 1300, height: 220 } })
-  // Cmd still held: hop 2 then 3 while reading the numbers; they stay up the whole time.
+  // Well past the old 350 ms hold.
+  await page.waitForTimeout(1_200)
+  expect(await keyCaps()).toEqual(before)
+  await expect(page.locator('.session-jump-badge')).toHaveCount(0)
+  await page.screenshot({ path: `${SHOTS}/cmd-held-no-badges.png`, clip: { x: 300, y: 0, width: 1300, height: 220 } })
+  // Cmd still held: 2 then 1 hop between the columns, and still nothing is drawn.
   await page.keyboard.press('2')
   await expect.poll(() => caretColumn(page)).toBe(SID('b'))
-  await expect(badges).toHaveCount(3)
-  await page.keyboard.press('3')
-  await expect.poll(() => caretColumn(page)).toBe(SID('c'))
-  await expect(badges).toHaveCount(3)
+  await page.keyboard.press('1')
+  await expect.poll(() => caretColumn(page)).toBe(SID('a'))
+  await page.waitForTimeout(500)
+  expect(await keyCaps()).toEqual(before)
   await page.keyboard.up('Meta')
-  await expect(badges).toHaveCount(0)
+  // And as single chords, as the person types them.
+  await page.keyboard.press('Meta+2')
+  await expect.poll(() => caretColumn(page)).toBe(SID('b'))
+  await page.keyboard.press('Meta+9')
+  await expect.poll(() => caretColumn(page)).toBe(SID('c'))
+  await page.keyboard.press('Meta+1')
+  await expect.poll(() => caretColumn(page)).toBe(SID('a'))
+  await expect(page.locator('.session-jump-badge')).toHaveCount(0)
 })
 
 test('? and Cmd+/ open the shortcuts sheet; ? typed in a text box is just a character', async ({ page }) => {

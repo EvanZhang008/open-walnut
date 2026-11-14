@@ -282,8 +282,7 @@ timeReportRouter.post('/work-hours', async (req: Request, res: Response) => {
     const config = await getConfig()
     const time = { ...config.time }
     if (body.reset === true) {
-      // Sent as undefined, the key is removed (core/config-section-write.ts).
-      time.work_hours = undefined
+      delete time.work_hours
     } else {
       // Fields left out keep their stored (or default) value.
       const current = resolveWorkHours(config.time?.work_hours).workHours
@@ -294,6 +293,7 @@ timeReportRouter.post('/work-hours', async (req: Request, res: Response) => {
       }, current)
       time.work_hours = workHoursToConfig(next)
     }
+    // updateConfig replaces the whole `time` key, so its siblings ride along.
     await updateConfig({ time })
     res.json(workHoursBody(resolveWorkHours(time.work_hours)))
   } catch (err) {

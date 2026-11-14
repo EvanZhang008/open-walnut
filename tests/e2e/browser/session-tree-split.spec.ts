@@ -339,6 +339,51 @@ test.describe('Tree Mode split screen', () => {
     await expectPages(panel, ['L 1.1', 'R 1.1.1'])
   })
 
+  test('under the task tabs: the path bar sits right below them and a task tab covers both halves', async ({ page, request }) => {
+    // A task the main chat names, so its pill opens it as a tab beside the chat.
+    const created = await request.post('/api/tasks', { data: { title: `Split peek probe ${Date.now()}`, source: 'local' } })
+    expect(created.ok()).toBe(true)
+    const probe = ((await created.json()) as { task: { id: string } }).task.id
+    try {
+      const panel = await openSheet(page)
+      await send(rightComposer(panel), `snapshot-clean-turn:The probe is ${probe}, ask it first.`)
+      const pill = rightBody(panel).locator(`a.task-link[data-task-id="${probe}"]`).last()
+      await expect(pill).toBeVisible({ timeout: 30_000 })
+      await openQuestion(panel, SPLIT_TITLES.Q1)
+      await expect(leftHeader(panel).locator('.thread-half-name')).toHaveText('Main conversation')
+      // The pill is on Main, the left page: it opens the probe as a tab.
+      await leftHalf(panel).locator(`a.task-link[data-task-id="${probe}"]`).last().click()
+      const peek = panel.getByTestId('board-task-peek')
+      await expect(peek).toHaveAttribute('data-task-id', probe)
+      const col = panel.locator('.session-panel-chat-col')
+      const tabBar = col.locator(':scope > .peek-tab-bar')
+      await expect(tabBar).toBeVisible()
+      const tabBox = (await tabBar.boundingBox())!
+      const peekBox = (await peek.boundingBox())!
+      const colBox = (await col.boundingBox())!
+      // The tab covers the whole column below the tabs: both pages, both composers.
+      expect(Math.abs(peekBox.y - (tabBox.y + tabBox.height))).toBeLessThanOrEqual(1)
+      expect(Math.abs(peekBox.width - colBox.width)).toBeLessThanOrEqual(2)
+      expect(Math.abs(peekBox.y + peekBox.height - (colBox.y + colBox.height))).toBeLessThanOrEqual(1)
+      await shot(page, 'peek-task', panel)
+      // Back to the chat: the path bar right under the tabs (one header offset,
+      // not two), both pages and the right composer filling the column.
+      await tabBar.getByRole('tab', { name: 'Chat', exact: true }).click()
+      await expect(peek).toHaveCount(0)
+      await expect(leftHalf(panel)).toBeVisible()
+      const barBox = (await bar(panel).boundingBox())!
+      expect(Math.abs(barBox.y - (tabBox.y + tabBox.height))).toBeLessThanOrEqual(1)
+      const leftBox = (await leftHalf(panel).boundingBox())!
+      const inputBox = (await panel.locator('.session-panel-input:not(.tree-split-input)').boundingBox())!
+      expect(Math.abs(leftBox.y - (barBox.y + barBox.height))).toBeLessThanOrEqual(1)
+      expect(Math.abs(leftBox.y + leftBox.height - (colBox.y + colBox.height))).toBeLessThanOrEqual(1)
+      expect(Math.abs(inputBox.y + inputBox.height - (colBox.y + colBox.height))).toBeLessThanOrEqual(1)
+      await shot(page, 'peek-chat', panel)
+    } finally {
+      await request.delete(`/api/tasks/${probe}?force=true`)
+    }
+  })
+
   test('the path bar never takes Cmd+[ outside Tree Mode, and a column shows as many pages as fit', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.goto('/')

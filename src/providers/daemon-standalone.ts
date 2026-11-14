@@ -12099,9 +12099,6 @@ async function computeChangesCached(sid: string, cwd: string | undefined, refres
         subCache: memo.subCache,
         gitRootByDir: memo.gitRootByDir,
         mainParse: memo.mainParse,
-        checkpointDir: path.join(SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR, 'changes-checkpoints'),
-        checkpointVersion: DAEMON_VERSION,
-        reparse: refresh,
         // Files whose ops, stat and HEAD content are unchanged reuse their last
         // reconstruction; it lives and dies with the cached output. Keep in sync
         // with daemon-source.ts.
@@ -12117,7 +12114,7 @@ async function computeChangesCached(sid: string, cwd: string | undefined, refres
       if (!output) return null
       logMsg('info', 'changes.compute done', {
         sid, ms: memo.lastUsed - startedAt, resumed: output.parseStats.resumed,
-        readBytes: output.parseStats.readBytes, subReadBytes: output.parseStats.subReadBytes ?? 0, size: output.size, files: output.result.fileCount,
+        readBytes: output.parseStats.readBytes, size: output.size, files: output.result.fileCount,
         reconstructed: output.computeStats.reconstructed, reused: output.computeStats.reused,
         gitSpawns: output.computeStats.gitSpawns,
       })
@@ -14494,11 +14491,7 @@ if (action === '--start' || SERVICE_MODE) {
   // daemon.pid before daemon.port: a starter that sees the port file reads the pid next
   // (2026-11-04: a test read daemon.pid in that gap, ENOENT; tests/providers/daemon-pid-before-port.test.ts).
   fs.writeFileSync(PID_FILE, String(process.pid))
-  // daemon.port by rename, so a reader that sees the file reads the whole port, never the empty
-  // file between its creation and its write (CI 43535674084: ws://127.0.0.1:NaN).
-  const portTmp = PORT_FILE + '.' + process.pid + '.tmp'
-  fs.writeFileSync(portTmp, String(port))
-  fs.renameSync(portTmp, PORT_FILE)
+  fs.writeFileSync(PORT_FILE, String(port))
   // The host network runs once this daemon answers on its port (net-v1).
   netSupervisor.start()
   // daemon.pid names us now: the journal writes are ours (journal v2 migration).

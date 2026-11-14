@@ -22,8 +22,6 @@ const EMPTY: SupervisionSnapshot = {
 interface Entry {
   snapshot: SupervisionSnapshot;
   listeners: Set<() => void>;
-  /** Mounted readers, on show or not (the hidden Home page): they keep the last state, never a poll. */
-  holds: number;
   revision: number;
   read: Promise<void> | null;
   refreshAgain: boolean;
@@ -53,7 +51,7 @@ class StaleSupervisionRead extends Error {
 function entryFor(sid: string): Entry {
   let entry = entries.get(sid);
   if (!entry) {
-    entry = { snapshot: EMPTY, listeners: new Set(), holds: 0, revision: 0, read: null, refreshAgain: false, actionError: null, timer: null, failingSince: 0, retry: null };
+    entry = { snapshot: EMPTY, listeners: new Set(), revision: 0, read: null, refreshAgain: false, actionError: null, timer: null, failingSince: 0, retry: null };
     entries.set(sid, entry);
   }
   return entry;
@@ -65,7 +63,7 @@ function publish(entry: Entry, patch: Partial<SupervisionSnapshot>): void {
 }
 
 function release(sid: string, entry: Entry): void {
-  if (!entry.listeners.size && !entry.holds && !entry.read && !entry.snapshot.writing && entries.get(sid) === entry) entries.delete(sid);
+  if (!entry.listeners.size && !entry.read && !entry.snapshot.writing && entries.get(sid) === entry) entries.delete(sid);
 }
 
 export function getSessionSupervision(sid: string): SupervisionSnapshot {
@@ -90,24 +88,6 @@ export function subscribeSessionSupervision(sid: string, listener: () => void): 
       entry.retry = null;
       release(sid, entry);
     }
-  };
-}
-
-/**
- * Keeps a session's last state while a reader is mounted, with no poll, no retry and no
- * notification. A reader off its page (the hidden Home page) holds without subscribing, so what
- * it showed (a stop still pending) is there when it comes back and subscribes, which reads at
- * once if no one else polls. Subscribers (their polls) are untouched by holds.
- */
-export function holdSessionSupervision(sid: string): () => void {
-  const entry = entryFor(sid);
-  entry.holds += 1;
-  let held = true;
-  return () => {
-    if (!held) return;
-    held = false;
-    entry.holds -= 1;
-    release(sid, entry);
   };
 }
 

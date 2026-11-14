@@ -27,8 +27,6 @@ final class ChatLaneJoinTests: XCTestCase {
         DurableStore.removeAllForTesting()
         DiskCache.remove(key: "messages-\(conv)")
         ChatStore.laneFollowPoll = .milliseconds(1500)
-        ChatStore.laneFollowLimit = 10 * 60
-        ChatStore.laneFollowSlowPoll = .seconds(15)
         SessionQueueModel.deliveredSpan = 2
     }
 
@@ -227,53 +225,6 @@ final class ChatLaneJoinTests: XCTestCase {
         rig.chat.withdrawQueued(bubble.id)
         await waitUntil("the bubble gone") { rig.chat.messages.isEmpty }
         XCTAssertEqual(rig.queue.deleted, [bubble.clientMessageId!])
-    }
-
-    // MARK: - The follow outlives what the phone missed (2026-11-11: "it just show queued")
-
-    /// A send into the turn that is still Queued, and the line read for it.
-    private func queuedSend(_ rig: Rig, _ text: String) async -> String {
-        _ = await rig.chat.sendReportingOutcome(text)
-        let id = rig.chat.messages.last!.clientMessageId!
-        rig.queue.rows = [SessionQueuedMessage(id: id, message: text, status: "pending",
-                                               enqueuedAt: "2026-11-11T17:08:00Z")]
-        await rig.chat.awaitLaneJoinsForTesting()
-        await waitUntil("Queued") { rig.chat.laneQueue?.sendStates[id] == .pending }
-        return id
-    }
-
-    /// The app went away while the message waited, and the session took it meanwhile: back
-    /// on screen, the line is read again and the bubble no longer says Queued. The follow
-    /// stopped with the screen and nothing started it again.
-    func testAFollowedSendIsReadAgainWhenTheChatIsBack() async {
-        let rig = makeRig()
-        let id = await queuedSend(rig, "while away")
-        rig.chat.closeStream()
-        rig.queue.rows = []
-        try? await Task.sleep(for: .milliseconds(80))
-        XCTAssertEqual(rig.chat.laneQueue?.sendStates[id], .pending, "nothing reads the line while away")
-        rig.chat.resumeForForeground()
-        await waitUntil("Delivered once back") { rig.chat.laneQueue?.sendStates[id] == .delivered }
-    }
-
-    /// A turn can run longer than the fast follow: the line is read on, slower, and the
-    /// bubble says Delivered when the session takes the message, never Queued for good.
-    func testAFollowNeverRunsOutOnTheClockWhileABubbleStillReadsQueued() async {
-        ChatStore.laneFollowLimit = 0.05
-        ChatStore.laneFollowSlowPoll = .milliseconds(20)
-        let rig = makeRig()
-        let id = await queuedSend(rig, "a long turn")
-        try? await Task.sleep(for: .milliseconds(200))
-        let reads = rig.queue.reads
-        rig.queue.rows = []
-        await waitUntil("Delivered after the fast follow") { rig.chat.laneQueue?.sendStates[id] == .delivered }
-        XCTAssertGreaterThan(rig.queue.reads, reads, "still read after the limit")
-    }
-
-    func testTheFollowSlowsDownAfterItsLimitAndNeverStops() {
-        XCTAssertEqual(ChatStore.laneFollowDelay(elapsed: 0), ChatStore.laneFollowPoll)
-        XCTAssertEqual(ChatStore.laneFollowDelay(elapsed: ChatStore.laneFollowLimit + 1), ChatStore.laneFollowSlowPoll)
-        XCTAssertEqual(ChatStore.laneFollowDelay(elapsed: 24 * 3600), ChatStore.laneFollowSlowPoll)
     }
 
     // MARK: - The watchdog's reading of a turn with a message inside it

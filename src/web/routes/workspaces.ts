@@ -21,15 +21,18 @@
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { WorkspaceError } from '../../core/workspaces/daemon-client.js'
-import { DETECT_BUDGET_MS, workspaceCandidates } from '../../core/workspaces/candidates.js'
+import { WorkspaceError, workspaceRpc } from '../../core/workspaces/daemon-client.js'
+import { workspaceProviderCatalog } from '../../core/workspaces/registry.js'
 import { cancelPendingStart, managerDeps, requestWorkspace, retryWorkspace, removalPreview, removeWorkspaceManually, PREVIEW_RPC_MS } from '../../core/workspaces/manager.js'
+import type { WorkspaceCandidate } from '../../core/workspaces/types.js'
 import { rerunSetup, sanitizeProjectScripts, scriptsFor, startAnyway, type ScriptsView } from '../../core/workspaces/scripts.js'
 import { isLaunchReady } from '../../core/workspaces/decisions.js'
 import { role } from '../../core/server-role.js'
 
 export const workspacesRouter = Router()
 
+const DETECT_BUDGET_MS = 15_000
+const DETECT_DEADLINE_MS = 22_000
 /** Above the preview's own RPC budget, below the browser's 30s patience for it. */
 const PREVIEW_DEADLINE_MS = PREVIEW_RPC_MS + 5_000
 const ACTION_DEADLINE_MS = 30_000
@@ -69,8 +72,53 @@ workspacesRouter.get('/providers', async (req: Request, res: Response, next: Nex
   try {
     const cwd = typeof req.query.cwd === 'string' ? req.query.cwd : ''
     const host = hostOf(req.query.host)
-    const answer = await workspaceCandidates(cwd, host, DETECT_BUDGET_MS)
-    res.json({ cwd, host, candidates: answer.candidates, ...(answer.degraded ? { degraded: answer.degraded } : {}) })
+    const catalog = await workspaceProviderCatalog()
+    const base = (reason: string): WorkspaceCandidate[] => catalog.providers.map((p) => ({
+      provider: p.id, displayName: p.displayName, priority: p.priority, builtin: p.builtin,
+      // A plugin provider stays pickable without the host's verdict; git needs a repository.
+      claimed: false, reason, ...(p.inputSchema ? { inputSchema: p.inputSchema } : {}),
+    }))
+    if (!cwd || (!cwd.startsWith('/') && !cwd.startsWith('~/'))) {
+      res.json({ cwd, host, candidates: base('Pick a folder first'), degraded: 'no-folder' })
+      return
+    }
+    if (role() === 'replica') {
+      res.json({ cwd, host, candidates: base('Isolated workspaces are made by the Walnut on your Mac'), degraded: 'cloud' })
+      return
+    }
+    let reply: Record<string, unknown>
+    try {
+      reply = await within(DETECT_DEADLINE_MS, workspaceRpc(host, 'workspace.detect', { anchor: cwd, budgetMs: DETECT_BUDGET_MS }, DETECT_DEADLINE_MS - 1_000))
+    } catch (err) {
+      const reason = err instanceof WorkspaceError ? err.message : err instanceof RouteDeadline ? 'The host took too long to look at this folder' : String(err)
+      res.json({ cwd, host, candidates: base(reason), degraded: err instanceof WorkspaceError ? err.code : 'timeout' })
+      return
+    }
+    if (!reply.ok) {
+      res.json({ cwd, host, candidates: base(String(reply.error ?? 'The host could not look at this folder')), degraded: 'detect-failed' })
+      return
+    }
+    const byId = new Map(catalog.providers.map((p) => [p.id, p]))
+    const found = (Array.isArray(reply.candidates) ? reply.candidates : []) as Array<Record<string, unknown>>
+    const candidates: WorkspaceCandidate[] = found
+      .filter((c) => typeof c.provider === 'string' && byId.has(c.provider))
+      .map((c) => {
+        const info = byId.get(String(c.provider))!
+        return {
+          provider: info.id, displayName: info.displayName, priority: info.priority, builtin: info.builtin,
+          claimed: c.claimed === true,
+          ...(typeof c.root === 'string' ? { root: c.root } : {}),
+          ...(typeof c.branch === 'string' ? { branch: c.branch } : {}),
+          ...(typeof c.reason === 'string' ? { reason: c.reason } : {}),
+          ...(info.inputSchema ? { inputSchema: info.inputSchema } : {}),
+        }
+      })
+    // A provider the daemon did not report (an older allowlist) is still offered, unclaimed.
+    for (const p of catalog.providers) {
+      if (!candidates.some((c) => c.provider === p.id)) candidates.push(...base('Not checked on this host').filter((c) => c.provider === p.id))
+    }
+    candidates.sort((a, b) => Number(b.claimed) - Number(a.claimed) || b.priority - a.priority)
+    res.json({ cwd, host, candidates })
   } catch (err) {
     sendError(res, err, next)
   }

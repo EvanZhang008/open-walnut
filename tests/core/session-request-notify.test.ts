@@ -115,7 +115,6 @@ import { parseWalnutMessage } from '../../src/core/peers/walnut-message-tag.js';
 import type { SessionRecord } from '../../src/core/types.js';
 import { flushSubtaskNotices } from '../../src/core/sessions/subtask-notices.js';
 import { _clearHeldNotices, pendingHeldNotices } from '../../src/core/sessions/held-notices.js';
-import { TURN_RETRY_REASONS, TURN_RETRY_TRAITS, __setTurnRetrierForTesting } from '../../src/core/sessions/turn-run.js';
 
 const ASKER = 'sess-asker-1';
 const TARGET = 'sess-target-1';
@@ -1001,32 +1000,6 @@ describe('sessionRequestWatchHook — the parent hears about its subtask by stat
     expect(n.attrs).toMatchObject({ outcome: 'completed', 'about-session': TARGET });
     expect(n.body).toContain('Footer added; the tests still fail on CI.');
     expect(buildSessionTranscript).toHaveBeenCalledWith(TARGET);
-  });
-
-  // Walnut continues the turn by itself (sessions/turn-run.ts): its lead hears of the turn that ends the
-  // work, never of the failure Walnut is undoing. Every reason, so a new one is held too, or fails here.
-  it.each(TURN_RETRY_REASONS)('a turn Walnut continues (%s): the lead hears nothing of its failed end, then the end that follows', async (reason) => {
-    sessions = sessions.map((s) => s.claudeSessionId === TARGET
-      ? rec(TARGET, { title: 'Target', taskId: 'task-77', process_status: 'error', errorMessage: 'API rate limit' })
-      : s);
-    const replays: Array<() => void> = [];
-    let holding = true;
-    await __setTurnRetrierForTesting(reason, {
-      reason, sources: ['test-retrier'], takes: () => false,
-      wait: () => (holding ? { reason } as never : null),
-      keep: (_sid, replay) => { if (!holding) return false; replays.push(replay); return true; },
-    });
-    try {
-      await fire();
-      expect(parentNotices()).toEqual([]);
-      // A retry kind that does not keep the phase keeps the notice for a retry that never starts.
-      expect(replays.length).toBe(TURN_RETRY_TRAITS[reason].keepsPhase ? 0 : 1);
-      holding = false;
-      await fire();
-      expect(parentNotices().map((n) => n.attrs.outcome)).toEqual(['error']);
-    } finally {
-      await __setTurnRetrierForTesting(reason, null);
-    }
   });
 
   it('a session in error at the edge: an error notice with the error text; a closed task stays completed', async () => {

@@ -26,14 +26,13 @@ vi.mock('../../src/core/session-message-queue.js', () => ({
 vi.mock('../../src/core/router/wake.js', () => ({}));
 
 import {
-  assertAreaDelivery, takeRouterWakeGrant, AREA_DELIVERY_REFUSED, ROUTER_RUNTIME_SOURCE,
+  assertAreaDelivery, takeRouterWakeGrant, withRouterDelivery, AREA_DELIVERY_REFUSED, ROUTER_RUNTIME_SOURCE,
 } from '../../src/core/router/delivery-scope.js';
 import { deliverToSession } from '../../src/core/sessions/session-send-core.js';
 import type { SessionRecord } from '../../src/core/types.js';
 
 const withWake = takeRouterWakeGrant();
-// An older build's receiver profile: since 2026-11-14 only a router runs isolated, so it reads as ordinary.
-const legacyWork = { profile: { areaId: 'personal', areaRole: 'work' } as unknown as SessionRecord['profile'] };
+const work = { profile: { areaId: 'personal', areaRole: 'work' as const } };
 const router = { profile: { areaId: 'personal', areaRole: 'router' as const } };
 const plain = { profile: undefined };
 
@@ -52,23 +51,24 @@ describe('assertAreaDelivery', () => {
     expect(() => assertAreaDelivery(plain, 's1', ROUTER_RUNTIME_SOURCE, undefined)).toThrow(AREA_DELIVERY_REFUSED);
   });
 
-  it('treats a session with a legacy work profile as ordinary: routed work takes every message', () => {
-    for (const source of ['peer', 'walnut-notify', 'trigger', 'api-agent', 'ui', undefined]) {
-      expect(assertAreaDelivery(legacyWork, 's1', source, 'qm-route-1')).toBe(false);
-    }
-    expect(() => assertAreaDelivery(legacyWork, 's1', ROUTER_RUNTIME_SOURCE, undefined)).toThrow(AREA_DELIVERY_REFUSED);
-  });
-
-  it('lets a person and the session\'s own recovery into a router session', () => {
+  it('lets a person and the session\'s own recovery into an area session', () => {
     for (const source of ['ui', 'mobile', 'cli', 'web-api', 'api-v1', 'chat', 'auto-recover', 'context-compact', 'context-recovery']) {
-      expect(assertAreaDelivery(router, 's1', source, undefined)).toBe(true);
+      expect(assertAreaDelivery(work, 's1', source, undefined)).toBe(true);
     }
   });
 
-  it('refuses automatic context into a router session', () => {
+  it('refuses automatic context into an area session without a grant', () => {
     for (const source of ['peer', 'walnut-notify', 'trigger', 'api-agent', undefined]) {
-      expect(() => assertAreaDelivery(router, 's1', source, 'qm-route-1')).toThrow(AREA_DELIVERY_REFUSED);
+      expect(() => assertAreaDelivery(work, 's1', source, 'qm-route-1')).toThrow(AREA_DELIVERY_REFUSED);
     }
+  });
+
+  it('lets a router delivery in only for its own session and message id', async () => {
+    await withRouterDelivery('s1', 'qm-route-1', async () => {
+      expect(assertAreaDelivery(work, 's1', 'peer', 'qm-route-1')).toBe(true);
+      expect(() => assertAreaDelivery(work, 's1', 'peer', 'qm-route-2')).toThrow(AREA_DELIVERY_REFUSED);
+      expect(() => assertAreaDelivery(work, 's2', 'peer', 'qm-route-1')).toThrow(AREA_DELIVERY_REFUSED);
+    });
   });
 
   it('lets the router wake into a router session only inside the wake grant', async () => {
@@ -76,7 +76,7 @@ describe('assertAreaDelivery', () => {
     expect(() => takeRouterWakeGrant()).toThrow(/already taken/);
     await withWake('s1', async () => {
       expect(assertAreaDelivery(router, 's1', ROUTER_RUNTIME_SOURCE, undefined)).toBe(true);
-      expect(() => assertAreaDelivery(legacyWork, 's1', ROUTER_RUNTIME_SOURCE, undefined)).toThrow(AREA_DELIVERY_REFUSED);
+      expect(() => assertAreaDelivery(work, 's1', ROUTER_RUNTIME_SOURCE, undefined)).toThrow(AREA_DELIVERY_REFUSED);
       expect(() => assertAreaDelivery(router, 's2', ROUTER_RUNTIME_SOURCE, undefined)).toThrow(AREA_DELIVERY_REFUSED);
     });
   });
@@ -96,9 +96,9 @@ describe('deliverToSession behind a pending prompt', () => {
     expect(sendMessageToSession).not.toHaveBeenCalled();
   });
 
-  it('refuses automatic context into a parked router session, on the record as it is now', async () => {
-    h.records.set('s1', { claudeSessionId: 's1', ...router });
-    // The caller's snapshot says ordinary; the fresh record is a router session.
+  it('refuses automatic context into a parked area session, on the record as it is now', async () => {
+    h.records.set('s1', { claudeSessionId: 's1', ...work });
+    // The caller's snapshot says ordinary; the fresh record is an area session.
     await expect(deliverToSession(parked('s1'), opts)).rejects.toThrow(AREA_DELIVERY_REFUSED);
     expect(enqueueMessage).not.toHaveBeenCalled();
     expect(sendMessageToSession).not.toHaveBeenCalled();
@@ -110,9 +110,10 @@ describe('deliverToSession behind a pending prompt', () => {
     expect(sendMessageToSession).not.toHaveBeenCalled();
   });
 
-  it('parks a router\'s delivery into routed work that carries a legacy work profile, like any task', async () => {
-    h.records.set('s1', { claudeSessionId: 's1', ...legacyWork });
-    const out = await deliverToSession(parked('s1', legacyWork.profile), { ...opts, source: 'api-agent', messageId: 'qm-route-1' });
+  it('parks a granted router delivery into its area session', async () => {
+    h.records.set('s1', { claudeSessionId: 's1', ...work });
+    const out = await withRouterDelivery('s1', 'qm-route-1', () =>
+      deliverToSession(parked('s1', work.profile), { ...opts, messageId: 'qm-route-1' }));
     expect(out).toEqual({ delivery: 'deferred', messageId: 'qm-route-1' });
     expect(enqueueMessage).toHaveBeenCalledTimes(1);
     expect(sendMessageToSession).not.toHaveBeenCalled();

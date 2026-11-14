@@ -48,12 +48,6 @@ export const WITHDRAWN_WORDS: ByLang<(note: string) => string> = {
   zh: (note) => `发件方已撤回：${note}`,
 };
 
-/** A decision letter settled because a lead, VP or Main withdrew its ask in the user's place (task_send answers_ask), with its words. */
-export const ASK_WITHDRAWN_FOR_USER_WORDS: ByLang<(by: string, note: string) => string> = {
-  en: (by, note) => `Withdrawn by ${by} for the user: ${note}`,
-  zh: (by, note) => `${by} 已代你撤回：${note}`,
-};
-
 /** The answer recorded on a withdrawn letter. */
 export const WITHDRAWN_LABEL_WORDS: ByLang<() => string> = {
   en: () => 'Withdrawn',

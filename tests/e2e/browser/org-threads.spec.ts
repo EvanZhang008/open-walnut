@@ -186,7 +186,7 @@ test('a request becomes a thread the lead keeps; asks about one subject are one 
   await expect(c1.getByTestId('org-thread-message')).toHaveCount(2)
 })
 
-test('Follow up files under the thread; Acknowledge closes it, Reopen preserves the reaction; a reload keeps them', async ({ page, request }) => {
+test('Follow up files under the thread; Acknowledge closes it, Reopen brings it back; a reload keeps them', async ({ page, request }) => {
   await openThreads(page)
   const t1 = (await threads(request)).find((t) => t.title === `Org: Threads view ${STAMP}`)!
   const c1 = card(page, t1.id)
@@ -217,8 +217,7 @@ test('Follow up files under the thread; Acknowledge closes it, Reopen preserves 
   await c1.getByTestId('org-thread-reopen').click()
   await expect(c1).toBeVisible()
   await expect(c1).not.toHaveAttribute('data-state', 'closed')
-  // Reopening is not a new answer: his earlier reaction still keeps it in the quiet list.
-  await expect(page.getByTestId('org-thread-list').locator(`[data-thread-id="${t1.id}"]`)).toHaveCount(0)
+  await expect(page.getByTestId('org-thread-list').locator(`[data-thread-id="${t1.id}"]`)).toBeVisible()
   await expect.poll(async () => (await threads(request)).find((t) => t.id === t1.id)?.closed, { timeout: 15_000 }).toBeUndefined()
 
   // Threads stays open: another page and back, then a reload (2026-11-01, the user: "If I was in
@@ -232,70 +231,6 @@ test('Follow up files under the thread; Acknowledge closes it, Reopen preserves 
   await page.reload()
   await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads', { timeout: 30_000 })
   await expect(card(page, t1.id).getByTestId('org-thread-count')).toHaveText(/^3 messages/)
-})
-
-test('a reaction survives split and an answered flip; only new words bring the card back', async ({ page, request }) => {
-  await page.setViewportSize({ width: 1280, height: 900 })
-  const errors: string[] = []
-  page.on('pageerror', (error) => errors.push(error.message))
-  const { walnutHome } = await discoverBrowserFixture(TEST_PORT)
-  const id = 'th-00000000ee01'
-  const message = 'tm-00000000ee01'
-  const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
-  let reply = 'Threads are grouped by subject. The conversation stays available after you react.'
-  let title = 'Thread grouping explanation'
-  let messages: unknown[] = [{ id: message, at: at(5), text: 'How do the threads work?', via: 'chat', answer: { text: reply, at: at(2) } }]
-  // An optional private copy of the reported data is replayed only on the isolated fixture.
-  if (process.env.WALNUT_THREAD_REPLAY_FILE) {
-    const real = JSON.parse(fs.readFileSync(process.env.WALNUT_THREAD_REPLAY_FILE, 'utf8')).threads
-      .find((t: { id: string }) => t.id === 'th-92426251ca02')
-    reply = real.reply
-    title = real.title
-    messages = real.messages.slice(0, 2).map((m: { text: string; answer?: { text: string } }, i: number) => ({
-      id: `tm-00000000ee0${i + 1}`, at: at(6 - i), text: m.text, via: 'chat',
-      ...(m.answer ? { answer: { text: m.answer.text, at: at(4 - i) } } : {}),
-    }))
-  }
-  const path = `${walnutHome}/org/threads/${ids.lead}.json`
-  fs.mkdirSync(`${walnutHome}/org/threads`, { recursive: true })
-  const dense = Array.from({ length: 14 }, (_, i) => ({
-    id: `th-00000000ef${i.toString(16).padStart(2, '0')}`, title: `Prior request ${i + 1}`, state: 'answered',
-    reply: `Result ${i + 1}: checked the task, its build and the next action.`, replyAt: at(20 + i),
-    messages: [{ id: `tm-00000000ef${i.toString(16).padStart(2, '0')}`, at: at(40 + i), text: `Request ${i + 1}`, via: 'chat' }],
-    createdAt: at(40 + i), updatedAt: at(20 + i), by: `task:${ids.lead}`,
-  }))
-  fs.writeFileSync(path, JSON.stringify({ version: 1, taskId: ids.lead, threads: [
-    ...dense, { id, title, state: 'answered', reply, replyAt: at(2),
-      messages,
-      createdAt: at(5), updatedAt: at(2), by: `task:${ids.lead}` },
-  ] }))
-  await isolateUiPrefs(page)
-  await page.addInitScript(() => localStorage.setItem('open-walnut-view:org.threads.showInProgress', 'false'))
-  await loadHome(page)
-  await page.getByTestId('sidebar-org').click()
-  await page.locator(`[data-testid="org-channel"][data-key="${rowKey(LED)}"]`).click()
-  await expect(card(page, id)).toBeVisible()
-  await card(page, id).getByTestId('org-thread-follow-open').click()
-  await card(page, id).getByTestId('org-thread-follow-input').fill('A different subject: redesign the task detail view.')
-  await card(page, id).getByTestId('org-thread-follow-send').click()
-  const visible = page.getByTestId('org-thread-list').locator(`[data-thread-id="${id}"]`)
-  await expect(visible).toHaveCount(0)
-  const stored = (await threads(request)).find((t) => t.id === id)!
-  const split = await request.post(`/api/v1/tasks/${ids.lead}/threads/${id}/split`, {
-    data: { message: stored.messages[stored.messages.length - 1].id }, headers: { 'x-walnut-caller-sid': ids.leadSid },
-  })
-  expect(split.ok(), await split.text()).toBe(true)
-  await leadUpdates(request, id, { state: 'answered', reply, title: 'Thread explanation already read', add_tasks: [ids.work] })
-  await expect(visible).toHaveCount(0)
-  await page.reload()
-  await expect(page.getByTestId('org-thread-list').getByTestId('org-thread')).toHaveCount(14)
-  await expect(visible).toHaveCount(0)
-  await shot(page, 'reaction-split-no-news')
-  await leadUpdates(request, id, { reply: 'New update: the task detail redesign now has a verified build.' })
-  await expect(visible).toBeVisible()
-  await expect(visible.getByTestId('org-thread-reply')).toContainText('New update:')
-  await shot(page, 'reaction-new-news')
-  expect(errors).toEqual([])
 })
 
 test('a long Unicode request reads in full; an Acknowledge the server refuses puts the card back', async ({ page, request }) => {
@@ -782,8 +717,6 @@ test('Snooze puts a thread aside in its Snoozed section until its time; it comes
 })
 
 test('asks and structured bodies stay whole; plain long answers still expand without fading', async ({ page, request }) => {
-  // This real-density matrix operates 90 cards, each with repeated expand/collapse input.
-  test.setTimeout(300_000)
   const project = `Threads readable ${STAMP} ${test.info().project.name}`
   await createTask(request, `Readable work ${STAMP}`, project)
   await createTask(request, `Readable review ${STAMP}`, project)

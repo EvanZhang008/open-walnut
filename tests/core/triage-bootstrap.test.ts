@@ -86,7 +86,7 @@ function cfg(triage: TriageConfig | undefined) {
 }
 
 const ON: TriageConfig = {
-  enabled: true, every: '30m', every_messages: 20, sources: ['slack'], mode: 'ask',
+  enabled: true, every: '30m', every_messages: 20, sources: ['mail', 'slack'], mode: 'ask',
 };
 
 beforeEach(() => {
@@ -131,7 +131,7 @@ describe('enabling', () => {
     expect(job.name).toBe('Inbox Triage');
     expect(job.schedule).toEqual({ kind: 'every', everyMs: 30 * 60_000 });
     expect(job.wake).toEqual({
-      events: ['plugin:slack:messages-received'],
+      events: ['plugin:mail:messages-received', 'plugin:slack:messages-received'],
       countField: 'count',
       threshold: 20,
       skipWhenIdle: true,
@@ -310,35 +310,18 @@ describe('hot config changes', () => {
     expect((layer.jobs[0] as any).wake.threshold).toBe(5);
   });
 
-  it('an older routine still counting mail arrivals is re-patched to Slack only', async () => {
+  it('re-patches wake.events when sources change', async () => {
     const layer = spyLayer();
     await ensureTriageRoutine({ ...layer.deps, getConfig: cfg(ON) });
-    (layer.jobs[0] as any).wake.events = ['plugin:mail:messages-received', 'plugin:slack:messages-received'];
-    const res = await ensureTriageRoutine({ ...layer.deps, getConfig: cfg(ON) });
-    expect(res.outcome).toBe('patched');
+    await ensureTriageRoutine({ ...layer.deps, getConfig: cfg({ ...ON, sources: ['slack'] }) });
     expect((layer.jobs[0] as any).wake.events).toEqual(['plugin:slack:messages-received']);
   });
 
-  it('removing every source turns the routine OFF, so its clock mints no task', async () => {
+  it('removing every source CLEARS wake (and with it skipWhenIdle, so the clock still runs)', async () => {
     const layer = spyLayer();
     await ensureTriageRoutine({ ...layer.deps, getConfig: cfg(ON) });
-    const res = await ensureTriageRoutine({ ...layer.deps, getConfig: cfg({ ...ON, sources: [] }) });
-    expect(res.outcome).toBe('disabled');
-    expect(res.resolved.disabledReason).toBe('no-sources');
-    expect((layer.jobs[0] as any).enabled).toBe(false);
-  });
-
-  it('the mail-only config of 2026-11-14 turns the routine off (mail goes to the mail router)', async () => {
-    const layer = spyLayer();
-    await ensureTriageRoutine({ ...layer.deps, getConfig: cfg(ON) });
-    const mailOnly = { enabled: true, every: '1h', sources: ['mail'], auto_mark_read: true } as unknown as TriageConfig;
-    const res = await ensureTriageRoutine({ ...layer.deps, getConfig: cfg(mailOnly) });
-    expect(res.outcome).toBe('disabled');
-    expect((layer.jobs[0] as any).enabled).toBe(false);
-    // A fresh install with that config makes no routine at all.
-    const fresh = spyLayer();
-    expect((await ensureTriageRoutine({ ...fresh.deps, getConfig: cfg(mailOnly) })).outcome).toBe('absent');
-    expect(fresh.createRoutine).not.toHaveBeenCalled();
+    await ensureTriageRoutine({ ...layer.deps, getConfig: cfg({ ...ON, sources: [] }) });
+    expect((layer.jobs[0] as any).wake).toBeUndefined();
   });
 
   it('a sub-floor interval is stored clamped, and re-reading it is then unchanged', async () => {
@@ -445,25 +428,19 @@ describe('the shipped skill', () => {
       'notes/Walnut/Triage/Runs/',
       'notes/Projects/<P>/Tracking.md',
       'project_tracking_get',
+      'mail_request_send',
       'slack_request_post',
+      'mail_unsubscribe_request',
     ]) {
       expect(raw, needle).toContain(needle);
-    }
-  });
-
-  it('carries no mail instructions: the mail router owns mail since 2026-11-14', async () => {
-    const fs = await import('node:fs/promises');
-    const raw = await fs.readFile(skillPath, 'utf-8');
-    for (const op of ['mail_list', 'mail_thread', 'mail_draft', 'mail_request_send', 'mail_unsubscribe_request', 'mail_mark_read']) {
-      expect(raw, op).not.toContain(op);
     }
   });
 });
 
 describe('the spec and the finder, as pure functions', () => {
-  it('the spec counts Slack arrivals only, never mail', () => {
-    const spec = buildTriageRoutineSpec(readTriageConfig({ triage: { enabled: true } }));
-    expect((spec.wake as { events: string[] }).events).toEqual(['plugin:slack:messages-received']);
+  it('a sources-less config carries wake: null (clear), never a counter nobody feeds', () => {
+    const spec = buildTriageRoutineSpec(readTriageConfig({ triage: { enabled: true, sources: [] } }));
+    expect(spec.wake).toBeNull();
   });
 
   it('the finder prefers the action marker over the name', () => {

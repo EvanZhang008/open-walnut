@@ -38,13 +38,8 @@ describe('the Approvals switch and answers_ask read one list of kinds', () => {
 
   it('both places read the shared list, not a copy of their own', () => {
     const answer = fs.readFileSync('src/core/sessions/ask-answer.ts', 'utf8')
-    expect(answer).toMatch(/const askMe = await asksPerson\(\)/)
-    expect(answer).toMatch(/needsUsersWords\(kind, askMe\)/)
+    expect(answer).toMatch(/needsUsersWords\(kind, await asksPerson\(\)\)/)
     expect(answer).not.toMatch(/APPROVAL_KINDS\.has/)
-    // A prompt's risky step is checked against the same list, with the same switch (ask-settle.ts).
-    const settle = fs.readFileSync('src/core/sessions/ask-settle.ts', 'utf8')
-    expect(settle).toMatch(/needsUsersWords\([^\n]*input\.askMe\)/)
-    expect(settle).not.toMatch(/APPROVAL_KINDS\.has/)
     expect(fs.readFileSync('src/core/sessions/reply-language-context.ts', 'utf8')).toMatch(/Object\.values\(STILL_THE_USERS\)/)
     expect(fs.readFileSync('src/core/same-ask.ts', 'utf8')).not.toMatch(/new Set\(\['outward'/)
   })

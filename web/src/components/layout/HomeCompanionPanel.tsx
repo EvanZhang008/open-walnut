@@ -9,9 +9,10 @@ interface Props {
   scratchpadOpen: boolean;
   onCloseCalendar: () => void;
   onCloseScratchpad: () => void;
-  /** For the scratchpad's /task search. */
+  /** For the scratchpad's task links. */
   tasks: Task[];
   focusedTaskId?: string;
+  onTaskClick: (taskId: string) => void;
   /** The task panel's width (a CSS length): a narrow window overlays the column from that edge. */
   overlayLeft?: string;
 }
@@ -50,7 +51,7 @@ interface ColumnProps extends Omit<Props, 'overlayLeft'> {
  * The agenda and the scratchpad in one column, agenda on top, each shown while it is open.
  * Home's column and every other page's side bar (PageSideBar) are this one component.
  */
-export function CompanionColumn({ calendarOpen, scratchpadOpen, onCloseCalendar, onCloseScratchpad, tasks, focusedTaskId, className, testId, style, children, place }: ColumnProps) {
+export function CompanionColumn({ calendarOpen, scratchpadOpen, onCloseCalendar, onCloseScratchpad, tasks, focusedTaskId, onTaskClick, className, testId, style, children, place }: ColumnProps) {
   const open = calendarOpen || scratchpadOpen;
   const shellRef = useRef<HTMLElement | null>(null);
   // Opening a pane takes the focus there: the agenda's close button, the scratchpad's editor
@@ -103,7 +104,7 @@ export function CompanionColumn({ calendarOpen, scratchpadOpen, onCloseCalendar,
         </div>
       )}
       {visitedScratchpad.current && (
-        <ScratchpadPane open={scratchpadOpen} onClose={onCloseScratchpad} tasks={tasks} focusedTaskId={focusedTaskId} testId={`${testId}-scratchpad`} />
+        <ScratchpadPane open={scratchpadOpen} onClose={onCloseScratchpad} tasks={tasks} focusedTaskId={focusedTaskId} onTaskClick={onTaskClick} testId={`${testId}-scratchpad`} />
       )}
       {children}
     </aside>
@@ -133,8 +134,8 @@ function focusEditorWhenReady(shell: HTMLElement): void {
 }
 
 /** The column's place for the window's one scratchpad editor (ScratchpadHost moves it here). */
-function ScratchpadPane({ open, onClose, tasks, focusedTaskId, testId }: { open: boolean; onClose: () => void; tasks: Task[]; focusedTaskId?: string; testId: string }) {
+function ScratchpadPane({ open, onClose, tasks, focusedTaskId, onTaskClick, testId }: { open: boolean; onClose: () => void; tasks: Task[]; focusedTaskId?: string; onTaskClick: (taskId: string) => void; testId: string }) {
   const slot = useRef<HTMLDivElement | null>(null);
-  useScratchpadSlot(slot, open, { onClose, tasks, focusedTaskId });
+  useScratchpadSlot(slot, open, { onClose, tasks, focusedTaskId, onTaskClick });
   return <div ref={slot} className="home-companion-body home-companion-scratchpad" data-testid={testId} style={open ? undefined : { display: 'none' }} />;
 }

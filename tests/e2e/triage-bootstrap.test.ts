@@ -95,7 +95,7 @@ describe('Inbox Triage bootstrap, end to end', () => {
     const saved = await put('/api/config', {
       triage: {
         enabled: true, every: '30m', every_messages: 20,
-        sources: ['slack'], mode: 'ask',
+        sources: ['mail', 'slack'], mode: 'ask',
       },
     });
     expect(saved.status, JSON.stringify(saved.json)).toBe(200);
@@ -104,7 +104,7 @@ describe('Inbox Triage bootstrap, end to end', () => {
     expect(job.name).toBe('Inbox Triage');
     expect(job.schedule).toEqual(expect.objectContaining({ kind: 'every', everyMs: 30 * 60_000 }));
     expect(job.wake).toEqual(expect.objectContaining({
-      events: ['plugin:slack:messages-received'],
+      events: ['plugin:mail:messages-received', 'plugin:slack:messages-received'],
       countField: 'count',
       threshold: 20,
       skipWhenIdle: true,

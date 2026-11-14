@@ -26,50 +26,7 @@ export type BrowserEndWhy = 'closed' | 'given_back' | 'stopped' | 'gone' | 'brow
 export interface BrowserViewState {
   tabs: BrowserViewTab[];
   ended?: { at: string; why: BrowserEndWhy };
-  /** The task's recorded steps (the Browser replay, src/core/browser-control/replay-store.ts). */
-  replay?: { steps: number; last?: string };
 }
-
-/** One recorded step of the Browser replay (GET /api/v1/browser/view/replay). */
-export interface ReplayStep {
-  id: string;
-  at: string;
-  action: string;
-  label: string;
-  ok: boolean;
-  code?: string;
-  url?: string;
-  title?: string;
-  tab: number;
-  /** Its picture was taken (GET /api/v1/browser/view/replay/frame). */
-  picture: boolean;
-}
-
-/** The replay's speeds: steps a second. */
-export const REPLAY_SPEEDS = [1, 2, 4] as const;
-/** While the replay is open, the list is read again this often (a running task adds steps). */
-export const REPLAY_REREAD_MS = 5000;
-
-/** The step whose picture shows at `i`: its own, else the last earlier step that has one (-1: none). */
-export function pictureIndex(steps: readonly Pick<ReplayStep, 'picture'>[], i: number): number {
-  for (let j = Math.min(i, steps.length - 1); j >= 0; j--) if (steps[j]?.picture) return j;
-  return -1;
-}
-
-/** A step's time: the clock time, with the day when it was not today. */
-export function replayTimeLine(at: string, now: number): string {
-  const d = new Date(at);
-  if (Number.isNaN(d.getTime())) return '';
-  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  const today = new Date(now);
-  const same = d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
-  return same ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
-}
-
-/** Why a step has no picture of its own, for the line under the last one shown. */
-export const NO_STEP_PICTURE = 'No picture of this step (the tab could not be pictured then): the last one before it shows.';
-/** The replay with nothing in it. */
-export const NO_REPLAY = 'No browser steps recorded for this task in the days kept.';
 
 export interface BrowserFrame {
   tab: number;

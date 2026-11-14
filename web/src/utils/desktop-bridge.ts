@@ -36,31 +36,12 @@ export interface DesktopBridge {
    *  Handled in place, never by a reload: the page may hold unsaved text. */
   openLink(link: string): boolean;
   openAgentRef(link: string): boolean;
-  /** A key chord the app's menu took before the page saw it ("Cmd+W", desktop/main.swift):
-   *  played to the page as the key press it was. True when something here used it. */
-  menuChord(chord: string): boolean;
 }
 
 declare global {
   interface Window {
     __walnutDesktop?: DesktopBridge;
   }
-}
-
-/** The chord as a key press on what has the focus, which bubbles to every key handler. */
-function playChord(target: Window, chord: string): boolean {
-  const parts = chord.split('+');
-  const key = parts.pop() ?? '';
-  if (!/^[A-Z0-9]$/.test(key)) return false;
-  const code = /[0-9]/.test(key) ? `Digit${key}` : `Key${key}`;
-  const Ctor = (target as Window & { KeyboardEvent: typeof KeyboardEvent }).KeyboardEvent;
-  const event = new Ctor('keydown', {
-    key: key.toLowerCase(), code, bubbles: true, cancelable: true,
-    metaKey: parts.includes('Cmd'), ctrlKey: parts.includes('Ctrl'), altKey: parts.includes('Alt'), shiftKey: parts.includes('Shift'),
-  });
-  const at: EventTarget = target.document.activeElement ?? target.document.body ?? target;
-  at.dispatchEvent(event);
-  return event.defaultPrevented;
 }
 
 export function installDesktopBridge(target: Window = window): DesktopBridge {
@@ -81,7 +62,6 @@ export function installDesktopBridge(target: Window = window): DesktopBridge {
     },
     openLink: (link) => openLink(String(link)),
     openAgentRef: (link) => claimAgentRef(String(link)),
-    menuChord: (chord) => playChord(target, String(chord)),
   };
   target.__walnutDesktop = bridge;
   return bridge;

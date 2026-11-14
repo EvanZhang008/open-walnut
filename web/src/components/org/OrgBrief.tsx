@@ -35,6 +35,7 @@ interface Props {
   tasks: readonly Task[];
   /** The owner's name, for the empty state. */
   name: string;
+  onOpenTask: (id: string) => void;
   now: number;
   /** Folded: its first lines, the rest a click away. */
   folded?: boolean;
@@ -44,7 +45,7 @@ interface Props {
   updating?: boolean;
 }
 
-export function OrgBrief({ owner, tasks, name, now, folded, fresh, updating }: Props) {
+export function OrgBrief({ owner, tasks, name, onOpenTask, now, folded, fresh, updating }: Props) {
   const brief = owner?.brief;
   const labels = useEntityLabelsVersion();
   const states = useMemo(() => new Map(tasks.map((t) => [t.id, userStateOf(t)] as const)), [tasks]);
@@ -105,7 +106,7 @@ export function OrgBrief({ owner, tasks, name, now, folded, fresh, updating }: P
     if (bodyRef.current) applyBriefMoves(bodyRef.current, moves, added);
   }, [html, moves, added]);
   const onFileOpen = useBriefFileOpener(owner?.id, text, textSources, tasks);
-  const onClick = useEntityClickHandler(undefined, onFileOpen.open, undefined, undefined, true);
+  const onClick = useEntityClickHandler(onOpenTask, undefined, onFileOpen.open, undefined, undefined, true);
 
   if (!brief?.text || !html) {
     return (

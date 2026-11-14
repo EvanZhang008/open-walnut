@@ -2,7 +2,7 @@
  * Finds every element in web/src whose native `title` only repeats its own text: the one
  * job such a title had was to show a cut-off row in full, and the in-place peek
  * (web/src/utils/truncation-peek.ts) does that now, so the dark tooltip would only open on
- * top of the component's text or repeat text already in full view. Shared by the guard test and
+ * top of the pill's text or repeat text already in full view. Shared by the guard test and
  * by the codemod that took them out.
  */
 import fs from 'node:fs';
@@ -109,16 +109,16 @@ function attrNames(el: ts.JsxOpeningLikeElement): string[] {
  * child is the title, directly or through a const holding it), and whether it sits in a row the
  * peek expands as a whole (`inMarkedRow`).
  */
-export function findTaskTitleSites(webSrc: string, titlePattern: RegExp = TASK_TITLE): TaskTitleSite[] {
+export function findTaskTitleSites(webSrc: string): TaskTitleSite[] {
   const cut = truncatingClasses(webSrc);
   const out: TaskTitleSite[] = [];
   for (const file of walk(webSrc, [])) {
     const text = fs.readFileSync(file, 'utf8');
-    if (!titlePattern.test(text)) continue;
+    if (!/title/.test(text)) continue;
     const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     const isTitleExpr = (expr: ts.Expression, from: ts.Node): boolean => {
       const t = expr.getText();
-      if (titlePattern.test(t)) return true;
+      if (TASK_TITLE.test(t)) return true;
       if (!ts.isIdentifier(expr)) return false;
       // A const of the enclosing functions that holds the title.
       for (let p: ts.Node | undefined = from.parent; p; p = p.parent) {
@@ -126,7 +126,7 @@ export function findTaskTitleSites(webSrc: string, titlePattern: RegExp = TASK_T
         let found = false;
         const look = (n: ts.Node) => {
           if (found) return;
-          if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === t && n.initializer && titlePattern.test(n.initializer.getText())) found = true;
+          if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === t && n.initializer && TASK_TITLE.test(n.initializer.getText())) found = true;
           else ts.forEachChild(n, look);
         };
         look(p);

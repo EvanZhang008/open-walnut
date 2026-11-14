@@ -367,7 +367,7 @@ test('Personal router pause: a failed resume stays paused everywhere, the real r
   await openSettings(page);
   await expect(page.getByTestId('org-router-paused')).toBeChecked();
   await page.getByTestId('org-router-paused').uncheck();
-  await expect(page.getByTestId('org-router-state-line')).toContainText('Ready. It reads each new item');
+  await expect(page.getByTestId('org-router-state-line')).toContainText('Ready for assigned items');
 
   // The resume fails the way the server says it when the wake routine cannot be armed: nothing moves.
   let failed = 0;
@@ -393,7 +393,7 @@ test('Personal router pause: a failed resume stays paused everywhere, the real r
   expect((await wakeJob(personal))?.executor?.config?.areaId).toBe('personal');
   await expect(routerRow(page, personal)).toContainText('Ready');
   await expect(routerRow(page, personal)).not.toContainText('Paused');
-  await expect(page.getByTestId('org-router-summary')).toContainText('Ready for new items');
+  await expect(page.getByTestId('org-router-summary')).toContainText('Ready for assigned items');
   // The page's state line follows the save: running or not yet started, and how mail reaches it.
   await expect(page.getByTestId('org-router-overview-state')).toHaveText(/^(Running|Not running yet)/);
   await expect(page.getByTestId('org-router-overview-next')).toContainText('Nothing is assigned to Personal yet');
@@ -413,5 +413,69 @@ test('Personal router pause: a failed resume stays paused everywhere, the real r
   await expect.poll(async () => (await wakeJob(personal))?.enabled ?? null).toBe(false);
   await expect(routerRow(page, personal)).toContainText('Paused');
   await capture(page, { path: `${SHOTS}/personal-paused-again.png` });
+  expect(watch.errors).toEqual([]);
+});
+
+test('area rules require one explicit confirmation, keep a failed draft, reject stale writers and restore after reload', async ({ page }) => {
+  const watch = watchErrors(page);
+  const id = 'rr-fixture-invoice';
+  const file = path.join(fixture.home, 'triage', 'routing-rules.json');
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const rule = { id, match: { subject: 'invoice' }, taskId: vp.a, taskTitle: 'Marina VP', enabled: true,
+    createdAt: Date.now(), updatedAt: Date.now(), author: { by: 'human' } };
+  await fs.writeFile(file, JSON.stringify({ version: 1, rules: [rule] }));
+  await openOrg(page);
+  await openRouter(page, routerOf.personal!);
+  await openSettings(page);
+  const section = page.getByTestId('org-router-rules');
+  const row = section.getByTestId('router-rule').filter({ hasText: 'invoice' });
+  await expect(row).toBeVisible();
+  await expect(row.getByRole('radio', { name: 'Unassigned', exact: true })).toBeChecked();
+  await row.getByRole('radio', { name: 'Personal', exact: true }).check();
+  await page.route('**/api/v1/router/rules', async (route) => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'busy', message: 'Rules are busy. Try again.' }) });
+  }, { times: 1 });
+  await section.getByTestId('router-rules-confirm').click();
+  await expect(section.getByRole('alert')).toContainText('busy');
+  await expect(row.getByRole('radio', { name: 'Personal', exact: true })).toBeChecked();
+  expect((await (await api.get('/api/v1/router/rules')).json()).bindings).toEqual([]);
+  await section.getByTestId('router-rules-confirm').click();
+  await expect(section.getByRole('status')).toContainText('Area rules confirmed.');
+  await expect.poll(async () => (await (await api.get('/api/v1/router/rules')).json()).bindings)
+    .toMatchObject([{ ruleId: id, areaId: 'personal' }]);
+  await watch.reload(async () => { await expect(page.getByTestId('org-routers')).toBeVisible({ timeout: 60_000 }); });
+  await openSettings(page);
+  await expect(row.getByRole('radio', { name: 'Personal', exact: true })).toBeChecked();
+  await row.getByRole('radio', { name: 'Work', exact: true }).check();
+  const current = await (await api.get('/api/v1/router/rules')).json();
+  const changed = await api.post('/api/v1/router/rules', { data: { bindings: [], expectedRevision: current.fileRevision } });
+  expect(changed.ok(), await changed.text()).toBe(true);
+  await section.getByTestId('router-rules-confirm').click();
+  await expect(section.getByRole('alert')).toBeVisible();
+  await expect(row.getByRole('radio', { name: 'Work', exact: true })).toBeChecked();
+  expect((await (await api.get('/api/v1/router/rules')).json()).bindings).toEqual([]);
+  await section.getByRole('button', { name: 'Reload rules', exact: true }).click();
+  await expect(section.getByTestId('router-rules-stale')).toBeVisible();
+  await expect(row.getByRole('radio', { name: 'Work', exact: true })).toBeChecked();
+  await expect(section.getByTestId('router-rules-confirm')).toBeDisabled();
+  await section.getByRole('button', { name: 'Discard changes', exact: true }).click();
+  await expect(section.getByRole('alert')).toHaveCount(0);
+  await expect(row.getByRole('radio', { name: 'Unassigned', exact: true })).toBeChecked();
+  await row.getByRole('radio', { name: 'Work', exact: true }).check();
+  await section.getByTestId('router-rules-confirm').click();
+  await expect(section.getByRole('status')).toContainText('Area rules confirmed.');
+  await fs.writeFile(file, JSON.stringify({ version: 1, rules: [{ ...rule, match: { subject: 'updated invoice' } }] }));
+  await section.getByRole('button', { name: 'Reload rules', exact: true }).click();
+  await expect(row).toContainText('saved area is inactive');
+  await row.getByTestId('router-rule-reconfirm').click();
+  await section.getByTestId('router-rules-confirm').click();
+  await expect(section.getByRole('status')).toContainText('Area rules confirmed.');
+  await row.getByRole('radio', { name: 'Unassigned', exact: true }).check();
+  await section.getByTestId('router-rules-confirm').click();
+  await expect(section.getByRole('status')).toContainText('Area rules confirmed.');
+  expect((await (await api.get('/api/v1/router/rules')).json()).bindings).toEqual([]);
+  await page.setViewportSize({ width: 900, height: 760 });
+  await capture(page, { path: `${SHOTS}/area-rule-confirmation.png` });
   expect(watch.errors).toEqual([]);
 });

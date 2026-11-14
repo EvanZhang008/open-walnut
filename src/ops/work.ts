@@ -12,7 +12,6 @@ import { USER_SPOKE_TEXT, USER_WORDS_BACK, userSaidLine, type UserSaid } from '.
 import { WORK_PLACE_RULE } from '../core/work-place.js';
 import { leftOutLine, shapeHistory, type HistoryShape, type ShapeResult } from './task-history-shape.js';
 import { SESSION_ENGINE_IDS, SESSION_MODE_IDS } from '../core/types.js';
-import { CLAUDE_PLUGIN_ID_MAX_CHARS, CLAUDE_PLUGINS_OFF_MAX_ITEMS } from '../core/sessions/claude-plugins-off.js';
 
 defineOp({
   name: 'task_start',
@@ -80,11 +79,8 @@ defineOp({
     answers_ask: z.boolean().optional().describe(
       'This message decides the question the target task is asking the user, in the user\'s place (you are a task it is under, its lead or VP, or Main). '
       + 'Walnut takes that ask off the user\'s Needs you and leads your message with one line telling the task so. A COMPLETE task, or one whose session is not running, '
-      + 'is not woken: the answer is recorded and nothing is delivered (delivery "recorded"); task_start it, or force with a reason, when it must act. '
-      + 'Any ask the user\'s Needs you shows is taken: its own question (in its report, or an org node\'s in its chat), a Board choice (answered on its Board: your words picking an option by its name pick it), '
-      + 'an AskUserQuestion prompt (answered with your words; any other tool\'s prompt is denied with them as the reason), or a decision letter (answered in the inbox by the option your text names, with user_words): delivery "settled". '
-      + '409 not_above when the task is not below you, '
-      + '409 no_open_ask when it has no ask to answer (none, a failure only the user can clear, a result to read, or one shown on another task, named), 409 user_words for an ask only the user approves, '
+      + 'is not woken: the answer is recorded and nothing is delivered (delivery "recorded"); task_start it, or force with a reason, when it must act. 409 not_above when the task is not below you, '
+      + '409 no_open_ask when it has no ask of its own to answer (none, a Board choice, or one shown on another task, named), 409 user_words for an ask only the user approves, '
       + `409 user_spoke_since when the user wrote in that task after it asked. ${USER_SPOKE_TEXT}`),
     withdraw_ask: z.boolean().optional().describe(
       'With answers_ask=true: the user withdrew this ask for good (do not remind them again, in other words either, unless they bring it up). '
@@ -119,20 +115,6 @@ defineOp({
         { ...b },
         `Note held for ${b.targetTaskId || target}: it asks for no reply, so it starts no turn and rides that task's next message (folded with your other such notes). Do NOT resend.`,
         'Nothing to wait for: no reply comes back.',
-      );
-    }
-    if (delivery === 'settled') {
-      const who = b.targetTaskId || target;
-      const s = (b.settled ?? {}) as { via?: string; board?: string; choice?: string; tool?: string; letterId?: string; settled?: boolean };
-      const where = s.via === 'board_choice' ? `its Board choice ${s.choice} on ${s.board} was answered and its Board's task told`
-        : s.via === 'question' ? 'its AskUserQuestion prompt was answered with your words'
-          : s.via === 'prompt_denied' ? `its ${s.tool} prompt was denied, with your answer as the reason (allowing a tool stays the user's)`
-            : s.via === 'letter' ? `its letter ${s.letterId} was ${s.settled ? 'settled' : 'answered'}, and the task told on the letter's own path`
-              : 'it was settled where it lives';
-      return withOutcome(
-        { ...b },
-        `${b.withdrawn === true ? 'Withdrawn' : 'Answered'} for the user on ${who}: ${where}. Walnut took the ask off the user's Needs you.${said ? ` ${said}` : ''}`,
-        'Nothing to wait for. Do NOT resend.',
       );
     }
     if (delivery === 'recorded') {
@@ -617,7 +599,7 @@ defineOp({
   name: 'project_metadata_get',
   title: 'Get project settings',
   description:
-    'Read one project\'s registry metadata, including default_cwd, default_host and claude_plugins_off. ' +
+    'Read one project\'s registry metadata, including default_cwd and default_host. ' +
     'This is not the project rename or merge operation.',
   input: {
     name: z.string().min(1).describe('Project name; Inbox has no metadata row'),
@@ -633,11 +615,7 @@ defineOp({
     'Merge execution defaults into one project registry row: default_cwd, default_host, and the ' +
     'launch defaults a new task of the project starts on when its start names none (default_engine, ' +
     'default_model of that engine, default_mode). A start that names its own engine, model or mode wins; ' +
-    'unset values fall back to the global defaults. claude_plugins_off lists Claude Code plugins ' +
-    '(name@marketplace) the project\'s Claude Code sessions start without, so their skills, agents and ' +
-    'MCP servers stay out of each request; the user\'s own plugin settings are not changed. ' +
-    'isolated_workspace says whether the project\'s code tasks start in an isolated workspace by default (on, off, or null to follow the global setting). ' +
-    'Do not use project rename or merge for settings.',
+    'unset values fall back to the global defaults. Do not use project rename or merge for settings.',
   input: {
     name: z.string().min(1).describe('Project name; Inbox has no metadata row'),
     default_cwd: z.string().nullable().optional().describe('Absolute default working directory; null clears it'),
@@ -645,15 +623,11 @@ defineOp({
     default_engine: z.enum(SESSION_ENGINE_IDS).nullable().optional().describe('Default coding engine for new tasks; null clears it (and its model)'),
     default_model: z.string().nullable().optional().describe('Default model id of default_engine; needs default_engine; null clears it'),
     default_mode: z.enum(SESSION_MODE_IDS).nullable().optional().describe('Default permission mode for new tasks; null clears it'),
-    isolated_workspace: z.enum(['on', 'off']).nullable().optional().describe('on: a new task of this project whose folder is a repository starts in its own isolated workspace (a git worktree, or a workspace plugin\'s); off: in the folder itself; null follows the global setting (Settings > Experimental)'),
-    claude_plugins_off: z.array(z.string().min(1).max(CLAUDE_PLUGIN_ID_MAX_CHARS).regex(/^\s*[^\s@]+@[^\s@]+\s*$/))
-      .max(CLAUDE_PLUGINS_OFF_MAX_ITEMS).nullable().optional()
-      .describe('Claude Code plugin ids (name@marketplace) this project\'s Claude Code sessions leave out; [] or null clears it'),
   },
   handler: async (args, call) => {
     const { name, ...body } = args;
     if (Object.values(body).every((v) => v === undefined)) {
-      throw new Error('project_metadata_update needs one of default_cwd, default_host, default_engine, default_model, default_mode, isolated_workspace, claude_plugins_off');
+      throw new Error('project_metadata_update needs one of default_cwd, default_host, default_engine, default_model, default_mode');
     }
     return call('PUT', `/projects/${encodeURIComponent(String(name))}/metadata`, body);
   },

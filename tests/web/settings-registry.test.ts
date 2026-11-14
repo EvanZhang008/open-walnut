@@ -23,9 +23,7 @@ const EXPECTED_IDS = [
   // session's Engine settings popover.
   // Task providers (2026-11-02): each plugin that syncs tasks, with the rules a task must
   // pass before it syncs there.
-  'tasks', 'focus-tiers', 'tags', 'task-providers',
-  // Keyboard shortcuts (2026-11-13): every shortcut, and a new key for the ones that can change.
-  'shortcuts', 'sessions',
+  'tasks', 'focus-tiers', 'tags', 'task-providers', 'sessions',
   // `stt` is labelled Voice and also carries Text-to-Speech now.
   // No `jev` row: Jev is one runner choice inside Tasks › Smart task creation.
   // No Integrations or Heartbeat entry (removed 2026-10-27). Mail rules follows

@@ -185,9 +185,7 @@ test('C21 C46 C94: title, ticket link, Sev chip, 3 line summary, Markdown as wri
   const popup = page.waitForEvent('popup')
   await link.click()
   await (await popup).close()
-  // Nor the task: the Board stays, no column opened for its session.
-  await expect(pane).toBeVisible()
-  await expect(page.locator(`${REAL_PANEL}[data-session-id="${team.sessions[team.perm]}"]`)).toHaveCount(0)
+  await expect(page.getByTestId('board-task-peek')).toHaveCount(0)
   await expect(perm).not.toHaveClass(/is-placeholder/)
   // Summary: at most 3 lines wide, the tooltip is the whole text. The card renders the words as
   // written (Markdown, so its paragraph ends in a line break the text node keeps; trimmed here).
@@ -215,8 +213,7 @@ test('C21 C46 C94: title, ticket link, Sev chip, 3 line summary, Markdown as wri
   await card(pane, team.idle[2]).focus()
   await page.keyboard.press('Escape')
   await expect(md).not.toHaveAttribute('data-expanded', 'true')
-  await expect(pane).toBeVisible()
-  await expect(page.locator(`${REAL_PANEL}[data-session-id="${team.sessions[team.idle[2]]}"]`)).toHaveCount(0)
+  await expect(page.getByTestId('board-task-peek')).toHaveCount(0)
 })
 
 test('C22: the done lane shows its 5 newest, then all 23, then fewer; the count stays 23', async ({ page }) => {
@@ -241,10 +238,8 @@ test('C30: unread output is a dot; opening the card clears it', async ({ page })
   const dot = card(pane, id).getByTestId('kanban-card-unread')
   await expect(dot).toHaveAttribute('aria-label', 'New output you have not seen')
   await card(pane, id).getByTestId('kanban-card-foot').click({ position: { x: 4, y: 12 } })
-  // The card opens its task on Home, its session's column (useOpenTask), and reads it.
-  await expect(page.locator(`${REAL_PANEL}[data-session-id="${team.sessions[id]}"]`)).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('board-task-peek')).toBeVisible({ timeout: 15_000 })
   await expect(dot).toHaveCount(0, { timeout: 15_000 })
-  await expect.poll(async () => (await call<{ task: { unread?: boolean } }>(api, 'GET', `/api/tasks/${id}`)).task.unread === true, { timeout: 15_000 }).toBe(false)
 })
 
 test('C47 C66: no Empty flash while loading; a task the store lacks is a loading card in its lane; an empty team', async ({ page }) => {

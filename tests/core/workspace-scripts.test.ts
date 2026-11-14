@@ -611,9 +611,6 @@ describe('setup after a workspace is made', () => {
     }
     expect(setupPromptLine(base)).toMatch(/succeeded/)
     expect(setupPromptLine({ ...base, state: 'removed' })).toBe('')
-    // No setup: only a default workspace (nobody asked for it) says where the agent works.
-    expect(setupPromptLine({ ...base, setup: undefined })).toBe('')
-    expect(setupPromptLine({ ...base, setup: undefined, by_default: true })).toMatch(/isolated workspace at .* by default, since this is a code task\. Work and commit here/)
     expect(setupPromptLine({ ...base, setup: { ...base.setup!, state: 'running', wait: false } })).toMatch(/may still be running: before you rely on what it prepares, check its result/)
   })
 })

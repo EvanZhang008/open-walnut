@@ -8,7 +8,7 @@ import type { MailAgentDeps } from './agent-surface.js'
 import { createMailBaseApi } from './api.js'
 import { MailApprovals } from './approvals.js'
 import { MailBodyStore } from './bodies.js'
-import { reconcileBodyRevision, reconcileRefusalRevision } from './body-revision.js'
+import { reconcileBodyRevision } from './body-revision.js'
 import { reconcileIdentityRevision } from './identity-revision.js'
 import { providerIdOf, type MailAccountDto } from './contract.js'
 import { openMailDatabase } from './db.js'
@@ -24,9 +24,8 @@ import type { RouterNoiseOutcome } from '../../core/router/source-registry.js'
 import type { RouterSource } from '../../core/router/types.js'
 import { decorateMailRoutes } from './router-decoration.js'
 import { bindMailAccounts, createMailRouterIntake } from './router-intake.js'
-import { mailIntakeQueue } from './intake-pending.js'
-import { adoptTriageMail } from './triage-mail-adoption.js'
 import { createMailOps } from './ops.js'
+import { guardMailOps, guardMailTools, keepUnassignedMail } from './router-read-guard.js'
 import { createMailMentionSource } from './mention-source.js'
 import { MailProviderRegistry, PROVIDERS_CHANGED_EVENT } from './provider-registry.js'
 import { createMailTriggerTemplate } from './trigger-template.js'
@@ -145,11 +144,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   // Late-bound: the noise decision marks read through the service and archives through the mover,
   // both built below. A replica changes no mail, so its router source has no noise hook.
   let tidyNoise: (source: RouterSource) => Promise<RouterNoiseOutcome> = async () => ({ read: false, archived: false })
-  // Late-bound too: a routed email whose body is not cached yet is fetched once (as the prefetch does) so its owner gets the original.
-  let fetchRoutedBody: (account: string, message: string) => Promise<void> = async () => undefined
-  const unregisterRouterSource = registerMailRouterSource(store, bodies, walnut.replica ? {} : {
-    noise: (source) => tidyNoise(source), fetchBody: (account, message) => fetchRoutedBody(account, message),
-  })
+  const unregisterRouterSource = registerMailRouterSource(store, bodies, walnut.replica ? {} : { noise: (source) => tidyNoise(source) })
   // Inbox sorting. Built before the service because ingest classifies each row it writes. The rules
   // file lives in this plugin's data dir; its poll is a HOST timer so teardown cancels it.
   const sort = new MailSortEngine({
@@ -272,7 +267,6 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     canArchive: (accountId) => filters.canArchive(accountId),
     archive: (accountId, messageId, stillCurrent) => filters.archiveNow(accountId, messageId, stillCurrent),
   }, source)
-  fetchRoutedBody = async (account, message) => { await service.readMessage(account, message, {}) }
   tidyNoise = (source) => {
     const run = (tidyChains.get(source.account) ?? Promise.resolve()).catch(() => undefined).then(() => tidyOne(source))
     tidyChains.set(source.account, run)
@@ -298,17 +292,15 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   // and this plugin already owns exactly one timer. A replica arms no tick at all, which is also how
   // the digest stays off there without a second replica check.
   const captureIncoming = createMailRouterIntake({ store, home: routingHome, log: walnut.log })
-  sync = new MailSync({ walnut, store, service, retention, events, sends, approvals, digest, sort, captureIncoming, retryIncoming: captureIncoming.retry })
+  sync = new MailSync({ walnut, store, service, retention, events, sends, approvals, digest, sort, captureIncoming })
   relistDue = (accountId) => sync.markRelistDue(accountId)
   relistNow = (accountId) => sync.relistNow(accountId)
   setActiveMailSync(sync)
   // Each mailbox goes to the one mail router (made when there is none), so the router reads every
-  // new mail; the intake also binds a mailbox added later, at its first new mail. Then the mail an
-  // older build buffered for Inbox Triage joins the intake's pending queue.
+  // new mail; the intake also binds a mailbox added later, at its first new mail.
   if (!walnut.replica) {
     walnut.timers.timeout(() => {
       void bindMailAccounts(store, routingHome, walnut.log)
-        .then(() => adoptTriageMail(routingHome, mailIntakeQueue(routingHome, { log: walnut.log }), walnut.log))
     }, 5_000)
   }
 
@@ -370,18 +362,6 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
         await reconcileBodyRevision({ store, bodies, log: walnut.log }, providerId, revision)
       } catch (error: unknown) {
         walnut.log.warn('mail could not retire the bodies a provider replaced', {
-          providerId, revision: revision ?? '', error: String(error).slice(0, 200),
-        })
-      }
-    },
-    // A provider that can now read mail it used to refuse as too large. Replica rule and failure
-    // handling as for bodyRevision: the refusals live on the primary's rows.
-    refusalRevision: async (providerId, revision) => {
-      if (walnut.replica) return
-      try {
-        await reconcileRefusalRevision({ store, log: walnut.log }, providerId, revision)
-      } catch (error: unknown) {
-        walnut.log.warn('mail could not forget the refusals a provider replaced', {
           providerId, revision: revision ?? '', error: String(error).slice(0, 200),
         })
       }
@@ -470,11 +450,15 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     // would register a second copy on top.
     const fresh: Array<{ dispose(): void | Promise<void> }> = []
     try {
-      for (const tool of createMailTools(agentDeps)) fresh.push(walnut.registry.tool(tool))
-      for (const op of createMailOps(agentDeps)) fresh.push(walnut.registry.op(op))
+      // Every op and tool naming an exact message judges a non-person caller's incoming-item area
+      // first: the gateway and tool belts run these in-process, past the HTTP area middleware.
+      for (const tool of guardMailTools(createMailTools(agentDeps), agentDeps, createMailTools)) fresh.push(walnut.registry.tool(tool))
+      for (const op of guardMailOps(createMailOps(agentDeps), agentDeps, createMailOps)) fresh.push(walnut.registry.op(op))
       fresh.push(walnut.registry.skill({ id: 'walnut-mail', directory: SKILL_DIR }))
       fresh.push(walnut.registry.triggerTemplate(createMailTriggerTemplate({
         store, listAccounts: () => service.listAccounts({ capabilities: false }),
+        // The watching session is judged as an agent with no area: classified mail never reaches it.
+        filterIncoming: (rows) => keepUnassignedMail(rows),
       })))
       fresh.push(walnut.registry.agentContext(line))
       // The "@" picker's Mail tab. Optional on the host: an older Walnut has no picker sources.

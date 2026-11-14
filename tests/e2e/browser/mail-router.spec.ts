@@ -3,7 +3,8 @@ import { expect, test, type Page, type Request as PwRequest } from '@playwright/
 import { MailFixtureServer, type MailFixture, showAllMail } from './mail-review-helpers';
 
 type MailItem = { accountId: string; messageId: string; subject: string };
-type RoutedFixture = MailFixture & { routerRows: { ownerId: string; vpId: string; rows: Array<MailItem & { status: string }>; queued: MailItem; unassigned: MailItem[] } };
+type RoutedFixture = MailFixture & { routerRows: { ownerId: string; vpId: string; rows: Array<MailItem & { status: string }>; confirmed: MailItem; unassigned: MailItem[];
+  handoffs: Array<MailItem & { status: 'pending' | 'denied' | 'expired' | 'claimed' }> } };
 let server: MailFixtureServer;
 let fixture: RoutedFixture;
 test.describe.configure({ mode: 'serial' });
@@ -334,29 +335,168 @@ test('Mail lists the area router with its live state, and it opens at Org level,
   await capture(page, { path: '/tmp/router-mail/router-at-org-level.png' });
 });
 
-test('an item its area router has not decided yet says so, never routed, across a reload', async ({ page }) => {
+test('a late area confirmation never appears on another email, and returning reads the server confirmation', async ({ page }) => {
+  await enterMail(page);
+  const item = fixture.routerRows.unassigned[2]!;
+  const other = fixture.routerRows.confirmed;
+  await openItem(page, item);
+  await page.getByTestId('mail-router-choose').click();
+  const form = page.getByTestId('mail-router-form');
+  await form.getByRole('radio', { name: 'Personal', exact: true }).check();
+  let held: import('@playwright/test').Route | undefined;
+  let seen!: () => void;
+  const intercepted = new Promise<void>((resolve) => { seen = resolve; });
+  await page.route('**/api/v1/router/assign', (route) => { held = route; seen(); }, { times: 1 });
+  try {
+    await form.getByTestId('mail-router-confirm').click();
+    await intercepted;
+    await openItem(page, other);
+    await expect(page.getByTestId('mail-reader-route')).toContainText('Confirmed for Personal');
+    const answered = page.waitForResponse((response) => response.url().includes('/api/v1/router/assign'));
+    await held!.continue();
+    held = undefined;
+    await answered;
+    await expect(page.getByTestId('mail-reader-route')).toContainText('Confirmed for Personal');
+    await expect(page.getByTestId('mail-router-form')).toHaveCount(0);
+    // The late answer still lands on its own row, never on the open one.
+    await expect(rowOf(page, item).getByTestId('mail-row-route')).toContainText('Confirmed for Personal');
+    await openItem(page, item);
+    await expect(page.getByTestId('mail-reader-route')).toContainText('Confirmed for Personal');
+    await expect(page.getByTestId('mail-router-choose')).toHaveCount(0);
+    await capture(page, { path: '/tmp/router-mail/late-confirm.png' });
+  } finally {
+    if (held) await held.abort().catch(() => {});
+    await page.unroute('**/api/v1/router/assign');
+  }
+});
+
+test('an item confirmed for an area says so, for this message only, never routed, across a reload', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   const prefetch = trackNotesPrefetch(page);
   try {
     await enterMail(page);
-    const item = fixture.routerRows.queued;
+    const item = fixture.routerRows.confirmed;
     await openItem(page, item);
-    // The row and the reader head say the same thing: queued for the area, nothing routed yet, and no area to choose.
-    await expect(page.getByTestId('mail-reader-route')).toContainText('Queued for Personal');
+    // The row and the reader head say the same thing: confirmed for the area, nothing routed yet.
+    await expect(page.getByTestId('mail-reader-route')).toContainText('Confirmed for Personal');
     await expect(page.getByTestId('mail-reader-route')).not.toContainText(/No router has seen this|Routed to/);
-    await expect(rowOf(page, item).getByTestId('mail-row-route')).toContainText('Queued for Personal');
+    await expect(rowOf(page, item).getByTestId('mail-row-route')).toContainText('Confirmed for Personal');
+    const confirmed = page.getByTestId('mail-router-confirmed');
+    await expect(confirmed).toContainText('This message only');
+    await expect(confirmed).not.toContainText('Routed to');
     await expect(page.getByTestId('mail-router-choose')).toHaveCount(0);
     await prefetch.settled();
     await page.reload();
     await expect(page.getByTestId('mail-row').first()).toBeVisible({ timeout: 90000 });
     await openItem(page, item);
-    await expect(page.getByTestId('mail-reader-route')).toContainText('Queued for Personal');
-    await capture(page, { path: '/tmp/router-mail/queued-item.png' });
+    await expect(page.getByTestId('mail-reader-route')).toContainText('Confirmed for Personal');
+    await capture(page, { path: '/tmp/router-mail/confirmed-item.png' });
     expect(errors).toEqual([]);
   } finally {
     prefetch.dispose();
   }
+});
+
+test('an unknown item of a known account needs Choose area: cancel, a failed confirm keeps the pick, a retry confirms only it', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const prefetch = trackNotesPrefetch(page);
+  try {
+    await enterMail(page);
+    const [item, other] = fixture.routerRows.unassigned;
+    await openItem(page, item!);
+    await expect(page.getByTestId('mail-router-confirmed')).toHaveCount(0);
+    await page.getByTestId('mail-router-choose').click();
+    const form = page.getByTestId('mail-router-form');
+    await expect(form).toContainText('This confirms this message only');
+    await expect(form.getByRole('radio', { name: 'Personal', exact: true })).toBeVisible();
+    await expect(form.locator('select')).toHaveCount(0);
+    await form.getByTestId('mail-router-cancel').click();
+    await expect(form).toHaveCount(0);
+    await expect(page.getByTestId('mail-router-choose')).toBeVisible();
+
+    await page.getByTestId('mail-router-choose').click();
+    await form.getByRole('radio', { name: 'Personal', exact: true }).check();
+    let failed = 0;
+    await page.route('**/api/v1/router/assign', async (route) => {
+      failed++;
+      await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Router areas are busy' }) });
+    }, { times: 1 });
+    await form.getByTestId('mail-router-confirm').click();
+    await expect(form.getByTestId('mail-router-error')).toBeVisible();
+    expect(failed).toBe(1);
+    await expect(form.getByRole('radio', { name: 'Personal', exact: true })).toBeChecked();
+    await expect(form.getByTestId('mail-router-confirm')).toHaveText('Try again');
+    await expect(page.getByTestId('mail-router-confirmed')).toHaveCount(0);
+    await form.getByTestId('mail-router-confirm').click();
+    await expect(page.getByTestId('mail-reader-route')).toContainText('Confirmed for Personal');
+    // The detail follows the area's router as the server has it now (another spec may have left it paused):
+    // a reading router is just pending; a paused one says so and offers the router to resume it.
+    const areas = await (await page.request.get('/api/v1/router/areas')).json() as { routers?: Array<{ areaId: string; paused?: boolean }> };
+    const reading = (areas.routers ?? []).some((r) => r.areaId === 'personal' && r.paused === false);
+    await expect(page.getByTestId('mail-reader-route')).toContainText(reading ? 'Routing pending' : 'Its router is paused');
+    await expect(page.getByTestId('mail-reader-route-action')).toHaveCount(reading ? 0 : 1);
+    await expect(page.getByTestId('mail-reader-route')).not.toContainText('Routed to');
+    await expect(page.getByTestId('mail-router-confirmed')).toContainText('This message only');
+    // The list row learns it at once, before any reload.
+    await expect(rowOf(page, item!).getByTestId('mail-row-route')).toContainText('Confirmed for Personal');
+
+    // Only that message: another one of the same account still asks.
+    await openItem(page, other!);
+    await expect(page.getByTestId('mail-router-choose')).toBeVisible();
+    await expect(page.getByTestId('mail-router-confirmed')).toHaveCount(0);
+
+    // The server keeps the confirmation: after a reload it reads from the message, not from the page.
+    await prefetch.settled();
+    await page.reload();
+    await expect(page.getByTestId('mail-row').first()).toBeVisible({ timeout: 90000 });
+    await openItem(page, item!);
+    await expect(page.getByTestId('mail-reader-route')).toContainText('Confirmed for Personal');
+    await expect(page.getByTestId('mail-router-choose')).toHaveCount(0);
+    await page.setViewportSize({ width: 900, height: 760 });
+    await capture(page, { path: '/tmp/router-mail/choose-area-confirmed.png' });
+    expect(errors).toEqual([]);
+  } finally {
+    prefetch.dispose();
+  }
+});
+
+test('a handoff ask reads the same on the row and the reader: never routed, no link, no Choose area, narrow too', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await enterMail(page);
+  const leads = { pending: 'Waiting for approval', denied: 'Handoff not approved', expired: 'Handoff approval expired', claimed: 'Handoff state unknown' };
+  for (const item of fixture.routerRows.handoffs) {
+    const row = rowOf(page, item);
+    await row.scrollIntoViewIfNeeded();
+    const line = row.getByTestId('mail-row-route');
+    await expect(line).toHaveAttribute('data-route-status', 'handoff');
+    await expect(line).toContainText(leads[item.status]);
+    await expect(line).toContainText('Pantry shelf inventory');
+    await expect(row.getByTestId('mail-row-route-link')).toHaveCount(0);
+    const words = (await line.textContent())!.replace(/\s+/g, ' ').trim();
+    const detail = line.locator('.mail-route-detail');
+    await expect(detail).toBeVisible();
+    expect((await detail.boundingBox())!.width).toBeGreaterThan(40);
+    await openItem(page, item);
+    const reader = page.getByTestId('mail-reader-route');
+    await expect(reader).toHaveText(words);
+    await expect(reader).not.toContainText(/Routed to|Not routed|No router has seen this/);
+    await expect(page.getByTestId('mail-reader-route-link')).toHaveCount(0);
+    await expect(page.getByTestId('mail-router-choose')).toHaveCount(0);
+    await expect(page.getByTestId('mail-router-confirmed')).toHaveCount(0);
+  }
+  await capture(page, { path: '/tmp/router-mail/handoff-wide.png' });
+  await page.setViewportSize({ width: 900, height: 760 });
+  const pending = fixture.routerRows.handoffs.find((one) => one.status === 'pending')!;
+  await page.getByTestId('mail-reader-back').click();
+  await expect(rowOf(page, pending).getByTestId('mail-row-route')).toContainText('Waiting for approval');
+  await capture(page, { path: '/tmp/router-mail/handoff-narrow-list.png' });
+  await openItem(page, pending);
+  await expect(page.getByTestId('mail-reader-route')).toContainText('Waiting for approval');
+  await capture(page, { path: '/tmp/router-mail/handoff-narrow.png' });
+  expect(errors).toEqual([]);
 });
 
 // 2026-11-07: a group that first showed up while the pointer was away from the grouped list had no

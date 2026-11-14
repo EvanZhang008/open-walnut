@@ -18,6 +18,7 @@ import { stopSupervisedSession } from '@/stores/session-supervision-store';
 import { SessionNotesPill, SessionNotesBar, useSessionNote } from './SessionNotes';
 import { OutputModePill } from './OutputModePill';
 import { useSessionPins } from '@/hooks/useSessionPins';
+import { useHidesHighlights } from '@/hooks/useHidesHighlights';
 import { SessionPinsContext } from '@/contexts/SessionPinsContext';
 import { SessionCommentsContext, type SessionCommentsApi } from '@/contexts/SessionCommentsContext';
 import { useSessionComments } from '@/hooks/useSessionComments';
@@ -48,6 +49,7 @@ import { sessionGitStore, useSessionGitGlance } from '@/stores/session-git-store
 import { changedChipTitle } from '@/utils/git-glance-text';
 import '@/styles/git-glance.css';
 import { KANBAN_COLLAPSE_CHAT_BELOW } from '@/components/board/kanban/kanban-contract';
+import { BoardTaskPeek } from '@/components/board/BoardTaskPeek';
 
 /**
  * The split view's panes, each loaded the first time it opens: the editors, the terminal and the
@@ -62,6 +64,8 @@ const DOCK_VIEW_LABEL: Partial<Record<SessionSplitView, string>> = { changed: 'C
 const SessionChangedTab = lazy(() => import('./SessionChangedTab').then((m) => ({ default: m.SessionChangedTab })));
 const SessionInboxPane = lazy(() => import('@/components/inbox/SessionInboxPane').then((m) => ({ default: m.SessionInboxPane })));
 const TaskBoardPane = lazy(() => import('@/components/board/TaskBoardPane').then((m) => ({ default: m.TaskBoardPane })));
+import { PeekTabBar } from '@/components/board/PeekTabBar';
+import { usePeekTabs } from '@/components/board/usePeekTabs';
 import { useSessionLetters } from '@/hooks/useSessionLetters';
 import {
   consumeSessionInboxLink, SESSION_INBOX_LINK_EVENT,
@@ -83,8 +87,6 @@ import { SideQuestionDrawer } from '@/components/sessions/SideQuestionDrawer';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useAgentFileOpener, useSessionTextRender } from '@/hooks/useAgentFileOpener';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
-import { useOpenTask } from '@/hooks/useOpenTask';
-import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { stripSendPrefixes, useSessionSend } from '@/hooks/useSessionSend';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
@@ -212,7 +214,6 @@ import { createTimelineShare } from './timeline-share';
 import { SessionScriptsChip } from '@/components/workspaces/SessionScriptsChip';
 import { workspaceOf } from '@/components/workspaces/workspace-text';
 import { noteScriptDropped, noteScriptTyped } from '@/components/workspaces/script-results';
-import { ShortcutHint } from '@/keyboard/ShortcutHint';
 
 /**
  * Below this viewport width a split view opens with the chat column collapsed:
@@ -303,12 +304,13 @@ class SessionPanelErrorBoundary extends Component<SessionPanelErrorBoundaryProps
 }
 
 /** Plan markdown in the popover, rendered and opened as its writer's (the panel's own, or the from-plan source). */
-function PlanPopoverContent({ content, writerSessionId, cwd, sessionId, sessionHost, onSessionClick, onFileOpen }: {
+function PlanPopoverContent({ content, writerSessionId, cwd, sessionId, sessionHost, onTaskClick, onSessionClick, onFileOpen }: {
   content: string;
   writerSessionId: string;
   cwd?: string;
   sessionId: string;
   sessionHost?: string;
+  onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   onFileOpen?: (path: string, line?: number) => void;
 }) {
@@ -324,7 +326,7 @@ function PlanPopoverContent({ content, writerSessionId, cwd, sessionId, sessionH
   );
   // Own plan: the panel's opener; another writer's: strictly that writer's machine.
   const onClick = useEntityClickHandler(
-    onSessionClick,
+    onTaskClick, onSessionClick,
     foreign ? writer.onFileOpen : onFileOpen,
     foreign ? writer.fileHost : sessionHost,
     foreign ? writer.fileSessionId : sessionId,
@@ -396,7 +398,8 @@ interface SessionPanelProps {
    */
   embedded?: boolean;
   /**
-   * Rendered inside another surface (an Org node's card). A nested column has no split and no
+   * Rendered inside another panel's chat column (a task opened from a Board,
+   * components/board/BoardTaskPeek.tsx). A nested column has no split and no
    * fullscreen of its own: the view chips, expand and popout are hidden, a view
    * request opens the task in its own column, a file opens in a new tab, and
    * the × means Back (onClose).
@@ -429,9 +432,9 @@ interface SessionPanelProps {
   /** The person completed this panel's task from its header (the ring or the status menu). The
    *  home page's column answers by closing itself. Not called while the panel is fullscreen. */
   onTaskCompleted?: (sessionId: string, info: { taskId: string; from: TaskPhase; title?: string }) => void;
+  onTaskClick?: (taskId: string) => void;
   /** The kebab's Locate row: find this panel's task in the task panel. Its session is
-   *  already on screen, so unlike a task link (useOpenTask) it must not open (and so reorder)
-   *  any column. Absent: an inset panel opens its task's column, any other finds it on Home. */
+   *  already on screen, so unlike onTaskClick it must not open (and so reorder) any column. */
   onLocateTask?: (taskId: string) => void;
   /** Open the task's full-screen detail modal (shared with the home task panel). */
   onOpenTaskDetail?: (taskId: string) => void;
@@ -507,7 +510,7 @@ const PLAIN_CHAT_CONTROLS: ReadonlySet<string> = new Set(['mode', 'model']);
  */
 const carriedTitles = new Map<string, string>();
 
-const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, onClose, onRestoredGone, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onMinimize, onTaskCompleted, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced: onSessionReplacedProp, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill, composerBar, emptyHistory }: SessionPanelProps) {
+const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, onClose, onRestoredGone, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onMinimize, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced: onSessionReplacedProp, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill, composerBar, emptyHistory }: SessionPanelProps) {
   // One place decides what "close this panel" means, so every exit (the header
   // button, the error boundary, the missing-session card) goes through the same
   // owner callback.
@@ -522,7 +525,6 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     onSessionReplacedProp(oldId, newId);
   } : undefined), [onSessionReplacedProp]);
   const navigate = useNavigate();
-  const openTask = useOpenTask();
   const { notify } = useNotifications();
   const confirmDialog = useConfirm();
   const enabledModes = useEnabledModes();
@@ -1624,14 +1626,24 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     autoCollapsed.current = false;
     setChatCollapsed(collapsed);
   }, []);
-  // The kebab's Locate (and an inset panel's view request): the host's own find when it gave
-  // one; else a nested column, whose session is not on screen as a column, opens it as one,
-  // and any other panel finds its task on Home.
-  const locateOwnTask = useLeanCallback((taskId: string) => {
-    if (onLocateTask) onLocateTask(taskId);
-    else if (inset) openTask(taskId, { sessionId });
-    else locateTaskOnHome(taskId, navigate, { sessionId });
-  }, [onLocateTask, inset, openTask, sessionId, navigate]);
+  // A task chip on the Board, or a task clicked in the chat while the panel is full
+  // screen, opens that task in the chat column as a tab, in place of this chat (which
+  // stays mounted under it). This panel's OWN task is the "Chat" tab, not the board's:
+  // a worker's Board shows its leader's. The tabs are remembered per task: leaving the
+  // full screen hides them, coming back shows the same tab.
+  const revealChat = useCallback(() => collapseChat(false), [collapseChat]);
+  const peek = usePeekTabs({ ownTaskId: session?.taskId, sessionId, enabled: !inset && shownFullscreen, onReveal: revealChat });
+  const peekShownId = session?.taskId ? peek.shownId : null;
+  // The chat stays mounted under a peek (visibility: hidden): its marks must not paint on the peek.
+  useHidesHighlights(!!peekShownId);
+  const { open: peekOpen, close: peekClose, active: peekActive } = peek;
+  const closeShownPeek = useCallback(() => { if (peekActive) peekClose(peekActive, 'close'); }, [peekActive, peekClose]);
+  // Stable (the hook's callbacks are), so the memoized chat history does not re-render for it.
+  const openPeekFromChat = useCallback((taskId: string) => peekOpen(taskId, 'chat'), [peekOpen]);
+  // A task clicked in the chat: full screen keeps it here, as a tab; a column opens its own.
+  const chatTaskClick = !inset && shownFullscreen && session?.taskId ? openPeekFromChat : onTaskClick;
+  // Full screen with no split view has no chat bar of its own: the tabs bring one.
+  const peekBarAlone = !inset && shownFullscreen && !splitOpen && peek.tabs.length > 0;
   // Opening a view decides the chat column's fate: below the split floor the Inbox
   // tab opens on the letter alone (the chat column has a 280px floor, and half a
   // letter is worse than one click on "show chat"); any other view clears a
@@ -1699,7 +1711,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       const taskId = session?.taskId;
       log.info('session-panel', 'inset view request opens the task', { sessionId, view, taskId: taskId ?? '' });
       if (!taskId) return;
-      locateOwnTask(taskId);
+      const locate = onLocateTask ?? onTaskClick;
+      if (locate) locate(taskId); else locateTaskOnHome(taskId, navigate, { sessionId });
       return;
     }
     const rerooting = view === 'files' && fileViewTarget !== null && activeView === 'files';
@@ -1718,7 +1731,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     // panel disappear but not exit the full screen"); X, Esc and the backdrop
     // still leave full screen.
     if (next) { if (!isPhoneLayout()) enterFullscreen(); applyOpenCollapse(next); } else { collapseChat(false); }
-  }, [enterFullscreen, fileViewTarget, activeView, applyOpenCollapse, collapseChat, inset, session?.taskId, sessionId, locateOwnTask]);
+  }, [enterFullscreen, fileViewTarget, activeView, applyOpenCollapse, collapseChat, inset, session?.taskId, sessionId, onLocateTask, onTaskClick, navigate]);
 
   // A project script from the Scripts chip: open the terminal (once) and type it there.
   // The run's id lets its result say whether it was typed (running) or never was (not run).
@@ -1923,8 +1936,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // click something inside already handled keeps the browser's own behavior.
   const handleServiceLinkClick = useCallback((e: ReactMouseEvent) => {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    // An inset panel has no Web split: it keeps the browser's own.
-    if (inset) return;
+    // An inset panel has no Web split, and a link in a task opened beside the
+    // Board is that task's (its host), never this panel's: both keep the browser's own.
+    if (inset || (e.target as HTMLElement).closest?.('.board-task-peek')) return;
     const anchor = (e.target as HTMLElement).closest?.('a[href]') as HTMLAnchorElement | null;
     if (!anchor || anchor.hasAttribute('data-native-link')) return;
     if (!consoleCanEmbedServices()) return;
@@ -2601,12 +2615,13 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     onRetryFailed: handleRetry,
     folderGoneHistory: session?.cwdGone?.history,
     onDismissFailed: dismissFailed,
+    onTaskClick: chatTaskClick,
     onSessionClick,
     onFileOpen: handleFileOpen,
     onQuoteInChat: quoteInChat,
     readTimeline: timelineShare,
   }), [sessionId, session?.engine, taskPhase, initialPromptText, session?.cwd, session?.host, session?.lane, optimisticMsgs, queueSyncProp,
-    handleEdit, handleDelete, handleRetry, session?.cwdGone?.history, dismissFailed, onSessionClick,
+    handleEdit, handleDelete, handleRetry, session?.cwdGone?.history, dismissFailed, chatTaskClick, onSessionClick,
     handleFileOpen, quoteInChat, timelineShare]);
 
   // Shift+Tab in a composer: the session's next mode.
@@ -2971,12 +2986,13 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       // Drawn, disabled with the reason, while the record that names the task is on its way, so
       // the row is there from the first opening of the menu (as the header button was).
       locate={taskSlot === 'live' ? {
-        label: onLocateTask ? 'Locate task' : 'Find on Home',
+        label: onLocateTask ?? onTaskClick ? 'Locate task' : 'Find on Home',
         waiting: locateWaitReason ?? (session?.taskId ? null : 'Locate becomes available once the session has loaded'),
         onClick: () => {
           const taskId = session?.taskId;
           if (!taskId) return;
-          locateOwnTask(taskId);
+          const locate = onLocateTask ?? onTaskClick;
+          if (locate) locate(taskId); else locateTaskOnHome(taskId, navigate, { sessionId });
         },
       } : undefined}
       onPopout={inset ? undefined : () => openPopout('session', { id: sessionId, host: session?.host, cwd: session?.cwd })}
@@ -3300,7 +3316,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                           <div style={{ fontSize: '12px', color: 'var(--fg-muted)', padding: '20px 0', textAlign: 'center' }}>Loading plan...</div>
                         )}
                         {plan?.content && (
-                          <PlanPopoverContent content={plan.content} writerSessionId={plan.sourceSessionId || sessionId} cwd={session?.cwd} sessionId={sessionId} sessionHost={session?.host} onSessionClick={onSessionClick} onFileOpen={handleFileOpen} />
+                          <PlanPopoverContent content={plan.content} writerSessionId={plan.sourceSessionId || sessionId} cwd={session?.cwd} sessionId={sessionId} sessionHost={session?.host} onTaskClick={chatTaskClick} onSessionClick={onSessionClick} onFileOpen={handleFileOpen} />
                         )}
                       </div>
                       <div className="plan-popup-input">
@@ -3432,7 +3448,6 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   aria-label={shownFullscreen ? 'Exit full screen' : inset ? 'Close this tab' : 'Close session panel'}
                 >
                   {ICON_CLOSE}
-                  {!shownFullscreen && <ShortcutHint command="session.close" />}
                 </button>
               )}
             </div>
@@ -3828,12 +3843,16 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                         barRightSlot={chatBarSlot}
                       />
                     )}
-                    {/* Board: the page the task's leader keeps. A task chip on it opens
-                        that task on Home, as every task link does (useOpenTask). */}
+                    {/* Board: the page the task's leader keeps. A task chip on it
+                        opens that task in the chat column (BoardTaskPeek below); the
+                        old jump (onTaskClick, then Locate) is the peek's "Open task". */}
                     {activeView === 'board' && session?.taskId && (
                       <TaskBoardPane
                         taskId={session.taskId}
+                        sessionId={sessionId}
                         barRightSlot={chatBarSlot}
+                        onOpenTask={shownFullscreen ? peek.open : (onTaskClick ?? onLocateTask)}
+                        onLocateTask={onTaskClick ?? onLocateTask}
                         onSendToSession={handleBoardSend}
                         renderSession={(cardSessionId, opts) => (
                           <InsetSessionPanel
@@ -3843,6 +3862,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                             embedded
                             inset
                             onClose={opts.onClose}
+                            onLocateTask={onTaskClick ?? onLocateTask}
+                            onTaskClick={chatTaskClick}
                             onSessionClick={onSessionClick}
                             onOpenTaskDetail={onOpenTaskDetail}
                             onOpenForkDraft={onOpenForkDraft}
@@ -3914,7 +3935,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             <div className="session-panel-chat-resize" {...chatPanel.handleProps} title="Drag to resize chat" />
           )}
           <div
-            className={`session-panel-chat-col${treeSplit.barShown ? ' has-tree-bar' : ''}${treeGrid ? ' is-tree-split' : ''}${treeSibling ? ' has-tree-sibling' : ''}${reader.colClass}`}
+            className={`session-panel-chat-col${peekShownId ? ' is-board-peek' : ''}${peekBarAlone ? ' has-peek-bar' : ''}${treeSplit.barShown ? ' has-tree-bar' : ''}${treeGrid ? ' is-tree-split' : ''}${treeSibling ? ' has-tree-sibling' : ''}${reader.colClass}`}
             data-time-view="chat"
             onClick={handleServiceLinkClick}
             ref={chatColCallbackRef}
@@ -3934,13 +3955,14 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   aria-expanded
                 >{ICON_PANEL_RIGHT_FILLED}</button>
               );
-              return (
+              return !inset && shownFullscreen && peek.tabs.length > 0 ? <PeekTabBar peek={peek} rightSlot={hideChat} /> : (
                 <div className="session-chat-bar">
                   <span className="session-chat-bar-title">Chat</span>
                   {hideChat}
                 </div>
               );
             })()}
+            {peekBarAlone && <PeekTabBar peek={peek} />}
             {treeSplit.barShown && (
               <ThreadPathBar
                 segments={pathSegments}
@@ -4057,7 +4079,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             )}
         <div className="session-panel-body" ref={bodyRef}>
           {/* A transferred task names the other end in one quiet line (the header row is precious). */}
-          <TransferLinks task={sessionTask} className="xfer-links-panel" testId="session-transfer-links" />
+          <TransferLinks task={sessionTask} onOpenTask={chatTaskClick} className="xfer-links-panel" testId="session-transfer-links" />
           {/* A phone says one plain sentence for a session that is gone (N29). */}
           {!(phoneLayer && !loading && !session) && (
             <SessionSupervisionBar sid={sessionId} snapshot={supervisionSnapshot} onRetryStop={handleTerminate} archived={session?.archived} />
@@ -4093,6 +4115,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             onFolderMoved={handleFolderMoved}
             folderGoneHistory={session?.cwdGone?.history}
             onDismissFailed={dismissFailed}
+            onTaskClick={chatTaskClick}
             onSessionClick={onSessionClick}
             onFileOpen={handleFileOpen}
             onStreamingChange={setIsStreaming}
@@ -4225,6 +4248,33 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             light={ownComposerLight}
           />
         </div>
+            {/* The active tab's task (a Board chip, or a task clicked in the chat in full
+                screen): a trailing child over the chat above, below the tab bar, which
+                keeps its shape and stays mounted (task-board.css). */}
+            {peekShownId && session?.taskId && (
+              <BoardTaskPeek
+                key={peekShownId}
+                ownTaskId={session.taskId}
+                targetTaskId={peekShownId}
+                onEscape={() => peek.activate(null, 'escape')}
+                onJump={onTaskClick ?? onLocateTask}
+                renderSession={(peekSessionId, jump) => (
+                  <InsetSessionPanel
+                    key={peekSessionId}
+                    sessionId={peekSessionId}
+                    viewPlace={`${viewPlace}:peek`}
+                    embedded
+                    inset
+                    onClose={closeShownPeek}
+                    onLocateTask={jump}
+                    onTaskClick={chatTaskClick}
+                    onSessionClick={onSessionClick}
+                    onOpenTaskDetail={onOpenTaskDetail}
+                    onOpenForkDraft={onOpenForkDraft}
+                  />
+                )}
+              />
+            )}
           </div>{/* .session-panel-chat-col */}
         </div>{/* .session-panel-split */}
         {engineSettingsEntry.popover}

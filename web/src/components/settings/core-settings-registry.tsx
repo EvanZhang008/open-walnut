@@ -28,7 +28,6 @@ import { SuggestAccuracySection } from './sections/SuggestAccuracySection'
 import { TagsSection } from './sections/TagsSection'
 import { TaskProvidersSection } from './sections/TaskProvidersSection'
 import { TasksSection } from './sections/TasksSection'
-import { KeyboardShortcutsSection } from './sections/KeyboardShortcutsSection'
 import { TriageSection } from './sections/TriageSection'
 import { UsageSection } from './sections/UsageSection'
 import { HealthMonitorSection } from './sections/HealthMonitorSection'
@@ -172,15 +171,6 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     ],
     render: ({ config, saveSection }) => <TaskProvidersSection config={config} onSave={saveSection} />,
   },
-  // Every keyboard shortcut, from the one table the keys use (keyboard/commands.ts and
-  // shortcuts.ts); the ones a person can change get their key here.
-  {
-    owner: 'walnut', id: 'shortcuts', label: 'Keyboard shortcuts', title: 'Keyboard shortcuts', group: 'configure',
-    icon: 'keyboard', tint: '#636366',
-    description: 'Every shortcut and its key, and a new key for the ones that can change.',
-    keywords: ['keyboard', 'shortcut', 'shortcuts', 'key', 'keys', 'hotkey', 'command', 'new task', 'close column', 'cmd'],
-    render: () => <KeyboardShortcutsSection />,
-  },
   {
     owner: 'walnut', id: 'sessions', label: 'Sessions', title: 'Sessions', group: 'configure',
     icon: 'two-speech-bubbles', tint: '#5856D6',
@@ -254,7 +244,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     render: ({ config, saveSection }) => <TriageSection config={config} onSave={saveSection} />,
   },
   // Mail rules: how the Mail app sorts an inbox into Important and groups. Right after Inbox Triage,
-  // which no longer reads mail (the mail router does, 2026-11-14); a different icon (a funnel, not the tray) and a
+  // which reads only Important when grouping is on; a different icon (a funnel, not the tray) and a
   // different sentence, so the two are never mistaken for one another. With the Mail plugin off the
   // section says so itself (`This panel is from Mail, which is off.`).
   {
@@ -282,7 +272,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     owner: 'walnut', id: 'browser', label: 'Browser extension', title: 'Browser extension', group: 'configure',
     icon: 'globe', tint: '#0A84FF',
     description: 'The Walnut extension for Chrome and Firefox: fill and save logins, and let agents use your browser.',
-    keywords: ['browser', 'extension', 'chrome', 'firefox', 'autofill', 'agents', 'relay', 'sites', 'tabs', 'replay', 'recording', 'screenshots'],
+    keywords: ['browser', 'extension', 'chrome', 'firefox', 'autofill', 'agents', 'relay', 'sites', 'tabs'],
     render: () => <BrowserSection />,
   },
   {

@@ -2,8 +2,6 @@
  * The token bucket a background upload is paced with (src/lib/upload-pacer.ts):
  * a burst goes at once, then bytes go at the rate, in the order they were taken,
  * a take bigger than the bucket goes once it is full, and drop() fails what waits.
- * Its pace changes while it runs (setLimits, a host's learned pace probing up), null limits
- * let bytes go at once, and it reports demand and the rate it let out (lib/adaptive-pace.ts).
  */
 import { describe, expect, it } from 'vitest'
 import { createUploadPacer } from '../../src/lib/upload-pacer.js'
@@ -14,7 +12,6 @@ function clock() {
   let ids = 0
   return {
     now: () => t,
-    pending: () => timers.length,
     setTimer: (fn: () => void, ms: number) => { const id = ++ids; timers.push({ at: t + ms, fn, id }); return id },
     clearTimer: (id: unknown) => { const i = timers.findIndex((x) => x.id === id); if (i >= 0) timers.splice(i, 1) },
     async advance(ms: number) {
@@ -91,70 +88,5 @@ describe('createUploadPacer', () => {
     p.drop('the lane closed')
     await expect(waiting).rejects.toThrow('the lane closed')
     expect(p.queuedBytes).toBe(0)
-  })
-
-  it('unpaced: every take goes at once, and is still counted', async () => {
-    const c = clock()
-    const p = createUploadPacer({ bytesPerSec: null, ...c })
-    const done: number[] = []
-    for (let i = 0; i < 5; i++) void p.take(1024 * 1024).then(() => done.push(i))
-    await Promise.resolve()
-    expect(done).toEqual([0, 1, 2, 3, 4])
-    expect(p.sentBytes).toBe(5 * 1024 * 1024)
-    expect(p.limits).toBeNull()
-    expect(p.lastSentAt).toBe(0)
-  })
-
-  it('setLimits changes the pace of the takes already waiting; null lets them all go', async () => {
-    const c = clock()
-    const p = createUploadPacer({ bytesPerSec: 1000, burstBytes: 1000, ...c })
-    const done: number[] = []
-    for (let i = 0; i < 4; i++) void p.take(1000).then(() => done.push(i))
-    await Promise.resolve()
-    expect(done).toEqual([0])
-    p.setLimits({ bytesPerSec: 4000, burstBytes: 1000 })
-    await c.advance(250)
-    expect(done).toEqual([0, 1])
-    p.setLimits(null)
-    await Promise.resolve()
-    expect(done).toEqual([0, 1, 2, 3])
-    expect(p.queuedBytes).toBe(0)
-  })
-
-  it('reports the time bytes waited behind the pace, and the rate it let out', async () => {
-    const c = clock()
-    const waited: number[] = []
-    const p = createUploadPacer({ bytesPerSec: 1000, burstBytes: 1000, ...c, onDemand: (ms) => waited.push(ms) })
-    for (let i = 0; i < 3; i++) void p.take(1000)
-    await c.advance(2000)
-    // Two seconds of waiting, reported as the pacer let each piece go.
-    expect(waited.reduce((a, b) => a + b, 0)).toBe(2000)
-    // 3000 bytes in 2 s: over the last few seconds, at least one second counted.
-    expect(p.recentBytesPerSec()).toBe(1500)
-    await c.advance(10_000)
-    expect(p.recentBytesPerSec()).toBe(0)
-    expect(waited.reduce((a, b) => a + b, 0)).toBe(2000)
-  })
-
-  it('a pace change from its own demand report (a probe) leaves one timer chain and counts each wait once', async () => {
-    const c = clock()
-    const waited: number[] = []
-    let probed = false
-    const p = createUploadPacer({
-      bytesPerSec: 1000, burstBytes: 1000, ...c,
-      onDemand: (ms) => { waited.push(ms); if (!probed) { probed = true; p.setLimits({ bytesPerSec: 2000, burstBytes: 1000 }) } },
-    })
-    const done: number[] = []
-    for (let i = 0; i < 6; i++) void p.take(1000).then(() => done.push(i))
-    await Promise.resolve()
-    for (let step = 0; step < 40 && done.length < 6; step++) {
-      await c.advance(100)
-      expect(c.pending()).toBeLessThanOrEqual(1)
-    }
-    expect(probed).toBe(true)
-    expect(done).toEqual([0, 1, 2, 3, 4, 5])
-    // 1 s at 1000 B/s for the second take, then 0.5 s each for the last four at 2000 B/s.
-    expect(waited.reduce((a, b) => a + b, 0)).toBe(3000)
-    expect(c.pending()).toBe(0)
   })
 })

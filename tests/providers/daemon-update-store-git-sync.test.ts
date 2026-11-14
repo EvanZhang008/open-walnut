@@ -36,7 +36,7 @@ afterEach(async () => { await removeTempTree(WALNUT_HOME) })
 describe('the daemon update state files and git-sync', () => {
   it('live in the machine-local part of the data home, and no sync commit holds them or their write temps', async () => {
     // machine-id: the stores' key for this machine (2026-11-04 review 4), never another machine's.
-    const files = ['daemon-build-backoff.json', 'daemon-update-pending.json', 'daemon-update-unread.json', 'upload-pace.json', 'machine-id'].flatMap((name) => {
+    const files = ['daemon-build-backoff.json', 'daemon-update-pending.json', 'daemon-update-unread.json', 'machine-id'].flatMap((name) => {
       const file = updateStoreFile(name)
       return [file, `${file}.tmp-4242`]
     })

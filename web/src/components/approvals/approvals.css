@@ -506,8 +506,8 @@ button.approval-line-more { border: 0; cursor: pointer; font: inherit; font-size
 .approval-line-who-link { display: flex; align-items: center; text-overflow: clip; }
 .approval-line-who .approval-task-link { display: flex; align-items: baseline; min-width: 0; white-space: nowrap; }
 
-/* The dialog's body (approval-context.tsx): the summary, Task and Repo (or Folder) as two label/value
-   lines, the request's sentence when it says more, then one Details fold (command, signed detail). */
+/* The dialog's body (approval-context.tsx): Task and Repo (or Folder) as two label/value lines, the
+   request's sentence when it says more, then one Details fold (command, asker's line, signed detail). */
 .approval-field { display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: baseline; gap: 10px; font-size: 14px; line-height: 1.45; }
 .approval-field-label { color: var(--fg-muted); font-size: 12px; font-weight: 600; }
 .approval-field-value { min-width: 0; overflow-wrap: anywhere; color: var(--fg); }
@@ -515,11 +515,7 @@ button.approval-line-more { border: 0; cursor: pointer; font: inherit; font-size
 .approval-details summary { font-size: 13px; }
 .approval-details-body { display: grid; gap: 10px; margin-top: 8px; }
 .approval-details .approval-detail-text { margin: 0; }
-/* The summary on top: what the step does and why, in full, never cut (approval-context.tsx summaryOf). */
-.approval-summary { display: grid; gap: 4px; padding-right: 24px; }
-.approval-summary-text { margin: 0; color: var(--fg); font-size: 15px; font-weight: 500; line-height: 1.45; overflow-wrap: anywhere; white-space: pre-wrap; }
-.approval-summary-why { margin: 0; color: var(--fg-secondary); font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }
-.approval-summary-by { color: var(--fg-muted); font-size: 11px; }
+.approval-why { margin-top: 4px; color: var(--fg-secondary); font-size: 13px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .approval-context { margin-top: 4px; display: grid; gap: 8px; }
 .approval-part-label { margin-bottom: 3px; color: var(--fg-muted); font-size: 11px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; }
 .approval-part-value { overflow-wrap: anywhere; }

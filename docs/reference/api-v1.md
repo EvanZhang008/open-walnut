@@ -4476,11 +4476,7 @@ usual (absent → `general`).
 - `GET /api/v1/projects/:name/metadata` → `{ name, source, metadata,
   memorySummary, counts }` — the project detail-pane payload (works on both
   boxes). `PUT /api/v1/projects/:name/metadata` → merged settings blob;
-  JSON `null` clears a key. Optional key `claude_plugins_off` (added
-  2026-11-13): a list of Claude Code plugin ids (`name@marketplace`, at most
-  100, each at most 200 characters) the project's Claude Code sessions leave
-  out; `[]` clears it, a malformed value is a `400`, and a row without it reads
-  as before. **REPLICA: 501** (registry writes have no
+  JSON `null` clears a key. **REPLICA: 501** (registry writes have no
   write-back channel). `POST /api/v1/projects/:name/summary/regenerate` →
   `{ "summary", "summary_task_count" }`; nothing to summarize → `422`.
   It can take up to 75 s (a `claude -p` turn on a CLI-only setup), so a

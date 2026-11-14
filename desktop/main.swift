@@ -2179,15 +2179,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let fileMenuItem = NSMenuItem()
         let fileMenu = NSMenu(title: "File")
-        // ⌘W is the page's (by default it closes the current session column; Settings >
-        // Keyboard shortcuts can give it another command): the page sees it first, and this item
-        // hands it on when the menu got it instead. It never closes the main window, so a column
-        // the person meant to close never takes the whole window with it. A window opened for a
-        // link (a popout) has no columns: there ⌘W closes it. Close Window moved to ⌘⇧W.
-        fileMenu.addItem(NSMenuItem(title: "Close Column", action: #selector(closeColumnOrPopout), keyEquivalent: "w"))
-        let closeWindowItem = NSMenuItem(title: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "W")
-        closeWindowItem.keyEquivalentModifierMask = [.command, .shift]
-        fileMenu.addItem(closeWindowItem)
+        fileMenu.addItem(NSMenuItem(title: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w"))
         fileMenuItem.submenu = fileMenu
         mainMenu.addItem(fileMenuItem)
 
@@ -2231,25 +2223,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         mainMenu.addItem(windowMenuItem)
 
         NSApp.mainMenu = mainMenu
-    }
-
-    /// ⌘W (File > Close Column): played to the page as the key press it was
-    /// (`__walnutDesktop.menuChord`, web/src/utils/desktop-bridge.ts). Nothing on the page used it
-    /// (no column open, an older page): a popout closes, the main window stays. A window with no
-    /// page (the About panel) closes as Close Window would close it. A page that let the real ⌘W
-    /// go unhandled gets it a second time here, which nothing on it acts on (its handlers act only
-    /// on a key they then mark handled).
-    @objc func closeColumnOrPopout() {
-        guard let key = NSApp.keyWindow else { return }
-        let isMain = key === window
-        guard let webView = key.contentView as? WKWebView else {
-            if !isMain { key.performClose(nil) }
-            return
-        }
-        webView.evaluateJavaScript("window.__walnutDesktop?.menuChord?.('Cmd+W') === true") { result, _ in
-            if result as? Bool == true || isMain { return }
-            key.performClose(nil)
-        }
     }
 
     @objc func reloadPage() {

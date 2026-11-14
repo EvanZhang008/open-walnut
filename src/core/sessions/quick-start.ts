@@ -371,11 +371,10 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     const { readRouterAreas, taskArea } = await import('../router/areas.js');
     const { WALNUT_HOME } = await import('../../constants.js');
     const areas = await readRouterAreas(WALNUT_HOME).catch((error) => {
-      if (target.org_role === 'router') throw error;
+      if (target.router_area_id || target.org_role === 'router') throw error;
       return undefined;
     });
-    // Only a router runs isolated (2026-11-14): routed work opens like any task.
-    if (target.org_role === 'router' || (areas && taskArea(areas, target.id))) {
+    if (target.router_area_id || target.org_role === 'router' || (areas && taskArea(areas, target.id))) {
       throw new QuickStartError('Open this area task through its own isolated conversation, not the quick launcher.', 409);
     }
   }

@@ -17,23 +17,22 @@ function rule(over: Partial<TriageRoutingRule>): TriageRoutingRule {
 describe('matching', () => {
   it('matches case-insensitive substrings; both halves when both are set', () => {
     const r = rule({ match: { from: 'ACME.example', subject: 'offer' } });
-    expect(ruleMatches(r, { source: 'slack', from: 'HR <hr@acme.example>', subject: 'Your Offer letter' })).toBe(true);
-    expect(ruleMatches(r, { source: 'slack', from: 'hr@acme.example', subject: 'Lunch' })).toBe(false);
+    expect(ruleMatches(r, { source: 'mail', from: 'HR <hr@acme.example>', subject: 'Your Offer letter' })).toBe(true);
+    expect(ruleMatches(r, { source: 'mail', from: 'hr@acme.example', subject: 'Lunch' })).toBe(false);
     // Unicode test data (CJK): a subject rule matches inside a longer CJK text.
     expect(ruleMatches(rule({ match: { subject: '\u62db\u8058' } }), { source: 'slack', from: 'bob #jobs', subject: '\u65b0\u7684\u62db\u8058\u901a\u77e5' })).toBe(true);
   });
   it('a turned-off rule matches nothing, and the first live rule wins', () => {
     const rules = [rule({ id: 'rr-a', match: { from: 'acme' }, enabled: false }), rule({ id: 'rr-b', match: { from: 'acme' } }), rule({ id: 'rr-c', match: { from: 'acme' } })];
-    expect(firstMatchingRule(rules, { source: 'slack', from: 'acme', subject: '' })?.id).toBe('rr-b');
+    expect(firstMatchingRule(rules, { source: 'mail', from: 'acme', subject: '' })?.id).toBe('rr-b');
   });
   it('no live rule: no section in the batch', () => {
-    expect(routingSection([rule({ match: { from: 'x' }, enabled: false })], [])).toBeNull();
+    expect(routingSection([rule({ match: { from: 'x' }, enabled: false })], [], [])).toBeNull();
   });
   it('caps the pre-matched list and says how many there were', () => {
-    const slack = Array.from({ length: 50 }, (_, i) => ({
-      conversation: '#c', isDm: false, isMention: false, alias: 'a@acme.example', ts: String(i), permalink: '', text: `m${i}`, atMs: 1,
-    }));
-    const text = routingSection([rule({ match: { from: 'acme' } })], slack)!;
+    const headlines = Array.from({ length: 5 }, (_, i) => ({ from: 'a@acme.example', subject: `m${i}` }));
+    const mail = Array.from({ length: 10 }, (_, i) => ({ accountId: `acc${i}`, count: 5, atMs: 1, headlines }));
+    const text = routingSection([rule({ match: { from: 'acme' } })], mail, [])!;
     expect(text).toMatch(/first 40 of 50/);
   });
 });

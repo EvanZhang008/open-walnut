@@ -81,7 +81,7 @@ import {
 import { DraftDecisionChips, DraftMoreButton, useDraftDecisionMenu } from './DraftDecisionRow';
 import { DraftTaskMenuPopover } from './DraftTaskMenu';
 import { DraftFolderPill, DraftPillsBreak, DraftProjectChip } from './DraftLaunchPills';
-import { DraftWorkspaceAutoChip, DraftWorkspaceRow } from '@/components/workspaces/DraftWorkspaceRow';
+import { DraftWorkspaceRow } from '@/components/workspaces/DraftWorkspaceRow';
 import { DraftWorkspaceMenuItem } from '@/components/workspaces/DraftWorkspaceMenuItem';
 import { draftProjectChip, draftProjectIsNew, draftProjectProvenance } from './draft-project-chip';
 import { SyncChoiceChip } from '@/components/tasks/SyncChoice';
@@ -336,7 +336,6 @@ export function DraftLaunchBar({
               onClick={() => { onClearFolder(draft.id); onAfterQuickPick?.(); }}
             >&times;</button>
           )}
-          {!isFork && workspaces && draft.cwd && <DraftWorkspaceAutoChip draftId={draft.id} />}
           <DraftPillsBreak />
           {projectChip && (
             <DraftProjectChip

@@ -517,8 +517,8 @@ tasksRouter.get('/', async (req: Request, res: Response, next: NextFunction) => 
     let total: number
     let truncated: boolean
     try {
-      // The completed-window cut below counts and limits the rows itself.
-      const deferLimit = completedWithinDays !== undefined
+      const { deferAreaTaskPage } = await import('../middleware/router-area-reader.js')
+      const deferLimit = deferAreaTaskPage(res, query.limit, completedWithinDays) || completedWithinDays !== undefined
       // A plugin's own tasks (Task.plugin_only) are in no general list: not the web
       // board's store, not an agent's task_list. A query naming ids still gets them, so a
       // plugin's own view can read the ones it knows.
@@ -533,9 +533,10 @@ tasksRouter.get('/', async (req: Request, res: Response, next: NextFunction) => 
       if (err instanceof TaskQueryError) { res.status(400).json({ error: err.message }); return }
       throw err
     }
-    // All row-hiding filters precede count and limit.
+    // All row-hiding filters precede count and limit. Scoped callers defer this
+    // window to the middleware's visibility checks; people apply it here.
     let completedHidden: number | undefined
-    if (completedWithinDays !== undefined) {
+    if (completedWithinDays !== undefined && !res.locals.walnutAreaTaskPage) {
       const { taskMatchPage } = await import('../../core/task-query-page.js')
       const page = taskMatchPage(queried as Task[], query.limit, completedWithinDays)
       queried = page.tasks
@@ -549,7 +550,9 @@ tasksRouter.get('/', async (req: Request, res: Response, next: NextFunction) => 
     // and writes session_status / plan_session_status / exec_session_status —
     // none of which overlap note/conversation_log. Safe to reuse on SlimTask
     // via a Task cast (the helper only reads/writes shared fields).
-    const enriched = await enrichTasksWithSessionStatus(queried as unknown as Task[])
+    const enriched = res.locals.walnutAreaTaskPage
+      ? queried as Task[]
+      : await enrichTasksWithSessionStatus(queried as unknown as Task[])
     const tEnrich = Date.now()
     const tasksWithBlocked = withBlockedFlags(enriched)
     // `total` / `truncated` are additive: `tasks` keeps its exact old shape, and

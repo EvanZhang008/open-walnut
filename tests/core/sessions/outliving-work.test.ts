@@ -195,7 +195,6 @@ const RAW_READERS: Record<string, string> = {
   'src/core/session-snapshot-apply.ts': 'projects a snapshot to the process status and settles turns',
   'src/core/sessions/restart-loss.ts': 'what a restart interrupted, from the fold at death',
   'src/core/sessions/endpoint-wait-takes.ts': 'a session:result: the endpoint wait takes only a real turn end',
-  'src/core/sessions/turn-run.ts': 'a session:result\'s facts, carried to the retriers that take a turn end (their own rules read them)',
   'src/core/human-inbox/item-status.ts': 'an inbox item\'s live status from a snapshot',
   'src/core/session-health-monitor.ts': 'the idle reap: a /loop gets the cron timeout',
   'src/core/sessions/live-sessions.ts': 'the live limit and idle exit keep a /loop owner alive (its cron fires inside that process)',

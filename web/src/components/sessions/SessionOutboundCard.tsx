@@ -184,11 +184,12 @@ function CopyChip({ value, label, title }: { value: string; label: string; title
 }
 
 /** What this session said, on this session's machine (never the target's); AgentText keeps its own clicks. */
-function OutboundBody({ body, sessionCwd, sessionHost, sessionId }: {
+function OutboundBody({ body, sessionCwd, sessionHost, sessionId, onTaskClick }: {
   body: string;
   sessionCwd?: string;
   sessionHost?: string;
   sessionId?: string;
+  onTaskClick?: (taskId: string) => void;
 }) {
   return (
     <blockquote className="provenance-body markdown-body">
@@ -196,6 +197,7 @@ function OutboundBody({ body, sessionCwd, sessionHost, sessionId }: {
         className="provenance-body-text"
         text={body}
         {...sessionTextSource({ sessionId, sessionHost, sessionCwd }, peekSessionRecord)}
+        onTaskClick={onTaskClick}
       />
     </blockquote>
   );
@@ -289,7 +291,7 @@ function ToLine({ send, resolved, direction, taskIds }: { send: OutboundSend; re
 }
 
 export function SessionOutboundCard({
-  send: transcriptSend, record, result, sessionCwd, sessionHost, sessionId, onSessionClick,
+  send: transcriptSend, record, result, sessionCwd, sessionHost, sessionId, onTaskClick, onSessionClick,
 }: {
   send: OutboundSend;
   /** Walnut's own record of this call (op-call-store.ts), when it has one. */
@@ -299,11 +301,12 @@ export function SessionOutboundCard({
   sessionCwd?: string;
   sessionHost?: string;
   sessionId?: string;
+  onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
 }) {
   const send = withRecord(transcriptSend, record);
   const resolved = useRefTargets(send, useResolvedTarget(send));
-  const handleClick = useEntityClickHandler(onSessionClick, undefined, sessionHost, sessionId);
+  const handleClick = useEntityClickHandler(onTaskClick, onSessionClick, undefined, sessionHost, sessionId);
   const taskLabel = useTaskLabel(resolved.taskId);
   const [open, toggle] = useMessageFold(foldKey(`${send.raw}\u0000${send.op}\u0000${record?.id ?? send.fields.title ?? ''}`));
 
@@ -340,7 +343,7 @@ export function SessionOutboundCard({
         <div className="op-card-detail">
           <CardRecipients direction={direction} taskIds={taskIds} />
           {!send.error && status && <div className="provenance-status">{status}</div>}
-          {hasDetail && <OutboundBody body={send.body!} sessionCwd={sessionCwd} sessionHost={sessionHost} sessionId={sessionId} />}
+          {hasDetail && <OutboundBody body={send.body!} sessionCwd={sessionCwd} sessionHost={sessionHost} sessionId={sessionId} onTaskClick={onTaskClick} />}
           {note && <div className="provenance-outbound-payload">{note}</div>}
           <OutboundDetails send={send} result={result} sessionId={resolved.fullId} />
         </div>
@@ -356,7 +359,7 @@ export function SessionOutboundCard({
  * arguments; the transcript's reading covers history recorded before it.
  */
 export function SessionOutboundCards({
-  calls, toolUseId, running, result, sessionCwd, sessionHost, sessionId, onSessionClick,
+  calls, toolUseId, running, result, sessionCwd, sessionHost, sessionId, onTaskClick, onSessionClick,
 }: {
   calls: OutboundSend[];
   toolUseId?: string;
@@ -366,12 +369,13 @@ export function SessionOutboundCards({
   sessionCwd?: string;
   sessionHost?: string;
   sessionId?: string;
+  onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
 }) {
   const viaCli = calls.some((c) => c.via === 'cli');
   const records = useOpCallRecords(sessionId, toolUseId, viaCli, running ? 'running' : 'done');
   const pairs = useMemo(() => pairWithRecords(calls, records), [calls, records]);
-  const shared = { result, sessionCwd, sessionHost, sessionId, onSessionClick };
+  const shared = { result, sessionCwd, sessionHost, sessionId, onTaskClick, onSessionClick };
   if (pairs.length === 1) return <SessionOutboundCard send={pairs[0].send} record={pairs[0].record} {...shared} />;
   return (
     <div className="op-card-stack">

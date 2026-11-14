@@ -24,10 +24,6 @@ describe('the current column wears no highlight', () => {
         for (const sel of m[1]!.split(',')) {
           const s = sel.trim();
           if (!/\.main-page-session-column[^\s]*\.is-current|\.is-current[^\s]*\.main-page-session-column/.test(s)) continue;
-          // The held modifier's number badge is the one allowed mark.
-          if (/\.session-jump-badge\b/.test(s)) continue;
-          // So is the close button's key while the modifier is held (only the current column's shows).
-          if (/\.shortcut-hint\b/.test(s)) continue;
           hits.push(`${path.relative(STYLES, file)}: ${s}`);
         }
       }

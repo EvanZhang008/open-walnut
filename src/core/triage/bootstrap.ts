@@ -59,7 +59,7 @@ export const TRIAGE_PROJECT = askProjectFor({ id: TRIAGE_AGENT_ID, name: TRIAGE_
 
 /** The routine's one-line description, shown on its card. */
 const TRIAGE_ROUTINE_DESCRIPTION =
-  'Reads each batch of new Slack messages, hands each item to the task that already owns it, '
+  'Reads each batch of new mail and Slack, hands each item to the task that already owns it, '
   + 'keeps the tracking notes true, and asks you about the rest with the homework done.';
 
 /**
@@ -70,7 +70,7 @@ const TRIAGE_ROUTINE_DESCRIPTION =
  */
 export const TRIAGE_RUN_INSTRUCTIONS = [
   'You are running one Inbox Triage batch. Read the batch above.',
-  'Work only the items it shows: there is no mail in it (the mail router owns mail),',
+  'Work only the inboxes it shows: when it has no Slack section, Slack is not this run\'s,',
   'and never dig items out of Walnut\'s own files (triage-state.json, its git history).',
   '',
   'Follow the walnut-inbox-triage skill. In order: read notes/Walnut/Triage/State.md,',
@@ -85,14 +85,15 @@ export const TRIAGE_RUN_INSTRUCTIONS = [
   'A task that was never started answers 409: do not start it, name it in the summary.',
   '',
   'When an item needs the user, do the homework before you ask: read the whole thread, look',
-  'up the related tasks and notes, and say what reply you would post when one is needed.',
+  'up the related mail, tasks and notes, and draft the reply when one is needed (mail_draft).',
   'The letter then says what you found and what you propose, so the user only decides.',
   'At most three decision letters, and a summary letter only when the run has something for',
   'the user (it then names every task you handed something to).',
   '',
   'Before you finish: rewrite notes/Walnut/Triage/State.md, append one line to',
   'notes/Walnut/Triage/Runs/<YYYY-MM>.md, and memory_write anything durable you',
-  'learned. Never post to Slack on your own: ask. Never invent a project or a task.',
+  'learned. Never send mail, post to Slack or unsubscribe on your own: ask. Never',
+  'invent a project or a task.',
 ].join('\n');
 
 /**
@@ -104,7 +105,7 @@ export const TRIAGE_RUN_INSTRUCTIONS = [
  * leave every future run reading the old rules until something else drifted.
  */
 export function triageInstructionsFor(resolved: ResolvedTriageConfig): string {
-  return `${TRIAGE_RUN_INSTRUCTIONS}\n\n${triageRunRules(resolved.mode)}`;
+  return `${TRIAGE_RUN_INSTRUCTIONS}\n\n${triageRunRules(resolved.mode, resolved.autoMarkRead)}`;
 }
 
 // ── Injectable seams (the live routines layer by default) ──
@@ -146,10 +147,7 @@ async function defaultResolveAgent(id: string): Promise<{ id: string; name: stri
 
 // ── The desired routine ──
 
-/**
- * The wake block for these sources. An enabled triage always has a source
- * (readTriageConfig turns a sources-less config off), so there are events to count.
- */
+/** The wake block for these sources, or undefined when there are none. */
 function wakeFor(resolved: ResolvedTriageConfig): CronWake | undefined {
   if (resolved.wakeEvents.length === 0) return undefined;
   return {
@@ -157,6 +155,8 @@ function wakeFor(resolved: ResolvedTriageConfig): CronWake | undefined {
     countField: TRIAGE_WAKE_COUNT_FIELD,
     threshold: resolved.everyMessages,
     // A timed batch with nothing new in it costs a whole session for no reason.
+    // Only safe BECAUSE there are events to count: with no wake block at all the
+    // clock runs unconditionally, which is what a sources-less config wants.
     skipWhenIdle: true,
   };
 }
@@ -169,8 +169,8 @@ export function buildTriageRoutineSpec(resolved: ResolvedTriageConfig): Record<s
     description: TRIAGE_ROUTINE_DESCRIPTION,
     enabled: true,
     schedule: { kind: 'every', everyMs: resolved.everyMs },
-    // `null` CLEARS a stored wake, where an absent key would leave the old one
-    // counting (an older routine still counting mail arrivals is patched to Slack).
+    // `null` CLEARS a stored wake (a user who removed every source), where an
+    // absent key would leave the old one counting.
     wake: wake ?? null,
     initProcessor: {
       actionId: TRIAGE_ACTION_ID,
@@ -223,7 +223,7 @@ function matchesSpec(job: CronJob, spec: Record<string, unknown>): boolean {
   const haveExec = job.executor;
   if (!haveExec || haveExec.type !== wantExec.type) return false;
   const haveConfig = haveExec.config ?? {};
-  // `instructions` is in the list because `triage.mode` only
+  // `instructions` is in the list because `triage.mode` / `auto_mark_read` only
   // reach a run through it (triageInstructionsFor): leaving it out would make a
   // mode change in Settings silently take effect "some time later".
   for (const key of ['cwd', 'agentId', 'project', 'titleTemplate', 'walnutAgent', 'instructions'] as const) {

@@ -7,7 +7,7 @@
  *   └ one card per VP: its avatar, name, how many it has open and what it is doing, then the
  *     projects it leads (its own included) (OrgChartVp.tsx); an open card holds Open chat and
  *     its menu, an open project every task in it as a tree with each one's status icon, and a
- *     task opens on Home (OrgChartProject.tsx)
+ *     task opens beside the Org page (OrgChartProject.tsx)
  *
  * Drag a project onto another VP's card to put it under that VP (or use the move menu: a
  * right-click on it); drag it
@@ -49,9 +49,10 @@ interface Props {
   routers?: readonly ChannelRow[];
   tasks: readonly Task[];
   onClose: () => void;
-  /** Open a card on the Org page (a channel row's key): the page's own navigation between its
-   *  nodes, not a task reference (a task in a card opens on Home, OrgChartProject). */
+  /** Open a card on the Org page (a channel row's key). */
   onPick: (key: string) => void;
+  /** Open a task beside the Org page. */
+  onOpenTask: (taskId: string) => void;
   /** Open on this move's question (the Org list's right-click menu). */
   startWith?: ChartStart;
 }
@@ -61,7 +62,7 @@ const DRAG_TYPE = 'application/x-walnut-org-project';
 /** The drop zone that gives a project a dedicated VP again. */
 const OWN = '__own__';
 
-export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick, startWith }: Props) {
+export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick, onOpenTask, startWith }: Props) {
   const [panel, setPanel] = useState<HTMLDivElement | null>(null);
   const [dragKey, setDragKey] = useState<string | null>(null);
   const [overKey, setOverKey] = useState<string | null>(null);
@@ -104,6 +105,7 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
   const { settings, save } = useOrgSettings();
   const byId = useMemo(() => new Map(tasks.map((t) => [t.id, t] as const)), [tasks]);
   const pick = (key: string) => { onClose(); onPick(key); };
+  const openTask = (taskId: string) => { onClose(); onOpenTask(taskId); };
   // A click outside the sheet: pressed and released on the backdrop itself (a press inside that
   // ends outside is a selection or a drag, not a click outside). What was open at the press
   // closes first, as Escape does: the menu (it closes itself on that press), then the question.
@@ -370,7 +372,7 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
                         dragging={dragKey === p.key}
                         onDragStart={onDragStart}
                         onDragEnd={endDrag}
-                        onLeave={onClose}
+                        onOpenTask={openTask}
                         {...(p.project ? { onMove: (from: HTMLElement, point?: { x: number; y: number }) => openMenu(p, from, point) } : {})}
                       />
                     ))}

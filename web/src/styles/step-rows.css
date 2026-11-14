@@ -24,6 +24,18 @@
   padding-left: 0;
   border-left: none;
 }
+/* While it runs, the closed line shows what it does now: one row, pulsing. */
+:root .process-fold-peek { margin: 0 0 2px; pointer-events: none; }
+:root .process-fold-peek .step-peek-row { display: flex; align-items: center; gap: 8px; min-height: 24px; padding: 0 4px; font-size: 13.5px; color: var(--fg-muted); min-width: 0; }
+:root .process-fold-peek .step-peek-text {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* Opacity only: an infinite animation of anything else repaints every frame
+     (tests/web/infinite-animation-composited.test.ts). */
+  animation: step-peek-pulse 1.8s ease-in-out infinite;
+}
+:root .process-fold-peek .step-peek-text.mono { font-family: var(--font-mono, ui-monospace, Menlo, monospace); font-size: 12.5px; }
+@keyframes step-peek-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+@media (prefers-reduced-motion: reduce) { :root .process-fold-peek .step-peek-text { animation: none; } }
 
 /* A step that needs the person (a refused permission) stands above the fold, red. */
 :root .step-lifted { margin: 2px 0 4px; padding: 4px 6px; border-radius: 8px; background: color-mix(in srgb, var(--error) 8%, transparent); }

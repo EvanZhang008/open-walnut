@@ -25,7 +25,7 @@ import { renderToStaticMarkup } from '../../web/node_modules/react-dom/server.no
 
 // An opened idle compaction row reads its reason and its setting: no server here.
 vi.mock('@/api/sessions', () => ({ fetchSession: async () => null }))
-vi.mock('@/api/config', () => ({ fetchConfig: async () => ({}), fetchFreshConfig: async () => ({}), updateConfig: async () => ({}), updateConfigKeys: async () => ({}) }))
+vi.mock('@/api/config', () => ({ fetchConfig: async () => ({}), fetchFreshConfig: async () => ({}), updateConfig: async () => ({}) }))
 
 let doc: Document
 let SM: typeof import('../../web/src/components/sessions/SessionMessage')

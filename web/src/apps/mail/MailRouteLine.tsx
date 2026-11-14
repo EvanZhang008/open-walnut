@@ -7,11 +7,13 @@
  */
 import type { KeyboardEvent, SyntheticEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { MailRouteDto, MailRoutingCoverage } from '@/api/mail';
+import type { MailRouteDto, MailRoutingCoverage, MailRoutingHandoffDto } from '@/api/mail';
 import { apiGet } from '@/api/client';
 import { fetchTask } from '@/api/tasks';
+import { openApproval } from '@/components/approvals/approvals-store';
 import { openTaskOnHome } from '@/utils/open-session';
 import { mailRouteAction, mailRouteView, orgNodePath, outgoingRouteView, routerPathOf, type MailRouteAction, type MailRouteLink } from './mail-route-model';
+import { MailRouterAssignment, sourceKeyOf, type MailRouterAreaRef, type MailRouterSource } from './MailRouterAssignment';
 
 const stop = (event: SyntheticEvent) => { event.stopPropagation(); };
 // Only the keys that activate the button: every other key still reaches the app's own shortcuts.
@@ -19,22 +21,25 @@ const stopActivation = (event: KeyboardEvent) => {
   if (event.key === 'Enter' || event.key === ' ') event.stopPropagation();
 };
 
-export function MailRouteLine({ route, surface, subject, routingArea, routingCoverage, outgoing, unavailable = false }: {
+export function MailRouteLine({ route, surface, source, subject, routingArea, routingCoverage, handoff, outgoing, unavailable = false }: {
   route: MailRouteDto | undefined;
   /** The person's own sent mail or draft, outside its own list: never routed, and the line says why. */
   outgoing?: 'sent' | 'draft' | null;
+  handoff?: MailRoutingHandoffDto;
   unavailable?: boolean;
   surface: 'row' | 'reader';
+  /** The reader's message: with no routing record and no area it offers Choose area (never on a row). */
+  source?: MailRouterSource;
   /** The reader's subject, named on the router's page when its "Open router" is followed. */
   subject?: string;
-  /** The area whose router takes this message: the line names it on every surface. */
-  routingArea?: { id: string; name: string; paused?: boolean };
+  /** The area this message was confirmed for (the API has no reassign yet): the line names it on every surface. */
+  routingArea?: MailRouterAreaRef & { paused?: boolean };
   /** With no area: why no router has the message (the server's `routingCoverage`). */
   routingCoverage?: MailRoutingCoverage;
 }) {
   const navigate = useNavigate();
   // Every row says where its message went or why it went nowhere (the user's ask), on one line.
-  const view = outgoing ? outgoingRouteView(outgoing) : mailRouteView(route, unavailable, routingArea, routingCoverage);
+  const view = outgoing ? outgoingRouteView(outgoing) : mailRouteView(route, unavailable, handoff, routingArea, routingCoverage);
   const Tag = surface === 'row' ? 'span' : 'p';
   const go = (link: MailRouteLink) => {
     if (link.kind === 'task') {
@@ -48,8 +53,9 @@ export function MailRouteLine({ route, surface, subject, routingArea, routingCov
       .catch(() => navigate(orgNodePath(null)));
   };
   // The reader offers the one next step a stuck state has (the row keeps to its line).
-  const action = surface === 'reader' && !unavailable && !outgoing ? mailRouteAction(view, route, routingArea) : null;
+  const action = surface === 'reader' && !unavailable && !outgoing ? mailRouteAction(view, route, handoff, routingArea) : null;
   const act = (next: MailRouteAction) => {
+    if (next.kind === 'approval') { openApproval(next.approvalId); return; }
     // The router's page says which message brought the person there and what to do (OrgRouterFromMail).
     const state = [view.lead, view.name].filter(Boolean).join(' ') + (view.detail ? ` · ${view.detail}` : '');
     void apiGet<unknown>('/api/v1/router/areas')
@@ -60,6 +66,9 @@ export function MailRouteLine({ route, surface, subject, routingArea, routingCov
       })
       .catch(() => navigate('/org'));
   };
+  const assign = surface === 'reader' && !unavailable && !outgoing && !route && source && !handoff
+    ? <MailRouterAssignment key={sourceKeyOf(source)} source={source} {...(routingArea ? { confirmed: routingArea } : {})} />
+    : null;
   const line = (
     <Tag
       className={`mail-route mail-route-${surface}`}
@@ -111,17 +120,19 @@ export function MailRouteLine({ route, surface, subject, routingArea, routingCov
   );
   // Beside the line, never inside it: the row and the reader line keep the same words.
   const next = action ? (
-    <button
-      type="button"
-      className="mail-router-link"
-      data-testid="mail-reader-route-action"
-      data-action={action.kind}
-      onKeyDown={stopActivation}
-      onClick={(event) => { event.stopPropagation(); act(action); }}
-    >
-      {action.label}
-    </button>
+    <div className="mail-router-assign">
+      <button
+        type="button"
+        className="mail-router-link"
+        data-testid="mail-reader-route-action"
+        data-action={action.kind}
+        onKeyDown={stopActivation}
+        onClick={(event) => { event.stopPropagation(); act(action); }}
+      >
+        {action.label}
+      </button>
+    </div>
   ) : null;
-  // One foot under the line, so the step reads as part of it.
-  return next ? <>{line}<div className="mail-route-foot" data-testid="mail-reader-route-foot">{next}</div></> : line;
+  // One foot under the line: the scope note first, then the step, so they read as part of it.
+  return assign || next ? <>{line}<div className="mail-route-foot" data-testid="mail-reader-route-foot">{assign}{next}</div></> : line;
 }

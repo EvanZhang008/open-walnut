@@ -19,16 +19,12 @@
  * Take over (the person's click) brings the tab forward in their browser and makes every agent
  * command there wait; Hand back (here or on the tab's own pill) gives it to the agent again. An
  * agent's request_sign_in shows as an ask over the picture: Take over, sign in, Done.
- *
- * Replay (SessionBrowserReplay.tsx, 2026-11-14): the task's recorded steps played back, from the
- * Replay button beside Larger, and on its own once the task has no tab left.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiGet, apiPost } from '@/api/client';
 import { usePageViewOf } from '@/utils/view-memory';
 import { log } from '@/utils/log';
 import { useBrowserView } from './useBrowserView';
-import { SessionBrowserReplay } from './SessionBrowserReplay';
 import {
   FRAME_EVERY_MS, FRAME_RETRY_MS, UNCHANGED_AGAIN_MS, agoLine, lateLine, endedLine, followedTab, handLine, liveGrantOffer, noPictureLine, tabKey, windowLine,
   type BrowserFrame,
@@ -102,8 +98,6 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
   const [waitFrom, setWaitFrom] = useState<string | undefined>(undefined);
   const [shotEl, setShotEl] = useState<HTMLDivElement | null>(null);
   const onScreen = useOnScreen(shotEl);
-  // The replay instead of the live picture (no live pictures are asked for meanwhile).
-  const [replaying, setReplaying] = useState(false);
 
   const tabs = state?.tabs ?? [];
   const followed = followedTab(tabs, prefs.pick);
@@ -111,7 +105,7 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
   const followedDevice = followed?.device;
   // The picture belongs to this task, browser and tab: any of them changing starts it afresh.
   const shownKey = followed ? `${taskId}|${tabKey(followed)}` : undefined;
-  const watching = !!followed && onScreen && !replaying;
+  const watching = !!followed && onScreen;
 
   // A new tab followed (another browser's, another task's): no picture of the old one under its title.
   const shownTab = useRef<string | undefined>(undefined);
@@ -232,41 +226,21 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
   const offerNow = liveGrantOffer(frame, followed);
   useEffect(() => { if (!offerNow) setGranting(null); }, [offerNow]);
   // In the pill's popover, nothing to show closes it (no empty popover left open).
-  const nothing = !!state && !followed && !state.replay && (!state.ended || prefs.dismissed === state.ended.at);
+  const nothing = !!state && !followed && (!state.ended || prefs.dismissed === state.ended.at);
   useEffect(() => { if (nothing) onClose(); }, [nothing, onClose]);
 
   if (!state) return null;
-  const large = () => setPrefs((p) => ({ ...p, large: !p.large }));
 
   if (!followed) {
     const ended = state.ended;
-    const endedRow = ended && prefs.dismissed !== ended.at ? (
+    if (!ended || prefs.dismissed === ended.at) return null;
+    return (
       <div className="session-browser-card session-browser-card--ended" data-testid="session-browser-ended" role="status">
         <span className="session-browser-dot session-browser-dot--off" aria-hidden />
         <span className="session-browser-ended-text">Browser: {endedLine(ended.why)} <span className="session-browser-muted">{agoLine(ended.at, Date.now())}</span></span>
         <button type="button" className="session-browser-btn session-browser-btn--icon" aria-label="Dismiss" title="Dismiss"
-          onClick={() => { setPrefs((p) => ({ ...p, dismissed: ended.at })); if (!state.replay) onClose(); }}>{CLOSE_GLYPH}</button>
+          onClick={() => { setPrefs((p) => ({ ...p, dismissed: ended.at })); onClose(); }}>{CLOSE_GLYPH}</button>
       </div>
-    ) : null;
-    // No tab left: the recorded steps, played back.
-    if (state.replay) {
-      return (
-        <>
-          {endedRow}
-          <SessionBrowserReplay key="replay" taskId={taskId} large={prefs.large} onLarge={large} onClose={onClose} />
-        </>
-      );
-    }
-    return endedRow;
-  }
-
-  if (replaying) {
-    // The same place in the tree as the no-tab replay above, so the last tab going keeps its step.
-    return (
-      <>
-        {null}
-        <SessionBrowserReplay key="replay" taskId={taskId} large={prefs.large} onLarge={large} onBack={() => setReplaying(false)} onClose={onClose} />
-      </>
     );
   }
 
@@ -336,11 +310,7 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
         <button type="button" className="session-browser-btn session-browser-btn--stop" onClick={() => { void stop(); }} disabled={stopping}
           title="The agent stops using this tab. The tab stays open, yours." data-testid="session-browser-stop">{stopping ? 'Stopping…' : 'Stop'}</button>
         <span className="session-browser-actions-gap" aria-hidden />
-        {state.replay && (
-          <button type="button" className="session-browser-btn" onClick={() => setReplaying(true)}
-            title="Play back the agent's steps in the browser" data-testid="session-browser-replay-open">Replay</button>
-        )}
-        <button type="button" className="session-browser-btn" onClick={large}
+        <button type="button" className="session-browser-btn" onClick={() => setPrefs((p) => ({ ...p, large: !p.large }))}
           aria-pressed={prefs.large} data-testid="session-browser-size">{prefs.large ? 'Smaller' : 'Larger'}</button>
         {driving
           ? <button type="button" className="session-browser-btn" onClick={() => { void hand('back'); }} disabled={handing !== null}

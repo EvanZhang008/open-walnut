@@ -149,6 +149,7 @@ export function OptionPickerFlyout<V extends string>({ anchorPoint, anchorRef, o
             onClose();
           }}
         >
+          <span className="task-kebab-project-check">{current === option.value ? '✓' : ''}</span>
           <span className="task-kebab-project-opt-name">{option.label}</span>
         </button>
       ))}

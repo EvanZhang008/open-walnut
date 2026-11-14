@@ -126,7 +126,8 @@ async function openColumnFromDetails(page: Page, sid: string): Promise<Locator> 
   await item.click()
   const col = column(page, sid)
   await expect(col).toBeVisible({ timeout: 30_000 })
-  // Opening a session from the details closes them (a task reference, useOpenTask).
+  // Opening a session from the details leaves them open over its column; put them away.
+  await page.keyboard.press('Escape')
   await expect(page.locator('.task-detail-modal')).toHaveCount(0)
   await expect(col.getByText('slots answer 12').first()).toBeVisible({ timeout: 30_000 })
   return col

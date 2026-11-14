@@ -118,7 +118,7 @@ describe('guard: the server records each writer from Walnut\'s own record only',
     for (const fn of ['setReply', 'normalizeReplySource']) rest = rest.replace(bodyOf(model, fn), '')
     expect(rest).not.toMatch(/\.reply\s*=[^=]/)
     expect(rest).not.toMatch(/\.reply_(by|sid|host)\s*=[^=]/)
-    expect(bodyOf(model, 'updateThread')).toMatch(/if \(text !== cur\.reply\) \{[\s\S]*?setReply\(next, text, by, source\)/)
+    expect(bodyOf(model, 'updateThread')).toMatch(/if \(text !== cur\.reply\) setReply\(next, text, by, source\)/)
     expect(bodyOf(model, 'openThread')).toMatch(/verifiedSource\(source\)/)
   })
 

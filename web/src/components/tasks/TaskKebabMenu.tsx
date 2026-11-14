@@ -458,6 +458,7 @@ export function ProjectPickerFlyout({ open, anchorRef, anchorPoint, align, curre
       className={`task-kebab-project-opt${current === name ? ' active' : ''}`}
       onClick={(e) => { e.stopPropagation(); onPick(name); onClose(); }}
     >
+      <span className="task-kebab-project-check">{current === name ? '✓' : ''}</span>
       <span className="task-kebab-project-opt-name">{label ?? projectDisplayName(name)}</span>
     </button>
   );

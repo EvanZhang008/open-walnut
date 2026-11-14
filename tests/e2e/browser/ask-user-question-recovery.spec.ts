@@ -25,8 +25,7 @@ async function openSessionFromTaskDetail(page: Page): Promise<void> {
   const detail = page.locator('.task-detail-modal')
   await expect(detail).toBeVisible()
   await detail.locator(`.todo-detail-session-item[data-session-id="${SESSION_ID}"]`).click()
-  // The details close on the open (a task reference, useOpenTask).
-  await expect(detail).toHaveCount(0)
+  await detail.getByRole('button', { name: 'Close detail panel' }).click()
 }
 
 test('AskUserQuestion survives server attach gaps and reopening the session column', async ({ page }) => {

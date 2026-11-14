@@ -344,6 +344,7 @@ export function DiffComparePicker({ sessionId, compare, resolved, onChange }: {
     if (it.kind === 'quick') {
       return (
         <div {...common}>
+          <span className="sdc-check" aria-hidden>{selected ? '✓' : ''}</span>
           <span className="sdc-main">
             <span className="sdc-title">{it.label}</span>
             <span className="sdc-hint">{it.hint}</span>
@@ -355,6 +356,7 @@ export function DiffComparePicker({ sessionId, compare, resolved, onChange }: {
       return (
         // Named whole (the cut name is two pieces on screen, which would read as two words).
         <div {...common} aria-label={`${it.name}${it.isCurrent ? ', current' : ''}${it.refKind === 'remote' ? ', remote' : ''}${it.time ? `, ${unixAgo(it.time)}` : ''}`} title={`${it.name}\nEvery file your branch changes since it split from ${it.name}, uncommitted work included`}>
+          <span className="sdc-check" aria-hidden>{selected ? '✓' : ''}</span>
           <span className="sdc-main sdc-main-row">
             {/* A long name is cut in the middle: its end is what tells similar branches apart. */}
             <span className="sdc-ref-name">
@@ -370,6 +372,7 @@ export function DiffComparePicker({ sessionId, compare, resolved, onChange }: {
     }
     return (
       <div {...common} title={`${it.sha}\n${it.subject}\n${it.author}${it.parents > 1 ? '\nMerge commit: shown against its first parent' : ''}`}>
+        <span className="sdc-check" aria-hidden>{selected ? '✓' : ''}</span>
         <span className="sdc-main sdc-main-row">
           <code className="sdc-sha">{shortSha(it.sha)}</code>
           <span className="sdc-subject">{it.subject || '(no message)'}</span>

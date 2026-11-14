@@ -285,6 +285,7 @@ function BlockPicker({ editor, current, disabled }: { editor: Editor; current: B
               onClick={() => pick(o.kind)}
             >
               <span className={`notes-format-block-sample sample-${o.kind}`}>{o.label}</span>
+              {o.kind === current && <span className="notes-format-block-check">✓</span>}
             </button>
           ))}
         </div>,

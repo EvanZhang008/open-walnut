@@ -2,10 +2,10 @@ import ActivityKit
 import AppIntents
 import Foundation
 
-/// Where a take's words go: the CEO chat (Talk to Walnut), or a page that shows them
-/// first, with Send (to the CEO chat) and Copy (to paste anywhere): Dictate.
+/// Where a take's words go: the CEO chat (Talk to Walnut), or the clipboard as heard,
+/// to paste anywhere (Dictate to Clipboard).
 enum TalkDestination: String, Codable, Hashable {
-    case ceo, dictation
+    case ceo, clipboard
 }
 
 /// The Live Activity a Talk to Walnut take shows on the Lock Screen and in the
@@ -40,8 +40,8 @@ struct TalkActivityAttributes: ActivityAttributes {
         /// The kept take a failed card speaks of, so the card goes once that
         /// take is sent or deleted instead of saying it still waits.
         var take: String?
-        /// A dictation (Dictate): its words go to the page that offers Send and Copy, not
-        /// straight to the CEO chat. Nil, in a state written before this field, is the CEO.
+        /// The words go to the clipboard, not the CEO chat (Dictate to Clipboard):
+        /// "sent" reads "Copied". Nil, in a state written before this field, is the CEO.
         var copy: Bool?
     }
 }
@@ -52,11 +52,11 @@ extension TalkActivityAttributes.ContentState {
         case .listening: return "Listening"
         case .transcribing: return "Getting your words"
         case .sending: return "Sending to your CEO"
-        case .sent: return copy == true ? "Your words are ready" : "Sent to your CEO"
+        case .sent: return copy == true ? "Copied" : "Sent to your CEO"
         case .failed:
             if later == true { return "Waiting to send" }
             if quiet == true { return "Nothing heard" }
-            return copy == true ? "Couldn't get your words" : "Not sent"
+            return copy == true ? "Not copied" : "Not sent"
         }
     }
 
@@ -67,15 +67,14 @@ extension TalkActivityAttributes.ContentState {
     var subtitle: String {
         switch phase {
         case .listening:
-            return copy == true ? "Tap Done, or press the Action Button again" : "Tap Send, or press the Action Button again"
+            return copy == true ? "Tap Copy, or press the Action Button again" : "Tap Send, or press the Action Button again"
         case .transcribing, .sending: return words ?? "One moment"
-        // A dictation's words wait on their page in Walnut.
-        case .sent: return copy == true ? "Open Walnut to send or copy them." : (words ?? "")
+        case .sent: return words ?? ""
         case .failed:
             let why = reason ?? "Something went wrong."
             if later == true { return why + " It sends the next time you open Walnut." }
             if kept == false { return why }
-            return why + (copy == true ? " Open Walnut to try again." : " Open Walnut to resend it.")
+            return why + (copy == true ? " Open Walnut to copy it." : " Open Walnut to resend it.")
         }
     }
 
@@ -83,7 +82,7 @@ extension TalkActivityAttributes.ContentState {
         switch phase {
         case .listening: return "waveform"
         case .transcribing, .sending: return "arrow.up.circle"
-        case .sent: return copy == true ? "text.bubble.fill" : "checkmark.circle.fill"
+        case .sent: return copy == true ? "doc.on.clipboard.fill" : "checkmark.circle.fill"
         case .failed:
             if later == true { return "tray.and.arrow.up.fill" }
             if quiet == true { return "mic.slash" }

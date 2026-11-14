@@ -171,35 +171,6 @@ export interface SessionRequest {
    * minutes into the turn that read it). Additive, 2026-11.
    */
   reachedAt?: string;
-  /**
-   * The answer that settled it, owed to its asker until its delivery is in the asker's queue
-   * (sessions/reply-outbox.ts): written in the same write as the settle, cleared once delivered. A
-   * server that died between the two finds it here and delivers it then (2026-11-14: the settle,
-   * the result and the queue were three writes, and a death between them left the request
-   * "replied" with the answer never delivered). Additive, 2026-11.
-   */
-  outbox?: ReplyOutbox;
-}
-
-/** An answer's delivery, owed (SessionRequest.outbox): what deliverToSession is called with. */
-export interface ReplyOutbox {
-  /** The asker session it goes to (resolved again when delivered from the outbox). */
-  to: string;
-  /** The session that answered: never a destination. */
-  from: string;
-  taskId?: string;
-  /** Its queue row id: a delivery again with the same id is the same row (deduped while queued). */
-  messageId: string;
-  busText: string;
-  enqueueText: string;
-  source: string;
-  fromLeader?: boolean;
-  /** The replier's task and the result to note on it, when it was not noted yet. */
-  report?: { taskId: string; head: Record<string, unknown>; fields: import('./peers/structured-reply.js').StructuredReply | null };
-  /** When it was owed (ISO). */
-  at: string;
-  /** Deliveries tried from the outbox (sessions/reply-outbox.ts). */
-  tries?: number;
 }
 
 /** How long an answer already delivered makes the same words to the same asker a repeat: one
@@ -522,14 +493,13 @@ async function settle(
   reply?: SessionRequest['reply'],
   forwardedTo?: string,
   answer?: AnswerStamp,
-  outbox?: (settled: SessionRequest) => ReplyOutbox | undefined,
 ): Promise<SessionRequest | null> {
   let settled: SessionRequest | null = null;
   await updateRequests((store) => {
     const requests = [...(store.requests ?? [])];
     const idx = requests.findIndex((r) => r.id === id);
     if (idx === -1 || requests[idx].status !== 'pending') return undefined;
-    const row: SessionRequest = {
+    settled = {
       ...requests[idx],
       status,
       settledAt: new Date().toISOString(),
@@ -539,9 +509,6 @@ async function settle(
       ...(status === 'expired' ? { overdueAt: new Date().toISOString() } : {}),
       ...stampAnswer(requests, id, answer),
     };
-    // The answer this settle owes its asker, in the same write (sessions/reply-outbox.ts).
-    const owed = outbox?.(row);
-    settled = owed ? { ...row, outbox: owed } : row;
     requests[idx] = settled;
     // A request this one carried has its work back: its wait shrinks to its target's own answer.
     if (settled.carries?.length) pullInBack(requests, id);
@@ -575,35 +542,8 @@ export async function noteAnswerDelivered(id: string, stamp: Pick<AnswerStamp, '
   });
 }
 
-export async function settleReplied(
-  id: string, reply?: SessionRequest['reply'] | null, forwardedTo?: string, answer?: AnswerStamp,
-  outbox?: (settled: SessionRequest) => ReplyOutbox | undefined,
-): Promise<SessionRequest | null> {
-  return settle(id, 'replied', undefined, reply ?? undefined, forwardedTo, answer, outbox);
-}
-
-/** The answer owed to `id`'s asker with this queue row id is in its queue now (or will never be): clear it. */
-export async function clearReplyOutbox(id: string, messageId: string): Promise<void> {
-  await updateRequests((store) => {
-    const requests = [...(store.requests ?? [])];
-    const idx = requests.findIndex((r) => r.id === id);
-    if (idx === -1 || requests[idx].outbox?.messageId !== messageId) return undefined;
-    const { outbox: _done, ...rest } = requests[idx];
-    requests[idx] = rest;
-    return { requests };
-  });
-}
-
-/** Count one more delivery tried from `id`'s outbox. */
-export async function noteReplyOutboxTry(id: string, messageId: string): Promise<void> {
-  await updateRequests((store) => {
-    const requests = [...(store.requests ?? [])];
-    const idx = requests.findIndex((r) => r.id === id);
-    const owed = idx === -1 ? undefined : requests[idx].outbox;
-    if (!owed || owed.messageId !== messageId) return undefined;
-    requests[idx] = { ...requests[idx], outbox: { ...owed, tries: (owed.tries ?? 0) + 1 } };
-    return { requests };
-  });
+export async function settleReplied(id: string, reply?: SessionRequest['reply'] | null, forwardedTo?: string, answer?: AnswerStamp): Promise<SessionRequest | null> {
+  return settle(id, 'replied', undefined, reply ?? undefined, forwardedTo, answer);
 }
 
 /**

@@ -5,9 +5,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   RouterAreaError,
   activeRouter,
+  assertSameArea,
   readRouterAreas,
   routerAreasPath,
-  routerFolders,
   sourceArea,
   taskArea,
   updateRouterAreas,
@@ -87,26 +87,22 @@ describe('readRouterAreas', () => {
   })
 })
 
-describe('sourceArea and taskArea', () => {
+describe('sourceArea and assertSameArea', () => {
   it('splits one account between personal and work item by item', async () => {
     const file = await updateRouterAreas(home, () => twoAreas())
     expect(sourceArea(file, mail(SHARED, 'INBOX:1:10'))?.id).toBe('personal')
     expect(sourceArea(file, mail(SHARED, 'INBOX:1:11'))?.id).toBe('work')
-  })
-
-  it('gives a task an area only through a router assignment, whatever list it is on', async () => {
-    const file = await updateRouterAreas(home, () => twoAreas())
-    // Routers (paused or not) run isolated in their area.
-    expect(taskArea(file, 'task-p1')?.id).toBe('personal')
-    expect(taskArea(file, 'task-p2')?.id).toBe('personal')
-    // A member an older build listed with no router assignment is ordinary work (2026-11-14).
-    expect(taskArea(file, 'task-w1')).toBeUndefined()
+    expect(assertSameArea(file, mail(SHARED, 'INBOX:1:10'), 'task-p2').id).toBe('personal')
+    expect(assertSameArea(file, mail(SHARED, 'INBOX:1:11'), 'task-w1').id).toBe('work')
+    await expectAreaError(() => assertSameArea(file, mail(SHARED, 'INBOX:1:10'), 'task-w1'), 'cross_area', 403)
+    await expectAreaError(() => assertSameArea(file, mail(SHARED, 'INBOX:1:11'), 'task-p1'), 'cross_area', 403)
   })
 
   it('never guesses an unknown item: an account source grants nothing by itself', async () => {
     const file = await updateRouterAreas(home, () => twoAreas())
     expect(sourceArea(file, mail(SHARED, 'INBOX:1:99'))).toBeUndefined()
     expect(sourceArea(file, { kind: 'slack', account: 'T0ACME', message: 'C1/1700000000.1' })).toBeUndefined()
+    await expectAreaError(() => assertSameArea(file, mail(SHARED, 'INBOX:1:99'), 'task-p1'), 'source_unassigned', 403)
   })
 
   it('matches kind, account and message exactly', async () => {
@@ -122,9 +118,10 @@ describe('sourceArea and taskArea', () => {
     for (const source of lookalikes) expect(sourceArea(file, source)).toBeUndefined()
   })
 
-  it('gives a task on no list no area', async () => {
+  it('refuses a target task that belongs to no area', async () => {
     const file = await updateRouterAreas(home, () => twoAreas())
     expect(taskArea(file, 'task-elsewhere')).toBeUndefined()
+    await expectAreaError(() => assertSameArea(file, mail(SHARED, 'INBOX:1:10'), 'task-elsewhere'), 'task_unassigned', 403)
   })
 })
 
@@ -215,6 +212,10 @@ describe('updateRouterAreas validation', () => {
     expect(sourceArea(saved, { ...first, version: 'third' })).toBeUndefined();
     expect(sourceArea(saved, mail(SHARED, 'conversation-1'))).toBeUndefined();
     expect((await readRouterAreas(home)).items).toEqual(file.items);
+    await expectAreaError(() => updateRouterAreas(home, (next) => {
+      next.items[0].source.version = 'changed';
+      return next;
+    }), 'area_reassignment', 409);
   });
 
   it('lets several exact items of one area share a canonical key, and keeps it on the item', async () => {
@@ -264,26 +265,17 @@ describe('updateRouterAreas history', () => {
     expect(sourceArea(await readRouterAreas(home), mail(SHARED, 'INBOX:1:10'))?.id).toBe('personal')
   })
 
-  it('lets an item leave the lists, as an open item of the same area, or with its area', async () => {
+  it('refuses to drop an item or delete an area that holds one', async () => {
     await updateRouterAreas(home, () => twoAreas())
-    // A restricted item opened in its own area (the 2026-11-14 move to the simple flow).
-    let file = await updateRouterAreas(home, (current) => ({ ...current, items: current.items.slice(1), openItems: [current.items[0]!] }))
-    expect(sourceArea(file, mail(SHARED, 'INBOX:1:10'))?.id).toBe('personal')
-    // Opened into another area is still a move.
+    await expectAreaError(() => updateRouterAreas(home, (current) => ({ ...current, items: current.items.slice(1) })), 'area_reassignment', 409)
     await expectAreaError(() => updateRouterAreas(home, (current) => ({
-      ...current, openItems: current.openItems!.map((one) => ({ ...one, areaId: 'work' })),
-    })), 'area_reassignment', 409)
-    file = await updateRouterAreas(home, (current) => ({ ...current, openItems: [] }))
-    expect(sourceArea(file, mail(SHARED, 'INBOX:1:10'))).toBeUndefined()
-    file = await updateRouterAreas(home, (current) => ({
       ...current,
       areas: current.areas.filter((one) => one.id !== 'work'),
       items: current.items.filter((item) => item.areaId !== 'work'),
-    }))
-    expect(file.areas.map((one) => one.id)).toEqual(['personal'])
+    })), 'area_reassignment', 409)
   })
 
-  it('refuses to move a task to another area, and lets it leave its area', async () => {
+  it('refuses to move a task to another area or drop it from its area', async () => {
     await updateRouterAreas(home, () => twoAreas())
     await expectAreaError(() => updateRouterAreas(home, (current) => {
       current.areas[0].taskIds = ['task-p1']
@@ -291,13 +283,12 @@ describe('updateRouterAreas history', () => {
       current.routers = current.routers.filter((router) => router.taskId !== 'task-p2')
       return current
     }), 'area_reassignment', 409)
-    expect(taskArea(await readRouterAreas(home), 'task-p2')?.id).toBe('personal')
-    // Leaving is fine: the simple flow takes non-router work out of its area.
-    const left = await updateRouterAreas(home, (current) => {
-      current.areas[1].taskIds = []
+    await expectAreaError(() => updateRouterAreas(home, (current) => {
+      current.areas[0].taskIds = ['task-p1']
+      current.routers = current.routers.filter((router) => router.taskId !== 'task-p2')
       return current
-    })
-    expect(left.areas[1].taskIds).toEqual([])
+    }), 'area_reassignment', 409)
+    expect(taskArea(await readRouterAreas(home), 'task-p2')?.id).toBe('personal')
   })
 
   it('lets a confirmed item gain a canonical key, never change or drop one', async () => {
@@ -328,7 +319,7 @@ describe('updateRouterAreas persistence', () => {
     const file = await readRouterAreas(home)
     expect([...file.areas[0].taskIds].sort()).toEqual(Array.from({ length: 20 }, (_, i) => `task-${i}`).sort())
     expect(file.items).toHaveLength(20)
-    for (let i = 0; i < 20; i++) expect(sourceArea(file, mail(SHARED, `INBOX:1:${i}`))?.id).toBe('ops')
+    for (let i = 0; i < 20; i++) expect(assertSameArea(file, mail(SHARED, `INBOX:1:${i}`), `task-${i}`).id).toBe('ops')
   })
 
   it('stores only the configured fields, never an item body or subject', async () => {
@@ -357,24 +348,5 @@ describe('updateRouterAreas persistence', () => {
     })).rejects.toThrow('change failed')
     expect(rawFile()).toBe(before)
     expect((await readRouterAreas(home)).areas[0].name).toBe('Area personal')
-  })
-})
-
-describe('the folders a router watches', () => {
-  it('keeps a folder list on the area, deduplicated, and falls back to the default without one', async () => {
-    const file = await updateRouterAreas(home, () => ({
-      ...twoAreas(), areas: [area('personal', { ...twoAreas().areas[0], folders: ['inbox', 'Receipts', 'Receipts'] }), twoAreas().areas[1]!],
-    }))
-    expect(file.areas[0]!.folders).toEqual(['inbox', 'Receipts'])
-    expect(routerFolders(file.areas[0]!, ['inbox'])).toEqual(['inbox', 'Receipts'])
-    expect(file.areas[1]).not.toHaveProperty('folders')
-    expect(routerFolders(file.areas[1]!, ['inbox'])).toEqual(['inbox'])
-    expect(routerFolders({ folders: [] }, ['inbox'])).toEqual(['inbox'])
-  })
-
-  it('refuses more than 50 folders or a folder name over 200 characters', async () => {
-    for (const folders of [Array.from({ length: 51 }, (_, i) => `F${i}`), ['x'.repeat(201)]]) {
-      await expectAreaError(() => updateRouterAreas(home, () => ({ ...twoAreas(), areas: [area('personal', { ...twoAreas().areas[0], folders })] })), 'invalid_areas', 400)
-    }
   })
 })

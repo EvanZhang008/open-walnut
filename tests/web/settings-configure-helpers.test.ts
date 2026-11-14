@@ -36,10 +36,10 @@ describe('lists that must never be empty or reordered', () => {
     expect(one).toEqual(['bypass'])
   })
 
-  it('toggles triage sources in canonical order, dropping an old mail (the mail router owns mail since 2026-11-14)', () => {
-    expect(toggleSource([], 'slack', true)).toEqual(['slack'])
-    expect(toggleSource(['slack'], 'slack', false)).toEqual([])
-    expect(toggleSource(['mail'], 'slack', true)).toEqual(['slack'])
+  it('toggles triage sources in canonical order', () => {
+    expect(toggleSource(['slack'], 'mail', true)).toEqual(['mail', 'slack'])
+    expect(toggleSource(['mail', 'slack'], 'mail', false)).toEqual(['slack'])
+    expect(toggleSource(['mail'], 'mail', false)).toEqual([])
   })
 
   it('normalizes excluded folders', () => {

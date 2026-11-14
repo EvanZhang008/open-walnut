@@ -64,6 +64,8 @@ const WALNUT_KIND_SENDERS: Record<string, LetterSender> = {
   'host-sign-in': { sessionId: 'external', host: 'local' },
   'host-exec-ask': { sessionId: 'external', host: 'local' },
   'budget-paused': { sessionId: 'external', host: 'local' },
+  'git-sync-secret-hold': { sessionId: 'external', host: 'local' },
+  'git-sync-secret-aside': { sessionId: 'external', host: 'local' },
   'org-report': { sessionId: 's-main', taskId: 't-main', taskTitle: 'Main', host: 'local' },
   'mail-approval': { sessionId: 'external', host: 'local', pluginId: 'mail', pluginName: 'Mail' },
   'mail-unsubscribe': { sessionId: 'external', host: 'local', pluginId: 'mail', pluginName: 'Mail' },
@@ -71,7 +73,6 @@ const WALNUT_KIND_SENDERS: Record<string, LetterSender> = {
   'offline-conflict': { sessionId: 'external', host: 'devbox' },
   'local-network-blocked': { sessionId: 'external', host: 'local' },
   'ssh-cert-expiry': { sessionId: 'external', host: 'local' },
-  'mail-no-router': { sessionId: 'external', host: 'local' },
 };
 
 describe('every kind of letter Walnut writes itself has an origin', () => {

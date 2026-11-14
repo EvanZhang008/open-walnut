@@ -2412,7 +2412,7 @@ select {
 
 .session-control-option {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: 24px minmax(0, 1fr) 20px;
   gap: 8px;
   align-items: center;
   width: 100%;
@@ -2459,6 +2459,12 @@ select {
   color: var(--fg-muted);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.session-control-option-check {
+  justify-self: end;
+  color: var(--fg-primary);
+  font-weight: 700;
 }
 
 /* Full access = ChatGPT's warning-orange row (name, description AND icon). */
@@ -15957,6 +15963,12 @@ a.task-kebab-info:hover {
 }
 .task-kebab-project-opt:hover { background: var(--accent-subtle); }
 .task-kebab-project-opt.active { font-weight: 600; color: var(--accent); }
+.task-kebab-project-check {
+  width: 12px;
+  flex: none;
+  font-size: 11px;
+  color: var(--accent);
+}
 .task-kebab-project-opt-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -19320,6 +19332,14 @@ a.task-kebab-info:hover {
 .model-picker-row-disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.model-picker-row-check {
+  width: 14px;
+  flex: none;
+  color: var(--accent);
+  font-weight: 700;
+  text-align: center;
 }
 
 .model-picker-row-name {
@@ -27612,6 +27632,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .sdc-item.is-selected .sdc-title,
 .sdc-item.is-selected .sdc-ref-name,
 .sdc-item.is-selected .sdc-subject { color: var(--accent); font-weight: 600; }
+.sdc-check { flex: 0 0 14px; text-align: center; color: var(--accent); font-size: 11px; }
 .sdc-main { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
 .sdc-main-row { flex-direction: row; align-items: center; gap: 6px; }
 .sdc-title { color: var(--fg); }

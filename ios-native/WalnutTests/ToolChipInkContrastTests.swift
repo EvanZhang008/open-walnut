@@ -15,13 +15,11 @@ import UIKit
 ///
 /// Method is the one used on the phone: rasterise at 3x, take the modal
 /// luminance of a band as its paper and the modal of the 8% farthest from that
-/// as its ink, then WCAG-ratio the two. The bands are LOCATED, never hard-coded.
-/// The row is a flat step row since 2026-11-11 (the web's design 1: no box, no
-/// fill), so its ink sits on the page itself: the row's last ink is found by
-/// scanning in from the empty page, and the chevron and subtitle are cut from
-/// the ink clusters actually present. A layout change (a fill coming back, the
-/// chevron no longer last) fails this test loudly instead of quietly measuring
-/// empty background.
+/// as its ink, then WCAG-ratio the two. The bands are LOCATED, never hard-coded:
+/// the capsule's painted edge is found by scanning in from the empty page, and
+/// the chevron and subtitle are cut from the app's own `TimelineMetrics.chipHPad`
+/// plus the ink clusters actually present. A layout change therefore fails this
+/// test loudly instead of quietly measuring empty background.
 @MainActor
 final class ToolChipInkContrastTests: XCTestCase {
 
@@ -63,14 +61,14 @@ final class ToolChipInkContrastTests: XCTestCase {
         }
     }
 
-    /// The tool NAME shares the row's ink, so it is held to the text bar too.
+    /// The tool NAME shares the capsule's ink, so it is held to the text bar too.
     /// It shipped at `.secondary` (3.24:1 light, measured on the phone), which is
     /// how the row ended up with its title quieter than AA while its subtitle was
     /// quieter still.
     func testToolNameClearsTheTextBarInBothSchemes() throws {
         for dark in [false, true] {
             let plain = try render(detail: nil, dark: dark)
-            let clusters = try plain.rowInkClusters()
+            let clusters = try plain.capsuleInkClusters()
             // wrench, name, chevron — the name is the middle one.
             guard clusters.count == 3 else {
                 XCTFail("expected wrench/name/chevron, got \(clusters.count) ink clusters "
@@ -88,19 +86,15 @@ final class ToolChipInkContrastTests: XCTestCase {
 
     // MARK: - Bands
 
-    /// The chevron: the last ink the row draws, right after the subtitle. Two checks
-    /// keep that true: the row paints no box (a fill would put its edge, not the
-    /// chevron, at the end of the ink), and the last cluster is glyph-sized, not text.
+    /// The chevron: the last ink cluster inside the capsule, which the row's own
+    /// layout puts `chipHPad` in from the painted edge.
     private func chevronBand(_ shot: Raster) throws -> Band {
-        XCTAssertLessThan(
-            abs(shot.rowPaper - shot.page), 0.025,
-            "the row paints a fill again — the row's layout changed and the last ink "
-                + "is no longer the chevron")
-        let clusters = try shot.rowInkClusters()
-        let last = try XCTUnwrap(clusters.last, "no ink in the row")
+        let clusters = try shot.capsuleInkClusters()
+        let last = try XCTUnwrap(clusters.last, "no ink inside the capsule")
+        let padEdge = shot.capsuleRight - Int(TimelineMetrics.chipHPad) * scale
         XCTAssertLessThanOrEqual(
-            last.x1 - last.x0, 12 * scale,
-            "the last cluster is \(last.x1 - last.x0)px wide, wider than a chevron — "
+            last.x1, padEdge + 2 * scale,
+            "the last cluster is not sitting on the capsule's trailing padding — "
                 + "the row's layout changed and this band no longer means 'chevron'")
         return last
     }
@@ -110,7 +104,7 @@ final class ToolChipInkContrastTests: XCTestCase {
     /// layout (margin, padding, wrench, spacing, name) is identical.
     private func subtitleBand(withDetail shot: Raster,
                               withoutDetail plain: Raster) throws -> Band {
-        let plainClusters = try plain.rowInkClusters()
+        let plainClusters = try plain.capsuleInkClusters()
         guard plainClusters.count == 3 else {
             // A thrown error, never an XCTSkip: a band this test can no longer
             // locate is a failure to report, not a case to quietly drop.
@@ -196,8 +190,8 @@ final class ToolChipInkContrastTests: XCTestCase {
 
     /// One rasterised row: per-pixel luminance plus the mean channel value, which
     /// is what edge-finding uses. Channels rather than luminance for edges because
-    /// a dark-mode fill (28/255 over a black page) is an obvious channel step and a
-    /// nearly invisible luminance one, which is how a fill coming back is caught.
+    /// dark mode's capsule (28/255 over a black page) is an obvious channel step
+    /// and a nearly invisible luminance one.
     struct Raster {
         let width: Int
         let height: Int
@@ -207,14 +201,10 @@ final class ToolChipInkContrastTests: XCTestCase {
         /// Vertical slice the text and the glyph both live in.
         private let y0: Int
         private let y1: Int
-        /// x just past the row's last ink (exclusive).
-        let inkRight: Int
-        private let rowLeft: Int
-        /// The page colour, read where nothing is drawn.
-        let page: Double
-        /// The paper under the row's ink: the mode of its interior. With no fill it
-        /// is the page.
-        let rowPaper: Double
+        /// x of the capsule's painted trailing edge (exclusive).
+        let capsuleRight: Int
+        private let capsuleLeft: Int
+        private let capsulePaper: Double
 
         init(_ image: UIImage, scale: Int) throws {
             let cg = try XCTUnwrap(image.cgImage, "render produced no bitmap")
@@ -243,35 +233,29 @@ final class ToolChipInkContrastTests: XCTestCase {
             chan = chans
             y0 = Int(Double(height) * 0.28)
             y1 = max(y0 + 1, Int(Double(height) * 0.72))
-            // The row is leading-aligned, so the far right is bare page. Scan in
-            // across the text slice, not one line: the chevron is a small glyph.
+            // The row is leading-aligned, so the far right is bare page.
             let midY = height / 2
             let page = chans[midY * width + (width - 2)]
-            let (sliceTop, sliceBottom) = (y0, y1)
-            func inked(_ x: Int) -> Bool {
-                (sliceTop..<sliceBottom).contains { abs(chans[$0 * width + x] - page) >= 0.025 }
-            }
             var right = width - 2
-            while right > 0, !inked(right) { right -= 1 }
-            self.page = page
-            rowLeft = Int(TimelineMetrics.hMargin) * scale
-            inkRight = right + 1
-            let from = min(rowLeft + 2 * scale, width - 1)
-            let to = min(max(from + 1, inkRight), width)
-            // Paper = the mode of the row's interior, where the ink is always the
-            // minority.
+            while right > 0, abs(chans[midY * width + right] - page) < 0.025 { right -= 1 }
+            capsuleLeft = Int(TimelineMetrics.hMargin) * scale
+            capsuleRight = right + 1
+            let from = min(capsuleLeft + 2 * scale, width - 1)
+            let to = min(max(from + 1, capsuleRight - 2 * scale), width)
+            // Paper = the capsule fill: the mode of its interior, where the ink is
+            // always the minority.
             var counts: [Double: Int] = [:]
             for y in y0..<y1 {
                 for x in from..<to {
                     counts[(chans[y * width + x] * 255).rounded() / 255, default: 0] += 1
                 }
             }
-            rowPaper = counts.max { $0.value < $1.value }?.key ?? page
+            capsulePaper = counts.max { $0.value < $1.value }?.key ?? page
             let lo = chans.min() ?? 0
             let hi = chans.max() ?? 0
             isBlank = hi - lo < 0.02
             debugSummary = "chan \(String(format: "%.3f…%.3f", lo, hi)) page=\(String(format: "%.3f", page)) "
-                + "row=[\(rowLeft),\(inkRight)) paper=\(String(format: "%.3f", rowPaper))"
+                + "capsule=[\(capsuleLeft),\(capsuleRight)) paper=\(String(format: "%.3f", capsulePaper))"
         }
 
         /// Nothing drew: every pixel the same. Used to fall back to a second
@@ -279,17 +263,17 @@ final class ToolChipInkContrastTests: XCTestCase {
         let isBlank: Bool
         let debugSummary: String
 
-        /// Columns of the row that carry ink, grouped into clusters with a
+        /// Columns inside the capsule that carry ink, grouped into clusters with a
         /// 4pt gap (wider than any letter gap at caption size, narrower than the
         /// row's 5pt element spacing).
-        func rowInkClusters() throws -> [Band] {
+        func capsuleInkClusters() throws -> [Band] {
             let inkStep = 0.09
             var inked: [Bool] = []
-            let from = rowLeft + 2 * scale
-            let to = max(from + 1, inkRight)
+            let from = capsuleLeft + 2 * scale
+            let to = max(from + 1, capsuleRight - 2 * scale)
             for x in from..<to {
                 var hit = false
-                for y in y0..<y1 where abs(chan[y * width + x] - rowPaper) > inkStep {
+                for y in y0..<y1 where abs(chan[y * width + x] - capsulePaper) > inkStep {
                     hit = true
                     break
                 }
@@ -310,7 +294,7 @@ final class ToolChipInkContrastTests: XCTestCase {
                 }
             }
             if let s = start { out.append(Band(x0: s, x1: lastInk + 1)) }
-            XCTAssertFalse(out.isEmpty, "no ink found in the row")
+            XCTAssertFalse(out.isEmpty, "no ink found inside the capsule")
             return out
         }
 

@@ -7,7 +7,7 @@
  * the server keeps on each task, so the numbers here are the Org page's, the task list's
  * and the phone's. Nothing here is written by the lead by hand.
  *
- * A row opens its task on Home, as every task reference does (useOpenTask); a choice that needs
+ * A row opens its task the way a chip does (the session panel's peek); a choice that needs
  * the user opens the Page at it. Narrow panes stack each row (board-status.css).
  */
 import { memo, useMemo, useState, type ReactNode } from 'react';
@@ -20,7 +20,6 @@ import { timeAgo } from '@/utils/time';
 import * as ICONS from '@/components/common/Icons';
 import { usePageViewOf } from '@/utils/view-memory';
 import { log } from '@/utils/log';
-import { useOpenTask } from '@/hooks/useOpenTask';
 import { apiPost } from '@/api/client';
 import { LiveActivityLine } from './LiveActivityLine';
 import { WithdrawAnswerButton } from '@/components/tasks/AnsweredForLine';
@@ -40,6 +39,7 @@ export interface BoardStatusViewProps {
   tasks: readonly Task[];
   /** The task store has not answered yet. */
   loading: boolean;
+  onOpenTask: (taskId: string) => void;
   /** Show the Page (a choice that needs the user is answered there). */
   onOpenPage?: () => void;
   /** Under a team of one (the owner alone): what the user can do next (ask its leader for a page). */
@@ -149,8 +149,7 @@ function NextCell({ row, onOpenPage }: { row: StatusRow; onOpenPage?: () => void
 /** The board owner's word: the org's own names on Main and a project's lead, else "Lead". */
 const ownerWord = (t: Pick<Task, 'org_role'> | undefined) => (t?.org_role === 'main' ? CEO_LABEL : t?.org_role === 'lead' ? VP_LABEL : 'Lead');
 
-const Row = memo(function Row({ row, onOpenPage }: { row: StatusRow; onOpenPage?: () => void }) {
-  const openTask = useOpenTask();
+const Row = memo(function Row({ row, onOpenTask, onOpenPage }: { row: StatusRow; onOpenTask: (id: string) => void; onOpenPage?: () => void }) {
   const t = row.task;
   const title = orgDisplayTitle(t);
   const when = ago(rowTime(row));
@@ -164,8 +163,8 @@ const Row = memo(function Row({ row, onOpenPage }: { row: StatusRow; onOpenPage?
       tabIndex={0}
       role="button"
       aria-label={`${title}: ${isNotStartedStatus(row.status) ? NOT_STARTED_LABEL : USER_STATE_LABELS[shown]}. Open the task`}
-      onClick={() => openTask(t.id)}
-      onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openTask(t.id); } }}
+      onClick={() => onOpenTask(t.id)}
+      onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpenTask(t.id); } }}
     >
       <td className="bs-c-status"><StatusPill row={row} /></td>
       <td className="bs-c-task">
@@ -239,8 +238,7 @@ function TeamStopControl({ owner, ownerId, working }: { owner: Task | undefined;
   );
 }
 
-export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenPage, soloExtra }: BoardStatusViewProps) {
-  const openTask = useOpenTask();
+export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenTask, onOpenPage, soloExtra }: BoardStatusViewProps) {
   // Each board's filter stays as it was left (utils/view-memory.ts).
   // A To read chip an older build kept opens as Needs you (statusFilterShown).
   const [kept, setFilter] = usePageViewOf<KeptStatusFilter>('board', 'statusFilter', ownerId, 'open', isStatusFilter);
@@ -275,7 +273,7 @@ export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenPag
               {brief.needs.map((n, i) => (
                 <span key={n.id}>
                   {i > 0 && '; '}
-                  <button type="button" className="bs-link" onClick={() => openTask(n.id)}>{n.title}</button>
+                  <button type="button" className="bs-link" onClick={() => onOpenTask(n.id)}>{n.title}</button>
                   {n.line && <> (<AgentText compact inline {...taskTextSource(tasks.find((t) => t.id === n.id), 'needs')} text={n.line.replace(/\.$/, '')} />)</>}
                   {n.unverified && <span className="bs-unverified" data-testid="board-brief-unverified"> not verified</span>}
                 </span>
@@ -314,7 +312,7 @@ export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenPag
             <tr><th className="bs-c-status">Status</th><th>Task</th><th>Where it stands</th><th>Next · who</th><th className="bs-c-when">Updated</th></tr>
           </thead>
           <tbody>
-            {rows.map((r) => <Row key={r.task.id} row={r} onOpenPage={onOpenPage} />)}
+            {rows.map((r) => <Row key={r.task.id} row={r} onOpenTask={onOpenTask} onOpenPage={onOpenPage} />)}
           </tbody>
         </table>
       )}

@@ -38,7 +38,6 @@ import { SHOWN_AFTER_PAINT_MAX_MS, SNAP_ROWS, type TasksSnap } from './ext-snaps
 import { latestReplies } from './ask-words-read';
 import { useAskWords } from './useExtAsks';
 import type { AgentTextSource } from '@/utils/agent-text-source';
-import { TaskOpenerContext } from '@/hooks/useOpenTask';
 import './ext-panel.css';
 
 export function PopoutExtTasks() {
@@ -286,9 +285,7 @@ function TaskReply({ task, line, rowState, reply, onChange }: { task: Task; line
       <div className="ext-task-asked" data-testid="ext-task-asked" ref={saidRef}>
         {/* The task's ask and last message, agent text: a path, link, task or letter in it opens
             (a task in a new tab, as Open in Walnut does). */}
-        <TaskOpenerContext.Provider value={openTask}>
-          {said.map((s, i) => <AgentText key={i} compact className={i === said.length - 1 && s === lastMessage ? 'ext-task-said ext-task-last' : 'ext-task-said'} {...(saidSources[i] ?? { unknownSource: true })} text={s} />)}
-        </TaskOpenerContext.Provider>
+        {said.map((s, i) => <AgentText key={i} compact className={i === said.length - 1 && s === lastMessage ? 'ext-task-said ext-task-last' : 'ext-task-said'} onTaskClick={openTask} {...(saidSources[i] ?? { unknownSource: true })} text={s} />)}
       </div>
     )}
     {sessionId

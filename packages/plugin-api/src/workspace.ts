@@ -62,18 +62,7 @@ export interface WorkspaceRepoRef {
 }
 
 export interface DetectArgs { anchor: string; markerRoot?: string }
-export interface DetectResult {
-  claimed: boolean
-  root?: string
-  reason?: string
-  /**
-   * The inputs a workspace of this folder would be made with (for example the package the
-   * folder belongs to): the draft fills its fields with them, and a code task's default
-   * workspace is made with them, so a provider whose fields are required can still be the
-   * default. Strings, booleans and string lists only; Walnut checks them against inputSchema.
-   */
-  inputs?: Record<string, string | boolean | string[]>
-}
+export interface DetectResult { claimed: boolean; root?: string; reason?: string }
 
 export interface CreateArgs {
   /** The folder the task was started from. */

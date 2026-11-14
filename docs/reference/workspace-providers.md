@@ -17,29 +17,6 @@ The task is filed at once and shows **Preparing workspace…** with the provider
 
 On the task, the kebab menu's **Workspace** row shows the provider, the state, the folder, the branch and the repositories, and holds **Remove workspace…**.
 
-## By default for code tasks
-
-With **Settings › Experimental › Code tasks start in an isolated workspace** on, a task that works on code gets a workspace without anyone asking: the first session of an ordinary task whose folder a provider claims (a git repository, or a folder a plugin's marker or detect step claims) starts in a new workspace from the provider that claims it with the highest priority. A plugin provider (default priority 50) wins over `git-worktree` (10), exactly as the draft's provider pills order them.
-
-What turns it on or off, most specific first:
-
-- **The start.** An agent's `task_start` or `task_create` passes `workspace: false` to work in the folder itself (a task that must share its checkout: it edits files another task or the user has open there, or it only reads). A draft's chip (below) does the same.
-- **The project.** The project's settings have a **Workspace** row: *Isolated workspace* turns it on for this project's tasks even while the global setting is off, *Folder itself* turns it off; *Global* follows the experiment. Agents set it with `project_metadata_update` (`isolated_workspace: "on" | "off"`, null clears it).
-- **Everyone else.** The experiment, off until the user turns it on.
-
-Never isolated by default, whatever the settings say:
-
-- a task that already ran a session: its conversation keeps the folder it ran in (a continue, an engine switch, a transfer, a recovery);
-- org nodes (Main, a VP, a lead, a router), Walnut's own agents and plugin tasks: they run in their own task directory;
-- a folder that is a task directory (a task's own or another's) or inside another task's workspace (a teammate shares its lead's copy on purpose);
-- a top provider whose required fields nobody gave and its detect step did not suggest (detect may answer `inputs`, see the protocol below), and a host that cannot answer in time: the start goes on in the folder.
-
-The agent's answer says the workspace is being made and how to opt out. The session's prompt says it runs in an isolated workspace, which provider made it and from which folder, so the agent works and commits there. If a default workspace cannot be made (git fails, the host is lost), nobody is asked to Retry: the session starts in the folder itself and its first message says why.
-
-In a new draft, the option is then on as one **chip** beside the folder pill ("⑂ Git worktree", or the plugin's name) once the host has said a provider claims the folder; a folder nothing claims shows nothing. Its × works in the folder itself, and the draft keeps that choice across a reload. The More menu's **Isolated workspace** row reads the same, and turning it on there shows the full options as before. The ▶ Start of an existing task that never ran a session gets its inline toggle already on.
-
-Setup and teardown scripts run for a default workspace exactly as for a picked one.
-
 ## The built-in git worktree
 
 - The worktree lives in a folder Walnut owns on that host, never inside the repository: `~/.open-walnut-worktrees/<repo>/<task-name>`. The daemon reads `WALNUT_WORKTREES_ROOT` to put it elsewhere.
@@ -183,7 +160,7 @@ Every line on **stderr** is progress: the last line shows on the task while it w
 
 | Operation | arguments | result |
 |---|---|---|
-| `detect` | `anchor`, `markerRoot` (when a marker was found) | `claimed` (boolean), `root`, `reason`, `inputs` (optional: the inputs a workspace of this folder uses, such as the package it belongs to; the draft fills its fields with them and a default workspace is made with them) |
+| `detect` | `anchor`, `markerRoot` (when a marker was found) | `claimed` (boolean), `root`, `reason` |
 | `create` | `anchor`, `name` (a safe one-segment name), `markerRoot`, `taskId`, `title`, `baseRef`, `inputs` | `root`, `cwd`, `repos`, `branch` |
 | `listRepos` | `root`, `inputs` | `repos` |
 | `status` | (not used today: Walnut probes the repositories itself) | |

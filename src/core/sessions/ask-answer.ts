@@ -23,7 +23,6 @@
  */
 import { log } from '../../logging/index.js';
 import { needsUsersWords } from '../approval-kinds.js';
-import { settlerFor, SettleError, type SettledVia } from './ask-settle.js';
 import { asksPerson } from '../approvals/ask-me.js';
 import { isLocalDraftAsk, isTeamCodeAsk } from '../org/user-kind.js';
 import { ambiguousIdMessage, matchIdRef, missingIdMessage } from '../../lib/id-ref.js';
@@ -35,50 +34,24 @@ import { reportDecision } from '../ask-decision.js';
 import { askAnswerLine, askKey, keptAnswers, type AskAnswer, type SameAskFold } from '../same-ask.js';
 
 export class AskAnswerError extends Error {
-  constructor(readonly code: 'not_above' | 'no_open_ask' | 'user_words' | 'user_spoke_since' | 'bad_request' | 'human_approval' | 'not_confirmed', message: string, readonly status = 409) {
+  constructor(readonly code: 'not_above' | 'no_open_ask' | 'user_words' | 'user_spoke_since' | 'bad_request', message: string, readonly status = 409) {
     super(message);
     this.name = 'AskAnswerError';
   }
 }
 
 /**
- * Where an ask the user's Needs you shows lives, so an answer in his place settles it there:
- *  - `report`: the session's own question, its status report (FOR_USER line);
- *  - `chat`: an org node's own question, folded into its chat (user-status.ts asOrgNode);
- *  - `choice`: a Board choice, answered on its Board (boards/board-choice-answer.ts);
- *  - `prompt`: a prompt open in its session: an AskUserQuestion is answered, any other tool's
- *    prompt is denied with the answer as its message (a grant stays the person's);
- *  - `letter`: an open decision letter, answered (or settled) in the inbox with its own checks.
- * Every source of a Needs you line is placed here or named as no question
- * (tests/core/sessions/answers-ask-every-need-ratchet.test.ts).
+ * The session's own question to the user this task shows now, or why there is none to answer here:
+ * a Board choice is answered on the Board, and an ask shown on another task (a fold) is answered
+ * there, where the user sees it.
  */
-export type AskWhere = 'report' | 'chat' | 'choice' | 'prompt' | 'letter';
-
-export type OpenAsk = { ask: string; where: AskWhere; choice?: { board: string; id: string } } | { none: string };
-
-/**
- * The question to the user this task shows now, and where it lives, or why there is none to
- * answer here: an ask shown on another task (a fold) is answered there, where the user sees it.
- */
-export function openAskOf(t: Pick<Task, 'user_status' | 'status_report'>): OpenAsk {
+export function openAskOf(t: Pick<Task, 'user_status' | 'status_report'>): { ask: string } | { none: string } {
   const us = t.user_status;
+  if (us?.state === 'needs' && us.ask && us.source === 'session') return { ask: us.ask };
+  if (us?.state === 'needs' && us.source === 'choice') return { none: 'its ask is a Board choice: answer it on the Board (board_post / the choice)' };
   if (us?.sameAsk) return { none: `its ask shows on "${us.sameAsk.title}" (${us.sameAsk.id}), which asks the user the same: answer that task` };
-  if (us?.state === 'needs' && us.ask) {
-    if (us.source === 'session') return { ask: us.ask, where: 'report' };
-    if (us.source === 'choice') return us.choice ? { ask: us.ask, where: 'choice', choice: { ...us.choice } } : { none: 'its Board choice names no Board: answer it on the Board (board_get)' };
-    if (us.source === 'prompt') return { ask: us.ask, where: 'prompt' };
-    if (us.source === 'letter') return { ask: us.ask, where: 'letter' };
-    if (us.source === 'error') return { none: `its Needs you is a failure only the user can clear ("${us.ask.slice(0, 160)}"), not a question: once it is fixed, retry it (task_restart)` };
-  }
-  // An org node's own question, folded into its chat: settled where it lives (its report, a choice, a prompt, a letter).
-  if (us?.state === 'waiting' && us.kind === 'you' && us.chatAsk) {
-    const from = us.chatAskFrom;
-    if (from === 'choice') return us.choice ? { ask: us.chatAsk, where: 'choice', choice: { ...us.choice } } : { none: 'its Board choice names no Board: answer it on the Board (board_get)' };
-    return { ask: us.chatAsk, where: from ?? 'chat' };
-  }
   const r = t.status_report;
-  if (r?.state === 'needs' && r.ask && (us?.snoozed?.ask || us?.answeredFor || us?.transient || us?.state === 'working')) return { ask: r.ask, where: 'report' };
-  if (us?.toRead) return { none: 'it asks nothing: it has a result for the user to read (complete it with task_complete once it is done)' };
+  if (r?.state === 'needs' && r.ask && (us?.snoozed?.ask || us?.answeredFor || us?.transient || us?.state === 'working')) return { ask: r.ask };
   return { none: 'it asks the user nothing now' };
 }
 
@@ -86,9 +59,9 @@ export function openAskOf(t: Pick<Task, 'user_status' | 'status_report'>): OpenA
  * A COMPLETE task reads Done, so its ask is the one its last report still asked, if any: answered,
  * it is recorded (a reopened task asking it again stays off Needs you), and never delivered.
  */
-function finishedAskOf(t: Pick<Task, 'status_report'>): OpenAsk {
+function finishedAskOf(t: Pick<Task, 'status_report'>): { ask: string } | { none: string } {
   const r = t.status_report;
-  if (r?.state === 'needs' && r.ask) return { ask: r.ask, where: 'report' };
+  if (r?.state === 'needs' && r.ask) return { ask: r.ask };
   return { none: 'it is complete and asks the user nothing (a message would reopen it; task_start it only if it must work again)' };
 }
 
@@ -177,11 +150,6 @@ export interface PreparedAnswer {
   userSaid?: UserSaid;
   /** Record it on the asker once the message is queued. */
   commit: () => Promise<void>;
-  /** Where the ask lives (openAskOf). */
-  where: AskWhere;
-  /** For an ask that lives outside the task's report (a Board choice, a prompt, a letter): settle it
-   *  there instead of sending a message (ask-settle.ts). */
-  settle?: () => Promise<SettledVia>;
 }
 
 /**
@@ -211,17 +179,12 @@ export async function prepareAskAnswer(
   if ('none' in open) {
     throw new AskAnswerError('no_open_ask', `Not sent: "${target.title}" (${target.id}) has no ask to answer here: ${open.none}. Or send it without answers_ask.`);
   }
-  const { ask, where } = open;
+  const { ask } = open;
   // An ask of a kind only the user approves (an outward send, spending, credentials...) is answered in
   // their place only on their own words (2026-11-04 review: Main could otherwise approve a spend).
   // With approvals off an outward step is no longer his (approval-kinds.ts, the same list the
   // prompt's approvals-off line reads); spending, credentials and the rest stay his.
-  // The kind is the report's: it says what the ask approves only for the report's own ask (or an org
-  // node's, from its report); a choice, prompt or letter carries its own checks where it is settled.
-  // A prompt over a report that still asks keeps the report's kind (the prompt shows first, user-status.ts).
-  const kind = where === 'report' || where === 'chat' || (where === 'prompt' && target.status_report?.state === 'needs')
-    ? target.status_report?.ask_own?.kind : undefined;
-  const askMe = await asksPerson();
+  const kind = target.status_report?.ask_own?.kind;
   const words = (userWords ?? '').replace(/\s+/g, ' ').trim();
   // Older reports may label owned code work or an unpublished local draft outward. Correct
   // only the matching plain ask, never a hidden choice, actual send or another approval kind.
@@ -229,7 +192,7 @@ export async function prepareAskAnswer(
   const localWork = kind === 'outward' && askKey(report?.ask) === askKey(ask) && !report?.ask_options?.length
     && (!report?.ask_kind || report.ask_kind === 'yes_no' || report.ask_kind === 'text')
     && (isLocalDraftAsk(ask, report?.ask_more) || isTeamCodeAsk(ask, report?.ask_own?.why, report?.ask_more));
-  if (caller && kind && !localWork && words.length < 10 && needsUsersWords(kind, askMe)) {
+  if (caller && kind && !localWork && words.length < 10 && needsUsersWords(kind, await asksPerson())) {
     throw new AskAnswerError('user_words',
       `Not sent: "${target.title}" asks the user to approve a step of kind ${kind}, which only the user decides. `
       + 'Answer it in their place only with their own words: pass user_words quoting what they said (task_history rows with sentBy "person", or their thread message). Otherwise leave it for them.');
@@ -242,7 +205,7 @@ export async function prepareAskAnswer(
   }
   // His words in the task come first: an answer in his place never goes against what he already
   // wrote there unseen (2026-11-07, Main's reflection: "local only" after his "submit the cr").
-  const check = caller ? await settleCheck(target, caller.id, userWords, 'sent', everything, { anyAsk: true }) : null;
+  const check = caller ? await settleCheck(target, caller.id, userWords, 'sent', everything) : null;
   if (check?.refusal) throw new AskAnswerError('user_spoke_since', check.refusal);
   const userSaid = check?.said;
   const byTitle = caller ? caller.title : 'The user';
@@ -256,18 +219,10 @@ export async function prepareAskAnswer(
     ...decisionOfAsk(target, ask),
     ...(opts.withdraw ? { withdrawn: true as const } : {}),
   };
-  const line = opts.withdraw
-    ? `${askAnswerLine(ask, byTitle).slice(0, -1)} The user withdrew this ask for good: never put it to them again, in any words, unless they bring it up.]`
-    : askAnswerLine(ask, byTitle);
-  const settle = await asAnswerError(() => settlerFor({
-    where, target, ...('choice' in open && open.choice ? { choice: open.choice } : {}), text, line, withdraw: opts.withdraw === true, byTitle,
-    ...(caller ? { callerTaskId: caller.id } : {}), ...(callerSessionId?.trim() ? { callerSessionId: callerSessionId.trim() } : {}),
-    ...(userWords ? { userWords } : {}), askMe,
-  }));
   return {
-    line,
-    where,
-    ...(settle ? { settle: () => asAnswerError(settle) } : {}),
+    line: opts.withdraw
+      ? `${askAnswerLine(ask, byTitle).slice(0, -1)} The user withdrew this ask for good: never put it to them again, in any words, unless they bring it up.]`
+      : askAnswerLine(ask, byTitle),
     target: { id: target.id, title: target.title, phase: target.phase },
     ...(userSaid ? { userSaid } : {}),
     commit: async () => {
@@ -281,14 +236,6 @@ export async function prepareAskAnswer(
       log.task.info('ask-answer: answered for the user', { taskId: target.id, by: answer.by });
     },
   };
-}
-
-/** A settle's refusal as answers_ask's own (ask-settle.ts SettleError, its code and status kept). */
-async function asAnswerError<T>(run: () => Promise<T>): Promise<T> {
-  try { return await run(); } catch (err) {
-    if (err instanceof SettleError) throw new AskAnswerError(err.code, err.message, err.status);
-    throw err;
-  }
 }
 
 /**

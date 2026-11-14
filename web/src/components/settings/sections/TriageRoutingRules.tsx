@@ -1,5 +1,5 @@
 /**
- * Settings > Inbox Triage > Routing rules: the standing "messages about X go to task Y" table every
+ * Settings > Inbox Triage > Routing rules: the standing "mail about X goes to task Y" table every
  * triage batch reads (src/core/triage/routing-rules.ts). The user, Main and the VPs write the same
  * rules (ops triage_rule_set / triage_rule_delete); each row says who wrote it and what it routed.
  */

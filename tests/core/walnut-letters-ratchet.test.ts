@@ -175,7 +175,7 @@ describe('(d) a kind Walnut stops sending is retired, and its open letters settl
   const EVER_REGISTERED = [
     'host-sign-in', 'host-exec-ask', 'budget-paused', 'git-sync-secret-hold', 'git-sync-secret-aside', 'org-report',
     'mail-approval', 'mail-unsubscribe', 'mail-digest', 'offline-conflict', 'trigger-stopped',
-    'local-network-blocked', 'ssh-cert-expiry', 'mail-no-router',
+    'local-network-blocked', 'ssh-cert-expiry',
   ]
   it('every kind ever registered is live or retired, and a new live kind is added to the list above', async () => {
     const { RETIRED_LETTER_KINDS } = await import('../../src/core/human-inbox/walnut-letters/retired.js')

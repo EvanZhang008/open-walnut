@@ -134,18 +134,9 @@ final class ChatStore {
     /// Sends into a turn still on their way, by conversation: anything sent there
     /// meanwhile that does not go into the turn too waits behind them.
     private(set) var joinsOut: [String: Int] = [:]
-    /// How often a followed send's line is read: fast for `laneFollowLimit`, then slower,
-    /// but never stopped while a bubble still reads Queued (2026-11-11: a follow that ran
-    /// out on the wall clock, or was cut by the app going away, left a delivered message
-    /// Queued with nothing left to read its line).
+    /// How often a followed send's line is read, and for how long at most.
     nonisolated(unsafe) static var laneFollowPoll: Duration = .milliseconds(1500)
     nonisolated(unsafe) static var laneFollowLimit: TimeInterval = 10 * 60
-    nonisolated(unsafe) static var laneFollowSlowPoll: Duration = .seconds(15)
-
-    /// The wait before the next read of a followed line, `elapsed` into the follow.
-    static func laneFollowDelay(elapsed: TimeInterval) -> Duration {
-        elapsed < laneFollowLimit ? laneFollowPoll : laneFollowSlowPoll
-    }
 
     var conversations: [ConversationSummary] = []
     /// The agent's asks exactly as the Mac's Ask drawer lists them
@@ -2645,8 +2636,7 @@ final class ChatStore {
     }
 
     /// Read the lane's line while a send into it is followed, until each has shown
-    /// Delivered: fast at first, slower after `laneFollowLimit`, and never given up while
-    /// a bubble still reads Queued (`laneFollowDelay`).
+    /// Delivered (and never longer than `laneFollowLimit`).
     private func followLane(_ laneID: String) -> SessionQueueModel {
         let queue: SessionQueueModel
         if let current = laneQueue, current.sessionId == laneID {
@@ -2659,34 +2649,20 @@ final class ChatStore {
             queue.onWithdrawn = { [weak self] messageID in self?.joinedWithdrawn(messageID) }
             laneQueue = queue
         }
-        if laneFollow == nil { startLaneFollow(readFirst: false) }
-        return queue
-    }
-
-    /// The follow loop. `readFirst`: the line is read at once (the screen is back, and what
-    /// it last read may be long gone).
-    private func startLaneFollow(readFirst: Bool) {
-        laneFollow?.cancel()
-        laneFollow = Task { @MainActor [weak self] in
-            let began = Date()
-            var wait = !readFirst
-            while !Task.isCancelled {
-                if wait { try? await Task.sleep(for: Self.laneFollowDelay(elapsed: Date().timeIntervalSince(began))) }
-                wait = true
-                guard let self, let queue = self.laneQueue, !Task.isCancelled else { return }
-                if queue.sendStates.isEmpty { break }
-                await queue.refresh()
+        if laneFollow == nil {
+            laneFollow = Task { @MainActor [weak self] in
+                let deadline = Date().addingTimeInterval(Self.laneFollowLimit)
+                while !Task.isCancelled, Date() < deadline {
+                    try? await Task.sleep(for: Self.laneFollowPoll)
+                    guard let self, let queue = self.laneQueue, !Task.isCancelled else { return }
+                    if queue.sendStates.isEmpty { break }
+                    await queue.refresh()
+                }
+                guard !Task.isCancelled else { return }
+                self?.laneFollow = nil
             }
-            guard !Task.isCancelled else { return }
-            self?.laneFollow = nil
         }
-    }
-
-    /// The screen is back: a send still followed is read again now, and followed on. Its
-    /// follow stopped when the screen went away (`closeStream`), and nothing else reads the line.
-    private func resumeLaneFollow() {
-        guard laneFollow == nil, let queue = laneQueue, !queue.sendStates.isEmpty else { return }
-        startLaneFollow(readFirst: true)
+        return queue
     }
 
     /// Take back a message sent into the turn that is still waiting to go in.
@@ -2766,8 +2742,7 @@ final class ChatStore {
         activity = nil
         forgetLiveTurn()
         // The lane line is read only while the screen shows it; a send into the turn
-        // still on its way finishes on its own, and a followed one is read again when the
-        // screen is back (`resumeLaneFollow`).
+        // still on its way finishes on its own (its bubble is settled by the reload).
         laneFollow?.cancel()
         laneFollow = nil
     }
@@ -2779,7 +2754,6 @@ final class ChatStore {
         if let id = activeID {
             trackTask { [weak self] in await self?.loadMessages(id) }
         }
-        resumeLaneFollow()
         // Nothing here assigns `streaming`, so a message banked mid-turn and left
         // while the turn ended off-screen has no flag transition to ride: the badge
         // kept promising "delivers when the current reply finishes" with no reply to

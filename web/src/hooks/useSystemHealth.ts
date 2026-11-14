@@ -14,8 +14,6 @@ export interface GitSyncHealth {
   error?: string;
   lastCommitAt?: string;
   consecutiveFailures: number;
-  /** Quiet private-data holds, not errors and never badge contributors. */
-  heldFiles?: Array<{ file: string; kinds: string[]; lines: number[]; since: string }>;
   /** This server keeps no backup by design (the Demo, a test server, a replica): never a problem to show. */
   off?: 'demo' | 'test' | 'copy';
 }

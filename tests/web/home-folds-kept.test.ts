@@ -231,7 +231,7 @@ describe('guard: a locate writes folds only to reveal a row nothing draws', () =
   const lines = effect.split('\n');
 
   it('the effect decides `reveal` from whether the panel already draws the row', () => {
-    expect(effect).toContain('const reveal = isUserLocate && (searchCleared || !rowShownInPanel(focusedTaskId));');
+    expect(effect).toContain('const reveal = isUserLocate && !rowShownInPanel(focusedTaskId);');
     expect(effect).toContain('revealInSectionRef.current(task, reveal)');
   });
 

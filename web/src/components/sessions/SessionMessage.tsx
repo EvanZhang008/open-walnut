@@ -265,6 +265,7 @@ interface SessionMessageProps {
   /** The calls of a row whose words drew it already (SessionChatHistory's
    *  `toolsAfter`): no second copy, pin or time strip for the same message. */
   noActions?: boolean;
+  onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   onFileOpen?: (path: string, line?: number) => void;
 }
@@ -324,13 +325,14 @@ export function CollapsedPlanWrite({ filePath }: { filePath: string }) {
 /** Accent-bordered card rendering the plan markdown, collapsible.
  *  Consumes PlanContentContext to show live plan content (bypasses memo).
  *  Falls back to the snapshot `content` prop when context is null (initial load, non-plan session). */
-export function PlanCard({ content, disclosureId, sessionId, sessionCwd, sessionHost, onSessionClick, onFileOpen }: {
+export function PlanCard({ content, disclosureId, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: {
   content: string;
   disclosureId?: string;
   /** The plan's session: pictures load from its machine, clicks use the panel's onFileOpen. */
   sessionId?: string;
   sessionCwd?: string;
   sessionHost?: string;
+  onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   onFileOpen?: (path: string, line?: number) => void;
 }) {
@@ -349,7 +351,7 @@ export function PlanCard({ content, disclosureId, sessionId, sessionCwd, session
     [displayContent, planCwd, imageHost, imagesKnown, labelsVersion],
   );
   const handleLinks = useEntityClickHandler(
-    onSessionClick,
+    onTaskClick, onSessionClick,
     foreign ? writer.onFileOpen : onFileOpen,
     foreign ? writer.fileHost : sessionHost,
     foreign ? writer.fileSessionId : sessionId,
@@ -433,8 +435,10 @@ function InjectedContextRow({ text }: { text: string }) {
 export { toolRunPhrase };
 
 /** Shared merged-row shell: muted phrase line + expandable children. */
-export function ToolRunShell({ phrase, calls, failCount, running, count, disclosureId, children }: {
+export function ToolRunShell({ phrase, calls, failCount, running, count, disclosureId, peek, children }: {
   phrase: string;
+  /** What the run does now (StepRows LivePeek), under the closed line while it runs. */
+  peek?: React.ReactNode;
   /** The run's tool calls: the line then counts them by outcome (ran, denied, waiting for
    *  an open prompt) and names the person's answers to the prompts they passed through
    *  (waiting-tools.ts). Without them the line is `phrase`. */
@@ -502,6 +506,7 @@ export function ToolRunShell({ phrase, calls, failCount, running, count, disclos
           </>
         ) : line}
       </button>
+      {!open && running && peek && <div className="process-fold-peek" data-testid="run-peek">{peek}</div>}
       {open && <div className="tool-run-body"><SoleCallContext.Provider value={calls?.length === 1}>{children}</SoleCallContext.Provider></div>}
     </div>
   );
@@ -622,7 +627,7 @@ export const SystemGroupRun = memo(function SystemGroupRun({ members }: { member
 });
 
 /** History-side merged run of generic tools. */
-function ToolRunRow({ tools, assistantLabel, sessionId, sessionCwd, sessionHost, onSessionClick, onFileOpen }: {
+function ToolRunRow({ tools, assistantLabel, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: {
   tools: SessionHistoryTool[];
 } & Omit<SessionToolCallProps, 'tool'>) {
   const phrase = toolRunPhrase(tools);
@@ -630,7 +635,7 @@ function ToolRunRow({ tools, assistantLabel, sessionId, sessionCwd, sessionHost,
   return (
     <ToolRunShell phrase={phrase} calls={tools.map(historyRunCall)} failCount={failCount} running={tools.some((t) => t.liveStatus === 'calling')} count={tools.length} disclosureId={disclosureIds.run({ toolUseId: tools[0]?.toolUseId })}>
       {tools.map((t, i) => (
-        <SessionToolCall key={t.toolUseId ?? i} tool={t} {...(t.liveStatus ? { status: t.liveStatus } : {})} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+        <SessionToolCall key={t.toolUseId ?? i} tool={t} {...(t.liveStatus ? { status: t.liveStatus } : {})} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
       ))}
     </ToolRunShell>
   );
@@ -759,12 +764,13 @@ function streamToolOf(b: StreamingBlock & { type: 'tool_call' }): SessionHistory
  *  body a persisted run shows (MergedHistoryToolRun), so the row does not change
  *  shape when history absorbs it. `live` marks the last member as still
  *  receiving tokens. */
-export function StreamRunMembers({ members, live, sessionId, sessionCwd, sessionHost, onSessionClick, onFileOpen }: {
+export function StreamRunMembers({ members, live, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: {
   members: readonly StreamRunMember[];
   live?: boolean;
   sessionId?: string;
   sessionCwd?: string;
   sessionHost?: string;
+  onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   onFileOpen?: (path: string, line?: number) => void;
 }) {
@@ -781,6 +787,7 @@ export function StreamRunMembers({ members, live, sessionId, sessionCwd, session
           sessionCwd={sessionCwd}
           sessionHost={sessionHost}
           sessionId={sessionId}
+          onTaskClick={onTaskClick}
           onSessionClick={onSessionClick}
           onFileOpen={onFileOpen}
         />
@@ -798,7 +805,7 @@ export function StreamRunMembers({ members, live, sessionId, sessionCwd, session
  *  memo: the parent re-renders every 150ms streaming flush; with a stable
  *  `messages` array (built once in the memoized history-parts pass) this
  *  entire subtree skips — the fix for whale-session scroll/typing lag. */
-export const MergedHistoryToolRun = memo(function MergedHistoryToolRun({ messages, trailingBlocks = [], trailingLive, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, onSessionClick, onFileOpen }: {
+export const MergedHistoryToolRun = memo(function MergedHistoryToolRun({ messages, trailingBlocks = [], trailingLive, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: {
   messages: SessionHistoryMessage[];
   trailingBlocks?: readonly StreamRunMember[];
   trailingLive?: boolean;
@@ -806,6 +813,7 @@ export const MergedHistoryToolRun = memo(function MergedHistoryToolRun({ message
   sessionId?: string;
   sessionCwd?: string;
   sessionHost?: string;
+  onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   onFileOpen?: (path: string, line?: number) => void;
 }) {
@@ -829,7 +837,7 @@ export const MergedHistoryToolRun = memo(function MergedHistoryToolRun({ message
         <div key={m.msgId ?? mi} data-find-row={m.msgId ?? m.walnutMessageId}>
           {m.thinking && <SessionThinking text={m.thinking} disclosureId={disclosureIds.thinking(m.msgId)} />}
           {(m.tools ?? []).map((t, ti) => (
-            <SessionToolCall key={t.toolUseId ?? ti} tool={t} {...(t.liveStatus ? { status: t.liveStatus } : {})} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+            <SessionToolCall key={t.toolUseId ?? ti} tool={t} {...(t.liveStatus ? { status: t.liveStatus } : {})} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
           ))}
         </div>
       ))}
@@ -839,6 +847,7 @@ export const MergedHistoryToolRun = memo(function MergedHistoryToolRun({ message
         sessionId={sessionId}
         sessionCwd={sessionCwd}
         sessionHost={sessionHost}
+        onTaskClick={onTaskClick}
         onSessionClick={onSessionClick}
         onFileOpen={onFileOpen}
       />
@@ -860,6 +869,7 @@ interface GenericToolCallProps {
   /** Session id — lets path resolution consult this session's transcript, which
    *  is the cheapest and most accurate way to turn a partial path into a real one. */
   sessionId?: string;
+  onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   onFileOpen?: (path: string, line?: number, term?: undefined, endLine?: number) => void;
 }
@@ -874,7 +884,7 @@ export const GenericToolCall = memo(function GenericToolCall(props: GenericToolC
   const sendResult = props.result ?? (props.tool as { result?: string }).result;
   const outbound = useMemo(() => detectOutboundCalls(props.tool as SessionHistoryTool, sendResult), [props.tool, sendResult]);
   if (outbound.length > 0) {
-    return <SessionOutboundCards calls={outbound} toolUseId={props.tool.toolUseId} running={sendResult === undefined && props.status === 'calling'} result={sendResult} sessionCwd={props.sessionCwd} sessionHost={props.sessionHost} sessionId={props.sessionId} onSessionClick={props.onSessionClick} />;
+    return <SessionOutboundCards calls={outbound} toolUseId={props.tool.toolUseId} running={sendResult === undefined && props.status === 'calling'} result={sendResult} sessionCwd={props.sessionCwd} sessionHost={props.sessionHost} sessionId={props.sessionId} onTaskClick={props.onTaskClick} onSessionClick={props.onSessionClick} />;
   }
   // A Walnut op through the CLI (`walnut tools call <op> …`) renders as the MCP
   // tool it stands in for, never as a raw Bash card.
@@ -889,7 +899,7 @@ export const GenericToolCall = memo(function GenericToolCall(props: GenericToolC
   return <GenericToolCallInner {...props} />;
 });
 
-function GenericToolCallInner({ tool, status: statusProp = 'done', result: resultProp, sessionCwd, sessionHost, sessionId, onSessionClick, onFileOpen }: GenericToolCallProps) {
+function GenericToolCallInner({ tool, status: statusProp = 'done', result: resultProp, sessionCwd, sessionHost, sessionId, onTaskClick, onSessionClick, onFileOpen }: GenericToolCallProps) {
   const runLive = useRunLive();
   const [open, setOpen] = useRowDisclosure(disclosureIds.tool(tool.toolUseId), useSoleCall());
   // Pill titles resolve from the entity-label store — memo boundary is at
@@ -997,7 +1007,7 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
 
   // Unified click handler for entity ref links (.task-link, .session-link, .file-link) inside tool blocks
   // The caller's opener (the panel's hand-off) first, else the writer's; one handler for the whole body.
-  const handleLinks = useEntityClickHandler(onSessionClick, onFileOpen ?? file.onFileOpen, sessionHost, sessionId, file.refusesAll);
+  const handleLinks = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen ?? file.onFileOpen, sessionHost, sessionId, file.refusesAll);
   // The shared handler marks a link it took (preventDefault); the row's handler must not take it too.
   const handleBodyClick = useCallback((e: React.MouseEvent) => {
     handleLinks(e);
@@ -1105,6 +1115,7 @@ interface SessionToolCallProps {
   sessionId?: string;
   sessionCwd?: string;
   sessionHost?: string;
+  onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   onFileOpen?: (path: string, line?: number) => void;
 }
@@ -1184,7 +1195,7 @@ function TaskGroup({ tool, sessionId }: SessionToolCallProps) {
 /** One tool call's card, live or saved: both draw it through this one dispatcher,
  *  so a card never changes form when its saved twin takes over (an Edit was a
  *  plain card live and a diff once saved). */
-export function SessionToolCall({ tool, assistantLabel, status, sessionId, sessionCwd, sessionHost, onSessionClick, onFileOpen }: SessionToolCallProps) {
+export function SessionToolCall({ tool, assistantLabel, status, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: SessionToolCallProps) {
   // Task/Agent tool with childMessages or agentId → its chip. A call still
   // streaming (`liveStatus`, a subagent's lane) is the chip from its first
   // frame, as its saved row will be.
@@ -1192,12 +1203,12 @@ export function SessionToolCall({ tool, assistantLabel, status, sessionId, sessi
   // counts them with the same function (@open-walnut/tool-header-text).
   const kind = toolCardKind(tool);
   if (kind === 'chip') {
-    return <TaskGroup tool={tool} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
+    return <TaskGroup tool={tool} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
   }
 
   // ExitPlanMode with plan content → render PlanCard
   if (kind === 'plan') {
-    return <PlanCard content={getExitPlanContent(tool) ?? ''} disclosureId={disclosureIds.plan(tool.toolUseId)} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
+    return <PlanCard content={getExitPlanContent(tool) ?? ''} disclosureId={disclosureIds.plan(tool.toolUseId)} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
   }
 
   // Write to plans → collapsed row
@@ -1222,7 +1233,7 @@ export function SessionToolCall({ tool, assistantLabel, status, sessionId, sessi
     );
   }
 
-  return <GenericToolCall tool={tool} {...(status ? { status } : {})} sessionCwd={sessionCwd} sessionHost={sessionHost} sessionId={sessionId} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
+  return <GenericToolCall tool={tool} {...(status ? { status } : {})} sessionCwd={sessionCwd} sessionHost={sessionHost} sessionId={sessionId} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
 }
 
 
@@ -1296,7 +1307,7 @@ export const SessionMessage = memo(function SessionMessage(props: SessionMessage
   return <SessionMessageBubble {...props} />;
 });
 
-function SessionMessageBubble({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, answerOnly, ridersFolded, trailingFolded, showCopyActions = false, noActions = false, onSessionClick, onFileOpen }: SessionMessageProps) {
+function SessionMessageBubble({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, answerOnly, ridersFolded, trailingFolded, showCopyActions = false, noActions = false, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {
   const { role, text: arrivingText, timestamp, tools: rawTools, thinking } = message;
   // A reply still arriving is this same row (SessionChatHistory draws a stream
   // block as the row its persisted twin will be): its words hold while the
@@ -1421,7 +1432,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
   const { segments, useSegments } = useSuggestSegments(isUser ? '' : text, message.msgId);
 
   // Unified click handler for entity ref links + file links in message content
-  const handleContentClick = useEntityClickHandler(onSessionClick, onFileOpen, sessionHost, sessionId);
+  const handleContentClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen, sessionHost, sessionId);
   // Pictures load from the session's machine (links while unknown); clicks keep onFileOpen.
   const { host: imageHost, images: imagesKnown } = useSessionTextRender({ sessionId, sessionHost, sessionCwd });
 
@@ -1518,7 +1529,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
         ) : bodyText && searchAnswer ? (
           <>
             {searchAnswer.before && <RichMarkdown text={searchAnswer.before} cwd={sessionCwd} host={imageHost} inlineImages={imagesKnown} scope={message.msgId} />}
-            <SearchAnswerCard answer={searchAnswer.answer} />
+            <SearchAnswerCard answer={searchAnswer.answer} onOpenTask={onTaskClick} />
             {searchAnswer.after && <RichMarkdown text={searchAnswer.after} cwd={sessionCwd} host={imageHost} inlineImages={imagesKnown} scope={`${message.msgId ?? ''}:after`} />}
           </>
         ) : bodyText && (useSegments ? (
@@ -1554,7 +1565,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
             // Single tools use the same muted row ("Ran a command ›") — one
             // visual language for all generic tool activity, like the iOS app.
             const key = `run-${run[0].toolUseId ?? out.length}`;
-            out.push(<ToolRunRow key={key} tools={run} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />);
+            out.push(<ToolRunRow key={key} tools={run} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />);
             run = [];
           };
           for (let i = 0; i < tools.length; i++) {
@@ -1571,7 +1582,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
               i = j - 1;
               continue;
             }
-            out.push(<SessionToolCall key={t.toolUseId ?? `solo-${i}`} tool={t} {...(t.liveStatus ? { status: t.liveStatus } : {})} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />);
+            out.push(<SessionToolCall key={t.toolUseId ?? `solo-${i}`} tool={t} {...(t.liveStatus ? { status: t.liveStatus } : {})} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />);
           }
           flush();
           return out;

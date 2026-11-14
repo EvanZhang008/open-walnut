@@ -16,8 +16,7 @@ import { startTimeFixture, type TimeFixture } from './time-app-fixture'
  *
  * What it pins: every part is plain rows under a small label, never a box per part;
  * a session is its title and never its id; rows lead where they say (a subtask, the
- * parent, a session: each a task reference, so Home with the popup gone, useOpenTask);
- * the rail's dates are editable in place and reach the
+ * parent, a session's column); the rail's dates are editable in place and reach the
  * server; the empty task says so in one line; both layouts hold in both engines.
  */
 
@@ -152,17 +151,11 @@ test('rows lead where they say, and the rail\'s dates change in place', async ({
   await loadHome(page)
   const modal = await openDetails(page, TASK, 'Time slots fixture')
 
-  // A subtask row opens that task on Home (a task reference, useOpenTask, 2026-11-13): the popup
-  // goes and Home's list has the task selected, never a second popup. The Parent row the same.
-  const located = (title: string) => page.locator('#home-task-navigation').locator('.task-focused, .todo-pinned-card-active').filter({ hasText: title })
+  // A subtask opens in the same popup; its Parent row leads back.
   await section(modal, 'Subtasks').locator('.tdp-task-row').filter({ hasText: 'Draw the day by day page' }).click()
-  await expect(modal).toHaveCount(0)
-  await expect(located('Draw the day by day page')).toHaveCount(1, { timeout: 20_000 })
-  await openDetails(page, TASK, 'Time slots fixture')
+  await expect(modal.locator('.todo-detail-title')).toHaveText('Draw the day by day page')
   await section(modal, 'Parent').locator('.tdp-task-row').click()
-  await expect(modal).toHaveCount(0)
-  await expect(located('Time tracking epic')).toHaveCount(1, { timeout: 20_000 })
-  await openDetails(page, TASK, 'Time slots fixture')
+  await expect(modal.locator('.todo-detail-title')).toHaveText('Time slots fixture task')
 
   // Due: the picker on the rail. Escape closes the picker alone, not the popup under it.
   const due = fact(modal, 'Due')
@@ -185,11 +178,10 @@ test('rows lead where they say, and the rail\'s dates change in place', async ({
   await expect(modal).toBeVisible()
   await expect(due.locator('.dp-trigger')).not.toHaveText('Set date')
 
-  // A session row opens that session's column, and the popup goes.
+  // A session row opens that session's column.
   const sid = fixture!.slots.sessionIds[0]!
   await modal.locator(`.todo-detail-session-item[data-session-id="${sid}"]`).click()
   await expect(page.locator(`.main-page-session-column[data-column-id="${sid}"]`)).toBeVisible({ timeout: 30_000 })
-  await expect(modal).toHaveCount(0)
   expect(errors).toEqual([])
 })
 

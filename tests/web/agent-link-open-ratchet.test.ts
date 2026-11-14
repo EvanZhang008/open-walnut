@@ -143,7 +143,7 @@ describe('every surface that renders agent text opens its paths and letters', ()
     for (const [file, opener] of handlers) {
       expect(read(file), file).toMatch(new RegExp(`useEntityClickHandler\\([\\s\\S]*?${opener}\\.refusesAll[\\s\\S]*?\\);`))
     }
-    expect(read('components/org/OrgBrief.tsx')).toContain('useEntityClickHandler(undefined, onFileOpen.open, undefined, undefined, true)')
+    expect(read('components/org/OrgBrief.tsx')).toContain('useEntityClickHandler(onOpenTask, undefined, onFileOpen.open, undefined, undefined, true)')
     expect(read('components/triage/TriagePanel.tsx')).toContain('{ unknownSource: true }')
     expect(read('components/inbox/LetterEnvelopeRow.tsx')).toContain('unknownSource={!letter.sender?.sessionId}')
     expect(read('components/inbox/EmailItem.tsx')).toContain('sender?.unknownSource ?? (!sender?.sessionId && sender?.host === undefined)')
@@ -409,7 +409,7 @@ describe('the Brief (its opener lives in useBriefFileOpener.tsx)', () => {
   it('OrgBrief opens its paths through the hook and draws its chooser', () => {
     expect(brief).toMatch(/import \{[^}]*\buseBriefFileOpener\b[^}]*\} from '\.\/useBriefFileOpener'/)
     expect(brief).toContain('const onFileOpen = useBriefFileOpener(owner?.id, text, textSources, tasks);')
-    expect(brief).toContain('useEntityClickHandler(undefined, onFileOpen.open, undefined, undefined, true)')
+    expect(brief).toContain('useEntityClickHandler(onOpenTask, undefined, onFileOpen.open, undefined, undefined, true)')
     expect(brief).toContain('{onFileOpen.dialog}')
     // No second opener in the view itself.
     expect(brief).not.toMatch(/openFileAnywhere\(|openFromSource\(|fetchSession\(/)

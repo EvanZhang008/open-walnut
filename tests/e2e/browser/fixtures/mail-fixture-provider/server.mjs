@@ -38,7 +38,6 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { activateGroups, groupsOn } from './groups-set.mjs';
-import { attachmentMessages, attachmentMethodsFor, attachmentsOn } from './attachment-set.mjs';
 import { inviteMessages, inviteMethods, inviteOn } from './invite-set.mjs';
 import { namesOnlyMessages, namesOnlyOn } from './names-only-set.mjs';
 
@@ -450,8 +449,6 @@ if (ctx) MESSAGES.push(...ctxMessages());
 if (unsub) MESSAGES.push(...unsubMessages());
 if (inviteOn) MESSAGES.push(...inviteMessages(now));
 if (namesOnlyOn) MESSAGES.push(...namesOnlyMessages(now));
-// `PW_MAIL_ATTACHMENTS=1`: the big message whose PDF, image and html attachments open (attachment-set.mjs).
-if (attachmentsOn) MESSAGES.push(...attachmentMessages(now));
 
 /** Read state, as a server holds it. Seeded from the canned envelopes. */
 const seen = new Set(MESSAGES.filter((one) => !one.unreadAtFirstSight).map((one) => one.messageId));
@@ -505,8 +502,7 @@ function envelopeOf(message) {
     ...(message.sentAtHeader ? { sentAtHeader: message.sentAtHeader } : {}),
     flags: seen.has(message.messageId) ? ['\\Seen'] : [],
     attachments: message.attachments,
-    // What a server reports as RFC822.SIZE when the row says so (the big message), else the body.
-    bodyBytes: message.sourceBytes ?? bytesOf(message.body),
+    bodyBytes: bytesOf(message.body),
     // Only when the row declares it. A transport that reports no List-Unsubscribe at all is the
     // ordinary case and must stay indistinguishable from one whose message really has none.
     ...(message.listUnsubscribe ? { listUnsubscribe: message.listUnsubscribe } : {}),
@@ -553,15 +549,13 @@ const spec = {
     send: true,
     sendAsReply: true,
     bodies: 'both',
-    // `PW_MAIL_ATTACHMENTS=1`: an attachment opens on a click (`getAttachment`, attachment-set.mjs).
-    attachments: attachmentsOn ? 'download' : 'metadata',
+    attachments: 'metadata',
     // `PW_MAIL_INVITE=1`: this provider answers meeting invites (invite-set.mjs).
     ...(inviteOn ? { rsvp: true } : {}),
     // `PW_MAIL_NAMES_ONLY=1`: a reply reaches the original sender even with an empty To.
     ...(namesOnlyOn ? { replyAddressesSender: true } : {}),
   },
   ...(inviteOn ? inviteMethods : {}),
-  ...(attachmentsOn ? attachmentMethodsFor((messageId) => MESSAGES.find((one) => one.messageId === messageId)) : {}),
   setup: {
     fields: [
       {
@@ -1280,7 +1274,7 @@ export function activate(walnut) {
   // `PW_MAIL_UNSUB=1` wants the same two adopted accounts `PW_MAIL_CTX=1` does, for the same reason: the
   // capability gate on a menu item is only a real question when two accounts disagree about it on one
   // screen. The two flags therefore share this branch, and each adds its own rows above.
-  if (ctx || unsub || inviteOn || namesOnlyOn || attachmentsOn) {
+  if (ctx || unsub || inviteOn || namesOnlyOn) {
     accounts.push({
       accountId: CTX_WRITER,
       providerId: 'fixture',

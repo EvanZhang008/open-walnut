@@ -58,7 +58,7 @@ describe('every new mail reaches its mailbox router', () => {
     const service = read('src/integrations/mail/service.ts');
     expect(service).toMatch(/const ingested = await this\.ingestPage\(accountId, mine\)\n[\s\S]{0,400}this\.deps\.arrivals\(accountId, ingested\.headlines\)/);
     expect(read('src/integrations/mail/index.ts')).toMatch(/arrivals: \(accountId, headlines\) => sync \? sync\.routeArrivals\(accountId, headlines\)/);
-    expect(read('src/integrations/mail/sync.ts')).toMatch(/async routeArrivals\([\s\S]{0,300}await this\.captureIncoming\(accountId, headlines, opts\)[\s\S]{0,120}await this\.finishIncoming\(accountId, finish\)/);
+    expect(read('src/integrations/mail/sync.ts')).toMatch(/async routeArrivals\([\s\S]{0,300}await this\.captureIncoming\(accountId, headlines\)[\s\S]{0,120}await this\.finishIncoming\(accountId, finish\)/);
   });
 
   it('the one arrival event runs after the router intake, and the plugin wires the intake and the mailbox binding', () => {
@@ -66,22 +66,16 @@ describe('every new mail reaches its mailbox router', () => {
     const sync = read('src/integrations/mail/sync.ts');
     const capture = sync.indexOf('const finish = deferred ? await this.captureIncoming(accountId, headlines) : null');
     expect(capture).toBeGreaterThan(0);
-    // A failed intake announces the mail as ingested (null), never as nothing.
-    expect(sync.indexOf('announce(finish ? await this.finishIncoming(accountId, finish) : null)')).toBeGreaterThan(capture);
-    // Other folders' arrivals reach the intake too, never announced, routed only when the router watches that folder.
-    expect(sync).toMatch(/if \(announcing && otherHeadlines\.length > 0\) await this\.routeArrivals\(accountId, otherHeadlines, \{ inbox: false \}\)/);
-    // Only the plugin's MailService wiring (pinned above) and the poll's other folders hand arrivals to the intake.
-    expect(callSites('routeArrivals').map((site) => site.split(':')[0])).toEqual(['src/integrations/mail/index.ts', 'src/integrations/mail/sync.ts']);
+    expect(sync.indexOf('announce(finish ? await this.finishIncoming(accountId, finish) : [])')).toBeGreaterThan(capture);
+    // Only the plugin's MailService wiring (pinned above) hands arrivals to the intake.
+    expect(callSites('routeArrivals').map((site) => site.split(':')[0])).toEqual(['src/integrations/mail/index.ts']);
     const index = read('src/integrations/mail/index.ts');
     expect(index).toMatch(/const captureIncoming = createMailRouterIntake\(/);
     expect(index).toMatch(/new MailSync\(\{[^}]*captureIncoming[^}]*\}\)/);
-    // What the intake could not enter yet is retried every tick (router-intake.ts retry).
-    expect(index).toMatch(/new MailSync\(\{[^}]*retryIncoming: captureIncoming\.retry[^}]*\}\)/);
     expect(index).toMatch(/bindMailAccounts\(store, routingHome/);
     const intake = read('src/integrations/mail/router-intake.ts');
-    // Every arrival in a folder the bound router watches goes to that router; nothing else decides first.
-    expect(intake).toMatch(/if \(!watchesFolder\(folders, mailbox\)\) continue/);
-    expect(intake).toMatch(/await confirmAccount\(batch\.map\(/);
+    // Every arrival no rule claims goes to a bound mailbox's router.
+    expect(intake).toMatch(/if \(routed\) bound\.push\(source\)/);
     expect(intake).toMatch(/await ensure\(accountId\)/);
   });
 });

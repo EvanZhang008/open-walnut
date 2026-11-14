@@ -12,11 +12,11 @@
  *     own config paths — so a hook with parameters is configured HERE, not in a
  *     hand-written block in some other settings section.
  *
- * ⚠ updateConfig() merges a section only one level deep (core/config-section-write.ts):
- * every write here reads the current config and writes back the FULLY-MERGED
- * top-level object. The merge is RECURSIVE: a policy whose config key is two
- * levels deep would otherwise erase its own siblings (shipped bug, caught in
- * real-UI verification).
+ * ⚠ updateConfig() replaces TOP-LEVEL keys wholesale — every write here reads
+ * the current config and writes back the FULLY-MERGED top-level object
+ * (a naive { hooks: { overrides: {...} } } would wipe hooks.defs). The merge is
+ * RECURSIVE: a policy whose config key is two levels deep would otherwise erase
+ * its own siblings (shipped bug, caught in real-UI verification).
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'

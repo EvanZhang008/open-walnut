@@ -94,7 +94,6 @@ SOURCES=(
   src/providers/usage-limit-text.ts
   src/logging/redact.ts
   src/providers/session-changes-core.ts
-  src/providers/changes-checkpoint.ts
   src/providers/usage-host-core.ts
   src/providers/usage-scan-core.ts
   src/providers/usage-scan-index.ts

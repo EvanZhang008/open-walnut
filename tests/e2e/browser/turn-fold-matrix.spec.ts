@@ -156,19 +156,7 @@ async function expectOneFold(history: Locator, label: string, opened = false): P
   return isFold;
 }
 
-/** Every shut row (a turn's fold, a run) draws its line and nothing under it, running or not:
- *  the step it is on shows only once the reader opens it (2026-11-14, the user: "Even not
- *  showing the currently working command, below collpes, if people need people cna click intop"). */
-async function expectShutRowsLineOnly(history: Locator, label: string) {
-  const extra = await history.evaluate((h) => Array.from(h.querySelectorAll('.tool-run-row'))
-    .filter((row) => row.querySelector(':scope > .tool-run-toggle[aria-expanded="false"]'))
-    .flatMap((row) => Array.from(row.children).filter((c) => !c.classList.contains('tool-run-toggle'))
-      .map((c) => `${row.getAttribute('data-testid') ?? 'run'}: ${(c as HTMLElement).innerText.slice(0, 80)}`)));
-  expect(extra, `${label}: something drawn under a shut row`).toEqual([]);
-}
-
 async function checkBothWays(page: Page, history: Locator, label: string, _set: string[]) {
-  await expectShutRowsLineOnly(history, label);
   const isFold = await expectOneFold(history, `${label}, folded`);
   // A run of calls, or one step alone, is the turn's fold too, never a row of its own.
   expect(isFold, `${label}: the row between the words and the answer is the turn's fold`).toBe(true);
@@ -220,12 +208,7 @@ async function run(page: Page, set: string[], state: State, conv: boolean) {
     await waitForStream(page);
     await page.waitForTimeout(300);
     await injectEvent(page, 'session:tool-use', { sessionId: MOCK_SESSION_ID, toolName: 'Bash', toolUseId: 'mx-live', input: { command: 'sample-cmd --last' } });
-    // The new call is in the shut fold, not under it: open it to see it came in, then shut it.
-    const live = history.locator('[data-testid="turn-fold"]').last();
-    await live.locator(':scope > .tool-run-toggle').click();
-    await expect(live.locator(':scope > .process-fold-body')).toContainText('sample-cmd --last', { timeout: 10000 });
-    await live.locator(':scope > .tool-run-toggle').click();
-    await expect(live).toHaveAttribute('data-open', 'false');
+    await expect(history).toContainText('sample-cmd --last', { timeout: 10000 });
   }
   if (state === 'just-ended') {
     await expect(history.locator('[data-testid="turn-fold"]')).toHaveCount(1, { timeout: 10000 });
@@ -443,9 +426,6 @@ for (const opener of ['person', 'notice', 'conversation'] as const) {
         .filter((e) => (e as HTMLElement).offsetParent !== null && !e.closest('[data-testid="turn-fold"]') && !e.closest('[data-thread-fold]') && !e.querySelector('[data-testid="turn-fold"]'))
         .map((e) => (e as HTMLElement).innerText.slice(0, 80)));
       expect(await loose(), 'live: a step outside the fold').toEqual([]);
-      // Shut while it runs: only its line, the running command not under it.
-      await expectShutRowsLineOnly(history, 'live');
-      await expect(history).not.toContainText('sample-cmd --last');
       const key = await fold.getAttribute('data-fold-id');
       await fold.locator(':scope > .tool-run-toggle').click();
       await expect(fold.locator(':scope > .process-fold-body')).toBeVisible();

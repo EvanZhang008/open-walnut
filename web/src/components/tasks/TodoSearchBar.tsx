@@ -6,13 +6,13 @@
 import { useRef, useEffect, useLayoutEffect, useCallback, useState, startTransition } from 'react';
 import { ICON_SEARCH } from '@/components/common/Icons';
 import { log } from '@/utils/log';
+import type { Task } from '@open-walnut/core';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { PhoneSearchLayer } from './PhoneSearchLayer';
 import { PhonePullToRefresh } from './PhonePullToRefresh';
 import { PhoneQueuedUpdatesPill } from './PhoneQueuedUpdatesPill';
 import { homeListScroller } from './phone-row-behavior';
 import { pageShortcutBlocked } from '@/utils/page-shortcut';
-import { isCommand } from '@/keyboard/shortcut-overrides';
 
 /** A blur this soon after a keystroke, with no user gesture, was not the user's. */
 const TYPING_GUARD_MS = 2000;
@@ -32,6 +32,8 @@ interface TodoSearchBarProps {
   onClear: () => void;
   isSearching: boolean;
   resultCount?: number | null; // null = no server results yet
+  /** Phone: how a task result of the search layer opens (the home row's open). */
+  onPhoneOpenTask?: (task: Task) => void;
 }
 
 export function TodoSearchBar({
@@ -41,6 +43,7 @@ export function TodoSearchBar({
   onClear,
   isSearching,
   resultCount,
+  onPhoneOpenTask,
 }: TodoSearchBarProps) {
   // Phone (spec 4.7 Search): the box is the door to a full-screen search layer.
   // It also hosts the home list's phone extras: pull to refresh and the
@@ -121,8 +124,8 @@ export function TodoSearchBar({
         if (inputRef.current?.closest('[inert]')) window.dispatchEvent(new CustomEvent('sidebar:toggle-todo'));
         reveal();
       };
-      // Cmd+K (Mac) or Ctrl+K (Windows), or the key the person gave it (keyboard/commands.ts)
-      if (isCommand(e, 'task.search')) {
+      // Cmd+K (Mac) or Ctrl+K (Windows)
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
         ensureVisible();
         return;
@@ -176,7 +179,7 @@ export function TodoSearchBar({
       )}
       {phone && (
         <>
-          <PhoneSearchLayer open={layerOpen} onClose={() => setLayerOpen(false)} />
+          <PhoneSearchLayer open={layerOpen} onClose={() => setLayerOpen(false)} onOpenTask={onPhoneOpenTask} />
           <PhonePullToRefresh enabled={!layerOpen} getScroller={homeListScroller} testId="phone-pull-home" />
           <PhoneQueuedUpdatesPill />
         </>

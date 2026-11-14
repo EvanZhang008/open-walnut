@@ -78,25 +78,6 @@ if (inputFormat === 'stream-json') {
 }
 
 const outputSessionId = sessionId || 'mock-replay-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
-
-// Recorded fixtures reuse this transport rather than inventing a second mock
-// CLI. Raw private recordings are never accepted by this repo-facing path.
-if (process.env.MOCK_REPLAY_FILE) {
-  const { readFile } = await import('node:fs/promises');
-  const { assertShapeOnly } = await import('../../scripts/incident-replay/shape.mjs');
-  const content = await readFile(process.env.MOCK_REPLAY_FILE, 'utf8');
-  assertShapeOnly(content);
-  for (const line of content.trim().split('\n')) {
-    const event = JSON.parse(line);
-    if ('session_id' in event) event.session_id = outputSessionId;
-    const copies = event.type === 'assistant' || event.type === 'user' ? replayCount : 1;
-    for (let copy = 0; copy < copies; copy++) process.stdout.write(JSON.stringify(event) + '\n');
-  }
-  // A pipe is asynchronous on macOS. Await the final queued write, as the
-  // existing synthetic result path does, before ending this mock process.
-  await new Promise(resolve => process.stdout.write('', resolve));
-  process.exit(0);
-}
 const resultText = `Processed: ${message}`;
 
 // 1. Init event — always exactly once

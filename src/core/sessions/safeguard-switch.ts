@@ -28,7 +28,6 @@ import { log } from '../../logging/index.js'
 import type { SafeguardSwitchState, SessionRecord } from '../types.js'
 import { isQuietTurn } from './quiet-turn.js'
 import { reportHeldTurnFailed } from './context-full-recovery.js'
-import { noteTurnAttempt, turnRetryEnded, type TurnRetrier } from './turn-run.js'
 import { ANTHROPIC_DEFAULT_WINDOW, resolveContextWindow } from '../../providers/context-window.js'
 import {
   FALLBACK_FAMILIES, modelFamilyOf, modelName, pickFallbackModel, REFUSALS_BEFORE_SWITCH, resendNoteText, rowFamily, switchedLine,
@@ -102,10 +101,7 @@ function defaultDeps(): SafeguardSwitchDeps {
         return { rejected: true, failed: true }
       }
     },
-    send: async (id, text, opts) => {
-      await noteTurnAttempt(id, 'safeguard_switch')
-      return (await import('../session-message-queue.js')).sendMessageToSession(id, text, opts)
-    },
+    send: async (id, text, opts) => (await import('../session-message-queue.js')).sendMessageToSession(id, text, opts),
     stopFence: async (id) => (await import('./session-stop.js')).sessionStops.fence(id),
     taskOpen: async (taskId) => {
       const { getTask } = await import('../task-manager.js')
@@ -371,7 +367,6 @@ export class SafeguardSwitch {
   private release(sessionId: string, run: Run | undefined, taskId: string | undefined, reason: string): void {
     if (!run || this.running.get(sessionId) === run) this.running.delete(sessionId)
     this.heldTurn.delete(sessionId)
-    turnRetryEnded(sessionId, 'safeguard_switch')
     reportHeldTurnFailed({ sessionId, ...(taskId ? { taskId } : {}), reason })
   }
 
@@ -627,21 +622,12 @@ export function safeguardSwitch(): SafeguardSwitch | null {
 
 /**
  * Whether a session's last turn end belongs to the safeguard switch: it was refused and Walnut is
- * moving the session to another model, so the turn answered nothing and the work goes on. Readers ask
- * the session's turn (sessions/turn-run.ts), whose row below answers with this.
+ * moving the session to another model, so the turn answered nothing and the work goes on. Every
+ * place that acts on a turn's end asks this with the context recovery (context-full-recovery.ts
+ * contextRecoveryHoldsTurn, turn-end-wait.ts turnHold, server.ts's error card).
  */
 export function safeguardSwitchHolds(sessionId: string | undefined, turnGen?: number): boolean {
   return !!sessionId && !!instance?.holds(sessionId, turnGen)
-}
-
-/** The safeguard switch's row of the session's turn (sessions/turn-run.ts). */
-export const turnRetrier: TurnRetrier<'safeguard_switch'> = {
-  reason: 'safeguard_switch',
-  sources: [SAFEGUARD_SWITCH_SOURCE],
-  // Its hold starts inside the refused result's own handler, so the result's readers see it; an ACP
-  // refusal ends "clean" (stopReason refusal), so a clean end is taken too.
-  takes: (end) => end.event === 'result' && safeguardSwitchHolds(end.sessionId, end.turnGen),
-  wait: (rec, q) => safeguardSwitchHolds(rec.claudeSessionId, q.turnGen) ? { reason: 'safeguard_switch' } : null,
 }
 
 /** Start the switch on the primary. */

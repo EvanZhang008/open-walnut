@@ -109,18 +109,13 @@ struct SessionConversationView: View {
     }
 
     /// The queue, wired to the page's store: a withdrawn or edited row changes its bubble too.
-    /// Internal for WalnutTests (`QueuedBadgeGuardTests` drives the real wiring).
-    static func makeQueue(sessionId: String, store: SessionConversationStore,
-                          api: SessionQueueTransport = WalnutAPI()) -> SessionQueueModel {
-        let queue = SessionQueueModel(sessionId: sessionId, api: api)
+    private static func makeQueue(sessionId: String, store: SessionConversationStore) -> SessionQueueModel {
+        let queue = SessionQueueModel(sessionId: sessionId)
         queue.onWithdrawn = { [weak store] id in store?.queuedMessageWithdrawn(id) }
         queue.onEdited = { [weak store] id, text in store?.queuedMessageEdited(id, text: text) }
         queue.onRowsLeft = { [weak store] in store?.requestTranscriptRefresh() }
         store.onInterruptAccepted = { [weak queue] id in queue?.hideWhileGoingOut(id) }
         store.onAccepted = { [weak queue] id in queue?.watch(id) }
-        // The transcript is the session's own word that it took a message: a Queued never
-        // waits for the next read of the line once its row is there.
-        store.onTranscriptShows = { [weak queue] ids in queue?.noteInTranscript(ids) }
         return queue
     }
 

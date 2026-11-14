@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PluginDatabaseClient } from '../../src/core/plugins/plugin-storage.js';
 import type { WalnutServerPluginApi } from '../../src/core/plugins/server-api.js';
-import { currentRouterSources, readRouterItem, readRouterItemForDelivery, registerRouterSource, resolveRouterItem } from '../../src/core/router/source-registry.js';
+import { currentRouterSources, readRouterItem, registerRouterSource, resolveRouterItem } from '../../src/core/router/source-registry.js';
 import type { RouterSource } from '../../src/core/router/types.js';
 import { MailBodyStore } from '../../src/integrations/mail/bodies.js';
 import { MailDatabase } from '../../src/integrations/mail/db.js';
@@ -38,7 +38,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-async function openCache(fetchBody?: (cache: Cache, account: string, message: string) => Promise<void>): Promise<Cache> {
+async function openCache(): Promise<Cache> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'mail-router-source-'));
   cleanups.push(() => fsp.rm(root, { recursive: true, force: true }).catch(() => undefined));
   const client = new PluginDatabaseClient(path.join(root, 'plugin.sqlite'));
@@ -53,10 +53,9 @@ async function openCache(fetchBody?: (cache: Cache, account: string, message: st
       state: 'active', healthJson: null, payload: '{}',
     });
   }
-  const cache: Cache = { root, db, store, bodies };
-  const dispose = registerMailRouterSource(store, bodies, fetchBody ? { fetchBody: (account, message) => fetchBody(cache, account, message) } : {});
+  const dispose = registerMailRouterSource(store, bodies);
   cleanups.push(dispose);
-  return cache;
+  return { root, db, store, bodies };
 }
 
 function envelope(over: Partial<MessageWrite> = {}): MessageWrite {
@@ -406,54 +405,6 @@ describe('mail router source: cache only, no provider', () => {
     expect(content.body).toBeNull();
     expect(content.bodyAvailable).toBe(false);
     expect(content.item.subject).toBe('Invoice for October');
-  });
-
-  it('a delivery read fetches a body the cache does not hold yet and hands it over, though the version moved', async () => {
-    const asked: string[] = [];
-    const cache = await openCache(async (at, account, message) => {
-      asked.push(`${account} ${message}`);
-      const row = (await at.store.getMessage(account, message))!;
-      await replaceBody(at, row.rowid, 'FETCHED_BODY_CANARY');
-    });
-    const seeded = await seed(cache, {});
-    const content = await readRouterItemForDelivery(seeded.source);
-    expect(asked).toEqual([`${ACCOUNT_A} INBOX:1:10`]);
-    expect(content.bodyAvailable).toBe(true);
-    expect(content.body?.text).toBe('FETCHED_BODY_CANARY');
-    // The cache-only read never fetches.
-    asked.length = 0;
-    const other = await seed(cache, { messageId: 'INBOX:1:11', rfcMessageId: '<a-11@marina.example.invalid>', envelopeHash: 'hash-a-11' });
-    expect((await readRouterItem(other.source)).bodyAvailable).toBe(false);
-    expect(asked).toEqual([]);
-  });
-
-  it('a delivery read fetches nothing for a cached body or one the provider refused for good', async () => {
-    const asked: string[] = [];
-    const cache = await openCache(async (_at, account, message) => { asked.push(`${account} ${message}`); });
-    const cached = await seed(cache, {}, { text: 'CACHED' });
-    expect((await readRouterItemForDelivery(cached.source)).body?.text).toBe('CACHED');
-    const refused = await seed(cache, { messageId: 'INBOX:1:12', rfcMessageId: '<a-12@marina.example.invalid>', envelopeHash: 'hash-a-12' });
-    await cache.store.setMessageBodyError(refused.rowid, 'too-large');
-    const content = await readRouterItemForDelivery({ ...refused.source, version: await versionNow(cache, ACCOUNT_A, 'INBOX:1:12') });
-    expect(content.bodyAvailable).toBe(false);
-    expect(asked).toEqual([]);
-  });
-
-  it('a delivery read whose fetch failed, or met another delivery, hands over the confirmed copy as cached', async () => {
-    let mode: 'fail' | 'other' = 'fail';
-    const cache = await openCache(async (at, account, message) => {
-      if (mode === 'fail') throw new Error('provider down');
-      const row = (await at.store.getMessage(account, message))!;
-      await replaceBody(at, row.rowid, 'ANOTHER_DELIVERY');
-      await at.db.run('UPDATE messages SET subject = ? WHERE rowid = ?', ['A different subject', row.rowid]);
-    });
-    const seeded = await seed(cache, {});
-    const failed = await readRouterItemForDelivery(seeded.source);
-    expect(failed.bodyAvailable).toBe(false);
-    expect(failed.item.subject).toBe('Invoice for October');
-    mode = 'other';
-    // The confirmed copy is gone from the cache (a later delivery replaced it): no content is handed over as its.
-    await expect(readRouterItemForDelivery(seeded.source)).rejects.toMatchObject({ code: 'source_changed' });
   });
 
   it('reports a body that can never be fetched as null, without trying', async () => {

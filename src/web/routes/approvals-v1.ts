@@ -305,9 +305,6 @@ approvalsV1Router.post('/approvals', (req: Request, res: Response, next: NextFun
       ...(body.request_only === true ? { requestOnly: true } : {}),
       testRun: ambientTestRun(),
     })
-    // An asker that said no why gets a summary Walnut writes, in the background (summary.ts).
-    const { scheduleApprovalSummary } = await import('../../core/approvals/summary.js')
-    scheduleApprovalSummary(approval)
     return { approval, waitToken, ...(downgraded ? { downgraded } : {}) }
   })
 })

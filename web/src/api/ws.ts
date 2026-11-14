@@ -9,7 +9,6 @@ import { log } from '@/utils/log';
 import { getDeviceToken, renewalDue, renewSignIn, tokenExpired } from './device-token';
 import { getUnpairedState, noteAuthRefusal, subscribeUnpaired } from './unpaired';
 import { wsProtocolsFor } from '../../../src/lib/ws-bearer-protocol';
-import { LEAN_SIGNATURE, LeanFrameCache } from './ws-lean';
 import { mintOpId } from './op-id';
 import { leaderErrorMessage, WS_LEADER_AWAY, WS_LEADER_BACK } from './leader-presence';
 import { demoPageGeneration, initDemoGeneration, isDemoOrigin } from '../utils/demo-generation';
@@ -148,10 +147,6 @@ class WsClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
   private eventCount = 0;
-  /** What this socket was sent, to rebuild lean frames (ws-lean.ts); emptied on every connect. */
-  private lean = new LeanFrameCache();
-  private leanResyncs: number[] = [];
-  private leanOff = false;
   // Distinguishes cold first-connect from subsequent reconnects.
   // `_ws:reconnected` only fires on reconnects, not the initial page load.
   private hasConnectedBefore = false;
@@ -182,13 +177,7 @@ class WsClient {
     // stored → a bare /ws with no subprotocol.
     const deviceToken = getDeviceToken();
     const generation = demoPageGeneration();
-    // Negotiate lean frames without losing the demo reset fence.
-    const params = new URLSearchParams();
-    if (generation) params.set('demo-generation', generation);
-    if (!this.leanOff) params.set('lean', LEAN_SIGNATURE);
-    const query = params.toString();
-    const url = `${proto}://${window.location.host}/ws${query ? '?' + query : ''}`;
-    this.lean.reset();
+    const url = `${proto}://${window.location.host}/ws${generation ? '?demo-generation=' + encodeURIComponent(generation) : ''}`;
     log.info('ws', 'connecting', { url });
     const ws = deviceToken ? new WebSocket(url, wsProtocolsFor(deviceToken)) : new WebSocket(url);
 
@@ -277,19 +266,7 @@ class WsClient {
       try {
         const frame: WsFrame = JSON.parse(ev.data);
         if (frame.type === 'event') {
-          if (ws !== this.ws) return; // a frame of a socket already replaced: its cache is gone
-          const data = this.lean.rebuild(frame.name, frame.data);
-          if (data === null && frame.data !== null) {
-            // A lean frame this cache cannot rebuild: start both sides over.
-            // Three in five minutes: this page reads whole frames from now on, never a reconnect loop.
-            const now = Date.now();
-            this.leanResyncs = [...this.leanResyncs.filter((t) => now - t < 5 * 60_000), now];
-            if (this.leanResyncs.length >= 3) this.leanOff = true;
-            log.warn('ws', 'lean frame could not be rebuilt; reconnecting', { name: frame.name, leanOff: this.leanOff });
-            try { ws.close(4000, 'lean_resync'); } catch { /* already closing */ }
-            return;
-          }
-          this.dispatchEvent(data === frame.data ? (frame as WsEventFrame) : { ...(frame as WsEventFrame), data });
+          this.dispatchEvent(frame as WsEventFrame);
         } else if (frame.type === 'res') {
           this.handleResponse(frame);
         } else {

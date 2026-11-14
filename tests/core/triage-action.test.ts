@@ -53,7 +53,7 @@ async function configureTriage(overrides: Record<string, unknown> = {}): Promise
   const config = await getConfig();
   await saveConfig({
     ...config,
-    triage: { enabled: true, every: '30m', every_messages: 20, sources: ['slack'], active_hours: '', ...overrides },
+    triage: { enabled: true, every: '30m', every_messages: 20, sources: ['mail', 'slack'], active_hours: '', ...overrides },
   } as never);
 }
 
@@ -76,7 +76,10 @@ describe('the action itself', () => {
   });
 
   it('makes ZERO model calls, even with a full buffer and a State.md to read', async () => {
-    await recordTriageArrivals({ slack: slackRows(12) });
+    await recordTriageArrivals({
+      mail: [{ accountId: 'work', count: 9, headlines: [{ from: 'a@b.test', subject: 'hi' }], atMs: Date.now() }],
+      slack: slackRows(12),
+    });
     const note = path.join(WALNUT_HOME, 'notes', TRIAGE_STATE_NOTE);
     await fs.mkdir(path.dirname(note), { recursive: true });
     await fs.writeFile(note, '---\nupdated: 2026-09-21T13:40Z\n---\n## Awaiting\n- rq-7\n', 'utf-8');
@@ -89,11 +92,14 @@ describe('the action itself', () => {
   });
 
   it('hands back the count hint as the FIRST line, then one envelope', async () => {
-    await recordTriageArrivals({ slack: slackRows(3) });
+    await recordTriageArrivals({
+      mail: [{ accountId: 'work', count: 4, headlines: [], atMs: Date.now() }],
+      slack: slackRows(3),
+    });
     const result = await run(ctx);
     const lines = (result.content ?? '').split('\n');
     // The executor only scans the first few lines for this and then strips it.
-    expect(lines[0]).toBe('WALNUT_TRIAGE_COUNT: 3');
+    expect(lines[0]).toBe('WALNUT_TRIAGE_COUNT: 7');
     expect(lines[1]).toMatch(/^<walnut-message kind="trigger" from="Inbox Triage" note="batch · /);
     expect(result.content?.match(/<walnut-message /g)).toHaveLength(1);
   });
@@ -198,21 +204,21 @@ describe('the buffer across two runs', () => {
     const claimAtMs = (await loadTriageState()).claim!.atMs;
     await ackTriageClaim(claimAtMs);
 
-    await recordTriageArrivals({ slack: slackRows(2).map((r) => ({ ...r, text: `later ${r.ts}` })) });
+    await recordTriageArrivals({
+      mail: [{ accountId: 'work', count: 2, headlines: [], atMs: Date.now() }],
+    });
     const next = await run(ctx);
     expect(next.content).not.toContain('line 0');
     expect(next.content).toContain('WALNUT_TRIAGE_COUNT: 2');
     expect(next.content).toContain(`Everything newer than ${new Date(claimAtMs).toISOString()}`);
   });
 
-  it('an old mail-only config runs no batch: skipped, nothing claimed, no task', async () => {
-    // Mail goes to the mail router since 2026-11-14, so `sources: ['mail']` leaves no source.
+  it('honours sources: a mail-only config never shows the Slack block', async () => {
     await configureTriage({ sources: ['mail'] });
     await recordTriageArrivals({ slack: slackRows(2) });
     const result = await run(ctx);
-    expect(result.invoke).toBe(false);
-    expect(result.status).toBe('skipped');
-    expect(result.content).toContain('no source');
-    expect((await loadTriageState()).claim).toBeUndefined();
+    expect(result.content).not.toContain('Slack');
+    expect(result.content).toContain('Mail —');
+    expect(result.content.split('\n')[0]).toBe('WALNUT_TRIAGE_COUNT: 0');
   });
 });

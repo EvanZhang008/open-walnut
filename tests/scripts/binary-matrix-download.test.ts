@@ -1,10 +1,7 @@
 import fs from 'node:fs'
-import os from 'node:os'
-import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
-import { guardedPath } from '../setup/exec-guard-core.js'
 
 // actions/download-artifact can pass with the file missing when its connection is
 // cut mid-stream: on 2026-10-28 the macos-26-intel row logged "Starting download"
@@ -30,20 +27,6 @@ const isFilesDownload = (s: Step) => !!s.uses?.startsWith('actions/download-arti
 // until the job's 30 minutes ran out, which cancelled the 0.6.28 promotion.
 const isReleaseDownload = (s: Step) => !!s.uses?.startsWith('actions/download-artifact@') && s.with?.name === '${{ inputs.files }}'
 
-/** Runs a check step's shell in a temp dir holding `files`; its output line and the files left. */
-function runCheck(run: string, env: Record<string, string>, files: Record<string, string>) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bm-check-'))
-  for (const [f, text] of Object.entries(files)) { fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), text) }
-  const out = path.join(dir, 'output')
-  const script = run.replaceAll('${{ inputs.files }}', 'the-files')
-  const r = spawnSync('bash', ['-e', '-c', script], { cwd: dir, encoding: 'utf8', env: { PATH: guardedPath([], '/usr/bin:/bin'), ...env, RUNNER_TEMP: dir, GITHUB_OUTPUT: out } })
-  if (r.status !== 0) throw new Error(r.stderr)
-  const left = Object.keys(files).filter((f) => fs.existsSync(path.join(dir, f)))
-  const res = { out: fs.readFileSync(out, 'utf8').trim(), left }
-  fs.rmSync(dir, { recursive: true, force: true })
-  return res
-}
-
 describe('binary matrix rows survive a download that fails or ends without the file', () => {
   const jobs = Object.entries<Job>(doc.jobs)
   const takers = jobs.filter(([, job]) => (job.steps ?? []).some(isFilesDownload))
@@ -64,12 +47,6 @@ describe('binary matrix rows survive a download that fails or ends without the f
       expect(check?.id).toBe('files')
       expect(check?.run).toContain('-s "dist-bin/$FILE"')
       expect(check?.run).toContain('missing=true')
-      // A download that timed out can leave a partly written file (2026-11-14): only a
-      // finished download counts, and the partial file is removed before the second.
-      expect((steps[first] as Step).id).toBe('dl-files')
-      expect(check?.env?.DOWNLOAD).toBe('${{ steps.dl-files.outcome }}')
-      expect(runCheck(check!.run!, { DOWNLOAD: 'failure', FILE: 'walnut-x' }, { 'dist-bin/walnut-x': 'half a file' })).toEqual({ out: 'missing=true', left: [] })
-      expect(runCheck(check!.run!, { DOWNLOAD: 'success', FILE: 'walnut-x' }, { 'dist-bin/walnut-x': 'whole' })).toEqual({ out: 'missing=false', left: ['dist-bin/walnut-x'] })
       expect(isFetch(again, 'walnut-files', 'dist-bin')).toBe(true)
       expect(again?.if).toContain("steps.files.outputs.missing == 'true'")
       // the fetch reads the artifact API with the job's token
@@ -88,11 +65,6 @@ describe('binary matrix rows survive a download that fails or ends without the f
       const [check, again] = steps.slice(first + 1, first + 3)
       expect((steps[first] as Step & { 'continue-on-error'?: boolean })['continue-on-error']).toBe(true)
       expect(check?.id).toBe('release')
-      expect((steps[first] as Step).id).toBe('dl-release')
-      expect(check?.env?.DOWNLOAD).toBe('${{ steps.dl-release.outcome }}')
-      const gz = 'release/walnut-1.0.0-x.gz'
-      expect(runCheck(check!.run!, { DOWNLOAD: 'cancelled', FILE: 'walnut-x', VERSION: '1.0.0' }, { 'release/SHA256SUMS': 's', [gz]: 'half' }))
-        .toEqual({ out: 'missing=true', left: ['release/SHA256SUMS'] })
       expect(check?.run).toContain('-s "$RUNNER_TEMP/release/SHA256SUMS"')
       expect(check?.run).toContain('walnut-$VERSION-${FILE#walnut-}.gz')
       expect(check?.run).toContain('missing=true')

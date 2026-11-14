@@ -59,9 +59,6 @@ let running: Promise<void> | null = null;
 let live = false;
 
 /** The facts every task in one pass is derived from, each store read once. */
-/** A session's facts in one pass (StatusFacts.sessions). */
-export type SessionStatusFacts = StatusFacts['sessions'] extends Map<string, infer V> ? V : never;
-
 export interface StatusFacts {
   followWorkers?: boolean;
   /** Per session id: what its record says. */
@@ -334,27 +331,36 @@ async function readRoutines(kind: 'triggers' | 'schedules' | 'checks'): Promise<
 const DECISION_SEEN_GRACE_MS = 5 * 60 * 1000;
 
 /**
- * The status facts of a session's turn (sessions/turn-run.ts): what Walnut continues it for, or what it
- * stopped continuing it for, each in the field its words come from (user-status.ts machineStop). A
- * restart loss speaks only for the CURRENT death: one recovery still holds (queued, sent), or one it
- * gave up on with no status change since. Total over the reasons: a new one needs its words here.
+ * A restart loss that speaks for the session's CURRENT death, else undefined: one recovery still
+ * holds (queued, sent: the same test the hand-back uses, holdsHandBack), or one it gave up on
+ * with no status change since. A loss stays on the record after it is decided, so an older one
+ * must never paint a later life (a manual resume that failed for its own reasons).
  */
-export function turnWaitFacts(run: import('./sessions/turn-run.js').TurnRun, rec: Pick<import('./types.js').SessionRecord, 'process_status'>): Pick<SessionStatusFacts, 'endpointWait' | 'usageLimit' | 'restartLoss' | 'autoRetryAt'> {
-  const out: ReturnType<typeof turnWaitFacts> = {};
-  // A running turn speaks for itself; a restart loss is judged against liveness by machineStop.
-  const idle = rec.process_status !== 'running';
-  for (const w of [...run.waits, ...run.stops]) {
-    switch (w.reason) {
-      case 'usage_limit': if (idle) out.usageLimit ??= w.usageLimit; break;
-      case 'endpoint_wait': if (idle) out.endpointWait ??= w.endpointWait; break;
-      case 'restart_recovery': if (w.loss) out.restartLoss ??= w.loss; break;
-      case 'auto_continue': if (idle) out.autoRetryAt ??= w.retryAt; break;
-      // The phase holds while these work on the session: the task reads its phase.
-      case 'safeguard_switch': case 'context_recovery': break;
-      default: { const never: never = w; void never; }
-    }
-  }
-  return out;
+export function liveRestartLoss(
+  rec: import('./types.js').SessionRecord,
+  recovery: { holdsHandBack(record: import('./types.js').SessionRecord): boolean } | null | undefined,
+): { state: string; cause?: string } | undefined {
+  const loss = rec.restartLoss;
+  if (!loss) return undefined;
+  if (loss.state === 'gave_up') return loss.revision === rec.statusRevision ? { state: loss.state, cause: loss.cause } : undefined;
+  if ((loss.state === 'queued' || loss.state === 'sent') && recovery?.holdsHandBack(rec)) return { state: loss.state, cause: loss.cause };
+  return undefined;
+}
+
+/** A session's endpoint wait as the status reads it: its record's, or one its error text opens before
+ *  the waiter has written it (the result and the status sync race at a turn end). */
+function endpointWaitOf(
+  rec: import('./types.js').SessionRecord,
+  endpoint: typeof import('./sessions/endpoint-wait.js'),
+): UserStatusInput['endpointWait'] {
+  if (!endpoint.endpointWaitEnabled()) return undefined;
+  // A continue whose turn ended cleanly is no wait any more, even before the waiter closes it.
+  if (rec.endpointWait && (rec.endpointWait.state !== 'resumed' || endpoint.recordInEndpointWait(rec))) return rec.endpointWait;
+  if (rec.endpointWait || !endpoint.recordInEndpointWait(rec)) return undefined;
+  return {
+    state: 'waiting', where: endpoint.machineWords(rec.host), since: rec.statusUpdatedAt || rec.last_status_change || new Date().toISOString(), resumes: 0,
+    ...(endpoint.endpointWaitCause(rec.errorMessage) === 'dropped' ? { cause: 'dropped' as const } : {}),
+  };
 }
 
 /** Read every fact source (the slow ones from the cache). Never throws: a store that cannot be
@@ -368,11 +374,13 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
   }
 
   const sessions: StatusFacts['sessions'] = new Map();
+  const { getSessionAutoRecover } = await import('./session-auto-recover.js');
+  const recovery = getSessionAutoRecover();
   await safely('sessions', async () => {
     const { listSessionsForTasks } = await import('./session-tracker.js');
     const runner = await import('../providers/claude-code-session.js').then((m) => m.sessionRunner).catch(() => null);
-    const turns = await import('./sessions/turn-run.js');
-    await turns.loadTurnRetriers();
+    const endpoint = await import('./sessions/endpoint-wait.js').catch(() => null);
+    const limits = await import('./sessions/usage-limit-wait.js').catch(() => null);
     const links = await import('../providers/daemon-connection.js').catch(() => null);
     // A link state that cannot be read is not "down".
     const linkDown = (host: string): boolean => { try { return links?.hostLinkDown(host) === true } catch { return false } };
@@ -382,23 +390,26 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
       if (!names.has(host)) names.set(host, import('./hosts/host-display-name.js').then((m) => m.hostDisplayNameFor(host)).catch(() => host));
       return names.get(host)!;
     };
+    const autoContinue = await import('./session-auto-continue.js').then((m) => m.getSessionAutoContinue()).catch(() => null);
     for (const rec of await listSessionsForTasks(taskIds, sessionIds)) {
       if (rec.provider === 'embedded') continue;
       // Only a live process carries work on: a stopped one's runner state is its last word.
       const live = rec.process_status === 'running' || rec.process_status === 'idle';
       const outliving = live && runner ? runner.outlivingWorkOf(rec.claudeSessionId) : [];
       const hostDown = rec.host && !rec.archived && linkDown(rec.host) ? await downHostName(rec.host) : undefined;
-      // What Walnut continues its turn for, or stopped continuing it for (sessions/turn-run.ts).
-      const turn = turnWaitFacts(turns.turnRunNow(rec, { failed: true }), rec);
+      const retryAt = rec.process_status !== 'running' ? autoContinue?.retryAt(rec.claudeSessionId) ?? null : null;
       sessions.set(rec.claudeSessionId, {
         ...(outliving.length ? { outliving } : {}),
         ...(hostDown ? { hostDown } : {}),
+        ...(retryAt ? { autoRetryAt: new Date(retryAt).toISOString() } : {}),
         // A quiet turn (Walnut's idle compaction, sessions/quiet-turn.ts) is no running work.
         processStatus: rec.process_status === 'running' && isQuietTurn(rec.claudeSessionId) ? 'idle' : rec.process_status,
         errorMessage: rec.errorMessage,
         errorReason: rec.status_reason, statusSince: rec.statusUpdatedAt || rec.last_status_change || rec.lastActiveAt,
         errorKind: rec.errorKind,
-        ...turn,
+        restartLoss: liveRestartLoss(rec, recovery),
+        ...(endpoint && rec.process_status !== 'running' ? { endpointWait: endpointWaitOf(rec, endpoint) } : {}),
+        ...(limits && rec.process_status !== 'running' ? { usageLimit: limits.usageLimitOfRecord(rec) } : {}),
         pendingTool: rec.pendingPermission ? (rec.pendingPermission.toolName ?? 'permission') : undefined,
         taskId: rec.taskId, archived: rec.archived, startedAt: rec.startedAt,
       });

@@ -1,5 +1,5 @@
 /**
- * Inbox Triage's standing routing rules: "messages about X go to task Y", kept across runs.
+ * Inbox Triage's standing routing rules: "mail about X goes to task Y", kept across runs.
  *
  * Every triage run is a new task and a new session that completes (2026-11-05: "Triage · 21:38 ·
  * 2 items"), so a routing the user asked for in one run's chat was gone by the next. The rules live
@@ -10,10 +10,9 @@
  *
  * Who writes: a person (Settings > Inbox Triage), Main or a VP (ops `triage_rule_set` /
  * `triage_rule_delete`), checked where the route is served (routes/triage-rules-v1.ts). A rule is
- * matched by plain case-insensitive substrings, no model call: `from` against the sender (a Slack
- * message's author and conversation), `subject` against its text; a rule with both needs both.
- * Mail no longer reaches a batch (the mail router owns it since 2026-11-14); the `'mail'` source
- * below stays only so rules and routed-item notes written before that still read.
+ * matched by plain case-insensitive substrings, no model call: `from` against the sender (a mail's
+ * name and address, a Slack message's author and conversation), `subject` against a mail's subject
+ * or a Slack message's text; a rule with both needs both.
  *
  * File: `<WALNUT_HOME>/triage/routing-rules.json`, one writer at a time (withFileLock). Only a missing file reads as no rules; anything else that is not a valid table throws (readRulesFile).
  * Paths come from the caller, because the batch action is its own bundle (actions/inbox-triage-batch.ts).
@@ -149,7 +148,7 @@ function parseRulesFile(file: string, content: string): RoutingRulesFile {
 
 // Only a missing file is no rules. A read that failed (EACCES, EMFILE, an I/O error), an empty
 // file, a wrong version, `rules` not a list or a rule Walnut cannot read throws: read as "no
-// rules" it would hand every item a rule covers to triage as unrouted, and a write that
+// rules" it would hand every item a rule covers to triage as unrouted mail, and a write that
 // started from it would replace the whole table with an empty one.
 async function readRulesFile(file: string): Promise<RoutingRulesFile> {
   let content: string;

@@ -92,8 +92,8 @@ export function deepMerge(current: unknown, patch: unknown): unknown {
  * Fold a patch onto the current config, returning ONLY the top-level keys the
  * patch touches.
  *
- * updateConfig() merges a section only one level deep, so each touched key must
- * arrive fully merged below that; and sending the WHOLE config back would make every
+ * updateConfig() replaces top-level keys wholesale, so each touched key must
+ * arrive fully merged; and sending the WHOLE config back would make every
  * toggle rewrite unrelated sections (and clobber a concurrent writer).
  */
 export function mergeTopLevel(

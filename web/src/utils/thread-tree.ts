@@ -22,7 +22,6 @@
  */
 import type { SessionPinnedQuote, SessionThreadAnchor } from '@/types/session';
 import { pinLabelFor } from '@/utils/pin-label';
-import { sendUuidsOfRow } from '@/utils/send-uuids';
 
 /** NUL — the one separator that cannot appear inside a msgId or a passage (same
  *  reasoning, and the same character, as pinKeyOf's key shape). */
@@ -148,8 +147,6 @@ export interface ThreadTreeMessage {
    * the attachment's `source_uuid`, which the server copies here.
    */
   sourceUuid?: string;
-  /** The other sends Claude Code merged into this line (`mergedSendUuids`). */
-  mergedUuids?: readonly string[];
   /**
    * Set by the split (tagged-reply-split.ts fileStrictAnswers) when a row's place
    * does not say whose it is: the thread id of the user row it is filed under,
@@ -396,7 +393,7 @@ export function withPendingUserRows<T extends ThreadTreeMessage>(
   const known = new Set<string>();
   for (const m of messages) {
     if (m.msgId) known.add(m.msgId);
-    for (const u of sendUuidsOfRow(m)) known.add(u);
+    if (m.sourceUuid) known.add(m.sourceUuid);
   }
   const extra = pending.filter((m) => !known.has(m.userUuid as string));
   return extra.length === 0 ? messages : [...messages, ...extra];

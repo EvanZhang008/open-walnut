@@ -41,8 +41,6 @@ export interface SessionStartParams {
   createCwd?: boolean;
   /** An isolated workspace for the start (core/workspaces), as the draft's workspace row. */
   workspace?: { provider: string; inputs?: unknown };
-  /** Opt out of the code task's default workspace (task_start `workspace: false`): run in the folder itself. */
-  noWorkspace?: boolean;
   engine?: SessionEngine;
   expectReply?: boolean;
   replyTimeoutSecs?: number;
@@ -97,8 +95,6 @@ export interface SessionStartResult {
   starting?: boolean;
   /** The task's isolated workspace is being made; the session starts in it once it is ready. */
   preparing?: boolean;
-  /** Nobody asked for that workspace: the task is a code task, so it gets one by default (default-isolation.ts). */
-  isolation?: { provider: string; displayName: string; byDefault: true };
   /** The task already had its one session: the message continued it (one-session-per-task.ts). */
   continued?: boolean;
   /** It started on the fallback engine: the default engine was out of usage (agents/fallback-engine.ts). */
@@ -413,8 +409,9 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
     const { resolveCaller } = await import('./session-send-core.js');
     const caller = await resolveCaller(params.callerSid);
     if (caller.kind === 'session' && caller.record.taskId) {
-      const { mayShareTaskContext } = await import('../router/context-sharing.js');
-      if (!await mayShareTaskContext(caller.record.taskId, task.id)) throw areaRefusal('cross_area', 'A router starts no other task, and no other task starts a router. Nothing was started.');
+      const { mayShareTaskContext, mayManageRoutedTask } = await import('../router/context-sharing.js');
+      if (!await mayShareTaskContext(caller.record.taskId, task.id)
+        && !await mayManageRoutedTask(caller.record.taskId, task.id)) throw areaRefusal('cross_area', 'Only the person, Main or the current owning VP may start routed work across its area boundary. Nothing was started.');
     }
   }
   if (params.source !== 'engine-switch') {
@@ -489,11 +486,6 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
   if (params.workspace) {
     const made = await startInNewWorkspace(task, params, params.workspace);
     if (made) return made;
-  } else if (!area) {
-    const made = await startInDefaultWorkspace(task, params);
-    if (made) return made;
-    // The host was asked meanwhile: read the task again, another start may have changed it.
-    if (made === null) task = await getTask(task.id);
   }
   if (!area && willDeferStart(task, params)) {
     // Its host's slot is taken when the workspace is ready and the start runs (manager.ts).
@@ -1047,7 +1039,7 @@ function pendingApplied(params: SessionStartParams): string[] {
  * the way, and the ordinary paths take the start.
  */
 async function startInNewWorkspace(
-  task: Task, params: SessionStartParams, workspace: NonNullable<SessionStartParams['workspace']> & { byDefault?: boolean },
+  task: Task, params: SessionStartParams, workspace: NonNullable<SessionStartParams['workspace']>,
 ): Promise<SessionStartResult | null> {
   if (!workspace.provider) throw new QuickStartError('workspace needs a provider (workspace_providers lists them)', 400);
   if (task.workspace && (isLaunchReady(task.workspace) || task.workspace.state === 'creating')) return null;
@@ -1068,44 +1060,6 @@ async function startInNewWorkspace(
   await checkUserRequest(task, params.callerSid, params.userRequest);
   const made = await requestTaskStartWorkspace(task, params, workspace, place);
   return made ? { ...made, applied: pendingApplied(params) } : null;
-}
-
-/**
- * A code task's first session starts in its own workspace by default (workspaces/default-isolation.ts).
- * Null: it starts as before, in its folder (undefined: nothing was asked, the task is as read).
- * The start's slot is held while the host is asked, so a second start meanwhile reads this one
- * as under way. An automatic start on a host with no room makes nothing: the ordinary path
- * places it by load, queues it or says the host is full, as before.
- */
-async function startInDefaultWorkspace(task: Task, params: SessionStartParams): Promise<SessionStartResult | null | undefined> {
-  const { defaultWorkspaceFor, notACodeTaskStart } = await import('../workspaces/default-isolation.js');
-  if (notACodeTaskStart(task, params)) return undefined;
-  if (pendingStarts.has(task.id)) return undefined;
-  pendingStarts.set(task.id, '');
-  try {
-    const auto = await defaultWorkspaceFor(task, params, () => resolveTaskLaunchReadOnly(task, params));
-    if (!auto) return null;
-    const { admitHostStart, isAutomaticStart, HostsFullError } = await import('./host-admission.js');
-    if (await isAutomaticStart(params)) {
-      try {
-        (await admitHostStart(task.id, auto.host, { automatic: true }))(0);
-      } catch (err) {
-        if (!(err instanceof HostsFullError)) throw err;
-        log.session.info('default workspace skipped: its host has no room now', { taskId: task.id, host: auto.host });
-        return null;
-      }
-    }
-    const fresh = await getTask(task.id);
-    if (notACodeTaskStart(fresh, params)) return null;
-    const made = await startInNewWorkspace(fresh, params, { provider: auto.provider, inputs: auto.inputs, byDefault: true }).catch((err) => {
-      // A default never blocks the start: it goes on in the folder, as before.
-      log.session.warn('default workspace not made', { taskId: task.id, provider: auto.provider, error: err instanceof Error ? err.message : String(err) });
-      return null;
-    });
-    return made ? { ...made, isolation: { provider: auto.provider, displayName: auto.displayName, byDefault: true } } : null;
-  } finally {
-    if (pendingStarts.get(task.id) === '') pendingStarts.delete(task.id);
-  }
 }
 
 /** A start of a task in a router area: the area, the isolated profile, and the start pinned to its place. */
@@ -1132,13 +1086,12 @@ async function routerAreaStart(task: Task, params: SessionStartParams): Promise<
   try {
     file = await readRouterAreas(WALNUT_HOME);
   } catch (err) {
-    if (task.org_role !== 'router') return null;
+    if (!task.router_area_id && task.org_role !== 'router') return null;
     throw areaRefusal('router_areas_unreadable', `This task's router area could not be read: ${err instanceof Error ? err.message : String(err)}`, 503);
   }
-  // Only a router runs isolated; a mark an older build left on routed work is ignored (2026-11-14).
   const area = taskArea(file, task.id);
-  if (task.org_role === 'router' && task.router_area_id && task.router_area_id !== area?.id) throw areaRefusal('router_area_mismatch', 'The task and its configured area disagree. Nothing was started.');
-  if (!area && task.org_role === 'router' && task.router_area_id) throw areaRefusal('router_unassigned', 'This scoped task has no matching area. Finish its router setup before starting it.');
+  if (task.router_area_id && task.router_area_id !== area?.id) throw areaRefusal('router_area_mismatch', 'The task and its configured area disagree. Nothing was started.');
+  if (!area && (task.router_area_id || task.org_role === 'router')) throw areaRefusal('router_unassigned', 'This scoped task has no matching area. Finish its router setup before starting it.');
   if (!area) return null;
   if (task.router_area_id !== area.id || task.source !== 'local'
     || file.routers.some((router) => router.taskId === task.id) !== (task.org_role === 'router')) {
@@ -1170,7 +1123,7 @@ async function routerAreaStart(task: Task, params: SessionStartParams): Promise<
     throw areaRefusal('area_place_fixed', `Task ${task.id} belongs to router area ${area.id} and runs only in its own task directory, not in ${params.cwd}.`);
   }
   return {
-    area, profile: routerAreaProfile(area.id), cwd,
+    area, profile: routerAreaProfile(area.id, file.routers.some((router) => router.taskId === task.id) ? 'router' : 'work'), cwd,
     params: { ...params, engine: undefined, mode: 'dontAsk', host: '__local__', cwd },
   };
 }
@@ -1181,7 +1134,7 @@ async function routerAreaStart(task: Task, params: SessionStartParams): Promise<
  * continued, resumed, retired or replaced by a start; the refusal leaves it as it is.
  */
 function refuseForeignAreaSessions(task: Task, area: RouterArea, records: SessionRecord[]): void {
-  const foreign = records.find((r) => !isRouterAreaSession(r, area));
+  const foreign = records.find((r) => !isRouterAreaSession(r, area, task.org_role === 'router' ? 'router' : 'work'));
   if (!foreign) return;
   throw new QuickStartError(
     `Task ${task.id} belongs to router area ${area.id}, but its session ${foreign.claudeSessionId} was not started isolated in that area. `

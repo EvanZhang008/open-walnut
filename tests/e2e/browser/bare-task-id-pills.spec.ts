@@ -175,7 +175,7 @@ test('a task pill on a surface with no click handler opens the task on Home in-a
     host.innerHTML = `<a href="/tasks/${id}" class="task-link" data-task-id="${id}">pill</a>`
     document.body.appendChild(host)
   }, OPEN_ID)
-  // There is no task page: the click locates and selects the task on Home (openTaskOnHome).
+  // There is no task page: the click locates and selects the task on Home (openTaskLink).
   const located = page.locator(`#home-task-navigation [data-task-id="${OPEN_ID}"]`)
     .and(page.locator('.task-focused, .todo-pinned-card-active'))
   await expect(located).toHaveCount(0)

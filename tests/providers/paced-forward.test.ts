@@ -1,8 +1,7 @@
 /**
  * The bulk channel's own connection to a host goes up at a steady pace (src/providers/paced-forward.ts;
  * 2026-11-12: the relay ended it within 1 to 4 s of each redial, eleven times in a row, because what
- * waited for it went out at full speed at once). The pace is the host's learned one
- * (tests/providers/upload-pace.test.ts); these cases name a fixed one.
+ * waited for it went out at full speed at once).
  *
  *   - bytes up leave at the pace and arrive whole and in order; bytes down pass at once;
  *   - its upload counter moves while a big frame is still going up (a command's timeout reads it);
@@ -10,8 +9,8 @@
  *   - every SSH forward Walnut opens to a host is paced (the bulk channel by this forward, the stream
  *     lane per stream): a new one fails here until it is;
  *   - no upload command carries more than MAX_UPLOAD_FRAME_BYTES (writePart and uploadPart split a
- *     bigger chunk): a daemon closes a client it heard no whole frame from for 120 s, and at the
- *     slowest pace the bulk channel learns a bigger frame is still going up then.
+ *     bigger chunk): a daemon closes a client it heard no whole frame from for 120 s, and at the pace
+ *     a bigger frame is still going up then.
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
@@ -151,13 +150,9 @@ describe('every SSH forward to a host is paced', () => {
 describe('no upload frame outlasts a daemon keepalive at the bulk pace', () => {
   afterEach(() => __setTransferConnectionResolverForTesting(null))
 
-  it('MAX_UPLOAD_FRAME_BYTES as base64 goes up within 100 s at the slowest pace the bulk channel learns', async () => {
-    const { CHANNEL_RULES } = await import('../../src/providers/upload-pace.js')
-    const { learnFromCut } = await import('../../src/lib/adaptive-pace.js')
-    const floor = CHANNEL_RULES.bulk.floor
-    expect(Math.ceil(MAX_UPLOAD_FRAME_BYTES * 4 / 3) / floor).toBeLessThanOrEqual(100)
-    // However low the rate a cut came at, the bulk channel is never paced under it.
-    expect(learnFromCut(null, { at: 0, measured: 1, cap: null }, CHANNEL_RULES.bulk)!.rate).toBe(floor)
+  it('MAX_UPLOAD_FRAME_BYTES as base64 goes up within 100 s at the bulk pace', async () => {
+    const { BULK_UPLOAD_BYTES_PER_SEC } = await import('../../src/providers/ssh-upload-budget.js')
+    expect(Math.ceil(MAX_UPLOAD_FRAME_BYTES * 4 / 3) / BULK_UPLOAD_BYTES_PER_SEC).toBeLessThan(100)
   })
 
   it('the senders of upload parts take their size from it', () => {

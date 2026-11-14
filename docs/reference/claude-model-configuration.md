@@ -158,24 +158,6 @@ configuration repair, so respawn affected sessions.
   `effort,xhigh_effort,max_effort,thinking,adaptive_thinking`) makes the CLI
   send `--effort`; with the override alone it drops the flag silently.
 
-- A project can leave Claude Code plugins out of its sessions: project
-  metadata `claude_plugins_off` is a list of full plugin ids
-  (`name@marketplace`, at most 100; `[]` or `null` clears it), set with
-  `project_metadata_update` or `PUT /api/projects/:name/metadata`. Each
-  session of a task in that project starts with
-  `--settings {"enabledPlugins":{"<id>":false}}`, which overrides the user's
-  own `enabledPlugins` for that one process only, so the plugin's skills,
-  agents and MCP servers stay out of every request. Config
-  `session.skill_listing_desc_chars` (an integer from 40 to 1536) adds
-  `skillListingMaxDescChars`, which cuts each skill's description in the skill
-  listing to that many characters. Both are unset by default and nothing is
-  sent then; fresh starts and resumes carry the same values
-  (`src/providers/claude-scope-settings.ts`). On one setup (CLI 2.1.322),
-  turning off plugins that held about half of the skills and capping the
-  listing at 200 took a bare session's first request from 37,749 to 29,312
-  tokens. Slim sessions and asks a host
-  starts from its spawn template while the Mac is away do not get them.
-
 ## Debugging
 
 - Probe configuration with an isolated `CLAUDE_CONFIG_DIR` and home directory.

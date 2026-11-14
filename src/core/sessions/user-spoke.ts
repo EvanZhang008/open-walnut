@@ -238,13 +238,10 @@ export interface SettleCheck { said: UserSaid; refusal?: string }
 export async function settleCheck(
   target: Spoken & Pick<Task, 'title'>, callerTaskId: string | null | undefined, userWords: string | undefined, what: string,
   everything: readonly Spoken[] = [],
-  opts: { anyAsk?: boolean } = {},
 ): Promise<SettleCheck | null> {
   if (!callerTaskId || callerTaskId === target.id) return null;
   const { openAskOf } = await import('./ask-answer.js');
-  const open = openAskOf(target);
-  // A report or phase write only takes off a report or chat ask; an answer (anyAsk) settles any.
-  if (!('ask' in open) || (!opts.anyAsk && open.where !== 'report' && open.where !== 'chat')) return null;
+  if (!('ask' in openAskOf(target))) return null;
   const said = await userSaidIn(target, everything);
   if (wordsNotPassedBack(said, userWords).length) return { said, refusal: userSpokeMessage(target, said, what) };
   // The words it quotes: his messages in the task newer than them must be quoted too.

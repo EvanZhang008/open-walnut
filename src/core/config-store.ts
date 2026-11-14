@@ -16,7 +16,6 @@ import { CONFIG_FILE } from '../constants.js';
 import { isHostReplicaProgram } from './server-role.js';
 import { NeedsLeaderError } from './replication/needs-leader.js';
 import {
-  CONFIG_FILE_MODE,
   commitConfigFile,
   isSettled,
   watchReplacedFile,
@@ -24,14 +23,10 @@ import {
   readConfigSnapshot,
   sameFileId,
   waitForQuietFile,
-  writeFileAtomic,
   type ConfigFileId,
   type ConfigFileState,
   type ConfigSnapshot,
 } from './config-file-io.js';
-import { CONFIG_RESTORE_HINT, configHistorySeed, pruneConfigHistory, recordConfigVersion, type ConfigHistorySeed } from './config-history.js';
-
-export { CONFIG_FILE_MODE, writeFileAtomic } from './config-file-io.js';
 
 /**
  * Sidecar copy of the last successfully written config.
@@ -74,7 +69,7 @@ export class ConfigUnreadableError extends Error {
   /** The HTTP answer (web/middleware/error-handler.ts): the file's state, not a server fault. */
   readonly status = 409;
   constructor(detail: string) {
-    super(`config.yaml cannot be read (${detail}). Walnut did not write it: fix the file, or restore it from ${CONFIG_RESTORE_HINT}, then try again.`);
+    super(`config.yaml cannot be read (${detail}). Walnut did not write it: fix the file, or restore it from config.yaml.bak, then try again.`);
     this.name = 'ConfigUnreadableError';
   }
 }
@@ -256,7 +251,7 @@ export async function modifyConfigDoc<T>(
   });
 }
 
-/** Restores, late-write merges and history prunes still running (tests wait for them). */
+/** Restores and late-write merges still running (tests wait for them). */
 const backgroundWork = new Set<Promise<void>>();
 function inBackground(work: Promise<void>): void {
   backgroundWork.add(work);
@@ -340,9 +335,37 @@ function repairWhenQuiet(key: string): void {
   inBackground(repairing);
 }
 
-/** Settles when the restores, late-write merges and history prunes running now (and any they start) are over. */
+/** Settles when the restores and late-write merges running now (and any they start) are over. */
 export async function _configRepairIdleForTest(): Promise<void> {
   while (backgroundWork.size > 0) await Promise.allSettled([...backgroundWork]);
+}
+
+/**
+ * Replace a file's whole content atomically: write a sibling temp, then rename.
+ *
+ * `fs.writeFile` truncates first and writes after, so a concurrent reader can
+ * observe a HALF file — and half a config.yaml is worse than none, because it
+ * still parses. The `agent:` section sits near the top of a ~280-line file, so a
+ * reader landing in that window got valid YAML with the whole section missing and
+ * silently ran on defaults, with no unreadable-config error logged because nothing
+ * ever threw (observed 2026-08-28 06:03, where the missing section sent one turn
+ * to a provider whose credentials this box does not keep).
+ *
+ * Temp lives in the SAME directory so the rename is a same-filesystem atomic
+ * swap (an EXDEV across /tmp would fall back to copy, reopening the window).
+ */
+/** config.yaml and its copies hold keys (a bucket's secret, provider keys): owner only. */
+export const CONFIG_FILE_MODE = 0o600;
+
+export async function writeFileAtomic(filePath: string, content: string, mode?: number): Promise<void> {
+  const tmp = `${filePath}.tmp-${process.pid}-${Date.now().toString(36)}`;
+  try {
+    await fs.writeFile(tmp, content, { encoding: 'utf-8', ...(mode !== undefined ? { mode } : {}) });
+    await fs.rename(tmp, filePath);
+  } catch (err) {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
 }
 
 /** Called after every write of config.yaml (the config and prefs copy kinds start a round). */
@@ -371,9 +394,8 @@ export function isOwnConfigWrite(hash: string): boolean {
 
 /**
  * Commit config.yaml (only over the file `expected` names, see commitConfigFile;
- * `undefined` replaces whatever is there), mirror it to the sidecar and save it
- * as a dated copy (config-history.ts; the first copy is the content it replaced).
- * Neither copy ever fails the write.
+ * `undefined` replaces whatever is there) and mirror it to the sidecar. The
+ * sidecar write never throws.
  */
 export async function writeConfigWithBackup(
   content: string,
@@ -381,7 +403,6 @@ export async function writeConfigWithBackup(
   opts: { holdReplaced?: boolean } = {},
 ): Promise<{ outcome: 'written' | 'conflict'; replaced?: FileHandle }> {
   refuseConfigWriteOnReplica();
-  const seed = await configHistorySeed(CONFIG_FILE);
   const prevHash = ownWriteHash;
   ownWriteHash = configContentHash(content);
   let replaced: FileHandle | undefined;
@@ -402,7 +423,6 @@ export async function writeConfigWithBackup(
       error: err instanceof Error ? err.message : String(err),
     });
   }
-  await keepConfigVersion(content, seed);
   return { outcome: 'written', replaced };
 }
 
@@ -410,8 +430,7 @@ export async function writeConfigWithBackup(
  * Bring the sidecar up to an edit made outside Walnut, so a later restore gives
  * back that edit and not the older content Walnut wrote last. Only a file that
  * parses as a mapping and has finished being written (and, with `expectedHash`,
- * is still the content the caller saw) is copied, to the sidecar and as a dated
- * copy (config-history.ts); never on a host replica.
+ * is still the content the caller saw) is copied; never on a host replica.
  */
 export async function refreshConfigBackup(expectedHash?: string): Promise<boolean> {
   if (isHostReplicaProgram()) return false;
@@ -433,16 +452,9 @@ export async function refreshConfigBackup(expectedHash?: string): Promise<boolea
       log.session.info('config.yaml changed outside Walnut without some sections the backup has: the backup keeps them', { dropped });
       return false;
     }
-    const seed = await configHistorySeed(CONFIG_BACKUP_FILE);
     await writeFileAtomic(CONFIG_BACKUP_FILE, snap.content!, CONFIG_FILE_MODE);
-    await keepConfigVersion(snap.content!, seed);
     return true;
   });
-}
-
-/** Save a dated copy; the prune after it runs in the background (it never fails anything). */
-async function keepConfigVersion(content: string, seed: ConfigHistorySeed | null): Promise<void> {
-  if (await recordConfigVersion(content, seed)) inBackground(pruneConfigHistory());
 }
 
 

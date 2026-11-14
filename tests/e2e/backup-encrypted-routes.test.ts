@@ -396,7 +396,7 @@ describe('encrypted backups through the routes', () => {
   }, 60_000);
 
   it('the older S3 copy keeps its own engine', async () => {
-    await updateConfig({ backup: { enabled: true, bucket: 'legacy-bucket', region: 'us-west-2', destination: undefined } } as never);
+    await updateConfig({ backup: { enabled: true, bucket: 'legacy-bucket', region: 'us-west-2' } } as never);
     scheduler.resetAnchor();
     const { isBackupConfigured } = await import('../../src/core/backup/backup-scheduler.js');
     expect(await isBackupConfigured((await getConfig()).backup, WALNUT_HOME)).toBe(true);

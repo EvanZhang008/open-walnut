@@ -680,7 +680,6 @@ describe('every free-form map in the Config type is accounted for', () => {
     joined: 'net.joined: keyed by network id (a public key); each value is a machine name, platform and time',
     where: 'net.where: keyed by network id (a public key); each value is ip:port addresses and a relay URL',
     experimental: 'an on/off switch per experiment id (src/core/experimental.ts registry)',
-    shortcuts: 'ui.shortcuts: a key chord (Cmd+J) per place and command id (web/src/keyboard/commands.ts)',
     answered: 'first_run.answered: a first-run step id to the ISO time the person answered it (src/core/first-run.ts)',
   }
 

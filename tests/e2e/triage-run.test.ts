@@ -4,16 +4,14 @@
  * and the real claude-code executor, against a mock daemon and a mock CLI.
  *
  * What only this layer can prove:
- *  - the whole chain fires from nothing but Slack plugin events: collector → wake
+ *  - the whole chain fires from nothing but two plugin events: collector → wake
  *    counter → threshold → batch action → a session;
  *  - decision D2 — every run is a NEW task AND a NEW session, both filed under
  *    'Ask Inbox Triage' and both kept OFF the pinned board;
  *  - the batch the session receives is one envelope whose counts match the events;
  *  - the buffer is cleared only once a run's task exists (at-least-once);
  *  - `session:result` closes a run out: COMPLETE, exactly one journal line, and
- *    the State.md check that warns the NEXT envelope;
- *  - a mail arrival never reaches the buffer: the mail router owns mail since
- *    2026-11-14 (tests/core/triage-no-mail.test.ts is the unit half).
+ *    the State.md check that warns the NEXT envelope.
  *
  * The built-in action loads through the host's own module table
  * (src/actions/builtin-modules.ts), exactly as in the built server. The CLI is
@@ -39,7 +37,9 @@ import { loadTriageState } from '../../src/core/triage/state.js';
 import { triageRunsNotePath } from '../../src/core/triage/runs.js';
 import { getTask } from '../../src/core/task-manager.js';
 import { getSessionsForTask } from '../../src/core/session-tracker.js';
-import { triageStatePath } from '../../src/core/triage/state.js';
+import { routerAreasPath } from '../../src/core/router/areas.js';
+import { mailRouterKey } from '../../src/integrations/mail/router-source.js';
+import { __resetHostAdmissionForTesting } from '../../src/core/sessions/host-admission.js';
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs');
 const TRIAGE_PROJECT = 'Ask Inbox Triage';
@@ -91,14 +91,20 @@ async function readJournal(): Promise<string> {
 async function waitForWakeInterest(): Promise<void> {
   await vi.waitFor(() => {
     const interest = getRoutineWakeHandleForTesting()?.stats().interest ?? [];
+    expect(interest).toContain('plugin:mail:messages-received');
     expect(interest).toContain('plugin:slack:messages-received');
-    expect(interest).not.toContain('plugin:mail:messages-received');
   }, { timeout: 20_000, interval: 50 });
 }
 
-/** Announce a batch of arrivals the way the Slack plugin does, then flush. */
-async function announce(slackItems: number): Promise<void> {
+/** Announce a batch of arrivals the way the two plugins do, then flush. */
+async function announce(mailCounts: Array<[string, number]>, slackItems: number): Promise<void> {
   await waitForWakeInterest();
+  for (const [accountId, count] of mailCounts) {
+    bus.emit('plugin:mail:messages-received', {
+      accountId, count,
+      headlines: [{ from: `list@${accountId}.test`, subject: `${accountId}: RFC v3 is out` }],
+    }, ['web-ui']);
+  }
   if (slackItems > 0) {
     bus.emit('plugin:slack:messages-received', {
       count: slackItems,
@@ -143,7 +149,7 @@ beforeAll(async () => {
   const saved = await send('PUT', '/api/config', {
     triage: {
       enabled: true, every: '30m', every_messages: 20,
-      sources: ['slack'], mode: 'ask', active_hours: '',
+      sources: ['mail', 'slack'], mode: 'ask', active_hours: '',
     },
     // Two slots on this machine, as a small CI runner has (hosts/placement.ts hostSlots floors at
     // 2): each run's start holds its slot for a minute (run-start-deps.ts SLOT_HOLD_MS), so the
@@ -173,10 +179,11 @@ describe('Inbox Triage runs, end to end', () => {
   });
 
   it('22 arrivals cross the threshold and start ONE run: a new task, a new session, unpinned', async () => {
-    await announce(22);
+    await announce([['work', 14], ['personal', 2]], 6);
 
     const buffered = await loadTriageState();
-    expect(buffered.pending.slack).toHaveLength(22);
+    expect(buffered.pending.mail.map((r) => r.accountId)).toEqual(['work', 'personal']);
+    expect(buffered.pending.slack).toHaveLength(6);
 
     const task = await waitForNewRunTask(seenTasks);
     seenTasks.add(task.id);
@@ -188,8 +195,8 @@ describe('Inbox Triage runs, end to end', () => {
     expect(task.cwd).toBe(WALNUT_HOME);
     // pinTier: null — background automation never adds a card to the pinned board.
     expect(task.pinned).toBeFalsy();
-    // The title template with the clock and the batch size filled in: 22 Slack
-    // items is exactly what the action's count hint carried.
+    // The title template with the clock and the batch size filled in: 16 mail
+    // messages + 6 Slack items is exactly what the action's count hint carried.
     expect(task.title).toMatch(/^Triage · \d{2}:\d{2} · 22 items$/);
 
     const sessions = await vi.waitFor(async () => {
@@ -216,9 +223,8 @@ describe('Inbox Triage runs, end to end', () => {
     // itself is proven by fire.items above and by the envelope's note below.
     expect(injected).not.toContain('WALNUT_TRIAGE_COUNT');
     expect(injected).toContain('<walnut-message kind="trigger" from="Inbox Triage"');
-    expect(injected).toContain('batch · 22 Slack items');
-    expect(injected).toContain('Slack — 22 items');
-    expect(injected).not.toContain('Mail —');
+    expect(injected).toContain('16 new mails in 2 accounts · 6 Slack items');
+    expect(injected).toContain('Mail — 16 new messages across 2 accounts');
   }, 60_000);
 
   it('the buffer is cleared only once the run has a task (at-least-once)', async () => {
@@ -228,12 +234,13 @@ describe('Inbox Triage runs, end to end', () => {
       return s;
     }, { timeout: 30_000, interval: 200 });
     expect(state.claim).toBeUndefined();
+    expect(state.pending.mail).toEqual([]);
     expect(state.pending.slack).toEqual([]);
     expect(state.lastRunAtMs).toBeGreaterThan(0);
   }, 60_000);
 
   it('a second batch makes a SECOND task and a SECOND session (never reuses the first)', async () => {
-    await announce(24);
+    await announce([['work', 20]], 4);
 
     const second = await waitForNewRunTask(seenTasks);
     seenTasks.add(second.id);
@@ -331,20 +338,99 @@ describe('Inbox Triage runs, end to end', () => {
     }, { timeout: 30_000, interval: 200 });
   }, 60_000);
 
-  it('a mail arrival never reaches the buffer (the mail router owns mail since 2026-11-14)', async () => {
-    const collector = getTriageCollectHandleForTesting()!;
-    const handledBefore = collector.stats().handled;
-    const before = await loadTriageState();
-    bus.emit('plugin:mail:messages-received', {
-      accountId: 'desk', count: 2,
-      headlines: [{ from: 'canary-sender@desk.test', subject: 'Canary-mail-7f3d', messageId: 'INBOX:41' }],
-    }, ['web-ui']);
-    await collector.flush();
-    // Not even consulted: mail is outside the collector's interest set.
-    expect(collector.stats().handled).toBe(handledBefore);
-    const after = await loadTriageState();
-    expect(after.pending).toEqual(before.pending);
-    const raw = await fs.readFile(triageStatePath(), 'utf-8');
-    expect(raw).not.toContain('Canary-mail-7f3d');
-  }, 60_000);
+  it('mail queued before it was classified into an area never reaches the run that reads the batch', async () => {
+    const account = 'desk';
+    const canary = { from: 'canary-sender@desk.test', subject: 'Canary-classified-7f3d', messageId: 'INBOX:41', canonicalKey: mailRouterKey(account, 'INBOX:41', '<canary-41@desk.test>') };
+    const ordinary = { from: 'ordinary-sender@desk.test', subject: 'Ordinary-open-9a2c', messageId: 'INBOX:42', canonicalKey: mailRouterKey(account, 'INBOX:42', '<ordinary-42@desk.test>') };
+
+    // Below the wake threshold, so nothing runs until the test asks for it.
+    bus.emit('plugin:mail:messages-received', { accountId: account, count: 2, headlines: [canary, ordinary] }, ['web-ui']);
+    await getTriageCollectHandleForTesting()!.flush();
+    const queued = await loadTriageState();
+    expect(queued.claim).toBeUndefined();
+    expect(queued.pending.mail.find((row) => row.accountId === account)?.headlines).toEqual([canary, ordinary]);
+
+    const areas = routerAreasPath(WALNUT_HOME);
+    const areasDir = path.dirname(areas);
+    const dirExisted = await fs.stat(areasDir).then(() => true, () => false);
+    const previous = await fs.readFile(areas, 'utf-8').catch((err: NodeJS.ErrnoException) => {
+      if (err.code === 'ENOENT') return undefined;
+      throw err;
+    });
+    try {
+      await fs.mkdir(areasDir, { recursive: true });
+      await fs.writeFile(areas, JSON.stringify({
+        version: 1,
+        areas: [{ id: 'desk-area', name: 'Desk', host: '__local__', taskIds: [], sources: [{ kind: 'mail', account }] }],
+        routers: [],
+        items: [{ source: { kind: 'mail', account, message: canary.messageId }, areaId: 'desk-area', canonicalKey: canary.canonicalKey }],
+      }), 'utf-8');
+
+      const job = await triageRoutine();
+      expect(job?.id, 'the triage routine must exist').toBeTruthy();
+      await vi.waitFor(async () => {
+        expect((await triageRoutine())?.state?.runningAtMs).toBeUndefined();
+      }, { timeout: 30_000, interval: 200 });
+      // The two runs above may still hold this host's two slots (a minute from their starts), and
+      // a routine's start waits for room (sessions/host-admission.ts). That wait is the product
+      // working, not what this case measures, so the holds are let go (2026-11-10 CI: the forced
+      // run waited, was cut at 30 s, made no task and still answered ran:true).
+      __resetHostAdmissionForTesting();
+      daemon.clearCommandHistory();
+      const known = new Set((await triageTasks()).map((t: any) => t.id));
+      // POST /api/routines/:id/run answers { result } with ops.run's CronRunResult; only
+      // { ran: false, reason: 'already-running' } proves nothing ran, so only that is sent again.
+      const deadline = Date.now() + 30_000;
+      for (;;) {
+        const ran = await send('POST', `/api/routines/${job.id}/run`, {});
+        expect(ran.status, JSON.stringify(ran.json)).toBe(200);
+        const result = ran.json?.result;
+        if (result?.ok === true && result.ran === false && result.reason === 'already-running' && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 500));
+          continue;
+        }
+        expect(result, JSON.stringify(ran.json)).toEqual({ ok: true, ran: true });
+        break;
+      }
+
+      const task = await waitForNewRunTask(known);
+      // The count is the event's: one hidden headline never shrinks it.
+      expect(task.title).toMatch(/^Triage · \d{2}:\d{2} · 2 items$/);
+
+      const escaped = (s: string) => JSON.stringify(s).slice(1, -1);
+      const has = (line: string, needle: string) => line.includes(needle) || line.includes(escaped(needle));
+      const daemonLines = () => [
+        ...daemon.getCommandHistoryFor('start').map((e) => String(e.payload.message ?? '')),
+        ...daemon.getCommandHistoryFor('send').map((e) => String(e.payload.message ?? '')),
+        ...daemon.getFifoWrites().map((w) => w.message),
+      ].filter(Boolean);
+      const envelope = await vi.waitFor(() => {
+        const found = daemonLines().find((line) => has(line, 'from="Inbox Triage"') && has(line, ordinary.subject));
+        expect(found, 'the run session must receive the batch through the daemon').toBeDefined();
+        return found!;
+      }, { timeout: 30_000, interval: 200 });
+      expect(has(envelope, ordinary.from)).toBe(true);
+      for (const line of daemonLines()) {
+        expect(line).not.toContain(canary.subject);
+        expect(line).not.toContain(canary.from);
+      }
+      const record = JSON.stringify(await getTask(task.id));
+      expect(record).not.toContain(canary.subject);
+      expect(record).not.toContain(canary.from);
+
+      await vi.waitFor(async () => {
+        const s = await loadTriageState();
+        expect(s.runs).toBe(queued.runs + 1);
+        expect(s.claim).toBeUndefined();
+        expect(s.pending.mail).toEqual([]);
+      }, { timeout: 30_000, interval: 200 });
+    } finally {
+      if (previous === undefined) {
+        await fs.rm(areas, { force: true });
+        if (!dirExisted) await fs.rmdir(areasDir).catch(() => {});
+      } else {
+        await fs.writeFile(areas, previous, 'utf-8');
+      }
+    }
+  }, 120_000);
 });

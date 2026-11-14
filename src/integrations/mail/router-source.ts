@@ -87,25 +87,9 @@ export async function relocateMailItem(store: Pick<MailStore, 'getMessage' | 'me
   return item.scopeKey === scopeKey ? item : undefined;
 }
 
-/** The same delivery once its body is cached: every field but the body, the preview it replaces and a blank sender it filled is unchanged. */
-export function sameDeliveryButBody(before: MessageRow, after: MessageRow): boolean {
-  return before.account_id === after.account_id && before.message_id === after.message_id && !before.body_ref && !!after.body_ref
-    && before.sent_at === after.sent_at && before.received_at === after.received_at && before.rfc_message_id === after.rfc_message_id
-    && (before.from_addr === after.from_addr || (!before.from_addr && !!after.from_addr)) && before.subject === after.subject && before.thread_id === after.thread_id
-    && JSON.stringify(deliveryJson(before.attachments_json)) === JSON.stringify(deliveryJson(after.attachments_json))
-    && JSON.stringify(deliveryJson(before.payload, true)) === JSON.stringify(deliveryJson(after.payload, true));
-}
-
-/**
- * `noise`: what the router's noise decision does to an email (router-noise.ts); without it, nothing.
- * `fetchBody`: fetches and caches one email's body (read only: IMAP's BODY.PEEK, as the prefetch);
- * the delivery uses it when the routed email's body is not cached yet.
- */
+/** `noise`: what the router's noise decision does to an email (router-noise.ts); without it, nothing. */
 export function registerMailRouterSource(store: MailStore, bodies: MailBodyStore,
-  opts: {
-    noise?: (source: RouterItem['source']) => Promise<RouterNoiseOutcome>
-    fetchBody?: (account: string, message: string) => Promise<void>
-  } = {}): () => void {
+  opts: { noise?: (source: RouterItem['source']) => Promise<RouterNoiseOutcome> } = {}): () => void {
   const rowFor = async (source: RouterItem['source']) => {
     const row = await store.getMessage(source.account, source.message);
     if (!row) throw new RouterSourceError('source_missing', 'The exact email is not in the mail cache.');
@@ -114,12 +98,16 @@ export function registerMailRouterSource(store: MailStore, bodies: MailBodyStore
     }
     return row;
   };
-  const readRow = async (row: MessageRow, again: () => Promise<MessageRow>) => {
+  return registerRouterSource('mail', {
+    async resolve(source) { return itemOf(await rowFor(source)); },
+    async read(source) {
+      if (source.version === undefined) throw new RouterSourceError('source_changed', 'Reading an email needs its confirmed delivery version.');
+      const row = await rowFor(source);
       const body = row.body_ref ? await bodies.read(row.body_ref, { accountId: row.account_id, messageId: row.message_id }).catch((error: unknown) => {
         if (error instanceof MailBodySnapshotError) throw new RouterSourceError('source_changed', 'The confirmed email body is no longer complete in the cache.');
         throw error;
       }) : null;
-      const current = await again();
+      const current = await rowFor(source);
       if (current.body_ref !== row.body_ref) throw new RouterSourceError('source_changed', 'The cached email body changed while it was being read.');
       let attachments: Array<{ filename?: string; mimeType?: string; bytes?: number }> = [];
       try {
@@ -131,23 +119,6 @@ export function registerMailRouterSource(store: MailStore, bodies: MailBodyStore
         }));
       } catch { /* A damaged metadata cache does not fetch from the provider. */ }
       return { item: itemOf(row), body, bodyAvailable: !!body && (body.text !== undefined || body.html !== undefined), attachments, attachmentsAvailable: false as const };
-  };
-  return registerRouterSource('mail', {
-    async resolve(source) { return itemOf(await rowFor(source)); },
-    async readForDelivery(source) {
-      if (source.version === undefined) throw new RouterSourceError('source_changed', 'Reading an email needs its confirmed delivery version.');
-      const row = await rowFor(source);
-      if (row.body_ref || row.body_error || !opts.fetchBody) return readRow(row, () => rowFor(source));
-      await opts.fetchBody(source.account, source.message);
-      const filled = await store.getMessage(source.account, source.message);
-      // Anything else changed (a later delivery under the same id): the confirmed copy as cached.
-      if (!filled || !sameDeliveryButBody(row, filled)) return readRow(row, () => rowFor(source));
-      return readRow(filled, async () => (await store.getMessage(source.account, source.message)) ?? filled);
-    },
-    async read(source) {
-      if (source.version === undefined) throw new RouterSourceError('source_changed', 'Reading an email needs its confirmed delivery version.');
-      const row = await rowFor(source);
-      return readRow(row, () => rowFor(source));
     },
     async currentSources(sources) {
       const byAccount = new Map<string, Set<string>>();

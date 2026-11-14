@@ -35,6 +35,7 @@ interface LaneHandlers {
   sessionId: string;
   sessionCwd?: string;
   sessionHost?: string;
+  onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   onFileOpen?: (path: string, line?: number) => void;
 }
@@ -263,7 +264,7 @@ function countHistoryChars(messages: readonly SessionHistoryMessage[]): number {
   return n;
 }
 
-export function LaneHistoryTimeline({ messages, live, startedAt, agentLabel, sessionId, sessionCwd, sessionHost, onSessionClick, onFileOpen }: LaneHandlers & {
+export function LaneHistoryTimeline({ messages, live, startedAt, agentLabel, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: LaneHandlers & {
   messages: readonly SessionHistoryMessage[];
   /** The agent is still running (the caller polls): show the working indicator. */
   live?: boolean;
@@ -273,7 +274,7 @@ export function LaneHistoryTimeline({ messages, live, startedAt, agentLabel, ses
   agentLabel?: string;
 }) {
   const parts = useMemo(() => laneHistoryParts(messages), [messages]);
-  const handlers = { sessionId, sessionCwd, sessionHost, onSessionClick, onFileOpen };
+  const handlers = { sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen };
   return (
     <>
       {parts.map((part, i) => {

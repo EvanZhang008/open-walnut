@@ -209,6 +209,7 @@ function PinMoreFlyout({ open, anchorRef, customizing, setCustomizing, more, all
             title={shown ? `Hide ${c.label} from the menu` : `Show ${c.label} on the menu`}
             onClick={(e) => { e.stopPropagation(); onToggle(c.value); }}
           >
+            <span className="task-kebab-project-check">{shown ? '✓' : ''}</span>
             <span className="task-pin-opt-icon" style={{ color: c.color }}>{c.icon}</span>
             <span className="task-kebab-project-opt-name">{c.label}</span>
           </button>
@@ -221,6 +222,7 @@ function PinMoreFlyout({ open, anchorRef, customizing, setCustomizing, more, all
         data-testid="kebab-pin-customize-done"
         onClick={(e) => { e.stopPropagation(); setCustomizing(false); }}
       >
+        <span className="task-kebab-project-check" />
         <span className="task-kebab-project-opt-name">Done</span>
       </button>
     </>
@@ -238,6 +240,7 @@ function PinMoreFlyout({ open, anchorRef, customizing, setCustomizing, more, all
             title={isCurrent ? `Unpin from ${c.label}` : c.label}
             onClick={(e) => { e.stopPropagation(); onChoose(c.value, isCurrent); }}
           >
+            <span className="task-kebab-project-check">{isCurrent ? '✓' : ''}</span>
             <span className="task-pin-opt-icon" style={{ color: c.color }}>{c.icon}</span>
             <span className="task-kebab-project-opt-name">{c.label}</span>
           </button>
@@ -251,6 +254,7 @@ function PinMoreFlyout({ open, anchorRef, customizing, setCustomizing, more, all
         data-testid="kebab-pin-customize"
         onClick={(e) => { e.stopPropagation(); setCustomizing(true); }}
       >
+        <span className="task-kebab-project-check" />
         <span className="task-kebab-project-opt-name">Customize menu…</span>
       </button>
     </>

@@ -76,9 +76,7 @@
   margin-right: 3px;
 }
 
-.shortcuts-help kbd,
-.shortcuts-settings .shortcuts-help-keys kbd,
-.session-jump-badge kbd {
+.shortcuts-help kbd {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -100,124 +98,10 @@
   line-height: 1.5;
 }
 
-/* The column number badges shown while the jump modifier is held (pages/useHomeKeyboard.ts):
-   one key cap per column, just under its header (whose rows are all buttons: JumpBadge sets the
-   top), at the top left of the transcript while the key is held. The last column also shows
-   the mod+9 that reaches it. */
-.main-page-session-column:has(> .session-jump-badge) { position: relative; }
-
 /* The current column (useHomeKeyboard's `current`, `is-current`) wears no mark of its own: its
    header and composer look as every column's do (2026-11-10, the user, of the tinted header with
-   an accent line: "who add this active when i clcik? so ugly"). Only the held modifier's number
-   below says which column the keys act on. tests/web/no-current-column-highlight.test.ts. */
-.session-jump-badge {
-  position: absolute;
-  top: 6px;
-  left: 10px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  z-index: 60;
-  pointer-events: none;
-  animation: session-jump-badge-in 0.12s ease-out;
-}
-
-.session-jump-badge kbd {
-  min-width: 40px;
-  height: 30px;
-  padding: 0 10px;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  background: var(--card-bg);
-  border-radius: 9px;
-  border-bottom-width: 3px;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.08);
-}
-
-.session-jump-badge kbd.session-jump-badge-last {
-  min-width: 0;
-  height: 22px;
-  padding: 0 6px;
-  font-size: 12px;
-  font-weight: 500;
-  border-radius: 7px;
-  border-bottom-width: 2px;
-  color: var(--fg-muted);
-  background: var(--card-bg);
-  border-color: var(--border);
-}
-
-/* The current column's number, in the accent: where the keys act now. */
-.main-page-session-column.is-current .session-jump-badge kbd:not(.session-jump-badge-last) {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-
-@keyframes session-jump-badge-in {
-  from { opacity: 0; transform: translateY(-4px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .session-jump-badge { animation: none; }
-}
-
-/* A button's key while the modifier is held (keyboard/ShortcutHint.tsx): a small key cap just
-   under the button, over whatever is below it, never moving the button itself. Only the current
-   column's close shows its key: that is the column the key closes. */
-button:has(> .shortcut-hint) { position: relative; overflow: visible; }
-
-.shortcut-hint {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 50%;
-  transform: translateX(50%);
-  z-index: 60;
-  pointer-events: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 22px;
-  height: 22px;
-  padding: 0 6px;
-  font: 600 12px/1 var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-  color: var(--fg);
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-bottom-width: 2px;
-  border-radius: 6px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.16);
-  animation: session-jump-badge-in 0.12s ease-out;
-}
-
-.main-page-session-column:not(.is-current) .shortcut-hint[data-command="session.close"] { display: none; }
-
-@media (prefers-reduced-motion: reduce) {
-  .shortcut-hint { animation: none; }
-}
-
-/* Settings > Keyboard shortcuts (components/settings/sections/KeyboardShortcutsSection.tsx). */
-.shortcuts-settings-control {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.shortcuts-settings-listening {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--accent);
-  padding: 0 4px;
-}
-
-.shortcuts-settings-none {
-  font-size: 12.5px;
-  color: var(--fg-muted);
-}
+   an accent line: "who add this active when i clcik? so ugly"). Holding the jump modifier shows
+   no number badges either (removed 2026-11-13). tests/web/no-current-column-highlight.test.ts. */
 
 /* The sheet takes focus as a whole (so Esc and the keys work at once): no ring around it all. */
 .app-modal.shortcuts-help:focus,

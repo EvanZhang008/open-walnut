@@ -554,18 +554,10 @@ export async function teardownBeforeCleanup(task: Task, ws: TaskWorkspace): Prom
 
 /** One line for the session's prompt: what setup did in this task's workspace. Empty when nothing ran. */
 export function setupPromptLine(ws: TaskWorkspace | undefined): string {
-  if (!ws || !ws.root || !isLaunchReady(ws)) return ''
-  const where = `This task runs in an isolated workspace at ${ws.root} on ${hostLabel(ws.host)}`
-  const run = ws.setup
-  if (!run) {
-    // A default workspace nobody asked for: say where the agent is, or a repository's own rules
-    // (work in this checkout) would send it back to the folder it was made from.
-    if (!ws.by_default) return ''
-    const made = ws.provider === 'git-worktree' && ws.branch ? `, a git worktree on branch ${ws.branch}` : ws.provider_name ? `, made by ${ws.provider_name}` : ''
-    return `${where}${made}, made from ${ws.anchor} by default, since this is a code task. `
-      + `Work and commit here; ${ws.anchor} is another checkout that other tasks or the user may be using.\n\n`
-  }
+  const run = ws?.setup
+  if (!ws || !run || !ws.root || !isLaunchReady(ws)) return ''
   const what = `its setup script "${run.name}" (\`${run.command.length > 200 ? `${run.command.slice(0, 200)}…` : run.command}\`, from ${run.source === 'project' ? 'the project\'s scripts' : run.source})`
+  const where = `This task runs in an isolated workspace at ${ws.root} on ${hostLabel(ws.host)}`
   if (run.state === 'done') return `${where}. Walnut ran ${what} when it was made, and it succeeded: what it installs or prepares is already there, so do not run it again.\n\n`
   if (run.state === 'running') {
     return `${where}. Walnut started ${what} beside this session, so it may still be running: before you rely on what it prepares, check its result (\`walnut tools call task_get\`, under workspace.setup).\n\n`

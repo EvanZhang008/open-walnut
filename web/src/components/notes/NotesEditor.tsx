@@ -17,7 +17,6 @@ import { Markdown } from 'tiptap-markdown';
 import { entityRefsToMarkdownLinks } from '@/utils/markdown';
 import { isOfficeClipboardHtml } from '@/utils/html-to-markdown';
 import { log } from '@/utils/log';
-import { useOpenTask } from '@/hooks/useOpenTask';
 import { TASK_PATH_PREFIX, taskIdOfPath } from '@/utils/task-path';
 import { SlashCommandExtension } from './slash-commands/SlashCommandExtension';
 import { SlashCommandPortal } from './slash-commands/SlashCommandPortal';
@@ -78,6 +77,8 @@ interface NotesEditorProps {
   tasks?: Task[];
   /** Currently focused task ID — pinned at top of search results */
   focusedTaskId?: string;
+  /** Called when user clicks a task reference link in the editor */
+  onTaskClick?: (taskId: string) => void;
   /** Enable wiki link [[ ]] support */
   enableWikiLinks?: boolean;
   /** Available notes for wiki link autocomplete */
@@ -194,7 +195,8 @@ const TaskAwareLink = Link.extend({
       return ['a', { ...HTMLAttributes, target: '_blank', rel: 'noopener noreferrer nofollow' }, 0];
     }
     // Normalize to relative path + strip target/rel — we handle navigation ourselves
-    // data-task-id is how every task-link reader (useTaskLinkClickFallback included) finds the task.
+    // data-task-id lets the app's task-link click fallback open it on Home when no
+    // onTaskClick is wired (useTaskLinkClickFallback).
     const taskId = taskIdOfPath(taskPath);
     const attrs: Record<string, unknown> = { ...HTMLAttributes, href: taskPath, class: 'task-link', ...(taskId ? { 'data-task-id': taskId } : {}) };
     delete attrs.target;
@@ -213,7 +215,7 @@ function isUrl(text: string): boolean {
   }
 }
 
-export function NotesEditor({ content, readOnly = false, onDirty, placeholder, className, autoFocus, findLabel = 'Find in document', tasks, focusedTaskId, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, onAskSelection, onAskHere, onComment, noDragEdits = false, tagSuggestions, attachmentNotePath, imageBaseDir, imageHost, imageVersion, onEditorReady, dictation = true }: NotesEditorProps) {
+export function NotesEditor({ content, readOnly = false, onDirty, placeholder, className, autoFocus, findLabel = 'Find in document', tasks, focusedTaskId, onTaskClick, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, onAskSelection, onAskHere, onComment, noDragEdits = false, tagSuggestions, attachmentNotePath, imageBaseDir, imageHost, imageVersion, onEditorReady, dictation = true }: NotesEditorProps) {
   const isExternalUpdate = useRef(false);
   const editorRef = useRef<Editor | null>(null);
   /**
@@ -231,8 +233,9 @@ export function NotesEditor({ content, readOnly = false, onDirty, placeholder, c
    * candidates so the disambiguation picker can render (§2.2 ambiguous edge).
    */
   const [disambig, setDisambig] = useState<{ target: string; candidates: NoteListItem[] } | null>(null);
-  // Stable, so ProseMirror's handleClick (built once) can hold it directly.
-  const openTask = useOpenTask();
+  // Ref so ProseMirror's handleClick closure always sees the latest callback
+  const onTaskClickRef = useRef(onTaskClick);
+  onTaskClickRef.current = onTaskClick;
   // Refs so the wiki-link click plugin (built once) always sees the latest
   // note list + navigate callback without rebuilding the editor.
   const wikiLinkNotesRef = useRef(wikiLinkNotes);
@@ -393,10 +396,10 @@ export function NotesEditor({ content, readOnly = false, onDirty, placeholder, c
         const anchor = target.closest('a');
         const href = anchor?.getAttribute('href');
         const taskPath = href ? extractTaskPath(href) : null;
-        if (taskPath) {
+        if (taskPath && onTaskClickRef.current) {
           event.preventDefault();
           const taskId = taskIdOfPath(taskPath);
-          if (taskId) openTask(taskId);
+          if (taskId) onTaskClickRef.current(taskId);
           return true; // tell ProseMirror we handled it
         }
         // External link (openOnClick is disabled so we do it manually): the plugin that

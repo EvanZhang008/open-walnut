@@ -249,10 +249,6 @@ export function checkLaunchDefaultsShape(patch: Record<string, unknown>): Record
     else if (!modelOk(model)) throw new ProjectSettingsError(`default_model is not a model id: ${JSON.stringify(out.default_model)}`);
     else out.default_model = model;
   }
-  if (Object.hasOwn(out, 'isolated_workspace') && out.isolated_workspace !== undefined
-    && out.isolated_workspace !== 'on' && out.isolated_workspace !== 'off') {
-    throw new ProjectSettingsError(`isolated_workspace must be "on" or "off" (null follows the global setting), not ${JSON.stringify(out.isolated_workspace)}`);
-  }
   if (Object.hasOwn(out, 'default_mode') && out.default_mode !== undefined) {
     if (typeof out.default_mode !== 'string' || !VALID_SESSION_MODE_IDS.has(out.default_mode)) {
       throw new ProjectSettingsError(`default_mode must be one of: ${SESSION_MODES.map((m) => m.id).join(', ')}`);

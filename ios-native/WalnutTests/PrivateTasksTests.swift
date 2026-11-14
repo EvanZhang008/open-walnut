@@ -222,7 +222,6 @@ final class PrivateTasksTests: XCTestCase {
          "live_activity":{"kind":"tool","since":"2026-11-01T00:00:00Z"},
          "result_report":{"result":"r"},"team_stop":{"at":"2026-11-01T00:00:00Z"},
          "wait_until":"2026-11-03T00:00:00Z","watched_at":"2026-11-01T00:00:00Z",
-         "background_at":"2026-11-01T00:00:00Z",
          "source":"plugin-a","sync_hold":{"state":"chosen","target":"plugin-a"},
          "summary_session_id":"s-summary","last_words":{"text":"w","at":"2026-11-01T00:00:00Z","session_id":"s-last"}}
         """.utf8))

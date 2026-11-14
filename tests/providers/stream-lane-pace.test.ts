@@ -5,11 +5,6 @@
  * rode the session link whenever the lane's last dial had failed).
  *
  *   - StreamLane: a 'replica' stream's bytes leave at the pace; a 'web' stream's at once;
- *     with no pace named, the host's learned one (upload-pace.ts): unpaced until a cut, so a
- *     host with no memory takes a 'replica' stream at full speed, and a lane closed by Walnut
- *     teaches nothing; only its SSH forward exiting by itself while uploading teaches (a relay
- *     cut), never the daemon closing the socket with the forward still up (an update, a swap)
- *     or a heartbeat timeout (a stall);
  *     the bytes arrive whole and in order; a dropped lane says what it had sent, by purpose.
  *   - DaemonConnection.openStream: with a lane that is not up, a 'replica' stream fails
  *     with nothing sent; any other purpose still takes the session link.
@@ -24,7 +19,6 @@ import { WebSocket, WebSocketServer } from 'ws'
 import { StreamLane, _setLaneForwardForTesting, laneUploadSummary } from '../../src/providers/stream-lane.js'
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
 import { PACED_STREAM_PURPOSES } from '../../src/providers/ssh-upload-budget.js'
-import { resetUploadPacesForTest, uploadPaceFor } from '../../src/providers/upload-pace.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -61,8 +55,6 @@ async function ackingDaemon() {
   return {
     port, got,
     stop: () => new Promise<void>((r) => { for (const s of sockets) s.terminate(); wss.close(); server.close(() => r()) }),
-    /** The daemon closes every lane socket (its update, its swap). */
-    closeAll: () => { for (const s of sockets) s.terminate() },
   }
 }
 
@@ -70,7 +62,6 @@ const cleanups: Array<() => unknown> = []
 afterEach(async () => {
   for (const c of cleanups.splice(0).reverse()) await c()
   _setLaneForwardForTesting(null)
-  resetUploadPacesForTest()
 })
 
 function payload(n: number): Buffer {
@@ -110,104 +101,6 @@ describe('StreamLane paces a background stream', () => {
     const span = replicaGot!.at[3]! - replicaGot!.at[0]!
     expect(span).toBeGreaterThan(1_200)
     expect(span).toBeLessThan(3_000)
-  })
-
-  it("with no pace named and no memory for the host, a 'replica' stream goes at full speed; a stop teaches nothing", async () => {
-    const d = await ackingDaemon()
-    cleanups.push(d.stop)
-    const l = new StreamLane({
-      hostKey: 'plainhost', home: '/h', walnutId: async () => 'w1', daemonInstanceId: () => 'd1',
-      forward: async () => ({ port: d.port, onExit: () => {}, stop: () => {} }), accept: () => null,
-    })
-    cleanups.push(() => l.stop())
-    l.start()
-    await waitFor(() => l.ready, 5_000, 'the lane')
-    // 1 MB as 48 KB pieces: the old fixed 10 KB/s took well over a minute.
-    const data = payload(48 * 1024 * 22)
-    const replica = await l.open('follower', 'replica')
-    const startedAt = Date.now()
-    replica.end(data)
-    await waitFor(() => [...d.got.values()].some((g) => g.bytes.length === 22), 5_000, 'the replica stream')
-    expect(Date.now() - startedAt).toBeLessThan(2_000)
-    expect(Buffer.concat([...d.got.values()][0]!.bytes).equals(data)).toBe(true)
-    l.stop()
-    await sleep(50)
-    expect(uploadPaceFor('plainhost', 'lane').limits).toBeNull()
-  })
-
-  /** A lane on the learned pace over a forward this test ends, with a 'replica' upload going. */
-  async function uploadingLane(host: string, opts: { beatMs?: number } = {}) {
-    const d = await ackingDaemon()
-    cleanups.push(d.stop)
-    // The path to the daemon, which `stall` freezes both ways (a silent network stall: no acks, no pongs).
-    let frozen = false
-    const pipes = new Set<net.Socket>()
-    const proxy = net.createServer((c) => {
-      const up = net.connect(d.port, '127.0.0.1')
-      pipes.add(c); pipes.add(up)
-      c.on('data', (b: Buffer) => { if (!frozen) up.write(b) })
-      up.on('data', (b: Buffer) => { if (!frozen) c.write(b) })
-      const end = () => { c.destroy(); up.destroy() }
-      c.on('error', end).on('close', end); up.on('error', end).on('close', end)
-    })
-    const proxyPort = await new Promise<number>((r) => proxy.listen(0, '127.0.0.1', () => r((proxy.address() as net.AddressInfo).port)))
-    cleanups.push(() => new Promise<void>((r) => { for (const p of pipes) p.destroy(); proxy.close(() => r()) }))
-    let exitCbs: Array<(why: string) => void> = []
-    const fwd = { port: proxyPort, onExit: (cb: (why: string) => void) => { exitCbs.push(cb) }, stop: () => { for (const cb of exitCbs.splice(0)) cb('stopped') } }
-    const l = new StreamLane({
-      hostKey: host, home: '/h', walnutId: async () => 'w1', daemonInstanceId: () => 'd1',
-      forward: async () => fwd, accept: () => null, redialMs: 60_000, sshExitGraceMs: 150, ...opts,
-    })
-    cleanups.push(() => l.stop())
-    l.start()
-    await waitFor(() => l.ready, 5_000, 'the lane')
-    const replica = await l.open('follower', 'replica')
-    replica.on('error', () => {})
-    replica.write(payload(4 * 1024 * 1024))
-    await waitFor(() => [...d.got.values()].some((g) => g.bytes.length > 2), 5_000, 'the upload to start')
-    return {
-      d, l, stall: () => { frozen = true },
-      sshExit: (why: string) => { const cbs = exitCbs; exitCbs = []; for (const cb of cbs) cb(why) },
-    }
-  }
-
-  it('its SSH forward exiting while uploading (a relay cut) paces the lane', async () => {
-    const { l, sshExit } = await uploadingLane('relayedhost')
-    sshExit('code 255: client_loop: send disconnect: Broken pipe')
-    await waitFor(() => uploadPaceFor('relayedhost', 'lane').limits !== null, 2_000, 'the lane pace to learn')
-    expect(l.ready).toBe(false)
-  })
-
-  it('the daemon closing the socket with the SSH forward still up (an update) teaches nothing', async () => {
-    const { d, l } = await uploadingLane('swappedhost')
-    d.closeAll()
-    await waitFor(() => !l.ready, 2_000, 'the lane to drop')
-    await sleep(400)
-    expect(uploadPaceFor('swappedhost', 'lane').limits).toBeNull()
-  })
-
-  it('a socket close with the SSH exiting right after is a cut', async () => {
-    const { d, l, sshExit } = await uploadingLane('closedfirsthost')
-    d.closeAll()
-    await waitFor(() => !l.ready, 2_000, 'the lane to drop')
-    sshExit('code 255: Connection reset by peer')
-    await waitFor(() => uploadPaceFor('closedfirsthost', 'lane').limits !== null, 2_000, 'the lane pace to learn')
-  })
-
-  it("its SSH forward ending on ssh's ServerAlive timeout (a stall) teaches nothing", async () => {
-    const { l, sshExit } = await uploadingLane('alivehost')
-    sshExit('code 255: Timeout, server alivehost not responding.')
-    await waitFor(() => !l.ready, 2_000, 'the lane to drop')
-    await sleep(100)
-    expect(uploadPaceFor('alivehost', 'lane').limits).toBeNull()
-  })
-
-  it('a heartbeat timeout (a silent stall, not a cut) teaches nothing', async () => {
-    const { l, stall } = await uploadingLane('stalledhost', { beatMs: 60 })
-    stall()
-    await waitFor(() => !l.ready, 3_000, 'the lane to give up on its beats')
-    await sleep(300)
-    expect(uploadPaceFor('stalledhost', 'lane').limits).toBeNull()
   })
 
   it('a lane that drops says what its streams had sent, by purpose', () => {

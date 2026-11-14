@@ -104,6 +104,7 @@ const PHASE_READERS: Record<string, number> = {
   // a precondition beside user_status (which decides): only a run its turn handed back is closed
   'src/core/routines/run-close.ts': 1,
   // A scoped receiver's phase write validates NEED_ACTION before saving the note and report.
+  'src/core/router/processing.ts': 2,
   'src/core/routines/trigger-api.ts': 2,
   'src/core/session-health-monitor.ts': 1,
   // a parked task's requests stay open on a host the server is away from (the server's twin: request-progress.ts)

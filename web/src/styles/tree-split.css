@@ -34,6 +34,9 @@
   z-index: 2;
 }
 .session-panel-split.is-changed-open .tree-path-bar { margin-top: 0; }
+/* A column with the task tabs alone already starts below the header
+   (task-board.css, has-peek-bar): the bar under the tabs adds nothing. */
+.session-panel-chat-col.has-peek-bar > .tree-path-bar { margin-top: 0; }
 /* Nothing below the bar runs under the glass header any more. */
 .session-panel-chat-col.has-tree-bar > :is(.session-panel-body, .tree-split-left) {
   --sp-header-h: 0px;

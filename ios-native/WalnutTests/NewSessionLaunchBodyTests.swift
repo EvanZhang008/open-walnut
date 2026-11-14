@@ -193,8 +193,7 @@ final class NewSessionLaunchBodyTests: XCTestCase {
     /// model at all), then the aliases the launch route accepts, the pick checked.
     func testDraftModelMenuOffersDefaultThenTheLaunchAliases() {
         let menu = NewSessionChatView.modelMenu(selected: nil)
-        // Section 0 is the model; the Effort section after it has its own test.
-        let items = menu.sections[0].items
+        let items = menu.sections.flatMap(\.items)
         XCTAssertEqual(items.map(\.title), ["Default", "Opus", "Sonnet", "Haiku"])
         XCTAssertEqual(items.map(\.choice), [.model(""), .model("opus"), .model("sonnet"), .model("haiku")])
         XCTAssertEqual(items.filter(\.checked).map(\.title), ["Default"])

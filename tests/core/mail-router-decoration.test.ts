@@ -4,10 +4,16 @@ import type { MailMessageDto } from '../../src/integrations/mail/contract.js';
 import type { RouterRoute } from '../../src/core/router/types.js';
 
 const h = vi.hoisted(() => ({ areas: null as unknown, error: null as Error | null,
-  ledgers: new Map<string, Map<string, RouterRoute>>(), failed: new Set<string>(), calls: [] as string[] }));
+  ledgers: new Map<string, Map<string, RouterRoute>>(), failed: new Set<string>(), calls: [] as string[],
+  asks: new Map<string, Record<string, unknown>>(), askError: null as Error | null, askCalls: [] as Array<{ areaId: string; routerTaskIds: string[]; messages: string[] }> }));
 vi.mock('../../src/core/router/areas.js', () => ({ canonicalItemKey: (kind: string, account: string, key: string) => JSON.stringify([kind, account, key]), readRouterAreas: async () => {
   if (h.error) throw h.error;
   return h.areas;
+} }));
+vi.mock('../../src/core/router/handoff-approval.js', () => ({ handoffAsksForSources: async (areaId: string, routerTaskIds: string[], sources: Array<{ kind: string; account: string; message: string }>) => {
+  h.askCalls.push({ areaId, routerTaskIds: [...routerTaskIds], messages: sources.map((s) => s.message) });
+  if (h.askError) throw h.askError;
+  return new Map(sources.flatMap((s) => h.asks.has(s.message) ? [[routerKey(s as Parameters<typeof routerKey>[0]), h.asks.get(s.message)!]] : []));
 } }));
 vi.mock('../../src/core/router/runtime.js', () => ({ routerStore: (areaId: string) => ({ getSources: async (sources: Array<{ kind: string; account: string; message: string }>) => {
   h.calls.push(areaId);
@@ -28,7 +34,7 @@ const message = (id: string): MailMessageDto => ({ accountId: ACCOUNT, messageId
   flags: [], subject: `Subject ${id}` } as MailMessageDto);
 
 beforeEach(() => {
-  h.error = null; h.ledgers.clear(); h.failed.clear(); h.calls.length = 0;
+  h.error = null; h.ledgers.clear(); h.failed.clear(); h.calls.length = 0; h.asks.clear(); h.askError = null; h.askCalls.length = 0;
   h.areas = { version: 1,
     areas: ['personal', 'work'].map((id) => ({ id, name: id, host: '__local__', taskIds: [], sources: [{ kind: 'mail', account: ACCOUNT }] })),
     routers: [], items: [{ source: { kind: 'mail', account: ACCOUNT, message: 'a' }, areaId: 'personal' },
@@ -85,6 +91,7 @@ describe('mail route decoration', () => {
     expect(rows[0]).toMatchObject({ routingArea: { id: 'personal' }, route: { areaId: 'personal' } });
     expect(rows[1]).not.toHaveProperty('routingArea');
     expect(rows[1]).not.toHaveProperty('route');
+    expect(rows[1]).not.toHaveProperty('routingHandoff');
   });
 
   it('finds the receipt by its confirmed source when the cached canonical identity changes', async () => {
@@ -135,6 +142,74 @@ describe('mail route decoration', () => {
     expect(rows).toHaveLength(500);
     expect(h.calls).toHaveLength(2);
     expect(rows.map((row) => row.flags)).toEqual(messages.map((row) => row.flags));
+  });
+
+  describe('handoff asks', () => {
+    const withRouter = () => {
+      const file = h.areas as RouterAreasFile;
+      file.areas[0]!.taskIds = ['router-p'];
+      file.routers = [{ taskId: 'router-p', areaId: 'personal', paused: false }];
+      file.items.push({ source: { kind: 'mail', account: ACCOUNT, message: 'c' }, areaId: 'personal' });
+    };
+
+    it('shows the ask only for an exact item with no receipt, asking about those items only', async () => {
+      withRouter();
+      h.asks.set('c', { approvalId: 'apr-1', status: 'pending', at: 5, targetTitle: 'Accounts payable' });
+      h.asks.set('a', { approvalId: 'apr-0', status: 'approved', at: 4 });
+      const rows = await decorateMailRoutes(['a', 'c'].map(message), '/fixture');
+      expect(rows[1]).toMatchObject({ routingArea: { id: 'personal' }, routingHandoff: { approvalId: 'apr-1', status: 'pending' } });
+      expect(rows[1]).not.toHaveProperty('route');
+      expect(rows[0]).toHaveProperty('route');
+      expect(rows[0]).not.toHaveProperty('routingHandoff');
+      expect(h.askCalls).toEqual([{ areaId: 'personal', routerTaskIds: ['router-p'], messages: ['c'] }]);
+    });
+
+    it('a denied ask stays an ask: no not_routed receipt is made up', async () => {
+      withRouter();
+      h.asks.set('c', { approvalId: 'apr-1', status: 'denied', at: 5 });
+      const [row] = await decorateMailRoutes([message('c')], '/fixture');
+      expect(row).toMatchObject({ routingHandoff: { status: 'denied' } });
+      expect(row).not.toHaveProperty('route');
+    });
+
+    it('an unreadable index makes the items without a receipt unavailable, never "no record"', async () => {
+      withRouter();
+      h.askError = new Error('index unreadable');
+      const rows = await decorateMailRoutes(['a', 'c', 'b'].map(message), '/fixture');
+      expect(rows[1]).toMatchObject({ routingUnavailable: true, routingArea: { id: 'personal' } });
+      expect(rows[1]).not.toHaveProperty('routingHandoff');
+      expect(rows[0]).toHaveProperty('route');
+      expect(rows[0]).not.toHaveProperty('routingUnavailable');
+      expect(rows[2]).not.toHaveProperty('routingUnavailable');
+    });
+
+    it('a paused router\'s past ask still shows: a pause stops processing, it hides no state', async () => {
+      withRouter();
+      (h.areas as RouterAreasFile).routers[0]!.paused = true;
+      h.asks.set('c', { approvalId: 'apr-1', status: 'denied', at: 5 });
+      const [row] = await decorateMailRoutes([message('c')], '/fixture');
+      expect(row).toMatchObject({ routingHandoff: { status: 'denied' } });
+      expect(h.askCalls).toEqual([{ areaId: 'personal', routerTaskIds: ['router-p'], messages: ['c'] }]);
+    });
+
+    it('asks only about routers registered in the area', async () => {
+      withRouter();
+      (h.areas as RouterAreasFile).routers.push({ taskId: 'router-stray', areaId: 'personal', paused: false });
+      await decorateMailRoutes([message('c')], '/fixture');
+      expect(h.askCalls[0]!.routerTaskIds).toEqual(['router-p']);
+    });
+
+    it('asks nothing with no registered router, and nothing for an unconfirmed copy', async () => {
+      const file = h.areas as RouterAreasFile;
+      file.items.push({ source: { kind: 'mail', account: ACCOUNT, message: 'c' }, areaId: 'personal' });
+      await decorateMailRoutes([message('c')], '/fixture');
+      expect(h.askCalls).toEqual([]);
+      withRouter();
+      const copy = { ...message('moved'), rfcMessageId: message('c').rfcMessageId };
+      const [row] = await decorateMailRoutes([copy], '/fixture');
+      expect(row).not.toHaveProperty('routingHandoff');
+      expect(h.askCalls).toEqual([]);
+    });
   });
 
   it('carries a legacy receipt\'s origin and evidence, and adds neither to a normal route', async () => {

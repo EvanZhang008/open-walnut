@@ -36,7 +36,6 @@ import { endpointWaitEnabled, endpointGaveUpWords } from './endpoint-unreachable
 export { endpointWaitEnabled, endpointGaveUpWords }
 import { AUTO_CONTINUE_SOURCE } from '../session-auto-continue.js'
 import { isQuietTurn } from './quiet-turn.js'
-import { noteTurnAttempt, turnRetryEnded, type TurnRetrier } from './turn-run.js'
 
 export type { SessionEndpointWait }
 
@@ -81,23 +80,6 @@ export function recordInEndpointWait(
   if (!instance) return false
   const at = Date.parse(rec.statusUpdatedAt || rec.last_status_change || '')
   return Number.isFinite(at) && now - at < ENDPOINT_WAIT_OPENING_MS
-}
-
-/** The endpoint wait's row of the session's turn (sessions/turn-run.ts). */
-export const turnRetrier: TurnRetrier<'endpoint_wait'> = {
-  reason: 'endpoint_wait',
-  sources: [AUTO_CONTINUE_SOURCE],
-  // The waiter takes the same turns (handleEvent): an interrupted one was stopped by someone.
-  takes: (end) => end.event === 'result' && !end.interrupted && endpointWaitTakes(end),
-  wait: (rec) => {
-    if (!recordInEndpointWait(rec)) return null
-    // Before the waiter has written it, the error text opens it (the result and a reader race at a turn end).
-    return { reason: 'endpoint_wait', endpointWait: rec.endpointWait ?? {
-      state: 'waiting', host: rec.host ?? '__local__', where: machineWords(rec.host), since: rec.statusUpdatedAt || rec.last_status_change || new Date().toISOString(), resumes: 0,
-      ...(endpointWaitCause(rec.errorMessage) === 'dropped' ? { cause: 'dropped' as const } : {}),
-    } }
-  },
-  stop: (rec) => endpointWaitEnabled() && rec.endpointWait?.state === 'gave_up' ? { reason: 'endpoint_wait', endpointWait: rec.endpointWait } : null,
 }
 
 /** The machine a session runs on, in the words a person reads. */
@@ -257,8 +239,6 @@ export class EndpointWaiter {
       if (rec.endpointWait.state === 'gave_up' && why === 'other-error') return
       await this.deps.patchWait(sid, () => null)
       log.session.info('endpoint wait: closed', { sessionId: sid, taskId: rec.taskId, why })
-      // A hand-back the wait held goes ahead now, unless a new turn took the session over (turn-run.ts).
-      turnRetryEnded(sid, 'endpoint_wait')
     } catch (err) {
       // The wait must not stay open with nothing behind it: try the close again (never a continue).
       log.session.warn('endpoint wait: close failed, trying again', { sessionId: sid, why, error: err instanceof Error ? err.message : String(err) })
@@ -446,10 +426,7 @@ function defaultDeps(gaveUp: EndpointWaitDeps['gaveUp']): EndpointWaitDeps {
         throw err
       }
     },
-    send: async (sid, text, opts) => {
-      await noteTurnAttempt(sid, 'endpoint_wait')
-      return (await import('../session-message-queue.js')).sendMessageToSession(sid, text, opts)
-    },
+    send: async (sid, text, opts) => (await import('../session-message-queue.js')).sendMessageToSession(sid, text, opts),
     note: (sid, taskId, message) => {
       bus.emit(EventNames.SESSION_SYSTEM_EVENT, { sessionId: sid, taskId, variant: 'info' as const, message },
         ['main-ai'], { source: AUTO_CONTINUE_SOURCE, urgency: 'urgent' })
@@ -487,7 +464,7 @@ export function startEndpointWait(opts: {
   const gaveUp: EndpointWaitDeps['gaveUp'] = async (rec, _wait, words) => {
     if (rec.taskId) {
       const { applySessionPhase } = await import('../phase.js')
-      await applySessionPhase(rec.taskId, 'session:error', 'endpoint-wait:gave-up', { sessionId: rec.claudeSessionId, retryOver: true })
+      await applySessionPhase(rec.taskId, 'session:error', 'endpoint-wait:gave-up', { sessionId: rec.claudeSessionId })
     }
     await opts.gaveUp?.(rec, words)
   }

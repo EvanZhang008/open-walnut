@@ -760,13 +760,14 @@ export function ModelPicker({
   const acpDefaultRow = onAcpSwitch && acpDraft && (
     <button
       type="button"
-      className={`model-picker-row${!acpCurrent ? ' model-picker-row-active' : ''}${!acpCurrent ? ' picker-row-current' : ''}`}
+      className={`model-picker-row${!acpCurrent ? ' model-picker-row-active' : ''}`}
       role="option"
       aria-selected={!acpCurrent}
       data-testid="acp-default-row"
       title={`${engineUi.displayName} picks its configured default model at launch`}
       onClick={() => { if (acpCurrent) onAcpSwitch(''); }}
     >
+      <span className="model-picker-row-check" aria-hidden>{!acpCurrent ? '✓' : ''}</span>
       <span className="model-picker-row-name">{acpDefaultLabel}</span>
     </button>
   );
@@ -828,12 +829,13 @@ export function ModelPicker({
                 <button
                   key={group.id || '(none)'}
                   type="button"
-                  className={`model-picker-row${isSelected ? ' model-picker-row-active' : ''}${holdsActive ? ' picker-row-current' : ''}`}
+                  className={`model-picker-row${isSelected ? ' model-picker-row-active' : ''}`}
                   role="option"
                   aria-selected={isSelected}
                   title={group.label || 'Other models'}
                   onClick={() => setAcpGroupSel(group.id)}
                 >
+                  <span className="model-picker-row-check" aria-hidden>{holdsActive ? '✓' : ''}</span>
                   <span className="model-picker-row-name">{group.label || 'Other'}</span>
                 </button>
               );
@@ -902,7 +904,7 @@ export function ModelPicker({
                       <button
                         key={fam.familyId}
                         type="button"
-                        className={`model-picker-row${isActive ? ' model-picker-row-active' : ''}${isActive ? ' picker-row-current' : ''}`}
+                        className={`model-picker-row${isActive ? ' model-picker-row-active' : ''}`}
                         role="option"
                         aria-selected={isActive}
                         title={sample?.description?.split('.')[0] ?? fam.label}
@@ -915,6 +917,7 @@ export function ModelPicker({
                           if (acpMatches) { setAcpQuery(''); setAcpGroupSel(fam.groupId); }
                         }}
                       >
+                        <span className="model-picker-row-check" aria-hidden>{isActive ? '✓' : ''}</span>
                         <span className="model-picker-row-name">
                           {fam.label}
                           {showGroup && <span className="model-picker-row-group"> — {fam.groupLabel}</span>}
@@ -934,11 +937,12 @@ export function ModelPicker({
                   one choice that IS true right now — the engine's default. */}
               <button
                 type="button"
-                className="model-picker-row model-picker-row-active picker-row-current"
+                className="model-picker-row model-picker-row-active"
                 role="option"
                 aria-selected
                 title={`${engineUi.displayName} picks its configured default model at launch`}
               >
+                <span className="model-picker-row-check" aria-hidden>✓</span>
                 <span className="model-picker-row-name">{engineUi.displayName} default</span>
               </button>
               <div className="model-picker-status">
@@ -958,7 +962,7 @@ export function ModelPicker({
                 <button
                   key={e.id}
                   type="button"
-                  className={`model-picker-row${active ? ' model-picker-row-active' : ''}${active ? ' picker-row-current' : ''}`}
+                  className={`model-picker-row${active ? ' model-picker-row-active' : ''}`}
                   role="option"
                   aria-selected={active}
                   disabled={disabled}
@@ -969,6 +973,7 @@ export function ModelPicker({
                     if (!active && variant && variant.modelId !== acpCurrent) onAcpSwitch(variant.modelId);
                   }}
                 >
+                  <span className="model-picker-row-check" aria-hidden>{active ? '✓' : ''}</span>
                   <span className="model-picker-row-name">{e.label}</span>
                 </button>
               );
@@ -984,12 +989,13 @@ export function ModelPicker({
                 <button
                   key={option.value}
                   type="button"
-                  className={`model-picker-row${active ? ' model-picker-row-active' : ''}${active ? ' picker-row-current' : ''}`}
+                  className={`model-picker-row${active ? ' model-picker-row-active' : ''}`}
                   role="option"
                   aria-selected={active}
                   title={option.description ?? option.name}
                   onClick={() => { if (!active) onAcpEffortControl?.(option.value); }}
                 >
+                  <span className="model-picker-row-check" aria-hidden>{active ? '✓' : ''}</span>
                   <span className="model-picker-row-name">{option.name}</span>
                 </button>
               );
@@ -1179,7 +1185,7 @@ export function ModelPicker({
               return (
                 <div
                   key={`current:${row.model}`}
-                  className="model-picker-row model-picker-row-active picker-row-current"
+                  className="model-picker-row model-picker-row-active"
                   data-testid="picker-out-of-catalog"
                   role="option"
                   aria-selected="true"
@@ -1187,6 +1193,7 @@ export function ModelPicker({
                     ? 'Saved model — not in this session\'s selectable catalog; it applies on the next start'
                     : 'Current model — not in this session\'s selectable catalog'}
                 >
+                  <span className="model-picker-row-check" aria-hidden>✓</span>
                   <span className="model-picker-row-name">{shortModelLabel(row.model)}</span>
                 </div>
               );
@@ -1196,13 +1203,14 @@ export function ModelPicker({
                 <button
                   key="auto"
                   type="button"
-                  className={`model-picker-row${row.active ? ' model-picker-row-active' : ''}${row.active ? ' picker-row-current' : ''}`}
+                  className={`model-picker-row${row.active ? ' model-picker-row-active' : ''}`}
                   data-testid="picker-auto-row"
                   role="option"
                   aria-selected={row.active}
                   title="No --model flag — the CLI/config default decides"
                   onClick={() => { if (!row.active) onSwitch(''); }}
                 >
+                  <span className="model-picker-row-check" aria-hidden>{row.active ? '✓' : ''}</span>
                   <span className="model-picker-row-name">{row.resolvedLabel ? `Auto (${row.resolvedLabel})` : 'Auto'}</span>
                 </button>
               );
@@ -1215,7 +1223,7 @@ export function ModelPicker({
               <button
                 key={m.value}
                 type="button"
-                className={`model-picker-row${isActive ? ' model-picker-row-active' : ''}${m.disabled ? ' model-picker-row-disabled' : ''}${isActive ? ' picker-row-current' : ''}`}
+                className={`model-picker-row${isActive ? ' model-picker-row-active' : ''}${m.disabled ? ' model-picker-row-disabled' : ''}`}
                 role="option"
                 aria-selected={isActive}
                 disabled={m.disabled}
@@ -1226,6 +1234,7 @@ export function ModelPicker({
                   : m.description ?? catalogRowLabel(m)}
                 onClick={() => { if (!isActive && !m.disabled) onSwitch(m.value); }}
               >
+                <span className="model-picker-row-check" aria-hidden>{isActive ? '✓' : ''}</span>
                 <span className="model-picker-row-name">
                   {catalogRowLabel(m)}
                   {isRequestedNotApplied && <span className="model-picker-option-requested"> ⚠</span>}
@@ -1240,13 +1249,14 @@ export function ModelPicker({
             {onEffortDefault && (
               <button
                 type="button"
-                className={`model-picker-row${currentEffort === undefined ? ' model-picker-row-active' : ''}${currentEffort === undefined ? ' picker-row-current' : ''}`}
+                className={`model-picker-row${currentEffort === undefined ? ' model-picker-row-active' : ''}`}
                 role="option"
                 aria-selected={currentEffort === undefined}
                 data-effort="default"
                 title={effortDefaultTitle ?? 'No --effort at start: Claude Code\'s own settings decide'}
                 onClick={() => { if (currentEffort !== undefined) onEffortDefault(); }}
               >
+                <span className="model-picker-row-check" aria-hidden>{currentEffort === undefined ? '✓' : ''}</span>
                 <span className="model-picker-row-name">Default</span>
               </button>
             )}
@@ -1269,7 +1279,7 @@ export function ModelPicker({
                 <button
                   key={e.id}
                   type="button"
-                  className={`model-picker-row${active ? ' model-picker-row-active' : ''}${requestedNotApplied ? ' model-picker-row-requested' : ''}${active ? ' picker-row-current' : ''}`}
+                  className={`model-picker-row${active ? ' model-picker-row-active' : ''}${requestedNotApplied ? ' model-picker-row-requested' : ''}`}
                   role="option"
                   aria-selected={active}
                   disabled={disabled}
@@ -1277,6 +1287,7 @@ export function ModelPicker({
                   data-effort={e.id}
                   onClick={() => { if (!disabled && !active) onEffortSwitch(e.id); }}
                 >
+                  <span className="model-picker-row-check" aria-hidden>{active ? '✓' : ''}</span>
                   <span className="model-picker-row-name">{e.label}{requestedNotApplied ? ' ⚠' : ''}</span>
                 </button>
               );

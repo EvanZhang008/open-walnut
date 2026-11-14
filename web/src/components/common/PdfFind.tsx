@@ -16,11 +16,8 @@ export function PdfFind({ pdf, root }: { pdf?: PDFDocumentProxy; root: React.Ref
 
   useEffect(() => { textRef.current.clear(); generation.current++; setMatches([]); setQuery(''); }, [pdf]);
   useEffect(() => {
-    const element = root.current;
-    if (!element) return;
-    // Cmd+F belongs to the frame that holds the PDF: the file viewer, or any other host that marks
-    // itself (the Mail attachment viewer). A host with neither keeps it on the PDF itself.
-    const owner = element.closest('.file-content-view, [data-pdf-find-scope]') ?? element;
+    const element = root.current!;
+    const owner = element.closest('.file-content-view')!;
     const key = (event: Event) => {
       const e = event as KeyboardEvent;
       if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'f') return;

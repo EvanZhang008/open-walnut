@@ -1,12 +1,16 @@
-// The production delivery (src/core/router/service.ts `sendRoute`): the routed item goes into the
-// owner's own conversation as a Router message, never as the person's words; a task with no
-// conversation yet starts with the message. Only the send core and the start are mocked.
+// The real registry's row hook avoids divergent vi.mock instances across dynamic imports.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMockConstants } from '../helpers/mock-constants.js'
 import type { RouterAreasFile } from '../../src/core/router/areas.js'
+import type { SessionRecord } from '../../src/core/types.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-router-send-route'))
 
+const h = vi.hoisted(() => ({
+  tasks: new Map<string, Record<string, unknown>>(),
+  records: [] as Array<Record<string, unknown>>,
+  areas: { value: null as unknown },
+}))
 const m = vi.hoisted(() => ({
   getTask: vi.fn(),
   startSessionForTask: vi.fn(),
@@ -14,76 +18,120 @@ const m = vi.hoisted(() => ({
 }))
 
 vi.mock('../../src/core/task-manager.js', async (importOriginal) => ({ ...(await importOriginal<Record<string, unknown>>()), getTask: m.getTask }))
+vi.mock('../../src/core/router/areas.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()), readRouterAreas: vi.fn(async () => structuredClone(h.areas.value)),
+}))
 vi.mock('../../src/core/sessions/task-start.js', async (importOriginal) => ({ ...(await importOriginal<Record<string, unknown>>()), startSessionForTask: m.startSessionForTask }))
 vi.mock('../../src/core/sessions/session-send-core.js', async (importOriginal) => ({ ...(await importOriginal<Record<string, unknown>>()), performSessionSend: m.performSessionSend }))
 
-import { SendError } from '../../src/core/sessions/session-send-core.js'
-import { ROUTER_START_SOURCE, routeItem, sendRoute } from '../../src/core/router/service.js'
+import { installAwaySessions } from '../../src/core/session-tracker.js'
+import { routeItem, sendRoute } from '../../src/core/router/service.js'
+import { isRouterDelivery } from '../../src/core/router/delivery-scope.js'
+import { routerAreaProfile } from '../../src/core/router/session-policy.js'
 import { RouterStore, routerKey, routerMessageId } from '../../src/core/router/store.js'
 import type { RouterRoute, RouterSource } from '../../src/core/router/types.js'
 import { WALNUT_HOME } from '../../src/constants.js'
 
 const ACCOUNT = 'desk@marina.example.invalid'
 const ITEM: RouterSource = { kind: 'mail', account: ACCOUNT, message: 'INBOX:1:10' }
-// The ledger file lives under the mocked home for the whole file: each routeItem case has its own item.
-const ITEM_2: RouterSource = { kind: 'mail', account: ACCOUNT, message: 'INBOX:1:11' }
 const AREAS: RouterAreasFile = {
   version: 1,
-  areas: [{ id: 'personal', name: 'Personal', host: '__local__', taskIds: ['t-router'], sources: [{ kind: 'mail', account: ACCOUNT }] }],
+  areas: [
+    { id: 'personal', name: 'Personal', host: '__local__', taskIds: ['t-work', 't-router'], sources: [{ kind: 'mail', account: ACCOUNT }] },
+    { id: 'work', name: 'Work', host: '__local__', taskIds: [], sources: [] },
+  ],
   routers: [{ taskId: 't-router', areaId: 'personal', paused: false }],
-  items: [],
-  openItems: [{ source: { ...ITEM }, areaId: 'personal' }, { source: { ...ITEM_2 }, areaId: 'personal' }],
+  items: [{ source: { ...ITEM }, areaId: 'personal' }],
 }
 const MID = routerMessageId('personal', routerKey(ITEM), 't-work')
 const route: RouterRoute = {
   areaId: 'personal', key: routerKey(ITEM), source: { ...ITEM }, sender: 'pat@acme.example.invalid', subject: 'Dock slot',
   status: 'routing', taskId: 't-work', reason: 'Dock work.', at: 1, messageId: MID,
 }
+const isolated = (sid: string) => ({ claudeSessionId: sid, taskId: 't-work', archived: false, lastActiveAt: '', host: '__local__', profile: routerAreaProfile('personal', 'work') })
+const fullTool = (sid: string) => ({ claudeSessionId: sid, taskId: 't-work', archived: false, lastActiveAt: '', host: '__local__' })
 const code = async (p: Promise<unknown>): Promise<string> => p.then(() => 'resolved', (e: { code?: string }) => e.code ?? String(e))
 
 beforeEach(() => {
+  h.areas.value = structuredClone(AREAS)
+  h.records = []
+  h.tasks = new Map([
+    ['t-work', { id: 't-work', title: 'Dock work', source: 'local', router_area_id: 'personal', phase: 'IN_PROGRESS' }],
+    ['t-router', { id: 't-router', title: 'Router', source: 'local', router_area_id: 'personal', org_role: 'router', router_paused: false, phase: 'IN_PROGRESS' }],
+  ])
   for (const fn of Object.values(m)) fn.mockReset()
   m.getTask.mockImplementation(async (id: string) => {
-    if (id === 't-work') return { id, title: 'Dock work', phase: 'IN_PROGRESS' }
-    if (id === 't-router') return { id, title: 'Router', phase: 'IN_PROGRESS', org_role: 'router' }
-    throw new Error(`Task not found: ${id}`)
+    const t = h.tasks.get(id)
+    if (!t) throw new Error(`Task not found: ${id}`)
+    return structuredClone(t)
   })
-  m.performSessionSend.mockResolvedValue({ ok: true })
-  m.startSessionForTask.mockResolvedValue({ started: true })
+  // The real registry's own extra-rows hook: getSessionsForTask and getSessionByClaudeId return
+  // these (by taskId / id) on top of the empty isolated store, for every importer of the module.
+  installAwaySessions(() => structuredClone(h.records) as unknown as SessionRecord[])
+  m.startSessionForTask.mockImplementation(async () => { h.records.push(isolated('sid-started')) })
+  m.performSessionSend.mockImplementation(async (i: { to: string; messageId?: string }) => ({ scoped: isRouterDelivery(i.to, i.messageId) }))
 })
+afterEach(() => { installAwaySessions(null) })
 
-describe('sendRoute', () => {
-  it('sends once into the owner task as the Router, under the route message id, with no start', async () => {
-    expect(await sendRoute(route, 'the routed text')).toEqual({ ok: true })
+describe('sendRoute (production same-area delivery)', () => {
+  it('sends once to an existing isolated receiver, inside the router delivery scope, with no start', async () => {
+    h.records = [isolated('sid-iso')]
+    expect(await sendRoute(route, 'brief')).toEqual({ scoped: true })
     expect(m.startSessionForTask).not.toHaveBeenCalled()
     expect(m.performSessionSend).toHaveBeenCalledTimes(1)
-    expect(m.performSessionSend.mock.calls[0][0]).toMatchObject({
-      to: 't-work', text: 'the routed text', messageId: MID, expectReply: false,
-      callerSid: 'external', source: 'api-agent', callerLabel: 'Router',
-    })
-    expect(m.performSessionSend.mock.calls[0][0].title).toContain('Dock slot')
+    expect(m.performSessionSend.mock.calls[0][0]).toMatchObject({ to: 'sid-iso', messageId: MID, expectReply: false, source: 'api-agent', callerLabel: 'Router' })
   })
 
-  it('starts a task with no conversation yet with the routed text as its first message', async () => {
-    m.performSessionSend.mockRejectedValueOnce(new SendError('task_has_no_session', 'no session', 409))
-    expect(await sendRoute(route, 'the routed text')).toEqual({ started: true })
-    expect(m.startSessionForTask).toHaveBeenCalledTimes(1)
-    expect(m.startSessionForTask.mock.calls[0][0]).toMatchObject({
-      taskIdPrefix: 't-work', source: ROUTER_START_SOURCE, expectReply: false, callerSid: 'external',
-    })
-    // Its first turn reads as the Router's, like every later delivery: never as the person's words.
-    const first = m.startSessionForTask.mock.calls[0][0].message as string
-    expect(first).toContain('the routed text')
-    expect(first).toContain('Walnut (Router)')
-    expect(ROUTER_START_SOURCE).toBe('router-delivery')
+  it('starts one receiver for a task with none, and sends to it after reading everything again', async () => {
+    await sendRoute(route, 'brief', 'sid-router')
+    expect(m.startSessionForTask).toHaveBeenCalledWith(expect.objectContaining({ taskIdPrefix: 't-work', idle: true, awaitStart: true, expectReply: false }))
+    expect(m.performSessionSend.mock.calls[0][0].to).toBe('sid-started')
   })
 
-  it('passes any other refusal through and starts nothing', async () => {
-    m.performSessionSend.mockRejectedValueOnce(new SendError('target_complete', 'done', 409))
-    expect(await code(sendRoute(route, 'x'))).toBe('target_complete')
-    m.performSessionSend.mockRejectedValueOnce(new Error('socket closed'))
-    expect(await code(sendRoute(route, 'x'))).toBe('Error: socket closed')
+  it('refuses a task with a full-tool conversation in its history, with zero sends and no start', async () => {
+    h.records = [isolated('sid-iso'), fullTool('sid-full')]
+    expect(await code(sendRoute(route, 'brief'))).toBe('router_history_not_isolated')
+    expect(m.performSessionSend).not.toHaveBeenCalled()
     expect(m.startSessionForTask).not.toHaveBeenCalled()
+  })
+
+  it('refuses a task naming a session the registry does not have', async () => {
+    h.records = [isolated('sid-iso')]
+    h.tasks.get('t-work')!.session_id = 'sid-ghost'
+    expect(await code(sendRoute(route, 'brief'))).toBe('router_history_not_isolated')
+    expect(m.performSessionSend).not.toHaveBeenCalled()
+  })
+
+  const during = (change: () => void) => m.startSessionForTask.mockImplementation(async () => { h.records.push(isolated('sid-started')); change() })
+
+  it('a task completed during the start gets nothing', async () => {
+    during(() => { h.tasks.get('t-work')!.phase = 'COMPLETE' })
+    expect(await code(sendRoute(route, 'brief'))).toBe('target_unavailable')
+    expect(m.performSessionSend).not.toHaveBeenCalled()
+  })
+
+  it('a task whose area mark changed during the start gets nothing', async () => {
+    during(() => { h.tasks.get('t-work')!.router_area_id = 'work' })
+    expect(await code(sendRoute(route, 'brief'))).toBe('target_scope')
+    expect(m.performSessionSend).not.toHaveBeenCalled()
+  })
+
+  it('a task the registry moved out of the area during the start gets nothing', async () => {
+    during(() => { (h.areas.value as RouterAreasFile).areas[0].taskIds = ['t-router'] })
+    expect(await code(sendRoute(route, 'brief'))).toBe('task_unassigned')
+    expect(m.performSessionSend).not.toHaveBeenCalled()
+  })
+
+  it('a receiver started with a full-tool profile gets nothing', async () => {
+    m.startSessionForTask.mockImplementation(async () => { h.records.push(fullTool('sid-started-full')) })
+    expect(await code(sendRoute(route, 'brief'))).toBe('router_history_not_isolated')
+    expect(m.performSessionSend).not.toHaveBeenCalled()
+  })
+
+  it('a start that leaves no receiver sends nothing', async () => {
+    m.startSessionForTask.mockImplementation(async () => undefined)
+    expect(await code(sendRoute(route, 'brief'))).toBe('receiver_not_isolated')
+    expect(m.performSessionSend).not.toHaveBeenCalled()
   })
 })
 
@@ -91,28 +139,18 @@ describe('routeItem through the production sendRoute', () => {
   let store: RouterStore
   afterEach(async () => { await store.dispose() })
 
-  const run = (item: RouterSource) => routeItem(
-    { source: { ...item }, taskId: 't-work', reason: 'Dock work.', byTaskId: 't-router', text: 'Please confirm the slot.' },
-    {
-      areas: structuredClone(AREAS), store,
-      resolve: async (source) => ({ source: { ...source }, key: routerKey(source), sender: 'pat@acme.example.invalid', subject: 'Dock slot' }),
-      read: async () => { throw new Error('not cached') },
-      getTask: m.getTask,
-    },
-  )
-
-  it('a delivered item settles routed, and the owner got the brief and the reference', async () => {
+  it('a refused delivery settles failed with zero sends', async () => {
     store = new RouterStore(WALNUT_HOME, 'personal')
-    expect(await run(ITEM)).toMatchObject({ fresh: true, route: { status: 'routed', taskId: 't-work' } })
-    const text = m.performSessionSend.mock.calls[0][0].text as string
-    expect(text).toContain('Please confirm the slot.')
-    expect(text).toContain(`mail_read {"account":"${ACCOUNT}","message":"INBOX:1:10"}`)
-  })
-
-  it('a refused delivery settles failed', async () => {
-    store = new RouterStore(WALNUT_HOME, 'personal')
-    m.performSessionSend.mockRejectedValueOnce(new SendError('queue_full', 'queue is full', 429))
-    expect(await run(ITEM_2)).toMatchObject({ fresh: true, route: { status: 'failed', taskId: 't-work', error: 'queue is full' } })
-    expect(m.startSessionForTask).not.toHaveBeenCalled()
+    h.records = [fullTool('sid-full')]
+    const out = await routeItem(
+      { source: { ...ITEM }, taskId: 't-work', reason: 'Dock work.', byTaskId: 't-router', text: 'Please confirm the slot.' },
+      {
+        areas: structuredClone(AREAS), store,
+        resolve: async (source) => ({ source: { ...source }, key: routerKey(source), sender: 'pat@acme.example.invalid', subject: 'Dock slot' }),
+        getTask: m.getTask,
+      },
+    )
+    expect(out).toMatchObject({ fresh: true, route: { status: 'failed', taskId: 't-work' } })
+    expect(m.performSessionSend).not.toHaveBeenCalled()
   })
 })

@@ -23,6 +23,7 @@
  *   told about, because the drawer takes that pane (`isSaveSettled`).
  */
 import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { ContextMenu, useContextMenu } from '@/components/common/ContextMenu';
 import { copyTextRobust } from '@/utils/clipboard';
 import type { MailMessageDto } from '@/api/mail';
@@ -39,7 +40,7 @@ import { unsubscribeFromMessage } from './mail-unsubscribe-actions';
 import { unsubscribeHandsOverToAsk } from './mail-unsubscribe-state';
 import { bodyQuoteText } from './mail-quote-text';
 import { groupedRowOf } from './mail-groups-store';
-import { useOpenTask } from '@/hooks/useOpenTask';
+import { openTaskOnHome } from '@/utils/open-session';
 
 /** The row a right-click landed on. The PAIR, because that is a message's identity. */
 export interface MailRowMenuTarget {
@@ -72,7 +73,7 @@ export function useMailRowContextMenu(view: MailRowMenuView): MailRowMenuHandle 
   // selects the word under the pointer as the right-press's own default action, so without this the
   // menu could never open on a row's text in the Mac app. A selection the human made is still theirs.
   const menu = useContextMenu<MailRowMenuTarget>({ ignorePressSelection: true });
-  const openTask = useOpenTask();
+  const navigate = useNavigate();
   const { snapshot } = view;
   const target = menu.state?.payload ?? null;
   // Live, by pair. A row that has left the snapshot altogether (the folder was reloaded and dropped
@@ -195,7 +196,7 @@ export function useMailRowContextMenu(view: MailRowMenuView): MailRowMenuHandle 
           onForward: forward,
           onTalkToCeo: (row) => { void talkToCeo(mailContentItem(row)).catch(() => { /* no app shell yet */ }); },
           onNewTask: (row) => { void newTaskFromContent(mailContentItem(row)); },
-          openTask,
+          onOpenTask: (taskId) => { openTaskOnHome(taskId, navigate); },
           onSearchSender: (address) => { void runMailSearch(address); },
           onCopyLink: copyLink,
           onSummarize: (row) => askWalnut(row, MAIL_ASK_PRESETS.summarize),

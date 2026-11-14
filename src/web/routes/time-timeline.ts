@@ -142,8 +142,8 @@ timeTimelineRouter.post('/meetings/ignore', async (req: Request, res: Response) 
     const time = { ...config.time }
     const patterns = (raw.patterns as string[]).map((p) => p.trim()).filter(Boolean)
     if (patterns.length) time.meetings = { ...time.meetings, ignore: patterns }
-    // Sent as undefined, the key is removed (core/config-section-write.ts).
-    else time.meetings = undefined
+    else delete time.meetings
+    // updateConfig replaces the whole `time` key, so its siblings ride along.
     await updateConfig({ time })
     res.json({ ignore: patterns })
   } catch (err) {

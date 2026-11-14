@@ -18,17 +18,18 @@ import type { SessionProfile, Task } from '../../src/core/types.js';
 import { patchLegacyTask } from '../helpers/router-history-fixtures.js';
 
 const REFUSAL = { code: 'router_history_not_isolated', status: 409 };
-// Since 2026-11-14 only a router runs isolated: a scoped task is a router task in area 'desk'.
-const scope = () => ({ router_area_id: 'desk', org_role: 'router' as const });
+const scope = (role: 'router' | 'work' = 'work') => ({
+  router_area_id: 'desk', ...(role === 'router' ? { org_role: 'router' as const } : {}),
+});
 
 async function task(fields: Partial<Task> = {}) {
   return (await addTask({ title: 'History fixture', project: '', source: 'local', ...fields })).task;
 }
-async function scoped() {
-  const owner = await task(scope());
+async function scoped(role: 'router' | 'work' = 'work') {
+  const owner = await task(scope(role));
   const sid = randomUUID();
   const record = await createSessionRecord(sid, owner.id, '', undefined, {
-    host: '__local__', profile: routerAreaProfile('desk'), initialProcessStatus: 'stopped',
+    host: '__local__', profile: routerAreaProfile('desk', role), initialProcessStatus: 'stopped',
   });
   return { owner, sid, record };
 }
@@ -101,7 +102,7 @@ describe('the synchronous task and session history write boundary', () => {
     expect(await getSessionByClaudeId(sid)).toBeNull();
     expect(await getSessionsForTask(owner.id)).toEqual([]);
     expect((await getTask(owner.id)).router_area_id).toBe('desk');
-    await createSessionRecord(sid, owner.id, '', undefined, { profile: routerAreaProfile('desk'), initialProcessStatus: 'stopped' });
+    await createSessionRecord(sid, owner.id, '', undefined, { profile: routerAreaProfile('desk', 'work'), initialProcessStatus: 'stopped' });
     expect((await getSessionByClaudeId(sid))?.profile?.areaId).toBe('desk');
   });
 
@@ -111,7 +112,7 @@ describe('the synchronous task and session history write boundary', () => {
       const sid = randomUUID();
       await createSessionRecord(sid, owner.id, '', undefined, { initialProcessStatus: 'stopped' });
       const before = await getSessionByClaudeId(sid);
-      const profile = routerAreaProfile('desk');
+      const profile = routerAreaProfile('desk', 'work');
       const write = writer === 'update'
         ? updateSessionRecord(sid, { profile })
         : createSessionRecord(sid, owner.id, '', undefined, { profile });
@@ -126,12 +127,12 @@ describe('the synchronous task and session history write boundary', () => {
     const sid = randomUUID();
     await createSessionRecord(sid, '', '', undefined, { initialProcessStatus: 'stopped' });
     const before = await getSessionByClaudeId(sid);
-    for (const patch of [{ taskId: owner.id }, { taskId: owner.id, profile: routerAreaProfile('desk') }]) {
+    for (const patch of [{ taskId: owner.id }, { taskId: owner.id, profile: routerAreaProfile('desk', 'work') }]) {
       await expect(updateSessionRecord(sid, patch)).rejects.toMatchObject(REFUSAL);
       expect(await getSessionByClaudeId(sid)).toEqual(before);
     }
     const taskless = randomUUID();
-    await expect(createSessionRecord(taskless, '', '', undefined, { profile: routerAreaProfile('desk') }))
+    await expect(createSessionRecord(taskless, '', '', undefined, { profile: routerAreaProfile('desk', 'work') }))
       .rejects.toMatchObject(REFUSAL);
     expect(await getSessionByClaudeId(taskless)).toBeNull();
   });
@@ -139,7 +140,7 @@ describe('the synchronous task and session history write boundary', () => {
   const invalidPolicies: Array<[string, Partial<SessionProfile>]> = [
     ['clear the area', { areaId: undefined }],
     ['change the area', { areaId: 'elsewhere' }],
-    ['change the role', { areaRole: 'work' as never }],
+    ['change the role', { areaRole: 'router' }],
     ['enable built-in tools', { tools: ['Bash'] }],
     ['enable default tools', { tools: [] }],
     ['allow a generic MCP tool', { allowedTools: ['mcp__walnut__task_list'] }],
@@ -180,7 +181,9 @@ describe('the synchronous task and session history write boundary', () => {
     }
     const roleOnly = await task({ org_role: 'router' });
     await expect(updateTaskRaw(roleOnly.id, { org_role: null as never })).rejects.toMatchObject(REFUSAL);
-    const { owner: router } = await scoped();
+    const { owner: work } = await scoped();
+    await expect(updateTaskRaw(work.id, { org_role: 'router' })).rejects.toMatchObject(REFUSAL);
+    const { owner: router } = await scoped('router');
     await expect(updateTaskRaw(router.id, { org_role: null as never })).rejects.toMatchObject(REFUSAL);
   });
 
@@ -276,8 +279,8 @@ describe('the synchronous task and session history write boundary', () => {
     const ordinary = await task();
     for (const opts of [
       { taskId: area.id },
-      { taskId: area.id, profile: routerAreaProfile('desk') },
-      { taskId: ordinary.id, profile: routerAreaProfile('desk') },
+      { taskId: area.id, profile: routerAreaProfile('desk', 'work') },
+      { taskId: ordinary.id, profile: routerAreaProfile('desk', 'work') },
     ]) {
       const sid = randomUUID();
       await expect(importSessionRecord({ claudeSessionId: sid, project: '', ...opts }))
@@ -291,7 +294,7 @@ describe('the synchronous task and session history write boundary', () => {
       const owner = await task(scope());
       const sid = randomUUID();
       await expect(createSessionRecord(sid, owner.id, '', undefined, {
-        profile: routerAreaProfile('desk'), [field]: randomUUID(), initialProcessStatus: 'stopped',
+        profile: routerAreaProfile('desk', 'work'), [field]: randomUUID(), initialProcessStatus: 'stopped',
       })).rejects.toMatchObject(REFUSAL);
       expect(await getSessionByClaudeId(sid)).toBeNull();
     });
@@ -413,7 +416,7 @@ describe('the synchronous task and session history write boundary', () => {
     await createSessionRecord(sid, legacy.id, '', undefined, { initialProcessStatus: 'stopped' });
     await task(); // the row shadow now describes the legacy row unmarked
     // Fault injection on the writer's own connection: data_version stays put, the shadow goes stale.
-    patchLegacyTask(legacy.id, { router_area_id: 'desk', org_role: 'router' });
+    patchLegacyTask(legacy.id, { router_area_id: 'desk' });
     const later = await task({ title: 'Written after the stale shadow' });
     expect((await getTask(later.id)).title).toBe('Written after the stale shadow');
     expect((await getTask(legacy.id)).router_area_id).toBe('desk');
@@ -433,41 +436,5 @@ describe('the synchronous task and session history write boundary', () => {
     await createSessionRecord(plainSid, plain.id, '', undefined, { initialProcessStatus: 'stopped' });
     await updateSessionRecord(plainSid, { process_status: 'idle', title: 'Ordinary fixture' });
     expect(await getSessionByClaudeId(plainSid)).toMatchObject({ taskId: plain.id, process_status: 'idle', title: 'Ordinary fixture' });
-  });
-});
-
-// 2026-11-14: only a router runs isolated. What an older build left on routed work (a task mark,
-// a receiver 'work' session profile) is ordinary again, so the work it was handed resumes freely.
-describe('legacy routed-work marks are ordinary', () => {
-  const legacyWork = () => ({ ...routerAreaProfile('desk'), areaRole: 'work' }) as unknown as SessionProfile;
-
-  it('a non-router task with an area mark takes ordinary conversations, and its mark can be cleared', async () => {
-    const owner = await task({ router_area_id: 'desk' });
-    const sid = randomUUID();
-    await createSessionRecord(sid, owner.id, '', undefined, { initialProcessStatus: 'stopped' });
-    expect(await getSessionsForTask(owner.id)).toHaveLength(1);
-    await updateTaskRaw(owner.id, { session_ids: [sid] });
-    await updateTaskRaw(owner.id, { router_area_id: null as never });
-    expect((await getTask(owner.id)).router_area_id).toBeFalsy();
-  });
-
-  it('a session with a legacy work profile writes like an ordinary one and drops the profile', async () => {
-    const owner = await task({ router_area_id: 'desk' });
-    const sid = randomUUID();
-    await createSessionRecord(sid, owner.id, '', undefined, { profile: legacyWork(), initialProcessStatus: 'stopped' });
-    await updateSessionRecord(sid, { host: 'remote-fixture' });
-    await updateSessionRecord(sid, { profile: undefined });
-    expect((await getSessionByClaudeId(sid))?.profile).toBeUndefined();
-    const plain = await task();
-    await updateSessionRecord(sid, { taskId: plain.id });
-    expect((await getSessionByClaudeId(sid))?.taskId).toBe(plain.id);
-  });
-
-  it('a router task still refuses a legacy work conversation', async () => {
-    const owner = await task(scope());
-    const sid = randomUUID();
-    await expect(createSessionRecord(sid, owner.id, '', undefined, { profile: legacyWork(), initialProcessStatus: 'stopped' }))
-      .rejects.toMatchObject(REFUSAL);
-    expect(await getSessionByClaudeId(sid)).toBeNull();
   });
 });

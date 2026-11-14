@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { fetchConfig, updateConfigKeys } from '@/api/config';
+import { fetchConfig, updateConfig } from '@/api/config';
 import { wsClient } from '@/api/ws';
 import type { TaskbarLeaving, TaskbarSettings } from '@/pages/sessionTaskbar';
 import { DEFAULT_TASKBAR_SETTINGS, taskbarSettingsOf } from '@/pages/sessionTaskbar';
@@ -77,9 +77,10 @@ export function useTaskbarSettings(): TaskbarSettings {
 function write(next: TaskbarSettings): void {
   publish(next);
   lastSelfChange = Date.now();
-  // Only this key: a write that sends the section read earlier would put back a sibling
-  // another window changed since (api/config.ts updateConfigKeys).
-  updateConfigKeys('ui', { taskbar_hide_recent_only: next.hideRecentOnly, taskbar_leaving: next.leaving }).catch(() => {});
+  // updateConfig replaces the whole `ui` object, so merge into what is there.
+  fetchConfig()
+    .then((c) => updateConfig({ ui: { ...c.ui, taskbar_hide_recent_only: next.hideRecentOnly, taskbar_leaving: next.leaving } }))
+    .catch(() => {});
 }
 
 export function setTaskbarHideRecentOnly(v: boolean): void {

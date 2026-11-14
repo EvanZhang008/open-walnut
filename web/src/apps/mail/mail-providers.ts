@@ -81,15 +81,6 @@ export function canAnswerInvites(providers: MailProviderSummary[], accountId: st
   return provider?.capabilities.rsvp === true;
 }
 
-/**
- * Does a click on an attachment open it? Only for a provider that declares `attachments: 'download'`:
- * any other one lists names and sizes, and a chip that looked clickable there would do nothing.
- */
-export function canOpenAttachments(providers: MailProviderSummary[], accountId: string): boolean {
-  const provider = providers.find((one) => one.id === providerIdOf(accountId));
-  return provider?.capabilities.attachments === 'download';
-}
-
 /** The provider behind an account id, re-reading the list once when it is not known yet. */
 export async function providerFor(accountId: string): Promise<ProviderAnswer> {
   const find = () => store.state.providers.find((one) => one.id === providerIdOf(accountId));

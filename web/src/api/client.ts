@@ -303,8 +303,6 @@ interface RequestExtra {
   keepalive?: boolean;
   /** Already sent again with a new token (RetryWithToken): a second 401 stands. */
   tokenRetried?: boolean;
-  /** Extra request headers (PUT /api/config's merge mark, api/config.ts). */
-  headers?: Record<string, string>;
 }
 
 function priorityOf(method: string, extra?: RequestExtra): FetchPriority {
@@ -383,7 +381,7 @@ async function fetchOnce(path: string, opts: RequestInit): Promise<Response> {
   }
 }
 
-async function attemptRequest<T>(method: string, path: string, body?: unknown, extra?: { signal?: AbortSignal; timeoutMs?: number; cacheBypass?: boolean; quietStatuses?: number[]; opId?: string; keepalive?: boolean; tokenRetried?: boolean; headers?: Record<string, string> }): Promise<T> {
+async function attemptRequest<T>(method: string, path: string, body?: unknown, extra?: { signal?: AbortSignal; timeoutMs?: number; cacheBypass?: boolean; quietStatuses?: number[]; opId?: string; keepalive?: boolean; tokenRetried?: boolean }): Promise<T> {
   const timeoutMs = extra?.timeoutMs ?? 15_000;
   // Created AFTER slot acquisition — the timer measures the network round
   // trip only, never time spent waiting for a connection.
@@ -398,7 +396,6 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
   if (deviceToken) headers['Authorization'] = `Bearer ${deviceToken}`;
   if (extra?.opId) headers[OP_ID_HEADER] = extra.opId;
   if (extra?.opId && timeoutMs > DEFAULT_WRITE_WAIT_MS) headers[WAIT_HEADER] = String(timeoutMs);
-  if (extra?.headers) Object.assign(headers, extra.headers);
   const opts: RequestInit = {
     method,
     headers,
@@ -587,7 +584,7 @@ export function apiPatch<T>(path: string, body?: unknown, opts?: { timeoutMs?: n
   return request<T>('PATCH', path, body, opts);
 }
 
-export function apiPut<T>(path: string, body?: unknown, opts?: { timeoutMs?: number; opId?: string; headers?: Record<string, string> }): Promise<T> {
+export function apiPut<T>(path: string, body?: unknown, opts?: { timeoutMs?: number; opId?: string }): Promise<T> {
   return request<T>('PUT', path, body, opts);
 }
 

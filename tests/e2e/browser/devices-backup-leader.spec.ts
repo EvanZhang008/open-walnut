@@ -15,7 +15,6 @@ import { mkdirSync } from 'node:fs'
 import { test, expect, type Page, type Route } from '@playwright/test'
 import { openWay } from './devices-ways-helpers'
 import { dropFakes } from './route-teardown'
-import { putExactSection } from './config-section-helpers'
 
 test.setTimeout(120_000)
 
@@ -46,7 +45,8 @@ async function readConfig(page: Page): Promise<Record<string, unknown>> {
 }
 
 async function writeBridge(page: Page, cloudBridge: Record<string, unknown> | undefined) {
-  await putExactSection(page.request, 'cloud_bridge', cloudBridge)
+  const res = await page.request.put('/api/config', { data: { cloud_bridge: cloudBridge ?? {} } })
+  expect(res.ok()).toBe(true)
 }
 
 async function openDevices(page: Page) {

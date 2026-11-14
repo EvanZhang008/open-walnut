@@ -24,8 +24,6 @@ export interface AskerContext {
   project?: string
   /** The session's last steps before it asked, oldest first, at most ASKER_STEPS. */
   steps?: AskerStep[]
-  /** What the step does and why, written by Walnut when the asker gave no why (summary.ts); shown on top. */
-  summary?: string
 }
 
 export const ASKER_STEPS = 3

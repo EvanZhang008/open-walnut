@@ -1,17 +1,11 @@
 /**
  * The pending buffer a triage run reads — `~/.open-walnut/triage-state.json`.
  *
- * WHY A FILE AT ALL. Slack's per-conversation cursors live inside the plugin and
- * are not queryable from core, so the items on `plugin:slack:messages-received`
- * ARE the data. Lose them and nobody can ever get them back. So they accumulate
- * here.
- *
- * SLACK ONLY. Mail rows (`pending.mail`, `droppedMail`, a claim's `mail`) were
- * kept here until 2026-11-14, when every mailbox was bound to a mail router that
- * owns each new mail. A file an older build wrote may still hold them: they never
- * reach a batch. Their message ids are kept (`legacyMail`, ids only) through any
- * write until the mail plugin moves them to its router's pending queue at start
- * (takeTriageLegacyMail), so that mail is not lost at the deploy.
+ * WHY A FILE AT ALL. Mail can answer "what arrived since T" through its own ops,
+ * so the envelope only has to carry `since` plus counts. Slack cannot: its
+ * per-conversation cursors live inside the plugin and are not queryable from
+ * core, so the items on `plugin:slack:messages-received` ARE the data. Lose them
+ * and nobody can ever get them back. So they accumulate here.
  *
  * MACHINE-LOCAL and gitignored, next to cron-state.json and routine-state/ and
  * for the same reason (the 2026-08-04 re-fire storm): this is RUNTIME state. An
@@ -37,9 +31,9 @@
  * the feature not working. The run is idempotent by construction anyway — it
  * re-reads real state through ops before it acts.
  *
- * The cap exists because this file is rewritten on every flush: 120 Slack rows
- * keep it a few tens of KB. Over the cap the OLDEST rows go and `droppedSlack`
- * says how many, so "22 new items" is never a lie.
+ * Caps exist because this file is rewritten on every flush: 120 Slack rows and
+ * 40 mail rows keep it a few tens of KB. Over the cap the OLDEST rows go and
+ * `droppedSlack` / `droppedMail` says how many, so "22 new items" is never a lie.
  */
 
 import path from 'node:path';
@@ -52,6 +46,8 @@ import { log } from '../../logging/index.js';
 
 /** Slack rows kept. ~6 busy ticks of 20, which is one 30-minute batch. */
 export const PENDING_SLACK_CAP = 120;
+/** Mail rows kept. One row per ACCOUNT per tick, so 40 is many accounts × ticks. */
+export const PENDING_MAIL_CAP = 40;
 
 /**
  * How long an unacknowledged claim stays open.
@@ -67,6 +63,37 @@ export const CLAIM_TTL_MS = 15 * 60_000;
 
 // ── Shapes ──
 
+/** One mail account's tick, as `plugin:mail:messages-received` reported it. */
+export interface TriagePendingMail {
+  accountId: string;
+  count: number;
+  headlines: Array<{ from: string; subject: string; messageId?: string; canonicalKey?: string; version?: string }>;
+  atMs: number;
+}
+
+const HEADLINE_MESSAGE_MAX = 1_000;
+const HEADLINE_KEY_MAX = 2_048;
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+
+function identityField(value: unknown, max: number): string | undefined {
+  return typeof value === 'string' && value && value.length <= max && !CONTROL_CHARS.test(value) ? value : undefined;
+}
+
+/** A headline as an event or the file carried it; a malformed id or key reads as absent. */
+export function readTriageHeadline(raw: unknown): TriagePendingMail['headlines'][number] {
+  const row = (raw ?? {}) as Record<string, unknown>;
+  const messageId = identityField(row.messageId, HEADLINE_MESSAGE_MAX);
+  const canonicalKey = identityField(row.canonicalKey, HEADLINE_KEY_MAX);
+  const version = identityField(row.version, 200);
+  return {
+    from: str(row.from, 200),
+    subject: str(row.subject, 300),
+    ...(messageId ? { messageId } : {}),
+    ...(canonicalKey ? { canonicalKey } : {}),
+    ...(version ? { version } : {}),
+  };
+}
+
 /** One Slack message, as `plugin:slack:messages-received` reported it. */
 export interface TriagePendingSlack {
   conversation: string;
@@ -80,15 +107,19 @@ export interface TriagePendingSlack {
 }
 
 export interface TriagePending {
+  mail: TriagePendingMail[];
   slack: TriagePendingSlack[];
-  /** Rows the cap or the emitting plugin dropped. Keeps the counts honest. */
+  /** Rows the caps or the emitting plugin dropped. Keeps the counts honest. */
+  droppedMail: number;
   droppedSlack: number;
 }
 
 /** What one run was handed. `atMs` is the claim's id AND the run's start. */
 export interface TriageClaim {
   atMs: number;
+  mail: number;
   slack: number;
+  droppedMail: number;
   droppedSlack: number;
   /**
    * The run task this batch waits in: a run filed while every host was full is
@@ -109,7 +140,7 @@ export interface TriageState {
   /**
    * First-run floor for `since`. Recorded the first time the action runs, so the
    * first batch says "since the routine existed" instead of reading a whole
-   * history from epoch 0, and so a later routine edit cannot move it.
+   * mailbox from epoch 0, and so a later routine edit cannot move it.
    */
   sinceMs?: number;
   /** The previous run's journal line, carried into the next envelope. */
@@ -122,19 +153,10 @@ export interface TriageState {
   /** Open batch: handed out, not yet acknowledged. */
   claim?: TriageClaim;
   pending: TriagePending;
-  /** Mail an older build buffered here, ids only, until the mail plugin takes it (takeTriageLegacyMail). */
-  legacyMail?: TriageLegacyMail[];
-}
-
-/** One mail arrival an older build buffered in `pending.mail`: which mails, of which mailbox, buffered when. */
-export interface TriageLegacyMail {
-  accountId: string;
-  messageIds: string[];
-  atMs: number;
 }
 
 export function emptyTriagePending(): TriagePending {
-  return { slack: [], droppedSlack: 0 };
+  return { mail: [], slack: [], droppedMail: 0, droppedSlack: 0 };
 }
 
 export function emptyTriageState(): TriageState {
@@ -166,6 +188,15 @@ function str(value: unknown, max: number): string {
   return typeof value === 'string' ? value.slice(0, max) : '';
 }
 
+function readMailRow(raw: unknown): TriagePendingMail | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const accountId = str(r.accountId, 200);
+  if (!accountId) return null;
+  const headlines = Array.isArray(r.headlines) ? r.headlines.slice(0, 5).map(readTriageHeadline) : [];
+  return { accountId, count: Math.max(0, Math.floor(num(r.count))), headlines, atMs: num(r.atMs) };
+}
+
 function readSlackRow(raw: unknown): TriagePendingSlack | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
@@ -184,34 +215,12 @@ function readSlackRow(raw: unknown): TriagePendingSlack | null {
   };
 }
 
-/** `pending.mail` rows as an older build wrote them, and `legacyMail` as this one keeps them, as ids only. */
-function readLegacyMail(raw: unknown): TriageLegacyMail[] {
-  if (!Array.isArray(raw)) return [];
-  const out: TriageLegacyMail[] = [];
-  for (const one of raw) {
-    if (!one || typeof one !== 'object') continue;
-    const r = one as Record<string, unknown>;
-    const accountId = str(r.accountId, 200);
-    const ids = Array.isArray(r.messageIds) ? r.messageIds
-      : Array.isArray(r.headlines) ? r.headlines.map((h) => (h && typeof h === 'object' ? (h as Record<string, unknown>).messageId : undefined))
-        : [];
-    const messageIds = [...new Set(ids.filter((id): id is string => typeof id === 'string' && !!id && id.length <= 1_000))];
-    if (accountId && messageIds.length) out.push({ accountId, messageIds, atMs: num(r.atMs) });
-  }
-  return out;
-}
-
 /**
  * Read the buffer, degrading to empty on anything unreadable.
  *
  * Every field is re-validated rather than trusted: this file is rewritten on a
  * timer while a run may be reading it, and a half-written or hand-edited row
  * must cost one tick's items, never the run.
- *
- * Mail rows an older build buffered (`pending.mail`) never join the buffer: the
- * mail router owns mail since 2026-11-14. Their ids are kept as `legacyMail` (the
- * next write moves them there, without the subjects and senders) until the mail
- * plugin takes them; `droppedMail` is only a count, and is dropped.
  */
 export async function loadTriageState(home?: string): Promise<TriageState> {
   const file = triageStatePath(home);
@@ -220,20 +229,22 @@ export async function loadTriageState(home?: string): Promise<TriageState> {
     if (!raw || typeof raw !== 'object' || raw.version !== 1) return emptyTriageState();
     const pendingRaw = (raw.pending ?? {}) as Partial<TriagePending>;
     const pending: TriagePending = {
+      mail: Array.isArray(pendingRaw.mail)
+        ? pendingRaw.mail.map(readMailRow).filter((r): r is TriagePendingMail => r !== null)
+        : [],
       slack: Array.isArray(pendingRaw.slack)
         ? pendingRaw.slack.map(readSlackRow).filter((r): r is TriagePendingSlack => r !== null)
         : [],
+      droppedMail: Math.max(0, Math.floor(num(pendingRaw.droppedMail))),
       droppedSlack: Math.max(0, Math.floor(num(pendingRaw.droppedSlack))),
     };
-    const legacyMail = [
-      ...readLegacyMail((raw as { legacyMail?: unknown }).legacyMail),
-      ...readLegacyMail((pendingRaw as { mail?: unknown }).mail),
-    ];
     const claimRaw = raw.claim as Partial<TriageClaim> | undefined;
     const claim: TriageClaim | undefined = claimRaw && num(claimRaw.atMs) > 0
       ? {
         atMs: num(claimRaw.atMs),
+        mail: Math.max(0, Math.floor(num(claimRaw.mail))),
         slack: Math.max(0, Math.floor(num(claimRaw.slack))),
+        droppedMail: Math.max(0, Math.floor(num(claimRaw.droppedMail))),
         droppedSlack: Math.max(0, Math.floor(num(claimRaw.droppedSlack))),
         ...(typeof claimRaw.taskId === 'string' && claimRaw.taskId ? { taskId: claimRaw.taskId.slice(0, 200) } : {}),
         ...(num(claimRaw.boundAtMs) > 0 ? { boundAtMs: num(claimRaw.boundAtMs) } : {}),
@@ -250,7 +261,6 @@ export async function loadTriageState(home?: string): Promise<TriageState> {
       ...(raw.stateStale === true ? { stateStale: true as const } : {}),
       ...(claim ? { claim } : {}),
       pending,
-      ...(legacyMail.length ? { legacyMail } : {}),
     };
   } catch (err) {
     log.cron.warn('triage: state file unreadable — starting from an empty buffer', {
@@ -281,29 +291,6 @@ export async function updateTriageState(
   });
 }
 
-/**
- * Hands the mail an older build buffered here to `adopt` (the mail plugin's pending queue), then
- * removes it from the file, under the file's lock: a failed `adopt` keeps it for the next try, and a
- * crash in between hands it over again (the queue keeps one entry per mail). Answers how many mails
- * moved; a file with none is not written.
- */
-export async function takeTriageLegacyMail(
-  adopt: (rows: readonly TriageLegacyMail[]) => Promise<void>,
-  home?: string,
-): Promise<number> {
-  if (!(await loadTriageState(home)).legacyMail?.length) return 0;
-  let moved = 0;
-  await updateTriageState(async (state) => {
-    const rows = state.legacyMail ?? [];
-    if (!rows.length) return;
-    await adopt(rows);
-    moved = rows.reduce((n, row) => n + row.messageIds.length, 0);
-    delete state.legacyMail;
-  }, home);
-  if (moved) log.cron.info('triage: mail an older build buffered went to the mail router', { mails: moved });
-  return moved;
-}
-
 // ── Appending (pure halves, so the caps are gradable without a disk) ──
 
 /**
@@ -326,7 +313,7 @@ export function appendCapped<T>(
 }
 
 /**
- * Persist a collector flush: Slack items in one locked write.
+ * Persist a collector flush: mail ticks and Slack items in one locked write.
  *
  * When the cap bites while a claim is OPEN, the claim shrinks by however many of
  * ITS rows went. The claim is the oldest prefix and the cap drops the oldest
@@ -334,11 +321,18 @@ export function appendCapped<T>(
  * longer matches the rows and would eat items that arrived after the claim.
  */
 export async function recordTriageArrivals(input: {
+  mail?: readonly TriagePendingMail[];
   slack?: readonly TriagePendingSlack[];
   droppedSlack?: number;
 }, home?: string): Promise<TriageState> {
   return await updateTriageState((state) => {
     const p = state.pending;
+    if (input.mail?.length) {
+      const { list, dropped } = appendCapped(p.mail, input.mail, PENDING_MAIL_CAP);
+      p.mail = list;
+      p.droppedMail += dropped;
+      if (state.claim && dropped > 0) state.claim.mail = Math.max(0, state.claim.mail - dropped);
+    }
     const extraDropped = Math.max(0, Math.floor(input.droppedSlack ?? 0));
     if (input.slack?.length || extraDropped) {
       const { list, dropped } = appendCapped(p.slack, input.slack ?? [], PENDING_SLACK_CAP);
@@ -354,6 +348,7 @@ export async function recordTriageArrivals(input: {
 export interface TriageClaimResult {
   claim: TriageClaim;
   /** The rows this run owns — the claimed PREFIX of the buffer. */
+  mail: TriagePendingMail[];
   slack: TriagePendingSlack[];
   /** True when an earlier run claimed this batch and never acknowledged it. */
   redelivered: boolean;
@@ -382,7 +377,7 @@ export interface TriageClaimResult {
  *
  * `sinceMs` is the floor for "what is new": the last acknowledged run's start,
  * or — on the very first run — `nowMs`, recorded so the first batch never asks a
- * session to read an inbox from the beginning of time.
+ * session to read a mailbox from the beginning of time.
  */
 export async function claimTriageBatch(nowMs: number, home?: string): Promise<TriageClaimResult> {
   let out!: TriageClaimResult;
@@ -392,7 +387,7 @@ export async function claimTriageBatch(nowMs: number, home?: string): Promise<Tr
     const live = !!open && !bound && nowMs - open.atMs < CLAIM_TTL_MS;
     if (open && !live && !bound) {
       log.cron.warn('triage: a previous batch was never acknowledged — re-claiming its items', {
-        claimedAtMs: open.atMs, slack: open.slack, ageMs: nowMs - open.atMs,
+        claimedAtMs: open.atMs, mail: open.mail, slack: open.slack, ageMs: nowMs - open.atMs,
       });
     }
     if (state.sinceMs === undefined) state.sinceMs = nowMs;
@@ -400,12 +395,15 @@ export async function claimTriageBatch(nowMs: number, home?: string): Promise<Tr
       ? open
       : {
         atMs: nowMs,
+        mail: state.pending.mail.length,
         slack: state.pending.slack.length,
+        droppedMail: state.pending.droppedMail,
         droppedSlack: state.pending.droppedSlack,
       };
     state.claim = claim;
     out = {
       claim,
+      mail: state.pending.mail.slice(0, claim.mail),
       slack: state.pending.slack.slice(0, claim.slack),
       redelivered: live || bound,
       sinceMs: state.lastRunAtMs ?? state.sinceMs ?? nowMs,
@@ -424,7 +422,9 @@ function dropClaimed(s: TriageState): void {
   // was in flight. Those rows were already delivered, so dropping fewer here
   // is correct — slicing by the claimed COUNT against a shorter list would
   // eat rows that arrived after the claim.
+  s.pending.mail = s.pending.mail.slice(Math.min(claim.mail, s.pending.mail.length));
   s.pending.slack = s.pending.slack.slice(Math.min(claim.slack, s.pending.slack.length));
+  s.pending.droppedMail = Math.max(0, s.pending.droppedMail - claim.droppedMail);
   s.pending.droppedSlack = Math.max(0, s.pending.droppedSlack - claim.droppedSlack);
   s.claim = undefined;
   s.lastRunAtMs = claim.atMs;

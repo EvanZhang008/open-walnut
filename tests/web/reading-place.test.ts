@@ -116,16 +116,6 @@ describe('one owner of the reading place', () => {
     expect(history).toMatch(/if \(onQuestionPageRef\.current\) \{ stop\(\); return; \}\n[^\n]*\n[^\n]*\n\s*if \(landingOwnedFor\.current === sessionId\) \{ stop\(\); return; \}\n[^\n]*\n[^\n]*\n\s*if \(readingPlace\.held\.current\) \{ raf = requestAnimationFrame\(pin\); return; \}/)
   })
 
-  it('hidden timelines pause pending restores and stop initial pins before held-place gates', () => {
-    const hook = read('components/sessions/useReadingPlace.ts')
-    expect(hook).toContain('if (!shownRef.current || !p || !el) return;')
-    expect(hook).toContain('pending.current.until = Math.max(pending.current.until, performance.now() + PENDING_MS);')
-    expect(hook).toContain('recordOwed.current ||= recordTimer.current !== undefined && dirty.current && !moved.current;')
-    expect(hook).toContain('if (recordOwed.current && dirty.current && !moved.current) record();')
-    const pin = history.slice(history.indexOf('const pin = () => {'))
-    expect(pin.indexOf('!routeShownRef.current || Date.now() - started > 15_000')).toBeLessThan(pin.indexOf('readingPlace.held.current'))
-  })
-
   it('the stack landing defers to a kept place', () => {
     expect(history).toMatch(/useThreadLanding\(\{[\s\S]*?placeAt: readingPlace\.placeAt, keepPlace: readingPlace\.keep, adoptPlace: readingPlace\.adopt, placeHeld: placeHeldFn/)
     const landing = read('hooks/useThreadLanding.ts')

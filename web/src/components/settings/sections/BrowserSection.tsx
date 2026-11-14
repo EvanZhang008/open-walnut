@@ -17,22 +17,6 @@ export interface BrowserStatus {
   browsers: Array<{ device: string; label: string; browser: string; caps: string[]; tabs?: unknown[] }>
   mode: SiteMode
   sites: Array<{ site: string; addedAt: string }>
-  /** How long the Browser replay keeps agents' steps (0: off), and what it holds now. */
-  replayDays?: number
-  replayBytes?: number
-}
-
-/** Settings' choices for the replay (the server takes these only: replay-store.ts REPLAY_DAY_CHOICES). */
-export const REPLAY_DAY_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: '0', label: 'Off' }, { value: '1', label: '1 day' }, { value: '3', label: '3 days' },
-  { value: '7', label: '7 days' }, { value: '14', label: '14 days' }, { value: '30', label: '30 days' },
-]
-
-/** Bytes as a person reads them. */
-export function sizeLine(bytes: number): string {
-  if (bytes < 1024 * 1024) return `${Math.max(0, Math.round(bytes / 1024))} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`
 }
 
 export function BrowserSection() {
@@ -53,7 +37,7 @@ export function BrowserSection() {
   const save = async (key: string, body: Record<string, unknown>) => {
     setBusy(key); setError('')
     try {
-      const r = await apiPut<Pick<BrowserStatus, 'mode' | 'sites' | 'replayDays' | 'replayBytes'>>('/api/v1/browser/settings', body)
+      const r = await apiPut<Pick<BrowserStatus, 'mode' | 'sites'>>('/api/v1/browser/settings', body)
       setSt((s) => (s ? { ...s, ...r } : s))
     } catch (err) {
       setError(saveErrorMessage(err))
@@ -93,19 +77,6 @@ export function BrowserSection() {
             control={<SettingsButton busy={busy === s.site} onClick={() => void save(s.site, { removeSite: s.site })}>Remove</SettingsButton>}
           />
         ))}
-        <SettingsRow
-          label="Keep replays of agents' steps"
-          help={st?.replayDays === 0
-            ? 'Off: no picture of an agent\'s step is kept.'
-            : `A picture of each step an agent takes in your browser, so a task's Browser view can play it back. Kept on this computer only, never synced or backed up, and deleted after ${st?.replayDays ?? 7} day${st?.replayDays === 1 ? '' : 's'}${st?.replayBytes !== undefined ? `. Using ${sizeLine(st.replayBytes)} now (at most 2 GB)` : ''}.`}
-          control={(
-            <select id="browser-replay-days" className="settings-select" aria-label="Keep replays of agents' steps" data-testid="browser-replay-days"
-              value={String(st?.replayDays ?? 7)} disabled={!st || busy === 'replay'}
-              onChange={(e) => void save('replay', { replayDays: Number(e.target.value) })}>
-              {REPLAY_DAY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          )}
-        />
         {error && <p className="settings-test-result" data-kind="fail" role="alert">{error}</p>}
       </SettingsGroup>
     </SettingsSection>

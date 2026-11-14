@@ -21,12 +21,14 @@ import {
   CLAIM_TTL_MS,
   loadTriageState,
   markTriageStateStale,
+  PENDING_MAIL_CAP,
   PENDING_SLACK_CAP,
   recordTriageArrivals,
   recordTriageJournalLine,
   releaseTriageClaim,
   triageStatePath,
   updateTriageState,
+  type TriagePendingMail,
   type TriagePendingSlack,
 } from '../../src/core/triage/state.js';
 
@@ -40,6 +42,15 @@ function slackRows(n: number, from = 0): TriagePendingSlack[] {
     permalink: `https://example.test/archives/C1/p${from + i}`,
     text: `line ${from + i}`,
     atMs: 1_000 + from + i,
+  }));
+}
+
+function mailRows(n: number, from = 0): TriagePendingMail[] {
+  return Array.from({ length: n }, (_, i) => ({
+    accountId: `acct-${from + i}`,
+    count: 2,
+    headlines: [{ from: 'sender@example.test', subject: `subject ${from + i}` }],
+    atMs: 2_000 + from + i,
   }));
 }
 
@@ -69,7 +80,7 @@ describe('appendCapped — the pure cap rule', () => {
 describe('the buffer on disk', () => {
   it('a missing file reads as empty, and nothing is created by reading', async () => {
     const state = await loadTriageState();
-    expect(state).toEqual({ version: 1, runs: 0, pending: { slack: [], droppedSlack: 0 } });
+    expect(state).toEqual({ version: 1, runs: 0, pending: { mail: [], slack: [], droppedMail: 0, droppedSlack: 0 } });
     await expect(fs.access(triageStatePath())).rejects.toThrow();
   });
 
@@ -93,10 +104,34 @@ describe('the buffer on disk', () => {
     }), 'utf-8');
     const state = await loadTriageState();
     expect(state.runs).toBe(0);
+    expect(state.pending.mail).toEqual([
+      { accountId: 'a', count: 4, headlines: [], atMs: 0 },
+    ]);
     expect(state.pending.slack).toHaveLength(1);
+    expect(state.pending.droppedMail).toBe(0);
     expect(state.pending.droppedSlack).toBe(3);
-    // Mail rows an older build buffered are not read at all (the mail router owns mail).
-    expect(state.pending).toEqual({ slack: [expect.objectContaining({ conversation: '#x' })], droppedSlack: 3 });
+  });
+
+  it('keeps a headline identity across the file, and reads a malformed one as absent', async () => {
+    const key = JSON.stringify(['mail', 'a', 'rfc', '<one@example.test>']);
+    await recordTriageArrivals({
+      mail: [{
+        accountId: 'a',
+        count: 3,
+        headlines: [
+          { from: 'x@example.test', subject: 'kept', messageId: 'INBOX:1', canonicalKey: key },
+          { from: 'x@example.test', subject: 'control', messageId: 'INBOX:\u0001', canonicalKey: `${key}\n` },
+          { from: 'x@example.test', subject: 'too long', messageId: 'm'.repeat(1_001), canonicalKey: 'k'.repeat(2_049) },
+        ],
+        atMs: 9,
+      }],
+    });
+    const state = await loadTriageState();
+    expect(state.pending.mail[0]?.headlines).toEqual([
+      { from: 'x@example.test', subject: 'kept', messageId: 'INBOX:1', canonicalKey: key },
+      { from: 'x@example.test', subject: 'control' },
+      { from: 'x@example.test', subject: 'too long' },
+    ]);
   });
 
   it('keeps 120 Slack rows out of 400 and says 280 were dropped', async () => {
@@ -118,6 +153,13 @@ describe('the buffer on disk', () => {
     const state = await loadTriageState();
     expect(state.pending.slack).toHaveLength(3);
     expect(state.pending.droppedSlack).toBe(11);
+  });
+
+  it('caps mail account ticks at 40', async () => {
+    await recordTriageArrivals({ mail: mailRows(50) });
+    const state = await loadTriageState();
+    expect(state.pending.mail).toHaveLength(PENDING_MAIL_CAP);
+    expect(state.pending.droppedMail).toBe(50 - PENDING_MAIL_CAP);
   });
 
   it('concurrent appends all land: the lock serializes read-modify-write', async () => {
@@ -148,15 +190,16 @@ describe('the buffer on disk', () => {
 
 describe('the claim / ack handover (at-least-once)', () => {
   it('a claim hands out the batch and deletes NOTHING', async () => {
-    await recordTriageArrivals({ slack: slackRows(6) });
+    await recordTriageArrivals({ mail: mailRows(2), slack: slackRows(6) });
     const claimed = await claimTriageBatch(50_000);
 
+    expect(claimed.mail).toHaveLength(2);
     expect(claimed.slack).toHaveLength(6);
     expect(claimed.redelivered).toBe(false);
     // Still on disk: nothing is dropped until somebody says a session got it.
     const state = await loadTriageState();
     expect(state.pending.slack).toHaveLength(6);
-    expect(state.claim).toEqual({ atMs: 50_000, slack: 6, droppedSlack: 0 });
+    expect(state.claim).toEqual({ atMs: 50_000, mail: 2, slack: 6, droppedMail: 0, droppedSlack: 0 });
   });
 
   it('the first claim ever sets `since` to now, so no run reads from epoch 0', async () => {
@@ -203,7 +246,7 @@ describe('the claim / ack handover (at-least-once)', () => {
   });
 
   it('a crash between the delivery and the clear re-delivers the same batch', async () => {
-    await recordTriageArrivals({ slack: slackRows(4) });
+    await recordTriageArrivals({ mail: mailRows(1), slack: slackRows(4) });
     const first = await claimTriageBatch(100_000);
     expect(first.slack).toHaveLength(4);
 
@@ -216,6 +259,7 @@ describe('the claim / ack handover (at-least-once)', () => {
     expect(second.redelivered).toBe(true);
     expect(second.claim.atMs).toBe(100_000);
     expect(second.slack.map((r) => r.text)).toEqual(first.slack.map((r) => r.text));
+    expect(second.mail).toHaveLength(1);
 
     // And the acknowledgement still refers to the ORIGINAL claim.
     expect((await ackTriageClaim(100_000)).acked).toBe(true);

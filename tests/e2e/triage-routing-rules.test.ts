@@ -45,12 +45,6 @@ import { addTask, updateTaskRaw } from '../../src/core/task-manager.js';
 import { createSessionRecord } from '../../src/core/session-tracker.js';
 import { executeOp } from '../../src/ops/index.js';
 import { buildTriageBatch } from '../../src/core/triage/batch.js';
-import type { TriagePendingSlack } from '../../src/core/triage/state.js';
-
-/** One Slack message as the collector buffers it (the batch carries Slack only since 2026-11-14). */
-function slackItem(alias: string, text: string, ts: string): TriagePendingSlack {
-  return { conversation: '#offers', isDm: false, isMention: false, alias, ts, permalink: '', text, atMs: 1 };
-}
 import { readRoutingRules, routingRulesPath } from '../../src/core/triage/routing-rules.js';
 
 let server: Server;
@@ -153,20 +147,20 @@ describe('every batch reads the rules, and an item goes to its task named by its
   it('the batch lists the rule and the items it already matches', async () => {
     const rules = await readRoutingRules(WALNUT_HOME);
     const batch = buildTriageBatch({
-      slack: [slackItem('hr@acme.example', 'Your offer', '1'), slackItem('news@other.example', 'Weekly', '2')],
-      droppedSlack: 0, sinceMs: 0, nowMs: 1, rules,
+      mail: [{ accountId: 'work', count: 2, atMs: 1, headlines: [{ from: 'HR <hr@acme.example>', subject: 'Your offer' }, { from: 'news@other.example', subject: 'Weekly' }] }],
+      slack: [], droppedMail: 0, droppedSlack: 0, sinceMs: 0, nowMs: 1, sources: ['mail'], rules,
     });
     const rule = rules.find((r) => r.match.from === 'acme.example')!;
     expect(batch.body).toContain(`${rule.id}: sender contains "acme.example" → task ${ownerId} ("Offer review")`);
-    expect(batch.body).toMatch(new RegExp(`from "hr@acme.example" → ${rule.id}`));
-    expect(batch.body).not.toMatch(/other\.example" →/);
+    expect(batch.body).toMatch(new RegExp(`subject "Your offer" → ${rule.id}`));
+    expect(batch.body).not.toMatch(/Weekly" →/);
     expect(batch.body).toContain('triage_route');
   });
 
   it('triage_route sends the item to the rule\'s task with the rule named, and records it', async () => {
     const rule = (await readRoutingRules(WALNUT_HOME)).find((r) => r.match.from === 'acme.example')!;
     deliveries.length = 0;
-    const out = await ok('triage_route', { rule_id: rule.id, item: 'Your offer', text: 'HR sent the offer letter (#offers, 1); it asks for a signature by Friday.', source: 'slack' }, RUN_SID);
+    const out = await ok('triage_route', { rule_id: rule.id, item: 'Your offer', text: 'HR sent the offer letter (work, m-1); it asks for a signature by Friday.', source: 'mail' }, RUN_SID);
     expect(out.delivered).toBeTruthy();
     expect(deliveries).toHaveLength(1);
     expect(deliveries[0]!.sessionId).toBe(OWNER_SID);
@@ -174,14 +168,14 @@ describe('every batch reads the rules, and an item goes to its task named by its
     expect(deliveries[0]!.message).toContain('Item: Your offer');
     const after = (await readRoutingRules(WALNUT_HOME)).find((r) => r.id === rule.id)!;
     expect(after.routedCount).toBe(1);
-    expect(after.recent?.[0]).toMatchObject({ item: 'Your offer', source: 'slack' });
+    expect(after.recent?.[0]).toMatchObject({ item: 'Your offer', source: 'mail' });
   });
 
   it('a rule\'s task that never ran is started with the item as its first message, on its own place', async () => {
     const fresh = (await addTask({ title: 'Placeholder for kitchen mail', project: 'Home', source: 'local' } as never)).task;
     const rule = await ok('triage_rule_set', { from: 'kitchenpros.example', task_id: fresh.id });
     starts.length = 0;
-    const out = await ok('triage_route', { rule_id: rule.rule.id, item: 'Quote ready', text: 'Bob sent the quote (#kitchen, 9).', source: 'slack' }, RUN_SID);
+    const out = await ok('triage_route', { rule_id: rule.rule.id, item: 'Quote ready', text: 'Bob sent the quote (home, m-9).', source: 'mail' }, RUN_SID);
     expect(out.started).toBeTruthy();
     expect(starts).toHaveLength(1);
     expect(starts[0]).toMatchObject({ taskIdPrefix: fresh.id, source: 'api-agent' });
@@ -228,10 +222,10 @@ describe('every batch reads the rules, and an item goes to its task named by its
     const live = await liveRules(await readRoutingRules(WALNUT_HOME));
     expect(live.some((r) => r.id === first.rule.id)).toBe(false);
     const batch = buildTriageBatch({
-      slack: [slackItem('x@dead-first.example', 'Hello', '3')],
-      droppedSlack: 0, sinceMs: 0, nowMs: 1, rules: live,
+      mail: [{ accountId: 'work', count: 1, atMs: 1, headlines: [{ from: 'x@dead-first.example', subject: 'Hello' }] }],
+      slack: [], droppedMail: 0, droppedSlack: 0, sinceMs: 0, nowMs: 1, sources: ['mail'], rules: live,
     });
-    expect(batch.body).toMatch(new RegExp(`from "x@dead-first.example" → ${second.rule.id}`));
+    expect(batch.body).toMatch(new RegExp(`subject "Hello" → ${second.rule.id}`));
   });
 
   it('a rule moves to a place in the list (the first matching rule wins)', async () => {

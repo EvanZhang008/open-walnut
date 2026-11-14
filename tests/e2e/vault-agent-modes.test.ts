@@ -226,11 +226,11 @@ describe('Bitwarden sync', () => {
 
 describe('unlock length and the keychain', () => {
   it('the status reports the choice; a config an older Walnut wrote reads idle minutes', async () => {
-    await updateConfig({ passwords: { unlock_for: '1h', auto_lock_minutes: undefined } })
+    await updateConfig({ passwords: { unlock_for: '1h' } })
     expect((await person('GET', '/vault/status')).body).toMatchObject({ unlockFor: '1h', autoLockMinutes: 60, lockAfterIdleMinutes: null })
-    await updateConfig({ passwords: { auto_lock_minutes: 20, unlock_for: undefined } })
+    await updateConfig({ passwords: { auto_lock_minutes: 20 } })
     expect((await person('GET', '/vault/status')).body).toMatchObject({ unlockFor: 'idle', autoLockMinutes: 20, lockAfterIdleMinutes: 20 })
-    await updateConfig({ passwords: { unlock_for: 'restart', auto_lock_minutes: undefined } })
+    await updateConfig({ passwords: { unlock_for: 'restart' } })
     // A new unlock under "until restart" has no clock.
     const s = (await http('POST', '/vault/unlock', { passwordKey: pwKey })).body.session
     expect(s.expiresAt).toBeNull()

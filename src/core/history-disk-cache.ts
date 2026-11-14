@@ -70,9 +70,6 @@ import { HISTORY_CACHE_SCHEMA } from './history-parse.js';
  *
  * 13 (2026-11-12): preserve the CLI's recorded assistant effort for the subagent settings reader.
  *
- * 14 (2026-11-14): `mergedUuids` on a user line Claude Code merged from several queued sends
- * (its `mergedSendUuids`). A version-13 parse lacks them, so the line proves only its own send.
- *
  * The number itself lives in history-parse.ts, beside the parser it versions: the session
  * daemon's ready views (src/providers/history-ready-core.ts) carry it too.
  */

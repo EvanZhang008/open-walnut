@@ -60,7 +60,6 @@ const CONNECTION: Record<string, Entry> = {
   reviveRemoteService: { count: 1, kind: 'not-for-test-server', why: 'revives the host\'s OS service; IS_EPHEMERAL returns before anything runs' },
   prewarmRemoteFolds: { count: 3, kind: 'own-dir', why: 'daemonDir = the chosen dir, env = dirEnv, bun probe with bunScriptOpts' },
   acpTurnsOpen: { count: 1, kind: 'read', why: 'reads acp-busy.json in the chosen daemon dir' },
-  attachDuringSwap: { count: 1, kind: 'read', why: 'buildLiveDaemonScanScript over the chosen daemon dir: reads its pid, port and instance files during a service swap' },
   updateManagedDaemon: { count: 3, kind: 'not-for-test-server', why: 'only for an OS-service daemon; an isolated one is never managed (detectServiceTakeover)' },
   stopUnmanagedDaemon: { count: 1, kind: 'own-dir', why: 'buildDaemonStopCmd(the chosen daemon dir), which proves the pid is that dir\'s daemon' },
   probeOrInstallBun: { count: 3, kind: 'own-dir', why: 'bunScriptOpts: the install runs with HOME and BUN_INSTALL under the isolated install home' },

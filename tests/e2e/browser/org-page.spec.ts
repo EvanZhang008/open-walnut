@@ -6,11 +6,11 @@
  *   - a lead shows its own chat, then All tasks by the user's status (Needs you / Working /
  *     Waiting / Not started, each task with its status line) and its Board; the
  *     composer under the Board sends to the lead and the chat shows the answer
- *   - a waiting question's task name opens that task's session on Home (a task reference)
+ *   - a waiting question's task name opens that task's session beside the page
  *   - search, a pick that survives a reload, live state, the keyboard, and the org chart
  *   - the rows hold still while the pointer is over the list, and re-sort once it leaves
  *   - another page and back (or a reload of /org) shows the same place: the pick, its sections'
- *     folds, the list's scroll
+ *     folds, the task beside it, the list's scroll
  *   - the org's name (the title) and the user's role on the chart are renamed in place and kept;
  *     the main agent reads as the CEO and the leads as VPs
  * The fixture is shared, so this file makes its own projects and removes what it made.
@@ -185,7 +185,7 @@ test('a lead\'s chat is in the page beside its Board, and its composer sends to 
   await expect(chat.getByText(`I processed your message: status please ${STAMP}`).first()).toBeVisible({ timeout: 60_000 })
 })
 
-test('the name of a task waiting on a question opens its session on Home', async ({ page }) => {
+test('the name of a task waiting on a question opens its session beside the page', async ({ page }) => {
   await openOrg(page)
   await row(page, ALPHA).click()
   await expect(page.getByTestId('org-detail-title')).toHaveText(`${ALPHA} VP`)
@@ -194,11 +194,9 @@ test('the name of a task waiting on a question opens its session on Home', async
   const alert = page.locator(`[data-testid="org-alert"][data-task-id="${ids.ask}"]`)
   await expect(alert).toHaveAttribute('data-kind', 'question')
   await alert.getByTestId('org-alert-link').click()
-  // A task reference: Home, with the task's session column (useOpenTask, 2026-11-13); no side panel.
-  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
-  await expect(page.locator(`.main-page-session-column .session-panel[data-session-id="${ids.askSid}"]`)).toBeVisible({ timeout: 30_000 })
-  await expect(page.getByTestId('org-side')).toHaveCount(0)
-  await expect(page.locator('.task-detail-modal')).toHaveCount(0)
+  // The user stays on the Org page (org-side-panel.spec.ts covers the panel itself).
+  await expect(page).toHaveURL(/\/org\?/)
+  await expect(page.getByTestId('org-side')).toHaveAttribute('data-session-id', ids.askSid, { timeout: 30_000 })
 })
 
 test('search, a pick that survives a reload, live state, the keyboard, and the org chart', async ({ page, request }) => {
@@ -384,7 +382,7 @@ test('a task waiting on a decision letter needs the user: its name opens the let
   await expect(side.locator('.session-inbox-pane')).toContainText(`Send the deposit ${STAMP}`)
 })
 
-test('back on the Org page, it is where it was: the pick, its folds, the list scroll; a reload too', async ({ page }) => {
+test('back on the Org page, it is where it was: the pick, its folds, the task beside it, the list scroll; a reload too', async ({ page }) => {
   await openOrg(page)
   await row(page, ALPHA).click()
   await expect(row(page, ALPHA)).toHaveAttribute('aria-selected', 'true')
@@ -392,8 +390,9 @@ test('back on the Org page, it is where it was: the pick, its folds, the list sc
   // Its folds are its own: Not started (folded by default) opened.
   await openSection(page, 'notstarted')
   // One of this team's own tasks, by id: the sections re-sort as the shared fixture's work moves.
-  // (A click on it opens it on Home now, a task reference: the Org page keeps no task beside it.)
-  await expect(taskRow(page, ids.build, 'notstarted')).toBeVisible()
+  const taskId = ids.build
+  await taskRow(page, taskId, 'notstarted').click()
+  await expect(page.getByTestId('org-side')).toBeVisible()
   const list = page.locator('.org-list-scroll')
   const top = await list.evaluate((el) => { el.scrollTop = Math.min(80, el.scrollHeight - el.clientHeight); return el.scrollTop })
   // The scroll is saved a moment after it stops.
@@ -403,7 +402,8 @@ test('back on the Org page, it is where it was: the pick, its folds, the list sc
     await expect(row(page, ALPHA)).toHaveAttribute('aria-selected', 'true', { timeout: 30_000 })
     await expect(page.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'all')
     await expect(taskSection(page, 'notstarted')).toHaveAttribute('data-open', '1')
-    await expect(taskRow(page, ids.build, 'notstarted')).toBeVisible()
+    await expect(page.getByTestId('org-side')).toBeVisible()
+    await expect(page).toHaveURL(new RegExp(`open=[^&]*${taskId}`))
     await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBe(top)
   }
   // Another page, then the sidebar's Org: the same place, not the first lead.

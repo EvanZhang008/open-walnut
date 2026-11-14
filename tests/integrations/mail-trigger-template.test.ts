@@ -2,10 +2,13 @@
  * The mail plugin's "New mail" trigger template (src/integrations/mail/trigger-template.ts)
  * against an in-memory stand-in for its cache.
  */
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, it, expect } from 'vitest'
-import { createMailTriggerTemplate } from '../../src/integrations/mail/trigger-template.js'
+import { createMailTriggerTemplate, type MailTriggerDeps } from '../../src/integrations/mail/trigger-template.js'
 import type { MessageRow } from '../../src/integrations/mail/store.js'
-import type { MailAccountDto } from '../../src/integrations/mail/contract.js'
+import type { MailAccountDto, MailMessageDto } from '../../src/integrations/mail/contract.js'
 
 const T0 = Date.parse('2026-10-21T08:00:00Z')
 
@@ -20,13 +23,14 @@ function row(over: Partial<MessageRow> & { message_id: string; account_id?: stri
   } as MessageRow
 }
 
-function setup(rows: MessageRow[]) {
+function setup(rows: MessageRow[], filterIncoming?: MailTriggerDeps['filterIncoming']) {
   const accounts = [
     { accountId: 'imap:me', address: 'me@example.com', displayName: 'Me' },
     { accountId: 'imap:work', address: 'work@example.org', displayName: 'Work' },
   ] as MailAccountDto[]
   const listed: unknown[] = []
   const template = createMailTriggerTemplate({
+    ...(filterIncoming ? { filterIncoming } : {}),
     listAccounts: async () => accounts,
     store: {
       mailboxesByRole: async () => [
@@ -149,12 +153,91 @@ describe('mail trigger template', () => {
     expect(await template.options('from', '')).toEqual([])
   })
 
-  it('delivers mail of a router mailbox like any other: no area filter hides it from the watcher', async () => {
-    const { template } = setup([
-      row({ message_id: 'm-plain', at: T0 + 60_000, subject: 'Lunch' }),
-      row({ message_id: 'm-routed', at: T0 + 120_000, from_addr: 'payroll@corp.example', subject: 'Salary letter' }),
-    ])
-    const r = await template.check({}, { state: { armedAt: T0, since: {} }, now: new Date(T0 + 300_000).toISOString() })
-    expect(r.items?.map((i) => i.id)).toEqual(['imap:me/m-plain', 'imap:me/m-routed'])
+  describe('mail of an incoming-item area', () => {
+    // m-sorted and m-sorted-2 belong to an area; the stand-in drops them as the router guard would.
+    const CLASSIFIED = new Set(['m-sorted', 'm-sorted-2'])
+    function guarded(rows: MessageRow[]) {
+      const seen: string[][] = []
+      let fail = false
+      const filter = async (incoming: MailMessageDto[]) => {
+        seen.push(incoming.map((m) => m.messageId))
+        if (fail) throw new Error('area registry unreadable')
+        return incoming.filter((m) => !CLASSIFIED.has(m.messageId))
+      }
+      return { ...setup(rows, filter), seen, failNext: (on: boolean) => { fail = on } }
+    }
+    const secret = { from_addr: 'payroll@corp.example', subject: 'Private salary letter', snippet: 'confidential figures' }
+    const leaks = (out: unknown) => /payroll@corp|Private salary|confidential figures/.test(JSON.stringify(out))
+
+    it('one account with both kinds: only the unassigned mail is delivered, the classified text never leaves', async () => {
+      const g = guarded([
+        row({ message_id: 'm-plain', at: T0 + 60_000, subject: 'Lunch' }),
+        row({ message_id: 'm-sorted', at: T0 + 120_000, ...secret }),
+      ])
+      const r = await g.template.check({}, { state: { armedAt: T0, since: {} }, now: new Date(T0 + 300_000).toISOString() })
+      expect(r.fire).toBe(true)
+      expect(r.items?.map((i) => i.id)).toEqual(['imap:me/m-plain'])
+      expect(leaks(r)).toBe(false)
+      // The filter sees every arrival past the cursor, before any sender or subject match.
+      expect(g.seen.map((ids) => [...ids].sort())).toEqual([['m-plain', 'm-sorted']])
+      expect(r.state).toEqual({ armedAt: T0, since: { 'imap:me': T0 + 120_000 } })
+    })
+
+    it('a sender or subject filter that names classified mail fires nothing', async () => {
+      const g = guarded([row({ message_id: 'm-sorted', at: T0 + 60_000, ...secret })])
+      const state = { armedAt: T0, since: {} }
+      const now = new Date(T0 + 300_000).toISOString()
+      for (const params of [{ from: 'payroll@' }, { subject: 'salary' }]) {
+        const r = await g.template.check(params, { state, now })
+        expect(r.fire).toBe(false)
+        expect(leaks(r)).toBe(false)
+      }
+    })
+
+    it('all classified: silent, the cursor still moves, and the next run replays nothing', async () => {
+      const g = guarded([
+        row({ message_id: 'm-sorted', at: T0 + 60_000, ...secret }),
+        row({ message_id: 'm-sorted-2', at: T0 + 90_000, ...secret }),
+      ])
+      const first = await g.template.check({}, { state: { armedAt: T0, since: {} }, now: new Date(T0 + 300_000).toISOString() })
+      expect(first).toMatchObject({ fire: false, items: [] })
+      expect(leaks(first)).toBe(false)
+      expect(first.state).toEqual({ armedAt: T0, since: { 'imap:me': T0 + 90_000 } })
+      const again = await g.template.check({}, { state: first.state, now: new Date(T0 + 600_000).toISOString() })
+      expect(again.fire).toBe(false)
+      expect(leaks(again)).toBe(false)
+      expect(again.state).toEqual(first.state)
+    })
+
+    it('a failed check returns no state, so the cursor stays; the next run delivers what was waiting', async () => {
+      const rows = [
+        row({ message_id: 'm-plain', at: T0 + 60_000, subject: 'Lunch' }),
+        row({ message_id: 'm-sorted', at: T0 + 120_000, ...secret }),
+      ]
+      const g = guarded(rows)
+      const state = { armedAt: T0, since: { 'imap:me': T0 } }
+      g.failNext(true)
+      await expect(g.template.check({}, { state, now: new Date(T0 + 300_000).toISOString() })).rejects.toThrow(/registry unreadable/)
+      g.failNext(false)
+      const r = await g.template.check({}, { state, now: new Date(T0 + 360_000).toISOString() })
+      expect(r.items?.map((i) => i.id)).toEqual(['imap:me/m-plain'])
+      expect(leaks(r)).toBe(false)
+      expect(r.state).toEqual({ armedAt: T0, since: { 'imap:me': T0 + 120_000 } })
+    })
+
+    it('nothing past the cursor asks the filter nothing', async () => {
+      const g = guarded([row({ message_id: 'm-sorted', at: T0 - 60_000, ...secret })])
+      const r = await g.template.check({}, { state: { armedAt: T0, since: {} }, now: new Date(T0 + 300_000).toISOString() })
+      expect(r.fire).toBe(false)
+      expect(g.seen).toEqual([])
+    })
+
+    it('the plugin wires the router guard into the trigger it registers', () => {
+      const here = path.dirname(fileURLToPath(import.meta.url))
+      const source = fs.readFileSync(path.join(here, '../../src/integrations/mail/index.ts'), 'utf8')
+      const call = /createMailTriggerTemplate\(\{([\s\S]*?)\}\)\)\)/.exec(source)?.[1] ?? ''
+      expect(call).toMatch(/filterIncoming:\s*\(rows\)\s*=>\s*keepUnassignedMail\(rows\)/)
+      expect(source).toMatch(/import \{[^}]*\bkeepUnassignedMail\b[^}]*\} from '\.\/router-read-guard\.js'/)
+    })
   })
 })

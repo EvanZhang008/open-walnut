@@ -3,7 +3,7 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
-/// Settings, Action Button: what Talk to Walnut and Dictate do, a way
+/// Settings, Action Button: what Talk to Walnut and Dictate to Clipboard do, a way
 /// to try each here, the exact steps to put one on the Action Button (only the
 /// person can, in iOS Settings), other places they run, and anything not delivered.
 struct TalkSetupView: View {
@@ -16,9 +16,6 @@ struct TalkSetupView: View {
 
     private var allWait: Bool { talk.outbox.unsent.allSatisfy(TalkSession.waits) }
     private var allCopy: Bool { talk.outbox.unsent.allSatisfy { $0.copy == true } }
-    /// Only dictations kept by the person's choice: no warning colour, nothing failed.
-    private var allChosen: Bool { talk.outbox.unsent.allSatisfy(TalkSession.awaitsChoice) }
-    private var rowTone: Color { allWait ? TalkTone.orange : allChosen ? Color(uiColor: .label) : TalkTone.red }
 
     var body: some View {
         List {
@@ -30,11 +27,11 @@ struct TalkSetupView: View {
                         showingUnsent = true
                     } label: {
                         HStack(spacing: 12) {
-                            Image(systemName: allWait ? "clock.arrow.circlepath" : allChosen ? "text.bubble" : "exclamationmark.bubble")
-                                .foregroundStyle(allChosen ? Color.accentColor : rowTone)
+                            Image(systemName: allWait ? "clock.arrow.circlepath" : "exclamationmark.bubble")
+                                .foregroundStyle(allWait ? TalkTone.orange : TalkTone.red)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(allWait ? "Waiting to Send" : allCopy ? "Dictations" : "Not Sent")
-                                    .foregroundStyle(rowTone)
+                                Text(allWait ? "Waiting to Send" : allCopy ? "Not Copied" : "Not Sent")
+                                    .foregroundStyle(allWait ? TalkTone.orange : TalkTone.red)
                                 Text(latest.reason ?? "")
                                     .font(.footnote)
                                     .foregroundStyle(Color(uiColor: .secondaryLabel))
@@ -61,17 +58,17 @@ struct TalkSetupView: View {
             }
 
             Section {
-                Text("Dictate opens Walnut and listens the same way, then shows your words on one page: send them to your CEO, or copy them to paste into any app. Nothing goes anywhere until you pick.")
+                Text("Dictate to Clipboard listens the same way, but puts your words on the clipboard exactly as heard, ready to paste into any app. Nothing goes to your CEO.")
                     .accessibilityIdentifier("talk.dictate.intro")
-                TalkTryRow(talk: talk, error: $dictateError, destination: .dictation)
+                TalkTryRow(talk: talk, error: $dictateError, destination: .clipboard)
             } header: {
-                Text("Dictate")
+                Text("Dictate to Clipboard")
             }
 
             Section {
                 TalkStepRow(number: 1, text: "Open the **Settings** app and tap **Action Button**.")
                 TalkStepRow(number: 2, text: "Swipe to **Shortcut**.")
-                TalkStepRow(number: 3, text: "Tap **Choose a Shortcut**, then pick **Talk to Walnut**, or **Dictate** to see your words first, then send or copy them.")
+                TalkStepRow(number: 3, text: "Tap **Choose a Shortcut**, then pick **Talk to Walnut**, or **Dictate to Clipboard** to paste what you say anywhere.")
             } header: {
                 Text("Set Up the Action Button")
             } footer: {
@@ -133,7 +130,7 @@ struct TalkTryRow: View {
     @Binding var error: String?
     var destination: TalkDestination = .ceo
 
-    private var copy: Bool { destination == .dictation }
+    private var copy: Bool { destination == .clipboard }
     /// The take on screen (or the last one) is this row's.
     private var mine: Bool { talk.destination == destination }
     /// Identifiers: the CEO row keeps its own, the clipboard row's carry "dictate".
@@ -172,10 +169,10 @@ struct TalkTryRow: View {
                         .buttonStyle(.bordered)
                         .accessibilityIdentifier(id("cancel"))
                     Button { Task { await talk.finishNow(source: "settings-send") } } label: {
-                        Text(copy ? "Done" : "Send").foregroundStyle(TalkTone.onProminent)
+                        Text(copy ? "Copy" : "Send").foregroundStyle(TalkTone.onProminent)
                     }
                         .buttonStyle(.borderedProminent)
-                        .accessibilityIdentifier(id(copy ? "done" : "send"))
+                        .accessibilityIdentifier(id(copy ? "copy" : "send"))
                 }
             case .starting, .transcribing, .sending:
                 HStack(spacing: 8) {
@@ -197,7 +194,7 @@ struct TalkTryRow: View {
                 } label: {
                     // Icon and words centred together; they wrap as one at large sizes.
                     HStack(spacing: 8) {
-                        Image(systemName: copy ? "text.bubble" : "waveform")
+                        Image(systemName: copy ? "doc.on.clipboard" : "waveform")
                         Text(copy ? "Try Dictation" : "Try It Now")
                     }
                     .multilineTextAlignment(.center)
@@ -225,7 +222,7 @@ struct TalkTryRow: View {
         guard mine else { return nil }
         switch talk.phase {
         case .sent(let words): return ("Sent to your CEO: \u{201C}\(TalkSession.preview(words))\u{201D}", "checkmark.circle", TalkTone.green)
-        case .copied(let words): return ("Copied: \u{201C}\(TalkSession.preview(words))\u{201D}", "doc.on.doc", TalkTone.green)
+        case .copied(let words): return ("Copied: \u{201C}\(TalkSession.preview(words))\u{201D}", "doc.on.clipboard", TalkTone.green)
         // A kept take is said once, by the Not Sent row right below, with its reason.
         case .notSent(_, kept: true) where !talk.outbox.unsent.isEmpty:
             return nil
@@ -245,8 +242,6 @@ struct TalkUnsentRows: View {
     var sharedReason: String?
     @State private var playback = TalkPlayback.shared
     @State private var confirmingDelete: String?
-    /// The row whose words a Copy just took, so its button says so.
-    @State private var copiedWords: String?
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
@@ -268,14 +263,12 @@ struct TalkUnsentRows: View {
                     // Stacked, the main action comes first.
                     VStack(alignment: .leading, spacing: 8) {
                         resendButton(entry, wide: true)
-                        copyWordsButton(entry, wide: true)
                         deleteButton(entry, wide: true)
                     }
                 } else {
                     HStack(spacing: 16) {
                         Spacer(minLength: 0)
                         deleteButton(entry, wide: false)
-                        copyWordsButton(entry, wide: false)
                         resendButton(entry, wide: false)
                     }
                 }
@@ -288,7 +281,7 @@ struct TalkUnsentRows: View {
                 // A recording with no words was never sent; words may have reached
                 // the server before an answer was lost, so they say only what is known.
                 entry.copy == true
-                    ? (entry.text == nil ? "Delete this recording? It was never sent or copied." : "Delete these words? They were never sent or copied.")
+                    ? (entry.text == nil ? "Delete this recording? It was never copied." : "Delete these words? They were never copied.")
                     : entry.text == nil
                     ? "Delete this recording? It was never sent to your CEO chat."
                     : "Delete these words? Walnut could not confirm they reached your CEO chat.",
@@ -325,8 +318,7 @@ struct TalkUnsentRows: View {
             VStack(alignment: .leading, spacing: 2) {
                 if entry.reason != sharedReason {
                     Text(entry.reason ?? "")
-                        .foregroundStyle(TalkSession.waits(entry) || TalkSession.awaitsChoice(entry)
-                            ? Color(uiColor: .secondaryLabel) : TalkTone.red)
+                        .foregroundStyle(TalkSession.waits(entry) ? Color(uiColor: .secondaryLabel) : TalkTone.red)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if entry.attempts > 1 {
@@ -361,19 +353,10 @@ struct TalkUnsentRows: View {
     private func resendButton(_ entry: TalkOutbox.Entry, wide: Bool) -> some View {
         // A take that sends by itself offers a quiet Send Now; one that needs
         // the person keeps the filled Resend.
-        // A dictation waits for the person's Send or Copy: both, as on its page.
+        // A take for the clipboard waits only for the person's Copy.
         if entry.copy == true {
-            if wide {
-                resendCore(entry, wide: true, title: "Send to CEO", onFill: true, send: true)
-                    .buttonStyle(.borderedProminent)
-                resendCore(entry, wide: true, title: "Copy", onFill: false)
-                    .buttonStyle(.bordered)
-            } else {
-                resendCore(entry, wide: false, title: "Copy", onFill: false)
-                    .buttonStyle(.bordered)
-                resendCore(entry, wide: false, title: "Send to CEO", onFill: true, send: true)
-                    .buttonStyle(.borderedProminent)
-            }
+            resendCore(entry, wide: wide, title: "Copy", onFill: true)
+                .buttonStyle(.borderedProminent)
         } else if TalkSession.waits(entry) {
             resendCore(entry, wide: wide, title: "Send Now", onFill: false)
                 .buttonStyle(.bordered)
@@ -383,32 +366,14 @@ struct TalkUnsentRows: View {
         }
     }
 
-    /// Copy beside Send for words on their way to the CEO: copied, they still go.
-    @ViewBuilder
-    private func copyWordsButton(_ entry: TalkOutbox.Entry, wide: Bool) -> some View {
-        if entry.copy != true, entry.text != nil {
-            Button {
-                let done = talk.copyWords(entry.id)
-                copiedWords = done ? entry.id : nil
-                UINotificationFeedbackGenerator().notificationOccurred(done ? .success : .error)
-            } label: {
-                Text(copiedWords == entry.id ? "Copied" : "Copy")
-                    .foregroundStyle(Color.accentColor)
-                    .frame(maxWidth: wide ? .infinity : nil)
-            }
-            .buttonStyle(.bordered)
-            .accessibilityIdentifier("talk.unsent.copyWords")
-        }
-    }
-
-    private func resendCore(_ entry: TalkOutbox.Entry, wide: Bool, title: String, onFill: Bool, send: Bool = false) -> some View {
+    private func resendCore(_ entry: TalkOutbox.Entry, wide: Bool, title: String, onFill: Bool) -> some View {
         let busy = talk.resending.contains(entry.id)
         return Button {
             // VoiceOver can still reach a dimmed button: a second Resend is a no-op.
             guard !busy else { return }
             playback.stop()
             Task {
-                let sent = await talk.resend(entry.id, send: send)
+                let sent = await talk.resend(entry.id)
                 UINotificationFeedbackGenerator().notificationOccurred(sent ? .success : .error)
             }
         } label: {
@@ -417,8 +382,7 @@ struct TalkUnsentRows: View {
                 .frame(maxWidth: wide ? .infinity : nil)
         }
         .modifier(TalkBusyButton(busy: busy))
-        // A dictation's Copy keeps the row's one Resend id; its Send has its own.
-        .accessibilityIdentifier(send ? "talk.unsent.send" : "talk.unsent.resend")
+        .accessibilityIdentifier("talk.unsent.resend")
     }
 
     @ViewBuilder
@@ -503,26 +467,29 @@ struct TalkUnsentList: View {
         let tail = allWait
             ? "Walnut tries again each time you open it."
             : allCopy
-            ? (one ? "Send it to your CEO, or copy it." : "Send each to your CEO, or copy it.")
+            ? (one ? "Tap Copy to put it on the clipboard." : "Tap Copy to put one on the clipboard.")
             : (one ? "This did not reach your CEO chat." : "These did not reach your CEO chat.")
         return [sharedReason, tail].compactMap { $0 }.joined(separator: " ")
     }
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var typeSize
-    @State private var shownTitle: String?
-
-    /// From the rows not going out right now: a dictation sent from this list is a take
-    /// for the CEO while it goes, and must not retitle the list "Not Sent" on its way out.
-    private var listTitle: String? {
-        let rows = talk.outbox.unsent.filter { !talk.resending.contains($0.id) }
-        guard !rows.isEmpty else { return nil }
-        if rows.allSatisfy(TalkSession.waits) { return "Waiting to Send" }
-        return rows.allSatisfy { $0.copy == true } ? "Dictations" : "Not Sent to Your CEO"
-    }
 
     var body: some View {
         NavigationStack {
             List {
+                // A Resend that went out says so here: its row leaves, as a
+                // Delete's does, and the words are what reached the CEO chat.
+                if let words = talk.lastResent {
+                    Label(
+                        talk.lastResentCopied
+                            ? "Copied: \u{201C}\(TalkSession.preview(words))\u{201D}"
+                            : "Sent to your CEO chat: \u{201C}\(TalkSession.preview(words))\u{201D}",
+                        systemImage: talk.lastResentCopied ? "doc.on.clipboard.fill" : "checkmark.circle.fill"
+                    )
+                        .font(.footnote)
+                        .foregroundStyle(TalkTone.green)
+                        .accessibilityIdentifier("talk.unsent.sent")
+                }
                 if !talk.outbox.unsent.isEmpty {
                     Section {
                         TalkUnsentRows(talk: talk, sharedReason: sharedReason)
@@ -534,34 +501,7 @@ struct TalkUnsentList: View {
                     }
                 }
             }
-            // The last rows sent or copied leave the list empty: it keeps the title it had,
-            // never one that says something still waits.
-            // A Resend that went out says so over the list, a moment, then gone: a line in
-            // the list moved every row under the thumb when it went.
-            .overlay(alignment: .bottom) {
-                if let words = talk.lastResent {
-                    Label(
-                        talk.lastResentCopied
-                            ? "Copied: \u{201C}\(TalkSession.preview(words))\u{201D}"
-                            : "Sent to your CEO chat: \u{201C}\(TalkSession.preview(words))\u{201D}",
-                        systemImage: talk.lastResentCopied ? "doc.on.doc.fill" : "checkmark.circle.fill"
-                    )
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(TalkTone.green)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(Capsule().fill(Color(uiColor: .secondarySystemGroupedBackground)).shadow(radius: 6, y: 2))
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 12)
-                    .accessibilityIdentifier("talk.unsent.sent")
-                    .task(id: words) {
-                        try? await Task.sleep(for: .seconds(6))
-                        if talk.lastResent == words { talk.clearResentNotice() }
-                    }
-                }
-            }
-            .navigationTitle(listTitle ?? shownTitle ?? "Action Button")
-            .onChange(of: listTitle, initial: true) { _, title in if let title { shownTitle = title } }
+            .navigationTitle(allWait ? "Waiting to Send" : allCopy ? "Not Copied" : "Not Sent to Your CEO")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.visible, for: .navigationBar)
             .talkHardTopEdge()
@@ -611,8 +551,6 @@ struct TalkUnsentSheetModifier: ViewModifier {
                 offerIfNew()
                 // No network work in a prewarm launch: only once the app is in front.
                 LaunchGate.shared.whenActive {
-                    // A page the last process left open opens again (`reopenUnseenPage`).
-                    if TalkSession.shared.isReviewing { TalkPanel.shared.show() }
                     TalkNetworkWatch.shared.start()
                     Task { await TalkSession.shared.resendKept(source: "app-active") }
                 }
@@ -622,11 +560,6 @@ struct TalkUnsentSheetModifier: ViewModifier {
                 // A take listening from behind (the person tapped its Live Activity, or
                 // opened Walnut): the Talk screen shows it, the whole screen its Send.
                 if talk.phase == .listening { TalkPanel.shared.show() }
-                // A dictation's words wait on their page (they came while Walnut was away),
-                // and one the person never saw opens on it too.
-                // Not while a press brings Walnut forward for its own take.
-                if !talkPressOpening { talk.reopenUnseenPageIfIdle() }
-                if talk.isReviewing { TalkPanel.shared.show() }
                 // Offered at once; what can go out now goes while the sheet shows,
                 // its rows saying so, and leaves the list by itself.
                 offerIfNew()
@@ -642,11 +575,8 @@ private extension TalkUnsentSheetModifier {
     /// Only takes that need the person interrupt: one Walnut sends by itself
     /// waits quietly in Settings, Action Button.
     func offerIfNew() {
-        // The page's own words are on the page, not news; and nothing pops under a page or a take.
-        // A dictation kept by choice is never news here: an unseen one opens on its page.
-        let fresh = talk.outbox.unsent.filter { !TalkSession.waits($0) && !TalkSession.awaitsChoice($0) }.map(\.id)
-            .filter { !offered.contains($0) && $0 != talk.reviewTake && !talk.closedPages.contains($0) }
-        if !fresh.isEmpty, !talk.isBusy, !talk.isReviewing, !TalkPanel.shared.isShown { showing = true }
+        let fresh = talk.outbox.unsent.filter { !TalkSession.waits($0) }.map(\.id).filter { !offered.contains($0) }
+        if !fresh.isEmpty, !talk.isBusy { showing = true }
     }
 
     /// Only ids still on the list are remembered, so the mark stays small.

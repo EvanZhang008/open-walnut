@@ -9,7 +9,7 @@
  * too (fail closed).
  */
 import { OrgError } from '../org/org-store.js';
-import { isRouterAreaSession } from './session-policy.js';
+import { isRouterAreaSession, type RouterAreaRole } from './session-policy.js';
 import type { RouterArea } from './areas.js';
 import type { SessionRecord, Task } from '../types.js';
 
@@ -37,8 +37,8 @@ async function readHistory(task: HistoryTask): Promise<{ records: SessionRecord[
   return { records: [...byId.values()], missing };
 }
 
-/** Throws 409 router_history_not_isolated unless the router task's history fits its area's router profile. */
-export async function assertIsolatedHistory(task: HistoryTask, area: HistoryArea): Promise<void> {
+/** Throws 409 router_history_not_isolated unless the task's history fits the area's profile for `role`. */
+export async function assertIsolatedHistory(task: HistoryTask, area: HistoryArea, role: RouterAreaRole): Promise<void> {
   let history: Awaited<ReturnType<typeof readHistory>>;
   try {
     history = await readHistory(task);
@@ -47,12 +47,12 @@ export async function assertIsolatedHistory(task: HistoryTask, area: HistoryArea
       `Task ${task.id}'s conversations could not be read (${error instanceof Error ? error.message : String(error)}). Nothing was changed; retry.`);
   }
   const fullArea = { id: area.id, host: area.host } as RouterArea;
-  const foreign = history.records.filter((record) => record.taskId !== task.id || !isRouterAreaSession(record, fullArea)).map((record) => record.claudeSessionId);
+  const foreign = history.records.filter((record) => record.taskId !== task.id || !isRouterAreaSession(record, fullArea, role)).map((record) => record.claudeSessionId);
   const outside = [...foreign, ...history.missing];
   if (outside.length === 0) return;
   throw new OrgError('router_history_not_isolated', 409,
     `Task ${task.id} already has ${outside.length === 1 ? 'a conversation' : `${outside.length} conversations`} (${outside.join(', ')}) `
-    + `not started in area ${area.id}'s isolated router profile. Such a conversation has seen tools and `
+    + `not started in area ${area.id}'s isolated ${role === 'router' ? 'router' : 'area work'} profile. Such a conversation has seen tools and `
     + 'context outside the area, so the area could never start or wake this task. Nothing was changed, and the old conversation is kept as it is: '
     + 'Walnut never deletes it to make room. Use a fresh task with no conversation for this area instead.');
 }

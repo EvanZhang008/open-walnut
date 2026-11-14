@@ -3,15 +3,15 @@
  * the user, on a Home row's dark native tooltip: "I want it to actually make the full line
  * expanded like what we did for side bar"). Two guards:
  * - no element keeps a native `title` that only repeats its own text: that title was how a
- *   truncated row showed its full text, and it would now open a dark box over the component (or
+ *   truncated row showed its full text, and it would now open a dark box over the pill (or
  *   repeat text in full view). A new row written that way fails here; drop the title, the peek
  *   needs nothing, or mark the element `data-peek="off"` if it must keep it;
- * - every shared peek grows its container in flow, never a floating clone of its text.
+ * - the pill's placement never leaves the window and grows out from the text's own spot.
  */
 import path from 'node:path';
-import fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { findRepeatedTitles, findTaskTitleSites } from './truncation-peek-scan';
+import { PEEK_EDGE, PEEK_PAD_X, PEEK_PAD_Y, placePeek, placeVertically } from '../../web/src/utils/truncation-peek-place';
 
 const WEB_SRC = path.resolve(__dirname, '../../web/src');
 
@@ -51,7 +51,7 @@ describe('truncated rows rely on the in-place peek, not a native title', () => {
  * Keyed by file and class, so a moved line does not fail; a stale entry does.
  */
 const NOT_A_ROW: Record<string, string> = {
-  'components/board/kanban/KanbanCard.tsx kanban-card-title': 'a loading skeleton, or the drag overlay whose row marker is disabled at runtime; real Board cards carry data-peek-row',
+  'components/board/kanban/KanbanCard.tsx kanban-card-title': 'a Board card has its own hover card (useHoverAnchor); its title still peeks when hovered itself',
   'components/calendar/CalendarItemPopover.tsx cal-item-title-static': 'the heading of an open popover, not a row; it peeks when hovered itself',
   'components/sessions/SessionBrowserCard.tsx session-browser-tab': 'a web page tab of the agent browser, not a task',
   'components/tasks/TodoPanel.tsx todo-item-title': 'TaskItemOverlay: the copy that follows the pointer in a drag, never hovered (the other todo-item-title is in the marked list row)',
@@ -78,32 +78,45 @@ describe('a task row whose text is cut off expands as a whole', () => {
   });
 });
 
-describe('all truncation peeks grow their container, never cloned text', () => {
-  it('the shared renderer has only the in-flow path, including new unmarked components', () => {
-    const source = fs.readFileSync(path.join(WEB_SRC, 'utils/truncation-peek.ts'), 'utf8');
-    expect(source).toContain('state.marked = expandRow(state.key, state.hosts)');
-    expect(source).toContain('const key = host.closest(CONTROL) ?? host.parentElement ?? host');
-    expect(source).not.toMatch(/createElement|cloneNode|appendChild|renderPill|placePeek|MAX_ROW_HOSTS/);
-    const css = fs.readFileSync(path.join(WEB_SRC, 'styles/truncation-peek.css'), 'utf8');
-    expect(css).not.toMatch(/position:\s*(fixed|absolute)|z-index|\.truncation-peek/);
-    expect(css).toContain('[data-peek-open]');
-    expect(css).toMatch(/\[data-peek-flow\]\s*\{[^}]*flex-wrap:\s*wrap\s*!important/);
-    const row = fs.readFileSync(path.join(WEB_SRC, 'utils/truncation-peek-row.ts'), 'utf8');
-    expect(row).toContain('mark(el, el === h.parentElement ? LINE_ATTR : FLOW_ATTR)');
-    expect(row).toContain("if (cs.maxWidth !== 'none') mark(el, FIT_ATTR)");
-    const calendar = fs.readFileSync(path.join(WEB_SRC, 'components/calendar/CalendarChip.tsx'), 'utf8');
-    expect(calendar).toContain("data-peek={style?.top !== undefined ? 'off' : undefined}");
-    expect(calendar).not.toMatch(/\btitle=\{/);
+describe('placePeek', () => {
+  const vp = { width: 1280, height: 800 };
+
+  it('keeps the text on its own spot and grows to the right on one line', () => {
+    const box = placePeek({ left: 100, top: 50 }, 400, 200, vp);
+    expect(box.left).toBe(100 - PEEK_PAD_X);
+    expect(box.top).toBe(50 - PEEK_PAD_Y);
+    expect(box.width).toBe(400 + PEEK_PAD_X * 2);
   });
 
-  it('every truncated letter subject belongs to a whole expandable card', () => {
-    const sites = findTaskTitleSites(WEB_SRC, /\bletter\.subject\b/);
-    expect(sites.length).toBeGreaterThan(0);
-    expect(sites.filter((s) => !s.inRow).map((s) => `${s.file}:${s.line}`)).toEqual([]);
-    const worker = fs.readFileSync(path.join(WEB_SRC, 'components/tasks/SubtaskPill.tsx'), 'utf8');
-    expect(worker).toContain('className="task-worker-parent"');
-    const acceptance = fs.readFileSync(path.resolve(__dirname, '../e2e/browser/inbox-card-peek.spec.ts'), 'utf8');
-    expect(acceptance).toContain("openInRow(row.locator('.task-worker-parent'))");
-    expect(acceptance).toContain('expect(meta.y + meta.height).toBeLessThanOrEqual(title.y + 1)');
+  it('stays one line as far as the window allows, and wraps only past its width', () => {
+    expect(placePeek({ left: 100, top: 50 }, 900, 200, vp).width).toBe(900 + PEEK_PAD_X * 2);
+    const wide = placePeek({ left: 100, top: 50 }, 3000, 200, vp);
+    expect(wide.width).toBe(vp.width - PEEK_EDGE * 2);
+    expect(wide.left).toBe(PEEK_EDGE);
+  });
+
+  it('moves left, never past the window, when the room on the right is too narrow', () => {
+    const box = placePeek({ left: 1100, top: 50 }, 600, 120, vp);
+    expect(box.left + box.width).toBeLessThanOrEqual(vp.width - PEEK_EDGE);
+    expect(box.width).toBe(600 + PEEK_PAD_X * 2);
+  });
+
+  it('fits a window narrower than the widest pill', () => {
+    const narrow = { width: 400, height: 800 };
+    const box = placePeek({ left: 30, top: 50 }, 2000, 100, narrow);
+    expect(box.left).toBeGreaterThanOrEqual(PEEK_EDGE);
+    expect(box.left + box.width).toBeLessThanOrEqual(narrow.width - PEEK_EDGE);
+  });
+
+  it('never narrower than what the row showed', () => {
+    expect(placePeek({ left: 100, top: 50 }, 150, 300, vp).width).toBe(300 + PEEK_PAD_X * 2);
+  });
+
+  it('moves up when a wrapped pill would pass the bottom, never above the top edge', () => {
+    const box = placePeek({ left: 100, top: 760 }, 3000, 200, vp);
+    const placed = placeVertically(box, 120, vp.height);
+    expect(placed.top + placed.height).toBeLessThanOrEqual(vp.height - PEEK_EDGE);
+    expect(placeVertically(box, 2000, vp.height).top).toBe(PEEK_EDGE);
+    expect(placeVertically(placePeek({ left: 100, top: 50 }, 300, 200, vp), 24, vp.height).top).toBe(50 - PEEK_PAD_Y);
   });
 });

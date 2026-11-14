@@ -43,7 +43,7 @@ Use the current tool schema for exact arguments. This skill explains decisions, 
 - A fresh task's message contains the current user request, valid permissions and prohibitions, done condition and necessary dependency facts or evidence pointers. Do not copy Main's or an old owner's transcript, unrelated unfinished work or private identity details. Parent/project links keep coordination, not conversation context. An old owner can supply a short handoff without executing the new goal.
 - `phase` is the work's lifecycle and you set it. `execution` is what a read reports about the run: `not_started`, the process status (`running`, `idle`, `stopped`, `error`), `waiting` when it is parked on a permission prompt, or `unknown`. There is no execution state to write. Every `task_list` row carries it. From inside a task, `task_list` lists your folder by default (your project when you have no folder); `scope` (`project` or `all`) widens it.
 - A task runs as a coding-agent process, which is why `task_history` has a conversation to return. That process is an implementation detail: address the work by its task ID everywhere.
-- Project execution defaults live in project metadata. Read `project_metadata_get` for `default_cwd`, `default_host` or `claude_plugins_off` (Claude Code plugins the project's sessions start without); update them with `project_metadata_update`.
+- Project execution defaults live in project metadata. Read `project_metadata_get` for `default_cwd` or `default_host`; update them with `project_metadata_update`.
 - Deleting a project (`project_delete`) is durable: the name is tombstoned, so a provider pull, a stale session launcher, or a `task_create` naming it files into the Inbox instead of re-creating it. Only an explicit project create re-opens the name. A project claimed by an external task-sync provider refuses a plain delete with 409; pass `remote: true` to also delete its remote container, otherwise the container keeps pulling the tasks back.
 - Pin state and focus tier are separate. Pin first, then set a tier. Satellite is the default tier and is stored as no explicit `focus_tier` value.
 - A task you or the user creates lands on the pinned board in Satellite by default. Pass `pinned: false` only for work that is not expected within about a month; search recovers it later. Automated importers (external sessions, provider sync, routine runs) stay unpinned.
@@ -52,10 +52,6 @@ Use the current tool schema for exact arguments. This skill explains decisions, 
 
 - Use `NEED_ACTION` when your work is ready for someone to look at.
 - Use `COMPLETE` when the whole task is finished. No phase is reserved for humans.
-
-## Change settings
-
-- `PUT /api/config` with one section (`{"session": {"reply_language": "en"}}`) changes only the keys you send in it: keys you leave out are kept, a key sent as `null` is removed (except `approvals.ask_me`, which only takes true or false), and an object one level down (`session.turn_retry`) is replaced whole. Sections that are lists of named entries (`hosts`, `providers`, `plugins`, `engines` and the like) are replaced by what you send, so read the section first and send it back whole with your change.
 
 ## Where to get facts
 

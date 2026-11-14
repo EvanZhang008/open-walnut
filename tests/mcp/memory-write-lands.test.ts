@@ -52,7 +52,7 @@ const WHOLE_REPLACE_KNOWN: Record<string, string> = {
 /** Creates, or short fields set whole: nothing a script would edit one line of. */
 const CREATE_OR_SHORT = new Set([
   'task_create', 'org_node_create', 'trigger_create', 'task_not_done_settle', 'board_project_set',
-  'board_card_set', 'board_remind', 'thread_update', 'hint_set', 'triage_rule_set',
+  'board_card_set', 'board_remind', 'thread_update', 'hint_set', 'triage_rule_set', 'router_work',
 ])
 /** Messages and request bodies: sent, not stored as a document. */
 const MESSAGE = new Set([

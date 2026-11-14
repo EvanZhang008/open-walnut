@@ -6,7 +6,7 @@
  *   POST /api/v1/browser/off      the extension stopped letting agents in
  *   POST /api/v1/browser/act      an agent's command: { action, tab?, device?, ...args }
  *   GET  /api/v1/browser/status   connected browsers, the site setting, the allowed sites
- *   PUT  /api/v1/browser/settings the person's choice: { mode?, removeSite?, replayDays? }
+ *   PUT  /api/v1/browser/settings the person's choice: { mode?, removeSite? }
  *   GET  /api/v1/browser/panel    { panel, askPanel, extension: { version, build } }: the build Walnut ships
  *   POST /api/v1/browser/extension/setup { browser } → { dir, build, copied, opened }
  *
@@ -29,19 +29,6 @@ import { missingIsNull } from '../../lib/id-ref.js'
 import { IS_DEMO } from '../../constants.js'
 
 export const browserV1Router = Router()
-
-browserV1Router.get('/browser/security-alert', async (req, res, next) => {
-  try {
-    const { checkSecurityAlert, SecurityAlertError } = await import('../../core/browser-control/security-alert.js')
-    const { isFollower } = await import('../../core/server-role.js')
-    if (isFollower()) { res.status(503).json({ status: 'unavailable', actions: [], next: 'Ask the owning task or supervisor to check on the primary.' }); return }
-    try { res.json(await checkSecurityAlert(req.query)) }
-    catch (error) {
-      if (error instanceof SecurityAlertError) { res.status(error.status).json({ error: error.message, code: error.code }); return }
-      throw error
-    }
-  } catch (error) { next(error) }
-})
 
 function header(req: Request, name: string): string | undefined {
   const v = req.headers[name]
@@ -200,8 +187,7 @@ browserV1Router.get('/browser/status', (_req, res, next) => {
     const f = await (await sites()).readSites()
     const h = await hub()
     const left = h.lastGone()
-    const replay = await import('../../core/browser-control/replay-store.js')
-    return { browsers: h.connected(), mode: f.mode, sites: f.sites, replayDays: f.replayDays, replayBytes: await replay.replayBytes(), ...(left ? { gone: { label: left.label, at: new Date(left.at).toISOString(), why: left.why } } : {}) }
+    return { browsers: h.connected(), mode: f.mode, sites: f.sites, ...(left ? { gone: { label: left.label, at: new Date(left.at).toISOString(), why: left.why } } : {}) }
   })
 })
 
@@ -209,23 +195,11 @@ browserV1Router.put('/browser/settings', (req, res, next) => {
   if (!personOnly(req, res)) return
   void run(res, next, async () => {
     const s = await sites()
-    const b = (req.body ?? {}) as { mode?: unknown; removeSite?: unknown; replayDays?: unknown }
+    const b = (req.body ?? {}) as { mode?: unknown; removeSite?: unknown }
     let f = await s.readSites()
     if (b.mode === 'ask' || b.mode === 'any') f = await s.setMode(b.mode)
     if (typeof b.removeSite === 'string' && b.removeSite) f = await s.removeSite(b.removeSite)
-    const replay = await import('../../core/browser-control/replay-store.js')
-    if (b.replayDays !== undefined) {
-      if (!(replay.REPLAY_DAY_CHOICES as readonly unknown[]).includes(b.replayDays)) {
-        res.status(400).json({ error: `replayDays is one of ${replay.REPLAY_DAY_CHOICES.join(', ')} (0: off).`, code: 'bad_request' })
-        return undefined
-      }
-      const before = f.replayDays
-      f = await s.setReplayDays(b.replayDays as number)
-      // What is now too old goes at once, not at the next hour (and the pill's counts are read again).
-      await replay.sweepReplays()
-      log.web.info('browser replay days set', { days: f.replayDays, before })
-    }
-    return { mode: f.mode, sites: f.sites, replayDays: f.replayDays, replayBytes: await replay.replayBytes() }
+    return { mode: f.mode, sites: f.sites }
   })
 })
 
@@ -334,8 +308,6 @@ export const ON_TAB = new Set<Action>([
 ])
 /** Actions whose step may buy, send or delete (the page judges; outward-asks.ts asks the person): a drag's press and release, a dialog's OK too. */
 const OUTWARD_ACTS = new Set<Action>(['click', 'press', 'type', 'drag', 'dialog'])
-/** Steps the Browser replay keeps a picture of (replay-store.ts): the ones that change the page. */
-export const REPLAY_ACTS = new Set<Action>(['open', 'navigate', 'back', 'click', 'hover', 'type', 'fill_form', 'select', 'press', 'scroll', 'drag', 'upload', 'dialog'])
 /** Actions the extension answers for the owner as a whole (its tabs, its downloads, a tab to take). */
 export const FOR_OWNER = new Set<Action>(['tabs', 'downloads', 'take'])
 const TIMEOUT: Partial<Record<Action, number>> = { open: 45_000, navigate: 45_000, back: 30_000, wait: 40_000, screenshot: 30_000, zoom: 30_000, downloads: 40_000, take: 30_000, network_body: 30_000, network_request_body: 30_000 }
@@ -582,15 +554,10 @@ browserV1Router.post('/browser/act', (req, res, next) => {
       if (!o.ok) { res.status(o.status).json(o.body); return undefined }
       args.outward_ok = o.sig
     }
-    // The Browser replay (replay-store.ts): an acting step of a task's carries a one-use token, and
-    // the extension posts its picture of the tab with it after the answer. Each send its own: a step
-    // sent again (after the page held it, or a site was allowed) is recorded as itself (review 2026-11-14).
-    const replays = REPLAY_ACTS.has(action) ? await import('../../core/browser-control/replay-store.js') : undefined
-    const go = async () => {
+    const go = () => {
       const ms = Math.min(action === 'screenshot' && args.full === true ? FULL_SCREENSHOT_MS : TIMEOUT[action] ?? h.DEFAULT_COMMAND_MS, left())
       if (ms < 5000) throw new h.BrowserError('Out of time for this call: call it again.', 504, 'browser_timeout')
-      const record = replays ? await replays.expectStep({ owner, device: c.device, action, args }) : undefined
-      return h.send(c.device, action, args, { ...s.allowOf(f), walnut: own, ...(record ? { record } : {}) }, ms)
+      return h.send(c.device, action, args, { ...s.allowOf(f), walnut: own }, ms)
     }
     // The page held a step that buys, sends or deletes: the person is asked (outward-asks.ts).
     // Approvals off (core/approvals/ask-me.ts): nobody is asked; the step is recorded and goes with its mark ('go').
@@ -651,9 +618,6 @@ browserV1Router.post('/browser/act', (req, res, next) => {
       lastTab.set(owner, { device: c.device, tab: used })
       h.noteActed(c.device, used)
       if (action !== 'open' && action !== 'take' && typeof r.url === 'string') h.noteTab(c.device, used, facts)
-    }
-    if (typeof r.url === 'string' && (action === 'open' || action === 'navigate')) {
-      await (await import('../../core/browser-control/agent-actions.js')).noteAgentAction(requester.taskId, r.url, 'browser')
     }
     log.web.info('browser act', { action, device: c.device, owner, tab: used })
     // Which window and tab, every time it may have changed; and the person's own tabs on the site.

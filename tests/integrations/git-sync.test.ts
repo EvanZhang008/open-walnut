@@ -522,45 +522,6 @@ describe('auth.json is never synced (data-repo gitignore)', () => {
     expect(execSync('git log --all -p', { cwd: tmpDir, encoding: 'utf-8' })).not.toContain(SECRET);
   });
 
-  // core/config-history.ts keeps dated copies of config.yaml (provider keys and
-  // all) in config.yaml.history/. It needs no new rule: the root-anchored
-  // `/config.yaml.*` that older installs already have (or get from the sync
-  // tick's repair) covers the folder, while a note folder of that name still syncs.
-  it('the dated copies of config.yaml never sync, under the template, an older .gitignore, or one the tick repairs', async () => {
-    const SECRET = ['invented', 'marker', 'for', 'this', 'test'].join('-');
-    const copy = (n: string) => `config.yaml.history/config-20261114T10111${n}.123Z-0123456789ab.yaml`;
-    const note = 'notes/config.yaml.history/what-i-changed.md';
-    const writeAll = async (n: string) => {
-      for (const [rel, text] of [[copy(n), `private_note: ${SECRET}\n`], [note, `note ${n}\n`]] as const) {
-        await fsp.mkdir(path.dirname(path.join(tmpDir, rel)), { recursive: true });
-        await fsp.writeFile(path.join(tmpDir, rel), text, 'utf-8');
-      }
-    };
-    const checkIgnored = (rel: string): boolean => {
-      try { execSync(`git check-ignore -q ${rel}`, { cwd: tmpDir }); return true; } catch { return false; }
-    };
-    initSync();
-    await writeAll('1');
-    expect(checkIgnored(copy('1'))).toBe(true);
-    expect(checkIgnored(note)).toBe(false);
-    await sync();
-    let tracked = execSync('git ls-files', { cwd: tmpDir, encoding: 'utf-8' }).split('\n');
-    expect(tracked).toContain(note);
-    expect(tracked.filter((f) => f.startsWith('config.yaml.history/'))).toEqual([]);
-
-    // The config lines exactly as an older Walnut wrote them.
-    await fsp.writeFile(path.join(tmpDir, '.gitignore'), 'config.yaml\nconfig.yaml.bak\n/config.yaml.*\n', 'utf-8');
-    expect(checkIgnored(copy('2'))).toBe(true);
-    // An install older than `/config.yaml.*`: the sync tick adds it before it commits.
-    await fsp.writeFile(path.join(tmpDir, '.gitignore'), 'images/\nconfig.yaml\nconfig.yaml.bak\n', 'utf-8');
-    execSync('git commit -qam "older gitignore"', { cwd: tmpDir });
-    await writeAll('3');
-    await sync();
-    tracked = execSync('git ls-files', { cwd: tmpDir, encoding: 'utf-8' }).split('\n');
-    expect(tracked.filter((f) => f.startsWith('config.yaml.history/'))).toEqual([]);
-    expect(execSync('git log --all -p', { cwd: tmpDir, encoding: 'utf-8' })).not.toContain(SECRET);
-  });
-
   // Walnut's caches all live at <home>/cache/; a folder the user named cache
   // inside notes/ or memory/ is their content and must keep syncing.
   const userCacheNotes = ['notes/dev/cache/eviction-design.md', 'memory/projects/cache/notes.md'];

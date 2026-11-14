@@ -109,9 +109,9 @@ describe('dead CLI status writers', () => {
     expect(conn.indexOf("status_reason: 'daemon_reported_exit'", legacy)).toBeGreaterThan(legacy)
   })
 
-  it('applySessionPhase asks the turn\'s retriers (restart recovery among them) before any death edge hands a task back', () => {
+  it('applySessionPhase asks restart recovery before any death edge hands a task back', () => {
     const phase = fs.readFileSync(path.join(ROOT, 'src/core/phase.ts'), 'utf8')
-    const gate = phase.indexOf('await turnRetryHoldsHandBack(sid, opts.processAlive === false')
+    const gate = phase.indexOf('restartRecoveryHolds(opts.sessionId, opts.processAlive === false)')
     expect(gate).toBeGreaterThan(phase.indexOf('export async function applySessionPhase('))
     // After the send and error bookkeeping (a death still ends an interrupted wait), before any wait restore or write.
     expect(gate).toBeGreaterThan(phase.indexOf("if (trigger === 'session:input') {\n    noteTurnSend("))

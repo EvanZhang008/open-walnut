@@ -128,7 +128,7 @@ describe('the companion copy of the tasks', () => {
   })
 
   it('ordinary writes on the companion cannot use the trusted copy scope', async () => {
-    primary = [row('area-work', { router_area_id: 'desk', org_role: 'router' })]
+    primary = [row('area-work', { router_area_id: 'desk' })]
     await syncTaskReplica(deps)
     await expect(tm.updateTaskRaw('area-work', { router_area_id: 'elsewhere' }))
       .rejects.toMatchObject({ code: 'router_history_not_isolated', status: 409 })

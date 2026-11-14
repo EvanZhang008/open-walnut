@@ -501,26 +501,6 @@ export async function noteAskerRead(id: string): Promise<void> {
   }))
 }
 
-/**
- * The summary Walnut wrote for a request still waiting (summary.ts): kept on its context, and every
- * screen showing it hears the change. Never a decided one, never over the asker's own words. True when kept.
- */
-export async function setApprovalSummary(id: string, summary: string): Promise<boolean> {
-  let kept: ApprovalRecord | undefined
-  await serial(() => updateJsonFile<ApprovalsFile>(approvalsFile(), EMPTY, (file) => {
-    const r = file.approvals.find((a) => a.id === id)
-    // Past its deadline it is expired, even before the sweep says so: no screen shows it again.
-    if (!r || r.status !== 'pending' || Date.parse(r.expiresAt) <= Date.now() || r.context?.whyFrom === 'asker') return file
-    r.context = { ...(r.context ?? {}), summary: wellFormed(summary) }
-    kept = r
-    return file
-  }))
-  // Only the screens: not the 'approvals' channel, whose push sender (notify.ts) reads a pending one
-  // as new and would ring the phone again, and not the signal, so nobody waiting on it wakes.
-  if (kept) bus.emit(APPROVAL_CHANGED, { id, status: kept.status, approval: viewOf(kept) }, ['web-ui'], { source: 'approvals' })
-  return !!kept
-}
-
 /** Walnut told the asking session; true only for the one write that marked it (never twice). */
 export async function markAskerTold(id: string): Promise<boolean> {
   let first = false

@@ -11,8 +11,7 @@
  * task store with the server's own function (@open-walnut/org-tree), and what
  * waits on a prompt comes from the session status store. The selection, tab and
  * opened task ride the URL (?node=…&tab=…&open=…), so a reload or Back keeps them.
- * A task reference clicked on the page opens on Home (useOpenTask); a session a chat names
- * and a letter's Answer open in the side panel, so the user stays here (a
+ * A task clicked on the page opens in the side panel, so the user stays here (a
  * narrow window lays it over the detail). A wide window keeps a strip of side panels:
  * the one `open` names plus the ones the user locked (org-side-columns.ts), saved in the
  * layout record so the pins come back after a restart. On a phone the list, the detail and the
@@ -373,21 +372,19 @@ export function OrgPage() {
       ? { state: { orgSide: true } }
       : { replace: true, state: (window.history.state as { usr?: unknown } | null)?.usr ?? null });
   }, [setParams, phone]);
-  // Main or a lead named anywhere on the page is a node of the page: its letter or session selects it,
-  // not a second copy beside the page. A self router is still its project's work: opened beside.
+  // Main or a lead named anywhere on the page is a node of the page: it is selected, not opened beside.
+  // A self router is still its project's work, so a chip of it opens the task beside the page.
   const nodeOf = useCallback((match: (t: Task) => boolean): ChannelRow | undefined => {
     const all = [channels.main, ...channels.rows, ...channels.routers.filter((r) => !r.selfRouter)];
     return all.find((r) => { const t = r.contactId ? tasks.find((x) => x.id === r.contactId) : undefined; return !!t && match(t); });
   }, [channels, tasks]);
   /** A letter's Answer: the task beside the page opens on its session's Inbox tab. */
   const [sideInbox, setSideInbox] = useState<{ taskId: string; n: number } | null>(null);
-  /** Answer on another task's letter (OrgNodeDetail's alert rows). A letter open, not a task
-   *  reference: a task reference anywhere on the page opens on Home (useOpenTask). */
-  const openLetterOf = useCallback((taskId: string) => {
+  const openTask = useCallback((taskId: string, opts?: { inbox?: boolean }) => {
     const node = nodeOf((t) => t.id === taskId);
     // A node lists its own letter on its chat, with Answer there.
-    if (node) { select(node.key, 'chat'); return; }
-    setSideInbox({ taskId, n: Date.now() });
+    if (node) { select(node.key, opts?.inbox ? 'chat' : undefined); return; }
+    setSideInbox(opts?.inbox ? { taskId, n: Date.now() } : null);
     recordTaskOpened(taskId);
     openSide({ kind: 'task', id: taskId });
   }, [nodeOf, select, openSide]);
@@ -519,6 +516,7 @@ export function OrgPage() {
           onNewRouter={() => setRouterSetup(true)}
           keptOf={keptOf}
           openTaskIds={openTaskIds}
+          onOpenTask={openTask}
           onUnwatch={unwatch}
           now={now}
         />
@@ -559,7 +557,7 @@ export function OrgPage() {
             initialTab={nodeParam === selected.key ? urlTab : null}
             onTabUsed={tabUsed}
             onSelect={select}
-            onOpenLetterOf={openLetterOf}
+            onOpenTask={openTask}
             onOpenSession={openSession}
             answers={answers}
             onStartChat={(row) => { void startChat(row); }}
@@ -575,6 +573,7 @@ export function OrgPage() {
           tasks={tasks}
           onClose={closeSide}
           {...restoredGone(sideTargetParam(side), () => { restoredSide.current?.delete(sideTargetParam(side)); closeSide(); })}
+          onOpenTask={openTask}
           onOpenSession={openSession}
           onStartChat={chatOnHome}
           {...(side.kind === 'task' && sideInbox?.taskId === side.id ? { inboxRequest: sideInbox.n } : {})}
@@ -608,6 +607,7 @@ export function OrgPage() {
                 onToggleLock={() => togglePanelLock(slot.id)}
                 onClose={() => closePanel(slot.id)}
                 {...restoredGone(slot.id, () => closePanel(slot.id))}
+                onOpenTask={openTask}
                 onOpenSession={openSession}
                 onStartChat={chatOnHome}
                 {...(target.kind === 'task' && sideInbox?.taskId === target.id ? { inboxRequest: sideInbox.n } : {})}
@@ -625,6 +625,7 @@ export function OrgPage() {
           {...(chartStart ? { startWith: chartStart } : {})}
           onClose={() => { setChartOpen(false); setChartStart(null); }}
           onPick={(key) => select(rowOf(channels, key)?.key ?? key)}
+          onOpenTask={openTask}
         />
       )}
     </div>

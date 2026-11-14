@@ -265,7 +265,7 @@ async function runAction(action: string, body: Body): Promise<Record<string, unk
         argv, command, commitSha: 'da21d9c6ebf95b2d1003c6af76bb17894603c207', cwd: repository, localRef: `refs/heads/${branch}`,
         operation: 'push', remote: 'origin', remoteRef: `refs/heads/${branch}`, repository, version: 'walnut-git-operation-v1',
       })
-      const made = await createApproval({
+      return await createApproval({
         what: `Push commit da21d9c to origin ${branch} in ${repository.split('/').pop()}`, detail: context,
         mode: 'biometric', singleUse: true, signingKeyId: 'ak-fixture-signer', outsideSwitch: true,
         requester: {
@@ -273,14 +273,6 @@ async function runAction(action: string, body: Body): Promise<Record<string, unk
           taskTitle: str(body.taskTitle) ?? 'Platform Lead', sessionId: 's-fixture', cwd: repository, command, identity: 'verified',
         },
       })
-      // The summary Walnut writes for it (summary.ts), arriving after the dialog first shows, as a model's would.
-      const summary = str(body.summary)
-      if (summary) {
-        const { setApprovalSummary } = await import('../../core/approvals/store.js')
-        const t = setTimeout(() => { void setApprovalSummary(made.approval.id, summary) }, typeof body.summaryAfterMs === 'number' ? body.summaryAfterMs : 0)
-        t.unref?.()
-      }
-      return made
     }
     case 'advance-clock': {
       advanceFixtureClock(typeof body.ms === 'number' ? body.ms : 0)

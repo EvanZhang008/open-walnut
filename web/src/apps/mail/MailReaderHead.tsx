@@ -15,13 +15,10 @@ import type { MailAccountDto, MailProviderSummary } from '@/api/mail';
 import { formatSize } from '@/utils/format';
 import { openMailForwardComposer, openMailReplyComposer } from './compose/compose-actions';
 import { CANNOT_SEND_TITLE, canSendFrom } from './compose/send-status';
-import { attachmentFileName, attachmentLabel, attachmentName, formatMailDate, isUnread, recipientLabel, senderLabel } from './mail-format';
-import { canAnswerInvites, canOpenAttachments, mayOfferMarkRead } from './mail-providers';
+import { attachmentLabel, formatMailDate, isUnread, recipientLabel, senderLabel } from './mail-format';
+import { canAnswerInvites, mayOfferMarkRead } from './mail-providers';
 import { bodyQuoteText } from './mail-quote-text';
-import { attachmentKind, attachmentViewer, senderMark, type AttachmentKind } from './mail-reader-format';
-import { MailAttachmentViewer, type OpenAttachment } from './MailAttachmentViewer';
-import { saveStatusLine, savesThroughServer, useAttachmentSave } from './mail-attachment-save';
-import { mailAttachmentUrl } from '@/api/mail';
+import { attachmentKind, senderMark, type AttachmentKind } from './mail-reader-format';
 import { setOpenMessageRead } from './mail-read-flag';
 import { MailContentActions } from './MailContentActions';
 import { MailInviteCard } from './MailInviteCard';
@@ -129,7 +126,7 @@ export function MailReaderHead({ open, message, accounts, providers }: Props) {
         </span>
       </div>
 
-      {routed && <MailRouteLine route={message.route} unavailable={message.routingUnavailable} surface="reader" subject={message.subject} routingArea={message.routingArea} routingCoverage={message.routingCoverage} />}
+      {routed && <MailRouteLine route={message.route} unavailable={message.routingUnavailable} surface="reader" subject={message.subject} source={{ account: message.accountId, message: message.messageId, ...(message.deliveryVersion ? { version: message.deliveryVersion } : {}) }} routingArea={message.routingArea} routingCoverage={message.routingCoverage} handoff={message.routingHandoff} />}
       {outgoing && <MailRouteLine route={undefined} outgoing={outgoing} surface="reader" />}
       {message.invite && canAnswerInvites(providers, open.accountId) && (
         <MailInviteCard accountId={open.accountId} messageId={open.messageId} kind={message.invite.kind} />
@@ -149,116 +146,23 @@ export function MailReaderHead({ open, message, accounts, providers }: Props) {
       )}
 
       {message.attachments.length > 0 && (
-        <AttachmentList
-          // A viewer belongs to the message it was opened from, never to the next one.
-          key={`${open.accountId}\u0000${open.messageId}`}
-          accountId={open.accountId}
-          messageId={open.messageId}
-          attachments={message.attachments}
-          canOpen={canOpenAttachments(providers, open.accountId)}
-        />
-      )}
-    </header>
-  );
-}
-
-/**
- * The attachment chips. With a provider that can download (`attachments: 'download'`), each chip with
- * an id is a control: a PDF or an image opens in Walnut's viewer, anything else is a plain download
- * link (in the Mac app, a button that has the server save it into Downloads, with a line saying
- * where). NOTHING is requested before the click: no prefetch, no thumbnail, no hover fetch, because
- * the person asked for exactly that ("please don't auto download, I will download attachment if
- * needed"). With any other provider a chip only names the file, as it always did.
- */
-function AttachmentList({ accountId, messageId, attachments, canOpen }: {
-  accountId: string;
-  messageId: string;
-  attachments: Message['attachments'];
-  canOpen: boolean;
-}) {
-  const [viewing, setViewing] = useState<OpenAttachment | null>(null);
-  const saver = useAttachmentSave(accountId, messageId);
-  const status = saveStatusLine(saver.state);
-  const throughServer = savesThroughServer();
-  return (
-    <>
-      <ul className="mail-attachments" data-testid="mail-attachments">
-        {attachments.map((attachment, index) => {
-          const key = attachment.id ?? `${attachment.filename ?? 'part'}-${index}`;
-          const face = (
-            <>
+        <ul className="mail-attachments" data-testid="mail-attachments">
+          {message.attachments.map((attachment, index) => (
+            <li
+              className="mail-attachment"
+              key={attachment.id ?? `${attachment.filename ?? 'part'}-${index}`}
+              title={attachmentLabel(attachment)}
+            >
               <span className="mail-attachment-glyph" aria-hidden="true">
                 <KindGlyph kind={attachmentKind(attachment)} />
               </span>
-              <span className="mail-attachment-name">{attachmentName(attachment)}</span>
+              <span className="mail-attachment-name">{attachment.filename?.trim() || 'Attachment'}</span>
               <span className="mail-attachment-size">{sizeOf(attachment.bytes)}</span>
-            </>
-          );
-          const id = attachment.id;
-          if (!canOpen || !id) {
-            return (
-              <li className="mail-attachment" key={key} title={attachmentLabel(attachment)}>
-                {face}
-              </li>
-            );
-          }
-          const viewer = attachmentViewer(attachment);
-          const common = {
-            className: 'mail-attachment mail-attachment-open',
-            'data-testid': 'mail-attachment',
-            'data-attachment-id': id,
-            'data-viewer': viewer,
-          };
-          return (
-            <li className="mail-attachment-slot" key={key}>
-              {viewer === 'download' && throughServer ? (
-                <button
-                  {...common}
-                  type="button"
-                  title={`Save ${attachmentLabel(attachment)} to Downloads`}
-                  disabled={saver.state.kind === 'saving'}
-                  onClick={() => { void saver.save({ ...attachment, id }); }}
-                >
-                  {face}
-                </button>
-              ) : viewer === 'download' ? (
-                <a
-                  {...common}
-                  href={mailAttachmentUrl(accountId, messageId, id, { download: true })}
-                  download={attachmentFileName(attachment)}
-                  title={`Download ${attachmentLabel(attachment)}`}
-                >
-                  {face}
-                </a>
-              ) : (
-                <button
-                  {...common}
-                  type="button"
-                  title={`Open ${attachmentLabel(attachment)}`}
-                  onClick={(event) => {
-                    // A click focuses nothing in WebKit: focus the chip, so the viewer hands focus back to it.
-                    event.currentTarget.focus({ preventScroll: true });
-                    setViewing({ accountId, messageId, attachment: { ...attachment, id }, kind: viewer });
-                  }}
-                >
-                  {face}
-                </button>
-              )}
             </li>
-          );
-        })}
-      </ul>
-      {status && (
-        <p
-          className={`mail-attachment-status${saver.state.kind === 'failed' ? ' is-failed' : ''}`}
-          data-testid="mail-attachment-save-status"
-          role="status"
-        >
-          {status}
-        </p>
+          ))}
+        </ul>
       )}
-      {viewing && <MailAttachmentViewer open={viewing} onClose={() => setViewing(null)} />}
-    </>
+    </header>
   );
 }
 

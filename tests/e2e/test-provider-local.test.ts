@@ -98,7 +98,7 @@ describe('POST /api/config/test-provider for Ollama', () => {
   })
 
   it('with only main_provider set (main_model unset), it says to set the model, and sends nothing', async () => {
-    await updateConfig({ agent: { main_provider: 'ollama', main_model: undefined } } as never)
+    await updateConfig({ agent: { main_provider: 'ollama' } } as never)
     chats.length = 0
     const r = await testProvider({ provider_name: 'ollama' })
     expect(r.ok).toBe(false)

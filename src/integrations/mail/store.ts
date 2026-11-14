@@ -1008,19 +1008,6 @@ export class MailStore {
     )
   }
 
-  /**
-   * Forget up to `limit` of an account's remembered `code` refusals (`body_error`), and say how many.
-   * A page per statement, like every bulk write here; the caller loops until a page comes back short.
-   */
-  async clearBodyErrors(accountId: string, code: string, limit: number): Promise<number> {
-    const result = await this.db.run(
-      'UPDATE messages SET body_error = NULL WHERE rowid IN'
-      + ' (SELECT rowid FROM messages WHERE account_id = ? AND body_error = ? LIMIT ?)',
-      [accountId, code, limit],
-    )
-    return result.changes
-  }
-
   /** One page of an account's rows, bodied or not, oldest rowid first: what a full wipe walks. */
   rowsForAccount(accountId: string, limit: number): Promise<Array<{ rowid: number; body_ref: string | null }>> {
     return this.db.all<{ rowid: number; body_ref: string | null }>(

@@ -93,10 +93,9 @@ describe('shutdownWitness', () => {
 describe('where the check runs', () => {
   it('the hand-back gate falls through to the shutdown check after recovery declines', () => {
     const phase = fs.readFileSync(path.join(ROOT, 'src/core/phase.ts'), 'utf8')
-    const fn = phase.slice(phase.indexOf('async function turnRetryHoldsHandBack('), phase.indexOf('export async function applySessionPhase('))
-    // The turn's retriers (restart recovery's holdsHandBack among them, sessions/turn-run.ts) first.
-    expect(fn.indexOf('await turnRunOf(rec, { failed: true, ownEnd: true })')).toBeGreaterThan(0)
-    expect(fn.indexOf('recovery.holdForShutdownCheck(')).toBeGreaterThan(fn.indexOf('await turnRunOf(rec, { failed: true, ownEnd: true })'))
+    const fn = phase.slice(phase.indexOf('async function restartRecoveryHolds('), phase.indexOf('export async function applySessionPhase('))
+    expect(fn.indexOf('recovery.holdsHandBack(rec)')).toBeGreaterThan(0)
+    expect(fn.indexOf('recovery.holdForShutdownCheck(')).toBeGreaterThan(fn.indexOf('recovery.holdsHandBack(rec)'))
   })
   it('stopServer marks the stop before it tears anything down', () => {
     const server = fs.readFileSync(path.join(ROOT, 'src/web/server.ts'), 'utf8')

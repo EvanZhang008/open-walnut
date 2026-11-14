@@ -39,15 +39,7 @@ import { SIDE_THREAD_DIGEST_TAG, stripSideThreadDigestRequest } from './sessions
  * view, a daemon's ready view) written under another number is dropped, never served. The bump
  * log lives beside HISTORY_CACHE_SCHEMA's re-export in history-disk-cache.ts.
  */
-export const HISTORY_CACHE_SCHEMA = 14;
-
-/** The other sends' uuids on a user line Claude Code merged from several queued sends. */
-function mergedSendUuidsOf(raw: { mergedSendUuids?: unknown }): string[] | undefined {
-  const list = raw.mergedSendUuids;
-  if (!Array.isArray(list)) return undefined;
-  const ids = list.filter((u): u is string => typeof u === 'string' && u.length > 0);
-  return ids.length > 0 ? ids : undefined;
-}
+export const HISTORY_CACHE_SCHEMA = 13;
 
 /** The reasoning effort the CLI recorded on an assistant line, when it is a known one. */
 function recordedEffortOf(raw: RawJsonlLine): string | undefined {
@@ -231,10 +223,6 @@ export interface SessionHistoryMessage {
    *  line uuid. A question's anchor and meta are keyed by that uuid, so this is how
    *  the row is found again. Not a transcript line id: `msgId` stays `queue-…`. */
   sourceUuid?: string;
-  /** A user line Claude Code merged from several queued sends: the uuids of the
-   *  sends besides its own (`msgId`), from the line's `mergedSendUuids`. Each one
-   *  proves its send reached the CLI (web/src/utils/send-uuids.ts). */
-  mergedUuids?: string[];
   /** This row's CONTENT can still change: the ACP fold marks its active text/thinking
    *  segment; the /history route also marks an Agent/Task row awaiting its late
    *  `bgTaskFinished`, or a tool row awaiting its result. The client re-asks for these ids on its next delta, which
@@ -299,8 +287,6 @@ export interface RawJsonlLine {
   effort?: unknown;
   /** Walnut-generated message ID on synthetic user events (subtype='walnut-injected'). */
   walnutMessageId?: string;
-  /** A user line merged from several queued sends: the other sends' uuids (CLI 2.1.3xx). */
-  mergedSendUuids?: unknown;
   // CLI-injected user-line flags. Canonical JSONL writes isMeta (skill dumps,
   // image metadata, agent continuations) and isCompactSummary/
   // isVisibleInTranscriptOnly (compaction summaries); the CLI's stream-json
@@ -664,7 +650,6 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
     parentToolUseId?: string;
     walnutMessageId?: string;
     sourceUuid?: string;
-    mergedUuids?: string[];
     unsettled?: boolean;
     queued?: boolean;
     injected?: boolean;
@@ -1262,8 +1247,6 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
       }
       if (isInjectedLine(raw)) existing.injected = true;
       if (nonHumanOrigin(raw.origin)) existing.agentOrigin = true;
-      const merged = raw.message.role === 'user' ? mergedSendUuidsOf(raw) : undefined;
-      if (merged) existing.mergedUuids = [...new Set([...(existing.mergedUuids ?? []), ...merged])];
     } else {
       messageMap.set(msgId, {
         role: raw.message.role,
@@ -1273,7 +1256,6 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
         usage: raw.message.usage,
         parentToolUseId: raw.parent_tool_use_id ?? undefined,
         walnutMessageId: raw.walnutMessageId ?? undefined,
-        mergedUuids: raw.message.role === 'user' ? mergedSendUuidsOf(raw) : undefined,
         injected: isInjectedLine(raw) || undefined,
         agentOrigin: nonHumanOrigin(raw.origin) || undefined,
         contentBlocks: raw.message.content
@@ -1534,7 +1516,6 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
       ...(msg.usage ? { usage: msg.usage } : {}),
       ...(msg.walnutMessageId ? { walnutMessageId: msg.walnutMessageId } : {}),
       ...(msg.sourceUuid ? { sourceUuid: msg.sourceUuid } : {}),
-      ...(msg.mergedUuids ? { mergedUuids: msg.mergedUuids } : {}),
       ...(msg.unsettled ? { unsettled: true } : {}),
       ...(msg.queued ? { queued: true } : {}),
       ...(msg.injected && msg.role === 'user' ? { injected: true } : {}),

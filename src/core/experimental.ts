@@ -18,12 +18,6 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'When a mail router judges an email to be noise, Walnut marks it read and moves it from the inbox to the archive. Nothing is deleted or sent, and its recorded reason says what was done.',
     default: false,
   },
-  {
-    id: 'isolated_workspace_by_default',
-    name: 'Code tasks start in an isolated workspace',
-    description: 'A new task whose folder is in a git repository, or one a workspace plugin claims, starts in its own workspace (a git worktree, or the plugin\'s), so tasks never edit the same checkout. A project\'s settings can turn it on or off for that project; a start can opt out with workspace: false.',
-    default: false,
-  },
 ] as const;
 
 export type ExperimentalFeatureId = typeof EXPERIMENTAL_FEATURES[number]['id'];

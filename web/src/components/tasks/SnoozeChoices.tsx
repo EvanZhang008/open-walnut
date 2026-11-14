@@ -24,14 +24,17 @@ export function SnoozeRows({ onSnooze, onPickDate, onClear }: {
       {snoozePresets().map(p => (
         <button key={p.id} type="button" className="task-kebab-project-opt snooze-row" data-snooze={p.id}
           onClick={e => { e.stopPropagation(); onSnooze(p.date); }}>
+          <span className="task-kebab-project-check" />
           <span className="task-kebab-project-opt-name">{p.label}</span>
           <span className="snooze-row-hint">{p.hint}</span>
         </button>
       ))}
       <button type="button" className="task-kebab-project-opt snooze-row" data-snooze="pick" onClick={e => { e.stopPropagation(); onPickDate(); }}>
+        <span className="task-kebab-project-check" />
         <span className="task-kebab-project-opt-name">Pick a date…</span>
       </button>
       {onClear && <button type="button" className="task-kebab-project-opt snooze-row" data-snooze="clear" onClick={e => { e.stopPropagation(); onClear(); }}>
+        <span className="task-kebab-project-check" />
         <span className="task-kebab-project-opt-name">Clear snooze</span>
       </button>}
     </div>

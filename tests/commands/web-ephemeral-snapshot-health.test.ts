@@ -12,7 +12,6 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { copyDataSnapshot } from '../../src/commands/ephemeral-snapshot.js'
-import { CONFIG_HISTORY_DIR_NAME } from '../../src/core/config-history.js'
 
 let root: string
 let home: string
@@ -60,16 +59,6 @@ describe('ephemeral snapshot copy', () => {
 
     expect(fs.existsSync(path.join(dest, 'places'))).toBe(false)
     expect(fs.readFileSync(path.join(dest, 'notes', 'places', 'list.md'), 'utf-8')).toBe('# list')
-  })
-
-  it('never copies the dated copies of config.yaml (they hold push tokens and tunnels the strip passes do not reach)', () => {
-    write('config.yaml', 'version: 1\n')
-    write(path.join(CONFIG_HISTORY_DIR_NAME, 'config-20261114T101112.123Z-0123456789ab.yaml'), 'push_tokens: [invented]\n')
-
-    copyDataSnapshot(home, dest)
-
-    expect(fs.existsSync(path.join(dest, CONFIG_HISTORY_DIR_NAME))).toBe(false)
-    expect(fs.readFileSync(path.join(dest, 'config.yaml'), 'utf-8')).toBe('version: 1\n')
   })
 
   it('still copies ordinary data, including a nested folder named health', () => {

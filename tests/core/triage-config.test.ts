@@ -21,9 +21,13 @@ describe('readTriageConfig — defaults', () => {
     expect(r.disabledReason).toBe('config');
     expect(r.everyMs).toBe(30 * 60_000);
     expect(r.everyMessages).toBe(DEFAULT_TRIAGE_EVERY_MESSAGES);
-    expect(r.sources).toEqual(['slack']);
-    expect(r.wakeEvents).toEqual(['plugin:slack:messages-received']);
+    expect(r.sources).toEqual(['mail', 'slack']);
+    expect(r.wakeEvents).toEqual([
+      'plugin:mail:messages-received',
+      'plugin:slack:messages-received',
+    ]);
     expect(r.mode).toBe('ask');
+    expect(r.autoMarkRead).toBe(false);
     expect(r.activeHours).toBe('08:00-22:00');
   });
 
@@ -139,37 +143,32 @@ describe('readTriageConfig — sources → wake.events', () => {
     expect(r.wakeEvents).toEqual(['plugin:slack:messages-received']);
   });
 
-  it('drops unknown names (an old mail among them), dedupes, and normalises case', () => {
-    const r = readTriageConfig({ triage: { sources: ['MAIL', 'mail', 'sms', 'SLACK', 'slack'] as never } });
-    expect(r.sources).toEqual(['slack']);
+  it('drops unknown names, dedupes, and normalises case', () => {
+    const r = readTriageConfig({ triage: { sources: ['MAIL', 'mail', 'sms', 'slack'] as never } });
+    expect(r.sources).toEqual(['mail', 'slack']);
   });
 
-  it('an EXPLICITLY empty array runs no batch: triage reads as off', () => {
-    const r = readTriageConfig({ triage: { enabled: true, sources: [] } });
+  it('an EXPLICITLY empty array means no event sources (clock only)', () => {
+    const r = readTriageConfig({ triage: { sources: [] } });
     expect(r.sources).toEqual([]);
     expect(r.wakeEvents).toEqual([]);
-    expect(r.enabled).toBe(false);
-    expect(r.disabledReason).toBe('no-sources');
   });
 
-  it("the production config of 2026-11-14 (mail only) reads as off without an error", () => {
-    // The mail router owns mail since that day; the user's file is read as it is, never rewritten.
-    const r = readTriageConfig({ triage: { enabled: true, every: '1h', sources: ['mail'] as never, auto_mark_read: true } as never });
-    expect(r.enabled).toBe(false);
-    expect(r.disabledReason).toBe('no-sources');
-    expect(r.wakeEvents).not.toContain('plugin:mail:messages-received');
-  });
-
-  it('a non-array value falls back to the default', () => {
-    expect(readTriageConfig({ triage: { sources: 'mail' as never } }).sources).toEqual(['slack']);
+  it('a non-array value falls back to both', () => {
+    expect(readTriageConfig({ triage: { sources: 'mail' as never } }).sources).toEqual(['mail', 'slack']);
   });
 });
 
-describe('readTriageConfig — mode, active_hours', () => {
+describe('readTriageConfig — mode, auto_mark_read, active_hours', () => {
   it('mode accepts ask/assist and falls back to ask', () => {
     expect(readTriageConfig({ triage: { mode: 'assist' } }).mode).toBe('assist');
     expect(readTriageConfig({ triage: { mode: 'ASK' as never } }).mode).toBe('ask');
     expect(readTriageConfig({ triage: { mode: 'yolo' as never } }).mode).toBe('ask');
+  });
+
+  it('auto_mark_read is strictly boolean true', () => {
+    expect(readTriageConfig({ triage: { auto_mark_read: true } }).autoMarkRead).toBe(true);
+    expect(readTriageConfig({ triage: { auto_mark_read: 'yes' as never } }).autoMarkRead).toBe(false);
   });
 
   it('an explicitly EMPTY active_hours means 24/7, an absent one takes the window', () => {

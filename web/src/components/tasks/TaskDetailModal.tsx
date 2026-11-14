@@ -27,12 +27,14 @@ import { TaskDetailPane } from './TaskDetailPane';
 import { PhoneTaskDetailHead } from './PhoneTaskDetailHead';
 
 export function TaskDetailModal({
-  task, allTasks, onClose, onOpenTriageForTask,
+  task, allTasks, onClose, onOpenSession, onOpenTriageForTask, onFocusChild,
 }: {
   task: Task;
   allTasks?: Task[];
   onClose: () => void;
+  onOpenSession?: (sessionId: string) => void;
   onOpenTriageForTask?: (taskId: string) => void;
+  onFocusChild?: (task: Task) => void;
 }) {
   const phone = usePhoneLayout();
   const afterCloseRef = useRef<(() => void) | null>(null);
@@ -52,14 +54,14 @@ export function TaskDetailModal({
   });
   const close = layer.close;
   useModalOverlay(close);
-  // A task or session opened from the details closes them first, then opens on Home (2026-11-13,
-  // the user: "in this task detail I clcik the session, the panle shoujdl be gone"). On a phone the
-  // session's layer is drawn below this one, so it comes once the detail's history entry is gone;
-  // the desktop closes at once and opens on the next tick.
-  const leave = useCallback((go: () => void) => {
-    afterCloseRef.current = go;
+  // Phone: a session opened from the detail replaces it (the session layer is
+  // drawn below this one), once the detail's history entry is gone.
+  const openSession = useCallback((sid: string) => {
+    if (!onOpenSession) return;
+    if (!phone) { onOpenSession(sid); return; }
+    afterCloseRef.current = () => onOpenSession(sid);
     close();
-  }, [close]);
+  }, [close, onOpenSession, phone]);
 
   return createPortal(
     <div className={`wf-modal-overlay task-detail-modal-overlay${phone ? ' is-phone-layer' : ''}`} onClick={close}>
@@ -71,8 +73,9 @@ export function TaskDetailModal({
           task={task}
           allTasks={allTasks}
           onClose={close}
+          onOpenSession={onOpenSession ? openSession : undefined}
           onOpenTriageForTask={onOpenTriageForTask}
-          onLeave={leave}
+          onFocusChild={onFocusChild}
         />
       </div>
     </div>,

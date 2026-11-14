@@ -73,7 +73,7 @@ const ALLOW: Record<string, AllowSpec> = {
   tag_links: { '*': true },
   link_tags: { '*': true },
   pull_requests: { watch: true, auto_complete_on_merge: true, wake_agent: true },
-  ui: { session_panels: true, show_priority: true, show_walnut_additions: true, next_after_complete: true, taskbar_hide_recent_only: true, taskbar_leaving: true, shortcuts: { '*': { '*': true } } },
+  ui: { session_panels: true, show_priority: true, show_walnut_additions: true, next_after_complete: true, taskbar_hide_recent_only: true, taskbar_leaving: true },
   time: {
     outside: { enabled: true },
     screentime: { enabled: true, include_this_mac: true },
@@ -167,7 +167,6 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
     history_compress_days: 'the history archive runs on the primary only (transcript-archive-sweep.ts)',
     history_remote: 'the remote history tier runs on the primary only, with its own credentials (core/history-remote/)',
     hints: 'the message hints the Mac composes into each message it delivers (core/hints/)',
-    skill_listing_desc_chars: 'the skill listing cap of the Claude Code sessions the Mac starts (providers/claude-scope-settings.ts)',
   },
   'hosts.*': {
     shell_setup: 'a shell command line that may carry tokens',

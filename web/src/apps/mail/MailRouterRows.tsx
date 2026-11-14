@@ -8,7 +8,7 @@ import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { useRouterAreaNames } from '@/components/org/router-area-names';
-import { ORG_ROUTER_SETUP_PATH } from './mail-route-model';
+import { ORG_ROUTER_SETUP_PATH } from './MailRouterAssignment';
 import { mailRouterRows } from './mail-router-rows';
 
 export function MailRouterRows({ onPicked }: { onPicked: () => void }) {
@@ -27,7 +27,7 @@ export function MailRouterRows({ onPicked }: { onPicked: () => void }) {
         {rows.length === 0 && (
           <li>
             <button type="button" className="mail-mailbox mail-router-row" data-testid="mail-router-setup" tabIndex={0}
-              title="Create a router in Org: it reads the mail of the mailboxes you give it" onClick={() => go(ORG_ROUTER_SETUP_PATH)}>
+              title="Create a router in Org: it reads only the messages you choose for its area" onClick={() => go(ORG_ROUTER_SETUP_PATH)}>
               <span className="mail-router-name">Set up a router</span>
             </button>
           </li>

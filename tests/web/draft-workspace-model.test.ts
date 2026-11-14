@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  applyChoicePatch, autoGivesWay, defaultIsolationOn, isPickable, selectedCandidate, workspaceRequestFor, type DraftWorkspaceChoice,
+  applyChoicePatch, isPickable, selectedCandidate, workspaceRequestFor, type DraftWorkspaceChoice,
 } from '../../web/src/components/workspaces/draft-workspace-model'
 import type { WorkspaceCandidate } from '../../src/core/workspaces/types'
 
@@ -66,34 +66,5 @@ describe('draft workspace choice', () => {
     expect(applyChoicePatch(failed, { values: { packages: 'a' } }).startError).toBeUndefined()
     expect(applyChoicePatch(failed, { provider: 'git-worktree' }).startError).toBeUndefined()
     expect(applyChoicePatch(failed, { enabled: false }).startError).toBeUndefined()
-  })
-
-  it('a default choice (no click) gives way quietly when there is nothing to make; a clicked one says why', () => {
-    const auto = (patch: Partial<DraftWorkspaceChoice> = {}) => on({ auto: true, ...patch })
-    expect(workspaceRequestFor(auto({ candidates: [git] }))).toEqual({ provider: 'git-worktree', inputs: {} })
-    expect(autoGivesWay(auto({ loading: true }))).toBe(false)
-    // Sent before the host answered: the server picks the claiming provider (or none), the Start never waits.
-    expect(workspaceRequestFor(auto({ loading: true }))).toEqual({ auto: true })
-    for (const quiet of [auto({ candidates: [gitNoRepo] }), auto({ candidates: [] }), auto({ candidates: [git], degraded: 'timeout' }),
-      auto({ candidates: [git], error: 'host offline' }), auto({ candidates: [{ ...multi, claimed: true }] })]) {
-      expect(autoGivesWay(quiet)).toBe(true)
-      expect(workspaceRequestFor(quiet)).toBeNull()
-    }
-    // Its required field filled: the claiming plugin makes it.
-    expect(workspaceRequestFor(auto({ candidates: [{ ...multi, claimed: true }], values: { packages: 'a, b' } }))).toMatchObject({ provider: 'multi', inputs: { packages: ['a', 'b'] } })
-    expect(workspaceRequestFor(on({ candidates: [gitNoRepo] }))).toMatchObject({ error: expect.stringMatching(/Pick how to isolate/) })
-    // The provider's detect step suggested the packages of this folder: the default makes it with them.
-    const suggested = { ...multi, claimed: true, inputs: { packages: ['alpha', 'beta'] } }
-    expect(autoGivesWay(auto({ candidates: [git, suggested] }))).toBe(false)
-    expect(workspaceRequestFor(auto({ candidates: [suggested, git] }))).toEqual({ provider: 'multi', inputs: { packages: ['alpha', 'beta'], mode: 'fresh' } })
-    // What the person typed wins over the suggestion.
-    expect(workspaceRequestFor(auto({ candidates: [suggested], values: { packages: 'gamma' } }))).toMatchObject({ inputs: { packages: ['gamma'] } })
-  })
-
-  it('the project\'s setting wins over the global one, as on the server', () => {
-    expect(defaultIsolationOn(true, undefined)).toBe(true)
-    expect(defaultIsolationOn(false, undefined)).toBe(false)
-    expect(defaultIsolationOn(true, 'off')).toBe(false)
-    expect(defaultIsolationOn(false, 'on')).toBe(true)
   })
 })

@@ -16,23 +16,24 @@
  *                                     ← then the engine appends the routine's
  *                                       own instructions, OUTSIDE the fence
  *
- * The fence holds Slack text, which is attacker-controlled;
+ * The fence holds mail subjects and Slack text, which are attacker-controlled;
  * `buildWalnutMessage` escapes a body that tries to close it. Walnut's own
  * instructions stay outside it on purpose — the fence means "this came from
  * elsewhere", and the run's orders did not. The engine's concatenation order is
  * `initOutput + "\n\n" + instructions` (cron/timer.ts), which is why the batch
  * comes first and why S12's instructions say "Read the batch above".
  *
- * SLACK IS DATA. Slack's cursors are not queryable from core at all, so the
- * items ARE the data and they ride in full. There is no mail section: since
- * 2026-11-14 every new mail goes to its mailbox's router, which does the triage
- * (tests/core/triage-no-mail.test.ts guards this).
+ * MAIL IS COUNTS, SLACK IS DATA. Mail's own ops can answer "what arrived since
+ * T", so the envelope carries `since`, the per-account counts and the headlines
+ * the event already had, and tells the session to call `mail_list`. Core never
+ * reads the mail plugin's SQLite. Slack's cursors are not queryable from core at
+ * all, so the items ARE the data and they ride in full.
  */
 
 import { boundedItemsJson, ITEMS_JSON_CAP } from '../routines/trigger-envelope.js';
 import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
-import type { TriagePendingSlack } from './state.js';
-import { TRIAGE_AGENT_NAME } from './types.js';
+import type { TriagePendingMail, TriagePendingSlack } from './state.js';
+import { TRIAGE_AGENT_NAME, type TriageSource } from './types.js';
 import { firstMatchingRule, ruleMatchText, type TriageRoutingRule } from './routing-rules.js';
 
 /** The shared 32 KB whole-item-drop budget, re-exported for the action's tests. */
@@ -59,13 +60,18 @@ export function triageCountHintLine(count: number): string {
 }
 
 export interface TriageBatchInput {
+  /** The claimed mail ticks, oldest first. */
+  mail: readonly TriagePendingMail[];
   /** The claimed Slack items, oldest first. */
   slack: readonly TriagePendingSlack[];
+  droppedMail: number;
   droppedSlack: number;
   /** Everything newer than this is "new" — the last acknowledged run's start. */
   sinceMs: number;
   /** This run's start (the claim). */
   nowMs: number;
+  /** Which inboxes the config says feed a batch. */
+  sources: readonly TriageSource[];
   /** State.md's raw bytes, or undefined when the note does not exist yet. */
   stateDoc?: string;
   /** The previous run's journal line, when there was one. */
@@ -79,9 +85,12 @@ export interface TriageBatchInput {
 }
 
 export interface TriageBatchCounts {
+  mailAccounts: number;
+  mailMessages: number;
   slackItems: number;
+  droppedMail: number;
   droppedSlack: number;
-  /** What `{count}` in the run's task title means: the Slack items. */
+  /** What `{count}` in the run's task title means: mail messages + Slack items. */
   total: number;
 }
 
@@ -125,6 +134,16 @@ export function cutStateDoc(text: string, cap = STATE_DOC_CAP): { text: string; 
   };
 }
 
+/** One mail account's row as the envelope carries it (counts + headlines). */
+function mailRow(row: TriagePendingMail): Record<string, unknown> {
+  return {
+    accountId: row.accountId,
+    newMessages: row.count,
+    at: iso(row.atMs),
+    headlines: row.headlines.map((h) => ({ from: h.from, subject: h.subject })),
+  };
+}
+
 function slackRow(row: TriagePendingSlack): Record<string, unknown> {
   return {
     conversation: row.conversation,
@@ -156,12 +175,24 @@ export const TRIAGE_FINISH_CHECKLIST = [
  * reader ends up.
  */
 export function buildTriageBatch(input: TriageBatchInput): TriageBatch {
-  const slack = input.slack;
-  // The note, the title's {count} and the count hint all describe what the body shows.
+  const wantsMail = input.sources.includes('mail');
+  const wantsSlack = input.sources.includes('slack');
+
+  // A source the config leaves out counts as nothing, everywhere: the note, the
+  // title's {count} and the count hint all describe what the body shows. The
+  // collector still buffers every source, so its rows ride the claim and are
+  // dropped on ack (2026-10-06: a mail-only run read "3 Slack items" in its
+  // note and went to triage Slack anyway).
+  const mail = wantsMail ? input.mail : [];
+  const slack = wantsSlack ? input.slack : [];
+  const mailMessages = mail.reduce((sum, row) => sum + Math.max(0, row.count), 0);
   const counts: TriageBatchCounts = {
+    mailAccounts: mail.length,
+    mailMessages,
     slackItems: slack.length,
-    droppedSlack: Math.max(0, Math.floor(input.droppedSlack)),
-    total: slack.length,
+    droppedMail: wantsMail ? Math.max(0, Math.floor(input.droppedMail)) : 0,
+    droppedSlack: wantsSlack ? Math.max(0, Math.floor(input.droppedSlack)) : 0,
+    total: mailMessages + slack.length,
   };
 
   const parts: string[] = [];
@@ -185,19 +216,44 @@ export function buildTriageBatch(input: TriageBatchInput): TriageBatch {
     `Everything newer than ${iso(input.sinceMs)} is new.`,
   ].join('\n'));
 
-  if (counts.slackItems > 0) {
-    const dropped = counts.droppedSlack > 0
-      ? ` ${counts.droppedSlack} older item(s) did not fit the buffer and are only in Slack.`
-      : '';
-    parts.push(
-      `Slack — ${plural(counts.slackItems, 'item')}.${dropped}\n`
-      + `\`\`\`json\n${boundedItemsJson(slack.map(slackRow), ITEMS_JSON_CAP)}\n\`\`\``,
-    );
-  } else {
-    parts.push('Slack — nothing new was reported since the last run.');
+  if (wantsMail) {
+    if (counts.mailAccounts > 0) {
+      const dropped = counts.droppedMail > 0
+        ? ` ${counts.droppedMail} older account tick(s) were dropped from the buffer.`
+        : '';
+      const cap = ITEMS_JSON_CAP;
+      parts.push(
+        `Mail — ${plural(counts.mailMessages, 'new message')} across `
+        + `${plural(counts.mailAccounts, 'account')}. The headlines below are a sample; read the `
+        + `messages with mail_list on each account and take everything newer than the \`since\` `
+        + `above.${dropped}\n\`\`\`json\n${boundedItemsJson(input.mail.map(mailRow), cap)}\n\`\`\``,
+      );
+    } else {
+      parts.push('Mail — nothing new was reported since the last run.');
+    }
   }
 
-  const routing = routingSection(input.rules ?? [], slack);
+  if (wantsSlack) {
+    if (counts.slackItems > 0) {
+      const dropped = counts.droppedSlack > 0
+        ? ` ${counts.droppedSlack} older item(s) did not fit the buffer and are only in Slack.`
+        : '';
+      // Slack shares the SAME 32 KB budget as mail and goes second, so a fat mail
+      // block cannot be pushed out by Slack items and the total stays bounded.
+      const mailJsonCost = wantsMail && counts.mailAccounts > 0
+        ? boundedItemsJson(input.mail.map(mailRow)).length
+        : 0;
+      const cap = Math.max(1_024, ITEMS_JSON_CAP - mailJsonCost);
+      parts.push(
+        `Slack — ${plural(counts.slackItems, 'item')}.${dropped}\n`
+        + `\`\`\`json\n${boundedItemsJson(input.slack.map(slackRow), cap)}\n\`\`\``,
+      );
+    } else {
+      parts.push('Slack — nothing new was reported since the last run.');
+    }
+  }
+
+  const routing = routingSection(input.rules ?? [], mail, slack);
   if (routing) parts.push(routing);
 
   const stateDoc = (input.stateDoc ?? '').trim();
@@ -218,7 +274,7 @@ export function buildTriageBatch(input: TriageBatchInput): TriageBatch {
   parts.push(TRIAGE_FINISH_CHECKLIST);
 
   const body = parts.join('\n\n');
-  const note = triageBatchNote(counts);
+  const note = triageBatchNote(counts, input.sources);
   const message = [
     triageCountHintLine(counts.total),
     buildWalnutMessage({
@@ -238,11 +294,13 @@ const ROUTED_LIST_CAP = 40;
  * The standing routing rules, and the items of this batch they already match.
  *
  * The rules are the user's (or Main's or a VP's), kept outside any run (routing-rules.ts), so a
- * routing asked for once holds on every batch. Rule text and item words are the writers' and the
- * senders', so this goes inside the fence with the rest of the batch.
+ * routing asked for once holds on every batch. Mail rides here as headlines, a sample: the run
+ * matches the messages it reads with mail_list against the same rules. Rule text and item words
+ * are the writers' and the senders', so this goes inside the fence with the rest of the batch.
  */
 export function routingSection(
   rules: readonly TriageRoutingRule[],
+  mail: readonly TriagePendingMail[],
   slack: readonly TriagePendingSlack[],
 ): string | null {
   const live = rules.filter((r) => r.enabled);
@@ -252,6 +310,12 @@ export function routingSection(
     return `- ${r.id}: ${ruleMatchText(r)} → ${task}${r.note ? `. Why: ${r.note}` : ''}`;
   });
   const matched: string[] = [];
+  for (const row of mail) {
+    for (const h of row.headlines) {
+      const rule = firstMatchingRule(live, { source: 'mail', from: h.from, subject: h.subject });
+      if (rule) matched.push(`- mail on ${row.accountId}, from ${JSON.stringify(h.from)}, subject ${JSON.stringify(h.subject)} → ${rule.id}`);
+    }
+  }
   for (const item of slack) {
     const rule = firstMatchingRule(live, { source: 'slack', from: `${item.alias} ${item.conversation}`, subject: item.text });
     if (rule) matched.push(`- Slack ${item.conversation} ${item.ts}, from ${JSON.stringify(item.alias)} → ${rule.id}`);
@@ -261,7 +325,7 @@ export function routingSection(
     'Routing rules (standing; set by the user, Main or a VP, kept across runs):',
     ...lines,
     '',
-    'Every item that matches a rule (sender and text, case-insensitive; the first rule',
+    'Every item you read that matches a rule (sender and subject, case-insensitive; the first rule',
     'in this list wins) belongs to that rule\'s task: hand it over with triage_route (rule_id, the item\'s',
     'subject, what it asks), which names the rule on the message the task gets. Do not route it',
     'anywhere else, and do not write the user a letter about it as well. A rule whose task answers',
@@ -279,8 +343,16 @@ export function routingSection(
  * items over a body holding 8 is the audit trail lying, which is worse than no
  * card. `dropped` is how the two are reconciled when the caps bit.
  */
-export function triageBatchNote(counts: TriageBatchCounts): string {
-  const bits = [plural(counts.slackItems, 'Slack item')];
-  if (counts.droppedSlack > 0) bits.push(`${counts.droppedSlack} dropped`);
-  return `batch · ${bits.join(' · ')}`;
+export function triageBatchNote(
+  counts: TriageBatchCounts,
+  sources: readonly TriageSource[] = ['mail', 'slack'],
+): string {
+  const bits: string[] = [];
+  if (sources.includes('mail')) {
+    bits.push(`${plural(counts.mailMessages, 'new mail')} in ${plural(counts.mailAccounts, 'account')}`);
+  }
+  if (sources.includes('slack')) bits.push(plural(counts.slackItems, 'Slack item'));
+  const dropped = counts.droppedMail + counts.droppedSlack;
+  if (dropped > 0) bits.push(`${dropped} dropped`);
+  return bits.length > 0 ? `batch · ${bits.join(' · ')}` : 'batch';
 }

@@ -106,7 +106,8 @@ const CALL_SITES: Record<string, number> = {
   'src/core/routines/executors/watcher.ts': 1,    // Singleton sends; new starts use the shared gate
   'src/core/routines/run-start-deps.ts': 2,       // Deferred create and admitted replay keep their original source
   'src/core/routines/trigger-health.ts': 1,
-  'src/core/router/service.ts': 2,                // the routed item, sent into its owner as the Router (or its first message)
+  'src/core/router/cross-route.ts': 1,             // one exact approved item, sent as peer under its delivery grant
+  'src/core/router/service.ts': 2,                // a confirmed item or its approval, sent as peer under its grant
   'src/core/router/wake.ts': 2,                   // the router's scoped runtime wake
   'src/core/session-auto-continue.ts': 1,
   // Walnut's idle compaction: the bare `/compact` command, passed unframed (send-frame.ts), as a quiet turn.
@@ -125,7 +126,6 @@ const CALL_SITES: Record<string, number> = {
   'src/core/sessions/auto-recover-env.ts': 1,
   'src/core/sessions/background-work-wake.ts': 1, // a Codex session's own leftover command ended
   'src/core/sessions/brief-refresh.ts': 1,
-  'src/core/sessions/reply-outbox.ts': 1,          // an owed answer sent again as it was stored: the answering task's own source
   'src/core/sessions/endpoint-wait.ts': 1,         // its one continue, as auto-continue
   'src/core/sessions/folder-gone.ts': 1,           // a new conversation's first line: a notice, then the rows that waited as stored
   'src/core/sessions/lane-turn.ts': 3,             // frames the first line for its source; a joined message goes as its lane's source
@@ -149,12 +149,10 @@ const CALL_SITES: Record<string, number> = {
   'src/core/subagents/registry.ts': 1,
   // A low disk: one Walnut notice (walnut-notify) asking an open task to clear its own folder.
   'src/core/task-dir-size-notice.ts': 1,
-  // A private-data hold: a Walnut notice to its writer, never a person's word.
-  'src/integrations/git-sync-secret-notices.ts': 1,
   'src/core/pull-requests/pr-watch.ts': 1,       // pull request news: a Walnut envelope, source pr-watch
   'src/core/task-wait-until.ts': 1,
   'src/core/transfer/transfer.ts': 1,
-  'src/core/workspaces/manager.ts': 3,              // workspace launch and its folder fallback keep the start's original source
+  'src/core/workspaces/manager.ts': 2,
   // an ACP session's first line (framed by its start); a textless kick for rows a late init put back;
   // a refused start's first line kept for Retry (Claude Code not installed), as its start framed it
   'src/providers/claude-code-session.ts': 3,

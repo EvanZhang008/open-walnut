@@ -38,7 +38,6 @@ import {
   deletePendingRequest,
   getSessionRequest,
   settleReplied,
-  clearReplyOutbox,
   settleLateReply,
   withdrawRequest,
   listAllSessionRequests,
@@ -46,7 +45,6 @@ import {
   noteAnswerDelivered,
   sameAnswerOf,
   type AnswerStamp,
-  type ReplyOutbox,
   type SessionRequest,
 } from '../session-requests.js';
 import { queueSentBy } from './send-sent-by.js';
@@ -70,8 +68,7 @@ export class SendError extends Error {
       | 'bad_request' | 'unknown_target' | 'ambiguous_target' | 'task_has_no_session'
       | 'target_archived' | 'task_starting' | 'self_send' | 'queue_full' | 'throttled' | 'delivery_failed'
       | 'unknown_request' | 'request_already_settled' | 'not_request_target' | 'origin_session_gone'
-      | 'parent_complete' | 'target_complete' | 'lead_handed_over' | 'org_off' | 'not_above' | 'no_open_ask' | 'user_words' | 'user_spoke_since' | 'area_forbidden' | 'cross_area'
-      | 'human_approval' | 'not_confirmed',
+      | 'parent_complete' | 'target_complete' | 'lead_handed_over' | 'org_off' | 'not_above' | 'no_open_ask' | 'user_words' | 'user_spoke_since' | 'area_forbidden' | 'cross_area',
     message: string,
     public statusCode = 400,
     public detail?: Record<string, unknown>,
@@ -144,9 +141,7 @@ export interface SessionSendInput {
 export interface SessionSendResult {
   /** queued = dispatched; deferred = enqueued but target awaits a permission prompt;
    *  recorded = an answer for the user kept on a task it was not delivered to (`notWoken`). */
-  delivery: 'queued' | 'deferred' | 'recorded' | 'held' | 'settled';
-  /** settled: an answers_ask whose ask lived outside the task's report, answered where it lives (ask-settle.ts). */
-  settled?: import('./ask-settle.js').SettledVia;
+  delivery: 'queued' | 'deferred' | 'recorded' | 'held';
   /** An answers_ask send to a COMPLETE task or one with no session running: recorded, no turn started. */
   notWoken?: 'complete' | 'stopped';
   /** The user's ask was permanently withdrawn, not merely answered. */
@@ -789,31 +784,6 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     if (err instanceof AskAnswerError) throw new SendError(err.code, err.message, err.status, targetTaskId ? { taskId: targetTaskId } : undefined);
     throw err;
   }
-  // An ask that lives outside the task's report (a Board choice, a prompt, a letter) is settled
-  // there, which tells the task on its own path; only when it does not (`tell`) does our message go too.
-  let settled: Awaited<ReturnType<NonNullable<typeof prepared.settle>>> | undefined;
-  if (prepared.settle) {
-    if (input.handsOn) throw new SendError('bad_request', `hands_on cannot ride an answer to "${prepared.target.title}"'s ${prepared.where === 'choice' ? 'Board choice' : prepared.where}: answer it without hands_on, then send the request on its own.`, 400, { taskId: prepared.target.id });
-    try {
-      settled = await prepared.settle();
-    } catch (err) {
-      if (err instanceof AskAnswerError) throw new SendError(err.code, err.message, err.status, { taskId: prepared.target.id });
-      throw err;
-    }
-    log.session.info('answers_ask: settled where the ask lives', { taskId: prepared.target.id, via: settled.via, tell: settled.tell === true, requestId: asked?.id });
-    if (!settled.tell) {
-      if (asked) await settleAnswerNotDelivered(asked, caller, input);
-      await prepared.commit();
-      const sid = 'sessionId' in settled ? settled.sessionId : destination?.claudeSessionId ?? '';
-      return {
-        delivery: 'settled', settled, targetSessionId: sid, targetTitle: prepared.target.title, targetTaskId: prepared.target.id,
-        target: { handle: sessionHandle(prepared.target.title, sid), sessionId: sid, taskId: prepared.target.id },
-        ...(asked ? { repliedTo: asked.id } : {}),
-        ...(input.withdrawAsk ? { withdrawn: true as const } : {}),
-        ...(prepared.userSaid ? { userSaid: prepared.userSaid } : {}),
-      };
-    }
-  }
   // An answer to a request goes where performReply would send it: past the asker for a request it
   // carries, or the asker's live fork (reply-routing.ts). The gate judges that very session.
   if (asked && caller.kind === 'session') destination = await replyDestinationOf(asked, caller.record.claudeSessionId);
@@ -827,7 +797,7 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     log.session.info('answers_ask: recorded, not delivered', { taskId: prepared.target.id, why, requestId: asked?.id });
     const sid = destination?.claudeSessionId ?? asked?.fromSessionId ?? '';
     return {
-      delivery: 'recorded', notWoken: why, ...(settled ? { settled } : {}), targetSessionId: sid, targetTitle: prepared.target.title, targetTaskId: prepared.target.id,
+      delivery: 'recorded', notWoken: why, targetSessionId: sid, targetTitle: prepared.target.title, targetTaskId: prepared.target.id,
       target: { handle: sessionHandle(prepared.target.title, sid), sessionId: sid, taskId: prepared.target.id },
       ...(asked ? { repliedTo: asked.id } : {}),
       ...(input.withdrawAsk ? { withdrawn: true as const } : {}),
@@ -856,7 +826,7 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     throw err;
   }
   await prepared.commit();
-  return { ...result, ...(settled ? { settled } : {}), ...(input.withdrawAsk ? { withdrawn: true as const } : {}), ...(prepared.userSaid ? { userSaid: prepared.userSaid } : {}) };
+  return { ...result, ...(input.withdrawAsk ? { withdrawn: true as const } : {}), ...(prepared.userSaid ? { userSaid: prepared.userSaid } : {}) };
 }
 
 /** Where an answer to `request` from `replierSid` goes (performReply's own routing), or undefined. */
@@ -930,10 +900,13 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
     throw err;
   }
   const targetSid = target.session.claudeSessionId;
+  let supervisorDelivery = false;
   if (caller.kind === 'session' && caller.record.taskId) {
-    const { mayShareTaskContext } = await import('../router/context-sharing.js');
-    if (!await mayShareTaskContext(caller.record.taskId, target.taskId ?? target.session.taskId)) {
-      throw new SendError('area_forbidden', 'A router talks only through its router tools, and no task sends into a router.', 403);
+    const { mayShareTaskContext, mayManageRoutedTask } = await import('../router/context-sharing.js');
+    const sharesArea = await mayShareTaskContext(caller.record.taskId, target.taskId ?? target.session.taskId);
+    if (!sharesArea) supervisorDelivery = await mayManageRoutedTask(caller.record.taskId, target.taskId ?? target.session.taskId);
+    if (!sharesArea && !supervisorDelivery) {
+      throw new SendError('area_forbidden', 'Context cannot be sent across an area boundary.', 403);
     }
   }
 
@@ -1089,7 +1062,8 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
       busText: body, enqueueText, source, taskId, messageId: rowId, fromLeader,
       ...(input.liveOnly ? { liveOnly: input.liveOnly } : {}),
     });
-    ({ delivery, messageId } = await deliver());
+    const { withRouterDelivery } = await import('../router/delivery-scope.js');
+    ({ delivery, messageId } = await (supervisorDelivery ? withRouterDelivery(targetSid, rowId, deliver) : deliver()));
   } catch (err) {
     // A rejected delivery never landed, so a request row we just created would
     // otherwise sit pending until its deadline and the sweeper would tell the
@@ -1268,7 +1242,7 @@ async function performReply(
   if (caller.record.taskId) {
     const { mayShareTaskContext } = await import('../router/context-sharing.js');
     if (!await mayShareTaskContext(caller.record.taskId, origin.taskId)) {
-      throw new SendError('cross_area', 'A reply never crosses into or out of a router. Nothing was delivered or settled.', 403);
+      throw new SendError('cross_area', 'This reply crosses an incoming-item area. Nothing was delivered or settled.', 403);
     }
   }
   // Before the settle: a refused answer leaves the request open for a forced retry.
@@ -1287,42 +1261,14 @@ async function performReply(
   // One answer at a time per asker and words: a second task_send with the same text waits until
   // the first is delivered (or failed), then reads it as a repeat (or as the answer, if it failed).
   const answeredFor = onward?.final ?? request;
+  let replierTitle = '';
   let delivery: 'queued' | 'deferred' = 'queued';
   let messageId: string | undefined;
-  // What the asker reads, known before the settle so the settle can owe it (reply-outbox.ts).
-  const replierTitle = await senderTitleOf(caller.record);
-  const answerText = () => {
-    const wrapped = buildReplyDeliveryText(answeredFor, {
-      // The replier's TASK title (sender-name.ts); none → the handle is just `[8hex]`.
-      title: replierTitle,
-      shortId: shortId(caller.record.claudeSessionId),
-      sessionId: caller.record.claudeSessionId,
-      taskId: caller.record.taskId,
-      host: displayHost(caller.record.host),
-    }, replyBody, { title: input.title });
-    // The asker's other requests it answers, named once (performReplies): no separate line for each.
-    return many.covers?.length
-      ? `${wrapped}\nThis one answer also settles your request${many.covers.length === 1 ? '' : 's'} ${many.covers.join(', ')} to the same task: nothing more comes for ${many.covers.length === 1 ? 'it' : 'them'}.`
-      : wrapped;
-  };
-  const fromLeader = await callerLeads(caller, origin.taskId);
-  // The queue row the answer goes out as: the same id when the outbox delivers it again.
-  let deliveryId = input.messageId ?? (await import('../session-queue-store.js')).generateId();
-  let owed = false;
-  // The replier's latest result, kept on its task: the Board and the Brief read Partial from it.
-  const resultHead = caller.record.taskId ? {
-    via: 'reply' as const, request_id: answeredFor.id, ...(origin.taskId ? { to_task_id: origin.taskId } : {}), by: `task:${caller.record.taskId}`,
-    ...(caller.record.claudeSessionId ? { sessionId: caller.record.claudeSessionId } : {}),
-  } : undefined;
-  const { replyInFlight } = await import('./reply-outbox.js');
   const releaseAnswer = onward ? () => {} : await holdAnswer(`${stamp.deliveredTo}\u0000${stamp.digest}\u0000${stamp.by.taskId ?? stamp.by.sessionId}`);
-  // While this call runs, the outbox sweep leaves this request to it (reply-outbox.ts).
-  const releaseFlight = replyInFlight(id);
   try {
     // Read again once the key is held: a send of the same words to the same request that waited
     // behind it finds the request settled by the first one, and reads itself as its repeat.
-    const fresh = onward ? request : ((await getSessionRequest(id).catch(() => null)) ?? request);
-    const status = fresh.status;
+    const status = onward ? request.status : ((await getSessionRequest(id).catch(() => null)) ?? request).status;
     if (onward) {
       // Settled once the answer is delivered: a failed delivery leaves the whole chain open.
     } else if (status !== 'pending') {
@@ -1333,29 +1279,23 @@ async function performReply(
       if (status === 'expired') sameAs = (await settleLateReply(id, fields, undefined, stamp).catch(() => null))?.sameAnswerAs;
       // Answered already, and these are the words it got then (or another request got).
       else sameAs = sameAnswerOf(await listAllSessionRequests().catch(() => []), stamp)?.id;
-      // Its answer is still owed (the server died before delivering it, and the replier sends again):
-      // this answer goes out as that same queue row, and the outbox owes nothing more.
-      if (fresh.outbox && !sameAs) { deliveryId = fresh.outbox.messageId; owed = true; }
     } else {
-      // The answer's delivery is owed in the same write as the settle (reply-outbox.ts): a server
-      // that dies before it reaches the asker's queue delivers it at its next start. Not for a
-      // repeat (the asker has it) or an answer only for a live session (ask-answer.ts).
-      const owe = many.quietRepeat || input.liveOnly ? undefined : (row: SessionRequest): ReplyOutbox | undefined => row.sameAnswerAs ? undefined : {
-        to: origin.claudeSessionId, from: caller.record.claudeSessionId, ...(origin.taskId ? { taskId: origin.taskId } : {}), messageId: deliveryId,
-        busText: replyBody, enqueueText: answerText(), source: 'peer', ...(fromLeader ? { fromLeader } : {}),
-        ...(resultHead ? { report: { taskId: caller.record.taskId!, head: resultHead, fields } } : {}),
-        at: new Date().toISOString(),
-      };
-      const settled = await settleReplied(id, fields, undefined, stamp, owe);
-      owed = !!settled?.outbox;
+      const settled = await settleReplied(id, fields, undefined, stamp);
       if (!settled) {
         log.session.info('session reply lost the settle race — delivering late', { requestId: id });
       }
       // Lost the race to another answer: these may be the very words it delivered.
       sameAs = settled ? settled.sameAnswerAs : sameAnswerOf(await listAllSessionRequests().catch(() => []), stamp)?.id;
     }
-    if (resultHead) await noteResultReport(caller.record.taskId!, resultHead, fields);
+    // The replier's latest result, kept on its task: the Board and the Brief read Partial from it.
+    if (caller.record.taskId) {
+      await noteResultReport(caller.record.taskId, {
+        via: 'reply', request_id: answeredFor.id, ...(origin.taskId ? { to_task_id: origin.taskId } : {}), by: `task:${caller.record.taskId}`,
+        ...(caller.record.claudeSessionId ? { sessionId: caller.record.claudeSessionId } : {}),
+      }, fields);
+    }
 
+    replierTitle = await senderTitleOf(caller.record);
     if (many.quietRepeat) {
       // Named in the one answer the asker just got (performReplies): nothing more to read.
       log.session.info('session reply settled with the answer it named — nothing more delivered', {
@@ -1382,23 +1322,31 @@ async function performReply(
         requestId: id, sameAnswerAs: sameAs, fromSessionId: caller.record.claudeSessionId, toSessionId: origin.claudeSessionId,
       });
     } else {
-      try {
-        ({ delivery, messageId } = await deliverToSession(origin, {
-          busText: replyBody, enqueueText: answerText(), source: 'peer', endsWait: true,
-          taskId: origin.taskId, messageId: deliveryId, fromLeader,
-          ...(input.liveOnly ? { liveOnly: input.liveOnly } : {}),
-        }));
-      } finally {
-        // Delivered, or failed in front of the replier (which sends again): owed no more either way.
-        if (owed) await clearReplyOutbox(id, deliveryId).catch(() => {});
-      }
+      const wrapped = buildReplyDeliveryText(answeredFor, {
+        // The replier's TASK title (sender-name.ts); none → the handle is just `[8hex]`.
+        title: replierTitle,
+        shortId: shortId(caller.record.claudeSessionId),
+        sessionId: caller.record.claudeSessionId,
+        taskId: caller.record.taskId,
+        host: displayHost(caller.record.host),
+      }, replyBody, { title: input.title });
+      // The asker's other requests it answers, named once (performReplies): no separate line for each.
+      const covered = many.covers?.length
+        ? `${wrapped}\nThis one answer also settles your request${many.covers.length === 1 ? '' : 's'} ${many.covers.join(', ')} to the same task: nothing more comes for ${many.covers.length === 1 ? 'it' : 'them'}.`
+        : wrapped;
+
+      ({ delivery, messageId } = await deliverToSession(origin, {
+        busText: replyBody, enqueueText: covered, source: 'peer', endsWait: true,
+        taskId: origin.taskId, messageId: input.messageId,
+        fromLeader: await callerLeads(caller, origin.taskId),
+        ...(input.liveOnly ? { liveOnly: input.liveOnly } : {}),
+      }));
     }
 
     // A later answer with these words to this asker is a repeat of this one (sameAnswerOf).
     if (!onward && !sameAs) await noteAnswerDelivered(id, stamp).catch(() => {});
   } finally {
     releaseAnswer();
-    releaseFlight();
   }
   const originSid = origin.claudeSessionId;
   // The asks this answer went past: the chain below the outermost one, or the asks that handed

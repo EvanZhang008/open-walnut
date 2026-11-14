@@ -14,7 +14,7 @@ import { claimAgentLinkClick } from '@/utils/open-anywhere';
  * unknown by default. A caller's own
  * `onClick` replaces the click handler whole: it must carry the same source itself.
  */
-export function AgentText({ text, className, testId, compact = false, inline = false, onClick, title, task, host, sessionId, cwd, unknownSource, taskIds }: {
+export function AgentText({ text, className, testId, compact = false, inline = false, onTaskClick, onClick, title, task, host, sessionId, cwd, unknownSource, taskIds }: {
   text: string;
   /** How a bare task id renders (renderMarkdownWithRefs `taskIds`); absent = pills, as before. */
   taskIds?: RenderMarkdownOptions['taskIds'];
@@ -28,6 +28,7 @@ export function AgentText({ text, className, testId, compact = false, inline = f
   testId?: string;
   compact?: boolean;
   inline?: boolean;
+  onTaskClick?: (id: string) => void;
   onClick?: (e: MouseEvent<HTMLElement>) => void;
 }) {
   const labels = useEntityLabelsVersion();
@@ -38,7 +39,7 @@ export function AgentText({ text, className, testId, compact = false, inline = f
     [text, compact, inline, labels, renderCwd, renderHost, images, taskIds],
   );
   const inner = useStableHtml(html);
-  const onEntityClick = useEntityClickHandler(undefined, file.onFileOpen, file.fileHost, file.fileSessionId, file.refusesAll);
+  const onEntityClick = useEntityClickHandler(onTaskClick, undefined, file.onFileOpen, file.fileHost, file.fileSessionId, file.refusesAll);
   const press = useRef<{ x: number; y: number; dragged: boolean } | null>(null);
   const Tag = inline ? 'span' : 'div';
   return <Tag

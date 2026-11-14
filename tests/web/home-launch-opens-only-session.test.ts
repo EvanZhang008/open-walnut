@@ -26,7 +26,7 @@ const CHAT_SHOWN_BY: Array<{ marker: string; why: string }> = [
   { marker: 'setChatVisible(prev => !prev);', why: 'the dock / sidebar chat toggle: the user' },
   { marker: "if (exit === 'close') setChatVisible(true);", why: 'a draft closed with its ×: nothing was made, the borrowed spot comes back' },
   { marker: "showAskInSlot(MAIN_PICK);\n      setChatVisible(true);", why: 'Talk to Main from the Org chart: the user' },
-  { marker: 'showAskInSlot(task.id);\n      setChatVisible(true);', why: 'a locate of an ask task (search, a link): the user' },
+  { marker: 'showAskInSlot(task.id);\n        setChatVisible(true);', why: 'a locate of an ask task (search, a link): the user' },
 ];
 
 describe('the chat slot shows only on the user\'s step', () => {

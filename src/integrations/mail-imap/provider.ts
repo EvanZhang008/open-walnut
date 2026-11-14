@@ -33,14 +33,14 @@ import type {
 } from '../mail/api.js'
 import {
   CONNECT_TIMEOUT_MS,
-  FOLDER_RESET,
   hasCapability,
   ImapConnection,
   ImapPool,
-  openMailbox,
   providerError,
+  serverRefusal,
   toProviderError,
   type ImapClient,
+  type ImapMailboxInfo,
 } from './client.js'
 import { accountIdFor, ImapAccountStore, PROVIDER_ID } from './config.js'
 import { decodeCursor, decodeMessageId, encodeCursor, encodeMessageId, mailboxRole } from './coords.js'
@@ -56,7 +56,6 @@ import {
   toEnvelope,
   uidChunks,
 } from './mime.js'
-import { createImapPartReader } from './provider-parts.js'
 import { advanceCursor, hasMore, planPoll } from './poll-range.js'
 import { createImapSender } from './provider-send.js'
 import { imapPortFor, pastedPassword, SETUP_PRESETS, serverFilesSentCopy, submissionPortFor } from './setup-presets.js'
@@ -81,6 +80,13 @@ interface ProviderLog {
   debug(message: string, meta?: Record<string, unknown>): void
   info(message: string, meta?: Record<string, unknown>): void
   warn(message: string, meta?: Record<string, unknown>): void
+}
+
+function tooLarge(bytes: number) {
+  return providerError(
+    'too-large',
+    `That message is ${Math.round(bytes / 1024)} KB, over the ${MAX_SOURCE_BYTES / 1024} KB cap Walnut will parse.`,
+  )
 }
 
 /**
@@ -109,6 +115,42 @@ function selectable(entry: { path: string; flags?: Iterable<string> }): boolean 
 }
 
 /**
+ * SELECT one mailbox, translating "the server will not open this one" into `not-found`.
+ *
+ * Every IMAP account has folders it lists but will not select. Gmail's `[Gmail]` namespace node is
+ * one, and so is any label whose only reason to exist is that a nested label lives under it: LIST
+ * reports them (RFC 5258 calls them `\Noselect`), SELECT answers `NO`. Without this the refusal was
+ * mapped as `unreachable`, which is a claim about the NETWORK, and two mechanisms built for network
+ * faults then fired on a healthy connection: the pool dropped the account's socket into a reconnect
+ * backoff, and the sweep treated it as this account being down.
+ *
+ * `not-found` is the code the contract already has for "that container is not there", and both
+ * layers above already do the right thing with it: the pool passes it through without touching the
+ * connection, and the sync loop marks the container done and moves to the next folder.
+ */
+async function openMailbox(
+  client: Pick<ImapClient, 'mailboxOpen'>,
+  path: string,
+): Promise<ImapMailboxInfo> {
+  try {
+    return await client.mailboxOpen(path)
+  } catch (error) {
+    const refused = serverRefusal(error)
+    if (!refused) throw error
+    // A NO can also be the SIGN-IN being rejected, and that answer outranks this one: the two send
+    // the human to opposite places, and only the credential reading ever asks them for a password.
+    // Deciding that is `toProviderError`'s job, so it gets asked first rather than second-guessed.
+    const mapped = toProviderError(error, `the folder "${path}"`)
+    if (mapped.code === 'auth') throw mapped
+    throw providerError(
+      'not-found',
+      `The mail server will not open the folder "${path}". It answered ${refused.status}`
+      + `${refused.text ? `: ${refused.text}` : '.'}`,
+    )
+  }
+}
+
+/**
  * The whole capability block, in one place so the per-account answer can narrow it.
  *
  * `send: true` is a statement about the PROVIDER, not about any one account: this code can send
@@ -130,8 +172,7 @@ const CAPABILITIES: MailCapabilities = {
   send: true,
   sendAsReply: true,
   bodies: 'both',
-  // One attachment's bytes on a click (`getAttachment`), on a connection of its own.
-  attachments: 'download',
+  attachments: 'metadata',
   // `UID MOVE` into the account's archive folder (`archiveTarget`); an account without one answers
   // every id as failed, with the reason.
   archive: true,
@@ -141,8 +182,8 @@ const CAPABILITIES: MailCapabilities = {
 
 /** An IMAP server without RFC 6851 MOVE: nothing is moved there (see `archiveMany`). */
 export const NO_MOVE = 'This mail server cannot move mail (it has no MOVE command).'
-/** The folder's UIDVALIDITY changed since the handle was made (client.ts, beside `openMailbox`). */
-export { FOLDER_RESET }
+/** The folder's UIDVALIDITY changed since the handle was made: its UIDs may name other mail now. */
+export const FOLDER_RESET = 'This folder was reset on the mail server; the mail is looked at again after the next check.'
 
 /**
  * The folder "archive" means on this server: a `\Archive` folder first, then Gmail's All Mail
@@ -179,9 +220,6 @@ export function createImapProvider(deps: {
   }
 
   const sender = createImapSender({ store, pool, log, accountOf })
-  // A big body and an attachment: one part at a time instead of the whole source (provider-parts.ts).
-  const parts = createImapPartReader({ pool, log })
-  const bodyByParts = parts.bodyByParts
 
   type Connection = ImapConnection
   type ListedBox = Awaited<ReturnType<ImapClient['list']>>[number]
@@ -261,9 +299,6 @@ export function createImapProvider(deps: {
     id: PROVIDER_ID,
     label: 'IMAP',
     capabilities: CAPABILITIES,
-    // 2026-11-13: a message over the source cap is read by its parts instead of refused, so the
-    // `too-large` answers given before that are forgotten once and those bodies are asked for again.
-    refusalRevision: 'body-by-parts-1',
 
     /**
      * What THIS account can do, which is not always what the provider can.
@@ -545,20 +580,19 @@ export function createImapProvider(deps: {
     },
 
     /**
-     * The raw source, parsed once, for a message up to the cap; its text parts alone above it.
+     * The raw source, refused above the cap, parsed once.
      *
      * The size is checked from the FETCH response before anything is parsed, and the source
      * itself is requested with a maxLength so a 50 MB message never lands in this process's
-     * heap even for the instant it takes to find out. A message over the cap is read by its
-     * parts (`bodyByParts`), never parsed whole.
+     * heap even for the instant it takes to reject it.
      */
     async getBody(accountId: string, messageId: string, sizeHint?: number): Promise<MailBody> {
       const coord = decodeMessageId(messageId)
       if (!coord) throw providerError('invalid', `"${messageId}" is not an IMAP message handle.`)
-      // Read by its parts from the hint the POLL already reported, before a byte of source moves.
-      // Learning the size from the source fetch meant downloading up to the cap of a message that is
-      // over it, which is the entire cost the cap exists to avoid, once per read attempt.
-      if (sizeHint !== undefined && sizeHint > MAX_SOURCE_BYTES) return bodyByParts(accountId, messageId, coord, sizeHint)
+      // Refused from the hint the POLL already reported, before a byte moves. Checking only after
+      // the fetch meant downloading up to the cap to discover the message is over it, which is
+      // the entire cost the cap exists to avoid, once per read attempt.
+      if (sizeHint !== undefined && sizeHint > MAX_SOURCE_BYTES) throw tooLarge(sizeHint)
       const connection = await pool.for(accountId)
       const fetched = await connection.run(`a body for ${messageId}`, async (client) => {
         await openMailbox(client, coord.mailbox)
@@ -572,14 +606,14 @@ export function createImapProvider(deps: {
         )
       })
       if (!fetched) throw providerError('not-found', `Message ${messageId} is no longer in ${coord.mailbox}.`)
-      if (fetched.size !== undefined && fetched.size > MAX_SOURCE_BYTES) return bodyByParts(accountId, messageId, coord, fetched.size)
+      if (fetched.size !== undefined && fetched.size > MAX_SOURCE_BYTES) throw tooLarge(fetched.size)
       if (!fetched.source) throw providerError('not-found', `The mail server returned no source for ${messageId}.`)
       // No RFC822.SIZE from the server, and the source arrived at exactly the maxLength we asked
       // for: that is what a truncated download looks like, and there is no way to tell it from a
       // message that happens to be exactly 2 MB. Parsing it would hand back the first 2 MB of a
-      // 50 MB message labelled complete, so it is read by its parts instead.
+      // 50 MB message labelled complete, so it is refused.
       if (fetched.size === undefined && fetched.source.byteLength >= MAX_SOURCE_BYTES) {
-        return bodyByParts(accountId, messageId, coord, fetched.source.byteLength)
+        throw tooLarge(fetched.source.byteLength)
       }
       const size = fetched.size ?? fetched.source.byteLength
       const parsed = await parseMime(fetched.source)
@@ -603,13 +637,6 @@ export function createImapProvider(deps: {
         ...(parsed.attachments.length ? { attachments: parsed.attachments } : {}),
         ...(listUnsubscribe ? { listUnsubscribe } : {}),
       }
-    },
-
-    /** One attachment's decoded bytes, streamed on a connection of its own (provider-parts.ts). */
-    async getAttachment(accountId: string, messageId: string, attachmentId: string, options: { maxBytes: number; signal: AbortSignal }) {
-      const coord = decodeMessageId(messageId)
-      if (!coord) throw providerError('invalid', `"${messageId}" is not an IMAP message handle.`)
-      return parts.getAttachment(accountId, messageId, coord, attachmentId, options)
     },
 
     async markRead(accountId: string, messageId: string, read: boolean): Promise<void> {

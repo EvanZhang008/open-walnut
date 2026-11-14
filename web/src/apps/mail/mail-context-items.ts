@@ -20,7 +20,6 @@
  *   selection: in a merged list the row's account and the pane's first account are different accounts.
  */
 import type { MailAccountDto, MailMessageDto, MailProviderSummary } from '@/api/mail';
-import type { OpenTask } from '@/hooks/useOpenTask';
 import { normalizeContextMenuItems, type ContextMenuItem } from '@/utils/context-menu';
 import { isUnread, rowRecipientLabel, senderLabel } from './mail-format';
 import { mayOfferMarkRead } from './mail-providers';
@@ -42,8 +41,7 @@ export interface MessageMenuActions {
   /** The two content actions every surface offers (utils/content-actions.ts). */
   onTalkToCeo: (message: MailMessageDto) => void;
   onNewTask: (message: MailMessageDto) => void;
-  /** The one task-open action (useOpenTask): Open task is the same click as every task reference. */
-  openTask: OpenTask;
+  onOpenTask: (taskId: string) => void;
   onSearchSender: (address: string) => void;
   onCopyLink: (message: MailMessageDto) => void;
   /**
@@ -401,7 +399,7 @@ export function messageMenuItems(input: MessageMenuInput): ContextMenuItem[] {
     // becomes a task on its own. A task an older Walnut made from this mail still opens from here.
     { key: 'talk-to-ceo', label: CONTENT_ACTION_WORDS.talk_to_ceo.label, title: CONTENT_ACTION_WORDS.talk_to_ceo.description, onSelect: () => actions.onTalkToCeo(message) },
     { key: 'new-task', label: CONTENT_ACTION_WORDS.new_task.label, title: CONTENT_ACTION_WORDS.new_task.description, onSelect: () => actions.onNewTask(message) },
-    { key: 'task', when: !!taskId, label: 'Open task', onSelect: () => { if (taskId) actions.openTask(taskId); } },
+    { key: 'task', when: !!taskId, label: 'Open task', onSelect: () => { if (taskId) actions.onOpenTask(taskId); } },
     {
       // `Unsubscribe` when the click just does it (one-click, the list's mail, its page): beside `Make a
       // task`, as another thing to do with this mail, with no ✦ because no model is involved.

@@ -33,7 +33,7 @@ const SID = 'ptl-guard-session';
 
 /** Every file that listens for a turn's end and writes a completion, and how it waits for the recovery. */
 const WAITS: Record<string, { how: RegExp; why: string }> = {
-  'src/core/triage/runs.ts': { how: /turnEndAnsweredNothing\(/, why: 'a triage run settles on its session result: not on one the recovery holds' },
+  'src/core/triage/runs.ts': { how: /contextRecoveryHoldsTurn\(/, why: 'a triage run settles on its session result: not on one the recovery holds' },
   'src/core/org/handover-close.ts': { how: /TurnEndWait/, why: 'waits through turnHold, which reads the recovery' },
 };
 
@@ -83,12 +83,12 @@ describe('a turn that ended on "Prompt is too long" is not the end of the work',
       .filter(({ text }) => /EventNames\.SESSION_RESULT|'session:result'|onTurnComplete|TurnEndWait/.test(text))
       .filter(({ text }) => /phase: 'COMPLETE'|\bcompleteTask\(/.test(text));
     const missing = members.filter((m) => !WAITS[m.rel]).map((m) => m.rel);
-    expect(missing, 'wait for the context recovery (turnEndAnsweredNothing, or turnHold / TurnEndWait) and list the file here').toEqual([]);
+    expect(missing, 'wait for the context recovery (contextRecoveryHoldsTurn, or turnHold / TurnEndWait) and list the file here').toEqual([]);
     for (const m of members) expect(WAITS[m.rel].how.test(m.text), m.rel).toBe(true);
     expect(Object.keys(WAITS).filter((f) => !members.some((m) => m.rel === f))).toEqual([]);
     // turnHold is where the TurnEndWait users (handover-close, team-stop, self-complete-stop,
     // engine-switch, lifecycle waits) read the recovery.
-    expect(readFileSync(path.join(ROOT, 'src/core/sessions/turn-end-wait.ts'), 'utf8')).toMatch(/await turnMidWork\(rec\)/);
+    expect(readFileSync(path.join(ROOT, 'src/core/sessions/turn-end-wait.ts'), 'utf8')).toMatch(/contextFullRecovery\(\)\?\.holds\(rec\.claudeSessionId\)/);
   });
 
   it('turnHold reads a session the recovery compacts as mid-turn', async () => {

@@ -13,16 +13,13 @@
  * is the fixture's temp dir, so every worktree and workspace lands inside it.
  *
  *   PW_WORKSPACE_FIXTURE=1 PW_TEST_PORT=3515 ./node_modules/.bin/playwright test tests/e2e/browser/task-workspaces.spec.ts --project=chromium
- * Also: code tasks starting in an isolated workspace by default (an agent's task_start, a
- * draft's chip, a plugin's folder over git, the opt-outs, setup and cleanup of one).
- *
  *   PW_WORKSPACE_FIXTURE=1 PW_TEST_PORT=3515 PW_WEBKIT=1 ./node_modules/.bin/playwright test tests/e2e/browser/task-workspaces.spec.ts --project=webkit
  */
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, draftPanel, draftTaskMenu, openDraft, openDraftOnCwd, openDraftSettings, pickDraftFolder, serverHome, shownHomePath } from './draft-helpers'
 import { selectSection } from './todo-panel-helpers'
@@ -34,8 +31,6 @@ const SHOTS = process.env.PW_SCREENSHOT_DIR ?? '/tmp/task-workspaces'
 
 test.skip(process.env.PW_WORKSPACE_FIXTURE !== '1', 'needs PW_WORKSPACE_FIXTURE=1 on its own PW_TEST_PORT')
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
-// One after another: the default-isolation tests below turn a server-wide setting on for a while.
-test.describe.configure({ mode: 'default' })
 
 /** The fixture's HOME exactly as the server spells it (on macOS /var/folders, not its /private realpath). */
 let home = ''
@@ -64,8 +59,7 @@ test.beforeAll(async () => {
 })
 
 interface Ws {
-  state: string; provider: string; root?: string; cwd?: string; branch?: string; anchor: string; by_default?: boolean
-  inputs?: Record<string, unknown>; setup?: { state: string; name: string }
+  state: string; provider: string; root?: string; cwd?: string; branch?: string; anchor: string
   repos?: Array<{ path: string; name?: string }>; kept_reason?: string; error?: string; progress?: string; branch_kept?: boolean
 }
 interface TaskRow { id: string; title: string; phase: string; focus_tier?: string; exec_session_id?: string; workspace?: Ws }
@@ -454,202 +448,4 @@ test('a bound draft (▶ Start of an existing task) offers the option inline fro
   expect((await readTask(page, taskId)).workspace?.state).toBe('ready')
   expect(audit.errors).toEqual([])
   expect(audit.failed).toEqual([])
-})
-
-// ── Isolated workspaces by default for code tasks (core/workspaces/default-isolation.ts) ──
-// The experiment is a server-wide setting: a test turns it on and puts it back in `finally`.
-// This file's tests run one after another (configure above), so no other test of the file sees it on.
-
-/** The experiment, as Settings > Experimental writes it. Returns the previous flags to restore. */
-async function setDefault(request: APIRequestContext, on: boolean): Promise<Record<string, boolean>> {
-  const cfg = await (await request.get('/api/config')).json() as { experimental?: Record<string, boolean> }
-  const before = { ...(cfg.experimental ?? {}) }
-  const res = await request.put('/api/config', { data: { experimental: { ...before, isolated_workspace_by_default: on } } })
-  expect(res.ok()).toBe(true)
-  return before
-}
-
-async function newTask(request: APIRequestContext, title: string, project: string): Promise<string> {
-  const res = await request.post('/api/tasks', { data: { title, project, source: 'local' } })
-  expect(res.ok(), await res.text()).toBe(true)
-  return ((await res.json()) as { task: { id: string } }).task.id
-}
-
-/** task_start the way an agent's op sends it (POST /api/v1/tasks/:id/start). */
-async function startTask(request: APIRequestContext, id: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const res = await request.post(`/api/v1/tasks/${id}/start`, { data: body })
-  expect(res.status(), await res.text()).toBe(202)
-  return await res.json() as Record<string, unknown>
-}
-
-async function sessionCwd(request: APIRequestContext, taskId: string): Promise<string | undefined> {
-  const res = await request.get(`/api/sessions/task/${taskId}`)
-  return ((await res.json()) as { sessions: Array<{ cwd?: string }> }).sessions[0]?.cwd
-}
-
-async function readTaskReq(request: APIRequestContext, taskId: string): Promise<TaskRow> {
-  const res = await request.get(`/api/tasks/${taskId}`)
-  expect(res.ok()).toBe(true)
-  return ((await res.json()) as { task: TaskRow }).task
-}
-
-async function waitWs(request: APIRequestContext, taskId: string, state: string, timeout = 60_000): Promise<Ws> {
-  let last: Ws | undefined
-  await expect.poll(async () => { last = (await readTaskReq(request, taskId)).workspace; return last?.state }, { timeout, message: `workspace of ${taskId} never reached ${state}` }).toBe(state)
-  return last!
-}
-
-test('an agent\'s task_start: a repository folder gets a worktree by default, a plugin\'s folder its workspace; workspace:false and the project setting keep the folder', async ({ request }) => {
-  test.setTimeout(240_000)
-  const proj = test.info().project.name
-  const repo = inHome(path.join(home, 'ws-fixture', 'app'))
-  const worktrees = path.join(home, '.open-walnut-worktrees', 'app')
-  const project = `PW default iso ${proj}`
-  const offProject = `PW default iso off ${proj}`
-  const before = await setDefault(request, true)
-  try {
-    // ── A repository folder: git-worktree, by default ──
-    const a = await newTask(request, `Fix the parser ${proj}`, project)
-    // (Its project exists now.) The project's own setup script runs after a default workspace is made, as after a picked one.
-    const scripts = await request.put(`/api/workspaces/scripts/project/${encodeURIComponent(project)}`, {
-      data: { scripts: [{ id: 'install', name: 'Install', command: 'echo "installed in $(basename "$PWD")"', setup: true }] },
-    })
-    expect(scripts.ok(), await scripts.text()).toBe(true)
-
-    const started = await startTask(request, a, { cwd: repo, message: 'Read the readme' })
-    expect(started).toMatchObject({ preparing: true, isolation: { provider: 'git-worktree', byDefault: true } })
-    const wsA = await waitWs(request, a, 'ready')
-    expect(wsA).toMatchObject({ provider: 'git-worktree', by_default: true, anchor: repo })
-    expect(path.dirname(wsA.root!)).toBe(worktrees)
-    await expect.poll(() => sessionCwd(request, a), { timeout: 30_000 }).toBe(wsA.cwd)
-    await expect.poll(async () => (await readTaskReq(request, a)).workspace?.setup?.state, { timeout: 30_000 }).toBe('done')
-
-    // ── workspace:false (the op sends no_workspace): the folder itself ──
-    const b = await newTask(request, `Edit the shared checkout ${proj}`, project)
-    const startedB = await startTask(request, b, { cwd: repo, message: 'Look around', no_workspace: true })
-    expect(startedB.preparing).toBeFalsy()
-    await expect.poll(() => sessionCwd(request, b), { timeout: 30_000 }).toBe(repo)
-    expect((await readTaskReq(request, b)).workspace).toBeUndefined()
-
-    // ── A project set to "Folder itself" overrides the global default ──
-    const meta = await request.put(`/api/projects/${encodeURIComponent(offProject)}/metadata`, { data: { isolated_workspace: 'off' } })
-    expect(meta.ok(), await meta.text()).toBe(true)
-    const c = await newTask(request, `Off project ${proj}`, offProject)
-    const startedC = await startTask(request, c, { cwd: repo, message: 'Look around' })
-    expect(startedC.preparing).toBeFalsy()
-    await expect.poll(() => sessionCwd(request, c), { timeout: 30_000 }).toBe(repo)
-    expect((await readTaskReq(request, c)).workspace).toBeUndefined()
-
-    // ── A folder a plugin claims (its marker), with higher priority than git: the plugin makes it,
-    //    with the packages its detect step suggested for the folder ──
-    const pkg = `alpha-default-${proj}`
-    const pluginFolder = inHome(path.join(home, 'ws-fixture', `marked-${proj}`))
-    fs.mkdirSync(pluginFolder, { recursive: true })
-    fs.writeFileSync(path.join(pluginFolder, 'fake-workspace.json'), JSON.stringify({ packages: [pkg] }))
-    const d = await newTask(request, `Plugin folder ${proj}`, project)
-    const startedD = await startTask(request, d, { cwd: pluginFolder, message: 'Wire it up' })
-    expect(startedD).toMatchObject({ preparing: true, isolation: { provider: 'fake-multirepo', byDefault: true } })
-    const wsD = await waitWs(request, d, 'ready', 90_000)
-    expect(wsD).toMatchObject({ provider: 'fake-multirepo', by_default: true, inputs: { packages: [pkg] } })
-    expect(fs.existsSync(path.join(wsD.root!, 'src', pkg, 'README.md'))).toBe(true)
-    await expect.poll(() => sessionCwd(request, d), { timeout: 30_000 }).toBe(wsD.cwd)
-
-    // ── Completion: the clean default worktree goes, as a picked one does ──
-    expect((await request.patch(`/api/tasks/${a}`, { data: { phase: 'COMPLETE' } })).ok()).toBe(true)
-    await waitWs(request, a, 'removed')
-    expect(fs.existsSync(wsA.root!)).toBe(false)
-    expect((await request.patch(`/api/tasks/${d}`, { data: { phase: 'COMPLETE' } })).ok()).toBe(true)
-    await waitWs(request, d, 'removed', 90_000)
-  } finally {
-    await request.put('/api/config', { data: { experimental: before } })
-  }
-})
-
-test('a person\'s draft: on by default as one chip on the folder row, × works in the folder (kept across a reload), a plain folder shows nothing', async ({ page, request }) => {
-  test.setTimeout(240_000)
-  const proj = test.info().project.name
-  const repo = inHome(path.join(home, 'ws-fixture', 'app'))
-  const plain = inHome(path.join(home, 'ws-fixture', `plain-${proj}`))
-  fs.mkdirSync(plain, { recursive: true })
-  const errors: string[] = []
-  page.on('pageerror', (e) => errors.push(e.message))
-  const before = await setDefault(request, true)
-  try {
-    await openHome(page)
-
-    // ── A repository: the chip names the provider; no body grows the bar ──
-    const draft = await openDraftOnCwd(page, repo)
-    const chip = draft.getByTestId('draft-workspace-auto')
-    await expect(chip).toContainText('Git worktree', { timeout: 30_000 })
-    await expect(draft.getByTestId('draft-workspace-row')).toHaveCount(0)
-    await shot(page, 'draft-default-chip', draftPanel(page).locator('.session-panel-input'), 8)
-    const menu = await openDraftSettings(draft)
-    await expect(menu.getByTestId('draft-menu-workspace')).toHaveAttribute('aria-pressed', 'true')
-    await page.keyboard.press('Escape')
-    await expect(draftTaskMenu(page)).toHaveCount(0)
-    const response = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/sessions/quick-start')
-    await draftComposer(page).fill(`Default draft ${proj}`)
-    await draftComposer(page).press('Enter')
-    const body = await (await response).json() as Record<string, unknown>
-    expect(body.preparing).toBe(true)
-    const ws = await waitWs(request, String(body.taskId), 'ready')
-    expect(ws.provider).toBe('git-worktree')
-    await expect.poll(() => sessionCwd(request, String(body.taskId)), { timeout: 30_000 }).toBe(ws.cwd)
-
-    // ── × on the chip: the folder itself, also after a reload ──
-    const second = await openDraftOnCwd(page, repo)
-    await expect(second.getByTestId('draft-workspace-auto')).toBeVisible({ timeout: 30_000 })
-    await second.getByTestId('draft-workspace-auto-off').click()
-    await expect(second.getByTestId('draft-workspace-auto')).toHaveCount(0)
-    // The draft (its text and its × choice) is saved before the reload.
-    const saved = page.waitForResponse((r) => r.request().method() === 'PUT' && new URL(r.url()).pathname === '/api/drafts', { timeout: 30_000 })
-    await draftComposer(page).fill(`Shared checkout ${proj}`)
-    await saved
-    await page.reload()
-    await expect(page.locator('.main-page')).toBeVisible({ timeout: 90_000 })
-    const reloaded = draftPanel(page)
-    await expect(draftComposer(page)).toHaveValue(`Shared checkout ${proj}`, { timeout: 30_000 })
-    await expect(reloaded.getByTestId('draft-workspace-auto')).toHaveCount(0)
-    const offMenu = await openDraftSettings(reloaded)
-    await expect(offMenu.getByTestId('draft-menu-workspace')).toHaveAttribute('aria-pressed', 'false')
-    await page.keyboard.press('Escape')
-    const response2 = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/sessions/quick-start')
-    await draftComposer(page).press('Enter')
-    const body2 = await (await response2).json() as Record<string, unknown>
-    expect(body2.preparing).toBeFalsy()
-    await expect.poll(() => sessionCwd(request, String(body2.taskId)), { timeout: 30_000 }).toBe(repo)
-    expect((await readTaskReq(request, String(body2.taskId))).workspace).toBeUndefined()
-
-    // ── Sent before the host answered (its answer held back): the server picks the claiming provider ──
-    let release!: () => void
-    const held = new Promise<void>((r) => { release = r })
-    await page.route('**/api/workspaces/providers**', async (route) => { await held; await route.continue().catch(() => {}) })
-    const early = await openDraftOnCwd(page, repo)
-    await expect(early.getByTestId('draft-workspace-auto')).toHaveCount(0)
-    const response4 = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/sessions/quick-start')
-    await draftComposer(page).fill(`Early start ${proj}`)
-    await draftComposer(page).press('Enter')
-    const r4 = await response4
-    expect(r4.request().postDataJSON().workspace).toEqual({ auto: true })
-    const body4 = await r4.json() as Record<string, unknown>
-    expect(body4.preparing).toBe(true)
-    expect((await waitWs(request, String(body4.taskId), 'ready')).provider).toBe('git-worktree')
-    release()
-    await page.unroute('**/api/workspaces/providers**')
-
-    // ── A plain folder nothing claims: no chip, no workspace ──
-    const third = await openDraftOnCwd(page, plain)
-    await page.waitForResponse((r) => r.url().includes('/api/workspaces/providers'), { timeout: 30_000 }).catch(() => {})
-    await expect(third.getByTestId('draft-workspace-auto')).toHaveCount(0)
-    await expect(third.getByTestId('draft-workspace-row')).toHaveCount(0)
-    const response3 = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/sessions/quick-start')
-    await draftComposer(page).fill(`Plain folder ${proj}`)
-    await draftComposer(page).press('Enter')
-    const body3 = await (await response3).json() as Record<string, unknown>
-    expect(body3.preparing).toBeFalsy()
-    await expect.poll(() => sessionCwd(request, String(body3.taskId)), { timeout: 30_000 }).toBe(plain)
-    expect(errors).toEqual([])
-  } finally {
-    await request.put('/api/config', { data: { experimental: before } })
-  }
 })

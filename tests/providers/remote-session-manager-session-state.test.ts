@@ -22,14 +22,6 @@ import { WALNUT_HOME } from '../../src/constants.js'
 
 const TEST_TARGET = { hostname: '127.0.0.1', user: undefined, port: undefined }
 
-/**
- * What a fresh link pushes on its own in the background (skills, hooks, triggers, the host
- * slice, the bridge, cron metadata): it may land in a spy installed right after the attach,
- * and none of it is the session's command under test.
- */
-const LINK_PUSHES = new Set(['skills.sync', 'hooks.configure', 'triggers.configure', 'host.slice', 'bridge.configure', 'cron.metadata'])
-const sessionCalls = (calls: unknown[][]): unknown[][] => calls.filter(([command]) => !LINK_PUSHES.has(command as string))
-
 describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
   let daemon: MockDaemon
   let mgr: RemoteSessionManager
@@ -383,7 +375,7 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
       const prepare = vi.spyOn(attached, 'prepareOutbound').mockImplementation(async (text) => text)
       try {
         expect(await attached.writeMessage('next')).toBe(true)
-        expect(sessionCalls(send.mock.calls)).toEqual([['send', { sid: 'sid-test', message: 'next' }]])
+        expect(send.mock.calls).toEqual([['send', { sid: 'sid-test', message: 'next' }]])
       } finally {
         capability.mockRestore()
         send.mockRestore()

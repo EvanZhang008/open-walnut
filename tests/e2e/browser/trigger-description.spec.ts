@@ -126,9 +126,7 @@ test('the pill, the flyout and the Routines row say what each trigger does; the 
     // The whole text is on hover even though only three lines show: it peeks in place
     // (web/src/utils/truncation-peek.ts), with no native title left to open a tooltip.
     await text.hover()
-    await expect(text).toHaveAttribute('data-peek-open', '')
-    await expect.poll(() => text.evaluate((el) => el.scrollHeight <= el.clientHeight + 1)).toBe(true)
-    await expect(page.getByTestId('truncation-peek')).toHaveCount(0)
+    await expect(page.getByTestId('truncation-peek')).toHaveText(LONG)
     await expect(text).not.toHaveAttribute('title', /./)
     // Sits under the heading (name + cadence), above the check command.
     const [headBox, textBox, runBox] = await Promise.all([
@@ -138,9 +136,7 @@ test('the pill, the flyout and the Routines row say what each trigger does; the 
     ])
     expect(textBox!.y).toBeGreaterThanOrEqual(headBox!.y + headBox!.height - 1)
     expect(runBox!.y).toBeGreaterThanOrEqual(textBox!.y + textBox!.height - 1)
-    // Back off the description: exactly three 18px lines are shown again.
-    await pill.hover()
-    await expect(text).not.toHaveAttribute('data-peek-open', '')
+    // Exactly three 18px lines, the rest clipped (WebKit included).
     const clamp = await text.evaluate((el) => ({
       height: el.getBoundingClientRect().height, scroll: el.scrollHeight, client: el.clientHeight,
     }))

@@ -226,12 +226,3 @@ export function noteSettledLine(s: QueueStore, m: QueuedMessage): void {
 export async function settledLineUuid(messageId: string): Promise<string | undefined> {
   return (await getStore()).settled?.[messageId];
 }
-
-/**
- * A row with this id already went out as a line (it left its queue written). Only a check that
- * it was delivered: a caller that sends such a row again reads settledLineUuid and asks
- * resendAlreadyRan first (sessions/resend-already-ran.ts).
- */
-export async function wentOutAsLine(messageId: string): Promise<boolean> {
-  return !!(await getStore()).settled?.[messageId];
-}

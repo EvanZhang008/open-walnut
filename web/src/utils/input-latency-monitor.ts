@@ -20,7 +20,6 @@
  * was smooth, and there was no number anywhere for either. Profiling the app
  * process caught it idle: passive sampling misses latency the user feels.
  */
-import { inMacApp } from './mac-app';
 
 const WINDOW_MS = 30_000;
 /** Above this a keystroke is visibly late. */
@@ -35,7 +34,10 @@ export type InputClient = 'mac-app' | 'browser';
 
 /** The Mac app's WKWebView exposes its native bridges; a browser never does. */
 export function detectInputClient(w: Window = window): InputClient {
-  return inMacApp(w) ? 'mac-app' : 'browser';
+  const handlers = (w as Window & {
+    webkit?: { messageHandlers?: Record<string, unknown> };
+  }).webkit?.messageHandlers;
+  return handlers && ('walnutChrome' in handlers || 'walnutClipboard' in handlers) ? 'mac-app' : 'browser';
 }
 
 export interface LatencyWindow {

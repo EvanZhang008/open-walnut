@@ -160,6 +160,7 @@ export function PluginFieldFlyout({ open, anchorRef, anchorPoint, field, current
       className={`task-kebab-project-opt${isCurrent ? ' active' : ''}`}
       onClick={(e) => { e.stopPropagation(); onPick(value); onClose(); }}
     >
+      <span className="task-kebab-project-check">{isCurrent ? '✓' : ''}</span>
       <span className="task-kebab-project-opt-name">
         {label}
         {isSuggested && <span className="plugin-field-current-mark"> · current</span>}

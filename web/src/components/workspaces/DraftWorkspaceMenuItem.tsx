@@ -14,7 +14,6 @@
  */
 import { log } from '@/utils/log';
 import { setDraftWorkspace, useDraftWorkspace } from './draft-workspace-store';
-import { autoGivesWay } from './draft-workspace-model';
 import '@/styles/workspaces.css';
 
 export function DraftWorkspaceMenuItem({ draftId, hasFolder, onDone }: {
@@ -25,8 +24,7 @@ export function DraftWorkspaceMenuItem({ draftId, hasFolder, onDone }: {
   onDone: () => void;
 }) {
   const choice = useDraftWorkspace(draftId);
-  // A default with nothing to make (nothing claims the folder) reads as off.
-  const on = choice.enabled && hasFolder && !autoGivesWay(choice);
+  const on = choice.enabled && hasFolder;
   return (
     <>
       <button
@@ -42,12 +40,12 @@ export function DraftWorkspaceMenuItem({ draftId, hasFolder, onDone }: {
             : 'Give this task its own working copy (a git worktree, or a plugin workspace)'}
         onClick={(e) => {
           e.stopPropagation();
-          setDraftWorkspace(draftId, { enabled: !on, touched: true, auto: false });
+          setDraftWorkspace(draftId, { enabled: !on });
           log.info('workspace', 'draft option toggled', { draftId, enabled: !on, via: 'more-menu' });
           onDone();
         }}
       >
-        <span className={`draft-workspace-switch${on ? ' is-on' : ''}`} aria-hidden />
+        <span className="draft-workspace-check" aria-hidden>{on ? '✓' : ''}</span>
         <span className="draft-workspace-menu-text">
           <span>Isolated workspace</span>
           {!hasFolder && <span className="draft-workspace-menu-hint" data-testid="draft-menu-workspace-hint">Pick a folder first</span>}

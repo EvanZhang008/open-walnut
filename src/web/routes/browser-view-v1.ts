@@ -11,9 +11,6 @@
  *   POST /api/v1/browser/view/grant { task, tab, device }     "Show it live": the extension opens its page that turns live pictures on
  *   POST /api/v1/browser/view/push   the extension's pictures while someone watches (browser-view-stream.ts)
  *   POST /api/v1/browser/handback    the extension: the person pressed Hand back on the tab's own pill
- *   GET  /api/v1/browser/view/replay?task=<id>          the task's recorded steps, oldest first (a person's request only)
- *   GET  /api/v1/browser/view/replay/frame?task=&id=    one step's picture (a person's request only)
- *   POST /api/v1/browser/view/replay  the extension's picture of an agent's step (core/browser-control/replay-store.ts)
  *
  * A tab id is unique within one browser only: a frame and a Stop name the browser (device) too, and
  * one that leaves it out is answered only when it names one tab. A test run gets nothing of the
@@ -35,7 +32,6 @@ import { endStream, streamFrame, streamPush, _resetBrowserStreamsForTesting } fr
 import { endSignIn, openAsk } from '../../core/browser-control/sign-in-ask.js'
 
 const hub = () => import('../../core/browser-control/hub.js')
-const replays = () => import('../../core/browser-control/replay-store.js')
 const sites = () => import('../../core/browser-control/sites.js')
 
 export interface ViewDeps {
@@ -101,9 +97,7 @@ export function mountBrowserView(r: Router, d: ViewDeps): void {
         const a = openAsk(t.device, t.tab, `task:${taskId}`)
         return a ? { ...t, signIn: { id: a.id, at: new Date(a.at).toISOString(), ...(a.site ? { site: a.site } : {}), ...(a.note ? { note: a.note } : {}) } } : t
       })
-      // The task's recorded steps: the pill offers the replay after its tabs are gone too.
-      const replay = await (await replays()).replaySummary(taskId).catch(() => undefined)
-      return { taskId, ...view, tabs, browsers: h.connected().length, ...(replay ? { replay } : {}) }
+      return { taskId, ...view, tabs, browsers: h.connected().length }
     })
   })
 
@@ -301,41 +295,6 @@ export function mountBrowserView(r: Router, d: ViewDeps): void {
       log.web.info('browser view hand back', { device, owner, tab, by: 'person', from: 'page', signIn: !!ask })
       return { ok: true, handedBack: true }
     })
-  })
-
-  // The Browser replay (replay-store.ts). Its pictures are not masked, as a live frame is not: the person's alone.
-  r.get('/browser/view/replay', (req, res, next) => {
-    void d.run(res, next, async () => {
-      const h = await hub()
-      if (!d.personCaller(req)) throw new h.BrowserError('Only a person watches the Browser replay.', 403, 'human_only')
-      const taskId = taskOf(req.query.task)
-      if (!taskId) throw new h.BrowserError('Which task: ?task=<id>.', 400, 'bad_request')
-      const r = await replays()
-      const { readSites } = await sites()
-      const steps = (await r.listSteps(taskId)).map(({ file, ...s }) => ({ ...s, picture: !!file }))
-      return { taskId, steps, days: (await readSites()).replayDays }
-    })
-  })
-
-  r.get('/browser/view/replay/frame', (req, res, next) => {
-    void d.run(res, next, async () => {
-      const h = await hub()
-      if (!d.personCaller(req)) throw new h.BrowserError('Only a person watches the Browser replay.', 403, 'human_only')
-      const taskId = taskOf(req.query.task)
-      const id = typeof req.query.id === 'string' ? req.query.id.slice(0, 40) : ''
-      if (!taskId || !id) throw new h.BrowserError('Which task and step: ?task=<id>&id=<step>.', 400, 'bad_request')
-      const pic = await (await replays()).stepPicture(taskId, id)
-      if (!pic) throw new h.BrowserError('That step has no picture (deleted after the days kept, or never taken).', 404, 'no_picture')
-      // JSON, as the live frame: the web's client adds the device's token, which an <img> would not.
-      res.setHeader('Cache-Control', 'private, max-age=3600')
-      return { id, image: `data:image/jpeg;base64,${pic.toString('base64')}` }
-    })
-  })
-
-  r.post('/browser/view/replay', (req, res, next) => {
-    const device = d.extensionOf(req, res)
-    if (!device) return
-    void d.run(res, next, async () => (await replays()).acceptStep(await hub(), device, (req.body ?? {}) as Record<string, unknown>))
   })
 
   // The extension's pictures while someone watches (browser-view-stream.ts).

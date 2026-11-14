@@ -55,17 +55,8 @@ final class RoutinesUITests: XCTestCase {
     private func openRoutines(_ app: XCUIApplication) {
         app.tabBars.buttons["Settings"].tap()
         let entry = app.buttons["settings.routines"].firstMatch
-        // Under the server's sections and Passwords: screens down at the largest text sizes,
-        // where one swipe did not reach it. A drag of part of a screen at a time, so a swipe's
-        // fling never carries it past between two looks.
-        _ = entry.waitForExistence(timeout: 5)
-        var drags = 0
-        while !(entry.exists && entry.isHittable), drags < 12 {
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
-                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)))
-            drags += 1
-        }
-        XCTAssertTrue(entry.exists && entry.isHittable, "no Routines row in Settings")
+        if !entry.waitForExistence(timeout: 10) { app.swipeUp() }
+        XCTAssertTrue(entry.waitForExistence(timeout: 10), "no Routines row in Settings")
         entry.tap()
         XCTAssertTrue(element(app, "routines.group.global").waitForExistence(timeout: 20), "the routines never loaded")
     }
@@ -247,16 +238,9 @@ final class RoutinesUITests: XCTestCase {
         backupRun.tap()
         let backupOutcome = element(app, "routines.runOutcome.r-backup")
         XCTAssertTrue(backupOutcome.waitForExistence(timeout: 5))
-        // Said for four seconds once the run lands: read as fast as the looks come, since a
-        // predicate wait on a slow CI simulator looked once a few seconds and missed it whole.
-        var said = ""
-        let until = Date().addingTimeInterval(12)
-        while Date() < until {
-            guard backupOutcome.exists else { break }
-            said = backupOutcome.label
-            if said.contains("Ran just now") { break }
-        }
-        XCTAssertTrue(said.contains("Ran just now"), "Run now never said how the run ended: \"\(said)\"")
+        let ranOk = expectation(for: NSPredicate(format: "label CONTAINS %@", "Ran just now"), evaluatedWith: backupOutcome)
+        wait(for: [ranOk], timeout: 12)
+        usleep(500_000)
         XCTAssertLessThanOrEqual(backupOutcome.frame.maxY, tabTop(app), "\"Ran just now\" is under the tab bar")
         shot("26-ran-just-now")
         let cleared = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: backupOutcome)
@@ -372,8 +356,7 @@ final class RoutinesUITests: XCTestCase {
         XCTAssertTrue(checkFact.exists, "the Check fact does not say what it runs and when it last checked (the box says it failed)")
         XCTAssertTrue(element(app, "routines.error.r-marina-1").label.contains("exit code 2: the pipeline page timed out"))
         XCTAssertEqual(element(app, "routines.errorNext.r-marina-1").label, "Fix the check command with Edit.")
-        // The fixture's fire was 9 min before it was made; the row is opened a minute or so later.
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label MATCHES %@", "Woke its task once, (9|1[0-2]) min ago · at most 6 a day")).firstMatch.exists,
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label MATCHES %@", "Woke its task once, 9 min ago · at most 6 a day")).firstMatch.exists,
                       "no Activity fact in plain words with its daily budget")
         XCTAssertFalse(element(app, "routines.sends.r-marina-1").exists, "the fold starts open")
         reveal(app, sendsFold)
@@ -486,8 +469,7 @@ final class RoutinesUITests: XCTestCase {
         stopped.tap()
         XCTAssertTrue(app.staticTexts["Stopped after 5 failed checks"].waitForExistence(timeout: 5))
         // Stopped after failed checks, so its last check failed (never "Not checked yet").
-        // Six minutes before the fixture was made, so 6m to 9m by the time it is opened; nothing after it.
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label MATCHES %@", "(?s).*\\nLast check: [6-9]m ago")).firstMatch.exists,
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label ENDSWITH %@", "Last check: 6m ago")).firstMatch.exists,
                       "the stopped trigger's last check does not say when (the box says it failed)")
         XCTAssertTrue(element(app, "routines.error.r-marina-stopped").label.contains("exit 1: release.sh"))
         XCTAssertEqual(element(app, "routines.errorNext.r-marina-stopped").label, "Fix the check command with Edit, then Resume.")
@@ -892,9 +874,6 @@ final class RoutinesUITests: XCTestCase {
         shot("25b-ax-long-error-full")
     }
 
-    /// The folds are a view choice (`ViewMemory`): every test starts with none folded, so a run
-    /// that stops with Acme folded never hides Acme's rows from the tests after it (2026-11-14,
-    /// CI: three later tests found no Acme row). The relaunch here keeps them on purpose.
     func testAFoldedSectionStaysFoldedAfterARelaunch() throws {
         var app = try launchPaired()
         openRoutines(app)
@@ -912,9 +891,7 @@ final class RoutinesUITests: XCTestCase {
         // The empty right end of the header folds too.
         header.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
         let folded = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: row)
-        // A slow CI simulator looks every few seconds: 5 s timed out there, and the tests after
-        // it found Acme folded.
-        wait(for: [folded], timeout: 10)
+        wait(for: [folded], timeout: 5)
         let foldedHeader = element(app, "routines.group.project:Acme")
         XCTAssertEqual(foldedHeader.value as? String, "Collapsed")
         settle()
@@ -928,8 +905,7 @@ final class RoutinesUITests: XCTestCase {
         shot("06-acme-folded")
 
         app.terminate()
-        // Keeps what the first launch left, the fold included (a launch erases kept views).
-        app = UITestLaunch.launch(arguments + [UITestLaunch.keepViewsArgument, "YES"])
+        app = UITestLaunch.launch(arguments)
         XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 60))
         openRoutines(app)
         let again = element(app, "routines.group.project:Acme")

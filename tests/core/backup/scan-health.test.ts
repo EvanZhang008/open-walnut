@@ -9,7 +9,6 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { EXCLUDED_DIRS, findCanonicalSqlite, isExcluded, scanDataDir } from '../../../src/core/backup/scan.js'
-import { CONFIG_HISTORY_DIR_NAME } from '../../../src/core/config-history.js'
 
 let root: string
 
@@ -60,16 +59,5 @@ describe('backup excludes the Places store', () => {
     const scanned = (await scanDataDir(root)).map((e) => e.path)
     expect(scanned).toContain('notes/trips/places/lisbon.md')
     expect(scanned.some((p) => p.startsWith('places/'))).toBe(false)
-  })
-})
-
-describe('backup leaves out the dated copies of config.yaml', () => {
-  it('config.yaml is backed up, its history folder is not', async () => {
-    expect(EXCLUDED_DIRS.has(CONFIG_HISTORY_DIR_NAME)).toBe(true)
-    await write('config.yaml', 'version: 1\n')
-    await write(`${CONFIG_HISTORY_DIR_NAME}/config-20261114T101112.123Z-0123456789ab.yaml`, 'version: 1\n')
-    const scanned = (await scanDataDir(root)).map((e) => e.path)
-    expect(scanned).toContain('config.yaml')
-    expect(scanned.some((p) => p.startsWith(`${CONFIG_HISTORY_DIR_NAME}/`))).toBe(false)
   })
 })

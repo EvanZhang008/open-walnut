@@ -164,7 +164,9 @@ async function searchHere(req: Request, res: Response, next: NextFunction, parti
     // CLI child now — by the time the agent query lands, boot is done.
     if (!slim) prewarmAgentSearchChild()
 
-    const results = await search(q, { types, limit, semanticDeadlineMs })
+    const { areaSearchVisibility } = await import('../middleware/router-area-reader.js')
+    const visibility = areaSearchVisibility(res)
+    const results = await search(q, { types, limit, semanticDeadlineMs, visibility })
     const { PARTIAL_RESULTS } = await import('../../replica/search-kept.js')
     res.json({ results: slim ? await toSlimResults(results) : results, ...(partial ? { partial: { ...PARTIAL_RESULTS } } : {}) })
   } catch (err) {

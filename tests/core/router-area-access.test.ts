@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 import type { RouterAreasFile } from '../../src/core/router/areas.js';
-import type { GatewayPolicyDeps } from '../../src/core/router/gateway-policy.js';
+import type { SourceReaderDeps } from '../../src/core/router/source-reader.js';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('router-area-access'));
@@ -37,13 +37,13 @@ vi.mock('../../src/core/router/areas.js', async (orig) => ({
   readRouterAreas: async () => { if (fake.areasError) throw fake.areasError; return fake.file; },
 }));
 
-const { areaOpsForCaller, ROUTER_AREA_OPS } = await import('../../src/core/router/gateway-policy.js');
+const { areaOpsForCaller, ROUTER_AREA_OPS, ROUTER_WORK_OPS } = await import('../../src/core/router/gateway-policy.js');
 const { routerAreaAccess } = await import('../../src/web/middleware/router-area-access.js');
 const { handleGatewayCapability } = await import('../../src/core/peers/capability-router.js');
 const { PeerThrottle } = await import('../../src/core/peers/peer-throttle.js');
 const { listOps } = await import('../../src/ops/index.js');
 
-const injected: GatewayPolicyDeps = {
+const injected: SourceReaderDeps = {
   async readAreas() { if (fake.areasError) throw fake.areasError; return fake.file; },
   async session(sid) { return (fake.sessions[sid] ?? null) as never; },
   async task(id) { if (fake.taskError) throw fake.taskError; return fake.tasks[id] as never; },
@@ -78,7 +78,6 @@ beforeEach(() => {
       'role-only': { profile: { areaRole: 'router' } },
       'role-wins': { taskId: 't-org-router', profile: { areaId: 'alpha', areaRole: 'work' } },
       conflict: { taskId: 't-old', profile: { areaId: 'beta', areaRole: 'work' } },
-      'router-conflict': { taskId: 't-assigned', profile: { areaId: 'alpha', areaRole: 'router' } },
     },
     tasks: {
       't-plain': { id: 't-plain' },
@@ -98,23 +97,19 @@ beforeEach(() => {
 });
 
 const NONE = new Set<string>();
-// Since 2026-11-14 only a router is held to its two ops: an older build's area mark or receiver
-// ('work') profile on routed work leaves it ordinary, with its full tools.
 const cases: Array<[string, ReadonlySet<string> | undefined]> = [
   ['ordinary', undefined],
-  ['legacy', undefined],
+  ['legacy', ROUTER_WORK_OPS],
   ['sibling-router', ROUTER_AREA_OPS],
-  ['sibling-work', undefined],
+  ['sibling-work', ROUTER_WORK_OPS],
   ['unassigned-router', ROUTER_AREA_OPS],
   ['assigned', ROUTER_AREA_OPS],
-  // Listed in an area's tasks but not its router: ordinary work (areas.ts taskArea).
-  ['listed', undefined],
-  ['taskless-work', undefined],
+  ['listed', ROUTER_WORK_OPS],
+  ['taskless-work', ROUTER_WORK_OPS],
   ['taskless-router', ROUTER_AREA_OPS],
   ['role-only', ROUTER_AREA_OPS],
-  ['role-wins', ROUTER_AREA_OPS],
-  ['conflict', undefined],
-  ['router-conflict', NONE],
+  ['role-wins', ROUTER_WORK_OPS],
+  ['conflict', NONE],
 ];
 
 describe('areaOpsForCaller', () => {
@@ -141,13 +136,13 @@ describe('areaOpsForCaller', () => {
     fake.file = registry();
     fake.sessions.listed = { taskId: 't-listed' };
     fake.tasks['t-listed'] = { id: 't-listed-other', router_area_id: 'beta', org_role: 'router' };
-    expect(await areaOpsForCaller('listed')).toBeUndefined();
+    expect(await areaOpsForCaller('listed')).toEqual(ROUTER_WORK_OPS);
   });
 
   it('a known session gets no op while the registry or its task cannot be read, ordinary ones included', async () => {
     fake.areasError = new Error('Unexpected token');
     expect(await areaOpsForCaller('ordinary', injected)).toEqual(NONE);
-    expect(await areaOpsForCaller('taskless-router', injected)).toEqual(NONE);
+    expect(await areaOpsForCaller('taskless-work', injected)).toEqual(NONE);
     fake.areasError = undefined;
     fake.taskError = new Error('database is locked');
     expect(await areaOpsForCaller('ordinary', injected)).toEqual(NONE);
@@ -157,6 +152,7 @@ describe('areaOpsForCaller', () => {
 // The HTTP tool belt and the raw gateway both ask areaOpsForCaller, so they agree on every case.
 const ROUTER_PATHS: Array<[string, string, string]> = [
   ['router_context', 'GET', '/v1/router/context'], ['router_route', 'POST', '/v1/router/route'],
+  ['router_item', 'GET', '/v1/router/item'], ['router_work', 'POST', '/v1/router/work'],
 ];
 
 async function beltAllows(sid: string, method: string, path: string): Promise<boolean> {
@@ -186,7 +182,7 @@ describe('the HTTP belt and the raw gateway', () => {
       if (want !== undefined) {
         const refused = await handleGatewayCapability('tools.call', sid, { name: 'task_list', args: {} }, '__local__', deps());
         expect(refused.ok).toBe(false);
-        if (!refused.ok) expect(refused.error.message).toMatch(/only its routing tools/);
+        if (!refused.ok) expect(refused.error.message).toMatch(/only its area routing tools/);
       }
     });
   }

@@ -110,7 +110,7 @@ function seedTask(id: string, title: string) {
 async function setFallback(fb: { engine: string; model?: string; model_label?: string } | null): Promise<void> {
   const cfg = await getConfig()
   const rest = { ...cfg.defaults } as Record<string, unknown>
-  rest.fallback_engine = undefined // a section write merges: undefined removes the key
+  delete rest.fallback_engine
   await updateConfig({ defaults: { ...rest, ...(fb ? { fallback_engine: fb } : {}) } as never })
 }
 
@@ -265,7 +265,7 @@ describe('fallback engine E2E', () => {
       } finally {
         const after = await getConfig()
         const rest = { ...after.defaults } as Record<string, unknown>
-        rest.engine_split = undefined
+        delete rest.engine_split
         await updateConfig({ defaults: rest as never })
       }
 

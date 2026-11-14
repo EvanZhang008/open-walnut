@@ -3001,10 +3001,6 @@ export async function completeTaskSessions(
     // only Ollama slot, so the next session waited behind it).
     const acpToStop: Pick<SessionRecord, 'claudeSessionId' | 'host' | 'acpRuntimeId'>[] = [];
     const toReap: { claudeSessionId: string; host?: string }[] = [];
-    // Each row this marks stopped, announced once the write commits: a status change no
-    // subscriber hears leaves them reading it as alive (2026-11-14: a completed task's
-    // isolated workspace waited for its session's stop, which never came, and stayed).
-    const stoppedRows: SessionRecord[] = [];
     let stopAtTurnEnd: string | undefined;
 
     const insertCols = [...SESSION_COLUMNS, 'payload'];
@@ -3068,11 +3064,9 @@ export async function completeTaskSessions(
         }
         ins.run(bound);
         noteSessionRowTouched(session.claudeSessionId);
-        stoppedRows.push(session);
         updated++;
       }
     });
-    for (const session of stoppedRows) emitSessionStatusChanged(session, {}, ['*'], { source: 'session-tracker' });
     // Still under the lock every record write takes: the status write that
     // ends this turn lands after the wait is registered.
     if (stopAtTurnEnd) {

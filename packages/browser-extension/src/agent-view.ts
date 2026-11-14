@@ -92,17 +92,16 @@ export async function bringUpForCommand(tabId: number): Promise<void> {
 /** Why a frame has no picture this time. */
 export type NoFrame = 'behind' | 'busy' | 'minimized' | 'covered' | 'no_permission' | 'not_web' | 'walnut_page' | 'changed' | 'failed' | 'discarded'
 
-/** The picture at most `maxW` pixels wide (a JPEG of `quality`), or as it came when it is no wider. */
-export async function shrink(dataUrl: string, maxW = FRAME_MAX_W, quality = 0.6): Promise<string> {
+async function shrink(dataUrl: string): Promise<string> {
   try {
     const blob = await (await fetch(dataUrl)).blob()
     const full = await createImageBitmap(blob)
-    if (full.width <= maxW) { full.close(); return dataUrl }
-    const h = Math.round(full.height * maxW / full.width)
-    const canvas = new OffscreenCanvas(maxW, h)
-    canvas.getContext('2d')!.drawImage(full, 0, 0, maxW, h)
+    if (full.width <= FRAME_MAX_W) { full.close(); return dataUrl }
+    const h = Math.round(full.height * FRAME_MAX_W / full.width)
+    const canvas = new OffscreenCanvas(FRAME_MAX_W, h)
+    canvas.getContext('2d')!.drawImage(full, 0, 0, FRAME_MAX_W, h)
     full.close()
-    const out = await canvas.convertToBlob({ type: 'image/jpeg', quality })
+    const out = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.6 })
     const bytes = new Uint8Array(await out.arrayBuffer())
     let s = ''
     for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000))

@@ -14,7 +14,7 @@
  * children", then 2026-11-02: "rename this to watching ... same wathcing as regular home pannel" and "if
  * a taks is lock also show here, show icon of watch or lock"): the watched ones (Home's Watching,
  * org-pins.ts) and the ones whose session panel is locked, one short line each, a little indented, an
- * eye or a lock (or both) saying why, then its own state's dot; a click opens it on Home, ×
+ * eye or a lock (or both) saying why, then its own state's dot; a click opens it beside the page, ×
  * stops watching it.
  */
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
@@ -26,7 +26,6 @@ import { timeAgo } from '@/utils/time';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { avatarColor, initials, rowAvatarColor, type ChannelRow, type ChannelState, type MovedRow } from './org-channels-model';
 import { usePointerHold } from './hold-order';
-import { useOpenTask } from '@/hooks/useOpenTask';
 import { OrgEditableName } from './OrgEditableName';
 import { OrgRouterSection } from './OrgRouterSection';
 import { OrgReorgReminder } from './OrgReorgReminder';
@@ -140,11 +139,10 @@ function KeptWhy({ watched, locked }: { watched: boolean; locked: boolean }) {
 }
 
 /** The tasks kept in view under one row (keptByRow), as its own children. Inside the list's listbox each
- *  is an option of a group (all a listbox may hold): Enter opens it on Home (useOpenTask); on a watched one Delete stops
+ *  is an option of a group (all a listbox may hold): Enter opens it; on a watched one Delete stops
  *  watching it, and the × is the pointer's way to the same. A task only locked goes once its panel is
  *  unlocked, where it was locked. */
-function KeptChildren({ row, kept, open, onUnwatch }: { row: ChannelRow; kept: readonly KeptTask[]; open?: ReadonlySet<string>; onUnwatch: (taskId: string) => void }) {
-  const openTask = useOpenTask();
+function KeptChildren({ row, kept, open, onOpenTask, onUnwatch }: { row: ChannelRow; kept: readonly KeptTask[]; open?: ReadonlySet<string>; onOpenTask: (id: string) => void; onUnwatch: (taskId: string) => void }) {
   if (!kept.length) return null;
   return (
     <div className="org-watched" role="group" aria-label={`Kept in view, under ${row.vpName ?? row.name}`} data-testid="org-watched" data-key={row.key}>
@@ -164,7 +162,7 @@ function KeptChildren({ row, kept, open, onUnwatch }: { row: ChannelRow; kept: r
               className="org-watched-open"
               data-testid="org-watched-open"
               title={`${title}: ${USER_STATE_LABELS[st]}`}
-              onClick={() => openTask(t.id)}
+              onClick={() => onOpenTask(t.id)}
               onKeyDown={(e) => { if (watched && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); onUnwatch(t.id); } }}
             >
               <KeptWhy watched={watched} locked={locked} />
@@ -249,11 +247,12 @@ interface Props {
   keptOf?: (row: ChannelRow) => readonly KeptTask[];
   /** The tasks open beside the page: their rows wear a light tint. */
   openTaskIds?: ReadonlySet<string>;
+  onOpenTask?: (taskId: string) => void;
   onUnwatch?: (taskId: string) => void;
   now: number;
 }
 
-export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, total, vps, selectedKey, query, onQuery, onSelect, onOpenChart, onNewRouter, keptOf, openTaskIds, onUnwatch, now }: Props) {
+export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, total, vps, selectedKey, query, onQuery, onSelect, onOpenChart, onNewRouter, keptOf, openTaskIds, onOpenTask, onUnwatch, now }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   const orgName = useOrgSettings();
   // A right-click selects a word in WebKit before the menu opens: that selection is the
@@ -283,8 +282,8 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
   const shown = hold.shown;
   // Up and Down walk the CEO, the VPs, then the routers, in the order they are drawn.
   const keys = [main.key, ...shown.map((r) => r.key), ...routers.map((r) => r.key)];
-  const keptUnder = (r: ChannelRow) => (keptOf && onUnwatch
-    ? <KeptChildren row={r} kept={keptOf(r)} open={openTaskIds} onUnwatch={onUnwatch} />
+  const keptUnder = (r: ChannelRow) => (keptOf && onOpenTask && onUnwatch
+    ? <KeptChildren row={r} kept={keptOf(r)} open={openTaskIds} onOpenTask={onOpenTask} onUnwatch={onUnwatch} />
     : null);
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;

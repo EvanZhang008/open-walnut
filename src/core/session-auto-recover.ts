@@ -72,7 +72,6 @@ import {
 } from './sessions/restart-loss.js'
 import { log } from '../logging/index.js'
 import { hasUnreadFirstLine, setStartDeathHandler } from './sessions/start-recovery.js'
-import type { TurnRetrier } from './sessions/turn-run.js'
 
 export { AUTO_RECOVER_SOURCE, resolveAutoRecoverConfig }
 export type { AutoRecoverConfig, AutoRecoverDeps, AutoRecoverTask } from './sessions/auto-recover-env.js'
@@ -964,31 +963,6 @@ export function startSessionAutoRecover(
     },
     instance: sar,
   }
-}
-
-/**
- * Restart and start recovery's row of the session's turn (sessions/turn-run.ts). It holds a failed or
- * dead end only (a clean answer is no death to undo), for as long as holdsHandBack does; a resume it
- * already sent is the resumed session's own turn end, whose errors hand back as usual (not a first
- * line sent again, start_died: a process that dies before reading it is that attempt's failure, which
- * recovery retries).
- */
-export const turnRetrier: TurnRetrier<'restart_recovery'> = {
-  reason: 'restart_recovery',
-  sources: [AUTO_RECOVER_SOURCE],
-  // A process that ended before it read its first line: recovery sends that line again (sessions/start-recovery.ts).
-  takes: (end) => end.event === 'error' && end.startRecovery === true,
-  wait: (rec, q) => {
-    if (!q.failed || !instance) return null
-    const loss = rec.restartLoss
-    if (q.ownEnd && loss?.state === 'sent' && loss.cause !== 'start_died') return null
-    if (!instance.holdsHandBack(rec)) return null
-    // Only a loss that waits for its resume speaks for this death in words (an older one may be stale).
-    return { reason: 'restart_recovery', ...(loss && (loss.state === 'queued' || loss.state === 'sent') ? { loss: { state: loss.state, cause: loss.cause } } : {}) }
-  },
-  // A loss stays on the record after it is decided: a give-up speaks only for the death it decided.
-  stop: (rec) => rec.restartLoss?.state === 'gave_up' && rec.restartLoss.revision === rec.statusRevision
-    ? { reason: 'restart_recovery', loss: { state: 'gave_up', cause: rec.restartLoss.cause } } : null,
 }
 
 export function getSessionAutoRecover(): SessionAutoRecover | null {

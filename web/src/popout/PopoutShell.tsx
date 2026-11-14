@@ -40,7 +40,7 @@ function PopoutApp() {
   useWebSocket();
   const location = useLocation();
   const navigate = useNavigate();
-  useTaskLinkClickFallback(navigate);
+  useTaskLinkClickFallback(navigate, true);
   useAgentLinkClickFallback();
   useOpenLetterRequests(true);
   // An install link opens the Plugin Store (leaving the pop-out); an open link goes there.

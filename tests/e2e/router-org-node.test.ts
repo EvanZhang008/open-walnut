@@ -1,20 +1,24 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-router-org'));
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
 import { ensureProjectLead } from '../../src/core/org/org-store.js';
-import { addTask, getTask } from '../../src/core/task-manager.js';
+import { addTask, getTask, listTasks, updateTaskRaw } from '../../src/core/task-manager.js';
 import * as taskManager from '../../src/core/task-manager.js';
 import * as routerAreas from '../../src/core/router/areas.js';
 import { OrgError } from '../../src/core/org/org-store.js';
 import { buildOrgTree, isHiddenFromTaskLists } from '../../src/core/org/org-tree.js';
-import { readRouterAreas } from '../../src/core/router/areas.js';
+import { readRouterAreas, updateRouterAreas } from '../../src/core/router/areas.js';
 import { updateRouterNode } from '../../src/core/router/nodes.js';
 import { createSessionRecord, getSessionsForTask } from '../../src/core/session-tracker.js';
+import { registerRouterSource } from '../../src/core/router/source-registry.js';
+import { routeItem, routerNewWorkId, routerNewWorkMarker, type RouteItemInput, type RouterDeliveryDeps } from '../../src/core/router/service.js';
+import { RouterStore, routerKey } from '../../src/core/router/store.js';
+import type { RouterItem, RouterRoute, RouterSource } from '../../src/core/router/types.js';
 import { taskIdForKey } from '../../src/core/task-create-idempotency.js';
 import { routerTaskDbPath } from '../../src/core/router/data-version.js';
 import { seedTaskStore, taskStoreVersion } from '../helpers/router-task-store.js';
@@ -305,63 +309,318 @@ describe('editing a router', () => {
 });
 
 describe('area membership', () => {
-  // An area lists only its routers: the work a router hands items to stays ordinary work (2026-11-14).
-  it('refuses an ordinary task, a parent and child pair, or a VP as a member, and marks nothing', async () => {
+  it('marks each member with its area and keeps a subtask in its parent\'s area', async () => {
     const parent = (await addTask({ title: 'Area parent fixture', project: '', source: 'local' })).task;
     const child = (await addTask({ title: 'Area child fixture', project: '', source: 'local', parent_task_id: parent.id })).task;
-    const plain = await taskWithFullHistory('Old member fixture');
+    const current = await readRouterAreas(WALNUT_HOME);
+    const split = { ...current, areas: [...current.areas,
+      { id: 'family', name: 'Family', host: '__local__', taskIds: [parent.id], sources: [] },
+      { id: 'side', name: 'Side', host: '__local__', taskIds: [child.id], sources: [] }] };
+    expect((await putAreas(split)).status).toBe(400);
+    expect(await readRouterAreas(WALNUT_HOME)).toEqual(current);
+
+    const together = { ...current, areas: [...current.areas,
+      { id: 'family', name: 'Family', host: '__local__', taskIds: [parent.id, child.id], sources: [] }] };
+    expect((await putAreas(together)).status).toBe(200);
+    for (const id of [parent.id, child.id]) {
+      const task = await getTask(id);
+      expect(task.router_area_id).toBe('family');
+      expect(task.org_role).toBeFalsy();
+    }
+  });
+
+  it('refuses a new member with an earlier full-tool conversation or a VP, before any marker is written', async () => {
+    const old = await taskWithFullHistory('Old member fixture');
+    const empty = (await addTask({ title: 'Empty member fixture', project: '', source: 'local' })).task;
     const current = await readRouterAreas(WALNUT_HOME);
     const withMembers = (taskIds: string[]) => ({ ...current, areas: [...current.areas,
-      { id: 'family', name: 'Family', host: '__local__', taskIds, sources: [] }] });
-    for (const taskIds of [[parent.id, child.id], [plain.task.id], [vpIds[0]]]) {
-      const response = await putAreas(withMembers(taskIds));
-      expect(response.status).toBe(400);
-      expect((await response.json()).error.code).toBe('area_target');
-    }
+      { id: 'history-area', name: 'History', host: '__local__', taskIds, sources: [] }] });
+
+    const refused = await putAreas(withMembers([empty.id, old.task.id]));
+    expect(refused.status).toBe(409);
+    expect((await refused.json()).error.code).toBe('router_history_not_isolated');
+    const vp = await putAreas(withMembers([vpIds[0]]));
+    expect(vp.status).toBe(409);
+    expect((await vp.json()).error.code).toBe('area_task_role');
     expect(await readRouterAreas(WALNUT_HOME)).toEqual(current);
-    for (const id of [parent.id, child.id, plain.task.id, vpIds[0]]) expect((await getTask(id)).router_area_id).toBeFalsy();
+    for (const id of [empty.id, old.task.id, vpIds[0]]) expect((await getTask(id)).router_area_id).toBeFalsy();
     expect((await getTask(vpIds[0])).org_role).toBe('lead');
-    expect((await getSessionsForTask(plain.task.id)).map((one) => one.claudeSessionId)).toEqual([plain.sid]);
-  });
+    expect((await getSessionsForTask(old.task.id)).map((one) => one.claudeSessionId)).toEqual([old.sid]);
 
-  it('keeps the registry as it was when the area keeps only its routers', async () => {
-    const current = await readRouterAreas(WALNUT_HOME);
-    const response = await putAreas(current);
-    expect(response.status).toBe(200);
-    expect(await readRouterAreas(WALNUT_HOME)).toEqual(current);
+    // A new task with no conversation joins.
+    const accepted = await putAreas(withMembers([empty.id]));
+    expect(accepted.status).toBe(200);
+    expect((await getTask(empty.id)).router_area_id).toBe('history-area');
   });
 });
 
-describe('the folders a router watches (PATCH /api/v1/org/routers/:id)', () => {
-  let routerId = '';
-  beforeAll(async () => { routerId = (await (await create('folders', [])).json()).task.id; });
-  const area = async () => (await readRouterAreas(WALNUT_HOME)).areas.find((one) => one.id === 'folders')!;
+describe('confirming one exact item\'s area (POST /api/v1/router/assign)', () => {
+  // Fixture accounts and message ids only; no mail provider or account exists on this server.
+  const DESK = 'assign-desk@marina.example.invalid';
+  // A mail item is confirmed at one exact delivery version (what the email reader shows); chats carry none.
+  const item = (message: string, account = DESK, kind: 'mail' | 'slack' | 'wechat' = 'mail') =>
+    (kind === 'mail' ? { kind, account, message, version: `fixture-delivery:${message}` } : { kind, account, message });
+  const FIRST = item('INBOX:assign:1');
+  const SECOND = item('INBOX:assign:2');
+  const lookups = { resolve: vi.fn(), read: vi.fn() };
+  const disposers: Array<() => void> = [];
 
-  it('saves the folders on the router\'s area, and an empty list goes back to the default', async () => {
-    expect(await area()).not.toHaveProperty('folders');
-    const response = await patch(routerId, { folders: ['inbox', ' Receipts ', 'Receipts'] });
+  async function assign(body: unknown, headers: Record<string, string> = {}) {
+    return fetch(`${base}/api/v1/router/assign`, { method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
+  }
+  async function areasNow() {
+    const response = await fetch(`${base}/api/v1/router/areas`);
     expect(response.status).toBe(200);
-    expect((await area()).folders).toEqual(['inbox', 'Receipts']);
-    expect((await patch(routerId, { folders: [] })).status).toBe(200);
-    expect(await area()).not.toHaveProperty('folders');
+    return response.json();
+  }
+  const sameItem = (a: { kind: string; account: string; message: string }, b: typeof a) =>
+    a.kind === b.kind && a.account === b.account && a.message === b.message;
+
+  beforeAll(async () => {
+    expect((await create('assign-personal', [])).status).toBe(201);
+    expect((await create('assign-work', [])).status).toBe(201);
+    for (const kind of ['mail', 'slack', 'wechat'] as const) {
+      disposers.push(registerRouterSource(kind, {
+        resolve: async (source) => { lookups.resolve(source); return { source, key: JSON.stringify([source.kind, source.account, source.message]), sender: 'Fixture sender', subject: 'Fixture item' }; },
+        read: async (source) => { lookups.read(source); throw new Error('no read expected'); },
+      }));
+    }
+  });
+  afterAll(() => { for (const dispose of disposers.splice(0)) dispose(); });
+  afterEach(() => {
+    expect(lookups.read).not.toHaveBeenCalled();
+    lookups.resolve.mockClear();
   });
 
-  it('refuses a malformed folder list and changes nothing', async () => {
-    await patch(routerId, { folders: ['inbox'] });
-    const before = await readRouterAreas(WALNUT_HOME);
-    for (const folders of ['inbox', [7], [''], ['x'.repeat(201)], ['line\nbreak'], Array.from({ length: 51 }, (_, i) => `F${i}`)]) {
-      const response = await patch(routerId, { folders });
+  it('refuses an unknown area and writes nothing', async () => {
+    const before = await areasNow();
+    const response = await assign({ source: FIRST, area_id: 'no-such-area' });
+    expect(response.status).toBe(409);
+    expect((await response.json()).error.code).toBe('area_missing');
+    expect(await areasNow()).toEqual(before);
+  });
+
+  it('refuses a malformed source or a missing area and writes nothing', async () => {
+    const before = await areasNow();
+    for (const body of [
+      { source: { kind: 'mail', account: DESK }, area_id: 'assign-personal' },
+      { source: { kind: 'fax', account: DESK, message: 'm' }, area_id: 'assign-personal' },
+      { source: { kind: 'mail', account: '  ', message: 'm' }, area_id: 'assign-personal' },
+      { source: FIRST },
+    ]) {
+      const response = await assign(body);
       expect(response.status).toBe(400);
     }
-    expect(await readRouterAreas(WALNUT_HOME)).toEqual(before);
+    expect(await areasNow()).toEqual(before);
+  });
+
+  it('refuses a mail item with no delivery version before any lookup, and writes nothing', async () => {
+    const before = await areasNow();
+    const unversioned = { kind: FIRST.kind, account: FIRST.account, message: FIRST.message };
+    const response = await assign({ source: unversioned, area_id: 'assign-personal' });
+    expect(response.status).toBe(409);
+    expect((await response.json()).error.code).toBe('source_version_required');
+    expect(lookups.resolve).not.toHaveBeenCalled();
+    expect(await areasNow()).toEqual(before);
+  });
+
+  it('refuses any session caller, whoever it claims to be, and writes nothing', async () => {
+    const before = await areasNow();
+    for (const headers of [{ 'x-walnut-caller-sid': randomUUID() }, { 'x-walnut-caller-sid': 'external' }, { 'x-walnut-caller-kind': 'automation' }]) {
+      const response = await assign({ source: FIRST, area_id: 'assign-personal' }, headers);
+      expect(response.status).toBe(403);
+      expect((await response.json()).error.code).toBe('area_forbidden');
+    }
+    expect(await areasNow()).toEqual(before);
+  });
+
+  it('lets the user confirm one exact item: one assignment, and the account added to the area once', async () => {
+    const before = await areasNow();
+    const response = await assign({ source: FIRST, area_id: 'assign-personal' });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ areaId: 'assign-personal', assigned: true });
+
+    const after = await areasNow();
+    expect(after.items).toEqual([...before.items, { source: FIRST, areaId: 'assign-personal', canonicalKey: JSON.stringify([FIRST.kind, FIRST.account, FIRST.message]) }]);
+    expect(after.routers).toEqual(before.routers);
+    const area = after.areas.find((one: { id: string }) => one.id === 'assign-personal');
+    expect(area.sources).toEqual([{ kind: 'mail', account: DESK }]);
+    expect(after.areas.filter((one: { id: string }) => one.id !== 'assign-personal'))
+      .toEqual(before.areas.filter((one: { id: string }) => one.id !== 'assign-personal'));
+  });
+
+  it('does not confirm the account\'s other mail: a sibling message stays unassigned', async () => {
+    const file = await areasNow();
+    expect(file.items.some((one: { source: typeof SECOND }) => sameItem(one.source, SECOND))).toBe(false);
+    const response = await fetch(`${base}/api/v1/router/context?${new URLSearchParams(SECOND)}`);
+    expect(response.status).toBe(409);
+    expect((await response.json()).error.code).toBe('area_unassigned');
+    // The same message id under another account or kind is another item, unassigned too.
+    for (const other of [item(FIRST.message, 'Assign-desk@marina.example.invalid'), item(FIRST.message, DESK, 'slack')]) {
+      const lookalike = await fetch(`${base}/api/v1/router/context?${new URLSearchParams(other)}`);
+      expect(lookalike.status).toBe(409);
+    }
+  });
+
+  it('is a no-op when the same item is confirmed for the same area again', async () => {
+    const before = await areasNow();
+    const response = await assign({ source: FIRST, area_id: 'assign-personal' });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ areaId: 'assign-personal', assigned: true });
+    const after = await areasNow();
+    expect(after).toEqual(before);
+    expect(after.items.filter((one: { source: typeof FIRST }) => sameItem(one.source, FIRST))).toHaveLength(1);
+  });
+
+  it('refuses moving a confirmed item to another area, leaving the registry as it was', async () => {
+    const before = await areasNow();
+    const response = await assign({ source: FIRST, area_id: 'assign-work' });
+    expect(response.status).toBe(409);
+    expect((await response.json()).error.code).toBe('area_reassignment');
+    expect(await areasNow()).toEqual(before);
+  });
+
+  it('confirms a second exact item of the same account without adding the account again', async () => {
+    const before = await areasNow();
+    const response = await assign({ source: SECOND, area_id: 'assign-personal' });
+    expect(response.status).toBe(200);
+    const after = await areasNow();
+    expect(after.items).toEqual([...before.items, { source: SECOND, areaId: 'assign-personal', canonicalKey: JSON.stringify([SECOND.kind, SECOND.account, SECOND.message]) }]);
+    expect(after.areas.find((one: { id: string }) => one.id === 'assign-personal').sources).toEqual([{ kind: 'mail', account: DESK }]);
+  });
+
+  // Swaps the wechat adapter for one test, then puts back a copy of the fixture above.
+  async function withWechatResolve(resolve: (source: RouterSource) => Promise<RouterItem>, run: () => Promise<void>) {
+    registerRouterSource('wechat', { resolve: async (source) => { lookups.resolve(source); return resolve(source); } });
+    try { await run(); } finally {
+      disposers.push(registerRouterSource('wechat', {
+        resolve: async (source) => { lookups.resolve(source); return { source, key: JSON.stringify([source.kind, source.account, source.message]), sender: 'Fixture sender', subject: 'Fixture item' }; },
+        read: async (source) => { lookups.read(source); throw new Error('no read expected'); },
+      }));
+    }
+  }
+
+  it('assigns nothing when the source metadata gives another identity, no usable key, or no cached row', async () => {
+    const chat = item('wx:assign:bad', 'wx-desk', 'wechat');
+    const fixture = (source: RouterSource, key: string): RouterItem => ({ source, key, sender: 'Fixture sender', subject: 'Fixture item' });
+    const cases: Array<(source: RouterSource) => Promise<RouterItem>> = [
+      async (source) => fixture({ ...source, message: 'wx:assign:other' }, 'k'),
+      async (source) => fixture(source, ''),
+      async (source) => fixture(source, 'key\nwith-newline'),
+      async (source) => fixture(source, 'k'.repeat(2049)),
+      async () => { throw Object.assign(new Error('The exact item is not in the cache.'), { code: 'source_missing' }); },
+    ];
+    for (const resolve of cases) {
+      const before = await areasNow();
+      await withWechatResolve(resolve, async () => {
+        const response = await assign({ source: chat, area_id: 'assign-personal' });
+        expect(response.status).toBe(503);
+        expect((await response.json()).error.code).toBe('source_unavailable');
+      });
+      expect(await areasNow()).toEqual(before);
+    }
+  });
+
+  it('keeps a confirmed item\'s assignment when its cached row is gone, without adding a key or reading it', async () => {
+    const chat = item('wx:assign:kept', 'wx-desk', 'wechat');
+    expect((await assign({ source: chat, area_id: 'assign-personal' })).status).toBe(200);
+    const before = await areasNow();
+    const gone = async (): Promise<RouterItem> => { throw Object.assign(new Error('The exact item is not in the cache.'), { code: 'source_missing' }); };
+    await withWechatResolve(gone, async () => {
+      const again = await assign({ source: chat, area_id: 'assign-personal' });
+      expect(again.status).toBe(200);
+      expect(await again.json()).toEqual({ areaId: 'assign-personal', assigned: true });
+      const moved = await assign({ source: chat, area_id: 'assign-work' });
+      expect(moved.status).toBe(409);
+      expect((await moved.json()).error.code).toBe('area_reassignment');
+    });
+    expect(await areasNow()).toEqual(before);
   });
 });
 
-describe('gone routes of the old triage hop', () => {
-  it('has no item assignment or rules routes any more', async () => {
-    for (const [method, path] of [['POST', '/api/v1/router/assign'], ['GET', '/api/v1/router/rules'], ['POST', '/api/v1/router/rules']]) {
-      const response = await fetch(`${base}${path}`, { method, headers: { 'content-type': 'application/json' }, ...(method === 'POST' ? { body: '{}' } : {}) });
-      expect(response.status, `${method} ${path}`).toBe(404);
+describe('new work a route makes, against the real task store and areas file', () => {
+  // Fixture account and message ids only. Delivery is a fake that refuses or accepts: no session
+  // is started, so nothing is spawned.
+  const DESK = 'newwork-desk@marina.example.invalid';
+  // Each mail item is assigned and routed at its exact delivery version.
+  const item = (message: string): RouterSource => ({ kind: 'mail', account: DESK, message, version: `fixture-delivery:${message}` });
+  const ledgers: RouterStore[] = [];
+  const resolve = async (source: RouterSource): Promise<RouterItem> =>
+    ({ source: { ...source }, key: routerKey(source), sender: 'pat@marina-desk.example.invalid', subject: 'Dock schedule' });
+  const decision = (source: RouterSource, extra: Partial<RouteItemInput> = {}): RouteItemInput => ({
+    source, newTaskTitle: 'Dock follow-up', reason: 'No open work owns dock requests',
+    text: 'Please confirm the dock slot for Thursday.', ...extra,
+  });
+  const listed = async (id: string) => (await readRouterAreas(WALNUT_HOME)).areas
+    .find((one) => one.id === 'newwork')!.taskIds.filter((one) => one === id);
+
+  let disposeSource: () => void;
+  beforeAll(async () => {
+    disposeSource = registerRouterSource('mail', { resolve });
+    const created = await create('newwork', []);
+    expect(created.status).toBe(201);
+    const routerId = ((await created.json()) as { task: { id: string } }).task.id;
+    await updateTaskRaw(routerId, { router_paused: false }, { source: 'test', emitEvent: false });
+    await updateRouterAreas(WALNUT_HOME, (file) => ({ ...file, routers: file.routers.map((one) => one.taskId === routerId ? { ...one, paused: false } : one) }));
+    for (const message of ['INBOX:newwork:1', 'INBOX:newwork:2']) {
+      const response = await fetch(`${base}/api/v1/router/assign`, { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ source: item(message), area_id: 'newwork' }) });
+      expect(response.status).toBe(200);
     }
+  });
+  afterAll(async () => { disposeSource(); for (const ledger of ledgers.splice(0)) await ledger.dispose().catch(() => undefined); });
+
+  function deps(send: RouterDeliveryDeps['send']): RouterDeliveryDeps {
+    const store = new RouterStore(WALNUT_HOME, 'newwork');
+    ledgers.push(store);
+    return { store, resolve, send };
+  }
+
+  it('births one marked task in the area, lists it once, and reuses it on a repeat and a retry', async () => {
+    const source = item('INBOX:newwork:1');
+    const id = await routerNewWorkId('newwork', routerKey(source));
+    const send = vi.fn(async (_route: RouterRoute, _text: string): Promise<unknown> => {
+      throw Object.assign(new Error('queue is full'), { code: 'queue_full' });
+    });
+    const d = deps(send);
+    const first = await routeItem(decision(source), d);
+    expect(first.route).toMatchObject({ status: 'failed', taskId: id, error: 'queue is full' });
+
+    const born = await getTask(id);
+    expect(born).toMatchObject({ title: 'Dock follow-up', project: '', source: 'local', router_area_id: 'newwork',
+      created_by_op: routerNewWorkMarker('newwork', id) });
+    expect(born.phase).not.toBe('COMPLETE');
+    expect(born.org_role).toBeFalsy();
+    expect(born.parent_task_id).toBeFalsy();
+    expect(born.session_ids ?? []).toEqual([]);
+    expect(born.session_id).toBeFalsy();
+    expect(await listed(id)).toEqual([id]);
+
+    // A plain repeat returns the row and makes nothing.
+    const count = (await listTasks()).length;
+    expect(await routeItem(decision(source, { newTaskTitle: 'Another title' }), d)).toMatchObject({ fresh: false, route: { status: 'failed' } });
+    expect(send).toHaveBeenCalledTimes(1);
+
+    // The retry reaches the same task: no second task, no second membership, the first title kept.
+    send.mockResolvedValueOnce({ ok: true });
+    const again = await routeItem(decision(source, { retry: true, newTaskTitle: 'Another title' }), d);
+    expect(again.route).toMatchObject({ status: 'routed', taskId: id, messageId: first.route.messageId });
+    expect(send).toHaveBeenCalledTimes(2);
+    expect((await listTasks()).length).toBe(count);
+    expect((await getTask(id)).title).toBe('Dock follow-up');
+    expect(await listed(id)).toEqual([id]);
+  });
+
+  it('never adopts a task that holds the id without the router\'s birth mark', async () => {
+    const source = item('INBOX:newwork:2');
+    const id = await routerNewWorkId('newwork', routerKey(source));
+    await addTask({ title: 'Lookalike fixture', project: '', source: 'local', router_area_id: 'newwork', explicitId: id });
+    const send = vi.fn(async (_route: RouterRoute, _text: string): Promise<unknown> => ({ ok: true }));
+    const result = await routeItem(decision(source), deps(send));
+    expect(result.route).toMatchObject({ status: 'failed', taskId: id });
+    expect(send).not.toHaveBeenCalled();
+    expect(await listed(id)).toEqual([]);
+    expect((await getTask(id)).title).toBe('Lookalike fixture');
   });
 });

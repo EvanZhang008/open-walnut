@@ -422,9 +422,6 @@ describe('the usage-limit wait', () => {
     expect(recordInUsageLimit({ ...base, usageLimit: w })).toBe(true)
     expect(recordInUsageLimit({ ...base, process_status: 'idle', usageLimit: { ...w, state: 'resumed' } })).toBe(false)
     expect(recordInUsageLimit({ ...base, usageLimit: { ...w, state: 'off' } })).toBe(false)
-    // Its continue hit the limit again: held (the waiter reopens it). Another error is not this wait's.
-    expect(recordInUsageLimit({ ...base, usageLimit: { ...w, state: 'resumed' } })).toBe(true)
-    expect(recordInUsageLimit({ ...base, errorMessage: 'API Error: 500 Internal server error', usageLimit: { ...w, state: 'resumed' } })).toBe(false)
     expect(usageLimitOfRecord({ ...base, process_status: 'idle', usageLimit: { ...w, state: 'resumed' } } as SessionRecord)).toBeUndefined()
   })
 })

@@ -46,7 +46,6 @@ import { classifyTurnError } from '../providers/daemon-core.js'
 
 import { endpointWaitEnabled, matchesEndpointUnreachable, matchesEndpointDropped } from './sessions/endpoint-unreachable.js'
 import { endpointWaitTakes, isEndpointUnreachableError, type EndpointResultFacts } from './sessions/endpoint-wait-takes.js'
-import { noteTurnAttempt, type TurnRetrier } from './sessions/turn-run.js'
 import { isQuietTurn } from './sessions/quiet-turn.js'
 
 export function matchesRetryExhaustion(text: string | null | undefined): boolean {
@@ -108,7 +107,6 @@ function defaultDeps(): AutoContinueDeps {
     setTimer: (fn, ms) => setTimeout(fn, ms),
     clearTimer: (handle) => clearTimeout(handle),
     send: async (sessionId, message, opts) => {
-      await noteTurnAttempt(sessionId, 'auto_continue')
       const { sendMessageToSession } = await import('./session-message-queue.js')
       return sendMessageToSession(sessionId, message, opts)
     },
@@ -438,19 +436,6 @@ export function startSessionAutoContinue(
 }
 
 /** Test/debug accessor for the live singleton. */
-/** The auto-continue retry's row of the session's turn (sessions/turn-run.ts). In memory: a server
- *  restart drops a pending retry, and the task was already handed back (it keeps no phase). */
-export const turnRetrier: TurnRetrier<'auto_continue'> = {
-  reason: 'auto_continue',
-  sources: [AUTO_CONTINUE_SOURCE],
-  takes: (end) => end.event === 'result' && end.isError && !!instance?.willResume(end.sessionId, end.result ?? null, end.retryExhausted, end),
-  wait: (rec) => {
-    const at = instance?.retryAt(rec.claudeSessionId)
-    return at ? { reason: 'auto_continue', retryAt: new Date(at).toISOString() } : null
-  },
-  keep: (sessionId, replay) => !!instance?.holdUntilRetried(sessionId, replay),
-}
-
 export function getSessionAutoContinue(): SessionAutoContinue | null {
   return instance
 }

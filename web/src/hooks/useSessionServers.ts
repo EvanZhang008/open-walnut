@@ -4,14 +4,11 @@
  * The host's daemon owns the scan (GET /api/sessions/:id/servers answers from one
  * pass over its listening sockets), so this only asks: every few seconds while the
  * Web view is open, more slowly while the panel just shows the header's count, and
- * never while the tab is hidden or its page is off show (the hidden Home page,
- * RouteShownContext false; the list it showed stays, and coming back asks at once).
- * A stop removes the row at once and asks again, so a server that ignored SIGTERM
- * comes back into the list rather than vanishing falsely.
+ * never while the tab is hidden. A stop removes the row at once and asks again, so a
+ * server that ignored SIGTERM comes back into the list rather than vanishing falsely.
  */
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError } from '@/api/client';
-import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { fetchSessionServers, lastSessionServers, stopSessionServer, type SessionServer, type SessionServersResult } from '@/api/session-servers';
 import { log } from '@/utils/log';
 
@@ -50,8 +47,6 @@ export function useSessionServers(sessionId: string | null | undefined, opts: { 
   const gone = useRef<Map<string, number>>(new Map());
   // The route is absent on an older server: stop asking for this session.
   const missing = useRef(false);
-  const shown = useContext(RouteShownContext) !== false;
-  const enabled = opts.enabled && shown;
 
   useEffect(() => {
     setResult(sessionId ? lastSessionServers(sessionId) ?? null : null); setStopping(new Set()); setStopErrors(new Map());
@@ -59,7 +54,7 @@ export function useSessionServers(sessionId: string | null | undefined, opts: { 
   }, [sessionId]);
 
   useEffect(() => {
-    if (!sessionId || !enabled || missing.current) return;
+    if (!sessionId || !opts.enabled || missing.current) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let abort: AbortController | null = null;
@@ -125,7 +120,7 @@ export function useSessionServers(sessionId: string | null | undefined, opts: { 
       abort?.abort();
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [sessionId, enabled, opts.fast, tick]);
+  }, [sessionId, opts.enabled, opts.fast, tick]);
 
   const refresh = useCallback(() => setTick((n) => n + 1), []);
 

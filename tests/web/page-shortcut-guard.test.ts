@@ -29,6 +29,7 @@ const NOT_BARE: Record<string, string> = {
   'components/notes/CommandPalette.tsx': 'Cmd+K only',
   'hooks/usePanelKeyRouter.ts': 'Cmd+Shift+E only',
   'pages/SettingsPage.tsx': 'Cmd+S only',
+  'pages/MainPage.tsx': 'Cmd+Shift+O only',
   'components/common/PageFind.tsx': 'Cmd+F and Cmd+G / Shift+Cmd+G (F3) only',
   'components/chat/ChatInput.tsx': 'its document handler is Escape for its own menus; the Cmd+Z it reads is the box\'s own onKeyDown',
 };

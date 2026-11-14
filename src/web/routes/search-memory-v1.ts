@@ -102,6 +102,8 @@ searchMemoryV1Router.get('/search', async (req: Request, res: Response, next: Ne
       import('../../core/search.js'),
       import('../../core/search-hit-tasks.js'),
     ])
+    const { areaSearchVisibility } = await import('../middleware/router-area-reader.js')
+    const visibility = areaSearchVisibility(res)
     const semanticDeadlineMs = extras.clampSemanticWaitMs(req.query.semanticWaitMs)
     const wantsTasks = extras.wantsHitTasks(req.query.tasks)
     const withTasks = async (results: Awaited<ReturnType<typeof search>>) => {
@@ -136,15 +138,15 @@ searchMemoryV1Router.get('/search', async (req: Request, res: Response, next: Ne
       if (ready.companionSearchReady()) {
         const asOf = ready.companionSearchAsOf()
         res.json({
-          ...(await withTasks(await search(q, { types, limit, semanticDeadlineMs }))),
+          ...(await withTasks(await search(q, { types, limit, semanticDeadlineMs, visibility }))),
           offline: true, ...(asOf ? { asOf: new Date(asOf).toISOString() } : {}), ...partial,
         })
         return
       }
-      res.json({ ...(await withTasks(await search(q, { types, limit }))), offline: true, degraded: 'offline-keyword', ...partial })
+      res.json({ ...(await withTasks(await search(q, { types, limit, visibility }))), offline: true, degraded: 'offline-keyword', ...partial })
       return
     }
-    res.json(await withTasks(await search(q, { types, limit, semanticDeadlineMs })))
+    res.json(await withTasks(await search(q, { types, limit, semanticDeadlineMs, visibility })))
   } catch (err) {
     next(err)
   }

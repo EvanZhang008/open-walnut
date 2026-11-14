@@ -11,22 +11,24 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { GlobalNotesSection } from '@/components/notes/GlobalNotesSection';
 import { useGlobalNotes } from '@/hooks/useGlobalNotes';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
-import { useYieldsToTaskOpen } from '@/hooks/useOpenTask';
 import { isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { homePanelOpen } from '@/pages/home-panel-live';
+import { openTaskOnHome } from '@/utils/open-session';
 import { setUnsavedWorkScratchpadOpener } from '@/utils/unsaved-work';
 import { setSideBarPane, sideBarPageOf } from './page-side-bar';
 import type { Task } from '@open-walnut/core';
 
-/** What the column holding the scratchpad hands it: its close and the tasks its /task search offers. */
+/** What the column holding the scratchpad hands it: its close and its task links. */
 export interface ScratchpadOwner {
   onClose: () => void;
   tasks: Task[];
   focusedTaskId?: string;
+  onTaskClick: (taskId: string) => void;
 }
 
 let box: HTMLDivElement | null = null;
@@ -77,7 +79,7 @@ export function useScratchpadSlot(slot: RefObject<HTMLElement | null>, open: boo
     if (b.parentElement !== el) el.appendChild(b);
     owner = { ...nextRef.current };
     for (const fn of [...listeners]) fn();
-  }, [open, slot, next.onClose, next.tasks, next.focusedTaskId]);
+  }, [open, slot, next.onClose, next.onTaskClick, next.tasks, next.focusedTaskId]);
   // A slot that goes while it holds the box parks it, never takes it out of the document.
   useLayoutEffect(() => {
     const el = slot.current;
@@ -112,7 +114,7 @@ export function ScratchpadHost() {
     <>
       {/* Nothing renders until a column first shows the scratchpad (the editor is not built for nothing). */}
       {who && createPortal(
-        <GlobalNotesSection {...notes} fill title="Scratchpad" onClose={who.onClose} tasks={who.tasks} focusedTaskId={who.focusedTaskId} />,
+        <GlobalNotesSection {...notes} fill title="Scratchpad" onClose={who.onClose} tasks={who.tasks} focusedTaskId={who.focusedTaskId} onTaskClick={who.onTaskClick} />,
         theBox(),
       )}
       {sheet && phone && <ScratchpadSheet onClose={closeSheet} />}
@@ -127,9 +129,10 @@ function ScratchpadSheet({ onClose }: { onClose: () => void }) {
   useModalOverlay(onClose);
   const slot = useRef<HTMLDivElement>(null);
   const tasks = useTasksContextSafe()?.tasks ?? NO_TASKS;
-  // A task link in the note opens that task on Home (NotesEditor, useOpenTask): the sheet gives way.
-  useYieldsToTaskOpen(onClose);
-  useScratchpadSlot(slot, true, { onClose, tasks });
+  const navigate = useNavigate();
+  // A task link in the note opens that task (on Home, as the side bar's do) and the sheet gives way.
+  const onTaskClick = useCallback((taskId: string) => { onClose(); openTaskOnHome(taskId, navigate); }, [onClose, navigate]);
+  useScratchpadSlot(slot, true, { onClose, tasks, onTaskClick });
   return createPortal(
     <div className="app-modal-overlay scratchpad-sheet-overlay" onPointerDown={(e) => { e.stopPropagation(); if (e.target === e.currentTarget) onClose(); }}>
       <div ref={slot} className="scratchpad-sheet" role="dialog" aria-modal="true" aria-label="Scratchpad" data-testid="scratchpad-sheet" onPointerDown={(e) => e.stopPropagation()} />

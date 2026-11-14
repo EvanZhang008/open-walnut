@@ -1,10 +1,9 @@
 import { isPhoneLayout } from '@/hooks/usePhoneLayout';
-import { useCallback, useContext, useEffect, useSyncExternalStore } from 'react';
-import { RouteShownContext } from '@/contexts/RouteShownContext';
+import { useCallback, useSyncExternalStore } from 'react';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useActiveSessionCron } from '@/hooks/useSessionStatus';
 import {
-  changeSessionSupervision, getSessionSupervision, holdSessionSupervision, refreshSessionSupervision,
+  changeSessionSupervision, getSessionSupervision, refreshSessionSupervision,
   subscribeSessionSupervision, type SupervisionSnapshot,
 } from '@/stores/session-supervision-store';
 import '@/styles/session-supervision.css';
@@ -42,29 +41,15 @@ const REASONS: Record<string, string> = {
   'user-disabled': 'Running CLI processes are left alone. Use Terminate to end the session.',
 };
 
-const NOT_SUBSCRIBED = () => {};
-
-/**
- * One session's recovery status. Off its page (the hidden Home page, RouteShownContext false) the
- * reader is not subscribed and reads nothing on an event, so a session also open on Org keeps its
- * own poll alone; the hold it keeps while mounted keeps the last state (a stop still pending) for
- * its return, when it subscribes again and reads at once unless another reader already polls.
- */
 export function useSessionSupervision(sid: string): SupervisionSnapshot {
-  const shown = useContext(RouteShownContext) !== false;
-  // Held for the whole mount: React drops the old subscription before it adds the new one, and a
-  // gap with no reader would release the entry and lose what it showed.
-  useEffect(() => holdSessionSupervision(sid), [sid]);
-  const subscribe = useCallback((listener: () => void) => (
-    shown ? subscribeSessionSupervision(sid, listener) : NOT_SUBSCRIBED
-  ), [sid, shown]);
+  const subscribe = useCallback((listener: () => void) => subscribeSessionSupervision(sid, listener), [sid]);
   const read = useCallback(() => getSessionSupervision(sid), [sid]);
   const snapshot = useSyncExternalStore(subscribe, read, read);
   useEvent('session:status-changed', (data) => {
     const event = data as { sessionId?: string };
-    if (shown && event.sessionId === sid) void refreshSessionSupervision(sid);
+    if (event.sessionId === sid) void refreshSessionSupervision(sid);
   });
-  useEvent('_ws:reconnected', () => { if (shown) void refreshSessionSupervision(sid); });
+  useEvent('_ws:reconnected', () => { void refreshSessionSupervision(sid); });
   return snapshot;
 }
 

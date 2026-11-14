@@ -24,7 +24,6 @@ import { PHASE_LABELS } from '@/utils/session-status';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 import type { TaskPhase } from '@open-walnut/core';
 import { Section } from './TaskDetailRows';
-import { useOpenTask } from '@/hooks/useOpenTask';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -72,14 +71,14 @@ export function TaskDetailActions({ task, onDeleted, onError }: {
 }
 
 /** What the task waits on and what waits on it, with add and remove. */
-export function TaskDependencies({ task, detail, onChanged, onError }: {
+export function TaskDependencies({ task, detail, onChanged, onOpenTask, onError }: {
   task: Task;
   /** The detail read: the only one that carries the resolved titles and the dependents. */
   detail: TaskDetail | null;
   onChanged: () => void;
+  onOpenTask: (taskId: string) => void;
   onError: (message: string) => void;
 }) {
-  const openTask = useOpenTask();
   useEntityLabelsVersion();
   const displayTitle = (reference: TaskDependencyReference) => {
     const live = lookupTaskLabel(reference.id);
@@ -134,7 +133,7 @@ export function TaskDependencies({ task, detail, onChanged, onError }: {
       {rows.map((dep) => (
         <div data-peek-row="" key={dep.id} className="tdp-row tdp-dep-row" data-testid="task-detail-dependency">
           <div className="tdp-row-line">
-            <button type="button" className="tdp-dep-title" onClick={() => openTask(dep.id)}>{displayTitle(dep)}</button>
+            <button type="button" className="tdp-dep-title" onClick={() => onOpenTask(dep.id)}>{displayTitle(dep)}</button>
             {dep.phase && <span className="tdp-row-end">{PHASE_LABELS[dep.phase as TaskPhase] ?? dep.phase}</span>}
             <button type="button" className="tdp-dep-remove" aria-label="Remove dependency" title="Remove dependency" onClick={() => void remove(dep.id)}>&times;</button>
           </div>
@@ -169,7 +168,7 @@ export function TaskDependencies({ task, detail, onChanged, onError }: {
         <div className="tdp-dependents">
           <div className="tdp-label tdp-dependents-label">Waiting on this task <span className="tdp-label-count">{dependents.length}</span></div>
           {dependents.map((dep) => (
-            <button data-peek-row="" type="button" key={dep.id} className="tdp-dep-title" onClick={() => openTask(dep.id)}>{displayTitle(dep)}</button>
+            <button data-peek-row="" type="button" key={dep.id} className="tdp-dep-title" onClick={() => onOpenTask(dep.id)}>{displayTitle(dep)}</button>
           ))}
         </div>
       )}

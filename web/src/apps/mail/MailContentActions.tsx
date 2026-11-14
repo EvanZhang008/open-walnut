@@ -13,12 +13,13 @@
  * container in the reader to delegate from: one anchor, one handler, and `href` kept honest so the
  * middle click and the context menu still do the right thing.
  */
-import { useEffect, type MouseEvent } from 'react';
+import { useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTaskLabel } from '@/hooks/useEntityLabels';
 import { lookupTaskLabel } from '@/stores/entity-label-store';
 import { ContentActionButtons } from '@/components/content/ContentActionButtons';
 import { taskPath } from '@/utils/task-path';
-import { useOpenTask } from '@/hooks/useOpenTask';
+import { openTaskOnHome } from '@/utils/open-session';
 import { bodyQuoteText } from './mail-quote-text';
 import { mailContentItem } from './mail-content-item';
 import type { MailOpenMessage } from './mail-store';
@@ -40,7 +41,7 @@ export function MailContentActions({ open }: { open: MailOpenMessage }) {
 }
 
 function MailTaskPill({ taskId }: { taskId: string }) {
-  const openTask = useOpenTask();
+  const navigate = useNavigate();
   const label = useTaskLabel(taskId);
   /*
    * Make the title arrive.
@@ -53,13 +54,6 @@ function MailTaskPill({ taskId }: { taskId: string }) {
    * write during render is a render-phase update.
    */
   useEffect(() => { lookupTaskLabel(taskId); }, [taskId]);
-  const open = (event: MouseEvent<HTMLAnchorElement>) => {
-    // A plain left click opens the task on Home; anything with a modifier is the human asking
-    // for a new tab, and the href is already right for that.
-    if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
-    event.preventDefault();
-    openTask(taskId);
-  };
   return (
     <a
       className="task-link mail-task-pill"
@@ -67,7 +61,13 @@ function MailTaskPill({ taskId }: { taskId: string }) {
       data-task-id={taskId}
       href={taskPath(taskId)}
       title={label?.project ? `${label.project} / ${label.title}` : taskId}
-      onClick={open}
+      onClick={(event) => {
+        // A plain left click navigates inside the SPA; anything with a modifier is the human asking
+        // for a new tab, and the href is already right for that.
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+        event.preventDefault();
+        openTaskOnHome(taskId, navigate);
+      }}
     >
       {label?.title ?? taskId}
     </a>

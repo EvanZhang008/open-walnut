@@ -526,10 +526,7 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   }
   running.set(jobId, { taskId: caller.taskId, host, until: Date.now() + timeoutMs + REPLY_MARGIN_MS, at: Date.now() })
   // This task's runs there, for host_exec_list (an older host does not say whose a job is).
-  const noteRun = () => {
-    jobs.noteStarted({ jobId, taskId: caller.taskId, host, command: preview, startedAt: Date.now() })
-    void import('../browser-control/agent-actions.js').then((a) => a.noteHostAction(caller.taskId, preview)).catch(() => {})
-  }
+  const noteRun = () => jobs.noteStarted({ jobId, taskId: caller.taskId, host, command: preview, startedAt: Date.now() })
   const runIn = (cwd: string | null | undefined) => ask(conn, host, 'exec.run', {
     jobId, taskId: caller.taskId, ...send,
     ...(cwd ? { cwd } : {}),

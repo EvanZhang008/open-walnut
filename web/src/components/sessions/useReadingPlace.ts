@@ -25,8 +25,7 @@
  * the reader moves, at most HOLD_MS, and owns the landing meanwhile: the
  * initial-load bottom pin and the forced load scrolls stand down (`held`).
  */
-import { useCallback, useContext, useEffect, useLayoutEffect, useRef, type MutableRefObject, type RefObject } from 'react';
-import { RouteShownContext } from '@/contexts/RouteShownContext';
+import { useCallback, useEffect, useLayoutEffect, useRef, type MutableRefObject, type RefObject } from 'react';
 import { applyPlace, flushPlaces, getPlace, placeDrift, readPlace, setPlace, type ReadingPlace } from './reading-place';
 import { READER_SCROLL_EVENT } from './phone-session-layer';
 
@@ -84,9 +83,6 @@ export interface ReadingPlaceApi {
 }
 
 export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
-  const routeShown = useContext(RouteShownContext) !== false;
-  const shownRef = useRef(routeShown);
-  shownRef.current = routeShown;
   const { sessionId, pageKey, view, containerRef, isAtBottom } = a;
   const argsRef = useRef(a);
   argsRef.current = a;
@@ -96,8 +92,6 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
   const pending = useRef<{ key: string; place: ReadingPlace; until: number; olderAsked?: boolean } | null>(null);
   const hold = useRef<{ stop: () => void } | null>(null);
   const recordTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  /** A reader's scroll paused before its quiet-period write when Home was hidden. */
-  const recordOwed = useRef(false);
   /** The reader moved this page in this box since it showed it (`shownAt`). */
   const dirty = useRef(false);
   const shownAt = useRef(0);
@@ -111,11 +105,10 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
     recordTimer.current = undefined;
     const el = containerRef.current;
     const key = keyRef.current;
-    if (!shownRef.current || !el || key === null || pending.current || hold.current) return;
+    if (!el || key === null || pending.current || hold.current) return;
     const place = readPlace(el, boxId);
     if (!place || (!place.atBottom && place.rows.length === 0)) return;
     setPlace(argsRef.current.sessionId, key, place);
-    recordOwed.current = false;
   }, [containerRef, boxId]);
 
   const stopHold = useCallback(() => {
@@ -143,10 +136,10 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
     const tick = () => {
       if (first) {
         first = false;
-        // Stop the initial bottom pin even if this hold was hidden before its first frame.
+        // Mount effects have run by now (the scroll handler, the bottom pin, the
+        // session reset that turns following on): the place is the reader's.
         el.dispatchEvent(new Event(READER_SCROLL_EVENT));
       }
-      if (!shownRef.current) { stop(); return; }
       isAtBottom.current = false;
       // The bar above the box still settling (a path bar leaving): hold on.
       const top = Math.round(el.getBoundingClientRect().top);
@@ -164,7 +157,7 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
   const tryRestore = useCallback((): void => {
     const p = pending.current;
     const el = containerRef.current;
-    if (!shownRef.current || !p || !el) return;
+    if (!p || !el) return;
     if (p.key !== keyRef.current) { pending.current = null; held.current = false; return; }
     const result = applyPlace(el, p.place, boxId);
     if (result === 'bottom') {
@@ -229,7 +222,6 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
     keyRef.current = pageKey;
     dirty.current = false;
     moved.current = false;
-    recordOwed.current = false;
     shownAt.current = performance.now();
     const switched = carried.current;
     carried.current = null;
@@ -246,22 +238,6 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
     tryRestore();
   }, [sessionId, pageKey, view, stopHold, tryRestore, containerRef]);
 
-  useLayoutEffect(() => {
-    if (!routeShown) {
-      if (hold.current) containerRef.current?.dispatchEvent(new Event(READER_SCROLL_EVENT));
-      stopHold();
-      recordOwed.current ||= recordTimer.current !== undefined && dirty.current && !moved.current;
-      clearTimeout(recordTimer.current);
-      recordTimer.current = undefined;
-    } else {
-      if (pending.current) {
-        pending.current.until = Math.max(pending.current.until, performance.now() + PENDING_MS);
-        tryRestore();
-      }
-      if (recordOwed.current && dirty.current && !moved.current) record();
-    }
-  }, [routeShown, stopHold, tryRestore, containerRef, record]);
-
   // The rows it waits for may be drawn now.
   const { renderNonce, loaded, older } = a;
   useLayoutEffect(() => {
@@ -271,7 +247,7 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
   // Recording.
   useEffect(() => {
     const el = containerRef.current;
-    if (!el || !routeShown) return;
+    if (!el) return;
     let inputAt = -Infinity;
     let inputWidth = -1;
     // His input: a wheel or a finger on the box, a press or a key anywhere (a
@@ -279,7 +255,6 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
     // typing into the composer. A click that shows another page in this box
     // starts a new showing (`shownAt`), so the landing it causes is not his.
     const onInput = (e: Event) => {
-      if (!shownRef.current) return;
       if (e.type === 'keydown') {
         const t = e.target as HTMLElement | null;
         if (t && t.closest('textarea, [contenteditable="true"], [contenteditable=""]')) return;
@@ -288,7 +263,6 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
       inputWidth = el.clientWidth;
     };
     const onScroll = () => {
-      if (!shownRef.current) return;
       // Only his scroll writes. A scroll the layout made (a list opening narrows
       // the box and the text rewraps) is no place of his, even right after a click.
       if (!(performance.now() - inputAt < INPUT_SCROLL_MS && inputAt > shownAt.current) || el.clientWidth !== inputWidth) {
@@ -319,7 +293,7 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
       for (const t of BOX_INPUTS) el.removeEventListener(t, onInput);
       for (const t of PAGE_INPUTS) document.removeEventListener(t, onInput, { capture: true });
     };
-  }, [containerRef, record, sessionId, routeShown]);
+  }, [containerRef, record, sessionId]);
 
   // Unmounting (Main leaving the left page, a remount): its rows are still drawn.
   useLayoutEffect(() => () => {

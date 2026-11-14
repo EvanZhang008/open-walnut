@@ -62,8 +62,9 @@ jevRouter.post('/key', async (req: Request, res: Response, next: NextFunction) =
 jevRouter.delete('/key', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const config = await getConfig()
-    // A key sent as undefined is removed (a section write merges: core/config-section-write.ts).
-    await updateConfig({ jev: { ...config.jev, api_key: undefined } })
+    const jev = { ...config.jev }
+    delete jev.api_key
+    await updateConfig({ jev })
     // Remove the secret file only when config pointed at OUR managed Jev file —
     // a user-managed ${file:} path is theirs to keep, and the SHARED OpenRouter
     // provider credential is never touched here: chat models may be riding it,

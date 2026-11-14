@@ -109,7 +109,7 @@ describe('his view shows only what has something for him', () => {
     expect(THREADS_PENDING_RULE).not.toMatch(/comes back by itself when he writes in it/)
   })
 
-  it('the cleanup reminder leaves pending hidden and never treats a known answer prefix as a summary rewrite', () => {
+  it('the cleanup reminder never calls a pending thread back, and asks nothing of a quiet working one', () => {
     let f = fileMessage(emptyThreads('lead-1'), { text: 'build the Threads view', via: 'chat', at: at(0) }).file
     const id = f.threads[0].id
     f = updateThread(f, id, { title: 'Threads view', state: 'pending', reply: 'Handed to the Threads task' }, 'task:lead-1', at(1)).file
@@ -117,8 +117,7 @@ describe('his view shows only what has something for him', () => {
     f = fileMessage(f, { text: 'and the phone?', via: 'chat', at: at(3) }).file
     expect(threadsTidyOf(f, Date.parse(at(4)))?.items.find((i) => i.id === id)).toBeUndefined()
     const working = updateThread(f, id, { state: 'working', known: 'all' }, 'task:lead-1', at(5)).file
-    // known marks the answer prefix, not a newer answer as covered by an older summary.
-    expect(threadsTidyOf(working, Date.parse(at(6)))?.items.find((i) => i.id === id)?.why).toBe('summary')
+    expect(threadsTidyOf(working, Date.parse(at(6)))?.items.find((i) => i.id === id)).toBeUndefined()
   })
 
   it('Reopen puts it back in his sight; a thread the node opens is never out of it', () => {

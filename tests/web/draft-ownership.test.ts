@@ -28,7 +28,7 @@ vi.mock('../../web/node_modules/react', () => ({
   },
   useEffect: (fn: () => void | (() => void)) => { fn(); },
 }));
-vi.mock('@/api/config', () => ({ fetchConfig: hookState.fetch, updateConfig: vi.fn(), updateConfigKeys: vi.fn(async () => ({})) }));
+vi.mock('@/api/config', () => ({ fetchConfig: hookState.fetch, updateConfig: vi.fn() }));
 vi.mock('@/api/ws', () => ({ wsClient: { onEvent: () => () => {} } }));
 
 const { applyDraftParse, suggestDiff, DRAFT_AI_FIELDS_ARE_SUGGEST_FIELDS } = await import('@/components/sessions/draft-column');

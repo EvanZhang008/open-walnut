@@ -5,7 +5,6 @@
  * session. Both paths begin in the same draft column, so the toolbar presents
  * one task-first verb instead of exposing that implementation detail.
  */
-import { ShortcutHint } from '@/keyboard/ShortcutHint';
 
 const ICON_PLUS = (
   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
@@ -27,7 +26,6 @@ export function NewLauncherButton({ onOpen }: NewLauncherButtonProps) {
     >
       {ICON_PLUS}
       <span className="new-launcher-label" aria-hidden="true">New task</span>
-      <ShortcutHint command="task.new" />
     </button>
   );
 }

@@ -174,7 +174,7 @@ describe('a router task is a router node, not a VP', () => {
 
 const settingsMod = await import('../../web/src/components/org/OrgRouterSettings')
 const {
-  OrgRouterSettings, RouterSettingsBody, folderList, foldersSkipInbox, routerBaseline, routerPatch, routerFormProblem, routerLinkRows,
+  OrgRouterSettings, RouterSettingsBody, routerBaseline, routerPatch, routerFormProblem, routerLinkRows,
   staleLinkLabel, staleNote, routerSummary, ROUTER_READY_LINE, ROUTER_PAUSED_LINE, ROUTER_LINK_NOTE,
 } = settingsMod
 const model = await import('../../web/src/components/org/org-channels-model.js')
@@ -190,7 +190,7 @@ const task = (id: string, extra: Partial<Task> = {}): Task => ({
 describe('a router\'s line and state words never claim collection runs', () => {
   it('says Paused or Ready, and counts links in the singular for one', () => {
     expect(model.routerStateWord(true)).toBe('Paused')
-    expect(model.routerStateWord(false)).toBe('Ready for new items')
+    expect(model.routerStateWord(false)).toBe('Ready for assigned items')
     expect(model.routerStateWord(false, true)).toBe('Ready')
     expect(model.vpLinkCount(0)).toBe('0 VP links')
     expect(model.vpLinkCount(1)).toBe('1 VP link')
@@ -238,23 +238,8 @@ describe('router settings: what a save sends and what the form says', () => {
   })
 
   it('reads its baseline from the task: org_name first, Paused only when set', () => {
-    expect(routerBaseline(task('r', { org_name: 'Named', router_links: ['a'], router_paused: true }))).toEqual({ name: 'Named', links: ['a'], paused: true, folders: '' })
-    expect(routerBaseline(task('r'))).toEqual({ name: 'r title', links: [], paused: true, folders: '' })
-    expect(routerBaseline(task('r'), ['inbox', 'Receipts']).folders).toBe('inbox, Receipts')
-  })
-
-  it('sends the watched folders only when they changed, as a clean list ([] goes back to the Inbox)', () => {
-    const base = { name: 'n', links: [], paused: false, folders: 'inbox' }
-    expect(routerPatch(base, { ...base, folders: ' inbox ,' })).toBeNull()
-    expect(routerPatch(base, { ...base, folders: 'inbox, Receipts, Receipts' })).toEqual({ folders: ['inbox', 'Receipts'] })
-    expect(routerPatch(base, { ...base, folders: '' })).toEqual({ folders: [] })
-    expect(folderList(' a, ,b ,a')).toEqual(['a', 'b'])
-  })
-
-  it('warns when the watched folders leave the Inbox out (empty means the Inbox)', () => {
-    expect(foldersSkipInbox('')).toBe(false)
-    expect(foldersSkipInbox(' INBOX, Receipts')).toBe(false)
-    expect(foldersSkipInbox('Receipts')).toBe(true)
+    expect(routerBaseline(task('r', { org_name: 'Named', router_links: ['a'], router_paused: true }))).toEqual({ name: 'Named', links: ['a'], paused: true })
+    expect(routerBaseline(task('r'))).toEqual({ name: 'r title', links: [], paused: true })
   })
 
   it('names each link that is no longer an open VP for what it is now', () => {
@@ -270,16 +255,16 @@ describe('router settings: what a save sends and what the form says', () => {
     expect(staleLinkLabel(rows[3]!)).toBe('A VP that was closed or removed')
     expect(staleNote(1)).toBe('One link no longer names an open VP. Uncheck to drop it.')
     expect(staleNote(2)).toBe('2 links no longer name an open VP. Uncheck to drop them.')
-    expect(routerSummary('support', { name: 'n', links: ['open', 'closed'], paused: false }, 1)).toBe('support · Ready for new items · 2 VP links · 1 not an open VP')
+    expect(routerSummary('support', { name: 'n', links: ['open', 'closed'], paused: false }, 1)).toBe('support · Ready for assigned items · 2 VP links · 1 not an open VP')
     expect(routerSummary('', { name: 'n', links: [], paused: true }, 0)).toBe('Area not configured · Paused · 0 VP links')
   })
 
   it('says links are collaboration, not ownership or access, and an unpaused router is only ready', () => {
     expect(ROUTER_LINK_NOTE).toMatch(/no ownership/)
     expect(ROUTER_LINK_NOTE).toMatch(/no access/)
-    // 2026-11-14: the router is the triage and hands each item straight to its owner.
-    expect(ROUTER_READY_LINE).toMatch(/^Ready\./)
-    expect(ROUTER_READY_LINE).toMatch(/hands it straight to the task or VP/)
+    expect(ROUTER_READY_LINE).toMatch(/^Ready for assigned items/)
+    expect(ROUTER_READY_LINE).toMatch(/may not be readable/)
+    expect(`${ROUTER_READY_LINE} ${ROUTER_PAUSED_LINE}`).not.toMatch(/running|collecting|reads every|all accounts/i)
   })
 })
 
@@ -290,7 +275,7 @@ describe('router settings render', () => {
   const noop = () => {}
   const body = (extra: Record<string, unknown> = {}) => renderToStaticMarkup(createElement(RouterSettingsBody, {
     id: 'org-router-settings-router-1', draftKey: 'draft:org-router-settings:router-1', area: 'support',
-    value: { name: 'Support router', links: ['lead', 'closed'], paused: true, folders: '' }, leads: [lead],
+    value: { name: 'Support router', links: ['lead', 'closed'], paused: true }, leads: [lead],
     stale: routerLinkRows(['closed'], [closed]), busy: false, error: '', problem: '', dirty: false, justSaved: false,
     tasksLoading: false, onEdit: noop, onToggleLink: noop, onSave: noop, onDiscard: noop, ...extra,
   } as Parameters<typeof RouterSettingsBody>[0]))
@@ -298,9 +283,8 @@ describe('router settings render', () => {
   it('says which accounts its area reads, or how one gets added', () => {
     const none = body()
     expect(none).toContain('data-testid="org-router-sources"')
-    expect(none).toContain('No account yet. The Mail plugin adds each mailbox here.')
-    expect(none).toContain('It reads every new mail of these accounts in the folders it watches.')
-    expect(none).toContain('data-testid="org-router-folders"')
+    expect(none).toContain('No account yet. When you choose this area for a message in Mail or Slack, its account shows here.')
+    expect(none).toContain('it reads only the messages you chose for this area, never the rest of the account.')
     const some = body({ sources: [{ kind: 'mail', account: 'desk@example.invalid' }, { kind: 'slack', account: 'T0FIXTURE' }] })
     expect(some).toContain('desk@example.invalid')
     expect(some).toContain('(Mail)')
@@ -333,7 +317,7 @@ describe('router settings render', () => {
     expect(html).toMatch(/<button[^>]*type="submit"[^>]*disabled=""[^>]*data-testid="org-router-save"|<button[^>]*data-testid="org-router-save"[^>]*disabled=""/)
   })
 
-  it('unpaused, it says Ready for new items, never that it collects', () => {
+  it('unpaused, it says Ready for assigned items, never that it collects', () => {
     const html = body({ value: { name: 'Support router', links: [], paused: false }, stale: [] })
     expect(html).toContain(ROUTER_READY_LINE)
     expect(html).not.toContain(staleNote(1))
@@ -493,11 +477,18 @@ describe('New router reuses the router an area already has', () => {
   })
 })
 
-describe('router settings', () => {
-  it('keep no per-message area rules: a mailbox is bound to its router as a whole', () => {
-    const settings = code(read('web/src/components/org/OrgRouterSettings.tsx'))
+describe('incoming area rules stay inside router settings', () => {
+  const settings = code(read('web/src/components/org/OrgRouterSettings.tsx'))
+  const rules = code(read('web/src/components/org/OrgRouterRules.tsx'))
+  it('keeps the rule draft per area and requires a separate explicit confirmation', () => {
+    expect(settings).toContain('<OrgRouterRules key={id} areaId={area} />')
     expect(settings).toContain('className="org-router-settings-scroll"')
-    expect(settings).not.toMatch(/OrgRouterRules|router\/rules|router\/assign/)
-    expect(fs.existsSync(path.join(ROOT, 'web/src/components/org/OrgRouterRules.tsx'))).toBe(false)
+    expect(rules).toContain("draftKey('org-router-rule-bindings', areaId)")
+    expect(rules).toContain("expectedRevision: draft.value.fileRevision")
+    expect(rules).toContain('Confirm area rules')
+    expect(rules).toContain('Unassigned')
+    expect(rules).toContain('New mail that matches then goes there by itself')
+    expect(rules).toContain('older mail, and mail two rules disagree on, waits for you.')
+    expect(rules).not.toMatch(/setInterval|createPortal|<select|router\/assign/)
   })
 })

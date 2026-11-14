@@ -159,6 +159,7 @@ export function LetterView({
     else openAgentRef(ref, onNavigate);
   }, [onNavigate, openBodyFile]);
   const onBodyClick = useEntityClickHandler(
+    useCallback((taskId: string) => onNavigate(taskPath(taskId)), [onNavigate]),
     useCallback((sid: string) => onNavigate(`/sessions?id=${sid}`), [onNavigate]),
     openBodyFile,
     host,

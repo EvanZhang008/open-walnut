@@ -49,7 +49,6 @@ export type {
   MailAccount,
   MailAccountState,
   MailAddress,
-  MailAttachmentContent,
   MailAttachmentMeta,
   MailBody,
   MailCapabilities,
@@ -145,14 +144,8 @@ export type {
  * rows it names, so mail read (or marked unread) on another device shows here on a provider whose
  * poll never lists a quiet folder again (IMAP). Additive: a provider without it keeps the
  * `listUnread` path, or none.
- *
- * 1.14.0 adds the optional `getAttachment`, read only when `capabilities.attachments` is `'download'`:
- * one attachment's decoded bytes, streamed to the person who clicked it, never cached and never handed
- * to an agent. And `MailProviderSpec.refusalRevision`: a provider that learned to read mail it used to
- * refuse as `too-large` says so, and the base forgets those remembered refusals once. Both additive: a
- * provider with neither keeps `'metadata'` chips and its refusals.
  */
-export const MAIL_BASE_API_VERSION = '1.14.0'
+export const MAIL_BASE_API_VERSION = '1.13.0'
 
 /**
  * The method bag published as `mail:base`.
@@ -219,12 +212,6 @@ export function createMailBaseApi(deps: {
    */
   identityRevision: (providerId: string, revision: string | undefined) => Promise<void>
   /**
-   * Reconcile `spec.refusalRevision`: forget the `too-large` refusals this provider gave before its
-   * fix, so those bodies are asked for again. Same calling shape; optional so a caller wiring only
-   * the other two keeps compiling.
-   */
-  refusalRevision?: (providerId: string, revision: string | undefined) => Promise<void>
-  /**
    * Run this after the current turn, on a timer the host owns.
    *
    * Injected rather than `setImmediate` so the loader cancels a pending sweep when it tears the
@@ -276,15 +263,6 @@ export function createMailBaseApi(deps: {
         const revision = spec.identityRevision
         deps.defer(() => {
           void deps.identityRevision(spec.id, revision).catch(() => undefined)
-        })
-      }
-      // A provider that can now read mail it used to refuse. Deferred and armed only when declared,
-      // like the two above; independent of them, since forgetting a refusal drops no cached body.
-      if (spec?.refusalRevision !== undefined && deps.refusalRevision) {
-        const revision = spec.refusalRevision
-        const reconcile = deps.refusalRevision
-        deps.defer(() => {
-          void reconcile(spec.id, revision).catch(() => undefined)
         })
       }
       return handle

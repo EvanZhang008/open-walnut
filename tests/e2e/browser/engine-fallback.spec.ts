@@ -55,8 +55,8 @@ async function config(request: APIRequestContext): Promise<Record<string, any>> 
 async function setFallback(request: APIRequestContext, fb: { engine: string; model?: string } | null): Promise<void> {
   const cfg = await config(request)
   const defaults = { ...cfg.defaults }
-  // A section write merges (src/core/config-section-write.ts): null removes the key.
-  defaults.fallback_engine = fb ?? null
+  delete defaults.fallback_engine
+  if (fb) defaults.fallback_engine = fb
   const res = await request.put('/api/config', { data: { ...cfg, defaults } })
   expect(res.ok(), await res.text()).toBe(true)
 }
