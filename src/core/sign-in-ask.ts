@@ -15,9 +15,9 @@
  *   - otherwise every task's sign-in ask folds into the first one asked, whatever team it is in.
  *
  * The checker's file (SignInStateFile) is also how an outside reminder owns telling the user about
- * sign-in: written fresh with `owns: true`, Walnut's warning ahead of a certificate's expiry steps
- * aside (readSignInOwner); once sign-in is broken, Walnut's letter steps aside only for the owner's
- * own open letter (readSignInOwnerLetter); stale or removed, they speak again.
+ * sign-in: ownership alone never silences a reminder. A delivered certificateWarning identifies
+ * the inbox letter for that exact expiry (readCertificateWarning); once sign-in is broken, only
+ * the owner's own open sign-in letter holds a new letter back (readSignInOwnerLetter).
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -43,8 +43,10 @@ export interface SignInStateFile {
   by?: string;
   /** With ok false: its own letter asking the user to sign in; every sign-in ask waits on it. */
   letterId?: string;
-  /** It tells the user about sign-in itself: Walnut's certificate and sign-in failure letters step aside. */
+  /** It can report its own delivered letters; ownership alone never suppresses a warning. */
   owns?: boolean;
+  /** Delivered certificate warning, tied to this exact expiry (epoch ms), not a push notification. */
+  certificateWarning?: { expiresAt: number; letterId: string };
 }
 
 const MEANING: RegExp[] = [
@@ -114,12 +116,26 @@ async function freshStateFile(nowMs: number, dir: string): Promise<{ said: SignI
 }
 
 /**
- * The outside reminder that owns telling the user about sign-in now (its file fresh, `owns: true`),
- * or null: then Walnut's own certificate and sign-in failure letters speak.
+ * The outside checker's ownership claim, for diagnostics only. This is not delivery evidence
+ * and must never hold back a certificate or sign-in warning.
  */
 export async function readSignInOwner(nowMs = Date.now(), dir = path.join(WALNUT_HOME, 'local')): Promise<{ by: string } | null> {
   const fresh = await freshStateFile(nowMs, dir);
   return fresh?.said.owns === true ? { by: fresh.by ?? 'the sign-in check' } : null;
+}
+
+/** A warning is handed off only after its inbox letter exists for this exact expiry. */
+export async function readCertificateWarning(
+  expiresAt: number, nowMs = Date.now(), dir = path.join(WALNUT_HOME, 'local'),
+  isOpen: (letterId: string) => Promise<boolean> = (id) => letterOpen(id, 'throw'),
+): Promise<{ by: string; letterId: string } | null> {
+  // Delivery is a durable fact, not a live ownership lease. A stopped checker can have sent it.
+  const said = await readJson(path.join(dir, SIGN_IN_STATE_FILE)) as Partial<SignInStateFile> | null;
+  const warning = said?.certificateWarning;
+  const letterId = typeof warning?.letterId === 'string' ? warning.letterId.trim() : '';
+  if (warning?.expiresAt !== expiresAt || !letterId || !(await isOpen(letterId))) return null;
+  const by = typeof said?.by === 'string' && said.by.trim() ? said.by.trim().slice(0, 80) : 'the sign-in check';
+  return { by, letterId };
 }
 
 /**
@@ -142,12 +158,15 @@ export async function readSignInOwnerLetter(
 }
 
 /** Whether a letter is still before the user (not archived); a letter that cannot be read counts as open. */
-async function letterOpen(id: string): Promise<boolean> {
+async function letterOpen(id: string, onError: true | 'throw' = true): Promise<boolean> {
   try {
     const { getLetter } = await import('./human-inbox/store.js');
     const letter = await getLetter(id, { deferBodies: true });
     return !!letter && !letter.archived;
-  } catch { return true; }
+  } catch (error) {
+    if (onError === 'throw') throw error;
+    return true;
+  }
 }
 
 /**

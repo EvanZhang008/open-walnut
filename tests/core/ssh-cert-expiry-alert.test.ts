@@ -41,6 +41,7 @@ function deps(over: Partial<CertExpiryAlertDeps> = {}): CertExpiryAlertDeps {
     loginHint: async () => 'run your login command',
     statePath: path.join(dir, 'cert.json'),
     now: () => clock,
+    timeZone: () => 'UTC',
     setTimer: () => ({ unref: () => {} }),
     clearTimer: () => {},
     ...over,
@@ -213,7 +214,7 @@ describe('the SSH certificate letter', () => {
     expect((await alert.episode())?.letterId).toBe('letter-x')
   })
 
-  it('handed off to another reminder: no letter, an open one archived, no join; handed back, it warns again', async () => {
+  it('explicit opt-out archives the letter and refuses joins; toggling back never repeats this expiry', async () => {
     let off = false
     const alert = createCertExpiryAlert(deps({ handedOff: async () => off }))
     clock = EXPIRES - HOUR
@@ -231,12 +232,11 @@ describe('the SSH certificate letter', () => {
     off = false
     clock = EXPIRES - 30 * 60_000
     await alert.check()
-    expect(sent).toHaveLength(2)
-    // A new letter, never the archived one under its old key.
-    expect(sent[1]!.opKey).not.toBe(sent[0]!.opKey)
+    expect(sent).toHaveLength(1)
+    expect(await alert.episode()).toBeNull()
   })
 
-  it('handed back after a restart, with a store that answers a known key with its archived letter, the warning still reaches the user', async () => {
+  it('a restart and hand-back never create a second delivery for an already retired expiry', async () => {
     // As sendLetterOnce: a key it has seen returns that letter and sends nothing.
     const byKey = new Map<string, string>()
     const delivered: string[] = []
@@ -254,8 +254,8 @@ describe('the SSH certificate letter', () => {
     off = false
     const back = createCertExpiryAlert(deps({ send, handedOff: async () => off }))
     await back.check()
-    expect(delivered).toHaveLength(2)
-    expect((await back.episode())?.letterId).toBe('letter-2')
+    expect(delivered).toHaveLength(1)
+    expect(await back.episode()).toBeNull()
   })
 
   it('reads in Chinese for a Chinese letter language', () => {

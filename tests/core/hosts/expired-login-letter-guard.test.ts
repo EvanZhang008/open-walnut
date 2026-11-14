@@ -116,33 +116,25 @@ describe('a certificate past its expiry reaches the one letter, even while Walnu
   }
 
   for (const shape of OWNER_SHAPES) {
-    it(`owner ${shape.name}: held ahead when it owns, one expired letter past the expiry unless its own letter is open`, async () => {
+    it(`owner ${shape.name}: an ownership claim cannot suppress the warning or replace its thread`, async () => {
       const sent: Array<{ subject: string; markdown: string }> = []
       const arms: number[] = []
       const turns: string[] = []
       const alert = cert(sent, { ok: false, error: 'Permission denied (publickey).' }, arms, turns)
-      const owns = shape.file?.owns === true && !shape.file.stale
-      // Two hours ahead: an owner holds Walnut's warning (it pushes its own), and the clock is set
-      // for the expiry itself.
+      // Two hours ahead: without proof of a warning for this expiry, Walnut sends its letter.
       clock = EXPIRES - 2 * HOUR
       writeOwner(shape.file)
       await alert.check()
-      expect(sent).toHaveLength(owns ? 0 : 1)
-      if (owns) expect(arms.at(-1)).toBeLessThanOrEqual(10 * 60_000)
+      expect(sent).toHaveLength(1)
+      expect(arms.at(-1)).toBeLessThanOrEqual(2 * 60_000)
       // Past the expiry: the fresh sign-in is refused.
       clock = EXPIRES + 60_000
       writeOwner(shape.file)
       await alert.check()
       await alert.check()
-      expect(sent).toHaveLength(shape.holds ? 0 : 1)
-      // Warned ahead: the expiry is one more turn in that letter; first sent past it: none needed.
-      expect(turns).toHaveLength(owns ? 0 : 1)
-      if (owns && !shape.holds) {
-        expect(sent[0]!.subject).toBe('SSH certificate for clouddev and olddev expired at 2026-11-10 16:04 UTC')
-        expect(sent[0]!.markdown).toContain('a fresh SSH sign-in to **clouddev** and **olddev** now fails')
-        expect(sent[0]!.markdown).toContain('Permission denied (publickey).')
-        expect(sent[0]!.markdown).not.toContain('in about')
-      }
+      expect(sent).toHaveLength(1)
+      expect(turns).toHaveLength(1)
+      expect(turns[0]).toContain('Permission denied (publickey).')
     })
   }
 
@@ -248,7 +240,7 @@ describe('both orders are one letter', () => {
   })
 })
 
-describe('source ratchet: only the warning ahead may be held by owning the reminder', () => {
+describe('source ratchet: no reminder is held by an ownership claim alone', () => {
   function walk(d: string, out: string[] = []): string[] {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
       const p = path.join(d, e.name)
@@ -258,7 +250,7 @@ describe('source ratchet: only the warning ahead may be held by owning the remin
     return out
   }
 
-  it('readSignInOwner( is called only in the ahead branch of certLetterHandedOff', () => {
+  it('no source caller suppresses a reminder through readSignInOwner', () => {
     const callers: string[] = []
     for (const file of walk(path.join(ROOT, 'src'))) {
       const text = fs.readFileSync(file, 'utf-8')
@@ -266,8 +258,7 @@ describe('source ratchet: only the warning ahead may be held by owning the remin
         if (/\breadSignInOwner\(/.test(line) && !/export async function readSignInOwner\(/.test(line)) callers.push(`${path.relative(ROOT, file)}: ${line.trim()}`)
       }
     }
-    // One caller, in certLetterHandedOff, after its 'expired' branch returned on the owner's letter.
-    expect(callers.map((c) => c.split(':')[0])).toEqual(['src/core/hosts/ssh-cert-expiry-alert.ts'])
+    expect(callers).toEqual([])
     const certSrc = fs.readFileSync(path.join(ROOT, 'src/core/hosts/ssh-cert-expiry-alert.ts'), 'utf-8')
     expect(certSrc).toMatch(/phase === 'expired'\)\s*return[^\n]*readSignInOwnerLetter\(/)
   })

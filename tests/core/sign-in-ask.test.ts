@@ -111,7 +111,7 @@ describe('an outside reminder owns sign-in only while it runs (readSignInOwner, 
     expect(await certLetterHandedOff(undefined, now, dir)).toBe(false)
     write({ ok: false, checkedAt: new Date(now - 60_000).toISOString(), by: 'the sign-in plugin', owns: true })
     expect(await readSignInOwner(now, dir)).toEqual({ by: 'the sign-in plugin' })
-    expect(await certLetterHandedOff(undefined, now, dir)).toBe(true)
+    expect(await certLetterHandedOff(undefined, now, dir)).toBe(false)
     write({ ok: true, checkedAt: new Date(now - 60_000).toISOString() })
     expect(await readSignInOwner(now, dir)).toBeNull()
     write({ ok: true, checkedAt: new Date(now - 60_000).toISOString(), owns: true })
@@ -130,7 +130,7 @@ describe('an outside reminder owns sign-in only while it runs (readSignInOwner, 
     // The 2026-11-10 file: owns, broken, no letter of its own.
     write({ ok: false, checkedAt: at, by: 'the sign-in plugin', owns: true, producer: 'p' })
     expect(await readSignInOwnerLetter(now, dir, open)).toBeNull()
-    expect(await certLetterHandedOff(undefined, now, dir, 'ahead', open)).toBe(true)
+    expect(await certLetterHandedOff(undefined, now, dir, 'ahead', open)).toBe(false)
     expect(await certLetterHandedOff(undefined, now, dir, 'expired', open)).toBe(false)
     write({ ok: false, checkedAt: at, by: 'the sign-in plugin', owns: true, letterId: 'lt-gone' })
     expect(await readSignInOwnerLetter(now, dir, open)).toBeNull()
