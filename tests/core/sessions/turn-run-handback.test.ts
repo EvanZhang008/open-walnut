@@ -16,12 +16,13 @@ import { WALNUT_HOME } from '../../../src/constants.js'
 import { closeDb } from '../../../src/core/session-db.js'
 import { _resetSessionTrackerForTesting, createSessionRecord, getSessionByClaudeId, updateSessionRecord, updateSessionRecordConditionally } from '../../../src/core/session-tracker.js'
 import { addTask, updateTask, getTask } from '../../../src/core/task-manager.js'
+import * as tasks from '../../../src/core/task-manager.js'
 import { applySessionPhase, handBackTaskOnSessionEnd } from '../../../src/core/phase.js'
 import { startEndpointWait } from '../../../src/core/sessions/endpoint-wait.js'
 import { bus, EventNames } from '../../../src/core/event-bus.js'
 import { startUsageLimitWait } from '../../../src/core/sessions/usage-limit-wait.js'
 import { startContextFullRecovery } from '../../../src/core/sessions/context-full-recovery.js'
-import { __resetTurnRunForTesting, __setHeldHandBackRecheckForTesting, turnEndKeepsPhase, noteTurnAttempt, startTurnRun } from '../../../src/core/sessions/turn-run.js'
+import { __resetTurnRunForTesting, __setHeldHandBackRecheckForTesting, turnRetryEnded, turnEndKeepsPhase, noteTurnAttempt, startTurnRun } from '../../../src/core/sessions/turn-run.js'
 import * as tracker from '../../../src/core/session-tracker.js'
 
 beforeEach(async () => {
@@ -29,7 +30,7 @@ beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
   await fsp.mkdir(WALNUT_HOME, { recursive: true })
 })
-afterEach(() => { vi.restoreAllMocks(); __resetTurnRunForTesting(); closeDb(); _resetSessionTrackerForTesting() })
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); __resetTurnRunForTesting(); __setHeldHandBackRecheckForTesting(null); closeDb(); _resetSessionTrackerForTesting() })
 
 describe('what the turn record holds is let go', () => {
   it('an endpoint wait stopped by a person releases its held hand-back', async () => {
@@ -154,5 +155,66 @@ describe('what the turn record holds is let go', () => {
     } finally {
       __setHeldHandBackRecheckForTesting(null)
     }
+  })
+})
+
+async function heldTask(sid: string) {
+  const { task } = await addTask({ title: 'Held turn' })
+  await updateTask(task.id, { phase: 'IN_PROGRESS' })
+  await createSessionRecord(sid, task.id, 'demo')
+  await updateSessionRecord(sid, {
+    process_status: 'error', errorMessage: 'API Error: 500',
+    usageLimit: { state: 'waiting', engine: 'claude', since: new Date().toISOString(), resumes: 0, tries: 0 },
+  })
+  await applySessionPhase(task.id, 'session:error', 'server.ts:session-error', { sessionId: sid })
+  return task
+}
+
+describe('a held hand-back never hands back a turn that moved on (review round 2)', () => {
+  it('a resumed session wins even after replay passed its first status check', async () => {
+    const task = await heldTask('sid-race')
+    await updateSessionRecordConditionally('sid-race', { usageLimit: undefined }, () => true)
+    const realWrite = tasks.updateTaskRaw
+    let started!: () => void
+    const atWrite = new Promise<void>((r) => { started = r })
+    vi.spyOn(tasks, 'updateTaskRaw').mockImplementationOnce(async (...args) => {
+      // A new turn starts after releaseHeldHandBack checked the status stamp,
+      // but before the task write lock's shouldUpdate check.
+      await updateSessionRecord('sid-race', { process_status: 'running' })
+      started()
+      return realWrite(...args)
+    })
+    turnRetryEnded('sid-race', 'usage_limit')
+    await atWrite
+    await new Promise((r) => setTimeout(r, 50))
+    expect((await getSessionByClaudeId('sid-race'))?.process_status).toBe('running')
+    expect((await getTask(task.id)).phase).toBe('IN_PROGRESS')
+  })
+
+  it('a new queued user message supersedes the old hand-back before the process status changes', async () => {
+    const task = await heldTask('sid-new-send')
+    const { startTurnRun } = await import('../../../src/core/sessions/turn-run.js')
+    const { startUsageLimitWait } = await import('../../../src/core/sessions/usage-limit-wait.js')
+    const { bus, EventNames } = await import('../../../src/core/event-bus.js')
+    const run = await startTurnRun()
+    const waiter = startUsageLimitWait({ pickUp: false })
+    try {
+      bus.emit(EventNames.SESSION_MESSAGE_QUEUED, { sessionId: 'sid-new-send', message: 'new user question', messageId: 'qm-new' }, ['*'], { source: 'ui' })
+      await new Promise((r) => setTimeout(r, 100))
+      expect((await getSessionByClaudeId('sid-new-send'))?.usageLimit).toBeUndefined()
+      expect((await getTask(task.id)).phase).toBe('IN_PROGRESS')
+    } finally { waiter.stop(); run.stop() }
+  })
+
+  it('an unchanged hold backs off from its original start instead of resetting each replay', async () => {
+    __setHeldHandBackRecheckForTesting([10, 20, 30])
+    await heldTask('sid-cadence')
+    // Held again under a fake clock, so the rechecks can be driven.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const timer = vi.spyOn(globalThis, 'setTimeout')
+    await applySessionPhase((await getSessionByClaudeId('sid-cadence'))!.taskId!, 'session:error', 'server.ts:session-error', { sessionId: 'sid-cadence' })
+    expect(timer.mock.calls.at(-1)?.[1]).toBe(10)
+    await vi.advanceTimersByTimeAsync(10)
+    expect(timer.mock.calls.at(-1)?.[1]).toBe(20)
   })
 })

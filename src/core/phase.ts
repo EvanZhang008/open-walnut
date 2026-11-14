@@ -505,6 +505,8 @@ interface ApplySessionPhaseOpts {
    *  it off): its hand-back is not held by the retry it ends (sessions/turn-run.ts). true: by none;
    *  a reason: by that one only (a held hand-back replayed when that retrier let go). */
   retryOver?: boolean | TurnRetryReason
+  /** Internal: the options a held hand-back was first asked with (its replays wrap their own). */
+  heldFrom?: ApplySessionPhaseOpts
   /** Internal: the second pass after the task moved under a planned return. */
   noResume?: boolean
 }
@@ -646,7 +648,13 @@ export async function applySessionPhase(
       })
       // Kept until the retrier lets go: then it goes ahead, unless the session moved on (turn-run.ts).
       const { noteHeldHandBack } = await import('./sessions/turn-run.js')
-      noteHeldHandBack(sid, held, (over) => applySessionPhase(taskId, trigger, source, { ...opts, ...(over ? { retryOver: over } : {}) }))
+      // A replay held again keeps the caller's own options, not the previous replay's.
+      const asked = opts.heldFrom ?? opts
+      noteHeldHandBack(sid, held, (over, stillSame) => applySessionPhase(taskId, trigger, source, {
+        ...asked, heldFrom: asked, ...(over ? { retryOver: over } : {}),
+        // Inside the task write: the session still reads the status it was held at (no new turn since).
+        shouldApply: (current) => stillSame() && (!asked.shouldApply || asked.shouldApply(current)),
+      }))
       return { changed: false, oldPhase: task.phase }
     }
   }

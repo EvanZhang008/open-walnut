@@ -311,7 +311,8 @@ export async function turnEndAnsweredNothing(sessionId: string | undefined, end?
 interface HeldHandBack {
   reason: TurnRetryReason
   stamp: string
-  replay: (over: TurnRetryReason | undefined) => Promise<unknown>
+  /** `stillSame`: the session still reads the status it was held at; the replay asks it again inside its task write. */
+  replay: (over: TurnRetryReason | undefined, stillSame: () => boolean) => Promise<unknown>
   tries: number
   since: number
   timer?: ReturnType<typeof setTimeout>
@@ -336,6 +337,7 @@ export function noteHeldHandBack(sessionId: string, reason: TurnRetryReason, rep
   if (!stamp) return
   const prior = heldHandBacks.get(sessionId)
   if (prior?.timer) clearTimeout(prior.timer)
+  if (prior) heldHandBacks.delete(sessionId)
   const same = prior && prior.stamp === stamp
   const h: HeldHandBack = { reason, stamp, replay, tries: same ? prior.tries : 0, since: same ? prior.since : Date.now() }
   if (Date.now() - h.since >= HELD_HANDBACK_MAX_MS) { heldHandBacks.delete(sessionId); return }
@@ -354,18 +356,38 @@ async function releaseHeldHandBack(sessionId: string, over: TurnRetryReason | un
   const h = heldHandBacks.get(sessionId)
   if (!h || (only && h !== only)) return
   if (h.timer) clearTimeout(h.timer)
-  heldHandBacks.delete(sessionId)
+  h.timer = undefined
+  // Kept while it replays: held again, the phase notes it once more and its tries and age carry on.
+  const drop = () => { if (heldHandBacks.get(sessionId) === h) heldHandBacks.delete(sessionId) }
   try {
     const { getSessionByClaudeId } = await import('../session-tracker.js')
     // A session that moved on (a new turn ran, a person resumed it) hands back for itself.
-    if (statusStamp(await getSessionByClaudeId(sessionId).catch(() => null)) !== h.stamp) return
+    if (statusStamp(await getSessionByClaudeId(sessionId).catch(() => null)) !== h.stamp) { drop(); return }
+    if (heldHandBacks.get(sessionId) !== h) return // a new send cancelled it meanwhile
+    const stillSame = () => {
+      if (heldHandBacks.get(sessionId) !== h) return false
+      let rec: SessionRecord | null = null
+      try { rec = recordNow?.(sessionId) ?? null } catch { return false }
+      return statusStamp(rec) === h.stamp
+    }
     // The retrier that ended passes its own reason, so its own opening window cannot hold it again;
     // another one still holding holds it again (and the phase keeps it here once more).
     log.session.info('turn run: a held hand-back goes ahead', { sessionId, reason: h.reason, ended: over ?? null, tries: h.tries })
-    await h.replay(over === h.reason ? over : undefined)
+    await h.replay(over === h.reason ? over : undefined, stillSame)
   } catch (err) {
     log.session.warn('turn run: a held hand-back failed', { sessionId, error: err instanceof Error ? err.message : String(err) })
+  } finally {
+    drop()
   }
+}
+
+/** A send by anyone but a retrier: a new turn drives the session, and hands back for itself. */
+function cancelHeldHandBack(sessionId: string): void {
+  const h = heldHandBacks.get(sessionId)
+  if (!h) return
+  if (h.timer) clearTimeout(h.timer)
+  heldHandBacks.delete(sessionId)
+  log.session.info('turn run: a held hand-back dropped: a new message drives the session', { sessionId, reason: h.reason })
 }
 
 // ── Attempts ────────────────────────────────────────────────────────────────────
@@ -445,6 +467,8 @@ export async function startTurnRun(): Promise<{ stop: () => void }> {
     if (event.name !== EventNames.SESSION_SEND && event.name !== EventNames.SESSION_MESSAGE_QUEUED) return
     const sid = (event.data as { sessionId?: string }).sessionId
     if (!sid || (event.source && turnAttemptSources().has(event.source))) return
+    // At the event, before anything awaits: a held hand-back must not replay over the new turn.
+    cancelHeldHandBack(sid)
     void newTurn(sid, Date.now())
   }
   bus.subscribe(name, handler, { global: true, interest: ['session:send', 'session:message-queued'] })
