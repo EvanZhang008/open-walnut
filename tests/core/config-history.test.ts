@@ -114,6 +114,17 @@ describe('config.yaml history through the write path', () => {
     expect(await copies()).toHaveLength(first.length + 1);
   });
 
+  it('a config flipping between two states keeps two copies, and the version before the flipping stays', async () => {
+    await updateConfig({ user: { name: 'Before' } } as any);
+    const before = (await copies()).at(-1)!.content;
+    for (let i = 0; i < 12; i++) await updateConfig({ user: { name: i % 2 ? 'Flip' : 'Flop' } } as any);
+    const all = await copies();
+    expect(all.map((c) => c.content)).toContain(before);
+    expect(new Set(all.map((c) => c.content)).size).toBe(all.length);
+    expect(all.at(-1)!.content).toBe(await fs.readFile(CONFIG_FILE, 'utf-8'));
+    expect(all.filter((c) => /Flip|Flop/.test(c.content))).toHaveLength(2);
+  });
+
   it('retention with a fixed clock: 30 writes over 12 days keep the 10 newest and the oldest and newest of each of the last 7 days', async () => {
     const T0 = Date.parse('2026-11-01T00:00:00.000Z');
     // Write i lands on day DAYS[i] (UTC), a few hours and minutes in.

@@ -145,6 +145,12 @@ export async function recordConfigVersion(content: string, seed: ConfigHistorySe
     if (newest?.hash === hash) return saved;
     // Always after the newest copy: names sort by time and never collide.
     await saveCopy(dir, content, Math.max(now, newest ? newest.at + 1 : now), hash);
+    // A config that flips between a few states (2026-11-14: a host's address list rewritten every
+    // few minutes) would fill the newest copies with repeats and push the last really different
+    // version out. A state already among the newest copies moves to the front instead: its older
+    // copy goes, so the count stays and the newest copies are distinct versions.
+    const repeats = entries.slice(-(CONFIG_HISTORY_RETENTION.recent ?? 0)).filter((e) => e.hash === hash);
+    for (const e of repeats) await fs.rm(path.join(dir, e.name), { force: true });
     return true;
   } catch (err) {
     log.session.warn('config-manager: could not save a dated copy of config.yaml', {
