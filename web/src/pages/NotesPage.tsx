@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useSearchParams } from 'react-router-dom';
 import { useNotesTree } from '@/hooks/useNotesTree';
 import { useNoteContent } from '@/hooks/useNoteContent';
@@ -757,7 +758,7 @@ export function NotesPage() {
 
   // A note renamed or moved: its open tab follows in place (position and active
   // state kept), so flush-on-switch is not triggered spuriously (§1.6).
-  const retargetTab = useCallback((from: string, to: string) => {
+  const retargetTab = useLeanCallback((from: string, to: string) => {
     setTabs((prev) => prev.map((t) => (t.path === from ? { ...t, path: to } : t)));
     setActivePath((cur) => (cur === from ? to : cur));
   }, []);
@@ -770,7 +771,7 @@ export function NotesPage() {
    * since the tree loaded moves on to the next number instead of overwriting that note.
    * The tree's New note, the empty state and the palette's blank capture all land here.
    */
-  const handleNewNote = useCallback(async (folder: string) => {
+  const handleNewNote = useLeanCallback(async (folder: string) => {
     const taken = new Set(filePaths);
     let made: string | null = null;
     for (let tries = 0; tries < 5 && !made; tries++) {
@@ -826,7 +827,7 @@ export function NotesPage() {
 
   // An auto-named note follows its title: renamed in place, so the editor, its caret
   // and its unsaved text carry on under the new name (useNoteContent.renameOpenNote).
-  const renameAutoNamed = useCallback((from: string, to: string) => renameOpenNote(
+  const renameAutoNamed = useLeanCallback((from: string, to: string) => renameOpenNote(
     from,
     to,
     () => moveNote(from, to),
@@ -837,7 +838,7 @@ export function NotesPage() {
       void refreshTree();
     },
   ), [renameOpenNote, retargetTab, refreshTree]);
-  const handleAutoNameFailed = useCallback((from: string, to: string, err: unknown) => {
+  const handleAutoNameFailed = useLeanCallback((from: string, to: string, err: unknown) => {
     // Most likely the name was taken since the tree loaded: a fresh tree picks the next free one.
     log.warn('notes', 'Naming a note after its title failed', { from, to, error: err instanceof Error ? err.message : String(err) });
     void refreshTree();

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { fetchNoteContent, saveNoteContent } from '@/api/notes-v2';
 import { useEvent } from '@/hooks/useWebSocket';
 import {
@@ -849,7 +850,7 @@ export function useNoteContent(notePath: string | null) {
    * `from` is read first: gone means it moved, so nothing is written back to `from` (a
    * save there would make the old file again beside the moved one).
    */
-  const renameOpenNote = useCallback(async (
+  const renameOpenNote = useLeanCallback(async (
     from: string,
     to: string,
     move: () => Promise<void>,

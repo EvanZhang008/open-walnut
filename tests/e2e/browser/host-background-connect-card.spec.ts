@@ -225,8 +225,8 @@ test('an established host reconnecting shows no card', async ({ page, baseURL })
 
 test('the card never takes the focus from what the person types in', async ({ page, baseURL }) => {
   const fake = await serve(page, baseURL!)
-  // An empty board opens the New task draft (it borrows the chat spot): its composer is the box.
-  const composer = page.locator('.main-page-session-column .chat-input-textarea').first()
+  // The task list's search box: on Home whatever the board holds or which columns are open.
+  const composer = page.getByRole('textbox', { name: /Search tasks/ }).first()
   await expect(composer).toBeVisible({ timeout: 60_000 })
   await composer.click()
   await page.keyboard.type('hello')
