@@ -1,0 +1,106 @@
+name: Leak gate
+
+# The leak scan of the git history itself (scripts/leak-scan/scan-git.mjs, the same scan the
+# commit and push hooks and every land run), here so that nothing reaches this repository
+# unscanned: a push that skipped the local hooks, a commit made on GitHub, a bot's commit, a
+# pull request. Every push and pull request scans the commits it adds; each also scans the whole
+# history (a rule added later judges what is already public; known hits, all fixed forward, sit
+# in the baselines). The schedule catches pushes made with GITHUB_TOKEN (the release and star
+# history bots), whose events start no workflow. The scanner that judges is the BASE commit's
+# (what main already had), never the pushed one, so a push cannot loosen its own scan. The
+# private rules (the LEAK_SCAN_RULES secret) are required, and given only to runs of main (a push
+# to it, the schedule, by hand): another branch's workflow file is its pusher's to edit, so it
+# runs the committed shapes and gitleaks, as a fork's pull request does. Output is redacted: the
+# rule and the file and line, never the text.
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '41 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: leak-gate-${{ github.event_name }}-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: Scan ${{ matrix.part }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [new commits, full history]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Install gitleaks (pinned, checksum checked)
+        run: |
+          set -euo pipefail
+          v=8.30.0
+          sum=79a3ab579b53f71efd634f3aaf7e04a0fa0cf206b7ed434638d1547a2470a66e
+          curl -fsSL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/gl.tgz" "https://github.com/gitleaks/gitleaks/releases/download/v$v/gitleaks_${v}_linux_x64.tar.gz"
+          echo "$sum  $RUNNER_TEMP/gl.tgz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin" && tar -xzf "$RUNNER_TEMP/gl.tgz" -C "$RUNNER_TEMP/bin" gitleaks
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: What to scan
+        id: what
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          zero=0000000000000000000000000000000000000000
+          head=${PR_HEAD:-$GITHUB_SHA}
+          base=
+          if [ "$EVENT" = pull_request ]; then base=$(git merge-base "$PR_BASE" "$head")
+          elif [ "$EVENT" = push ] && [ -n "$BEFORE" ] && [ "$BEFORE" != "$zero" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then base=$BEFORE
+          elif [ "$EVENT" = push ]; then
+            # a new branch or tag: from the parent of its oldest commit no other branch holds
+            first=$(git rev-list --reverse --topo-order "$head" --not $(git for-each-ref --format='%(objectname)' refs/remotes/origin | grep -vx "$head" || true) | head -1)
+            if [ -z "$first" ]; then base=$head; elif git rev-parse -q --verify "$first^" >/dev/null; then base=$(git rev-parse "$first^"); else base=$zero; fi
+          fi
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "scan: ${base:-(no new commits: $EVENT)}..$head"
+      - name: The scanner that judges (the base commit's)
+        env:
+          BASE: ${{ steps.what.outputs.base }}
+        run: |
+          set -euo pipefail
+          judge="$RUNNER_TEMP/judge"; mkdir -p "$judge"
+          from=HEAD
+          if [ -n "$BASE" ] && git cat-file -e "$BASE:scripts/leak-scan/scan-git.mjs" 2>/dev/null; then from=$BASE; fi
+          git archive "$from" scripts/leak-scan | tar -x -C "$judge"
+          echo "judged by the scanner of $(git rev-parse --short "$from")"
+      - name: Scan
+        env:
+          LEAK_SCAN_RULES: ${{ (github.ref == 'refs/heads/main' && github.event_name != 'pull_request') && secrets.LEAK_SCAN_RULES || '' }}
+          PART: ${{ matrix.part }}
+          BASE: ${{ steps.what.outputs.base }}
+          HEAD_SHA: ${{ steps.what.outputs.head }}
+          UPSTREAM: ${{ github.repository == 'EvanZhang008/open-walnut' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+        run: |
+          set -euo pipefail
+          rules=()
+          if [ -n "$LEAK_SCAN_RULES" ]; then rules=(--rules-env LEAK_SCAN_RULES); export WALNUT_LEAK_STRICT=1
+          elif [ "$UPSTREAM" = true ]; then echo "::error::The LEAK_SCAN_RULES secret is not set (scripts/leak-scan/README.md)"; exit 1
+          fi
+          if [ "$PART" = "full history" ]; then
+            bun "$RUNNER_TEMP/judge/scripts/leak-scan/scan-git.mjs" --repo . --history "$HEAD_SHA" --redact "${rules[@]}"
+          elif [ -z "$BASE" ] || [ "$BASE" = "$HEAD_SHA" ]; then
+            echo "No new commits to scan."
+          else
+            bun "$RUNNER_TEMP/judge/scripts/leak-scan/scan-git.mjs" --repo . --range "$BASE..$HEAD_SHA" --redact "${rules[@]}"
+          fi

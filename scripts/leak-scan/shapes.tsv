@@ -1,0 +1,23 @@
+# Committed shape rules for scan-git.mjs: credential and private-data SHAPES, never words.
+# They judge every commit everywhere (a contributor's clone, CI on a fork's pull request),
+# with or without the maintainer's private rules (scripts/leak-scan/README.md).
+# label<TAB>kind<TAB>value[<TAB>allow pattern...]; an allow pattern drops a hit whose
+# surrounding text matches it (case-insensitive). Every rule here is source-only by nature:
+# scan-git.mjs is the only reader.
+#
+# Credentials gitleaks has no rule for, or that Walnut itself mints.
+walnut-bearer	regex-cs	\bwalnut\.bearer\.[A-Za-z0-9_-]{24,}	fake|example|placeholder|0123456789|abcdef
+bedrock-api-key	regex-cs	\bABSK[A-Za-z0-9+/]{40,}={0,2}	fake|example|placeholder|0123456789|abcdef
+anthropic-key	regex-cs	\bsk-ant-(api|admin|oat)[0-9]{2}-[A-Za-z0-9_-]{40,}	fake|example|placeholder|0123456789|abcdef|x{20}
+openai-key	regex-cs	\bsk-(proj|svcacct|admin)-[A-Za-z0-9_-]{40,}	fake|example|placeholder|0123456789|abcdef|x{20}
+github-token	regex-cs	\bgh[pousr]_[A-Za-z0-9]{36}\b|\bgithub_pat_[A-Za-z0-9_]{82}\b	abcdefghij|0123456789|fake|example
+aws-access-key	regex-cs	\b(AKIA|ASIA)[0-9A-Z]{16}\b	EXAMPLE|FAKE|TEST|0123456789|ABCDEF
+aws-secret-key	regex-cs	aws_secret_access_key\s*[=:]\s*["']?[A-Za-z0-9/+]{40}\b	EXAMPLEKEY|fixture|fake|example
+slack-token	regex-cs	\bxox[abposr]-[0-9]{8,}-[A-Za-z0-9-]{20,}	fake|example|0123456789
+npm-token	regex-cs	\bnpm_[A-Za-z0-9]{36}\b	fake|example|0123456789|abcdef
+google-api-key	regex-cs	\bAIza[0-9A-Za-z_-]{35}\b	fake|example|0123456789|abcdef
+tailscale-key	regex-cs	\btskey-(auth|api|client|webhook)-[A-Za-z0-9]{8,}-[A-Za-z0-9]{16,}	fake|example|0123456789|abcdef
+bitwarden-session	regex-cs	\bBW_SESSION=["']?[A-Za-z0-9+/]{40,}	fake|example|0123456789|abcdef
+private-key	regex-cs	-----BEGIN (RSA |EC |OPENSSH |DSA |ENCRYPTED |PGP )?PRIVATE KEY( BLOCK)?-----(\\n|\r?\n)[A-Za-z0-9+/]{64}	PEM_BODY|repeat\(|MIIEow
+# A gitleaks inline allow comment silences gitleaks on its line: never in a new line.
+gitleaks-allow	regex-cs	gitleaks:[a]llow

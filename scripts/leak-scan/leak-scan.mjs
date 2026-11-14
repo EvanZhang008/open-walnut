@@ -29,7 +29,7 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { binaryHits, loadRules, printableRuns, runOffset, scanText } from './core.mjs'
+import { binaryHits, decodeRules, loadRules, printableRuns, runOffset, scanText } from './core.mjs'
 
 const CHUNK = 32 * 1024 * 1024
 const OVERLAP = 4096
@@ -60,11 +60,11 @@ function parseArgs(argv) {
 /** Rules JSON from a file or an env var (raw JSON or base64 of it). */
 export function readRules({ rules, rulesEnv }, env = process.env) {
   let raw
-  if (rules) raw = fs.readFileSync(rules, 'utf8')
+  if (rules) raw = decodeRules(fs.readFileSync(rules, 'utf8'))
   else if (rulesEnv) {
     raw = env[rulesEnv]
     if (!raw || !raw.trim()) throw new Error(`no rules: ${rulesEnv} is empty or unset`)
-    if (!raw.trim().startsWith('{')) raw = Buffer.from(raw.trim(), 'base64').toString('utf8')
+    raw = decodeRules(raw)
   } else throw new Error('no rules: pass --rules <file> or --rules-env <VAR>')
   let json
   try { json = JSON.parse(raw) } catch { throw new Error('the rules are not valid JSON') }

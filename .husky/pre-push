@@ -1,5 +1,9 @@
 # Pre-push gate (committed; runs for everyone who installs deps).
 #
+# 0. The leak scan of every commit and tag this push publishes (scripts/leak-scan/scan-push.sh,
+#    scan-git.mjs per commit: credentials, private words and shapes, private data files,
+#    screenshots). First, because it is cheap and nothing else matters if it fails.
+#
 # 1. TypeScript type-check: matches CI's `npm run lint` (tsc --noEmit; `bun run lint` here).
 #    The local dev build uses tsup/esbuild, which ONLY transpiles and SKIPS
 #    type-checking, so type errors stay invisible locally and surface only in
@@ -17,11 +21,11 @@
 #    degrades to just the type-check.
 #
 # 4. The test gate, last because it is the slowest: see scripts/push-gate.sh.
-#
-# Bypass everything with `git push --no-verify` (not recommended).
 
-# The refs being pushed, read once: the scanner and the test gate below both read them.
+# The refs being pushed, read once: the scans and the test gate below all read them.
 refs=$(cat)
+
+printf '%s\n' "$refs" | bash scripts/leak-scan/scan-push.sh "$@" || exit 1
 
 # A tool that already type-checked the exact tree it pushes names that tree in
 # WALNUT_PUSH_TYPECHECKED_TREE, and the hook does not check it again (2026-11-11: on a busy machine a
@@ -35,8 +39,7 @@ else
   echo "Type-checking before push (tsc --noEmit)…"
   if ! bun run --silent lint; then
     echo ""
-    echo "Push blocked: TypeScript errors above (CI would fail too)."
-    echo "Fix them, or bypass with: git push --no-verify"
+    echo "Push blocked: TypeScript errors above (CI would fail too). Fix them and push again."
     exit 1
   fi
   echo "✓ Type-check passed."

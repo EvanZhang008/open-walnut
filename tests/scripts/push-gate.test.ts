@@ -776,6 +776,9 @@ describe('the pre-push hook', () => {
     expect(hook).toMatch(/printf '%s\\n' "\$refs" \| bash scripts\/push-gate\.sh "\$@" \|\| exit 1/)
     // The gate runs after the scanner: a leak is refused before minutes of tests.
     expect(hook.indexOf('| bash scripts/push-gate.sh')).toBeGreaterThan(hook.indexOf('| "$scanner"'))
+    // The committed leak scan runs first of all, for everyone, before the type check.
+    expect(hook).toMatch(/printf '%s\\n' "\$refs" \| bash scripts\/leak-scan\/scan-push\.sh "\$@" \|\| exit 1/)
+    expect(hook.indexOf('scan-push.sh "$@"')).toBeLessThan(hook.indexOf('bun run --silent lint'))
   })
 })
 
@@ -795,6 +798,8 @@ describe('the pre-push type check', () => {
     fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true })
     fs.writeFileSync(path.join(dir, 'scripts/check-committed-bundle.sh'), 'exit 0\n')
     fs.writeFileSync(path.join(dir, 'scripts/push-gate.sh'), 'cat >/dev/null; exit 0\n')
+    fs.mkdirSync(path.join(dir, 'scripts/leak-scan'), { recursive: true })
+    fs.writeFileSync(path.join(dir, 'scripts/leak-scan/scan-push.sh'), 'cat >/dev/null; exit 0\n')
     fs.writeFileSync(path.join(dir, 'a.ts'), 'export const a = 1\n')
     git('add', '-A'); git('-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'base')
     const bin = path.join(dir, '.bin'); fs.mkdirSync(bin)

@@ -41,7 +41,7 @@ if [ "$FAIL" -ne 0 ]; then
   echo "" >&2
   echo "The STAGED blob is broken even if your worktree compiles (partial add," >&2
   echo "mangled hunk). Fix the staged content: re-stage the file or edit and" >&2
-  echo "'git add' again. Bypass (not recommended): git commit --no-verify" >&2
+  echo "'git add' again." >&2
   exit 1
 fi
 exit 0

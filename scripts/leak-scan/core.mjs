@@ -12,7 +12,10 @@
  * `foo2`), and through the escapes of JSON and JS strings (`\nfoo`, `%2Ffoo`).
  */
 
+import { gunzipSync } from 'node:zlib'
+
 export const RULES_VERSION = 1
+const SOURCE_ONLY = '@source'
 const MAX_TERM_WORDS = 6
 const HEX = /^[0-9a-f]{14}$/
 // words remembered per scan before the memo starts over (bounds its memory)
@@ -55,19 +58,25 @@ export function termKey(term, caseSensitive) {
  * `allow` (regex rules only) is a list of patterns; a hit whose surrounding text
  * matches one of them is not reported (a documented placeholder, say).
  * A label is printed with every hit, so it must name a kind of thing, never the term.
+ * A kind ending in `@source` (`term@source`) is a source-only rule: it judges only text
+ * Walnut's own people write (what git publishes, read by scan-git.mjs), never a build
+ * artifact or a third-party tree, where the word is ordinary English or table bytes.
  */
 export function compileRules(entries, { seed = 0 } = {}) {
   const regex = []
   const terms = []
   const labels = [] // term labels, stored once: a term carries its index (`l`), which keeps the file small
   const labelIndex = (l) => (labels.includes(l) ? labels.indexOf(l) : labels.push(l) - 1)
-  for (const e of entries) {
+  for (const raw of entries) {
+    const source = raw.kind.endsWith(SOURCE_ONLY)
+    const e = source ? { ...raw, kind: raw.kind.slice(0, -SOURCE_ONLY.length) } : raw
+    const src = source ? { src: 1 } : {}
     if (e.kind === 'regex' || e.kind === 'regex-cs') {
       // throw here, at build time, never in CI where the error could quote the pattern
       new RegExp(e.value, e.kind === 'regex' ? 'i' : '')
       if (slowStart(e.value) || slowOnLongRuns(new RegExp(e.value, e.kind === 'regex' ? 'gi' : 'g'))) throw new Error(`${SLOW_START} (label ${e.label})`)
       for (const a of e.allow ?? []) new RegExp(a, 'i')
-      regex.push({ label: e.label, source: e.value, flags: e.kind === 'regex' ? 'i' : '', allow: e.allow ?? [] })
+      regex.push({ label: e.label, source: e.value, flags: e.kind === 'regex' ? 'i' : '', allow: e.allow ?? [], ...src })
     } else if (e.kind === 'term' || e.kind === 'term-cs') {
       const cs = e.kind === 'term-cs'
       const key = termKey(e.value, cs)
@@ -75,7 +84,7 @@ export function compileRules(entries, { seed = 0 } = {}) {
       const n = key.split(' ').length
       if (n > MAX_TERM_WORDS) throw new Error(`term longer than ${MAX_TERM_WORDS} words (label ${e.label})`)
       // `f`, the first word's hash, lets the scan skip every word no multi-word term starts with
-      terms.push({ l: labelIndex(e.label), h: termHash(key, seed), n, ...(cs ? { cs: 1 } : {}), ...(n > 1 ? { f: termHash(key.split(' ')[0], seed) } : {}) })
+      terms.push({ l: labelIndex(e.label), h: termHash(key, seed), n, ...(cs ? { cs: 1 } : {}), ...(n > 1 ? { f: termHash(key.split(' ')[0], seed) } : {}), ...src })
     } else {
       throw new Error(`unknown rule kind "${e.kind}" (label ${e.label})`)
     }
@@ -83,12 +92,30 @@ export function compileRules(entries, { seed = 0 } = {}) {
   return { version: RULES_VERSION, seed, regex, labels, terms }
 }
 
-/** Validates a parsed rule set and prepares it for scanning. Throws on anything malformed. */
-export function loadRules(json) {
+/**
+ * The text of a rule set as a file or a secret holds it: the JSON itself, base64 of it, or
+ * base64 of its gzip (an Actions secret holds 48 KB at most, and the rules with their history
+ * baseline are past that in base64).
+ */
+export function decodeRules(raw) {
+  const t = String(raw ?? '').trim()
+  if (!t) throw new Error('no rules: the rule text is empty')
+  if (t.startsWith('{')) return t
+  const bytes = Buffer.from(t, 'base64')
+  return (bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzipSync(bytes) : bytes).toString('utf8')
+}
+
+/**
+ * Validates a parsed rule set and prepares it for scanning. Throws on anything malformed.
+ * `scope: 'source'` keeps the source-only rules (scan-git.mjs); any other scope drops them.
+ * `baseline` (a list of hex fingerprints, scan-git.mjs --history) passes through as a Set.
+ */
+export function loadRules(json, { scope = 'artifact' } = {}) {
   if (!json || json.version !== RULES_VERSION || !Array.isArray(json.regex) || !Array.isArray(json.terms)) {
     throw new Error(`not a leak-scan rule set (version ${RULES_VERSION} with regex and terms lists)`)
   }
   if (json.regex.length + json.terms.length === 0) throw new Error('the rule set is empty')
+  if (scope !== 'source') json = { ...json, regex: json.regex.filter((r) => !r.src), terms: json.terms.filter((t) => !t.src) }
   for (const r of json.regex) if (slowStart(r.source ?? '')) throw new Error(`${SLOW_START} (label ${r.label})`)
   const regex = json.regex.map((r) => ({
     label: r.label,
@@ -110,7 +137,8 @@ export function loadRules(json) {
     if (n > 1) m.firsts.add(parseInt(t.f, 16))
     m.max = Math.max(m.max, n)
   }
-  return { seed: json.seed ?? 0, regex, modes, count: json.regex.length + json.terms.length, memo: { i: new Map(), s: new Map() } }
+  const baseline = new Set(Array.isArray(json.baseline) ? json.baseline.filter((b) => typeof b === 'string') : [])
+  return { seed: json.seed ?? 0, regex, modes, count: json.regex.length + json.terms.length, memo: { i: new Map(), s: new Map() }, baseline }
 }
 
 /**

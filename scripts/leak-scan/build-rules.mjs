@@ -4,11 +4,14 @@
  * term hashed (scripts/leak-scan/README.md).
  *
  *   bun scripts/leak-scan/build-rules.mjs <source.tsv> [--names <file> <label>]...
- *       [--out <file>] [--base64]
+ *       [--baseline <file>] [--out <file>] [--base64]
  *
  * source.tsv, one rule per line (# comments and blank lines skipped):
  *   label<TAB>kind<TAB>value[<TAB>allow pattern<TAB>allow pattern...]
- * kind: regex | regex-cs | term | term-cs. A --names file adds one `term` per line under <label>.
+ * kind: regex | regex-cs | term | term-cs, each optionally with `@source` (judges only what git
+ * publishes, scan-git.mjs). A --names file adds one `term` per line under <label>. A --baseline
+ * file lists the fingerprints of hits already public in git history (scan-git.mjs --history
+ * prints them), one per line: the history scan reports them as known, never as new.
  * The source holds the words in the clear, so it stays private (never in a public repo).
  */
 import { randomInt } from 'node:crypto'
@@ -31,15 +34,22 @@ export function parseNames(text, label) {
     .map((value) => ({ label, kind: 'term', value }))
 }
 
+/** Fingerprints of known history hits: one hex string per line, # comments allowed. */
+export function parseBaseline(text) {
+  return text.split(/\r?\n/).map((l) => l.replace(/#.*/, '').trim()).filter((l) => /^[0-9a-f]{16,64}$/.test(l))
+}
+
 function main() {
   const argv = process.argv.slice(2)
   const entries = []
   let out = null
   let base64 = false
+  let baseline = []
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--names') { entries.push(...parseNames(fs.readFileSync(argv[i + 1], 'utf8'), argv[i + 2])); i += 2 }
     else if (a === '--out') out = argv[++i]
+    else if (a === '--baseline') baseline = parseBaseline(fs.readFileSync(argv[++i], 'utf8'))
     else if (a === '--base64') base64 = true
     else entries.push(...parseSource(fs.readFileSync(a, 'utf8')))
   }
@@ -48,7 +58,8 @@ function main() {
     process.exit(2)
   }
   // a fresh salt per build: no table computed for one rule file fits another
-  const json = JSON.stringify(compileRules(entries, { seed: randomInt(1, 2 ** 31) }))
+  const rules = compileRules(entries, { seed: randomInt(1, 2 ** 31) })
+  const json = JSON.stringify(baseline.length ? { ...rules, baseline } : rules)
   const body = base64 ? Buffer.from(json).toString('base64') : json
   if (out) fs.writeFileSync(out, body, { mode: 0o600 })
   else process.stdout.write(`${body}\n`)

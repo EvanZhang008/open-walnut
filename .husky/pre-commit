@@ -1,20 +1,14 @@
-# Pre-commit gate (committed). Intentionally light — the heavy checks
-# (type-check, full scan) run at push time in .husky/pre-push.
+# Pre-commit gate (committed, runs for everyone). Intentionally light: the type check runs at
+# push time in .husky/pre-push.
 #
-# Runs an OPTIONAL local-only scanner (scripts/local/scan-sensitive-staged.sh,
-# gitignored) if present — the maintainer uses it to catch private content in
-# staged changes before it ever lands in a commit. Absent for everyone else,
-# so this hook is a no-op for them.
-#
-# Bypass with `git commit --no-verify`.
+# 1. The leak scan of the staged change (scripts/leak-scan/scan-git.mjs): credentials, private
+#    words and shapes, private data files, screenshots outside the asset folders. A hit names
+#    the rule and the file and line; reword it and commit again. On the maintainer's machines it
+#    also needs the private rules and gitleaks, and refuses without them.
+bun scripts/leak-scan/scan-git.mjs --staged || exit 1
 
-if [ -x scripts/local/scan-sensitive-staged.sh ]; then
-  scripts/local/scan-sensitive-staged.sh || exit 1
-fi
-
-# Parse-check staged .ts/.tsx blobs (committed, runs for everyone; <1s).
-# Guards against the mangled-hunk class where the committed content is
-# syntactically broken while the worktree compiles — see the script header.
+# 2. Parse-check staged .ts/.tsx blobs (<1s). Guards against the mangled-hunk class where the
+#    committed content is syntactically broken while the worktree compiles: see the script header.
 if [ -x scripts/check-staged-parse.sh ]; then
   scripts/check-staged-parse.sh || exit 1
 fi
