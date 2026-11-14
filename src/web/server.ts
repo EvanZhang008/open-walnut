@@ -2820,8 +2820,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     res.json(await getHookInfoListLegacy())
   })
 
-  app.get('/api/git-sync/status', (_req, res) => {
-    res.json(getGitAutoCommitHealth())
+  app.get('/api/git-sync/status', async (_req, res) => {
+    const { readSecretHoldSummaries } = await import('../integrations/git-sync-secret-notices.js')
+    res.json({ ...getGitAutoCommitHealth(), heldFiles: await readSecretHoldSummaries() })
   })
 
   // In-flight Personal AI turns — the deploy drain's probe (scripts/dev-prod.sh).
@@ -6392,7 +6393,9 @@ function startGitAutoCommit(
   gitRecoveryTracker.reset()
 
   const emitStatus = () => {
-    broadcastEvent('git-sync:status', health)
+    void import('../integrations/git-sync-secret-notices.js').then(async ({ readSecretHoldSummaries }) => {
+      broadcastEvent('git-sync:status', { ...health, heldFiles: await readSecretHoldSummaries() })
+    }).catch(() => { broadcastEvent('git-sync:status', health) })
   }
 
   // Check git availability

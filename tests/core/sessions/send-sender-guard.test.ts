@@ -149,6 +149,8 @@ const CALL_SITES: Record<string, number> = {
   'src/core/subagents/registry.ts': 1,
   // A low disk: one Walnut notice (walnut-notify) asking an open task to clear its own folder.
   'src/core/task-dir-size-notice.ts': 1,
+  // A private-data hold: a Walnut notice to its writer, never a person's word.
+  'src/integrations/git-sync-secret-notices.ts': 1,
   'src/core/pull-requests/pr-watch.ts': 1,       // pull request news: a Walnut envelope, source pr-watch
   'src/core/task-wait-until.ts': 1,
   'src/core/transfer/transfer.ts': 1,

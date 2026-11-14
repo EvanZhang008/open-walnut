@@ -23,17 +23,17 @@
  *  - When the other box changes a held path, git would refuse the merge (and `reset
  *    --hard` / `checkout -f` would discard the local copy), so the merge path first
  *    moves the local copy to `<file>.conflicted-secret-<stamp>` (ignored by the
- *    `*.conflicted-*` rule) and tells the user.
+ *    `*.conflicted-*` rule) and tells the writer.
  *  - Every stage judges it again (a cache keyed by the blobs skips unchanged work),
  *    so a hold ends by itself once the credential is gone; .git/walnut-secret-holds.json
- *    only remembers letters and set-aside candidates, and the next stage rebuilds it.
- *  - The user gets one inbox letter per stage that holds new files, naming each file,
- *    the kind of secret and its lines, never the value.
+ *    remembers writer notices and set-aside candidates, and the next stage rebuilds it.
+ *  - The writer gets the file, kind and lines, never the value. An unknown writer
+ *    leaves quiet Health detail. Private local data is not a public leak.
  * An older Walnut (after a rollback) sees ordinary changed and untracked files and
  * would commit them: the guard protects the versions that have it.
  *
  * The rules are high-precision on purpose: a false hit stops one file from syncing
- * and sends a letter; a miss publishes a credential. Values that look like
+ * and tells its writer; a miss puts a credential in synced history. Values that look like
  * placeholders (EXAMPLE, xxxx, <token>, ***) are not secrets.
  */
 import crypto from 'node:crypto';
@@ -228,8 +228,12 @@ export interface SecretHold {
   since: string;
   /** HEAD has the file: held at HEAD's version in the index (else: a new file, held untracked). */
   tracked: boolean;
-  /** The letter that announced it (its opKey). */
+  /** Legacy letter key, retained for old hold records. */
   letterOp?: string;
+  /** The writer notice was delivered (or recorded quietly when no writer was known). */
+  writerNotified?: boolean;
+  /** Preserved local sidecar: resolve its writer from the original path. */
+  asideOf?: string;
 }
 
 interface HoldStore { version: 2; holds: Record<string, SecretHold> }
@@ -241,62 +245,33 @@ export interface SecretHoldNotice {
   event: 'held' | 'set-aside' | 'released';
   files: Array<{ file: string; hold: SecretHold }>;
   aside?: string;
-  /** The letter key for this notice. */
+  /** Stable key for this notice. */
   op: string;
+  /** The private data repository, never the code checkout. */
+  root?: string;
 }
 
 type Notifier = (notice: SecretHoldNotice) => Promise<void> | void;
 let notifier: Notifier = defaultNotifier;
 
-/** Test seam: where hold notices go (default: the user's inbox). */
+/** Test seam: where hold notices go (default: the writer, or quiet Health detail). */
 export function setSecretHoldNotifierForTest(fn: Notifier | null): void {
   notifier = fn ?? defaultNotifier;
 }
 
-function describe(hold: SecretHold): string {
-  const byKind = new Map<string, number[]>();
-  hold.kinds.forEach((kind, i) => {
-    const lines = byKind.get(kind) ?? [];
-    if (hold.lines[i]) lines.push(hold.lines[i]);
-    byKind.set(kind, lines);
-  });
-  return [...byKind].map(([kind, lines]) => (lines.length ? `${kind} (line ${lines.slice(0, 5).join(', ')})` : kind)).join(', ');
-}
-
-/** Files Walnut writes itself (session records, chats, task stores): the user cannot "edit the secret out". */
-function walnutWritten(file: string): boolean {
-  return /^(?:sessions|conversations|tasks|timeline)\/|^chat-history[^/]*\.json$/.test(file);
-}
-
 async function defaultNotifier(notice: SecretHoldNotice): Promise<void> {
-  if (process.env.WALNUT_SECRET_HOLD_LETTER === '0') return;
-  const { sendLetterOnce, findLetterByOp, setArchived } = await import('../core/human-inbox/store.js');
-  if (notice.event === 'released') {
-    const letter = await findLetterByOp(notice.op);
-    if (letter) await setArchived(letter.id, true);
-    return;
-  }
-  const sender = { sessionId: 'external', host: 'local' };
-  const { walnutLetterLanguage } = await import('../core/human-inbox/walnut-letters/languages.js');
-  const { GIT_SYNC_SECRET_ASIDE, GIT_SYNC_SECRET_HOLD } = await import('../core/human-inbox/walnut-letters/git-sync-secret.js');
-  const lang = await walnutLetterLanguage();
-  if (notice.event === 'set-aside') {
-    const { file, hold } = notice.files[0];
-    const letter = GIT_SYNC_SECRET_ASIDE.render(lang, { file, described: describe(hold), aside: notice.aside ?? '' });
-    await sendLetterOnce({ subject: letter.subject, type: GIT_SYNC_SECRET_ASIDE.type, sender, markdown: letter.markdown }, { opKey: notice.op });
-    return;
-  }
-  const letter = GIT_SYNC_SECRET_HOLD.render(lang, {
-    files: notice.files.map(({ file, hold }) => ({ file, described: describe(hold), walnutWritten: walnutWritten(file) })),
-  });
-  await sendLetterOnce({ subject: letter.subject, type: GIT_SYNC_SECRET_HOLD.type, sender, markdown: letter.markdown }, { opKey: notice.op });
+  const { notifySecretHoldWriter } = await import('./git-sync-secret-notices.js');
+  await notifySecretHoldWriter(notice);
 }
 
-async function notify(notice: SecretHoldNotice): Promise<void> {
+async function notify(notice: SecretHoldNotice): Promise<boolean> {
   try {
     await notifier(notice);
+    return true;
   } catch (error) {
-    log.git.warn('git-sync: could not tell the user about a secret hold', { event: notice.event, files: notice.files.map((f) => f.file), error: error instanceof Error ? error.message : String(error) });
+    // Do not turn a private local hold into a user alarm, including on delivery failure.
+    log.git.info('git-sync: writer notice not delivered; private data held locally; nothing sent', { event: notice.event, files: notice.files.map((f) => f.file), error: error instanceof Error ? error.message : String(error) });
+    return false;
   }
 }
 
@@ -486,7 +461,6 @@ async function holdStagedSecretsNow(git: GitRunner, root: string): Promise<strin
   }
 
   const op = `git-sync-secret-hold:${new Date().toISOString()}`;
-  const added: Array<{ file: string; hold: SecretHold }> = [];
   for (const file of files) {
     const { findings, tracked } = flagged.get(file)!;
     const prior = store.holds[file];
@@ -496,22 +470,23 @@ async function holdStagedSecretsNow(git: GitRunner, root: string): Promise<strin
       since: prior?.since ?? new Date().toISOString(),
       tracked,
       letterOp: prior?.letterOp ?? op,
+      writerNotified: prior?.writerNotified,
     };
     store.holds[file] = hold;
-    if (!prior) added.push({ file, hold });
   }
-  if (added.length > 0 || released.length > 0) await writeHolds(dir, store);
+  // Refresh the findings too: a held file can change before its writer cleans it.
+  if (files.length > 0 || released.length > 0) await writeHolds(dir, store);
 
-  if (added.length > 0) {
-    log.git.warn('git-sync: kept file(s) out of the commit because they hold a secret', {
-      files: added.slice(0, 20).map(({ file, hold }) => ({ file, kinds: hold.kinds, lines: hold.lines, tracked: hold.tracked })),
-      count: added.length,
-    });
-    await notify({ event: 'held', files: added, op });
+  for (const [file, hold] of Object.entries(store.holds)) {
+    if (hold.writerNotified) continue;
+    const delivered = await notify({ event: hold.asideOf ? 'set-aside' : 'held', files: [{ file: hold.asideOf ?? file, hold }],
+      ...(hold.asideOf ? { aside: file } : {}), op: hold.letterOp ?? op, root });
+    if (delivered) hold.writerNotified = true;
   }
+  if (Object.keys(store.holds).length > 0 || released.length > 0) await writeHolds(dir, store);
   if (released.length > 0) {
     log.git.info('git-sync: file(s) no longer hold a secret and sync again', { files: released.map((r) => r.file) });
-    // A letter is archived once none of the files it named is still held.
+    // Preserve the released event seam for callers; the default notifier is quiet.
     const stillHeldOps = new Set(Object.values(store.holds).map((h) => h.letterOp));
     const ops = new Set(released.map((r) => r.hold.letterOp).filter((o): o is string => !!o && !stillHeldOps.has(o)));
     for (const o of ops) await notify({ event: 'released', files: released.filter((r) => r.hold.letterOp === o), op: o });
@@ -543,7 +518,7 @@ export function setAsideHeldTouchedBy(git: GitRunner, root: string, ref: string,
     const dir = await gitDir(git, root);
     if (!fs.existsSync(path.join(dir, HOLDS_FILE))) return [];
     const store = await readHolds(dir);
-    const held = Object.keys(store.holds).filter((file) => fs.existsSync(path.join(root, file)));
+    const held = Object.keys(store.holds).filter((file) => !store.holds[file].asideOf && fs.existsSync(path.join(root, file)));
     if (held.length === 0) return [];
     let base: string | null = null;
     if (mode === 'merge') {
@@ -574,12 +549,16 @@ export function setAsideHeldTouchedBy(git: GitRunner, root: string, ref: string,
         continue;
       }
       delete store.holds[file];
+      const preserved: SecretHold = { ...hold, tracked: false, asideOf: file, writerNotified: false, letterOp: `git-sync-secret-aside:${file}:${stamp}` };
+      store.holds[aside] = preserved;
       moved.push(file);
-      await notify({ event: 'set-aside', files: [{ file, hold }], aside, op: `git-sync-secret-aside:${file}:${stamp}` });
+      // Persist before delivery so a failed notice or restart still leaves a Health entry.
+      await writeHolds(dir, store);
+      if (await notify({ event: 'set-aside', files: [{ file, hold: preserved }], aside, root, op: preserved.letterOp! })) preserved.writerNotified = true;
     }
     if (moved.length > 0) {
       await writeHolds(dir, store);
-      log.git.warn('git-sync: set aside held file(s) the other box changed, so the merge can run', { files: moved, ref, mode });
+      log.git.info('git-sync: private data copy preserved locally for merge; held credential not sent', { files: moved, ref, mode });
     }
     return moved;
   });

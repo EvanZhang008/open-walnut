@@ -212,7 +212,7 @@ describe('auto-commit with the secret guard', () => {
     for (const name of names) await writeFile(name, `k ${fake.github()}\n`);
     await commitIfDirty();
     for (const name of names) expect(showHead(name), name).toBeNull();
-    expect(notices[0].files.map((f) => f.file).sort()).toEqual([...names].sort());
+    expect(notices.flatMap((n) => n.files.map((f) => f.file)).sort()).toEqual([...names].sort());
   });
 
   it('a content line that starts with "++ " is content, not a file header', async () => {
@@ -317,12 +317,12 @@ describe('auto-commit with the secret guard', () => {
     expect(notices[0].files[0]).toMatchObject({ file: 'project/.env', hold: { kinds: ['env-file'] } });
   });
 
-  it('several new files in one tick get one letter', async () => {
+  it('several new files in one tick get independently acknowledged writer notices', async () => {
     await writeFile('a/one.md', `x ${fake.github()}\n`);
     await writeFile('b/two.json', `{"client_secret": "${fake.opaque(48)}"}\n`);
     await commitIfDirty();
-    expect(notices).toHaveLength(1);
-    expect(notices[0].files.map((f) => f.file).sort()).toEqual(['a/one.md', 'b/two.json']);
+    expect(notices).toHaveLength(2);
+    expect(notices.flatMap((n) => n.files.map((f) => f.file)).sort()).toEqual(['a/one.md', 'b/two.json']);
   });
 
   it('the replica stage holds secrets too', async () => {

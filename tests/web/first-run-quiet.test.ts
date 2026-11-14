@@ -53,6 +53,13 @@ describe('a backup that runs nowhere by design is no warning', () => {
     expect(gitSyncNeedsLook({ protected: true, consecutiveFailures: 0 })).toBe(false);
   });
 
+  it('private data holds never contribute to the bell or Needs you verdict', () => {
+    const heldFiles = [{ file: '/home/alice/.open-walnut/notes/setup.md', kinds: ['private-key'], lines: [2], since: 'now' }];
+    expect(gitSyncNeedsLook({ protected: true, consecutiveFailures: 0, heldFiles })).toBe(false);
+    // Holding one file must not hide an actual backup failure.
+    expect(gitSyncNeedsLook({ protected: true, consecutiveFailures: 3, heldFiles })).toBe(true);
+  });
+
   it('guard: nothing in the web app judges the backup by `protected` alone', () => {
     const root = path.join(__dirname, '../../web/src');
     const offenders: string[] = [];
