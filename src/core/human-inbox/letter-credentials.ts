@@ -1,14 +1,10 @@
 /**
- * No credential in a letter: a letter is written to the data folder, which syncs to
- * the user's other machines, and the sync's own scan (integrations/git-sync-secrets.ts)
- * holds back any file that looks like it carries one. So a letter with a credential
- * never reached the other machines, and the user got a second letter, from the sync,
- * about the first (2026-11-12: a backup task wrote a Google OAuth client secret into
- * its letter, and the sync held lt-...md back). The same scan now runs when the letter
- * is written, and the sender gets the refusal while it can still take the value out.
+ * Letters refuse credential values at send time, independently of private-data sync.
+ * The sender can refer to the Settings or secrets-store location instead of copying
+ * a value into a user-facing document. Private files themselves sync normally.
  *
- * `redactLetterLines` is the way out for a letter written before this check: the lines
- * the scan flags are replaced, so the file syncs again.
+ * `redactLetterLines` removes credential lines from older letters when explicitly
+ * requested, keeping the body sizes and index consistent.
  */
 import { findSecretsInText, findSecretsInTextAsync, type SecretFinding } from '../../integrations/git-sync-secrets.js'
 

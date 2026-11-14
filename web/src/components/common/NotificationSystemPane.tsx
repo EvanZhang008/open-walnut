@@ -198,23 +198,6 @@ export const NotificationSystemPane = memo(function NotificationSystemPane(
             </div>
           )}
 
-          {!!gitSync.heldFiles?.length && (
-            <details className="notification-detail-row muted" style={{ display: 'block' }} data-testid="private-data-holds">
-              <summary>{gitSync.heldFiles.length} private data files kept local</summary>
-              <div>
-                <p>These files are in your private data folder, not the Walnut code repository. The held credentials were not sent anywhere. When the writer is known, Walnut asks them to move credentials into Settings or the secrets store; otherwise this is a quiet record. No review is needed from you.</p>
-                <ul>
-                  {gitSync.heldFiles.map((held) => (
-                    <li key={held.file}>
-                      <span style={{ overflowWrap: 'anywhere' }}>{held.file}</span>
-                      {': '}{held.kinds.map((kind, i) => `${kind}${held.lines[i] ? ` (line ${held.lines[i]})` : ''}`).join(', ')}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </details>
-          )}
-
           {gitSync.lastCommitAt && (
             <div className="notification-detail-row muted">
               <span>Last backup</span>

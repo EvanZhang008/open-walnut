@@ -2834,9 +2834,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     res.json(await getHookInfoListLegacy())
   })
 
-  app.get('/api/git-sync/status', async (_req, res) => {
-    const { readSecretHoldSummaries } = await import('../integrations/git-sync-secret-notices.js')
-    res.json({ ...getGitAutoCommitHealth(), heldFiles: await readSecretHoldSummaries() })
+  app.get('/api/git-sync/status', (_req, res) => {
+    // Older clients may still read this field; private data is no longer held for credentials.
+    res.json({ ...getGitAutoCommitHealth(), heldFiles: [] })
   })
 
   // In-flight Personal AI turns — the deploy drain's probe (scripts/dev-prod.sh).
@@ -6403,9 +6403,7 @@ function startGitAutoCommit(
   gitRecoveryTracker.reset()
 
   const emitStatus = () => {
-    void import('../integrations/git-sync-secret-notices.js').then(async ({ readSecretHoldSummaries }) => {
-      broadcastEvent('git-sync:status', { ...health, heldFiles: await readSecretHoldSummaries() })
-    }).catch(() => { broadcastEvent('git-sync:status', health) })
+    broadcastEvent('git-sync:status', { ...health, heldFiles: [] })
   }
 
   // Check git availability

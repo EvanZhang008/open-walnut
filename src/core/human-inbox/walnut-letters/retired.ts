@@ -38,13 +38,13 @@ export const TRIGGER_STOPPED: RetiredLetterKind = {
 };
 
 const privateDataHoldReason = {
-  en: 'This file is in your private data folder, not the Walnut code repository. The held credential was not sent anywhere. Walnut tells its writer, or records it quietly in Health; no review is needed.',
-  zh: '这是你的私有数据文件夹，不是 Walnut 代码仓库。被拦下的凭据没有发到任何地方。Walnut 会通知写入任务处理，或在 Health 中安静记录，不需要你审核。',
+  en: 'This is your private data folder, not the public code repository. Private files now sync normally, including credential-shaped text. No review is needed.',
+  zh: '这是你的私有数据文件夹，不是公开代码仓库。私有文件现在正常同步，即使正文看起来含有凭据，也不再拦截，不需要你审核。',
 };
 
 export const GIT_SYNC_SECRET_HOLD: RetiredLetterKind = {
   id: 'git-sync-secret-hold',
-  retired: 'Private data holds go to the writer, never the human inbox.',
+  retired: 'Private data sync no longer blocks credential-shaped documents.',
   matches: (l) => walnutSent(l) && (l.createdByOp?.startsWith('git-sync-secret-hold:') === true
     || /^(?:A file was kept out of sync: it holds a secret|\d+ files were kept out of sync: they hold secrets)$/.test(l.subject)
     || /^有(?:一个文件| \d+ 个文件)没有同步：/.test(l.subject)),

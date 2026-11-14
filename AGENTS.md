@@ -260,7 +260,7 @@ death).
 | Plugins | `src/core/integration-*.ts` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | Chat history | `src/core/chat-history.ts` | skill `walnut-core-internals` |
 | Usage tracking | `src/core/usage/` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
-| Git sync (data hub) | `src/integrations/git-sync.ts` | Mac ⇄ EC2 data plane; secrets NEVER ride it ([cloud sync](./docs/reference/cloud-sync.md)) |
+| Git sync (data hub) | `src/integrations/git-sync.ts` | Private data syncs normally; public code-repository protection is separate ([cloud sync](./docs/reference/cloud-sync.md)) |
 | Org, Brief, Threads, inbox | `src/core/org/`, `src/core/human-inbox/` | [org and inbox](./docs/reference/org-and-inbox.md), [user status](./docs/reference/user-status.md) |
 | Logging & ops | `src/logging/` | skill `walnut-ops` + [src/logging/AGENTS.md](./src/logging/AGENTS.md) + [logs and debugging](./docs/reference/logs-and-debugging.md) |
 | Testing | `tests/` | skill `walnut-testing` + [tests/AGENTS.md](./tests/AGENTS.md) |

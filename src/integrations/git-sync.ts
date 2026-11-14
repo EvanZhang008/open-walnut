@@ -17,7 +17,8 @@ import {
   readFileBounded,
   scanForConflictMarkers,
 } from '../utils/json-conflict-recovery.js';
-import { SECRET_IGNORE_PATTERNS, holdStagedSecrets, setAsideHeldTouchedBy } from './git-sync-secrets.js';
+import { SECRET_IGNORE_PATTERNS } from './git-sync-secrets.js';
+import { releasePrivateDataHolds } from './git-sync-private-data.js';
 import { carryLocalCommits, type CarryResult, type GitStatusRunner } from './git-sync-rewrite-carry.js';
 
 export interface SyncStatus {
@@ -911,8 +912,8 @@ secrets/
 # server; the real one lives in ~/.local/state). machine.json there opens it. Root only.
 /vault/
 
-# Credential stores by name. git-sync-secrets.ts also scans what every commit adds.
-${SECRET_IGNORE_PATTERNS.join('\n')}
+# Private documents sync regardless of credential-shaped text or file names.
+# Dedicated machine-local Settings and secrets stores remain excluded above.
 
 # Dead pre-SQLite session store. sessions.sqlite is the source of truth (ignored
 # above). session-db-migration.ts still reads sessions.json and writes
@@ -1049,9 +1050,6 @@ const EXTRA_IGNORE_PATTERNS = [
   // quiet.json: machine-local runtime state (see GITIGNORE_CONTENT), new in 2026-09.
   'quiet.json',
   // (/local/, new in 2026-09, is a CRITICAL_IGNORE_DIRS entry since 2026-10: untracked too.)
-  // Credential stores by name (.env, SSH keys, keystores, .netrc), 2026-10-27. The
-  // content scan in git-sync-secrets.ts is the guarantee; these keep git from even listing them.
-  ...SECRET_IGNORE_PATTERNS,
 ];
 
 /**
@@ -1151,6 +1149,7 @@ export async function stageAllForCommit(
   const cloudMode = opts.cloudMode ?? CLOUD_MODE;
   const gitOpts = opts.cwd ? { cwd: opts.cwd } : undefined;
   const root = gitOpts?.cwd ?? WALNUT_HOME;
+  await releasePrivateDataHolds(gitRunnerAt(root), root);
   if (cloudMode) await restoreNeverStagePaths(gitOpts);
   else await prepareSyncedPluginFiles(root);
   await gitAsync(stageAllArgs(cloudMode), gitOpts);
@@ -1163,9 +1162,6 @@ export async function stageAllForCommit(
       await gitSafeAsync(`reset -q -- "${p}"`, gitOpts);
     }
   }
-  // Last, on what is really staged: no secret is committed (git-sync-secrets.ts).
-  // Throws when a flagged file cannot be unstaged, so the caller commits nothing.
-  await holdStagedSecrets(gitRunnerAt(root), root);
 }
 
 const unfitPluginFilesReported = new Set<string>();
@@ -1391,7 +1387,10 @@ export function ensureCriticalIgnores(): void {
   } catch {
     return; // no .gitignore yet — initSync writes the full template
   }
-  const rewritten = content.split('\n').map((line) => REANCHORED_LINES.get(line) ?? line).join('\n');
+  // Retire only the scanner's blanket filename rules, not machine-local stores or user rules.
+  const retired = new Set(SECRET_IGNORE_PATTERNS);
+  const rewritten = content.split('\n').filter((line) => !retired.has(line.trim()))
+    .map((line) => REANCHORED_LINES.get(line) ?? line).join('\n');
   const lines = new Set(rewritten.split('\n').map((l) => l.trim()));
   const missing = [...CRITICAL_IGNORES, ...EXTRA_IGNORE_PATTERNS].filter((entry) => !lines.has(entry));
   const suffix = missing.length === 0 ? '' : (
@@ -1943,20 +1942,11 @@ export async function recoverOrphanedGitSurgery(
     await prepareSyncedPluginFiles(repoDir);
     await gitSafeAsync('add -A', opts);
     if (!CLOUD_MODE) await keepUnfitPluginFilesOut({ cwd: repoDir }).catch(() => undefined);
-    // The rescue is merged into the branch and pushed, so no secret may ride it. A
-    // held file stays on disk (untracked, or changed against HEAD); step 2 sets the
-    // local copy aside first when `checkout -f` would overwrite or discard it.
-    try {
-      await holdStagedSecrets(gitRunnerAt(repoDir), repoDir);
-    } catch (error) {
-      return { recovered: false, kind: 'rebase', rescueBranch, error: error instanceof Error ? error.message : String(error) };
-    }
     await gitSafeAsync('commit -q -m "rescue: live worktree at orphaned-rebase recovery"', opts);
     const rescueTip = await gitSafeAsync('rev-parse HEAD', opts);
     if (rescueTip) await gitSafeAsync(`branch -f ${rescueBranch} ${rescueTip}`, opts);
 
     // 2. Back to the pre-rebase branch tip (keeps every un-replayed local commit).
-    await setAsideHeldTouchedBy(gitRunnerAt(repoDir), repoDir, branch, 'replace').catch(() => undefined);
     if (await gitSafeAsync(`checkout -f ${branch}`, { ...opts, timeout: PULL_TIMEOUT }) === null) {
       return { recovered: false, kind: 'rebase', rescueBranch, error: `checkout -f ${branch} failed` };
     }
@@ -2010,8 +2000,7 @@ export async function recoverOrphanedGitSurgery(
       );
       if (healed.restored.length > 0 || healed.quarantined.length > 0) {
         await gitSafeAsync('add -A', opts);
-        const held = await holdStagedSecrets(gitRunnerAt(repoDir), repoDir).then(() => true, () => false);
-        if (held) await gitSafeAsync('commit -q -m "rescue: restore JSON files that carried conflict markers"', opts);
+        await gitSafeAsync('commit -q -m "rescue: restore JSON files that carried conflict markers"', opts);
       }
     }
 
@@ -2661,11 +2650,6 @@ async function lwwMerge(branch: string, remoteBefore: string | null = null): Pro
     return { merged: false, conflicts: 0 };
   }
 
-  // A file held for a secret is untracked or changed here, and git refuses to write
-  // its path when the other box changed it (the safe failure, but sync would stay stuck).
-  // Set that copy aside (never synced) first, so this tick can take the change.
-  await setAsideHeldTouchedBy(gitRunnerAt(WALNUT_HOME), WALNUT_HOME, remoteRef, 'merge').catch((error) => log.git.warn('git-sync: secret-hold set-aside failed', { error: error instanceof Error ? error.message : String(error) }));
-
   // Upstream history rewrite (weekly compaction on the primary force-pushes a
   // rewritten main). Merging would join the OLD fat chain with the rewritten
   // one — resurrecting the entire pre-rewrite history into the hub and undoing
@@ -2701,8 +2685,6 @@ async function lwwMerge(branch: string, remoteBefore: string | null = null): Pro
       });
     }
     const target = carried?.head ?? remoteRef;
-    // reset --hard discards a held file's local copy: it goes aside first.
-    await setAsideHeldTouchedBy(gitRunnerAt(WALNUT_HOME), WALNUT_HOME, target, 'replace').catch(() => undefined);
     if (await gitSafeAsync(`reset --hard ${target}`) === null) {
       log.git.error('git-sync: upstream history rewritten but reset --hard failed — will retry next cycle', { localHead, remoteHead });
       return { merged: false, conflicts: 0 };

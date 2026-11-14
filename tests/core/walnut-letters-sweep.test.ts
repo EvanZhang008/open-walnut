@@ -151,8 +151,8 @@ describe('settling Walnut letters nobody needs', () => {
     const mine = await sendLetter({ subject: subjects[0], type: 'review', markdown: 'Task report.', sender: { sessionId: 'task-session', taskId: 'task-x' } });
     const settled = new Map((await settleUnneededWalnutLetters()).map((s) => [s.id, s.reason]));
     for (const letter of old) {
-      expect(settled.get(letter.id)).toContain('private data folder, not the Walnut code repository');
-      expect(settled.get(letter.id)).toContain('not sent anywhere');
+      expect(settled.get(letter.id)).toContain('private data folder, not the public code repository');
+      expect(settled.get(letter.id)).toContain('sync normally');
       expect((await getLetter(letter.id))!.archived).toBe(true);
     }
     expect(settled.has(mine.id)).toBe(false);

@@ -883,8 +883,10 @@ changes the cloud box, so do it only when you decide to:
 The probe registers as host `probe`, so it shows up in the companion's live
 bridge list. Revoke it with `walnut device revoke bridge-probe`.
 
-## Git sync: secrets never ride it
+## Git sync: private data is not the public code repository
 
-_Moved from the Subsystem Map of the root `AGENTS.md` on 2026-11-11._
+`src/integrations/git-sync.ts` syncs the private data folder between the user's machines. Document content and credential-shaped file names do not block its commits or generate letters, bell alerts or writer notices. Machine-local runtime and dedicated Settings/secrets stores remain excluded for their existing ownership rules. Public code-repository scans remain separate and strict.
 
-`src/integrations/git-sync.ts`: Mac ⇄ EC2 data plane; secrets NEVER ride it: ignore rules are only the first layer, every commit path stages through `stageAllForCommit`, whose content scan (`git-sync-secrets.ts`) holds any file with a credential out of the commit and tells its writer, never the user. This is the private data folder, not the code repository; the held credential stays local. An unknown writer leaves quiet Health detail, with no inbox letter, bell or Needs you item (2026-07-26: an unlisted atomic-write temp of a sign-in cache was committed); every git spawn takes `gitChildEnv()` (`src/lib/git-env.ts`), because an inherited `GIT_DIR` outranks `cwd` and git exports one while running hooks
+Older credential holds are released before staging. A preserved sidecar is copied to a stable `recovered-private-data` name that syncs normally, keeping both the incoming version and the original sidecar untouched. A failed recovery does not block ordinary staging or mark the migration complete, so it can retry safely. Copies are published atomically, and an edited recovery copy is preserved beside a fresh copy.
+
+Every git spawn takes `gitChildEnv()` (`src/lib/git-env.ts`), because an inherited `GIT_DIR` outranks `cwd` and git exports one while running hooks.
