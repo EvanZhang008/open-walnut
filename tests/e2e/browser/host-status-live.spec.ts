@@ -444,12 +444,18 @@ test('Settings › Remote hosts: a live status line per host and a Connect now b
   // An SSH host's retry says it is SSH (2026-11-04 review: two buttons named Retry meant two things).
   await expect(connect).toHaveText('Retry SSH')
   await expect(connect).toBeEnabled()
+  // Why, on the row itself: the server's hint, then what ssh said (2026-11-10 review: a failed
+  // row with no reason while its Details were closed; useLinkedHostRow's connectReasonLine).
+  await expect(row.getByTestId('rh-row-reason')).toHaveText('Check the VPN. ssh: Connection timed out')
   await row.getByTestId('rh-row-more').click()
   await page.getByTestId('rh-row-menu').getByRole('menuitem', { name: 'Details', exact: true }).click()
-  const failure = page.locator(`[data-testid="rh-details"][data-host="${HOST}"] .rh-failure`)
-  // The row's state line says the headline; Details start with what it does not say (2026-11-05 review).
-  await expect(failure.locator('.hft-hint')).toHaveText('Check the VPN.')
+  const details = page.locator(`[data-testid="rh-details"][data-host="${HOST}"]`)
+  await expect(details).toBeVisible()
+  // The row says the headline and the reason; Details say neither again (2026-11-05 review).
+  const failure = details.locator('.rh-failure')
+  await expect(failure.locator('.hft-hint')).toHaveCount(0)
   await expect(failure.locator('.hft-headline')).toHaveCount(0)
+  await expect(details).not.toContainText('Check the VPN.')
   await expect(state).toHaveText(`Could not connect to ${HOST_LABEL}`)
   // Settings re-reads /api/config on its own clock; WebKit tears the page down
   // fast enough that one such read is still in flight when the test ends.
