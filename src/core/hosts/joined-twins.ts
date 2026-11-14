@@ -20,13 +20,17 @@
  * Only a joined row that can be used counts: enabled, while the host network is on
  * (`net.enabled`). A user who turns it off, or disables the joined row, gets the found row
  * back everywhere.
+ * A match is remembered on the found row (`not_offered: same_machine`, found-host-offer.ts,
+ * written by found-host-marks.ts): the joined machine reports only the addresses it has now, so
+ * a Mac that moved to another network would otherwise be offered again under its SSH alias.
  * A found row whose alias is a joined machine's never got in (config-manager.ts).
  */
 import { isIP } from 'node:net'
 import { whereOf } from '../net/net-where.js'
 import { foundHostWaits } from './found-hosts.js'
+import { notOfferedOf } from './found-host-offer.js'
 
-type HostRows = Record<string, { hostname?: unknown; discovered?: unknown; transport?: unknown; endpoint?: unknown; label?: unknown; enabled?: unknown } | undefined>
+type HostRows = Record<string, { hostname?: unknown; discovered?: unknown; transport?: unknown; endpoint?: unknown; label?: unknown; enabled?: unknown; not_offered?: unknown } | undefined>
 
 /** What may follow a machine's own name and still name that machine on a home network. */
 const LOCAL_SUFFIX = /^(?:local|lan|home|localdomain|home\.arpa)$/
@@ -62,8 +66,14 @@ export function joinedTwins(hosts: HostRows, net: unknown): Array<{ alias: strin
     for (const n of new Set([alias, typeof h.label === 'string' ? h.label : ''])) if (n) add(named, n.toLowerCase(), alias)
   }
   const out: Array<{ alias: string; joined: string }> = []
+  const joinedAliases = new Set(joined.map(([alias]) => alias))
   for (const [alias, h] of Object.entries(hosts)) {
     if (!h || h.discovered !== true || h.transport === 'net' || typeof h.hostname !== 'string') continue
+    const kept = notOfferedOf(h)
+    if (kept?.reason === 'same_machine' && kept.same_as && joinedAliases.has(kept.same_as)) {
+      out.push({ alias, joined: kept.same_as })
+      continue
+    }
     const name = h.hostname.trim().toLowerCase().replace(/^\[|\]$/g, '')
     const dot = name.indexOf('.')
     const local = dot < 0 || LOCAL_SUFFIX.test(name.slice(dot + 1))
@@ -94,7 +104,9 @@ export function foundPickableHosts<T extends { enabled?: unknown; discovered?: u
   hosts: Record<string, T | undefined>, net: unknown,
 ): Array<[string, T]> {
   const twins = new Set(joinedTwins(hosts as HostRows, net).map((t) => t.alias))
-  return Object.entries(hosts).filter((e): e is [string, T] => !!e[1] && foundHostWaits(e[1]) && !twins.has(e[0]))
+  // Nor one Walnut learned it cannot set up over SSH (found-host-offer.ts).
+  return Object.entries(hosts).filter((e): e is [string, T] => !!e[1] && foundHostWaits(e[1]) && !twins.has(e[0])
+    && notOfferedOf(e[1] as { not_offered?: unknown })?.reason !== 'not_linux')
 }
 
 /**

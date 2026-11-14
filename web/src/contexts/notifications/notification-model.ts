@@ -16,6 +16,7 @@ import { parseAskUserQuestionInput, type AskQuestion } from '@/components/sessio
 import type { Notification, NotificationAcpOption, NotificationKind } from './types';
 import { wireActionsOf } from './notification-actions';
 import { taskPath } from '@/utils/task-path';
+import { FOUND_HOST_CARD_PREFIX } from '@open-walnut/found-host-offer';
 
 export type NotificationSection = 'action' | 'inbox' | 'errors' | 'automation' | 'all';
 
@@ -37,6 +38,15 @@ export function sectionOf(n: Notification): NotificationSection {
   if (n.kind === 'operation-error') return n.resolved ? 'all' : 'errors';
   if (n.kind === 'cron' || n.kind === 'skill' || n.kind === 'hook') return 'automation';
   return 'all';
+}
+
+/**
+ * An error the person fixes, not Walnut's code: a found host that cannot be added or cannot
+ * connect (src/core/hosts/found-host-alert.ts) needs a join link, a key or a network, so its
+ * card offers its own way forward and no "Fix with agent".
+ */
+export function personFixesCard(n: Pick<Notification, 'dedupKey'>): boolean {
+  return n.dedupKey.startsWith(FOUND_HOST_CARD_PREFIX);
 }
 
 /**

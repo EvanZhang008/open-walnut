@@ -4725,7 +4725,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const { startHostAuthAlert } = await import('../core/hosts/host-auth-alert.js')
     const { hostFixtureMode } = await import('../core/hosts/host-fixture.js')
     const offAuthAlert = await startHostAuthAlert({ knownHosts: () => shown(hostDefs), enabled: !hostFixtureMode() })
-    unsubscribeHostPhase = () => { offPhase(); offReadiness(); offCloudBox(); offAuthAlert() }
+    // A found host that cannot be added or cannot connect is ONE Notifications entry, never a
+    // block on Home; one that is not Linux is marked and never dialled again (found-host-alert.ts).
+    const { startFoundHostAlert } = await import('../core/hosts/found-host-alert.js')
+    const offFoundHostAlert = await startFoundHostAlert({ enabled: !hostFixtureMode() })
+    unsubscribeHostPhase = () => { offPhase(); offReadiness(); offCloudBox(); offAuthAlert(); offFoundHostAlert() }
     // macOS blocking Walnut from the local network sends ONE letter too (archived once it reaches it again).
     const { startLocalNetworkAlert } = await import('../core/hosts/local-network-alert.js')
     const offLocalNetworkAlert = await startLocalNetworkAlert({ enabled: !hostFixtureMode() })

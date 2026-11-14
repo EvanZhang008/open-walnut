@@ -18,7 +18,5 @@ export function firstUseCanStartMain(health: SystemHealth): boolean {
     ['claude_missing', 'claude_needs_node', 'claude_error', 'claude_not_logged_in', 'claude_outdated'].includes(p.kind));
 }
 
-export function foundHostsToAsk(hosts: Record<string, { discovered?: boolean; connect?: string; label?: string }> | undefined): Array<{ host: string; label: string }> {
-  return Object.entries(hosts ?? {}).filter(([, h]) => h.discovered && h.connect === 'ask')
-    .map(([host, h]) => ({ host, label: h.label?.trim() || host }));
-}
+// Which found hosts Home asks about: the server's rule (one place, found-host-offer.ts).
+export { foundHostsToAsk, consentedFoundHosts } from '@open-walnut/found-host-offer';

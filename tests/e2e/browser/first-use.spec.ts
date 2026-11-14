@@ -253,7 +253,8 @@ test('Home keeps 20 long-label hosts unanswered and answering one leaves every o
     if (host !== 'devbox-10') await expect(foundRow(page, host)).toContainText(`Connect to ${def.label}?`);
   }
   await foundRow(page, 'devbox-20').getByRole('button', { name: 'Connect', exact: true }).click();
-  await expect(foundRow(page, 'devbox-20').getByRole('progressbar')).toBeVisible();
+  // Its connect shows in the background connect card, not as a row here.
+  await expect(foundRow(page, 'devbox-20')).toHaveCount(0);
   await expect(prompts(page).getByRole('button', { name: 'Connect', exact: true })).toHaveCount(18);
   expect(fixture.answers).toEqual([{ host: 'devbox-10', answer: 'not_now' }, { host: 'devbox-20', answer: 'yes' }]);
   expect(fixture.connects).toEqual([]);
@@ -267,11 +268,12 @@ test('double-clicking Connect sends one consent POST and does not answer another
     const row = foundRow(page, 'devbox-1');
     await row.getByRole('button', { name: 'Connect', exact: true }).dblclick();
     await expect.poll(() => fixture.answers).toEqual([{ host: 'devbox-1', answer: 'yes' }]);
-    await expect(row.getByRole('progressbar')).toBeVisible();
+    await expect(row.getByRole('button', { name: 'Connect', exact: true })).toBeDisabled();
     await expect(foundRow(page, 'devbox-2').getByRole('button', { name: 'Connect', exact: true })).toBeEnabled();
     const answered = page.waitForResponse(response => response.url().endsWith('/devbox-1/found-answer'));
     heldAnswer.resolve();
     await answered;
+    await expect(row).toHaveCount(0);
     await foundRow(page, 'devbox-2').getByRole('button', { name: 'Not now', exact: true }).click();
     await expect(foundRow(page, 'devbox-2')).toHaveCount(0);
     await expect(notNowRow(page, 'devbox-2')).toBeVisible();
@@ -282,34 +284,30 @@ test('double-clicking Connect sends one consent POST and does not answer another
   }
 });
 
-test('a failed found-answer status survives reload and Try again uses connect rather than repeating consent', async ({ page, baseURL }) => {
+// 2026-11-13, the user, of a host that read "Could not connect" here after every reload: "I don't
+// want it keep showing ... Just show it inside notification is fine". A connect in progress is the
+// background connect card's and a failure is one Notifications entry (the server raises it).
+test('a found host that fails to connect is no row on Home, before or after a reload, and is not asked again', async ({ page, baseURL }) => {
   const fixture = await mockFoundHosts(page, { answerPhase: 'failed' });
   await openFresh(page, baseURL!);
   const row = foundRow(page, 'devbox-1');
   await row.getByRole('button', { name: 'Connect', exact: true }).click();
-  await expect(row.getByRole('alert')).toHaveText(connectionError);
-  await expect(row.getByRole('button', { name: 'Try again', exact: true })).toBeVisible();
-  await expect(row.getByRole('progressbar')).toHaveCount(0);
+  await expect(row).toHaveCount(0);
+  await expect(prompts(page).getByText(/Could not connect|Try again/)).toHaveCount(0);
   expect(fixture.hosts['devbox-1'].connect).toBe('yes');
   expect(fixture.statuses['devbox-1'].phase).toBe('failed');
 
   const hydrated = page.waitForResponse(response => response.url().endsWith('/api/hosts/status'));
   await page.reload();
   expect((await (await hydrated).json()).hosts).toContainEqual(fixture.statuses['devbox-1']);
-  await expect(row.getByRole('button', { name: 'Try again', exact: true })).toBeVisible({ timeout: 60_000 });
-  await expect(row.getByRole('alert')).toHaveText(connectionError);
-  // A failed host can still be put aside, as a found one can.
-  await expect(row.getByRole('button', { name: 'Not now', exact: true })).toBeVisible();
-  await row.getByRole('button', { name: 'Try again', exact: true }).click();
-  await expect(row.getByRole('progressbar')).toBeVisible();
-  await expect(row.getByRole('alert')).toHaveCount(0);
+  await expect(foundRow(page, 'devbox-2')).toContainText(`Connect to ${fixture.hosts['devbox-2'].label}?`, { timeout: 60_000 });
+  await expect(row).toHaveCount(0);
   expect(fixture.answers).toEqual([{ host: 'devbox-1', answer: 'yes' }]);
-  expect(fixture.connects).toEqual(['devbox-1']);
-  await expect(foundRow(page, 'devbox-2')).toContainText(`Connect to ${fixture.hosts['devbox-2'].label}?`);
+  expect(fixture.connects).toEqual([]);
 });
 
 for (const phase of ['install-runtime', 'failed'] as const) {
-  test(`consented ${phase} status survives task-panel remount without asking again`, async ({ page, baseURL }) => {
+  test(`consented ${phase} status is no row on Home across a task-panel remount and a reload`, async ({ page, baseURL }) => {
     const fixture = await mockFoundHosts(page);
     const events = await openFresh(page, baseURL!);
     await foundRow(page, 'devbox-1').getByRole('button', { name: 'Connect', exact: true }).click();
@@ -322,31 +320,18 @@ for (const phase of ['install-runtime', 'failed'] as const) {
     events.push('config:changed', {});
     expect((await (await consentConfig).json()).config.hosts['devbox-1'].connect).toBe('yes');
     const row = foundRow(page, 'devbox-1');
-    if (phase === 'failed') await expect(row.getByRole('alert')).toHaveText(connectionError);
-    else await expect(row.getByRole('progressbar')).toHaveAccessibleName(/Installing the session daemon runtime/);
+    await expect(row).toHaveCount(0);
 
     // MainPage mounts this component in a different place when the task panel hides.
     await taskPanelToggle(page).click();
     await expect(taskPanelToggle(page)).toHaveAttribute('aria-expanded', 'false');
-    if (phase === 'failed') {
-      await expect(row.getByRole('button', { name: 'Try again', exact: true })).toBeVisible();
-      await expect(row.getByRole('alert')).toHaveText(connectionError);
-    } else {
-      await expect(row.getByRole('progressbar')).toHaveAccessibleName(/Installing the session daemon runtime/);
-    }
-    await expect(row.getByRole('button', { name: 'Not now', exact: true })).toHaveCount(phase === 'failed' ? 1 : 0);
+    await expect(foundRow(page, 'devbox-2')).toBeVisible();
+    await expect(row).toHaveCount(0);
     await taskPanelToggle(page).click();
     await expect(taskPanelToggle(page)).toHaveAttribute('aria-expanded', 'true');
-    if (phase === 'failed') await expect(row.getByRole('button', { name: 'Try again', exact: true })).toBeVisible();
-    else await expect(row.getByRole('progressbar')).toBeVisible();
     await page.reload();
-    if (phase === 'failed') {
-      await expect(row.getByRole('button', { name: 'Try again', exact: true })).toBeVisible({ timeout: 60_000 });
-      await expect(row.getByRole('alert')).toHaveText(connectionError);
-    } else {
-      await expect(row.getByRole('progressbar')).toBeVisible({ timeout: 60_000 });
-      await expect(row.getByRole('progressbar')).toHaveAccessibleName(/Installing the session daemon runtime/);
-    }
+    await expect(foundRow(page, 'devbox-2')).toBeVisible({ timeout: 60_000 });
+    await expect(row).toHaveCount(0);
     expect(fixture.answers).toEqual([{ host: 'devbox-1', answer: 'yes' }]);
     expect(fixture.connects).toEqual([]);
   });

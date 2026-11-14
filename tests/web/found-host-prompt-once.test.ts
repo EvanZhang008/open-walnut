@@ -51,7 +51,7 @@ describe('a host the found-host prompt shows takes no banner row', () => {
 
   it('the prompt publishes the hosts it shows and clears them when it unmounts', () => {
     const src = readFileSync(new URL('../../web/src/components/common/FoundHostPrompts.tsx', import.meta.url), 'utf8');
-    expect(src).toMatch(/setPromptedHosts\(rowHosts \? rowHosts\.split/);
+    expect(src).toMatch(/setPromptedHosts\(ownedHosts \? ownedHosts\.split/);
     expect(src).toMatch(/\(\) => \(\) => setPromptedHosts\(\[\]\)/);
   });
 

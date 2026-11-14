@@ -7,6 +7,8 @@
  *                      on the first start a found host in use that config.yaml
  *                      did not hold yet is written as a yes. Then the server asks
  *                      (`hosts_found.asking_since`): a host found later waits.
+ *                      A found host that is a machine already joined is
+ *                      remembered as it (found-host-marks.ts markFoundTwinsDoc).
  *   answerFoundHost    the person's Connect or Not now (Remote Hosts, Runs on).
  *
  * A fact that cannot be read stops the decision for this start: the rows stay as
@@ -22,6 +24,7 @@ import {
   addFoundTarget, decideFoundHost, foundTargetTaken, isFoundHostAnswer, knownFoundTargets, recordScanIfSame, withFoundHostAnswer,
   type FoundHostAnswer, type FoundHostFacts, type FoundHostReason, type FoundHostRow,
 } from './found-hosts.js'
+import { markFoundTwinsDoc } from './found-host-marks.js'
 
 export interface FoundHostDecision {
   alias: string
@@ -108,12 +111,17 @@ export async function settleFoundHosts(depsArg?: Partial<SettleFoundHostsDeps>):
     return []
   }
   let decided: FoundHostDecision[] = []
+  let twins: string[] = []
   await deps.modify((doc) => {
     const before = JSON.stringify([doc.hosts, doc.hosts_found])
-    decided = settleFoundHostsDoc(doc, { facts, scanned, reserved: deps.reserved, now: (deps.now ?? (() => new Date()))() })
+    const now = (deps.now ?? (() => new Date()))()
+    decided = settleFoundHostsDoc(doc, { facts, scanned, reserved: deps.reserved, now })
+    // A found host that is a machine already joined is remembered as it (found-host-marks.ts).
+    twins = markFoundTwinsDoc(doc, { scanned, reserved: deps.reserved, now })
     return JSON.stringify([doc.hosts, doc.hosts_found]) !== before
   })
   if (decided.length > 0) log.session.info('found hosts: decided the hosts an older Walnut left', { decided })
+  if (twins.length > 0) log.session.info('found hosts: remembered as machines already joined', { hosts: twins })
   return decided
 }
 

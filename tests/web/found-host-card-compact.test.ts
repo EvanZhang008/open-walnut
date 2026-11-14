@@ -1,8 +1,10 @@
 /**
- * The "Your other computers" card stays small and every stuck row can be put aside
- * (FoundHostPrompts.tsx; 2026-11-11 review F8: at 1280x560 a failed and a reconnecting host took
- * half the task list, and the failed row had no way out). Source guards: the card has no DOM test
- * harness here, and the browser check is done in WebKit.
+ * The "Your other computers" card stays small and holds only real choices (FoundHostPrompts.tsx).
+ * 2026-11-11 review F8: at 1280x560 a failed and a reconnecting host took half the task list.
+ * 2026-11-13, the user, of a Mac that read "Could not connect" there after every reload: "I don't
+ * want it keep showing ... Just show it inside notification is fine". A connect in progress is the
+ * background connect card's, and a host that cannot connect is one Notifications entry
+ * (src/core/hosts/found-host-alert.ts). Source guards: the card has no DOM test harness here.
  */
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
@@ -13,16 +15,22 @@ const web = (rel: string) => fs.readFileSync(path.join(__dirname, '../../web/src
 describe('the found-host card', () => {
   const card = web('components/common/FoundHostPrompts.tsx');
 
-  it('folds the connect steps once it holds several rows, and caps its height', () => {
+  it('stays a few lines tall when it holds several rows', () => {
     expect(card).toMatch(/const compact = items\.length > 1;/);
-    expect(card).toMatch(/<HostConnectSteps hostKey=\{h\.host\} label=\{h\.label\} compact=\{compact\} \/>/);
-    expect(web('components/sessions/path-selector/HostConnectSteps.tsx')).toMatch(/\{!compact && <ol className="sps-host-step-list">/);
     expect(web('styles/first-use.css')).toMatch(/\.found-host-prompts ul \{[^}]*max-height: min\(180px, 28vh\)/);
   });
 
-  it('offers Not now on a failed or failing row, the same answer a found host gets', () => {
-    expect(card).toMatch(/const stuck = failed \|\| \(active && !status\?\.connected && !!reconnectReasonOf\(status\)\);/);
-    expect(card).toMatch(/\{\(!active \|\| stuck\) && <button[^>]*onClick=\{\(\) => void answer\(h, 'not_now'\)\}>Not now<\/button>\}/);
+  it('shows no connect in progress and no failure: those live in the connect card and Notifications', () => {
+    expect(card).not.toMatch(/HostConnectSteps/);
+    // (Its readiness part keeps its own "Try again" for a failed Claude Code fix.)
+    expect(card).not.toMatch(/Could not connect|Connecting to|\bconnectHost\b/);
+    expect(card).not.toMatch(/isHostFailed|isHostConnecting|reconnectReasonOf/);
+  });
+
+  it('asks only about hosts Walnut can add, through the one rule the server reads', () => {
+    expect(card).toMatch(/setFound\(foundHostsToAsk\(config\.hosts, config\.net\)\)/);
+    expect(card).toMatch(/setConsented\(consentedFoundHosts\(config\.hosts, config\.net\)\)/);
+    expect(web('utils/first-use.ts')).toMatch(/export \{ foundHostsToAsk, consentedFoundHosts \} from '@open-walnut\/found-host-offer'/);
   });
 });
 

@@ -30,7 +30,7 @@ import { usePhoneOverlay } from '@/hooks/usePhoneOverlayHistory';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { PhonePullToRefresh } from '@/components/tasks/PhonePullToRefresh';
 import {
-  useNotifications, sectionOf, sectionCounts, effectiveTs,
+  useNotifications, sectionOf, sectionCounts, effectiveTs, personFixesCard,
   toolNameOf, sessionLabelOf, formatRelative,
   linkTargetOf, resolvedLabelOf, categoryOf, presentError, groupErrorsByCategory,
   partitionErrorsByCause, systemIssueCount, errorsBadgeCount, letterIdOf, requestIdOf,
@@ -1149,8 +1149,8 @@ const FeedItem = memo(function FeedItem({
   // An error card is the one kind that can be handed to a coding session, and
   // only where a source tree exists (canFix) or a session already ran (n.fix) —
   // on a cloud replica or a git-less install the affordance simply isn't there.
-  const fixKind = n.kind === 'operation-error'
-    || (n.severity === 'error' && ['cron', 'skill', 'hook'].includes(n.kind));
+  const fixKind = (n.kind === 'operation-error'
+    || (n.severity === 'error' && ['cron', 'skill', 'hook'].includes(n.kind))) && !personFixesCard(n);
   // Not while Claude Code cannot run here: no agent can start without it. A repair
   // session that already ran still opens.
   const showFixActions = fixKind && (!agentBlocked || !!fixTarget);

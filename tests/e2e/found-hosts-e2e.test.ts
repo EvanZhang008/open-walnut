@@ -157,6 +157,20 @@ describe('found hosts on a real server', () => {
     expect(doc.hosts['off-box']).toMatchObject({ connect: 'not_now', enabled: false })
   })
 
+  it('a save from an editor that does not know `not_offered` keeps it, so the host is never offered again', async () => {
+    // What found-host-alert.ts writes when a found host's SSH probe says Darwin (found-host-offer.ts).
+    const mark = { reason: 'not_linux', os: 'Darwin', at: '2026-11-13T10:00:00.000Z' }
+    const before = await stored()
+    await updateConfig({ hosts: { ...before.hosts, 'off-box': { ...before.hosts['off-box'], not_offered: mark } } } as never)
+    const res = await api('/api/config', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ hosts: { ...before.hosts, 'off-box': { hostname: 'off-box.invalid', enabled: false, discovered: true } } }),
+    })
+    expect(res.status).toBe(200)
+    expect((await stored()).hosts['off-box']).toMatchObject({ connect: 'not_now', enabled: false, not_offered: mark })
+    expect((await config()).hosts['off-box'].not_offered).toEqual(mark)
+  })
+
   it('a host the person said yes to follows a port changed in ~/.ssh/config, across a Settings save, until they set one here', async () => {
     const sshConfig = path.join(isolation.home, '.ssh', 'config')
     const writeSsh = async (port: number, at: number) => {

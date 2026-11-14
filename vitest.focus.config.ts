@@ -30,6 +30,7 @@ const config = mergeConfig(
         '@open-walnut/core': path.resolve(import.meta.dirname, 'src/core/types.ts'),
         '@open-walnut/task-query': path.resolve(import.meta.dirname, 'src/core/task-query.ts'),
         '@open-walnut/host-problem': path.resolve(import.meta.dirname, 'src/core/hosts/host-problem.ts'),
+        '@open-walnut/found-host-offer': path.resolve(import.meta.dirname, 'src/core/hosts/found-host-offer.ts'),
         '@open-walnut/ask-list': path.resolve(import.meta.dirname, 'src/core/sessions/ask-list.ts'),
         '@open-walnut/org-tree': path.resolve(import.meta.dirname, 'src/core/org/org-tree.ts'),
         '@open-walnut/model-line': path.resolve(import.meta.dirname, 'src/core/usage/model-line.ts'),

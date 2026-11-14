@@ -1,30 +1,39 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { fetchFreshConfig } from '@/api/config';
-import { answerFoundHost, connectHost } from '@/api/hosts';
+import { answerFoundHost } from '@/api/hosts';
 import { useEvent } from '@/hooks/useWebSocket';
 import { seedHostStatus, useAllHostStatus } from '@/hooks/useHostStatus';
-import { foundHostsToAsk } from '@/utils/first-use';
-import { isHostConnecting, isHostFailed, reconnectReasonOf } from '@/utils/host-connect';
-import { HostConnectSteps } from '@/components/sessions/path-selector/HostConnectSteps';
+import { consentedFoundHosts, foundHostsToAsk } from '@/utils/first-use';
 import { log } from '@/utils/log';
 import { useHostActions } from '@/hooks/useHostActions';
 import { setPromptedHosts } from '@/utils/host-user-retrying';
 import { openHostSettings } from '@/utils/host-settings-nav';
 import { notNowLine } from '@/utils/found-host-words';
 import { RemoteHostReadiness } from '@/components/settings/sections/RemoteHostReadiness';
-import { autofixProgressText, autofixVerbFor, BLOCKING_READINESS_KINDS, hostReadinessConfirmed, isClaudeFixAction, readinessAnsweredThisConnection, READINESS_ANSWER_GRACE_MS, shownFailureSummary } from '@open-walnut/host-problem';
+import { autofixProgressText, autofixVerbFor, BLOCKING_READINESS_KINDS, hostReadinessConfirmed, isClaudeFixAction, readinessAnsweredThisConnection, READINESS_ANSWER_GRACE_MS } from '@open-walnut/host-problem';
 import { hostReadinessProblems } from '@/utils/host-readiness';
 import { SetupProgress } from './SetupProgress';
+import { markHostConnectAsked } from '@/components/hosts/background-connect';
 import { useServerTick } from '@/hooks/useServerTick';
 import type { HostStatus } from '@/api/hosts';
 import '@/styles/first-use.css';
 
 type Found = { host: string; label: string };
 
+/**
+ * Home's "Your other computers": only real choices and the last step of a setup.
+ *   ask      a found host Walnut can add (found-host-offer.ts foundHostsToAsk): Connect / Not now
+ *   ready    a host the person said Connect to, connected, while Walnut checks or fixes Claude
+ *            Code there (FoundHostReadiness)
+ *   not now  the line that says where to connect it later, in the host's place, until closed
+ * A host it cannot add (not Linux, or a machine already connected under another name) is never
+ * asked, a connect in progress shows in the background connect card, and a host that cannot
+ * connect is one Notifications entry (src/core/hosts/found-host-alert.ts), never a row here
+ * (2026-11-13, the user: "I don't want it keep showing ... Just show it inside notification").
+ */
 export function FoundHostPrompts() {
   const [found, setFound] = useState<Found[]>([]);
-  const [connecting, setConnecting] = useState<Found[]>([]);
   const [consented, setConsented] = useState<Found[]>([]);
   const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -39,63 +48,49 @@ export function FoundHostPrompts() {
     const own = ++generation.current;
     void fetchFreshConfig().then(config => {
       if (own !== generation.current) return;
-      setFound(foundHostsToAsk(config.hosts));
-      setConsented(Object.entries(config.hosts ?? {})
-        .filter(([, h]) => h.discovered && h.connect === 'yes' && h.enabled !== false)
-        .map(([host, h]) => ({ host, label: h.label?.trim() || host })));
+      setFound(foundHostsToAsk(config.hosts, config.net));
+      setConsented(consentedFoundHosts(config.hosts, config.net));
     }).catch(error => log.warn('first-use', 'found hosts could not be read', { error: String(error) }));
   }, []);
   useEffect(() => { refresh(); return () => { generation.current++; }; }, [refresh]);
   useEvent('config:changed', refresh);
   useEvent('_ws:reconnected', refresh);
-  useEffect(() => {
-    setConnecting(prev => {
-      const next = prev.filter(h => {
-        const status = statuses.find(s => s.host === h.host);
-        const ready = hostReadinessConfirmed(status);
-        return !ready && (busy.current.has(h.host) || found.some(row => row.host === h.host) || consented.some(row => row.host === h.host));
-      });
-      for (const h of consented) {
-        const status = statuses.find(s => s.host === h.host);
-        if ((isHostConnecting(status) || isHostFailed(status) || (status?.connected && !hostReadinessConfirmed(status)))
-          && !next.some(row => row.host === h.host)) next.push(h);
-      }
-      return next.length === prev.length && next.every((h, i) => h.host === prev[i].host) ? prev : next;
-    });
-  }, [statuses, consented, found]);
 
-  const answer = async (h: Found, choice: 'yes' | 'not_now', retry = false) => {
+  const answer = async (h: Found, choice: 'yes' | 'not_now') => {
     if (busy.current.has(h.host)) return;
     busy.current.add(h.host);
     setPending(new Set(busy.current));
     setErrors(prev => { const next = { ...prev }; delete next[h.host]; return next; });
-    if (choice === 'yes') setConnecting(prev => prev.some(row => row.host === h.host) ? prev : [...prev, h]);
+    // The floating card shows a Connect at once, before the server's first status lands.
+    if (choice === 'yes') markHostConnectAsked(h.host);
     try {
-      if (retry) seedHostStatus(await connectHost(h.host));
-      else {
-        const result = await answerFoundHost(h.host, choice);
-        seedHostStatus(result.status);
-        refresh();
-        setFound(prev => prev.filter(row => row.host !== h.host));
-        if (choice === 'yes') setConsented(prev => prev.some(row => row.host === h.host) ? prev : [...prev, h]);
-        if (choice === 'not_now') {
-          // A row put aside while it connected leaves at once (the server ends its link).
-          setConnecting(prev => prev.filter(row => row.host !== h.host));
-          setConsented(prev => prev.filter(row => row.host !== h.host));
-          setDeferred(prev => prev.some(row => row.host === h.host) ? prev : [...prev, h]);
-        } else setDeferred(prev => prev.filter(row => row.host !== h.host));
+      const result = await answerFoundHost(h.host, choice);
+      seedHostStatus(result.status);
+      refresh();
+      setFound(prev => prev.filter(row => row.host !== h.host));
+      if (choice === 'not_now') {
+        setConsented(prev => prev.filter(row => row.host !== h.host));
+        setDeferred(prev => prev.some(row => row.host === h.host) ? prev : [...prev, h]);
+      } else {
+        setConsented(prev => prev.some(row => row.host === h.host) ? prev : [...prev, h]);
+        setDeferred(prev => prev.filter(row => row.host !== h.host));
       }
     } catch (error) {
       setErrors(prev => ({ ...prev, [h.host]: error instanceof Error ? error.message : String(error) }));
-      if (!retry) setConnecting(prev => prev.filter(row => row.host !== h.host));
     } finally {
       busy.current.delete(h.host);
       setPending(new Set(busy.current));
     }
   };
-  const rows = [...found.filter(h => !connecting.some(c => c.host === h.host)), ...connecting];
-  const rowHosts = rows.map(h => h.host).sort().join('\n');
-  useEffect(() => { setPromptedHosts(rowHosts ? rowHosts.split('\n') : []); }, [rowHosts]);
+  const statusOf = (host: string) => statuses.find(s => s.host === host);
+  // Connected, and Claude Code there not confirmed yet: the setup's last step shows here.
+  const settingUp = consented.filter(h => { const s = statusOf(h.host); return !!s?.connected && !hostReadinessConfirmed(s); });
+  const rows = [...found.filter(h => !settingUp.some(c => c.host === h.host)), ...settingUp];
+  // The hosts this setup speaks for (asked here, or said Connect to and not set up yet), so the
+  // System attention banner gives them no row: their progress is the background connect card and
+  // their failure the one Notifications entry.
+  const ownedHosts = [...new Set([...found, ...consented.filter(h => !hostReadinessConfirmed(statusOf(h.host)))].map(h => h.host))].sort().join('\n');
+  useEffect(() => { setPromptedHosts(ownedHosts ? ownedHosts.split('\n') : []); }, [ownedHosts]);
   useEffect(() => () => setPromptedHosts([]), []);
   // A Not now line holds its host's place; a host asked again (it came back as found) is a row again.
   const notNow = deferred.filter(d => !rows.some(r => r.host === d.host));
@@ -103,8 +98,8 @@ export function FoundHostPrompts() {
   const items = [...rows.map(h => ({ h, deferred: false })), ...notNow.map(h => ({ h, deferred: true }))];
   items.sort((a, b) => order.current.get(a.h.host)! - order.current.get(b.h.host)!);
   if (!items.length) return null;
-  // Several rows fold their connect steps to one progress line, so the card stays a few lines tall
-  // above the task list (2026-11-11 review: at 1280x560 two rows took half the list).
+  // Several rows keep the card a few lines tall above the task list (2026-11-11 review: at
+  // 1280x560 two rows took half the list).
   const compact = items.length > 1;
   return (
     <section className={`found-host-prompts${compact ? ' found-host-prompts-compact' : ''}`} data-testid="found-host-prompts" aria-label="Connect a found host">
@@ -119,21 +114,20 @@ export function FoundHostPrompts() {
             </div>
           </li>
         );
-        const active = connecting.some(c => c.host === h.host);
-        const status = statuses.find(s => s.host === h.host);
-        const failed = active && isHostFailed(status);
-        // A row that failed, or keeps failing while it reconnects, can be put aside like a found host:
-        // Not now (it stays off, and Settings > Remote Hosts connects it any time).
-        const stuck = failed || (active && !status?.connected && !!reconnectReasonOf(status));
+        const status = statusOf(h.host);
+        if (settingUp.some(c => c.host === h.host) && status) return (
+          <li key={h.host} className="found-host-prompt" data-host={h.host}>
+            <p>{`${h.label} is connected`}</p>
+            <FoundHostReadiness host={h} status={status} />
+          </li>
+        );
         return (
           <li key={h.host} className="found-host-prompt" data-host={h.host}>
-            <p>{status?.connected ? `${h.label} is connected` : failed ? `Could not connect to ${h.label}` : active ? `Connecting to ${h.label}` : `Connect to ${h.label}?`}</p>
-            {active && !failed && !status?.connected && <HostConnectSteps hostKey={h.host} label={h.label} compact={compact} />}
-            {active && status?.connected && <FoundHostReadiness host={h} status={status} />}
+            <p>{`Connect to ${h.label}?`}</p>
             <div className="found-host-actions">
-              {(!active || failed) && <button type="button" className="setup-step-btn" disabled={pending.has(h.host)} onClick={() => void answer(h, 'yes', failed)}>{failed ? 'Try again' : 'Connect'}</button>}
-              {(!active || stuck) && <button type="button" className="setup-step-btn" disabled={pending.has(h.host)} onClick={() => void answer(h, 'not_now')}>Not now</button>}
-              {(errors[h.host] || failed) && <span className="found-host-error" role="alert">{errors[h.host] || status?.hint || shownFailureSummary(status?.error)}</span>}
+              <button type="button" className="setup-step-btn" disabled={pending.has(h.host)} onClick={() => void answer(h, 'yes')}>Connect</button>
+              <button type="button" className="setup-step-btn" disabled={pending.has(h.host)} onClick={() => void answer(h, 'not_now')}>Not now</button>
+              {errors[h.host] && <span className="found-host-error" role="alert">{errors[h.host]}</span>}
             </div>
           </li>
         );
