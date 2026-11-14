@@ -951,3 +951,58 @@ test('a Git push approval shows the summary Walnut wrote on top, in full, once i
   await dialog.getByRole('button', { name: 'Deny' }).click()
   await expect.poll(async () => (await (await request.get(`/api/v1/approvals/${made.approval.id}`)).json()).approval.status).toBe('denied')
 })
+
+// The summary is always read whole, with no click; Details holds only the technical part
+// (2026-11-14, the user: "summayr一直都显示不需要点detail detail只是xommend detail啥的"). Three kinds
+// side by side: one of Walnut's own asks (its explanation in words), a Git push with the summary
+// Walnut wrote, and a script that said why.
+test('every kind of approval shows its summary whole, with Details holding only the technical part', async ({ page, request }, info) => {
+  test.setTimeout(120_000)
+  await page.goto('/')
+  await expect(page.locator('.app-layout, #root').first()).toBeVisible()
+  await offHome(page)
+  const s = stamp()
+  const steps = 'The task "Notes" wants to click "Send" in your browser, which would send something in your name (a reply to the club).\n'
+    + 'Page: https://mail.example.test/inbox\nMessage it sends: Thanks for the invite, I will bring the projector on Friday.\n'
+    + 'Approve to let it take this one step; deny and it stops there.'
+  const own = await (await request.post('/api/test/host-fixture', { data: { action: 'builtin-approval', what: `Let "Notes" click "Send" on mail.example.test? (${s})`, detail: steps } })).json() as { approval: { id: string } }
+  const summary = 'Pushes the two progress-table commits to the shared repo, so the team reads today\'s numbers before the review.'
+  const git = await (await request.post('/api/test/host-fixture', { data: {
+    action: 'git-push-approval', host: 'clouddev', taskTitle: 'Orchid Platform Lead', summary,
+    repository: '/local/home/dev/.local/state/open-walnut/tasks/t-8252/meta-fresh', branch: 'mainline',
+  } })).json() as { approval: { id: string } }
+  const why = 'The launch post links to these notes at noon, so they must be on the site first.'
+  const script = await ask(request, { what: `Publish the release notes? (${s})`, why, detail: 'site/notes.md | 42 +++++\n1 file changed' })
+  const cases: Array<[string, string[], string | null]> = [
+    [own.approval.id, ['Message it sends: Thanks for the invite, I will bring the projector on Friday.', 'Approve to let it take this one step'], null],
+    [git.approval.id, [summary, 'Walnut’s summary of the task’s session, not signed'], 'git -C'],
+    [script.approval.id, [why], 'site/notes.md'],
+  ]
+  // The corner shows the oldest first; each Deny brings the next one up.
+  for (const [id, mustRead, technical] of cases) {
+    const card = page.locator(`[data-testid="approval-card"][data-approval-id="${id}"]`)
+    await expect(card).toBeVisible({ timeout: 15_000 })
+    await page.waitForTimeout(500)
+    await card.getByTestId('approval-what').click()
+    const dialog = page.locator(`.approval-dialog[data-approval-id="${id}"]`)
+    await expect(dialog).toBeVisible({ timeout: 15_000 })
+    for (const words of mustRead) {
+      // Read without a click: on screen now, and not inside the Details fold.
+      await expect(dialog.getByText(words, { exact: false }).first()).toBeVisible({ timeout: 15_000 })
+      await expect(dialog.locator('details').filter({ hasText: words })).toHaveCount(0)
+    }
+    if (technical) {
+      await expect(dialog.locator('details').filter({ hasText: technical })).toHaveCount(1)
+      await expect(dialog.getByText(technical).first()).toBeHidden()
+    } else {
+      // Nothing technical: no Details fold at all.
+      await expect(dialog.locator('details')).toHaveCount(0)
+    }
+    if (process.env.APR_SHOTS) await page.locator('.approval-dialog').screenshot({ path: `${process.env.APR_SHOTS}/${info.project.name}-whole-${cases.findIndex((c) => c[0] === id)}.png` })
+    await page.waitForTimeout(1_500)
+    await dialog.getByRole('button', { name: 'Deny' }).click()
+    await expect.poll(async () => (await (await request.get(`/api/v1/approvals/${id}`)).json()).approval.status).toBe('denied')
+    await page.getByTestId('approval-dialog').locator('.approval-dialog-close').click({ timeout: 3_000 }).catch(() => {})
+    await page.waitForTimeout(600)
+  }
+})

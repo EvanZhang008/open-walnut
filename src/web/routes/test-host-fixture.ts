@@ -250,8 +250,10 @@ async function runAction(action: string, body: Body): Promise<Record<string, unk
       const { createApproval } = await import('../../core/approvals/store.js')
       const what = str(body.what) ?? 'A built-in step'
       const requester = { host: 'this computer', local: true }
-      if (!(await asksPerson())) return { approval: await goAheadUnasked('browserOutward', { what, requester }) }
-      return await createApproval({ what, mode: 'tap', requester })
+      // Its explanation in words, as every Walnut ask writes one (store.ts detailRole 'summary').
+      const detail = str(body.detail)
+      if (!(await asksPerson())) return { approval: await goAheadUnasked('browserOutward', { what, requester, ...(detail ? { detail } : {}) }) }
+      return await createApproval({ what, mode: 'tap', requester, ...(detail ? { detail, detailRole: 'summary' as const } : {}) })
     }
     case 'git-push-approval': {
       // A signed Git push as the Git gate asks it (a walnut-git-operation-v1 context in a single-use
