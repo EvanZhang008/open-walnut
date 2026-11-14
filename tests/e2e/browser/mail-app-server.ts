@@ -509,7 +509,17 @@ async function seedRouterRows() {
   const { resolveRouterItem } = await import('../../../src/core/router/source-registry.js')
   const owner = (await addTask({ title: 'Review the dock reservation', project: 'Dock', source: 'local' })).task
   const vp = await ensureProjectLead('Dock')
-  await createRouterNode({ name: 'Personal mail router', areaId: 'personal', areaName: 'Personal', host: '__local__', links: [vp.id], sources: [] })
+  // Boot binds each mailbox to its router at the same time, and a router setup is compare-and-set:
+  // a concurrent write answers router_configuration_changed, whose contract is "read and retry".
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await createRouterNode({ name: 'Personal mail router', areaId: 'personal', areaName: 'Personal', host: '__local__', links: [vp.id], sources: [] })
+      break
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'router_configuration_changed' || attempt >= 20) throw error
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+  }
   await updateRouterAreas(tmpBase, (file) => ({ ...file,
     areas: file.areas.map((area) => area.id === 'personal' ? { ...area, taskIds: [...area.taskIds, owner.id, vp.id],
       sources: [...new Set(listed.map((m) => m.accountId))].map((account) => ({ kind: 'mail' as const, account })) } : area),
