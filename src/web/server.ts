@@ -703,6 +703,7 @@ let triageCollectHandle: import('../core/triage/collect.js').TriageCollectHandle
 /** Completes a triage run's task, journals it, checks it updated State.md. */
 let triageRunsHandle: import('../core/triage/runs.js').TriageRunsHandle | null = null
 let recordingReaperHandle: { stop: () => void } | null = null
+let replaySweeperHandle: { stop: () => void } | null = null
 let externalSessionImporter:
   import('../core/sessions/external-session-import.js').ExternalSessionImporterHandle | null = null
 let terminalReaperHandle: { stop: () => void } | null = null
@@ -4465,6 +4466,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       recordingReaper.start()
       recordingReaperHandle = recordingReaper
     }
+    // -- The Browser replay's sweep: steps past the days kept, and past the disk cap, are deleted --
+    {
+      const { startReplaySweeper } = await import('../core/browser-control/replay-store.js')
+      replaySweeperHandle = startReplaySweeper()
+    }
 
     // -- Start external-session importer --
     // Sessions a human started OUTSIDE Walnut (terminal `claude`, Claude
@@ -7350,6 +7356,10 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   if (recordingReaperHandle) {
     recordingReaperHandle.stop()
     recordingReaperHandle = null
+  }
+  if (replaySweeperHandle) {
+    replaySweeperHandle.stop()
+    replaySweeperHandle = null
   }
   // An import pass in flight stops at its next row (its stop aborts it); the wait is that row's write.
   if (externalSessionImporter) {

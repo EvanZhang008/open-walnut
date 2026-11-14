@@ -282,7 +282,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     owner: 'walnut', id: 'browser', label: 'Browser extension', title: 'Browser extension', group: 'configure',
     icon: 'globe', tint: '#0A84FF',
     description: 'The Walnut extension for Chrome and Firefox: fill and save logins, and let agents use your browser.',
-    keywords: ['browser', 'extension', 'chrome', 'firefox', 'autofill', 'agents', 'relay', 'sites', 'tabs'],
+    keywords: ['browser', 'extension', 'chrome', 'firefox', 'autofill', 'agents', 'relay', 'sites', 'tabs', 'replay', 'recording', 'screenshots'],
     render: () => <BrowserSection />,
   },
   {

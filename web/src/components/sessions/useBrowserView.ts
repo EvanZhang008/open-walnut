@@ -20,7 +20,7 @@ export function useBrowserView(taskId: string | undefined): { state: BrowserView
     if (!taskId) return;
     const mine = ++gen.current;
     apiGet<BrowserViewState>('/api/v1/browser/view', { task: taskId }, { priority: 'low', quietStatuses: [400, 404] })
-      .then((v) => { if (gen.current === mine) setState({ tabs: v.tabs ?? [], ...(v.ended ? { ended: v.ended } : {}) }); })
+      .then((v) => { if (gen.current === mine) setState({ tabs: v.tabs ?? [], ...(v.ended ? { ended: v.ended } : {}), ...(v.replay ? { replay: v.replay } : {}) }); })
       .catch((err: unknown) => {
         log.warn('session-panel', 'browser view read failed', { taskId, error: err instanceof Error ? err.message : String(err) });
       });

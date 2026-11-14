@@ -40,6 +40,7 @@ import { forgetAgentMade, noteAgentMade, tidyLeftovers } from './agent-tidy'
 import { restoreLeftPersonTabs } from './agent-groups-person'
 import { keptReady, startKeep } from './agent-keep'
 import { refuseWhileDialog } from './agent-dialog'
+import { replayStep } from './agent-replay'
 
 export { setTrustedInput, trustedInputState } from './trusted-switch'
 
@@ -451,7 +452,17 @@ async function run(c: WireCommand): Promise<void> {
     body = { id: c.id, ok: false, error: { message: err instanceof Error ? err.message : String(err), code: err instanceof AgentError ? err.code : 'browser_error', ...(err instanceof AgentError ? { extra: err.extra } : {}) } }
   }
   await call('POST', '/browser/result', body, { noSession: true, timeoutMs: 20_000 }).catch(() => undefined)
+  // The Browser replay (agent-replay.ts): the step's picture, in its tab's turn, after the answer.
+  const token = c.allow.record
+  if (typeof token === 'string' && token) {
+    const answer = body as { ok: boolean; result?: unknown; error?: { code?: string } }
+    const opened = c.action === 'open' && answer.ok ? (answer.result as { tab?: unknown } | undefined)?.tab : undefined
+    const tabId = typeof c.args.tab === 'number' ? c.args.tab : typeof opened === 'number' ? opened : undefined
+    if (tabId !== undefined) void replayStep(token, tabId, answer, c.allow.walnut, replayPost, inTurn)
+  }
 }
+
+const replayPost = (body: Record<string, unknown>) => call('POST', '/browser/view/replay', body, { noSession: true, timeoutMs: 15_000 })
 
 /** The agent tabs, who holds each, and where each is (a restarted Walnut shows them in the task's Browser view at once). */
 async function report(): Promise<Array<{ id: number; owner: string; grant?: string; url?: string; title?: string; window?: string; windowState?: string; handed?: boolean; driving?: boolean }>> {
