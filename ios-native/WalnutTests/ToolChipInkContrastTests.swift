@@ -247,11 +247,13 @@ final class ToolChipInkContrastTests: XCTestCase {
             // across the text slice, not one line: the chevron is a small glyph.
             let midY = height / 2
             let page = chans[midY * width + (width - 2)]
-            let (sliceTop, sliceBottom) = (y0, y1)
+            // Locals only: a nested function that read `width` (self) would capture self
+            // before every stored property is set, which Swift refuses.
+            let (sliceTop, sliceBottom, w) = (y0, y1, cg.width)
             func inked(_ x: Int) -> Bool {
-                (sliceTop..<sliceBottom).contains { abs(chans[$0 * width + x] - page) >= 0.025 }
+                (sliceTop..<sliceBottom).contains { abs(chans[$0 * w + x] - page) >= 0.025 }
             }
-            var right = width - 2
+            var right = w - 2
             while right > 0, !inked(right) { right -= 1 }
             self.page = page
             rowLeft = Int(TimelineMetrics.hMargin) * scale
