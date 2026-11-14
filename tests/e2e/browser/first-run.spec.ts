@@ -147,7 +147,9 @@ test('a fresh install: Add connects a host, Done records the answer, a reload as
   await expect(dialog(page)).toBeVisible();
   await page.getByTestId('first-run-primary').click();
   await expect(dialog(page)).toHaveCount(0);
-  expect(fake.answers).toEqual(['hosts']);
+  // The dialog goes at once and records the answer after (FirstRunHost: a POST it does not wait
+  // for), so the answer is waited for: on a loaded CI runner it landed after the dialog was gone.
+  await expect.poll(() => fake.answers).toEqual(['hosts']);
   await page.reload();
   await page.waitForLoadState('domcontentloaded');
   await page.waitForTimeout(1_500);
@@ -220,7 +222,8 @@ test('Escape is Not now: recorded, and the dialog is gone', async ({ page }) => 
   await expect(dialog(page)).toBeVisible({ timeout: 30_000 });
   await page.keyboard.press('Escape');
   await expect(dialog(page)).toHaveCount(0);
-  expect(fake.answers).toEqual(['hosts']);
+  // Recorded after the dialog went (see the Done case above).
+  await expect.poll(() => fake.answers).toEqual(['hosts']);
   expect(fake.yes).toEqual([]);
 });
 
