@@ -31,14 +31,21 @@ vi.mock('../../../src/core/task-manager.js', () => ({
 }));
 
 const sendMessageToSession = vi.fn();
+/** The rows in any session's queue, and the rows that went out as a written line. */
+let queued = new Set<string>();
+let settledLines = new Map<string, string>();
 vi.mock('../../../src/core/session-message-queue.js', () => ({
   sendMessageToSession: (...args: unknown[]) => sendMessageToSession(...args),
   enqueueMessage: vi.fn(),
   getQueue: async () => [],
+  findQueuedMessage: async (id: string) => (queued.has(id) ? { id } : null),
+}));
+vi.mock('../../../src/core/session-queue-lines.js', () => ({
+  settledLineUuid: async (id: string) => settledLines.get(id),
 }));
 
 import { performSessionSend } from '../../../src/core/sessions/session-send-core.js';
-import { OWED_AFTER_MS, OWED_MAX_TRIES, redeliverOwedReplies } from '../../../src/core/sessions/reply-outbox.js';
+import { OWED_MAX_TRIES, redeliverOwedReplies, replyInFlight } from '../../../src/core/sessions/reply-outbox.js';
 import { REQUESTS_FILE, createSessionRequest, getSessionRequest } from '../../../src/core/session-requests.js';
 
 const ASKER = 'sess-asker-1';
@@ -49,13 +56,15 @@ const rec = (claudeSessionId: string, title: string, taskId: string) => ({
   startedAt: NOW, lastActiveAt: NOW, messageCount: 0,
 });
 const ask = () => createSessionRequest({ fromSessionId: ASKER, toSessionId: TARGET, text: 'count the rows' });
-/** A pass after the server came back: the outbox is old enough to be owed, nothing in the queue. */
-const later = { now: () => Date.now() + OWED_AFTER_MS + 1_000, wentOut: async () => false, noteReport: async () => {} };
+/** A pass after the server came back (the result note is checked on its own below). */
+const later = { noteReport: async () => {} };
 
 beforeEach(() => {
   fs.rmSync(REQUESTS_FILE, { force: true });
   sessions = [rec(ASKER, 'Asker', 'task-asker'), rec(TARGET, 'Target', 'task-target')];
   tasks = [{ id: 'task-asker', title: 'Asker', phase: 'IN_PROGRESS' }, { id: 'task-target', title: 'Target', phase: 'IN_PROGRESS' }];
+  queued = new Set();
+  settledLines = new Map();
   sendMessageToSession.mockReset();
   sendMessageToSession.mockImplementation(async (_sid: string, _text: string, opts: { messageId?: string }) => ({ id: opts.messageId ?? 'qm-x' }));
 });
@@ -126,20 +135,46 @@ describe('a server that died between the settle and the queue delivers the answe
     expect(sendMessageToSession).toHaveBeenCalledTimes(1);
   });
 
-  it('one that reached the queue before the death is not delivered again', async () => {
+  it.each([
+    ['still queued (in any session: a row moves with its session)', (id: string) => { queued.add(id); }],
+    ['already gone out as a written line', (id: string) => { settledLines.set(id, 'line-uuid'); }],
+  ])('one that reached the queue before the death is not delivered again: %s', async (_how, reached) => {
     const died = await answerAndDie('done');
-    const asked: string[] = [];
-    await redeliverOwedReplies({ ...later, wentOut: async (to, id) => { asked.push(`${to} ${id}`); return true; } });
-    expect(asked).toEqual([`${ASKER} ${died.messageId}`]);
+    reached(died.messageId);
+    expect(await redeliverOwedReplies(later)).toBe(0);
     expect(sendMessageToSession).not.toHaveBeenCalled();
     expect((await getSessionRequest(died.id))?.outbox).toBeUndefined();
   });
 
-  it('an answer still in flight (a fresh outbox) is left to its own delivery', async () => {
+  it('an answer this server is still delivering is left to its own call', async () => {
     const died = await answerAndDie('done');
-    expect(await redeliverOwedReplies({ ...later, now: () => Date.now() })).toBe(0);
-    expect(sendMessageToSession).not.toHaveBeenCalled();
-    expect((await getSessionRequest(died.id))?.outbox).toBeDefined();
+    const release = replyInFlight(died.id);
+    try {
+      expect(await redeliverOwedReplies(later)).toBe(0);
+      expect(sendMessageToSession).not.toHaveBeenCalled();
+      expect((await getSessionRequest(died.id))?.outbox).toBeDefined();
+    } finally { release(); }
+    expect(await redeliverOwedReplies(later)).toBe(1);
+  });
+
+  it('a replier that sends the answer again after the death delivers it once, as the owed row', async () => {
+    const died = await answerAndDie('Done: 412 rows moved.');
+    await performSessionSend({ text: 'Done: 412 rows moved.', inReplyTo: died.id, callerSid: TARGET });
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+    expect((sendMessageToSession.mock.calls[0][2] as { messageId?: string }).messageId).toBe(died.messageId);
+    expect((await getSessionRequest(died.id))?.outbox).toBeUndefined();
+    expect(await redeliverOwedReplies(later)).toBe(0);
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('the owed answer goes where the asker reads now, never back to the replier', async () => {
+    const died = await answerAndDie('done');
+    // The asker carried on in a new session of its task; the old one is no longer live.
+    sessions = sessions.map((s) => s.claudeSessionId === ASKER ? { ...s, process_status: 'stopped', archived: true } : s);
+    sessions.push(rec('sess-asker-2', 'Asker', 'task-asker'));
+    await redeliverOwedReplies(later);
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+    expect(sendMessageToSession.mock.calls[0][0]).toBe('sess-asker-2');
   });
 
   it('the result is noted on the replier\'s task with the answer', async () => {

@@ -183,8 +183,10 @@ export interface SessionRequest {
 
 /** An answer's delivery, owed (SessionRequest.outbox): what deliverToSession is called with. */
 export interface ReplyOutbox {
-  /** The asker session it goes to. */
+  /** The asker session it goes to (resolved again when delivered from the outbox). */
   to: string;
+  /** The session that answered: never a destination. */
+  from: string;
   taskId?: string;
   /** Its queue row id: a delivery again with the same id is the same row (deduped while queued). */
   messageId: string;

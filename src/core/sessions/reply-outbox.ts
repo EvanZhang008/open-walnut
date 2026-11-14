@@ -11,27 +11,42 @@
  *   performReply ──► settle + outbox, ONE write ──► result noted ──► queued ──► outbox cleared
  *                         │ the server dies anywhere after this write
  *                         ▼
- *   redeliverOwedReplies (at start, then every minute): an outbox older than OWED_AFTER_MS
- *     - its row is in the asker's queue, or left it as a delivered line: cleared (it went out)
+ *   redeliverOwedReplies (at start, then every minute): an outbox no performReply of this server holds
+ *     - its row is in a queue, or left one as a written line: cleared (it went out)
  *     - else: the result is noted if the replier's task holds none newer, the same row id is
- *       queued again (session-send-core.ts deliverToSession), then cleared
+ *       queued again where the asker reads now (reply-routing.ts), then cleared
  *     - an asker that is gone, or OWED_MAX_TRIES failed tries: cleared, and logged
+ *   A replier that sends the answer again after the death (the request reads replied) goes out as
+ *   the owed row and clears it (session-send-core.ts performReply).
  *
  * The queue keeps the commit point of a delivery (its own atomic write, deduped by row id), so the
- * answer is delivered once: the outbox only remembers that it is owed. The one window left is a
- * death after the queue write and before the clear, for a row that then left the queue with no
- * line id on record (a host without send markers): that answer can go out twice.
+ * answer is delivered once: the outbox only remembers that it is owed. The window left is a death
+ * after the queue write and before the clear, for a row that then left the queue with no written
+ * line on record (deleted by the person, past the settled-line cap, or held out of every queue by an
+ * engine switch at that moment): that answer can go out twice.
  */
 import { log } from '../../logging/index.js';
 import type { ReplyOutbox, SessionRequest } from '../session-requests.js';
 
-/** An outbox this old is no performReply's still in flight (its delivery times out well before). */
-export const OWED_AFTER_MS = 60_000;
 /** Deliveries tried from one outbox before it is given up. */
 export const OWED_MAX_TRIES = 5;
 
+/** Requests a performReply of this server is answering now: their outbox is its own to clear. */
+const inFlight = new Map<string, number>();
+
+/** `id` is being answered by this server: the sweep leaves its outbox alone until the release. */
+export function replyInFlight(id: string): () => void {
+  inFlight.set(id, (inFlight.get(id) ?? 0) + 1);
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    const n = (inFlight.get(id) ?? 1) - 1;
+    if (n > 0) inFlight.set(id, n); else inFlight.delete(id);
+  };
+}
+
 export interface OwedReplyDeps {
-  now: () => number;
   list: () => Promise<SessionRequest[]>;
   /** The row is in the asker's queue, or left it as a delivered line. */
   wentOut: (to: string, messageId: string) => Promise<boolean>;
@@ -43,20 +58,20 @@ export interface OwedReplyDeps {
 
 function defaultDeps(): OwedReplyDeps {
   return {
-    now: () => Date.now(),
     list: async () => (await import('../session-requests.js')).listAllSessionRequests(),
-    wentOut: async (to, messageId) => {
-      const { isMessageQueued } = await import('../session-message-queue.js');
-      if (await isMessageQueued(to, messageId)) return true;
+    wentOut: async (_to, messageId) => {
+      // Any session's queue: a row moves with its session (a fork, a resume, an engine switch).
+      const { findQueuedMessage } = await import('../session-message-queue.js');
+      if (await findQueuedMessage(messageId)) return true;
       const { settledLineUuid } = await import('../session-queue-lines.js');
       return !!(await settledLineUuid(messageId));
     },
     deliver: async (req, owed) => {
-      const { getSessionByClaudeId } = await import('../session-tracker.js');
       const { resolveReplyDestination } = await import('./reply-routing.js');
-      // The asker as it reads now (a fork it carried on in), never the replier itself.
-      const at = (await getSessionByClaudeId(owed.to).catch(() => null))
-        ?? (await resolveReplyDestination(req.fromSessionId, { exclude: req.toSessionId ? [req.toSessionId] : [] }))?.session
+      // Where the asker reads now (a fork it carried on in), never the session that answered.
+      const exclude = [owed.from, ...(req.toSessionId ? [req.toSessionId] : [])].filter(Boolean);
+      const at = (await resolveReplyDestination(owed.to, { exclude }))?.session
+        ?? (owed.to !== req.fromSessionId ? (await resolveReplyDestination(req.fromSessionId, { exclude }))?.session : undefined)
         ?? null;
       if (!at) return 'gone';
       const { deliverToSession } = await import('./session-send-core.js');
@@ -91,10 +106,12 @@ export function redeliverOwedReplies(deps: Partial<OwedReplyDeps> = {}): Promise
 
 async function run(d: OwedReplyDeps): Promise<number> {
   let delivered = 0;
-  const owed = (await d.list().catch(() => [] as SessionRequest[]))
-    .filter((r) => r.outbox && d.now() - Date.parse(r.outbox.at) >= OWED_AFTER_MS);
+  const owed = (await d.list().catch(() => [] as SessionRequest[])).filter((r) => r.outbox);
   for (const req of owed) {
     const box = req.outbox!;
+    // Still being answered here: its own call delivers and clears it.
+    if (inFlight.has(req.id)) continue;
+    const release = replyInFlight(req.id);
     try {
       if (await d.wentOut(box.to, box.messageId)) {
         await d.clear(req.id, box.messageId);
@@ -114,6 +131,8 @@ async function run(d: OwedReplyDeps): Promise<number> {
     } catch (err) {
       // Kept: the next pass tries again, up to OWED_MAX_TRIES.
       log.session.warn('owed reply: delivery failed, trying again later', { requestId: req.id, error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      release();
     }
   }
   return delivered;

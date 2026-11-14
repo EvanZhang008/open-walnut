@@ -4139,6 +4139,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // A delivered ask stamps its request reached, which the silent-target notice reads after any
     // restart (src/core/sessions/request-reached.ts).
     void import('../core/sessions/request-reached.js').then((m) => m.startRequestReachedWatch()).catch(() => {})
+    // Answers a dead server settled but never queued go out now, then with every sweep below
+    // (src/core/sessions/reply-outbox.ts).
+    const owedReplies = () => void import('../core/sessions/reply-outbox.js')
+      .then(({ redeliverOwedReplies }) => redeliverOwedReplies())
+      .catch((err) => log.session.warn('owed reply sweep failed', {
+        error: err instanceof Error ? err.message : String(err),
+      }))
+    owedReplies()
     const sweep = setInterval(() => {
       void import('../core/sessions/session-request-notify.js')
         .then(({ sweepSessionRequests }) => sweepSessionRequests())
@@ -4146,13 +4154,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         .catch((err) => log.session.warn('session-request sweep failed', {
           error: err instanceof Error ? err.message : String(err),
         }))
-      // An answer settled but not yet in its asker's queue when a server died: delivered now
-      // (src/core/sessions/reply-outbox.ts).
-      void import('../core/sessions/reply-outbox.js')
-        .then(({ redeliverOwedReplies }) => redeliverOwedReplies())
-        .catch((err) => log.session.warn('owed reply sweep failed', {
-          error: err instanceof Error ? err.message : String(err),
-        }))
+      owedReplies()
     }, 60_000)
     sweep.unref?.()
   }

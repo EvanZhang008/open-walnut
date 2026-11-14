@@ -1307,18 +1307,22 @@ async function performReply(
   };
   const fromLeader = await callerLeads(caller, origin.taskId);
   // The queue row the answer goes out as: the same id when the outbox delivers it again.
-  const deliveryId = input.messageId ?? (await import('../session-queue-store.js')).generateId();
+  let deliveryId = input.messageId ?? (await import('../session-queue-store.js')).generateId();
   let owed = false;
   // The replier's latest result, kept on its task: the Board and the Brief read Partial from it.
   const resultHead = caller.record.taskId ? {
     via: 'reply' as const, request_id: answeredFor.id, ...(origin.taskId ? { to_task_id: origin.taskId } : {}), by: `task:${caller.record.taskId}`,
     ...(caller.record.claudeSessionId ? { sessionId: caller.record.claudeSessionId } : {}),
   } : undefined;
+  const { replyInFlight } = await import('./reply-outbox.js');
   const releaseAnswer = onward ? () => {} : await holdAnswer(`${stamp.deliveredTo}\u0000${stamp.digest}\u0000${stamp.by.taskId ?? stamp.by.sessionId}`);
+  // While this call runs, the outbox sweep leaves this request to it (reply-outbox.ts).
+  const releaseFlight = replyInFlight(id);
   try {
     // Read again once the key is held: a send of the same words to the same request that waited
     // behind it finds the request settled by the first one, and reads itself as its repeat.
-    const status = onward ? request.status : ((await getSessionRequest(id).catch(() => null)) ?? request).status;
+    const fresh = onward ? request : ((await getSessionRequest(id).catch(() => null)) ?? request);
+    const status = fresh.status;
     if (onward) {
       // Settled once the answer is delivered: a failed delivery leaves the whole chain open.
     } else if (status !== 'pending') {
@@ -1329,12 +1333,15 @@ async function performReply(
       if (status === 'expired') sameAs = (await settleLateReply(id, fields, undefined, stamp).catch(() => null))?.sameAnswerAs;
       // Answered already, and these are the words it got then (or another request got).
       else sameAs = sameAnswerOf(await listAllSessionRequests().catch(() => []), stamp)?.id;
+      // Its answer is still owed (the server died before delivering it, and the replier sends again):
+      // this answer goes out as that same queue row, and the outbox owes nothing more.
+      if (fresh.outbox && !sameAs) { deliveryId = fresh.outbox.messageId; owed = true; }
     } else {
       // The answer's delivery is owed in the same write as the settle (reply-outbox.ts): a server
       // that dies before it reaches the asker's queue delivers it at its next start. Not for a
       // repeat (the asker has it) or an answer only for a live session (ask-answer.ts).
       const owe = many.quietRepeat || input.liveOnly ? undefined : (row: SessionRequest): ReplyOutbox | undefined => row.sameAnswerAs ? undefined : {
-        to: origin.claudeSessionId, ...(origin.taskId ? { taskId: origin.taskId } : {}), messageId: deliveryId,
+        to: origin.claudeSessionId, from: caller.record.claudeSessionId, ...(origin.taskId ? { taskId: origin.taskId } : {}), messageId: deliveryId,
         busText: replyBody, enqueueText: answerText(), source: 'peer', ...(fromLeader ? { fromLeader } : {}),
         ...(resultHead ? { report: { taskId: caller.record.taskId!, head: resultHead, fields } } : {}),
         at: new Date().toISOString(),
@@ -1391,6 +1398,7 @@ async function performReply(
     if (!onward && !sameAs) await noteAnswerDelivered(id, stamp).catch(() => {});
   } finally {
     releaseAnswer();
+    releaseFlight();
   }
   const originSid = origin.claudeSessionId;
   // The asks this answer went past: the chain below the outermost one, or the asks that handed
