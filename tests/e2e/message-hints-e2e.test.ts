@@ -55,15 +55,18 @@ describe('message hints through a real server', () => {
     const r = await json('GET', '/hints')
     expect(r.status).toBe(200)
     const kinds = r.body.hints.map((h: { kind: string }) => h.kind)
-    // No reply-language row since 2026-11-06: the setting is a line of the system prompt.
-    expect(kinds).toEqual(['question', 'rich-output', 'voice-reply', 'object-context', 'user-away', 'brief', 'threads', 'threads-tidy', 'hand-on'])
-    // Whose words: every built-in reads as Walnut's, and none sends a setting of the user's.
+    // reply-language is back since 4f6ac14c2 (2026-11-14) with the one trigger on_drift: the rule
+    // itself stays a line of the system prompt; the hint only corrects a turn that drifted off it.
+    expect(kinds).toEqual(['question', 'rich-output', 'reply-language', 'voice-reply', 'object-context', 'user-away', 'brief', 'threads', 'threads-tidy', 'hand-on'])
+    // Whose words: every built-in reads as Walnut's, and only reply-language sends a setting of the
+    // user's (his reply-language rule, named as his: tests/core/hints/hint-origin.test.ts).
     expect(r.body.hints.every((h: { built_in: boolean }) => h.built_in)).toBe(true)
-    expect(r.body.hints.some((h: { user_setting?: unknown }) => h.user_setting)).toBe(false)
+    expect(r.body.hints.filter((h: { user_setting?: unknown }) => h.user_setting).map((h: { kind: string }) => h.kind)).toEqual(['reply-language'])
     const rich = r.body.hints.find((h: { kind: string }) => h.kind === 'rich-output')
     expect(rich).toMatchObject({ enabled: true, every_turns: 5, placement: 'after', overridden: false })
     expect(rich.triggers).toEqual(['session_start', 'after_compaction', 'on_change'])
     expect(r.body.triggers).toContain('on_drift')
+    expect(r.body.hints.find((h: { kind: string }) => h.kind === 'reply-language').triggers).toEqual(['on_drift'])
   })
 
   it('a person changes a built-in; config.yaml keeps only the change; reset removes it', async () => {
