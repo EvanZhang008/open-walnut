@@ -16,10 +16,11 @@ import UIKit
 /// kept in `TalkOutbox` with the reason, for a resend, never dropped: a take a
 /// call cut off, or one a dead process left on disk, joins the list too.
 ///
-/// Dictate to Clipboard (`DictateToClipboardIntent`) is the same take with another
-/// destination: its words go onto the clipboard exactly as transcribed, never to
-/// the CEO chat, and one that could not be copied waits in the same list for the
-/// person's Copy.
+/// Dictate (`DictateToClipboardIntent`) is the same take with another destination:
+/// its words, exactly as transcribed, open on one page (`TalkPanel`) with Send, to the
+/// CEO chat, and Copy, to the clipboard (the user, 2026-11-11: "just one page that can
+/// send and can copy"). Nothing goes anywhere until the person picks one, and words
+/// they leave there wait in the same list, with both.
 @Observable
 @MainActor
 final class TalkSession {
@@ -34,7 +35,9 @@ final class TalkSession {
         case sending
         /// The words that reached the CEO chat.
         case sent(String)
-        /// The words now on the clipboard (Dictate to Clipboard).
+        /// A dictation's words, on its page until the person sends or copies them.
+        case review(String)
+        /// The words now on the clipboard (a dictation's Copy).
         case copied(String)
         /// Nothing was sent; the sentence says why. `kept` = it is on the
         /// unsent list for a resend.
@@ -44,6 +47,8 @@ final class TalkSession {
     enum Outcome: Equatable {
         case listening
         case finishing
+        /// A dictation's page is up: the press only brings it back.
+        case reviewing
     }
 
     enum StartError: LocalizedError, CustomLocalizedStringResourceConvertible, Equatable {
@@ -95,6 +100,20 @@ final class TalkSession {
     private(set) var lastResent: String?
     /// The last take a Resend delivered was copied, not sent.
     private(set) var lastResentCopied = false
+    /// The kept entry the dictation page shows.
+    private(set) var reviewTake: String?
+    /// The takes Walnut already offered in the unsent sheet, kept across launches (the
+    /// sheet's own `@AppStorage` reads and writes the same key). A dictation's page the
+    /// person closed with neither button joins them: it is in the list by their choice,
+    /// so no launch offers it again as news.
+    static let offeredKey = "walnut.talk.offeredUnsent"
+    var closedPages: Set<String> {
+        Set((prefs.string(forKey: Self.offeredKey) ?? "").split(separator: ",").map(String.init))
+    }
+    /// Retries a take that waits for the server while Walnut is in front (a seam for the
+    /// unit tests): the person was told it goes by itself once the server answers again.
+    @ObservationIgnored var retryLaterDelay: Duration = .seconds(30)
+    @ObservationIgnored private var retryLater: Task<Void, Never>?
     let outbox: TalkOutbox
 
     private let recorder: TalkRecording
@@ -120,13 +139,20 @@ final class TalkSession {
     @ObservationIgnored var cue: (TalkCue) -> Void = TalkCue.play
     /// Puts words on the clipboard; false when iOS did not take them (a seam for the unit tests).
     @ObservationIgnored var copier: (String) -> Bool = TalkClipboard.copy
+    /// Opens the CEO chat in Walnut once the page's Send got there, so the person sees
+    /// their message and the answer (a seam for the unit tests).
+    @ObservationIgnored var openCEOChat: @MainActor () -> Void = {
+        ContentActionLink.shared.openChat(taskId: nil, sessionId: nil)
+    }
+    /// Brings up the dictation's page (a seam for the unit tests).
+    @ObservationIgnored var presentReview: @MainActor () -> Void = { _ = TalkPanel.shared.show() }
     /// Automatic resends of one entry before only the person's Resend tries it.
     static let autoResendLimit = 8
 
     /// A kept take Walnut still sends by itself (the server was away and it has
     /// tries left): it waits, calmly. Anything else needs the person.
-    /// A take for the clipboard never waits: copied later by itself, it would replace
-    /// whatever the person copied since.
+    /// A dictation never waits: it goes only where the person sends or copies it, and
+    /// copied later by itself it would replace whatever they copied since.
     static func waits(_ entry: TalkOutbox.Entry) -> Bool {
         entry.copy != true && TalkReason.goesOutLater(entry.reason ?? "") && entry.attempts < autoResendLimit
     }
@@ -154,6 +180,44 @@ final class TalkSession {
         self.isPaired = isPaired
         self.prefs = prefs
         recoverFromLastProcess()
+        reopenUnseenPage()
+    }
+
+    /// Walnut came to the front: a dictation the person has not seen yet (its take ended
+    /// from behind, then another take or iOS took its card) opens on its page.
+    func reopenUnseenPageIfIdle() {
+        guard !isBusy, !isReviewing else { return }
+        reopenUnseenPage()
+    }
+
+    /// A dictation whose page the person never closed (iOS ended Walnut while it was up,
+    /// or the take ended from behind and Walnut was gone by the time they came back): the
+    /// next launch opens it on its page again, as a warm return does, never as a list.
+    private func reopenUnseenPage() {
+        let closed = closedPages
+        guard let entry = outbox.unsent
+            .filter({ Self.awaitsChoice($0) && !closed.contains($0.id) })
+            .max(by: { $0.createdAt < $1.createdAt }),
+            let text = entry.text
+        else { return }
+        reviewTake = entry.id
+        destination = .dictation
+        phase = .review(text)
+        AppLog.info("talk", "dictation page reopened", ["chars": String(text.count)])
+    }
+
+    /// A kept take's words onto the clipboard, the take left as it was (it still goes to
+    /// the CEO): with the server away, the person may want them somewhere else now.
+    @discardableResult
+    func copyWords(_ id: String) -> Bool {
+        guard let text = outbox.entry(id)?.text else { return false }
+        return copier(text)
+    }
+
+    /// A dictation's page is up, waiting for Send or Copy.
+    var isReviewing: Bool {
+        if case .review = phase { return true }
+        return false
     }
 
     var isBusy: Bool {
@@ -173,6 +237,20 @@ final class TalkSession {
     @discardableResult
     func toggle(source: String, to destination: TalkDestination = .ceo) async throws -> Outcome {
         switch phase {
+        case .review:
+            // Walnut in front shows the page: a press there brings it back, never drops its
+            // words for a new take. A page left unseen behind another app is no reason to
+            // block the next press: its words are already in the list (Settings, Action
+            // Button) with Send and Copy, and the press starts its take.
+            if isForeground() {
+                AppLog.info("talk", "press shows the dictation", ["source": source])
+                presentReview()
+                return .reviewing
+            }
+            AppLog.info("talk", "press sets the unseen dictation aside", ["source": source])
+            closeReview(seen: false)
+            try await start(source: source, to: destination)
+            return .listening
         case .listening:
             beginFinish(source: source)
             return .finishing
@@ -220,8 +298,8 @@ final class TalkSession {
         // microphone, and so which way the take went.
         AppLog.info("talk", "opening microphone", ["source": source, "inFront": foreground ? "true" : "false"])
         // A process that dies with this take leaves its recording, listed on the next
-        // launch: it must be listed as a take for the clipboard, never sent to the CEO.
-        prefs.set(destination == .clipboard, forKey: Self.clipboardTakeKey)
+        // launch: it must be listed as a dictation, never sent to the CEO by itself.
+        prefs.set(destination == .dictation, forKey: Self.clipboardTakeKey)
         var refused = await recorder.begin()
         #if DEBUG
         if refused == nil, !foreground, TalkDebug.refuseFromBehind {
@@ -302,9 +380,15 @@ final class TalkSession {
     /// Send an unsent entry again: transcribe it first when it has no words yet.
     /// True when it reached the CEO chat (and left the list). The entry keeps its
     /// reason while it is resent, so the row stays on screen with its progress.
+    /// `send`: a kept dictation goes to the CEO chat (its Send) instead of the clipboard.
     @discardableResult
-    func resend(_ id: String) async -> Bool {
+    func resend(_ id: String, send: Bool = false) async -> Bool {
         guard var entry = outbox.entry(id), !resending.contains(id) else { return false }
+        if send, entry.copy == true {
+            // The person picked Send: from now on it is a take for the CEO, kept as one.
+            entry.copy = nil
+            outbox.update(id) { $0.copy = nil }
+        }
         resending.insert(id)
         defer { resending.remove(id) }
         if entry.text == nil {
@@ -330,7 +414,7 @@ final class TalkSession {
                 return false
             }
         }
-        let sent = entry.copy == true ? copyOut(entry, live: false) : await deliver(entry, live: false)
+        let sent = entry.copy == true ? copyOut(entry) : await deliver(entry, live: false)
         if sent {
             lastResent = entry.text
             lastResentCopied = entry.copy == true
@@ -341,6 +425,90 @@ final class TalkSession {
     }
 
     func clearResentNotice() { lastResent = nil }
+
+    // MARK: - The dictation's page
+
+    /// The page's Send: the words, as the person left them, go to the CEO chat the way a
+    /// take for it does (kept for a resend when they do not get there).
+    func sendReview(_ words: String) async {
+        guard isReviewing, Self.hasWords(words) else { return }
+        // A take for the CEO now, under its own id (the card that said the words wait in
+        // Walnut is the dictation's, and goes with it) and the dictation's message id, so a
+        // send the server already has is not sent twice. With no kept entry (it could not
+        // be saved), a new one: Send always sends.
+        let kept = reviewTake.flatMap(outbox.entry)
+        let entry = TalkOutbox.Entry(
+            id: UUID().uuidString, messageId: kept?.messageId ?? SendRetryPolicy.newMessageId(),
+            createdAt: kept?.createdAt ?? Date(), text: words, recordingID: nil, reason: nil, attempts: 0,
+            updatedAt: Date(), copy: nil
+        )
+        destination = .ceo
+        outbox.begin(entry)
+        if let old = reviewTake {
+            reviewTake = nil
+            drop(old)
+        }
+        AppLog.info("talk", "dictation sent from its page", ["chars": String(words.count)])
+        // A Send followed at once by leaving Walnut still finishes.
+        let background = BackgroundWork.begin("talk-send")
+        defer { background.end() }
+        if await deliver(entry, live: true), isForeground() { openCEOChat() }
+    }
+
+    /// The page's Copy: the words, as the person left them, onto the clipboard. False when
+    /// iOS did not take them: the page stays, with its words, for another try.
+    @discardableResult
+    func copyReview(_ words: String) -> Bool {
+        guard isReviewing, Self.hasWords(words) else { return false }
+        keepReviewWords(words)
+        guard copy(words, live: true) else { return false }
+        if let id = reviewTake { drop(id) }
+        reviewTake = nil
+        phase = .copied(words)
+        cue(.sent)
+        return true
+    }
+
+    /// The page's words as the person left them, onto the kept entry (Walnut is going to
+    /// the background, the page closes): iOS may end Walnut before a Send or Copy.
+    func keepReviewWords(_ words: String) {
+        guard isReviewing, Self.hasWords(words) else { return }
+        if let id = reviewTake, outbox.entry(id) != nil {
+            outbox.update(id) { $0.text = words }
+            return
+        }
+        // The first save failed (the disk was full): another try, so the words are not
+        // lost with the page.
+        let entry = newEntry(text: words, recordingID: nil, reason: TalkReason.notChosen, copy: true)
+        if outbox.begin(entry) { reviewTake = entry.id }
+    }
+
+    /// The page closed with neither: the words stay in the list (Settings, Action Button),
+    /// as the person last left them, with Send and Copy. `seen` is false when a press set
+    /// aside a page the person never saw: that one is still news the next time Walnut opens.
+    func closeReview(_ words: String? = nil, seen: Bool = true) {
+        guard case .review(let heard) = phase else { return }
+        keepReviewWords(words ?? heard)
+        let kept = reviewTake.flatMap(outbox.entry) != nil
+        if seen, let id = reviewTake {
+            let offered = closedPages.union([id]).filter { outbox.entry($0) != nil }
+            prefs.set(offered.sorted().joined(separator: ","), forKey: Self.offeredKey)
+        }
+        reviewTake = nil
+        phase = .idle
+        AppLog.info("talk", "dictation page closed", ["kept": String(kept), "seen": String(seen)])
+    }
+
+    /// A dictation whose words wait for the person's Send or Copy by their own choice (the
+    /// page closed, or not reached yet): nothing went wrong, so the lists show it plainly.
+    static func awaitsChoice(_ entry: TalkOutbox.Entry) -> Bool {
+        entry.copy == true && entry.text != nil && entry.reason == TalkReason.notChosen
+    }
+
+    /// Words worth sending or copying: not only spaces and line breaks.
+    static func hasWords(_ text: String) -> Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     /// Send what is kept, oldest first, without the person tapping Resend: when
     /// Walnut comes to the front, when the network comes back, and after a take
@@ -387,6 +555,11 @@ final class TalkSession {
     private func drop(_ id: String) {
         outbox.remove(id)
         if case .notSent(_, kept: true) = phase, outbox.unsent.isEmpty { phase = .idle }
+        // The page's words were sent, copied or deleted from the list: the page has nothing left.
+        if id == reviewTake {
+            reviewTake = nil
+            if isReviewing { phase = .idle }
+        }
         activity.endLeftovers(keeping: Set(outbox.entries.map(\.id)))
     }
 
@@ -414,8 +587,8 @@ final class TalkSession {
         // Kept takes now carry their destination: a dead process no longer needs the mark.
         defer { prefs.removeObject(forKey: Self.clipboardTakeKey) }
         let take = await recorder.finish()
-        if destination == .clipboard {
-            completeCopy(take)
+        if destination == .dictation {
+            completeDictation(take)
             return
         }
         switch take {
@@ -435,20 +608,34 @@ final class TalkSession {
         }
     }
 
-    /// A take for the clipboard: its words go there as heard, even one the 5-minute cap
-    /// ended (a copy reaches no one, and the person pastes it only if they meant it).
-    private func completeCopy(_ take: TalkTake) {
+    /// A dictation: its words open on their page as heard, even one the 5-minute cap ended
+    /// (nothing goes anywhere until the person sends or copies it).
+    private func completeDictation(_ take: TalkTake) {
         switch take {
         case .words(let text, let recordingID):
-            // The audio goes once the words are on the clipboard or safe in the list.
-            let entry = newEntry(text: text, recordingID: recordingID, reason: nil, copy: true)
-            if copyOut(entry, live: true) || outbox.entry(entry.id) != nil, let recordingID {
+            // In the list before the page shows: a process that dies on it leaves the words.
+            let entry = newEntry(text: text, recordingID: recordingID, reason: TalkReason.notChosen, copy: true)
+            // The audio goes once the words are safe on disk.
+            if outbox.begin(entry), let recordingID {
                 recorder.forget(recordingID: recordingID)
                 outbox.update(entry.id) { $0.recordingID = nil }
             }
+            reviewTake = entry.id
+            phase = .review(text)
+            cue(.sent)
+            AppLog.info("talk", "dictation ready", ["chars": String(text.count)])
+            // Walnut in front shows the page, and the card has nothing more to say. Behind
+            // another app (the take was ended from there), the card says the words wait in
+            // Walnut, and stays until they are sent or copied; tapping it opens Walnut.
+            var ready = state(.sent, words: text)
+            ready.take = entry.id
+            activity.end(ready, linger: isForeground() ? 0 : notSentLinger)
+            presentReview()
+            // The server just transcribed it: what it missed before goes now.
+            Task { await resendKept(source: "after-dictation") }
         case .noWords(let recordingID):
             if let recordingID { recorder.forget(recordingID: recordingID) }
-            finishNotSent("Didn't catch any words, so nothing was copied.", kept: false, linger: 6, quiet: true)
+            finishNotSent("Didn't catch any words, so there is nothing to send or copy.", kept: false, linger: 6, quiet: true)
         case .failed(let reason, let recordingID):
             let entry = newEntry(text: nil, recordingID: recordingID, reason: reason, attempts: 1, copy: true)
             let kept = recordingID != nil && outbox.begin(entry)
@@ -456,36 +643,30 @@ final class TalkSession {
         }
     }
 
-    /// Put an entry's words on the clipboard, unchanged. `live` = the take just spoken
-    /// (its Live Activity is up); a failed live copy joins the list for the person's Copy.
+    /// A kept dictation's Copy in the list: its words onto the clipboard, unchanged.
     @discardableResult
-    private func copyOut(_ entry: TalkOutbox.Entry, live: Bool) -> Bool {
+    private func copyOut(_ entry: TalkOutbox.Entry) -> Bool {
         guard let text = entry.text else { return false }
-        guard copier(text) else {
-            AppLog.warn("talk", "copy failed", ["live": live ? "true" : "false"])
-            if live {
-                var kept = entry
-                kept.reason = TalkReason.notCopied
-                let saved = outbox.begin(kept)
-                finishNotSent(TalkReason.notCopied, kept: saved, linger: notSentLinger, words: text, take: entry.id)
-            } else {
-                outbox.update(entry.id) {
-                    $0.reason = TalkReason.notCopied
-                    $0.attempts += 1
-                }
+        guard copy(text, live: false) else {
+            outbox.update(entry.id) {
+                $0.reason = TalkReason.notCopied
+                $0.attempts += 1
             }
             return false
         }
-        if outbox.entry(entry.id) != nil { drop(entry.id) }
-        AppLog.info("talk", "copied", ["chars": String(text.count), "live": live ? "true" : "false"])
-        if live {
-            phase = .copied(text)
-            cue(.sent)
-            activity.end(state(.sent, words: text), linger: sentLinger)
-            // The server just transcribed it: what it missed before goes now.
-            Task { await resendKept(source: "after-copy") }
-        }
+        drop(entry.id)
         return true
+    }
+
+    /// The one way words reach the clipboard, from the page (`live`) or the list.
+    private func copy(_ text: String, live: Bool) -> Bool {
+        let done = copier(text)
+        if done {
+            AppLog.info("talk", "copied", ["chars": String(text.count), "live": live ? "true" : "false"])
+        } else {
+            AppLog.warn("talk", "copy failed", ["live": live ? "true" : "false"])
+        }
+        return done
     }
 
     private func newEntry(
@@ -542,11 +723,31 @@ final class TalkSession {
     ) {
         phase = .notSent(reason, kept: kept)
         var ending = state(.failed, words: words, reason: reason, kept: kept)
-        // A dictation never goes out by itself: it waits for the person's Copy.
-        ending.later = kept && destination != .clipboard && TalkReason.goesOutLater(reason)
+        // A dictation never goes out by itself: it waits for the person's Send or Copy.
+        ending.later = kept && destination != .dictation && TalkReason.goesOutLater(reason)
         ending.quiet = quiet
         ending.take = kept ? take : nil
         activity.end(ending, linger: linger)
+        if ending.later == true { retryWhileWaiting() }
+    }
+
+    /// While a take waits for the server and Walnut is in front, try again now and then
+    /// (30 s, doubling to 5 minutes): the network may never have dropped (the server
+    /// itself was away), so no path change would send it. Each try counts toward
+    /// `autoResendLimit`, after which it is the person's to send.
+    private func retryWhileWaiting() {
+        guard retryLater == nil else { return }
+        retryLater = Task { @MainActor [weak self] in
+            var delay = self?.retryLaterDelay ?? .seconds(30)
+            while !Task.isCancelled {
+                try? await Task.sleep(for: delay)
+                guard let self, !Task.isCancelled else { return }
+                guard self.outbox.unsent.contains(where: Self.waits) else { break }
+                if self.isForeground() { await self.resendKept(source: "retry-later") }
+                delay = min(delay * 2, .seconds(300))
+            }
+            self?.retryLater = nil
+        }
     }
 
     private func stopMonitor() {
@@ -593,8 +794,8 @@ final class TalkSession {
     }
 
     private func dropSilentTake() {
-        let notice = destination == .clipboard
-            ? "Didn't hear anything, so nothing was copied." : "Didn't hear anything, so nothing was sent."
+        let notice = destination == .dictation
+            ? "Didn't hear anything, so there is nothing to send or copy." : "Didn't hear anything, so nothing was sent."
         stopMonitor()
         recorder.discard()
         prefs.removeObject(forKey: Self.clipboardTakeKey)
@@ -621,7 +822,7 @@ final class TalkSession {
             for id in recorder.keptTakeIDs() where !listed.contains(id) { recorder.forget(recordingID: id) }
         }
         #endif
-        // The take that died was one for the clipboard: what it left is copied, never sent.
+        // The take that died was a dictation: what it left waits for the person's Send or Copy.
         let copy = prefs.bool(forKey: Self.clipboardTakeKey)
         prefs.removeObject(forKey: Self.clipboardTakeKey)
         for id in recorder.keptTakeIDs() where !listed.contains(id) {
@@ -629,7 +830,7 @@ final class TalkSession {
             // person tells one take from another.
             outbox.begin(newEntry(
                 text: nil, recordingID: id,
-                reason: copy ? "Walnut stopped before this recording was copied." : "Walnut stopped before this recording was sent.",
+                reason: copy ? "Walnut stopped before this dictation was ready." : "Walnut stopped before this recording was sent.",
                 createdAt: recorder.keptAudio(recordingID: id)?.recordedAt ?? Date(), copy: copy
             ))
         }
@@ -644,11 +845,11 @@ final class TalkSession {
             phase: phase, startedAt: startedAt ?? Date(),
             words: words.map(Self.preview), reason: reason, kept: kept
         )
-        if destination == .clipboard { content.copy = true }
+        if destination == .dictation { content.copy = true }
         return content
     }
 
-    /// Set while a take for the clipboard records or is transcribed.
+    /// Set while a dictation records or is transcribed.
     static let clipboardTakeKey = "walnut.talk.clipboardTake"
 
     /// A Live Activity holds little: the first words are enough to recognise it.
@@ -670,7 +871,7 @@ final class TalkSession {
     }
 }
 
-/// The clipboard a take for it lands on.
+/// The clipboard a dictation's Copy puts its words on.
 enum TalkClipboard {
     /// Put the words on the clipboard exactly as given. False when iOS did not take
     /// them (the clipboard's change count did not move).
