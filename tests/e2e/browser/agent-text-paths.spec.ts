@@ -203,11 +203,17 @@ test('task, letter and external URL links activate through pointer and keyboard 
   const external = await popup;
   await expect(external.getByRole('heading', { name: 'External design' })).toBeVisible();
   await external.close();
+  // A task link opens on Home as every task reference does (useOpenTask, 178667afb), never a
+  // panel beside the Org page: the worker has no session, so it is selected in Home's list.
+  const onHome = async () => {
+    await expect.poll(() => new URL(page.url()).pathname).toBe('/');
+    await expect(page.locator(`#home-task-navigation [data-task-id="${workerId}"]`).and(page.locator('.task-focused, .todo-pinned-card-active'))).toHaveCount(1, { timeout: 15_000 });
+    await expect(page.getByTestId('org-side')).toHaveCount(0);
+    await expect(page.locator('.task-detail-modal')).toHaveCount(0);
+  };
   await click(page, summary.locator('a.task-link'));
-  const openedTask = page.getByRole('complementary', { name: 'Opened task', exact: true });
-  await expect(openedTask.getByRole('heading', { name: `Output worker ${stamp}`, exact: true })).toBeVisible();
-  await click(page, openedTask.getByRole('button', { name: 'Close', exact: true }));
-  await expect(openedTask).toHaveCount(0);
+  await onHome();
+  await threads(page);
   const composer = page.getByRole('textbox', { name: /^Send a message to this session/ }).first();
   await tabTo(page, composer, summary.locator('a.letter-link'));
   await page.keyboard.press('Enter');
@@ -215,8 +221,8 @@ test('task, letter and external URL links activate through pointer and keyboard 
   await closeLinkedLetter(page);
   await tabTo(page, composer, summary.locator('a.task-link'));
   await page.keyboard.press('Enter');
-  await expect(openedTask.getByRole('heading', { name: `Output worker ${stamp}`, exact: true })).toBeVisible();
-  await click(page, openedTask.getByRole('button', { name: 'Close', exact: true }));
+  await onHome();
+  await threads(page);
   await tabTo(page, composer, website);
   const keyboardPopup = context.waitForEvent('page', { timeout: 15_000 });
   await page.keyboard.press('Enter');

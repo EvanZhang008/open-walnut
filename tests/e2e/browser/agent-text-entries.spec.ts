@@ -588,10 +588,12 @@ test('triage history: the stored analysis links its file past the old preview cu
   await closeLinkedLetter(page)
   await expectPopup(context, page, full.locator(`a[href="${report}"]`), report)
   await folded(true)
-  // The task named in the analysis: Home finds its row; the record stays open.
+  // The task named in the analysis opens on Home as every task reference does (useOpenTask,
+  // 178667afb): its row is found and its session opens in a column; the record stays open.
   await click(page, full.locator('a.task-link[data-task-id="pw-task-codepath"]'))
   await folded(true)
   await expect(page.locator('[data-task-id="pw-task-codepath"]:not(a)').first()).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator('.main-page-session-column .session-panel[data-session-id="pw-codepath-session"]')).toBeVisible({ timeout: 20_000 })
   await expect(page.locator('.todo-search-input')).toHaveValue('')
   await expect(panel).toBeVisible()
   // Folding keeps the whole analysis linked, but only the first lines are visible.
@@ -614,8 +616,11 @@ test('triage history: the stored analysis links its file past the old preview cu
   await closeFile(page)
   await click(page, header)
   await folded(false)
-  // A press on the words, not a link, still opens it, and the header folds it again.
-  await click(page, preview.locator('[data-agent-text]'))
+  // A press on the words, not a link, still opens it, and the header folds it again. The words are
+  // the analysis' own heading: a press at the preview's middle lands wherever its lines wrap, and
+  // with the task's session column open beside it (above) that is a link, which opens the link
+  // and never unfolds the record (AgentText stops a link press there).
+  await click(page, preview.locator('[data-agent-text]').getByText('Triage Analysis:', { exact: true }))
   await folded(true)
   await click(page, header)
   await folded(false)
