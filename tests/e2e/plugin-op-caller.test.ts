@@ -3,11 +3,14 @@
  * provider): the op route (`POST /api/plugin-runtime/:id/ops/:op`), the cloud companion's relay
  * (`server.plugin-op`) and a nested call inside another op. The op reports the caller its
  * handler was given, the raw identity headers its nested call carried (read back by the
- * plugin's own route) and a nested read of a task in an incoming-item area.
+ * plugin's own route) and nested reads of a router's task and an ordinary one.
  *
- * Before: every such op ran as `plugin:<id>`, so a person was read as an agent (refused area
- * work) and a session's id was dropped for the plugin's. Only the companion's transport is
- * stubbed, looped back into the Mac's own relay handler.
+ * Before: every such op ran as `plugin:<id>`, so a person was read as an agent and a session's
+ * id was dropped for the plugin's. Since 6b8c2747c (2026-11-14) no caller is refused a read of
+ * area work (the router hands each item to an ordinary owner with the original, so its task row
+ * hides nothing); only the router's own session stays held to its routing tools. The reads stay
+ * in the probe so a refusal that comes back for one kind of caller shows here. Only the
+ * companion's transport is stubbed, looped back into the Mac's own relay handler.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import type { Server as HttpServer } from 'node:http'
@@ -53,10 +56,10 @@ import type { Task } from '../../src/core/types.js'
 
 let server: HttpServer
 let port: number
-let areaId = ''
+let routerTaskId = ''
 let plainId = ''
 const ordinarySid = 'b7c5e0f1-0000-4000-8000-00000000c001'
-const areaSid = 'b7c5e0f1-0000-4000-8000-00000000c002'
+const routerSid = 'b7c5e0f1-0000-4000-8000-00000000c002'
 const legacySid = 'b7c5e0f1-0000-4000-8000-00000000c003'
 
 // `who` answers with its handler's caller, the raw headers of a nested call, and nested reads.
@@ -104,7 +107,7 @@ async function post(route: string, body: unknown, headers: Record<string, string
 }
 
 const who = (headers: Record<string, string> = {}) =>
-  post('/api/plugin-runtime/probe/ops/probe_who', { read: [areaId, plainId] }, headers)
+  post('/api/plugin-runtime/probe/ops/probe_who', { read: [routerTaskId, plainId] }, headers)
 const calls = async () => (await post('/api/plugin-runtime/probe/ops/probe_calls', {})).data.result.calls as number
 
 async function mark(taskId: string, patch: Record<string, unknown>) {
@@ -128,21 +131,21 @@ beforeAll(async () => {
     await new Promise((r) => setTimeout(r, 200))
   }
 
-  areaId = (await addTask({ title: 'Area desk', project: 'Garden' })).task.id
+  routerTaskId = (await addTask({ title: 'Personal router', project: 'Garden' })).task.id
   plainId = (await addTask({ title: 'Plain chores', project: 'Pantry' })).task.id
   const legacyHome = (await addTask({ title: 'Moved session home', project: 'Pantry' })).task.id
   await updateRouterAreas(WALNUT_HOME, () => ({
     version: 1,
-    areas: [{ id: 'personal', name: 'Personal', host: '__local__', taskIds: [areaId], sources: [] }],
-    routers: [{ taskId: areaId, areaId: 'personal', paused: false }],
+    areas: [{ id: 'personal', name: 'Personal', host: '__local__', taskIds: [routerTaskId], sources: [] }],
+    routers: [{ taskId: routerTaskId, areaId: 'personal', paused: false }],
     items: [],
   }))
-  await mark(areaId, { org_role: 'router', router_area_id: 'personal', router_paused: false })
+  await mark(routerTaskId, { org_role: 'router', router_area_id: 'personal', router_paused: false })
   await createSessionRecord(ordinarySid, plainId, 'Pantry', WALNUT_HOME, { mode: 'dontAsk' })
-  await createSessionRecord(areaSid, areaId, 'Garden', WALNUT_HOME, { profile: routerAreaProfile('personal'), mode: 'dontAsk' })
+  await createSessionRecord(routerSid, routerTaskId, 'Garden', WALNUT_HOME, { profile: routerAreaProfile('personal'), mode: 'dontAsk' })
   // Fault injection: only legacyTaskId still ties this detached historical session to the area.
-  await seedLegacySession(legacySid, legacyHome, 'Pantry', WALNUT_HOME, { mode: 'dontAsk', legacyTaskId: areaId, initialProcessStatus: 'stopped' })
-  for (const sid of [ordinarySid, areaSid]) await updateSessionRecord(sid, { process_status: 'stopped' })
+  await seedLegacySession(legacySid, legacyHome, 'Pantry', WALNUT_HOME, { mode: 'dontAsk', legacyTaskId: routerTaskId, initialProcessStatus: 'stopped' })
+  for (const sid of [ordinarySid, routerSid]) await updateSessionRecord(sid, { process_status: 'stopped' })
 }, 90_000)
 
 afterAll(async () => {
@@ -152,21 +155,21 @@ afterAll(async () => {
 })
 
 describe('the plugin op route runs the op for its own caller', () => {
-  it('a person (no caller header) is a person: no session id, and area work reads', async () => {
+  it('a person (no caller header) is a person: no session id, and both tasks read', async () => {
     const r = await who()
     expect(r.data).toEqual({ ok: true, result: {
       ctx: { kind: 'person', sid: null },
       echo: { sid: null, kind: null, plugin: 'probe', origin: LOCAL_ORIGIN },
-      reads: { [areaId]: 'ok', [plainId]: 'ok' },
+      reads: { [routerTaskId]: 'ok', [plainId]: 'ok' },
     } })
   })
 
-  it('an automated caller is an agent with no session: area work is refused', async () => {
+  it('an automated caller is an agent with no session, and reads a router\'s task like any task', async () => {
     const r = await who({ 'x-walnut-caller-kind': 'automation' })
     expect(r.data.result).toEqual({
       ctx: { kind: 'agent', sid: null },
       echo: { sid: null, kind: 'automation', plugin: 'probe', origin: LOCAL_ORIGIN },
-      reads: { [areaId]: 'denied', [plainId]: 'ok' },
+      reads: { [routerTaskId]: 'ok', [plainId]: 'ok' },
     } satisfies Who)
   })
 
@@ -175,13 +178,13 @@ describe('the plugin op route runs the op for its own caller', () => {
     expect(r.data.result).toEqual({
       ctx: { kind: 'agent', sid: ordinarySid },
       echo: { sid: ordinarySid, kind: null, plugin: 'probe', origin: LOCAL_ORIGIN },
-      reads: { [areaId]: 'denied', [plainId]: 'ok' },
+      reads: { [routerTaskId]: 'ok', [plainId]: 'ok' },
     } satisfies Who)
   })
 
-  it('a session in an area, by its task or only by its legacy task, is refused before the handler', async () => {
+  it('a router\'s own session, by its task or only by its legacy task, is refused before the handler', async () => {
     const before = await calls()
-    for (const sid of [areaSid, legacySid]) {
+    for (const sid of [routerSid, legacySid]) {
       const r = await who({ 'x-walnut-caller-sid': sid })
       expect({ sid, status: r.status, code: r.data?.code }).toEqual({ sid, status: 403, code: 'area_forbidden' })
     }
@@ -194,7 +197,7 @@ describe('the plugin op route runs the op for its own caller', () => {
       expect(r.data.result).toEqual({
         ctx: { kind: 'agent', sid: 'plugin:probe' },
         echo: { sid: 'plugin:probe', kind: null, plugin: 'probe', origin: LOCAL_ORIGIN },
-        reads: { [areaId]: 'denied', [plainId]: 'ok' },
+        reads: { [routerTaskId]: 'ok', [plainId]: 'ok' },
       } satisfies Who)
     }
   })
@@ -207,7 +210,7 @@ describe('a nested call cannot change who it runs for', () => {
     dispose = definePluginOp('caller-scope-test', {
       name: 'caller_scope_outer', title: 'outer', description: 'Nested caller probe',
       input: { claim: z.enum(['person', 'agent']) },
-      handler: async (args) => callPluginOp('probe', 'probe_who', { read: [areaId] }, LOCAL_ORIGIN,
+      handler: async (args) => callPluginOp('probe', 'probe_who', { read: [routerTaskId] }, LOCAL_ORIGIN,
         args.claim === 'person' ? { kind: 'person' } : { kind: 'agent', sid: ordinarySid }),
       tags: { readonly: true, remote: 'allow' },
     })
@@ -221,7 +224,7 @@ describe('a nested call cannot change who it runs for', () => {
     expect(out.result.result).toEqual({
       ctx: { kind: 'agent', sid: ordinarySid },
       echo: { sid: ordinarySid, kind: null, plugin: 'probe', origin: LOCAL_ORIGIN },
-      reads: { [areaId]: 'denied' },
+      reads: { [routerTaskId]: 'ok' },
     })
   })
 
@@ -232,7 +235,7 @@ describe('a nested call cannot change who it runs for', () => {
     expect(out.result.result).toEqual({
       ctx: { kind: 'person', sid: null },
       echo: { sid: null, kind: null, plugin: 'probe', origin: LOCAL_ORIGIN },
-      reads: { [areaId]: 'ok' },
+      reads: { [routerTaskId]: 'ok' },
     })
   })
 })
@@ -240,33 +243,33 @@ describe('a nested call cannot change who it runs for', () => {
 describe('the companion\'s relay carries the caller, and an older one names none', () => {
   it('the bridge sends the caller across, and the Mac runs the op for it at the relay\'s origin', async () => {
     relayed.params.length = 0
-    const person = await callPrimaryPluginOp('probe', 'probe_who', { read: [areaId] }, { kind: 'person' }) as { ok: true; result: Who }
+    const person = await callPrimaryPluginOp('probe', 'probe_who', { read: [routerTaskId] }, { kind: 'person' }) as { ok: true; result: Who }
     expect(relayed.params[0]?.caller).toEqual({ kind: 'person' })
     expect(person.result).toEqual({
       ctx: { kind: 'person', sid: null },
       echo: { sid: null, kind: null, plugin: 'probe', origin: REMOTE_HTTP_ORIGIN },
-      reads: { [areaId]: 'ok' },
+      reads: { [routerTaskId]: 'ok' },
     })
-    const session = await callPrimaryPluginOp('probe', 'probe_who', { read: [areaId] }, { kind: 'agent', sid: ordinarySid }) as { ok: true; result: Who }
+    const session = await callPrimaryPluginOp('probe', 'probe_who', { read: [routerTaskId] }, { kind: 'agent', sid: ordinarySid }) as { ok: true; result: Who }
     expect(session.result.echo).toEqual({ sid: ordinarySid, kind: null, plugin: 'probe', origin: REMOTE_HTTP_ORIGIN })
-    expect(session.result.reads).toEqual({ [areaId]: 'denied' })
+    expect(session.result.reads).toEqual({ [routerTaskId]: 'ok' })
   })
 
   it('no caller (an older companion) or a caller of any other shape runs as the plugin, never a person', async () => {
     relayed.params.length = 0
-    const old = await callPrimaryPluginOp('probe', 'probe_who', { read: [areaId] }) as { ok: true; result: Who }
+    const old = await callPrimaryPluginOp('probe', 'probe_who', { read: [routerTaskId] }) as { ok: true; result: Who }
     expect('caller' in (relayed.params[0] ?? {})).toBe(false)
     expect(old.result.ctx).toEqual({ kind: 'agent', sid: 'plugin:probe' })
-    expect(old.result.reads).toEqual({ [areaId]: 'denied' })
+    expect(old.result.reads).toEqual({ [routerTaskId]: 'ok' })
     for (const caller of [
       { kind: 'person', sid: ordinarySid }, { kind: 'admin' }, { kind: 'agent', sid: 'x'.repeat(201) },
       { kind: 'person', scope: 'all' }, 'person', ['person'],
     ]) {
-      const out = await handlePluginControlRelay('server.plugin-op', { pluginId: 'probe', opName: 'probe_who', args: { read: [areaId] }, caller })
+      const out = await handlePluginControlRelay('server.plugin-op', { pluginId: 'probe', opName: 'probe_who', args: { read: [routerTaskId] }, caller })
       expect(out).toMatchObject({ ok: true, result: { ok: true, result: {
         ctx: { kind: 'agent', sid: 'plugin:probe' },
         echo: { sid: 'plugin:probe', kind: null, plugin: 'probe', origin: REMOTE_HTTP_ORIGIN },
-        reads: { [areaId]: 'denied' },
+        reads: { [routerTaskId]: 'ok' },
       } } })
     }
   })
