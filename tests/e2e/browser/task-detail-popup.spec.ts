@@ -66,10 +66,15 @@ async function openDetails(page: Page, taskId: string, search: string): Promise<
     await page.locator('.todo-search-input').fill(search)
     await expect(row).toBeVisible({ timeout: 5_000 })
   }).toPass({ timeout: 40_000 })
-  await row.getByRole('button', { name: 'More actions' }).click()
-  await page.locator('.task-kebab-menu:visible').getByText('Details', { exact: true }).click()
   const modal = page.locator('.task-detail-modal')
-  await expect(modal).toBeVisible()
+  await expect(async () => {
+    if (await modal.isVisible()) return
+    await row.getByRole('button', { name: 'More actions' }).click()
+    const menu = page.locator('.task-kebab-menu:visible')
+    await expect(menu).toBeVisible()
+    await menu.getByText('Details', { exact: true }).click()
+    await expect(modal).toBeVisible({ timeout: 3_000 })
+  }).toPass({ timeout: 20_000 })
   return modal
 }
 
@@ -103,9 +108,9 @@ test('a busy task reads as one header, a main column of rows and a rail of facts
   await expect(rows.filter({ hasText: 'Rename the time grid \u91cd\u547d\u540d' })).toHaveCount(1)
   await expect(rows.filter({ hasText: 'Untitled session' })).toHaveCount(1)
   expect(await modal.innerText()).not.toContain('sess-time-slots')
-  // A long title stays one line; the hover text has all of it.
+  // A long title wraps in the relationship rail; the hover text still has all of it.
   const long = rows.filter({ hasText: 'Review the day-by-day list' })
-  expect((await long.locator('.tdp-row-title').boundingBox())!.height).toBeLessThanOrEqual(22)
+  expect((await long.locator('.tdp-row-title').boundingBox())!.width).toBeLessThanOrEqual((await modal.locator('.tdp-rail').boundingBox())!.width)
   await expect(long).toHaveAttribute('title', /a title long enough to truncate/)
 
   // Parent and subtasks: rows, the done one struck through.
@@ -130,9 +135,21 @@ test('a busy task reads as one header, a main column of rows and a rail of facts
   // It stays inside the main column (a fixed pixel cap broke when the editor took the field).
   expect(doc.width).toBeLessThanOrEqual((await modal.locator('.tdp-main').boundingBox())!.width + 0.5)
 
-  // The parts in reading order.
-  const tops = await Promise.all(['Session', 'Parent', 'Subtasks', 'Description', 'Note'].map(async (label) => (await section(modal, label).boundingBox())!.y))
-  expect([...tops].sort((a, b) => a - b)).toEqual(tops)
+  // The chosen popup: documents on the left, relationships and facts on the right.
+  const descriptionBox = await section(modal, 'Description').boundingBox()
+  const noteBox = await section(modal, 'Note').boundingBox()
+  expect(noteBox!.y).toBeGreaterThan(descriptionBox!.y)
+  for (const label of ['Session', 'Parent', 'Subtasks']) {
+    expect((await section(modal, label).boundingBox())!.x).toBeGreaterThan(descriptionBox!.x + descriptionBox!.width)
+  }
+  await expect(modal.getByTestId('task-detail-complete')).toBeVisible()
+  await expect(modal.getByTestId('task-detail-delete')).toBeVisible()
+  await expect(modal.getByRole('button', { name: 'Open session', exact: false })).toBeVisible()
+  await modal.getByTestId('task-status-badge').click()
+  await expect(page.locator('.task-status-menu-quiet .task-status-pill-icon')).toHaveCount(0)
+  await expect(page.locator('.task-status-menu-quiet [aria-checked="true"]')).toHaveCount(1)
+  await page.keyboard.press('Escape')
+  await expect(modal).toBeVisible()
 
   // The rail: one fact per row, to the right of the main column.
   await expect(fact(modal, 'Time')).toBeVisible({ timeout: 60_000 })
@@ -140,7 +157,7 @@ test('a busy task reads as one header, a main column of rows and a rail of facts
   await expect(fact(modal, 'Source')).toContainText('Local')
   await expect(fact(modal, 'ID')).toContainText(TASK)
   const [main, rail] = await Promise.all([modal.locator('.tdp-main').boundingBox(), modal.locator('.tdp-rail').boundingBox()])
-  expect(rail!.x).toBeGreaterThan(main!.x + main!.width)
+  expect(rail!.x).toBeGreaterThanOrEqual(main!.x + main!.width)
   expect(Math.abs(rail!.y - main!.y)).toBeLessThan(4)
   await page.waitForTimeout(300)
   await modal.screenshot({ path: `${SHOTS}/after-${browserName}-wide.png`, animations: 'disabled' })
@@ -193,14 +210,14 @@ test('rows lead where they say, and the rail\'s dates change in place', async ({
   expect(errors).toEqual([])
 })
 
-test('a narrow popup puts the facts first, then the main column', async ({ page, browserName }) => {
+test('a narrow popup stacks the document before relationships and facts', async ({ page, browserName }) => {
   const errors = watchErrors(page)
   // A desktop window just wide enough not to be the phone app (768 px and below, 7e7f280b6,
   // where the popup is a full-screen page): the popup is then under its 720 px container width.
   await page.setViewportSize({ width: 790, height: 900 })
   await loadHome(page)
   const modal = await openDetails(page, TASK, 'Time slots fixture')
-  expect((await modal.locator('.tdp').boundingBox())!.width).toBeLessThanOrEqual(720)
+  expect((await modal.locator('.tdp').boundingBox())!.width).toBeLessThanOrEqual(760)
   // The earlier sessions, folded under the task's one session, hold the long title.
   await modal.getByRole('button', { name: 'Earlier sessions (3)' }).click()
   await expect(modal.locator('.todo-detail-session-item')).toHaveCount(4, { timeout: 20_000 })
@@ -211,10 +228,9 @@ test('a narrow popup puts the facts first, then the main column', async ({ page,
       const cs = getComputedStyle(el)
       return { overflow: cs.textOverflow, wrap: cs.whiteSpace, hidden: cs.overflow, height: el.getBoundingClientRect().height }
     })
-  expect(cut).toMatchObject({ overflow: 'ellipsis', wrap: 'nowrap', hidden: 'hidden' })
-  expect(cut.height).toBeLessThanOrEqual(22)
+  expect(cut).toMatchObject({ overflow: 'ellipsis', wrap: 'normal', hidden: 'hidden' })
   const [main, rail] = await Promise.all([modal.locator('.tdp-main').boundingBox(), modal.locator('.tdp-rail').boundingBox()])
-  expect(rail!.y + rail!.height).toBeLessThanOrEqual(main!.y)
+  expect(main!.y + main!.height).toBeLessThanOrEqual(rail!.y)
   expect(Math.abs(rail!.width - main!.width)).toBeLessThan(2)
   // Nothing spills sideways.
   const overflow = await modal.locator('.todo-detail-pane').evaluate((el) => el.scrollWidth - el.clientWidth)
@@ -241,4 +257,43 @@ test('a task with nothing yet shows only its empty description and note, with it
   expect(labels).not.toContain('Time')
   await modal.screenshot({ path: `${SHOTS}/after-${browserName}-empty.png`, animations: 'disabled' })
   expect(errors).toEqual([])
+})
+
+
+test('the document survives resizing and a refused save, then opens its session with the popup gone', async ({ page, request }) => {
+  const errors = watchErrors(page)
+  await loadHome(page)
+  const modal = await openDetails(page, TASK, 'Time slots fixture')
+  const field = modal.getByTestId('task-detail-description')
+  const editor = field.locator('.ProseMirror')
+  const original = (await (await request.get(`${base()}/api/tasks/${TASK}`)).json()).task.description
+  try {
+    await editor.click()
+    await page.keyboard.press('ControlOrMeta+End')
+    await page.keyboard.type(' Popup layout edit')
+    await expect.poll(async () => (await (await request.get(`${base()}/api/tasks/${TASK}`)).json()).task.description).toContain('Popup layout edit')
+    await editor.evaluate((el) => el.setAttribute('data-layout-identity', 'kept'))
+    await page.setViewportSize({ width: 790, height: 900 })
+    await expect(editor).toHaveAttribute('data-layout-identity', 'kept')
+    await page.setViewportSize({ width: 1280, height: 860 })
+    await expect(editor).toHaveAttribute('data-layout-identity', 'kept')
+    await page.route(`**/api/tasks/${TASK}/description`, (route) => route.request().method() === 'PUT'
+      ? route.fulfill({ status: 503, json: { error: 'Save refusal fixture' } })
+      : route.continue())
+    await editor.click()
+    await page.keyboard.press('ControlOrMeta+End')
+    await page.keyboard.type(' Retained')
+    await expect(field.locator('.notes-save-status')).toHaveText('Save failed')
+    await expect(editor).toContainText('Retained')
+    await page.unroute(`**/api/tasks/${TASK}/description`)
+    await page.keyboard.type(' recovered')
+    await expect.poll(async () => (await (await request.get(`${base()}/api/tasks/${TASK}`)).json()).task.description).toContain('Retained recovered')
+    await modal.getByRole('button', { name: 'Open session', exact: false }).click()
+    await expect(modal).toHaveCount(0)
+    await expect(page.locator(`.main-page-session-column[data-column-id="${fixture!.slots.sessionIds[0]}"]`)).toBeVisible()
+    expect(errors).toEqual([])
+  } finally {
+    await page.unroute(`**/api/tasks/${TASK}/description`)
+    await request.put(`${base()}/api/tasks/${TASK}/description`, { data: { content: original } })
+  }
 })

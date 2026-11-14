@@ -9,18 +9,22 @@
   flex-direction: column;
 }
 
-/* The popup is as tall as what the task has (up to the shell's 90vh), not a 90vh
-   sheet with one line on it. The pane scrolls inside once it is taller. */
+/* A bounded, centered window: the body scrolls without moving its header or actions. */
 .wf-modal.task-detail-modal {
-  height: auto;
+  width: min(1040px, 92vw);
+  height: min(780px, 90vh);
   min-height: min(360px, 90vh);
   max-height: 90vh;
+  border-radius: 16px;
 }
 
 /* ── Header ── */
 
 .tdp-head {
-  margin-bottom: 18px;
+  flex: none;
+  margin: 0;
+  padding: 20px 32px 24px;
+  border-bottom: 1px solid var(--border);
 }
 .tdp-head-top {
   display: flex;
@@ -29,9 +33,9 @@
   min-height: 24px;
 }
 .tdp .todo-detail-title {
-  margin: 4px 0 10px;
-  font-size: 19px;
-  font-weight: 650;
+  margin: 12px 0;
+  font-size: 28px;
+  font-weight: 500;
   line-height: 1.3;
   color: var(--fg-primary, var(--fg));
   overflow-wrap: anywhere;
@@ -47,27 +51,33 @@
 
 .tdp-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 248px;
-  gap: 28px;
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr) 336px;
+  gap: 0;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  align-items: stretch;
 }
 .tdp-main {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 28px;
+  padding: 24px 32px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .tdp-label {
   display: flex;
   align-items: baseline;
   gap: 6px;
-  margin: 0 0 6px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--fg-muted);
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--fg);
 }
 .tdp-label-count {
   font-weight: 500;
@@ -81,7 +91,7 @@
 .tdp .tdp-row {
   display: block;
   margin: 0 -8px;
-  padding: 5px 8px;
+  padding: 8px;
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.12s;
@@ -98,8 +108,8 @@
 }
 .tdp-dot {
   flex: none;
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
 }
 .tdp-row-title {
@@ -107,13 +117,14 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   color: var(--fg-primary, var(--fg));
 }
 .tdp-row-title.is-loading { color: var(--fg-muted); }
 .tdp-row-end {
   flex: none;
-  font-size: 11.5px;
+  font-size: 11px;
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -128,7 +139,7 @@
 }
 .tdp-task-row.is-done .tdp-row-title {
   color: var(--fg-muted);
-  text-decoration: line-through;
+  text-decoration: none;
 }
 .tdp .todo-detail-plan-badge { flex: none; }
 
@@ -160,7 +171,7 @@
   color: var(--fg-secondary);
 }
 .tdp-doc + .tdp-doc {
-  padding-top: 18px;
+  padding-top: 24px;
   border-top: 1px solid var(--border);
 }
 
@@ -169,13 +180,16 @@
 /* ── Rail: one fact per row ── */
 
 .tdp-rail {
-  position: sticky;
-  top: 0;
-  padding: 4px 14px;
-  font-size: 12.5px;
+  padding: 24px;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  font-size: 12px;
   background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: 10px;
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
 }
 .tdp-fact {
   display: flex;
@@ -186,7 +200,7 @@
   padding: 4px 0;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
-.tdp-rail > .tdp-fact:last-child { border-bottom: none; }
+.tdp-facts > .tdp-fact:last-child { border-bottom: none; }
 .tdp-fact-k { flex: none; color: var(--fg-muted); }
 .tdp-fact-v {
   min-width: 0;
@@ -203,24 +217,17 @@
 .tdp-source { color: var(--accent); text-decoration: none; white-space: nowrap; }
 .tdp-source:hover { text-decoration: underline; }
 
-/* A narrow popup: the rail's facts first, two to a row so they stay short, then the
-   main column. */
-@container (max-width: 720px) {
-  .tdp-body { grid-template-columns: minmax(0, 1fr); gap: 18px; }
-  .tdp-rail {
-    position: static;
-    order: -1;
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    column-gap: 24px;
-  }
-  /* A line above each fact but the first row's (Start, Due, always first). */
-  .tdp-rail > .tdp-fact { border-bottom: none; border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
-  .tdp-rail > .tdp-fact:nth-child(-n + 2) { border-top: none; }
+/* At narrow widths the two regions become one document scroll area. */
+@container (max-width: 760px) {
+  .tdp-body { display: block; overflow-y: auto; }
+  .tdp-main { overflow: visible; padding: 24px; }
+  .tdp-rail { overflow: visible; border-left: 0; border-top: 1px solid var(--border); padding: 24px; }
+  .tdp-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 24px; }
+  .tdp-head { padding: 16px 24px 20px; }
 }
 @container (max-width: 420px) {
-  .tdp-rail { grid-template-columns: minmax(0, 1fr); }
-  .tdp-rail > .tdp-fact:nth-child(2) { border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+  .tdp-facts { grid-template-columns: minmax(0, 1fr); }
+  .tdp .todo-detail-title { font-size: 24px; }
 }
 
 /* A task kept local in a project that syncs: why, under its Source fact. */
@@ -233,17 +240,17 @@
 
 .tdp-actions {
   display: flex;
-  gap: 6px;
+  gap: 8px;
 }
 /* The project name takes the free space, so the eye (when there is one), the actions and the
    close pack to the right whichever of them shows. */
 .tdp-head-top .todo-detail-project { flex: 1 1 auto; min-width: 0; }
 .tdp-head-top .tdp-actions + .todo-detail-close { margin-left: 4px; }
 .tdp-action {
-  padding: 3px 10px;
+  padding: 6px 12px;
   font: inherit;
   font-size: 12.5px;
-  font-weight: 550;
+  font-weight: 500;
   color: var(--fg);
   background: var(--bg-secondary);
   border: 1px solid var(--border);
@@ -252,18 +259,18 @@
 }
 .tdp-action:hover { background: var(--bg-tertiary, var(--bg-secondary)); }
 .tdp-action-primary {
-  color: #fff;
-  background: var(--accent);
-  border-color: var(--accent);
+  color: var(--fg);
+  background: var(--bg-secondary);
+  border-color: var(--border);
 }
-.tdp-action-primary:hover { filter: brightness(1.08); background: var(--accent); }
+.tdp-action-primary:hover { background: var(--bg-tertiary); }
 .tdp-action-danger { color: var(--error, #ff3b30); }
 
 .tdp-blocked {
   align-self: flex-start;
   padding: 1px 6px;
   font-size: 11px;
-  font-weight: 550;
+  font-weight: 500;
   color: #b45309;
   background: #f59e0b22;
   border-radius: 4px;
@@ -342,15 +349,17 @@
    popup's flow: as tall as their text, not the full-page sheet the editor is on /notes. */
 .tdp-doc .notes-editor-panel { height: auto; }
 .tdp-doc .notes-editor-header {
-  min-height: 0;
-  padding: 0 0 2px;
+  position: relative;
+  height: 20px;
+  min-height: 20px;
+  padding: 0;
   border-bottom: none;
 }
 .tdp-doc .notes-width-btn { display: none; }
 .tdp-doc .notes-editor-content { overflow: visible; }
 .tdp-doc .notes-editor .ProseMirror {
-  min-height: 64px;
-  padding: 6px 2px 10px;
+  min-height: 48px;
+  padding: 4px 0 12px;
 }
 .tdp-doc .notes-editor-panel.notes-width-normal .ProseMirror { max-width: none; }
 /* No scroll-past-end zone (notes-editor.css gives the page editor 40vh under the last line). */
@@ -387,3 +396,30 @@
 /* Withdraw on an answer given for the user (AnsweredForLine.tsx), also on a Board Status row. */
 .answered-for-confirm { display: inline-flex; gap: 6px; }
 .answered-for-btn-compact { margin-left: 6px; font-size: 11px; padding: 0 6px; }
+
+/* The selected design keeps the header and actions visible around independent columns. */
+.task-detail-modal .todo-detail-pane.tdp { padding: 0; overflow: hidden; height: 100%; }
+.tdp-footer { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; border-top: 1px solid var(--border); background: var(--bg); }
+.tdp-open-session { padding: 6px 12px; font: inherit; font-size: 12.5px; color: var(--bg); background: var(--fg); border: 1px solid var(--fg); border-radius: 6px; cursor: pointer; }
+.tdp-open-session:hover { opacity: .85; }
+.tdp-open-session:focus-visible, .tdp-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tdp-facts { border-top: 1px solid var(--border); padding-top: 16px; }
+.tdp .todo-detail-project { font-size: 12px; font-weight: 400; text-transform: none; letter-spacing: 0; }
+.tdp .todo-detail-close { width: 28px; height: 28px; margin-left: 4px; opacity: 1; }
+.tdp .todo-detail-badges .badge-phase { background: transparent; padding: 0; font-size: 12px; }
+.tdp .todo-detail-badges { gap: 12px; }
+.tdp-rail .todo-detail-session-item { background: var(--bg); border: 1px solid var(--border); margin: 0; padding: 12px; }
+.tdp-rail .tdp-task-row { border-bottom: 1px solid var(--border); border-radius: 0; }
+.tdp-rail .tdp-row-line { align-items: baseline; }
+.tdp-rail .tdp-dot { align-self: center; }
+.tdp .notes-editor .ProseMirror { font-size: 14px; line-height: 1.7; }
+.tdp .notes-editor .ProseMirror h1, .tdp .notes-editor .ProseMirror h2 { font-size: 20px; line-height: 1.4; font-weight: 500; }
+.tdp .notes-editor .ProseMirror h3 { font-size: 16px; line-height: 1.5; font-weight: 500; }
+.tdp .notes-editor .ProseMirror > :first-child { margin-top: 0; }
+/* Phone uses the same fields and a single body scroller, below its own page header. */
+.is-phone-layer .todo-detail-pane.tdp { height: auto; flex: 1; }
+.is-phone-layer .tdp-head { padding: 16px; }
+.is-phone-layer .tdp-main, .is-phone-layer .tdp-rail { padding: 16px; }
+.is-phone-layer .tdp-footer { padding: 12px 16px; }
+
+.tdp-doc .notes-editor-meta { margin-left: auto; }

@@ -1,24 +1,9 @@
 /**
- * TaskDetailPane: one task's details, in the popup TaskDetailModal hosts (Home's
- * "Details", the session menu's "Task detail").
- *
- *   ┌ PROJECT ─────────────────────────────────────────────── × ┐
- *   │ Title                                                    │
- *   │ [status] [priority] [plugin fields] [tags]               │
- *   ├──────────────────────────────────────┬───────────────────┤
- *   │ Sessions · Parent · Subtasks         │ Start   Due       │
- *   │ Description                          │ Time    Source    │
- *   │ Note                                 │ Created Updated ID│
- *   └──────────────────────────────────────┴───────────────────┘
- *
- * What the task IS on the left, every small fact about it in one rail on the right.
- * This popup is the one place a task's details are read and edited: the separate
- * task page is gone (utils/task-path.ts), so its edits live here (TaskDetailEdits:
- * Complete / Reopen, Delete, dependencies, a line added to the note) beside the
- * description and note editors. A narrow popup stacks the
- * rail above the main column. Each part is plain rows under a small label, not a box
- * of its own (2026-10-06 redesign: the old pane stacked a box per part, repeated the
- * task's phase on every session and printed session ids).
+ * The centered task popup: description and note on the left, sessions,
+ * task relationships, dependencies and facts on the right. Both columns
+ * scroll under one fixed header and above the complete/delete/open actions.
+ * Narrow windows stack the columns without remounting either editor.
+ * Every related task/session leaves the popup before opening on Home.
  */
 import { matchParentRef, refNamesId } from '../../../../src/lib/id-ref';
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
@@ -218,14 +203,13 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenTriageForTask, o
           <span className="todo-detail-project">{taskProjectLabel(task)}</span>
           {/* Watch: keep it at the top of the task panel whatever its state. */}
           <WatchButton task={task} className="tdp-watch" />
-          <TaskDetailActions task={task} onDeleted={onClose} onError={reportError} />
           {onClose && (
             <button className="todo-detail-close" onClick={onClose} aria-label="Close detail panel" title="Close">&times;</button>
           )}
         </div>
         <h2 className="todo-detail-title">{orgDisplayTitle(task)}</h2>
         <div className="todo-detail-badges">
-          <TaskStatusBadge task={task} />
+          <TaskStatusBadge task={task} quiet />
           {showPriority && task.priority && PRIORITY_TEXT[task.priority] && (
             <span className={`todo-detail-priority-pill priority-${task.priority}`}>{PRIORITY_TEXT[task.priority]}</span>
           )}
@@ -246,6 +230,26 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenTriageForTask, o
           <StartQueueLine task={task} onError={reportError} />
           <AnsweredForLine task={task} onError={reportError} />
 
+          <Section label="Description" className="tdp-doc" testId="task-detail-description">
+            {descriptionReady
+              ? <TaskFieldEditor taskId={task.id} field="description" value={descriptionContent ?? ''} save={updateDescription} placeholder="What is this task about? Why does it exist?" />
+              : <div className="tdp-muted">Loading…</div>}
+          </Section>
+
+          <Section label="Note" className="tdp-doc" testId="task-detail-note">
+            {/* Empty note + a session: the AI's first self-report has not fired yet. Say so; a
+                silent blank reads as "broken" (two incident reports, 2026-07-25). */}
+            {noteReady && !(noteContent ?? '').trim() && (task.session_ids?.length ?? 0) > 0 && (
+              <div className="tdp-row-sub">AI keeps this note updated after each working session.</div>
+            )}
+            {noteReady
+              ? <TaskFieldEditor taskId={task.id} field="note" value={noteContent ?? ''} save={updateNote} placeholder="Working notes, findings, context…" />
+              : <div className="tdp-muted">Loading…</div>}
+            <TaskNoteAdd key={`note-add:${task.id}`} taskId={task.id} onAdded={() => reloadDetail()} onError={reportError} />
+          </Section>
+        </div>
+
+        <aside className="tdp-rail" aria-label="Task relationships and facts">
           {hasSessions && (
             <Section label="Session">
               {showPrimary && primarySessionId && (() => {
@@ -294,26 +298,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenTriageForTask, o
             onError={reportError}
           />
 
-          <Section label="Description" className="tdp-doc" testId="task-detail-description">
-            {descriptionReady
-              ? <TaskFieldEditor taskId={task.id} field="description" value={descriptionContent ?? ''} save={updateDescription} placeholder="What is this task about? Why does it exist?" />
-              : <div className="tdp-muted">Loading…</div>}
-          </Section>
-
-          <Section label="Note" className="tdp-doc" testId="task-detail-note">
-            {/* Empty note + a session: the AI's first self-report has not fired yet. Say so; a
-                silent blank reads as "broken" (two incident reports, 2026-07-25). */}
-            {noteReady && !(noteContent ?? '').trim() && (task.session_ids?.length ?? 0) > 0 && (
-              <div className="tdp-row-sub">AI keeps this note updated after each working session.</div>
-            )}
-            {noteReady
-              ? <TaskFieldEditor taskId={task.id} field="note" value={noteContent ?? ''} save={updateNote} placeholder="Working notes, findings, context…" />
-              : <div className="tdp-muted">Loading…</div>}
-            <TaskNoteAdd key={`note-add:${task.id}`} taskId={task.id} onAdded={() => reloadDetail()} onError={reportError} />
-          </Section>
-        </div>
-
-        <aside className="tdp-rail" aria-label="Task facts">
+          <div className="tdp-facts" aria-label="Task facts">
           <Fact label="Start"><DatePicker date={task.start_date} onChange={handleStartDateChange} label="Start" bare /></Fact>
           <Fact label="Due"><DatePicker date={task.due_date} onChange={handleDateChange} label="Due" bare /></Fact>
           {task.phase === 'WAITING' && task.wait_until && (
@@ -342,8 +327,15 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenTriageForTask, o
           {task.created_at && <Fact label="Created" title={fullDate(task.created_at)}>{timeAgo(task.created_at)}</Fact>}
           {task.updated_at && <Fact label="Updated" title={fullDate(task.updated_at)}>{timeAgo(task.updated_at)}</Fact>}
           <Fact label="ID"><CopyableId id={task.id} label="" /></Fact>
+          </div>
         </aside>
       </div>
+      <footer className="tdp-footer">
+        <TaskDetailActions task={task} onDeleted={onClose} onError={reportError} />
+        {showPrimary && primarySessionId && (
+          <button type="button" className="tdp-open-session" onClick={() => openSession(primarySessionId)}>Open session &rarr;</button>
+        )}
+      </footer>
     </div>
   );
 }

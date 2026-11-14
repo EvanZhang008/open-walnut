@@ -168,13 +168,14 @@ function WaitUntilRow({ task, onSet }: { task: Pick<Task, 'id' | 'phase' | 'wait
  * PATCH fallback has no optimistic copy); it goes again if the task's phase
  * then moves anywhere but Waiting.
  */
-function StatusOptions({ task, onPick, onPickWaiting, onSetWaitUntil }: {
+function StatusOptions({ task, onPick, onPickWaiting, onSetWaitUntil, quiet = false }: {
   task: Pick<Task, 'id' | 'phase' | 'wait_until'>;
   /** A pick other than Waiting: the caller writes it and closes. */
   onPick: (phase: TaskPhase) => void;
   /** Waiting picked: the caller writes it and stays open for the until row. */
   onPickWaiting: () => void;
   onSetWaitUntil: (waitUntil: string) => void;
+  quiet?: boolean;
 }) {
   const [pickedWaiting, setPickedWaiting] = useState(false);
   useEffect(() => { setPickedWaiting(false); }, [task.phase]);
@@ -183,6 +184,7 @@ function StatusOptions({ task, onPick, onPickWaiting, onSetWaitUntil }: {
     <>
       <StatusPills
         task={task}
+        quiet={quiet}
         onPick={(phase) => {
           if (phase === 'WAITING') { setPickedWaiting(true); onPickWaiting(); return; }
           onPick(phase);
@@ -193,7 +195,7 @@ function StatusOptions({ task, onPick, onPickWaiting, onSetWaitUntil }: {
   );
 }
 
-function StatusPills({ task, onPick }: { task: Pick<Task, 'id' | 'phase'>; onPick: (phase: TaskPhase) => void }) {
+function StatusPills({ task, onPick, quiet = false }: { task: Pick<Task, 'id' | 'phase'>; onPick: (phase: TaskPhase) => void; quiet?: boolean }) {
   return (
     <div className="task-status-options" role="radiogroup" aria-label="Status">
       {STATUS_OPTIONS.map((o) => {
@@ -208,7 +210,7 @@ function StatusPills({ task, onPick }: { task: Pick<Task, 'id' | 'phase'>; onPic
             data-phase={o.value}
             onClick={(e) => { e.stopPropagation(); onPick(o.value); }}
           >
-            <span className="task-status-pill-icon" aria-hidden="true">{o.icon}</span>
+            {!quiet && <span className="task-status-pill-icon" aria-hidden="true">{o.icon}</span>}
             <span>{o.label}</span>
           </button>
         );
@@ -292,7 +294,7 @@ export function TaskStatusMenuSection({ task, onSetPhase, onSetWaitUntil, afterA
 }
 
 /** The detail pane's status badge: shows the status, click to change it. */
-export function TaskStatusBadge({ task, onSetPhase, onSetWaitUntil }: { task: Task; onSetPhase?: SetPhase; onSetWaitUntil?: SetWaitUntil }) {
+export function TaskStatusBadge({ task, onSetPhase, onSetWaitUntil, quiet = false }: { task: Task; onSetPhase?: SetPhase; onSetWaitUntil?: SetWaitUntil; quiet?: boolean }) {
   const setPhase = useSetPhase(onSetPhase);
   const setWaitUntil = useSetWaitUntil(onSetWaitUntil);
   const [open, setOpen] = useState(false);
@@ -338,12 +340,12 @@ export function TaskStatusBadge({ task, onSetPhase, onSetWaitUntil }: { task: Ta
         data-testid="task-status-badge"
         onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
       >
-        {option?.icon ?? '○'} {taskStatusLabel(task)} <span className="task-status-caret" aria-hidden="true">▾</span>
+        {!quiet && (option?.icon ?? '○')} {taskStatusLabel(task)} <span className="task-status-caret" aria-hidden="true">▾</span>
       </button>
       {open && createPortal(
         <div
           ref={menuRef}
-          className="task-kebab-menu task-status-menu"
+          className={`task-kebab-menu task-status-menu${quiet ? ' task-status-menu-quiet' : ''}`}
           role="menu"
           style={menuPlacementStyle(pos)}
           onPointerDown={(e) => e.stopPropagation()}
@@ -352,6 +354,7 @@ export function TaskStatusBadge({ task, onSetPhase, onSetWaitUntil }: { task: Ta
             <span className="task-kebab-status-label">Status</span>
             <StatusOptions
               task={task}
+              quiet={quiet}
               onPick={(phase) => { if (phase !== task.phase) setPhase(task.id, phase); close(); }}
               onPickWaiting={() => { if (task.phase !== 'WAITING') setPhase(task.id, 'WAITING'); }}
               onSetWaitUntil={(waitUntil) => { setWaitUntil(task.id, waitUntil); close(); }}

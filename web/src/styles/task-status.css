@@ -186,3 +186,7 @@ button.task-status-badge:hover { filter: brightness(0.96); }
 }
 .task-waiting-card-head { color: var(--fg); font-weight: 600; margin-bottom: 4px; }
 .task-waiting-card-line + .task-waiting-card-line { margin-top: 2px; }
+
+/* Task detail selection uses colour alone, without a second checkmark or phase glyph. */
+.task-status-menu-quiet .task-status-pill { font-weight: 400; }
+.task-status-menu-quiet .task-status-pill.is-current { font-weight: 500; }
