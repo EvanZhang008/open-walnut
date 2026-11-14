@@ -223,8 +223,17 @@ test('task dependency references show current display names and preserve real ti
   await expect(dependencies).toHaveCount(2)
   await expect(dependencies.filter({ hasText: 'Quick question' })).toHaveCount(1)
   await expect(dependencies.filter({ hasText: 'Ask Bob about the lease' })).toHaveCount(1)
+  // A dependency is a task reference: its click closes the details and opens that task on Home,
+  // here only selecting it, as it has no session (178667afb: one action for every task chip).
   await pointAt(page, dependencies.getByRole('button', { name: 'Quick question', exact: true }))
-  await expect(modal.locator('.todo-detail-title')).toHaveText('Quick question')
+  await expect(modal).toHaveCount(0)
+  // Selected where it is listed: a pinned card here (it was made pinned), else its list row.
+  const picked = page.locator([
+    `.todo-pinned-card-active[data-task-id="${pickedID}"]`,
+    `.todo-panel-item.task-focused[data-task-id="${pickedID}"]`,
+  ].join(', ')).first()
+  await expect(picked).toBeVisible()
+  await expect(picked).toContainText('Quick question')
 })
 
 test('a mouse-selected note task reference finds display and stored names without saving a renamed task', async ({ page, request }) => {
