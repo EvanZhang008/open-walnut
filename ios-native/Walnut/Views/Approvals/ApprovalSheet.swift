@@ -7,6 +7,7 @@ struct ApprovalSheet: View {
     @State private var center = ApprovalCenter.shared
     @State private var working: String?
     @State private var error: String?
+    @State private var detailsOpen = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -18,20 +19,36 @@ struct ApprovalSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     header
-                    if let detail = approval.detail, !detail.isEmpty {
-                        Text(detail)
-                            .font(.system(.footnote, design: .monospaced))
+                    // An answer that failed says why right here, above everything that can be long.
+                    if let error {
+                        Text(error).font(.footnote).foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("approval.error")
+                    }
+                    // The request in words is read whole; only a technical detail folds (2026-11-14,
+                    // the user: "summayr一直都显示不需要点detail detail只是xommend detail啥的").
+                    if let words = approval.words {
+                        Text(words).font(.body)
+                            .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(12)
-                            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-                            .accessibilityIdentifier("approval.detail")
+                            .accessibilityIdentifier("approval.words")
                     }
                     if let note = approval.downgraded {
                         Text(note).font(.footnote).foregroundStyle(.secondary)
                     }
-                    if let error {
-                        Text(error).font(.footnote).foregroundStyle(.red).accessibilityIdentifier("approval.error")
+                    if let tech = approval.technicalDetail {
+                        DisclosureGroup(isExpanded: $detailsOpen) {
+                            Text(tech.text)
+                                .font(.system(.footnote, design: .monospaced))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(12)
+                                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                                .accessibilityIdentifier("approval.detail")
+                        } label: {
+                            Text(tech.signed ? "Details (signed)" : "Details").font(.subheadline)
+                        }
+                        .accessibilityIdentifier("approval.details")
                     }
                 }
                 .padding(20)
@@ -94,8 +111,13 @@ struct ApprovalSheet: View {
                     .accessibilityIdentifier("approval.what")
             }
             Text(approval.requesterLine).font(.subheadline).foregroundStyle(.secondary)
-            if let cwd = approval.requester.cwd {
-                Text(cwd).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(2)
+            // Where it acts: the repository and the branch a signed Git push names, else the folder.
+            if let repo = approval.repoLine {
+                (Text("Repo  ").foregroundStyle(.secondary) + Text(repo))
+                    .font(.caption.monospaced()).lineLimit(3)
+                    .accessibilityIdentifier("approval.repo")
+            } else if let cwd = approval.requester.cwd {
+                Text(Approval.shortPath(cwd)).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(2)
             }
         }
     }

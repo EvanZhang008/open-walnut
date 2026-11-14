@@ -55,6 +55,10 @@ struct Approval: Codable, Identifiable, Equatable, Hashable {
     /// Or any one of these keys (the Mac and the iPhone).
     var signingKeyIds: [String]? = nil
     var context: ApprovalContext? = nil
+    /// "summary": the detail is the request in words, read whole; else it is technical (folded).
+    var detailRole: String? = nil
+    /// A single-use ask's detail is a signed envelope: always technical.
+    var singleUse: Bool? = nil
 
     /// The words on top of the sheet, as the web dialog leads with them (approval-context.tsx
     /// summaryOf): the asker's own line and why, else the summary Walnut wrote.
@@ -71,6 +75,57 @@ struct Approval: Codable, Identifiable, Equatable, Hashable {
 
     /// The keys that may sign it; empty = any device that signs.
     var boundTo: [String] { signingKeyIds ?? signingKeyId.map { [$0] } ?? [] }
+
+    /// The request in words, shown whole under the lead (Walnut's own asks), else nil.
+    /// Twin of web/src/components/approvals/approval-context.tsx wordsOf.
+    var words: String? {
+        guard detailRole == "summary", singleUse != true, let d = detail?.trimmingCharacters(in: .whitespacesAndNewlines), !d.isEmpty else { return nil }
+        return detail
+    }
+
+    /// The technical detail folded under Details: a signed envelope's context laid out, or the
+    /// detail as it is (detailText). Nil when there is none or the detail is the words.
+    var technicalDetail: (text: String, signed: Bool)? {
+        guard words == nil, let d = detail, !d.isEmpty else { return nil }
+        if singleUse == true, let env = Self.envelope(d), let ctx = env["context"] as? String {
+            return (Self.prettyJSON(ctx), true)
+        }
+        return (Self.prettyJSON(d), false)
+    }
+
+    /// Where a signed Git operation acts: "~/…/meta-fresh → mainline", from its signed context.
+    /// Twin of approval-context.tsx gitOperation + whereLine.
+    var repoLine: String? {
+        guard singleUse == true, let d = detail, let env = Self.envelope(d), let ctx = env["context"] as? String,
+              let data = ctx.data(using: .utf8),
+              let c = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              c["version"] as? String == "walnut-git-operation-v1",
+              let repo = c["repository"] as? String, !repo.isEmpty else { return nil }
+        let branch = (c["remoteRef"] as? String)?.replacingOccurrences(of: "refs/heads/", with: "")
+        return Self.shortPath(repo) + (branch.map { " \u{2192} \($0)" } ?? "")
+    }
+
+    private static func envelope(_ d: String) -> [String: Any]? {
+        guard let data = d.data(using: .utf8),
+              let env = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              env["version"] as? String == "walnut-single-use-v1" else { return nil }
+        return env
+    }
+
+    /// A one-line JSON object laid out one field a line; any other text as it is.
+    static func prettyJSON(_ text: String) -> String {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.hasPrefix("{") || t.hasPrefix("["), let data = t.data(using: .utf8),
+              let v = try? JSONSerialization.jsonObject(with: data),
+              let out = try? JSONSerialization.data(withJSONObject: v, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]),
+              let s = String(data: out, encoding: .utf8) else { return text }
+        return s
+    }
+
+    /// A path with its home folder said as "~" (shortPath on the web).
+    static func shortPath(_ p: String) -> String {
+        p.replacingOccurrences(of: #"^(?:/local)?/home/(?!linuxbrew(?:/|$))[^/]+(?=/|$)|^/Users/(?!(?:Shared|Guest)(?:/|$))[^/]+(?=/|$)|^/root(?=/|$)"#, with: "~", options: .regularExpression)
+    }
 
     var isBiometric: Bool { mode == "biometric" }
     var isPending: Bool { status == "pending" }
