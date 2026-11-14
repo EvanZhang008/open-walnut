@@ -93,6 +93,18 @@ const KINDS: Record<string, { file: string; how: string; check: (src: string, cs
       expect(read('web/src/styles/file-thread.css')).not.toMatch(/\.fv-ask-notice\s*\{[^}]*(nowrap|text-overflow)/);
     },
   },
+  hostConnect: {
+    file: 'web/src/components/hosts/HostConnectCard.tsx',
+    how: 'the card wraps every line; its one-line form carries the whole line in its title, and a click opens the card',
+    check: (src) => {
+      expect(src).toContain('title={`${line}: show the details`}');
+      expect(src).toContain("onClick={(e) => choose(e, 'card')}");
+      const own = read('web/src/components/hosts/host-connect-card.css');
+      expect(own).toMatch(/\.hcc-title \{[^}]*overflow-wrap: anywhere/);
+      expect(own).not.toMatch(/\.hcc-(?:card|rows?|title|note)\b[^{]*\{[^}]*(?:nowrap|text-overflow)/);
+      expect(read('web/src/styles/setup-progress.css')).toMatch(/\.setup-progress-label \{[^}]*overflow-wrap: anywhere/);
+    },
+  },
   approvals: {
     file: 'web/src/components/approvals/ApprovalPrompts.tsx',
     how: 'the card is a summary; a click opens the request\'s dialog with its whole words',
