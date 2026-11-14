@@ -1,11 +1,12 @@
 /**
- * Router area launch guard: an area session (router or work role) spawns only with its
- * isolated profile, and a cold resume never drops that profile.
+ * Router area launch guard: a router's session spawns only with its isolated profile, and a
+ * cold resume never drops that profile. Since 2026-11-14 only a router runs isolated: the work
+ * it hands items to is ordinary, whatever an older build marked on it.
  *
  * What is pinned:
  *   1. send() of a valid area profile builds the argv the policy promises: no built-in
  *      tools (`--tools ''`), no settings sources, strict MCP with exactly the walnut
- *      server, the role's two router ops, a replaced system prompt, no session hooks,
+ *      server, the router's two ops, a replaced system prompt, no session hooks,
  *      and the Claude Code memory / CLAUDE.md loading turned off through settings env.
  *   2. send() refuses, synchronously and before any transport exists, a wrong or old
  *      policy version, extra tools, extra MCP servers, a non-slim or appended prompt,
@@ -123,7 +124,7 @@ const AREA_ID = 'personal'
 
 const AREAS: RouterAreasFile = {
   version: 1,
-  areas: [{ id: AREA_ID, name: 'Personal', host: '__local__', taskIds: ['t-work', 't-router'], sources: [] }],
+  areas: [{ id: AREA_ID, name: 'Personal', host: '__local__', taskIds: ['t-legacy', 't-router'], sources: [] }],
   routers: [{ taskId: 't-router', areaId: AREA_ID, paused: false }],
   items: [],
 }
@@ -164,7 +165,7 @@ function callSend(session: ClaudeCodeSession, input: SendInput): void {
 /** Spawn through the fake transport and return the argv handed to it. */
 async function spawnArgs(input: SendInput): Promise<string[]> {
   const before = h.starts.length
-  const session = new ClaudeCodeSession(input.taskId ?? 't-work', 'proj', MOCK_CLI)
+  const session = new ClaudeCodeSession(input.taskId ?? 't-router', 'proj', MOCK_CLI)
   callSend(session, input)
   await waitUntil(() => h.starts.length > before, 5000, 'transport.start')
   return h.starts.at(-1)!.args
@@ -174,7 +175,7 @@ async function spawnArgs(input: SendInput): Promise<string[]> {
 function expectRefused(input: SendInput, session?: ClaudeCodeSession): void {
   const made = createSessionManagerMock.mock.calls.length
   const starts = h.starts.length
-  const target = session ?? new ClaudeCodeSession(input.taskId ?? 't-work', 'proj', MOCK_CLI)
+  const target = session ?? new ClaudeCodeSession(input.taskId ?? 't-router', 'proj', MOCK_CLI)
   expect(() => callSend(target, input)).toThrow()
   expect(createSessionManagerMock.mock.calls.length).toBe(made)
   expect(h.starts.length).toBe(starts)
@@ -200,8 +201,8 @@ beforeEach(() => {
 })
 
 describe('area session spawn argv', () => {
-  it('a work session gets no built-ins, strict walnut-only MCP, its two ops and memory off', async () => {
-    const args = await spawnArgs({ taskId: 't-work', profile: routerAreaProfile(AREA_ID, 'work') })
+  it('a router session gets no built-ins, strict walnut-only MCP, its two ops and memory off', async () => {
+    const args = await spawnArgs({ taskId: 't-router', profile: routerAreaProfile(AREA_ID) })
 
     expect(args).toContain('--tools')
     expect(flagValue(args, '--tools')).toBe('')
@@ -210,8 +211,8 @@ describe('area session spawn argv', () => {
     expect(args).toContain('--strict-mcp-config')
     expect(args).toContain('--disable-slash-commands')
     expect(JSON.parse(flagValue(args, '--mcp-config')!)).toEqual({ mcpServers: { walnut: hostWalnutMcpServer() } })
-    expect(flagValue(args, '--allowedTools')).toBe('mcp__walnut__router_item,mcp__walnut__router_work')
-    expect(flagValue(args, '--system-prompt')).toBe(routerAreaProfile(AREA_ID, 'work').systemPrompt)
+    expect(flagValue(args, '--allowedTools')).toBe('mcp__walnut__router_context,mcp__walnut__router_route')
+    expect(flagValue(args, '--system-prompt')).toBe(routerAreaProfile(AREA_ID).systemPrompt)
     expect(args).not.toContain('--append-system-prompt')
     expect(args).not.toContain('--fork-session')
 
@@ -224,17 +225,10 @@ describe('area session spawn argv', () => {
     // No signalling or other transport member was used on the way to start().
     expect(h.transportCalls.filter((m) => /stop|kill|terminate|signal/i.test(m))).toEqual([])
   })
-
-  it('a router session gets exactly the router ops', async () => {
-    const args = await spawnArgs({ taskId: 't-router', profile: routerAreaProfile(AREA_ID, 'router') })
-    expect(flagValue(args, '--allowedTools')).toBe('mcp__walnut__router_context,mcp__walnut__router_route')
-    expect(flagValue(args, '--tools')).toBe('')
-    expect(args).toContain('--strict-mcp-config')
-  })
 })
 
 describe('area session spawn refusals (no transport is made)', () => {
-  const good = (): SessionProfile => routerAreaProfile(AREA_ID, 'work')
+  const good = (): SessionProfile => routerAreaProfile(AREA_ID)
 
   it('refuses a profile with no policy version (an older Walnut wrote it)', () => {
     const { areaPolicyVersion: _dropped, ...old } = good()
@@ -251,9 +245,9 @@ describe('area session spawn refusals (no transport is made)', () => {
     expectRefused({ profile: { ...good(), tools: ['Bash'] } })
   })
 
-  it('refuses extra allowed tools and the other role\'s ops', () => {
+  it('refuses extra allowed tools and the deleted receiver ops', () => {
     expectRefused({ profile: { ...good(), allowedTools: [...good().allowedTools!, 'Bash'] } })
-    expectRefused({ profile: { ...good(), allowedTools: routerAreaProfile(AREA_ID, 'router').allowedTools } })
+    expectRefused({ profile: { ...good(), allowedTools: ['mcp__walnut__router_item', 'mcp__walnut__router_work'] } })
   })
 
   it('refuses an extra or replaced MCP server', () => {
@@ -280,16 +274,16 @@ describe('area session spawn refusals (no transport is made)', () => {
   })
 
   it('refuses a respawn of a scoped session that lost its profile', async () => {
-    const session = new ClaudeCodeSession('t-work', 'proj', MOCK_CLI)
+    const session = new ClaudeCodeSession('t-router', 'proj', MOCK_CLI)
     callSend(session, { profile: good() })
     await waitUntil(() => h.starts.length === 1, 5000, 'first spawn')
-    expectRefused({ taskId: 't-work' }, session)
+    expectRefused({ taskId: 't-router' }, session)
   })
 })
 
 describe('user settings env cache', () => {
   it('an area session never writes its memory switches into the shared env cache', async () => {
-    await spawnArgs({ taskId: 't-work', profile: routerAreaProfile(AREA_ID, 'work') })
+    await spawnArgs({ taskId: 't-router', profile: routerAreaProfile(AREA_ID) })
     expect(h.sharedUserEnv).toEqual({ ANTHROPIC_MODEL: 'test-model' })
 
     // A later unscoped slim session reads the same cache and must not inherit them.
@@ -308,20 +302,25 @@ describe('shared direct and event launch guard', () => {
   const runner = sessionRunner as unknown as {
     assertStartRouting(data: Record<string, unknown>): Promise<void>
   };
-  it('rejects an area task from the quick launcher without an isolated profile', async () => {
-    h.tasks.set('t-work', { id: 't-work', source: 'local', router_area_id: AREA_ID });
-    await expect(runner.assertStartRouting({ taskId: 't-work', mode: 'bypassPermissions' })).rejects.toThrow();
+  it('rejects a router task from the quick launcher without an isolated profile', async () => {
+    h.tasks.set('t-router', { id: 't-router', source: 'local', router_area_id: AREA_ID, org_role: 'router' });
+    await expect(runner.assertStartRouting({ taskId: 't-router', mode: 'bypassPermissions' })).rejects.toThrow();
     expect(createSessionManagerMock).not.toHaveBeenCalled();
   });
   it('accepts the same isolated profile through the shared start gate', async () => {
-    h.tasks.set('t-work', { id: 't-work', source: 'local', router_area_id: AREA_ID });
-    await expect(runner.assertStartRouting({ taskId: 't-work', mode: 'dontAsk', profile: routerAreaProfile(AREA_ID, 'work') })).resolves.toBeUndefined();
+    h.tasks.set('t-router', { id: 't-router', source: 'local', router_area_id: AREA_ID, org_role: 'router' });
+    await expect(runner.assertStartRouting({ taskId: 't-router', mode: 'dontAsk', profile: routerAreaProfile(AREA_ID) })).resolves.toBeUndefined();
   });
   it('rejects a daemon without the isolated MCP capability before creating a manager', async () => {
-    h.tasks.set('t-work', { id: 't-work', source: 'local', router_area_id: AREA_ID });
+    h.tasks.set('t-router', { id: 't-router', source: 'local', router_area_id: AREA_ID, org_role: 'router' });
     h.daemon.mcp = false;
-    await expect(runner.assertStartRouting({ taskId: 't-work', mode: 'dontAsk', profile: routerAreaProfile(AREA_ID, 'work') })).rejects.toThrow('cannot serve isolated routing tools');
+    await expect(runner.assertStartRouting({ taskId: 't-router', mode: 'dontAsk', profile: routerAreaProfile(AREA_ID) })).rejects.toThrow('cannot serve isolated routing tools');
     expect(createSessionManagerMock).not.toHaveBeenCalled();
+  });
+  it('starts work an older build marked and listed in the area as an ordinary task', async () => {
+    h.tasks.set('t-legacy', { id: 't-legacy', source: 'local', router_area_id: AREA_ID });
+    h.daemon.mcp = false;
+    await expect(runner.assertStartRouting({ taskId: 't-legacy', mode: 'bypassPermissions' })).resolves.toBeUndefined();
   });
   it('does not require isolated MCP support for an ordinary task', async () => {
     h.tasks.set('t-plain', { id: 't-plain', source: 'local' });
@@ -330,7 +329,7 @@ describe('shared direct and event launch guard', () => {
   });
   it('rejects a fork out of an area even when the target task is ordinary', async () => {
     h.tasks.set('t-plain', { id: 't-plain', source: 'local' });
-    h.records.set('source-area', { taskId: 't-work', profile: routerAreaProfile(AREA_ID, 'work') });
+    h.records.set('source-area', { taskId: 't-router', profile: routerAreaProfile(AREA_ID) });
     await expect(runner.assertStartRouting({ taskId: 't-plain', forkedFromSessionId: 'source-area' })).rejects.toThrow('cannot be copied');
   });
   it('the direct and event start sites both use the shared gate before hints or engine selection', () => {
@@ -343,16 +342,16 @@ describe('shared direct and event launch guard', () => {
 
 describe('area reconnect prerequisites', () => {
   it('rejects a dropped area profile before attaching a manager', async () => {
-    h.tasks.set('t-work', { id: 't-work', source: 'local', router_area_id: AREA_ID })
-    await expect(ClaudeCodeSession.attachToExisting({ taskId: 't-work', claudeSessionId: 'attach-area' } as import('../../src/core/types.js').SessionRecord))
+    h.tasks.set('t-router', { id: 't-router', source: 'local', router_area_id: AREA_ID, org_role: 'router' })
+    await expect(ClaudeCodeSession.attachToExisting({ taskId: 't-router', claudeSessionId: 'attach-area' } as import('../../src/core/types.js').SessionRecord))
       .rejects.toThrow('attached session does not match')
     expect(createSessionManagerMock).not.toHaveBeenCalled()
   })
 
   it('rejects missing MCP support before any daemon attach or tail read', async () => {
-    h.tasks.set('t-work', { id: 't-work', source: 'local', router_area_id: AREA_ID })
+    h.tasks.set('t-router', { id: 't-router', source: 'local', router_area_id: AREA_ID, org_role: 'router' })
     h.daemon.mcp = false
-    await expect(ClaudeCodeSession.attachToExisting({ taskId: 't-work', claudeSessionId: 'attach-area', profile: routerAreaProfile(AREA_ID, 'work') } as import('../../src/core/types.js').SessionRecord))
+    await expect(ClaudeCodeSession.attachToExisting({ taskId: 't-router', claudeSessionId: 'attach-area', profile: routerAreaProfile(AREA_ID) } as import('../../src/core/types.js').SessionRecord))
       .rejects.toThrow('cannot serve isolated routing tools')
     expect(createSessionManagerMock).not.toHaveBeenCalled()
     expect(h.transportCalls).toEqual([])
@@ -365,20 +364,20 @@ describe('resolveResumeArgs fails closed for area sessions', () => {
   }
   const SID = 'resume-area'
 
-  function areaTask(id = 't-work'): void {
-    h.tasks.set(id, { id, title: 'area work', source: 'local', router_area_id: AREA_ID, phase: 'IN_PROGRESS' })
+  function areaTask(id = 't-router'): void {
+    h.tasks.set(id, { id, title: 'router', source: 'local', router_area_id: AREA_ID, org_role: 'router', phase: 'IN_PROGRESS' })
   }
 
   it('resumes a valid area record with its exact profile', async () => {
     areaTask()
-    h.records.set(SID, { claudeSessionId: SID, taskId: 't-work', cwd: WALNUT_HOME, profile: routerAreaProfile(AREA_ID, 'work') })
+    h.records.set(SID, { claudeSessionId: SID, taskId: 't-router', cwd: WALNUT_HOME, profile: routerAreaProfile(AREA_ID) })
     const resolved = await runner.resolveResumeArgs(SID)
-    expect(resolved.profile).toEqual(routerAreaProfile(AREA_ID, 'work'))
+    expect(resolved.profile).toEqual(routerAreaProfile(AREA_ID))
   })
 
   it('refuses a resume after the daemon loses isolated MCP support', async () => {
     areaTask()
-    h.records.set(SID, { claudeSessionId: SID, taskId: 't-work', cwd: WALNUT_HOME, profile: routerAreaProfile(AREA_ID, 'work') })
+    h.records.set(SID, { claudeSessionId: SID, taskId: 't-router', cwd: WALNUT_HOME, profile: routerAreaProfile(AREA_ID) })
     h.daemon.mcp = false
     await expect(runner.resolveResumeArgs(SID)).rejects.toThrow('cannot serve isolated routing tools')
     expect(createSessionManagerMock).not.toHaveBeenCalled()
@@ -396,16 +395,16 @@ describe('resolveResumeArgs fails closed for area sessions', () => {
 
   it('rejects an area record whose stored task a prefix lookup answers with another', async () => {
     h.tasks.set('t-gone', { id: 't-gone-other', title: 'ordinary task', phase: 'IN_PROGRESS' })
-    h.records.set(SID, { claudeSessionId: SID, taskId: 't-gone', cwd: WALNUT_HOME, profile: routerAreaProfile(AREA_ID, 'work') })
+    h.records.set(SID, { claudeSessionId: SID, taskId: 't-gone', cwd: WALNUT_HOME, profile: routerAreaProfile(AREA_ID) })
     await expect(runner.resolveResumeArgs(SID)).rejects.toThrow('prefix match')
     expect(createSessionManagerMock).not.toHaveBeenCalled()
   })
 
   it('rejects when a prefix lookup hides a stored task the area file lists', async () => {
     areaTask()
-    h.tasks.delete('t-work')
-    h.tasks.set('t-work', { id: 't-work-other', title: 'ordinary task', phase: 'IN_PROGRESS' })
-    h.records.set(SID, { claudeSessionId: SID, taskId: 't-work', cwd: WALNUT_HOME })
+    h.tasks.delete('t-router')
+    h.tasks.set('t-router', { id: 't-work-other', title: 'ordinary task', phase: 'IN_PROGRESS' })
+    h.records.set(SID, { claudeSessionId: SID, taskId: 't-router', cwd: WALNUT_HOME })
     await expect(runner.resolveResumeArgs(SID)).rejects.toThrow('prefix match')
   })
 
@@ -426,37 +425,45 @@ describe('resolveResumeArgs fails closed for area sessions', () => {
   it('rejects a marked task whose area file is unreadable', async () => {
     areaTask()
     h.areas.error = new Error('corrupt areas.json')
-    h.records.set(SID, { claudeSessionId: SID, taskId: 't-work', cwd: WALNUT_HOME, profile: routerAreaProfile(AREA_ID, 'work') })
+    h.records.set(SID, { claudeSessionId: SID, taskId: 't-router', cwd: WALNUT_HOME, profile: routerAreaProfile(AREA_ID) })
     await expect(runner.resolveResumeArgs(SID)).rejects.toThrow()
   })
 
   it('rejects an area task whose record dropped its profile', async () => {
     areaTask()
-    h.records.set(SID, { claudeSessionId: SID, taskId: 't-work', cwd: WALNUT_HOME })
+    h.records.set(SID, { claudeSessionId: SID, taskId: 't-router', cwd: WALNUT_HOME })
     await expect(runner.resolveResumeArgs(SID)).rejects.toThrow()
   })
 
   it('rejects a record with an old policy version', async () => {
     areaTask()
-    const { areaPolicyVersion: _dropped, ...old } = routerAreaProfile(AREA_ID, 'work')
-    h.records.set(SID, { claudeSessionId: SID, taskId: 't-work', cwd: WALNUT_HOME, profile: old })
+    const { areaPolicyVersion: _dropped, ...old } = routerAreaProfile(AREA_ID)
+    h.records.set(SID, { claudeSessionId: SID, taskId: 't-router', cwd: WALNUT_HOME, profile: old })
     await expect(runner.resolveResumeArgs(SID)).rejects.toThrow()
   })
 
-  it('rejects a task listed in the area file even without its durable mark', async () => {
-    h.tasks.set('t-work', { id: 't-work', title: 'unmarked', phase: 'IN_PROGRESS' })
-    h.records.set(SID, { claudeSessionId: SID, taskId: 't-work', cwd: WALNUT_HOME })
+  it('rejects a router assignment\'s task even without its durable mark', async () => {
+    h.tasks.set('t-router', { id: 't-router', title: 'unmarked', phase: 'IN_PROGRESS' })
+    h.records.set(SID, { claudeSessionId: SID, taskId: 't-router', cwd: WALNUT_HOME })
     await expect(runner.resolveResumeArgs(SID)).rejects.toThrow()
   })
 
   it('rejects a matching profile when its task lost or changed the durable area mark', async () => {
     for (const mark of [undefined, 'work']) {
       areaTask();
-      h.tasks.get('t-work')!.router_area_id = mark;
-      h.records.set(SID, { claudeSessionId: SID, taskId: 't-work', cwd: WALNUT_HOME, profile: routerAreaProfile(AREA_ID, 'work') });
+      h.tasks.get('t-router')!.router_area_id = mark;
+      h.records.set(SID, { claudeSessionId: SID, taskId: 't-router', cwd: WALNUT_HOME, profile: routerAreaProfile(AREA_ID) });
       await expect(runner.resolveResumeArgs(SID)).rejects.toThrow();
     }
   });
+
+  it('work an older build marked and listed in the area resumes as ordinary work', async () => {
+    h.tasks.set('t-legacy', { id: 't-legacy', title: 'legacy', source: 'local', router_area_id: AREA_ID, phase: 'IN_PROGRESS' })
+    h.records.set(SID, { claudeSessionId: SID, taskId: 't-legacy', cwd: WALNUT_HOME, mode: 'plan' })
+    const resolved = await runner.resolveResumeArgs(SID)
+    expect(resolved.profile).toBeUndefined()
+    expect(resolved.mode).toBe('plan')
+  })
 
   it('an ordinary task still resumes when the area file is unreadable', async () => {
     h.tasks.set('t-plain', { id: 't-plain', title: 'plain', phase: 'IN_PROGRESS' })

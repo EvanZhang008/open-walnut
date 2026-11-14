@@ -219,20 +219,10 @@ export interface MailMessageDto {
   /** With no area for the message: why no router has it (absent from an older server). */
   routingCoverage?: MailRoutingCoverage;
   routingUnavailable?: boolean;
-  /** Only while no receipt exists: the router asked the person before handing this message on. */
-  routingHandoff?: MailRoutingHandoffDto;
 }
 
 /** `no_router`: no area with a router takes this account; `unassigned`: one does, but this message has no area. */
 export type MailRoutingCoverage = 'no_router' | 'unassigned';
-
-export interface MailRoutingHandoffDto {
-  approvalId: string;
-  status: 'pending' | 'approved' | 'denied' | 'expired' | 'canceled' | 'missing' | 'claim_incomplete';
-  /** Epoch milliseconds of the ask. */
-  at: number;
-  targetTitle?: string;
-}
 
 export type MailRouteStatus = 'routing' | 'routed' | 'not_routed' | 'failed' | 'unknown';
 

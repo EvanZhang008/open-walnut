@@ -3800,15 +3800,16 @@ export class ClaudeCodeSession {
     const task = record.taskId ? await getTask(record.taskId).catch(() => undefined) : undefined
     const { readRouterAreas, taskArea } = await import('../core/router/areas.js')
     const { WALNUT_HOME } = await import('../constants.js')
+    // Only a router runs isolated (2026-11-14); a receiver profile or mark an older build left on routed work is not read.
+    const routerScoped = record.profile?.areaRole === 'router' || task?.org_role === 'router'
     const areas = await readRouterAreas(WALNUT_HOME).catch((error) => {
-      if (record.profile?.areaId || task?.router_area_id || task?.org_role === 'router') throw error
+      if (routerScoped) throw error
       return undefined
     })
     const area = record.taskId && areas ? taskArea(areas, record.taskId) : undefined
-    if (area || record.profile?.areaId || task?.router_area_id || task?.org_role === 'router') {
-      const role = areas?.routers.some((router) => router.taskId === record.taskId) ? 'router' : 'work'
+    if (area || routerScoped) {
       if (!task || !area || task.source !== 'local' || task.router_area_id !== area.id
-        || (role === 'router') !== (task.org_role === 'router') || !isRouterAreaSession(record, area, role)) {
+        || task.org_role !== 'router' || !isRouterAreaSession(record, area)) {
         throw new Error('The attached session does not match its isolated area policy')
       }
       const { link } = await import('../core/hosts/link.js')
@@ -11810,7 +11811,7 @@ async function taskMayBeInArea(taskId: string | undefined): Promise<boolean> {
   if (areas && taskArea(areas, taskId)) return true
   const { getTask } = await import('../core/task-manager.js')
   const task = await getTask(taskId).catch(() => null)
-  return !!task && task.id === taskId && (!!task.router_area_id || task.org_role === 'router')
+  return !!task && task.id === taskId && task.org_role === 'router'
 }
 
 export class SessionRunner {
@@ -13236,28 +13237,27 @@ export class SessionRunner {
     resumeFile?: string
     transferAttemptId?: string
   }): Promise<void> {
-    if (data.profile?.areaId && !data.taskId) throw new Error('An area session must name its task')
+    if (data.profile?.areaRole === 'router' && !data.taskId) throw new Error('An area session must name its task')
     if (data.taskId) {
       const { readRouterAreas, taskArea } = await import('../core/router/areas.js')
       const { WALNUT_HOME } = await import('../constants.js')
       const { getTask } = await import('../core/task-manager.js')
       // A session may start for a task that does not exist (yet); only an area start needs one.
       const task = await getTask(data.taskId).catch((error) => {
-        if (data.profile?.areaId) throw error
+        if (data.profile?.areaRole === 'router') throw error
         return null
       })
-      const marked = !!task && (!!task.router_area_id || task.org_role === 'router')
+      const marked = !!task && task.org_role === 'router'
       let areas: Awaited<ReturnType<typeof readRouterAreas>> | undefined
       try { areas = await readRouterAreas(WALNUT_HOME) } catch (error) {
-        if (marked || data.profile?.areaId) throw error
+        if (marked || data.profile?.areaRole === 'router') throw error
       }
       const area = areas && taskArea(areas, data.taskId)
-      if (!area && (marked || data.profile?.areaId)) throw new Error('This scoped task has no matching area')
+      if (!area && (marked || data.profile?.areaRole === 'router')) throw new Error('This scoped task has no matching area')
       if (area && !task) throw new Error('This area task is unavailable; its session cannot start')
       if (area && task) {
-        const role = areas!.routers.some((router) => router.taskId === task.id) ? 'router' : 'work'
-        if (task.router_area_id !== area.id || task.source !== 'local' || (role === 'router') !== (task.org_role === 'router')
-          || !isRouterAreaSession({ profile: data.profile, host: data.host, engine: data.engine }, area, role)
+        if (task.router_area_id !== area.id || task.source !== 'local' || task.org_role !== 'router'
+          || !isRouterAreaSession({ profile: data.profile, host: data.host, engine: data.engine }, area)
           || data.mode !== 'dontAsk' || data.appendSystemPrompt || data.forkedFromSessionId) {
           throw new Error('This area task requires a fresh isolated session on its configured host')
         }
@@ -15484,7 +15484,7 @@ export class SessionRunner {
           areaBound = true
           throw new Error('The session record is unavailable; its area policy cannot be restored')
         }
-      } else if (record.profile?.areaId) areaBound = true
+      } else if (record.profile?.areaRole === 'router') areaBound = true
       if (record?.taskId) {
         const { getTask } = await import('../core/task-manager.js')
         // A task that is gone is no area task unless other evidence says so; a store that
@@ -15498,7 +15498,7 @@ export class SessionRunner {
         })
         // A prefix lookup may answer another task: only the stored id's own task counts.
         const task = found && found.id === record.taskId ? found : null
-        if (task && (task.router_area_id || task.org_role === 'router')) areaBound = true
+        if (task && task.org_role === 'router') areaBound = true
         const { readRouterAreas, taskArea } = await import('../core/router/areas.js')
         const { WALNUT_HOME } = await import('../constants.js')
         // A task with no area mark is outside every area (the mark is never cleared), so only a
@@ -15514,9 +15514,8 @@ export class SessionRunner {
             : 'The saved session task is unavailable; its area policy cannot be restored')
         }
         if (areaBound && task) {
-          const role = areas?.routers.some((router) => router.taskId === task.id) ? 'router' : 'work'
           if (!area || task.router_area_id !== area.id || task.source !== 'local'
-            || (role === 'router') !== (task.org_role === 'router') || !isRouterAreaSession(record, area, role)) {
+            || task.org_role !== 'router' || !isRouterAreaSession(record, area)) {
             throw new Error('The saved session does not match its isolated area policy')
           }
           const { link } = await import('../core/hosts/link.js')

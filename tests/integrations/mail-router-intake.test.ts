@@ -1,36 +1,36 @@
-// Real sync, service and store; the area file and the rules confirm are stand-ins, except in the real-confirm block at the end.
+// Every new mail of a bound mailbox goes straight to its router (2026-11-14, Evan: "mailbox goes
+// straight to the router; the router itself is the triage"). Real sync, service and store; the area
+// file and the confirm are stand-ins, except in the bound-router blocks at the end, which use the
+// real areas file and confirmAccountArrivals.
+import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { assertNoReassignment, normalizeRouterAreas, readRouterAreas, updateRouterAreas, type RouterAreasFile, type RouterRuleBinding } from '../../src/core/router/areas.js';
-import { ensureAccountRouter, followOpenArrivals } from '../../src/core/router/account-intake.js';
-import { sourceReaderFor } from '../../src/core/router/source-reader.js';
-import { keepTriageMailOutsideAreas } from '../../src/core/triage/router-mail.js';
-import {
-  confirmRouterIncoming, readPendingRuleMatches, routerRulesView, saveRouterRuleBindings,
-  type PendingRuleMatch, type RouterRulesDeps,
-} from '../../src/core/router/rules.js';
-import { currentRouterSources, readRouterItem, relocateRouterItem, resolveRouterItem } from '../../src/core/router/source-registry.js';
+import { assertNoReassignment, normalizeRouterAreas, readRouterAreas, updateRouterAreas, type RouterAreasFile } from '../../src/core/router/areas.js';
+import { confirmAccountArrivals, ensureAccountRouter, followOpenArrivals, type AccountRouterOutcome } from '../../src/core/router/account-intake.js';
+import { currentRouterSources, readRouterItem, relocateRouterItem } from '../../src/core/router/source-registry.js';
 import { disposeRouterStores, routerStore } from '../../src/core/router/runtime.js';
 import { routerKey } from '../../src/core/router/store.js';
 import { routeItem } from '../../src/core/router/service.js';
 import type { Task } from '../../src/core/types.js';
-import { setRoutingRule } from '../../src/core/triage/routing-rules.js';
 import { seedTaskStore } from '../helpers/router-task-store.js';
-import type { MailRouterIntakeConfirmDeps } from '../../src/integrations/mail/router-intake.js';
 import { checkRouterPending, pendingSources, type RouterWakeDeps, type WakeTask } from '../../src/core/router/wake.js';
 import type { RouterRoute, RouterSource } from '../../src/core/router/types.js';
 import { PluginDatabaseClient } from '../../src/core/plugins/plugin-storage.js';
 import type { WalnutServerPluginApi } from '../../src/core/plugins/server-api.js';
 import { MailBodyStore } from '../../src/integrations/mail/bodies.js';
+import { MAIL_INTAKE_MAX_TRIES, mailIntakeQueue } from '../../src/integrations/mail/intake-pending.js';
+import type { MailNoRouterParams } from '../../src/core/human-inbox/walnut-letters/mail-no-router.js';
 import type { MailIncomingCapture } from '../../src/integrations/mail/contract.js';
 import { MailDatabase } from '../../src/integrations/mail/db.js';
 import { reconcileIdentityRevision } from '../../src/integrations/mail/identity-revision.js';
 import type { MailHeadline } from '../../src/integrations/mail/events.js';
 import { MailProviderRegistry } from '../../src/integrations/mail/provider-registry.js';
 import { decorateMailRoutes } from '../../src/integrations/mail/router-decoration.js';
-import { bindMailAccounts, createMailRouterIntake, ROUTER_INTAKE_BATCH } from '../../src/integrations/mail/router-intake.js';
+import {
+  bindMailAccounts, createMailRouterIntake, OTHER_FOLDER_NEW_MS, ROUTER_INTAKE_BATCH, watchesOtherFolders,
+} from '../../src/integrations/mail/router-intake.js';
 import { mailRowDeliveryVersion, registerMailRouterSource } from '../../src/integrations/mail/router-source.js';
 import { MailService } from '../../src/integrations/mail/service.js';
 import { MailStore } from '../../src/integrations/mail/store.js';
@@ -41,20 +41,19 @@ const ACCOUNT = 'fixture:acct-a';
 const OTHER = 'fixture:acct-b';
 const HOME = '/walnut-home-under-test';
 const BASE = Date.UTC(2026, 9, 1, 9, 0, 0);
+/** The intake's clock: an hour after the fixture's first mail, so every fixture arrival is recent. */
+const NOW = BASE + 3_600_000;
 
-const NO_RULES = { version: 1, areas: [], routers: [], items: [] } as unknown as RouterAreasFile;
-const binding = (n: number, areaId = 'area-1', confirmedAt = BASE + n): RouterRuleBinding =>
-  ({ ruleId: `rule-${n}`, revision: String(n).repeat(64).slice(0, 64), areaId, confirmedAt });
-const withBindings = (...bindings: RouterRuleBinding[]) => ({ ...NO_RULES, ruleBindings: bindings }) as unknown as RouterAreasFile;
-const WITH_RULES = withBindings(binding(1));
-const WITH_MORE_RULES = withBindings(binding(1), binding(2));
-
-type RuleMatch = PendingRuleMatch['match'];
-/** A real areas file under `home`, read and confirmed by the real rules code with these deps. */
-type RealRouter = { home: string; ruleDeps: RouterRulesDeps };
-/** Each rule's live match by id; `null` is a rule no longer live (its fingerprint changed, it is off, its target complete). */
-type RuleTable = { current: Record<string, RuleMatch | null> };
-const SUBJECT_RULE: RuleMatch = { subject: 'Subject' };
+const UNBOUND = { version: 1, areas: [], routers: [], items: [] } as unknown as RouterAreasFile;
+/** ACCOUNT bound to area-1's open router, watching `folders` (none: the plugin's default, the Inbox). */
+const bound = (folders?: string[]): RouterAreasFile => ({
+  version: 1,
+  areas: [{ id: 'area-1', name: 'Area one', host: '__local__', taskIds: ['router-1'], sources: [{ kind: 'mail', account: ACCOUNT }], ...(folders ? { folders } : {}) }],
+  routers: [{ taskId: 'router-1', areaId: 'area-1', paused: false }],
+  items: [],
+  accountBindings: [{ kind: 'mail', account: ACCOUNT, areaId: 'area-1', boundAt: 1 }],
+}) as RouterAreasFile;
+const BOUND_OUTCOME: AccountRouterOutcome = { bound: true, areaId: 'area-1', created: false, already: true };
 
 const open: Array<{ db: MailDatabase; sync?: MailSync }> = [];
 const roots: string[] = [];
@@ -82,6 +81,13 @@ function envelope(n: number, over: Partial<MailEnvelope> = {}): MailEnvelope {
   };
 }
 
+/** A mail in the Receipts folder. */
+const receipt = (n: number, over: Partial<MailEnvelope> = {}) =>
+  envelope(n, { messageId: `receipts:m-${n}`, mailboxId: 'receipts', rfcMessageId: `rfc-receipt-${n}@example.invalid`, ...over });
+
+const INBOX_ROW = { mailboxId: 'inbox', name: 'Inbox', role: 'inbox', unread: 0, total: 0 };
+const RECEIPTS_ROW = { mailboxId: 'receipts', name: 'Receipts', role: 'other', unread: 0, total: 0 };
+
 async function cache(accounts: readonly string[] = [ACCOUNT, OTHER]) {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'mail-router-intake-'));
   roots.push(root);
@@ -101,44 +107,54 @@ async function cache(accounts: readonly string[] = [ACCOUNT, OTHER]) {
   return { store, bodies, entry };
 }
 
-/** The intake with a recording confirm and a switchable area file. */
+/** The intake with a recording confirm and a switchable area file; `real` uses the areas file and confirm under that home. */
 function intake(store: MailStore, areas: { current: RouterAreasFile }, options: {
   /** `true` fails every confirm; `'once'` only the first one (one tick's finish). */
   confirmFails?: boolean | 'once';
+  /** A confirm that holds this message id throws, every time (one mail its router can never take). */
+  confirmRefuses?: string;
+  /** What the no-router letter send answers (false: held back, not sent). */
+  letterSent?: boolean;
   areasFail?: boolean;
-  /** `true` fails every read; `'second'` only the one at finish. */
-  pendingRulesFail?: boolean | 'second';
-  /** A stand-in rule: an exact source enters the area when its cached row, at that version, is from this sender. */
-  matchSender?: string;
-  /** Rule matches by id; a rule not listed matches subjects containing "Subject". */
-  rules?: RuleTable;
-  /** Pending matches lose their rule id, as a reader that cannot tie a match to its binding. */
-  noRuleIds?: boolean;
-  /** The real area file, pending rules and confirm under this home. */
-  real?: RealRouter;
+  /** The intake's first call of this store read fails. */
+  failOnce?: 'messagesByIds' | 'listMailboxes';
+  real?: { home: string };
+  warnings?: string[];
+  /** Whether a router task is open; every one is by default. */
+  routerOpen?: (taskId: string) => Promise<boolean>;
 } = {}) {
-  const home = options.real?.home ?? HOME;
+  // The pending queue lives under the home, so a fake home is still a real temp dir.
+  const home = options.real?.home ?? fs.mkdtempSync(path.join(os.tmpdir(), 'mail-router-intake-home-'));
+  if (!options.real) roots.push(home);
   const confirmed: RouterSource[][] = [];
   /** What each confirm answered it wrote. */
   const written: RouterSource[][] = [];
-  const confirmDeps: MailRouterIntakeConfirmDeps[] = [];
-  const assigned = new Set<string>();
+  const ensured: string[] = [];
+  /** Each "no router reads this mailbox" letter the intake sent. */
+  const letters: Array<{ params: MailNoRouterParams; opKey: string }> = [];
   let reads = 0;
-  let ruleReads = 0;
-  const table: RuleTable = options.rules ?? { current: options.matchSender ? { 'rule-1': { from: options.matchSender } } : {} };
   const real = options.real;
+  /** The intake's clock. */
+  const clock = { at: NOW };
+  const failing = new Set(options.failOnce ? [options.failOnce] : []);
+  const failOnce = <T>(name: 'messagesByIds' | 'listMailboxes', run: () => Promise<T>): Promise<T> => {
+    if (!failing.delete(name)) return run();
+    return Promise.reject(new Error(`${name} unavailable`));
+  };
   const capture = createMailRouterIntake({
-    store,
+    store: {
+      messagesByIds: (accountId, wanted) => failOnce('messagesByIds', () => store.messagesByIds(accountId, wanted)),
+      listMailboxes: (accountId) => failOnce('listMailboxes', () => store.listMailboxes(accountId)),
+      getAccount: (accountId) => store.getAccount(accountId),
+    },
     home,
-    // Like the real reader: one entry per live binding, carrying the rule id it was bound for.
-    pendingRules: real ? (file, at) => readPendingRuleMatches(file, at, real.ruleDeps) : async (file) => {
-      ruleReads += 1;
-      if (options.pendingRulesFail === true || (options.pendingRulesFail === 'second' && ruleReads === 2)) throw new Error('rules unreadable');
-      return (file.ruleBindings ?? []).flatMap((one): PendingRuleMatch[] => {
-        const match = one.ruleId in table.current ? table.current[one.ruleId] : SUBJECT_RULE;
-        if (!match) return [];
-        return [{ areaId: one.areaId, match: { ...match }, ...(options.noRuleIds ? {} : { ruleId: one.ruleId }) }];
-      });
+    now: () => clock.at,
+    log: { warn: (message) => { options.warnings?.push(message); } },
+    routerOpen: options.routerOpen ?? (async () => true),
+    notifyNoRouter: async (params, opKey) => {
+      if (options.letterSent === false) return false;
+      letters.push({ params, opKey });
+      return true;
     },
     readAreas: async (at) => {
       expect(at).toBe(home);
@@ -146,53 +162,51 @@ function intake(store: MailStore, areas: { current: RouterAreasFile }, options: 
       if (options.areasFail) throw new Error('areas file unreadable');
       return real ? readRouterAreas(at) : areas.current;
     },
-    confirm: async (sources, at, deps) => {
+    ensureRouter: async (accountId) => { ensured.push(accountId); return BOUND_OUTCOME; },
+    confirmAccount: async (sources, at) => {
       expect(at).toBe(home);
       confirmed.push([...sources]);
-      confirmDeps.push(deps);
       if (real) {
-        const out = await confirmRouterIncoming(sources, at, { ...real.ruleDeps, ...deps });
+        const out = await confirmAccountArrivals(sources, at);
         written.push([...out]);
         return out;
       }
-      if (options.confirmFails === true || (options.confirmFails === 'once' && confirmed.length === 1)) throw new Error('rules store is down');
-      // The stand-in writes every source, or with a sender rule only the exact rows from that sender.
-      const out: RouterSource[] = [];
-      for (const source of sources) {
-        const row = await store.getMessage(source.account, source.message);
-        if (!options.matchSender) { out.push(source); continue; }
-        if (row && row.from_addr === options.matchSender && mailRowDeliveryVersion(row) === source.version) {
-          assigned.add(`${source.message}@${source.version}`);
-          out.push(source);
-        }
-      }
-      written.push([...out]);
-      return out;
+      if (options.confirmFails === true || (options.confirmFails === 'once' && confirmed.length === 1)) throw new Error('areas store is down');
+      if (options.confirmRefuses && sources.some((one) => one.message === options.confirmRefuses)) throw new Error('unusable scope key');
+      written.push([...sources]);
+      return sources;
     },
   });
-  return { capture, confirmed, confirmDeps, written, assigned, reads: () => reads };
+  return {
+    capture, confirmed, written, ensured, letters, clock, home, reads: () => reads,
+    /** The arrivals kept for a retry, as `message` ids. */
+    pending: async () => (await mailIntakeQueue(home).read()).entries.map((one) => one.message).sort(),
+    notices: async () => (await mailIntakeQueue(home).read()).notices,
+  };
 }
 
 const messagesOf = (batches: RouterSource[][]) => batches.map((batch) => batch.map((one) => one.message).sort());
 
 async function harness(options: {
-  /** `false` starts with no bindings at all. */
-  ruleBindings?: boolean;
+  /** `false` starts with the mailbox bound to no router. */
+  bound?: boolean;
+  /** The folders the bound router watches. */
+  folders?: string[];
   /** Every page reads as sorted out of Important, so only the full headline list can carry it. */
   nothingImportant?: boolean;
   confirmFails?: boolean | 'once';
-  matchSender?: string;
+  /** The intake's capture read fails once. */
   captureFails?: boolean;
   areasFail?: boolean;
-  pendingRulesFail?: boolean | 'second';
-  /** The bindings standing at the start (default WITH_RULES). */
-  areas?: RouterAreasFile;
-  rules?: Record<string, RuleMatch | null>;
-  noRuleIds?: boolean;
+  /** The intake's folder list read fails once (at the finish). */
+  mailboxesFail?: boolean;
+  routerOpen?: (taskId: string) => Promise<boolean>;
   noPrefetch?: boolean;
   /** One message per page, so a listing of more than 20 takes several ticks to walk. */
   paged?: boolean;
-  real?: RealRouter;
+  /** The provider also lists a Receipts folder. */
+  receipts?: boolean;
+  real?: { home: string };
   /** The provider changes read flags, and its listing then carries them (off by default, as every other test expects). */
   markRead?: boolean;
   /** The service decorates rows with the real area file and ledgers under the real router's home. */
@@ -202,6 +216,8 @@ async function harness(options: {
   const { store, bodies, entry } = await cache([ACCOUNT]);
   const providers = new MailProviderRegistry(() => undefined);
   const listing: { current: MailEnvelope[] } = { current: [envelope(1)] };
+  /** The Receipts folder's listing (with `receipts`). */
+  const receipts: { current: MailEnvelope[] } = { current: [] };
   /** The next poll answers "your cursor is void" with the listing's first page. */
   const control = { reset: false };
   /** The sender a body read reveals, as a conversation transport does. */
@@ -224,10 +240,14 @@ async function harness(options: {
     health: async () => { calls.other += 1; return { state: 'ok', checkedAt: Date.now() }; },
     listMailboxes: async () => {
       calls.listMailboxes += 1;
-      return [{ mailboxId: 'inbox', name: 'Inbox', role: 'inbox', unread: 0, total: listing.current.length }];
+      return [
+        { mailboxId: 'inbox', name: 'Inbox', role: 'inbox', unread: 0, total: listing.current.length },
+        ...(options.receipts ? [{ mailboxId: 'receipts', name: 'Receipts', role: 'other' as const, unread: 0, total: receipts.current.length }] : []),
+      ];
     },
     poll: async (_account, request) => {
       calls.poll += 1;
+      if (request.mailbox === 'receipts') return { messages: receipts.current, cursor: 'r1', more: false };
       if (!options.paged) return { messages: listing.current, cursor: 'c1', more: false };
       const reset = control.reset;
       control.reset = false;
@@ -261,17 +281,17 @@ async function harness(options: {
     ...(options.decorate && routingHome ? { routes: (messages) => decorateMailRoutes(messages, routingHome) } : {}),
   });
 
-  const areas = { current: options.areas ?? (options.ruleBindings === false ? NO_RULES : WITH_RULES) };
-  const rules: RuleTable = { current: { ...(options.matchSender ? { 'rule-1': { from: options.matchSender } } : {}), ...options.rules } };
+  const warnings: string[] = [];
+  const areas = { current: options.bound === false ? UNBOUND : bound(options.folders) };
   const recorder = intake(store, areas, {
-    confirmFails: options.confirmFails, areasFail: options.areasFail, pendingRulesFail: options.pendingRulesFail,
-    matchSender: options.matchSender, rules, noRuleIds: options.noRuleIds, real: options.real,
+    confirmFails: options.confirmFails, areasFail: options.areasFail, real: options.real, warnings,
+    failOnce: options.captureFails ? 'messagesByIds' : options.mailboxesFail ? 'listMailboxes' : undefined,
+    routerOpen: options.routerOpen,
   });
-  const captured: Array<{ accountId: string; headlines: MailHeadline[] }> = [];
-  const captureIncoming: MailIncomingCapture = async (accountId, headlines) => {
-    captured.push({ accountId, headlines: [...headlines] });
-    if (options.captureFails) throw new Error('intake unavailable');
-    return recorder.capture(accountId, headlines);
+  const captured: Array<{ accountId: string; headlines: MailHeadline[]; inbox: boolean }> = [];
+  const captureIncoming: MailIncomingCapture = async (accountId, headlines, opts) => {
+    captured.push({ accountId, headlines: [...headlines], inbox: opts?.inbox !== false });
+    return recorder.capture(accountId, headlines, opts);
   };
 
   const real = { ingestPage: service.ingestPage.bind(service), prefetchBodies: service.prefetchBodies.bind(service) };
@@ -289,9 +309,8 @@ async function harness(options: {
     return real.prefetchBodies(accountId, mailboxId, limit, deadlineAt);
   };
 
-  const warnings: string[] = [];
-  /** Each event with what the rules had confirmed at the moment it went out. */
-  const events: Array<{ count: number; headlines: MailHeadline[]; confirmedAtEmit: RouterSource[][]; assignedAtEmit: string[] }> = [];
+  /** Each event with what the intake had confirmed at the moment it went out. */
+  const events: Array<{ count: number; headlines: MailHeadline[]; confirmedAtEmit: RouterSource[][] }> = [];
   const host = {
     replica: false,
     log: { debug: () => undefined, info: () => undefined, warn: (message: string) => { warnings.push(message); } },
@@ -314,10 +333,7 @@ async function harness(options: {
     events: {
       syncCompleted: () => undefined,
       messagesReceived: (_account: string, count: number, headlines: MailHeadline[]) => {
-        events.push({
-          count, headlines: [...headlines],
-          confirmedAtEmit: recorder.confirmed.map((batch) => [...batch]), assignedAtEmit: [...recorder.assigned],
-        });
+        events.push({ count, headlines: [...headlines], confirmedAtEmit: recorder.confirmed.map((batch) => [...batch]) });
       },
       accountHealth: () => undefined,
       mailboxCounts: () => undefined,
@@ -328,11 +344,13 @@ async function harness(options: {
       applyCategoryHints: async () => 0,
     } : undefined,
     captureIncoming,
+    retryIncoming: recorder.capture.retry,
   });
   entry.sync = sync;
   return {
-    db: entry.db, store, bodies, service, sync, listing, control, bodyFrom, bodyAddresses, calls, areas, captured, beforePrefetch, warnings, events, assigned: recorder.assigned,
-    confirmed: () => recorder.confirmed, confirmDeps: recorder.confirmDeps, written: recorder.written, reads: recorder.reads, rules,
+    db: entry.db, store, bodies, service, sync, listing, receipts, control, bodyFrom, bodyAddresses, calls, areas, captured, beforePrefetch, warnings, events,
+    confirmed: () => recorder.confirmed, written: recorder.written, ensured: recorder.ensured, reads: recorder.reads,
+    letters: recorder.letters, clock: recorder.clock, home: recorder.home, pending: recorder.pending, notices: recorder.notices,
   };
 }
 
@@ -344,8 +362,8 @@ const rowOf = async (store: MailStore, messageId: string, accountId = ACCOUNT) =
 
 const ids = (...ns: number[]) => ns.map((n) => `inbox:m-${n}`).sort();
 
-describe('mail sync hands arrived inbox mail to the area rules intake', () => {
-  it('confirms every arrival before the event, then announces it once at its body-filled version', async () => {
+describe('mail sync hands every new inbox mail to its router', () => {
+  it('enters every arrival before the event, then announces it once at its body-filled version', async () => {
     const mail = await harness();
     await mail.sync.runTick({ force: true });
     // The backfill is not an arrival: nothing captured, the area file not even read.
@@ -356,13 +374,12 @@ describe('mail sync hands arrived inbox mail to the area rules intake', () => {
     const before = { ...mail.calls };
     await mail.sync.runTick({ force: true });
     expect(mail.captured).toHaveLength(1);
+    expect(mail.ensured).toEqual([ACCOUNT]);
     const announced = new Map(mail.captured[0]!.headlines.map((one) => [one.messageId, one.version]));
     expect([...announced.keys()].sort()).toEqual(ids(2, 3, 4, 5, 6, 7, 8));
 
-    // One confirm, after the prefetch, of the body-filled versions only, granted through the binding that matched at capture.
+    // One confirm, after the prefetch, of the body-filled versions only.
     expect(mail.confirmed()).toHaveLength(1);
-    expect(mail.confirmDeps).toEqual([{ expectedRuleBindings: [binding(1)] }]);
-
     // One event, after that confirm, counting seven and naming each at its current exact version.
     expect(mail.events).toHaveLength(1);
     const event = mail.events[0]!;
@@ -382,14 +399,18 @@ describe('mail sync hands arrived inbox mail to the area rules intake', () => {
     expect(mail.calls).toEqual({ ...before, listMailboxes: before.listMailboxes + 1, poll: before.poll + 1, getBody: before.getBody + 7 });
     expect(mail.calls.send).toBe(0);
 
-    // The same listing again is no arrival: nothing captured, nothing confirmed, nothing named.
+    // The same listing again is no arrival: nothing captured, confirmed or named, and the binding is not asked again.
     await mail.sync.runTick({ force: true });
     expect(mail.captured).toHaveLength(1);
     expect(mail.confirmed()).toHaveLength(1);
     expect(mail.events.at(-1)).toMatchObject({ count: 0, headlines: [] });
+    mail.listing.current = [...mail.listing.current, envelope(9)];
+    await mail.sync.runTick({ force: true });
+    expect(messagesOf(mail.confirmed().slice(1))).toEqual([ids(9)]);
+    expect(mail.ensured).toEqual([ACCOUNT]);
   });
 
-  it('with grouping on, the intake sees every arrival while the event names only the initially Important ones', async () => {
+  it('with grouping on, the router gets every arrival while the event names only the initially Important ones', async () => {
     const mail = await harness({ nothingImportant: true });
     await mail.sync.runTick({ force: true });
     mail.listing.current = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => envelope(n));
@@ -399,9 +420,9 @@ describe('mail sync hands arrived inbox mail to the area rules intake', () => {
     expect(mail.events).toEqual([expect.objectContaining({ count: 0, headlines: [] })]);
   });
 
-  it('a body read that fills a blank sender lets the matching rule confirm, and the event names that version', async () => {
+  it('a body read that fills a blank sender enters that version, and the event names it', async () => {
     const billing = 'billing@invoices.example.invalid';
-    const mail = await harness({ matchSender: billing });
+    const mail = await harness();
     await mail.sync.runTick({ force: true });
     mail.bodyFrom.current = { address: billing };
     mail.listing.current = [envelope(1), envelope(2, { from: { name: 'Billing', address: '' }, subject: 'Invoice 2' })];
@@ -411,44 +432,28 @@ describe('mail sync hands arrived inbox mail to the area rules intake', () => {
     expect(row.from_addr).toBe(billing);
     const initial = mail.captured[0]!.headlines[0]!;
     expect(initial).toMatchObject({ from: '', messageId: 'inbox:m-2' });
-    // Only the filled version is confirmed, and it entered the area before the event.
-    expect(mail.confirmed().map((batch) => batch.map((one) => one.version))).toEqual([[mailRowDeliveryVersion(row)]]);
     expect(mailRowDeliveryVersion(row)).not.toBe(initial.version);
-    // The unknown sender kept the sender rule as a capture-time candidate, so its own binding grants the filled version.
-    expect(mail.confirmDeps).toEqual([{ expectedRuleBindings: [binding(1)] }]);
+    expect(mail.confirmed().map((batch) => batch.map((one) => one.version))).toEqual([[mailRowDeliveryVersion(row)]]);
     expect(mail.events).toHaveLength(1);
-    expect(mail.events[0]!.assignedAtEmit).toEqual([`inbox:m-2@${mailRowDeliveryVersion(row)}`]);
+    expect(mail.events[0]!.confirmedAtEmit).toHaveLength(1);
     expect(mail.events[0]!.headlines).toEqual([expect.objectContaining({
       from: billing, subject: 'Invoice 2', messageId: 'inbox:m-2', version: mailRowDeliveryVersion(row),
     })]);
   });
 
-  it('a known sender no rule matches stays unassigned and named in the event', async () => {
-    const mail = await harness({ matchSender: 'billing@invoices.example.invalid' });
-    await mail.sync.runTick({ force: true });
-    mail.listing.current = [envelope(1), envelope(2)];
-    await mail.sync.runTick({ force: true });
-    expect(mail.assigned.size).toBe(0);
-    const row = await rowOf(mail.store, 'inbox:m-2');
-    expect(mail.events[0]!.headlines).toEqual([expect.objectContaining({
-      from: 'sender2@example.invalid', messageId: 'inbox:m-2', version: mailRowDeliveryVersion(row),
-    })]);
-  });
-
-  it('a known sender rewritten to another between capture and finish inherits nothing', async () => {
+  it('a known sender rewritten to another between capture and finish is another delivery: neither entered nor named', async () => {
     const other = 'billing@invoices.example.invalid';
-    const mail = await harness({ matchSender: other });
+    const mail = await harness();
     await mail.sync.runTick({ force: true });
     mail.listing.current = [envelope(1), envelope(2)];
     mail.beforePrefetch.current = async () => {
       mail.beforePrefetch.current = undefined;
-      // Same instants and Message-ID, so the same delivery to the cache, but another known sender.
+      // Same instants and Message-ID, so the same handle to the cache, but another known sender.
       await mail.service.ingestPage(ACCOUNT, [envelope(2, { from: { address: other } })]);
     };
     await mail.sync.runTick({ force: true });
     expect((await rowOf(mail.store, 'inbox:m-2')).from_addr).toBe(other);
     expect(mail.confirmed()).toEqual([]);
-    expect(mail.assigned.size).toBe(0);
     expect(mail.events).toEqual([expect.objectContaining({ count: 1, headlines: [] })]);
   });
 
@@ -462,14 +467,13 @@ describe('mail sync hands arrived inbox mail to the area rules intake', () => {
       await mail.service.ingestPage(ACCOUNT, [envelope(2, { sentAt: BASE + 9e6, receivedAt: BASE + 9e6, subject: 'RE: Subject 2' })]);
     };
     await mail.sync.runTick({ force: true });
-    // Neither delivery of m-2 is confirmed: the first was replaced before finish, and the reply was never captured.
+    // Neither delivery of m-2 is entered: the first was replaced before finish, and the reply was never captured.
     expect(messagesOf(mail.confirmed())).toEqual([ids(3)]);
-    // The replaced handle gets no headline; the other is named at its current version.
     expect(mail.events.at(-1)!.headlines.map((one) => one.messageId)).toEqual(['inbox:m-3']);
   });
 
-  it('without bindings, nothing is confirmed and the event names each arrival at its body-filled version', async () => {
-    const mail = await harness({ ruleBindings: false });
+  it('a mailbox bound to no router keeps its mail, sends one letter, and its router gets the mail once it is bound', async () => {
+    const mail = await harness({ bound: false });
     await mail.sync.runTick({ force: true });
     mail.listing.current = [envelope(1), envelope(2), envelope(3)];
     await mail.sync.runTick({ force: true });
@@ -478,153 +482,77 @@ describe('mail sync hands arrived inbox mail to the area rules intake', () => {
     const latest = await Promise.all(['inbox:m-2', 'inbox:m-3'].map(async (id) => mailRowDeliveryVersion(await rowOf(mail.store, id))));
     expect(mail.events[0]!.headlines.map((one) => [one.messageId, one.version])).toEqual([['inbox:m-2', latest[0]], ['inbox:m-3', latest[1]]]);
     expect(mail.events[0]!.headlines.map((one) => one.version)).not.toContain(mail.captured[0]!.headlines[0]!.version);
-  });
+    // Kept, never dropped, and the person is told once.
+    expect(await mail.pending()).toEqual(ids(2, 3));
+    expect(mail.letters).toEqual([{ params: { mailbox: 'acct-a@example.invalid', reason: 'none' }, opKey: expect.stringMatching(/^mail-no-router:fixture%3Aacct-a:\d+$/) }]);
 
-  it('never captures the backfill, and a rule set that appears during the prefetch neither confirms nor exposes the arrival', async () => {
-    const mail = await harness({ ruleBindings: false });
-    mail.listing.current = [envelope(1), envelope(2)];
-    await mail.sync.runTick({ force: true });
-    expect(mail.confirmed()).toEqual([]);
-
-    mail.listing.current = [envelope(1), envelope(2), envelope(3)];
-    mail.beforePrefetch.current = async () => { mail.areas.current = WITH_RULES; };
-    await mail.sync.runTick({ force: true });
-    expect(mail.captured).toHaveLength(1);
-    expect(mail.confirmed()).toEqual([]);
-    expect(mail.events.at(-1)).toMatchObject({ count: 1, headlines: [] });
-
-    // Rules on now: the history already cached is not scanned, only the next arrival is confirmed.
-    mail.beforePrefetch.current = undefined;
+    // Still no router: more mail is kept too, and no second letter.
     mail.listing.current = [envelope(1), envelope(2), envelope(3), envelope(4)];
     await mail.sync.runTick({ force: true });
-    expect(messagesOf(mail.confirmed())).toEqual([ids(4)]);
-    expect(mail.events.at(-1)!.headlines.map((one) => one.messageId)).toEqual(['inbox:m-4']);
+    expect(await mail.pending()).toEqual(ids(2, 3, 4));
+    expect(mail.letters).toHaveLength(1);
+
+    // Bound to its router: the next tick's retry enters every kept mail at its current version, and the episode ends.
+    mail.areas.current = bound();
+    await mail.sync.runTick({ force: true });
+    expect(messagesOf(mail.written)).toEqual([ids(2, 3, 4)]);
+    for (const source of mail.written[0]!) expect(source.version).toBe(mailRowDeliveryVersion(await rowOf(mail.store, source.message)));
+    expect(await mail.pending()).toEqual([]);
+    expect(await mail.notices()).toEqual({});
+    expect(mail.letters).toHaveLength(1);
   });
 
-  it('a binding of the same area confirmed during the prefetch adds no authority: the original binding alone grants', async () => {
-    const mail = await harness();
+  it('a confirm that fails once goes in one by one in the same tick: the event names the arrivals and nothing waits', async () => {
+    const mail = await harness({ confirmFails: 'once' });
     await mail.sync.runTick({ force: true });
-    mail.listing.current = [envelope(1), envelope(2)];
-    mail.beforePrefetch.current = async () => { mail.areas.current = WITH_MORE_RULES; };
-    await mail.sync.runTick({ force: true });
-    const row = await rowOf(mail.store, 'inbox:m-2');
-    expect(mail.confirmed()).toEqual([[{ kind: 'mail', account: ACCOUNT, message: 'inbox:m-2', version: mailRowDeliveryVersion(row) }]]);
-    // Never the new binding: it only agrees on the area.
-    expect(mail.confirmDeps).toEqual([{ expectedRuleBindings: [binding(1)] }]);
-    expect(mail.events.at(-1)!.headlines.map((one) => [one.messageId, one.version])).toEqual([['inbox:m-2', mailRowDeliveryVersion(row)]]);
-
-    // The next arrival is captured under the new bindings, and both may grant it.
-    mail.beforePrefetch.current = undefined;
     mail.listing.current = [envelope(1), envelope(2), envelope(3)];
     await mail.sync.runTick({ force: true });
-    expect(mail.confirmDeps.slice(1)).toEqual([{ expectedRuleBindings: [binding(1), binding(2)] }]);
+    expect(mail.events[0]!.headlines.map((one) => one.messageId)).toEqual(['inbox:m-2', 'inbox:m-3']);
+    expect(messagesOf(mail.written)).toEqual([ids(2), ids(3)]);
+    expect(await mail.pending()).toEqual([]);
+    expect(mail.warnings).toContain('mail router intake failed; entering that batch one by one');
   });
 
   it.each([
-    ['added', WITH_RULES, WITH_MORE_RULES],
-    ['removed', WITH_MORE_RULES, WITH_RULES],
-  ] as const)('an unrelated binding %s during the prefetch still confirms the body-filled version under the original one', async (_label, start, next) => {
-    const mail = await harness({ areas: start, rules: { 'rule-2': { subject: 'Unrelated' } } });
-    await mail.sync.runTick({ force: true });
-    mail.listing.current = [envelope(1), envelope(2), envelope(3, { subject: 'Ordinary arrival' })];
-    mail.beforePrefetch.current = async () => { mail.areas.current = next; };
-    await mail.sync.runTick({ force: true });
-    const [m2, m3] = await Promise.all(['inbox:m-2', 'inbox:m-3'].map((id) => rowOf(mail.store, id)));
-    // The rule's own binding never moved, so the new delivery version is not left out of the area.
-    expect(mail.confirmed()).toEqual([[{ kind: 'mail', account: ACCOUNT, message: 'inbox:m-2', version: mailRowDeliveryVersion(m2!) }]]);
-    expect(mail.confirmDeps).toEqual([{ expectedRuleBindings: [binding(1)] }]);
-    // Both headlines go out at their current versions; the one no rule matches is never confirmed.
-    expect(mail.events.at(-1)!.headlines.map((one) => [one.messageId, one.version])).toEqual([
-      ['inbox:m-2', mailRowDeliveryVersion(m2!)], ['inbox:m-3', mailRowDeliveryVersion(m3!)],
-    ]);
-  });
-
-  it.each([
-    ['its binding was removed', () => withBindings(binding(2)), {}],
-    ['its binding moved to another area', () => withBindings(binding(1, 'area-2')), {}],
-    ['its binding was confirmed again', () => withBindings(binding(1, 'area-1', BASE + 99)), {}],
-    ['its rule changed or its target completed', () => WITH_RULES, { 'rule-1': null }],
-  ] as const)('when the matching rule\'s %s, the new version is withheld and never confirmed; unrelated mail still goes out', async (_label, next, live) => {
-    const mail = await harness({ rules: { 'rule-2': { subject: 'Unrelated' } } });
-    await mail.sync.runTick({ force: true });
-    mail.listing.current = [envelope(1), envelope(2), envelope(3, { subject: 'Ordinary arrival' })];
-    mail.beforePrefetch.current = async () => {
-      mail.areas.current = next();
-      Object.assign(mail.rules.current, live);
-    };
-    await mail.sync.runTick({ force: true });
-    expect(mail.confirmed()).toEqual([]);
-    expect(mail.events.at(-1)).toMatchObject({ count: 2, headlines: [{ messageId: 'inbox:m-3', subject: 'Ordinary arrival' }] });
-  });
-
-  it('a binding that alone matches only after capture authorizes nothing captured before it', async () => {
-    const mail = await harness({ rules: { 'rule-1': { subject: 'Invoice' } } });
-    await mail.sync.runTick({ force: true });
-    mail.listing.current = [envelope(1), envelope(2), envelope(3, { subject: 'Ordinary arrival' })];
-    mail.beforePrefetch.current = async () => { mail.areas.current = WITH_MORE_RULES; };
-    await mail.sync.runTick({ force: true });
-    // The new binding matches m-2, which no binding matched at capture: withheld, nothing confirmed.
-    expect(mail.confirmed()).toEqual([]);
-    expect(mail.events.at(-1)).toMatchObject({ count: 2, headlines: [{ messageId: 'inbox:m-3' }] });
-  });
-
-  it('a binding of another area that now also matches is a conflict: withheld and never confirmed', async () => {
-    const mail = await harness();
-    await mail.sync.runTick({ force: true });
-    mail.listing.current = [envelope(1), envelope(2), envelope(3, { subject: 'Ordinary arrival' })];
-    mail.beforePrefetch.current = async () => { mail.areas.current = withBindings(binding(1), binding(2, 'area-2')); };
-    await mail.sync.runTick({ force: true });
-    expect(mail.confirmed()).toEqual([]);
-    expect(mail.events.at(-1)).toMatchObject({ count: 2, headlines: [{ messageId: 'inbox:m-3' }] });
-  });
-
-  it('two original bindings of one area: one removed, the other unchanged still grants alone', async () => {
-    const mail = await harness({ areas: WITH_MORE_RULES });
-    await mail.sync.runTick({ force: true });
-    mail.listing.current = [envelope(1), envelope(2)];
-    mail.beforePrefetch.current = async () => { mail.areas.current = withBindings(binding(2)); };
-    await mail.sync.runTick({ force: true });
-    expect(messagesOf(mail.confirmed())).toEqual([ids(2)]);
-    expect(mail.confirmDeps).toEqual([{ expectedRuleBindings: [binding(2)] }]);
-    expect(mail.events.at(-1)!.headlines.map((one) => one.messageId)).toEqual(['inbox:m-2']);
-  });
-
-  it('a pending match with no rule id restricts but never authorizes', async () => {
-    const mail = await harness({ noRuleIds: true });
-    await mail.sync.runTick({ force: true });
-    mail.listing.current = [envelope(1), envelope(2), envelope(3, { subject: 'Ordinary arrival' })];
-    await mail.sync.runTick({ force: true });
-    expect(mail.confirmed()).toEqual([]);
-    expect(mail.events.at(-1)).toMatchObject({ count: 2, headlines: [{ messageId: 'inbox:m-3' }] });
-  });
-
-  it.each([
-    ['every confirm fails', { confirmFails: true }, 'mail area intake confirm failed', []],
-    ['the capture itself fails', { captureFails: true }, 'mail area intake capture failed', []],
-    ['the area file cannot be read', { areasFail: true }, 'mail area intake capture failed', []],
-    ['the pending rules cannot be read', { pendingRulesFail: true }, 'mail area intake capture failed', []],
-    ['the confirm after the prefetch fails once', { confirmFails: 'once' }, 'mail area intake confirm failed', ['inbox:m-4']],
-    ['the pending rules cannot be read at finish', { pendingRulesFail: 'second' }, 'mail area intake confirm failed', ['inbox:m-4']],
-  ] as const)('when %s, the event keeps its count with no headlines and polling carries on', async (_label, failure, warning, nextNamed) => {
+    ['every confirm fails', { confirmFails: true }, 'mail router intake failed; entering that batch one by one', true, [], ids(2, 3, 4)],
+    ['the capture itself fails', { captureFails: true }, 'mail router intake capture failed', false, [ids(2, 3), ids(4)], []],
+    ['the area file cannot be read', { areasFail: true }, 'mail router intake confirm failed', false, [], ids(2, 3, 4)],
+    ['the folder list cannot be read', { mailboxesFail: true }, 'mail router intake confirm failed', false, [ids(2, 3), ids(4)], []],
+  ] as const)('when %s, the event still names the arrivals, polling carries on, and the arrivals are kept for the retry', async (_label, failure, warning, current, writtenAfter, pendingAfter) => {
     const mail = await harness(failure);
     await mail.sync.runTick({ force: true });
     mail.listing.current = [envelope(1), envelope(2), envelope(3)];
     const report = await mail.sync.runTick({ force: true });
     expect(report.polled).toBe(1);
-    expect(mail.events).toEqual([expect.objectContaining({ count: 2, headlines: [] })]);
+    expect(mail.events).toHaveLength(1);
+    expect(mail.events[0]).toMatchObject({ count: 2 });
+    expect(mail.events[0]!.headlines.map((one) => one.messageId)).toEqual(['inbox:m-2', 'inbox:m-3']);
+    // A failed write still names the current versions; a failed capture or finish names them as ingested.
+    const finals = await Promise.all(['inbox:m-2', 'inbox:m-3'].map(async (id) => mailRowDeliveryVersion(await rowOf(mail.store, id))));
+    if (current) expect(mail.events[0]!.headlines.map((one) => one.version)).toEqual(finals);
+    else expect(mail.events[0]!.headlines.map((one) => one.version)).not.toEqual(finals);
     expect(mail.warnings).toContain(warning);
     expect(mail.warnings).not.toContain('mail poll failed');
     expect((await mail.store.getAccount(ACCOUNT))?.state).toBe('active');
     expect((await rowOf(mail.store, 'inbox:m-3')).body_ref).toBeTruthy();
 
-    // The next tick runs normally.
+    // Nothing was lost: what did not reach the router waits for the next tick.
+    expect(await mail.pending()).toEqual(ids(2, 3));
+    expect(mail.letters).toEqual([]);
+
+    // The next tick runs normally, and its retry enters what the failure kept (before the new mail).
     mail.listing.current = [envelope(1), envelope(2), envelope(3), envelope(4)];
     expect((await mail.sync.runTick({ force: true })).polled).toBe(1);
     expect(mail.events.at(-1)!.count).toBe(1);
-    expect(mail.events.at(-1)!.headlines.map((one) => one.messageId)).toEqual(nextNamed);
+    expect(mail.events.at(-1)!.headlines.map((one) => one.messageId)).toEqual(['inbox:m-4']);
+    expect(messagesOf(mail.written)).toEqual(writtenAfter);
+    expect(await mail.pending()).toEqual(pendingAfter);
+    for (const batch of mail.written) {
+      for (const source of batch) expect(source.version).toBe(mailRowDeliveryVersion(await rowOf(mail.store, source.message)));
+    }
   });
 
-  it('reads only the cache: a body not cached is confirmed as it stands, never fetched', async () => {
+  it('reads only the cache: a body not cached is entered as it stands, never fetched', async () => {
     const mail = await harness({ noPrefetch: true });
     await mail.sync.runTick({ force: true });
     mail.listing.current = [envelope(1), envelope(2)];
@@ -632,23 +560,20 @@ describe('mail sync hands arrived inbox mail to the area rules intake', () => {
     expect(mail.calls.getBody).toBe(0);
     const row = await rowOf(mail.store, 'inbox:m-2');
     expect(row.body_ref).toBeNull();
-    // The version did not move: finish confirms that same exact version, once.
+    // The version did not move: finish enters that same exact version, once.
     expect(mail.confirmed()).toEqual([[{ kind: 'mail', account: ACCOUNT, message: 'inbox:m-2', version: mailRowDeliveryVersion(row) }]]);
   });
 
-  it('nothing can wake the area router while the prefetch runs; after it, only the final version is pending, once', async () => {
+  it('nothing can wake the router while the prefetch runs; after it, only the final version is pending, once', async () => {
     const mail = await harness();
     // The real mail source registry answers the wake's "still current" check from the same cache.
     const unregister = registerMailRouterSource(mail.store, mail.bodies);
     try {
       await mail.sync.runTick({ force: true });
-      // What the area file holds if each confirmed source entered area-1, with its active local router.
+      // What the area file holds once each entered source is an open item of area-1, with its active local router.
       const wakeFile = (): RouterAreasFile => ({
-        version: 1,
-        areas: [{ id: 'area-1', name: 'Area one', host: '__local__', taskIds: ['task-router'], sources: [{ kind: 'mail', account: ACCOUNT }] }],
-        routers: [{ taskId: 'task-router', areaId: 'area-1', paused: false }],
-        items: mail.confirmed().flat().map((source) => ({ source: { ...source }, areaId: 'area-1', canonicalKey: `key-${source.message}` })),
-        ruleBindings: [binding(1)],
+        ...bound(),
+        openItems: mail.confirmed().flat().map((source) => ({ source: { ...source }, areaId: 'area-1', canonicalKey: `key-${source.message}` })),
       });
       const wakeDeps: RouterWakeDeps = {
         readAreas: async () => wakeFile(),
@@ -678,6 +603,42 @@ describe('mail sync hands arrived inbox mail to the area rules intake', () => {
     } finally {
       unregister();
     }
+  });
+});
+
+describe('the folders a router watches', () => {
+  it('by default only the Inbox: a new Receipts mail reaches the intake but is neither read nor entered nor announced', async () => {
+    const mail = await harness({ receipts: true });
+    await mail.sync.runTick({ force: true });
+    mail.listing.current = [envelope(1), envelope(2)];
+    mail.receipts.current = [receipt(3)];
+    await mail.sync.runTick({ force: true });
+    expect(mail.captured.map((one) => [one.inbox, one.headlines.map((headline) => headline.messageId)]))
+      .toEqual([[true, ['inbox:m-2']], [false, ['receipts:m-3']]]);
+    expect(messagesOf(mail.confirmed())).toEqual([ids(2)]);
+    expect(mail.events.map((one) => one.headlines.map((headline) => headline.messageId))).toEqual([['inbox:m-2']]);
+  });
+
+  it('a router that names Receipts gets a new Receipts arrival at its final version, never announced as inbox news', async () => {
+    const mail = await harness({ receipts: true, folders: ['inbox', 'Receipts'] });
+    await mail.sync.runTick({ force: true });
+    mail.receipts.current = [receipt(3)];
+    await mail.sync.runTick({ force: true });
+    const row = await rowOf(mail.store, 'receipts:m-3');
+    expect(mail.confirmed()).toEqual([[{ kind: 'mail', account: ACCOUNT, message: 'receipts:m-3', version: mailRowDeliveryVersion(row) }]]);
+    expect(mail.events.flatMap((one) => one.headlines)).toEqual([]);
+    expect(await watchesOtherFolders(ACCOUNT, HOME, async () => mail.areas.current)).toBe(true);
+  });
+
+  it('a Receipts mail that arrived longer ago than the new-mail window is not routed (its folder\'s first sweep lists old mail)', async () => {
+    const mail = await harness({ receipts: true, folders: ['inbox', 'Receipts'] });
+    await mail.sync.runTick({ force: true });
+    mail.receipts.current = [
+      receipt(3, { sentAt: NOW - OTHER_FOLDER_NEW_MS - 60_000, receivedAt: NOW - OTHER_FOLDER_NEW_MS - 60_000 }),
+      receipt(4, { sentAt: NOW - OTHER_FOLDER_NEW_MS + 60_000, receivedAt: NOW - OTHER_FOLDER_NEW_MS + 60_000 }),
+    ];
+    await mail.sync.runTick({ force: true });
+    expect(messagesOf(mail.confirmed())).toEqual([['receipts:m-4']]);
   });
 });
 
@@ -735,28 +696,31 @@ describe('a cache that lists again from the top is a backfill, not an arrival', 
   });
 });
 
-describe('the area rules intake helper', () => {
-  async function seeded(n: number) {
+describe('the router intake helper', () => {
+  async function seeded(n: number, mailboxes = [INBOX_ROW]) {
     const { store, bodies } = await cache();
+    for (const accountId of [ACCOUNT, OTHER]) for (const row of mailboxes) await store.upsertMailbox({ accountId, ...row });
     const service = new MailService({ store, bodies, providers: new MailProviderRegistry(() => undefined) });
     const ingested = await service.ingestPage(ACCOUNT, Array.from({ length: n }, (_, i) => envelope(i + 1)));
     expect(ingested.headlines).toHaveLength(n);
     return { store, service, headlines: ingested.headlines };
   }
 
-  it('without bindings it confirms nothing but still answers exact current headlines; with no ids it reads nothing', async () => {
+  it('an unbound mailbox enters nothing but keeps it and still answers exact current headlines; with no ids it reads nothing', async () => {
     const { store, headlines } = await seeded(3);
-    const quiet = intake(store, { current: NO_RULES });
+    const quiet = intake(store, { current: UNBOUND });
     const shown = await (await quiet.capture(ACCOUNT, headlines))();
     expect(quiet.confirmed).toEqual([]);
-    expect(quiet.reads()).toBe(2);
+    expect(quiet.reads()).toBe(1);
+    expect(await quiet.pending()).toEqual(ids(1, 2, 3));
+    expect(quiet.letters).toHaveLength(1);
     expect(shown).toEqual(await Promise.all(headlines.map(async (one) => {
       const row = await rowOf(store, one.messageId!);
       return { from: row.from_addr, subject: row.subject, messageId: row.message_id, version: mailRowDeliveryVersion(row), canonicalKey: one.canonicalKey };
     })));
 
     // Void (keep the ingested headlines) only when no headline names an exact delivery.
-    const empty = intake(store, { current: WITH_RULES });
+    const empty = intake(store, { current: bound() });
     expect(await (await empty.capture(ACCOUNT, []))()).toBeUndefined();
     expect(await (await empty.capture(ACCOUNT, [{ from: 'x', subject: 'no handle' }]))()).toBeUndefined();
     expect(empty.reads()).toBe(0);
@@ -767,23 +731,23 @@ describe('the area rules intake helper', () => {
     const { store, service, headlines } = await seeded(2);
     // The second row was rewritten (a re-decoded subject) after its headline went out.
     await service.ingestPage(ACCOUNT, [envelope(2, { subject: 'Subject 2 (re-decoded)' })]);
-    const recorder = intake(store, { current: WITH_RULES });
+    const recorder = intake(store, { current: bound() });
     await (await recorder.capture(ACCOUNT, headlines))();
     expect(messagesOf(recorder.confirmed)).toEqual([ids(1)]);
 
-    for (const areas of [WITH_RULES, NO_RULES]) {
+    for (const areas of [bound(), UNBOUND]) {
       const stale = intake(store, { current: areas });
       expect(await (await stale.capture(ACCOUNT, headlines.slice(1)))()).toEqual([]);
       expect(stale.confirmed).toEqual([]);
     }
   });
 
-  it('treats the account as no grant: only the exact headlined rows of that account are confirmed', async () => {
+  it('enters only the exact headlined rows of that account', async () => {
     const { store, service, headlines } = await seeded(2);
     // The same handle cached under another account, and more mail in this account, none headlined.
     await service.ingestPage(OTHER, [envelope(1)]);
     await service.ingestPage(ACCOUNT, [envelope(40), envelope(41)]);
-    const recorder = intake(store, { current: WITH_RULES });
+    const recorder = intake(store, { current: bound() });
     await (await recorder.capture(ACCOUNT, headlines.slice(0, 1)))();
     expect(recorder.confirmed).toEqual([[{
       kind: 'mail', account: ACCOUNT, message: 'inbox:m-1',
@@ -791,30 +755,137 @@ describe('the area rules intake helper', () => {
     }]]);
   });
 
-  it('confirms nothing at capture, and finish leaves out a row that left the cache', async () => {
+  it('enters nothing at capture, and finish leaves out a row that left the cache', async () => {
     const { store, headlines } = await seeded(2);
-    const recorder = intake(store, { current: WITH_RULES });
+    const recorder = intake(store, { current: bound() });
     const finish = await recorder.capture(ACCOUNT, headlines);
     expect(recorder.confirmed).toEqual([]);
+    expect(recorder.reads()).toBe(0);
     await store.deleteMessages([(await rowOf(store, 'inbox:m-1')).rowid]);
     expect(await store.getMessage(ACCOUNT, 'inbox:m-1')).toBeUndefined();
     expect((await finish() ?? []).map((one) => one.messageId)).toEqual(['inbox:m-2']);
     expect(messagesOf(recorder.confirmed)).toEqual([ids(2)]);
   });
 
-  it('names a restricted arrival only when the confirm answers it wrote that exact source', async () => {
-    const { store, headlines } = await seeded(3);
-    const capture = createMailRouterIntake({
-      store, home: HOME,
-      pendingRules: async () => [{ ruleId: 'rule-1', areaId: 'area-1', match: { subject: 'Subject 2' } }],
-      readAreas: async () => WITH_RULES,
-      // An answer at another version is not the source asked.
-      confirm: async (sources) => sources.map((one) => ({ ...one, version: 'another-version' })),
-    });
-    expect((await (await capture(ACCOUNT, headlines))())?.map((one) => one.messageId)).toEqual(['inbox:m-1', 'inbox:m-3']);
+  it('a mail in a folder no router watches is still named, never entered', async () => {
+    const { store, headlines } = await seeded(2);
+    // The row's folder has no mailbox row at all (a folder the cache forgot): never the router's.
+    await store.deleteMailbox(ACCOUNT, 'inbox');
+    const recorder = intake(store, { current: bound() });
+    expect((await (await recorder.capture(ACCOUNT, headlines))())?.map((one) => one.messageId)).toEqual(['inbox:m-1', 'inbox:m-2']);
+    expect(recorder.confirmed).toEqual([]);
   });
 
-  it(`queries rows and confirms in batches of ${ROUTER_INTAKE_BATCH}`, async () => {
+  it('{ inbox: false } with an Inbox-only router reads nothing; a router that watches another folder reads it', async () => {
+    const { store, headlines } = await seeded(2, [INBOX_ROW, RECEIPTS_ROW]);
+    let storeReads = 0;
+    const counting = {
+      messagesByIds: async (accountId: string, wanted: ReadonlyArray<string>) => { storeReads += 1; return store.messagesByIds(accountId, wanted); },
+      listMailboxes: async (accountId: string) => { storeReads += 1; return store.listMailboxes(accountId); },
+    };
+    const confirmed: RouterSource[][] = [];
+    const make = (file: RouterAreasFile) => createMailRouterIntake({
+      store: counting, home: HOME, now: () => NOW, routerOpen: async () => true, readAreas: async () => file,
+      ensureRouter: async () => BOUND_OUTCOME,
+      confirmAccount: async (sources) => { confirmed.push([...sources]); return sources; },
+    });
+    for (const file of [bound(), bound(['inbox']), bound(['INBOX'])]) {
+      expect(await (await make(file)(ACCOUNT, headlines, { inbox: false }))()).toBeUndefined();
+    }
+    expect(storeReads).toBe(0);
+    expect(confirmed).toEqual([]);
+    // These rows sit in the Inbox, which the router also watches: entered, folder by role.
+    await (await make(bound(['Receipts', 'inbox']))(ACCOUNT, headlines, { inbox: false }))();
+    expect(storeReads).toBeGreaterThan(0);
+    expect(messagesOf(confirmed)).toEqual([ids(1, 2)]);
+  });
+
+  it('binds the mailbox once per run while the binding holds; a person\'s pick or a failure asks again next time', async () => {
+    const { store, headlines } = await seeded(1);
+    const answers: Array<AccountRouterOutcome | Error> = [{ bound: false, reason: 'choose' }, new Error('areas locked'), BOUND_OUTCOME];
+    const asked: string[] = [];
+    const warnings: string[] = [];
+    const capture = createMailRouterIntake({
+      store, home: HOME, now: () => NOW, routerOpen: async () => true, readAreas: async () => bound(),
+      log: { warn: (message) => { warnings.push(message); } },
+      ensureRouter: async (accountId) => {
+        asked.push(accountId);
+        const next = answers.shift()!;
+        if (next instanceof Error) throw next;
+        return next;
+      },
+      confirmAccount: async (sources) => sources,
+    });
+    for (let i = 0; i < 4; i += 1) await (await capture(ACCOUNT, headlines))();
+    expect(asked).toEqual([ACCOUNT, ACCOUNT, ACCOUNT]);
+    expect(warnings).toEqual(['mail router binding left this mailbox unbound', 'mail router binding failed']);
+  });
+
+  it('a retry waits for the first backfill, then enters a kept mail; one gone from the cache is dropped', async () => {
+    const mail = await harness();
+    await mailIntakeQueue(mail.home, { now: () => NOW }).add([
+      { account: ACCOUNT, message: 'inbox:m-1', at: NOW },
+      { account: ACCOUNT, message: 'inbox:m-99', at: NOW },
+      { account: OTHER, message: 'inbox:m-1', at: NOW },
+    ]);
+    await mail.sync.runTick({ force: true });
+    // The backfill tick: nothing retried yet.
+    expect(mail.confirmed()).toEqual([]);
+    expect(await mail.pending()).toEqual(['inbox:m-1', 'inbox:m-1', 'inbox:m-99']);
+    await mail.sync.runTick({ force: true });
+    expect(mail.written).toEqual([[{ kind: 'mail', account: ACCOUNT, message: 'inbox:m-1', version: mailRowDeliveryVersion(await rowOf(mail.store, 'inbox:m-1')) }]]);
+    // Only this account's entries are this account's retry: the other mailbox's stays for its own.
+    expect((await mailIntakeQueue(mail.home).read()).entries).toEqual([{ account: OTHER, message: 'inbox:m-1', at: NOW }]);
+  });
+
+  it('a retried mail outside the Inbox counts as new by when it was first seen, not by the retry', async () => {
+    const { store, service } = await seeded(0, [INBOX_ROW, RECEIPTS_ROW]);
+    await service.ingestPage(ACCOUNT, [receipt(1), receipt(2)]);
+    const recorder = intake(store, { current: bound(['Receipts']) });
+    // Seen within the window (an hour after it arrived), retried three days later; the other first seen three days on.
+    await mailIntakeQueue(recorder.home, { now: () => NOW }).add([
+      { account: ACCOUNT, message: 'receipts:m-1', at: NOW },
+      { account: ACCOUNT, message: 'receipts:m-2', at: NOW + 3 * 24 * 60 * 60_000 },
+    ]);
+    recorder.clock.at = NOW + 3 * 24 * 60 * 60_000;
+    await recorder.capture.retry(ACCOUNT);
+    expect(messagesOf(recorder.written)).toEqual([['receipts:m-1']]);
+    // Neither waits any more: one entered, one not new for any router.
+    expect(await recorder.pending()).toEqual([]);
+  });
+
+  it('a retry that fails keeps its entries and never throws', async () => {
+    const { store } = await seeded(1);
+    const warnings: string[] = [];
+    const recorder = intake(store, { current: bound() }, { confirmFails: true, warnings });
+    await mailIntakeQueue(recorder.home, { now: () => NOW }).add([{ account: ACCOUNT, message: 'inbox:m-1', at: NOW }]);
+    await expect(recorder.capture.retry(ACCOUNT)).resolves.toBeUndefined();
+    expect(await recorder.pending()).toEqual(ids(1));
+    expect(warnings).toContain('mail router intake failed; entering that batch one by one');
+  });
+
+  it('one mail its router always refuses holds back no other, and leaves the queue after MAIL_INTAKE_MAX_TRIES retries', async () => {
+    const { store } = await seeded(3);
+    const warnings: string[] = [];
+    const recorder = intake(store, { current: bound() }, { confirmRefuses: 'inbox:m-1', warnings });
+    await mailIntakeQueue(recorder.home, { now: () => NOW }).add(['inbox:m-1', 'inbox:m-2', 'inbox:m-3'].map((message) => ({ account: ACCOUNT, message, at: NOW })));
+    await recorder.capture.retry(ACCOUNT);
+    // The other two went in at once; only the refused one waits.
+    expect(messagesOf(recorder.written).flat().sort()).toEqual(['inbox:m-2', 'inbox:m-3']);
+    expect(await recorder.pending()).toEqual(['inbox:m-1']);
+    for (let n = 1; n < MAIL_INTAKE_MAX_TRIES; n += 1) await recorder.capture.retry(ACCOUNT);
+    expect(await recorder.pending()).toEqual([]);
+    expect(warnings).toContain('mail intake dropped arrivals its router refused every time');
+  });
+
+  it('a no-router letter held back (automatic router off) is asked again, never marked sent', async () => {
+    const { store, headlines } = await seeded(1);
+    const recorder = intake(store, { current: UNBOUND }, { letterSent: false });
+    await (await recorder.capture(ACCOUNT, headlines))();
+    expect(Object.values(await recorder.notices()).map((one) => one.sent)).toEqual([false]);
+  });
+
+  it(`queries rows and enters them in batches of ${ROUTER_INTAKE_BATCH}`, async () => {
     const { store, headlines } = await seeded(450);
     const queried: number[] = [];
     const counting = {
@@ -822,79 +893,68 @@ describe('the area rules intake helper', () => {
         queried.push(wanted.length);
         return store.messagesByIds(accountId, wanted);
       },
+      listMailboxes: (accountId: string) => store.listMailboxes(accountId),
     };
     const confirmed: number[] = [];
     const capture = createMailRouterIntake({
-      store: counting, home: HOME,
-      pendingRules: async () => [{ ruleId: 'rule-1', areaId: 'area-1', match: { subject: 'Subject' } }],
-      readAreas: async () => WITH_RULES,
-      confirm: async (sources) => { confirmed.push(sources.length); return sources; },
+      store: counting, home: HOME, now: () => NOW, routerOpen: async () => true, readAreas: async () => bound(),
+      ensureRouter: async () => BOUND_OUTCOME,
+      confirmAccount: async (sources) => { confirmed.push(sources.length); return sources; },
     });
     const finish = await capture(ACCOUNT, headlines);
     expect(queried).toEqual([200, 200, 50]);
     expect(confirmed).toEqual([]);
     expect(await finish()).toHaveLength(450);
     expect(queried).toEqual([200, 200, 50, 200, 200, 50]);
-    // Finish confirms every row once at its exact version, unchanged here.
+    // Finish enters every row once at its exact version, unchanged here.
     expect(confirmed).toEqual([200, 200, 50]);
   });
 });
 
-describe('with the real rules confirm and area file, only what the confirm wrote is announced', () => {
+describe('a mailbox bound to its router: every new mail reaches that router', () => {
+  // 2026-11-12: the prod Personal router had no rule and no confirmed item, so no mail ever reached it.
   const BAKERY = 'desk@bakery.example.invalid';
+  const prior = process.env.WALNUT_MAIL_AUTO_ROUTER;
+  beforeEach(() => { process.env.WALNUT_MAIL_AUTO_ROUTER = '1'; });
+  afterEach(() => {
+    if (prior === undefined) delete process.env.WALNUT_MAIL_AUTO_ROUTER; else process.env.WALNUT_MAIL_AUTO_ROUTER = prior;
+  });
 
-  async function realRouter() {
-    const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'mail-router-real-'));
+  const routerOpen = async () => true;
+
+  /** A real areas file under a temp home: the Personal area and its router; `bind` binds ACCOUNT to it already. */
+  async function boundRouter(options: { paused?: boolean; bind?: boolean } = {}) {
+    const paused = options.paused ?? false;
+    const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'mail-router-bound-'));
     roots.push(home);
     seedTaskStore(home);
     await updateRouterAreas(home, () => ({
       version: 1,
-      areas: [
-        { id: 'personal', name: 'Personal', host: '__local__', taskIds: ['router-personal'], sources: [] },
-        { id: 'work', name: 'Work', host: '__local__', taskIds: ['router-work'], sources: [] },
-      ],
-      routers: [{ taskId: 'router-personal', areaId: 'personal', paused: false }, { taskId: 'router-work', areaId: 'work', paused: false }],
+      areas: [{ id: 'personal', name: 'Personal', host: '__local__', taskIds: ['router-personal'], sources: options.bind === false ? [] : [{ kind: 'mail', account: ACCOUNT }] }],
+      routers: [{ taskId: 'router-personal', areaId: 'personal', paused }],
       items: [],
+      ...(options.bind === false ? {} : { accountBindings: [{ kind: 'mail', account: ACCOUNT, areaId: 'personal', boundAt: 1 }] }),
     }) as RouterAreasFile);
-    const hooks: { beforeResolve?: () => Promise<void> } = {};
-    const ruleDeps: RouterRulesDeps = {
-      targets: async (wanted) => new Map(wanted.map((id) => [id, { title: id, open: true }])),
-      resolve: async (source) => {
-        const run = hooks.beforeResolve;
-        hooks.beforeResolve = undefined;
-        await run?.();
-        return resolveRouterItem(source);
-      },
-    };
-    const rule = (match: { from?: string; subject?: string }, taskId: string) =>
-      setRoutingRule(home, { ...match, taskId }, { by: 'human' });
-    const bind = async (entries: Array<{ ruleId: string; areaId: string }>) => {
-      const view = await routerRulesView(home, ruleDeps);
-      const byId = new Map(view.rules.map((one) => [one.id, one.revision]));
-      await saveRouterRuleBindings({
-        bindings: entries.map((one) => ({ ...one, revision: byId.get(one.ruleId)! })), expectedRevision: view.fileRevision,
-      }, home, ruleDeps);
-    };
-    const wakes = async (areaId: string) => (await checkRouterPending({ areaId }, {
+    const wakeDeps = (): RouterWakeDeps => ({
       readAreas: () => readRouterAreas(home),
-      getTask: async (id) => ({
-        id, phase: 'IN_PROGRESS', source: 'local', org_role: 'router', router_area_id: id.replace('router-', ''), router_paused: false,
-      }) as WakeTask,
+      getTask: async (id) => ({ id, phase: 'IN_PROGRESS', source: 'local', org_role: 'router', router_area_id: 'personal', router_paused: paused }) as WakeTask,
       orgEnabled: async () => true,
       routesFor: async () => new Map(),
       sessionsForTask: async () => [],
       send: async () => undefined,
       start: async () => ({}),
       nonce: () => 'n',
-    })).fire;
-    return { real: { home, ruleDeps }, hooks, rule, bind, wakes, items: async () => (await readRouterAreas(home)).items };
+    });
+    const wakes = async () => (await checkRouterPending({ areaId: 'personal' }, wakeDeps())).fire;
+    return { home, wakes, wakeDeps, openItems: async () => (await readRouterAreas(home)).openItems ?? [] };
   }
 
+  /** A tick of backfill, then `envelopes` arrive after m-1, with the real areas file and confirm. */
   async function arrive(
-    router: Awaited<ReturnType<typeof realRouter>>, envelopes: MailEnvelope[],
-    extra: { markRead?: boolean; decorate?: boolean } = {}, prepare?: (mail: Awaited<ReturnType<typeof harness>>) => void,
+    router: Awaited<ReturnType<typeof boundRouter>>, envelopes: MailEnvelope[],
+    extra: { markRead?: boolean; decorate?: boolean; routerOpen?: (taskId: string) => Promise<boolean> } = {}, prepare?: (mail: Awaited<ReturnType<typeof harness>>) => void,
   ) {
-    const mail = await harness({ real: router.real, ...extra });
+    const mail = await harness({ real: { home: router.home }, ...extra });
     prepare?.(mail);
     const unregister = registerMailRouterSource(mail.store, mail.bodies);
     await mail.sync.runTick({ force: true });
@@ -903,74 +963,296 @@ describe('with the real rules confirm and area file, only what the confirm wrote
     return { mail, unregister };
   }
 
-  it('an arrival two areas match at capture is withheld: no registry item, no wake, no headline', async () => {
-    const router = await realRouter();
-    const bakery = await router.rule({ from: 'bakery.example.invalid' }, 'task-florist');
-    const invoice = await router.rule({ subject: 'invoice' }, 'task-invoices');
-    await router.bind([{ ruleId: bakery.id, areaId: 'personal' }, { ruleId: invoice.id, areaId: 'work' }]);
-    const { mail, unregister } = await arrive(router, [envelope(2, { from: { address: BAKERY }, subject: 'Invoice for pickup' })]);
-    try {
-      expect(await router.items()).toEqual([]);
-      expect([await router.wakes('personal'), await router.wakes('work')]).toEqual([false, false]);
-      expect(mail.events).toEqual([expect.objectContaining({ count: 1, headlines: [] })]);
-    } finally { unregister(); }
-  });
+  async function bindAndArrive(router: Awaited<ReturnType<typeof boundRouter>>, envelopes: MailEnvelope[]) {
+    const outcome = await ensureAccountRouter('mail', ACCOUNT, { home: router.home, routerOpen });
+    return { outcome, ...await arrive(router, envelopes) };
+  }
 
-  it('a blank sender the body read never fills is withheld: the confirm writes nothing, so nothing is named', async () => {
-    const router = await realRouter();
-    const bakery = await router.rule({ from: 'bakery.example.invalid' }, 'task-florist');
-    await router.bind([{ ruleId: bakery.id, areaId: 'personal' }]);
-    const { mail, unregister } = await arrive(router, [envelope(2, { from: { name: 'Desk', address: '' }, subject: 'Pickup' })]);
+  it('binds the mailbox to the one router area and gives that router every arrival, with no rule', async () => {
+    const router = await boundRouter({ bind: false });
+    const { outcome, mail, unregister } = await bindAndArrive(router, [envelope(2), envelope(3, { subject: 'A newsletter' }), envelope(4)]);
     try {
-      expect((await rowOf(mail.store, 'inbox:m-2')).from_addr).toBe('');
-      // The rule could not be cleared, so the confirm was asked, and answered it wrote nothing.
-      expect(mail.confirmed()).toHaveLength(1);
-      expect(mail.written).toEqual([[]]);
-      expect(await router.items()).toEqual([]);
-      expect(await router.wakes('personal')).toBe(false);
-      expect(mail.events).toEqual([expect.objectContaining({ count: 1, headlines: [] })]);
-    } finally { unregister(); }
-  });
-
-  it('a binding moved while the confirm runs grants nothing, so the arrival is not named', async () => {
-    const router = await realRouter();
-    const bakery = await router.rule({ from: 'bakery.example.invalid' }, 'task-florist');
-    await router.bind([{ ruleId: bakery.id, areaId: 'personal' }]);
-    // After the finish read its bindings, before the confirm takes the lock.
-    router.hooks.beforeResolve = () => router.bind([{ ruleId: bakery.id, areaId: 'work' }]);
-    const { mail, unregister } = await arrive(router, [envelope(2, { from: { address: BAKERY }, subject: 'Pickup' })]);
-    try {
-      expect(mail.confirmed()).toHaveLength(1);
-      expect(mail.written).toEqual([[]]);
-      expect(await router.items()).toEqual([]);
-      expect([await router.wakes('personal'), await router.wakes('work')]).toEqual([false, false]);
-      expect(mail.events).toEqual([expect.objectContaining({ count: 1, headlines: [] })]);
-    } finally { unregister(); }
-  });
-
-  it('a confirmed arrival is named once at its written version, beside an ordinary one', async () => {
-    const router = await realRouter();
-    const bakery = await router.rule({ from: 'bakery.example.invalid' }, 'task-florist');
-    await router.bind([{ ruleId: bakery.id, areaId: 'personal' }]);
-    const { mail, unregister } = await arrive(router, [
-      envelope(2, { from: { address: BAKERY }, subject: 'Pickup' }), envelope(3, { subject: 'Ordinary arrival' }),
-    ]);
-    try {
-      const [m2, m3] = await Promise.all(['inbox:m-2', 'inbox:m-3'].map((id) => rowOf(mail.store, id)));
-      const final = { kind: 'mail' as const, account: ACCOUNT, message: 'inbox:m-2', version: mailRowDeliveryVersion(m2!) };
-      expect(mail.written).toEqual([[final]]);
-      expect((await router.items()).map((one) => [one.source, one.areaId])).toEqual([[final, 'personal']]);
-      expect([await router.wakes('personal'), await router.wakes('work')]).toEqual([true, false]);
-      expect(mail.events.map((one) => one.headlines.map((headline) => [headline.messageId, headline.version]))).toEqual([[
-        ['inbox:m-2', final.version], ['inbox:m-3', mailRowDeliveryVersion(m3!)],
-      ]]);
-
-      // The same listing again is no arrival: nothing confirmed or named again, the one item kept.
+      expect(outcome).toEqual({ bound: true, areaId: 'personal', created: false, already: false });
+      const file = await readRouterAreas(router.home);
+      expect(file.accountBindings).toEqual([{ kind: 'mail', account: ACCOUNT, areaId: 'personal', boundAt: expect.any(Number) }]);
+      expect(file.areas[0].sources).toEqual([{ kind: 'mail', account: ACCOUNT }]);
+      // Open, never restricted: the confirmed list stays empty.
+      expect(file.items).toEqual([]);
+      expect((file.openItems ?? []).map((one) => one.source.message).sort()).toEqual(ids(2, 3, 4));
+      expect(await router.wakes()).toBe(true);
+      const pending = await pendingSources(file, file.areas[0], { routesFor: async () => new Map() });
+      expect(pending.map((one) => one.message).sort()).toEqual(ids(2, 3, 4));
+      // Every arrival is still announced, at the version the router holds.
+      const announced = mail.events.at(-1)!.headlines;
+      expect(announced.map((one) => one.messageId).sort()).toEqual(ids(2, 3, 4));
+      expect(announced.map((one) => one.version).sort()).toEqual((file.openItems ?? []).map((one) => one.source.version).sort());
+      // The same listing again is no new arrival.
       await mail.sync.runTick({ force: true });
-      expect(mail.confirmed()).toHaveLength(1);
-      expect(mail.events.at(-1)).toMatchObject({ count: 0, headlines: [] });
-      expect(await router.items()).toHaveLength(1);
+      expect(await router.openItems()).toHaveLength(3);
     } finally { unregister(); }
+  });
+
+  it('a paused router keeps its mail: arrivals are entered, and the wake waits for the resume', async () => {
+    const router = await boundRouter({ paused: true });
+    const { mail, unregister } = await arrive(router, [envelope(2)]);
+    try {
+      const row = await rowOf(mail.store, 'inbox:m-2');
+      expect((await router.openItems()).map((one) => one.source)).toEqual([{ kind: 'mail', account: ACCOUNT, message: 'inbox:m-2', version: mailRowDeliveryVersion(row) }]);
+      expect(mail.written).toEqual([[{ kind: 'mail', account: ACCOUNT, message: 'inbox:m-2', version: mailRowDeliveryVersion(row) }]]);
+      expect(await router.wakes()).toBe(false);
+      expect(mail.events.at(-1)!.headlines.map((one) => one.messageId)).toEqual(['inbox:m-2']);
+      // Resumed: the same item wakes it, nothing re-entered.
+      await updateRouterAreas(router.home, (file) => ({ ...file, routers: file.routers.map((one) => ({ ...one, paused: false })) }));
+      const resumed = { ...router.wakeDeps(), getTask: async (id: string) => ({ id, phase: 'IN_PROGRESS', source: 'local', org_role: 'router', router_area_id: 'personal', router_paused: false }) as WakeTask };
+      expect((await checkRouterPending({ areaId: 'personal' }, resumed)).fire).toBe(true);
+    } finally { unregister(); }
+  });
+
+  it('a mailbox whose area has no router at all keeps its mail and tells the person once; a router given to the area gets it', async () => {
+    const router = await boundRouter();
+    await updateRouterAreas(router.home, (file) => ({ ...file, routers: [] }));
+    const { mail, unregister } = await arrive(router, [envelope(2)]);
+    try {
+      expect(mail.confirmed()).toEqual([]);
+      expect(await router.openItems()).toEqual([]);
+      expect(mail.events.at(-1)!.headlines.map((one) => one.messageId)).toEqual(['inbox:m-2']);
+      expect(await mail.pending()).toEqual(ids(2));
+      expect(mail.letters.map((one) => one.params)).toEqual([{ mailbox: 'acct-a@example.invalid', reason: 'none' }]);
+      await mail.sync.runTick({ force: true });
+      expect(mail.letters).toHaveLength(1);
+
+      // The area gets its router back: the next tick's retry lists the kept mail.
+      await updateRouterAreas(router.home, (file) => ({ ...file, routers: [{ taskId: 'router-personal', areaId: 'personal', paused: false }] }));
+      await mail.sync.runTick({ force: true });
+      expect((await router.openItems()).map((one) => one.source.message)).toEqual(['inbox:m-2']);
+      expect(await mail.pending()).toEqual([]);
+      expect(await mail.notices()).toEqual({});
+      expect(mail.letters).toHaveLength(1);
+    } finally { unregister(); }
+  });
+
+  it('a mailbox whose router is complete lists its mail for the reopen and tells the person once per episode', async () => {
+    const router = await boundRouter();
+    const state = { open: false };
+    const { mail, unregister } = await arrive(router, [envelope(2)], { routerOpen: async () => state.open });
+    try {
+      // Listed for the area, so the reopened router is woken for it; nothing waits in the queue.
+      expect((await router.openItems()).map((one) => one.source.message)).toEqual(['inbox:m-2']);
+      expect(await mail.pending()).toEqual([]);
+      expect(mail.letters.map((one) => one.params)).toEqual([{ mailbox: 'acct-a@example.invalid', reason: 'closed' }]);
+      mail.listing.current = [envelope(1), envelope(2), envelope(3)];
+      await mail.sync.runTick({ force: true });
+      expect((await router.openItems()).map((one) => one.source.message)).toEqual(ids(2, 3));
+      expect(mail.letters).toHaveLength(1);
+
+      // Reopened: the next tick ends the episode; closed again later, a new mail starts a new one.
+      state.open = true;
+      await mail.sync.runTick({ force: true });
+      expect(await mail.notices()).toEqual({});
+      state.open = false;
+      mail.clock.at += 60_000;
+      mail.listing.current = [envelope(1), envelope(2), envelope(3), envelope(4)];
+      await mail.sync.runTick({ force: true });
+      expect(mail.letters).toHaveLength(2);
+      expect(mail.letters[1]!.opKey).not.toBe(mail.letters[0]!.opKey);
+    } finally { unregister(); }
+  });
+
+  it('an arrival a filter moves out of the inbox before the router wakes still reaches the router, at its new copy', async () => {
+    // 2026-11-12, prod: a CI notice arrived in the inbox, the person's keep-out-of-inbox rule moved it
+    // seconds later, and the router's next wake found no current copy: no wake, no receipt.
+    const router = await boundRouter();
+    const { mail, unregister } = await arrive(router, [envelope(2, { subject: 'Run failed: CI' }), envelope(3)]);
+    try {
+      expect((await router.openItems()).map((one) => one.source.message).sort()).toEqual(ids(2, 3));
+      // The cache now holds the message only in the CI folder, under another id.
+      await mail.db.run('UPDATE messages SET mailbox_id = ?, message_id = ? WHERE account_id = ? AND message_id = ?', ['ci', 'ci:m-2', ACCOUNT, 'inbox:m-2']);
+      const before = await readRouterAreas(router.home);
+      expect((await pendingSources(before, before.areas[0], { routesFor: async () => new Map() })).map((one) => one.message)).toEqual(['inbox:m-3']);
+
+      expect(await followOpenArrivals('personal', { routesFor: async () => new Map() }, router.home)).toBe(1);
+      const after = await readRouterAreas(router.home);
+      const moved = after.openItems!.find((one) => one.source.message === 'ci:m-2')!;
+      expect(moved.source.version).toBe(mailRowDeliveryVersion(await rowOf(mail.store, 'ci:m-2')));
+      expect(moved.canonicalKey).toBe(before.openItems!.find((one) => one.source.message === 'inbox:m-2')!.canonicalKey);
+      expect((await pendingSources(after, after.areas[0], { routesFor: async () => new Map() })).map((one) => one.message).sort()).toEqual(['ci:m-2', 'inbox:m-3']);
+      // Followed once: nothing changes again.
+      expect(await followOpenArrivals('personal', { routesFor: async () => new Map() }, router.home)).toBe(0);
+
+      // A message the cache holds no copy of any more leaves the list.
+      await mail.db.run('DELETE FROM messages WHERE account_id = ? AND message_id = ?', [ACCOUNT, 'inbox:m-3']);
+      expect(await followOpenArrivals('personal', { routesFor: async () => new Map() }, router.home)).toBe(1);
+      expect((await router.openItems()).map((one) => one.source.message)).toEqual(['ci:m-2']);
+    } finally { unregister(); }
+  });
+
+  it('the wake check follows a moved arrival first, so the router is woken for it', async () => {
+    const router = await boundRouter();
+    const { mail, unregister } = await arrive(router, [envelope(2)]);
+    try {
+      await mail.db.run('UPDATE messages SET mailbox_id = ?, message_id = ? WHERE account_id = ? AND message_id = ?', ['ci', 'ci:m-2', ACCOUNT, 'inbox:m-2']);
+      expect(await router.wakes()).toBe(false);
+      const fire = (await checkRouterPending({ areaId: 'personal' }, {
+        ...router.wakeDeps(),
+        followOpen: (areaId) => followOpenArrivals(areaId, { routesFor: async () => new Map() }, router.home),
+      })).fire;
+      expect(fire).toBe(true);
+    } finally { unregister(); }
+  });
+
+  it('one arrival the source cannot follow never holds back the others, and an unknown answer keeps it', async () => {
+    const router = await boundRouter();
+    const { mail, unregister } = await arrive(router, [envelope(2), envelope(3)]);
+    try {
+      for (const n of [2, 3]) {
+        await mail.db.run('UPDATE messages SET mailbox_id = ?, message_id = ? WHERE account_id = ? AND message_id = ?', ['ci', `ci:m-${n}`, ACCOUNT, `inbox:m-${n}`]);
+      }
+      const relocate = async (source: RouterSource, scopeKey: string) => {
+        if (source.message === 'inbox:m-2') throw new Error('cache unavailable');
+        return relocateRouterItem(source, scopeKey);
+      };
+      expect(await followOpenArrivals('personal', { routesFor: async () => new Map(), relocate }, router.home)).toBe(1);
+      expect((await router.openItems()).map((one) => one.source.message).sort()).toEqual(['ci:m-3', 'inbox:m-2']);
+      // A source that cannot tell (undefined) leaves the item as it is.
+      expect(await followOpenArrivals('personal', { routesFor: async () => new Map(), relocate: async () => undefined }, router.home)).toBe(0);
+      expect((await router.openItems()).map((one) => one.source.message).sort()).toEqual(['ci:m-3', 'inbox:m-2']);
+    } finally { unregister(); }
+  });
+
+  it('a mail with no RFC id that moved under another id is kept, never dropped as gone', async () => {
+    const router = await boundRouter();
+    const { mail, unregister } = await arrive(router, [envelope(2, { rfcMessageId: '' })]);
+    try {
+      const listed = await router.openItems();
+      expect(listed.map((one) => one.source.message)).toEqual(['inbox:m-2']);
+      await mail.db.run('UPDATE messages SET mailbox_id = ?, message_id = ? WHERE account_id = ? AND message_id = ?', ['ci', 'ci:m-2', ACCOUNT, 'inbox:m-2']);
+      expect(await followOpenArrivals('personal', { routesFor: async () => new Map() }, router.home)).toBe(0);
+      expect(await router.openItems()).toEqual(listed);
+    } finally { unregister(); }
+  });
+
+  it('a routed arrival stays where it was routed when its mail moves', async () => {
+    const router = await boundRouter();
+    const { mail, unregister } = await arrive(router, [envelope(2)]);
+    try {
+      const routed = (await router.openItems())[0]!.source;
+      await mail.db.run('UPDATE messages SET mailbox_id = ?, message_id = ? WHERE account_id = ? AND message_id = ?', ['ci', 'ci:m-2', ACCOUNT, 'inbox:m-2']);
+      const routesFor = async (_area: string, sources: readonly RouterSource[]) => new Map(sources.map((one) => [routerKey(one), {} as RouterRoute]));
+      expect(await followOpenArrivals('personal', { routesFor }, router.home)).toBe(0);
+      expect((await router.openItems()).map((one) => one.source)).toEqual([routed]);
+    } finally { unregister(); }
+  });
+
+  it('is off with WALNUT_MAIL_AUTO_ROUTER=0', async () => {
+    const router = await boundRouter({ bind: false });
+    process.env.WALNUT_MAIL_AUTO_ROUTER = '0';
+    expect(await ensureAccountRouter('mail', ACCOUNT, { home: router.home, routerOpen })).toEqual({ bound: false, reason: 'off' });
+    expect((await readRouterAreas(router.home)).accountBindings).toBeUndefined();
+  });
+
+  it('the areas file keeps open arrivals honest: one listing per source, a binding needs its source, an item never changes area', () => {
+    const base = {
+      version: 1, routers: [],
+      areas: [
+        { id: 'personal', name: 'Personal', host: '__local__', taskIds: [], sources: [{ kind: 'mail', account: ACCOUNT }] },
+        { id: 'family', name: 'Family', host: '__local__', taskIds: [], sources: [{ kind: 'mail', account: ACCOUNT }] },
+      ],
+    };
+    const item = { source: { kind: 'mail', account: ACCOUNT, message: 'inbox:m-1', version: 'v1' }, areaId: 'personal' };
+    expect(() => normalizeRouterAreas({ ...base, items: [item], openItems: [item] })).toThrow(/listed twice/);
+    expect(() => normalizeRouterAreas({ ...base, items: [], accountBindings: [{ kind: 'mail', account: OTHER, areaId: 'personal', boundAt: 1 }] }))
+      .toThrow(/no mail source for its bound account/);
+    const closed = normalizeRouterAreas({ ...base, items: [item] });
+    const reopened = normalizeRouterAreas({ ...base, items: [], openItems: [item] });
+    const empty = normalizeRouterAreas({ ...base, items: [] });
+    // A restricted item may become an open one of the same area (the 2026-11-14 move), and any item may leave the list.
+    expect(() => assertNoReassignment(closed, reopened)).not.toThrow();
+    expect(() => assertNoReassignment(reopened, closed)).not.toThrow();
+    expect(() => assertNoReassignment(reopened, empty)).not.toThrow();
+    expect(() => assertNoReassignment(closed, empty)).not.toThrow();
+    // Never to another area.
+    const elsewhere = normalizeRouterAreas({ ...base, items: [], openItems: [{ ...item, areaId: 'family' }] });
+    expect(() => assertNoReassignment(reopened, elsewhere)).toThrow(/cannot move from area personal to family/);
+  });
+
+  it('binds every mailbox the cache holds at start', async () => {
+    const router = await boundRouter({ bind: false });
+    const { store } = await cache([ACCOUNT, OTHER]);
+    await bindMailAccounts(store, router.home, undefined, (accountId, at) => ensureAccountRouter('mail', accountId, { home: at, routerOpen }));
+    expect((await readRouterAreas(router.home)).accountBindings?.map((one) => [one.account, one.areaId]))
+      .toEqual([[ACCOUNT, 'personal'], [OTHER, 'personal']]);
+  });
+
+  describe('which router a mailbox is bound to (pickArea)', () => {
+    const MAIL_AREA = { id: 'mail', name: 'Mail', host: '__local__', taskIds: ['router-mail'], sources: [] };
+    const MAIL_ROUTER = { taskId: 'router-mail', areaId: 'mail', paused: false };
+
+    async function homeWith(areas: Array<{ id: string; router: string }>) {
+      const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'mail-router-pick-'));
+      roots.push(home);
+      seedTaskStore(home);
+      await updateRouterAreas(home, () => ({
+        version: 1, items: [],
+        areas: areas.map((one) => ({ id: one.id, name: one.id, host: '__local__', taskIds: [one.router], sources: [] })),
+        routers: areas.map((one) => ({ taskId: one.router, areaId: one.id, paused: false })),
+      }) as RouterAreasFile);
+      const made: string[] = [];
+      // As the Org's router setup does: the Mail area and its router join whatever the file holds.
+      const createRouter = async (_kind: string, account: string) => {
+        made.push(account);
+        await updateRouterAreas(home, (file) => ({
+          ...file,
+          areas: [...file.areas, { ...MAIL_AREA, sources: [{ kind: 'mail', account }] }],
+          routers: [...file.routers, MAIL_ROUTER],
+        }));
+        return 'router-mail';
+      };
+      return { home, made, createRouter };
+    }
+
+    it('several open routers and a Mail router: the mailbox goes to the Mail router', async () => {
+      const { home, made, createRouter } = await homeWith([{ id: 'personal', router: 'r-1' }, { id: 'mail', router: 'router-mail' }]);
+      expect(await ensureAccountRouter('mail', ACCOUNT, { home, routerOpen, createRouter })).toEqual({ bound: true, areaId: 'mail', created: false, already: false });
+      expect(made).toEqual([]);
+      expect((await readRouterAreas(home)).accountBindings?.map((one) => [one.account, one.areaId])).toEqual([[ACCOUNT, 'mail']]);
+    });
+
+    it('several open routers and no Mail router: the Mail router is made and takes the mailbox, never left unbound', async () => {
+      const { home, made, createRouter } = await homeWith([{ id: 'personal', router: 'r-1' }, { id: 'family', router: 'r-2' }]);
+      expect(await ensureAccountRouter('mail', ACCOUNT, { home, routerOpen, createRouter })).toEqual({ bound: true, areaId: 'mail', created: true, already: false });
+      expect(made).toEqual([ACCOUNT]);
+      expect((await readRouterAreas(home)).accountBindings?.map((one) => [one.account, one.areaId])).toEqual([[ACCOUNT, 'mail']]);
+    });
+
+    it('no router area at all: one Mail router is made, active, for the first mailbox, and the next joins it', async () => {
+      const { home, made, createRouter } = await homeWith([]);
+      const [first, second] = await Promise.all([
+        ensureAccountRouter('mail', ACCOUNT, { home, routerOpen, createRouter }),
+        ensureAccountRouter('mail', OTHER, { home, routerOpen, createRouter }),
+      ]);
+      expect(made).toEqual([ACCOUNT]);
+      expect(first).toEqual({ bound: true, areaId: 'mail', created: true, already: false });
+      expect(second).toEqual({ bound: true, areaId: 'mail', created: false, already: false });
+      expect((await readRouterAreas(home)).accountBindings?.map((one) => one.account)).toEqual([ACCOUNT, OTHER]);
+    });
+
+    it('the kind\'s other mailboxes are bound to one area: a new one joins it, whatever else is open', async () => {
+      const { home, createRouter } = await homeWith([{ id: 'personal', router: 'r-1' }, { id: 'mail', router: 'router-mail' }]);
+      await updateRouterAreas(home, (file) => ({
+        ...file,
+        areas: file.areas.map((one) => one.id === 'personal' ? { ...one, sources: [{ kind: 'mail', account: OTHER }] } : one),
+        accountBindings: [{ kind: 'mail', account: OTHER, areaId: 'personal', boundAt: 1 }],
+      }));
+      expect(await ensureAccountRouter('mail', ACCOUNT, { home, routerOpen, createRouter })).toMatchObject({ bound: true, areaId: 'personal' });
+    });
+
+    it('a Mail area whose router is closed is the person\'s pick: nothing is bound and nothing made', async () => {
+      const { home, made, createRouter } = await homeWith([{ id: 'personal', router: 'r-1' }, { id: 'family', router: 'r-2' }, { id: 'mail', router: 'router-mail' }]);
+      const closed = async (id: string) => id !== 'router-mail';
+      expect(await ensureAccountRouter('mail', ACCOUNT, { home, routerOpen: closed, createRouter })).toEqual({ bound: false, reason: 'choose' });
+      expect(made).toEqual([]);
+      expect((await readRouterAreas(home)).accountBindings).toBeUndefined();
+    });
   });
 
   describe('a routed arrival read and marked in the mailbox', () => {
@@ -990,31 +1272,26 @@ describe('with the real rules confirm and area file, only what the confirm wrote
       }],
     ];
 
-    /** One bakery arrival confirmed into Personal by its rule, then routed for real: only the session send is a stand-in. */
-    async function routedArrival(router: Awaited<ReturnType<typeof realRouter>>, shape: Shape = SHAPES[0]![1]) {
-      const bakery = await router.rule({ from: 'bakery.example.invalid' }, FLORIST);
-      await router.bind([{ ruleId: bakery.id, areaId: 'personal' }]);
+    /** One bakery arrival entered into Personal by the bound mailbox, then routed for real: only the session send is a stand-in. */
+    async function routedArrival(router: Awaited<ReturnType<typeof boundRouter>>, shape: Shape = SHAPES[0]![1]) {
       // `bodyBytes` lands in the payload as a hint, so the prefetch and a later poll write its keys in different orders.
       const arrived = await arrive(router, [envelope(2, { from: { address: BAKERY }, subject: 'Pickup', bodyBytes: 40, ...shape.envelope })],
         { markRead: true, decorate: true }, (mail) => {
           mail.bodyFrom.current = shape.bodyFrom;
           mail.bodyAddresses.current = shape.bodyAddresses;
         });
-      // The rule's target is work of this area, so a route may name it.
-      await updateRouterAreas(router.real.home, (file) => ({
-        ...file, areas: file.areas.map((area) => area.id === 'personal' ? { ...area, taskIds: [...area.taskIds, FLORIST] } : area),
-      }));
       const row = await rowOf(arrived.mail.store, M2);
       expect(row.body_ref).toBeTruthy();
       const source: RouterSource = { kind: 'mail', account: ACCOUNT, message: M2, version: mailRowDeliveryVersion(row) };
-      expect((await router.items()).map((one) => one.source)).toEqual([source]);
+      expect((await router.openItems()).map((one) => one.source)).toEqual([source]);
       const sent: RouterRoute[] = [];
+      // The florist task is ordinary open work in no area: the router hands it the mail straight.
       const route = async (at: RouterSource) => routeItem(
         { source: at, taskId: FLORIST, reason: 'Bakery mail goes to the florist task.', text: 'Please book the pickup.' },
         {
-          areas: await readRouterAreas(router.real.home),
-          store: routerStore('personal', router.real.home),
-          getTask: async (id) => ({ id, title: id, phase: 'IN_PROGRESS', source: 'local', router_area_id: 'personal' }) as Task,
+          areas: await readRouterAreas(router.home),
+          store: routerStore('personal', router.home),
+          getTask: async (id) => ({ id, title: id, phase: 'IN_PROGRESS', source: 'local' }) as Task,
           send: async (one) => { sent.push(one); },
         },
       );
@@ -1036,7 +1313,7 @@ describe('with the real rules confirm and area file, only what the confirm wrote
       ({ version: one.deliveryVersion, area: one.routingArea, route: one.route, unavailable: one.routingUnavailable });
 
     it.each(SHAPES)('%s: every poll after a read flag keeps the same version and receipt, the source still reads from cache, and nothing arrives or sends again', async (_name, shape) => {
-      const router = await realRouter();
+      const router = await boundRouter();
       const { mail, unregister, row: prefetched, source, receipt, sent, route } = await routedArrival(router, shape);
       try {
         const before = await views(mail);
@@ -1087,8 +1364,8 @@ describe('with the real rules confirm and area file, only what the confirm wrote
         expect(mail.captured).toHaveLength(start.captured);
         expect(mail.confirmed()).toHaveLength(start.confirmed);
         expect(mail.events.slice(start.events).map((one) => [one.count, one.headlines])).toEqual([[0, []], [0, []], [0, []]]);
-        expect((await router.items()).map((one) => one.source)).toEqual([source]);
-        expect([...(await routerStore('personal', router.real.home).getSources([source])).values()]).toEqual([receipt]);
+        expect((await router.openItems()).map((one) => one.source)).toEqual([source]);
+        expect([...(await routerStore('personal', router.home).getSources([source])).values()]).toEqual([receipt]);
       } finally { unregister(); await disposeRouterStores(); }
     });
 
@@ -1098,7 +1375,7 @@ describe('with the real rules confirm and area file, only what the confirm wrote
       ['a re-decoded subject', (one: MailEnvelope) => ({ ...one, subject: 'Pickup moved to Friday' }), false],
       ['an attachment the listing now names', (one: MailEnvelope) => ({ ...one, attachments: [{ filename: 'form.pdf', mimeType: 'application/pdf', bytes: 9 }] }), false],
     ] as const)('%s is another delivery: the old receipt and confirmation are never shown on it', async (_name, change, withFlag) => {
-      const router = await realRouter();
+      const router = await boundRouter();
       const { mail, unregister, source, receipt, sent, route } = await routedArrival(router);
       try {
         const start = { captured: mail.captured.length, confirmed: mail.confirmed().length };
@@ -1121,279 +1398,9 @@ describe('with the real rules confirm and area file, only what the confirm wrote
         expect(mail.events.at(-1)).toMatchObject({ count: 0, headlines: [] });
         expect(sent).toHaveLength(1);
         expect(mail.calls.send).toBe(0);
-        expect((await router.items()).map((one) => one.source)).toEqual([source]);
-        expect([...(await routerStore('personal', router.real.home).getSources([source])).values()]).toEqual([receipt]);
+        expect((await router.openItems()).map((one) => one.source)).toEqual([source]);
+        expect([...(await routerStore('personal', router.home).getSources([source])).values()]).toEqual([receipt]);
       } finally { unregister(); await disposeRouterStores(); }
     });
-  });
-});
-
-describe('a mailbox bound to its router: every new mail reaches that router', () => {
-  // 2026-11-12: the prod Personal router had no rule and no confirmed item, so no mail ever reached it.
-  const prior = process.env.WALNUT_MAIL_AUTO_ROUTER;
-  beforeEach(() => { process.env.WALNUT_MAIL_AUTO_ROUTER = '1'; });
-  afterEach(() => {
-    if (prior === undefined) delete process.env.WALNUT_MAIL_AUTO_ROUTER; else process.env.WALNUT_MAIL_AUTO_ROUTER = prior;
-  });
-
-  async function personalRouter(paused = false) {
-    const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'mail-router-bound-'));
-    roots.push(home);
-    seedTaskStore(home);
-    await updateRouterAreas(home, () => ({
-      version: 1,
-      areas: [{ id: 'personal', name: 'Personal', host: '__local__', taskIds: ['router-personal'], sources: [] }],
-      routers: [{ taskId: 'router-personal', areaId: 'personal', paused }],
-      items: [],
-    }) as RouterAreasFile);
-    const wakes = async () => (await checkRouterPending({ areaId: 'personal' }, {
-      readAreas: () => readRouterAreas(home),
-      getTask: async (id) => ({ id, phase: 'IN_PROGRESS', source: 'local', org_role: 'router', router_area_id: 'personal', router_paused: paused }) as WakeTask,
-      orgEnabled: async () => true,
-      routesFor: async () => new Map(),
-      sessionsForTask: async () => [],
-      send: async () => undefined,
-      start: async () => ({}),
-      nonce: () => 'n',
-    })).fire;
-    return { home, wakes, ruleDeps: { targets: async (wanted: string[]) => new Map(wanted.map((id) => [id, { title: id, open: true }])) } as RouterRulesDeps };
-  }
-
-  const routerOpen = async () => true;
-
-  async function bindAndArrive(router: Awaited<ReturnType<typeof personalRouter>>, envelopes: MailEnvelope[]) {
-    const outcome = await ensureAccountRouter('mail', ACCOUNT, { home: router.home, routerOpen });
-    const mail = await harness({ real: { home: router.home, ruleDeps: router.ruleDeps } });
-    const unregister = registerMailRouterSource(mail.store, mail.bodies);
-    await mail.sync.runTick({ force: true });
-    mail.listing.current = [envelope(1), ...envelopes];
-    await mail.sync.runTick({ force: true });
-    return { outcome, mail, unregister };
-  }
-
-  it('an arrival a filter moves out of the inbox before the router wakes still reaches the router, at its new copy', async () => {
-    // 2026-11-12, prod: a CI notice arrived in the inbox, the person's keep-out-of-inbox rule moved it
-    // seconds later, and the router's next wake found no current copy: no wake, no receipt.
-    const router = await personalRouter();
-    const { mail, unregister } = await bindAndArrive(router, [envelope(2, { subject: 'Run failed: CI' }), envelope(3)]);
-    try {
-      expect((await readRouterAreas(router.home)).openItems!.map((one) => one.source.message).sort()).toEqual(ids(2, 3));
-      // The cache now holds the message only in the CI folder, under another id.
-      await mail.db.run('UPDATE messages SET mailbox_id = ?, message_id = ? WHERE account_id = ? AND message_id = ?', ['ci', 'ci:m-2', ACCOUNT, 'inbox:m-2']);
-      const before = await readRouterAreas(router.home);
-      expect((await pendingSources(before, before.areas[0], { routesFor: async () => new Map() })).map((one) => one.message)).toEqual(['inbox:m-3']);
-
-      expect(await followOpenArrivals('personal', { routesFor: async () => new Map() }, router.home)).toBe(1);
-      const after = await readRouterAreas(router.home);
-      const moved = after.openItems!.find((one) => one.source.message === 'ci:m-2')!;
-      expect(moved.source.version).toBe(mailRowDeliveryVersion(await rowOf(mail.store, 'ci:m-2')));
-      expect(moved.canonicalKey).toBe(before.openItems!.find((one) => one.source.message === 'inbox:m-2')!.canonicalKey);
-      expect((await pendingSources(after, after.areas[0], { routesFor: async () => new Map() })).map((one) => one.message).sort()).toEqual(['ci:m-2', 'inbox:m-3']);
-      // Followed once: nothing changes again, and a routed arrival never moves.
-      expect(await followOpenArrivals('personal', { routesFor: async () => new Map() }, router.home)).toBe(0);
-
-      // A message the cache holds no copy of any more leaves the list.
-      await mail.db.run('DELETE FROM messages WHERE account_id = ? AND message_id = ?', [ACCOUNT, 'inbox:m-3']);
-      expect(await followOpenArrivals('personal', { routesFor: async () => new Map() }, router.home)).toBe(1);
-      expect((await readRouterAreas(router.home)).openItems!.map((one) => one.source.message)).toEqual(['ci:m-2']);
-    } finally { unregister(); }
-  });
-
-  it('the wake check follows a moved arrival first, so the router is woken for it', async () => {
-    const router = await personalRouter();
-    const { mail, unregister } = await bindAndArrive(router, [envelope(2)]);
-    try {
-      await mail.db.run('UPDATE messages SET mailbox_id = ?, message_id = ? WHERE account_id = ? AND message_id = ?', ['ci', 'ci:m-2', ACCOUNT, 'inbox:m-2']);
-      expect(await router.wakes()).toBe(false);
-      const fire = (await checkRouterPending({ areaId: 'personal' }, {
-        readAreas: () => readRouterAreas(router.home),
-        getTask: async (id) => ({ id, phase: 'IN_PROGRESS', source: 'local', org_role: 'router', router_area_id: 'personal', router_paused: false }) as WakeTask,
-        orgEnabled: async () => true,
-        routesFor: async () => new Map(),
-        sessionsForTask: async () => [],
-        send: async () => undefined,
-        start: async () => ({}),
-        nonce: () => 'n',
-        followOpen: (areaId) => followOpenArrivals(areaId, { routesFor: async () => new Map() }, router.home),
-      })).fire;
-      expect(fire).toBe(true);
-    } finally { unregister(); }
-  });
-
-  it('one arrival the source cannot follow never holds back the others, and an unknown answer keeps it', async () => {
-    const router = await personalRouter();
-    const { mail, unregister } = await bindAndArrive(router, [envelope(2), envelope(3)]);
-    try {
-      for (const n of [2, 3]) {
-        await mail.db.run('UPDATE messages SET mailbox_id = ?, message_id = ? WHERE account_id = ? AND message_id = ?', ['ci', `ci:m-${n}`, ACCOUNT, `inbox:m-${n}`]);
-      }
-      const relocate = async (source: RouterSource, scopeKey: string) => {
-        if (source.message === 'inbox:m-2') throw new Error('cache unavailable');
-        return relocateRouterItem(source, scopeKey);
-      };
-      expect(await followOpenArrivals('personal', { routesFor: async () => new Map(), relocate }, router.home)).toBe(1);
-      expect((await readRouterAreas(router.home)).openItems!.map((one) => one.source.message).sort()).toEqual(['ci:m-3', 'inbox:m-2']);
-      // A source that cannot tell (undefined) leaves the item as it is.
-      expect(await followOpenArrivals('personal', { routesFor: async () => new Map(), relocate: async () => undefined }, router.home)).toBe(0);
-      expect((await readRouterAreas(router.home)).openItems!.map((one) => one.source.message).sort()).toEqual(['ci:m-3', 'inbox:m-2']);
-    } finally { unregister(); }
-  });
-
-  it('a mail with no RFC id that moved under another id is kept, never dropped as gone', async () => {
-    const router = await personalRouter();
-    const { mail, unregister } = await bindAndArrive(router, [envelope(2, { rfcMessageId: '' })]);
-    try {
-      const listed = (await readRouterAreas(router.home)).openItems!;
-      expect(listed.map((one) => one.source.message)).toEqual(['inbox:m-2']);
-      await mail.db.run('UPDATE messages SET mailbox_id = ?, message_id = ? WHERE account_id = ? AND message_id = ?', ['ci', 'ci:m-2', ACCOUNT, 'inbox:m-2']);
-      expect(await followOpenArrivals('personal', { routesFor: async () => new Map() }, router.home)).toBe(0);
-      expect((await readRouterAreas(router.home)).openItems).toEqual(listed);
-    } finally { unregister(); }
-  });
-
-  it('a routed arrival stays where it was routed when its mail moves', async () => {
-    const router = await personalRouter();
-    const { mail, unregister } = await bindAndArrive(router, [envelope(2)]);
-    try {
-      const routed = (await readRouterAreas(router.home)).openItems![0]!.source;
-      await mail.db.run('UPDATE messages SET mailbox_id = ?, message_id = ? WHERE account_id = ? AND message_id = ?', ['ci', 'ci:m-2', ACCOUNT, 'inbox:m-2']);
-      const routesFor = async (_area: string, sources: readonly RouterSource[]) => new Map(sources.map((one) => [routerKey(one), {} as RouterRoute]));
-      expect(await followOpenArrivals('personal', { routesFor }, router.home)).toBe(0);
-      expect((await readRouterAreas(router.home)).openItems!.map((one) => one.source)).toEqual([routed]);
-    } finally { unregister(); }
-  });
-
-  it('binds the mailbox to the one router area and gives that router every arrival, with no rule', async () => {
-    const router = await personalRouter();
-    const { outcome, mail, unregister } = await bindAndArrive(router, [envelope(2), envelope(3, { subject: 'A newsletter' }), envelope(4)]);
-    try {
-      expect(outcome).toEqual({ bound: true, areaId: 'personal', created: false, already: false });
-      const file = await readRouterAreas(router.home);
-      expect(file.accountBindings).toEqual([{ kind: 'mail', account: ACCOUNT, areaId: 'personal', boundAt: expect.any(Number) }]);
-      expect(file.areas[0].sources).toEqual([{ kind: 'mail', account: ACCOUNT }]);
-      // Open, never restricted: the confirmed list stays empty.
-      expect(file.items).toEqual([]);
-      expect((file.openItems ?? []).map((one) => one.source.message).sort()).toEqual(ids(2, 3, 4));
-      expect(await router.wakes()).toBe(true);
-      const pending = await pendingSources(file, file.areas[0], { routesFor: async () => new Map() });
-      expect(pending.map((one) => one.message).sort()).toEqual(ids(2, 3, 4));
-      // Every arrival is still announced, and Inbox Triage leaves the router's mail to it.
-      const announced = mail.events.at(-1)!.headlines;
-      expect(announced.map((one) => one.messageId).sort()).toEqual(ids(2, 3, 4));
-      const triage = await keepTriageMailOutsideAreas([{ accountId: ACCOUNT, headlines: announced } as never], router.home);
-      expect(triage[0].headlines).toEqual([]);
-      // No reader is restricted: an agent with no area reads them as before.
-      const reader = await sourceReaderFor({ kind: 'agent' }, { readAreas: async () => file } as never);
-      expect(reader.kind === 'scoped' && announced.every((one) => reader.allows({
-        kind: 'mail', account: ACCOUNT, message: one.messageId!, version: one.version, canonicalKey: one.canonicalKey,
-      }))).toBe(true);
-      // The same listing again is no new arrival.
-      await mail.sync.runTick({ force: true });
-      expect((await readRouterAreas(router.home)).openItems).toHaveLength(3);
-    } finally { unregister(); }
-  });
-
-  it('a paused router takes nothing: the mail stays with Inbox Triage', async () => {
-    const router = await personalRouter(true);
-    const { mail, unregister } = await bindAndArrive(router, [envelope(2)]);
-    try {
-      const file = await readRouterAreas(router.home);
-      expect(file.accountBindings).toHaveLength(1);
-      expect(file.openItems).toBeUndefined();
-      expect(await router.wakes()).toBe(false);
-      const triage = await keepTriageMailOutsideAreas([{ accountId: ACCOUNT, headlines: mail.events.at(-1)!.headlines } as never], router.home);
-      expect(triage[0].headlines.map((one) => one.messageId)).toEqual(['inbox:m-2']);
-    } finally { unregister(); }
-  });
-
-  it('a rule-confirmed arrival stays restricted to its area, and a later rule closes an open one there', async () => {
-    const router = await personalRouter();
-    const bakery = await setRoutingRule(router.home, { from: 'bakery.example.invalid', taskId: 'task-florist' }, { by: 'human' });
-    const view = await routerRulesView(router.home, router.ruleDeps);
-    await saveRouterRuleBindings({ bindings: [{ ruleId: bakery.id, areaId: 'personal', revision: view.rules[0].revision }], expectedRevision: view.fileRevision }, router.home, router.ruleDeps);
-    const { unregister } = await bindAndArrive(router, [envelope(2, { from: { address: 'desk@bakery.example.invalid' } }), envelope(3)]);
-    try {
-      const file = await readRouterAreas(router.home);
-      expect(file.items.map((one) => one.source.message)).toEqual(['inbox:m-2']);
-      expect((file.openItems ?? []).map((one) => one.source.message)).toEqual(['inbox:m-3']);
-      const open = file.openItems![0].source;
-      const moved = await confirmRouterIncoming([open], router.home, { ...router.ruleDeps, resolve: async (source) => ({ ...(await resolveRouterItem(source)), sender: 'desk@bakery.example.invalid' }) });
-      expect(moved).toEqual([open]);
-      const after = await readRouterAreas(router.home);
-      expect(after.items.map((one) => one.source.message).sort()).toEqual(ids(2, 3));
-      expect(after.openItems).toBeUndefined();
-    } finally { unregister(); }
-  });
-
-  it('a person with no router area gets one made, active, for the mailbox; several areas are the person\'s pick', async () => {
-    const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'mail-router-none-'));
-    roots.push(home);
-    seedTaskStore(home);
-    const made: string[] = [];
-    const createRouter = async (_kind: string, account: string) => {
-      made.push(account);
-      await updateRouterAreas(home, () => ({
-        version: 1, items: [],
-        areas: [{ id: 'mail', name: 'Mail', host: '__local__', taskIds: ['router-mail'], sources: [{ kind: 'mail', account }] }],
-        routers: [{ taskId: 'router-mail', areaId: 'mail', paused: false }],
-      }) as RouterAreasFile);
-      return 'router-mail';
-    };
-    const [first, second] = await Promise.all([
-      ensureAccountRouter('mail', ACCOUNT, { home, routerOpen, createRouter }),
-      ensureAccountRouter('mail', OTHER, { home, routerOpen, createRouter }),
-    ]);
-    expect(made).toEqual([ACCOUNT]);
-    expect(first).toEqual({ bound: true, areaId: 'mail', created: true, already: false });
-    expect(second).toEqual({ bound: true, areaId: 'mail', created: false, already: false });
-    expect((await readRouterAreas(home)).accountBindings?.map((one) => one.account)).toEqual([ACCOUNT, OTHER]);
-
-    const many = await fsp.mkdtemp(path.join(os.tmpdir(), 'mail-router-many-'));
-    roots.push(many);
-    seedTaskStore(many);
-    await updateRouterAreas(many, () => ({
-      version: 1, items: [],
-      areas: [
-        { id: 'personal', name: 'Personal', host: '__local__', taskIds: ['r-1'], sources: [] },
-        { id: 'family', name: 'Family', host: '__local__', taskIds: ['r-2'], sources: [] },
-      ],
-      routers: [{ taskId: 'r-1', areaId: 'personal', paused: false }, { taskId: 'r-2', areaId: 'family', paused: false }],
-    }) as RouterAreasFile);
-    expect(await ensureAccountRouter('mail', ACCOUNT, { home: many, routerOpen, createRouter })).toEqual({ bound: false, reason: 'choose' });
-    expect((await readRouterAreas(many)).accountBindings).toBeUndefined();
-  });
-
-  it('is off with WALNUT_MAIL_AUTO_ROUTER=0', async () => {
-    const router = await personalRouter();
-    process.env.WALNUT_MAIL_AUTO_ROUTER = '0';
-    expect(await ensureAccountRouter('mail', ACCOUNT, { home: router.home, routerOpen })).toEqual({ bound: false, reason: 'off' });
-    expect((await readRouterAreas(router.home)).accountBindings).toBeUndefined();
-  });
-
-  it('the areas file keeps open arrivals honest: one listing per source, a confirmed item never reopens, a binding needs its source', () => {
-    const base = {
-      version: 1, routers: [],
-      areas: [{ id: 'personal', name: 'Personal', host: '__local__', taskIds: [], sources: [{ kind: 'mail', account: ACCOUNT }] }],
-    };
-    const item = { source: { kind: 'mail', account: ACCOUNT, message: 'inbox:m-1', version: 'v1' }, areaId: 'personal' };
-    expect(() => normalizeRouterAreas({ ...base, items: [item], openItems: [item] })).toThrow(/listed twice/);
-    expect(() => normalizeRouterAreas({ ...base, items: [], accountBindings: [{ kind: 'mail', account: OTHER, areaId: 'personal', boundAt: 1 }] }))
-      .toThrow(/no mail source for its bound account/);
-    const closed = normalizeRouterAreas({ ...base, items: [item] });
-    const reopened = normalizeRouterAreas({ ...base, items: [], openItems: [item] });
-    expect(() => assertNoReassignment(closed, reopened)).toThrow(/cannot become an open one/);
-    expect(() => assertNoReassignment(reopened, closed)).not.toThrow();
-    // An open arrival may leave the list (its mail moved or is gone); a confirmed one never does.
-    const empty = normalizeRouterAreas({ ...base, items: [] });
-    expect(() => assertNoReassignment(reopened, empty)).not.toThrow();
-    expect(() => assertNoReassignment(closed, empty)).toThrow(/cannot be removed/);
-  });
-
-  it('binds every mailbox the cache holds at start', async () => {
-    const router = await personalRouter();
-    const { store } = await cache([ACCOUNT, OTHER]);
-    await bindMailAccounts(store, router.home, undefined, (accountId, at) => ensureAccountRouter('mail', accountId, { home: at, routerOpen }));
-    expect((await readRouterAreas(router.home)).accountBindings?.map((one) => [one.account, one.areaId]))
-      .toEqual([[ACCOUNT, 'personal'], [OTHER, 'personal']]);
   });
 });

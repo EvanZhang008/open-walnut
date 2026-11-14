@@ -13,7 +13,6 @@ import { closeDb, getDb, MAX_SUPPORTED_SCHEMA_VERSION, SCHEMA_VERSION, TASK_DB_P
 import { _resetForTesting, addTask, getTask } from '../../src/core/task-manager.js'
 import { TASK_DB_ROUTER_VERSION, TASK_DB_SCHEMA_VERSION, TASK_DB_MAX_SUPPORTED_VERSION } from '../../src/core/task-db-version.js'
 import { ensureRouterDataVersion, routerTaskDbPath } from '../../src/core/router/data-version.js'
-import { ensureRouterNewWork, routerNewWorkId } from '../../src/core/router/service.js'
 import { PluginDatabaseClient } from '../../src/core/plugins/plugin-storage.js'
 import { RouterAreaError, readRouterAreas, routerAreasPath, updateRouterAreas, type RouterAreasFile } from '../../src/core/router/areas.js'
 import { seedTaskStore, taskStoreVersion } from '../helpers/router-task-store.js'
@@ -263,11 +262,10 @@ describe('task store version for isolated areas', () => {
     const item = { kind: 'mail' as const, account: ACCOUNT, message: 'm-1' }
     fs.writeFileSync(routerAreasPath(WALNUT_HOME), JSON.stringify({ ...oneArea(), items: [{ areaId: 'desk', source: item }] }))
     expect(taskStoreVersion(TASK_DB_PATH)).toBe(13)
-    const taskId = await routerNewWorkId('desk', 'key-1')
-    await ensureRouterNewWork({ areaId: 'desk', source: item, key: 'key-1', taskId, title: 'Desk follow-up', brief: 'Follow up on the desk mail.' }, WALNUT_HOME)
+    const arrival = { kind: 'mail' as const, account: ACCOUNT, message: 'm-2' }
+    await updateRouterAreas(WALNUT_HOME, (file) => ({ ...file, openItems: [{ areaId: 'desk', source: arrival }] }))
     expect(taskStoreVersion(TASK_DB_PATH)).toBe(14)
-    expect((await getTask(taskId)).router_area_id).toBe('desk')
-    expect((await readRouterAreas(WALNUT_HOME)).areas[0]!.taskIds).toContain(taskId)
+    expect((await readRouterAreas(WALNUT_HOME)).openItems).toEqual([{ areaId: 'desk', source: arrival }])
   })
 
 })

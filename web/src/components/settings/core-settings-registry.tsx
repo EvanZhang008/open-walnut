@@ -254,7 +254,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     render: ({ config, saveSection }) => <TriageSection config={config} onSave={saveSection} />,
   },
   // Mail rules: how the Mail app sorts an inbox into Important and groups. Right after Inbox Triage,
-  // which reads only Important when grouping is on; a different icon (a funnel, not the tray) and a
+  // which no longer reads mail (the mail router does, 2026-11-14); a different icon (a funnel, not the tray) and a
   // different sentence, so the two are never mistaken for one another. With the Mail plugin off the
   // section says so itself (`This panel is from Mail, which is off.`).
   {

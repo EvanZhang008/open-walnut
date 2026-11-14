@@ -129,7 +129,7 @@ export function MailReaderHead({ open, message, accounts, providers }: Props) {
         </span>
       </div>
 
-      {routed && <MailRouteLine route={message.route} unavailable={message.routingUnavailable} surface="reader" subject={message.subject} source={{ account: message.accountId, message: message.messageId, ...(message.deliveryVersion ? { version: message.deliveryVersion } : {}) }} routingArea={message.routingArea} routingCoverage={message.routingCoverage} handoff={message.routingHandoff} />}
+      {routed && <MailRouteLine route={message.route} unavailable={message.routingUnavailable} surface="reader" subject={message.subject} routingArea={message.routingArea} routingCoverage={message.routingCoverage} />}
       {outgoing && <MailRouteLine route={undefined} outgoing={outgoing} surface="reader" />}
       {message.invite && canAnswerInvites(providers, open.accountId) && (
         <MailInviteCard accountId={open.accountId} messageId={open.messageId} kind={message.invite.kind} />

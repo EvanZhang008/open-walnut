@@ -64,7 +64,7 @@ beforeEach(async () => {
   // A claim has to exist for the acknowledgement path to run at all, and it has to be a claim the
   // handler can LOAD: `claimTriageBatch` takes the clock first, and a claim stamped with anything but
   // a number is dropped on the way back in — which would make every assertion below pass vacuously.
-  await recordTriageArrivals({ mail: [{ accountId: 'a', mailbox: 'INBOX', count: 3, headlines: ['hi'] }] }, HOME());
+  await recordTriageArrivals({ slack: [{ conversation: '#a', isDm: false, isMention: false, alias: 'a', ts: '1', permalink: '', text: 'hi', atMs: 1 }] }, HOME());
   await claimTriageBatch(Date.now(), HOME());
   expect((await loadTriageState(HOME())).claim?.atMs).toBeTypeOf('number');
 });

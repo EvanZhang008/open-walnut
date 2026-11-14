@@ -32,8 +32,6 @@ const repoRoot = path.resolve(__dirname, '../..');
  */
 const STORE_LOCKS = new Set<string>([
   'src/core/router/route-lock.ts: lock',                        // WALNUT_HOME/router/areas/<area>/items.sqlite route lock
-  'src/core/router/handoff-approval.ts: d.file',                // WALNUT_HOME/router/handoff-approvals.json
-  'src/core/router/migration.ts: file',                         // a legacy watcher migration record under WALNUT_HOME/router
   'src/core/triage/routing-rules.ts: file',                     // WALNUT_HOME/triage/routing-rules.json
   'src/commands/demo.ts: root.state',                           // Walnut's own Demo state, not user content
   'src/core/boards/board-store.ts: file',                       // WALNUT_HOME/boards/<task>.json

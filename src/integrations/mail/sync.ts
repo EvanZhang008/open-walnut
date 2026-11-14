@@ -106,6 +106,14 @@ interface AccountState {
   dirty: Set<string>
   /** False until one sync of this account drained every container it looked at. */
   backfilled: boolean
+  /** Whether this process asked yet if the account resumes a cache synced before (see syncAccount). */
+  resumeChecked: boolean
+  /**
+   * While a resumed account's sweep has not drained: only mail that arrived after this instant (the
+   * last sync before the restart, less a margin) is new. Older mail the sweep still lists (a first
+   * backfill cut short by the restart) stays a backfill. Null otherwise.
+   */
+  resumeSince: number | null
   /**
    * Where the next WIDE sweep starts among the non-inbox containers, wrapping.
    *
@@ -124,10 +132,20 @@ interface AccountState {
   staleRelistAt: number
 }
 
+/** How far back a resumed account's news reaches before its last sync: a provider's arrival stamp can trail its listing. */
+export const RESUME_MARGIN_MS = 2 * 60_000
+
+/** The instant a resumed account's news starts from: its inbox's last sync before the restart, less the margin; null when it never synced. */
+export function resumeSinceOf(mailboxes: readonly Pick<MailboxRow, 'role' | 'cursor' | 'last_sync_at'>[]): number | null {
+  const synced = mailboxes.filter((row) => row.role === ('inbox' satisfies MailboxRole) && !!row.cursor && Number.isFinite(row.last_sync_at) && (row.last_sync_at ?? 0) > 0)
+  if (synced.length === 0) return null
+  return Math.min(...synced.map((row) => row.last_sync_at as number)) - RESUME_MARGIN_MS
+}
+
 function emptyState(): AccountState {
   return {
     polls: 0, failures: 0, nextAt: 0, paused: false, dirty: new Set(),
-    backfilled: false, sweepFrom: 0, relistDue: false, staleRelistAt: 0,
+    backfilled: false, resumeChecked: false, resumeSince: null, sweepFrom: 0, relistDue: false, staleRelistAt: 0,
   }
 }
 
@@ -231,8 +249,13 @@ export class MailSync {
      * grouping is on, `messages-received` announces only the mail that landed in Important.
      */
     sort?: MailSyncSortHook
-    /** Area rules intake for arrived inbox mail; optional so a loop without areas runs as before. */
+    /** The router intake for arrived mail; optional so a loop without routers runs as before. */
     captureIncoming?: MailIncomingCapture
+    /**
+     * Enters again what the intake could not enter yet (a failed intake, a mailbox no router reads):
+     * once per tick for each account past its first backfill. Never throws into the poll.
+     */
+    retryIncoming?: (accountId: string) => Promise<void>
   }) {}
 
   get polling(): boolean {
@@ -530,6 +553,8 @@ export class MailSync {
       if (Date.now() >= deadlineAt) { report.incomplete = true; break }
       processed += 1
       const state = this.stateFor(account.account_id)
+      // Reads only the cache, so it runs for an account in backoff too.
+      await this.retryIncoming(account.account_id, state)
       if (!options.force && (state.paused || Date.now() < state.nextAt)) {
         report.skipped += 1
         continue
@@ -586,6 +611,18 @@ export class MailSync {
       await this.deps.sort?.refreshIdentities().catch(() => undefined)
 
       const mailboxes = await this.refreshMailboxes(accountId, spec, state, force)
+      // A restart is not an account being added: an inbox this cache synced before keeps its cursor
+      // across restarts and goes on from where it stopped, so what arrived while Walnut was down is
+      // new mail and reaches the router. Only that: mail from before the last sync (a first backfill
+      // the restart cut short) is not news. Asked once per process: a reset or wipe later is a real backfill.
+      if (!state.resumeChecked) {
+        state.resumeChecked = true
+        const since = resumeSinceOf(mailboxes)
+        if (!state.backfilled && since !== null) {
+          state.backfilled = true
+          state.resumeSince = since
+        }
+      }
       const wide = force || state.polls % NON_INBOX_EVERY === 1
       const sweep = wide ? sweepOrder(mailboxes, state.sweepFrom) : {
         containers: mailboxes.filter(
@@ -596,6 +633,8 @@ export class MailSync {
       const containers = sweep.containers
 
       const headlines: MailHeadline[] = []
+      // Arrivals outside the Inbox: never announced, routed only to a router that watches their folder.
+      const otherHeadlines: MailHeadline[] = []
       let exhausted = true
       // Counted separately from `added`: a message appearing in Sent is one the user sent, and
       // announcing it as "received" is wrong in the one place a human reads the number.
@@ -659,6 +698,10 @@ export class MailSync {
         if (mailbox.role === ('inbox' satisfies MailboxRole)) {
           received += outcome.received
           headlines.push(...outcome.headlines)
+        } else {
+          otherHeadlines.push(...outcome.headlines)
+        }
+        if (mailbox.role === ('inbox' satisfies MailboxRole)) {
           receivedImportant += outcome.importantAdded
           importantHeadlines.push(...outcome.importantHeadlines)
           inboxPolled = !outcome.missing
@@ -695,9 +738,17 @@ export class MailSync {
 
       // One event per account per tick, and none at all for the first backfill: "you have 4812
       // new messages" is the account being added, not news.
-      // With grouping on, the count and headlines are Important's only (Inbox Triage reads them, and a
-      // pager burst is not "new mail that needs you"); `importantAdded` rides the event either way.
+      // With grouping on, the count and headlines are Important's only (a pager burst is not "new
+      // mail that needs you"); `importantAdded` rides the event either way.
       const announcing = state.backfilled
+      if (announcing && state.resumeSince !== null) {
+        const since = state.resumeSince
+        const fresh = await this.arrivedSince(accountId, [...headlines, ...importantHeadlines, ...otherHeadlines], since)
+        const keep = (list: MailHeadline[]) => list.splice(0, list.length, ...list.filter((one) => !one.messageId || fresh.has(one.messageId)))
+        keep(headlines); keep(importantHeadlines); keep(otherHeadlines)
+        received = Math.min(received, headlines.length)
+        receivedImportant = Math.min(receivedImportant, importantHeadlines.length)
+      }
       const grouped = announcing && (this.deps.sort?.groupedOn() ?? false)
       const importantIds = new Set(importantHeadlines.map((one) => one.messageId))
       /** `null` keeps the headlines as ingested; a list replaces them (never adding a non-Important one when grouped). */
@@ -706,22 +757,26 @@ export class MailSync {
           : grouped ? shown.filter((one) => importantIds.has(one.messageId)) : [...shown]
         this.deps.events.messagesReceived(accountId, grouped ? receivedImportant : received, list, receivedImportant)
       }
-      // Area rules confirm before the event, which then waits for the prefetch so it names the filled sender.
+      // The router intake reads the arrivals first; the event then waits for the prefetch so it names the filled sender.
       const deferred = announcing && !!this.deps.captureIncoming && headlines.length > 0
       const finish = deferred ? await this.captureIncoming(accountId, headlines) : null
-      // Without area intake, announce the captured snapshot before prefetch can change its content version.
+      // Without the router intake, announce the captured snapshot before prefetch can change its content version.
       if (announcing && !deferred) announce(null)
       try {
         if (inbox && Date.now() < deadlineAt) {
           await this.deps.service.prefetchBodies(accountId, inbox.mailbox_id, BODY_PREFETCH_LIMIT, deadlineAt)
         }
       } finally {
-        if (deferred) announce(finish ? await this.finishIncoming(accountId, finish) : [])
+        if (deferred) announce(finish ? await this.finishIncoming(accountId, finish) : null)
       }
+      if (announcing && otherHeadlines.length > 0) await this.routeArrivals(accountId, otherHeadlines, { inbox: false })
       if (inbox && this.deps.sort && Date.now() < deadlineAt) {
         await this.refreshCategoryHints(accountId, spec, inbox.mailbox_id, !state.backfilled)
       }
-      if (exhausted) state.backfilled = true
+      if (exhausted) {
+        state.backfilled = true
+        state.resumeSince = null
+      }
       // EVERY container the sweep reached failed, so whatever is wrong is the account's, not one
       // folder's, and it gets the backoff. One folder refusing while the inbox and ten others
       // synced is not an account failure, and treating it as one is what put a healthy mailbox
@@ -749,30 +804,60 @@ export class MailSync {
    * Mail the cache took outside the poll (the unread refresh): the router intake confirms it as the
    * poll would, after the account's first backfill. No event: the poll owns "new mail" news.
    */
-  async routeArrivals(accountId: string, headlines: MailHeadline[]): Promise<void> {
+  async routeArrivals(accountId: string, headlines: MailHeadline[], opts?: { inbox?: boolean }): Promise<void> {
     if (!this.deps.captureIncoming || headlines.length === 0 || !this.stateFor(accountId).backfilled) return
-    const finish = await this.captureIncoming(accountId, headlines)
+    const finish = await this.captureIncoming(accountId, headlines, opts)
     if (finish) await this.finishIncoming(accountId, finish)
   }
 
-  /** `null` when the capture failed: the event then carries its count only. */
-  private async captureIncoming(accountId: string, headlines: MailHeadline[]): Promise<MailIncomingFinish | null> {
+  /** `null` when the capture failed: the event then carries the arrivals as ingested. */
+  private async captureIncoming(accountId: string, headlines: MailHeadline[], opts?: { inbox?: boolean }): Promise<MailIncomingFinish | null> {
     try {
-      return await this.deps.captureIncoming!(accountId, headlines)
+      return await this.deps.captureIncoming!(accountId, headlines, opts)
     } catch (error) {
-      // Fail closed: an unconfirmed arrival may be a rule's private item.
-      this.deps.walnut.log.warn('mail area intake capture failed', { accountId, error: reasonOf(error).slice(0, 200) })
+      // The news still goes out as ingested; the intake kept the arrivals, and the next tick's retry enters them.
+      this.deps.walnut.log.warn('mail router intake capture failed', { accountId, error: reasonOf(error).slice(0, 200) })
       return null
     }
   }
 
-  /** The headlines to announce: `null` keeps the ingested ones, `[]` after a failure. */
+  /** The headlines to announce: `null` keeps the ingested ones (also after a failure). */
   private async finishIncoming(accountId: string, finish: MailIncomingFinish): Promise<readonly MailHeadline[] | null> {
     try {
       return (await finish()) ?? null
     } catch (error) {
-      this.deps.walnut.log.warn('mail area intake confirm failed', { accountId, error: reasonOf(error).slice(0, 200) })
-      return []
+      // As for the capture: the arrivals were kept, and the next tick's retry enters them.
+      this.deps.walnut.log.warn('mail router intake confirm failed', { accountId, error: reasonOf(error).slice(0, 200) })
+      return null
+    }
+  }
+
+  /** The ids among these whose mail arrived at or after `since` (a resumed account's news). */
+  private async arrivedSince(accountId: string, headlines: readonly MailHeadline[], since: number): Promise<Set<string>> {
+    const ids = [...new Set(headlines.flatMap((one) => one.messageId ? [one.messageId] : []))]
+    const fresh = new Set<string>()
+    for (let at = 0; at < ids.length; at += 200) {
+      for (const row of await this.deps.store.messagesByIds(accountId, ids.slice(at, at + 200))) {
+        if ((row.received_at ?? row.sent_at) >= since) fresh.add(row.message_id)
+      }
+    }
+    return fresh
+  }
+
+  /**
+   * What an earlier tick could not enter goes to its router again: once the account's first backfill
+   * is done, or (after a restart, before this process polled it well) for an inbox synced before.
+   */
+  private async retryIncoming(accountId: string, state: AccountState): Promise<void> {
+    if (!this.deps.retryIncoming) return
+    if (!state.backfilled) {
+      const synced = await this.deps.store.listMailboxes(accountId).then(resumeSinceOf).catch(() => null)
+      if (synced === null) return
+    }
+    try {
+      await this.deps.retryIncoming(accountId)
+    } catch (error) {
+      this.deps.walnut.log.warn('mail router intake retry failed', { accountId, error: reasonOf(error).slice(0, 200) })
     }
   }
 

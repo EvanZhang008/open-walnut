@@ -140,32 +140,27 @@ function quick(existingTaskId: string) {
 describe('area start prerequisites', () => {
   it('refuses missing daemon MCP support before writing a task or session', async () => {
     h.daemonMcp = false
-    await expect(startSessionForTask({ taskIdPrefix: 't-work', idle: true, source: 'api-agent' }))
+    await expect(startSessionForTask({ taskIdPrefix: 't-router', idle: true, source: 'api-agent' }))
       .rejects.toMatchObject({ statusCode: 409, body: { code: 'area_tools_unavailable' } })
     expectUntouched()
   })
 })
 
-describe('quickStartSession on an existing area task', () => {
-  it('refuses a marked work task after host readiness, before any write or event', async () => {
-    await expect(quick('t-work')).rejects.toBeInstanceOf(QuickStartError)
-    await expect(quick('t-work')).rejects.toMatchObject({ statusCode: 409 })
-    expectUntouched()
-  })
-
-  it('refuses a router task the same way', async () => {
+describe('quickStartSession on an existing router task', () => {
+  it('refuses a router task after host readiness, before any write or event', async () => {
+    await expect(quick('t-router')).rejects.toBeInstanceOf(QuickStartError)
     await expect(quick('t-router')).rejects.toMatchObject({ statusCode: 409 })
     expectUntouched()
   })
 
-  it('refuses a task listed in the area file whose durable mark is missing', async () => {
-    await expect(quick('t-unmarked')).rejects.toMatchObject({ statusCode: 409 })
-    expectUntouched()
+  // Since 2026-11-14 only a router runs isolated: work an older build listed in an area is ordinary.
+  it('does not refuse a non-router task an older build listed in the area', async () => {
+    await expect(quick('t-unmarked')).resolves.toMatchObject({ id: 't-unmarked' })
   })
 
-  it('fails closed for a marked task when the area file cannot be read', async () => {
+  it('fails closed for a router task when the area file cannot be read', async () => {
     h.areas.error = new Error('corrupt areas.json')
-    await expect(quick('t-work')).rejects.toThrow()
+    await expect(quick('t-router')).rejects.toThrow()
     expectUntouched()
   })
 
@@ -203,22 +198,22 @@ describe('quickStartSession on an existing area task', () => {
 describe('forkSessionToTask from an area source', () => {
   const SRC = 'src-session'
 
-  it('refuses a source carrying an area profile, before the target task is read', async () => {
-    h.records.set(SRC, { claudeSessionId: SRC, taskId: 't-work', cwd: WALNUT_HOME, profile: routerAreaProfile(AREA_ID, 'work') })
+  it('refuses a source carrying a router profile, before the target task is read', async () => {
+    h.records.set(SRC, { claudeSessionId: SRC, taskId: 't-router', cwd: WALNUT_HOME, profile: routerAreaProfile(AREA_ID) })
     await expect(forkSessionToTask(SRC, { task_id: 't-plain' })).rejects.toMatchObject({ statusCode: 409, extra: { code: 'area_scoped' } })
     expect(m.getTask).not.toHaveBeenCalled()
     expectUntouched()
   })
 
-  it('refuses an area task\'s session with no profile (made before it joined), into a new child task too', async () => {
-    h.records.set(SRC, { claudeSessionId: SRC, taskId: 't-unmarked', cwd: WALNUT_HOME })
+  it('refuses a router task\'s session with no profile (made before it became a router), into a new child task too', async () => {
+    h.records.set(SRC, { claudeSessionId: SRC, taskId: 't-router', cwd: WALNUT_HOME })
     await expect(forkSessionToTask(SRC, { create_child_task: true, child_title: 'copy' }))
       .rejects.toBeInstanceOf(SessionControlError)
     expect(m.getTask.mock.calls.map(([id]) => id)).not.toContain('t-plain')
-    expectUntouched('t-unmarked')
+    expectUntouched('t-router')
   })
 
-  it('fails closed on an unreadable area file for a marked source, reading only the source task', async () => {
+  it('fails closed on an unreadable area file, reading only the source task', async () => {
     h.areas.error = new Error('corrupt areas.json')
     h.records.set(SRC, { claudeSessionId: SRC, taskId: 't-work', cwd: WALNUT_HOME })
     await expect(forkSessionToTask(SRC, { task_id: 't-plain' })).rejects.toMatchObject({ statusCode: 409 })

@@ -6,7 +6,8 @@
  * nothing (the useAutoSave baseline trap — a baseline that differs from the
  * rendered default rewrites the config on every visit), and a save spreads the
  * sibling `triage.*` keys the card does not render instead of replacing the key
- * whole (updateConfig replaces `triage` wholesale).
+ * whole (updateConfig replaces `triage` wholesale). Since 2026-11-14 the card offers
+ * Slack only: new mail goes to the mail router, and the card says so.
  *
  * Engines: this file is Chromium, and the WebKit half is deliberately READ-ONLY
  * (settings-triage.webkit.spec.ts is NOT added for the same reason
@@ -31,7 +32,6 @@ type TriageConfig = {
   every_messages?: number
   sources?: string[]
   mode?: string
-  auto_mark_read?: boolean
   active_hours?: string
   [key: string]: unknown
 }
@@ -86,11 +86,15 @@ test.describe('Settings → Inbox Triage', () => {
     await expect(section.locator('#inbox-triage-enabled')).toHaveAttribute('aria-checked', String(before?.enabled ?? false))
     await expect(section.locator('#inbox-triage-every')).toHaveValue(before?.every ?? '30m')
     await expect(section.locator('#inbox-triage-every-messages')).toHaveValue(String(before?.every_messages ?? 20))
-    await expect(section.getByTestId('inbox-triage-source-mail')).toBeChecked()
+    // Slack is the only source; mail is the mail router's, and the card says where it went.
     await expect(section.getByTestId('inbox-triage-source-slack')).toBeChecked()
+    await expect(section.getByTestId('inbox-triage-source-mail')).toHaveCount(0)
+    await expect(section.locator('#inbox-triage-auto-mark-read')).toHaveCount(0)
+    const note = section.getByTestId('triage-mail-router-note')
+    await expect(note).toContainText('New mail goes to the mail router')
+    await expect(note.getByRole('link', { name: 'Open Org' })).toHaveAttribute('href', '/org')
     await expect(section.getByTestId(`inbox-triage-mode-${before?.mode ?? 'ask'}`)).toHaveAttribute('aria-checked', 'true')
     await expect(section.locator('#inbox-triage-hours')).toHaveValue(before?.active_hours ?? '08:00-22:00')
-    await expect(section.locator('#inbox-triage-auto-mark-read')).toHaveAttribute('aria-checked', String(before?.auto_mark_read ?? false))
 
     // Give the auto-save debounce a chance to misbehave before judging it.
     await page.waitForTimeout(2_000)
@@ -108,11 +112,12 @@ test.describe('Settings → Inbox Triage', () => {
     await section.locator('#inbox-triage-every').press('Enter')
     await section.locator('#inbox-triage-every-messages').fill('8')
     await section.locator('#inbox-triage-every-messages').press('Enter')
-    await section.getByTestId('inbox-triage-source-mail').uncheck()
+    // Off and on again, so the source list is written: Slack, and nothing else.
+    await section.getByTestId('inbox-triage-source-slack').uncheck()
+    await section.getByTestId('inbox-triage-source-slack').check()
     await section.getByTestId('inbox-triage-mode-assist').click()
     await section.locator('#inbox-triage-hours').fill('09:00-18:00')
     await section.locator('#inbox-triage-hours').blur()
-    await section.locator('#inbox-triage-auto-mark-read').click()
 
     await expect.poll(async () => await serverTriage(request), { timeout: 20_000 })
       .toMatchObject({
@@ -122,7 +127,6 @@ test.describe('Settings → Inbox Triage', () => {
         sources: ['slack'],
         mode: 'assist',
         active_hours: '09:00-18:00',
-        auto_mark_read: true,
       })
 
     // The card renders from the config, so a real navigation away and back is
@@ -130,37 +134,32 @@ test.describe('Settings → Inbox Triage', () => {
     const reopened = await reopenTriageSection(page)
     await expect(reopened.locator('#inbox-triage-every')).toHaveValue('45m')
     await expect(reopened.locator('#inbox-triage-every-messages')).toHaveValue('8')
-    await expect(reopened.getByTestId('inbox-triage-source-mail')).not.toBeChecked()
     await expect(reopened.getByTestId('inbox-triage-source-slack')).toBeChecked()
     await expect(reopened.getByTestId('inbox-triage-mode-assist')).toHaveAttribute('aria-checked', 'true')
     await expect(reopened.locator('#inbox-triage-enabled')).toHaveAttribute('aria-checked', 'true')
   })
 
-  test('marking promotional mail read is a choice in ask mode too', async ({ page, request }) => {
-    const section = await openTriageSection(page)
-    // The previous test left triage on, in assist, with marking read on.
-    await section.getByTestId('inbox-triage-mode-ask').click()
-    const toggle = section.locator('#inbox-triage-auto-mark-read')
-    await expect(toggle).toBeEnabled()
-    await expect(section.getByText('Triage never deletes mail')).toBeVisible()
-    await toggle.click()
-    await expect.poll(async () => await serverTriage(request), { timeout: 20_000 })
-      .toMatchObject({ mode: 'ask', auto_mark_read: false })
-    await toggle.click()
-    await expect.poll(async () => await serverTriage(request), { timeout: 20_000 })
-      .toMatchObject({ mode: 'ask', auto_mark_read: true })
-
-    // The routine's instructions follow, in ask mode: the switch is a permission there too.
-    const reopened = await reopenTriageSection(page)
-    await expect(reopened.locator('#inbox-triage-auto-mark-read')).toHaveAttribute('aria-checked', 'true')
-    await expect(reopened.getByTestId('inbox-triage-mode-ask')).toHaveAttribute('aria-checked', 'true')
-    await expect.poll(async () => {
+  test('an old mail-only config runs nothing, and ticking Slack drops the mail', async ({ page, request }) => {
+    // The production config of 2026-11-14: triage on, mail only. Mail is the mail router's now.
+    const current = await serverTriage(request)
+    const put = await request.put('/api/config', { data: { triage: { ...current, enabled: true, sources: ['mail'] } } })
+    expect(put.ok()).toBe(true)
+    const routine = async () => {
       const res = await request.get('/api/routines?includeDisabled=true')
       const body = await res.json() as { jobs?: Array<Record<string, any>> }
       const row = (body.jobs ?? []).find((j) => j?.initProcessor?.actionId === 'inbox-triage-batch')
-      const text = String(row?.executor?.config?.instructions ?? '')
-      return { ask: text.includes('Mode: ask'), markRead: text.includes('mail_mark_read') }
-    }, { timeout: 30_000 }).toEqual({ ask: true, markRead: true })
+      return { enabled: row?.enabled, instructions: String(row?.executor?.config?.instructions ?? '') }
+    }
+    // No source left: the routine is turned off, so its clock makes no run task.
+    await expect.poll(async () => (await routine()).enabled, { timeout: 30_000 }).toBe(false)
+
+    const section = await openTriageSection(page)
+    await expect(section.getByTestId('inbox-triage-source-slack')).not.toBeChecked()
+    await expect(section.getByTestId('inbox-triage-sources')).toContainText('With no source ticked, Inbox Triage does not run.')
+    await section.getByTestId('inbox-triage-source-slack').check()
+    await expect.poll(async () => (await serverTriage(request))?.sources, { timeout: 20_000 }).toEqual(['slack'])
+    await expect.poll(async () => (await routine()).enabled, { timeout: 30_000 }).toBe(true)
+    expect((await routine()).instructions).not.toMatch(/\bmail_[a-z_]+/)
   })
 
   test('a save keeps a sibling triage key the card does not render', async ({ page, request }) => {

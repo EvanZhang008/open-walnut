@@ -328,7 +328,7 @@ export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
       const bound = await bindTriageClaim(task.id, Date.now(), home);
       if (bound) {
         log.cron.info('triage: batch waits with its run for a free slot', {
-          taskId: task.id, claimedAtMs: bound.atMs, mail: bound.mail, slack: bound.slack,
+          taskId: task.id, claimedAtMs: bound.atMs, slack: bound.slack,
         });
       }
       return;
@@ -371,7 +371,7 @@ export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
 
   function logAck(taskId: string, claim: TriageClaim): void {
     log.cron.info('triage: batch acknowledged — the run has a session', {
-      taskId, claimedAtMs: claim.atMs, mail: claim.mail, slack: claim.slack,
+      taskId, claimedAtMs: claim.atMs, slack: claim.slack,
     });
   }
 

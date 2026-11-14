@@ -106,8 +106,7 @@ const CALL_SITES: Record<string, number> = {
   'src/core/routines/executors/watcher.ts': 1,    // Singleton sends; new starts use the shared gate
   'src/core/routines/run-start-deps.ts': 2,       // Deferred create and admitted replay keep their original source
   'src/core/routines/trigger-health.ts': 1,
-  'src/core/router/cross-route.ts': 1,             // one exact approved item, sent as peer under its delivery grant
-  'src/core/router/service.ts': 2,                // a confirmed item or its approval, sent as peer under its grant
+  'src/core/router/service.ts': 2,                // the routed item, sent into its owner as the Router (or its first message)
   'src/core/router/wake.ts': 2,                   // the router's scoped runtime wake
   'src/core/session-auto-continue.ts': 1,
   // Walnut's idle compaction: the bare `/compact` command, passed unframed (send-frame.ts), as a quiet turn.

@@ -254,13 +254,12 @@
     min-height: 44px;
   }
   /* C18, C19: a mail's route line and the routers' states (MailRouteLine, MailRouterRows) read at
-     12 px, and the reader's routing buttons (Choose area, Try again, Create router, the route's
-     target) take a finger like the reader's other buttons (MailRouterAssignment). */
+     12 px, and the reader's routing buttons (Open router, the route's target) take a finger like
+     the reader's other buttons. */
   .app-shell-navigation .mail-app .mail-route,
   .app-shell-navigation .mail-app .mail-router-state {
     font-size: 12px;
   }
-  .app-shell-navigation .mail-app .mail-router-choose,
   .app-shell-navigation .mail-app .mail-router-link,
   .app-shell-navigation .mail-app .mail-route-reader .mail-route-link {
     display: inline-flex;

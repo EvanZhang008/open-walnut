@@ -1,7 +1,8 @@
 /**
- * A merge never touches incoming-item area work (task-manager.ts refuseAreaMerge): the area
- * registry and its ledger keep the victim's exact id, and a merge moves sessions, children and
- * history, which is no migration. Real task store, real session store, a real registry file in a
+ * A merge never touches a router (task-manager.ts refuseAreaMerge): the area registry and its
+ * ledger keep the router's exact id, and a merge moves sessions, children and history. Since
+ * 2026-11-14 only a router is area work: the work it hands items to is ordinary, so what an older
+ * build left on it (an area mark, a receiver profile, registry membership) merges like any task. Real task store, real session store, a real registry file in a
  * temp home. Every refusal must leave tasks, sessions, children and the registry as they were;
  * an ordinary merge still runs.
  */
@@ -24,10 +25,10 @@ import { seedLegacySession } from '../helpers/router-history-fixtures.js';
 
 const areasFile = () => path.join(WALNUT_HOME, 'router', 'areas.json');
 
-function writeAreas(areas: Array<{ id: string; taskIds: string[] }>): void {
+function writeAreas(areas: Array<{ id: string; taskIds: string[] }>, routers: Array<{ taskId: string; areaId: string }> = []): void {
   fs.mkdirSync(path.dirname(areasFile()), { recursive: true });
   fs.writeFileSync(areasFile(), JSON.stringify({
-    version: 1, routers: [], items: [],
+    version: 1, routers: routers.map((r) => ({ ...r, paused: false })), items: [],
     areas: areas.map((a) => ({ id: a.id, name: a.id, host: '__local__', sources: [], taskIds: a.taskIds })),
   }));
 }
@@ -58,14 +59,16 @@ afterEach(() => {
   fs.rmSync(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
 });
 
-/** Two local tasks, one victim session, and a child under the victim. */
-async function pair(opts: { survivorArea?: string; victimArea?: string } = {}) {
-  const { task: survivor } = await addTask({ title: 'Survivor', project: '', source: 'local', ...(opts.survivorArea ? { router_area_id: opts.survivorArea } : {}) });
-  const { task: victim } = await addTask({ title: 'Victim', project: '', source: 'local', ...(opts.victimArea ? { router_area_id: opts.victimArea } : {}) });
-  const { task: child } = await addTask({ title: 'Child', project: '', source: 'local', parent_task_id: victim.id,
-    ...(opts.victimArea ? { router_area_id: opts.victimArea } : {}) });
-  await tracker.createSessionRecord('victim-sid', victim.id, '', '/tmp',
-    opts.victimArea ? { profile: routerAreaProfile(opts.victimArea, 'work') } : {});
+/** Two local tasks, one victim session, and a child under the victim; either may be a router of an area. */
+async function pair(opts: { survivorRouter?: string; victimRouter?: string; legacyVictim?: string } = {}) {
+  const { task: survivor } = await addTask({ title: 'Survivor', project: '', source: 'local' });
+  const { task: victim } = await addTask({ title: 'Victim', project: '', source: 'local', ...(opts.legacyVictim ? { router_area_id: opts.legacyVictim } : {}) });
+  const { task: child } = await addTask({ title: 'Child', project: '', source: 'local', parent_task_id: victim.id });
+  if (opts.survivorRouter) await updateTaskRaw(survivor.id, { org_role: 'router', router_area_id: opts.survivorRouter });
+  if (opts.victimRouter) await updateTaskRaw(victim.id, { org_role: 'router', router_area_id: opts.victimRouter });
+  const profile = opts.victimRouter ? { profile: routerAreaProfile(opts.victimRouter) }
+    : opts.legacyVictim ? { profile: { ...routerAreaProfile(opts.legacyVictim), areaRole: 'work' as const } as ReturnType<typeof routerAreaProfile> } : {};
+  await tracker.createSessionRecord('victim-sid', victim.id, '', '/tmp', profile);
   await updateTaskRaw(victim.id, { session_id: 'victim-sid', session_ids: ['victim-sid'] });
   return { survivor, victim, child };
 }
@@ -88,44 +91,26 @@ async function expectRefused(run: () => Promise<unknown>, role: 'survivor' | 'vi
   expect(isRemoteIdBlocked('local', victimId)).toBe(false);
 }
 
-describe('merge refuses incoming-item area work before any write', () => {
-  it('area victim into ordinary work', async () => {
-    const { survivor, victim, child } = await pair({ victimArea: 'personal' });
-    writeAreas([{ id: 'personal', taskIds: [victim.id, child.id] }]);
+describe('merge refuses a router before any write', () => {
+  it('a router victim into ordinary work', async () => {
+    const { survivor, victim, child } = await pair({ victimRouter: 'personal' });
+    writeAreas([{ id: 'personal', taskIds: [victim.id] }], [{ taskId: victim.id, areaId: 'personal' }]);
     await expectRefused(() => mergeTaskInto(survivor.id, victim.id), 'victim', victim.id);
     expect((await getTask(child.id)).parent_task_id).toBe(victim.id);
     expect((await tracker.getSessionByClaudeId('victim-sid'))?.taskId).toBe(victim.id);
   });
 
-  it('ordinary victim into area work', async () => {
-    const { survivor, victim } = await pair({ survivorArea: 'personal' });
-    writeAreas([{ id: 'personal', taskIds: [survivor.id] }]);
+  it('ordinary victim into a router', async () => {
+    const { survivor, victim } = await pair({ survivorRouter: 'personal' });
+    writeAreas([{ id: 'personal', taskIds: [survivor.id] }], [{ taskId: survivor.id, areaId: 'personal' }]);
     await expectRefused(() => mergeTaskInto(survivor.id, victim.id), 'survivor', victim.id);
   });
 
-  it('two tasks of the same area', async () => {
-    const { survivor, victim, child } = await pair({ survivorArea: 'personal', victimArea: 'personal' });
-    writeAreas([{ id: 'personal', taskIds: [survivor.id, victim.id, child.id] }]);
-    await expectRefused(() => mergeTaskInto(survivor.id, victim.id), 'survivor', victim.id);
-  });
-
-  it('two tasks of different areas', async () => {
-    const { survivor, victim, child } = await pair({ survivorArea: 'personal', victimArea: 'work' });
-    writeAreas([{ id: 'personal', taskIds: [survivor.id] }, { id: 'work', taskIds: [victim.id, child.id] }]);
-    await expectRefused(() => mergeTaskInto(survivor.id, victim.id), 'survivor', victim.id);
-  });
-
-  it('a task whose only area trace is a session profile', async () => {
+  it('a task whose only router trace is a router session profile', async () => {
     const { survivor, victim } = await pair();
-    await seedLegacySession('profile-only', survivor.id, '', '/tmp', { profile: { areaId: 'personal', areaRole: 'work' }, initialProcessStatus: 'running' });
+    await seedLegacySession('profile-only', survivor.id, '', '/tmp', { profile: { areaId: 'personal', areaRole: 'router' }, initialProcessStatus: 'running' });
     writeAreas([]);
     await expectRefused(() => mergeTaskInto(survivor.id, victim.id), 'survivor', victim.id);
-  });
-
-  it('a task listed only in the registry', async () => {
-    const { survivor, victim } = await pair();
-    writeAreas([{ id: 'personal', taskIds: [victim.id] }]);
-    await expectRefused(() => mergeTaskInto(survivor.id, victim.id), 'victim', victim.id);
   });
 
   it('an unreadable registry refuses every merge', async () => {
@@ -135,14 +120,24 @@ describe('merge refuses incoming-item area work before any write', () => {
     await expectRefused(() => mergeTaskInto(survivor.id, victim.id), 'survivor', victim.id);
   });
 
-  it('a batch with one area victim merges none of its victims', async () => {
-    const { survivor, victim } = await pair({ victimArea: 'personal' });
+  it('a batch with one router victim merges none of its victims', async () => {
+    const { survivor, victim } = await pair({ victimRouter: 'personal' });
     const { task: plain } = await addTask({ title: 'Plain duplicate', project: '', source: 'local' });
-    writeAreas([{ id: 'personal', taskIds: [victim.id] }]);
+    writeAreas([{ id: 'personal', taskIds: [victim.id] }], [{ taskId: victim.id, areaId: 'personal' }]);
     const before = await snapshot();
     await expect(mergeTasksInto(survivor.id, [plain.id, victim.id])).rejects.toBeInstanceOf(AreaMergeRefusedError);
     expect(await snapshot()).toEqual(before);
     expect((await getTask(plain.id)).id).toBe(plain.id);
+  });
+});
+
+describe('routed work an older build isolated merges like any task', () => {
+  it('an area mark, a receiver profile and registry membership do not refuse a merge', async () => {
+    const { survivor, victim } = await pair({ legacyVictim: 'personal' });
+    writeAreas([{ id: 'personal', taskIds: [victim.id] }]);
+    await mergeTaskInto(survivor.id, victim.id);
+    expect((await tracker.getSessionByClaudeId('victim-sid'))?.taskId).toBe(survivor.id);
+    await expect(getTask(victim.id)).rejects.toThrow(/No task found/);
   });
 });
 

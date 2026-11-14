@@ -259,18 +259,13 @@
 .org-router-settings-body {
   display: flex; flex-direction: column; gap: 12px; padding: 4px 18px 14px 38px;
 }
-.org-router-rules { padding: 4px 18px 14px 38px; min-width: 0; }
-.org-router-rules h4 { margin: 0 0 6px; font-size: 13px; }
-.org-router-rules fieldset { margin: 12px 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; min-width: 0; }
-.org-router-rules legend { font-size: 12px; overflow-wrap: anywhere; }
-.org-router-rules .org-router-actions { margin: 12px 0; }
 .org-router-field { display: flex; flex-direction: column; gap: 4px; max-width: 520px; font-size: 13px; }
 .org-router-field input:not([type]) { max-width: 360px; }
 .org-router-label { font-weight: 600; }
 .org-router-hint { font-size: 12px; color: var(--fg-secondary); }
 .org-router-check { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 13px; }
 .org-router-check.is-stale { color: var(--fg-secondary); font-style: italic; }
-/* Many VPs: a finder above, and the list scrolls inside its own box so Save and the rules stay near. */
+/* Many VPs: a finder above, and the list scrolls inside its own box so Save stays near. */
 .org-router-link-filter {
   width: 100%; max-width: 320px; margin: 0 0 6px; padding: 5px 8px; font: inherit; font-size: 13px;
   color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
@@ -284,8 +279,7 @@
 .org-router-error { margin: 0; font-size: 12px; color: var(--error, #d70015); }
 .org-router-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .org-page.is-phone .org-router-settings-head { padding: 8px 12px; }
-.org-page.is-phone .org-router-settings-body,
-.org-page.is-phone .org-router-rules { padding: 4px 12px 12px; }
+.org-page.is-phone .org-router-settings-body { padding: 4px 12px 12px; }
 .org-detail { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .org-detail-head {
   display: flex;

@@ -38,7 +38,6 @@ const TURN_END_WRITER = 'src/core/sessions/status-question.ts'
 /** Writers of task.status_report that derive nothing from a turn end, and why. */
 const NOT_TURN_END: Record<string, string> = {
   'src/core/sessions/report-set.ts': 'task_report_set: an explicit call of the task, its lead or Main, with the words it gives now',
-  'src/core/router/processing.ts': 'router_work: an incoming-item task\'s explicit report call, with the words it gives now',
 }
 /** Readers of a turn-end report, each storing it only through applyStatusAnswer. */
 const REPORT_READERS = ['src/core/sessions/status-question.ts', 'src/core/session-hooks/builtins.ts']

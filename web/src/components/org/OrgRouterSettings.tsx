@@ -3,7 +3,7 @@
  * A router is its own Org node (Task.org_role 'router'): not a VP and not a task under one. Only a
  * router's detail draws this section; a VP never gets any of it.
  *
- *   folded   one line: its area, Paused or Ready for assigned items, how many VPs it works with
+ *   folded   one line: its area, Paused or Ready for new items, how many VPs it works with
  *   open     its area (set at creation, read only here), its name, Paused, and the VPs it works
  *            with first; Save sends PATCH /api/v1/org/routers/:id with the changed fields only
  *
@@ -20,22 +20,33 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { apiPatch } from '@/api/client';
-import { refreshRouterAreas, routerAreaSources, useRouterAreaNames } from './router-area-names';
+import { refreshRouterAreas, routerAreaFolders, routerAreaSources, useRouterAreaNames } from './router-area-names';
 import { setRouterSettingsOpen } from './router-settings-open';
 import { listMailAccounts } from '@/api/mail';
 import { useDraftValue } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import { isBoolean, usePageViewOf } from '@/utils/view-memory';
 import { areaIdWords, routerStateWord, vpLinkCount } from './org-channels-model';
-import { OrgRouterRules } from './OrgRouterRules';
 
 export interface RouterSettingsValue {
   name: string;
   links: string[];
   paused: boolean;
+  /** The watched folders as typed: names separated by commas ('' = the Inbox, the plugin's default); unset in a draft saved before. */
+  folders?: string;
 }
 
-export type RouterSettingsPatch = Partial<RouterSettingsValue>;
+export interface RouterSettingsPatch {
+  name?: string;
+  links?: string[];
+  paused?: boolean;
+  folders?: string[];
+}
+
+/** The typed folder list as the server keeps it: trimmed, no repeats, no blanks. */
+export function folderList(text: string): string[] {
+  return [...new Set(text.split(',').map((one) => one.trim()).filter(Boolean))];
+}
 
 /** What a link points at now: an open VP, or something that is no longer one. */
 export type RouterLinkState = 'open' | 'closed' | 'not-vp' | 'missing';
@@ -48,18 +59,27 @@ export interface RouterLinkRow {
 
 export const ROUTER_NAME_MAX = 60;
 export const ROUTER_PAUSED_LINE = 'Paused. It reads no incoming items until you turn Paused off.';
-export const ROUTER_READY_LINE = 'Ready for assigned items. It reads only items routed to its own area, and some source accounts may not be readable yet.';
+export const ROUTER_READY_LINE = 'Ready. It reads each new item of its accounts and hands it straight to the task or VP that owns it.';
 /** Window event (detail: the router's task id) that opens that router's settings section. */
 export const ROUTER_SETTINGS_OPEN_EVENT = 'org:router-settings-open';
 
-/** What "Reads from" means: an account listed here gives the router only the messages chosen for this area. */
-export const ROUTER_SOURCES_NOTE = 'From these accounts it reads only the messages you chose for this area, never the rest of the account.';
+/** What "Reads from" means: every new mail of these accounts, in the folders it watches. */
+export const ROUTER_SOURCES_NOTE = 'It reads every new mail of these accounts in the folders it watches.';
+
+export const ROUTER_FOLDERS_NOTE = 'Folder or label names, separated by commas. Empty: the Inbox.';
+export const ROUTER_NO_INBOX_LINE = 'Inbox is not in this list: new Inbox mail of these accounts goes to no one. Add Inbox to keep it.';
+
+/** Whether a typed folder list leaves the Inbox out (an empty list means the Inbox). */
+export function foldersSkipInbox(text: string): boolean {
+  const list = folderList(text);
+  return list.length > 0 && !list.some((one) => one.toLowerCase() === 'inbox');
+}
 
 export const ROUTER_LINK_NOTE = 'Links name the VPs it works with first. A link gives no ownership and no access to a VP\'s data.';
 
 /** The router's saved settings, as the form's baseline. */
-export function routerBaseline(task: Pick<Task, 'org_name' | 'title' | 'router_links' | 'router_paused'>): RouterSettingsValue {
-  return { name: task.org_name || task.title, links: [...(task.router_links ?? [])], paused: task.router_paused !== false };
+export function routerBaseline(task: Pick<Task, 'org_name' | 'title' | 'router_links' | 'router_paused'>, folders: readonly string[] = []): RouterSettingsValue {
+  return { name: task.org_name || task.title, links: [...(task.router_links ?? [])], paused: task.router_paused !== false, folders: folders.join(', ') };
 }
 
 /** Only the fields that changed (null: nothing to save). Links compare as a set. */
@@ -71,6 +91,9 @@ export function routerPatch(saved: RouterSettingsValue, edited: RouterSettingsVa
   const b = [...new Set(edited.links)].sort();
   if (a.length !== b.length || a.some((id, i) => id !== b[i])) patch.links = [...new Set(edited.links)];
   if (edited.paused !== saved.paused) patch.paused = edited.paused;
+  const before = folderList(saved.folders ?? '');
+  const after = folderList(edited.folders ?? '');
+  if (before.length !== after.length || before.some((one, i) => one !== after[i])) patch.folders = after;
   return Object.keys(patch).length ? patch : null;
 }
 
@@ -96,7 +119,7 @@ export function routerLinkRows(links: readonly string[], tasks: readonly Task[])
   });
 }
 
-/** The folded line: its area, Paused or Ready for assigned items, its VP links (and how many of
+/** The folded line: its area, Paused or Ready for new items, its VP links (and how many of
  *  them no longer name an open VP). */
 export function routerSummary(area: string, saved: RouterSettingsValue, staleLinks: number): string {
   const parts = [area || 'Area not configured', routerStateWord(saved.paused), vpLinkCount(new Set(saved.links).size)];
@@ -141,7 +164,11 @@ export function OrgRouterSettings({ router, tasks, tasksLoading = false }: Props
   useEffect(() => () => { seq.current++; }, []);
 
   const fresh = saved && saved.id === id && (saved.updated_at ?? '') >= (router.updated_at ?? '') ? saved : router;
-  const baseline = useMemo(() => routerBaseline(fresh), [fresh]);
+  const area = fresh.router_area_id || '';
+  // The area's own name ("Personal"), never its id; the id stays until the areas list answers.
+  const areaNames = useRouterAreaNames([area]);
+  const savedFolders = (routerAreaFolders()[area] ?? []).join('\n');
+  const baseline = useMemo(() => routerBaseline(fresh, savedFolders ? savedFolders.split('\n') : []), [fresh, savedFolders, areaNames]);
   const form = useDraftValue<RouterSettingsValue>(draftKey('org-router-settings', id), baseline);
   const value = form.value;
   const busy = pendingFor === id;
@@ -175,6 +202,7 @@ export function OrgRouterSettings({ router, tasks, tasksLoading = false }: Props
       form.clear(sentKey, sentText);
       if (mine !== seq.current || currentId.current !== forId) return;
       if (res?.task && res.task.id === forId) setSaved(res.task);
+      if (patch.folders) refreshRouterAreas();
       setSavedAt({ id: forId, at: Date.now() });
     } catch (err) {
       if (mine !== seq.current || currentId.current !== forId) return;
@@ -184,7 +212,6 @@ export function OrgRouterSettings({ router, tasks, tasksLoading = false }: Props
     }
   };
 
-  const area = fresh.router_area_id || '';
   // Opening the settings reads the areas again: choosing this area for a message in Mail or Slack
   // adds its account on the server, and "Reads from" must show it without a reload.
   useEffect(() => { if (expanded) refreshRouterAreas(); }, [expanded, id]);
@@ -205,8 +232,6 @@ export function OrgRouterSettings({ router, tasks, tasksLoading = false }: Props
     window.addEventListener(ROUTER_SETTINGS_OPEN_EVENT, open);
     return () => window.removeEventListener(ROUTER_SETTINGS_OPEN_EVENT, open);
   }, [id, setExpanded]);
-  // The area's own name ("Personal"), never its id; the id stays until the areas list answers.
-  const areaNames = useRouterAreaNames([area]);
   const areaLabel = (area && (areaNames[area] || areaIdWords(area))) || area;
   const regionId = `org-router-settings-${id}`;
   const justSaved = savedAt?.id === id && !patch;
@@ -235,7 +260,6 @@ export function OrgRouterSettings({ router, tasks, tasksLoading = false }: Props
             linkFilter={vpQuery} onLinkFilter={setVpQuery}
             onEdit={form.setValue} onToggleLink={toggleLink} onSave={() => { void save(); }} onDiscard={() => { form.clear(); setFailure(null); }}
           />
-          <OrgRouterRules key={id} areaId={area} />
         </div>
       )}
     </section>
@@ -305,15 +329,28 @@ export function RouterSettingsBody({ id, draftKey: key, area, sources = [], valu
       <div className="org-router-field">
         <span className="org-router-label">Area</span>
         <span data-testid="org-router-area">{area || 'Not configured'}</span>
-        <span className="org-router-hint">Set when the router was made. It reads only items routed to this area.</span>
+        <span className="org-router-hint">Set when the router was made.</span>
       </div>
       <div className="org-router-field" data-testid="org-router-sources">
         <span className="org-router-label">Reads from</span>
         {sources.length
           ? <ul className="org-router-sources">{sources.map((src) => <li key={`${src.kind}\n${src.account}`} data-account={src.account}>{(src.kind === 'mail' && sourceNames[src.account]) || src.account} <span className="org-router-hint">({src.kind === 'slack' ? 'Slack' : 'Mail'})</span></li>)}</ul>
-          : <span className="org-router-hint">No account yet. When you choose this area for a message in Mail or Slack, its account shows here.</span>}
+          : <span className="org-router-hint">No account yet. The Mail plugin adds each mailbox here.</span>}
         <span className="org-router-hint">{ROUTER_SOURCES_NOTE}</span>
       </div>
+      <label className="org-router-field">
+        <span className="org-router-label">Watches folders</span>
+        <input
+          value={value.folders ?? ''}
+          placeholder="Inbox"
+          data-draft-key={draftAttr}
+          data-testid="org-router-folders"
+          disabled={busy}
+          onChange={(e) => { const folders = e.target.value; onEdit((v) => ({ ...v, folders })); }}
+        />
+        <span className="org-router-hint">{ROUTER_FOLDERS_NOTE}</span>
+        {foldersSkipInbox(value.folders ?? '') ? <span className="org-router-error" role="status" data-testid="org-router-folders-no-inbox">{ROUTER_NO_INBOX_LINE}</span> : null}
+      </label>
       <label className="org-router-field">
         <span className="org-router-label">Name</span>
         <input

@@ -928,13 +928,10 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
     throw err;
   }
   const targetSid = target.session.claudeSessionId;
-  let supervisorDelivery = false;
   if (caller.kind === 'session' && caller.record.taskId) {
-    const { mayShareTaskContext, mayManageRoutedTask } = await import('../router/context-sharing.js');
-    const sharesArea = await mayShareTaskContext(caller.record.taskId, target.taskId ?? target.session.taskId);
-    if (!sharesArea) supervisorDelivery = await mayManageRoutedTask(caller.record.taskId, target.taskId ?? target.session.taskId);
-    if (!sharesArea && !supervisorDelivery) {
-      throw new SendError('area_forbidden', 'Context cannot be sent across an area boundary.', 403);
+    const { mayShareTaskContext } = await import('../router/context-sharing.js');
+    if (!await mayShareTaskContext(caller.record.taskId, target.taskId ?? target.session.taskId)) {
+      throw new SendError('area_forbidden', 'A router talks only through its router tools, and no task sends into a router.', 403);
     }
   }
 
@@ -1090,8 +1087,7 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
       busText: body, enqueueText, source, taskId, messageId: rowId, fromLeader,
       ...(input.liveOnly ? { liveOnly: input.liveOnly } : {}),
     });
-    const { withRouterDelivery } = await import('../router/delivery-scope.js');
-    ({ delivery, messageId } = await (supervisorDelivery ? withRouterDelivery(targetSid, rowId, deliver) : deliver()));
+    ({ delivery, messageId } = await deliver());
   } catch (err) {
     // A rejected delivery never landed, so a request row we just created would
     // otherwise sit pending until its deadline and the sweeper would tell the
@@ -1270,7 +1266,7 @@ async function performReply(
   if (caller.record.taskId) {
     const { mayShareTaskContext } = await import('../router/context-sharing.js');
     if (!await mayShareTaskContext(caller.record.taskId, origin.taskId)) {
-      throw new SendError('cross_area', 'This reply crosses an incoming-item area. Nothing was delivered or settled.', 403);
+      throw new SendError('cross_area', 'A reply never crosses into or out of a router. Nothing was delivered or settled.', 403);
     }
   }
   // Before the settle: a refused answer leaves the request open for a forced retry.

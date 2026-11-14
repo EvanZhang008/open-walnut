@@ -4768,8 +4768,8 @@ export async function updateTask(
         throw new Error(ambiguousIdMessage(updates.parent_task_id!, parentMatches, 'parent_task_id'));
       }
       const parentTask = parentMatches[0];
-      if (task.org_role === 'router' || task.router_area_id !== parentTask.router_area_id) {
-        throw new Error('Router nodes are independent, and receiving work cannot move under a leader in another area.');
+      if (task.org_role === 'router' || parentTask.org_role === 'router') {
+        throw new Error('Router nodes are independent: a router never moves under a leader, and no task moves under a router.');
       }
       if (parentTask.id === task.id) {
         throw new Error('A task cannot be its own parent.');
@@ -5850,9 +5850,9 @@ async function refuseAreaMerge(survivorId: string, victimId: string): Promise<vo
   }
 }
 
-/** The same refusal on the rows read under the write lock: their own area marks and role. */
+/** The same refusal on the rows read under the write lock: a router (only a router is area work since 2026-11-14). */
 function areaMarked(task: Task): boolean {
-  return (typeof task.router_area_id === 'string' && !!task.router_area_id.trim()) || task.org_role === 'router';
+  return task.org_role === 'router';
 }
 
 /**

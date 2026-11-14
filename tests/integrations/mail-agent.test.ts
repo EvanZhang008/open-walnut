@@ -574,15 +574,12 @@ describe('a poisoned body comes back as data', () => {
   it('answers a `too-large` body with a plain sentence rather than a throw', async () => {
     const readMessage = vi.spyOn(MailService.prototype, 'readMessage');
     try {
-      const captured = await api<{ bodyError?: string }>('GET', `/messages/${encodeURIComponent(ONE)}/INBOX%3A900%3A4`);
-      expect(captured.body.bodyError).toBe('too-large');
-      readMessage.mockClear();
       const first = await tool('mail_read', { message: 'INBOX:900:4' });
       expect(first).toContain('over the size cap');
       expect(first).not.toContain('Error');
       // The envelope is still real data, and it is still answered.
       expect(first).toContain('Photos from the trip');
-      expect(readMessage.mock.calls).toEqual([]);
+      expect(readMessage.mock.calls[0]?.[2]).toEqual({});
 
       const before = marks().bodyFetches['INBOX:900:4'] ?? 0;
       // Without `retry` the refusal is answered from the marker: re-asking on every open is how
@@ -592,10 +589,9 @@ describe('a poisoned body comes back as data', () => {
 
       const retried = await tool('mail_read', { message: 'INBOX:900:4', retry: true });
       expect(retried).toContain('over the size cap');
-      expect(readMessage.mock.calls).toEqual([]);
-      expect(marks().bodyFetches['INBOX:900:4'] ?? 0).toBe(before);
-      await api('GET', `/messages/${encodeURIComponent(ONE)}/INBOX%3A900%3A4?retry=1`);
-      expect(readMessage.mock.calls.at(-1)?.[2]).toEqual({ retry: true, cacheOnly: false });
+      // The flag reached the service, and the service reached the provider (no read guard sits in
+      // between since 2026-11-14: only a router session is restricted, and it has no mail_read).
+      expect(readMessage.mock.calls.at(-1)?.[2]).toEqual({ retry: true });
       expect(marks().bodyFetches['INBOX:900:4'] ?? 0).toBe(before + 1);
     } finally {
       readMessage.mockRestore();

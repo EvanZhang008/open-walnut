@@ -114,7 +114,7 @@ const MailKidRow = memo(function MailKidRow({ message, selected, openMenu, menuO
       <span className="mail-kid-from">{senderLabel(message.from)}</span>
       <span className="mail-kid-subject">{message.subject || '(no subject)'}</span>
       <span className="mail-row-time">{formatMailTime(message.sentAt)}</span>
-      {showsRouteLine(message) && <MailRouteLine route={message.route} unavailable={message.routingUnavailable} handoff={message.routingHandoff} routingArea={message.routingArea} routingCoverage={message.routingCoverage} surface="row" />}
+      {showsRouteLine(message) && <MailRouteLine route={message.route} unavailable={message.routingUnavailable} routingArea={message.routingArea} routingCoverage={message.routingCoverage} surface="row" />}
       {outgoing && <MailRouteLine route={undefined} outgoing={outgoing} surface="row" />}
     </div>
   );

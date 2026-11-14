@@ -904,7 +904,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
   // the type flows and a stale/cleared task can't trigger a no-op triage.
   if (!p.taskId) return;
   const taskId = p.taskId;
-  // A router area task's note and status are router_work's alone: no generic merged note.
+  // A router's note and status are its own routing log: no generic merged note.
   if (await routerScopedStatus(taskId, p.sessionId)) return;
 
   // Cooldown: prevent burst dispatches from replayed events after server restart.

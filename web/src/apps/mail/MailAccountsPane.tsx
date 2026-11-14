@@ -18,7 +18,7 @@ import {
 } from 'react';
 import type { MailAccountDto, MailDraftDto, MailProviderSummary, MailboxDto } from '@/api/mail';
 import { useNavigate } from 'react-router-dom';
-import { ORG_ROUTER_SETUP_PATH } from './MailRouterAssignment';
+import { ORG_ROUTER_SETUP_PATH } from './mail-route-model';
 import { MailRouterRows } from './MailRouterRows';
 import { ContextMenu } from '@/components/common/ContextMenu';
 import { useScrollAnchor } from '@/hooks/useScrollAnchor';

@@ -187,7 +187,7 @@ export function MailRow({ message, selected, accounts, outbound, menu, flagFaile
         )}
       </span>
       <span className="mail-row-snippet">{message.snippet}</span>
-      {routed && <MailRouteLine route={message.route} unavailable={message.routingUnavailable} handoff={message.routingHandoff} routingArea={message.routingArea} routingCoverage={message.routingCoverage} surface="row" />}
+      {routed && <MailRouteLine route={message.route} unavailable={message.routingUnavailable} routingArea={message.routingArea} routingCoverage={message.routingCoverage} surface="row" />}
       {outgoing && <MailRouteLine route={undefined} outgoing={outgoing} surface="row" />}
       {footer}
     </div>

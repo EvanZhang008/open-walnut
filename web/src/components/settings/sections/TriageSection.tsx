@@ -16,7 +16,8 @@ interface Props {
   onSave: OnSave;
 }
 
-type TriageSource = 'mail' | 'slack';
+/** Slack only: new mail goes to the mail router since 2026-11-14 (an old 'mail' is ignored). */
+type TriageSource = 'slack';
 type TriageMode = 'ask' | 'assist';
 type TriageBlock = NonNullable<Config['triage']>;
 
@@ -28,13 +29,16 @@ type TriageBlock = NonNullable<Config['triage']>;
  */
 const DEFAULT_EVERY = '30m';
 const DEFAULT_EVERY_MESSAGES = 20;
-const ALL_SOURCES: TriageSource[] = ['mail', 'slack'];
+const ALL_SOURCES: TriageSource[] = ['slack'];
 const DEFAULT_MODE: TriageMode = 'ask';
 const DEFAULT_ACTIVE_HOURS = '08:00-22:00';
-const SOURCE_LABELS: Record<TriageSource, string> = { mail: 'Mail', slack: 'Slack' };
+const SOURCE_LABELS: Record<TriageSource, string> = { slack: 'Slack' };
 
-/** Toggle one source, keeping the canonical order (pure, unit tested). */
-export function toggleSource(sources: readonly TriageSource[], source: TriageSource, on: boolean): TriageSource[] {
+/**
+ * Toggle one source, keeping the canonical order (pure, unit tested). A stored
+ * source this build no longer knows (an old 'mail') is dropped on the next toggle.
+ */
+export function toggleSource(sources: readonly string[], source: TriageSource, on: boolean): TriageSource[] {
   return ALL_SOURCES.filter((s) => (s === source ? on : sources.includes(s)));
 }
 
@@ -49,7 +53,6 @@ export function TriageSection({ config, onSave }: Props) {
   const enabled = useOptimisticSetting<boolean>(t?.enabled ?? false, (v) => saveTriage({ enabled: v }, 'triage.enabled'), { rowKey: 'triage.enabled' });
   const sources = useOptimisticSetting<TriageSource[]>(t?.sources ?? ALL_SOURCES, (v) => saveTriage({ sources: v }, 'triage.sources'), { rowKey: 'triage.sources' });
   const mode = useOptimisticSetting<TriageMode>(t?.mode ?? DEFAULT_MODE, (v) => saveTriage({ mode: v }, 'triage.mode'), { rowKey: 'triage.mode' });
-  const markRead = useOptimisticSetting<boolean>(t?.auto_mark_read ?? false, (v) => saveTriage({ auto_mark_read: v }, 'triage.mark-read'), { rowKey: 'triage.mark-read' });
   const every = useCommitField<string>(
     t?.every ?? DEFAULT_EVERY,
     (v) => saveTriage({ every: v.trim() || DEFAULT_EVERY }, 'triage.every'),
@@ -74,12 +77,12 @@ export function TriageSection({ config, onSave }: Props) {
 
   return (
     <SectionCard id="triage" title="Inbox Triage" onSave={handleSubmit} showSave={false}>
-      {/* The other half of the Mail rules cross-link: Triage reads what grouping left in Important. */}
-      <p className="settings-row-help triage-mail-rules-link" data-testid="triage-mail-rules-link">
-        Walnut sorts mail into groups first. <Link to="/settings#mail-rules">Open Mail rules</Link>
+      {/* Since 2026-11-14 every mailbox is bound to a mail router, which triages each new mail itself. */}
+      <p className="settings-row-help triage-mail-router-note" data-testid="triage-mail-router-note">
+        New mail goes to the mail router, not here. <Link to="/org">Open Org</Link>
       </p>
       <SettingsGroup>
-        <SettingsRow label="Inbox triage" help="Works through new mail and Slack against your projects and tasks." htmlFor="inbox-triage-enabled"
+        <SettingsRow label="Inbox triage" help="Works through new Slack messages against your projects and tasks." htmlFor="inbox-triage-enabled"
           error={enabled.error}
           control={<ToggleSwitch id="inbox-triage-enabled" checked={enabled.value} busy={enabled.busy} onChange={enabled.set} />} />
         <SettingsRow indent disabled={off} label="Interval" help={'A duration such as 30m or 1h; at least 5m, and "0" turns it off.'}
@@ -93,7 +96,7 @@ export function TriageSection({ config, onSave }: Props) {
           control={<input id="inbox-triage-hours" type="text" data-no-draft="autosave" className="settings-input settings-input--number" placeholder={DEFAULT_ACTIVE_HOURS} disabled={off} {...hours.inputProps} />} />
       </SettingsGroup>
 
-      <SettingsGroup heading="Sources" className="settings-checklist" footer="With neither ticked, only the interval starts a batch."
+      <SettingsGroup heading="Sources" className="settings-checklist" footer="With no source ticked, Inbox Triage does not run."
         disabled={off} data-testid="inbox-triage-sources">
         {ALL_SOURCES.map((source) => (
           <SettingsCheckbox
@@ -109,7 +112,7 @@ export function TriageSection({ config, onSave }: Props) {
       </SettingsGroup>
 
       <SettingsGroup heading="Actions">
-        <SettingsRow disabled={off} label="Mode" help="Sending mail and posting to Slack always need your approval." error={mode.error}
+        <SettingsRow disabled={off} label="Mode" help="Posting to Slack always needs your approval." error={mode.error}
           data-testid="inbox-triage-mode-row"
           control={
             <SegmentedControl<TriageMode>
@@ -120,14 +123,10 @@ export function TriageSection({ config, onSave }: Props) {
               onChange={mode.set}
               options={[
                 { value: 'ask', label: 'Ask', testId: 'inbox-triage-mode-ask', title: 'Hands items to their tasks, asks you about the rest' },
-                { value: 'assist', label: 'Assist', testId: 'inbox-triage-mode-assist', title: 'May also update tasks and unsubscribe' },
+                { value: 'assist', label: 'Assist', testId: 'inbox-triage-mode-assist', title: 'May also update tasks' },
               ]}
             />
           } />
-        <SettingsRow disabled={off} label="Mark promotional mail as read"
-          help="Newsletters, ads and notices that ask nothing of you; Triage never deletes mail."
-          htmlFor="inbox-triage-auto-mark-read" error={markRead.error}
-          control={<ToggleSwitch id="inbox-triage-auto-mark-read" checked={markRead.value} busy={markRead.busy} disabled={off} onChange={markRead.set} />} />
       </SettingsGroup>
 
       <TriageRoutingRules off={off} />

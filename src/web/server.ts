@@ -1539,6 +1539,18 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   if (role() === 'leader') {
     const { readRouterAreas, ensureAreasDataVersion } = await import('../core/router/areas.js')
     if ((await readRouterAreas(WALNUT_HOME)).areas.length > 0) await ensureAreasDataVersion(WALNUT_HOME)
+    // Before any session starts or resumes: routed work leaves its area, so it runs as ordinary work
+    // (router/simplify-migration.ts, backed up and reversible). A failure leaves the store as it was.
+    try {
+      const { runRouterSimplify } = await import('../core/router/simplify-migration.js')
+      const run = await runRouterSimplify()
+      if (run) log.web.info('router simplify moved routed work out of its areas', {
+        members: run.members.reduce((n, one) => n + one.taskIds.length, 0), items: run.items.length,
+        rules: run.ruleBindings.length, marks: run.marks.length, profiles: run.profiles.length,
+      })
+    } catch (err) {
+      log.web.warn('router simplify failed; it runs again at the next boot', { error: err instanceof Error ? err.message : String(err) })
+    }
   }
 
   // Start local daemon for session management. All sessions (local + remote)
@@ -1803,7 +1815,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // reads as that session's record id from here on (core/sessions/acp-caller-sid.ts).
   app.use('/api', (await import('../core/sessions/acp-caller-sid.js')).acpCallerSidMiddleware)
   app.use('/api', (await import('./middleware/router-area-access.js')).routerAreaAccess)
-  app.use('/api', (await import('./middleware/router-area-reader.js')).routerAreaReader)
   // A host replica answering alone (the Mac away, no companion standing in): a
   // session that runs on the Mac (or another host) cannot be read here beyond
   // its row; its reads answer needs_leader. This host's sessions are WP6's

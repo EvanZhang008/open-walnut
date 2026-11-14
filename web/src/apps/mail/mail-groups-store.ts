@@ -460,20 +460,6 @@ export function applyRouteToGroupedRows(target: { accountId: string; messageId: 
   if (touched) emit();
 }
 
-/** The area the person confirmed for one delivery; a row that already names an area keeps it. */
-export function applyAreaToGroupedRows(target: { accountId: string; messageId: string; version?: string }, area: { id: string; name: string }): void {
-  let touched = false;
-  for (const [key, page] of pages) {
-    const rows = page.rows.map((one) => {
-      if (rowId(one) !== rowId(target) || (one.deliveryVersion ?? '') !== (target.version ?? '') || one.routingArea) return one;
-      touched = true;
-      return { ...one, routingArea: area };
-    });
-    if (rows.some((one, i) => one !== page.rows[i])) pages.set(key, { ...page, rows });
-  }
-  if (touched) emit();
-}
-
 /** A bulk job's `changedIds`: restyle every loaded row it names (spec 9.1 step 4). */
 export function restyleRows(ids: Array<{ accountId: string; messageId: string }>, seen: boolean): void {
   let touched = false;

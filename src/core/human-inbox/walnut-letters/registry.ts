@@ -15,6 +15,7 @@ import { ORG_REPORT } from './org-report.js';
 import { MAIL_APPROVAL } from './mail-approval.js';
 import { MAIL_UNSUBSCRIBE } from './mail-unsubscribe.js';
 import { MAIL_DIGEST } from './mail-digest.js';
+import { MAIL_NO_ROUTER } from './mail-no-router.js';
 import { OFFLINE_CONFLICT } from './offline-conflict.js';
 import { LOCAL_NETWORK_BLOCKED } from './local-network-blocked.js';
 import { SSH_CERT_EXPIRY } from './ssh-cert-expiry.js';
@@ -28,6 +29,7 @@ export const WALNUT_LETTER_KINDS: readonly WalnutLetterKind<any>[] = [
   MAIL_APPROVAL,
   MAIL_UNSUBSCRIBE,
   MAIL_DIGEST,
+  MAIL_NO_ROUTER,
   OFFLINE_CONFLICT,
   LOCAL_NETWORK_BLOCKED,
   SSH_CERT_EXPIRY,

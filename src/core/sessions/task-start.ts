@@ -413,9 +413,8 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
     const { resolveCaller } = await import('./session-send-core.js');
     const caller = await resolveCaller(params.callerSid);
     if (caller.kind === 'session' && caller.record.taskId) {
-      const { mayShareTaskContext, mayManageRoutedTask } = await import('../router/context-sharing.js');
-      if (!await mayShareTaskContext(caller.record.taskId, task.id)
-        && !await mayManageRoutedTask(caller.record.taskId, task.id)) throw areaRefusal('cross_area', 'Only the person, Main or the current owning VP may start routed work across its area boundary. Nothing was started.');
+      const { mayShareTaskContext } = await import('../router/context-sharing.js');
+      if (!await mayShareTaskContext(caller.record.taskId, task.id)) throw areaRefusal('cross_area', 'A router starts no other task, and no other task starts a router. Nothing was started.');
     }
   }
   if (params.source !== 'engine-switch') {
@@ -1133,12 +1132,13 @@ async function routerAreaStart(task: Task, params: SessionStartParams): Promise<
   try {
     file = await readRouterAreas(WALNUT_HOME);
   } catch (err) {
-    if (!task.router_area_id && task.org_role !== 'router') return null;
+    if (task.org_role !== 'router') return null;
     throw areaRefusal('router_areas_unreadable', `This task's router area could not be read: ${err instanceof Error ? err.message : String(err)}`, 503);
   }
+  // Only a router runs isolated; a mark an older build left on routed work is ignored (2026-11-14).
   const area = taskArea(file, task.id);
-  if (task.router_area_id && task.router_area_id !== area?.id) throw areaRefusal('router_area_mismatch', 'The task and its configured area disagree. Nothing was started.');
-  if (!area && (task.router_area_id || task.org_role === 'router')) throw areaRefusal('router_unassigned', 'This scoped task has no matching area. Finish its router setup before starting it.');
+  if (task.org_role === 'router' && task.router_area_id && task.router_area_id !== area?.id) throw areaRefusal('router_area_mismatch', 'The task and its configured area disagree. Nothing was started.');
+  if (!area && task.org_role === 'router' && task.router_area_id) throw areaRefusal('router_unassigned', 'This scoped task has no matching area. Finish its router setup before starting it.');
   if (!area) return null;
   if (task.router_area_id !== area.id || task.source !== 'local'
     || file.routers.some((router) => router.taskId === task.id) !== (task.org_role === 'router')) {
@@ -1170,7 +1170,7 @@ async function routerAreaStart(task: Task, params: SessionStartParams): Promise<
     throw areaRefusal('area_place_fixed', `Task ${task.id} belongs to router area ${area.id} and runs only in its own task directory, not in ${params.cwd}.`);
   }
   return {
-    area, profile: routerAreaProfile(area.id, file.routers.some((router) => router.taskId === task.id) ? 'router' : 'work'), cwd,
+    area, profile: routerAreaProfile(area.id), cwd,
     params: { ...params, engine: undefined, mode: 'dontAsk', host: '__local__', cwd },
   };
 }
@@ -1181,7 +1181,7 @@ async function routerAreaStart(task: Task, params: SessionStartParams): Promise<
  * continued, resumed, retired or replaced by a start; the refusal leaves it as it is.
  */
 function refuseForeignAreaSessions(task: Task, area: RouterArea, records: SessionRecord[]): void {
-  const foreign = records.find((r) => !isRouterAreaSession(r, area, task.org_role === 'router' ? 'router' : 'work'));
+  const foreign = records.find((r) => !isRouterAreaSession(r, area));
   if (!foreign) return;
   throw new QuickStartError(
     `Task ${task.id} belongs to router area ${area.id}, but its session ${foreign.claudeSessionId} was not started isolated in that area. `

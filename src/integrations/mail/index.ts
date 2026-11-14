@@ -24,8 +24,9 @@ import type { RouterNoiseOutcome } from '../../core/router/source-registry.js'
 import type { RouterSource } from '../../core/router/types.js'
 import { decorateMailRoutes } from './router-decoration.js'
 import { bindMailAccounts, createMailRouterIntake } from './router-intake.js'
+import { mailIntakeQueue } from './intake-pending.js'
+import { adoptTriageMail } from './triage-mail-adoption.js'
 import { createMailOps } from './ops.js'
-import { guardMailOps, guardMailTools, keepUnassignedMail } from './router-read-guard.js'
 import { createMailMentionSource } from './mention-source.js'
 import { MailProviderRegistry, PROVIDERS_CHANGED_EVENT } from './provider-registry.js'
 import { createMailTriggerTemplate } from './trigger-template.js'
@@ -292,15 +293,17 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   // and this plugin already owns exactly one timer. A replica arms no tick at all, which is also how
   // the digest stays off there without a second replica check.
   const captureIncoming = createMailRouterIntake({ store, home: routingHome, log: walnut.log })
-  sync = new MailSync({ walnut, store, service, retention, events, sends, approvals, digest, sort, captureIncoming })
+  sync = new MailSync({ walnut, store, service, retention, events, sends, approvals, digest, sort, captureIncoming, retryIncoming: captureIncoming.retry })
   relistDue = (accountId) => sync.markRelistDue(accountId)
   relistNow = (accountId) => sync.relistNow(accountId)
   setActiveMailSync(sync)
   // Each mailbox goes to the one mail router (made when there is none), so the router reads every
-  // new mail; the intake also binds a mailbox added later, at its first new mail.
+  // new mail; the intake also binds a mailbox added later, at its first new mail. Then the mail an
+  // older build buffered for Inbox Triage joins the intake's pending queue.
   if (!walnut.replica) {
     walnut.timers.timeout(() => {
       void bindMailAccounts(store, routingHome, walnut.log)
+        .then(() => adoptTriageMail(routingHome, mailIntakeQueue(routingHome, { log: walnut.log }), walnut.log))
     }, 5_000)
   }
 
@@ -462,15 +465,11 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     // would register a second copy on top.
     const fresh: Array<{ dispose(): void | Promise<void> }> = []
     try {
-      // Every op and tool naming an exact message judges a non-person caller's incoming-item area
-      // first: the gateway and tool belts run these in-process, past the HTTP area middleware.
-      for (const tool of guardMailTools(createMailTools(agentDeps), agentDeps, createMailTools)) fresh.push(walnut.registry.tool(tool))
-      for (const op of guardMailOps(createMailOps(agentDeps), agentDeps, createMailOps)) fresh.push(walnut.registry.op(op))
+      for (const tool of createMailTools(agentDeps)) fresh.push(walnut.registry.tool(tool))
+      for (const op of createMailOps(agentDeps)) fresh.push(walnut.registry.op(op))
       fresh.push(walnut.registry.skill({ id: 'walnut-mail', directory: SKILL_DIR }))
       fresh.push(walnut.registry.triggerTemplate(createMailTriggerTemplate({
         store, listAccounts: () => service.listAccounts({ capabilities: false }),
-        // The watching session is judged as an agent with no area: classified mail never reaches it.
-        filterIncoming: (rows) => keepUnassignedMail(rows),
       })))
       fresh.push(walnut.registry.agentContext(line))
       // The "@" picker's Mail tab. Optional on the host: an older Walnut has no picker sources.

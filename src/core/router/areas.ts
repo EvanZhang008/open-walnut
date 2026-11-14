@@ -12,8 +12,22 @@ export interface RouterArea {
   id: string
   name: string
   host: string
+  /** The area's routers. Since 2026-11-14 no other task joins an area: routed work stays ordinary work. */
   taskIds: string[]
   sources: RouterAreaSource[]
+  /**
+   * The folders or labels of its mailboxes this router watches (a role such as "inbox", or a name).
+   * Unset: what the source plugin watches by default (mail: the Inbox).
+   */
+  folders?: string[]
+}
+
+export const ROUTER_FOLDERS_MAX = 50
+export const ROUTER_FOLDER_MAX = 200
+
+/** The folders a router watches: its own list, else the plugin's default. */
+export function routerFolders(area: Pick<RouterArea, 'folders'>, fallback: readonly string[]): readonly string[] {
+  return area.folders?.length ? area.folders : fallback
 }
 
 export interface RouterAssignment {
@@ -53,7 +67,7 @@ export interface RouterAreasFile {
   version: 1
   areas: RouterArea[]
   routers: RouterAssignment[]
-  /** Items a person or a rule confirmed: restricted to their area (source-reader, router-area-reader). */
+  /** Legacy: items a person or a rule confirmed. Nothing writes them since 2026-11-14 (router/simplify-migration.ts opens them); kept so an older build still reads the file. */
   items: RouterAreaItem[]
   ruleBindings?: RouterRuleBinding[]
   accountBindings?: RouterAccountBinding[]
@@ -170,7 +184,10 @@ function normalizeArea(value: unknown, index: number): RouterArea {
     seen.add(key)
     return { kind, account }
   })
-  return { id, name, host, taskIds, sources }
+  if (value.folders === undefined) return { id, name, host, taskIds, sources }
+  if (!Array.isArray(value.folders) || value.folders.length > ROUTER_FOLDERS_MAX) throw invalid(`${field}.folders must be a list of at most ${ROUTER_FOLDERS_MAX} folders`)
+  const folders = [...new Set(value.folders.map((one, i) => plainString(one, `${field}.folders[${i}]`, ROUTER_FOLDER_MAX, { trimmed: true }).trim()))]
+  return folders.length ? { id, name, host, taskIds, sources, folders } : { id, name, host, taskIds, sources }
 }
 
 function normalizeRouter(value: unknown, index: number): RouterAssignment {
@@ -337,53 +354,32 @@ export function accountBinding(file: RouterAreasFile, kind: RouterSourceKind, ac
   return file.accountBindings?.find((one) => one.kind === kind && one.account === account)
 }
 
+/**
+ * An item, a router or a task never moves to another area: its ledger (where it went) is that
+ * area's, so a move could route it twice. Leaving the lists is fine (an open arrival whose mail
+ * moved; since 2026-11-14 also a restricted item opened, and routed work leaving its area).
+ */
 export function assertNoReassignment(before: RouterAreasFile, after: RouterAreasFile): void {
-  // Open and closed alike: an item never leaves its area (an open one may become a closed one there).
   const nextItems = new Map(allAreaItems(after).map((item) => [itemKey(item.source), item]))
-  const nextOpen = new Set((after.openItems ?? []).map((item) => itemKey(item.source)))
-  for (const item of before.items) {
-    if (nextOpen.has(itemKey(item.source))) {
-      throw new RouterAreaError('area_reassignment', 409, `A confirmed ${item.source.kind} item of area ${item.areaId} cannot become an open one`)
-    }
-  }
-  const wasOpen = new Set((before.openItems ?? []).map((item) => itemKey(item.source)))
   for (const item of allAreaItems(before)) {
-    const nextItem = nextItems.get(itemKey(item.source))
-    const next = nextItem?.areaId
-    // An open arrival restricts no reader, so it may leave the list (its mail moved or is gone), never another area.
-    if (next === undefined && wasOpen.has(itemKey(item.source))) continue
-    if (next === item.areaId) {
-      // A saved canonical key is part of the confirmation: it may be added, never changed or dropped.
-      if (item.canonicalKey !== undefined && nextItem!.canonicalKey !== item.canonicalKey) {
-        throw new RouterAreaError(
-          'area_reassignment',
-          409,
-          `The canonical identity of a ${item.source.kind} item of area ${item.areaId} cannot be ${nextItem!.canonicalKey === undefined ? 'removed' : 'changed'}; use a migration`,
-        )
-      }
-      continue
+    const next = nextItems.get(itemKey(item.source))
+    if (!next) continue
+    if (next.areaId !== item.areaId) {
+      throw new RouterAreaError('area_reassignment', 409, `A ${item.source.kind} item cannot move from area ${item.areaId} to ${next.areaId}`)
     }
-    throw new RouterAreaError(
-      'area_reassignment',
-      409,
-      next === undefined
-        ? `A ${item.source.kind} item of area ${item.areaId} cannot be removed; use a migration`
-        : `A ${item.source.kind} item cannot move from area ${item.areaId} to ${next}; use a migration`,
-    )
+    // A saved canonical key is the item's identity: it may be added, never changed or dropped.
+    if (item.canonicalKey !== undefined && next.canonicalKey !== item.canonicalKey) {
+      throw new RouterAreaError('area_reassignment', 409,
+        `The canonical identity of a ${item.source.kind} item of area ${item.areaId} cannot be ${next.canonicalKey === undefined ? 'removed' : 'changed'}`)
+    }
   }
   const nextTasks = new Map<string, string>()
   for (const area of after.areas) for (const taskId of area.taskIds) nextTasks.set(taskId, area.id)
   for (const area of before.areas) {
     for (const taskId of area.taskIds) {
       const next = nextTasks.get(taskId)
-      if (next === area.id) continue
-      throw new RouterAreaError(
-        'area_reassignment',
-        409,
-        next === undefined
-          ? `Task ${taskId} cannot be removed from area ${area.id}; use a migration`
-          : `Task ${taskId} cannot move from area ${area.id} to ${next}; use a migration`,
-      )
+      if (next === undefined || next === area.id) continue
+      throw new RouterAreaError('area_reassignment', 409, `Task ${taskId} cannot move from area ${area.id} to ${next}`)
     }
   }
 }
@@ -442,8 +438,13 @@ export function sourceArea(file: RouterAreasFile, source: RouterSource): RouterA
   return allowed ? area : undefined
 }
 
+/**
+ * The area a task runs isolated in: only a router's own (2026-11-14). The work a router hands items
+ * to is ordinary work, whatever an older build marked on it.
+ */
 export function taskArea(file: RouterAreasFile, taskId: string): RouterArea | undefined {
-  return file.areas.find((area) => area.taskIds.includes(taskId))
+  const router = file.routers.find((one) => one.taskId === taskId)
+  return router ? file.areas.find((area) => area.id === router.areaId && area.taskIds.includes(taskId)) : undefined
 }
 
 export function activeRouter(file: RouterAreasFile, areaId: string): RouterAssignment | undefined {

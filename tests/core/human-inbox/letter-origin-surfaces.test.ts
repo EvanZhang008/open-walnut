@@ -71,6 +71,7 @@ const WALNUT_KIND_SENDERS: Record<string, LetterSender> = {
   'offline-conflict': { sessionId: 'external', host: 'devbox' },
   'local-network-blocked': { sessionId: 'external', host: 'local' },
   'ssh-cert-expiry': { sessionId: 'external', host: 'local' },
+  'mail-no-router': { sessionId: 'external', host: 'local' },
 };
 
 describe('every kind of letter Walnut writes itself has an origin', () => {

@@ -1,19 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { isRouterDelivery, withRouterDelivery } from '../../src/core/router/delivery-scope.js';
+import { assertAreaDelivery } from '../../src/core/router/delivery-scope.js';
 import { ROUTER_AREA_OPS } from '../../src/core/router/gateway-policy.js';
 const root = path.resolve(import.meta.dirname, '../..');
 const read = (name: string) => fs.readFileSync(path.join(root, name), 'utf8');
 describe('router isolation guard', () => {
-  it('never treats a user-provided route message id as a delivery grant', async () => {
-    expect(isRouterDelivery('s1', 'qm-route-forged')).toBe(false);
-    await withRouterDelivery('s1', 'qm-route-one', async () => {
-      expect(isRouterDelivery('s1', 'qm-route-one')).toBe(true);
-      expect(isRouterDelivery('s2', 'qm-route-one')).toBe(false);
-      expect(isRouterDelivery('s1', 'qm-route-forged')).toBe(false);
-    });
-    expect(isRouterDelivery('s1', 'qm-route-one')).toBe(false);
+  it('a router session takes no other task\'s message, whatever message id it carries', () => {
+    const router = { profile: { areaId: 'personal', areaRole: 'router' as const } };
+    expect(() => assertAreaDelivery(router, 's1', 'peer', 'qm-route-forged')).toThrow();
+    // A receiver profile an older build left on routed work is ordinary now: its messages land.
+    expect(assertAreaDelivery({ profile: { areaId: 'personal', areaRole: 'work' as const } }, 's2', 'peer', 'qm-x')).toBe(false);
   });
   it('exposes no generic API, shell, search or outward-send op', () => {
     expect([...ROUTER_AREA_OPS].sort()).toEqual(['router_context', 'router_route']);

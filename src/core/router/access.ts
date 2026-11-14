@@ -16,7 +16,7 @@ export async function routerAccess(source: RouterSource, callerSid: string | und
   const { isRouterAreaSession } = await import('./session-policy.js');
   if (!taskId || taskArea(file, taskId)?.id !== area.id
     || activeRouter(file, area.id)?.taskId !== taskId
-    || caller.kind !== 'session' || !isRouterAreaSession(caller.record, area, 'router')) {
+    || caller.kind !== 'session' || !isRouterAreaSession(caller.record, area)) {
     throw new RouterAreaError('area_forbidden', 403, 'Only this area\'s active router may read or route this item.');
   }
   // The registry names the router; the task itself must still be that live router: its own

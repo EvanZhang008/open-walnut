@@ -86,8 +86,8 @@ describe("Mail's Open router", () => {
     expect(code(read('web/src/components/org/OrgRouterSettings.tsx'))).toContain('setRouterSettingsOpen(id, expanded)')
   })
 
-  it('puts the scope note and the step in one foot under the reader line', () => {
-    expect(code(read('web/src/apps/mail/MailRouteLine.tsx'))).toContain('<div className="mail-route-foot" data-testid="mail-reader-route-foot">{assign}{next}</div>')
+  it('puts the step in one foot under the reader line', () => {
+    expect(code(read('web/src/apps/mail/MailRouteLine.tsx'))).toContain('<div className="mail-route-foot" data-testid="mail-reader-route-foot">{next}</div>')
   })
 })
 

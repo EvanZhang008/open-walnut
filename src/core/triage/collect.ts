@@ -11,14 +11,15 @@
  *
  *  - `interest` is not optional. A global subscriber is consulted for every event
  *    on the hot path, so without the allowlist every streaming delta would wake
- *    this handler (event-bus.ts interest semantics). The set is FIXED (both
- *    source events, always) rather than derived from `triage.sources`: turning a
+ *    this handler (event-bus.ts interest semantics). The set is FIXED (every
+ *    source event, always) rather than derived from `triage.sources`: turning a
  *    source off mid-batch would otherwise silently discard items already on the
- *    wire, and the batch filters by `sources` anyway.
+ *    wire. Mail is NOT in it: since 2026-11-14 every new mail goes to its mailbox's
+ *    router, which does the triage (tests/core/triage-no-mail.test.ts guards this).
  *
- *  - Buffer, then flush. Ten mail accounts reporting in one tick must be ONE disk
- *    write, so arrivals accumulate in memory and a 5s TRAILING timer folds them
- *    into triage-state.json. Same discipline (and the same 5s) as the wake
+ *  - Buffer, then flush. A busy Slack tick must be ONE disk write, so arrivals
+ *    accumulate in memory and a 5s TRAILING timer folds them into
+ *    triage-state.json. Same discipline (and the same 5s) as the wake
  *    counter, for the same reason.
  *
  *  - NEVER on a replica. The buffer is machine-local and the run happens on the
@@ -33,7 +34,7 @@
 import { bus, type BusEvent } from '../event-bus.js';
 import { log } from '../../logging/index.js';
 import { readTriageConfig, type TriageConfigHolder } from './config.js';
-import { readTriageHeadline, recordTriageArrivals, type TriagePendingMail, type TriagePendingSlack } from './state.js';
+import { recordTriageArrivals, type TriagePendingSlack } from './state.js';
 import { TRIAGE_WAKE_EVENTS } from './types.js';
 import { isFollower } from '../server-role.js';
 
@@ -42,9 +43,6 @@ export const TRIAGE_COLLECT_SUBSCRIBER = 'triage-collect';
 
 /** Trailing flush window — long enough to fold a burst, short enough to feel live. */
 export const TRIAGE_COLLECT_FLUSH_MS = 5_000;
-
-/** How many headlines one mail tick contributes (the emitter's own cap). */
-const MAX_HEADLINES = 5;
 
 /** Defensive ceiling on ONE flush, so a misbehaving emitter cannot wedge a write. */
 const MAX_BUFFERED = 400;
@@ -62,7 +60,7 @@ export type TriageCollectHandle = {
   /** Flush now (tests; also called on shutdown so a pending burst is not lost). */
   flush(): Promise<void>;
   /** Diagnostics + tests: proof the interest allowlist is doing its job. */
-  stats(): { handled: number; bufferedMail: number; bufferedSlack: number; droppedSlack: number; writes: number };
+  stats(): { handled: number; bufferedSlack: number; droppedSlack: number; writes: number };
 };
 
 async function defaultGetConfig(): Promise<TriageConfigHolder> {
@@ -77,17 +75,6 @@ function str(value: unknown, max: number): string {
 function count(value: unknown): number {
   const n = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
-}
-
-/** `plugin:mail:messages-received` → one buffered row, or null when unusable. */
-export function mailArrival(data: unknown, atMs: number): TriagePendingMail | null {
-  if (!data || typeof data !== 'object') return null;
-  const d = data as Record<string, unknown>;
-  const accountId = str(d.accountId, 200);
-  const n = count(d.count);
-  if (!accountId || n <= 0) return null;
-  const headlines = Array.isArray(d.headlines) ? d.headlines.slice(0, MAX_HEADLINES).map(readTriageHeadline) : [];
-  return { accountId, count: n, headlines, atMs };
 }
 
 /** `plugin:slack:messages-received` → buffered rows + what the plugin dropped. */
@@ -135,9 +122,8 @@ export function startTriageCollect(deps: TriageCollectDeps = {}): TriageCollectH
   const getConfig = deps.getConfig ?? defaultGetConfig;
   const record = deps.record ?? recordTriageArrivals;
   const flushMs = deps.flushMs ?? TRIAGE_COLLECT_FLUSH_MS;
-  const interest = [TRIAGE_WAKE_EVENTS.mail, TRIAGE_WAKE_EVENTS.slack];
+  const interest = [TRIAGE_WAKE_EVENTS.slack];
 
-  let mail: TriagePendingMail[] = [];
   let slack: TriagePendingSlack[] = [];
   let droppedSlack = 0;
   let handled = 0;
@@ -153,11 +139,9 @@ export function startTriageCollect(deps: TriageCollectDeps = {}): TriageCollectH
   async function flush(): Promise<void> {
     if (flushTimer) clearTimeout(flushTimer);
     flushTimer = null;
-    if (mail.length === 0 && slack.length === 0 && droppedSlack === 0) return;
-    const batchMail = mail;
+    if (slack.length === 0 && droppedSlack === 0) return;
     const batchSlack = slack;
     const batchDropped = droppedSlack;
-    mail = [];
     slack = [];
     droppedSlack = 0;
     try {
@@ -166,18 +150,18 @@ export function startTriageCollect(deps: TriageCollectDeps = {}): TriageCollectH
         // Nothing to keep: a disabled triage has no run to feed, and a file that
         // grows while the feature is off is a file nobody asked for.
         log.cron.debug('triage: collector dropped a flush — triage is disabled', {
-          mail: batchMail.length, slack: batchSlack.length,
+          slack: batchSlack.length,
         });
         return;
       }
-      await record({ mail: batchMail, slack: batchSlack, droppedSlack: batchDropped });
+      await record({ slack: batchSlack, droppedSlack: batchDropped });
       writes += 1;
     } catch (err) {
       // The items are gone from the buffer at this point. Re-queueing them would
       // risk an unbounded retry loop against a broken disk; the caps already make
       // this best-effort, and the WARN is what makes a real failure visible.
       log.cron.warn('triage: collector flush failed — these arrivals are lost', {
-        mail: batchMail.length, slack: batchSlack.length,
+        slack: batchSlack.length,
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -186,14 +170,6 @@ export function startTriageCollect(deps: TriageCollectDeps = {}): TriageCollectH
   function handler(event: BusEvent): void {
     handled += 1;
     const atMs = event.timestamp || Date.now();
-    if (event.name === TRIAGE_WAKE_EVENTS.mail) {
-      const row = mailArrival(event.data, atMs);
-      if (!row) return;
-      if (mail.length >= MAX_BUFFERED) return;
-      mail.push(row);
-      scheduleFlush();
-      return;
-    }
     if (event.name === TRIAGE_WAKE_EVENTS.slack) {
       const { items, dropped } = slackArrivals(event.data, atMs);
       if (items.length === 0 && dropped === 0) return;
@@ -209,7 +185,6 @@ export function startTriageCollect(deps: TriageCollectDeps = {}): TriageCollectH
       stopped = true;
       if (flushTimer) clearTimeout(flushTimer);
       flushTimer = null;
-      mail = [];
       slack = [];
       droppedSlack = 0;
       bus.unsubscribe(TRIAGE_COLLECT_SUBSCRIBER);
@@ -219,7 +194,7 @@ export function startTriageCollect(deps: TriageCollectDeps = {}): TriageCollectH
       await flush();
     },
     stats() {
-      return { handled, bufferedMail: mail.length, bufferedSlack: slack.length, droppedSlack, writes };
+      return { handled, bufferedSlack: slack.length, droppedSlack, writes };
     },
   };
 
