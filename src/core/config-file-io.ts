@@ -237,3 +237,31 @@ async function readWhole(fh: fs.FileHandle, size: number): Promise<string> {
   }
   return buf.subarray(0, off).toString('utf-8')
 }
+
+/** config.yaml and its copies hold keys (a bucket's secret, provider keys): owner only. */
+export const CONFIG_FILE_MODE = 0o600
+
+/**
+ * Replace a file's whole content atomically: write a sibling temp, then rename.
+ *
+ * `fs.writeFile` truncates first and writes after, so a concurrent reader can
+ * observe a HALF file, and half a config.yaml is worse than none, because it
+ * still parses. The `agent:` section sits near the top of a ~280-line file, so a
+ * reader landing in that window got valid YAML with the whole section missing and
+ * silently ran on defaults, with no unreadable-config error logged because nothing
+ * ever threw (observed 2026-08-28 06:03, where the missing section sent one turn
+ * to a provider whose credentials this box does not keep).
+ *
+ * Temp lives in the SAME directory so the rename is a same-filesystem atomic
+ * swap (an EXDEV across /tmp would fall back to copy, reopening the window).
+ */
+export async function writeFileAtomic(filePath: string, content: string, mode?: number): Promise<void> {
+  const tmp = `${filePath}.tmp-${process.pid}-${Date.now().toString(36)}`
+  try {
+    await fs.writeFile(tmp, content, { encoding: 'utf-8', ...(mode !== undefined ? { mode } : {}) })
+    await fs.rename(tmp, filePath)
+  } catch (err) {
+    await fs.rm(tmp, { force: true }).catch(() => {})
+    throw err
+  }
+}

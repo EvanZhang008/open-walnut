@@ -1,7 +1,7 @@
 /**
  * Keep a sensible history and give back the space of the rest.
  *
- * Retention (selectKept, pure): every snapshot of the last `withinHours` (at
+ * Retention (selectKept, pure, src/lib/retention.ts; days in local time): every snapshot of the last `withinHours` (at
  * most MAX_WITHIN), the newest `recent` snapshots, the newest of each of the
  * last `daily` days that have one, and the newest of each of the last `weekly`
  * ISO weeks. So "Back up now" pressed a few times never pushes out the
@@ -23,64 +23,17 @@
 import { createHash } from 'node:crypto';
 import { log } from '../../../logging/index.js';
 import { loadLiveIndex } from './backup-run.js';
-import { packKey, PACK_TARGET_BYTES, type BlobLocation, type PackInfo, type Snapshot } from './format.js';
+import { packKey, PACK_TARGET_BYTES, type BlobLocation, type PackInfo } from './format.js';
 import { PackCache, PackWriter, type Repository } from './repository.js';
 import type { WriterIdentity } from '../local-state.js';
+import { selectKept, type RetentionPolicy } from '../../../lib/retention.js';
 
-export interface RetentionPolicy {
-  daily: number;
-  weekly: number;
-  /** The newest few, whatever their day: a backup made right after a bad change keeps the good one of that morning. */
-  recent?: number;
-  /** Every backup this recent is kept, whatever else the policy says. */
-  withinHours?: number;
-}
+export { isoWeekKey, selectKept, type RetentionPolicy } from '../../../lib/retention.js';
 
 export const DEFAULT_RETENTION: RetentionPolicy = { daily: 7, weekly: 4, recent: 3, withinHours: 24 };
-/** A bound on the backups kept for being recent (an hourly schedule plus many manual runs). */
-const MAX_WITHIN = 48;
 const ORPHAN_GRACE_MS = 6 * 3_600_000;
 const REPACK_BELOW_LIVE_RATIO = 0.5;
 const MAX_INDEX_FILES = 8;
-
-const dayKey = (d: Date): string => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
-
-/** ISO 8601 week ("2026-W45"), in local time. */
-export function isoWeekKey(d: Date): string {
-  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-  const weekday = t.getUTCDay() || 7; // Monday 1 .. Sunday 7
-  t.setUTCDate(t.getUTCDate() + 4 - weekday); // the Thursday of this week decides the year
-  const yearStart = Date.UTC(t.getUTCFullYear(), 0, 1);
-  const week = Math.ceil(((t.getTime() - yearStart) / 86_400_000 + 1) / 7);
-  return `${t.getUTCFullYear()}-W${week}`;
-}
-
-/** Ids of the snapshots the policy keeps. */
-export function selectKept(snapshots: Array<Pick<Snapshot, 'id' | 'createdAt'>>, policy: RetentionPolicy, now = Date.now()): Set<string> {
-  const newestFirst = [...snapshots].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  const kept = new Set<string>();
-  if (policy.withinHours) {
-    const since = now - policy.withinHours * 3_600_000;
-    for (const s of newestFirst.filter((x) => Date.parse(x.createdAt) >= since).slice(0, MAX_WITHIN)) kept.add(s.id);
-  }
-  for (const s of newestFirst.slice(0, Math.max(1, policy.recent ?? 1))) kept.add(s.id);
-  const days = new Set<string>();
-  const weeks = new Set<string>();
-  for (const s of newestFirst) {
-    const d = new Date(s.createdAt);
-    const dk = dayKey(d);
-    if (!days.has(dk) && days.size < policy.daily) {
-      days.add(dk);
-      kept.add(s.id);
-    }
-    const wk = isoWeekKey(d);
-    if (!weeks.has(wk) && weeks.size < policy.weekly) {
-      weeks.add(wk);
-      kept.add(s.id);
-    }
-  }
-  return kept;
-}
 
 export interface PruneResult {
   forgotten: string[];

@@ -14,7 +14,9 @@ import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
-const WRITE = /\b(writeFile|writeFileSync|writeFileAtomic|commitConfigFile|appendFile|appendFileSync|copyFile|copyFileSync|rename|renameSync)\([^)]*(CONFIG_FILE|CONFIG_BACKUP_FILE|config\.yaml)/
+// The arguments may hold one level of call (`path.join(dir, name)`); CONFIG_FILE_MODE
+// (config.yaml's own mode) marks a copy of the file as well (core/config-history.ts).
+const WRITE = /\b(writeFile|writeFileSync|writeFileAtomic|commitConfigFile|appendFile|appendFileSync|copyFile|copyFileSync|rename|renameSync)\((?:[^()]|\([^()]*\))*(CONFIG_FILE|CONFIG_BACKUP_FILE|config\.yaml)/
 const GUARD = /isHostReplicaProgram\(\)|refuseConfigWriteOnReplica\(\)/
 const FUNCTION_START = /^(export\s+)?(async\s+)?function\s+\w+/
 
@@ -49,8 +51,9 @@ describe('config.yaml writers on a host replica', () => {
 
   it('the scan finds the writers it is known to (a scan that went blind would pass anything)', () => {
     const files = new Set(sites.map((s) => s.where.replace(/:\d+$/, '')))
-    // Every writer goes through config-store.ts (integration-loader's boot migration too, via migrateStoredConfig).
-    expect([...files].sort()).toEqual(['src/core/config-store.ts'])
+    // Every writer goes through config-store.ts (integration-loader's boot migration too, via
+    // migrateStoredConfig), and config-history.ts writes the dated copies.
+    expect([...files].sort()).toEqual(['src/core/config-history.ts', 'src/core/config-store.ts'])
     expect(sites.length).toBeGreaterThanOrEqual(3)
   })
 
