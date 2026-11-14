@@ -160,6 +160,25 @@ final class SessionQueueModelTests: XCTestCase {
         XCTAssertEqual(m.rows.map(\.id), ["qm-b"], "the slow read held the list from before the withdraw")
     }
 
+    /// A read stopped while on its way (the screen went away) changes nothing when it
+    /// answers, as a cancelled network read would not: the line is read again when the screen
+    /// is back (2026-11-14, CI: a read that answered after the chat closed ended Queued early).
+    func testAReadStoppedOnItsWayChangesNothing() async {
+        let t = Transport()
+        t.rows = [row("qm-a")]
+        let m = model(t)
+        await m.refresh()
+        let gate = CheckedContinuationGate()
+        t.readGate = gate
+        t.rows = []
+        let stopped = Task { await m.refresh() }
+        try? await Task.sleep(for: .milliseconds(30))
+        stopped.cancel()
+        gate.open()
+        await stopped.value
+        XCTAssertEqual(m.rows.map(\.id), ["qm-a"], "a stopped read emptied the line")
+    }
+
     // MARK: - Withdraw
 
     func testWithdrawRemovesTheRowAndTellsThePageWhichMessageWentAway() async {

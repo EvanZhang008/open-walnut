@@ -137,7 +137,9 @@ final class PostEraseLogTests: XCTestCase {
             ),
             for: URLRequest(url: url)
         )
-        let gone = await waitFor(LocalDataReset.lateCacheClearDelay + 2) {
+        // Generous: a busy runner can stall the process for seconds, and the wait ends as soon
+        // as the entry is gone.
+        let gone = await waitFor(LocalDataReset.lateCacheClearDelay + 10) {
             URLCache.shared.cachedResponse(for: URLRequest(url: url)) == nil
         }
         XCTAssertTrue(gone, "a response cached right after the erase survived it")

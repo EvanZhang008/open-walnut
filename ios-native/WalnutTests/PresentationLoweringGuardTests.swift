@@ -92,6 +92,7 @@ final class PresentationLoweringGuardTests: XCTestCase {
     }
 
     private static let inputKeeping: [String: (keeps: Keeps, why: String)] = [
+        "Walnut/Talk/TalkPanel.swift": (.draft("keepReviewWords"), "the Dictate page's words, kept on the dictation as typed and shown again when its page or the Action Button list opens; its own window is no push's to close"),
         "Walnut/Views/Calendar/CalendarCreateSheet.swift": (.holds, "CalendarCreate.edited: a title, project, moved time, all-day or sync change"),
         "Walnut/Views/Calendar/CalendarFilterSheet.swift": (.savedOnChange, "each toggle is the calendar's filter, applied at once"),
         "Walnut/Views/Calendar/CalendarRows.swift": (.notPresented, "the month view's quick-add row, on the Calendar tab itself"),

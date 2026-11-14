@@ -272,7 +272,9 @@ final class SessionQueueModel {
         let read = readsStarted
         do {
             let fetched = try await api.sessionQueue(id: sessionId)
-            guard started == generation, !restoring else { return }
+            // A read whose task was stopped meanwhile (the screen went away) is dropped, as
+            // the network's own cancellation drops it: what it saw may already be stale.
+            guard started == generation, !restoring, !Task.isCancelled else { return }
             // The tray is the person's own line: a row another task or Walnut sent is not
             // theirs to manage, and a row the CLI already took is in the conversation.
             let next = withKeptTimes(Self.shownRows(fetched).filter { !isHidden($0.id) })
