@@ -1,0 +1,20 @@
+/* A router's watched folders (RouterFoldersField): the same field on the Org page and in Apps › Mail. */
+.router-folders { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.router-folders-input {
+  box-sizing: border-box; width: 100%; max-width: 380px; height: 30px; padding: 0 10px; font: inherit; font-size: 13px;
+  color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.router-folders-input::placeholder { color: var(--fg-secondary); opacity: 0.7; }
+.router-folders-input:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.router-folders-input[aria-invalid='true'] { border-color: var(--warning, #b25000); }
+.router-folders-input[aria-invalid='true']:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning, #b25000) 18%, transparent); }
+.router-folders-hint { font-size: 12px; line-height: 1.45; color: var(--fg-secondary); }
+.router-folders-warn {
+  display: flex; align-items: baseline; gap: 7px; max-width: 380px;
+  font-size: 12px; line-height: 1.45; color: var(--warning, #b25000);
+}
+.router-folders-warn::before {
+  content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; transform: translateY(-1px);
+}
+@media (prefers-reduced-motion: reduce) { .router-folders-input { transition: none; } }

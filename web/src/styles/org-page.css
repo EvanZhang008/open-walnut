@@ -256,13 +256,26 @@
 .org-router-sources { margin: 0; padding: 0 0 0 16px; font-size: 13px; }
 .org-router-setup-actions { display: flex; gap: 8px; margin-top: 4px; }
 .org-router-setup-actions .btn { margin-right: 0; }
-.org-router-settings-body {
-  display: flex; flex-direction: column; gap: 12px; padding: 4px 18px 14px 38px;
+/* The open settings: one quiet column of rows, a label on the left and its control on the right. */
+.org-router-settings-body { --org-router-label-w: 136px; --org-router-gap: 16px; display: flex; flex-direction: column; padding: 0 20px 16px 38px; max-width: 760px; font-size: 13px; }
+.org-router-row {
+  display: grid; grid-template-columns: var(--org-router-label-w) minmax(0, 1fr); column-gap: var(--org-router-gap); align-items: start;
+  padding: 12px 0; border-top: 1px solid var(--border);
 }
-.org-router-field { display: flex; flex-direction: column; gap: 4px; max-width: 520px; font-size: 13px; }
-.org-router-field input:not([type]) { max-width: 360px; }
-.org-router-label { font-weight: 600; }
-.org-router-hint { font-size: 12px; color: var(--fg-secondary); }
+.org-router-row:first-child { border-top: none; }
+.org-router-label { padding-top: 6px; font-weight: 500; color: var(--fg-secondary); }
+.org-router-value { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding-top: 6px; }
+.org-router-value:has(> input:not([type]):first-child, > .router-folders) { padding-top: 0; }
+.org-router-value > input:not([type]) {
+  box-sizing: border-box; width: 100%; max-width: 380px; height: 30px; padding: 0 10px; font: inherit;
+  color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
+}
+.org-router-value > input:not([type]):focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.org-router-hint { font-size: 12px; line-height: 1.45; color: var(--fg-secondary); }
+.org-router-sources { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.org-router-kind { margin-left: 4px; font-size: 12px; color: var(--fg-secondary); }
+.org-router-link-out { color: var(--accent); text-decoration: none; }
+.org-router-link-out:hover { text-decoration: underline; }
 .org-router-check { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 13px; }
 .org-router-check.is-stale { color: var(--fg-secondary); font-style: italic; }
 /* Many VPs: a finder above, and the list scrolls inside its own box so Save stays near. */
@@ -272,14 +285,16 @@
 }
 .org-router-link-filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
 .org-router-link-list { max-height: 228px; overflow-y: auto; }
-.org-router-links { margin: 0; padding: 10px 12px; max-width: 520px; border: 1px solid var(--border); border-radius: 8px; }
-.org-router-links legend { padding: 0 4px; font-size: 13px; font-weight: 600; }
-.org-router-links > .org-router-hint { margin: 0 0 6px; }
+.org-router-links .org-router-value > .org-router-hint { margin: 0 0 4px; }
 .org-router-warn { margin: 6px 0 0; font-size: 12px; color: var(--warning, #b25000); }
 .org-router-error { margin: 0; font-size: 12px; color: var(--error, #d70015); }
-.org-router-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.org-router-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 12px 0 0 calc(var(--org-router-label-w) + var(--org-router-gap)); border-top: 1px solid var(--border); }
+.org-router-settings-body > .org-router-error { padding: 8px 0 0 calc(var(--org-router-label-w) + var(--org-router-gap)); }
 .org-page.is-phone .org-router-settings-head { padding: 8px 12px; }
-.org-page.is-phone .org-router-settings-body { padding: 4px 12px 12px; }
+.org-page.is-phone .org-router-settings-body { padding: 0 12px 12px; }
+.org-page.is-phone .org-router-row { grid-template-columns: minmax(0, 1fr); row-gap: 4px; }
+.org-page.is-phone .org-router-label { padding-top: 0; }
+.org-page.is-phone :is(.org-router-actions, .org-router-settings-body > .org-router-error) { padding-left: 0; }
 .org-detail { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .org-detail-head {
   display: flex;

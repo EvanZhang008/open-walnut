@@ -33,7 +33,7 @@ describe('router settings', () => {
   it('read the areas again whenever they open, so an account Mail added shows', () => {
     const src = code(read('web/src/components/org/OrgRouterSettings.tsx'))
     expect(src).toMatch(/useEffect\(\(\) => \{ if \(expanded\) refreshRouterAreas\(\); \}, \[expanded, id\]\)/)
-    expect(code(read('web/src/components/org/router-area-names.ts'))).toMatch(/export function refreshRouterAreas\(\): void \{\s*queueRead\(\);/)
+    expect(code(read('web/src/components/org/router-area-names.ts'))).toMatch(/export function refreshRouterAreas\(\): Promise<void> \{\s*queueRead\(\);/)
   })
 
   it('name a mail account by its address, an unknown one or a Slack team by its id', () => {

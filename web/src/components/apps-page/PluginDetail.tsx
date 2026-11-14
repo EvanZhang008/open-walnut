@@ -39,6 +39,7 @@ import type { PluginStore } from './usePluginStore'
 import { ExposeGuide } from './ExposeGuide'
 import { TaskProviderRulesGroup } from '@/components/settings/sections/TaskProviderRulesGroup'
 import { PluginSettingsPanels, usePluginSettingsPanels } from './PluginSettingsPanels'
+import { CorePluginPanel, hasCorePluginPanel } from './core-plugin-panels'
 
 export function PluginDetail({ store, pluginId, config, onSave, onBack, onOpen, focusPanel }: {
   store: PluginStore
@@ -106,7 +107,10 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
   const settingsApp = row.settingsIn === 'app' ? apps[0] : undefined
   // The panels the plugin draws itself (`walnut.ui.settings`): registered while its web part runs.
   const panels = usePluginSettingsPanels(row.id)
-  const ownPanels = row.installed && panels.length > 0
+  // A built-in plugin's own section drawn by core code (Mail's routers): shown while the plugin runs,
+  // since what it reads is that plugin's.
+  const corePanel = row.installed && on && hasCorePluginPanel(row.id)
+  const ownPanels = row.installed && (panels.length > 0 || corePanel)
   // The manifest's form, unless the App holds it, or the plugin's own panels are all it has.
   const showForm = !settingsApp && (row.configurable || !ownPanels)
   const connection = store.connections[row.id]
@@ -130,7 +134,8 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
           }
         />
       )}
-      {ownPanels && <PluginSettingsPanels panels={panels} pluginName={row.name} focusPanel={focusPanel} />}
+      {corePanel && <CorePluginPanel pluginId={row.id} />}
+      {panels.length > 0 && <PluginSettingsPanels panels={panels} pluginName={row.name} focusPanel={focusPanel} />}
       {showForm && (
         <div className="settings-addons-rows plugin-store-config" data-testid={`plugin-config-${row.id}`}>
           <PluginConfigCards

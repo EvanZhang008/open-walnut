@@ -174,9 +174,10 @@ describe('a router task is a router node, not a VP', () => {
 
 const settingsMod = await import('../../web/src/components/org/OrgRouterSettings')
 const {
-  OrgRouterSettings, RouterSettingsBody, folderList, foldersSkipInbox, routerBaseline, routerPatch, routerFormProblem, routerLinkRows,
+  OrgRouterSettings, RouterSettingsBody, routerBaseline, routerPatch, routerFormProblem, routerLinkRows,
   staleLinkLabel, staleNote, routerSummary, ROUTER_READY_LINE, ROUTER_PAUSED_LINE, ROUTER_LINK_NOTE,
 } = settingsMod
+const { folderList, foldersSkipInbox } = await import('../../web/src/components/org/RouterFoldersField')
 const model = await import('../../web/src/components/org/org-channels-model.js')
 const names = await import('../../web/src/components/org/router-area-names')
 const orgPage = read('web/src/pages/OrgPage.tsx')
@@ -303,9 +304,12 @@ describe('router settings render', () => {
     expect(none).toContain('data-testid="org-router-folders"')
     const some = body({ sources: [{ kind: 'mail', account: 'desk@example.invalid' }, { kind: 'slack', account: 'T0FIXTURE' }] })
     expect(some).toContain('desk@example.invalid')
-    expect(some).toContain('(Mail)')
+    expect(some).toContain('<span class="org-router-kind">Mail</span>')
     expect(some).toContain('T0FIXTURE')
-    expect(some).toContain('(Slack)')
+    expect(some).toContain('<span class="org-router-kind">Slack</span>')
+    // A mail account's folders are set in Apps › Mail too; a Slack-only area has no such link.
+    expect(some).toContain('data-testid="org-router-folders-in-mail"')
+    expect(none).not.toContain('data-testid="org-router-folders-in-mail"')
     expect(names.areaSourcesOf({ areas: [{ id: 'personal', sources: [{ kind: 'mail', account: 'a@example.invalid' }, { kind: 'mail' }, 'x'] }, { id: 'work' }] }))
       .toEqual({ personal: [{ kind: 'mail', account: 'a@example.invalid' }], work: [] })
   })

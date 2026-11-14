@@ -3,7 +3,7 @@
  * shared by the Org list's router rows and a router's settings, so both show an area by its name and
  * never by its id. Until the list answers (or when it leaves an area out) a caller shows the id.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { apiGet } from '@/api/client';
 
 export type RouterAreaNames = Readonly<Record<string, string>>;
@@ -29,9 +29,46 @@ export function areaFoldersOf(body: unknown): Record<string, string[]> {
 let names: RouterAreaNames = {};
 let sources: RouterAreaSources = {};
 let folders: RouterAreaFolders = {};
+let accountAreas: RouterAccountAreas = {};
+/** How the areas read went: not answered yet, answered, or the last one failed. */
+export type RouterAreasReadState = 'pending' | 'ok' | 'failed';
+let readState: RouterAreasReadState = 'pending';
+const stateListeners = new Set<() => void>();
+const setReadState = (next: RouterAreasReadState) => { readState = next; for (const l of stateListeners) l(); };
+let areaRouters: RouterAreaRouters = {};
 let queue: Promise<void> = Promise.resolve();
 const askedFor = new Set<string>();
 const listeners = new Set<(next: RouterAreaNames) => void>();
+
+/** Which area reads each account, keyed `<kind>\u0000<account>`: its binding first, else the area listing it as a source. */
+export type RouterAccountAreas = Readonly<Record<string, string>>;
+/** Each area's router task id. */
+export type RouterAreaRouters = Readonly<Record<string, string>>;
+
+export const accountAreaKey = (kind: string, account: string): string => `${kind}\u0000${account}`;
+
+export function accountAreasOf(body: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [area, list] of Object.entries(areaSourcesOf(body))) {
+    for (const src of list) out[accountAreaKey(src.kind, src.account)] ??= area;
+  }
+  const bindings = (body as { accountBindings?: unknown } | null)?.accountBindings;
+  for (const one of Array.isArray(bindings) ? bindings as Array<{ kind?: unknown; account?: unknown; areaId?: unknown }> : []) {
+    if (typeof one?.kind === 'string' && typeof one.account === 'string' && one.account && typeof one.areaId === 'string' && one.areaId) {
+      out[accountAreaKey(one.kind, one.account)] = one.areaId;
+    }
+  }
+  return out;
+}
+
+export function areaRoutersOf(body: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  const list = (body as { routers?: unknown } | null)?.routers;
+  for (const one of Array.isArray(list) ? list as Array<{ areaId?: unknown; taskId?: unknown }> : []) {
+    if (typeof one?.areaId === 'string' && one.areaId && typeof one.taskId === 'string' && one.taskId) out[one.areaId] ??= one.taskId;
+  }
+  return out;
+}
 
 export function areaSourcesOf(body: unknown): Record<string, Array<{ kind: string; account: string }>> {
   const out: Record<string, Array<{ kind: string; account: string }>> = {};
@@ -61,8 +98,10 @@ export function areaNamesOf(body: unknown): Record<string, string> {
 // older one that predates it.
 function queueRead(): void {
   queue = queue.then(() => apiGet<unknown>('/api/v1/router/areas')
-    .then((body) => { names = areaNamesOf(body); sources = areaSourcesOf(body); folders = areaFoldersOf(body); for (const l of listeners) l(names); })
-    .catch(() => { /* callers keep showing the id */ }));
+    .then((body) => { names = areaNamesOf(body); sources = areaSourcesOf(body); folders = areaFoldersOf(body);
+      accountAreas = accountAreasOf(body); areaRouters = areaRoutersOf(body); for (const l of listeners) l(names); setReadState('ok'); })
+    // Callers keep showing the id; one that must know the read failed asks useRouterAreasReadState.
+    .catch(() => { setReadState('failed'); }));
 }
 
 /** The area names, read again when an id in `ids` has none and was not asked about yet. */
@@ -83,9 +122,15 @@ export function useRouterAreaNames(ids: readonly string[]): RouterAreaNames {
   return shown;
 }
 
-/** Reads the areas again (a Mail or Slack choice since the last read may have added an account). */
-export function refreshRouterAreas(): void {
+/** Reads the areas again (a Mail or Slack choice since the last read may have added an account); settles once that read did. */
+export function refreshRouterAreas(): Promise<void> {
   queueRead();
+  return queue;
+}
+
+/** Whether the areas were read yet (re-renders when that changes). */
+export function useRouterAreasReadState(): RouterAreasReadState {
+  return useSyncExternalStore((l) => { stateListeners.add(l); return () => { stateListeners.delete(l); }; }, () => readState, () => readState);
 }
 
 /** The sources of the areas read so far (with the names: one read serves both). */
@@ -98,7 +143,17 @@ export function routerAreaFolders(): RouterAreaFolders {
   return folders;
 }
 
+/** Which area reads each account (the same read). */
+export function routerAccountAreas(): RouterAccountAreas {
+  return accountAreas;
+}
+
+/** Each area's router task id (the same read). */
+export function routerAreaRouters(): RouterAreaRouters {
+  return areaRouters;
+}
+
 /** Test seam: forget what was read. */
 export function _resetRouterAreaNames(): void {
-  names = {}; sources = {}; folders = {}; queue = Promise.resolve(); askedFor.clear(); listeners.clear();
+  names = {}; sources = {}; folders = {}; accountAreas = {}; areaRouters = {}; readState = 'pending'; stateListeners.clear(); queue = Promise.resolve(); askedFor.clear(); listeners.clear();
 }
