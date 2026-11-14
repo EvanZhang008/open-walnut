@@ -39,16 +39,23 @@ async function call(method: string, p: string, body?: unknown, headers: Record<s
   return { status: res.status, json: await res.json().catch(() => null) as any }
 }
 
-/** The last three daily 08:00 UTC slots that are over an hour old, oldest first. */
+/**
+ * The hour the routines here run each day: twelve hours from now, so no slot comes due or passes
+ * the server's grace (MISSED_GRACE_MS, 15 minutes) while the suite runs. A fixed `0 8 * * *` with
+ * slots over an hour old met a third missed slot between 08:15 and 09:00 UTC (CI, 2026-11-14).
+ */
+const SLOT_HOUR = (new Date().getUTCHours() + 12) % 24
+
+/** The last three daily slots that are over an hour old, oldest first. */
 function pastSlots(): number[] {
   const today = new Date()
-  let s = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), 8, 0, 0)
+  let s = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), SLOT_HOUR, 0, 0)
   while (s > Date.now() - HOUR) s -= DAY
   return [s - 2 * DAY, s - DAY, s]
 }
 
 const daily = (name: string, state?: Record<string, unknown>) => ({
-  name, enabled: true, wakeMode: 'now', schedule: { kind: 'cron', expr: '0 8 * * *', tz: 'UTC' },
+  name, enabled: true, wakeMode: 'now', schedule: { kind: 'cron', expr: `0 ${SLOT_HOUR} * * *`, tz: 'UTC' },
   executor: { type: 'e2e-runlog', config: { instructions: 'Reflect.' } },
   ...(state ? { state } : {}),
 })
