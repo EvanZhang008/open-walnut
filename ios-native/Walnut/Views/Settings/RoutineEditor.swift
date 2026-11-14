@@ -311,7 +311,9 @@ struct RoutineEditorSheet: View {
             .task(id: TaskSearchKey(open: changingTask || needsATask, query: taskQuery)) { await searchTasks() }
             .navigationTitle(job == nil ? "New Routine" : "Edit Routine")
             .navigationBarTitleDisplayMode(.inline)
-            .interactiveDismissDisabled(saving || dirty)
+            // Unsaved edits or a save running: a swipe down asks, and a push navigation waits
+            // until he saves or closes it (it would close the sheet and drop the edits).
+            .holdsNavigation(saving || dirty)
             .background(SheetDismissAttempt {
                 guard dirty, !saving else { return }
                 // After the sheet has settled back: a dialog asked for while the drag's
@@ -640,7 +642,7 @@ struct RoutineEditorSheet: View {
 }
 
 /// Calls `onAttempt` when the person swipes down a sheet whose dismissal is held
-/// (`interactiveDismissDisabled`), so the sheet can ask instead of doing nothing.
+/// (`holdsNavigation`), so the sheet can ask instead of doing nothing.
 /// SwiftUI has no hook for it: this wraps the sheet's presentation delegate and passes
 /// every other call on to SwiftUI's own.
 struct SheetDismissAttempt: UIViewRepresentable {

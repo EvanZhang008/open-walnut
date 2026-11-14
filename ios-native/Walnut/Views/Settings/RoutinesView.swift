@@ -69,8 +69,10 @@ struct RoutinesView: View {
     /// than what the screen shows, and is dropped.
     @State private var writes = 0
     @State private var rowWrites: [String: Int] = [:]
-    /// Folded groups, by key, one per line: kept across visits like the console's.
-    @AppStorage("routines.foldedGroups") private var foldedRaw = ""
+    /// Folded groups, by key, one per line: kept across visits like the console's, as a view
+    /// choice (`ViewMemory`): the demo keeps its own, and a UI test starts with none folded
+    /// (a fold one test left behind hid another test's rows, 2026-11-14).
+    @AppStorage(ViewMemory.key("routines", "foldedGroups"), store: AppPrefs.defaults) private var foldedRaw = ""
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.scenePhase) private var scenePhase
     /// The facts' label column: "Last check", the longest label, at the text size.
@@ -824,9 +826,13 @@ struct RoutinesView: View {
                     Text(RoutineGroups.auditClock(entry.atMs, now: now))
                         .monospacedDigit()
                         .foregroundStyle(Theme.secondaryOnCard)
-                    Text(RoutineGroups.describeAuditEntry(entry))
+                    // The shared renderer: a row carries the executor's summary and a check's
+                    // error, which can hold a model's words and file paths. Their writer is not
+                    // known here, so a path link opens nothing; a task mention opens its task.
+                    Text(MarkdownParser.inline(RoutineGroups.describeAuditEntry(entry)))
                         .foregroundStyle(RoutineGroups.auditFailed(entry) ? Theme.dangerText : Color.primary)
                         .fixedSize(horizontal: false, vertical: true)
+                        .handlingFilePathLinks(source: .unknown)
                 }
                 .font(.footnote)
                 .accessibilityElement(children: .combine)
