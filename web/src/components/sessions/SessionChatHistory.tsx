@@ -2431,8 +2431,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
      *  drifted mirror swallows exactly the update that would have brought the
      *  arrow back. React bails out on an unchanged value by itself. */
     const syncArrow = () => {
-      setShowScrollArrow(el.scrollHeight > el.clientHeight
-        && el.scrollTop + el.clientHeight < el.scrollHeight - NEAR_BOTTOM_PX);
+      if (!routeShownRef.current) return;
+      const height = el.scrollHeight;
+      const client = el.clientHeight;
+      setShowScrollArrow(height > client && el.scrollTop + client < height - NEAR_BOTTOM_PX);
     };
     // Jump tripwire state: previous geometry, to detect teleports between
     // consecutive scroll events. User scrolling (incl. momentum fling) moves
@@ -2565,6 +2567,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     // and expanding a tool run is a click. Keyboard activation arrives as keydown.
     el.addEventListener('click', markUserInput, { passive: true });
     const onScroll = () => {
+      if (!routeShownRef.current) return;
       const rawTop = el.scrollTop;
       const rawSh = el.scrollHeight;
       const dTop = rawTop - prevTop;
@@ -2632,7 +2635,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const pollTimer = setInterval(() => {
       // Hidden off Home: no layout read; the first look back takes a fresh baseline.
       if (!routeShownRef.current) { resync = true; return; }
-      if (resync) { resync = false; pollSh = el.scrollHeight; prevSh = pollSh; syncArrow(); return; }
+      if (resync) { resync = false; pollSh = el.scrollHeight; prevSh = pollSh; prevTop = el.scrollTop; syncArrow(); return; }
       const sh = el.scrollHeight;
       const dSh = sh - pollSh;
       pollSh = sh;
@@ -2947,6 +2950,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const pin = () => {
       raf = null;
       if (stopped) return;
+      if (!routeShownRef.current || Date.now() - started > 15_000) { stop(); return; }
       // A question page owns its landing (a reload restores it): never pin it.
       if (onQuestionPageRef.current) { stop(); return; }
       // A stack landing put the box at a passage (it can run before this effect
@@ -3107,7 +3111,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const el = containerRef.current;
     if (!el) return;
     const onLoad = (e: Event) => {
-      if (!isAtBottom.current) return;
+      if (!routeShownRef.current || !isAtBottom.current) return;
       if (selectionActive()) { noteSuppressedScroll(); return; }
       const target = e.target as HTMLElement;
       if (target.tagName !== 'IMG') return;
@@ -3130,9 +3134,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Path B-2: Container resize (sibling components loading) — debounced
   useEffect(() => {
     const el = containerRef.current;
-    if (!el) return;
+    if (!el || !routeShown) return;
     let prevHeight = el.clientHeight;
     const ro = new ResizeObserver(() => {
+      if (!routeShownRef.current) return;
       const newHeight = el.clientHeight;
       const delta = newHeight - prevHeight;
       if (delta !== 0) {
@@ -3176,7 +3181,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         let frames = 0;
         const chase = () => {
           shrinkChaseRaf.current = null;
-          if (!isAtBottom.current || selectionActive()) { shrinkOwed.current = 0; return; }
+          if (!routeShownRef.current || !isAtBottom.current || selectionActive()) { shrinkOwed.current = 0; return; }
           closeShrinkGap();
           if (frames++ < 3) shrinkChaseRaf.current = requestAnimationFrame(chase);
           else shrinkOwed.current = 0;
@@ -3190,7 +3195,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       ro.disconnect();
       if (shrinkChaseRaf.current !== null) cancelAnimationFrame(shrinkChaseRaf.current);
     };
-  }, [debouncedScroll, scrollLog, selectionActive]);
+  }, [debouncedScroll, scrollLog, selectionActive, routeShown]);
 
   // Click handler for the scroll-to-bottom arrow
   const handleScrollToBottom = useCallback(() => {

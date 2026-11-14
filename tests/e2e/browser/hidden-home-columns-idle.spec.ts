@@ -84,8 +84,8 @@ test('a column following the newest row reads no layout while hidden and still f
   await page.waitForTimeout(700)
   expect((await geometry(page)).gap).toBeLessThanOrEqual(80)
 
-  const reads = await awayOnOrg(page, 3_000)
-  // Before the fix this one hidden column made 24 reads in 3 s (WebKit, 2026-11-11).
+  const reads = await awayOnOrg(page, 35_000)
+  // Stay away past the restore deadline; the returning column must still follow.
   expect(reads, 'layout reads inside the hidden home page while on Org').toBeLessThanOrEqual(2)
 
   expect((await geometry(page)).gap, 'back on Home, still on the newest row').toBeLessThanOrEqual(80)
@@ -102,7 +102,7 @@ test('a column parked mid-history keeps its place and its way back across a visi
   expect(parked.gap, 'the wheel leaves the bottom').toBeGreaterThan(400)
   await expect.poll(() => arrowShown(page), { timeout: 4000 }).toBe(true)
 
-  await awayOnOrg(page, 1_500)
+  await awayOnOrg(page, 35_000)
 
   const back = await geometry(page)
   expect(Math.abs(back.top - parked.top), 'the same place in the history').toBeLessThanOrEqual(2)
