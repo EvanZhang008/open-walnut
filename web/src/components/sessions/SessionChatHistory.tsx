@@ -6,6 +6,7 @@ import { useHostStatus } from '@/hooks/useHostStatus';
 import { draftHash, draftKey, writeDraft, type DraftOrigin } from '@/utils/drafts';
 import { staleBannerText } from './stale-banner-text';
 import { scrollDebugEnabled } from '@/utils/scroll-debug';
+import { sendUuidsOfRow } from '@/utils/send-uuids';
 import { startFlashProbe } from '@/utils/flash-probe';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
@@ -3713,9 +3714,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
     const rows = new Map<string, SessionHistoryMessage>();
     for (const m of loadedMessages) {
-      if (m.role !== 'user') continue;
-      if (m.msgId && !rows.has(m.msgId)) rows.set(m.msgId, m);
-      if (m.sourceUuid && !rows.has(m.sourceUuid)) rows.set(m.sourceUuid, m);
+      for (const u of sendUuidsOfRow(m)) if (!rows.has(u)) rows.set(u, m);
     }
     return { bubbles, rows };
   })() : null;

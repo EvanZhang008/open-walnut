@@ -82,7 +82,6 @@ const READERS: Record<string, string> = {
   'web/src/components/sessions/SessionPanel.tsx': 'no attribution',
   // The person's own sends only (user rows): a failed send marks its own thread, a confirmed one clears its draft.
   'web/src/utils/thread-meta.ts': 'user rows only: latestUnsentRows, no answer attribution',
-  'web/src/utils/drafts.ts': 'user rows only: settleConfirmedDrafts, no answer attribution',
 };
 
 /** The positional readers: each takes rows and files a row under the user row before it. */

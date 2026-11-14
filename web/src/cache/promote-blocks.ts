@@ -63,6 +63,7 @@
 
 import { isPendingPermissionBlock, type StreamingBlock } from '@/stream/stream-reducer';
 import type { SessionHistoryMessage } from '@/types/session';
+import { sendUuidsOfRow } from '@/utils/send-uuids';
 
 /** Build the set of evidence keys present in a batch of persisted messages. */
 export interface DeltaEvidence {
@@ -126,10 +127,7 @@ export function buildDeltaEvidence(delta: SessionHistoryMessage[]): DeltaEvidenc
         if (m.msgId) systemMsgIds.add(m.msgId);
         continue;
       }
-      if (m.role === 'user') {
-        if (m.msgId) userLineIds.add(m.msgId);
-        if (m.sourceUuid) userLineIds.add(m.sourceUuid);
-      }
+      for (const u of sendUuidsOfRow(m)) userLineIds.add(u);
       if (m.text) bump(m.text);
       if (m.thinking) bump(m.thinking);
       if (m.msgId && m.text) textMsgIds.add(m.msgId);
