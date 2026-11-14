@@ -3,6 +3,7 @@ import { USER_KINDS } from '../../src/core/org/user-kind.js';
 import { readStatusReport } from '../../src/core/session-hooks/builtins.js';
 import { deriveUserStatus } from '../../src/core/user-status.js';
 import { TEAM_CHARTER } from '../../src/core/team-charter.js';
+import { readFileSync } from 'node:fs';
 
 const now = Date.now();
 describe('every task keeps agent questions off the user', () => {
@@ -23,9 +24,12 @@ describe('every task keeps agent questions off the user', () => {
         .toMatchObject({ state: 'needs', ask_own: { kind } });
     });
   }
-  it('teaches all tasks to fetch through owners and check action attribution first', () => {
-    expect(TEAM_CHARTER).toContain('Missing tools never mean the user runs commands or pastes logs');
-    expect(TEAM_CHARTER).toContain('security_alert_check');
-    expect(TEAM_CHARTER).toContain('unknown goes to the owner or lead');
+  it('keeps owner escalation in the bootstrap and action details in the on-demand guide', () => {
+    expect(TEAM_CHARTER).toContain('goes to the task that owns it or to your lead, not to the user');
+    expect(TEAM_CHARTER).not.toContain('security_alert_check');
+    const guide = readFileSync(new URL('../../src/data/skills/walnut-session-messaging/SKILL.md', import.meta.url), 'utf8');
+    expect(guide).toContain('Missing tools never mean the user runs commands or pastes logs');
+    expect(guide).toContain('`security_alert_check`');
+    expect(guide).toContain('unknown goes to the owner or lead');
   });
 });
