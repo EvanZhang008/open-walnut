@@ -267,6 +267,24 @@ host that is never quiet a forced swap can come about every 3 hours while builds
 update not done with no clock to ask again is listed in `DAEMON_UPDATE_STOPS` with why. `DAEMON_UPDATE_HOLDS` lists every place an update is put off;
 `tests/providers/daemon-update-holds-ratchet.test.ts` fails on one not listed.
 
+## A service's swap reconnects when the new daemon answers
+
+A reconnect waits for a daemon swap this connection runs, so it never deploys, starts, stops or
+rebuilds the ControlMaster under the swap. A service-managed swap is the one exception
+(`attachDuringSwap` in `daemon-connection.ts`; 2026-11-13: every service update left the host down
+for 55 to 60 s although the new daemon served within 8 s, because the update answers only after the
+host watched the new daemon stay serving for 30 s). The service starts the new daemon, so the
+reconnect looks in the daemon dir (a read-only scan, every 2 s at first and backing off to 10 s) and
+attaches only to a daemon that stayed: the same pid, port and runtime-dir instance in two looks a
+step apart, whose hello names that instance and not the one that dropped. It still deploys, starts
+and stops nothing while the swap runs. The handover stays armed until the update answers, so a
+drop before then (a build in a crash loop, or the old build put back after a failed one) reopens
+the window, is not counted as a link drop, and reconnects again the same way; the swap ends as
+"swap done" when the link is up at its end, else with the failure. A handover that ends with the
+link still down puts the outage in the host-link ledger from the drop on (and one link drop when
+its window ran out), since later failed redials make no new down edge. An unmanaged swap needs none of
+this: it ends at its stop, and the reconnect itself starts the new daemon. Tests: `tests/providers/daemon-connection-deferred-upgrade.test.ts`.
+
 ## Never scp manually
 
 **Never scp manually**: some corporate SSH proxies kills large transfers. That's exactly what the chunked auto-deploy solves.

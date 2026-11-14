@@ -1,8 +1,9 @@
 /**
- * Small keyed JSON files in WALNUT_HOME for daemon update facts that must outlive the
- * server process (a deploy restarts it, a crash too): which build did not stay serving
- * where (daemon-build-backoff.ts), and which host's old daemon was just stopped for an
- * update with a copy kept to go back to (below).
+ * Small keyed JSON files in WALNUT_HOME for per-host facts of this machine that must outlive
+ * the server process (a deploy restarts it, a crash too): which build did not stay serving
+ * where (daemon-build-backoff.ts), which host's old daemon was just stopped for an update with
+ * a copy kept to go back to (below), and the upload pace each host's connections learned
+ * (upload-pace.ts).
  *
  * Wall clock (Date.now), never a monotonic one: every entry here must run out in real
  * time, across a Mac's sleep and across restarts, and a monotonic clock stops in sleep

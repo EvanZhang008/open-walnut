@@ -88,8 +88,9 @@ import type { SessionRecord } from '../core/types.js'
 import { sessionCronMetadata } from '../core/sessions/session-cron-metadata.js'
 import { notLinuxSentence, classifyHostConnectError, CONNECT_IN_FLIGHT_PHASES, credentialRetryDelayMs, PROXY_LOGIN_EVIDENCE } from '../core/sessions/host-connect-hint.js'
 import { isSshTransportFailure, markedUploadCommand, extractMarkedOutput, runRemoteSh, runSshBounded, shq, userShellPathScript } from './remote-sh.js'
-import { BULK_UPLOAD_BURST_BYTES, BULK_UPLOAD_BYTES_PER_SEC, PACED_STREAM_PURPOSES, rideMaster } from './ssh-upload-budget.js'
+import { PACED_STREAM_PURPOSES, rideMaster } from './ssh-upload-budget.js'
 import { pacedForward } from './paced-forward.js'
+import { uploadPaceFor } from './upload-pace.js'
 import { chunkListScript, parseChunkList, parseUploadPrecheck, remoteSha256Command, resumeFailureCap, sha256Hex, uploadPrecheckScript } from './upload-resume.js'
 import { count as metricsCount } from '../core/observability/metrics.js'
 import {
@@ -603,6 +604,8 @@ const UPGRADE_HOLD_COMMANDS = new Set([
   'fs.write', 'fs.rm', 'fs.rename', 'fs.copy', 'fs.mkdir', 'host.fix', 'triggers.run', 'triggers.ack', 'triggers.claim', 'offline.ack',
 ])
 
+/** Why a swap's handover ends when its window runs out with no daemon answering (endHandover). */
+const HANDOVER_WINDOW_RAN_OUT = 'the new daemon did not answer within the window'
 /** File changes an overdue swap holds back until it settles (send(); daemon-over-busy.ts step 3). */
 const SWAP_HELD_FILE_COMMANDS = new Set(['fs.write', 'fs.rm', 'fs.rename', 'fs.copy', 'fs.mkdir'])
 /** The longest a file change waits for an overdue swap: the CLI's minute plus the service's restart. */
@@ -1199,6 +1202,20 @@ export class DaemonConnection {
   /** An overdue swap the host network updater runs (fenceFileChanges): file changes wait for it. */
   private _fileFence: Promise<void> | null = null
   private _swapSettle: (() => void) | null = null
+  /**
+   * The swap in flight is a service's (updateManagedDaemon): the OS service starts the new daemon,
+   * never this connection, so a reconnect may attach to it before the update's verdict
+   * (attachDuringSwap). An unmanaged swap ends at its stop, and the reconnect starts the new daemon.
+   */
+  private _swapAttachable = false
+  /** A reconnect attached during the swap in flight: its handover ends when the swap settles. */
+  private _swapAttached = false
+  /**
+   * How long a reconnect during a service's swap waits between looks at the daemon dir: soon at
+   * first, less often while nothing new runs there. A daemon just seen is looked at again after the
+   * first step, and dialled only when the second look finds it the same (attachDuringSwap).
+   */
+  static SWAP_ATTACH_POLL_MS = [2_000, 2_000, 2_000, 3_000, 5_000, 8_000, 10_000]
   /** How long a planned swap may read as connected while the new daemon comes up. */
   static HANDOVER_WINDOW_MS = 45_000
   /** How soon after connecting a deferred update starts (the connected edge's own pushes go first). */
@@ -1462,6 +1479,8 @@ export class DaemonConnection {
       },
       hold: async () => {
         if (!this._connected || this._connecting || this._reconnectInFlight) return 'the connection is not settled'
+        // A link that attached to a service's new daemon before its update answered (attachDuringSwap).
+        if (this._swapInFlight) return 'a daemon update is still going on there'
         const writes = [...this.pendingCommands.values()].filter((p) => p.cmd && UPGRADE_HOLD_COMMANDS.has(p.cmd)).length
         if (writes > 0) return `${writes} daemon command(s) that change a session or a file are in flight`
         // The install hands the daemon over: a host_exec run there would end with it (exec-runs-hold.ts).
@@ -1573,7 +1592,10 @@ export class DaemonConnection {
     if (changed && value) this._bootStart?.schedule()
     if (changed && value) this.netUpdater?.schedule()
     if (value) {
-      if (changed) this.endHandover()
+      // Attached during a service's swap (attachDuringSwap): the handover stays until the update
+      // answers, so a drop before then (a rollback, a build that answers and exits) is the swap's.
+      if (changed && this._swapAttachable && this._swapInFlight && this._handoverArmed) this.holdHandoverWhileAttached()
+      else if (changed) this.endHandover()
       // A daemon answers again: requests waiting out a swap go to it (daemon-drain-resend.ts).
       this._drainSeenAt = 0
       if (changed) wakeHostLink(`daemon:${this.hostKey}`)
@@ -1593,19 +1615,9 @@ export class DaemonConnection {
         this._awakeTick = setInterval(() => { this._awakeDown.sample(Date.now()) }, AWAKE_TICK_MS)
         this._awakeTick.unref?.()
       }
-      // A link that fell by itself counts toward "unstable"; a planned daemon swap, a deliberate
-      // teardown, and a drop this Mac's own wake or network change caused do not (daemon-link-drops.ts).
-      const ownChange = this._disconnectedSince - lastHostSignalAt() < WAKE_GRACE_MS
-      // A planned swap's wait is Walnut's own (the update holds the sends), so it stays in the delivery.
-      // A server stop closing its links is no outage of the host (the next server would read it as one).
-      if (!this._destroyed && !this._handoverArmed && !daemonDialsClosed()) noteHostLinkDown(this.hostKey, this._disconnectedSince)
-      if (!this._destroyed && !this._handoverArmed && !ownChange) {
-        noteLinkDrop(this.hostKey, this._disconnectedSince)
-        // The frame changes meaning when this drop ages out of the window: push one then, so an
-        // open dot or row stops saying Unstable without waiting for the next phase change.
-        const host = this.hostKey
-        setTimeout(() => notifyDaemonPhaseChange(host), FLAP_WINDOW_MS + 1_000).unref?.()
-      }
+      // A planned swap's wait is Walnut's own (the update holds the sends), so it stays in the delivery
+      // and is no drop; if the swap's window ends with the link still down, endHandover notes it then.
+      if (!this._handoverArmed) this.noteLinkDown(this._disconnectedSince)
       this.openHandoverWindow()
       this.setPhase('reconnecting')
     }
@@ -4894,7 +4906,8 @@ export class DaemonConnection {
     const run = this.runUpgradeRecheck().finally(() => {
       this._upgradeRecheckInFlight = null
       // A swap that never dropped the link (the update failed, or was held): the host reads as it is.
-      if (this._handoverArmed && this._connected) this.endHandover('the old daemon kept serving')
+      // Attached during it: the swap is done once the link is up, whatever the update said.
+      if (this._handoverArmed && this._connected) this.endHandover(this._swapAttached ? undefined : 'the old daemon kept serving')
       this.settleSwap()
       if (this._upgradeRecheckAgain) {
         this._upgradeRecheckAgain = false
@@ -5020,7 +5033,7 @@ export class DaemonConnection {
     if (!this._handoverArmed || this._handoverUntil) return
     this._handoverUntil = Date.now() + DaemonConnection.HANDOVER_WINDOW_MS
     if (this._handoverTimer) clearTimeout(this._handoverTimer)
-    this._handoverTimer = setTimeout(() => this.endHandover('the new daemon did not answer within the window'), DaemonConnection.HANDOVER_WINDOW_MS)
+    this._handoverTimer = setTimeout(() => this.endHandover(HANDOVER_WINDOW_RAN_OUT), DaemonConnection.HANDOVER_WINDOW_MS)
     this._handoverTimer.unref?.()
   }
 
@@ -5050,13 +5063,52 @@ export class DaemonConnection {
 
   private settleSwap(): void {
     this._swapOverBusy = false
+    this._swapAttachable = false
+    this._swapAttached = false
+    // A failure the update left while the link already serves the build it wanted is over.
+    if (this._connected && this._updateFailure && this._daemonVersion === this._updateFailure.expected) this._updateFailure = null
     const settle = this._swapSettle
     this._swapSettle = null
     this._swapInFlight = null
     settle?.()
   }
 
+  /**
+   * Connected again during a service's swap: the handover stays armed until the update answers
+   * (settled in updateManagedDaemon, else recheckPostponedUpgrade), and its window starts again at
+   * the next drop, which then counts as the swap's and not as the link's.
+   */
+  private holdHandoverWhileAttached(): void {
+    this._swapAttached = true
+    this._handoverUntil = 0
+    if (this._handoverTimer) clearTimeout(this._handoverTimer)
+    this._handoverTimer = null
+    log.session.info('DaemonConnection: connected to the new daemon; the swap ends when its update answers', {
+      host: this.hostKey, ms: Date.now() - this._handoverStartedAt, instanceId: this._daemonInstanceId,
+    })
+  }
+
   /** The swap is over: connected to the new daemon (no reason), or it failed (`why`) and the host reads as it is. */
+  /**
+   * The link went down at `since`, for the host-link ledger (delivery-latency.ts) and the drops
+   * that read "Unstable" (daemon-link-drops.ts): at the drop itself, or when a swap's handover ends
+   * with the link still down (the drop was hidden until then). `drop: false` notes only the down
+   * (a swap whose update failed: Walnut's own, not a link that fell by itself).
+   */
+  private noteLinkDown(since: number, drop = true): void {
+    // A server stop closing its links is no outage of the host (the next server would read it as one).
+    if (!this._destroyed && !daemonDialsClosed()) noteHostLinkDown(this.hostKey, since)
+    // A link that fell by itself counts toward "unstable"; a deliberate teardown and a drop this
+    // Mac's own wake or network change caused do not.
+    const ownChange = since - lastHostSignalAt() < WAKE_GRACE_MS
+    if (!drop || this._destroyed || ownChange) return
+    noteLinkDrop(this.hostKey, since)
+    // The frame changes meaning when this drop ages out of the window: push one then, so an
+    // open dot or row stops saying Unstable without waiting for the next phase change.
+    const host = this.hostKey
+    setTimeout(() => notifyDaemonPhaseChange(host), FLAP_WINDOW_MS + 1_000).unref?.()
+  }
+
   private endHandover(why?: string): void {
     if (!this._handoverArmed) return
     const ms = Date.now() - this._handoverStartedAt
@@ -5069,6 +5121,10 @@ export class DaemonConnection {
       return
     }
     log.session.warn('DaemonConnection: daemon swap window ended', { host: this.hostKey, why, ms })
+    // Still down: the swap hid an outage, which counts from the drop on (a network loss after an
+    // attach included). Later failed redials make no new down edge, so it is noted now or never.
+    // One drop only for a window that ran out: a failed update is Walnut's own, no link that fell.
+    if (!this._connected && this._disconnectedSince !== null) this.noteLinkDown(this._disconnectedSince, why === HANDOVER_WINDOW_RAN_OUT)
     // Requests waiting out this swap look again now (daemon-drain-resend.ts).
     wakeHostLink(`daemon:${this.hostKey}`)
     // What it hid reaches every surface now.
@@ -5174,6 +5230,8 @@ export class DaemonConnection {
           swapping = true
           counted = this.countForcedTry(expected)
           this.beginHandover()
+          // The service starts the new daemon: a reconnect attaches to it once it answers.
+          if (this._swapInFlight) this._swapAttachable = true
           return true
         },
       })
@@ -5191,7 +5249,8 @@ export class DaemonConnection {
       if (ran.launched && !unanswered) void unreadUpdates.write(key, null)
       // By name: the class lives in daemon-service-update.ts, which tests replace with a double.
       if (error instanceof Error && error.name === 'DaemonUpdateStageError') return stageFailed(error)
-      if (swapping) this.endHandover('the service update failed')
+      // Connected again during the swap (the old build back, or a verdict that came too late): done.
+      if (swapping) this.endHandover(this._connected && this._swapAttached ? undefined : 'the service update failed')
       // Another update's runner still works on the host (daemon-net-update-io.ts), or a hold:
       // nothing was changed, asked again in a minute.
       if (error instanceof Error && error.name === 'NetUpdateHeldError') {
@@ -7559,10 +7618,10 @@ export class DaemonConnection {
     const sshArgs = this.buildSshArgs({ useControlMaster: false })
     const sshHost = this.sshHostString
     const laneOpts = this.laneForwardOpts()
-    // Its upload goes at the relay's pace, whatever waited for it (paced-forward.ts).
-    return async () => pacedForward(await sshLaneForward(sshArgs, sshHost, remotePort, laneOpts), {
-      bytesPerSec: BULK_UPLOAD_BYTES_PER_SEC, burstBytes: BULK_UPLOAD_BURST_BYTES,
-    })
+    // Its upload goes at the pace this host's bulk channel learned, whatever waited for it
+    // (paced-forward.ts, upload-pace.ts): full speed until a cut while uploading teaches it.
+    const learn = uploadPaceFor(this.hostKey, 'bulk')
+    return async () => pacedForward(await sshLaneForward(sshArgs, sshHost, remotePort, laneOpts), { learn })
   }
 
   /**
@@ -7721,6 +7780,7 @@ export class DaemonConnection {
         this.announceProbeRole(ws)
         log.session.info('DaemonConnection: bulk channel connected', {
           host: this.hostKey, url, instanceId, ownConnection: this.bulkForward !== null,
+          ...(this.bulkForward !== null ? uploadPaceFor(this.hostKey, 'bulk').describe() : {}),
         })
         this.releaseBulkWaiters()
       }).catch((err) => {
@@ -8117,7 +8177,17 @@ export class DaemonConnection {
     // (and maybe rebuild) the ControlMaster under that stop and race it to the
     // deploy. Only the swap: a drop during the upload before it dials the old
     // daemon, which still serves (that run then finds its connection gone).
-    if (this._swapInFlight) await this._swapInFlight
+    // A service's swap is the exception (attachDuringSwap): the service starts the new daemon, and
+    // its update answers only after watching it stay serving, about 50 s after it first answered
+    // (2026-11-13: every service update left the host down that long). The link attaches as soon
+    // as the new daemon answers, and still deploys, starts and stops nothing until the swap ends.
+    if (this._swapInFlight) {
+      const attached = await this.attachDuringSwap()
+      if (attached) { this.reconnected(attached.port, attached.priorInstanceId); return }
+      if (this._swapInFlight) await this._swapInFlight
+      // Torn down during the swap (disconnect settles it): nothing to dial any more.
+      if (this._destroyed) return
+    }
 
     // Reset deploy flags — if daemon is still alive we skip deploy entirely;
     // if daemon died, deployDaemon() will set these correctly.
@@ -8217,6 +8287,11 @@ export class DaemonConnection {
       this.recoverDisconnectedSessions().catch(() => {})
       return
     }
+    this.reconnected(daemonPort, priorInstanceId)
+  }
+
+  /** The reconnect's link is up on `daemonPort`: connected, and what a new link starts (both reconnect paths). */
+  private reconnected(daemonPort: number, priorInstanceId: string | null): void {
     this.setConnected(true)
     this.startPing()
 
@@ -8231,6 +8306,104 @@ export class DaemonConnection {
 
     // Auto-recover sessions that were marked error due to disconnect
     this.recoverDisconnectedSessions().catch(() => {})
+  }
+
+  /**
+   * A reconnect during a service's swap (_swapAttachable): attach to the new daemon once it serves
+   * in the daemon dir, not after the update's verdict. Every reason the reconnect waits for a swap
+   * stays true here, because this only reads and dials:
+   *   - nothing is deployed, started or stopped (no checkDaemonRunning: it may revive the service);
+   *   - the ControlMaster is neither probed nor rebuilt (the update's own commands ride it);
+   *   - only a daemon that stayed (the same pid, port and runtime-dir instance in two looks a step
+   *     apart, as daemonReady in daemon-service-ready.ts asks) and whose hello names the dir's own
+   *     instance, not the one that dropped, counts: the old daemon on its way out, or a build that
+   *     answers and exits, is never attached.
+   * Returns null when the swap ended first (the caller then goes on as before), for a swap this
+   * cannot attach during, or when the connection was torn down. A build the update then judges
+   * failed is replaced on the host by the old one: that drop is the swap's (the handover stays
+   * armed, holdHandoverWhileAttached) and reconnects again, here while the swap runs, else as usual.
+   */
+  private async attachDuringSwap(): Promise<{ port: number; priorInstanceId: string | null } | null> {
+    const swap = this._swapInFlight
+    if (!swap || !this._swapAttachable || !this.sshTarget) return null
+    // An unmanaged replacement this connection still watches (settleStartedOnLive) goes the usual way.
+    await this.loadPendingReplace()
+    if (this._replacing) return null
+    const dirs = [this._remoteDir]
+    // The runtime dir's instance marker first: the scan script exits once it finds a daemon.
+    const script = `printf 'walnut-instance %s\\n' "$(cat ${shq(`${this._remoteDir}/daemon.instance`)} 2>/dev/null)"\n${buildLiveDaemonScanScript(dirs)}`
+    const priorInstanceId = this._daemonInstanceId
+    const polls = DaemonConnection.SWAP_ATTACH_POLL_MS
+    // pid:port of a daemon whose hello named the instance that dropped (a daemon writes its pid
+    // file before its port file, so a pid alone could match a new daemon read with the old port).
+    const skip = new Set<string>()
+    let seen: string | null = null
+    let idle = 0
+    let settled = false
+    let wake: (() => void) | null = null
+    void swap.then(() => { settled = true; wake?.() })
+    for (let first = true; ; first = false) {
+      if (!first) {
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const ms = seen ? polls[0] : polls[Math.min(idle++, polls.length - 1)]
+        await new Promise<void>((resolve) => { wake = resolve; timer = setTimeout(resolve, ms); timer.unref?.() })
+        clearTimeout(timer)
+        wake = null
+      }
+      if (settled || this._swapInFlight !== swap || this._destroyed) return null
+      const output = await this.sshExec(script, 5_000).catch(() => '')
+      const found = parseLiveDaemonScan(output, dirs)
+      const owner = output.match(/^walnut-instance (\S*)\s*$/m)?.[1] ?? ''
+      const key = found ? `${found.pid}:${found.port}:${owner}` : null
+      if (!found || !key || skip.has(`${found.pid}:${found.port}`)) { seen = null; continue }
+      // Seen once: dialled only when the next look finds the very same daemon there.
+      if (seen !== key) { seen = key; continue }
+      seen = null
+      if (settled || this._swapInFlight !== swap || this._destroyed) return null
+      this.closeBulkChannel()
+      if (this.tunnel) { try { this.tunnel.kill('SIGTERM') } catch {} ; this.tunnel = null }
+      // What the hello sets, as it was: a dial that does not attach leaves the link naming the
+      // daemon that dropped (the next hello compares to it, and the host's status reads it).
+      const before = { instance: this._daemonInstanceId, version: this._daemonVersion, caps: this._capabilities }
+      const restore = () => {
+        this._daemonInstanceId = before.instance
+        this._daemonVersion = before.version
+        this._capabilities = before.caps
+      }
+      try {
+        this.localPort = await this.createTunnel(found.port)
+        await this.connectWebSocket(this.localPort)
+        const ok = await this.verifyCapabilities()
+        // Torn down during the dial: its tunnel goes too, and nothing connects.
+        if (this._destroyed) { restore(); this.closeTransport(); return null }
+        // The swap ended during the dial: the usual path decides now, as it would have.
+        if (settled || this._swapInFlight !== swap) { restore(); this.closeTransport(); return null }
+        const instance = this._daemonInstanceId
+        if (ok && instance !== null && instance !== priorInstanceId && (!owner || owner === instance)) {
+          // A live daemon, nothing deployed: the deploy flags as the usual path leaves them.
+          this._deployedViaSource = false
+          this._bunPath = null
+          this.remotePort = found.port
+          // Its build is decided once connected, as the usual path's live daemon is (startDeferredUpgrade).
+          this._upgradeDeferred = true
+          log.session.info('DaemonConnection: attached to the new daemon before its update answered', {
+            host: this.hostKey, port: found.port, pid: found.pid, instanceId: instance, version: this._daemonVersion,
+          })
+          return { port: found.port, priorInstanceId }
+        }
+        // The daemon that dropped, still on its way out: not asked again.
+        if (ok && instance === priorInstanceId) skip.add(`${found.pid}:${found.port}`)
+      } catch (err) {
+        // A daemon this server may not use is refused, as on every path.
+        if (err instanceof DaemonIdentityError) throw err
+        log.session.debug('DaemonConnection: the new daemon did not answer yet during the swap', {
+          host: this.hostKey, port: found.port, error: err instanceof Error ? err.message : String(err),
+        })
+      }
+      restore()
+      this.closeTransport()
+      if (this._destroyed) return null
+    }
   }
 
   /**
