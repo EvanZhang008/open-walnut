@@ -8,7 +8,7 @@ import { socketAddr } from '../../providers/net-config-core.js'
 import type { Daemon } from './net-local.js'
 import { choiceOfMode, directAddr, PUBLIC_RELAYS, type MachineLink, type RelayChoice } from './net-relay.js'
 import { netRows, type HostRows } from './net-rows.js'
-import { mergeAddrs, noteWhere } from './net-where.js'
+import { noteWhere } from './net-where.js'
 
 /**
  * Note where a machine is now (net-where.ts): the address this Mac reaches it at first, and
@@ -31,7 +31,8 @@ export async function noteSeen(local: Daemon, conn: Daemon, name: string, endpoi
     ]
     // Its relay is kept only when it is one of this Mac's own (net-where.ts relayToKeep).
     const home = typeof st.node?.homeRelay === 'string' ? st.node.homeRelay : null
-    if (await noteWhere(endpoint, { addrs: mergeAddrs(at ? [at] : [], own), home, ours: [...ours, ...running], self: own })) log.session.info('net: noted where a machine is', { host: name, at, home })
+    // Keep the full sighting until noteWhere compares it with the stored address book.
+    if (await noteWhere(endpoint, { addrs: [...(at ? [at] : []), ...own], home, ours: [...ours, ...running], self: own })) log.session.info('net: noted where a machine is', { host: name, at, home })
   } catch (err) { log.session.debug('net: could not read where a machine is', { host: name, error: (err as Error).message }) }
 }
 

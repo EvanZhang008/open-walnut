@@ -62,9 +62,46 @@ export function withWhere(members: NetMember[], net: unknown, ours: string[] = [
   })
 }
 
-/** The addresses to keep: the new ones first, then the old ones, once each, at most 8. */
+/** A valid socket's identity, independent of IPv6 spelling and leading zeroes in its port. */
+function addrKey(addr: string): string {
+  const colon = addr.lastIndexOf(':')
+  return `${new URL(`http://${addr.slice(0, colon)}/`).hostname}:${Number(addr.slice(colon + 1))}`
+}
+
+/** New sockets first, then old ones, at most 8; oversized reports choose a stable subset. */
 export function mergeAddrs(fresh: string[], kept: string[] = []): string[] {
-  return [...new Set([...fresh.filter(socketAddr), ...kept])].slice(0, MAX_ADDRS)
+  const keys = new Set<string>()
+  const out: string[] = []
+  for (const addr of fresh) {
+    if (!socketAddr(addr)) continue
+    const key = addrKey(addr)
+    if (keys.has(key)) continue
+    keys.add(key)
+    out.push(addr)
+  }
+  // A report larger than the address book must pick the same subset in any order.
+  // Otherwise changing the direct path can repeatedly evict and restore its eighth socket.
+  // Byte order keeps IPv4 (including LAN/NAT sockets) before IPv6, independent of locale.
+  if (out.length > MAX_ADDRS) return out.sort((a, b) => {
+    const ka = addrKey(a), kb = addrKey(b)
+    return ka < kb ? -1 : ka > kb ? 1 : 0
+  }).slice(0, MAX_ADDRS)
+  for (const addr of kept) {
+    if (out.length === MAX_ADDRS) break
+    if (!socketAddr(addr)) continue
+    const key = addrKey(addr)
+    if (keys.has(key)) continue
+    keys.add(key)
+    out.push(addr)
+  }
+  return out
+}
+
+/** Keep the stored spelling and dial order when a sighting only permutes the same sockets. */
+function stableAddrs(next: string[], was: string[] = []): string[] {
+  const before = new Set(was.map(addrKey))
+  const after = new Set(next.map(addrKey))
+  return before.size === after.size && [...after].every((addr) => before.has(addr)) ? was : next
 }
 
 /** The same relay: a hostname with or without its final dot (iroh writes n0's with it). */
@@ -104,10 +141,10 @@ export async function noteWhere(endpoint: string, seen: { addrs: string[]; home?
     if (!listed || removing.includes(endpoint)) return { write: false, result: false }
     const all = whereOf(net)
     const was = all[endpoint] ?? {}
-    const addrs = mergeAddrs(seen.addrs, was.addrs)
+    const addrs = stableAddrs(mergeAddrs(seen.addrs, was.addrs), was.addrs)
     const keep = 'home' in seen ? relayToKeep(seen.home, seen.ours ?? [], was.relay) : was.relay
     const relay = relayOk(keep) ? keep : undefined
-    const self = seen.self ? [...new Set(seen.self.filter(socketAddr))].slice(0, MAX_ADDRS) : was.self ?? []
+    const self = seen.self ? stableAddrs(mergeAddrs(seen.self), was.self) : was.self ?? []
     // Seen on the relay kept: stamped, at most once a day so a sighting rarely writes config.yaml.
     const onIt = !!relay && !!seen.home && sameRelay(relay, seen.home)
     const now = Date.now()
