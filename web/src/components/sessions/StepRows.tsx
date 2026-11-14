@@ -1,13 +1,13 @@
 /**
  * Rows of an opened turn that are not tool calls or message cards, drawn as the one
  * step row every other step is (step-rows.css): the session's own words on the way
- * to its answer, one line until opened; a step that needs the person, lifted out
- * above the fold in red; and the live turn's current step under its closed line.
+ * to its answer, one line until opened; and a step that needs the person, lifted out
+ * above the fold in red.
  */
 import type { ReactNode } from 'react';
 import { bashCommandSummary, toolDescription } from '@open-walnut/tool-header-text';
 import { useTurnFold } from './TurnFolds';
-import { StepIcon, toolDisplayName, toolStepIcon } from './StepIcon';
+import { StepIcon, toolDisplayName } from './StepIcon';
 import { toolTarget } from './step-target';
 import { isRuleDenied } from './tool-run-phrase';
 import { thinkingFirstLine } from './SessionMessage';
@@ -60,31 +60,3 @@ export function LiftedStep({ name, input, result }: { name: string; input?: Reco
   );
 }
 
-/** The live turn's current step, under its closed line: icon and words, shimmering. */
-export function PeekRow({ icon, text, mono }: { icon: Parameters<typeof StepIcon>[0]['name']; text: string; mono?: boolean }) {
-  return (
-    <div className="step-peek-row">
-      <StepIcon name={icon} />
-      <span className={`step-peek-text${mono ? ' mono' : ''}`}>{text}</span>
-    </div>
-  );
-}
-
-/** A live run's members as the peek reads them. */
-type PeekMember = { type: string; name?: string; input?: Record<string, unknown>; content?: string };
-
-/**
- * What a live run or turn does now, under its closed line, in ONE line: the call it is
- * on when the last member is a call, else its latest thought (design 1, 2026-11-11: a
- * running turn shows one live line; 2026-11-12: a thought above the call made the row
- * three lines tall, and every row is at most two).
- */
-export function LivePeek({ members }: { members: readonly PeekMember[] }) {
-  const last = members[members.length - 1];
-  if (!last) return null;
-  const call = last.type === 'tool_call' && last.name ? last : undefined;
-  const line = call ? callLine(call.name!, call.input) : undefined;
-  if (call && line) return <PeekRow icon={toolStepIcon(call.name!)} text={line.label} mono={line.mono} />;
-  const thought = [...members].reverse().find((m) => m.type === 'thinking' && !!m.content?.trim());
-  return thought ? <PeekRow icon="thought" text={thinkingFirstLine(thought.content!)} /> : null;
-}

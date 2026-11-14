@@ -81,7 +81,7 @@ import { useReadingPlace } from './useReadingPlace';
 import { ThreadTurnLabel } from './ThreadTurnLabel';
 import { foldGroupOf, foldOpenKeys, foldParts, isFolded } from '@/utils/thread-fold';
 import { WORKING_LEAD, envelopeSteps, foldStepsPhrase, secondsBetween, walnutCompactLine, workedForLead, type FoldStep } from './fold-steps';
-import { FoldedWordsRow, LiftedStep, LivePeek, needsPerson } from './StepRows';
+import { FoldedWordsRow, LiftedStep, needsPerson } from './StepRows';
 import { lookupTaskByRef } from '@/stores/entity-label-store';
 import { countFoldFailures, isNarration, joinsQuiet, MSG_KIND_ROLE, SYSTEM_VARIANT_ROLE, toolRole, TOOL_ROLE_FOLDS, type FoldFailures, type MsgKind, type RowRole } from './fold-rows';
 import { chunkByKind, EMPTY_STEP_GROUP, foldsAsOne, leadingStepGroup, settleWords, stepGroups, type StepGroup, type StepKind } from './stream-step-groups';
@@ -5681,11 +5681,6 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       liveTailKeyRef.current = { sessionId, key: turnFoldKey(id) };
       const head = opener ? headOf(opener) : undefined;
       const group = leadingGroup;
-      // What the turn does now, under its closed line: its latest thought and the step it is
-      // on (design 1: a running turn is one live line, nothing else grows).
-      const livePeek = (g: StepGroup): React.ReactNode => (
-        <LivePeek members={g.members.map((k) => timeline[k]).flatMap((t) => (t && t.kind === 'block' ? [t.block] : []))} />
-      );
       // Built once renderQueuedRow exists (the group's cards render with it).
       liveTailRow = () => {
         const firstChunk = chunkByKind(group.members, (k) => stepKinds[k])[0];
@@ -5706,7 +5701,6 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold" failed={failed}
               findMembers={findMembersAttr(tail.flatMap(rowsOf))}
               running={isStreaming || live}
-              peek={isStreaming ? livePeek(group) : undefined}
               lead={isStreaming ? WORKING_LEAD : undefined} phrase={phrase}>
               {tailCarry && carriedRow(tailCarry)}
               {tail.map((part, k) => {
@@ -6156,7 +6150,6 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     return (
       <div key={runRowKey(members, chunk.members[0])} className="session-msg-bare">
         <ToolRunShell phrase={phrase} calls={calls} failCount={failCount} running={thinkingLive || (isStreaming && streamRunHasCallingTool(members))}
-          peek={isStreaming ? <LivePeek members={members} /> : undefined}
           count={members.filter((m) => m.type === 'tool_call').length}
           disclosureId={disclosureIds.run(members[0]?.type === 'tool_call' ? { toolUseId: members[0].toolUseId } : { msgId: members[0]?.msgId })}>
           <StreamRunMembers members={members} live={thinkingLive}
@@ -6325,7 +6318,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const rowKeys = rowKeysAttr(members.map((m) => (m.type === 'tool_call' ? m.toolUseId : undefined)));
       return (
         <div key={`run-${item.index}`} className="session-msg-bare" data-row-keys={rowKeys}>
-          <ToolRunShell phrase={phrase} calls={calls} failCount={failCount} running={running} peek={isStreaming ? <LivePeek members={members} /> : undefined} count={members.filter((m) => m.type === 'tool_call').length} disclosureId={disclosureIds.run(members[0]?.type === 'tool_call' ? { toolUseId: members[0].toolUseId } : { msgId: members[0]?.msgId })}>
+          <ToolRunShell phrase={phrase} calls={calls} failCount={failCount} running={running} count={members.filter((m) => m.type === 'tool_call').length} disclosureId={disclosureIds.run(members[0]?.type === 'tool_call' ? { toolUseId: members[0].toolUseId } : { msgId: members[0]?.msgId })}>
             <StreamRunMembers
               members={members}
               live={thinkingLive}

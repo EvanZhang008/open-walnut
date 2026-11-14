@@ -433,10 +433,8 @@ function InjectedContextRow({ text }: { text: string }) {
 export { toolRunPhrase };
 
 /** Shared merged-row shell: muted phrase line + expandable children. */
-export function ToolRunShell({ phrase, calls, failCount, running, count, disclosureId, peek, children }: {
+export function ToolRunShell({ phrase, calls, failCount, running, count, disclosureId, children }: {
   phrase: string;
-  /** What the run does now (StepRows LivePeek), under the closed line while it runs. */
-  peek?: React.ReactNode;
   /** The run's tool calls: the line then counts them by outcome (ran, denied, waiting for
    *  an open prompt) and names the person's answers to the prompts they passed through
    *  (waiting-tools.ts). Without them the line is `phrase`. */
@@ -504,7 +502,6 @@ export function ToolRunShell({ phrase, calls, failCount, running, count, disclos
           </>
         ) : line}
       </button>
-      {!open && running && peek && <div className="process-fold-peek" data-testid="run-peek">{peek}</div>}
       {open && <div className="tool-run-body"><SoleCallContext.Provider value={calls?.length === 1}>{children}</SoleCallContext.Provider></div>}
     </div>
   );

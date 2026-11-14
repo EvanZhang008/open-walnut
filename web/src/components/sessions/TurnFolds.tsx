@@ -76,15 +76,15 @@ export function useTurnFold(key: string): [boolean, () => void] {
  * answer use the same row under turnFoldKey. `failed` puts the count of failed calls (and,
  * apart, of the runtime's error lines) in the header, so a folded failure is never silent.
  */
-export function ProcessFoldRow({ foldId, phrase, lead, children, foldKey, failed = 0, testId = 'process-fold', running = false, peek, findMembers }: {
+export function ProcessFoldRow({ foldId, phrase, lead, children, foldKey, failed = 0, testId = 'process-fold', running = false, findMembers }: {
   foldId: string; phrase: string;
   /** Before the steps: how long the turn worked ("Worked for 2m 16s"), or "Working" while it runs. */
   lead?: string; children: ReactNode; foldKey?: string; failed?: number | FoldFailures; testId?: string;
-  /** A step inside is still running (the live turn): the row breathes like a running tool run. */
+  /** A step inside is still running (the live turn): the row breathes like a running tool run.
+   *  Shut, the line is all it shows: no current step under it; a click opens the steps, which
+   *  keep updating (2026-11-14, the user: "Even not showing the currently working command,
+   *  below collpes, if people need people cna click intop"). */
   running?: boolean;
-  /** What the turn is doing now, drawn under the closed line while it runs (the latest
-   *  thought, the current step), so a running turn shows one live line and nothing grows. */
-  peek?: ReactNode;
   /** The saved rows it holds (space-separated ids), REQUIRED of every fold: the find bar
    *  counts them as drawn while the fold is shut, and opens it to land on them
    *  (PageFind openRunsOf). `undefined` only for a fold of no saved row. */
@@ -104,7 +104,6 @@ export function ProcessFoldRow({ foldId, phrase, lead, children, foldKey, failed
         {failedWords && <span className="tool-run-fail">{failedWords}</span>}
         {running && <span className="tool-run-live-dot" />}
       </button>
-      {!open && running && peek && <div className="process-fold-peek" data-testid="turn-fold-peek">{peek}</div>}
       {open && <div className="process-fold-body"><InFoldBody.Provider value>{children}</InFoldBody.Provider></div>}
     </div>
   );

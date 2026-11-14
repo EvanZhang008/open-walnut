@@ -175,18 +175,20 @@ for (const theme of ['light', 'dark'] as const) {
     await expect(body).toHaveCount(0)
     await beat(page)
 
-    // A running turn: one live line, the step it is on under it (its thought when no call runs).
+    // A running turn: one live line and nothing under it; a click shows the step it is on
+    // (2026-11-14, the user: "Even not showing the currently working command, below collpes,
+    // if people need people cna click intop").
     await injectEvent(page, 'session:thinking-delta', { sessionId: SESSION_ID, delta: 'WF_LIVE_THOUGHT I should check the extension build first.', msgId: 'wf-live-1' })
     await injectEvent(page, 'session:tool-use', { sessionId: SESSION_ID, toolName: 'Bash', toolUseId: 'wf-live-t1', input: { command: 'make extension' } })
-    // The live line is the turn's run (or its fold, when it took in a message): either way one
-    // line, and under it what it does now.
-    const peek = history.locator('[data-testid="run-peek"], [data-testid="turn-fold-peek"]').last()
-    await expect(peek).toContainText('make extension', { timeout: 10000 })
-    // One line under it: the step it is on, never the thought above it too (the row would be
-    // three lines tall; every row is at most two).
-    await expect(peek).not.toContainText('WF_LIVE_THOUGHT')
+    const liveFold = history.locator('[data-testid="turn-fold"][data-running="true"]').last()
+    await expect(liveFold).toHaveAttribute('data-open', 'false', { timeout: 10000 })
+    await expect(liveFold.locator(':scope > :not(.tool-run-toggle)')).toHaveCount(0)
+    await expect(history).not.toContainText('make extension')
     await beat(page, 1200)
     await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-${theme}-4-running.png` }).catch(() => {})
+    await liveFold.locator(':scope > .tool-run-toggle').click()
+    await expect(liveFold.locator(':scope > .process-fold-body')).toContainText('make extension')
+    await liveFold.locator(':scope > .tool-run-toggle').click()
 
     // A permission prompt stays outside the fold, where it is answered.
     await injectEvent(page, 'session:tool-result', { sessionId: SESSION_ID, toolUseId: 'wf-live-t1', result: 'ok' })
