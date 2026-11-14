@@ -60,7 +60,8 @@ import { ICON_CHEVRON_DOWN, ICON_CHEVRON_RIGHT } from './Icons';
 import { useHumanInbox } from '@/hooks/useHumanInbox';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { useShiftClickGuard } from './useShiftClickGuard';
-import { InboxPane } from '@/components/inbox/InboxPane';
+import { InboxPane, isInboxLayout, type InboxLayout } from '@/components/inbox/InboxPane';
+import { usePageView } from '@/utils/view-memory';
 import { LetterReader } from '@/components/inbox/LetterReader';
 import { ApprovalRows, usePendingApprovals } from '@/components/approvals/ApprovalRow';
 import {
@@ -199,6 +200,9 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   // gated on the panel being open; every letter WS event refreshes it (D8).
   const [showArchived, setShowArchived] = useState(false);
   const [openLetterId, setOpenLetterId] = useState<string | null>(null);
+  // Cards remain the default for existing installs; an explicit Split choice is kept.
+  const [inboxLayout, setInboxLayout] = usePageView<InboxLayout>('inbox', 'layout', 'cards', isInboxLayout);
+  const inboxSplit = section === 'inbox' && inboxLayout === 'split';
   const location = useLocation();
   const returningLetter = useRef<string | undefined>(undefined);
   // A letter a link opened onto a closed center: closing it takes the center with it, back to where the link was.
@@ -424,18 +428,26 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
 
   const pickSection = useCallback((next: RailSection) => {
     userPickedSection.current = true;
+    if (inboxSplit && next !== 'inbox') setOpenLetterId(null);
     setSection(next);
     // Entering Errors through the SECTION button always lands on every category
     // ("all" is the natural landing); a specific family is only reached through
     // its own sub-entry (pickErrorCategory below).
     setErrorCategory(null);
-  }, []);
+  }, [inboxSplit]);
+
+  const changeInboxLayout = useCallback((next: InboxLayout) => {
+    // A choice to leave the right reader is not a request to open a modal over the list.
+    if (inboxSplit && next !== 'split') setOpenLetterId(null);
+    setInboxLayout(next);
+  }, [inboxSplit, setInboxLayout]);
 
   const pickErrorCategory = useCallback((category: string) => {
     userPickedSection.current = true;
+    if (inboxSplit) setOpenLetterId(null);
     setSection('errors');
     setErrorCategory(category);
-  }, []);
+  }, [inboxSplit]);
 
   useEffect(() => {
     if (open) setErrorCategory(null);
@@ -539,6 +551,21 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
     />
   ) : null;
 
+  const letterReader = openLetterId && <LetterReader
+    letterId={openLetterId}
+    {...(inbox.byId.get(openLetterId) ? { envelope: inbox.byId.get(openLetterId) } : {})}
+    embedded={inboxSplit}
+    onClose={() => {
+      setOpenLetterId(null);
+      if (linkOpened.current) { linkOpened.current = false; onClose(); }
+    }}
+    onLetterUpdated={inbox.mergeLetter}
+    onMarkRead={markLetterRead}
+    onTogglePin={toggleLetterPin}
+    onToggleArchive={toggleLetterArchive}
+    onNavigate={onNavigate}
+  />;
+
   // Portal to <body>: the panel is mounted inside the Sidebar, whose mobile
   // styles apply a transform — that turns the sidebar into the containing
   // block for position:fixed, dragging the "fixed" panel off-screen with the
@@ -551,7 +578,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
       {/* Panel */}
       <div
         ref={setPanelEl}
-        className={`notification-panel nfc-panel-wide${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}
+        className={`notification-panel nfc-panel-wide${sidebarCollapsed ? ' sidebar-collapsed' : ''}${inboxSplit ? ' nfc-panel-inbox-split' : ''}`}
       >
         <div className="notification-panel-header">
           <span className="notification-panel-title">Notifications</span>
@@ -659,6 +686,10 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
               <NotificationSystemPane indexStatus={indexStatus} disabled={disabledHosts} onLeave={onClose} onNavigate={onNavigate} />
             ) : section === 'inbox' ? (
               <InboxPane
+                layout={inboxLayout}
+                onLayoutChange={changeInboxLayout}
+                selectedId={openLetterId}
+                reader={letterReader}
                 letters={inboxRows}
                 loaded={inbox.loaded}
                 error={inbox.error}
@@ -773,23 +804,8 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
         </div>
       </div>
 
-      {/* The reader is its own portalled overlay above the panel: a letter is a
-          document, not a card, and the narrow panel can't hold one. */}
-      {openLetterId && (
-        <LetterReader
-          letterId={openLetterId}
-          {...(inbox.byId.get(openLetterId) ? { envelope: inbox.byId.get(openLetterId) } : {})}
-          onClose={() => {
-            setOpenLetterId(null);
-            if (linkOpened.current) { linkOpened.current = false; onClose(); }
-          }}
-          onLetterUpdated={inbox.mergeLetter}
-          onMarkRead={markLetterRead}
-          onTogglePin={toggleLetterPin}
-          onToggleArchive={toggleLetterArchive}
-          onNavigate={onNavigate}
-        />
-      )}
+      {/* Split hosts this same reader in its right column; every other entry uses the overlay. */}
+      {!inboxSplit && letterReader}
     </>,
     document.body,
   );

@@ -31,10 +31,13 @@ interface LetterEnvelopeRowProps {
   onTogglePin: () => void;
   onToggleArchive: () => void;
   onToggleRead: () => void;
+  /** The split view's index selects the reader rather than opening a second body in the list. */
+  indexRow?: boolean;
+  selected?: boolean;
 }
 
 export const LetterEnvelopeRow = memo(function LetterEnvelopeRow({
-  letter, onOpen, onNavigate, onTogglePin, onToggleArchive, onToggleRead,
+  letter, onOpen, onNavigate, onTogglePin, onToggleArchive, onToggleRead, indexRow = false, selected = false,
 }: LetterEnvelopeRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [opened, setOpened] = useState(false);
@@ -67,8 +70,9 @@ export const LetterEnvelopeRow = memo(function LetterEnvelopeRow({
 
   return (
     <div
-      className={`hib-row${letter.read ? '' : ' hib-unread'}${letter.pinned ? ' hib-pinned' : ''}`}
+      className={`hib-row${letter.read ? '' : ' hib-unread'}${letter.pinned ? ' hib-pinned' : ''}${indexRow ? ' hib-index-row' : ''}${selected ? ' hib-selected' : ''}`}
       data-letter-id={letter.id}
+      data-selected={selected || undefined}
       data-peek-row=""
       onClick={onOpen}
       onContextMenu={(e) => { if (!(e.target as HTMLElement).closest('.hib-card-content')) menu.open(e, undefined); }}
@@ -110,8 +114,8 @@ export const LetterEnvelopeRow = memo(function LetterEnvelopeRow({
       )}
 
       <div className="hib-row-actions">
-        <button className="hib-row-btn hib-card-toggle" aria-expanded={expanded} aria-controls={bodyId} onClick={(event) => { event.stopPropagation(); toggleExpanded(); }}>
-          <span className="hib-card-chevron" aria-hidden="true">›</span>{expanded ? 'Collapse' : 'Read letter'}
+        <button className="hib-row-btn hib-card-toggle" aria-expanded={indexRow ? undefined : expanded} aria-controls={indexRow ? undefined : bodyId} onClick={(event) => { event.stopPropagation(); if (indexRow) onOpen(); else toggleExpanded(); }}>
+          <span className="hib-card-chevron" aria-hidden="true">›</span>{!indexRow && expanded ? 'Collapse' : 'Read letter'}
         </button>
         <button
           className="hib-row-btn"
@@ -132,11 +136,11 @@ export const LetterEnvelopeRow = memo(function LetterEnvelopeRow({
           {letter.archived ? 'Unarchive' : 'Archive'}
         </button>
       </div>
-      <div id={bodyId} className={`hib-card-expand${expanded ? ' is-expanded' : ''}`} aria-hidden={!expanded} inert={!expanded}>
+      {!indexRow && <div id={bodyId} className={`hib-card-expand${expanded ? ' is-expanded' : ''}`} aria-hidden={!expanded} inert={!expanded}>
         <div className="hib-card-clip">
           {opened && <LetterCardBody letter={letter} expanded={expanded} onOpen={onOpen} onNavigate={onNavigate} />}
         </div>
-      </div>
+      </div>}
       {menu.state && (
         <ContextMenu
           point={menu.state.point}

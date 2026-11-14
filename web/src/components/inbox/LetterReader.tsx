@@ -28,11 +28,13 @@ interface LetterReaderProps {
   onToggleArchive: (letter: LetterEnvelope) => void;
   /** SPA navigation out of the panel (task pills, session refs). */
   onNavigate: (to: string) => void;
+  /** Notification Inbox can host the same reader in its right column. */
+  embedded?: boolean;
 }
 
 export function LetterReader({
   letterId, envelope, onClose, onLetterUpdated, onMarkRead, onTogglePin, onToggleArchive,
-  onNavigate,
+  onNavigate, embedded = false,
 }: LetterReaderProps) {
   const [fileView, setFileView] = useState<LetterFileTarget | null>(null);
   const fileViewRef = useRef(false);
@@ -50,9 +52,32 @@ export function LetterReader({
       onClose();
     };
     document.addEventListener('keydown', onKey);
-    lockScroll();
-    return () => { document.removeEventListener('keydown', onKey); unlockScroll(); };
-  }, [onClose]);
+    if (!embedded) lockScroll();
+    return () => { document.removeEventListener('keydown', onKey); if (!embedded) unlockScroll(); };
+  }, [onClose, embedded]);
+
+  const view = <LetterView
+    key={letterId}
+    letterId={letterId}
+    {...(envelope ? { envelope } : {})}
+    embedded={embedded}
+    onClose={onClose}
+    onLetterUpdated={onLetterUpdated}
+    onMarkRead={onMarkRead}
+    onTogglePin={onTogglePin}
+    onToggleArchive={onToggleArchive}
+    onNavigate={onNavigate}
+    onOpenFile={onOpenFile}
+  />;
+  const filePreview = fileView && <FileViewer
+    path={fileView.path}
+    {...(fileView.line ? { line: fileView.line } : {})}
+    {...(fileView.endLine ? { endLine: fileView.endLine } : {})}
+    {...(fileView.host ? { host: fileView.host } : {})}
+    {...(fileView.sourceOnly ? { sourceOnly: true } : {})}
+    onClose={() => setFileView(null)}
+  />;
+  if (embedded) return <>{view}{filePreview}</>;
 
   return createPortal(
     <>
@@ -71,29 +96,10 @@ export function LetterReader({
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <LetterView
-            letterId={letterId}
-            {...(envelope ? { envelope } : {})}
-            onClose={onClose}
-            onLetterUpdated={onLetterUpdated}
-            onMarkRead={onMarkRead}
-            onTogglePin={onTogglePin}
-            onToggleArchive={onToggleArchive}
-            onNavigate={onNavigate}
-            onOpenFile={onOpenFile}
-          />
+          {view}
         </div>
       </div>
-      {fileView && (
-        <FileViewer
-          path={fileView.path}
-          {...(fileView.line ? { line: fileView.line } : {})}
-          {...(fileView.endLine ? { endLine: fileView.endLine } : {})}
-          {...(fileView.host ? { host: fileView.host } : {})}
-          {...(fileView.sourceOnly ? { sourceOnly: true } : {})}
-          onClose={() => setFileView(null)}
-        />
-      )}
+      {filePreview}
     </>,
     document.body,
   );
