@@ -223,6 +223,7 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/integrations/git-sync-compaction-coordination.test.ts", sleep: "await new Promise((r) => setTimeout(r, 100));", reason: "inside a polling loop with a deadline" },
   { file: "tests/integrations/git-sync-compaction-coordination.test.ts", sleep: "await new Promise((r) => setTimeout(r, 4_000));", reason: "negative: the rewrite pass must stand down (last run unchanged) past its 3 s delay" },
   { file: "tests/integrations/mail-folder-filter-routes.test.ts", sleep: "await new Promise((r) => setTimeout(r, 3_000))", reason: "negative: a deleted filter files no new arrival, so no move may come in that time" },
+  { file: "tests/integrations/mail-imap-parts.test.ts", sleep: "await new Promise((resolve) => setTimeout(resolve, 50))", reason: "negative: once the browser went away, the FETCH loop asks for no further chunks in that time" },
   { file: "tests/integrations/mail-imap.test.ts", sleep: "await new Promise((resolve) => setTimeout(resolve, 250));", reason: "negative: no Sent copy appended when the account says its server saves it" },
   { file: "tests/integrations/mail-invites-route.test.ts", sleep: "await new Promise((resolve) => setTimeout(resolve, 200));", reason: "inside a polling loop with a deadline" },
   { file: "tests/integrations/mail-invites-route.test.ts", sleep: "await new Promise((resolve) => setTimeout(resolve, 50));", reason: "inside a polling loop with a deadline" },

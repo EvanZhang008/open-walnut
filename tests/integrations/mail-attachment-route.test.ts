@@ -190,11 +190,10 @@ beforeAll(async () => {
 
   await addAccount('files');
   await addAccount('names');
-  const until = Date.now() + 30_000;
-  while (Date.now() < until && (await rows('SELECT rowid FROM messages')).length < 2) {
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-  expect(await rows('SELECT rowid FROM messages')).toHaveLength(2);
+  // Wait on the state the first sync leaves, never a clock (tests/core/fixed-sleep-wait-guard.test.ts).
+  await vi.waitFor(async () => {
+    expect(await rows('SELECT rowid FROM messages')).toHaveLength(2);
+  }, { timeout: 30_000, interval: 200 });
 }, 180_000);
 
 afterAll(async () => {
