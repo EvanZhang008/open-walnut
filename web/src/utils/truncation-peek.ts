@@ -9,6 +9,11 @@
  * dark box opens on top of it, and a title that only repeats its text is gone from the source
  * (tests/web/truncation-peek-guard.test.ts).
  *
+ * A task row (`data-peek-row`) expands in place instead (2026-11-13, the user: "I want the
+ * actually the task to expand to a full one"): with the pointer anywhere on it, the row itself
+ * grows to show every text it cut off, wrapped inside its own width, and the rows below move
+ * down (truncation-peek-row.ts); it closes when the pointer leaves.
+ *
  * One capturing document listener serves every surface, so a new truncated row needs
  * nothing to get it. The pill takes no pointer events: the row under it keeps its clicks,
  * and so does the row below that it covers. `data-peek="off"` on an element or an ancestor
@@ -17,6 +22,7 @@
 import '@/styles/truncation-peek.css';
 import { PEEK_OPEN_MS, PEEK_PAD_X, placePeek, placeVertically } from './truncation-peek-place';
 import { clippingAncestors } from './clip-ancestors';
+import { collapseRow, expandRow, inListBelow, within, type RowMarks } from './truncation-peek-row';
 
 /** How far up from the hovered node the cut-off text is looked for. */
 const MAX_DEPTH = 6;
@@ -100,8 +106,10 @@ export function findCutText(target: EventTarget | null): HTMLElement | null {
 
 /** A task row (or any list row) that expands as a whole: the pointer anywhere on it shows every cut-off text in it. */
 export const PEEK_ROW_SELECTOR = '[data-peek-row]';
-/** At most this many texts of one row peek at once (a title, its status line, its project). */
-const MAX_ROW_HOSTS = 4;
+/** At most this many texts of one row open at once (a title, its status line, its project). */
+const MAX_ROW_HOSTS = 8;
+/** A row opens once the pointer rests on it this long, so sweeping across rows moves nothing. */
+const ROW_OPEN_MS = 140;
 /** A row's own buttons (its ⋮ menu, Start, Close): over one the row keeps quiet, so the button shows. */
 const CONTROL = 'button, a[href], [role="button"], [role="menuitem"], [role="checkbox"], input, select, textarea, summary';
 
@@ -163,18 +171,73 @@ const TYPE_PROPS = ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'lineHe
  * title for its tooltip right after the pointer event, so taking it off here means no tooltip
  * ever starts), and its pills are up once the hover intent ran out.
  */
-interface Active { key: Element; hosts: HTMLElement[]; titles: Array<[Element, string]>; texts: string[]; pills: HTMLElement[]; timer: ReturnType<typeof setTimeout> | null }
+interface Active {
+  key: Element; hosts: HTMLElement[]; titles: Array<[Element, string]>; texts: string[]; timer: ReturnType<typeof setTimeout> | null;
+  /** A task row: it expands in place (truncation-peek-row.ts) instead of showing pills. */
+  row: boolean;
+  pills: HTMLElement[];
+  /** What expanding the row marked. */
+  marked: RowMarks;
+}
 
 let active: Active | null = null;
+let pointer: { x: number; y: number } | null = null;
+/** The list a closing row scrolled back: its own scroll event is no reason to close anything. */
+let ownScroll: Element | null = null;
+/**
+ * The open row the pointer just left. It closes in the same step as the next row opens, so the
+ * list changes once per row and not twice (a close, then an open 140 ms later), or once the
+ * pointer rested off it for LINGER_MS, or at once when the pointer left its list.
+ */
+let lingering: Active | null = null;
+let lingerTimer: ReturnType<typeof setTimeout> | null = null;
+const LINGER_MS = 220;
+
+function noteOwnScroll(list: Element | null): void {
+  if (!list) return;
+  ownScroll = list;
+  // Its scroll event comes within a frame or two; after that a scroll there is a person's.
+  requestAnimationFrame(() => requestAnimationFrame(() => { if (ownScroll === list) ownScroll = null; }));
+}
+
+/** `keepPlace`: the rows under the pointer stay where they are (truncation-peek-row.ts). */
+function closeLingering(keepPlace: boolean): void {
+  if (lingerTimer) { clearTimeout(lingerTimer); lingerTimer = null; }
+  const was = lingering;
+  if (!was) return;
+  lingering = null;
+  if (keepPlace) noteOwnScroll(collapseRow(was.marked, was.key, pointer));
+  else collapseRow(was.marked);
+  putTitlesBack(was.titles);
+}
+
+/** The pointer left the open row `state`: it stays open a moment (see `lingering`). */
+function linger(state: Active): void {
+  closeLingering(true);
+  lingering = state;
+  const wait = () => {
+    lingerTimer = setTimeout(() => {
+      lingerTimer = null;
+      // A row about to open closes it itself, in its own step; a press holds it as it is.
+      if (active?.timer || pressed) wait();
+      else closeLingering(true);
+    }, LINGER_MS);
+  };
+  wait();
+}
 let observer: MutationObserver | null = null;
 // When the last peek went: one that comes right after it opens at once, as the next row does.
 let lastHiddenAt = 0;
 const REOPEN_AT_ONCE_MS = 250;
 
-/** Takes every native title from the pointer's element to the root, and in the row, off while the pills show. */
+/**
+ * Takes every native title from the pointer's element to the root, and in the row, off while
+ * it peeks. In a row the titles of its own buttons stay: they show their own labels.
+ */
 function takeTitles(from: Element, row?: Element): Array<[Element, string]> {
   const out: Array<[Element, string]> = [];
   const take = (a: Element) => {
+    if (row && a !== row && row.contains(a) && rowControl(a)) return;
     const t = a.getAttribute('title');
     if (t !== null) { out.push([a, t]); a.removeAttribute('title'); }
   };
@@ -188,7 +251,14 @@ function putTitlesBack(titles: Array<[Element, string]>): void {
   for (const [el, t] of titles) if (!el.hasAttribute('title')) el.setAttribute('title', t);
 }
 
+/** Ends every peek, the row just left included. */
 export function hidePeek(): void {
+  close(false);
+  closeLingering(false);
+}
+
+/** Ends the current peek. `keepPlace`: as closeLingering's. */
+function close(keepPlace: boolean): void {
   if (!active) return;
   const was = active;
   active = null;
@@ -196,6 +266,8 @@ export function hidePeek(): void {
   observer?.disconnect();
   for (const p of was.pills) p.remove();
   if (was.pills.length) lastHiddenAt = Date.now();
+  if (keepPlace) noteOwnScroll(collapseRow(was.marked, was.key, pointer));
+  else collapseRow(was.marked);
   putTitlesBack(was.titles);
 }
 
@@ -258,51 +330,154 @@ function renderPill(host: HTMLElement, grow: boolean, placed: Box[]): HTMLElemen
 }
 
 function renderAll(state: Active, grow: boolean): void {
+  if (state.row) {
+    // The row just left closes in this same step: one change of the list, not two.
+    closeLingering(true);
+    state.marked = expandRow(state.key, state.hosts);
+    return;
+  }
   const placed: Box[] = [];
   for (const h of state.hosts) {
     const pill = renderPill(h, grow, placed);
     if (pill) state.pills.push(pill);
   }
-  if (!state.pills.length) hidePeek();
+  if (!state.pills.length) close(false);
+}
+
+/** The row it shows changed under the pointer (renamed, re-sorted, gone): the peek goes with it. */
+function watchActive(): void {
+  observer ??= new MutationObserver(() => {
+    const a = active;
+    if (a && (!a.key.isConnected || a.hosts.some((h, i) => !h.isConnected || h.isContentEditable || h.textContent !== a.texts[i]))) { close(!!a.row); if (a.row) settleSoon(); }
+  });
+  observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['contenteditable'] });
 }
 
 function activate(key: Element, hosts: HTMLElement[], target: Element, now: boolean): void {
-  hidePeek();
-  const state: Active = { key, hosts, titles: takeTitles(target, key !== hosts[0] ? key : undefined), texts: hosts.map((h) => h.textContent ?? ''), pills: [], timer: null };
+  close(false);
+  // A row placed on its own (a calendar chip over the day's grid) would grow over its
+  // neighbours: it shows pills instead.
+  const row = key !== hosts[0] && key.matches(PEEK_ROW_SELECTOR) && !/^(absolute|fixed)$/.test(getComputedStyle(key).position);
+  const state: Active = { key, hosts, titles: takeTitles(target, key !== hosts[0] ? key : undefined), texts: hosts.map((h) => h.textContent ?? ''), timer: null, row, pills: [], marked: [] };
   active = state;
-  // The row it shows changed under the pointer (renamed, re-sorted, gone): the pills go with it.
-  observer ??= new MutationObserver(() => {
-    const a = active;
-    if (a && (!a.key.isConnected || a.hosts.some((h, i) => !h.isConnected || h.isContentEditable || h.textContent !== a.texts[i]))) hidePeek();
-  });
-  observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['contenteditable'] });
-  if (now) { renderAll(state, false); return; }
+  watchActive();
+  if (now && !row) { renderAll(state, false); return; }
   state.timer = setTimeout(() => {
     if (active !== state) return;
     state.timer = null;
     if (key.matches(':hover')) renderAll(state, true);
-    else hidePeek();
-  }, PEEK_OPEN_MS);
+    else close(false);
+  }, row ? ROW_OPEN_MS : PEEK_OPEN_MS);
 }
 
+let downAt: { x: number; y: number } | null = null;
+
 function onOver(e: PointerEvent): void {
-  if (e.pointerType === 'touch' || e.buttons !== 0) { hidePeek(); return; }
-  // Still on the row that peeks, off its own buttons: nothing to scan again.
+  if (e.pointerType === 'touch') { hidePeek(); return; }
+  // A press in progress: a click lands on the row as it is; a drag closes it (onMove).
+  if (e.buttons !== 0) { if (active && !active.row) close(false); return; }
+  pointer = { x: e.clientX, y: e.clientY };
   const target = e.target instanceof Element ? e.target : null;
+  if (lingering && target) {
+    // Back on the row just left: it is the open row again.
+    if (lingering.key.contains(target)) {
+      close(false);
+      if (lingerTimer) { clearTimeout(lingerTimer); lingerTimer = null; }
+      active = lingering;
+      lingering = null;
+      watchActive();
+      return;
+    }
+    // Out of its list: closing it moves nothing under the pointer.
+    if (!inListBelow(lingering.key, pointer) && !within(lingering.key, pointer)) closeLingering(false);
+  }
+  // On the open row, its own buttons included: it stays open (closing it would move the button
+  // out from under the pointer and open it again).
+  if (active?.row && target && active.key.contains(target)) {
+    if (!rowControl(target)) active.titles.push(...takeTitles(target, active.key));
+    return;
+  }
+  // Off an open row: it stays open a moment, and closes in the step the next one opens.
+  if (active?.row && active.marked.length) {
+    const was = active;
+    active = null;
+    observer?.disconnect();
+    linger(was);
+  }
+  over(target);
+}
+
+/** What `target` peeks, now that the pointer is on it. */
+function over(target: Element | null): void {
+  if (pressed) return;
+  // Still on the row that peeks, off its own buttons: nothing to scan again.
   const sameRow = active && target && active.key.matches(PEEK_ROW_SELECTOR) && target.closest(PEEK_ROW_SELECTOR) === active.key && !rowControl(target);
   if (active && target && (sameRow || active.key === target || (active.hosts.length === 1 && active.hosts[0].contains(target)))) {
     active.titles.push(...takeTitles(target));
     return;
   }
-  const next = peekTargetOf(e.target);
+  const next = peekTargetOf(target);
   if (active && next && next.key === active.key) {
     // The pointer moved onto a child that carries its own title: take that one off too.
-    active.titles.push(...takeTitles(e.target as Element));
+    active.titles.push(...takeTitles(target as Element));
     return;
   }
-  if (!next) { hidePeek(); return; }
-  // A pill already up moves to the next row at once; the first one waits a short intent.
-  activate(next.key, next.hosts, e.target as Element, !!active?.pills.length || Date.now() - lastHiddenAt < REOPEN_AT_ONCE_MS);
+  if (!next || !target) { close(false); return; }
+  // A pill already up moves to the next text at once; the first one waits a short intent.
+  activate(next.key, next.hosts, target, !!active?.pills.length || Date.now() - lastHiddenAt < REOPEN_AT_ONCE_MS);
+}
+
+/** After a scroll or a resize moved the page under a still pointer: what it is on now. */
+let settle: ReturnType<typeof setTimeout> | null = null;
+function settleSoon(): void {
+  if (settle) clearTimeout(settle);
+  settle = setTimeout(() => {
+    settle = null;
+    if (!active && pointer) over(document.elementFromPoint(pointer.x, pointer.y));
+  }, 160);
+}
+
+/** Whether a scroll or a wheel at `t` moves what peeks (another pane streaming its chat does not). */
+function movesPeek(t: EventTarget | null): boolean {
+  if (!(t instanceof Element) || t === document.documentElement || t === document.body) return true;
+  const shown = [active?.key, lingering?.key].filter((r): r is Element => !!r);
+  return shown.some((r) => t.contains(r) || r.contains(t));
+}
+
+function hideAndSettle(e?: Event): void {
+  if (e?.type === 'scroll' && ownScroll && e.target === ownScroll) { ownScroll = null; return; }
+  if (e && e.type !== 'resize' && (pressed || !movesPeek(e.target))) return;
+  hidePeek();
+  settleSoon();
+}
+
+/**
+ * A press in progress: nothing changes size until it ends, so a click lands where it was aimed
+ * and a drag (dnd-kit measures the rows as it starts) sees the list hold still.
+ */
+let pressed = false;
+let dragged = false;
+
+function onDown(e: PointerEvent): void {
+  downAt = { x: e.clientX, y: e.clientY };
+  pressed = true;
+  dragged = false;
+  // A click on an open row keeps it as it is, so the click lands where it was aimed; a pill goes.
+  // A row not open yet stays closed through the press, so the click lands where it was aimed.
+  if (active && (!active.row || active.timer)) close(false);
+}
+
+function onMove(e: PointerEvent): void {
+  if (e.pointerType === 'touch') return;
+  pointer = { x: e.clientX, y: e.clientY };
+  if (pressed && e.buttons !== 0 && downAt && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 4) dragged = true;
+}
+
+function onUp(): void {
+  if (!pressed) return;
+  pressed = false;
+  // After a drag the rows are where it dropped them: start over from what the pointer is on.
+  if (dragged) { dragged = false; hidePeek(); settleSoon(); }
 }
 
 function onOut(e: PointerEvent): void {
@@ -310,6 +485,7 @@ function onOut(e: PointerEvent): void {
   if (!e.relatedTarget) hidePeek();
 }
 
+const MODIFIERS = new Set(['Shift', 'Meta', 'Control', 'Alt', 'CapsLock']);
 let installed = false;
 
 /** Once per window, from main.tsx. */
@@ -318,10 +494,18 @@ export function installTruncationPeek(): void {
   installed = true;
   document.addEventListener('pointerover', onOver, true);
   document.addEventListener('pointerout', onOut, true);
-  // Anything that moves rows or starts an action ends the pill at once, before the action's own handlers.
-  for (const type of ['pointerdown', 'wheel', 'keydown', 'dragstart'] as const) document.addEventListener(type, hidePeek, { capture: true, passive: true });
-  document.addEventListener('scroll', hidePeek, { capture: true, passive: true });
-  window.addEventListener('resize', hidePeek);
+  document.addEventListener('pointerdown', onDown, { capture: true, passive: true });
+  document.addEventListener('pointermove', onMove, { capture: true, passive: true });
+  document.addEventListener('pointerup', onUp, { capture: true, passive: true });
+  document.addEventListener('pointercancel', onUp, { capture: true, passive: true });
+  // Anything that starts an action ends the peek at once, before the action's own handlers.
+  document.addEventListener('dragstart', hidePeek, { capture: true, passive: true });
+  // A modifier held for a click (Cmd or Shift to select) is no action of its own.
+  document.addEventListener('keydown', (e) => { if (!MODIFIERS.has(e.key)) hidePeek(); }, { capture: true, passive: true });
+  // Anything that moves the page under the pointer ends it, and what the pointer rests on after peeks.
+  document.addEventListener('wheel', hideAndSettle, { capture: true, passive: true });
+  document.addEventListener('scroll', hideAndSettle, { capture: true, passive: true });
+  window.addEventListener('resize', hideAndSettle);
   window.addEventListener('blur', hidePeek);
   document.addEventListener('visibilitychange', hidePeek);
 }

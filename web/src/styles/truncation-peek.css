@@ -40,3 +40,37 @@
 @media (prefers-reduced-motion: reduce) {
   .truncation-peek { animation: none; }
 }
+
+/* A task row expanding in place (utils/truncation-peek-row.ts): its cut-off texts wrap inside
+   the row's own width, and a box that held them to one line grows with them, so the row gets
+   taller and the rows below move down. Attributes only, so taking them off restores the row. */
+[data-peek-open] {
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  -webkit-line-clamp: unset !important;
+  line-clamp: none !important;
+  /* Breaks a word only when it alone is wider than the row: it never narrows the text's own
+     minimum width, so a narrow panel still wraps at spaces. */
+  overflow-wrap: break-word;
+  height: auto !important;
+  max-height: none !important;
+  min-width: 0 !important;
+}
+[data-peek-open] * {
+  white-space: normal !important;
+  text-overflow: clip !important;
+}
+[data-peek-fit] {
+  flex-shrink: 1 !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+[data-peek-grow] {
+  height: auto !important;
+  max-height: none !important;
+  /* Taller, never wider: it still clips sideways, and keeps the flex minimum its clip gave it. */
+  overflow-x: clip !important;
+  overflow-y: visible !important;
+  min-width: 0 !important;
+}
