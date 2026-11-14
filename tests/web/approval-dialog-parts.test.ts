@@ -65,7 +65,7 @@ describe('the approval dialog leads with the task and the path', () => {
     // The summary comes first, in full, and says who wrote it.
     expect(top.indexOf('data-testid="approval-ai-summary"')).toBeLessThan(top.indexOf('data-testid="approval-task"'));
     expect(top).toContain(`>${SUMMARY.replace("'", '&#x27;')}<`);
-    expect(top).toContain('Summary by Walnut');
+    expect(top).toContain('Walnut’s summary of the task’s session, not signed');
     expect(top).toContain('data-testid="approval-task-link"');
     expect(top).toContain('Platform Lead');
     expect(top).toContain('>Repo<');
@@ -85,7 +85,7 @@ describe('the approval dialog leads with the task and the path', () => {
     const top = glance(render(gitPush()));
     expect(top).toContain('data-testid="approval-asks">Push commit da21d9c to origin mainline in meta-fresh<');
     expect(top.indexOf('data-testid="approval-asks"')).toBeLessThan(top.indexOf('data-testid="approval-task"'));
-    expect(top).not.toContain('Summary by Walnut');
+    expect(top).not.toContain('approval-summary-by');
     expect(top).toContain('>Repo<');
   });
 

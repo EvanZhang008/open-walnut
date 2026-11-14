@@ -932,7 +932,7 @@ test('a Git push approval shows the summary Walnut wrote on top, in full, once i
   await expect(dialog.getByTestId('approval-asks')).toHaveText('Push commit da21d9c to origin mainline in meta-fresh')
   await expect(dialog.getByTestId('approval-ai-summary')).toHaveText(summary, { timeout: 15_000 })
   await expect(dialog.getByTestId('approval-asks')).toHaveCount(0)
-  await expect(dialog.getByTestId('approval-dialog-summary')).toContainText('Summary by Walnut')
+  await expect(dialog.getByTestId('approval-dialog-summary')).toContainText('Walnut’s summary of the task’s session, not signed')
   // Shown whole: no clamp, no ellipsis, nothing hidden inside its box.
   expect(await dialog.getByTestId('approval-ai-summary').evaluate((n) => n.scrollHeight <= n.clientHeight + 1 && getComputedStyle(n).webkitLineClamp !== '2')).toBe(true)
   // The summary comes first, then Task and Repo.

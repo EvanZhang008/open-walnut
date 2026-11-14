@@ -509,13 +509,15 @@ export async function setApprovalSummary(id: string, summary: string): Promise<b
   let kept: ApprovalRecord | undefined
   await serial(() => updateJsonFile<ApprovalsFile>(approvalsFile(), EMPTY, (file) => {
     const r = file.approvals.find((a) => a.id === id)
-    if (!r || r.status !== 'pending' || r.context?.whyFrom === 'asker') return file
+    // Past its deadline it is expired, even before the sweep says so: no screen shows it again.
+    if (!r || r.status !== 'pending' || Date.parse(r.expiresAt) <= Date.now() || r.context?.whyFrom === 'asker') return file
     r.context = { ...(r.context ?? {}), summary: wellFormed(summary) }
     kept = r
     return file
   }))
-  // Only the screens: the request is still waiting, so nobody waiting on it wakes.
-  if (kept) bus.emit(APPROVAL_CHANGED, { id, status: kept.status, approval: viewOf(kept) }, ['web-ui', 'approvals'], { source: 'approvals' })
+  // Only the screens: not the 'approvals' channel, whose push sender (notify.ts) reads a pending one
+  // as new and would ring the phone again, and not the signal, so nobody waiting on it wakes.
+  if (kept) bus.emit(APPROVAL_CHANGED, { id, status: kept.status, approval: viewOf(kept) }, ['web-ui'], { source: 'approvals' })
   return !!kept
 }
 

@@ -140,7 +140,7 @@ export function ApprovalContextRows({ a, hostName }: { a: Approval; hostName: st
         {/* The request's own line keeps its id (approval-asks); Walnut's summary says who wrote it. */}
         <p className={`approval-summary-text${summary.by === 'asker' ? ' approval-asks' : ''}`} data-testid={summary.by === 'asker' ? 'approval-asks' : 'approval-ai-summary'}>{summary.text}</p>
         {summary.why ? <p className="approval-summary-why" data-testid="approval-why">{summary.why}</p> : null}
-        {summary.by === 'walnut' ? <span className="approval-summary-by">Summary by Walnut, from the task’s session</span> : null}
+        {summary.by === 'walnut' ? <span className="approval-summary-by" data-testid="approval-summary-by">Walnut’s summary of the task’s session, not signed: the lines below are what you approve</span> : null}
       </div>
       <div className="approval-field" data-testid="approval-task">
         <span className="approval-field-label">Task</span>
