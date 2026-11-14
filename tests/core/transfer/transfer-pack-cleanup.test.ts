@@ -132,7 +132,8 @@ describe('dropSourcePack', () => {
     const opts = { sourceHost: '__local__', targetHost: 'devbox', bundleDir: '~/.open-walnut-transfers/xf-6f1c2a9e-3b4d-4c5e-8f70-1a2b3c4d5e6f/pack', dropSource: true }
     relayFile.mockImplementationOnce(async () => {}).mockImplementationOnce(async () => { throw new Error('link dropped') })
     await expect(copyPack(pack, opts)).rejects.toThrow('link dropped')
-    await new Promise((r) => setImmediate(r))
+    await vi.dynamicImportSettled()
+    await new Promise((r) => setTimeout(r, 0))
     expect(removePath).not.toHaveBeenCalled()
     await copyPack(pack, opts)
     await vi.waitFor(() => expect(removePath).toHaveBeenCalledWith('__local__', (pack as { outDir: string }).outDir, true, 60_000))
@@ -150,7 +151,9 @@ describe('dropSourcePack', () => {
   it('a caller that reads the source pack again (a task move backs a shared checkout up from it) keeps it', async () => {
     const pack = { outDir: '/Users/u/.open-walnut-transfers/xf-1/0/pack', files: [{ name: 'changes.patch', size: 1, sha256: 'a' }], meta: { kind: 'git', root: '/w/app' } } as never
     await copyPack(pack, { sourceHost: '__local__', targetHost: 'devbox', bundleDir: '~/.open-walnut-transfers/xf-1/0/pack' })
-    await new Promise((r) => setTimeout(r, 20))
+    // A drop would start with a dynamic import: let every one settle, then one turn.
+    await vi.dynamicImportSettled()
+    await new Promise((r) => setTimeout(r, 0))
     expect(removePath).not.toHaveBeenCalled()
     // task-work.ts (backupFrom) must never ask for the drop.
     const src = fs.readFileSync(path.join(SRC, 'core/transfer/task-work.ts'), 'utf8')
