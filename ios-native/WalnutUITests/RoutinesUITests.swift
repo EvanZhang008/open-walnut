@@ -489,7 +489,9 @@ final class RoutinesUITests: XCTestCase {
         // Six minutes before the fixture was made, so 6m to 9m by the time it is opened; nothing after it.
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label MATCHES %@", "(?s).*\\nLast check: [6-9]m ago")).firstMatch.exists,
                       "the stopped trigger's last check does not say when (the box says it failed)")
-        XCTAssertTrue(element(app, "routines.error.r-marina-stopped").label.contains("exit 1: release.sh"))
+        // Said plainly since round 6 ("exit 1" reads "exit code 1").
+        let stoppedError = element(app, "routines.error.r-marina-stopped").label
+        XCTAssertTrue(stoppedError.contains("exit code 1: release.sh"), stoppedError)
         XCTAssertEqual(element(app, "routines.errorNext.r-marina-stopped").label, "Fix the check command with Edit, then Resume.")
         XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "ot checked yet")).firstMatch.exists)
         XCTAssertTrue(element(app, "routines.historyFold.r-marina-stopped").label.contains("History (5 recorded checks)"))
@@ -868,7 +870,9 @@ final class RoutinesUITests: XCTestCase {
         let openTask = app.buttons["routines.openTask.r-router"]
         XCTAssertGreaterThan(openTask.frame.minY, run.frame.maxY - 1, "the buttons do not wrap at this size")
         let paired = abs(delete.frame.midY - openTask.frame.midY) < 2
-        let stacked = edit.frame.minY > run.frame.maxY - 1 && delete.frame.minY > openTask.frame.maxY - 1
+        // Pairs fill a line each where both fit (Run with Edit, say) and stand one to a line
+        // where they do not (Open task, then Delete): Delete never trails three on its own.
+        let stacked = openTask.frame.minY > edit.frame.maxY - 1 && delete.frame.minY > openTask.frame.maxY - 1
         XCTAssertTrue(paired || stacked, "Delete sits alone under the others: run \(run.frame) edit \(edit.frame) open \(openTask.frame) delete \(delete.frame)")
         XCTAssertLessThanOrEqual(delete.frame.maxY, tabTop(app), "Delete is under the tab bar")
         shot("25-ax-actions")
