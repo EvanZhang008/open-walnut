@@ -110,6 +110,49 @@ export function shouldAutoOpenFirstDraft(input: FirstDraftInput): boolean {
     && !input.narrowLayout;
 }
 
+/** What holds the keyboard at the moment the first draft opens. */
+export interface FocusHolder {
+  /** 'none': focus is on the page itself; 'field': a box the person types in; 'other': any other control. */
+  active: 'none' | 'field' | 'other';
+  /** A menu, list popup or modal dialog is open (the first-run dialog, a row's context menu). */
+  overlayOpen: boolean;
+}
+
+/**
+ * May the auto-opened first draft take the caret? It was opened FOR the person, not by them, so it
+ * takes focus only when nothing else holds it. A field they type in, a control they focused, or an
+ * open menu or modal dialog keeps the keyboard where it is: the draft's caret closed a Sidebar context
+ * menu the person had just opened (a menu closes when focus leaves it), and took Escape away from the
+ * first-run dialog (2026-11-13).
+ */
+export function autoDraftMayTakeFocus(holder: FocusHolder): boolean {
+  return holder.active === 'none' && !holder.overlayOpen;
+}
+
+/**
+ * Elements that are an open overlay holding the person's attention: one role per kind of popup
+ * the app opens (`aria-haspopup`'s menu, listbox and dialog; `true` means menu), plus a modal.
+ * tests/web/home-panel-flags.test.ts fails when the app opens a popup kind this does not name.
+ */
+export const OVERLAY_ROLES = ['menu', 'listbox', 'dialog', 'alertdialog'] as const;
+export const OPEN_OVERLAY_SELECTOR = [...OVERLAY_ROLES.map((r) => `[role="${r}"]`), '[aria-modal="true"]', 'dialog[open]'].join(', ');
+
+/** Read the FocusHolder from a document (a minimal shape, so it is graded without a DOM). */
+export function focusHolderOf(doc: {
+  activeElement: Element | null;
+  body: Element | null;
+  documentElement: Element | null;
+  querySelector(selector: string): Element | null;
+}): FocusHolder {
+  const a = doc.activeElement as (Element & { isContentEditable?: boolean }) | null;
+  const active = !a || a === doc.body || a === doc.documentElement
+    ? 'none'
+    : a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || a.isContentEditable
+      ? 'field'
+      : 'other';
+  return { active, overlayOpen: !!doc.querySelector(OPEN_OVERLAY_SELECTOR) };
+}
+
 /** What Home holds besides the task panel, as MainPage renders it. */
 export interface HomeBesideTasks {
   /** The Ask Walnut slot. */

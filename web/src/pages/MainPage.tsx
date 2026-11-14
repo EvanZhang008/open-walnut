@@ -129,7 +129,7 @@ import { withHomeFolder } from '@/components/sessions/draft-home-default';
 import { reconcileActiveSession } from '@/stores/active-session';
 import { loadColWeights, saveColWeights, resizeAtBoundary } from './columnSizing';
 import {
-  HOME_CHAT_VISIBLE_DEFAULT, LS_HOME_CHAT_VISIBLE_KEY, firstDraftDecisionReady, homeChatChosenOpen, homeTaskPanelShown, readHomeChatVisible, shouldAutoOpenFirstDraft,
+  HOME_CHAT_VISIBLE_DEFAULT, LS_HOME_CHAT_VISIBLE_KEY, autoDraftMayTakeFocus, firstDraftDecisionReady, focusHolderOf, homeChatChosenOpen, homeTaskPanelShown, readHomeChatVisible, shouldAutoOpenFirstDraft,
 } from './home-panel-flags';
 import { deriveRepairTarget, type WalnutRepairTarget } from './repair-target';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
@@ -1436,13 +1436,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     if (!firstDraftDecisionReady(input)) return;
     firstDraftDecidedRef.current = true;
     if (!shouldAutoOpenFirstDraft(input)) return;
-    // Opened for the user, not by them: never take the caret from a field they are
-    // already typing in (the search box, a rename) when the list lands.
-    const active = document.activeElement as HTMLElement | null;
-    const typing = !!active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable);
+    // Opened for the user, not by them: it takes the caret only when nothing else holds
+    // it (a field, a focused control, an open menu or dialog; autoDraftMayTakeFocus).
+    const holder = focusHolderOf(document);
+    const takeFocus = autoDraftMayTakeFocus(holder);
     const draftId = openDraftColumn();
-    if (typing) setFocusDraftId(prev => (prev === draftId ? null : prev));
-    log.info('home', 'opened a first draft on an empty board', { draftId, typing });
+    if (!takeFocus) setFocusDraftId(prev => (prev === draftId ? null : prev));
+    log.info('home', 'opened a first draft on an empty board', { draftId, takeFocus, active: holder.active, overlayOpen: holder.overlayOpen });
   }, [visible, loading, tasksError, urlSync.pending, tasks, completedHidden, sessionColumns.length, draftColumns.length, chatVisible, openDraftColumn]);
 
   /** Drop a draft's client-side state: the row, its persisted composer text and

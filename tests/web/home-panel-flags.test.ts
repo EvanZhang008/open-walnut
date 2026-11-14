@@ -6,13 +6,17 @@
  * the chat spot open, and a first-draft rule that fired on a board with
  * history (or twice) would grow columns the user never asked for.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import {
   HOME_CHAT_VISIBLE_DEFAULT,
   LS_HOME_CHAT_VISIBLE_KEY,
+  OPEN_OVERLAY_SELECTOR,
+  OVERLAY_ROLES,
+  autoDraftMayTakeFocus,
   firstDraftDecisionReady,
+  focusHolderOf,
   hasHomeChatChoice,
   readHomeChatVisible,
   shouldAutoOpenFirstDraft,
@@ -145,5 +149,63 @@ describe('a new user lands on New task, not the CEO chat', () => {
     const src = readFileSync(join(__dirname, '../../web/src/pages/MainPage.tsx'), 'utf8');
     expect(src).toContain('taskCount: tasks.filter(t => !t.org_role).length');
     expect(src).toContain('chatChosen: homeChatChosenOpen(localStorage, chatVisible)');
+  });
+});
+
+describe('the auto-opened first draft takes the caret only when nothing else holds it', () => {
+  const el = (tagName: string, isContentEditable = false) => ({ tagName, isContentEditable }) as unknown as Element;
+  const body = el('BODY');
+  const html = el('HTML');
+  const doc = (active: Element | null, overlay = false) => ({
+    activeElement: active, body, documentElement: html,
+    querySelector: (sel: string) => (overlay && sel === OPEN_OVERLAY_SELECTOR ? el('DIV') : null),
+  });
+
+  it('takes it from the page itself', () => {
+    for (const active of [null, body, html]) {
+      expect(autoDraftMayTakeFocus(focusHolderOf(doc(active)))).toBe(true);
+    }
+  });
+
+  it('keeps a field, a focused control and an open menu or dialog where they are', () => {
+    expect(focusHolderOf(doc(el('INPUT'))).active).toBe('field');
+    expect(focusHolderOf(doc(el('TEXTAREA'))).active).toBe('field');
+    expect(focusHolderOf(doc(el('DIV', true))).active).toBe('field');
+    // A context menu's item, the first-run dialog itself: a focused control that is not a field.
+    expect(focusHolderOf(doc(el('BUTTON'))).active).toBe('other');
+    expect(focusHolderOf(doc(el('DIV'))).active).toBe('other');
+    for (const active of [el('INPUT'), el('BUTTON'), el('DIV')]) {
+      expect(autoDraftMayTakeFocus(focusHolderOf(doc(active)))).toBe(false);
+    }
+    // WebKit does not focus a pressed button, so an open menu can leave focus on the page.
+    expect(autoDraftMayTakeFocus(focusHolderOf(doc(body, true)))).toBe(false);
+  });
+
+  it('counts every kind of popup the app opens as an overlay', () => {
+    // A new popup kind (aria-haspopup="tree", say) must join OVERLAY_ROLES, or the draft's caret
+    // closes it the way it closed the Sidebar's context menu.
+    const root = join(__dirname, '../../web/src');
+    const kinds = new Set<string>();
+    const walk = (dir: string) => {
+      for (const ent of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, ent.name);
+        if (ent.isDirectory()) walk(p);
+        else if (/\.(tsx?|jsx?)$/.test(ent.name)) {
+          for (const m of readFileSync(p, 'utf8').matchAll(/aria-haspopup[=:]\s*["'{]+([a-z]+)["'}]/g)) kinds.add(m[1]);
+        }
+      }
+    };
+    walk(root);
+    kinds.delete('true'); // ARIA: true is menu
+    expect(kinds.size).toBeGreaterThan(0);
+    const missing = [...kinds].filter((k) => !(OVERLAY_ROLES as readonly string[]).includes(k));
+    expect(missing).toEqual([]);
+    expect(OPEN_OVERLAY_SELECTOR).toContain('[aria-modal="true"]');
+  });
+
+  it('MainPage asks before the first draft takes focus', () => {
+    const src = readFileSync(join(__dirname, '../../web/src/pages/MainPage.tsx'), 'utf8');
+    expect(src).toContain('const holder = focusHolderOf(document);');
+    expect(src).toContain('if (!takeFocus) setFocusDraftId(');
   });
 });
