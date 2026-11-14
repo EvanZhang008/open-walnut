@@ -218,8 +218,8 @@ describe('chat open measurement', () => {
       expect(at, `${selector} in ${file}`).toBeGreaterThan(-1);
       return css.slice(at, css.indexOf('}', at));
     };
+    // The full-screen peek tab that also hid a mounted chat is gone (2026-11-13, every task link opens on Home).
     expect(rule('web/src/styles/globals.css', '.main-page-wrapper-hidden {')).toMatch(/visibility:\s*hidden/);
-    expect(rule('web/src/styles/task-board.css', '.session-panel-chat-col.is-board-peek >')).toMatch(/visibility:\s*hidden/);
   });
 
   it('intersection changes reveal an existing body without a DOM mutation and retain the original total', () => {
