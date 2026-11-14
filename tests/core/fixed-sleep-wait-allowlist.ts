@@ -632,4 +632,12 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/web/sent-draft-stays-sent.test.ts", sleep: "await wait(1_500)", reason: "fake timers: wait() advances vi fake timers (vi.advanceTimersByTimeAsync)" },
   { file: "tests/web/sent-draft-stays-sent.test.ts", sleep: "await wait(10)", reason: "fake timers: wait() advances vi fake timers (vi.advanceTimersByTimeAsync)" },
   { file: "tests/web/terminal/terminal-manager.test.ts", sleep: "await new Promise((r) => setTimeout(r, 30));", reason: "negative: the opening drain does not settle while a spawn is held" },
+  { file: "tests/providers/stream-lane-pace.test.ts", sleep: "await sleep(50)", reason: "negative: a lane stopped by Walnut must not teach a pace" },
+  { file: "tests/providers/stream-lane-pace.test.ts", sleep: "await sleep(400)", reason: "negative: the daemon closing the lane's socket while its SSH forward stays up must not teach a pace, past the 300 ms SSH-exit grace this test sets" },
+  { file: "tests/providers/stream-lane-pace.test.ts", sleep: "await sleep(100)", reason: "negative: an SSH forward ending on a ServerAlive timeout (a stall) must not teach a pace" },
+  { file: "tests/providers/stream-lane-pace.test.ts", sleep: "await sleep(300)", reason: "negative: a heartbeat timeout (a silent stall) must not teach a pace" },
+  { file: "tests/providers/upload-pace.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50))", reason: "negative: a close with nothing uploading must not teach a pace" },
+  { file: "tests/providers/upload-pace.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50))", reason: "negative: a cut while the whole host link went down must not teach a pace" },
+  { file: "tests/providers/upload-pace.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50))", reason: "negative: a bulk forward ending on a ServerAlive timeout must not teach a pace" },
+  { file: "tests/providers/upload-pace.test.ts", sleep: "await new Promise((r) => setTimeout(r, 400))", reason: "negative: once both cuts of one outage are rolled back the pace must stay unpaced" },
 ]

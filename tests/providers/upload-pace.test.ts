@@ -204,9 +204,11 @@ describe('a cut is judged even while the redial carries demand', () => {
   it('a real cut: kept in the file for the next server', async () => {
     const pace = new HostUploadPace('cuthost', 'lane', { judgeMs: 600, hostLinkDroppedNear: () => false })
     await cutThenDemand(pace)
-    await new Promise((r) => setTimeout(r, 1_000))
-    await updateStoresSettled()
-    expect(fs.existsSync(storeFile)).toBe(true)
+    // The judge runs judgeMs after the cut and writes then: wait on the file, not a clock.
+    await vi.waitFor(async () => {
+      await updateStoresSettled()
+      expect(fs.existsSync(storeFile)).toBe(true)
+    }, { timeout: 5_000, interval: 50 })
     const next = new HostUploadPace('cuthost', 'lane', noLinkDrop)
     await next.ready()
     expect(next.limits).toEqual(pace.limits)
