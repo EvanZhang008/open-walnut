@@ -109,6 +109,27 @@ export function classifyRestartLoss(input: {
   return { verdict: 'resume', reason: `lost: ${lost.join(', ')}` }
 }
 
+/** How far apart the death's error write and its loss record may be and still be one death. */
+const SAME_DEATH_MS = 10 * 60_000
+
+/**
+ * Whether a session in `error` failed in its work, the turn its task, its lead or its askers must
+ * hear about. A restart that killed a process whose last turn had already finished (restart recovery
+ * found nothing in flight: settled, or a wait that outlives the process) is not: the turn ended as it
+ * ended, and only the process is gone. 2026-11-14, 22:27Z: clouddev's daemon restarted, four idle
+ * sessions whose last turn was an agent-ack were written `error`, and their lead read four "ended its
+ * turn with an ERROR" notices for work that was fine. A loss of an older death (a later real error
+ * leaves the old loss on the record) does not count.
+ */
+export function endedInError(record: Pick<SessionRecord, 'process_status' | 'restartLoss' | 'last_status_change'> | null | undefined): boolean {
+  if (record?.process_status !== 'error') return false
+  const loss = record.restartLoss
+  if (!loss || loss.lost.length > 0 || (loss.verdict !== 'settled' && loss.verdict !== 'wait_held')) return true
+  const died = Date.parse(record.last_status_change ?? '')
+  const noted = Date.parse(loss.at)
+  return !(Number.isFinite(died) && Number.isFinite(noted) && Math.abs(noted - died) <= SAME_DEATH_MS)
+}
+
 /** Verdicts that keep the task's phase where it was until the resume resolves. */
 export function holdsPhase(loss: SessionRestartLoss | undefined): boolean {
   if (!loss) return false

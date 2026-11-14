@@ -2400,7 +2400,8 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
     let outcome: 'completed' | 'error' | 'awaiting_human' = 'completed';
     if ('error' in payload && !isPhaseEdge) outcome = 'error';
     else if (record?.pendingPermission) outcome = 'awaiting_human';
-    else if (record?.process_status === 'error') outcome = 'error';
+    // A restart that killed a process whose last turn had finished is no error of the work (restart-loss.ts).
+    else if ((await import('../sessions/restart-loss.js')).endedInError(record)) outcome = 'error';
 
     // A failure under a leader that completed (it hears nothing more from its subtasks) goes to the
     // VP or Main above, as its status says (user-status.ts failureOf, 2026-11-09).

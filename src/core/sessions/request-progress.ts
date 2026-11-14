@@ -21,6 +21,7 @@ import { log } from '../../logging/index.js';
 import type { NoticeLastMessage, SessionRequest } from '../session-requests.js';
 import { STATUS_SETTLE_MS } from './status-question.js';
 import { whenReportSettled } from './report-pending.js';
+import { endedInError } from './restart-loss.js';
 
 export type ProgressReason = 'work-outlives-turn' | 'parked' | 'waits-on-another-task';
 
@@ -69,7 +70,7 @@ export async function requestTargetContinues(request: Pick<SessionRequest, 'toTa
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const sid = request.toSessionId ?? task?.session_id ?? undefined;
   const record = sid ? await getSessionByClaudeId(sid).catch(() => null) : null;
-  if (record?.process_status === 'error' || record?.pendingPermission) return false;
+  if (endedInError(record) || record?.pendingPermission) return false;
   if (record?.process_status === 'running') return true;
   const live = task?.user_status;
   if (live?.state === 'needs' || live?.state === 'read' || live?.state === 'done') return false;
@@ -141,11 +142,11 @@ async function settleStopped(input: { sessionId: string; taskId: string; request
     .filter((r): r is SessionRequest => !!r && r.status === 'pending');
   if (open.length === 0) return;
   const { holdHandedOn } = await import('./request-handoff.js');
-  const speak = await holdHandedOn(open, { outcome: record?.process_status === 'error' ? 'error' : 'completed', phase: task.phase });
+  const speak = await holdHandedOn(open, { outcome: endedInError(record) ? 'error' : 'completed', phase: task.phase });
   if (speak.length === 0) return;
   const notify = await import('./session-request-notify.js');
   const lastWords = input.lastWords ?? (await notify.readLastTurn(input.sessionId))?.words;
-  await notify.notifyRequesterGroup(speak, record?.process_status === 'error' ? 'error' : 'completed', {
+  await notify.notifyRequesterGroup(speak, endedInError(record) ? 'error' : 'completed', {
     phase: task.phase, lastWords,
   });
 }

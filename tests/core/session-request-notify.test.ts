@@ -1029,6 +1029,37 @@ describe('sessionRequestWatchHook — the parent hears about its subtask by stat
     }
   });
 
+  // 2026-11-14, 22:27Z: clouddev's daemon restarted and killed four idle sessions whose last turn had
+  // ended (with an agent-ack); each was written `error`, and the lead read "ended its turn with an
+  // ERROR" four times for work that was fine (322aae38, ade69155, 30011f0f, 043302fc).
+  it('a restart that killed an idle session (its last turn had finished) is no error; a death in a turn still is', async () => {
+    const diedAt = new Date(Date.now() - 60_000).toISOString();
+    const dead = (loss: Record<string, unknown>) => {
+      sessions = sessions.map((s) => s.claudeSessionId === TARGET
+        ? rec(TARGET, {
+          title: 'Target', taskId: 'task-77', process_status: 'error', status_reason: 'daemon_restarted', errorKind: 'infra',
+          last_status_change: diedAt, restartLoss: { at: diedAt, cause: 'host_restart', lost: [], state: 'skipped', ...loss },
+        } as never)
+        : s);
+    };
+    for (const verdict of ['settled', 'wait_held']) {
+      dead({ verdict });
+      sendMessageToSession.mockClear();
+      await fire();
+      expect(parentNotices().map((n) => n.attrs.outcome), verdict).not.toContain('error');
+    }
+    // The turn was in flight when it died: that is the lead's to hear.
+    dead({ verdict: 'resume', lost: ['turn'], state: 'gave_up' });
+    sendMessageToSession.mockClear();
+    await fire();
+    expect(parentNotices().map((n) => n.attrs.outcome)).toContain('error');
+    // An older death's loss on the record says nothing of a later real error.
+    dead({ verdict: 'settled', at: new Date(Date.parse(diedAt) - 3_600_000).toISOString() });
+    sendMessageToSession.mockClear();
+    await fire();
+    expect(parentNotices().map((n) => n.attrs.outcome)).toContain('error');
+  });
+
   it('a session in error at the edge: an error notice with the error text; a closed task stays completed', async () => {
     sessions = sessions.map((s) => s.claudeSessionId === TARGET
       ? rec(TARGET, { title: 'Target', taskId: 'task-77', process_status: 'error', errorMessage: 'API rate limit' })
