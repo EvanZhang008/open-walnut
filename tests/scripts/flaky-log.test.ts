@@ -7,7 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 // @ts-expect-error plain .mjs without types
-import { clear, offenders, readLog, record, REPEATS, WINDOW_DAYS } from '../../scripts/flaky-log.mjs'
+import { clear, judgeRun, offenders, readLog, record, REPEATS, WINDOW_DAYS } from '../../scripts/flaky-log.mjs'
 
 const DAY = 24 * 60 * 60 * 1000
 const NOW = Date.parse('2026-11-09T12:00:00Z')
@@ -83,5 +83,40 @@ describe('flaky-log', () => {
     fs.appendFileSync(file, '{not json\n')
     expect(offenders(readLog(file), { now: NOW, lastChange: unchanged })).toHaveLength(2)
     expect(offenders(readLog(file), { now: NOW, lastChange: unchanged, only: new Set(['tests/b.test.ts']) }).map((o: { file: string }) => o.file)).toEqual(['tests/b.test.ts'])
+  })
+
+  // 2026-11-14: two 11-12 flakes of one file failed every later `bun run test` whose tests of it
+  // all passed. A run fails only on a file that flaked in it too; the rest are named, not failed on.
+  it('a run fails only on a file that flaked in it; one on the record that passed here is standing', () => {
+    const file = logFile()
+    record([`${A} :: races`], 'gate 1', { file, now: NOW - 3 * DAY })
+    record([`${A} :: races`], 'gate 2', { file, now: NOW - 2 * DAY })
+    const passed = judgeRun([], { rows: readLog(file), now: NOW, lastChange: unchanged })
+    expect(passed.failing).toEqual([])
+    expect(passed.standing.map((o: { file: string }) => o.file)).toEqual([A])
+    const other = judgeRun(['tests/b.test.ts :: once'], { rows: readLog(file), now: NOW, lastChange: unchanged })
+    expect(other.failing).toEqual([])
+    record([`${A} :: races`], 'gate 3', { file, now: NOW - DAY })
+    const again = judgeRun([`${A} :: races`], { rows: readLog(file), now: NOW, lastChange: unchanged })
+    expect(again.failing.map((o: { file: string }) => o.file)).toEqual([A])
+    expect(again.standing).toEqual([])
+    // `only` still narrows what a run names.
+    expect(judgeRun([], { rows: readLog(file), now: NOW, lastChange: unchanged, only: new Set(['tests/c.test.ts']) }).standing).toEqual([])
+  })
+
+  // The class: every script that judges a run on the record goes through judgeRun, so none fails a run
+  // on a file whose tests all passed in it. Enumerated from the scripts that import flaky-log.mjs.
+  it('every script that reads the record judges a run with judgeRun, never offenders() alone', () => {
+    const dir = path.resolve(__dirname, '../../scripts')
+    const users = fs.readdirSync(dir).filter((f) => /\.(mjs|sh)$/.test(f) && f !== 'flaky-log.mjs')
+      .filter((f) => /flaky-log\.mjs/.test(fs.readFileSync(path.join(dir, f), 'utf8')))
+    expect(users.sort()).toEqual(['push-gate.sh', 'test-baseline.mjs', 'test-layers.mjs'])
+    for (const f of users.filter((u) => u.endsWith('.mjs'))) {
+      const src = fs.readFileSync(path.join(dir, f), 'utf8')
+      expect(src, f).toMatch(/judgeRun\(/)
+      expect(src, f).not.toMatch(/\boffenders\(/)
+    }
+    // The push gate calls the CLI's `gate`, which judges with judgeRun.
+    expect(fs.readFileSync(path.join(dir, 'push-gate.sh'), 'utf8')).toMatch(/flaky-log\.mjs gate /)
   })
 })

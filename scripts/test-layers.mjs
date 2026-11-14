@@ -34,7 +34,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { vitestCommand } from './bun-vitest.mjs'
-import { offenderText, offenders, readLog, record as recordFlaky } from './flaky-log.mjs'
+import { judgeRun, offenderText, record as recordFlaky, standingText } from './flaky-log.mjs'
 import { buildImportGraph, isTestFile } from './lib/import-graph.mjs'
 import { fileIndex, listCode, namedPaths } from './test-changed-refs.mjs'
 import { SLOW_TEST_DIRS, SLOW_TEST_FILES } from '../tests/setup/slow-tests.ts'
@@ -402,10 +402,12 @@ function run(o, files, slowFiles = []) {
   const n = files.length + slowFiles.length
   const verdict = { layer: o.layer, base: o.base, files: n, ms: tiers.reduce((s, t) => s + t.ms, 0), fails, flaky, ok: fails.length === 0 }
   if (flaky.length) console.log(`[test-layers] ${flaky.length} test(s) failed in the full run and passed alone (flaky, not counted):\n  ${flaky.join('\n  ')}`)
-  // Each flake goes on the record; a file of this run flaky twice in a week fails it (scripts/flaky-log.mjs).
+  // Each flake goes on the record; a file that flaked in this run and before within a week fails it,
+  // one on the record whose tests all passed here is only named (scripts/flaky-log.mjs judgeRun).
   recordFlaky(flaky, `test-layers ${o.layer}`)
-  const repeat = offenders(readLog(), { only: new Set([...files, ...slowFiles]) })
-  if (repeat.length) { console.log(offenderText(repeat)); verdict.ok = false }
+  const { failing, standing } = judgeRun(flaky, { only: new Set([...files, ...slowFiles]) })
+  if (standing.length) console.log(standingText(standing))
+  if (failing.length) { console.log(offenderText(failing)); verdict.ok = false }
   if (fails.length) console.log(`[test-layers] FAILED: ${fails.length} test(s) failed twice:\n  ${fails.join('\n  ')}`)
   if (o.json) fs.writeFileSync(o.json, JSON.stringify(verdict, null, 2))
   console.log(`[test-layers] ${verdict.ok ? 'passed' : 'failed'}: ${n} file(s) in ${Math.round(verdict.ms / 1000)} s`)

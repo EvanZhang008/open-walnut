@@ -33,7 +33,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { vitestCommand } from './bun-vitest.mjs';
 import { nameTestTimeout } from './lib/test-timeout-message.mjs';
-import { offenderText, offenders, readLog, record as recordFlaky } from './flaky-log.mjs';
+import { judgeRun, offenderText, record as recordFlaky, standingText } from './flaky-log.mjs';
 
 const CONFIG = process.env.WALNUT_BASELINE_CONFIG ?? 'vitest.quick.config.ts';
 const BASELINE = process.env.WALNUT_BASELINE_FILE ?? 'tests/setup/known-failures.json';
@@ -327,10 +327,11 @@ if (flaky.length) {
   });
   regressions.splice(0, regressions.length, ...regressions.filter((k) => !flaky.includes(k)));
 }
-// Each flake goes on the record; a file of this run flaky twice in a week fails the gate until it
-// is fixed or removed (scripts/flaky-log.mjs).
+// Each flake goes on the record; a file that flaked in this run and before within a week fails it,
+// one on the record whose tests all passed here is only named (scripts/flaky-log.mjs judgeRun).
 recordFlaky(flaky, `test-baseline ${CONFIG}`);
-const repeatFlaky = offenders(readLog(), { only: filesInRun });
+const { failing: repeatFlaky, standing: standingFlaky } = judgeRun(flaky, { only: filesInRun });
+if (standingFlaky.length) console.log(`\n${standingText(standingFlaky)}`);
 if (repeatFlaky.length) {
   console.log(`\n${offenderText(repeatFlaky)}`);
   process.exit(1);

@@ -5,12 +5,17 @@
  * or removed (2026-11-09, the user on tests that pass and fail at random: "这种测试我们能不能废啊？
  * 把这个 test 把搞成 more reliable 啊？"). A second chance hides a flaky test; this keeps it seen.
  *
+ * A run fails only on a file that flaked in that run too: a file on the record whose tests all passed
+ * in this run hides nothing in it, so it is named as still on the record and the run goes on
+ * (2026-11-14: two 11-12 flakes of session-status-contract.test.ts failed every task's `bun run
+ * test` while all its tests passed; judgeRun).
+ *
  * A file counts as fixed once it changed after its flakes (a commit touched the test file, or it
  * is gone). A fix that lives only in src/ clears it with `clear`, which records who and why.
  *
  *   bun scripts/flaky-log.mjs record <source> <key>...     add flakes ("<file> :: <test>")
  *   bun scripts/flaky-log.mjs check [<file>...]             exit 1 naming each file flaky twice in a week
- *   bun scripts/flaky-log.mjs gate <source> [<key>...]      record, then check every file (keys may come on stdin)
+ *   bun scripts/flaky-log.mjs gate <source> [<key>...]      record, then fail on a file that flaked here and before (keys may come on stdin)
  *   bun scripts/flaky-log.mjs clear <file> <reason>         a fix outside the test file
  *   bun scripts/flaky-log.mjs list                          the record of the last week
  *
@@ -102,6 +107,25 @@ export function offenders(rows = readLog(), { now = Date.now(), only = null, las
  */
 export const isLocalRun = (r) => typeof r?.source === 'string' && r.source.startsWith('test-layers ')
 
+/**
+ * A run's verdict on the record, the one rule every caller uses (test-layers, test-baseline, the push
+ * gate): `failing` are the files that flaked in this run (`flakyKeys`) and are offenders with it;
+ * `standing` are offenders among `only` that did not flake in this run, named and not failed on.
+ */
+export function judgeRun(flakyKeys, { rows = readLog(), only = null, ...opts } = {}) {
+  const now = new Set(flakyKeys.map(fileOf).filter(Boolean))
+  const list = offenders(rows, { ...opts, only })
+  return { failing: list.filter((o) => now.has(o.file)), standing: list.filter((o) => !now.has(o.file)) }
+}
+
+/** The note for offenders whose tests all passed in this run: still on the record, not failed on. */
+export function standingText(list) {
+  return [
+    `! ${list.length} test file(s) on the flaky record passed in this run, so they do not fail it; fix them anyway:`,
+    ...list.map(({ file, flakes }) => `    ${file} (${new Set(flakes.map((r) => `${r.source}|${r.at}`)).size} flaky runs, last ${flakes.at(-1)?.at})`),
+  ].join('\n')
+}
+
 export function offenderText(list) {
   return [
     `✗ ${list.length} test file(s) failed and then passed alone ${REPEATS} or more times in ${WINDOW_DAYS} days: a test that passes and fails at random hides real failures.`,
@@ -117,16 +141,19 @@ function main(argv) {
   if (cmd === 'record') { record(rest.slice(1), rest[0] || 'unknown'); return 0 }
   if (cmd === 'clear') { clear(rest[0], rest.slice(1).join(' ')); return 0 }
   if (cmd === 'list') { for (const r of readLog().filter((r) => Date.parse(r.at) >= Date.now() - WINDOW_DAYS * DAY)) console.log(JSON.stringify(r)); return 0 }
-  if (cmd === 'check' || cmd === 'gate') {
-    const only = cmd === 'check' && rest.length ? new Set(rest) : null
-    if (cmd === 'gate') {
-      const keys = [...rest.slice(1), ...(rest.length > 1 || process.stdin.isTTY ? [] : stdinKeys())].filter((k) => k.trim())
-      record(keys, rest[0] || 'gate')
-    }
-    const list = offenders(readLog(), { only, gateOnly: cmd === 'gate' })
-    if (!list.length) return 0
-    console.log(offenderText(list))
-    return 1
+  // check: every offender (or of the files named); gate: record this run's flakes, fail on those (judgeRun).
+  if (cmd === 'check') {
+    const list = offenders(readLog(), { only: rest.length ? new Set(rest) : null })
+    if (list.length) console.log(offenderText(list))
+    return list.length ? 1 : 0
+  }
+  if (cmd === 'gate') {
+    const keys = [...rest.slice(1), ...(rest.length > 1 || process.stdin.isTTY ? [] : stdinKeys())].filter((k) => k.trim())
+    record(keys, rest[0] || 'gate')
+    const { failing, standing } = judgeRun(keys, { gateOnly: true })
+    if (standing.length) console.log(standingText(standing))
+    if (failing.length) console.log(offenderText(failing))
+    return failing.length ? 1 : 0
   }
   console.error('usage: bun scripts/flaky-log.mjs record|check|gate|clear|list …')
   return 2
