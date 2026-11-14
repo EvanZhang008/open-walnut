@@ -183,6 +183,37 @@ describe('every kind of private content is blocked at every path to GitHub', () 
     expect(out(land)).toMatch(/work-email at commit committer/)
   })
 
+  it('a commit that adds no file still has its identity and message read (empty, delete-only, a commit-tree copy)', () => {
+    const dir = scratchRepo('nofile')
+    fs.writeFileSync(path.join(dir, 'old.txt'), 'clean\n')
+    git(dir, 'add', '-A'); git(dir, 'commit', '-qm', 'a file to delete later')
+    const base = git(dir, 'rev-parse', 'HEAD')
+    // 1. a commit-tree copy of the parent's tree, committed by a work address
+    const copy = sh('git', ['commit-tree', '-p', 'HEAD', '-m', 'a copy', 'HEAD^{tree}'], dir, {
+      env: { ...process.env, GIT_COMMITTER_EMAIL: 'pat@acmecorp.example', GIT_COMMITTER_NAME: 'Pat' },
+    }).stdout.trim()
+    git(dir, 'reset', '-q', '--soft', copy)
+    // 2. an empty commit authored by a work address
+    git(dir, '-c', 'user.email=pat@acmecorp.example', 'commit', '-q', '--allow-empty', '-m', 'empty')
+    // 3. a delete-only commit whose message names an internal tool
+    git(dir, 'rm', '-q', 'old.txt'); git(dir, 'commit', '-qm', 'drop the zorblatt notes')
+    for (const args of [['--range', `${base}..HEAD`], ['--history', 'HEAD']]) {
+      const r = sh('bun', ['scripts/leak-scan/scan-git.mjs', ...args], dir)
+      expect(r.status, out(r)).toBe(1)
+      expect(out(r)).toContain(`work-email at commit committer (commit ${copy.slice(0, 10)})`)
+      expect(out(r)).toMatch(/work-email at commit author/)
+      expect(out(r)).toMatch(/internal-tool at commit message line 1/)
+    }
+    // the push hook sees them too
+    const tip = git(dir, 'rev-parse', 'HEAD')
+    const bare = path.join(root, 'nofile-remote.git')
+    git(root, 'init', '-q', '--bare', bare)
+    git(dir, 'push', '-q', bare, `${base}:refs/heads/main`)
+    const push = sh('bash', ['scripts/leak-scan/scan-push.sh', 'origin', bare], dir, { input: `refs/heads/main ${tip} refs/heads/main ${base}\n` })
+    expect(push.status, out(push)).toBe(1)
+    expect(out(push)).toMatch(/work-email at commit committer/)
+  })
+
   it('a word added and removed again inside one push is still blocked (each commit is public)', () => {
     const dir = scratchRepo('gone')
     const base = git(dir, 'rev-parse', 'HEAD')

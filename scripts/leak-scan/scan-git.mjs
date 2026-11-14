@@ -592,7 +592,10 @@ export async function run(argv, { env = process.env, log = console.log, err = co
       if (o.mode === 'staged') args = ['diff', '--cached', '--diff-filter=ACMRT', ...DIFF_OPTS, ...(gitOut(o.repo, ['rev-parse', '-q', '--verify', 'HEAD'], { ok: true }) ? ['HEAD'] : ['4b825dc642cb6eb9a060e54bf8d69288fbee4904'])]
       else {
         const rev = o.mode === 'range' && ZERO.test(o.arg.split('..')[0]) ? o.arg.split('..')[1] : o.arg
-        args = ['log', '--reverse', '--diff-merges=first-parent', '--diff-filter=ACMRT', ...DIFF_OPTS, LOG_FORMAT, rev, '--']
+        // No --diff-filter here: on git log it drops whole COMMITS whose diff adds nothing (an
+        // empty commit, a delete-only one, a commit-tree copy of its parent's tree), and their
+        // author, committer and message would go unread. The parser skips deleted files itself.
+        args = ['log', '--reverse', '--diff-merges=first-parent', ...DIFF_OPTS, LOG_FORMAT, rev, '--']
       }
       const s = gitStream(o.repo, args)
       await parseGitStream(s.stdout, onUnit)
