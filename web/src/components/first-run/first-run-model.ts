@@ -45,16 +45,14 @@ export function addressOf(def: Pick<HostDefs[string], 'hostname' | 'user' | 'por
  * The hosts the step lists, in the config's order (the order of ~/.ssh/config), waiting and
  * added alike, so a reload shows each host where it was (2026-11-11 review: added hosts moved
  * to the bottom, out of sight). A host the person turned off by hand is left out: it was added
- * and turned off on purpose. So is a found host Walnut learned it cannot add (not Linux, or a
- * machine already connected under another name: found-host-offer.ts); its one Notifications
- * entry says what to do instead.
+ * and turned off on purpose. So is a found host Walnut learned is not Linux (found-host-offer.ts);
+ * its one Notifications entry says what to do instead.
  */
-export function firstRunHostRows(hosts: Config['hosts'] | undefined, net?: Config['net']): FirstRunHostRow[] {
+export function firstRunHostRows(hosts: Config['hosts'] | undefined): FirstRunHostRow[] {
   const rows: FirstRunHostRow[] = [];
-  const all = hosts ?? {};
-  for (const [alias, def] of Object.entries(all)) {
+  for (const [alias, def] of Object.entries(hosts ?? {})) {
     if (!def || !isSshHost(def)) continue;
-    if (def.discovered === true && !foundHostOffered(def, all, net)) continue;
+    if (def.discovered === true && !foundHostOffered(def)) continue;
     const waits = def.discovered === true && (def.connect === 'ask' || def.connect === 'not_now');
     if (!waits && def.enabled === false) continue;
     const label = typeof def.label === 'string' && def.label.trim() ? def.label.trim() : alias;

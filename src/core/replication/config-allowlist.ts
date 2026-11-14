@@ -182,6 +182,7 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
     endpoint: 'the host network id the Mac dials; the companion keeps its own member list',
     connect: 'the person\'s answer about a found host, read where hosts are dialled, on the Mac (a found host without the yes is stored off, so the copy reads it off; named in the copy, an older replica would refuse the whole hosts row)',
     connect_by: 'who gave that answer, read only where the Mac warms its hosts',
+    not_offered: 'why the Mac no longer offers a found host (it is stored off, so the copy reads it off; named in the copy, an older replica would refuse the whole hosts row)',
   },
   stt: {
     sherpa_model_dir: 'a model path on the Mac', sherpa_model_type: 'a model of the Mac',

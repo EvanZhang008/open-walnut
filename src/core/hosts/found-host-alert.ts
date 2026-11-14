@@ -7,9 +7,13 @@
  *   not Linux   its SSH probe named another system (not_linux). The first answer marks the host
  *               (found-host-marks.ts: off, never offered or dialled again) and raises the entry:
  *               what it is, and the one way to add it (join it with a link).
- *   failed      a found host the person said Connect to (found-host-offer.ts consentedFoundHosts)
- *               failed to connect, or keeps failing on a cause that does not heal by itself: the
- *               entry says why, in the words every host surface uses, with its Settings row.
+ *   cannot add  a found host the person said Connect to (connect: yes, never Walnut's own yes for
+ *               an older row) and that never connected failed on a cause that does not heal by
+ *               itself (STANDING_FAILURE_KINDS: a key, a host key, a name, a login): the entry
+ *               says why, in the words every host surface uses, with its Settings row. A timeout
+ *               or a refused port retries by itself and the background connect card or the banner
+ *               says so; a host that connected before is an established host, and its outage
+ *               stays the attention banner's, as for any host.
  *
  * One entry per host (dedupKey `found-host:<alias>`), however many failures or reloads: a repeat
  * folds into it. Its recoveryKey is the host's own (`host:<alias>`), so the host connecting
@@ -23,6 +27,7 @@
  */
 
 import { log } from '../../logging/index.js'
+import { sshDestination } from '../../providers/session-io.js'
 import type { NewNotification } from '../notifications/store.js'
 import { classifyHostConnectError, hintForKind, type HostConnectErrorKind } from '../sessions/host-connect-hint.js'
 import { hostFailureHeadline, STANDING_FAILURE_KINDS } from './host-problem.js'
@@ -40,13 +45,14 @@ export interface FoundHostPhase {
   lastKind?: string
 }
 
-type Row = OfferRow & { hostname?: unknown; user?: unknown; port?: unknown }
+type Row = OfferRow & { transport?: unknown }
 
 export interface FoundHostAlertDeps {
   onPhase: (cb: (state: FoundHostPhase) => void) => () => void
   /** The host rows as getConfig reads them. */
   readHosts: () => Promise<Record<string, Row>>
-  readNet?: () => Promise<unknown>
+  /** The host's link was up before, in any run (host-profile.ts hostConnectedBefore; an error reads yes). */
+  everConnected: (alias: string) => Promise<boolean>
   markNotLinux: (alias: string, os: string | undefined) => Promise<boolean>
   clearNotLinux: (alias: string) => Promise<boolean>
   publish: (card: NewNotification) => Promise<void>
@@ -112,10 +118,12 @@ function failureOf(s: FoundHostPhase): { message: string; kind?: string } | null
 export interface FoundHostAlertMemory {
   raised: Map<string, string>
   phase: Map<string, string>
+  /** Hosts seen connected by this server: established, whatever their profile says. */
+  connected: Set<string>
 }
 
 export function newFoundHostAlertMemory(): FoundHostAlertMemory {
-  return { raised: new Map(), phase: new Map() }
+  return { raised: new Map(), phase: new Map(), connected: new Set() }
 }
 
 /** Handle one phase change (exported for tests). */
@@ -126,6 +134,7 @@ export async function handleFoundHostPhase(s: FoundHostPhase, mem: FoundHostAler
   if (s.phase === 'connected') {
     if (was === 'connected') return
     mem.raised.delete(s.host)
+    mem.connected.add(s.host)
     // A host marked not Linux that connects (turned on again, and the alias names another machine now).
     const hosts = await deps.readHosts()
     if (notOfferedOf(hosts[s.host])?.reason !== 'not_linux') return
@@ -141,36 +150,39 @@ export async function handleFoundHostPhase(s: FoundHostPhase, mem: FoundHostAler
   const hostname = text(row.hostname)
   const user = text(row.user)
   const target = { label, hostname, user, ...(typeof row.port === 'number' ? { port: row.port } : {}) }
-  const sshTarget = user ? `${user}@${hostname}` : hostname
+  const sshTarget = sshDestination({ hostname, user: user || undefined })
   const classified = classifyHostConnectError(failure.message, sshTarget, [s.host, hostname, user], target)
   const kind = (failure.kind as HostConnectErrorKind | undefined) ?? classified.kind
   if (mem.raised.get(s.host) === kind) return
+  // The person chose it (Connect): never Walnut's own yes on an older row, nor a host still asked.
+  const chosen = row.connect === 'yes' && row.connect_by !== 'walnut'
   if (SSH_SETUP_REFUSED_KINDS.includes(kind)) {
     mem.raised.set(s.host, kind)
     const os = osOfNotLinuxError(failure.message)
     // Only the write that turned it off speaks: a host already marked and off says nothing again.
     if (await deps.markNotLinux(s.host, os)) {
-      log.session.info('found host is not Linux: marked, off, and told once', { host: s.host, os })
-      await deps.publish(notLinuxCard(s.host, label, os))
+      log.session.info('found host is not Linux: marked and off', { host: s.host, os, told: chosen })
+      if (chosen) await deps.publish(notLinuxCard(s.host, label, os))
     }
     return
   }
-  const net = deps.readNet ? await deps.readNet() : undefined
-  if (!consentedFoundHosts(hosts, net).some((h) => h.host === s.host)) return
+  if (!chosen || !STANDING_FAILURE_KINDS.includes(kind)) return
+  if (!consentedFoundHosts(hosts).some((h) => h.host === s.host)) return
+  if (mem.connected.has(s.host) || await deps.everConnected(s.host).catch(() => true)) return
   mem.raised.set(s.host, kind)
   const hint = kind === classified.kind ? classified.hint : hintForKind(kind, sshTarget, target)
   await deps.publish(connectFailedCard(s.host, label, kind, hint))
 }
 
 async function defaultDeps(): Promise<FoundHostAlertDeps> {
-  const [{ addOnDaemonPhaseChange }, { getConfig }, marks, { upsertNotification }, { bus }] = await Promise.all([
+  const [{ addOnDaemonPhaseChange }, { getConfig }, marks, { upsertNotification }, { bus }, { hostConnectedBefore }] = await Promise.all([
     import('../../providers/daemon-connection.js'), import('../config-manager.js'), import('./found-host-marks.js'),
-    import('../notifications/store.js'), import('../event-bus.js'),
+    import('../notifications/store.js'), import('../event-bus.js'), import('./host-profile.js'),
   ])
   return {
     onPhase: (cb) => addOnDaemonPhaseChange((state) => cb(state)),
     readHosts: async () => ((await getConfig()).hosts ?? {}) as Record<string, Row>,
-    readNet: async () => (await getConfig()).net,
+    everConnected: (alias) => hostConnectedBefore(alias),
     markNotLinux: (alias, os) => marks.markNotLinux(alias, os),
     clearNotLinux: (alias) => marks.clearNotLinux(alias),
     publish: async (card) => {

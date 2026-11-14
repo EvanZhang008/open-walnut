@@ -26,10 +26,12 @@ import { firstRunHostRows } from '../../../web/src/components/first-run/first-ru
 
 const MAC = 'a'.repeat(64)
 
+/** Hosts whose link was up before, in an earlier run (the profile's record). */
+const connectedBefore = new Set<string>()
 const deps: FoundHostAlertDeps = {
   onPhase: () => () => {},
   readHosts: async () => ((await getConfig()).hosts ?? {}) as never,
-  readNet: async () => (await getConfig()).net,
+  everConnected: async (alias) => connectedBefore.has(alias),
   markNotLinux: (alias, os) => markNotLinux(alias, os),
   clearNotLinux: (alias) => clearNotLinux(alias),
   publish: async (card) => { await upsertNotification(card) },
@@ -42,6 +44,7 @@ const failed = (host: string, error: string): FoundHostPhase => ({ host, phase: 
 const feed = async () => (await listNotifications()).feed
 
 beforeEach(async () => {
+  connectedBefore.clear()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   await fs.mkdir(WALNUT_HOME, { recursive: true })
   await updateConfig({
@@ -61,7 +64,7 @@ beforeEach(async () => {
 describe('a found host that is not Linux', () => {
   it('its first answer marks it off for good, leaves every list, and raises one entry that says how to add it', async () => {
     await handleFoundHostPhase(failed('studio-mac', notLinuxSentence('studio-mac', 'Darwin')), newFoundHostAlertMemory(), deps)
-    expect((await stored())['studio-mac']).toMatchObject({ connect: 'yes', enabled: false, not_offered: { reason: 'not_linux', os: 'Darwin' } })
+    expect((await stored())['studio-mac']).toMatchObject({ connect: 'yes', enabled: false, not_offered: { reason: 'not_linux', os: 'Darwin', target: { hostname: '10.20.30.40', user: 'sam' } } })
     const hosts = (await getConfig()).hosts
     expect(consentedFoundHosts(hosts).map((h) => h.host)).toEqual(['devbox'])
     expect(foundHostsToAsk(hosts).map((h) => h.host)).toEqual(['labbox'])
@@ -96,6 +99,46 @@ describe('a found host that is not Linux', () => {
     await handleFoundHostPhase({ host: 'studio-mac', phase: 'connected' }, newFoundHostAlertMemory(), deps)
     expect((await stored())['studio-mac']).not.toHaveProperty('not_offered')
   })
+
+  it('the mark holds only for its target: an edit to another HostName asks the host again, still off', async () => {
+    await handleFoundHostPhase(failed('studio-mac', notLinuxSentence('studio-mac', 'Darwin')), newFoundHostAlertMemory(), deps)
+    // A hand edit from an editor that does not know the field: the mark is kept, on its old target.
+    const { not_offered: _m, ...edited } = (await stored())['studio-mac']
+    await updateConfig({ hosts: { ...(await stored()), 'studio-mac': { ...edited, hostname: '10.20.30.50' } } } as never)
+    expect((await stored())['studio-mac']).toMatchObject({ not_offered: { target: { hostname: '10.20.30.40' } } })
+    // The read asks it again, off until answered, and every list offers it.
+    const hosts = (await getConfig()).hosts
+    expect(hosts['studio-mac']).toMatchObject({ hostname: '10.20.30.50', connect: 'ask', enabled: false })
+    expect(hosts['studio-mac']).not.toHaveProperty('not_offered')
+    expect(foundHostsToAsk(hosts).map((h) => h.host)).toEqual(['studio-mac', 'labbox'])
+    expect(firstRunHostRows(hosts).map((r) => r.alias)).toContain('studio-mac')
+    // The person's Connect is written without the old mark.
+    expect(await answerFoundHost('studio-mac', 'yes')).toMatchObject({ ok: true })
+    expect((await stored())['studio-mac']).toMatchObject({ hostname: '10.20.30.50', connect: 'yes' })
+    expect((await stored())['studio-mac']).not.toHaveProperty('not_offered')
+  })
+
+  it('a start whose ~/.ssh/config moved the alias writes the host back to asking', async () => {
+    await handleFoundHostPhase(failed('studio-mac', notLinuxSentence('studio-mac', 'Darwin')), newFoundHostAlertMemory(), deps)
+    const rows = await stored()
+    rows['studio-mac'] = { ...rows['studio-mac'], scanned: { hostname: '10.20.30.40', user: 'sam' } }
+    const doc = { hosts: rows, hosts_found: { asking_since: '2026-11-01T00:00:00.000Z' } } as Record<string, unknown>
+    const facts = { sessionHosts: new Set<string>(), taskHosts: new Set<string>(), connectedHosts: new Set<string>(), serverHosts: new Set<string>() }
+    // Same target in ~/.ssh/config: the mark stands.
+    settleFoundHostsDoc(doc, { facts, scanned: new Map([['studio-mac', { alias: 'studio-mac', hostname: '10.20.30.40', user: 'sam' }]]), now: new Date() })
+    expect((doc.hosts as typeof rows)['studio-mac']).toMatchObject({ connect: 'yes', enabled: false, not_offered: { reason: 'not_linux' } })
+    settleFoundHostsDoc(doc, { facts, scanned: new Map([['studio-mac', { alias: 'studio-mac', hostname: 'build-box.example.test', user: 'sam' }]]), now: new Date() })
+    const row = (doc.hosts as typeof rows)['studio-mac']
+    expect(row).toMatchObject({ hostname: 'build-box.example.test', connect: 'ask', enabled: false })
+    expect(row).not.toHaveProperty('not_offered')
+  })
+
+  it('a host Walnut said yes to for an older row is marked off without an entry', async () => {
+    await updateConfig({ hosts: { ...(await stored()), 'studio-mac': { ...(await stored())['studio-mac'], connect_by: 'walnut' } } } as never)
+    await handleFoundHostPhase(failed('studio-mac', notLinuxSentence('studio-mac', 'Darwin')), newFoundHostAlertMemory(), deps)
+    expect((await stored())['studio-mac']).toMatchObject({ enabled: false, not_offered: { reason: 'not_linux' } })
+    expect(await feed()).toEqual([])
+  })
 })
 
 describe('a found host the person said Connect to that does not connect', () => {
@@ -110,6 +153,29 @@ describe('a found host the person said Connect to that does not connect', () => 
     // The host connecting (web/server.ts publishRecovery on connect) retires it.
     await recoverNotifications(['host:devbox'])
     expect((await feed())[0].resolved).toBe('recovered')
+  })
+
+  it('only a cause that does not heal by itself raises it: a timeout or a refused port is the banner\'s', async () => {
+    const mem = newFoundHostAlertMemory()
+    await handleFoundHostPhase(failed('devbox', 'ssh: connect to host devbox.example.test port 22: Connection timed out'), mem, deps)
+    await handleFoundHostPhase(failed('devbox', 'ssh: connect to host devbox.example.test port 22: Connection refused'), mem, deps)
+    // The reconnect loop's frames carry only a standing kind here.
+    await handleFoundHostPhase({ host: 'devbox', phase: 'reconnecting', lastError: 'Connection timed out', lastKind: 'timeout' }, mem, deps)
+    expect(await feed()).toEqual([])
+    await handleFoundHostPhase({ host: 'devbox', phase: 'reconnecting', lastError: 'Permission denied (publickey).', lastKind: 'auth' }, mem, deps)
+    expect((await feed()).map((n) => n.dedupKey)).toEqual([foundHostCardKey('devbox')])
+  })
+
+  it('an established host (connected before, in this run or an earlier one) or Walnut\'s own yes raises nothing: its outage is the banner\'s', async () => {
+    connectedBefore.add('devbox')
+    await handleFoundHostPhase(failed('devbox', 'Permission denied (publickey).'), newFoundHostAlertMemory(), deps)
+    connectedBefore.clear()
+    const mem = newFoundHostAlertMemory()
+    await handleFoundHostPhase({ host: 'devbox', phase: 'connected' }, mem, deps)
+    await handleFoundHostPhase(failed('devbox', 'Permission denied (publickey).'), mem, deps)
+    await updateConfig({ hosts: { ...(await stored()), devbox: { ...(await stored()).devbox, connect_by: 'walnut' } } } as never)
+    await handleFoundHostPhase(failed('devbox', 'Permission denied (publickey).'), newFoundHostAlertMemory(), deps)
+    expect(await feed()).toEqual([])
   })
 
   it('a host added by hand, or one still waiting for the yes, raises nothing here', async () => {
@@ -131,9 +197,9 @@ describe('Not now sticks', () => {
     expect(rows.devbox).toMatchObject({ connect: 'not_now', enabled: false })
     // A reload reads them from the server: neither is asked or shown on Home.
     const hosts = (await getConfig()).hosts
-    expect(foundHostsToAsk(hosts, (await getConfig()).net)).toEqual([])
+    expect(foundHostsToAsk(hosts)).toEqual([])
     // studio-mac is the fixture's other host said Connect to; devbox is gone from Home's setup rows.
-    expect(consentedFoundHosts(hosts, (await getConfig()).net).map((h) => h.host)).toEqual(['studio-mac'])
+    expect(consentedFoundHosts(hosts).map((h) => h.host)).toEqual(['studio-mac'])
     // A restart's settle keeps the answer.
     const doc = { hosts: rows, hosts_found: { asking_since: '2026-11-01T00:00:00.000Z' } } as Record<string, unknown>
     settleFoundHostsDoc(doc, { facts: { sessionHosts: new Set(), taskHosts: new Set(), connectedHosts: new Set(), serverHosts: new Set() }, scanned: new Map(), now: new Date() })

@@ -12,9 +12,10 @@
  * the seconds before the server's probe, and a host queued behind another). An established host's
  * reconnect never shows. Once followed, a host stays until its connect ends: connected, it reads
  * "<name> is connected" for CONNECTED_HOLD_MS, then goes; failed, it goes at once (the
- * Notifications panel says why), and comes back as soon as a NEW attempt of it starts (a retry
- * from Settings, from Notifications, Try again, or the server's own), never for the attempt
- * that failed.
+ * Notifications panel says why). It comes back for a person's retry (markHostConnectAsked: first
+ * run's Try again, Home's Connect) or a fresh attempt with no failure before it; never for a dial
+ * of the server's retry loop (a status carrying `lastError` or `reconnectSince`), so a machine
+ * that is switched off does not pop the card up every few minutes.
  * Everything shown is read from the live host status, so a reload shows a running first connect
  * again (the server still flags it).
  */
@@ -36,8 +37,11 @@ export interface BackgroundConnectMemory {
    * not read as the new attempt's end.
    */
   readonly asked: Readonly<Record<string, { at: number; frame?: number }>>;
-  /** Hosts the card follows: null while connecting, else when it was seen connected. */
-  readonly following: Readonly<Record<string, number | null>>;
+  /**
+   * Hosts the card follows: when each was seen connected (absent while connecting), and whether
+   * a person asked for this attempt (then the retry loop's marks on its frames do not end it).
+   */
+  readonly following: Readonly<Record<string, { connectedAt?: number; asked?: true }>>;
   /** Hosts whose followed connect failed, by that attempt (attemptKey): only a new attempt shows again. */
   readonly dropped: Readonly<Record<string, number>>;
 }
@@ -77,15 +81,27 @@ export function attemptKey(status: HostStatus): number {
 /**
  * The attempt ended in a failure: failed, or the reconnect loop waiting out its pause after one
  * (`reconnecting` with its `lastError`). The Notifications panel says why, so the card lets the
- * host go; a dial of that loop is a new attempt, not this.
+ * host go.
  */
 export function failedNow(status: HostStatus): boolean {
   return isHostFailed(status) || (!status.connected && status.phase === 'reconnecting' && !!status.lastError);
 }
 
-/** Is this host's connect one the card shows when it starts? */
+/**
+ * A dial of the server's retry loop: its frames carry the loop's last failure or when the loop
+ * began (host-status.ts). Never a reason for the card to show a host by itself.
+ */
+export function isLoopDial(status: HostStatus): boolean {
+  return !status.connected && (!!status.lastError || typeof status.reconnectSince === 'number');
+}
+
+/**
+ * Is this host's connect one the card shows? Asked by the person here: any attempt in flight.
+ * Otherwise only a first connect the server flags that is not a dial of its retry loop.
+ */
 export function isFirstConnect(status: HostStatus | undefined, asked: boolean): boolean {
-  return !!status && isHostConnecting(status) && !failedNow(status) && (status.firstConnect === true || asked);
+  if (!status || !isHostConnecting(status) || failedNow(status)) return false;
+  return asked || (status.firstConnect === true && !isLoopDial(status));
 }
 
 function rowOf(status: HostStatus, state: BackgroundConnectRow['state']): BackgroundConnectRow {
@@ -113,40 +129,42 @@ export function stepBackgroundConnects(
   const byHost = new Map(statuses.map((s) => [s.host, s]));
   let changed = false;
   const asked: Record<string, { at: number; frame?: number }> = {};
-  const following: Record<string, number | null> = {};
+  const following: Record<string, { connectedAt?: number; asked?: true }> = {};
   const dropped: Record<string, number> = {};
   const rows: BackgroundConnectRow[] = [];
   let wakeAt: number | undefined;
   const wake = (at: number) => { wakeAt = wakeAt === undefined ? at : Math.min(wakeAt, at); };
 
-  // A failed attempt stays dropped while the host still shows that attempt; a new one, a
-  // connect, or the host gone ends it.
+  // A dropped host stays dropped through its failed attempt and every dial of the retry loop
+  // after it; a fresh attempt with no failure before it, a connect, or the host gone ends it.
   for (const [host, key] of Object.entries(prev.dropped)) {
     const s = byHost.get(host);
-    if (s && !s.connected && (failedNow(s) || attemptKey(s) === key)) dropped[host] = key;
+    if (s && !s.connected && (failedNow(s) || isLoopDial(s) || attemptKey(s) === key)) dropped[host] = key;
     else changed = true;
   }
 
-  for (const [host, since] of Object.entries(prev.following)) {
+  for (const [host, f] of Object.entries(prev.following)) {
     const s = byHost.get(host);
     if (!s) { changed = true; continue; }
     if (s.connected) {
-      const at = since ?? now;
-      if (since === null) changed = true;
+      const at = f.connectedAt ?? now;
+      if (f.connectedAt === undefined) changed = true;
       if (now - at < CONNECTED_HOLD_MS) {
-        following[host] = at;
+        following[host] = { ...f, connectedAt: at };
         rows.push(rowOf(s, 'connected'));
         wake(at + CONNECTED_HOLD_MS);
       } else changed = true;
       continue;
     }
     // Connected, then connecting again within the hold: that is a reconnect, not this card's.
-    if (since !== null || failedNow(s) || s.phase === 'off') {
+    if (f.connectedAt !== undefined || s.phase === 'off') { changed = true; continue; }
+    // Failed, or (an attempt nobody here asked for) the retry loop took it over: it failed once.
+    if (failedNow(s) || (!f.asked && isLoopDial(s))) {
       changed = true;
-      if (since === null && failedNow(s)) dropped[host] = attemptKey(s);
+      dropped[host] = attemptKey(s);
       continue;
     }
-    following[host] = null;
+    following[host] = f;
     // Between tries (a retry put it back to idle): followed, nothing to draw yet.
     if (isHostConnecting(s)) rows.push(rowOf(s, 'connecting'));
   }
@@ -156,8 +174,10 @@ export function stepBackgroundConnects(
     const s = byHost.get(host);
     const fresh = s && (ask.frame === undefined || s.at > ask.frame) ? s : undefined;
     if (host in following) { changed = true; continue; }
-    if (fresh && !(host in dropped) && isFirstConnect(fresh, true)) {
-      following[host] = null;
+    // The person's own retry: shown again whatever happened to the attempt before it.
+    if (fresh && isFirstConnect(fresh, true)) {
+      following[host] = { asked: true };
+      delete dropped[host];
       rows.push(rowOf(fresh, 'connecting'));
       changed = true;
       continue;
@@ -169,7 +189,7 @@ export function stepBackgroundConnects(
 
   for (const s of statuses) {
     if (s.host in following || s.host in dropped || !isFirstConnect(s, false)) continue;
-    following[s.host] = null;
+    following[s.host] = {};
     rows.push(rowOf(s, 'connecting'));
     changed = true;
   }

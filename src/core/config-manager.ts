@@ -14,6 +14,7 @@ import { injectCloudBoxHost, withoutCloudBoxHost } from './hosts/cloud-box-host.
 import { isFollower, isHostReplicaProgram } from './server-role.js';
 import { COMPANION_ALIAS, migrateLegacyCompanionKeep } from './replication/companion-keep.js';
 import { applyFoundHostAnswers, askingAboutFoundHosts, mergeFoundHosts } from './hosts/found-hosts.js';
+import { keepNotOfferedRows } from './hosts/found-host-offer.js';
 import { noteRequestTagConfig } from './sessions/request-tag.js';
 import { firstRunStampAllowed, homeHoldsWork, stampFirstRun } from './first-run.js';
 import { writeConfigSection } from './config-section-write.js';
@@ -340,6 +341,7 @@ export async function updateConfig(partial: Partial<Config>, opts: { wholeSectio
     // The companion's keep choice where an older build kept it moves to cloud_bridge
     // first, so a partial that replaces `hosts` or `cloud_bridge` never drops it.
     migrateLegacyCompanionKeep(existing);
+    const hostsBefore = existing.hosts && typeof existing.hosts === 'object' ? existing.hosts as Record<string, unknown> : undefined;
     for (const [key, value] of Object.entries(partial)) {
       if (value !== undefined) existing[key] = writeConfigSection(key, existing[key], value, opts);
     }
@@ -349,6 +351,9 @@ export async function updateConfig(partial: Partial<Config>, opts: { wholeSectio
     // injected cloud box row; it must never reach config.yaml.
     if (existing.hosts && typeof existing.hosts === 'object') {
       existing.hosts = withoutCloudBoxHost(existing.hosts as Record<string, unknown>);
+      // A found host's not Linux mark, which no editor carries, stays on the row as stored now
+      // (core/hosts/found-host-offer.ts): a save never offers the host again.
+      if (partial.hosts !== undefined) existing.hosts = keepNotOfferedRows(existing.hosts as Record<string, unknown>, hostsBefore);
     }
     return { write: true, result: undefined };
   });

@@ -25,6 +25,7 @@
 
 import type { Config } from '../types.js'
 import type { DiscoveredHost } from '../ssh-config-scanner.js'
+import { withoutStaleNotLinux } from './found-host-offer.js'
 
 export type FoundHostAnswer = 'ask' | 'yes' | 'not_now'
 
@@ -71,10 +72,17 @@ export function foundHostUnadopted(def: FoundFlags | null | undefined): boolean 
   return !!def && def.discovered === true && (def.connect !== 'yes' || def.connect_by === 'walnut')
 }
 
-/** The read rule: a found host waiting for the yes is off. Mutates `hosts` in place. */
+/**
+ * The read rule: a found host waiting for the yes is off, and one marked not Linux on a target
+ * the alias no longer names is asked again (found-host-offer.ts withoutStaleNotLinux; the start's
+ * settle writes it). Mutates `hosts` in place.
+ */
 export function applyFoundHostAnswers(hosts: Config['hosts']): void {
-  for (const def of Object.values(hosts ?? {})) {
-    if (def && foundHostWaits(def)) def.enabled = false
+  for (const [alias, def] of Object.entries(hosts ?? {})) {
+    if (!def) continue
+    const asked = withoutStaleNotLinux(def)
+    if (asked !== def) hosts![alias] = asked
+    if (foundHostWaits(asked)) asked.enabled = false
   }
 }
 

@@ -1285,14 +1285,22 @@ export class DaemonConnection {
   get everConnected(): boolean { return this.linkUpAt > 0 }
 
   /**
-   * A probe of this connection found no daemon on the host before its link was ever up, so
-   * the connect is putting one there: the host's first connect (markFirstConnect). Kept
-   * across a retry of that connect; spent once the link comes up.
+   * A probe of this connection found no daemon on a host Walnut never reached before, so the
+   * connect is putting one there: the host's first connect (markFirstConnect). Kept across a
+   * retry of that connect; spent once the link comes up.
    */
   private _firstConnect = false
 
-  /** Called where connect() and reconnect() deploy because the host has no daemon running. */
-  private markFirstConnect(): void {
+  /**
+   * Called where connect() and reconnect() deploy because the host has no daemon running. A host
+   * whose link was up before, in this run or an earlier one (its profile records it:
+   * recordHostConnected), is established: after a restart its daemon can be gone (the host
+   * rebooted, /tmp was cleaned) and that is a reconnect, not a first connect.
+   */
+  private async markFirstConnect(): Promise<void> {
+    if (this.everConnected || this._firstConnect) return
+    const { hostConnectedBefore } = await import('../core/hosts/host-profile.js')
+    if (await hostConnectedBefore(this.hostKey)) return
     if (!this.everConnected) this._firstConnect = true
   }
 
@@ -1756,6 +1764,10 @@ export class DaemonConnection {
     }
     if (changed && value) {
       this.linkUpAt = Date.now()
+      // The record a later run reads to tell this host's reconnect from a first connect (markFirstConnect).
+      if (this.hostKey !== '__local__' && !this.isCloudTunnel && !this.isNetHost) {
+        void import('../core/hosts/host-profile.js').then((m) => m.recordHostConnected(this.hostKey)).catch(() => {})
+      }
       this.mainSentByCmd = new Map()
       // What a daemon process was sent it still holds when the link comes back to
       // it: the skills (228 KB), the routine template (60 KB) and the host-replica
@@ -2544,7 +2556,7 @@ export class DaemonConnection {
         }
         // Steps 2-3: deploy (stamps install-runtime / upload) and start, with
         // one runtime fallback chain if the start fails in a runtime-shaped way.
-        this.markFirstConnect()
+        await this.markFirstConnect()
         daemonPort = await this.deployAndStart()
       }
 
@@ -8545,7 +8557,7 @@ export class DaemonConnection {
     if (daemonPort === null) {
       // Daemon genuinely absent — redeploy and restart
       log.session.info('DaemonConnection: daemon not running, redeploying', { host: this.hostKey })
-      this.markFirstConnect()
+      await this.markFirstConnect()
       daemonPort = await this.deployAndStart()
     }
 

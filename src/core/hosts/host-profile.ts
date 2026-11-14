@@ -46,6 +46,11 @@ export interface HostProfile {
   };
   /** Walnut's description of the host and how many sessions it was written from. */
   learned?: { summary: string; sessionCount: number; at: string };
+  /**
+   * When Walnut's link to the host first came up (recordHostConnected). With `probed`, the
+   * record that the host connected before, in any earlier run of the server.
+   */
+  connectedAt?: string;
   updatedAt: string;
 }
 
@@ -136,6 +141,53 @@ export async function recordProbedFacts(host: string, facts: HostFacts): Promise
       p.kindReasons = reasons;
     }
   });
+}
+
+/** Hosts this process knows connected before (recorded, or read so): asked once each. */
+const connectedBefore = new Set<string>();
+
+/**
+ * The link to `host` came up (DaemonConnection's connected edge): recorded on its profile once,
+ * so a later run of the server knows the host is established even before its link is up again.
+ */
+export async function recordHostConnected(host: string, at: Date = new Date()): Promise<void> {
+  if (connectedBefore.has(host)) return;
+  connectedBefore.add(host);
+  try {
+    const profile = await readHostProfile(host);
+    if (profile.connectedAt || profile.probed) return;
+    await updateHostProfile(host, (p) => { p.connectedAt ??= at.toISOString(); });
+  } catch {
+    // Not recorded: the next link-up tries again.
+    connectedBefore.delete(host);
+  }
+}
+
+/**
+ * Did Walnut's link to `host` come up before, in this run or an earlier one: its profile records
+ * a connect or a probe of its daemon, or (a host used before connects were recorded) a session
+ * ran there. A record that cannot be read says yes (an established host must not read as new);
+ * only a host with none of these is new.
+ */
+export async function hostConnectedBefore(host: string): Promise<boolean> {
+  if (connectedBefore.has(host)) return true;
+  try {
+    const profile = await readHostProfile(host);
+    let yes = !!(profile.connectedAt || profile.probed);
+    if (!yes) {
+      const { listSessions } = await import('../session-tracker.js');
+      yes = (await listSessions()).some((s) => s.host === host);
+    }
+    if (yes) connectedBefore.add(host);
+    return yes;
+  } catch {
+    return true;
+  }
+}
+
+/** Test hook: a server restart forgets what it read. */
+export function __resetHostConnectedForTests(): void {
+  connectedBefore.clear();
 }
 
 export function probeIsStale(profile: HostProfile, now = Date.now()): boolean {

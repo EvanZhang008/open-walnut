@@ -9,11 +9,14 @@
  *          (not_linux), the server marks the row (not_offered, off), drops its status and raises
  *          one entry. Home shows no row for it, the bell holds one entry, x dismisses it, and a
  *          reload shows neither the block nor a second entry.
- *   twin   a found host that is the machine already joined with a link (not_offered:
- *          same_machine) is never asked; another found host still is.
+ *   twin   a found host that is the machine already joined with a link is never asked: the server
+ *          matches it live on the machine's current addresses (GET /api/hosts/net `twins`) and
+ *          writes nothing down; once it no longer matches, the host is asked again. Another found
+ *          host is asked throughout.
  *
  * The fixture server reads no real ~/.ssh/config, so its merged rows are laid over GET /api/config
- * here, with the host statuses, the found answer, the notification feed and the server's pushes;
+ * here, with the host statuses, the host network's twins, the found answer, the notification feed
+ * and the server's pushes;
  * nothing reaches its config or dials a host. page.goto only loads the app.
  * WebKit is not needed (no engine-dependent behavior): Chromium.
  */
@@ -31,6 +34,8 @@ type Row = Record<string, unknown>
 interface Fake {
   hosts: Record<string, Row>
   net: Row
+  /** GET /api/hosts/net `twins`: found alias to the joined machine it is now. */
+  twins: Record<string, string>
   statuses: Record<string, Row>
   feed: Row[]
   answers: Array<{ host: string; answer: string }>
@@ -58,7 +63,7 @@ function push(fake: Fake, name: string, data: unknown): void {
 }
 
 async function serve(page: Page, hosts: Record<string, Row>, net: Row = { enabled: true }): Promise<Fake> {
-  const fake: Fake = { hosts, net, statuses: {}, feed: [], answers: [], dismissed: [] }
+  const fake: Fake = { hosts, net, twins: {}, statuses: {}, feed: [], answers: [], dismissed: [] }
   await page.route('**/api/ui-prefs', (route) => route.fulfill({ json: route.request().method() === 'GET' ? { prefs: {} } : { ok: true } }))
   await page.route((url) => url.pathname === '/api/config', async (route: Route) => {
     if (route.request().method() !== 'GET') { await route.fallback(); return }
@@ -67,6 +72,9 @@ async function serve(page: Page, hosts: Record<string, Row>, net: Row = { enable
     await route.fulfill({ response: res, json: { ...body, config: { ...body.config, hosts: structuredClone(fake.hosts), net: fake.net } } })
   })
   await page.route((url) => url.pathname === '/api/hosts/status', (route) => route.fulfill({ json: { hosts: Object.values(fake.statuses) } }))
+  await page.route((url) => url.pathname === '/api/hosts/net', (route) => route.fulfill({
+    json: { enabled: true, macId: null, relays: [], syncedAt: null, error: null, machines: [], twins: { ...fake.twins } },
+  }))
   await page.route((url) => url.pathname === '/api/notifications', (route) =>
     route.fulfill({ json: { feed: fake.feed, unreadCount: fake.feed.filter((n) => !n.read).length } }))
   await page.route((url) => url.pathname === '/api/notifications/mark-read', (route) => route.fulfill({ json: { unreadCount: 0 } }))
@@ -100,7 +108,8 @@ async function serve(page: Page, hosts: Record<string, Row>, net: Row = { enable
 function probeSaysDarwin(fake: Fake, host: string): void {
   fake.statuses[host] = statusOf(host, { phase: 'failed', kind: 'not_linux', error: NOT_LINUX, retryable: false })
   push(fake, 'host:status', fake.statuses[host])
-  fake.hosts[host] = { ...fake.hosts[host], enabled: false, not_offered: { reason: 'not_linux', os: 'Darwin', at: new Date().toISOString() } }
+  const { hostname, user } = fake.hosts[host] as { hostname: string; user?: string }
+  fake.hosts[host] = { ...fake.hosts[host], enabled: false, not_offered: { reason: 'not_linux', os: 'Darwin', target: { hostname, ...(user ? { user } : {}) }, at: new Date().toISOString() } }
   // Off now: its status leaves every surface (pushHostRemoved), and the entry is raised once.
   delete fake.statuses[host]
   push(fake, 'host:status', { host, removed: true, at: Date.now(), serverNow: Date.now() })
@@ -173,15 +182,14 @@ test('a Mac from the ssh config leaves Home after its first not-Linux answer and
   expect(fake.answers).toEqual([{ host: 'studio-mac', answer: 'yes' }])
 })
 
-test('a found host that is the machine already joined with a link is never asked', async ({ page }) => {
+test('a found host that is the machine already joined with a link is never asked, while it is that machine', async ({ page }) => {
   const fake = await serve(page, {
-    'studio-alias': {
-      hostname: '10.20.30.40', user: 'sam', discovered: true, connect: 'ask', enabled: false,
-      not_offered: { reason: 'same_machine', same_as: 'Studio-MacBook', at: '2026-11-13T10:00:00.000Z' },
-    },
+    'studio-alias': { hostname: '10.20.30.40', user: 'sam', discovered: true, connect: 'ask', enabled: false },
     'Studio-MacBook': { hostname: 'Studio-MacBook.walnut-net.invalid', label: 'Studio-MacBook', transport: 'net', endpoint: MAC, enabled: true },
     labbox: { hostname: 'labbox.example.test', discovered: true, connect: 'ask', enabled: false },
   })
+  // The server matches it on the joined machine's current addresses (joined-twins.ts).
+  fake.twins = { 'studio-alias': 'Studio-MacBook' }
   fake.statuses['Studio-MacBook'] = statusOf('Studio-MacBook', {
     hostname: 'Studio-MacBook.walnut-net.invalid', connected: true, phase: 'connected', connectedAt: Date.now(),
     readiness: { checkedAt: Date.now(), problems: [] },
@@ -192,8 +200,9 @@ test('a found host that is the machine already joined with a link is never asked
   await reloadHome(page, fake)
   await expect(row(page, 'labbox')).toBeVisible({ timeout: 30_000 })
   await expect(row(page, 'studio-alias')).toHaveCount(0)
-  // The joined machine turned off: the found row is that machine no more, and is asked again.
-  fake.hosts['Studio-MacBook'] = { ...fake.hosts['Studio-MacBook'], enabled: false }
+  // The joined machine moved to another network: its addresses no longer match, nothing was
+  // written down, and the found row is asked again.
+  fake.twins = {}
   push(fake, 'config:changed', { key: 'hosts' })
   await expect(row(page, 'studio-alias')).toContainText('Connect to studio-alias?')
   expect(fake.answers).toEqual([])

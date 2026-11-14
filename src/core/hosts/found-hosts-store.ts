@@ -7,8 +7,8 @@
  *                      on the first start a found host in use that config.yaml
  *                      did not hold yet is written as a yes. Then the server asks
  *                      (`hosts_found.asking_since`): a host found later waits.
- *                      A found host that is a machine already joined is
- *                      remembered as it (found-host-marks.ts markFoundTwinsDoc).
+ *                      A found host marked not Linux on a target the alias no
+ *                      longer names is asked again (found-host-offer.ts).
  *   answerFoundHost    the person's Connect or Not now (Remote Hosts, Runs on).
  *
  * A fact that cannot be read stops the decision for this start: the rows stay as
@@ -21,10 +21,10 @@ import { CRON_FILE, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import type { DiscoveredHost } from '../ssh-config-scanner.js'
 import {
-  addFoundTarget, decideFoundHost, foundTargetTaken, isFoundHostAnswer, knownFoundTargets, recordScanIfSame, withFoundHostAnswer,
+  addFoundTarget, decideFoundHost, followScan, foundTargetTaken, isFoundHostAnswer, knownFoundTargets, recordScanIfSame, withFoundHostAnswer,
   type FoundHostAnswer, type FoundHostFacts, type FoundHostReason, type FoundHostRow,
 } from './found-hosts.js'
-import { markFoundTwinsDoc } from './found-host-marks.js'
+import { notLinuxMarkStale, withoutNotLinuxMark, withoutStaleNotLinux } from './found-host-offer.js'
 
 export interface FoundHostDecision {
   alias: string
@@ -63,9 +63,15 @@ export function settleFoundHostsDoc(
   for (const [alias, row] of Object.entries(rows)) {
     if (!row || typeof row !== 'object' || row.discovered !== true) continue
     if (isFoundHostAnswer(row.connect)) {
+      // Marked not Linux on a target the alias no longer names (~/.ssh/config or a hand edit
+      // moved it): asked again, and off until answered (found-host-offer.ts).
+      const scan = ctx.scanned.get(alias)
+      const followed = scan ? followScan(row, scan) : row
+      const asked = withoutStaleNotLinux(followed)
+      if (asked !== followed) { rows[alias] = asked; recorded = true; continue }
       // A row answered before the scan record existed: from now on it follows ~/.ssh/config
       // when its values still equal it (a value that differs may be the person's edit).
-      const next = recordScanIfSame(row, ctx.scanned.get(alias))
+      const next = recordScanIfSame(row, scan)
       if (next !== row) { rows[alias] = next; recorded = true }
       continue
     }
@@ -111,17 +117,12 @@ export async function settleFoundHosts(depsArg?: Partial<SettleFoundHostsDeps>):
     return []
   }
   let decided: FoundHostDecision[] = []
-  let twins: string[] = []
   await deps.modify((doc) => {
     const before = JSON.stringify([doc.hosts, doc.hosts_found])
-    const now = (deps.now ?? (() => new Date()))()
-    decided = settleFoundHostsDoc(doc, { facts, scanned, reserved: deps.reserved, now })
-    // A found host that is a machine already joined is remembered as it (found-host-marks.ts).
-    twins = markFoundTwinsDoc(doc, { scanned, reserved: deps.reserved, now })
+    decided = settleFoundHostsDoc(doc, { facts, scanned, reserved: deps.reserved, now: (deps.now ?? (() => new Date()))() })
     return JSON.stringify([doc.hosts, doc.hosts_found]) !== before
   })
   if (decided.length > 0) log.session.info('found hosts: decided the hosts an older Walnut left', { decided })
-  if (twins.length > 0) log.session.info('found hosts: remembered as machines already joined', { hosts: twins })
   return decided
 }
 
@@ -245,7 +246,9 @@ export async function answerFoundHost(host: string, answer: unknown): Promise<An
       ...(def.label ? { label: def.label } : {}),
       ...(def.scanned !== undefined ? { scanned: def.scanned } : {}),
     }
-    const next = withFoundHostAnswer(base, answer, 'person', scan)
+    const answered = withFoundHostAnswer(base, answer, 'person', scan)
+    // A not Linux mark learned on another target than the one answered for says nothing of it.
+    const next = notLinuxMarkStale(answered) ? withoutNotLinuxMark(answered) : answered
     if (JSON.stringify(next) === JSON.stringify(stored)) return false
     rows[host] = next
     doc.hosts = rows

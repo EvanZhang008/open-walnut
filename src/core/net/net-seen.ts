@@ -32,12 +32,7 @@ export async function noteSeen(local: Daemon, conn: Daemon, name: string, endpoi
     // Its relay is kept only when it is one of this Mac's own (net-where.ts relayToKeep).
     const home = typeof st.node?.homeRelay === 'string' ? st.node.homeRelay : null
     // Keep the full sighting until noteWhere compares it with the stored address book.
-    if (await noteWhere(endpoint, { addrs: [...(at ? [at] : []), ...own], home, ours: [...ours, ...running], self: own })) {
-      log.session.info('net: noted where a machine is', { host: name, at, home })
-      // Its addresses may name a found ~/.ssh/config host: that host is remembered as this machine.
-      void import('../hosts/found-host-marks.js').then((m) => m.markFoundTwins())
-        .catch((err) => log.session.warn('net: could not remember found hosts as joined machines', { host: name, error: (err as Error).message }))
-    }
+    if (await noteWhere(endpoint, { addrs: [...(at ? [at] : []), ...own], home, ours: [...ours, ...running], self: own })) log.session.info('net: noted where a machine is', { host: name, at, home })
   } catch (err) { log.session.debug('net: could not read where a machine is', { host: name, error: (err as Error).message }) }
 }
 

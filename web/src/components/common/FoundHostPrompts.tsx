@@ -14,7 +14,10 @@ import { RemoteHostReadiness } from '@/components/settings/sections/RemoteHostRe
 import { autofixProgressText, autofixVerbFor, BLOCKING_READINESS_KINDS, hostReadinessConfirmed, isClaudeFixAction, readinessAnsweredThisConnection, READINESS_ANSWER_GRACE_MS } from '@open-walnut/host-problem';
 import { hostReadinessProblems } from '@/utils/host-readiness';
 import { SetupProgress } from './SetupProgress';
-import { markHostConnectAsked } from '@/components/hosts/background-connect';
+import { isFirstConnect, markHostConnectAsked, useBackgroundConnectMemory } from '@/components/hosts/background-connect';
+import { fetchNet } from '@/api/hosts-net';
+import { useOptionalNotifications } from '@/contexts/notifications/notification-context';
+import { FOUND_HOST_CARD_PREFIX } from '@open-walnut/found-host-offer';
 import { useServerTick } from '@/hooks/useServerTick';
 import type { HostStatus } from '@/api/hosts';
 import '@/styles/first-use.css';
@@ -27,10 +30,11 @@ type Found = { host: string; label: string };
  *   ready    a host the person said Connect to, connected, while Walnut checks or fixes Claude
  *            Code there (FoundHostReadiness)
  *   not now  the line that says where to connect it later, in the host's place, until closed
- * A host it cannot add (not Linux, or a machine already connected under another name) is never
- * asked, a connect in progress shows in the background connect card, and a host that cannot
- * connect is one Notifications entry (src/core/hosts/found-host-alert.ts), never a row here
- * (2026-11-13, the user: "I don't want it keep showing ... Just show it inside notification").
+ * A host it cannot add (not Linux, or a machine already joined with a link, matched live on its
+ * current addresses: GET /api/hosts/net `twins`) is never asked, a connect in progress shows in
+ * the background connect card, and a first setup that cannot connect is one Notifications entry
+ * (src/core/hosts/found-host-alert.ts), never a row here (2026-11-13, the user: "I don't want it
+ * keep showing ... Just show it inside notification").
  */
 export function FoundHostPrompts() {
   const [found, setFound] = useState<Found[]>([]);
@@ -39,6 +43,10 @@ export function FoundHostPrompts() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   // Hosts the person said Not now to here: one line each, in place, until closed.
   const [deferred, setDeferred] = useState<Found[]>([]);
+  // Hosts the person said Connect to here: this setup speaks for them while their first connect runs.
+  const [askedHere, setAskedHere] = useState<ReadonlySet<string>>(new Set());
+  const connectMemory = useBackgroundConnectMemory();
+  const feed = useOptionalNotifications()?.feed;
   const navigate = useNavigate();
   const busy = useRef(new Set<string>());
   const order = useRef(new Map<string, number>());
@@ -46,10 +54,15 @@ export function FoundHostPrompts() {
   const statuses = useAllHostStatus();
   const refresh = useCallback(() => {
     const own = ++generation.current;
-    void fetchFreshConfig().then(config => {
+    void fetchFreshConfig().then(async config => {
       if (own !== generation.current) return;
-      setFound(foundHostsToAsk(config.hosts, config.net));
-      setConsented(consentedFoundHosts(config.hosts, config.net));
+      const asked = foundHostsToAsk(config.hosts);
+      // A found host that is a machine already joined with a link is not asked; the server matches
+      // it on the machine's current addresses each time (joined-twins.ts), never writing it down.
+      const twins: Record<string, string> = asked.length ? await fetchNet().then(n => n.twins ?? {}, () => ({})) : {};
+      if (own !== generation.current) return;
+      setFound(asked.filter(h => !Object.hasOwn(twins, h.host)));
+      setConsented(consentedFoundHosts(config.hosts));
     }).catch(error => log.warn('first-use', 'found hosts could not be read', { error: String(error) }));
   }, []);
   useEffect(() => { refresh(); return () => { generation.current++; }; }, [refresh]);
@@ -62,7 +75,10 @@ export function FoundHostPrompts() {
     setPending(new Set(busy.current));
     setErrors(prev => { const next = { ...prev }; delete next[h.host]; return next; });
     // The floating card shows a Connect at once, before the server's first status lands.
-    if (choice === 'yes') markHostConnectAsked(h.host);
+    if (choice === 'yes') {
+      markHostConnectAsked(h.host);
+      setAskedHere(prev => new Set(prev).add(h.host));
+    } else setAskedHere(prev => { const next = new Set(prev); next.delete(h.host); return next; });
     try {
       const result = await answerFoundHost(h.host, choice);
       seedHostStatus(result.status);
@@ -86,10 +102,17 @@ export function FoundHostPrompts() {
   // Connected, and Claude Code there not confirmed yet: the setup's last step shows here.
   const settingUp = consented.filter(h => { const s = statusOf(h.host); return !!s?.connected && !hostReadinessConfirmed(s); });
   const rows = [...found.filter(h => !settingUp.some(c => c.host === h.host)), ...settingUp];
-  // The hosts this setup speaks for (asked here, or said Connect to and not set up yet), so the
-  // System attention banner gives them no row: their progress is the background connect card and
-  // their failure the one Notifications entry.
-  const ownedHosts = [...new Set([...found, ...consented.filter(h => !hostReadinessConfirmed(statusOf(h.host)))].map(h => h.host))].sort().join('\n');
+  // The hosts this setup speaks for, so the System attention banner gives them no row: a host
+  // waiting for an answer, one in its last setup step here, and one in its first setup (a connect
+  // the background card follows: said Connect to here, or the server's own first connect; or the
+  // server's one entry for a first setup that cannot connect). An established host that drops
+  // stays the banner's.
+  const setupCards = new Set((feed ?? []).filter(n => n.dedupKey.startsWith(FOUND_HOST_CARD_PREFIX) && !n.resolved && n.host).map(n => n.host!));
+  const inFirstSetup = (h: Found) => {
+    const here = askedHere.has(h.host);
+    return setupCards.has(h.host) || isFirstConnect(statusOf(h.host), here) || (here && !!connectMemory.asked[h.host]);
+  };
+  const ownedHosts = [...new Set([...found, ...settingUp, ...consented.filter(inFirstSetup)].map(h => h.host))].sort().join('\n');
   useEffect(() => { setPromptedHosts(ownedHosts ? ownedHosts.split('\n') : []); }, [ownedHosts]);
   useEffect(() => () => setPromptedHosts([]), []);
   // A Not now line holds its host's place; a host asked again (it came back as found) is a row again.

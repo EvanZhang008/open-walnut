@@ -9,8 +9,8 @@
  *  - "–" puts it down to one line ("Connecting to lab-mac · 34%") that stays; a click opens it;
  *  - connected: "<name> is connected" for a few seconds, then the card is gone;
  *  - a reload during the connect shows the card again (the server still flags it);
- *  - a failure lets the host go (the Notifications panel says why), and a new attempt of it brings
- *    it back;
+ *  - a failure lets the host go (the Notifications panel says why); the server's retry loop never
+ *    brings it back, a fresh attempt does;
  *  - an established host reconnecting shows no card;
  *  - it never takes the focus from what the person types in.
  *
@@ -192,15 +192,17 @@ test('a failure lets the host go from the card, and a new attempt of it brings i
   fake.push(failed('build-box', { attemptStartedAt: firstTry }))
   await expect(page.getByTestId('host-connect-row-build-box')).toHaveCount(0)
   await expect(page.getByTestId('host-connect-row-lab-box')).toBeVisible()
-  // The same attempt again (the reconnect loop's pause after it): still out.
+  // The retry loop's pause after it, then one of its dials (a new attempt carrying the loop's last
+  // failure): still out, so a machine that is switched off never pops the card up again by itself.
   fake.push(statusOf('build-box', 'reconnecting', { firstConnect: true, attemptStartedAt: firstTry, lastError: 'Connection refused' }))
+  fake.push(statusOf('build-box', 'ssh', { firstConnect: true, attemptStartedAt: Date.now(), lastError: 'Connection refused' }))
   await page.waitForTimeout(500)
   await expect(page.getByTestId('host-connect-row-build-box')).toHaveCount(0)
   // The other one failing too: nothing left, no card.
   fake.push(failed('lab-box'))
   await expect(card(page)).toHaveCount(0)
   await expect(pill(page)).toHaveCount(0)
-  // A NEW attempt (a retry from Settings or Notifications, or the server's own): back in the card.
+  // A fresh attempt with no failure before it: back in the card.
   fake.push(statusOf('build-box', 'ssh', { firstConnect: true, attemptStartedAt: Date.now() }))
   await expect(page.getByTestId('host-connect-row-build-box')).toContainText('Connecting to build-box')
   await shot(page, 'retry-shown-again', card(page))
@@ -223,7 +225,8 @@ test('an established host reconnecting shows no card', async ({ page, baseURL })
 
 test('the card never takes the focus from what the person types in', async ({ page, baseURL }) => {
   const fake = await serve(page, baseURL!)
-  const composer = page.locator('[data-testid="ask-walnut-slot"] .chat-input-textarea').first()
+  // An empty board opens the New task draft (it borrows the chat spot): its composer is the box.
+  const composer = page.locator('.main-page-session-column .chat-input-textarea').first()
   await expect(composer).toBeVisible({ timeout: 60_000 })
   await composer.click()
   await page.keyboard.type('hello')

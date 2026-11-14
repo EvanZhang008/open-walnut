@@ -83,6 +83,7 @@ describe('the class: every list of hosts to pick from goes through pickableHosts
     'src/commands/ephemeral-snapshot.ts': "turns off every row's tunnel in a test copy",
     'src/core/sessions/mobile-launch.ts': 'the reserved-alias check (its list is pickableHosts)',
     'src/core/hosts/found-hosts.ts': 'merges the ~/.ssh/config rows into config.hosts: the rows themselves',
+    'src/core/hosts/found-host-offer.ts': 'which found hosts may be asked about at all; the twin match needs the network, and Home reads it live (GET /api/hosts/net twins)',
     'src/commands/demo-ssh-masters.ts': "the Demo's stop ends the SSH masters of every SSH row its data dir holds: a teardown, not a choice",
   }
 

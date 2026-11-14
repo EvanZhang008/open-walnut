@@ -67,7 +67,6 @@ import { permissionsApplicable } from '../../core/permissions/applicable.js'
 import { withoutCloudBoxHost } from '../../core/hosts/cloud-box-host.js'
 import { walnutRequestTagHeaders } from '../../core/sessions/request-tag.js'
 import { keepFoundHostScan } from '../../core/hosts/found-hosts.js'
-import { keepNotOffered } from '../../core/hosts/found-host-offer.js'
 
 // GET /api/config
 configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
@@ -774,9 +773,8 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
           if (!('connect_by' in row) && was.connect_by !== undefined && next.connect === was.connect) next = { ...next, connect_by: was.connect_by }
           // What ~/.ssh/config said (`scanned`): an editor without the field keeps it, so the
           // row still follows the file, and a field the person changed here no longer matches it.
-          // What Walnut learned that keeps it from being offered (`not_offered`, found-host-offer.ts)
-          // stays too: the editor has no field for it, and a save must never offer the host again.
-          sent[key] = keepNotOffered(keepFoundHostScan(next, was as Parameters<typeof keepFoundHostScan>[1]), was as Parameters<typeof keepNotOffered>[1])
+          // (`not_offered` stays too: updateConfig keeps it from the stored row, under its lock.)
+          sent[key] = keepFoundHostScan(next, was as Parameters<typeof keepFoundHostScan>[1])
         }
       }
       // A machine on the host network is written by the network only (core/net/net-mac.ts):

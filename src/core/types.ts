@@ -1668,9 +1668,9 @@ export interface Config {
      *  from what it recorded. Walnut's own yes dials the host when used, never at every start. */
     connect_by?: 'walnut';
     /** What Walnut learned that keeps a found host from being offered (core/hosts/found-host-offer.ts):
-     *  it is not Linux (and is off), or it is the joined machine `same_as`. Additive: an older
-     *  Walnut reads past it. */
-    not_offered?: { reason: 'not_linux' | 'same_machine'; os?: string; same_as?: string; at: string };
+     *  its SSH probe said it is not Linux, on `target` (and it is off). Additive: an older Walnut
+     *  reads past it. */
+    not_offered?: { reason: 'not_linux'; os?: string; target?: { hostname: string; user?: string; port?: number }; at: string };
     /** Automatic host fixes after a preflight (install the native Claude Code,
      *  gcc under passwordless sudo, build dtach). Default on; `false` turns them
      *  off for this host. WALNUT_HOST_AUTOFIX=0 turns them off for every host. */

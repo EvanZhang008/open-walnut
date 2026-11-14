@@ -3,32 +3,39 @@
  * that the server's lists and the browser's read alike (web alias `@open-walnut/found-host-offer`),
  * so no surface offers a host the others leave out.
  *
- * A found host is not offered once Walnut learned that it cannot be set up over SSH, or that it
- * is a machine already connected under another name. 2026-11-13: a Mac found in ~/.ssh/config,
- * said Connect to once, showed "Could not connect" on Home after every reload ("I don't want it
- * keep showing"), while the same Mac was already connected, joined with a link.
+ * A found host is not offered once its SSH probe said it is not Linux. 2026-11-13: a Mac found in
+ * ~/.ssh/config, said Connect to once, showed "Could not connect" on Home after every reload ("I
+ * don't want it keep showing"). `hosts.<alias>.not_offered` keeps it:
+ *   reason: not_linux   what `uname -s` named (`os`), on the SSH target it was learned on
+ *                       (`target`: hostname, user, port). The row is also turned off
+ *                       (`enabled: false`): nothing dials it again, and an older Walnut, which
+ *                       reads past the field, sees it off too.
+ *   at                  when Walnut learned it (ISO).
+ * The mark holds only for that target: once the alias names another one (~/.ssh/config or a hand
+ * edit changed it), the host is asked again (`withoutStaleNotLinux`), and a connect that works
+ * clears it (found-host-marks.ts).
  *
- * `hosts.<alias>.not_offered` keeps what Walnut learned, for good:
- *   reason: not_linux     the SSH probe's `uname -s` named another system (`os`). The row is also
- *                         turned off (`enabled: false`): nothing dials it again, and an older Walnut,
- *                         which reads past the field, sees it off too. A connect that works later
- *                         (the alias names another machine now) clears it (found-host-marks.ts).
- *   reason: same_machine  it is the joined machine `same_as` (joined-twins.ts matched it). It stands
- *                         only while that machine's row can be used, so removing or turning off the
- *                         joined machine brings the found row back, as joined-twins.ts promises.
- *   at                    when Walnut learned it (ISO).
+ * A found host that is a machine already joined with a link is NOT marked: that match is read live
+ * from the machine's current addresses (joined-twins.ts), because an address match can be an
+ * accident (a laptop on a cafe network takes the address of a Linux box behind a VPN). A
+ * `same_machine` entry an earlier build of this change wrote is ignored.
  *
  * Import-free: the browser bundles this file.
  */
 
-export type NotOfferedReason = 'not_linux' | 'same_machine'
+/** The SSH target a mark was learned on. */
+export interface NotOfferedTarget {
+  hostname: string
+  user?: string
+  port?: number
+}
 
 export interface HostNotOffered {
-  reason: NotOfferedReason
-  /** not_linux: what `uname -s` said ("Darwin"). */
+  reason: 'not_linux'
+  /** What `uname -s` said ("Darwin"). */
   os?: string
-  /** same_machine: the alias of the joined machine this found host is. */
-  same_as?: string
+  /** The target it was learned on; absent on a mark written before the field (never stale). */
+  target?: NotOfferedTarget
   at: string
 }
 
@@ -48,47 +55,63 @@ export function foundHostCardKey(alias: string): string {
 
 /** The fields these rules read (a stored row is untyped YAML). */
 export interface OfferRow {
+  hostname?: unknown
+  user?: unknown
+  port?: unknown
   discovered?: unknown
   connect?: unknown
+  connect_by?: unknown
   enabled?: unknown
   label?: unknown
-  transport?: unknown
-  endpoint?: unknown
   not_offered?: unknown
 }
 type Rows = Record<string, OfferRow | null | undefined>
 
-/** The row's `not_offered`, when it is one these rules know. */
+function text(v: unknown): string {
+  return v === undefined || v === null ? '' : String(v).trim()
+}
+
+/** The SSH target a row dials now. */
+export function targetOf(row: OfferRow): NotOfferedTarget {
+  const port = typeof row.port === 'number' ? row.port : Number(text(row.port)) || undefined
+  return { hostname: text(row.hostname), ...(text(row.user) ? { user: text(row.user) } : {}), ...(port ? { port } : {}) }
+}
+
+/** One target: the hostname in any case, the user, the port (22 when none is named). */
+export function sameTarget(a: NotOfferedTarget, b: NotOfferedTarget): boolean {
+  return a.hostname.toLowerCase() === b.hostname.toLowerCase() && text(a.user) === text(b.user) && (a.port ?? 22) === (b.port ?? 22)
+}
+
+function targetIn(v: unknown): NotOfferedTarget | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined
+  const t = targetOf(v as OfferRow)
+  return t.hostname ? t : undefined
+}
+
+/** The row's `not_offered`, when it is one these rules know (any other reason is ignored). */
 export function notOfferedOf(row: OfferRow | null | undefined): HostNotOffered | undefined {
   const m = row?.not_offered
   if (!m || typeof m !== 'object' || Array.isArray(m)) return undefined
   const o = m as Record<string, unknown>
-  const at = typeof o.at === 'string' ? o.at : ''
-  if (o.reason === 'not_linux') return { reason: 'not_linux', ...(typeof o.os === 'string' && o.os ? { os: o.os } : {}), at }
-  if (o.reason === 'same_machine' && typeof o.same_as === 'string' && o.same_as) return { reason: 'same_machine', same_as: o.same_as, at }
-  return undefined
+  if (o.reason !== 'not_linux') return undefined
+  const target = targetIn(o.target)
+  return { reason: 'not_linux', ...(typeof o.os === 'string' && o.os ? { os: o.os } : {}), ...(target ? { target } : {}), at: typeof o.at === 'string' ? o.at : '' }
 }
 
-/**
- * The joined machine `alias` names can be used: a host network row that is on, while the host
- * network is on. `net` undefined = not known here (the check is left to the row).
- */
-export function joinedRowUsable(hosts: Rows, alias: string, net?: unknown): boolean {
-  const h = Object.hasOwn(hosts, alias) ? hosts[alias] : undefined
-  if (!h || h.transport !== 'net' || typeof h.endpoint !== 'string' || h.enabled === false) return false
-  return net === undefined || (!!net && typeof net === 'object' && (net as { enabled?: unknown }).enabled === true)
+/** The mark was learned on another target than the one the row names now: it says nothing of this one. */
+export function notLinuxMarkStale(row: OfferRow): boolean {
+  const target = notOfferedOf(row)?.target
+  return !!target && !sameTarget(target, targetOf(row))
 }
 
-/** What Walnut learned about this host still keeps it from being offered. */
-export function notOfferedStands(row: OfferRow | null | undefined, hosts: Rows, net?: unknown): boolean {
-  const m = notOfferedOf(row)
-  if (!m) return false
-  return m.reason === 'not_linux' || joinedRowUsable(hosts, m.same_as ?? '', net)
+/** What Walnut learned still keeps this host from being offered. */
+export function notOfferedStands(row: OfferRow | null | undefined): boolean {
+  return !!row && !!notOfferedOf(row) && !notLinuxMarkStale(row)
 }
 
 /** A found host Walnut may offer: found in ~/.ssh/config, and nothing learned keeps it out. */
-export function foundHostOffered(row: OfferRow | null | undefined, hosts: Rows, net?: unknown): boolean {
-  return !!row && row.discovered === true && !notOfferedStands(row, hosts, net)
+export function foundHostOffered(row: OfferRow | null | undefined): boolean {
+  return !!row && row.discovered === true && !notOfferedStands(row)
 }
 
 function labelOf(alias: string, row: OfferRow): string {
@@ -96,16 +119,14 @@ function labelOf(alias: string, row: OfferRow): string {
 }
 
 /** The found hosts to ask "Connect to it?" (asked, not answered yet), with what each is called. */
-export function foundHostsToAsk(hosts: Rows | undefined, net?: unknown): Array<{ host: string; label: string }> {
-  const all = hosts ?? {}
-  return Object.entries(all).filter(([, h]) => !!h && h.connect === 'ask' && foundHostOffered(h, all, net))
+export function foundHostsToAsk(hosts: Rows | undefined): Array<{ host: string; label: string }> {
+  return Object.entries(hosts ?? {}).filter(([, h]) => !!h && h.connect === 'ask' && foundHostOffered(h))
     .map(([host, h]) => ({ host, label: labelOf(host, h!) }))
 }
 
 /** The found hosts the person said Connect to, still on and offered: their setup is shown until it is done. */
-export function consentedFoundHosts(hosts: Rows | undefined, net?: unknown): Array<{ host: string; label: string }> {
-  const all = hosts ?? {}
-  return Object.entries(all).filter(([, h]) => !!h && h.connect === 'yes' && h.enabled !== false && foundHostOffered(h, all, net))
+export function consentedFoundHosts(hosts: Rows | undefined): Array<{ host: string; label: string }> {
+  return Object.entries(hosts ?? {}).filter(([, h]) => !!h && h.connect === 'yes' && h.enabled !== false && foundHostOffered(h))
     .map(([host, h]) => ({ host, label: labelOf(host, h!) }))
 }
 
@@ -115,28 +136,44 @@ export function osOfNotLinuxError(error: string | undefined): string | undefined
   return m ? m[1].trim() : undefined
 }
 
-/** The row marked not Linux, and off. */
-export function withNotLinuxMark<T extends OfferRow>(row: T, os: string | undefined, now: Date): T {
-  return { ...row, enabled: false, not_offered: { reason: 'not_linux', ...(os ? { os } : {}), at: now.toISOString() } }
+/** The row marked not Linux on `target` (default: the one it names now), and off. */
+export function withNotLinuxMark<T extends OfferRow>(row: T, os: string | undefined, now: Date, target: NotOfferedTarget = targetOf(row)): T {
+  return { ...row, enabled: false, not_offered: { reason: 'not_linux', ...(os ? { os } : {}), target, at: now.toISOString() } }
 }
 
-/** The row marked as the joined machine `sameAs`. */
-export function withSameMachineMark<T extends OfferRow>(row: T, sameAs: string, now: Date): T {
-  return { ...row, not_offered: { reason: 'same_machine', same_as: sameAs, at: now.toISOString() } }
-}
-
-/** The row without a not_linux mark (any other mark stays); the same object when it has none. */
+/** The row without its not_linux mark; the same object when it has none. */
 export function withoutNotLinuxMark<T extends OfferRow>(row: T): T {
-  if (notOfferedOf(row)?.reason !== 'not_linux') return row
+  if (!notOfferedOf(row)) return row
   const { not_offered: _gone, ...rest } = row
   return rest as T
 }
 
 /**
- * A settings write whose row carries no `not_offered` (an editor that does not know the field, as
- * Remote Hosts' does not) keeps the stored one, so saving Settings never offers the host again.
+ * A found host whose not Linux mark no longer holds (the alias names another target now) is
+ * asked again: the mark goes, `connect: ask`, and it stays off until the person answers. The
+ * same object when the mark still holds or there is none.
  */
-export function keepNotOffered<T extends OfferRow>(sent: T, was: OfferRow | undefined): T {
-  if (!was || 'not_offered' in sent || was.not_offered === undefined) return sent
-  return { ...sent, not_offered: was.not_offered }
+export function withoutStaleNotLinux<T extends OfferRow>(row: T): T {
+  if (row.discovered !== true || !notLinuxMarkStale(row)) return row
+  const { not_offered: _gone, connect_by: _by, ...rest } = row
+  return { ...rest, connect: 'ask', enabled: false } as T
+}
+
+/**
+ * A whole hosts map written back by an editor that does not know `not_offered` (Remote Hosts'
+ * does not) keeps each found host's stored one, so a Settings save never offers the host again.
+ * A row the sender names `not_offered` on keeps its own; a row it leaves out is gone as sent.
+ */
+export function keepNotOfferedRows(sent: Record<string, unknown>, was: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!was) return sent
+  let out: Record<string, unknown> | null = null
+  for (const [alias, row] of Object.entries(sent)) {
+    const old = Object.hasOwn(was, alias) ? was[alias] as OfferRow | undefined : undefined
+    if (!row || typeof row !== 'object' || !old || typeof old !== 'object') continue
+    const r = row as OfferRow
+    if ('not_offered' in r || old.not_offered === undefined || old.discovered !== true || r.discovered !== true) continue
+    out ??= { ...sent }
+    out[alias] = { ...r, not_offered: old.not_offered }
+  }
+  return out ?? sent
 }

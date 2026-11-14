@@ -116,11 +116,51 @@ describe('which hosts the background card lists', () => {
     expect(shown(retry.rows)).toEqual(['build-box:connecting'])
   })
 
-  it('the reconnect loop waiting after a failure is a failure; its next dial is a new attempt', () => {
-    const r = run([{ now: T0, statuses: [first('build-box', 'install-runtime', { attemptStartedAt: T0 })] }, { now: T0 + 1, statuses: [first('build-box', 'reconnecting', { attemptStartedAt: T0, lastError: 'Connection timed out', at: T0 + 1 })] }])
+  it('a switched-off host: the retry loop\'s dials never bring its row back, however many', () => {
+    const r = run([{ now: T0, statuses: [first('build-box', 'install-runtime', { attemptStartedAt: T0 })] }, { now: T0 + 1, statuses: [status('build-box', 'failed', { attemptStartedAt: T0, error: 'Connection timed out', at: T0 + 1 })] }])
     expect(r.rows).toEqual([])
-    const dial = run([{ now: T0 + 30, statuses: [first('build-box', 'ssh', { attemptStartedAt: T0 + 30, lastError: 'Connection timed out', at: T0 + 30 })] }], r.memory)
-    expect(shown(dial.rows)).toEqual(['build-box:connecting'])
+    // Every few minutes a dial of the loop walks ssh and probe, each a new attempt, each carrying
+    // the loop's last failure or its start (host-status.ts); between them the loop waits.
+    let memory = r.memory
+    for (let i = 1; i <= 5; i++) {
+      const t = T0 + i * 180_000
+      for (const frame of [
+        first('build-box', 'ssh', { attemptStartedAt: t, lastError: 'Connection timed out', at: t }),
+        first('build-box', 'probe', { attemptStartedAt: t, reconnectSince: T0, at: t + 1 }),
+        first('build-box', 'reconnecting', { attemptStartedAt: t, lastError: 'Connection timed out', at: t + 2 }),
+      ]) {
+        const step = run([{ now: frame.at, statuses: [frame] }], memory)
+        expect(step.rows, `dial ${i} ${frame.phase}`).toEqual([])
+        memory = step.memory
+      }
+    }
+    expect(Object.keys(memory.dropped)).toEqual(['build-box'])
+  })
+
+  it('a person\'s retry brings it back, even over the loop\'s marks, and the loop\'s marks do not end that attempt', () => {
+    const r = run([{ now: T0, statuses: [first('build-box', 'install-runtime', { attemptStartedAt: T0 })] }, { now: T0 + 1, statuses: [status('build-box', 'failed', { attemptStartedAt: T0, error: 'Connection timed out', at: T0 + 1 })] }])
+    const before = status('build-box', 'failed', { attemptStartedAt: T0, error: 'Connection timed out', at: T0 + 1 })
+    const retry = run([
+      { now: T0 + 10, ask: ['build-box'], askedOver: before, statuses: [before] },
+      { now: T0 + 11, statuses: [first('build-box', 'ssh', { attemptStartedAt: T0 + 11, lastError: 'Connection timed out', at: T0 + 11 })] },
+    ], r.memory)
+    expect(shown(retry.rows)).toEqual(['build-box:connecting'])
+    expect(retry.memory.dropped).toEqual({})
+    const later = run([{ now: T0 + 12, statuses: [first('build-box', 'upload', { attemptStartedAt: T0 + 11, reconnectSince: T0, at: T0 + 12 })] }], retry.memory)
+    expect(shown(later.rows)).toEqual(['build-box:connecting'])
+  })
+
+  it('a host the card follows that the retry loop takes over (no ask here) goes', () => {
+    const r = run([{ now: T0, statuses: [first('build-box', 'install-runtime', { attemptStartedAt: T0 })] }, { now: T0 + 1, statuses: [first('build-box', 'ssh', { attemptStartedAt: T0 + 1, lastError: 'Connection refused', at: T0 + 1 })] }])
+    expect(r.rows).toEqual([])
+    expect(r.memory.dropped).toEqual({ 'build-box': T0 + 1 })
+  })
+
+  it('after a reload the card never picks up a dial of the retry loop, only a first connect in flight', () => {
+    const loop = run([{ now: T0, statuses: [first('build-box', 'ssh', { lastError: 'Connection timed out' }), first('lab-box', 'probe', { reconnectSince: T0 - 60_000 })] }])
+    expect(loop.rows).toEqual([])
+    const real = run([{ now: T0, statuses: [first('build-box', 'upload')] }])
+    expect(shown(real.rows)).toEqual(['build-box:connecting'])
   })
 
   it('a host removed from the config, or connected then dropping within the hold, goes', () => {

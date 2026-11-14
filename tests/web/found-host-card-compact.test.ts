@@ -27,10 +27,20 @@ describe('the found-host card', () => {
     expect(card).not.toMatch(/isHostFailed|isHostConnecting|reconnectReasonOf/);
   });
 
-  it('asks only about hosts Walnut can add, through the one rule the server reads', () => {
-    expect(card).toMatch(/setFound\(foundHostsToAsk\(config\.hosts, config\.net\)\)/);
-    expect(card).toMatch(/setConsented\(consentedFoundHosts\(config\.hosts, config\.net\)\)/);
+  it('asks only about hosts Walnut can add, through the one rule the server reads, and the live twin match', () => {
+    expect(card).toMatch(/const asked = foundHostsToAsk\(config\.hosts\);/);
+    expect(card).toMatch(/fetchNet\(\)\.then\(n => n\.twins \?\? \{\}/);
+    expect(card).toMatch(/setFound\(asked\.filter\(h => !Object\.hasOwn\(twins, h\.host\)\)\)/);
+    expect(card).toMatch(/setConsented\(consentedFoundHosts\(config\.hosts\)\)/);
     expect(web('utils/first-use.ts')).toMatch(/export \{ foundHostsToAsk, consentedFoundHosts \} from '@open-walnut\/found-host-offer'/);
+  });
+
+  it('speaks for a host only while it is asked or in its first setup: an established host that drops stays the banner\'s', () => {
+    expect(card).toMatch(/const ownedHosts = \[\.\.\.new Set\(\[\.\.\.found, \.\.\.settingUp, \.\.\.consented\.filter\(inFirstSetup\)\]/);
+    // The background card's own rule for a connect it follows, and the server's one entry for a first setup.
+    expect(card).toMatch(/isFirstConnect\(statusOf\(h\.host\), here\)/);
+    expect(card).toMatch(/n\.dedupKey\.startsWith\(FOUND_HOST_CARD_PREFIX\) && !n\.resolved/);
+    expect(card).not.toMatch(/consented\.filter\(h => !hostReadinessConfirmed/);
   });
 });
 

@@ -6,15 +6,27 @@
  *  - a probe that finds no daemon on a host whose link was never up: first connect, from the
  *    deploy on, until the link comes up;
  *  - a probe that finds the daemon running (a server restart re-attaching): not;
- *  - a link that was up before, its daemon gone (the host rebooted): not.
+ *  - a link that was up before, its daemon gone (the host rebooted): not;
+ *  - a server restart, then the daemon gone on a host whose link was up in the run before (the
+ *    connected edge recorded it on the host profile): not.
  *
  * All transport is stubbed on the instance; no process, socket or tunnel is created.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import fs from 'node:fs'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createMockConstants } from '../helpers/mock-constants.js'
+
+vi.mock('../../src/constants.js', () => createMockConstants('walnut-first-connect'))
+
 import { DaemonConnection, getDaemonConnectState, setPooledConnectionForTest } from '../../src/providers/daemon-connection.js'
+import { HOST_PROFILES_DIR, __resetHostConnectedForTests, readHostProfile } from '../../src/core/hosts/host-profile.js'
 import { TARGET, priv, state } from '../helpers/daemon-connection-update-stubs.js'
 
 let conns: DaemonConnection[] = []
+beforeEach(() => {
+  fs.rmSync(HOST_PROFILES_DIR, { recursive: true, force: true })
+  __resetHostConnectedForTests()
+})
 afterEach(() => {
   for (const c of conns) { state(c)._connected = false; c.disconnect() }
   conns = []
@@ -66,6 +78,21 @@ describe('a host\'s first connect', () => {
     await c.connect()
     expect(states).toEqual([undefined])
     expect(priv(c).deployAndStart).not.toHaveBeenCalled()
+  })
+
+  it('a server restart, then the daemon gone on a host that connected in the run before, is not one', async () => {
+    // The run before: the link came up, and its connected edge recorded it on the host profile.
+    const before = new DaemonConnection('devbox', TARGET)
+    conns.push(before)
+    priv(before).setConnected(true)
+    await vi.waitFor(async () => { expect((await readHostProfile('devbox')).connectedAt).toBeTruthy() })
+    state(before)._connected = false
+    before.disconnect()
+    // The restart: a new process remembers nothing but what is on disk.
+    __resetHostConnectedForTests()
+    const { c, seenDuringDeploy } = make(false)
+    await c.connect()
+    expect(seenDuringDeploy).toEqual([undefined])
   })
 
   it('a host whose link was up before, its daemon gone since, is not one', async () => {
