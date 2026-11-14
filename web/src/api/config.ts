@@ -1,4 +1,5 @@
 import { apiGet, apiPut, apiPost } from './client';
+import { CONFIG_MERGE_HEADER } from '../../../src/core/config-section-write';
 import type { Config } from '@open-walnut/core';
 import { invalidateSharedGet, sharedGet } from './shared-get';
 import { noteReplicaConfig } from './leader-presence';
@@ -77,6 +78,8 @@ interface ServerFacts {
    */
   serverCapabilities?: string[];
   build?: BuildInfo | null;
+  /** `merge`: a marked config write merges a section one level deep; absent on an older server. */
+  configWrites?: 'merge';
 }
 
 /**
@@ -217,6 +220,42 @@ export async function updateConfig(config: Partial<Config>): Promise<{ ok: boole
   } finally {
     invalidateSharedGet(CONFIG_URL);
   }
+}
+
+/**
+ * The body that writes only `keys` of one section on a server that merges
+ * (core/config-section-write.ts). JSON drops `undefined`, so a key set to
+ * `undefined` goes as `null`, which removes it.
+ */
+export function configMergeBody(section: string, keys: Record<string, unknown>): Record<string, unknown> {
+  return { [section]: Object.fromEntries(Object.entries(keys).map(([k, v]) => [k, v === undefined ? null : v])) };
+}
+
+/**
+ * Write some keys of one config section and leave the rest of it alone.
+ *
+ * A server that says it merges (`configWrites: 'merge'`) gets only these keys,
+ * marked, so a sibling another window changed a moment ago is never written back.
+ * A replica forwards config writes to a Mac whose version this page does not know,
+ * and an older server replaces the whole section: both get the section read fresh
+ * with these keys over it (a key set to `undefined` is left out, which removes it).
+ */
+export async function updateConfigKeys<K extends keyof Config>(
+  section: K, keys: Partial<NonNullable<Config[K]>>,
+): Promise<{ ok: boolean }> {
+  const facts = await serverFacts().catch((): ServerFacts => ({}));
+  if (facts.configWrites === 'merge' && facts.role !== 'replica') {
+    invalidateSharedGet(CONFIG_URL);
+    try {
+      return await apiPut<{ ok: boolean }>(CONFIG_URL, configMergeBody(section, keys as Record<string, unknown>), {
+        headers: { [CONFIG_MERGE_HEADER]: 'merge' },
+      });
+    } finally {
+      invalidateSharedGet(CONFIG_URL);
+    }
+  }
+  const c = await fetchFreshConfig();
+  return updateConfig({ [section]: { ...(c[section] as object | undefined), ...keys } } as Partial<Config>);
 }
 
 export interface TestConnectionResult {

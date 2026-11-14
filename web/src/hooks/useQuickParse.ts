@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { fetchConfig, updateConfig } from '@/api/config';
+import { fetchConfig, updateConfigKeys } from '@/api/config';
 import { wsClient } from '@/api/ws';
 
 /**
@@ -112,9 +112,8 @@ export function useQuickParseEnabled(): boolean {
 /**
  * Flip the flag: echo to every mounted composer first, then persist.
  *
- * The read-then-spread is required, not defensive: updateConfig replaces the whole
- * `agent` object, so writing `{ agent: { quick_parse } }` on its own would drop
- * main_model, language, available_models and every other sibling key.
+ * Only this key is written (api/config.ts updateConfigKeys): a write that sent the
+ * `agent` block read earlier would put back a sibling another window changed since.
  *
  * A failed write reverts the echo. A toggle that stays lit while the config still
  * says off is worse than one that visibly refuses: the next reload would silently
@@ -125,8 +124,7 @@ export function setQuickParseEnabled(v: boolean): void {
   const epoch = ++writeEpoch;
   publish(v);
   lastSelfChange = Date.now();
-  fetchConfig()
-    .then((c) => updateConfig({ agent: { ...c.agent, quick_parse: v } }))
+  updateConfigKeys('agent', { quick_parse: v })
     // Only OUR failure reverts: a second click in the meantime owns the value now,
     // and undoing it to this call's `previous` would be a worse lie than the one the
     // revert exists to prevent.

@@ -19,6 +19,7 @@
  */
 import fs from 'node:fs'
 import { test, expect, type Locator, type Page } from '@playwright/test'
+import { exactSection } from './config-section-helpers'
 import {
   discoverFixtureRoot, draftMenuProject, draftMoreButton, loadHome, openDraftOnCwd,
 } from './draft-helpers'
@@ -267,7 +268,7 @@ test.describe.serial('Settings › Task providers', () => {
       await expect.poll(async () => (await own())?.words).toEqual([word])
       await expect(head).toContainText('Checks every task against 1 hard rule and the AI rule')
     } finally {
-      await api('PUT', '/api/config', { private_tasks: before ?? { words: [] } }).catch(() => undefined)
+      await api('PUT', '/api/config', { private_tasks: exactSection((await api<Cfg>('GET', '/api/config')).config.private_tasks, before ?? { words: [] }) }).catch(() => undefined)
     }
   })
 
@@ -337,7 +338,7 @@ test.describe.serial('Settings › Task providers', () => {
       await expect(page.getByTestId(`settings-provider-${SERVICE}-head`)).toContainText('Not checked: every task syncs')
       await expect(page.getByTestId(`settings-provider-${SERVICE}-words`)).toHaveCount(0)
     } finally {
-      await api('PUT', '/api/config', { private_tasks: before ?? { words: [] } }).catch(() => undefined)
+      await api('PUT', '/api/config', { private_tasks: exactSection((await api<Cfg>('GET', '/api/config')).config.private_tasks, before ?? { words: [] }) }).catch(() => undefined)
     }
   })
 
@@ -380,7 +381,7 @@ test.describe.serial('Settings › Task providers', () => {
       expect(writes).toHaveLength(1)
       expect(JSON.parse(writes[0]).private_tasks.providers[SERVICE]).toMatchObject({ check: false })
     } finally {
-      await api('PUT', '/api/config', { private_tasks: before ?? { words: [] } }).catch(() => undefined)
+      await api('PUT', '/api/config', { private_tasks: exactSection((await api<Cfg>('GET', '/api/config')).config.private_tasks, before ?? { words: [] }) }).catch(() => undefined)
     }
   })
 

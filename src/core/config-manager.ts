@@ -16,6 +16,7 @@ import { COMPANION_ALIAS, migrateLegacyCompanionKeep } from './replication/compa
 import { applyFoundHostAnswers, askingAboutFoundHosts, mergeFoundHosts } from './hosts/found-hosts.js';
 import { noteRequestTagConfig } from './sessions/request-tag.js';
 import { firstRunStampAllowed, homeHoldsWork, stampFirstRun } from './first-run.js';
+import { writeConfigSection } from './config-section-write.js';
 import {
   dumpConfig,
   modifyConfigDoc,
@@ -321,26 +322,26 @@ export async function saveConfig(config: Config): Promise<void> {
 }
 
 /**
- * Partial config update — read-merge-write.
- * Each top-level key in `partial` replaces the corresponding key in the existing config,
- * but UNMENTIONED keys are preserved. This prevents accidental data loss when callers
- * send incomplete config objects (e.g., PUT /api/config from SettingsPage).
+ * Partial config update: read, merge, write. Top-level keys left out are kept.
+ * A section of fixed fields (`session`, `defaults`, ...) merges one level deep:
+ * the keys sent replace the stored ones, keys left out are kept, and a key sent
+ * as `null` (or `undefined`) is removed; objects below that level are replaced
+ * whole. A map of named entries (`hosts`, `providers`, `plugins`, ...) is replaced
+ * by the map sent. The table and its reasons: config-section-write.ts.
+ * `wholeSections` writes each section as sent (an older web client's write).
  *
  * The base is config.yaml as it stands after any save in flight lands (modifyConfigDoc):
  * merging into `{}` or into an older backup used to persist a config with every
  * unmentioned section (stt, hosts, plugins, tools) dropped, or roll back an edit the
  * user had just saved. A file that does not parse is refused, never replaced.
  */
-export async function updateConfig(partial: Partial<Config>): Promise<void> {
+export async function updateConfig(partial: Partial<Config>, opts: { wholeSections?: boolean } = {}): Promise<void> {
   return modifyConfigDoc((existing) => {
     // The companion's keep choice where an older build kept it moves to cloud_bridge
     // first, so a partial that replaces `hosts` or `cloud_bridge` never drops it.
     migrateLegacyCompanionKeep(existing);
-    // Merge: each top-level key in partial replaces the existing key
     for (const [key, value] of Object.entries(partial)) {
-      if (value !== undefined) {
-        existing[key] = value;
-      }
+      if (value !== undefined) existing[key] = writeConfigSection(key, existing[key], value, opts);
     }
     migrateLegacyCompanionKeep(existing);
     dropLegacyBucketBesideDestination(existing);
@@ -484,7 +485,7 @@ export async function updatePushTokens(
 
 /**
  * Read-modify-write the whole stored mapping, for a migration that must delete or
- * move keys (updateConfig only replaces top-level keys). `mutate` edits the mapping
+ * move keys anywhere (updateConfig writes section by section). `mutate` edits the mapping
  * in place and returns whether it changed anything; nothing is written otherwise.
  */
 export async function migrateStoredConfig(mutate: (doc: Record<string, unknown>) => Promise<boolean> | boolean): Promise<boolean> {
@@ -497,8 +498,8 @@ export async function migrateStoredConfig(mutate: (doc: Record<string, unknown>)
 /**
  * One-time migration: strip the retired category fields from config.yaml on disk.
  *
- * Full-file rewrite (not `updateConfig`, which can only replace top-level keys —
- * it has no way to DELETE `local:`). Runs before the boot seed at
+ * Full-file rewrite (not `updateConfig`, which writes section by section and
+ * has no way to DELETE a whole section such as `local:`). Runs before the boot seed at
  * startup; idempotent, so a second run is a cheap parse + no write.
  */
 export async function migrateConfigFileToProjectOnly(): Promise<boolean> {

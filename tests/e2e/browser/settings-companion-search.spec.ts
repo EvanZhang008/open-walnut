@@ -19,6 +19,7 @@
 import { mkdirSync } from 'node:fs'
 import { test, expect, type Page, type Route } from '@playwright/test'
 import { dropFakes } from './route-teardown'
+import { putExactSection } from './config-section-helpers'
 
 test.setTimeout(120_000)
 
@@ -53,8 +54,7 @@ async function companionSetting(page: Page): Promise<unknown> {
 }
 
 async function writeSearch(page: Page, search: Record<string, unknown> | undefined) {
-  const res = await page.request.put('/api/config', { data: { search: search ?? {} } })
-  expect(res.ok()).toBe(true)
+  await putExactSection(page.request, 'search', search)
 }
 
 async function openSearch(page: Page) {

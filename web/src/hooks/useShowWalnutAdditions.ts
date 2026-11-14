@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { fetchConfig, updateConfig } from '@/api/config';
+import { fetchConfig, updateConfigKeys } from '@/api/config';
 import { wsClient } from '@/api/ws';
 
 /**
@@ -74,8 +74,7 @@ export function useShowWalnutAdditions(): boolean {
 export function setShowWalnutAdditions(v: boolean): void {
   publish(v);
   lastSelfChange = Date.now();
-  // updateConfig replaces the whole `ui` object, so merge into what is there.
-  fetchConfig()
-    .then((c) => updateConfig({ ui: { ...c.ui, show_walnut_additions: v } }))
-    .catch(() => {});
+  // Only this key: a write that sends the section read earlier would put back a sibling
+  // another window changed since (api/config.ts updateConfigKeys).
+  updateConfigKeys('ui', { show_walnut_additions: v }).catch(() => {});
 }

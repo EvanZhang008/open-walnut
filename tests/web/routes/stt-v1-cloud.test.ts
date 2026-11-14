@@ -58,7 +58,8 @@ describe('POST /api/v1/stt/transcribe (cloud companion)', () => {
     bridgeRequest.mockReset();
     transcribeAudio.mockReset();
     hostedTranscribe.mockReset();
-    await updateConfig({ stt: {} });
+    // A section write merges (core/config-section-write.ts): clear what the cases set.
+    await updateConfig({ stt: { engine: undefined, openai_api_key: undefined } });
     // The fallback leg must be reached deterministically. A real key in the
     // developer's environment would silently turn every no-key assertion below
     // into a live OpenAI call.
@@ -140,7 +141,7 @@ describe('POST /api/v1/stt/transcribe (cloud companion)', () => {
   }, 30_000);
 
   it('with the Mac away, an engine set up on the companion answers as via=local', async () => {
-    await updateConfig({ stt: { engine: 'whisper-cpp' } });
+    await updateConfig({ stt: { engine: 'whisper-cpp', openai_api_key: undefined } });
     bridgeRequest.mockRejectedValue(new Error('bridge offline: no live connection for __local__'));
     transcribeAudio.mockResolvedValue({ text: 'local words', durationMs: 80 });
     const res = await post({ audio: 'aGVsbG8=', format: 'm4a' });
@@ -150,7 +151,7 @@ describe('POST /api/v1/stt/transcribe (cloud companion)', () => {
   });
 
   it('the Mac first: a companion engine is not used while the Mac answers', async () => {
-    await updateConfig({ stt: { engine: 'whisper-cpp' } });
+    await updateConfig({ stt: { engine: 'whisper-cpp', openai_api_key: undefined } });
     bridgeRequest.mockResolvedValue({ ok: true, text: 'mac words', durationMs: 50 });
     const res = await post({ audio: 'aGVsbG8=', format: 'm4a' });
     expect(res.body).toMatchObject({ text: 'mac words', via: 'bridge' });
@@ -178,7 +179,7 @@ describe('POST /api/v1/stt/transcribe (cloud companion)', () => {
   });
 
   it('a companion engine that failed, with no key, says what failed rather than blaming the Mac', async () => {
-    await updateConfig({ stt: { engine: 'whisper-cpp' } });
+    await updateConfig({ stt: { engine: 'whisper-cpp', openai_api_key: undefined } });
     bridgeRequest.mockRejectedValue(new Error('bridge offline'));
     transcribeAudio.mockRejectedValue(new Error('The speech model is still loading'));
     const res = await post({ audio: 'aGVsbG8=', format: 'm4a' });

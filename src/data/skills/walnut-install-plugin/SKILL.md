@@ -82,7 +82,7 @@ curl -s "$base/api/integrations/settings" | jq '.[] | select(.id=="<plugin-id>")
 
 `missing` lists required keys. `uiHints.<key>.help` explains where the user can find each value. Quote that help when asking for input.
 
-`PUT /api/config` replaces the whole `plugins` object, so use read, merge, then write:
+`PUT /api/config` replaces the whole `plugins` object (a map of named entries; most other sections merge the keys you send), so use read, merge, then write:
 
 ```bash
 current=$(curl -s "$base/api/config" | jq '.config.plugins // {}')

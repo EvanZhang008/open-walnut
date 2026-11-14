@@ -11,9 +11,8 @@
  *   . ONE fetch for the whole app: a second mounted instance reads the module
  *     cache, and instances mounted before the first fetch settles share it.
  *   . `setShowPriority` echoes to every mounted instance BEFORE the write goes
- *     out, and the write MERGES into the existing `ui` block (updateConfig
- *     replaces the whole key, so a naive `{ ui: { show_priority } }` would drop
- *     the user's sibling ui settings).
+ *     out, and the write names only its own key (updateConfigKeys keeps the
+ *     user's sibling ui settings: tests/web/config-write-body.test.ts).
  *
  * HOW it runs without a DOM (the root vitest is `environment: 'node'`): React is
  * mocked with stand-ins for the two hooks this module uses, the same trick as
@@ -37,8 +36,8 @@ vi.mock('../../web/node_modules/react', () => ({
 }))
 
 const fetchConfig = vi.fn<() => Promise<Record<string, unknown>>>()
-const updateConfig = vi.fn<(patch: Record<string, unknown>) => Promise<unknown>>()
-vi.mock('@/api/config', () => ({ fetchConfig, updateConfig }))
+const updateConfigKeys = vi.fn<(section: string, keys: Record<string, unknown>) => Promise<unknown>>()
+vi.mock('@/api/config', () => ({ fetchConfig, updateConfigKeys }))
 
 /**
  * The WS subscription is bound ONCE per module lifetime (`wsBound`), and
@@ -74,7 +73,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   _resetShowPriorityForTests()
   fetchConfig.mockResolvedValue({})
-  updateConfig.mockResolvedValue({})
+  updateConfigKeys.mockResolvedValue({})
 })
 
 describe('useShowPriority', () => {
@@ -161,13 +160,13 @@ describe('setShowPriority', () => {
     // the echo cannot wait on the round-trip.
     expect(a.set).toHaveBeenCalledWith(true)
     expect(b.set).toHaveBeenCalledWith(true)
-    expect(updateConfig).not.toHaveBeenCalled()
+    // The write starts in the same tick now (no read first), after the echo.
+    expect(a.set.mock.invocationCallOrder[0]).toBeLessThan(updateConfigKeys.mock.invocationCallOrder[0])
 
     await flush()
 
-    // MERGED: sibling ui keys survive, because updateConfig replaces the whole
-    // `ui` object rather than patching one sub-key.
-    expect(updateConfig).toHaveBeenCalledWith({ ui: { session_panels: 3, show_priority: true } })
+    // Only its own key: a sibling another window changed is never written back.
+    expect(updateConfigKeys).toHaveBeenCalledWith('ui', { show_priority: true })
     a.unmount()
     b.unmount()
   })
@@ -182,12 +181,12 @@ describe('setShowPriority', () => {
 
     expect(row.set).toHaveBeenCalledWith(false)
     await flush()
-    expect(updateConfig).toHaveBeenCalledWith({ ui: { show_priority: false } })
+    expect(updateConfigKeys).toHaveBeenCalledWith('ui', { show_priority: false })
     row.unmount()
   })
 
   it('a rejected write does not throw at the caller', async () => {
-    updateConfig.mockRejectedValue(new Error('disk full'))
+    updateConfigKeys.mockRejectedValue(new Error('disk full'))
     const row = mount()
     await flush()
 

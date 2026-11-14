@@ -315,18 +315,18 @@ describe('the windows a Walnut restart keeps', () => {
 
 describe('an older install keeps its idle lock', () => {
   it('writes unlock_for: idle once when a vault exists and no choice was written', async () => {
-    await updateConfig({ passwords: {} })
+    await updateConfig({ passwords: { unlock_for: undefined, auto_lock_minutes: undefined } })
     expect(await keepOldIdleLock()).toBe(true)
     expect((await getConfig()).passwords?.unlock_for).toBe('idle')
     expect(await keepOldIdleLock()).toBe(false)
     // Old minutes written by an older Walnut read as idle already: nothing written.
-    await updateConfig({ passwords: { auto_lock_minutes: 30 } })
+    await updateConfig({ passwords: { auto_lock_minutes: 30, unlock_for: undefined } })
     expect(await keepOldIdleLock()).toBe(false)
     expect((await getConfig()).passwords?.unlock_for).toBeUndefined()
   })
 
   it('writes nothing without a vault (a new vault\'s setup writes 48 hours)', async () => {
-    await updateConfig({ passwords: {} })
+    await updateConfig({ passwords: { unlock_for: undefined, auto_lock_minutes: undefined } })
     resetVaultForTest(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-vault-none-')))
     try {
       expect(await keepOldIdleLock()).toBe(false)

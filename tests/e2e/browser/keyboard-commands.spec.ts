@@ -59,8 +59,8 @@ async function clearShortcuts(page: Page) {
   if (!res.ok()) return
   const { config } = (await res.json()) as { config: { ui?: Record<string, unknown> } }
   if (!config.ui || !('shortcuts' in config.ui)) return
-  const { shortcuts: _drop, ...ui } = config.ui
-  await page.request.put('/api/config', { data: { ui } })
+  // A section write merges (src/core/config-section-write.ts): null removes the key.
+  await page.request.put('/api/config', { data: { ui: { shortcuts: null } } })
 }
 
 test.beforeEach(async ({ page }) => {

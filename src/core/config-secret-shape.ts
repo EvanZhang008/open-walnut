@@ -16,7 +16,7 @@
  * Masking what a client reads is safe only with the other half. Clients save
  * back what they read: Settings lays each save over a fresh GET, the
  * install-plugin skill reads `plugins`, merges and writes it whole, and a config
- * write replaces each top-level key it names. `restoreMaskedSecrets` puts the
+ * write carries whole sections (config-section-write.ts). `restoreMaskedSecrets` puts the
  * stored value back wherever a write carries a mask, so a redaction never turns
  * into data loss. It pairs a mask with a stored value by identity (the same key
  * path, the same address of a URL, the same `id` or `name` of a list entry),

@@ -30,6 +30,7 @@ import { test, expect, type Page, type Route } from '@playwright/test'
 import { backToDevices, openWay } from './devices-ways-helpers'
 import { fixtureHome } from './engine-settings-helpers'
 import { dropFakes } from './route-teardown'
+import { putExactSection } from './config-section-helpers'
 
 test.setTimeout(120_000)
 
@@ -63,8 +64,7 @@ const keepOf = async (page: Page) => (await bridge(page))?.keep
 const copiesOf = async (page: Page) => (await bridge(page))?.copies
 
 async function writeBridge(page: Page, cloudBridge: Record<string, unknown> | undefined) {
-  const res = await page.request.put('/api/config', { data: { cloud_bridge: cloudBridge ?? {} } })
-  expect(res.ok()).toBe(true)
+  await putExactSection(page.request, 'cloud_bridge', cloudBridge)
 }
 
 async function openGroup(page: Page) {

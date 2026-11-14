@@ -65,7 +65,8 @@ afterAll(async () => {
 })
 beforeEach(async () => {
   daemon.clearCommandHistory()
-  await updateConfig({ session: {} })
+  // A section write merges (core/config-section-write.ts): clear the key itself.
+  await updateConfig({ session: { skill_listing_desc_chars: undefined } })
 })
 
 describe('claude_plugins_off in project settings', () => {

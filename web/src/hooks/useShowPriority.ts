@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { fetchConfig, updateConfig } from '@/api/config';
+import { fetchConfig, updateConfigKeys } from '@/api/config';
 import { wsClient } from '@/api/ws';
 
 /**
@@ -86,11 +86,9 @@ export function useShowPriorityState(): boolean | 'unknown' {
 export function setShowPriority(v: boolean): void {
   publish(v);
   lastSelfChange = Date.now();
-  // Merge into the existing ui block so sibling keys (session_panels, …) survive:
-  // updateConfig replaces the whole `ui` object, not individual sub-keys.
-  fetchConfig()
-    .then((c) => updateConfig({ ui: { ...c.ui, show_priority: v } }))
-    .catch(() => {});
+  // Only this key: a write that sends the section read earlier would put back a sibling
+  // another window changed since (api/config.ts updateConfigKeys).
+  updateConfigKeys('ui', { show_priority: v }).catch(() => {});
 }
 
 /** Test seam: reset the module cache so a test starts from "not fetched". */
