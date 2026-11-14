@@ -168,14 +168,22 @@ struct PopoutWindowTests {
         try await wait { delegate.popoutWindows.values.contains { ($0.contentView as? WKWebView)?.url?.absoluteString.contains("view=session") == true } }
         let final = reopened ?? delegate.popoutWindows.values.first { ($0.contentView as? WKWebView)?.url?.absoluteString.contains("view=session") == true }!
         try await wait { (try? await js(final.contentView as! WKWebView, "!!document.querySelector('.popout-session .session-panel-input textarea')")) as? Bool == true }
+        // The main window stays in the background (never visible), so its closes are counted.
+        var mainCloses = 0
+        let closeObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification,
+            object: delegate.window, queue: .main) { _ in MainActor.assumeIsolated { mainCloses += 1 } }
+        defer { NotificationCenter.default.removeObserver(closeObserver) }
         // In the main window Command-W is handed to the page (Close Column) and never closes it.
         _ = try await js(parent, "(() => { window.__menuCommandW = 0; document.addEventListener('keydown', e => { if (e.metaKey && e.key === 'w') window.__menuCommandW++ }, true); return true })()")
         try pressCloseKey(delegate.window)
         try await wait { (try? await js(parent, "window.__menuCommandW")) as? Int == 1 }
-        try expect(delegate.window.isVisible, "Command-W closed the main window")
+        // One more round trip, so the menu's own answer to the page (closeColumnOrPopout) has run.
+        _ = try await js(parent, "true")
+        try await Task.sleep(nanoseconds: 300_000_000)
+        try expect(mainCloses == 0, "Command-W closed the main window")
         print("Command-W went to the page and kept the main window open")
         try pressCloseKey(delegate.window, shift: true)
-        try await wait { !delegate.window.isVisible }
+        try await wait { mainCloses == 1 }
         precondition(delegate.popoutWindows.count == 2)
         print("Command-Shift-W closed parent without closing children")
         precondition(!final.isVisible)
