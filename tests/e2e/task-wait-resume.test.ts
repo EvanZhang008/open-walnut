@@ -409,6 +409,56 @@ describe('turn ends that are not a plain result', () => {
     expect((await task(a.taskId)).phase).toBe('NEED_ACTION')
   })
 
+  // 2026-11-14 (136609e0, parked until 11-16 17:30Z): a peer note interrupted the wait, the
+  // session ended out of band and was handed back, and its turn-end report parked it again with no
+  // clock named: the store gave it the 4-hour default, which woke it for nothing at 10:08Z.
+  it('parked again after an out-of-band hand-back, by its report or by itself: the clock it was interrupted on', async () => {
+    const { updateTaskRaw } = await import('../../src/core/task-manager.js')
+    const far = new Date(Date.now() + 50 * HOUR).toISOString()
+    for (const parkAgain of [
+      // The turn-end report (sessions/report-phase.ts) writes the phase alone, raw.
+      () => updateTaskRaw(a.taskId, { phase: 'WAITING' }, { emitEvent: true, source: 'status-report' }),
+      // The session parks itself with task_update and names no clock.
+      () => getOp('task_update')!.handler!({ id: a.taskId, phase: 'WAITING', waiting_on: 'the test run on CI' }, opCall(a.sid)),
+    ]) {
+      await park(a, far)
+      await applySessionPhase(a.taskId, 'session:input', 'test', { sessionId: a.sid, sendSource: 'peer' })
+      expect(await handBackTaskOnSessionEnd(a.taskId, a.sid, 'snapshot-apply:daemon-push')).toBe(true)
+      expect((await task(a.taskId)).phase).toBe('NEED_ACTION')
+      await parkAgain()
+      expect(await task(a.taskId)).toMatchObject({ phase: 'WAITING', wait_until: far })
+      expect(interruptedWaits().has(a.taskId)).toBe(false)
+    }
+    // A wait that had no clock comes back with none.
+    await park(a, '')
+    await applySessionPhase(a.taskId, 'session:input', 'test', { sessionId: a.sid, sendSource: 'peer' })
+    await handBackTaskOnSessionEnd(a.taskId, a.sid, 'snapshot-apply:daemon-push')
+    await updateTaskRaw(a.taskId, { phase: 'WAITING' }, { emitEvent: true, source: 'status-report' })
+    expect((await task(a.taskId)).wait_until).toBeFalsy()
+  })
+
+  it('parked again after a person wrote, or once its clock passed: a new default clock, not the old one', async () => {
+    const { updateTaskRaw } = await import('../../src/core/task-manager.js')
+    const far = new Date(Date.now() + 50 * HOUR).toISOString()
+    await park(a, far)
+    await applySessionPhase(a.taskId, 'session:input', 'test', { sessionId: a.sid, sendSource: 'peer' })
+    // A person's message ends the wait for good.
+    await applySessionPhase(a.taskId, 'session:input', 'test', { sessionId: a.sid, sendSource: 'ui' })
+    await handBackTaskOnSessionEnd(a.taskId, a.sid, 'snapshot-apply:daemon-push')
+    await updateTaskRaw(a.taskId, { phase: 'WAITING' }, { emitEvent: true, source: 'status-report' })
+    const t = await task(a.taskId)
+    expect(t.wait_until).not.toBe(far)
+    expect(Date.parse(t.wait_until) - Date.now()).toBeLessThan(5 * HOUR)
+    // A clock that passed meanwhile is not brought back.
+    const soon = new Date(Date.now() + 1_500).toISOString()
+    await park(a, soon)
+    await applySessionPhase(a.taskId, 'session:input', 'test', { sessionId: a.sid, sendSource: 'peer' })
+    await handBackTaskOnSessionEnd(a.taskId, a.sid, 'snapshot-apply:daemon-push')
+    await new Promise((r) => setTimeout(r, 2_000))
+    await updateTaskRaw(a.taskId, { phase: 'WAITING' }, { emitEvent: true, source: 'status-report' })
+    expect(Date.parse((await task(a.taskId)).wait_until)).toBeGreaterThan(Date.now() + HOUR)
+  })
+
   it('a turn nobody sent that is not the CLI\'s background follow-up (a wakeup, a loop) hands back', async () => {
     await park(a, new Date(Date.now() + HOUR).toISOString())
     await applySessionPhase(a.taskId, 'session:input', 'test', { sessionId: a.sid, sendSource: 'peer' })

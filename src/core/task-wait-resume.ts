@@ -306,6 +306,27 @@ export async function resumableWait(task: Readonly<Task>, sessionId: string | un
   return { waitUntil: entry.waitUntil };
 }
 
+/**
+ * The clock a task re-entering WAITING with none named gets (the store's default otherwise,
+ * task-manager.ts): the one its interrupted wait had, when that wait is still remembered (nothing
+ * that ends a wait came in: a person, a fire, the clock) and its clock is still ahead. A wait that
+ * had no clock comes back with none. Consumes the memory.
+ *
+ * 2026-11-14 (136609e0, parked until 11-16 17:30Z): a peer note interrupted the wait, the session
+ * then ended out of band (after its background work) and was handed back, its turn-end report
+ * parked it again with no clock named, and the store gave it the 4-hour default, which woke it for
+ * nothing at 10:08Z. Every path that parks a task again now gets the clock it was interrupted on.
+ */
+export function returningWaitUntil(taskId: string, defaultUntil: () => string, nowMs: number = Date.now()): string | undefined {
+  const entry = interrupted.get(taskId);
+  if (!entry) return defaultUntil();
+  const at = entry.waitUntil ? Date.parse(entry.waitUntil) : NaN;
+  if (entry.waitUntil && !(Number.isFinite(at) && at > nowMs)) return defaultUntil();
+  interrupted.delete(taskId);
+  log.session.info('wait back on the clock it was interrupted on', { taskId, waitUntil: entry.waitUntil, source: entry.source });
+  return entry.waitUntil ?? undefined;
+}
+
 /** Restored waits: the phase_changed_at the restore wrote → when the wait was left. */
 const restored = new Map<string, { stamp: string; leftAt: string }>();
 

@@ -15,6 +15,7 @@ import { bus, EventNames } from './event-bus.js';
 import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, PIN_TIER_POLICY, RETIRED_PIN_TIERS, migrateFocusTier, defaultWaitUntil, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord, type SyncHold } from './types.js';
 import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES, HELD_PHASES, withCompletion } from './phase.js';
 import { isMainAgentTask } from './org/main-stays-active.js';
+import { returningWaitUntil } from './task-wait-resume.js';
 import { TaskSyncError, TASK_SYNC_PUSH_FAILED_LOG, taskSyncPushRecoveryKey } from './task-sync-error.js';
 import { TEST_RUN_OWNER, TEST_RUN_PROJECT_KEY, ambientTestRun, isTestRunProject, isTestRunTask, testRunProjectMetadata, unmarkForTestViewer } from './test-run.js';
 import {
@@ -4717,7 +4718,8 @@ export async function updateTask(
   if (updates.wait_until !== undefined) {
     task.wait_until = task.phase === 'WAITING' && updates.wait_until ? updates.wait_until : undefined;
   } else if (task.phase === 'WAITING' && phaseBefore !== 'WAITING') {
-    task.wait_until = defaultWaitUntil();
+    // Back to a wait a turn only interrupted: its own clock, not a new default (task-wait-resume.ts).
+    task.wait_until = returningWaitUntil(task.id, defaultWaitUntil);
   }
   // '' means "clear" for both dates — normalize to undefined so the store never
   // holds an empty string (downstream code checks truthiness AND !== undefined).
@@ -8718,7 +8720,8 @@ function prepareRawUpdate(
     && safeUpdates.wait_until === undefined && task.wait_until !== undefined) {
     (safeUpdates as Record<string, unknown>).wait_until = null;
   } else if (task.phase !== 'WAITING' && safeUpdates.phase === 'WAITING' && safeUpdates.wait_until === undefined) {
-    (safeUpdates as Record<string, unknown>).wait_until = defaultWaitUntil();
+    // Back to a wait a turn only interrupted: its own clock, not a new default (task-wait-resume.ts).
+    (safeUpdates as Record<string, unknown>).wait_until = returningWaitUntil(task.id, defaultWaitUntil) ?? null;
   }
 
   // A folder never follows a task across projects (raw twin of the updateTask
