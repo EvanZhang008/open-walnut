@@ -311,6 +311,8 @@ export async function turnEndAnsweredNothing(sessionId: string | undefined, end?
 interface HeldHandBack {
   reason: TurnRetryReason
   stamp: string
+  /** The send generation it was held in: a send since means a new turn, which hands back for itself. */
+  gen: number
   /** `stillSame`: the session still reads the status it was held at; the replay asks it again inside its task write. */
   replay: (over: TurnRetryReason | undefined, stillSame: () => boolean) => Promise<unknown>
   tries: number
@@ -318,6 +320,13 @@ interface HeldHandBack {
   timer?: ReturnType<typeof setTimeout>
 }
 const heldHandBacks = new Map<string, HeldHandBack>()
+/** Per session: how many sends by anyone but a retrier this server saw (each starts a new turn). */
+const sendGenerations = new Map<string, number>()
+
+/** The session's send generation now: a reader that holds a hand-back reads it before it awaits anything. */
+export function turnSendGeneration(sessionId: string): number {
+  return sendGenerations.get(sessionId) ?? 0
+}
 /** Rechecks of a held hand-back, from when it was held (the last repeats), and when to stop. */
 export const HELD_HANDBACK_RECHECK_MS: readonly number[] = [90_000, 5 * 60_000, 15 * 60_000]
 let recheckMs: readonly number[] = HELD_HANDBACK_RECHECK_MS
@@ -329,8 +338,10 @@ function statusStamp(rec: SessionRecord | null | undefined): string | null {
   return `${rec.process_status}|${rec.statusRevision ?? ''}|${rec.statusUpdatedAt ?? rec.last_status_change ?? ''}`
 }
 
-/** The phase held this session's hand-back for `reason` (phase.ts); `replay` applies it again. */
-export function noteHeldHandBack(sessionId: string, reason: TurnRetryReason, replay: HeldHandBack['replay']): void {
+/** The phase held this session's hand-back for `reason` (phase.ts); `replay` applies it again. `gen`:
+ *  the send generation the phase read before it began (turnSendGeneration): a send since drops it. */
+export function noteHeldHandBack(sessionId: string, reason: TurnRetryReason, replay: HeldHandBack['replay'], gen: number): void {
+  if (turnSendGeneration(sessionId) !== gen) return
   let rec: SessionRecord | null = null
   try { rec = recordNow?.(sessionId) ?? null } catch { /* unreadable: no stamp */ }
   const stamp = statusStamp(rec)
@@ -339,7 +350,7 @@ export function noteHeldHandBack(sessionId: string, reason: TurnRetryReason, rep
   if (prior?.timer) clearTimeout(prior.timer)
   if (prior) heldHandBacks.delete(sessionId)
   const same = prior && prior.stamp === stamp
-  const h: HeldHandBack = { reason, stamp, replay, tries: same ? prior.tries : 0, since: same ? prior.since : Date.now() }
+  const h: HeldHandBack = { reason, stamp, gen, replay, tries: same ? prior.tries : 0, since: same ? prior.since : Date.now() }
   if (Date.now() - h.since >= HELD_HANDBACK_MAX_MS) { heldHandBacks.delete(sessionId); return }
   const wait = recheckMs[Math.min(h.tries, recheckMs.length - 1)]
   h.timer = setTimeout(() => { h.tries++; void releaseHeldHandBack(sessionId, undefined, h) }, wait)
@@ -365,7 +376,7 @@ async function releaseHeldHandBack(sessionId: string, over: TurnRetryReason | un
     if (statusStamp(await getSessionByClaudeId(sessionId).catch(() => null)) !== h.stamp) { drop(); return }
     if (heldHandBacks.get(sessionId) !== h) return // a new send cancelled it meanwhile
     const stillSame = () => {
-      if (heldHandBacks.get(sessionId) !== h) return false
+      if (heldHandBacks.get(sessionId) !== h || turnSendGeneration(sessionId) !== h.gen) return false
       let rec: SessionRecord | null = null
       try { rec = recordNow?.(sessionId) ?? null } catch { return false }
       return statusStamp(rec) === h.stamp
@@ -467,7 +478,8 @@ export async function startTurnRun(): Promise<{ stop: () => void }> {
     if (event.name !== EventNames.SESSION_SEND && event.name !== EventNames.SESSION_MESSAGE_QUEUED) return
     const sid = (event.data as { sessionId?: string }).sessionId
     if (!sid || (event.source && turnAttemptSources().has(event.source))) return
-    // At the event, before anything awaits: a held hand-back must not replay over the new turn.
+    // At the event, before anything awaits: a held hand-back, or one being held now, must not replay over the new turn.
+    sendGenerations.set(sid, turnSendGeneration(sid) + 1)
     cancelHeldHandBack(sid)
     void newTurn(sid, Date.now())
   }
@@ -491,6 +503,7 @@ export function __setHeldHandBackRecheckForTesting(ms: readonly number[] | null)
 export function __resetTurnRunForTesting(): void {
   for (const h of heldHandBacks.values()) if (h.timer) clearTimeout(h.timer)
   heldHandBacks.clear()
+  sendGenerations.clear()
   for (const k of Object.keys(rows)) delete (rows as Record<string, unknown>)[k]
   loading = null
   stopListening?.()

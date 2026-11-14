@@ -22,7 +22,7 @@ import { startEndpointWait } from '../../../src/core/sessions/endpoint-wait.js'
 import { bus, EventNames } from '../../../src/core/event-bus.js'
 import { startUsageLimitWait } from '../../../src/core/sessions/usage-limit-wait.js'
 import { startContextFullRecovery } from '../../../src/core/sessions/context-full-recovery.js'
-import { __resetTurnRunForTesting, __setHeldHandBackRecheckForTesting, turnRetryEnded, turnEndKeepsPhase, noteTurnAttempt, startTurnRun } from '../../../src/core/sessions/turn-run.js'
+import { __resetTurnRunForTesting, __setHeldHandBackRecheckForTesting, __setTurnRetrierForTesting, turnRetryEnded, turnEndKeepsPhase, noteTurnAttempt, startTurnRun } from '../../../src/core/sessions/turn-run.js'
 import * as tracker from '../../../src/core/session-tracker.js'
 
 beforeEach(async () => {
@@ -30,7 +30,8 @@ beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
   await fsp.mkdir(WALNUT_HOME, { recursive: true })
 })
-afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); __resetTurnRunForTesting(); __setHeldHandBackRecheckForTesting(null); closeDb(); _resetSessionTrackerForTesting() })
+// The spies first: one taken on a fake setTimeout would otherwise be restored to the fake.
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); __resetTurnRunForTesting(); __setHeldHandBackRecheckForTesting(null); closeDb(); _resetSessionTrackerForTesting() })
 
 describe('what the turn record holds is let go', () => {
   it('an endpoint wait stopped by a person releases its held hand-back', async () => {
@@ -104,6 +105,8 @@ describe('what the turn record holds is let go', () => {
       unblock()
       for (let i = 0; i < 100 && (await getSessionByClaudeId('sid-limit'))?.usageLimit; i++) await new Promise((r) => setTimeout(r, 10))
       expect((await getSessionByClaudeId('sid-limit'))?.usageLimit).toBeUndefined()
+      // The held hand-back replays once the wait closed (turnRetryEnded runs after the close).
+      for (let i = 0; i < 100 && (await getTask(task.id)).phase === 'IN_PROGRESS'; i++) await new Promise((r) => setTimeout(r, 10))
       expect((await getTask(task.id)).phase).toBe('NEED_ACTION')
     } finally { unblock(); waiter.stop() }
   })
@@ -216,5 +219,34 @@ describe('a held hand-back never hands back a turn that moved on (review round 2
     expect(timer.mock.calls.at(-1)?.[1]).toBe(10)
     await vi.advanceTimersByTimeAsync(10)
     expect(timer.mock.calls.at(-1)?.[1]).toBe(20)
+  })
+
+  it('a message that comes in while the phase is still deciding to hold drops that hold (review round 3)', async () => {
+    __setHeldHandBackRecheckForTesting([20])
+    const run = await startTurnRun()
+    let first = true
+    await __setTurnRetrierForTesting('usage_limit', {
+      reason: 'usage_limit', sources: ['test-retrier'], takes: () => false,
+      wait: (rec) => {
+        if (!first || rec.claudeSessionId !== 'sid-gen') return null
+        first = false
+        // A person's message lands after the phase read the hold, before it notes it.
+        queueMicrotask(() => bus.emit(EventNames.SESSION_MESSAGE_QUEUED, { sessionId: 'sid-gen', message: 'new question', messageId: 'qm-gen' }, ['*'], { source: 'ui' }))
+        return { reason: 'usage_limit', usageLimit: { state: 'waiting', engine: 'claude', since: new Date().toISOString(), resumes: 0, tries: 0 } }
+      },
+    })
+    try {
+      const { task } = await addTask({ title: 'New message mid-hold' })
+      await updateTask(task.id, { phase: 'IN_PROGRESS' })
+      await createSessionRecord('sid-gen', task.id, 'demo')
+      await updateSessionRecord('sid-gen', { process_status: 'error', errorMessage: 'API Error: 500' })
+      await applySessionPhase(task.id, 'session:error', 'server.ts:session-error', { sessionId: 'sid-gen' })
+      await new Promise((r) => setTimeout(r, 150))
+      // The new message drives the session: its own turn hands back, never the old error.
+      expect((await getTask(task.id)).phase).toBe('IN_PROGRESS')
+    } finally {
+      await __setTurnRetrierForTesting('usage_limit', null)
+      run.stop()
+    }
   })
 })

@@ -641,20 +641,22 @@ export async function applySessionPhase(
   if (newPhase === 'NEED_ACTION' && opts?.sessionId && source !== AUTO_RECOVER_HANDBACK_SOURCE && opts.retryOver !== true
     && (trigger === 'session:error' || trigger === 'session:result' || trigger === 'reconciler')) {
     const sid = opts.sessionId
+    // Read before anything awaits: a message that comes in while this looks starts a new turn.
+    const { turnSendGeneration, noteHeldHandBack } = await import('./sessions/turn-run.js')
+    const gen = turnSendGeneration(sid)
     const held = await turnRetryHoldsHandBack(sid, opts.processAlive === false, opts.retryOver || undefined)
     if (held) {
       log.session.info('applySessionPhase: skip (Walnut continues this turn: it holds the hand-back)', {
         taskId, currentPhase: task.phase, trigger, source, sessionId: sid, reason: held,
       })
       // Kept until the retrier lets go: then it goes ahead, unless the session moved on (turn-run.ts).
-      const { noteHeldHandBack } = await import('./sessions/turn-run.js')
       // A replay held again keeps the caller's own options, not the previous replay's.
       const asked = opts.heldFrom ?? opts
       noteHeldHandBack(sid, held, (over, stillSame) => applySessionPhase(taskId, trigger, source, {
         ...asked, heldFrom: asked, ...(over ? { retryOver: over } : {}),
         // Inside the task write: the session still reads the status it was held at (no new turn since).
         shouldApply: (current) => stillSame() && (!asked.shouldApply || asked.shouldApply(current)),
-      }))
+      }), gen)
       return { changed: false, oldPhase: task.phase }
     }
   }
