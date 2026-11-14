@@ -5,8 +5,13 @@
  * the card's command), and the card never noticed, because only the sign-in
  * state was re-checked.
  */
-import { describe, expect, it } from 'vitest'
-import { localRecheckWanted } from '../../web/src/utils/local-claude-recheck'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+const check = vi.hoisted(() => vi.fn(async () => ({ localClaude: null })))
+vi.mock('../../web/src/api/local-claude', () => ({ checkLocalClaude: check }))
+
+import { __resetLocalClaudeRecheckForTests, localRecheckWanted, recheckLocalClaudeNow } from '../../web/src/utils/local-claude-recheck'
+import { _resetLeaderPresenceForTesting, notePresenceEvent } from '../../web/src/api/leader-presence'
 import { claudeBannerView, localAnswerUnsettled, localNoticeShows } from '../../web/src/utils/local-claude-banner'
 import { readFileSync } from 'node:fs'
 import type { SystemHealth } from '../../web/src/hooks/useSystemHealth'
@@ -71,5 +76,26 @@ describe('localRecheckWanted', () => {
       const health = { hasReadyProvider: true, claudeCliAvailable: true, localClaude: { checkedAt: 1, claude: { ...claude, ...c }, problems: [] } } as unknown as SystemHealth
       if (localAnswerUnsettled(health)) expect(localRecheckWanted(health, []), JSON.stringify(c)).toBe(true)
     }
+  })
+
+  // 2026-11-14 nightly (replica-away-read.spec.ts): behind a host replica whose Mac
+  // was away, the 15s re-check was refused every time (503 mac-away). The check
+  // looks at the Mac's Claude Code, so nothing asks while the Mac does not answer.
+  describe('while the Mac is away', () => {
+    afterEach(() => { _resetLeaderPresenceForTesting(); __resetLocalClaudeRecheckForTests(); check.mockClear() })
+
+    it('the interval is not wanted, and resumes once the Mac answers', () => {
+      expect(localRecheckWanted(withLocal([SIGN_IN]), [], false, false)).toBe(false)
+      expect(localRecheckWanted(withLocal([SIGN_IN]), [], false, true)).toBe(true)
+    })
+
+    it('a card mount or panel open asks nothing', async () => {
+      notePresenceEvent({ answers: false, why: 'mac-away', seq: 1, boot: 'b1' })
+      await recheckLocalClaudeNow()
+      expect(check).not.toHaveBeenCalled()
+      notePresenceEvent({ answers: true, seq: 2, boot: 'b1' })
+      await recheckLocalClaudeNow()
+      expect(check).toHaveBeenCalledTimes(1)
+    })
   })
 })
