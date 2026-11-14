@@ -1028,6 +1028,18 @@ export class DaemonConnection {
    */
   static readonly BACKGROUND_UPLOADS = new Set(['fs.writePart', 'replica.put', 'replica.sync', 'attachments.put', 'attachments.sync', 'sessions.discoverExternal'])
   /**
+   * The copies this connection pushes to a host by itself (every command a push*() method here
+   * sends; a ratchet keeps the list whole; configs other modules send, such as jobs.configure,
+   * are a few KB). While the bulk channel's own connection is wanted and down
+   * (its login refused: no new SSH login works, so a relay cut of the session link leaves the
+   * host unreachable), one of COPY_HOLD_BYTES or more is not sent on the session link: it waits
+   * for the own connection and goes again when that opens (2026-11-14 12:08Z: under an expired
+   * certificate the whole host copy went bound on the session link, six times in 12 minutes,
+   * 4.8 MB, and the relay ended that link, which could not log in again).
+   */
+  static readonly AUTOMATIC_COPIES = new Set(['host.slice', 'skills.sync', 'triggers.configure', 'hooks.configure', 'bridge.configure'])
+  static COPY_HOLD_BYTES = 256 * 1024
+  /**
    * Commands whose request is big only sometimes: a picture pasted into a session on the
    * host or a large file saved (fs.write), a replica's manifest of thousands of rows. At
    * BULK_WHEN_BIG_BYTES or more they ride the bulk channel as uploads; small, they stay on
@@ -1694,6 +1706,7 @@ export class DaemonConnection {
     // were away, then hand it a fresh read copy (docs/plan/daemon-first-hosts.md).
     if (changed) {
       this.lastHostSlicePushHash = null; this.hostSliceSids = new Set(); this.offlineDrainDue = true; this.leaderConfigured = false; this.replicaPushed = false
+      this.heldCopies.clear()
       // A new link's first copy is probed first; back at a daemon process that held ours, one it lacks waits out the link's first seconds.
       this.hostSliceSentAt = 0; this.hostSliceSentBytes = 0
       if (this.hostSlicePaceTimer) { clearTimeout(this.hostSlicePaceTimer); this.hostSlicePaceTimer = null }
@@ -2147,6 +2160,14 @@ export class DaemonConnection {
           const sliceGz = (this.hostKey !== '__local__' || json.length * 3 > DAEMON_FRAME_MAX_BYTES) && this.hasCapability('host-slice-gz-v1')
             ? (await gzipAsync(Buffer.from(json))).toString('base64') : null
           const bytes = sliceGz ? sliceGz.length : json.length
+          // A big copy is held while the session link could not log in again after a cut (AUTOMATIC_COPIES).
+          if (bytes >= DaemonConnection.COPY_HOLD_BYTES && this.copiesWaitForOwnBulk()) {
+            if (!this.heldCopies.has('host.slice')) {
+              log.session.info('DaemonConnection: host copy waits for the bulk channel\'s own connection', { host: this.hostKey, bytes, refusal: this.bulkOwnRefusal })
+            }
+            this.heldCopies.add('host.slice')
+            break
+          }
           // The whole copy is the biggest thing the link uploads (about 0.9 MB, again after
           // every reconnect), and a relay ends an SSH connection a few MB in (2026-11-11:
           // 14 drops in 30 min, each push and re-push on the session link). With a bulk
@@ -2250,6 +2271,31 @@ export class DaemonConnection {
   private sliceRidesOwnBulk(): boolean {
     return this.hostKey !== '__local__' && this.bulkOwnLink
       && this.hasCapability('host-slice-unbound-v1') && this.hasCapability('leader-epoch-v1')
+  }
+
+  /**
+   * The bulk channel's own connection is wanted and its socket is not open: it rides the session
+   * link, which cannot log in again if a relay ends it. Big automatic copies wait (AUTOMATIC_COPIES).
+   * Read from the socket, not bulkOwnLink, which a dial sets before it knows the login works.
+   */
+  private copiesWaitForOwnBulk(): boolean {
+    return this.hostKey !== '__local__' && this.bulkOwnWanted && !this.bulkSocketOwn
+  }
+  /** Automatic copies held off the session link, pushed again once the own connection opens. */
+  private heldCopies = new Set<string>()
+  private pushHeldCopies(): void {
+    const held = [...this.heldCopies]
+    this.heldCopies.clear()
+    for (const cmd of held) this.repushCopy(cmd)
+  }
+  private repushCopy(cmd: string): void {
+    switch (cmd) {
+      case 'host.slice': this.pushHostSlice(); break
+      case 'skills.sync': this.pushSkillSync(); break
+      case 'triggers.configure': this.lastTriggersPushHash = null; this.pushTriggers(); break
+      case 'hooks.configure': this.pushDaemonHooks(); break
+      case 'bridge.configure': this.pushBridgeConfig(); break
+    }
   }
 
   /** Whether the copy last pushed to this daemon names the session. */
@@ -2715,6 +2761,11 @@ export class DaemonConnection {
     if (background && (this.bulkOwnLink ? !bulkSocket : this.bulkOwnWanted && !ownUp)) {
       const refused = !this.bulkOwnLink && this.bulkOwnRefusal ? ` (its own SSH connection will not open: ${this.bulkOwnRefusal})` : ''
       throw markLinkFailure(new Error(`${cmd}: the upload channel to ${this.hostKey} is not up${refused} (waited ${Math.round(waited / 1000)}s); nothing was sent, try again`), 'no-link')
+    }
+    if (!ownUp && this.copiesWaitForOwnBulk() && DaemonConnection.AUTOMATIC_COPIES.has(cmd)
+      && message.length >= DaemonConnection.COPY_HOLD_BYTES) {
+      this.heldCopies.add(cmd)
+      throw markLinkFailure(new Error(`${cmd}: a ${Math.round(message.length / 1024)} KB copy waits for the upload channel's own connection to ${this.hostKey} (${this.bulkOwnRefusal || 'it will not open'}); nothing was sent, it goes when that opens`), 'no-link')
     }
 
     const startedAt = Date.now()
@@ -7601,7 +7652,7 @@ export class DaemonConnection {
     const opener = this.bulkForwardOpener()
     this.bulkOwnLink = opener !== null
     this.bulkLastDialAt = Date.now()
-    if (!opener) { this.bulkOwnWanted = false; this.openBulkSocket(url, seq, false); return }
+    if (!opener) { this.bulkOwnWanted = false; this.openBulkSocket(url, seq, false); this.pushHeldCopies(); return }
     void opener().then((fwd) => {
       if (seq !== this.bulkDialSeq || !this._connected || this._destroyed) { fwd.stop(); return }
       this.adoptBulkForward(fwd, seq)
@@ -7674,7 +7725,7 @@ export class DaemonConnection {
       this.bulkOwnRetryTimer = null
       if (!this._connected || this._destroyed || this.bulkSocketOwn || !this.bulkOwnWanted) return
       const opener = this.bulkForwardOpener()
-      if (!opener) { this.bulkOwnWanted = false; return }
+      if (!opener) { this.bulkOwnWanted = false; this.pushHeldCopies(); return }
       this.bulkOwnRetrying = true
       const epoch = this._connectionEpoch
       void opener().then((fwd) => {
@@ -7871,6 +7922,8 @@ export class DaemonConnection {
           ...(this.bulkForward !== null ? uploadPaceFor(this.hostKey, 'bulk').describe() : {}),
         })
         this.releaseBulkWaiters()
+        // What waited for the own connection goes now that its socket said hello.
+        if (own && this.heldCopies.size > 0) this.pushHeldCopies()
       }).catch((err) => {
         // Terminate UNCONDITIONALLY: disconnect() rejects the shared pending
         // map (including this hello) but closeBulkChannel only terminates an
