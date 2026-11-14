@@ -203,8 +203,9 @@ describe('a held hand-back never hands back a turn that moved on (review round 2
     const waiter = startUsageLimitWait({ pickUp: false })
     try {
       bus.emit(EventNames.SESSION_MESSAGE_QUEUED, { sessionId: 'sid-new-send', message: 'new user question', messageId: 'qm-new' }, ['*'], { source: 'ui' })
+      await vi.waitFor(async () => expect((await getSessionByClaudeId('sid-new-send'))?.usageLimit).toBeUndefined())
+      // Negative: the wait closed (someone else sent), and the old error must not hand the task back.
       await new Promise((r) => setTimeout(r, 100))
-      expect((await getSessionByClaudeId('sid-new-send'))?.usageLimit).toBeUndefined()
       expect((await getTask(task.id)).phase).toBe('IN_PROGRESS')
     } finally { waiter.stop(); run.stop() }
   })

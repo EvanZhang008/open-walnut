@@ -95,8 +95,8 @@ describe('where the check runs', () => {
     const phase = fs.readFileSync(path.join(ROOT, 'src/core/phase.ts'), 'utf8')
     const fn = phase.slice(phase.indexOf('async function turnRetryHoldsHandBack('), phase.indexOf('export async function applySessionPhase('))
     // The turn's retriers (restart recovery's holdsHandBack among them, sessions/turn-run.ts) first.
-    expect(fn.indexOf('await turnWaitOf(rec, { failed: true, ownEnd: true })')).toBeGreaterThan(0)
-    expect(fn.indexOf('recovery.holdForShutdownCheck(')).toBeGreaterThan(fn.indexOf('await turnWaitOf(rec, { failed: true, ownEnd: true })'))
+    expect(fn.indexOf('await turnRunOf(rec, { failed: true, ownEnd: true })')).toBeGreaterThan(0)
+    expect(fn.indexOf('recovery.holdForShutdownCheck(')).toBeGreaterThan(fn.indexOf('await turnRunOf(rec, { failed: true, ownEnd: true })'))
   })
   it('stopServer marks the stop before it tears anything down', () => {
     const server = fs.readFileSync(path.join(ROOT, 'src/web/server.ts'), 'utf8')

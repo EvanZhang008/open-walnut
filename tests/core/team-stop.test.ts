@@ -182,8 +182,8 @@ describe('stopTeam / resumeTeam', () => {
     await import('../../src/core/session-tracker.js');
     await import('../../src/core/task-manager.js');
     await import('../../src/providers/claude-code-session.js');
-    await import('../../src/core/sessions/context-full-recovery.js'); // turnHold asks it (42cdfd264)
-    await import('../../src/core/sessions/safeguard-switch.js'); // turnHold asks it too (32507224e)
+    // turnHold asks the session's turn (sessions/turn-run.ts), which loads every retry kind's module.
+    await (await import('../../src/core/sessions/turn-run.js')).loadTurnRetriers();
     vi.useFakeTimers({ toFake: ['setTimeout'] });
     try {
       sessions = [sess('s-a', 'a', 'running'), sess('s-a1', 'a1', 'running')];
