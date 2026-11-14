@@ -919,7 +919,7 @@ test('a Git push approval shows the summary Walnut wrote on top, in full, once i
   await expect(page.locator('.app-layout, #root').first()).toBeVisible()
   await offHome(page)
   const res = await request.post('/api/test/host-fixture', { data: {
-    action: 'git-push-approval', host: 'clouddev', taskTitle: 'Orchid Platform Lead', summary, summaryAfterMs: 2_500,
+    action: 'git-push-approval', host: 'clouddev', taskTitle: 'Orchid Platform Lead', summary, summaryAfterMs: 6_000,
     repository: '/local/home/dev/.local/state/open-walnut/tasks/t-8252/meta-fresh', branch: 'mainline',
   } })
   expect(res.status(), await res.text()).toBe(200)
