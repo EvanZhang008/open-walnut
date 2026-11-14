@@ -284,6 +284,15 @@ defineOp({
 });
 
 defineOp({
+  name: 'security_alert_check',
+  title: 'Check a security alert against recent agent actions',
+  description: 'Before asking whether the user signed in, check Walnut\'s recent sanitized browser, fill-login and host-exec actions for the alert\'s domain and exact event time. A unique successful form fill is ours and names its task, not proof the site accepted a sign-in. Unknown or unavailable means the owner or supervisor verifies it, never asks the user to fetch readable evidence. Returns no account, command, URL path, secret or transcript.',
+  input: { domain: z.string().min(1).max(253).describe('The registrable domain in the alert'), occurred_at: z.string().describe('Exact ISO event time, not the mail delivery time'), account: z.string().min(1).max(320).optional().describe('The login account named in the alert, compared only as a local salted fingerprint. Without a matching account the result stays unknown.') },
+  bind: { method: 'GET', path: '/browser/security-alert', query: ['domain', 'occurred_at', 'account'] },
+  tags: { readonly: true, remote: 'allow', primaryOnly: true },
+});
+
+defineOp({
   name: 'browser_status',
   title: 'Browsers agents may use',
   description: 'The user\'s browsers that let agents in now (the Walnut extension with agents turned on), whether a new site asks the user first, and the sites agents may use.',

@@ -30,6 +30,19 @@ import { IS_DEMO } from '../../constants.js'
 
 export const browserV1Router = Router()
 
+browserV1Router.get('/browser/security-alert', async (req, res, next) => {
+  try {
+    const { checkSecurityAlert, SecurityAlertError } = await import('../../core/browser-control/security-alert.js')
+    const { isFollower } = await import('../../core/server-role.js')
+    if (isFollower()) { res.status(503).json({ status: 'unavailable', actions: [], next: 'Ask the owning task or supervisor to check on the primary.' }); return }
+    try { res.json(await checkSecurityAlert(req.query)) }
+    catch (error) {
+      if (error instanceof SecurityAlertError) { res.status(error.status).json({ error: error.message, code: error.code }); return }
+      throw error
+    }
+  } catch (error) { next(error) }
+})
+
 function header(req: Request, name: string): string | undefined {
   const v = req.headers[name]
   return typeof v === 'string' && v ? v : undefined
@@ -618,6 +631,9 @@ browserV1Router.post('/browser/act', (req, res, next) => {
       lastTab.set(owner, { device: c.device, tab: used })
       h.noteActed(c.device, used)
       if (action !== 'open' && action !== 'take' && typeof r.url === 'string') h.noteTab(c.device, used, facts)
+    }
+    if (typeof r.url === 'string' && (action === 'open' || action === 'navigate')) {
+      await (await import('../../core/browser-control/agent-actions.js')).noteAgentAction(requester.taskId, r.url, 'browser')
     }
     log.web.info('browser act', { action, device: c.device, owner, tab: used })
     // Which window and tab, every time it may have changed; and the person's own tabs on the site.

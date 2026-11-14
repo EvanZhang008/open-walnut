@@ -187,7 +187,9 @@ export async function fillLogin(input: FillInput, deps: FillDeps): Promise<FillO
     const url = await tabUrl(deps, input.owner, input.tab)
     if (!originOf(url) || originOf(url) !== originOf(p.url)) throw new BrowserError('The tab moved to another site while the person was asked: nothing was filled.', 409, 'page_changed')
     await onCheckedSite(input, url)
-    return fill(deps, input.tab, url, p.item, w.values, p.what)
+    const result = await fill(deps, input.tab, url, p.item, w.values, p.what)
+    await recordFill(input, url, p.what, w.values.username)
+    return result
   }
   const url = await tabUrl(deps, input.owner, input.tab)
   await onCheckedSite(input, url)
@@ -203,5 +205,12 @@ export async function fillLogin(input: FillInput, deps: FillDeps): Promise<FillO
     pendingFills.set(u.requestId, { owner: input.owner, tab: input.tab, token: u.waitToken, url, item, fields, what, at: now })
     return needsOk(u.requestId, { item, what })
   }
-  return fill(deps, input.tab, url, item, u.values, what)
+  const result = await fill(deps, input.tab, url, item, u.values, what)
+  await recordFill(input, url, what, u.values.username)
+  return result
+}
+
+async function recordFill(input: FillInput, url: string, what: 'login' | 'code', account?: string) {
+  const { noteAgentAction } = await import('./agent-actions.js')
+  await noteAgentAction(input.requester.taskId, url, what === 'code' ? 'fill_code' : 'fill_login', Date.now(), account)
 }
