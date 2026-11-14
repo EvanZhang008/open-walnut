@@ -6,7 +6,8 @@
  * and for every person's message, so hint_list said one thing and every session got another.
  * On 2026-11-06 the reply-language hint was removed altogether (the user: "just remove reply
  * language"): the setting is a line of every session's system prompt now
- * (sessions/reply-language-context.ts), so no message carries it.
+ * (sessions/reply-language-context.ts). On 2026-11-14 it came back as a correction only
+(hints/reply-language-drift.ts): `on_drift` is its one trigger, and no other hint may use it.
  *
  * The class guard, two halves:
  *   - every built-in and a custom hint, planned for every role, both senders, every session state
@@ -96,7 +97,7 @@ describe('a hint goes out only for its own triggers', () => {
     expect(carried).toBeGreaterThan(0);
   });
 
-  it('a reply-language block is never due, for any role or sender, even on a record told it before', () => {
+  it('a reply-language block is never due without a drift, for any role or sender, even on a record told it before', () => {
     const config = { session: { reply_language: RULE } } as never;
     for (const role of HINT_ROLES) {
       for (const sentBy of ['person', 'agent'] as const) {
@@ -116,10 +117,12 @@ describe('a hint goes out only for its own triggers', () => {
     }
   });
 
-  it('reply-language is not a registry hint, and no hint may use on_drift', () => {
+  it('reply-language goes out only on a drift, and no other hint may use on_drift', () => {
     const hints = effectiveHints({ session: { reply_language: RULE } } as never);
-    expect(hints.map((x) => x.kind)).not.toContain('reply-language');
-    for (const h of hints) expect(h.allowedTriggers, h.kind).not.toContain('on_drift');
+    const lang = hints.find((x) => x.kind === 'reply-language')!;
+    expect(lang.allowedTriggers).toEqual(['on_drift']);
+    expect(lang.triggers).toEqual(['on_drift']);
+    for (const h of hints) if (h.kind !== 'reply-language') expect(h.allowedTriggers, h.kind).not.toContain('on_drift');
     // No built-in rides every message by default except threads, which says so (one per message the user files).
     const everyTurn = effectiveHints(null).filter((x) => x.triggers.includes('every_turn')).map((x) => x.kind);
     expect(everyTurn).toEqual(['threads']);
@@ -174,6 +177,8 @@ describe('no path sends a hint around the registry', () => {
       'core/sessions/output-mode.ts': 'defines it',
       'core/sessions/reply-language-context.ts': 'the line of every session\'s system prompt',
       'core/human-inbox/walnut-letters/languages.ts': 'the language of Walnut\'s own letters to the user, not a hint',
+      'core/hints/hint-registry.ts': 'the reply-language correction, due only on a drift (on_drift)',
+      'core/hints/reply-language-drift.ts': 'judges a person\'s turn and a session\'s letters against it',
     };
     const users = all.filter((f) => /\breplyLanguageText\s*\(/.test(f.text)).map((f) => f.rel);
     expect(users.filter((f) => !READERS[f])).toEqual([]);

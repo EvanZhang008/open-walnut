@@ -16,6 +16,17 @@ language setting is one of them: a versioned block of every session's prompt
 set back to an earlier one, and a cleared setting. It was a hint until 2026-11-06 (the user: "just
 remove reply language"). The setting alone decides: empty says nothing.
 
+With the rule only in the prompt, long sessions drifted to English when the user typed English
+(2026-11-14, the org reflection). So a drift, and only a drift, is corrected
+(`src/core/hints/reply-language-drift.ts`): in a turn a person started, the first line he reads
+that is off the language (code, paths and links do not count) gets one short correction mid-turn,
+read with the next tool result (native Claude Code sessions; again only after two more lines off,
+at most two a turn); a turn that still ended off marks the drift, and the next message carries the
+`reply-language` hint, whose one trigger is `on_drift`. A letter a session writes him
+(`human_inbox_send`, `human_inbox_reply`, a router's `for_user` brief) that is off gets a note in
+the op's answer. A session that keeps the language gets nothing. The hint's Settings switch turns
+all of it off.
+
 Every hint costs every session that gets it on every message it rides. Add one only
 when nothing else can carry it, never restate a rule the prompt already has, keep it
 to a line or two, and measure its bytes per message first. The 2026-11-06 audit found
@@ -96,7 +107,7 @@ Any one trigger that holds sends the hint:
 | `session_start` | the session was never told this hint |
 | `after_compaction` | it was told before the session's latest compaction boundary (`SessionRecord.lastCompactUuid`, the boundary the place and instruction notices use) |
 | `on_change` | what it says now differs from what the session was told (a mode switch, an edited setting) |
-| `on_drift` | a reply since it last went out broke its rule (no hint uses it since the reply language left the registry) |
+| `on_drift` | a reply since it last went out broke its rule (the `reply-language` correction alone) |
 | `on_request` | the sender asked for it on this message (a voice send, a question number) |
 
 The queue composes hints for turns nobody typed (triggers, peers, Walnut's
@@ -219,7 +230,7 @@ _Moved from the root `AGENTS.md` on 2026-11-11; the root file keeps a one-line s
 
 ### Walnut text that rides a message is a message hint, defined in ONE registry
 
-- **Walnut text that rides a message is a message hint, defined in ONE registry** (`src/core/hints/`, [docs](./docs/reference/message-hints.md); 2026-10-27, the user: rich and reply-language lines rode every message, "a generic feature to define these hidden messages ... per round, per x round, per compaction"). Question number, rich output, voice reply, the org notes and custom hints are registry entries (built-in, or config `session.hints`), each with its triggers (`every_turn`, `every_n_turns`, `session_start`, `after_compaction`, `on_change`, `on_request`), audience and placement; every send path calls `prepareHintedSend`, none knows which hints exist. Each hint is a Claude Code style `<system-reminder>` block opening `Walnut (<kind>):`; the message's own `<system-reminder` tags are escaped first, so display takes hints off by structure and never matches the person's words. History rows carry `hints` and `rawText`; the session menu's "Raw input & output" shows what the model received. People and agents change hints the same way (`/api/v1/hints`, ops `hint_list/hint_set/hint_reset`). Standing rules are not hints: they live in the system prompt and the instruction notice. The user's Reply language setting is one of those rules: a line of every session's prompt (`src/core/sessions/reply-language-context.ts`), never a hint (2026-11-06, the user: "just remove reply language").
+- **Walnut text that rides a message is a message hint, defined in ONE registry** (`src/core/hints/`, [docs](./docs/reference/message-hints.md); 2026-10-27, the user: rich and reply-language lines rode every message, "a generic feature to define these hidden messages ... per round, per x round, per compaction"). Question number, rich output, voice reply, the org notes and custom hints are registry entries (built-in, or config `session.hints`), each with its triggers (`every_turn`, `every_n_turns`, `session_start`, `after_compaction`, `on_change`, `on_request`), audience and placement; every send path calls `prepareHintedSend`, none knows which hints exist. Each hint is a Claude Code style `<system-reminder>` block opening `Walnut (<kind>):`; the message's own `<system-reminder` tags are escaped first, so display takes hints off by structure and never matches the person's words. History rows carry `hints` and `rawText`; the session menu's "Raw input & output" shows what the model received. People and agents change hints the same way (`/api/v1/hints`, ops `hint_list/hint_set/hint_reset`). Standing rules are not hints: they live in the system prompt and the instruction notice. The user's Reply language setting is one of those rules: a line of every session's prompt (`src/core/sessions/reply-language-context.ts`), never a hint on a schedule (2026-11-06, the user: "just remove reply language"); only its correction after a drift is (`reply-language`, trigger `on_drift`, 2026-11-14).
 
 ### Text Walnut adds to every message, or every few, costs every session on every turn
 

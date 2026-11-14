@@ -13,14 +13,17 @@
 
 
 /** Every hint kind the registry defines (hint-registry.ts BUILT_IN), in its order. */
-export const BUILT_IN_HINT_KINDS = ['question', 'rich-output', 'voice-reply', 'object-context', 'user-away', 'brief', 'threads', 'threads-tidy', 'hand-on'] as const;
+export const BUILT_IN_HINT_KINDS = ['question', 'rich-output', 'reply-language', 'voice-reply', 'object-context', 'user-away', 'brief', 'threads', 'threads-tidy', 'hand-on'] as const;
+
+/** Walnut text that rides a message outside the registry (no switch in Settings). */
+export const WALNUT_ONLY_KINDS = ['session-context', 'engine-switch', 'images', 'status-question-cut'] as const;
 
 /**
- * Walnut text that rides a message outside the registry (no switch in Settings). `reply-language`
- * was a built-in hint until 2026-11-06 (the user: "just remove reply language"; the language is in
- * the system prompt now): old rows still carry it, and no custom hint may take its name.
+ * Walnut's own words after the user's reply-language sentence, on the message after a turn the user
+ * read broke it (hints/reply-language-drift.ts); the language itself is a line of the system prompt.
  */
-export const WALNUT_ONLY_KINDS = ['session-context', 'engine-switch', 'images', 'status-question-cut', 'reply-language'] as const;
+export const REPLY_LANGUAGE_DRIFT_TAIL = 'Your last reply the user read was not in this language. Write every line the user reads in it, '
+  + 'the short progress lines between tool calls included, also when the message you answer or a tool result is in English.';
 
 /** A built-in whose text holds a setting of the user's: which one, and where Settings shows it. */
 export interface HintUserSetting {
@@ -34,8 +37,9 @@ export interface HintUserSetting {
   walnutText: string;
 }
 
-/** None today: the one such hint, the reply language, is part of the system prompt now. */
-export const HINT_USER_SETTINGS: Readonly<Record<string, HintUserSetting>> = {};
+export const HINT_USER_SETTINGS: Readonly<Record<string, HintUserSetting>> = {
+  'reply-language': { label: 'Reply language', anchor: 'session-reply-language', key: 'reply_language', walnutText: REPLY_LANGUAGE_DRIFT_TAIL },
+};
 
 export function isBuiltInHintKind(kind: string): boolean {
   return (BUILT_IN_HINT_KINDS as readonly string[]).includes(kind) || (WALNUT_ONLY_KINDS as readonly string[]).includes(kind);

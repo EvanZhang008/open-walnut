@@ -961,3 +961,40 @@ describe('big letter bodies: staged in, streamed out', () => {
     expect(error.message).toMatch(/html_ref/)
   }, 60_000)
 })
+
+describe('a letter off the user\'s reply language (hints/reply-language-drift.ts)', () => {
+  const apiBase = () => `http://127.0.0.1:${port}`
+  const RULE = 'Talk to the user in Chinese.'
+  beforeAll(async () => {
+    const { updateConfig } = await import('../../src/core/config-manager.js')
+    await updateConfig({ session: { reply_language: RULE } } as never)
+  })
+  afterAll(async () => {
+    const { updateConfig } = await import('../../src/core/config-manager.js')
+    await updateConfig({ session: { reply_language: undefined } } as never)
+  })
+
+  it('an English letter and reply get the note in the op answer; Chinese ones none', async () => {
+    const english = await executeOp('human_inbox_send', {
+      subject: 'Recruiter replied about interview timing', type: 'review',
+      markdown: "The recruiter replied to your own question about interview timing; only you can reply or pick the times. The reschedule request is still waiting on you.",
+    }, { apiBase: apiBase(), callerSid: SENDER_SID })
+    expect(english.ok).toBe(true)
+    const instruction = (english as { result: { instruction: string; letterId: string } }).result.instruction
+    expect(instruction.startsWith('Reply language: this letter is not in the user\'s language.')).toBe(true)
+    expect(instruction).toContain(RULE)
+
+    const reply = await post(`/api/v1/human-inbox/${(english as { result: { letterId: string } }).result.letterId}/reply`,
+      { text: 'One more thing: the second interview slot on Thursday afternoon was taken by someone else.' }, SENDER_SID)
+    expect(reply.status).toBe(200)
+    expect(((await reply.json()) as { replyLanguage?: string }).replyLanguage).toContain('not in the user\'s language')
+
+    // The Chinese letter: subject "interview time", body "the recruiter replied; only you can pick a time".
+    const chinese = await executeOp('human_inbox_send', {
+      subject: '面试时间', type: 'review',
+      markdown: '招聘方回复了你问的面试时间，只有你能回复或选时间。改期请求还在等你，见 `src/core/router/service.ts`。',
+    }, { apiBase: apiBase(), callerSid: SENDER_SID })
+    expect(chinese.ok).toBe(true)
+    expect((chinese as { result: { instruction: string } }).result.instruction).not.toContain('Reply language')
+  })
+})

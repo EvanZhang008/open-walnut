@@ -123,12 +123,14 @@ defineOp({
   mapResult: ({ body }) => {
     const added = (body as { addedToThread?: unknown } | undefined)?.addedToThread === true
     const openAsk = openAskOf(body)
+    const language = (body as { replyLanguage?: unknown } | undefined)?.replyLanguage
     return {
       letterId: (body as { id?: unknown } | undefined)?.id,
       ...(added ? { addedToThread: true } : {}),
       ...(openAsk ? { openAsk } : {}),
       instruction:
-        (openAsk ? `${openAsk.hint} ` : '')
+        (typeof language === 'string' && language ? `${language} ` : '')
+        + (openAsk ? `${openAsk.hint} ` : '')
         + (added
           ? 'The user is away from your chat, so this update joined your letter of this absence (one thread, one buzz). '
           : 'The letter is in the human\'s inbox. ')

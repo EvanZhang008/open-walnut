@@ -219,6 +219,11 @@ function readBool(res: Response, value: unknown, field: string): boolean | null 
 
 // ─── Send ────────────────────────────────────────────────────────────────────
 
+async function languageNoteOf(parts: unknown[]): Promise<string | null> {
+  const { letterLanguageNote } = await import('../../core/hints/reply-language-drift.js')
+  return letterLanguageNote(parts)
+}
+
 // POST /api/v1/human-inbox { subject, type, html?|markdown?, text?, actions?, task_refs?, pin? }
 humanInboxV1Router.post('/human-inbox', async (req: Request, res: Response, next: NextFunction) => {
   await guard(res, next, 'POST /human-inbox', async () => {
@@ -240,7 +245,9 @@ humanInboxV1Router.post('/human-inbox', async (req: Request, res: Response, next
     const { letter, addedToThread, openAsk } = await sendLetterAsCallerOnce(b as unknown as Omit<NewLetter, 'sender'>, callerSid(req))
     // addedToThread: the user is away from the sender's chat, and the update joined that absence's letter.
     // openAsk: the sender's open decision letter asking the same thing (duplicate-letter.ts).
-    res.status(201).json({ id: letter.id, ...(addedToThread ? { addedToThread: true } : {}), ...(openAsk ? { openAsk } : {}) })
+    // A session's letter off the user's reply language gets one note in its answer (hints/reply-language-drift.ts).
+    const replyLanguage = callerSid(req) ? await languageNoteOf([b.subject, b.text, b.markdown, b.html]) : null
+    res.status(201).json({ id: letter.id, ...(addedToThread ? { addedToThread: true } : {}), ...(openAsk ? { openAsk } : {}), ...(replyLanguage ? { replyLanguage } : {}) })
   })
 })
 
@@ -365,7 +372,8 @@ humanInboxV1Router.post('/human-inbox/:id/reply', async (req: Request, res: Resp
     // The sender's own thread reply (the human's is /human-reply): a repeat of its latest turn is refused (duplicate-letter.ts).
     const letter = await agentReply(id, b as unknown as AgentReplyInput, { refuseDuplicate: true, sender })
     log.notif.info('human-inbox: agent reply accepted', { letterId: id, callerSid: callerSid(req) })
-    res.json({ letter })
+    const replyLanguage = callerSid(req) ? await languageNoteOf([b.text, b.markdown, b.html]) : null
+    res.json({ letter, ...(replyLanguage ? { replyLanguage } : {}) })
   })
 })
 

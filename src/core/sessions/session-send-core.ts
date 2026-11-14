@@ -460,7 +460,12 @@ export async function resolveCaller(callerSid: string | undefined): Promise<Call
  */
 export async function deliverToSession(
   target: SessionRecord,
-  opts: { busText: string; enqueueText: string; source: string; taskId?: string; messageId?: string; fromLeader?: boolean; endsWait?: boolean; liveOnly?: import('./ask-answer.js').LiveDelivery },
+  opts: {
+    busText: string; enqueueText: string; source: string; taskId?: string; messageId?: string; fromLeader?: boolean; endsWait?: boolean;
+    liveOnly?: import('./ask-answer.js').LiveDelivery;
+    /** Checked again just before the row is stored: false and nothing is queued (SendNoLongerWantedError). */
+    stillWanted?: () => boolean;
+  },
 ): Promise<{ delivery: 'queued' | 'deferred'; messageId?: string }> {
   const sid = target.claudeSessionId;
   // An answer for the user goes only into the live session it was checked against (ask-answer.ts).
@@ -499,6 +504,7 @@ export async function deliverToSession(
       ...(opts.messageId ? { messageId: opts.messageId } : {}),
       ...(leaderAnswersQuestion ? { closesPrompt: true } : {}),
       ...(opts.endsWait ? { endsWait: true } : {}),
+      ...(opts.stillWanted ? { stillWanted: opts.stillWanted } : {}),
       ...(guard ?? {}),
     }),
     DELIVERY_TIMEOUT_MS,

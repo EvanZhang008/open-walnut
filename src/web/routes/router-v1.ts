@@ -290,6 +290,9 @@ routerV1Router.post('/router/route', async (req: Request, res: Response, next: N
       ...(typeof b.text === 'string' ? { text: b.text } : {}),
     });
     const [route] = await routeViews([result.route]);
-    res.status(result.route.status === 'routed' ? 202 : 200).json({ ...result, route });
+    // The person's letter is the router's brief: one off the user's reply language gets a note (hints/reply-language-drift.ts).
+    const { letterLanguageNote } = await import('../../core/hints/reply-language-drift.js');
+    const replyLanguage = forUser && result.fresh ? await letterLanguageNote([reason, b.text]) : null;
+    res.status(result.route.status === 'routed' ? 202 : 200).json({ ...result, route, ...(replyLanguage ? { reply_language: replyLanguage } : {}) });
   } catch (error) { failure(res, next, error); }
 });

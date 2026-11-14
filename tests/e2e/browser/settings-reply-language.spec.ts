@@ -31,7 +31,7 @@ test('the reply language saves on blur, reloads, keeps other session settings, a
   await expect(input).toBeVisible()
   await expect(input).toHaveValue(typeof before.reply_language === 'string' ? before.reply_language : '')
   await expect(page.locator('#settings-reply-language .settings-row-help'))
-    .toHaveText("One sentence in every session's instructions; a running session hears a change. Empty says nothing about language.")
+    .toHaveText("One sentence in every session's instructions; a running session hears a change, and a reply that drifts from it gets a short correction. Empty says nothing about language.")
 
   await input.fill(RULE)
   await input.blur()

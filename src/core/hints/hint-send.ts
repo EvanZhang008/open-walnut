@@ -480,6 +480,12 @@ export interface StartHintData {
  */
 export async function prepareStartHints<T extends StartHintData>(data: T, opts: { config?: HintConfig; now?: () => number } = {}): Promise<{ data: T; commit(sessionId: string): Promise<void> }> {
   const none = { data, commit: async () => {} };
+  // Who started the conversation is kept even when no hint rides its first message: the reply-language
+  // check judges only a turn a person started (hints/reply-language-drift.ts), the first one included.
+  const sender = data.attributed ? 'person' as const : 'agent' as const;
+  const bare = { data, commit: async (sessionId: string) => writeHintState(sessionId, (cur) => (
+    cur.hintState?.lastSendBy === sender ? null
+      : { hintState: advanceHintState(cur.hintState, cur, {}, { now: Date.now(), sentBy: sender, count: false }) })) };
   if (!data.message || data.profile?.areaId || data.message.startsWith('/') || data.forkedFromSessionId || data.resumeFile || data.resumeSessionAtMessageUuid) return none;
   try {
     const config = opts.config !== undefined ? opts.config : await import('../config-manager.js').then((m) => m.getConfig()).catch(() => null);
@@ -494,7 +500,7 @@ export async function prepareStartHints<T extends StartHintData>(data: T, opts: 
       ...(data.attributed ? { sentBy: 'person' as const, inChat: true } : { sentBy: 'agent' as const }),
       message: parseHinted(data.message).text,
     });
-    if (!plan.carried.length) return none;
+    if (!plan.carried.length) return bare;
     const message = [...(plan.before.length ? [plan.before.join('\n')] : []), data.message, ...(plan.after.length ? [plan.after.join('\n')] : [])].join('\n\n');
     const now = opts.now ?? Date.now;
     return {
@@ -619,8 +625,11 @@ export function hintStateAtBoundary(
   return changed ? { ...state, told } : undefined;
 }
 
-/** The triggers a host can honour: they need no message count and no request. */
-const HOST_TRIGGERS: ReadonlySet<string> = new Set(['every_turn', 'session_start', 'after_compaction', 'on_change', 'on_drift']);
+/**
+ * The triggers a host can honour: they need no message count and no request. Not `on_drift`: the host
+ * cannot record that it told the correction, so it would ride every peer note until the server's next send.
+ */
+const HOST_TRIGGERS: ReadonlySet<string> = new Set(['every_turn', 'session_start', 'after_compaction', 'on_change']);
 
 /**
  * The blocks a session's HOST appends to a message it delivers itself (a peer note

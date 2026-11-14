@@ -79,9 +79,11 @@ export interface RouterDeliveryDeps {
 
 /** The router's one letter for an item only the person can act on: who sent it, its subject, why, and what to do. */
 async function routerLetter(areaId: string, item: RouterItem, route: RouterRoute, brief: string, callerSid?: string): Promise<void> {
-  const { sendLetterOnce } = await import('../human-inbox/store.js');
+  const [{ sendLetterOnce }, { walnutLetterLanguage }] = await Promise.all([
+    import('../human-inbox/store.js'), import('../human-inbox/walnut-letters/languages.js'),
+  ]);
   await sendLetterOnce({
-    ...routerLetterContent(item, route, brief),
+    ...routerLetterContent(item, route, brief, await walnutLetterLanguage()),
     type: 'review',
     ...(route.byTaskId ? { taskRefs: [route.byTaskId] } : {}),
     sender: { sessionId: callerSid?.trim() || 'external', ...(route.byTaskId ? { taskId: route.byTaskId } : {}) },

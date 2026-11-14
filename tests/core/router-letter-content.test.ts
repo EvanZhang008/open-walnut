@@ -26,3 +26,16 @@ it('takes a credential the quoted mail carries out of the letter, and the rest s
   expect(letter.markdown).toContain(REDACTED_LINE);
   expect(letter.markdown).toContain('Rotate by Friday');
 });
+
+it("writes Walnut's own frame in the language of Walnut's letters, every language of it filled", async () => {
+  const { LETTER_LANGUAGES } = await import('../../src/core/human-inbox/walnut-letters/languages.js');
+  const en = routerLetterContent({}, { reason: 'r' }, 'b', 'en');
+  for (const lang of LETTER_LANGUAGES) {
+    const l = routerLetterContent({}, { reason: 'r' }, 'b', lang);
+    expect(l.subject.length, lang).toBeGreaterThan(2);
+    if (lang !== 'en') expect(l.subject, lang).not.toBe(en.subject);
+    expect(l.markdown.split('\n').filter((line) => line.startsWith('## '))).toHaveLength(2);
+  }
+  // '给你' is the Chinese "For you".
+  expect(routerLetterContent({ subject: 'Hi' }, { reason: 'r' }, 'b', 'zh').subject).toBe('给你: Hi');
+});

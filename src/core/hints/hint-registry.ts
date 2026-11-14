@@ -25,14 +25,14 @@ import type {
   Config, MessageHintRole, MessageHintSettings, MessageHintTrigger, SessionOutputMode,
 } from '../types.js';
 import {
-  RICH_OUTPUT_MODE_OFF_INSTRUCTION, RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_REMINDER, resolveEffectiveOutputMode,
+  RICH_OUTPUT_MODE_OFF_INSTRUCTION, RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_REMINDER, replyLanguageText, resolveEffectiveOutputMode,
 } from '../sessions/output-mode.js';
 import { VOICE_REPLY_TEXT } from '../sessions/voice-reply.js';
 import { getHintContext, hintContextText } from './hint-context.js';
 import { ASK_THREAD_RE, askHintText, askNameOf } from '../sessions/ask-thread.js';
 import { briefHintText, type BriefHintState } from '../sessions/brief-hint.js';
 import { threadHintText, threadsTidyText, type ThreadHintState, type ThreadsTidyState } from '../org/thread-capture.js';
-import { HINT_USER_SETTINGS, WALNUT_ONLY_KINDS } from './hint-origin.js';
+import { HINT_USER_SETTINGS, REPLY_LANGUAGE_DRIFT_TAIL, WALNUT_ONLY_KINDS } from './hint-origin.js';
 import { orgHandOnHint } from '../org/core-instructions.js';
 
 export const HINT_TRIGGERS: readonly MessageHintTrigger[] = [
@@ -84,9 +84,10 @@ interface HintSpec {
   render(input: HintContentInput, reasons: ReadonlySet<MessageHintTrigger>): HintRender | null;
 }
 
-// on_drift stays a trigger name an older config may hold, but no hint can use it: its one user, the
-// reply language, is no hint any more (2026-11-06, the user: "just remove reply language").
+// on_drift belongs to the reply-language correction alone (hints/reply-language-drift.ts); no other
+// hint, and no custom one, may use it.
 const SCHEDULED: readonly MessageHintTrigger[] = HINT_TRIGGERS.filter((t) => t !== 'on_request' && t !== 'on_drift');
+const REPLY_LANGUAGE_DRIFT_FRESH_MS = 24 * 3600_000;
 const periodicOnly = (reasons: ReadonlySet<MessageHintTrigger>) =>
   [...reasons].every((r) => r === 'every_turn' || r === 'every_n_turns');
 
@@ -129,6 +130,25 @@ const BUILT_IN: readonly HintSpec[] = [
         return reasons.has('on_change') && i.toldHash === 'rich' ? { text: RICH_OUTPUT_MODE_OFF_INSTRUCTION } : null;
       }
       return { text: periodicOnly(reasons) ? RICH_OUTPUT_MODE_REMINDER : RICH_OUTPUT_MODE_ON_INSTRUCTION };
+    },
+  },
+  {
+    kind: 'reply-language',
+    label: 'Reply language correction',
+    description: 'Only after a turn you started was read in another language than your Reply language setting (Settings): the next message carries your setting again with a short correction, and a line or letter off it gets one inside the turn. Nothing is sent while replies keep the language or the setting is empty.',
+    allowed: ['on_drift'],
+    // The language itself is a line of every session's prompt (sessions/reply-language-context.ts);
+    // this hint is only the correction (2026-11-14, the org reflection: long sessions drifted to
+    // English with nothing to bring them back). Never on a schedule (2026-11-05, the user: "I said
+    // don't do this every round").
+    defaults: { enabled: true, triggers: ['on_drift'], placement: 'after' },
+    identity: (i) => replyLanguageText(i.config),
+    render: (i, reasons) => {
+      const text = replyLanguageText(i.config);
+      const age = Date.now() - Date.parse(i.record?.hintState?.drift?.['reply-language'] ?? '');
+      // A mark older than a day (one an older Walnut left) is no news about this conversation, nor one dated ahead.
+      if (!text || !reasons.has('on_drift') || !(age > -60_000 && age < REPLY_LANGUAGE_DRIFT_FRESH_MS)) return null;
+      return { text: `${text} ${REPLY_LANGUAGE_DRIFT_TAIL}` };
     },
   },
   {
@@ -417,8 +437,10 @@ export function validateHintSettings(kind: string, input: unknown): MessageHintS
 }
 
 /** A hint as the API and the ops show it (no functions). */
-export function describeHint(h: EffectiveHint, _config?: Pick<Config, 'session'> | null) {
+export function describeHint(h: EffectiveHint, config?: Pick<Config, 'session'> | null) {
   const setting = h.builtIn ? HINT_USER_SETTINGS[h.kind] : undefined;
+  // As it is sent: whitespace collapsed, a long one cut (output-mode.ts).
+  const value = setting?.key === 'reply_language' ? replyLanguageText(config ?? null) : null;
   return {
     kind: h.kind,
     label: h.label,
@@ -436,7 +458,7 @@ export function describeHint(h: EffectiveHint, _config?: Pick<Config, 'session'>
     ...(setting ? {
       user_setting: {
         label: setting.label, anchor: setting.anchor,
-        value: null,
+        value,
         walnut_text: setting.walnutText,
       },
     } : {}),

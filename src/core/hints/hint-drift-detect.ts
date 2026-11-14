@@ -1,7 +1,8 @@
 /**
  * Which language a reply-language sentence asks for, and is a text in it? Pure and
- * cheap. Walnut's own letters use it to pick their language (walnut-letters/languages.ts);
- * it judged the reply-language hint's drift until that hint was removed (2026-11-06).
+ * cheap. Walnut's own letters use it to pick their language (walnut-letters/languages.ts),
+ * and the drift check judges with it every line of a turn a person started and every letter
+ * a session writes him (reply-language-drift.ts).
  *
  * The rule is the user's own sentence ("Talk to the user in Chinese; code ...
  * stays English"), so the language it asks for is read from the language names it
@@ -22,6 +23,9 @@ const NAMED: ReadonlyArray<[RegExp, Script, string | null]> = [
 
 /** Fewer letters than this and the reply is not judged. */
 const MIN_LETTERS = 40;
+
+/** Letters a progress line needs to be judged inside a turn ("Chromium 34/34. Now WebKit." is 17). */
+export const LIVE_MIN_LETTERS = 12;
 
 /** The script the rule asks for: the first language it names (the rest is usually "code stays English"). */
 export function expectedScript(rule: string): Script | null {

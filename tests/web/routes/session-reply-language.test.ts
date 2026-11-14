@@ -9,8 +9,9 @@
  *
  * What this file pins: the prompt line (and its absence), and that no message a person,
  * another task or Walnut sends carries a reply-language block, in either output mode,
- * after a change, a compaction or a drift mark an older Walnut left. Old history rows
- * still hold the block, so both display paths still strip it.
+ * after a change or a compaction. Only a fresh drift mark (hints/reply-language-drift.ts,
+ * 2026-11-14) puts the correction on the next message, once. Old history rows still hold
+ * the block, so both display paths still strip it.
  *
  * Same harness as session-output-mode.test.ts: the RPC handler is captured by
  * stubbing `registerMethod`; no WS server, port, or `claude` process.
@@ -184,7 +185,7 @@ describe('no message carries a reply-language block', () => {
     }
   })
 
-  it('a change of the setting, a compaction and a drift mark an older Walnut left add nothing', async () => {
+  it('a change of the setting and a compaction add nothing; a fresh drift adds the correction once', async () => {
     await setSession({ output_mode: 'markdown', reply_language: RULE })
     const sid = await newSession()
     await callSend({ sessionId: sid, message: 'one' })
@@ -196,9 +197,17 @@ describe('no message carries a reply-language block', () => {
     await callSend({ sessionId: sid, message: 'three' })
     expect(await drain(sid)).toBe('three')
     const rec = await getSessionByClaudeId(sid)
-    await updateSessionRecord(sid, { hintState: { ...rec!.hintState!, drift: { 'reply-language': new Date(Date.now() + 1000).toISOString() } } })
+    // A mark older than a day (an older Walnut left it) adds nothing.
+    await updateSessionRecord(sid, { hintState: { ...rec!.hintState!, drift: { 'reply-language': new Date(Date.now() - 2 * 86_400_000).toISOString() } } })
     await callSend({ sessionId: sid, message: 'four' })
     expect(await drain(sid)).toBe('four')
+    const rec2 = await getSessionByClaudeId(sid)
+    await updateSessionRecord(sid, { hintState: { ...rec2!.hintState!, drift: { 'reply-language': new Date(Date.now() + 1000).toISOString() } } })
+    await callSend({ sessionId: sid, message: 'five' })
+    const five = await drain(sid)
+    expect(five).toContain('Walnut (reply-language): Answer in French. Your last reply the user read was not in this language.')
+    await callSend({ sessionId: sid, message: 'six' })
+    expect(await drain(sid)).toBe('six')
   })
 
   it('rich: only the rich instruction rides the first message', async () => {

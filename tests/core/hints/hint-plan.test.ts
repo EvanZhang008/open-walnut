@@ -199,15 +199,19 @@ describe('compaction hook and host tail', () => {
     expect(run(rec, config, 1)).toEqual([[]]);
   });
 
-  it('the host tail is empty by default and carries only an owed hint, never a reply language', () => {
+  it('the host tail is empty by default and carries only an owed hint, never the reply-language correction', () => {
     const rec: Rec = { claudeSessionId: 's12', output_mode: 'markdown' };
     const config = cfg({ reply_language: 'Chinese.' });
     run(rec, config, 1);
     expect(hostReplyTail(rec, cfg({}))).toBeNull();
     expect(hostReplyTail(rec, config)).toBeNull();
-    // A drift mark an older Walnut left owes nothing now.
-    rec.hintState = { ...rec.hintState!, drift: { 'reply-language': '2026-12-01T00:00:00Z' } };
+    // A drift mark an older Walnut left (over a day old) owes nothing now.
+    rec.hintState = { ...rec.hintState!, drift: { 'reply-language': new Date(Date.now() - 2 * 86_400_000).toISOString() } };
     expect(hostReplyTail(rec, config)).toBeNull();
+    // Nor a fresh one: the host cannot record that it told it, so it waits for the server's next send.
+    rec.hintState = { ...rec.hintState!, drift: { 'reply-language': new Date().toISOString() } };
+    expect(hostReplyTail(rec, config)).toBeNull();
+    delete rec.hintState!.drift;
     expect(hostReplyTail(rec, cfg({ reply_language: 'Chinese.', hints: { tone: { text: 'Hi.', triggers: ['every_turn'] } } }))).toContain('Walnut (tone): Hi.');
   });
 });
@@ -230,7 +234,7 @@ describe('a hand-edited config.yaml', () => {
     expect(rich.everyTurns).toBe(5);
     expect(rich.placement).toBe('after');
     expect(rich.audience.roles).toEqual([]);
-    expect(hints.find((h) => h.kind === 'reply-language')).toBeUndefined();
+    expect(hints.find((h) => h.kind === 'reply-language')!.triggers).toEqual(['on_drift']);
     expect(hints.find((h) => h.kind === 'my-note')).toBeUndefined();
     const ok = hints.find((h) => h.kind === 'ok-note')!;
     expect(ok.triggers).toEqual(['every_turn']);
