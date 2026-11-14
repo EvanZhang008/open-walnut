@@ -751,6 +751,7 @@ let humanInboxQueueFlushHandle: { stop: () => void } | null = null
 let companionJournalDueHandle: { stop: () => void } | null = null
 let companionCardsHandle: { stop: () => void } | null = null
 let autoContinueHandle: { stop: () => void } | null = null
+let turnRunHandle: { stop: () => void } | null = null
 let idleCompactionHandle: { stop: () => void } | null = null
 let promptRefreshRespawnHandle: { stop: () => void } | null = null
 let contextFullRecoveryHandle: { stop: () => void } | null = null
@@ -2207,7 +2208,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         for (let i = 0; i < 90 && isQuietTurn(rec.claudeSessionId); i++) await new Promise((r) => setTimeout(r, 1_000))
         if (!(await still())) return
         const { applySessionPhase } = await import('../core/phase.js')
-        await applySessionPhase(rec.taskId, 'session:error', why, { sessionId: rec.claudeSessionId })
+        await applySessionPhase(rec.taskId, 'session:error', why, { sessionId: rec.claudeSessionId, retryOver: true })
           .catch((err) => log.web.warn('held session error: phase not applied', { taskId: rec.taskId, why, error: String(err) }))
       }
       const { getSessionByClaudeId: currentRecord } = await import('../core/session-tracker.js')
@@ -3776,6 +3777,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // ends, and closed threads are deleted after their week (core/org/thread-answers.ts).
       const { startThreadAnswers } = await import('../core/org/thread-answers.js')
       threadAnswersHandle = startThreadAnswers()
+
+      // The session's current turn (sessions/turn-run.ts): every reader of "is Walnut retrying this
+      // turn" asks it; its attempts start over at any send that is not a retrier's. Primary only.
+      turnRunHandle = await (await import('../core/sessions/turn-run.js')).startTurnRun()
 
       // Auto-continue: recover a turn that died to upstream retry exhaustion by
       // scheduling one delayed `continue` nudge (b12 retry hardening). Primary box
@@ -5644,40 +5649,19 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const { getSessionByClaudeId: laneCheckRead } = await import('../core/session-tracker.js')
       const isLaneSession = !!(sessionId && (await laneCheckRead(sessionId).catch(() => null))?.lane)
       const willBeTriage = !isError && !!taskId
-      const { endpointWaitTakes } = await import('../core/sessions/endpoint-wait.js')
-      const { usageLimitTakes } = await import('../core/sessions/usage-limit-model.js')
-      // The usage-limit wait (sessions/usage-limit-wait.ts) holds the same way, as long as it runs here.
-      const limitWaitHolds = !!sessionId && !!usageLimitWaitHandle && usageLimitTakes(eventData<'session:result'>(event))
-      const endpointWaitHolds = (!!sessionId && endpointWaitTakes(eventData<'session:result'>(event))) || limitWaitHolds
-      // "Prompt is too long" of a session Walnut recovers: it compacts and resends
-      // (sessions/context-full-recovery.ts), so the task keeps its session and its phase.
-      const { contextFullRecovery } = await import('../core/sessions/context-full-recovery.js')
-      const { safeguardSwitchHolds } = await import('../core/sessions/safeguard-switch.js')
-      const contextRecoveryHolds = (!!sessionId && isError
-        && !!contextFullRecovery()?.takes(result, await laneCheckRead(sessionId).catch(() => null)))
-        // Refused twice in a row by the model's safeguards: Walnut moves it to another model and
-        // resends (sessions/safeguard-switch.ts), and raises the card itself only if it cannot.
-        || safeguardSwitchHolds(sessionId, turnGen)
+      // Walnut continues this turn by itself (sessions/turn-run.ts: the endpoint and usage-limit waits,
+      // the auto-continue retry, the safeguard switch, the context recovery): its error card is held,
+      // and a reason that keeps the phase keeps the task's phase and its session too. The retrier
+      // raises the card itself only if it gives up.
+      const { turnEndTakenBy, TURN_RETRY_TRAITS } = await import('../core/sessions/turn-run.js')
+      const takenBy = sessionId ? await turnEndTakenBy({
+        ...eventData<'session:result'>(event), event: 'result', sessionId, isError: !!isError, result, turnGen,
+        record: await laneCheckRead(sessionId).catch(() => null),
+      }) : null
+      const turnKept = !!takenBy && TURN_RETRY_TRAITS[takenBy].keepsPhase
       if (isError) {
-        // A retry-exhaustion result that auto-continue is about to resume is not
-        // a condition for the human: the card sat red for the whole continued
-        // turn and retired only when that turn ended. A result the cap or the
-        // shape excludes still gets its card (the failure is then the human's).
-        const { getSessionAutoContinue } = await import('../core/session-auto-continue.js')
-        const resumed = !!sessionId && !!getSessionAutoContinue()?.willResume(
-          sessionId, result, eventData<'session:result'>(event).retryExhausted, eventData<'session:result'>(event),
-        )
-        if (resumed) {
-          log.session.info('session error card held: auto-continue resumes this turn', { sessionId, taskId })
-        } else if (contextRecoveryHolds) {
-          // "Prompt is too long": Walnut compacts and resends (sessions/context-full-recovery.ts), and
-          // raises the card itself only if it gives up.
-          log.session.info('session error card held: the context recovery or the safeguard switch works on this session', { sessionId, taskId })
-        } else if (endpointWaitHolds) {
-          // The endpoint was never reached, or the usage limit stopped it: Walnut waits and continues
-          // (sessions/endpoint-wait.ts, sessions/usage-limit-wait.ts), and raises the card itself only
-          // if it gives up.
-          log.session.info(limitWaitHolds ? 'session error card held: the usage-limit wait continues this turn' : 'session error card held: the endpoint wait continues this turn', { sessionId, taskId })
+        if (takenBy) {
+          log.session.info('session error card held: Walnut continues this turn', { sessionId, taskId, reason: takenBy })
         } else {
           await publishSessionErrorNotification({
             title: 'Session Error',
@@ -5722,7 +5706,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       if (isError || !taskId) {
         // A foreground error does not mean that background work still running has ended; the error notification is kept on its own.
         // A turn the endpoint wait holds keeps its session and phase: Walnut continues it (endpoint-wait.ts).
-        if (taskId && sessionId && !workContinues && !endpointWaitHolds && !contextRecoveryHolds) {
+        if (taskId && sessionId && !workContinues && !turnKept) {
           try {
             const { clearSessionSlot, clearSession } = await import('../core/task-manager.js')
             const { task } = await clearSessionSlot(taskId, sessionId)
@@ -5769,9 +5753,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // by the timer — the fired turn that does NOT re-arm hands back.
         // An ACP turn the model's safeguards refused ends "clean" (stopReason refusal): while the
         // safeguard switch moves the session, its task keeps its phase (sessions/safeguard-switch.ts).
-        const refusedHeld = safeguardSwitchHolds(sessionId, turnGen)
-        if (refusedHeld) log.session.info('session result phase held: the safeguard switch moves this session', { sessionId, taskId })
-        if (!workContinues && !refusedHeld) {
+        if (turnKept) log.session.info('session result phase held: Walnut continues this turn', { sessionId, taskId, reason: takenBy })
+        if (!workContinues && !turnKept) {
           try {
             const { applySessionPhase } = await import('../core/phase.js')
             // turnGen threads the emitting session's turn generation into the
@@ -5809,15 +5792,21 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // Route session errors to Notifications. Session panels retain their own
     // contextual error/retry state; the general chat must remain conversational.
     if (event.name === 'session:error') {
-      const { error, taskId, sessionId, errorKind, parked, retryAt, startRecovery } = eventData<'session:error'>(event)
+      const { error, taskId, sessionId, errorKind, parked, retryAt } = eventData<'session:error'>(event)
       const isDeliveryFailure = errorKind === 'delivery_failed'
-      // An ACP engine's turn the usage limit stopped: the usage-limit wait continues it at the reset
-      // (sessions/usage-limit-wait.ts), so no card, no phase flip, and the task keeps its session.
-      const { usageLimitTakes } = await import('../core/sessions/usage-limit-model.js')
-      if (!isDeliveryFailure && sessionId && usageLimitWaitHandle && usageLimitTakes(eventData<'session:error'>(event))) {
-        log.web.info('session error held: the usage-limit wait continues this turn', { sessionId, taskId })
-        bus.emit(EventNames.SESSION_ENDED, { sessionId, taskId }, ['web-ui'], { source: 'session-error' })
-        return
+      // Walnut continues this turn by itself (sessions/turn-run.ts): an ACP engine's turn the usage
+      // limit stopped, which the usage-limit wait continues at the reset; a process that ended before
+      // it read its first line, whose line restart recovery sends again (sessions/start-recovery.ts).
+      // No card, no phase flip, and the task keeps its session: the task says it waits on the machine,
+      // and the retrier hands it back itself if it gives up.
+      if (sessionId) {
+        const { turnEndTakenBy, TURN_RETRY_TRAITS } = await import('../core/sessions/turn-run.js')
+        const takenBy = await turnEndTakenBy({ ...eventData<'session:error'>(event), event: 'error', sessionId, isError: true, result: error })
+        if (takenBy && TURN_RETRY_TRAITS[takenBy].keepsPhase) {
+          log.web.info('session error held: Walnut continues this turn', { sessionId, taskId, reason: takenBy })
+          bus.emit(EventNames.SESSION_ENDED, { sessionId, taskId }, ['web-ui'], { source: 'session-error' })
+          return
+        }
       }
       const { inboxOwnsStartFailure } = await import('../core/human-inbox/item-start-notification.js')
       let shouldPublish = !(taskId && !isDeliveryFailure && await inboxOwnsStartFailure(taskId, sessionId).catch(() => false))
@@ -5831,9 +5820,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         const { isLoginFailure } = await import('../core/hosts/host-auth-alert.js')
         if (isLoginFailure(error)) shouldPublish = false
       }
-      // A process that ended before it read its first line: restart recovery sends
-      // that line again (sessions/start-recovery.ts), and the task says it waits on the machine.
-      if (startRecovery) shouldPublish = false
       // Claude Code is not installed (or cannot run) yet: a setup step, not a fault. The
       // session's own row says it with Retry, and the setup banner holds the install, so
       // no card, and no "Fix with agent" for something an agent cannot run without.
@@ -5908,16 +5894,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // Delivery failure: session is intact (batch back in pending) — do NOT clear
       // the task slot, do NOT flip the phase, do NOT announce session:ended.
       if (isDeliveryFailure) return
-      // Clear active session from task on error (not one recovery continues: the task keeps it)
+      // Clear active session from task on error (one Walnut continues returned above: the task keeps it)
       if (taskId && sessionId) {
-        if (!startRecovery) {
-          try {
-            const { clearSessionSlot, clearSession } = await import('../core/task-manager.js')
-            await clearSessionSlot(taskId, sessionId)
-            // Also clear new single-slot field (parallel 1-slot transition)
-            await clearSession(taskId, sessionId).catch(() => {})
-          } catch (err) { log.web.warn('failed to clear session slot', { sessionId, taskId, error: String(err) }) }
-        }
+        try {
+          const { clearSessionSlot, clearSession } = await import('../core/task-manager.js')
+          await clearSessionSlot(taskId, sessionId)
+          // Also clear new single-slot field (parallel 1-slot transition)
+          await clearSession(taskId, sessionId).catch(() => {})
+        } catch (err) { log.web.warn('failed to clear session slot', { sessionId, taskId, error: String(err) }) }
         // Phase sync: session error → WAIT
         try {
           const { applySessionPhase } = await import('../core/phase.js')
@@ -7545,6 +7529,10 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   if (autoContinueHandle) {
     autoContinueHandle.stop()
     autoContinueHandle = null
+  }
+  if (turnRunHandle) {
+    turnRunHandle.stop()
+    turnRunHandle = null
   }
   if (autoRecoverHandle) {
     autoRecoverHandle.stop()

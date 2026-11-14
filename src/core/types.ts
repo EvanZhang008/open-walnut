@@ -2818,6 +2818,26 @@ export interface RoutineStart {
   launch?: RoutineLaunch;
 }
 
+/** Why Walnut continues a session's turn by itself (sessions/turn-run.ts TURN_RETRY_REASONS). */
+export type TurnRetryReason = 'usage_limit' | 'endpoint_wait' | 'restart_recovery' | 'auto_continue' | 'safeguard_switch' | 'context_recovery';
+
+/** One continue Walnut sent for a session's turn. */
+export interface TurnAttempt {
+  reason: TurnRetryReason;
+  /** When it was sent (ISO). */
+  at: string;
+}
+
+/**
+ * A session's current turn, as far as Walnut retried it (sessions/turn-run.ts): the continues it sent
+ * after the message that started the turn. A send by anyone but a retrier starts a new turn and clears it.
+ */
+export interface SessionTurn {
+  /** The first continue of this turn (ISO). */
+  since: string;
+  attempts: TurnAttempt[];
+}
+
 export interface SessionRestartLoss {
   /** ISO time the loss was observed (server boot, host reconnect). */
   at: string;
@@ -3888,6 +3908,8 @@ export interface SessionRecord {
   restartLoss?: SessionRestartLoss;
   /** Its last turn could not reach the model endpoint: Walnut waits for it and continues (sessions/endpoint-wait.ts). No status write touches it. */
   endpointWait?: SessionEndpointWait;
+  /** Walnut's continues of its current turn (sessions/turn-run.ts). No status write touches it. */
+  turn?: SessionTurn;
   /** Its last turn hit the subscription's usage limit: Walnut continues it at the reset (sessions/usage-limit-wait.ts). No status write touches it. */
   usageLimit?: SessionUsageLimit;
   /** Walnut's continue after a usage limit reset ran (sessions/usage-limit-wait.ts); cleared by the next send. */

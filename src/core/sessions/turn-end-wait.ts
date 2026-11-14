@@ -69,13 +69,11 @@ export async function turnHold(
   rec: Pick<SessionRecord, 'claudeSessionId' | 'process_status'> & Partial<Pick<SessionRecord, 'host' | 'engine'>>,
   opts: { queue: boolean; owner?: boolean },
 ): Promise<TurnHold> {
-  // A session the context recovery holds is mid-work even between turns: its last turn ended on
-  // "Prompt is too long", answered nothing, and the recovery compacts and resends (2026-11-06).
-  const { contextFullRecovery } = await import('./context-full-recovery.js');
-  if (contextFullRecovery()?.holds(rec.claudeSessionId)) return 'turn';
-  // So is one the safeguard switch moves to another model: its last turn was refused (safeguard-switch.ts).
-  const { safeguardSwitchHolds } = await import('./safeguard-switch.js');
-  if (safeguardSwitchHolds(rec.claudeSessionId)) return 'turn';
+  // A session a retrier works on is mid-work even between turns (sessions/turn-run.ts midWork): the
+  // context recovery compacts and resends after "Prompt is too long" (2026-11-06), the safeguard
+  // switch moves a refused session to another model. Its last turn answered nothing.
+  const { turnMidWork } = await import('./turn-run.js');
+  if (await turnMidWork(rec)) return 'turn';
   if (opts.queue) {
     const { getStore } = await queueStore();
     const rows = (await getStore().catch(() => null))?.queues[rec.claudeSessionId] ?? [];

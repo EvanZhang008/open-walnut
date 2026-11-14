@@ -501,6 +501,9 @@ interface ApplySessionPhaseOpts {
    *  an ACP turn that ended), so an interrupted wait may come back instead, as
    *  on 'session:result'. Never for a process that died mid-turn. */
   turnEnd?: boolean
+  /** A retrier's own verdict that its retry is over (it gave up, a person stopped it, the user turned
+   *  it off): its hand-back is not held by the retry it ends (sessions/turn-run.ts). */
+  retryOver?: boolean
   /** Internal: the second pass after the task moved under a planned return. */
   noResume?: boolean
 }
@@ -519,36 +522,36 @@ const QUIET_TURN_TRIGGERS: ReadonlySet<PhaseTransitionTrigger> = new Set([
 const AUTO_RECOVER_HANDBACK_SOURCE = 'auto-recover'
 
 /**
- * Is this session's death held by restart recovery? A record that reads stopped
- * or errored is held while recovery holds its loss. A record that reads live is
- * held only for an edge that reports the death itself (`processAlive: false`):
- * a runner the server had attached reports its dead process as a turn end and
- * rewrites the record to a live status. A real turn of a live session is never
- * held, whatever its loss says.
+ * Is this session's death or failed turn end held because Walnut continues its turn (sessions/turn-run.ts:
+ * restart recovery, the endpoint and usage-limit waits, the safeguard switch, the context recovery)? A
+ * record that reads stopped or errored is asked as it is. A record that reads live is asked only for
+ * an edge that reports the death itself (`processAlive: false`): a runner the server had attached
+ * reports its dead process as a turn end and rewrites the record to a live status. A real turn of a
+ * live session is never held, whatever a retrier's state says.
  */
-async function restartRecoveryHolds(sessionId: string, processDied: boolean): Promise<boolean> {
+async function turnRetryHoldsHandBack(sessionId: string, processDied: boolean): Promise<string | null> {
   try {
     const { getSessionByClaudeIdSync } = await import('./session-tracker.js')
     const rec = getSessionByClaudeIdSync(sessionId)
-    if (!rec) return false
-    const loss = rec.restartLoss
-    // A resume already sent is the resumed session's own: its errors hand back as usual.
-    // Not a first line sent again (start_died): a process that dies before reading it
-    // is that attempt's failure, which recovery retries (session-auto-recover.ts).
-    if (loss?.state === 'sent' && loss.cause !== 'start_died') return false
+    if (!rec) return null
     const dead = rec.process_status === 'stopped' || rec.process_status === 'error'
-    if (!dead && !processDied) return false
-    const { getSessionAutoRecover } = await import('./session-auto-recover.js')
-    const recovery = getSessionAutoRecover()
-    if (!recovery) return false
-    if (recovery.holdsHandBack(rec)) return true
+    if (!dead && !processDied) return null
+    const { turnWaitOf, TURN_RETRY_TRAITS } = await import('./sessions/turn-run.js')
+    // Its own turn end: a resume restart recovery already sent is the resumed session's own.
+    const wait = await turnWaitOf(rec, { failed: true, ownEnd: true })
+    if (wait && TURN_RETRY_TRAITS[wait.reason].keepsPhase) return wait.reason
     // A death no one asked for may be its host's own shutdown: held until that
     // shows or the check says it died on its own (sessions/shutdown-death.ts).
+    const loss = rec.restartLoss
+    if (loss?.state === 'sent' && loss.cause !== 'start_died') return null
+    const { getSessionAutoRecover } = await import('./session-auto-recover.js')
+    const recovery = getSessionAutoRecover()
+    if (!recovery) return null
     const { shutdownCheckApplies, shutdownWitness, shutdownCheckMs } = await import('./sessions/shutdown-death.js')
-    if (!shutdownCheckApplies(rec, processDied) || await endedByIdleReap(sessionId)) return false
-    return recovery.holdForShutdownCheck(rec, shutdownWitness, shutdownCheckMs())
+    if (!shutdownCheckApplies(rec, processDied) || await endedByIdleReap(sessionId)) return null
+    return recovery.holdForShutdownCheck(rec, shutdownWitness, shutdownCheckMs()) ? 'restart_recovery' : null
   } catch {
-    return false
+    return null
   }
 }
 
@@ -623,19 +626,21 @@ export async function applySessionPhase(
     dropInterruptedWait(taskId, trigger)
     dropFireTurn(taskId)
   }
-  // A hand-back from a session restart recovery holds (sessions/restart-death.ts):
-  // its process was killed by a restart and the verdict is not in yet, or it
-  // will be resumed. Every death edge goes through here (a session error, a
-  // process-death result, a reconcile), so none can beat the verdict, which
-  // hands the task back itself when it does not resume (2026-11-04: eight
+  // A hand-back from a session Walnut continues by itself (sessions/turn-run.ts): a restart killed its
+  // process and recovery's verdict is not in yet or it will be resumed (sessions/restart-death.ts), a
+  // wait continues it at its endpoint or usage reset, a switch or a compaction resends it. Every death
+  // and failure edge goes through here (a session error, a process-death result, a reconcile), so none
+  // can beat the retrier, which hands the task back itself when it gives up (2026-11-04: eight
   // sessions on a rebooted host were handed back first and never resumed).
-  if (newPhase === 'NEED_ACTION' && opts?.sessionId && source !== AUTO_RECOVER_HANDBACK_SOURCE
-    && (trigger === 'session:error' || trigger === 'session:result' || trigger === 'reconciler')
-    && await restartRecoveryHolds(opts.sessionId, opts.processAlive === false)) {
-    log.session.info('applySessionPhase: skip (restart recovery holds the hand-back)', {
-      taskId, currentPhase: task.phase, trigger, source, sessionId: opts.sessionId,
-    })
-    return { changed: false, oldPhase: task.phase }
+  if (newPhase === 'NEED_ACTION' && opts?.sessionId && source !== AUTO_RECOVER_HANDBACK_SOURCE && !opts.retryOver
+    && (trigger === 'session:error' || trigger === 'session:result' || trigger === 'reconciler')) {
+    const held = await turnRetryHoldsHandBack(opts.sessionId, opts.processAlive === false)
+    if (held) {
+      log.session.info('applySessionPhase: skip (Walnut continues this turn: it holds the hand-back)', {
+        taskId, currentPhase: task.phase, trigger, source, sessionId: opts.sessionId, reason: held,
+      })
+      return { changed: false, oldPhase: task.phase }
+    }
   }
 
   let resume: { waitUntil: string | null } | null = null
@@ -858,7 +863,8 @@ export async function handBackTaskOnSessionEnd(
 
     const { getSessionsForTask, getSessionsForTaskSync } = await import('./session-tracker.js')
     const { sessionRunner } = await import('../providers/claude-code-session.js')
-    const { getSessionAutoRecover } = await import('./session-auto-recover.js')
+    const { turnWaitNow, loadTurnRetriers, TURN_RETRY_TRAITS } = await import('./sessions/turn-run.js')
+    await loadTurnRetriers()
     await getSessionsForTask(taskId)
     const parks = !isMainAgentTask(task) && await endedByIdleReap(sessionId)
       && !(await sessionEndedInError(sessionId)) && await standingRoutineWaits(taskId)
@@ -873,12 +879,12 @@ export async function handBackTaskOnSessionEnd(
         if (!ending || ending.archived) return false
         if (sessions.some((s) => !s.archived && (s.process_status === 'running'
           || sessionRunner.findSessionByClaudeId(s.claudeSessionId)?.processStatus === 'running'))) return false
-        // A restart killed this session's process and recovery has not decided
-        // yet, or will resume it: the task is not waiting on the user. Its
-        // verdict hands it back itself when it does not resume.
-        const recovery = getSessionAutoRecover()
-        if (recovery && (ending.process_status === 'stopped' || ending.process_status === 'error')
-          && recovery.holdsHandBack(ending)) return false
+        // Walnut continues this session's turn (sessions/turn-run.ts): a restart killed its process and
+        // recovery has not decided yet or will resume it, a wait continues it at its reset. The task is
+        // not waiting on the user; the retrier hands it back itself when it gives up.
+        const dead = ending.process_status === 'stopped' || ending.process_status === 'error'
+        const wait = dead ? turnWaitNow(ending, { failed: true }) : null
+        if (wait && TURN_RETRY_TRAITS[wait.reason].keepsPhase) return false
         return true
       },
     })

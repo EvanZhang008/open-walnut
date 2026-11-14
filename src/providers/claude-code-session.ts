@@ -124,7 +124,7 @@ import { LiveActivityTracker, toolTarget, type LiveActivity } from '../core/live
 import { reportLiveActivity } from '../core/sessions/live-activity-registry.js'
 import { noteRateLimitEvent } from '../core/sessions/subscription-limits.js'
 import { parseRateLimitInfo } from '../core/sessions/subscription-limits-model.js'
-import { blockedLimitOf, claudeUsageLimitFacts, usageLimitTakes } from '../core/sessions/usage-limit-model.js'
+import { blockedLimitOf, claudeUsageLimitFacts } from '../core/sessions/usage-limit-model.js'
 import { safeguardStopOfCliLine, safeguardStopOfResult, type SafeguardStopFacts } from '../core/sessions/safeguard-stop.js'
 import { matchesUsageLimitText, parseUsageLimitReset } from './usage-limit-text.js'
 import { processActionsRefused, refuseProcessAction } from '../core/sessions/replica-process-guard.js'
@@ -12556,14 +12556,15 @@ export class SessionRunner {
               }).then(rec => {
                 // The snapshot may reject a stale status write, so clear the link based only on the status that was finally saved.
                 if ((rec.process_status === 'stopped' || rec.process_status === 'error') && rec.taskId) {
-                  // A turn the endpoint wait continues keeps its task's session (sessions/endpoint-wait.ts).
-                  // Nor does a death restart recovery starts again (sessions/start-recovery.ts).
-                  if (event.name === EventNames.SESSION_ERROR && (event.data as { startRecovery?: boolean }).startRecovery) return
-                  import('../core/sessions/endpoint-wait.js').then(({ endpointWaitTakes }) => {
-                    if (rec.process_status === 'error' && result && (endpointWaitTakes(result) || usageLimitTakes(result))) return
-                    return import('../core/task-manager.js').then(({ clearSessionSlot }) => {
-                      clearSessionSlot(rec.taskId!, sessionId).catch(() => {})
-                    })
+                  // A turn Walnut continues by itself keeps its task's session when its reason keeps the
+                  // phase (sessions/turn-run.ts: a wait, a death restart recovery starts again, a switch).
+                  import('../core/sessions/turn-run.js').then(async ({ turnEndKeepsPhase }) => {
+                    const kept = await turnEndKeepsPhase(result
+                      ? { ...result, event: 'result', sessionId, isError: rec.process_status === 'error' || result.isError === true }
+                      : { ...eventData<'session:error'>(event), event: 'error', sessionId, isError: true, result: errorMessage })
+                    if (kept) return
+                    const { clearSessionSlot } = await import('../core/task-manager.js')
+                    clearSessionSlot(rec.taskId!, sessionId).catch(() => {})
                   }).catch(() => {})
                 }
               }).catch(() => {})

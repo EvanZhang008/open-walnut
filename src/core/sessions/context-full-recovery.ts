@@ -27,6 +27,7 @@ import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import { log } from '../../logging/index.js';
 import type { ContextRecoveryState, SessionRecord } from '../types.js';
 import { isContextFullText } from './context-full.js';
+import { noteTurnAttempt, type TurnRetrier } from './turn-run.js';
 import {
   addQuietTurnEndListener, beginQuietTurn, endQuietTurn, isQuietTurn, noteQuietTurnSettled, noteTurnStart,
   quietTurnKind, quietTurnRow, QUIET_ROW_PREFIX, type QuietTurnEnd,
@@ -155,7 +156,11 @@ function defaultDeps(): ContextFullRecoveryDeps {
     getSession: async (id) => (await import('../session-tracker.js')).getSessionByClaudeId(id),
     saveSession: async (id, updates) => (await import('../session-tracker.js'))
       .updateSessionRecordConditionally(id, updates, () => true, { preserveLastActiveAt: true }),
-    send: async (id, text, opts) => (await import('../session-message-queue.js')).sendMessageToSession(id, text, opts),
+    send: async (id, text, opts) => {
+      // The compaction is a quiet turn; the resend is the turn's next attempt.
+      if (opts.source === CONTEXT_RESEND_SOURCE) await noteTurnAttempt(id, 'context_recovery');
+      return (await import('../session-message-queue.js')).sendMessageToSession(id, text, opts);
+    },
     emitNote: (sessionId, taskId, message, variant) => {
       bus.emit(EventNames.SESSION_SYSTEM_EVENT, { sessionId, taskId, variant, message },
         ['main-ai'], { source: CONTEXT_COMPACT_SOURCE, urgency: 'urgent' });
@@ -1025,26 +1030,17 @@ export function contextFullRecovery(): ContextFullRecovery | null {
 }
 
 /**
- * Whether a session's turn end belongs to the recovery: it holds the session (a compaction, a resend,
- * one a restart caught), or the turn ended on a "Prompt is too long" it takes; or to the safeguard
- * switch, which moves a session its model's safeguards refused to another model (safeguard-switch.ts). Whatever acts on a
- * turn's end (closing a run, closing a handed-over task, a hand-back) waits while this says so: such
- * a turn answered nothing (2026-11-06). Guard: tests/core/sessions/context-full-turn-end-guard.test.ts.
+ * The context recovery's row of the session's turn (sessions/turn-run.ts): it holds the session (a
+ * compaction, a resend, one a restart caught), or the turn ended on a "Prompt is too long" it takes.
+ * Such a turn answered nothing (2026-11-06), so whatever acts on a turn's end waits while it holds.
+ * Guard: tests/core/sessions/context-full-turn-end-guard.test.ts.
  */
-export async function contextRecoveryHoldsTurn(sessionId: string | undefined, result?: string | null): Promise<boolean> {
-  if (!sessionId) return false;
-  // A turn the model's safeguards refused, whose session Walnut moves to another model, answered nothing too.
-  const { safeguardSwitchHolds } = await import('./safeguard-switch.js');
-  if (safeguardSwitchHolds(sessionId)) return true;
-  const recovery = instance;
-  if (!recovery) return false;
-  if (recovery.holds(sessionId)) return true;
-  if (!isContextFullText(result)) return false;
-  const { getSessionByClaudeId } = await import('../session-tracker.js');
-  const rec = await getSessionByClaudeId(sessionId).catch(() => null);
-  // The recovery's own listener of this result may have taken the session meanwhile.
-  return recovery.holds(sessionId) || recovery.takes(result, rec);
-}
+export const turnRetrier: TurnRetrier<'context_recovery'> = {
+  reason: 'context_recovery',
+  sources: [CONTEXT_RESEND_SOURCE, CONTEXT_COMPACT_SOURCE],
+  takes: (end) => end.event === 'result' && end.isError && !!instance?.takes(end.result, end.record ?? null),
+  wait: (rec) => instance?.holds(rec.claudeSessionId) ? { reason: 'context_recovery' } : null,
+};
 
 /** Start the recovery on the primary. */
 export function startContextFullRecovery(deps: Partial<ContextFullRecoveryDeps> = {}): { stop: () => void; instance: ContextFullRecovery } {
