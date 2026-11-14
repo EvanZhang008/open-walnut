@@ -8,6 +8,7 @@ const read = (p: string) => fs.readFileSync(path.join(web, p), 'utf8');
 describe('inbox split uses one reader and kept view choices', () => {
   it('layout and density live in view memory, not transient component state', () => {
     expect(read('components/common/NotificationPanel.tsx')).toContain("usePageView<InboxLayout>('inbox', 'layout', 'cards', isInboxLayout)");
+    expect(read('components/common/NotificationPanel.tsx')).toContain('const changeInboxLayout = useLeanCallback(');
     expect(read('components/inbox/InboxPane.tsx')).toContain("usePageView<InboxDensity>('inbox', 'density', 'roomy', isInboxDensity)");
   });
 

@@ -62,6 +62,7 @@ import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { useShiftClickGuard } from './useShiftClickGuard';
 import { InboxPane, isInboxLayout, type InboxLayout } from '@/components/inbox/InboxPane';
 import { usePageView } from '@/utils/view-memory';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { LetterReader } from '@/components/inbox/LetterReader';
 import { ApprovalRows, usePendingApprovals } from '@/components/approvals/ApprovalRow';
 import {
@@ -436,7 +437,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
     setErrorCategory(null);
   }, [inboxSplit]);
 
-  const changeInboxLayout = useCallback((next: InboxLayout) => {
+  const changeInboxLayout = useLeanCallback((next: InboxLayout) => {
     // A choice to leave the right reader is not a request to open a modal over the list.
     if (inboxSplit && next !== 'split') setOpenLetterId(null);
     setInboxLayout(next);
