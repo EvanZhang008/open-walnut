@@ -282,6 +282,13 @@ test.describe('Calendar view', () => {
     await chip.scrollIntoViewIfNeeded()
     await expect(chip).toBeVisible()
     await expect(chip).toContainText('Morning brief')
+    await expect(chip).toHaveAttribute('data-peek', 'off')
+    const before = (await chip.boundingBox())!
+    await chip.hover()
+    await page.waitForTimeout(200)
+    expect((await chip.boundingBox())!.height).toBeCloseTo(before.height, 0)
+    await expect(page.getByTestId('truncation-peek')).toHaveCount(0)
+    await expect(chip).not.toHaveAttribute('title')
     // readonly holiday renders in the all-day row
     await expect(page.locator('.cal-grid-allday .cal-chip[data-item-id="event:ev-e2e-holiday"]')).toBeVisible()
   })

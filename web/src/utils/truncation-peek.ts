@@ -1,26 +1,12 @@
 /**
- * Cut-off text peeks in place (2026-11-12, the user: "I want it to actually make the full
- * line expanded like what we did for side bar"). Hovering text the page cut off (an
- * ellipsis, a line clamp, or a column that clips it) lays one light pill exactly over that
- * text, same font on the same spot, grown out over its neighbours until the whole text
- * shows: one line while it fits the window, wrapped below that. It replaces the native
- * `title` tooltip such rows used: from the first hover on cut-off text, every `title` from the
- * hovered element to the page root is taken off (and put back when the pointer leaves), so no
- * dark box opens on top of it, and a title that only repeats its text is gone from the source
- * (tests/web/truncation-peek-guard.test.ts).
- *
- * A task row (`data-peek-row`) expands in place instead (2026-11-13, the user: "I want the
- * actually the task to expand to a full one"): with the pointer anywhere on it, the row itself
- * grows to show every text it cut off, wrapped inside its own width, and the rows below move
- * down (truncation-peek-row.ts); it closes when the pointer leaves.
- *
- * One capturing document listener serves every surface, so a new truncated row needs
- * nothing to get it. The pill takes no pointer events: the row under it keeps its clicks,
- * and so does the row below that it covers. `data-peek="off"` on an element or an ancestor
- * opts it out. Never on touch, while a button is held, or in an editable field.
+ * Cut-off text has one behavior everywhere: its whole container grows in place, wrapping
+ * inside its own width and pushing the following rows down. Never clone text into a floating
+ * box. Mark a component `data-peek-row` to open all its cut-off texts when hovered anywhere;
+ * unmarked text opens its nearest control or layout container through the same path.
+ * Native titles are lifted during the peek and restored on exit. Fields, touch, drags and
+ * `data-peek="off"` stay untouched. One capturing listener serves every surface.
  */
 import '@/styles/truncation-peek.css';
-import { PEEK_OPEN_MS, PEEK_PAD_X, placePeek, placeVertically } from './truncation-peek-place';
 import { clippingAncestors } from './clip-ancestors';
 import { collapseRow, expandRow, inListBelow, within, type RowMarks } from './truncation-peek-row';
 
@@ -31,7 +17,7 @@ const MAX_DEPTH = 6;
 const SKIP_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT', 'OPTION']);
 
 function optedOut(el: Element): boolean {
-  return !!el.closest('[data-peek="off"], .truncation-peek, [contenteditable="true"], [contenteditable=""]');
+  return !!el.closest('[data-peek="off"], [inert], [aria-hidden="true"], [contenteditable="true"], [contenteditable=""]');
 }
 
 function hasOwnText(el: Element): boolean {
@@ -106,12 +92,10 @@ export function findCutText(target: EventTarget | null): HTMLElement | null {
 
 /** A task row (or any list row) that expands as a whole: the pointer anywhere on it shows every cut-off text in it. */
 export const PEEK_ROW_SELECTOR = '[data-peek-row]';
-/** At most this many texts of one row open at once (a title, its status line, its project). */
-const MAX_ROW_HOSTS = 8;
 /** A row opens once the pointer rests on it this long, so sweeping across rows moves nothing. */
 const ROW_OPEN_MS = 140;
 /** A row's own buttons (its ⋮ menu, Start, Close): over one the row keeps quiet, so the button shows. */
-const CONTROL = 'button, a[href], [role="button"], [role="menuitem"], [role="checkbox"], input, select, textarea, summary';
+const CONTROL = 'button, a[href], [role="button"], [role="menuitem"], [role="option"], [role="treeitem"], [role="tab"], [role="checkbox"], input, select, textarea, summary';
 
 /**
  * The row's own control under `target`, if any. A control that reads as part of the row's text
@@ -130,10 +114,10 @@ function isTruncating(cs: CSSStyleDeclaration): boolean {
 /** Every text in `row` the page cut off, in document order (not those of a row nested in it). */
 export function cutTextsIn(row: Element): HTMLElement[] {
   const out: HTMLElement[] = [];
-  for (const el of Array.from(row.querySelectorAll<HTMLElement>('*'))) {
-    if (out.length >= MAX_ROW_HOSTS) break;
+  for (const el of [row, ...Array.from(row.querySelectorAll<HTMLElement>('*'))]) {
+    if (!(el instanceof HTMLElement)) continue;
     if (out.some((h) => h.contains(el))) continue;
-    if (el.closest(PEEK_ROW_SELECTOR) !== row || optedOut(el) || el.isContentEditable || SKIP_TAGS.has(el.tagName)) continue;
+    if (el.closest(PEEK_ROW_SELECTOR) !== row.closest(PEEK_ROW_SELECTOR) || optedOut(el) || el.isContentEditable || SKIP_TAGS.has(el.tagName)) continue;
     const cs = getComputedStyle(el);
     if (!isTruncating(cs) || cs.visibility === 'hidden' || cs.display === 'none' || el.getClientRects().length === 0) continue;
     if (isCut(el, cs)) out.push(el);
@@ -155,27 +139,21 @@ export function peekTargetOf(target: EventTarget | null): { key: Element; hosts:
       const control = rowControl(target);
       const onOwnButton = control && row.contains(control) && !hosts.some((h) => control.contains(h) || h.contains(control));
       if (!onOwnButton) return { key: row, hosts };
-      // A button of the row with cut text of its own (past the row's first few) still peeks that text.
-      const own = findCutText(target);
-      return own && control.contains(own) ? { key: own, hosts: [own] } : null;
+      return null;
     }
   }
   const host = findCutText(target);
-  return host ? { key: host, hosts: [host] } : null;
+  if (!host) return null;
+  // An unmarked component uses the same in-flow expansion, including standalone controls.
+  const key = host.closest(CONTROL) ?? host.parentElement ?? host;
+  const hosts = cutTextsIn(key);
+  if (!hosts.includes(host)) hosts.push(host);
+  return { key, hosts };
 }
 
-const TYPE_PROPS = ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'lineHeight', 'letterSpacing', 'wordSpacing', 'textTransform', 'color', 'fontVariantNumeric'] as const;
-
-/**
- * What is being peeked: its titles are off from the first hover (a browser reads an element's
- * title for its tooltip right after the pointer event, so taking it off here means no tooltip
- * ever starts), and its pills are up once the hover intent ran out.
- */
+/** The container being opened and the attributes to restore on exit. */
 interface Active {
   key: Element; hosts: HTMLElement[]; titles: Array<[Element, string]>; texts: string[]; timer: ReturnType<typeof setTimeout> | null;
-  /** A task row: it expands in place (truncation-peek-row.ts) instead of showing pills. */
-  row: boolean;
-  pills: HTMLElement[];
   /** What expanding the row marked. */
   marked: RowMarks;
 }
@@ -226,9 +204,6 @@ function linger(state: Active): void {
   wait();
 }
 let observer: MutationObserver | null = null;
-// When the last peek went: one that comes right after it opens at once, as the next row does.
-let lastHiddenAt = 0;
-const REOPEN_AT_ONCE_MS = 250;
 
 /**
  * Takes every native title from the pointer's element to the root, and in the row, off while
@@ -264,110 +239,36 @@ function close(keepPlace: boolean): void {
   active = null;
   if (was.timer) clearTimeout(was.timer);
   observer?.disconnect();
-  for (const p of was.pills) p.remove();
-  if (was.pills.length) lastHiddenAt = Date.now();
   if (keepPlace) noteOwnScroll(collapseRow(was.marked, was.key, pointer));
   else collapseRow(was.marked);
   putTitlesBack(was.titles);
 }
 
-type Box = { left: number; top: number; width: number; height: number };
-
-function overlaps(a: Box, b: Box): boolean {
-  return a.left < b.left + b.width && b.left < a.left + a.width && a.top < b.top + b.height && b.top < a.top + a.height;
-}
-
-/** One pill over one cut-off text. `placed`: the row's pills so far, which it never covers. */
-function renderPill(host: HTMLElement, grow: boolean, placed: Box[]): HTMLElement | null {
-  if (!host.isConnected) return null;
-  const cs = getComputedStyle(host);
-  const hostRect = host.getBoundingClientRect();
-  const text = contentRect(host);
-  const pill = document.createElement('div');
-  pill.className = 'truncation-peek';
-  pill.setAttribute('aria-hidden', 'true');
-  pill.dataset.testid = 'truncation-peek';
-  for (const p of TYPE_PROPS) pill.style[p] = cs[p];
-  for (const n of Array.from(host.childNodes)) pill.appendChild(n.cloneNode(true));
-  pill.querySelectorAll('[id]').forEach((n) => n.removeAttribute('id'));
-  pill.querySelectorAll('[data-testid]').forEach((n) => n.removeAttribute('data-testid'));
-  pill.querySelectorAll('[title]').forEach((n) => n.removeAttribute('title'));
-  // Measured on one line first, out of sight.
-  pill.style.visibility = 'hidden';
-  pill.style.whiteSpace = 'nowrap';
-  pill.style.left = '0px';
-  pill.style.top = '0px';
-  document.body.appendChild(pill);
-  const natural = pill.scrollWidth - PEEK_PAD_X * 2;
-  const clamped = cs.webkitLineClamp && cs.webkitLineClamp !== 'none';
-  const visibleWidth = Math.max(0, Math.min(hostRect.right, clipRight(host)) - text.left);
-  const minWidth = clamped ? host.clientWidth : visibleWidth;
-  const viewport = { width: window.innerWidth, height: window.innerHeight };
-  const box = placePeek({ left: text.left, top: Math.max(hostRect.top + (parseFloat(cs.paddingTop) || 0), text.top) }, clamped ? Math.min(natural, host.clientWidth) : natural, minWidth, viewport);
-  pill.style.whiteSpace = box.width - PEEK_PAD_X * 2 + 0.5 >= natural ? 'nowrap' : 'normal';
-  pill.style.width = `${box.width}px`;
-  let at = placeVertically(box, pill.offsetHeight, viewport.height);
-  // A second text of the row on the same line as the first one's pill goes right after that
-  // pill, or under it when the window has no room there.
-  for (let round = 0; round < placed.length * 2; round++) {
-    const prev = placed.find((p) => overlaps(at, p));
-    if (!prev) break;
-    const right = prev.left + prev.width + 4;
-    at = right + at.width <= viewport.width - 8
-      ? { ...at, left: right }
-      : { ...at, top: prev.top + prev.height + 2 };
-  }
-  // Never past the window's bottom, even if that lays it over an earlier pill of the row.
-  if (at.top + at.height > viewport.height - 8) at = placeVertically(at, at.height, viewport.height);
-  pill.style.left = `${at.left}px`;
-  pill.style.top = `${at.top}px`;
-  // It opens from what the row showed: a clip that widens out from the cut.
-  if (grow) pill.style.setProperty('--peek-from', `${Math.max(0, at.width - (visibleWidth + PEEK_PAD_X))}px`);
-  else pill.dataset.instant = '';
-  pill.style.visibility = '';
-  placed.push(at);
-  return pill;
-}
-
-function renderAll(state: Active, grow: boolean): void {
-  if (state.row) {
-    // The row just left closes in this same step: one change of the list, not two.
-    closeLingering(true);
-    state.marked = expandRow(state.key, state.hosts);
-    return;
-  }
-  const placed: Box[] = [];
-  for (const h of state.hosts) {
-    const pill = renderPill(h, grow, placed);
-    if (pill) state.pills.push(pill);
-  }
-  if (!state.pills.length) close(false);
+function renderAll(state: Active): void {
+  closeLingering(true);
+  state.marked = expandRow(state.key, state.hosts);
 }
 
 /** The row it shows changed under the pointer (renamed, re-sorted, gone): the peek goes with it. */
 function watchActive(): void {
   observer ??= new MutationObserver(() => {
     const a = active;
-    if (a && (!a.key.isConnected || a.hosts.some((h, i) => !h.isConnected || h.isContentEditable || h.textContent !== a.texts[i]))) { close(!!a.row); if (a.row) settleSoon(); }
+    if (a && (!a.key.isConnected || a.hosts.some((h, i) => !h.isConnected || h.isContentEditable || h.textContent !== a.texts[i]))) { close(true); settleSoon(); }
   });
   observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['contenteditable'] });
 }
 
-function activate(key: Element, hosts: HTMLElement[], target: Element, now: boolean): void {
+function activate(key: Element, hosts: HTMLElement[], target: Element): void {
   close(false);
-  // A row placed on its own (a calendar chip over the day's grid) would grow over its
-  // neighbours: it shows pills instead.
-  const row = key !== hosts[0] && key.matches(PEEK_ROW_SELECTOR) && !/^(absolute|fixed)$/.test(getComputedStyle(key).position);
-  const state: Active = { key, hosts, titles: takeTitles(target, key !== hosts[0] ? key : undefined), texts: hosts.map((h) => h.textContent ?? ''), timer: null, row, pills: [], marked: [] };
+  const state: Active = { key, hosts, titles: takeTitles(target, key), texts: hosts.map((h) => h.textContent ?? ''), timer: null, marked: [] };
   active = state;
   watchActive();
-  if (now && !row) { renderAll(state, false); return; }
   state.timer = setTimeout(() => {
     if (active !== state) return;
     state.timer = null;
-    if (key.matches(':hover')) renderAll(state, true);
+    if (key.matches(':hover')) renderAll(state);
     else close(false);
-  }, row ? ROW_OPEN_MS : PEEK_OPEN_MS);
+  }, ROW_OPEN_MS);
 }
 
 let downAt: { x: number; y: number } | null = null;
@@ -375,7 +276,7 @@ let downAt: { x: number; y: number } | null = null;
 function onOver(e: PointerEvent): void {
   if (e.pointerType === 'touch') { hidePeek(); return; }
   // A press in progress: a click lands on the row as it is; a drag closes it (onMove).
-  if (e.buttons !== 0) { if (active && !active.row) close(false); return; }
+  if (e.buttons !== 0) return;
   pointer = { x: e.clientX, y: e.clientY };
   const target = e.target instanceof Element ? e.target : null;
   if (lingering && target) {
@@ -393,12 +294,12 @@ function onOver(e: PointerEvent): void {
   }
   // On the open row, its own buttons included: it stays open (closing it would move the button
   // out from under the pointer and open it again).
-  if (active?.row && target && active.key.contains(target)) {
+  if (active?.marked.length && target && active.key.contains(target)) {
     if (!rowControl(target)) active.titles.push(...takeTitles(target, active.key));
     return;
   }
   // Off an open row: it stays open a moment, and closes in the step the next one opens.
-  if (active?.row && active.marked.length) {
+  if (active?.marked.length) {
     const was = active;
     active = null;
     observer?.disconnect();
@@ -423,8 +324,7 @@ function over(target: Element | null): void {
     return;
   }
   if (!next || !target) { close(false); return; }
-  // A pill already up moves to the next text at once; the first one waits a short intent.
-  activate(next.key, next.hosts, target, !!active?.pills.length || Date.now() - lastHiddenAt < REOPEN_AT_ONCE_MS);
+  activate(next.key, next.hosts, target);
 }
 
 /** After a scroll or a resize moved the page under a still pointer: what it is on now. */
@@ -462,9 +362,9 @@ function onDown(e: PointerEvent): void {
   downAt = { x: e.clientX, y: e.clientY };
   pressed = true;
   dragged = false;
-  // A click on an open row keeps it as it is, so the click lands where it was aimed; a pill goes.
+  // A click on an open row keeps it as it is, so the click lands where it was aimed.
   // A row not open yet stays closed through the press, so the click lands where it was aimed.
-  if (active && (!active.row || active.timer)) close(false);
+  if (active?.timer) close(false);
 }
 
 function onMove(e: PointerEvent): void {

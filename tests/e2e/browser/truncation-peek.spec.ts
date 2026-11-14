@@ -10,7 +10,7 @@ import { openInRow, peekPill } from './truncation-peek-helpers'
  * wrapped in its own width, and the rows below move down; no native title is left above the
  * pointer, so no dark box opens; it closes when the pointer leaves or the list scrolls; a row
  * that fits shows nothing. Text outside a row that a column clips (2026-11-12, "make the full
- * line expanded like what we did for side bar") gets a light pill over it.
+ * line expanded like what we did for side bar") grows its own container too.
  */
 
 const SHOTS = '/tmp/truncation-peek'
@@ -219,28 +219,32 @@ test('moving down a list: one row open at a time, the rows under the pointer sta
   }
 })
 
-test('text a column clips with no ellipsis peeks too, and a title above it is lifted and put back', async ({ page, baseURL }) => {
+test('text a column clips with no ellipsis grows its control in flow, and titles are restored', async ({ page, baseURL }) => {
   await isolateUiPrefs(page)
   await openHome(page, baseURL!)
   await page.mouse.move(1200, 780)
   await page.evaluate(() => {
     const box = document.createElement('div')
     box.id = 'peek-fixture'
-    box.style.cssText = 'position:fixed;left:1100px;top:300px;width:150px;overflow:hidden;white-space:nowrap;z-index:5000;background:var(--bg);font-size:14px'
-    box.innerHTML = '<button type="button" title="Open the long line: Working"><span class="clip-line">A line the column cuts off at its edge, with every word of it still to read</span></button>'
+    box.style.cssText = 'position:fixed;left:1000px;top:300px;width:250px;z-index:5000;background:var(--bg);font-size:14px'
+    box.innerHTML = '<button type="button" title="Open the long line: Working" style="display:block;width:100%;overflow:hidden;white-space:nowrap;text-align:left"><span class="clip-line">A line the column cuts off at its edge, with every word of it still to read</span></button><div id="peek-following">Following row</div>'
     document.body.appendChild(box)
   })
   const line = page.locator('#peek-fixture .clip-line')
-  const at = await centerOf(page, line)
+  const before = (await page.locator('#peek-fixture button').boundingBox())!
+  const following = (await page.locator('#peek-following').boundingBox())!.y
+  const at = await centerOf(page, page.locator('#peek-fixture button'))
   await page.mouse.move(at.x, at.y)
-  await expect(pill(page)).toHaveText('A line the column cuts off at its edge, with every word of it still to read')
-  const box = (await pill(page).boundingBox())!
-  // Near the right edge it moves left to stay in the window.
-  expect(box.x + box.width).toBeLessThanOrEqual(1280 - 7)
-  expect(await titlesAt(page, at.x, at.y)).toEqual([])
-  await page.screenshot({ path: `${SHOTS}/2-clipped-line.png`, clip: { x: 500, y: 240, width: 780, height: 140 } })
-  await page.mouse.move(600, 700)
+  await expect.poll(() => openInRow(line)).toBe(true)
+  const box = (await page.locator('#peek-fixture button').boundingBox())!
+  expect(box.height).toBeGreaterThan(before.height)
+  expect(box.width).toBeCloseTo(before.width, 0)
+  expect((await page.locator('#peek-following').boundingBox())!.y).toBeGreaterThan(following)
   await expect(pill(page)).toHaveCount(0)
+  expect(await titlesAt(page, at.x, at.y)).toEqual([])
+  await page.screenshot({ path: `${SHOTS}/2-clipped-line.png`, clip: { x: 900, y: 240, width: 380, height: 240 } })
+  await page.mouse.move(600, 700)
+  await expect.poll(() => openInRow(line)).toBe(false)
   await expect(page.locator('#peek-fixture button')).toHaveAttribute('title', 'Open the long line: Working')
 })
 

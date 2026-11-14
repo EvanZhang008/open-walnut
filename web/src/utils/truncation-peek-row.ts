@@ -18,6 +18,10 @@ export const OPEN_ATTR = 'data-peek-open';
 export const GROW_ATTR = 'data-peek-grow';
 /** On a text that would not shrink in its flex line: it shrinks to the row's width and wraps. */
 export const FIT_ATTR = 'data-peek-fit';
+/** On the text's own flex line: keep its label/icon beside the first text line. */
+export const LINE_ATTR = 'data-peek-line';
+/** On a flex container inside the row: metadata and capped chips wrap in normal flow. */
+export const FLOW_ATTR = 'data-peek-flow';
 /** On the row while it is open. */
 export const EXPANDED_ATTR = 'data-peek-expanded';
 
@@ -63,12 +67,26 @@ export function expandRow(row: Element, hosts: HTMLElement[]): RowMarks {
   };
   mark(row, EXPANDED_ATTR);
   for (const h of hosts) mark(h, OPEN_ATTR);
+  // Release the layout constraints inside the component before measuring its height.
+  // A capped parent chip otherwise wraps its name into a narrow column inside a 15px line.
+  for (const h of hosts) {
+    for (let el = h; el && el !== row && row.contains(el); el = el.parentElement!) {
+      const cs = getComputedStyle(el);
+      // Only metadata rows wrap. Column bodies must keep stretching to the card width;
+      // a text's direct flex line keeps its icon/label beside the wrapping text.
+      if ((cs.display === 'flex' || cs.display === 'inline-flex') && cs.flexDirection.startsWith('row')) {
+        mark(el, el === h.parentElement ? LINE_ATTR : FLOW_ATTR);
+      }
+      if (cs.maxWidth !== 'none') mark(el, FIT_ATTR);
+    }
+  }
   // Up to the list's scroller: a box that cut a text to its own height grows with it.
   for (const h of hosts) {
     for (let el = h.parentElement; el && el !== document.body; el = el.parentElement) {
       const cs = getComputedStyle(el);
       if (isScroller(cs)) break;
-      if (cs.overflowY !== 'visible' && el.scrollHeight > el.clientHeight + 1) mark(el, GROW_ATTR);
+      // A fixed-height row can overflow visibly too: its siblings still need to move down.
+      if (el.scrollHeight > el.clientHeight + 1) mark(el, GROW_ATTR);
     }
   }
   // Measured once everything is open: a text that keeps its full width in a flex line

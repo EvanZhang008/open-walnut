@@ -1,6 +1,6 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 
-/** The pill web/src/utils/truncation-peek.ts lays over cut-off text while the pointer is on it. */
+/** Old floating clones must never return. Kept as a negative assertion across surfaces. */
 export const peekPill = (page: Page): Locator => page.getByTestId('truncation-peek')
 
 /**
@@ -17,7 +17,7 @@ export const openInRow = (el: Locator): Promise<boolean> => el.evaluate((node) =
  * Cut-off text shows its whole text in place on hover, never in a native tooltip (2026-11-12,
  * the user: "make the full line expanded like what we did for side bar"; 2026-11-13: in a task
  * row, the row itself expands): the element carries no title of its own, hovering it shows
- * `text` (its row grown to hold it, or a pill over a text outside a row), and leaving it ends
+ * `text` inside its own grown container, and leaving it ends
  * that. The element is scrolled into view first and hovered again until it shows: a scroll ends
  * a peek (truncation-peek.ts), and the one Playwright's hover makes can land after it.
  */
@@ -28,7 +28,8 @@ export async function expectPeeksInPlace(el: Locator, text: string, label: strin
   await expect(async () => {
     await page.mouse.move(1, 1)
     await el.hover()
-    await expect.poll(async () => (await openInRow(el)) || ((await peekPill(page).filter({ hasText: text }).count()) > 0), { timeout: 2_000 }).toBe(true)
+    await expect.poll(() => openInRow(el), { timeout: 2_000 }).toBe(true)
+    await expect(peekPill(page)).toHaveCount(0)
   }, `${label}: hovering it shows the whole text in place`).toPass({ timeout: 15_000 })
   await expect(el).toContainText(text)
   await page.mouse.move(1, 1)

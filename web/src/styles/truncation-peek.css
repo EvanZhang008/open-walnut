@@ -1,58 +1,15 @@
-/* Cut-off text peeking in place (utils/truncation-peek.ts): one light pill laid over the
-   text the page cut off, its font copied onto it so the words stay on the same spot, grown
-   out over the neighbours until the whole text shows. The same surface as the side bar's
-   item peek (sidebar-peek.css): the hover tint over an opaque page colour, a soft shadow.
-   It takes no pointer events, so the row under it, and the row below it covers, keep their
-   clicks; it sits above menus and popovers, since rows inside them peek too. */
-
-.truncation-peek {
-  position: fixed;
-  z-index: 100000;
-  box-sizing: border-box;
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
-  background: linear-gradient(var(--accent-subtle), var(--accent-subtle)), var(--bg);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14), 0 0 0 1px var(--border);
-  overflow-wrap: anywhere;
-  text-align: left;
-  pointer-events: none;
-  user-select: none;
-  -webkit-user-select: none;
-  animation: truncation-peek-grow 140ms cubic-bezier(0.2, 0, 0, 1) both;
-}
-.truncation-peek[data-instant] {
-  animation: none;
-}
-/* Copies of the row's own children: their own cut-off rules must not cut them again here. */
-.truncation-peek * {
-  max-width: none !important;
-  overflow: visible !important;
-  white-space: inherit !important;
-  text-overflow: clip !important;
-  -webkit-line-clamp: unset !important;
-}
-
-@keyframes truncation-peek-grow {
-  from { clip-path: inset(0 var(--peek-from, 0px) 0 0 round var(--radius-sm)); }
-  to { clip-path: inset(0 0 0 0 round var(--radius-sm)); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .truncation-peek { animation: none; }
-}
-
-/* A task row expanding in place (utils/truncation-peek-row.ts): its cut-off texts wrap inside
+/* Every truncated component expands in place (utils/truncation-peek-row.ts): its cut-off texts wrap inside
    the row's own width, and a box that held them to one line grows with them, so the row gets
    taller and the rows below move down. Attributes only, so taking them off restores the row. */
 [data-peek-open] {
+  flex: 1 1 0 !important;
   white-space: normal !important;
   overflow: visible !important;
   text-overflow: clip !important;
   -webkit-line-clamp: unset !important;
   line-clamp: none !important;
-  /* Breaks a word only when it alone is wider than the row: it never narrows the text's own
-     minimum width, so a narrow panel still wraps at spaces. */
-  overflow-wrap: break-word;
+  /* Long identifiers also stay inside the component, without widening the list. */
+  overflow-wrap: anywhere;
   height: auto !important;
   max-height: none !important;
   min-width: 0 !important;
@@ -66,6 +23,25 @@
   min-width: 0 !important;
   max-width: 100% !important;
 }
+[data-peek-line] {
+  align-items: flex-start !important;
+  height: auto !important;
+  max-height: none !important;
+}
+[data-peek-flow] {
+  flex-wrap: wrap !important;
+  align-items: flex-start !important;
+  height: auto !important;
+  max-height: none !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+/* Metadata and its team chip both have capped children. They use the row's available width,
+   not a tiny text column, and the title remains a separate line below them. */
+[data-peek-flow] > [data-peek-flow] {
+  flex: 0 1 auto !important;
+  overflow: visible !important;
+}
 [data-peek-grow] {
   height: auto !important;
   max-height: none !important;
@@ -73,4 +49,35 @@
   overflow-x: clip !important;
   overflow-y: visible !important;
   min-width: 0 !important;
+}
+
+/* The clock stays right-aligned even when metadata wraps onto another line. */
+.status-card-meta[data-peek-flow] > .todo-recent-ago {
+  margin-left: auto;
+}
+.status-card-meta[data-peek-flow] > .status-card-meta-fill {
+  display: none;
+}
+/* A team link is one sentence, not a capped two-column button. Let it use a full metadata
+   line, including in the compact panel that normally abbreviates Worker to W. */
+.status-card-meta[data-peek-flow] > .todo-item-subtask-pill[data-peek-line] {
+  display: block !important;
+  flex: 1 0 100% !important;
+  max-width: 100% !important;
+  text-align: left;
+  white-space: normal !important;
+}
+.status-card-meta[data-peek-flow] .todo-item-subtask-pill > .task-pill-long {
+  display: inline !important;
+  margin-right: 4px;
+}
+.status-card-meta[data-peek-flow] .todo-item-subtask-pill::after {
+  display: none !important;
+}
+.status-card-meta[data-peek-flow] .task-worker-parent[data-peek-open] {
+  display: inline;
+  text-align: left;
+}
+[data-peek-expanded].status-card-two-line {
+  align-items: flex-start !important;
 }

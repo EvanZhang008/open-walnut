@@ -69,6 +69,7 @@ export const LetterEnvelopeRow = memo(function LetterEnvelopeRow({
     <div
       className={`hib-row${letter.read ? '' : ' hib-unread'}${letter.pinned ? ' hib-pinned' : ''}`}
       data-letter-id={letter.id}
+      data-peek-row=""
       onClick={onOpen}
       onContextMenu={(e) => { if (!(e.target as HTMLElement).closest('.hib-card-content')) menu.open(e, undefined); }}
     >
