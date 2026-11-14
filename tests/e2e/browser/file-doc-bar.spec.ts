@@ -22,7 +22,7 @@
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { mkdir } from 'node:fs/promises'
-import { isolateUiPrefs } from './todo-panel-helpers'
+import { goToSessionFolder, isolateUiPrefs } from './todo-panel-helpers'
 import { docBarSettled, pressBarTool as pressTool, type BarTool } from './doc-bar-helpers'
 import { withCssColor } from './css-color'
 
@@ -71,6 +71,9 @@ async function openFilesPanel(page: Page): Promise<Locator> {
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 15_000 })
+  // Files opens on the home folder unless a path is given (3b4b4403a); the
+  // scratch files live in the session's folder, so go there as a user would.
+  await goToSessionFolder(explorer)
   return explorer
 }
 
@@ -80,10 +83,11 @@ async function filesPanelAgain(page: Page): Promise<Locator> {
   const restored = page.locator(`.session-panel[data-session-id="${SESSION_ID}"] .session-file-explorer`)
   try {
     await restored.waitFor({ state: 'visible', timeout: 5_000 })
-    return restored
   } catch {
     return openFilesPanel(page)
   }
+  await goToSessionFolder(restored)
+  return restored
 }
 
 function nodeByName(explorer: Locator, name: string) {

@@ -10,6 +10,7 @@
  * file-doc-bar.spec.ts.
  */
 import { test, expect, type Page } from '@playwright/test'
+import { goToSessionFolder } from './todo-panel-helpers'
 
 test.use({ viewport: { width: 1280, height: 800 }, video: 'on' })
 
@@ -64,6 +65,8 @@ test('file page walk-through', async ({ page, baseURL }) => {
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 15_000 })
+  // Files opens on the home folder unless a path is given; the note is in the session's folder.
+  await goToSessionFolder(explorer)
   await pause(page, 1500)
 
   await explorer.locator('.sfe-name', { hasText: name }).first().click()
