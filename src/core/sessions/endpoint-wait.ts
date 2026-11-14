@@ -36,7 +36,7 @@ import { endpointWaitEnabled, endpointGaveUpWords } from './endpoint-unreachable
 export { endpointWaitEnabled, endpointGaveUpWords }
 import { AUTO_CONTINUE_SOURCE } from '../session-auto-continue.js'
 import { isQuietTurn } from './quiet-turn.js'
-import { noteTurnAttempt, type TurnRetrier } from './turn-run.js'
+import { noteTurnAttempt, turnRetryEnded, type TurnRetrier } from './turn-run.js'
 
 export type { SessionEndpointWait }
 
@@ -257,6 +257,8 @@ export class EndpointWaiter {
       if (rec.endpointWait.state === 'gave_up' && why === 'other-error') return
       await this.deps.patchWait(sid, () => null)
       log.session.info('endpoint wait: closed', { sessionId: sid, taskId: rec.taskId, why })
+      // A hand-back the wait held goes ahead now, unless a new turn took the session over (turn-run.ts).
+      turnRetryEnded(sid, 'endpoint_wait')
     } catch (err) {
       // The wait must not stay open with nothing behind it: try the close again (never a continue).
       log.session.warn('endpoint wait: close failed, trying again', { sessionId: sid, why, error: err instanceof Error ? err.message : String(err) })

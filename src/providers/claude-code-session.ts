@@ -12560,8 +12560,8 @@ export class SessionRunner {
                   // phase (sessions/turn-run.ts: a wait, a death restart recovery starts again, a switch).
                   import('../core/sessions/turn-run.js').then(async ({ turnEndKeepsPhase }) => {
                     const kept = await turnEndKeepsPhase(result
-                      ? { ...result, event: 'result', sessionId, isError: rec.process_status === 'error' || result.isError === true }
-                      : { ...eventData<'session:error'>(event), event: 'error', sessionId, isError: true, result: errorMessage })
+                      ? { ...result, event: 'result', sessionId, isError: rec.process_status === 'error' || result.isError === true, record: rec }
+                      : { ...eventData<'session:error'>(event), event: 'error', sessionId, isError: true, result: errorMessage, record: rec })
                     if (kept) return
                     const { clearSessionSlot } = await import('../core/task-manager.js')
                     clearSessionSlot(rec.taskId!, sessionId).catch(() => {})

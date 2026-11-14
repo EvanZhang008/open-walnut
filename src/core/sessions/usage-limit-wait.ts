@@ -30,7 +30,7 @@ import { log } from '../../logging/index.js'
 import { AUTO_CONTINUE_SOURCE } from '../session-auto-continue.js'
 import { frameAsWalnut } from './send-frame.js'
 import { isQuietTurn } from './quiet-turn.js'
-import { noteTurnAttempt, type TurnRetrier } from './turn-run.js'
+import { noteTurnAttempt, turnRetryEnded, type TurnRetrier } from './turn-run.js'
 import { isPersonSource } from './send-sent-by.js'
 import { engineCaps, resolveEngine } from '../agents/engine-registry.js'
 import { matchesUsageLimitText, parseUsageLimitReset } from '../../providers/usage-limit-text.js'
@@ -320,6 +320,8 @@ export class UsageLimitWaiter {
       }
       await this.deps.patchWait(sid, () => null)
       log.session.info('usage-limit wait: closed', { sessionId: sid, taskId: rec.taskId, why })
+      // A hand-back the wait held goes ahead now, unless a new turn took the session over (turn-run.ts).
+      turnRetryEnded(sid, 'usage_limit')
       if (why === 'person-stopped' && held && rec.process_status !== 'running') {
         await this.deps.release(rec, why).catch((err) => {
           log.session.warn('usage-limit wait: release failed', { sessionId: sid, error: err instanceof Error ? err.message : String(err) })

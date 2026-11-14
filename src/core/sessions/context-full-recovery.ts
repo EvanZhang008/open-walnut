@@ -27,7 +27,7 @@ import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import { log } from '../../logging/index.js';
 import type { ContextRecoveryState, SessionRecord } from '../types.js';
 import { isContextFullText } from './context-full.js';
-import { noteTurnAttempt, type TurnRetrier } from './turn-run.js';
+import { noteTurnAttempt, turnRetryEnded, type TurnRetrier } from './turn-run.js';
 import {
   addQuietTurnEndListener, beginQuietTurn, endQuietTurn, isQuietTurn, noteQuietTurnSettled, noteTurnStart,
   quietTurnKind, quietTurnRow, QUIET_ROW_PREFIX, type QuietTurnEnd,
@@ -815,6 +815,8 @@ export class ContextFullRecovery {
   private release(sessionId: string, run: Run): void {
     if (this.running.get(sessionId) !== run) return;
     this.running.delete(sessionId);
+    // A hand-back it held goes ahead, unless its resend's turn took the session over (turn-run.ts).
+    turnRetryEnded(sessionId, 'context_recovery');
     if (run.retryAfter && !this.stopped) {
       run.retryAfter = false;
       void this.recoverNow(sessionId).catch((err) => log.session.warn('context recovery: click not run', {

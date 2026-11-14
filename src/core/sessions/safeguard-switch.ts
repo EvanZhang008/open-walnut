@@ -28,7 +28,7 @@ import { log } from '../../logging/index.js'
 import type { SafeguardSwitchState, SessionRecord } from '../types.js'
 import { isQuietTurn } from './quiet-turn.js'
 import { reportHeldTurnFailed } from './context-full-recovery.js'
-import { noteTurnAttempt, type TurnRetrier } from './turn-run.js'
+import { noteTurnAttempt, turnRetryEnded, type TurnRetrier } from './turn-run.js'
 import { ANTHROPIC_DEFAULT_WINDOW, resolveContextWindow } from '../../providers/context-window.js'
 import {
   FALLBACK_FAMILIES, modelFamilyOf, modelName, pickFallbackModel, REFUSALS_BEFORE_SWITCH, resendNoteText, rowFamily, switchedLine,
@@ -371,6 +371,7 @@ export class SafeguardSwitch {
   private release(sessionId: string, run: Run | undefined, taskId: string | undefined, reason: string): void {
     if (!run || this.running.get(sessionId) === run) this.running.delete(sessionId)
     this.heldTurn.delete(sessionId)
+    turnRetryEnded(sessionId, 'safeguard_switch')
     reportHeldTurnFailed({ sessionId, ...(taskId ? { taskId } : {}), reason })
   }
 

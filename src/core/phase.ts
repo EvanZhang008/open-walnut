@@ -97,7 +97,7 @@
  */
 
 import { log } from '../logging/index.js'
-import type { TaskPhase, TaskStatus, Task } from './types.js';
+import type { TaskPhase, TaskStatus, Task, TurnRetryReason } from './types.js';
 import { isQuietTurn } from './sessions/quiet-turn.js'
 import { isMainAgentTask } from './org/main-stays-active.js'
 import {
@@ -502,8 +502,9 @@ interface ApplySessionPhaseOpts {
    *  on 'session:result'. Never for a process that died mid-turn. */
   turnEnd?: boolean
   /** A retrier's own verdict that its retry is over (it gave up, a person stopped it, the user turned
-   *  it off): its hand-back is not held by the retry it ends (sessions/turn-run.ts). */
-  retryOver?: boolean
+   *  it off): its hand-back is not held by the retry it ends (sessions/turn-run.ts). true: by none;
+   *  a reason: by that one only (a held hand-back replayed when that retrier let go). */
+  retryOver?: boolean | TurnRetryReason
   /** Internal: the second pass after the task moved under a planned return. */
   noResume?: boolean
 }
@@ -529,17 +530,20 @@ const AUTO_RECOVER_HANDBACK_SOURCE = 'auto-recover'
  * reports its dead process as a turn end and rewrites the record to a live status. A real turn of a
  * live session is never held, whatever a retrier's state says.
  */
-async function turnRetryHoldsHandBack(sessionId: string, processDied: boolean): Promise<string | null> {
+async function turnRetryHoldsHandBack(sessionId: string, processDied: boolean, over?: TurnRetryReason): Promise<TurnRetryReason | null> {
   try {
     const { getSessionByClaudeIdSync } = await import('./session-tracker.js')
     const rec = getSessionByClaudeIdSync(sessionId)
     if (!rec) return null
     const dead = rec.process_status === 'stopped' || rec.process_status === 'error'
     if (!dead && !processDied) return null
-    const { turnWaitOf, TURN_RETRY_TRAITS } = await import('./sessions/turn-run.js')
-    // Its own turn end: a resume restart recovery already sent is the resumed session's own.
-    const wait = await turnWaitOf(rec, { failed: true, ownEnd: true })
-    if (wait && TURN_RETRY_TRAITS[wait.reason].keepsPhase) return wait.reason
+    const { turnRunOf, TURN_RETRY_TRAITS } = await import('./sessions/turn-run.js')
+    // Its own turn end: a resume restart recovery already sent is the resumed session's own. A
+    // retrier whose retry is over (`over`) holds it no more, even in its own opening window.
+    const wait = (await turnRunOf(rec, { failed: true, ownEnd: true })).waits
+      .find((w) => w.reason !== over && TURN_RETRY_TRAITS[w.reason].keepsPhase)
+    if (wait) return wait.reason
+    if (over === 'restart_recovery') return null
     // A death no one asked for may be its host's own shutdown: held until that
     // shows or the check says it died on its own (sessions/shutdown-death.ts).
     const loss = rec.restartLoss
@@ -632,13 +636,17 @@ export async function applySessionPhase(
   // and failure edge goes through here (a session error, a process-death result, a reconcile), so none
   // can beat the retrier, which hands the task back itself when it gives up (2026-11-04: eight
   // sessions on a rebooted host were handed back first and never resumed).
-  if (newPhase === 'NEED_ACTION' && opts?.sessionId && source !== AUTO_RECOVER_HANDBACK_SOURCE && !opts.retryOver
+  if (newPhase === 'NEED_ACTION' && opts?.sessionId && source !== AUTO_RECOVER_HANDBACK_SOURCE && opts.retryOver !== true
     && (trigger === 'session:error' || trigger === 'session:result' || trigger === 'reconciler')) {
-    const held = await turnRetryHoldsHandBack(opts.sessionId, opts.processAlive === false)
+    const sid = opts.sessionId
+    const held = await turnRetryHoldsHandBack(sid, opts.processAlive === false, opts.retryOver || undefined)
     if (held) {
       log.session.info('applySessionPhase: skip (Walnut continues this turn: it holds the hand-back)', {
-        taskId, currentPhase: task.phase, trigger, source, sessionId: opts.sessionId, reason: held,
+        taskId, currentPhase: task.phase, trigger, source, sessionId: sid, reason: held,
       })
+      // Kept until the retrier lets go: then it goes ahead, unless the session moved on (turn-run.ts).
+      const { noteHeldHandBack } = await import('./sessions/turn-run.js')
+      noteHeldHandBack(sid, held, (over) => applySessionPhase(taskId, trigger, source, { ...opts, ...(over ? { retryOver: over } : {}) }))
       return { changed: false, oldPhase: task.phase }
     }
   }
@@ -863,8 +871,6 @@ export async function handBackTaskOnSessionEnd(
 
     const { getSessionsForTask, getSessionsForTaskSync } = await import('./session-tracker.js')
     const { sessionRunner } = await import('../providers/claude-code-session.js')
-    const { turnWaitNow, loadTurnRetriers, TURN_RETRY_TRAITS } = await import('./sessions/turn-run.js')
-    await loadTurnRetriers()
     await getSessionsForTask(taskId)
     const parks = !isMainAgentTask(task) && await endedByIdleReap(sessionId)
       && !(await sessionEndedInError(sessionId)) && await standingRoutineWaits(taskId)
@@ -879,12 +885,8 @@ export async function handBackTaskOnSessionEnd(
         if (!ending || ending.archived) return false
         if (sessions.some((s) => !s.archived && (s.process_status === 'running'
           || sessionRunner.findSessionByClaudeId(s.claudeSessionId)?.processStatus === 'running'))) return false
-        // Walnut continues this session's turn (sessions/turn-run.ts): a restart killed its process and
-        // recovery has not decided yet or will resume it, a wait continues it at its reset. The task is
-        // not waiting on the user; the retrier hands it back itself when it gives up.
-        const dead = ending.process_status === 'stopped' || ending.process_status === 'error'
-        const wait = dead ? turnWaitNow(ending, { failed: true }) : null
-        if (wait && TURN_RETRY_TRAITS[wait.reason].keepsPhase) return false
+        // A session Walnut continues by itself (sessions/turn-run.ts) was held by applySessionPhase's
+        // gate before this write, which keeps the hand-back until the retrier lets go.
         return true
       },
     })

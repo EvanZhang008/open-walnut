@@ -221,6 +221,11 @@ export async function turnWaitOf(rec: SessionRecord | null | undefined, q: TurnQ
  *  keeps the phase the task keeps its phase and its session (web/server.ts, the runner). */
 export async function turnEndTakenBy(end: TurnEndFacts): Promise<TurnRetryReason | null> {
   await loadTurnRetriers()
+  // A row may need the session's record (the context recovery: is it recoverable?): read it when the caller has none.
+  if (end.record === undefined) {
+    const { getSessionByClaudeId } = await import('../session-tracker.js')
+    end = { ...end, record: await getSessionByClaudeId(end.sessionId).catch(() => null) }
+  }
   for (const row of each()) {
     if (safe(row.reason, () => row.takes(end), false)) return row.reason
   }
@@ -293,43 +298,133 @@ export async function turnEndAnsweredNothing(sessionId: string | undefined, end?
   return null
 }
 
+// ── Held hand-backs ─────────────────────────────────────────────────────────────
+
+/**
+ * A hand-back the phase held because Walnut continues the turn (phase.ts) must go ahead once the
+ * retrier lets go without a new turn taking over: a person stopped the session during a wait, the
+ * wait closed on another error, an opening wait was never written. Each held hand-back is kept here
+ * with the session's status when it was held; the retrier that closes its wait says so
+ * (turnRetryEnded), and a recheck runs on a clock for any that does not. Replayed only while the
+ * session still reads that same stopped or failed status: a new turn hands back for itself.
+ */
+interface HeldHandBack {
+  reason: TurnRetryReason
+  stamp: string
+  replay: (over: TurnRetryReason | undefined) => Promise<unknown>
+  tries: number
+  since: number
+  timer?: ReturnType<typeof setTimeout>
+}
+const heldHandBacks = new Map<string, HeldHandBack>()
+/** Rechecks of a held hand-back, from when it was held (the last repeats), and when to stop. */
+export const HELD_HANDBACK_RECHECK_MS: readonly number[] = [90_000, 5 * 60_000, 15 * 60_000]
+let recheckMs: readonly number[] = HELD_HANDBACK_RECHECK_MS
+export const HELD_HANDBACK_MAX_MS = 24 * 60 * 60_000
+
+function statusStamp(rec: SessionRecord | null | undefined): string | null {
+  // Any status write (a new turn, a resume, a stop) moves the revision or the time.
+  if (!rec) return null
+  return `${rec.process_status}|${rec.statusRevision ?? ''}|${rec.statusUpdatedAt ?? rec.last_status_change ?? ''}`
+}
+
+/** The phase held this session's hand-back for `reason` (phase.ts); `replay` applies it again. */
+export function noteHeldHandBack(sessionId: string, reason: TurnRetryReason, replay: HeldHandBack['replay']): void {
+  let rec: SessionRecord | null = null
+  try { rec = recordNow?.(sessionId) ?? null } catch { /* unreadable: no stamp */ }
+  const stamp = statusStamp(rec)
+  if (!stamp) return
+  const prior = heldHandBacks.get(sessionId)
+  if (prior?.timer) clearTimeout(prior.timer)
+  const same = prior && prior.stamp === stamp
+  const h: HeldHandBack = { reason, stamp, replay, tries: same ? prior.tries : 0, since: same ? prior.since : Date.now() }
+  if (Date.now() - h.since >= HELD_HANDBACK_MAX_MS) { heldHandBacks.delete(sessionId); return }
+  const wait = recheckMs[Math.min(h.tries, recheckMs.length - 1)]
+  h.timer = setTimeout(() => { h.tries++; void releaseHeldHandBack(sessionId, undefined, h) }, wait)
+  h.timer.unref?.()
+  heldHandBacks.set(sessionId, h)
+}
+
+/** A retrier closed its wait on this session (no continue of its own follows): a hand-back it held goes ahead. */
+export function turnRetryEnded(sessionId: string, reason: TurnRetryReason): void {
+  void releaseHeldHandBack(sessionId, reason)
+}
+
+async function releaseHeldHandBack(sessionId: string, over: TurnRetryReason | undefined, only?: HeldHandBack): Promise<void> {
+  const h = heldHandBacks.get(sessionId)
+  if (!h || (only && h !== only)) return
+  if (h.timer) clearTimeout(h.timer)
+  heldHandBacks.delete(sessionId)
+  try {
+    const { getSessionByClaudeId } = await import('../session-tracker.js')
+    // A session that moved on (a new turn ran, a person resumed it) hands back for itself.
+    if (statusStamp(await getSessionByClaudeId(sessionId).catch(() => null)) !== h.stamp) return
+    // The retrier that ended passes its own reason, so its own opening window cannot hold it again;
+    // another one still holding holds it again (and the phase keeps it here once more).
+    log.session.info('turn run: a held hand-back goes ahead', { sessionId, reason: h.reason, ended: over ?? null, tries: h.tries })
+    await h.replay(over === h.reason ? over : undefined)
+  } catch (err) {
+    log.session.warn('turn run: a held hand-back failed', { sessionId, error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
 // ── Attempts ────────────────────────────────────────────────────────────────────
 
 /** At most this many attempts are kept on a record (a turn retried more is already a give-up). */
 export const TURN_ATTEMPTS_KEPT = 20
 
+/** Each session's turn writes, in the order they were asked for (an attempt and a new turn race otherwise). */
+const turnWrites = new Map<string, Promise<void>>()
+function inOrder(sessionId: string, fn: () => Promise<void>): Promise<void> {
+  const next = (turnWrites.get(sessionId) ?? Promise.resolve()).then(fn, fn)
+  turnWrites.set(sessionId, next)
+  void next.finally(() => { if (turnWrites.get(sessionId) === next) turnWrites.delete(sessionId) })
+  return next
+}
+
+/** Write the record's turn as `fn` makes it from the current one (a compare-and-set; null removes it). */
+async function patchTurn(sessionId: string, fn: (cur: SessionTurn | undefined) => SessionTurn | null): Promise<void> {
+  const { getSessionByClaudeId, updateSessionRecordConditionally } = await import('../session-tracker.js')
+  for (let i = 0; i < 4; i++) {
+    const cur = await getSessionByClaudeId(sessionId)
+    if (!cur) return
+    const seen = JSON.stringify(cur.turn ?? null)
+    const next = fn(cur.turn) ?? undefined
+    if (JSON.stringify(next ?? null) === seen) return
+    const written = await updateSessionRecordConditionally(sessionId, { turn: next } as Partial<SessionRecord>,
+      (current) => JSON.stringify(current.turn ?? null) === seen, { preserveLastActiveAt: true })
+    if (written) return
+  }
+  throw new Error('the turn write kept racing')
+}
+
 /**
  * A retrier is about to send its continue of this session's turn: append the attempt. Never throws
  * (an attempt that could not be written is still sent: the record is for reading, not a gate).
  */
-export async function noteTurnAttempt(sessionId: string, reason: TurnRetryReason, at: string = new Date().toISOString()): Promise<void> {
-  try {
-    const { updateSessionRecordConditionally } = await import('../session-tracker.js')
-    for (let i = 0; i < 4; i++) {
-      const { getSessionByClaudeId } = await import('../session-tracker.js')
-      const cur = await getSessionByClaudeId(sessionId)
-      if (!cur) return
-      const seen = JSON.stringify(cur.turn ?? null)
-      const turn: SessionTurn = { since: cur.turn?.since ?? at, attempts: [...(cur.turn?.attempts ?? []), { reason, at }].slice(-TURN_ATTEMPTS_KEPT) }
-      const written = await updateSessionRecordConditionally(sessionId, { turn } as Partial<SessionRecord>,
-        (current) => JSON.stringify(current.turn ?? null) === seen, { preserveLastActiveAt: true })
-      if (written) return
-    }
-  } catch (err) {
+export function noteTurnAttempt(sessionId: string, reason: TurnRetryReason, at: string = new Date().toISOString()): Promise<void> {
+  return inOrder(sessionId, () => patchTurn(sessionId, (cur) => ({
+    since: cur?.since ?? at, attempts: [...(cur?.attempts ?? []), { reason, at }].slice(-TURN_ATTEMPTS_KEPT),
+  })).catch((err) => {
     log.session.warn('turn run: an attempt could not be noted', { sessionId, reason, error: err instanceof Error ? err.message : String(err) })
-  }
+  }))
 }
 
-/** A send from anyone but a retrier starts a new turn: the old turn's attempts go. */
-async function newTurn(sessionId: string): Promise<void> {
-  try {
-    const { getSessionByClaudeIdSync, updateSessionRecordConditionally } = await import('../session-tracker.js')
+/**
+ * A send from anyone but a retrier, at `atMs`, starts a new turn: the attempts made before it go. Only
+ * those: an attempt noted after the send (a late second event of the same send) stays.
+ */
+function newTurn(sessionId: string, atMs: number): Promise<void> {
+  return inOrder(sessionId, async () => {
+    const { getSessionByClaudeIdSync } = await import('../session-tracker.js')
     if (!getSessionByClaudeIdSync(sessionId)?.turn) return
-    await updateSessionRecordConditionally(sessionId, { turn: undefined } as Partial<SessionRecord>,
-      (current) => !!current.turn, { preserveLastActiveAt: true })
-  } catch (err) {
+    await patchTurn(sessionId, (cur) => {
+      const kept = (cur?.attempts ?? []).filter((a) => !(Date.parse(a.at) <= atMs))
+      return kept.length ? { since: kept[0].at, attempts: kept } : null
+    })
+  }).catch((err) => {
     log.session.warn('turn run: a new turn could not be noted', { sessionId, error: err instanceof Error ? err.message : String(err) })
-  }
+  })
 }
 
 /** The send sources of every row (a send from one of them is an attempt). */
@@ -350,7 +445,7 @@ export async function startTurnRun(): Promise<{ stop: () => void }> {
     if (event.name !== EventNames.SESSION_SEND && event.name !== EventNames.SESSION_MESSAGE_QUEUED) return
     const sid = (event.data as { sessionId?: string }).sessionId
     if (!sid || (event.source && turnAttemptSources().has(event.source))) return
-    void newTurn(sid)
+    void newTurn(sid, Date.now())
   }
   bus.subscribe(name, handler, { global: true, interest: ['session:send', 'session:message-queued'] })
   const stop = () => { bus.unsubscribe(name); if (stopListening === stop) stopListening = null }
@@ -365,8 +460,13 @@ export async function __setTurnRetrierForTesting<R extends TurnRetryReason>(reas
   else { delete (rows as Record<string, unknown>)[reason]; loading = null; await loadTurnRetriers() }
 }
 
+/** Tests: a shorter recheck clock for held hand-backs (null: the real one). */
+export function __setHeldHandBackRecheckForTesting(ms: readonly number[] | null): void { recheckMs = ms ?? HELD_HANDBACK_RECHECK_MS }
+
 /** Tests: forget the loaded rows. */
 export function __resetTurnRunForTesting(): void {
+  for (const h of heldHandBacks.values()) if (h.timer) clearTimeout(h.timer)
+  heldHandBacks.clear()
   for (const k of Object.keys(rows)) delete (rows as Record<string, unknown>)[k]
   loading = null
   stopListening?.()

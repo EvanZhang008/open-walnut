@@ -199,11 +199,11 @@ describe('the attempts of a turn', () => {
     await createSessionRecord('sess-attempts', '', 'demo');
     const handle = await startTurnRun();
     try {
-      await noteTurnAttempt('sess-attempts', 'endpoint_wait', '2026-11-14T08:00:00.000Z');
-      await noteTurnAttempt('sess-attempts', 'auto_continue', '2026-11-14T08:05:00.000Z');
+      await noteTurnAttempt('sess-attempts', 'endpoint_wait', '2026-01-14T08:00:00.000Z');
+      await noteTurnAttempt('sess-attempts', 'auto_continue', '2026-01-14T08:05:00.000Z');
       const after = await getSessionByClaudeId('sess-attempts');
-      expect(after?.turn).toEqual({ since: '2026-11-14T08:00:00.000Z', attempts: [
-        { reason: 'endpoint_wait', at: '2026-11-14T08:00:00.000Z' }, { reason: 'auto_continue', at: '2026-11-14T08:05:00.000Z' },
+      expect(after?.turn).toEqual({ since: '2026-01-14T08:00:00.000Z', attempts: [
+        { reason: 'endpoint_wait', at: '2026-01-14T08:00:00.000Z' }, { reason: 'auto_continue', at: '2026-01-14T08:05:00.000Z' },
       ] });
       expect((await turnRunOf(after!)).attempts).toHaveLength(2);
 
