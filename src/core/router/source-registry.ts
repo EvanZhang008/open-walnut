@@ -33,6 +33,12 @@ export class RouterSourceError extends Error {
 export interface RouterSourceAdapter {
   resolve(source: RouterSource): Promise<RouterItem>;
   read?(source: RouterSource): Promise<RouterItemContent>;
+  /**
+   * The delivery's read: as `read`, but a body the cache does not hold yet is fetched first (read
+   * only, never marking the item read), and the copy that gained it is accepted when nothing else of
+   * the delivery changed. The owner gets the original, not only its reference.
+   */
+  readForDelivery?(source: RouterSource): Promise<RouterItemContent>;
   /** Cache-only batch check: the given sources that are still the cached current delivery. */
   currentSources?(sources: readonly RouterSource[]): Promise<RouterSource[]>;
   /**
@@ -65,11 +71,12 @@ export function assertRouterSource(kind: unknown, adapter: unknown): asserts ada
   }
   if (!adapter || typeof adapter !== 'object') throw new TypeError('A routing source adapter must be an object with resolve() and an optional read().');
   for (const key of Object.keys(adapter)) {
-    if (key !== 'resolve' && key !== 'read' && key !== 'currentSources' && key !== 'relocate' && key !== 'noise') {
-      throw new TypeError(`A routing source adapter takes only resolve(), read(), currentSources(), relocate() and noise(), not "${key}".`);
+    if (key !== 'resolve' && key !== 'read' && key !== 'readForDelivery' && key !== 'currentSources' && key !== 'relocate' && key !== 'noise') {
+      throw new TypeError(`A routing source adapter takes only resolve(), read(), readForDelivery(), currentSources(), relocate() and noise(), not "${key}".`);
     }
   }
-  const { resolve, read, currentSources, relocate, noise } = adapter as Record<string, unknown>;
+  const { resolve, read, currentSources, relocate, noise, readForDelivery } = adapter as Record<string, unknown>;
+  if (readForDelivery !== undefined && typeof readForDelivery !== 'function') throw new TypeError('A routing source adapter\'s readForDelivery must be a function when given.');
   if (relocate !== undefined && typeof relocate !== 'function') throw new TypeError('A routing source adapter\'s relocate must be a function when given.');
   if (noise !== undefined && typeof noise !== 'function') throw new TypeError('A routing source adapter\'s noise must be a function when given.');
   if (typeof resolve !== 'function') throw new TypeError('A routing source adapter needs a resolve() function.');
@@ -115,6 +122,29 @@ export async function readRouterItem(source: RouterSource): Promise<RouterItemCo
   } catch (error) {
     if (['source_missing', 'source_changed'].includes((error as { code?: string })?.code ?? '')) throw error;
     throw new RouterSourceError('source_unavailable', error instanceof Error ? error.message : String(error));
+  } finally { if (timer) clearTimeout(timer); }
+}
+
+/** How long a delivery waits for a body fetch: it runs once per routed item, never in a wake's batch. */
+export const ROUTER_DELIVERY_READ_MS = 20_000;
+
+/** The original as the owner gets it: with its body fetched when the cache had none (readForDelivery), else the cached read. */
+export async function readRouterItemForDelivery(source: RouterSource): Promise<RouterItemContent> {
+  const adapter = adapters.get(source.kind);
+  if (!adapter?.readForDelivery) return readRouterItem(source);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const content = await Promise.race([
+      adapter.readForDelivery(source),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Routing content fetch timed out.')), ROUTER_DELIVERY_READ_MS); }),
+    ]);
+    if (content.item.source.kind !== source.kind || content.item.source.account !== source.account || content.item.source.message !== source.message) {
+      throw new RouterSourceError('source_changed', 'The delivery read answered another item.');
+    }
+    return content;
+  } catch {
+    // A fetch that failed or ran long leaves the cached read: the reference still reads the rest.
+    return readRouterItem(source);
   } finally { if (timer) clearTimeout(timer); }
 }
 

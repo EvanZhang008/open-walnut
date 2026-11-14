@@ -217,6 +217,15 @@ function heldElsewhere(file: RouterAreasFile, source: RouterSource, areaId: stri
     && (one.canonicalKey === canonicalKey || one.source.message === source.message));
 }
 
+/** The Message-ID a mail item's canonical key names (["mail", account, "rfc", id]); undefined for a key by cache id. */
+export function rfcIdOf(canonicalKey: string | undefined): string | undefined {
+  if (!canonicalKey) return undefined;
+  try {
+    const parts: unknown = JSON.parse(canonicalKey);
+    return Array.isArray(parts) && parts[0] === 'mail' && parts[2] === 'rfc' && typeof parts[3] === 'string' && parts[3] ? parts[3] : undefined;
+  } catch { return undefined; }
+}
+
 const usableKey = (key: unknown): key is string => typeof key === 'string' && !!key && key.length <= ROUTER_CANONICAL_KEY_MAX
   && !/[\u0000-\u001f\u007f]/.test(key);
 
@@ -266,6 +275,11 @@ export async function confirmAccountArrivals(sources: readonly RouterSource[], h
       // One decision per mail: another folder's copy of a message this area already lists (a label's copy) is not new.
       if (allAreaItems(file).some((item) => item.areaId === areaId && item.source.kind === one.source.kind
         && item.source.account === one.source.account && item.canonicalKey === one.canonicalKey)) continue;
+      // One decision per mail across mailboxes too: a mail sent to two of the person's addresses (or
+      // to one that forwards to another) arrives once in each, under one Message-ID.
+      const message = rfcIdOf(one.canonicalKey);
+      if (message && allAreaItems(file).some((item) => item.areaId === areaId && item.source.kind === one.source.kind
+        && item.source.account !== one.source.account && rfcIdOf(item.canonicalKey) === message)) continue;
       file.openItems = [...(file.openItems ?? []), { source: { ...one.source }, areaId, canonicalKey: one.canonicalKey }];
       entered.push({ ...one.source });
     }

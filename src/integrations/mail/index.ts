@@ -145,7 +145,11 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   // Late-bound: the noise decision marks read through the service and archives through the mover,
   // both built below. A replica changes no mail, so its router source has no noise hook.
   let tidyNoise: (source: RouterSource) => Promise<RouterNoiseOutcome> = async () => ({ read: false, archived: false })
-  const unregisterRouterSource = registerMailRouterSource(store, bodies, walnut.replica ? {} : { noise: (source) => tidyNoise(source) })
+  // Late-bound too: a routed email whose body is not cached yet is fetched once (as the prefetch does) so its owner gets the original.
+  let fetchRoutedBody: (account: string, message: string) => Promise<void> = async () => undefined
+  const unregisterRouterSource = registerMailRouterSource(store, bodies, walnut.replica ? {} : {
+    noise: (source) => tidyNoise(source), fetchBody: (account, message) => fetchRoutedBody(account, message),
+  })
   // Inbox sorting. Built before the service because ingest classifies each row it writes. The rules
   // file lives in this plugin's data dir; its poll is a HOST timer so teardown cancels it.
   const sort = new MailSortEngine({
@@ -268,6 +272,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     canArchive: (accountId) => filters.canArchive(accountId),
     archive: (accountId, messageId, stillCurrent) => filters.archiveNow(accountId, messageId, stillCurrent),
   }, source)
+  fetchRoutedBody = async (account, message) => { await service.readMessage(account, message, {}) }
   tidyNoise = (source) => {
     const run = (tidyChains.get(source.account) ?? Promise.resolve()).catch(() => undefined).then(() => tidyOne(source))
     tidyChains.set(source.account, run)

@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { bus } from '../event-bus.js';
 import { routerLetterContent } from './letter-content.js';
 import { routerStore } from './runtime.js';
-import { handleRouterNoise, hasRouterNoise, readRouterItem, resolveRouterItem, type RouterItemContent, type RouterNoiseOutcome } from './source-registry.js';
+import { handleRouterNoise, hasRouterNoise, readRouterItemForDelivery, resolveRouterItem, type RouterItemContent, type RouterNoiseOutcome } from './source-registry.js';
 import { RETRY_FAILED_PREFIX, type RouterItem, type RouterRoute, type RouterSource } from './types.js';
 import { routerKey, RouterStoreError, type RouterStore } from './store.js';
 import type { Task } from '../types.js';
@@ -334,7 +334,7 @@ async function routeItemLocked(input: RouteItemInput, deps: RouterDeliveryDeps, 
   await announce(claimed.route, deps);
   try {
     // The original rides the message; a cache that cannot give it now leaves the reference to read it.
-    const content = await (deps.read ?? readRouterItem)(item.source).catch(() => undefined);
+    const content = await (deps.read ?? readRouterItemForDelivery)(item.source).catch(() => undefined);
     await (deps.send ?? sendRoute)(claimed.route, routedText(item, claimed.route, input.text!, content));
     const settled = await store.settle(claimed.route.key, claimed.route.messageId!, { status: 'routed' });
     const route = settled.route ?? claimed.route;

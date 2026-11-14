@@ -15485,7 +15485,8 @@ export class SessionRunner {
           areaBound = true
           throw new Error('The session record is unavailable; its area policy cannot be restored')
         }
-      } else if (record.profile?.areaRole === 'router') areaBound = true
+      // Any area profile but an older build's receiver ('work', dropped at boot) is a router's: one that cannot say which stays scoped.
+      } else if (record.profile?.areaId && record.profile.areaRole !== 'work') areaBound = true
       if (record?.taskId) {
         const { getTask } = await import('../core/task-manager.js')
         // A task that is gone is no area task unless other evidence says so; a store that
