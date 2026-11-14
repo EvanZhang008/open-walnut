@@ -37,6 +37,7 @@ import { _resetAttachmentReplicaForTesting, forgetAttachments, syncAttachments }
 import { replicaExtras, type Extras } from './host-replica-extras.js'
 import { cleanKeepEntries, leftOut } from './replication/keep-rule.js'
 import { companionKeepOf } from './replication/companion-keep.js'
+import { noteRoundFailure, noteRoundReached } from './replication/round-outage.js'
 import { CLOUD_BOX_HOST_ALIAS } from './hosts/cloud-box-host.js'
 
 export type ReplicaKind = 'notes' | 'memory' | 'skills'
@@ -441,18 +442,23 @@ export async function syncHostReplica(target: ReplicaTarget): Promise<ReplicaRou
       const { getConfig } = await import('./config-manager.js')
       const config = await getConfig()
       keep = hostKeepFor(config, target.hostKey, { companion: target.companion })
+      /** The host was not reachable this round: its other kinds wait for the next round, untried. */
+      let away: string | null = null
       for (const kind of REPLICA_KINDS) {
+        if (away !== null) { results.push({ kind, action: 'failed', error: away }); continue }
         const startedAt = Date.now()
         try {
           const r = await syncKind(target, kind, keep, config)
           results.push(r)
+          // A memo's `unchanged` asked nothing of the host: only a reply proves it is back.
+          if (r.action !== 'unchanged') noteRoundReached(log.session, 'host replica', target.hostKey)
           if (r.action !== 'unchanged') {
             log.session.info('host replica: round', { host: target.hostKey, kind, action: r.action, entries: r.entries, sent: r.sent, ms: Date.now() - startedAt })
           }
         } catch (err) {
           const error = err instanceof Error ? err.message : String(err)
           results.push({ kind, action: 'failed', error })
-          log.session.warn('host replica: round failed', { host: target.hostKey, kind, error })
+          if (noteRoundFailure(log.session, 'host replica', target.hostKey, error, { kind })) away = error
         }
       }
     } while (state.rerun)
@@ -466,6 +472,9 @@ export async function syncHostReplica(target: ReplicaTarget): Promise<ReplicaRou
 
 async function attachmentsRound(target: ReplicaTarget, keep: HostKeep): Promise<void> {
   const r = await syncAttachments(target, { on: keep.attachments, exclude: keep.notesExclude })
-  if (r.action === 'failed') log.session.warn('host replica: attachments round failed', { host: target.hostKey, error: r.error })
-  else if (r.action !== 'unchanged' && r.action !== 'skipped') log.session.info('host replica: attachments round', { host: target.hostKey, ...r })
+  if (r.action === 'failed') noteRoundFailure(log.session, 'host replica attachments', target.hostKey, r.error ?? 'failed', {}, { message: 'host replica: attachments round failed' })
+  else if (r.action !== 'unchanged' && r.action !== 'skipped') {
+    noteRoundReached(log.session, 'host replica attachments', target.hostKey)
+    log.session.info('host replica: attachments round', { host: target.hostKey, ...r })
+  }
 }

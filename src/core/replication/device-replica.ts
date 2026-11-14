@@ -21,6 +21,7 @@ import { log } from '../../logging/index.js'
 import { isDeviceCopyId } from '../../host-server/device-copy.js'
 import type { ReplicaTarget } from './replica-targets.js'
 import { noteKindRound } from './replica-status.js'
+import { answered, noteRoundFailure, noteRoundReached } from './round-outage.js'
 import { isFollower } from '../server-role.js'
 
 const TICK_MS = 30_000
@@ -140,6 +141,7 @@ export function syncDeviceReplica(deps?: DeviceReplicaDeps): Promise<DeviceRepli
         try {
           if (!(await target.available())) { out.push({ target: target.id, action: 'skipped' }); continue }
           const r = await target.post({ op: 'put', kind: 'devices', devices, hash }, { timeoutMs: PUT_TIMEOUT_MS })
+          if (answered(r)) noteRoundReached(log.web, 'device replica', target.id)
           if (r.ok && r.reply.ok === true && r.reply.hash === hash) {
             taken.set(target.id, hash)
             retryAt.delete(target.id)
@@ -153,11 +155,13 @@ export function syncDeviceReplica(deps?: DeviceReplicaDeps): Promise<DeviceRepli
             const error = r.ok ? String(r.reply.error ?? 'refused') : (r.error ?? `HTTP ${r.status ?? '?'}`)
             retryAt.set(target.id, now + FAILED_RETRY_MS)
             out.push({ target: target.id, action: 'failed', error })
-            log.web.warn('device replica: a host server did not take the device list', { target: target.id, error })
+            noteRoundFailure(log.web, 'device replica', target.id, error, {}, { message: 'device replica: a host server did not take the device list' })
           }
         } catch (err) {
+          const error = err instanceof Error ? err.message : String(err)
           retryAt.set(target.id, now + FAILED_RETRY_MS)
-          out.push({ target: target.id, action: 'failed', error: err instanceof Error ? err.message : String(err) })
+          out.push({ target: target.id, action: 'failed', error })
+          noteRoundFailure(log.web, 'device replica', target.id, error, {}, { message: 'device replica: a host server did not take the device list' })
         }
       }
       // Its own protocol, one status row per host (GET /api/replicas/status).

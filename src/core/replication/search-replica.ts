@@ -34,6 +34,7 @@ import { isFollower, type FollowerKind } from '../server-role.js'
 import type { ReplicaTarget } from './replica-targets.js'
 import { refOfReplicaKey, replicaKey } from '../search/replica-refs.js'
 import { DigestMap } from './search-digest.js'
+import { noteRoundFailure, noteRoundReached } from './round-outage.js'
 import { companionKeepOf } from './companion-keep.js'
 import { keepsAllSearch, searchKeyKept, searchNoteKeyPrefix, type SearchKeep } from './search-replica-keep.js'
 import {
@@ -352,6 +353,7 @@ async function round(deps: SearchReplicaDeps, target: ReplicaTarget, urgent = fa
     }
     const manifestDigest = filter ? map.digestWhere((k) => snapshot.has(k)) : map.digest
     const reply = await step(target, { op: 'status', mode, model, digest: manifestDigest })
+    noteRoundReached(log.memory, 'search replica', target.id)
     const info = {
       reason: reply.reason as CompanionSearchReason | undefined,
       totalMb: Number(reply.totalMb) || undefined,
@@ -402,7 +404,7 @@ async function round(deps: SearchReplicaDeps, target: ReplicaTarget, urgent = fa
     }
     fs.status = { ...base, state: 'error', error }
     fs.syncedAt = 0
-    log.memory.warn('search replica: round failed', { target: target.id, error })
+    noteRoundFailure(log.memory, 'search replica', target.id, error)
     return { action: 'failed', error }
   }
 }

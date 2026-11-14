@@ -36,6 +36,7 @@ import { buildKindManifest, confirmKindRemoval, runKindRound, StepFailed, type K
 import { noteManifestTaken, runDeltaRound, type DeltaKind } from './kind-delta.js'
 import { _resetReplicaStatusForTesting, confirmWaiting, dropTargetsNotIn, forgetKindManifests, kindState, peekKindState } from './replica-status.js'
 import type { ReplicaTarget } from './replica-targets.js'
+import { answeredBy, noteRoundFailure } from './round-outage.js'
 
 const DEBOUNCE_MS = 3_000
 const SWEEP_MS = 5 * 60_000
@@ -164,19 +165,20 @@ export async function syncTaskReplica(deps?: TaskReplicaDeps): Promise<TaskRepli
 async function serveTarget(
   s: Served, manifests: { tasks: KindManifest<Task>; registry: KindManifest<TaskReplicaRegistry> }, asOf: number, results: TaskReplicaRoundResult[],
 ): Promise<void> {
+  const target = answeredBy(log.task, 'task replica', s.target)
   for (const kind of KINDS) {
     const startedAt = Date.now()
     try {
       const r = kind === 'tasks'
-        ? await tasksRound(manifests.tasks, s.target, asOf)
-        : await runKindRound(REGISTRY_KIND, manifests.registry, s.target, { asOf, log: log.task })
+        ? await tasksRound(manifests.tasks, target, asOf)
+        : await runKindRound(REGISTRY_KIND, manifests.registry, target, { asOf, log: log.task })
       results.push(named(s, r as Omit<TaskReplicaRoundResult, 'target'>))
       if (r.action === 'synced') log.task.info('task replica: round', { target: s.target.id, ...r, ms: Date.now() - startedAt })
     } catch (err) {
       const outcome = err instanceof StepFailed ? err.outcome : 'failed'
       const error = err instanceof Error ? err.message : String(err)
       results.push(named(s, { kind, action: outcome, error }))
-      if (outcome === 'failed') log.task.warn('task replica: round failed', { target: s.target.id, kind, error })
+      if (outcome === 'failed') noteRoundFailure(log.task, 'task replica', s.target.id, error, { kind })
       break // the other kind waits for the next round
     }
   }

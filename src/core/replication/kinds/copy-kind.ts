@@ -31,6 +31,7 @@ import { forgetTaken, noteManifestTaken, runDeltaRound } from '../kind-delta.js'
 import { confirmWaiting, forgetKindManifests, kindState, peekKindState, type KindState } from '../replica-status.js'
 import type { ReplicaTarget } from '../replica-targets.js'
 import { COMPANION_COPY_KINDS } from './gate.js'
+import { answeredBy, noteRoundFailure } from '../round-outage.js'
 
 export const COPY_DEBOUNCE_MS = 3_000
 export const COPY_SWEEP_MS = 5 * 60_000
@@ -180,14 +181,23 @@ export async function syncCopyKinds(kinds: readonly CopyKind<any>[], deps: CopyK
       log.session.warn('copies: could not read the leader rows of a kind', { kind: kind.kind, error: err instanceof Error ? err.message : String(err) })
     }
   }
-  for (const { target, choice } of ready) {
+  for (const { target: listed, choice } of ready) {
+    const target = answeredBy(log.session, 'copies', listed)
+    /** The target was not reachable this round: its other kinds wait for the next round, untried. */
+    let away: string | null = null
     for (const kind of kinds) {
       if (!keepsCopiesTarget(target, kind.kind)) continue
       const manifest = manifests.get(kind.kind)
       const st = kindState(target, kind.kind)
       if (!choice[kind.choice]) {
         // Turned off for this host: it drops what it holds of the kind (once), and its state says so.
-        const removed = purged.has(st) ? undefined : await purgeKind(kind, target, st)
+        // A host that is away takes the purge in a later round (it stays unpurged until then).
+        let removed: number | undefined
+        if (!purged.has(st) && away === null) {
+          const r = await purgeKind(kind, target, st)
+          removed = r.removed
+          if (r.away !== undefined) away = r.away
+        }
         Object.assign(st, { action: 'off', manifest: null })
         forgetTaken(st)
         results.push({ target: target.id, kind: kind.kind, action: 'unsupported', error: 'kind_not_copied', ...(removed !== undefined ? { removed } : {}) })
@@ -195,6 +205,12 @@ export async function syncCopyKinds(kinds: readonly CopyKind<any>[], deps: CopyK
       }
       purged.delete(st)
       if (!manifest) continue
+      if (away !== null && st.manifest !== manifest.hash) {
+        // The same as a failed step: the kind's copy is not held now, and its manifest goes again.
+        Object.assign(st, { manifest: null, action: 'failed', error: away })
+        results.push({ target: target.id, kind: kind.kind, action: 'failed', error: away })
+        continue
+      }
       const startedAt = now()
       try {
         const r = await runCopyRound(kind, manifest, target, { asOf, now })
@@ -204,7 +220,7 @@ export async function syncCopyKinds(kinds: readonly CopyKind<any>[], deps: CopyK
         const outcome = err instanceof StepFailed ? err.outcome : 'failed'
         const error = err instanceof Error ? err.message : String(err)
         results.push({ target: target.id, kind: kind.kind, action: outcome, error })
-        if (outcome === 'failed') log.session.warn('copies: round failed', { target: target.id, kind: kind.kind, error })
+        if (outcome === 'failed' && noteRoundFailure(log.session, 'copies', target.id, error, { kind: kind.kind })) away = error
       }
     }
   }
@@ -215,9 +231,13 @@ export async function syncCopyKinds(kinds: readonly CopyKind<any>[], deps: CopyK
  * The `purge` step of a kind the host turned off. The target dropped its store
  * (or answered a rest error: an older follower that has no purge): noted, not
  * sent again until the kind is turned on and off again. A failed step goes
- * again next round. Returns the rows removed, when the target says.
+ * again next round. Returns the rows removed when the target says, and the
+ * error when the target was not reachable (the round skips its other kinds).
  */
-async function purgeKind(kind: CopyKind<unknown>, target: CopyTarget, st: KindState): Promise<number | undefined> {
+async function purgeKind(kind: CopyKind<unknown>, target: CopyTarget, st: KindState): Promise<{ removed?: number; away?: string }> {
+  const failed = (error: string): { away?: string } => (
+    noteRoundFailure(log.session, 'copies', target.id, error, { kind: kind.kind }, { message: 'copies: purge of a kind turned off failed, again next round' }) ? { away: error } : {}
+  )
   try {
     const r = await target.post({ op: 'purge', kind: kind.kind, schemaVersion: kind.schemaVersion })
     if (r.ok && r.reply.ok === true) {
@@ -226,14 +246,14 @@ async function purgeKind(kind: CopyKind<unknown>, target: CopyTarget, st: KindSt
       if (removed > 0) log.session.info('copies: the host dropped a kind its choice turned off', { target: target.id, kind: kind.kind, removed })
       // The companion reads the pushed session projection again: it goes there at once.
       if (target.kind === 'companion' && kind.choice === 'sessions') (await import('../../projection-push-state.js')).forgetUnread()
-      return removed
+      return { removed }
     }
     if (!r.ok && (r.outcome === 'unsupported' || REST_ERRORS.has(r.error ?? ''))) purged.add(st)
-    else log.session.warn('copies: purge of a kind turned off failed, again next round', { target: target.id, kind: kind.kind, error: r.ok ? String(r.reply.error ?? '') : r.error })
+    else return failed(r.ok ? String(r.reply.error ?? '') : (r.error ?? `HTTP ${r.status ?? '?'}`))
   } catch (err) {
-    log.session.warn('copies: purge of a kind turned off failed, again next round', { target: target.id, kind: kind.kind, error: err instanceof Error ? err.message : String(err) })
+    return failed(err instanceof Error ? err.message : String(err))
   }
-  return undefined
+  return {}
 }
 
 let schedulers = 0
