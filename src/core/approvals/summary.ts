@@ -10,6 +10,7 @@
  * a model; the dialog shows the request's own line until it arrives, and keeps it if writing fails.
  * Display only: what is signed (the request's line and detail) never changes.
  */
+import { EventEmitter } from 'node:events'
 import { log } from '../../logging/index.js'
 import { contextSummary, cutTo } from './asker-context.js'
 import type { ApprovalRecord } from './types.js'
@@ -114,13 +115,52 @@ export async function writeApprovalSummary(rec: Asked): Promise<string> {
   }
 }
 
+/** The writes under way (and just ended), so the phone's push can wait for the summary (notify.ts). */
+const writing = new Map<string, Promise<string>>()
+const started = new EventEmitter()
+started.setMaxListeners(0)
+/** How long an ended write's answer stays readable here. */
+const KEEP_MS = 60_000
+
 /** After a request is made: write its summary in the background when it needs one. */
 export function scheduleApprovalSummary(rec: Asked): void {
   if (!needsSummary(rec)) return
   // A test server reaches no model unless a test installs a writer (cheap-model.ts).
-  if (!override) {
-    void import('../cheap-model.js').then(({ backgroundAiDisabled }) => { if (!backgroundAiDisabled()) void writeApprovalSummary(rec) }).catch(() => {})
-    return
+  const run = override ? writeApprovalSummary(rec)
+    : import('../cheap-model.js').then(({ backgroundAiDisabled }) => backgroundAiDisabled() ? '' : writeApprovalSummary(rec)).catch(() => '')
+  writing.set(rec.id, run)
+  started.emit(rec.id)
+  void run.finally(() => { const t = setTimeout(() => writing.delete(rec.id), KEEP_MS); t.unref?.() })
+}
+
+/**
+ * The summary of a request, once written, within `ms`: '' when none is written in time (the asker
+ * said why, writing failed or is off, or it is slow). The push is sent on the same tick as the
+ * request, a moment before the route starts the write, so a write that has not started is waited
+ * for a little too. Never throws.
+ */
+export async function summaryWithin(id: string, ms: number): Promise<string> {
+  const until = Date.now() + ms
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = (left: number) => new Promise<''>((resolve) => { timer = setTimeout(() => resolve(''), Math.max(0, left)); timer.unref?.() })
+  try {
+    if (!writing.has(id)) {
+      await Promise.race([new Promise<void>((resolve) => started.once(id, () => resolve())), deadline(Math.min(ms, 1_000))])
+      clearTimeout(timer)
+    }
+    const run = writing.get(id)
+    if (!run) return ''
+    return await Promise.race([run.catch(() => ''), deadline(until - Date.now())])
+  } finally {
+    clearTimeout(timer)
+    started.removeAllListeners(id)
   }
-  void writeApprovalSummary(rec)
+}
+
+/** The summary's first sentence, for a push body. Pure. */
+export function firstSentence(text: string, max = 180): string {
+  const t = text.replace(/\s+/g, ' ').trim()
+  // A Latin stop ends a sentence before a space; a CJK one ends it where it stands.
+  const m = /^(.+?(?:[.!?](?=\s|$)|[\u3002\uff01\uff1f]))/u.exec(t)
+  return cutTo(m ? m[1]! : t, max)
 }

@@ -15,6 +15,16 @@ struct ApprovalRequester: Codable, Equatable, Hashable {
     let command: String?
 }
 
+/// What Walnut read when it was asked (src/core/approvals/asker-context.ts); only the parts the
+/// sheet shows. An older server sends none, and an older app ignores it.
+struct ApprovalContext: Codable, Equatable, Hashable {
+    var why: String? = nil
+    /// "asker": its own `--why`; "session": the session's last words (never shown as a reason).
+    var whyFrom: String? = nil
+    /// What the step does and why, written by Walnut when the asker gave no why (summary.ts).
+    var summary: String? = nil
+}
+
 struct ApprovalAnswerRecord: Codable, Equatable, Hashable {
     struct Device: Codable, Equatable, Hashable {
         let id: String?
@@ -44,6 +54,20 @@ struct Approval: Codable, Identifiable, Equatable, Hashable {
     var signingKeyId: String? = nil
     /// Or any one of these keys (the Mac and the iPhone).
     var signingKeyIds: [String]? = nil
+    var context: ApprovalContext? = nil
+
+    /// The words on top of the sheet, as the web dialog leads with them (approval-context.tsx
+    /// summaryOf): the asker's own line and why, else the summary Walnut wrote.
+    var lead: (text: String, byWalnut: Bool, why: String?) {
+        if let s = context?.summary?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty, context?.whyFrom != "asker" {
+            return (s, true, nil)
+        }
+        let why = context?.whyFrom == "asker" ? context?.why?.trimmingCharacters(in: .whitespacesAndNewlines) : nil
+        return (what, false, (why?.isEmpty ?? true) ? nil : why)
+    }
+
+    /// Walnut writes a summary for it, not yet arrived: the sheet reads it again shortly.
+    var awaitsSummary: Bool { isPending && context?.whyFrom != "asker" && (context?.summary ?? "").isEmpty }
 
     /// The keys that may sign it; empty = any device that signs.
     var boundTo: [String] { signingKeyIds ?? signingKeyId.map { [$0] } ?? [] }

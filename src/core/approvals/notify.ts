@@ -11,6 +11,7 @@
 import { bus } from '../event-bus.js'
 import { log } from '../../logging/index.js'
 import { APPROVAL_CHANGED } from './store.js'
+import { firstSentence, needsSummary, summaryWithin } from './summary.js'
 import type { ApprovalView } from './types.js'
 
 export const APPROVAL_PUSH_TYPE = 'approval_request'
@@ -24,11 +25,22 @@ export function requesterLine(a: Pick<ApprovalView, 'requester'>, hostName: stri
   return `${who} on ${hostName}`
 }
 
-export function approvalPushContent(a: ApprovalView, hostName?: string) {
+/** How long a new request's push waits for the summary Walnut writes (summary.ts takes 2 to 4 s). */
+export const PUSH_SUMMARY_WAIT_MS = 6_000
+
+/**
+ * The push: its title the request's own line; its body the summary's first sentence when there is
+ * one (the asker's own why, else Walnut's), then who asks (2026-11-14, Walnut VP: the phone shows
+ * the summary the dialog leads with). The app reads only `data`, so an older app is unaffected.
+ */
+export function approvalPushContent(a: ApprovalView, hostName?: string, summary?: string) {
   const biometric = a.mode === 'biometric'
+  const own = a.context?.whyFrom === 'asker' ? a.context.why : undefined
+  const lead = own || summary || (a.context?.whyFrom !== 'asker' ? a.context?.summary : undefined)
+  const who = `${requesterLine(a, hostName)}${biometric ? ' · Face ID needed' : ''}`
   return {
     title: `Approve? ${a.what}`.slice(0, 120),
-    body: `${requesterLine(a, hostName)}${biometric ? ' · Face ID needed' : ''}`.slice(0, 240),
+    body: (lead ? `${firstSentence(lead)}\n${who}` : who).slice(0, 240),
     data: { type: APPROVAL_PUSH_TYPE, approvalId: a.id, mode: a.mode },
     priority: 10,
     collapseId: a.id,
@@ -54,7 +66,16 @@ async function pushNew(a: ApprovalView): Promise<void> {
     logQuietSkipOnce('push', quiet)
     return
   }
-  const out = await deliverPush(tokens, approvalPushContent(a, await hostDisplayNameFor(a.requester.host)))
+  // One push, with the summary when it comes in time: a second push for it would ring the phone again.
+  const waited = !a.context?.summary && needsSummary(a)
+  const summary = a.context?.summary || (waited ? await summaryWithin(a.id, PUSH_SUMMARY_WAIT_MS) : '')
+  if (waited) {
+    // Answered or withdrawn on the Mac while it waited: nothing to ring the phone for.
+    const { getApproval } = await import('./store.js')
+    const now = await getApproval(a.id).catch(() => undefined)
+    if (now && now.status !== 'pending') return
+  }
+  const out = await deliverPush(tokens, approvalPushContent(a, await hostDisplayNameFor(a.requester.host), summary || undefined))
   log.notif.info('approval push', { approvalId: a.id, attempted: out.attempted, sent: out.sent, failed: out.failed, ...(out.reason ? { reason: out.reason } : {}) })
 }
 

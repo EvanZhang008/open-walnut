@@ -14,12 +14,19 @@ import type { AddressInfo } from 'node:net'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-approval-summary-e2e'))
+const sendApns = vi.hoisted(() => vi.fn(async (targets: unknown[]) => ({ attempted: true, sent: targets.length, failed: 0, deadTokens: [] as string[] })))
+vi.mock('../../src/core/push/apns.js', () => ({
+  sendApns,
+  apnsStatus: vi.fn(async () => ({ configured: true, environment: 'production', topic: 'test' })),
+}))
 
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { bus } from '../../src/core/event-bus.js'
 import { getApproval, setApprovalSummary, APPROVAL_CHANGED } from '../../src/core/approvals/store.js'
-import { cleanSummary, needsSummary, setApprovalSummaryOverride, summaryPrompt, SUMMARY_MAX } from '../../src/core/approvals/summary.js'
+import { cleanSummary, firstSentence, needsSummary, setApprovalSummaryOverride, summaryPrompt, summaryWithin, SUMMARY_MAX } from '../../src/core/approvals/summary.js'
+import { approvalPushContent } from '../../src/core/approvals/notify.js'
+import { updateConfig } from '../../src/core/config-manager.js'
 
 let base = ''
 const asked: Array<{ system: string; user: string }> = []
@@ -101,6 +108,57 @@ describe('Walnut writes the summary of an ask that says no why', () => {
     expect((await getApproval(empty.body.approval.id))?.context?.summary).toBeUndefined()
     await fetch(`${base}/api/v1/approvals/${empty.body.approval.id}/cancel`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: empty.body.waitToken }) })
     expect(await setApprovalSummary(empty.body.approval.id, 'too late')).toBe(false)
+  })
+})
+
+describe('the phone gets the summary in its one push', () => {
+  /** The pushes of one approval: its body lines. */
+  const pushesOf = (id: string) => sendApns.mock.calls.map((c) => (c as unknown as [unknown, { aps?: { alert?: { body?: string } }; approvalId?: string }])[1])
+    .filter((p) => p.approvalId === id).map((p) => ({ body: p.aps?.alert?.body }))
+  async function pushed(id: string, timeoutMs = 12_000) {
+    const until = Date.now() + timeoutMs
+    while (Date.now() < until && pushesOf(id).length === 0) await new Promise((r) => setTimeout(r, 50))
+    return pushesOf(id)
+  }
+
+  it('waits for the summary, then sends ONE push whose body leads with its first sentence', async () => {
+    await updateConfig({ push_tokens: [{ token: 'a'.repeat(64), platform: 'ios' }] } as never)
+    answer = async () => { await new Promise((r) => setTimeout(r, 800)); return 'Pushes the two report commits to the shared repo. Nothing else changes.' }
+    const r = await post({ what: 'Push commit 1a2b3c4 to origin main in reports', command: 'git push origin main' })
+    const got = await pushed(r.body.approval.id)
+    expect(got).toHaveLength(1)
+    expect(got[0]!.body).toMatch(/^Pushes the two report commits to the shared repo\.\n/)
+    // The summary's change on the screens rang no second push.
+    await new Promise((res) => setTimeout(res, 500))
+    expect(pushesOf(r.body.approval.id)).toHaveLength(1)
+  })
+
+  it('a slow summary never holds the push past its wait, and a decided ask is not pushed', async () => {
+    answer = async () => { await new Promise((r) => setTimeout(r, 60_000)); return 'too late' }
+    const slow = await post({ what: 'Rotate the archive keys?' })
+    const t0 = Date.now()
+    const got = await pushed(slow.body.approval.id)
+    expect(got).toHaveLength(1)
+    expect(Date.now() - t0).toBeLessThan(9_000)
+    expect(got[0]!.body).not.toContain('too late')
+    // Answered (withdrawn) while the push waited: nothing rings.
+    const gone = await post({ what: 'Rotate the spare keys?' })
+    await fetch(`${base}/api/v1/approvals/${gone.body.approval.id}/cancel`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: gone.body.waitToken }) })
+    await new Promise((res) => setTimeout(res, 7_000))
+    expect(pushesOf(gone.body.approval.id)).toHaveLength(0)
+  }, 30_000)
+
+  it('the push body: the asker\'s own why, else the summary, else who asks', () => {
+    const a = { id: 'apr-x', what: 'Publish?', mode: 'tap', requester: { host: 'h', taskTitle: 'Notes' } } as never
+    expect(approvalPushContent(a, 'Mac').body).toBe('task "Notes" on Mac')
+    expect(approvalPushContent(a, 'Mac', 'Publishes the notes. Then it tweets.').body).toBe('Publishes the notes.\ntask "Notes" on Mac')
+    const own = { ...(a as object), context: { why: 'The launch links to them.', whyFrom: 'asker', summary: 'ignored' } } as never
+    expect(approvalPushContent(own, 'Mac', 'ignored too').body).toBe('The launch links to them.\ntask "Notes" on Mac')
+    expect(firstSentence('\u63a8\u9001\u4e24\u4e2a\u63d0\u4ea4\u3002\u5176\u4f59\u4e0d\u53d8\u3002')).toBe('\u63a8\u9001\u4e24\u4e2a\u63d0\u4ea4\u3002')
+  })
+
+  it('summaryWithin: nothing written in time is \'\'', async () => {
+    expect(await summaryWithin('apr-none', 200)).toBe('')
   })
 })
 

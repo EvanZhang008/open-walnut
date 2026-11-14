@@ -46,6 +46,15 @@ struct ApprovalSheet: View {
             }
         }
         .accessibilityIdentifier("approval.sheet")
+        // Walnut's summary comes a few seconds after the ask: read it again until it is here.
+        .task(id: approval.awaitsSummary) {
+            guard approval.awaitsSummary else { return }
+            for _ in 0..<4 {
+                try? await Task.sleep(for: .seconds(2))
+                if Task.isCancelled { return }
+                await center.refresh()
+            }
+        }
     }
 
     private var header: some View {
@@ -65,10 +74,25 @@ struct ApprovalSheet: View {
             }
             .font(.footnote.weight(.semibold))
             .foregroundStyle(approval.isBiometric ? Theme.tint : .secondary)
-            Text(approval.what)
+            // What the step does and why, in full (2026-11-14, the user: "I need the summary AI write").
+            let lead = approval.lead
+            Text(lead.text)
                 .font(.title3.weight(.semibold))
                 .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("approval.what")
+                .accessibilityIdentifier(lead.byWalnut ? "approval.summary" : "approval.what")
+            if let why = lead.why {
+                Text(why).font(.body).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("approval.why")
+            }
+            if lead.byWalnut {
+                Text("Walnut\u{2019}s summary of the task\u{2019}s session, not signed: the lines below are what you approve")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("approval.summaryBy")
+                // The request's own line, the one that is signed, stays in sight under it.
+                Text(approval.what).font(.subheadline.weight(.medium))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("approval.what")
+            }
             Text(approval.requesterLine).font(.subheadline).foregroundStyle(.secondary)
             if let cwd = approval.requester.cwd {
                 Text(cwd).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(2)

@@ -77,6 +77,9 @@ final class ApprovalCenter {
             if let shown = presented, !pending.contains(where: { $0.id == shown.id }) {
                 // Answered elsewhere or expired: the sheet shows its end state from the fetch.
                 presented = (try? await api.approval(id: shown.id)) ?? shown
+            } else if let shown = presented, let fresh = pending.first(where: { $0.id == shown.id }), fresh != shown {
+                // Still waiting, with something new to read (Walnut's summary): the open sheet shows it.
+                presented = fresh
             }
             await enrollIfNeeded(keys: r.keys)
         } catch {
