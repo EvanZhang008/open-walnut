@@ -4146,6 +4146,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         .catch((err) => log.session.warn('session-request sweep failed', {
           error: err instanceof Error ? err.message : String(err),
         }))
+      // An answer settled but not yet in its asker's queue when a server died: delivered now
+      // (src/core/sessions/reply-outbox.ts).
+      void import('../core/sessions/reply-outbox.js')
+        .then(({ redeliverOwedReplies }) => redeliverOwedReplies())
+        .catch((err) => log.session.warn('owed reply sweep failed', {
+          error: err instanceof Error ? err.message : String(err),
+        }))
     }, 60_000)
     sweep.unref?.()
   }

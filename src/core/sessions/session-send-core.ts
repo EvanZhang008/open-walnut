@@ -38,6 +38,7 @@ import {
   deletePendingRequest,
   getSessionRequest,
   settleReplied,
+  clearReplyOutbox,
   settleLateReply,
   withdrawRequest,
   listAllSessionRequests,
@@ -45,6 +46,7 @@ import {
   noteAnswerDelivered,
   sameAnswerOf,
   type AnswerStamp,
+  type ReplyOutbox,
   type SessionRequest,
 } from '../session-requests.js';
 import { queueSentBy } from './send-sent-by.js';
@@ -1285,9 +1287,33 @@ async function performReply(
   // One answer at a time per asker and words: a second task_send with the same text waits until
   // the first is delivered (or failed), then reads it as a repeat (or as the answer, if it failed).
   const answeredFor = onward?.final ?? request;
-  let replierTitle = '';
   let delivery: 'queued' | 'deferred' = 'queued';
   let messageId: string | undefined;
+  // What the asker reads, known before the settle so the settle can owe it (reply-outbox.ts).
+  const replierTitle = await senderTitleOf(caller.record);
+  const answerText = () => {
+    const wrapped = buildReplyDeliveryText(answeredFor, {
+      // The replier's TASK title (sender-name.ts); none → the handle is just `[8hex]`.
+      title: replierTitle,
+      shortId: shortId(caller.record.claudeSessionId),
+      sessionId: caller.record.claudeSessionId,
+      taskId: caller.record.taskId,
+      host: displayHost(caller.record.host),
+    }, replyBody, { title: input.title });
+    // The asker's other requests it answers, named once (performReplies): no separate line for each.
+    return many.covers?.length
+      ? `${wrapped}\nThis one answer also settles your request${many.covers.length === 1 ? '' : 's'} ${many.covers.join(', ')} to the same task: nothing more comes for ${many.covers.length === 1 ? 'it' : 'them'}.`
+      : wrapped;
+  };
+  const fromLeader = await callerLeads(caller, origin.taskId);
+  // The queue row the answer goes out as: the same id when the outbox delivers it again.
+  const deliveryId = input.messageId ?? (await import('../session-queue-store.js')).generateId();
+  let owed = false;
+  // The replier's latest result, kept on its task: the Board and the Brief read Partial from it.
+  const resultHead = caller.record.taskId ? {
+    via: 'reply' as const, request_id: answeredFor.id, ...(origin.taskId ? { to_task_id: origin.taskId } : {}), by: `task:${caller.record.taskId}`,
+    ...(caller.record.claudeSessionId ? { sessionId: caller.record.claudeSessionId } : {}),
+  } : undefined;
   const releaseAnswer = onward ? () => {} : await holdAnswer(`${stamp.deliveredTo}\u0000${stamp.digest}\u0000${stamp.by.taskId ?? stamp.by.sessionId}`);
   try {
     // Read again once the key is held: a send of the same words to the same request that waited
@@ -1304,22 +1330,25 @@ async function performReply(
       // Answered already, and these are the words it got then (or another request got).
       else sameAs = sameAnswerOf(await listAllSessionRequests().catch(() => []), stamp)?.id;
     } else {
-      const settled = await settleReplied(id, fields, undefined, stamp);
+      // The answer's delivery is owed in the same write as the settle (reply-outbox.ts): a server
+      // that dies before it reaches the asker's queue delivers it at its next start. Not for a
+      // repeat (the asker has it) or an answer only for a live session (ask-answer.ts).
+      const owe = many.quietRepeat || input.liveOnly ? undefined : (row: SessionRequest): ReplyOutbox | undefined => row.sameAnswerAs ? undefined : {
+        to: origin.claudeSessionId, ...(origin.taskId ? { taskId: origin.taskId } : {}), messageId: deliveryId,
+        busText: replyBody, enqueueText: answerText(), source: 'peer', ...(fromLeader ? { fromLeader } : {}),
+        ...(resultHead ? { report: { taskId: caller.record.taskId!, head: resultHead, fields } } : {}),
+        at: new Date().toISOString(),
+      };
+      const settled = await settleReplied(id, fields, undefined, stamp, owe);
+      owed = !!settled?.outbox;
       if (!settled) {
         log.session.info('session reply lost the settle race — delivering late', { requestId: id });
       }
       // Lost the race to another answer: these may be the very words it delivered.
       sameAs = settled ? settled.sameAnswerAs : sameAnswerOf(await listAllSessionRequests().catch(() => []), stamp)?.id;
     }
-    // The replier's latest result, kept on its task: the Board and the Brief read Partial from it.
-    if (caller.record.taskId) {
-      await noteResultReport(caller.record.taskId, {
-        via: 'reply', request_id: answeredFor.id, ...(origin.taskId ? { to_task_id: origin.taskId } : {}), by: `task:${caller.record.taskId}`,
-        ...(caller.record.claudeSessionId ? { sessionId: caller.record.claudeSessionId } : {}),
-      }, fields);
-    }
+    if (resultHead) await noteResultReport(caller.record.taskId!, resultHead, fields);
 
-    replierTitle = await senderTitleOf(caller.record);
     if (many.quietRepeat) {
       // Named in the one answer the asker just got (performReplies): nothing more to read.
       log.session.info('session reply settled with the answer it named — nothing more delivered', {
@@ -1346,25 +1375,16 @@ async function performReply(
         requestId: id, sameAnswerAs: sameAs, fromSessionId: caller.record.claudeSessionId, toSessionId: origin.claudeSessionId,
       });
     } else {
-      const wrapped = buildReplyDeliveryText(answeredFor, {
-        // The replier's TASK title (sender-name.ts); none → the handle is just `[8hex]`.
-        title: replierTitle,
-        shortId: shortId(caller.record.claudeSessionId),
-        sessionId: caller.record.claudeSessionId,
-        taskId: caller.record.taskId,
-        host: displayHost(caller.record.host),
-      }, replyBody, { title: input.title });
-      // The asker's other requests it answers, named once (performReplies): no separate line for each.
-      const covered = many.covers?.length
-        ? `${wrapped}\nThis one answer also settles your request${many.covers.length === 1 ? '' : 's'} ${many.covers.join(', ')} to the same task: nothing more comes for ${many.covers.length === 1 ? 'it' : 'them'}.`
-        : wrapped;
-
-      ({ delivery, messageId } = await deliverToSession(origin, {
-        busText: replyBody, enqueueText: covered, source: 'peer', endsWait: true,
-        taskId: origin.taskId, messageId: input.messageId,
-        fromLeader: await callerLeads(caller, origin.taskId),
-        ...(input.liveOnly ? { liveOnly: input.liveOnly } : {}),
-      }));
+      try {
+        ({ delivery, messageId } = await deliverToSession(origin, {
+          busText: replyBody, enqueueText: answerText(), source: 'peer', endsWait: true,
+          taskId: origin.taskId, messageId: deliveryId, fromLeader,
+          ...(input.liveOnly ? { liveOnly: input.liveOnly } : {}),
+        }));
+      } finally {
+        // Delivered, or failed in front of the replier (which sends again): owed no more either way.
+        if (owed) await clearReplyOutbox(id, deliveryId).catch(() => {});
+      }
     }
 
     // A later answer with these words to this asker is a repeat of this one (sameAnswerOf).
