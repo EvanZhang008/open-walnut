@@ -1,0 +1,33 @@
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"(user text)"}]},"session_id":"synth_000001"}
+{"type":"result","subtype":"success","is_error":false,"num_turns":0,"duration_ms":105281,"result":"(result text)","session_id":"synth_000001"}
+{"type":"result","subtype":"success","is_error":false,"num_turns":4,"duration_ms":81614,"result":"(result text)","session_id":"synth_000001"}
+{"type":"system","subtype":"session_state_changed","state":"idle","session_id":"synth_000001"}
+{"type":"system","subtype":"session_state_changed","state":"running","session_id":"synth_000001"}
+{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":19619,"result":"(result text)","session_id":"synth_000001"}
+{"type":"system","subtype":"session_state_changed","state":"idle","session_id":"synth_000001"}
+{"type":"system","subtype":"session_state_changed","state":"running","session_id":"synth_000001"}
+{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":31537,"result":"(result text)","session_id":"synth_000001"}
+{"type":"system","subtype":"session_state_changed","state":"idle","session_id":"synth_000001"}
+{"type":"system","subtype":"session_state_changed","state":"running","session_id":"synth_000001"}
+{"type":"system","subtype":"task_started","task_id":"synth_000002","task_type":"local_bash","session_id":"synth_000001"}
+{"type":"system","subtype":"task_updated","task_id":"synth_000002","patch":{"is_backgrounded":true},"session_id":"synth_000001"}
+{"type":"result","subtype":"success","is_error":false,"num_turns":5,"duration_ms":181820,"result":"(result text)","session_id":"synth_000001"}
+{"type":"system","subtype":"session_state_changed","state":"idle","session_id":"synth_000001"}
+{"type":"system","subtype":"task_updated","task_id":"synth_000002","patch":{"status":"completed"},"session_id":"synth_000001"}
+{"type":"system","subtype":"task_notification","task_id":"synth_000002","status":"completed","session_id":"synth_000001"}
+{"type":"system","subtype":"session_state_changed","state":"running","session_id":"synth_000001"}
+{"type":"result","subtype":"success","is_error":false,"num_turns":2,"duration_ms":22306,"result":"(result text)","session_id":"synth_000001"}
+{"type":"system","subtype":"session_state_changed","state":"idle","session_id":"synth_000001"}
+{"type":"system","subtype":"session_state_changed","state":"running","session_id":"synth_000001"}
+{"type":"system","subtype":"task_started","task_id":"synth_000003","task_type":"local_bash","session_id":"synth_000001"}
+{"type":"system","subtype":"task_updated","task_id":"synth_000003","patch":{"is_backgrounded":true},"session_id":"synth_000001"}
+{"type":"system","subtype":"task_started","task_id":"synth_000004","task_type":"local_bash","session_id":"synth_000001"}
+{"type":"system","subtype":"task_notification","task_id":"synth_000004","status":"completed","session_id":"synth_000001"}
+{"type":"system","subtype":"task_started","task_id":"synth_000005","task_type":"local_bash","session_id":"synth_000001"}
+{"type":"system","subtype":"task_updated","task_id":"synth_000003","patch":{"status":"completed"},"session_id":"synth_000001"}
+{"type":"system","subtype":"task_notification","task_id":"synth_000003","status":"completed","session_id":"synth_000001"}
+{"type":"system","subtype":"task_updated","task_id":"synth_000005","patch":{"is_backgrounded":true},"session_id":"synth_000001"}
+{"type":"system","subtype":"task_started","task_id":"synth_000006","task_type":"local_bash","session_id":"synth_000001"}
+{"type":"system","subtype":"task_notification","task_id":"synth_000006","status":"completed","session_id":"synth_000001"}
+{"type":"result","subtype":"success","is_error":false,"num_turns":16,"duration_ms":411501,"result":"(result text)","session_id":"synth_000001"}
+{"type":"system","subtype":"session_state_changed","state":"idle","session_id":"synth_000001"}

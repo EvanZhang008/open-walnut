@@ -14,7 +14,7 @@
  *     real replayed result; record settled 'idle' but task wedged IN_PROGRESS.
  *     Phase-debt reconcile must advance the phase without touching the record.
  *   D 07fffbe5 — REAL sanitized event sequence from the incident stream file:
- *     an is_backgrounded full-disk grep (b60h9ag3m) never got a terminal event;
+ *     an is_backgrounded full-disk grep (synth_000005) never got a terminal event;
  *     the CLI ended the turn (result turns=16 + idle). gatingBgCount must be 0
  *     and the verdict turnEnded.
  */
@@ -37,6 +37,7 @@ import {
   _resetSessionTrackerForTesting,
 } from '../../src/core/session-tracker.js'
 import { closeDb } from '../../src/core/session-db.js'
+import { foldLine, initialFoldState, assembleSnapshot } from '../../src/providers/daemon-fold.js'
 import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js'
 
 const FIXTURE_DIR = path.join(__dirname, '..', 'fixtures', 'incident-replays')
@@ -161,18 +162,18 @@ describe('incident C (10e7df54) — swallowed result: task wedged IN_PROGRESS be
 })
 
 describe('incident D (07fffbe5) — REAL event sequence: backgrounded grep must not gate turn-over', () => {
-  it('fold of the actual incident tail: gatingBgCount=0, turnEnded, b60h9ag3m visible-but-backgrounded', async () => {
+  it('fold of the actual incident tail: gatingBgCount=0, turnEnded, synth_000005 visible-but-backgrounded', async () => {
     const content = await fsp.readFile(
-      path.join(FIXTURE_DIR, 'incident-d-backgrounded-grep.jsonl'), 'utf-8')
+      path.join(FIXTURE_DIR, 'incident-d-backgrounded-grep.shape.jsonl'), 'utf-8')
     const fold = foldSessionTail(content)
 
     expect(fold.foundTurnAnchor).toBe(true)
     // The full-disk grep: started + is_backgrounded, NO terminal event — ever.
-    expect(fold.bgTasks['b60h9ag3m']).toBeDefined()
-    expect(fold.bgTasks['b60h9ag3m'].status).toBe('running')
-    expect(fold.bgTasks['b60h9ag3m'].isBackgrounded).toBe(true)
+    expect(fold.bgTasks['synth_000005']).toBeDefined()
+    expect(fold.bgTasks['synth_000005'].status).toBe('running')
+    expect(fold.bgTasks['synth_000005'].isBackgrounded).toBe(true)
     // The other four local_bash tasks all reached terminal.
-    for (const tid of ['byb6d9nfo', 'bakbiny4m', 'bloiq0ggt', 'b4j6j9nbm']) {
+    for (const tid of ['synth_000002', 'synth_000003', 'synth_000004', 'synth_000006']) {
       expect(fold.bgTasks[tid]?.status).toBe('completed')
     }
     // THE incident assertion: the CLI ended the turn (result turns=16 + idle),
@@ -183,12 +184,25 @@ describe('incident D (07fffbe5) — REAL event sequence: backgrounded grep must 
     expect(fold.trailingIdle).toBe(true)
     expect(fold.turnEnded).toBe(true)
     expect(fold.workStatus).toBe('agent_complete')
+
+    // The incremental daemon fold must agree with the historical tail fold.
+    // Restart builds from byte zero, not from a made-up task phase.
+    let state = initialFoldState()
+    let offset = 0
+    for (const line of content.trim().split('\n')) {
+      offset += Buffer.byteLength(line) + 1
+      state = foldLine(state, line, offset)
+    }
+    const snapshot = assembleSnapshot({ foldState: state, pendingCtrl: null, dead: false, pid: null, exitCode: null })
+    expect(snapshot.turnActive).toBe(false)
+    expect(snapshot.gatingBgCount).toBe(fold.gatingBgCount)
+    expect(snapshot.detachedBgCount).toBe(1)
   })
 
   it('keeps the incident session running until its detached task finishes', async () => {
     const sid = 'incident-d'
     const content = await fsp.readFile(
-      path.join(FIXTURE_DIR, 'incident-d-backgrounded-grep.jsonl'), 'utf-8')
+      path.join(FIXTURE_DIR, 'incident-d-backgrounded-grep.shape.jsonl'), 'utf-8')
     await writeStream(sid, content)
     await createSessionRecord(sid, '', 'proj', CWD, { pid: process.pid })
     const record = await updateSessionRecord(sid, {
@@ -202,7 +216,7 @@ describe('incident D (07fffbe5) — REAL event sequence: backgrounded grep must 
 
     await fsp.appendFile(path.join(streamsDir, `${sid}.jsonl`), JSON.stringify({
       type: 'system', subtype: 'task_notification', session_id: sid,
-      task_id: 'b60h9ag3m', status: 'completed',
+      task_id: 'synth_000005', status: 'completed',
     }) + '\n')
     expect(await reconcileProcessStatus(record, { isAlive: true }))
       .toEqual({ converged: true, from: 'running', to: 'idle' })
