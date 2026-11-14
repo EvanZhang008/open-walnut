@@ -456,6 +456,13 @@ export async function queueSubtaskNotice(n: SubtaskNotice): Promise<void> {
     }
     n = await attachCardLine(n);
     if (n.queuedAt === undefined) n = { ...n, queuedAt: Date.now() };
+    // An edge that does not say which completion it is takes the child's own: without it the
+    // dedupe cannot match it (2026-11-14, 73055f46: told at 08:17, an edge with no completed_at
+    // was held at 08:24 and released at 08:26 as a second notice of the same completion).
+    if (n.kind === 'completed' && !n.completedAt) {
+      const stored = await getTask(n.child.id).catch(() => null);
+      if (stored?.completed_at) n = { ...n, completedAt: stored.completed_at };
+    }
     // Again after the reads above: another edge's flush may have told it meanwhile.
     if (toldAlready()) return;
     const sid = dest.claudeSessionId;

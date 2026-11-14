@@ -728,6 +728,21 @@ describe('what is left of the team (2026-10-28: count what is open, wake an idle
       expect(sendMessageToSession).toHaveBeenCalledTimes(1);
     });
 
+    it('an edge that does not say which completion it is takes the child\'s own, and is not told twice', async () => {
+      getChildTasks.mockResolvedValue([child('a', 'COMPLETE')]);
+      const base = getTask.getMockImplementation()!;
+      getTask.mockImplementation(async (id: string) => (id === 'a' ? { id: 'a', title: 'A', phase: 'COMPLETE', completed_at: at } : base(id)));
+      await queueSubtaskNotice({ ...completed('a'), completedAt: at });
+      await flushNow();
+      expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+      // The same completion again, this edge carrying no completed_at.
+      await queueSubtaskNotice(completed('a'));
+      await flushNow();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await flushNow();
+      expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+    });
+
     it('a team list that never arrived is not counted as seen', async () => {
       getChildTasks.mockResolvedValue([child('a', 'COMPLETE'), child('b', 'COMPLETE'), child('d', 'IN_PROGRESS', { state: 'working' })]);
       sendMessageToSession.mockRejectedValueOnce(new Error('daemon unreachable'));
