@@ -661,6 +661,14 @@ export function mainUploadSummary(sent: ReadonlyMap<string, number>, upAt: numbe
   return { upForMs: upAt > 0 ? Math.max(0, now - upAt) : null, sentKB: Math.round(total / 1024), topSent: top.join(' ') }
 }
 
+/**
+ * Hosts whose bulk channel had a connection of its own in this process: one that will not open
+ * now is a login refused for a while, not a host that allows one connection (noteBulkOwnRefused).
+ */
+const bulkOwnEverUpHosts = new Set<string>()
+/** An SSH login the host refused (a key or certificate it does not take): no new session link either. */
+const BULK_LOGIN_REFUSED = /Permission denied|publickey|certificate|Authentication failed|Too many authentication failures/i
+
 export class DaemonConnection {
   private ws: WebSocket | null = null
   /** Byte streams to the host's server (core/host-server/), through the daemon. */
@@ -906,6 +914,21 @@ export class DaemonConnection {
   private bulkOwnLink = false
   /** The open bulk socket rides its own connection: its bytes say nothing about the session link's. */
   private bulkSocketOwn = false
+  /**
+   * The bulk channel's own connection opened on this host before and now does not (a login the
+   * host refuses for a while: an expired SSH certificate while the session link still rides the
+   * master opened before it). It is dialled again on a backoff (bulkOwnFailures), and until it is
+   * back a background upload waits instead of riding the session link: a relay that cut that link
+   * then would leave the host unreachable, since no new login works (2026-11-14).
+   */
+  private bulkOwnWanted = false
+  /** Why the own connection would not open last (said in the error a held upload gets). */
+  private bulkOwnRefusal = ''
+  private bulkOwnFailures = 0
+  /** A retry of the own connection is being dialled (it opens beside the channel in use). */
+  private bulkOwnRetrying = false
+  /** The first retry of an own connection that would not open; doubling, at most BULK_REDIAL_MAX_MS. */
+  private static BULK_OWN_RETRY_MS = 30_000
   /**
    * Request bytes this link's session socket carried per command since it came up. A relay
    * ends the SSH connection a few MB in, so the "connection lost" line names what sent them.
@@ -2688,8 +2711,10 @@ export class DaemonConnection {
     // each time their own channel dropped, and took the session link down after it). Read
     // here, after every wait, so a channel that dropped meanwhile counts. Nothing was sent;
     // the caller's retry finds the channel back.
-    if (background && this.bulkOwnLink && !bulkSocket) {
-      throw markLinkFailure(new Error(`${cmd}: the upload channel to ${this.hostKey} is not up (waited ${Math.round(waited / 1000)}s); nothing was sent, try again`), 'no-link')
+    const ownUp = !!bulkSocket && this.bulkSocketOwn
+    if (background && (this.bulkOwnLink ? !bulkSocket : this.bulkOwnWanted && !ownUp)) {
+      const refused = !this.bulkOwnLink && this.bulkOwnRefusal ? ` (its own SSH connection will not open: ${this.bulkOwnRefusal})` : ''
+      throw markLinkFailure(new Error(`${cmd}: the upload channel to ${this.hostKey} is not up${refused} (waited ${Math.round(waited / 1000)}s); nothing was sent, try again`), 'no-link')
     }
 
     const startedAt = Date.now()
@@ -7576,11 +7601,32 @@ export class DaemonConnection {
     const opener = this.bulkForwardOpener()
     this.bulkOwnLink = opener !== null
     this.bulkLastDialAt = Date.now()
-    if (!opener) { this.openBulkSocket(url, seq, false); return }
+    if (!opener) { this.bulkOwnWanted = false; this.openBulkSocket(url, seq, false); return }
     void opener().then((fwd) => {
       if (seq !== this.bulkDialSeq || !this._connected || this._destroyed) { fwd.stop(); return }
+      this.adoptBulkForward(fwd, seq)
+    }, (err: unknown) => {
+      if (seq !== this.bulkDialSeq || !this._connected || this._destroyed) return
+      // No second connection (a login it refuses): the bulk channel rides the session link, as before.
+      log.session.info('DaemonConnection: bulk channel has no connection of its own; it rides the session link', {
+        host: this.hostKey, error: err instanceof Error ? err.message : String(err),
+      })
+      this.bulkOwnLink = false
+      this.releaseBulkWaiters()
+      this.openBulkSocket(url, seq, false)
+      this.noteBulkOwnRefused(err)
+    })
+  }
+
+  /** The bulk channel's own connection is open: its socket rides it (dial `seq`). */
+  private adoptBulkForward(fwd: LaneForward, seq: number): void {
       this.bulkForward = fwd
       this.bulkForwardOpenedAt = Date.now()
+      bulkOwnEverUpHosts.add(this.hostKey)
+      if (this.bulkOwnWanted) log.session.info('DaemonConnection: bulk channel has its own connection again', { host: this.hostKey, tries: this.bulkOwnFailures })
+      this.bulkOwnWanted = false
+      this.bulkOwnRefusal = ''
+      this.bulkOwnFailures = 0
       // Kept monotonic across connections, so a mark taken on the last one still compares.
       this.bulkUpBase = this.bulkUpBytes()
       this.bulkUpSent = (fwd as { sentBytes?: () => number }).sentBytes ?? null
@@ -7596,17 +7642,59 @@ export class DaemonConnection {
         if (ws) { try { ws.terminate() } catch { /* closing */ } } else if (seq === this.bulkDialSeq) this.scheduleBulkRedial()
       })
       this.openBulkSocket(`ws://127.0.0.1:${fwd.port}`, seq, true)
-    }, (err: unknown) => {
-      if (seq !== this.bulkDialSeq || !this._connected || this._destroyed) return
-      // No second connection (a login it refuses): the bulk channel rides the session link, as before.
-      log.session.info('DaemonConnection: bulk channel has no connection of its own; it rides the session link', {
-        host: this.hostKey, error: err instanceof Error ? err.message : String(err),
-      })
-      this.bulkOwnLink = false
-      this.releaseBulkWaiters()
-      this.openBulkSocket(url, seq, false)
-    })
   }
+
+  /**
+   * The bulk channel's own connection would not open, and it rides the session link for now. When
+   * this host's own connection opened before (in this server or an earlier one of this process), or
+   * the login itself was refused (an expired certificate while the session link still rides the
+   * master opened before it: no new login works, so a relay cut of that link would leave the host
+   * unreachable), background uploads wait for it instead of riding the session link, and it is
+   * dialled again on a backoff, beside the channel in use. A host whose second connection never
+   * opened for another reason keeps riding the session link, as before, with no retry.
+   */
+  private noteBulkOwnRefused(err: unknown): void {
+    const said = (err instanceof Error ? err.message : String(err)).split('\n')[0].slice(0, 300)
+    const wanted = bulkOwnEverUpHosts.has(this.hostKey) || BULK_LOGIN_REFUSED.test(said)
+    if (!wanted) return
+    if (!this.bulkOwnWanted) {
+      log.session.warn('DaemonConnection: the bulk channel\'s own connection will not open; background uploads wait for it', { host: this.hostKey, error: said })
+    }
+    this.bulkOwnWanted = true
+    this.bulkOwnRefusal = said
+    this.retryBulkOwnLink()
+  }
+
+  /** Dial the own connection again after a backoff; it replaces the session-link channel only once open. */
+  private retryBulkOwnLink(): void {
+    if (!this._connected || this._destroyed || this.bulkOwnRetryTimer || this.bulkOwnRetrying) return
+    this.bulkOwnFailures++
+    const delay = Math.min(DaemonConnection.BULK_REDIAL_MAX_MS, DaemonConnection.BULK_OWN_RETRY_MS * 2 ** (this.bulkOwnFailures - 1))
+    this.bulkOwnRetryTimer = setTimeout(() => {
+      this.bulkOwnRetryTimer = null
+      if (!this._connected || this._destroyed || this.bulkSocketOwn || !this.bulkOwnWanted) return
+      const opener = this.bulkForwardOpener()
+      if (!opener) { this.bulkOwnWanted = false; return }
+      this.bulkOwnRetrying = true
+      const epoch = this._connectionEpoch
+      void opener().then((fwd) => {
+        this.bulkOwnRetrying = false
+        if (!this._connected || this._destroyed || this.bulkSocketOwn || this._connectionEpoch !== epoch) { fwd.stop(); return }
+        // Open: the channel moves onto it (what rode the session-link socket fails over, once).
+        this.closeBulkChannel()
+        this.bulkOwnLink = true
+        this.bulkLastDialAt = Date.now()
+        this.adoptBulkForward(fwd, ++this.bulkDialSeq)
+      }, (err: unknown) => {
+        this.bulkOwnRetrying = false
+        if (!this._connected || this._destroyed || this._connectionEpoch !== epoch) return
+        this.bulkOwnRefusal = (err instanceof Error ? err.message : String(err)).split('\n')[0].slice(0, 300)
+        this.retryBulkOwnLink()
+      })
+    }, delay)
+    this.bulkOwnRetryTimer.unref?.()
+  }
+  private bulkOwnRetryTimer: ReturnType<typeof setTimeout> | null = null
 
   /** How this host's bulk channel opens a connection of its own, or null: it rides the session link. */
   private bulkForwardOpener(): (() => Promise<LaneForward>) | null {
@@ -7856,6 +7944,7 @@ export class DaemonConnection {
     if (!this._connected || this._destroyed) {
       this.bulkOwnLink = false
       this.releaseBulkWaiters()
+      if (this.bulkOwnRetryTimer) { clearTimeout(this.bulkOwnRetryTimer); this.bulkOwnRetryTimer = null }
     }
   }
 
