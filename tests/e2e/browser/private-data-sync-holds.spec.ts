@@ -1,8 +1,6 @@
 import { test, expect } from '@playwright/test';
-import fs from 'node:fs/promises';
-import path from 'node:path';
 
-test('private data sync stays protected and no longer offers credential-hold controls', async ({ page, baseURL }) => {
+test('private data sync stays protected and no longer offers credential-hold controls', async ({ page, baseURL }, testInfo) => {
   await page.setViewportSize({ width: 1100, height: 800 });
   await page.route('**/api/git-sync/status', (route) => route.fulfill({ json: { protected: true, consecutiveFailures: 0, heldFiles: [] } }));
   await page.route('**/api/notifications', (route) => route.fulfill({ json: { feed: [], unreadCount: 0 } }));
@@ -18,9 +16,7 @@ test('private data sync stays protected and no longer offers credential-hold con
   await expect(card.getByText('Protected', { exact: true })).toBeVisible();
   await expect(panel.getByTestId('private-data-holds')).toHaveCount(0);
   await expect(panel).not.toContainText('kept local');
-  const dir = path.join(process.env.WALNUT_TASK_DIR!, 'evidence-private-sync');
-  await fs.mkdir(dir, { recursive: true });
-  await panel.screenshot({ path: path.join(dir, 'backup-no-holds.png') });
+  await panel.screenshot({ path: testInfo.outputPath('backup-no-holds.png') });
   await panel.locator('.nfc-rail-btn', { hasText: 'Needs you' }).click();
   await expect(panel).not.toContainText('credential');
   await system.click();

@@ -13,6 +13,23 @@ const sources = fs.readdirSync(DIR)
   .filter((f) => f.endsWith('.ts'))
   .map((f) => ({ file: f, text: fs.readFileSync(path.join(DIR, f), 'utf8') }))
 
+describe('optional task directories', () => {
+  const requiredTaskDir = /\bprocess\.env(?:\.WALNUT_TASK_DIR|\[['"]WALNUT_TASK_DIR['"]\])\s*!/
+
+  it('no browser source assumes the session task directory exists on CI', () => {
+    const offenders = sources.flatMap(({ file, text }) => text.split('\n')
+      .flatMap((line, i) => requiredTaskDir.test(line) ? [`${file}:${i + 1}`] : []))
+    expect(offenders).toEqual([])
+  })
+
+  it('catches required access and accepts a fallback or runner output', () => {
+    expect(requiredTaskDir.test('process.env.WALNUT_TASK_DIR!')).toBe(true)
+    expect(requiredTaskDir.test("process.env['WALNUT_TASK_DIR']!")).toBe(true)
+    expect(requiredTaskDir.test("process.env.WALNUT_TASK_DIR ?? 'test-results'")).toBe(false)
+    expect(requiredTaskDir.test("testInfo.outputPath('backup.png')")).toBe(false)
+  })
+})
+
 describe('pin undo shortcuts', () => {
   const fixedUndo = /\.press\(['"](?:Meta|Control)\+z['"]\)/i
 
