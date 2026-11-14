@@ -4,8 +4,8 @@
  *
  * The shape now:
  *   - nothing is pinned at the top of the session for plain background work;
- *   - during a turn, the "<engine> is working…" line is followed by a note,
- *     "· 1 command in background ›", that opens the Background tasks panel;
+ *   - during a turn, the "<engine> is working…" line carries a note before its clock,
+ *     "· 1 command running ›", that opens the Background tasks panel;
  *   - after the turn, while something still runs, one quiet line takes the working
  *     line's place: "1 command still running in the background ›", same panel;
  *   - when everything finished, no note; the session's ⋮ menu has a "Background tasks"
@@ -153,15 +153,18 @@ test.describe('Session background work placement', () => {
     const row = panel.locator('.session-working-row');
     await expect(row.locator('.session-working-label')).toHaveText('Claude Code is working…');
     await expect(note).toHaveCount(1);
-    await expect(note).toHaveText(/^·\s*1 command in background\s*›$/);
+    await expect(note).toHaveText(/^·\s*1 command running\s*›$/);
     await expectNoBarAtTop(panel);
-    // The note sits on the working line, after it, on its middle.
+    // The note sits on the working line, after its words and before its clock and token
+    // count (2026-11-14, the user: "这个 subagent 再跑 可以放在 那个token数量的前面吗"), on its middle.
     const geo = await row.evaluate(el => {
-      const label = el.querySelector('.session-working-indicator')!.getBoundingClientRect();
+      const label = el.querySelector('.session-working-label')!.getBoundingClientRect();
+      const meta = el.querySelector('.session-working-meta')!.getBoundingClientRect();
       const n = el.querySelector('[data-testid="session-background-note"]')!.getBoundingClientRect();
-      return { after: n.left >= label.right - 0.5, midDelta: Math.abs((n.top + n.height / 2) - (label.top + label.height / 2)) };
+      return { after: n.left >= label.right - 0.5, beforeCount: n.right <= meta.left + 0.5, midDelta: Math.abs((n.top + n.height / 2) - (label.top + label.height / 2)) };
     });
     expect(geo.after, 'the note follows the working label').toBe(true);
+    expect(geo.beforeCount, 'the note comes before the clock and token count').toBe(true);
     expect(geo.midDelta, 'the note shares the working line').toBeLessThanOrEqual(3);
     await shoot(page, row, '1-working-line-note');
 
@@ -180,7 +183,7 @@ test.describe('Session background work placement', () => {
       command('tests', 'running', 'npm run test:quick'),
       command('status', 'completed', 'git status --short'),
     ]);
-    await expect(note).toHaveText(/^·\s*1 agent, 1 command in background\s*›$/);
+    await expect(note).toHaveText(/^·\s*1 subagent, 1 command running\s*›$/);
 
     // 4. The turn ends with both still running: one quiet line in the working line's place.
     await inject(page, SID_BG, 'session:result', { result: 'Started the checks.', isError: false });
@@ -188,7 +191,7 @@ test.describe('Session background work placement', () => {
     await expect(panel.locator('.session-working-label', { hasText: 'is working…' })).toHaveCount(0);
     await expect(note).toHaveCount(1);
     await expect(note).toHaveClass(/session-background-after/);
-    await expect(note.locator('.session-working-label')).toHaveText('1 agent, 1 command still running in the background');
+    await expect(note.locator('.session-working-label')).toHaveText('1 subagent, 1 command still running in the background');
     await expect(note).toHaveText(/background\s*›$/);
     await expectNoBarAtTop(panel);
     // It is the chat's last line, inside the chat column, its words whole.
@@ -203,12 +206,12 @@ test.describe('Session background work placement', () => {
     let menu = await openMenu(page, panel);
     const viewsToggle = menu.getByTestId('session-kebab-open').locator('.task-kebab-group-toggle');
     await expect(viewsToggle.locator('.session-action-chip-count')).toHaveText('2');
-    await expect(viewsToggle.locator('.session-action-chip-count')).toHaveAttribute('title', '1 agent, 1 command running');
+    await expect(viewsToggle.locator('.session-action-chip-count')).toHaveAttribute('title', '1 subagent, 1 command running');
     const views = await openViews(menu);
     const menuRow = menu.locator('[data-testid="session-kebab-background"]');
     await expect(menuRow).toContainText('Background tasks');
     await expect(menuRow.locator('.session-action-chip-count')).toHaveText('2');
-    await expect(menuRow.locator('.session-action-chip-count')).toHaveAttribute('title', '1 agent, 1 command running');
+    await expect(menuRow.locator('.session-action-chip-count')).toHaveAttribute('title', '1 subagent, 1 command running');
     // It is a row of Open, after "Msgs" (the group's last row).
     const order = await views.locator('.task-kebab-item').evaluateAll(els => els.map(el => (el as HTMLElement).innerText.replace(/\s+/g, ' ').trim()));
     const msgsAt = order.findIndex(t => /^Msgs\b/.test(t));
@@ -298,7 +301,7 @@ test.describe('Session background work placement', () => {
     // The same element before and after the note joins: a remount restarts the clock at 0s.
     await line.evaluate(el => { (el as any).__sameLine = true; });
     await ledger(page, SID_STOP, [command('serve', 'running', 'npm run dev')]);
-    await expect(note).toHaveText(/^·\s*1 command in background\s*›$/);
+    await expect(note).toHaveText(/^·\s*1 command running\s*›$/);
     expect(await line.evaluate(el => (el as any).__sameLine === true)).toBe(true);
     await ledger(page, SID_STOP, [command('serve', 'completed', 'npm run dev')]);
     await expect(note).toHaveCount(0);

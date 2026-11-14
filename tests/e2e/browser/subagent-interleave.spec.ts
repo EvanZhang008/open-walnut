@@ -486,7 +486,7 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     await expect(page.locator('.wf-card-tasks')).toHaveCount(0);
     const note = page.locator(`.session-panel[data-session-id="${SESSION_ID}"] [data-testid="session-background-note"]`);
     await expect(note).toHaveCount(1);
-    await expect(note).toHaveText(/^·\s*1 agent in background\s*›$/);
+    await expect(note).toHaveText(/^·\s*1 subagent running\s*›$/);
     // The chat chip mirrors the ledger: running, pulsing, with the ledger's tool count
     // and the agent's model from the tool input.
     await expect(chip.locator('.bg-tasks-chip-status')).toHaveText('Running');
@@ -881,7 +881,7 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     // No Background bar; the working line's note counts both kinds and opens the panel.
     await expect(page.locator('.wf-card')).toHaveCount(0);
     const note = page.locator(`.session-panel[data-session-id="${SESSION_ID}"] [data-testid="session-background-note"]`);
-    await expect(note).toHaveText(/^·\s*1 agent, 1 command in background\s*›$/);
+    await expect(note).toHaveText(/^·\s*1 subagent, 1 command running\s*›$/);
     await note.click();
     const panel = page.locator('.wf-modal--tasks');
     const rows = panel.locator('.bg-task-row');

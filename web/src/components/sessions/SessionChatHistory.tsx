@@ -31,7 +31,7 @@ import { TimelineBottomPills, useFlagStore } from './PhoneTimelinePills';
 import { SessionMessage, SessionThinking, StableMarkdownBody, ToolRunShell, StreamRunMembers, streamRunSummary, streamRunHasCallingTool, runRowKey, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, isTextPlusStepTools, mergeThinkingOnly, trailingThinkingOnlyStart, MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember, type StreamRunMember } from './SessionMessage';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { useSessionTextRender } from '@/hooks/useAgentFileOpener';
-import { StreamingBlockView, StreamingReplyMeta, WorkingIndicator, countStreamChars, streamReplyText, useStreamReplyRows } from './StreamingBlockView';
+import { StreamingBlockView, StreamingReplyMeta, countStreamChars, streamReplyText, useStreamReplyRows } from './StreamingBlockView';
 import { SessionWorkingIndicator } from './SessionWorkingIndicator';
 import { CONTEXT_COMPACTING_TEXT, IDLE_COMPACTING_TEXT, useWalnutCompacting } from './CompactContext';
 import { isIdleCompactLine } from '../../../../src/core/sessions/prompt-cache';
@@ -6342,20 +6342,18 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         );
       }
       return (
-        <SessionWorkingIndicator key="ind-working" sessionId={sessionId}>
-          <WorkingIndicator
-            label={assistantLabel}
-            {...(workingText ? { text: workingText } : {})}
-            tokens={Math.round(countStreamChars(blocks, shownHiddenBlocks) / 4)}
-            {...(walnutCompacting
-              ? { text: walnutCompacting === 'context' ? CONTEXT_COMPACTING_TEXT : IDLE_COMPACTING_TEXT }
-              // A compaction's progress row is open: the line says the same, not "is working".
-              : blocks.some((b) => b.type === 'system' && b.variant === 'compact' && b.progress === true)
-                ? { text: `${assistantLabel} is compacting the context\u2026` }
-                : {})}
-            waiting={blocks.some(isPendingPermissionBlock)}
-          />
-        </SessionWorkingIndicator>
+        <SessionWorkingIndicator key="ind-working" sessionId={sessionId} working={{
+          label: assistantLabel,
+          ...(workingText ? { text: workingText } : {}),
+          tokens: Math.round(countStreamChars(blocks, shownHiddenBlocks) / 4),
+          ...(walnutCompacting
+            ? { text: walnutCompacting === 'context' ? CONTEXT_COMPACTING_TEXT : IDLE_COMPACTING_TEXT }
+            // A compaction's progress row is open: the line says the same, not "is working".
+            : blocks.some((b) => b.type === 'system' && b.variant === 'compact' && b.progress === true)
+              ? { text: `${assistantLabel} is compacting the context\u2026` }
+              : {}),
+          waiting: blocks.some(isPendingPermissionBlock),
+        }} />
       );
     }
 

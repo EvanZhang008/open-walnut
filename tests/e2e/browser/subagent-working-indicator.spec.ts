@@ -71,7 +71,7 @@ test('only background agents get the clickable tail status, across repeated fore
   await expect(indicator(page)).toHaveCount(0);
   await expect(panel(page).locator('.session-working-label')).toHaveText('Claude Code is working…');
   // The foreground turn runs beside the agent: the working line names it after itself.
-  await expect(backgroundNote(page)).toHaveText(/^·\s*1 agent in background\s*›$/);
+  await expect(backgroundNote(page)).toHaveText(/^·\s*1 subagent running\s*›$/);
 
   await ledger(page, [agent('one')], false);
   await inject(page, 'session:result', { result: 'Main reply complete.', isError: false });
@@ -125,15 +125,15 @@ test('commands, mixed jobs, unknown foreground, permission waits, and terminal s
   await ledger(page, [agent('one')]);
   await expect(indicator(page)).toHaveCount(0);
   // Not known to wait on it: the quiet after-turn line names the agent instead.
-  await expect(backgroundNote(page).locator('.session-working-label')).toHaveText('1 agent still running in the background');
+  await expect(backgroundNote(page).locator('.session-working-label')).toHaveText('1 subagent still running in the background');
   await ledger(page, [agent('one')], false);
   await expect(indicator(page)).toBeVisible();
   await expect(backgroundNote(page)).toHaveCount(0);
   const command = { taskId: 'command', taskType: 'local_bash', status: 'running', isBackgrounded: true };
   const shapes: Array<[object[], string]> = [
     [[command], '1 command'],
-    [[agent('one'), command], '1 agent, 1 command'],
-    [[{ ...agent('one'), status: 'paused' }], '1 agent'],
+    [[agent('one'), command], '1 subagent, 1 command'],
+    [[{ ...agent('one'), status: 'paused' }], '1 subagent'],
     [[{ ...agent('one'), taskType: 'unknown' }], '1 task'],
   ];
   for (const [tasks, label] of shapes) {

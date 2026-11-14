@@ -221,13 +221,13 @@ describe('backgroundRunning / backgroundRunningLabel (the working line and the s
       task({ taskId: 'ended', status: 'running', taskType: 'local_bash', endedPerLevel: true }),
     ]);
     expect(r).toEqual({ agents: 1, commands: 1, other: 0, total: 2 });
-    expect(backgroundRunningLabel(r)).toBe('1 agent, 1 command');
+    expect(backgroundRunningLabel(r)).toBe('1 subagent, 1 command');
   });
 
   it('names one kind alone, plural when more, and says nothing when all is done', () => {
     expect(backgroundRunningLabel(backgroundRunning([command('c1')]))).toBe('1 command');
     expect(backgroundRunningLabel(backgroundRunning([command('c1'), command('c2'), command('c3', 'pending')]))).toBe('3 commands');
-    expect(backgroundRunningLabel(backgroundRunning([agent('a1'), agent('a2')]))).toBe('2 agents');
+    expect(backgroundRunningLabel(backgroundRunning([agent('a1'), agent('a2')]))).toBe('2 subagents');
     expect(backgroundRunningLabel(backgroundRunning([command('c1', 'completed'), agent('a1', 'stopped')]))).toBe('');
     expect(backgroundRunningLabel(backgroundRunning([]))).toBe('');
   });

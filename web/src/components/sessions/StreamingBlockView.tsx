@@ -9,7 +9,7 @@
  * request id, see web/src/stores/permission-request-store.ts.
  */
 
-import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, memo, type ReactNode } from 'react';
 import type { SessionHistoryMessage } from '@/types/session';
 import { stripQuestionTag } from '@/utils/question-tag';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
@@ -263,7 +263,7 @@ function formatTokenCount(tokens: number): string {
  * it stably), so elapsed time is simply time-since-mount — no cross-component
  * turn clock to maintain.
  */
-export function WorkingIndicator({ label, tokens, startedAt, text, waiting }: {
+export interface WorkingIndicatorProps {
   label: string;
   tokens: number;
   /** The whole line instead of "<label> is working…" (Walnut's idle compaction says what it does). */
@@ -274,7 +274,13 @@ export function WorkingIndicator({ label, tokens, startedAt, text, waiting }: {
    *  start): elapsed counts from there instead of from mount, so a reader opened
    *  mid-run shows the run's age, not the reader's. */
   startedAt?: number;
-}) {
+  /** What else runs (a subagent, a background command), drawn before the clock and the
+   *  token count: "Claude Code is working… · 1 subagent running › · 12s · 1.2k tokens"
+   *  (2026-11-14, the user: "这个 subagent 再跑 可以放在 那个token数量的前面吗"). */
+  note?: ReactNode;
+}
+
+export function WorkingIndicator({ label, tokens, startedAt, text, waiting, note }: WorkingIndicatorProps) {
   const startRef = useRef(startedAt ?? Date.now());
   const [elapsed, setElapsed] = useState(() => Math.max(0, Math.floor((Date.now() - startRef.current) / 1000)));
   useEffect(() => {
@@ -287,9 +293,11 @@ export function WorkingIndicator({ label, tokens, startedAt, text, waiting }: {
   return (
     <div className="session-working-indicator">
       <span className="session-working-label">{text ?? (waiting ? `${label} is waiting for your answer` : `${label} is working…`)}</span>
+      {note}
       {/* No clock while it waits: this one counts from when the page drew it, not from the ask. */}
       {!waiting && (
         <span className="session-working-meta">
+          {note && <span className="session-working-meta-sep" aria-hidden="true">· </span>}
           {elapsed}s{tokens > 0 ? ` · ${formatTokenCount(tokens)} tokens` : ''}
         </span>
       )}

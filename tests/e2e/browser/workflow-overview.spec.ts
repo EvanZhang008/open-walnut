@@ -352,7 +352,7 @@ test.describe('Background work', () => {
         shellTask(0, 'completed'), shellTask(1, 'completed'), shellTask(2, 'completed'), shellTask(3, 'failed'),
       ],
     })
-    await expect(note.locator('.session-working-label')).toHaveText('1 agent still running in the background', { timeout: 30_000 })
+    await expect(note.locator('.session-working-label')).toHaveText('1 subagent still running in the background', { timeout: 30_000 })
 
     // The reported density: 2 agents beside 150 commands, one failed, one running.
     await emitBackgroundTasks(page, {
@@ -363,11 +363,11 @@ test.describe('Background work', () => {
         ...Array.from({ length: 150 }, (_, i) => shellTask(i, i === 40 ? 'failed' : i === 149 ? 'running' : 'completed')),
       ],
     })
-    await expect(note.locator('.session-working-label')).toHaveText('2 agents, 1 command still running in the background', { timeout: 30_000 })
+    await expect(note.locator('.session-working-label')).toHaveText('2 subagents, 1 command still running in the background', { timeout: 30_000 })
     await expect(panel.locator('.wf-card')).toHaveCount(0)
     row = await openSessionMenu(page, panel)
     await expect(row.locator('.session-action-chip-count')).toHaveText('3')
-    await expect(row.locator('.session-action-chip-count')).toHaveAttribute('title', '2 agents, 1 command running')
+    await expect(row.locator('.session-action-chip-count')).toHaveAttribute('title', '2 subagents, 1 command running')
     await page.keyboard.press('Escape')
     await shootNote(page, note, 'background-after-turn-dense')
 
@@ -437,7 +437,7 @@ test.describe('Background work', () => {
       ],
     })
     const note = backgroundNote(panel)
-    await expect(note.locator('.session-working-label')).toHaveText('1 agent, 1 command still running in the background', { timeout: 30_000 })
+    await expect(note.locator('.session-working-label')).toHaveText('1 subagent, 1 command still running in the background', { timeout: 30_000 })
     await note.click()
     const tasksPanel = page.locator('.wf-modal--tasks')
     await expect(tasksPanel.locator('.wf-modal-meta').first()).toHaveText('2 agents · 150 commands · 1 other task · 2 running')

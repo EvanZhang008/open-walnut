@@ -97,7 +97,7 @@ test.describe('Stop one background task', () => {
     await emitLedger(page, sessionId, ledger())
     // The session's after-turn line names what still runs and opens the reader.
     const note = panel.locator('[data-testid="session-background-note"]')
-    await expect(note.locator('.session-working-label')).toHaveText('1 agent, 1 command still running in the background', { timeout: 30_000 })
+    await expect(note.locator('.session-working-label')).toHaveText('1 subagent, 1 command still running in the background', { timeout: 30_000 })
     await note.click()
     const reader = page.locator('.wf-modal--tasks')
     const head = reader.locator('.bg-tasks-detail-head')
