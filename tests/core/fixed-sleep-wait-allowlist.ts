@@ -636,6 +636,8 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/web/sent-draft-stays-sent.test.ts", sleep: "await wait(1_500)", reason: "fake timers: wait() advances vi fake timers (vi.advanceTimersByTimeAsync)" },
   { file: "tests/web/sent-draft-stays-sent.test.ts", sleep: "await wait(10)", reason: "fake timers: wait() advances vi fake timers (vi.advanceTimersByTimeAsync)" },
   { file: "tests/web/terminal/terminal-manager.test.ts", sleep: "await new Promise((r) => setTimeout(r, 30));", reason: "negative: the opening drain does not settle while a spawn is held" },
+  { file: "tests/providers/daemon-gateway-held-catalog-twins-e2e.test.ts", sleep: "await new Promise((r) => setTimeout(r, 300))", reason: "negative: on a cold host only the first catalog ask goes; the others must not reach the server while it is out" },
+  { file: "tests/providers/daemon-gateway-held-catalog-twins-e2e.test.ts", sleep: "await new Promise((r) => setTimeout(r, 500))", reason: "negative: a sameAs the host never held is refused, never asked for again" },
   { file: "tests/providers/stream-lane-pace.test.ts", sleep: "await sleep(50)", reason: "negative: a lane stopped by Walnut must not teach a pace" },
   { file: "tests/providers/stream-lane-pace.test.ts", sleep: "await sleep(400)", reason: "negative: the daemon closing the lane's socket while its SSH forward stays up must not teach a pace, past the 300 ms SSH-exit grace this test sets" },
   { file: "tests/providers/stream-lane-pace.test.ts", sleep: "await sleep(100)", reason: "negative: an SSH forward ending on a ServerAlive timeout (a stall) must not teach a pace" },

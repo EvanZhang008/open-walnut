@@ -6972,7 +6972,10 @@ function gatewayRelaysSocketGone(ws) {
 function relayToPrimary(target, home, capability, callerSid, payload, respond, readable, deadline) {
   if (typeof deadline !== 'number') deadline = Date.now() + GATEWAY_HUB_TIMEOUT_MS;
   // A cold daemon asks for one catalog per Walnut at a time; the rest go once it is held.
-  if (heldCatalogs.wait(home, capability, payload, function () { relayToPrimary(gatewayTargetFor(home) || target, home, capability, callerSid, payload, respond, readable, deadline); })) return;
+  var resume = function () {
+    relayToPrimary(gatewayTargetFor(home) || target, home, capability, callerSid, payload, respond, readable, deadline);
+  };
+  if (heldCatalogs.wait(home, capability, payload, resume)) return;
   gatewayRelayCounter += 1;
   var relayId = gatewayRelayCounter;
   // A schemas tools.list names the catalogs held for its Walnut (held-catalogs-core.ts).

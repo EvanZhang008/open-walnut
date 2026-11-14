@@ -5698,7 +5698,8 @@ function relayToPrimary(
   deadline: number = Date.now() + gatewayHubTimeoutMs(),
 ) {
   // A cold daemon asks for one catalog per Walnut at a time; the rest go once it is held.
-  if (heldCatalogs.wait(home, capability, payload, () => relayToPrimary(gatewayTargetFor(home) ?? target, home, capability, callerSid, payload, respond, readable, deadline))) return
+  const resume = () => relayToPrimary(gatewayTargetFor(home) ?? target, home, capability, callerSid, payload, respond, readable, deadline)
+  if (heldCatalogs.wait(home, capability, payload, resume)) return
   const relayId = ++gatewayRelayCounter
   // A schemas tools.list names the catalogs held for its Walnut (held-catalogs-core.ts).
   payload = heldCatalogs.ask(home, capability, payload)
