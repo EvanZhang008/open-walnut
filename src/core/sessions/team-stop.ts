@@ -269,13 +269,15 @@ export async function wakeSourcesOf(rootRef: string, opts: { team?: boolean } = 
   }
   try {
     const { getSessionByClaudeId } = await import('../session-tracker.js');
+    const { turnRunOf } = await import('./turn-run.js');
     for (const t of members) {
       const rec = t.session_id ? await getSessionByClaudeId(t.session_id).catch(() => null) : null;
-      const w = rec?.endpointWait;
-      if (w && w.state !== 'gave_up') clocks.push({ taskId: t.id, kind: 'endpoint_wait', at: w.since });
-      // A usage-limit wait continues its session at the reset (sessions/usage-limit-wait.ts); a team stop holds it too.
-      const ul = rec?.usageLimit;
-      if (ul && (ul.state === 'waiting' || ul.state === 'resumed')) clocks.push({ taskId: t.id, kind: 'usage_limit', at: ul.dueAt ?? ul.since });
+      if (!rec) continue;
+      // A wait continues its session at its endpoint or its usage reset (sessions/turn-run.ts); a team stop holds it too.
+      for (const w of (await turnRunOf(rec, { failed: true })).waits) {
+        if (w.reason === 'endpoint_wait') clocks.push({ taskId: t.id, kind: 'endpoint_wait', at: w.endpointWait.since });
+        if (w.reason === 'usage_limit') clocks.push({ taskId: t.id, kind: 'usage_limit', at: w.usageLimit.dueAt ?? w.usageLimit.since });
+      }
     }
   } catch { /* sessions unreadable: the task clocks above still list */ }
   return {

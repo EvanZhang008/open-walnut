@@ -8,6 +8,7 @@
 import type { MailAddress, MailAttachmentMeta } from '@/api/mail';
 import { formatSize } from '@/utils/format';
 import { timeAgo } from '@/utils/time';
+import { cleanAttachmentName, safeFilename } from '../../../../src/integrations/mail/attachment-name';
 
 /** Past this, an age stops answering "when" and the date is what the reader wants. */
 const AGE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -73,8 +74,22 @@ export function formatMailDate(sentAt: number): string {
 }
 
 /** An attachment chip. v1 shows metadata only: nothing here is downloadable yet. */
+/**
+ * An attachment's name as the console shows it: the sender's name with no control character or
+ * bidirectional override (`invoice\u202Efdp.exe` would read as `invoiceexe.pdf`), by the same rule
+ * the server names the file with (src/integrations/mail/attachment-name.ts).
+ */
+export function attachmentName(attachment: MailAttachmentMeta): string {
+  return cleanAttachmentName(attachment.filename) || 'Attachment';
+}
+
+/** The name a browser saves the file under: the name the server's header and Downloads use. */
+export function attachmentFileName(attachment: MailAttachmentMeta): string {
+  return safeFilename(attachment.filename);
+}
+
 export function attachmentLabel(attachment: MailAttachmentMeta): string {
-  const name = attachment.filename?.trim() || 'Attachment';
+  const name = attachmentName(attachment);
   return attachment.bytes && attachment.bytes > 0 ? `${name} (${formatSize(attachment.bytes)})` : name;
 }
 

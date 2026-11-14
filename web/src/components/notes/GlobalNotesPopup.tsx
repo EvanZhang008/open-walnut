@@ -1,4 +1,5 @@
 import { useEffect, useCallback } from 'react';
+import { useYieldsToTaskOpen } from '@/hooks/useOpenTask';
 import { createPortal } from 'react-dom';
 import { MarkdownEditorPanel } from './MarkdownEditorPanel';
 import type { RawFlushIO } from './MarkdownEditorPanel';
@@ -25,13 +26,14 @@ interface GlobalNotesPopupProps {
   onClose: () => void;
   tasks?: Task[];
   focusedTaskId?: string;
-  onTaskClick?: (taskId: string) => void;
 }
 
-export function GlobalNotesPopup({ content, onDirty, saving, onClose, tasks, focusedTaskId, onTaskClick }: GlobalNotesPopupProps) {
+export function GlobalNotesPopup({ content, onDirty, saving, onClose, tasks, focusedTaskId }: GlobalNotesPopupProps) {
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === 'Escape') onClose();
   }, [onClose]);
+  // A task link in the notes opens on Home: the popup gives way.
+  useYieldsToTaskOpen(onClose);
 
   useEffect(() => {
     document.addEventListener('keydown', handleKeyDown);
@@ -72,7 +74,6 @@ export function GlobalNotesPopup({ content, onDirty, saving, onClose, tasks, foc
             rawFlushIO={GLOBAL_RAW_IO}
             tasks={tasks}
             focusedTaskId={focusedTaskId}
-            onTaskClick={onTaskClick}
           />
         </div>
       </div>

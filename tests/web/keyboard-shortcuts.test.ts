@@ -9,9 +9,10 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
-  cycleDir, envNote, isCompleteNextChord, isFocusComposerChord, isHelpChord,
-  jumpIndex, shortcutGroups, type KeyEnv,
+  cycleDir, envNote, isHelpChord, isJumpHintModifier,
+  jumpBadgeLabel, jumpIndex, shortcutGroups, type KeyEnv,
 } from '../../web/src/keyboard/shortcuts'
+import { commandDef, commandFor } from '../../web/src/keyboard/commands'
 
 type K = { key: string; code: string; metaKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean; altKey?: boolean }
 const ev = (k: K) => ({ metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, ...k })
@@ -41,21 +42,14 @@ describe('session switching takes the modifier the place leaves free', () => {
     expect(jumpIndex(ev({ key: '0', code: 'Digit0', altKey: true }), 'other')).toBe(0)
   })
 
-  // Holding the jump modifier alone shows nothing (2026-11-13: the column number badges came up on
-  // a bare Cmd press the person never asked for, "i press "command" and this show"). The sheet has
-  // no hold row, Home's keys never act on a lone modifier, and no page draws the badges.
-  it('a lone modifier held is no shortcut: no hold row, no handler, no badge', () => {
-    const MODIFIERS = new Set(['\u2318', '\u2303', '\u2325', '\u21e7', 'Ctrl', 'Alt', 'Shift'])
-    for (const env of ['mac-app', 'mac-browser', 'other'] as KeyEnv[]) {
-      for (const row of shortcutGroups(env).flatMap((g) => g.rows)) {
-        for (const chord of row.keys) expect(chord.every((k) => MODIFIERS.has(k)), `"${row.id}" is a modifier alone`).toBe(false)
-      }
-    }
-    const home = readFileSync(path.resolve(import.meta.dirname, '../../web/src/pages/useHomeKeyboard.ts'), 'utf8')
-    expect(home).not.toMatch(/e\.key === '(Meta|Control|Alt)'/)
-    expect(home).not.toMatch(/addEventListener\('keyup'/)
-    const main = readFileSync(path.resolve(import.meta.dirname, '../../web/src/pages/MainPage.tsx'), 'utf8')
-    expect(main).not.toMatch(/session-jump-badge|JumpBadge/)
+  it('the column badges and the hold that shows them follow the same modifier', () => {
+    expect(jumpBadgeLabel(1, 'mac-app')).toBe('\u23181')
+    expect(jumpBadgeLabel(4, 'mac-browser')).toBe('\u23034')
+    expect(jumpBadgeLabel(2, 'other')).toBe('Alt+2')
+    expect(isJumpHintModifier(ev({ key: 'Meta', code: 'MetaLeft', metaKey: true }), 'mac-app')).toBe(true)
+    expect(isJumpHintModifier(ev({ key: 'Meta', code: 'MetaLeft', metaKey: true, shiftKey: true }), 'mac-app')).toBe(false)
+    expect(isJumpHintModifier(ev({ key: 'Control', code: 'ControlLeft', ctrlKey: true }), 'mac-browser')).toBe(true)
+    expect(isJumpHintModifier(ev({ key: 'Meta', code: 'MetaLeft', metaKey: true }), 'mac-browser')).toBe(false)
   })
 })
 
@@ -64,18 +58,18 @@ describe('task and help chords', () => {
   it('mod+I focuses the composer and mod+Shift+D completes and goes on, with the ordinary modifier', () => {
     for (const env of envs) {
       const mod = env === 'other' ? { ctrlKey: true } : { metaKey: true }
-      expect(isFocusComposerChord(ev({ key: 'i', code: 'KeyI', ...mod }), env)).toBe(true)
-      expect(isFocusComposerChord(ev({ key: 'I', code: 'KeyI', ...mod, shiftKey: true }), env)).toBe(false)
-      expect(isCompleteNextChord(ev({ key: 'D', code: 'KeyD', ...mod, shiftKey: true }), env)).toBe(true)
-      expect(isCompleteNextChord(ev({ key: 'd', code: 'KeyD', ...mod }), env)).toBe(false)
-      expect(isCompleteNextChord(ev({ key: 'D', code: 'KeyD', ...mod, shiftKey: true, altKey: true }), env)).toBe(false)
+      expect(commandFor(ev({ key: 'i', code: 'KeyI', ...mod }), env)).toBe('composer.focus')
+      expect(commandFor(ev({ key: 'I', code: 'KeyI', ...mod, shiftKey: true }), env)).toBeNull()
+      expect(commandFor(ev({ key: 'D', code: 'KeyD', ...mod, shiftKey: true }), env)).toBe('task.completeNext')
+      expect(commandFor(ev({ key: 'd', code: 'KeyD', ...mod }), env)).toBeNull()
+      expect(commandFor(ev({ key: 'D', code: 'KeyD', ...mod, shiftKey: true, altKey: true }), env)).toBeNull()
     }
   })
 
   it('the composer key also takes the session modifier, so elsewhere Alt+I sits with Alt+1..9', () => {
-    expect(isFocusComposerChord(ev({ key: '\u02c6', code: 'KeyI', altKey: true }), 'other')).toBe(true)
-    expect(isFocusComposerChord(ev({ key: 'i', code: 'KeyI', ctrlKey: true }), 'mac-browser')).toBe(true)
-    expect(isFocusComposerChord(ev({ key: 'i', code: 'KeyI', altKey: true }), 'mac-app')).toBe(false)
+    expect(commandFor(ev({ key: '\u02c6', code: 'KeyI', altKey: true }), 'other')).toBe('composer.focus')
+    expect(commandFor(ev({ key: 'i', code: 'KeyI', ctrlKey: true }), 'mac-browser')).toBe('composer.focus')
+    expect(commandFor(ev({ key: 'i', code: 'KeyI', altKey: true }), 'mac-app')).toBeNull()
     const row = (env: KeyEnv) => shortcutGroups(env)[0].rows.find((r) => r.id === 'composer.focus')!.keys[0]
     expect(row('other')).toEqual(['Alt', 'I'])
     expect(row('mac-app')).toEqual(['\u2318', 'I'])
@@ -102,15 +96,11 @@ describe('the sheet names only handled keys', () => {
   const HANDLERS: Record<string, { file: string; has: RegExp }> = {
     'session.jump': { file: 'pages/useHomeKeyboard.ts', has: /jumpIndex\(e, env\)/ },
     'session.last': { file: 'pages/useHomeKeyboard.ts', has: /n === 9 \? ids\[ids\.length - 1\]/ },
+    'session.numbers': { file: 'pages/useHomeKeyboard.ts', has: /isJumpHintModifier\(e, env\)/ },
     'session.cycle': { file: 'pages/useHomeKeyboard.ts', has: /cycleDir\(e, env\)/ },
-    'composer.focus': { file: 'pages/useHomeKeyboard.ts', has: /isFocusComposerChord\(e, env\)/ },
-    'task.completeNext': { file: 'pages/useHomeKeyboard.ts', has: /isCompleteNextChord\(e, env\)/ },
     'undo': { file: 'undo/TaskUndoContext.tsx', has: /undoKeyApplies\(e, active\)/ },
     'help': { file: 'keyboard/ShortcutsHelp.tsx', has: /isHelpChord\(e, detectKeyEnv\(\)/ },
-    'session.find': { file: 'pages/MainPage.tsx', has: /e\.shiftKey && \(e\.key === 'o' \|\| e\.key === 'O'\)/ },
-    'session.new': { file: 'pages/MainPage.tsx', has: /e\.shiftKey && e\.key === 'Enter'/ },
     'session.drawer': { file: 'hooks/usePanelKeyRouter.ts', has: /isDrawerChord\(e, isMacPlatform\(\)\)/ },
-    'task.search': { file: 'components/tasks/TodoSearchBar.tsx', has: /e\.key === 'k'/ },
     'task.filter': { file: 'components/tasks/useHomeFilters.ts', has: /e\.key !== 'f' && e\.key !== 'F'/ },
     'page.find': { file: 'components/common/PageFind.tsx', has: /isFindChord/ },
     'escape': { file: 'pages/MainPage.tsx', has: /e\.key === 'Escape' && focusedTaskRef\.current/ },
@@ -120,7 +110,8 @@ describe('the sheet names only handled keys', () => {
     const rows = shortcutGroups('mac-app').flatMap((g) => g.rows)
     expect(rows.length).toBeGreaterThan(8)
     for (const row of rows) {
-      const h = HANDLERS[row.id]
+      // A command row names its handler in the registry (keyboard/commands.ts).
+      const h = row.command ? commandDef(row.command).handler : HANDLERS[row.id]
       expect(h, `the sheet lists "${row.id}" (${row.label}) but no handler is named for it here`).toBeDefined()
       expect(web(h.file), `"${row.id}" names ${h.file}, which no longer handles it`).toMatch(h.has)
     }

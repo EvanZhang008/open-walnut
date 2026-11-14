@@ -621,14 +621,18 @@ export function answeredWords(a: Pick<AskAnswer, 'byTitle' | 'text'>): string {
 /**
  * The status shown for a task whose own question a lead, VP or Main already answered for the user
  * (`answer`, Task.ask_answered): Waiting on itself to act on the answer, never Needs you, while it
- * asks the same in the same words. Any other status as derived. Only the session's own question: a
- * Board choice is answered on the Board, a prompt or a failure in the session. Pure.
+ * asks the same in the same words. Any other status as derived. Only the session's own question
+ * (in its report, or an org node's in its chat): a Board choice, a letter and a prompt are settled
+ * where they live (ask-answer.ts settles them there), so they leave by themselves. Pure.
  */
 export function answeredAbove(
   derived: UserStatus, answers: AskAnswer | readonly AskAnswer[] | null | undefined, nowMs = Date.now(), personAt?: string,
 ): UserStatus {
-  if (!answers || derived.state !== 'needs' || derived.source !== 'session' || !derived.ask) return derived;
-  const answer = answerFor(Array.isArray(answers) ? answers : [answers as AskAnswer], derived.ask, nowMs, { ...derived.decision,
+  // An org node's own question reads Waiting on the user in its chat (user-status.ts asOrgNode): answered the same way.
+  const chat = derived.state === 'waiting' && derived.kind === 'you' && !!derived.chatAsk && !derived.chatAskFrom;
+  if (!answers || !(chat || (derived.state === 'needs' && derived.source === 'session' && derived.ask))) return derived;
+  const asked = chat ? derived.chatAsk! : derived.ask!;
+  const answer = answerFor(Array.isArray(answers) ? answers : [answers as AskAnswer], asked, nowMs, { ...derived.decision,
     more: derived.askForm?.more, kind: derived.askForm?.kind, options: derived.askForm?.options,
     ...(personAt ? { personAt } : {}),
   });

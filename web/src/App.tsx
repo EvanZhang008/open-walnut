@@ -113,7 +113,7 @@ export function App() {
   const apps = useAppCatalog();
   // A task pill on a surface with no click handler of its own stays in the app,
   // or in the pop-out when this window is one.
-  useTaskLinkClickFallback(navigate, isPopoutPath(location.pathname));
+  useTaskLinkClickFallback(navigate);
   // A path or a letter in agent text opens from every surface (utils/open-anywhere.ts).
   useAgentLinkClickFallback();
   useOpenLetterRequests(isPopoutPath(location.pathname));

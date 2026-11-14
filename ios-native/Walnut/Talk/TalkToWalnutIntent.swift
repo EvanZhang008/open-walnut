@@ -42,21 +42,26 @@ struct TalkToWalnutIntent: TalkPressIntent, AudioRecordingIntent, LiveActivityIn
     }
 }
 
-/// Dictate to Clipboard: the same take as Talk to Walnut, but the words go onto the
-/// clipboard exactly as heard, to paste anywhere, and never to the CEO chat. Locked,
-/// iOS asks for Face ID first, as for Talk to Walnut: the words land on this
-/// iPhone's clipboard.
+/// Dictate: the same take as Talk to Walnut, but its words open on one page, exactly as
+/// heard, with Send (to the CEO chat) and Copy (to paste anywhere); nothing goes anywhere
+/// before the person picks one (the user, 2026-11-11: "just one page that can send and can
+/// copy"). The page needs Walnut in front, so the press opens Walnut and listens there.
+/// Locked, iOS asks for Face ID first, as for Talk to Walnut.
+///
+/// The type keeps its first name: an Action Button set to it in iOS stays set across the
+/// rename (iOS keeps the intent's type, not its title).
 struct DictateToClipboardIntent: TalkPressIntent, AudioRecordingIntent, LiveActivityIntent, ForegroundContinuableIntent {
-    static let title: LocalizedStringResource = "Dictate to Clipboard"
+    static let title: LocalizedStringResource = "Dictate"
     static let description = IntentDescription(
-        "Say something and Walnut puts your words on the clipboard, exactly as heard. Tap Copy, or run it again, to finish.",
+        "Say something and Walnut shows your words on one page: send them to your CEO chat, or copy them to paste anywhere.",
         categoryName: "Walnut"
     )
     static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
+    /// Walnut comes forward from `press`, after Face ID, as Talk to Walnut's fallback does.
     static let openAppWhenRun = false
     @available(iOS 26.0, *)
     static var supportedModes: IntentModes { [.background, .foreground(.dynamic)] }
-    static let destination: TalkDestination = .clipboard
+    static let destination: TalkDestination = .dictation
 
     @MainActor
     func perform() async throws -> some IntentResult {
@@ -65,7 +70,7 @@ struct DictateToClipboardIntent: TalkPressIntent, AudioRecordingIntent, LiveActi
     }
 }
 
-/// One press of Talk to Walnut or Dictate to Clipboard: both run this, so the two can
+/// One press of Talk to Walnut or Dictate: both run this, so the two can
 /// never drift apart on the rules a real phone enforces (`ForegroundRecordingGuardTests`
 /// reads this extension as part of each intent that conforms).
 protocol TalkPressIntent: ForegroundContinuableIntent {
@@ -75,7 +80,7 @@ protocol TalkPressIntent: ForegroundContinuableIntent {
 
 /// A press is bringing Walnut forward to listen there (Face ID, a cold launch), for
 /// either intent: there is one take at a time.
-@MainActor private var talkPressOpening = false
+@MainActor var talkPressOpening = false
 
 extension TalkPressIntent {
     @MainActor
@@ -89,17 +94,39 @@ extension TalkPressIntent {
             if talk.inFront { TalkPanel.shared.show() }
             return
         }
+        // A dictation's page left unseen behind another app: its words wait in the list, and
+        // this press is a new take (a Talk to Walnut press still listens from behind).
+        if talk.isReviewing, !talk.inFront {
+            AppLog.info("talk", "press sets the unseen dictation aside", ["source": "intent"])
+            talk.closeReview()
+        }
+        // A dictation's take ended from another app ends on its page: Walnut comes forward.
+        if talk.phase == .listening, talk.destination == .dictation, !talk.inFront {
+            talkPressOpening = true
+            defer { talkPressOpening = false }
+            try await openWalnut()
+            _ = await talk.waitUntilInFront()
+            try await Self.takeInFront(talk)
+            return
+        }
         // A press while a take listens finishes it, wherever it shows; one while it opens
         // the microphone or sends leaves that take alone.
         if talk.isBusy || talk.inFront {
             try await Self.takeInFront(talk)
             return
         }
-        do {
-            try await talk.toggle(source: "intent", to: destination)
-            return
-        } catch let refused as TalkSession.StartError where TalkToWalnutIntent.opensWalnut(for: refused) {
-            AppLog.info("talk", "listening in Walnut instead", ["reason": refused.localizedDescription])
+        // A dictation ends on its page, and a dictation's page waits for Send or Copy:
+        // only Walnut in front shows it, so both open Walnut. A take for the CEO listens
+        // from behind.
+        if destination == .ceo, !talk.isReviewing {
+            do {
+                try await talk.toggle(source: "intent", to: destination)
+                return
+            } catch let refused as TalkSession.StartError where TalkToWalnutIntent.opensWalnut(for: refused) {
+                AppLog.info("talk", "listening in Walnut instead", ["reason": refused.localizedDescription])
+            }
+        } else {
+            AppLog.info("talk", "opening Walnut", ["for": talk.isReviewing ? "dictation-page" : "dictation"])
         }
         talkPressOpening = true
         defer { talkPressOpening = false }
@@ -203,10 +230,10 @@ struct WalnutShortcuts: AppShortcutsProvider {
             intent: DictateToClipboardIntent(),
             phrases: [
                 "Dictate with \(.applicationName)",
-                "Dictate to clipboard with \(.applicationName)",
+                "Dictate to \(.applicationName)",
             ],
-            shortTitle: "Dictate to Clipboard",
-            systemImageName: "doc.on.clipboard"
+            shortTitle: "Dictate",
+            systemImageName: "text.bubble"
         )
     }
 

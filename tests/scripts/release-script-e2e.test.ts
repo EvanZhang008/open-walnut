@@ -14,6 +14,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { withLocalImports } from '../helpers/script-imports.js'
 
 const REPO = path.resolve(__dirname, '../..')
 
@@ -81,7 +82,10 @@ beforeEach(() => {
   fs.mkdirSync(path.join(work, 'scripts'), { recursive: true })
   fs.mkdirSync(fakeBin)
   fs.writeFileSync(path.join(fakeBin, 'gh'), FAKE_GH, { mode: 0o755 })
-  for (const f of ['release.mjs', 'ci-gate.mjs']) fs.copyFileSync(path.join(REPO, 'scripts', f), path.join(work, 'scripts', f))
+  for (const f of withLocalImports(['release.mjs', 'ci-gate.mjs'])) {
+    fs.mkdirSync(path.dirname(path.join(work, 'scripts', f)), { recursive: true })
+    fs.copyFileSync(path.join(REPO, 'scripts', f), path.join(work, 'scripts', f))
+  }
   const pkg = { name: 'open-walnut', version: '0.5.1', scripts: { release: 'node scripts/release.mjs' } }
   fs.writeFileSync(path.join(work, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`)
   // bun.lock carries no version of its own, so a release leaves it byte for byte.

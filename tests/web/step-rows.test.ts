@@ -70,12 +70,13 @@ describe('the fold line says how long the turn worked, then its steps', () => {
     const foldRules = css.match(/\.process-fold[^{]*\{[^}]*\}/g) ?? []
     for (const rule of foldRules) expect(rule, rule).not.toMatch(/border-(bottom|top)\s*:\s*\d/)
   })
-  it('a running fold shows what it does now under its closed line', () => {
-    const live = html(createElement(ProcessFoldRow, { findMembers: undefined, foldId: 'f2', lead: 'Working', phrase: 'Ran 1 tool', running: true, peek: 'NOW' }, 'body'))
-    expect(live).toContain('data-testid="turn-fold-peek"')
-    expect(live).toContain('NOW')
-    const idle = html(createElement(ProcessFoldRow, { findMembers: undefined, foldId: 'f3', phrase: 'Ran 1 tool', peek: 'NOW' }, 'body'))
-    expect(idle).not.toContain('turn-fold-peek')
+  it('a running fold, shut, draws its line and nothing under it (the user, 2026-11-14)', () => {
+    const live = html(createElement(ProcessFoldRow, { findMembers: undefined, foldId: 'f2', lead: 'Working', phrase: 'Ran 1 tool', running: true }, 'body'))
+    expect(live).toContain('data-running="true"')
+    expect(live).toContain('tool-run-live-dot')
+    expect(live).not.toContain('body')
+    // The row holds its toggle and nothing else.
+    expect(live.replace(/<button[\s\S]*<\/button>/, '')).toMatch(/^<div[^>]*><\/div>$/)
   })
   it('a shut fold names the saved rows it holds, so the find bar can count and open it', () => {
     const shut = html(createElement(ProcessFoldRow, { findMembers: 'ta1 tb1', foldId: 'f4', phrase: 'Ran 2 tools', testId: 'turn-fold' }, 'body'))

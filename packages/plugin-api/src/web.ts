@@ -222,6 +222,10 @@ export interface TaskViewProps {
   grouped?: boolean
   toolbar?: boolean
   storageKey?: string
+  /**
+   * @deprecated Not called. A click on a task in a TaskView opens it on Walnut's Home with its
+   * session, as a task click does everywhere in Walnut (2026-11-13). Kept so older plugins compile.
+   */
   onOpenTask?(taskId: string): void
 }
 

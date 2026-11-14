@@ -49,8 +49,7 @@
      Answer button were 26 px tall. One floor on a phone: 12 px, 44 px targets. */
   .app-shell-navigation .task-board-pane :is(
     .bs-who, .bs-table th, .bs-sub, .bs-stale, .bs-c-when, .bs-pill, .bs-chip, .bs-act,
-    .board-view-count, .task-board-bar-sub,
-    .board-task-peek-kicker, .board-task-peek-phase, .board-task-peek-note
+    .board-view-count, .task-board-bar-sub
   ) {
     font-size: 12px;
   }

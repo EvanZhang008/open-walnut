@@ -26,6 +26,12 @@
  *   - O11: a read whose answer never comes fails alone while uploads still move on the channel:
  *     the channel and the parts on it stay (2026-11-12: reads timed out behind 1 MB parts, each
  *     timeout ended the channel and cut the part going up, over and over, and a move failed).
+ *   - O13: a host whose second login is refused from the first dial (no own connection yet in this
+ *     process, as after a server restart under an expired certificate) holds background uploads too,
+ *     and the retry opens beside the channel in use: a command on it is not cut by a failed retry;
+ *   - O12: an own connection that worked and then will not open (2026-11-14: an expired SSH
+ *     certificate while the session link still rode its old master) keeps background uploads off
+ *     the session link, lets a person's upload through, and is dialled again until it opens.
  * The mock forward is a TCP proxy to the mock daemon (no SSH in tests).
  */
 
@@ -41,7 +47,7 @@ import { linkFailureKind } from '../../src/providers/link-failure.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 
 const TARGET = { hostname: '127.0.0.1', user: undefined, port: undefined }
-type Statics = { BULK_REDIAL_DELAY_MS: number; BULK_UPLOAD_WAIT_MS: number }
+type Statics = { BULK_REDIAL_DELAY_MS: number; BULK_UPLOAD_WAIT_MS: number; BULK_OWN_RETRY_MS: number }
 const statics = DaemonConnection as unknown as Statics
 
 async function waitFor(cond: () => boolean, timeoutMs = 5_000, label = 'condition'): Promise<void> {
@@ -92,7 +98,7 @@ describe('DaemonConnection: the bulk channel on a connection of its own', () => 
   let saved: Statics
 
   beforeEach(async () => {
-    saved = { BULK_REDIAL_DELAY_MS: statics.BULK_REDIAL_DELAY_MS, BULK_UPLOAD_WAIT_MS: statics.BULK_UPLOAD_WAIT_MS }
+    saved = { BULK_REDIAL_DELAY_MS: statics.BULK_REDIAL_DELAY_MS, BULK_UPLOAD_WAIT_MS: statics.BULK_UPLOAD_WAIT_MS, BULK_OWN_RETRY_MS: statics.BULK_OWN_RETRY_MS }
     statics.BULK_REDIAL_DELAY_MS = 300
     daemon = await createMockDaemon()
     forwards = []
@@ -293,13 +299,132 @@ describe('DaemonConnection: the bulk channel on a connection of its own', () => 
   })
 
   it('O4: a forward that cannot open leaves the bulk channel on the session link, with no wait', async () => {
-    _setBulkForwardForTesting(async () => { throw new Error('its SSH forward did not open (Permission denied)') })
+    // A host that takes no second connection (not a refused login): as before, no wait, no retry.
+    _setBulkForwardForTesting(async () => { throw new Error('its SSH forward did not open (channel 0: open failed: administratively prohibited)') })
     statics.BULK_UPLOAD_WAIT_MS = 5_000
-    conn = new DaemonConnection('bulk-own-host', TARGET)
+    conn = new DaemonConnection('bulk-single-host', TARGET)
     await conn.connectDirect(`ws://127.0.0.1:${daemon.port}`)
     await waitFor(() => conn.bulkChannelActive, 5_000, 'bulk channel up on the session tunnel')
     daemon.clearCommandHistory()
     await conn.send('fs.writePart', { path: '/tmp/x', offset: 0, data: 'AAAA' })
     expect(daemon.getCommandHistoryFor('fs.writePart')[0].connIndex).toBe(1)
+  })
+  it('O12: an own connection that worked and now will not open keeps background uploads off the session link, and is dialled again', async () => {
+    let refuse = false
+    _setBulkForwardForTesting(async () => {
+      if (refuse) throw new Error('its SSH forward did not open (code 255: Permission denied (publickey).)')
+      const f = await proxyForward(daemon.port)
+      forwards.push(f)
+      return f
+    })
+    conn = new DaemonConnection('bulk-own-host', TARGET)
+    await conn.connectDirect(`ws://127.0.0.1:${daemon.port}`)
+    await waitFor(() => conn.bulkChannelActive, 5_000, 'bulk channel up')
+    statics.BULK_OWN_RETRY_MS = 60_000
+    statics.BULK_UPLOAD_WAIT_MS = 300
+    refuse = true
+    forwards[0].cut()
+    // The redial is refused: the channel rides the session tunnel for now.
+    await waitFor(() => conn.bulkChannelActive && (conn as unknown as { bulkSocketOwn: boolean }).bulkSocketOwn === false
+      && (conn as unknown as { bulkOwnWanted: boolean }).bulkOwnWanted, 5_000, 'bulk channel on the session tunnel')
+    daemon.clearCommandHistory()
+    const err = await conn.send('fs.writePart', { path: '/tmp/x', offset: 0, data: 'AAAA' }).then(() => null, (e: Error) => e)
+    expect(err?.message).toMatch(/nothing was sent/)
+    expect(linkFailureKind(err)).toBe('no-link')
+    expect(daemon.getCommandHistoryFor('fs.writePart')).toEqual([])
+    // A person's own upload is not held.
+    await conn.send('fs.write', { path: '/tmp/big', data: 'A'.repeat(300 * 1024), encoding: 'base64' })
+    expect(daemon.getCommandHistoryFor('fs.write')).toHaveLength(1)
+    // The login works again: the retry finds it, and uploads ride the own connection.
+    refuse = false
+    statics.BULK_OWN_RETRY_MS = 100
+    // The pending retry waits a minute: start it again on a short clock (the next try's timer).
+    const c = conn as unknown as { bulkOwnRetryTimer: ReturnType<typeof setTimeout> | null; retryBulkOwnLink(): void }
+    if (c.bulkOwnRetryTimer) clearTimeout(c.bulkOwnRetryTimer)
+    c.bulkOwnRetryTimer = null
+    c.retryBulkOwnLink()
+    await waitFor(() => forwards.length === 2 && conn.bulkChannelActive && (conn as unknown as { bulkSocketOwn: boolean }).bulkSocketOwn, 5_000, 'own connection back')
+    daemon.clearCommandHistory()
+    await conn.send('fs.writePart', { path: '/tmp/x', offset: 0, data: 'AAAA' })
+    expect(daemon.getCommandHistoryFor('fs.writePart')).toHaveLength(1)
+    expect((conn as unknown as { bulkOwnWanted: boolean }).bulkOwnWanted).toBe(false)
+  })
+  it('O14: while the own connection is refused, a big automatic copy is not sent on the session link, a small one is, and the held one goes when it opens', async () => {
+    let refuse = true
+    _setBulkForwardForTesting(async () => {
+      if (refuse) throw new Error('its SSH forward did not open (code 255: user@devbox: Permission denied (publickey).)')
+      const f = await proxyForward(daemon.port)
+      forwards.push(f)
+      return f
+    })
+    statics.BULK_OWN_RETRY_MS = 60_000
+    conn = new DaemonConnection('bulk-copy-held-host', TARGET)
+    await conn.connectDirect(`ws://127.0.0.1:${daemon.port}`)
+    await waitFor(() => conn.bulkChannelActive && (conn as unknown as { bulkOwnWanted: boolean }).bulkOwnWanted, 5_000, 'own connection wanted')
+    const repushed: string[] = []
+    ;(conn as unknown as { repushCopy(cmd: string): void }).repushCopy = (cmd) => { repushed.push(cmd) }
+    daemon.clearCommandHistory()
+    for (const cmd of DaemonConnection.AUTOMATIC_COPIES) {
+      const err = await conn.send(cmd, { blob: 'A'.repeat(DaemonConnection.COPY_HOLD_BYTES) }).then(() => null, (e: Error) => e)
+      expect(err?.message, cmd).toMatch(/waits for the upload channel's own connection.*nothing was sent/)
+      expect(linkFailureKind(err)).toBe('no-link')
+      expect(daemon.getCommandHistoryFor(cmd), cmd).toEqual([])
+    }
+    // A dial in progress (a reconnect under the same refused login) sets bulkOwnLink before it
+    // knows the login works: the copy still waits.
+    const d = conn as unknown as { bulkOwnLink: boolean }
+    d.bulkOwnLink = true
+    const during = await conn.send('skills.sync', { blob: 'A'.repeat(DaemonConnection.COPY_HOLD_BYTES) }).then(() => null, (e: Error) => e)
+    expect(during?.message).toMatch(/nothing was sent/)
+    d.bulkOwnLink = false
+    // A small one (a probe naming a hash) still goes.
+    await conn.send('host.slice', { home: '/h', hash: 'abc', asOf: 1 })
+    expect(daemon.getCommandHistoryFor('host.slice')).toHaveLength(1)
+    expect(conn.connected).toBe(true)
+    // The login works again: every held copy is pushed again, once.
+    refuse = false
+    statics.BULK_OWN_RETRY_MS = 100
+    const c = conn as unknown as { bulkOwnRetryTimer: ReturnType<typeof setTimeout> | null; retryBulkOwnLink(): void }
+    if (c.bulkOwnRetryTimer) clearTimeout(c.bulkOwnRetryTimer)
+    c.bulkOwnRetryTimer = null
+    c.retryBulkOwnLink()
+    await waitFor(() => (conn as unknown as { bulkSocketOwn: boolean }).bulkSocketOwn, 5_000, 'own connection back')
+    expect(repushed.sort()).toEqual([...DaemonConnection.AUTOMATIC_COPIES].sort())
+  })
+
+  // Every copy Walnut pushes by itself is in AUTOMATIC_COPIES and has a re-push: a new push*()
+  // command that is not would ride the session link whole under a refused login.
+  it('O15: every command a push*() method sends is an automatic copy with a re-push', () => {
+    const src = fs.readFileSync(path.resolve('src/providers/daemon-connection.ts'), 'utf8')
+    const sent = new Set<string>()
+    const starts = [...src.matchAll(/^  (?:private |public )?(?:async )?push[A-Z]\w*\([^)]*\)[^{\n]*\{$/gm)]
+    expect(starts.length).toBeGreaterThan(4)
+    for (const m of starts) {
+      const from = m.index! + m[0].length
+      const end = src.indexOf('\n  }\n', from)
+      for (const s of src.slice(from, end).matchAll(/this\.send\('([^']+)'/g)) sent.add(s[1])
+    }
+    expect([...sent].sort()).toEqual([...DaemonConnection.AUTOMATIC_COPIES].sort())
+    const repush = src.slice(src.indexOf('private repushCopy('), src.indexOf('\n  }\n', src.indexOf('private repushCopy(')))
+    for (const cmd of DaemonConnection.AUTOMATIC_COPIES) expect(repush, cmd).toContain(`case '${cmd}':`)
+  })
+
+  it('O13: a login refused from the first dial holds background uploads, and a failed retry cuts nothing in flight', async () => {
+    let tries = 0
+    _setBulkForwardForTesting(async () => { tries++; throw new Error('its SSH forward did not open (code 255: user@devbox: Permission denied (publickey).)') })
+    statics.BULK_OWN_RETRY_MS = 150
+    statics.BULK_UPLOAD_WAIT_MS = 300
+    conn = new DaemonConnection('bulk-refused-host', TARGET)
+    await conn.connectDirect(`ws://127.0.0.1:${daemon.port}`)
+    await waitFor(() => conn.bulkChannelActive && (conn as unknown as { bulkOwnWanted: boolean }).bulkOwnWanted, 5_000, 'bulk channel on the session tunnel, own wanted')
+    daemon.clearCommandHistory()
+    const err = await conn.send('replica.put', { home: '/h', kind: 'notes', files: [{ path: 'a.md', data: 'AAAA' }] }).then(() => null, (e: Error) => e)
+    expect(err?.message).toMatch(/its own SSH connection will not open: .*Permission denied/)
+    expect(daemon.getCommandHistoryFor('replica.put')).toEqual([])
+    // Retries run on their own and leave the channel in use alone: a big read on it keeps going.
+    const bulkBefore = (conn as unknown as { bulkWs: unknown }).bulkWs
+    await waitFor(() => tries >= 3, 5_000, 'two retries')
+    expect((conn as unknown as { bulkWs: unknown }).bulkWs).toBe(bulkBefore)
+    expect(conn.connected).toBe(true)
   })
 })

@@ -34,6 +34,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { test, expect, devices, type Browser, type BrowserContext, type Page } from '@playwright/test'
+import { putExactSection } from './config-section-helpers'
 
 test.setTimeout(600_000)
 test.describe.configure({ mode: 'serial' })
@@ -247,6 +248,6 @@ test('boot through a 150 ms tunnel: cold and warm, 5 runs each (C48), no desktop
     }
   } finally {
     await page.request.put('/api/expose', { data: { enabled: false } }).catch(() => undefined)
-    await page.request.put('/api/config', { data: { expose: {} } }).catch(() => undefined)
+    await putExactSection(page.request, 'expose', {}).catch(() => undefined)
   }
 })

@@ -16,7 +16,8 @@
  * - IMAP runs one command at a time per connection. A SELECT interleaved with another caller's
  *   FETCH reads the WRONG mailbox, which is a data bug rather than an error.
  * - Nothing over the byte cap is parsed at all. One multi-megabyte MIME parse is CPU work on the
- *   single event loop every route shares.
+ *   single event loop every route shares; such a message is read by its parts instead
+ *   (mail-imap-parts.test.ts).
  * - The password reaches the transport and nothing else, least of all a log line.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
@@ -1349,7 +1350,10 @@ describe('a body', () => {
     expect((await live.provider.getBody(ACCOUNT_ID, 'INBOX:9001:2')).format).toBe('both');
   });
 
-  it('refuses from the poll-reported size WITHOUT fetching anything', async () => {
+  // A message over the cap is READ BY ITS PARTS in production (mail-imap-parts.test.ts). This file's
+  // fake has no part download, which is the one client that still refuses, and the three cases below
+  // pin what that refusal never does: fetch the source, or parse a byte of it.
+  it('without part downloads, refuses from the poll-reported size WITHOUT fetching anything', async () => {
     const parser = vi.fn();
     setMimeParserForTesting(parser as never);
     wire.source = Buffer.from('Subject: big\r\n\r\nbody');
@@ -1364,7 +1368,7 @@ describe('a body', () => {
     setMimeParserForTesting(null);
   });
 
-  it('refuses a truncated download the server gave no size for', async () => {
+  it('without part downloads, refuses a truncated download the server gave no size for', async () => {
     const parser = vi.fn();
     setMimeParserForTesting(parser as never);
     // Exactly maxLength and no RFC822.SIZE: indistinguishable from a 50 MB message cut at 2 MB.
@@ -1381,7 +1385,7 @@ describe('a body', () => {
     setMimeParserForTesting(null);
   });
 
-  it('refuses anything over the cap WITHOUT parsing a byte of it', async () => {
+  it('without part downloads, refuses anything over the cap WITHOUT parsing a byte of it', async () => {
     const parser = vi.fn();
     setMimeParserForTesting(parser as never);
     wire.source = Buffer.from('Subject: too big\r\n\r\nbody');

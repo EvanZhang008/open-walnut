@@ -256,6 +256,7 @@ function KanbanCardInner({ vm, laneName, tabStop, handled, moved, flash, overlay
       data-testid={overlay ? 'kanban-card-drag-overlay' : 'kanban-card'}
       data-task-id={overlay ? undefined : vm.taskId}
       data-lane={at}
+      data-peek-row={overlay ? undefined : ''}
       data-source={vm.source}
       data-completed-after-move={vm.completedAfterMove ? 'true' : undefined}
       data-expanded={expanded ? 'true' : undefined}

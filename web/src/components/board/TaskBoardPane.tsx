@@ -32,8 +32,7 @@ import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { resolveTaskToken } from '@/stores/entity-label-store';
 import { log } from '@/utils/log';
-import { locateTaskOnHome } from '@/utils/open-session';
-import { resolveTaskSessionId } from '@/utils/session-status';
+import { useOpenTask } from '@/hooks/useOpenTask';
 import { timeAgo } from '@/utils/time';
 import runtimeCore from './board-runtime.frame.js?raw';
 import runtimeMarkdown from './board-markdown.frame.js?raw';
@@ -77,12 +76,8 @@ import '@/styles/task-board.css';
 
 export interface TaskBoardPaneProps {
   taskId: string;
-  sessionId?: string;
   /** Chat segment of the full-width bar (see SessionFileExplorer.barRightSlot). */
   barRightSlot?: ReactNode;
-  /** A task chip opens its task beside the board (the session panel's peek); first choice. */
-  onOpenTask?: (taskId: string) => void;
-  onLocateTask?: (taskId: string) => void;
   onSendToSession?: (text: string) => Promise<unknown> | void;
   /** A narrow kanban's opened card: the host's real session chat (R3-05). */
   renderSession?: KanbanRenderSession;
@@ -114,8 +109,9 @@ const BOARD_SOURCE_UNKNOWN = 'Walnut could not tell which machine wrote the word
 /** Why a writer with no session saved beside its text opens nothing (logged, never guessed from its task). */
 const NO_SAVED_SESSION = 'The saved text has no writing session that identifies its machine.';
 
-export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onLocateTask, onSendToSession, renderSession, quietEmpty }: TaskBoardPaneProps) {
+export function TaskBoardPane({ taskId, barRightSlot, onSendToSession, renderSession, quietEmpty }: TaskBoardPaneProps) {
   const navigate = useNavigate();
+  const openOnHome = useOpenTask();
   const store = useTasksContextSafe();
   const storeById = useMemo(() => {
     if (!store) return null;
@@ -273,16 +269,13 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
     payload?.section_seen, seen, renderedText, ownerId, reply?.target.thread, reply?.target.choice, reply?.target.mark, postData,
   ]);
 
+  /** A task chip in the Page: its short ref read to the full id, then the task on Home. */
   const openTask = useCallback((rawId: string) => {
     const ref = refs[rawId];
     const full = ref?.id ?? (store ? matchIdRef(store.tasks, rawId)[0]?.id : undefined) ?? rawId;
     log.info('board', 'task chip opened', { taskId, targetTaskId: full });
-    if (onOpenTask) { onOpenTask(full); return; }
-    if (onLocateTask) { onLocateTask(full); return; }
-    const target = store?.tasks.find((t) => t.id === full);
-    const sid = target ? resolveTaskSessionId(target) : null;
-    locateTaskOnHome(full, navigate, sid ? { sessionId: sid } : (sessionId ? { sessionId } : undefined));
-  }, [refs, store, taskId, onOpenTask, onLocateTask, navigate, sessionId]);
+    openOnHome(full);
+  }, [refs, store, taskId, openOnHome]);
 
   const fileSeq = useRef(0);
   // `hosts` is null while the click still reads which machine each copy is on.
@@ -736,7 +729,6 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
             ownerTitle={ownerTitle}
             tasks={store.tasks}
             loading={team.loading}
-            onOpenTask={openTask}
             onOpenPage={hasPage ? () => pickView('custom') : undefined}
             soloExtra={hasPage ? undefined : <AskLeaderRow taskId={ownerId} onSendToSession={ownerId === taskId ? onSendToSession : undefined} />}
           />
@@ -751,7 +743,6 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
             reloadKanban={reloadKanban}
             visible={shownView === 'cards'}
             projectOf={projectOf}
-            onOpenTask={openTask}
             onOpenSignal={openSignal}
             onAttention={setAttention}
             renderSession={renderSession}

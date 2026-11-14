@@ -133,7 +133,11 @@ export function MailReaderBody({ open }: { open: MailOpenMessage }) {
   );
 }
 
-/** A body that did not arrive, with the one control that can change that. */
+/**
+ * A body that did not arrive, with the one control that can change that. Every failure keeps Try
+ * again, too-large and not-found included: an older release can mark a big mail too-large again after
+ * the one-time sweep, and a folder the server would not open reads as not-found.
+ */
 function Notice({ testId, text }: { testId: string; text: string }) {
   return (
     <div className="mail-reader-body mail-reader-column">
@@ -149,6 +153,8 @@ function Notice({ testId, text }: { testId: string; text: string }) {
 
 /** The plugin answers with a provider error CODE; a code is not an explanation. */
 function bodyErrorSentence(code: string): string {
+  // Attachments do not count toward it: a big message is read through its own text parts, so only
+  // text itself over the cap ends here.
   if (code === 'too-large') return 'This message body is too big to cache, so Walnut did not fetch it.';
   if (code === 'auth') return 'The provider refused the credentials while fetching this body.';
   if (code === 'not-found') return 'The provider no longer has this message.';

@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { apiGet, apiPost } from '@/api/client';
 import { hasAppUpdater } from '@/hooks/useAppUpdate';
+import { inMacApp } from '@/utils/mac-app';
 
 function inDesktopApp(): boolean {
-  const handlers = (window as unknown as { webkit?: { messageHandlers?: { walnutChrome?: unknown } } }).webkit?.messageHandlers;
-  return hasAppUpdater() || !!handlers?.walnutChrome;
+  return hasAppUpdater() || inMacApp();
 }
 
 interface InstalledUpdate {

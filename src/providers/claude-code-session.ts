@@ -124,7 +124,7 @@ import { LiveActivityTracker, toolTarget, type LiveActivity } from '../core/live
 import { reportLiveActivity } from '../core/sessions/live-activity-registry.js'
 import { noteRateLimitEvent } from '../core/sessions/subscription-limits.js'
 import { parseRateLimitInfo } from '../core/sessions/subscription-limits-model.js'
-import { blockedLimitOf, claudeUsageLimitFacts, usageLimitTakes } from '../core/sessions/usage-limit-model.js'
+import { blockedLimitOf, claudeUsageLimitFacts } from '../core/sessions/usage-limit-model.js'
 import { safeguardStopOfCliLine, safeguardStopOfResult, type SafeguardStopFacts } from '../core/sessions/safeguard-stop.js'
 import { matchesUsageLimitText, parseUsageLimitReset } from './usage-limit-text.js'
 import { processActionsRefused, refuseProcessAction } from '../core/sessions/replica-process-guard.js'
@@ -3358,6 +3358,10 @@ export class ClaudeCodeSession {
         if (own) { resolvedCwd = own.cwd; this._cwd = own.cwd; ownMoveUndo = own.undo ?? null }
         stepDone('ownFolderMs')
       }
+      if (!slim) {
+        await this.applySpawnClaudeScope(args)
+        stepDone('scopeMs')
+      }
       await this.applySpawnWalnutMount(args, profile, host)
       log.session.info('spawn: pre-spawn steps', {
         taskId: this.taskId, sessionId: tmpId, host: host ?? '__local__', resume: isResume && resumeNow,
@@ -3796,15 +3800,16 @@ export class ClaudeCodeSession {
     const task = record.taskId ? await getTask(record.taskId).catch(() => undefined) : undefined
     const { readRouterAreas, taskArea } = await import('../core/router/areas.js')
     const { WALNUT_HOME } = await import('../constants.js')
+    // Only a router runs isolated (2026-11-14); a receiver profile or mark an older build left on routed work is not read.
+    const routerScoped = record.profile?.areaRole === 'router' || task?.org_role === 'router'
     const areas = await readRouterAreas(WALNUT_HOME).catch((error) => {
-      if (record.profile?.areaId || task?.router_area_id || task?.org_role === 'router') throw error
+      if (routerScoped) throw error
       return undefined
     })
     const area = record.taskId && areas ? taskArea(areas, record.taskId) : undefined
-    if (area || record.profile?.areaId || task?.router_area_id || task?.org_role === 'router') {
-      const role = areas?.routers.some((router) => router.taskId === record.taskId) ? 'router' : 'work'
+    if (area || routerScoped) {
       if (!task || !area || task.source !== 'local' || task.router_area_id !== area.id
-        || (role === 'router') !== (task.org_role === 'router') || !isRouterAreaSession(record, area, role)) {
+        || task.org_role !== 'router' || !isRouterAreaSession(record, area)) {
         throw new Error('The attached session does not match its isolated area policy')
       }
       const { link } = await import('../core/hosts/link.js')
@@ -10348,6 +10353,46 @@ export class ClaudeCodeSession {
   }
 
   /**
+   * The task's project's Claude plugins left out and the configured skill listing cap
+   * (claude-scope-settings.ts), merged into the spawn's one `--settings` arg. Fresh
+   * spawns and resumes both pass here. A lookup that fails spawns without them.
+   */
+  private async applySpawnClaudeScope(args: string[]): Promise<void> {
+    let project = this.project ?? ''
+    try {
+      const [{ getTask, getProjectMetadata }, { getConfig }, { readClaudePluginsOff }, { claudeScopeSettings, skillListingDescChars }] = await Promise.all([
+        import('../core/task-manager.js'),
+        import('../core/config-manager.js'),
+        import('../core/sessions/claude-plugins-off.js'),
+        import('./claude-scope-settings.js'),
+      ])
+      // The task's project now (it may have moved since this session was made), else the one it was made in.
+      const task = this.taskId ? await getTask(this.taskId).catch(() => undefined) : undefined
+      if (task) project = task.project ?? ''
+      const pluginsOff = project.trim() ? readClaudePluginsOff(await getProjectMetadata(project)) : []
+      // A broken config file costs only the cap, never the project's plugin choice.
+      const config = await getConfig().catch((err: unknown) => {
+        log.session.warn('claude scope settings: config unreadable; no skill listing cap this spawn', { taskId: this.taskId, error: err instanceof Error ? err.message : String(err) })
+        return null
+      })
+      const scope = claudeScopeSettings({ pluginsOff, listingDescChars: skillListingDescChars(config) })
+      if (Object.keys(scope).length === 0) return
+      const at = args.indexOf('--settings')
+      const current = at >= 0 ? JSON.parse(args[at + 1]) as Record<string, unknown> : {}
+      const value = JSON.stringify({ ...current, ...scope })
+      if (at >= 0) args[at + 1] = value
+      else args.push('--settings', value)
+      log.session.info('spawn: claude scope settings', {
+        taskId: this.taskId, project, pluginsOff, listingDescChars: scope.skillListingMaxDescChars ?? null,
+      })
+    } catch (err) {
+      log.session.warn('claude scope settings: could not read them; this spawn goes without', {
+        taskId: this.taskId, project, error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  /**
    * Put the Walnut MCP mount into this spawn's `--mcp-config` (every spawn: fresh,
    * cold resume, fork). The record's profile is not changed, so a session decides
    * again at each spawn and one older than the mount gets it at its next one.
@@ -11766,7 +11811,7 @@ async function taskMayBeInArea(taskId: string | undefined): Promise<boolean> {
   if (areas && taskArea(areas, taskId)) return true
   const { getTask } = await import('../core/task-manager.js')
   const task = await getTask(taskId).catch(() => null)
-  return !!task && task.id === taskId && (!!task.router_area_id || task.org_role === 'router')
+  return !!task && task.id === taskId && task.org_role === 'router'
 }
 
 export class SessionRunner {
@@ -12511,14 +12556,15 @@ export class SessionRunner {
               }).then(rec => {
                 // The snapshot may reject a stale status write, so clear the link based only on the status that was finally saved.
                 if ((rec.process_status === 'stopped' || rec.process_status === 'error') && rec.taskId) {
-                  // A turn the endpoint wait continues keeps its task's session (sessions/endpoint-wait.ts).
-                  // Nor does a death restart recovery starts again (sessions/start-recovery.ts).
-                  if (event.name === EventNames.SESSION_ERROR && (event.data as { startRecovery?: boolean }).startRecovery) return
-                  import('../core/sessions/endpoint-wait.js').then(({ endpointWaitTakes }) => {
-                    if (rec.process_status === 'error' && result && (endpointWaitTakes(result) || usageLimitTakes(result))) return
-                    return import('../core/task-manager.js').then(({ clearSessionSlot }) => {
-                      clearSessionSlot(rec.taskId!, sessionId).catch(() => {})
-                    })
+                  // A turn Walnut continues by itself keeps its task's session when its reason keeps the
+                  // phase (sessions/turn-run.ts: a wait, a death restart recovery starts again, a switch).
+                  import('../core/sessions/turn-run.js').then(async ({ turnEndKeepsPhase }) => {
+                    const kept = await turnEndKeepsPhase(result
+                      ? { ...result, event: 'result', sessionId, isError: rec.process_status === 'error' || result.isError === true, record: rec }
+                      : { ...eventData<'session:error'>(event), event: 'error', sessionId, isError: true, result: errorMessage, record: rec })
+                    if (kept) return
+                    const { clearSessionSlot } = await import('../core/task-manager.js')
+                    clearSessionSlot(rec.taskId!, sessionId).catch(() => {})
                   }).catch(() => {})
                 }
               }).catch(() => {})
@@ -13192,28 +13238,27 @@ export class SessionRunner {
     resumeFile?: string
     transferAttemptId?: string
   }): Promise<void> {
-    if (data.profile?.areaId && !data.taskId) throw new Error('An area session must name its task')
+    if (data.profile?.areaRole === 'router' && !data.taskId) throw new Error('An area session must name its task')
     if (data.taskId) {
       const { readRouterAreas, taskArea } = await import('../core/router/areas.js')
       const { WALNUT_HOME } = await import('../constants.js')
       const { getTask } = await import('../core/task-manager.js')
       // A session may start for a task that does not exist (yet); only an area start needs one.
       const task = await getTask(data.taskId).catch((error) => {
-        if (data.profile?.areaId) throw error
+        if (data.profile?.areaRole === 'router') throw error
         return null
       })
-      const marked = !!task && (!!task.router_area_id || task.org_role === 'router')
+      const marked = !!task && task.org_role === 'router'
       let areas: Awaited<ReturnType<typeof readRouterAreas>> | undefined
       try { areas = await readRouterAreas(WALNUT_HOME) } catch (error) {
-        if (marked || data.profile?.areaId) throw error
+        if (marked || data.profile?.areaRole === 'router') throw error
       }
       const area = areas && taskArea(areas, data.taskId)
-      if (!area && (marked || data.profile?.areaId)) throw new Error('This scoped task has no matching area')
+      if (!area && (marked || data.profile?.areaRole === 'router')) throw new Error('This scoped task has no matching area')
       if (area && !task) throw new Error('This area task is unavailable; its session cannot start')
       if (area && task) {
-        const role = areas!.routers.some((router) => router.taskId === task.id) ? 'router' : 'work'
-        if (task.router_area_id !== area.id || task.source !== 'local' || (role === 'router') !== (task.org_role === 'router')
-          || !isRouterAreaSession({ profile: data.profile, host: data.host, engine: data.engine }, area, role)
+        if (task.router_area_id !== area.id || task.source !== 'local' || task.org_role !== 'router'
+          || !isRouterAreaSession({ profile: data.profile, host: data.host, engine: data.engine }, area)
           || data.mode !== 'dontAsk' || data.appendSystemPrompt || data.forkedFromSessionId) {
           throw new Error('This area task requires a fresh isolated session on its configured host')
         }
@@ -15440,7 +15485,8 @@ export class SessionRunner {
           areaBound = true
           throw new Error('The session record is unavailable; its area policy cannot be restored')
         }
-      } else if (record.profile?.areaId) areaBound = true
+      // Any area profile but an older build's receiver ('work', dropped at boot) is a router's: one that cannot say which stays scoped.
+      } else if (record.profile?.areaId && record.profile.areaRole !== 'work') areaBound = true
       if (record?.taskId) {
         const { getTask } = await import('../core/task-manager.js')
         // A task that is gone is no area task unless other evidence says so; a store that
@@ -15454,7 +15500,7 @@ export class SessionRunner {
         })
         // A prefix lookup may answer another task: only the stored id's own task counts.
         const task = found && found.id === record.taskId ? found : null
-        if (task && (task.router_area_id || task.org_role === 'router')) areaBound = true
+        if (task && task.org_role === 'router') areaBound = true
         const { readRouterAreas, taskArea } = await import('../core/router/areas.js')
         const { WALNUT_HOME } = await import('../constants.js')
         // A task with no area mark is outside every area (the mark is never cleared), so only a
@@ -15470,9 +15516,8 @@ export class SessionRunner {
             : 'The saved session task is unavailable; its area policy cannot be restored')
         }
         if (areaBound && task) {
-          const role = areas?.routers.some((router) => router.taskId === task.id) ? 'router' : 'work'
           if (!area || task.router_area_id !== area.id || task.source !== 'local'
-            || (role === 'router') !== (task.org_role === 'router') || !isRouterAreaSession(record, area, role)) {
+            || task.org_role !== 'router' || !isRouterAreaSession(record, area)) {
             throw new Error('The saved session does not match its isolated area policy')
           }
           const { link } = await import('../core/hosts/link.js')

@@ -75,13 +75,6 @@ export interface MailMessageDto {
    */
   routingCoverage?: 'no_router' | 'unassigned'
   routingUnavailable?: boolean
-  /** The area router's latest handoff ask for this message, only while no routing receipt exists. */
-  routingHandoff?: {
-    approvalId: string
-    status: 'pending' | 'approved' | 'denied' | 'expired' | 'canceled' | 'missing' | 'claim_incomplete'
-    at: number
-    targetTitle?: string
-  }
   route?: {
     areaId: string
     status: 'routing' | 'routed' | 'not_routed' | 'failed' | 'unknown'
@@ -316,6 +309,8 @@ export type MailIncomingFinish = () => Promise<ReadonlyArray<MailHeadline> | voi
 export type MailIncomingCapture = (
   accountId: string,
   headlines: ReadonlyArray<MailHeadline>,
+  /** `inbox: false`: arrivals of other folders, routed only when the mailbox's router watches them, never announced. */
+  opts?: { inbox?: boolean },
 ) => Promise<MailIncomingFinish>
 
 export interface RetentionLimits {

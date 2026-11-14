@@ -904,7 +904,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
   // the type flows and a stale/cleared task can't trigger a no-op triage.
   if (!p.taskId) return;
   const taskId = p.taskId;
-  // A router area task's note and status are router_work's alone: no generic merged note.
+  // A router's note and status are its own routing log: no generic merged note.
   if (await routerScopedStatus(taskId, p.sessionId)) return;
 
   // Cooldown: prevent burst dispatches from replayed events after server restart.
@@ -2412,44 +2412,18 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
       if (leaderClosed && reportsToOrgNode(task, { leaderClosed })) orgTask = task;
     }
 
-    // Its turn never reached the model endpoint: Walnut waits for the endpoint and continues that turn
-    // (sessions/endpoint-wait.ts), so its askers and its lead hear of the turn that follows, not of a
-    // machine blip (2026-11-03: a proxy that went down failed eight sessions at once). A wait that gave
-    // up is the user's, and their status says so.
+    // Walnut continues this turn by itself (sessions/turn-run.ts: the endpoint and usage-limit waits,
+    // restart recovery, the auto-continue retry, the safeguard switch, the context recovery): its
+    // askers and its lead hear of the turn that ends the work, never of the failure Walnut is undoing
+    // (2026-11-03: a proxy that went down failed eight sessions at once; 2026-11-09: a lead was told
+    // of an ECONNRESET three minutes before Walnut's own retry, and passed it to the user). Held, not
+    // dropped: a retry that never starts its turn lets this edge speak after all (its row keeps it),
+    // and a give-up's phase edge speaks for the others. A wait that gave up is the user's.
     if (phase !== 'COMPLETE' && record) {
-      const { recordInEndpointWait } = await import('../sessions/endpoint-wait.js');
-      if (recordInEndpointWait(record)) {
-        log.session.info('turn-end notices held: the endpoint wait continues this turn', { sessionId: record.claudeSessionId, taskId: task?.id });
-        return;
-      }
-      // Walnut retries its failed turn by itself (session-auto-continue.ts): its askers and its lead
-      // hear of the retried turn, never of the error it is undoing (2026-11-09: a lead was told of
-      // an ECONNRESET three minutes before Walnut's own retry, and passed it to the user).
-      const retry = (await import('../session-auto-continue.js')).getSessionAutoContinue();
-      const retryAt = retry?.retryAt(record.claudeSessionId);
-      // Held, not dropped: a retry that never starts its turn lets this edge speak after all.
-      if (retryAt && retry!.holdUntilRetried(record.claudeSessionId, () => { void sessionRequestWatchHook.handler?.(payload); })) {
-        log.session.info('turn-end notices held: Walnut retries this turn', { sessionId: record.claudeSessionId, taskId: task?.id, retryAt: new Date(retryAt).toISOString() });
-        return;
-      }
-      // Restart recovery continues this session (a restart killed it, or its process
-      // ended before it read its first line, sessions/start-recovery.ts): its askers
-      // hear of the turn that follows, never of a death Walnut is undoing.
-      if (outcome === 'error' && (await import('../session-auto-recover.js')).getSessionAutoRecover()?.holdsHandBack(record)) {
-        log.session.info('turn-end notices held: restart recovery continues this session', { sessionId: record.claudeSessionId, taskId: task?.id });
-        return;
-      }
-      // The usage limit stopped it: Walnut continues it at the reset (sessions/usage-limit-wait.ts).
-      const { recordInUsageLimit } = await import('../sessions/usage-limit-wait.js');
-      if (recordInUsageLimit(record)) {
-        log.session.info('turn-end notices held: the usage-limit wait continues this turn', { sessionId: record.claudeSessionId, taskId: task?.id });
-        return;
-      }
-      // The model's safeguards refused it twice: Walnut moves it to another model and resends
-      // (sessions/safeguard-switch.ts), so its askers hear the answer that follows, its lead one line.
-      const { safeguardSwitchHolds } = await import('../sessions/safeguard-switch.js');
-      if (safeguardSwitchHolds(record.claudeSessionId)) {
-        log.session.info('turn-end notices held: the safeguard switch moves this session to another model', { sessionId: record.claudeSessionId, taskId: task?.id });
+      const { holdTurnEndNotices } = await import('../sessions/turn-run.js');
+      const held = await holdTurnEndNotices(record, { failed: outcome === 'error' }, () => { void sessionRequestWatchHook.handler?.(payload); });
+      if (held) {
+        log.session.info('turn-end notices held: Walnut continues this turn', { sessionId: record.claudeSessionId, taskId: task?.id, reason: held });
         return;
       }
     }

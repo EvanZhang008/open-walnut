@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
-import { fetchConfig, updateConfig } from '@/api/config';
+import { fetchConfig, updateConfigKeys } from '@/api/config';
 import { useEvent } from '@/hooks/useWebSocket';
 
 /**
@@ -204,11 +204,9 @@ export function useSessionPanelMode(containerWidth = 0) {
     setLoaded(true);
     broadcastMode(m);
     lastSelfChangeRef.current = Date.now();
-    // Merge into existing ui block so sibling keys (e.g. bump_pinned_on_chat) survive —
-    // updateConfig replaces the whole `ui` object, not individual sub-keys.
-    fetchConfig()
-      .then(c => updateConfig({ ui: { ...c.ui, session_panels: m } }))
-      .catch(() => {});
+    // Only this key: a write that sends the section read earlier would put back a sibling
+    // another window changed since (api/config.ts updateConfigKeys).
+    updateConfigKeys('ui', { session_panels: m }).catch(() => {});
   }, []);
 
   // An explicit count wins; 'auto' (and any value that failed validation on the

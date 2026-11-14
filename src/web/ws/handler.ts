@@ -10,7 +10,7 @@ import type { IncomingMessage } from 'node:http'
 import type { Server as HttpServer } from 'node:http'
 import type { WsFrame } from './protocol.js'
 import { isCompanion, isHostReplica } from '../../core/server-role.js'
-import { hasCapability } from '../../core/capabilities.js'
+import { openSocketDoor } from '../../core/capabilities.js'
 import { toDisposable, type Disposable } from '../../core/plugins/disposable.js'
 import { OwnedRegistry } from '../../core/plugins/owned-registry.js'
 import { log } from '../../logging/index.js'
@@ -18,6 +18,8 @@ import { DAEMON_TUNNEL_PATH } from '../../core/hosts/cloud-box-host.js'
 import { configChangedForClients } from '../../core/config-broadcast.js'
 import { selectWsProtocol } from '../../lib/ws-bearer-protocol.js'
 import { upgradeCredential } from './upgrade-credential.js'
+import { leanShaper, newLeanState, wantsLean, type LeanState } from './lean-frames.js'
+import { SocketTraffic } from './traffic.js'
 import { authenticateFeatureNode, upgradeFeatureNode, startFeatureNodes, closeFeatureNodes } from './feature-node-runtime.js'
 import { BRIDGE_SESSION_STREAM_PATH, closeAllBridgeSessionStreams, handleBridgeSessionStreamUpgrade } from './bridge-session-stream.js'
 
@@ -43,6 +45,10 @@ interface Client {
   interest: Set<string>
   /** The paired device the upgrade's token named, if any: its revoke closes this socket. */
   device?: string
+  /** Set when the socket asked for lean frames (`/ws?lean=<signature>`): what it was sent (lean-frames.ts). */
+  lean?: LeanState
+  traffic: SocketTraffic
+  socketId: string
 }
 
 /** Close code of a socket whose device was signed out (revoked) while it was open. */
@@ -64,6 +70,18 @@ const rpcMethods = new OwnedRegistry<RpcHandler>()
 const PING_INTERVAL_MS = 30_000
 
 let pingTimer: ReturnType<typeof setInterval> | null = null
+let socketCounter = 0
+
+function logTraffic(client: Client, closing = false): void {
+  const sample = client.traffic.sample(Date.now(), closing)
+  if (sample) log.ws.info('socket traffic', { socketId: client.socketId, lean: !!client.lean, ...sample })
+}
+
+/** Count encoded bytes at the one send boundary, not rebuilt client payloads. */
+function sendFrame(client: Client, json: string, plainBytes?: number, name?: string): void {
+  client.ws.send(json)
+  client.traffic.record(Buffer.byteLength(json), plainBytes, name)
+}
 
 /** Callbacks invoked when a client socket disconnects (close or error). */
 const disconnectListeners = new Set<(ws: WebSocket) => void>()
@@ -178,6 +196,10 @@ export function broadcastEvent(name: string, data: unknown): void {
   const entity = data as { sessionId?: string; taskId?: string } | null | undefined
   const sessionId = entity?.sessionId
   const taskId = entity?.taskId
+  // Shared work for lean sockets, done once and only when one is connected.
+  let shaper: ReturnType<typeof leanShaper> | undefined
+  let fullJson: string | undefined
+  let fullBytes = 0
 
   for (const client of clients) {
     if (client.ws.readyState !== WebSocket.OPEN) continue
@@ -185,8 +207,23 @@ export function broadcastEvent(name: string, data: unknown): void {
     // opted into. Default "global" clients are never filtered — unchanged firehose.
     if (client.mode === 'lightweight' && !clientWantsEvent(client, sessionId, taskId)) continue
     client.seq++
-    const frame: WsFrame = { type: 'event', name, data, seq: client.seq }
-    client.ws.send(JSON.stringify(frame))
+    if (client.lean && shaper === undefined) shaper = leanShaper(name, data)
+    const shaping = !!client.lean && !!shaper
+    // Only old sockets or the first minute of a comparison need the full serialization.
+    if (fullJson === undefined && (!shaping || client.traffic.compare)) {
+      const json = JSON.stringify(data)
+      const eventName = JSON.stringify(name)
+      fullJson = `{"type":"event"${eventName === undefined ? '' : `,"name":${eventName}`}${json === undefined ? '' : `,"data":${json}`},"seq":`
+      fullBytes = Buffer.byteLength(fullJson)
+    }
+    if (client.lean && shaper) {
+      const frame: WsFrame = { type: 'event', name, data: shaper(client.lean), seq: client.seq }
+      const plainBytes = client.traffic.compare ? fullBytes + String(client.seq).length + 1 : undefined
+      sendFrame(client, JSON.stringify(frame), plainBytes, name)
+    } else {
+      const plainBytes = fullBytes + String(client.seq).length + 1
+      sendFrame(client, `${fullJson}${client.seq}}`, plainBytes, name)
+    }
   }
 }
 
@@ -216,8 +253,10 @@ export function sendToClient(ws: WebSocket, name: string, data: unknown): void {
   for (const client of clients) {
     if (client.ws === ws) {
       client.seq++
-      const frame: WsFrame = { type: 'event', name, data, seq: client.seq }
-      ws.send(JSON.stringify(frame))
+      const shaper = client.lean ? leanShaper(name, data) : null
+      const frame: WsFrame = { type: 'event', name, data: shaper && client.lean ? shaper(client.lean) : data, seq: client.seq }
+      const plainBytes = shaper && client.traffic.compare ? Buffer.byteLength(JSON.stringify({ type: 'event', name, data, seq: client.seq })) : undefined
+      sendFrame(client, JSON.stringify(frame), plainBytes, name)
       return
     }
   }
@@ -239,7 +278,10 @@ function sendResponse(ws: WebSocket, id: string, ok: boolean, payload?: unknown,
   const frame: WsFrame = ok
     ? { type: 'res', id, ok: true, payload }
     : { type: 'res', id, ok: false, error }
-  ws.send(JSON.stringify(frame))
+  const client = findClient(ws)
+  const json = JSON.stringify(frame)
+  if (client) sendFrame(client, json)
+  else ws.send(json)
 }
 
 /**
@@ -254,6 +296,7 @@ async function handleMessage(client: Client, raw: string): Promise<void> {
   }
 
   if (frame.type !== 'req') return // only handle RPC requests from clients
+  if (frame.method === 'browser:logs') client.traffic.identify(frame.payload)
 
   const own = rpcAnswer?.(frame.method, frame.payload, typeof frame.opId === 'string' ? frame.opId : undefined) ?? null
   if (own) {
@@ -498,10 +541,15 @@ export function attachWss(server: HttpServer): WebSocketServer {
       return
     }
 
-    // /bridge (the bridge-door capability, core/capabilities.ts): a remote daemon
-    // dialing in. Requires a machine token; the connection goes to the bridge
-    // registry, NOT the browser client set (no RPC surface, no broadcasts).
-    if (hasCapability('bridge-door') && url.pathname === '/bridge') {
+    // A socket door a capability opens (its manifest in core/capabilities/ names the
+    // path and who may open it); null when no manifest declares it or this box lacks
+    // that capability. Every other path is /ws or refused below.
+    const door = openSocketDoor(url.pathname)?.path ?? null
+
+    // /bridge (bridge-door): a remote daemon dialing in. Requires a machine token;
+    // the connection goes to the bridge registry, NOT the browser client set (no
+    // RPC surface, no broadcasts).
+    if (door === '/bridge') {
       // Import BEFORE handleUpgrade: the daemon sends its hello immediately on
       // open, and message listeners must be attached synchronously in the
       // upgrade callback or the first frame is lost (first-connection race).
@@ -550,10 +598,11 @@ export function attachWss(server: HttpServer): WebSocketServer {
       return
     }
 
-    // /daemon-tunnel (the bridge-door capability): the paired Mac driving its own
-    // daemon on this box. Only the primary's machine token opens it (daemon-tunnel.ts).
-    if (hasCapability('bridge-door') && (url.pathname === DAEMON_TUNNEL_PATH || url.pathname === BRIDGE_SESSION_STREAM_PATH)) {
-      if (url.pathname === BRIDGE_SESSION_STREAM_PATH) {
+    // /daemon-tunnel and /bridge/session-stream (bridge-door): the paired Mac driving
+    // its own daemon on this box, or reading one session. Only the primary's machine
+    // token opens them (daemon-tunnel.ts, bridge-session-stream.ts).
+    if (door === DAEMON_TUNNEL_PATH || door === BRIDGE_SESSION_STREAM_PATH) {
+      if (door === BRIDGE_SESSION_STREAM_PATH) {
         void handleBridgeSessionStreamUpgrade(request, socket, head, { verify: () => verifyCloudUpgrade(url, request) })
       } else {
         import('./daemon-tunnel.js')
@@ -607,9 +656,12 @@ export function attachWss(server: HttpServer): WebSocketServer {
   wss.on('connection', (ws: WebSocket, request?: IncomingMessage) => {
     // New connections default to "global" mode (full firehose) — unchanged behavior.
     const device = (request as DeviceUpgrade | undefined)?.walnutDevice
-    const client: Client = { ws, seq: 0, alive: true, mode: 'global', interest: new Set(), ...(device ? { device } : {}) }
+    let lean = false
+    try { lean = wantsLean(new URL(request?.url ?? '/', 'http://ws.local')) } catch { /* a bad URL asks for nothing */ }
+    const socketId = `${process.pid}-${++socketCounter}`
+    const client: Client = { ws, seq: 0, alive: true, mode: 'global', interest: new Set(), socketId, traffic: new SocketTraffic(), ...(device ? { device } : {}), ...(lean ? { lean: newLeanState() } : {}) }
     clients.add(client)
-    log.ws.info('client connected', { clientCount: clients.size })
+    log.ws.info('client connected', { clientCount: clients.size, lean, socketId })
     // A browser's socket ends with its access token: the page renews and comes back (WS_RENEW_SIGN_IN).
     const accessUntil = (request as DeviceUpgrade | undefined)?.walnutAccessUntil
     const renewTimer = accessUntil === undefined ? null : setTimeout(() => {
@@ -640,6 +692,7 @@ export function attachWss(server: HttpServer): WebSocketServer {
 
     ws.on('close', () => {
       if (renewTimer) clearTimeout(renewTimer)
+      logTraffic(client, true)
       clients.delete(client)
       for (const l of disconnectListeners) { try { l(ws) } catch { /* listener error ignored */ } }
       log.ws.info('client disconnected', { clientCount: clients.size })
@@ -647,6 +700,7 @@ export function attachWss(server: HttpServer): WebSocketServer {
 
     ws.on('error', () => {
       if (renewTimer) clearTimeout(renewTimer)
+      logTraffic(client, true)
       clients.delete(client)
       for (const l of disconnectListeners) { try { l(ws) } catch { /* listener error ignored */ } }
       log.ws.warn('client error, removing', { clientCount: clients.size })
@@ -656,6 +710,7 @@ export function attachWss(server: HttpServer): WebSocketServer {
   // Ping/pong heartbeat
   pingTimer = setInterval(() => {
     for (const client of clients) {
+      logTraffic(client)
       if (!client.alive) {
         client.ws.terminate()
         clients.delete(client)

@@ -448,8 +448,9 @@ describe('incoming-item areas', () => {
   });
 
   const stored = async (title = 'Area work'): Promise<Task> => (await addTask({ title, project: PROJECT })).task;
+  // Only a router is area work since 2026-11-14: "classified" means the task became a router.
   const mark = (id: string, patch: Record<string, unknown>) =>
-    updateTaskRaw(id, patch as Partial<Task>, { source: 'router-areas', emitEvent: false });
+    updateTaskRaw(id, { org_role: 'router', ...patch } as Partial<Task>, { source: 'router-areas', emitEvent: false });
   /** No model call, no history entry, the project skill as it was. */
   const wroteNothing = (runner: MaintainerRunner) => {
     expect(runner).not.toHaveBeenCalled();
@@ -458,18 +459,22 @@ describe('incoming-item areas', () => {
   };
   const lifecycle = [EventNames.TASK_CREATED, EventNames.TASK_COMPLETED];
 
-  it('skips a task marked on the event copy, from any source, created or completed', async () => {
+  it('skips a router on the event copy, from any source, created or completed', async () => {
     const runner = logOnly();
     for (const event of lifecycle) {
-      for (const source of ['api', 'router-work', 'router-runtime', 'web-ui', '']) {
-        expect(await maybeRunForTaskEvent(event, makeTask({ id: `marked-${event}-${source}`, router_area_id: 'personal' }), source, runner)).toBe(false);
+      for (const source of ['api', 'router-runtime', 'web-ui', '']) {
         expect(await maybeRunForTaskEvent(event, makeTask({ id: `router-${event}-${source}`, org_role: 'router' }), source, runner)).toBe(false);
       }
     }
     wroteNothing(runner);
   });
 
-  it('reads the stored task: a stale unmarked event copy of a marked task is skipped', async () => {
+  it('runs for routed work an older build marked: it is ordinary work now', async () => {
+    const runner = logOnly('Routed work entry.');
+    expect(await maybeRunForTaskEvent(EventNames.TASK_CREATED, makeTask({ id: 'legacy-marked', router_area_id: 'personal' }), 'api', runner)).toBe(true);
+  });
+
+  it('reads the stored task: a stale event copy of a task that became a router is skipped', async () => {
     const task = await stored();
     const copy = { ...task };
     await mark(task.id, { router_area_id: 'personal' });
@@ -478,10 +483,10 @@ describe('incoming-item areas', () => {
     wroteNothing(runner);
   });
 
-  it('skips a task only the registry lists', async () => {
+  it('skips a task only the registry names as a router', async () => {
     const task = await stored();
     await updateRouterAreas(WALNUT_HOME, () => ({
-      version: 1, routers: [], items: [],
+      version: 1, routers: [{ taskId: task.id, areaId: 'personal', paused: true }], items: [],
       areas: [{ id: 'personal', name: 'Personal', host: '__local__', taskIds: [task.id], sources: [] }],
     }));
     const runner = logOnly();
@@ -489,9 +494,9 @@ describe('incoming-item areas', () => {
     wroteNothing(runner);
   });
 
-  it('skips a task only a session profile names', async () => {
+  it('skips a task only a router session profile names', async () => {
     const task = await stored();
-    await seedLegacySession(randomUUID(), task.id, PROJECT, '/tmp', { profile: { areaId: 'personal' }, initialProcessStatus: 'running' });
+    await seedLegacySession(randomUUID(), task.id, PROJECT, '/tmp', { profile: { areaId: 'personal', areaRole: 'router' }, initialProcessStatus: 'running' });
     const runner = logOnly();
     for (const event of lifecycle) expect(await maybeRunForTaskEvent(event, task, 'api', runner)).toBe(false);
     wroteNothing(runner);

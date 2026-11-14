@@ -135,13 +135,15 @@ test('C31 C75 C88: the real path, Copy path, Create rules file, Open in Walnut, 
   await expect(page.locator('.file-viewer-overlay')).toContainText('sort-rules.yaml')
   await page.keyboard.press('Escape')
   await expect(page.locator('.file-viewer-overlay')).toHaveCount(0)
-  // The two panels link to each other, by SPA navigation.
-  await page.getByTestId('mail-rules-triage-link').getByRole('link', { name: 'Open Inbox Triage' }).click()
+  // The panel points to the mail router (the Org page), which reads every new Inbox mail since 2026-11-14.
+  await expect(page.getByTestId('mail-rules-router-link').getByRole('link', { name: 'Open Org' })).toHaveAttribute('href', '/org')
+  await page.getByTestId('settings-nav-triage').click()
   await expect(page).toHaveURL(/#triage$/)
-  await page.getByTestId('triage-mail-rules-link').getByRole('link', { name: 'Open Mail rules' }).click()
+  // Inbox Triage no longer reads mail (2026-11-14), so its card points to the Org page, not back here.
+  await expect(page.getByTestId('triage-mail-router-note').getByRole('link', { name: 'Open Org' })).toHaveAttribute('href', '/org')
+  await page.getByTestId('settings-nav-mail-rules').click()
   await expect(page).toHaveURL(/#mail-rules$/)
   expect(await page.evaluate(() => (window as unknown as { __spaMarker?: number }).__spaMarker)).toBe(42)
-  await expect(page.locator(PANEL)).toContainText('Mail that Inbox Triage marks read is not part of group Undo.')
   // Not the Triage tray: the nav tile draws its own glyph.
   const navHtml = await page.getByTestId('settings-nav-mail-rules').innerHTML()
   const trayHtml = await page.getByTestId('settings-nav-triage').innerHTML()

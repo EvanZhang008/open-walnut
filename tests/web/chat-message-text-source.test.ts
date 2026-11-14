@@ -359,7 +359,8 @@ describe('ChatMessage.tsx draws agent text only with its writer', () => {
     const clicks = S.calls.filter((c) => c.key === def('hooks/useEntityClickHandler', 'useEntityClickHandler'))
     expect(clicks.length).toBeGreaterThanOrEqual(2)
     for (const c of clicks) {
-      expect(c.args.slice(2), `line ${c.line}`).toEqual(['file.onFileOpen', 'file.fileHost', 'file.fileSessionId', 'file.refusesAll'])
+      // After onSessionClick: the writer's opener, host, session and refusal (task pills open themselves).
+      expect(c.args.slice(1), `line ${c.line}`).toEqual(['file.onFileOpen', 'file.fileHost', 'file.fileSessionId', 'file.refusesAll'])
     }
   })
 

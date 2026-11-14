@@ -26,11 +26,14 @@ import { useStoreTask } from '@/contexts/TasksContext';
 import { allowScriptsFile, fetchScripts, fetchWorkspaceCandidates, type ResolvedProjectScript } from '@/api/workspaces';
 import { log } from '@/utils/log';
 import { useDraftValue } from '@/hooks/useDraft';
+import { useExperimental } from '@/hooks/useExperimental';
+import { useProjectEntry } from '@/hooks/useProjectRegistry';
 import { draftKey } from '@/utils/drafts';
 import {
   isPickable, selectedCandidate, setDraftWorkspace, useDraftWorkspace, getDraftWorkspace,
   type DraftWorkspaceChoice,
 } from './draft-workspace-store';
+import { autoGivesWay, defaultIsolationOn, suggestedText } from './draft-workspace-model';
 import '@/styles/workspaces.css';
 
 export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId, project }: {
@@ -63,6 +66,36 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId, project }: 
   const setValues = (values: DraftWorkspaceChoice['values']) => {
     setDraftWorkspace(draftId, { values });
     kept.setValue(values);
+  };
+
+  // On by default for a code task's folder (the experiment, or the project's setting), until
+  // the person turns it on or off here; that click is kept with the draft across a reload.
+  const globalDefault = useExperimental('isolated_workspace_by_default');
+  const { row: projectRow } = useProjectEntry(project ?? boundTask?.project ?? '');
+  const picked0 = useDraftValue<{ enabled?: boolean }>(draftKey('draft-workspace-on', draftId), {});
+  const pickedOn = picked0.value.enabled;
+  // A bound draft whose task already ran a session continues that conversation: no new workspace.
+  const defaultOn = !!cwd && defaultIsolationOn(globalDefault, projectRow?.isolatedWorkspace)
+    && (!bound || (inline && !boundTask?.session_id));
+  useEffect(() => {
+    const cur = getDraftWorkspace(draftId);
+    if (typeof pickedOn === 'boolean') {
+      if (!cur.touched || cur.enabled !== pickedOn) setDraftWorkspace(draftId, { enabled: pickedOn, touched: true, auto: false });
+      return;
+    }
+    if (cur.touched || cur.enabled === defaultOn) return;
+    setDraftWorkspace(draftId, { enabled: defaultOn, auto: defaultOn });
+    log.info('workspace', 'draft default applied', { draftId, enabled: defaultOn, project: project ?? boundTask?.project, global: globalDefault, projectSetting: projectRow?.isolatedWorkspace });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftId, defaultOn, pickedOn]);
+  // The person's own on/off (here, the More menu, the folder row's chip) is kept with the draft.
+  useEffect(() => {
+    if (choice.touched && pickedOn !== choice.enabled) picked0.setValue({ enabled: choice.enabled });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [choice.touched, choice.enabled, pickedOn]);
+  const pick = (enabled: boolean, via: string) => {
+    setDraftWorkspace(draftId, { enabled, touched: true, auto: false });
+    log.info('workspace', 'draft option toggled', { draftId, enabled, via });
   };
 
   // Ask the host when the option is on and the folder is new to this choice.
@@ -132,6 +165,11 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId, project }: 
   };
 
   if (!cwd || (bound ? !inline : !choice.enabled)) return null;
+  // A default shows only its chip on the folder row (DraftWorkspaceAutoChip): a folder pick must
+  // never grow the bottom-anchored bar. One with nothing to make shows nothing at all.
+  const quiet = autoGivesWay(choice);
+  const autoOnly = !!choice.auto && choice.enabled;
+  if (autoOnly && !bound) return null;
   const picked = selectedCandidate(choice);
   const pickable = (choice.candidates ?? []).filter(isPickable);
   const unpickable = (choice.candidates ?? []).filter((c) => !isPickable(c));
@@ -143,22 +181,19 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId, project }: 
       {bound && (
         <button
           type="button"
-          className={`draft-workspace-toggle${choice.enabled ? ' is-on' : ''}`}
-          aria-pressed={choice.enabled}
+          className={`draft-workspace-toggle${choice.enabled && !quiet ? ' is-on' : ''}`}
+          aria-pressed={choice.enabled && !quiet}
           data-testid="draft-workspace-toggle"
           title={choice.enabled
             ? 'The task gets its own working copy; its session starts there once it is ready'
             : 'Give this task its own working copy (a git worktree, or a plugin workspace)'}
-          onClick={() => {
-            setDraftWorkspace(draftId, { enabled: !choice.enabled });
-            log.info('workspace', 'draft option toggled', { draftId, enabled: !choice.enabled, via: 'bound-toggle' });
-          }}
+          onClick={() => pick(!(choice.enabled && !quiet), 'bound-toggle')}
         >
-          <span className="draft-workspace-check" aria-hidden>{choice.enabled ? '✓' : ''}</span>
+          <span className={`draft-workspace-switch${choice.enabled && !quiet ? ' is-on' : ''}`} aria-hidden />
           Isolated workspace
         </button>
       )}
-      {choice.enabled && (
+      {choice.enabled && !autoOnly && (
         <div className="draft-workspace-body">
           {!bound && (
             <span className="draft-workspace-on" data-testid="draft-workspace-on" title="The task gets its own working copy; its session starts there once it is ready">
@@ -169,10 +204,7 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId, project }: 
                 data-testid="draft-workspace-off"
                 aria-label="Turn off the isolated workspace"
                 title="Turn off: run in the folder itself"
-                onClick={() => {
-                  setDraftWorkspace(draftId, { enabled: false });
-                  log.info('workspace', 'draft option toggled', { draftId, enabled: false, via: 'body-pill' });
-                }}
+                onClick={() => pick(false, 'body-pill')}
               >
                 ×
               </button>
@@ -191,7 +223,7 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId, project }: 
                   className={`draft-workspace-provider${picked?.provider === c.provider ? ' is-picked' : ''}`}
                   data-testid={`draft-workspace-provider-${c.provider}`}
                   title={c.claimed ? (c.root ? `Matches ${c.root}` : 'Matches this folder') : (c.reason ?? 'Pick it to use it here')}
-                  onClick={() => setDraftWorkspace(draftId, { provider: c.provider })}
+                  onClick={() => setDraftWorkspace(draftId, { provider: c.provider, auto: false })}
                 >
                   {c.displayName}
                   {c.claimed && c.branch && <span className="draft-workspace-provider-meta"> · from {c.branch}</span>}
@@ -252,7 +284,7 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId, project }: 
                   data-draft-key={kept.key ?? undefined}
                   className="draft-workspace-input"
                   data-testid={`draft-workspace-input-${key}`}
-                  value={typeof value === 'string' ? value : ''}
+                  value={typeof value === 'string' ? value : suggestedText(picked, key)}
                   // "current commit" beside "from main" read as two bases: say they are the same one.
                   placeholder={field.placeholder === 'current commit' && picked?.claimed && picked.branch ? `current commit of ${picked.branch}`
                     : field.placeholder ?? (field.type === 'array' ? 'names, separated by commas' : '')}
@@ -298,5 +330,34 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId, project }: 
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * The default's whole face (DraftWorkspaceRow's `auto`): one chip beside the folder pill,
+ * in the row that is already there, naming who makes the copy ("Git worktree") once the
+ * host said a provider claims the folder. Its × runs the task in the folder itself; the
+ * More menu's row says the same. Nothing while the host is asked, or when nothing claims it.
+ */
+export function DraftWorkspaceAutoChip({ draftId }: { draftId: string }) {
+  const choice = useDraftWorkspace(draftId);
+  if (!choice.enabled || !choice.auto || choice.loading || autoGivesWay(choice)) return null;
+  const picked = selectedCandidate(choice);
+  if (!picked) return null;
+  return (
+    <span className="session-action-chip draft-workspace-auto" data-testid="draft-workspace-auto"
+      title={`Isolated workspace by default: the task gets its own working copy (${picked.displayName}${picked.root ? ` of ${picked.root}` : ''}), so it never edits the folder other tasks use. × works in the folder itself.`}>
+      <span aria-hidden>⑂</span> {picked.displayName}
+      <button
+        type="button"
+        className="draft-workspace-off"
+        data-testid="draft-workspace-auto-off"
+        aria-label="Work in the folder itself, without an isolated workspace"
+        onClick={() => {
+          setDraftWorkspace(draftId, { enabled: false, touched: true, auto: false });
+          log.info('workspace', 'draft option toggled', { draftId, enabled: false, via: 'auto-chip' });
+        }}
+      >×</button>
+    </span>
   );
 }

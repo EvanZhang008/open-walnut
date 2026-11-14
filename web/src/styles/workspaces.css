@@ -58,20 +58,40 @@
   line-height: 1;
   cursor: pointer;
 }
-.draft-workspace-off:hover { background: var(--accent-subtle); color: var(--fg); }
-.draft-workspace-off:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 1px; }
-.draft-workspace-check {
-  flex: 0 0 auto;
-  width: 12px;
-  height: 12px;
-  border: 1px solid currentColor;
-  border-radius: 3px;
+.session-action-chip.draft-workspace-auto {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  font-size: 9px;
-  line-height: 1;
+  gap: 4px;
+  padding-right: 3px;
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  white-space: nowrap;
 }
+.draft-workspace-off:hover { background: var(--accent-subtle); color: var(--fg); }
+.draft-workspace-off:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 1px; }
+/* On or off is a switch (a picker's current choice is a colour, never a checkmark). */
+.draft-workspace-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 12px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--fg-muted) 45%, transparent);
+  transition: background 0.12s;
+}
+.draft-workspace-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.12s;
+}
+.draft-workspace-switch.is-on { background: var(--accent); }
+.draft-workspace-switch.is-on::after { transform: translateX(10px); }
 .draft-workspace-body {
   display: flex;
   flex-wrap: wrap;

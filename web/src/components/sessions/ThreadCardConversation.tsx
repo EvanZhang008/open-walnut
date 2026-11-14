@@ -32,7 +32,6 @@ interface RowHandlers {
   sessionId: string;
   sessionCwd?: string;
   sessionHost?: string;
-  onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   onFileOpen?: (path: string, line?: number) => void;
 }
@@ -83,7 +82,7 @@ function LiveAnswer({ live, streaming, h }: { live: LiveText; streaming: boolean
       <div className="session-msg-content">
         <StreamingBlockView
           block={live.block} sessionId={h.sessionId} sessionCwd={h.sessionCwd} sessionHost={h.sessionHost}
-          live={streaming} onTaskClick={h.onTaskClick} onSessionClick={h.onSessionClick} onFileOpen={h.onFileOpen}
+          live={streaming} onSessionClick={h.onSessionClick} onFileOpen={h.onFileOpen}
         />
         {/* The persisted reply's strip, so the handover adds nothing under it. */}
         {live.block.type === 'text' && <StreamingReplyMeta block={live.block} alwaysVisible={false} />}
@@ -119,8 +118,8 @@ export interface ThreadCardConversationProps extends RowHandlers {
 export const ThreadCardConversation = memo(function ThreadCardConversation(p: ThreadCardConversationProps) {
   const h: RowHandlers = useMemo(() => ({
     sessionId: p.sessionId, sessionCwd: p.sessionCwd, sessionHost: p.sessionHost,
-    onTaskClick: p.onTaskClick, onSessionClick: p.onSessionClick, onFileOpen: p.onFileOpen,
-  }), [p.sessionId, p.sessionCwd, p.sessionHost, p.onTaskClick, p.onSessionClick, p.onFileOpen]);
+    onSessionClick: p.onSessionClick, onFileOpen: p.onFileOpen,
+  }), [p.sessionId, p.sessionCwd, p.sessionHost, p.onSessionClick, p.onFileOpen]);
   const replyRow = useStreamReplyRows();
   // The live answer to the newest turn is drawn as the reply its persisted
   // twin will be, under the twin's key, in its turn: the twin takes over that
@@ -139,7 +138,7 @@ export const ThreadCardConversation = memo(function ThreadCardConversation(p: Th
   const reply = (r: SessionHistoryMessage) => (
     <SessionMessage
       key={r.msgId ?? r.walnutMessageId} message={r} sessionId={h.sessionId} sessionCwd={h.sessionCwd}
-      sessionHost={h.sessionHost} answerOnly onTaskClick={h.onTaskClick} onSessionClick={h.onSessionClick} onFileOpen={h.onFileOpen}
+      sessionHost={h.sessionHost} answerOnly onSessionClick={h.onSessionClick} onFileOpen={h.onFileOpen}
     />
   );
   return (

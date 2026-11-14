@@ -104,7 +104,7 @@ describe('area routing on the real server', () => {
     expect(response.status).toBe(200);
     const text = await response.text();
     expect(JSON.parse(text)).toMatchObject({
-      area: { id: 'personal' },
+      router: { id: 'personal' },
       item: { source: personal, key: routerKey(personal), subject: 'PRIVATE_CANARY' },
       body: { text: 'PRIVATE_BODY_CANARY' },
       bodyAvailable: true,
@@ -160,7 +160,7 @@ describe('area routing on the real server', () => {
     clearLookups();
     const response = await call('GET', contextPath(work));
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ area: { id: 'work' }, body: { text: 'WORK_BODY_CANARY' } });
+    expect(await response.json()).toMatchObject({ router: { id: 'work' }, body: { text: 'WORK_BODY_CANARY' } });
   });
 
   it('says the reader is missing instead of falling back to another lookup', async () => {
@@ -225,6 +225,26 @@ describe('area routing on the real server', () => {
     const response = await call('PUT', '/api/v1/router/areas', workSid, { ...before, items: [] });
     expect(response.status).toBe(403);
     expect(await readRouterAreas(WALNUT_HOME)).toEqual(before);
+  });
+
+  it('an ordinary session (a VP) reads a task an older build marked into an area, in its list, search and the org', async () => {
+    const vpSid = randomUUID();
+    const vpId = (await addTask({ title: 'Garden VP', project: 'Garden' })).task.id;
+    await createSessionRecord(vpSid, vpId, '', WALNUT_HOME, { mode: 'dontAsk' });
+    await updateSessionRecord(vpSid, { process_status: 'stopped' });
+    const routedId = (await addTask({ title: 'ROUTED_ROTA_CANARY', project: 'Garden' })).task.id;
+    // The mark an older build left on the work a router handed an item to; that build hid it from the VP.
+    patchLegacyTask(routedId, { router_area_id: 'personal' } as Partial<Task>);
+    const one = await call('GET', `/api/tasks/${routedId}`, vpSid);
+    expect(one.status).toBe(200);
+    expect(await one.text()).toContain('ROUTED_ROTA_CANARY');
+    const list = await call('GET', '/api/tasks?slim=1', vpSid);
+    expect(list.status).toBe(200);
+    expect(await list.text()).toContain(routedId);
+    const org = await call('GET', '/api/v1/org', vpSid);
+    expect(org.status).toBe(200);
+    // A router's own session is still held to its two tools.
+    expect((await call('GET', `/api/tasks/${routedId}`, personalSid)).status).toBe(403);
   });
 
   it('records no-action without a model run or delivery and shows the same ledger on reread', async () => {

@@ -1,10 +1,11 @@
 /**
  * The approval dialog's body (web/src/components/approvals/approval-context.tsx; 2026-11-12, the
  * user on a Git push dialog: "I just need to know which task and which path right.. this si
- * confuing"). Two lines first, the task that asked and where it acts (repo and branch, or folder,
- * and the machine); the request's sentence when it says more; the command and the signed detail in
- * one Details fold, closed. Never the session's last words, the task's goal, its last steps or the
- * hook that ran the command.
+ * confuing"; 2026-11-14: "Broi..... I need the summary AI write"). The summary on top, in full (the
+ * asker's own words, else the one Walnut wrote); then two lines, the task that asked and where it
+ * acts (repo and branch, or folder, and the machine); the request's sentence when it says more; the
+ * command and the signed detail in one Details fold, closed. Never the session's raw last words, the
+ * task's goal, its last steps or the hook that ran the command.
  */
 import { describe, expect, it, vi } from 'vitest';
 import { createElement } from '../../web/node_modules/react/index.js';
@@ -15,7 +16,7 @@ vi.mock('../../web/src/components/approvals/approvals-store', () => ({ closeAppr
 vi.mock('@/utils/open-session', () => ({ openTaskOnHome: vi.fn() }));
 
 const { MemoryRouter } = await import('../../web/node_modules/react-router-dom');
-const { ApprovalContextRows, detailText, gitOperation, prettyJson, shortPath } = await import('../../web/src/components/approvals/approval-context');
+const { ApprovalContextRows, detailText, gitOperation, prettyJson, shortPath, summaryOf } = await import('../../web/src/components/approvals/approval-context');
 
 function approval(over: Partial<Approval> = {}, requester: Partial<Approval['requester']> = {}): Approval {
   return {
@@ -56,9 +57,15 @@ const gitPush = (over: Partial<Approval> = {}) => approval({
 const glance = (html: string) => html.split('<details')[0]!;
 
 describe('the approval dialog leads with the task and the path', () => {
-  it('a Git push reads as two lines, Task and Repo with its branch and machine; the rest is folded', () => {
-    const html = render(gitPush());
+  const SUMMARY = 'Pushes the two progress-table commits to the shared repo, so the team sees today\'s numbers before the review.';
+
+  it('a Git push reads as Walnut\'s summary, then Task and Repo with its branch and machine; the rest is folded', () => {
+    const html = render(gitPush({ context: { ...approval().context, summary: SUMMARY } }));
     const top = glance(html);
+    // The summary comes first, in full, and says who wrote it.
+    expect(top.indexOf('data-testid="approval-ai-summary"')).toBeLessThan(top.indexOf('data-testid="approval-task"'));
+    expect(top).toContain(`>${SUMMARY.replace("'", '&#x27;')}<`);
+    expect(top).toContain('Walnut’s summary of the task’s session, not signed');
     expect(top).toContain('data-testid="approval-task-link"');
     expect(top).toContain('Platform Lead');
     expect(top).toContain('>Repo<');
@@ -74,7 +81,22 @@ describe('the approval dialog leads with the task and the path', () => {
     expect(html.match(/<details/g)).toHaveLength(1);
   });
 
-  it('any other request keeps its own sentence under the two lines, with the folder it ran in', () => {
+  it('until Walnut\'s summary arrives (or if it is never written) the request\'s own line is on top', () => {
+    const top = glance(render(gitPush()));
+    expect(top).toContain('data-testid="approval-asks">Push commit da21d9c to origin mainline in meta-fresh<');
+    expect(top.indexOf('data-testid="approval-asks"')).toBeLessThan(top.indexOf('data-testid="approval-task"'));
+    expect(top).not.toContain('approval-summary-by');
+    expect(top).toContain('>Repo<');
+  });
+
+  it('under Walnut\'s summary, a request line that says more stays in sight', () => {
+    const top = glance(render(approval({ what: 'Send the weekly report to the team?', singleUse: false, context: { summary: SUMMARY } })));
+    expect(top).toContain('data-testid="approval-ai-summary"');
+    expect(top).toContain('>Asks<');
+    expect(top).toContain('data-testid="approval-asks">Send the weekly report to the team?<');
+  });
+
+  it('any other request keeps its own sentence on top, with the folder it ran in', () => {
     const html = render(approval({ what: 'Send the weekly report to the team?', singleUse: false, detail: 'notes: 4 lines' }, { command: 'release.sh' }));
     const top = glance(html);
     expect(top).toContain('>Folder<');
@@ -92,9 +114,16 @@ describe('the approval dialog leads with the task and the path', () => {
     }
   });
 
-  it('shows the asker\'s own line, in Details', () => {
-    const own = render(approval({ context: { why: 'Ships the release notes to the site.', whyFrom: 'asker' } }));
-    expect(own.split('<details')[1]).toContain('data-testid="approval-why">Ships the release notes to the site.<');
+  it('shows the asker\'s own line and its own why on top, in full, and never a summary over them', () => {
+    const why = 'Ships the release notes to the site, which the launch post links to; '.repeat(4).trim();
+    const a = approval({ what: 'Publish the release notes?', context: { why, whyFrom: 'asker', summary: 'A summary that must not show' } });
+    const top = glance(render(a));
+    expect(top).toContain('data-testid="approval-asks">Publish the release notes?<');
+    expect(top).toContain(`data-testid="approval-why">${why}<`);
+    expect(top).not.toContain('must not show');
+    expect(summaryOf(a)).toEqual({ text: 'Publish the release notes?', by: 'asker', why });
+    // The session's last words are never the asker's why.
+    expect(summaryOf(approval({ what: 'X?' }))).toEqual({ text: 'X?', by: 'asker' });
   });
 
   it('falls back to what ran the command when the asker named none, and says when no task asked', () => {

@@ -93,7 +93,7 @@ export function sessionModeLabel(control: SessionControl): string {
 
 /**
  * ChatGPT-parity approval menu: ONE pill (current mode) opening a dropdown of
- * the provider's own options — icon + name + description, check on the RIGHT,
+ * the provider's own options — icon + name + description, the current one in the accent colour,
  * full-access row in warning orange. Plan mode rides as a toggle row at the
  * bottom (ChatGPT keeps it in the "+" menu; we have no such menu here), and
  * only surfaces as its own amber pill while ON, where clicking turns it off.
@@ -138,9 +138,7 @@ function ThoughtControlPill({ control, setControl }: Pick<SessionControlPillsPro
           setBusy(true);
           void setControl(control.id, option.value).catch(() => {}).finally(() => { setBusy(false); setOpen(false); });
         }}>
-        <span aria-hidden />
         <span className="session-control-option-name">{option.name}</span>
-        <span className="session-control-option-check" aria-hidden>{option.value === control.currentValue ? '✓' : ''}</span>
       </button>)}
     </div>, document.body)}
   </>;
@@ -234,7 +232,6 @@ function ApprovalControlPills({
                       </span>
                     )}
                   </span>
-                  <span className="session-control-option-check" aria-hidden>{active ? '✓' : ''}</span>
                 </button>
               );
             })}
@@ -244,6 +241,7 @@ function ApprovalControlPills({
                 <button
                   type="button"
                   className="session-control-option"
+                  aria-pressed={planOn}
                   disabled={busy}
                   onClick={() => apply(collab.id, planOn ? 'default' : 'plan')}
                 >
@@ -256,7 +254,6 @@ function ApprovalControlPills({
                       {planOn ? 'Turn plan mode off.' : 'Turn plan mode on.'}
                     </span>
                   </span>
-                  <span className="session-control-option-check" aria-hidden>{planOn ? '✓' : ''}</span>
                 </button>
               </>
             )}

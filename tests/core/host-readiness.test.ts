@@ -340,10 +340,11 @@ describe('wireHostReadiness', () => {
     await refresh.mock.results[0].value
     expect(emit).toHaveBeenCalledWith('devbox')
     // Whether anything uses the host for sessions rides its readiness, and a flip re-pushes it.
-    await vi.waitFor(() => expect(getHostReadiness('devbox')?.usedForSessions).toBe(false))
+    // The poller ticks every 20 ms; a busy runner can take longer than waitFor's default 1 s.
+    await vi.waitFor(() => expect(getHostReadiness('devbox')?.usedForSessions).toBe(false), { timeout: 10_000 })
     emit.mockClear()
     used = new Set(['devbox'])
-    await vi.waitFor(() => expect(emit).toHaveBeenCalledWith('devbox'))
+    await vi.waitFor(() => expect(emit).toHaveBeenCalledWith('devbox'), { timeout: 10_000 })
     expect(getHostReadiness('devbox')?.usedForSessions).toBe(true)
     off()
     expect(fire).toBeNull()

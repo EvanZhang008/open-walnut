@@ -12,9 +12,8 @@ import type { MailPreviewResponse, MailRule, MailRuleView, MailRuleWhen, MailRul
 import { movesPhrase } from '@/utils/mail-preview-moves';
 
 export const COPY = {
-  crossLink: 'Inbox Triage reads only Important when grouping is on.',
-  openTriage: 'Open Inbox Triage',
-  triageUndo: 'Mail that Inbox Triage marks read is not part of group Undo.',
+  crossLink: 'Grouping sorts what you see; the mail router still reads every new Inbox mail.',
+  openRouter: 'Open Org',
   noFile: 'No rules file yet. Walnut creates it the first time you save a rule.',
   commentsNote: "Saving from here rewrites the file. Comments outside a rule's note are not kept; the previous version is kept as sort-rules.yaml.bak.",
   fixFirst: 'Fix the file first, or reload it after fixing.',

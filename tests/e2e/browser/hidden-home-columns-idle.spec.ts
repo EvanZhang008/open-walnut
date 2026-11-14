@@ -38,13 +38,18 @@ async function mockSession(page: Page) {
   })
   // Count layout reads made inside the hidden home page.
   await page.addInitScript(() => {
-    const w = window as unknown as { __hiddenReads: number }
+    const w = window as unknown as { __hiddenReads: number; __hiddenReadStacks: Record<string, number> }
     w.__hiddenReads = 0
+    w.__hiddenReadStacks = {}
     const desc = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollHeight')!
     Object.defineProperty(Element.prototype, 'scrollHeight', {
       ...desc,
       get(this: Element) {
-        if (this.closest('.main-page-wrapper-hidden')) w.__hiddenReads++
+        if (this.closest('.main-page-wrapper-hidden')) {
+          w.__hiddenReads++
+          const stack = new Error().stack ?? 'unknown'
+          w.__hiddenReadStacks[stack] = (w.__hiddenReadStacks[stack] ?? 0) + 1
+        }
         return desc.get!.call(this)
       },
     })
@@ -71,6 +76,7 @@ async function awayOnOrg(page: Page, ms: number): Promise<number> {
   const before = await hiddenReads(page)
   await page.waitForTimeout(ms)
   const reads = (await hiddenReads(page)) - before
+  if (reads > 2) console.log('[hidden-layout-stacks]', await page.evaluate(() => (window as unknown as { __hiddenReadStacks: unknown }).__hiddenReadStacks))
   await page.getByTestId('sidebar-core-app-home').click()
   await expect(page.locator('.main-page-wrapper-hidden')).toHaveCount(0)
   await page.waitForTimeout(1200)
@@ -84,8 +90,8 @@ test('a column following the newest row reads no layout while hidden and still f
   await page.waitForTimeout(700)
   expect((await geometry(page)).gap).toBeLessThanOrEqual(80)
 
-  const reads = await awayOnOrg(page, 3_000)
-  // Before the fix this one hidden column made 24 reads in 3 s (WebKit, 2026-11-11).
+  const reads = await awayOnOrg(page, 35_000)
+  // Stay away past the restore deadline; the returning column must still follow.
   expect(reads, 'layout reads inside the hidden home page while on Org').toBeLessThanOrEqual(2)
 
   expect((await geometry(page)).gap, 'back on Home, still on the newest row').toBeLessThanOrEqual(80)
@@ -102,7 +108,7 @@ test('a column parked mid-history keeps its place and its way back across a visi
   expect(parked.gap, 'the wheel leaves the bottom').toBeGreaterThan(400)
   await expect.poll(() => arrowShown(page), { timeout: 4000 }).toBe(true)
 
-  await awayOnOrg(page, 1_500)
+  await awayOnOrg(page, 35_000)
 
   const back = await geometry(page)
   expect(Math.abs(back.top - parked.top), 'the same place in the history').toBeLessThanOrEqual(2)

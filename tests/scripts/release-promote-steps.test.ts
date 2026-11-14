@@ -31,6 +31,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { parse as parseYaml } from 'yaml'
 import { TARGETS, assetName, builtName, writeAssets } from '../../scripts/release-files.mjs'
 import { ghCalls, installFakeGh, isDraft, makeRelease, releaseAssets } from './fake-gh-release.js'
+import { withLocalImports } from '../helpers/script-imports.js'
 
 const REPO = path.resolve(__dirname, '../..')
 const VERSION = '0.6.1'
@@ -246,8 +247,8 @@ beforeEach(async () => {
   fs.writeFileSync(path.join(fakeBin, 'sleep'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
   fs.writeFileSync(path.join(runner, 'notes.md'), NOTES)
 
-  for (const f of ['stable-promote.mjs', 'release.mjs', 'ci-gate.mjs', 'release-notes.mjs', 'npm-packages.mjs', 'release-files.mjs',
-    'release-unpack.sh', 'release-attach.sh', 'install.sh', 'npm-launcher/package.json', 'npm-launcher/launch.js', 'npm-launcher/fetch-platform.js', 'npm-launcher/postinstall.js']) {
+  for (const f of withLocalImports(['stable-promote.mjs', 'release.mjs', 'ci-gate.mjs', 'release-notes.mjs', 'npm-packages.mjs', 'release-files.mjs',
+    'release-unpack.sh', 'release-attach.sh', 'install.sh', 'npm-launcher/package.json', 'npm-launcher/launch.js', 'npm-launcher/fetch-platform.js', 'npm-launcher/postinstall.js'])) {
     fs.mkdirSync(path.dirname(path.join(seed, 'scripts', f)), { recursive: true })
     fs.copyFileSync(path.join(REPO, 'scripts', f), path.join(seed, 'scripts', f))
   }

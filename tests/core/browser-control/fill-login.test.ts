@@ -12,6 +12,9 @@ import { derivePasswordKey, randomBytes, toB64 } from '../../../src/core/vault/c
 import { createItems, getItem, resetVaultForTest, setupVault, updateItem } from '../../../src/core/vault/store.js'
 import { resetAgentStateForTest, type ApprovalCreator, type ApprovalWaiter } from '../../../src/core/vault/agent.js'
 import { _resetFillLoginForTesting, fillLogin, type FillDeps } from '../../../src/core/browser-control/fill-login.js'
+import { vi } from 'vitest'
+const attribution = vi.hoisted(() => ({ note: vi.fn() }))
+vi.mock('../../../src/core/browser-control/agent-actions.js', () => ({ noteAgentAction: attribution.note }))
 
 let dir = ''
 let shopId = ''
@@ -56,6 +59,7 @@ beforeEach(() => {
   resetAgentStateForTest()
   _resetFillLoginForTesting()
   fills = []
+  attribution.note.mockClear()
   tabUrl = 'https://shop.example.test/login'
 })
 
@@ -65,6 +69,7 @@ describe('fill_login after an approval', () => {
     const r = await fillLogin(input({ request }), deps)
     expect(r).toMatchObject({ status: 200, body: { filled: true, item: { id: shopId } } })
     expect(fills).toHaveLength(1)
+    expect(attribution.note).toHaveBeenCalledWith('t-fill', tabUrl, 'fill_login', expect.any(Number), 'a@example.test')
   })
 
   it('refuses a tab now on another origin of the same site (another host, or plain http)', async () => {
@@ -77,6 +82,17 @@ describe('fill_login after an approval', () => {
       await expect(fillLogin(input({ request }), deps)).rejects.toMatchObject({ code: 'page_changed' })
     }
     expect(fills).toEqual([])
+    expect(attribution.note).not.toHaveBeenCalled()
+  })
+
+  it('records no successful attribution when the browser refuses the form, and retries cleanly', async () => {
+    const request = await askAndApprove()
+    const refused = { ...deps, send: async (action: string, args: Record<string, unknown>, ms: number) =>
+      action === 'fill_login' ? { filled: false } : deps.send(action, args, ms) }
+    await expect(fillLogin(input({ request }), refused)).rejects.toMatchObject({ code: 'no_login_form' })
+    expect(attribution.note).not.toHaveBeenCalled()
+    expect((await fillLogin(input(), deps)).status).toBe(200)
+    expect(attribution.note).toHaveBeenCalledTimes(1)
   })
 
   it('checks the item\'s own sites again right before the fill (edited while the person was asked)', async () => {

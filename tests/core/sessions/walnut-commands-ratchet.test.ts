@@ -185,7 +185,7 @@ describe('every listed command reads as Walnut\'s notice', () => {
     // LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS (LEGACY_IDLE_COMPACT_HISTORY_TEXTS for the idle one), then
     // update this pin.
     expect({ schema: HISTORY_CACHE_SCHEMA, notices: [...WALNUT_COMMANDS.map((c) => c.notice), WALNUT_COMMAND_HISTORY_TEXT] }).toEqual({
-      schema: 13,
+      schema: 14,
       notices: [
         'Walnut sent /compact while the session was idle, before its prompt cache would expire, so the next message reads a summary instead of the whole conversation.',
         'Claude Code answered "Prompt is too long", so Walnut asked it to compact this conversation.',

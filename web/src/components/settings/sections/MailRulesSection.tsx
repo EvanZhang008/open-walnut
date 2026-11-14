@@ -305,10 +305,9 @@ function MailRulesPanel() {
 
   return (
     <SettingsSection id="mail-rules" title="Mail rules" data-testid="mail-rules-section">
-      <p className="mail-rules-crosslink" data-testid="mail-rules-triage-link">
-        {COPY.crossLink} <Link to="/settings#triage">{COPY.openTriage}</Link>
+      <p className="mail-rules-crosslink" data-testid="mail-rules-router-link">
+        {COPY.crossLink} <Link to="/org">{COPY.openRouter}</Link>
       </p>
-      <p className="mail-rules-help">{COPY.triageUndo}</p>
       {progress && (
         <p className="mail-rules-progress" data-testid="mail-rules-progress" aria-live="polite">
           Updating groups… {progress.done.toLocaleString('en-US')} of {progress.total.toLocaleString('en-US')}

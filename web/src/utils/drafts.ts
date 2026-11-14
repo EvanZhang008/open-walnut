@@ -24,6 +24,7 @@
 import { apiGet, apiPut } from '@/api/client';
 import { getDeviceToken } from '@/api/device-token';
 import { log } from '@/utils/log';
+import { sendUuidsOfRow, type RowWithSendUuids } from '@/utils/send-uuids';
 import { foldPending, hasCredential, isDraftKey, MAX_SYNCED_DRAFT_LEN, planDraftMerge, type DraftEntry } from './draft-merge';
 import { onLocalStorageWrite, rawLocalStorage } from './ui-prefs-sync';
 import { KEPT_ATTACHMENTS_PREFIX } from './kept-attachments-key';
@@ -253,11 +254,11 @@ export function forgetFailedDraft(origin: DraftOrigin): void {
 }
 
 /** History holds the user line of a refused send (the server took it after all): settled as a Retry. */
-export function settleConfirmedDrafts(sid: string, rows: ReadonlyArray<{ role: string; msgId?: string; sourceUuid?: string }>): void {
+export function settleConfirmedDrafts(sid: string, rows: ReadonlyArray<RowWithSendUuids>): void {
   const mine = failedRecords().filter((r) => r.sid === sid);
   if (mine.length === 0) return;
   const ids = new Set<string>();
-  for (const m of rows) if (m.role === 'user') { if (m.msgId) ids.add(m.msgId); if (m.sourceUuid) ids.add(m.sourceUuid); }
+  for (const m of rows) for (const u of sendUuidsOfRow(m)) ids.add(u);
   for (const r of mine) {
     if (!ids.has(r.uuid)) continue;
     const origin = adoptFailedDraft(sid, r.uuid);

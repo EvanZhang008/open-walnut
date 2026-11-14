@@ -8,12 +8,12 @@
  */
 import type { KanbanFilterApi, KanbanFilterKey, KanbanMode } from './kanban-contract';
 import type { KanbanBoardVM, KanbanWorkerKey } from './kanban-model';
+import { useOpenTask } from '@/hooks/useOpenTask';
 
 export interface KanbanRollupProps {
   board: KanbanBoardVM;
   filter: KanbanFilterApi;
   mode: KanbanMode;
-  onOpenTask(taskId: string): void;
 }
 
 const WORKER_CHIP: Partial<Record<KanbanWorkerKey, KanbanFilterKey>> = { running: 'running', waiting: 'needs', error: 'needs' };
@@ -23,7 +23,8 @@ export function leaderReason(text: string): string {
   return text.replace(/^Needs you:\s*/, '').trim() || 'look at it';
 }
 
-export function KanbanRollup({ board, filter, mode, onOpenTask }: KanbanRollupProps) {
+export function KanbanRollup({ board, filter, mode }: KanbanRollupProps) {
+  const openTask = useOpenTask();
   const { rollup, leader } = board;
   const pick = (chip: KanbanFilterKey) => filter.setChip(filter.chip === chip ? null : chip);
   return (
@@ -34,7 +35,7 @@ export function KanbanRollup({ board, filter, mode, onOpenTask }: KanbanRollupPr
           className="kanban-rollup-leader"
           data-testid="kanban-rollup-leader"
           title={leader.status.tooltip || leader.status.text}
-          onClick={() => onOpenTask(leader.taskId)}
+          onClick={() => openTask(leader.taskId)}
         >The leader needs you: {leaderReason(leader.status.text)}</button>
       )}
       <span className="kanban-rollup" data-testid="kanban-rollup">

@@ -240,7 +240,7 @@ async function handleToolsCall(
   }
   const { areaOpsForCaller } = await import('../router/gateway-policy.js');
   const areaOps = await areaOpsForCaller(callerSid);
-  if (areaOps && !areaOps.has(name)) return err('bad_request', 'This scoped session may use only its area routing tools. Nothing ran.');
+  if (areaOps && !areaOps.has(name)) return err('bad_request', 'A router session may use only its routing tools. Nothing ran.');
   let args = payload.args;
   if (args !== undefined && (typeof args !== 'object' || args === null || Array.isArray(args))) {
     return err('bad_request', 'tools.call "args" must be a JSON object');

@@ -8,16 +8,21 @@
  * browser's own pages (the extension refuses those too).
  *
  * A site is a registrable domain (url-match.ts siteKey), the same unit Passwords uses.
+ *
+ * `replayDays`: how long the pictures of agents' steps are kept for the Browser replay
+ * (replay-store.ts), 7 by default; 0 records none.
  */
 import path from 'node:path'
 import { siteKey } from '../vault/url-match.js'
+import { DEFAULT_REPLAY_DAYS, daysOf } from './replay-store.js'
 
 export interface SitesFile {
   mode: 'ask' | 'any'
   sites: Array<{ site: string; addedAt: string; by: string }>
+  replayDays: number
 }
 
-const EMPTY: SitesFile = { mode: 'any', sites: [] }
+const EMPTY: SitesFile = { mode: 'any', sites: [], replayDays: DEFAULT_REPLAY_DAYS }
 const modeOf = (m: unknown): SitesFile['mode'] => (m === 'ask' ? 'ask' : 'any')
 
 async function file(): Promise<string> {
@@ -28,13 +33,13 @@ async function file(): Promise<string> {
 export async function readSites(): Promise<SitesFile> {
   const { readJsonFile } = await import('../../utils/fs.js')
   const f = await readJsonFile<SitesFile>(await file(), EMPTY)
-  return { mode: modeOf(f.mode), sites: Array.isArray(f.sites) ? f.sites.filter((s) => typeof s?.site === 'string') : [] }
+  return { mode: modeOf(f.mode), sites: Array.isArray(f.sites) ? f.sites.filter((s) => typeof s?.site === 'string') : [], replayDays: daysOf(f.replayDays) }
 }
 
 async function update(mutate: (f: SitesFile) => void): Promise<SitesFile> {
   const { updateJsonFile } = await import('../../utils/fs.js')
   return updateJsonFile<SitesFile>(await file(), EMPTY, (f) => {
-    const next: SitesFile = { mode: modeOf(f.mode), sites: Array.isArray(f.sites) ? [...f.sites] : [] }
+    const next: SitesFile = { mode: modeOf(f.mode), sites: Array.isArray(f.sites) ? [...f.sites] : [], replayDays: daysOf(f.replayDays) }
     mutate(next)
     return next
   })
@@ -55,6 +60,10 @@ export async function removeSite(site: string): Promise<SitesFile> {
 
 export async function setMode(mode: 'ask' | 'any'): Promise<SitesFile> {
   return update((f) => { f.mode = mode })
+}
+
+export async function setReplayDays(days: number): Promise<SitesFile> {
+  return update((f) => { f.replayDays = daysOf(days) })
 }
 
 /** What the extension checks a tab against before it acts in it. */

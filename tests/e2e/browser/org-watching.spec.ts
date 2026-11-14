@@ -7,8 +7,8 @@
  *     server keeps it
  *   - the Watching section lists the node's watched work in watch order, each with its own state's
  *     dot, and a watched open task is drawn there only, not again in its state's section
- *   - the Org list shows them under the node's chat row; a click opens the task beside the page,
- *     × (or Delete) stops watching it there
+ *   - the Org list shows them under the node's chat row; a click opens the task on Home (a task
+ *     reference, useOpenTask), × (or Delete) stops watching it there
  *   - Home's Watching lists what the Org page watches; a watch made elsewhere (Home, an agent)
  *     shows on the Org page without a reload
  *   - a refused watch goes back
@@ -23,7 +23,7 @@ import { isolateUiPrefs } from './todo-panel-helpers'
 import { presetPanelDesign, setStatusSectionOpen, showSectionCard } from './status-section-helpers'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { lockLeftmostPanel } from './draft-helpers'
-import { openSection, openTaskFromRail, sectionCount, showTasks, taskRow, taskSection } from './org-view-helpers'
+import { openBeside, openSection, sectionCount, showTasks, taskRow, taskSection } from './org-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 
@@ -146,13 +146,14 @@ test('a row\'s eye watches it; the Watching section lists them first, in order; 
   await page.locator('.org-list').screenshot({ path: `test-results/org-watching-list-${test.info().project.name}.png` })
   await page.getByTestId('org-rail').screenshot({ path: `test-results/org-watching-rail-${test.info().project.name}.png` })
 
-  // A click opens the task beside the page; the Org page stays.
+  // A click opens the task on Home (a task reference): it has no session, so Home's list has it
+  // selected; nothing opens beside the Org page.
   await children.first().getByTestId('org-watched-open').click()
-  await expect(page.getByTestId('org-side')).toBeVisible({ timeout: 30_000 })
-  await expect(page).toHaveURL(/\/org\?/)
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
+  await expect(page.locator(`#home-task-navigation [data-task-id="${ids.b}"]`).and(page.locator('.task-focused, .todo-pinned-card-active'))).toHaveCount(1, { timeout: 30_000 })
+  await expect(page.getByTestId('org-side')).toHaveCount(0)
 
   // Home's Watching lists the same two.
-  await page.locator('.sidebar-home-group a').first().click()
   const panel = page.locator('.todo-panel').first()
   await expect(panel).toBeVisible({ timeout: 30_000 })
   await setStatusSectionOpen(panel, 'watching', true)
@@ -217,10 +218,11 @@ test('a locked session panel hangs its task under the row with a lock; eye and l
   const kept = page.locator(`[data-testid="org-watched"][data-key="${NODE}"] [data-testid="org-watched-item"][data-task-id="${ids.d}"]`)
   await expect(kept).toHaveCount(0)
 
-  // Beside the Org page: open the task and lock its panel.
-  // Its row in All tasks, or its card under Needs you once its turn ended (whichever its state draws).
+  // Beside the Org page: open the task and lock its panel. A task reference opens on Home now, so
+  // the task opens there by the page's own place (openBeside).
   const side = page.getByTestId('org-side')
-  await openTaskFromRail(page, ids.d, () => expect(side).toHaveAttribute('data-session-id', ids.dSid, { timeout: 3_000 }))
+  await openBeside(page, `task:${ids.d}`)
+  await expect(side).toHaveAttribute('data-session-id', ids.dSid, { timeout: 30_000 })
   await side.locator('.session-panel-lock').click()
   await expect(side).toHaveClass(/is-locked/)
   await expect(kept).toHaveCount(1)

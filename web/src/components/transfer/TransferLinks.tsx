@@ -4,13 +4,12 @@
  * one quiet line at the top of a session panel's body (never in its header).
  */
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { fetchTask } from '@/api/tasks';
 import { useTaskLabel } from '@/hooks/useEntityLabels';
 import '@/styles/transfer.css';
 import { taskPath } from '@/utils/task-path';
-import { openTaskOnHome } from '@/utils/open-session';
+import { useOpenTask } from '@/hooks/useOpenTask';
 
 /** Titles of tasks the board list does not carry (a completed source), read once per page. */
 const fetched = new Map<string, Promise<string | null>>();
@@ -33,8 +32,8 @@ export function useTaskTitle(taskId: string): string | null {
   return label?.title ?? title;
 }
 
-export function TaskRefLink({ taskId, onOpen }: { taskId: string; onOpen?: (taskId: string) => void }) {
-  const navigate = useNavigate();
+export function TaskRefLink({ taskId }: { taskId: string }) {
+  const openTask = useOpenTask();
   const title = useTaskTitle(taskId);
   return (
     <a
@@ -43,10 +42,11 @@ export function TaskRefLink({ taskId, onOpen }: { taskId: string; onOpen?: (task
       data-task-id={taskId}
       title={title ?? taskId}
       onClick={(e) => {
+        // A modifier click keeps the browser's own open of the href in a new view.
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) { e.stopPropagation(); return; }
         e.preventDefault();
         e.stopPropagation();
-        if (onOpen) onOpen(taskId);
-        else openTaskOnHome(taskId, navigate);
+        openTask(taskId);
       }}
     >
       {title ?? 'Loading…'}
@@ -61,9 +61,8 @@ export function hasTransferLinks(task: TransferFields | null | undefined): boole
 }
 
 /** Both ends of a transfer, each a clickable task pill. Nothing when the task has neither. */
-export function TransferLinks({ task, onOpenTask, className, testId }: {
+export function TransferLinks({ task, className, testId }: {
   task: TransferFields | null | undefined;
-  onOpenTask?: (taskId: string) => void;
   className?: string;
   testId?: string;
 }) {
@@ -73,13 +72,13 @@ export function TransferLinks({ task, onOpenTask, className, testId }: {
       {task.transferred_from && (
         <span className="xfer-link-item" data-link="from">
           <span>Moved from</span>
-          <TaskRefLink taskId={task.transferred_from} onOpen={onOpenTask} />
+          <TaskRefLink taskId={task.transferred_from} />
         </span>
       )}
       {task.transferred_to && (
         <span className="xfer-link-item" data-link="to">
           <span>Moved to</span>
-          <TaskRefLink taskId={task.transferred_to} onOpen={onOpenTask} />
+          <TaskRefLink taskId={task.transferred_to} />
         </span>
       )}
     </div>

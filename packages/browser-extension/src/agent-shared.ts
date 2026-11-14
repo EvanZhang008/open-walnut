@@ -15,7 +15,8 @@ import { windowOf } from './agent-window'
 import { more } from './agent-api'
 import { endLinger } from './cdp'
 
-export interface WireCommand { id: string; action: string; args: Record<string, unknown>; allow: { any: boolean; sites: string[]; walnut?: string[] } }
+/** `allow.record`: Walnut keeps a picture of this step for the Browser replay; post it with this token (agent-replay.ts). */
+export interface WireCommand { id: string; action: string; args: Record<string, unknown>; allow: { any: boolean; sites: string[]; walnut?: string[]; record?: string } }
 
 export class AgentError extends Error {
   constructor(message: string, readonly code: string, readonly extra: Record<string, unknown> = {}) { super(message) }

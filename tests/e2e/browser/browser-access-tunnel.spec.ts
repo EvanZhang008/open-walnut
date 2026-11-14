@@ -30,6 +30,7 @@ import { test, expect, devices, type Browser, type Locator, type Page } from '@p
 import { backToDevices, openWay } from './devices-ways-helpers'
 import { browserKindFromUserAgent } from '../../../src/core/browser-kind'
 import { expectQrEncodes } from './phone-link-qr-check'
+import { putExactSection } from './config-section-helpers'
 
 test.setTimeout(180_000)
 
@@ -205,7 +206,7 @@ test.describe('Open from a browser', () => {
 
   test.afterAll(async ({ browser }) => {
     const context = await browser.newContext({ baseURL: test.info().project.use.baseURL })
-    await context.request.put('/api/config', { data: { expose: {} } }).catch(() => {})
+    await putExactSection(context.request, 'expose', {}).catch(() => {})
     await context.request.put('/api/expose', { data: { enabled: false } }).catch(() => {})
     await context.close()
   })

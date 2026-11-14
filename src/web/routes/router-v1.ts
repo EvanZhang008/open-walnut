@@ -1,13 +1,11 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { role as serverRole } from '../../core/server-role.js';
 import { ambientTestRun } from '../../core/test-run.js';
-import { readRouterItem, resolveRouterItem } from '../../core/router/source-registry.js';
+import { readRouterItem } from '../../core/router/source-registry.js';
 import { routerContext } from '../../core/router/context.js';
 import { routerAccess } from '../../core/router/access.js';
 import { routeItem, routeViews, RouterError } from '../../core/router/service.js';
-import { RouterAreaError, allAreaItems, readRouterAreas, updateRouterAreas, normalizeRouterAreas, assertNoReassignment, activeRouter, sourceArea, ROUTER_CANONICAL_KEY_MAX, ensureAreasDataVersion } from '../../core/router/areas.js';
-import { crossRouteItem, needsHandoff } from '../../core/router/cross-route.js';
-import { HandoffApprovalError } from '../../core/router/handoff-approval.js';
+import { RouterAreaError, readRouterAreas, updateRouterAreas, normalizeRouterAreas, assertNoReassignment, sourceArea, ensureAreasDataVersion } from '../../core/router/areas.js';
 import { WALNUT_HOME } from '../../constants.js';
 import type { RouterSource } from '../../core/router/types.js';
 import { sendV1Error } from './v1-control-relay.js';
@@ -15,17 +13,23 @@ import { createRouterNode, updateRouterNode, type RouterNodePatch } from '../../
 import { setSelfRouter, clearSelfRouter } from '../../core/router/self-router.js';
 import { assertIsolatedHistory } from '../../core/router/history-isolation.js';
 import { OrgError } from '../../core/org/org-store.js';
-import { routerProcessingRouter } from './router-processing.js';
-import { confirmedRouteRule, routerRulesView, saveRouterRuleBindings, RouterRuleError } from '../../core/router/rules.js';
 
 export const routerV1Router = Router();
-routerV1Router.use(routerProcessingRouter);
 
 function callerSid(req: Request): string | undefined {
   const sid = req.headers['x-walnut-caller-sid'];
   if (typeof sid === 'string' && sid.trim()) return sid.trim();
   const kind = req.headers['x-walnut-caller-kind'];
   return typeof kind === 'string' && kind.trim().toLowerCase() === 'automation' ? 'external' : undefined;
+}
+
+/** A router's own session, which reads outside content with only its two router tools. */
+async function refuseRouterSession(req: Request, message: string): Promise<void> {
+  const sid = callerSid(req);
+  if (!sid) return;
+  const { resolveCaller } = await import('../../core/sessions/session-send-core.js');
+  const caller = await resolveCaller(sid);
+  if (caller.kind !== 'session' || caller.record.profile?.areaId || caller.record.profile?.areaRole) throw new RouterError('area_forbidden', message, 403);
 }
 
 function primary(write = false): void {
@@ -48,7 +52,7 @@ function sourceOf(value: unknown): RouterSource {
 }
 
 function failure(res: Response, next: NextFunction, error: unknown): void {
-  if (error instanceof RouterError || error instanceof RouterAreaError || error instanceof OrgError || error instanceof HandoffApprovalError || error instanceof RouterRuleError) sendV1Error(res, error.status, error.code, error.message);
+  if (error instanceof RouterError || error instanceof RouterAreaError || error instanceof OrgError) sendV1Error(res, error.status, error.code, error.message);
   else if ((error as { code?: string })?.code === 'source_changed') {
     sendV1Error(res, 409, 'source_changed', error instanceof Error ? error.message : String(error));
   } else if (['source_missing', 'source_unavailable'].includes((error as { code?: string })?.code ?? '')) {
@@ -101,18 +105,22 @@ routerV1Router.delete('/org/routers/self/:id', async (req: Request, res: Respons
   } catch (error) { failure(res, next, error); }
 });
 
-const ROUTER_PATCH_FIELDS = new Set(['name', 'links', 'paused']);
+const ROUTER_PATCH_FIELDS = new Set(['name', 'links', 'paused', 'folders']);
 
 routerV1Router.patch('/org/routers/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     primary(true);
     const body = req.body as Record<string, unknown> | undefined;
-    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new RouterError('bad_router', 'Give the router fields to change: name, links or paused.');
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new RouterError('bad_router', 'Give the router fields to change: name, links, folders or paused.');
     const keys = Object.keys(body);
     if (keys.some((key) => !ROUTER_PATCH_FIELDS.has(key))) {
-      throw new RouterError('router_field_fixed', 'Only a router\'s name, VP links and pause change here. Its area, host and sources stay as configured.');
+      throw new RouterError('router_field_fixed', 'Only a router\'s name, VP links, watched folders and pause change here. Its area, host and sources stay as configured.');
     }
-    if (keys.length === 0) throw new RouterError('bad_router', 'Give at least one of name, links or paused.');
+    if (keys.length === 0) throw new RouterError('bad_router', 'Give at least one of name, links, folders or paused.');
+    if (body.folders !== undefined && (!Array.isArray(body.folders) || body.folders.length > 50
+      || body.folders.some((one) => typeof one !== 'string' || !one.trim() || one.length > 200 || /[\u0000-\u001f\u007f]/.test(one)))) {
+      throw new RouterError('bad_router', 'folders must be a list of at most 50 folder names or roles (such as "inbox").');
+    }
     if (body.name !== undefined && typeof body.name !== 'string') throw new RouterError('bad_router', 'name must be a string.');
     if (body.links !== undefined && (!Array.isArray(body.links) || body.links.some((id) => typeof id !== 'string'))) {
       throw new RouterError('bad_router', 'links must be a list of VP task ids.');
@@ -122,6 +130,7 @@ routerV1Router.patch('/org/routers/:id', async (req: Request, res: Response, nex
       ...(body.name !== undefined ? { name: body.name as string } : {}),
       ...(body.links !== undefined ? { links: body.links as string[] } : {}),
       ...(body.paused !== undefined ? { paused: body.paused as boolean } : {}),
+      ...(body.folders !== undefined ? { folders: body.folders as string[] } : {}),
     };
     res.json({ task: await updateRouterNode(String(req.params.id), patch) });
   } catch (error) { failure(res, next, error); }
@@ -130,7 +139,9 @@ routerV1Router.patch('/org/routers/:id', async (req: Request, res: Response, nex
 routerV1Router.get('/router/areas', async (req: Request, res: Response, next: NextFunction) => {
   try {
     primary();
-    if (callerSid(req)?.trim()) throw new RouterError('area_forbidden', 'Sessions read only their own routing context, not the area registry.', 403);
+    // Which mailboxes and folders each router watches is no secret: Main, a VP or any task reads it.
+    // Only a router's own isolated session keeps to its routing context.
+    await refuseRouterSession(req, 'A router reads only its own routing context, not the router registry.');
     res.json(await readRouterAreas(WALNUT_HOME));
   } catch (error) { failure(res, next, error); }
 });
@@ -140,7 +151,7 @@ routerV1Router.get('/router/areas', async (req: Request, res: Response, next: Ne
 routerV1Router.get('/router/nodes/:id/summary', async (req: Request, res: Response, next: NextFunction) => {
   try {
     primary();
-    if (callerSid(req)?.trim()) throw new RouterError('area_forbidden', 'Sessions read only their own routing context, not a router\'s summary.', 403);
+    await refuseRouterSession(req, 'A router reads only its own routing context, not a router\'s summary.');
     const { routerNodeSummary, RouterSummaryError } = await import('../../core/router/summary.js');
     try {
       res.json(await routerNodeSummary(String(req.params.id)));
@@ -177,20 +188,24 @@ routerV1Router.put('/router/areas', async (req: Request, res: Response, next: Ne
     });
     assertNoReassignment(before, normalizeRouterAreas({ ...proposed, ...keep(before) }));
     // Confirmed members stay as they are; each new one is checked before any marker is written.
+    // An area holds its routers only: the work they hand items to stays ordinary work (2026-11-14).
+    if (proposed.areas.some((area) => area.taskIds.some((id) => !proposed.routers.some((router) => router.taskId === id && router.areaId === area.id)))) {
+      throw new RouterError('area_target', 'An area lists only its own routers. The tasks a router hands items to are ordinary work and join no area.');
+    }
     const added = proposed.areas.flatMap((area) => area.taskIds
       .filter((id) => !before.areas.some((one) => one.id === area.id && one.taskIds.includes(id)))
-      .map((id) => ({ id, area, role: proposed.routers.some((router) => router.taskId === id) ? 'router' as const : 'work' as const })));
+      .map((id) => ({ id, area })));
     const checkAdded = async () => {
-      for (const { id, area, role } of added) {
+      for (const { id, area } of added) {
         const task = await getTask(id);
         if (task.id !== id) throw new RouterError('area_target', `Task ${id} no longer exists. Read the area configuration and retry.`, 409);
         if (task.source !== 'local') {
           throw new RouterError('area_task_not_local', `Task ${id} syncs with an outside service. Make it local before it joins area ${area.id}.`, 409);
         }
-        if (task.org_role === 'lead' || (task.org_role === 'router') !== (role === 'router')) {
-          throw new RouterError('area_task_role', `Task ${id} is a VP or a router of another kind; area membership never restricts it silently. Use a fresh task for area ${area.id}.`, 409);
+        if (task.org_role !== 'router') {
+          throw new RouterError('area_task_role', `Task ${id} is not a router; only routers join an area. Use a fresh router for area ${area.id}.`, 409);
         }
-        await assertIsolatedHistory(task, area, role);
+        await assertIsolatedHistory(task, area);
       }
     };
     await checkAdded();
@@ -207,84 +222,11 @@ routerV1Router.put('/router/areas', async (req: Request, res: Response, next: Ne
     await checkAdded();
     const saved = await updateRouterAreas(WALNUT_HOME, (current) => {
       if (JSON.stringify(current) !== JSON.stringify(before)) throw new RouterError('router_configuration_changed', 'The area changed while membership was being confirmed. Read it and retry.', 409);
-      // Rule bindings change only through POST /router/rules, account bindings and open arrivals only
+      // Account bindings and open arrivals change only
       // through the mail plugin's intake: the saved ones are kept as they are.
       return { ...proposed, ...keep(current) };
     });
     res.json(saved);
-  } catch (error) { failure(res, next, error); }
-});
-
-routerV1Router.get('/router/rules', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    primary();
-    if (callerSid(req)?.trim()) throw new RouterError('area_forbidden', 'Only the person reads and confirms area rules.', 403);
-    res.json(await routerRulesView(WALNUT_HOME));
-  } catch (error) { failure(res, next, error); }
-});
-
-routerV1Router.post('/router/rules', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    primary(true);
-    if (callerSid(req)?.trim()) throw new RouterError('area_forbidden', 'Only the person confirms which area a routing rule feeds. No session, Main or VP can.', 403);
-    res.json(await saveRouterRuleBindings(req.body, WALNUT_HOME));
-  } catch (error) { failure(res, next, error); }
-});
-
-routerV1Router.post('/router/assign', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    primary(true);
-    if (callerSid(req)?.trim()) throw new RouterError('area_forbidden', 'A scoped session cannot authorize a new incoming item.', 403);
-    const source = sourceOf(req.body?.source);
-    if (source.kind === 'mail' && source.version === undefined) throw new RouterError('source_version_required', 'Confirm the delivery version shown in the email reader.', 409);
-    const areaId = req.body?.area_id;
-    if (typeof areaId !== 'string') throw new RouterError('area_required', 'Choose this exact item\'s area.');
-    const before = await readRouterAreas(WALNUT_HOME);
-    if (!before.areas.some((area) => area.id === areaId)) throw new RouterError('area_missing', 'Create a router for this area first.', 409);
-    // Cache metadata, never request fields, determines copies of the confirmed item.
-    const sameExact = (one: { source: RouterSource }) => one.source.kind === source.kind && one.source.account === source.account && one.source.message === source.message
-      && (one.source.version ?? '') === (source.version ?? '');
-    let canonicalKey: string;
-    try {
-      // The restriction identity copies share (a mail's RFC id), not the ledger's exact delivery key.
-      const resolved = await resolveRouterItem(source);
-      canonicalKey = resolved.scopeKey ?? resolved.key;
-      if (typeof canonicalKey !== 'string' || !canonicalKey || canonicalKey.length > ROUTER_CANONICAL_KEY_MAX || /[\u0000-\u001f\u007f]/.test(canonicalKey)) {
-        throw new RouterError('source_unavailable', 'The source gave no usable identity for this item. Nothing was assigned.', 503);
-      }
-    } catch (error) {
-      // A repeat of a confirmed item whose cached row is gone keeps its receipt as it was: no key added.
-      const prior = (await readRouterAreas(WALNUT_HOME)).items.find(sameExact);
-      if (!prior || (error as { code?: string })?.code !== 'source_missing') throw error;
-      if (prior.areaId !== areaId) throw new RouterError('area_reassignment', 'This item already belongs to another area. It cannot be moved through confirmation.', 409);
-      res.json({ areaId: prior.areaId, assigned: true });
-      return;
-    }
-    const saved = await updateRouterAreas(WALNUT_HOME, (file) => {
-      const area = file.areas.find((one) => one.id === areaId);
-      if (!area) throw new RouterError('area_missing', 'Create a router for this area first.', 409);
-      // A bound mailbox's open arrival confirmed by the person becomes a restricted item of the same area.
-      const opened = (file.openItems ?? []).find(sameExact);
-      if (opened && opened.areaId !== areaId) throw new RouterError('area_reassignment', 'This item already belongs to another area. It cannot be moved through confirmation.', 409);
-      if (opened) {
-        file.openItems = file.openItems!.filter((one) => !sameExact(one));
-        if (file.openItems.length === 0) delete file.openItems;
-      }
-      const prior = file.items.find(sameExact);
-      if (prior && prior.areaId !== areaId) throw new RouterError('area_reassignment', 'This item already belongs to another area. It cannot be moved through confirmation.', 409);
-      if (prior?.canonicalKey !== undefined && prior.canonicalKey !== canonicalKey) {
-        throw new RouterError('area_identity_changed', 'This item was confirmed under another identity. It cannot be changed through confirmation.', 409);
-      }
-      // Rechecked under the lock: a copy of this item confirmed for another area meanwhile wins.
-      const other = allAreaItems(file).find((one) => !sameExact(one) && one.areaId !== areaId && one.canonicalKey === canonicalKey
-        && one.source.kind === source.kind && one.source.account === source.account);
-      if (other) throw new RouterError('area_reassignment', 'A copy of this item already belongs to another area. It cannot be moved through confirmation.', 409);
-      if (!area.sources.some((one) => one.kind === source.kind && one.account === source.account)) area.sources.push({ kind: source.kind, account: source.account });
-      if (!prior) file.items.push({ areaId, source, canonicalKey });
-      else if (prior.canonicalKey === undefined) prior.canonicalKey = canonicalKey;
-      return file;
-    });
-    res.json({ areaId: saved.items.find(sameExact)!.areaId, assigned: true });
   } catch (error) { failure(res, next, error); }
 });
 
@@ -315,20 +257,18 @@ routerV1Router.post('/router/route', async (req: Request, res: Response, next: N
     const areas = await routerAccess(source, callerSid(req));
     const reason = typeof b.reason === 'string' ? b.reason.trim() : '';
     if (!reason || reason.length > 500) throw new RouterError('reason_required', 'Give a routing reason of 1 to 500 characters.');
+    // The router never makes tasks or waits on the person to clear a hand-off (2026-11-14, the user:
+    // "it does not need to create a triage in between, it just asks the VP or that task").
+    if (b.new_task_title !== undefined) {
+      throw new RouterError('no_new_work', 'The router does not create tasks. Hand the item to the VP of its project (task_id: a VP id from router_context owners), who decides what work it needs.');
+    }
+    if (b.rule_id !== undefined || b['approval' + '_id'] !== undefined) {
+      throw new RouterError('bad_decision', 'Rules and per-item hand-off confirmations are gone: name the owner with task_id.');
+    }
     const forUser = b.for_user === true;
     const notRouted = b.not_routed === true || forUser;
-    if (forUser && (b.task_id !== undefined || b.new_task_title !== undefined || b.rule_id !== undefined)) {
-      throw new RouterError('bad_decision', 'A letter to the person names no target, new work or rule.');
-    }
-    let taskId = typeof b.task_id === 'string' ? b.task_id : undefined;
-    if (b.rule_id !== undefined && (typeof b.rule_id !== 'string' || !b.rule_id.trim() || b.rule_id.length > 60)) {
-      throw new RouterError('bad_rule', 'Name the confirmed rule from router_context.');
-    }
-    const askedRule = typeof b.rule_id === 'string' ? b.rule_id : undefined;
-    let ruleId: string | undefined;
-    if (askedRule && (notRouted || b.new_task_title !== undefined)) {
-      throw new RouterError('bad_decision', 'A rule route goes to the rule\'s task; it names no new work and is not a not-routed decision.');
-    }
+    const taskId = typeof b.task_id === 'string' && b.task_id.trim() ? b.task_id.trim() : undefined;
+    if (forUser && taskId) throw new RouterError('bad_decision', 'A letter to the person names no target.');
     if (notRouted && (taskId || b.retry)) throw new RouterError('bad_decision', 'A not-routed decision has no target or delivery retry.');
     const sid = callerSid(req);
     if (typeof b.text === 'string' && b.text.length > 20000) throw new RouterError('text_too_large', 'The receiving brief is at most 20000 characters.');
@@ -341,36 +281,11 @@ routerV1Router.post('/router/route', async (req: Request, res: Response, next: N
         return;
       }
     }
-    if (askedRule) {
-      // The rule must be confirmed for this item's own area and match its exact cached metadata.
-      const rule = await confirmedRouteRule(areas, sourceArea(areas, source)!.id, askedRule, source);
-      if (taskId !== undefined && taskId !== rule.taskId) throw new RouterError('rule_target', 'A rule route goes to the rule\'s own task.');
-      taskId = rule.taskId;
-      ruleId = rule.id;
-    }
     const { resolveCaller } = await import('../../core/sessions/session-send-core.js');
     const caller = sid ? await resolveCaller(sid) : undefined;
-    const byTaskId = caller?.kind === 'session' ? caller.record.taskId : activeRouter(areas, sourceArea(areas, source)!.id)?.taskId;
-    if (b.approval_id !== undefined && (typeof b.approval_id !== 'string' || !b.approval_id.trim() || b.approval_id.length > 200)) {
-      throw new RouterError('bad_approval', 'Name the approval for this exact handoff.');
-    }
-    if (taskId && !notRouted && (b.approval_id || await needsHandoff(source, taskId))) {
-      if (b.new_task_title || !byTaskId || typeof b.text !== 'string' || !b.text.trim()) {
-        throw new RouterError('bad_handoff', 'A handoff needs an active router, one existing target and its brief.');
-      }
-      const result = await crossRouteItem({ source, targetTaskId: taskId, byTaskId, brief: b.text, reason,
-        ...(ruleId ? { ruleId } : {}), ...(b.retry === true ? { retry: true } : {}),
-        ...(typeof b.approval_id === 'string' ? { approvalId: b.approval_id } : {}) });
-      if (result.status === 'needs_approval') { res.status(200).json(result); return; }
-      const [route] = await routeViews([result.route]);
-      res.status(result.route.status === 'routed' ? 202 : 200).json({ ...result, route });
-      return;
-    }
-    if (b.approval_id !== undefined) throw new RouterError('bad_handoff', 'An approval is only for its exact existing target.');
     const result = await routeItem({
-      source, reason, taskId, notRouted, retry: b.retry === true, callerSid: sid, ...(ruleId ? { ruleId } : {}),
+      source, reason, taskId, notRouted, retry: b.retry === true, callerSid: sid,
       ...(forUser ? { forUser: true } : {}),
-      ...(typeof b.new_task_title === 'string' ? { newTaskTitle: b.new_task_title } : {}),
       ...(caller?.kind === 'session' && caller.record.taskId ? { byTaskId: caller.record.taskId } : {}),
       ...(typeof b.text === 'string' ? { text: b.text } : {}),
     });

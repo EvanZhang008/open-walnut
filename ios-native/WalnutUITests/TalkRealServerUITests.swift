@@ -115,8 +115,14 @@ final class TalkRealServerUITests: XCTestCase {
         }
         var count = 0
         for id in sessions {
-            let history = String(decoding: try api("GET", "/sessions/\(id)/history"), as: UTF8.self).lowercased()
-            count += history.components(separatedBy: Self.sentence).count - 1
+            // Only the person's own messages, one per row: the history also carries each row's raw
+            // text and hints, rows Walnut injected, and the CEO's answers, any of which can quote
+            // the sentence and land in the middle of a later test.
+            let history = try JSONSerialization.jsonObject(with: api("GET", "/sessions/\(id)/history")) as? [String: Any]
+            for row in (history?["messages"] as? [[String: Any]]) ?? []
+            where (row["role"] as? String) == "user" && row["injected"] == nil {
+                if ((row["text"] as? String) ?? "").lowercased().contains(Self.sentence) { count += 1 }
+            }
         }
         return count
     }
@@ -129,14 +135,26 @@ final class TalkRealServerUITests: XCTestCase {
     // MARK: - The press
 
     private func tile(_ shortcuts: XCUIApplication, _ name: String = "Talk to Walnut") -> XCUIElement {
-        let tile = labelled(shortcuts, name)
+        // The tile's own label, exactly: "Dictate" is also the label of the search field's
+        // microphone (system dictation), which sits above the tiles.
+        let matches = shortcuts.descendants(matching: .any).matching(NSPredicate(format: "label == %@", name))
         // A fresh install's shortcuts reach the Shortcuts app once iOS has indexed them.
-        if !tile.waitForExistence(timeout: 30) {
+        if !matches.firstMatch.waitForExistence(timeout: 30) {
             shortcuts.terminate()
             shortcuts.launch()
         }
-        XCTAssertTrue(tile.waitForExistence(timeout: 60), "\(name) is not in the Shortcuts app")
-        return tile
+        XCTAssertTrue(matches.firstMatch.waitForExistence(timeout: 60), "\(name) is not in the Shortcuts app")
+        // The tile itself, never its title inside it (a static text a tap does not run:
+        // 2026-11-13, every press tapped the title and nothing started), nor the search
+        // field's microphone.
+        let search = shortcuts.searchFields.firstMatch
+        let searchFrame = search.exists ? search.frame : .null
+        let around = shortcuts.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", name))
+        let tile = around.allElementsBoundByIndex.first {
+            $0.isHittable && $0.elementType != .staticText && !$0.frame.intersects(searchFrame)
+        }
+        print("talk-test: \(name) tile = \(tile.map { "\($0.elementType.rawValue) '\($0.label)' \($0.frame)" } ?? "none, the first match")")
+        return tile ?? matches.firstMatch
     }
 
     /// Walnut opened once (paired), then sent away.
@@ -231,38 +249,70 @@ final class TalkRealServerUITests: XCTestCase {
         XCTAssertTrue(reachesTheCEO(after: before, "fallback"), "the send stopped when Walnut was left")
     }
 
-    /// Dictate to Clipboard, the Action Button's other shortcut: press, the sentence, press
-    /// again, with Walnut closed all along. The words land on the clipboard and never in the
-    /// CEO chat; Walnut's Action Button page then shows what it copied.
+    /// Dictate, the Action Button's other shortcut: the press opens Walnut listening, Done
+    /// ends the take, and its words open on one page with Send and Copy (the user,
+    /// 2026-11-11: "just one page that can send and can copy"). Copy puts them on the
+    /// clipboard and sends nothing; a second dictation's Send reaches the CEO chat.
     @MainActor
-    func testDictateToClipboardCopiesTheWordsWithWalnutClosedAndSendsNothing() throws {
+    func testDictateShowsOnePageThatCopiesOrSends() throws {
         let app = UITestLaunch.launch(try pairing())
         sendAway(app)
         let shortcuts = XCUIApplication(bundleIdentifier: "com.apple.shortcuts")
         shortcuts.launch()
-        let dictate = tile(shortcuts, "Dictate to Clipboard")
+        _ = tile(shortcuts, "Dictate")
         shot("shortcuts-dictate")
         XCTAssertNotEqual(app.state, .runningForeground, "Walnut is in front before the press")
         XCTAssertNotEqual(app.state, .notRunning, "Walnut stopped: the tap would start an unpinned one")
         let before = try timesInCEOChat()
-        dictate.tap()
-        listensBehind(app, "dictate", seconds: 9)
-        dictate.tap()
-        // Copied with Walnut closed: open it and read what the Action Button page says it copied.
-        _ = film("dictate-finishing", seconds: 20) { false }
-        XCTAssertNotEqual(app.state, .runningForeground, "the copy opened Walnut")
-        app.activate()
-        XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 30))
+
+        // Copy.
+        let words = dictateToPage(app, shortcuts, "copy")
+        element(app, "talk.review.copy").tap()
+        let title = element(app, "talk.panel.title")
+        XCTAssertTrue(film("copy-done", seconds: 5) { title.exists && title.label == "Copied" }, "Copy did not say Copied")
+        _ = film("copy-closes", seconds: 4) { !element(app, "talk.panel").exists }
+        XCTAssertFalse(element(app, "talk.panel").exists, "the page stayed up after Copy")
         app.tabBars.buttons["Settings"].tap()
         let row = element(app, "settings.talkToWalnut")
         for _ in 0..<6 where !row.isHittable { app.swipeUp() }
         row.tap()
         let result = element(app, "talk.dictate.result")
         for _ in 0..<4 where !result.exists { app.swipeUp() }
-        let copied = film("dictate-copied", seconds: 10) { result.exists && result.label.contains(Self.sentence) }
-        XCTAssertTrue(copied, "the page does not show the copied words: \(result.exists ? result.label : "no result")")
+        XCTAssertTrue(film("copied-line", seconds: 10) { result.exists && result.label.contains(Self.sentence) },
+                      "the Action Button page does not show what was copied: \(result.exists ? result.label : "none")")
         XCTAssertTrue(result.label.hasPrefix("Copied"), result.label)
-        XCTAssertEqual(try timesInCEOChat(), before, "a dictation reached the CEO chat")
+        XCTAssertEqual(try timesInCEOChat(), before, "Copy reached the CEO chat")
+        XCTAssertTrue(words.lowercased().contains(Self.sentence))
+
+        // Send, from a second dictation.
+        XCUIDevice.shared.press(.home)
+        shortcuts.activate()
+        _ = dictateToPage(app, shortcuts, "send")
+        element(app, "talk.review.send").tap()
+        XCTAssertTrue(reachesTheCEO(after: before, "dictate-send"), "Send never reached the CEO chat")
+        XCTAssertTrue(film("send-done", seconds: 6) { !element(app, "talk.panel").exists }, "the page stayed up after Send")
+    }
+
+    /// The Dictate tile: Walnut comes forward listening, Done ends the take, and the page
+    /// shows its words. Returns the words on the page.
+    private func dictateToPage(_ app: XCUIApplication, _ shortcuts: XCUIApplication, _ label: String) -> String {
+        tile(shortcuts, "Dictate").tap()
+        // Filmed: whatever the Shortcuts app says instead (an alert, an error) shows in the clip.
+        XCTAssertTrue(film("\(label)-press", seconds: 20) { app.state == .runningForeground }, "Dictate did not bring Walnut forward")
+        let title = element(app, "talk.panel.title")
+        XCTAssertTrue(film("\(label)-opening", seconds: 15) { title.exists && title.label == "Listening" },
+                      "Dictate never listened: \(title.exists ? title.label : "no panel")")
+        XCTAssertEqual(element(app, "talk.panel.send").label, "Done", "listening offers Send, not Done")
+        _ = film("\(label)-take", seconds: 7) { false }
+        element(app, "talk.panel.send").tap()
+        let text = element(app, "talk.review.text")
+        XCTAssertTrue(film("\(label)-page", seconds: 40) { text.exists && ((text.value as? String) ?? "").lowercased().contains(Self.sentence) },
+                      "the page never showed the words")
+        XCTAssertTrue(element(app, "talk.review.copy").isHittable, "no Copy on the page")
+        XCTAssertTrue(element(app, "talk.review.send").isHittable, "no Send on the page")
+        // Held a moment so the clip shows the page a person reads before picking.
+        _ = film("\(label)-page-ready", seconds: 3) { false }
+        return (text.value as? String) ?? ""
     }
 
     /// Right after Walnut's own voice input (the chat's microphone), with Walnut sent away.

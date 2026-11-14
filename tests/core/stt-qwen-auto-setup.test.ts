@@ -39,7 +39,8 @@ describe('autoSetupDecision', () => {
 describe('startQwenAutoSetup', () => {
   beforeEach(async () => {
     _resetQwenAutoSetupForTest();
-    await updateConfig({ stt: {} });
+    // A section write merges (core/config-section-write.ts): clear the engine itself.
+    await updateConfig({ stt: { engine: undefined } });
   });
 
   it('installs in the background, then makes qwen the engine', async () => {

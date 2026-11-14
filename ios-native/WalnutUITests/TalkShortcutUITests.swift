@@ -103,8 +103,9 @@ final class TalkShortcutUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter().wait(for: [waiting], timeout: 40), .completed, "the take did not end as waiting to send: \(title.label)")
         XCTAssertTrue(labelled(app, "by itself the next time").exists, "the panel does not say the take goes out later")
         shot("3-not-sent")
-        element(app, "talk.panel.close").tap()
-        XCTAssertTrue(panel.waitForNonExistence(timeout: 5), "Close left the Talk screen")
+        // It goes out by itself, so the screen goes by itself too: no Close to tap.
+        XCTAssertFalse(element(app, "talk.panel.close").exists, "Waiting to send asks for a Close it does not need")
+        XCTAssertTrue(panel.waitForNonExistence(timeout: 15), "Waiting to send stayed on screen")
 
         // Settings, Action Button: the waiting take comes first, then what it
         // does, the steps, and the other ways.

@@ -176,7 +176,8 @@ export async function setTaskReport(
     const open = openAskOf(task);
     // Only the same words leave his ask as it was: a reworded ask is checked against what he wrote
     // there too (the decision id only keeps it from being news, ask-decision.ts).
-    if ('ask' in open && !(report.state === 'needs' && askKey(report.ask) === askKey(open.ask))) {
+    // Only a report or chat ask is the report's to take off; a choice, prompt or letter stays where it lives.
+    if ('ask' in open && (open.where === 'report' || open.where === 'chat') && !(report.state === 'needs' && askKey(report.ask) === askKey(open.ask))) {
       const { listTasks } = await import('../task-manager.js');
       const userWords = typeof (raw as ReportChange | null)?.user_words === 'string' ? (raw as ReportChange).user_words : undefined;
       const check = await settleCheck(task, known.taskId, userWords, 'changed', await listTasks().catch(() => []));

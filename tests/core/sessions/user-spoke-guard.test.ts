@@ -207,11 +207,6 @@ describe('every path that settles an ask for the user reads his words first', ()
     'src/core/sessions/status-question.ts': (c) => {
       expect(c).toMatch(/needsSinceOf\(report, prev\)[\s\S]*?needs_since: needsSince[\s\S]*?status_report: report/)
     },
-    // A receiving task's own ask from its saved findings: it only adds an ask (never takes one off
-    // Needs you), stamped with when it began asking.
-    'src/core/router/processing.ts': (c) => {
-      expect(c).toMatch(/report = reportOfChange\(\{ state: 'needs'[\s\S]*?status_report: (?:stampSaidDecision\()?withNeedsSince\(report, needsSinceOf\(report, current\.status_report\)\)/)
-    },
   }
 
   it('the list is complete', () => {

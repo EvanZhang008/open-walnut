@@ -6,12 +6,14 @@
  * should use this hook instead of duplicating the event-delegation pattern.
  *
  * Behavior:
- *  - task-link click → onTaskClick(taskId) → select + scroll + open session (no detail)
+ *  - task-link click → the one task open (hooks/useOpenTask.ts): Home, its session open, no details
+ *    popup; no caller picks another (tests/web/task-ref-click-guard.test.ts). A modifier click
+ *    keeps the browser's own open-in-a-new-view of the pill's `/tasks/<id>` href.
  *  - session-link click → onSessionClick(sessionId) → open session panel
  *  - project-link click → navigate('/tasks') (no per-project route exists yet)
  *  - file-link click → onFileOpen(path, line?, undefined, endLine?) → open FileViewer overlay
  *    (a range reference such as `x.go:31-34` carries data-file-end-line)
- *  - Fallback: the task on Home (openTaskOnHome) or /sessions?id=:id when callbacks are absent;
+ *  - Fallback: /sessions?id=:id when no session callback is given;
  *    a file with no onFileOpen opens in the app's own FileViewer (utils/open-anywhere.ts)
  *  - letter-link anchors are the app's (useAgentLinkClickFallback opens them)
  *  - a relative lookup opens only for the newest click on the mounted surface and its source (a late answer popped a viewer elsewhere)
@@ -20,14 +22,13 @@ import { useCallback, useLayoutEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { locatePath } from '@/api/files';
 import { log } from '@/utils/log';
-import { openTaskOnHome } from '@/utils/open-session';
+import { useOpenTask } from '@/hooks/useOpenTask';
 import { claimAgentLinkClick, openFileAnywhere } from '@/utils/open-anywhere';
 
 type FileOpen = (path: string, line?: number, term?: undefined, endLine?: number) => void;
 interface FileSource { fileHost?: string; fileSessionId?: string }
 
 export function useEntityClickHandler(
-  onTaskClick?: (taskId: string) => void,
   onSessionClick?: (sessionId: string) => void,
   /** The third parameter is the session panel's jump term, never set here; the
    *  fourth is the last line of a range reference. */
@@ -43,6 +44,7 @@ export function useEntityClickHandler(
   relativeToOpener?: boolean,
 ) {
   const navigate = useNavigate();
+  const openTask = useOpenTask();
   // The newest click; a relative lookup answers into nothing once this moved past it.
   const seq = useRef(0);
   // The latest opener: a handler, not a source, so a new identity each render cancels nothing.
@@ -76,11 +78,10 @@ export function useEntityClickHandler(
 
     const taskAnchor = target.closest('a.task-link') as HTMLAnchorElement | null;
     if (taskAnchor) {
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button > 0) return;
       e.preventDefault();
       const taskId = taskAnchor.dataset.taskId;
-      if (taskId) {
-        onTaskClick ? onTaskClick(taskId) : openTaskOnHome(taskId, navigate);
-      }
+      if (taskId) openTask(taskId);
       return;
     }
 
@@ -161,5 +162,5 @@ export function useEntityClickHandler(
           });
       }
     }
-  }, [onTaskClick, onSessionClick, fileHost, fileSessionId, relativeToOpener, navigate]);
+  }, [openTask, onSessionClick, fileHost, fileSessionId, relativeToOpener, navigate]);
 }

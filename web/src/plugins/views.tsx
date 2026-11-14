@@ -98,7 +98,8 @@ export function createPluginViews(pluginId: string): PluginViews {
     )
   }
 
-  function TaskView({ storageKey, ...props }: TaskViewProps) {
+  // A plugin's own onOpenTask is no longer called (TaskViewProps): its task clicks open on Home.
+  function TaskView({ storageKey, onOpenTask: _notCalled, ...props }: TaskViewProps) {
     return (
       <TaskViewSurface
         {...props}

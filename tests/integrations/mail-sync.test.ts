@@ -1485,6 +1485,30 @@ describe('retention', () => {
   }, 180_000);
 });
 
+describe('a restart', () => {
+  it('announces mail that came in while Walnut was down: an inbox synced before resumes, never a silent backfill', async () => {
+    await sendJson('PUT', '/groups/pref', { on: false });
+    try {
+      await stopServer();
+      marks().messages.INBOX.push(message(900, 'While Walnut was down', { sentAt: Date.now() }));
+      // Listed now, but it reached the server long before the last sync: a backfill the restart cut
+      // short lists such mail, and it is not news.
+      marks().messages.INBOX.push(message(901, 'Old mail the sweep lists late', { sentAt: Date.UTC(2026, 0, 2, 9, 0, 0) }));
+      events.length = 0;
+      await boot({ poll_interval_seconds: 600, max_rows_per_account: 50, retention_days: 3650 });
+      await mailSyncForTesting()!.runTick({ force: true });
+      const subjects = eventsOf('messages-received')
+        .flatMap((one) => (one.headlines as Array<{ subject: string }>).map((headline) => headline.subject));
+      // Without the resume, the first tick of the new process took it as a backfill: no event, and
+      // the mail router never met that mail.
+      expect(subjects).toContain('While Walnut was down');
+      expect(subjects).not.toContain('Old mail the sweep lists late');
+    } finally {
+      await sendJson('PUT', '/groups/pref', { on: true });
+    }
+  });
+});
+
 describe('deleting an account', () => {
   it('removes the mirror, the cache, the body files and tells the provider', async () => {
     events.length = 0;
@@ -1722,3 +1746,4 @@ describe('on a replica', () => {
     }
   });
 });
+

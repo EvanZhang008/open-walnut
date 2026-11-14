@@ -91,7 +91,13 @@ try {
   if (inputs.fail === operation) { reply({ ok: false, error: `simulated ${operation} failure` }); process.exit(0) }
 
   if (operation === 'detect') {
-    reply({ ok: true, result: args.markerRoot ? { claimed: true, root: args.markerRoot } : { claimed: false, reason: 'no fake-workspace.json marker' } })
+    // The marker may name the packages this folder belongs to: they are the inputs a workspace of it uses.
+    let suggested = null
+    try {
+      const doc = args.markerRoot ? JSON.parse(fs.readFileSync(path.join(args.markerRoot, 'fake-workspace.json'), 'utf8')) : null
+      if (Array.isArray(doc?.packages) && doc.packages.length) suggested = { packages: doc.packages.map(String) }
+    } catch { /* an empty or odd marker names none */ }
+    reply({ ok: true, result: args.markerRoot ? { claimed: true, root: args.markerRoot, ...(suggested ? { inputs: suggested } : {}) } : { claimed: false, reason: 'no fake-workspace.json marker' } })
   } else if (operation === 'create') {
     const pkgs = packagesOf(inputs)
     if (pkgs.length === 0) { reply({ ok: false, error: 'packages is required (at least one package name)' }); process.exit(0) }

@@ -36,7 +36,6 @@ const GATES: Record<string, Gate> = {
   'src/web/routes/browser-v1.ts': { asks: 1, kept: 'the site gate: only when the person set Browser extension to approved sites only, their own list of where agents may go (the outward steps and the fresh sign-in in this file read the switch)' },
   'src/core/browser-control/outward-asks.ts': { asks: 1, readBy: 'src/web/routes/browser-v1.ts', why: 'askIfHeld reads the switch before it calls askOutward' },
   'src/core/browser-control/fresh-sign-in.ts': { asks: 1, readBy: 'src/web/routes/browser-v1.ts', why: 'the fill_login route asks with unasked:true when the switch is off' },
-  'src/core/router/handoff-approval.ts': { asks: 2, reads: 'self' },
   'src/core/vault/agent.ts': { asks: 1, reads: 'self' },
   'src/core/hosts/host-exec-grant.ts': { asks: 1, reads: 'self' },
   'src/integrations/mail/approvals.ts': { asks: 1, reads: 'self' },

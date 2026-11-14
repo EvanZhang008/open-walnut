@@ -379,15 +379,13 @@ test('the Board tab: ask, live components, threads, re-render, marks and locate'
   expect(stored.threads['area-a'].map((m) => m.id)).toContain(victim)
   await expect(thread.locator(`.wn-msg[data-id="${victim}"] .wn-del`)).toHaveText('×')
 
-  // ── 6. A chip opens its task beside the board; its "Open task" leads to it on the home board ──
-  // (the peek itself: tests/e2e/browser/task-board-peek.spec.ts)
+  // ── 6. A chip opens its task on Home, as every task reference does (useOpenTask) ──
+  // The worker has no session, so it is selected in the task list; no details popup opens.
+  // (every task-ref surface: tests/e2e/browser/task-ref-opens-home.spec.ts)
   await frame.locator(`#sec-a walnut-task[id="${worker}"] .wn-task`).click()
-  const peek = panel.getByTestId('board-task-peek')
-  await expect(peek).toHaveAttribute('data-task-id', worker)
-  await expect(peek.getByTestId('board-peek-title')).toHaveText(workerTitle)
-  await expect(pane).toBeVisible()
-  await peek.getByTestId('board-peek-card').getByRole('button', { name: 'Open task' }).click()
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
   await expect(page.locator(`.todo-panel-item[data-task-id="${worker}"]`)).toHaveClass(/task-focused/, { timeout: 15_000 })
+  await expect(page.locator('.task-detail-modal')).toHaveCount(0)
   // Locating yields the full-screen sheet (as the header's Locate does), which closes the tab.
   await expect(pane).toHaveCount(0)
   await expect(chip).not.toHaveClass(/session-action-chip-active/)

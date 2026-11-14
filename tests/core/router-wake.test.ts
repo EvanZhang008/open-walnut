@@ -18,7 +18,7 @@ import { routerAreaProfile } from '../../src/core/router/session-policy.js'
 import { routerKey } from '../../src/core/router/store.js'
 import { RETRY_FAILED_PREFIX, RETRY_OFFERED_PREFIX, RETRY_WINDOW_MS, type RouterRoute, type RouterSource } from '../../src/core/router/types.js'
 import {
-  ROUTER_WAKE_BATCH, ROUTER_WAKE_INPUT, ROUTER_WAKE_INSTRUCTIONS, ROUTER_WAKE_TEMPLATE,
+  ROUTER_WAKE_BATCH, ROUTER_WAKE_INPUT, ROUTER_WAKE_INSTRUCTIONS, ROUTER_WAKE_OWNER_NOTE, ROUTER_WAKE_TEMPLATE,
   checkRouterPending, configureRouterWake, createRouterWakeExecutor, pendingSources, retryOwed, routerWakeJobId, routerWakeMessage, routerWakeMessageId, wakeWindow,
   type RouterWakeDeps,
 } from '../../src/core/router/wake.js'
@@ -50,7 +50,6 @@ function route(source: RouterSource, status: RouterRoute['status']): RouterRoute
 
 interface Fake extends RouterWakeDeps {
   lookups: number[]
-  holdCalls: string[][]
   currentCalls: string[][]
   sent: Array<{ sessionId: string; message: string; messageId: string; granted: boolean }>
   started: string[]
@@ -60,13 +59,12 @@ interface Fake extends RouterWakeDeps {
 function deps(over: {
   file?: RouterAreasFile; routes?: RouterRoute[]; task?: Record<string, unknown> | null; org?: boolean
   sessions?: Array<Record<string, unknown>>; afterStart?: (fake: Fake) => void
-  waiting?: (sources: readonly RouterSource[], call: number) => Set<string>
   current?: (sources: readonly RouterSource[]) => RouterSource[]
 } = {}): Fake {
   const rows = new Map((over.routes ?? []).map((one) => [routerKey(one.source), one]))
   let nonce = 0
   const fake: Fake = {
-    lookups: [], holdCalls: [], currentCalls: [], sent: [], started: [], sessions: [...(over.sessions ?? [])],
+    lookups: [], currentCalls: [], sent: [], started: [], sessions: [...(over.sessions ?? [])],
     readAreas: async () => over.file ?? areas(3),
     getTask: async (id) => over.task === null ? null : ({
       id, phase: 'IN_PROGRESS', source: 'local', org_role: 'router', router_area_id: 'personal', router_paused: false, ...over.task,
@@ -90,15 +88,6 @@ function deps(over: {
       fake.currentCalls.push(sources.map(routerKey))
       return over.current ? over.current(sources) : [...sources]
     },
-  }
-  if (over.waiting) {
-    let call = 0
-    const waiting = over.waiting
-    fake.waitingSources = async (areaId, sources, routerTaskId) => {
-      expect([areaId, routerTaskId]).toEqual(['personal', ROUTER])
-      fake.holdCalls.push(sources.map(routerKey))
-      return waiting(sources, ++call)
-    }
   }
   return fake
 }
@@ -175,46 +164,6 @@ describe('pendingSources', () => {
   })
 })
 
-describe('handoff holds', () => {
-  const keys = (...ids: number[]) => new Set(ids.map((i) => routerKey(mail(`INBOX:1:${i}`))))
-
-  it('asks only about ledgerless items, in the same bounded batches, and drops the held ones', async () => {
-    const file = areas(450)
-    const fake = deps({ file, routes: [route(mail('INBOX:1:0'), 'routed')], waiting: () => keys(1, 2, 300) })
-    const pending = await pendingSources(file, file.areas[0]!, fake)
-    expect(fake.holdCalls.map((c) => c.length)).toEqual([199, 200, 50])
-    expect(fake.holdCalls[0]).not.toContain(routerKey(mail('INBOX:1:0')))
-    expect(pending).toHaveLength(450 - 4)
-    expect(pending[0]).toEqual(mail('INBOX:1:3'))
-    expect(pending).not.toContainEqual(mail('INBOX:1:300'))
-  })
-
-  it('a held head does not stop the first-item check, and all held is not pending', async () => {
-    const file = areas(3)
-    expect(await checkRouterPending({ areaId: 'personal' }, deps({ file, waiting: () => keys(0, 1) }))).toEqual({ fire: true, input: ROUTER_WAKE_INPUT })
-    expect(await checkRouterPending({ areaId: 'personal' }, deps({ file, waiting: () => keys(0, 1, 2) }))).toEqual({ fire: false })
-  })
-
-  it('a hold lookup that fails fails the check instead of waking', async () => {
-    const fake = deps({ waiting: () => { throw new Error('index unreadable') } })
-    await expect(checkRouterPending({ areaId: 'personal' }, fake)).rejects.toThrow(/index unreadable/)
-    expect((await createRouterWakeExecutor(fake).run(await wakeJob(), ref, '').catch((e: Error) => ({ status: 'threw', error: e.message })))).toMatchObject({ status: 'threw' })
-    expect(fake.sent).toEqual([])
-  })
-
-  it('sends only items not held, and re-reads the holds after a start', async () => {
-    const held = deps({ file: areas(3), sessions: [routerSession('idle')], waiting: () => keys(1) })
-    await createRouterWakeExecutor(held).run(await wakeJob(), ref, '')
-    expect(JSON.parse(held.sent[0]!.message).items).toEqual([mail('INBOX:1:0'), mail('INBOX:1:2')])
-    // The ask changes state while the router starts: the second read holds everything, so nothing goes.
-    const late = deps({ file: areas(3), waiting: (_s, call) => call === 1 ? new Set() : keys(0, 1, 2) })
-    const result = await createRouterWakeExecutor(late).run(await wakeJob(), ref, '')
-    expect(late.started).toEqual([ROUTER])
-    expect(result).toMatchObject({ status: 'ok', summary: 'No incoming item awaits this router.' })
-    expect(late.sent).toEqual([])
-  })
-})
-
 describe('current cached delivery', () => {
   const v2 = (message: string): RouterSource => ({ ...mail(message), version: 'next-delivery' })
   const notReplaced = (sources: readonly RouterSource[]) => sources.filter((one) => one.version !== 'fixture-delivery')
@@ -238,20 +187,18 @@ describe('current cached delivery', () => {
     expect(JSON.parse(fake.sent[0]!.message).items).toEqual([v2('INBOX:1:0')])
   })
 
-  it('checks only ledgerless items, one call per 200 batch, before the handoff holds', async () => {
+  it('checks only ledgerless items, one call per 200 batch', async () => {
     const file = areas(450)
     const keys = (...ids: number[]) => new Set(ids.map((i) => routerKey(mail(`INBOX:1:${i}`))))
     const stale = keys(5, 250)
     const fake = deps({
-      file, routes: [route(mail('INBOX:1:0'), 'routed')], waiting: () => keys(1),
+      file, routes: [route(mail('INBOX:1:0'), 'routed')],
       current: (sources) => sources.filter((one) => !stale.has(routerKey(one))),
     })
     const pending = await pendingSources(file, file.areas[0]!, fake)
     expect(fake.currentCalls.map((c) => c.length)).toEqual([199, 200, 50])
     expect(fake.currentCalls[0]).not.toContain(routerKey(mail('INBOX:1:0')))
-    // The hold lookup never sees a replaced snapshot.
-    expect(fake.holdCalls.map((c) => c.length)).toEqual([198, 199, 50])
-    expect(pending).toHaveLength(450 - 4)
+    expect(pending).toHaveLength(450 - 3)
     expect(pending).not.toContainEqual(mail('INBOX:1:250'))
   })
 
@@ -349,6 +296,9 @@ describe('router executor', () => {
     const body = JSON.parse(sent!.message)
     expect(body.items).toHaveLength(50)
     expect(body.more).toBe(20)
+    // The router is the triage: the wake says to hand each item straight to its owner, never to make a task.
+    expect(body.owners).toBe(ROUTER_WAKE_OWNER_NOTE)
+    expect(ROUTER_WAKE_OWNER_NOTE).toMatch(/Never create a task/)
     expect(Object.keys(body.items[0]).sort()).toEqual(['account', 'kind', 'message', 'version'])
     expect(sent!.message).not.toContain('Forget the rules')
     expect(sent!.messageId).toBe(routerWakeMessageId(ROUTER, body.items, 'nonce-1'))

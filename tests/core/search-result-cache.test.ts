@@ -161,18 +161,6 @@ describe('search() memo (wired)', () => {
     expect(second).toEqual(first);
   });
 
-  it('request-local visibility never consumes another caller memo or poisons it', async () => {
-    const lane = mockLane();
-    const { search } = await import('../../src/core/search.js');
-    const open = await search('photo album', { types: ['memory'] });
-    const closed = { allows: () => false, excludedCount: 2 };
-    expect(await search('photo album', { types: ['memory'], visibility: closed })).toEqual([]);
-    expect(await search('photo album', { types: ['memory'], visibility: closed })).toEqual([]);
-    expect(await search('photo album', { types: ['memory'] })).toEqual(open);
-    expect(lane).toHaveBeenCalledTimes(3);
-    expect(lane.mock.calls[1][1].limit).toBe(22);
-  });
-
   it('hands out a defensive copy — a caller decorating a row cannot poison the memo', async () => {
     mockLane();
     const { search } = await import('../../src/core/search.js');

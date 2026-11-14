@@ -185,6 +185,7 @@ export function defaultDeps(): AutoRecoverDeps {
     setTimer: (fn, ms) => setTimeout(fn, ms),
     clearTimer: (handle) => clearTimeout(handle),
     send: async (sessionId, message, opts) => {
+      await (await import('./turn-run.js')).noteTurnAttempt(sessionId, 'restart_recovery')
       const { sendMessageToSession } = await import('../session-message-queue.js')
       return sendMessageToSession(sessionId, message, opts)
     },

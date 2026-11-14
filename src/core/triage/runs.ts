@@ -52,7 +52,8 @@ import { TRIAGE_PROJECT } from './bootstrap.js';
 import { ackTriageClaimForTask, bindTriageClaim, loadTriageState, markTriageStateStale, recordTriageJournalLine, triageRunHold, type TriageClaim } from './state.js';
 import { TRIAGE_AGENT_ID } from './types.js';
 import { isQuietTurn } from '../sessions/quiet-turn.js';
-import { addContextRecoveryFailListener, contextFullRecovery, contextRecoveryHoldsTurn } from '../sessions/context-full-recovery.js';
+import { addContextRecoveryFailListener } from '../sessions/context-full-recovery.js';
+import { loadTurnRetriers, turnEndAnsweredNothing, turnMidWorkNow } from '../sessions/turn-run.js';
 
 /** The ONE subscriber name. Re-subscribing overwrites it. */
 export const TRIAGE_RUNS_SUBSCRIBER = 'triage-runs';
@@ -258,6 +259,8 @@ let active: TriageRunsHandle | null = null;
 
 export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
   active?.stop();
+  // Its handler reads the session's turn before anything awaits (turnMidWorkNow): the rows must be there.
+  void loadTurnRetriers();
 
   const home = deps.home ?? WALNUT_HOME;
   const getTask = deps.getTask ?? defaultGetTask;
@@ -328,7 +331,7 @@ export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
       const bound = await bindTriageClaim(task.id, Date.now(), home);
       if (bound) {
         log.cron.info('triage: batch waits with its run for a free slot', {
-          taskId: task.id, claimedAtMs: bound.atMs, mail: bound.mail, slack: bound.slack,
+          taskId: task.id, claimedAtMs: bound.atMs, slack: bound.slack,
         });
       }
       return;
@@ -371,7 +374,7 @@ export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
 
   function logAck(taskId: string, claim: TriageClaim): void {
     log.cron.info('triage: batch acknowledged — the run has a session', {
-      taskId, claimedAtMs: claim.atMs, mail: claim.mail, slack: claim.slack,
+      taskId, claimedAtMs: claim.atMs, slack: claim.slack,
     });
   }
 
@@ -452,7 +455,7 @@ export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
     handled += 1;
     // Read at the event, before anything awaits: the recovery lets go of a session on this same event.
     const eventSid = (event.data as { sessionId?: string } | undefined)?.sessionId;
-    const recoveryHeld = event.name !== EventNames.TASK_CREATED && !!contextFullRecovery()?.holds(eventSid ?? '');
+    const recoveryHeld = event.name !== EventNames.TASK_CREATED && !!turnMidWorkNow(eventSid);
     // The interest is a prefix list: `session:started` must not stand for another name.
     if (event.name !== EventNames.TASK_CREATED && event.name !== EventNames.SESSION_STARTED
       && event.name !== EventNames.TASK_UPDATED
@@ -510,7 +513,7 @@ export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
         // A turn that ended on "Prompt is too long" answered nothing: the context recovery compacts and
         // resends, and the turn that answers settles the run (2026-11-06; a run it gives up on stays
         // open as the error it is).
-        if (recoveryHeld || await contextRecoveryHoldsTurn(eventSid, data?.isError ? data.result : undefined)) return;
+        if (recoveryHeld || await turnEndAnsweredNothing(eventSid, { event: 'result', isError: !!data?.isError, result: data?.isError ? data.result : undefined })) return;
         await onRunSettled(task!, data?.isError
           ? { status: 'error', error: data?.result }
           : { status: 'ok' });

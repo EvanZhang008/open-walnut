@@ -18,6 +18,7 @@
 
 import { useMemo } from 'react';
 import type { Task } from '@open-walnut/core';
+import { useOpenTask } from '@/hooks/useOpenTask';
 import { binaryPhaseIcon } from '@/components/common/Icons';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { taskStatusLabel, taskUserState } from '@/utils/session-status';
@@ -58,14 +59,14 @@ function rowTooltip(row: SearchResultRowView): string {
   return [row.title ?? row.taskId, row.evidence ? `“${row.evidence}”` : '', where].filter(Boolean).join('\n');
 }
 
-export function AgentSearchResultRows({ rows, onOpenTask, className }: {
+export function AgentSearchResultRows({ rows, className }: {
   rows: readonly SearchResultRowView[];
-  onOpenTask: (taskId: string) => void;
   /** Extra class on the <ul>, so a surface can scope its own spacing. */
   className?: string;
 }) {
   // The search answer and the bulk lookup carry no user status; the store row does.
   const tasks = useTasksContextSafe()?.tasks;
+  const openTask = useOpenTask();
   const statusById = useMemo(() => {
     const ids = new Set(rows.map((r) => r.taskId));
     const out = new Map<string, Task['user_status']>();
@@ -105,7 +106,7 @@ export function AgentSearchResultRows({ rows, onOpenTask, className }: {
               data-peek-row=""
               data-task-id={row.taskId}
               title={rowTooltip(row)}
-              onClick={() => onOpenTask(row.taskId)}
+              onClick={() => openTask(row.taskId)}
             >
               <span className={`task-phase-icon-btn agent-search-row-circle ${circleClassForPhase(row.phase)}`} aria-hidden="true">
                 {binaryPhaseIcon(isDone, row.phase, taskUserState({ phase: row.phase, user_status: row.user_status ?? statusById.get(row.taskId) } as Parameters<typeof taskUserState>[0]))}

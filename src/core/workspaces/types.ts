@@ -47,6 +47,8 @@ export interface WorkspacePendingStart {
   user_request?: string
   expect_reply?: boolean
   reply_timeout_secs?: number
+  /** rq-… a request the caller handed to this task (task_start hands_on). */
+  hands_on?: string
   source?: string
   at: string
 }
@@ -87,6 +89,12 @@ export interface TaskWorkspace {
   /** While `removing`: what asked, and the state to go back to if the host refuses. */
   removal?: { trigger: 'manual' | 'complete'; from: 'ready' | 'kept' }
   pending_start?: WorkspacePendingStart
+  /**
+   * Walnut made it because the task is a code task (default-isolation.ts), not because
+   * someone asked: a creation that fails then starts the waiting session in the anchor
+   * folder instead of leaving the task waiting for a Retry.
+   */
+  by_default?: boolean
   /** The workspace is ready but the session waiting for it could not start (Retry starts it again). */
   launch_error?: string
   /** The setup script run after it was made (scripts.ts). */
@@ -164,6 +172,8 @@ export interface WorkspaceCandidate {
   root?: string
   branch?: string
   reason?: string
+  /** The inputs its detect step suggests for this folder (a plugin's: the package it belongs to, say). */
+  inputs?: Record<string, unknown>
   inputSchema?: WorkspaceInputSchema
 }
 

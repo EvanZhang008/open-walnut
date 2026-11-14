@@ -29,7 +29,7 @@ import { useSelectionFrozen } from '@/utils/selection-guard';
 import { visibleInterval } from '@/utils/page-visibility';
 
 /** Memoized text block that caches renderMarkdownWithRefs output */
-function StreamingTextBlock({ content, msgId, sessionCwd, sessionHost, sessionId, onTaskClick, onSessionClick, onFileOpen }: { content: string; msgId?: string; sessionCwd?: string; sessionHost?: string; sessionId?: string; onTaskClick?: (taskId: string) => void; onSessionClick?: (sessionId: string) => void; onFileOpen?: (path: string, line?: number) => void }) {
+function StreamingTextBlock({ content, msgId, sessionCwd, sessionHost, sessionId, onSessionClick, onFileOpen }: { content: string; msgId?: string; sessionCwd?: string; sessionHost?: string; sessionId?: string; onSessionClick?: (sessionId: string) => void; onFileOpen?: (path: string, line?: number) => void }) {
   // Freeze the rendered content while the user is selecting inside this block —
   // each delta otherwise swaps innerHTML and destroys the selection's anchor
   // nodes (the "selection disappears while generating" bug). Catches up the
@@ -43,7 +43,7 @@ function StreamingTextBlock({ content, msgId, sessionCwd, sessionHost, sessionId
   // freeze covers the card too.
   const { segments, useSegments } = useSuggestSegments(displayContent, msgId);
   const imagePaths = useMemo(() => findImagePaths(displayContent), [displayContent]);
-  const handleClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen, sessionHost, sessionId);
+  const handleClick = useEntityClickHandler(onSessionClick, onFileOpen, sessionHost, sessionId);
   // Same render source as the persisted row, so the handover draws the same pictures.
   const { host: imageHost, images: imagesKnown } = useSessionTextRender({ sessionId, sessionHost, sessionCwd });
   return (
@@ -129,11 +129,11 @@ export function StreamingReplyMeta({ block, alwaysVisible }: { block: Extract<St
 // The prompt cards (permission, AskUserQuestion) live in PromptCards.tsx.
 
 /** Render a single streaming block */
-export const StreamingBlockView = memo(function StreamingBlockView({ block, sessionId, sessionCwd, sessionHost, live, onTaskClick, onSessionClick, onFileOpen }: { block: StreamingBlock; sessionId: string; sessionCwd?: string; sessionHost?: string; live?: boolean; onTaskClick?: (taskId: string) => void; onSessionClick?: (sessionId: string) => void; onFileOpen?: (path: string, line?: number) => void }) {
+export const StreamingBlockView = memo(function StreamingBlockView({ block, sessionId, sessionCwd, sessionHost, live, onSessionClick, onFileOpen }: { block: StreamingBlock; sessionId: string; sessionCwd?: string; sessionHost?: string; live?: boolean; onSessionClick?: (sessionId: string) => void; onFileOpen?: (path: string, line?: number) => void }) {
   if (block.type === 'text') {
     const content = streamReplyText(block.content);
     if (!content.trim()) return null;
-    return <StreamingTextBlock content={content} msgId={block.msgId} sessionCwd={sessionCwd} sessionHost={sessionHost} sessionId={sessionId} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
+    return <StreamingTextBlock content={content} msgId={block.msgId} sessionCwd={sessionCwd} sessionHost={sessionHost} sessionId={sessionId} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
   }
 
   if (block.type === 'system') {
@@ -182,7 +182,7 @@ export const StreamingBlockView = memo(function StreamingBlockView({ block, sess
     const content = block.planContent
       ?? (typeof block.input?.plan === 'string' && block.input.plan ? block.input.plan : null);
     if (content) {
-      return <PlanCard content={content} disclosureId={disclosureIds.plan(block.toolUseId)} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
+      return <PlanCard content={content} disclosureId={disclosureIds.plan(block.toolUseId)} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
     }
   }
 
@@ -213,7 +213,6 @@ export const StreamingBlockView = memo(function StreamingBlockView({ block, sess
       sessionCwd={sessionCwd}
       sessionHost={sessionHost}
       sessionId={sessionId}
-      onTaskClick={onTaskClick}
       onSessionClick={onSessionClick}
       onFileOpen={onFileOpen}
     />

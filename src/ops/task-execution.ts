@@ -28,10 +28,12 @@ export const TASK_START_INPUT = {
   effort: z.enum(SESSION_EFFORT_IDS as [typeof SESSION_EFFORT_IDS[number], ...typeof SESSION_EFFORT_IDS[number][]]).optional().describe('Reasoning effort, the draft picker\'s Effort row (claude engine only; xhigh and max only on models that offer them). Omit for the model default'),
   user_request: z.string().trim().min(10).optional().describe('The user\'s own words asking for this start now, quoted. Only when the user asked: the start goes ahead at once even when its host has no free slot, as the user\'s own start does. Never for work you decided on yourself'),
   create_cwd: z.boolean().optional().describe('Create cwd on its host first, the folder picker\'s "Create folder & start". Default false: a missing folder fails the start'),
-  workspace: z.object({
+  workspace: z.union([z.object({
     provider: z.string().min(1).describe('Provider id from workspace_providers'),
     inputs: z.record(z.string(), z.unknown()).optional().describe('The provider\'s inputs, as workspace_providers describes them'),
-  }).strict().optional().describe('Start in an isolated workspace (the draft\'s "Isolated workspace" row): Walnut makes it on the host, then starts the session in it; the answer says preparing'),
+  }).strict(), z.literal(false)]).optional().describe('Start in an isolated workspace (the draft\'s "Isolated workspace" row): Walnut makes it on the host, then starts the session in it; the answer says preparing. '
+    + 'Omitted: when isolated workspaces are on by default (Settings > Experimental, or the project\'s settings), a new task whose folder is in a git repository (or one a workspace plugin claims) gets one from the provider that claims it. '
+    + 'false: work in the folder itself, for a task that must share its checkout (it edits files another task or the user has open there, or it only reads)'),
   expect_reply: z.boolean().optional().describe('Report back to the caller; defaults to true for a tracked caller. false opts out'),
   reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before a no-reply notification (default 12h: the answer is the task done)'),
   hands_on: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('A request you owe (rq-…) that you hand to this task instead of answering it now: its asker waits for this task\'s answer, is told where the work went, and gets that answer straight from it (handed to several tasks, the answers come to you to combine)'),
@@ -121,6 +123,13 @@ function fallbackNote(started: Record<string, unknown>): string {
   return note && typeof note.to === 'string' ? ` ${fallbackStartWords(note, Date.now())}` : ''
 }
 
+/** A workspace nobody asked for: the task is a code task (core/workspaces/default-isolation.ts). */
+function isolationNote(started: Record<string, unknown>): string {
+  const iso = started.isolation as { displayName?: string; byDefault?: boolean } | undefined
+  if (!iso?.byDefault) return ''
+  return ` Its folder is a repository, so it gets its own ${iso.displayName ?? 'workspace'} by default; to work in the folder itself (a checkout it must share), start it with workspace: false.`
+}
+
 /** Where placement by load put a first start (core/sessions/start-placement.ts), in its own words. */
 function placementNote(started: Record<string, unknown>): string {
   const p = started.placement as { host?: string; moved?: boolean; reason?: string; cwd?: string } | undefined
@@ -161,7 +170,10 @@ export function queuedOutcome(taskId: string, queued: { position?: number; host?
 export async function startTask(id: string, body: Record<string, unknown>, call: Call): Promise<Record<string, unknown>> {
   // An op never fills a folder in: one it names was chosen (a VP's or lead's start keeps it only
   // on a person's request with no caller session; core/sessions/org-own-folder.ts personNamedCwd).
-  const sent = typeof body.cwd === 'string' && body.cwd ? { ...body, cwd_chosen: true } : body
+  const named = typeof body.cwd === 'string' && body.cwd ? { ...body, cwd_chosen: true } : body
+  // `workspace: false` goes as no_workspace, which a server older than the default simply ignores.
+  const { workspace: asked, ...rest } = named
+  const sent = asked === false ? { ...rest, no_workspace: true } : named
   const started = await call('POST', `/tasks/${encodeURIComponent(id)}/start`, sent) as Record<string, unknown> | undefined
   if (!started || typeof started.taskId !== 'string') {
     throw new Error(`Start response was incomplete. Read task_get for ${id} before retrying; do not create another task.`)
@@ -174,7 +186,7 @@ export async function startTask(id: string, body: Record<string, unknown>, call:
     { ...started, execution: { state } },
     (started.continued === true
       ? `Task ${started.taskId} already had its conversation; the message continued it (a task has one active session; task_switch_engine changes its engine).`
-      : started.preparing === true ? `Task ${started.taskId}'s isolated workspace is being made; its session starts in it once the workspace is ready.`
+      : started.preparing === true ? `Task ${started.taskId}'s isolated workspace is being made; its session starts in it once the workspace is ready.${isolationNote(started)}`
       : state === 'running' ? `Task ${started.taskId} started.`
       : started.starting === true ? `Task ${started.taskId}'s session is still starting (its engine takes longer than this answer waits); it has not failed so far, and task_get shows it running once it is up.`
       : `Start accepted for task ${started.taskId}; execution is not yet confirmed.`) + launchSettingsNote(body, started) + placementNote(started) + fallbackNote(started) + enginePickNote(started)

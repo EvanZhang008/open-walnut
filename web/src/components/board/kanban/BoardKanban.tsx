@@ -9,10 +9,9 @@
  * control aria-disabled with READ_ONLY_TITLE.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { log } from '@/utils/log';
-import { locateTaskOnHome } from '@/utils/open-session';
+import { useOpenTask } from '@/hooks/useOpenTask';
 import { deletePreview as previewDelete, type BoardCard, type BoardKanbanSeenCard } from '../../../../../src/core/boards/board-lanes';
 import type { BoardPayload, BoardSeen } from '../board-model';
 import { buildBoardVM, type KanbanBoardVM } from './kanban-model';
@@ -48,8 +47,6 @@ export interface BoardKanbanProps {
   reloadKanban(): void;
   /** Cards view on screen (false = the Page is shown; the board stays mounted). */
   visible: boolean;
-  /** A card opened beside the board (the session panel's peek). */
-  onOpenTask?: (taskId: string) => void;
   /** A red board signal: switch to the Page and scroll to it. */
   onOpenSignal(target: { kind: 'choice' | 'thread'; id: string }): void;
   /** The team's attention number (G12) for the view toggle. */
@@ -77,10 +74,10 @@ const EMPTY_VM = (ownerId: string): KanbanBoardVM => buildBoardVM({
 });
 
 export function BoardKanban({
-  ownerId, payload, threadSeen, fetchStartedAt, reloadKanban, visible, onOpenTask, onOpenSignal, onAttention, emptyExtra, renderSession,
+  ownerId, payload, threadSeen, fetchStartedAt, reloadKanban, visible, onOpenSignal, onAttention, emptyExtra, renderSession,
   projectOf = NO_PROJECTS, quietEmpty = false,
 }: BoardKanbanProps) {
-  const navigate = useNavigate();
+  const openTask = useOpenTask();
   const reducedMotion = usePrefersReducedMotion();
   const rootEl = useRef<HTMLDivElement | null>(null);
   const scrollEl = useRef<HTMLDivElement | null>(null);
@@ -105,22 +102,18 @@ export function BoardKanban({
     const s = storeRef.current;
     if (s?.tasks.some((t) => t.id === taskId && t.unread)) s.update(taskId, { unread: false });
   }, []);
+  /** A card, its session link, the leader's row: the task on Home (useOpenTask), the session named if one was. */
   const openSession = useCallback((taskId: string, sessionId?: string) => {
     markRead(taskId);
     log.info('board', 'kanban card session opened', { taskId: ownerId, cardTaskId: taskId, sessionId: sessionId ?? '' });
-    locateTaskOnHome(taskId, navigate, sessionId ? { sessionId } : undefined);
-  }, [navigate, ownerId, markRead]);
-  const openBeside = useCallback((taskId: string) => {
-    markRead(taskId);
-    if (onOpenTask) onOpenTask(taskId);
-    else openSession(taskId, vmRef.current?.cards[taskId]?.sessionId);
-  }, [onOpenTask, openSession, markRead]);
+    openTask(taskId, sessionId ? { sessionId } : undefined);
+  }, [openTask, ownerId, markRead]);
   const storePhase = useCallback((id: string) => taskOfRef.current(id)?.phase, []);
 
   const writes = useKanbanWrites({
     ownerId, getVM: () => vmRef.current, getCards: () => cardsRef.current, getLaneOrder: (l) => layoutRef.current[l],
     fetchStartedAt, reloadKanban, toasts, storePhase,
-    onApplied: () => applyNowRef.current(), onReveal: (id) => revealRef.current(id), onFlash: (id) => { flashCards([id]); setTimeout(() => keepClearOfCorner(cardEl(rootEl.current, id)), CLEAR_AFTER_MS); }, onOpenTask: openBeside,
+    onApplied: () => applyNowRef.current(), onReveal: (id) => revealRef.current(id), onFlash: (id) => { flashCards([id]); setTimeout(() => keepClearOfCorner(cardEl(rootEl.current, id)), CLEAR_AFTER_MS); },
     // After the render that placed the card where the phase put it, so the baseline holds the new lane.
     onHumanPhase: (id) => { setTimeout(() => markSeenRef.current(id), 0); },
   });
@@ -330,8 +323,8 @@ export function BoardKanban({
   modeRef.current = mode;
   // The callbacks above move with the store (the pane's openTask reads it), so the
   // cards reach them through a ref: one status update re-renders one card (G36).
-  const live = useRef({ api, openBeside, openSession, onOpenSignal, markSeen: seen.markCardSeen, hold });
-  live.current = { api, openBeside, openSession, onOpenSignal, markSeen: seen.markCardSeen, hold };
+  const live = useRef({ api, openSession, onOpenSignal, markSeen: seen.markCardSeen, hold });
+  live.current = { api, openSession, onOpenSignal, markSeen: seen.markCardSeen, hold };
   const cardReadOnly = api.readOnly;
   const cardApi = useMemo<KanbanWriteApi>(() => ({
     readOnly: cardReadOnly,
@@ -350,7 +343,7 @@ export function BoardKanban({
     getCard: (id) => cardsRef.current[id],
     openTask: (id) => {
       log.info('board', 'kanban card opened', { taskId: ownerId, cardTaskId: id, mode: modeRef.current });
-      if (modeRef.current === 'narrow') { savedScroll.current = scrollEl.current?.scrollTop ?? 0; markRead(id); setDetail(id); } else live.current.openBeside(id);
+      if (modeRef.current === 'narrow') { savedScroll.current = scrollEl.current?.scrollTop ?? 0; markRead(id); setDetail(id); } else live.current.openSession(id);
     },
     openSession: (id, sid) => live.current.openSession(id, sid),
     openSignal: (target) => live.current.onOpenSignal(target),
@@ -458,9 +451,9 @@ export function BoardKanban({
             <div className="kanban-head-fixed">
               <KanbanHeader
                 board={shown} filter={filter} seen={seen} mode={mode} ownerId={ownerId}
-                onJumpToLane={onJumpToLane} onRevealCard={reveal} onOpenTask={openBeside} searchRef={searchRef}
+                onJumpToLane={onJumpToLane} onRevealCard={reveal} searchRef={searchRef}
               />
-              {showLeaderRow && vm.leader && <KanbanLeaderRow leader={vm.leader} onOpenTask={openBeside} />}
+              {showLeaderRow && vm.leader && <KanbanLeaderRow leader={vm.leader} />}
             </div>
             {filter.emptyText && (
               <div className="kanban-filter-empty" data-testid="kanban-filter-empty">

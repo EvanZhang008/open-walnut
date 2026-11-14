@@ -316,10 +316,12 @@ final class PeerMessagePresentationTests: XCTestCase {
         TimelineTextStyler.adopt(.large)
     }
 
-    /// At accessibility sizes a long sender wraps whole, as the title does, and the
-    /// row pays for every line: "Trigger: Nightly build" read "Trigger: Nightly bui…"
-    /// at AX-XXXL when the sender kept one line.
-    func testALongSenderWrapsAtAccessibilitySizesAndTheRowPaysForIt() {
+    /// A received message is a flat step row like every other step (2026-11-11, the
+    /// web's design 1). At accessibility sizes the title takes its own line under the
+    /// sender, each ONE line, so a long sender truncates instead of wrapping and the row
+    /// pays for exactly two lines whatever the sender's length. VoiceOver still reads the
+    /// whole sender, and the row reserves what it renders.
+    func testALongSenderKeepsOneLineAtAccessibilitySizesAndTheRowPaysForTwo() {
         let builder = TimelineRowBuilder()
         let size = DynamicTypeSize.accessibility5
         TimelineTextStyler.adopt(TimelineChipLayout.category(size))
@@ -333,7 +335,13 @@ final class PeerMessagePresentationTests: XCTestCase {
         let long = row(from: "Nightly build and release candidate checks")
         guard case .peerMessage(let description) = long.content else { return XCTFail("Expected description") }
         XCTAssertEqual(description.sender, "Nightly build and release candidate checks")
-        XCTAssertGreaterThan(long.height, short.height + TimelineTextStyler.caption2Font.lineHeight * 0.9)
+        XCTAssertEqual(description.accessibilityLabel, "Nightly build and release candidate checks: Ready",
+                       "the sender a line cuts is read whole")
+        XCTAssertEqual(long.height, short.height, "the sender keeps one line, so its length moves nothing")
+        XCTAssertEqual(long.height, TimelineRowBuilder.stepRowHeight(stacked: true))
+        XCTAssertGreaterThan(long.height, TimelineRowBuilder.stepRowHeight(stacked: false)
+                             + TimelineTextStyler.captionFont.lineHeight * 0.5,
+                             "stacked, the row pays for the title's own line")
         let host = UIHostingController(rootView: TimelineHostedCell.content(for: long, delegate: nil).dynamicTypeSize(size))
         let rendered = host.sizeThatFits(in: CGSize(width: 320, height: CGFloat.greatestFiniteMagnitude)).height
         XCTAssertGreaterThanOrEqual(long.height, rendered - 1, "reserved \(long.height), rendered \(rendered)")

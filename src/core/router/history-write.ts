@@ -38,14 +38,20 @@ const engineOf = (r: SessionHistoryFields) => r.engine || 'claude';
 const originOf = (r: SessionHistoryFields | undefined) => (r ? ORIGIN_KEYS.map((k) => stable(r[k])).join('|') : ORIGIN_KEYS.map(() => '').join('|'));
 const hasOrigin = (r: SessionHistoryFields) => ORIGIN_KEYS.some((k) => r[k] !== undefined && r[k] !== null && r[k] !== '');
 
+/**
+ * Only a router's own conversation is isolated (2026-11-14): a receiver profile ('work') an older
+ * build left on routed work reads as none, so that work and its history are ordinary again.
+ */
 function hasAreaProfile(record: Pick<SessionRecord, 'profile'> | undefined): boolean {
   const p = record?.profile;
-  return !!p && (p.areaId !== undefined || p.areaRole !== undefined || p.areaPolicyVersion !== undefined);
+  return !!p && p.areaRole !== 'work' && (p.areaId !== undefined || p.areaRole !== undefined || p.areaPolicyVersion !== undefined);
 }
 
-const markOf = (t: Pick<Task, 'router_area_id'> | undefined) => (typeof t?.router_area_id === 'string' ? t.router_area_id.trim() : '');
-const roleOf = (t: Pick<Task, 'org_role'>): RouterAreaRole => (t.org_role === 'router' ? 'router' : 'work');
-const areaMarked = (t: Pick<Task, 'org_role' | 'router_area_id'>) => !!markOf(t) || t.org_role === 'router';
+/** A router's area mark; the mark an older build wrote on routed work is not read. */
+const markOf = (t: Partial<Pick<Task, 'router_area_id' | 'org_role'>> | undefined) =>
+  (t?.org_role === 'router' && typeof t.router_area_id === 'string' ? t.router_area_id.trim() : '');
+const roleOf = (_t: Pick<Task, 'org_role'>): RouterAreaRole => 'router';
+const areaMarked = (t: Pick<Task, 'org_role' | 'router_area_id'>) => t.org_role === 'router';
 const areaFor = (id: string) => ({ id, host: LOCAL_HOST }) as RouterArea;
 
 function refuse(message: string): never {
@@ -128,8 +134,7 @@ export function assertSessionHistoryWrite(before: SessionHistoryFields | undefin
   if (before && hasAreaProfile(before)) {
     if (before.taskId !== after.taskId) refuse(`Session ${sid} belongs to its original area task and cannot move to another task.`);
     const { areaId, areaRole } = before.profile!;
-    if (typeof areaId !== 'string' || !areaId || (areaRole !== 'router' && areaRole !== 'work')
-      || !isRouterAreaSession(after, areaFor(areaId), areaRole)) {
+    if (typeof areaId !== 'string' || !areaId || areaRole !== 'router' || !isRouterAreaSession(after, areaFor(areaId))) {
       refuse(`Session ${sid} runs in area ${areaId}'s isolated profile; its profile, role, tools, host and engine never change.`);
     }
   } else if (before && hasAreaProfile(after)) {
@@ -142,7 +147,7 @@ export function assertSessionHistoryWrite(before: SessionHistoryFields | undefin
   if (task && areaMarked(task)) {
     const mark = markOf(task);
     const role = roleOf(task);
-    if (task.source !== 'local' || !hasAreaProfile(after) || after.profile!.areaRole !== role || !isRouterAreaSession(after, areaFor(mark), role)) {
+    if (task.source !== 'local' || !hasAreaProfile(after) || after.profile!.areaRole !== role || !isRouterAreaSession(after, areaFor(mark))) {
       refuse(`Task ${task.id} belongs to router area ${mark || '(none)'}; session ${sid} is not that area's isolated `
         + `${role === 'router' ? 'router' : 'area work'} conversation on this machine.`);
     }
@@ -222,7 +227,7 @@ export function assertTaskHistoryWrite(before: Partial<HistoryTask> | undefined,
   const role = roleOf(after);
   const { records, missing } = readTaskHistory(sessionDb, after);
   const foreign = records
-    .filter((r) => r.taskId !== after.id || hasOrigin(r) || !isRouterAreaSession(r, areaFor(mark), role))
+    .filter((r) => r.taskId !== after.id || hasOrigin(r) || !isRouterAreaSession(r, areaFor(mark)))
     .map((r) => r.claudeSessionId);
   const outside = [...foreign, ...missing];
   if (outside.length === 0) return;

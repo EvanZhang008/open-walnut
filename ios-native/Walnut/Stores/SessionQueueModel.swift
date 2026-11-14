@@ -69,13 +69,16 @@ final class SessionQueueModel {
     /// Counts the queue reads started, so a read that left before a send was accepted never
     /// takes the send's absence for its delivery (it was not on the server yet).
     @ObservationIgnored private var readsStarted = 0
-    /// How long after a send the page reads its line fast.
+    /// How long after a send the page reads its line fast, and how often.
     static let watchFastSpan: TimeInterval = 20
+    nonisolated(unsafe) static var watchFastPace: TimeInterval = 1.5
     @ObservationIgnored private var fadeTask: Task<Void, Never>?
     /// How long "Delivered" stays on a bubble (the web's 2 s).
     nonisolated(unsafe) static var deliveredSpan: TimeInterval = 2
 
     @ObservationIgnored private var pollTask: Task<Void, Never>?
+    /// What the running clock asks each lap; nil while it is stopped.
+    @ObservationIgnored private var turnRunning: (@MainActor () -> Bool)?
     @ObservationIgnored private var failures = 0
     /// Bumps per accepted write so a slower GET that started before it cannot put the
     /// old list back over it.
@@ -99,16 +102,39 @@ final class SessionQueueModel {
         guard !messageId.isEmpty, watched[messageId] == nil else { return }
         watched[messageId] = Watch(afterRead: readsStarted, since: Date(), deliveredAt: nil)
         updateSendStates(fetched: nil, read: nil)
-        Task { await refresh() }
+        // The clock may be in a long sleep (15 s with nothing running, a minute while the
+        // server does not answer): a send starts it over, so its first read is now and the
+        // next ones come at the fast pace (2026-11-11: a send waited out a 15 s sleep).
+        if pollTask != nil { runPoll() } else { Task { await refresh() } }
+    }
+
+    /// The ids of the messages the session's own transcript holds (`walnutMessageId` on its
+    /// rows). A message there was taken by the session, whatever the line said last: the
+    /// line is only read now and then, and not at all while the page is away or the server
+    /// does not answer, so it is never the only way a Queued ends (2026-11-11, the owner's
+    /// phone: "it just show queued").
+    @ObservationIgnored private(set) var inTranscript: Set<String> = []
+
+    /// The transcript the page shows now (`SessionConversationStore.onTranscriptShows`).
+    func noteInTranscript(_ ids: Set<String>, now: Date = Date()) {
+        guard ids != inTranscript else { return }
+        inTranscript = ids
+        updateSendStates(fetched: nil, read: nil, now: now)
     }
 
     /// Each watched send's state from the server's rows (nil = not read this time).
-    /// `read` is the number of the read that `fetched` came from.
+    /// `read` is the number of the read that `fetched` came from. Every way the page can
+    /// learn that the session took a send ends its Queued here: the transcript holds it,
+    /// its row says it was handed over, or a read that started after the send no longer
+    /// lists it (`QueuedBadgeGuardTests`).
     func updateSendStates(fetched: [SessionQueuedMessage]?, read: Int?, now: Date = Date()) {
         var next: [String: QueuedSend.Status] = [:]
         for (id, watch) in watched {
             var at = watch.deliveredAt
-            if at == nil, let fetched {
+            if at == nil, inTranscript.contains(id) {
+                at = now
+                watched[id]?.deliveredAt = now
+            } else if at == nil, let fetched {
                 let row = fetched.first { $0.id == id }
                 // Waiting in line: Queued. Taken in, being answered, or gone from the line
                 // in a read that started after the send was accepted: the session has it.
@@ -144,6 +170,31 @@ final class SessionQueueModel {
         watched.values.contains { $0.deliveredAt == nil && now.timeIntervalSince($0.since) < Self.watchFastSpan }
     }
 
+    /// Each bubble's badge, by bubble id: its send's own state while it is followed, else
+    /// Queued while its row waits in the line, never for a message the transcript already
+    /// holds (its row names it, `walnutMessageId`): the line's last read can be minutes
+    /// old, the transcript is the session's own word. The one place a bubble's Queued is
+    /// decided for the session page.
+    static func bubbleStates(
+        for messages: [ChatMessage], sendStates: [String: QueuedSend.Status],
+        rows: [String: SessionQueuedMessage]
+    ) -> [String: QueuedSend.Status] {
+        guard !sendStates.isEmpty || !rows.isEmpty else { return [:] }
+        let taken = Set(messages.lazy.compactMap(\.walnutMessageId))
+        var out: [String: QueuedSend.Status] = [:]
+        for message in messages {
+            // A bubble the transcript absorbed carries its id as `walnutMessageId`.
+            guard let id = message.clientMessageId ?? message.walnutMessageId else { continue }
+            let inTranscript = taken.contains(id)
+            if let state = sendStates[id] {
+                if !(state == .pending && inTranscript) { out[message.id] = state }
+            } else if !inTranscript, let row = rows[id], row.status == "pending", !row.isDelivered {
+                out[message.id] = .pending
+            }
+        }
+        return out
+    }
+
     /// The person's rows waiting to go in that no bubble on this page stands for (sent from
     /// another device): the page draws them as bubbles too, as the web does.
     func waitingRowsWithoutBubble(_ bubbleMessageIds: Set<String>) -> [SessionQueuedMessage] {
@@ -174,7 +225,7 @@ final class SessionQueueModel {
         switch (turnRunning, hasRows) {
         // A send of this page is on its way: its bubble's state is read often, so Queued turns
         // into Delivered within moments of the session taking it.
-        case _ where watching: base = 1.5
+        case _ where watching: base = watchFastPace
         case (true, true): base = 3
         case (false, true): base = 5
         case (true, false): base = 6
@@ -244,6 +295,17 @@ final class SessionQueueModel {
     /// Read now and keep reading while the page is up. `turnRunning` is asked each lap.
     func start(turnRunning: @escaping @MainActor () -> Bool) {
         stop()
+        self.turnRunning = turnRunning
+        runPoll()
+    }
+
+    /// Whether the read clock runs (the page is up).
+    var isPolling: Bool { pollTask != nil }
+
+    /// The clock from its first read: one read now, then one per `pollInterval`.
+    private func runPoll() {
+        pollTask?.cancel()
+        guard let turnRunning else { pollTask = nil; return }
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -258,6 +320,7 @@ final class SessionQueueModel {
     func stop() {
         pollTask?.cancel()
         pollTask = nil
+        turnRunning = nil
         clearUndo()
     }
 

@@ -1,6 +1,7 @@
 // Controls stay mounted so the add menu can activate their existing handlers and popovers.
 import { createContext, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
+import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { detailFits, foldDirectButtons, pickVisibleControls, rowExcess, type ControlFitInput, type RowShape } from './composer-controls-fit';
 import '@/styles/composer-controls.css';
@@ -104,6 +105,9 @@ function rowRoom(bar: HTMLElement, spacer: HTMLElement | null, hint: HTMLElement
 }
 
 export function ComposerControlsBar({ controls, className, handleRef }: ComposerControlsBarProps) {
+  const routeShown = useContext(RouteShownContext) !== false;
+  const shownRef = useRef(routeShown);
+  shownRef.current = routeShown;
   const present = useMemo(() => controls.filter((c) => !!c.node), [controls]);
   const inline = useMemo(() => present.filter((c) => !c.inAddMenu), [present]);
   const ids = useMemo(() => present.map((c) => c.id).join('|'), [present]);
@@ -133,7 +137,7 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
 
   const measure = useCallback(() => {
     const bar = barRef.current;
-    if (!bar) return;
+    if (!bar || !shownRef.current) return;
     for (const el of bar.querySelectorAll<HTMLElement>('[data-control-id]')) {
       const id = el.dataset.controlId!;
       const w = el.getBoundingClientRect().width;
@@ -225,6 +229,7 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
   }, [inline, pinned, condensed, showDetail, folded]);
 
   useLayoutEffect(() => {
+    if (!routeShown) return;
     measure();
     const bar = barRef.current;
     if (!bar || typeof ResizeObserver === 'undefined') return;
@@ -242,7 +247,7 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
     for (const el of bar.parentElement?.querySelectorAll<HTMLElement>(DIRECT_BUTTON) ?? []) ro.observe(el);
     return () => { ro.disconnect(); cancelAnimationFrame(frame); };
     // `ids` covers "a control appeared or disappeared"; `measure` covers the rest.
-  }, [measure, ids]);
+  }, [measure, ids, routeShown]);
 
   useEffect(() => {
     if (!open) return;

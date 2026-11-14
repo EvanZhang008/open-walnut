@@ -483,6 +483,12 @@ export interface UserStatus {
   /** A task whose own question a lead, VP or Main answered for the user (same-ask.ts answeredAbove):
    *  it reads Waiting on itself to act on that answer, never Needs you, while it asks the same. */
   answeredFor?: { by: string; byTitle: string; at: string; ask: string; sessionId?: string };
+  /** An org node's own question to the user, folded into its chat (asOrgNode: it reads Waiting on
+   *  the user, never Needs you): what a lead or Main above it answers with task_send answers_ask. */
+  chatAsk?: string;
+  /** Where that folded question lives: its report (absent), a Board choice (with `choice`), a prompt
+   *  open in its session, or a decision letter, so it is settled there (sessions/ask-settle.ts). */
+  chatAskFrom?: 'choice' | 'prompt' | 'letter';
   /** needs from its own report: the decision it asks (ask-decision.ts). Every surface tells a change
    *  of the ask by its `key`, never by its words. */
   decision?: StatusDecision;
@@ -1087,14 +1093,20 @@ function orgNodeNeverNeeds(s: UserStatus, input: UserStatusInput): UserStatus {
 
 function asOrgNode(s: UserStatus): UserStatus {
   if (s.state !== 'needs') return s;
-  const { ask, source, askForm: _form, checkedAt: _c, checkedBy: _b, unverified: _u, watchedAt: _wa, choice: _ch, askBy: _ab, askSessionId: _as, ...rest } = s;
+  const { ask, source, askForm: _form, checkedAt: _c, checkedBy: _b, unverified: _u, watchedAt: _wa, choice, askBy: _ab, askSessionId: _as, ...rest } = s;
   const said = clean(ask);
   const waitingOn = source === 'prompt' ? `You, in its chat: ${said}`
     : source === 'error' ? `You or Walnut, in its chat: ${said}`
       : said && said !== HANDED_BACK_ASK ? `Its teams; its question to you is in its chat: "${said.slice(0, 200)}"`
         : 'Your next message, or news from its teams';
-  // On the user, in its chat (status-push says "on you"), never a Needs you of its own.
-  return { ...rest, state: 'waiting', kind: 'you', waitingOn };
+  // On the user, in its chat (status-push says "on you"), never a Needs you of its own. Its own
+  // question stays named, so a node above can answer it in the user's place (ask-answer.ts).
+  const from = source === 'choice' || source === 'prompt' || source === 'letter' ? source : undefined;
+  const chatAsk = (source === 'session' || from) && said && said !== HANDED_BACK_ASK ? said : undefined;
+  return {
+    ...rest, state: 'waiting', kind: 'you', waitingOn,
+    ...(chatAsk ? { chatAsk, ...(from ? { chatAskFrom: from } : {}), ...(from === 'choice' && choice ? { choice } : {}) } : {}),
+  };
 }
 
 function derive(input: UserStatusInput, nowMs: number): UserStatus {

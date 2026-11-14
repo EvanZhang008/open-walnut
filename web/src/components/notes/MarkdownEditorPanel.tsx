@@ -96,7 +96,6 @@ export interface MarkdownEditorPanelProps {
   attachmentNotePath?: string | null;
   tasks?: React.ComponentProps<typeof NotesEditor>['tasks'];
   focusedTaskId?: string | null;
-  onTaskClick?: (taskId: string) => void;
   placeholder?: string;
   autoFocus?: boolean;
 
@@ -160,7 +159,6 @@ export function MarkdownEditorPanel({
   attachmentNotePath,
   tasks,
   focusedTaskId,
-  onTaskClick,
   placeholder,
   autoFocus,
   showWidthToggle = false,
@@ -571,7 +569,6 @@ export function MarkdownEditorPanel({
             attachmentNotePath={attachmentNotePath ?? undefined}
             tasks={tasks}
             focusedTaskId={focusedTaskId ?? undefined}
-            onTaskClick={onTaskClick}
             onEditorReady={showFormatToolbar ? handleEditorReady : undefined}
           />
         </div>

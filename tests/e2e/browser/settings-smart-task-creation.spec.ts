@@ -19,6 +19,7 @@
  * files running in parallel against the shared fixture would race each other.
  */
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test'
+import { putExactSection } from './config-section-helpers'
 
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(90_000)
@@ -53,12 +54,13 @@ test.beforeAll(async ({ request }) => {
 
 test.afterAll(async ({ request }) => {
   // The fixture server is shared by every spec: put back exactly what was there.
-  await request.put('/api/config', { data: { agent: original.agent ?? {} } })
+  await putExactSection(request, 'agent', original.agent as Record<string, unknown> | undefined)
   await request.put('/api/config', { data: { jev: original.jev ?? null } })
-  await request.put('/api/config', { data: { tools: original.tools ?? {} } })
+  await putExactSection(request, 'tools', original.tools as Record<string, unknown> | undefined)
   // The Advanced autosave below writes these two keys whole.
   for (const key of ['session_server', 'keep_awake'] as const) {
-    await request.put('/api/config', { data: { [key]: original[key] ?? null } })
+    if (original[key]) await putExactSection(request, key, original[key] as Record<string, unknown>)
+    else await request.put('/api/config', { data: { [key]: null } })
   }
 })
 

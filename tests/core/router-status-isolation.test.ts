@@ -39,6 +39,7 @@ function fakeSession(sid: string) {
 
 type Case = { name: string; sid: string; task: Task }
 const scoped: Case[] = []
+const legacyWork: Case[] = []
 let plain: Case
 let selfReport: MockInstance | undefined
 
@@ -58,7 +59,7 @@ beforeAll(async () => {
   const ordinary = await makeTask('Ordinary task')
   await fs.mkdir(path.join(WALNUT_HOME, 'router'), { recursive: true })
   await fs.writeFile(path.join(WALNUT_HOME, 'router', 'areas.json'), JSON.stringify({
-    version: 1, routers: [], items: [],
+    version: 1, routers: [{ taskId: listed.id, areaId: 'personal', paused: false }], items: [],
     areas: [{ id: 'personal', name: 'Personal', host: '__local__', taskIds: [listed.id], sources: [] }],
   }))
   // Fault injection keeps each historical area signal independent; the ordinary control uses registration.
@@ -69,17 +70,23 @@ beforeAll(async () => {
     else await createSessionRecord(sid, task.id, 'Garden', '/tmp', opts.profile ? { profile: opts.profile } : undefined)
     return { name, sid, task }
   }
+  // Only a router is scoped (2026-11-14): its role, a router session profile, or its registry assignment.
   scoped.push(
-    await add('task marker', 'iso-marked', marked, { legacy: true }),
     await add('router role', 'iso-router', router, { legacy: true }),
-    await add('session profile', 'iso-profiled', profiled, { legacy: true, profile: routerAreaProfile('personal', 'work') }),
+    await add('session profile', 'iso-profiled', profiled, { legacy: true, profile: routerAreaProfile('personal') }),
     await add('registry membership', 'iso-listed', listed, { legacy: true }),
   )
   plain = await add('ordinary', 'iso-plain', ordinary)
+  // What an older build left on routed work (an area mark, a receiver profile) is ordinary now.
+  legacyWork.push(
+    await add('task marker', 'iso-marked', marked, { legacy: true }),
+    await add('receiver profile', 'iso-work', await makeTask('Receiver session task'),
+      { legacy: true, profile: { ...routerAreaProfile('personal'), areaRole: 'work' } as ReturnType<typeof routerAreaProfile> }),
+  )
 })
 
 afterAll(async () => {
-  for (const c of [...scoped, plain]) sessions.delete(c.sid)
+  for (const c of [...scoped, ...legacyWork, plain]) sessions.delete(c.sid)
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
 })
 
@@ -99,6 +106,7 @@ describe('router area status isolation', () => {
   it('recognizes every area signal and leaves an ordinary task alone', async () => {
     for (const c of scoped) expect(await routerScopedStatus(c.task.id, c.sid), c.name).toBe(true)
     expect(await routerScopedStatus(plain.task.id, plain.sid)).toBe(false)
+    for (const c of legacyWork) expect(await routerScopedStatus(c.task.id, c.sid), c.name).toBe(false)
     expect(await routerScopedStatus('no-such-task', 'no-such-session')).toBe(true)
   })
 

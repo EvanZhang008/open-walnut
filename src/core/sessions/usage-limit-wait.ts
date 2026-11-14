@@ -30,6 +30,7 @@ import { log } from '../../logging/index.js'
 import { AUTO_CONTINUE_SOURCE } from '../session-auto-continue.js'
 import { frameAsWalnut } from './send-frame.js'
 import { isQuietTurn } from './quiet-turn.js'
+import { noteTurnAttempt, turnRetryEnded, type TurnRetrier } from './turn-run.js'
 import { isPersonSource } from './send-sent-by.js'
 import { engineCaps, resolveEngine } from '../agents/engine-registry.js'
 import { matchesUsageLimitText, parseUsageLimitReset } from '../../providers/usage-limit-text.js'
@@ -319,6 +320,8 @@ export class UsageLimitWaiter {
       }
       await this.deps.patchWait(sid, () => null)
       log.session.info('usage-limit wait: closed', { sessionId: sid, taskId: rec.taskId, why })
+      // A hand-back the wait held goes ahead now, unless a new turn took the session over (turn-run.ts).
+      turnRetryEnded(sid, 'usage_limit')
       if (why === 'person-stopped' && held && rec.process_status !== 'running') {
         await this.deps.release(rec, why).catch((err) => {
           log.session.warn('usage-limit wait: release failed', { sessionId: sid, error: err instanceof Error ? err.message : String(err) })
@@ -481,7 +484,9 @@ export function recordInUsageLimit(rec: LimitRecord | null | undefined, now: num
   const w = rec.usageLimit
   if (w?.state === 'off' || w?.state === 'gave_up') return false
   if (w?.state === 'waiting') return true
-  if (w?.state === 'resumed') return rec.process_status === 'error'
+  // Its continue hit the limit again (the waiter reopens it). Another error is not this wait's: the
+  // waiter closes it, and the turn end hands back (a held hand-back would have no one to let it go).
+  if (w?.state === 'resumed') return rec.process_status === 'error' && matchesUsageLimitText(rec.errorMessage)
   return openingLimit(rec, now)
 }
 
@@ -498,6 +503,21 @@ export function usageLimitOfRecord(rec: SessionRecord, now: number = Date.now())
     ...(reset ? { resetsAt: new Date(reset).toISOString(), dueAt: new Date(reset).toISOString(), resetsFrom: 'text' as const } : {}),
     resumes: 0, tries: 0,
   }
+}
+
+/** The usage-limit wait's row of the session's turn (sessions/turn-run.ts). */
+export const turnRetrier: TurnRetrier<'usage_limit'> = {
+  reason: 'usage_limit',
+  sources: [AUTO_CONTINUE_SOURCE],
+  // Only while the waiter runs here: no one else would continue it.
+  takes: (end) => !!instance && usageLimitTakes(end),
+  wait: (rec) => {
+    if (!recordInUsageLimit(rec)) return null
+    const usageLimit = usageLimitOfRecord(rec)
+    return usageLimit ? { reason: 'usage_limit', usageLimit } : null
+  },
+  stop: (rec) => usageLimitWaitEnabled() && (rec.usageLimit?.state === 'off' || rec.usageLimit?.state === 'gave_up')
+    ? { reason: 'usage_limit', usageLimit: rec.usageLimit } : null,
 }
 
 // ── Wiring ──
@@ -529,7 +549,10 @@ function defaultDeps(handBack: UsageLimitWaitDeps['handBack']): UsageLimitWaitDe
       }
       throw new Error('usageLimit write kept racing')
     },
-    send: async (sid, text, opts) => (await import('../session-message-queue.js')).sendMessageToSession(sid, text, opts),
+    send: async (sid, text, opts) => {
+      await noteTurnAttempt(sid, 'usage_limit')
+      return (await import('../session-message-queue.js')).sendMessageToSession(sid, text, opts)
+    },
     setContinued: async (sid, note) => {
       const { updateSessionRecordConditionally } = await import('../session-tracker.js')
       const written = await updateSessionRecordConditionally(sid, { usageLimitContinued: note ?? undefined } as Partial<SessionRecord>,
@@ -555,7 +578,7 @@ function defaultDeps(handBack: UsageLimitWaitDeps['handBack']): UsageLimitWaitDe
     release: async (rec, why) => {
       if (!rec.taskId) return
       const { applySessionPhase } = await import('../phase.js')
-      await applySessionPhase(rec.taskId, 'session:error', `usage-limit-wait:${why}`, { sessionId: rec.claudeSessionId })
+      await applySessionPhase(rec.taskId, 'session:error', `usage-limit-wait:${why}`, { sessionId: rec.claudeSessionId, retryOver: true })
     },
   }
 }
@@ -571,7 +594,7 @@ export function startUsageLimitWait(opts: {
   const handBack: UsageLimitWaitDeps['handBack'] = async (rec, wait) => {
     if (rec.taskId) {
       const { applySessionPhase } = await import('../phase.js')
-      await applySessionPhase(rec.taskId, 'session:error', `usage-limit-wait:${wait.state}`, { sessionId: rec.claudeSessionId })
+      await applySessionPhase(rec.taskId, 'session:error', `usage-limit-wait:${wait.state}`, { sessionId: rec.claudeSessionId, retryOver: true })
     }
     if (wait.state === 'gave_up') {
       const { limitAskWords } = await import('./usage-limit-model.js')

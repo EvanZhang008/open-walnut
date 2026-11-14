@@ -6,6 +6,7 @@ import { useHostStatus } from '@/hooks/useHostStatus';
 import { draftHash, draftKey, writeDraft, type DraftOrigin } from '@/utils/drafts';
 import { staleBannerText } from './stale-banner-text';
 import { scrollDebugEnabled } from '@/utils/scroll-debug';
+import { sendUuidsOfRow } from '@/utils/send-uuids';
 import { startFlashProbe } from '@/utils/flash-probe';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
@@ -80,7 +81,7 @@ import { useReadingPlace } from './useReadingPlace';
 import { ThreadTurnLabel } from './ThreadTurnLabel';
 import { foldGroupOf, foldOpenKeys, foldParts, isFolded } from '@/utils/thread-fold';
 import { WORKING_LEAD, envelopeSteps, foldStepsPhrase, secondsBetween, walnutCompactLine, workedForLead, type FoldStep } from './fold-steps';
-import { FoldedWordsRow, LiftedStep, LivePeek, needsPerson } from './StepRows';
+import { FoldedWordsRow, LiftedStep, needsPerson } from './StepRows';
 import { lookupTaskByRef } from '@/stores/entity-label-store';
 import { countFoldFailures, isNarration, joinsQuiet, MSG_KIND_ROLE, SYSTEM_VARIANT_ROLE, toolRole, TOOL_ROLE_FOLDS, type FoldFailures, type MsgKind, type RowRole } from './fold-rows';
 import { chunkByKind, EMPTY_STEP_GROUP, foldsAsOne, leadingStepGroup, settleWords, stepGroups, type StepGroup, type StepKind } from './stream-step-groups';
@@ -371,7 +372,6 @@ interface SessionChatHistoryProps {
   onFolderMoved?: (result: ContinueInNewFolderResult) => void;
   /** Whether the gone folder's session still has its history (the button's words follow it). */
   folderGoneHistory?: 'found' | 'missing' | 'unknown';
-  onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   onFileOpen?: (path: string, line?: number) => void;
   /** Bubbles the hook's isStreaming up so parents don't need to mount their
@@ -687,7 +687,7 @@ function ownRowsOf(queuedSig: string, tree: ThreadTree): { sentKeys: Set<string>
   return { sentKeys, queuedKeys };
 }
 
-export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, queueSync, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession, publishTimeline, readTimeline, readerPane, workingText, emptyHistory }: SessionChatHistoryProps) {
+export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, queueSync, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession, publishTimeline, readTimeline, readerPane, workingText, emptyHistory }: SessionChatHistoryProps) {
   // Dev-only render counter per session: lets a browser test prove a hot
   // interaction (the pointer over a question mark) never re-renders this tree.
   if (import.meta.env.DEV && typeof window !== 'undefined') {
@@ -754,7 +754,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const [sentNow, setSentNow] = useState<ReadonlySet<string>>(() => new Set());
   // The pinned Initial Prompt renders through the same markdown path as every
   // other user bubble, so its task pills and file links need the same delegate.
-  const handleInitialPromptClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen, sessionHost, sessionId);
+  const handleInitialPromptClick = useEntityClickHandler(onSessionClick, onFileOpen, sessionHost, sessionId);
   // The initial prompt's pictures load from the session's machine, as its full bubble's do.
   const initialPromptRender = useSessionTextRender({ sessionId, sessionHost, sessionCwd });
 
@@ -2431,8 +2431,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
      *  drifted mirror swallows exactly the update that would have brought the
      *  arrow back. React bails out on an unchanged value by itself. */
     const syncArrow = () => {
-      setShowScrollArrow(el.scrollHeight > el.clientHeight
-        && el.scrollTop + el.clientHeight < el.scrollHeight - NEAR_BOTTOM_PX);
+      if (!routeShownRef.current) return;
+      const height = el.scrollHeight;
+      const client = el.clientHeight;
+      setShowScrollArrow(height > client && el.scrollTop + client < height - NEAR_BOTTOM_PX);
     };
     // Jump tripwire state: previous geometry, to detect teleports between
     // consecutive scroll events. User scrolling (incl. momentum fling) moves
@@ -2565,6 +2567,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     // and expanding a tool run is a click. Keyboard activation arrives as keydown.
     el.addEventListener('click', markUserInput, { passive: true });
     const onScroll = () => {
+      if (!routeShownRef.current) return;
       const rawTop = el.scrollTop;
       const rawSh = el.scrollHeight;
       const dTop = rawTop - prevTop;
@@ -2632,7 +2635,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const pollTimer = setInterval(() => {
       // Hidden off Home: no layout read; the first look back takes a fresh baseline.
       if (!routeShownRef.current) { resync = true; return; }
-      if (resync) { resync = false; pollSh = el.scrollHeight; prevSh = pollSh; syncArrow(); return; }
+      if (resync) { resync = false; pollSh = el.scrollHeight; prevSh = pollSh; prevTop = el.scrollTop; syncArrow(); return; }
       const sh = el.scrollHeight;
       const dSh = sh - pollSh;
       pollSh = sh;
@@ -2947,6 +2950,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const pin = () => {
       raf = null;
       if (stopped) return;
+      if (!routeShownRef.current || Date.now() - started > 15_000) { stop(); return; }
       // A question page owns its landing (a reload restores it): never pin it.
       if (onQuestionPageRef.current) { stop(); return; }
       // A stack landing put the box at a passage (it can run before this effect
@@ -3107,7 +3111,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const el = containerRef.current;
     if (!el) return;
     const onLoad = (e: Event) => {
-      if (!isAtBottom.current) return;
+      if (!routeShownRef.current || !isAtBottom.current) return;
       if (selectionActive()) { noteSuppressedScroll(); return; }
       const target = e.target as HTMLElement;
       if (target.tagName !== 'IMG') return;
@@ -3130,9 +3134,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Path B-2: Container resize (sibling components loading) — debounced
   useEffect(() => {
     const el = containerRef.current;
-    if (!el) return;
+    if (!el || !routeShown) return;
     let prevHeight = el.clientHeight;
     const ro = new ResizeObserver(() => {
+      if (!routeShownRef.current) return;
       const newHeight = el.clientHeight;
       const delta = newHeight - prevHeight;
       if (delta !== 0) {
@@ -3176,7 +3181,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         let frames = 0;
         const chase = () => {
           shrinkChaseRaf.current = null;
-          if (!isAtBottom.current || selectionActive()) { shrinkOwed.current = 0; return; }
+          if (!routeShownRef.current || !isAtBottom.current || selectionActive()) { shrinkOwed.current = 0; return; }
           closeShrinkGap();
           if (frames++ < 3) shrinkChaseRaf.current = requestAnimationFrame(chase);
           else shrinkOwed.current = 0;
@@ -3190,7 +3195,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       ro.disconnect();
       if (shrinkChaseRaf.current !== null) cancelAnimationFrame(shrinkChaseRaf.current);
     };
-  }, [debouncedScroll, scrollLog, selectionActive]);
+  }, [debouncedScroll, scrollLog, selectionActive, routeShown]);
 
   // Click handler for the scroll-to-bottom arrow
   const handleScrollToBottom = useCallback(() => {
@@ -3709,9 +3714,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
     const rows = new Map<string, SessionHistoryMessage>();
     for (const m of loadedMessages) {
-      if (m.role !== 'user') continue;
-      if (m.msgId && !rows.has(m.msgId)) rows.set(m.msgId, m);
-      if (m.sourceUuid && !rows.has(m.sourceUuid)) rows.set(m.sourceUuid, m);
+      for (const u of sendUuidsOfRow(m)) if (!rows.has(u)) rows.set(u, m);
     }
     return { bubbles, rows };
   })() : null;
@@ -4952,7 +4955,6 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             sessionId={sessionId}
             sessionCwd={sessionCwd}
             sessionHost={sessionHost}
-            onTaskClick={onTaskClick}
             onSessionClick={onSessionClick}
             onFileOpen={onFileOpen}
           />
@@ -5012,7 +5014,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             {noActionSet.has(globalIndex) ? <NoActionMark /> : null}
           </>
         ) : (
-          <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} {...(thinkingFolded.has(globalIndex) ? { answerOnly: true } : {})} {...(ridersFolded.has(globalIndex) ? { ridersFolded: true } : {})} {...(trailingFolded.has(globalIndex) ? { trailingFolded: true } : {})} showCopyActions={stream ? stream.showCopy : globalIndex === lastAssistantTextIndex && !part.toolsAfter} {...(part.toolsAfter ? { noActions: true } : {})} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+          <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} {...(thinkingFolded.has(globalIndex) ? { answerOnly: true } : {})} {...(ridersFolded.has(globalIndex) ? { ridersFolded: true } : {})} {...(trailingFolded.has(globalIndex) ? { trailingFolded: true } : {})} showCopyActions={stream ? stream.showCopy : globalIndex === lastAssistantTextIndex && !part.toolsAfter} {...(part.toolsAfter ? { noActions: true } : {})} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
         )}
       </div>
     );
@@ -5679,11 +5681,6 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       liveTailKeyRef.current = { sessionId, key: turnFoldKey(id) };
       const head = opener ? headOf(opener) : undefined;
       const group = leadingGroup;
-      // What the turn does now, under its closed line: its latest thought and the step it is
-      // on (design 1: a running turn is one live line, nothing else grows).
-      const livePeek = (g: StepGroup): React.ReactNode => (
-        <LivePeek members={g.members.map((k) => timeline[k]).flatMap((t) => (t && t.kind === 'block' ? [t.block] : []))} />
-      );
       // Built once renderQueuedRow exists (the group's cards render with it).
       liveTailRow = () => {
         const firstChunk = chunkByKind(group.members, (k) => stepKinds[k])[0];
@@ -5704,7 +5701,6 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold" failed={failed}
               findMembers={findMembersAttr(tail.flatMap(rowsOf))}
               running={isStreaming || live}
-              peek={isStreaming ? livePeek(group) : undefined}
               lead={isStreaming ? WORKING_LEAD : undefined} phrase={phrase}>
               {tailCarry && carriedRow(tailCarry)}
               {tail.map((part, k) => {
@@ -5908,8 +5904,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         {...(live ? { live: { index: live.index, block: live.block } } : {})}
         streaming={isStreaming}
         empty={turns.length === 0 && !deduped.some((m) => m.role === 'user' && optimisticThreadKey(m) === key)}
-        sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost}
-        onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen}
+        sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onSessionClick={onSessionClick} onFileOpen={onFileOpen}
         {...(asks ? { asks } : {})}
       />
     );
@@ -6010,7 +6005,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     return (
       <div key={`u-${m.queueId}`} {...threadWrapperProps(optimisticRowId, wrapperClass)}>
         {turnLabelFor(optimisticRowId, 'user')}
-        <SessionMessage message={m} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+        <SessionMessage message={m} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
         {queuedBehind && (
           <div className="thread-queue-note" role="status">Waits for “{answeringTitle}” to finish.</div>
         )}
@@ -6104,7 +6099,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       if (msgId && (overlaidReplies.has(msgId) || savedMsgIds().has(msgId))) return null;
       const row = msgId
         ? renderHistoryPart({ kind: 'msg', m: streamReplyMessage(b, msgId), globalIndex: -1, stream: { showCopy: false } })
-        : <StreamingBlockView block={b} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} live={false} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
+        : <StreamingBlockView block={b} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} live={false} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
       return <FoldedWordsRow key={`words-${msgId ?? `b-${t.index}`}`} foldKey={wordsFoldKey(msgId ?? `b-${t.index}`)} text={text}>{row}</FoldedWordsRow>;
     });
     // Subagents it started: one chip for the burst, as on its own.
@@ -6129,7 +6124,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const t = timeline[k] as Extract<TimelineItem, { kind: 'block' }>;
       return (
         <div key={`b-${t.index}`} className="session-msg-bare">
-          <StreamingBlockView block={t.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} live={false} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+          <StreamingBlockView block={t.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} live={false} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
         </div>
       );
     });
@@ -6155,12 +6150,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     return (
       <div key={runRowKey(members, chunk.members[0])} className="session-msg-bare">
         <ToolRunShell phrase={phrase} calls={calls} failCount={failCount} running={thinkingLive || (isStreaming && streamRunHasCallingTool(members))}
-          peek={isStreaming ? <LivePeek members={members} /> : undefined}
           count={members.filter((m) => m.type === 'tool_call').length}
           disclosureId={disclosureIds.run(members[0]?.type === 'tool_call' ? { toolUseId: members[0].toolUseId } : { msgId: members[0]?.msgId })}>
           <StreamRunMembers members={members} live={thinkingLive}
-            sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost}
-            onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+            sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
         </ToolRunShell>
       </div>
     );
@@ -6224,7 +6217,6 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         sessionId={sessionId}
         sessionCwd={sessionCwd}
         sessionHost={sessionHost}
-        onTaskClick={onTaskClick}
         onSessionClick={onSessionClick}
         onFileOpen={onFileOpen}
       />
@@ -6326,14 +6318,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const rowKeys = rowKeysAttr(members.map((m) => (m.type === 'tool_call' ? m.toolUseId : undefined)));
       return (
         <div key={`run-${item.index}`} className="session-msg-bare" data-row-keys={rowKeys}>
-          <ToolRunShell phrase={phrase} calls={calls} failCount={failCount} running={running} peek={isStreaming ? <LivePeek members={members} /> : undefined} count={members.filter((m) => m.type === 'tool_call').length} disclosureId={disclosureIds.run(members[0]?.type === 'tool_call' ? { toolUseId: members[0].toolUseId } : { msgId: members[0]?.msgId })}>
+          <ToolRunShell phrase={phrase} calls={calls} failCount={failCount} running={running} count={members.filter((m) => m.type === 'tool_call').length} disclosureId={disclosureIds.run(members[0]?.type === 'tool_call' ? { toolUseId: members[0].toolUseId } : { msgId: members[0]?.msgId })}>
             <StreamRunMembers
               members={members}
               live={thinkingLive}
               sessionId={sessionId}
               sessionCwd={sessionCwd}
               sessionHost={sessionHost}
-              onTaskClick={onTaskClick}
               onSessionClick={onSessionClick}
               onFileOpen={onFileOpen}
             />
@@ -6463,7 +6454,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             {/* The body class, as on a persisted row: quote pins and
                 passage selection find the message body by it. */}
             <div className="session-msg-content">
-              <StreamingBlockView block={item.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} live={isLiveTail} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+              <StreamingBlockView block={item.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} live={isLiveTail} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
               {item.block.type === 'text' && (
                 <StreamingReplyMeta block={item.block} alwaysVisible={!isStreaming && i === lastStreamTextIdx} />
               )}
@@ -6473,7 +6464,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       }
       return (
         <div key={`b-${item.index}`} className="session-msg-bare">
-          <StreamingBlockView block={item.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} live={isLiveTail} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+          <StreamingBlockView block={item.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} live={isLiveTail} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
         </div>
       );
     }
@@ -6883,7 +6874,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         )}
         {!onQuestionPage && launchHead.map((m) => (
           <div key={`launch-${m.queueId}`} data-launch-prompt="">
-            <SessionMessage message={m} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+            <SessionMessage message={m} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
             <OptimisticImagePreviews images={m.images} />
           </div>
         ))}

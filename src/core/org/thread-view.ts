@@ -25,12 +25,16 @@ export interface ViewMessage {
   at: string;
   text: string;
   answer?: { text: string; at: string; about?: string[] };
+  /** Answers through this time were visible when the user reacted; travels with the message. */
+  readAt?: string;
 }
 
 /** What the view reads of a thread. */
 export interface ViewThread<M extends ViewMessage = ViewMessage> {
   messages: M[];
-  known?: { through: string };
+  known?: { through: string; at?: string; by?: string };
+  /** The user's last reaction on this subject, retained when its message is split out. */
+  reactedAt?: string;
   closed?: { by: string };
   /** The node opened the thread itself: its first post. */
   opener?: { text: string; at: string; from: string; ref?: string };
@@ -81,7 +85,7 @@ export function exchangesOf<M extends ViewMessage>(t: ViewThread<M>): ThreadExch
   const ackedByHim = t.closed?.by === 'human';
   if (t.opener) {
     const o = t.opener;
-    out.push({ n: 0, messages: [], opener: o, known: ackedByHim || t.messages.some((m) => m.at > o.at) });
+    out.push({ n: 0, messages: [], opener: o, known: ackedByHim || (!!t.reactedAt && t.reactedAt >= o.at) || t.messages.some((m) => m.at > o.at) });
   }
   let n = 1;
   let i = 0;
@@ -101,7 +105,10 @@ export function exchangesOf<M extends ViewMessage>(t: ViewThread<M>): ThreadExch
     const messages = t.messages.slice(i, j);
     const answer = first.answer as NonNullable<M['answer']> | undefined;
     const later = t.messages.slice(j).some((m) => !!answer && m.at > answer.at);
-    out.push({ n, messages, ...(answer ? { answer } : {}), known: !!answer && (later || ackedByHim || knownThrough >= i) });
+    const read = messages.some((m) => !!answer && !!m.readAt && m.readAt >= answer.at);
+    const marked = !t.reactedAt && !t.messages.some((m) => m.readAt) && knownThrough >= i
+      && (!t.known?.at || !answer || t.known.at >= answer.at);
+    out.push({ n, messages, ...(answer ? { answer } : {}), known: !!answer && (later || read || ackedByHim || marked) });
     n += messages.length;
     i = j;
   }
@@ -262,6 +269,10 @@ export function supersededBySummary(t: ViewThread, x: Pick<ThreadExchange, 'mess
   // Every summary was written after the thread's first post.
   if (x.opener) return s >= x.opener.at;
   if (!x.answer) return false;
+  // An old summary cannot cover a late answer arriving after the user's reaction.
+  const reaction = threadReactionAt(t);
+  if (reaction && s <= reaction && x.answer.at > reaction) return false;
+  if (t.messages.some((m) => m.readAt) && s < x.answer.at) return false;
   // A thread no write has touched since replyAt existed: the node's last change stands in, newer
   // than the answer. Any write stamps replyAt first (stampLegacyReplyAt), so an answer that came
   // later is judged by the stamped time, never by a state or title write after it (review
@@ -334,11 +345,27 @@ export function shownToHim<M extends ViewMessage>(t: ViewThread<M> & { state: st
   // Pinned: in his sight whatever its state, until he unpins or acknowledges it.
   if (pinnedNow(t)) return true;
   if (t.state === 'pending' || snoozedNow(t, now)) return false;
-  if (t.state === 'needs' || t.state === 'answered') return true;
+  if (t.state === 'needs') return true;
+  if (t.state === 'answered') return hasThreadNews(t, shared);
   // New or working: the node's move, out of sight even with its chat answer on it (2026-11-07, the
   // user: about 20 s later the real reply comes, "before it replies, what is the use?"), until the
   // node has let it sit past the reminder and there is something for him on it.
   return overdueShown(t, shared, now);
+}
+
+/** The reaction receipt survives splitting out the follow-up; older files infer it from his messages. */
+export function threadReactionAt(t: ViewThread): string {
+  return t.messages.reduce((last, m) => m.at > last ? m.at : last, t.reactedAt ?? '');
+}
+
+/** Real words after his reaction, not a state, title, task link or move. */
+export function hasThreadNews(t: ViewThread, shared: ReadonlySet<string> = NONE): boolean {
+  const reaction = threadReactionAt(t);
+  const summary = summaryAt(t);
+  const summaryRead = t.known?.by === 'human' && t.known.at && t.known.at > reaction ? t.known.at : reaction;
+  if (t.reply?.trim() && summary && summary > summaryRead && (t.replyAt || !t.known && !t.reactedAt)) return true;
+  return exchangesOf(t).some((x) => (x.answer || x.opener) && !x.known
+    && !x.messages.some((m) => shared.has(m.id)));
 }
 
 /** A thread in the node's hands (new, working) with nothing new this long is overdue: Walnut wakes the node. */

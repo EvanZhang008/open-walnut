@@ -16,6 +16,7 @@ Mac and Ctrl elsewhere.
 | mod+I | Put the caret in the current column's composer (with the session switching modifier too) |
 | mod+Shift+D | Complete the current task, close its column, go to the next task that needs you |
 | mod+Z | Undo the last complete, reopen, snooze, pin or delete, for 5 seconds |
+| hold the jump modifier | Each column shows its number |
 
 Browsers keep some chords for their tabs and never pass them to a page. So the session switching
 keys (the number jumps and previous / next) use the modifier the place leaves free:
@@ -26,7 +27,7 @@ keys (the number jumps and previous / next) use the modifier the place leaves fr
 | A browser on a Mac | Control (Cmd+1 to Cmd+9 switch the browser's tabs) |
 | A browser elsewhere | Alt (Ctrl+1 to Ctrl+9 switch the browser's tabs) |
 
-The sheet always shows the keys of the place you are in.
+The sheet and the column numbers always show the keys of the place you are in.
 
 "The current column" is the one holding the caret, or, when the caret is nowhere (you clicked
 into a transcript to read it), the one you last clicked in. With two columns or more it wears a

@@ -2309,11 +2309,13 @@ export class SessionHealthMonitor {
           if (mgr && await mgr.isAlive()) processAlive = true
         } catch { /* registry unavailable — keep the probe's verdict */ }
       }
-      // A session restart recovery holds (killed by a restart, its resume
-      // queued or still being decided) is work in flight, not a dead end.
+      // A session Walnut continues by itself (sessions/turn-run.ts: killed by a restart with its resume
+      // queued or still being decided, waiting on its endpoint or a usage reset) is work in flight, not
+      // a dead end.
       if (!processAlive) {
-        const { getSessionAutoRecover } = await import('./session-auto-recover.js')
-        if (getSessionAutoRecover()?.holdsHandBack(session)) processAlive = true
+        const { turnWaitOf, TURN_RETRY_TRAITS } = await import('./sessions/turn-run.js')
+        const wait = await turnWaitOf(session, { failed: true })
+        if (wait && TURN_RETRY_TRAITS[wait.reason].keepsPhase) processAlive = true
       }
       ;(processAlive ? bucket.alive : bucket.dead).push(session)
     }

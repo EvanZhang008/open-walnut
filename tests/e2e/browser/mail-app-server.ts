@@ -156,6 +156,12 @@ const withInvite = process.env.PW_MAIL_INVITE === '1'
 /** `PW_MAIL_NAMES_ONLY=1`: rows whose listing names people without addresses (names-only-set.mjs). */
 const withNamesOnly = process.env.PW_MAIL_NAMES_ONLY === '1'
 
+/** `PW_MAIL_ATTACHMENTS=1`: the big message and attachments that open (attachment-set.mjs). Implies the link. */
+const withAttachments = process.env.PW_MAIL_ATTACHMENTS === '1'
+// The Mac app's Download saves into `~/Downloads` of the server's user (attachments.ts), and HOME
+// here is the fixture's own: the folder a real Mac has, made inside the fixture.
+if (withAttachments) await fs.mkdir(path.join(tmpBase, 'Downloads'), { recursive: true })
+
 /**
  * `PW_MAIL_GROUPS=1`: the inbox-sorting message set (two adopted accounts, marina and ferry, see
  * `fixtures/mail-fixture-provider/groups-set.mjs`). `PW_MAIL_GROUPS_DENSE=1` is the same two accounts
@@ -171,7 +177,7 @@ const withGroups = process.env.PW_MAIL_GROUPS === '1' || withGroupsDense
 const ruleModelMode = (['canned', 'invalid', 'down', 'slow'] as const)
   .find((mode) => mode === process.env.PW_MAIL_RULE_MODEL) ?? 'down'
 
-const withProvider = process.env.PW_MAIL_PROVIDER === '1' || withCtx || withUnsub || withInvite || withNamesOnly || withGroups
+const withProvider = process.env.PW_MAIL_PROVIDER === '1' || withCtx || withUnsub || withInvite || withNamesOnly || withAttachments || withGroups
 if (withProvider) {
   const providerSource = path.join(repoRoot, 'tests/e2e/browser/fixtures/mail-fixture-provider')
   await fs.access(path.join(providerSource, 'server.mjs'))
@@ -503,12 +509,23 @@ async function seedRouterRows() {
   const { resolveRouterItem } = await import('../../../src/core/router/source-registry.js')
   const owner = (await addTask({ title: 'Review the dock reservation', project: 'Dock', source: 'local' })).task
   const vp = await ensureProjectLead('Dock')
-  await createRouterNode({ name: 'Personal mail router', areaId: 'personal', areaName: 'Personal', host: '__local__', links: [vp.id], sources: [] })
+  // Boot binds each mailbox to its router at the same time, and a router setup is compare-and-set:
+  // a concurrent write answers router_configuration_changed, whose contract is "read and retry".
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await createRouterNode({ name: 'Personal mail router', areaId: 'personal', areaName: 'Personal', host: '__local__', links: [vp.id], sources: [] })
+      break
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'router_configuration_changed' || attempt >= 20) throw error
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+  }
   await updateRouterAreas(tmpBase, (file) => ({ ...file,
     areas: file.areas.map((area) => area.id === 'personal' ? { ...area, taskIds: [...area.taskIds, owner.id, vp.id],
       sources: [...new Set(listed.map((m) => m.accountId))].map((account) => ({ kind: 'mail' as const, account })) } : area),
-    // Only the six routed rows and one confirmed row are assigned: every other message, of the same known accounts, still needs Choose area.
-    items: [...messages.slice(0, 7), ...messages.slice(10, 15)]
+    // Only the six routed rows, one queued row and the legacy row are the router's: every other message of
+    // the same accounts reads as one its router never took.
+    openItems: [...messages.slice(0, 7), messages[14]!]
       .map((m) => ({ areaId: 'personal', source: { kind: 'mail' as const, account: m.accountId, message: m.messageId, version: m.deliveryVersion } })),
   }))
   const ledger = routerStore('personal', tmpBase)
@@ -531,84 +548,9 @@ async function seedRouterRows() {
   await ledger.recordLegacy(legacyItem, { taskId: owner.id, reason: 'Handled before the router', evidence: 'The prior task recorded its review', at: Date.now() - 60_000 })
   rows.push({ ...legacy, status: 'legacy' })
   const pick = (m: (typeof messages)[number]) => ({ accountId: m.accountId, messageId: m.messageId, subject: m.subject })
-  const handoffs = await seedHandoffAsks(messages.slice(10, 14), pick)
-  return { ownerId: owner.id, vpId: vp.id, rows, confirmed: pick(messages[6]!), unassigned: messages.slice(7, 10).map(pick), handoffs }
+  return { ownerId: owner.id, vpId: vp.id, rows, queued: pick(messages[6]!), unassigned: messages.slice(7, 10).map(pick) }
 }
 
-// Approval records go straight into this home's file, never through the store, so nothing is announced, pushed or told to a session.
-async function seedHandoffAsks<T>(picked: Array<{ accountId: string; messageId: string; deliveryVersion: string; rfcMessageId?: string; subject: string; from?: { address: string } }>,
-  pick: (m: (typeof picked)[number]) => T) {
-  const crypto = await import('node:crypto')
-  const { addTask } = await import('../../../src/core/task-manager.js')
-  const { approvalDigest } = await import('../../../src/core/approvals/digest.js')
-  const { updateJsonFile } = await import('../../../src/utils/fs.js')
-  const { readRouterAreas } = await import('../../../src/core/router/areas.js')
-  const { claimHandoffApproval, requestHandoffApproval } = await import('../../../src/core/router/handoff-approval.js')
-  const { readRouterItem } = await import('../../../src/core/router/source-registry.js')
-  type ApprovalRecord = import('../../../src/core/approvals/types.js').ApprovalRecord
-  type ApprovalsFile = import('../../../src/core/approvals/types.js').ApprovalsFile
-  const approvalsFile = path.join(tmpBase, 'approvals', 'approvals.json')
-  const empty: ApprovalsFile = { version: 1, approvals: [] }
-  const putApproval = (id: string, patch: Partial<ApprovalRecord>) => updateJsonFile<ApprovalsFile>(approvalsFile, empty, (file) => {
-    const rec = file.approvals.find((one) => one.id === id)
-    if (rec) Object.assign(rec, patch)
-    return file
-  })
-  const routerTaskId = (await readRouterAreas(tmpBase)).routers.find((one) => one.areaId === 'personal')!.taskId
-  const target = (await addTask({ title: 'Pantry shelf inventory', source: 'local' })).task
-  let n = 0
-  const deps = {
-    home: tmpBase,
-    activeKeyCount: async () => 0,
-    livePendingIds: async () => new Set<string>(),
-    createApproval: async (input: import('../../../src/core/approvals/store.js').CreateInput) => {
-      const id = `apr-fixture-${++n}`
-      const now = Date.now()
-      const createdAt = new Date(now).toISOString()
-      const expiresAt = new Date(now + 24 * 60 * 60_000).toISOString()
-      const waitToken = crypto.randomBytes(24).toString('base64url')
-      const rec: ApprovalRecord = {
-        id, what: input.what, ...(input.detail ? { detail: input.detail } : {}), mode: input.mode, requester: input.requester, createdAt, expiresAt,
-        status: 'pending', waitTokenHash: crypto.createHash('sha256').update(waitToken, 'utf8').digest('hex'),
-        digest: approvalDigest({ id, mode: input.mode, createdAt, expiresAt, host: input.requester.host, taskId: input.requester.taskId, what: input.what, detail: input.detail }),
-        ...(input.guard ? { guard: input.guard } : {}), ...(input.testRun ? { testRun: input.testRun } : {}),
-      }
-      await updateJsonFile<ApprovalsFile>(approvalsFile, empty, (file) => { file.approvals.push(rec); return file })
-      const { waitTokenHash: _hidden, ...approval } = rec
-      return { approval, waitToken }
-    },
-  }
-  const answer = (decision: 'approve' | 'deny') => ({ decision, at: new Date().toISOString(), mode: 'tap' as const, device: { name: 'Fixture', kind: 'web' as const } })
-  const states = ['pending', 'denied', 'expired', 'claimed'] as const
-  const out: Array<T & { status: (typeof states)[number] }> = []
-  for (let i = 0; i < states.length; i++) {
-    const m = picked[i]!
-    const status = states[i]!
-    // The confirmed delivery: the adapter reads only a versioned source.
-    const source = { kind: 'mail' as const, account: m.accountId, message: m.messageId, version: m.deliveryVersion }
-    // The adapter's exact item, as a real ask freezes it; only the body is the fixture's.
-    const { item } = await readRouterItem(source)
-    const snapshot = {
-      areaId: 'personal', source, canonicalKey: item.key, targetTaskId: target.id, targetScope: 'unscoped', byTaskId: routerTaskId,
-      brief: 'Please check the shelf counts in this note.', reason: 'The note is about the shelf inventory.',
-      content: { item, body: { text: 'Neutral fixture body.' },
-        bodyAvailable: true, attachments: [], attachmentsAvailable: false as const },
-    }
-    const ticket = await requestHandoffApproval(snapshot,
-      { targetTitle: target.title, routerTitle: 'Personal mail router', host: '__local__', testRun: 'mail-router-fixture' }, deps)
-    // A terminal record carries readAt: its asker already knows, so no note goes to the router's session.
-    const readAt = new Date().toISOString()
-    if (status === 'denied') await putApproval(ticket.approvalId, { status: 'denied', answer: answer('deny'), readAt })
-    if (status === 'expired') await putApproval(ticket.approvalId, { status: 'expired', readAt })
-    if (status === 'claimed') {
-      await putApproval(ticket.approvalId, { status: 'approved', answer: answer('approve') })
-      const { content: _content, ...identity } = snapshot
-      await claimHandoffApproval(ticket.approvalId, identity, { home: tmpBase })
-    }
-    out.push({ ...pick(m), status })
-  }
-  return out
-}
 const routerRows = process.env.PW_MAIL_ROUTER === '1' ? await seedRouterRows() : null
 
 // `outbox` is where the canned provider writes every message it was handed, so the write spec can

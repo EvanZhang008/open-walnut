@@ -118,6 +118,7 @@ export const DAEMON_SOURCE_FILES = [
   'src/logging/redact.ts',
   // Session-changes host-local compute (changes.compute / changes.file).
   'src/providers/session-changes-core.ts',
+  'src/providers/changes-checkpoint.ts',
   'src/providers/usage-host-core.ts',
   'src/providers/usage-scan-core.ts',
   'src/providers/usage-scan-index.ts',

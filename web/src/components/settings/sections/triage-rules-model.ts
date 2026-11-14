@@ -6,8 +6,8 @@ import type { TriageRoutingRuleView } from '@/api/triage-rules';
 
 export const ROUTING_COPY = {
   heading: 'Routing rules',
-  help: 'Mail or Slack that matches a rule goes straight to its task on every batch. The first matching rule wins.',
-  empty: 'No routing rules yet. Add one to send a kind of mail to the task that owns it.',
+  help: 'Slack messages that match a rule go straight to its task on every batch. The first matching rule wins.',
+  empty: 'No routing rules yet. Add one to send a kind of message to the task that owns it.',
   add: 'Add rule',
   from: 'Sender contains',
   subject: 'Subject contains',

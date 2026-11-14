@@ -27,9 +27,11 @@ export type { SnapshotCopyOptions, SnapshotReport } from './ephemeral-snapshot-c
  * test server running from source loads them from node_modules instead.
  * `health` and `places` are the exception: the Apple Health store and the
  * iPhone's place visits are not regenerable, they are PRIVATE, and a test server
- * must never carry a copy of them into $TMPDIR.
+ * must never carry a copy of them into $TMPDIR. `config.yaml.history` holds older
+ * copies of config.yaml (core/config-history.ts): the push tokens and tunnels the
+ * strip passes below take out of config.yaml and config.yaml.bak are in them too.
  */
-export const SNAPSHOT_SKIP_TOP_LEVEL = new Set(['.git', '.smart-env', 'cache', 'components', 'health', 'places'])
+export const SNAPSHOT_SKIP_TOP_LEVEL = new Set(['.git', '.smart-env', 'cache', 'components', 'health', 'places', 'config.yaml.history'])
 
 /**
  * Copy the data dir `home` into the snapshot dir `dest`, leaving out what a test

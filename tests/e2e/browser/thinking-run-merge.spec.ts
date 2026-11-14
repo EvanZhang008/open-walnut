@@ -273,14 +273,16 @@ test.describe('Reasoning folds into the tool run around it', () => {
     const history = panel.locator('.session-history')
     await expect(history).toContainText('Parent turn.')
 
-    // Only reasoning so far: the turn's fold, "Working" with no count, the thought
-    // as its live line (was: a live "Thinking ›" row of its own).
+    // Only reasoning so far: the turn's fold, "Working" with no count, and nothing under
+    // its line (was: the thought as a live line under it; 2026-11-14 the user: "Even not
+    // showing the currently working command, below collpes, if people need people cna click intop").
     await think(page, 'think_1', 'Let me look this up.')
     await expect(turnFold(history)).toHaveCount(1)
     await expect(foldLead(history)).toHaveText(/^Working/)
     await expect(foldLabel(history)).toHaveCount(0)
     await expect(turnFold(history)).toHaveAttribute('data-running', 'true')
-    await expect(turnFold(history).locator('[data-testid="turn-fold-peek"]')).toContainText('Let me look this up.')
+    await expect(turnFold(history).locator(':scope > :not(.tool-run-toggle)')).toHaveCount(0)
+    await expect(history).not.toContainText('Let me look this up.')
 
     // The call it leads to is in flight: it joins the closed row at once (no card
     // opens under it) and the row breathes while it runs.

@@ -61,11 +61,14 @@ export const CalendarChip = memo(function CalendarChip({
 
   return (
     <div data-peek-row=""
+      // Timed blocks encode duration in their absolute geometry. Their full text is in the
+      // click-open detail, not a hover expansion that covers the next event. List chips grow.
+      data-peek={style?.top !== undefined ? 'off' : undefined}
       className={cls}
       style={tint ? ({ ...style, '--cal-chip-tint': tint } as CSSProperties) : style}
       data-item-id={item.id}
       data-day={item.day}
-      title={isDue ? `Due · ${title}` : title}
+      aria-label={isDue ? `Due: ${title}` : title}
       onPointerDown={readonly ? undefined : (e) => {
         if (e.button !== 0) return; // right/middle button must not arm a drag
         onMovePointerDown?.(e, item);

@@ -144,6 +144,20 @@ describe('settling Walnut letters nobody needs', () => {
     expect((await getLetter(mine.id))!.archived).toBe(false)
   })
 
+  it('old private-data hold and set-aside letters settle, including unmarked translated letters, but a task letter is kept', async () => {
+    const subjects = ['A file was kept out of sync: it holds a secret', 'A file kept out of sync was set aside', '\u6709\u4e00\u4e2a\u6587\u4ef6\u6ca1\u6709\u540c\u6b65\uff1a\u5b83\u542b\u6709\u5bc6\u94a5'];
+    const old = [];
+    for (const subject of subjects) old.push(await sendLetter({ subject, type: 'review', markdown: 'Private data hold.', sender: { sessionId: 'external', host: 'local' } }, { createdAt: OCT_31 }));
+    const mine = await sendLetter({ subject: subjects[0], type: 'review', markdown: 'Task report.', sender: { sessionId: 'task-session', taskId: 'task-x' } });
+    const settled = new Map((await settleUnneededWalnutLetters()).map((s) => [s.id, s.reason]));
+    for (const letter of old) {
+      expect(settled.get(letter.id)).toContain('private data folder, not the Walnut code repository');
+      expect(settled.get(letter.id)).toContain('not sent anywhere');
+      expect((await getLetter(letter.id))!.archived).toBe(true);
+    }
+    expect(settled.has(mine.id)).toBe(false);
+  })
+
   it('settles in the user\'s letter language', async () => {
     await updateConfig({ session: { reply_language: 'Talk to the user in Chinese; code stays English' } } as never)
     try {

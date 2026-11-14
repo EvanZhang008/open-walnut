@@ -263,6 +263,16 @@ describe('Event push (bus → WebSocket)', () => {
     await delay(50);
   });
 
+  it('whole frames preserve JSON serialization for undefined names and payloads', async () => {
+    const ws = await connectClient();
+    const pending = waitForMessage(ws);
+    broadcastEvent(undefined as unknown as string, undefined);
+    const frame = await pending;
+    expect(frame).toEqual({ type: 'event', seq: expect.any(Number) });
+    ws.close();
+    await delay(50);
+  });
+
   it('events not destined for "web-ui" are NOT pushed to WS clients', async () => {
     const ws = await connectClient();
 

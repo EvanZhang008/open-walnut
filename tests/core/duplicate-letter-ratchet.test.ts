@@ -25,6 +25,7 @@ const GUARDED_SENDS: Record<string, string> = {
 const DIRECT_SENDS: Record<string, string> = {
   'src/core/human-inbox/store.ts': 'the store itself',
   'src/core/router/service.ts': 'a router\'s for_user letter: once per item under a fixed op key (router-letter:<area>:<item>), sent only by the claim\'s winner',
+  'src/core/router/account-intake.ts': 'Walnut\'s own mail-no-router letter: once per mailbox episode under its op key (mail-no-router:<account>:<since>)',
   'src/core/human-inbox/letter-ops.ts': 'the guarded entry point (passes refuseDuplicate)',
   'src/core/org/morning-report.ts': 'Walnut\'s scheduled report in a node\'s name, sent by its clock, not the session',
   'src/core/plugins/server-api.ts': 'a plugin\'s letter (pluginId), the plugin owns its asks',

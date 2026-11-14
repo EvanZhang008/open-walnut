@@ -57,6 +57,8 @@ export interface ApprovalContext {
   goal?: string;
   project?: string;
   steps?: { kind: 'ran' | 'edited' | 'said' | 'tool'; text: string }[];
+  /** What the step does and why, written by Walnut when the asker gave no why (src/core/approvals/summary.ts). */
+  summary?: string;
 }
 
 export interface ApprovalKey {

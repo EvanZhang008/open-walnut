@@ -36,23 +36,24 @@ export interface TriageConfigHolder {
 /** The resolved, clamped answer. What bootstrap.ts and the batch action read. */
 export interface ResolvedTriageConfig {
   /**
-   * Run triage at all. False when the user never enabled it AND when `every` is
-   * "0": "no interval" spells "off", rather than a second switch. An `every` nobody can PARSE is
-   * not a zero and does not disable anything (see readEveryMs).
+   * Run triage at all. False when the user never enabled it, when `every` is
+   * "0" ("no interval" spells "off", rather than a second switch), and when no
+   * source is left (a batch with no inbox has nothing to read; an old mail-only
+   * config lands here since mail went to the mail router on 2026-11-14). An `every`
+   * nobody can PARSE is not a zero and does not disable anything (see readEveryMs).
    */
   enabled: boolean;
   /** Why it is off, for the log line that explains an absent routine. */
-  disabledReason?: 'config' | 'interval-zero';
+  disabledReason?: 'config' | 'interval-zero' | 'no-sources';
   /** Batch interval in ms, never below MIN_TRIAGE_EVERY_MS. 0 only when off. */
   everyMs: number;
   /** Wake threshold. 0 = the clock is the only trigger. */
   everyMessages: number;
-  /** Which inboxes feed a batch (may be empty = clock only). */
+  /** Which inboxes feed a batch. Empty only when triage is off (`no-sources`). */
   sources: TriageSource[];
   /** The bus events those sources emit, in `sources` order. */
   wakeEvents: string[];
   mode: TriageMode;
-  autoMarkRead: boolean;
   /** "HH:MM-HH:MM" local, or undefined for 24/7. */
   activeHours?: string;
 }
@@ -105,10 +106,11 @@ function readEveryMessages(raw: unknown): number {
 }
 
 /**
- * An ABSENT key means both inboxes; a PRESENT array is filtered to the known
- * ones and may legitimately end up empty (the user asked for no event sources,
- * which leaves the clock as the only trigger). Unknown names are dropped rather
- * than failing the read — a config typo must not be able to stop triage dead.
+ * An ABSENT key means every source; a PRESENT array is filtered to the known
+ * ones and may end up empty, which turns triage off (readTriageConfig). Unknown
+ * names are dropped rather than failing the read, and that includes `'mail'`:
+ * the mail router owns mail since 2026-11-14, and an old config that still lists
+ * it is read without an error and never rewritten.
  */
 function readSources(raw: unknown): TriageSource[] {
   if (!Array.isArray(raw)) return [...DEFAULT_TRIAGE_SOURCES];
@@ -162,16 +164,18 @@ export function readTriageConfig(config: TriageConfigHolder | null | undefined):
   }
   const sources = readSources(raw.sources);
   const wantsEnabled = raw.enabled === true;
-  const enabled = wantsEnabled && everyMs > 0;
+  const enabled = wantsEnabled && everyMs > 0 && sources.length > 0;
+  const disabledReason = !wantsEnabled ? 'config' as const
+    : everyMs <= 0 ? 'interval-zero' as const
+      : 'no-sources' as const;
   return {
     enabled,
-    ...(enabled ? {} : { disabledReason: wantsEnabled ? 'interval-zero' as const : 'config' as const }),
+    ...(enabled ? {} : { disabledReason }),
     everyMs,
     everyMessages: readEveryMessages(raw.every_messages),
     sources,
     wakeEvents: sources.map((s) => TRIAGE_WAKE_EVENTS[s]),
     mode: readMode(raw.mode),
-    autoMarkRead: raw.auto_mark_read === true,
     activeHours: readActiveHours(raw.active_hours),
   };
 }

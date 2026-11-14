@@ -179,6 +179,32 @@ describe('host copy pacing', () => {
     })
   })
 
+  // 2026-11-14 12:08Z: under an expired SSH certificate the bulk channel's own connection would
+  // not open, and six whole copies (4.8 MB in 12 minutes) went bound on the session link until the
+  // relay ended it; no new login worked, so the host stayed unreachable.
+  it("while the bulk channel's own connection is wanted and down, the whole copy waits, and goes once it opens", async () => {
+    const { conn, send } = connected('devbox')
+    const c = conn as unknown as Record<string, unknown>
+    c.bulkOwnWanted = true
+    c.bulkOwnLink = false
+    c.bulkOwnRefusal = 'Permission denied (publickey)'
+    slices.next = () => copyOf(1_500_000)
+    conn.pushHostSlice()
+    await settle()
+    expect(slicePushes(send)).toBe(0)
+    // Later changes meanwhile send nothing either.
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    conn.pushHostSlice()
+    await settle()
+    expect(slicePushes(send)).toBe(0)
+    // The own connection opens: the held copy goes by itself.
+    c.bulkOwnWanted = false
+    c.bulkOwnLink = true
+    ;(conn as unknown as { pushHeldCopies(): void }).pushHeldCopies()
+    await settle()
+    expect(slicePushes(send)).toBe(1)
+  })
+
   it('the wait: none for a first copy, in proportion to size, capped at 3 minutes', () => {
     expect(hostSliceWaitMs({ lastSentAt: 0, lastBytes: 2_000_000, now: 10, namesNewSession: false })).toBe(0)
     expect(hostSliceWaitMs({ lastSentAt: 1_000, lastBytes: 240_000, now: 4_000, namesNewSession: false })).toBe(37_000)

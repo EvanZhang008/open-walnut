@@ -11,11 +11,11 @@ import type { WalnutLetterKind } from './kind.js';
 import { HOST_SIGN_IN } from './host-sign-in.js';
 import { HOST_EXEC_ASK } from './host-exec-ask.js';
 import { BUDGET_PAUSED } from './budget-paused.js';
-import { GIT_SYNC_SECRET_ASIDE, GIT_SYNC_SECRET_HOLD } from './git-sync-secret.js';
 import { ORG_REPORT } from './org-report.js';
 import { MAIL_APPROVAL } from './mail-approval.js';
 import { MAIL_UNSUBSCRIBE } from './mail-unsubscribe.js';
 import { MAIL_DIGEST } from './mail-digest.js';
+import { MAIL_NO_ROUTER } from './mail-no-router.js';
 import { OFFLINE_CONFLICT } from './offline-conflict.js';
 import { LOCAL_NETWORK_BLOCKED } from './local-network-blocked.js';
 import { SSH_CERT_EXPIRY } from './ssh-cert-expiry.js';
@@ -25,12 +25,11 @@ export const WALNUT_LETTER_KINDS: readonly WalnutLetterKind<any>[] = [
   HOST_SIGN_IN,
   HOST_EXEC_ASK,
   BUDGET_PAUSED,
-  GIT_SYNC_SECRET_HOLD,
-  GIT_SYNC_SECRET_ASIDE,
   ORG_REPORT,
   MAIL_APPROVAL,
   MAIL_UNSUBSCRIBE,
   MAIL_DIGEST,
+  MAIL_NO_ROUTER,
   OFFLINE_CONFLICT,
   LOCAL_NETWORK_BLOCKED,
   SSH_CERT_EXPIRY,

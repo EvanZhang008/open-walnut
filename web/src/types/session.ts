@@ -335,6 +335,9 @@ export interface SessionHistoryMessage {
   /** A `queue-…` user row (sent while a turn ran): the uuid it was sent under,
    *  which question anchors and meta are keyed by. Never a rewind target. */
   sourceUuid?: string;
+  /** A user line Claude Code merged from several queued sends: the other sends'
+   *  uuids (`mergedSendUuids`). Read through utils/send-uuids.ts. */
+  mergedUuids?: string[];
   /** Server-stamped: this row's content can still change (an Agent row awaiting its
    *  late `bgTaskFinished`, a tool row awaiting its result). We re-ask for these ids
    *  on the next delta — otherwise a prefix synced mid-flight stays frozen and that

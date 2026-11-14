@@ -41,8 +41,6 @@ import {
 } from '../../src/core/human-inbox/triage-quota.js';
 import {
   TRIAGE_APPROVAL_OPS,
-  TRIAGE_MARK_READ_RULE,
-  TRIAGE_NO_REMOVAL,
   triageLetterBudgetText,
   triageModeText,
   triageRunRules,
@@ -399,66 +397,48 @@ describe('triageQuotaVerdict is pure', () => {
 describe('assist differs from ask only in what a run may do on its own', () => {
   it('the letter budget text is identical in both modes', () => {
     const budget = triageLetterBudgetText();
-    expect(triageRunRules('ask', false)).toContain(budget);
-    expect(triageRunRules('assist', false)).toContain(budget);
-    expect(triageRunRules('assist', true)).toContain(budget);
+    expect(triageRunRules('ask')).toContain(budget);
+    expect(triageRunRules('assist')).toContain(budget);
     expect(budget).toContain('at most 1 summary letter');
     expect(budget).toContain('at most 3 decision letters');
     expect(budget).toContain('refuses a fourth decision letter');
     expect(budget).toContain('Withdraw a decision letter an earlier');
-    expect(budget).toContain('items entry bound to its exact account/message');
-    expect(budget).toContain('Use the fixed op action mark_read');
-    expect(budget).toContain('never make a task from an email');
+    expect(budget).toContain('never make a task from a message');
     expect(budget).not.toContain('create_task');
     expect(budget).toContain('Whole-letter actions only ask the AI');
     expect(budget).toContain('human_inbox_reply');
   });
 
-  it('both modes still route every outward action through the same approval ops', () => {
+  it('both modes still route every outward action through the same approval op', () => {
     for (const mode of ['ask', 'assist'] as const) {
-      const text = triageModeText(mode, true);
+      const text = triageModeText(mode);
       for (const op of TRIAGE_APPROVAL_OPS) expect(text).toContain(op);
-      expect(text).toContain('posting to Slack');
+      expect(text).toContain('osting to Slack');
       expect(text).toContain('marking Slack read');
     }
-    expect(TRIAGE_APPROVAL_OPS).toEqual([
-      'mail_request_send', 'slack_request_post', 'mail_unsubscribe_request',
-    ]);
+    expect(TRIAGE_APPROVAL_OPS).toEqual(['slack_request_post']);
   });
 
-  it('ask creates nothing on its own but hands items to their tasks; assist may update tasks and notes, and neither makes a task from an email', () => {
-    const ask = triageModeText('ask', false);
+  it('ask creates nothing on its own but hands items to their tasks; assist may update tasks and notes, and neither makes a task from a message', () => {
+    const ask = triageModeText('ask');
     expect(ask).toContain('only read, update the triage and tracking notes, and hand an');
     expect(ask).toContain('item to the task that already owns it (task_send)');
-    expect(ask).toContain('offers New task and Talk to CEO by itself');
     expect(ask).not.toContain('create_task');
-    expect(ask).toContain('Other requests go to the user as a decision letter: editing a task or unsubscribing');
+    expect(ask).toContain('Other requests go to the user as a decision letter: editing a task');
 
-    const assist = triageModeText('assist', false);
+    const assist = triageModeText('assist');
     expect(assist).toContain('update existing tasks');
-    expect(assist).toContain('You never make a task from an email or a message');
+    expect(assist).toContain('You never make a task from a message');
     expect(assist).toContain('update the tracking notes');
-    expect(assist).toContain('one-click unsubscribe');
     expect(assist).toContain('never what may leave this machine');
   });
 
-  it('auto_mark_read lets either mode mark promotional mail read; without it, ask puts marking read in a letter', () => {
-    expect(triageModeText('assist', false)).toContain('may NOT mark mail as read (auto_mark_read is off)');
-    expect(triageModeText('assist', true)).toContain(TRIAGE_MARK_READ_RULE);
-    expect(triageModeText('ask', true)).toContain(TRIAGE_MARK_READ_RULE);
-    expect(triageModeText('ask', true)).not.toContain('marking mail read, ');
-    expect(triageModeText('ask', false)).not.toContain(TRIAGE_MARK_READ_RULE);
-    expect(triageModeText('ask', false)).toContain('mark_read where you add it for a single email');
-    expect(triageModeText('ask', false)).toContain('independent typed items');
-    // The rule names the tool and keeps the doubtful case unread.
-    expect(TRIAGE_MARK_READ_RULE).toContain('mail_mark_read');
-    expect(TRIAGE_MARK_READ_RULE).toContain('when unsure, leave it unread');
-  });
-
-  it('every mode, with the flag on or off, says nothing deletes, archives or moves mail', () => {
+  it('no mode carries a mail rule: the mail router owns mail since 2026-11-14', () => {
     for (const mode of ['ask', 'assist'] as const) {
-      for (const flag of [false, true]) expect(triageModeText(mode, flag)).toContain(TRIAGE_NO_REMOVAL);
+      const text = triageRunRules(mode);
+      expect(text).not.toMatch(/\bmail_[a-z_]+/);
+      expect(text).not.toMatch(/\bemail\b/i);
+      expect(text).not.toContain('unsubscribe');
     }
-    expect(TRIAGE_NO_REMOVAL).toContain('Nothing deletes, archives or moves mail');
   });
 });

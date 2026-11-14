@@ -3,7 +3,7 @@
  * it has open; opened, every task in it as a tree (workers under their team), each row its
  * title and its status as an icon in the row (2026-11-08, the user: "just list all the tasks",
  * each task with its status, and the hierarchy is the point; the chart is a glance, not a place
- * to decide, so no counts, asks or status words in it). A task opens beside the Org page. The
+ * to decide, so no counts, asks or status words in it). A task opens on Home (useOpenTask). The
  * move under another VP is a drag or a right-click on the row. Every VP card lists its
  * projects, its own included. Each row remembers whether it was open (usePageViewOf).
  */
@@ -13,6 +13,7 @@ import { teamNews, type OrgTaskNode, type TeamNewsItem, type TeamNewsTask } from
 import { stateWord } from '@open-walnut/user-status';
 import * as ICONS from '../common/Icons';
 import type { VpProject } from './org-chart-model';
+import { useOpenTask } from '@/hooks/useOpenTask';
 import { domId, useChartOpen } from './OrgChartVp';
 
 export interface ProjectTaskLine {
@@ -66,12 +67,14 @@ interface Props {
   dragging: boolean;
   onDragStart: (e: DragEvent, p: VpProject) => void;
   onDragEnd: () => void;
-  onOpenTask: (taskId: string) => void;
+  /** Close the chart: a task clicked here opens on Home, which the sheet would cover. */
+  onLeave: () => void;
   /** Open the menu that moves it under another VP, when it can move (at the control, or where the pointer is). */
   onMove?: (from: HTMLElement, point?: { x: number; y: number }) => void;
 }
 
-export function OrgChartProject({ project: p, tasks, dragging, onDragStart, onDragEnd, onOpenTask, onMove }: Props) {
+export function OrgChartProject({ project: p, tasks, dragging, onDragStart, onDragEnd, onLeave, onMove }: Props) {
+  const openTask = useOpenTask();
   const [open, toggle] = useChartOpen(p.key);
   const lines = open ? projectTasks(p, tasks) : [];
   const detailId = domId('oc-tasks', p.key);
@@ -136,7 +139,7 @@ export function OrgChartProject({ project: p, tasks, dragging, onDragStart, onDr
                 data-depth={t.depth}
                 // The status is the icon; its words are a hover away.
                 title={[t.title, `${stateName(t)}${t.words ? `: ${t.words}` : ''}`].join('\n')}
-                onClick={() => onOpenTask(t.id)}
+                onClick={() => { onLeave(); openTask(t.id); }}
               >
                 <span className={`oc-task-icon is-${t.state}${t.snoozed ? ' is-snoozed' : ''}`} role="img" aria-label={stateName(t)} data-testid="org-chart-task-icon">{stateIcon(t)}</span>
                 <span className="oc-task-title">{t.title}</span>

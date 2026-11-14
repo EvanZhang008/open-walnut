@@ -50,7 +50,7 @@
 import { userKindVerdict } from './user-kind.js';
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
 import { PICTURE_TITLE_WORDS } from '../human-inbox/walnut-letters/receipt-words.js';
-import { pinnedFirst } from './thread-view.js';
+import { pinnedFirst, hasThreadNews, threadReactionAt } from './thread-view.js';
 import { sameDecisionWords } from '../ask-decision.js';
 import crypto from 'node:crypto';
 
@@ -103,6 +103,8 @@ export interface ThreadMessage {
   sid?: string;
   /** The node's answer, read from its chat by Walnut (thread-answers.ts). */
   answer?: ThreadAnswer;
+  /** What was visible when the user reacted; kept through split, merge and move. */
+  readAt?: string;
 }
 
 export interface ThreadAnswer {
@@ -165,6 +167,8 @@ export interface ThreadKnown {
 }
 
 export interface ThreadClosed {
+  /** Auto-acknowledged after its follow-up left; real news may reopen it. */
+  reacted?: boolean;
   how: ThreadCloseHow;
   at: string;
   by: ThreadWriter;
@@ -247,8 +251,10 @@ export interface OrgThread {
   /** Who made the last change. */
   by?: ThreadWriter;
   closed?: ThreadClosed;
-  /** What he already knows, as the node judged it (he reacted after those answers). */
+  /** Answers he reacted to, automatically recorded on a follow-up or checked by the node. */
   known?: ThreadKnown;
+  /** The user's last reaction, independent of where its message was later filed. */
+  reactedAt?: string;
   /** The node opened this thread itself (not one of his requests): its first post. */
   opener?: ThreadOpener;
   /** Put aside until a time (thread-view.ts snoozedNow says whether it still is). */
@@ -360,6 +366,7 @@ function normalizeMessage(m: unknown): ThreadMessage | null {
   const x = m as Partial<ThreadMessage>;
   if (!isStr(x.id) || !isStr(x.at) || !isStr(x.text)) return null;
   const next = { ...x, via: isStr(x.via) ? x.via : 'chat', ...(Array.isArray(x.images) ? { images: x.images.filter(isStr) } : {}) } as ThreadMessage;
+  if (next.readAt !== undefined && !(isStr(next.readAt) && Number.isFinite(Date.parse(next.readAt)))) delete next.readAt;
   if (next.answer && !(typeof next.answer === 'object' && isStr(next.answer.text) && isStr(next.answer.at))) delete next.answer;
   else if (next.answer) next.answer = withSource(next.answer, false);
   return next;
@@ -398,6 +405,7 @@ function normalizeThread(t: unknown): OrgThread | null {
   // A closed thread holds no pin (a hand edit, or a file from a build that kept one).
   if (next.closed) delete next.pinned;
   if (next.known && !(typeof next.known === 'object' && isStr(next.known.through) && messages.some((m) => m.id === next.known!.through))) delete next.known;
+  if (next.reactedAt !== undefined && !(isStr(next.reactedAt) && Number.isFinite(Date.parse(next.reactedAt)))) delete next.reactedAt;
   if (!validMove(next.movedTo)) delete next.movedTo;
   if (!validMove(next.movedFrom)) delete next.movedFrom;
   return next;
@@ -583,9 +591,10 @@ export function fileMessage(file: ThreadsFile, input: FileMessageInput): FileMes
   const target = named ?? recent;
   if (target && (isOpen(target) || reopened)) {
     // His own message in a snoozed thread brings it back; one he closed minutes ago opens again.
-    const { snoozed: _s, closed: _c, ...rest } = target;
+    const { snoozed: _s, closed: _c, pinned: _p, ...rest } = target;
+    const reacted = recordReaction(rest, input.at);
     const next: OrgThread = {
-      ...rest, messages: [...target.messages, message], updatedAt: input.at, by: 'human',
+      ...reacted, messages: [...reacted.messages, message], updatedAt: input.at, by: 'human',
       // He spoke again: a thread answered, waiting on him or pending is the node's turn again.
       ...(reopened || target.state === 'answered' || target.state === 'needs' || target.state === 'pending' ? { state: 'working' as ThreadState } : {}),
     };
@@ -599,6 +608,38 @@ export function fileMessage(file: ThreadsFile, input: FileMessageInput): FileMes
     ...(named ? { follows: named.id } : {}),
   };
   return { file: { ...file, threads: prune([...file.threads, thread], input.at) }, thread, message, created: true, duplicate: false };
+}
+
+/** Persist what he saw before a follow-up can leave this subject. Silence never sets this receipt. */
+function recordReaction(t: OrgThread, at: string): OrgThread {
+  const reactedAt = threadReactionAt(t) > at ? threadReactionAt(t) : at;
+  const messages = t.messages.map((m) => m.answer && m.answer.at <= at
+    ? { ...m, readAt: m.readAt && m.readAt > at ? m.readAt : at } : m);
+  const last = [...messages].reverse().find((m) => m.answer && m.answer.at <= at);
+  return { ...t, reactedAt, messages,
+    ...(last && (!t.known || messages.findIndex((m) => m.id === last.id) >= messages.findIndex((m) => m.id === t.known!.through))
+      ? { known: { through: last.id, at: reactedAt, by: 'human' as const } } : {}),
+  };
+}
+
+/** Materialize legacy inferred reactions before messages change subjects. */
+function preserveReaction(t: OrgThread): OrgThread {
+  const at = t.messages.reduce((last, m) => m.at > last ? m.at : last, t.reactedAt ?? '');
+  let next = at ? recordReaction(t, at) : t;
+  // Legacy marks lack per-message receipts; new marks already carry their exact checked prefix.
+  if (t.known && !t.messages.some((m) => m.readAt) && !t.reactedAt) {
+    const through = t.messages.findIndex((m) => m.id === t.known!.through);
+    next = { ...next, messages: next.messages.map((m, i) => i <= through && m.answer
+      && (!t.known!.at || m.answer.at <= t.known!.at) ? { ...m, readAt: m.readAt && m.readAt > (t.known!.at ?? m.answer.at) ? m.readAt : t.known!.at ?? m.answer.at } : m) };
+  }
+  return next;
+}
+
+/** A split source with no unanswered work and no unseen words is finished, not a fresh result. */
+function ackReaction(t: OrgThread, by: ThreadWriter, at: string): OrgThread {
+  if (t.closed || t.state === 'needs' || t.pinned || !t.reactedAt || hasThreadNews(t)) return t;
+  if (t.messages.some((m) => !m.answer)) return t;
+  return { ...t, closed: { how: 'acked', at, by, reacted: true } };
 }
 
 export interface ThreadPatch {
@@ -811,6 +852,7 @@ export function patchHandsToUser(cur: Pick<OrgThread, 'state' | 'closed'>, patch
  */
 export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, by: ThreadWriter, at: string, source?: ThreadTextSource): { file: ThreadsFile; thread: OrgThread } {
   checkPatch(patch);
+  file = stampLegacyReplyAt(file);
   const cur = find(file, id);
   // A thread that moved lives on at the other node: it is changed there, never opened again here.
   if (movedAway(cur) && (patch.reopen || patch.pin)) {
@@ -827,11 +869,14 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   if (patch.ask !== undefined) { if (patch.ask.trim()) next.ask = clip(patch.ask, THREAD_ASK_MAX); else delete next.ask; }
   // The summary's writer moves only with its words: the same words sent again (a state move that
   // repeats the reply) keep the writer they had, so a path in them still opens where it was written.
-  // `replyAt` is when the node last wrote it, so it moves with every non-empty write.
+  // Repeating the same words is not news and never advances the summary receipt.
   if (patch.reply !== undefined) {
     const text = patch.reply.trim() ? clip(patch.reply, THREAD_REPLY_MAX) : undefined;
-    if (text !== cur.reply) setReply(next, text, by, source);
-    if (text) next.replyAt = at; else delete next.replyAt;
+    if (text !== cur.reply) {
+      if (cur.reply && !cur.replyAt) next.replyAt = legacySummaryAt(cur);
+      setReply(next, text, by, source);
+      if (text) next.replyAt = at; else delete next.replyAt;
+    } else if (text && !next.replyAt) next.replyAt = legacySummaryAt(cur);
   }
   if (patch.state !== undefined) next.state = patch.state;
   // A new summary on a thread out of his sight is news: it shows (answered), unless the same write names a state.
@@ -854,9 +899,15 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
     const upTo = patch.known === 'all' ? cur.messages.length - 1 : cur.messages.findIndex((m) => m.id === patch.known);
     if (upTo < 0 && patch.known === 'all') throw new ThreadError('no_message', 409, `Thread ${id} holds no message of his yet: there is nothing he knows.`);
     if (upTo < 0) throw new ThreadError('no_message', 404, `No message ${patch.known} in thread ${id}.`);
-    next.known = { through: cur.messages[knownThrough(file, cur, upTo, by)].id, by, at };
+    const through = knownThrough(file, cur, upTo, by);
+    next.known = { through: cur.messages[through].id, by, at };
+    // An agent's prefix mark never proves the user read this thread's summary.
+    if (by === 'human') next.reactedAt = at;
+    const readAt = by === 'human' ? at : lastUserAt(file)!;
+    next.messages = next.messages.map((m, i) => i <= through && m.answer && m.answer.at <= readAt
+      ? { ...m, readAt: m.readAt && m.readAt > readAt ? m.readAt : readAt } : m);
   }
-  if (patch.close && !(cur.closed && cur.closed.how === patch.close)) {
+  if (patch.close && (!(cur.closed && cur.closed.how === patch.close) || by === 'human' && cur.closed.reacted)) {
     // A thread the node opened that he never answered may be dropped by it: he was never asked yet.
     const ownUnseen = patch.close === 'dropped' && !!cur.opener && !cur.messages.length && by === cur.opener.by;
     if (!ownUnseen) checkClose(file, cur, by, patch.user_words);
@@ -864,8 +915,10 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
     delete next.snoozed;
     delete next.pinned;
   }
-  // Reopened by him: in his sight again until he writes in it.
+  // Reopening preserves read receipts: the view still requires news.
   if (patch.reopen) { delete next.closed; if (HIDDEN_STATES.has(next.state) && patch.state === undefined) next.state = 'answered'; }
+  // Only a system reaction-close may reopen on actual news, never an explicit user close.
+  if (!patch.close && next.closed?.reacted && (next.state === 'needs' || hasThreadNews(next))) delete next.closed;
   if (patch.pin !== undefined) applyPin(next, cur, patch.pin, by, at);
   // Only its ask in other words: the thread is the decision, so nothing moved (no news, no new
   // change time, no overdue clock reset; 2026-11-09, ask-decision.ts).
@@ -907,8 +960,11 @@ function pinOnly(file: ThreadsFile, cur: OrgThread, pin: boolean, by: ThreadWrit
  */
 export function mergeThreads(file: ThreadsFile, fromId: string, intoId: string, by: ThreadWriter, at: string): { file: ThreadsFile; thread: OrgThread } {
   if (fromId === intoId) throw new ThreadError('same_thread', 400, 'A thread cannot be merged into itself.');
-  const from = find(file, fromId);
-  const into = find(file, intoId);
+  file = stampLegacyReplyAt(file);
+  const fromFound = find(file, fromId);
+  const intoFound = find(file, intoId);
+  const from = preserveReaction(fromFound);
+  const into = preserveReaction(intoFound);
   // A closed subject asked again is a new thread that follows it, never a reopened one.
   if (!isOpen(into)) throw new ThreadError('thread_closed', 409, `Thread ${intoId} is closed; a new ask about it stays its own thread (it follows ${intoId}).`);
   // A thread the user closed stays closed: merging it would open it again unasked.
@@ -940,7 +996,8 @@ export interface MoveEnd { task: string; title: string }
  * as it was the moment it left, the copy the other node gets. Refuses a closed thread.
  */
 export function moveThreadOut(file: ThreadsFile, id: string, to: MoveEnd, by: ThreadWriter, at: string, why?: string, kind: ThreadMoveKind = 'work'): { file: ThreadsFile; thread: OrgThread } {
-  const cur = find(file, id);
+  file = stampLegacyReplyAt(file);
+  const cur = preserveReaction(find(file, id));
   if (cur.closed) {
     throw new ThreadError('thread_closed', 409, cur.movedTo
       ? `Thread ${id} already moved to ${cur.movedTo.title} (${cur.movedTo.task}).`
@@ -981,16 +1038,18 @@ export function moveThreadIn(file: ThreadsFile, thread: OrgThread, from: MoveEnd
 }
 
 /** The copy here, plus the source's messages and tasks it lacks (an answer the copy lacks too). */
-function mergeMovedCopy(copy: OrgThread, src: Pick<OrgThread, 'messages' | 'tasks' | 'updatedAt'>): OrgThread {
+function mergeMovedCopy(copy: OrgThread, src: Pick<OrgThread, 'messages' | 'tasks' | 'updatedAt' | 'reactedAt'>): OrgThread {
   const mine = new Map(copy.messages.map((m) => [m.id, m] as const));
   const messages = [...copy.messages.map((m) => {
     const theirs = src.messages.find((x) => x.id === m.id);
-    return !m.answer && theirs?.answer ? { ...m, answer: theirs.answer } : m;
+    const readAt = [m.readAt, theirs?.readAt].filter((x): x is string => !!x).sort().pop();
+    return { ...m, ...(!m.answer && theirs?.answer ? { answer: theirs.answer } : {}), ...(readAt ? { readAt } : {}) };
   }), ...src.messages.filter((m) => !mine.has(m.id))].sort((a, b) => a.at.localeCompare(b.at));
+  const reactedAt = [copy.reactedAt, src.reactedAt].filter((x): x is string => !!x).sort().pop();
   const added = messages.length > copy.messages.length;
   const tasks = [...new Set([...(copy.tasks ?? []), ...(src.tasks ?? [])])];
   return {
-    ...copy, messages, ...(tasks.length ? { tasks } : {}),
+    ...copy, messages, ...(tasks.length ? { tasks } : {}), ...(reactedAt ? { reactedAt } : {}),
     updatedAt: src.updatedAt > copy.updatedAt ? src.updatedAt : copy.updatedAt,
     // He spoke again in the source: an open thread waiting on him or answered is the node's turn again.
     ...(added && (copy.state === 'answered' || copy.state === 'needs' || copy.state === 'pending') ? { state: 'working' as ThreadState } : {}),
@@ -1005,8 +1064,8 @@ function mergeMovedCopy(copy: OrgThread, src: Pick<OrgThread, 'messages' | 'task
 export function addMovedMessages(file: ThreadsFile, left: OrgThread, at: string): ThreadsFile {
   const cur = file.threads.find((t) => t.id === left.id);
   if (!cur) return file;
-  const merged = mergeMovedCopy(cur, { messages: left.messages, tasks: cur.tasks, updatedAt: cur.updatedAt });
-  if (merged.messages.length === cur.messages.length) return file;
+  const merged = mergeMovedCopy(cur, { messages: left.messages, tasks: cur.tasks, updatedAt: cur.updatedAt, reactedAt: left.reactedAt });
+  if (JSON.stringify(merged) === JSON.stringify(cur)) return file;
   const next: OrgThread = { ...merged, updatedAt: at > cur.updatedAt ? at : cur.updatedAt };
   // A copy he closed here stays closed with his words kept.
   if (cur.closed) next.state = cur.state;
@@ -1015,7 +1074,9 @@ export function addMovedMessages(file: ThreadsFile, left: OrgThread, at: string)
 
 /** Take one message out of a thread into a thread of its own (a wrong merge undone). */
 export function splitThreadMessage(file: ThreadsFile, threadId: string, messageId: string, by: ThreadWriter, at: string, newId?: string, lang: LetterLang = 'en'): { file: ThreadsFile; thread: OrgThread; from: OrgThread } {
-  const cur = find(file, threadId);
+  file = stampLegacyReplyAt(file);
+  const found = find(file, threadId);
+  const cur = preserveReaction(found);
   const msg = cur.messages.find((m) => m.id === messageId);
   if (!msg) throw new ThreadError('no_message', 404, `No message ${messageId} in thread ${threadId}.`);
   if (cur.messages.length < 2 && !cur.opener) throw new ThreadError('last_message', 409, 'A thread keeps at least one message; this one is already its own thread.');
@@ -1032,7 +1093,8 @@ export function splitThreadMessage(file: ThreadsFile, threadId: string, messageI
     id: newId && THREAD_ID_RE.test(newId) ? newId : newThreadId(),
     title: fallbackTitle(msg.text, lang), state: 'new', messages: [msg], createdAt: msg.at, updatedAt: at, by,
   };
-  return { file: { ...file, threads: [...file.threads.map((t) => (t.id === threadId ? from : t)), thread] }, thread, from };
+  const settled = ackReaction(from, by, at);
+  return { file: { ...file, threads: [...file.threads.map((t) => (t.id === threadId ? settled : t)), thread] }, thread, from: settled };
 }
 
 export interface OpenThreadInput {
@@ -1095,7 +1157,9 @@ export function setAnswers(file: ThreadsFile, answers: ReadonlyMap<string, Threa
     });
     if (!hit) return t;
     changed.push(t.id);
-    return { ...t, messages };
+    const next = { ...t, messages };
+    if (next.closed?.reacted && hasThreadNews(next)) delete next.closed;
+    return next;
   });
   return changed.length ? { file: { ...file, threads }, changed } : { file, changed };
 }

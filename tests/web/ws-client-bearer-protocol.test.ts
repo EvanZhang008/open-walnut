@@ -8,6 +8,7 @@
  * A stand-in WebSocket records what the client asked for; nothing else is mocked.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { LEAN_SIGNATURE } from '../../src/lib/ws-lean-protocol'
 import { decodeBearerProtocol, WS_APP_PROTOCOL, WS_BEARER_PREFIX } from '../../src/lib/ws-bearer-protocol.js'
 
 const TOKEN = '9a8b7c6d5e4f30211203f4e5d6c7b8a9'
@@ -44,10 +45,11 @@ async function connect() {
 }
 
 describe('the SPA\'s /ws handshake', () => {
-  it('a browser signed in with a code: a bare /ws URL, the token in the bearer subprotocol', async () => {
+  it('a browser signed in with a code: a /ws URL with no credential, the token in the bearer subprotocol', async () => {
     stored['walnut.deviceToken'] = TOKEN
     const { url, protocols } = await connect()
-    expect(url).toBe('wss://walnut.example.net/ws')
+    // Only the lean-frames version rides the query (web/src/api/ws-lean.ts), never a credential.
+    expect(url).toBe(`wss://walnut.example.net/ws?lean=${LEAN_SIGNATURE}`)
     expect(url).not.toContain('token')
     expect(url).not.toContain(TOKEN)
     const offered = protocols as string[]
@@ -68,7 +70,7 @@ describe('the SPA\'s /ws handshake', () => {
     await initDemoGeneration()
     stored['walnut.demo.generation'] = 'second'
     const { url } = await connect()
-    expect(url).toBe('ws://127.0.0.1:3458/ws?demo-generation=first')
+    expect(url).toBe(`ws://127.0.0.1:3458/ws?demo-generation=first&lean=${LEAN_SIGNATURE}`)
   })
 
   it('a reset detected on socket close reloads before retrying its refused old generation', async () => {
@@ -90,9 +92,10 @@ describe('the SPA\'s /ws handshake', () => {
     wsClient.disconnect()
   })
 
-  it('on the server\'s own machine (no token stored): a bare /ws and no subprotocol', async () => {
+  it('on the server\'s own machine (no token stored): a /ws with no credential and no subprotocol', async () => {
     const { url, argc } = await connect()
-    expect(url).toBe('wss://walnut.example.net/ws')
+    // Only the lean-frames version rides the query (web/src/api/ws-lean.ts), never a credential.
+    expect(url).toBe(`wss://walnut.example.net/ws?lean=${LEAN_SIGNATURE}`)
     expect(argc).toBe(1)
   })
 })

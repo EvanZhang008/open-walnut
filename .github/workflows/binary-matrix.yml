@@ -152,6 +152,7 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
       - uses: actions/download-artifact@v4
+        id: dl-files
         if: inputs.files == ''
         # A failed download (2026-10-31: the artifact service timed out, macos-26-intel)
         # leaves the file missing too: the check below downloads once more.
@@ -160,13 +161,17 @@ jobs:
         with:
           name: walnut-files
           path: dist-bin
-      # A download cut short can pass with the file missing (2026-10-28, macos-26-intel):
+      # A download cut short can pass with the file missing (2026-10-28, macos-26-intel),
+      # and one that timed out can leave a partly written file (2026-11-14, ubuntu:20.04
+      # arm64), so only a download that finished, with the file there, counts:
       # download once more before failing (tests/scripts/binary-matrix-download.test.ts).
       - id: files
         if: inputs.files == ''
+        env:
+          DOWNLOAD: ${{ steps.dl-files.outcome }}
         run: |
-          if [ -s "dist-bin/$FILE" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
-          else echo "::warning::dist-bin/$FILE is missing after the download; downloading walnut-files again"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
+          if [ "$DOWNLOAD" = success ] && [ -s "dist-bin/$FILE" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
+          else echo "::warning::dist-bin/$FILE is missing or the download did not finish ($DOWNLOAD); downloading walnut-files again"; rm -f "dist-bin/$FILE"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
       - if: inputs.files == '' && steps.files.outputs.missing == 'true'
         timeout-minutes: 10
         env:
@@ -183,6 +188,7 @@ jobs:
       # without the file is cut off and downloaded once more
       # (tests/scripts/binary-matrix-download.test.ts).
       - uses: actions/download-artifact@v4
+        id: dl-release
         if: inputs.files != ''
         continue-on-error: true
         timeout-minutes: 4
@@ -191,10 +197,12 @@ jobs:
           path: ${{ runner.temp }}/release
       - id: release
         if: inputs.files != ''
+        env:
+          DOWNLOAD: ${{ steps.dl-release.outcome }}
         run: |
           gz="$RUNNER_TEMP/release/walnut-$VERSION-${FILE#walnut-}.gz"
-          if [ -s "$RUNNER_TEMP/release/SHA256SUMS" ] && [ -s "$gz" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
-          else echo "::warning::$gz or SHA256SUMS is missing after the download; downloading ${{ inputs.files }} again"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
+          if [ "$DOWNLOAD" = success ] && [ -s "$RUNNER_TEMP/release/SHA256SUMS" ] && [ -s "$gz" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
+          else echo "::warning::$gz or SHA256SUMS is missing or the download did not finish ($DOWNLOAD); downloading ${{ inputs.files }} again"; rm -f "$gz"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
       - if: inputs.files != '' && steps.release.outputs.missing == 'true'
         timeout-minutes: 10
         env:
@@ -238,6 +246,7 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
       - uses: actions/download-artifact@v4
+        id: dl-files
         if: inputs.files == ''
         # A failed download (2026-10-31: the artifact service timed out, macos-26-intel)
         # leaves the file missing too: the check below downloads once more.
@@ -250,9 +259,11 @@ jobs:
       # download once more before failing (tests/scripts/binary-matrix-download.test.ts).
       - id: files
         if: inputs.files == ''
+        env:
+          DOWNLOAD: ${{ steps.dl-files.outcome }}
         run: |
-          if [ -s "dist-bin/$FILE" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
-          else echo "::warning::dist-bin/$FILE is missing after the download; downloading walnut-files again"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
+          if [ "$DOWNLOAD" = success ] && [ -s "dist-bin/$FILE" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
+          else echo "::warning::dist-bin/$FILE is missing or the download did not finish ($DOWNLOAD); downloading walnut-files again"; rm -f "dist-bin/$FILE"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
       - if: inputs.files == '' && steps.files.outputs.missing == 'true'
         timeout-minutes: 10
         env:
@@ -267,6 +278,7 @@ jobs:
       # without the file is cut off and downloaded once more
       # (tests/scripts/binary-matrix-download.test.ts).
       - uses: actions/download-artifact@v4
+        id: dl-release
         if: inputs.files != ''
         continue-on-error: true
         timeout-minutes: 4
@@ -275,10 +287,12 @@ jobs:
           path: ${{ runner.temp }}/release
       - id: release
         if: inputs.files != ''
+        env:
+          DOWNLOAD: ${{ steps.dl-release.outcome }}
         run: |
           gz="$RUNNER_TEMP/release/walnut-$VERSION-${FILE#walnut-}.gz"
-          if [ -s "$RUNNER_TEMP/release/SHA256SUMS" ] && [ -s "$gz" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
-          else echo "::warning::$gz or SHA256SUMS is missing after the download; downloading ${{ inputs.files }} again"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
+          if [ "$DOWNLOAD" = success ] && [ -s "$RUNNER_TEMP/release/SHA256SUMS" ] && [ -s "$gz" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
+          else echo "::warning::$gz or SHA256SUMS is missing or the download did not finish ($DOWNLOAD); downloading ${{ inputs.files }} again"; rm -f "$gz"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
       - if: inputs.files != '' && steps.release.outputs.missing == 'true'
         timeout-minutes: 10
         env:
@@ -320,6 +334,7 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
       - uses: actions/download-artifact@v4
+        id: dl-files
         if: inputs.files == ''
         # A failed download (2026-10-31: the artifact service timed out, macos-26-intel)
         # leaves the file missing too: the check below downloads once more.
@@ -333,10 +348,11 @@ jobs:
       - id: files
         if: inputs.files == ''
         env:
+          DOWNLOAD: ${{ steps.dl-files.outcome }}
           FILE: walnut-linux-x64
         run: |
-          if [ -s "dist-bin/$FILE" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
-          else echo "::warning::dist-bin/$FILE is missing after the download; downloading walnut-files again"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
+          if [ "$DOWNLOAD" = success ] && [ -s "dist-bin/$FILE" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
+          else echo "::warning::dist-bin/$FILE is missing or the download did not finish ($DOWNLOAD); downloading walnut-files again"; rm -f "dist-bin/$FILE"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
       - if: inputs.files == '' && steps.files.outputs.missing == 'true'
         timeout-minutes: 10
         env:
@@ -353,6 +369,7 @@ jobs:
       # without the file is cut off and downloaded once more
       # (tests/scripts/binary-matrix-download.test.ts).
       - uses: actions/download-artifact@v4
+        id: dl-release
         if: inputs.files != ''
         continue-on-error: true
         timeout-minutes: 4
@@ -362,11 +379,12 @@ jobs:
       - id: release
         if: inputs.files != ''
         env:
+          DOWNLOAD: ${{ steps.dl-release.outcome }}
           FILE: walnut-linux-x64
         run: |
           gz="$RUNNER_TEMP/release/walnut-$VERSION-${FILE#walnut-}.gz"
-          if [ -s "$RUNNER_TEMP/release/SHA256SUMS" ] && [ -s "$gz" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
-          else echo "::warning::$gz or SHA256SUMS is missing after the download; downloading ${{ inputs.files }} again"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
+          if [ "$DOWNLOAD" = success ] && [ -s "$RUNNER_TEMP/release/SHA256SUMS" ] && [ -s "$gz" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
+          else echo "::warning::$gz or SHA256SUMS is missing or the download did not finish ($DOWNLOAD); downloading ${{ inputs.files }} again"; rm -f "$gz"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
       - if: inputs.files != '' && steps.release.outputs.missing == 'true'
         timeout-minutes: 10
         env:

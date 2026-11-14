@@ -14,10 +14,9 @@
  *     path the parse burst starved in the first place. A mount-time fetch here
  *     would put one `/api/config` back on it, which no unit test would notice and
  *     tests/e2e/browser/draft-quick-parse-off.spec.ts scenario 4 would fail on.
- *   . the write MERGES into the existing `agent` block. updateConfig replaces the
- *     whole top-level key, so a naive `{ agent: { quick_parse } }` would delete
- *     main_model, language and available_models. That is silent data loss from a
- *     one-click menu row, which makes it the most important case in this file.
+ *   . the write names only `agent.quick_parse` (updateConfigKeys): it must not
+ *     carry main_model, language or available_models back from an earlier read,
+ *     and updateConfigKeys keeps them on any server (tests/web/config-write-body.test.ts).
  *   . the echo is synchronous, so the row lights up under the cursor rather than
  *     after a round trip.
  *   . a FAILED write reverts the echo. A lit toggle whose config still says off is
@@ -43,8 +42,8 @@ vi.mock('../../web/node_modules/react', () => ({
 }))
 
 const fetchConfig = vi.fn<() => Promise<Record<string, unknown>>>()
-const updateConfig = vi.fn<(patch: Record<string, unknown>) => Promise<unknown>>()
-vi.mock('@/api/config', () => ({ fetchConfig, updateConfig }))
+const updateConfigKeys = vi.fn<(section: string, keys: Record<string, unknown>) => Promise<unknown>>()
+vi.mock('@/api/config', () => ({ fetchConfig, updateConfigKeys }))
 
 /** Bound once per module lifetime; the reset seam deliberately does not unbind it,
  *  so capture the handler in a variable rather than off a mock's call log. */
@@ -85,7 +84,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   _resetQuickParseForTests()
   fetchConfig.mockResolvedValue({})
-  updateConfig.mockResolvedValue({})
+  updateConfigKeys.mockResolvedValue({})
 })
 
 describe('useQuickParseEnabled', () => {
@@ -182,9 +181,9 @@ describe('useQuickParseEnabled', () => {
 })
 
 describe('setQuickParseEnabled', () => {
-  it('KEEPS every sibling agent key — updateConfig replaces the whole block', async () => {
-    // The case that makes this a data-loss bug rather than a cosmetic one: one
-    // click on a menu row must not delete the user's model, language and catalog.
+  it('writes only its own key, never the agent block it read', async () => {
+    // One click on a menu row must not write the user's model, language and catalog
+    // back from an older read; updateConfigKeys keeps them on the server.
     fetchConfig.mockResolvedValue({ agent: AGENT })
     const composer = mount()
     await flush()
@@ -192,9 +191,7 @@ describe('setQuickParseEnabled', () => {
     setQuickParseEnabled(true)
     await flush()
 
-    expect(updateConfig).toHaveBeenCalledWith({ agent: { ...AGENT, quick_parse: true } })
-    const written = updateConfig.mock.calls[0][0] as { agent: Record<string, unknown> }
-    expect(Object.keys(written.agent).sort()).toEqual([...Object.keys(AGENT), 'quick_parse'].sort())
+    expect(updateConfigKeys).toHaveBeenCalledWith('agent', { quick_parse: true })
     composer.unmount()
   })
 
@@ -211,10 +208,11 @@ describe('setQuickParseEnabled', () => {
     // Synchronous: the row lights up under the cursor, not after a round trip.
     expect(a.set).toHaveBeenCalledWith(true)
     expect(b.set).toHaveBeenCalledWith(true)
-    expect(updateConfig).not.toHaveBeenCalled()
+    // The write starts in the same tick now (no read first), after the echo.
+    expect(a.set.mock.invocationCallOrder[0]).toBeLessThan(updateConfigKeys.mock.invocationCallOrder[0])
 
     await flush()
-    expect(updateConfig).toHaveBeenCalledTimes(1)
+    expect(updateConfigKeys).toHaveBeenCalledTimes(1)
     a.unmount()
     b.unmount()
   })
@@ -229,13 +227,13 @@ describe('setQuickParseEnabled', () => {
 
     expect(composer.set).toHaveBeenCalledWith(false)
     await flush()
-    expect(updateConfig).toHaveBeenCalledWith({ agent: { ...AGENT, quick_parse: false } })
+    expect(updateConfigKeys).toHaveBeenCalledWith('agent', { quick_parse: false })
     composer.unmount()
   })
 
   it('REVERTS the echo when the write fails, so the row never lies', async () => {
     fetchConfig.mockResolvedValue({ agent: AGENT })
-    updateConfig.mockRejectedValue(new Error('disk full'))
+    updateConfigKeys.mockRejectedValue(new Error('disk full'))
     const composer = mount()
     await ensureQuickParseLoaded()
     composer.set.mockClear()
@@ -253,7 +251,7 @@ describe('setQuickParseEnabled', () => {
 
   it('reverts to the PREVIOUS value, not to a hardcoded off', async () => {
     fetchConfig.mockResolvedValue({ agent: { ...AGENT, quick_parse: true } })
-    updateConfig.mockRejectedValue(new Error('disk full'))
+    updateConfigKeys.mockRejectedValue(new Error('disk full'))
     const composer = mount()
     // Loaded, because that is the only way a user sees a lit switch to click: the
     // menu that draws it asks for the value as it opens.
@@ -268,7 +266,7 @@ describe('setQuickParseEnabled', () => {
   })
 
   it('does not throw at the caller when the write rejects', async () => {
-    updateConfig.mockRejectedValue(new Error('disk full'))
+    updateConfigKeys.mockRejectedValue(new Error('disk full'))
     const composer = mount()
     await flush()
     expect(() => setQuickParseEnabled(true)).not.toThrow()
@@ -302,7 +300,7 @@ describe('setQuickParseEnabled', () => {
     // looking at.
     fetchConfig.mockResolvedValue({ agent: AGENT })
     let failFirst: (e: Error) => void = () => {}
-    updateConfig.mockReturnValueOnce(new Promise((_, reject) => { failFirst = reject }))
+    updateConfigKeys.mockReturnValueOnce(new Promise((_, reject) => { failFirst = reject }))
     const composer = mount()
     await ensureQuickParseLoaded()
 

@@ -19,6 +19,7 @@
  */
 
 import { typedUserText } from '@open-walnut/history-injected-banner';
+import { sendUuidsOfRow } from '@/utils/send-uuids';
 
 /** Minimal shapes — structural, so the component's richer types just fit. */
 interface PersistedLike {
@@ -38,6 +39,8 @@ interface PersistedLike {
    *  uuid it was sent under: either one equals a bubble's pre-assigned userUuid. */
   msgId?: string;
   sourceUuid?: string;
+  /** The other sends Claude Code drained into this one line (its `mergedSendUuids`). */
+  mergedUuids?: readonly string[];
 }
 /** A stretch of the transcript missing from inside the loaded rows: the rows on
  *  either side of it, by the CLI's timestamps (history-gap.ts). */
@@ -85,18 +88,16 @@ export function uuidProves(m: OptimisticLike): boolean {
 }
 
 /**
- * The uuids history's user rows carry (the line's own uuid, or the uuid a line
- * taken mid-turn was sent under). A bubble whose userUuid is among them reached
- * the CLI, whatever its send RPC said: a send whose acknowledgement was lost
- * shows "Send failed" while its line and the answer are in history (2026-11-10).
+ * The uuids history's user rows carry (sendUuidsOfRow: the line's own uuid, the
+ * uuid a line taken mid-turn was sent under, and the sends merged into it). A
+ * bubble whose userUuid is among them reached the CLI, whatever its send RPC
+ * said: a send whose acknowledgement was lost shows "Send failed" while its line
+ * and the answer are in history (2026-11-10).
  */
 export function historyUuidsOf(messages: readonly PersistedLike[]): Map<string, number> {
   const at = new Map<string, number>();
   for (let i = 0; i < messages.length; i++) {
-    const m = messages[i];
-    if (m.role !== 'user') continue;
-    if (m.msgId && !at.has(m.msgId)) at.set(m.msgId, i);
-    if (m.sourceUuid && !at.has(m.sourceUuid)) at.set(m.sourceUuid, i);
+    for (const u of sendUuidsOfRow(messages[i])) if (!at.has(u)) at.set(u, i);
   }
   return at;
 }
@@ -253,14 +254,22 @@ export function dedupeOptimisticMessages<T extends OptimisticLike>(
   // the CLI), unless the server reported it undelivered (`uuidProves`).
   // Exact, so no window; the row is retired from the text multisets below so it
   // can never account for a second bubble with the same words.
+  // One uuid proves one bubble, but one row can prove several: a line Claude Code
+  // merged from several queued sends carries each of their uuids (`mergedUuids`).
+  // `uuidRowOf` keeps the row's index so pass 3 can extend a merged line to the
+  // bubbles around it whose uuid the line does not list (inc-1794638780357).
   const uuidRows = historyUuidsOf(messages);
   const uuidProven = new Set<number>();
   const uuidClaimed = new Set<number>();
+  const uuidTaken = new Set<string>();
+  const uuidRowOf = new Map<number, number>();
   for (const [i, m] of optimistic.entries()) {
     const row = uuidProves(m) ? uuidRows.get(m.userUuid!) : undefined;
-    if (row === undefined || uuidClaimed.has(row)) continue;
+    if (row === undefined || uuidTaken.has(m.userUuid!)) continue;
     uuidProven.add(i);
     uuidClaimed.add(row);
+    uuidTaken.add(m.userUuid!);
+    uuidRowOf.set(i, row);
   }
 
   const scanStart = dedupScanStart(prevMsgLen, messages.length);
@@ -411,37 +420,67 @@ export function dedupeOptimisticMessages<T extends OptimisticLike>(
   const SEPARATORS = ['\n', '\n\n'];
   const MAX_RUN = 8;
 
-  // Pass 3 — id-anchored run. The bound line IS the merged prompt, so reconstructing
-  // it exactly from [anchor, …following open bubbles] is server-grade proof for the
-  // whole run. This is the shape production actually produces; without it the batch's
-  // 2..N bubbles are orphaned forever.
+  // Pass 3 — anchored run. The bound line IS the merged prompt, so reconstructing
+  // it exactly from a contiguous run of open bubbles next to the anchor is
+  // server-grade proof for the whole run. Two anchors, each extended only the way
+  // its line is written:
+  //  - the echo-claim id: bindEchoClaims stamps qmIds[0], so the run FOLLOWS it;
+  //  - the line's uuid: Claude Code writes a merged line under its LAST send's uuid
+  //    (`mergedSendUuids` lists the others), so the run PRECEDES it. A row that
+  //    lists them proved every member by uuid already and is never extended; one
+  //    that does not (a parse or host daemon older than `mergedUuids`) proves the
+  //    bubbles before it by the join, never one after it: a send typed after the
+  //    line with the same words ("ok" after "ok\nok") is live and must stay.
+  // inc-1794638780357: the uuid proved the last bubble and retired the line, and
+  // the first stayed "Delivered ✓" under five later messages. Without this the
+  // batch's other bubbles are orphaned forever.
   //
   // It MUST still retire the line from the windowed multiset (`claimLine` below).
   // Skipping that looks harmless — the id already proved this batch — but it lets
   // pass 4 match the SAME persisted line again for a second, identical batch whose
   // messages are NOT in history yet, hiding live sends. Verified: with 1 merged line
   // and 2 identical 3-message batches on screen, all 6 bubbles disappeared instead
-  // of 3. One persisted line accounts for exactly one batch.
+  // of 3. One persisted line accounts for exactly one batch. (A uuid-claimed row is
+  // out of the multisets already.)
   const claimLine = (line: string, floorMs: number | undefined) => {
     // Only lines inside the index window, or dated at/after the anchor's enqueue,
     // are in a multiset. An id-bound line from elsewhere has no entry — nothing to
     // retire, and pass 4 can't reach it either.
     takeText(line, floorMs);
   };
+  const joinsTo = (a: number, b: number, line: string): boolean => {
+    const texts = optimistic.slice(a, b + 1).map(dedupKeyOf);
+    return SEPARATORS.some(sep => texts.join(sep).trim() === line);
+  };
   for (let i = 0; i < optimistic.length; i++) {
-    if (state[i] !== 'id') continue;
-    const raw = idLine[i];
-    const line = raw?.trim();
-    if (!line || !line.includes('\n')) continue; // single-message echo — nothing to extend
-    const texts = [dedupKeyOf(optimistic[i])];
-    for (let j = i + 1; j < optimistic.length && texts.length < MAX_RUN; j++) {
-      if (state[j] !== 'open') break; // contiguity: a proven bubble ends the run
-      texts.push(dedupKeyOf(optimistic[j]));
-      if (SEPARATORS.some(sep => texts.join(sep).trim() === line)) {
+    if (state[i] === 'id') {
+      const raw = idLine[i];
+      const line = raw?.trim();
+      if (!line || !line.includes('\n')) continue; // single-message echo — nothing to extend
+      for (let j = i + 1; j < optimistic.length && j - i < MAX_RUN; j++) {
+        if (state[j] !== 'open') break; // contiguity: a proven bubble ends the run
+        if (!joinsTo(i, j, line)) continue;
         for (let k = i + 1; k <= j; k++) state[k] = 'id';
         claimLine(raw as string, floorOf(optimistic[i])); // key the multiset by the RAW text, as built above
         break;
       }
+      continue;
+    }
+    const rowAt = state[i] === 'uuid' ? uuidRowOf.get(i) : undefined;
+    if (rowAt === undefined) continue;
+    const row = messages[rowAt];
+    if (row.mergedUuids?.length) continue; // every member named itself
+    const line = row.text.trim();
+    if (!line.includes('\n')) continue;
+    // Members were all enqueued before the CLI wrote the line.
+    const rowMs = tsMs(row.timestamp);
+    for (let a = i - 1; a >= 0 && i - a < MAX_RUN; a--) {
+      if (state[a] !== 'open') break;
+      const ms = floorOf(optimistic[a]);
+      if (rowMs !== undefined && ms !== undefined && ms > rowMs + BUBBLE_CLOCK_SLACK_MS) break;
+      if (!joinsTo(a, i, line)) continue;
+      for (let k = a; k < i; k++) state[k] = 'uuid';
+      break;
     }
   }
 

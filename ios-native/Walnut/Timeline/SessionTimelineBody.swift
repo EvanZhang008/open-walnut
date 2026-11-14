@@ -92,19 +92,11 @@ struct SessionTimelineBody: View {
     }
 
     /// Each bubble's state, by its id: Queued while its row waits to go in, Delivered for a
-    /// moment once the session has it (`SessionQueueModel.sendStates`).
+    /// moment once the session has it (`SessionQueueModel.bubbleStates`).
     private var bubbleStates: [String: QueuedSend.Status] {
         guard let queue else { return [:] }
-        let states = queue.sendStates
-        let rows = queueRowsByMessage
-        var out: [String: QueuedSend.Status] = [:]
-        for message in visibleMessages {
-            // A bubble the transcript absorbed carries its id as `walnutMessageId`.
-            guard let id = message.clientMessageId ?? message.walnutMessageId else { continue }
-            if let state = states[id] { out[message.id] = state }
-            else if let row = rows[id], row.status == "pending", !row.isDelivered { out[message.id] = .pending }
-        }
-        return out
+        return SessionQueueModel.bubbleStates(for: visibleMessages, sendStates: queue.sendStates,
+                                              rows: queueRowsByMessage)
     }
 
     /// A row from another device as a bubble: its typed words, matched to the transcript's

@@ -31,7 +31,7 @@ struct WalnutApp: App {
         // AppLog uploads never drive SwiftUI, and a crash report that waits for
         // an activation that may never come is a lost crash report.
         CrashReporter.shared.start()
-        // Tell iOS the App Shortcuts may have changed (an update added Dictate to Clipboard):
+        // Tell iOS the App Shortcuts may have changed (an update added or renamed one, such as Dictate):
         // it lists them in Shortcuts and the Action Button picker from its own index.
         WalnutShortcuts.updateAppShortcutParameters()
         // Cache device identity while the main thread is definitely alive —

@@ -93,6 +93,11 @@ final class SessionConversationStore {
     /// The server took this message id: the page follows it until the session has it, so its
     /// bubble reads Queued, then Delivered (`SessionQueueModel.watch`).
     @ObservationIgnored var onAccepted: ((String) -> Void)?
+    /// The messages the transcript holds now, by Walnut message id (`walnutMessageId` on its
+    /// rows), told whenever a read changes them: a followed send in it was taken by the
+    /// session, so its Queued ends even with no read of the line (`SessionQueueModel.noteInTranscript`).
+    @ObservationIgnored var onTranscriptShows: ((Set<String>) -> Void)?
+    @ObservationIgnored private var transcriptMessageIDs: Set<String> = []
     /// A tool call came after the live words: the next words start a new paragraph.
     @ObservationIgnored private var liveTextBreaksBeforeNext = false
     /// When each file send's progress was last written to its kept copy.
@@ -801,6 +806,11 @@ final class SessionConversationStore {
         // full-page invalidation. ChatMessage is Equatable.
         if next != historyMessages {
             historyMessages = next
+        }
+        let shownIDs = Set(next.lazy.compactMap(\.walnutMessageId))
+        if shownIDs != transcriptMessageIDs {
+            transcriptMessageIDs = shownIDs
+            onTranscriptShows?(shownIDs)
         }
         // A read DURING the turn holds the messages the session has finished so
         // far: what of them the runs or the live region still draw goes, so

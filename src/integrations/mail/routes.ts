@@ -21,6 +21,8 @@ import { registerMailSortRulesRoutes } from './routes-sort-rules.js'
 import { registerMailSortWriteRoutes } from './routes-sort-write.js'
 import { registerMailWriteRoutes } from './routes-write.js'
 import { registerMailInviteRoutes } from './routes-invite.js'
+import { registerMailAttachmentRoutes } from './routes-attachment.js'
+import { MailAttachments } from './attachments.js'
 import { MailInvites } from './invites.js'
 import { isGroupIdShape } from './sort-classify.js'
 import type { MailSortEngine } from './sort-engine.js'
@@ -70,6 +72,8 @@ import type { MailUnsubscribe } from './unsubscribe.js'
  *                                                          and 400s on any other scope value)
  * GET    /messages/:accountId/:messageId               -> { message, body, bodyError? }
  * POST   /messages/:accountId/:messageId/read { read } -> { ok: true, message } | 409 unsupported
+ * GET    /messages/:a/:m/attachments/:id[?download=1]  -> the attachment's bytes, streamed on a click
+ *                                                          (in routes-attachment.ts; never cached)
  * POST   /messages/:a/:m/unsubscribe { method?, confirm? } (in routes-write.ts: it makes network
  *                                                          egress, and one rung sends mail)
  * GET    /search?account=&q=&limit=                    -> { messages, source: 'provider'|'cache' }
@@ -444,6 +448,7 @@ export function registerMailRoutes(
   registerMailWriteRoutes(walnut, { service, drafts, approvals, sends, unsubscribe })
   // Meeting invites: the calendar read and the answer (an RSVP the organizer sees).
   registerMailInviteRoutes(walnut, { invites: new MailInvites({ service, log: walnut.log }) })
+  registerMailAttachmentRoutes(walnut, { attachments: new MailAttachments({ service }) })
   // Inbox sorting: reads (groups, senders, rules) and writes (bulk read, batch unsubscribe, rules).
   registerMailSortRoutes(walnut, { store, sort: deps.sort, providers, ...(deps.filters ? { filters: deps.filters } : {}) })
   registerMailSortRulesRoutes(walnut, { store, sort: deps.sort })

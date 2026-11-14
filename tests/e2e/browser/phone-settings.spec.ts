@@ -17,6 +17,7 @@ import { backToDevices, openWay } from './devices-ways-helpers'
 import { findSmallTargets, findSmallText } from './phone-helpers'
 import { isolateUiPrefsContext } from './status-section-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { putExactSection } from './config-section-helpers'
 
 test.setTimeout(240_000)
 
@@ -330,7 +331,7 @@ test.describe('a phone signed in through a tunnel', () => {
   test.afterAll(async ({ browser }) => {
     const context = await browser.newContext({ baseURL: test.info().project.use.baseURL })
     await context.request.put('/api/expose', { data: { enabled: false } }).catch(() => {})
-    await context.request.put('/api/config', { data: { expose: {} } }).catch(() => {})
+    await putExactSection(context.request, 'expose', {}).catch(() => {})
     await context.close()
   })
 

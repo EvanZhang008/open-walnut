@@ -113,7 +113,7 @@ describe('gh calls ride out GitHub\'s own errors', () => {
   const noSleep = () => {}
 
   it('a 502, a 429 or a dropped connection is tried again, then the answer is returned', () => {
-    for (const text of ['gh: Server Error (HTTP 502)', 'gh: HTTP 429: rate limited', 'read ECONNRESET']) {
+    for (const text of ['gh: Server Error (HTTP 502)', 'gh: HTTP 429: rate limited', 'read ECONNRESET', 'error connecting to api.github.com']) {
       let calls = 0
       const out = ghRetry(() => { if (++calls < 3) throw fail(text); return '{"jobs":[]}' }, ['api', 'x'], { sleep: noSleep })
       expect(out).toBe('{"jobs":[]}')

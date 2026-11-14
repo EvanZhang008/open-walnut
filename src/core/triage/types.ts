@@ -1,12 +1,18 @@
 /**
  * Inbox Triage type definitions.
  *
- * Triage reads a BATCH of new mail and Slack, decides what each item means for
+ * Triage reads a BATCH of new Slack messages, decides what each item means for
  * work the user already has, keeps the project tracking notes true, and asks the
  * user about anything that needs a decision. Every run is a NEW task + a NEW
  * session (the `claude-code` executor); the memory that carries across runs
  * lives in notes and in the agent's standing memory file, never in a long-lived
  * session — see docs and the `walnut-inbox-triage` skill.
+ *
+ * NO MAIL, since 2026-11-14 (Evan: "mailbox straight to the router... the router
+ * itself does the triage"). Every mailbox is bound to a mail router, which owns
+ * each new mail end to end (src/integrations/mail/router-intake.ts), so mail is
+ * not a source here: an old config's `'mail'` is ignored when read (config.ts), and
+ * mail rows an older build buffered are dropped when read (state.ts).
  *
  * A small config interface plus
  * DEFAULT_* constants, and the defaults live at the READER
@@ -15,20 +21,18 @@
  * key a real config.yaml already has is dropped.
  */
 
-/** Which inbox a batch may draw from. */
-export const TRIAGE_SOURCES = ['mail', 'slack'] as const;
+/** Which inbox a batch may draw from. Slack only: mail goes to the mail router (see above). */
+export const TRIAGE_SOURCES = ['slack'] as const;
 export type TriageSource = (typeof TRIAGE_SOURCES)[number];
 
 /**
  * How much a run may do on its own.
  *  - 'ask'    — only safe writes (notes, handing an item to the task that owns
- *               it); unsubscribing and every send / post go to the user as a
+ *               it); every other change and every post go to the user as a
  *               letter.
- *  - 'assist' — may also update existing tasks and one-click unsubscribe.
- *               Neither mode makes a task from an email: its letter item
- *               offers the user New task and Talk to CEO. Sending mail, posting to Slack and
- *               marking Slack read STILL need approval.
- * Marking mail read is `auto_mark_read`, a separate switch honoured in both.
+ *  - 'assist' — may also update existing tasks. Neither mode makes a task from a
+ *               message, and posting to Slack and marking Slack read STILL need
+ *               approval.
  */
 export const TRIAGE_MODES = ['ask', 'assist'] as const;
 export type TriageMode = (typeof TRIAGE_MODES)[number];
@@ -52,21 +56,14 @@ export interface TriageConfig {
   every_messages?: number;
 
   /**
-   * Which inboxes feed a batch. An ABSENT key means both; an explicitly EMPTY
-   * array means no event sources at all, which leaves the clock as the only
-   * trigger. Default: ['mail', 'slack'].
+   * Which inboxes feed a batch. An ABSENT key means Slack; a list is filtered to
+   * the known sources (an old `'mail'` is dropped), and a list left EMPTY runs no
+   * batch at all: the routine is turned off, so no task is made. Default: ['slack'].
    */
   sources?: TriageSource[];
 
   /** How much a run may do without asking. Default: 'ask'. */
   mode?: TriageMode;
-
-  /**
-   * Let a run (either mode) mark mail read when it is purely promotional or low
-   * importance, through `mail_mark_read`. Nothing deletes, archives or moves
-   * mail in any mode. Slack is never auto-marked. Default: false.
-   */
-  auto_mark_read?: boolean;
 
   /**
    * Only run inside this window — "HH:MM-HH:MM" in local time. An empty string
@@ -79,8 +76,8 @@ export interface TriageConfig {
 export const DEFAULT_TRIAGE_EVERY = '30m';
 
 /**
- * Floor for the batch interval. A triage run costs a whole session, reads two
- * inboxes and may write letters — five minutes is already aggressive, and a
+ * Floor for the batch interval. A triage run costs a whole session, reads an
+ * inbox and may write letters — five minutes is already aggressive, and a
  * typo'd "30s" would otherwise mint a session every half minute.
  */
 export const MIN_TRIAGE_EVERY_MS = 5 * 60_000;
@@ -89,7 +86,7 @@ export const MIN_TRIAGE_EVERY_MS = 5 * 60_000;
 export const DEFAULT_TRIAGE_EVERY_MESSAGES = 20;
 
 /** Default sources. */
-export const DEFAULT_TRIAGE_SOURCES: readonly TriageSource[] = ['mail', 'slack'];
+export const DEFAULT_TRIAGE_SOURCES: readonly TriageSource[] = ['slack'];
 
 /** Default mode. */
 export const DEFAULT_TRIAGE_MODE: TriageMode = 'ask';
@@ -122,7 +119,6 @@ export const TRIAGE_ACTION_TIMEOUT_SECONDS = 30;
  * moves the threshold by 14 rather than by 1.
  */
 export const TRIAGE_WAKE_EVENTS: Readonly<Record<TriageSource, string>> = {
-  mail: 'plugin:mail:messages-received',
   slack: 'plugin:slack:messages-received',
 };
 

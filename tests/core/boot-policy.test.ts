@@ -4,14 +4,14 @@
  * here from the expression the gate had before (docs/plan/walnut-replica-servers-impl.md,
  * section 2); the host replica column is the plan's OFF list. The companion's
  * truth comes from the one replica column plus its capabilities
- * (src/core/capabilities.ts), all four when it sets none; taking one away turns
- * off exactly the rows that name it (stage 5 of docs/plan/walnut-companion-unified-replica.md).
+ * (src/core/capabilities.ts), all of them when it sets none; taking one away turns
+ * off exactly the rows its manifest names (stage 5 of docs/plan/walnut-companion-unified-replica.md).
  */
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { BOOT_POLICY, bootPolicy, bootPolicyDecisions, jobsOfCapability, type BootJob, type BootRow } from '../../src/core/boot-policy.js'
-import { CAPABILITIES, defaultCapabilities, type Capability } from '../../src/core/capabilities.js'
+import { CAPABILITIES, capabilityOfJob, defaultCapabilities, type Capability } from '../../src/core/capabilities.js'
 import { listTsFiles } from '../helpers/cloud-mode-scan.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..')
@@ -75,7 +75,7 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'usage-collect': leaderOnly, // new: the leader reads every host's usage through its daemon
   'session-health-monitor': leaderOnly,
   'overview-maintainer': leaderOnly, // 4d: its project skill writes would land on the box's copy
-  'project-summary': always,
+  'project-summary': leaderOnly, // 2026-11-14: its summary landed on the box's copy of the project row
   'host-learning': leaderOnly, // new: host profiles are written on the Mac
   'routine-wake': always,
   // The server.ts gate was `always`, but startWorkspaceWatch returned at once on its own
@@ -183,7 +183,7 @@ const CAPABILITY_JOBS: Record<Capability, BootJob[]> = {
   'public-door': ['host-network-door', 'setup-token-banner', 'revoke-queue', 'expose-runtime', 'stt-auto-setup'],
   'bridge-door': ['companion-ingest-routes', 'git-maintenance'],
   'cloud-exec': ['cloud-exec', 'local-daemon', 'stream-file-cleanup', 'send-path-canary'],
-  'backup-leader': ['backup-leader', 'project-summary', 'routine-wake', 'cron'],
+  'backup-leader': ['backup-leader', 'routine-wake', 'cron'],
 }
 
 /** What the companion still runs on its own pipeline, and the stage that decides each. */
@@ -199,7 +199,7 @@ const without = (cap: Capability): ReadonlySet<Capability> => new Set(CAPABILITI
 describe('boot policy: one replica column plus capability rows', () => {
   it('each capability turns on the rows the plan names, and only those', () => {
     for (const cap of CAPABILITIES) expect(jobsOfCapability(cap), cap).toEqual(CAPABILITY_JOBS[cap])
-    const named = rows.filter((r) => r.capability !== undefined).map((r) => r.job).sort()
+    const named = rows.filter((r) => capabilityOfJob(r.job) !== undefined).map((r) => r.job).sort()
     expect(named).toEqual(Object.values(CAPABILITY_JOBS).flat().sort())
   })
 
@@ -212,15 +212,16 @@ describe('boot policy: one replica column plus capability rows', () => {
 
   it('a row is a capability row, a companion row or neither, and both are off in the replica column', () => {
     for (const r of rows) {
-      expect(r.capability !== undefined && r.companionUntil !== undefined, r.job).toBe(false)
-      if (r.capability !== undefined || r.companionUntil !== undefined) expect(r.replica, r.job).toBe(false)
+      const cap = capabilityOfJob(r.job)
+      expect(cap !== undefined && r.companionUntil !== undefined, r.job).toBe(false)
+      if (cap !== undefined || r.companionUntil !== undefined) expect(r.replica, r.job).toBe(false)
     }
   })
 
   it.each(CAPABILITIES.map((c) => [c] as const))('a companion without %s turns off exactly its rows', (cap) => {
     for (const r of rows) {
       const job = r.job as BootJob
-      const want = r.capability === cap ? false : OLD_TRUTH[job](true)
+      const want = capabilityOfJob(r.job) === cap ? false : OLD_TRUTH[job](true)
       expect(bootPolicy(job, 'cloud', without(cap)), `${cap}: ${job}`).toBe(want)
     }
   })

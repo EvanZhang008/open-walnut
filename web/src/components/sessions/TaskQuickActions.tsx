@@ -7,6 +7,8 @@
  */
 
 import { useState, useEffect, useRef, useCallback, lazy, Suspense, type ReactNode } from 'react';
+import { useYieldsToTaskOpen } from '@/hooks/useOpenTask';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { createPortal } from 'react-dom';
 import type { Task, TaskPhase, TaskPriority } from '@open-walnut/core';
 import { deleteTask, fetchTask, updateTask } from '@/api/tasks';
@@ -123,6 +125,9 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
   const [memoryOpen, setMemoryOpen] = useState(false);
   // The task's details where the host has no detail pane of its own (an Org node's chat).
   const [detailOpen, setDetailOpen] = useState(false);
+  const closeDetail = useLeanCallback(() => setDetailOpen(false), []);
+  // A task opened from inside it (a pill in its words) goes to Home: the details give way.
+  useYieldsToTaskOpen(closeDetail, detailOpen);
   /** Set only by the right-click path, which anchors the menu at the cursor. */
   const [cursorAnchor, setCursorAnchor] = useState<{ x: number; y: number } | null>(null);
   const kebabBtnRef = useRef<HTMLButtonElement>(null);
@@ -495,7 +500,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
         document.body,
       )}
       {memoryOpen && task && <AgentMemoryPanel task={task} onClose={() => setMemoryOpen(false)} />}
-      {detailOpen && task && <Suspense fallback={null}><OutsideTaskDetail task={task} onClose={() => setDetailOpen(false)} /></Suspense>}
+      {detailOpen && task && <Suspense fallback={null}><OutsideTaskDetail task={task} onClose={closeDetail} /></Suspense>}
     </div>
   );
 }

@@ -38,7 +38,6 @@ vi.mock('@/contexts/notifications', () => ({ formatRelative: () => 'just now' })
 vi.mock('@/api/human-inbox', () => ({ answeredByName: () => 'A task' }))
 
 import { LetterThread } from '../../web/src/components/inbox/LetterThread'
-import { taskPath } from '../../web/src/utils/task-path'
 
 const SENDER = { host: 'devbox', sessionId: 'sender-sid' }
 const turn = (over: Props) => ({ at: 1, text: 'see /home/me/a.ts', body: '# see /home/me/a.ts', bodyFormat: 'markdown', ...over })
@@ -79,8 +78,8 @@ describe('a letter turn opens its paths on the host of whoever wrote it', () => 
     const text = h.agentText[0]!
     expect(text).toMatchObject({ host: undefined, sessionId: undefined, unknownSource: true })
     expect(text.onClick).not.toBe(onBodyClick)
-    expect(text.onClick.args[2]).toBe(h.peerOpen)
-    expect(text.onClick.args[5]).toBe(true)
+    expect(text.onClick.args[1]).toBe(h.peerOpen)
+    expect(text.onClick.args[4]).toBe(true)
     expect(h.letterBody[0]).toMatchObject({ source: { unknownSource: true } })
     expect(h.letterBody[0]!.onClick).toBe(text.onClick)
     expect(h.letterBody[0]!.onRefOpen).not.toBe(onRefOpen)
@@ -122,13 +121,12 @@ describe('a letter turn opens its paths on the host of whoever wrote it', () => 
     expect(text).toMatchObject({ sessionId: 'peer-sid', host: undefined })
     // Plain and rich share one click handler, built on the peer's opener.
     expect(text.onClick).not.toBe(onBodyClick)
-    expect(text.onClick.args[2]).toBe(h.peerOpen)
+    expect(text.onClick.args[1]).toBe(h.peerOpen)
     expect(h.letterBody[0]!.onClick).toBe(text.onClick)
     expect(h.letterBody[0]).toMatchObject({ source: { sessionId: 'peer-sid' } })
-    // The shared handler keeps the letter's task and session navigation.
-    text.onClick.args[0]('t1')
-    text.onClick.args[1]('s9')
-    expect(onNavigate.mock.calls).toEqual([[taskPath('t1')], ['/sessions?id=s9']])
+    // The shared handler keeps the letter's session navigation; a task pill is the one task open.
+    text.onClick.args[0]('s9')
+    expect(onNavigate.mock.calls).toEqual([['/sessions?id=s9']])
   })
 
   it("a peer turn's HTML references: a file goes to the peer's opener, the rest open as before", async () => {

@@ -20,17 +20,19 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Config } from './types.js'
 import { underTestRunner } from '../lib/real-ssh-guard.js'
+import { CONFIG_HISTORY_DIR_NAME } from './config-history-name.js'
 
 /**
  * What only a used data home holds. An empty config alone does not make a fresh install:
  * a config.yaml that was lost or emptied (and its backup with it) reads as `{}` too, and that
  * person's work is still there (2026-11-11 reviews). Files, and directories that count once
  * they hold anything (boot makes some of them empty before the config is seeded).
+ * config.yaml.history (core/config-history.ts) holds dated copies of a config Walnut wrote.
  */
 export const USED_HOME_MARKERS = [
   'config.yaml.bak', 'tasks/tasks.json', 'sessions.json', 'sessions.sqlite', 'chat-history.json', 'cron-jobs.json',
 ] as const
-export const USED_HOME_DIRS = ['notes', 'boards', 'human-inbox', 'tasks/archive', 'memory/sessions'] as const
+export const USED_HOME_DIRS = ['notes', 'boards', 'human-inbox', 'tasks/archive', 'memory/sessions', CONFIG_HISTORY_DIR_NAME] as const
 
 /** Does this data home already hold someone's work (a marker file, or a marker dir with anything in it)? */
 export async function homeHoldsWork(home: string): Promise<boolean> {

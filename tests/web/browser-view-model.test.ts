@@ -162,3 +162,31 @@ describe('a covered window, by what the extension says of live pictures', () => 
     }
   })
 })
+
+describe('the Browser replay\'s words (SessionBrowserReplay.tsx)', () => {
+  it('shows a step\'s own picture, else the last earlier one, else none', async () => {
+    const { pictureIndex } = await import('../../web/src/components/sessions/browser-view-model')
+    const steps = [{ picture: false }, { picture: true }, { picture: false }, { picture: false }, { picture: true }]
+    expect(pictureIndex(steps, 0)).toBe(-1)
+    expect(pictureIndex(steps, 1)).toBe(1)
+    expect(pictureIndex(steps, 3)).toBe(1)
+    expect(pictureIndex(steps, 4)).toBe(4)
+    expect(pictureIndex(steps, 99)).toBe(4)
+    expect(pictureIndex([], 0)).toBe(-1)
+  })
+
+  it('gives a step\'s time, with its day when it was not today', async () => {
+    const { replayTimeLine } = await import('../../web/src/components/sessions/browser-view-model')
+    const now = new Date(2026, 10, 14, 15, 0, 0).getTime()
+    expect(replayTimeLine(new Date(2026, 10, 14, 14, 3, 22).toISOString(), now)).toMatch(/14|2/)
+    expect(replayTimeLine(new Date(2026, 10, 14, 14, 3, 22).toISOString(), now)).not.toMatch(/Nov/)
+    expect(replayTimeLine(new Date(2026, 10, 12, 9, 0, 0).toISOString(), now)).toMatch(/Nov/)
+    expect(replayTimeLine('not a time', now)).toBe('')
+  })
+
+  it('the pill offers the replay once no tab is left (SessionBrowserChip.tsx)', async () => {
+    const { REPLAY_LOOK, browserChipLook } = await import('../../web/src/components/sessions/SessionBrowserChip')
+    expect(browserChipLook([])).toBeNull()
+    expect(REPLAY_LOOK).toMatchObject({ label: 'Replay', tone: 'ended' })
+  })
+})

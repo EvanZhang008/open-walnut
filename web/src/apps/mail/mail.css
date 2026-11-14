@@ -1491,7 +1491,7 @@
 }
 .mail-route-mark[data-route-status='routed'] { background: var(--success); opacity: 1; }
 .mail-route-mark[data-route-status='routing'] { background: var(--accent); opacity: 1; }
-.mail-route-mark[data-route-status='confirmed'] { background: var(--accent); opacity: 0.6; }
+.mail-route-mark[data-route-status='queued'] { background: var(--accent); opacity: 0.6; }
 .mail-route-mark[data-route-status='failed'] { background: var(--error); opacity: 1; }
 .mail-route-mark[data-route-status='unknown'] { background: var(--warning); opacity: 1; }
 
@@ -1540,32 +1540,13 @@
 .mail-route[data-route-status='failed'] .mail-route-lead { color: var(--error); }
 .mail-route[data-route-status='unknown'] .mail-route-lead { color: var(--warning); }
 
-/* The reader's inline area choice for a message with no routing record (MailRouterAssignment). */
-.mail-router-assign { margin: 4px 0 0; font-size: 12px; color: var(--fg-secondary); }
-/* Under the route line's words (6px mark + 4px gap), so the note reads as part of that line. */
-.mail-router-assign.is-confirmed { color: var(--fg-secondary); padding-left: 10px; }
-/* The reader's line foot: the scope note and the next step on one row under the line's words. */
+/* The reader's line foot: the next step on one row under the line's words (6px mark + 4px gap). */
 .mail-route-foot { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; margin: 2px 0 0; padding-left: 10px; font-size: 12px; }
-.mail-route-foot > .mail-router-assign { margin: 0; padding-left: 0; }
-.mail-route-foot > .mail-router-assign.is-open { flex-basis: 100%; margin: 4px 0 0 -10px; }
-.mail-router-assign.is-open {
-  display: flex; flex-direction: column; gap: 6px; max-width: 520px; padding: 8px 10px;
-  border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
-}
-.mail-router-choose,
 .mail-router-link {
   padding: 0; border: none; background: none; font: inherit; color: var(--accent); cursor: pointer;
 }
-.mail-router-choose:hover,
 .mail-router-link:hover { text-decoration: underline; }
-.mail-router-choose:focus-visible,
 .mail-router-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 2px; }
-.mail-router-note { margin: 0; color: var(--fg-muted); }
-.mail-router-error { margin: 0; color: var(--error); }
-.mail-router-areas { margin: 0; padding: 4px 0 0; border: none; min-width: 0; }
-.mail-router-areas legend { padding: 0; font-weight: 600; color: var(--fg); }
-.mail-router-area { display: flex; align-items: center; gap: 6px; padding: 2px 0; color: var(--fg); }
-.mail-router-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
 /* The Routers group (MailRouterRows.tsx): each area's router, the task its mail goes to first, with
    its live state. The same row face as a folder, a status dot where a folder has its glyph, and its

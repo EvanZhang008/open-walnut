@@ -11,10 +11,14 @@
  */
 import { WALNUT_HOME } from '../../constants.js';
 import {
-  accountBinding, activeRouter, allAreaItems, readRouterAreas, updateRouterAreas, ROUTER_CANONICAL_KEY_MAX,
+  accountBinding, allAreaItems, readRouterAreas, updateRouterAreas, ROUTER_CANONICAL_KEY_MAX,
   type RouterArea, type RouterAreasFile,
 } from './areas.js';
 import type { RouterItem, RouterSource, RouterSourceKind } from './types.js';
+import type { LetterRecord } from '../human-inbox/types.js';
+import type { StillNeededContext } from '../human-inbox/walnut-letters/kind.js';
+import { letterOpKey } from '../human-inbox/walnut-letters/kind.js';
+import { MAIL_NO_ROUTER, mailNoRouterSettled, type MailNoRouterParams } from '../human-inbox/walnut-letters/mail-no-router.js';
 
 /** The area the plugin makes when the person has no router area yet. */
 export const ACCOUNT_ROUTER_AREA = { id: 'mail', name: 'Mail', router: 'Mail router' } as const;
@@ -66,28 +70,36 @@ async function defaultCreateRouter(kind: RouterSourceKind, account: string): Pro
 
 /**
  * The one area this account's arrivals belong to: where the kind's other accounts are bound, else the
- * one local area with an open router that takes this kind (no source yet, or one of this kind).
- * Several candidates are the person's choice, so nothing is bound.
+ * one local area with an open router that takes this kind, else the Mail router's own area. Never
+ * left for later (2026-11-14: every mailbox goes straight to a router, nothing else reads its mail):
+ * with no such area, 'none' makes the Mail router. A Mail area whose router is closed is the person's
+ * choice ('choose'): the mailbox stays unbound, and its new mail waits in the mail intake's pending
+ * queue while one letter tells the person (src/integrations/mail/router-intake.ts).
  */
 async function pickArea(file: RouterAreasFile, kind: RouterSourceKind, routerOpen: (id: string) => Promise<boolean>): Promise<RouterArea | 'none' | 'choose'> {
+  const openRouter = async (area: RouterArea) => {
+    for (const router of file.routers.filter((one) => one.areaId === area.id && area.taskIds.includes(one.taskId))) {
+      if (await routerOpen(router.taskId)) return true;
+    }
+    return false;
+  };
   const boundAreas = new Set((file.accountBindings ?? []).filter((one) => one.kind === kind).map((one) => one.areaId));
   if (boundAreas.size === 1) {
     const area = file.areas.find((one) => one.id === [...boundAreas][0]);
-    if (area) return area;
+    if (area && await openRouter(area)) return area;
   }
-  if (boundAreas.size > 1) return 'choose';
   const candidates: RouterArea[] = [];
   for (const area of file.areas) {
     if (area.host !== '__local__') continue;
     if (area.sources.length && !area.sources.some((one) => one.kind === kind)) continue;
-    const routers = file.routers.filter((one) => one.areaId === area.id && area.taskIds.includes(one.taskId));
-    let open = false;
-    for (const router of routers) if (await routerOpen(router.taskId)) { open = true; break; }
-    if (open) candidates.push(area);
+    if (await openRouter(area)) candidates.push(area);
   }
-  if (candidates.length === 1) return candidates[0];
-  if (candidates.length === 0 && file.areas.length === 0) return 'none';
-  return 'choose';
+  if (boundAreas.size === 0 && candidates.length === 1) return candidates[0];
+  // Several routers could take it, or none: the Mail router's own area takes the rest.
+  const mail = file.areas.find((one) => one.id === ACCOUNT_ROUTER_AREA.id);
+  if (mail && await openRouter(mail)) return mail;
+  if (mail) return 'choose';
+  return 'none';
 }
 
 let chain: Promise<unknown> = Promise.resolve();
@@ -133,6 +145,69 @@ async function ensureOne(kind: RouterSourceKind, account: string, deps: AccountR
   return { bound: true, areaId: binding.areaId, created, already: false };
 }
 
+/** The area's router assignment, paused or not. */
+const areaRouter = (file: RouterAreasFile, areaId: string) => {
+  const area = file.areas.find((one) => one.id === areaId);
+  return area ? file.routers.find((one) => one.areaId === areaId && area.taskIds.includes(one.taskId)) : undefined;
+};
+
+/**
+ * Who reads an account's new arrivals now: `open` its area's router task is open (paused counts:
+ * the person paused it, and its items wait for the resume); `closed` the area has a router whose
+ * task is complete or gone, so its arrivals are listed but nobody is woken for them; `none` the
+ * account is bound to no area, or its area has no router, so nothing can take them at all.
+ */
+export type AccountRouterState = 'open' | 'closed' | 'none';
+
+export async function accountRouterState(
+  file: RouterAreasFile, kind: RouterSourceKind, account: string, routerOpen: (taskId: string) => Promise<boolean> = defaultRouterOpen,
+): Promise<AccountRouterState> {
+  const binding = accountBinding(file, kind, account);
+  const area = binding ? file.areas.find((one) => one.id === binding.areaId) : undefined;
+  if (!area) return 'none';
+  const routers = file.routers.filter((one) => one.areaId === area.id && area.taskIds.includes(one.taskId));
+  if (routers.length === 0) return 'none';
+  for (const router of routers) if (await routerOpen(router.taskId)) return 'open';
+  return 'closed';
+}
+
+/** The letter's op key for one episode of an account no router reads (see MAIL_NO_ROUTER). */
+export function noRouterLetterOpKey(account: string, since: number): string {
+  return letterOpKey(MAIL_NO_ROUTER.id, account, String(since));
+}
+
+/**
+ * Tells the person, once per episode (`opKey`), that the new mail of `mailbox` is not being read by
+ * any router. Never on a replica, in a test run, or with the automatic router off.
+ */
+export async function sendNoRouterLetter(params: MailNoRouterParams, opKey: string): Promise<boolean> {
+  if (await gate()) return false;
+  const [{ sendLetterOnce }, { walnutLetterLanguage }] = await Promise.all([
+    import('../human-inbox/store.js'), import('../human-inbox/walnut-letters/languages.js'),
+  ]);
+  const { subject, markdown } = MAIL_NO_ROUTER.render(await walnutLetterLanguage(), params);
+  await sendLetterOnce({ subject, type: 'review', markdown, sender: { sessionId: 'external', host: 'local' } }, { opKey });
+  return true;
+}
+
+/** The account a MAIL_NO_ROUTER letter is about, from its op key. */
+export function noRouterLetterAccount(letter: Pick<LetterRecord, 'createdByOp'>): string | undefined {
+  const [id, account] = (letter.createdByOp ?? '').split(':');
+  if (id !== MAIL_NO_ROUTER.id || !account) return undefined;
+  try { return decodeURIComponent(account); } catch { return undefined; }
+}
+
+/** MAIL_NO_ROUTER's stillNeeded check: settled once the mailbox has an open router again. */
+export async function noRouterLetterSettleReason(letter: LetterRecord, ctx: StillNeededContext, home = WALNUT_HOME): Promise<string | null> {
+  const account = noRouterLetterAccount(letter);
+  if (!account) return null;
+  const open = async (taskId: string) => {
+    const task = await ctx.task(taskId);
+    return !!task && task.id === taskId && task.org_role === 'router' && task.phase !== 'COMPLETE';
+  };
+  return await accountRouterState(await readRouterAreas(home), 'mail', account, open) === 'open' ? mailNoRouterSettled(ctx.lang) : null;
+}
+
 const sameSource = (a: RouterSource, b: RouterSource) => a.kind === b.kind && a.account === b.account && a.message === b.message
   && (a.version ?? '') === (b.version ?? '');
 
@@ -142,13 +217,22 @@ function heldElsewhere(file: RouterAreasFile, source: RouterSource, areaId: stri
     && (one.canonicalKey === canonicalKey || one.source.message === source.message));
 }
 
+/** The Message-ID a mail item's canonical key names (["mail", account, "rfc", id]); undefined for a key by cache id. */
+export function rfcIdOf(canonicalKey: string | undefined): string | undefined {
+  if (!canonicalKey) return undefined;
+  try {
+    const parts: unknown = JSON.parse(canonicalKey);
+    return Array.isArray(parts) && parts[0] === 'mail' && parts[2] === 'rfc' && typeof parts[3] === 'string' && parts[3] ? parts[3] : undefined;
+  } catch { return undefined; }
+}
+
 const usableKey = (key: unknown): key is string => typeof key === 'string' && !!key && key.length <= ROUTER_CANONICAL_KEY_MAX
   && !/[\u0000-\u001f\u007f]/.test(key);
 
 /**
  * Enters each exact new arrival of a bound account with an active router as an open item of its
  * area, under the areas lock with the live cache. Returns the sources this call wrote; one already
- * listed, held by another area, no longer current or of an account with no active router is not among them.
+ * listed, held by another area, no longer current or of an account with no router is not among them.
  */
 export async function confirmAccountArrivals(sources: readonly RouterSource[], home = WALNUT_HOME, deps: AccountArrivalDeps = {}): Promise<readonly RouterSource[]> {
   if (sources.length === 0) return [];
@@ -157,7 +241,8 @@ export async function confirmAccountArrivals(sources: readonly RouterSource[], h
   const before = await readRouterAreas(home);
   const routed = (file: RouterAreasFile, source: RouterSource) => {
     const binding = accountBinding(file, source.kind, source.account);
-    return binding && activeRouter(file, binding.areaId) ? binding.areaId : undefined;
+    // A paused router keeps its mail: the wake hands it over once the person resumes it.
+    return binding && areaRouter(file, binding.areaId) ? binding.areaId : undefined;
   };
   const asked = sources.filter((one) => !!one.message && (one.kind !== 'mail' || !!one.version) && routed(before, one)
     && !allAreaItems(before).some((item) => sameSource(item.source, one)));
@@ -190,6 +275,11 @@ export async function confirmAccountArrivals(sources: readonly RouterSource[], h
       // One decision per mail: another folder's copy of a message this area already lists (a label's copy) is not new.
       if (allAreaItems(file).some((item) => item.areaId === areaId && item.source.kind === one.source.kind
         && item.source.account === one.source.account && item.canonicalKey === one.canonicalKey)) continue;
+      // One decision per mail across mailboxes too: a mail sent to two of the person's addresses (or
+      // to one that forwards to another) arrives once in each, under one Message-ID.
+      const message = rfcIdOf(one.canonicalKey);
+      if (message && allAreaItems(file).some((item) => item.areaId === areaId && item.source.kind === one.source.kind
+        && item.source.account !== one.source.account && rfcIdOf(item.canonicalKey) === message)) continue;
       file.openItems = [...(file.openItems ?? []), { source: { ...one.source }, areaId, canonicalKey: one.canonicalKey }];
       entered.push({ ...one.source });
     }

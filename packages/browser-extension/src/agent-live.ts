@@ -125,7 +125,7 @@ export async function liveState(tabId: number, now = Date.now()): Promise<LiveSt
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-async function take(tabId: number, by: string, o: { format: 'jpeg' | 'png'; quality?: number }, still: () => boolean = () => true): Promise<string> {
+async function take(tabId: number, by: string, o: { format: 'jpeg' | 'png'; quality?: number }, still: () => boolean = () => true, quiet = false): Promise<string> {
   listen()
   try {
     const send = await acquireDebugger(more.debugger!, tabId, by)
@@ -150,7 +150,7 @@ async function take(tabId: number, by: string, o: { format: 'jpeg' | 'png'; qual
     return `data:image/${o.format};base64,${r.data}`
   } catch (err) {
     // Ended meanwhile (the attach landed late, or the stream let go while the picture was drawn): no failure of the page.
-    if (!(err instanceof Superseded) && still()) failedAt.set(tabId, { at: Date.now(), why: err instanceof CdpError && err.code === 'debugger_busy' ? 'devtools' : 'failed' })
+    if (!(err instanceof Superseded) && still() && !quiet) failedAt.set(tabId, { at: Date.now(), why: err instanceof CdpError && err.code === 'debugger_busy' ? 'devtools' : 'failed' })
     throw err
   }
 }
@@ -190,6 +190,11 @@ export async function endLive(tabId: number): Promise<void> {
  * full page takes several) and let go by endShot.
  */
 export const liveShot = (tabId: number, o: { format: 'jpeg' | 'png'; quality?: number }): Promise<string> => take(tabId, 'shot', o)
+/**
+ * The Browser replay's picture of a step (agent-replay.ts): the screenshot's way, but a failure is
+ * not remembered, so an agent's own screenshot and the live view never wait out its backoff.
+ */
+export const replayShot = (tabId: number, o: { format: 'jpeg' | 'png'; quality?: number }): Promise<string> => take(tabId, 'shot', o, () => true, true)
 
 /**
  * The screenshot is done: its hold goes, lingering a while as an agent's step does (cdp.ts

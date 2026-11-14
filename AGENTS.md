@@ -206,8 +206,11 @@ commands (`daemon-capabilities.ts`). Detail and the path resolver's rules:
 A server is the leader (the Mac) or a replica; the companion is a replica that turns on
 capabilities (`src/core/capabilities.ts`). Never ask "am I the companion" in a feature or a client
 (no new `WALNUT_CLOUD_MODE`, `isCompanion()`, `placement() === 'cloud'`): ask `isFollower()` / `role()`,
-`leaderAnswers()` or `hasCapability(<name>)`; a new feature of one box is a new capability. Ratchet:
-`tests/core/companion-is-a-replica-ratchet.test.ts` (counts only fall). Detail:
+`leaderAnswers()` or `hasCapability(<name>)`; a new feature of one box is a new capability: one manifest
+in `src/core/capabilities/` naming its jobs, every way in (socket doors, HTTP routes outside `/api`) with
+the credential each takes, and every file that reads it; a new one is off until a box names it
+(`tests/core/capability-manifests.test.ts`). Ratchet:
+`tests/core/companion-is-a-replica-ratchet.test.ts` (counts only fall). Detail and how to add one:
 `docs/reference/session-daemon.md`.
 
 ### Remote Session Daemon (resilience model)

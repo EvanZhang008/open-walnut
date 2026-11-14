@@ -85,21 +85,31 @@ describe('updateConfig', () => {
     expect(result.user.name).toBe('New User');
   });
 
-  it('replaces a top-level key entirely (not deep merge)', async () => {
+  it('merges a section one level deep: keys left out are kept, null or undefined removes one', async () => {
     const initial = {
       version: 1,
-      defaults: { priority: 'none', project: 'Personal' },
+      defaults: { priority: 'none', project: 'Personal', platform: 'local' },
+      session: { reply_language: 'en', turn_retry: { max: 3, delay_s: 5 } },
     };
     await fs.writeFile(CONFIG_FILE, yaml.dump(initial), 'utf-8');
 
-    // Send defaults with only priority — project should be gone (top-level key replacement)
-    await updateConfig({ defaults: { priority: 'immediate' } } as any);
+    await updateConfig({ defaults: { priority: 'immediate', platform: undefined } } as any);
+    await updateConfig({ session: { reply_language: null, turn_retry: { max: 1 } } } as any);
 
-    const raw = await fs.readFile(CONFIG_FILE, 'utf-8');
-    const result = yaml.load(raw) as any;
+    const result = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as any;
+    expect(result.defaults).toEqual({ priority: 'immediate', project: 'Personal' });
+    // An object below the first level is replaced whole.
+    expect(result.session).toEqual({ turn_retry: { max: 1 } });
+  });
 
-    expect(result.defaults.priority).toBe('immediate');
-    expect(result.defaults.project).toBeUndefined();
+  it('replaces a map of named entries: a host left out is removed', async () => {
+    const initial = { version: 1, hosts: { a: { hostname: 'a' }, b: { hostname: 'b' } } };
+    await fs.writeFile(CONFIG_FILE, yaml.dump(initial), 'utf-8');
+
+    await updateConfig({ hosts: { a: { hostname: 'a2' } } } as any);
+
+    const result = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as any;
+    expect(result.hosts).toEqual({ a: { hostname: 'a2' } });
   });
 
   it('does not write undefined values', async () => {

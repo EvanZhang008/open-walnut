@@ -11,7 +11,7 @@ import { mayShareTaskContext, type ContextSharingDeps } from '../../src/core/rou
 type FakeTask = { id: string; router_area_id?: string; org_role?: string };
 const h = {
   tasks: new Map<string, FakeTask>(),
-  sessions: new Map<string, Array<{ profile?: { areaId?: string } }>>(),
+  sessions: new Map<string, Array<{ profile?: { areaId?: string; areaRole?: string } }>>(),
   areas: null as unknown as RouterAreasFile,
   broken: false,
   sessionsBroken: new Set<string>(),
@@ -41,27 +41,51 @@ const deps: ContextSharingDeps = {
 };
 
 const share = (from: string, to: string | undefined) => mayShareTaskContext(from, to, deps);
-const profile = (taskId: string, ...areaIds: string[]) => h.sessions.set(taskId, areaIds.map((areaId) => ({ profile: { areaId } })));
+const profile = (taskId: string, areaRole: string | undefined, ...areaIds: string[]) =>
+  h.sessions.set(taskId, areaIds.map((areaId) => ({ profile: { areaId, ...(areaRole ? { areaRole } : {}) } })));
 
+// Since 2026-11-14 only a router is scoped: the work it hands items to is ordinary work, whatever
+// an older build marked on it (router_area_id, area membership, a 'work' session profile).
 beforeEach(() => {
   h.tasks.clear(); h.sessions.clear(); h.sessionsBroken.clear();
   h.broken = false; h.areaHomes.length = 0; h.taskReads.length = 0; h.sessionReads.length = 0;
-  for (const id of ['plain', 'plain2', 'personal', 'personal2', 'work']) h.tasks.set(id, { id });
-  h.tasks.get('personal')!.router_area_id = 'personal';
-  h.tasks.get('personal2')!.router_area_id = 'personal';
-  h.tasks.get('work')!.router_area_id = 'work';
-  h.areas = { version: 1, routers: [], items: [], areas: ['personal', 'work'].map((id) => ({ id, name: id,
-    host: '__local__', sources: [], taskIds: id === 'personal' ? ['personal', 'personal2'] : ['work'] })) } satisfies RouterAreasFile;
+  for (const id of ['plain', 'plain2', 'marked']) h.tasks.set(id, { id });
+  h.tasks.get('marked')!.router_area_id = 'personal';
+  h.tasks.set('rp', { id: 'rp', org_role: 'router' });
+  h.tasks.set('rw', { id: 'rw', org_role: 'router' });
+  h.areas = {
+    version: 1, items: [],
+    routers: [{ taskId: 'rp', areaId: 'personal', paused: false }, { taskId: 'rw', areaId: 'work', paused: false }],
+    areas: ['personal', 'work'].map((id) => ({ id, name: id, host: '__local__', sources: [],
+      taskIds: id === 'personal' ? ['rp', 'marked'] : ['rw'] })),
+  } satisfies RouterAreasFile;
 });
 
-describe('context sharing across incoming-item areas', () => {
-  it('allows the same confirmed scope and ordinary work, never a cross-area or area-to-ordinary copy', async () => {
+describe('context sharing around routers', () => {
+  it('lets ordinary work share freely, a router keep to itself, and two routers never share', async () => {
     expect(await share('plain', 'plain2')).toBe(true);
-    expect(await share('personal', 'personal2')).toBe(true);
     expect(await share('plain', undefined)).toBe(true);
-    for (const pair of [['personal', 'work'], ['personal', 'plain'], ['plain', 'personal']]) {
+    expect(await share('rp', 'rp')).toBe(true);
+    for (const pair of [['rp', 'plain'], ['plain', 'rp'], ['rp', 'rw'], ['rw', 'rp']]) {
       expect(await share(pair[0]!, pair[1]!)).toBe(false);
     }
+    expect(await share('rp', undefined)).toBe(false);
+  });
+
+  it('treats work an older build marked and listed in an area as ordinary work', async () => {
+    expect(await share('marked', 'plain')).toBe(true);
+    expect(await share('plain', 'marked')).toBe(true);
+    expect(await share('marked', undefined)).toBe(true);
+    expect(await share('marked', 'rp')).toBe(false);
+    expect(await share('rp', 'marked')).toBe(false);
+  });
+
+  it('ignores a legacy work session profile and a profile with no role', async () => {
+    profile('plain', 'work', 'personal');
+    expect(await share('plain', 'plain2')).toBe(true);
+    expect(await share('plain2', 'plain')).toBe(true);
+    profile('plain', undefined, 'personal');
+    expect(await share('plain', undefined)).toBe(true);
   });
 
   it('reads the registry from the data home and the task and sessions of both sides', async () => {
@@ -71,17 +95,9 @@ describe('context sharing across incoming-item areas', () => {
     expect([...h.sessionReads].sort()).toEqual(['plain', 'plain2']);
   });
 
-  it('does not lose a persisted mark while the registry is partially saved', async () => {
-    h.areas.areas = [];
-    expect(await share('personal', 'plain')).toBe(false);
-    expect(await share('personal', 'work')).toBe(false);
-    expect(await share('personal', 'personal2')).toBe(true);
-  });
-
   it('withholds everything on a broken registry, ordinary work included', async () => {
     h.broken = true;
-    expect(await share('personal', 'work')).toBe(false);
-    expect(await share('personal', 'personal2')).toBe(false);
+    expect(await share('rp', 'rp')).toBe(false);
     expect(await share('plain', 'plain2')).toBe(false);
     expect(await share('plain', undefined)).toBe(false);
   });
@@ -107,57 +123,39 @@ describe('context sharing across incoming-item areas', () => {
     expect(await share('plain', undefined)).toBe(true);
   });
 
-  it('counts an area held only by a session profile, in both directions', async () => {
-    profile('plain', 'personal');
+  it('counts a router session profile, in both directions', async () => {
+    profile('plain', 'router', 'personal');
     expect(await share('plain', 'plain2')).toBe(false);
     expect(await share('plain2', 'plain')).toBe(false);
     expect(await share('plain', undefined)).toBe(false);
-    expect(await share('plain', 'work')).toBe(false);
-    expect(await share('plain', 'personal')).toBe(true);
-    expect(await share('personal2', 'plain')).toBe(true);
+    expect(await share('plain', 'rw')).toBe(false);
+    expect(await share('plain', 'rp')).toBe(true);
+    expect(await share('rp', 'plain')).toBe(true);
   });
 
-  it('withholds a profile that conflicts with the task\'s mark', async () => {
-    profile('personal', 'work');
-    expect(await share('personal', 'personal2')).toBe(false);
-    expect(await share('personal', 'work')).toBe(false);
-    expect(await share('work', 'personal')).toBe(false);
-    expect(await share('personal', 'plain')).toBe(false);
-  });
-
-  it('withholds a task whose sessions hold two areas, and keeps one held twice', async () => {
-    profile('plain', 'personal', 'work');
-    expect(await share('plain', 'personal')).toBe(false);
-    expect(await share('plain', 'work')).toBe(false);
-    expect(await share('plain2', 'plain')).toBe(false);
-    profile('plain', 'work', 'work');
-    expect(await share('plain', 'work')).toBe(true);
+  it('withholds a task whose router sessions hold two areas, and keeps one held twice', async () => {
+    profile('plain', 'router', 'personal', 'work');
+    expect(await share('plain', 'rp')).toBe(false);
+    expect(await share('plain', 'rw')).toBe(false);
+    profile('plain', 'router', 'work', 'work');
+    expect(await share('plain', 'rw')).toBe(true);
     expect(await share('plain', 'plain2')).toBe(false);
   });
 
-  it('counts an area held only by a router assignment', async () => {
-    h.areas.routers = [{ taskId: 'plain', areaId: 'work', paused: false }];
-    expect(await share('plain', 'work')).toBe(true);
-    expect(await share('work', 'plain')).toBe(true);
+  it('counts a router assignment without the org role', async () => {
+    h.areas.routers = [...h.areas.routers, { taskId: 'plain', areaId: 'work', paused: false }];
+    expect(await share('plain', 'rw')).toBe(true);
     expect(await share('plain', 'plain2')).toBe(false);
     expect(await share('plain2', 'plain')).toBe(false);
-    expect(await share('plain', 'personal')).toBe(false);
-    h.tasks.get('plain')!.org_role = 'router';
-    expect(await share('plain', 'work')).toBe(true);
+    expect(await share('plain', 'rp')).toBe(false);
   });
 
-  it('withholds a mismatched mark and registry rather than choosing the wider one', async () => {
-    h.tasks.get('personal')!.router_area_id = 'work';
-    expect(await share('personal', 'personal2')).toBe(false);
-    expect(await share('personal', 'work')).toBe(false);
-  });
-
-  it('does not let an unassigned router share ordinary context or an area copy into a taskless session', async () => {
+  it('does not let an unassigned router share ordinary context or reach a taskless session', async () => {
     h.tasks.get('plain')!.org_role = 'router';
     expect(await share('plain', 'plain2')).toBe(false);
     expect(await share('plain2', 'plain')).toBe(false);
+    expect(await share('plain', 'plain')).toBe(false);
     expect(await share('plain', undefined)).toBe(false);
-    expect(await share('personal', undefined)).toBe(false);
     expect(await share('plain2', undefined)).toBe(true);
   });
 });

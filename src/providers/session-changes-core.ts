@@ -26,6 +26,7 @@ import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { parseBashFileOps } from '../core/bash-file-ops.js';
 import { restoreArchivedAt } from './transcript-archive.js';
+import { loadChangesCheckpoint, saveChangesCheckpoint } from './changes-checkpoint.js';
 
 // ── Public result types (the wire + frontend shape) ──
 
@@ -496,11 +497,17 @@ export interface HostLocalComputeOptions {
   /** Claude home (default `$HOME/.claude`). Tests point this at a temp dir. */
   claudeHome?: string;
   /** Caller-owned caches, reused across recomputes for the same session. */
-  subCache?: Map<string, { size: number; fileMap: Map<string, FileAccum> }>;
+  subCache?: Map<string, { size: number; mtimeMs?: number; ctimeMs?: number; epoch?: string; tail?: string; fileMap: Map<string, FileAccum> }>;
   gitRootByDir?: Map<string, string | null>;
   /** Caller-owned holder for where the main transcript parse stopped, so the
    *  next compute reads only what was appended since (see MainParseState). */
   mainParse?: { state?: MainParseState };
+  /** Host-owned disposable checkpoints, to resume a parse across daemon restarts. */
+  checkpointDir?: string;
+  /** Deploy fingerprint fences checkpoints when the parser or its dependencies change. */
+  checkpointVersion?: string;
+  /** An explicit Refresh reparses authoritative records, never a saved checkpoint. */
+  reparse?: boolean;
   /** Abort if the whole compute exceeds this (default 100s). */
   deadlineMs?: number;
   /** The previous compute's `changesMemo` for this session: files whose ops,
@@ -518,7 +525,7 @@ export interface HostLocalComputeOutput {
   size: number;
   /** How the main transcript was read: continued from the caller's
    *  MainParseState, and how many bytes this compute read. */
-  parseStats: { resumed: boolean; readBytes: number };
+  parseStats: { resumed: boolean; readBytes: number; subReadBytes?: number };
   /** Pass back as `changesMemo` on the next compute of this session. */
   changesMemo: HostLocalChangesMemo;
   computeStats: HostLocalComputeStats;
@@ -585,6 +592,8 @@ export interface MainParseState {
   /** Ops of the complete lines before `offset`. Never merged into: merges and
    *  the trailing partial line go to a copy (cloneFileMap). */
   fileMap: Map<string, FileAccum>;
+  /** Last durable offset, so a busy session saves at most once per megabyte. */
+  savedOffset?: number;
 }
 
 const epochOf = (st: fs.Stats): string => `${st.dev}:${st.ino}:${Math.floor(st.birthtimeMs)}`;
@@ -599,6 +608,13 @@ async function tailHashAt(fh: fsp.FileHandle, offset: number): Promise<string> {
     got += bytesRead;
   }
   return createHash('sha1').update(buf.subarray(0, got)).digest('hex') + ':' + got;
+}
+
+async function optionalTailHash(file: string, offset: number): Promise<string | undefined> {
+  let fh: fsp.FileHandle | undefined;
+  try { fh = await fsp.open(file, 'r'); return await tailHashAt(fh, offset); }
+  catch { return undefined; } // A disappearing file or unavailable cache check is a miss.
+  finally { await fh?.close().catch(() => {}); }
 }
 
 /** Copy a fileMap so ops pushed into the copy never reach the original. */
@@ -960,45 +976,65 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
   try { st = await fsp.stat(jsonlPath); } catch { return null; }
 
   // 1. Main JSONL ops (streamed, continuing from the caller's MainParseState).
-  const parsed = await streamParseHostLocal(jsonlPath, deadlineMs, opts.mainParse?.state);
+  const parserVersion = opts.checkpointVersion ?? 'changes-parser-1';
+  const disk = !opts.reparse && !opts.mainParse?.state && opts.checkpointDir
+    ? await loadChangesCheckpoint(opts.checkpointDir, jsonlPath, parserVersion) : undefined;
+  const resume = opts.reparse ? undefined : opts.mainParse?.state ?? disk;
+  const parsed = await streamParseHostLocal(jsonlPath, deadlineMs, resume);
   if (parsed === null) return null;
   const { trailing, resumed, readFrom, ...state } = parsed;
+  state.savedOffset = resumed ? resume?.savedOffset : undefined;
   if (opts.mainParse) opts.mainParse.state = state;
-  // This compute's map is a copy when the state is kept: the trailing partial
-  // line and the subagent merges below must not reach the next continuation.
-  const fileMap = opts.mainParse ? cloneFileMap(state.fileMap) : state.fileMap;
+  // Kept state, in memory or on disk, contains only complete main transcript lines.
+  // Trailing partial lines and subagent merges belong only to this compute's result.
+  const fileMap = opts.mainParse || opts.checkpointDir ? cloneFileMap(state.fileMap) : state.fileMap;
   if (trailing) collectOpsFromJsonl(trailing, fileMap);
   const effectiveCwd = extractCwdFromJsonl(parsed.headBlock) ?? opts.cwd;
   const slice = createSlicer();
   await slice();
 
   // 2. Subagent JSONLs — size-keyed cache so finished agents are parsed once.
-  const subCache = opts.subCache ?? new Map<string, { size: number; fileMap: Map<string, FileAccum> }>();
+  const subCache = opts.subCache ?? new Map<string, { size: number; mtimeMs?: number; ctimeMs?: number; epoch?: string; tail?: string; fileMap: Map<string, FileAccum> }>();
+  if (opts.reparse) subCache.clear();
+  else if (resumed && disk?.subCache) for (const [name, sub] of disk.subCache) subCache.set(name, sub);
+  let subChanged = false;
+  let subReadBytes = 0;
   const subDir = jsonlPath.replace(/\.jsonl$/, '') + '/subagents';
   let subNames: string[] = [];
   try { subNames = await fsp.readdir(subDir); } catch { /* no subagents dir */ }
   const jsonls = subNames.filter((n) => n.startsWith('agent-') && n.endsWith('.jsonl'));
   const present = new Set(jsonls);
   for (const k of [...subCache.keys()]) {
-    if (!present.has(k)) subCache.delete(k);
+    if (!present.has(k)) { subCache.delete(k); subChanged = true; }
   }
   for (const name of jsonls) {
     if (Date.now() > deadlineMs) throw new Error('changes: subagent-parse deadline exceeded');
     const p = path.join(subDir, name);
     let sst: fs.Stats;
     try { sst = await fsp.stat(p); } catch { subCache.delete(name); continue; }
-    const cached = subCache.get(name);
-    if (cached && cached.size === sst.size) continue;
+    const cached = subCache.get(name) as { size: number; mtimeMs?: number; ctimeMs?: number; epoch?: string; tail?: string; fileMap: Map<string, FileAccum> } | undefined;
+    if (cached && cached.size === sst.size && cached.mtimeMs === sst.mtimeMs && cached.ctimeMs === sst.ctimeMs && cached.epoch === epochOf(sst) && cached.tail) {
+      if (await optionalTailHash(p, sst.size) === cached.tail) continue;
+    }
     const sub = await streamParseHostLocal(p, deadlineMs);
     if (sub) {
+      subChanged = true;
+      subReadBytes += sst.size;
       if (sub.trailing) collectOpsFromJsonl(sub.trailing, sub.fileMap);
-      subCache.set(name, { size: sst.size, fileMap: sub.fileMap });
+      // The complete file tail also covers a valid trailing line without a newline.
+      const tail = await optionalTailHash(p, sst.size);
+      subCache.set(name, { size: sst.size, mtimeMs: sst.mtimeMs, ctimeMs: sst.ctimeMs, epoch: epochOf(sst), tail, fileMap: sub.fileMap });
     }
   }
   for (const name of [...present].sort()) {
     const c = subCache.get(name);
     if (c) mergeFileMapInto(c.fileMap, fileMap);
     await slice();
+  }
+
+  if (opts.checkpointDir && (!resumed || subChanged || state.offset - (state.savedOffset ?? 0) >= 1024 * 1024)) {
+    await saveChangesCheckpoint(opts.checkpointDir, jsonlPath, { ...state, subCache }, parserVersion);
+    state.savedOffset = state.offset;
   }
 
   const gitRootByDir = opts.gitRootByDir ?? new Map<string, string | null>();
@@ -1245,7 +1281,7 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
     jsonlPath,
     mtimeMs: st.mtimeMs,
     size: st.size,
-    parseStats: { resumed, readBytes: state.offset + Buffer.byteLength(trailing) - readFrom },
+    parseStats: { resumed, readBytes: state.offset + Buffer.byteLength(trailing) - readFrom, ...(jsonls.length ? { subReadBytes } : {}) },
     changesMemo: memo,
     computeStats: stats,
   };

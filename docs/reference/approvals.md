@@ -123,7 +123,6 @@ marked `unasked` with its gate, or the plugin's own sent log, or a host grant `v
 | `walnut approve` / `approval_request` | `src/web/routes/approvals-v1.ts` |
 | A browser step that sends, buys or deletes | `src/web/routes/browser-v1.ts` (askIfHeld) |
 | A fresh sign-in on a site open in the person's own tab | `src/web/routes/browser-v1.ts`, `src/core/browser-control/fresh-sign-in.ts` |
-| A router hand-off outside its area | `src/core/router/handoff-approval.ts`, `cross-route.ts` |
 | An agent using a saved password | `src/core/vault/agent.ts` |
 | A mail send, a mailing-list unsubscribe | `src/integrations/mail/approvals.ts`, `unsubscribe.ts` |
 | A task's first command on another host | `src/core/hosts/host-exec-grant.ts` |

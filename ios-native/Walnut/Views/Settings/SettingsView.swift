@@ -304,9 +304,13 @@ struct SettingsView: View {
             // counts what it could not send, the one thing here that needs a tap.
             NavigationLink(value: SettingsRoute.talkToWalnut) {
                 LabeledContent {
-                    let unsent = talkOutbox.unsent.count
-                    if unsent > 0 {
-                        Text("\(unsent) not sent").foregroundStyle(.red)
+                    // Red only for what went wrong; dictations kept by choice are plain.
+                    let saved = talkOutbox.unsent.filter(TalkSession.awaitsChoice).count
+                    let failed = talkOutbox.unsent.count - saved
+                    if failed > 0 {
+                        Text("\(failed) not sent").foregroundStyle(.red)
+                    } else if saved > 0 {
+                        Text("\(saved) saved").foregroundStyle(.secondary)
                     }
                 } label: {
                     Label("Action Button", systemImage: "button.programmable")

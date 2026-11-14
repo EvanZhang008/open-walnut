@@ -1,7 +1,7 @@
 /**
  * Kanban cards in use (board-kanban-fixture.ts team): the leader's writes
  * arriving live with who and when, Add task with its tags and its failure,
- * the hover action bar, Open session and the peek, a turn end that leaves the
+ * the hover action bar, Open session and a card click (both open Home), a turn end that leaves the
  * card where it is, the leader's suggestion after a 409, the newer summary
  * wins (C10 C17 C23 C25 C40 C56 C69 C70 C74). Chromium and WebKit, real clicks.
  */
@@ -193,15 +193,24 @@ test('C23: the action bar shows in the foot on hover and on focus, never moving 
   await expect(bar).toBeVisible()
 })
 
-test('C25: Open session opens its column on Home; a click on the card opens the task beside the board', async ({ page }) => {
-  test.setTimeout(180_000)
-  const pane = await openBoard(page)
-  const id = team.idle[6]
-  await card(pane, id).getByTestId('kanban-card-foot').click({ position: { x: 4, y: 12 } })
-  await expect(page.getByTestId('board-task-peek')).toBeVisible({ timeout: 15_000 })
-  await card(pane, id).hover()
-  await card(pane, id).getByTestId('kanban-card-open').click()
-  await expect(page.locator(`${REAL_PANEL}[data-session-id="${team.sessions[id]}"]`)).toBeVisible({ timeout: 30_000 })
+test('C25: Open session and a click on the card each open that task\'s column on Home, no details popup', async ({ page }) => {
+  test.setTimeout(240_000)
+  // Every task reference opens the task on Home (useOpenTask, 2026-11-13): the card itself too.
+  const column = (id: string) => page.locator(`${REAL_PANEL}[data-session-id="${team.sessions[id]}"]`)
+  let pane = await openBoard(page)
+  const opened = team.idle[6]
+  await expect(column(opened)).toHaveCount(0)
+  await card(pane, opened).hover()
+  await card(pane, opened).getByTestId('kanban-card-open').click()
+  await expect(column(opened)).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('.task-detail-modal')).toHaveCount(0)
+  pane = await openBoard(page)
+  const clicked = team.idle[5]
+  await expect(column(clicked)).toHaveCount(0)
+  await card(pane, clicked).getByTestId('kanban-card-foot').click({ position: { x: 4, y: 12 } })
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
+  await expect(column(clicked)).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('.task-detail-modal')).toHaveCount(0)
 })
 
 test('C56: a turn that ends leaves the card where it was; the sticky auto lane is recorded', async ({ page }) => {

@@ -506,7 +506,6 @@ timeRouter.post('/apps/toggle', async (req: Request, res: Response) => {
     const body = (req.body ?? {}) as { enabled?: unknown };
     const next = typeof body.enabled === 'boolean' ? body.enabled : !current;
     if (next !== current) {
-      // updateConfig replaces the whole `time` key, so its siblings ride along.
       await updateConfig({ time: { ...config.time, outside: { ...config.time?.outside, enabled: next } } });
     }
     lastKnownOutsideEnabled = next;
@@ -760,7 +759,7 @@ timeRouter.post('/screentime/toggle', async (req: Request, res: Response) => {
       includeThisMac: typeof body.includeThisMac === 'boolean' ? body.includeThisMac : current.includeThisMac,
     };
     if (next.enabled !== current.enabled || next.includeThisMac !== current.includeThisMac) {
-      // updateConfig replaces the whole `time` key, so its siblings ride along.
+      // `time.screentime` is one level down, so it is replaced whole: spread its siblings.
       await updateConfig({
         time: {
           ...config.time,

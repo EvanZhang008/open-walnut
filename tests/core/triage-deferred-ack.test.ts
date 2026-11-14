@@ -102,7 +102,7 @@ beforeEach(async () => {
   const config = await getConfig();
   await saveConfig({
     ...config,
-    triage: { enabled: true, every: '30m', every_messages: 20, sources: ['mail', 'slack'], active_hours: '' },
+    triage: { enabled: true, every: '30m', every_messages: 20, sources: ['slack'], active_hours: '' },
   } as never);
   withdrawSuperseded = vi.fn(async () => ({ withdrawn: [], kept: 0, failed: 0 }));
   handle = startTriageRuns({

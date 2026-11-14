@@ -111,7 +111,10 @@ final class TalkLiveActivity: TalkActivityPresenting {
     nonisolated static func endsNow(_ state: TalkActivityAttributes.ContentState, keeping kept: Set<String>) -> Bool {
         switch state.phase {
         case .listening, .transcribing, .sending: return true
-        case .sent: return false
+        // A dictation's "ready" card goes once its words were sent, copied or deleted.
+        case .sent:
+            guard state.copy == true, let take = state.take else { return false }
+            return !kept.contains(take)
         case .failed:
             guard let take = state.take else { return false }
             return !kept.contains(take)

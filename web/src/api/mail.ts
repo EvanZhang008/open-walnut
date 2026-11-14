@@ -37,6 +37,7 @@ export interface MailCapabilities {
   send: boolean;
   sendAsReply: boolean;
   bodies: 'text' | 'html' | 'both';
+  /** `'download'`: an attachment opens on a click (`mailAttachmentUrl`); anything else lists names only. */
   attachments: 'none' | 'metadata' | 'download';
   /** Moves inbox mail to the archive (a "keep out of the Inbox" rule). Absent means no. */
   archive?: boolean;
@@ -218,20 +219,10 @@ export interface MailMessageDto {
   /** With no area for the message: why no router has it (absent from an older server). */
   routingCoverage?: MailRoutingCoverage;
   routingUnavailable?: boolean;
-  /** Only while no receipt exists: the router asked the person before handing this message on. */
-  routingHandoff?: MailRoutingHandoffDto;
 }
 
 /** `no_router`: no area with a router takes this account; `unassigned`: one does, but this message has no area. */
 export type MailRoutingCoverage = 'no_router' | 'unassigned';
-
-export interface MailRoutingHandoffDto {
-  approvalId: string;
-  status: 'pending' | 'approved' | 'denied' | 'expired' | 'canceled' | 'missing' | 'claim_incomplete';
-  /** Epoch milliseconds of the ask. */
-  at: number;
-  targetTitle?: string;
-}
 
 export type MailRouteStatus = 'routing' | 'routed' | 'not_routed' | 'failed' | 'unknown';
 
@@ -491,6 +482,51 @@ export function readMailMessage(
   opts?: { retry?: boolean },
 ): Promise<MailMessageRead> {
   return apiGet(messagePath(accountId, messageId), opts?.retry ? { retry: '1' } : undefined, QUIET);
+}
+
+/**
+ * Where one attachment's bytes are, for the viewer (a PDF, an image) and for a Download link.
+ *
+ * A URL rather than a fetch on purpose: the bytes go from the plugin to the browser's own PDF and
+ * image loaders, or to its download manager, and never through this tab's memory as a JSON string.
+ * Nothing calls it ahead of a click. `download` asks for `attachment` disposition, so the browser saves
+ * the file instead of showing it.
+ */
+export function mailAttachmentUrl(
+  accountId: string,
+  messageId: string,
+  attachmentId: string,
+  opts?: { download?: boolean },
+): string {
+  const url = `${messagePath(accountId, messageId)}/attachments/${encodeURIComponent(attachmentId)}`;
+  return opts?.download ? `${url}?download=1` : url;
+}
+
+/** Where the server put a saved attachment: `name` in the Downloads folder, at `path`. */
+export interface SavedMailAttachment { name: string; path: string }
+
+/**
+ * Save one attachment into the Downloads folder of this Mac, for the Mac app, whose web view has no
+ * download of its own. The server answers once the last byte is on disk (or the copy failed, with
+ * nothing kept), so this waits as long as the route may run.
+ */
+export async function saveMailAttachment(accountId: string, messageId: string, attachmentId: string): Promise<SavedMailAttachment> {
+  const answer = await apiPost<{ saved?: boolean; name?: string; path?: string; message?: string }>(
+    `${mailAttachmentUrl(accountId, messageId, attachmentId)}/save`,
+    {},
+    { timeoutMs: 6 * 60_000, quietStatuses: [403, 404, 409, 413, 501, 502] },
+  );
+  if (answer.saved !== true || !answer.name || !answer.path) {
+    throw new Error(answer.message || 'The attachment was not saved.');
+  }
+  return { name: answer.name, path: answer.path };
+}
+
+/** The server's own words for a failed attachment request, never just its error code. */
+export function mailRequestFailure(error: unknown): string {
+  const body = (error as { body?: { message?: unknown } } | null)?.body;
+  if (typeof body?.message === 'string' && body.message) return body.message;
+  return error instanceof Error && error.message ? error.message : 'Something went wrong.';
 }
 
 /** 409 `unsupported` when the provider cannot change the flag; the caller reverts. */

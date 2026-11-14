@@ -92,7 +92,6 @@ function PopoutSessionPanel() {
       embedded
       onClose={() => window.close()}
       onSessionClick={sessionId => openPopout('session', { id: sessionId })}
-      onTaskClick={taskId => openTaskInApp(taskId)}
       onOpenTaskDetail={taskId => openTaskInApp(taskId)}
       onSessionReplaced={replaceSession}
       onOpenForkDraft={seed => {

@@ -42,6 +42,8 @@ export interface ProjectRegistryRow {
   /** A model of `defaultEngine`; never set without it. */
   defaultModel?: string;
   defaultMode?: SessionMode;
+  /** Its code tasks start in an isolated workspace ('on') or never do ('off'); absent follows the global setting. */
+  isolatedWorkspace?: 'on' | 'off';
 }
 
 /** A project's launch defaults, as the draft and the settings read them. */
@@ -162,6 +164,7 @@ function toRows(projects: ProjectSummary[]): ProjectRegistryRow[] {
     ...(p.metadata?.default_engine ? { defaultEngine: p.metadata.default_engine } : {}),
     ...(p.metadata?.default_engine && p.metadata.default_model ? { defaultModel: p.metadata.default_model } : {}),
     ...(p.metadata?.default_mode ? { defaultMode: p.metadata.default_mode } : {}),
+    ...(p.metadata?.isolated_workspace === 'on' || p.metadata?.isolated_workspace === 'off' ? { isolatedWorkspace: p.metadata.isolated_workspace } : {}),
   })));
 }
 
@@ -173,7 +176,8 @@ function rowsEqual(a: readonly ProjectRegistryRow[], b: readonly ProjectRegistry
     const y = b[i];
     if (x.name !== y.name || x.source !== y.source || x.favorite !== y.favorite
       || x.defaultCwd !== y.defaultCwd || x.defaultHost !== y.defaultHost
-      || x.defaultEngine !== y.defaultEngine || x.defaultModel !== y.defaultModel || x.defaultMode !== y.defaultMode) return false;
+      || x.defaultEngine !== y.defaultEngine || x.defaultModel !== y.defaultModel || x.defaultMode !== y.defaultMode
+      || x.isolatedWorkspace !== y.isolatedWorkspace) return false;
   }
   return true;
 }
@@ -401,6 +405,7 @@ export interface ProjectRowPatch {
   defaultEngine?: SessionEngine | null;
   defaultModel?: string | null;
   defaultMode?: SessionMode | null;
+  isolatedWorkspace?: 'on' | 'off' | null;
   source?: string;
   favorite?: boolean;
 }
@@ -430,6 +435,10 @@ export function patchProjectLocal(name: string, patch: ProjectRowPatch): (ok: bo
     if (patch.defaultMode !== undefined) {
       if (patch.defaultMode) next.defaultMode = patch.defaultMode;
       else delete next.defaultMode;
+    }
+    if (patch.isolatedWorkspace !== undefined) {
+      if (patch.isolatedWorkspace) next.isolatedWorkspace = patch.isolatedWorkspace;
+      else delete next.isolatedWorkspace;
     }
     // The server's rule: a new or cleared engine drops the old engine's model.
     if (patch.defaultEngine !== undefined && patch.defaultEngine !== r.defaultEngine && patch.defaultModel === undefined) delete next.defaultModel;

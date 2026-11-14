@@ -647,7 +647,7 @@ test('C51: with the master switch off, Triage rows are dimmed and inert', async 
   for (const id of ['inbox-triage-every-row', 'inbox-triage-messages-row', 'inbox-triage-hours-row', 'inbox-triage-mode-row']) {
     await expect(tr.getByTestId(id)).toHaveAttribute('aria-disabled', 'true')
   }
-  await expect(tr.getByTestId('inbox-triage-source-mail')).toBeDisabled()
+  await expect(tr.getByTestId('inbox-triage-source-slack')).toBeDisabled()
 })
 
 test('C59: the API provider is one group with a segmented choice; every model label names its owner', async ({ page }) => {

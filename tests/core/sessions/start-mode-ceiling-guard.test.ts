@@ -25,6 +25,7 @@ const NOT_A_SESSIONS_START: Record<string, { count: number; why: string }> = {
   'src/core/transfer/transfer.ts': { count: 1, why: 'the native fork of a transfer, whose mode transferTask capped when it planned it' },
   'src/core/health-monitor/fix-task.ts': { count: 2, why: 'Walnut\'s own repair task, named no mode' },
   'src/core/router/wake.ts': { count: 1, why: 'the router runtime wakes its own task, named no mode' },
+  'src/core/router/service.ts': { count: 1, why: 'the router hands an item to a task with no conversation yet: that task starts with it, named no mode' },
   'src/web/routes/session-control-v1.ts': { count: 1, why: 'a fork names no mode: it keeps the mode its source session already runs in' },
   'src/web/routes/sessions.ts': { count: 1, why: 'a fork names no mode: it keeps the mode its source session already runs in' },
   'src/web/routes/triage-rules-v1.ts': { count: 1, why: 'starts the task a person or Main named in a routing rule, with no mode' },

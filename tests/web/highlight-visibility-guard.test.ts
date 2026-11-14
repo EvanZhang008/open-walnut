@@ -133,7 +133,6 @@ function hidingSites(): string[] {
 /** A surface that hides words a painter marks, and the file that re-checks the registry when it turns. */
 const REFRESHES: Record<string, string> = {
   'web/src/styles/globals.css :: .main-page-wrapper-hidden': 'web/src/App.tsx',
-  'web/src/styles/task-board.css :: .session-panel-chat-col.is-board-peek > :not(.board-task-peek):not(.peek-tab-bar)': 'web/src/components/sessions/SessionPanel.tsx',
   'web/src/styles/fullscreen-tab.css :: html .open-walnut-fullscreen-away, html .open-walnut-fullscreen-away *': 'web/src/hooks/useFullscreen.tsx',
   // The sheet under a sheet: the Files view's full screen turns it here; the threads sheet in SideQuestionDrawer.
   'web/src/styles/fullscreen-tab.css :: html .open-walnut-fullscreen:has(.file-content-view.fv-fullscreen, .side-question-popover.open-walnut-fullscreen)': 'web/src/components/common/FileContentView.tsx',
@@ -149,6 +148,8 @@ const HEADER = 'a header or bar: no painter marks its words';
 /** Hides nothing a painter marks (thread marks, pins, comments, find), with why. */
 const NO_PAINTED_WORDS: Record<string, string> = {
   'web/src/utils/scrollbar-metrics.ts :: inline (1)': SLOT,
+  // A column's jump number (JumpBadge), hidden for the frame it measures where its header ends.
+  'web/src/pages/MainPage.tsx :: inline (1)': PLACING,
   'web/src/styles/plugin-updates.css :: .plugin-update-label::after': SLOT,
   'web/src/styles/plugin-updates.css :: .plugin-update-slot': SLOT,
   'web/src/styles/board-kanban-controls.css :: .kanban-lane-strip-measure': SLOT,

@@ -26,7 +26,7 @@ import path from 'node:path'
 import { expect, test, type APIRequestContext, type Browser, type BrowserContext, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { homeColumns, loadHome, lockLeftmostPanel, seedColumns, setPanelMode } from './draft-helpers'
-import { openTaskFromRail } from './org-view-helpers'
+import { openBeside } from './org-view-helpers'
 import { holdPanelCountLock } from './panel-count-lock'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -250,10 +250,11 @@ test.describe('Org', () => {
     await page.locator(`[data-testid="org-channel"][data-key="${rowKey}"]`).click()
     await expect(page.getByTestId('org-detail-title')).toHaveText(`${PROJECT} VP`)
   }
-  /** Open a task from the side bar's All tasks and wait for the URL to open it (the sections re-sort
-   *  as statuses move under load). */
+  /** Open a task beside the page (a task reference opens on Home now; the page's own place still
+   *  opens it here) and wait for the URL to hold it. */
   async function openFromTasks(page: Page, id: string): Promise<void> {
-    await openTaskFromRail(page, id, () => expect(page).toHaveURL(new RegExp(`open=task(%3A|:)${id}`), { timeout: 3_000 }))
+    await openBeside(page, `task:${id}`)
+    await expect(page).toHaveURL(new RegExp(`open=task(%3A|:)${id}`))
   }
   const stripTargets = (page: Page) => side(page).evaluateAll(
     (els) => els.map((el) => `${el.getAttribute('data-target')}${el.classList.contains('is-locked') ? '*' : ''}`),

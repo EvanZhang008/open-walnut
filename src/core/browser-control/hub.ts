@@ -57,7 +57,8 @@ export interface WireCommand {
   args: Record<string, unknown>
   /** The sites agents may use (the extension checks the tab it acts in against them). */
   /** The sites agents may use, and Walnut's own addresses (`host` or `host:port`), never theirs. */
-  allow: { any: boolean; sites: string[]; walnut?: string[] }
+  /** `record`: the Browser replay's one-use token for this step's picture (replay-store.ts). */
+  allow: { any: boolean; sites: string[]; walnut?: string[]; record?: string }
 }
 
 interface Pending {

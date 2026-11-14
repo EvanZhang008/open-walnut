@@ -9,8 +9,10 @@ import { ICON_NEW_TAB } from '@/components/common/Icons';
 import type { KanbanLeaderRowProps } from './kanban-contract';
 import { KanbanCardPrompt } from './KanbanCardPrompt';
 import { leaderReason } from './KanbanRollup';
+import { useOpenTask } from '@/hooks/useOpenTask';
 
-export function KanbanLeaderRow({ leader, onOpenTask }: KanbanLeaderRowProps) {
+export function KanbanLeaderRow({ leader }: KanbanLeaderRowProps) {
+  const openTask = useOpenTask();
   const [open, setOpen] = useState(false);
   const prompt = leader.status.prompt;
   const text = `The leader: ${leaderReason(leader.status.text)}`;
@@ -33,7 +35,7 @@ export function KanbanLeaderRow({ leader, onOpenTask }: KanbanLeaderRowProps) {
             className="kanban-leader-row-toggle"
             data-testid="kanban-leader-row-toggle"
             title={leader.status.tooltip || text}
-            onClick={() => onOpenTask(leader.taskId)}
+            onClick={() => openTask(leader.taskId)}
           >{text}</button>
         )}
         <button
@@ -42,7 +44,7 @@ export function KanbanLeaderRow({ leader, onOpenTask }: KanbanLeaderRowProps) {
           data-testid="kanban-leader-row-open"
           aria-label={`Open ${leader.title}`}
           title={`Open ${leader.title}`}
-          onClick={() => onOpenTask(leader.taskId)}
+          onClick={() => openTask(leader.taskId)}
         >{ICON_NEW_TAB}</button>
       </div>
       {open && prompt && (

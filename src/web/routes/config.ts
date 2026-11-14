@@ -59,6 +59,7 @@ export function getWebAssetsReport(): WebAssetsReport | null {
 // settings, say) are masked; the typed fields Settings edits are not.
 import { configForClients, emitConfigChanged } from '../../core/config-broadcast.js'
 import { MaskedValueError, restoreMaskedSecrets } from '../../core/config-secret-shape.js'
+import { CONFIG_MERGE_HEADER, writeConfigSection } from '../../core/config-section-write.js'
 import { storedBackupLike } from '../../core/backup/destination.js'
 import { getSelfRepairStatus } from '../../core/self-repair/walnut-source.js'
 import { getBuildInfo } from '../../lib/build-info.js'
@@ -152,7 +153,7 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     // that run here, so the console tells a session here from one on the Mac. Absent
     // everywhere else (the Mac, the companion): their answer is unchanged.
     const replicaHostKey = role() === 'replica' && placement() === 'host' ? (process.env.WALNUT_HOST_KEY ?? '').trim() : ''
-    res.json({ config: configForClients(experimentalConfigView(shown)), ...(configCopied === undefined ? {} : { configCopied }), envTokenHint, installDir: isFollower() ? null : WALNUT_INSTALL_DIR, notesDir: isFollower() ? null : NOTES_DIR, processNice, memory, loginSession: (await import('../../core/login-session.js')).loginSessionState(), canRevealLocalFiles, macAccess, remoteIdUniquenessGaps, cloud: isCompanion(), ...serverFacts(), webAssets, selfRepair, build: getBuildInfo(), ...(replicaHostKey ? { replica: { hostKey: replicaHostKey } } : {}) })
+    res.json({ config: configForClients(experimentalConfigView(shown)), ...(configCopied === undefined ? {} : { configCopied }), envTokenHint, installDir: isFollower() ? null : WALNUT_INSTALL_DIR, notesDir: isFollower() ? null : NOTES_DIR, processNice, memory, loginSession: (await import('../../core/login-session.js')).loginSessionState(), canRevealLocalFiles, macAccess, remoteIdUniquenessGaps, cloud: isCompanion(), ...serverFacts(), configWrites: 'merge', webAssets, selfRepair, build: getBuildInfo(), ...(replicaHostKey ? { replica: { hostKey: replicaHostKey } } : {}) })
   } catch (err) {
     next(err)
   }
@@ -602,11 +603,16 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
     // `push_tokens` is left out first: the push registry is its only writer (below), and
     // a phone may change its row between this client's read and its write.
     const { push_tokens: ignoredPushTokens, ...sent } = req.body ?? {}
+    const sections = { wholeSections: wholeSectionsOf(req) }
     const storedConfig = await getConfig()
     const body = restoreMaskedSecrets(sent, sent.backup === undefined ? storedConfig
       : { ...storedConfig, backup: storedBackupLike(sent.backup, storedConfig.backup) })
 
-    if (body.experimental !== undefined && !validExperimentalFlags(body.experimental)) {
+    // A flag sent as null is removed, where the write merges (core/config-section-write.ts).
+    const flagsSent = body.experimental && typeof body.experimental === 'object' && !Array.isArray(body.experimental) && !sections.wholeSections
+      ? Object.fromEntries(Object.entries(body.experimental as Record<string, unknown>).filter(([, v]) => v !== null))
+      : body.experimental
+    if (body.experimental !== undefined && !validExperimentalFlags(flagsSent)) {
       res.status(400).json({ error: 'experimental must be an object of boolean flags' })
       return
     }
@@ -620,7 +626,8 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
         res.status(400).json({ error: 'defaults must be an object' })
         return
       }
-      if (body.defaults.priority !== undefined && !VALID_PRIORITIES.includes(body.defaults.priority)) {
+      // A key sent as null is removed (core/config-section-write.ts).
+      if (body.defaults.priority !== undefined && body.defaults.priority !== null && !VALID_PRIORITIES.includes(body.defaults.priority)) {
         res.status(400).json({ error: `defaults.priority must be one of: ${VALID_PRIORITIES.join(', ')}` })
         return
       }
@@ -655,10 +662,21 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
       const config = body.external_session_import
       const rules = config?.excluded_cwds
       if (!config || typeof config !== 'object' || Array.isArray(config)
-        || (rules !== undefined && (!rules || typeof rules !== 'object' || Array.isArray(rules)
+        || (rules !== undefined && rules !== null && (typeof rules !== 'object' || Array.isArray(rules)
           || Object.values(rules).some(paths => !Array.isArray(paths) || paths.some(value =>
             typeof value !== 'string' || !path.posix.isAbsolute(value) || path.posix.normalize(value) === '/'))))) {
         res.status(400).json({ error: 'external_session_import.excluded_cwds must map host names to absolute non-root directories' })
+        return
+      }
+    }
+
+    // The skill listing cap of Claude Code sessions (providers/claude-scope-settings.ts): an integer
+    // in the CLI's own range, or null to clear it.
+    const listingCap = (body.session as { skill_listing_desc_chars?: unknown } | undefined)?.skill_listing_desc_chars
+    if (listingCap !== undefined && listingCap !== null) {
+      const { validSkillListingDescChars, SKILL_LISTING_DESC_CHARS_MIN, SKILL_LISTING_DESC_CHARS_MAX } = await import('../../providers/claude-scope-settings.js')
+      if (!validSkillListingDescChars(listingCap)) {
+        res.status(400).json({ error: `session.skill_listing_desc_chars must be an integer from ${SKILL_LISTING_DESC_CHARS_MIN} to ${SKILL_LISTING_DESC_CHARS_MAX}` })
         return
       }
     }
@@ -669,7 +687,8 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
     if (body.approvals !== undefined) {
       const a = body.approvals as { ask_me?: unknown } | null
       if (!a || typeof a !== 'object' || Array.isArray(a) || Object.keys(a).some((k) => k !== 'ask_me') || (a.ask_me !== undefined && typeof a.ask_me !== 'boolean')) {
-        res.status(400).json({ error: 'approvals must be { ask_me: boolean }' })
+        // ask_me is turned on or off, never removed: a null is refused like any other non-boolean.
+        res.status(400).json({ error: a?.ask_me === null ? 'approvals.ask_me cannot be removed: send true or false' : 'approvals must be { ask_me: boolean }' })
         return
       }
       // Written only through setAskMe (ask-me.ts), never by the generic merge below; turning it
@@ -706,8 +725,10 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
     // The tunnel puts this server one address away from the internet, and its command runs
     // here: only the person at this machine changes it (routes/expose.ts). A write that
     // carries the section back unchanged (a whole-config round trip) is fine.
+    // Both checks compare the section as the write leaves it (a partial one merges, see
+    // core/config-section-write.ts) with the section stored now.
     if (body.expose !== undefined && !isPersonAtThisMachine(req)
-      && JSON.stringify(body.expose) !== JSON.stringify((await getConfig()).expose ?? {})) {
+      && JSON.stringify(writeConfigSection('expose', storedConfig.expose, body.expose, sections) ?? {}) !== JSON.stringify(storedConfig.expose ?? {})) {
       res.status(403).json({ error: 'Only you, at this computer, can change how Walnut is reached from outside (Settings, Phones & Cloud).', code: 'person_at_this_machine' })
       return
     }
@@ -716,7 +737,7 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
     // one that keeps less history would delete backups.
     // Switching them on or off and the interval stay open to all.
     if (body.backup !== undefined && !isPersonAtThisMachine(req)
-      && backupTarget(body.backup) !== backupTarget((await getConfig()).backup)) {
+      && backupTarget(writeConfigSection('backup', storedConfig.backup, body.backup, sections)) !== backupTarget(storedConfig.backup)) {
       res.status(403).json({ error: 'Only you, at this computer, can change where backups go (Settings, Backup).', code: 'person_at_this_machine' })
       return
     }
@@ -788,7 +809,7 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
     if (privateExperiment) delete body.experimental
     // A test run's own choice neither writes the user's file nor tells other windows.
     if (privateExperiment && !Object.keys(body).length) { res.json({ ok: true }); return }
-    await updateConfig(body)
+    await updateConfig(body, sections)
     // Re-read merged config so the event carries the full picture
     const read = await getConfig()
     // Same view as GET /api/config: the injected cloud box row is not a Settings host.
@@ -805,6 +826,18 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
     next(err)
   }
 })
+
+/**
+ * Whether this write stores each section as sent (core/config-section-write.ts). An
+ * unmarked write from a browser page (it carries Origin or Sec-Fetch-Mode, and a
+ * forward through a replica keeps both) is a Settings page from before the merge,
+ * which removes a key by leaving it out: it keeps exactly the old rule. Every other
+ * write merges: an agent's, the CLI's, and a web client's that sends the header.
+ */
+function wholeSectionsOf(req: Request): boolean {
+  if (req.get(CONFIG_MERGE_HEADER) === 'merge') return false
+  return !!(req.get('origin') || req.get('sec-fetch-mode'))
+}
 
 /** Where a backup section sends the data (secrets left out: they arrive masked). */
 function backupTarget(b: unknown): string {

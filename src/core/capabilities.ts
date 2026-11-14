@@ -1,27 +1,21 @@
 /**
- * What this box offers beyond the replica core
- * (docs/plan/walnut-companion-unified-replica.md, stage 5). A replica is one
- * program; what differs between replicas is configuration, and these four
- * capabilities are the part of it that turns jobs and doors on:
- *
- *   public-door    phones pair and claim here, push, voice, the revoke queue,
- *                  the tunnel in front of the box (expose)
- *   bridge-door    daemons dial in on /bridge, the Mac drives its own daemon on
- *                  /daemon-tunnel, the Mac's /bridge/* HTTPS routes and /git/data
- *   cloud-exec     the box's own session daemons (they still start only with
- *                  cloud.exec.enabled), stream file cleanup, the send path canary
- *   backup-leader  takeover, and while it leads: cron, routines, overview,
- *                  project summary
+ * The capability registry: what a replica may offer beyond the replica core
+ * (docs/reference/session-daemon.md, "The cloud companion is a replica with
+ * capabilities"). Each capability is one manifest in src/core/capabilities/,
+ * which names everything it does: the boot jobs it turns on, the socket doors it
+ * opens and who may open them, and every file that asks for it. Adding one is a
+ * new manifest file and its line in MANIFESTS below; the tests in
+ * tests/core/capability-manifests.test.ts then hold it exact.
  *
  * The box sets them for itself in WALNUT_CAPABILITIES (names separated by commas
  * or spaces, `none` for no capability), in its own unit as root sets
- * WALNUT_COMPANION_MAC_BUILDS. Unset or blank, the companion has all four, which
- * is exactly what it ran before capabilities existed; the Mac and a host replica
- * have none. Only the companion reads the variable for now: the Mac runs every
+ * WALNUT_COMPANION_MAC_BUILDS. Unset or blank, the companion has the four marked
+ * companionDefault, exactly what it ran before capabilities existed; one added later
+ * is off until the box names it. The Mac and a host replica have none. Only the companion reads the variable for now: the Mac runs every
  * job by its own column, and a host replica keeps its plan's OFF list, so on
  * both a value is ignored and the boot policy line says so. On the companion a
  * name that is not a capability stops the boot: a typo must not read as a door
- * left shut.
+ * left shut, and nothing outside this list can be switched on.
  *
  * The defaults read `CLOUD_MODE` here on purpose (with the env parse in
  * constants.ts, the reads the boot policy ratchet keeps), and live: tests flip
@@ -30,9 +24,34 @@
 
 import { CLOUD_MODE } from '../constants.js'
 import type { Placement } from './server-role.js'
+import type { Entrance } from './capabilities/manifest.js'
+import { publicDoor } from './capabilities/public-door.js'
+import { bridgeDoor } from './capabilities/bridge-door.js'
+import { cloudExec } from './capabilities/cloud-exec.js'
+import { backupLeader } from './capabilities/backup-leader.js'
 
-export const CAPABILITIES = ['public-door', 'bridge-door', 'cloud-exec', 'backup-leader'] as const
-export type Capability = (typeof CAPABILITIES)[number]
+/** Every capability, in the order the boot policy line and serverCapabilities list them. */
+export const MANIFESTS = [publicDoor, bridgeDoor, cloudExec, backupLeader] as const
+export type Capability = (typeof MANIFESTS)[number]['name']
+export const CAPABILITIES: readonly Capability[] = MANIFESTS.map((m) => m.name)
+
+/** The capability that turns `job` on for a replica, if one does. */
+export function capabilityOfJob(job: string): Capability | undefined {
+  return MANIFESTS.find((m) => (m.jobs as readonly string[]).includes(job))?.name
+}
+
+/**
+ * The socket door at `path` this server has open, or null. A path no manifest
+ * declares is null on every server: the upgrade handler refuses it. `caps`
+ * defaults to this server's own (a test reads another set).
+ */
+export function openSocketDoor(path: string, caps: ReadonlySet<Capability> = capabilityFacts().capabilities): Entrance | null {
+  for (const m of MANIFESTS) {
+    const door = m.doors.find((d) => d.path === path)
+    if (door) return caps.has(m.name) ? door : null
+  }
+  return null
+}
 
 export const CAPABILITIES_ENV = 'WALNUT_CAPABILITIES'
 
@@ -42,23 +61,24 @@ export interface CapabilityFacts {
   ignored: string | null
 }
 
-const ALL: ReadonlySet<Capability> = new Set(CAPABILITIES)
+/** What a companion that sets nothing has: the manifests marked companionDefault (the four it always ran). */
+const COMPANION_DEFAULT: ReadonlySet<Capability> = new Set(MANIFESTS.filter((m) => m.companionDefault).map((m) => m.name))
 const NONE: ReadonlySet<Capability> = new Set()
 
 export function isCapability(name: string): name is Capability {
   return (CAPABILITIES as readonly string[]).includes(name)
 }
 
-/** What a server at `where` has when it sets nothing: the companion all four, the rest none. */
+/** What a server at `where` has when it sets nothing: the companion its default set, the rest none. */
 export function defaultCapabilities(where: Placement): ReadonlySet<Capability> {
-  return where === 'cloud' ? ALL : NONE
+  return where === 'cloud' ? COMPANION_DEFAULT : NONE
 }
 
 /** The capabilities `raw` (WALNUT_CAPABILITIES) gives a server; `companion` is whether it is the companion. */
 export function resolveCapabilities(raw: string | undefined, companion: boolean): CapabilityFacts {
   const text = (raw ?? '').trim()
   if (!companion) return { capabilities: NONE, ignored: text || null }
-  if (!text) return { capabilities: ALL, ignored: null }
+  if (!text) return { capabilities: COMPANION_DEFAULT, ignored: null }
   const names = text.split(/[\s,]+/).filter(Boolean)
   if (names.length === 1 && names[0] === 'none') return { capabilities: NONE, ignored: null }
   const out = new Set<Capability>()

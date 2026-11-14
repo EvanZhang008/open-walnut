@@ -8,7 +8,6 @@ import { openAgentRef, type AgentRef } from '@/utils/agent-ref-open';
 import { useCallback } from 'react';
 import { useAgentFileOpener } from '@/hooks/useAgentFileOpener';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
-import { taskPath } from '@/utils/task-path';
 
 type Sender = { host?: string; sessionId?: string; unknownSource?: boolean };
 
@@ -37,7 +36,6 @@ function TurnBody({ entry, sender, subject, onBodyClick, onRefOpen, onNavigate }
   const source = agent ? agentTurnSource(entry) : peer ? { sessionId: by } : person ? { host: '__local__' } : sender;
   const file = useAgentFileOpener(source);
   const peerClick = useEntityClickHandler(
-    (taskId) => onNavigate(taskPath(taskId)),
     (sid) => onNavigate(`/sessions?id=${sid}`),
     file.onFileOpen, file.fileHost, file.fileSessionId, file.refusesAll,
   );

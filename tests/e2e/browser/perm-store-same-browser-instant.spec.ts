@@ -117,7 +117,8 @@ async function openSessionColumn(page: Page): Promise<Locator> {
   const detail = page.locator('.task-detail-modal')
   await expect(detail).toBeVisible()
   await detail.locator(`.todo-detail-session-item[data-session-id="${SESSION_ID}"]`).click()
-  await detail.getByRole('button', { name: 'Close detail panel' }).click()
+  // The details close on the open (a task reference, useOpenTask).
+  await expect(detail).toHaveCount(0)
 
   const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible({ timeout: 20_000 })

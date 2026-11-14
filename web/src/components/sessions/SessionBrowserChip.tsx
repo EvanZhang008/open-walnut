@@ -6,7 +6,8 @@
  * back, Stop) in a popover over the page. Guard: tests/web/live-resources-header-only-guard.test.ts.
  *
  *   pill     "Browser" (or "Browser 2" for two tabs); amber "Sign in" while the agent asks the
- *            person to sign in, "Yours" while the person has the tab; nothing while no tab is used
+ *            person to sign in, "Yours" while the person has the tab; a grey "Replay" once no tab
+ *            is used but the task's steps are kept (SessionBrowserReplay.tsx); else nothing
  *   popover  on a click (or Enter): the Browser view, which asks for pictures only while it is open
  *
  * `compact`: the phone's top bar, beside the kebab: a browser window glyph in a 44 px target,
@@ -56,6 +57,9 @@ export function browserChipLook(tabs: readonly Pick<BrowserViewTab, 'driving' | 
   };
 }
 
+/** No tab now, but the task's recorded steps are kept: a grey pill that opens the replay. */
+export const REPLAY_LOOK = { label: 'Replay', tone: 'ended' as BrowserChipTone, title: 'Play back what the agent did in your browser' };
+
 export function SessionBrowserChip({ taskId, view, compact = false }: {
   taskId: string;
   /** The task's tabs, read once by the panel (useBrowserView) for every pill it draws. */
@@ -71,7 +75,8 @@ export function SessionBrowserChip({ taskId, view, compact = false }: {
   useOverlayLayer({ open, onClose: () => setOpen(false), refs: [cardRef, chipRef], trapFocus: false });
 
   const tabs = view.state?.tabs ?? [];
-  const look = browserChipLook(tabs);
+  const replay = !!view.state?.replay;
+  const look = browserChipLook(tabs) ?? (replay ? REPLAY_LOOK : null);
   // The last tab gone while the view is open: the pill stays until it closes, so the view can say why.
   const shown = !!look || open;
   // No tab and nothing to say about the last one: nothing to show, so no popover either.

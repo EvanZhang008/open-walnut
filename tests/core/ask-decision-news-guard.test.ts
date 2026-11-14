@@ -492,7 +492,7 @@ describe('an ask a lead answered for the user stays answered in other words', ()
   })
   it('an answer records the decision it answered, and the status passes its decision in', () => {
     expect(code('src/core/sessions/ask-answer.ts')).toMatch(/askId: d\.id, decisionKey: d\.key/)
-    expect(code('src/core/same-ask.ts')).toMatch(/answerFor\(.*derived\.ask, nowMs, \{ \.\.\.derived\.decision/)
+    expect(code('src/core/same-ask.ts')).toMatch(/answerFor\([^\n]*asked, nowMs, \{ \.\.\.derived\.decision/)
   })
 })
 
@@ -608,7 +608,7 @@ describe('every path that tells an ask changed compares the decision', () => {
   it('every writer of a task\'s report stamps the decision', () => {
     // The server's writers (the web's own task list merges what the server sent).
     const writers = filesWith(/[{,]\s*status_report\s*:/).filter((f) => f.startsWith('src/'))
-    expect(writers).toEqual(['src/core/router/processing.ts', 'src/core/sessions/report-set.ts', 'src/core/sessions/status-question.ts'])
+    expect(writers).toEqual(['src/core/sessions/report-set.ts', 'src/core/sessions/status-question.ts'])
     for (const f of writers) expect(code(f), `${f}: run stampSaidDecision before storing`).toMatch(/stampSaidDecision\(/)
   })
 

@@ -762,6 +762,8 @@ export interface StartQueueEntry {
     userRequest?: string;
     createCwd?: boolean;
     workspace?: { provider: string; inputs?: unknown };
+    /** The start opted out of a code task's default workspace (an older Walnut ignores it). */
+    noWorkspace?: boolean;
     expectReply?: boolean;
     replyTimeoutSecs?: number;
     handsOn?: string;
@@ -1795,6 +1797,11 @@ export interface Config {
      *  the user's other ones. Default off (src/core/sessions/request-tag.ts). */
     tag_requests?: boolean;
 
+    /** Characters of each skill's description a Claude Code session's skill listing keeps
+     *  (an integer 40..1536, sent as the CLI's `skillListingMaxDescChars` setting). Unset:
+     *  nothing is sent and Claude Code keeps its own default (providers/claude-scope-settings.ts). */
+    skill_listing_desc_chars?: number;
+
     /** Days a Claude Code session's history stays as it is: a session nobody touched
      *  for longer is compressed in place on its host and comes back the moment it is
      *  opened (src/core/transcript-archive-sweep.ts). Default 60; 0 turns it off. */
@@ -2066,6 +2073,10 @@ export interface Config {
     /** Where a session that leaves Home's strip without a Minimize goes: 'recent' (the Recent
      *  end of the taskbar, the default) or 'chips' (a chip like a minimized one). */
     taskbar_leaving?: 'recent' | 'chips';
+    /** The keys a person gave the keyboard commands (web/src/keyboard/commands.ts), per place
+     *  ('mac-app', 'mac-browser', 'other'): command id → chord ("Cmd+J"), '' for no key. A
+     *  command left out keeps its default. Settings > Keyboard shortcuts writes it. */
+    shortcuts?: Record<string, Record<string, string>>;
   };
   /** How a task's tags show (core/tag-display-rules.ts): a tag (`label:urgent`) or a key
    *  (`ticket-id:*`) to `shown` (whole), `value` (the text after the key) or `hidden`. Display
@@ -2805,6 +2816,26 @@ export interface RoutineStart {
   waited_for_slot?: true;
   error?: string;
   launch?: RoutineLaunch;
+}
+
+/** Why Walnut continues a session's turn by itself (sessions/turn-run.ts TURN_RETRY_REASONS). */
+export type TurnRetryReason = 'usage_limit' | 'endpoint_wait' | 'restart_recovery' | 'auto_continue' | 'safeguard_switch' | 'context_recovery';
+
+/** One continue Walnut sent for a session's turn. */
+export interface TurnAttempt {
+  reason: TurnRetryReason;
+  /** When it was sent (ISO). */
+  at: string;
+}
+
+/**
+ * A session's current turn, as far as Walnut retried it (sessions/turn-run.ts): the continues it sent
+ * after the message that started the turn. A send by anyone but a retrier starts a new turn and clears it.
+ */
+export interface SessionTurn {
+  /** The first continue of this turn (ISO). */
+  since: string;
+  attempts: TurnAttempt[];
 }
 
 export interface SessionRestartLoss {
@@ -3877,6 +3908,8 @@ export interface SessionRecord {
   restartLoss?: SessionRestartLoss;
   /** Its last turn could not reach the model endpoint: Walnut waits for it and continues (sessions/endpoint-wait.ts). No status write touches it. */
   endpointWait?: SessionEndpointWait;
+  /** Walnut's continues of its current turn (sessions/turn-run.ts). No status write touches it. */
+  turn?: SessionTurn;
   /** Its last turn hit the subscription's usage limit: Walnut continues it at the reset (sessions/usage-limit-wait.ts). No status write touches it. */
   usageLimit?: SessionUsageLimit;
   /** Walnut's continue after a usage limit reset ran (sessions/usage-limit-wait.ts); cleared by the next send. */

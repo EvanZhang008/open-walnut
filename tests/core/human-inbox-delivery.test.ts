@@ -162,7 +162,7 @@ describe('delivery: a session parked on a permission prompt', () => {
       pendingPermission: { requestId: 'req-9', toolName: 'Bash', receivedAt: new Date().toISOString() },
     };
     // The first read is ordinary; the fresh read right before the enqueue is an area session.
-    const area = { ...parked, profile: { areaId: 'personal', areaRole: 'work' } };
+    const area = { ...parked, profile: { areaId: 'personal', areaRole: 'router' } };
     const letter = await sendLetter(letterInput({ type: 'action_required', actions: [{ id: 'ship', label: 'Ship it' }] }));
     const answered = await answerLetter(letter.id, { actionId: 'ship', freeText: 'go' });
     const agent = { sessionId: 'sess-lead-2', taskId: 'task-lead', name: 'Lead' };

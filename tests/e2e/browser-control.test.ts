@@ -39,6 +39,34 @@ async function http(method: string, p: string, body?: unknown, headers: Record<s
   return { status: res.status, body: await res.json().catch(() => ({})) as Record<string, any> }
 }
 
+describe('security alert attribution on the real API', () => {
+  it('reports ours with its task and sends unknown verification to agents', async () => {
+    const { noteAgentAction } = await import('../../src/core/browser-control/agent-actions.js');
+    const at = Date.now();
+    await noteAgentAction('task-login-owner', 'https://secure.alert.test/login?secret=PRIVATE_CANARY', 'fill_login', at, 'account@example.test');
+    const response = await http('GET', `/browser/security-alert?${new URLSearchParams({ domain: 'alert.test', occurred_at: new Date(at).toISOString(), account: 'account@example.test' })}`, undefined, AGENT);
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ status: 'ours', actions: [{ taskId: 'task-login-owner' }] });
+    expect(JSON.stringify(response.body)).not.toContain('PRIVATE_CANARY');
+    const unknown = await http('GET', `/browser/security-alert?${new URLSearchParams({ domain: 'unknown.test', occurred_at: new Date(at).toISOString() })}`, undefined, AGENT);
+    expect(unknown.status).toBe(200);
+    expect(unknown.body.status).toBe('unknown');
+    expect(unknown.body.next).toContain('supervisor');
+    expect(unknown.body.next).toContain('Do not ask the user');
+    const invalid = await http('GET', '/browser/security-alert?domain=alert.test&occurred_at=recently', undefined, AGENT);
+    expect(invalid.status).toBe(400);
+  });
+  it('a replica reports unavailable rather than reading an empty local attribution file', async () => {
+    const roles = await import('../../src/core/server-role.js');
+    const spy = vi.spyOn(roles, 'isFollower').mockReturnValue(true);
+    try {
+      const result = await http('GET', `/browser/security-alert?${new URLSearchParams({ domain: 'alert.test', occurred_at: new Date().toISOString() })}`, undefined, AGENT);
+      expect(result.status).toBe(503);
+      expect(result.body).toMatchObject({ status: 'unavailable', actions: [] });
+    } finally { spy.mockRestore(); }
+  });
+});
+
 interface Seen { action: string; args: Record<string, any>; allow: { any: boolean; sites: string[]; walnut?: string[] } }
 
 /** A browser extension that polls like the real one and answers from a script. */

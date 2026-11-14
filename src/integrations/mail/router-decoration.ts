@@ -1,5 +1,4 @@
 import { readRouterAreas } from '../../core/router/areas.js';
-import { handoffAsksForSources } from '../../core/router/handoff-approval.js';
 import { routerStore } from '../../core/router/runtime.js';
 import { routeViews } from '../../core/router/service.js';
 import { routerKey } from '../../core/router/store.js';
@@ -32,8 +31,6 @@ export async function decorateMailRoutes(messages: MailMessageDto[], home: strin
   }
   const routes = new Map<string, NonNullable<MailMessageDto['route']>>();
   const unavailable = new Set<string>();
-  const handoffs = new Map<string, NonNullable<MailMessageDto['routingHandoff']>>();
-  const handoffUnavailable = new Set<string>();
   await Promise.all([...groups].map(async ([areaId, group]) => {
     try {
       const ledger = await routerStore(areaId, home).getSources(group.map(messageSource));
@@ -47,23 +44,14 @@ export async function decorateMailRoutes(messages: MailMessageDto[], home: strin
           ...(view.origin === 'legacy' ? { origin: 'legacy' as const, evidence: view.evidence } : {}),
         });
       }
-      // An ask shows only where no receipt exists (the ledger wins), and a pause hides no past ask.
-      const routerTaskIds = file.routers.filter((router) => router.areaId === areaId && byId.get(areaId)?.taskIds.includes(router.taskId))
-        .map((router) => router.taskId);
-      const open = group.map(messageSource).filter((source) => !ledger.has(routerKey(source)));
-      if (routerTaskIds.length === 0 || open.length === 0) return;
-      try {
-        for (const [key, ask] of await handoffAsksForSources(areaId, routerTaskIds, open, { home })) handoffs.set(JSON.stringify([areaId, key]), ask);
-      } catch { handoffUnavailable.add(areaId); }
     } catch { unavailable.add(areaId); }
   }));
   return messages.map((message) => {
     const area = areaOf(message);
     const route = area ? routes.get(receiptKey(area.id, message)) : undefined;
-    const routingHandoff = area && !route ? handoffs.get(receiptKey(area.id, message)) : undefined;
-    const blind = !!area && (unavailable.has(area.id) || (!route && handoffUnavailable.has(area.id)));
+    const blind = !!area && unavailable.has(area.id);
     const coverage = area ? {} : { routingCoverage: coveredAccounts.has(message.accountId) ? 'unassigned' as const : 'no_router' as const };
     return { ...message, ...(route ? { route } : {}), ...(area ? { routingArea: { id: area.id, name: area.name, paused: paused(area.id) } } : {}), ...coverage,
-      ...(routingHandoff ? { routingHandoff } : {}), ...(blind ? { routingUnavailable: true } : {}) };
+      ...(blind ? { routingUnavailable: true } : {}) };
   });
 }

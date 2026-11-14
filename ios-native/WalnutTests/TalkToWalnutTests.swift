@@ -160,6 +160,7 @@ final class TalkSessionTests: XCTestCase {
     private var outbox: TalkOutbox!
     private var mic: TalkSession.MicAccess = .granted
     /// In front unless a test says otherwise (a press from behind the app on screen).
+    private var ceoChatsOpened = 0
     private var foreground = true
     private var paired = true
     private var cues: [TalkCue] = []
@@ -167,6 +168,8 @@ final class TalkSessionTests: XCTestCase {
     /// The clipboard of the dictation tests: what was copied, and whether iOS takes it.
     private var copied: [String] = []
     private var copyTakes = true
+    /// How many times the dictation's page was brought up.
+    private var pagesShown = 0
     private let prefsSuite = "talk-prefs-test-\(UUID().uuidString)"
     private var prefs: UserDefaults!
 
@@ -180,6 +183,7 @@ final class TalkSessionTests: XCTestCase {
         paired = true
         copied = []
         copyTakes = true
+        pagesShown = 0
         prefs = UserDefaults(suiteName: prefsSuite)
     }
 
@@ -203,6 +207,8 @@ final class TalkSessionTests: XCTestCase {
             self.copied.append(text)
             return true
         }
+        session.presentReview = { [unowned self] in self.pagesShown += 1 }
+        session.openCEOChat = { [unowned self] in self.ceoChatsOpened += 1 }
         return session
     }
 
@@ -875,140 +881,452 @@ final class TalkSessionTests: XCTestCase {
         }
     }
 
-    // MARK: - Dictate to Clipboard
+    // MARK: - Dictate: one page with Send and Copy
 
-    private func dictateTwice(_ talk: TalkSession) async throws {
-        try await talk.toggle(source: "test", to: .clipboard)
-        try await talk.toggle(source: "test", to: .clipboard)
+    /// Listen, then end the take: its words open on the page.
+    private func dictate(_ talk: TalkSession) async throws {
+        try await talk.toggle(source: "test", to: .dictation)
+        try await talk.toggle(source: "test", to: .dictation)
         await talk.finishing?.value
     }
 
-    /// The user, 2026-11-10: "just what ever we said it should send it, without modify".
-    func testADictationPutsTheWordsOnTheClipboardExactlyAndSendsNothing() async throws {
+    /// The user, 2026-11-11: "just one page that can send and can copy". The words open on
+    /// the page exactly as heard, and nothing is sent or copied before the person picks.
+    func testADictationOpensItsPageWithTheWordsAsHeardAndSendsOrCopiesNothingByItself() async throws {
         let said = "  Ship it Friday,\nthen tell Chen.  \u{1F680} "
         recorder.finishResult = .words(said, recordingID: "rec-d")
         let talk = session()
-        try await talk.toggle(source: "test", to: .clipboard)
-        XCTAssertEqual(talk.destination, .clipboard)
-        XCTAssertEqual(activity.started.first?.copy, true, "the Live Activity offers Copy, not Send")
-        XCTAssertEqual(activity.started.first?.subtitle, "Tap Copy, or press the Action Button again")
+        try await talk.toggle(source: "test", to: .dictation)
+        XCTAssertEqual(talk.destination, .dictation)
+        XCTAssertEqual(activity.started.first?.copy, true, "the Live Activity offers Done, not Send")
+        XCTAssertEqual(activity.started.first?.subtitle, "Tap Done, or press the Action Button again")
         XCTAssertTrue(prefs.bool(forKey: TalkSession.clipboardTakeKey), "a dying process would list it as a send")
-        try await talk.toggle(source: "test", to: .clipboard)
+        try await talk.toggle(source: "test", to: .dictation)
         await talk.finishing?.value
-        XCTAssertEqual(copied, [said], "the words were changed on the way to the clipboard")
-        XCTAssertTrue(sender.sent.isEmpty, "a dictation reached the CEO chat")
-        XCTAssertEqual(talk.phase, .copied(said))
-        XCTAssertEqual(activity.ended.last?.state.title, "Copied")
-        XCTAssertEqual(activity.ended.last?.state.copy, true)
-        XCTAssertEqual(activity.updates.map(\.phase), [.transcribing], "a dictation is never sending")
-        XCTAssertTrue(outbox.entries.isEmpty, "a copied take leaves nothing behind")
-        XCTAssertEqual(recorder.forgotten, ["rec-d"], "the audio was left on the phone after its words were copied")
+        XCTAssertEqual(talk.phase, .review(said), "the words were changed on the way to the page")
+        XCTAssertTrue(talk.isReviewing)
+        XCTAssertFalse(talk.isBusy, "the page would block the next press")
+        XCTAssertEqual(pagesShown, 1, "the page was not brought up")
+        XCTAssertTrue(copied.isEmpty, "the words were copied before the person picked Copy")
+        XCTAssertTrue(sender.sent.isEmpty, "the words reached the CEO before the person picked Send")
+        XCTAssertEqual(activity.updates.map(\.phase), [.transcribing], "a dictation is never sending by itself")
+        XCTAssertEqual(activity.ended.last?.linger, 0, "the card lingered over the page Walnut shows")
+        // On disk while the page shows: a process that dies there leaves the words listed.
+        let kept = try XCTUnwrap(outbox.entries.first)
+        XCTAssertEqual(kept.text, said)
+        XCTAssertEqual(kept.copy, true)
+        XCTAssertEqual(kept.reason, TalkReason.notChosen)
+        XCTAssertNil(kept.recordingID, "the audio stays referenced after its words are safe")
+        XCTAssertFalse(TalkSession.waits(kept), "a dictation would be sent by itself")
+        XCTAssertEqual(recorder.forgotten, ["rec-d"], "the audio was left on the phone after its words were saved")
         XCTAssertFalse(prefs.bool(forKey: TalkSession.clipboardTakeKey))
         XCTAssertEqual(cues, [.started, .sent])
     }
 
-    func testADictationIOSWouldNotCopyIsKeptForTheCopyButtonAndNeverCopiedByItself() async throws {
-        copyTakes = false
+    func testThePagesCopyPutsTheWordsAsLeftOnTheClipboardAndSendsNothing() async throws {
         let talk = session()
-        try await dictateTwice(talk)
-        XCTAssertEqual(talk.phase, .notSent(TalkReason.notCopied, kept: true))
-        XCTAssertEqual(activity.ended.last?.state.title, "Not copied")
-        XCTAssertEqual(activity.ended.last?.state.subtitle, TalkReason.notCopied + " Open Walnut to copy it.")
-        let entry = try XCTUnwrap(outbox.unsent.first)
-        XCTAssertEqual(entry.text, "hello", "the words are kept")
-        XCTAssertEqual(entry.copy, true)
-        XCTAssertFalse(TalkSession.waits(entry), "copied later by itself, it would replace what the person copied since")
-        // Walnut comes to the front, the network comes back: nothing copies it by itself.
-        copyTakes = true
-        await talk.resendKept(source: "test")
-        XCTAssertTrue(copied.isEmpty, "a kept dictation was copied without the person's Copy")
-        XCTAssertTrue(sender.sent.isEmpty)
-        // The person's Copy.
-        let done = await talk.resend(entry.id)
-        XCTAssertTrue(done)
-        XCTAssertEqual(copied, ["hello"])
-        XCTAssertTrue(sender.sent.isEmpty, "a kept dictation was sent to the CEO")
-        XCTAssertEqual(talk.lastResent, "hello")
-        XCTAssertTrue(talk.lastResentCopied, "the list would say it was sent")
-        XCTAssertTrue(outbox.entries.isEmpty)
-        XCTAssertEqual(talk.phase, .idle)
+        try await dictate(talk)
+        XCTAssertTrue(talk.copyReview("hello, edited"))
+        XCTAssertEqual(copied, ["hello, edited"], "Copy did not take the words as the person left them")
+        XCTAssertTrue(sender.sent.isEmpty, "Copy reached the CEO chat")
+        XCTAssertEqual(talk.phase, .copied("hello, edited"))
+        XCTAssertTrue(outbox.entries.isEmpty, "a copied dictation stays in the list")
+        XCTAssertNil(talk.reviewTake)
+        XCTAssertEqual(cues, [.started, .sent, .sent])
     }
 
-    func testAFailedTranscriptionOfADictationKeepsTheRecordingAndCopyTranscribesItFirst() async throws {
+    func testThePagesSendDeliversTheWordsAsLeftToTheCEOAndCopiesNothing() async throws {
+        let talk = session()
+        try await dictate(talk)
+        let messageId = try XCTUnwrap(outbox.entries.first?.messageId)
+        await talk.sendReview("hello there")
+        XCTAssertEqual(sender.sent.map(\.text), ["hello there"], "Send did not take the words as the person left them")
+        XCTAssertEqual(sender.sent.first?.messageId, messageId, "Send made a second message id for the take")
+        XCTAssertTrue(copied.isEmpty, "Send copied the words")
+        XCTAssertEqual(talk.phase, .sent("hello there"))
+        XCTAssertEqual(talk.destination, .ceo, "the page would still read as a dictation")
+        XCTAssertTrue(outbox.entries.isEmpty, "a sent dictation stays in the list")
+    }
+
+    /// The server was away: Send keeps the words as a take for the CEO, which goes out by
+    /// itself later as any other does; they are never copied.
+    func testThePagesSendThatCannotReachTheServerKeepsTheWordsToGoOutLater() async throws {
+        sender.failures = [APIError.network(underlying: URLError(.notConnectedToInternet))]
+        let talk = session()
+        try await dictate(talk)
+        await talk.sendReview("hello")
+        XCTAssertEqual(talk.phase, .notSent(TalkReason.serverUnavailable, kept: true))
+        let entry = try XCTUnwrap(outbox.unsent.first)
+        XCTAssertEqual(entry.text, "hello")
+        XCTAssertNil(entry.copy, "the person picked Send: it is a take for the CEO now")
+        XCTAssertTrue(TalkSession.waits(entry))
+        XCTAssertEqual(activity.ended.last?.state.later, true)
+        await talk.resendKept(source: "test")
+        XCTAssertEqual(sender.sent.map(\.text), ["hello"])
+        XCTAssertTrue(copied.isEmpty)
+        XCTAssertTrue(outbox.entries.isEmpty)
+    }
+
+    /// iOS did not take the words: the page stays with them, for another Copy or a Send.
+    func testACopyIOSRefusesLeavesThePageAndTheWords() async throws {
+        copyTakes = false
+        let talk = session()
+        try await dictate(talk)
+        XCTAssertFalse(talk.copyReview("hello"))
+        XCTAssertEqual(talk.phase, .review("hello"))
+        XCTAssertEqual(outbox.entries.first?.text, "hello")
+        copyTakes = true
+        XCTAssertTrue(talk.copyReview("hello"))
+        XCTAssertEqual(copied, ["hello"])
+    }
+
+    /// Words with nothing in them are no message: neither button does anything.
+    func testThePageSendsAndCopiesNothingWhenTheWordsWereClearedAway() async throws {
+        let talk = session()
+        try await dictate(talk)
+        XCTAssertFalse(talk.copyReview(" \n "))
+        await talk.sendReview("   ")
+        XCTAssertTrue(copied.isEmpty)
+        XCTAssertTrue(sender.sent.isEmpty)
+        XCTAssertEqual(talk.phase, .review("hello"))
+    }
+
+    /// Closed with neither: the words, as left, wait in the list with Send and Copy, and
+    /// nothing sends or copies them by itself.
+    func testAPageClosedWithNeitherKeepsTheWordsInTheListForSendOrCopy() async throws {
+        let talk = session()
+        try await dictate(talk)
+        talk.closeReview("hello, kept")
+        XCTAssertEqual(talk.phase, .idle)
+        XCTAssertNil(talk.reviewTake)
+        let entry = try XCTUnwrap(outbox.unsent.first)
+        XCTAssertEqual(entry.text, "hello, kept")
+        XCTAssertEqual(entry.copy, true)
+        XCTAssertEqual(entry.reason, TalkReason.notChosen)
+        await talk.resendKept(source: "test")
+        XCTAssertTrue(copied.isEmpty, "a kept dictation was copied without the person's Copy")
+        XCTAssertTrue(sender.sent.isEmpty, "a kept dictation was sent without the person's Send")
+        // The list's Send.
+        let sent = await talk.resend(entry.id, send: true)
+        XCTAssertTrue(sent)
+        XCTAssertEqual(sender.sent.map(\.text), ["hello, kept"])
+        XCTAssertEqual(sender.sent.first?.messageId, entry.messageId)
+        XCTAssertTrue(copied.isEmpty)
+        XCTAssertFalse(talk.lastResentCopied)
+        XCTAssertTrue(outbox.entries.isEmpty)
+    }
+
+    func testAKeptDictationsCopyInTheListCopiesItAndSendsNothing() async throws {
+        let talk = session()
+        try await dictate(talk)
+        talk.closeReview()
+        let id = try XCTUnwrap(outbox.unsent.first?.id)
+        let done = await talk.resend(id)
+        XCTAssertTrue(done)
+        XCTAssertEqual(copied, ["hello"])
+        XCTAssertTrue(sender.sent.isEmpty)
+        XCTAssertTrue(talk.lastResentCopied)
+        XCTAssertTrue(outbox.entries.isEmpty)
+    }
+
+    /// The page's words deleted from the list (or sent or copied there): the page goes, and
+    /// the next press starts a take again.
+    func testThePageGoesWhenItsWordsLeaveTheList() async throws {
+        let talk = session()
+        try await dictate(talk)
+        let id = try XCTUnwrap(talk.reviewTake)
+        talk.discard(id)
+        XCTAssertEqual(talk.phase, .idle, "the page stayed with words no longer kept")
+        XCTAssertNil(talk.reviewTake)
+        let outcome = try await talk.toggle(source: "test", to: .ceo)
+        XCTAssertEqual(outcome, .listening, "a press only brought back a page with nothing on it")
+        await talk.cancel(source: "test")
+    }
+
+    /// A page left unseen behind another app never blocks the next press: Talk to Walnut
+    /// listens from behind as always, and the words wait in the list, still news.
+    func testAPressAfterAnUnseenPageStartsItsTakeAndTheWordsWaitInTheList() async throws {
+        let talk = session()
+        foreground = false
+        try await dictate(talk)
+        let id = try XCTUnwrap(talk.reviewTake)
+        let outcome = try await talk.toggle(source: "test", to: .ceo)
+        XCTAssertEqual(outcome, .listening, "an old page took over the press")
+        XCTAssertEqual(talk.destination, .ceo)
+        XCTAssertNil(talk.reviewTake)
+        XCTAssertFalse(talk.closedPages.contains(id), "an unseen page reads as closed by the person")
+        XCTAssertEqual(outbox.unsent.first { $0.id == id }?.text, "hello", "the words were dropped")
+        try await talk.toggle(source: "test", to: .ceo)
+        await talk.finishing?.value
+        XCTAssertEqual(sender.sent.map(\.text), ["hello"])
+        XCTAssertEqual(outbox.unsent.map(\.id), [id], "the dictation went out with the take")
+        XCTAssertTrue(copied.isEmpty)
+    }
+
+    /// Closed by the person: in the list, and not offered again as news.
+    func testAClosedPageIsNotOfferedAgain() async throws {
+        let talk = session()
+        try await dictate(talk)
+        let id = try XCTUnwrap(talk.reviewTake)
+        talk.closeReview("hello")
+        XCTAssertTrue(talk.closedPages.contains(id))
+    }
+
+    /// The first save failed: Close saves the words again rather than losing them.
+    func testClosingAPageWhoseEntryIsGoneKeepsTheWords() async throws {
+        let talk = session()
+        try await dictate(talk)
+        outbox.remove(try XCTUnwrap(talk.reviewTake))
+        talk.closeReview("hello, corrected")
+        let entry = try XCTUnwrap(outbox.unsent.first)
+        XCTAssertEqual(entry.text, "hello, corrected")
+        XCTAssertEqual(entry.copy, true)
+        XCTAssertEqual(entry.reason, TalkReason.notChosen)
+    }
+
+    /// Send from the page ends the card that said the words wait in Walnut.
+    func testThePagesSendEndsTheReadyCard() async throws {
+        let talk = session()
+        foreground = false
+        try await dictate(talk)
+        let card = try XCTUnwrap(activity.ended.last)
+        foreground = true
+        sender.failures = [APIError.network(underlying: URLError(.notConnectedToInternet))]
+        await talk.sendReview("hello")
+        XCTAssertNotNil(outbox.unsent.first, "the take is kept to send later")
+        XCTAssertTrue(TalkLiveActivity.endsNow(card.state, keeping: try XCTUnwrap(activity.lastKeeping)),
+                      "the card still says the words wait to be sent or copied")
+    }
+
+    /// The server was away though the network never dropped: while Walnut is in front the
+    /// waiting take is tried again by itself, as the screen promised, and goes out once.
+    func testAWaitingTakeGoesOutByItselfWhileWalnutIsInFront() async throws {
+        sender.failures = [APIError.network(underlying: URLError(.cannotConnectToHost))]
+        let talk = session()
+        talk.retryLaterDelay = .milliseconds(20)
+        try await talk.toggle(source: "test", to: .ceo)
+        try await talk.toggle(source: "test", to: .ceo)
+        await talk.finishing?.value
+        XCTAssertEqual(talk.phase, .notSent(TalkReason.serverUnavailable, kept: true))
+        try await waitUntil { self.sender.sent.count == 1 }
+        XCTAssertEqual(sender.sent.map(\.text), ["hello"])
+        XCTAssertTrue(outbox.entries.isEmpty)
+    }
+
+    /// A page the last process left open opens on its page at the next launch, never as a list.
+    func testAPageTheLastProcessLeftOpenReopensOnItsPage() async throws {
+        recorder.finishResult = .words("ship it", recordingID: "rec-p")
+        let talk = session()
+        try await dictate(talk)
+        let id = try XCTUnwrap(talk.reviewTake)
+        outbox = TalkOutbox(key: key)
+        let next = session()
+        XCTAssertEqual(next.phase, .review("ship it"))
+        XCTAssertEqual(next.reviewTake, id)
+        XCTAssertEqual(next.destination, .dictation)
+        await next.sendReview("ship it")
+        XCTAssertEqual(sender.sent.map(\.text), ["ship it"])
+    }
+
+    /// Copy on a take on its way to the CEO copies its words and leaves it to go.
+    func testCopyingAWaitingTakeLeavesItToGoToTheCEO() async throws {
+        sender.failures = [APIError.network(underlying: URLError(.notConnectedToInternet))]
+        let talk = session()
+        try await talk.toggle(source: "test", to: .ceo)
+        try await talk.toggle(source: "test", to: .ceo)
+        await talk.finishing?.value
+        let id = try XCTUnwrap(outbox.unsent.first?.id)
+        XCTAssertTrue(talk.copyWords(id))
+        XCTAssertEqual(copied, ["hello"])
+        XCTAssertEqual(outbox.unsent.map(\.id), [id], "a copy took the take off its way to the CEO")
+    }
+
+    /// The page's Send lands on the CEO chat in Walnut, where the person sees their message
+    /// and the answer; a Send that did not get there stays on its screen.
+    func testThePagesSendOpensTheCEOChatOnlyOnceItGotThere() async throws {
+        let talk = session()
+        try await dictate(talk)
+        await talk.sendReview("hello")
+        XCTAssertEqual(ceoChatsOpened, 1)
+        sender.failures = [APIError.network(underlying: URLError(.notConnectedToInternet))]
+        try await dictate(talk)
+        await talk.sendReview("hello again")
+        XCTAssertEqual(ceoChatsOpened, 1, "a failed Send moved the person to the chat")
+    }
+
+    /// An unseen page set aside by a Talk to Walnut press opens again once Walnut is in
+    /// front and nothing runs; a closed one never does.
+    func testAnUnseenPageReopensWhenWalnutComesForwardIdle() async throws {
+        let talk = session()
+        foreground = false
+        try await dictate(talk)
+        let id = try XCTUnwrap(talk.reviewTake)
+        try await talk.toggle(source: "test", to: .ceo)
+        talk.reopenUnseenPageIfIdle()
+        XCTAssertFalse(talk.isReviewing, "a page took over a take that listens")
+        try await talk.toggle(source: "test", to: .ceo)
+        await talk.finishing?.value
+        foreground = true
+        talk.reopenUnseenPageIfIdle()
+        XCTAssertEqual(talk.reviewTake, id)
+        XCTAssertEqual(talk.phase, .review("hello"))
+        talk.closeReview("hello")
+        talk.reopenUnseenPageIfIdle()
+        XCTAssertFalse(talk.isReviewing, "a closed page came back")
+    }
+
+    /// A closed page is remembered across launches: the next launch offers nothing.
+    func testAClosedPageStaysClosedForTheNextLaunch() async throws {
+        let talk = session()
+        try await dictate(talk)
+        let id = try XCTUnwrap(talk.reviewTake)
+        talk.closeReview("hello")
+        outbox = TalkOutbox(key: key)
+        XCTAssertTrue(session().closedPages.contains(id), "a new launch would offer the closed page again")
+        XCTAssertTrue(prefs.string(forKey: TalkSession.offeredKey)?.contains(id) == true)
+    }
+
+    /// A dictation kept by choice reads plainly; a real failure stays a failure.
+    func testOnlyAChosenDictationReadsAsAwaitingChoice() async throws {
+        let talk = session()
+        try await dictate(talk)
+        talk.closeReview("hello")
+        XCTAssertTrue(TalkSession.awaitsChoice(try XCTUnwrap(outbox.unsent.first)))
+        recorder.finishResult = .failed("Voice unavailable: the Mac is asleep.", recordingID: "rec-x")
+        try await dictate(talk)
+        let failed = try XCTUnwrap(outbox.unsent.first { $0.recordingID == "rec-x" })
+        XCTAssertFalse(TalkSession.awaitsChoice(failed))
+    }
+
+    /// Send always sends what the page shows, even when its entry could not be kept.
+    func testThePagesSendSendsEvenWhenItsEntryIsGone() async throws {
+        let talk = session()
+        try await dictate(talk)
+        outbox.remove(try XCTUnwrap(talk.reviewTake))
+        await talk.sendReview("hello")
+        XCTAssertEqual(sender.sent.map(\.text), ["hello"])
+        XCTAssertEqual(talk.phase, .sent("hello"))
+    }
+
+    /// Ended from behind another app: the card says the words wait in Walnut, stays until
+    /// they are sent or copied, and goes then.
+    func testADictationEndedFromBehindLeavesACardUntilItsWordsAreSentOrCopied() async throws {
+        let talk = session()
+        try await talk.toggle(source: "test", to: .dictation)
+        foreground = false
+        try await talk.toggle(source: "test", to: .dictation)
+        await talk.finishing?.value
+        let card = try XCTUnwrap(activity.ended.last)
+        XCTAssertEqual(card.linger, talk.notSentLinger, "the card went before the person saw it")
+        XCTAssertEqual(card.state.title, "Your words are ready")
+        XCTAssertEqual(card.state.subtitle, "Open Walnut to send or copy them.")
+        let id = try XCTUnwrap(talk.reviewTake)
+        XCTAssertEqual(card.state.take, id)
+        XCTAssertFalse(TalkLiveActivity.endsNow(card.state, keeping: Set(outbox.entries.map(\.id))), "the card went while the words wait")
+        foreground = true
+        XCTAssertTrue(talk.copyReview("hello"))
+        XCTAssertTrue(TalkLiveActivity.endsNow(card.state, keeping: try XCTUnwrap(activity.lastKeeping)), "the card stayed after Copy")
+    }
+
+    /// Corrections made on the page are kept when Walnut goes away before Send or Copy.
+    func testThePagesCorrectionsAreKeptForTheList() async throws {
+        let talk = session()
+        try await dictate(talk)
+        talk.keepReviewWords("hello, corrected")
+        XCTAssertEqual(outbox.entries.first?.text, "hello, corrected")
+        talk.keepReviewWords("  ")
+        XCTAssertEqual(outbox.entries.first?.text, "hello, corrected", "cleared words replaced the kept ones")
+    }
+
+    /// A press while the page is up brings the page back; it never drops its words for a new take.
+    func testAPressWhileThePageIsUpShowsItAndStartsNoTake() async throws {
+        let talk = session()
+        try await dictate(talk)
+        let started = activity.started.count
+        let outcome = try await talk.toggle(source: "test", to: .ceo)
+        XCTAssertEqual(outcome, .reviewing)
+        XCTAssertEqual(talk.phase, .review("hello"))
+        XCTAssertEqual(activity.started.count, started, "a press started a new take over the page")
+        XCTAssertEqual(pagesShown, 2)
+        XCTAssertTrue(sender.sent.isEmpty)
+    }
+
+    func testAFailedTranscriptionOfADictationKeepsTheRecordingAndBothButtonsTranscribeItFirst() async throws {
         recorder.finishResult = .failed("Voice unavailable: the Mac is asleep.", recordingID: "rec-9")
         recorder.transcribeResult = .words("later words", recordingID: "rec-9")
         let talk = session()
-        try await dictateTwice(talk)
+        try await dictate(talk)
         XCTAssertEqual(talk.phase, .notSent("Voice unavailable: the Mac is asleep.", kept: true))
-        XCTAssertEqual(activity.ended.last?.state.title, "Not copied")
+        XCTAssertEqual(activity.ended.last?.state.title, "Couldn't get your words")
+        XCTAssertEqual(pagesShown, 0, "a page with no words was shown")
         let entry = try XCTUnwrap(outbox.unsent.first)
         XCTAssertNil(entry.text)
         XCTAssertEqual(entry.recordingID, "rec-9")
         XCTAssertEqual(entry.copy, true)
-        let done = await talk.resend(entry.id)
+        let done = await talk.resend(entry.id, send: true)
         XCTAssertTrue(done)
         XCTAssertEqual(recorder.transcribed, ["rec-9"])
-        XCTAssertEqual(copied, ["later words"])
-        XCTAssertTrue(sender.sent.isEmpty)
-        XCTAssertEqual(recorder.forgotten, ["rec-9"])
+        XCTAssertEqual(sender.sent.map(\.text), ["later words"])
+        XCTAssertTrue(copied.isEmpty)
         XCTAssertTrue(outbox.entries.isEmpty)
     }
 
     /// The server was away: a take for the CEO waits to go out by itself, a dictation never.
-    func testADictationTheServerMissedWaitsOnlyForThePersonsCopy() async throws {
+    func testADictationTheServerMissedWaitsOnlyForThePerson() async throws {
         recorder.finishResult = .failed(TalkReason.serverUnavailable, recordingID: "rec-away")
         recorder.transcribeResult = .words("later words", recordingID: "rec-away")
         let talk = session()
-        try await dictateTwice(talk)
+        try await dictate(talk)
         let entry = try XCTUnwrap(outbox.unsent.first)
         XCTAssertEqual(entry.copy, true)
-        XCTAssertFalse(TalkSession.waits(entry), "a dictation would be copied by itself")
+        XCTAssertFalse(TalkSession.waits(entry), "a dictation would go out by itself")
         XCTAssertNotEqual(activity.ended.last?.state.later, true, "the card says it sends by itself")
-        XCTAssertEqual(activity.ended.last?.state.title, "Not copied")
         await talk.resendKept(source: "test")
         XCTAssertTrue(recorder.transcribed.isEmpty, "a kept dictation was retried without the person")
         XCTAssertTrue(copied.isEmpty)
         XCTAssertTrue(sender.sent.isEmpty)
-        XCTAssertTrue(recorder.forgotten.isEmpty, "the audio went before its words were copied")
+        XCTAssertTrue(recorder.forgotten.isEmpty, "the audio went before its words were safe")
         let done = await talk.resend(entry.id)
         XCTAssertTrue(done)
         XCTAssertEqual(copied, ["later words"])
         XCTAssertEqual(recorder.forgotten, ["rec-away"])
     }
 
-    func testACopyThatFailsAgainKeepsTheWordsAndSaysItWasTried() async throws {
-        copyTakes = false
+    func testACopyInTheListThatFailsAgainKeepsTheWordsAndSaysItWasTried() async throws {
         let talk = session()
-        try await dictateTwice(talk)
+        try await dictate(talk)
+        talk.closeReview()
+        copyTakes = false
         let id = try XCTUnwrap(outbox.unsent.first?.id)
         let done = await talk.resend(id)
         XCTAssertFalse(done)
         XCTAssertEqual(outbox.unsent.first?.text, "hello")
+        XCTAssertEqual(outbox.unsent.first?.reason, TalkReason.notCopied)
         XCTAssertEqual(outbox.unsent.first?.attempts, 1)
         XCTAssertNil(talk.lastResent)
     }
 
-    /// A copy reaches no one: the cap ends a dictation by copying it, where a take for
-    /// the CEO waits for the person.
-    func testTheCapEndsADictationByCopyingIt() async throws {
+    /// The cap ends a dictation on its page: nothing goes anywhere until the person picks.
+    func testTheCapEndsADictationOnItsPage() async throws {
         var detector = TalkPauseDetector()
         detector.maxDuration = 0.05
         recorder.levels = [-15]
         let talk = session()
         talk.detectorTemplate = detector
-        try await talk.toggle(source: "test", to: .clipboard)
-        try await waitUntil { if case .copied = talk.phase { return true }; return false }
-        XCTAssertEqual(copied, ["hello"])
+        try await talk.toggle(source: "test", to: .dictation)
+        try await waitUntil { talk.isReviewing }
+        XCTAssertEqual(talk.phase, .review("hello"))
+        XCTAssertTrue(copied.isEmpty)
         XCTAssertTrue(sender.sent.isEmpty)
-        XCTAssertTrue(outbox.entries.isEmpty)
     }
 
-    func testADictationWithNoWordsCopiesNothingAndSaysSo() async throws {
+    func testADictationWithNoWordsOpensNoPageAndSaysSo() async throws {
         recorder.finishResult = .noWords(recordingID: "rec-cough")
         let talk = session()
-        try await dictateTwice(talk)
-        XCTAssertEqual(talk.phase, .notSent("Didn't catch any words, so nothing was copied.", kept: false))
+        try await dictate(talk)
+        XCTAssertEqual(talk.phase, .notSent("Didn't catch any words, so there is nothing to send or copy.", kept: false))
         XCTAssertEqual(activity.ended.last?.state.title, "Nothing heard")
+        XCTAssertEqual(pagesShown, 0)
         XCTAssertTrue(copied.isEmpty)
         XCTAssertTrue(outbox.entries.isEmpty)
         XCTAssertEqual(recorder.forgotten, ["rec-cough"])
@@ -1017,11 +1335,12 @@ final class TalkSessionTests: XCTestCase {
     func testAMarkIsLeftOnlyWhileADictationRuns() async throws {
         recorder.beginFailure = "Audio is in use by another app."
         let talk = session()
-        do { try await talk.toggle(source: "test", to: .clipboard) } catch {}
+        do { try await talk.toggle(source: "test", to: .dictation) } catch {}
         XCTAssertFalse(prefs.bool(forKey: TalkSession.clipboardTakeKey), "a refused start left the mark")
         recorder.beginFailure = nil
         // A take for the CEO after a dictation is no dictation.
-        try await dictateTwice(talk)
+        try await dictate(talk)
+        talk.closeReview()
         try await talk.toggle(source: "test", to: .ceo)
         XCTAssertFalse(prefs.bool(forKey: TalkSession.clipboardTakeKey))
         XCTAssertEqual(talk.destination, .ceo)
@@ -1030,22 +1349,38 @@ final class TalkSessionTests: XCTestCase {
 
     func testACancelledDictationLeavesNoMark() async throws {
         let talk = session()
-        try await talk.toggle(source: "test", to: .clipboard)
+        try await talk.toggle(source: "test", to: .dictation)
         await talk.cancel(source: "test")
         XCTAssertFalse(prefs.bool(forKey: TalkSession.clipboardTakeKey))
         XCTAssertTrue(copied.isEmpty)
+        XCTAssertTrue(outbox.entries.isEmpty)
     }
 
-    /// A process that died with a dictation leaves its recording: it is listed to copy,
-    /// never as a take a Resend sends to the CEO.
-    func testADictationTheLastProcessLeftIsListedToCopyNeverToSend() throws {
+    /// A process that died with a dictation leaves its recording: it is listed for the
+    /// person's Send or Copy, never as a take that goes to the CEO by itself.
+    func testADictationTheLastProcessLeftIsListedForThePersonNeverSentByItself() throws {
         prefs.set(true, forKey: TalkSession.clipboardTakeKey)
         recorder.kept = ["rec-orphan"]
         _ = session()
         let orphan = try XCTUnwrap(outbox.unsent.first)
         XCTAssertEqual(orphan.copy, true)
-        XCTAssertEqual(orphan.reason, "Walnut stopped before this recording was copied.")
+        XCTAssertEqual(orphan.reason, "Walnut stopped before this dictation was ready.")
+        XCTAssertFalse(TalkSession.waits(orphan))
         XCTAssertFalse(prefs.bool(forKey: TalkSession.clipboardTakeKey), "the next launch would mark another take")
+    }
+
+    /// A process that died with the page up leaves the words in the list, as they were heard.
+    func testThePageTheLastProcessLeftIsListedWithItsWords() async throws {
+        let talk = session()
+        try await dictate(talk)
+        XCTAssertTrue(talk.isReviewing)
+        // A new process reads the list from the disk.
+        outbox = TalkOutbox(key: key)
+        let next = session()
+        let entry = try XCTUnwrap(next.outbox.unsent.first)
+        XCTAssertEqual(entry.text, "hello")
+        XCTAssertEqual(entry.copy, true)
+        XCTAssertEqual(entry.reason, TalkReason.notChosen, "a page left open is not listed as waiting for Send or Copy")
     }
 
     func testATakeTheLastProcessLeftWithNoMarkIsStillOneToSend() throws {
@@ -1060,13 +1395,15 @@ final class TalkSessionTests: XCTestCase {
     func testAPressOfEitherShortcutEndsTheTakeAsItWasStarted() async throws {
         let talk = session()
         try await talk.toggle(source: "test", to: .ceo)
-        try await talk.toggle(source: "test", to: .clipboard)
+        try await talk.toggle(source: "test", to: .dictation)
         await talk.finishing?.value
         XCTAssertEqual(sender.sent.map(\.text), ["hello"])
-        XCTAssertTrue(copied.isEmpty)
+        XCTAssertEqual(pagesShown, 0)
         // And the next take is a dictation again.
-        try await dictateTwice(talk)
-        XCTAssertEqual(copied, ["hello"])
+        try await talk.toggle(source: "test", to: .dictation)
+        try await talk.toggle(source: "test", to: .ceo)
+        await talk.finishing?.value
+        XCTAssertEqual(talk.phase, .review("hello"))
         XCTAssertEqual(sender.sent.count, 1)
     }
 }
@@ -1293,12 +1630,12 @@ final class TalkBundleTests: XCTestCase {
         XCTAssertTrue(text.contains("TalkToWalnutIntent"))
         XCTAssertTrue(text.contains("Talk to Walnut"))
         XCTAssertTrue(text.contains("DictateToClipboardIntent"))
-        XCTAssertTrue(text.contains("Dictate to Clipboard"))
+        XCTAssertTrue(text.contains("Dictate with"), "the Dictate shortcut's phrases are not in the metadata")
     }
 
-    func testDictateToClipboardRecordsWithoutOpeningWalnutToo() {
+    func testDictateIsAnAudioRecordingPressLikeTalkToWalnut() {
         XCTAssertFalse(DictateToClipboardIntent.openAppWhenRun)
-        XCTAssertEqual(DictateToClipboardIntent.destination, .clipboard)
+        XCTAssertEqual(DictateToClipboardIntent.destination, .dictation)
         XCTAssertEqual(TalkToWalnutIntent.destination, .ceo)
         XCTAssertTrue((DictateToClipboardIntent() as Any) is any LiveActivityIntent)
         XCTAssertTrue((DictateToClipboardIntent() as Any) is any AudioRecordingIntent)
@@ -1316,9 +1653,10 @@ final class TalkBundleTests: XCTestCase {
         XCTAssertEqual(state.title, "Sent to your CEO")
         var copy = state
         copy.copy = true
-        XCTAssertEqual(copy.title, "Copied")
+        XCTAssertEqual(copy.title, "Your words are ready")
+        XCTAssertEqual(copy.subtitle, "Open Walnut to send or copy them.")
         copy.phase = .failed
-        XCTAssertEqual(copy.title, "Not copied")
+        XCTAssertEqual(copy.title, "Couldn't get your words")
     }
 }
 

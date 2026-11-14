@@ -104,6 +104,20 @@ describe('PUT /api/config', () => {
     expect((await request(app).put('/api/config').send({ external_session_import: config })).status).toBe(400);
   });
 
+  it('keeps the skill listing cap of Claude Code sessions when it is in range', async () => {
+    const app = createApp();
+    expect((await request(app).put('/api/config').send({ session: { skill_listing_desc_chars: 200 } })).status).toBe(200);
+    const raw = yaml.load(await fs.readFile(CONFIG_FILE, 'utf8')) as any;
+    expect(raw.session.skill_listing_desc_chars).toBe(200);
+  });
+
+  it.each([39, 1537, 100.5, '200', true])('rejects a skill listing cap outside 40..1536: %j', async value => {
+    const app = createApp();
+    const res = await request(app).put('/api/config').send({ session: { skill_listing_desc_chars: value } });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/skill_listing_desc_chars/);
+  });
+
   it('partial PUT preserves unmentioned config sections', async () => {
     const app = createApp();
 

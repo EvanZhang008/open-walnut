@@ -433,16 +433,21 @@ test('full screen is the pop-up sheet with margins, kept across a reload; close 
   await page.keyboard.press('Escape')
   await expect(rail).not.toHaveAttribute('data-fullscreen', '1')
 
-  // A task opened from the sheet opens beside the page with the sheet gone, never under it.
+  // A task clicked in the sheet opens on Home (a task reference, useOpenTask) with the sheet gone,
+  // never under it: Home's list has it selected, no panel beside the Org page, no details popup.
   await detail.getByTestId('org-top-task').click()
   await detail.getByTestId('org-task-mode-all').click()
   await detail.getByTestId('org-rail-fullscreen').click()
   await expect(rail).toHaveAttribute('data-fullscreen', '1')
   await openAllSections(detail)
-  await detail.getByTestId('org-task-row').first().click()
-  await expect(rail).not.toHaveAttribute('data-fullscreen', '1')
+  const first = detail.getByTestId('org-task-row').first()
+  const firstId = (await first.getAttribute('data-task-id'))!
+  await first.click()
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
   await expect(page.locator('.open-walnut-fullscreen-backdrop')).toHaveCount(0)
-  await expect(page.getByTestId('org-side')).toBeVisible()
+  await expect(page.locator(`#home-task-navigation [data-task-id="${firstId}"]`).and(page.locator('.task-focused, .todo-pinned-card-active'))).toHaveCount(1, { timeout: 30_000 })
+  await expect(page.getByTestId('org-side')).toHaveCount(0)
+  await expect(page.locator('.task-detail-modal')).toHaveCount(0)
 })
 
 test('a narrow window stacks the side bar above the chat, with no widen; a link naming Team opens All tasks once', async ({ page }) => {

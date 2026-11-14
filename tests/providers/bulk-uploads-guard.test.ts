@@ -131,7 +131,7 @@ describe('bytes carried up to a host ride the bulk channel', () => {
   it('a background upload never falls back to the session link while its own channel is meant to be up', () => {
     const once = CONN.slice(CONN.indexOf('private async sendOnce('), CONN.indexOf('private async sendOnce(') + 6_000)
     expect(once).toMatch(/const upload = DaemonConnection\.isUpload\(cmd, params\)/)
-    expect(once).toMatch(/if \(background && this\.bulkOwnLink && !bulkSocket\) \{\s*throw markLinkFailure\(/)
+    expect(once).toMatch(/if \(background && \(this\.bulkOwnLink \? !bulkSocket : this\.bulkOwnWanted && !ownUp\)\) \{[\s\S]{0,400}?throw markLinkFailure\(/)
     // Every upload no person waits on is in the background set.
     for (const c of ['fs.writePart', 'replica.put', 'replica.sync', 'attachments.put', 'attachments.sync', 'sessions.discoverExternal']) expect(background, c).toContain(c)
     // At any size (2026-11-12: manifests under the size bar, 1.5 MB in 16 minutes, still

@@ -116,7 +116,7 @@ describe('every way a link comes up passes the gate (ratchet)', () => {
     expect(body.indexOf('assertDaemonDialsOpen(')).toBeLessThan(body.indexOf('this._connected = value'))
   })
   /** Helpers that bring a link up but are only ever called from a gated entry. */
-  const ONLY_FROM_GATED = ['dialDirect', 'forceRedeployAndReconnect']
+  const ONLY_FROM_GATED = ['dialDirect', 'forceRedeployAndReconnect', 'reconnected']
 
   it('each gated entry checks the gate', () => {
     for (const name of GATED) expect(bodyOf(name), name).toMatch(/assertDaemonDialsOpen\(/)
