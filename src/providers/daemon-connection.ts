@@ -666,8 +666,15 @@ export function mainUploadSummary(sent: ReadonlyMap<string, number>, upAt: numbe
  * now is a login refused for a while, not a host that allows one connection (noteBulkOwnRefused).
  */
 const bulkOwnEverUpHosts = new Set<string>()
-/** An SSH login the host refused (a key or certificate it does not take): no new session link either. */
-const BULK_LOGIN_REFUSED = /Permission denied|publickey|certificate|Authentication failed|Too many authentication failures/i
+/**
+ * A host that takes no second forward (its sshd forbids it): the one case where the bulk channel
+ * rides the session link for good. Any other failure (a refused key or certificate, a proxy that
+ * closes the login, a timeout) is judged temporary and waited out: on 2026-11-14 15:21Z a proxy
+ * refused the second login with only "Connection closed by UNKNOWN port 65535" on its last line,
+ * which no list of login errors named, and 1.3 MB of background uploads rode the session link
+ * until the relay ended it 11 minutes later.
+ */
+const BULK_FORWARD_FORBIDDEN = /administratively prohibited|forwarding (?:is )?disabled|refused local port forward/i
 
 export class DaemonConnection {
   private ws: WebSocket | null = null
@@ -7696,17 +7703,17 @@ export class DaemonConnection {
   }
 
   /**
-   * The bulk channel's own connection would not open, and it rides the session link for now. When
-   * this host's own connection opened before (in this server or an earlier one of this process), or
-   * the login itself was refused (an expired certificate while the session link still rides the
-   * master opened before it: no new login works, so a relay cut of that link would leave the host
-   * unreachable), background uploads wait for it instead of riding the session link, and it is
-   * dialled again on a backoff, beside the channel in use. A host whose second connection never
-   * opened for another reason keeps riding the session link, as before, with no retry.
+   * The bulk channel's own connection would not open, and it rides the session link for now. Unless
+   * the host forbids a second forward (BULK_FORWARD_FORBIDDEN) and never had one in this process,
+   * background uploads wait for it instead of riding the session link, and it is dialled again on a
+   * backoff, beside the channel in use. The usual cause is a login refused while the session link
+   * still rides the master opened before it (an expired certificate, a proxy whose own login
+   * expired): no new login works, so a relay cut of that link would leave the host unreachable.
+   * A host that forbids the second forward keeps riding the session link, as before, with no retry.
    */
   private noteBulkOwnRefused(err: unknown): void {
     const said = (err instanceof Error ? err.message : String(err)).split('\n')[0].slice(0, 300)
-    const wanted = bulkOwnEverUpHosts.has(this.hostKey) || BULK_LOGIN_REFUSED.test(said)
+    const wanted = bulkOwnEverUpHosts.has(this.hostKey) || !BULK_FORWARD_FORBIDDEN.test(said)
     if (!wanted) return
     if (!this.bulkOwnWanted) {
       log.session.warn('DaemonConnection: the bulk channel\'s own connection will not open; background uploads wait for it', { host: this.hostKey, error: said })

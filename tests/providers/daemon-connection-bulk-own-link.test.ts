@@ -349,6 +349,31 @@ describe('DaemonConnection: the bulk channel on a connection of its own', () => 
     expect(daemon.getCommandHistoryFor('fs.writePart')).toHaveLength(1)
     expect((conn as unknown as { bulkOwnWanted: boolean }).bulkOwnWanted).toBe(false)
   })
+  // 2026-11-14 15:21Z: a proxy refused the second login with only "Connection closed by UNKNOWN port
+  // 65535" on stderr's last line; no list of login errors named it, background uploads rode the
+  // session link and the relay ended it. Every failure but a forbidden forward holds them.
+  for (const said of [
+    'code 255: Connection closed by UNKNOWN port 65535',
+    'code 255: user@devbox: Permission denied (publickey).',
+    'code 255: ssh: connect to host devbox port 22: Operation timed out',
+    'the forward did not answer in 20s',
+  ]) {
+    it(`O16: a first dial that fails with "${said}" holds background uploads and is dialled again`, async () => {
+      let tries = 0
+      _setBulkForwardForTesting(async () => { tries++; throw new Error(`its SSH forward did not open (${said})`) })
+      statics.BULK_OWN_RETRY_MS = 100
+      statics.BULK_UPLOAD_WAIT_MS = 300
+      conn = new DaemonConnection(`bulk-fail-${tries}-${said.length}`, TARGET)
+      await conn.connectDirect(`ws://127.0.0.1:${daemon.port}`)
+      await waitFor(() => conn.bulkChannelActive && (conn as unknown as { bulkOwnWanted: boolean }).bulkOwnWanted, 5_000, 'own connection wanted')
+      daemon.clearCommandHistory()
+      const err = await conn.send('replica.put', { home: '/h', kind: 'notes', files: [{ path: 'a.md', data: 'AAAA' }] }).then(() => null, (e: Error) => e)
+      expect(err?.message).toMatch(/nothing was sent/)
+      expect(daemon.getCommandHistoryFor('replica.put')).toEqual([])
+      await waitFor(() => tries >= 2, 5_000, 'dialled again')
+    })
+  }
+
   it('O14: while the own connection is refused, a big automatic copy is not sent on the session link, a small one is, and the held one goes when it opens', async () => {
     let refuse = true
     _setBulkForwardForTesting(async () => {
