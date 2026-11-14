@@ -125,6 +125,7 @@ const CALL_SITES: Record<string, number> = {
   'src/core/sessions/auto-recover-env.ts': 1,
   'src/core/sessions/background-work-wake.ts': 1, // a Codex session's own leftover command ended
   'src/core/sessions/brief-refresh.ts': 1,
+  'src/core/sessions/reply-outbox.ts': 1,          // an owed answer sent again as it was stored: the answering task's own source
   'src/core/sessions/endpoint-wait.ts': 1,         // its one continue, as auto-continue
   'src/core/sessions/folder-gone.ts': 1,           // a new conversation's first line: a notice, then the rows that waited as stored
   'src/core/sessions/lane-turn.ts': 3,             // frames the first line for its source; a joined message goes as its lane's source
