@@ -1011,6 +1011,11 @@ The capability rows as built in 5a:
 | `cloud-exec` | `cloud-exec`, `local-daemon`, `stream-file-cleanup`, `send-path-canary` | `cloudExecActive`, the tunnel daemon's exec check, the canary's own start |
 | `backup-leader` | `backup-leader`, `cron`, `routine-wake` | `getBackupLeader`, `canStandIn` |
 
+Since 2026-11-14 each capability is a manifest in `src/core/capabilities/`: its rows are the manifest's
+`jobs`, and its socket doors, its HTTP routes outside the `/api` token check and the files that read it
+are listed there too; a row no longer carries a `capability` field (docs/reference/session-daemon.md,
+"Adding a capability").
+
 `expose-runtime` is a public door too (the tunnel in front of the box), so it joined
 `public-door`. The pairing, claim, push and voice routes are mounted on every server
 already, so `public-door` gates no mount yet. Inside the core modules those routes

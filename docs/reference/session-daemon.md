@@ -92,16 +92,17 @@ diagnosis: degrade to the nearest existing directory plus "couldn't find X".
 plus a public capability ... we must not maintain a pile of logic", then "it cannot go wrong next time".)
 A Walnut server is the **leader** (the Mac) or a **replica**. The cloud companion is a replica like
 the server on any host; what it offers on top is a set of **capabilities**, each a flag the box turns
-on (`src/core/capabilities.ts`: `public-door` phones pair, push and voice reach it from the internet;
-`bridge-door` daemons dial in; `cloud-exec` its own sessions; `backup-leader` it may stand in for the
-Mac). Walnut keeps ONE replica logic, never a second one for the companion:
+on (`public-door` phones pair, push and voice reach it from the internet; `bridge-door` daemons dial in;
+`cloud-exec` it runs its own machine's daemon; `backup-leader` it may stand in for the Mac). Each one is a
+manifest in `src/core/capabilities/` (see "Adding a capability" below). Walnut keeps ONE replica logic,
+never a second one for the companion:
 
 - **Never ask "am I the companion".** No new `CLOUD_MODE`, `process.env.WALNUT_CLOUD_MODE`,
   `isCompanion()`, `followerKind() === 'companion'` or `placement() === 'cloud'` in a feature, on the
   server or in a client. Ask what you mean instead: `isFollower()` / `role()` (this server is a
   replica, its leader is elsewhere), `leaderAnswers()` (the leader answers now), `hasCapability(<name>)`
   or a `bootPolicy` row (this box offers that door or job). A new optional feature of one box is a new
-  capability in `capabilities.ts`, on by default only where it ran before.
+  capability, on by default only where it ran before.
 - **Clients read the same way**: the web and the phone read `role`, `placement` and `capabilities` from
   `GET /api/config` and `GET /api/v1/status` (and the leader presence headers), never `cloud: true` or
   `mode: 'REPLICA'` as "this is the companion"; those two fields stay only for older clients.
@@ -112,6 +113,49 @@ Mac). Walnut keeps ONE replica logic, never a second one for the companion:
   and queues, which plan slice 5b of `docs/plan/walnut-companion-unified-replica.md` removes, a stored
   value that names the companion, a fact a client is told). A new read fails it; a count may only
   fall. Do not raise a row: convert the read.
+
+### Adding a capability
+
+(2026-11-14, the user: "make them an internal capability platform, so relatively easy to add ... but
+please still keep the security to the best, as the public thing is not kidding".) A capability is one
+file in `src/core/capabilities/`, and that file is its whole surface:
+
+| Field | What it holds | Kept true by |
+|---|---|---|
+| `name` | the wire name: `WALNUT_CAPABILITIES`, `serverCapabilities` in `GET /api/config` and `/api/v1/status`, the boot policy line; never renamed | the wire-name check |
+| `summary` | one sentence a person reads | |
+| `companionDefault` | whether a companion that sets nothing has it: true only for the four that existed before `WALNUT_CAPABILITIES` | the default set is exactly those four |
+| `jobs` | the boot policy rows (`src/core/boot-policy.ts`) it turns on for a replica, in table order | every job is a row, owned by one capability |
+| `doors` | each socket path it opens: who may open it (`opensWith`), the file that checks the credential (`verifiedIn`) and that check as it reads in the code (`check`) | the upgrade handler reads the path only to look the door up and to test `/ws`; every door branch checks a credential before it hands the socket on; only the listed files take upgrades; a door is shut without its capability; the `check` is in the code of `verifiedIn` |
+| `routes` | each HTTP path it mounts that the `/api` device-token check does not cover (an invite code, the Mac's machine token, git's own credential), with the same three fields | everything `server.ts` mounts outside `/api`, and every path `middleware/auth.ts` lets in without a token, is a declared route or named in the test as no capability's, with why |
+| `reads` | every file in `src/` and `web/src/` that asks `hasCapability('<name>')` or `useServerCapability('<name>')` with a literal name (a wrapper such as `canStandIn` counts as its own file's read) | the read list must match the code exactly |
+
+To add one:
+
+1. Write the manifest (`companionDefault: false`) and add it to `MANIFESTS` in `src/core/capabilities.ts`.
+2. Add its name to `ServerCapability` in `web/src/api/config.ts`.
+3. Gate its jobs with `bootPolicy` rows, and add them to `CAPABILITY_JOBS` (and their old truth to
+   `OLD_TRUTH`) in `tests/core/boot-policy.test.ts`.
+4. Gate its code with `hasCapability`, and declare every door and route it opens.
+
+`tests/core/capability-manifests.test.ts` fails until the manifest names all of it. A box turns it on by
+naming it in `WALNUT_CAPABILITIES`.
+
+The security rules every capability keeps:
+
+- **Closed list.** Manifests are compiled in; nothing loads a capability from disk, a plugin or the
+  network. A name in `WALNUT_CAPABILITIES` that no manifest has stops the companion's boot, and the Mac
+  and a host replica ignore the variable.
+- **Off unless named.** The Mac and a host replica have no capability, so no door opens on them. A
+  companion that sets nothing has the four it always ran; a capability added later is off on every box
+  until the box names it, so an update never opens a new door by itself.
+- **Every way in states its credential.** A socket door or an HTTP route outside `/api` names the one
+  credential that opens it, the file that checks it before anything else happens, and the check itself.
+  The upgrade handler destroys every other socket path; every other `/api` route takes the device-token
+  check (`src/web/middleware/auth.ts`).
+- **The smallest surface.** What a bridge socket may ask a daemon is the daemon's own allowlist
+  (`BRIDGE_ALLOWED_COMMANDS`), never its full command set; a capability that needs more adds the one
+  command to that list on purpose, with a test.
 
 ## Topology, files, CLI lifecycle and delivery paths
 

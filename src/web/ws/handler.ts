@@ -10,7 +10,7 @@ import type { IncomingMessage } from 'node:http'
 import type { Server as HttpServer } from 'node:http'
 import type { WsFrame } from './protocol.js'
 import { isCompanion, isHostReplica } from '../../core/server-role.js'
-import { hasCapability } from '../../core/capabilities.js'
+import { openSocketDoor } from '../../core/capabilities.js'
 import { toDisposable, type Disposable } from '../../core/plugins/disposable.js'
 import { OwnedRegistry } from '../../core/plugins/owned-registry.js'
 import { log } from '../../logging/index.js'
@@ -541,10 +541,15 @@ export function attachWss(server: HttpServer): WebSocketServer {
       return
     }
 
-    // /bridge (the bridge-door capability, core/capabilities.ts): a remote daemon
-    // dialing in. Requires a machine token; the connection goes to the bridge
-    // registry, NOT the browser client set (no RPC surface, no broadcasts).
-    if (hasCapability('bridge-door') && url.pathname === '/bridge') {
+    // A socket door a capability opens (its manifest in core/capabilities/ names the
+    // path and who may open it); null when no manifest declares it or this box lacks
+    // that capability. Every other path is /ws or refused below.
+    const door = openSocketDoor(url.pathname)?.path ?? null
+
+    // /bridge (bridge-door): a remote daemon dialing in. Requires a machine token;
+    // the connection goes to the bridge registry, NOT the browser client set (no
+    // RPC surface, no broadcasts).
+    if (door === '/bridge') {
       // Import BEFORE handleUpgrade: the daemon sends its hello immediately on
       // open, and message listeners must be attached synchronously in the
       // upgrade callback or the first frame is lost (first-connection race).
@@ -593,10 +598,11 @@ export function attachWss(server: HttpServer): WebSocketServer {
       return
     }
 
-    // /daemon-tunnel (the bridge-door capability): the paired Mac driving its own
-    // daemon on this box. Only the primary's machine token opens it (daemon-tunnel.ts).
-    if (hasCapability('bridge-door') && (url.pathname === DAEMON_TUNNEL_PATH || url.pathname === BRIDGE_SESSION_STREAM_PATH)) {
-      if (url.pathname === BRIDGE_SESSION_STREAM_PATH) {
+    // /daemon-tunnel and /bridge/session-stream (bridge-door): the paired Mac driving
+    // its own daemon on this box, or reading one session. Only the primary's machine
+    // token opens them (daemon-tunnel.ts, bridge-session-stream.ts).
+    if (door === DAEMON_TUNNEL_PATH || door === BRIDGE_SESSION_STREAM_PATH) {
+      if (door === BRIDGE_SESSION_STREAM_PATH) {
         void handleBridgeSessionStreamUpgrade(request, socket, head, { verify: () => verifyCloudUpgrade(url, request) })
       } else {
         import('./daemon-tunnel.js')
