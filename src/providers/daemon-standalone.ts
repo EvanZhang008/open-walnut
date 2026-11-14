@@ -14494,7 +14494,11 @@ if (action === '--start' || SERVICE_MODE) {
   // daemon.pid before daemon.port: a starter that sees the port file reads the pid next
   // (2026-11-04: a test read daemon.pid in that gap, ENOENT; tests/providers/daemon-pid-before-port.test.ts).
   fs.writeFileSync(PID_FILE, String(process.pid))
-  fs.writeFileSync(PORT_FILE, String(port))
+  // daemon.port by rename, so a reader that sees the file reads the whole port, never the empty
+  // file between its creation and its write (CI 43535674084: ws://127.0.0.1:NaN).
+  const portTmp = PORT_FILE + '.' + process.pid + '.tmp'
+  fs.writeFileSync(portTmp, String(port))
+  fs.renameSync(portTmp, PORT_FILE)
   // The host network runs once this daemon answers on its port (net-v1).
   netSupervisor.start()
   // daemon.pid names us now: the journal writes are ours (journal v2 migration).
