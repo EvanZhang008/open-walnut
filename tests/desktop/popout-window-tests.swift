@@ -46,9 +46,16 @@ struct PopoutWindowTests {
         app.delegate = delegate
         delegate.setupMainMenu()
         let fileMenu = app.mainMenu?.items.compactMap { $0.submenu }.first { $0.title == "File" }
+        // Command-W is the page's first (Close Column: a column in the main window, the window
+        // itself in a pop-out); Command-Shift-W closes any window (desktop/main.swift setupMainMenu).
+        let columnItem = fileMenu?.item(withTitle: "Close Column")
+        precondition(columnItem?.keyEquivalent == "w")
+        precondition(columnItem?.keyEquivalentModifierMask == .command)
+        precondition(columnItem?.action == #selector(AppDelegate.closeColumnOrPopout))
+        precondition(columnItem?.target == nil)
         let closeItem = fileMenu?.item(withTitle: "Close Window")
-        precondition(closeItem?.keyEquivalent == "w")
-        precondition(closeItem?.keyEquivalentModifierMask == .command)
+        precondition(closeItem?.keyEquivalent == "W")
+        precondition(closeItem?.keyEquivalentModifierMask == [.command, .shift])
         precondition(closeItem?.action == #selector(NSWindow.performClose(_:)))
         precondition(closeItem?.target == nil)
         delegate.webContentWatchdog = WebContentWatchdog(
@@ -162,9 +169,13 @@ struct PopoutWindowTests {
         let final = reopened ?? delegate.popoutWindows.values.first { ($0.contentView as? WKWebView)?.url?.absoluteString.contains("view=session") == true }!
         try await wait { (try? await js(final.contentView as! WKWebView, "!!document.querySelector('.popout-session .session-panel-input textarea')")) as? Bool == true }
         try pressCloseKey(delegate.window)
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+        try expect(delegate.window.isVisible, "Command-W closed the main window")
+        print("Command-W kept the main window open")
+        try pressCloseKey(delegate.window, shift: true)
         try await wait { !delegate.window.isVisible }
         precondition(delegate.popoutWindows.count == 2)
-        print("Command-W closed parent without closing children")
+        print("Command-Shift-W closed parent without closing children")
         precondition(!final.isVisible)
         let finalView = final.contentView as! WKWebView
         try await wait { (try? await js(finalView, "!document.querySelector('.session-panel-header').textContent.includes('Loading...')")) as? Bool == true }
@@ -421,17 +432,19 @@ struct PopoutWindowTests {
     }
 
     @MainActor
-    static func pressCloseKey(_ window: NSWindow) throws {
+    /// Command-W (Close Column), or Command-Shift-W (Close Window) with `shift`.
+    static func pressCloseKey(_ window: NSWindow, shift: Bool = false) throws {
         let app = NSApp as! BackgroundApplication
         app.testKeyWindow = window
         defer { app.testKeyWindow = nil }
         precondition(NSApp.keyWindow === window)
-        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+        let key = shift ? "W" : "w"
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: shift ? [.command, .shift] : .command,
             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-            context: nil, characters: "w", charactersIgnoringModifiers: "w", isARepeat: false, keyCode: 13)!
+            context: nil, characters: key, charactersIgnoringModifiers: key, isARepeat: false, keyCode: 13)!
         NSApp.mainMenu!.update()
         let target = NSApp.target(forAction: #selector(NSWindow.performClose(_:)))
-        print("Command-W target matches: \((target as? NSWindow) === window), sheet: \(window.attachedSheet != nil)")
+        print("Command-\(shift ? "Shift-" : "")W close target matches: \((target as? NSWindow) === window), sheet: \(window.attachedSheet != nil)")
         precondition(NSApp.mainMenu!.performKeyEquivalent(with: event))
         // No window state here: a pop-out closes only after its page answers whether it holds
         // unsaved work (windowShouldClose in desktop/main.swift), so each caller waits for what

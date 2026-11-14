@@ -41,6 +41,10 @@ struct RecentHumanTouchTests {
           localStorage.clear(); sessionStorage.setItem('native-recent-initialized','1');
           localStorage.setItem('walnut-todo-active-section','all');
           localStorage.setItem('walnut-todo-panel-design','project');
+          // A returning visitor's folds (playwright.config.ts storageState): a first visit folds
+          // every region of a board that holds work, and the rows this test clicks are in one.
+          localStorage.setItem('walnut-todo-collapsed-sections','["wait"]');
+          localStorage.setItem('walnut-todo-status-sections','{}');
           localStorage.setItem('open-walnut-chat-visible','false');
         }
         document.addEventListener('click',e=>{window.nativeLastInputTrusted=e.isTrusted},true);
