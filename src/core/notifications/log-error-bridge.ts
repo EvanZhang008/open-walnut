@@ -33,6 +33,7 @@
 
 import { setErrorNotificationSink, type ErrorNotifyPayload } from '../../logging/subsystem.js';
 import { redactSensitiveText } from '../../logging/redact.js';
+import { releaseOutageRepeats } from '../../logging/outage-repeat.js';
 import { upsertNotification } from './store.js';
 import { hostOutageCopy, humanizeErrorNotification } from './humanize.js';
 import { causeKeyForError, hostOfCauseKey, namesLinkDown } from './error-cause.js';
@@ -77,6 +78,9 @@ function pruneRecent(now: number): void {
  */
 export function releaseAbsorbedKeys(recoveryKeys: string[]): void {
   if (recoveryKeys.length === 0) return;
+  // The logger's own fold of a host outage's repeats (outage-repeat.ts) ends with it too,
+  // or a re-failure would be written at info and never reach this bridge.
+  releaseOutageRepeats(recoveryKeys);
   const keys = new Set(recoveryKeys);
   for (const [dedupKey, conditions] of recentKeyConditions) {
     if (!conditions.some(c => keys.has(c))) continue;

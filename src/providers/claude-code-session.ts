@@ -111,6 +111,7 @@ import { isWakeupArmed } from './daemon-fold.js'
 import { outlivingOf, type OutlivingSource } from '../core/sessions/outliving-work.js'
 import { noteSuppressedErrorReason } from '../core/session-snapshot-gate.js'
 import { BudgetCheckingError, BudgetPausedError, ClaudeRuntimeMissingError, classifyDeliveryFailure, isDaemonCommandOutcomeUnknown, isHostLinkFailure, isPermanentDeliveryFailure, isSlowHostFailure, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
+import { linkFailureKind } from './link-failure.js'
 import { describeClaudeLaunchFailure } from './host-runtime-core.js'
 import { hostLinkReason, isHostWaitReason, slowHostReason } from './host-wait-words.js'
 import { AcpSession, sessionMcpServerToAcp, splitAcpModelId } from './acp-session.js'
@@ -3461,7 +3462,10 @@ export class ClaudeCodeSession {
     this._spawnSettled = spawnPromise.then(() => {}, () => {})
       .finally(() => { this._spawnSettled = null })
 
+    // The daemon confirmed the spawn: a throw in the body below is not a start that failed.
+    let spawnResolved = false
     spawnPromise.then((result) => {
+      spawnResolved = true
       this.pid = result.pid
       this._outputFile = result.outputFile
       this._turnStartOffset = result.fileSize
@@ -3563,6 +3567,13 @@ export class ClaudeCodeSession {
       // The server's pre-flight throws CwdMissingError; a host's daemon says it in its own
       // words when the pre-flight could not ask it (folder-gone-words.ts).
       const folderGone = err instanceof CwdMissingError || isFolderGoneReason(err instanceof Error ? err.message : String(err))
+      // Nothing was delivered, so "no JSONL 30s after delivery" would be a false stall
+      // (2026-11-14: one after each of 262 starts refused by a host nobody reached). An
+      // unknown outcome keeps it (the daemon may still run the buffered start), except a
+      // start that never had a link: the pool's cached failure reads as unknown by its
+      // words, but its tag says no command left (link-failure.ts).
+      const neverSent = linkFailureKind(err) === 'no-link' || !isDaemonCommandOutcomeUnknown(err)
+      if (this._transport === transport && !spawnResolved && neverSent) this.clearStallDiagTimer()
       // A fresh start that never reached its host (unreachable, an expired login):
       // restart recovery sends its line again once the host answers, so no error
       // for the user. Taken on before the start is reported failed, so its caller

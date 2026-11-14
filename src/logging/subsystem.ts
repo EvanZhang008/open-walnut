@@ -16,6 +16,7 @@ import type { LogLevel } from './levels.js';
 import { shouldLog } from './levels.js';
 import { writeLogEntry } from './logger.js';
 import { redactSensitiveText } from './redact.js';
+import { outageRepeatOf } from './outage-repeat.js';
 
 // ── Types ──
 
@@ -151,7 +152,15 @@ function emit(
   // below the configured threshold we must do ZERO work (no JSON.stringify, no
   // synchronous stderr write, no redaction regex) or the event loop starves and
   // unrelated HTTP requests stall for 15 s. Default threshold is `info`.
+  // A warn/error that only repeats a host's link outage already told in its window
+  // goes at info, saying so (outage-repeat.ts): one outage, not one error per session.
+  let repeatOf: string | null = null;
+  if (level === 'warn' || level === 'error') {
+    repeatOf = outageRepeatOf(level, subsystem, message, meta);
+    if (repeatOf) level = 'info';
+  }
   if (!shouldLog(level)) return;
+  if (repeatOf) meta = { ...meta, outageRepeat: repeatOf };
 
   const now = new Date();
 

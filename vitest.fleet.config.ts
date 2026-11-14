@@ -17,7 +17,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     globalSetup: ['tests/setup/global-setup.ts'],
-    setupFiles: ['tests/setup/bun-compat.ts', 'tests/setup/prod-server-guard.ts', 'tests/setup/git-env-isolation.ts', 'tests/setup/worker-watchdog.ts', 'tests/setup/byte-equality.ts'],
+    setupFiles: ['tests/setup/bun-compat.ts', 'tests/setup/prod-server-guard.ts', 'tests/setup/git-env-isolation.ts', 'tests/setup/worker-watchdog.ts', 'tests/setup/byte-equality.ts', 'tests/setup/outage-repeat-reset.ts'],
     include: ['tests/fleet/**/*.fleet.ts'],
     testTimeout: 300_000,
     hookTimeout: 600_000,
