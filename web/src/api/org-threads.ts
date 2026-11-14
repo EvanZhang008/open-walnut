@@ -15,6 +15,7 @@ export interface OrgThreadMessage {
    * the session it was read from (absent on an answer kept before they were recorded: unknown).
    */
   answer?: { text: string; at: string; about?: string[]; clipped?: boolean; from?: 'letter'; sid?: string; host?: string };
+  readAt?: string;
 }
 
 export interface OrgThreadMove { task: string; title: string; at: string; by: string; why?: string; kind?: 'work' | 'hand' }
@@ -45,6 +46,7 @@ export interface OrgThread {
   movedFrom?: OrgThreadMove;
   /** He reacted to the answers through this message, as the node judged it. */
   known?: { through: string; by: string; at: string };
+  reactedAt?: string;
   /** The node opened the thread itself: its first post and where it came from. */
   opener?: { text: string; at: string; from: string; ref?: string; by: string; sid?: string; host?: string };
   /** Put aside until `until` (core/org/thread-view.ts snoozedNow says whether it still is). */

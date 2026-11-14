@@ -151,7 +151,7 @@ describe('what his view shows', () => {
 
   it('needs and answered show; new, working and pending with nothing for him do not', () => {
     expect(shownToHim(th('needs', [msg('tm-1', 10, 'x')]))).toBe(true)
-    expect(shownToHim(th('answered', [asked, msg('tm-2', 12, 'ok')]))).toBe(true)
+    expect(shownToHim(th('answered', [asked, msg('tm-2', 12, 'ok')]))).toBe(false)
     expect(shownToHim(th('new', [msg('tm-1', 10, 'build it')]), new Set(), Date.parse(at(13)))).toBe(false)
     expect(shownToHim(th('working', [asked, msg('tm-2', 12, 'and the phone?')]), new Set(), Date.parse(at(13)))).toBe(false)
     expect(shownToHim(th('pending', [msg('tm-1', 10, 'x')]))).toBe(false)

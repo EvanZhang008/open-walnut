@@ -27,7 +27,9 @@ const t = (id: string, project: string, extra: Partial<Task> = {}): Task => ({
 const noAlerts: AlertProbe = () => null
 
 const thread = (id: string, state: string, updatedAt: string) => ({
-  id, title: `${id} title`, state, updatedAt, messages: [{ id: `${id}-m`, at: updatedAt, text: 'my ask' }],
+  id, title: `${id} title`, state, updatedAt, messages: [{ id: `${id}-m`, at: updatedAt, text: 'my ask',
+    ...(state === 'answered' ? { answer: { text: 'A new result.', at: new Date(Date.parse(updatedAt) + 1000).toISOString() } } : {}),
+  }],
 })
 
 describe('threads come first', () => {

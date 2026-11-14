@@ -107,8 +107,8 @@ describe('reading Threads as the phone does', () => {
   it('says per thread whether his view shows it, by the count the node status uses', async () => {
     const all = (await (await read()).json()) as Reply
     const expected = threadCounts(fixture()).shown
-    // needs, two answered, pinned; not pending, snoozed, working (with or without a chat answer), or the shared answer.
-    expect(expected).toBe(4)
+    // needs, the unread answer and pinned; a known answer never returns on its answered state.
+    expect(expected).toBe(3)
     expect(all.shown_count).toBe(expected)
     expect(all.threads.filter((t) => t.shown).length).toBe(expected)
     // The open part alone carries the same judgement: a list built from it agrees with the header.
@@ -162,7 +162,7 @@ describe('reading Threads as the phone does', () => {
     expect(res.status).toBe(200)
     const { thread } = (await res.json()) as { thread: Reply['threads'][number] }
     expect(thread.messages[0].answer?.text).toBe(LONG)
-    expect(thread.shown).toBe(true)
+    expect(thread.shown).toBe(false)
     expect((await fetch(`${base}/api/v1/tasks/${leadId}/threads/th-ffffff`)).status).toBe(404)
   })
 
