@@ -20,7 +20,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Config } from './types.js'
 import { underTestRunner } from '../lib/real-ssh-guard.js'
-import { CONFIG_HISTORY_DIR_NAME } from './config-history.js'
+import { CONFIG_HISTORY_DIR_NAME } from './config-history-name.js'
 
 /**
  * What only a used data home holds. An empty config alone does not make a fresh install:

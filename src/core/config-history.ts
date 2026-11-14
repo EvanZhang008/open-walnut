@@ -37,9 +37,10 @@ import { log } from '../logging/index.js';
 import { selectKept, type RetentionPolicy } from '../lib/retention.js';
 import { CONFIG_FILE_MODE, writeFileAtomic } from './config-file-io.js';
 import { isHostReplicaProgram } from './server-role.js';
+import { CONFIG_HISTORY_DIR_NAME } from './config-history-name.js';
 
 /** The folder's name beside config.yaml (ephemeral-snapshot.ts and backup/scan.ts leave it out). */
-export const CONFIG_HISTORY_DIR_NAME = 'config.yaml.history';
+export { CONFIG_HISTORY_DIR_NAME };
 const DIR_MODE = 0o700;
 
 /** The last 10 distinct versions, plus the oldest and the newest of each of the last 7 UTC days with one. */
