@@ -57,7 +57,7 @@ export function MailAttachmentViewer({ open, onClose }: { open: OpenAttachment; 
       onPointerDown={(event) => event.stopPropagation()}
     >
       <div className="mail-attachment-viewer-bar" onClick={(event) => event.stopPropagation()}>
-        <span className="mail-attachment-viewer-name" title={name}>{name}</span>
+        <span className="mail-attachment-viewer-name">{name}</span>
         {attachment.bytes ? <span className="mail-attachment-viewer-size">{formatSize(attachment.bytes)}</span> : null}
         {status && (
           <span
