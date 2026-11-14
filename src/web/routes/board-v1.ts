@@ -81,13 +81,10 @@ import {
   boardCheckStates,
   writeBoardProject,
   setBoardCheck,
-  setBoardChoice,
   setBoardReminder,
   setBoardSectionSeen,
-  markChoiceDelivery,
 } from '../../core/boards/board-items.js'
 import {
-  buildChoicePrompt,
   buildProjectStatusPrompt,
   deliverBoardText,
   threadHeading,
@@ -97,6 +94,7 @@ import {
 import {
   boardWriter, boardWriterStamp, kanbanFields, resolveBoardCaller, resolveTeamBoardTask, teamSnapshot, type BoardCaller,
 } from '../../core/boards/board-team.js'
+import { answerBoardChoice } from '../../core/boards/board-choice-answer.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { picturesHeader, saveAnswerPictures } from '../../core/answer-pictures.js'
 
@@ -488,27 +486,13 @@ boardV1Router.put('/tasks/:id/board/choices/:choice', route(async (req, res) => 
   const overrideUser = bodyFlag(b, 'override_user')
   // Pictures with the answer (`imageRefs` or inline `images`): kept on the choice, named in every delivery of it.
   const images = await saveAnswerPictures(b)
-  const result = await setBoardChoice(task.id, choiceId, { option: option as string | undefined, text: text as string | undefined, ...(images.length ? { images } : {}) },
-    { writer: await boardWriterStamp(caller), overrideUser, ...(caller.kind === 'task' || (caller.kind === 'agent' && caller.untracked) ? { sessionId: caller.sessionId } : {}) })
-  let delivery: BoardDelivery | { state: 'skipped'; reason: 'unchanged' | 'cleared' | 'self' }
-  if (!result.choice) delivery = { state: 'skipped', reason: 'cleared' }
-  // The same answer again: nothing to say, unless its last delivery did not go out.
-  else if (!result.changed && !result.choice.undelivered) delivery = { state: 'skipped', reason: 'unchanged' }
-  // The board task's own session answering its own choice: it knows already.
-  else if (caller.kind === 'task' && caller.taskId === task.id) delivery = { state: 'skipped', reason: 'self' }
-  else {
-    const board = await getBoard(task.id)
-    const text = await picturesHeader(result.choice.images) + await buildChoicePrompt(board?.html ?? '', choiceId, result.choice)
-    // The user's answer goes as the user; an agent's as a message from that agent's session (peer provenance).
-    delivery = await deliverBoardText(task.id, text, { choice: choiceId, option: result.choice.option },
-      caller.kind === 'human' ? undefined : { callerSid: caller.sessionId })
-    result.choice = await markChoiceDelivery(task.id, choiceId, result.choice, delivery.state !== 'stored')
-  }
+  const { choice, delivery } = await answerBoardChoice(task.id, choiceId,
+    { option: option as string | undefined, text: text as string | undefined, ...(images.length ? { images } : {}) }, caller, { overrideUser })
   log.web.info('board choice answered', {
-    taskId: task.id, choice: choiceId, option: result.choice?.option ?? '', textChars: result.choice?.text?.length ?? 0,
+    taskId: task.id, choice: choiceId, option: choice?.option ?? '', textChars: choice?.text?.length ?? 0,
     by: writer(caller), delivery: delivery.state, ...(overrideUser ? { overrideUser: true } : {}),
   })
-  res.json({ choice: result.choice, delivery })
+  res.json({ choice, delivery })
 }))
 
 boardV1Router.put('/tasks/:id/board/reminders/:target', route(async (req, res) => {

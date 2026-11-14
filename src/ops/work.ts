@@ -80,8 +80,11 @@ defineOp({
     answers_ask: z.boolean().optional().describe(
       'This message decides the question the target task is asking the user, in the user\'s place (you are a task it is under, its lead or VP, or Main). '
       + 'Walnut takes that ask off the user\'s Needs you and leads your message with one line telling the task so. A COMPLETE task, or one whose session is not running, '
-      + 'is not woken: the answer is recorded and nothing is delivered (delivery "recorded"); task_start it, or force with a reason, when it must act. 409 not_above when the task is not below you, '
-      + '409 no_open_ask when it has no ask of its own to answer (none, a Board choice, or one shown on another task, named), 409 user_words for an ask only the user approves, '
+      + 'is not woken: the answer is recorded and nothing is delivered (delivery "recorded"); task_start it, or force with a reason, when it must act. '
+      + 'Any ask the user\'s Needs you shows is taken: its own question (in its report, or an org node\'s in its chat), a Board choice (answered on its Board: your words picking an option by its name pick it), '
+      + 'an AskUserQuestion prompt (answered with your words; any other tool\'s prompt is denied with them as the reason), or a decision letter (answered in the inbox by the option your text names, with user_words): delivery "settled". '
+      + '409 not_above when the task is not below you, '
+      + '409 no_open_ask when it has no ask to answer (none, a failure only the user can clear, a result to read, or one shown on another task, named), 409 user_words for an ask only the user approves, '
       + `409 user_spoke_since when the user wrote in that task after it asked. ${USER_SPOKE_TEXT}`),
     withdraw_ask: z.boolean().optional().describe(
       'With answers_ask=true: the user withdrew this ask for good (do not remind them again, in other words either, unless they bring it up). '
@@ -116,6 +119,20 @@ defineOp({
         { ...b },
         `Note held for ${b.targetTaskId || target}: it asks for no reply, so it starts no turn and rides that task's next message (folded with your other such notes). Do NOT resend.`,
         'Nothing to wait for: no reply comes back.',
+      );
+    }
+    if (delivery === 'settled') {
+      const who = b.targetTaskId || target;
+      const s = (b.settled ?? {}) as { via?: string; board?: string; choice?: string; tool?: string; letterId?: string; settled?: boolean };
+      const where = s.via === 'board_choice' ? `its Board choice ${s.choice} on ${s.board} was answered and its Board's task told`
+        : s.via === 'question' ? 'its AskUserQuestion prompt was answered with your words'
+          : s.via === 'prompt_denied' ? `its ${s.tool} prompt was denied, with your answer as the reason (allowing a tool stays the user's)`
+            : s.via === 'letter' ? `its letter ${s.letterId} was ${s.settled ? 'settled' : 'answered'}, and the task told on the letter's own path`
+              : 'it was settled where it lives';
+      return withOutcome(
+        { ...b },
+        `${b.withdrawn === true ? 'Withdrawn' : 'Answered'} for the user on ${who}: ${where}. Walnut took the ask off the user's Needs you.${said ? ` ${said}` : ''}`,
+        'Nothing to wait for. Do NOT resend.',
       );
     }
     if (delivery === 'recorded') {

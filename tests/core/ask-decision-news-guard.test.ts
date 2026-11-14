@@ -492,7 +492,7 @@ describe('an ask a lead answered for the user stays answered in other words', ()
   })
   it('an answer records the decision it answered, and the status passes its decision in', () => {
     expect(code('src/core/sessions/ask-answer.ts')).toMatch(/askId: d\.id, decisionKey: d\.key/)
-    expect(code('src/core/same-ask.ts')).toMatch(/answerFor\(.*derived\.ask, nowMs, \{ \.\.\.derived\.decision/)
+    expect(code('src/core/same-ask.ts')).toMatch(/answerFor\([^\n]*asked, nowMs, \{ \.\.\.derived\.decision/)
   })
 })
 

@@ -68,7 +68,8 @@ export class SendError extends Error {
       | 'bad_request' | 'unknown_target' | 'ambiguous_target' | 'task_has_no_session'
       | 'target_archived' | 'task_starting' | 'self_send' | 'queue_full' | 'throttled' | 'delivery_failed'
       | 'unknown_request' | 'request_already_settled' | 'not_request_target' | 'origin_session_gone'
-      | 'parent_complete' | 'target_complete' | 'lead_handed_over' | 'org_off' | 'not_above' | 'no_open_ask' | 'user_words' | 'user_spoke_since' | 'area_forbidden' | 'cross_area',
+      | 'parent_complete' | 'target_complete' | 'lead_handed_over' | 'org_off' | 'not_above' | 'no_open_ask' | 'user_words' | 'user_spoke_since' | 'area_forbidden' | 'cross_area'
+      | 'human_approval' | 'not_confirmed',
     message: string,
     public statusCode = 400,
     public detail?: Record<string, unknown>,
@@ -141,7 +142,9 @@ export interface SessionSendInput {
 export interface SessionSendResult {
   /** queued = dispatched; deferred = enqueued but target awaits a permission prompt;
    *  recorded = an answer for the user kept on a task it was not delivered to (`notWoken`). */
-  delivery: 'queued' | 'deferred' | 'recorded' | 'held';
+  delivery: 'queued' | 'deferred' | 'recorded' | 'held' | 'settled';
+  /** settled: an answers_ask whose ask lived outside the task's report, answered where it lives (ask-settle.ts). */
+  settled?: import('./ask-settle.js').SettledVia;
   /** An answers_ask send to a COMPLETE task or one with no session running: recorded, no turn started. */
   notWoken?: 'complete' | 'stopped';
   /** The user's ask was permanently withdrawn, not merely answered. */
@@ -784,6 +787,31 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     if (err instanceof AskAnswerError) throw new SendError(err.code, err.message, err.status, targetTaskId ? { taskId: targetTaskId } : undefined);
     throw err;
   }
+  // An ask that lives outside the task's report (a Board choice, a prompt, a letter) is settled
+  // there, which tells the task on its own path; only when it does not (`tell`) does our message go too.
+  let settled: Awaited<ReturnType<NonNullable<typeof prepared.settle>>> | undefined;
+  if (prepared.settle) {
+    if (input.handsOn) throw new SendError('bad_request', `hands_on cannot ride an answer to "${prepared.target.title}"'s ${prepared.where === 'choice' ? 'Board choice' : prepared.where}: answer it without hands_on, then send the request on its own.`, 400, { taskId: prepared.target.id });
+    try {
+      settled = await prepared.settle();
+    } catch (err) {
+      if (err instanceof AskAnswerError) throw new SendError(err.code, err.message, err.status, { taskId: prepared.target.id });
+      throw err;
+    }
+    log.session.info('answers_ask: settled where the ask lives', { taskId: prepared.target.id, via: settled.via, tell: settled.tell === true, requestId: asked?.id });
+    if (!settled.tell) {
+      if (asked) await settleAnswerNotDelivered(asked, caller, input);
+      await prepared.commit();
+      const sid = 'sessionId' in settled ? settled.sessionId : destination?.claudeSessionId ?? '';
+      return {
+        delivery: 'settled', settled, targetSessionId: sid, targetTitle: prepared.target.title, targetTaskId: prepared.target.id,
+        target: { handle: sessionHandle(prepared.target.title, sid), sessionId: sid, taskId: prepared.target.id },
+        ...(asked ? { repliedTo: asked.id } : {}),
+        ...(input.withdrawAsk ? { withdrawn: true as const } : {}),
+        ...(prepared.userSaid ? { userSaid: prepared.userSaid } : {}),
+      };
+    }
+  }
   // An answer to a request goes where performReply would send it: past the asker for a request it
   // carries, or the asker's live fork (reply-routing.ts). The gate judges that very session.
   if (asked && caller.kind === 'session') destination = await replyDestinationOf(asked, caller.record.claudeSessionId);
@@ -797,7 +825,7 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     log.session.info('answers_ask: recorded, not delivered', { taskId: prepared.target.id, why, requestId: asked?.id });
     const sid = destination?.claudeSessionId ?? asked?.fromSessionId ?? '';
     return {
-      delivery: 'recorded', notWoken: why, targetSessionId: sid, targetTitle: prepared.target.title, targetTaskId: prepared.target.id,
+      delivery: 'recorded', notWoken: why, ...(settled ? { settled } : {}), targetSessionId: sid, targetTitle: prepared.target.title, targetTaskId: prepared.target.id,
       target: { handle: sessionHandle(prepared.target.title, sid), sessionId: sid, taskId: prepared.target.id },
       ...(asked ? { repliedTo: asked.id } : {}),
       ...(input.withdrawAsk ? { withdrawn: true as const } : {}),
@@ -826,7 +854,7 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     throw err;
   }
   await prepared.commit();
-  return { ...result, ...(input.withdrawAsk ? { withdrawn: true as const } : {}), ...(prepared.userSaid ? { userSaid: prepared.userSaid } : {}) };
+  return { ...result, ...(settled ? { settled } : {}), ...(input.withdrawAsk ? { withdrawn: true as const } : {}), ...(prepared.userSaid ? { userSaid: prepared.userSaid } : {}) };
 }
 
 /** Where an answer to `request` from `replierSid` goes (performReply's own routing), or undefined. */
