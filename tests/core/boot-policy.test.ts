@@ -75,7 +75,7 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'usage-collect': leaderOnly, // new: the leader reads every host's usage through its daemon
   'session-health-monitor': leaderOnly,
   'overview-maintainer': leaderOnly, // 4d: its project skill writes would land on the box's copy
-  'project-summary': always,
+  'project-summary': leaderOnly, // 2026-11-14: its summary landed on the box's copy of the project row
   'host-learning': leaderOnly, // new: host profiles are written on the Mac
   'routine-wake': always,
   // The server.ts gate was `always`, but startWorkspaceWatch returned at once on its own
@@ -183,7 +183,7 @@ const CAPABILITY_JOBS: Record<Capability, BootJob[]> = {
   'public-door': ['host-network-door', 'setup-token-banner', 'revoke-queue', 'expose-runtime', 'stt-auto-setup'],
   'bridge-door': ['companion-ingest-routes', 'git-maintenance'],
   'cloud-exec': ['cloud-exec', 'local-daemon', 'stream-file-cleanup', 'send-path-canary'],
-  'backup-leader': ['backup-leader', 'project-summary', 'routine-wake', 'cron'],
+  'backup-leader': ['backup-leader', 'routine-wake', 'cron'],
 }
 
 /** What the companion still runs on its own pipeline, and the stage that decides each. */

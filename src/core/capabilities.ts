@@ -10,8 +10,10 @@
  *                  /daemon-tunnel, the Mac's /bridge/* HTTPS routes and /git/data
  *   cloud-exec     the box's own session daemons (they still start only with
  *                  cloud.exec.enabled), stream file cleanup, the send path canary
- *   backup-leader  takeover, and while it leads: cron, routines, overview,
- *                  project summary
+ *   backup-leader  takeover (while it leads a host it answers that host's gateway
+ *                  calls and routes its messages), and the box's own routine engine,
+ *                  which runs only its git sync and backup jobs, leading or not: the
+ *                  Mac's routines, the overview and project summaries stay on the Mac
  *
  * The box sets them for itself in WALNUT_CAPABILITIES (names separated by commas
  * or spaces, `none` for no capability), in its own unit as root sets

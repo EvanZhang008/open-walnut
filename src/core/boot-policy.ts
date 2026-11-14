@@ -103,8 +103,12 @@ export const BOOT_POLICY = [
   // Stage 4d: off on the companion too. Its project skill writes went to the box's disk, a
   // copy of the Mac's skills that git sync no longer brings round.
   { job: 'overview-maintainer', leader: true, replica: false, why: 'project skills are written on the Mac; a replica holds a copy' },
-  { job: 'project-summary', leader: true, replica: false, capability: 'backup-leader', why: OFF_HOST_DATA },
+  // Off on the companion too (2026-11-14): it summarised into the box's copy of the project row,
+  // a model call the Mac's own summary replaces (the Mac counts the task once it holds it).
+  { job: 'project-summary', leader: true, replica: false, why: 'project summaries are written on the Mac; a replica holds a copy' },
   { job: 'host-learning', leader: true, replica: false, why: 'host profiles have one writer, the Mac' },
+  // On the companion the counter, like the engine below, takes only the box's own git sync and
+  // backup jobs (cron/jobs.ts cloudModeSkipsJob), leading or not: the Mac's routines never run there.
   { job: 'routine-wake', leader: true, replica: false, capability: 'backup-leader', why: 'routines never run on a host replica' },
   // replicaCloud false: startWorkspaceWatch returned at once on the companion (its own env read at 8b0fb0e08).
   { job: 'workspace-watch', leader: true, replica: false, why: OFF_HOST_DATA },
@@ -114,6 +118,7 @@ export const BOOT_POLICY = [
   { job: 'plugins', leader: true, replica: false, companionUntil: '5b', why: 'plugin credentials are never copied' },
   { job: 'companion-plugin-cards', leader: false, replica: false, companionUntil: '5b', why: 'plugins never load on a host replica' },
   { job: 'plugin-sync-polling', leader: true, replica: false, why: 'plugins never load on a host replica' },
+  // The companion's engine runs its own git sync and backup jobs only (cloudModeSkipsJob), leading or not.
   { job: 'cron', leader: true, replica: false, capability: 'backup-leader', why: 'routines never run on a host replica' },
   { job: 'triage-bootstrap', leader: true, replica: false, why: 'the Mac owns cron-jobs.json' },
   { job: 'board-store-watch', leader: true, replica: false, why: 'boards are copies on a host replica (WP4)' },
