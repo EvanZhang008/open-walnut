@@ -656,6 +656,13 @@ function requestBytesEstimate(params: Record<string, unknown>): number {
   return n
 }
 
+/** A relay answer's size: its gzipped result, else its plain one (an older daemon takes no gzip). */
+function gatewayResultBytes(params: Record<string, unknown>): number {
+  if (typeof params.resultGz === 'string') return params.resultGz.length
+  if (params.result === undefined || params.result === null) return 0
+  try { return JSON.stringify(params.result).length } catch { return 0 }
+}
+
 /**
  * What a session link sent before it dropped: its age, the request bytes on its
  * connection, and the commands that sent the most (for the "connection lost" line).
@@ -1065,6 +1072,14 @@ export class DaemonConnection {
   static readonly BULK_WHEN_BIG = new Set(['fs.write', 'replica.sync', 'attachments.sync'])
   static BULK_WHEN_BIG_BYTES = 256 * 1024
   /**
+   * A relay's answer of GATEWAY_RESULT_BULK_BYTES or more (a session's `walnut` call whose
+   * answer is big) rides the bulk channel too, on its own paced connection: the daemon takes
+   * an answer from any socket of the server's run. 2026-11-14 19:41Z: one trigger_list answer
+   * (1.4 MB of routines, 250 KB gzipped) went up the session link, and the relay ended it
+   * 50 ms later; 91 such answers went to that host that day.
+   */
+  static GATEWAY_RESULT_BULK_BYTES = 64 * 1024
+  /**
    * The request is an upload: one of BULK_UPLOADS or BACKGROUND_UPLOADS, a BULK_WHEN_BIG
    * command at its size, or the host's whole read copy sent unbound (host-slice-unbound-v1, pushHostSlice).
    */
@@ -1076,6 +1091,7 @@ export class DaemonConnection {
       || DaemonConnection.BACKGROUND_UPLOADS.has(cmd)
       || (cmd === 'host.slice' && params.bind === false)
       || (DaemonConnection.BULK_WHEN_BIG.has(cmd) && requestBytesEstimate(params) >= DaemonConnection.BULK_WHEN_BIG_BYTES)
+      || (cmd === 'gateway-result' && gatewayResultBytes(params) >= DaemonConnection.GATEWAY_RESULT_BULK_BYTES)
   }
   /**
    * The longest an upload waits for the bulk channel on its own connection. A background

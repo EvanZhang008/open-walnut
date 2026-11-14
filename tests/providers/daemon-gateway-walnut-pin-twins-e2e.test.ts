@@ -242,6 +242,28 @@ afterEach(async () => {
 
 for (const twin of TWINS) {
   describe(`a session's call stays with its own Walnut, ${twin.name}`, () => {
+    // 2026-11-14 19:41Z: a 250 KB answer on the session link was what the relay cut. The server
+    // sends a big answer on its bulk channel instead, which names only its run: the daemon takes it.
+    it("a call relayed on A's main socket is answered from A's bulk socket", async () => {
+      const port = await boot(twin)
+      const mainA = await open(port, 'mainA', 'A', 'run-a', HOME_A)
+      const bulkA = await open(port, 'bulkA', 'A', 'run-a')
+      const mainB = await open(port, 'mainB', 'B', 'run-b', HOME_B)
+      const bulkB = await open(port, 'bulkB', 'B', 'run-b')
+      const sidA = await startSession(mainA, HOME_A)
+      const answer = call(sidA, 'task_create', 8_000)
+      const deadline = Date.now() + 8_000
+      while (mainA.requests.length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
+      const relay = mainA.requests[0]
+      expect(relay).toBeDefined()
+      // Another Walnut's bulk socket may not settle it.
+      const foreign = await rpc(bulkB.ws, { cmd: 'gateway-result', relayId: relay.relayId, result: { from: 'B' } }, 5_000)
+      expect(foreign.ok).toBe(false)
+      expect((await rpc(bulkA.ws, { cmd: 'gateway-result', relayId: relay.relayId, result: { from: 'A-bulk', sid: sidA } }, 5_000)).ok).toBe(true)
+      expect(await answer).toMatchObject({ ok: true, result: { from: 'A-bulk', sid: sidA } })
+      void mainB
+    }, 60_000)
+
     it('A\'s link drops again and again beside B and a nameless server: none of A\'s calls reach them', async () => {
       const port = await boot(twin)
       // Walnut B: its main socket bound, its bulk socket naming only its run (as a real server's does).

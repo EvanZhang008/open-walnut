@@ -245,6 +245,17 @@ describe('DaemonConnection: the bulk channel on a connection of its own', () => 
     expect(writes.map((w) => [w.payload.path, w.connIndex])).toEqual([['/tmp/small', 0], ['/tmp/big', 1]])
   })
 
+  it('O17: a big relay answer rides the bulk channel, gzipped or plain; a small one stays on the session link', async () => {
+    await connectWithForward()
+    daemon.clearCommandHistory()
+    const big = DaemonConnection.GATEWAY_RESULT_BULK_BYTES
+    await conn.send('gateway-result', { relayId: 1, result: { ok: true } })
+    await conn.send('gateway-result', { relayId: 2, resultGz: 'A'.repeat(big) })
+    await conn.send('gateway-result', { relayId: 3, result: { text: 'A'.repeat(big) } })
+    const sent = daemon.getCommandHistoryFor('gateway-result')
+    expect(sent.map((r) => [r.payload.relayId, r.connIndex])).toEqual([[1, 0], [2, 1], [3, 1]])
+  })
+
   it('O10: a read sent while MB of upload parts wait on the paced connection takes the session link and answers at once', async () => {
     // 1 MB/s here stands for the relay's 20 KB/s: 3 MB ahead would hold a read 3 s on the bulk channel.
     await connectWithForward({ bytesPerSec: 1024 * 1024, burstBytes: 32 * 1024 })
