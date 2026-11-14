@@ -14,6 +14,7 @@
  * the message queue, and the clock. Real deps are dynamically imported on
  * first use.
  */
+import { createHash } from 'node:crypto';
 import type { GatewayError } from '../../providers/gateway-core.js';
 import { EXTERNAL_CALLER_SID, isBusyAgainOp, isExternalCallerSid } from '../../providers/gateway-core.js';
 import { GATEWAY_WRITE_MAX_PER_WINDOW, PeerThrottle } from './peer-throttle.js';
@@ -160,20 +161,24 @@ async function handleToolsList(payload: Record<string, unknown>, host: string, c
   // refused. An older hub ignores the flag; that server then lists permissive schemas.
   if (payload.schemas === true) {
     const { opInputJsonSchema } = await import('../../ops/registry.js');
-    const ops = listOps().filter((o) => (!areaOps || areaOps.has(o.name)) && !gatewayRefusal(o, host, getOpOwner(o.name)));
-    return {
-      ok: true,
-      result: {
-        ops: ops.map((o) => ({
-          name: o.name,
-          title: o.title,
-          description: o.description,
-          readonly: o.tags.readonly,
-          ...(o.tags.destructive !== undefined ? { destructive: o.tags.destructive } : {}),
-          inputSchema: cachedInputSchema(o, opInputJsonSchema),
-        })),
-      },
-    };
+    const ops = listOps()
+      .filter((o) => (!areaOps || areaOps.has(o.name)) && !gatewayRefusal(o, host, getOpOwner(o.name)))
+      .map((o) => ({
+        name: o.name,
+        title: o.title,
+        description: o.description,
+        readonly: o.tags.readonly,
+        ...(o.tags.destructive !== undefined ? { destructive: o.tags.destructive } : {}),
+        inputSchema: cachedInputSchema(o, opInputJsonSchema),
+      }));
+    // tools-list-held-v1 (held-catalogs-core.ts): the host's daemon names the catalogs it
+    // holds (`have`); when it holds this caller's, only the hash goes back, not ~130 KB.
+    // An older daemon sends no `have` and reads past `catalogHash`.
+    const catalogHash = catalogHashOf(ops);
+    if (Array.isArray(payload.have) && payload.have.includes(catalogHash)) {
+      return { ok: true, result: { sameAs: catalogHash } };
+    }
+    return { ok: true, result: { ops, catalogHash } };
   }
   const ops = (wanted ? listOps({ includeDeprecated: true }).filter((o) => o.name === wanted) : listOps())
     .filter((o) => !areaOps || areaOps.has(o.name));
@@ -203,6 +208,15 @@ function cachedInputSchema<T extends object>(op: T, build: (op: T) => Record<str
   let schema = inputSchemaCache.get(op);
   if (!schema) { schema = build(op); inputSchemaCache.set(op, schema); }
   return schema;
+}
+
+/**
+ * A caller's schema catalog, named by its content: sha256 of its JSON, 16 hex characters.
+ * The same ops give the same hash on every call and in every server run; a caller with
+ * another catalog (another area, another host's refusals) gets another hash.
+ */
+export function catalogHashOf(ops: unknown[]): string {
+  return createHash('sha256').update(JSON.stringify(ops)).digest('hex').slice(0, 16);
 }
 
 type GatewayOpTags = { name: string; tags: { remote?: string; localHostGateway?: boolean }; localOnlyMessage?: string };

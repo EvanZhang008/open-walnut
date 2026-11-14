@@ -57,6 +57,7 @@ import { createLeaderBook } from './leader-core.js'
 import { createWalnutScope } from './walnut-scope-core.js'
 import { createServedWalnuts } from './served-walnuts-core.js'
 import { createGatewayIdentity } from './gateway-identity-core.js'
+import { createHeldCatalogs } from './held-catalogs-core.js'
 import { createLiveSettings } from './live-settings-core.js'
 import { createOfflineSearch } from './offline-search-core.js'
 import { createBoardOffline } from './offline-board-core.js'
@@ -279,6 +280,7 @@ export function getDaemonSource(): string {
     ['__CREATE_WALNUT_SCOPE__', createWalnutScope.toString()],
     ['__CREATE_SERVED_WALNUTS__', createServedWalnuts.toString()],
     ['__CREATE_GATEWAY_IDENTITY__', createGatewayIdentity.toString()],
+    ['__CREATE_HELD_CATALOGS__', createHeldCatalogs.toString()],
     ['__CREATE_LIVE_SETTINGS__', createLiveSettings.toString()],
     ['__CREATE_OFFLINE_SEARCH__', createOfflineSearch.toString()],
     ['__CREATE_BOARD_OFFLINE__', createBoardOffline.toString()],
@@ -567,6 +569,16 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       const book = createLeader({ fs: noDir, path, dir: '/nonexistent', now: () => 0, keyOf: () => 'k', log: () => {}, takeoverMs: 1, bootAt: 0 })
       const r = book.backupClaim('w', 2)
       if (r.ok || r.code !== 'unknown_walnut') throw new Error('leader book did not build')
+    }
+    // Held catalogs smoke: a reconstructed store must hold a full answer and hand it back for its hash.
+    const createHeld = reconstructed['__CREATE_HELD_CATALOGS__'] as typeof createHeldCatalogs | undefined
+    if (createHeld) {
+      const held = createHeld()
+      const full = { ops: [], catalogHash: 'h1' }
+      held.settle('w', 'tools.list', { schemas: true }, full)
+      const asked = held.ask('w', 'tools.list', { schemas: true })
+      const back = held.settle('w', 'tools.list', asked, { sameAs: 'h1' })
+      if (!('result' in back) || back.result !== full) throw new Error('held catalogs did not build')
     }
     // Host resume smoke: a reconstructed copy must turn a fresh spawn's command
     // into a resume (no --session-id beside --resume, the bypass flag dropped).
@@ -5398,6 +5410,9 @@ var gatewayClientHomes = new WeakMap();
 // Which Walnut each server socket speaks for, its bulk channel's included, and where a
 // session's call may go (gateway-identity-core.ts, inlined). Mirror daemon-standalone.ts.
 var gatewayIdentity = (__CREATE_GATEWAY_IDENTITY__)();
+// The op catalogs this host was sent, per Walnut, by hash (held-catalogs-core.ts, inlined;
+// tools-list-held-v1). Twin of daemon-standalone.ts.
+var heldCatalogs = (__CREATE_HELD_CATALOGS__)();
 function bindGatewayClientHome(ws, home) {
   var fresh = gatewayClientHomes.get(ws) !== home;
   if (fresh) featureRelay.disconnect(featureSocket(ws));
@@ -6956,8 +6971,12 @@ function gatewayRelaysSocketGone(ws) {
 
 function relayToPrimary(target, home, capability, callerSid, payload, respond, readable, deadline) {
   if (typeof deadline !== 'number') deadline = Date.now() + GATEWAY_HUB_TIMEOUT_MS;
+  // A cold daemon asks for one catalog per Walnut at a time; the rest go once it is held.
+  if (heldCatalogs.wait(home, capability, payload, function () { relayToPrimary(gatewayTargetFor(home) || target, home, capability, callerSid, payload, respond, readable, deadline); })) return;
   gatewayRelayCounter += 1;
   var relayId = gatewayRelayCounter;
+  // A schemas tools.list names the catalogs held for its Walnut (held-catalogs-core.ts).
+  payload = heldCatalogs.ask(home, capability, payload);
   var call = { home: home, capability: capability, callerSid: callerSid, payload: payload, readable: readable, deadline: deadline, sentOn: null, run: undefined, attempts: 0, pinned: walnutPinned(home) };
   gatewayRelayPending.set(relayId, { respond: respond, timer: undefined, call: call });
   sendRelayAttempt(relayId, target);
@@ -7043,8 +7062,14 @@ function cmdGatewayResult(ws, id, cmd) {
   gatewayRelayPending.delete(relayId);
   clearTimeout(pending.timer);
   if (result && !error) {
-    pending.respond({ ok: true, result: result });
+    // A relay to the primary of a schemas tools.list: a held catalog the server named by its
+    // hash, or one to hold (held-catalogs-core.ts). The bridge's relays carry no 'have'.
+    var held = pending.call ? heldCatalogs.settle(pending.call.home, pending.call.capability, pending.call.payload, result) : { result: result };
+    if (held.again) heldCatalogAskAgain(relayId, pending.call, held.again, pending.respond);
+    else if (held.error) pending.respond(gatewayError('internal', held.error));
+    else pending.respond({ ok: true, result: held.result });
   } else {
+    if (pending.call) heldCatalogs.failed(pending.call.home, pending.call.capability, pending.call.payload);
     var errObj = gatewayError(errorCode || 'internal', error || 'gateway request failed');
     if (detail !== undefined) {
       errObj.error.detail = detail;
@@ -7057,6 +7082,22 @@ function cmdGatewayResult(ws, id, cmd) {
     else pending.respond(errObj);
   }
   sendOk(ws, id, {});
+}
+
+// The server named a catalog this host no longer holds: the same call goes again as a NEW
+// relay without 'have', to its Walnut's server, once (twin of daemon-standalone.ts).
+function heldCatalogAskAgain(relayId, call, payload, respond) {
+  var target = gatewayTargetFor(call.home);
+  // Its server went in the moment since it answered: nothing of this ask was sent.
+  if (!target) return respond(gatewayNoServerError(call.home));
+  gatewayRelayCounter += 1;
+  var next = gatewayRelayCounter;
+  logMsg('info', 'gateway: tool catalog not held here; asking for it in full', { relayId: relayId, next: next, callerSid: call.callerSid });
+  gatewayRelayPending.set(next, {
+    respond: respond, timer: undefined,
+    call: { home: call.home, capability: call.capability, callerSid: call.callerSid, payload: payload, readable: call.readable, deadline: call.deadline, sentOn: null, run: undefined, attempts: 0, pinned: call.pinned },
+  });
+  sendRelayAttempt(next, target);
 }
 
 // A call the server refused as busy goes again after 'inMs' as a NEW relay; meanwhile it

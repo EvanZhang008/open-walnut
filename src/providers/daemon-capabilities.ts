@@ -336,6 +336,14 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // session link, 9 MB in 14 minutes, and the relay on the SSH path ended the link). Both
   // twins. Optional: without it the server sends `result` as before.
   'gateway-result-gz-v1',
+  // 'tools-list-held-v1' (held-catalogs-core.ts): the gateway keeps the op catalogs the server
+  // answered `tools.list {schemas: true}` with (8 per Walnut, by their `catalogHash`), names
+  // them in the next such relay (`have`), and hands the caller the held one when the server
+  // answers `{sameAs: hash}`; one it no longer holds is asked for again in full (2026-11-14:
+  // about 20 sessions starting at once after an outage sent 2.6 MB of catalogs up one link in
+  // 10 s, and the relay ended it). Both twins. The server needs no gate: an older daemon never
+  // sends `have`, so it always gets the whole catalog.
+  'tools-list-held-v1',
   // 'start-arg-refs-v1': a `start`'s long arguments (hook scripts, the session prompt) may come
   // as `@walnut-arg-ref:<sha256-32>` once the host kept a copy of them from an earlier start; a
   // copy it lacks is answered `{code: 'ARG_REFS_MISSING', missingRefs}` and the server sends those

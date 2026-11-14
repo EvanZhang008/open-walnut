@@ -49,6 +49,7 @@ const RESEND_CALLERS: Record<string, string> = {
   gatewayRelaysSocketGone: 'relayResendTarget',
   relayAttemptEnded: 'relayResendTarget',
   busyAskAgain: 'gatewayTargetFor(call.home), as a new relay of the same call',
+  heldCatalogAskAgain: 'gatewayTargetFor(call.home), as a new relay of the same call without `have`',
 }
 /** Every caller of relayToPrimary, and how its target was picked. */
 const RELAY_CALLERS: Record<string, string> = {
@@ -75,6 +76,10 @@ describe('a session\'s call goes only to a server of its own Walnut, both twins'
       const busy = fnBody(src, 'busyAskAgain')
       expect(busy).toMatch(/(const|var) target = gatewayTargetFor\(call\.home\)/)
       expect(busy).toMatch(/pinned: call\.pinned/)
+      const held = fnBody(src, 'heldCatalogAskAgain')
+      expect(held).toMatch(/(const|var) target = gatewayTargetFor\(call\.home\)/)
+      expect(held).toMatch(/pinned: call\.pinned/)
+      expect(held).toMatch(/sendRelayAttempt\(next, target\)/)
       expect(fnBody(src, 'historyFetchTarget')).toMatch(/home \? gatewayTargetFor\(home\) : pickTrustedClient\(''\)\.client/)
       const relays = enclosing(src, /(?<!function )\brelayToPrimary\(/).filter((fn) => fn !== 'relayToPrimary')
       for (const fn of relays) expect(RELAY_CALLERS, `${fn} calls relayToPrimary`).toHaveProperty(fn)

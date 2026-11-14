@@ -96,6 +96,7 @@ import { createLeaderBook } from './leader-core.js'
 import { createWalnutScope } from './walnut-scope-core.js'
 import { createServedWalnuts } from './served-walnuts-core.js'
 import { createGatewayIdentity } from './gateway-identity-core.js'
+import { createHeldCatalogs } from './held-catalogs-core.js'
 import { createLiveSettings } from './live-settings-core.js'
 import { createOfflineSearch } from './offline-search-core.js'
 import { createBoardOffline } from './offline-board-core.js'
@@ -4034,6 +4035,8 @@ const gatewayClientHomes = new WeakMap<ServerWebSocket<WsData>, string>()
  * run binds them all), and where a session's call may go (gateway-identity-core.ts).
  */
 const gatewayIdentity = createGatewayIdentity()
+/** The op catalogs this host was sent, per Walnut, by hash (held-catalogs-core.ts, tools-list-held-v1). Twin of daemon-source.ts. */
+const heldCatalogs = createHeldCatalogs()
 function bindGatewayClientHome(ws: ServerWebSocket<WsData>, home: string): void {
   const fresh = gatewayClientHomes.get(ws) !== home
   if (fresh) featureRelay.disconnect(featureSocket(ws))
@@ -5694,7 +5697,11 @@ function relayToPrimary(
   readable: boolean,
   deadline: number = Date.now() + gatewayHubTimeoutMs(),
 ) {
+  // A cold daemon asks for one catalog per Walnut at a time; the rest go once it is held.
+  if (heldCatalogs.wait(home, capability, payload, () => relayToPrimary(gatewayTargetFor(home) ?? target, home, capability, callerSid, payload, respond, readable, deadline))) return
   const relayId = ++gatewayRelayCounter
+  // A schemas tools.list names the catalogs held for its Walnut (held-catalogs-core.ts).
+  payload = heldCatalogs.ask(home, capability, payload)
   const call: GatewayRelayCall = { home, capability, callerSid, payload, readable, deadline, sentOn: null, attempts: 0, pinned: walnutPinned(home) }
   gatewayRelayPending.set(relayId, { respond, timer: undefined, call })
   sendRelayAttempt(relayId, target)
@@ -5796,8 +5803,14 @@ function cmdGatewayResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
   gatewayRelayPending.delete(relayId as number)
   clearTimeout(pending.timer)
   if (result && !error) {
-    pending.respond({ ok: true, result })
+    // A relay to the primary of a schemas tools.list: a held catalog the server named by its
+    // hash, or one to hold (held-catalogs-core.ts). The bridge's relays carry no `have`.
+    const held = pending.call ? heldCatalogs.settle(pending.call.home, pending.call.capability, pending.call.payload, result) : { result }
+    if ('again' in held) heldCatalogAskAgain(relayId as number, pending.call as GatewayRelayCall, held.again, pending.respond)
+    else if ('error' in held) pending.respond(gatewayError('internal', held.error))
+    else pending.respond({ ok: true, result: held.result })
   } else {
+    if (pending.call) heldCatalogs.failed(pending.call.home, pending.call.capability, pending.call.payload)
     const errObj: GatewayResponse & { ok: false } = {
       ok: false,
       error: {
@@ -5817,6 +5830,25 @@ function cmdGatewayResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
     else pending.respond(errObj)
   }
   sendOk(ws, id, {})
+}
+
+/**
+ * The server named a catalog this host no longer holds (dropped for a newer one, or this
+ * daemon restarted): the same call goes again as a NEW relay without `have`, to its Walnut's
+ * server, so that server sends the catalog in full. Once: a call without `have` is never
+ * answered by a hash (held-catalogs-core.ts). Keep in sync with daemon-source.ts.
+ */
+function heldCatalogAskAgain(relayId: number, call: GatewayRelayCall, payload: Record<string, unknown>, respond: (resp: GatewayResponse) => void): void {
+  const target = gatewayTargetFor(call.home)
+  // Its server went in the moment since it answered: nothing of this ask was sent.
+  if (!target) return respond(gatewayNoServerError(call.home))
+  const next = ++gatewayRelayCounter
+  logMsg('info', 'gateway: tool catalog not held here; asking for it in full', { relayId, next, callerSid: call.callerSid })
+  gatewayRelayPending.set(next, {
+    respond, timer: undefined,
+    call: { home: call.home, capability: call.capability, callerSid: call.callerSid, payload, readable: call.readable, deadline: call.deadline, sentOn: null, attempts: 0, pinned: call.pinned },
+  })
+  sendRelayAttempt(next, target)
 }
 
 /**
