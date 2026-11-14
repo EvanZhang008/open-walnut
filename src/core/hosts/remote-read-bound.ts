@@ -110,6 +110,18 @@ export class HostStillLoadingError extends HostReconnectingError {
   }
 }
 
+/**
+ * The level a caller logs its own failed host read at. A read that answered
+ * degraded because the host is not answering (HostReconnectingError) is the
+ * expected answer while that host is away, and the bound already logged why at
+ * info: a warn for it on every request made an outage read as a flood of
+ * warnings (2026-11-14: a dev host signed out for hours raised a log-spike
+ * alarm on the slash-command palette). Any other error stays a warn.
+ */
+export function hostReadFailureLevel(err: unknown): 'info' | 'warn' {
+  return err instanceof HostReconnectingError ? 'info' : 'warn'
+}
+
 type WouldWait = 'connected' | 'fails-fast' | 'dialing' | 'cold'
 
 export interface BoundDeps {

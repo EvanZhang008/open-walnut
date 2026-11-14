@@ -92,6 +92,7 @@ vi.mock('../../../src/core/hosts/host-connect-action.js', () => ({
 }))
 
 import { buildSessionSlashCommandItems, buildSlashCommandItems } from '../../../src/web/routes/slash-commands.js'
+import { log } from '../../../src/logging/index.js'
 import { mediaV1Router } from '../../../src/web/routes/media-v1.js'
 import { filesRouter } from '../../../src/web/routes/files.js'
 import { listSessionDirs } from '../../../src/core/sessions/session-extras.js'
@@ -165,6 +166,22 @@ describe('slash palette: the remote scan is bounded', () => {
     expect(value.items.length).toBeGreaterThan(0) // Walnut + built-in commands still offered
     expect(ms).toBeLessThan(1_000)
     expect(pool.dials).toBe(0)
+  })
+
+  it('a host that is away degrades at info, never a warn per palette open (2026-11-14 log-spike alarm)', async () => {
+    const warn = vi.spyOn(log.session, 'warn')
+    const info = vi.spyOn(log.session, 'info')
+    try {
+      pool.wouldWait = 'dialing'
+      await buildSlashCommandItems({ host: ALIAS, cwd: '/work', fresh: true })
+      await buildSessionSlashCommandItems({ sessionId: 'sid-remote-away', fresh: true })
+      const said = (spy: typeof warn) => spy.mock.calls.map((c) => String(c[0])).filter((m) => m.startsWith('slash-commands:'))
+      expect(said(warn)).toEqual([])
+      expect(said(info)).toContain('slash-commands: remote discovery failed, degrading')
+    } finally {
+      warn.mockRestore()
+      info.mockRestore()
+    }
   })
 
   it('a connected link that went silent answers degraded at the quiet point plus one probe', async () => {

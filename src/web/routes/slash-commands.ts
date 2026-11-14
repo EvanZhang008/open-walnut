@@ -321,8 +321,9 @@ async function remoteItemsViaCache(host: string, cwd: string | undefined, fresh:
         revalidating.add(cacheKey)
         void scanRemoteItems(host, cwd)
           .then((items) => { remoteCache.set(cacheKey, { time: Date.now(), items }) })
-          .catch((err) => {
-            log.session.warn('slash-commands: background revalidation failed (stale cache kept)', {
+          .catch(async (err) => {
+            const { hostReadFailureLevel } = await import('../../core/hosts/remote-read-bound.js')
+            log.session[hostReadFailureLevel(err)]('slash-commands: background revalidation failed (stale cache kept)', {
               host, error: err instanceof Error ? err.message : String(err),
             })
           })
@@ -371,7 +372,10 @@ export async function buildSlashCommandItems(opts: {
   } catch (err) {
     // Degrade: never silently fall back to LOCAL skills (they'd misrepresent the
     // remote host). Return only Walnut + built-in commands, flagged degraded.
-    log.session.warn('slash-commands: remote discovery failed, degrading', {
+    // A host that is away (it did not answer this request, or the bound said
+    // so) is the expected degraded answer, logged at info; anything else warns.
+    const { hostReadFailureLevel } = await import('../../core/hosts/remote-read-bound.js')
+    log.session[hostNotAnswering ? 'info' : hostReadFailureLevel(err)]('slash-commands: remote discovery failed, degrading', {
       host,
       error: err instanceof Error ? err.message : String(err),
     })
@@ -487,7 +491,8 @@ export async function buildSessionSlashCommandItems(opts: {
   } catch (err) {
     // The list itself is intact (it came from the CLI); only descriptions are
     // missing. Say so instead of shrinking the palette to a handful of built-ins.
-    log.session.warn('slash-commands: description scan failed, serving CLI names bare', {
+    const { hostReadFailureLevel } = await import('../../core/hosts/remote-read-bound.js')
+    log.session[hostReadFailureLevel(err)]('slash-commands: description scan failed, serving CLI names bare', {
       sessionId, host: record.host, error: err instanceof Error ? err.message : String(err),
     })
   }

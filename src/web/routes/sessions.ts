@@ -901,7 +901,7 @@ import {
 } from '../../core/sessions/session-lifecycle.js'
 import { SessionControlError } from '../../core/sessions/session-controls.js'
 import { historyNotWrittenYet, transcriptNotWrittenYet } from '../../core/sessions/history-not-written.js'
-import { HOST_RECONNECTING, HostReconnectingError, HostStillLoadingError, boundHostRead, boundSharedHostRead, isRemoteHost } from '../../core/hosts/remote-read-bound.js'
+import { HOST_RECONNECTING, HostReconnectingError, HostStillLoadingError, boundHostRead, boundSharedHostRead, hostReadFailureLevel, isRemoteHost } from '../../core/hosts/remote-read-bound.js'
 
 /** A SessionControlError as the web shape: `{ error }`, plus its `code` when it has one. */
 function sendControlError(res: Response, err: SessionControlError): void {
@@ -1761,7 +1761,8 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       const msg = fromRemote && fromRemote.remote && !(err instanceof HostStillLoadingError)
         ? 'This conversation is kept in remote storage and could not be brought back now (the storage or its credentials did not answer). Nothing was lost; try again.'
         : raw
-      log.web.warn('session history read failed', { sessionId, host: record?.host, error: raw })
+      // A host that is away answers degraded below: expected while it is away (info).
+      log.web[hostReadFailureLevel(err)]('session history read failed', { sessionId, host: record?.host, error: raw })
       // Still arriving, on a link that answers: the client keeps what it shows
       // and asks again at once, joining the read (boundSharedHostRead).
       const loading = err instanceof HostStillLoadingError ? { loading: { from: err.from } } : {}

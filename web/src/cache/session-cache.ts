@@ -32,6 +32,8 @@ import {
 } from '@/stream/stream-reducer';
 import type { SessionHistoryMessage } from '@/types/session';
 import { fetchSessionHistory, HISTORY_TAIL_LIMIT } from '@/api/sessions';
+import { ApiError } from '@/api/client';
+import { isComingBackCode } from '@/api/files';
 import { promoteCompletedBlocks, buildIdOnlyEvidence, type DeltaEvidence } from './promote-blocks';
 import { getFinishedAgentIds } from './finished-agents-store';
 import { computeHistoryAnchor, collectUnsettledIds } from '@/hooks/history-anchor';
@@ -606,7 +608,12 @@ function registerGlobalListeners(): void {
           log.info('session-cache', `bg-updated history for ${sid.substring(0, 8)}`, { msgCount: r.messages.length });
         }
       }))
-      .catch((err) => log.warn('session-cache', 'bg history fetch failed', { sid, error: String(err) }))
+      .catch((err) => {
+        // The session's host (or Walnut) is coming back: the next turn retries,
+        // and an outage of hours must not read as a flood of warnings.
+        const away = err instanceof ApiError && isComingBackCode((err.body as { code?: string } | undefined)?.code);
+        log[away ? 'info' : 'warn']('session-cache', 'bg history fetch failed', { sid, error: String(err) });
+      })
       .finally(() => inflightBgFetches.delete(sid));
   }
 
