@@ -501,6 +501,24 @@ export async function noteAskerRead(id: string): Promise<void> {
   }))
 }
 
+/**
+ * The summary Walnut wrote for a request still waiting (summary.ts): kept on its context, and every
+ * screen showing it hears the change. Never a decided one, never over the asker's own words. True when kept.
+ */
+export async function setApprovalSummary(id: string, summary: string): Promise<boolean> {
+  let kept: ApprovalRecord | undefined
+  await serial(() => updateJsonFile<ApprovalsFile>(approvalsFile(), EMPTY, (file) => {
+    const r = file.approvals.find((a) => a.id === id)
+    if (!r || r.status !== 'pending' || r.context?.whyFrom === 'asker') return file
+    r.context = { ...(r.context ?? {}), summary: wellFormed(summary) }
+    kept = r
+    return file
+  }))
+  // Only the screens: the request is still waiting, so nobody waiting on it wakes.
+  if (kept) bus.emit(APPROVAL_CHANGED, { id, status: kept.status, approval: viewOf(kept) }, ['web-ui', 'approvals'], { source: 'approvals' })
+  return !!kept
+}
+
 /** Walnut told the asking session; true only for the one write that marked it (never twice). */
 export async function markAskerTold(id: string): Promise<boolean> {
   let first = false

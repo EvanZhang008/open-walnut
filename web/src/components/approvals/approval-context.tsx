@@ -100,12 +100,23 @@ function whereLine(a: Approval, git: GitOperation | null, hostName: string): { l
 }
 
 /**
+ * The words on top of the dialog: what the step does and why, in full (2026-11-14, the user:
+ * "Broi..... I need the summary AI write"). The asker's own line and its own why when it gave one;
+ * else the summary Walnut wrote from the asking session (summary.ts on the server), with the
+ * request's line under the two lines when it says more; until that arrives, the request's line.
+ */
+export function summaryOf(a: Approval): { text: string; by: 'walnut' | 'asker'; why?: string } {
+  const c = a.context ?? {};
+  if (c.summary && c.whyFrom !== 'asker') return { text: c.summary, by: 'walnut' };
+  return { text: a.what, by: 'asker', ...(c.why && c.whyFrom === 'asker' ? { why: c.why } : {}) };
+}
+
+/**
  * The dialog's body (2026-11-12, the user on a Git push dialog: "I just need to know which task and
- * which path right.. this si confuing"): two lines read at a glance, the task that asked (a link)
- * and where it acts (the repo and branch, or the folder, and the machine), then the request's own
- * sentence when it says more than those two lines (a mail, a browser step, a script's question),
- * a warning only when one is due, and everything else (the command, what started it, the asker's
- * own line, the signed detail) in one Details fold, closed. One layout for every kind of approval.
+ * which path right.. this si confuing"): the summary on top, then two lines read at a glance, the
+ * task that asked (a link) and where it acts (the repo and branch, or the folder, and the machine),
+ * a warning only when one is due, and everything else (the command, what started it, the signed
+ * detail) in one Details fold, closed. One layout for every kind of approval.
  */
 export function ApprovalContextRows({ a, hostName }: { a: Approval; hostName: string }) {
   const r = a.requester;
@@ -115,15 +126,22 @@ export function ApprovalContextRows({ a, hostName }: { a: Approval; hostName: st
   const command = r.command || r.ranBy;
   const outside = [r.process ? `run by ${r.process}` : '', r.user ? `as ${r.user}` : ''].filter(Boolean).join(' ');
   const detail = detailText(a);
-  // The Git gate's own push sentence ("Push commit … to origin mainline in meta-fresh") says again what the
-  // Repo line says; any other sentence (a force push, a tag, words of the asker's own) is shown.
-  const asks = git && git.operation === 'push' && git.branch && a.what === gatePushSentence(git) ? '' : a.what;
+  const summary = summaryOf(a);
+  // Under Walnut's summary, the request's own line when it says more: the Git gate's push sentence
+  // ("Push commit … to origin mainline in meta-fresh") says again what the Repo line says, so it is left out.
+  const asks = summary.by === 'walnut' && a.what !== summary.text
+    && !(git && git.operation === 'push' && git.branch && a.what === gatePushSentence(git)) ? a.what : '';
   // What Walnut read from the process table, when it differs from the command the asker named: a sign
   // of who really asks, so it stays above the fold (a signed approval binds the real operation instead).
   const ranByDiffers = !a.singleUse && !!r.command && !!r.ranBy && r.ranBy !== r.command;
-  const why = c.why && c.whyFrom !== 'session' ? c.why : '';
   return (
     <div className="approval-context" data-testid="approval-context">
+      <div className="approval-summary" data-testid="approval-dialog-summary" data-by={summary.by}>
+        {/* The request's own line keeps its id (approval-asks); Walnut's summary says who wrote it. */}
+        <p className={`approval-summary-text${summary.by === 'asker' ? ' approval-asks' : ''}`} data-testid={summary.by === 'asker' ? 'approval-asks' : 'approval-ai-summary'}>{summary.text}</p>
+        {summary.why ? <p className="approval-summary-why" data-testid="approval-why">{summary.why}</p> : null}
+        {summary.by === 'walnut' ? <span className="approval-summary-by">Summary by Walnut, from the task’s session</span> : null}
+      </div>
       <div className="approval-field" data-testid="approval-task">
         <span className="approval-field-label">Task</span>
         <span className="approval-field-value">
@@ -157,12 +175,10 @@ export function ApprovalContextRows({ a, hostName }: { a: Approval; hostName: st
         </div>
       ) : null}
       {a.downgraded ? <div className="approval-note" data-testid="approval-downgraded">{a.downgraded}</div> : null}
-      {command || why || detail.text ? (
+      {command || detail.text ? (
         <details className="approval-detail approval-details" data-testid="approval-detail">
           <summary>Details</summary>
           <div className="approval-details-body">
-            {/* The asker's own line (`walnut approve --why`); never the session's last words. */}
-            {why ? <div className="approval-why" data-testid="approval-why">{why}</div> : null}
             {command ? (
               <div className="approval-part">
                 <div className="approval-part-label">Command</div>

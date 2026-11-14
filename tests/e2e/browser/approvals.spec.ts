@@ -864,8 +864,9 @@ test('with a device that signs, turning approvals off waits for its Face ID, fro
 })
 
 // A Git push from the Git gate (2026-11-12, the user on its dialog: "I just need to know which task
-// and which path right.. this si confuing"): two lines, Task (a link) and Repo (path, branch,
-// machine); the sentence that repeats them, the command and the signed JSON are in Details, closed.
+// and which path right.. this si confuing"): the request's line on top until Walnut's summary
+// arrives, then two lines, Task (a link) and Repo (path, branch, machine); the command and the
+// signed JSON are in Details, closed.
 test('a Git push approval reads as Task and Repo, with the command and the signed detail folded', async ({ page, request }, info) => {
   await page.goto('/')
   await expect(page.locator('.app-layout, #root').first()).toBeVisible()
@@ -883,8 +884,9 @@ test('a Git push approval reads as Task and Repo, with the command and the signe
   await expect(dialog.getByTestId('approval-task')).toHaveText(/^Task\s*Orchid Platform Lead/)
   await expect(dialog.getByTestId('approval-task-link')).toBeVisible()
   await expect(dialog.getByTestId('approval-where')).toHaveText(/^Repo\s*~\/\.local\/state\/open-walnut\/tasks\/t-8252\/meta-fresh → mainline \(.+\)$/)
-  // Nothing else above the fold: no sentence repeating the Repo line, no command, no JSON.
-  await expect(dialog.getByTestId('approval-asks')).toHaveCount(0)
+  // Until a summary is written the request's own line is on top; no command, no JSON above the fold.
+  await expect(dialog.getByTestId('approval-asks')).toHaveText('Push commit da21d9c to origin mainline in meta-fresh')
+  await expect(dialog.getByTestId('approval-ai-summary')).toHaveCount(0)
   await expect(dialog.locator('.approval-what')).toHaveCount(0)
   await expect(dialog.getByTestId('approval-command')).toBeHidden()
   await expect(dialog.locator('.approval-detail-text')).toBeHidden()
@@ -903,6 +905,49 @@ test('a Git push approval reads as Task and Repo, with the command and the signe
   await expect(dialog.getByTestId('approval-command')).toBeHidden()
   // The dialog never scrolls sideways on a long path.
   expect(await page.locator('.approval-dialog').evaluate((n) => n.scrollWidth <= n.clientWidth + 1)).toBe(true)
+  await dialog.getByRole('button', { name: 'Deny' }).click()
+  await expect.poll(async () => (await (await request.get(`/api/v1/approvals/${made.approval.id}`)).json()).approval.status).toBe('denied')
+})
+
+// The summary Walnut writes (2026-11-14, the user: "Broi..... I need the summary AI write"): it
+// arrives after the dialog opens and takes the top in full (never cut, never folded), says who wrote
+// it, and the request's line that repeats the Repo line leaves; Task and Repo stay right under it.
+test('a Git push approval shows the summary Walnut wrote on top, in full, once it arrives', async ({ page, request }, info) => {
+  const summary = 'Pushes the two progress-table commits to the shared repo, so the team reads today\'s numbers before the 3pm review. '
+    + 'Both commits are only on this machine; nothing else in the repo changes.'
+  await page.goto('/')
+  await expect(page.locator('.app-layout, #root').first()).toBeVisible()
+  await offHome(page)
+  const res = await request.post('/api/test/host-fixture', { data: {
+    action: 'git-push-approval', host: 'clouddev', taskTitle: 'Orchid Platform Lead', summary, summaryAfterMs: 2_500,
+    repository: '/local/home/dev/.local/state/open-walnut/tasks/t-8252/meta-fresh', branch: 'mainline',
+  } })
+  expect(res.status(), await res.text()).toBe(200)
+  const made = await res.json() as { approval: { id: string } }
+  const card = page.locator(`[data-testid="approval-card"][data-approval-id="${made.approval.id}"]`)
+  await expect(card).toBeVisible({ timeout: 15_000 })
+  await card.getByTestId('approval-what').click()
+  const dialog = page.getByTestId('approval-dialog')
+  // First the request's own line, then the summary replaces it live.
+  await expect(dialog.getByTestId('approval-asks')).toHaveText('Push commit da21d9c to origin mainline in meta-fresh')
+  await expect(dialog.getByTestId('approval-ai-summary')).toHaveText(summary, { timeout: 15_000 })
+  await expect(dialog.getByTestId('approval-asks')).toHaveCount(0)
+  await expect(dialog.getByTestId('approval-dialog-summary')).toContainText('Summary by Walnut')
+  // Shown whole: no clamp, no ellipsis, nothing hidden inside its box.
+  expect(await dialog.getByTestId('approval-ai-summary').evaluate((n) => n.scrollHeight <= n.clientHeight + 1 && getComputedStyle(n).webkitLineClamp !== '2')).toBe(true)
+  // The summary comes first, then Task and Repo.
+  const order = await dialog.locator('[data-testid="approval-ai-summary"], [data-testid="approval-task"], [data-testid="approval-where"]').evaluateAll((ns) => ns.map((n) => n.getAttribute('data-testid')))
+  expect(order).toEqual(['approval-ai-summary', 'approval-task', 'approval-where'])
+  await expect(dialog.getByTestId('approval-where')).toHaveText(/^Repo\s*~\/\.local\/state\/open-walnut\/tasks\/t-8252\/meta-fresh → mainline \(.+\)$/)
+  await expect(dialog.getByTestId('approval-command')).toBeHidden()
+  if (process.env.APR_SHOTS) await page.locator('.approval-dialog').screenshot({ path: `${process.env.APR_SHOTS}/${info.project.name}-git-summary.png` })
+  // The task link still opens the task that asked.
+  await expect(dialog.getByTestId('approval-task-link')).toBeVisible()
+  await dialog.locator('.approval-detail summary').click()
+  await expect(dialog.getByTestId('approval-command')).toContainText('meta-fresh')
+  await page.waitForTimeout(600)
+  await dialog.locator('.approval-detail summary').click()
+  await page.waitForTimeout(600)
   await dialog.getByRole('button', { name: 'Deny' }).click()
   await expect.poll(async () => (await (await request.get(`/api/v1/approvals/${made.approval.id}`)).json()).approval.status).toBe('denied')
 })
