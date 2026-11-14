@@ -90,7 +90,8 @@ describe('a transition value is never mirrored into a ref during render', () => 
     const uses: Record<string, string[]> = {
       'pages/MainPage.tsx': ['useCommittedRef(taskMap)', 'useCommittedRef(loading)'],
       'pages/OrgPage.tsx': ['useCommittedRef(allTasks)'],
-      'components/tasks/TodoPanel.tsx': ['useCommittedRef<Task[]>(tasks)', 'useCommittedRef(tasks)'],
+      // Its AI search rows' own mirror went with them: they open on Home (useOpenTask), 2026-11-13.
+      'components/tasks/TodoPanel.tsx': ['useCommittedRef<Task[]>(tasks)'],
       'components/chat/AskWalnutSlot.tsx': ['useCommittedRef(tasks)', 'useCommittedRef(askTasks)', 'useCommittedRef(rows)'],
       'hooks/useFocusBar.ts': ['useCommittedRef<Task[]>(tasks)'],
       // The full list, held deletes included: the writes work on it (useTasks' hideTasks).

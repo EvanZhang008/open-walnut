@@ -21,7 +21,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome, seedColumns } from './draft-helpers'
 import { directControl } from './composer-controls-overflow-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { openTaskFromRail } from './org-view-helpers'
+import { openBeside } from './org-view-helpers'
 import { holdApprovalsLock } from './approvals-lock'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -230,7 +230,8 @@ test('Org: the Org chat\'s Side threads, the Org side bar and a task beside the 
 
   // A task opened beside the page: its panel and its Side threads.
   const side = page.getByTestId('org-side')
-  await openTaskFromRail(page, tasks[0]!, () => expect(side).toHaveAttribute('data-session-id', workSid, { timeout: 5_000 }))
+  await openBeside(page, `task:${tasks[0]!}`)
+  await expect(side).toHaveAttribute('data-session-id', workSid, { timeout: 30_000 })
   const panel = side.locator(`.session-panel[data-session-id="${workSid}"]`)
   await expect(panel).toBeVisible({ timeout: 30_000 })
   await threadsFullScreen(page, panel, 'Side threads of the task beside the Org page')

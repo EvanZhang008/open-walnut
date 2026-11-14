@@ -3044,6 +3044,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (phoneOpenKeepsList(focusScope)) { locateHoldRef.current = null; return; }
     // A locate asked from outside the panel holds its task on screen while it moves; one asked
     // by a click in the panel does not (the row was in view, and the person steers from there).
+    let searchCleared = false;
     if (isUserLocate) {
       locateHoldRef.current = pendingHoldRef.current ? { id: focusedTaskId, sig: placeSigRef.current(task) } : null;
       pendingHoldRef.current = false;
@@ -3051,6 +3052,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (searchQuery.trim() && focusScope === 'locate') {
         clearSearch();
         setSearchReset((version) => version + 1);
+        searchCleared = true;
       }
     }
     // 'pinned' scope (tier quick-adds): the new card is already visible in its tier —
@@ -3068,7 +3070,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // the pointer (2026-11-10 review: opening a completed task opened the project run the user
     // had folded in Pinned and pushed the list 260 px down). Only a row nothing draws is revealed,
     // and only in the place that draws it (locate-fold-writes.test.ts).
-    const reveal = isUserLocate && !rowShownInPanel(focusedTaskId);
+    // A row the search results draw is no proof: the search clears just above, and the list it
+    // goes back to may hold the row under a fold (2026-11-13: a subtask opened from a details popup
+    // over a search landed on a list with nothing selected on screen).
+    const reveal = isUserLocate && (searchCleared || !rowShownInPanel(focusedTaskId));
     // A task a status section (or a project fold) draws is on screen there: it opens for a locate.
     const drawnInSection = revealInSectionRef.current(task, reveal);
     // A flat status section draws the row on its own: no list project, parent or folder holds it.
@@ -6691,7 +6696,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     setSelectedIds(new Set());
   }, []);
 
-  const handleTaskClick = useLeanCallback((task: Task, e?: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) => {
+  // A press on one of this list's own rows (Cmd/Ctrl/Shift builds a selection): Home's own list,
+  // not a task reference elsewhere, so it focuses the row in place (onFocusTask).
+  const handleRowPress = useLeanCallback((task: Task, e?: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) => {
     if (e && (e.metaKey || e.ctrlKey || e.shiftKey)) {
       setSelectedIds((prev) => {
         const next = new Set(prev);
@@ -6708,13 +6715,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     onFocusTask?.(task, phoneRowFocusOpts(sid));
   }, [onFocusTask, onOpenSession, selectedIds]);
 
-  // AI search rows carry only a taskId — resolve to the live Task and route
-  // through handleTaskClick so a click behaves exactly like a normal result row.
-  const tasksForAgentClickRef = useCommittedRef(tasks);
-  const handleAgentResultClick = useLeanCallback((taskId: string) => {
-    const task = tasksForAgentClickRef.current.find((t) => t.id === taskId);
-    if (task) handleTaskClick(task);
-  }, [handleTaskClick]);
 
   // Resolve the current selection to actual tasks. Grouping has NO scope rule
   // anymore — any ≥2 tasks can be grouped regardless of project (a group
@@ -6850,12 +6850,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     exitSelectMode();
   }, [selectionInfo, projectRegistry.sourceByName, projectRegistry.loaded, confirm, onMoveTask, exitSelectMode]);
 
-  const handlePinnedCardClick = handleTaskClick;
+  const handlePinnedCardClick = handleRowPress;
   // A Recent row the board list does not carry (finished long ago, opened from search) opens
-  // the way any task link does, by id: Home reads it and shows its details.
-  const openUnlistedTask = useLeanCallback((task: Task) => {
-    window.dispatchEvent(new CustomEvent('main:locate-task', { detail: { taskId: task.id, openDetail: true } }));
-  }, []);
+  // the way any task link does, by id: Home reads it and opens its session, or its details
+  // when it has none; its "Details" asks for the details by name.
+  const openUnlistedTask = useLeanCallback((task: Task) => { openTaskOnHome(task.id, navigate); }, [navigate]);
+  const openUnlistedDetail = useLeanCallback((task: Task) => { openTaskOnHome(task.id, navigate, { detail: true }); }, [navigate]);
 
   const handleExpandDetail = useLeanCallback((task: Task) => {
     setDetailTarget(null);
@@ -6873,8 +6873,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [holdRecentRow, recentOutside, openUnlistedTask, handlePinnedCardClick, handleExpandDetail]);
   const handleRecentExpandDetail = useLeanCallback((task: Task) => {
     holdRecentRow(task.id);
-    (recentOutside.has(task.id) ? openUnlistedTask : handleExpandDetail)(task);
-  }, [holdRecentRow, recentOutside, openUnlistedTask, handleExpandDetail]);
+    (recentOutside.has(task.id) ? openUnlistedDetail : handleExpandDetail)(task);
+  }, [holdRecentRow, recentOutside, openUnlistedDetail, handleExpandDetail]);
   const handleRecentStartSession = useLeanCallback((task: Task) => {
     holdRecentRow(task.id);
     onStartSession?.(task);
@@ -7149,7 +7149,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     twoLine: needsSection && effectiveSection !== 'recent' && effectiveSection !== 'tasks',
     isVanishing: isSectionRowVanishing,
     onLoadMore: askArchive,
-    onClick: handleTaskClick,
+    onClick: handleRowPress,
     onSetPhase: setPhaseOrComplete,
     onUpdateTitle: onUpdate ? handleUpdateTitle : undefined,
     onSetPriority,
@@ -7167,7 +7167,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     onFilterProject: jumpToProject,
     // Watching is the user's own order: its rows drag (watchReorder).
     onReorderWatching: isSearchMode ? undefined : reorderWatching,
-  }), [isSearchMode, reorderWatching, focusedTaskId, limitFlash, limitLive, suppressDetail, openSessionTaskIds, isPinnedRow, getTier, effectiveSection, needsSection, tierLabelOf, isSectionRowVanishing, askArchive, handleTaskClick, setPhaseOrComplete, onUpdate, handleUpdateTitle, onSetPriority, onSetDate, onSetStartDate, onPinTask, onUnpinTask, onSetTier, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, onMoveTask, handleMoveToProject, onDelete, jumpToProject]);
+  }), [isSearchMode, reorderWatching, focusedTaskId, limitFlash, limitLive, suppressDetail, openSessionTaskIds, isPinnedRow, getTier, effectiveSection, needsSection, tierLabelOf, isSectionRowVanishing, askArchive, handleRowPress, setPhaseOrComplete, onUpdate, handleUpdateTitle, onSetPriority, onSetDate, onSetStartDate, onPinTask, onUnpinTask, onSetTier, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, onMoveTask, handleMoveToProject, onDelete, jumpToProject]);
   // The By project design (panel-design.ts): each region's waiting and completed tasks
   // by project, drawn as folds at the end of the project. A tier region holds its own
   // pins; the list holds the rest (the pins too, outside the stacked view).
@@ -8033,7 +8033,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           onClear={clearSearch}
           isSearching={isSearching}
           resultCount={searchResultCount}
-          onPhoneOpenTask={handleTaskClick}
         />
         {onOpenLauncher && <NewLauncherButton onOpen={onOpenLauncher} />}
         <DisplayButton {...displayProps} filters={filterBar} />
@@ -8063,7 +8062,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       {isSearchMode && (
         <AgentSearchPanel
           query={searchQuery}
-          onOpenTask={handleAgentResultClick}
           {...(onOpenSearchSession ? { onOpenSession: onOpenSearchSession } : {})}
         />
       )}
@@ -8130,7 +8128,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           A search in the All view is ONE ranked list (pinned hits carry a tier pill), so
           the tier regions step aside; a single-tier view still searches inside its tier. */}
       {/* The Needs you section above already lists these. */}
-      {isStacked && !isSearchMode && !needsSection && <PhoneNeedsYouStrip tasks={tasks} onOpen={handleTaskClick} />}
+      {isStacked && !isSearchMode && !needsSection && <PhoneNeedsYouStrip tasks={tasks} onOpen={handleRowPress} />}
       {/* R3-02: on a phone the host card and the tier rows wait for the first
           task list, so the Needs-you strip above them lands in the same commit
           instead of pushing painted controls down under the thumb (the spinner
@@ -8522,7 +8520,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
                       isVanishing={isRowVanishing(task)}
                       isNestTarget={nestTargetId === task.id} isGroupTarget={groupTargetId === task.id}
-                      onClick={handleTaskClick}
+                      onClick={handleRowPress}
                       isSelected={selectedIds.has(task.id)}
                       selectMode={selectMode}
                       onSelectToggle={onSelectToggle}
@@ -8595,7 +8593,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   childCount={trueChildCountMap.get(task.id)}
                   isExpanded={expandedParents.has(task.id)}
                   onToggleExpand={toggleParentExpand}
-                  onClick={handleTaskClick}
+                  onClick={handleRowPress}
                   isSelected={selectedIds.has(task.id)}
                   selectMode={selectMode}
                   onSelectToggle={onSelectToggle}
@@ -8698,7 +8696,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                 childCount={trueChildCountMap.get(task.id)}
                                 isExpanded={expandedParents.has(task.id)}
                                 onToggleExpand={toggleParentExpand}
-                                onClick={handleTaskClick}
+                                onClick={handleRowPress}
                                 isSelected={selectedIds.has(task.id)}
                                 selectMode={selectMode}
                                 onSelectToggle={onSelectToggle}

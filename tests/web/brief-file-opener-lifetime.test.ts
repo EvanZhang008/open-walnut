@@ -211,7 +211,7 @@ describe('a Brief path lookup lives only as long as its click, its letter and it
     const owner = { id: 'owner-task-0001', brief: { text, at: new Date().toISOString() } } as Task
     await act(async () => {
       root!.render(createElement(MemoryRouter, null, createElement(OrgBrief, {
-        owner, tasks: [], name: 'Notes', now: Date.now(), onOpenTask: () => {},
+        owner, tasks: [], name: 'Notes', now: Date.now(),
       })))
     })
     const link = doc.querySelector('[data-testid="org-brief-body"] a.file-link')!

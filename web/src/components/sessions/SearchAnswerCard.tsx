@@ -152,10 +152,8 @@ function countLabel(shown: number, extra: number): string {
   return total === 1 ? '1 match' : `${total} matches`;
 }
 
-export function SearchAnswerCard({ answer, onOpenTask }: {
-  answer: SearchAnswerMessage;
-  onOpenTask?: (taskId: string) => void;
-}) {
+/** A row opens its task the way every task reference does (AgentSearchResultRows calls useOpenTask). */
+export function SearchAnswerCard({ answer }: { answer: SearchAnswerMessage }) {
   const rows = useResolvedRows(answer.rows);
   return (
     <section className="session-search-answer" data-testid="session-search-answer">
@@ -168,7 +166,6 @@ export function SearchAnswerCard({ answer, onOpenTask }: {
       {rows.length > 0 && (
         <AgentSearchResultRows
           rows={rows}
-          onOpenTask={onOpenTask ?? (() => {})}
           className="session-search-answer-rows"
         />
       )}

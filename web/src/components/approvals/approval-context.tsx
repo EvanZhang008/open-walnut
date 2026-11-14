@@ -6,36 +6,26 @@
  * before it asked, its goal, its last steps and the folder are left out: they read as noise, and
  * the task link opens all of it.
  */
-import { useNavigate } from 'react-router-dom';
-import { openTaskOnHome } from '@/utils/open-session';
+import { useOpenTask } from '@/hooks/useOpenTask';
 import { taskPath } from '@/utils/task-path';
 import type { Approval } from '@/api/approvals';
-import { closeApproval, openApproval } from './approvals-store';
 
 /**
- * The task that asked, opened the way a task link opens it: on Home, selected, its session column
- * open, from any page or a full-screen sheet (2026-11-06, the user: "It doesn't make me able to
- * click and jump to that task"). An open dialog closes first; the card stays in its corner.
+ * The asking task's name as a task link: a click opens it the way every task link does, on Home
+ * with its session column open, from any page or a full-screen sheet (2026-11-06, the user: "It
+ * doesn't make me able to click and jump to that task"). An open dialog closes itself when a task
+ * opens (ApprovalDialog); the card stays in its corner. A modifier click opens it in a new tab.
  */
-export function useOpenAsker(): (a: Approval) => void {
-  const navigate = useNavigate();
-  return (a: Approval) => {
-    if (!a.requester.taskId) { openApproval(a.id); return; }
-    closeApproval();
-    openTaskOnHome(a.requester.taskId, navigate);
-  };
-}
-
-/** The asking task's name as a task link (a modifier click opens it in a new tab). */
 export function AskerLink({ a, label }: { a: Approval; label: string }) {
-  const openAsker = useOpenAsker();
+  const openTask = useOpenTask();
   const id = a.requester.taskId!;
+  const onClick = (e: React.MouseEvent) => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault(); e.stopPropagation(); openTask(id);
+  };
   return (
     <a className="task-link approval-task-link" data-task-id={id} data-testid="approval-task-link" href={taskPath(id)} title="Open the task that asked"
-      onClick={(e) => {
-        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-        e.preventDefault(); e.stopPropagation(); openAsker(a);
-      }}><span className="approval-task-link-label">{label}</span><span className="approval-task-link-go" aria-hidden="true">&nbsp;↗</span></a>
+      onClick={onClick}><span className="approval-task-link-label">{label}</span><span className="approval-task-link-go" aria-hidden="true">&nbsp;↗</span></a>
   );
 }
 

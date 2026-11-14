@@ -4,7 +4,7 @@
  * them: the bar reads Status | Cards | Page and opens on Status (BoardStatusView,
  * the user's pick of 2026-10-25), whose states and counts are the server's one
  * user status (src/core/user-status.ts), the same numbers the Org page reports;
- * a chip filters, a row opens its task, and a task that moves moves its row live.
+ * a chip filters, a row opens its task on Home, and a task that moves moves its row live.
  * Cards names each card's project, a project chip shows that project's cards
  * only (with a chip and the search too), and the pick is remembered; a project
  * the leader renames or removes changes the cards live.
@@ -160,9 +160,13 @@ test('Status is the default; its states and counts are the stored status, the Or
   await pane.getByTestId('board-status-filter-open').click()
   await expect(rows(pane)).toHaveCount(open.length)
 
-  // A row opens its task beside the board.
+  // A row opens its task on Home, its session's column (useOpenTask), no details popup.
+  const permColumn = page.locator(`${REAL_PANEL}[data-session-id="${team.sessions[team.perm]}"]`)
+  await expect(permColumn).toHaveCount(0)
   await rows(pane).filter({ has: page.locator(`text=${team.titles[team.perm]}`) }).first().click()
-  await expect(page.getByTestId('peek-tab-title').filter({ hasText: team.titles[team.perm] })).toBeVisible({ timeout: 15_000 })
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
+  await expect(permColumn).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('.task-detail-modal')).toHaveCount(0)
 })
 
 async function pollStored(ok: (ts: StoredTask[]) => boolean): Promise<StoredTask[]> {

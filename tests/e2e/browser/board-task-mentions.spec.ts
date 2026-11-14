@@ -140,11 +140,15 @@ test('task ids in the Board text and its messages become live chips', async ({ p
   await page.waitForTimeout(500)
   expect(await recent()).toBe(recentBefore)
   expect(await inRecent(UUID_ID)).toBe(false)
-  await expect(page.getByTestId('board-task-peek')).toHaveCount(0)
+  // The task has no session: an open selects it in Home's task list (useOpenTask).
+  const located = page.locator(`#home-task-navigation [data-task-id="${UUID_ID}"]`)
+    .and(page.locator('.task-focused, .todo-pinned-card-active'))
+  await expect(located).toHaveCount(0)
 
-  // A chip opens its task beside the board.
+  // A real click on a chip opens its task on Home: selected in the list, no details popup.
   await pointer(page, msg.locator(`a.task-link[data-task-id="${UUID_ID}"]`))
-  await expect(page.getByTestId('board-task-peek').or(page.locator(`[data-task-id="${UUID_ID}"]`)).first()).toBeVisible({ timeout: 15_000 })
+  await expect(located).toHaveCount(1, { timeout: 15_000 })
+  await expect(page.locator('.task-detail-modal')).toHaveCount(0)
   await expect.poll(() => page.evaluate((id) => JSON.parse(localStorage.getItem('walnut-todo-recent-opened') ?? '[]').some((e: { id: string; human?: boolean }) => e.id === id && e.human === true), UUID_ID)).toBe(true)
   expect(pageErrors).toEqual([])
 })

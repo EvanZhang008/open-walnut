@@ -10,7 +10,7 @@
  *   - dragging it onto the drop zone creates a dedicated VP for it again; the move menu (in the
  *     opened project, or a right-click on it) does the same without a drag, and
  *     Escape closes the question before the sheet
- *   - a project opens to its tasks and where each stands; a task opens beside the Org page
+ *   - a project opens to its tasks and where each stands; a task opens on Home
  *   - a project under another VP is part of that VP's channel on the Org page, not one of its own
  *   - an opened card's Open chat opens its project on the Org page, on its chat (chat is the first tab)
  *   - a click outside the sheet closes it (the menu and the question close first)
@@ -258,13 +258,18 @@ test('a drag onto another VP says what it does, asks first, and puts the project
   await expect(page.getByTestId('org-chart-confirm')).toHaveCount(0)
   await expect(page.getByTestId('org-chart')).toBeVisible()
 
-  // A task opens beside the Org page, and the sheet closes.
+  // A task opens on Home (a task reference, useOpenTask), and the sheet closes: it has no session,
+  // so Home's list has it selected; nothing opens beside the Org page.
   const label = seeds.locator('[data-testid="org-chart-task"]', { hasText: `Label jars ${STAMP}` })
   const labelId = await label.getAttribute('data-task-id')
   await label.click()
   await expect(page.getByTestId('org-chart')).toHaveCount(0)
-  await expect(page.getByTestId('org-side')).toBeVisible()
-  await expect(page).toHaveURL(new RegExp(`open=[^&]*${labelId}`))
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
+  await expect(page.locator(`#home-task-navigation [data-task-id="${labelId}"]`).and(page.locator('.task-focused, .todo-pinned-card-active'))).toHaveCount(1, { timeout: 30_000 })
+  await expect(page.getByTestId('org-side')).toHaveCount(0)
+  // Back on the Org page.
+  await page.getByTestId('sidebar-org').click()
+  await expect(page.getByTestId('org-page')).toBeVisible()
 
   // On the Org page, B is part of A's channel now: no channel of its own, and A's says it leads one more.
   const channel = (name: string) => page.locator(`[data-testid="org-channel"][data-key="project:${name.toLowerCase()}"]`)

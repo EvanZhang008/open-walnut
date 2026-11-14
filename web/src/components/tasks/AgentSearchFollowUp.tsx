@@ -39,7 +39,7 @@ import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
 import { useSessionSend } from '@/hooks/useSessionSend';
 
 export function AgentSearchFollowUp({
-  query, searchEnabled, progressId, onLive, onOpenTask,
+  query, searchEnabled, progressId, onLive,
 }: {
   /** The search this conversation continues — the adopt key, never a session id. */
   query: string;
@@ -49,7 +49,6 @@ export function AgentSearchFollowUp({
   progressId?: string;
   /** The window went live (or was dismissed): the card hides its rows while it is. */
   onLive: (sessionId: string | null) => void;
-  onOpenTask?: (taskId: string) => void;
 }) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [firstMessage, setFirstMessage] = useState<{ text: string; images?: ImageAttachment[] } | null>(null);
@@ -158,7 +157,6 @@ export function AgentSearchFollowUp({
           onEditQueued={(queueId, newText) => sessionSend.handleEditQueued(sessionId, queueId, newText)}
           onDeleteQueued={(queueId) => sessionSend.handleDeleteQueued(sessionId, queueId)}
           onAgentQueued={sessionSend.addExternalQueued}
-          {...(onOpenTask ? { onTaskClick: onOpenTask } : {})}
         />
       </div>
       <div className="agent-search-followup-input">

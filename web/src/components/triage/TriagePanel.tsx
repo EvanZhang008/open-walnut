@@ -15,7 +15,6 @@ interface TriagePanelProps {
   onClose: () => void;
   /** When set, only show triage entries for this task */
   taskId?: string;
-  onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
 }
 
@@ -54,13 +53,11 @@ function TriageSessionSection({
   entry,
   index,
   defaultExpanded,
-  onTaskClick,
   onSessionClick,
 }: {
   entry: ChatEntry;
   index: number;
   defaultExpanded: boolean;
-  onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
@@ -93,7 +90,7 @@ function TriageSessionSection({
   // The summary is the triage session's words: its paths open on that session's host.
   const source = entry.sessionId ? { sessionId: entry.sessionId } : { unknownSource: true };
   const file = useAgentFileOpener(source);
-  const handleEntityClick = useEntityClickHandler(onTaskClick, onSessionClick, file.onFileOpen, file.fileHost, file.fileSessionId, file.refusesAll);
+  const handleEntityClick = useEntityClickHandler(onSessionClick, file.onFileOpen, file.fileHost, file.fileSessionId, file.refusesAll);
   // stopPropagation needed because these links sit inside the collapsible section
   // header button — without it, clicking a task ref would also toggle section expand/collapse.
   const handleTaskRefClick = useCallback((e: React.MouseEvent<HTMLSpanElement>) => {
@@ -150,7 +147,6 @@ function TriageSessionSection({
               sessionId={entry.sessionId}
               sessionHost={file.render.host}
               onFileOpen={file.onFileOpen}
-              onTaskClick={onTaskClick}
               onSessionClick={onSessionClick}
             />
           ))}
@@ -165,7 +161,7 @@ function TriageSessionSection({
   );
 }
 
-export function TriagePanel({ onClose, taskId, onTaskClick, onSessionClick }: TriagePanelProps) {
+export function TriagePanel({ onClose, taskId, onSessionClick }: TriagePanelProps) {
   const [entries, setEntries] = useState<ChatEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -230,7 +226,6 @@ export function TriagePanel({ onClose, taskId, onTaskClick, onSessionClick }: Tr
             entry={entry}
             index={i}
             defaultExpanded={i === 0}
-            onTaskClick={onTaskClick}
             onSessionClick={onSessionClick}
           />
         ))}

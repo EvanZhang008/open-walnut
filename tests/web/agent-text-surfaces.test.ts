@@ -158,7 +158,9 @@ describe('agent text cannot silently become plain JSX on a new surface', () => {
     expect(read('components/tasks/WaitingChip.tsx')).toMatch(/lines\.map\(\(l, i\) => <AgentText\b/);
     const popout = read('popout/PopoutExtTasks.tsx');
     // No <p> around the renderer's block, a task opens in a new tab, and the message is never cut.
-    expect(renders('popout/PopoutExtTasks.tsx', textIs('s', { onTaskClick: 'openTask', compact: true }))).toBe(true);
+    expect(renders('popout/PopoutExtTasks.tsx', textIs('s', { compact: true }))).toBe(true);
+    // The extension's panel has no Home: its pills hand the task to its own opener (a new tab).
+    expect(popout).toMatch(/<TaskOpenerContext\.Provider value=\{openTask\}>\s*\{said\.map/);
     expect(popout).toMatch(/said\.map\(\(s, i\) => <AgentText\b/);
     expect(popout).not.toMatch(/<p[^>]*>\{s\}<\/p>/);
     expect(popout).not.toContain('LAST_MESSAGE_MAX');

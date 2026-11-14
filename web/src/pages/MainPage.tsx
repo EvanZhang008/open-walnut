@@ -2517,21 +2517,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     handleFocusTask(task, { openDetail: false, fromOutside: true });
   }, [handleFocusTask]);
 
-  // Unified task-click: select + scroll + open session (if any). Never open detail panel.
-  // Used by chat refs, session panels, triage — must behave identically to TodoPanel/PinnedCard clicks.
-  const handleFocusTaskById = useLeanCallback((taskId: string) => {
-    const task = taskMapRef.current.get(taskId);
-    if (!task) return;
-    const sid = resolveTaskSessionId(task);
-    if (sid) handleToggleSession(sid);
-    handleLocateTaskById(taskId);
-  }, [handleLocateTaskById, handleToggleSession]);
-
-  const handleFocusTaskByIdFromBoard = useLeanCallback((task: Task) => {
-    if (resolveTaskSessionId(task)) handleFocusTaskById(task.id);
-    else { setTodoVisible(true); handleFocusTask(task, { openDetail: true, fromOutside: true }); }
-  }, [handleFocusTaskById, handleFocusTask]);
-
   // `locateTaskOnHome` (utils/open-session.ts): a session panel off Home asked to be found. Its task
   // may be seconds old and not in this page's list yet (an ask started from Mail), so the locate is
   // held until the task arrives, for a bounded while, rather than dropped on the first miss. The panel
@@ -2565,22 +2550,27 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const loadingRef = useCommittedRef(loading);
   const sessionToOpen = (task: Task, sessionId?: string, openSession?: boolean) =>
     sessionId ?? (openSession ? resolveTaskSessionId(task) ?? undefined : undefined);
-  const revealOnHome = useLeanCallback((task: Task, sessionId?: string, openDetail?: boolean) => {
-    if (sessionId) {
-      // The slot's own rule (`agentOfTask` over the agents it lists): a task it would not show goes to a
-      // column rather than to a slot that would drop the selection.
-      if (agentOfTask(task, slotAgents(getAgentsSnapshot().agents))) {
-        showAskInSlot(task.id);
-        setChatVisible(true);
-      } else {
-        openSessionOrToast(sessionId);
-      }
+  // A task's session on Home. The slot's own rule (`agentOfTask` over the agents it lists): a task it
+  // would not show goes to a column rather than to a slot that would drop the selection.
+  const openTaskSession = useLeanCallback((task: Task, sessionId: string) => {
+    if (agentOfTask(task, slotAgents(getAgentsSnapshot().agents))) {
+      showAskInSlot(task.id);
+      setChatVisible(true);
+    } else {
+      openSessionOrToast(sessionId);
     }
+  }, [openSessionOrToast]);
+  const revealOnHome = useLeanCallback((task: Task, sessionId?: string, openDetail?: boolean) => {
+    if (sessionId) openTaskSession(task, sessionId);
+    // Whatever details popup was open goes (2026-11-13, the user: a task-ref click is "go to taht
+    // sesison in home that is it"): the focused task's through the locate below, which suppresses
+    // its detail, and one from outside the list here.
+    if (!openDetail) setOutsideTask(null);
     handleLocateTaskById(task.id);
-    // A finished task has no row in the panel's views to show, so its details popup opens instead
-    // of a selection nobody can see.
-    if (openDetail || task.status === 'done') setSuppressDetail(false);
-  }, [handleLocateTaskById, openSessionOrToast]);
+    // A finished task has no row in the panel's views to show, so with no session to open its
+    // details popup opens instead of a selection nobody can see.
+    if (openDetail || (task.status === 'done' && !sessionId)) setSuppressDetail(false);
+  }, [handleLocateTaskById, openTaskSession]);
   // The full-screen task detail for a listed task, touching neither the session columns nor the locate.
   const openDetailOf = useLeanCallback((task: Task) => {
     recordTaskOpened(task.id);
@@ -2612,10 +2602,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     }
     const showOutside = () => {
       pendingLocateRef.current = null;
+      pending.recordOpen?.(full.id);
+      // A task-ref click on a task the list does not carry still opens its session, and only that;
+      // the details popup is for one with no session, or a "Details" asked for by name.
+      const sid = pending.detailOnly || pending.openDetail ? undefined : sessionToOpen(full as Task, pending.sessionId, pending.openSession);
+      if (sid) { openTaskSession(full as Task, sid); return; }
       setTodoVisible(true);
       yieldFullscreen('locate-task');
       setOutsideTask(full as Task);
-      pending.recordOpen?.(full.id);
     };
     // Only a task made in the last minute may still be on its way to the list; any other opens now.
     const fresh = !!full.created_at && Date.now() - Date.parse(full.created_at) < 60_000 && full.status !== 'done';
@@ -2623,7 +2617,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     const waiting: PendingLocate = { ...reading, taskId: full.id, until: Date.now() + 3_000 };
     pendingLocateRef.current = waiting;
     setTimeout(() => { if (pendingLocateRef.current === waiting) showOutside(); }, 3_000);
-  }, [revealPending, showOperationError]);
+  }, [revealPending, showOperationError, openTaskSession]);
   const revealFetchedRef = useRef(revealFetched);
   revealFetchedRef.current = revealFetched;
   useEffect(() => {
@@ -2665,7 +2659,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, []);
 
   // Open the full-screen task detail modal for a taskId (used by the Session panel
-  // kebab "Details"). Unlike handleFocusTaskById this OPENS the detail (no
+  // kebab "Details"). Unlike a task-ref click (openTaskOnHome) this OPENS the detail (no
   // suppressDetail) and does not touch the session panel rotation. The menu reads the
   // session's own task, so Details can be tapped before Home's list has it (a cold deep
   // link on a slow link) or for a task the list never carries: held like a locate and
@@ -3733,7 +3727,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             both components remain (fix-walnut + the chat "+" pills). */}
       </div>
 
-      <HomeBoardSheet onOpenTask={handleFocusTaskByIdFromBoard} />
+      <HomeBoardSheet />
 
       {/* Todo Resize Handle — only shown when todo is visible */}
       {todoShown && <div className="todo-resize-handle" {...todoPanel.handleProps} />}
@@ -3752,7 +3746,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onCloseScratchpad={closeScratchpad}
           tasks={tasks}
           focusedTaskId={focusedTask?.id}
-          onTaskClick={handleFocusTaskById}
           overlayLeft={todoShown ? todoPanel.width : undefined}
         />
       )}
@@ -3810,7 +3803,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onOpenOrg={openOrg}
           // The inspector describes the session actually on screen.
           onSelectionChange={setAskSlotSelection}
-          onTaskClick={handleFocusTaskById}
           onLocateTask={handleLocateTaskById}
           onOpenTaskDetail={handleOpenTaskDetailById}
           onSessionClick={handleSessionClick}
@@ -3879,7 +3871,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             <TriagePanel
               onClose={handleCloseTriage}
               taskId={triageTaskId ?? undefined}
-              onTaskClick={handleFocusTaskById}
               onSessionClick={handleSessionClick}
             />
           </div>
@@ -3997,10 +3988,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                   onTaskCompleted={columnComplete.onTaskCompleted}
                   onClose={handleClosePanel}
                   {...(restoredColumnIdsRef.current.has(sid) ? { onRestoredGone: handleRestoredGone } : {})}
-                  onTaskClick={handleFocusTaskById}
                   onLocateTask={handleLocateTaskById}
                   onOpenTaskDetail={handleOpenTaskDetailById}
-                  onSessionClick={handleSessionClick}
+              onSessionClick={handleSessionClick}
                   onSessionReplaced={handleSessionReplaced}
                   onOpenForkDraft={handleOpenForkDraft}
                   phoneLayer={phoneLayout && idx === mobileActiveIdx}
@@ -4027,8 +4017,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           key={outsideTask.id}
           task={outsideTask}
           onClose={() => setOutsideTask(null)}
-          onOpenSession={handleToggleSession}
-          onFocusChild={(t) => { setOutsideTask(null); window.dispatchEvent(new CustomEvent('main:locate-task', { detail: { taskId: t.id, openDetail: true } })); }}
         />
       )}
       {focusedTask && !suppressDetail && (
@@ -4036,9 +4024,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           task={focusedTask}
           allTasks={tasks}
           onClose={handleClearFocus}
-          onOpenSession={handleToggleSession}
           onOpenTriageForTask={handleOpenTriageForTask}
-          onFocusChild={handleFocusTask}
         />
       )}
 

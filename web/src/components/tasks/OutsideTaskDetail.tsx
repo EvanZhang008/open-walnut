@@ -13,11 +13,9 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { deletedTaskId } from '../../../../src/core/task-deleted-id';
 import { TaskDetailModal } from './TaskDetailModal';
 
-export function OutsideTaskDetail({ task: initial, onClose, onOpenSession, onFocusChild }: {
+export function OutsideTaskDetail({ task: initial, onClose }: {
   task: Task;
   onClose: () => void;
-  onOpenSession?: (sessionId: string) => void;
-  onFocusChild?: (task: Task) => void;
 }) {
   const [task, setTask] = useState(initial);
   const follow = (data: unknown) => {
@@ -27,5 +25,5 @@ export function OutsideTaskDetail({ task: initial, onClose, onOpenSession, onFoc
   useEvent('task:updated', follow);
   useEvent('task:completed', follow);
   useEvent('task:deleted', (data) => { if (deletedTaskId(data) === task.id) onClose(); });
-  return <TaskDetailModal task={task} onClose={onClose} onOpenSession={onOpenSession} onFocusChild={onFocusChild} />;
+  return <TaskDetailModal task={task} onClose={onClose} />;
 }

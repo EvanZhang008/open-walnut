@@ -24,19 +24,20 @@ const h = vi.hoisted(() => ({
 }))
 vi.mock('@/api/files', () => ({ locatePath: h.locatePath }))
 vi.mock('@/utils/open-anywhere', () => ({ openFileAnywhere: h.openFileAnywhere, claimAgentLinkClick: (e: unknown) => { h.claimed.push(e) } }))
+vi.mock('@/utils/open-session', () => ({ openTaskOnHome: vi.fn() }))
 vi.mock('@/utils/log', () => ({ log: { info: vi.fn(), warn: h.warn, error: vi.fn(), debug: vi.fn() } }))
 
 const { MemoryRouter } = await import('../../web/node_modules/react-router-dom')
 const { useEntityClickHandler } = await import('../../web/src/hooks/useEntityClickHandler')
 
 type FileOpen = (path: string, line?: number, term?: undefined, endLine?: number) => void
-interface Props { onTaskClick?: (id: string) => void; onFileOpen?: FileOpen; fileHost?: string; fileSessionId?: string; relativeToOpener?: boolean; suspend?: boolean }
+interface Props { onSessionClick?: (id: string) => void; onFileOpen?: FileOpen; fileHost?: string; fileSessionId?: string; relativeToOpener?: boolean; suspend?: boolean }
 type Handler = (e: unknown) => void
 const pendingRender = new Promise<never>(() => {})
 
 let latest: Handler | null = null
 function Probe(p: Props) {
-  latest = useEntityClickHandler(p.onTaskClick, undefined, p.onFileOpen, p.fileHost, p.fileSessionId, p.relativeToOpener) as unknown as Handler
+  latest = useEntityClickHandler(p.onSessionClick, p.onFileOpen, p.fileHost, p.fileSessionId, p.relativeToOpener) as unknown as Handler
   if (p.suspend) throw pendingRender
   return null
 }
@@ -182,11 +183,11 @@ describe('a file link opens only from its click and its surface as they are now'
     expect(third).toHaveBeenCalledExactlyOnceWith('/srv/repo/a.ts', 5, undefined, undefined)
   })
 
-  it('a new task callback each render cancels nothing', async () => {
+  it('a new session callback each render cancels nothing', async () => {
     const open = vi.fn<FileOpen>()
-    await mount({ onFileOpen: open, onTaskClick: () => {} })
+    await mount({ onFileOpen: open, onSessionClick: () => {} })
     press(latest!, rel('a.ts'))
-    await rerender({ onFileOpen: open, onTaskClick: () => {} })
+    await rerender({ onFileOpen: open, onSessionClick: () => {} })
     await answer(0, { path: '/srv/repo/a.ts' })
     expect(open).toHaveBeenCalledExactlyOnceWith('/srv/repo/a.ts', undefined, undefined, undefined)
   })
@@ -200,8 +201,8 @@ describe('a file link opens only from its click and its surface as they are now'
     ['a URL', () => { const a = anchor('', {}); a.setAttribute('href', 'https://example.com/x'); return a }],
   ])('a newer click on %s: the earlier relative answer opens nothing', async (_what, make) => {
     const open = vi.fn<FileOpen>()
-    const onTaskClick = vi.fn()
-    await mount({ onFileOpen: open, onTaskClick })
+    const onSessionClick = vi.fn()
+    await mount({ onFileOpen: open, onSessionClick })
     press(latest!, rel('a.ts'))
     // A session or project press navigates the real router: inside act.
     await act(async () => { press(latest!, make()) })

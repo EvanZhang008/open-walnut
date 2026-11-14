@@ -22,7 +22,6 @@
  */
 import { matchParentRef, refNamesId } from '../../../../src/lib/id-ref';
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
-import { useNavigate } from 'react-router-dom';
 import type { Task as CoreTask, SessionRecord } from '@open-walnut/core';
 import { fetchSessionsForTask } from '@/api/sessions';
 import { fetchTask, updateDescription, updateNote, updateTask as apiUpdateTask, type TaskDetail } from '@/api/tasks';
@@ -48,7 +47,7 @@ import { Fact, Section, SessionRow, TaskRow } from './TaskDetailRows';
 import { EarlierSessions, taskSessionLayout } from './TaskSessionHistory';
 import { hasTransferLinks, TransferLinks } from '../transfer/TransferLinks';
 import { dateTags } from '../../../../src/core/tag-model';
-import { openTaskOnHome } from '@/utils/open-session';
+import { useOpenTask, type OpenTaskOptions } from '@/hooks/useOpenTask';
 import { taskProjectLabel } from '@/utils/project-display';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { TaskFieldEditor } from './TaskFieldEditor';
@@ -71,19 +70,19 @@ interface TaskDetailPaneProps {
   task: Task;
   allTasks?: Task[];
   onClose?: () => void;
-  onOpenSession?: (sessionId: string) => void;
   onOpenTriageForTask?: (taskId: string) => void;
-  onFocusChild?: (task: Task) => void;
   /**
-   * A linked task (a transfer or a dependency) that is not in `allTasks`. Default: Home opens it.
-   * A host with no Home behind it (the browser extension's panel) opens it its own way.
+   * The host's way out of the details before a task or session opens from them: the popup closes
+   * first (2026-11-13, the user: "in this task detail I clcik the session, the panle shoujdl be
+   * gone and jump to that task directly"), and on a phone its history entry goes before the
+   * session's layer comes. Absent: the open goes straight on.
    */
-  onOpenTaskId?: (taskId: string) => void;
+  onLeave?: (go: () => void) => void;
   style?: CSSProperties;
 }
 
-export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageForTask, onFocusChild, onOpenTaskId, style }: TaskDetailPaneProps) {
-  const navigate = useNavigate();
+export function TaskDetailPane({ task, allTasks, onClose, onOpenTriageForTask, onLeave, style }: TaskDetailPaneProps) {
+  const openTask = useOpenTask();
   const integrations = useIntegrations();
   // Re-render on live status changes (the session row reads the status store).
   useSessionStatusEpoch();
@@ -151,12 +150,12 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
     () => (allTasks && task.parent_task_id ? matchParentRef(allTasks, task) ?? null : null),
     [allTasks, task],
   );
-  const openTask = (t: Task) => (onFocusChild ? onFocusChild(t) : openTaskOnHome(t.id, navigate));
-  const openLinked = (id: string) => {
-    const t = allTasks?.find((x) => x.id === id);
-    if (t) openTask(t);
-    else if (onOpenTaskId) onOpenTaskId(id);
-    else openTaskOnHome(id, navigate);
+  // Every task or session opened from the details is the one task open (hooks/useOpenTask.ts):
+  // Home, that session in its column, the details gone.
+  const leaveTo = (taskId: string, opts?: OpenTaskOptions) => {
+    const go = () => openTask(taskId, opts);
+    if (onLeave) onLeave(go);
+    else go();
   };
 
   // One session per task: the task's own session, then the ones it held before
@@ -191,7 +190,8 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
 
   const primaryRecord = primarySessionId ? sessionRecords.get(primarySessionId) : undefined;
   const loadingRows = sessionsLoading && sessionRecords.size === 0;
-  const openSession = (sid: string) => (onOpenSession ? onOpenSession(sid) : navigate(`/sessions?id=${sid}`));
+  // A session row is one of this task's sessions: its own, or an earlier one it held.
+  const openSession = (sid: string) => leaveTo(task.id, { sessionId: sid });
 
   const [triageTotal, setTriageTotal] = useState(0);
   useEffect(() => {
@@ -242,7 +242,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
 
       <div className="tdp-body">
         <div className="tdp-main">
-          <TransferLinks task={task} onOpenTask={openLinked} className="tdp-transfer" />
+          <TransferLinks task={task} className="tdp-transfer" />
           <StartQueueLine task={task} onError={reportError} />
           <AnsweredForLine task={task} onError={reportError} />
 
@@ -268,14 +268,14 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
 
           {parentTask && (
             <Section label="Parent">
-              <TaskRow title={orgDisplayTitle(parentTask)} phase={parentTask.phase} done={parentTask.status === 'done'} status={taskStatusLabel(parentTask)} onOpen={() => openTask(parentTask)} />
+              <TaskRow title={orgDisplayTitle(parentTask)} phase={parentTask.phase} done={parentTask.status === 'done'} status={taskStatusLabel(parentTask)} onOpen={() => leaveTo(parentTask.id)} />
             </Section>
           )}
 
           {childTasks.length > 0 && (
             <Section label="Subtasks" count={childTasks.length}>
               {childTasks.map((child) => (
-                <TaskRow key={child.id} title={orgDisplayTitle(child)} phase={child.phase} done={child.status === 'done'} status={taskStatusLabel(child)} onOpen={() => openTask(child)} />
+                <TaskRow key={child.id} title={orgDisplayTitle(child)} phase={child.phase} done={child.status === 'done'} status={taskStatusLabel(child)} onOpen={() => leaveTo(child.id)} />
               ))}
             </Section>
           )}
@@ -291,7 +291,6 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
             task={task}
             detail={detail}
             onChanged={reloadDetail}
-            onOpenTask={openLinked}
             onError={reportError}
           />
 

@@ -4,20 +4,20 @@
  * under the bar, `Cancel` in the bar's right slot (the only way out: no Back
  * beside it, N26), and the results of the
  * existing search APIs grouped as Tasks / Sessions / Notes (rows 48 px). A
- * result opens its own layer above this one (session, task detail), so Back
- * comes back to the results; a note opens the Notes page. It stands in for the
+ * session result opens its own layer above this one, so Back comes back to the
+ * results; a task opens on Home as every task reference does (useOpenTask); a
+ * note opens the Notes page. It stands in for the
  * desktop's Cmd+Shift+O session finder, which a phone has no way to reach.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import type { Task } from '@open-walnut/core';
 import { apiGet } from '@/api/client';
 import { searchNotesHybrid, type SearchResult as NoteHit } from '@/api/notes-v2';
 import { noteHitLabel } from '../../../../src/core/note-hit-label';
 import { usePhoneOverlay } from '@/hooks/usePhoneOverlayHistory';
 import { log } from '@/utils/log';
-import { useHomeTasksById } from './phone-row-behavior';
+import { useOpenTask } from '@/hooks/useOpenTask';
 
 const DEBOUNCE_MS = 250;
 const TIMEOUT_MS = 10_000;
@@ -129,15 +129,13 @@ function useSearch(query: string): { phase: Phase; groups: SearchGroups } {
 export interface PhoneSearchLayerProps {
   open: boolean;
   onClose: () => void;
-  /** A task result: the home row's own open (its session, else its detail). */
-  onOpenTask?: (task: Task) => void;
 }
 
-export function PhoneSearchLayer({ open, onClose, onOpenTask }: PhoneSearchLayerProps) {
+export function PhoneSearchLayer({ open, onClose }: PhoneSearchLayerProps) {
   const [query, setQuery] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
-  const tasksById = useHomeTasksById();
+  const openTask = useOpenTask();
   const afterCloseRef = useRef<(() => void) | null>(null);
   const cancel = useRef<() => void>(() => {});
   const action = useMemo(() => (
@@ -164,12 +162,13 @@ export function PhoneSearchLayer({ open, onClose, onOpenTask }: PhoneSearchLayer
     inputRef.current?.focus({ preventScroll: true });
   }, [open]);
 
-  const openTask = useCallback((taskId: string) => {
-    const task = tasksById.get(taskId);
+  // Like a note: leave the search first, then open the task on Home (its session's layer, or
+  // its row selected in the list the search covered).
+  const openTaskResult = (taskId: string) => {
     inputRef.current?.blur();
-    if (task && onOpenTask) { onOpenTask(task); return; }
-    log.warn('phone-search', 'task result not on the board', { taskId });
-  }, [onOpenTask, tasksById]);
+    afterCloseRef.current = () => openTask(taskId);
+    layer.close();
+  };
 
   const openSession = useCallback((sessionId: string) => {
     inputRef.current?.blur();
@@ -210,7 +209,7 @@ export function PhoneSearchLayer({ open, onClose, onOpenTask }: PhoneSearchLayer
         {phase === 'done' && groups.tasks.length > 0 && (
           <SearchGroup label="Tasks">
             {groups.tasks.map((r) => (
-              <ResultRow key={r.taskId} title={r.title} snippet={r.snippet} onOpen={() => openTask(r.taskId)} />
+              <ResultRow key={r.taskId} title={r.title} snippet={r.snippet} onOpen={() => openTaskResult(r.taskId)} />
             ))}
           </SearchGroup>
         )}

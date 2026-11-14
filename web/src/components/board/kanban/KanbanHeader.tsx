@@ -9,10 +9,10 @@ import { KanbanFilters } from './KanbanFilters';
 import { KanbanLaneStrip } from './KanbanLaneStrip';
 import { KanbanRollup } from './KanbanRollup';
 
-export function KanbanHeader({ board, filter, seen, mode, onJumpToLane, onRevealCard, onOpenTask, searchRef }: KanbanHeaderProps) {
+export function KanbanHeader({ board, filter, seen, mode, onJumpToLane, onRevealCard, searchRef }: KanbanHeaderProps) {
   return (
     <div className={`kanban-header is-${mode}`} data-testid="kanban-header" data-mode={mode}>
-      <KanbanRollup board={board} filter={filter} mode={mode} onOpenTask={onOpenTask} />
+      <KanbanRollup board={board} filter={filter} mode={mode} />
       <KanbanFilters board={board} filter={filter} seen={seen} mode={mode} searchRef={searchRef} onRevealCard={onRevealCard} />
       {mode === 'wide' && board.lanes.length > 0 && <KanbanLaneStrip board={board} onJumpToLane={onJumpToLane} isVisible={filter.active ? (t) => filter.isVisible(t) || filter.isHandled(t) : null} />}
     </div>

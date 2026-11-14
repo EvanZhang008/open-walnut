@@ -6,6 +6,7 @@ import { PHASE_LABELS } from '@/utils/session-status';
 import type { MessageBlock, ThinkingBlock, ToolCallBlock, ImageBlock, TaskContext, ImageAttachment } from '@/hooks/useChat';
 import { useLightbox } from '@/hooks/useLightbox';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
+import { useOpenTask, type OpenTask } from '@/hooks/useOpenTask';
 import { Lightbox } from '@/components/common/Lightbox';
 import { AgentText } from '@/components/common/AgentText';
 import { extractMarkdownFields, renderMarkdownWithRefs, renderUserMessage, type RenderMarkdownOptions } from '@/utils/markdown';
@@ -51,7 +52,6 @@ interface ChatMessageProps {
   queued?: boolean;
   onCancel?: () => void;
   taskLookup?: Map<string, Task>;
-  onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   /**
    * Stable per-message id that scopes this message's `<suggest>` card receipts
@@ -264,12 +264,12 @@ function TaskContextSection({ ctx, onSessionClick }: TaskContextSectionProps) {
 interface RouteInfoSectionProps {
   info: RouteInfo;
   taskLookup?: Map<string, Task>;
-  onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
 }
 
-function RouteInfoSection({ info, taskLookup, onTaskClick, onSessionClick }: RouteInfoSectionProps) {
+function RouteInfoSection({ info, taskLookup, onSessionClick }: RouteInfoSectionProps) {
   const navigate = useNavigate();
+  const openTask = useOpenTask();
   const [open, setOpen] = useState(false);
   const arrow = info.direction === 'sent' ? '\u2191' : '\u2193';
   const label = `${arrow} Routed via ${info.event}`;
@@ -304,7 +304,7 @@ function RouteInfoSection({ info, taskLookup, onTaskClick, onSessionClick }: Rou
                   <span
                     className="task-id-pill"
                     title={`${info.taskId} → ${resolvedTask.title}`}
-                    onClick={(e) => { e.stopPropagation(); onTaskClick?.(resolvedTask.id); }}
+                    onClick={(e) => { e.stopPropagation(); openTask(resolvedTask.id); }}
                   >
                     {resolvedTask.title}
                   </span>
@@ -390,8 +390,8 @@ const SESSION_ID_JSON_RE = /("(?:session_id|sessionId|from_plan|plan_session|exe
  */
 function renderJsonWithTaskLinks(
   input: Record<string, unknown>,
-  taskLookup?: Map<string, Task>,
-  onTaskClick?: (taskId: string) => void,
+  taskLookup: Map<string, Task> | undefined,
+  openTask: OpenTask,
   onSessionClick?: (sessionId: string) => void,
   onFileOpen?: (path: string, line?: number) => void,
 ): ReactNode {
@@ -404,7 +404,7 @@ function renderJsonWithTaskLinks(
   let match: RegExpExecArray | null;
 
   // Task ID matches
-  if (taskLookup && onTaskClick) {
+  if (taskLookup) {
     TASK_ID_JSON_RE.lastIndex = 0;
     while ((match = TASK_ID_JSON_RE.exec(jsonStr)) !== null) {
       const rawId = match[2];
@@ -421,7 +421,7 @@ function renderJsonWithTaskLinks(
             key={`task-pill-${m.index}`}
             className="task-id-pill"
             title={`${rawId} → ${task.title}`}
-            onClick={(e) => { e.stopPropagation(); onTaskClick(task.id); }}
+            onClick={(e) => { e.stopPropagation(); openTask(task.id); }}
           >
             {task.title}
           </span>
@@ -446,7 +446,7 @@ function renderJsonWithTaskLinks(
             key={`task-pill-bare-${m.index}`}
             className="task-id-pill"
             title={`${rawId} → ${task.title}`}
-            onClick={(e) => { e.stopPropagation(); onTaskClick(task.id); }}
+            onClick={(e) => { e.stopPropagation(); openTask(task.id); }}
           >
             {task.title}
           </span>
@@ -535,8 +535,8 @@ function renderJsonWithTaskLinks(
  */
 function buildInputSummary(
   input: Record<string, unknown>,
-  taskLookup?: Map<string, Task>,
-  onTaskClick?: (taskId: string) => void,
+  taskLookup: Map<string, Task> | undefined,
+  openTask: OpenTask,
   onSessionClick?: (sessionId: string) => void,
 ): ReactNode {
   const entries = Object.entries(input);
@@ -548,7 +548,7 @@ function buildInputSummary(
     const truncated = val.length > 60 ? val.slice(0, 60) + '...' : val;
 
     // Check if this key is a task ID and we can resolve it
-    if (TASK_ID_KEYS.has(k) && typeof v === 'string' && taskLookup && onTaskClick) {
+    if (TASK_ID_KEYS.has(k) && typeof v === 'string' && taskLookup) {
       const task = resolveTaskId(v, taskLookup);
       if (task) {
         if (i > 0) parts.push(', ');
@@ -560,7 +560,7 @@ function buildInputSummary(
             title={`${v} → ${task.title}`}
             onClick={(e) => {
               e.stopPropagation();
-              onTaskClick(task.id);
+              openTask(task.id);
             }}
           >
             {task.title}
@@ -662,14 +662,14 @@ const DATA_RENDER_NO_IMAGES: RenderMarkdownOptions = { taskIds: 'links', inlineI
 interface ToolCallSectionProps {
   block: ToolCallBlock;
   taskLookup?: Map<string, Task>;
-  onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   /** The message's opener over its writer; absent is unknown. */
   file?: AgentFileOpener;
 }
 
-export function ToolCallSection({ block, taskLookup, onTaskClick, onSessionClick, file: fileProp }: ToolCallSectionProps) {
+export function ToolCallSection({ block, taskLookup, onSessionClick, file: fileProp }: ToolCallSectionProps) {
   const navigate = useNavigate();
+  const openTask = useOpenTask();
   // Unconditional for hook order; used only without the message's opener.
   const ownFile = useAgentFileOpener(UNKNOWN_WRITER);
   const file = fileProp ?? ownFile;
@@ -691,7 +691,7 @@ export function ToolCallSection({ block, taskLookup, onTaskClick, onSessionClick
     }
   }, [navigate, onSessionClick]);
 
-  const handleEntityClick = useEntityClickHandler(onTaskClick, onSessionClick, file.onFileOpen, file.fileHost, file.fileSessionId, file.refusesAll);
+  const handleEntityClick = useEntityClickHandler(onSessionClick, file.onFileOpen, file.fileHost, file.fileSessionId, file.refusesAll);
   // A link the shared handler took must not reach the bubble's handler and open twice.
   const handleResultClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     handleEntityClick(e);
@@ -700,13 +700,13 @@ export function ToolCallSection({ block, taskLookup, onTaskClick, onSessionClick
 
   // Collapsed summary: resolve task IDs and session IDs as pills
   const inputSummaryNode = block.input
-    ? buildInputSummary(block.input, taskLookup, onTaskClick, handleSessionClick)
+    ? buildInputSummary(block.input, taskLookup, openTask, handleSessionClick)
     : null;
 
   // Expanded JSON: resolve task IDs / session IDs / file paths inline as clickable nodes.
   // Always use the renderer so file paths become clickable even without taskLookup.
   const expandedJson = block.input
-    ? renderJsonWithTaskLinks(block.input, taskLookup, onTaskClick, handleSessionClick, onFileOpen)
+    ? renderJsonWithTaskLinks(block.input, taskLookup, openTask, handleSessionClick, onFileOpen)
     : null;
 
   // Pill titles resolve from the entity-label store — re-render when an
@@ -792,12 +792,11 @@ function extractMessageToUser(blocks: MessageBlock[]): string | null {
  * ALL content (tool calls, thinking, text, images) collapses by default.
  * Only <MESSAGE-TO-USER> content is shown above the collapsed group.
  */
-function SystemMessageGroup({ blocks, sourceLabel, taskLookup, cardScope, onTaskClick, onSessionClick, file, onContentClick }: {
+function SystemMessageGroup({ blocks, sourceLabel, taskLookup, cardScope, onSessionClick, file, onContentClick }: {
   blocks: MessageBlock[];
   sourceLabel: string;
   taskLookup?: Map<string, Task>;
   cardScope?: string;
-  onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   /** The message's opener over its writer. */
   file: AgentFileOpener;
@@ -852,7 +851,7 @@ function SystemMessageGroup({ blocks, sourceLabel, taskLookup, cardScope, onTask
                   return <ThinkingSection key={i} block={block} />;
                 case 'tool_call':
                   if (block.name === 'subagent_create') return <SubagentBlock key={i} block={block} />;
-                  return <ToolCallSection key={i} block={block} taskLookup={taskLookup} onTaskClick={onTaskClick} onSessionClick={onSessionClick} file={file} />;
+                  return <ToolCallSection key={i} block={block} taskLookup={taskLookup} onSessionClick={onSessionClick} file={file} />;
                 case 'text':
                   return <MemoizedTextBlock key={i} content={block.content} cardScope={cardScope} render={file.render} onClick={onContentClick} />;
                 case 'image': {
@@ -907,7 +906,7 @@ function MemoizedTextBlock({ content, cardScope, render, onClick }: {
   );
 }
 
-function ChatMessageBubble({ role, content, blocks, images, taskContext, routeInfo, timestamp, source, cronJobName, notification, errorCount, queued, onCancel, taskLookup, onTaskClick, onSessionClick, cardScope, textSource }: ChatMessageProps) {
+function ChatMessageBubble({ role, content, blocks, images, taskContext, routeInfo, timestamp, source, cronJobName, notification, errorCount, queued, onCancel, taskLookup, onSessionClick, cardScope, textSource }: ChatMessageProps) {
   const { lightboxSrc, openLightbox, closeLightbox } = useLightbox();
 
   // Paths open on the writer's machine; unknown reads nothing and loads no picture until one is chosen.
@@ -921,7 +920,7 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
   const time = formatTimestamp(timestamp);
 
   // Unified entity click handler for .task-link, .session-link, and .file-link anchors
-  const handleEntityClick = useEntityClickHandler(onTaskClick, onSessionClick, file.onFileOpen, file.fileHost, file.fileSessionId, file.refusesAll);
+  const handleEntityClick = useEntityClickHandler(onSessionClick, file.onFileOpen, file.fileHost, file.fileSessionId, file.refusesAll);
 
   // Pill titles resolve from the entity-label store — the version dep below
   // re-renders refs when an observed title changes or the store loads late.
@@ -1172,7 +1171,7 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
           )}
           {(!isCollapsed || !shouldAutoCollapse) && (
             <div className="chat-message-content">
-              {routeInfo && <RouteInfoSection info={routeInfo} taskLookup={taskLookup} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />}
+              {routeInfo && <RouteInfoSection info={routeInfo} taskLookup={taskLookup} onSessionClick={onSessionClick} />}
               {isSystemInitiated ? (
                 /* System-initiated: fully collapse ALL blocks, show only <MESSAGE-TO-USER> */
                 <SystemMessageGroup
@@ -1180,7 +1179,6 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
                   sourceLabel={roleLabel}
                   taskLookup={taskLookup}
                   cardScope={cardScope}
-                  onTaskClick={onTaskClick}
                   onSessionClick={onSessionClick}
                   file={file}
                   onContentClick={handleContentClick}
@@ -1194,7 +1192,7 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
                     case 'tool_call': {
                       // Render create_subagent as SubagentBlock
                       if (block.name === 'subagent_create') return <SubagentBlock key={i} block={block} />;
-                      return <ToolCallSection key={i} block={block} taskLookup={taskLookup} onTaskClick={onTaskClick} onSessionClick={onSessionClick} file={file} />;
+                      return <ToolCallSection key={i} block={block} taskLookup={taskLookup} onSessionClick={onSessionClick} file={file} />;
                     }
                     case 'text':
                       return <MemoizedTextBlock key={i} content={block.content} cardScope={cardScope} render={render} onClick={handleContentClick} />;
@@ -1249,7 +1247,7 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
         {role === 'user' ? (
           (!isCollapsed || !shouldAutoCollapse) && <div className="chat-message-content">
             {taskContext && <TaskContextSection ctx={taskContext} onSessionClick={onSessionClick} />}
-            {routeInfo && <RouteInfoSection info={routeInfo} taskLookup={taskLookup} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />}
+            {routeInfo && <RouteInfoSection info={routeInfo} taskLookup={taskLookup} onSessionClick={onSessionClick} />}
             {images && images.length > 0 && (
               <div className="chat-message-images">
                 {images.map((img, i) => {
@@ -1300,7 +1298,7 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
         ) : (
           (!isCollapsed || !shouldAutoCollapse) && (
             <div className="chat-message-content">
-              {routeInfo && <RouteInfoSection info={routeInfo} taskLookup={taskLookup} onTaskClick={onTaskClick} onSessionClick={onSessionClick} />}
+              {routeInfo && <RouteInfoSection info={routeInfo} taskLookup={taskLookup} onSessionClick={onSessionClick} />}
               {/* History replay arrives without blocks, so cards have to work on
                   this path too — otherwise a reloaded card degrades to prose. */}
               {legacyCards ? (
@@ -1358,7 +1356,6 @@ function arePropsEqual(prev: ChatMessageProps, next: ChatMessageProps): boolean 
     prev.queued === next.queued &&
     prev.onCancel === next.onCancel &&
     prev.taskLookup === next.taskLookup &&
-    prev.onTaskClick === next.onTaskClick &&
     prev.onSessionClick === next.onSessionClick &&
     prev.cardScope === next.cardScope &&
     sameTextSource(prev.textSource, next.textSource)

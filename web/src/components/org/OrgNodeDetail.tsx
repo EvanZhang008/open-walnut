@@ -23,6 +23,7 @@ import { isBoolean, usePageViewOf } from '@/utils/view-memory';
 import { oneOf } from '@/hooks/usePersistentState';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { yieldFullscreen } from '@/hooks/useFullscreen';
+import { useOpenTask } from '@/hooks/useOpenTask';
 import type { Task } from '@open-walnut/core';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { OrgPaneHandle } from './OrgPaneHandle';
@@ -81,8 +82,9 @@ interface Props {
   /** That view was opened: the URL lets go of it, so the node keeps the view it is left on. */
   onTabUsed: (key: string) => void;
   onSelect: (key: string) => void;
-  /** Open a task that is not this node: the page's side panel (`inbox`: on its session's Inbox tab). */
-  onOpenTask: (taskId: string, opts?: { inbox?: boolean }) => void;
+  /** A letter another task wrote: its Answer, on that task's session Inbox tab (OrgPage). A letter,
+   *  not a task reference: a task reference opens on Home (useOpenTask). */
+  onOpenLetterOf: (taskId: string) => void;
   /** Open a session a chat names: the page's side panel. */
   onOpenSession: (sessionId: string) => void;
   /** Asks answered from their rows (the page's holds, OrgPage). */
@@ -181,12 +183,14 @@ function TeamBoard({ columns, onPick, emptyText }: {
   );
 }
 
-export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelect: selectRow, onOpenTask: openTaskOut, onOpenSession, answers, onStartChat, tasksLoading, onBack, now }: Props) {
-  // What opens instead of this node or beside it (another node, a task's panel, the chat this
+export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelect: selectRow, onOpenLetterOf, onOpenSession, answers, onStartChat, tasksLoading, onBack, now }: Props) {
+  // What opens instead of this node or beside it (another node, a letter's panel, the chat this
   // fills) lies under a full-screen sheet, its side bar's or its chat's: leave it first, as a home
-  // column does (useFullscreen's COLUMN-OPEN EXIT), or the click reads as nothing happened.
+  // column does (useFullscreen's COLUMN-OPEN EXIT), or the click reads as nothing happened. A task
+  // reference goes Home (useOpenTask), whose column open yields it there.
   const onSelect = (key: string) => { yieldFullscreen('org-select-node'); selectRow(key); };
-  const onOpenTask = (taskId: string, opts?: { inbox?: boolean }) => { yieldFullscreen('org-open-task'); openTaskOut(taskId, opts); };
+  const openLetter = (taskId: string) => { yieldFullscreen('org-open-letter'); onOpenLetterOf(taskId); };
+  const openTask = useOpenTask();
   const contact = useMemo(() => (row.contactId ? tasks.find((t) => t.id === row.contactId) : undefined), [tasks, row.contactId]);
   // Temporary (utils/flash-probe.ts): a remount of the node's detail is one cause of a flash.
   useEffect(() => { if (flashProbeEnabled()) log.info('flash-probe', 'org detail mounted', { node: row.key }); }, [row.key]);
@@ -315,13 +319,6 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   const threadsCounted = useMemo<ThreadCounts | undefined>(() => (threads.threads ? threadCounts(threads.threads) : row.threads), [threads.threads, row.threads]);
   const threadsCount = threadsCounted?.shown ?? 0;
   const followUp = sessionId ? (threadId: string, text: string, images?: ImageAttachment[]) => send(sessionId, text, images, { threadId }) : null;
-  /** A task chip on the Board: a node of this page is selected; any other task opens beside it. */
-  const openChip = (id: string) => {
-    const hit = rows.find((r) => r.contactId === id);
-    if (hit) { onSelect(hit.key); return; }
-    onOpenTask(id);
-  };
-
   /** The contact's Board is its team's (resolveTeamBoardTask): the contact's own choices and its
    *  subtasks' are there, another task's are not. */
   const onContactBoard = (id: string): boolean => {
@@ -334,17 +331,17 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
     return false;
   };
   /** The task's name: where the ask lives. A choice on this node's Board, a letter in its
-   *  session's Inbox tab, anything else in its chat (this node's, or the task's beside the page). */
+   *  session's Inbox tab, anything else in its chat (this node's, or the task's on Home). */
   const openAlert = (a: OrgAlertView) => {
     const own = a.taskId === row.contactId;
     // The Board may still be loading (null): the side bar shows all its tasks until it is known.
     if (a.kind === 'needs' && a.source === 'choice' && hasBoard !== false && onContactBoard(a.taskId)) { openTasks('board'); return; }
-    if (a.kind === 'needs' && a.source === 'letter' && !own) { onOpenTask(a.taskId, { inbox: true }); return; }
+    if (a.kind === 'needs' && a.source === 'letter' && !own) { openLetter(a.taskId); return; }
     if (own) {
       if (a.kind === 'needs' && a.source === 'letter' && sessionId) { yieldFullscreen('org-own-letter'); setChatInbox({ sid: sessionId, n: Date.now() }); }
       return;
     }
-    onOpenTask(a.taskId);
+    openTask(a.taskId);
   };
   /** Quote: the ask into this node's chat composer, to answer it in the chat. The chat may need
    *  to open first, so the quote waits for its panel (which takes COMPOSER_INSERT_EVENT). */
@@ -421,7 +418,8 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
     <TeamBoard
       columns={columns}
       emptyText={row.kind === 'main' ? 'No project has open work yet.' : 'Nothing open here.'}
-      onPick={(it) => { if (it.rowKey) onSelect(it.rowKey); else onOpenTask(it.id); }}
+      // A project's row is a node of this page (the page's own navigation); a task opens on Home.
+      onPick={(it) => { if (it.rowKey) onSelect(it.rowKey); else openTask(it.id); }}
     />
   );
   /** The Board its lead keeps, in the side bar. */
@@ -429,11 +427,10 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
     <TaskBoardPane
       key={row.contactId}
       taskId={row.contactId}
-      {...(sessionId ? { sessionId, onSendToSession: (text: string) => send(sessionId, text) } : {})}
-      onOpenTask={openChip}
+      {...(sessionId ? { onSendToSession: (text: string) => send(sessionId, text) } : {})}
       quietEmpty
       renderSession={(cardSessionId, opts) => (
-        <SessionPanel key={cardSessionId} sessionId={cardSessionId} viewPlace="org-node-card" embedded inset onClose={opts.onClose} onTaskClick={openChip} onSessionClick={onOpenSession} />
+        <SessionPanel key={cardSessionId} sessionId={cardSessionId} viewPlace="org-node-card" embedded inset onClose={opts.onClose} onSessionClick={onOpenSession} />
       )}
     />
   ) : null;
@@ -445,7 +442,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
       mode={taskMode} onMode={setTaskMode} renderBoard={hasBoard && row.contactId ? renderBoard : null} briefFolded={briefFolded} onBriefFolded={setBriefFolded} briefFresh={briefFresh} briefUpdating={updating}
       threads={threads} onThreadFollowUp={followUp}
       contact={contact} title={title} onOpenAlert={openAlert} onQuote={quoteAlert} canQuote={!!sessionId} answers={answers}
-      onOpenTask={openChip} now={now} placement={railSide ? 'side' : 'top'}
+      now={now} placement={railSide ? 'side' : 'top'}
       {...(railSide ? { width: railCss } : {})}
     />
   );
@@ -509,7 +506,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
         {shown === 'team' && renderTeam()}
         {shown === 'chat' && (sessionId ? (
           <div ref={chatHostRef} className="org-chat-host" data-testid="org-chat">
-            <SessionPanel key={sessionId} sessionId={sessionId} viewPlace="org-node" embedded headerSlot={chatTools} {...(!isRouter && hasBoard && row.contactId ? { onHostBoard: () => openTasks('board') } : {})} inboxRequest={chatInbox?.sid === sessionId ? chatInbox.n : 0} {...(routerEmptyChat ? { emptyHistory: routerEmptyChat } : {})} onTaskClick={openChip} onSessionClick={onOpenSession} />
+            <SessionPanel key={sessionId} sessionId={sessionId} viewPlace="org-node" embedded headerSlot={chatTools} {...(!isRouter && hasBoard && row.contactId ? { onHostBoard: () => openTasks('board') } : {})} inboxRequest={chatInbox?.sid === sessionId ? chatInbox.n : 0} {...(routerEmptyChat ? { emptyHistory: routerEmptyChat } : {})} onSessionClick={onOpenSession} />
           </div>
         ) : (
           // No session yet: it starts by itself in the background (org-autostart.ts); Retry only after a failure.

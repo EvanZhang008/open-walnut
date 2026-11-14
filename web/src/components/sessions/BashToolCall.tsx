@@ -106,7 +106,7 @@ export function BashToolCall({ tool, status: statusProp = 'done', result: result
       .filter((x): x is NonNullable<typeof x> => x !== null);
     return resolved.length > 0 ? resolved : null;
   }, [result, open, sessionCwd, imageHost, imagesKnown]);
-  const onLinkClick = useEntityClickHandler(undefined, undefined, onFileOpen ? (p) => onFileOpen(p) : undefined, sessionHost, sessionId);
+  const onLinkClick = useEntityClickHandler(undefined, onFileOpen ? (p) => onFileOpen(p) : undefined, sessionHost, sessionId);
   // The shared handler marks a link it took (preventDefault); no handler around the card takes it again.
   const handleImageLinkClick = (e: React.MouseEvent) => {
     onLinkClick(e);

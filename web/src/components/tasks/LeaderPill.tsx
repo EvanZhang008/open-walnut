@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { binaryPhaseIcon } from '@/components/common/Icons';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useKeyboardOpenFocus } from '@/hooks/useKeyboardOpenFocus';
-import { locateTaskOnHome } from '@/utils/open-session';
+import { useOpenTask } from '@/hooks/useOpenTask';
 import { resolveTaskSessionId, taskCircleClass, taskStatusLabel, taskUserState } from '@/utils/session-status';
 import { log } from '@/utils/log';
 import { AdoptWorkerFlyout } from './AdoptWorkerFlyout';
@@ -46,7 +45,7 @@ const ICON_UNLINK = (
  * "Adopt a task…", swaps it for the AdoptWorkerFlyout on the same pill.
  */
 export function LeaderPill({ task, className }: { task: Task; className?: string }) {
-  const navigate = useNavigate();
+  const openTask = useOpenTask();
   const store = useTasksContextSafe();
   const [open, setOpen] = useState(false);
   const [adoptOpen, setAdoptOpen] = useState(false);
@@ -115,7 +114,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
   const goTo = (sub: Task) => {
     close(false);
     const sid = resolveTaskSessionId(sub);
-    locateTaskOnHome(sub.id, navigate, sid ? { sessionId: sid } : undefined);
+    openTask(sub.id, sid ? { sessionId: sid } : undefined);
   };
 
   return (

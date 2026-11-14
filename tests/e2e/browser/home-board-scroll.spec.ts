@@ -110,9 +110,12 @@ test('every nested card body activates only its own drag and leaves controls cli
   await child.locator(':scope > .home-board-family > button').click();
   await expect(board.locator('[data-board-task="board-body-2"]')).toHaveCount(0);
   await expect(board.locator('.home-board-drag-preview')).toHaveCount(0);
+  // A card's title is a task reference (useOpenTask): the sheet goes and, the task having no
+  // session, Home's list has it selected; no details popup.
   await child.locator(':scope > .home-board-card-top > .home-board-title').click();
   await expect(board).toHaveCount(0);
-  await expect(page.locator('.todo-detail-pane[data-task-id="board-body-1"]')).toBeVisible();
+  await expect(page.locator('#home-task-navigation [data-task-id="board-body-1"]').and(page.locator('.task-focused, .todo-pinned-card-active'))).toHaveCount(1, { timeout: 15_000 });
+  await expect(page.locator('.task-detail-modal')).toHaveCount(0);
 });
 
 test('dense board scrolls horizontally from cards and keeps one clipping boundary per scroll area', async ({ page }) => {

@@ -173,7 +173,7 @@ describe('R3-06 no row that does nothing, and one warning that is true', () => {
       readerHasRow: over.readerHasRow === true,
       actions: {
         onSetRead: () => {}, onOpen: () => {}, onReply: () => {}, onForward: () => {},
-        onTalkToCeo: () => {}, onNewTask: () => {}, onOpenTask: () => {}, onSearchSender: () => {}, onCopyLink: () => {},
+        onTalkToCeo: () => {}, onNewTask: () => {}, openTask: () => {}, onSearchSender: () => {}, onCopyLink: () => {},
       },
     });
   }

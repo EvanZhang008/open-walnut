@@ -7,6 +7,7 @@
  * `dock:activate-task` / `sidebar:toggle-todo`.
  */
 import { armSessionInboxLink, parseSessionInboxTarget } from '@/components/inbox/session-inbox-link';
+import { isPopoutPath, openTaskInApp } from '@/popout/openPopout';
 import { taskIdOfPath } from './task-path';
 
 /** Extra state a session deep link can carry (currently: the Inbox tab). */
@@ -64,23 +65,39 @@ export function locateTaskOnHome(
   navigate: (to: string) => void,
   opts?: { sessionId?: string },
 ): void {
+  // A pop-out has no Home: the app's own window finds it (a pop-out session's Locate).
+  if (window.location && isPopoutPath(window.location.pathname)) { openTaskInApp(taskId); return; }
   window.dispatchEvent(new CustomEvent('main:locate-task', {
     detail: { taskId, ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}) },
   }));
   navigate('/');
 }
 
+/** What a task open may carry besides the task. */
+export interface OpenTaskOptions {
+  /** Open this session of the task rather than its own (a details popup's earlier-session row). */
+  sessionId?: string;
+  /** A "Details" item off Home: the task's details popup opens over Home too. Never a task-ref click. */
+  detail?: boolean;
+}
+
 /**
- * Open a task on the HOME page from anywhere: select it in the task panel and open its session,
- * the way a click on its row does, then go home.
+ * Open a task on the HOME page from anywhere: its session in a column (the one named, else its
+ * own), the task selected in the task panel, every details popup closed, then go home. A task
+ * with no session is only selected, as a click on its row does.
  *
  * What every task link and task click does, wherever it is (2026-10-26, the user: "Inbox directly
- * jumping to the home page is better"; 2026-11-02, everywhere, and the separate task page is gone).
- * Same window-event bridge as `locateTaskOnHome`, which it extends with the task's own session.
+ * jumping to the home page is better"; 2026-11-02, everywhere, and the separate task page is gone;
+ * 2026-11-13, "We want to clcik go to taht sesison in home that is it"). Components reach it through
+ * `useOpenTask` (hooks/useOpenTask.ts), never through a callback prop. In a pop-out tab there is no
+ * Home: the app's own window opens it (openTaskInApp). Same window-event bridge as
+ * `locateTaskOnHome`, which it extends with the task's session.
  */
-export function openTaskOnHome(taskId: string, navigate: (to: string) => void, opts?: { detail?: boolean }): void {
-  // `detail`: a "Details" item off Home also opens the task's details popup there.
-  window.dispatchEvent(new CustomEvent('main:locate-task', { detail: { taskId, openSession: true, ...(opts?.detail ? { openDetail: true } : {}) } }));
+export function openTaskOnHome(taskId: string, navigate: (to: string) => void, opts?: OpenTaskOptions): void {
+  if (window.location && isPopoutPath(window.location.pathname)) { openTaskInApp(taskId); return; }
+  window.dispatchEvent(new CustomEvent('main:locate-task', {
+    detail: { taskId, openSession: true, ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}), ...(opts?.detail ? { openDetail: true } : {}) },
+  }));
   navigate('/');
 }
 

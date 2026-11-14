@@ -12,6 +12,7 @@ import { ApiError, apiPatch, apiPost, apiPut } from '@/api/client';
 import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { useLeaderPresence } from '@/hooks/useLeaderPresence';
 import { log } from '@/utils/log';
+import { useOpenTask } from '@/hooks/useOpenTask';
 import { autoLaneKind, firstLaneOfKind, type BoardCard, type BoardLane } from '../../../../../src/core/boards/board-lanes';
 import { boardErrorMessage, boardPath } from '../useTaskBoard';
 import type {
@@ -49,7 +50,6 @@ export interface KanbanWritesDeps {
   onReveal: (taskId: string) => void;
   /** Marks a card a moment in its new place: its move's toast shows in the window's corner, away from it. */
   onFlash?: (taskId: string) => void;
-  onOpenTask: (taskId: string) => void;
   /** R3-02: the user changed this task's phase from the board (Complete, Reopen, Undo): the move it causes is not news. */
   onHumanPhase?: (taskId: string) => void;
 }
@@ -104,6 +104,7 @@ export function useKanbanWrites(deps: KanbanWritesDeps): KanbanWrites {
   const seq = useRef(0);
   const d = useRef(deps);
   d.current = deps;
+  const openTask = useOpenTask();
   const base = boardPath(ownerId);
   useEffect(() => { setOverlays(new Map()); setPending([]); setRefused(false); }, [ownerId]);
 
@@ -240,7 +241,7 @@ export function useKanbanWrites(deps: KanbanWritesDeps): KanbanWrites {
       if (e.status === 409 && typeof e.body.active_count === 'number') {
         const n = e.body.active_count as number;
         toastError(`Can't complete ${quote(title)}: ${n} open ${n === 1 ? 'subtask' : 'subtasks'}`,
-          [{ label: 'Open', testId: 'kanban-toast-open', run: () => d.current.onOpenTask(taskId) }]);
+          [{ label: 'Open', testId: 'kanban-toast-open', run: () => openTask(taskId) }]);
       } else {
         toastError(`Couldn't complete ${quote(title)}: ${boardErrorMessage(r.err)}`);
       }
@@ -272,7 +273,7 @@ export function useKanbanWrites(deps: KanbanWritesDeps): KanbanWrites {
       ],
     });
     return true;
-  }, [run, ownerId, setPhase, moveCard]);
+  }, [run, ownerId, setPhase, moveCard, openTask]);
 
   const reopenTask = useCallback((taskId: string) => setPhase(taskId, 'IN_PROGRESS', 'reopen'), [setPhase]);
 

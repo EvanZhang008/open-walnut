@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { useDragGesture } from '@/hooks/useDragGesture';
-import { openTaskOnHome } from '@/utils/open-session';
 import { CompanionColumn } from './HomeCompanionPanel';
 import { SIDE_BAR_LAYOUT_EVENT, SIDE_BAR_WIDTH_MIN, sideBarPageOf, sideBarWidth, usePageSideBar } from './page-side-bar';
 
@@ -31,7 +30,6 @@ function useWindowWidth(): number {
  */
 export function PageSideBar() {
   const location = useLocation();
-  const navigate = useNavigate();
   const page = sideBarPageOf(location.pathname);
   const { view, setPane, setWidth } = usePageSideBar(page);
   const tasks = useTasksContextSafe()?.tasks ?? [];
@@ -57,7 +55,6 @@ export function PageSideBar() {
   });
   const closeAgenda = useCallback(() => { setPane('agenda', false); focusOpener('sidebar-toggle-calendar'); }, [setPane]);
   const closeScratchpad = useCallback(() => { setPane('scratchpad', false); focusOpener('sidebar-toggle-scratchpad'); }, [setPane]);
-  const onTaskClick = useCallback((taskId: string) => openTaskOnHome(taskId, navigate), [navigate]);
 
   const width = dragWidth ?? shown;
   const agendaOpen = page !== null && view.agenda;
@@ -71,7 +68,6 @@ export function PageSideBar() {
       onCloseCalendar={closeAgenda}
       onCloseScratchpad={closeScratchpad}
       tasks={tasks}
-      onTaskClick={onTaskClick}
       className="page-side-bar"
       testId="page-side-bar"
       place={page}

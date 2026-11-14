@@ -1,7 +1,9 @@
 /**
- * The Org page keeps the user on it (web/src/components/org/OrgSidePanel.tsx): a task clicked
- * on the page opens in a side panel, and the lead list and the detail stay where they are.
- *   - a row of All tasks, a Board chip, and a waiting question's task name open beside the page
+ * The Org page's side panel (web/src/components/org/OrgSidePanel.tsx): what opens beside the page
+ * (a letter's Answer, a session a chat names, a taskbar chip, the page's own `open=` place) opens
+ * in a side panel, and the lead list and the detail stay where they are.
+ *   - a task reference (a row of All tasks, a Board chip, a waiting question's task name) does
+ *     not: it opens on Home with its session's column (useOpenTask, 2026-11-13)
  *   - a task with no session shows what it is and how to start one; Ã— closes the panel
  *   - a reload keeps the opened task; Home opens it on home instead
  *   - a narrow window lays the panel over the detail; a phone shows it alone and Back returns
@@ -11,7 +13,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { openTaskFromRail, openTasksBy, showTasks } from './org-view-helpers'
+import { clickTaskInRail, openBeside, openTasksBy, showTasks } from './org-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 // Both browser projects load this file at about the same moment: the pid keeps them apart.
@@ -62,9 +64,18 @@ async function openLead(page: Page): Promise<void> {
 }
 
 const side = (page: Page) => page.getByTestId('org-side')
-/** Open a task from the side bar's All tasks (its section opened, wherever its state draws it); done
- *  once the panel beside the page shows it. */
-const openAlpha = (page: Page) => openTaskFromRail(page, ids.alpha, () => expect(side(page)).toHaveAttribute('data-session-id', ids.alphaSid, { timeout: 5_000 }))
+/** Open alpha beside the page; done once the panel shows its session. */
+async function openAlpha(page: Page): Promise<void> {
+  await openBeside(page, `task:${ids.alpha}`)
+  await expect(side(page)).toHaveAttribute('data-session-id', ids.alphaSid, { timeout: 30_000 })
+}
+/** Home, the session's column open, nothing left of the Org page or a details popup. */
+async function expectOnHome(page: Page, sid: string): Promise<void> {
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
+  await expect(page.locator(`.main-page-session-column .session-panel[data-session-id="${sid}"]`)).toBeVisible({ timeout: 30_000 })
+  await expect(side(page)).toHaveCount(0)
+  await expect(page.locator('.task-detail-modal')).toHaveCount(0)
+}
 
 test.beforeAll(async ({ request }) => {
   const { fixtureRoot } = await discoverBrowserFixture(TEST_PORT)
@@ -89,7 +100,7 @@ test.afterAll(async ({ request }) => {
   for (const id of made) await removeTask(request, id)
 })
 
-test('a task of All tasks opens beside the page; the list and the detail stay; Ã— closes it', async ({ page }) => {
+test('a task opened beside the page: the list and the detail stay; one with no session says so; Ã— closes it', async ({ page }) => {
   await openLead(page)
   await openTasksBy(page, 'all')
   const list = page.locator('.org-list')
@@ -109,7 +120,8 @@ test('a task of All tasks opens beside the page; the list and the detail stay; Ã
   await expect(page.getByTestId('org-detail-title')).toHaveText(`${PROJECT} VP`)
 
   // Another task replaces it; one with no session says so.
-  await openTaskFromRail(page, ids.beta, () => expect(side(page).getByTestId('org-side-title')).toHaveText(`Side beta ${STAMP}`, { timeout: 5_000 }))
+  await openBeside(page, `task:${ids.beta}`)
+  await expect(side(page).getByTestId('org-side-title')).toHaveText(`Side beta ${STAMP}`, { timeout: 30_000 })
   await expect(side(page)).toContainText('No session yet.')
   await expect(side(page).getByTestId('org-side-start')).toBeVisible()
   await side(page).getByTestId('org-side-close').click()
@@ -117,27 +129,31 @@ test('a task of All tasks opens beside the page; the list and the detail stay; Ã
   await expect(page).not.toHaveURL(/open=/)
 })
 
-test('a Board chip opens its task beside the page', async ({ page }) => {
+test('a row of All tasks opens its task on Home, not beside the page', async ({ page }) => {
+  await openLead(page)
+  await clickTaskInRail(page, ids.alpha)
+  await expectOnHome(page, ids.alphaSid)
+})
+
+test('a Board chip opens its task on Home, not beside the page', async ({ page }) => {
   await openLead(page)
   await openTasksBy(page, 'board')
   await page.getByTestId('board-view-custom').click()
   const chip = page.frameLocator('.task-board-frame').locator(`walnut-task[id="${ids.alpha}"] .wn-task`)
   await expect(chip).toBeVisible({ timeout: 30_000 })
   await chip.click()
-  await expect(side(page)).toHaveAttribute('data-session-id', ids.alphaSid)
-  await expect(page).toHaveURL(/\/org\?/)
+  await expectOnHome(page, ids.alphaSid)
 })
 
-test('the name of a task waiting on a question opens it beside the page, question and all', async ({ page }) => {
+test('the name of a task waiting on a question opens it on Home, question and all', async ({ page }) => {
   await openLead(page)
   // A lead opens on its Threads (2026-11-04); its tasks' asks are in Tasks.
   await showTasks(page)
   const alert = page.locator(`[data-testid="org-alert"][data-task-id="${ids.ask}"]`)
   await expect(alert).toHaveAttribute('data-kind', 'question', { timeout: 30_000 })
   await alert.getByTestId('org-alert-link').click()
-  await expect(side(page)).toHaveAttribute('data-session-id', ids.askSid)
-  await expect(side(page).getByText('Which validation target?').first()).toBeVisible({ timeout: 30_000 })
-  await expect(page).toHaveURL(/\/org\?/)
+  await expectOnHome(page, ids.askSid)
+  await expect(page.locator(`.main-page-session-column .session-panel[data-session-id="${ids.askSid}"]`).getByText('Which validation target?').first()).toBeVisible({ timeout: 30_000 })
 })
 
 test('a reload keeps the opened task; Home opens it on home', async ({ page }) => {

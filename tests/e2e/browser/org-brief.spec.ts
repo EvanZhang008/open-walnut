@@ -384,10 +384,13 @@ test('a subtask\'s ask sits under its top-level task in the Task view, once', as
   const order = await detail.getByTestId('org-alert').evaluateAll((els) => els.map((e) => e.getAttribute('data-task-id')))
   expect(order.indexOf(sub)).toBe(order.indexOf(ids.parser) + 1)
   await detail.screenshot({ path: `test-results/org-ask-via-${test.info().project.name}.png` })
-  // The breadcrumb opens the top-level task itself, beside the page.
+  // The breadcrumb opens the top-level task itself, on Home (a task reference, useOpenTask): it has
+  // no session, so Home's list has it selected; nothing opens beside the Org page.
   await card.getByTestId('org-ask-via').click()
-  await expect(page.getByTestId('org-side')).toHaveAttribute('data-target', new RegExp(`:${ids.parser}$`), { timeout: 30_000 })
-  await expect(page).toHaveURL(/\/org\?/)
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
+  await expect(page.locator(`#home-task-navigation [data-task-id="${ids.parser}"]`).and(page.locator('.task-focused, .todo-pinned-card-active'))).toHaveCount(1, { timeout: 30_000 })
+  await expect(page.getByTestId('org-side')).toHaveCount(0)
+  await expect(page.locator('.task-detail-modal')).toHaveCount(0)
   await removeTask(request, sub)
 })
 

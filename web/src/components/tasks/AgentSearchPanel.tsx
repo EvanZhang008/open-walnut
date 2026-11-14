@@ -123,9 +123,8 @@ function OpenSessionButton({ launching, live, onClick }: { launching: boolean; l
   );
 }
 
-export function AgentSearchPanel({ query, onOpenTask, onOpenSession }: {
+export function AgentSearchPanel({ query, onOpenSession }: {
   query: string;
-  onOpenTask: (taskId: string) => void;
   /** Continue `query` as a conversation. The owner first tries to REOPEN the
    *  session the AI lane ran the search in (its answer is already there);
    *  `message` is the briefing for the fallback, when there is no such session
@@ -255,10 +254,10 @@ export function AgentSearchPanel({ query, onOpenTask, onOpenSession }: {
       )}
       {state === 'done' && data && !noMatches && !followUpSessionId && (
         <>
-          {data.summary && <AgentText compact unknownSource className="agent-search-summary" text={data.summary} onTaskClick={onOpenTask} />}
+          {data.summary && <AgentText compact unknownSource className="agent-search-summary" text={data.summary} />}
           {/* Shared with the transcript card (AgentSearchResultRows): the same
               answer renders identically wherever it is read back. */}
-          <AgentSearchResultRows rows={data.results} onOpenTask={onOpenTask} />
+          <AgentSearchResultRows rows={data.results} />
         </>
       )}
       {/* Ask right here. Only once the search is DONE: before that there is no
@@ -271,7 +270,6 @@ export function AgentSearchPanel({ query, onOpenTask, onOpenSession }: {
           searchEnabled={enabled}
           {...(sid ? { progressId: sid } : {})}
           onLive={setFollowUpSessionId}
-          onOpenTask={onOpenTask}
         />
       )}
     </section>

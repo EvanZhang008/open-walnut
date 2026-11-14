@@ -19,7 +19,8 @@ import type { TpSort } from './tasks-page-sort'
 import type { TaskViewProps } from '@/plugins/types'
 import '@/styles/tasks-page.css'
 
-interface TaskViewSurfaceProps extends Omit<TaskViewProps, 'storageKey'> {
+// The plugin contract's onOpenTask is not taken: a row opens on Home (TasksPageTable, useOpenTask).
+interface TaskViewSurfaceProps extends Omit<TaskViewProps, 'storageKey' | 'onOpenTask'> {
   persistenceKey?: string
 }
 
@@ -61,7 +62,6 @@ export function TaskViewSurface({
   grouped: initialGrouped = false,
   toolbar = false,
   persistenceKey,
-  onOpenTask,
 }: TaskViewSurfaceProps) {
   const { tasks, loading, error, create, update } = useTasksContext()
   const { toggleComplete, deleteTask } = useUndoableTaskActions()
@@ -182,7 +182,6 @@ export function TaskViewSurface({
         collapsed={collapsed}
         onToggleGroup={handleToggleGroup}
         projectOrder={projectOrder}
-        onOpenTask={onOpenTask}
       />
     </div>
   )

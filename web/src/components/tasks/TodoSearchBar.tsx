@@ -6,7 +6,6 @@
 import { useRef, useEffect, useLayoutEffect, useCallback, useState, startTransition } from 'react';
 import { ICON_SEARCH } from '@/components/common/Icons';
 import { log } from '@/utils/log';
-import type { Task } from '@open-walnut/core';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { PhoneSearchLayer } from './PhoneSearchLayer';
 import { PhonePullToRefresh } from './PhonePullToRefresh';
@@ -33,8 +32,6 @@ interface TodoSearchBarProps {
   onClear: () => void;
   isSearching: boolean;
   resultCount?: number | null; // null = no server results yet
-  /** Phone: how a task result of the search layer opens (the home row's open). */
-  onPhoneOpenTask?: (task: Task) => void;
 }
 
 export function TodoSearchBar({
@@ -44,7 +41,6 @@ export function TodoSearchBar({
   onClear,
   isSearching,
   resultCount,
-  onPhoneOpenTask,
 }: TodoSearchBarProps) {
   // Phone (spec 4.7 Search): the box is the door to a full-screen search layer.
   // It also hosts the home list's phone extras: pull to refresh and the
@@ -180,7 +176,7 @@ export function TodoSearchBar({
       )}
       {phone && (
         <>
-          <PhoneSearchLayer open={layerOpen} onClose={() => setLayerOpen(false)} onOpenTask={onPhoneOpenTask} />
+          <PhoneSearchLayer open={layerOpen} onClose={() => setLayerOpen(false)} />
           <PhonePullToRefresh enabled={!layerOpen} getScroller={homeListScroller} testId="phone-pull-home" />
           <PhoneQueuedUpdatesPill />
         </>

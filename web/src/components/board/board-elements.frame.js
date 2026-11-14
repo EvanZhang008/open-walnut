@@ -19,7 +19,7 @@
   var esc = kit.esc;
 
   // The one user status (src/core/user-status.ts) names a chip; the phase is the fallback for a
-  // task the server has not derived, read as fallbackUserState reads it (board-peek-model.ts twins it).
+  // task the server has not derived, read as fallbackUserState reads it.
   // `read` (To read, from an older parent) is drawn as Needs you (shownState, 2026-11-03): the chip
   // reads it through SHOWN, and USER stays the one set of names (task-state-ratchet).
   var USER = { needs: 'Needs you', read: 'To read', working: 'Working', waiting: 'Waiting / snoozed', done: 'Completed' };

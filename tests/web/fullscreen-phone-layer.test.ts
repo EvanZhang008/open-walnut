@@ -138,11 +138,9 @@ describe('a phone layer keeps the desktop fullscreen place without drawing over 
 
   it('desktop-only panel behavior reads the drawn sheet, never its remembered owner', () => {
     const source = readFileSync(new URL('../../web/src/components/sessions/SessionPanel.tsx', import.meta.url), 'utf8');
-    expect(source).toContain('enabled: !inset && shownFullscreen');
-    expect(source).toContain('const chatTaskClick = !inset && shownFullscreen && session?.taskId ? openPeekFromChat : onTaskClick;');
     expect(source).toContain('onTaskCompleted && !shownFullscreen');
-    expect(source).toContain('onOpenTask={shownFullscreen ? peek.open : (onTaskClick ?? onLocateTask)}');
-    expect(source).not.toMatch(/on(?:OpenTask|TaskClick)=\{(?:peek\.open|openPeekFromChat)\}/);
+    // A task link opens on Home in full screen too (useOpenTask yields the sheet), never a peek tab.
+    expect(source).not.toMatch(/peek\.open\b|peekOpen\(|openPeekFromChat/);
     const ownerReads = source.split('\n').map((line) => line.trim()).filter((line) => /\bisFullscreen\b/.test(line));
     expect(ownerReads).toEqual([
       'const { isFullscreen, shownFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen({ keepAcrossRoutes: true, place: sheetAt, phoneLayer: !!(phoneLayer || phoneHostSlot) });',

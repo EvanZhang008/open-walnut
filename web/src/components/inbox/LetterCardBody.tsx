@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { openAgentRef } from '@/utils/agent-ref-open';
 import { useAgentFileOpener } from '@/hooks/useAgentFileOpener';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
-import { taskPath } from '@/utils/task-path';
 import { getLetter, type LetterDetail, type LetterEnvelope } from '@/api/human-inbox';
 import { LetterBody } from './LetterBody';
 
@@ -15,7 +14,7 @@ export function LetterCardBody({ letter, expanded, onOpen, onNavigate }: { lette
   const source = detail?.sender ?? letter.sender ?? { unknownSource: true };
   const file = useAgentFileOpener(source);
   const onBodyClick = useEntityClickHandler(
-    (id) => navigate(taskPath(id)), (id) => navigate(`/sessions?id=${id}`),
+    (id) => navigate(`/sessions?id=${id}`),
     file.onFileOpen, file.fileHost, file.fileSessionId, file.refusesAll,
   );
 
