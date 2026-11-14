@@ -14,7 +14,7 @@ const codec = typeof (globalThis as { Bun?: unknown }).Bun === 'undefined' ? 'no
 const key = (jsonlPath: string) => createHash('sha256').update(codec + '|' + jsonlPath).digest('hex') + '.bin';
 export interface ChangesCheckpointState extends MainParseState {
   savedOffset?: number;
-  subCache?: Map<string, { size: number; mtimeMs?: number; epoch?: string; fileMap: MainParseState['fileMap'] }>;
+  subCache?: Map<string, { size: number; mtimeMs?: number; ctimeMs?: number; epoch?: string; tail?: string; fileMap: MainParseState['fileMap'] }>;
 }
 
 /** Cache bytes never get trusted as a result: the parser checks file identity and tail again. */

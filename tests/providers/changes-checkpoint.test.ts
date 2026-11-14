@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { execFileSync } from 'node:child_process'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { computeHostLocalChanges, encodeProjectPathCore } from '../../src/providers/session-changes-core.js'
 import { CHANGES_CHECKPOINT_MAX_BYTES, loadChangesCheckpoint, saveChangesCheckpoint } from '../../src/providers/changes-checkpoint.js'
 
@@ -90,10 +90,35 @@ describe('disposable Changed parse checkpoints', () => {
     const restored = await compute()
     expect(restored?.parseStats).toMatchObject({ resumed: true, readBytes: 0, subReadBytes: 0 })
     expect(restored?.result.fileCount).toBe(2)
-    await fs.writeFile(sub, write('c.ts', 'subagent\n')); await fs.writeFile(path.join(repo, 'c.ts'), 'subagent\n')
+    const savedStat = await fs.stat(sub)
+    await fs.writeFile(sub, write('c.ts', 'subagent\n'))
+    // Deliberately preserve mtime: a same-size rewrite must not reuse the old operations.
+    await fs.utimes(sub, savedStat.atime, savedStat.mtime)
+    await fs.writeFile(path.join(repo, 'c.ts'), 'subagent\n')
     const rewritten = await compute()
     expect(rewritten?.parseStats.subReadBytes).toBeGreaterThan(0)
     expect(rewritten?.result.groups.flatMap(g => g.files).map(f => f.relPath).sort()).toEqual(['a.ts', 'c.ts'])
+  })
+
+  it('an unavailable subagent tail check is a miss, not a failed Changed read', async () => {
+    const subDir = transcript.replace(/\.jsonl$/, '') + '/subagents'
+    await fs.mkdir(subDir, { recursive: true })
+    const sub = path.join(subDir, 'agent-child.jsonl')
+    await fs.writeFile(sub, write('b.ts', 'child\n'))
+    await fs.writeFile(path.join(repo, 'b.ts'), 'child\n')
+    await compute()
+    const open = fs.open.bind(fs)
+    let opens = 0
+    const spy = vi.spyOn(fs, 'open').mockImplementation(((file: string, ...args: unknown[]) => {
+      if (file === sub && ++opens !== 2) return Promise.reject(new Error('tail check unavailable'))
+      return (open as (...args: unknown[]) => ReturnType<typeof fs.open>)(file, ...args)
+    }) as typeof fs.open)
+    try {
+      const restored = await compute()
+      expect(restored?.result.fileCount).toBe(2)
+      expect(restored?.parseStats.subReadBytes).toBeGreaterThan(0)
+      expect(opens).toBe(3)
+    } finally { spy.mockRestore() }
   })
 
   it('disk-only callers keep trailing and subagent operations out of main checkpoints', async () => {

@@ -497,7 +497,7 @@ export interface HostLocalComputeOptions {
   /** Claude home (default `$HOME/.claude`). Tests point this at a temp dir. */
   claudeHome?: string;
   /** Caller-owned caches, reused across recomputes for the same session. */
-  subCache?: Map<string, { size: number; mtimeMs?: number; epoch?: string; fileMap: Map<string, FileAccum> }>;
+  subCache?: Map<string, { size: number; mtimeMs?: number; ctimeMs?: number; epoch?: string; tail?: string; fileMap: Map<string, FileAccum> }>;
   gitRootByDir?: Map<string, string | null>;
   /** Caller-owned holder for where the main transcript parse stopped, so the
    *  next compute reads only what was appended since (see MainParseState). */
@@ -608,6 +608,13 @@ async function tailHashAt(fh: fsp.FileHandle, offset: number): Promise<string> {
     got += bytesRead;
   }
   return createHash('sha1').update(buf.subarray(0, got)).digest('hex') + ':' + got;
+}
+
+async function optionalTailHash(file: string, offset: number): Promise<string | undefined> {
+  let fh: fsp.FileHandle | undefined;
+  try { fh = await fsp.open(file, 'r'); return await tailHashAt(fh, offset); }
+  catch { return undefined; } // A disappearing file or unavailable cache check is a miss.
+  finally { await fh?.close().catch(() => {}); }
 }
 
 /** Copy a fileMap so ops pushed into the copy never reach the original. */
@@ -987,7 +994,7 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
   await slice();
 
   // 2. Subagent JSONLs — size-keyed cache so finished agents are parsed once.
-  const subCache = opts.subCache ?? new Map<string, { size: number; mtimeMs?: number; epoch?: string; fileMap: Map<string, FileAccum> }>();
+  const subCache = opts.subCache ?? new Map<string, { size: number; mtimeMs?: number; ctimeMs?: number; epoch?: string; tail?: string; fileMap: Map<string, FileAccum> }>();
   if (opts.reparse) subCache.clear();
   else if (resumed && disk?.subCache) for (const [name, sub] of disk.subCache) subCache.set(name, sub);
   let subChanged = false;
@@ -1005,14 +1012,18 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
     const p = path.join(subDir, name);
     let sst: fs.Stats;
     try { sst = await fsp.stat(p); } catch { subCache.delete(name); continue; }
-    const cached = subCache.get(name) as { size: number; mtimeMs?: number; epoch?: string; fileMap: Map<string, FileAccum> } | undefined;
-    if (cached && cached.size === sst.size && cached.mtimeMs === sst.mtimeMs && cached.epoch === epochOf(sst)) continue;
+    const cached = subCache.get(name) as { size: number; mtimeMs?: number; ctimeMs?: number; epoch?: string; tail?: string; fileMap: Map<string, FileAccum> } | undefined;
+    if (cached && cached.size === sst.size && cached.mtimeMs === sst.mtimeMs && cached.ctimeMs === sst.ctimeMs && cached.epoch === epochOf(sst) && cached.tail) {
+      if (await optionalTailHash(p, sst.size) === cached.tail) continue;
+    }
     const sub = await streamParseHostLocal(p, deadlineMs);
     if (sub) {
       subChanged = true;
       subReadBytes += sst.size;
       if (sub.trailing) collectOpsFromJsonl(sub.trailing, sub.fileMap);
-      subCache.set(name, { size: sst.size, mtimeMs: sst.mtimeMs, epoch: epochOf(sst), fileMap: sub.fileMap });
+      // The complete file tail also covers a valid trailing line without a newline.
+      const tail = await optionalTailHash(p, sst.size);
+      subCache.set(name, { size: sst.size, mtimeMs: sst.mtimeMs, ctimeMs: sst.ctimeMs, epoch: epochOf(sst), tail, fileMap: sub.fileMap });
     }
   }
   for (const name of [...present].sort()) {
