@@ -973,15 +973,22 @@ test('every kind of approval shows its summary whole, with Details holding only 
   } })).json() as { approval: { id: string } }
   const why = 'The launch post links to these notes at noon, so they must be on the site first.'
   const script = await ask(request, { what: `Publish the release notes? (${s})`, why, detail: 'site/notes.md | 42 +++++\n1 file changed' })
-  const cases: Array<[string, string[], string | null]> = [
-    [own.approval.id, ['Message it sends: Thanks for the invite, I will bring the projector on Friday.', 'Approve to let it take this one step'], null],
-    [git.approval.id, [summary, 'Walnut’s summary of the task’s session, not signed'], 'git -C'],
-    [script.approval.id, [why], 'site/notes.md'],
+  // Each: what the dialog reads with no click, its technical part, and what the corner card leads with.
+  const cases: Array<[string, string[], string | null, string[]]> = [
+    [own.approval.id, ['Message it sends: Thanks for the invite, I will bring the projector on Friday.', 'Approve to let it take this one step'], null, [`Let "Notes" click "Send" on mail.example.test? (${s})`]],
+    [git.approval.id, [summary, 'Walnut’s summary of the task’s session, not signed'], 'git -C', [summary, 'Push commit']],
+    [script.approval.id, [why], 'site/notes.md', [`Publish the release notes? (${s})`, why]],
   ]
   // The corner shows the oldest first; each Deny brings the next one up.
-  for (const [id, mustRead, technical] of cases) {
+  for (const [id, mustRead, technical, cardReads] of cases) {
     const card = page.locator(`[data-testid="approval-card"][data-approval-id="${id}"]`)
     await expect(card).toBeVisible({ timeout: 15_000 })
+    // The corner card leads with the summary too, whole (its title first, then the line under it).
+    await expect(card.locator('.approval-what-text')).toHaveText(cardReads[0]!, { timeout: 15_000 })
+    for (const words of cardReads.slice(1)) await expect(card.getByText(words, { exact: false }).first()).toBeVisible()
+    // Its kicker takes at most two lines in a narrow corner, never a word a line beside the count and the clock.
+    const kicker = card.locator('.approval-kicker').first()
+    expect(await kicker.evaluate((e) => e.getBoundingClientRect().height)).toBeLessThanOrEqual(40)
     await page.waitForTimeout(500)
     await card.getByTestId('approval-what').click()
     const dialog = page.locator(`.approval-dialog[data-approval-id="${id}"]`)

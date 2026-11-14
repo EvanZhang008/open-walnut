@@ -211,6 +211,11 @@
   row-gap: 4px;
 }
 .corner-stack .approval-card:not(.approval-card-line) .approval-head { flex: 1 0 100%; margin: 0; align-items: center; }
+/* The kicker takes a row of its own before it is squeezed to a word a line beside the count and clock. */
+.corner-stack .approval-card:not(.approval-card-line) .approval-head { flex-wrap: wrap; row-gap: 2px; }
+/* Under the summary: the asker's own why, then (under Walnut's summary) the request's signed line. */
+.corner-stack .approval-card-why { flex: 1 0 100%; margin: 0; font-size: 13px; line-height: 1.4; color: var(--fg-secondary); overflow-wrap: anywhere; }
+.corner-stack .approval-card-request { flex: 1 0 100%; margin: 0; font-size: 12px; line-height: 1.35; color: var(--fg-muted); overflow-wrap: anywhere; }
 .corner-stack .approval-what-open { flex: 1 0 100%; min-width: 0; font-size: 14px; line-height: 1.35; }
 /* Whole, wrapping as it needs: the title says what, on which site and why it waits (review
    2026-11-06 round 3: cut to one line, or three in a narrow corner, it hid the site and the reason). */

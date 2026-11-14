@@ -34,7 +34,7 @@ import {
 } from './approvals-store';
 import { ApprovalUnlock } from './ApprovalUnlock';
 import { askNoticePermission, nativeNoticeStatus, noticeAccess, openNoticeSettings, OPEN_APPROVAL_EVENT, takeClickedApproval, type NoticeAccess } from './approval-notify';
-import { ApprovalContextRows, AskerLink, hostWords, technicalDetail, wordsOf } from './approval-context';
+import { ApprovalContextRows, AskerLink, hostWords, summaryOf, technicalDetail, wordsOf } from './approval-context';
 import { useYieldsToTaskOpen } from '@/hooks/useOpenTask';
 import './approvals.css';
 
@@ -142,16 +142,25 @@ export function ApprovalDetail({ a, open = false }: { a: Approval; open?: boolea
   );
 }
 
+/** The card's name in its corner: the one way it is approved here, short enough for a narrow corner. */
+function kicker(biometric: boolean, kind: ReturnType<typeof approveKind>): string {
+  if (!biometric || kind === 'tap') return 'Approve?';
+  return kind === 'touch-id' ? 'Approve with Touch ID' : 'Needs Face ID or Touch ID';
+}
+
 /** What the request is, who asks, the detail, and the answer: the card's and the dialog's body. */
 function ApprovalBody({ a, s, now, onOpen, onMinimize, total = 0 }: { a: Approval; s: ApprovalsState; now: number; onOpen?: () => void; onMinimize?: () => void; total?: number }) {
   const biometric = a.mode === 'biometric';
   const hostName = useHostDisplayLabel(a.requester.host);
   const asker = a.requester.taskId;
+  // The card leads with what the step does and why, whole, as the dialog does (2026-11-14, the user:
+  // "summayr一直都显示不需要点detail"); under Walnut's summary, the request's own (signed) line.
+  const lead = summaryOf(a);
   return (
     <>
       <div className="approval-head">
         {/* The card names itself in the corner; the dialog has no title of its own: its sentence is the request. */}
-        {onOpen ? <span className="approval-kicker">{biometric && approveKind(s, a) !== 'tap' ? 'Approve with Face ID / Touch ID' : 'Approve?'}</span> : <span />}
+        {onOpen ? <span className="approval-kicker">{kicker(biometric, approveKind(s, a))}</span> : <span />}
         {onOpen && total > 1 && (
           <button type="button" className="approval-count" data-testid="approval-count" title={`See all ${total} approvals waiting`} onClick={onOpen}>
             {total} waiting
@@ -167,8 +176,10 @@ function ApprovalBody({ a, s, now, onOpen, onMinimize, total = 0 }: { a: Approva
         </span>
       </div>
       {onOpen
-        ? <button type="button" className="approval-what approval-what-open" title="Open the request" data-testid="approval-what" onClick={onOpen}><span className="approval-what-text">{a.what}</span></button>
+        ? <button type="button" className="approval-what approval-what-open" title="Open the request" data-testid="approval-what" onClick={onOpen}><span className="approval-what-text">{lead.text}</span></button>
         : null}
+      {onOpen && lead.why ? <div className="approval-card-why" data-testid="approval-card-why">{lead.why}</div> : null}
+      {onOpen && lead.by === 'walnut' ? <div className="approval-card-request" data-testid="approval-card-request" title="The request itself: what you approve">{a.what}</div> : null}
       {onOpen ? (<>
         <div className="approval-who">
           <span className="approval-who-text">{asker
