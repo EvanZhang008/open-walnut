@@ -32,6 +32,12 @@
  *    that host's disk. 2026-11-08: the Mac fell to 5.4 GB free while a task was
  *    freeing it through host_exec, and every next command got this 507, so the
  *    cleanup stopped itself; only /files/delete was left to free enough by hand.
+ *
+ * A write this box only carries to the Mac (the companion's v1-forward) is not this disk's to
+ * refuse: it writes nothing here. 2026-11-14: the companion's disk reached 95%, and a phone's
+ * signed Face ID answer to an approval got this 507 three times, never reaching the Mac, while
+ * the Mac had room. The forward registers which writes it takes (deferDiskGuardTo), and applies
+ * this same refusal itself whenever it answers one here instead (refuseWhenDiskFull).
  */
 
 import type { Request, Response, NextFunction } from 'express';
@@ -52,6 +58,23 @@ const EXEMPT_ROUTES = [
   /^\/v1\/host-exec\/grants\/[^/]+\/exec\/?$/,
 ];
 
+/** Which writes the forward takes to the Mac (it guards the ones it answers here); null: none. */
+let forwardTakes: ((req: Request) => boolean) | null = null;
+
+/** The companion's v1-forward names the writes it carries to the Mac (server.ts, bootPolicy 'v1-forward'). */
+export function deferDiskGuardTo(takes: ((req: Request) => boolean) | null): void {
+  forwardTakes = takes;
+}
+
+/** Sends the 507 and returns true when this write would land on a critically full disk here. */
+export function refuseWhenDiskFull(req: Request, res: Response): boolean {
+  if (!MUTATING_METHODS.has(req.method.toUpperCase()) || !isDiskWriteBlocked()) return false;
+  const rel = (req.originalUrl.split('?')[0] ?? '').replace(/^\/api(?=\/)/, '');
+  if (EXEMPT_PREFIXES.some((p) => rel.startsWith(p)) || EXEMPT_ROUTES.some((r) => r.test(rel))) return false;
+  sendDiskFull(res);
+  return true;
+}
+
 export function diskGuardMiddleware(req: Request, res: Response, next: NextFunction): void {
   if (!MUTATING_METHODS.has(req.method) || !isDiskWriteBlocked()) {
     next();
@@ -61,6 +84,15 @@ export function diskGuardMiddleware(req: Request, res: Response, next: NextFunct
     next();
     return;
   }
+  // Carried to the Mac, it writes nothing here; answered here instead, the forward refuses it.
+  if (forwardTakes?.(req)) {
+    next();
+    return;
+  }
+  sendDiskFull(res);
+}
+
+function sendDiskFull(res: Response): void {
   const { usedPct } = getDiskWatermarkState();
   res.status(507).json({
     error: `Data disk is critically full (${usedPct}% used) — writes are paused to protect data integrity. `

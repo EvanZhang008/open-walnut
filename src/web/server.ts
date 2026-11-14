@@ -2620,6 +2620,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   if (bootPolicy('v1-forward')) {
     const { getV1Forward, startLeaderPresenceTick } = await import('./v1-forward/proxy.js')
     app.use('/api/v1', getV1Forward().middleware)
+    // A write carried to the Mac writes nothing on this disk: the disk guard leaves it to the forward.
+    ;(await import('./middleware/disk-guard.js')).deferDiskGuardTo(getV1Forward().takesWrite)
     // And this server's one view of the leader (core/server-role.ts) follows it.
     startLeaderPresenceTick()
   }

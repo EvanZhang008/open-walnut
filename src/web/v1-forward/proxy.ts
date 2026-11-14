@@ -29,7 +29,8 @@ import { isSelfCallToken } from '../../lib/self-api-root.js'
 import { setLeaderPresence } from '../../core/server-role.js'
 import { LEADER_HEARTBEAT_MS } from '../../core/leader/protocol.js'
 import type { RelayFailure } from '../routes/v1-control-relay.js'
-import { MAX_FORWARD_REQUEST_BYTES, companionAnswers, forwardRequestHeaders, isTaskCopyWrite, parseConsoleCopyCall, parseConsoleTaskWrite, phoneCopyReadOf } from './policy.js'
+import { MAX_FORWARD_REQUEST_BYTES, companionAnswers, forwardRequestHeaders, isTaskCopyWrite, parseConsoleCopyCall, parseConsoleTaskWrite, parseForwardUrl, phoneCopyReadOf } from './policy.js'
+import { refuseWhenDiskFull } from '../middleware/disk-guard.js'
 import { forwardOnStream } from './stream-forward.js'
 
 /** What the companion knows of the Mac right now. */
@@ -148,8 +149,22 @@ export function createV1Forward(deps: ForwardDeps) {
       lastLoggedWhy = why
       log.web.info('v1 forward: the companion answers itself', { why, method: req.method, path: req.path })
     }
+    // Answered here, a write lands on this disk: the disk guard let it pass for the Mac (takesWrite).
+    if (refuseWhenDiskFull(req, res)) return
     res.setHeader('X-Walnut-Answered-By', 'companion')
     next()
+  }
+
+  /**
+   * Whether this write goes through the forward, which carries it to the Mac or, answering it
+   * here, refuses it on a full disk itself (answerHere): the disk guard leaves it to the forward.
+   */
+  function takesWrite(req: Request): boolean {
+    if (!deps.enabled()) return false
+    const method = req.method.toUpperCase()
+    const v1 = parseForwardUrl(req.originalUrl)
+    if (v1) return companionAnswers(method, v1.rel) === null
+    return !!parseConsoleTaskWrite(method, req.originalUrl) || !!parseConsoleCopyCall(method, req.originalUrl)
   }
 
   async function keptReadOff(method: string, rel: string): Promise<boolean> {
@@ -356,8 +371,10 @@ export function createV1Forward(deps: ForwardDeps) {
     },
     /** A console call about what the copy does not keep (consoleCopyMiddleware above); `here` when not forwarded. */
     consoleCopy: (req: Request, res: Response, here: () => void): void => {
-      consoleCopyMiddleware(req, res, () => here()).catch(() => { if (!res.headersSent) here() })
+      consoleCopyMiddleware(req, res, () => here()).catch(() => { if (!res.headersSent && !refuseWhenDiskFull(req, res)) here() })
     },
+    /** Whether the disk guard leaves this write to the forward (takesWrite above; server.ts registers it). */
+    takesWrite,
     /**
      * The Mac is away by the companion's own view: no bridge, silent, a forward
      * since its last beat went unanswered, or the companion leads a host. A
