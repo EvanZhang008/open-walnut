@@ -290,6 +290,9 @@ export function ContextMenu({
   // Held in a ref so the Escape handler below does not have to be rebuilt when the prop identity moves.
   const back = useRef<HTMLElement | null>(returnFocus ?? null);
   back.current = returnFocus ?? back.current;
+  // The button a button-opened menu hangs from, read by the scroll closer below (subscribed once).
+  const button = useRef(anchorRef);
+  button.current = anchorRef;
 
   useEffect(() => {
     menuRef.current?.focus({ preventScroll: true });
@@ -359,6 +362,15 @@ export function ContextMenu({
     const onScroll = (e: Event) => {
       if (!scrollArmed) return;
       if (menuRef.current?.contains(e.target as Node)) return;
+      // A menu a BUTTON opened (anchorRef) never closes on a scroll. Its placement follows the
+      // button on every scroll (useMenuPlacement), so it never points at the wrong thing; and a
+      // person cannot scroll the page behind it without closing it first (the backdrop takes the
+      // press and the wheel). So a scroll heard here is the page laying itself out: a section
+      // above filling in, scroll anchoring that kept the row only roughly in place, a landing
+      // holding its row in view (2026-11-14: Remote Hosts' Overview read its hosts after Settings
+      // landed on a row, the row moved 61px under its open More menu, and the menu closed under
+      // the hand). A button gone from the page falls through to the row rule below.
+      if (button.current?.current?.isConnected) return;
       // ONLY a scroll that MOVED the anchored row (cursor-menu-scroll.ts). Closing on scroll exists
       // because the row moves out from under the menu. This listener is on `window` in the CAPTURE
       // phase, so it also hears every unrelated pane: a folder list restoring its offset after a sync,

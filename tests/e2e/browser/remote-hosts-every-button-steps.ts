@@ -98,18 +98,32 @@ export async function checkAddHost(ctx: StepCtx): Promise<void> {
     await expect(menu).toHaveCount(0)
     await expect(addButton(page)).toBeFocused()
   }
-  // A scroll closes the menu; the focus stays on the button, also when the scroll moved it into
-  // the sticky bar (2026-11-04 review: it fell to the page).
+  // A scroll the page makes by itself (a section above filling in, scroll anchoring) leaves the
+  // menu open under its button (2026-11-14: a row's More menu closed under the hand while the
+  // Overview read its hosts); the person's own wheel closes it, and the focus stays on the button
+  // (2026-11-04 review: it fell to the page).
   await addButton(page).click()
   await expect(menu).toBeVisible()
   // The menu hears scrolls from the frame after it opened (ContextMenu.tsx): wait that frame out,
   // as a person always does (WebKit's frames came half a second apart under load).
   await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))))
-  // A scroll the pane can make from where it stands (WebKit's pane may sit at its end already).
+  // A scroll the pane can make from where it stands (WebKit's pane may sit at its end already),
+  // small enough that the button stays where it is (not into the sticky bar).
   await page.locator('.settings-pane').first().evaluate((el) => {
     const max = el.scrollHeight - el.clientHeight
     el.scrollTop += el.scrollTop > max / 2 ? -Math.min(24, el.scrollTop) : Math.min(24, max - el.scrollTop)
   })
+  await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))))
+  await expect(menu).toBeVisible()
+  {
+    const [b2, m2] = await Promise.all([addButton(page).boundingBox(), menu.boundingBox()])
+    expect(Math.abs(b2!.x + b2!.width - (m2!.x + m2!.width))).toBeLessThanOrEqual(2)
+    expect(m2!.y).toBeGreaterThanOrEqual(b2!.y + b2!.height)
+  }
+  // A wheel over the page, clear of the menu: the person's scroll.
+  const pane = (await page.locator('.settings-pane').first().boundingBox())!
+  await page.mouse.move(pane.x + 24, pane.y + pane.height - 24)
+  await page.mouse.wheel(0, 120)
   await expect(menu).toHaveCount(0)
   await expect(addButton(page)).toBeFocused()
 

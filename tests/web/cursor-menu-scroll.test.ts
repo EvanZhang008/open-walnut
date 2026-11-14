@@ -112,3 +112,40 @@ describe('every cursor-anchored menu judges a scroll by its row', () => {
     expect(text).not.toMatch(/if \(cursorAnchor\) \{ close\w*\(\); return; \}/);
   });
 });
+
+/**
+ * A menu a BUTTON opens (ContextMenu's `anchorRef`: a row's More, Add host, a pill's picker) follows
+ * that button on every scroll (useMenuPlacement), and the backdrop closes it on the person's own
+ * press or wheel, so no scroll it hears is the person's: 2026-11-14, Remote Hosts' Overview read
+ * its hosts after Settings landed on a row, scroll anchoring kept the row only roughly in place
+ * (61px off), and the row's open More menu closed under the hand (host-problems-draft.spec.ts).
+ * The scroll closer must let such a menu be before any row rule judges the scroll.
+ */
+describe('a menu a button opens is never closed by a scroll', () => {
+  const text = fs.readFileSync(path.join(ROOT, 'components/common/ContextMenu.tsx'), 'utf8');
+  const onScroll = text.slice(text.indexOf('const onScroll = (e: Event) => {'));
+  const body = onScroll.slice(0, onScroll.indexOf('\n    };'));
+
+  it('reads the button the menu hangs from', () => {
+    expect(text).toMatch(/const button = useRef\(anchorRef\);\s*button\.current = anchorRef;/);
+  });
+
+  it('returns for a button still on the page before any row rule', () => {
+    const keep = body.indexOf('if (button.current?.current?.isConnected) return;');
+    expect(keep).toBeGreaterThan(0);
+    for (const rule of ['scrollMovedRow(', 'close()']) {
+      const at = body.indexOf(rule);
+      expect(at, rule).toBeGreaterThan(keep);
+    }
+  });
+
+  it('the Remote Hosts button menus pass their button as anchorRef, so the rule reaches them', () => {
+    // A button-opened ContextMenu placed at a point instead would fall back to the row rule.
+    const files = sources(ROOT)
+      .filter((f) => /<ContextMenu[\s\S]{0,400}?anchorRef=/.test(fs.readFileSync(f, 'utf8')))
+      .map((f) => path.relative(ROOT, f));
+    expect(files).toEqual(expect.arrayContaining([
+      'components/settings/sections/HostRow.tsx', 'components/settings/sections/AddHostMenu.tsx',
+    ]));
+  });
+});
