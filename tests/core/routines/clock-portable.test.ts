@@ -30,6 +30,7 @@ import { START_TASK_TOKEN, type ClockStartSpec } from '../../../src/providers/tr
 import { validateTriggerDef } from '../../../src/providers/trigger-check-core.js'
 import { updateConfig } from '../../../src/core/config-manager.js'
 import { recordProbedFacts } from '../../../src/core/hosts/host-profile.js'
+import { recordFleetVitals, recordFleetFailure, flushFleetCacheNow, __resetFleetCacheForTesting } from '../../../src/core/hosts/fleet-cache.js'
 import type { HostCapabilities } from '../../../src/core/hosts/capabilities.js'
 import type { CronJob, CronJobCreate, CronServiceState } from '../../../src/core/cron/types.js'
 
@@ -761,6 +762,42 @@ describe('the folder, the push budget and the default facts', () => {
     expect(await run.capabilities('ghost')).toBeNull()
     expect(await run.remoteHome('declared')).toBe('/home/probed')
     expect(await run.remoteHome('plain')).toBeNull()
+  })
+
+  it('reads inferred always-on from durable Fleet history after restart without a full Fleet read or declared tag', async () => {
+    await updateConfig({ hosts: { durable: { hostname: 'durable.example.test' } } } as never)
+    await recordProbedFacts('durable', { os: { platform: 'linux', release: '5' }, arch: 'x64', cpus: 2, memBytes: 1, home: '/home/durable', proxyEnv: {}, cloud: null, internet: null, tools: {} } as never)
+    recordFleetVitals('durable', { stats: {}, history: { windows: [{ days: 7, online: 0.99, minutes: 7 * 1440 }] } } as never, Date.now())
+    await flushFleetCacheNow()
+    __resetFleetCacheForTesting()
+    const run = defaultPortableClockEnv().run
+    expect((await run.capabilities('durable'))?.tags).toContain(ALWAYS_ON_TAG)
+    expect((await capabilitiesOf('durable', { capabilities: async () => null }))?.tags).toContain(ALWAYS_ON_TAG)
+    recordFleetVitals('durable', { stats: {}, history: { windows: [{ days: 7, online: 0.2, minutes: 7 * 1440 }] } } as never, Date.now())
+    expect((await run.capabilities('durable'))?.tags).not.toContain(ALWAYS_ON_TAG)
+  })
+
+  it('does not infer current uptime from stale, expired or future durable readings, but keeps explicit tags', async () => {
+    await updateConfig({ hosts: { aged: { hostname: 'aged.example.test' } } } as never)
+    const run = defaultPortableClockEnv().run
+    const value = { stats: {}, history: { windows: [{ days: 7, online: 1, minutes: 10080 }] } }
+    for (const at of [Date.now() - 8 * 86_400_000, Date.now() + 60_000]) {
+      recordFleetVitals('aged', value as never, at)
+      expect((await run.capabilities('aged'))?.unknown).toContain(ALWAYS_ON_TAG)
+    }
+    recordFleetVitals('aged', value as never, Date.now())
+    recordFleetFailure('aged', 'not connected', Date.now())
+    expect((await run.capabilities('aged'))?.unknown).toContain(ALWAYS_ON_TAG)
+    await updateConfig({ hosts: { aged: { hostname: 'aged.example.test', capabilities: ['always-on'] } } } as never)
+    expect((await run.capabilities('aged'))?.tags).toContain(ALWAYS_ON_TAG)
+  })
+
+  it.each([{}, { windows: null }, { windows: [null] }, { windows: [{ days: 7, online: 2, minutes: 10080 }] }])('keeps malformed durable uptime history unknown (%j)', async history => {
+    await updateConfig({ hosts: { malformed: { hostname: 'malformed.example.test' } } } as never)
+    recordFleetVitals('malformed', { stats: {}, history } as never, Date.now())
+    const caps = await defaultPortableClockEnv().run.capabilities('malformed')
+    expect(caps?.tags).not.toContain(ALWAYS_ON_TAG)
+    expect(caps?.unknown).toContain(ALWAYS_ON_TAG)
   })
 
   it('a card read before the user declared always-on does not hide the declaration', async () => {

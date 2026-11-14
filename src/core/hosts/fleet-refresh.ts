@@ -173,6 +173,13 @@ async function readHost(e: HostEntry, conn: VitalsConn | undefined): Promise<Rea
   if (outcome === 'away' || outcome === 'no-vitals') recordFleetNoVitals(e.host, Date.now(), { away: outcome === 'away' })
   else if (outcome === 'late') recordFleetFailure(e.host, `it did not answer in ${Math.round(hostMs / 1000)} s`, Date.now())
   probeInBackground(e.host, conn, await readHostProfile(e.host).catch(() => null))
+  // A connect's first clock push can precede these facts. Reconsider clocks
+  // once the durable capability history and load are available, not only when
+  // someone edits a routine or opens Fleet.
+  if (outcome === 'ok') {
+    void import('../routines/clock-placement-watch.js').then(m => m.scheduleClockPlacement())
+      .catch(err => log.web.debug('fleet: clock refresh failed', { host: e.host, error: String(err) }))
+  }
   return outcome
 }
 

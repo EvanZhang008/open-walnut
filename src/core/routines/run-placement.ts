@@ -497,9 +497,7 @@ function realDeps(): RunPlacementDeps {
     remoteHome: async (host) => (await conn(host))?.remoteHome ?? null,
     closed: async (host) => (await import('../hosts/exec-grants.js')).isHostClosed(host),
     async capabilities(host) {
-      // The fleet's last read (host_list, the Fleet page): a host no card was read for is unknown.
-      const { lastFleetRead } = await import('../hosts/fleet.js');
-      return lastFleetRead()?.cards.find((c) => c.host === host)?.capabilities ?? null;
+      return (await import('../hosts/capability-reader.js')).readHostCapabilities(host);
     },
     engineOn: (host, launch) => routineEngineOn(host, launch),
     async engineBlocker(host, engine) {

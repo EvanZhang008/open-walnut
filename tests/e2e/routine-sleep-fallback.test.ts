@@ -11,7 +11,7 @@ const TWINS = (process.env.REPLICA_CLUSTER_TWINS ?? 'standalone').split(',').fil
 const PROMPT = 'Read the server notes and write the scheduled report.'
 const EVERY = 10 * 60_000
 
-const seedClockFacts: SeedMac = ({ base, macData, env }) => {
+const seedClockFacts: SeedMac = ({ base, env }) => {
   const home = path.join(base, 'hh')
   fs.mkdirSync(path.join(home, '.open-walnut'), { recursive: true })
   const hook = path.join(base, 'mh', 'clock-facts.mts')
@@ -21,9 +21,10 @@ const seedClockFacts: SeedMac = ({ base, macData, env }) => {
 const p = await import(${JSON.stringify(path.join(ROOT, 'src/core/routines/run-placement.ts'))})
 p.__setRunPlacementDepsForTesting({ remoteHome: async () => ${JSON.stringify(home)}, engineBlocker: async () => null })
 const clock = await import(${JSON.stringify(path.join(ROOT, 'src/core/routines/clock-portable.ts'))})
-const env = clock.defaultPortableClockEnv()
-clock.__setPortableClockEnvForTesting({ free: async () => true, allowed: async () => true,
-  run: { ...env.run, capabilities: async () => ({ tags: ['always-on', 'linux'], unknown: [] }) } })
+const cache = await import(${JSON.stringify(path.join(ROOT, 'src/core/hosts/fleet-cache.ts'))})
+cache.recordFleetVitals('devbox', { stats: {}, history: { windows: [{ days: 7, online: 1, minutes: 10080 }] } }, Date.now())
+await cache.flushFleetCacheNow()
+clock.__setPortableClockEnvForTesting({ free: async () => true, allowed: async () => true })
 `)
   const transcriptDir = path.join(base, 'mh', '.claude', 'projects', path.join(base, 'mh', 'work').replace(/[^a-zA-Z0-9]/g, '-'))
   fs.mkdirSync(transcriptDir, { recursive: true })
@@ -37,8 +38,6 @@ clock.__setPortableClockEnvForTesting({ free: async () => true, allowed: async (
   fs.writeFileSync(path.join(transcriptDir, `${MAC_SID}.jsonl`), rows.map(row => JSON.stringify(row)).join('\n') + '\n')
   env.WALNUT_CLUSTER_CLOCK_FACTS = hook
   env.WALNUT_LOG_LEVEL = 'debug'
-  const file = path.join(macData, 'config.yaml')
-  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('    hostname: devbox.invalid', '    capabilities: [always-on]\n    hostname: devbox.invalid'))
 }
 
 function gateway(c: ReplicaCluster, sid: string, name: string, args: Record<string, unknown>, callId: string): Promise<any> {

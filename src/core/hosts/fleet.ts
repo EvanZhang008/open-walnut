@@ -206,10 +206,13 @@ export function probeInBackground(host: string, conn: VitalsConn | undefined, pr
   if (probedInstances.has(key)) return
   probedInstances.add(key)
   void conn.send('host.facts', {}, 20_000)
-    .then((res) => {
+    .then(async (res) => {
       if (res.ok === false || !res.os) return
       const { ok: _ok, ...facts } = res
-      return recordProbedFacts(host, facts as never)
+      await recordProbedFacts(host, facts as never)
+      // The profile can arrive after the vitals read and its clock push.
+      const { scheduleClockPlacement } = await import('../routines/clock-placement-watch.js')
+      scheduleClockPlacement()
     })
     .catch((err) => log.web.debug('fleet: host.facts failed', { host, error: String(err) }))
 }

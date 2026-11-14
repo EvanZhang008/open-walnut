@@ -13,6 +13,8 @@ import fsp from 'node:fs/promises'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('host-fleet'))
+const clockRefresh = vi.hoisted(() => vi.fn())
+vi.mock('../../../src/core/routines/clock-placement-watch.js', () => ({ scheduleClockPlacement: clockRefresh }))
 
 const config = {
   hosts: {
@@ -50,7 +52,7 @@ import { WALNUT_HOME } from '../../../src/constants.js'
 import { __setFleetConnectionsForTesting, __setFleetLoadsForTesting, BootStartCheckError, checkHostBootStart, getFleetHost, listFleet } from '../../../src/core/hosts/fleet.js'
 import { judgeHost, type HostLoadView } from '../../../src/core/hosts/placement.js'
 import { readHostProfile } from '../../../src/core/hosts/host-profile.js'
-import { cachedFleet, fleetRefreshIdle, startFleetRefresh } from '../../../src/core/hosts/fleet-refresh.js'
+import { cachedFleet, fleetRefreshIdle, readHostsOnConnect, startFleetRefresh, __setFleetRefreshDeadlinesForTesting } from '../../../src/core/hosts/fleet-refresh.js'
 import { flushFleetCacheNow } from '../../../src/core/hosts/fleet-cache.js'
 
 const NOW = Date.now()
@@ -93,6 +95,8 @@ function views(hosts: string[]): HostLoadView[] {
 let local: Fake, dev: Fake, slow: Fake, old: Fake
 beforeEach(async () => {
   loadAsks.length = 0
+  costCalls.length = 0
+  clockRefresh.mockClear()
   __setFleetLoadsForTesting(async (hosts) => views(hosts))
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
   await fsp.mkdir(WALNUT_HOME, { recursive: true })
@@ -105,6 +109,43 @@ beforeEach(async () => {
   ]) as never)
 })
 afterEach(() => { __setFleetConnectionsForTesting(null); __setFleetLoadsForTesting(null) })
+
+it('a host connection reads missing facts and reconsiders clocks without opening Fleet', async () => {
+  let connected!: (host: string) => void
+  __setFleetRefreshDeadlinesForTesting({ connectReadDelayMs: 1 })
+  const off = readHostsOnConnect(cb => { connected = cb; return () => {} })
+  try {
+    connected('devbox')
+    await vi.waitFor(() => expect(clockRefresh).toHaveBeenCalled())
+    await fleetRefreshIdle()
+    expect(dev.sends.some(s => s.cmd === 'host.vitals')).toBe(true)
+    expect(dev.sends.some(s => s.cmd === 'host.facts')).toBe(true)
+  } finally {
+    off()
+    __setFleetRefreshDeadlinesForTesting(null)
+  }
+})
+
+it('a completed host read reconsiders clocks that connected before capability facts arrived', async () => {
+  await startFleetRefresh(['devbox'])
+  await fleetRefreshIdle()
+  await vi.waitFor(() => expect(clockRefresh).toHaveBeenCalled())
+})
+
+it('reconsiders clocks again when the profile arrives after the vitals push', async () => {
+  let answerFacts!: (value: Record<string, unknown>) => void
+  const lateFacts = new Promise<Record<string, unknown>>(resolve => { answerFacts = resolve })
+  dev = fake(['host-vitals-v1', 'host-facts-v1'], async cmd => cmd === 'host.vitals' ? vitalsReply(19) : lateFacts, 'i-late-facts')
+  __setFleetConnectionsForTesting(() => new Map([['devbox', [dev.conn]]]) as never)
+  await startFleetRefresh(['devbox'])
+  await fleetRefreshIdle()
+  await vi.waitFor(() => expect(clockRefresh).toHaveBeenCalled())
+  expect((await readHostProfile('devbox')).probed).toBeUndefined()
+  clockRefresh.mockClear()
+  answerFacts(facts)
+  await vi.waitFor(() => expect(clockRefresh).toHaveBeenCalledTimes(1))
+  expect((await readHostProfile('devbox')).probed?.home).toBe('/home/dev')
+})
 
 describe('listFleet', () => {
   it('lists the Mac first, then every enabled host, and asks only daemons that can answer', async () => {

@@ -204,12 +204,12 @@ let overrides: Partial<PortableClockEnv> | null = null;
 export function __setPortableClockEnvForTesting(next: Partial<PortableClockEnv> | null): void { overrides = next; }
 
 /**
- * The capabilities a host is known by: the fleet's last read, else what the user declared plus its
- * probe. A cached card is as old as the last fleet read, so what the config declares now is
- * merged into it: a tag the user added since (always-on) counts at once, never after the next read.
+ * Host placement's capability reader uses durable Fleet history and the current profile/config.
+ * An alternate reader can return an older card, so current declarations are merged into it:
+ * a tag the user added since (always-on) counts at once, never after the next full Fleet read.
  */
 export async function capabilitiesOf(host: string, base: Pick<RunPlacementDeps, 'capabilities'>): Promise<HostCapabilities | null> {
-  const [{ getConfig }, { hostCapabilities, normalizeTag }] = await Promise.all([import('../config-manager.js'), import('../hosts/capabilities.js')]);
+  const [{ getConfig }, { normalizeTag }] = await Promise.all([import('../config-manager.js'), import('../hosts/capabilities.js')]);
   const def = (await getConfig()).hosts?.[host];
   const cached = await base.capabilities(host);
   if (cached) {
@@ -222,10 +222,7 @@ export async function capabilitiesOf(host: string, base: Pick<RunPlacementDeps, 
       ...(alwaysOn ? { alwaysOn: true, unknown: cached.unknown.filter((u) => u !== ALWAYS_ON_TAG) } : {}),
     };
   }
-  if (!def) return null;
-  const { readHostProfile } = await import('../hosts/host-profile.js');
-  const profile = await readHostProfile(host).catch(() => null);
-  return hostCapabilities({ probed: profile?.probed, kind: profile?.kind, local: false, week: null, declared: def.capabilities });
+  return (await import('../hosts/capability-reader.js')).readHostCapabilities(host);
 }
 
 export function defaultPortableClockEnv(): PortableClockEnv {
