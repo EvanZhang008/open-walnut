@@ -179,6 +179,49 @@ describe('chat open measurement', () => {
     expect(h.intersectionDisconnect).toHaveBeenCalled();
   });
 
+  it.each([
+    ['checkVisibility', (panel: HTMLElement) => { (panel as unknown as { checkVisibility: (o?: { visibilityProperty?: boolean }) => boolean }).checkVisibility = (o) => !o?.visibilityProperty; }],
+    ['computed style', () => { vi.stubGlobal('getComputedStyle', () => ({ visibility: 'hidden', display: 'block', opacity: '1' })); }],
+  ])('a chat laid out but hidden by the page (%s) is not a visible timeout (2026-11-14)', async (_how, hide) => {
+    // Home stays mounted under visibility:hidden behind /org: its columns keep their boxes.
+    const h = harness();
+    hide(h.panel);
+    stops.push(observeSessionOpen(h.panel, `metric-hidden-page-${_how}`, () => 'claude'));
+    h.show(); h.paint(30_000);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(log.info).toHaveBeenCalledWith('session-open', expect.any(String), expect.objectContaining({
+      outcome: 'not-visible', outsideViewportAtAttach: true, viewportSeen: false,
+    }));
+  });
+
+  it('a chat hidden under a peek after it opened times out as not visible, not as a slow open', async () => {
+    // task-board.css hides the chat column's children, not the panel: the history scroller tells.
+    const h = harness();
+    let peek = false;
+    const scroller = { checkVisibility: (o?: { visibilityProperty?: boolean }) => !(peek && o?.visibilityProperty) } as unknown as HTMLElement;
+    (h.panel as unknown as { querySelector: (s: string) => unknown }).querySelector = (sel: string) => sel === '.session-history' ? scroller : null;
+    stops.push(observeSessionOpen(h.panel, 'metric-hidden-peek', () => 'claude'));
+    h.paint(16);
+    peek = true;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(log.info).toHaveBeenCalledWith('session-open', expect.any(String), expect.objectContaining({
+      outcome: 'not-visible', hiddenByPage: true,
+    }));
+  });
+
+  it('the page hides a mounted chat with visibility, which the measurement reads', () => {
+    // Each member of the class (a chat kept mounted but not drawn) must hide it in a way
+    // chatHiddenByPage() sees: visibility, never opacity alone.
+    const rule = (file: string, selector: string) => {
+      const css = fs.readFileSync(file, 'utf8');
+      const at = css.indexOf(selector);
+      expect(at, `${selector} in ${file}`).toBeGreaterThan(-1);
+      return css.slice(at, css.indexOf('}', at));
+    };
+    expect(rule('web/src/styles/globals.css', '.main-page-wrapper-hidden {')).toMatch(/visibility:\s*hidden/);
+    expect(rule('web/src/styles/task-board.css', '.session-panel-chat-col.is-board-peek >')).toMatch(/visibility:\s*hidden/);
+  });
+
   it('intersection changes reveal an existing body without a DOM mutation and retain the original total', () => {
     const h = harness(); h.offscreen(true);
     stops.push(observeSessionOpen(h.panel, 'metric-intersection', () => 'claude'));

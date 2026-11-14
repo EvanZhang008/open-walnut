@@ -6,7 +6,7 @@ import type { SessionHistoryMessage } from '@/types/session';
 
 export type OpenHistorySource = 'memory' | 'idb' | 'snapshot' | 'ready' | 'preview' | 'network' | 'stream' | 'unknown';
 export type OpenHistoryStage = 'historyEffect' | 'idbStart' | 'idbReady' | 'historyReady' | 'historyAdopted' | 'contentDetected';
-interface OpenAttempt { at: number; source?: OpenHistorySource; entry: string; id: number; stages: Partial<Record<OpenHistoryStage, number>>; timeout?: ReturnType<typeof setTimeout>; engine?: () => string; settle?: () => void; hiddenDuringOpen?: boolean; viewportSeen?: boolean; outsideViewportAtAttach?: boolean; viewportEnteredMs?: number; longestFrameGap?: { ms: number; endedMs: number }; notVisible?: NotVisibleProbe }
+interface OpenAttempt { at: number; source?: OpenHistorySource; entry: string; id: number; stages: Partial<Record<OpenHistoryStage, number>>; timeout?: ReturnType<typeof setTimeout>; engine?: () => string; settle?: () => void; hiddenDuringOpen?: boolean; viewportSeen?: boolean; outsideViewportAtAttach?: boolean; viewportEnteredMs?: number; longestFrameGap?: { ms: number; endedMs: number }; notVisible?: NotVisibleProbe; chatHiddenNow?: () => boolean; hiddenByPage?: boolean }
 const attempts = new Map<string, OpenAttempt>();
 const sources = new Map<string, OpenHistorySource>();
 const OPEN_EVENT = 'walnut:session-open-measure';
@@ -16,7 +16,9 @@ let sequence = 0;
 function finishAttempt(sessionId: string, attempt: OpenAttempt, outcome: 'content' | 'timeout'): void {
   if (attempts.get(sessionId) !== attempt) return;
   const source = attempt.source ?? 'unknown';
-  const measuredOutcome = outcome === 'timeout' && attempt.outsideViewportAtAttach && !attempt.viewportSeen
+  const hiddenAtEnd = outcome === 'timeout' && attempt.chatHiddenNow?.() === true;
+  if (hiddenAtEnd) attempt.hiddenByPage = true;
+  const measuredOutcome = outcome === 'timeout' && (hiddenAtEnd || attempt.outsideViewportAtAttach && !attempt.viewportSeen)
     ? 'not-visible' : outcome;
   log.info('session-open', `first content ${sessionId} open ${attempt.id}`, {
     sessionId, ms: Math.round(performance.now() - attempt.at),
@@ -27,6 +29,7 @@ function finishAttempt(sessionId: string, attempt: OpenAttempt, outcome: 'conten
     viewportSeen: attempt.viewportSeen === true, viewportEnteredMs: attempt.viewportEnteredMs,
     client: detectInputClient(), userAgent: navigator.userAgent,
     hiddenDuringOpen: attempt.hiddenDuringOpen === true || document.visibilityState === 'hidden',
+    ...(attempt.hiddenByPage ? { hiddenByPage: true } : {}),
     ...(attempt.longestFrameGap ? { longestFrameGap: attempt.longestFrameGap } : {}),
     ...(attempt.notVisible ? { notVisible: attempt.notVisible } : {}),
   });
@@ -107,8 +110,27 @@ export function sessionOpenStageRecorder(sessionId: string): (stage: OpenHistory
   };
 }
 
+/** Laid out but not drawn: Home mounted behind another page (`.main-page-wrapper-hidden`
+ *  hides the whole panel), a chat under a peek tab (task-board.css hides the chat column's
+ *  children, so the panel itself still shows). Its boxes keep their geometry, so only the
+ *  style tells (2026-11-14: a Home column mounted on /org read as a visible 30 s timeout;
+ *  its 9 rows had been adopted at 102 ms). Opacity is left out on purpose: a fade-in starts
+ *  at 0 and must not exclude a real open from the budget. */
+function hiddenByStyle(el: HTMLElement): boolean {
+  const check = (el as HTMLElement & { checkVisibility?: (o?: { visibilityProperty?: boolean }) => boolean }).checkVisibility;
+  if (typeof check === 'function') return !check.call(el, { visibilityProperty: true });
+  return getComputedStyle(el).visibility === 'hidden';
+}
+
+/** The panel, or the conversation inside it, is hidden by the page. */
+function chatHiddenByPage(panel: HTMLElement): boolean {
+  if (hiddenByStyle(panel)) return true;
+  const scroller = panel.querySelector?.<HTMLElement>('.session-history');
+  return !!scroller && hiddenByStyle(scroller);
+}
+
 function panelInViewport(panel: HTMLElement): boolean {
-  if (document.visibilityState === 'hidden') return false;
+  if (document.visibilityState === 'hidden' || chatHiddenByPage(panel)) return false;
   const box = panel.getBoundingClientRect();
   return box.width > 0 && box.height > 0 && box.bottom > 0 && box.top < innerHeight
     && box.right > 0 && box.left < innerWidth;
@@ -184,7 +206,7 @@ export function observeSessionOpen(panel: HTMLElement, sessionId: string, engine
   };
   const attachEngine = () => {
     const attempt = attempts.get(sessionId);
-    if (attempt) { attempt.engine = engine; attempt.settle = disconnect; noteViewport(attempt); }
+    if (attempt) { attempt.engine = engine; attempt.settle = disconnect; attempt.chatHiddenNow = () => chatHiddenByPage(panel); noteViewport(attempt); }
   };
   const report = (attempt: OpenAttempt) => {
     if (stopped || reported === attempt.id || attempts.get(sessionId) !== attempt) return;
