@@ -144,6 +144,37 @@ describe('inside a turn a person started', () => {
   });
 });
 
+describe('the VP reply of 2026-11-14 17:08Z (reported as a false positive)', () => {
+  // As the transcript holds it: English prose, so a true positive.
+  const SENT = "I've handed it to the inbox task: use the side-by-side, left-and-right panel layout and add a switch between compact and roomy. The whole card still grows on hover, and your compact choice is remembered.\n\nIt won't start yet: the task runs on devbox, and new sign-ins to devbox have been refused since the SSH certificate expired at 07:20Z. Once you renew it with ssh-keygen on the Mac, the message goes out by itself and the work starts.\n\n<walnut-about tasks=\"322aae38-819c-58e8-a497-b0fd5e088d16\"/>";
+  // The same reply in Chinese with its English names (devbox, SSH, ssh-keygen, 07:20Z, panel): it passes.
+  // It reads: handed to the inbox task, left and right two panels plus a compact switch; it starts
+  // once ssh-keygen renews the SSH certificate of devbox, which expired at 07:20Z.
+  const CHINESE_WITH_NAMES = '已交给收件箱任务：按你说的"左右两个 panel"排，再加一个 compact / 宽松的切换，悬停时整张卡片变大，你选的 compact 会记住。\n\n现在还开不了：这个任务在 devbox 上跑，devbox 的 SSH 证书 07:20Z 过期后新登录都被拒了。你在 Mac 上跑一次 ssh-keygen 续期，消息会自己发出去，活就开始了。\n\n<walnut-about tasks="322aae38-819c-58e8-a497-b0fd5e088d16"/>';
+
+  it('Chinese prose with English host names, tool names and times passes', async () => {
+    session('v1');
+    emit(EventNames.SESSION_TEXT_DELTA, 'v1', { delta: CHINESE_WITH_NAMES, msgId: 'r' });
+    emit(EventNames.SESSION_RESULT, 'v1', { result: CHINESE_WITH_NAMES, isError: false });
+    await _settledForTest();
+    expect(driftOf('v1')).toBeUndefined();
+  });
+
+  it('the English reply as sent is marked, and the next message quotes it', async () => {
+    const { offLineOf } = await import('../../../src/core/hints/reply-language-quote.js');
+    session('v2');
+    emit(EventNames.SESSION_TEXT_DELTA, 'v2', { delta: SENT, msgId: 'r' });
+    emit(EventNames.SESSION_RESULT, 'v2', { result: SENT, isError: false });
+    await _settledForTest();
+    expect(driftOf('v2')).toBeTruthy();
+    expect(offLineOf('v2')).toMatch(/^I've handed it to the inbox task/);
+    const { effectiveHints } = await import('../../../src/core/hints/hint-registry.js');
+    const hint = effectiveHints(config as never).find((h) => h.kind === 'reply-language')!;
+    const out = hint.render({ config: config as never, record: { claudeSessionId: 'v2', hintState: records.get('v2')!.hintState } } as never, new Set(['on_drift']))!;
+    expect(out.text).toContain('It was: "I\'ve handed it to the inbox task');
+  });
+});
+
 describe('who started the turn, from the rows delivered for it', () => {
   const queued = (sid: string, messageId: string, sentBy: 'person' | 'agent') => emit(EventNames.SESSION_MESSAGE_QUEUED, sid, { messageId, sentBy });
   const deliveredRows = (sid: string, ids: string[]) => emit(EventNames.SESSION_MESSAGES_DELIVERED, sid, { messageIds: ids, count: ids.length });

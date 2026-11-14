@@ -30,6 +30,7 @@ import { replyLanguageText } from '../sessions/output-mode.js';
 import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
 import { isQuietTurn } from '../sessions/quiet-turn.js';
 import { stripAboutTag } from '../org/message-about.js';
+import { clearOffLine, noteOffLine, quoteLine } from './reply-language-quote.js';
 
 const SUBSCRIBER = 'reply-language-drift';
 const KIND = 'reply-language';
@@ -40,7 +41,6 @@ const SESSIONS_MAX = 300;
 /** Corrections in one turn: the next one only when two more lines after the last are still off. */
 const LIVE_MAX = 2;
 const OFF_BEFORE_NEXT = 2;
-const QUOTE_MAX = 160;
 /** Characters of each part of a letter that are judged. */
 const LETTER_JUDGE_CHARS = 20_000;
 
@@ -59,6 +59,8 @@ interface Turn {
   attempts: number;
   /** Lines off since the last correction (since the start, with none). */
   offAfter: number;
+  /** The last line judged off, quoted by the next message's correction. */
+  lastOff?: string;
   /** Any line off in the whole turn, and any judged in the language. */
   anyOff: boolean;
   anyIn: boolean;
@@ -79,11 +81,7 @@ export function liveCorrectionText(said: string): string {
 /** Said in English in every language: the tag is the same in all. */
 export const LIVE_LATE_LINE = 'If your turn had already ended when this arrived, reply with only <walnut-turn status="agent-ack"/>.';
 
-/** The line as quoted: one line, cut at QUOTE_MAX. */
-export function quoteLine(line: string): string {
-  const one = line.replace(/\s+/g, ' ').trim();
-  return one.length > QUOTE_MAX ? `${one.slice(0, QUOTE_MAX - 1)}…` : one;
-}
+export { quoteLine };
 
 export function liveCorrectionMessage(rule: string, said: string): string {
   return buildWalnutMessage({
@@ -216,7 +214,7 @@ async function judge(t: Turn, texts: string[]): Promise<{ rule: string; off: str
     if (v === true) off.push(x);
     else if (v === false) t.anyIn = true;
   }
-  if (off.length) { t.anyOff = true; t.offAfter += off.length; }
+  if (off.length) { t.anyOff = true; t.offAfter += off.length; t.lastOff = off[off.length - 1]; }
   return { rule, off };
 }
 
@@ -280,7 +278,9 @@ async function finishTurn(sid: string, t: Turn): Promise<void> {
     const { drift: _old, ...rest } = state;
     return { hintState: Object.keys(drift).length ? { ...rest, drift } : rest };
   });
-  if (broke) log.session.info('reply-language: drift marked for the next message', { sessionId: sid, corrections: t.corrections });
+  if (broke && t.lastOff) noteOffLine(sid, t.lastOff);
+  else clearOffLine(sid);
+  if (broke) log.session.info('reply-language: drift marked for the next message', { sessionId: sid, corrections: t.corrections, line: t.lastOff ? quoteLine(t.lastOff).slice(0, 80) : undefined });
 }
 
 /** Judgements still running (a test waits for them: `_settledForTest`). */

@@ -66,9 +66,11 @@ export function hintTextParts(h: { kind: string; text: string }): HintTextPart[]
   const parts: HintTextPart[] = [];
   let rest = text;
   let tail = '';
-  if (rest.endsWith(setting.walnutText)) {
-    tail = setting.walnutText;
-    rest = rest.slice(0, rest.length - tail.length).trimEnd();
+  // Walnut's words run from its fixed text to the end (a quote of the session's own line may follow it).
+  const at = rest.lastIndexOf(setting.walnutText);
+  if (at >= 0) {
+    tail = rest.slice(at);
+    rest = rest.slice(0, at).trimEnd();
   }
   if (rest) parts.push({ text: rest, from: 'user', setting: setting.label });
   if (tail) parts.push({ text: tail, from: 'walnut' });

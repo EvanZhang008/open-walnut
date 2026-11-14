@@ -34,6 +34,7 @@ import { briefHintText, type BriefHintState } from '../sessions/brief-hint.js';
 import { threadHintText, threadsTidyText, type ThreadHintState, type ThreadsTidyState } from '../org/thread-capture.js';
 import { HINT_USER_SETTINGS, REPLY_LANGUAGE_DRIFT_TAIL, WALNUT_ONLY_KINDS } from './hint-origin.js';
 import { orgHandOnHint } from '../org/core-instructions.js';
+import { offLineOf } from './reply-language-quote.js';
 
 export const HINT_TRIGGERS: readonly MessageHintTrigger[] = [
   'every_turn', 'every_n_turns', 'session_start', 'after_compaction', 'on_change', 'on_drift', 'on_request',
@@ -47,7 +48,7 @@ export const HINT_EVERY_MAX = 1000;
 export interface HintContentInput {
   config: Pick<Config, 'session'> | null;
   record: {
-    output_mode?: SessionOutputMode; hintState?: { drift?: Record<string, string> };
+    output_mode?: SessionOutputMode; hintState?: { drift?: Record<string, string> }; claudeSessionId?: string;
     threadMeta?: ReadonlyArray<{ seq?: number; thread?: string; title?: string; question?: string }>;
     asksSent?: ReadonlyArray<{ thread: string; name: string }>;
   } | null;
@@ -148,7 +149,9 @@ const BUILT_IN: readonly HintSpec[] = [
       const age = Date.now() - Date.parse(i.record?.hintState?.drift?.['reply-language'] ?? '');
       // A mark older than a day (one an older Walnut left) is no news about this conversation, nor one dated ahead.
       if (!text || !reasons.has('on_drift') || !(age > -60_000 && age < REPLY_LANGUAGE_DRIFT_FRESH_MS)) return null;
-      return { text: `${text} ${REPLY_LANGUAGE_DRIFT_TAIL}` };
+      // The line itself, so the session can see it was not in the language (it read a bare correction as a mistake).
+      const said = offLineOf(i.record?.claudeSessionId);
+      return { text: `${text} ${REPLY_LANGUAGE_DRIFT_TAIL}${said ? ` It was: "${said}"` : ''}` };
     },
   },
   {
