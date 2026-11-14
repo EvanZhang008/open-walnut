@@ -89,6 +89,12 @@ export interface HostStatus {
   steps: HostConnectStep[];
   /** First-connect explainer shown during install-runtime/upload. */
   note?: string;
+  /**
+   * The host's first connect is running: no daemon was there when it was probed, and its link
+   * was never up in this server. The background card (HostConnectCard) follows these hosts; an
+   * established host's reconnect never carries it. Absent from older servers.
+   */
+  firstConnect?: true;
   phaseElapsedMs: number;
   connectElapsedMs: number;
   error?: string;

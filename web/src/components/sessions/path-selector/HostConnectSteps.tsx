@@ -14,7 +14,7 @@
 import { useEffect, useState } from 'react';
 import type { DirListingPending } from '@/api/sessions';
 import { serverNow, useHostStatus } from '@/hooks/useHostStatus';
-import { connectNote, connectSteps, elapsedNow, formatElapsed, hostStatusText, reconnectReasonOf, transferProgress, transferWords } from '@/utils/host-connect';
+import { connectNote, connectProgress, connectSteps, elapsedNow, formatElapsed, hostStatusText, reconnectReasonOf } from '@/utils/host-connect';
 import { SetupProgress } from '@/components/common/SetupProgress';
 
 interface Props {
@@ -62,7 +62,6 @@ export function HostConnectSteps({ hostKey, label, pending, lastHeadline, compac
   }, []);
 
   const steps = connectSteps(status, pending?.phase);
-  const completed = steps.filter((s) => s.status === 'done').length;
   const phaseText = status ? hostStatusText(status) : (pending?.label ?? `Connecting to ${label}`);
   const elapsed = connectElapsed(status, now);
   const phaseElapsed = status ? elapsed.phase : (pending?.elapsedMs ?? 0);
@@ -70,11 +69,8 @@ export function HostConnectSteps({ hostKey, label, pending, lastHeadline, compac
   const note = connectNote(status, steps);
   // Every surface that draws the steps says why a reconnect is not back yet, not only the picker.
   const lastAttempt = lastHeadline ?? reconnectReasonOf(status);
-  // While the daemon file goes onto the host the bar is its bytes, else the steps done (2026-11-12,
-  // the user: "this uploading to old dev please have some kind of progress bar").
-  const transfer = transferProgress(status);
-  const percent = transfer ? (transfer.fraction == null ? undefined : Math.round(transfer.fraction * 100)) : steps.length ? completed / steps.length * 100 : undefined;
-  const valueText = transfer ? transferWords(transfer) : `${completed} of ${steps.length} steps complete`;
+  // While the daemon file goes onto the host the bar is its bytes, else the steps done.
+  const { percent, valueText } = connectProgress(status, pending?.phase);
 
   return (
     <div className="sps-host-connecting sps-host-steps" role="status" data-host={hostKey} data-compact={compact ? '' : undefined}>

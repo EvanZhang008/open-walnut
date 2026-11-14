@@ -1285,6 +1285,27 @@ export class DaemonConnection {
   get everConnected(): boolean { return this.linkUpAt > 0 }
 
   /**
+   * A probe of this connection found no daemon on the host before its link was ever up, so
+   * the connect is putting one there: the host's first connect (markFirstConnect). Kept
+   * across a retry of that connect; spent once the link comes up.
+   */
+  private _firstConnect = false
+
+  /** Called where connect() and reconnect() deploy because the host has no daemon running. */
+  private markFirstConnect(): void {
+    if (!this.everConnected) this._firstConnect = true
+  }
+
+  /**
+   * The host's first connect is running: what the person sees as "Connecting to <host>" in the
+   * background card (web HostConnectCard). An established host's reconnect never reads so: its
+   * link was up before, or its daemon was still running when it was probed.
+   */
+  get firstConnectRunning(): boolean {
+    return this._firstConnect && !this._connected && !this.everConnected
+  }
+
+  /**
    * Access sshTarget with non-null assertion. Only call from SSH-only code paths
    * (connect, deploy, tunnel) — never from connectDirect.
    */
@@ -2523,6 +2544,7 @@ export class DaemonConnection {
         }
         // Steps 2-3: deploy (stamps install-runtime / upload) and start, with
         // one runtime fallback chain if the start fails in a runtime-shaped way.
+        this.markFirstConnect()
         daemonPort = await this.deployAndStart()
       }
 
@@ -8523,6 +8545,7 @@ export class DaemonConnection {
     if (daemonPort === null) {
       // Daemon genuinely absent — redeploy and restart
       log.session.info('DaemonConnection: daemon not running, redeploying', { host: this.hostKey })
+      this.markFirstConnect()
       daemonPort = await this.deployAndStart()
     }
 
@@ -10285,6 +10308,8 @@ export interface DaemonConnectState {
   daemonUpdate?: DaemonUpdateView
   /** In the `upload` step: how far the daemon's file has got onto the host, sent or downloaded there. */
   transfer?: ConnectTransfer
+  /** The host's first connect is running (DaemonConnection.firstConnectRunning). */
+  firstConnect?: true
 }
 
 export function getDaemonConnectState(hostKey: string): DaemonConnectState {
@@ -10300,6 +10325,7 @@ export function getDaemonConnectState(hostKey: string): DaemonConnectState {
   if (conn?.remoteRuntime) state.runtime = conn.remoteRuntime
   const transfer = conn?.connectTransfer
   if (transfer && state.phase === 'upload') state.transfer = { ...transfer }
+  if (conn?.firstConnectRunning) state.firstConnect = true
   const dir = conn?.remoteDirChoice
   if (dir) state.daemonDir = { ...dir, ...(conn?.remoteHome ? { home: conn.remoteHome } : {}) }
   const failure = failureCache.get(hostKey)

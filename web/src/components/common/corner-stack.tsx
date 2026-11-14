@@ -29,6 +29,9 @@ export const CORNER_ORDER = {
   board: 20,
   /** A one-off line from a pop-out window (openPopout.ts). */
   flash: 25,
+  /** A host's first connect running in the background (hosts/HostConnectCard.tsx): it stays
+   *  for minutes, so it sits under the passing toasts, just above the approval card. */
+  hostConnect: 28,
   /** Approval cards: a script waits on them, so they sit nearest the corner. */
   approvals: 30,
 } as const;
@@ -176,7 +179,7 @@ function syncAround(sidebarRight: number, columnRight: number): void {
   // third of the page. Counted by the kinds shown, never by the stack's own height, so the short
   // forms do not undo the very reason for them.
   const phone = window.matchMedia(PHONE_LAYOUT_QUERY).matches;
-  const kinds = ['.corner-slot-toasts', '.corner-slot-board', '.corner-slot-approvals']
+  const kinds = ['.corner-slot-toasts', '.corner-slot-board', '.corner-slot-host-connect', '.corner-slot-approvals']
     .filter((sel) => { const el = stack!.querySelector(sel); return !!el && el.childElementCount > 0 && shown(el); }).length;
   const crowded = kinds >= 3 || (kinds >= 2 && window.innerHeight < SHORT_WINDOW_PX);
   // Over a page's work it stays short for as long as that page shows: scrolling a note to its

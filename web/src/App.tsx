@@ -19,6 +19,7 @@ import { PageFind } from './components/common/PageFind';
 import { useHidesHighlights } from './hooks/useHidesHighlights';
 import { UnpairedNotice } from './components/common/UnpairedNotice';
 import { ApprovalPrompts } from './components/approvals/ApprovalPrompts';
+import { HostConnectCard } from './components/hosts/HostConnectCard';
 import { PluginBoundary } from './components/common/PluginBoundary';
 import { PluginBounds } from './plugins/PluginBounds';
 import { LoadingSpinner } from './components/common/LoadingSpinner';
@@ -179,6 +180,7 @@ export function App() {
       <PageFind />
       <UnpairedNotice />
       <ApprovalPrompts />
+      <HostConnectCard />
       <FirstRunHost />
       <div className={isHome ? 'main-page-wrapper' : 'main-page-wrapper main-page-wrapper-hidden'}>
         <RouteShownContext.Provider value={isHome}>

@@ -9,7 +9,9 @@
  * each a component below; the dots show only with two or more.
  *
  * It never closes on an outside click (a stray click would answer the question). Escape,
- * Not now and Done close it, and each records the answer, so it never comes back by itself;
+ * Not now, Done and Run in background close it, and each records the answer, so it never comes
+ * back by itself; a host still connecting goes on in the server, shown in the corner card
+ * (hosts/HostConnectCard.tsx);
  * Settings › Remote Hosts › Add host › "Pick from your SSH config" opens the step again
  * (`mode: 'picker'`, which records nothing).
  */
@@ -24,7 +26,8 @@ import { seedHostStatus, serverNow, useAllHostStatus, useHostStatus } from '@/ho
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { HostFailureText } from '@/components/hosts/HostFailureText';
 import { SetupProgress } from '@/components/common/SetupProgress';
-import { transferProgress, transferWords } from '@/utils/host-connect';
+import { isHostConnecting, transferProgress, transferWords } from '@/utils/host-connect';
+import { markHostConnectAsked } from '@/components/hosts/background-connect';
 import type { FirstRunStep } from '@/api/first-run';
 import { WalkthroughSteps, useSshKey } from '@/components/hosts/SshWalkthrough';
 import { addedRowState, firstRunHostRows, type FirstRunHostRow } from './first-run-model';
@@ -80,6 +83,7 @@ function AddedFailure({ row, onUndo, onRetry }: { row: FirstRunHostRow; onUndo: 
   if (state.type !== 'failed') return null;
   const retry = async () => {
     onRetry();
+    markHostConnectAsked(row.alias);
     const started = Date.now();
     setRetrying(true);
     setRetryError(null);
@@ -198,6 +202,8 @@ function HostsStep({ hosts, saidYes, onSaidYes, onUndone, onAddByHand }: {
     if (adding.has(alias)) return;
     setAdding((prev) => new Set(prev).add(alias));
     setAddError(null);
+    // Closed while it connects, the corner card (hosts/HostConnectCard.tsx) follows it.
+    markHostConnectAsked(alias);
     try {
       const r = await answerFoundHost(alias, 'yes');
       seedHostStatus(r.status);
@@ -319,7 +325,7 @@ export function FirstRunDialog({ steps, mode, onClose, onAddByHand }: {
   const failedHere = !connectedHere && [...addedAliases].some((a) => { const s = statusOf(a); return !!s && !s.connected && (s.phase === 'failed' || !!s.lastError); });
   // A first connect can take minutes; it runs in the server, so the dialog can go (2026-11-12, the
   // user: "make it clear that this will working in the background, feel free to close").
-  const connectingHere = [...addedAliases].some((a) => { const s = statusOf(a); return !!s && !s.connected && s.phase !== 'failed' && s.phase !== 'idle'; });
+  const connectingHere = [...addedAliases].some((a) => isHostConnecting(statusOf(a)));
 
   const close = useCallback(() => onClose({ added: addedHere, answered: true }), [onClose, addedHere]);
   const owner = useModalOverlay(useCallback(() => onClose({ added: addedHere, answered: false }), [onClose, addedHere]));
@@ -337,10 +343,12 @@ export function FirstRunDialog({ steps, mode, onClose, onAddByHand }: {
 
   const step = steps[index] ?? 'hosts';
   const last = index >= steps.length - 1;
-  // Done once a host is connected; Close while added hosts have not connected (and always in
-  // Settings' picker, where nothing is skipped); Not now when nothing was added.
-  const primaryLabel = !last ? 'Next' : connectedHere ? 'Done' : addedAliases.size > 0 || mode === 'picker' ? 'Close' : 'Not now';
-  const primaryStrong = !last || connectedHere;
+  // Run in background while an added host connects: it closes the dialog and the connect goes on,
+  // shown in the corner card (2026-11-13, the user: "make it clear, close & run background that
+  // make it clear that it will still running"). Done once a host is connected; Close while added
+  // hosts have not connected (and always in Settings' picker); Not now when nothing was added.
+  const primaryLabel = !last ? 'Next' : connectingHere ? 'Run in background' : connectedHere ? 'Done' : addedAliases.size > 0 || mode === 'picker' ? 'Close' : 'Not now';
+  const primaryStrong = !last || connectingHere || connectedHere;
   const primary = () => (last ? close() : setIndex(index + 1));
 
   return createPortal(

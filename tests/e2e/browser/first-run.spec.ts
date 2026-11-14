@@ -339,7 +339,11 @@ test('Add all adds every waiting host in one click, and a slow first connect say
   const bar = page.getByTestId('first-run-host-lab-mac').getByTestId('host-transfer');
   await expect(bar).toContainText('23 of 67 MB sent');
   await expect(bar.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '34');
+  // The way out says the connect goes on: it closes the dialog, and the corner card takes over
+  // (host-background-connect-card.spec.ts follows it from there).
+  await expect(page.getByTestId('first-run-primary')).toHaveText('Run in background');
   await shot(page, 'add-all', dialog(page).locator('.fr-modal'));
   await page.getByTestId('first-run-primary').click();
   await expect(dialog(page)).toHaveCount(0);
+  await expect(page.getByTestId('host-connect-card')).toContainText('Connecting to lab-mac');
 });

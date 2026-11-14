@@ -228,3 +228,25 @@ export function transferWords(p: TransferProgress): string {
   const amount = p.total ? `${mb(p.done)} of ${mb(p.total)} MB` : `${mb(p.done)} MB`;
   return p.via === 'download' ? `${amount}, downloaded by the host` : `${amount} sent`;
 }
+
+/** What a connect's progress bar shows: a measured percent (absent: not measured) and its words. */
+export interface ConnectProgress {
+  /** 0..100 (bytes whole, steps exact); undefined while nothing can be measured (the bar sweeps). */
+  percent: number | undefined;
+  valueText: string;
+}
+
+/**
+ * The connect's bar, the same on every surface that draws one: the daemon file's bytes while it
+ * goes onto the host, else the steps done of all (2026-11-12, the user: "this uploading to old
+ * dev please have some kind of progress bar").
+ */
+export function connectProgress(status: HostStatus | undefined, fallbackPhase?: string): ConnectProgress {
+  const transfer = transferProgress(status);
+  if (transfer) {
+    return { percent: transfer.fraction == null ? undefined : Math.round(transfer.fraction * 100), valueText: transferWords(transfer) };
+  }
+  const steps = connectSteps(status, fallbackPhase);
+  const done = steps.filter((s) => s.status === 'done').length;
+  return { percent: steps.length ? (done / steps.length) * 100 : undefined, valueText: `${done} of ${steps.length} steps complete` };
+}

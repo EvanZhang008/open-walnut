@@ -63,6 +63,20 @@ describe('buildHostStatus: the upload step\'s progress bar', () => {
   });
 });
 
+describe('buildHostStatus: a host\'s first connect', () => {
+  it('carries firstConnect on every step of the connect while it runs', () => {
+    for (const phase of ['ssh', 'probe', 'install-runtime', 'upload', 'start', 'tunnel', 'handshake'] as DaemonConnectPhase[]) {
+      expect(buildHostStatus('devbox', devbox, state(phase, { firstConnect: true }), undefined, AT).firstConnect, phase).toBe(true);
+    }
+  });
+
+  it('never once it ended (connected or failed), and never for a connection that does not say so', () => {
+    expect(buildHostStatus('devbox', devbox, state('connected', { firstConnect: true }), undefined, AT).firstConnect).toBeUndefined();
+    expect(buildHostStatus('devbox', devbox, state('failed', { firstConnect: true, error: 'Connection refused' }), undefined, AT).firstConnect).toBeUndefined();
+    expect(buildHostStatus('devbox', devbox, state('upload'), undefined, AT).firstConnect).toBeUndefined();
+  });
+});
+
 describe('buildHostStatus — steps and wording per phase', () => {
   it('marks everything before the active step done and everything after todo', () => {
     for (const [i, phase] of DAEMON_CONNECT_STEPS.entries()) {

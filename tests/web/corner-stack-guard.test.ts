@@ -152,6 +152,8 @@ describe('one corner for every notice', () => {
       'web/src/components/board/kanban/KanbanToasts.tsx',
       // Why an Ask here opened no card, in Files and in Changed.
       'web/src/components/common/FileAskNotice.tsx',
+      // A host's first connect running in the background.
+      'web/src/components/hosts/HostConnectCard.tsx',
     ]) expect(read(f), f).toMatch(/<CornerSlot order=\{CORNER_ORDER\.\w+\}[ >]/);
     expect(read('web/src/popout/openPopout.ts')).toMatch(/appendToCornerStack\(el, CORNER_ORDER\.flash\)/);
   });
@@ -159,7 +161,9 @@ describe('one corner for every notice', () => {
   it('approvals sit nearest the corner: a script waits on them', () => {
     const src = read('web/src/components/common/corner-stack.tsx');
     const order = (k: string) => Number(src.match(new RegExp(`\\b${k}: (\\d+)`))?.[1]);
-    expect(order('approvals')).toBeGreaterThan(Math.max(order('toasts'), order('board'), order('flash')));
+    expect(order('approvals')).toBeGreaterThan(Math.max(order('toasts'), order('board'), order('flash'), order('hostConnect')));
+    // The background connect card stays for minutes: under the passing toasts, so they never move it.
+    expect(order('hostConnect')).toBeGreaterThan(Math.max(order('toasts'), order('board'), order('flash')));
   });
 
   it('over what the person works in, or over a chat, the corner takes its short form and keeps to that column', () => {

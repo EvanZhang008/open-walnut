@@ -69,6 +69,12 @@ export interface HostStatus {
   steps: ConnectStep[]
   /** Only on the slow first-connect steps. */
   note?: string
+  /**
+   * The host's first connect is running: it had no daemon when probed and its link was never
+   * up in this server (DaemonConnection.firstConnectRunning). The web console's background
+   * card follows these; an established host's reconnect never carries it.
+   */
+  firstConnect?: true
   phaseElapsedMs: number
   connectElapsedMs: number
   /** One-line summary of the last connect failure, while it is still cached. */
@@ -187,6 +193,7 @@ export function buildHostStatus(
   }
   const note = connectPhaseNote(state.phase, label)
   if (note) status.note = note
+  if (state.firstConnect && !state.connected && IN_PROGRESS_PHASES.has(state.phase)) status.firstConnect = true
   // The daemon file's bytes on the host so far: the upload step's progress bar.
   const moving = withTransfer(status.steps, status.phase, state.transfer, label)
   status.steps = moving.steps

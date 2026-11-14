@@ -1,0 +1,58 @@
+/* HostConnectCard: a host's first connect, running in the background. The approval card's look
+   (approvals.css: its head, kicker, "–" and the put-aside pill), in the same corner stack
+   (corner-stack.css places it, just above the approval card). */
+.hcc-card {
+  pointer-events: auto;
+  background: var(--card-bg);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-md);
+  box-shadow: var(--corner-card-shadow);
+  padding: 12px 14px;
+  font-size: 13px;
+}
+.hcc-card .hcc-head { align-items: center; }
+
+.hcc-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  /* Add all of a long SSH config: the list scrolls inside the card, never past the window. */
+  max-height: min(45vh, 320px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.hcc-row { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.hcc-title { font-size: 14px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.hcc-row .setup-progress { display: flex; font-size: 12px; }
+.hcc-row .setup-progress-track { width: auto; }
+
+.hcc-row-done { flex-direction: row; align-items: baseline; gap: 6px; font-size: 14px; font-weight: 600; }
+.hcc-ok { flex: none; color: var(--success); font-weight: 700; }
+
+.hcc-note { margin-top: 10px; color: var(--fg-secondary); font-size: 12px; line-height: 1.4; }
+
+/* Minimized: the approval card's put-aside pill, with how far it is. */
+.hcc-pill .hcc-pill-percent { margin-left: auto; color: var(--fg-muted); font-weight: 500; font-variant-numeric: tabular-nums; }
+.hcc-pill-spinner {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: hcc-pulse 1.4s ease-in-out infinite;
+}
+.hcc-card :is(.approval-minimize):focus:not(:focus-visible) { outline: none; background: none; }
+
+@keyframes hcc-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hcc-pill-spinner { animation: none; }
+}
