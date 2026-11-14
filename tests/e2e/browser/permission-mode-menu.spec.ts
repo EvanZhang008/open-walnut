@@ -69,6 +69,15 @@ test('a running session: no shortcut hint, the pill opens a menu of every mode a
     await expect(menu.locator('[role="option"][aria-selected="true"]')).toHaveCount(1);
     await expect(menu.locator('[role="option"][data-mode="bypass"]')).toHaveAttribute('aria-selected', 'true');
     await fits(page, menu);
+    // The current mode is shown by colour alone: no checkmark, and no column kept for one.
+    expect(await menu.innerText()).not.toMatch(/[✓✔]/);
+    const current = menu.locator('[role="option"][aria-selected="true"]');
+    await expect(current).toHaveClass(/picker-row-current/);
+    const other = menu.locator('[role="option"][data-mode="default"]');
+    const nameColor = (row: Locator) => row.locator('.permission-mode-name').evaluate((el) => getComputedStyle(el).color);
+    expect(await nameColor(current), 'the current mode has its own colour').not.toBe(await nameColor(other));
+    const nameX = async (row: Locator) => (await row.locator('.permission-mode-name').boundingBox())!.x - (await row.boundingBox())!.x;
+    expect(await nameX(other), 'no empty leading column').toBeLessThanOrEqual(10);
     // Compact, like the model menu beside it: one line per mode, no wider than its names need.
     const menuBox = (await menu.boundingBox())!;
     expect(menuBox.width, 'the menu fits its content').toBeLessThan(200);

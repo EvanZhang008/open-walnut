@@ -189,3 +189,27 @@
 .permission-mode-menu .permission-mode-danger .permission-mode-name {
   color: var(--warning, #e8833a);
 }
+
+/* A picker's current item is shown by colour alone: no checkmark, no column kept
+   for one (2026-11-14, the user: "just show the name, and colour the selected
+   one"). One rule for the model, effort, mode and approval pickers; the compare picker's
+   own rule (.sdc-item.is-selected) does the same. */
+.picker-row-current,
+.picker-row-current .model-picker-row-name,
+.session-control-option[aria-selected="true"]:not(.session-control-option-danger) .session-control-option-name,
+.session-control-option[aria-pressed="true"] .session-control-option-name {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Keyboard focus is a ring, never the selected colour. */
+.model-picker-row:focus-visible,
+.session-control-option:focus-visible {
+  outline: 2px solid var(--fg-primary);
+  outline-offset: -2px;
+}
+
+/* A row with an icon keeps a column for it; a plain row is its name alone. */
+.session-control-option:has(.session-control-option-icon) {
+  grid-template-columns: 24px minmax(0, 1fr);
+}
