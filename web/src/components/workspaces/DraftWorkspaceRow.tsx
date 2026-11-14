@@ -154,7 +154,7 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId, project }: 
             log.info('workspace', 'draft option toggled', { draftId, enabled: !choice.enabled, via: 'bound-toggle' });
           }}
         >
-          <span className="draft-workspace-check" aria-hidden>{choice.enabled ? '✓' : ''}</span>
+          <span className={`draft-workspace-switch${choice.enabled ? ' is-on' : ''}`} aria-hidden />
           Isolated workspace
         </button>
       )}

@@ -341,7 +341,7 @@ export function HomeBoardSheet() {
             onPickDate={() => { picker.close(); datePicker.open(task, point, origin); }}
             onClear={snoozedNow(task) && task.start_date ? () => { snoozeFromMenu(task, null); picker.close(); } : undefined} />
           <button type="button" className="task-kebab-project-opt snooze-row board-move-done" data-board-done onClick={e => { e.stopPropagation(); setPhase(task.id, 'COMPLETE'); picker.close(); }}>
-            <span className="task-kebab-project-check" /><span className="task-kebab-project-opt-name">Mark done</span>
+            <span className="task-kebab-project-opt-name">Mark done</span>
           </button>
         </>;
       })()} />}

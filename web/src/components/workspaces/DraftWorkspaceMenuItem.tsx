@@ -45,7 +45,7 @@ export function DraftWorkspaceMenuItem({ draftId, hasFolder, onDone }: {
           onDone();
         }}
       >
-        <span className="draft-workspace-check" aria-hidden>{on ? '✓' : ''}</span>
+        <span className={`draft-workspace-switch${on ? ' is-on' : ''}`} aria-hidden />
         <span className="draft-workspace-menu-text">
           <span>Isolated workspace</span>
           {!hasFolder && <span className="draft-workspace-menu-hint" data-testid="draft-menu-workspace-hint">Pick a folder first</span>}
