@@ -461,6 +461,8 @@ describe('plugin providers', () => {
     const det = await core.handle('workspace.detect', { anchor: path.join(res.root, 'src', 'alpha'), providersHash: hash }) as { candidates: Array<Record<string, unknown>> }
     const fake = det.candidates.find((c) => c.provider === 'fake-multirepo')!
     expect(fake).toMatchObject({ claimed: true, root: res.root })
+    // Its detect step suggests the inputs a workspace of this folder uses (the marker's packages).
+    expect(fake.inputs).toEqual({ packages: ['alpha', 'beta'] })
     // Priority orders the candidates: the plugin (50) before the git fallback (10).
     expect(det.candidates[0].provider).toBe('fake-multirepo')
   })

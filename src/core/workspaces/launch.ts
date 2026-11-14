@@ -66,7 +66,7 @@ export interface DeferredTaskStart { taskId: string; title: string; started: fal
 /** What a task-start hands a workspace to replay once it is ready. */
 interface TaskStartAsk {
   message?: string; model?: string; mode?: string; effort?: string; engine?: string; cwd?: string
-  requestedAt?: string; callerSid?: string; userRequest?: string; expectReply?: boolean; replyTimeoutSecs?: number; source: string
+  requestedAt?: string; callerSid?: string; userRequest?: string; expectReply?: boolean; replyTimeoutSecs?: number; handsOn?: string; source: string
 }
 
 function taskStartPending(task: Task, params: TaskStartAsk): WorkspacePendingStart {
@@ -81,6 +81,7 @@ function taskStartPending(task: Task, params: TaskStartAsk): WorkspacePendingSta
     ...(params.userRequest ? { user_request: params.userRequest } : {}),
     ...(params.expectReply !== undefined ? { expect_reply: params.expectReply } : {}),
     ...(params.replyTimeoutSecs !== undefined ? { reply_timeout_secs: params.replyTimeoutSecs } : {}),
+    ...(params.handsOn ? { hands_on: params.handsOn } : {}),
     source: params.source,
     at: params.requestedAt ?? new Date().toISOString(),
   }
@@ -115,7 +116,7 @@ export async function deferTaskStart(task: Task, params: TaskStartAsk): Promise<
  * (deferTaskStart queues the start).
  */
 export async function requestTaskStartWorkspace(
-  task: Task, params: TaskStartAsk, asked: { provider: string; inputs?: unknown }, place: { cwd: string; host?: string },
+  task: Task, params: TaskStartAsk, asked: { provider: string; inputs?: unknown; byDefault?: boolean }, place: { cwd: string; host?: string },
 ): Promise<DeferredTaskStart | null> {
   const ws = task.workspace
   if (ws && (isLaunchReady(ws) || ws.state === 'creating')) return null
@@ -124,7 +125,7 @@ export async function requestTaskStartWorkspace(
   try {
     await requestWorkspace(task.id, {
       provider: asked.provider, host: normHost(place.host), anchor: place.cwd, inputs: asked.inputs,
-      pending: taskStartPending(task, params),
+      pending: taskStartPending(task, params), ...(asked.byDefault ? { byDefault: true } : {}),
     })
   } catch (err) {
     throw asQuickStartError(err)
@@ -160,16 +161,21 @@ export interface QuickStartWorkspacePlan {
   begin?: (task: Task, pending: Omit<WorkspacePendingStart, 'via' | 'at'> & { at?: string }) => Promise<Record<string, unknown>>
 }
 
-/** The quick-start route's workspace step (body field `workspace: { provider, inputs? }`). */
+/** The quick-start route's workspace step (body field `workspace: { provider, inputs? }`, or `{ auto: true }`). */
 export async function workspaceLaunchPlan(body: Record<string, unknown>, ctx: {
   cwd: string; host?: string; existingTaskId?: string; isWalnutAgent: boolean
 }): Promise<QuickStartWorkspacePlan | null> {
-  const asked = body.workspace && typeof body.workspace === 'object' ? body.workspace as Record<string, unknown> : null
+  let asked = body.workspace && typeof body.workspace === 'object' ? body.workspace as Record<string, unknown> : null
   const refuse = (status: number, error: string, code: string) => ({ refuse: { status, body: { error, code } } })
   let existing: Task | null = null
   // A bound draft's Start (▶ on an existing task): the task's own row decides.
   if (ctx.existingTaskId) existing = await managerDeps().getTask(ctx.existingTaskId)
   const ws = existing?.workspace
+  // `{ auto: true }`: the draft's default, sent before the host answered which provider claims the
+  // folder. Decided here as a task_start's default is: the claiming provider, or the folder itself.
+  if (asked && asked.auto === true && typeof asked.provider !== 'string') {
+    asked = ctx.isWalnutAgent || ws ? null : await (await import('./default-isolation.js')).draftDefaultAsk(ctx.cwd, normHost(ctx.host))
+  }
   const begin = (request: { provider: string; inputs?: unknown } | null): QuickStartWorkspacePlan => ({
     defer: true,
     begin: async (task, pending) => {

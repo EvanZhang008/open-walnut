@@ -41,6 +41,10 @@ export interface WorkspaceManagerDeps {
   rpc(host: string, cmd: string, params: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>>
   /** Start the session that waited for the workspace. Throws with the reason it could not. */
   launch(task: Task, ws: TaskWorkspace, pending: WorkspacePendingStart): Promise<void>
+  /** Drop the task's workspace row while it is still this creation (`jobId`); false when it changed. */
+  forget(taskId: string, jobId: string): Promise<boolean>
+  /** A default workspace could not be made: start the waiting session in the folder it was made from. */
+  launchInFolder(task: Task, ws: TaskWorkspace, pending: WorkspacePendingStart, error: string): Promise<void>
   /** A session of the task is mid-turn. */
   sessionBusy(taskId: string): Promise<boolean>
   /** A session of the task is alive (its start already happened). */
@@ -91,6 +95,7 @@ const realDeps: WorkspaceManagerDeps = {
         engine: pending.engine as never, callerSid: pending.caller_sid,
         ...(pending.user_request ? { userRequest: pending.user_request } : {}), expectReply: pending.expect_reply,
         replyTimeoutSecs: pending.reply_timeout_secs, source: pending.source ?? 'workspace',
+      ...(pending.hands_on ? { handsOn: pending.hands_on } : {}),
       })
       return
     }
@@ -103,6 +108,28 @@ const realDeps: WorkspaceManagerDeps = {
       source: pending.source ?? 'workspace', engine: pending.engine as never, callerSid: pending.caller_sid,
       ...(pending.engine_decided ? { engineDecided: true } : {}),
       ...(pending.session_id ? { preassignedSessionId: pending.session_id } : {}),
+    })
+  },
+  async forget(taskId, jobId) {
+    const { updateTaskRaw } = await import('../task-manager.js')
+    const res = await updateTaskRaw(taskId, (current) => (current.workspace?.job_id === jobId && current.workspace.state === 'creating'
+      ? { workspace: null as never } : null), { source: 'workspace' })
+    if (!res.changed || !res.task) return false
+    const { bus, EventNames } = await import('../event-bus.js')
+    bus.emit(EventNames.TASK_UPDATED, { task: res.task }, ['web-ui'], { source: 'workspace' })
+    return true
+  },
+  async launchInFolder(task, ws, pending, error) {
+    const { startSessionForTask } = await import('../sessions/task-start.js')
+    const note = `(Walnut could not make this task's isolated workspace (${error}), so it runs in ${ws.anchor} itself, a checkout other tasks may share.)`
+    await startSessionForTask({
+      taskIdPrefix: task.id, requestedAt: pending.at, message: `${pending.message}\n\n${note}`, model: pending.model, mode: pending.mode,
+      ...(pending.effort ? { effort: pending.effort as SessionEffort } : {}),
+      engine: pending.engine as never, callerSid: pending.caller_sid,
+      ...(pending.user_request ? { userRequest: pending.user_request } : {}), expectReply: pending.expect_reply,
+      replyTimeoutSecs: pending.reply_timeout_secs, source: pending.source ?? 'workspace',
+      ...(pending.hands_on ? { handsOn: pending.hands_on } : {}),
+      cwd: ws.anchor, host: ws.host, noWorkspace: true,
     })
   },
   async sessionBusy(taskId) {
@@ -208,6 +235,8 @@ export interface WorkspaceRequest {
   anchor?: string
   inputs?: unknown
   pending?: WorkspacePendingStart
+  /** Made because the task is a code task, not asked for (default-isolation.ts). */
+  byDefault?: boolean
 }
 
 /** Ask for a workspace and start making it. Answers at once with the task (state `creating`). */
@@ -239,6 +268,7 @@ export async function requestWorkspace(taskId: string, req: WorkspaceRequest): P
       name: latest && latest.provider === provider.id && latest.anchor === anchor && latest.name
         ? latest.name : workspaceName(task, req.pending?.message),
       ...(req.pending ?? latest?.pending_start ? { pending_start: req.pending ?? latest!.pending_start } : {}),
+      ...(req.byDefault ? { by_default: true } : {}),
       created_at: now, updated_at: now,
     }
   })
@@ -314,7 +344,7 @@ export async function deferStart(taskId: string, pending: WorkspacePendingStart)
     const written = await deps.write(task.id, (latest) => (latest?.state === 'creating' ? stamp(latest, { pending_start: pending }) : null))
     return written ?? task
   }
-  return requestWorkspace(taskId, { provider: ws.provider, host: ws.host, anchor: ws.anchor, inputs: ws.inputs, pending })
+  return requestWorkspace(taskId, { provider: ws.provider, host: ws.host, anchor: ws.anchor, inputs: ws.inputs, pending, ...(ws.by_default ? { byDefault: true } : {}) })
 }
 
 export function drive(taskId: string): Promise<void> {
@@ -406,6 +436,28 @@ async function runCreate(task: Task, ws: TaskWorkspace): Promise<void> {
   }
   const fail = async (error: string, code?: string) => {
     log.web.warn('workspace creation failed', { taskId: task.id, provider: ws.provider, host: ws.host, jobId, error, code })
+    // Nobody asked for a default workspace: its failure never holds the work back, the waiting
+    // start runs in the folder instead. Not when contact was lost (the host may still finish
+    // it, and a forgotten row would leave that worktree to nobody), nor for a task completed
+    // or started meanwhile.
+    const latest = await deps.getTask(task.id)
+    const pending = latest?.workspace?.job_id === jobId ? latest.workspace.pending_start : undefined
+    if (ws.by_default && code !== 'lost' && pending?.via === 'task-start' && latest?.phase !== 'COMPLETE'
+      && !(await deps.hasLiveSession(task.id)) && await deps.forget(task.id, jobId)) {
+      log.web.info('default workspace failed: starting in the folder', { taskId: task.id, anchor: ws.anchor, host: ws.host })
+      try {
+        await deps.launchInFolder(task, ws, pending, error)
+      } catch (err) {
+        // That start failed too: the task shows the failure, holding its start for Retry.
+        const why = `${error}; starting in ${ws.anchor} instead failed too: ${errText(err)}`
+        log.web.warn('default workspace fallback start failed', { taskId: task.id, error: errText(err) })
+        const now = new Date(deps.now()).toISOString()
+        await deps.write(task.id, (cur) => (cur ? null : {
+          ...ws, state: 'failed', error: why, error_code: code, job_id: undefined, progress: undefined, pending_start: pending, updated_at: now,
+        }))
+      }
+      return
+    }
     await deps.write(task.id, (cur) => (cur?.job_id === jobId && cur.state === 'creating'
       ? stamp(cur, { state: 'failed', error, error_code: code, progress: undefined })
       : null))

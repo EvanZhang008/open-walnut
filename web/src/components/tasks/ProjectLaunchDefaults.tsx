@@ -7,9 +7,11 @@
  *   Engine      [Codex                  v]   Project
  *   Model       [GPT-5.5                v]   Project
  *   Permission  [Global default (Bypass)v]   Global
+ *   Workspace   [Global: Folder itself  v]   Global
  *
  * Each row says where its value comes from: this project, or the global default
- * (Settings > Sessions), named. "Use global defaults" clears all three at once. A
+ * (Settings > Sessions), named. Workspace: whether a code task starts in an isolated
+ * workspace (default-isolation.ts). "Use global defaults" clears them all at once. A
  * pick saves at once (optimistically in the shared registry store, which the
  * draft's pills read); a refusal puts the old value back and says why.
  */
@@ -24,11 +26,12 @@ import { launchSourceWords, useGlobalDefaultEngine } from '@/utils/launch-source
 import { engineEntry } from '@/utils/engines';
 import { LaunchSourceTag } from '@/components/sessions/LaunchSourceNote';
 import { useClaudeLaunchMode } from '@/hooks/useClaudeLaunchMode';
+import { useExperimental } from '@/hooks/useExperimental';
 
-type Field = 'default_engine' | 'default_model' | 'default_mode';
+type Field = 'default_engine' | 'default_model' | 'default_mode' | 'isolated_workspace';
 
 const PATCH_KEY: Record<Field, keyof ProjectRowPatch> = {
-  default_engine: 'defaultEngine', default_model: 'defaultModel', default_mode: 'defaultMode',
+  default_engine: 'defaultEngine', default_model: 'defaultModel', default_mode: 'defaultMode', isolated_workspace: 'isolatedWorkspace',
 };
 
 export function ProjectLaunchDefaults({ project, row }: { project: string; row: ProjectRegistryRow | null }) {
@@ -39,6 +42,8 @@ export function ProjectLaunchDefaults({ project, row }: { project: string; row: 
   const engine = row?.defaultEngine;
   const model = engine ? row?.defaultModel : undefined;
   const mode = row?.defaultMode;
+  const isolation = row?.isolatedWorkspace;
+  const globalIsolation = useExperimental('isolated_workspace_by_default');
   const models = useFallbackModels(engine ?? null);
   const nameOf = useCallback((id: string) => engineName(engineEntry(catalog, id).displayName), [catalog]);
   const engineLabel = engine ? nameOf(engine) : '';
@@ -74,7 +79,7 @@ export function ProjectLaunchDefaults({ project, row }: { project: string; row: 
     }
   }, [project]);
 
-  const any = !!(engine || mode);
+  const any = !!(engine || mode || isolation);
   const engineFrom = engine ? 'project' : 'global';
   const modeFrom = mode ? 'project' : 'global';
   const modelFrom = model ? 'project' : 'global';
@@ -88,7 +93,7 @@ export function ProjectLaunchDefaults({ project, row }: { project: string; row: 
           className="project-launch-defaults-clear"
           data-testid="project-launch-defaults-clear"
           disabled={!any || busy}
-          onClick={() => { void save({ default_engine: null, default_model: null, default_mode: null }); }}
+          onClick={() => { void save({ default_engine: null, default_model: null, default_mode: null, isolated_workspace: null }); }}
           title="Clear this project's engine, model and permission mode: new tasks use the global defaults (Settings > Sessions)"
         >
           Use global defaults
@@ -148,6 +153,24 @@ export function ProjectLaunchDefaults({ project, row }: { project: string; row: 
           {SESSION_MODES.map((m) => <option key={m.id} value={m.id} title={m.description}>{m.label}</option>)}
         </select>
         <LaunchSourceTag row={{ source: modeFrom, words: launchSourceWords(modeFrom, mode ? project : undefined) }} />
+      </div>
+
+      <div className="detail-setting-row">
+        <label className="detail-setting-label" htmlFor={`pld-isolation-${project}`}>Workspace</label>
+        <select
+          id={`pld-isolation-${project}`}
+          className="detail-setting-select"
+          data-testid="project-isolated-workspace"
+          value={isolation ?? ''}
+          disabled={busy}
+          title="A new task whose folder is a repository starts in its own isolated workspace (a git worktree, or a workspace plugin's copy)"
+          onChange={(e) => { void save({ isolated_workspace: e.target.value || null }); }}
+        >
+          <option value="">Global: {globalIsolation ? 'Isolated workspace' : 'Folder itself'}</option>
+          <option value="on">Isolated workspace</option>
+          <option value="off">Folder itself</option>
+        </select>
+        <LaunchSourceTag row={{ source: isolation ? 'project' : 'global', words: launchSourceWords(isolation ? 'project' : 'global', isolation ? project : undefined) }} />
       </div>
 
       {missing ? (

@@ -27,6 +27,9 @@ export interface ProjectMetadata {
   default_engine?: SessionEngine;
   default_model?: string;
   default_mode?: SessionMode;
+  /** 'on': this project's code tasks start in an isolated workspace; 'off': never; absent follows
+   *  the global setting (server: src/core/workspaces/default-isolation.ts). */
+  isolated_workspace?: 'on' | 'off';
   /** Fast-model project summary (project-summary.ts), regenerated at task-count thresholds. */
   summary?: string;
   summary_task_count?: number;

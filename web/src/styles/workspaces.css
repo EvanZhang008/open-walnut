@@ -58,6 +58,15 @@
   line-height: 1;
   cursor: pointer;
 }
+.session-action-chip.draft-workspace-auto {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 3px;
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  white-space: nowrap;
+}
 .draft-workspace-off:hover { background: var(--accent-subtle); color: var(--fg); }
 .draft-workspace-off:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 1px; }
 /* On or off is a switch (a picker's current choice is a colour, never a checkmark). */

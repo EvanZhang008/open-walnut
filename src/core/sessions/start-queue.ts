@@ -75,6 +75,7 @@ export async function waitForHostSlot(params: SessionStartParams, detail: HostsF
       ...(params.expectReply !== undefined ? { expectReply: params.expectReply } : {}),
       ...(params.replyTimeoutSecs !== undefined ? { replyTimeoutSecs: params.replyTimeoutSecs } : {}),
       ...(params.handsOn !== undefined ? { handsOn: params.handsOn } : {}),
+      ...(params.noWorkspace ? { noWorkspace: true } : {}),
     },
   };
   await updateTaskRaw(detail.taskId, (cur) => cur.phase === 'COMPLETE' || cur.start_queue || cur.last_start?.state === 'starting'

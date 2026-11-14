@@ -37,7 +37,7 @@ export function useDraftWorkspace(draftId: string): DraftWorkspaceChoice {
 }
 
 /** What the launch sends for this draft (see workspaceRequestFor). */
-export function draftWorkspaceRequest(draftId: string): { provider: string; inputs: Record<string, unknown> } | { error: string } | null {
+export function draftWorkspaceRequest(draftId: string): ReturnType<typeof workspaceRequestFor> {
   return workspaceRequestFor(getDraftWorkspace(draftId));
 }
 

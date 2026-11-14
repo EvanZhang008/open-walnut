@@ -491,8 +491,8 @@ export async function composeSessionContext(
           }
         }
       }
-      // Its isolated workspace's setup script (workspaces/scripts.ts): what is already installed, or why not.
-      if (task.workspace?.setup) {
+      // Its isolated workspace (workspaces/scripts.ts): where it is, and what its setup script already installed, or why not.
+      if (task.workspace) {
         const { setupPromptLine } = await import('../workspaces/scripts.js')
         taskLine += setupPromptLine(task.workspace)
       }

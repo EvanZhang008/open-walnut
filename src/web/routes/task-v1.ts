@@ -330,8 +330,8 @@ taskV1Router.post('/tasks/:id/complete', async (req: Request, res: Response, nex
 })
 
 // POST /api/v1/tasks/:id/start { message?, cwd?, host?, model?, mode?, effort?,
-// engine?, expect_reply?, reply_timeout?, user_request?, create_cwd?, workspace? }
-// → 202 { taskId, title, sessionId?, requestId?, started, preparing?, continued?,
+// engine?, expect_reply?, reply_timeout?, user_request?, create_cwd?, workspace? (or false), no_workspace? }
+// → 202 { taskId, title, sessionId?, requestId?, started, preparing?, isolation?, continued?,
 // applied? } (`applied` names the newer launch fields it honoured). — start a NEW session for an EXISTING task
 // (the session_start op). Distinct from POST /api/v1/sessions, whose body
 // requires an absolute `cwd`: this one names only a task and lets the
@@ -540,12 +540,15 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
       sendError(res, 400, 'bad_request', 'start_attempt_id must be a UUID')
       return
     }
-    const ws = b.workspace
+    // `workspace: false` (or `no_workspace: true`, what the op sends, which an older server ignores)
+    // opts out of a code task's default workspace (core/workspaces/default-isolation.ts).
+    const ws = b.workspace === false ? undefined : b.workspace
     if (ws !== undefined && (!ws || typeof ws !== 'object' || Array.isArray(ws) || typeof (ws as { provider?: unknown }).provider !== 'string')) {
-      sendError(res, 400, 'bad_request', 'workspace must be { provider, inputs? }')
+      sendError(res, 400, 'bad_request', 'workspace must be { provider, inputs? } or false')
       return
     }
     const workspace = ws as { provider: string; inputs?: unknown } | undefined
+    const noWorkspace = b.workspace === false || b.no_workspace === true
     const rawSid = req.headers['x-walnut-caller-sid']
     const callerSid = (Array.isArray(rawSid) ? rawSid[0] : rawSid ?? '').trim() || undefined
     const { startSessionForTask, SessionExistsError } = await import('../../core/sessions/task-start.js')
@@ -567,6 +570,7 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
         userRequest: str('user_request'),
         ...(b.create_cwd === true ? { createCwd: true } : {}),
         ...(workspace ? { workspace } : {}),
+        ...(noWorkspace ? { noWorkspace: true } : {}),
         engine: b.engine,
         // Tri-state, NOT `=== true`: omitting the flag must reach the core as
         // `undefined` so it can apply the session-caller default (on).

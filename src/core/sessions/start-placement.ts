@@ -67,7 +67,7 @@ async function within<T>(work: Promise<T>, deadline: number, what: string): Prom
 }
 
 /** Starts that continue, replace or recover a session keep their place. */
-const KEEP_SOURCES = new Set(['engine-switch', 'transfer', 'auto-recover', 'recovery', 'restart', 'folder-gone', 'workspace']);
+export const KEEP_SOURCES: ReadonlySet<string> = new Set(['engine-switch', 'transfer', 'auto-recover', 'recovery', 'restart', 'folder-gone', 'workspace']);
 
 export interface PlaceableLaunch { host?: string; cwd: string; message: string }
 

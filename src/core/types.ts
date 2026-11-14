@@ -762,6 +762,8 @@ export interface StartQueueEntry {
     userRequest?: string;
     createCwd?: boolean;
     workspace?: { provider: string; inputs?: unknown };
+    /** The start opted out of a code task's default workspace (an older Walnut ignores it). */
+    noWorkspace?: boolean;
     expectReply?: boolean;
     replyTimeoutSecs?: number;
     handsOn?: string;

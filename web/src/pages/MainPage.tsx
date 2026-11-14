@@ -3024,7 +3024,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       /** "Start anyway": skip the outdated / not-signed-in gate. */
       overrideReadiness?: boolean;
       /** Isolated workspace: the task is filed now, its session starts once the host made it. */
-      workspace?: { provider: string; inputs: Record<string, unknown> };
+      workspace?: { provider: string; inputs: Record<string, unknown> } | { auto: true };
       /** The user picked Claude Code over a default that is not (utils/launch-source.ts
        *  draftLaunchPayload): the launch names it, or the server would start that default. */
       namesClaude?: boolean;

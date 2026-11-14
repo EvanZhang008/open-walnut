@@ -22,6 +22,7 @@ import { __settleCompletionCheck, onTaskCompleted, onTaskDeleted, onTaskSessionS
 import { deferTaskStart, workspaceLaunchPlan, workspaceStartPlace } from '../../src/core/workspaces/launch.js'
 import { recordedCwd } from '../../src/core/sessions/task-start.js'
 import { workspaceEventAction } from '../../src/core/workspaces/watch.js'
+import { __setDefaultWorkspaceDepsForTesting } from '../../src/core/workspaces/default-isolation.js'
 
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-ws-server-')))
 
@@ -159,6 +160,8 @@ interface Fake {
   calls: Array<{ cmd: string; params: Record<string, unknown> }>
   jobs: Map<string, Record<string, unknown> | null>
   launched: Array<{ taskId: string; cwd?: string; via: string }>
+  /** Starts a failed default workspace handed to its anchor folder. */
+  inFolder: Array<{ taskId: string; cwd: string; error: string }>
   notes: Array<{ title: string; body: string }>
   probe: WorkspaceProbeSummary
   busy: boolean
@@ -170,7 +173,7 @@ interface Fake {
 }
 
 function fake(): Fake {
-  const f: Fake = { tasks: new Map(), calls: [], jobs: new Map(), launched: [], notes: [], probe: probe({}), busy: false, live: false }
+  const f: Fake = { tasks: new Map(), calls: [], jobs: new Map(), launched: [], inFolder: [], notes: [], probe: probe({}), busy: false, live: false }
   current = f
   let n = 0
   __setWorkspacePluginSourceForTesting(async () => [])
@@ -214,6 +217,13 @@ function fake(): Fake {
       if (f.launchError) throw new Error(f.launchError)
       f.launched.push({ taskId: task.id, cwd: ws.cwd, via: pending.via })
     },
+    forget: async (id, jobId) => {
+      const t = f.tasks.get(id)
+      if (!t || t.workspace?.job_id !== jobId || t.workspace.state !== 'creating') return false
+      f.tasks.set(id, { ...t, workspace: undefined })
+      return true
+    },
+    launchInFolder: async (task, ws, _pending, error) => { f.inFolder.push({ taskId: task.id, cwd: ws.anchor, error }) },
     sessionBusy: async () => f.busy,
     hasLiveSession: async () => f.live,
     notify: async (n2) => { f.notes.push({ title: n2.title, body: n2.body }) },
@@ -277,6 +287,29 @@ describe('manager', () => {
     expect(ws).toMatchObject({ state: 'creating', name })
     expect(ws.error).toBeUndefined()
     expect(ws.job_id).not.toBe(f.calls[0].params.jobId)
+  })
+
+  it('a default workspace that cannot be made starts the waiting task-start in its folder; one the person asked for waits for Retry', async () => {
+    addTask(f, { id: 'd1' })
+    const pending = { via: 'task-start' as const, message: 'go', at: 'now' }
+    await requestWorkspace('d1', { provider: 'git-worktree', anchor: '/r/repo', pending, byDefault: true })
+    expect(f.tasks.get('d1')!.workspace).toMatchObject({ state: 'creating', by_default: true })
+    await finishJob(f, 'd1', { state: 'failed', error: 'git worktree add failed: disk full', code: 'git_failed' })
+    expect(f.tasks.get('d1')!.workspace).toBeUndefined()
+    expect(f.inFolder).toEqual([{ taskId: 'd1', cwd: '/r/repo', error: 'git worktree add failed: disk full' }])
+
+    // Contact lost: the host may still finish it, so the row stays (failed, Retry) and nothing starts.
+    addTask(f, { id: 'd3' })
+    await requestWorkspace('d3', { provider: 'git-worktree', anchor: '/r/repo', pending, byDefault: true })
+    await finishJob(f, 'd3', null)
+    expect(f.tasks.get('d3')!.workspace).toMatchObject({ state: 'failed', error_code: 'lost' })
+    expect(f.inFolder).toHaveLength(1)
+
+    addTask(f, { id: 'd2' })
+    await requestWorkspace('d2', { provider: 'git-worktree', anchor: '/r/repo', pending })
+    await finishJob(f, 'd2', { state: 'failed', error: 'git worktree add failed: disk full', code: 'git_failed' })
+    expect(f.tasks.get('d2')!.workspace).toMatchObject({ state: 'failed', pending_start: { message: 'go' } })
+    expect(f.inFolder).toHaveLength(1)
   })
 
   it('a job the host forgot fails with a Retry message, never hangs', async () => {
@@ -515,6 +548,20 @@ describe('start paths', () => {
       .toMatchObject({ refuse: { status: 400 } })
     const plan = await workspaceLaunchPlan({ workspace: { provider: 'git-worktree', inputs: { baseRef: 'dev' } } }, { cwd: '/r/repo', isWalnutAgent: false })
     expect(plan?.defer).toBe(true)
+  })
+
+  it('a draft\'s default sent before the host answered ({ auto: true }) makes the claiming provider\'s workspace, or runs in the folder', async () => {
+    fake()
+    const claimed = { provider: 'git-worktree', displayName: 'Git worktree', priority: 10, builtin: true, claimed: true }
+    try {
+      __setDefaultWorkspaceDepsForTesting({ candidates: async () => ({ candidates: [claimed] }) })
+      expect((await workspaceLaunchPlan({ workspace: { auto: true } }, { cwd: '/r/repo', isWalnutAgent: false }))?.defer).toBe(true)
+      expect(await workspaceLaunchPlan({ workspace: { auto: true } }, { cwd: '/r/repo', isWalnutAgent: true })).toBeNull()
+      __setDefaultWorkspaceDepsForTesting({ candidates: async () => ({ candidates: [{ ...claimed, claimed: false }] }) })
+      expect(await workspaceLaunchPlan({ workspace: { auto: true } }, { cwd: '/r/plain', isWalnutAgent: false })).toBeNull()
+    } finally {
+      __setDefaultWorkspaceDepsForTesting(null)
+    }
   })
 
   it('a bound draft\'s Start on an existing task makes the workspace on THAT task and starts once it is ready', async () => {

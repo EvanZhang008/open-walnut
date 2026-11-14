@@ -1395,6 +1395,22 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
 
   // ── detect ──
 
+  /** A detect step's suggested inputs: at most 16 fields of strings, booleans or string lists, small. */
+  function detectInputs(raw: unknown): Record<string, unknown> | null {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+    var out: Record<string, unknown> = {}
+    var keys = Object.keys(raw as Record<string, unknown>).slice(0, 16)
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i]
+      var v = (raw as Record<string, unknown>)[k]
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(k)) continue
+      if (typeof v === 'string' && v.length <= 1000) out[k] = v
+      else if (typeof v === 'boolean') out[k] = v
+      else if (Array.isArray(v) && v.length <= 64 && v.every((x) => typeof x === 'string' && x.length <= 200)) out[k] = v.slice()
+    }
+    return Object.keys(out).length ? out : null
+  }
+
   async function detect(args: Record<string, unknown>, h: string): Promise<WorkspaceReply> {
     if (!isAbsPathString(args.anchor)) return fail('workspace.detect: anchor must be an absolute path', 'bad_args')
     var anchor = P.resolve(expandHome(String(args.anchor)))
@@ -1414,10 +1430,12 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
       }
       try {
         var res = await runProvider(spec, 'detect', { anchor: anchor, ...(markerRoot ? { markerRoot: markerRoot } : {}) }, undefined, Math.min(budget, opTimeoutMs(spec, 'detect')))
+        var inputs = detectInputs(res.inputs)
         return Object.assign(base, {
           claimed: res.claimed === true,
           ...(typeof res.root === 'string' ? { root: res.root } : markerRoot ? { root: markerRoot } : {}),
           ...(typeof res.reason === 'string' ? { reason: res.reason.slice(0, 300) } : {}),
+          ...(inputs ? { inputs: inputs } : {}),
         })
       } catch (err) {
         var code = (err as { code?: string }).code

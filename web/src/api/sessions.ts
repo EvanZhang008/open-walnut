@@ -1296,8 +1296,9 @@ export async function quickStartSession(opts: {
   overrideReadiness?: boolean;
   /** Isolated workspace (core/workspaces): the server files the task, makes the
    *  workspace on the host, then starts the session in it. The answer says
-   *  `preparing` and carries no sessionId. */
-  workspace?: { provider: string; inputs?: Record<string, unknown> };
+   *  `preparing` and carries no sessionId. `{ auto: true }`: the default, the server picks
+   *  the provider that claims the folder, or none (core/workspaces/launch.ts). */
+  workspace?: { provider: string; inputs?: Record<string, unknown> } | { auto: true };
   /** Message hints the first message asks for (`on_request`: the ask drawer's object-context). */
   hints?: Record<string, { arg?: string }>;
   /** A new task with no folder (`cwd` ''): it starts in its own task directory on this machine
