@@ -12,6 +12,7 @@ import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, u
 import { BubbleMenu } from '@tiptap/react/menus';
 import { posToDOMRect, type Editor } from '@tiptap/core';
 import { turnInto } from './block-transforms';
+import { editorRefOf } from './editor-dom';
 import { editLinkViaPrompt } from './link-prompt';
 import { usePrompt } from '@/hooks/useConfirm';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
@@ -76,7 +77,9 @@ export function NotesBubbleMenu({ editor, onAsk, onAskHere, onComment }: NotesBu
   }, [editor]);
   useEffect(() => () => portalRef.current?.remove(), []);
   const menuRef = useRef<HTMLDivElement | null>(null);
-  const editorRef = useMemo(() => ({ current: editor.view.dom }), [editor]);
+  // Read when the menu places itself, never while rendering: tiptap throws on `editor.view` until
+  // EditorContent has mounted it, and a note opened at once (New note) renders this in that window.
+  const editorRef = useMemo(() => editorRefOf(editor), [editor]);
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<MenuPlacementOptions['anchorPoint']>(null);
   const passageVisibleRef = useRef(true);
