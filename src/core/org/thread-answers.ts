@@ -15,6 +15,7 @@
  *
  * The primary also sweeps the closed threads past their week (threads-model sweepClosed).
  */
+import { hasWordsBeyondControl } from '../../lib/walnut-control-text.js';
 import { log } from '../../logging/index.js';
 import { readAboutTag, stripAboutTag } from './message-about.js';
 import { userWordsOf } from './thread-capture.js';
@@ -39,7 +40,6 @@ const ROW_AFTER_MS = 12 * 3600_000;
 /** Messages older than this are not looked for again. */
 const LOOK_BACK_MS = 14 * 24 * 3600_000;
 const COMPARE_CHARS = 160;
-const TURN_MARKER_RE = /<walnut-turn\b[^>]*\/>/g;
 /** A Walnut notice batched in front of his words in one chat row (its body escapes every tag). */
 const LEADING_ENVELOPE_RE = /^<walnut-message\b[^>]*>[\s\S]*?<\/walnut-message>\s*/;
 
@@ -49,7 +49,7 @@ function norm(s: string): string {
 
 /** The reply as words: without the turn marker and the tasks line, is anything said? */
 function said(text: string): boolean {
-  return stripAboutTag(text).replace(TURN_MARKER_RE, '').trim() !== '';
+  return hasWordsBeyondControl(stripAboutTag(text));
 }
 
 /** His words in a chat row: Walnut's notices batched in front of them taken off. */

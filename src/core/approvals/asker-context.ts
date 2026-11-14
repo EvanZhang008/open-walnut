@@ -8,6 +8,7 @@
  * stays absent, and the screen says so ("Session: unknown"), never a blank (2026-11-07, the user:
  * "if some is missing at least we know some info, it will still work, but will show xx is unknown").
  */
+import { withoutWalnutControl } from '../../lib/walnut-control-text.js'
 
 export interface AskerStep {
   /** ran: a shell command; edited: a file it wrote; said: its own words; tool: any other tool. */
@@ -73,14 +74,19 @@ function stepOf(r: Row): AskerStep | null {
     const short = name.replace(/^mcp__[^_]+__/, '')
     return { kind: 'tool', text: cutTo(detail ? `${short} ${detail}` : short, STEP_MAX) }
   }
-  if (r.role === 'assistant' && !r.kind && r.text.trim()) return { kind: 'said', text: cutTo(r.text, STEP_MAX) }
+  if (r.role === 'assistant' && !r.kind && saidWords(r)) return { kind: 'said', text: cutTo(saidWords(r), STEP_MAX) }
   return null
+}
+
+/** What an assistant row says to a person: its words without Walnut's control lines ('' for none). Pure. */
+function saidWords(r: Row): string {
+  return oneLine(withoutWalnutControl(r.text ?? ''))
 }
 
 /** Why and the last steps, from the transcript rows up to the request. Pure. */
 export function contextFromRows(rows: readonly Row[] | undefined, why?: string): Pick<AskerContext, 'why' | 'whyFrom' | 'steps'> {
   const out: Pick<AskerContext, 'why' | 'whyFrom' | 'steps'> = {}
-  const given = why ? oneLine(why) : ''
+  const given = why ? oneLine(withoutWalnutControl(why)) : ''
   if (given) { out.why = cutTo(given, WHY_MAX); out.whyFrom = 'asker' }
   if (!rows?.length) return out
   // The rows before the request: from the end, past the call that asked (it may still be running).
@@ -98,8 +104,9 @@ export function contextFromRows(rows: readonly Row[] | undefined, why?: string):
   }
   if (steps.length) out.steps = steps
   if (!given) {
-    const said = [...before].reverse().find((r) => r.role === 'assistant' && !r.kind && r.text.trim())
-    if (said) { out.why = lastWordsOf(said.text); out.whyFrom = 'session' }
+    // A turn that said only a control line (an agent-ack) gave no reason: the one before it did, or none.
+    const said = [...before].reverse().find((r) => r.role === 'assistant' && !r.kind && saidWords(r))
+    if (said) { out.why = lastWordsOf(saidWords(said)); out.whyFrom = 'session' }
   }
   return out
 }

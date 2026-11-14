@@ -11,6 +11,7 @@
  * Personal AI chat lane, an answer that never reads). Runs in the same tick, a few tasks a pass,
  * never waking a session.
  */
+import { withoutWalnutControl } from '../../lib/walnut-control-text.js';
 import { log } from '../../logging/index.js';
 import type { SessionRecord, Task } from '../types.js';
 import type { NoticeLastMessage } from '../session-requests.js';
@@ -37,8 +38,7 @@ const lastRead = new Map<string, number>();
 /** The last message as one plain line, its end kept (a turn ends with its question). Pure. */
 export function lastWordsText(words: NoticeLastMessage | undefined): string {
   if (!words) return '';
-  const plain = words.text
-    .replace(/<walnut-turn[^>]*\/>/g, ' ')
+  const plain = withoutWalnutControl(words.text)
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/[*_`#>|]+/g, ' ')

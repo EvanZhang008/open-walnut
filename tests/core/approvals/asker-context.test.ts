@@ -69,4 +69,21 @@ describe('the context an approval shows', () => {
     expect(contextSummary({ why: 'w', whyFrom: 'asker', goal: 'g', project: 'Walnut', steps: [{ kind: 'ran', text: 'ls' }] }))
       .toBe('Why (given): w\nGoal: g\nProject: Walnut\nRan: ls')
   })
+
+  // 2026-11-14: a Git push's approval read "why: <walnut-turn status="agent-ack"/>" on the phone.
+  it('a Walnut control line is never the reason: an agent-ack turn gives none, the turn before it does', () => {
+    const ack = said('<walnut-turn status="agent-ack"/>')
+    const rows = [said('Publishing the two tracking commits so the table is current.'), tool('Bash', 'git status'), ack]
+    const ctx = contextFromRows(rows)
+    expect(ctx).toMatchObject({ why: 'Publishing the two tracking commits so the table is current.', whyFrom: 'session' })
+    expect(JSON.stringify(ctx)).not.toContain('walnut-turn')
+    expect(contextSummary({ ...ctx })).not.toMatch(/walnut-/)
+    // Only control lines: no reason at all, and no step that says one.
+    const only = contextFromRows([ack, said('<walnut-message kind="peer-note" from="x">note</walnut-message>')])
+    expect(only.why).toBeUndefined()
+    expect(only.steps ?? []).toEqual([])
+    // Words beside a control line keep only the words; an asker's own why is cleaned the same way.
+    expect(contextFromRows([said('Pushing now. <walnut-turn status="done"/>')]).why).toBe('Pushing now.')
+    expect(contextFromRows([], '<walnut-turn status="agent-ack"/> Release check').why).toBe('Release check')
+  })
 })
