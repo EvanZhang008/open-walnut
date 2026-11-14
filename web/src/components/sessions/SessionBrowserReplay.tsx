@@ -14,7 +14,8 @@
  * the card's life. The list is read again every few seconds while the replay is open, so a running
  * task's new steps join it; a replay left at its last step follows them.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { apiGet } from '@/api/client';
 import { log } from '@/utils/log';
 import { NO_REPLAY, NO_STEP_PICTURE, REPLAY_REREAD_MS, REPLAY_SPEEDS, agoLine, pictureIndex, replayTimeLine, type ReplayStep } from './browser-view-model';
@@ -48,7 +49,7 @@ export function SessionBrowserReplay({ taskId, large, onLarge, onBack, onClose }
   const missing = useRef(new Set<string>());
   const listRef = useRef<HTMLOListElement>(null);
 
-  const read = useCallback(async () => {
+  const read = useLeanCallback(async () => {
     try {
       const r = await apiGet<{ steps: ReplayStep[]; days: number }>('/api/v1/browser/view/replay', { task: taskId }, { priority: 'low', timeoutMs: 15_000 });
       setSteps((prev) => {
@@ -86,7 +87,7 @@ export function SessionBrowserReplay({ taskId, large, onLarge, onBack, onClose }
   }, [steps]);
   useEffect(() => { before.current = { len: steps?.length ?? 0, id: steps && i >= 0 ? steps[i]?.id : undefined }; }, [steps, i]);
 
-  const fetchPicture = useCallback(async (id: string) => {
+  const fetchPicture = useLeanCallback(async (id: string) => {
     if (cache.current.has(id) || asking.current.has(id) || missing.current.has(id)) return;
     asking.current.add(id);
     try {
@@ -157,7 +158,7 @@ export function SessionBrowserReplay({ taskId, large, onLarge, onBack, onClose }
     <section className={`session-browser-card session-browser-replay${large ? ' session-browser-card--large' : ''}`} data-testid="session-browser-replay" aria-label="Browser replay">
       <header className="session-browser-head">
         <span className="session-browser-dot session-browser-dot--off" aria-hidden />
-        <div className="session-browser-title" data-testid="session-browser-replay-title" title={title}>{title}</div>
+        <div className="session-browser-title" data-testid="session-browser-replay-title">{title}</div>
         <button type="button" className="session-browser-btn session-browser-btn--icon" aria-label="Close the Browser view" title="Close"
           onClick={onClose} data-testid="session-browser-replay-hide">{CLOSE_GLYPH}</button>
       </header>
