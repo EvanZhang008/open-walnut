@@ -140,6 +140,8 @@ export async function initApprovals(): Promise<void> {
 export interface CreateInput {
   what: string
   detail?: string
+  /** Whether `detail` is the request in words (shown whole) or technical (in Details): every creator says (approval-detail-role-ratchet). */
+  detailRole?: 'summary' | 'technical'
   mode: ApprovalMode
   timeoutMs?: number
   requester: ApprovalRequester
@@ -257,6 +259,8 @@ export async function createApproval(input: CreateInput): Promise<{ approval: Ap
     .map(([k, v]) => [k, typeof v === 'string' ? wellFormed(v) : v])) as unknown as ApprovalRequester
   const rec: ApprovalRecord = {
     id, what, ...(detail ? { detail } : {}),
+    // A signed envelope's detail is the operation's context: technical, whatever the creator said.
+    ...(detail && input.detailRole === 'summary' && !input.singleUse ? { detailRole: 'summary' as const } : {}),
     digest: approvalDigest({ id, mode: input.mode, createdAt, expiresAt, host: requester.host, taskId: requester.taskId, what, detail }),
     mode: input.mode,
     ...(input.downgraded ? { downgraded: input.downgraded } : {}),

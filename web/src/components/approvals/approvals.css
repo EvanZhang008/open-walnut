@@ -520,6 +520,9 @@ button.approval-line-more { border: 0; cursor: pointer; font: inherit; font-size
 .approval-summary-text { margin: 0; color: var(--fg); font-size: 15px; font-weight: 500; line-height: 1.45; overflow-wrap: anywhere; white-space: pre-wrap; }
 .approval-summary-why { margin: 0; color: var(--fg-secondary); font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }
 .approval-summary-by { color: var(--fg-muted); font-size: 11px; }
+/* The request in words (a Walnut ask's detail): read whole, as text, never folded. */
+.approval-summary-words { margin: 0; color: var(--fg-secondary); font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.approval-detail-words pre { max-height: none; overflow: visible; white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; }
 .approval-context { margin-top: 4px; display: grid; gap: 8px; }
 .approval-part-label { margin-bottom: 3px; color: var(--fg-muted); font-size: 11px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; }
 .approval-part-value { overflow-wrap: anywhere; }

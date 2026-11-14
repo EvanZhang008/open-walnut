@@ -323,9 +323,10 @@ test('a long message reads whole in the side panel\'s Ask card before Approve: t
     await expect(card).toBeVisible({ timeout: 60_000 })
     // The title is cut before the message's end: its last words are not in it.
     await expect(card.locator('.ext-ask-approval-what')).not.toContainText(tail)
-    const detail = card.getByTestId('approval-detail')
-    await expect(detail.locator('pre')).toBeHidden()
-    await detail.locator('summary').click()
+    // The request in words is read whole on the card, with no click (2026-11-14, the user: the
+    // summary always shows; Details only for the command).
+    const detail = card.getByTestId('approval-detail-words')
+    await expect(detail.locator('summary')).toHaveCount(0)
     // Read through the real view: the whole message, its last words on screen inside the card.
     const pre = detail.locator('pre')
     await expect(pre).toBeVisible()

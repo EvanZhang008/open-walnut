@@ -120,6 +120,7 @@ export async function askFreshSignIn(input: Scope & { theirs: Array<{ id: number
       `${input.requester.taskTitle ? `The task "${input.requester.taskTitle}"` : 'A Walnut agent'} wants to sign in to ${input.site} with your saved login in its own tab ${input.tab}, although you have the site open yourself (${tabs}).`,
       'Approve only if you asked it for a new sign-in there. Deny, and it asks you for your tab instead.',
     ].join('\n'),
+    detailRole: 'summary',
     // Approvals off (approvals/ask-me.ts): recorded as yes, nobody asked; the caller takes it at once.
     ...(input.unasked ? { mode: 'tap' as const, unasked: 'browserSignIn' } : { mode: (await signers()).length ? 'biometric' as const : 'tap' as const, guard: 'person' as const }),
     timeoutMs: ASK_MS, requester: input.requester, ...(input.testRun ? { testRun: input.testRun } : {}),

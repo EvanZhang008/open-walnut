@@ -266,7 +266,7 @@ async function runAction(action: string, body: Body): Promise<Record<string, unk
         operation: 'push', remote: 'origin', remoteRef: `refs/heads/${branch}`, repository, version: 'walnut-git-operation-v1',
       })
       const made = await createApproval({
-        what: `Push commit da21d9c to origin ${branch} in ${repository.split('/').pop()}`, detail: context,
+        what: `Push commit da21d9c to origin ${branch} in ${repository.split('/').pop()}`, detail: context, detailRole: 'technical',
         mode: 'biometric', singleUse: true, signingKeyId: 'ak-fixture-signer', outsideSwitch: true,
         requester: {
           host: str(body.host) ?? 'this computer', local: !str(body.host), taskId: str(body.taskId) ?? 't-fixture',

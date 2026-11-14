@@ -34,7 +34,7 @@ import {
 } from './approvals-store';
 import { ApprovalUnlock } from './ApprovalUnlock';
 import { askNoticePermission, nativeNoticeStatus, noticeAccess, openNoticeSettings, OPEN_APPROVAL_EVENT, takeClickedApproval, type NoticeAccess } from './approval-notify';
-import { ApprovalContextRows, AskerLink, detailText, hostWords } from './approval-context';
+import { ApprovalContextRows, AskerLink, hostWords, technicalDetail, wordsOf } from './approval-context';
 import { useYieldsToTaskOpen } from '@/hooks/useOpenTask';
 import './approvals.css';
 
@@ -123,7 +123,16 @@ export function ApprovalButtons({ a, s }: { a: Approval; s: ApprovalsState }) {
  * before approving. Home's card and dialog, and the browser panel's Ask card (ExtApprovals.tsx).
  */
 export function ApprovalDetail({ a, open = false }: { a: Approval; open?: boolean }) {
-  const detail = detailText(a);
+  // The request in words is read whole, never behind a click; only a technical detail folds.
+  const words = wordsOf(a);
+  if (words) {
+    return (
+      <div className="approval-detail approval-detail-words" data-testid="approval-detail-words">
+        <pre>{words}</pre>
+      </div>
+    );
+  }
+  const detail = technicalDetail(a);
   if (!detail.text) return null;
   return (
     <details className="approval-detail" open={open} data-testid="approval-detail">

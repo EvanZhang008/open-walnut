@@ -197,6 +197,7 @@ export async function requestAskMeOff(requester: ApprovalRequester): Promise<App
   const { approval } = await createApproval({
     what: ASK_ME_OFF_WHAT,
     detail: `${since ? `Approvals have been on since ${since}. ` : ''}Approve only if you just turned approvals off yourself, in Settings or from a request. Every step that then goes ahead is listed in Settings, General.`,
+    detailRole: 'summary',
     mode: 'biometric', outsideSwitch: true, turnsAskMeOff: true, timeoutMs: 10 * 60_000, requester,
   })
   return approval
@@ -236,7 +237,7 @@ export async function asksPerson(): Promise<boolean> {
 export async function goAheadUnasked(gate: AskMeGate, input: { what: string; detail?: string; requester: ApprovalRequester; testRun?: string }): Promise<ApprovalView> {
   const { createApproval } = await import('./store.js')
   const { approval } = await createApproval({
-    what: input.what.length > 300 ? `${input.what.slice(0, 299)}…` : input.what, ...(input.detail ? { detail: input.detail } : {}), mode: 'tap', requester: input.requester,
+    what: input.what.length > 300 ? `${input.what.slice(0, 299)}…` : input.what, ...(input.detail ? { detail: input.detail, detailRole: 'summary' as const } : {}), mode: 'tap', requester: input.requester,
     unasked: gate, ...(input.testRun ? { testRun: input.testRun } : {}),
   })
   return approval

@@ -12,6 +12,8 @@ export interface Approval {
   id: string;
   what: string;
   detail?: string;
+  /** `summary`: the detail is the request said in words (Walnut's own asks): shown whole, never in a fold. */
+  detailRole?: 'summary';
   digest: string;
   mode: ApprovalMode;
   downgraded?: string;

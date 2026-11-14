@@ -378,6 +378,7 @@ async function siteGate(req: Request, owner: string, url: string, holdMs: number
       what: `Let Walnut agents use ${site} in your browser?`,
       detail: `${requester.taskTitle ? `"${requester.taskTitle}" wants to open ${url}` : `An agent wants to open ${url}`} in the Walnut agent window of your browser. `
         + `Approve once and agents may use ${site} until you remove it in Settings, Browser extension.`,
+      detailRole: 'summary',
       mode: 'tap', outsideSwitch: true, timeoutMs: 10 * 60_000, requester, testRun: ambientTestRun(),
     })
     id = made.approval.id

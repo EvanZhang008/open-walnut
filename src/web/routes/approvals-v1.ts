@@ -298,6 +298,8 @@ approvalsV1Router.post('/approvals', (req: Request, res: Response, next: NextFun
       outsideSwitch: true,
       what: String(body.what ?? ''),
       detail: typeof body.detail === 'string' ? body.detail : undefined,
+      // What a script attaches (`--detail`): a diff, a command's context. Its words are `what` and `--why`.
+      detailRole: 'technical',
       mode, timeoutMs, downgraded,
       requester,
       ...(singleUse ? { singleUse: true, ...(Array.isArray(body.signing_key_ids) ? { signingKeyIds: keyIds } : { signingKeyId: keyIds[0] }) } : {}),

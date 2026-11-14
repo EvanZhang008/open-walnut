@@ -103,7 +103,7 @@ export async function askOutward(input: { owner: string; tab: number; action: st
   const words = askWords(input.hold, input.requester.taskTitle)
   const made = await store.createApproval({
     what: words.what,
-    detail: words.detail,
+    detail: words.detail, detailRole: 'summary',
     // A plain tap from this machine is not proof (any process here can send one, the asking agent
     // too): Face ID or Touch ID where a device signs, else this window's Passwords unlock (`person`).
     mode: (await signers()).length ? 'biometric' : 'tap', guard: 'person',

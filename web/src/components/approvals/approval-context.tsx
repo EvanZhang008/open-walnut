@@ -105,10 +105,26 @@ function whereLine(a: Approval, git: GitOperation | null, hostName: string): { l
  * else the summary Walnut wrote from the asking session (summary.ts on the server), with the
  * request's line under the two lines when it says more; until that arrives, the request's line.
  */
-export function summaryOf(a: Approval): { text: string; by: 'walnut' | 'asker'; why?: string } {
+export function summaryOf(a: Approval): { text: string; by: 'walnut' | 'asker'; why?: string; words?: string } {
   const c = a.context ?? {};
-  if (c.summary && c.whyFrom !== 'asker') return { text: c.summary, by: 'walnut' };
-  return { text: a.what, by: 'asker', ...(c.why && c.whyFrom === 'asker' ? { why: c.why } : {}) };
+  // Walnut's own asks say the request in words in their detail (store.ts detailRole): part of the summary.
+  const words = wordsOf(a);
+  if (c.summary && c.whyFrom !== 'asker') return { text: c.summary, by: 'walnut', ...(words ? { words } : {}) };
+  return { text: a.what, by: 'asker', ...(c.why && c.whyFrom === 'asker' ? { why: c.why } : {}), ...(words ? { words } : {}) };
+}
+
+/** The detail when it is the request in words (shown whole with the summary), else undefined. */
+export function wordsOf(a: Approval): string | undefined {
+  return a.detailRole === 'summary' && !a.singleUse && a.detail?.trim() ? a.detail : undefined;
+}
+
+/**
+ * The detail that waits in Details: only a technical one (a command's context, a diff, a signed
+ * envelope), never the request in words (2026-11-14, the user: "summayr一直都显示不需要点detail
+ * detail只是xommend detail啥的").
+ */
+export function technicalDetail(a: Approval): { text?: string; signed: boolean } {
+  return wordsOf(a) ? { signed: false } : detailText(a);
 }
 
 /**
@@ -125,7 +141,7 @@ export function ApprovalContextRows({ a, hostName }: { a: Approval; hostName: st
   const where = whereLine(a, git, hostName);
   const command = r.command || r.ranBy;
   const outside = [r.process ? `run by ${r.process}` : '', r.user ? `as ${r.user}` : ''].filter(Boolean).join(' ');
-  const detail = detailText(a);
+  const detail = technicalDetail(a);
   const summary = summaryOf(a);
   // Under Walnut's summary, the request's own line when it says more: the Git gate's push sentence
   // ("Push commit … to origin mainline in meta-fresh") says again what the Repo line says, so it is left out.
@@ -140,6 +156,7 @@ export function ApprovalContextRows({ a, hostName }: { a: Approval; hostName: st
         {/* The request's own line keeps its id (approval-asks); Walnut's summary says who wrote it. */}
         <p className={`approval-summary-text${summary.by === 'asker' ? ' approval-asks' : ''}`} data-testid={summary.by === 'asker' ? 'approval-asks' : 'approval-ai-summary'}>{summary.text}</p>
         {summary.why ? <p className="approval-summary-why" data-testid="approval-why">{summary.why}</p> : null}
+        {summary.words ? <p className="approval-summary-words" data-testid="approval-summary-words">{summary.words}</p> : null}
         {summary.by === 'walnut' ? <span className="approval-summary-by" data-testid="approval-summary-by">Walnut’s summary of the task’s session, not signed: the lines below are what you approve</span> : null}
       </div>
       <div className="approval-field" data-testid="approval-task">

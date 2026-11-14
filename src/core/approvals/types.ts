@@ -74,6 +74,13 @@ export interface ApprovalRecord {
   id: string
   what: string
   detail?: string
+  /**
+   * `summary`: the detail is the request said in words for the person (Walnut's own asks: a browser
+   * step, a sign-in, a password), so every screen shows it whole, never in a fold; else it is
+   * technical (a command's context, a diff) and waits in Details (2026-11-14, the user: "summayr
+   * 一直都显示不需要点detail detail只是xommend detail啥的").
+   */
+  detailRole?: 'summary'
   /** What the person was asked to sign: sha256 hex of canonicalText() (digest.ts). */
   digest: string
   mode: ApprovalMode

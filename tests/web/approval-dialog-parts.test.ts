@@ -17,6 +17,7 @@ vi.mock('@/utils/open-session', () => ({ openTaskOnHome: vi.fn() }));
 
 const { MemoryRouter } = await import('../../web/node_modules/react-router-dom');
 const { ApprovalContextRows, detailText, gitOperation, prettyJson, shortPath, summaryOf } = await import('../../web/src/components/approvals/approval-context');
+const { ApprovalDetail } = await import('../../web/src/components/approvals/ApprovalPrompts');
 
 function approval(over: Partial<Approval> = {}, requester: Partial<Approval['requester']> = {}): Approval {
   return {
@@ -207,4 +208,39 @@ describe('the signed detail reads one field per line', () => {
     expect(prettyJson('{"n":12345678901234567890}')).toBe('{"n":12345678901234567890}');
     expect(detailText(approval({ detail: 'notes: 4 lines' }))).toEqual({ text: 'notes: 4 lines', signed: false });
   });
+});
+
+// The summary is always read whole, never behind a click; Details holds only the technical part
+// (2026-11-14, the user: "summayr一直都显示不需要点detail detail只是xommend detail啥的"). Every kind of
+// approval, in every state its summary can be in: each case names the words the person must read
+// without a click, and none of them may sit inside the Details fold.
+describe('the summary never lands inside Details', () => {
+  const words = (a: Approval) => [a.what, a.context?.whyFrom === 'asker' ? a.context.why : '', a.context?.summary, a.detailRole === 'summary' ? a.detail : ''].filter(Boolean) as string[];
+  const browserStep = 'The task "Notes" wants to click "Send" in your browser, which would send something in your name (a reply).\nPage: https://mail.example.test/inbox\nMessage it sends: Thanks, see you Friday.\nApprove to let it take this one step; deny and it stops there.';
+  const CASES: Array<[string, Approval, string[]]> = [
+    ['a Git push before its summary is written', gitPush(), ['Push commit da21d9c to origin mainline in meta-fresh']],
+    ['a Git push with the summary Walnut wrote', gitPush({ context: { summary: 'Pushes the report commits.' } }), ['Pushes the report commits.']],
+    ['a script that said why', approval({ what: 'Publish?', singleUse: false, detail: 'diff: 3 files', context: { why: 'The launch links to it.', whyFrom: 'asker' } }), ['Publish?', 'The launch links to it.']],
+    ['an agent\'s browser step', approval({ what: 'Let "Notes" click "Send" on mail.example.test?', singleUse: false, detail: browserStep, detailRole: 'summary', context: undefined }, { command: undefined }), ['Let "Notes" click "Send" on mail.example.test?', 'Message it sends: Thanks, see you Friday.']],
+    ['a password an agent asks for', approval({ what: 'Give "Notes" the password "Mail"?', singleUse: false, detail: 'Fields: password\nWhy: send the reply\nFor: this one use', detailRole: 'summary', context: undefined }), ['Why: send the reply']],
+    ['a new signing device', approval({ what: 'Let "Phone" sign your approvals', singleUse: false, detail: 'A new device asked to sign Walnut approvals with Face ID or Touch ID.', detailRole: 'summary', context: undefined }, { taskId: undefined, taskTitle: undefined }), ['A new device asked to sign Walnut approvals']],
+  ];
+  const plain = (html: string) => html.replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&amp;/g, '&');
+  for (const [name, a, mustRead] of CASES) {
+    it(`${name}: read whole above Details, in the dialog and on the browser panel's card`, () => {
+      const html = plain(render(a));
+      const [top, fold = ''] = html.split('<details');
+      for (const w of mustRead) {
+        expect(top, w).toContain(w.split('\n')[0]!);
+        expect(fold, `${w} is inside Details`).not.toContain(w.split('\n')[0]!);
+      }
+      for (const w of words(a)) expect(fold, `${w.slice(0, 40)} is inside Details`).not.toContain(w.split('\n')[0]!);
+      // The card's detail (the browser panel, Home's card) never folds the words either.
+      const card = plain(renderToStaticMarkup(createElement(ApprovalDetail, { a })));
+      if (a.detailRole === 'summary') {
+        expect(card).not.toContain('<details');
+        expect(card).toContain(a.detail!.split('\n').at(-1)!);
+      }
+    });
+  }
 });

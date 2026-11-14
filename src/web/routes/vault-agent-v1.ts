@@ -101,7 +101,7 @@ export const createApproval: ApprovalCreator = async (input) => {
   const downgraded = input.biometric && !signs
     ? 'This item asks for Face ID or Touch ID, but no device signs approvals yet (the Walnut iPhone app sets one up), so a window with Passwords unlocked approves it.'
     : undefined
-  const { approval, waitToken } = await create({ what: input.what, detail: input.detail, mode, timeoutMs: input.timeoutMs, requester: input.requester, downgraded, testRun: input.testRun, guard: input.biometric ? 'vault-sensitive' : 'vault' })
+  const { approval, waitToken } = await create({ what: input.what, detail: input.detail, detailRole: 'summary', mode, timeoutMs: input.timeoutMs, requester: input.requester, downgraded, testRun: input.testRun, guard: input.biometric ? 'vault-sensitive' : 'vault' })
   const { cancelInternal } = await import('../../core/approvals/store.js')
   return {
     id: approval.id, waitToken, mode, expiresAt: approval.expiresAt, ...(downgraded ? { downgraded } : {}),
