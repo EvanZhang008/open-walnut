@@ -33,17 +33,23 @@ export function transfersDir(host: string): string {
 
 const KEEP_TRANSFER_FILES_MS = 7 * 24 * 3600_000;
 
+/** A transfer folder's name: a transfer's `xf-<uuid>` or a start placement's
+ *  `xf-place-<task id head>-<base36 time>` (start-placement.ts). */
+export const TRANSFER_ENTRY = /^xf-(?:[0-9a-f-]+|place-[0-9a-z-]+)$/;
+
 /** Remove this machine's transfer files older than a week (the new session has
- *  long applied them). Only `xf-…` entries, never anything else in the folder, and
- *  never a private transcript stage (an `.attempt` inside): a transfer that did not
- *  finish keeps its stage until someone decides about it. */
+ *  long applied them). Only transfer entries (TRANSFER_ENTRY), never anything else
+ *  in the folder, and never a private transcript stage (an `.attempt` inside): a
+ *  transfer that did not finish keeps its stage until someone decides about it.
+ *  Runs with every task-dir sweep (task-dir-sweep.ts), not only when a transfer
+ *  starts: 2026-11-14 the Mac held 14.8 GB of them, placement packs never swept. */
 export async function pruneLocalTransfers(now = Date.now()): Promise<number> {
   const fsp = await import('node:fs/promises');
   const dir = transfersDir(LOCAL_HOST);
   const names = await fsp.readdir(dir).catch(() => [] as string[]);
   let removed = 0;
   for (const name of names) {
-    if (!/^xf-[0-9a-f-]+$/.test(name)) continue;
+    if (!TRANSFER_ENTRY.test(name)) continue;
     const stat = await fsp.stat(path.join(dir, name)).catch(() => null);
     if (!stat || now - stat.mtimeMs < KEEP_TRANSFER_FILES_MS) continue;
     if (await fsp.lstat(path.join(dir, name, '.attempt')).then(() => true, (e: NodeJS.ErrnoException) => e.code !== 'ENOENT')) continue;
@@ -87,7 +93,8 @@ export async function moveWorkspace(opts: {
   // A link that drops while the workspace is copied is waited for (link-wait.ts).
   return withLinkWait(MOVE_LINK_WAIT_MS, async () => {
     const pack: PackReply = await client.packWorkspace(opts.sourceHost, { cwd: opts.sourceCwd, outDir: sourceDir });
-    return copyPack(pack, { sourceHost: opts.sourceHost, targetHost: opts.targetHost, bundleDir: `${transfersDir(opts.targetHost)}/${opts.transferId}/pack` });
+    // Nothing reads this source copy once the target holds it (transfer.ts reads `moved` only).
+    return copyPack(pack, { sourceHost: opts.sourceHost, targetHost: opts.targetHost, bundleDir: `${transfersDir(opts.targetHost)}/${opts.transferId}/pack`, dropSource: true });
   });
 }
 
@@ -96,7 +103,7 @@ export async function moveWorkspace(opts: {
  * over the target's own SSH when it reaches the source, else relayed through
  * this server in chunks. Each file is checked against its sha256.
  */
-export async function copyPack(pack: PackReply, opts: { sourceHost: string; targetHost: string; bundleDir: string }): Promise<MovedWorkspace> {
+export async function copyPack(pack: PackReply, opts: { sourceHost: string; targetHost: string; bundleDir: string; dropSource?: boolean }): Promise<MovedWorkspace> {
   const client = await import('./daemon-transfer-client.js');
   const bundleDir = opts.bundleDir;
   const bytes = pack.files.reduce((n, f) => n + f.size, 0);
@@ -117,6 +124,7 @@ export async function copyPack(pack: PackReply, opts: { sourceHost: string; targ
         });
         if (fetched.ok) {
           await recordReach(opts.targetHost, opts.sourceHost, true);
+          if (opts.dropSource) void dropSourcePack(pack.outDir, opts);
           return { meta: pack.meta, bundleDir, files: pack.files.map((f) => f.name), route: 'direct', bytes };
         }
         const why = fetched.results.find((r) => !r.ok)?.error ?? 'copy failed';
@@ -135,7 +143,38 @@ export async function copyPack(pack: PackReply, opts: { sourceHost: string; targ
   for (const f of pack.files) {
     await client.relayFile(opts.sourceHost, `${pack.outDir}/${f.name}`, opts.targetHost, `${bundleDir}/${f.name}`, { size: f.size, sha256: f.sha256 });
   }
+  if (opts.dropSource) void dropSourcePack(pack.outDir, opts);
   return { meta: pack.meta, bundleDir, files: pack.files.map((f) => f.name), route: 'relay', bytes };
+}
+
+/** The source host's pack folder: `<transfers dir>/<entry>/pack` or `<entry>/<n>/pack`,
+ *  or a resent pack's `…/pack-again-<n>` (transfer-errors.ts). */
+const SOURCE_PACK = /-transfers\/xf-[^/]+\/(?:\d+\/)?pack(?:-again-\d+)?$/;
+
+/**
+ * Once every file of a pack sits on another host, checked by its sha256, the
+ * source's copy is only a copy of a workspace that is still there: remove it
+ * now instead of keeping it a week (2026-11-14: 293 such packs, 9.4 GB, filled
+ * the Mac while the copies on the target were long applied). Only a caller that
+ * never reads the source pack again asks for it (copyPack's dropSource): a task
+ * move (task-work.ts) keeps its packs as the backup clearMovedCopies restores
+ * from. Same host, or the same folder: the pack is the one the target applies,
+ * so it stays. Best effort: a miss waits for pruneLocalTransfers on this machine.
+ */
+export async function dropSourcePack(outDir: string, opts: { sourceHost: string; targetHost: string; bundleDir?: string }): Promise<boolean> {
+  if (opts.sourceHost === opts.targetHost || outDir === opts.bundleDir || !SOURCE_PACK.test(outDir)) return false;
+  try {
+    const { DaemonFileReader } = await import('../daemon-file-reader.js');
+    await new DaemonFileReader(opts.sourceHost).removePath(outDir, true, 60_000);
+    return true;
+  } catch (err) {
+    // A stopping server leaves it to the sweep too, without a line that reads like a host fault.
+    if (interruptedByShutdown(err)) return false;
+    log.session.info('transfer: the source copy of a moved pack stays until the transfers prune', {
+      host: opts.sourceHost, dir: outDir, error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
 }
 
 /** The folder a repository goes to on a host that has not seen it. */

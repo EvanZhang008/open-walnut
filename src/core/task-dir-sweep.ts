@@ -255,8 +255,17 @@ let sweepInFlight: Promise<SweepRow[]> | null = null
 
 /** One round now, joined by every caller while it runs (the timers below, the health monitor's disk fix). */
 export function sweepTaskDirsNow(): Promise<SweepRow[]> {
-  sweepInFlight ??= sweepTaskDirsOnce().finally(() => { sweepInFlight = null })
+  // Transfer packs ride the same rounds: their own prune ran only when a new transfer started.
+  sweepInFlight ??= Promise.all([sweepTaskDirsOnce(), pruneTransfersQuietly()]).then(([rows]) => rows).finally(() => { sweepInFlight = null })
   return sweepInFlight
+}
+
+async function pruneTransfersQuietly(): Promise<void> {
+  try {
+    const { pruneLocalTransfers } = await import('./transfer/workspace.js')
+    const removed = await pruneLocalTransfers()
+    if (removed) log.session.info('task-dir sweep: removed old transfer packs', { removed })
+  } catch { /* next round */ }
 }
 
 export function startTaskDirSweep(): { stop: () => void } {
