@@ -119,6 +119,7 @@ describe('guard: every visible-box measure asks the one clip rule', () => {
   // taken out before the scan, so a real measure added beside it in the same file still counts.
   const NOT_A_MEASURE: Record<string, { method: string; why: string }> = {
     'utils/page-find.ts': { method: 'private needsSolid(', why: 'a clipping ancestor means the match box is drawn solid; nothing is measured' },
+    'utils/truncation-peek-row.ts': { method: "// Up to the list's scroller: a box that cut a text to its own height grows with it.", why: 'an expanded row marks the boxes between its text and its list that cut the text, so they grow with it; nothing is measured against a clip' },
   };
   const withoutOthers = (f: { p: string; s: string }) => {
     const other = NOT_A_MEASURE[f.p];
