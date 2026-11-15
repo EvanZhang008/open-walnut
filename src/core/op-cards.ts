@@ -196,6 +196,7 @@ export const NOT_CARDED: Record<string, string> = {
   browser: 'types into a web page',
   thread_split: 'moves a message between threads',
   trigger_create: 'a watch script, not a message',
+  trigger_update: 'a change to a watch script, not a message',
 }
 
 /** Message-like argument names: an op taking one is carded or listed in NOT_CARDED. */
