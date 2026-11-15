@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, it, expect } from 'vitest'
 import type { Task } from '../../src/core/types.js'
-import { HOME_OFF_VIEW, homeLockedIds, homeLocksFor, releaseHomeTakeoff } from '../../web/src/components/org/org-side-columns.js'
+import { HOME_OFF_VIEW, homeLocksFor, releaseHomeTakeoff } from '../../web/src/components/org/org-side-columns.js'
 import { viewKey } from '../../web/src/utils/view-memory.js'
 import { taskRowKey } from '../../web/src/components/org/org-task-tabs.js'
 import type { ChannelRow } from '../../web/src/components/org/org-channels-model.js'
@@ -50,10 +50,6 @@ describe('the panels Home locked, beside their node', () => {
   it('leaves out the ones taken off on the Org page, and a lock of a task it does not know', () => {
     expect(homeLocksFor('project:atlas', home, tasks, rowKeyOf, new Set(['session:s-sync']))).toEqual([{ id: 'session:s-route', locked: true }])
     expect(homeLocksFor('project:atlas', [{ id: 's-gone', locked: true }], tasks, rowKeyOf)).toEqual([])
-  })
-
-  it('names every Home lock by its Org id, so a taking-off lapses once Home unlocks it', () => {
-    expect([...homeLockedIds(home)].sort()).toEqual(['session:s-inbox', 'session:s-lead', 'session:s-notes', 'session:s-route', 'session:s-sync'])
   })
 
   it('a lock button pressed on Home ends the Org page\'s taking-off of that panel, and only that one', () => {

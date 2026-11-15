@@ -964,9 +964,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   // Graduated session area width — use total session count (not visible) so tabbed
   // sessions still get full width. Only auto-set when count increases.
-  const prevColCountRef = useRef(0);
+  // The columns a load restores are not opened by the user: the first count is taken as it is,
+  // so the width they dragged is kept across a reload (2026-11-15: it went back every load).
+  const prevColCountRef = useRef<number | null>(null);
   useEffect(() => {
     const count = sessionColumns.length + (triagePanelOpen ? 1 : 0);
+    if (prevColCountRef.current === null) { prevColCountRef.current = count; return; }
     if (count === prevColCountRef.current) return;
     const prev = prevColCountRef.current;
     prevColCountRef.current = count;

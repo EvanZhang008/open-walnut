@@ -51,7 +51,7 @@ import { OrgNodeDetail, type OrgAnswers, type OrgTab } from '@/components/org/Or
 import type { AnswerFailure } from '@/components/org/OrgInlineAnswer';
 import { OrgSidePanel, parseSideTarget, sideTargetParam, type OrgSideTarget } from '@/components/org/OrgSidePanel';
 import {
-  homeLockedIds, homeLocksFor, HOME_OFF_VIEW, orgStripToggleLock, orgStripView, type SameSession,
+  homeLocksFor, HOME_OFF_MAX, HOME_OFF_VIEW, orgStripToggleLock, orgStripView, type SameSession,
 } from '@/components/org/org-side-columns';
 import { usePageView } from '@/utils/view-memory';
 import { isStringArray } from '@/hooks/usePersistentState';
@@ -310,11 +310,9 @@ export function OrgPage() {
   // (2026-11-04, the user: "the lock should always show for that vp"; homeLocksFor). One taken off
   // here (its lock or its ×) leaves this page only, never Home's lock, until Home's lock button is pressed on it
   // again (releaseHomeTakeoff).
+  // Never pruned on what a mount reads (2026-11-15: a stale read of Home's strip dropped the user's
+  // taking-off, and the panel stood beside the node again): it lapses only on Home's lock button.
   const [homeOff, setHomeOff] = usePageView<string[]>('org', HOME_OFF_VIEW, [], isStringArray);
-  const homeLocked = useMemo(() => homeLockedIds(homeLocks), [homeLocks]);
-  useEffect(() => {
-    if (homeOff.some((id) => !homeLocked.has(id))) setHomeOff(homeOff.filter((id) => homeLocked.has(id)));
-  }, [homeOff, homeLocked, setHomeOff]);
   const rowKeyOf = useMemo(() => taskRowKey(channels.main, channels.rows), [channels.main, channels.rows]);
   // Only where they fit beside the chat: a window that lays side panels over the node never covers its
   // chat with them unasked (the VP: "don't squeeze the chat away"); its kept row still opens one.
@@ -458,7 +456,7 @@ export function OrgPage() {
   const closePanel = useCallback((id: string) => {
     restoredSide.current?.delete(id);
     const home = homeIdsOf(id);
-    if (home.length) setHomeOff([...homeOff, ...home.filter((h) => !homeOff.includes(h))]);
+    if (home.length) setHomeOff([...homeOff, ...home.filter((h) => !homeOff.includes(h))].slice(-HOME_OFF_MAX));
     setPins((cols) => cols.filter((c) => c.id !== id && !sameSession(c.id, id)));
     if (openParam && (id === openParam || sameSession(id, openParam))) closeSide();
   }, [openParam, closeSide, sameSession, homeIdsOf, homeOff, setHomeOff]);

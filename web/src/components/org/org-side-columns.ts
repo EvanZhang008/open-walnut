@@ -125,6 +125,8 @@ export function homeLocksFor(
 
 /** The Org page's view name for the Home locks taken off it (OrgPage homeOff). */
 export const HOME_OFF_VIEW = 'homeLocksOff';
+/** The takings-off kept, newest last: one Home closed since never lapses, so the list is capped. */
+export const HOME_OFF_MAX = 64;
 
 /**
  * Home's lock button was pressed on `columnId`: a taking-off on the Org page lapses, so a panel
@@ -137,10 +139,4 @@ export function releaseHomeTakeoff(columnId: string): void {
   const key = viewKey('org', HOME_OFF_VIEW);
   const off = storedView(shownText(key), null, isStringArray) ?? [];
   if (off.includes(id)) writeView(key, null, off.filter((x) => x !== id));
-}
-
-/** The Org ids of every panel locked on Home (so a taking-off kept here can lapse once Home unlocks it). */
-export function homeLockedIds(homeSlots: readonly { id: string; locked?: boolean }[]): Set<string> {
-  return new Set(homeSlots.filter((s) => s.locked && !isPlaceholderColumnId(s.id))
-    .map((s) => (s.id.startsWith('task:') || s.id.startsWith('session:') ? s.id : `session:${s.id}`)));
 }

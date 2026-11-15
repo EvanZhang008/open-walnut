@@ -66,14 +66,14 @@ const META_KEY = 'open-walnut-ui-prefs-sync-meta';
 // this module: under HMR the module runs again after the prototype is already
 // wrapped, and capturing then took the previous wrapper as "raw", so every
 // write was queued twice and the chain grew by one wrapper per hot reload.
-interface RawStorage { get: Storage['getItem']; set: Storage['setItem']; remove: Storage['removeItem'] }
+interface RawStorage { get: Storage['getItem']; set: Storage['setItem']; remove: Storage['removeItem']; clear: Storage['clear'] }
 const RAW_STORAGE = Symbol.for('open-walnut.ui-prefs-sync.raw-storage');
 const storageProto: Storage | null = typeof Storage === 'undefined' ? null : Storage.prototype;
 function rawStorage(proto: Storage): RawStorage {
   const holder = proto as unknown as Record<symbol, RawStorage | undefined>;
   const known = holder[RAW_STORAGE];
   if (known) return known;
-  const raw: RawStorage = { get: proto.getItem, set: proto.setItem, remove: proto.removeItem };
+  const raw: RawStorage = { get: proto.getItem, set: proto.setItem, remove: proto.removeItem, clear: proto.clear };
   Object.defineProperty(proto, RAW_STORAGE, { value: raw, enumerable: false, configurable: true });
   return raw;
 }
@@ -82,13 +82,76 @@ const noop = () => null;
 const rawGet: Storage['getItem'] = raw?.get ?? noop;
 const rawSet: Storage['setItem'] = raw?.set ?? noop;
 const rawRemove: Storage['removeItem'] = raw?.remove ?? noop;
+const rawClear: Storage['clear'] = raw?.clear ?? (() => undefined);
 const FLUSH_DEBOUNCE_MS = 800;
+
+// ── What this page wrote ──
+//
+// The browser's storage can take a write and later drop it. 2026-11-15, the Mac app: its WebKit
+// storage database was locked for two days ("SQLiteStorageArea::setItem failed ... database is
+// locked"), every write failed in the background, and WebKit put the page's storage back to what
+// was on disk, so a side bar closed a second before was open again when the user came back to
+// the page. So this page keeps every value it wrote (or adopted from the server) and reads its own
+// value first; another tab's write (a real `storage` event) hands the key back to storage. Values
+// are the same strings the writer passed: kept by reference, they cost no copy.
+const pageWrites = new Map<string, string | null>();
+/** Keys whose stored value went back on this page (logged once each). */
+const lostWrites = new Set<string>();
+
+function noteLost(key: string, mine: string | null, now: string | null): void {
+  if (lostWrites.has(key)) return;
+  lostWrites.add(key);
+  log.warn('ui-prefs', 'browser storage lost a write; this page keeps its own value', {
+    key, mineBytes: mine?.length ?? -1, storedBytes: now?.length ?? -1, lostKeys: lostWrites.size,
+  });
+}
+
+/** This page's value of a key: its own last write, else what storage holds. */
+function localGet(key: string): string | null {
+  if (pageWrites.has(key)) {
+    const mine = pageWrites.get(key) ?? null;
+    let now: string | null = mine;
+    try { now = rawGet.call(localStorage, key); } catch { /* storage off */ }
+    if (now !== mine) noteLost(key, mine, now);
+    return mine;
+  }
+  return rawGet.call(localStorage, key);
+}
+/** Writes that throw (quota, storage off) are not kept: the caller is told, as before. */
+function localSet(key: string, value: string): void {
+  rawSet.call(localStorage, key, value);
+  pageWrites.set(key, String(value));
+}
+function localRemove(key: string): void {
+  rawRemove.call(localStorage, key);
+  pageWrites.set(key, null);
+}
+
+/** Another tab of this browser wrote: storage holds its value now, not this page's. */
+function onOtherTabWrite(e: StorageEvent): void {
+  try { if (e.storageArea !== localStorage) return; } catch { return; }
+  if (e.key === null) pageWrites.clear();
+  else pageWrites.delete(e.key);
+}
+// From the first write on (the drafts adopt theirs before the wrap), and once per page: a hot
+// reload replaces the listener, never adds a second one. Capture: it runs before any page's own
+// storage listener reads the key.
+const OTHER_TAB_LISTENER = Symbol.for('open-walnut.ui-prefs-sync.other-tab-listener');
+try {
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    const slot = window as unknown as Record<symbol, ((e: StorageEvent) => void) | undefined>;
+    const prev = slot[OTHER_TAB_LISTENER];
+    if (prev) window.removeEventListener('storage', prev as EventListener, true);
+    slot[OTHER_TAB_LISTENER] = onOtherTabWrite;
+    window.addEventListener('storage', onOtherTabWrite as EventListener, true);
+  }
+} catch { /* no DOM */ }
 
 /** localStorage without the mirror: a write through these is seen by no listener. */
 export const rawLocalStorage = {
-  get: (key: string): string | null => { try { return rawGet.call(localStorage, key); } catch { return null; } },
-  set: (key: string, value: string): void => { rawSet.call(localStorage, key, value); },
-  remove: (key: string): void => { rawRemove.call(localStorage, key); },
+  get: (key: string): string | null => { try { return localGet(key); } catch { return null; } },
+  set: (key: string, value: string): void => { localSet(key, value); },
+  remove: (key: string): void => { localRemove(key); },
 };
 
 type StorageWriteListener = (key: string, value: string | null) => void;
@@ -116,21 +179,35 @@ export function syncable(key: string): boolean {
   return INCLUDE_PREFIXES.some((p) => key.startsWith(p));
 }
 
-function readMeta(): Record<string, number> {
+function parseMeta(text: string | null): Record<string, number> {
   try {
-    const raw = rawGet.call(localStorage, META_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
+    if (text) {
+      const parsed = JSON.parse(text);
       if (parsed && typeof parsed === 'object') return parsed as Record<string, number>;
     }
   } catch { /* corrupt — start fresh */ }
   return {};
 }
 
+/**
+ * The write stamps, this page's and storage's together (the newer stamp of each key): another tab
+ * may have stamped a key a moment before its storage event reaches this page, and storage may have
+ * dropped this page's own stamps (pageWrites above).
+ */
+function readMeta(): Record<string, number> {
+  const mine = parseMeta(localGet(META_KEY));
+  let stored: Record<string, number> = mine;
+  try { stored = parseMeta(rawGet.call(localStorage, META_KEY)); } catch { /* storage off */ }
+  if (stored === mine) return mine;
+  const out = { ...stored };
+  for (const [k, ts] of Object.entries(mine)) if (typeof ts === 'number' && !(typeof out[k] === 'number' && out[k] >= ts)) out[k] = ts;
+  return out;
+}
+
 let meta: Record<string, number> = {};
 
 function persistMeta() {
-  try { rawSet.call(localStorage, META_KEY, JSON.stringify(meta)); } catch { /* quota */ }
+  try { localSet(META_KEY, JSON.stringify(meta)); } catch { /* quota */ }
 }
 
 let pending = new Map<string, PrefEntry>();
@@ -164,8 +241,8 @@ async function mergeWithServer(prefs: Record<string, PrefEntry>): Promise<void> 
       entry.ts = Math.max(entry.ts, theirs.ts + 1);
       if (merged === mine) continue;
       entry.v = merged;
-      if (rawGet.call(localStorage, key) !== mine) continue;
-      rawSet.call(localStorage, key, merged);
+      if (localGet(key) !== mine) continue;
+      localSet(key, merged);
       window.dispatchEvent(new StorageEvent('storage', { key, newValue: merged }));
     } catch { /* offline: PUT this window's copy; the next boot merge unions them */ }
   }
@@ -204,7 +281,7 @@ function queue(key: string, value: string | null) {
   if (shownAs !== undefined) {
     // Read late, not shown yet (ui-prefs-remount.ts): untouched, this is a default re-saved.
     if (!touchedSinceLateMerge()) {
-      try { if (shownAs === null) rawRemove.call(localStorage, key); else rawSet.call(localStorage, key, shownAs); } catch { /* quota */ }
+      try { if (shownAs === null) localRemove(key); else localSet(key, shownAs); } catch { /* quota */ }
       return;
     }
     forgetStale(key);
@@ -251,16 +328,16 @@ function mergeServerPrefs(server: Record<string, PrefEntry>, held: ReadonlySet<s
   const adoptLayout = adoptsServerLayout();
   const setRaw = (key: string, value: string | null): void => {
     try {
-      if (rawGet.call(localStorage, key) === value) return;
-      if (value === null) rawRemove.call(localStorage, key);
-      else rawSet.call(localStorage, key, value);
+      if (localGet(key) === value) return;
+      if (value === null) localRemove(key);
+      else localSet(key, value);
       changed.push(key);
     } catch { /* quota */ }
   };
   for (const [key, entry] of Object.entries(server)) {
     if (!syncable(key) || !entry || typeof entry.ts !== 'number') continue;
     if (!adoptLayout && key.startsWith(LAYOUT_PREFIX)) continue;
-    const localVal = rawGet.call(localStorage, key);
+    const localVal = localGet(key);
     const localTs = meta[key];
     // A list both sides add to (the tasks opened lately): one list from the two, never the
     // newer side replacing the other, so an open whose write never reached the server stays.
@@ -290,7 +367,7 @@ function mergeServerPrefs(server: Record<string, PrefEntry>, held: ReadonlySet<s
   }
   for (const key of held) {
     if (key in server || !syncable(key)) continue;
-    const value = rawGet.call(localStorage, key);
+    const value = localGet(key);
     if (value === null) continue;
     const ts = Date.now();
     meta[key] = ts;
@@ -384,12 +461,12 @@ function applyLatePrefs(prefs: Record<string, PrefEntry>): void {
   listenUntilRead(false);
   if (Object.keys(push).length > 0) void apiPut('/api/ui-prefs', { prefs: push }).catch(() => {});
   for (const key of changed) {
-    try { window.dispatchEvent(new StorageEvent('storage', { key, newValue: rawGet.call(localStorage, key) })); } catch { /* no DOM */ }
+    try { window.dispatchEvent(new StorageEvent('storage', { key, newValue: localGet(key) })); } catch { /* no DOM */ }
   }
   // The UI reads these keys in useState initializers: ui-prefs-remount.ts mounts the app again
   // (at once on a young untouched page, else once it is hidden). The lists both sides add to
   // (MERGED_KEYS) are read through their storage listeners and need no remount.
-  const shown = showLatePrefs(changed.filter((k) => !MERGED_KEYS[k]).map((k) => [k, rawGet.call(localStorage, k)] as const));
+  const shown = showLatePrefs(changed.filter((k) => !MERGED_KEYS[k]).map((k) => [k, localGet(k)] as const));
   log.info('ui-prefs', 'late prefs applied', { changed: changed.length, pushed: Object.keys(push).length, shown, tries: retryStep + 1 });
 }
 
@@ -475,14 +552,24 @@ export function wrapLocalStorageWrites(): void {
     if (v !== null && /=>|function/.test(v)) rawRemove.call(localStorage, junk);
   }
   storageProto.setItem = function setItem(this: Storage, key: string, value: string) {
+    if (this !== localStorage) { rawSet.call(this, key, value); return; }
     // A write of the value the key already holds changes nothing to sync: a boot that
     // re-saved its state used to PUT it back every load (N19).
-    const unchanged = this === localStorage && rawGet.call(this, key) === String(value);
-    rawSet.call(this, key, value);
-    if (this === localStorage && !unchanged) { queue(key, value); notifyWrite(key, String(value)); }
+    const unchanged = localGet(key) === String(value) && rawGet.call(this, key) === String(value);
+    localSet(key, value);
+    if (!unchanged) { queue(key, value); notifyWrite(key, String(value)); }
   };
   storageProto.removeItem = function removeItem(this: Storage, key: string) {
-    rawRemove.call(this, key);
-    if (this === localStorage) { queue(key, null); notifyWrite(key, null); }
+    if (this !== localStorage) { rawRemove.call(this, key); return; }
+    localRemove(key);
+    queue(key, null); notifyWrite(key, null);
+  };
+  // Every reader (view memory, the layout record, a plugin's own key) gets this page's value.
+  storageProto.getItem = function getItem(this: Storage, key: string) {
+    return this === localStorage ? localGet(key) : rawGet.call(this, key);
+  };
+  storageProto.clear = function clear(this: Storage) {
+    if (this === localStorage) pageWrites.clear();
+    rawClear.call(this);
   };
 }
