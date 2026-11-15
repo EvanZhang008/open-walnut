@@ -656,6 +656,11 @@ function requestBytesEstimate(params: Record<string, unknown>): number {
   return n
 }
 
+/** A request's size as sent (its JSON), for the few commands routed by it. */
+function jsonBytes(params: Record<string, unknown>): number {
+  try { return JSON.stringify(params).length } catch { return 0 }
+}
+
 /** A relay answer's size: its gzipped result, else its plain one (an older daemon takes no gzip). */
 function gatewayResultBytes(params: Record<string, unknown>): number {
   if (typeof params.resultGz === 'string') return params.resultGz.length
@@ -864,6 +869,8 @@ export class DaemonConnection {
   /** The push in flight, for pushTriggersNow callers that wait for it. */
   private triggersPushDone: Promise<void> | null = null
   private lastTriggersPushHash: string | null = null
+  /** Each trigger's hash in the set last pushed, so a push says which ones changed (changedTriggerIds). */
+  private lastTriggerDefHashes = new Map<string, string>()
   /** host.slice serialization (see pushHostSlice) — same three fields, same reasons. */
   private hostSlicePushInFlight = false
   private hostSlicePushRerun = false
@@ -1085,6 +1092,27 @@ export class DaemonConnection {
    */
   static isBackgroundUpload(cmd: string, params: Record<string, unknown>): boolean {
     return DaemonConnection.BACKGROUND_UPLOADS.has(cmd) || (cmd === 'host.slice' && params.bind === false)
+      || DaemonConnection.isBigAutomaticCopy(cmd, params)
+  }
+  /**
+   * An automatic copy of COPY_BULK_BYTES or more that binds nothing to the socket it arrives on:
+   * a background upload, on the bulk channel (the daemon takes these from an unbound socket,
+   * walnut-scope-core.ts). 2026-11-12: the walnut skills (about 360 KB) went up the session link
+   * on every new link whose daemon did not hold them yet.
+   */
+  static COPY_BULK_BYTES = 64 * 1024
+  static readonly COPIES_ON_BULK_WHEN_BIG = new Set(['skills.sync', 'hooks.configure'])
+  /**
+   * Automatic copies that stay on the session link at any size, each because the daemon binds
+   * something to the socket it arrives on: the host copy's bound form binds the socket's Walnut,
+   * triggers.configure sets the socket's trigger scope (where fires and acks go), bridge.configure
+   * makes the socket a pusher of the bridge link. Every AUTOMATIC_COPIES entry is in one of the two
+   * sets (O20).
+   */
+  static readonly COPIES_BOUND_TO_SOCKET = new Set(['host.slice', 'triggers.configure', 'bridge.configure'])
+  static isBigAutomaticCopy(cmd: string, params: Record<string, unknown>): boolean {
+    if (!DaemonConnection.COPIES_ON_BULK_WHEN_BIG.has(cmd)) return false
+    return jsonBytes(params) >= DaemonConnection.COPY_BULK_BYTES
   }
   static isUpload(cmd: string, params: Record<string, unknown>): boolean {
     return DaemonConnection.BULK_UPLOADS.has(cmd)
@@ -1092,6 +1120,7 @@ export class DaemonConnection {
       || (cmd === 'host.slice' && params.bind === false)
       || (DaemonConnection.BULK_WHEN_BIG.has(cmd) && requestBytesEstimate(params) >= DaemonConnection.BULK_WHEN_BIG_BYTES)
       || (cmd === 'gateway-result' && gatewayResultBytes(params) >= DaemonConnection.GATEWAY_RESULT_BULK_BYTES)
+      || DaemonConnection.isBigAutomaticCopy(cmd, params)
   }
   /**
    * The longest an upload waits for the bulk channel on its own connection. A background
@@ -2092,8 +2121,10 @@ export class DaemonConnection {
           await compiled.applied?.(reply).catch((err: unknown) => log.session.warn('DaemonConnection: clock settle failed', {
             host: this.hostKey, error: err instanceof Error ? err.message : String(err),
           }))
+          const changed = this.changedTriggerIds(compiled.payload.triggers)
           log.session.info('DaemonConnection: triggers pushed', {
             host: this.hostKey, hash: compiled.hash, triggers: compiled.payload.triggers.length, held: reply === probe,
+            ...(reply === probe ? {} : { changed: changed.slice(0, 8), changedCount: changed.length }),
           })
         } while (this.triggersPushRerun)
       } catch (err) {
@@ -2107,6 +2138,24 @@ export class DaemonConnection {
     })()
     this.triggersPushDone = done
     return done
+  }
+
+  /**
+   * The triggers whose def differs from the set pushed before (new ones included), and keeps this
+   * set's hashes. Each push sends the whole set (about 250 KB for 97 triggers): the ids say what
+   * moved it (2026-11-15: three routines' conversation samples moved it every few seconds).
+   */
+  private changedTriggerIds(defs: unknown[]): string[] {
+    const next = new Map<string, string>()
+    const changed: string[] = []
+    defs.forEach((def, i) => {
+      const id = def && typeof def === 'object' && typeof (def as { id?: unknown }).id === 'string' ? (def as { id: string }).id : `#${i}`
+      const hash = crypto.createHash('sha1').update(JSON.stringify(def) ?? '').digest('hex')
+      next.set(id, hash)
+      if (this.lastTriggerDefHashes.get(id) !== hash) changed.push(id)
+    })
+    this.lastTriggerDefHashes = next
+    return changed
   }
 
   /**
@@ -2831,6 +2880,8 @@ export class DaemonConnection {
     const ownUp = !!bulkSocket && this.bulkSocketOwn
     if (background && (this.bulkOwnLink ? !bulkSocket : this.bulkOwnWanted && !ownUp)) {
       const refused = !this.bulkOwnLink && this.bulkOwnRefusal ? ` (its own SSH connection will not open: ${this.bulkOwnRefusal})` : ''
+      // An automatic copy goes again once the own connection opens (pushHeldCopies).
+      if (DaemonConnection.AUTOMATIC_COPIES.has(cmd)) this.heldCopies.add(cmd)
       throw markLinkFailure(new Error(`${cmd}: the upload channel to ${this.hostKey} is not up${refused} (waited ${Math.round(waited / 1000)}s); nothing was sent, try again`), 'no-link')
     }
     if (!ownUp && this.copiesWaitForOwnBulk() && DaemonConnection.AUTOMATIC_COPIES.has(cmd)

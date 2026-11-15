@@ -23,6 +23,7 @@ import { applyTriggerFired } from '../../../src/core/cron/trigger-apply.js'
 import {
   __setClockPlacementDepsForTesting, _ownerWatchForTest, _resetClockPlacementForTest, OWNER_REFRESH_MS, defaultPlacementDeps, placeClocksForHost, takeBackStrandedClocks,
   type ClockService, type PlacementDeps,
+  START_SAMPLE_QUIET_MS, START_SAMPLE_REFRESH_MS, _sampleRefreshForTest,
 } from '../../../src/core/routines/clock-placement.js'
 import { ALWAYS_ON_TAG, capabilitiesOf, defaultPortableClockEnv, type PortableClockEnv } from '../../../src/core/routines/clock-portable.js'
 import type { RunPlacementDeps } from '../../../src/core/routines/run-placement.js'
@@ -192,6 +193,63 @@ describe('a portable claude-code routine takes its clock to an always-on host', 
     expect((stored.executor!.config as Record<string, unknown>).host).toBeUndefined()
     await placed.applied({ clocks: [{ id: job.id, fromMs: slot(1), nextRunAtMs: slot(1) }] })
     expect((await jobOf(state, job.id)).state.clockStarts).toBe(true)
+  })
+
+  // 2026-11-15 00:50Z: a busy watched conversation changed three held starts' samples every few
+  // seconds, and each change sent the whole trigger set again (5.8 MB in 2.5 minutes).
+  it('a held start whose conversation sample alone moved is sent as accepted, until START_SAMPLE_REFRESH_MS; any other change goes at once', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      let n = 0
+      let message = 'Summarize the board'
+      const d = deps({ routineStart: async (_job, host, at) => (at ? { ...startOf(host, at.cwd), message, context: `task ${START_TASK_TOKEN} saved_at=${++n}` } : null) })
+      const state = makeState()
+      const job = await ops.add(state, portable())
+      const accepted = await holdOn(state, BOX, job.id, d)
+      expect(accepted?.context).toContain('saved_at=1')
+      // Pushed again with a new sample: the def is the one the daemon holds, so the set's hash stays.
+      const again = await push(state, BOX, d)
+      expect(again.defs.find((x) => x.id === job.id)?.start).toBe(accepted)
+      // Past the refresh, the new sample goes.
+      vi.setSystemTime(Date.now() + START_SAMPLE_REFRESH_MS + 1_000)
+      const later = await push(state, BOX, d)
+      expect(later.defs.find((x) => x.id === job.id)?.start?.context).toContain(`saved_at=${n}`)
+      // A change of the instructions goes at once, whatever the sample's age.
+      await later.applied({ clocks: [{ id: job.id, fromMs: slot(1), nextRunAtMs: slot(1) }] })
+      message = 'Summarize the board twice'
+      const changed = await push(state, BOX, d)
+      expect(changed.defs.find((x) => x.id === job.id)?.start?.message).toBe('Summarize the board twice')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // Review of the fix above: a conversation that stopped moving left the host on its first sample
+  // until some unrelated push, hours later; the latest one must go up once the sample is quiet.
+  it('a held start whose sample stopped moving sends the latest one after START_SAMPLE_QUIET_MS, with no other push', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+    try {
+      let n = 0
+      const d = deps({ routineStart: async (_job, host, at) => (at ? { ...startOf(host, at.cwd), context: `task ${START_TASK_TOKEN} saved_at=${++n}` } : null) })
+      const state = makeState()
+      const job = await ops.add(state, portable())
+      const accepted = await holdOn(state, BOX, job.id, d)
+      const again = await push(state, BOX, d)
+      expect(again.defs.find((x) => x.id === job.id)?.start).toBe(accepted)
+      // A newer sample kept back arms the quiet timer; it fires with no event and marks the sample due.
+      expect(_sampleRefreshForTest()).toEqual({ armed: 1, due: 0 })
+      vi.advanceTimersByTime(START_SAMPLE_QUIET_MS + 1_000)
+      expect(_sampleRefreshForTest()).toEqual({ armed: 0, due: 1 })
+      const quiet = await push(state, BOX, d)
+      const latest = quiet.defs.find((x) => x.id === job.id)?.start
+      expect(latest?.context).toContain(`saved_at=${n}`)
+      // Accepted: nothing is due any more, and the next moving sample is kept back again.
+      await quiet.applied({ clocks: [{ id: job.id, fromMs: slot(1), nextRunAtMs: slot(1) }] })
+      expect(_sampleRefreshForTest()).toEqual({ armed: 0, due: 0 })
+      expect((await push(state, BOX, d)).defs.find((x) => x.id === job.id)?.start).toBe(latest)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('the Mac awake takes the host\'s fire and runs the routine as it always did; one run per slot', async () => {

@@ -32,6 +32,9 @@
  *   - O12: an own connection that worked and then will not open (2026-11-14: an expired SSH
  *     certificate while the session link still rode its old master) keeps background uploads off
  *     the session link, lets a person's upload through, and is dialled again until it opens.
+ *   - O18 to O20: a big automatic copy that binds nothing to its socket (the walnut skills, the
+ *     hooks) rides the bulk channel, is held while the own channel is down and goes again once it
+ *     is back; every automatic copy is placed, so a new one must say which kind it is.
  * The mock forward is a TCP proxy to the mock daemon (no SSH in tests).
  */
 
@@ -112,13 +115,13 @@ describe('DaemonConnection: the bulk channel on a connection of its own', () => 
     await daemon.stop()
   })
 
-  async function connectWithForward(pace?: { bytesPerSec: number; burstBytes: number }): Promise<void> {
+  async function connectWithForward(pace?: { bytesPerSec: number; burstBytes: number }, host = 'bulk-own-host'): Promise<void> {
     _setBulkForwardForTesting(async () => {
       const f = await proxyForward(daemon.port)
       forwards.push(f)
       return pace ? pacedForward(f, pace) : f
     })
-    conn = new DaemonConnection('bulk-own-host', TARGET)
+    conn = new DaemonConnection(host, TARGET)
     await conn.connectDirect(`ws://127.0.0.1:${daemon.port}`)
     await waitFor(() => conn.bulkChannelActive, 5_000, 'bulk channel up')
   }
@@ -256,6 +259,46 @@ describe('DaemonConnection: the bulk channel on a connection of its own', () => 
     expect(sent.map((r) => [r.payload.relayId, r.connIndex])).toEqual([[1, 0], [2, 1], [3, 1]])
   })
 
+  it('O18: a big automatic copy rides the bulk channel; a small one stays on the session link', async () => {
+    await connectWithForward(undefined, 'bulk-copy-host')
+    daemon.clearCommandHistory()
+    const big = { config: { version: 1, hooks: [{ run: 'A'.repeat(DaemonConnection.COPY_BULK_BYTES) }] }, home: '/h' }
+    await conn.send('hooks.configure', { config: { version: 1, hooks: [] }, home: '/h' })
+    await conn.send('hooks.configure', big)
+    expect(daemon.getCommandHistoryFor('hooks.configure').map((r) => r.connIndex)).toEqual([0, 1])
+    // A copy the daemon binds to its socket stays on the session link at any size.
+    for (const cmd of DaemonConnection.COPIES_BOUND_TO_SOCKET) {
+      expect(DaemonConnection.isBigAutomaticCopy(cmd, { data: 'A'.repeat(DaemonConnection.COPY_BULK_BYTES) })).toBe(false)
+    }
+  })
+
+  it('O19: a big automatic copy whose own channel is down is not sent on the session link, and goes again when it is back', async () => {
+    // A host of its own: the cut below teaches this host's pace, which the other cases must not inherit.
+    await connectWithForward(undefined, 'bulk-copy-cut-host')
+    statics.BULK_UPLOAD_WAIT_MS = 300
+    statics.BULK_REDIAL_DELAY_MS = 60_000
+    const repushed: string[] = []
+    ;(conn as unknown as { repushCopy(cmd: string): void }).repushCopy = (cmd) => { repushed.push(cmd) }
+    forwards[0].cut()
+    await waitFor(() => !conn.bulkChannelActive, 5_000, 'bulk channel down')
+    daemon.clearCommandHistory()
+    const big = { config: { version: 1, hooks: [{ run: 'A'.repeat(DaemonConnection.COPY_BULK_BYTES) }] }, home: '/h' }
+    const err = await conn.send('hooks.configure', big).then(() => null, (e: Error) => e)
+    expect(err?.message).toMatch(/nothing was sent/)
+    expect(daemon.getCommandHistoryFor('hooks.configure')).toEqual([])
+    expect(conn.connected).toBe(true)
+    // The own channel comes back: the held copy is pushed again.
+    statics.BULK_REDIAL_DELAY_MS = 100
+    ;(conn as unknown as { dialBulkChannel(): void }).dialBulkChannel()
+    await waitFor(() => conn.bulkChannelActive && repushed.includes('hooks.configure'), 5_000, 'held copy pushed again')
+  })
+
+  it('O20: every automatic copy either may ride the bulk channel or names why it is bound to its socket', () => {
+    const placed = [...DaemonConnection.COPIES_ON_BULK_WHEN_BIG, ...DaemonConnection.COPIES_BOUND_TO_SOCKET]
+    expect(new Set(placed).size).toBe(placed.length)
+    expect([...placed].sort()).toEqual([...DaemonConnection.AUTOMATIC_COPIES].sort())
+  })
+
   it('O10: a read sent while MB of upload parts wait on the paced connection takes the session link and answers at once', async () => {
     // 1 MB/s here stands for the relay's 20 KB/s: 3 MB ahead would hold a read 3 s on the bulk channel.
     await connectWithForward({ bytesPerSec: 1024 * 1024, burstBytes: 32 * 1024 })
@@ -284,6 +327,10 @@ describe('DaemonConnection: the bulk channel on a connection of its own', () => 
 
   it('O11: a read whose answer never comes fails alone while uploads still move behind it; the channel and its parts stay', async () => {
     await connectWithForward({ bytesPerSec: 1024 * 1024, burstBytes: 32 * 1024 })
+    // The walnut skills (about 360 KB) go up the bulk channel on connect: let them land first, so
+    // the read below is sent on an empty queue.
+    await waitFor(() => daemon.getCommandHistoryFor('skills.sync').length > 0
+      && (conn as unknown as { pendingCommands: Map<number, unknown> }).pendingCommands.size === 0, 10_000, 'connect copies sent')
     const part = 'A'.repeat(1024 * 1024)
     const send = (i: number) => conn.send('fs.writePart', { path: '/tmp/q', offset: i * part.length, data: part }, 60_000)
     daemon.clearCommandHistory()
@@ -402,7 +449,7 @@ describe('DaemonConnection: the bulk channel on a connection of its own', () => 
     daemon.clearCommandHistory()
     for (const cmd of DaemonConnection.AUTOMATIC_COPIES) {
       const err = await conn.send(cmd, { blob: 'A'.repeat(DaemonConnection.COPY_HOLD_BYTES) }).then(() => null, (e: Error) => e)
-      expect(err?.message, cmd).toMatch(/waits for the upload channel's own connection.*nothing was sent/)
+      expect(err?.message, cmd).toMatch(/nothing was sent/)
       expect(linkFailureKind(err)).toBe('no-link')
       expect(daemon.getCommandHistoryFor(cmd), cmd).toEqual([])
     }

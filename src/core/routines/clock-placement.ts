@@ -344,6 +344,7 @@ export async function placeClocksForHost(
         retained.set(job.id, start);
       }
       start ??= null;
+      if (start && held) start = steadyStart(host, job.id, start);
       // A routine the host cannot start stays on its own path (its delivery, or the server timer): a new
       // handover needs the start, and an offline routine's def is nothing without one.
       if (!start && (!held || kind === 'offline')) continue;
@@ -373,9 +374,10 @@ export async function placeClocksForHost(
       } else {
         // A claude-code run the host may start itself while this Mac is away
         // (clock-host-start-v1): only for a daemon that can, holding the routine template.
-        const start = opts.hostStart && job.executor?.type === 'claude-code' && deps.routineStart
+        const fresh = opts.hostStart && job.executor?.type === 'claude-code' && deps.routineStart
           ? await deps.routineStart(job, host).catch(() => null)
           : null;
+        const start = fresh && job.state?.clockHost === host ? steadyStart(host, job.id, fresh) : fresh;
         def = clockDefOf(job, taskOf.get(job.id), WALNUT_HOME, start);
       }
       if (def) defs.push(def);
@@ -403,8 +405,15 @@ export async function placeClocksForHost(
       const held = new Set((Array.isArray(reply.clocks) ? reply.clocks as Array<{ id?: string }> : []).map((c) => c.id));
       for (const id of new Set([...sentStarts.keys(), ...placed.owned.map((j) => j.id)])) {
         const spec = sentStarts.get(id);
-        if (spec && held.has(id)) acceptedStarts.set(acceptedKey(host, id), spec);
-        else acceptedStarts.delete(acceptedKey(host, id));
+        const key = acceptedKey(host, id);
+        if (spec && held.has(id)) {
+          if (acceptedStarts.get(key) !== spec) { acceptedAt.set(key, Date.now()); dropSampleRefresh(key); }
+          acceptedStarts.set(key, spec);
+        } else {
+          acceptedStarts.delete(key);
+          acceptedAt.delete(key);
+          dropSampleRefresh(key);
+        }
       }
       if (back.length > 0) log.cron.info('clock routines back on the server timer', { host, jobIds: back });
     },
@@ -427,6 +436,67 @@ async function noteOwner(job: CronJob, deps: PlacementDeps, deadlineMs: number):
 /** The start each daemon accepted for each clock (host and routine), as sent: this server's record of what the daemon holds. */
 const acceptedStarts = new Map<string, ClockStartSpec>();
 const acceptedKey = (host: string, jobId: string): string => `${host}\u0000${jobId}`;
+/** When each accepted start was first accepted (steadyStart). */
+const acceptedAt = new Map<string, number>();
+
+/**
+ * How long a start the daemon holds keeps its conversation sample (its `context`) while nothing
+ * else in it changed and the sample keeps moving. The sample is rebuilt on every push, from the
+ * watched conversation and the owner's rules and notes: on 2026-11-15 00:50Z a busy conversation
+ * changed three portable routines' samples every few seconds, and each change sent the whole
+ * trigger set again (94 triggers, about 250 KB; 23 MB in ten minutes) until the relay ended the link.
+ */
+export const START_SAMPLE_REFRESH_MS = 30 * 60_000;
+/** A sample that stopped moving this long goes up then (the conversation paused, or the Mac is about to leave). */
+export const START_SAMPLE_QUIET_MS = 2 * 60_000;
+/** Per held start: the push that sends its latest sample once it is quiet (or at the refresh). */
+const sampleRefresh = new Map<string, ReturnType<typeof setTimeout>>();
+/** Held starts whose latest sample is due: the next push sends it. */
+const sampleDue = new Set<string>();
+
+function dropSampleRefresh(key: string): void {
+  const t = sampleRefresh.get(key);
+  if (t) clearTimeout(t);
+  sampleRefresh.delete(key);
+  sampleDue.delete(key);
+}
+
+/** Send the latest sample after `ms` with no newer one (each kept sample moves the time), never past the refresh. */
+function armSampleRefresh(key: string, ms: number): void {
+  const t = sampleRefresh.get(key);
+  if (t) clearTimeout(t);
+  const timer = setTimeout(() => {
+    sampleRefresh.delete(key);
+    sampleDue.add(key);
+    scheduleClockPlacement();
+  }, Math.max(0, ms));
+  timer.unref?.();
+  sampleRefresh.set(key, timer);
+}
+
+/** Test view: the held starts whose latest sample waits to go (armed) and those due on the next push. */
+export function _sampleRefreshForTest(): { armed: number; due: number } {
+  return { armed: sampleRefresh.size, due: sampleDue.size };
+}
+
+/**
+ * The start to send for a clock this host holds: while only its sample moved, the one it accepted,
+ * and the latest one once the sample was quiet for START_SAMPLE_QUIET_MS or the accepted one is
+ * START_SAMPLE_REFRESH_MS old; any other change goes at once.
+ */
+export function steadyStart(host: string, jobId: string, fresh: ClockStartSpec, now = Date.now()): ClockStartSpec {
+  const key = acceptedKey(host, jobId);
+  const kept = acceptedStarts.get(key);
+  if (!kept || kept === fresh) return fresh;
+  const { context: _a, ...keptRest } = kept as ClockStartSpec & { context?: unknown };
+  const { context: _b, ...freshRest } = fresh as ClockStartSpec & { context?: unknown };
+  if (JSON.stringify(keptRest) !== JSON.stringify(freshRest)) return fresh;
+  if (kept.context === fresh.context) return kept;
+  const at = acceptedAt.get(key) ?? 0;
+  if (sampleDue.has(key) || now - at >= START_SAMPLE_REFRESH_MS) return fresh;
+  armSampleRefresh(key, Math.min(START_SAMPLE_QUIET_MS, at + START_SAMPLE_REFRESH_MS - now));
+  return kept;
+}
 
 /** Why a portable routine was not seated on a host, told at info once per change (a push repeats the same verdict). */
 const seatVerdicts = new Map<string, string>();
@@ -548,6 +618,10 @@ export function _resetClockPlacementForTest(): void {
   refusedClocks.clear();
   seatVerdicts.clear();
   acceptedStarts.clear();
+  acceptedAt.clear();
+  for (const t of sampleRefresh.values()) clearTimeout(t);
+  sampleRefresh.clear();
+  sampleDue.clear();
 }
 
 // The watch's exports stay reachable from here (callers and tests import them from this file).
