@@ -36,69 +36,69 @@ export const COMPONENTS_MANIFEST: ComponentsManifest = {
       }
     },
     "images": {
-      "version": "0.34.5-1",
-      "tag": "component-images-0.34.5-1",
-      "entry": "node_modules/sharp/lib/index.js",
+      "version": "0.35.5-1",
+      "tag": "component-images-0.35.5-1",
+      "entry": "node_modules/sharp/dist/index.cjs",
       "packages": {
-        "sharp": "0.34.5",
-        "@img/colour": "1.0.0",
+        "sharp": "0.35.5",
+        "@img/colour": "1.1.0",
         "detect-libc": "2.1.2",
-        "semver": "7.7.4"
+        "semver": "7.8.6"
       },
       "platforms": {
         "darwin-arm64": {
-          "asset": "walnut-images-0.34.5-1-darwin-arm64.tar.gz",
-          "size": 7546640,
-          "tarSize": 16786944,
-          "tarSha256": "8c02f738e85725f7853942608300918db11b84541b97eb5e0b92c6f88d190e5b"
+          "asset": "walnut-images-0.35.5-1-darwin-arm64.tar.gz",
+          "size": 8241441,
+          "tarSize": 19224064,
+          "tarSha256": "03a3c5ef479b3f745a6fd9ce974c540de10cf38e1200ca8047bf5aebfb372582"
         },
         "darwin-x64": {
-          "asset": "walnut-images-0.34.5-1-darwin-x64.tar.gz",
-          "size": 8286566,
-          "tarSize": 18683392,
-          "tarSha256": "e01d1cea601e5fb1d6887dccac154b2a3cb890e530df1e87e050040b4058167a"
+          "asset": "walnut-images-0.35.5-1-darwin-x64.tar.gz",
+          "size": 8982804,
+          "tarSize": 21337088,
+          "tarSha256": "a0c1372d636089d611c0e06f891a96f96e2dea28ec9d8d7dab9301bfee9029df"
         },
         "linux-arm64": {
-          "asset": "walnut-images-0.34.5-1-linux-arm64.tar.gz",
-          "size": 7673706,
-          "tarSize": 17794560,
-          "tarSha256": "1ab205f0e5b9c743d52f8baebdcca0da0f5c9cb4a98f564bb4c4fe670adad27e"
+          "asset": "walnut-images-0.35.5-1-linux-arm64.tar.gz",
+          "size": 8380259,
+          "tarSize": 19567104,
+          "tarSha256": "d376923a4ac47362836e28bff588389612762aac44eccad65bef1fd44e834991"
         },
         "linux-arm64-musl": {
-          "asset": "walnut-images-0.34.5-1-linux-arm64-musl.tar.gz",
-          "size": 7771886,
-          "tarSize": 17761792,
-          "tarSha256": "484c5205438f21e9a09ee002099a8760f33ab150fca87d01ea3bc4f0d1f28d65"
+          "asset": "walnut-images-0.35.5-1-linux-arm64-musl.tar.gz",
+          "size": 8379984,
+          "tarSize": 19755008,
+          "tarSha256": "21fc22cf4ddd6b23962e2c6256d3c5ec4e56adb853fa74690fa3546ab9bfd223"
         },
         "linux-x64": {
-          "asset": "walnut-images-0.34.5-1-linux-x64.tar.gz",
-          "size": 7604303,
-          "tarSize": 17503232,
-          "tarSha256": "14d590d0a26e430d7e9f6954fefe4efeebf04c5d1917f1cb966642d558700e56"
+          "asset": "walnut-images-0.35.5-1-linux-x64.tar.gz",
+          "size": 8311682,
+          "tarSize": 19826688,
+          "tarSha256": "e5188b68a62ea9304b0b475cdb17321e1e10f25350a1cffde49d02184070d920"
         },
         "linux-x64-musl": {
-          "asset": "walnut-images-0.34.5-1-linux-x64-musl.tar.gz",
-          "size": 7657814,
-          "tarSize": 17697280,
-          "tarSha256": "5e456d19df2e40b044a5a4a0e0b9d0756955c4deb9fc138c59189f4caa6579c3"
+          "asset": "walnut-images-0.35.5-1-linux-x64-musl.tar.gz",
+          "size": 8304827,
+          "tarSize": 19924480,
+          "tarSha256": "ccc7c19fa04892b61a61b295875d58d717d6aa8ed1b8bcc9c2e3973d7deca0e2"
         }
       }
     },
     "audio-capture": {
-      "version": "1.3.6-1",
-      "tag": "component-audio-capture-1.3.6-1",
+      "version": "1.3.6-2",
+      "tag": "component-audio-capture-1.3.6-2",
       "entry": "node_modules/screencapturekit-audio-capture/dist/index.js",
       "packages": {
         "screencapturekit-audio-capture": "1.3.6",
         "node-gyp-build": "4.8.4",
-        "ws": "8.19.0"
+        "ws": "8.21.0"
       },
       "platforms": {
         "darwin-arm64": {
-          "asset": "walnut-audio-capture-1.3.6-1-darwin-arm64.tar.gz",
-          "size": 101424,
-          "tarSize": 444416,
-          "tarSha256": "bf50ec1ba6f8ef0856b6273bd6e5d976e02d7376ec86d0f1f9566f2a0ae9fe3a"
+          "asset": "walnut-audio-capture-1.3.6-2-darwin-arm64.tar.gz",
+          "size": 102069,
+          "tarSize": 447488,
+          "tarSha256": "865bb8b32f1049ccee377e418c2b6ffd0f6a7198e5c1e408e3d0dddbfd4826cc"
         }
       }
     }

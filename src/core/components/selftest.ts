@@ -34,7 +34,7 @@ export async function componentSelftest(name: ComponentName, opts: SelftestOptio
 }
 
 async function imagesThroughFeature(req: NodeJS.Require): Promise<string> {
-  const sharp = req('sharp') as typeof import('sharp');
+  const sharp = req('sharp') as typeof import('sharp').default;
   const png = await sharp({ create: { width: 3000, height: 2000, channels: 3, background: '#2a6' } }).png().toBuffer();
   const { compressForApi, MAX_IMAGE_DIMENSION } = await import('../../utils/image-compress.js');
   const out = await compressForApi(png, 'image/png');
