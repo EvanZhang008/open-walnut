@@ -59,6 +59,7 @@ const NOT_A_ROW: Record<string, string> = {
   'components/tasks/AdoptWorkerFlyout.tsx adopt-worker-title': 'the heading of the Adopt dialog, not a row; it peeks when hovered itself',
   'components/tasks/ReleaseWorkerFlyout.tsx adopt-worker-title': 'the heading of the Release dialog, not a row; it peeks when hovered itself',
   'components/tasks/LeaderPill.tsx leader-subtasks-title': 'the heading of the Leader flyout, not a row; its subtask rows are marked',
+  'pages/OrgPage.tsx org-locked-dock-label': 'a vertical tab at the page edge, not a row: its text runs top to bottom, so growing it in place has no room, and its button title names the whole task',
   'components/tasks/SubtaskPill.tsx task-worker-parent': 'a pill drawn inside a task row, which is marked where the row is built',
   'components/common/NotificationToaster.tsx notification-toast-title': 'a toast that comes and goes, not a list row; it peeks when hovered itself',
 };

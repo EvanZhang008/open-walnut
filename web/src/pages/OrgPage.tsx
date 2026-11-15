@@ -20,6 +20,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { ICON_LOCK } from '@/components/common/Icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
@@ -452,7 +453,7 @@ export function OrgPage() {
   }, [navigate, setParams]);
 
   /** The Home locks a panel of the strip shows (one, or none for the page's own). */
-  const homeIdsOf = useCallback((id: string) => fromHome.filter((h) => h.id === id || sameSession(h.id, id)).map((h) => h.id), [fromHome, sameSession]);
+  const homeIdsOf = useLeanCallback((id: string) => fromHome.filter((h) => h.id === id || sameSession(h.id, id)).map((h) => h.id), [fromHome, sameSession]);
   /** × on one panel of the strip: the free one closes through the URL, a pin leaves the strip. */
   const closePanel = useCallback((id: string) => {
     restoredSide.current?.delete(id);
