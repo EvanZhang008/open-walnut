@@ -37,7 +37,24 @@ final class ThreadFollowUpVoiceUITests: ThreadPushUITestCase {
     private func openFollowUp(_ index: Int = 0) {
         let follow = card(ids[index]).buttons["org.thread.followUp"]
         XCTAssertTrue(follow.waitForExistence(timeout: 15))
-        bringIntoView(follow)
+        // At accessibility text sizes the view switch is a menu, not the
+        // segmented control the older shared viewport helper looks for.
+        let list = el("org.threads")
+        let window = app.windows.firstMatch
+        let bar = app.tabBars.firstMatch
+        for _ in 0..<24 {
+            let top = max(app.navigationBars.firstMatch.frame.maxY, window.frame.minY + 80)
+            let bottom = bar.exists ? bar.frame.minY : window.frame.maxY - 20
+            if follow.isHittable && follow.frame.minY >= top && follow.frame.maxY <= bottom { break }
+            let below = follow.frame.maxY > bottom
+            let fromY = below ? bottom - 70 : top + 70
+            let toY = below ? top + 90 : bottom - 90
+            list.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: list.frame.width / 2, dy: fromY - list.frame.minY))
+                .press(forDuration: 0.05, thenDragTo: list.coordinate(withNormalizedOffset: .zero)
+                    .withOffset(CGVector(dx: list.frame.width / 2, dy: toY - list.frame.minY)))
+        }
+        XCTAssertTrue(follow.isHittable, "Follow up must be reached by scrolling the actual thread list")
         touch(follow)
         XCTAssertTrue(el("org.thread.followUp.input").waitForExistence(timeout: 15))
         let mic = el("voice-mic.thread-follow-up")
@@ -227,7 +244,10 @@ final class ThreadFollowUpVoiceUITests: ThreadPushUITestCase {
         ])
         XCTAssertTrue(el("org.node.page").waitForExistence(timeout: 60))
         back()
-        sessionMenu("Rename")
+        sessionMenu("Session")
+        let rename = app.buttons["Rename"]
+        XCTAssertTrue(rename.waitForExistence(timeout: 10))
+        rename.tap()
         let input = el("session.rename.field")
         XCTAssertTrue(input.waitForExistence(timeout: 15))
         input.tap()
