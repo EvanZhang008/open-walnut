@@ -32,7 +32,7 @@ import { log } from '../logging/index.js'
 import { getConnectedDaemonConnection, getDirectDaemonConnection, readDaemonLineFate, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
 import { BudgetCheckingError, BudgetPausedError, ClaudeRuntimeMissingError, cliStoppedBeforeFirstLine, cliStoppedSentence, startFailureSentence, heldByAnotherProcess, holderKindOf, holderPidOf, isDaemonCommandOutcomeUnknown, sendMayHaveLanded, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
 import { InheritedSessionRefusedError } from './ephemeral-session-gate.js'
-import { linkFailureKind } from './link-failure.js'
+import { linkFailureKind, markLinkFailure } from './link-failure.js'
 import type { LineFate } from './line-fate-core.js'
 import { CloudSessionLink } from './cloud-session-link.js'
 import { isSessionStopSuperseded, SessionStopSupersededError } from '../core/sessions/session-stop.js'
@@ -150,6 +150,12 @@ export class RemoteSessionManager implements SessionManager {
    * one; a stop has nothing to stop.
    */
   private _startRefused = false
+  /**
+   * start()/attach() calls still connecting, before they bind the sid. Such a call
+   * may spawn or adopt a CLI the moment it connects, so an unbound manager runs
+   * nothing (and a stop has nothing to stop) only while none is pending.
+   */
+  private _bindsPending = 0
   // Byte cursor into the daemon's STREAM file (~/.open-walnut/tmp/streams/<sid>.jsonl).
   // Only an ABSOLUTE position is a valid fromOffset for daemon attach. It is
   // absolute only after start()/attach() adopted the daemon-reported offset —
@@ -400,7 +406,9 @@ export class RemoteSessionManager implements SessionManager {
   // ── Startup ──
 
   async start(opts: TransportStartOptions): Promise<TransportStartResult> {
-    await this.ensureConnected()
+    // Pending until the sid is bound below: no await sits between this finally and that line.
+    this._bindsPending++
+    try { await this.ensureConnected() } finally { this._bindsPending-- }
     // A process starting (a cold resume included) is activity: its first line
     // can take a while under load, and an empty clock would be read from the
     // transcript of the turn before.
@@ -464,7 +472,8 @@ export class RemoteSessionManager implements SessionManager {
           host: this.hostKey, sid: this.tmpId,
           error: err instanceof Error ? err.message : String(err),
         })
-        result = await this.retryStartAfterReconnect(startPayload, opts.stopFence)
+        // Only 'no-link' says the first start never left; any other may have spawned a CLI.
+        result = await this.retryStartAfterReconnect(startPayload, opts.stopFence, linkFailureKind(err) !== 'no-link')
       } else {
         throw err
       }
@@ -567,13 +576,17 @@ export class RemoteSessionManager implements SessionManager {
    */
   private async retryStartAfterReconnect(
     startPayload: Record<string, unknown>,
-    stopFence?: string | null,
+    stopFence: string | null | undefined,
+    firstMayHaveRun: boolean,
   ): Promise<Record<string, unknown>> {
     // Clear local reference — do NOT disconnect() the shared pool connection.
     // disconnect() sets _destroyed=true which permanently kills auto-reconnect.
     // The pool's getDaemonConnection() will reconnect if needed.
     this.conn = null
-    await this.ensureConnected()
+    // A first start whose answer was lost may have spawned a CLI: a reconnect that
+    // fails here, or a resend that never left, does not make it unsent.
+    const unsentRetry = (err: unknown): unknown => firstMayHaveRun ? this.startOutcomeLost(err) : err
+    try { await this.ensureConnected() } catch (err) { throw unsentRetry(err) }
 
     // Re-subscribe event listener on the fresh connection
     this.rebindEventListener()
@@ -608,9 +621,19 @@ export class RemoteSessionManager implements SessionManager {
       host: this.hostKey, sid,
     })
     // A boot-wait start answers only once the CLI took its line (send-boot-wait-v1).
-    return this.dispatch(sid, stopFence, () => startPayload.bootWait === true
-      ? this.conn!.send('start', startPayload, RemoteSessionManager.BOOT_WAIT_SEND_TIMEOUT_MS)
-      : this.conn!.send('start', startPayload))
+    try {
+      return await this.dispatch(sid, stopFence, () => startPayload.bootWait === true
+        ? this.conn!.send('start', startPayload, RemoteSessionManager.BOOT_WAIT_SEND_TIMEOUT_MS)
+        : this.conn!.send('start', startPayload))
+    } catch (err) {
+      throw linkFailureKind(err) === 'no-link' ? unsentRetry(err) : err
+    }
+  }
+
+  /** The first start got no answer and the retry never reached the daemon: whether it runs is unknown ('lost'). */
+  private startOutcomeLost(cause: unknown): Error {
+    const why = cause instanceof Error ? cause.message : String(cause)
+    return markLinkFailure(new Error(`daemon command lost: start: ${this.hostKey} did not answer, and the retry failed (${why})`, { cause }), 'lost')
   }
 
   // ── Attach ──
@@ -618,7 +641,8 @@ export class RemoteSessionManager implements SessionManager {
   async attach(opts: TransportAttachOptions): Promise<TransportAttachResult> {
     this.closeCloudLink()
     if (this._sid !== opts.sessionId) this.knownPermissionRequests.clear()
-    await this.ensureConnected()
+    this._bindsPending++
+    try { await this.ensureConnected() } finally { this._bindsPending-- }
 
     this._onOutput = opts.onOutput
     this._onExit = opts.onExit
@@ -1233,10 +1257,17 @@ export class RemoteSessionManager implements SessionManager {
   // ── Process Control ──
 
   async stop(reason: 'user' | 'maintenance' | 'idle' = 'maintenance'): Promise<void> {
-    if (this._startRefused) {
-      log.session.info('RemoteSessionManager.stop: nothing runs, its start was refused', { host: this.hostKey, sid: this._sid })
+    // Nothing of this manager runs: no start or attach ever bound a sid (a cold
+    // resume's fresh manager, a start that failed to connect), or its start was
+    // refused under START_REFUSALS_RUN_NOTHING. Not while a start or attach is
+    // still connecting: it may spawn or adopt a CLI right after this returns.
+    if (this._bindsPending === 0 && (this._startRefused || !this._sid)) {
+      log.session.info('RemoteSessionManager.stop: nothing runs', {
+        host: this.hostKey, sid: this._sid, why: this._startRefused ? 'start refused' : 'never bound',
+      })
       return
     }
+    // A bound sid may own a live CLI: unreachable is unknown, never stopped.
     if (!this.conn?.connected || !this._sid) {
       log.session.info('RemoteSessionManager.stop: skipped', {
         host: this.hostKey, sid: this._sid,

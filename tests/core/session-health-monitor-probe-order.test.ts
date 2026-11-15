@@ -29,6 +29,8 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-health-probe
 
 /** Sessions the runner should report as busy with background work. */
 const backgroundActive = new Set<string>();
+let connected = true;
+let duringProbe: (() => void) | undefined;
 /** Every sid isBackgroundWorkActive was asked about, in call order. */
 let probed: string[] = [];
 /** Runner timestamps per sid (drives checkHungSessions). */
@@ -46,7 +48,7 @@ vi.mock('../../src/utils/session-liveness.js', () => ({
   isLocalJsonlFresh: () => 'unknown' as const,
 }));
 vi.mock('../../src/providers/daemon-connection.js', () => ({
-  isDaemonConnected: () => false,
+  isDaemonConnected: () => connected,
   getDaemonDisconnectedSince: () => null,
   probeDaemonSession: async () => null,
   getPooledSnapshotConnection: () => null,
@@ -73,6 +75,7 @@ vi.mock('../../src/providers/claude-code-session.js', () => ({
     isCronArmed: () => false,
     isBackgroundWorkActive: (sid: string) => {
       probed.push(sid);
+      duringProbe?.();
       return Promise.resolve(backgroundActive.has(sid));
     },
     hasPendingPermission: () => false,
@@ -89,6 +92,7 @@ import {
 } from '../../src/core/session-tracker.js';
 import { SessionHealthMonitor } from '../../src/core/session-health-monitor.js';
 import { WALNUT_HOME } from '../../src/constants.js';
+import { log } from '../../src/logging/index.js';
 
 const MIN = 60_000;
 const DEAD_PID = 999999999;
@@ -113,6 +117,8 @@ beforeEach(async () => {
   managers.clear();
   timestamps.clear();
   backgroundActive.clear();
+  connected = true;
+  duringProbe = undefined;
   probed = [];
   seeded = [];
 });
@@ -170,6 +176,54 @@ describe('checkIdleTimeout: daemon probe only for reap candidates', () => {
 });
 
 describe('checkHungSessions: daemon probe only for real suspects', () => {
+  type HungMonitor = { checkHungSessions(sessions: unknown[], update: typeof updateSessionRecord): Promise<Set<string>> };
+  const scan = async (monitor: SessionHealthMonitor, sid: string) => {
+    const { getSessionByClaudeId } = await import('../../src/core/session-tracker.js');
+    return (monitor as unknown as HungMonitor).checkHungSessions([await getSessionByClaudeId(sid)], updateSessionRecord);
+  };
+
+  it('never calls an unconfirmed delivery or a disconnected host hung', async () => {
+    await seedSession('unsent', 2 * MIN, 'running');
+    timestamps.set('unsent', { lastMessageDeliveryAt: 0, lastClaudeOutputAt: 0 });
+    const monitor = new SessionHealthMonitor();
+    expect((await scan(monitor, 'unsent')).size).toBe(0);
+    timestamps.set('unsent', { lastMessageDeliveryAt: Date.now() - 9 * MIN, lastClaudeOutputAt: 0 });
+    connected = false;
+    expect((await scan(monitor, 'unsent')).size).toBe(0);
+    expect(probed).toEqual([]);
+    connected = true;
+    expect((await scan(monitor, 'unsent')).size).toBe(1);
+  });
+
+  it.each(['output', 'new-delivery', 'disconnect'])('a %s racing the probe cancels the stale warning', async (event) => {
+    await seedSession('racing', 2 * MIN, 'running');
+    const delivery = Date.now() - 9 * MIN;
+    timestamps.set('racing', { lastMessageDeliveryAt: delivery, lastClaudeOutputAt: 0 });
+    duringProbe = () => {
+      if (event === 'disconnect') connected = false;
+      else timestamps.set('racing', { lastMessageDeliveryAt: event === 'new-delivery' ? Date.now() : delivery,
+        lastClaudeOutputAt: event === 'output' ? Date.now() : 0 });
+    };
+    expect((await scan(new SessionHealthMonitor(), 'racing')).size).toBe(0);
+  });
+
+  it('warns once per delivery while keeping the gauge flagged on every tick', async () => {
+    await seedSession('repeat', 2 * MIN, 'running');
+    const delivery = Date.now() - 9 * MIN;
+    timestamps.set('repeat', { lastMessageDeliveryAt: delivery, lastClaudeOutputAt: 0 });
+    const warn = vi.spyOn(log.session, 'warn');
+    const warnings = () => warn.mock.calls.filter(([message]) => String(message).startsWith('health monitor: possible hung session'));
+    try {
+      const monitor = new SessionHealthMonitor();
+      for (let i = 0; i < 4; i++) expect((await scan(monitor, 'repeat')).size).toBe(1);
+      expect(warnings()).toHaveLength(1);
+      timestamps.set('repeat', { lastMessageDeliveryAt: delivery + 1, lastClaudeOutputAt: 0 });
+      expect((await scan(monitor, 'repeat')).size).toBe(1);
+      expect(warnings()).toHaveLength(2);
+      timestamps.set('repeat', { lastMessageDeliveryAt: delivery + 1, lastClaudeOutputAt: Date.now() });
+      expect((await scan(monitor, 'repeat')).size).toBe(0);
+    } finally { warn.mockRestore(); }
+  });
   it('a running session with no outstanding message is never probed', async () => {
     await seedSession('running-quiet', 2 * MIN, 'running');
     timestamps.set('running-quiet', { lastClaudeOutputAt: Date.now(), lastMessageDeliveryAt: Date.now() - MIN });

@@ -3186,6 +3186,10 @@ export class ClaudeCodeSession {
     const tmpId = isResume ? resumeSessionId : (preassignedId ?? crypto.randomBytes(8).toString('hex'))
 
     this._spawnTs = Date.now()
+    // A new process has not received a line yet. Never carry the previous CLI's
+    // delivery clock through a failed cold resume.
+    this.clearStallDiagTimer()
+    this._lastMessageDeliveryTs = 0
     const transport = createSessionManager(tmpId, host ?? undefined, sshTarget, undefined, this.cliCommand, this._testDaemonUrl)
     this._transport = transport
 
@@ -3555,6 +3559,11 @@ export class ClaudeCodeSession {
 
       // Spawn confirmed by the daemon (pid returned). Only now is it safe to
       // consider the message delivered — see onSpawnSettled doc on send().
+      if (this._transport === transport && !initOnly && !this._turnResultEmitted) {
+        this.startStallDiagTimer('resume-spawn', true, this._spawnTs)
+        // Output can beat the start acknowledgement on the shared socket.
+        if (this._lastClaudeOutputTs >= this._spawnTs) this.clearStallDiagTimer()
+      }
       // A folder that was gone and is back (or a session that moved): no banner left behind.
       if (this.claudeSessionId) void import('../core/sessions/folder-gone.js').then((m) => m.clearFolderGone(this.claudeSessionId)).catch(() => {})
       const line: SpawnLineOutcome | undefined = result.cut || result.fate
@@ -3567,13 +3576,16 @@ export class ClaudeCodeSession {
       // The server's pre-flight throws CwdMissingError; a host's daemon says it in its own
       // words when the pre-flight could not ask it (folder-gone-words.ts).
       const folderGone = err instanceof CwdMissingError || isFolderGoneReason(err instanceof Error ? err.message : String(err))
-      // Nothing was delivered, so "no JSONL 30s after delivery" would be a false stall
-      // (2026-11-14: one after each of 262 starts refused by a host nobody reached). An
-      // unknown outcome keeps it (the daemon may still run the buffered start), except a
-      // start that never had a link: the pool's cached failure reads as unknown by its
-      // words, but its tag says no command left (link-failure.ts).
-      const neverSent = linkFailureKind(err) === 'no-link' || !isDaemonCommandOutcomeUnknown(err)
-      if (this._transport === transport && !spawnResolved && neverSent) this.clearStallDiagTimer()
+      // A refusal is not delivery. An unknown start gets its own diagnostic,
+      // never a confirmed-delivery clock. A cached no-link failure cannot have
+      // sent a command even when its words resemble an unknown outcome.
+      const linkFailure = linkFailureKind(err)
+      const neverSent = linkFailure === 'no-link' || (linkFailure === null && !isDaemonCommandOutcomeUnknown(err))
+      if (this._transport === transport && !spawnResolved && this._lastClaudeOutputTs < this._spawnTs) {
+        this.clearStallDiagTimer()
+        this._lastMessageDeliveryTs = 0
+        if (!neverSent) this.startStallDiagTimer('resume-spawn', false)
+      }
       // A fresh start that never reached its host (unreachable, an expired login):
       // restart recovery sends its line again once the host answers, so no error
       // for the user. Taken on before the start is reported failed, so its caller
@@ -3631,7 +3643,8 @@ export class ClaudeCodeSession {
           // adopt the live CLI or confirm the death. A bare 'stopped' here was
           // inc-1787511363340: the "failed" start spawned 15s later and ran for
           // 1.6h behind a record every recovery path skipped unconditionally.
-          const outcomeUnknown = isDaemonCommandOutcomeUnknown(err)
+          // The link tag wins over the words: a no-link failure sent nothing.
+          const outcomeUnknown = !neverSent
           this._processStatus = outcomeUnknown ? 'error' : 'stopped'
           this._activity = undefined
           // The spawn edge already flipped the readout to live; a start that never
@@ -3729,11 +3742,9 @@ export class ClaudeCodeSession {
     this._outputFile = transport.outputFile ?? this._outputFile
     this.emitStatusChanged('IN_PROGRESS')
     this.startLivenessMonitor()
-    // Init-only spawn: silence is EXPECTED (the CLI idles until the first user
-    // message) — a 30s no-JSONL stall warning would be a false alarm.
-    if (!preassignedId) {
-      this.startStallDiagTimer('resume-spawn')
-    }
+    // The delivery clock starts only once the daemon confirms the start (the
+    // success path above): a refused start delivered nothing. An init-only spawn
+    // has no outstanding message, so it never arms the diagnostic.
   }
 
   /** A wrapper named for an old sid that a cold resume will send through; it reads, attaches and spawns nothing. */
@@ -7054,9 +7065,9 @@ export class ClaudeCodeSession {
    * of stall, we can't distinguish these cases from logs alone. The 30s threshold
    * balances early detection vs false positives (some tool calls legitimately take 20s+).
    */
-  private startStallDiagTimer(trigger: 'fifo-write' | 'resume-spawn'): void {
+  private startStallDiagTimer(trigger: 'fifo-write' | 'resume-spawn', delivered = true, diagnosticStartedAt = Date.now()): void {
     this.clearStallDiagTimer()
-    this._lastMessageDeliveryTs = Date.now()
+    if (delivered) this._lastMessageDeliveryTs = diagnosticStartedAt
     this._fileSizeAtDelivery = this._transport?.fileSize ?? 0
 
     this._stallDiagTimer = setTimeout(async () => {
@@ -7068,12 +7079,14 @@ export class ClaudeCodeSession {
       const pidAlive = this._transport
         ? await this._transport.isAlive()
         : (this.pid !== null && !processActionsRefused() && await isProcessAliveAsync(this.pid, 'claude'))
-      const msSinceDelivery = now - this._lastMessageDeliveryTs
+      const msSinceDelivery = now - diagnosticStartedAt
       const msSinceLastEvent = this._lastJsonlEventTs ? now - this._lastJsonlEventTs : -1
       const hasTailer = !!this._transport
 
-      log.session.warn('STALL DIAGNOSTIC: no JSONL event 30s after message delivery', {
-        trigger,
+      log.session.warn(delivered
+        ? 'STALL DIAGNOSTIC: no JSONL event 30s after message delivery'
+        : 'STALL DIAGNOSTIC: no JSONL event 30s after unconfirmed start', {
+        trigger, delivered,
         sessionId: this.claudeSessionId,
         taskId: this.taskId,
         pid: this.pid,

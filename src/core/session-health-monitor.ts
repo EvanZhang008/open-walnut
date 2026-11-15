@@ -260,6 +260,8 @@ export class SessionHealthMonitor {
    * forward) re-arms the warning, while a session sitting still stays silent.
    */
   private willReapWarnedBase = new Map<string, number>()
+  /** One warning per confirmed delivery, not one warning per 30-second tick. */
+  private hungWarnedDelivery = new Map<string, number>()
   /** Idle stops the owner refused: sid → the pid asked about and when (IDLE_REAP_RETRY_BACKOFF_MS). */
   private idleReapDeclined = new Map<string, { pid: number; at: number }>()
   /** Sessions the live limit announced it will stop: sid → the quiet clock it was announced on, and when. */
@@ -909,6 +911,11 @@ export class SessionHealthMonitor {
   ): Promise<Set<string>> {
     const WARN_THRESHOLD_MS = 5 * 60 * 1000  // log warning after 5 min with no Claude output
     const flaggedIds = new Set<string>()
+    const activeIds = new Set(sessions.filter(s => s.process_status === 'running').map(s => s.claudeSessionId))
+    for (const sid of this.hungWarnedDelivery.keys()) {
+      if (!activeIds.has(sid)) this.hungWarnedDelivery.delete(sid)
+    }
+    const { isDaemonConnected } = await import('../providers/daemon-connection.js')
 
     let runner: { getSessionTimestamps(id: string): { lastClaudeOutputAt: number; lastMessageDeliveryAt: number } | undefined; isTeamActive(id: string): boolean; isBackgroundWorkActive(id: string): boolean | Promise<boolean> } | undefined
     try {
@@ -943,10 +950,13 @@ export class SessionHealthMonitor {
       // flag, so deferring it changes no outcome.
       const ts = runner.getSessionTimestamps(session.claudeSessionId)
       if (!ts) continue
-      if (ts.lastMessageDeliveryAt === 0) continue  // no message delivered yet
-
-      // Only flag if a message was delivered AFTER the last Claude output
-      if (ts.lastClaudeOutputAt >= ts.lastMessageDeliveryAt) continue
+      if (ts.lastMessageDeliveryAt === 0 || ts.lastClaudeOutputAt >= ts.lastMessageDeliveryAt) {
+        this.hungWarnedDelivery.delete(session.claudeSessionId)
+        continue
+      }
+      // An unreachable host gives no evidence that its CLI is silent. Its link
+      // alarm and the queued message's delivery state already explain the wait.
+      if (!isDaemonConnected(session.host ?? '__local__')) continue
 
       const waitingMs = Date.now() - ts.lastMessageDeliveryAt
       if (waitingMs < WARN_THRESHOLD_MS) continue
@@ -963,17 +973,23 @@ export class SessionHealthMonitor {
         'isBackgroundWorkActive', session.claudeSessionId,
       )) continue
 
+      const latest = runner.getSessionTimestamps(session.claudeSessionId)
+      if (!isDaemonConnected(session.host ?? '__local__') || !latest
+        || latest.lastMessageDeliveryAt !== ts.lastMessageDeliveryAt
+        || latest.lastClaudeOutputAt >= ts.lastMessageDeliveryAt) continue
       const waitingMin = Math.round(waitingMs / 60_000)
 
-      // Log warning (every 30s health check will re-log, but that's fine for diagnostics)
-      log.session.warn('health monitor: possible hung session — no Claude output after message delivery', {
-        sessionId: session.claudeSessionId,
-        taskId: session.taskId,
-        pid: session.pid,
-        waitingMinutes: waitingMin,
-        lastMessageDeliveryAt: new Date(ts.lastMessageDeliveryAt).toISOString(),
-        lastClaudeOutputAt: ts.lastClaudeOutputAt ? new Date(ts.lastClaudeOutputAt).toISOString() : 'never',
-      })
+      if (this.hungWarnedDelivery.get(session.claudeSessionId) !== ts.lastMessageDeliveryAt) {
+        this.hungWarnedDelivery.set(session.claudeSessionId, ts.lastMessageDeliveryAt)
+        log.session.warn('health monitor: possible hung session — no Claude output after message delivery', {
+          sessionId: session.claudeSessionId,
+          taskId: session.taskId,
+          pid: session.pid,
+          waitingMinutes: waitingMin,
+          lastMessageDeliveryAt: new Date(ts.lastMessageDeliveryAt).toISOString(),
+          lastClaudeOutputAt: ts.lastClaudeOutputAt ? new Date(ts.lastClaudeOutputAt).toISOString() : 'never',
+        })
+      }
 
       // Update activity so UI shows a yellow warning banner
       const updated = await updateSessionRecord(session.claudeSessionId, {
