@@ -202,7 +202,12 @@ export interface BpOptions {
   listHosts?: boolean
 }
 
-/** git-sync reads healthy, so the bell's older system dot (hasIssues) never mixes into a host or local reason. */
+/**
+ * git-sync reads healthy, so the bell's older system dot (hasIssues) never mixes into a host or
+ * local reason. It is also a backup that RUNS: a test server runs none (`off: 'test'`), and its
+ * System section then shows no Data Backup card (NotificationSystemPane.tsx), so a spec that reads
+ * that card routes this first.
+ */
 export async function healthyGitSync(page: Page): Promise<void> {
   await page.route('**/api/git-sync/status', (route) => route.fulfill({ json: { protected: true, consecutiveFailures: 0 } }))
 }

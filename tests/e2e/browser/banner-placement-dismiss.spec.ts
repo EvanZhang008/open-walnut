@@ -80,7 +80,7 @@ test.describe('one dismiss store behind the card and the panel\'s problems; Syst
     await expect(systemHostRow(page, 'certbox')).toBeVisible()
   })
 
-  test('BP-C11: the panel has no x and no Dismiss all; Dismiss all on the Home card hides its host rows and keeps the local section, and All then leads with the Claude Code card alone (Errors counts 1), while System still lists every problem host', async ({ page }) => {
+  test('BP-C11: the panel has no x and no Dismiss all; Dismiss all on the Home card hides its host rows and keeps the local section, and All then leads with the Claude Code card alone (Errors counts nothing: signing in is a setup step), while System still lists every problem host', async ({ page }) => {
     await bpSetup(page, { local: 'sign-in' })
     await expandSystemAttention(page)
     await expectTasksCard(page)
@@ -102,7 +102,8 @@ test.describe('one dismiss store behind the card and the panel\'s problems; Syst
     // Every host row was dismissed on the card: no host card here, and no undo line either.
     await expect(problemHosts(page)).toHaveCount(0)
     await expect(page.locator('.notification-panel').locator('.hpb-undo-row, [data-testid="hpb-undo-row"]')).toHaveCount(0)
-    await expect(errorsBadge(page)).toHaveText('1')
+    // The dismissed hosts count no more, and a sign-in step never did (localNoticeIsFailure).
+    await expect(errorsBadge(page)).toHaveCount(0)
     await pickRail(page, 'System')
     await expect.poll(() => systemRowHosts(page)).toEqual(['signbox', 'keybox', 'certbox', 'netbox'])
     await expect(systemHosts(page).locator('.hpb-undo-row, [data-testid="hpb-undo-row"]')).toHaveCount(0)
@@ -113,9 +114,10 @@ test.describe('one dismiss store behind the card and the panel\'s problems; Syst
   })
 
   test('BP-C12: Dismiss Claude Code notice in All\'s Claude Code card on /notes: the bell dot goes in the next frame, the card leaves the panel and the Errors count; Home shows no local section', async ({ page }) => {
-    await bpSetup(page, { hosts: [connected('devbox', 'Dev box')], local: 'sign-in' })
+    // A Claude Code that does not start: a failure, so its card counts on Errors (localNoticeIsFailure).
+    await bpSetup(page, { hosts: [connected('devbox', 'Dev box')], local: 'broken' })
     await expandSystemAttention(page)
-    await expect(banner(page).locator('[data-testid="setup-banner-sign-in"]')).toBeVisible({ timeout: 20_000 })
+    await expect(banner(page).locator('[data-testid="setup-banner-install"]')).toBeVisible({ timeout: 20_000 })
     await goRail(page, 'notes')
     await expect(bellDot(page)).toHaveCount(1)
     await expect(bell(page)).toHaveAttribute('aria-label', 'Notifications: Claude Code needs attention')
@@ -129,7 +131,7 @@ test.describe('one dismiss store behind the card and the panel\'s problems; Syst
     await closePanel(page, 'escape')
     await goRail(page, 'home')
     await page.mouse.move(2, 2)
-    await expect(page.locator('[data-testid="setup-banner-sign-in"]')).toHaveCount(0)
+    await expect(page.locator('[data-testid="setup-banner-install"]')).toHaveCount(0)
     await expect(banner(page)).toHaveCount(0, { timeout: 12_000 })
   })
 })

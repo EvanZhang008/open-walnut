@@ -19,6 +19,7 @@
 import fs from 'node:fs/promises'
 import { test, expect, type Page } from '@playwright/test'
 import { presetPanelView } from './todo-panel-helpers'
+import { healthyGitSync } from './banner-placement-helpers'
 
 const SCREENSHOT_DIR = '/tmp/t29-campaign/shots'
 
@@ -130,6 +131,8 @@ test('quick add: Enter creates a task; Escape abandons a draft without side effe
 })
 
 test('notification panel: Remote Hosts rows say Connected/Disconnected, never Idle', async ({ page }) => {
+  // A test server runs no backup: route a running one, whose card says the System zone has loaded.
+  await healthyGitSync(page)
   await openHome(page)
 
   await page.locator('button[aria-label="Notifications"]').click()

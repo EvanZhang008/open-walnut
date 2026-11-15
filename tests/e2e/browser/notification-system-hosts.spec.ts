@@ -262,7 +262,7 @@ test.describe('one attempt, Open Settings, cards under their host (c, d, e)', ()
 })
 
 test.describe('this machine\'s Claude Code leads the problems (f)', () => {
-  test('NSH-f: the Claude Code card leads All and Errors only while the local notice shows, and counts once on the Errors badge; System never holds it', async ({ page, browserName }) => {
+  test('NSH-f: the Claude Code card leads All and Errors only while the local notice shows, and counts once on the Errors badge only as a failure; System never holds it', async ({ page, browserName }) => {
     await page.setViewportSize({ width: 1280, height: 800 })
     const h = await bpSetup(page, { hosts: [connected('devbox', 'Dev box'), failed('netbox', 'Net box', 'unreachable')], local: 'sign-in' })
     await expandSystemAttention(page)
@@ -278,8 +278,8 @@ test.describe('this machine\'s Claude Code leads the problems (f)', () => {
     expect(await first(), 'the first block of All').toBe(true)
     // Then the host problems, in the same block.
     expect(await local.evaluate((el) => el.nextElementSibling?.getAttribute('data-testid'))).toBe('nfc-problem-hosts')
-    // Net box and this machine: two.
-    await expect(errorsBadge(page)).toHaveText('2')
+    // Net box only: not signed in yet is a setup step the card asks for, not an error.
+    await expect(errorsBadge(page)).toHaveText('1')
     await expect(systemBadge(page)).toHaveCount(0)
     await page.mouse.move(2, 2)
     await page.locator('.notification-panel').screenshot({ path: `${SHOTS}/all-local-card-${browserName}.png` })
@@ -298,9 +298,14 @@ test.describe('this machine\'s Claude Code leads the problems (f)', () => {
     await expect(local).toHaveCount(0, { timeout: 10_000 })
     await expect(problemRow(page, 'netbox')).toBeVisible()
     await expect(errorsBadge(page)).toHaveText('1')
-    // Signed out again: back at the top.
+    // Signed out again: back at the top, still not an error.
     await h.health!.set('sign-in')
     await expect(local).toBeVisible({ timeout: 10_000 })
+    expect(await first()).toBe(true)
+    await expect(errorsBadge(page)).toHaveText('1')
+    // Claude Code that does not start is a failure: the same card, counted once beside Net box.
+    await h.health!.set('broken')
+    await expect(local).toHaveAttribute('data-kind', 'install', { timeout: 10_000 })
     expect(await first()).toBe(true)
     await expect(errorsBadge(page)).toHaveText('2')
     // Too old for one model is never a notice: no card, no count.

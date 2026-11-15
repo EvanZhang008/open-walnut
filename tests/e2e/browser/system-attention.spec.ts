@@ -102,7 +102,7 @@ test('shared repair pending survives collapse and notification switches, then fa
   expect(requests).toEqual([{ host: 'alpha' }, { host: 'alpha' }]);
 });
 
-test('credential repair sends the whole group once; local and backup/search errors have typed actions', async ({ page }) => {
+test('credential repair sends the whole group once; backup/search errors have typed actions; none is offered while Claude Code here cannot run', async ({ page }) => {
   let requests: Record<string, unknown>[] = [];
   await page.route('**/api/notifications/fix', async (route) => {
     requests.push(route.request().postDataJSON());
@@ -110,21 +110,25 @@ test('credential repair sends the whole group once; local and backup/search erro
   });
   await page.route('**/api/git-sync/status', (route) => route.fulfill({ json: { protected: false, consecutiveFailures: 3, error: 'Backup failed' } }));
   await page.route('**/api/search-index/status', (route) => route.fulfill({ json: { status: 'error', error: 'Search failed', model: { name: 'Test model', downloaded: true }, stores: {} } }));
-  await setup(page, [failed('alpha', 'Alpha box', 'cert_expired'), failed('beta', 'Beta box', 'cert_expired')], 'sign-in', { listHosts: true });
-  await count(page, 3);
+  // A repair session runs on Claude Code here, so it is signed in (local-agent-runnable.ts).
+  const hosts = await setup(page, [failed('alpha', 'Alpha box', 'cert_expired'), failed('beta', 'Beta box', 'cert_expired')], 'ready', { listHosts: true });
+  await count(page, 2);
   await expand(page);
   await banner(page).getByRole('button', { name: 'Fix with agent for Alpha box, Beta box', exact: true }).click();
   await expect(banner(page).locator('.host-agent-fix-error').last()).toContainText('Retry later');
   expect(requests[0]).toEqual({ hosts: ['alpha', 'beta'] });
-  await banner(page).getByRole('button', { name: 'Fix with agent for this computer', exact: true }).click();
-  await expect(banner(page).locator('.ab-local .host-agent-fix-error')).toContainText('Retry later');
-  expect(requests[1]).toEqual({ host: '__local__' });
   await openSystemHosts(page);
   await page.getByRole('button', { name: 'Fix with agent for Data Backup', exact: true }).click();
   await expect(page.locator('.notification-panel .host-agent-fix-error').first()).toContainText('Retry later');
   await page.getByRole('button', { name: 'Fix with agent for Embedding Search', exact: true }).click();
-  await expect.poll(() => requests.length).toBe(4);
-  expect(requests.slice(2)).toEqual([{ system: 'backup' }, { system: 'search' }]);
+  await expect.poll(() => requests.length).toBe(3);
+  expect(requests.slice(1)).toEqual([{ system: 'backup' }, { system: 'search' }]);
+  // Signed out here: a repair session would fail like the errors it was asked to fix, so no
+  // Fix with agent is offered anywhere, this computer's included; its sign-in step is the way on.
+  await hosts.health!.set('sign-in');
+  await expect(banner(page).locator('[data-testid="setup-banner-sign-in"]')).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole('button', { name: /^Fix with agent for / })).toHaveCount(0);
+  expect(requests).toHaveLength(3);
 });
 
 test('12 host faults leave 100 tasks usable in narrow short light and dark panels', async ({ page, browserName }) => {
@@ -248,15 +252,17 @@ test('a late group repair cannot navigate after its fault membership changes', a
   } finally { release(); }
 });
 
-test('long local repair failures remain fully readable without consuming the short task panel', async ({ page, browserName }) => {
+test('long repair failures remain fully readable without consuming the short task panel', async ({ page, browserName }) => {
   await page.setViewportSize({ width: 960, height: 600 });
   await healthyGitSync(page);
   const error = Array.from({ length: 60 }, (_, i) => `Clone diagnostic ${i}: a long actionable error with retry details.`).join('\n');
   await page.route('**/api/notifications/fix', (route) => route.fulfill({ status: 503, json: { error } }));
-  await setup(page, [], 'sign-in');
+  // A host's repair: this computer's own Fix with agent is never offered while Claude Code here
+  // cannot run (local-agent-runnable.ts), and once it runs there is no local notice to repair.
+  await setup(page, [failed('alpha', 'Alpha box', 'cert_expired')], 'ready');
   await page.locator('.main-page-todo').evaluate((el) => { Object.assign((el as HTMLElement).style, { width: '360px', minWidth: '360px', maxWidth: '360px', height: '400px', flex: 'none' }); });
   await expand(page);
-  await banner(page).getByRole('button', { name: 'Fix with agent for this computer', exact: true }).click();
+  await banner(page).getByRole('button', { name: 'Fix with agent for Alpha box', exact: true }).click();
   const detail = banner(page).locator('.host-agent-fix-error');
   await expect(detail).toHaveText(error);
   const dimensions = await detail.evaluate((el) => ({ height: el.clientHeight, full: el.scrollHeight }));
@@ -266,7 +272,7 @@ test('long local repair failures remain fully readable without consuming the sho
   await detail.press('End');
   await expect.poll(() => detail.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
   expect(await page.locator('.home-navigation-scroll').evaluate((el) => el.clientHeight)).toBeGreaterThan(60);
-  await page.screenshot({ path: `${SHOTS}/${browserName}-local-long-error.png` });
+  await page.screenshot({ path: `${SHOTS}/${browserName}-long-repair-error.png` });
   await toggle(page).click();
   await expand(page);
   await expect(detail).toHaveText(error);

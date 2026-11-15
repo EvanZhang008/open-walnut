@@ -101,9 +101,10 @@ test.describe('local Claude Code: the re-check and the version floor', () => {
     await openBell(page)
     await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
     await expect(panelProblems(page).locator('[data-testid="nfc-local-claude"]')).toBeVisible()
-    // Only this machine is wrong: no host card in the problems block, one on the Errors badge.
+    // Only this machine needs a step: no host card in the problems block, and nothing on the
+    // Errors badge, since signing in is a first-run step, not a failure (localNoticeIsFailure).
     await expect(problemHosts(page)).toHaveCount(0)
-    await expect(errorsBadge(page)).toHaveText('1')
+    await expect(errorsBadge(page)).toHaveCount(0)
     await page.waitForTimeout(1500)
     expect(h.health!.rechecks - n0).toBe(1)
     await closePanel(page, 'escape')

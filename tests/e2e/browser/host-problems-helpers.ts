@@ -150,14 +150,23 @@ export class Hosts {
   }
 }
 
-/** This machine's Claude Code states a routed /api/system/health can report. */
-export type LocalState = 'ready' | 'outdated' | 'sign-in'
+/**
+ * This machine's Claude Code states a routed /api/system/health can report. `sign-in` is a
+ * first-run step and `broken` (installed, but it did not start) a failure: only a failure counts
+ * on the Errors badge (web/src/utils/local-claude-banner.ts localNoticeIsFailure).
+ */
+export type LocalState = 'ready' | 'outdated' | 'sign-in' | 'broken'
 
 export function localClaudeBody(state: LocalState): Record<string, unknown> {
   if (state === 'outdated') return {
     checkedAt: now(),
     claude: { found: true, version: '2.1.258', minVersion: '2.1.280', versionOk: false, kind: 'native', auth: 'ok', installMethod: 'other' },
     problems: [{ kind: 'claude_outdated', message: 'Claude Code on this computer is 2.1.258, but the default model needs 2.1.280 or newer.', commands: ['claude update'] }],
+  }
+  if (state === 'broken') return {
+    checkedAt: now(),
+    claude: { found: true, version: '2.1.281', minVersion: '2.1.280', versionOk: true, kind: 'native', auth: 'ok', installMethod: 'native', error: 'exited with code 1' },
+    problems: [{ kind: 'claude_error', message: 'Claude Code did not start: exited with code 1', commands: ['claude doctor'] }],
   }
   if (state === 'sign-in') return {
     checkedAt: now(),

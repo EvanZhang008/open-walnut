@@ -35,6 +35,7 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, openDraftOnCwd } from './draft-helpers'
 import { holdApprovalsLock } from './approvals-lock'
+import { healthyGitSync } from './banner-placement-helpers'
 // The wire shape the panel actually parses — imported, never re-declared here, so
 // a change to the server record can't leave this spec seeding a stale shape.
 import type { FeedRecord } from '../../../web/src/contexts/notifications/NotificationProvider'
@@ -339,6 +340,8 @@ async function actionBadge(panel: Locator): Promise<number> {
 test('rail sorts the feed by what the user has to do, and cards carry the ask', async ({ page }) => {
   await captureWs(page)
   await stubNotifications(page, actionableFeed(Date.now()))
+  // A test server runs no backup; System's ambient health below reads a running one.
+  await healthyGitSync(page)
   await loadHome(page)
   await waitForWs(page)
 
