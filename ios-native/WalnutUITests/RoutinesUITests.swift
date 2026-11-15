@@ -413,9 +413,13 @@ final class RoutinesUITests: XCTestCase {
         XCTAssertTrue(app.buttons["routines.editor.save"].isEnabled)
         shot("12-edit-sheet")
         // Under its Task and Schedule: the trigger's check command.
+        // A drag on the sheet, above the keyboard: an app-wide swipe with the keyboard up
+        // scrolled nothing on a local simulator (2026-11-15, lane b batch), and the check is
+        // further down since What it sends moved above the Schedule.
         var swipes = 0
-        while !(app.textFields["routines.editor.check"].exists || app.textViews["routines.editor.check"].exists), swipes < 5 {
-            app.swipeUp()
+        while !(app.textFields["routines.editor.check"].exists || app.textViews["routines.editor.check"].exists), swipes < 8 {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)))
             swipes += 1
         }
         XCTAssertTrue(app.textFields["routines.editor.check"].exists || app.textViews["routines.editor.check"].exists,
