@@ -23,10 +23,15 @@ const FIRST_SWEEP_MS = 90_000;
 export function slotLabel(job: Pick<CronJob, 'schedule'>, slotMs: number): string {
   const tz = job.schedule.kind === 'cron' && job.schedule.tz ? job.schedule.tz : undefined;
   try {
-    return new Date(slotMs).toLocaleString('en-US', {
+    // Built from the parts, so the words between the date and the time do not change with the
+    // runtime's ICU: newer data joins them with " at " ("Sun, Nov 8 at 8:00 AM"), older with ", ".
+    const parts = new Intl.DateTimeFormat('en-US', {
       weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
       ...(tz ? { timeZone: tz, timeZoneName: 'short' } : {}),
-    });
+    }).formatToParts(new Date(slotMs));
+    const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? '';
+    const zone = part('timeZoneName');
+    return `${part('weekday')}, ${part('month')} ${part('day')}, ${part('hour')}:${part('minute')} ${part('dayPeriod')}${zone ? ` ${zone}` : ''}`;
   } catch {
     return new Date(slotMs).toISOString();
   }
