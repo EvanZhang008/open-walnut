@@ -225,6 +225,38 @@ describe('teammates beside each other, and an ask answered above (2026-11-04, af
     expect(await sameAskQuestionFor(second.id)).toContain(`[${first.id}] Orchard platform lead (your team)`)
   })
 
+  it('an explicit same-decision owner becomes a pointer through the real report API', async () => {
+    const res = await call('PUT', `/api/v1/tasks/${second.id}/report`, { state: 'needs', ask: 'Confirm the already pending rollout decision?',
+      same_as: first.id, user_kind: 'user_own', user_kind_why: 'The owner carries the same decision.' }, second.sid);
+    expect(res.status).toBe(200);
+    await settle();
+    const saved = await getTask(second.id);
+    expect(saved.status_report?.decision_owner?.taskId).toBe(first.id);
+    expect(saved.user_status).toMatchObject({ state: 'waiting', sameAsk: { id: first.id } });
+    const bad = await call('PUT', `/api/v1/tasks/${first.id}/report`, { state: 'needs', ask: 'Create a circular decision pointer?',
+      same_as: second.id, user_kind: 'user_own', user_kind_why: 'This would point to another pointer.' }, first.sid);
+    expect(bad.status).toBe(409);
+    const third = await asking('Orchard decision root', 'Choose a different release region?', undefined, 'Orchard');
+    await settle();
+    // A root changing ownership resolves every dependent to the new root, before and after refresh.
+    const chain = await call('PUT', `/api/v1/tasks/${first.id}/report`, { state: 'needs', ask: 'Repeat the root decision?',
+      ask_id: (await getTask(first.id)).user_status?.decision?.id, same_as: third.id, user_kind: 'user_own', user_kind_why: 'This would create a chain.' }, first.sid);
+    expect(chain.status).toBe(200);
+    const pointer = await call('PUT', `/api/v1/tasks/${third.id}/report`, { state: 'needs', ask: 'Repeat the existing pointer?',
+      same_as: second.id, user_kind: 'user_own', user_kind_why: 'This would target a stored pointer.' }, third.sid);
+    expect(pointer.status).toBe(409);
+    await settle();
+    expect((await getTask(second.id)).user_status).toMatchObject({ state: 'waiting', sameAsk: { id: third.id } });
+    expect(needsIds((await listTasks()).filter((t) => [first.id, second.id, third.id].includes(t.id)))).toEqual([third.id]);
+    await updateTask(third.id, { phase: 'COMPLETE' });
+    await report(first.id, 'Choose another staging schedule?', 'user_own');
+    await settle();
+    expect((await getTask(second.id)).user_status?.state).toBe('needs');
+    await report(first.id, ASK_R, 'user_own');
+    await report(second.id, ASK_R, 'user_own');
+    await settle();
+  });
+
   it('a teammate putting the same ask on the user from outside is refused, naming the one that asks', async () => {
     const res = await call('PUT', `/api/v1/tasks/${second.id}/report`, { state: 'needs', ask: ASK_R, user_kind: 'user_own', user_kind_why: 'He decides the design' }, second.sid)
     expect(res.status).toBe(409)

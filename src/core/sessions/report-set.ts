@@ -34,6 +34,8 @@ export interface ReportChange {
   ask_id?: string;
   /** needs, the same decision: what is really new about it (a fact, an option, a deadline). */
   ask_new?: string;
+  /** needs: the existing task that owns this same decision. Walnut stores a pointer, not another ask. */
+  same_as?: string;
   /** needs: why it asks what a task in its tree already asks the user (same-ask.ts). Never stored. */
   same_ask_reason?: string;
   /** Set by a task over the task's ask after the user wrote there: his words, passed back (user-spoke.ts). Never stored. */
@@ -88,6 +90,7 @@ export function reportOfChange(raw: unknown, by: StatusLineBy, byName: string | 
     state: c.state,
     ...(ask && c.state === 'needs' ? { ask } : {}),
     ...(own ? { ask_own: own } : {}),
+    ...(c.state === 'needs' && typeof c.same_as === 'string' && c.same_as.trim() ? { same_as: c.same_as.trim() } : {}),
     ...(waitingOn && c.state === 'waiting' ? { waiting_on: waitingOn } : {}),
     ...(kind && c.state === 'waiting' ? { waiting_kind: kind as WaitKind } : {}),
     ...(next ? { next } : {}),
@@ -153,13 +156,32 @@ export type ReportSetter = { taskId: string; title?: string; sessionId?: string 
 export async function setTaskReport(
   taskId: string, raw: unknown, setter: ReportSetter | null, nowMs = Date.now(),
 ): Promise<{ task: Task; phase: string | null; userSaid?: UserSaid }> {
+  if ((raw as ReportChange | null)?.same_as) {
+    const { withFileLock } = await import('../../utils/file-lock.js');
+    const { WALNUT_HOME } = await import('../../constants.js');
+    // Two tasks referencing each other must recheck under the same lock, not both pass on stale reads.
+    return withFileLock(`${WALNUT_HOME}/cache/decision-owner.json`, () => saveTaskReport(taskId, raw, setter, nowMs));
+  }
+  return saveTaskReport(taskId, raw, setter, nowMs);
+}
+
+async function saveTaskReport(
+  taskId: string, raw: unknown, setter: ReportSetter | null, nowMs: number,
+): Promise<{ task: Task; phase: string | null; userSaid?: UserSaid }> {
   const { getTask, updateTask, updateTaskRaw } = await import('../task-manager.js');
   const task = await getTask(taskId).catch(() => null);
   if (!task) throw new ReportChangeError(`task ${taskId} not found`, 'not_found', 404);
   if (task.phase === 'COMPLETE' || task.status === 'done') throw new ReportChangeError('the task is complete: reopen it first', 'conflict', 409);
   const known = setter && 'taskId' in setter ? setter : null;
   const by: StatusLineBy = !setter ? 'human' : !known ? 'unknown' : known.taskId === task.id ? 'self' : `task:${known.taskId}`;
-  const parsed = reportOfChange(raw, by, known && by !== 'self' ? known.title : undefined, nowMs);
+  let parsed = reportOfChange(raw, by, known && by !== 'self' ? known.title : undefined, nowMs);
+  if (parsed.same_as) {
+    const { listTasks } = await import('../task-manager.js');
+    const { bindDecisionOwner } = await import('../decision-owner.js');
+    const bound = bindDecisionOwner(task, parsed, await listTasks());
+    if (!bound) throw new ReportChangeError('same_as must name the open task in this team that owns the decision, not another pointer.', 'same_ask', 409);
+    parsed = bound;
+  }
   // The writer's session comes from the resolved caller only, never from the request body.
   const { session_id: _fromBody, ...rest } = parsed;
   const sid = known?.sessionId?.trim();
@@ -186,7 +208,7 @@ export async function setTaskReport(
     }
   }
   // A Needs you its tree already asks the user is not put on them twice (same-ask.ts); a person's own line is never asked.
-  if (report.state === 'needs' && by !== 'human') {
+  if (report.state === 'needs' && by !== 'human' && !report.decision_owner) {
     const { refuseSameAsk } = await import('../same-ask-tree.js');
     const { SameAskError, answerContextOf } = await import('../same-ask.js');
     const { reportDecision } = await import('../ask-decision.js');

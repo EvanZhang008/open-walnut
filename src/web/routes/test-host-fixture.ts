@@ -267,14 +267,16 @@ async function runAction(action: string, body: Body): Promise<Record<string, unk
         argv, command, commitSha: 'da21d9c6ebf95b2d1003c6af76bb17894603c207', cwd: repository, localRef: `refs/heads/${branch}`,
         operation: 'push', remote: 'origin', remoteRef: `refs/heads/${branch}`, repository, version: 'walnut-git-operation-v1',
       })
-      const made = await createApproval({
+      // A dialog fixture: its specs show several at once with nobody in a chat (biometric-fence.ts).
+      const { _unfencedForFixture } = await import('../../core/approvals/biometric-fence.js')
+      const made = await _unfencedForFixture(() => createApproval({
         what: `Push commit da21d9c to origin ${branch} in ${repository.split('/').pop()}`, detail: context, detailRole: 'technical',
         mode: 'biometric', singleUse: true, signingKeyId: 'ak-fixture-signer', outsideSwitch: true,
         requester: {
           host: str(body.host) ?? 'this computer', local: !str(body.host), taskId: str(body.taskId) ?? 't-fixture',
           taskTitle: str(body.taskTitle) ?? 'Platform Lead', sessionId: 's-fixture', cwd: repository, command, identity: 'verified',
         },
-      })
+      }))
       // The summary Walnut writes for it (summary.ts), arriving after the dialog first shows, as a model's would.
       const summary = str(body.summary)
       if (summary) {

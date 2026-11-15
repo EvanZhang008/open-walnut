@@ -17,8 +17,10 @@ import { isFollower } from '../server-role.js';
 import { walnutLetterLanguage as letterLang } from '../human-inbox/walnut-letters/languages.js';
 import {
   addMovedMessages, emptyThreads, enteredNeeds, fileMessage, markClosesTold, markRechecked, mergeThreads, movedAway, moveThreadIn, moveThreadOut, normalizeThreads, openThread, patchHandsToUser, setAnswers, splitThreadMessage, stampLegacyReplyAt, sweepClosed, ThreadError, updateThread,
-  type FileMessageInput, type FileMessageResult, type MoveEnd, type OpenThreadInput, type ThreadMoveKind, type OrgThread, type ThreadAnswer, type ThreadPatch, type ThreadRecheck, type ThreadsFile, type ThreadTextSource, type ThreadWriter,
+  type FileMessageInput, type FileMessageResult, type MoveEnd, type OpenThreadInput, type ThreadAskOwner, type ThreadMoveKind, type OrgThread, type ThreadAnswer, type ThreadPatch, type ThreadRecheck, type ThreadsFile, type ThreadTextSource, type ThreadWriter,
 } from './threads-model.js';
+import { askOwnerKept, askOwnerOf, pointerTaskIds, withAskPointers } from './thread-task-ask.js';
+import type { ThreadAskedIn } from './thread-view.js';
 
 const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
@@ -49,6 +51,51 @@ export async function readThreads(taskId: string): Promise<ThreadsFile> {
   return normalizeThreads(await readJsonFile<unknown>(threadsFile(taskId), null), taskId);
 }
 
+/**
+ * The node's threads as he reads them: each in needs whose decision a task already asks carries
+ * that task (`askedIn`, thread-task-ask.ts). Every reader of what waits on him goes through this
+ * (the route, the status counts, the recheck, the push), so they agree. A store Walnut cannot read
+ * leaves the threads as they are: a miss shows an ask twice, never hides one.
+ */
+export async function withTaskAsks<T extends OrgThread>(taskId: string, threads: readonly T[], tasks?: readonly import('../types.js').Task[]): Promise<Array<T & { askedIn?: ThreadAskedIn }>> {
+  if (!threads.some((t) => !t.closed && t.state === 'needs')) return [...threads];
+  try {
+    const all = tasks ?? await (await import('../task-manager.js')).listTasks();
+    const node = all.find((t) => t.id === taskId);
+    if (!node) return [...threads];
+    const { treeAround } = await import('../same-ask-tree.js');
+    // Completed tasks can still hold an answered decision. Use open copies for membership only,
+    // then project the real rows so a completion never revives the thread's old ask.
+    const members = treeAround(taskId, all.map((t) => t.phase === 'COMPLETE' || t.status === 'done'
+      ? { ...t, phase: 'NEED_ACTION' as const, status: 'todo' as const } : t));
+    const byId = new Map(all.map((t) => [t.id, t] as const));
+    const around = members.map((row) => byId.get(row.task.id)!).filter(Boolean);
+    // His own word to a task that stopped asking is the evidence it was settled there: one read of
+    // the session records for those tasks only.
+    const ids = pointerTaskIds(threads);
+    const quiet = around.filter((t) => ids.has(t.id) && t.user_status?.state !== 'needs');
+    const personAt = quiet.length ? await personWroteAt(quiet) : new Map<string, string>();
+    return withAskPointers(node, threads, around, { personAt: (id) => personAt.get(id) });
+  } catch {
+    return [...threads];
+  }
+}
+
+/** When a person last wrote to each task's sessions (SessionRecord.humanInputAt, chatInputAt); none on a failed read. */
+async function personWroteAt(tasks: readonly import('../types.js').Task[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  try {
+    const { listSessionsForTasks } = await import('../session-tracker.js');
+    const bySid = new Map<string, string>();
+    for (const t of tasks) for (const sid of [t.session_id, ...(t.session_ids ?? [])]) if (sid) bySid.set(sid, t.id);
+    for (const rec of await listSessionsForTasks(new Set(tasks.map((t) => t.id)), new Set(bySid.keys()))) {
+      const id = rec.taskId && tasks.some((t) => t.id === rec.taskId) ? rec.taskId : bySid.get(rec.claudeSessionId);
+      for (const at of [rec.humanInputAt, rec.chatInputAt]) if (id && at && at > (out.get(id) ?? '')) out.set(id, at);
+    }
+  } catch { /* no evidence read: the thread keeps its own ask */ }
+  return out;
+}
+
 /** Every node that has a threads file (the follow rule reads them all: thread-follow.ts). */
 export async function listThreadNodes(): Promise<string[]> {
   if (isFollower()) return [];
@@ -75,8 +122,14 @@ async function mutateThreads<R>(taskId: string, mutate: (cur: ThreadsFile) => { 
   });
   if (entered.length) {
     const threads = entered;
-    // A push must never fail or slow the write that triggered it.
-    void import('../push/thread-push.js').then((m) => m.onThreadsEnteredNeeds(taskId, threads)).catch(() => {});
+    // A push must never fail or slow the write that triggered it. A thread whose decision a task
+    // already asks him buzzes nothing: that task's ask is the one he answers (thread-task-ask.ts).
+    void withTaskAsks(taskId, threads)
+      .then(async (read) => {
+        const own = threads.filter((t) => !read.find((r) => r.id === t.id)?.askedIn);
+        if (own.length) await (await import('../push/thread-push.js')).onThreadsEnteredNeeds(taskId, own);
+      })
+      .catch(() => {});
   }
   return out as R;
 }
@@ -156,16 +209,48 @@ export async function openNodeThread(taskId: string, input: OpenThreadInput, by:
   return thread;
 }
 
-/** `source`: as for openNodeThread; it is recorded only when the patch changes the summary (`reply`). */
+/**
+ * `source`: as for openNodeThread; it is recorded only when the patch changes the summary (`reply`).
+ * `ask_owner`: the task that already asks him this thread's decision (thread-task-ask.ts): stored
+ * with that task's decision id and words now, and the task linked; such a write is a pointer, never
+ * refused as a second ask. "" takes it off; a write that changes what the thread asks drops it
+ * unless it still asks that decision (thread-task-ask.ts askOwnerKept).
+ */
 export async function patchThread(taskId: string, id: string, patch: ThreadPatch, by: ThreadWriter, source?: ThreadTextSource): Promise<OrgThread> {
-  if (by !== 'human') {
-    const cur = (await readThreads(taskId)).threads.find((t) => t.id === id);
-    if (cur && patchHandsToUser(cur, patch)) await refuseSameAskThread(taskId, patch.ask?.trim() || cur.ask || patch.title?.trim() || cur.title, by, patch);
-  }
+  const { ask_owner: ownerId, ...rest } = patch;
   const at = new Date().toISOString();
+  let owner: ThreadAskOwner | null | undefined;
+  if (ownerId !== undefined) {
+    if (typeof ownerId !== 'string') throw new ThreadError('bad_input', 400, 'ask_owner must be a task id, or "" to take it off.');
+    const want = ownerId.trim();
+    if (!want) owner = null;
+    else {
+      const all = await (await import('../task-manager.js')).listTasks();
+      try {
+        const { treeAround } = await import('../same-ask-tree.js');
+        const task = treeAround(taskId, all).find((row) => row.task.id === want)?.task;
+        owner = askOwnerOf(want, all.find((t) => t.id === taskId) ?? { id: taskId }, task, by, at);
+      } catch (err) {
+        throw new ThreadError('bad_input', 409, err instanceof Error ? err.message : String(err));
+      }
+      rest.add_tasks = [...(rest.add_tasks ?? []), owner.task];
+    }
+  }
+  if (by !== 'human' && !owner) {
+    const cur = (await readThreads(taskId)).threads.find((t) => t.id === id);
+    if (cur && patchHandsToUser(cur, rest)) await refuseSameAskThread(taskId, rest.ask?.trim() || cur.ask || rest.title?.trim() || cur.title, by, rest);
+  }
   const thread = await mutateThreads(taskId, (cur) => {
-    const r = updateThread(cur, id, patch, by, at, source);
-    return { file: r.file, out: r.thread };
+    const before = cur.threads.find((t) => t.id === id);
+    const r = Object.keys(rest).length || !before ? updateThread(cur, id, rest, by, at, source) : { file: cur, thread: before };
+    let next = r.thread;
+    if (owner) next = { ...next, askOwner: owner };
+    else if (next.askOwner && (owner === null || !before || !askOwnerKept(before, next))) {
+      const { askOwner: _gone, ...kept } = next;
+      next = kept;
+    }
+    if (next === r.thread) return { file: r.file, out: next };
+    return { file: { ...r.file, threads: r.file.threads.map((t) => (t.id === id ? next : t)) }, out: next };
   });
   emit({ taskId, kind: 'updated', threadId: id });
   return thread;

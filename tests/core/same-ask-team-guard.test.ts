@@ -116,6 +116,22 @@ function lineal(a: Task, b: Task, byId: Map<string, Task>): boolean {
 }
 
 describe('one decision shows once across a team', () => {
+  it('exact duplicate asks never create two Needs you items even when every task declares different', () => {
+    const start = ORG.map((t) => t.status_report ? { ...t, status_report: { ...t.status_report, ask_distinct: true as const } } : t);
+    checkOnce(settle(start));
+  });
+  it('a shared decision id folds reworded asks but does not fold a different id and target', () => {
+    const vp = task('stable-vp', { org_role: 'lead' });
+    const a = task('stable-old', { created_at: '2026-11-01T00:00:00Z' });
+    const b = task('stable-new', { created_at: '2026-11-02T00:00:00Z' });
+    a.status_report = { ...a.status_report!, ask: 'Approve the authentication step for the sandbox account?', ask_id: 'ask-shared', ask_distinct: true };
+    b.status_report = { ...b.status_report!, ask: 'Confirm this same pending phone challenge?', ask_id: 'ask-shared', ask_distinct: true };
+    const settled = settle([vp, a, b]);
+    expect(settled.filter((t) => t.user_status?.state === 'needs')).toHaveLength(1);
+    b.status_report = { ...b.status_report, ask_id: 'ask-other', ask: 'Approve authentication for the production account?' };
+    const separate = settle([vp, a, b]);
+    expect(separate.filter((t) => t.user_status?.state === 'needs')).toHaveLength(2);
+  });
   const settled = settle(ORG)
   const byId = new Map(settled.map((t) => [t.id, t]))
   const asking = settled.filter((t) => !t.org_role)
