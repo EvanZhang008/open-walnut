@@ -292,9 +292,16 @@ test('the Browser view shows itself when the task\'s session opens a page, follo
   await page.screenshot({ path: path.join(SHOTS, 'stopped.png') })
   expect(await sw.evaluate(async (tab: number) => !!(await chrome.tabs.get(tab).catch(() => null)), agentTab)).toBe(true)
   expect((await act(page, { action: 'snapshot', tab: agentTab })).body.code).toBe('not_your_tab')
-  // Dismissed, the popover and the pill are gone.
+  // Dismissed, the notice goes; the task's recorded steps stay (kept 7 days by default,
+  // extension-browser-replay.spec.ts), so the popover shows their replay and its × closes it,
+  // leaving the grey Replay pill.
   await press(page, ended.getByRole('button', { name: 'Dismiss' }))
+  await expect(ended).toHaveCount(0)
+  const replay = popover(page).getByTestId('session-browser-replay')
+  await expect(replay).toBeVisible()
+  await press(page, replay.getByTestId('session-browser-replay-hide'))
   await expect(popover(page)).toHaveCount(0)
-  await expect(chip(page)).toHaveCount(0)
+  await expect(chip(page)).toHaveText('Replay')
+  await expect(chip(page)).toHaveAttribute('data-tone', 'ended')
   await mine.close()
 })
