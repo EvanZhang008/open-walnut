@@ -92,17 +92,23 @@ describe('routineStartOf: the run the Mac would start, or none', () => {
     expect(await routineStartOf(job({ host: 'ghost' }), 'ghost')).toBeNull()
   })
 
-  it('none when the Mac would run it on another engine or through the SDK session server', async () => {
+  it('keeps the configured remote engine restriction', async () => {
     await updateConfig({ defaults: { engine: 'codex' } } as never)
     // An ACP default is dropped for a remote launch, so Claude Code still runs it.
     const codex = await routineStartOf(job({}), HOST)
-    await updateConfig({ defaults: {}, session_server: { enabled: true } } as never)
-    expect(await routineStartOf(job({}), HOST)).toBeNull()
     // Whatever the engine registry says of codex on a remote host, the start says the same.
     const { normalizeEngine } = await import('../../../src/core/agents/engine-registry.js')
     const { resolveDefaultEngine } = await import('../../../src/core/agents/default-engine.js')
     const remote = normalizeEngine(resolveDefaultEngine({ defaults: { engine: 'codex' } } as never, { host: HOST }))
     expect(codex === null).toBe(remote !== undefined)
+  })
+
+  it.each([false, true])('builds a detached CLI start with primary session_server.enabled=%s', async enabled => {
+    await updateConfig({ defaults: {}, session_server: { enabled } } as never)
+    const spec = await routineStartOf(job({}), HOST)
+    expect(spec).toMatchObject({ host: HOST, cwd: '/srv/repo', project: 'Routines', mode: 'auto' })
+    expect(spec!.message).toContain('Write the nightly report')
+    expect(spec!.context).toContain(START_TASK_TOKEN)
   })
 })
 
