@@ -159,6 +159,8 @@ struct OrgThreadsView: View {
                 // and nothing ends under the floating tab bar.
                 .padding(.bottom, 240)
                 .opacity(hides ? 0 : 1)
+                // Up and down only: never a page that slides sideways under a drag.
+                .pageWidth()
             }
             .coordinateSpace(.named(Self.scrollSpace))
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }

@@ -207,6 +207,7 @@ struct LetterReaderView: View {
                             .id(Self.boxId)
                     }
                 }
+                .pageWidth()
             }
             // The page's frame is what shows: it starts under the navigation bar
             // and ends at the reply box (and the keyboard). Its safe-area insets,
@@ -273,6 +274,7 @@ struct LetterReaderView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 4)
                 .padding(.bottom, 16)
+                .pageWidth()
                 .id(Self.contentId)
             }
             .scrollDismissesKeyboard(.interactively)
