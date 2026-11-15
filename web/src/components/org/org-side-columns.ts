@@ -10,7 +10,11 @@
  * beside the pins). Slot ids are the `?open=` strings, `task:<id>` / `session:<id>`. The
  * strip is a layout record field (`orgColumns`), so the pins survive a restart.
  */
+import type { Task } from '@open-walnut/core';
 import { removeSessionColumn, replaceSessionColumn, toggleLockSlot, type SessionSlot } from '@/pages/sessionColumns';
+import { isPlaceholderColumnId } from '@/utils/column-ids';
+import { shownText, storedView, viewKey, writeView } from '@/utils/view-memory';
+import { isStringArray } from '@/hooks/usePersistentState';
 
 /** Two slot ids that show the same session (`task:<id>` of a task whose session is `session:<sid>`). */
 export type SameSession = (a: string, b: string) => boolean;
@@ -84,4 +88,59 @@ export function orgStripToggleLock(cols: readonly SessionSlot[], id: string): Se
 export function orgStripView(pins: readonly SessionSlot[], open: string | null, same: SameSession = () => false): SessionSlot[] {
   const locked = pins.filter((c) => c.locked);
   return orgStripOnOpen(orgStripDedupe(locked, same, open), null, open, same);
+}
+
+/**
+ * The panels locked on Home that belong to one node of the Org page, as its locked panels (2026-11-04,
+ * the user, on a VP: "the lock view is not there, the lock should always show for that vp"): in
+ * Home's order, each a `session:<id>` / `task:<id>` slot, the node's own chat and the ones taken off
+ * here (`off`) left out. `rowKeyOf` places a task under its row (org-task-tabs taskRowKey).
+ */
+export function homeLocksFor(
+  rowKey: string,
+  homeSlots: readonly { id: string; locked?: boolean }[],
+  tasks: readonly Task[],
+  rowKeyOf: (t: Task) => string | undefined,
+  off: ReadonlySet<string> = new Set(),
+): SessionSlot[] {
+  const bySession = new Map<string, Task>();
+  const byId = new Map<string, Task>();
+  for (const t of tasks) {
+    byId.set(t.id, t);
+    for (const sid of [t.session_id, t.exec_session_id, t.plan_session_id, ...(t.session_ids ?? []), ...(t.legacy_session_ids ?? [])]) {
+      if (sid && !bySession.has(sid)) bySession.set(sid, t);
+    }
+  }
+  const out: SessionSlot[] = [];
+  for (const s of homeSlots) {
+    if (!s.locked || isPlaceholderColumnId(s.id)) continue;
+    const task = s.id.startsWith('task:') ? byId.get(s.id.slice(5)) : bySession.get(s.id.startsWith('session:') ? s.id.slice(8) : s.id);
+    if (!task || task.org_role || task.plugin_only || rowKeyOf(task) !== rowKey) continue;
+    const id = s.id.startsWith('task:') || s.id.startsWith('session:') ? s.id : `session:${s.id}`;
+    if (off.has(id) || out.some((c) => c.id === id)) continue;
+    out.push({ id, locked: true });
+  }
+  return out;
+}
+
+/** The Org page's view name for the Home locks taken off it (OrgPage homeOff). */
+export const HOME_OFF_VIEW = 'homeLocksOff';
+
+/**
+ * Home's lock button was pressed on `columnId`: a taking-off on the Org page lapses, so a panel
+ * locked on Home again (in this browser or any other, the views are synced) stands beside its node
+ * again. Unlocking lapses it too, as Home no longer locks it (2026-11-05, round 23: one unlock on
+ * the Org page kept it away for good, whatever Home did after).
+ */
+export function releaseHomeTakeoff(columnId: string): void {
+  const id = columnId.startsWith('task:') || columnId.startsWith('session:') ? columnId : `session:${columnId}`;
+  const key = viewKey('org', HOME_OFF_VIEW);
+  const off = storedView(shownText(key), null, isStringArray) ?? [];
+  if (off.includes(id)) writeView(key, null, off.filter((x) => x !== id));
+}
+
+/** The Org ids of every panel locked on Home (so a taking-off kept here can lapse once Home unlocks it). */
+export function homeLockedIds(homeSlots: readonly { id: string; locked?: boolean }[]): Set<string> {
+  return new Set(homeSlots.filter((s) => s.locked && !isPlaceholderColumnId(s.id))
+    .map((s) => (s.id.startsWith('task:') || s.id.startsWith('session:') ? s.id : `session:${s.id}`)));
 }

@@ -573,3 +573,38 @@
   border-radius: 50%;
   animation: spin 0.9s linear infinite;
 }
+
+/* The panels locked on Home that do not fit beside the chat (a window that lays side panels over the
+   node): one slim tab each at the right edge, the lock and the task's name; a click opens it. */
+.org-locked-dock {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 32px;
+  padding: 8px 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+  align-items: center;
+  overflow: hidden;
+}
+/* The name runs down the tab (WebKit lays a button out horizontally whatever its writing mode, so
+   the turn is on the name itself). */
+.org-locked-dock-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 26px;
+  padding: 8px 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+.org-locked-dock-item svg { flex: none; width: 13px; height: 13px; }
+.org-locked-dock-label { writing-mode: vertical-rl; max-height: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-locked-dock-item:hover { background: var(--bg-hover); color: var(--fg); }
+.org-locked-dock-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }

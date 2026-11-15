@@ -20,6 +20,7 @@ import { projectLaunchDefaultsNow, useProjectRegistry } from '@/hooks/useProject
 import { defaultEngineRuns, draftLaunchChoice, draftLaunchPayload, unnamedLaunchIsNotClaude, useGlobalDefaultEngine } from '@/utils/launch-source';
 import { projectService } from '@/components/tasks/private-task-model';
 import { homeColumnsField, isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { releaseHomeTakeoff } from '@/components/org/org-side-columns';
 import { isPhoneOverlayOpen } from '@/hooks/usePhoneOverlayHistory';
 import { deepLinkBaseUrl, usePhoneRestore } from '@/hooks/usePhoneRestore';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
@@ -2032,6 +2033,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   // Lock toggle — reorders slot; auto-animate handles the smooth slide.
   const handleToggleLockSession = useLeanCallback((sessionId: string) => {
+    // A lock (or unlock) made on Home again ends an Org page's taking-off of it (org-side-columns).
+    releaseHomeTakeoff(sessionId);
     setSessionColumns(prev => toggleLockSlot(prev, sessionId));
   }, []);
 

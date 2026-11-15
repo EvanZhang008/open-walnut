@@ -130,6 +130,17 @@ export function slotTaskIds(slots: readonly LayoutSlot[], tasks: readonly Task[]
   return out;
 }
 
+/** The row of the Org list a task belongs to: the VP whose work holds its project (its own or one it
+ *  leads), else the CEO. */
+export function taskRowKey(main: ChannelRow | null, rows: readonly ChannelRow[]): (t: Pick<Task, 'project'>) => string | undefined {
+  const rowOf = new Map<string, string>();
+  for (const r of rows) for (const p of [r.project, ...(r.led ?? []).map((l) => l.project)]) {
+    const k = projectKey(p);
+    if (!rowOf.has(k)) rowOf.set(k, r.key);
+  }
+  return (t) => rowOf.get(projectKey(t.project)) ?? main?.key;
+}
+
 /** A task hung under a row of the Org list, and why: the user watches it, its session panel is locked, or both. */
 export interface KeptTask { task: Task; watched: boolean; locked: boolean }
 
@@ -141,11 +152,7 @@ export interface KeptTask { task: Task; watched: boolean; locked: boolean }
  * hangs it under one.
  */
 export function keptByRow(main: ChannelRow | null, rows: readonly ChannelRow[], tasks: readonly Task[], locked: readonly string[] = []): Map<string, KeptTask[]> {
-  const rowOf = new Map<string, string>();
-  for (const r of rows) for (const p of [r.project, ...(r.led ?? []).map((l) => l.project)]) {
-    const k = projectKey(p);
-    if (!rowOf.has(k)) rowOf.set(k, r.key);
-  }
+  const rowKeyOf = taskRowKey(main, rows);
   const lockedSet = new Set(locked);
   const byId = locked.length ? new Map(tasks.map((t) => [t.id, t])) : new Map<string, Task>();
   const watched = sortSectionTasks('watching', tasks.filter((x) => isWatched(x) && !x.plugin_only));
@@ -153,7 +160,7 @@ export function keptByRow(main: ChannelRow | null, rows: readonly ChannelRow[], 
     .filter((t): t is Task => !!t && !isWatched(t) && !t.plugin_only && !t.org_role);
   const out = new Map<string, KeptTask[]>();
   for (const t of [...watched, ...lockedOnly]) {
-    const key = rowOf.get(projectKey(t.project)) ?? main?.key;
+    const key = rowKeyOf(t);
     if (key) out.set(key, [...(out.get(key) ?? []), { task: t, watched: isWatched(t), locked: lockedSet.has(t.id) }]);
   }
   return out;

@@ -18,11 +18,12 @@
  * layout record so the pins come back after a restart. On a phone the list, the detail and the
  * opened task take turns. The old org chart (drag to reparent) stays one click away.
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
+import { ICON_LOCK } from '@/components/common/Icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
-import { keptByRow, lockedTaskIds, slotTaskIds } from '@/components/org/org-task-tabs';
+import { keptByRow, lockedTaskIds, slotTaskIds, taskRowKey } from '@/components/org/org-task-tabs';
 import { buildOrgTree } from '@open-walnut/org-tree';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
@@ -49,8 +50,10 @@ import { OrgNodeDetail, type OrgAnswers, type OrgTab } from '@/components/org/Or
 import type { AnswerFailure } from '@/components/org/OrgInlineAnswer';
 import { OrgSidePanel, parseSideTarget, sideTargetParam, type OrgSideTarget } from '@/components/org/OrgSidePanel';
 import {
-  orgStripToggleLock, orgStripView, type SameSession,
+  homeLockedIds, homeLocksFor, HOME_OFF_VIEW, orgStripToggleLock, orgStripView, type SameSession,
 } from '@/components/org/org-side-columns';
+import { usePageView } from '@/utils/view-memory';
+import { isStringArray } from '@/hooks/usePersistentState';
 import {
   MAIN_KEY, buildChannels, filterChannels, flattenNodes, movedProjects, pickChannel, projectRowKey, rowOf, settleDefaultNode, vpCount, type AlertProbe, type ChannelRow,
 } from '@/components/org/org-channels-model';
@@ -72,6 +75,13 @@ const ORG_DETAIL_MIN_PX = 480;
 const ORG_SIDE_MIN_PX = 340;
 /** Up to this window width an opened task is laid over the node (org-page.css), not a column. */
 const ORG_SIDE_OVERLAY_MAX_VW = 1180;
+const OVERLAY_QUERY = `(max-width: ${ORG_SIDE_OVERLAY_MAX_VW}px)`;
+const overlaysNow = () => typeof window !== 'undefined' && !!window.matchMedia?.(OVERLAY_QUERY).matches;
+const onOverlayChange = (cb: () => void) => {
+  const mq = typeof window !== 'undefined' ? window.matchMedia?.(OVERLAY_QUERY) : undefined;
+  mq?.addEventListener('change', cb);
+  return () => mq?.removeEventListener('change', cb);
+};
 
 const TABS: readonly OrgTab[] = ['board', 'team', 'chat'];
 
@@ -275,8 +285,6 @@ export function OrgPage() {
   // is gone closes itself instead of drawing "Session not found" (SessionPanel onRestoredGone).
   const restoredSide = useRef<Set<string> | null>(null);
   if (!restoredSide.current) restoredSide.current = new Set([...pins.map((s) => s.id), ...(restore?.open ? [restore.open] : [])]);
-  // `sameSession` changes with `tasks`: a task's panel and its session's become one once the tasks are known.
-  const strip = useMemo(() => orgStripView(pins, openParam, sameSession), [pins, openParam, sameSession]);
   // Under each row of the list, the tasks the user keeps in view there: the watched ones (Home's
   // Watching) and the ones whose session panel is locked, on Home (this window's strip, read from the
   // saved layout: another window's lock arrives with `storage`, and coming back to the page reads it
@@ -297,7 +305,36 @@ export function OrgPage() {
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, []);
-  const lockedIds = useMemo(() => lockedTaskIds([...pins, ...homeLocks], shownTasks), [pins, homeLocks, shownTasks]);
+  // Beside a node, the panels locked on Home that belong to it stay locked here too, in Home's order
+  // (2026-11-04, the user: "the lock should always show for that vp"; homeLocksFor). One taken off
+  // here (its lock or its ×) leaves this page only, never Home's lock, until Home's lock button is pressed on it
+  // again (releaseHomeTakeoff).
+  const [homeOff, setHomeOff] = usePageView<string[]>('org', HOME_OFF_VIEW, [], isStringArray);
+  const homeLocked = useMemo(() => homeLockedIds(homeLocks), [homeLocks]);
+  useEffect(() => {
+    if (homeOff.some((id) => !homeLocked.has(id))) setHomeOff(homeOff.filter((id) => homeLocked.has(id)));
+  }, [homeOff, homeLocked, setHomeOff]);
+  const rowKeyOf = useMemo(() => taskRowKey(channels.main, channels.rows), [channels.main, channels.rows]);
+  // Only where they fit beside the chat: a window that lays side panels over the node never covers its
+  // chat with them unasked (the VP: "don't squeeze the chat away"); its kept row still opens one.
+  const overlays = useSyncExternalStore(onOverlayChange, overlaysNow, () => false);
+  const homeHere = useMemo(
+    () => (phone ? [] : homeLocksFor(selected.key, homeLocks, tasks, rowKeyOf, new Set(homeOff))),
+    [phone, selected.key, homeLocks, tasks, rowKeyOf, homeOff],
+  );
+  const fromHome = useMemo(() => (overlays ? [] : homeHere), [overlays, homeHere]);
+  // `sameSession` changes with `tasks`: a task's panel and its session's become one once the tasks are known.
+  const strip = useMemo(
+    () => orgStripView([...fromHome, ...pins.filter((p) => !fromHome.some((h) => h.id === p.id))], openParam, sameSession),
+    [fromHome, pins, openParam, sameSession],
+  );
+  // A Home lock taken off this page is no longer listed here as kept either.
+  const homeLocksHere = useMemo(() => homeLocks.filter((s) => !homeOff.includes(s.id.startsWith('task:') || s.id.startsWith('session:') ? s.id : `session:${s.id}`)), [homeLocks, homeOff]);
+  const docked = useMemo(() => (!overlays ? [] : homeHere
+    .filter((h) => !strip.some((c) => c.id === h.id || sameSession(c.id, h.id)))
+    .flatMap((slot) => { const id = slotTaskIds([slot], tasks)[0]; const task = id ? tasks.find((t) => t.id === id) : undefined; return task ? [{ slot, task }] : []; })),
+  [overlays, homeHere, strip, sameSession, tasks]);
+  const lockedIds = useMemo(() => lockedTaskIds([...pins, ...homeLocksHere], shownTasks), [pins, homeLocksHere, shownTasks]);
   const kept = useMemo(() => keptByRow(channels.main, channels.rows, shownTasks, lockedIds), [channels.main, channels.rows, shownTasks, lockedIds]);
   const keptOf = useCallback((row: ChannelRow) => kept.get(row.key) ?? [], [kept]);
   // A kept row whose task is open beside this page wears a light tint (2026-11-03, the user: no frame,
@@ -305,7 +342,10 @@ export function OrgPage() {
   const openTaskIds = useMemo(() => new Set(slotTaskIds(phone ? (openParam ? [{ id: openParam, locked: false }] : []) : strip, shownTasks)), [phone, openParam, strip, shownTasks]);
   // A phone shows one panel from the URL and never touches the desktop's saved strip.
   const [writeStrip] = useState(() => createStripWriter('orgColumns'));
-  useEffect(() => { if (!phone) writeStrip(strip); }, [strip, phone, writeStrip]);
+  // The page's own strip only: a panel Home locked is Home's, read again from there.
+  useEffect(() => {
+    if (!phone) writeStrip(strip.filter((s) => !fromHome.some((h) => h.id === s.id) || pins.some((p) => p.id === s.id)));
+  }, [strip, phone, writeStrip, fromHome, pins]);
   // Remember the place as the URL moves (not before the URL has caught up with a restore).
   const urlPlaced = !!(params.get('node') || params.get('open'));
   useEffect(() => {
@@ -411,20 +451,27 @@ export function OrgPage() {
       { replace: true, state: (window.history.state as { usr?: unknown } | null)?.usr ?? null });
   }, [navigate, setParams]);
 
+  /** The Home locks a panel of the strip shows (one, or none for the page's own). */
+  const homeIdsOf = useCallback((id: string) => fromHome.filter((h) => h.id === id || sameSession(h.id, id)).map((h) => h.id), [fromHome, sameSession]);
   /** × on one panel of the strip: the free one closes through the URL, a pin leaves the strip. */
   const closePanel = useCallback((id: string) => {
     restoredSide.current?.delete(id);
+    const home = homeIdsOf(id);
+    if (home.length) setHomeOff([...homeOff, ...home.filter((h) => !homeOff.includes(h))]);
     setPins((cols) => cols.filter((c) => c.id !== id && !sameSession(c.id, id)));
     if (openParam && (id === openParam || sameSession(id, openParam))) closeSide();
-  }, [openParam, closeSide, sameSession]);
+  }, [openParam, closeSide, sameSession, homeIdsOf, homeOff, setHomeOff]);
   const restoredGone = (id: string, close: () => void) => (restoredSide.current?.has(id) ? { onRestoredGone: close } : {});
   /** The lock: the free panel joins the pins; an unlocked pin becomes the free panel (one per page). */
   const togglePanelLock = useCallback((id: string) => {
+    // A panel Home locked: unlocked here, it leaves this page (the VP: "unlocking on Org only takes it
+    // off here"); Home keeps its own lock.
+    if (homeIdsOf(id).length && strip.some((c) => c.id === id && c.locked)) { closePanel(id); return; }
     const wasPinned = pins.some((c) => c.id === id);
     setPins(orgStripToggleLock(strip, id).filter((c) => c.locked));
     const target = parseSideTarget(id);
     if (wasPinned && target && id !== openParam && !(openParam && sameSession(id, openParam))) openSide(target);
-  }, [pins, strip, openParam, sameSession, openSide]);
+  }, [pins, strip, openParam, sameSession, openSide, homeIdsOf, closePanel]);
 
   /** Talk to a task off this page: its session on home, or a composer bound to it (MainPage). */
   const chatOnHome = useCallback((taskId: string) => {
@@ -614,6 +661,18 @@ export function OrgPage() {
               />
             );
           })}
+        </div>
+      )}
+      {/* Too narrow to stand beside the chat: each one waits as a slim tab at the right edge, one click
+          opens it (the chat keeps its room, as on Home, where columns never cover the chat). */}
+      {docked.length > 0 && (
+        <div className="org-locked-dock" role="group" aria-label="Locked on Home" data-testid="org-locked-dock">
+          {docked.map(({ slot, task }) => (
+            <button key={slot.id} type="button" className="org-locked-dock-item" data-testid="org-locked-dock-item" data-id={slot.id}
+              title={`${task.title}: locked on Home. Open it`} onClick={() => { const t = parseSideTarget(slot.id); if (t) openSide(t); }}>
+              {ICON_LOCK}<span className="org-locked-dock-label">{task.title}</span>
+            </button>
+          ))}
         </div>
       )}
       {chartOpen && (
