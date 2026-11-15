@@ -6,7 +6,8 @@
  *   - an English line in a turn a person started gets ONE correction mid-turn, at the tool call
  *     after it, quoting the line, in Walnut's English plus the user's rule;
  *   - a Chinese turn gets nothing, and code blocks, paths and identifiers do not count;
- *   - a turn another task or Walnut started is not judged;
+ *   - a turn another task, a trigger or Walnut started gets no mid-turn line, but its last reply is
+ *     judged and an English one corrects the next message (2026-11-15: overnight reports in English);
  *   - a turn still off at its end marks the drift for the next message; one that came back after
  *     the correction does not; a clean turn clears an older mark;
  *   - a letter off the language gets a note, one in it gets none.
@@ -194,8 +195,9 @@ describe('who started the turn, from the rows delivered for it', () => {
     queued('d2', 'qm-a', 'agent');
     deliveredRows('d2', ['qm-a']);
     await replay('d2', ENGLISH);
+    // An agent's turn: no mid-turn line; its last reply, English, still marks the drift.
     expect(delivered).toHaveLength(0);
-    expect(driftOf('d2')).toBeUndefined();
+    expect(driftOf('d2')).toBeTruthy();
   });
 
   it('a person\'s row opening the turn counts though the record says agent', async () => {
@@ -208,11 +210,26 @@ describe('who started the turn, from the rows delivered for it', () => {
 });
 
 describe('what is not judged', () => {
-  it('a turn another task or Walnut started', async () => {
+  it('a turn another task or a trigger started: no mid-turn line, but an English last reply marks the drift', async () => {
     session('a1', 'agent');
-    await replay('a1', ENGLISH);
+    // The shape of the overnight reports of 2026-11-15: a trigger turn's summary in English.
+    const report = "I've posted today's summary as a reply in your weekly thread: two new notes went out, one got an answer, and nothing needs you today.";
+    await replay('a1', [...ENGLISH, report]);
     expect(delivered).toHaveLength(0);
-    expect(driftOf('a1')).toBeUndefined();
+    expect(driftOf('a1')).toBeTruthy();
+  });
+
+  it('an agent turn whose last reply is Chinese marks nothing, whatever its progress lines were', async () => {
+    session('a6', 'agent');
+    await replay('a6', [...ENGLISH, CHINESE[2]]);
+    expect(delivered).toHaveLength(0);
+    expect(driftOf('a6')).toBeUndefined();
+  });
+
+  it('an agent turn that ends on the no-action line marks nothing (the chat hides it)', async () => {
+    session('a7', 'agent');
+    await replay('a7', [...ENGLISH, '<walnut-turn status="agent-ack"/>']);
+    expect(driftOf('a7')).toBeUndefined();
   });
 
   it('an override that dropped the on_drift trigger turns the check off', async () => {

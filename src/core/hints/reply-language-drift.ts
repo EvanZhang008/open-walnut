@@ -91,10 +91,10 @@ export function liveCorrectionMessage(rule: string, said: string): string {
   });
 }
 
-/** The note a letter off the language gets in its op's answer. */
-export function letterLanguageNoteText(rule: string): string {
-  return `Reply language: this letter is not in the user's language. It went out as written; write every letter, `
-    + `reply and line the user reads in it from now on (an English quote or draft inside one is fine). ${rule}`;
+/** The note a letter (a thread post, a Brief) off the language gets in its op's answer. */
+export function letterLanguageNoteText(rule: string, what = 'letter'): string {
+  return `Reply language: this ${what} is not in the user's language. It went out as written; write every letter, `
+    + `thread post, Brief and line the user reads in it from now on (an English quote or draft inside one is fine). ${rule}`;
 }
 
 let ruleCache: { rule: string | null; enabled: boolean; at: number } | null = null;
@@ -119,7 +119,7 @@ function readable(text: string): string {
  * A letter's words (subject, body, preview), judged as one: the note for its op's answer when it is
  * off the user's language, else null. Never throws.
  */
-export async function letterLanguageNote(parts: ReadonlyArray<unknown>): Promise<string | null> {
+export async function letterLanguageNote(parts: ReadonlyArray<unknown>, what = 'letter'): Promise<string | null> {
   try {
     // A body may be megabytes of inline media: its head is enough to tell, and the event loop stays free.
     const text = parts.filter((p): p is string => typeof p === 'string' && !!p.trim())
@@ -127,7 +127,7 @@ export async function letterLanguageNote(parts: ReadonlyArray<unknown>): Promise
     if (!text) return null;
     const { rule, enabled } = await currentRule(true);
     if (!rule || !enabled) return null;
-    return languageDrift(rule, readable(text)) === true ? letterLanguageNoteText(rule) : null;
+    return languageDrift(rule, readable(text)) === true ? letterLanguageNoteText(rule, what) : null;
   } catch {
     return null;
   }
@@ -262,10 +262,33 @@ async function sendCorrection(sid: string, rule: string, said: string, stillRunn
  * next message; a turn in the language throughout clears an older mark.
  */
 async function finishTurn(sid: string, t: Turn): Promise<void> {
-  const verdict = await judge(t, unjudged(t));
-  if (!verdict && !(await personOf(t))) return;
+  if (!(await personOf(t))) return finishOtherTurn(sid, t);
+  await judge(t, unjudged(t));
   const broke = t.offAfter > 0;
   if (!broke && (t.anyOff || !t.anyIn)) return;
+  await markDrift(sid, broke, t.lastOff, t.corrections);
+}
+
+/**
+ * A turn a trigger, a notice or another task started (2026-11-15, the org reflection: overnight a
+ * worker wrote 13 of 23 replies in English and a VP's three promotion reports were English, none
+ * corrected). The user reads its last reply in the morning, so that one is judged, as a final reply
+ * (40 letters or more); no mid-turn line, and its progress lines are not judged. A drift corrects the
+ * session's next message, whoever sends it.
+ */
+async function finishOtherTurn(sid: string, t: Turn): Promise<void> {
+  const last = [...t.texts.values()].reverse().find((x) => x.trim());
+  if (!last) return;
+  const { rule, enabled } = await currentRule();
+  if (!rule || !enabled) return;
+  const line = readable(last);
+  const v = languageDrift(rule, line);
+  if (v === null) return;
+  await markDrift(sid, v, v ? line : undefined, 0);
+}
+
+/** Mark the drift for the next message (and keep the line it quotes), or clear an older mark. */
+async function markDrift(sid: string, broke: boolean, lastOff: string | undefined, corrections: number): Promise<void> {
   const { writeHintState } = await import('./hint-send.js');
   const at = new Date().toISOString();
   await writeHintState(sid, (cur) => {
@@ -278,9 +301,9 @@ async function finishTurn(sid: string, t: Turn): Promise<void> {
     const { drift: _old, ...rest } = state;
     return { hintState: Object.keys(drift).length ? { ...rest, drift } : rest };
   });
-  if (broke && t.lastOff) noteOffLine(sid, t.lastOff);
+  if (broke && lastOff) noteOffLine(sid, lastOff);
   else clearOffLine(sid);
-  if (broke) log.session.info('reply-language: drift marked for the next message', { sessionId: sid, corrections: t.corrections, line: t.lastOff ? quoteLine(t.lastOff).slice(0, 80) : undefined });
+  if (broke) log.session.info('reply-language: drift marked for the next message', { sessionId: sid, corrections, line: lastOff ? quoteLine(lastOff).slice(0, 80) : undefined });
 }
 
 /** Judgements still running (a test waits for them: `_settledForTest`). */

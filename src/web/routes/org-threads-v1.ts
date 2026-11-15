@@ -180,6 +180,13 @@ orgThreadsV1Router.get('/tasks/:id/threads/:thread', route(async (req, res) => {
   res.json({ task_id: task.id, thread: { ...markShared(thread, shared), shown: shownToHim(thread, shared, Date.now()) } })
 }))
 
+/** A session's thread post off the user's reply language gets one note in its answer (hints/reply-language-drift.ts). */
+async function threadLanguageNote(req: Request, parts: unknown[]): Promise<string | null> {
+  if (!req.get('x-walnut-caller-sid')) return null
+  const { letterLanguageNote } = await import('../../core/hints/reply-language-drift.js')
+  return letterLanguageNote(parts, 'thread post')
+}
+
 orgThreadsV1Router.post('/tasks/:id/threads', route(async (req, res) => {
   const task = await nodeTask(req)
   const b = body(req)
@@ -229,7 +236,8 @@ orgThreadsV1Router.post('/tasks/:id/threads/open', route(async (req, res) => {
     ...(str(b, 'same_ask_reason') ? { same_ask_reason: str(b, 'same_ask_reason') } : {}),
   }, by, source)
   log.task.info('org thread opened by the node', { taskId: task.id, threadId: thread.id, by, from: thread.opener?.from })
-  res.status(201).json({ task_id: task.id, thread })
+  const replyLanguage = await threadLanguageNote(req, [str(b, 'title'), str(b, 'text')])
+  res.status(201).json({ task_id: task.id, thread, ...(replyLanguage ? { reply_language: replyLanguage } : {}) })
 }))
 
 orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) => {
@@ -262,7 +270,9 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
   }
   if (!thread) throw new RouteError(400, 'bad_request', 'Nothing to change: pass title, ask, state, reply, tasks, add_tasks, known, close, reopen, snooze, pin or merge_into.')
   log.task.info('org thread updated', { taskId: task.id, threadId: id, by, fields: Object.keys(patch), mergeInto })
-  res.json({ task_id: task.id, thread, ...(mergeInto ? { merged: id } : {}) })
+  // What the user reads of it (his own words, user_words, are never judged).
+  const replyLanguage = await threadLanguageNote(req, [patch.title, patch.ask, patch.reply])
+  res.json({ task_id: task.id, thread, ...(mergeInto ? { merged: id } : {}), ...(replyLanguage ? { reply_language: replyLanguage } : {}) })
 }))
 
 orgThreadsV1Router.post('/tasks/:id/threads/:thread/split', route(async (req, res) => {
