@@ -47,7 +47,7 @@ function scriptPaths(run: string, cwd: string | undefined): string[] {
   for (const raw of run.split(/\s+/)) {
     const word = raw.replace(/^['"]|['"]$/g, '')
     if (!/\.(?:py|sh|bash|zsh|js|mjs|cjs|ts|rb|pl)$/i.test(word)) continue
-    const expanded = word.startsWith('~/') ? path.join(home, word.slice(2)) : word.replace(/^\$HOME\//, `${home}/`)
+    const expanded = word.startsWith('~/') ? path.join(home, word.slice(2)) : word.replace(/^\$HOME\//, () => `${home}/`)
     if (expanded.includes('$')) continue
     out.push(path.isAbsolute(expanded) ? expanded : path.resolve(cwd || process.cwd(), expanded))
   }
