@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { OWED_STATUS_SOURCES, namesUser, statusAskItem, userNameOf, userProgressItems } from '../../src/core/sessions/owed-to-user.js'
+import { OWED_STATUS_SOURCES, leadsTask, namesUser, statusAskItem, userNameOf, userProgressItems } from '../../src/core/sessions/owed-to-user.js'
 import { extractProgressLines } from '../../src/core/task-progress.js'
 import { deriveUserStatus, type UserStatus } from '../../src/core/user-status.js'
 import { phaseForReport } from '../../src/core/sessions/report-phase.js'
@@ -197,5 +197,30 @@ describe('every session-reachable close asks what the user still has', () => {
       expect(got, f).toEqual({ closes: want.closes, gates: want.gates })
       if (got.gates < got.closes) expect(want.why, `${f}: a close without the gate and no reason`).toBeTruthy()
     }
+  })
+})
+
+describe('leadsTask: whose close is answered to the closer, not the user', () => {
+  const tasks: Record<string, { id: string; org_role?: 'main' | 'lead' | 'router'; parent_task_id?: string }> = {
+    vp: { id: 'vp', org_role: 'lead' }, main: { id: 'main', org_role: 'main' },
+    team: { id: 'team', parent_task_id: 'vp' }, work: { id: 'work', parent_task_id: 'team' },
+    peer: { id: 'peer', parent_task_id: 'vp' }, loopA: { id: 'loopA', parent_task_id: 'loopB' }, loopB: { id: 'loopB', parent_task_id: 'loopA' },
+  }
+  const read = async (id: string) => tasks[id] ?? null
+  it('Main, a lead and any task above it lead; the task itself, a peer and an unknown caller do not', async () => {
+    expect(await leadsTask(tasks.work, 'vp', read)).toBe(true)
+    expect(await leadsTask(tasks.work, 'main', read)).toBe(true)
+    expect(await leadsTask(tasks.work, 'team', read)).toBe(true)
+    expect(await leadsTask(tasks.work, 'work', read)).toBe(false)
+    expect(await leadsTask(tasks.work, 'peer', read)).toBe(false)
+    expect(await leadsTask(tasks.work, 'gone', read)).toBe(false)
+    expect(await leadsTask(tasks.loopA, 'peer', read)).toBe(false)
+  })
+  it('a lead\'s hold never reads as Needs you and never forces NEED_ACTION', () => {
+    const report = { via: 'complete' as const, at: '2026-11-15T00:00:00Z', not_done: ['You: x'],
+      owed: { items: ['You: x'], ask: 'Left for you: x', at: '2026-11-15T00:00:00Z', by: 'task:vp', told: ['vp'], toCloser: true as const } }
+    expect(phaseForReport({ state: 'done' }, { result_report: report } as never, false)).not.toBe('NEED_ACTION')
+    const { toCloser: _drop, ...userHold } = report.owed
+    expect(phaseForReport({ state: 'done' }, { result_report: { ...report, owed: userHold } } as never, false)).toBe('NEED_ACTION')
   })
 })

@@ -493,7 +493,8 @@ const openLeader = (t: Task): boolean => t.phase !== 'COMPLETE' && t.status !== 
 /** What a session's close left for the user, still open (sessions/owed-to-user.ts). */
 function openOwedHold(task: Task): { ask: string; at: string } | null {
   const o = task.result_report?.owed;
-  return o?.items?.length && !o.settled ? { ask: o.ask, at: o.at } : null;
+  // A hold a lead's close made is that lead's to settle, never the user's Needs you.
+  return o?.items?.length && !o.settled && !o.toCloser ? { ask: o.ask, at: o.at } : null;
 }
 
 /** What the task's workspace asks the person about its waiting start, unless a session of it started since. */

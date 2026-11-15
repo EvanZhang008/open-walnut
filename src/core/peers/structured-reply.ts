@@ -115,6 +115,12 @@ export interface TaskOwed {
   by: string;
   /** The tasks whose close was refused with these items named: only they may force it closed. */
   told?: string[];
+  /**
+   * Made by the task's lead (an org node, or a task above it) closing it: the items are the lead's to
+   * settle, so the hold answers only that caller and never reads as the user's Needs you
+   * (owed-to-user.ts leadsTask). Dropped as soon as any other closer is held by the same items.
+   */
+  toCloser?: true;
   settled?: { at: string; by?: string; how: 'taken' | 'dropped'; note?: string };
 }
 

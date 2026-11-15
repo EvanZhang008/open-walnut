@@ -55,7 +55,7 @@ export function phaseForReport(
   if (task.org_role === 'main') return null;
   // A close its session tried left something for the user (owed-to-user.ts): it stays on their
   // list until that is settled, whatever a later turn says, except while its own work runs.
-  if (!task.org_role && openOwed(task.result_report)) return report.state === 'working' && alive ? 'IN_PROGRESS' : 'NEED_ACTION';
+  if (!task.org_role && openOwed(task.result_report) && !task.result_report?.owed?.toCloser) return report.state === 'working' && alive ? 'IN_PROGRESS' : 'NEED_ACTION';
   const phase = individualPhase(report, task, alive, armed, onUser);
   // A lead parks only on a trigger of its own (outside-wait.ts parksOnlyOnTrigger): with none, its
   // turn's wait leaves the phase as it is, so no clock wakes it for nothing.

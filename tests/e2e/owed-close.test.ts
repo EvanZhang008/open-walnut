@@ -427,8 +427,62 @@ describe('what ends a hold, and what still closes', () => {
     await updateTaskRaw(task.id, { note: PROGRESS('You: approve the release') }, { emitEvent: true })
     const body = { force: true, reason: 'not in use any more by anyone' }
     expect((await json('POST', `/api/v1/tasks/${task.id}/complete`, body, lead.sid)).status).toBe(409)
-    expect((await getTask(task.id)).phase).toBe('NEED_ACTION')
+    // The hold is the lead's to settle (2026-11-15): it keeps its phase, off the user's Needs you.
+    expect((await getTask(task.id)).phase).toBe('IN_PROGRESS')
+    expect((await getTask(task.id)).result_report?.owed?.toCloser).toBe(true)
     expect((await json('POST', `/api/v1/tasks/${task.id}/complete`, body, lead.sid)).status).toBe(200)
     expect((await getTask(task.id)).result_report?.owed?.settled?.how).toBe('dropped')
   })
+})
+
+describe('a lead\'s close is answered to the lead, never put on the user\'s Needs you', () => {
+  // 2026-11-15, the Walnut VP: a VP closing a router-made task whose stale note still said
+  // "[WAIT] You:" put three items on the user's Needs you for a decision the VP had already made.
+  for (const kind of ['org lead', 'parent task'] as const) {
+    it(`${kind}: 409 names the items to the caller, the task keeps its phase and Partial, Needs you stays clear, a force closes it`, async () => {
+      const lead = await worker('Owed')
+      const { task, sid } = await worker('Owed')
+      if (kind === 'org lead') await updateTaskRaw(lead.task.id, { org_role: 'lead' } as never, { emitEvent: true })
+      else await updateTask(task.id, { parent_task_id: lead.task.id })
+      await updateTaskRaw(task.id, { note: PROGRESS('You: get the python3.9 function list') }, { emitEvent: true })
+      const res = await json('POST', `/api/v1/tasks/${task.id}/complete`, {}, lead.sid)
+      expect(res.status).toBe(409)
+      const body = JSON.stringify(await res.json())
+      expect(body).toContain('owed_to_user')
+      expect(body).toContain('python3.9 function list')
+      expect(body).toMatch(/yours to settle/)
+      const held = await getTask(task.id)
+      // The protection stays: nothing is dropped, the items are on the result, the phase is untouched.
+      expect(held.phase).toBe('IN_PROGRESS')
+      expect(isPartial(held.result_report)).toBe(true)
+      expect(held.result_report?.owed).toMatchObject({ toCloser: true, told: [lead.task.id] })
+      await syncUserStatuses(null)
+      expect((await getTask(task.id)).user_status?.state).not.toBe('needs')
+      // A later report of its own does not move it to NEED_ACTION for the lead's hold either.
+      await applyReportPhase(task.id, sid, { state: 'done' } as never, Date.now())
+      expect((await getTask(task.id)).phase).not.toBe('NEED_ACTION')
+      const forced = await json('POST', `/api/v1/tasks/${task.id}/complete`, { force: true, reason: 'The user\'s items were settled by the lead: not Personal work.' }, lead.sid)
+      expect(forced.status).toBe(200)
+      expect((await getTask(task.id)).phase).toBe('COMPLETE')
+    }, 60_000)
+  }
+
+  it('a lead\'s hold turns into the user\'s once a non-lead close is held by the same items', async () => {
+    const lead = await worker('Owed')
+    const peer = await worker('Owed')
+    const { task } = await worker('Owed')
+    await updateTask(task.id, { parent_task_id: lead.task.id })
+    await updateTaskRaw(task.id, { note: PROGRESS('You: approve the release') }, { emitEvent: true })
+    expect((await json('POST', `/api/v1/tasks/${task.id}/complete`, {}, lead.sid)).status).toBe(409)
+    expect((await getTask(task.id)).result_report?.owed?.toCloser).toBe(true)
+    // A peer's close (forced past task_in_use, as the task now reads Partial) is held by the same items.
+    const peerClose = await json('POST', `/api/v1/tasks/${task.id}/complete`, { force: true, reason: 'A peer thinks this is done now.' }, peer.sid)
+    expect(peerClose.status).toBe(409)
+    expect(JSON.stringify(await peerClose.json())).toContain('owed_to_user')
+    const after = await getTask(task.id)
+    expect(after.result_report?.owed?.toCloser).toBeUndefined()
+    expect(after.phase).toBe('NEED_ACTION')
+    await syncUserStatuses(null)
+    expect((await getTask(task.id)).user_status?.state).toBe('needs')
+  }, 60_000)
 })
