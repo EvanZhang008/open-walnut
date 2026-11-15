@@ -43,7 +43,7 @@ pre-commit sensitive-content scan. Push still only happens on request. How the d
 
 No company-internal names, personal info, internal URLs, credentials, or internal processes. Generic descriptions only. Internal plugins go in `~/.open-walnut/plugins/` (never committed). **When in doubt, leave it out.**
 
-**Every path to GitHub runs the leak gate** (`scripts/leak-scan/scan-git.mjs`: the commit and push hooks, every land, CI on every push and pull request); a hit names the rule and the file and line, and the fix is to reword it. Nothing skips it: no `--no-verify`, no `core.hooksPath`, no option of its own. Ratchet: `tests/scripts/leak-gate-paths.test.ts`. (`scripts/leak-scan/README.md`)
+**Every path to GitHub runs the leak gate** (`scripts/leak-scan/scan-git.mjs`: the commit and push hooks, every land, CI on every push and pull request); a hit names the rule and the file and line, and the fix is to reword it. Nothing skips it: no `--no-verify`, no `core.hooksPath`, no option of its own. GitHub's main takes only a commit that passed it (the "main leak gate" ruleset; the pre-push hook gets that check first), and a change to the gate's own files needs the maintainer's approval. Ratchet: `tests/scripts/leak-gate-paths.test.ts`. (`scripts/leak-scan/README.md`)
 
 ## Every feature works for anyone who installs it
 
