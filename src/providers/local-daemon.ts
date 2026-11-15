@@ -30,6 +30,7 @@ import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 import { WebSocket } from '#ws'
 import { log } from '../logging/index.js'
+import { HoldNews, holdLog } from './daemon-hold-news.js'
 import { acpUpgradeHolds } from './acp-upgrade-hold.js'
 import { execRunsReason, execRunsWait, runningJobs } from './exec-runs-hold.js'
 import { daemonUpdateOverdue } from './daemon-update-behind.js'
@@ -492,6 +493,8 @@ export class LocalDaemon {
   /** How long this Mac has run another daemon build, when that is past the bound (daemon-update-behind.ts); 0 otherwise. */
   private _overdueMs = 0
   private _overdueNoted: string | null = null
+  /** Which upgrade holds are news (daemon-hold-news.ts): the same hold asked again every minute is said at info. */
+  private readonly _holdNews = new HoldNews()
   /** Overdue on a managed daemon: its update passes `--over-busy`. */
   private _forceable = false
 
@@ -601,7 +604,7 @@ export class LocalDaemon {
             log.session.warn('local daemon upgrade goes ahead over ACP turns open too long', { busySids, heldMs: acpHold.heldMs })
           }
           if (busySids.length > 0 && acpHold.holds && !this._overdueMs) {
-            log.session.warn('local daemon version mismatch — upgrade DEFERRED (ACP turns open)', {
+            holdLog(this._holdNews, expectedVersion ?? '', 'ACP turns open', 'local daemon version mismatch — upgrade DEFERRED (ACP turns open)', {
               running: helloResult.version,
               expected: expectedVersion,
               busySids,
@@ -836,7 +839,7 @@ export class LocalDaemon {
    */
   private deferForProbation(hello: { version?: string; instanceId?: string }, port: number, expected: string): boolean {
     if (!hello.version || !this._stay.watching(hello.version)) return false
-    log.session.warn('local daemon version mismatch — upgrade DEFERRED (the running build is on its probation)', {
+    holdLog(this._holdNews, expected, 'probation', 'local daemon version mismatch — upgrade DEFERRED (the running build is on its probation)', {
       running: hello.version, expected, leftMs: Math.round(this._stay.leftMs(hello.version)),
     })
     this._port = port
@@ -964,10 +967,11 @@ export class LocalDaemon {
    */
   private deferForExecRuns(hello: { version?: string; instanceId?: string; execRunning?: number }, port: number, expected: string): boolean {
     const why = execRunsWait('__local__', execRunsReason(hello.execRunning))
-    if (!why) return false
+    if (!why) { this._holdNews.forget(/host_exec/); return false }
     // Overdue: the update goes over them (daemon-update-behind.ts).
     if (this._overdueMs) return false
-    log.session.warn('local daemon version mismatch — upgrade DEFERRED (host_exec runs)', { running: hello.version, expected, why })
+    // Asked again every minute while a run lasts (up to 2 h): a warning only when it is news.
+    holdLog(this._holdNews, expected, why, 'local daemon version mismatch — upgrade DEFERRED (host_exec runs)', { running: hello.version, expected, why })
     this._port = port
     this._wsUrl = `ws://localhost:${port}`
     this._instanceId = hello.instanceId ?? this.readInstanceIdFile()
@@ -1116,7 +1120,7 @@ export class LocalDaemon {
       clearDaemonSwap('daemon:__local__')
       // Refused before anything changed (the daemon busy, launchd starting no jobs): asked again on the upgrade clock.
       this._lastManagedUpdate = null
-      log.session.warn(`local daemon: managed update ${outcome === 'busy' ? 'refused while the daemon is busy, or another update or the last one\'s probation is at work' : 'deferred: launchd starts no jobs in this login session now'}; trying again later`, { expected })
+      holdLog(this._holdNews, expected, `managed update ${outcome}`, `local daemon: managed update ${outcome === 'busy' ? 'refused while the daemon is busy, or another update or the last one\'s probation is at work' : 'deferred: launchd starts no jobs in this login session now'}; trying again later`, { expected })
       return 'busy'
     }
     const port = this.readPortFile()

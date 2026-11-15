@@ -117,7 +117,7 @@ describe('daemon update holds', () => {
     for (const [file, re] of Object.entries(SITES)) {
       const lines = read(file).split('\n')
       lines.forEach((l, i) => {
-        if (!/log\.session\.(warn|error|info)\(/.test(l)) return
+        if (!/log\.session\.(warn|error|info)\(|\bholdLog\(/.test(l)) return
         const text = /\(\s*$/.test(l) ? `${l} ${lines[i + 1] ?? ''}` : l
         if (!STOP_WORDS.test(text) || !/update|upgrade/i.test(text)) return
         const nearHold = lines.slice(Math.max(0, i - 12), i + 13).some((x) => re.test(x))
@@ -160,6 +160,34 @@ describe('daemon update holds', () => {
     const remote = read('src/providers/daemon-connection.ts')
     const errorClass = remote.slice(remote.indexOf('export class DaemonServiceNotReadyError'), remote.indexOf('export class DaemonServiceProbeError'))
     expect(errorClass).not.toMatch(/Run on that host|serviceTakeoverInstruction/)
+  })
+
+  // A hold is asked again on its clock (every minute while work runs), and each ask logs why it
+  // still waits. 2026-11-12 (a remote host) and 2026-11-15 (this Mac, 30 an hour while one long
+  // host_exec ran): a warning on every ask raised the log-spike alarm for a wait that works as
+  // designed. A hold's line goes through holdLog (daemon-hold-news.ts): warn once, then info.
+  it('a hold asked again on its clock is said at warn only when it is news (holdLog)', () => {
+    const HOLD_WORDS = /\b(deferred|DEFERRED|postponed|held by)\b|trying again later|checking again/
+    const bare: string[] = []
+    const viaHoldLog: string[] = []
+    // Every warn in the files that put an update off, wherever it sits: a hold's line can be far
+    // from its clock (startManagedUpdate answers 'busy' and its caller sets the recheck).
+    for (const file of Object.keys(SITES)) {
+      const lines = read(file).split('\n')
+      lines.forEach((l, i) => {
+        const call = /log\.session\.warn\(|\bholdLog\(/.exec(l)
+        if (!call) return
+        const text = lines.slice(i, i + 3).join(' ')
+        if (!HOLD_WORDS.test(text) || !/update|upgrade/i.test(text) || /\bfailed\b/.test(text)) return
+        if (call[0].startsWith('holdLog')) viaHoldLog.push(`${file}:${i + 1}`)
+        else bare.push(`${file}:${i + 1} ${l.trim().slice(0, 160)}`)
+      })
+    }
+    expect(bare, 'a daemon-update hold logged with a bare log.session.warn repeats on every recheck: log it with holdLog (src/providers/daemon-hold-news.ts)').toEqual([])
+    // The scan still sees the holds it guards (it would pass on nothing if the pattern drifted):
+    // the postpone hub, ACP turns and host_exec runs on both twins, probation, the managed update,
+    // a host network machine held by its host setting.
+    expect(viaHoldLog.length, viaHoldLog.join('\n')).toBeGreaterThanOrEqual(8)
   })
 
   it('a bounded wait names a limit defined where it says', () => {

@@ -36,6 +36,7 @@ import crypto from 'node:crypto'
 import net from 'node:net'
 import type { Duplex } from 'node:stream'
 import { log } from '../logging/index.js'
+import { HoldNews, holdLog } from './daemon-hold-news.js'
 import { createStreamEndpoint, listenLoopback, spliceStream, type StreamEndpoint } from '../lib/link-stream.js'
 import { bareHost, isLoopbackHostname } from '../core/service-url.js'
 import { registerForwardSocket } from '../lib/forward-lane-ports.js'
@@ -5080,7 +5081,7 @@ export class DaemonConnection {
         return false
       }
       if (open) {
-        log.session.warn('DaemonConnection: daemon upgrade DEFERRED (ACP turns open)', {
+        holdLog(this._holdNews, expected, 'ACP turns open', 'DaemonConnection: daemon upgrade DEFERRED (ACP turns open)', {
           host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)',
           busySids: busy.busySids,
         })
@@ -5094,20 +5095,16 @@ export class DaemonConnection {
   /** host_exec runs on the host (exec-runs-hold.ts): a stop would end them, so the update is asked again in a minute. */
   private async execRunsOpen(expected: string, remoteVersion: string): Promise<boolean> {
     const why = await execRunsHold(this, this.hostKey)
-    if (!why) { this._execRunsNoted = null; return false }
+    if (!why) { this._holdNews.forget(/host_exec/); return false }
     // Overdue: the swap goes over them (daemon-update-behind.ts); noteOverdue said so.
     if (this._overdueMs) return false
-    // Asked again every minute while a run lasts (up to 2 h): said once per reason.
-    if (this._execRunsNoted !== `${expected} ${why}`) {
-      this._execRunsNoted = `${expected} ${why}`
-      log.session.warn('DaemonConnection: daemon upgrade DEFERRED (host_exec runs)', {
-        host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)', why,
-      })
-    }
+    // Asked again every minute while a run lasts (up to 2 h): a warning only when it is news.
+    holdLog(this._holdNews, expected, why, 'DaemonConnection: daemon upgrade DEFERRED (host_exec runs)', {
+      host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)', why,
+    })
     this.postponeUpgrade(why, expected, remoteVersion, { steady: true })
     return true
   }
-  private _execRunsNoted: string | null = null
 
   /**
    * A re-check's gate said not now: drop the decision (stale) or ask again (busy). An
@@ -5225,8 +5222,7 @@ export class DaemonConnection {
       host: this.hostKey, reason, expected, remoteVersion: remoteVersion || '(missing)',
       attempt: opts.attempt !== undefined ? opts.attempt + 1 : this._upgradeRecheckAttempt, retryInMs: delayMs,
     }
-    if (this.postponeIsNews(expected, reason)) log.session.warn('DaemonConnection: daemon update postponed; checking again', fields)
-    else log.session.info('DaemonConnection: daemon update postponed; checking again', fields)
+    holdLog(this._postponeNews, expected, reason, 'DaemonConnection: daemon update postponed; checking again', fields)
     if (this.upgradeRecheckTimer) clearTimeout(this.upgradeRecheckTimer)
     this.upgradeRecheckTimer = setTimeout(() => {
       this.upgradeRecheckTimer = null
@@ -5235,27 +5231,13 @@ export class DaemonConnection {
     this.upgradeRecheckTimer.unref?.()
   }
 
-  /** When each hold of `expected` was last said at warn level: the same hold asked again every minute is not news. */
-  private _postponeNoted: { expected: string; at: Map<string, number> } | null = null
-  private static POSTPONE_REWARN_MS = 30 * 60_000
-
   /**
-   * Whether this postpone is worth a warning: a new build, a new kind of reason (counts set aside,
-   * so "3 host_exec runs" and "2 host_exec runs" are one hold), or the same hold still going after
-   * POSTPONE_REWARN_MS. The rest go at info. 2026-11-12: three host_exec runs on clouddev held its
-   * update for over an hour and the minute re-check logged a warning each time, 61 an hour, which
-   * raised the log-spike alarm for a wait that works as designed (exec-runs-hold.ts bounds it).
+   * Which postpones and holds are news (daemon-hold-news.ts): the same hold asked again every
+   * minute is said at info. Two trackers: a hold's own line and the postpone it leads to are
+   * each said once.
    */
-  private postponeIsNews(expected: string, reason: string): boolean {
-    // Holds that alternate (a connect in progress, then a version read that timed out) are each news once.
-    if (this._postponeNoted?.expected !== expected) this._postponeNoted = { expected, at: new Map() }
-    const kind = reason.replace(/\d+/g, '#')
-    const now = Date.now()
-    const last = this._postponeNoted.at.get(kind)
-    if (last !== undefined && now - last < DaemonConnection.POSTPONE_REWARN_MS) return false
-    this._postponeNoted.at.set(kind, now)
-    return true
-  }
+  private readonly _postponeNews = new HoldNews()
+  private readonly _holdNews = new HoldNews()
 
   private clearUpgradeRecheck(): void {
     if (this.upgradeRecheckTimer) clearTimeout(this.upgradeRecheckTimer)

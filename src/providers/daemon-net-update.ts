@@ -33,6 +33,7 @@ import { daemonBusyRefusal, execRunsHold } from './exec-runs-hold.js'
 import { daemonUpdateOverdue, OVERDUE_GATE_WAIT_MS } from './daemon-update-behind.js'
 import { daemonUpdateGapWhy, daemonUpdateMinGapMs, daemonUpdateWaitMs } from './daemon-update-gap.js'
 import { log } from '../logging/index.js'
+import { HoldNews, holdLog } from './daemon-hold-news.js'
 import type { HostFileTarget } from '../core/host-server/host-target.js'
 import { updateRemoteDaemonService } from './daemon-service-update.js'
 import { sharedDaemonVerdict, walnutKeyOf, type DaemonServes } from './daemon-shared.js'
@@ -214,6 +215,14 @@ function sharedWhy(c: NetUpdateLink, expected: string | null, now: number): stri
 
 const QUIET_SKIPS: ReadonlySet<NetUpdateSkip> = new Set(['current', 'not-net', 'local', 'test-server', 'follower', 'cooldown', 'no-build-version'])
 
+/** Per host, for the server's life: the host setting that holds updates is news once per build. */
+const HELD_BY_HOST_SETTING = new Map<string, HoldNews>()
+function heldByHostSetting(host: string): HoldNews {
+  let news = HELD_BY_HOST_SETTING.get(host)
+  if (!news) HELD_BY_HOST_SETTING.set(host, news = new HoldNews(Number.POSITIVE_INFINITY))
+  return news
+}
+
 export class NetDaemonUpdater {
   private timer: ReturnType<typeof setTimeout> | null = null
   private inFlight: Promise<NetUpdateState> | null = null
@@ -226,7 +235,6 @@ export class NetDaemonUpdater {
   private retryAt = 0
   /** A build that stopped the host's daemon and did not stay serving: a day off, kept across restarts (undefined until read). */
   private notServing: BuildBackoffEntry | null | undefined = undefined
-  private heldNoted: string | null = null
   private skipNoted: string | null = null
   private overdueNoted: string | null = null
   /** Since when this build's update has been held by the update gap (daemon-update-gap.ts). */
@@ -493,10 +501,9 @@ export class NetDaemonUpdater {
     const c = this.d.conn
     if (d.skip === 'held') {
       const expected = this.d.expectedVersion()
-      if (this.heldNoted !== expected) {
-        this.heldNoted = expected
-        log.session.warn('DaemonConnection: daemon update held by the host setting', { host: c.host, running: c.daemonVersion, expected, why: d.why })
-      }
+      // Said once per build and host for this server: an updater is made per connection, and a
+      // host whose link drops (2026-11-14: 62 a day for one home machine) said it again at each.
+      holdLog(heldByHostSetting(c.host), expected ?? '', 'held by the host setting', 'DaemonConnection: daemon update held by the host setting', { host: c.host, running: c.daemonVersion, expected, why: d.why })
       return this.set('held', d.why, { skip: d.skip })
     }
     // A skip that ends by itself (the gap after a daemon started, the cooldown, a lookup that may
