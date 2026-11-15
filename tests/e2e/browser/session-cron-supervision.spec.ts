@@ -164,6 +164,12 @@ async function openHome(page: Page, baseURL: string) {
   await expect(page.locator('.todo-search-input')).toBeVisible({ timeout: 60_000 })
 }
 
+/** A reload boots the app again: wait for that as the first open does, not a default assertion's window. */
+async function reloadHome(page: Page) {
+  await page.reload()
+  await expect(page.locator('.todo-search-input')).toBeVisible({ timeout: 60_000 })
+}
+
 function taskRow(page: Page): Locator {
   return page.locator(`.todo-panel-item[data-task-id="${TASK}"]`)
 }
@@ -336,7 +342,7 @@ test('shared recovery toggle keeps both home surfaces and a dense transcript usa
     await page.mouse.wheel(0, -550)
     await expect(column.locator('.chat-input-textarea')).toHaveValue(DRAFT)
     await page.screenshot({ path: `${SHOTS}/${info.project.name}-shared-css.png`, scale: 'css' })
-    await page.reload()
+    await reloadHome(page)
     // Reload starts collapsed again: the pill is the memory, not the card.
     const restored = page.locator(`.main-page-session-column .session-panel[data-session-id="${SID}"]`)
     await expectHeaderCron(restored, true)
@@ -397,7 +403,7 @@ test('offline stop remains pending through reload and retries without sending a 
     await column.locator('.chat-input-textarea').click()
     await expect(page.locator('.task-kebab-menu:visible')).toHaveCount(0)
     await page.screenshot({ path: `${SHOTS}/${info.project.name}-pending-stop-css.png`, scale: 'css' })
-    await page.reload()
+    await reloadHome(page)
     const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${SID}"]`)
     const restored = panel.locator('.session-supervision')
     await expect(restored).toContainText('Stop pending host confirmation')

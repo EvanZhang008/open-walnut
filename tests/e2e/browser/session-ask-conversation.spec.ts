@@ -187,15 +187,15 @@ test.describe('Ask here asks in the view on screen; Ask inline and Ask in Tree p
     await expect(foldLines(panel)).toHaveCount(lines0 + 1)
 
     // A reload keeps Conversation Mode (Ask inline switched it for this session) and
-    // the fold. The mock CLI keeps no turns for this fixture session across a
-    // reload (only the reload fixtures persist), so the history comes back as the
-    // fixture wrote it: its own questions, each still one line.
+    // the fold. The mock CLI files this session's turns in its transcript, as the real
+    // CLI does (MOCK_CLAUDE_PERSIST_SESSIONS in test-server.ts, since 3b4b4403a), so the
+    // question asked here comes back too: every question, the new one included, one line.
     await page.reload()
     await page.waitForLoadState('networkidle')
     const again = sessionPanel(page, TAGGED_SESSION)
     await expect(again).toBeVisible({ timeout: 30_000 })
     await expect(history(again)).toHaveAttribute('data-view-mode', 'linear', { timeout: 30_000 })
-    await expect(foldLines(again)).toHaveCount(lines0, { timeout: 30_000 })
+    await expect(foldLines(again)).toHaveCount(lines0 + 1, { timeout: 30_000 })
     await expect(askedBubble(again, QUESTION)).toHaveCount(0)
   })
 

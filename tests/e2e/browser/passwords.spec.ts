@@ -194,7 +194,9 @@ test('lock, a wrong password, unlock, and a reload keeps the section and the ite
   await expect(page.getByTestId('pw-detail').getByRole('heading', { name: SITE })).toBeVisible()
 
   await page.reload()
-  await expect(page.getByTestId('pw-section-logins')).toHaveAttribute('aria-current', 'page')
+  // A reload boots the app again: on a loaded CI runner that alone took most of the default 15 s
+  // window, and this assertion ran out twice in a row (CI run 43675655194).
+  await expect(page.getByTestId('pw-section-logins')).toHaveAttribute('aria-current', 'page', { timeout: 60_000 })
   await expect(page.getByTestId('pw-detail').getByRole('heading', { name: SITE })).toBeVisible()
 })
 

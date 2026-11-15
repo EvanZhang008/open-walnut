@@ -306,7 +306,11 @@ test.describe('Tree Mode split screen', () => {
     await expectPages(panel, ['L 1.1', 'R 1.1.1'])
     await page.setViewportSize({ width: 800, height: 900 })
     await expectPages(panel, ['L 1.1', 'R 1.1.1'])
+    // A 600px window is the phone layout, whose chat is the whole window: exactly 600px still
+    // holds two pages (SPLIT_MIN_WIDTH, web/src/utils/tree-split-state.ts); a pixel less, one.
     await page.setViewportSize({ width: 600, height: 900 })
+    await expectPages(panel, ['L 1.1', 'R 1.1.1'])
+    await page.setViewportSize({ width: 599, height: 900 })
     await expect(sidePages(panel)).toHaveCount(0)
     // One page is the plain page: no sibling above it either.
     await expect(panel.locator('.tree-split-sibling')).toHaveCount(0)
