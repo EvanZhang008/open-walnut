@@ -803,6 +803,28 @@ test('fill_code types the saved login\'s one-time code into the page; the agent 
   expect((await act(page, { action: 'navigate', url: site('shop.example.test', '/order') })).status).toBe(200)
 })
 
+test('the cursor goes by itself once the agent stops acting, and gets out of the person\'s way (2026-11-15)', async () => {
+  test.setTimeout(90_000)
+  const tab = agentPage()!
+  const cursor = tab.locator('walnut-ext[data-walnut-cursor]')
+  const snap = (await act(tab, { action: 'snapshot', tab: agentTab })).body.snapshot as string
+  const who = refOf(snap, /textbox "Your name"/)
+  expect((await act(tab, { action: 'hover', tab: agentTab, ref: who })).status).toBe(200)
+  await expect(cursor).toHaveCount(1)
+  // No new step and no message: it fades out on its own (page-cursor.ts IDLE_MS, 10 s), the tab still held.
+  await tab.waitForTimeout(4000)
+  await expect(cursor).toHaveCount(1)
+  await expect.poll(() => cursor.count(), { timeout: 15_000 }).toBe(0)
+  expect((await act(tab, { action: 'tabs' })).body.tabs.map((t: { id: number }) => t.id)).toContain(agentTab)
+  // The next step draws it again; the person's own pointer coming over it takes it away at once.
+  expect((await act(tab, { action: 'hover', tab: agentTab, ref: who })).status).toBe(200)
+  await expect(cursor).toHaveCount(1)
+  const box = await tab.locator('#who').boundingBox()
+  await tab.waitForTimeout(1700)
+  await tab.mouse.move(box!.x + box!.width / 2 + 12, box!.y + box!.height / 2 + 8)
+  await expect.poll(() => cursor.count(), { timeout: 2000 }).toBe(0)
+})
+
 test('the agent tab wears a frame; Stop gives it back to the person', async () => {
   const tab = agentPage()!
   // The agent points at something: its cursor is there until Stop.
@@ -826,6 +848,11 @@ test('Settings, Browser extension shows the browser and the allowed site; Remove
   await page.goto(`${base}/settings#browser`)
   const now = page.locator('.settings-row', { hasText: 'Browsers that let agents in now' })
   await expect(now).toContainText(/Walnut extension \(Chrome on/, { timeout: 20_000 })
+  // Your browsers: this one, connected, with the version it runs (its update check or its poll said it: extension-seen.ts).
+  const mine = page.getByTestId('ext-browsers').locator('.settings-row', { hasText: /Walnut extension \(Chrome on/ })
+  await expect(mine).toContainText(/Connected\. Version \d+\.\d+\.\d+/, { timeout: 20_000 })
+  await expect(mine).toContainText('Agents on')
+  await expect(page.getByTestId('ext-features')).toContainText('Agents use your browser')
   const row = page.locator('.settings-row', { hasText: 'example.test' })
   await expect(row).toBeVisible()
   await row.getByRole('button', { name: 'Remove' }).click()

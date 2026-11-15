@@ -177,10 +177,14 @@ function pawSvg(s: Svg, cls: string): Element {
       s('path', { d: 'M-5.2-2.6Q0-5.6 5.2-2.6', fill: 'none', stroke: '#ffe2c2', 'stroke-opacity': 0.4, 'stroke-width': 1.6, 'stroke-linecap': 'round' })))
 }
 
-/** The rules every look shares: no pointer events anywhere, the glide, the tag, the click ring. */
+/** How long the cursor fades out when it goes by itself (page-cursor.ts: idle, or the person's own pointer). */
+export const FADE_MS = 180
+
+/** The rules every look shares: no pointer events anywhere, the glide, the fade out, the tag, the click ring. */
 const BASE = `.c,.c *{pointer-events:none !important}
 .c{position:fixed;left:0;top:0;width:0;height:0;pointer-events:none;transition:transform var(--ms,0ms) cubic-bezier(.22,.8,.24,1);will-change:transform;--click:${CLICK_MS}ms}
 .c.hid{visibility:hidden}
+.c.out{opacity:0;transition:opacity ${FADE_MS}ms ease-out}
 .c .b{position:absolute;pointer-events:none;filter:drop-shadow(0 2px 3px rgba(0,0,0,.28)) drop-shadow(0 6px 10px rgba(0,0,0,.14));transition:transform 220ms cubic-bezier(.3,1.5,.5,1)}
 .c.go .b{transform:rotate(var(--tilt,0deg)) scale(1.05)}
 .c svg{position:absolute;left:0;top:0;display:block;overflow:visible;pointer-events:none}

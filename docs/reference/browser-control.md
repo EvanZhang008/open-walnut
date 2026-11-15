@@ -159,6 +159,13 @@ extension's Settings, reached from the key's popover in the side panel or the to
   (`after`: the number of the picture the view has), `POST /api/v1/browser/view/stop`,
   `/takeover`, `/handback` (`src/web/routes/browser-view-v1.ts`); the web hears `browser:tabs`
   when a task's tabs change.
+- **The agent's cursor.** A Walnut cursor (a picture, never your mouse) glides to where an agent is
+  about to act and stays while it works there. It goes by itself 10 seconds after the agent's last
+  step in that page (`page-cursor.ts` IDLE_MS): a tab stays held while its task waits for you, and
+  a turn that ends, a session that stops or a lost link sends nothing, so the cursor is a lease each
+  step renews. It also goes at once when your own pointer comes over it or you click in the page,
+  when the agent lets the tab go, and when you take the tab over or press Stop. The next step draws
+  it again.
 - **Take over.** Your click on **Take over** brings that tab up in your browser, its window in
   front, so you use it with your own mouse and keys (sign in, solve a check, look around). It is
   the one time Walnut brings an agent's window forward, and only on your click. While you have the

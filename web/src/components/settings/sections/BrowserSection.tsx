@@ -1,8 +1,9 @@
 /**
  * Settings → Browser extension: the Walnut extension for Chrome and Firefox. It fills and saves
  * logins from Passwords, and, when the person turns agents on in its popup, lets Walnut agents
- * use the browser (core/browser-control): this pane installs it, lists the connected browsers
- * with Remove, and holds which sites agents may use.
+ * use the browser (core/browser-control): this pane shows each connected browser (connected now,
+ * its version, how it updates) with Remove, installs it, says what it does, and holds which sites
+ * agents may use.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { apiGet, apiPut } from '@/api/client'
@@ -11,12 +12,16 @@ import { SettingsButton } from '../inputs/SettingsButton'
 import { SegmentedControl } from '../inputs/SegmentedControl'
 import { saveErrorMessage } from '../settings-pane-context'
 import { BrowserExtensionGroup } from './BrowserExtensionGroup'
+import type { ExtSeen, ExtShipped } from './browser-extension-model'
 
 type SiteMode = 'ask' | 'any'
 export interface BrowserStatus {
   browsers: Array<{ device: string; label: string; browser: string; caps: string[]; tabs?: unknown[] }>
   mode: SiteMode
   sites: Array<{ site: string; addedAt: string }>
+  /** The extension build this Walnut ships, and what each connected extension last said it runs (an older Walnut has neither). */
+  extension?: ExtShipped | null
+  extensions?: ExtSeen[]
   /** How long the Browser replay keeps agents' steps (0: off), and what it holds now. */
   replayDays?: number
   replayBytes?: number
@@ -62,12 +67,11 @@ export function BrowserSection() {
     }
   }
 
-  const agentsOn = new Set(st?.browsers.map((b) => b.device) ?? [])
   // Every pane is a settings section with its registry id: that draws the pane's title and is
   // what the nav, search and deep links find (tests/e2e/browser/settings-panes.spec.ts C2).
   return (
     <SettingsSection id="browser" title="Browser extension">
-      <BrowserExtensionGroup agentsOn={agentsOn} />
+      <BrowserExtensionGroup status={st} />
       <SettingsGroup
         heading="Agents in your browser"
         footer={<>Agents use your browser only after you turn it on in the extension (its popup, Settings). They open their own tabs in a separate window, never yours, see and act only in those, and each tab has a Stop button that takes it back. They never use Walnut's own pages.</>}

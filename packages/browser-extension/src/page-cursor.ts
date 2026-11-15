@@ -19,9 +19,20 @@
  *   - Gone when the agent lets the tab go (every release deletes the tab's holding, and that
  *     sends `agent-cursor {off}` to every frame: agent-shared.ts letGo), and when the person takes
  *     the tab over.
+ *   - Gone by itself IDLE_MS after the agent's last step here (2026-11-15, the user: "if the task is
+ *     finished, u can remove it riht it jsut keeo showing and block the view"). A holding outlives
+ *     the work: a task that waits for the person keeps its tabs (browser-tab-tidy.ts), and a turn
+ *     that ends, a session that dies, a background the browser stopped or a lost link to Walnut send
+ *     nothing at all. So the cursor is a lease each step renews, not a picture something must
+ *     remember to take away: every way control ends, named or new, ends in silence, and silence
+ *     takes it away. The next step draws it again.
+ *   - Out of the person's way: their own pointer coming over it, or their click anywhere in the
+ *     page, takes it away at once (personInput). The agent's own real input (agent-trusted.ts) lands
+ *     on the cursor's tip right after the step drew it there, and goes on as one stream (a drag's
+ *     moves, slow typing's keys): it is never taken for theirs.
  */
 import { dropHost, hostStyle, makeHost, type Host } from './content-host'
-import { CLICK_MS, DEFAULT_CURSOR_STYLE, cursorCss, cursorParts, isCursorStyle, storedCursorStyle, type CursorStyle } from './cursor-looks'
+import { CLICK_MS, DEFAULT_CURSOR_STYLE, FADE_MS, cursorCss, cursorParts, isCursorStyle, storedCursorStyle, type CursorStyle } from './cursor-looks'
 import { ask, ext } from './ext'
 
 export type CursorKind = 'move' | 'click' | 'drag'
@@ -39,13 +50,36 @@ const UP_MS = 6000
 const LOOK_READ_MS = 250
 /** A move longer than this leans the cursor into it while it glides. */
 const TILT_MIN_PX = 24
+/**
+ * With no new step here for this long the agent is not working in this page now (its turn ended,
+ * it waits for the person, it went away): the cursor fades out. Long enough to stay between the
+ * quick steps of one action; a step after a longer think draws it again where it acts.
+ */
+export const IDLE_MS = 10_000
+/**
+ * Real input this soon after a step drew the cursor is the agent's own (agent-trusted.ts: the
+ * debugger presses where the page just placed it); a drag's own length is added. Each such input
+ * holds the window open again: a long drag's moves and slow typing's keys are one stream of the
+ * agent's, and they keep the cursor up as steps do.
+ */
+export const AGENT_INPUT_MS = 1500
+/** The person's pointer this close to the picture or its tag, or to its tip, is in its way. */
+export const NEAR_PX = 16
+const TIP_PX = 32
+/** Real input within this of the cursor's tip is the agent's own press at its point, never the person's. */
+const ON_TIP_PX = 2
 
-interface Drawn { host: Host; box: HTMLElement; x: number; y: number; look: CursorStyle }
+interface Drawn { host: Host; box: HTMLElement; parts: HTMLElement[]; x: number; y: number; look: CursorStyle }
 let cur: Drawn | null = null
 let masked = false
 let rippleTimer: ReturnType<typeof setTimeout> | undefined
 let tiltTimer: ReturnType<typeof setTimeout> | undefined
 let moves = 0
+let idleTimer: ReturnType<typeof setTimeout> | undefined
+let fadeTimer: ReturnType<typeof setTimeout> | undefined
+/** Until when real input in the page is the agent's own (performance.now()). */
+let agentInputUntil = 0
+let listening = false
 /** The look drawn: the person's pick in Settings (`settings.cursorStyle`), else the shipped one. */
 let look: CursorStyle = DEFAULT_CURSOR_STYLE
 let lookRead: Promise<void> | null = null
@@ -99,10 +133,12 @@ function ensure(): Drawn {
   hostStyle(host, `z-index: ${CURSOR_Z} !important; top: 0 !important; left: 0 !important; width: 0 !important; height: 0 !important; overflow: visible !important; pointer-events: none !important;`)
   const style = document.createElement('style')
   style.textContent = cursorCss(look)
-  const { box } = cursorParts(document, look)
+  const { box, body, tag } = cursorParts(document, look)
   if (masked) box.classList.add('hid')
   root.append(style, box)
-  cur = { host, box, x: NaN, y: NaN, look }
+  // The picture itself (body only places it: its art is positioned inside it, so it has no size of its own) and the tag.
+  cur = { host, box, parts: [(body.firstElementChild as HTMLElement | null) ?? body, tag], x: NaN, y: NaN, look }
+  listenPerson(true)
   if (at && Number.isFinite(at.x)) place(cur, at.x, at.y, 0)
   return cur
 }
@@ -120,6 +156,9 @@ function place(c: Drawn, x: number, y: number, ms: number): void {
  */
 export async function cursorAt(x: number, y: number, kind: CursorKind = 'move', ms?: number): Promise<void> {
   if (!Number.isFinite(x) || !Number.isFinite(y)) return
+  // A step: the lease starts again once it is drawn, and a fade on its way is called off.
+  clearTimeout(idleTimer)
+  unfade()
   if (!cur) {
     const off = offs
     await readLook()
@@ -142,8 +181,73 @@ export async function cursorAt(x: number, y: number, kind: CursorKind = 'move', 
   place(c, x, y, dur)
   moves++
   const wait = still() ? 0 : first ? FIRST_MS : dur
+  const dragMs = kind === 'drag' && ms ? ms : 0
+  agentInputUntil = now() + wait + dragMs + AGENT_INPUT_MS
+  renew()
   if (wait) await sleep(wait)
   if (kind === 'click') ripple()
+  // The input the step makes comes after its glide.
+  agentInputUntil = Math.max(agentInputUntil, now() + dragMs + AGENT_INPUT_MS)
+}
+
+const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
+
+/** The agent is at work here: the cursor stays IDLE_MS more. */
+function renew(): void {
+  clearTimeout(idleTimer)
+  if (cur) idleTimer = setTimeout(() => fadeOff(), IDLE_MS)
+}
+
+/** It goes by itself (idle, or in the person's way): a short fade, then out of the page. */
+function fadeOff(): void {
+  clearTimeout(idleTimer)
+  if (!cur) return
+  if (still()) { cursorOff(); return }
+  cur.box.classList.add('out')
+  clearTimeout(fadeTimer)
+  // Whatever is drawn then goes (a redraw in another look during the fade too); a step meanwhile calls the fade off (unfade).
+  fadeTimer = setTimeout(() => cursorOff(), FADE_MS)
+}
+
+function unfade(): void {
+  clearTimeout(fadeTimer)
+  cur?.box.classList.remove('out')
+}
+
+/**
+ * The person's own pointer: over the cursor, or a press anywhere in the page while the agent is
+ * not pressing here, takes the cursor away. Listened for only while it is drawn.
+ */
+function personInput(e: Event): void {
+  const p = e as PointerEvent
+  if (!cur || !p.isTrusted) return
+  if (now() < agentInputUntil) {
+    agentInputUntil = now() + AGENT_INPUT_MS
+    renew()
+    return
+  }
+  // The person's keys never move it: only their pointer is in its way.
+  if (p.type === 'keydown' || !Number.isFinite(p.clientX) || !Number.isFinite(p.clientY)) return
+  if (Math.hypot(p.clientX - cur.x, p.clientY - cur.y) <= ON_TIP_PX) return
+  if (p.type === 'pointerdown' || nearCursor(cur, p.clientX, p.clientY)) fadeOff()
+}
+
+function nearCursor(c: Drawn, x: number, y: number): boolean {
+  if (Math.hypot(x - c.x, y - c.y) <= TIP_PX) return true
+  return c.parts.some((el) => {
+    const r = el.getBoundingClientRect()
+    return r.width > 0 && r.height > 0 && x >= r.left - NEAR_PX && x <= r.right + NEAR_PX && y >= r.top - NEAR_PX && y <= r.bottom + NEAR_PX
+  })
+}
+
+function listenPerson(on: boolean): void {
+  if (on === listening || typeof addEventListener !== 'function') return
+  listening = on
+  const opts = { capture: true, passive: true } as const
+  for (const type of ['pointermove', 'pointerdown', 'keydown'] as const) {
+    if (on) addEventListener(type, personInput, opts)
+    else removeEventListener(type, personInput, opts)
+  }
 }
 
 function ripple(): void {
@@ -162,6 +266,10 @@ export function cursorOff(): void {
   offs++
   clearTimeout(rippleTimer)
   clearTimeout(tiltTimer)
+  clearTimeout(idleTimer)
+  clearTimeout(fadeTimer)
+  listenPerson(false)
+  agentInputUntil = 0
   if (cur) dropHost(cur.host)
   cur = null
 }
@@ -170,6 +278,8 @@ export function cursorOff(): void {
 export function cursorMask(on: boolean): void {
   masked = on
   if (cur) cur.box.classList.toggle('hid', on)
+  // A screenshot is the agent at work here too.
+  if (!on && cur) renew()
 }
 
 /** The person picked another look in Settings: a cursor on show now is drawn again in it, in place. */
@@ -282,7 +392,7 @@ export function listenCursor(): void {
 }
 
 /** For tests: what is drawn (the shadow root is closed). */
-export function _cursorForTesting(): { host: HTMLElement; box: HTMLElement; x: number; y: number; hidden: boolean; rippling: boolean; moves: number; look: CursorStyle } | null {
-  return cur && cur.host.el.isConnected ? { host: cur.host.el, box: cur.box, x: cur.x, y: cur.y, hidden: cur.box.classList.contains('hid'), rippling: cur.box.classList.contains('on'), moves, look: cur.look } : null
+export function _cursorForTesting(): { host: HTMLElement; box: HTMLElement; x: number; y: number; hidden: boolean; rippling: boolean; fading: boolean; moves: number; look: CursorStyle } | null {
+  return cur && cur.host.el.isConnected ? { host: cur.host.el, box: cur.box, x: cur.x, y: cur.y, hidden: cur.box.classList.contains('hid'), rippling: cur.box.classList.contains('on'), fading: cur.box.classList.contains('out'), moves, look: cur.look } : null
 }
 export function _resetCursorForTesting(): void { cursorOff(); masked = false; moves = 0; look = DEFAULT_CURSOR_STYLE; lookRead = null; lookChanged = false }

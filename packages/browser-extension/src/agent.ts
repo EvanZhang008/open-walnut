@@ -16,6 +16,7 @@
 import { ext, isFirefox, type Sender } from './ext'
 import { more } from './agent-api'
 import { ApiError, call, connection } from './walnut-api'
+import { buildOf } from './self-update'
 import { siteKey } from '../../../src/core/vault/url-match'
 import { pageCheck, reachPage } from './page-reach'
 import {
@@ -504,7 +505,7 @@ export async function agentLoop(): Promise<void> {
           ...(isFirefox ? [] : ['live-pictures']),
         ]
         const r = await call<{ commands: WireCommand[] }>('POST', '/browser/poll', {
-          browser: isFirefox ? 'firefox' : 'chrome', version: ext.runtime.getManifest().version, caps, tabs: await report(), waitMs: 25_000,
+          browser: isFirefox ? 'firefox' : 'chrome', version: ext.runtime.getManifest().version, build: buildOf(ext.runtime.getManifest().version_name) ?? undefined, caps, tabs: await report(), waitMs: 25_000,
         }, { noSession: true, timeoutMs: 40_000 })
         backoff = 1000
         for (const c of r.commands ?? []) void run(c)

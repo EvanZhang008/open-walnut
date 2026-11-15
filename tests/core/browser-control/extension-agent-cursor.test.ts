@@ -17,7 +17,7 @@
  *     frame's own document; a frame's place is read with runtime.getFrameId.
  */
 import { readFileSync, readdirSync } from 'node:fs'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installFakePage } from './page-dom-fake'
 
 const frameIds = new Map<Element, number>()
@@ -259,6 +259,163 @@ describe('the cursor never gets in the way', () => {
     expect(s).toMatch(/if \(mode === 'driving'\) cursorOff\(\)/)
     expect(s).toMatch(/type: 'agent-stop' \}\)\.then\(\(\) => \{ cursorOff\(\)/)
     expect(s).toMatch(/\nlistenCursor\(\)\n/)
+  })
+})
+
+/** The page's own listeners, as the cursor adds them on the window (personInput). */
+const winListeners = new Map<string, Set<(e: Event) => void>>()
+g.addEventListener = (type: string, fn: (e: Event) => void) => { if (!winListeners.has(type)) winListeners.set(type, new Set()); winListeners.get(type)!.add(fn) }
+g.removeEventListener = (type: string, fn: (e: Event) => void) => { winListeners.get(type)?.delete(fn) }
+/** A real (trusted) pointer event of the person's, as the browser would give it. */
+const person = (type: 'pointermove' | 'pointerdown', x: number, y: number, isTrusted = true) => {
+  for (const fn of winListeners.get(type) ?? []) fn({ type, clientX: x, clientY: y, isTrusted } as unknown as Event)
+}
+
+describe('the cursor goes when the agent stops working here (2026-11-15: it stayed over a form after the task)', () => {
+  const reduce = () => { g.matchMedia = (q: string) => ({ matches: q.includes('reduce') }) }
+  afterEach(() => { vi.useRealTimers() })
+
+  it('with no new step for IDLE_MS it is gone by itself, with no message: every way control ends (turn over, task done, session dead, link lost, any new one) is a silence', async () => {
+    reduce()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    await cur.cursorAt(100, 100, 'click')
+    expect(at()).toEqual({ x: 100, y: 100 })
+    vi.advanceTimersByTime(cur.IDLE_MS - 1)
+    expect(at()).not.toBeNull()
+    vi.advanceTimersByTime(1)
+    expect(at()).toBeNull()
+    // Nothing was asked of the background or the page for it.
+    expect(sent).toEqual([])
+    // The next step draws it again, with a lease of its own.
+    await cur.cursorAt(30, 40)
+    expect(at()).toEqual({ x: 30, y: 40 })
+    vi.advanceTimersByTime(cur.IDLE_MS)
+    expect(at()).toBeNull()
+  })
+
+  it('it fades out first where motion is shown, and a step during the fade keeps it', async () => {
+    g.matchMedia = () => ({ matches: false })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const step = async (x: number, y: number) => { const p = cur.cursorAt(x, y); await vi.advanceTimersByTimeAsync(cur.MOVE_MAX_MS + 300); await p }
+    await step(100, 100)
+    await vi.advanceTimersByTimeAsync(cur.IDLE_MS - cur.MOVE_MAX_MS - 300)
+    expect(cur._cursorForTesting()!.fading).toBe(true)
+    await vi.advanceTimersByTimeAsync(looks.FADE_MS)
+    expect(at()).toBeNull()
+    await step(200, 200)
+    await vi.advanceTimersByTimeAsync(cur.IDLE_MS - cur.MOVE_MAX_MS - 300)
+    expect(cur._cursorForTesting()!.fading).toBe(true)
+    // A step during the fade: back in full, and it stays.
+    const p = cur.cursorAt(250, 250)
+    expect(cur._cursorForTesting()!.fading).toBe(false)
+    await vi.advanceTimersByTimeAsync(cur.MOVE_MAX_MS + looks.FADE_MS + 50)
+    await p
+    expect(at()).toEqual({ x: 250, y: 250 })
+  })
+
+  it('steps keep it up; so does the agent\'s own screenshot (the mask coming off)', async () => {
+    reduce()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    await cur.cursorAt(10, 10)
+    for (let i = 0; i < 5; i++) {
+      vi.advanceTimersByTime(cur.IDLE_MS - 100)
+      await cur.cursorAt(10 + i, 10)
+    }
+    vi.advanceTimersByTime(cur.IDLE_MS - 100)
+    cur.cursorMask(true)
+    cur.cursorMask(false)
+    vi.advanceTimersByTime(cur.IDLE_MS - 100)
+    expect(at()).not.toBeNull()
+    vi.advanceTimersByTime(100)
+    expect(at()).toBeNull()
+  })
+
+  it('a look changed during the fade: the redrawn cursor still goes', async () => {
+    g.matchMedia = () => ({ matches: false })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const p = cur.cursorAt(100, 100)
+    await vi.advanceTimersByTimeAsync(cur.IDLE_MS)
+    await p
+    expect(cur._cursorForTesting()!.fading).toBe(true)
+    cur.setCursorLook(looks.CURSOR_STYLES.find((l) => l !== cur._cursorForTesting()!.look))
+    expect(at()).toEqual({ x: 100, y: 100 })
+    await vi.advanceTimersByTimeAsync(looks.FADE_MS)
+    expect(at()).toBeNull()
+  })
+
+  it('every way a cursor is drawn arms the lease: one host maker, reached only through cursorAt (and a redraw in place of one already up)', () => {
+    const files = readdirSync(SRC).filter((f) => f.endsWith('.ts'))
+    const makers = files.filter((f) => /makeHost\(CURSOR_Z|makeHost\([^)]*,\s*'walnutCursor'\)/.test(read(f)))
+    expect(makers).toEqual(['page-cursor.ts'])
+    const s = read('page-cursor.ts')
+    expect([...s.matchAll(/makeHost\(/g)]).toHaveLength(1)
+    // ensure() draws; its callers are cursorAt (which renews the lease once placed) and applyLook (a cursor already up, its lease running).
+    const callers = [...s.matchAll(/\n(?:export )?(?:async )?function (\w+)[^\n]*\n(?:(?!\n(?:export )?(?:async )?function )[\s\S])*?\bensure\(\)/g)].map((m) => m[1]).filter((n) => n !== 'ensure')
+    expect(callers.sort()).toEqual(['applyLook', 'cursorAt'])
+    expect(s).toMatch(/place\(c, x, y, dur\)[\s\S]{0,300}renew\(\)/)
+    expect(s).toMatch(/function applyLook[\s\S]{0,200}if \(cur && cur\.host\.el\.isConnected\) ensure\(\)/)
+  })
+})
+
+describe('out of the person\'s way', () => {
+  beforeEach(() => { g.matchMedia = (q: string) => ({ matches: q.includes('reduce') }) })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('their pointer coming over it takes it away; one passing far off does not', async () => {
+    await cur.cursorAt(300, 300)
+    await new Promise((r) => setTimeout(r, cur.AGENT_INPUT_MS + 100))
+    person('pointermove', 700, 600)
+    expect(at()).not.toBeNull()
+    person('pointermove', 320, 310)
+    expect(at()).toBeNull()
+  })
+
+  it('their click anywhere in the page takes it away', async () => {
+    await cur.cursorAt(300, 300)
+    await new Promise((r) => setTimeout(r, cur.AGENT_INPUT_MS + 100))
+    person('pointerdown', 900, 50)
+    expect(at()).toBeNull()
+  })
+
+  it('the agent\'s own real input is never theirs: right after the step, or on the cursor\'s tip; an untrusted event is the page\'s', async () => {
+    await cur.cursorAt(300, 300, 'click')
+    person('pointermove', 300, 300)
+    person('pointerdown', 300, 300)
+    person('pointerdown', 340, 320)
+    expect(at()).toEqual({ x: 300, y: 300 })
+    await new Promise((r) => setTimeout(r, cur.AGENT_INPUT_MS + 100))
+    person('pointerdown', 300.5, 300)
+    person('pointerdown', 900, 50, false)
+    expect(at()).toEqual({ x: 300, y: 300 })
+  })
+
+  it('the agent\'s own input stream holds it up: a long drag\'s moves off the tip, slow typing\'s keys past the lease', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    await cur.cursorAt(300, 300, 'drag', 300)
+    // The debugger's moves every 30 ms along the way, for 4 s, never on the tip.
+    for (let t = 0; t < 4000; t += 30) { await vi.advanceTimersByTimeAsync(30); person('pointermove', 300 + t / 40, 302) }
+    expect(at()).not.toBeNull()
+    // Slow typing: a key every 50 ms for longer than the lease.
+    for (let t = 0; t < cur.IDLE_MS + 2000; t += 50) { await vi.advanceTimersByTimeAsync(50); for (const fn of winListeners.get('keydown') ?? []) fn({ type: 'keydown', isTrusted: true } as unknown as Event) }
+    expect(at()).not.toBeNull()
+    // The stream ended: the person's pointer over it, later, takes it away; their keys alone never do.
+    await vi.advanceTimersByTimeAsync(cur.AGENT_INPUT_MS + 50)
+    for (const fn of winListeners.get('keydown') ?? []) fn({ type: 'keydown', isTrusted: true } as unknown as Event)
+    expect(at()).not.toBeNull()
+    person('pointermove', 325, 310)
+    expect(at()).toBeNull()
+  })
+
+  it('listens only while a cursor is drawn', async () => {
+    expect(winListeners.get('pointermove')?.size ?? 0).toBe(0)
+    await cur.cursorAt(300, 300)
+    expect(winListeners.get('pointermove')?.size).toBe(1)
+    expect(winListeners.get('pointerdown')?.size).toBe(1)
+    expect(winListeners.get('keydown')?.size).toBe(1)
+    cur.cursorOff()
+    expect(winListeners.get('pointermove')?.size).toBe(0)
+    expect(winListeners.get('pointerdown')?.size).toBe(0)
+    expect(winListeners.get('keydown')?.size).toBe(0)
   })
 })
 

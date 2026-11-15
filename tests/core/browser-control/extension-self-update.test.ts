@@ -28,17 +28,17 @@ const state = {
   alarms: { create() {}, onAlarm: { addListener() {} } },
 }
 
-const api = vi.hoisted(() => ({ build: 'bbbbbb222222' as string | undefined, folder: 'f0f0f0f0f0f0f0f0f0f0f0f0' as string | undefined, connected: true, fails: false }))
+const api = vi.hoisted(() => ({ build: 'bbbbbb222222' as string | undefined, folder: 'f0f0f0f0f0f0f0f0f0f0f0f0' as string | undefined, connected: true, fails: false, paths: [] as string[] }))
 vi.mock('../../../packages/browser-extension/src/walnut-api', () => ({
   connection: async () => (api.connected ? { serverUrl: 'http://localhost:3456', token: 't', device: 'd' } : null),
-  call: async () => { if (api.fails) throw new Error('unreachable'); return api.build ? { panel: 1, extension: { version: '0.6.25', build: api.build, ...(api.folder ? { folder: api.folder } : {}) } } : { panel: 1 } },
+  call: async (_m: string, path: string) => { api.paths.push(path); if (api.fails) throw new Error('unreachable'); return api.build ? { panel: 1, extension: { version: '0.6.25', build: api.build, ...(api.folder ? { folder: api.folder } : {}) } } : { panel: 1 } },
 }))
 
-const { selfUpdate, buildOf } = await import('../../../packages/browser-extension/src/self-update')
+const { selfUpdate, buildOf, installKindOf } = await import('../../../packages/browser-extension/src/self-update')
 
 beforeEach(() => {
   state.local = {}; state.versionName = '0.6.25 build aaaaaa111111'; state.installType = 'development'; state.reloads = 0
-  api.build = 'bbbbbb222222'; api.folder = 'f0f0f0f0f0f0f0f0f0f0f0f0'; api.connected = true; api.fails = false
+  api.build = 'bbbbbb222222'; api.folder = 'f0f0f0f0f0f0f0f0f0f0f0f0'; api.connected = true; api.fails = false; api.paths = []
   state.files = { 'walnut-folder.json': { folder: api.folder, browser: 'chrome' }, 'manifest.json': { version_name: '0.6.25 build bbbbbb222222' } }
 })
 /** Walnut brought the folder up to `build` (its manifest on disk). */
@@ -83,6 +83,23 @@ describe('the extension updates itself from the folder Walnut keeps', () => {
     folderHolds('dddddd444444')
     await selfUpdate()
     expect(state.reloads).toBe(1)
+  })
+
+  it('every copy, of every kind, says what it runs with the check (Settings shows it: extension-seen.ts)', async () => {
+    const said = () => Object.fromEntries(new URL(api.paths.at(-1)!, 'http://x').searchParams)
+    await selfUpdate(true)
+    expect(said()).toEqual({ version: '0.6.25', build: 'aaaaaa111111', install: 'walnut-folder' })
+    delete state.files['walnut-folder.json']
+    await selfUpdate(true)
+    expect(said()).toEqual({ version: '0.6.25', build: 'aaaaaa111111', install: 'unpacked' })
+    state.installType = 'normal'
+    await selfUpdate(true)
+    expect(said()).toEqual({ version: '0.6.25', build: 'aaaaaa111111', install: 'store' })
+    state.versionName = undefined
+    await selfUpdate(true)
+    expect(said()).toEqual({ version: '0.6.25', install: 'store' })
+    expect(api.paths.every((p) => p.startsWith('/browser/panel?'))).toBe(true)
+    expect(installKindOf('sideload', false)).toBe('other')
   })
 
   it('reads the build from version_name', () => {

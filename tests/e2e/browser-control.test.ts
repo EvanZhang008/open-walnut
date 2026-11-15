@@ -481,5 +481,22 @@ describe('setting the extension up from Walnut, and keeping it current', () => {
     expect((await http('GET', '/browser/panel')).body).toEqual({ panel: 1, askPanel: 2 })
     expect((await http('POST', '/browser/extension/setup', { browser: 'chrome' })).body.code).toBe('no_extension_build')
   })
+
+  it('each extension says what it runs with its update check; status shows it beside the build Walnut ships (Settings, Your browsers)', async () => {
+    process.env.WALNUT_WEB_STATIC_DIR = await staticFor('cccccc333333')
+    const dev = await pair()
+    const auth = { authorization: `Bearer ${dev.token}` }
+    expect((await http('GET', '/browser/panel?version=0.6.24&build=aaaaaa111111&install=walnut-folder', undefined, auth)).status).toBe(200)
+    // The side panel's own page asks with no device token: it says nothing about any extension.
+    await http('GET', '/browser/panel?version=9.9.9&build=dddddd444444&install=store')
+    const st = (await http('GET', '/browser/status')).body
+    expect(st.extension).toEqual({ version: '0.6.25', build: 'cccccc333333' })
+    const mine = (st.extensions as Array<{ device: string }>).filter((e) => e.device === dev.name)
+    expect(mine).toEqual([{ device: dev.name, version: '0.6.24', build: 'aaaaaa111111', install: 'walnut-folder', at: expect.any(String) }])
+    expect((st.extensions as Array<{ version: string }>).some((e) => e.version === '9.9.9')).toBe(false)
+    // Removing the device forgets what it said.
+    expect((await http('DELETE', `/api/devices/${dev.name}`)).status).toBeLessThan(300)
+    await expect.poll(async () => ((await http('GET', '/browser/status')).body.extensions as Array<{ device: string }>).some((e) => e.device === dev.name), { timeout: 5000 }).toBe(false)
+  })
 })
 

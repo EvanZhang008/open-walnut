@@ -293,8 +293,22 @@ machine; no password or site leaves it.
 `packages/browser-extension` is one source for Chrome (and Edge, Brave, Arc) and Firefox (128
 or later), built by `bun run extension:build` (part of `web:build` and of the compiled release
 build) into `dist/extension/{chrome,firefox}` and the downloads this Walnut serves at
-`/downloads/walnut-extension-{chrome,firefox}.zip`. Settings, Browser extension shows
-how to load it and lists the connected ones with Remove.
+`/downloads/walnut-extension-{chrome,firefox}.zip`. Settings, Browser extension lists each
+connected browser (Your browsers: connected now or when last heard from, the version it runs against
+the build Walnut ships, how it updates: by itself from Walnut's folder, once set up from that
+folder, or through the store; agents on or off) with Remove, shows how to install it, and says what
+it does. Each copy says what it runs with its update check (`GET /api/v1/browser/panel?version&build&install`
+with its own token) and its agents poll (`build`); the server keeps the last report per device in
+memory (`core/browser-control/extension-seen.ts`) and `GET /api/v1/browser/status` returns it as
+`extensions`, beside `extension` (the build it ships).
+
+**The Chrome Web Store.** On macOS and Windows Chrome installs an extension in one click only
+from its store (its own documentation: the external update address "must point to the Chrome Web
+Store", and no install from a local CRX path since Chrome 33 on Windows and 44 on Mac). The
+submission is ready in `packages/browser-extension/store/` (listing text, permission reasons,
+privacy policy); `bun scripts/extension-store-package.mjs` builds the upload into
+`dist/extension-store`. Submitting publishes under the maintainer's developer account, so it is the
+maintainer's step.
 
 **Setting it up from Walnut, and keeping it current.** A browser loads an extension that is not
 from its store only on the person's own two clicks (Chrome: Developer mode, then Load unpacked),

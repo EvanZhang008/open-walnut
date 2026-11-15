@@ -11,11 +11,16 @@
  * developer's build, an unpacked zip, a browser started with --load-extension) never reloads:
  * Chrome turns a command-line unpacked extension off after a reload when Developer mode is off,
  * and a reload would not change its files anyway. One reload per build Walnut names.
+ *
+ * Every copy, of every kind, says what it runs with the check (`version`, `build`, `install`), so
+ * Settings, Browser extension, shows each connected browser's version and how it updates
+ * (src/core/browser-control/extension-seen.ts).
  */
 import { ext } from './ext'
 import { call, connection } from './walnut-api'
 import { keepForReload } from './agent-keep'
 import { CLEAR_MS } from './bg-clipboard'
+import type { InstallKind } from '../../../src/core/browser-control/extension-seen'
 
 const EVERY_MS = 10 * 60_000
 let checkedAt = 0
@@ -33,19 +38,30 @@ async function ownFile(name: string): Promise<Record<string, unknown> | null> {
   } catch { return null }
 }
 
+export type { InstallKind } from '../../../src/core/browser-control/extension-seen'
+
+/** How the browser installed this copy (management.getSelf's installType, and Walnut's folder marker in its own files). */
+export function installKindOf(installType: unknown, hasWalnutMarker: boolean): InstallKind {
+  if (installType === 'development') return hasWalnutMarker ? 'walnut-folder' : 'unpacked'
+  if (installType === 'normal') return 'store'
+  return 'other'
+}
+
 export async function selfUpdate(force = false): Promise<void> {
   if (!force && Date.now() - checkedAt < EVERY_MS) return
   checkedAt = Date.now()
-  const own = buildOf(ext.runtime.getManifest().version_name)
-  if (!own || !(await connection())) return
+  const manifest = ext.runtime.getManifest()
+  const own = buildOf(manifest.version_name)
+  if (!(await connection())) return
   const self = await Promise.resolve(ext.management?.getSelf?.()).catch(() => null)
-  if (self?.installType !== 'development') return
-  const r = await call<{ extension?: { build?: unknown; folder?: unknown } }>('GET', '/browser/panel', undefined, { noSession: true, timeoutMs: 20_000 }).catch(() => null)
+  const marker = self?.installType === 'development' ? await ownFile('walnut-folder.json') : null
+  const said = new URLSearchParams({ version: String(manifest.version ?? ''), ...(own ? { build: own } : {}), install: installKindOf(self?.installType, typeof marker?.folder === 'string') })
+  const r = await call<{ extension?: { build?: unknown; folder?: unknown } }>('GET', `/browser/panel?${said}`, undefined, { noSession: true, timeoutMs: 20_000 }).catch(() => null)
+  if (!own || self?.installType !== 'development') return
   const want = typeof r?.extension?.build === 'string' ? r.extension.build : ''
   const folder = typeof r?.extension?.folder === 'string' ? r.extension.folder : ''
   if (!want || want === own || !folder) return
   // This copy is in the folder Walnut keeps, and that folder now holds the build Walnut names.
-  const marker = await ownFile('walnut-folder.json')
   if (marker?.folder !== folder) return
   if (buildOf((await ownFile('manifest.json'))?.version_name) !== want) return
   const { reloadedFor } = await ext.storage.local.get('reloadedFor')

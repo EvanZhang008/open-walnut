@@ -26,7 +26,7 @@ const NOT_A_HOST_LINK: Record<string, string> = {
   'web/src/components/settings/sections/CloudSection.tsx': "the cloud companion's pairing",
   'web/src/components/settings/sections/backup/backup-model.ts': 'a backup storage test',
   'web/src/components/settings/sections/backup/DriveConnect.tsx': "the Google account a backup goes to",
-  'web/src/components/settings/sections/BrowserExtensionGroup.tsx': 'the browser extension',
+  'web/src/components/settings/sections/browser-extension-model.ts': 'the browser extension',
   'web/src/components/settings/sections/ProvidersSection.tsx': 'a model provider test',
   'web/src/components/settings/sections/cloud/RemoteAccessCard.tsx': "the phone's remote access",
   'web/src/components/settings/sections/cloud/ways-model.ts': "the phone's ways in",

@@ -8,6 +8,7 @@
  *   GET  /api/v1/browser/status   connected browsers, the site setting, the allowed sites
  *   PUT  /api/v1/browser/settings the person's choice: { mode?, removeSite?, replayDays? }
  *   GET  /api/v1/browser/panel    { panel, askPanel, extension: { version, build } }: the build Walnut ships
+ *                                 (an extension asking with its token says its own: ?version&build&install)
  *   POST /api/v1/browser/extension/setup { browser } → { dir, build, copied, opened }
  *
  * A site an agent has not used before asks the person first (a Walnut approval), unless they
@@ -132,8 +133,9 @@ browserV1Router.post('/browser/poll', (req, res, next) => {
   // A browser is here: Walnut tidies the tabs tasks no longer use (browser-tab-tidy.ts).
   startTabTidy(tidyDeps)
   void run(res, next, async () => {
-    const b = (req.body ?? {}) as { browser?: unknown; version?: unknown; caps?: unknown; tabs?: unknown; waitMs?: unknown }
+    const b = (req.body ?? {}) as { browser?: unknown; version?: unknown; build?: unknown; caps?: unknown; tabs?: unknown; waitMs?: unknown }
     const h = await hub()
+    ;(await import('../../core/browser-control/extension-seen.js')).noteExtension(device, b)
     // Each agent tab, who holds it, and where it is (address, title, window: the task's Browser view; hub.ts cuts them to size).
     const tabs = Array.isArray(b.tabs) ? (b.tabs as Array<{ id?: unknown; owner?: unknown; grant?: unknown; url?: unknown; title?: unknown; window?: unknown; windowState?: unknown; driving?: unknown }>)
       .filter((t) => typeof t?.id === 'number' && typeof t?.owner === 'string')
@@ -181,6 +183,7 @@ browserV1Router.post('/browser/result', (req, res, next) => {
 // gone at once, and an agent's next command says the person disconnected it (no wait for a poll).
 onCredentialsRevoked((names) => {
   void hub().then((h) => { for (const n of names) h.disconnect(n, 'disconnected') }).catch(() => undefined)
+  void import('../../core/browser-control/extension-seen.js').then((x) => { for (const n of names) x.forgetExtension(n) }).catch(() => undefined)
 })
 
 browserV1Router.post('/browser/off', (req, res, next) => {
@@ -201,7 +204,10 @@ browserV1Router.get('/browser/status', (_req, res, next) => {
     const h = await hub()
     const left = h.lastGone()
     const replay = await import('../../core/browser-control/replay-store.js')
-    return { browsers: h.connected(), mode: f.mode, sites: f.sites, replayDays: f.replayDays, replayBytes: await replay.replayBytes(), ...(left ? { gone: { label: left.label, at: new Date(left.at).toISOString(), why: left.why } } : {}) }
+    // What Walnut ships, and what each connected extension last said it runs (Settings shows installed, up to date, how it updates).
+    const shipped = (await import('../../core/browser-control/extension-install.js')).bundledExtension()
+    const extensions = (await import('../../core/browser-control/extension-seen.js')).extensionsSeen().map((e) => ({ ...e, at: new Date(e.at).toISOString() }))
+    return { browsers: h.connected(), extension: shipped, extensions, mode: f.mode, sites: f.sites, replayDays: f.replayDays, replayBytes: await replay.replayBytes(), ...(left ? { gone: { label: left.label, at: new Date(left.at).toISOString(), why: left.why } } : {}) }
   })
 })
 
@@ -241,6 +247,9 @@ browserV1Router.put('/browser/settings', (req, res, next) => {
  */
 browserV1Router.get('/browser/panel', (req, res, next) => {
   void run(res, next, async () => {
+    // The extension's own update check says what it runs (extension-seen.ts); the side panel's page asks with no device token.
+    const device = (req as Request & { deviceName?: string }).deviceName
+    if (device && /^extension-[0-9a-f]{6}$/.test(device)) (await import('../../core/browser-control/extension-seen.js')).noteExtension(device, req.query)
     const x = await import('../../core/browser-control/extension-install.js')
     const bundled = x.bundledExtension()
     if (bundled && !ambientTestRun()) {
