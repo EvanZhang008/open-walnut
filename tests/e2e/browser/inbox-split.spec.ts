@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { home } from './inbox-items-helpers'
+import { expectRestored, expectStill, expectWidensInPlace, topsOf } from './truncation-peek-helpers'
 
 // No model turn or production write: all letters live in the fixture server.
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
@@ -48,19 +49,32 @@ test('split inbox keeps both panels, density, selection and per-letter reply dra
     await expect(reader.locator('.hib-composer textarea').first()).toHaveValue('')
     await row(ids[29]).locator('.hib-subject').click()
     await expect(reader.locator('.hib-composer textarea').first()).toHaveValue('Keep this draft for letter 29')
-    // Both density modes keep full text inside the whole hovered row.
+    // Both density modes open the whole hovered row wider over the reader, as tall as it was;
+    // its subject is longer than the window, so it may still end cut.
     for (const mode of ['Roomy', 'Compact']) {
       await pane.getByRole('button', { name: mode, exact: true }).click()
       await page.mouse.move(1200, 780)
       const before = (await row(ids[29]).boundingBox())!
+      const tops = await topsOf([row(ids[28])])
       await row(ids[29]).hover({ position: { x: before.width - 6, y: 6 } })
-      await expect(row(ids[29])).toHaveAttribute('data-peek-expanded', '')
-      expect((await row(ids[29]).boundingBox())!.height).toBeGreaterThan(before.height)
-      await expect(page.getByTestId('truncation-peek')).toHaveCount(0)
+      await expectWidensInPlace(row(ids[29]), before, { label: `split ${mode}` })
+      await expectStill([row(ids[28])], tops, `split ${mode}: the next letter`)
       await page.screenshot({ path: info.outputPath(`split-${mode.toLowerCase()}.png`) })
       await page.mouse.move(1200, 780)
-      await expect(row(ids[29])).not.toHaveAttribute('data-peek-expanded')
+      await expectRestored(row(ids[29]), before, `split ${mode}`)
     }
+    // A click on the widened row is a click on the real row: it opens that letter.
+    const other = (await row(ids[28]).boundingBox())!
+    await row(ids[28]).hover({ position: { x: other.width - 6, y: 6 } })
+    await expectWidensInPlace(row(ids[28]), other, { label: 'split row before its click' })
+    await row(ids[28]).locator('.hib-subject').click()
+    await expect(reader.locator('.hib-reader-body')).toContainText('Letter 28 body')
+    await expect(row(ids[28])).toHaveAttribute('data-selected', 'true')
+    await expect(row(ids[28])).toBeVisible()
+    await page.mouse.move(1200, 780)
+    await expectRestored(row(ids[28]), other, 'split row after its click')
+    await row(ids[29]).locator('.hib-subject').click()
+    await expect(reader.locator('.hib-composer textarea').first()).toHaveValue('Keep this draft for letter 29')
     await pane.getByRole('button', { name: 'Compact', exact: true }).click()
     // First Escape closes the letter, second the center. Reopening restores view choices.
     await page.keyboard.press('Escape')

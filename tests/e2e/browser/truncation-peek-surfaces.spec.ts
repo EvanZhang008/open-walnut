@@ -1,13 +1,14 @@
 import { expect, test } from '@playwright/test'
 import { home } from './inbox-items-helpers'
 import { openAllSections, openTasksBy, taskRow } from './org-view-helpers'
-import { openInRow, peekPill } from './truncation-peek-helpers'
+import { expectRestored, expectStill, expectWidensInPlace, followingOf, openInRow, topsOf } from './truncation-peek-helpers'
 
-// Real list/card components with long team names, at both panel widths and themes.
+// Real list/card components with long team names, at both panel widths and themes: each widens
+// as a whole at its own height (2026-11-15, the user: wider, not taller), and nothing beside moves.
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
 test.setTimeout(120_000)
 
-test('Org and Board grow whole cards in flow at narrow and wide panel widths', async ({ page, request }, info) => {
+test('Org rows and Board cards widen whole at their own height, at narrow and wide panel widths', async ({ page, request }, info) => {
   const project = `Peek surfaces ${Date.now().toString(36)}`
   const title = 'Garden org demo Friday: insight end to end with the complete schedule, every tool and all the next steps for the platform rewrite'
   const made: string[] = []
@@ -37,20 +38,22 @@ test('Org and Board grow whole cards in flow at narrow and wide panel widths', a
     await openAllSections(page)
     const row = taskRow(page, made[2])
     await expect(row).toBeVisible()
-    for (const theme of ['light', 'dark']) {
+    for (const theme of ['light', 'dark'] as const) {
       await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme)
       for (const width of [520, 280]) {
         await page.mouse.move(1, 1)
         await row.evaluate((el, w) => { const list = el.closest<HTMLElement>('.org-task-list')!; list.style.width = `${w}px`; list.style.maxWidth = '100%'; }, width)
         await row.scrollIntoViewIfNeeded()
         const before = (await row.boundingBox())!
+        const next = await followingOf(row, `org-${theme}-${width}`)
+        const tops = next ? await topsOf([next]) : []
         await row.hover({ position: { x: 16, y: 5 } })
+        await expectWidensInPlace(row, before, { label: `org ${theme} ${width}`, theme })
         await expect.poll(() => openInRow(row.locator('.org-task-title'))).toBe(true)
-        expect((await row.boundingBox())!.height).toBeGreaterThan(before.height)
-        await expect(peekPill(page)).toHaveCount(0)
+        if (next) await expectStill([next], tops, `org ${theme} ${width}: the row below`)
         await page.screenshot({ path: info.outputPath(`org-${theme}-${width}.png`) })
         await page.mouse.move(1, 1)
-        await expect(row).not.toHaveAttribute('data-peek-expanded')
+        await expectRestored(row, before, `org ${theme} ${width}`)
       }
     }
     await openTasksBy(page, 'board')
@@ -58,7 +61,7 @@ test('Org and Board grow whole cards in flow at narrow and wide panel widths', a
     await pane.getByTestId('board-view-cards').click()
     const card = pane.locator(`[data-testid="kanban-card"][data-task-id="${made[2]}"]`)
     await expect(card).toBeVisible()
-    for (const theme of ['light', 'dark']) {
+    for (const theme of ['light', 'dark'] as const) {
       await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme)
       for (const width of [400, 240]) {
         await page.mouse.move(1, 1)
@@ -68,15 +71,16 @@ test('Org and Board grow whole cards in flow at narrow and wide panel widths', a
         const titleBox = (await card.locator('.kanban-card-title').boundingBox())!
         // The title is a three-line clamp; at both widths this real title must be cut.
         expect(await card.locator('.kanban-card-title').evaluate((el) => el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth)).toBe(true)
+        const next = await followingOf(card, `board-${theme}-${width}`)
+        const tops = next ? await topsOf([next]) : []
         await card.hover({ position: { x: titleBox.x - before.x + 5, y: titleBox.y - before.y + 5 } })
+        // The clamped title opens on one line in its own box; the card is as tall as it was.
+        await expectWidensInPlace(card, before, { label: `board ${theme} ${width}`, theme })
         await expect.poll(() => openInRow(card.locator('.kanban-card-title'))).toBe(true)
-        const after = (await card.boundingBox())!
-        expect(after.height).toBeGreaterThan(before.height)
-        expect(after.width).toBeCloseTo(before.width, 0)
-        await expect(peekPill(page)).toHaveCount(0)
+        if (next) await expectStill([next], tops, `board ${theme} ${width}: the card below`)
         await page.screenshot({ path: info.outputPath(`board-${theme}-${width}.png`) })
         await page.mouse.move(1, 1)
-        await expect(card).not.toHaveAttribute('data-peek-expanded')
+        await expectRestored(card, before, `board ${theme} ${width}`)
       }
     }
   } finally {

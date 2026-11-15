@@ -274,7 +274,7 @@ test('C67: a hover holds the layout while sessions push status and a card parks;
   await hovered.scrollIntoViewIfNeeded()
   const tb = (await hovered.getByTestId('kanban-card-title').boundingBox())!
   await page.mouse.move(tb.x + 10, tb.y + tb.height / 2)
-  // A cut-off card opens in place under the pointer (67dc4025f): the pushes must move nothing after.
+  // A cut-off card widens in place under the pointer, at its own height: the pushes must move nothing after.
   const b0 = await settledBox(hovered)
   let n = 0
   const pushes = setInterval(() => {

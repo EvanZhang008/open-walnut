@@ -11,11 +11,12 @@ import ts from 'typescript';
 
 export interface RepeatedTitle { file: string; line: number; tag: string; title: string; start: number; end: number }
 
-function walk(dir: string, out: string[]): string[] {
+/** Every source file under `dir` whose name matches `ext` (components by default), tests left out. */
+export function walk(dir: string, out: string[] = [], ext = /\.tsx$/): string[] {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, e.name);
-    if (e.isDirectory()) walk(p, out);
-    else if (e.name.endsWith('.tsx') && !/\.(test|spec)\./.test(e.name)) out.push(p);
+    if (e.isDirectory()) walk(p, out, ext);
+    else if (ext.test(e.name) && !/\.(test|spec)\./.test(e.name)) out.push(p);
   }
   return out;
 }

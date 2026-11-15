@@ -1,83 +1,58 @@
-/* Every truncated component expands in place (utils/truncation-peek-row.ts): its cut-off texts wrap inside
-   the row's own width, and a box that held them to one line grows with them, so the row gets
-   taller and the rows below move down. Attributes only, so taking them off restores the row. */
+/* The whole real component widens in the top layer, above neighbouring panes. Its empty
+   placeholder holds the original list geometry. No text-only tooltip and no vertical growth. */
+[data-peek-expanded][popover] {
+  position: fixed !important;
+  inset: auto !important;
+  top: var(--peek-top) !important;
+  left: var(--peek-left) !important;
+  width: var(--peek-width) !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  height: var(--peek-height) !important;
+  min-height: var(--peek-height) !important;
+  max-height: var(--peek-height) !important;
+  box-sizing: border-box !important;
+  display: var(--peek-display) !important;
+  margin: 0 !important;
+  padding: var(--peek-padding) !important;
+  border: var(--peek-border) !important;
+  background: var(--peek-background) !important;
+  overflow: hidden !important;
+  transform: none !important;
+  transition: none !important;
+  box-shadow: 0 3px 14px rgb(0 0 0 / 16%);
+}
+[data-peek-expanded]::backdrop {
+  background: transparent;
+  pointer-events: none;
+}
+[data-peek-placeholder] {
+  visibility: hidden !important;
+  pointer-events: none !important;
+  animation: none !important;
+  transition: none !important;
+}
 [data-peek-open] {
-  flex: 1 1 0 !important;
-  white-space: normal !important;
-  overflow: visible !important;
-  text-overflow: clip !important;
+  box-sizing: border-box !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
   -webkit-line-clamp: unset !important;
   line-clamp: none !important;
-  /* Long identifiers also stay inside the component, without widening the list. */
-  overflow-wrap: anywhere;
-  height: auto !important;
-  max-height: none !important;
+  overflow-wrap: normal !important;
   min-width: 0 !important;
+  height: var(--peek-text-height) !important;
+  min-height: var(--peek-text-height) !important;
+  max-height: var(--peek-text-height) !important;
+  flex-shrink: 0 !important;
 }
 [data-peek-open] * {
-  white-space: normal !important;
-  text-overflow: clip !important;
+  white-space: nowrap !important;
 }
 [data-peek-fit] {
-  flex-shrink: 1 !important;
-  min-width: 0 !important;
-  max-width: 100% !important;
+  max-width: none !important;
 }
-[data-peek-line] {
-  align-items: flex-start !important;
-  height: auto !important;
-  max-height: none !important;
-}
-[data-peek-flow] {
-  flex-wrap: wrap !important;
-  align-items: flex-start !important;
-  height: auto !important;
-  max-height: none !important;
-  min-width: 0 !important;
-  max-width: 100% !important;
-}
-/* Metadata and its team chip both have capped children. They use the row's available width,
-   not a tiny text column, and the title remains a separate line below them. */
-[data-peek-flow] > [data-peek-flow] {
-  flex: 0 1 auto !important;
-  overflow: visible !important;
-}
-[data-peek-grow] {
-  height: auto !important;
-  max-height: none !important;
-  /* Taller, never wider: it still clips sideways, and keeps the flex minimum its clip gave it. */
-  overflow-x: clip !important;
-  overflow-y: visible !important;
-  min-width: 0 !important;
-}
-
-/* The clock stays right-aligned even when metadata wraps onto another line. */
-.status-card-meta[data-peek-flow] > .todo-recent-ago {
-  margin-left: auto;
-}
-.status-card-meta[data-peek-flow] > .status-card-meta-fill {
-  display: none;
-}
-/* A team link is one sentence, not a capped two-column button. Let it use a full metadata
-   line, including in the compact panel that normally abbreviates Worker to W. */
-.status-card-meta[data-peek-flow] > .todo-item-subtask-pill[data-peek-line] {
+/* WebKit's multi-line clamp is a box layout; nowrap alone does not release it. */
+[data-peek-block] {
   display: block !important;
-  flex: 1 0 100% !important;
-  max-width: 100% !important;
-  text-align: left;
-  white-space: normal !important;
-}
-.status-card-meta[data-peek-flow] .todo-item-subtask-pill > .task-pill-long {
-  display: inline !important;
-  margin-right: 4px;
-}
-.status-card-meta[data-peek-flow] .todo-item-subtask-pill::after {
-  display: none !important;
-}
-.status-card-meta[data-peek-flow] .task-worker-parent[data-peek-open] {
-  display: inline;
-  text-align: left;
-}
-[data-peek-expanded].status-card-two-line {
-  align-items: flex-start !important;
 }

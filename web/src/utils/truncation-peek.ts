@@ -1,14 +1,14 @@
 /**
- * Cut-off text has one behavior everywhere: its whole container grows in place, wrapping
- * inside its own width and pushing the following rows down. Never clone text into a floating
- * box. Mark a component `data-peek-row` to open all its cut-off texts when hovered anywhere;
+ * Cut-off text has one behavior everywhere: its whole real container widens in the top layer,
+ * keeping its exact height and leaving neighbouring rows still. No cloned text tooltip.
+ * Mark a component `data-peek-row` to open all its cut-off texts when hovered anywhere;
  * unmarked text opens its nearest control or layout container through the same path.
  * Native titles are lifted during the peek and restored on exit. Fields, touch, drags and
  * `data-peek="off"` stay untouched. One capturing listener serves every surface.
  */
 import '@/styles/truncation-peek.css';
 import { clippingAncestors } from './clip-ancestors';
-import { collapseRow, expandRow, inListBelow, within, type RowMarks } from './truncation-peek-row';
+import { collapseRow, expandRow, within, type RowMarks } from './truncation-peek-row';
 
 /** How far up from the hovered node the cut-off text is looked for. */
 const MAX_DEPTH = 6;
@@ -144,7 +144,7 @@ export function peekTargetOf(target: EventTarget | null): { key: Element; hosts:
   }
   const host = findCutText(target);
   if (!host) return null;
-  // An unmarked component uses the same in-flow expansion, including standalone controls.
+  // Unmarked components widen through the same whole-container path.
   const key = host.closest(CONTROL) ?? host.parentElement ?? host;
   const hosts = cutTextsIn(key);
   if (!hosts.includes(host)) hosts.push(host);
@@ -160,45 +160,31 @@ interface Active {
 
 let active: Active | null = null;
 let pointer: { x: number; y: number } | null = null;
-/** The list a closing row scrolled back: its own scroll event is no reason to close anything. */
-let ownScroll: Element | null = null;
-/**
- * The open row the pointer just left. It closes in the same step as the next row opens, so the
- * list changes once per row and not twice (a close, then an open 140 ms later), or once the
- * pointer rested off it for LINGER_MS, or at once when the pointer left its list.
- */
+/** Briefly keep a row open while the pointer crosses a gap. No list geometry changes. */
 let lingering: Active | null = null;
 let lingerTimer: ReturnType<typeof setTimeout> | null = null;
 const LINGER_MS = 220;
 
-function noteOwnScroll(list: Element | null): void {
-  if (!list) return;
-  ownScroll = list;
-  // Its scroll event comes within a frame or two; after that a scroll there is a person's.
-  requestAnimationFrame(() => requestAnimationFrame(() => { if (ownScroll === list) ownScroll = null; }));
-}
-
-/** `keepPlace`: the rows under the pointer stay where they are (truncation-peek-row.ts). */
-function closeLingering(keepPlace: boolean): void {
+function closeLingering(): void {
   if (lingerTimer) { clearTimeout(lingerTimer); lingerTimer = null; }
   const was = lingering;
   if (!was) return;
   lingering = null;
-  if (keepPlace) noteOwnScroll(collapseRow(was.marked, was.key, pointer));
-  else collapseRow(was.marked);
+  if (!active) observer?.disconnect();
+  collapseRow(was.marked);
   putTitlesBack(was.titles);
 }
 
 /** The pointer left the open row `state`: it stays open a moment (see `lingering`). */
 function linger(state: Active): void {
-  closeLingering(true);
+  closeLingering();
   lingering = state;
   const wait = () => {
     lingerTimer = setTimeout(() => {
       lingerTimer = null;
       // A row about to open closes it itself, in its own step; a press holds it as it is.
       if (active?.timer || pressed) wait();
-      else closeLingering(true);
+      else closeLingering();
     }, LINGER_MS);
   };
   wait();
@@ -228,33 +214,31 @@ function putTitlesBack(titles: Array<[Element, string]>): void {
 
 /** Ends every peek, the row just left included. */
 export function hidePeek(): void {
-  close(false);
-  closeLingering(false);
+  close();
+  closeLingering();
 }
 
-/** Ends the current peek. `keepPlace`: as closeLingering's. */
-function close(keepPlace: boolean): void {
+/** Ends the current peek without moving the list. */
+function close(): void {
   if (!active) return;
   const was = active;
   active = null;
   if (was.timer) clearTimeout(was.timer);
-  observer?.disconnect();
-  if (keepPlace) noteOwnScroll(collapseRow(was.marked, was.key, pointer));
-  else collapseRow(was.marked);
+  if (!lingering) observer?.disconnect();
+  collapseRow(was.marked);
   putTitlesBack(was.titles);
 }
 
 function renderAll(state: Active): void {
-  closeLingering(true);
+  closeLingering();
   state.marked = expandRow(state.key, state.hosts);
 }
 
 /**
  * The open row's texts changed while it stays under the pointer (a status push re-rendered it, a
- * late markdown pass replaced its nodes): it opens again on its new texts in this same task, so
- * no frame shows it closed. Closing and reopening it later shrank and regrew a hovered Board card
- * by 90px within a second, moving every card below it (2026-11-15, board-kanban-layout C67).
- * False when it no longer has cut-off text there; then it is closed.
+ * late markdown pass replaced its nodes): measure the original box and widen its new text in
+ * the same task. No painted frame changes height or moves a neighbour. False when it no longer
+ * has cut-off text there; then it is closed.
  */
 function reopenInPlace(a: Active): boolean {
   if (!a.key.isConnected || !a.marked.length || !pointer || !within(a.key, pointer)) return false;
@@ -265,33 +249,40 @@ function reopenInPlace(a: Active): boolean {
   a.hosts = hosts;
   a.texts = hosts.map((h) => h.textContent ?? '');
   a.titles.push(...takeTitles(a.key, a.key));
-  a.marked = expandRow(a.key, hosts);
+  a.marked = expandRow(a.key, hosts, false);
   return true;
 }
 
 /** The row it shows changed under the pointer (renamed, re-sorted, gone): the peek goes with it. */
 function watchActive(): void {
   observer ??= new MutationObserver(() => {
+    const moved = (state: Active) => !!state.marked.placeholder &&
+      (state.marked.placeholder.nextSibling !== state.key || !state.key.matches(':popover-open'));
+    if (lingering && (!lingering.key.isConnected || moved(lingering))) closeLingering();
     const a = active;
-    if (!a || !(!a.key.isConnected || a.hosts.some((h, i) => !h.isConnected || h.isContentEditable || h.textContent !== a.texts[i]))) return;
+    if (!a) return;
+    // React can move the same node without disconnecting it or changing any text. Its old
+    // shell must go immediately; settle on whatever is now under the pointer at the new order.
+    if (!a.key.isConnected || moved(a)) { close(); settleSoon(); return; }
+    if (!a.hosts.some((h, i) => !h.isConnected || h.isContentEditable || h.textContent !== a.texts[i])) return;
     if (reopenInPlace(a)) return;
-    close(true);
+    close();
     settleSoon();
   });
   observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['contenteditable'] });
 }
 
-function activate(key: Element, hosts: HTMLElement[], target: Element): void {
-  close(false);
+function activate(key: Element, hosts: HTMLElement[], target: Element, keyboard = false): void {
+  close();
   const state: Active = { key, hosts, titles: takeTitles(target, key), texts: hosts.map((h) => h.textContent ?? ''), timer: null, marked: [] };
   active = state;
   watchActive();
   state.timer = setTimeout(() => {
     if (active !== state) return;
     state.timer = null;
-    if (key.matches(':hover')) renderAll(state);
-    else close(false);
-  }, ROW_OPEN_MS);
+    if (key.matches(':hover') || (keyboard && key.contains(document.activeElement))) renderAll(state);
+    else close();
+  }, keyboard ? 0 : ROW_OPEN_MS);
 }
 
 let downAt: { x: number; y: number } | null = null;
@@ -305,15 +296,14 @@ function onOver(e: PointerEvent): void {
   if (lingering && target) {
     // Back on the row just left: it is the open row again.
     if (lingering.key.contains(target)) {
-      close(false);
+      close();
       if (lingerTimer) { clearTimeout(lingerTimer); lingerTimer = null; }
       active = lingering;
       lingering = null;
       watchActive();
       return;
     }
-    // Out of its list: closing it moves nothing under the pointer.
-    if (!inListBelow(lingering.key, pointer) && !within(lingering.key, pointer)) closeLingering(false);
+    if (!within(lingering.key, pointer)) closeLingering();
   }
   // On the open row, its own buttons included: it stays open (closing it would move the button
   // out from under the pointer and open it again).
@@ -325,8 +315,8 @@ function onOver(e: PointerEvent): void {
   if (active?.marked.length) {
     const was = active;
     active = null;
-    observer?.disconnect();
     linger(was);
+    watchActive();
   }
   over(target);
 }
@@ -346,7 +336,7 @@ function over(target: Element | null): void {
     active.titles.push(...takeTitles(target as Element));
     return;
   }
-  if (!next || !target) { close(false); return; }
+  if (!next || !target) { close(); return; }
   activate(next.key, next.hosts, target);
 }
 
@@ -368,7 +358,6 @@ function movesPeek(t: EventTarget | null): boolean {
 }
 
 function hideAndSettle(e?: Event): void {
-  if (e?.type === 'scroll' && ownScroll && e.target === ownScroll) { ownScroll = null; return; }
   if (e && e.type !== 'resize' && (pressed || !movesPeek(e.target))) return;
   hidePeek();
   settleSoon();
@@ -387,13 +376,16 @@ function onDown(e: PointerEvent): void {
   dragged = false;
   // A click on an open row keeps it as it is, so the click lands where it was aimed.
   // A row not open yet stays closed through the press, so the click lands where it was aimed.
-  if (active?.timer) close(false);
+  if (active?.timer) close();
 }
 
 function onMove(e: PointerEvent): void {
   if (e.pointerType === 'touch') return;
   pointer = { x: e.clientX, y: e.clientY };
-  if (pressed && e.buttons !== 0 && downAt && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 4) dragged = true;
+  if (pressed && e.buttons !== 0 && downAt && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 4) {
+    dragged = true;
+    hidePeek();
+  }
 }
 
 function onUp(): void {
@@ -415,6 +407,17 @@ let installed = false;
 export function installTruncationPeek(): void {
   if (installed || typeof document === 'undefined') return;
   installed = true;
+  document.addEventListener('focusin', (e) => {
+    const target = e.target;
+    if (!(target instanceof Element) || !target.matches(':focus-visible')) return;
+    const next = peekTargetOf(target);
+    if (next) activate(next.key, next.hosts, target, true);
+    else hidePeek();
+  }, true);
+  document.addEventListener('focusout', (e) => {
+    const next = e.relatedTarget;
+    if (active && (!(next instanceof Element) || !active.key.contains(next))) hidePeek();
+  }, true);
   document.addEventListener('pointerover', onOver, true);
   document.addEventListener('pointerout', onOut, true);
   document.addEventListener('pointerdown', onDown, { capture: true, passive: true });
@@ -423,6 +426,9 @@ export function installTruncationPeek(): void {
   document.addEventListener('pointercancel', onUp, { capture: true, passive: true });
   // Anything that starts an action ends the peek at once, before the action's own handlers.
   document.addEventListener('dragstart', hidePeek, { capture: true, passive: true });
+  // React resolves the real control first; restore afterwards so a new menu is not hidden
+  // underneath the top layer. Capture would change its geometry before its own click handler.
+  document.addEventListener('click', () => { setTimeout(hidePeek, 0); }, { capture: true, passive: true });
   // A modifier held for a click (Cmd or Shift to select) is no action of its own.
   document.addEventListener('keydown', (e) => { if (!MODIFIERS.has(e.key)) hidePeek(); }, { capture: true, passive: true });
   // Anything that moves the page under the pointer ends it, and what the pointer rests on after peeks.

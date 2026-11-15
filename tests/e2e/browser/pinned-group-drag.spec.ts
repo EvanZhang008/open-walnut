@@ -106,8 +106,8 @@ async function openFocus(page: Page): Promise<void> {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   await selectSection(page, 'Focus')
-  // Off the rows: a cut-off row the pointer rests on grows in place (truncation-peek-row.ts),
-  // which would move the rows this spec measures before it drags.
+  // Off the rows: a cut-off row the pointer rests on widens over its neighbours in the top layer
+  // (truncation-peek-row.ts), which would cover the rows this spec measures before it drags.
   await page.mouse.move(1200, 780)
   await page.waitForTimeout(900)
 }

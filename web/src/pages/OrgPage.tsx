@@ -669,7 +669,7 @@ export function OrgPage() {
       {docked.length > 0 && (
         <div className="org-locked-dock" role="group" aria-label="Locked on Home" data-testid="org-locked-dock">
           {docked.map(({ slot, task }) => (
-            <button key={slot.id} type="button" className="org-locked-dock-item" data-testid="org-locked-dock-item" data-id={slot.id}
+            <button key={slot.id} type="button" className="org-locked-dock-item" data-peek-row="" data-testid="org-locked-dock-item" data-id={slot.id}
               title={`${task.title}: locked on Home. Open it`} onClick={() => { const t = parseSideTarget(slot.id); if (t) openSide(t); }}>
               {ICON_LOCK}<span className="org-locked-dock-label">{task.title}</span>
             </button>

@@ -106,8 +106,8 @@ async function openScrolledProject(page: Page, baseURL: string, project: string,
   await openListProject(page, tail)
   await openListProject(page, project)
   await expect(page.locator(`[data-task-id="${ids[ids.length - 1]}"]`)).toBeAttached()
-  // Off the rows: a cut-off row the pointer rests on grows in place (truncation-peek-row.ts),
-  // which would move the rows this spec measures (as in pinned-group-drag.spec.ts).
+  // Off the rows: a cut-off row the pointer rests on widens over its neighbours in the top layer
+  // (truncation-peek-row.ts), which would cover the rows this spec measures (as in pinned-group-drag.spec.ts).
   await page.mouse.move(1270, 630)
   const scrolled = await listProjectHeader(page, project).evaluate((header, by) => {
     const outer = document.querySelector('.home-navigation-scroll') as HTMLElement

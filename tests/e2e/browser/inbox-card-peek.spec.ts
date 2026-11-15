@@ -1,13 +1,14 @@
 import { expect, test } from '@playwright/test'
 import { home } from './inbox-items-helpers'
-import { openInRow, peekPill } from './truncation-peek-helpers'
+import { expectInboxCardWidens, expectRestored, expectStill, expectWidensInPlace, expectWorkerRowWidens, isOpen, openInRow, topsOf } from './truncation-peek-helpers'
 
+// A whole card widens sideways at its own height (2026-11-15, the user: wider, not taller).
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
 
-const SUBJECT = 'A letter with a full-length subject: review the neighbourhood garden schedule, the tool inventory and all the next steps before the weekend'
+const SUBJECT = 'A letter with a full-length subject: review the garden schedule, the tool inventory and the next steps before the weekend'
 const PREVIEW = 'The garden group needs a reply about the whole schedule. Check the tools, confirm the available dates, and bring the inventory notes from the last meeting. '.repeat(4)
 
-test('dense inbox cards grow as a whole, preserve actions, and recover after leaving and resizing', async ({ page, request }, info) => {
+test('dense inbox cards widen as a whole, keep their height and actions, and recover after leaving and resizing', async ({ page, request }, info) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
   const ids: string[] = []
@@ -21,159 +22,155 @@ test('dense inbox cards grow as a whole, preserve actions, and recover after lea
     await page.getByRole('button', { name: /^Notifications/ }).click()
     const panel = page.locator('.notification-panel')
     await panel.locator('.nfc-rail-btn').filter({ hasText: 'Inbox' }).click()
-    const card = panel.locator(`[data-letter-id="${ids[11]}"]`)
-    const following = panel.locator(`[data-letter-id="${ids[10]}"]`)
-    await card.scrollIntoViewIfNeeded()
-    await page.mouse.move(1, 1)
-    const before = (await card.boundingBox())!
-    const below = (await following.boundingBox())!.y
-    expect(await card.locator('.hib-subject').evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true)
-    await page.screenshot({ path: info.outputPath('before.png') })
-    for (let round = 0; round < 3; round++) {
-      // Blank card padding is enough, not only the text itself.
-      await card.hover({ position: { x: before.width - 6, y: 6 } })
-      await expect.poll(() => openInRow(card.locator('.hib-subject'))).toBe(true)
-      await expect.poll(() => openInRow(card.locator('.hib-preview'))).toBe(true)
-      const after = (await card.boundingBox())!
-      expect(after.height).toBeGreaterThan(before.height + 20)
-      expect(after.y).toBeCloseTo(before.y, 0)
-      expect(after.width).toBeCloseTo(before.width, 0)
-      expect((await following.boundingBox())!.y).toBeGreaterThan(below + 20)
-      await expect(peekPill(page)).toHaveCount(0)
-      await expect(card.locator('.hib-card-toggle')).toHaveAttribute('aria-expanded', 'false')
-      if (round === 0) await page.screenshot({ path: info.outputPath('whole-card.png') })
-      await page.mouse.move(1, 1)
-      await expect(card).not.toHaveAttribute('data-peek-expanded')
-      expect((await card.boundingBox())!.height).toBeCloseTo(before.height, 0)
-    }
-    // A button press must not move its target or open the reader accidentally.
-    await card.hover({ position: { x: before.width - 6, y: 6 } })
-    await expect(card).toHaveAttribute('data-peek-expanded', '')
-    await card.getByRole('button', { name: 'Pin', exact: true }).click()
-    await expect(card.getByRole('button', { name: 'Unpin', exact: true })).toBeVisible()
-    await expect(page.locator('.hib-reader')).toHaveCount(0)
-    await card.getByRole('button', { name: 'Read letter', exact: true }).click()
-    await expect(card.locator('.hib-card-toggle')).toHaveAttribute('aria-expanded', 'true')
-    await page.mouse.move(1, 1)
-    await expect(card.locator('.hib-card-expand')).toHaveClass(/is-expanded/)
-    await card.getByRole('button', { name: 'Collapse', exact: true }).click()
-    await page.mouse.move(1, 1)
-    await page.setViewportSize({ width: 720, height: 800 })
-    await card.scrollIntoViewIfNeeded()
-    await card.hover({ position: { x: 5, y: 5 } })
-    await expect.poll(() => openInRow(card.locator('.hib-subject'))).toBe(true)
-    expect(await card.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
-    await page.mouse.move(1, 1)
-    await card.locator('.hib-subject').focus()
-    await page.keyboard.press('Enter')
-    await expect(page.locator('.hib-reader')).toBeVisible()
+    const card = (id: string) => panel.locator(`[data-letter-id="${id}"]`)
+    await expectInboxCardWidens(page, card(ids[11]), [card(ids[10]), card(ids[9])], info)
     expect(errors).toEqual([])
   } finally {
     for (const id of ids) await request.post(`/api/v1/human-inbox/${id}/archive`, { data: { archived: true } })
   }
 })
 
-test('new unmarked components and rows with more than eight texts have no floating fallback', async ({ page }) => {
+test('unmarked components, rows with twelve texts, a line longer than the window and the keyboard all widen the real row', async ({ page }) => {
   await home(page)
-  await page.mouse.move(1, 1)
+  await page.mouse.move(1000, 100)
   await page.evaluate(() => {
+    const cut = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap'
     const fixture = document.createElement('section')
     fixture.id = 'peek-class-fixture'
-    fixture.style.cssText = 'position:fixed;left:40px;top:100px;width:260px;z-index:9999;background:var(--bg)'
-    fixture.innerHTML = `<div data-peek-row="" id="many-texts" style="height:216px;overflow:visible">${Array.from({ length: 12 }, (_, i) => `<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Row ${i}: ${'A detailed entry with all of its words shown inside this component. '.repeat(2)}</div>`).join('')}</div><div id="new-container"><span id="new-text" style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${'A new component also grows in flow. '.repeat(5)}</span></div><div id="following">Following component</div><div role="listbox"><div role="option" id="option-a" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">A long option name with many words that should only expand this option, never the whole list</div><div role="option" id="option-b" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">A second long option that must remain truncated while the first option is hovered</div></div><div id="icon-line" style="display:flex;width:240px;gap:8px"><span id="line-icon" style="flex:none">○</span><span id="line-text" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">A long status text must keep its own icon beside the first line while wrapping inside the available space</span></div>`
+    fixture.style.cssText = 'position:fixed;left:40px;top:60px;width:260px;z-index:9999;background:var(--bg)'
+    fixture.innerHTML = [
+      `<div data-peek-row="" id="many-texts" style="height:216px;overflow:hidden">${Array.from({ length: 12 }, (_, i) => `<div style="${cut};height:18px">Row ${i}: ${'A detailed entry with all of its words shown in this row. '.repeat(2)}</div>`).join('')}</div>`,
+      `<div id="new-container"><span id="new-text" style="display:block;${cut}">${'A new component also widens in place. '.repeat(3)}</span></div>`,
+      '<div id="following">Following component</div>',
+      `<div role="listbox"><div role="option" id="option-a" style="${cut}">A long option name with many words that should only widen this option, never the whole list</div><div role="option" id="option-b" style="${cut}">A second long option that must remain cut while the first option is hovered</div></div>`,
+      `<div id="icon-line" style="display:flex;width:240px;gap:8px"><span id="line-icon" style="flex:none">○</span><span id="line-text" style="${cut}">A long status text keeps its own icon beside it on the same line while the row widens</span></div>`,
+      `<div id="too-long-box"><span id="too-long" style="display:block;${cut}">${'Far longer than any window: every word of this line will not fit on one screen. '.repeat(8)}</span></div>`,
+      `<div data-peek-row="" id="btn-row" style="display:flex;gap:6px;width:240px"><span id="btn-text" style="${cut};flex:1;min-width:0">A row with its own button keeps that button working while it is wide open</span><button id="btn-spy" type="button">More</button></div><div id="btn-after">After the button row</div>`,
+      `<button id="kbd-before">Before</button><div data-peek-row="" tabindex="0" id="kbd-row" style="${cut}">A row reached with the keyboard opens as wide as the pointer would make it</div><button id="kbd-after">After</button>`,
+    ].join('')
     document.body.appendChild(fixture)
+    // The row's own button, as a menu button: every event of a press lands on it once, and its
+    // click opens a menu outside the row.
+    const spy = document.getElementById('btn-spy')!
+    const w = window as unknown as { __spy: string[] }
+    w.__spy = []
+    for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) spy.addEventListener(type, (e) => { if (e.target === spy) w.__spy.push(type) })
+    spy.addEventListener('click', () => { const m = document.createElement('div'); m.id = 'spy-menu'; m.setAttribute('role', 'menu'); m.textContent = 'Spy menu'; fixture.appendChild(m) })
   })
+  const box = async (sel: string) => (await page.locator(sel).boundingBox())!
+  const off = () => page.mouse.move(1278, 790)
+
+  // Twelve cut texts in one row: all open at once, all whole, and nothing below moves.
   const many = page.locator('#many-texts')
+  const manyBefore = await box('#many-texts')
+  const below = [page.locator('#new-container'), page.locator('#following')]
+  const belowTops = await topsOf(below)
   await many.hover({ position: { x: 5, y: 5 } })
+  await expectWidensInPlace(many, manyBefore, { label: 'twelve texts' })
   await expect(many.locator('[data-peek-open]')).toHaveCount(12)
-  await page.mouse.move(1000, 100)
-  await expect(many).not.toHaveAttribute('data-peek-expanded')
-  const before = (await page.locator('#following').boundingBox())!.y
+  for (const t of await many.locator('[data-peek-open]').all()) expect(await openInRow(t)).toBe(true)
+  await expectStill(below, belowTops, 'below twelve texts')
+  await off()
+  await expectRestored(many, manyBefore, 'twelve texts')
+
+  // An unmarked component opens its container through the same path.
+  const container = page.locator('#new-container')
+  const containerBefore = await box('#new-container')
+  const followingTop = await topsOf([page.locator('#following')])
   await page.locator('#new-text').hover()
-  await expect(page.locator('#new-container')).toHaveAttribute('data-peek-expanded', '')
+  await expectWidensInPlace(container, containerBefore, { label: 'unmarked container' })
   await expect.poll(() => openInRow(page.locator('#new-text'))).toBe(true)
-  expect((await page.locator('#following').boundingBox())!.y).toBeGreaterThan(before)
-  await expect(peekPill(page)).toHaveCount(0)
-  // A live text replacement drops stale marks, then the current text can open again.
-  await page.locator('#new-text').evaluate((el) => { el.textContent = 'Changed entry: '.repeat(20) })
-  await page.mouse.move(1000, 100)
-  await expect(page.locator('#new-container')).not.toHaveAttribute('data-peek-expanded')
+  await expectStill([page.locator('#following')], followingTop, 'after the unmarked container')
+  // A live text change under the pointer opens it again on the new text, at the same height.
+  await page.locator('#new-text').evaluate((el) => { el.textContent = 'Changed entry with new words: '.repeat(3) })
+  await expect.poll(() => openInRow(page.locator('#new-text'))).toBe(true)
+  await expect(page.locator('#new-text')).toContainText('Changed entry')
+  await expectWidensInPlace(container, containerBefore, { label: 'unmarked container, changed' })
+  await off()
+  await expectRestored(container, containerBefore, 'unmarked container')
+
+  // React's keyed reorder moves a node without changing its text. The old shell must be
+  // removed before a frame paints the new order, even though the row remains connected.
   await page.locator('#new-text').hover()
-  await expect.poll(() => openInRow(page.locator('#new-text'))).toBe(true)
-  await page.mouse.move(1000, 100)
+  await expectWidensInPlace(container, containerBefore, { label: 'before same-node reorder' })
+  await container.evaluate(el => el.parentElement!.appendChild(el))
+  await expect(container).not.toHaveAttribute('data-peek-expanded')
+  await expect(page.locator('[data-peek-placeholder]')).toHaveCount(0)
+  expect(await container.evaluate(el => el.matches(':popover-open'))).toBe(false)
+  await container.evaluate(el => el.parentElement!.insertBefore(el, document.getElementById('following')))
+  await off()
+
+  // One option of a list opens alone.
+  const optionBTop = await topsOf([page.locator('#option-b')])
+  const optionBefore = await box('#option-a')
   await page.locator('#option-a').hover()
-  await expect(page.locator('#option-a')).toHaveAttribute('data-peek-expanded', '')
+  await expectWidensInPlace(page.locator('#option-a'), optionBefore, { label: 'option' })
   await expect(page.locator('#option-b')).not.toHaveAttribute('data-peek-open')
-  await page.mouse.move(1000, 100)
+  await expectStill([page.locator('#option-b')], optionBTop, 'the next option')
+  await off()
+  await expectRestored(page.locator('#option-a'), optionBefore, 'option')
+
+  // A text keeps its icon beside it on the same line.
+  const lineBefore = await box('#icon-line')
   await page.locator('#line-text').hover()
+  await expectWidensInPlace(page.locator('#icon-line'), lineBefore, { label: 'icon line' })
   await expect.poll(() => openInRow(page.locator('#line-text'))).toBe(true)
-  const icon = (await page.locator('#line-icon').boundingBox())!
-  const text = (await page.locator('#line-text').boundingBox())!
+  const icon = await box('#line-icon')
+  const text = await box('#line-text')
   expect(text.y).toBeCloseTo(icon.y, 0)
   expect(text.x).toBeGreaterThan(icon.x + icon.width)
+  await off()
+  await expectRestored(page.locator('#icon-line'), lineBefore, 'icon line')
+
+  // Longer than the window: as wide as the window allows, still one line, and it may stay cut.
+  const longBefore = await box('#too-long-box')
+  await page.locator('#too-long').hover()
+  await expectWidensInPlace(page.locator('#too-long-box'), longBefore, { label: 'longer than the window', capped: true })
+  expect(await isOpen(page.locator('#too-long'))).toBe(true)
+  await off()
+  await expectRestored(page.locator('#too-long-box'), longBefore, 'longer than the window')
+
+  // The open row is the real one: a press on its own button lands there once and opens its menu,
+  // and the row is back in its place, visible, when the menu shows.
+  const btnRow = page.locator('#btn-row')
+  const btnBefore = await box('#btn-row')
+  const btnAfterTop = await topsOf([page.locator('#btn-after')])
+  await page.locator('#btn-text').hover()
+  await expectWidensInPlace(btnRow, btnBefore, { label: 'row with a button' })
+  await page.locator('#btn-spy').click()
+  expect(await page.evaluate(() => (window as unknown as { __spy: string[] }).__spy)).toEqual(['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'])
+  await expect(page.locator('#spy-menu')).toBeVisible()
+  await expect(btnRow).toBeVisible()
+  await expect(page.locator('#btn-spy')).toBeVisible()
+  // Whether the click closed it or not, the row is still drawn at its own top and height.
+  const clicked = (await btnRow.boundingBox())!
+  expect(Math.abs(clicked.y - btnBefore.y)).toBeLessThanOrEqual(0.5)
+  expect(Math.abs(clicked.height - btnBefore.height)).toBeLessThanOrEqual(0.5)
+  await off()
+  await expectRestored(btnRow, btnBefore, 'row with a button after its click')
+  await expectStill([page.locator('#btn-after')], btnAfterTop, 'after the button row')
+
+  // The keyboard: Tab onto the row opens it at once, Escape closes it, Tab off it closes it.
+  const kbd = page.locator('#kbd-row')
+  const kbdBefore = await box('#kbd-row')
+  await page.locator('#kbd-before').focus()
+  await page.keyboard.press('Tab')
+  await expect(kbd).toBeFocused()
+  await expectWidensInPlace(kbd, kbdBefore, { label: 'keyboard row' })
+  await page.keyboard.press('Escape')
+  await expectRestored(kbd, kbdBefore, 'keyboard row after Escape')
+  await page.keyboard.press('Shift+Tab')
+  await page.keyboard.press('Tab')
+  await expectWidensInPlace(kbd, kbdBefore, { label: 'keyboard row again' })
+  await page.keyboard.press('Tab')
+  await expect(page.locator('#kbd-after')).toBeFocused()
+  await expectRestored(kbd, kbdBefore, 'keyboard row after Tab')
 })
 
-
-test('a long worker lead uses the whole metadata line, never a narrow column over the title', async ({ page, request }, info) => {
-  const { presetPanelDesign, setStatusSectionOpen } = await import('./status-section-helpers')
-  const { showAllSections } = await import('./todo-panel-helpers')
-  const made: string[] = []
-  const create = async (title: string, extra = {}) => {
-    const res = await request.post('/api/tasks', { data: { title, project: 'Garden Insights', source: 'local', ...extra } })
-    expect(res.status()).toBe(201)
-    const id = (await res.json()).task.id as string
-    made.push(id)
-    if ('phase' in extra) expect((await request.patch(`/api/tasks/${id}`, { data: { phase: extra.phase } })).ok()).toBe(true)
-    return id
-  }
-  try {
-    const lead = await create('Garden Re-Architecture As Platform - Platform Lead with the complete plan and the inventory of every tool')
-    const worker = await create('Garden org demo Friday: garden insight end to end, with the complete planting schedule and all the next steps', { parent_task_id: lead, phase: 'NEED_ACTION' })
-    await create('Next garden task below the worker', { phase: 'NEED_ACTION' })
-    await presetPanelDesign(page, 'status')
-    await home(page)
-    await showAllSections(page)
-    await setStatusSectionOpen(page.locator('.todo-panel').first(), 'needs', true)
-    const row = page.locator(`.status-section-card[data-task-id="${worker}"]`).first()
-    await expect(row).toBeVisible()
-    await row.scrollIntoViewIfNeeded()
-    for (const theme of ['light', 'dark']) {
-      await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme)
-      for (const width of [640, 300]) {
-        await page.mouse.move(1, 1)
-        // Change the real panel width, not the font or the chip, so this tests the cramped layout.
-        await row.evaluate((el, w) => { const panel = el.closest<HTMLElement>('#home-task-navigation')!; panel.style.width = `${w}px`; panel.style.minWidth = `${w}px`; panel.style.maxWidth = `${w}px`; }, width)
-        await row.scrollIntoViewIfNeeded()
-        const before = (await row.boundingBox())!
-        const chipBefore = (await row.locator('.task-worker-parent').boundingBox())!
-        const metaBefore = (await row.locator('.status-card-meta').boundingBox())!
-        const following = await row.evaluate((el) => el.nextElementSibling?.getBoundingClientRect().top ?? null)
-        const timeBefore = await row.locator('.todo-recent-ago').boundingBox()
-        await row.locator('.todo-pinned-title').hover({ position: { x: 12, y: 6 } })
-        await expect.poll(() => openInRow(row.locator('.task-worker-parent'))).toBe(true)
-        await expect.poll(() => openInRow(row.locator('.todo-pinned-title'))).toBe(true)
-        const meta = (await row.locator('.status-card-meta').boundingBox())!
-        const title = (await row.locator('.todo-pinned-title').boundingBox())!
-        const chip = (await row.locator('.task-worker-parent').boundingBox())!
-        const after = (await row.boundingBox())!
-        expect(chip.width).toBeGreaterThan(chipBefore.width + 40)
-        expect(meta.width).toBeCloseTo(metaBefore.width, 0)
-        expect(meta.y + meta.height).toBeLessThanOrEqual(title.y + 1)
-        const timeAfter = await row.locator('.todo-recent-ago').boundingBox()
-        if (timeBefore && timeAfter) expect(timeAfter.x + timeAfter.width).toBeCloseTo(timeBefore.x + timeBefore.width, 0)
-        const workerLabel = (await row.locator('.task-pill-long').boundingBox())!
-        expect(chip.y).toBeCloseTo(workerLabel.y, 0)
-        expect(title.y + title.height).toBeLessThanOrEqual(after.y + after.height + 1)
-        expect(after.height).toBeGreaterThan(before.height + 15)
-        expect(after.width).toBeCloseTo(before.width, 0)
-        if (following !== null) expect(await row.evaluate((el) => el.nextElementSibling!.getBoundingClientRect().top)).toBeGreaterThan(following)
-        await expect(peekPill(page)).toHaveCount(0)
-        await page.screenshot({ path: info.outputPath(`worker-${theme}-${width}.png`) })
-        await page.mouse.move(1, 1)
-        await expect(row).not.toHaveAttribute('data-peek-expanded')
-      }
-    }
-  } finally {
-    for (const id of made.reverse()) await request.delete(`/api/tasks/${id}?force=true`)
-  }
+test('a long worker lead widens the whole row, with the metadata one line above the title', async ({ page, request }, info) => {
+  await expectWorkerRowWidens(page, request, {
+    project: 'Garden Insights',
+    lead: 'Garden Re-Architecture As Platform - Platform Lead with the complete plan and the inventory of every tool',
+    worker: 'Garden org demo Friday: garden insight end to end, with the complete planting schedule and all the next steps',
+  }, info)
 })

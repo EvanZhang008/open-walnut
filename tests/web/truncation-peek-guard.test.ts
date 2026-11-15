@@ -6,12 +6,13 @@
  *   truncated row showed its full text, and it would now open a dark box over the component (or
  *   repeat text in full view). A new row written that way fails here; drop the title, the peek
  *   needs nothing, or mark the element `data-peek="off"` if it must keep it;
- * - every shared peek grows its container in flow, never a floating clone of its text.
+ * - every shared peek widens the real row sideways in the top layer (2026-11-15, the user: the
+ *   whole card gets wider, not taller), never a floating clone of its text.
  */
 import path from 'node:path';
 import fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { findRepeatedTitles, findTaskTitleSites } from './truncation-peek-scan';
+import { findRepeatedTitles, findTaskTitleSites, walk } from './truncation-peek-scan';
 
 const WEB_SRC = path.resolve(__dirname, '../../web/src');
 
@@ -79,20 +80,48 @@ describe('a task row whose text is cut off expands as a whole', () => {
   });
 });
 
-describe('all truncation peeks grow their container, never cloned text', () => {
-  it('the shared renderer has only the in-flow path, including new unmarked components', () => {
-    const source = fs.readFileSync(path.join(WEB_SRC, 'utils/truncation-peek.ts'), 'utf8');
+describe('all truncation peeks widen the real row, never taller, never cloned text', () => {
+  const read = (p: string) => fs.readFileSync(path.join(WEB_SRC, p), 'utf8');
+
+  it('one expandRow path opens the real row in the top layer over an empty placeholder', () => {
+    const source = read('utils/truncation-peek.ts');
     expect(source).toContain('state.marked = expandRow(state.key, state.hosts)');
     expect(source).toContain('const key = host.closest(CONTROL) ?? host.parentElement ?? host');
+    // No text clone, pill or second renderer beside the row path.
     expect(source).not.toMatch(/createElement|cloneNode|appendChild|renderPill|placePeek|MAX_ROW_HOSTS/);
-    const css = fs.readFileSync(path.join(WEB_SRC, 'styles/truncation-peek.css'), 'utf8');
-    expect(css).not.toMatch(/position:\s*(fixed|absolute)|z-index|\.truncation-peek/);
-    expect(css).toContain('[data-peek-open]');
-    expect(css).toMatch(/\[data-peek-flow\]\s*\{[^}]*flex-wrap:\s*wrap\s*!important/);
-    const row = fs.readFileSync(path.join(WEB_SRC, 'utils/truncation-peek-row.ts'), 'utf8');
-    expect(row).toContain('mark(el, el === h.parentElement ? LINE_ATTR : FLOW_ATTR)');
-    expect(row).toContain("if (cs.maxWidth !== 'none') mark(el, FIT_ATTR)");
-    const calendar = fs.readFileSync(path.join(WEB_SRC, 'components/calendar/CalendarChip.tsx'), 'utf8');
+    // The row module is the only one that opens a row.
+    const users = walk(WEB_SRC, [], /\.tsx?$/).filter((f) => /\bexpandRow\(/.test(fs.readFileSync(f, 'utf8'))).map((f) => path.relative(WEB_SRC, f)).sort();
+    expect(users).toEqual(['utils/truncation-peek-row.ts', 'utils/truncation-peek.ts']);
+    const row = read('utils/truncation-peek-row.ts');
+    expect(row).toContain("row.setAttribute('popover', 'manual')");
+    expect(row).toContain('row.showPopover()');
+    // The placeholder is a shallow shell: no copied text, controls or ids.
+    expect(row).toContain('row.cloneNode(false)');
+    expect(row).not.toMatch(/cloneNode\((true)?\)/);
+    expect(row).toContain("'data-peek-placeholder'");
+    expect(row).toContain("'--peek-height', `${rect.height}px`");
+    // Nothing scrolls the list to make up for a height that no longer changes.
+    expect(row).not.toMatch(/scrollTop|inListBelow|GROW_ATTR|FLOW_ATTR|LINE_ATTR/);
+  });
+
+  it('the styles hold the exact height and keep every open text on one line', () => {
+    const css = read('styles/truncation-peek.css');
+    expect(css).toMatch(/\[data-peek-expanded\][^{]*\{[^}]*height:\s*var\(--peek-height\)\s*!important/);
+    expect(css).toMatch(/\[data-peek-open\]\s*\{[^}]*white-space:\s*nowrap\s*!important/);
+    expect(css).toContain('[data-peek-placeholder]');
+    const split = read('styles/inbox-split.css');
+    // Hover-only actions reserve their row: visibility changes, display never inserts a line.
+    expect(split).not.toMatch(/\.hib-(?:index-row|inbox-pane)[^{]*\.hib-row-actions\s*\{[^}]*display:\s*none/);
+    expect(split).toContain('visibility: hidden');
+    expect(split).toContain('visibility: visible');
+    const row = read('utils/truncation-peek-row.ts');
+    expect(row).toContain('duration: 160');
+    expect(read('utils/truncation-peek.ts')).toContain('const ROW_OPEN_MS = 140');
+    expect(row).toContain('rect.right - width');
+    // The old vertical peek: wrapping text and rows that take the height of what they hold.
+    expect(css).not.toMatch(/height:\s*auto|flex-wrap:\s*wrap|white-space:\s*normal|overflow-wrap:\s*anywhere/);
+    expect(css).not.toMatch(/\.truncation-peek\b/);
+    const calendar = read('components/calendar/CalendarChip.tsx');
     expect(calendar).toContain("data-peek={style?.top !== undefined ? 'off' : undefined}");
     expect(calendar).not.toMatch(/\btitle=\{/);
   });
@@ -101,10 +130,15 @@ describe('all truncation peeks grow their container, never cloned text', () => {
     const sites = findTaskTitleSites(WEB_SRC, /\bletter\.subject\b/);
     expect(sites.length).toBeGreaterThan(0);
     expect(sites.filter((s) => !s.inRow).map((s) => `${s.file}:${s.line}`)).toEqual([]);
-    const worker = fs.readFileSync(path.join(WEB_SRC, 'components/tasks/SubtaskPill.tsx'), 'utf8');
+    const worker = read('components/tasks/SubtaskPill.tsx');
     expect(worker).toContain('className="task-worker-parent"');
-    const acceptance = fs.readFileSync(path.resolve(__dirname, '../e2e/browser/inbox-card-peek.spec.ts'), 'utf8');
-    expect(acceptance).toContain("openInRow(row.locator('.task-worker-parent'))");
-    expect(acceptance).toContain('expect(meta.y + meta.height).toBeLessThanOrEqual(title.y + 1)');
+    // The acceptance of both: the shared flows in truncation-peek-helpers.ts.
+    const browser = path.resolve(__dirname, '../e2e/browser');
+    const helpers = fs.readFileSync(path.join(browser, 'truncation-peek-helpers.ts'), 'utf8');
+    expect(helpers).toContain("openInRow(row.locator('.task-worker-parent'))");
+    expect(helpers).toContain('the metadata stays above the title');
+    const acceptance = fs.readFileSync(path.join(browser, 'inbox-card-peek.spec.ts'), 'utf8');
+    expect(acceptance).toContain('expectWorkerRowWidens(');
+    expect(acceptance).toContain('expectInboxCardWidens(');
   });
 });
