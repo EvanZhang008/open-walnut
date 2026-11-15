@@ -232,6 +232,21 @@ describe('takeTriggerStateSnapshot', () => {
     expect(takeTriggerStateSnapshot(deps())).toMatchObject({ supported: false, reason: 'pending_fires' })
   })
 
+  it('keeps the latest quiet check exactly, and refuses a malformed or unknown report field', () => {
+    const lastCheck = {
+      type: 'trigger.checked', id: TID, atMs: nowMs - 1000, outcome: 'quiet', reason: 'all-seen',
+      durationMs: 12, nextRunAtMs: nowMs + 60_000, consecutiveErrors: 0,
+    }
+    writeState(HOME_A, JSON.stringify(validState({ lastCheck })))
+    const reply = takeTriggerStateSnapshot(deps())
+    expect(reply.supported).toBe(true)
+    if (reply.supported) expect(reply.state.lastCheck).toEqual(lastCheck)
+    for (const bad of [{ ...lastCheck, atMs: 'yesterday' }, { ...lastCheck, futureField: true }]) {
+      writeState(HOME_A, JSON.stringify(validState({ lastCheck: bad })))
+      expect(takeTriggerStateSnapshot(deps())).toMatchObject({ supported: false, reason: 'state_corrupt' })
+    }
+  })
+
   it('corrupt or unfamiliar files are refused, never coerced', () => {
     const cases: Array<[string, string]> = [
       ['not json', 'state_corrupt'],

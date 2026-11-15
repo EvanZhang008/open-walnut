@@ -637,6 +637,54 @@ describe('trigger.checked from the daemon', () => {
     expect(row.schedule).toMatchObject({ kind: 'every', everyMs: 600_000 })
   })
 
+  it('a replay updates the schedule without duplicating history, errors or notices', async () => {
+    const atMs = Date.now()
+    const report = {
+      type: 'trigger.checked' as const, id: quietJobId, atMs, outcome: 'error' as const,
+      error: 'exit 1', durationMs: 5, nextRunAtMs: atMs + 600_000, consecutiveErrors: 1,
+    }
+    await handleTriggerChecked('__local__', report)
+    const before = await jobState(quietJobId)
+    for (let i = 0; i < 6; i++) handleTriggerEvent('__local__', { ...report, replay: true, nextRunAtMs: atMs + 700_000 })
+    await settle(100)
+    const after = await jobState(quietJobId)
+    expect(after.enabled).toBe(true)
+    expect(after.state.consecutiveErrors).toBe(1)
+    expect(after.state.checkLog).toEqual(before.state.checkLog)
+    expect(after.state.nextRunAtMs).toBe(atMs + 700_000)
+    // A late quiet result cannot erase a newer error or move its clock backwards.
+    await handleTriggerChecked('__local__', { ...report, atMs: atMs - 1, outcome: 'quiet', error: undefined, consecutiveErrors: 0 })
+    expect((await jobState(quietJobId)).state).toEqual(after.state)
+    await handleTriggerChecked('__local__', { ...report, atMs: atMs + 1, outcome: 'quiet', error: undefined, consecutiveErrors: 0 })
+    expect((await jobState(quietJobId)).state.lastCheck).toMatchObject({ atMs: atMs + 1, outcome: 'quiet' })
+    expect((await jobState(quietJobId)).state.consecutiveErrors).toBe(0)
+  })
+
+  it('the latest replay reports offline failures once, without replaying each failed check', async () => {
+    const created = await post('/api/routines', {
+      name: 'offline failing watcher', schedule: { kind: 'every', everyMs: 600_000 },
+      check: { run: 'bash missing.sh' }, executor: { type: 'session', config: { target: taskId, prompt: 'p' } },
+    })
+    const id = created.json.job.id
+    const atMs = Date.now()
+    const report = {
+      type: 'trigger.checked' as const, id, atMs, outcome: 'error' as const, error: 'exit 1',
+      durationMs: 1, nextRunAtMs: atMs + 600_000, consecutiveErrors: 70, replay: true as const,
+    }
+    // Go through the same fan-out sink as the production socket, including its short dedup.
+    await handleTriggerEvent('__local__', report)
+    await handleTriggerEvent('__local__', report)
+    await settle(100)
+    const job = await jobState(id)
+    expect(job.enabled).toBe(true)
+    expect(job.state.consecutiveErrors ?? 0).toBe(0)
+    expect(job.state.lastCheck).toMatchObject({ atMs, outcome: 'error' })
+    expect(job.state.checkLog).toHaveLength(1)
+    await handleTriggerChecked('__local__', { ...report, replay: undefined, atMs: atMs + 1, outcome: 'quiet', error: undefined, consecutiveErrors: 0 })
+    expect((await jobState(id)).enabled).toBe(true)
+    expect((await jobState(id)).state.lastCheck.outcome).toBe('quiet')
+  })
+
   it('an event for a routine that no longer exists is ignored, not thrown', async () => {
     await expect(handleTriggerChecked('__local__', {
       type: 'trigger.checked', id: 'gone-job', atMs: 1, outcome: 'quiet',

@@ -9358,7 +9358,9 @@ function loadTriggerScope(home, file, raw, now, skip) {
   // A pause made here while the server was away holds across a restart too.
   var armedDefs = effectiveTriggerDefs(home, defs);
   for (var d = 0; d < armedDefs.length; d++) {
-    armedTriggers.set(triggerKey(home, armedDefs[d].id), newArmedTrigger(home, armedDefs[d], readTriggerState(home, armedDefs[d].id, now), now + TRIGGER_BOOT_RUN_DELAY_MS, now));
+    // Leave a tick's headroom: even the minimum cadence checks within one interval at boot.
+    var delay = armedDefs[d].check ? Math.min(TRIGGER_BOOT_RUN_DELAY_MS, armedDefs[d].everyMs - TRIGGER_TICK_MS) : TRIGGER_BOOT_RUN_DELAY_MS;
+    armedTriggers.set(triggerKey(home, armedDefs[d].id), newArmedTrigger(home, armedDefs[d], readTriggerState(home, armedDefs[d].id, now), now + delay, now));
   }
   // Released clocks with fires still unacked go on replaying them.
   var drainingDefs = Array.isArray(raw.draining) ? raw.draining : [];
@@ -9525,15 +9527,16 @@ async function runTrigger(entry) {
     if (error) {
       triggerCheckCore.applyCheckError(entry.state, now);
       entry.nextRunAtMs = now + triggerCadenceMs(entry);
+      entry.state.lastCheck = {
+        type: 'trigger.checked', id: entry.def.id, atMs: now, outcome: 'error', error: error, durationMs: proc.durationMs,
+        nextRunAtMs: entry.nextRunAtMs, consecutiveErrors: entry.state.consecutiveErrors,
+      };
       persistTriggerState(entry.home, entry.def.id, entry.state);
       logMsg('warn', 'trigger run', {
         id: entry.def.id, outcome: 'error', error: error, durationMs: proc.durationMs,
         consecutiveErrors: entry.state.consecutiveErrors, nextRunAtMs: entry.nextRunAtMs,
       });
-      sendTriggerEvent(entry.home, 'trigger.checked', {
-        id: entry.def.id, atMs: now, outcome: 'error', error: error, durationMs: proc.durationMs,
-        nextRunAtMs: entry.nextRunAtMs, consecutiveErrors: entry.state.consecutiveErrors,
-      });
+      sendTriggerEvent(entry.home, 'trigger.checked', entry.state.lastCheck);
       return { outcome: 'error', error: error };
     }
     // checkErrorOf already reported every failed parse above; this is the narrow.
@@ -9545,6 +9548,12 @@ async function runTrigger(entry) {
       arbitrated: !!entry.def.deliver,
     });
     entry.nextRunAtMs = now + triggerCadenceMs(entry);
+    if (!fire) entry.state.lastCheck = {
+      type: 'trigger.checked', id: entry.def.id, atMs: now, outcome: 'quiet',
+      durationMs: proc.durationMs, nextRunAtMs: entry.nextRunAtMs, consecutiveErrors: entry.state.consecutiveErrors,
+    };
+    if (!fire && decision.kind === 'quiet') entry.state.lastCheck.reason = decision.reason;
+    if (!fire && output.warnings && output.warnings.length) entry.state.lastCheck.warnings = output.warnings;
     persistTriggerState(entry.home, entry.def.id, entry.state);
     logMsg('info', 'trigger run', {
       id: entry.def.id, outcome: fire ? 'fired' : 'quiet',
@@ -9558,13 +9567,8 @@ async function runTrigger(entry) {
       return { outcome: 'fired' };
     }
     var quiet = { outcome: 'quiet' };
-    var checked = {
-      id: entry.def.id, atMs: now, outcome: 'quiet', durationMs: proc.durationMs,
-      nextRunAtMs: entry.nextRunAtMs, consecutiveErrors: entry.state.consecutiveErrors,
-    };
-    if (decision.kind === 'quiet') { checked.reason = decision.reason; quiet.reason = decision.reason; }
-    if (output.warnings && output.warnings.length) checked.warnings = output.warnings;
-    sendTriggerEvent(entry.home, 'trigger.checked', checked);
+    if (decision.kind === 'quiet') quiet.reason = decision.reason;
+    sendTriggerEvent(entry.home, 'trigger.checked', entry.state.lastCheck);
     return quiet;
   } finally {
     entry.running = false;
@@ -9781,7 +9785,10 @@ function armTriggerSet(home, defs, now) {
     // Handed back before its fires drained: those fires stay with it.
     var draining = drainingTriggers.get(key);
     if (draining) { drainingTriggers.delete(key); drainingChanged = true; }
-    armedTriggers.set(key, newArmedTrigger(home, defs[d], draining ? draining.state : readTriggerState(home, defs[d].id, now), now + TRIGGER_FIRST_RUN_DELAY_MS, now, !!draining));
+    var state = draining ? draining.state : readTriggerState(home, defs[d].id, now);
+    // A deliberate re-arm gets a fresh error budget, as the server's resume does. Boot preserves it.
+    state.consecutiveErrors = 0;
+    armedTriggers.set(key, newArmedTrigger(home, defs[d], state, now + TRIGGER_FIRST_RUN_DELAY_MS, now, !!draining));
   }
   if (drainingChanged) persistTriggersFile(home);
   return released;
@@ -9946,6 +9953,19 @@ async function configureTriggers(ws, id, cmd) {
   for (const entry of fireHolders(home)) {
     for (var f = 0; f < entry.state.pendingFires.length; f++) {
       sendTriggerFire(entry, entry.state.pendingFires[f], true);
+    }
+  }
+  // A quiet host kept checking too. Only a server that dedups checked replays asks for them.
+  if (cmd.replayChecks === true) {
+    for (const entry of armedOf(home)) {
+      var checked = entry.state.lastCheck;
+      if (entry.def.check && checked && checked.id === entry.def.id) {
+        // A failed offline check gets another chance within this interval, not the outage's backoff.
+        if (checked.outcome === 'error' && !entry.running) {
+          entry.nextRunAtMs = Math.min(entry.nextRunAtMs, now + Math.min(TRIGGER_FIRST_RUN_DELAY_MS, entry.def.everyMs - TRIGGER_TICK_MS));
+        }
+        sendEvent(ws, 'trigger.checked', Object.assign({}, checked, { nextRunAtMs: entry.nextRunAtMs, replay: true }));
+      }
     }
   }
 }
@@ -12055,6 +12075,10 @@ function stopSessionProcess(ws, id, sid) {
     }
     let checks = 0;
     const checkExit = function () {
+      // The CLI may have exited on the SIGINT while its children still leave its group: with the
+      // leader gone and the group alive, the members are the CLI's own. Identity is read BEFORE the
+      // group, so the last member leaving during the ps read is a finished stop (daemon-standalone.ts).
+      const ours = sameProcess() || leaderGoneWithGroup(pid);
       if (!isProcessGroupAlive(pid)) {
         if (sessions.get(sid) === session) {
           reapSession(sid, 0, 'stop-confirmed', true);
@@ -12062,9 +12086,7 @@ function stopSessionProcess(ws, id, sid) {
         }
         return reply();
       }
-      // The CLI may have exited on the SIGINT while its children still leave its group: with the
-      // leader gone and the group alive, the members are the CLI's own (daemon-standalone.ts).
-      if (!sameProcess() && !leaderGoneWithGroup(pid)) return reply('stop: process identity changed; no further signals sent');
+      if (!ours) return reply('stop: process identity changed; no further signals sent');
       checks++;
       if (checks === 25) {
         try { killProcessGroup(pid, 'SIGTERM'); } catch (err) { return reply('stop: ' + String(err)); }

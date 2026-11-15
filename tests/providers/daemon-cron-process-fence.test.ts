@@ -1091,6 +1091,33 @@ describe.each(GATE_TWINS)('%s twin: stop waits for confirmed process death', (ki
     expect(twin.groupSignal.mock.calls).toEqual([[4242, 'SIGINT'], [4242, 'SIGTERM']])
   })
 
+  // 2026-11-13 flake of daemon-stop-lingering-child-twins-e2e: on macOS the identity read is a `ps`
+  // call, and the group's last member left during it. A group read before it said alive, the one
+  // after said empty, and the finished stop answered "identity changed". All stubs: nothing is signalled.
+  it('answers stopped when the last group member leaves while the identity is read', async () => {
+    twin.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '900' })
+    const stopping = twin.stop()
+    // The CLI exited on the SIGINT and was reaped; its child is the group's last member.
+    twin.liveness.mockImplementation(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }) })
+    twin.startTime.mockImplementation(() => { twin.groupAlive.mockReturnValue(false); return null as unknown as string })
+    await vi.advanceTimersByTimeAsync(200)
+    await stopping
+    expect(twin.replies).toEqual([{ id: 1, ok: true, data: { stopped: true } }])
+    expect(twin.reaped).toHaveBeenCalledExactlyOnceWith(GATE_SID, 0, 'stop-confirmed', true)
+    expect(twin.groupSignal.mock.calls).toEqual([[4242, 'SIGINT']])
+  })
+
+  it('still refuses a pid that now runs another live process while the group is alive', async () => {
+    twin.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '900' })
+    const stopping = twin.stop()
+    twin.startTime.mockReturnValue('901')
+    await vi.runAllTimersAsync()
+    await stopping
+    expect(twin.replies[0]).toMatchObject({ ok: false, error: expect.stringContaining('identity changed') })
+    expect(twin.reaped).not.toHaveBeenCalled()
+    expect(twin.groupSignal.mock.calls).toEqual([[4242, 'SIGINT']])
+  })
+
   it('does not escalate against a replacement process', async () => {
     twin.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '900' })
     const stopping = twin.stop()

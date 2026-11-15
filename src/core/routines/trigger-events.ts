@@ -108,6 +108,7 @@ export async function handleTriggerChecked(host: string, event: TriggerCheckedEv
     log.cron.debug('trigger.checked for an unknown routine', { host, jobId: event.id });
     return;
   }
+  if (applied.ignored) return;
   log.cron.info('trigger checked', {
     host, jobId: event.id, outcome: event.outcome,
     ...(event.reason ? { reason: event.reason } : {}),
@@ -651,7 +652,8 @@ function checkedSeenBefore(host: string, e: TriggerCheckedEvent): boolean {
 export function handleTriggerEvent(host: string, event: TriggerEvent): void {
   void (async () => {
     if (event.type === 'trigger.checked') {
-      if (checkedSeenBefore(host, event)) return;
+      // A replay may carry a newly armed schedule for the same completed check.
+      if (!event.replay && checkedSeenBefore(host, event)) return;
       await handleTriggerChecked(host, event);
     } else if (event.type === 'trigger.fired') {
       enqueueFire(host, event);

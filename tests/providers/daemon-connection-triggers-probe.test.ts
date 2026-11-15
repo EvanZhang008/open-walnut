@@ -57,17 +57,30 @@ describe('DaemonConnection trigger push with a probe first', () => {
     await waitFor(() => first.triggersPushed)
     expect(pushes().map((c) => c.payload.probe === true ? 'probe' : 'set')).toEqual(['probe', 'set'])
     expect(pushes()[1].payload.pushHash).toBe('set-h1')
+    expect(pushes().every((c) => c.payload.replayChecks === true)).toBe(true)
     expect(applied).toHaveBeenCalledTimes(1)
     first.disconnect()
 
     const second = await connect('trig-probe')
     await waitFor(() => second.triggersPushed)
     expect(pushes().map((c) => c.payload.probe === true ? 'probe' : 'set')).toEqual(['probe', 'set', 'probe'])
+    expect(pushes()[2].payload.replayChecks).toBe(true)
     expect(applied).toHaveBeenCalledTimes(2)
     expect(applied.mock.calls[1][0]).toMatchObject({ ok: true, held: true, applied: true })
     // On the same connection, a push of the same set sends nothing at all.
     await second.pushTriggersNow()
     expect(pushes()).toHaveLength(3)
+  })
+
+  it('routine edits on a connected host do not request status replay or accelerate failed checks', async () => {
+    await daemon.start()
+    const conn = await connect('trig-probe-edit')
+    await waitFor(() => conn.triggersPushed)
+    setTriggerPayloadProvider(async () => ({ payload: SET, hash: 'set-h2', applied }))
+    await conn.pushTriggersNow()
+    expect(pushes()).toHaveLength(3)
+    expect(pushes()[2].payload).toMatchObject({ pushHash: 'set-h2' })
+    expect(pushes()[2].payload.replayChecks).toBeUndefined()
   })
 
   it('a daemon without triggers-probe-v1 gets the set as before, with no name, on every connection', async () => {

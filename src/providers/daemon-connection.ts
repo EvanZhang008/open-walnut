@@ -2097,14 +2097,17 @@ export class DaemonConnection {
           // A daemon that still holds this set under its name configures it from its copy
           // (triggers-probe-v1): a reconnect or restart sends no set. Else the set goes, named.
           const probes = this.hasCapability(TRIGGERS_PROBE_CAPABILITY)
+          const fresh = this.lastTriggersPushHash === null
           // Only the first push on a connection can be held: later ones are changes.
-          const probe = probes && this.lastTriggersPushHash === null
-            ? await this.send('triggers.configure', { probe: true, hash: compiled.hash, home: WALNUT_HOME })
+          const probe = probes && fresh
+            ? await this.send('triggers.configure', { probe: true, hash: compiled.hash, home: WALNUT_HOME, replayChecks: true })
             : null
           // `home`: the daemon keeps one set per Walnut (walnut-scope-core.ts).
           const reply = probe?.ok === true && probe.held === true ? probe : await this.send('triggers.configure', {
             config: compiled.payload as unknown as Record<string, unknown>,
             home: WALNUT_HOME,
+            // Routine edits must not replay status or accelerate an unrelated failed check.
+            ...(fresh ? { replayChecks: true } : {}),
             ...(probes ? { pushHash: compiled.hash } : {}),
           })
           if (reply.ok !== true) {

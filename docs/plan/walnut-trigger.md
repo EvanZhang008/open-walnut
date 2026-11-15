@@ -100,6 +100,21 @@ The trigger id rides `triggerId`, never `id`: a daemon frame is `{id, cmd, ...pa
 
 Daemon state lives in its own directory (`triggers.json` for the set, `trigger-state/<id>.json` for `seen`, `state`, `fires today`, `pendingFires`, `consecutiveErrors`). Loaded at boot so checks keep running while the server is down; the next `triggers.configure` replaces the set. The per-trigger files must outlive a reboot, which the production runtime dir (`/tmp/open-walnut`) does not: the production daemon keeps them in `~/.open-walnut/tmp/trigger-state/`, a service daemon in its state dir, an isolated daemon dir inside itself. A file still in the old dir is moved the first time its trigger is armed. (2026-10-06: a reboot emptied `/tmp`, and a watch re-reported every item it had already reported and restarted the week its script was counting.) Capability `triggers-v1`; an older daemon makes `trigger_create` for that host answer 400 with "upgrade the daemon on <host> (it auto-deploys on the next send)".
 
+### Reconnect also restores quiet check status
+
+A disconnected server cannot tell that a quiet host kept checking. The daemon keeps its latest
+non-firing report as optional `lastCheck` in each trigger's state file. A configure or held probe
+with `replayChecks: true` sends that report again, marked `replay: true`, with the current next
+check time. Older servers do not request it; older daemons ignore the request. A fire clears an
+older quiet report. Only the newest check is replayed, not a backlog of quiet checks.
+
+The server ignores duplicate and older reports, so reconnects cannot add failed checks, audit
+rows or notices twice. A latest error replay updates the check status, not the failure budget or
+stop policy: the outage may have caused it. The returning host retries within one interval instead
+of waiting out its failure backoff. A deliberate re-arm starts its error budget over. A daemon restart
+re-arms checks within one polling interval, including the minimum ten-second interval, without
+resetting the script's cursor, seen ids, fire budget or pending fires.
+
 ### Who delivers a fire: the daemon decides
 
 Delivery used to need the server, so a fire waited in `pendingFires` while the Mac slept, even when the target session ran on the same host. On 2026-10-05 a one-minute chat monitor fired five times between 20:59Z and 21:33Z while the Mac was in clamshell sleep; its target session sat idle on that host the whole time, and the fires arrived together at 21:40 during one dark wake, up to 42 minutes late.

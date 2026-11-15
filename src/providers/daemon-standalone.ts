@@ -7926,7 +7926,9 @@ function loadTriggerScope(home: string, file: string, raw: unknown, now: number,
   if (!home && parsedFile.scoped !== 1) scope.inherited = true
   // A pause made here while the server was away holds across a restart too.
   for (const def of effectiveTriggerDefs(home, defs)) {
-    armedTriggers.set(triggerKey(home, def.id), newArmedTrigger(home, def, readTriggerState(home, def.id, now), now + TRIGGER_BOOT_RUN_DELAY_MS, now))
+    // Leave a tick's headroom: even the minimum cadence checks within one interval at boot.
+    const delay = def.check ? Math.min(TRIGGER_BOOT_RUN_DELAY_MS, def.everyMs - TRIGGER_TICK_MS) : TRIGGER_BOOT_RUN_DELAY_MS
+    armedTriggers.set(triggerKey(home, def.id), newArmedTrigger(home, def, readTriggerState(home, def.id, now), now + delay, now))
   }
   // Released clocks with fires still unacked go on replaying them.
   for (const rawDef of Array.isArray(parsedFile.draining) ? parsedFile.draining : []) {
@@ -8100,15 +8102,16 @@ async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'qu
     if (error) {
       applyCheckError(entry.state, now)
       entry.nextRunAtMs = now + triggerCadenceMs(entry)
+      entry.state.lastCheck = {
+        type: 'trigger.checked', id: entry.def.id, atMs: now, outcome: 'error', error, durationMs: proc.durationMs,
+        nextRunAtMs: entry.nextRunAtMs, consecutiveErrors: entry.state.consecutiveErrors,
+      }
       persistTriggerState(entry.home, entry.def.id, entry.state)
       logMsg('warn', 'trigger run', {
         id: entry.def.id, outcome: 'error', error, durationMs: proc.durationMs,
         consecutiveErrors: entry.state.consecutiveErrors, nextRunAtMs: entry.nextRunAtMs,
       })
-      sendTriggerEvent(entry.home, 'trigger.checked', {
-        id: entry.def.id, atMs: now, outcome: 'error', error, durationMs: proc.durationMs,
-        nextRunAtMs: entry.nextRunAtMs, consecutiveErrors: entry.state.consecutiveErrors,
-      })
+      sendTriggerEvent(entry.home, 'trigger.checked', { ...entry.state.lastCheck })
       return { outcome: 'error', error }
     }
     // checkErrorOf already reported every failed parse above; this is the narrow.
@@ -8120,6 +8123,12 @@ async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'qu
       arbitrated: !!entry.def.deliver,
     })
     entry.nextRunAtMs = now + triggerCadenceMs(entry)
+    if (!fire) entry.state.lastCheck = {
+      type: 'trigger.checked', id: entry.def.id, atMs: now, outcome: 'quiet',
+      ...(decision.kind === 'quiet' ? { reason: decision.reason } : {}),
+      durationMs: proc.durationMs, nextRunAtMs: entry.nextRunAtMs, consecutiveErrors: entry.state.consecutiveErrors,
+      ...(output.warnings?.length ? { warnings: output.warnings } : {}),
+    }
     persistTriggerState(entry.home, entry.def.id, entry.state)
     logMsg('info', 'trigger run', {
       id: entry.def.id, outcome: fire ? 'fired' : 'quiet',
@@ -8132,11 +8141,7 @@ async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'qu
       return { outcome: 'fired' }
     }
     const reason = decision.kind === 'quiet' ? decision.reason : undefined
-    sendTriggerEvent(entry.home, 'trigger.checked', {
-      id: entry.def.id, atMs: now, outcome: 'quiet', ...(reason ? { reason } : {}),
-      durationMs: proc.durationMs, nextRunAtMs: entry.nextRunAtMs, consecutiveErrors: entry.state.consecutiveErrors,
-      ...(output.warnings?.length ? { warnings: output.warnings } : {}),
-    })
+    sendTriggerEvent(entry.home, 'trigger.checked', { ...entry.state.lastCheck! })
     return { outcome: 'quiet', ...(reason ? { reason } : {}) }
   } finally {
     entry.running = false
@@ -8346,7 +8351,10 @@ function armTriggerSet(home: string, defs: TriggerDef[], now: number): ClockRepo
     // Handed back before its fires drained: those fires stay with it.
     const draining = drainingTriggers.get(key)
     if (draining) { drainingTriggers.delete(key); drainingChanged = true }
-    armedTriggers.set(key, newArmedTrigger(home, def, draining ? draining.state : readTriggerState(home, def.id, now), now + TRIGGER_FIRST_RUN_DELAY_MS, now, !!draining))
+    const state = draining ? draining.state : readTriggerState(home, def.id, now)
+    // A deliberate re-arm gets a fresh error budget, as the server's resume does. Boot preserves it.
+    state.consecutiveErrors = 0
+    armedTriggers.set(key, newArmedTrigger(home, def, state, now + TRIGGER_FIRST_RUN_DELAY_MS, now, !!draining))
   }
   if (drainingChanged) persistTriggersFile(home)
   return released
@@ -8544,6 +8552,19 @@ async function configureTriggers(ws: ServerWebSocket<WsData>, id: number, cmd: R
   // dedups on (id, epoch, seq).
   for (const entry of fireHolders(home)) {
     for (const fire of entry.state.pendingFires) sendTriggerFire(entry, fire, true)
+  }
+  // A quiet host kept checking too. Only a server that dedups checked replays asks for them.
+  if (cmd.replayChecks === true) {
+    for (const entry of armedOf(home)) {
+      const checked = entry.state.lastCheck
+      if (entry.def.check && checked?.id === entry.def.id) {
+        // A failed offline check gets another chance within this interval, not the outage's backoff.
+        if (checked.outcome === 'error' && !entry.running) {
+          entry.nextRunAtMs = Math.min(entry.nextRunAtMs, now + Math.min(TRIGGER_FIRST_RUN_DELAY_MS, entry.def.everyMs - TRIGGER_TICK_MS))
+        }
+        sendEvent(ws, 'trigger.checked', { ...checked, nextRunAtMs: entry.nextRunAtMs, replay: true })
+      }
+    }
   }
 }
 
@@ -10355,6 +10376,15 @@ function stopSessionProcess(ws: ServerWebSocket<WsData>, id: number, sid: string
     }
     let checks = 0
     const checkExit = () => {
+      // The CLI itself may have exited on the SIGINT (and been reaped) while its children are still
+      // leaving its group (2026-11-12: a Demo reset's stop answered "identity changed" 200 ms after the
+      // CLI ended). With the leader gone and the group alive, no process can hold this pid (a group's
+      // id is not reused while it has members), so the members are the CLI's own: keep waiting, with
+      // the SIGTERM below. Only a live process whose identity changed is refused.
+      // Identity is read BEFORE the group: on macOS readStartTime is a `ps` call, and the last member
+      // leaving during it made a group read before it say alive and the one inside leaderGoneWithGroup
+      // say empty, so a finished stop answered "identity changed" (2026-11-13, a flaky twins e2e).
+      const ours = sameProcess() || leaderGoneWithGroup(pid)
       if (!isProcessGroupAlive(pid)) {
         if (sessions.get(sid) === session) {
           reapSession(sid, 0, 'stop-confirmed', true)
@@ -10362,12 +10392,7 @@ function stopSessionProcess(ws: ServerWebSocket<WsData>, id: number, sid: string
         }
         return reply()
       }
-      // The CLI itself may have exited on the SIGINT (and been reaped) while its children are still
-      // leaving its group (2026-11-12: a Demo reset's stop answered "identity changed" 200 ms after the
-      // CLI ended). With the leader gone and the group alive, no process can hold this pid (a group's
-      // id is not reused while it has members), so the members are the CLI's own: keep waiting, with
-      // the SIGTERM below. Only a live process whose identity changed is refused.
-      if (!sameProcess() && !leaderGoneWithGroup(pid)) return reply('stop: process identity changed; no further signals sent')
+      if (!ours) return reply('stop: process identity changed; no further signals sent')
       checks++
       if (checks === 25) {
         try { killProcessGroup(pid, 'SIGTERM') } catch (error) { return reply(`stop: ${String(error)}`) }

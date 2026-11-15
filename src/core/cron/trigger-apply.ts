@@ -37,6 +37,8 @@ export interface TriggerCheckedApplied {
   found: boolean;
   /** True when this check crossed MAX_CONSECUTIVE_CHECK_ERRORS and was disabled. */
   disabled: boolean;
+  /** Duplicate or older report; it must not add errors, audit rows or notices. */
+  ignored?: true;
   jobName?: string;
   host?: string;
   consecutiveErrors?: number;
@@ -207,24 +209,40 @@ export async function applyTriggerChecked(
 
     const atMs = Number.isFinite(event.atMs) ? event.atMs : state.deps.nowMs();
     const durationMs = Number.isFinite(event.durationMs) ? event.durationMs : 0;
+    const lastAt = job.state.lastCheck?.atMs;
+    if (typeof lastAt === 'number' && atMs <= lastAt) {
+      // A restart re-arms the clock even when its latest check was already recorded.
+      if (event.replay && atMs === lastAt && job.enabled && Number.isFinite(event.nextRunAtMs)
+        && event.nextRunAtMs > state.deps.nowMs() && event.nextRunAtMs !== job.state.nextRunAtMs) {
+        job.state.nextRunAtMs = event.nextRunAtMs;
+        await persist(state);
+        emit(state, { jobId: job.id, action: 'updated', nextRunAtMs: job.state.nextRunAtMs });
+      }
+      return { found: true, disabled: false, ignored: true };
+    }
     // A deadline kill is said as one, with the limit, whichever daemon version worded it.
     const limitS = timeLimitSeconds(job.check);
     const killedAtLimit = event.outcome === 'error' && isTimeLimitError(event.error);
     const error = checkErrorText(event.error, limitS);
 
     if (event.outcome === 'error') {
-      applyJobResult(state, job, {
-        status: 'error',
-        error: error ?? 'check failed',
-        startedAt: atMs,
-        endedAt: atMs + durationMs,
-      });
+      if (event.replay) {
+        // Historical failures may be the outage itself. Show them, but give the returning host a fresh check.
+        job.state.lastError = error;
+      } else {
+        applyJobResult(state, job, {
+          status: 'error',
+          error: error ?? 'check failed',
+          startedAt: atMs,
+          endedAt: atMs + durationMs,
+        });
+      }
     } else {
       job.state.consecutiveErrors = 0;
       job.state.lastError = undefined;
       job.updatedAtMs = atMs;
     }
-    const health = checkHealth(job, event.outcome, atMs);
+    const health = event.replay && event.outcome === 'error' ? {} : checkHealth(job, event.outcome, atMs);
 
     job.state.lastCheck = {
       atMs,
@@ -269,7 +287,7 @@ export async function applyTriggerChecked(
     let disabled = false;
     // Only a polling trigger can be stopped: a late error from a check that was
     // running when someone paused it leaves the pause as it is, with no notice.
-    if (job.enabled && event.outcome === 'error' && (job.state.consecutiveErrors ?? 0) >= MAX_CONSECUTIVE_CHECK_ERRORS) {
+    if (job.enabled && !event.replay && event.outcome === 'error' && (job.state.consecutiveErrors ?? 0) >= MAX_CONSECUTIVE_CHECK_ERRORS) {
       job.enabled = false;
       job.state.nextRunAtMs = undefined;
       job.state.runningAtMs = undefined;

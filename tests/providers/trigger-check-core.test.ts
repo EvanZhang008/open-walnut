@@ -647,6 +647,30 @@ describe('fires carry what the server needs to dedup and to explain', () => {
   });
 });
 
+describe('latest host check for reconnect', () => {
+  const lastCheck = {
+    type: 'trigger.checked' as const, id: def.id, atMs: NOW, outcome: 'quiet' as const, reason: 'all-seen' as const,
+    durationMs: 12, nextRunAtMs: NOW + 60_000, consecutiveErrors: 0,
+  };
+
+  it('round-trips the latest report and keeps older state files readable', () => {
+    const state = emptyHostState(NOW);
+    state.lastCheck = lastCheck;
+    expect(coerceHostState(JSON.parse(JSON.stringify(state)), NOW).lastCheck).toEqual(lastCheck);
+    delete state.lastCheck;
+    expect(coerceHostState(state, NOW).lastCheck).toBeUndefined();
+    expect(coerceHostState({ ...state, lastCheck: { ...lastCheck, nextRunAtMs: 'later' } }, NOW).lastCheck).toBeUndefined();
+  });
+
+  it('a fire clears an older quiet report, never replaying it over a newer fire', () => {
+    const state = emptyHostState(NOW);
+    state.lastCheck = lastCheck;
+    const output = parsedOk('{"fire":true,"items":[{"id":"new"}]}').output;
+    applyCheckOutcome(state, output, decideCheck(def, output, state, NOW + 1), NOW + 1, 1);
+    expect(state.lastCheck).toBeUndefined();
+  });
+});
+
 describe('startAwakeDeadline', () => {
   // 2026-10-14: a check started in a dark wake, the Mac slept 7 minutes, and the
   // plain timer fired at wake: "timed out after 434s" for 8 s of running.

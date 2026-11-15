@@ -259,6 +259,8 @@ export interface TriggerHostState {
   seq: number;
   lastRunAtMs?: number;
   lastFireAtMs?: number;
+  /** Latest non-firing check, replayed on reconnect so quiet hosts do not look stalled. */
+  lastCheck?: TriggerCheckedEvent;
   /** A clock routine's place in its schedule (trigger-clock-core.ts). */
   clock?: ClockHostState;
   /**
@@ -330,6 +332,8 @@ export interface TriggerCheckedEvent {
   consecutiveErrors: number;
   /** A quiet run the daemon had to repair (TriggerCheckOutput.warnings). */
   warnings?: string[];
+  /** Latest host status sent again at configure, not a new check. */
+  replay?: true;
 }
 
 /**
@@ -425,6 +429,7 @@ export function coerceHostState(raw: unknown, nowMs: number): TriggerHostState {
     ? (r.pendingFires as unknown[]).filter((p): p is PendingFire =>
         !!p && typeof p === 'object' && typeof (p as PendingFire).seq === 'number' && Array.isArray((p as PendingFire).items))
     : [];
+  const lastCheck = coerceCheckedEvent(r.lastCheck);
   return {
     version: 1,
     // A file from before epochs gets one now: the server has no mark for it yet.
@@ -439,6 +444,29 @@ export function coerceHostState(raw: unknown, nowMs: number): TriggerHostState {
     ...(typeof r.lastFireAtMs === 'number' ? { lastFireAtMs: r.lastFireAtMs } : {}),
     ...(coerceClock(r.clock) ? { clock: coerceClock(r.clock) } : {}),
     ...(r.sharedCopy === true ? { sharedCopy: true as const } : {}),
+    ...(lastCheck ? { lastCheck } : {}),
+  };
+}
+
+/** A bounded check report read from disk. Older daemons simply ignore this optional field. */
+export function coerceCheckedEvent(raw: unknown): TriggerCheckedEvent | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  if (r.type !== 'trigger.checked' || typeof r.id !== 'string' || !r.id || r.id.length > 200
+    || (r.outcome !== 'quiet' && r.outcome !== 'error')
+    || !['atMs', 'durationMs', 'nextRunAtMs', 'consecutiveErrors'].every((k) => typeof r[k] === 'number' && Number.isFinite(r[k]))) return undefined;
+  if ((r.durationMs as number) < 0 || !Number.isInteger(r.consecutiveErrors) || (r.consecutiveErrors as number) < 0) return undefined;
+  if (r.reason !== undefined && !['fire-false', 'all-seen', 'rate-limited'].includes(String(r.reason))) return undefined;
+  if (r.error !== undefined && (typeof r.error !== 'string' || r.error.length > 1024)) return undefined;
+  if (r.warnings !== undefined && (!Array.isArray(r.warnings) || r.warnings.length > CHECK_WARNINGS_MAX
+    || r.warnings.some((w) => typeof w !== 'string' || w.length > 1024))) return undefined;
+  return {
+    type: 'trigger.checked', id: r.id, outcome: r.outcome,
+    atMs: r.atMs as number, durationMs: r.durationMs as number,
+    nextRunAtMs: r.nextRunAtMs as number, consecutiveErrors: r.consecutiveErrors as number,
+    ...(r.reason ? { reason: r.reason as TriggerCheckedEvent['reason'] } : {}),
+    ...(typeof r.error === 'string' ? { error: r.error } : {}),
+    ...(r.warnings ? { warnings: r.warnings as string[] } : {}),
   };
 }
 
@@ -771,6 +799,7 @@ export function applyCheckOutcome(
   const cap = decision.budgetCap ?? MAX_FIRES_PER_DAY_DEFAULT;
   state.budget = cap > 0 ? { used: fireBudgetUsed(cap, state.budget, nowMs) + 1, atMs: nowMs } : { used: 0, atMs: nowMs };
   state.lastFireAtMs = nowMs;
+  delete state.lastCheck;
   state.seq += 1;
   const fire: PendingFire = {
     seq: state.seq,

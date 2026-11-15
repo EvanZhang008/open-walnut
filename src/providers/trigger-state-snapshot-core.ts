@@ -7,7 +7,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { TRIGGER_STATE_TTL_MS, type TriggerHostState } from './trigger-check-core.js';
+import { coerceCheckedEvent, TRIGGER_STATE_TTL_MS, type TriggerHostState } from './trigger-check-core.js';
 
 export const TRIGGER_STATE_SNAPSHOT_CAPABILITY = 'trigger-state-snapshot-v1';
 export const TRIGGER_STATE_SNAPSHOT_COMMAND = 'triggers.state.snapshot';
@@ -207,7 +207,7 @@ export function readFileBounded(fs: SnapshotFsLike, file: string, maxBytes: numb
 
 const STATE_KEYS = new Set([
   'version', 'epoch', 'seen', 'state', 'budget', 'pendingFires', 'consecutiveErrors', 'seq',
-  'lastRunAtMs', 'lastFireAtMs', 'clock', 'sharedCopy',
+  'lastRunAtMs', 'lastFireAtMs', 'clock', 'sharedCopy', 'lastCheck',
 ]);
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -268,6 +268,10 @@ export function parseSnapshotState(bytes: Uint8Array): { ok: true; state: Trigge
     clock = { fromMs: c.fromMs, ...(c.nextRunAtMs !== undefined ? { nextRunAtMs: c.nextRunAtMs as number } : {}) };
   }
   if (raw.sharedCopy !== undefined && raw.sharedCopy !== true) return refuse('state_corrupt', 'sharedCopy');
+  const lastCheck = coerceCheckedEvent(raw.lastCheck);
+  if ('lastCheck' in raw && (!lastCheck || canonicalTriggerStateJson(lastCheck) !== canonicalTriggerStateJson(raw.lastCheck))) {
+    return refuse('state_corrupt', 'lastCheck');
+  }
   const state: TriggerHostState = {
     version: 1,
     epoch: raw.epoch,
@@ -281,6 +285,7 @@ export function parseSnapshotState(bytes: Uint8Array): { ok: true; state: Trigge
     ...(raw.lastFireAtMs !== undefined ? { lastFireAtMs: raw.lastFireAtMs as number } : {}),
     ...(clock ? { clock } : {}),
     ...(raw.sharedCopy === true ? { sharedCopy: true as const } : {}),
+    ...(lastCheck ? { lastCheck } : {}),
   };
   return { ok: true, state };
 }
