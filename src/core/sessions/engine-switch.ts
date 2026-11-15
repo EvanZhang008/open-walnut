@@ -43,6 +43,7 @@ import { isPersonSource } from './send-sent-by.js';
 import { randomUUID } from 'node:crypto';
 import { log } from '../../logging/index.js';
 import type { EngineSwitchState, SessionEffort, SessionEngine, SessionMode, SessionRecord, Task } from '../types.js';
+import { matchSessionModelCatalogEntry, resolveModelSwitchValue, SESSION_MODEL_FAMILIES, SESSION_MODELS, VALID_SESSION_EFFORT_IDS } from '../types.js';
 import { engineCaps, isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
 import { engineHostBlocker, LOCAL_HOST, normalizeHost } from '../transfer/planner.js';
 import { engineSwitchedReason, isSupersededSession } from './engine-switch-marker.js';
@@ -72,6 +73,8 @@ export interface EngineSwitchRequest {
   host?: string;
   /** The user's words asking for it, quoted by the agent that passes them on. */
   userWords?: string;
+  /** Why it is asked for, in a few words ("to run browser tests"): the session's line says it. */
+  reason?: string;
   model?: string;
   effort?: SessionEffort;
   permissionMode?: SessionMode;
@@ -320,8 +323,6 @@ async function switchFrom(req: EngineSwitchRequest, task: Task): Promise<EngineS
     throw new EngineSwitchError(
       `A switch to ${engineCaps(waiting.to.engine).displayName} already waits for this turn to end; cancel it first`, 409, 'switch_pending');
   }
-  // A newer pick with no message of its own replaces a waiting switch: that switch's message goes with it.
-  const carry = waiting?.message && !message && waiting.from_session_id === old.claudeSessionId ? waiting : undefined;
   if (waiting) {
     // A pending pick whose turn is long over (or whose session is no longer the task's): this one replaces it.
     await tm.updateTaskRaw(task.id, (cur) => (cur.engine_switch?.id === waiting.id && cur.engine_switch.state === 'pending'
@@ -331,9 +332,15 @@ async function switchFrom(req: EngineSwitchRequest, task: Task): Promise<EngineS
   const caller = await resolveCaller(req.callerSid);
   const { frameStartText, framingCallerOf } = await import('./send-frame.js');
   // Freeze the message's author before it waits or a restart replaces the caller's session.
+  // The task's own session asking (an agent moving itself) is not "another task" by name.
+  const framed = caller.kind === 'session' ? await framingCallerOf(caller.record) : undefined;
+  const asker = by(req.callerSid, caller.kind === 'session' ? caller.record.taskId : undefined, req.source);
+  // A newer pick with no message of its own replaces a waiting switch: that switch's message goes
+  // with it, when the same asker made both (a person's pick never carries an agent's move message
+  // in that agent's name, and an agent's never a person's).
+  const carry = waiting?.message && !message && waiting.from_session_id === old.claudeSessionId && waiting.by === asker ? waiting : undefined;
   const firstMessage = frameStartText(message, {
-    source: req.source, callerSid: req.callerSid,
-    ...(caller.kind === 'session' ? { caller: await framingCallerOf(caller.record) } : {}),
+    source: req.source, callerSid: req.callerSid, ...(framed ? { caller: framed } : {}),
   });
   const state: EngineSwitchState = {
     id: switchId, state: 'pending', at: new Date().toISOString(),
@@ -345,9 +352,13 @@ async function switchFrom(req: EngineSwitchRequest, task: Task): Promise<EngineS
     ...(move ? { move: true, from_host: oldHost, ...(old.cwd ? { from_cwd: old.cwd } : {}) } : {}),
     ...(lost ? { from_host_lost: lost } : {}),
     ...(req.userWords?.trim() ? { user_words: req.userWords.trim().slice(0, 2000) } : {}),
+    ...(req.reason?.trim() ? { reason: req.reason.trim().slice(0, 200) } : {}),
     ...(message ? { message: firstMessage, display_text: req.displayText ?? message } : {}),
-    by: by(req.callerSid, caller.kind === 'session' ? caller.record.taskId : undefined, req.source),
-    ...(carry ? { message: carry.message, ...(carry.display_text ? { display_text: carry.display_text } : {}), by: carry.by } : {}),
+    by: asker,
+    // The asker by name, for the session's line ("Walnut VP is moving this task..."), so a switch an
+    // agent asked for never reads as the result of the person's own click (2026-11-15).
+    ...(framed?.title && caller.kind === 'session' && caller.record.taskId !== task.id ? { by_name: framed.title.slice(0, 120) } : {}),
+    ...(carry ? { message: carry.message, ...(carry.display_text ? { display_text: carry.display_text } : {}) } : {}),
   };
   if (busy && !now) {
     await tm.updateTaskRaw(task.id, { engine_switch: state }, { source: 'engine-switch', emitEvent: true });
@@ -643,7 +654,7 @@ async function handOver(
     const { startSessionForTask } = await import('./task-start.js');
     const started = await startSessionForTask({
       taskIdPrefix: taskId, message: prepared.message, cwd: prepared.cwd, host: host === LOCAL_HOST ? '__local__' : host,
-      engine, ...(state.to.model ? { model: state.to.model } : {}), ...(state.to.effort ? { effort: state.to.effort } : {}),
+      engine, ...(prepared.model ? { model: prepared.model } : {}), ...(prepared.effort ? { effort: prepared.effort } : {}),
       ...(prepared.mode ? { mode: prepared.mode } : {}), expectReply: false, source: 'engine-switch', ownMove: true, awaitStart: true,
       ...(prepared.message ? {} : { idle: true }),
     });
@@ -788,11 +799,12 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
     return undefined;
   });
   const transcriptMs = Date.now() - t0 - readMs;
-  const window = await targetWindowTokens(engine, state.to.model, host, rows);
+  const kept = await keptSettings(old, state, engine, host);
+  const window = await targetWindowTokens(engine, kept.model, host, rows);
   // Back to an engine the task used before: resume that session when its history is still a
   // prefix. Never on a move: the work was set up anew in another place.
   const planned = state.move ? { reason: 'a move starts a new session' } : await planResume({
-    active: old, activeCtx: ctx, rows, engine, host, cwd, model: state.to.model, windowTokens: window,
+    active: old, activeCtx: ctx, rows, engine, host, cwd, model: kept.model, windowTokens: window,
     ...(transcriptPath ? { transcriptPath } : {}),
   }).catch((err: unknown) => ({ reason: `the check failed: ${err instanceof Error ? err.message : String(err)}` }));
   log.session.info(`engine switch: ${'plan' in planned && planned.plan ? 'resumes the earlier session' : 'starts a new session'}`, {
@@ -841,10 +853,46 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
   const message = words ? composeHinted(words, { before: blocks, after: [] }) : '';
   // An old ACP record's unchosen 'default' is no mode to carry (acp-recorded-mode.ts).
   const mode = state.to.permission_mode ?? (recordedSessionMode(old).chosen ? old.mode : undefined);
+  const { model, effort } = kept;
   return {
-    message, context: words ? undefined : blocks.join('\n'), cwd, carried, transcriptPath, compacted: ctx.compacted, source: ctx.source, mode, left, moved, clearable, leftCopies,
+    message, context: words ? undefined : blocks.join('\n'), cwd, carried, transcriptPath, compacted: ctx.compacted, source: ctx.source, mode, model, effort, left, moved, clearable, leftCopies,
     ...(resume && resumeBlock ? { resume: { ...resume, message: words ? composeHinted(words, { before: [resumeBlock], after: [] }) : '', context: words ? undefined : resumeBlock } } : {}),
   };
+}
+
+/**
+ * The model and effort the new session starts with: the switch's own, else, on the same engine (a
+ * move), the ones the old session runs at the moment it hands over, so a pick made in its picker
+ * while the move waited goes with the work (2026-11-15: a move started its new session on the
+ * default model, dropping the Opus the user had just picked). Another engine has models of its own.
+ * A model id the target host does not list goes as its family's alias ("opus"), which every host's
+ * CLI resolves to its own newest of that family; one with no family stays behind, and so does its
+ * effort (an effort fits a model, not a host).
+ */
+export async function keptSettings(
+  old: Pick<SessionRecord, 'engine' | 'cliModel' | 'effort'>, state: Pick<EngineSwitchState, 'to'>, engine: SessionEngine, host: string,
+): Promise<{ model?: string; effort?: SessionEffort }> {
+  const named = { ...(state.to.model ? { model: state.to.model } : {}), ...(state.to.effort ? { effort: state.to.effort } : {}) };
+  if (state.to.model || resolveEngine(old.engine) !== resolveEngine(engine) || isAcpEngine(engine)) return named;
+  const own = old.cliModel && old.cliModel !== 'default' ? old.cliModel : undefined;
+  const model = own ? await modelOnHost(own, host) : undefined;
+  // Its effort goes with the model it was picked for: the same one, or the host's default for both.
+  const effort = state.to.effort ?? (old.effort && VALID_SESSION_EFFORT_IDS.has(old.effort) && (model === own) ? old.effort : undefined);
+  return { ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
+}
+
+/** `model` as the CLI on `host` takes it: as it is when that host lists it (or it is an alias), else its family's alias. */
+async function modelOnHost(model: string, host: string): Promise<string | undefined> {
+  if (!resolveModelSwitchValue(model)) return undefined;
+  if (SESSION_MODELS.some((m) => m.cliModel === model)) return model;
+  const { getHostModelCatalog } = await import('../host-model-catalog.js');
+  const catalog = await getHostModelCatalog(host === LOCAL_HOST ? null : host).catch(() => null);
+  if (catalog && matchSessionModelCatalogEntry(catalog.models, model)) return model;
+  const lower = model.toLowerCase();
+  const family = SESSION_MODEL_FAMILIES.find((f) => lower.includes(f));
+  const is1m = /\[1m\]$/.test(lower);
+  return family ? SESSION_MODELS.find((m) => m.family === family && m.is1m === is1m)?.cliModel
+    ?? SESSION_MODELS.find((m) => m.family === family)?.cliModel : undefined;
 }
 
 /**

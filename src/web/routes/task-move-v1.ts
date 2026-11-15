@@ -2,7 +2,7 @@
  * Move a task to another host in one step (core/sessions/engine-switch.ts, `move`), and
  * read every host's load (core/hosts/placement.ts).
  *
- *   POST /tasks/:id/move   { host, text?, engine?, model?, team?, wait_ms?, user_request? }
+ *   POST /tasks/:id/move   { host, text?, engine?, model?, team?, wait_ms?, user_request?, reason? }
  *                          → 200 done (same task id, its new session, what moved), 202 pending
  *                          (its turn ends first) or moving (still copying after wait_ms).
  *                          wait_ms 0: 202 switching once the move is checked and under way.
@@ -78,10 +78,11 @@ taskMoveV1Router.post('/tasks/:id/move', async (req: Request, res: Response, nex
     const { requestEngineSwitch } = await import('../../core/sessions/engine-switch.js')
     const caller = callerSid(req)
     const userWords = typeof body.user_request === 'string' ? body.user_request : undefined
+    const reason = typeof body.reason === 'string' && body.reason.trim() ? body.reason : undefined
     const waitFor = Math.min(Math.max(Number(body.wait_ms ?? 25_000) || 0, 0), 180_000)
     // wait_ms 0 answers once the move is checked and under way: a refusal still answers as one.
     const ask = (id: string) => requestEngineSwitch({
-      taskId: id, engine, host, message: text, ...(userWords ? { userWords } : {}), ...(waitFor === 0 ? { detach: true } : {}),
+      taskId: id, engine, host, message: text, ...(userWords ? { userWords } : {}), ...(reason ? { reason } : {}), ...(waitFor === 0 ? { detach: true } : {}),
       ...(typeof body.model === 'string' && body.model ? { model: body.model } : {}),
       callerSid: caller, source,
     })
@@ -98,7 +99,7 @@ taskMoveV1Router.post('/tasks/:id/move', async (req: Request, res: Response, nex
         try {
           const r = await requestEngineSwitch({
             taskId: t.id, engine: resolveEngine((await taskConversation(t.id))?.engine), host, message: text,
-            ...(userWords ? { userWords } : {}), callerSid: caller, source,
+            ...(userWords ? { userWords } : {}), ...(reason ? { reason } : {}), callerSid: caller, source,
           })
           results.push({ taskId: t.id, state: r.state })
         } catch (err) {

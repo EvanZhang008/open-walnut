@@ -1660,6 +1660,33 @@ await fs.writeFile(
         note: '',
         subtasks: [],
       })),
+      // pending-move-settings.spec.ts: a task whose session is in a turn while a move the
+      // Walnut VP asked for waits; one per browser (the spec changes its saved model and mode).
+      ...['chromium', 'webkit'].map((browser) => ({
+        id: `pw-task-pending-move-${browser}`,
+        title: `Pending move test task ${browser}`,
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'immediate',
+        project: 'Walnut',
+        source: 'local',
+        session_id: `pw-pending-move-session-${browser}`,
+        session_status: { process_status: 'running', mode: 'bypass' },
+        session_ids: [`pw-pending-move-session-${browser}`],
+        active_session_ids: [`pw-pending-move-session-${browser}`],
+        engine_switch: {
+          id: `es-pw-pending-move-${browser}`, state: 'pending', at: new Date().toISOString(),
+          from_session_id: `pw-pending-move-session-${browser}`, to: { engine: 'claude', host: 'clouddev' },
+          move: true, from_host: '__local__', by: 'task:pw-task-walnut-vp', by_name: 'Walnut VP',
+          reason: 'to run browser tests', display_text: 'Your task moved to this host. Carry on.',
+        },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      })),
       {
         // Used by model-switch.spec.ts — task with a RUNNING session
         id: 'pw-task-model-switch',
@@ -4555,6 +4582,20 @@ await fs.writeFile(
         messageCount: 1,
         cwd: process.cwd(),
         title: `Bypass: model picker test session ${browser}`,
+      })),
+      ...['chromium', 'webkit'].map((browser) => ({
+        claudeSessionId: `pw-pending-move-session-${browser}`,
+        taskId: `pw-task-pending-move-${browser}`,
+        project: 'Walnut',
+        process_status: 'running',
+        mode: 'bypass',
+        cliModel: 'sonnet',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 60_000).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        messageCount: 1,
+        cwd: process.cwd(),
+        title: `Pending move test session ${browser}`,
       })),
       {
         // Used by model-switch.spec.ts — RUNNING session for model picker tests

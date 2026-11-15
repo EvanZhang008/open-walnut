@@ -114,6 +114,7 @@ engineSwitchV1Router.post('/tasks/:id/switch-engine', async (req: Request, res: 
       ...(typeof body.model === 'string' && body.model ? { model: body.model } : {}),
       ...(typeof body.effort === 'string' ? { effort: body.effort as SessionEffort } : {}),
       ...(typeof body.permission_mode === 'string' ? { permissionMode: body.permission_mode as SessionMode } : {}),
+      ...(typeof body.reason === 'string' && body.reason.trim() ? { reason: body.reason } : {}),
       callerSid: callerSid(req), source: startRouteSource('api-v1', req.headers),
     })
     let timer: ReturnType<typeof setTimeout> | undefined

@@ -987,6 +987,25 @@ describe('task_move', () => {
     expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'pending', move: true, to: { host: 'cloud' } });
     expect(W.starts).toHaveLength(0);
   }, 60_000);
+
+  it('a model, effort and mode picked while the move waits go with it, and the move still runs (2026-11-15)', async () => {
+    const { taskId, sid } = await taskInSharedCheckout();
+    await updateSessionRecord(sid, { process_status: 'running', cliModel: 'sonnet' } as never);
+    const res = await requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', reason: 'to run browser tests', source: 'test' });
+    expect(res.state).toBe('pending');
+    const waiting = (await getTask(taskId)).engine_switch!;
+    // The picker's writes, as applySessionModelChange / applySessionEffortChange / patchSession make them.
+    await updateSessionRecord(sid, { cliModel: 'opus', effort: 'xhigh', mode: 'plan', modeChosen: true } as never);
+    expect((await getTask(taskId)).engine_switch).toEqual(waiting);
+    // The turn ends: the same move runs, with the new picks.
+    await updateSessionRecord(sid, { process_status: 'idle' } as never);
+    const { runEngineSwitch } = await import('../../../src/core/sessions/engine-switch.js');
+    const done = await runEngineSwitch(taskId, waiting);
+    expect(done).toMatchObject({ state: 'done', host: 'cloud' });
+    expect(W.starts).toHaveLength(1);
+    expect(W.starts[0]).toMatchObject({ host: 'cloud', engine: 'claude', model: 'opus', effort: 'xhigh', mode: 'plan' });
+    expect((await getTask(taskId)).engine_switch).toMatchObject({ id: waiting.id, state: 'done', reason: 'to run browser tests' });
+  }, 120_000);
 });
 
 // 2026-11-07: a task whose session ran on a laptop that went offline could not move (502: the

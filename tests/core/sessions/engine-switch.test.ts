@@ -798,6 +798,35 @@ describe('engine switch inside a task', () => {
     }
   }, 20_000);
 
+  it('a person\'s pick over an agent\'s waiting switch is the person\'s: no agent name, no agent message (2026-11-15)', async () => {
+    const { task: lead } = await addTask({ title: 'Walnut VP', project: 'Marina', cwd: '/work/repo' } as never);
+    await createSessionRecord('vp-sid', lead.id, 'Marina', '/work/repo');
+    await linkSession(lead.id, 'vp-sid');
+    const { taskId } = await taskOn('claude', { status: 'running' });
+    await requestEngineSwitch({ taskId, engine: 'codex', message: 'Carry on as the VP said.', reason: 'to try Codex', source: 'api-agent', callerSid: 'vp-sid' });
+    expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'pending', by: `task:${lead.id}`, by_name: 'Walnut VP', reason: 'to try Codex' });
+    endTurnOnInterrupt('test-interrupt-person-over-agent');
+    try {
+      const res = await requestEngineSwitch({ taskId, engine: 'pi', source: 'ui' });
+      expect(res).toMatchObject({ state: 'done', engine: 'pi' });
+      const sw = (await getTask(taskId)).engine_switch!;
+      expect(sw.by).toBe('human');
+      expect(sw.by_name).toBeUndefined();
+      expect(String(edges.starts.at(-1)?.message ?? '')).not.toContain('Carry on as the VP said.');
+    } finally {
+      bus.unsubscribe('test-interrupt-person-over-agent');
+    }
+  }, 20_000);
+
+  it('a task moving itself is not named as another task', async () => {
+    const { taskId, sid } = await taskOn('claude', { status: 'running' });
+    await linkSession(taskId, sid);
+    await requestEngineSwitch({ taskId, engine: 'codex', message: 'Carry on.', source: 'api-agent', callerSid: sid });
+    const sw = (await getTask(taskId)).engine_switch!;
+    expect(sw).toMatchObject({ state: 'pending', by: `task:${taskId}` });
+    expect(sw.by_name).toBeUndefined();
+  });
+
   it('an agent\'s switch message reaches the new session in that agent\'s peer note', async () => {
     const { task: lead } = await addTask({ title: 'Parser lead', project: 'Marina', cwd: '/work/repo' } as never);
     await createSessionRecord('lead-sid-1', lead.id, 'Marina', '/work/repo');

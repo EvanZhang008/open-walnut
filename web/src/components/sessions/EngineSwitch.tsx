@@ -184,6 +184,28 @@ function engineName(catalog: readonly EngineCatalogEntry[], engine: string | und
   return engineEntry(catalog as never, engine).displayName;
 }
 
+/**
+ * Who asked for a switch, by name: an agent's switch or move says it is the agent's, so it never
+ * reads as the result of the person's own click (2026-11-15: a move the Walnut VP queued showed
+ * right after the user changed the model, and read as the model change turning into a transfer).
+ * Null: the person asked themself.
+ */
+export function switchAsker(server: Pick<ServerSwitch, 'by' | 'by_name'> | undefined, taskId?: string): string | null {
+  const by = server?.by;
+  if (!by || by === 'human') return null;
+  if (taskId && by === `task:${taskId}`) return 'This task\'s agent';
+  if (server?.by_name?.trim()) return server.by_name.trim();
+  if (by.startsWith('automation:')) return 'Walnut';
+  return 'Another task';
+}
+
+/** The asker's reason after the place: "to run browser tests" reads on, anything else after a colon. */
+function reasonTail(reason: string | undefined): string {
+  const r = reason?.trim().replace(/[.\s]+$/, '');
+  if (!r) return '';
+  return /^(to|for|because|so|since|while|as)\b/i.test(r) ? ` ${r}` : `: ${r}`;
+}
+
 /** The composer's line about a switch: picked, waiting for the turn, starting, or failed. */
 export function EngineSwitchLine({ pick, server, refused, sending, catalog, taskId, onUndo }: {
   pick: EngineSwitchPick | null;
@@ -212,14 +234,25 @@ export function EngineSwitchLine({ pick, server, refused, sending, catalog, task
   const held = server?.display_text ?? server?.message;
   // A move to another host (task_move) is the same switch with another host: it reads as a move.
   const moveTo = server?.move ? (!server.to.host || server.to.host === '__local__' ? 'this Mac' : server.to.host) : null;
+  const asker = switchAsker(server, taskId);
 
   if (server?.state === 'pending') {
+    const why = reasonTail(server.reason);
     return (
-      <div className="engine-switch-line" role="status" data-testid="engine-switch-line" data-state="pending">        <span className="engine-switch-text">
-          {moveTo ? <>Moves to <strong>{moveTo}</strong> when this turn ends</> : <>Switches to <strong>{toName}</strong> when this turn ends</>}{held && !moveTo ? <>, then sends: <em className="engine-switch-held">{held}</em></> : null}
+      <div className="engine-switch-line" role="status" data-testid="engine-switch-line" data-state="pending" data-asker={asker ?? 'you'}>
+        <span className="engine-switch-text">
+          {moveTo
+            ? asker
+              ? <><strong>{asker}</strong> is moving this task to <strong>{moveTo}</strong>{why}. It moves when this turn ends.</>
+              : <>You asked to move this task to <strong>{moveTo}</strong>{why}. It moves when this turn ends.</>
+            : asker
+              ? <><strong>{asker}</strong> is switching this task to <strong>{toName}</strong>{why}. It switches when this turn ends</>
+              : <>Switches to <strong>{toName}</strong> when this turn ends</>}
+          {held && !moveTo ? <>, then sends: <em className="engine-switch-held">{held}</em></> : moveTo ? null : '.'}
         </span>
-        <button type="button" className="engine-switch-btn" disabled={busy} onClick={() => void cancel(true)}>Send here instead</button>
-        <button type="button" className="engine-switch-btn" disabled={busy} onClick={() => void cancel(false)}>Cancel</button>
+        {/* A move's held text is Walnut's handoff for the new host, never a message for here. */}
+        {!moveTo && <button type="button" className="engine-switch-btn" disabled={busy} onClick={() => void cancel(true)}>Send here instead</button>}
+        <button type="button" className="engine-switch-btn" disabled={busy} onClick={() => void cancel(false)}>{moveTo ? 'Cancel move' : 'Cancel'}</button>
       </div>
     );
   }
@@ -231,7 +264,7 @@ export function EngineSwitchLine({ pick, server, refused, sending, catalog, task
           // A restart cut it short: it runs again by itself once Walnut is back (engine-switch-restart.ts).
           ? <>{server.error}</>
           : moveTo
-            ? <>Moving this task&apos;s work and conversation to <strong>{moveTo}</strong>…</>
+            ? <>{asker ? <><strong>{asker}</strong> is moving</> : 'Moving'} this task&apos;s work and conversation to <strong>{moveTo}</strong>…</>
             : <>Starting {toName} with this task&apos;s conversation…</>}</span>
       </div>
     );

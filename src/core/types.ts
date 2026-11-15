@@ -3490,6 +3490,10 @@ export interface EngineSwitchState {
   error?: string;
   /** Who asked: 'human', 'task:<id>', 'caller:<id>' or 'automation:<source>'. */
   by?: string;
+  /** The asking task's title when an agent asked ("Walnut VP"), for the session's line. */
+  by_name?: string;
+  /** Why it was asked for, in a few words ("to run browser tests"), when the asker said. */
+  reason?: string;
   /** It ran over background work the old session's finished turn left running (engine-switch-watch.ts). */
   background_cut?: boolean;
   /** Queue rows taken off the old session while switching (a restart mid-switch puts them back). */
