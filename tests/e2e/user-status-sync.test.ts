@@ -55,32 +55,6 @@ afterAll(async () => {
 })
 
 describe('user status sync', () => {
-  it('a linked owner status change updates the lead counts without another thread write or a sweep', async () => {
-    const { ensureProjectLead } = await import('../../src/core/org/org-store.js');
-    const { openNodeThread, patchThread } = await import('../../src/core/org/threads-store.js');
-    const lead = await ensureProjectLead('Cedar');
-    const owner = (await addTask({ title: 'Cedar review owner', project: 'Cedar', parent_task_id: lead.id })).task;
-    const ask = 'Approve the Cedar design review for the rollout?';
-    const th = await openNodeThread(lead.id, { title: 'Cedar review', text: 'The design needs review.', from: 'task', state: 'needs', tasks: [owner.id] }, 'human');
-    await patchThread(lead.id, th.id, { ask }, 'human');
-    await statusOf(lead.id, (t) => t.user_status?.threads?.needs === 1);
-    await updateTaskRaw(owner.id, { phase: 'NEED_ACTION', status_report: { state: 'needs', ask,
-      ask_own: { kind: 'user_own', why: 'The person reviews the design.' }, at: new Date().toISOString() } }, { emitEvent: true, source: 'test' });
-    await statusOf(owner.id, (t) => t.user_status?.state === 'needs');
-    await statusOf(lead.id, (t) => !t.user_status?.threads?.needs);
-    await createSessionRecord('cedar-lead-session', lead.id, 'Cedar');
-    await updateSessionRecord('cedar-lead-session', { process_status: 'idle' });
-    await updateTaskRaw(lead.id, { phase: 'NEED_ACTION', session_id: 'cedar-lead-session', status_report: { state: 'needs', ask, ask_distinct: true,
-      ask_own: { kind: 'user_own', why: 'The same review is already owned.' }, at: new Date().toISOString() } }, { emitEvent: true, source: 'test' });
-    const pointer = await statusOf(lead.id, (t) => t.user_status?.sameAsk?.id === owner.id);
-    expect(pointer.user_status?.chatAsk).toBeUndefined();
-    expect(pointer.user_status?.state).toBe('waiting');
-    await updateTaskRaw(owner.id, { status_report: { state: 'needs', ask: 'Choose a different Cedar release region?', ask_id: 'new',
-      ask_own: { kind: 'user_own', why: 'A separate region decision.' }, at: new Date().toISOString() } }, { emitEvent: true, source: 'test' });
-    await statusOf(owner.id, (t) => t.user_status?.ask?.includes('region') === true);
-    await statusOf(lead.id, (t) => t.user_status?.threads?.needs === 1);
-  }, 45_000);
-
   it('derives each state from the facts and keeps it current as they move', async () => {
     const lead = (await addTask({ title: 'Team lead', project: 'Acme' })).task
     const make = async (title: string) => {

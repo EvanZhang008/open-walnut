@@ -326,8 +326,7 @@ describe('org channels', () => {
     // Its work is the VP's: all three projects' teams, counts, asks and news.
     expect(marina.counts).toMatchObject({ open: 4, running: 1 })
     expect(marina.alerts.map((a) => a.taskId)).toEqual(['i2'])
-    expect(marina.latest).toBe('Asked in i2 title')
-    expect(marina.latest).not.toContain('Approve the cleanup')
+    expect(marina.latest).toBe('Decide: Approve the cleanup')
     expect(marina.node?.teams.map((n) => n.id).sort()).toEqual(['e1', 'h1', 'i1', 'i2'])
     // The chart still has one row per project, each with its own work.
     expect(channels.projects.map((r) => r.name).sort()).toEqual(['Events', 'Insights', 'Marina', 'Other'])

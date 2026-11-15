@@ -55,11 +55,6 @@ export interface OrgThread {
   pinned?: { at: string; by: string };
   /** Walnut woke the node about this thread's overdue stretch (core/org/thread-recheck.ts). */
   recheck?: { since: string; at: string; why?: string; pending?: boolean };
-  /** The node named the task that already asks him this decision (core/org/threads-model.ts ThreadAskOwner). */
-  askOwner?: { task: string; decision?: string; ask?: string; at: string; by: string };
-  /** Projected by the server on every read, never stored: a task asks him this decision now, so the
-   *  thread points there instead of asking twice (core/org/thread-task-ask.ts). */
-  askedIn?: { task: string; title: string; ask: string; via: 'owner' | 'words'; decision?: string; answered?: true };
 }
 
 const base = (taskId: string) => `/api/v1/tasks/${encodeURIComponent(taskId)}/threads`;

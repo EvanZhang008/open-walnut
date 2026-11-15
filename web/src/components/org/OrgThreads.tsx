@@ -38,9 +38,7 @@
  *   Snoozed    the ones he put aside (Snooze on a card, OrgThreadSnooze), each saying when it comes
  *              back; collapsed by default. A thread leaves the list and the tab's dot while snoozed
  *              and comes back on its date, or earlier on news (core/org/thread-view.ts snoozedNow)
- *   In progress  open but nothing for him (new, working, pending): one quiet line at the bottom opens them;
- *              a thread whose decision a task already asks him reads pending with that task (askedIn,
- *              core/org/thread-task-ask.ts) and waits here too, its card naming the task: one decision, asked once
+ *   In progress  open but nothing for him (new, working, pending): one quiet line at the bottom opens them
  *   Closed     the ones closed this week (kept a week, then deleted) open from one quiet line at
  *              the bottom, Reopen on each
  */
@@ -354,18 +352,6 @@ function Exchange({ x, t, name, state, now, shared }: { x: ThreadExchange<OrgThr
   );
 }
 
-/** The task that already asks him this thread's decision: he answers it there (one click opens it). */
-function AskedIn({ a }: { a: NonNullable<OrgThread['askedIn']> }) {
-  const openTask = useOpenTask();
-  return (
-    <p className="org-thread-follows org-thread-asked-in" data-testid="org-thread-asked-in" data-task-id={a.task} data-answered={a.answered ? 'true' : undefined} title={a.ask}>
-      {a.answered ? 'Answered in' : 'Asked in'}{' '}
-      <button type="button" className="org-thread-link" data-testid="org-thread-asked-in-task" onClick={() => openTask(a.task)}>{a.title}</button>
-      {a.answered ? ': nothing more to decide here.' : ': answer it there. This thread comes back if that task stops asking it.'}
-    </p>
-  );
-}
-
 function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed }: {
   t: OrgThread; all: readonly OrgThread[]; shared: ReadonlySet<string>; tasks: readonly Task[];
   state: OrgThreadsState; onFollowUp: Props['onFollowUp']; name: string; now: number;
@@ -379,8 +365,6 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   const [unfolded, setUnfolded] = useState(false);
   const closed = !!t.closed;
   const pinned = pinnedNow(t);
-  // Its decision is asked in a task (core/org/thread-task-ask.ts): the card says where, not Needs you.
-  const asked = !closed && !!t.askedIn;
   const card = useMemo(() => cardView(t, shared), [t, shared]);
   // It sat too long with nothing from the node: the card says so (core/org/thread-view.ts threadOverdue).
   const overdue = closed || snoozed ? null : overdueLine(t, name, now, (iso) => timeAgo(iso, { now }), threadDeadline(t, tasks, now));
@@ -390,9 +374,9 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   const chips = useMemo(() => {
     if (!t.tasks?.length) return [];
     const named = new Set([...renderMarkdownWithRefs(t.reply ?? '').matchAll(/data-task-id="([^"]+)"/g)].map((m) => m[1]));
-    return t.tasks.filter((id) => !named.has(id) && id !== t.askedIn?.task);
+    return t.tasks.filter((id) => !named.has(id));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `labels` is the renderer's own input
-  }, [t.tasks, t.reply, t.askedIn?.task, labels]);
+  }, [t.tasks, t.reply, labels]);
   const exchanges = useMemo(() => exchangesOf(t), [t]);
   const follows = t.follows ? all.find((x) => x.id === t.follows) : undefined;
   const last = t.messages[t.messages.length - 1] ?? t.opener;
@@ -400,11 +384,11 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   const quote = (x: ThreadExchange<OrgThreadMessage>) => `\u201c${oneLine(x.messages.map((m) => m.text || 'A picture').join(' / '), QUOTE_WORDS)}\u201d`;
   const from = (o: { from: string; ref?: string }) => `${FROM_LABEL[o.from] ?? FROM_LABEL.node}${o.ref ? `: ${o.ref}` : ''}`;
   return (
-    <li className={`org-thread${closed ? ' is-closed' : ''}${open ? ' is-open' : ''}${snoozed ? ' is-snoozed' : ''}${pinned ? ' is-pinned' : ''}`} data-testid="org-thread" data-thread-id={t.id} data-state={closed ? 'closed' : t.state} data-snoozed={snoozed ? 'true' : undefined} data-pinned={pinned ? 'true' : undefined} data-asked-in={asked ? t.askedIn!.task : undefined}>
+    <li className={`org-thread${closed ? ' is-closed' : ''}${open ? ' is-open' : ''}${snoozed ? ' is-snoozed' : ''}${pinned ? ' is-pinned' : ''}`} data-testid="org-thread" data-thread-id={t.id} data-state={closed ? 'closed' : t.state} data-snoozed={snoozed ? 'true' : undefined} data-pinned={pinned ? 'true' : undefined}>
       <button type="button" className="org-thread-head" aria-expanded={open} aria-controls={`${t.id}-conversation`} data-testid="org-thread-head" onClick={() => setOpen(!open)}>
         <span className="org-thread-state" data-testid="org-thread-state">
-          <i style={{ background: closed || asked ? 'var(--fg-muted, #86868B)' : STATE_DOT[t.state] }} />
-          {closed ? (t.movedTo ? 'Moved' : t.closed!.how === 'acked' ? 'Done' : 'Dropped') : asked ? (t.askedIn!.answered ? 'Answered in a task' : 'Asked in a task') : STATE_LABEL[t.state]}
+          <i style={{ background: closed ? 'var(--fg-muted, #86868B)' : STATE_DOT[t.state] }} />
+          {closed ? (t.movedTo ? 'Moved' : t.closed!.how === 'acked' ? 'Done' : 'Dropped') : STATE_LABEL[t.state]}
         </span>
         <span className="org-thread-meta">
           {pinned && (<>
@@ -424,8 +408,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
       {!closed && t.movedFrom && <p className="org-thread-follows" data-testid="org-thread-moved-from" title={t.movedFrom.why}>Moved here from {t.movedFrom.title}{t.movedFrom.why ? `: ${t.movedFrom.why}` : ''}</p>}
       {closed && t.movedTo && <p className="org-thread-follows" data-testid="org-thread-moved-to" title={t.movedTo.why}>Moved to {t.movedTo.title}{t.movedTo.why ? `: ${t.movedTo.why}` : ''}</p>}
       {overdue && <p className="org-thread-overdue" data-testid="org-thread-overdue">{overdue}</p>}
-      {asked && <AskedIn a={t.askedIn!} />}
-      {!asked && (card.summary.by === 'node'
+      {card.summary.by === 'node'
         ? (<>
           {/* The summary opens on the machine of the session that last wrote it, never the node's current one. */}
           <AgentText text={card.summary.text} compact className="org-thread-summary" testId="org-thread-reply" {...threadSummarySource(t)} />
@@ -440,7 +423,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
               : <AgentText text={card.summary.text} compact {...threadStandInSource(t, card.summary)} />}
             {card.summary.from !== 'none' && <span className="org-thread-stand-in-note" data-testid="org-thread-stand-in">{STAND_IN_NOTE[card.summary.from ?? 'answer'](name)}</span>}
           </div>
-        ))}
+        )}
       {chips.length > 0 && <TaskChips ids={chips} tasks={tasks} />}
       {/* The card is its title and summary: the new answers fold behind one line until a click
           (2026-11-08, the user: "the history should all be collapsed unless I click to expand"). */}

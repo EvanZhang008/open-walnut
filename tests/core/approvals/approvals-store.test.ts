@@ -18,7 +18,6 @@ import {
 } from '../../../src/core/approvals/store.js'
 import { answerMessage, approvalDigest, canonicalText, keyIdOf, verifySignature } from '../../../src/core/approvals/digest.js'
 import { activeKey, applyKeyApproval, enrollKey, listKeys, removeKey } from '../../../src/core/approvals/keys.js'
-import { _setFenceDepsForTest } from '../../../src/core/approvals/biometric-fence.js'
 
 function softKey() {
   const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
@@ -32,8 +31,6 @@ const lookup = (id: string) => activeKey(id)
 
 beforeEach(async () => {
   _resetApprovalTimersForTesting()
-  // The person is at hand (biometric-fence.ts; its own tests vary this).
-  _setFenceDepsForTest({ activity: async () => ({ lastSeenAt: Date.now(), streaming: false }) })
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
 })
 
@@ -427,10 +424,6 @@ describe('strict single-use approvals', () => {
     const base = { what: 'One step', mode: 'biometric' as const, singleUse: true, signingKeyId: key.id, requester: owner }
     const context = 'Line one\n"quoted" \\ path ' + String.fromCodePoint(0x4e2d, 0x6587)
     const a = await createApproval({ ...base, detail: context })
-    // One pending Face ID ask per account (biometric-fence.ts): the first is withdrawn before the second.
-    await cancelApproval(a.approval.id, a.waitToken, 'test')
-    // The stubbed person acts after the withdrawal (Date.now() at the next ask is later).
-    await new Promise((r) => setTimeout(r, 5))
     const b = await createApproval({ ...base, detail: context })
     expect(Date.parse(a.approval.expiresAt) - Date.parse(a.approval.createdAt)).toBe(300_000)
     const envelope = JSON.parse(a.approval.detail!)

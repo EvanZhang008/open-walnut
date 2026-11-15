@@ -118,28 +118,6 @@ export async function userInTaskChat(
   return !awayStateOf({ taskId: taskId ?? '', sessions, heartbeats: seen, streaming, now, afterMs: withinMs }).away;
 }
 
-/**
- * The person's latest activity anywhere in Walnut, from the same signals: what he typed in any chat
- * (`chatInputAt` of `sessions`) and any attention heartbeat; `streaming` = a phone streams one of
- * `sessions` now (he is looking, though not doing anything new).
- */
-export async function userActivityAnywhere(
-  sessions: readonly Pick<SessionRecord, 'claudeSessionId' | 'chatInputAt'>[], now = Date.now(),
-): Promise<{ lastSeenAt: number | null; streaming: boolean }> {
-  let last = 0;
-  for (const at of seen.values()) if (at > last) last = at;
-  for (const s of sessions) {
-    const typed = s.chatInputAt ? Date.parse(s.chatInputAt) : NaN;
-    if (Number.isFinite(typed) && typed > last) last = typed;
-  }
-  let streaming = false;
-  try {
-    const { sseConnCount } = await import('../../web/sse-channels.js');
-    streaming = sessions.some((s) => sseConnCount(`session:${s.claudeSessionId}`) > 0);
-  } catch { /* no web server in this process */ }
-  return { lastSeenAt: last > 0 ? Math.min(last, now) : null, streaming };
-}
-
 /** Test seam. */
 export function _resetUserAwayForTest(): void {
   seen.clear();

@@ -58,17 +58,6 @@ export function buildStatusPrompt(forUserPrompt: string, title: string, uiLangua
 export async function applyStatusAnswer(
   taskId: string, sessionId: string, report: StatusReport, turnEndedMs: number, opts: { midTurn?: boolean } = {},
 ): Promise<boolean> {
-  if (report.same_as) {
-    const { withFileLock } = await import('../../utils/file-lock.js');
-    const { WALNUT_HOME } = await import('../../constants.js');
-    return withFileLock(`${WALNUT_HOME}/cache/decision-owner.json`, () => saveStatusAnswer(taskId, sessionId, report, turnEndedMs, opts));
-  }
-  return saveStatusAnswer(taskId, sessionId, report, turnEndedMs, opts);
-}
-
-async function saveStatusAnswer(
-  taskId: string, sessionId: string, report: StatusReport, turnEndedMs: number, opts: { midTurn?: boolean },
-): Promise<boolean> {
   const { getTask, updateTaskRaw } = await import('../task-manager.js');
   // A finished task reads Done whatever its session said, and a write to a COMPLETE row would
   // announce it as completed again (updateTaskRaw names the event by phase).
@@ -97,17 +86,6 @@ async function saveStatusAnswer(
   const admitted = await admitTurnEndAsk(report, prev, { taskId, sessionId, compactedAt: rec?.lastCompactAt, midTurn: opts.midTurn });
   if (!admitted) return false;
   report = admitted;
-  if (report.same_as) {
-    const { bindDecisionOwner } = await import('../decision-owner.js');
-    const { listTasks } = await import('../task-manager.js');
-    const bound = bindDecisionOwner(current, report, await listTasks());
-    if (bound) report = bound;
-    else {
-      // An invalid pointer cannot hide an ask. Keep the task's words without the reference.
-      const { same_as: _same, decision_owner: _owner, ...local } = report;
-      report = local;
-    }
-  }
   await updateTaskRaw(taskId, { status_report: report }, {
     emitEvent: true, source: 'status-report', shouldUpdate: (cur) => cur.phase !== 'COMPLETE' && cur.status !== 'done',
   });

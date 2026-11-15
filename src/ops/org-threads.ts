@@ -28,7 +28,7 @@ async function ownTask(args: { task?: unknown }, call: OpCall): Promise<string> 
 
 const TASK_ARG = z.string().min(1).optional().describe('Task id or unique prefix of Main or a lead; default: your own task')
 
-interface ThreadView { id: string; title: string; state: string; closed?: { how: string } | null; messages?: unknown[]; snoozed?: { until: string }; pinned?: { by: string }; askedIn?: { task: string; title: string } }
+interface ThreadView { id: string; title: string; state: string; closed?: { how: string } | null; messages?: unknown[]; snoozed?: { until: string }; pinned?: { by: string } }
 
 /** Every thread op that hands a thread to the user (same-ask.ts). */
 const SAME_ASK_REASON_PARAM = 'With needs: only after a 409 same_ask (a task in your team already asks him this; leave the ask to it and keep the thread working or pending), '
@@ -69,7 +69,6 @@ defineOp({
     user_kind: z.enum(USER_KINDS).optional().describe(USER_KIND_PARAM),
     user_kind_why: z.string().max(300).optional().describe(USER_KIND_WHY_PARAM),
     same_ask_reason: z.string().max(300).optional().describe(SAME_ASK_REASON_PARAM),
-    ask_owner: z.string().max(128).optional().describe('The id of the task in your team whose Needs you already asks him this thread\'s decision: the thread then points at that ask (read as pending with askedIn, its conversation kept) and waits on him again by itself once that task stops asking it or asks another decision. Refused (409) when that task asks him nothing now. "" takes it off'),
     reply: z.string().max(2000).optional().describe('The summary the card shows: the latest first (the open question or what he must decide), then one or two sentences of background; Markdown ("" clears it)'),
     tasks: z.array(z.string().min(1)).max(12).optional().describe('Every task it went to (replaces the list)'),
     add_tasks: z.array(z.string().min(1)).max(12).optional().describe('Tasks to add to it'),
@@ -89,7 +88,7 @@ defineOp({
     return withOutcome(
       body,
       body.merged ? `Thread ${body.merged} is now under ${body.thread.id} "${body.thread.title}" (${body.thread.messages?.length ?? 0} messages).`
-        : `Thread ${body.thread.id} "${body.thread.title}": ${body.thread.closed ? `closed (${body.thread.closed.how})` : body.thread.state}${body.thread.snoozed && !body.thread.closed && Date.parse(body.thread.snoozed.until) > Date.now() ? `, snoozed until ${body.thread.snoozed.until}` : ''}${body.thread.pinned && !body.thread.closed ? `, pinned${body.thread.pinned.by === 'human' ? ' by the user' : ''}` : ''}${body.thread.askedIn ? `, its decision asked in ${body.thread.askedIn.title} (${body.thread.askedIn.task})` : ''}.`,
+        : `Thread ${body.thread.id} "${body.thread.title}": ${body.thread.closed ? `closed (${body.thread.closed.how})` : body.thread.state}${body.thread.snoozed && !body.thread.closed && Date.parse(body.thread.snoozed.until) > Date.now() ? `, snoozed until ${body.thread.snoozed.until}` : ''}${body.thread.pinned && !body.thread.closed ? `, pinned${body.thread.pinned.by === 'human' ? ' by the user' : ''}` : ''}.`,
       'No further action is required.',
     )
   },

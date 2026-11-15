@@ -83,16 +83,15 @@ describe('foldSameAsk', () => {
     expect(foldSameAsk('lead', needs('Create the three alpha test accounts?', { source: 'choice' }), [child], {})).toMatchObject({ state: 'waiting' })
   })
 
-  it('takes explicit owner references but never lets a different label duplicate an exact ask', () => {
+  it('takes the sessions\' own word over the text test, and a "different" from either side wins', () => {
     const differentWords = needs('Go ahead with the stage plan?')
     expect(foldSameAsk('lead', differentWords, [child], { report: { ...report, same_as: 'child' } })).toMatchObject({ state: 'waiting', sameAsk: { id: 'child' } })
     expect(foldSameAsk('lead', differentWords, [child], { report, declared: (id) => (id === 'child' ? { same_as: 'lead' } : null) }))
       .toMatchObject({ state: 'waiting', sameAsk: { id: 'child' } })
     const same = needs('Should we create three alpha test accounts?')
-    expect(foldSameAsk('lead', same, [child], { report: { ...report, ask_distinct: true } })).toMatchObject({ state: 'waiting' })
-    expect(foldSameAsk('lead', same, [child], { report: { ...report, ask_distinct: true }, declared: () => ({ same_as: 'lead' }) })).toMatchObject({ state: 'waiting' })
-    expect(foldSameAsk('lead', same, [child], { report, declared: () => ({ ask_distinct: true }) })).toMatchObject({ state: 'waiting' })
-    expect(foldSameAsk('lead', differentWords, [child], { report: { ...report, ask_distinct: true } })).toBe(differentWords)
+    expect(foldSameAsk('lead', same, [child], { report: { ...report, ask_distinct: true } })).toBe(same)
+    expect(foldSameAsk('lead', same, [child], { report: { ...report, ask_distinct: true }, declared: () => ({ same_as: 'lead' }) })).toBe(same)
+    expect(foldSameAsk('lead', same, [child], { report, declared: () => ({ ask_distinct: true }) })).toBe(same)
   })
 
   it('keeps the fold once the subtask asks no more only when the user wrote to it after the fold', () => {
@@ -196,12 +195,12 @@ describe('foldSameAsk beside it in its team', () => {
     expect(newer).toMatchObject({ state: 'waiting', sameAsk: { id: 'old', team: true } })
   })
 
-  it('keeps one holder for an exact decision even when a teammate labels it different', () => {
+  it('takes either side\'s word: a teammate naming it folds in other words, a "different" never', () => {
     const other = needs('Do we block the deploy until the CRD is ready?')
     expect(foldSameAsk('lead', other, [], { report: { ...report, same_as: 'sib' }, relatives: [sib] })).toMatchObject({ state: 'waiting', sameAsk: { id: 'sib' } })
     expect(foldSameAsk('lead', other, [], { report, relatives: [sib], declared: (id) => (id === 'sib' ? { same_as: 'lead' } : null) })).toMatchObject({ sameAsk: { id: 'sib' } })
-    expect(foldSameAsk('lead', needs(ASK), [], { report: { ...report, ask_distinct: true }, relatives: [sib] }).state).toBe('waiting')
-    expect(foldSameAsk('lead', needs(ASK), [], { report, relatives: [sib], declared: () => ({ ask_distinct: true }) }).state).toBe('waiting')
+    expect(foldSameAsk('lead', needs(ASK), [], { report: { ...report, ask_distinct: true }, relatives: [sib] }).state).toBe('needs')
+    expect(foldSameAsk('lead', needs(ASK), [], { report, relatives: [sib], declared: () => ({ ask_distinct: true }) }).state).toBe('needs')
     expect(foldSameAsk('lead', needs('Rename the stage?'), [], { report, relatives: [sib] }).state).toBe('needs')
   })
 

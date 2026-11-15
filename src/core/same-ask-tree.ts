@@ -121,7 +121,7 @@ const answeredAsk = (t: Task): boolean => !!t.user_status?.answeredFor?.ask;
 export function relativeAsksIndex(everything: readonly Task[]): (task: Task) => RelativeAsk[] {
   const of = teammatesIndex(everything, (t) => shownAsk(t) || answeredAsk(t));
   return (task) => of(task).map((t) => shownAsk(t)
-    ? { id: t.id, title: t.title, ask: t.user_status!.ask!, createdAt: t.created_at, ...(t.user_status!.decision ? { decision: t.user_status!.decision } : {}) }
+    ? { id: t.id, title: t.title, ask: t.user_status!.ask!, createdAt: t.created_at }
     : { id: t.id, title: t.title, ask: t.user_status!.answeredFor!.ask, createdAt: t.created_at, answered: true as const });
 }
 

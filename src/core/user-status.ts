@@ -190,8 +190,6 @@ export interface StatusReport {
   /** needs: the session said its ask is a different decision from the ones its tree asks
    *  (FOR_USER_ASK_SAME: different): Walnut's word test never folds it. */
   ask_distinct?: true;
-  /** Explicit owner bound to the decision it held when referenced, not a free-form task link. */
-  decision_owner?: { taskId: string; decisionId?: string; askKey: string };
   /** needs: the decision this ask is (ask-decision.ts): kept by the task across rewordings, a new one
    *  only when the session says so (FOR_USER_ASK_ID: new). Absent on a report an older Walnut stored. */
   ask_id?: string;

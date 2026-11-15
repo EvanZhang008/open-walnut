@@ -57,12 +57,6 @@ export function useOrgThreads(taskId: string | undefined, enabled: boolean): Org
   /** A write the server refused: kept until the next write saves (a re-read does not clear it). */
   const [writeError, setWriteError] = useState<string | null>(null);
   const seq = useRef(0);
-  const ownerReadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => {
-    if (ownerReadTimer.current) clearTimeout(ownerReadTimer.current);
-    ownerReadTimer.current = null;
-    seq.current++;
-  }, [taskId, enabled]);
   /** Writes on their way, by thread: a read that lands meanwhile keeps showing them. */
   const pending = useRef(new Map<string, OrgThreadPatch>());
   const withPending = (list: OrgThread[]): OrgThread[] =>
@@ -94,17 +88,6 @@ export function useOrgThreads(taskId: string | undefined, enabled: boolean): Org
     if (!enabled || (data as { taskId?: string } | null)?.taskId !== taskId) return;
     void load('changed');
   });
-  const ownerChanged = (data: unknown) => {
-    if (!enabled) return;
-    const d = data as { task?: { id?: string }; taskId?: string } | null;
-    const id = d?.task?.id ?? d?.taskId;
-    if (id && !ownerReadTimer.current && threads?.some((t) => t.askOwner?.task === id || t.tasks?.includes(id))) {
-      ownerReadTimer.current = setTimeout(() => { ownerReadTimer.current = null; void load('owner-changed'); }, 150);
-    }
-  };
-  useEvent('task:updated', ownerChanged);
-  useEvent('task:completed', ownerChanged);
-  useEvent('task:deleted', ownerChanged);
   useEvent('_ws:reconnected', () => { if (enabled) void load('reconnect'); });
   // A snoozed thread comes back on its date: read again then, so the list, the count and the
   // Threads tab's dot follow at once (not at the page's next minute tick).

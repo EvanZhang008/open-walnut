@@ -39,12 +39,6 @@ describe('the Task view tabs', () => {
   const { main, rows } = buildChannels(buildOrgTree(tasks), tasks, noAlerts)
   const walnut = rows.find((r) => r.project === 'Walnut')!
 
-  it('a lead row points at the owner rather than repeating its decision', () => {
-    expect(walnut.latest).toBe('Asked in ask title');
-    expect(walnut.latest).not.toContain('Pick a layout');
-    expect(walnut.latestTask).toBe('ask title');
-  })
-
   it('carry the home panel\'s names, in its order', () => {
     expect(ORG_TASK_TABS.map((k) => ORG_TASK_TAB_LABELS[k])).toEqual(['Needs you', 'Working', 'Waiting / snoozed', 'Not started', 'Completed'])
     for (const k of ORG_TASK_TABS) expect(ORG_TASK_TAB_LABELS[k]).toBe(STATUS_SECTION_LABELS[k])

@@ -75,8 +75,6 @@ async function startOf(pid: number): Promise<string> {
 const daemonSessions = new Map<string, { pid: number; start?: string | null }>()
 const daemonAsked: string[] = []
 beforeAll(async () => {
-  // The person is at hand (biometric-fence.ts has its own tests).
-  ;(await import('../../src/core/approvals/biometric-fence.js'))._setFenceDepsForTest({ activity: async () => ({ lastSeenAt: Date.now(), streaming: false }) })
   const { _setInSessionForTesting } = await import('../../src/core/approvals/caller-proof.js')
   const { PS_TREE_ARGS, parseProcessTree, proofFor } = await import('../../src/providers/caller-proof-core.js')
   _setInSessionForTesting(async (sid, pid, at) => {

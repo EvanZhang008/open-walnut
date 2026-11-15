@@ -53,26 +53,6 @@ export interface ViewThread<M extends ViewMessage = ViewMessage> {
   by?: string;
   /** Walnut woke the node about this thread's overdue stretch that began at `since` (thread-recheck.ts). */
   recheck?: { since: string; at: string; pending?: boolean };
-  /** Projected on read, never stored (thread-task-ask.ts): a task asks him this thread's decision now. */
-  askedIn?: ThreadAskedIn;
-}
-
-/**
- * A thread in needs whose decision a task already asks him (thread-task-ask.ts threadAskedIn). The
- * read that finds it shows the thread as `pending` (a state every client, an older phone included,
- * already keeps out of his sight, out of the counts and off the overdue clock) with this pointer on
- * it; the stored state stays needs, so it waits on him again the moment that task stops asking.
- * `via`: the node named the task (`owner`), or the thread and a linked task ask it in the same
- * words or reworded (`words`).
- */
-export interface ThreadAskedIn {
-  task: string;
-  title: string;
-  ask: string;
-  via: 'owner' | 'words';
-  decision?: string;
-  /** That decision was answered there (by a lead, VP or Main for him) or withdrawn: nothing is asked, the thread stays quiet. */
-  answered?: true;
 }
 
 /** The nearest future deadline of this thread's open tasks, never stored on the thread. */
