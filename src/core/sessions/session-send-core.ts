@@ -465,6 +465,8 @@ export async function deliverToSession(
     liveOnly?: import('./ask-answer.js').LiveDelivery;
     /** Checked again just before the row is stored: false and nothing is queued (SendNoLongerWantedError). */
     stillWanted?: () => boolean;
+    /** Why a notice whose kind asks nothing must start a turn (sendMessageToSession, sessions/wake-policy.ts). */
+    wakeReason?: string;
   },
 ): Promise<{ delivery: 'queued' | 'deferred'; messageId?: string }> {
   const sid = target.claudeSessionId;
@@ -505,6 +507,7 @@ export async function deliverToSession(
       ...(leaderAnswersQuestion ? { closesPrompt: true } : {}),
       ...(opts.endsWait ? { endsWait: true } : {}),
       ...(opts.stillWanted ? { stillWanted: opts.stillWanted } : {}),
+      ...(opts.wakeReason ? { wakeReason: opts.wakeReason } : {}),
       ...(guard ?? {}),
     }),
     DELIVERY_TIMEOUT_MS,

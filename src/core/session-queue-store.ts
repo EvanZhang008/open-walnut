@@ -105,6 +105,12 @@ export interface QueuedMessage {
    * once the prompt is answered.
    */
   closesPrompt?: true;
+  /**
+   * Nothing but Walnut notices that ask nothing (sessions/wake-policy.ts rowRides), queued while a
+   * turn ran: it never starts a turn. Read between turns, it leaves the queue for the held notices
+   * (held-notices.ts) and rides in front of the session's next message.
+   */
+  rides?: true;
 }
 
 export interface QueueStore {

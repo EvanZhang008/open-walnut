@@ -150,6 +150,8 @@ export async function tellLead(leadId: string, nowMs = Date.now()): Promise<bool
     try {
       ({ delivery } = await deliverToSession(target, {
         busText: note.text, enqueueText: note.text, source: 'walnut-notify', taskId: lead.id, messageId,
+        // Its team note asks nothing by kind, but this one names work that waits on the lead.
+        wakeReason: 'a task of its team waits on the lead',
       }));
     } catch (err) {
       // A timeout abandons the wait, not the enqueue (session-send-core.ts): the row still lands.

@@ -190,7 +190,11 @@ async function tellNow(task: Task, w: AskAnswerWithdrawal, live: SessionRecord |
     const guard = await liveSendGuard(await liveDelivery(live.claudeSessionId));
     const { sendMessageToSession } = await import('../session-message-queue.js');
     const { WAIT_UNTIL_SEND_SOURCE } = await import('../task-wait-until.js');
-    await sendMessageToSession(live.claudeSessionId, await noteOf(w), { source: WAIT_UNTIL_SEND_SOURCE, taskId: task.id, ...guard });
+    await sendMessageToSession(live.claudeSessionId, await noteOf(w), {
+      source: WAIT_UNTIL_SEND_SOURCE, taskId: task.id, ...guard,
+      // Its report no longer asks: it may have acted on the answer, so an idle session hears it now.
+      wakeReason: 'an answer it may have acted on was taken back',
+    });
     return 'now';
   } catch (err) {
     if (!(await notDeliveredLive(err))) throw err;

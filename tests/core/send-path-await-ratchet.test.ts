@@ -58,6 +58,8 @@ const ALLOWED_MODULES: Record<string, string> = {
   './sessions/personal-ai-lane.js': 'Ask Walnut persona drift repair: one indexed local record read, TTL-bounded rebuild from local config',
   './human-inbox/item-execution.js': 'inbox item boundary check against the local inbox store (inbox item sends only)',
   './sessions/session-stop.js': 'stop fence read from the local session record',
+  '../providers/claude-code-session.js': 'the session runner already loaded in this process: its in-memory turn state (turnRunningFor)',
+  './sessions/wake-policy.js': 'pure check of the row\'s notice envelopes, and the in-memory hold for one that asks nothing',
 }
 
 /** Calls awaited on the path to SESSION_SEND, each with why it stays local. */
@@ -94,6 +96,8 @@ const ALLOWED_AWAITS: Record<string, string> = {
   'folderMoved.markTold': 'folder-gone.ts: local session record write',
   'switchContext.markTold': 'engine-switch-io.ts: local store write',
   'outputMode.commit': 'hint-send.ts: records the hints told in the local session record',
+  'tellCarried': 'this file: the markTold writes listed here, for the notes the row or the hold carries',
+  'turnRunningFor': 'this file: the runner\'s in-memory turn state, then the local session record (only for a row of notices that ask nothing)',
   'refreshWalnutSessionProfile': 'personal-ai-lane.ts: one indexed local record read, TTL-bounded rebuild from local config',
 }
 

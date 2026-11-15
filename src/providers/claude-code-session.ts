@@ -14081,7 +14081,8 @@ export class SessionRunner {
       let deliverySessionId: string
       let ok = false
       try {
-        msgs = await markNextProcessing(sessionId)
+        // A steer lands in the running turn: a notice that asks nothing goes in with it.
+        msgs = await markNextProcessing(sessionId, { midTurn: true })
         if (msgs.length === 0) return injected
         if (await this.parkIfRedeliveryLoop(sessionId, msgs)) return injected
         message = msgs[0]
@@ -15154,7 +15155,7 @@ export class SessionRunner {
     const { ready, release } = this.holdMidTurnWrite(sessionId)
     try {
       await ready
-      const newMsgs = await markProcessing(sessionId, stopFence, { tracked: targetSession.reportsLineLifecycle, midTurn: true })
+      const newMsgs = await markProcessing(sessionId, stopFence, { tracked: targetSession.reportsLineLifecycle, midTurn: true, inTurn: targetSession.inTurn })
       if (newMsgs.length === 0) return
       // The rest go back to pending and ride the turn's end (its processNext).
       if (await this.parkIfRedeliveryLoop(sessionId, newMsgs)) return

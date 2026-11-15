@@ -52,6 +52,8 @@ import type { NoticeLastMessage } from '../session-requests.js';
 import type { EnvelopeWordsUnread, SubtaskNoticeKind, TurnStarter } from '../peers/envelope-kit.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import { parseWalnutMessage } from '../peers/walnut-message-tag.js';
+// The edges worth a new turn for a parent whose own turn is over (completed, error) are the wake policy's.
+import { noticeWakes } from './wake-policy.js';
 
 const kit = createEnvelopeKit();
 
@@ -484,8 +486,6 @@ export async function queueSubtaskNotice(n: SubtaskNotice): Promise<void> {
   }
 }
 
-/** The edges worth a new turn for a parent whose own turn is over. */
-const WAKES_AN_IDLE_PARENT: ReadonlySet<SubtaskNoticeKind> = new Set<SubtaskNoticeKind>(['completed', 'error']);
 
 /**
  * The completions in `notices` learn what is left of the team: the last one carries the
@@ -579,14 +579,14 @@ async function flush(parentSid: string): Promise<void> {
       // Settled (or an error): what it held goes out with this edge. A stop, a block or a
       // park is still never sent to an idle parent (the "Still open" line says where each
       // stands); it only lets the held completions go when it leaves nothing working.
-      const quiet = notices.filter((n) => !WAKES_AN_IDLE_PARENT.has(n.kind));
+      const quiet = notices.filter((n) => !noticeWakes(n.kind));
       if (quiet.length > 0) {
         log.session.info('subtask notice not sent: the parent is not mid-turn', {
           parentSid, parentTaskId: target.taskId, status: target.process_status,
           children: quiet.map((n) => ({ id: n.child.id, kind: n.kind })),
         });
       }
-      notices = [...held, ...notices.filter((n) => WAKES_AN_IDLE_PARENT.has(n.kind))];
+      notices = [...held, ...notices.filter((n) => noticeWakes(n.kind))];
       if (notices.length === 0) return;
     } else {
       // Mid-turn: anything held rides this message (the parent is reading now).
