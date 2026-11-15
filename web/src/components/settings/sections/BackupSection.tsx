@@ -293,6 +293,14 @@ export function BackupSection({ config, onSave }: Props) {
     setEditing(!!keptOf(t) && !!readTyped()[t])
     setTestResult(null)
   }
+  /** The service picker: from the older S3 copy, S3 stays on it and another service leaves it (nothing is saved yet). */
+  const pickService = (t: BackupDestinationType) => {
+    if (legacyMode) {
+      if (t === 's3') return
+      setLegacyMode(false)
+    }
+    pickType(t)
+  }
   /** Back to the saved settings: what was typed since goes. */
   const cancelEdit = () => {
     if (!kept) return
@@ -506,33 +514,35 @@ export function BackupSection({ config, onSave }: Props) {
         footer={legacyMode ? undefined : DESTINATION_NOTE[type]}
         data-testid="backup-destination-group"
       >
+        {/* Where backups go comes first, whichever way they are made: the older S3 copy is one state of S3,
+            and Cloudflare R2 or Google Drive is one click away from it (2026-11-15: "that is seperate option"). */}
+        <SettingsRow
+          label="Service"
+          help={legacyMode ? 'In use: the older S3 copy (unencrypted). Pick Cloudflare R2 or Google Drive to back up there instead.' : serviceHelp}
+          data-testid="backup-service-row"
+          control={
+            <SegmentedControl
+              id="backup-service"
+              aria-label="Backup service"
+              value={legacyMode ? 's3' : type}
+              onChange={pickService}
+              options={DESTINATIONS.map((d) => ({
+                value: d.value, label: d.label, testId: `backup-service-${d.value}`,
+                // The service backups go to now carries a mark, whichever tab is open.
+                ...((legacyMode ? d.value === 's3' : savedDest?.type === d.value) ? { className: 'backup-service-in-use', title: 'In use: backups go here' } : {}),
+              }))}
+            />
+          }
+        />
         {legacyMode ? (
           <LegacyS3Fields value={legacy} onChange={setLegacy} profiles={profiles} onSwitch={switchToEncrypted} />
         ) : (
           <>
-            <SettingsRow
-              label="Service"
-              help={serviceHelp}
-              data-testid="backup-service-row"
-              control={
-                <SegmentedControl
-                  id="backup-service"
-                  aria-label="Backup service"
-                  value={type}
-                  onChange={pickType}
-                  options={DESTINATIONS.map((d) => ({
-                    value: d.value, label: d.label, testId: `backup-service-${d.value}`,
-                    // The service backups go to now carries a mark, whichever tab is open.
-                    ...(savedDest?.type === d.value && !legacyMode ? { className: 'backup-service-in-use', title: 'In use: backups go here' } : {}),
-                  }))}
-                />
-              }
-            />
             {savedEngine === 'mirror' && !savedDest && (
               <SettingsRow
                 state="warning"
                 label="The older S3 copy keeps running"
-                help={'Until this one is tested and saved, files still go to the old bucket unencrypted.'}
+                help={type === 'gdrive' ? 'Until Google Drive is connected, files still go to the old bucket unencrypted.' : 'Until this one is tested and saved, files still go to the old bucket unencrypted.'}
                 data-testid="backup-legacy-pending"
                 control={<SettingsButton onClick={() => { setLegacyMode(true); setTestResult(null) }} data-testid="backup-legacy-back">Back to it</SettingsButton>}
               />

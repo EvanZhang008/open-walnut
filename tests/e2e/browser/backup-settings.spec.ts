@@ -66,15 +66,24 @@ async function openBackup(page: Page) {
   return section
 }
 
+/** The tab looked at is a kept view, mirrored to ui-prefs: its writes are answered in the page. */
+async function holdPrefsWrites(page: Page): Promise<void> {
+  await page.route('**/api/ui-prefs**', (route) => route.request().method() === 'GET'
+    ? route.continue()
+    : route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) }))
+}
+
+/** The end of a test: its answers go, the ui-prefs hold stays (the page still writes as it closes). */
+async function releaseRoutes(page: Page): Promise<void> {
+  await page.unrouteAll({ behavior: 'ignoreErrors' })
+  await holdPrefsWrites(page)
+}
+
 test.describe('Backup settings', () => {
   // The tab looked at is a kept view (view-memory), mirrored to ui-prefs. On the shared fixture
   // server a pick in one test would come back in the next one's fresh browser at boot, so this
   // file's prefs writes are answered in the page and each test starts on the service in use.
-  test.beforeEach(async ({ page }) => {
-    await page.route('**/api/ui-prefs**', (route) => route.request().method() === 'GET'
-      ? route.continue()
-      : route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) }))
-  })
+  test.beforeEach(async ({ page }) => { await holdPrefsWrites(page) })
 
   test('a new setup: R2 fields, test, recovery key, restore', async ({ page }) => {
     const config = await holdConfigWrites(page, {})
@@ -183,7 +192,7 @@ test.describe('Backup settings', () => {
     await expect(section.getByTestId('backup-restore-list').locator('label')).toHaveCount(2)
     await expect(section.locator('#backup-restore-target')).toHaveValue('')
     await expect(section.getByTestId('backup-backups-group')).toContainText('On a new computer')
-    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await releaseRoutes(page)
   })
 
   test('the older S3 copy keeps its form until the user switches', async ({ page }) => {
@@ -192,7 +201,10 @@ test.describe('Backup settings', () => {
     const section = await openBackup(page)
     await expect(section).toContainText('files go to the bucket unencrypted')
     await expect(section.locator('#backup-bucket')).toHaveValue('old-bucket')
-    await expect(section.getByTestId('backup-service-r2')).toHaveCount(0)
+    // The service picker is there too, on S3 (the older copy is one state of S3).
+    await expect(section.getByTestId('backup-service-s3')).toHaveAttribute('aria-checked', 'true')
+    await section.getByTestId('backup-service-s3').click()
+    await expect(section.locator('#backup-bucket')).toHaveValue('old-bucket')
     await answer(page, '**/api/backup/destination/test', { ok: true, destination: 's3://old-bucket/walnut-backup', canWrite: true, hasBackups: false, hasKey: false })
     await section.getByTestId('backup-legacy-switch').click()
     await expect(section.getByTestId('backup-service-s3')).toHaveAttribute('aria-checked', 'true')
@@ -205,7 +217,38 @@ test.describe('Backup settings', () => {
       type: 's3', bucket: 'old-bucket', region: 'eu-west-1', prefix: 'walnut-backup',
     })
     expect((config.last()?.backup as Record<string, unknown>).bucket).toBeUndefined()
-    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await releaseRoutes(page)
+  })
+
+  test('from the older S3 copy to Google Drive with the client saved on this computer: nothing to fill in', async ({ page }) => {
+    // The 2026-11-15 case: the older S3 copy in use, and the person looked for Google Drive.
+    const config = await holdConfigWrites(page, { enabled: true, bucket: 'old-bucket', region: 'us-west-1', prefix: 'walnut', interval_hours: 24 })
+    await answer(page, '**/api/backup/status', { configured: true, running: false, consecutiveFailures: 0, primary: true, engine: 'mirror' })
+    const file = '/home/someone/.open-walnut/local/backup/gdrive-client.json'
+    await answer(page, '**/api/backup/gdrive/status', { builtinClient: true, machineClientFile: file, client: 'builtin', connected: false, email: null, folderName: null, pending: false })
+    let connectBody: Record<string, unknown> | null = null
+    await page.route('**/api/backup/gdrive/connect', (route) => {
+      connectBody = route.request().postDataJSON() as Record<string, unknown>
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ authUrl: 'about:blank#google', redirectUri: 'http://127.0.0.1:5555' }) })
+    })
+    const section = await openBackup(page)
+    // Google Drive is one click away: no "Switch to encrypted" first.
+    await expect(section.getByTestId('backup-service-row')).toContainText('In use: the older S3 copy (unencrypted)')
+    await section.getByTestId('backup-service-gdrive').click()
+    await expect(section.getByTestId('backup-legacy-pending')).toContainText('Until Google Drive is connected, files still go to the old bucket unencrypted.')
+    await expect(section.getByTestId('backup-gdrive-row')).toContainText(`Uses the Google client saved on this computer (${file})`)
+    await expect(section.getByTestId('backup-gdrive-client-help')).toHaveCount(0)
+    const connect = section.getByTestId('backup-gdrive-connect')
+    await expect(connect).toBeEnabled()
+    await connect.click()
+    await expect.poll(() => connectBody).not.toBeNull()
+    expect(connectBody!.client_id ?? '').toBe('')
+    // Looking and connecting moved nothing: the older copy runs until Drive is signed in.
+    expect((config.last()?.backup as Record<string, unknown> | undefined)?.destination).toBeUndefined()
+    // Back to it: the older copy's form again, its bucket as it was.
+    await section.getByTestId('backup-legacy-back').click()
+    await expect(section.locator('#backup-bucket')).toHaveValue('old-bucket')
+    await releaseRoutes(page)
   })
 
   test('Google Drive with the user\'s own Google client, and the paste fallback', async ({ page }) => {
@@ -259,7 +302,7 @@ test.describe('Backup settings', () => {
     await expect.poll(() => (config.last()?.backup as Record<string, unknown> | undefined)?.destination).toMatchObject({
       type: 'gdrive', client_id: '1234-abc.apps.googleusercontent.com',
     })
-    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await releaseRoutes(page)
   })
 
   test('looking at another service changes nothing; its fields are kept apart', async ({ page }) => {
@@ -300,7 +343,7 @@ test.describe('Backup settings', () => {
     await expect(section.locator('#backup-r2-bucket')).toHaveValue('my-bucket')
     await expect(section.getByTestId('backup-test-connection')).toHaveText('Test connection')
     await expect(section.getByTestId('backup-service-row')).toContainText(/backups go to Cloudflare R2/i)
-    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await releaseRoutes(page)
   })
 
   test('Drive in use with the R2 tab open after a reload: backups still read as running', async ({ page }) => {
@@ -319,7 +362,7 @@ test.describe('Backup settings', () => {
     await expect(section.getByTestId('backup-enabled-row')).toContainText('Encrypted on this computer first')
     await expect(section.getByTestId('backup-enabled-row')).not.toContainText('Paused')
     await expect(section.getByTestId('backup-run-now')).toBeEnabled()
-    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await releaseRoutes(page)
   })
 
   test('S3 with an endpoint: keys typed first stay in view and are saved with it', async ({ page }) => {
@@ -342,7 +385,7 @@ test.describe('Backup settings', () => {
     await expect.poll(() => (config.last()?.backup as { destination?: Record<string, unknown> } | undefined)?.destination).toMatchObject({
       type: 's3', endpoint: 'https://minio.example', access_key_id: 'MINIOKEY', secret_access_key: 'MINIOSECRET',
     })
-    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await releaseRoutes(page)
   })
 
   test('a folder holding backups made with another key is asked about before it is used', async ({ page }) => {
@@ -362,7 +405,7 @@ test.describe('Backup settings', () => {
     expect(config.last()).toBeNull()
     await section.getByTestId('backup-test-connection').click()
     await expect.poll(() => (config.last()?.backup as { destination?: Record<string, unknown> } | undefined)?.destination).toMatchObject({ type: 'r2', bucket: 'old-backups' })
-    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await releaseRoutes(page)
   })
 
   test('a new computer (no key of its own) uses a folder with backups at once, then asks for the saved key', async ({ page }) => {
@@ -380,7 +423,7 @@ test.describe('Backup settings', () => {
     await expect.poll(() => (config.last()?.backup as { destination?: Record<string, unknown> } | undefined)?.destination).toMatchObject({ type: 'r2', bucket: 'my-backups' })
     await expect(section.getByTestId('backup-connection-row')).toContainText('enter the recovery key you saved for them below')
     await expect(section.getByTestId('backup-connection-row')).not.toContainText('different key')
-    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await releaseRoutes(page)
   })
 
   test('Drive connected while R2 is in use: chosen on purpose, R2 kept; disconnect asks first', async ({ page }) => {
@@ -414,7 +457,7 @@ test.describe('Backup settings', () => {
     const written = config.last()?.backup as Record<string, unknown>
     expect(written.other_destinations).toEqual([expect.objectContaining({ type: 'r2', bucket: 'my-bucket' })])
     expect(written.enabled).toBe(true)
-    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await releaseRoutes(page)
   })
 
   test('a finished restore: use it in place of the current data, after a confirm; or keep the current data', async ({ page }) => {
@@ -460,7 +503,7 @@ test.describe('Backup settings', () => {
     await section.getByTestId('backup-restore-dismiss').click()
     await expect(section.getByTestId('backup-restore-done')).toHaveCount(0)
     expect(dismissed).toBe(true)
-    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await releaseRoutes(page)
   })
   test('after a switch: the previous data is kept until the user deletes it, after a confirm', async ({ page }) => {
     const r2 = { type: 'r2', bucket: 'my-bucket', account_id: '0123456789abcdef0123456789abcdef', access_key_id: 'AKEXAMPLE', secret_access_key: '\u2022\u2022\u2022\u2022\u2022\u2022mple' }
@@ -491,7 +534,7 @@ test.describe('Backup settings', () => {
     await expect(row).toHaveCount(0)
     await expect(section.getByTestId('backup-restore-delete-previous-confirm')).toHaveCount(0)
     expect(deleted).toBe(1)
-    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await releaseRoutes(page)
   })
 
   test('a restore under way can be cancelled; the result says the folder was removed', async ({ page }) => {
@@ -518,7 +561,7 @@ test.describe('Backup settings', () => {
     await expect(row).toContainText('Restore cancelled')
     await expect(row).toContainText(`${targetDir}) was removed`)
     await expect(section.getByTestId('backup-restore-use')).toHaveCount(0)
-    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await releaseRoutes(page)
   })
 
   test('keys that are not AWS keys, refused by AWS, point to the endpoint under Advanced', async ({ page }) => {
@@ -534,7 +577,7 @@ test.describe('Backup settings', () => {
     await section.locator('#backup-s3-secret').fill('minio-secret')
     await section.getByTestId('backup-test-connection').click()
     await expect(section.getByTestId('backup-destination-group')).toContainText('Using MinIO or Backblaze B2? Set its endpoint under Advanced.')
-    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await releaseRoutes(page)
   })
 
   test('Switch and restart: the rest of the pane is out of reach at once', async ({ page }) => {
@@ -565,7 +608,7 @@ test.describe('Backup settings', () => {
     release()
     await expect(section.getByTestId('backup-pane')).not.toHaveClass(/backup-restarting/)
     await expect(section.getByTestId('backup-backups-group')).toContainText('held for the test')
-    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await releaseRoutes(page)
   })
 
   test('while the key is still being read, backups say Checking, never Paused', async ({ page }) => {
@@ -588,7 +631,7 @@ test.describe('Backup settings', () => {
     release()
     await expect(enabledRow).not.toContainText('Checking...')
     await expect(enabledRow).not.toContainText('Paused')
-    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await releaseRoutes(page)
   })
 })
 
