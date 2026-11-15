@@ -30,6 +30,9 @@ interface Harness {
   /** The most chunk requests the host held open at one time. */
   peak: () => number
   setImageFailure: (message: string | null) => void
+  /** Walnut is down (its connection refused) until set back to false. */
+  setImageDown: (down: boolean) => void
+  imageTries: () => number
 }
 
 const ok: ChunkPlan = () => ({ status: 200 })
@@ -133,7 +136,11 @@ async function open(page: Page, history: unknown[] = []): Promise<Harness> {
     await route.fulfill({ json: { exists, sizes } })
   })
   let imageFailure: string | null = null
-  await page.route('**/api/images/upload', (route) => (imageFailure
+  let imageDown = false
+  let imageTries = 0
+  await page.route('**/api/images/upload', (route) => (++imageTries, imageDown
+    ? route.abort('connectionrefused')
+    : imageFailure
     ? route.fulfill({ status: 507, json: { error: imageFailure } })
     : route.fulfill({ json: { url: '/api/images/1-abc.png', filename: '1-abc.png', mediaType: 'image/png' } })))
   await page.route('**/api/local-image**', (route) => route.fulfill({ contentType: 'image/png', body: PNG }))
@@ -151,6 +158,8 @@ async function open(page: Page, history: unknown[] = []): Promise<Harness> {
     setPlan: (p) => { plan = p },
     peak: () => peak,
     setImageFailure: (m) => { imageFailure = m },
+    setImageDown: (d) => { imageDown = d },
+    imageTries: () => imageTries,
   }
 }
 
@@ -452,12 +461,12 @@ test('uploaded attachments stay with the draft over a reload', async ({ page }) 
 
 test('why an upload failed is said in words, for a picture too', async ({ page }) => {
   const h = await open(page)
-  h.setPlan((name) => (name === 'down.log' ? { status: 503, body: {} } : { status: 200 }))
+  h.setPlan((name) => (name === 'down.log' ? { status: 507, body: { error: { code: 'host_disk_full', message: "The session's host does not have room for this file." } } } : { status: 200 }))
   h.setImageFailure('The images folder is full.')
   await fileInput(page).setInputFiles({ name: 'down.log', mimeType: 'text/plain', buffer: Buffer.from('x') })
   await pasteFile(page, 'broken.png', 'image/png', PNG.toString('base64'))
   await expect(composer(page).locator('.chat-attachments-note')).toContainText('broken.png: The images folder is full.')
-  await expect(card(page, 'down.log')).toContainText("The session's host is not reachable right now", { timeout: 20_000 })
+  await expect(card(page, 'down.log')).toContainText("The session's host does not have room for this file.", { timeout: 20_000 })
   await shot(page, 'failed-words')
 })
 
@@ -586,4 +595,35 @@ test('a send made while a dropped picture is still being read waits for it', asy
   const [msg] = await h.sent()
   expect(msg.imageRefs).toEqual([{ filename: '1-abc.png' }])
   expect(msg.message).toBe('look at this')
+})
+
+test('a picture pasted while Walnut restarts waits, uploads by itself, and a send made meanwhile goes once it is up', async ({ page }) => {
+  const h = await open(page)
+  h.setImageDown(true)
+  await pasteFile(page, 'image.png', 'image/png', PNG.toString('base64'))
+  const tile = composer(page).locator('.chat-image-preview')
+  // Waiting, not failed: no red ring, no Retry, the line says it goes on by itself.
+  await expect(tile).toHaveClass(/is-waiting/, { timeout: 15_000 })
+  await expect(tile).not.toHaveClass(/is-failed/)
+  await expect(composer(page).getByRole('button', { name: 'Retry uploading image.png' })).toHaveCount(0)
+  const note = composer(page).locator('.chat-attachments-note')
+  await expect(note).toContainText('Waiting for the connection to Walnut: the upload goes on by itself')
+  await expect(note).not.toHaveClass(/is-warning/)
+  await shot(page, 'restart-waiting')
+  // Enter while it waits: the message waits for the picture instead of being refused.
+  const input = composer(page).locator('textarea')
+  await input.fill("didn't see this")
+  await input.press('Enter')
+  await expect(note).toContainText('then the message sends')
+  // Several tries while down (well past the old one-and-fail), and nothing sent yet.
+  await expect.poll(() => h.imageTries(), { timeout: 20_000 }).toBeGreaterThanOrEqual(3)
+  expect(await h.sent()).toHaveLength(0)
+  // Walnut is back: the picture goes up by itself and the message with it, once.
+  h.setImageDown(false)
+  await expect.poll(async () => (await h.sent()).length, { timeout: 20_000 }).toBe(1)
+  const [msg] = await h.sent()
+  expect(msg.message).toContain("didn't see this")
+  expect(msg.imageRefs).toEqual([{ filename: '1-abc.png' }])
+  await expect(composer(page).locator('.chat-image-preview')).toHaveCount(0)
+  await expect(composer(page).locator('.chat-attachments-note')).toHaveCount(0)
 })

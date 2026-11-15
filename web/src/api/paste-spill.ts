@@ -13,6 +13,7 @@
 
 import { attachmentParts, withFilePaths } from './file-upload';
 import { apiPost } from './client';
+import { SEND_TIME_UPLOAD_BUDGET_MS, withUploadRetry } from './upload-retry';
 
 /**
  * Spill threshold, in characters.
@@ -37,11 +38,12 @@ export async function spillOversizedText(text: string): Promise<string> {
   const files = parts?.files ?? [];
   const body = files.length > 0 && parts ? parts.body : text;
   if (body.length <= PASTE_SPILL_THRESHOLD) return text;
-  const res = await apiPost<{ path: string; chars: number }>(
+  // A dropped connection or restarting server is waited out first (upload-retry.ts).
+  const res = await withUploadRetry(() => apiPost<{ path: string; chars: number }>(
     '/api/pastes',
     { text: body },
     { timeoutMs: 60_000 },
-  );
+  ), { budgetMs: SEND_TIME_UPLOAD_BUDGET_MS });
   return withFilePaths(
     `[Large text attached — ${res.chars.toLocaleString()} chars, spilled to a file. `
     + `Use the Read tool to view it]\n- ${res.path}`,

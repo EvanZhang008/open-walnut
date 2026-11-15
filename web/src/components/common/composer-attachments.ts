@@ -45,6 +45,11 @@ export interface ComposerAttachment {
   /** Bytes the server holds so far. */
   sent: number;
   error?: string;
+  /**
+   * Why it is waiting to try again (the connection to Walnut dropped, the
+   * session's host is away): it goes on by itself, still pending (upload-retry.ts).
+   */
+  waiting?: string;
   /** A picture's preview, with `url` once it is uploaded. */
   image?: ImageAttachment;
   /** A file's path on its host, once uploaded. */
@@ -140,7 +145,7 @@ export function useComposerAttachments(target: UploadTarget | null): ComposerAtt
     h.abort = undefined;
     running.current.delete(item.id);
     waiting.current = waiting.current.filter((w) => w.id !== item.id);
-    patch(item.id, { status: 'preparing', sent: 0, error: undefined });
+    patch(item.id, { status: 'preparing', sent: 0, error: undefined, waiting: undefined });
     waiting.current.push(item);
     pump();
   }, [patch, pump]);
@@ -153,7 +158,7 @@ export function useComposerAttachments(target: UploadTarget | null): ComposerAtt
     // The slot frees once this try ends, however it ends (a remove aborts it).
     const settle = () => { if (running.current.delete(item.id)) pump(); };
     abort.signal.addEventListener('abort', settle, { once: true });
-    patch(item.id, { status: 'uploading', sent: 0, error: undefined });
+    patch(item.id, { status: 'uploading', sent: 0, error: undefined, waiting: undefined });
     let last = 0;
     const onProgress = (sent: number) => {
       // A re-render per progress event floods React on a fast link: every 1%.
@@ -161,28 +166,42 @@ export function useComposerAttachments(target: UploadTarget | null): ComposerAtt
       last = sent;
       if (!abort.signal.aborted) patch(item.id, { sent });
     };
+    // A dropped link is waited out (upload-retry.ts): the card says so. While it
+    // waits it gives up its place, so an upload to a host that answers (a picture
+    // while a session's host is away) is not held behind it; it takes one again to try.
+    const onWaiting = (reason: string | null) => {
+      if (abort.signal.aborted) return;
+      last = 0;
+      if (reason) {
+        if (running.current.delete(item.id)) pump();
+        patch(item.id, { waiting: reason });
+      } else {
+        running.current.add(item.id);
+        patch(item.id, { waiting: undefined });
+      }
+    };
     const done = (result: Partial<ComposerAttachment>) => {
       settle();
       if (abort.signal.aborted || !held.current.has(item.id)) return;
-      patch(item.id, { status: 'done', sent: item.size, ...result });
+      patch(item.id, { status: 'done', sent: item.size, waiting: undefined, ...result });
     };
     const fail = (err: unknown) => {
       settle();
       if (abort.signal.aborted || !held.current.has(item.id)) return;
       if (err instanceof DOMException && err.name === 'AbortError') return;
       const message = err instanceof FileUploadError || err instanceof Error ? err.message : 'Upload failed';
-      patch(item.id, { status: 'failed', error: message });
+      patch(item.id, { status: 'failed', error: message, waiting: undefined });
     };
     if (item.kind === 'image' && item.image) {
       const image = item.image;
-      uploadImageWithProgress(image, { signal: abort.signal, onProgress })
+      uploadImageWithProgress(image, { signal: abort.signal, onProgress, onWaiting })
         .then((url) => done({ image: { ...image, url } }), fail);
       return;
     }
     const to = targetRef.current;
     if (!to) { fail(new Error('This box cannot take files')); return; }
     h.target = to;
-    uploadFile(h.file, to, { uploadId: h.uploadId, name: item.name, signal: abort.signal, onProgress })
+    uploadFile(h.file, to, { uploadId: h.uploadId, name: item.name, signal: abort.signal, onProgress, onWaiting })
       .then((path) => done({ path }), fail);
   }, [patch, pump]);
   runRef.current = run;
@@ -352,7 +371,7 @@ export function savedAttachments(items: readonly ComposerAttachment[]): Composer
     if (up) return [a.image ? { ...a, image: { ...a.image, data: '' } } : { ...a }];
     // Not up yet: kept by name only, so a reload says it is missing instead of
     // sending the words without it.
-    const { image: _image, path: _path, ...rest } = a;
+    const { image: _image, path: _path, waiting: _waiting, ...rest } = a;
     return [{ ...rest, status: 'failed', sent: 0, error: ORPHAN_ERROR, orphan: true }];
   });
 }

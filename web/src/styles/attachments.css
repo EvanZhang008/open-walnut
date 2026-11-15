@@ -28,6 +28,10 @@
   pointer-events: none;
 }
 .attachment-ring svg { transform: rotate(-90deg); }
+/* Waiting for the connection to come back: the ring turns slowly instead of filling (upload-retry.ts). */
+.chat-image-preview.is-waiting .attachment-ring svg { animation: attachment-ring-wait 1.6s linear infinite; }
+@keyframes attachment-ring-wait { from { transform: rotate(-90deg); } to { transform: rotate(270deg); } }
+@media (prefers-reduced-motion: reduce) { .chat-image-preview.is-waiting .attachment-ring svg { animation: none; } }
 .attachment-ring-track { fill: rgba(0, 0, 0, 0.35); stroke: rgba(255, 255, 255, 0.35); stroke-width: 3; }
 .attachment-ring-fill { fill: none; stroke: #fff; stroke-width: 3; stroke-linecap: round; transition: stroke-dasharray 0.2s ease; }
 

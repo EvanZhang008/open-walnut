@@ -1,4 +1,5 @@
 import { apiGet, apiPost, apiPut } from './client';
+import { SEND_TIME_UPLOAD_BUDGET_MS, withUploadRetry } from './upload-retry';
 import { noteDocKey, publishDocSaved } from '@/stores/file-save-signal';
 
 /**
@@ -29,8 +30,11 @@ export async function saveGlobalNotes(
   return res;
 }
 
-/** Upload a base64 image and return the server URL */
+/** Upload a base64 image and return the server URL (a dropped connection is waited out: upload-retry.ts). */
 export async function uploadNoteImage(data: string, mediaType: string): Promise<string> {
-  const res = await apiPost<{ url: string }>('/api/images/upload', { data, mediaType });
+  const res = await withUploadRetry(
+    () => apiPost<{ url: string }>('/api/images/upload', { data, mediaType }, { timeoutMs: 60_000 }),
+    { budgetMs: SEND_TIME_UPLOAD_BUDGET_MS },
+  );
   return res.url;
 }

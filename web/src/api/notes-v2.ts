@@ -1,4 +1,5 @@
 import { apiGet, apiPut, apiPost, apiDelete } from './client';
+import { SEND_TIME_UPLOAD_BUDGET_MS, withUploadRetry } from './upload-retry';
 import { noteDocKey, publishDocSaved, rememberDocSave } from '@/stores/file-save-signal';
 
 export interface NoteTreeNode {
@@ -34,17 +35,18 @@ export function attachmentUrl(path: string, notePath?: string): string {
  * Upload a pasted image INTO THE VAULT (an `_attachment/` folder beside the
  * note). Returns the vault-relative path — the `![[...]]` embed target — so the
  * markdown on disk stays Obsidian-portable (vs. the chat-only /api/images store).
+ * A dropped connection or restarting server is waited out (upload-retry.ts).
  */
 export async function uploadNoteAttachment(
   notePath: string,
   data: string,
   mediaType: string,
 ): Promise<{ path: string; name: string }> {
-  return apiPost<{ ok: boolean; path: string; name: string }>('/api/notes-v2/attachment', {
+  return withUploadRetry(() => apiPost<{ ok: boolean; path: string; name: string }>('/api/notes-v2/attachment', {
     notePath,
     data,
     mediaType,
-  });
+  }, { timeoutMs: 60_000 }), { budgetMs: SEND_TIME_UPLOAD_BUDGET_MS });
 }
 
 /**

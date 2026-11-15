@@ -175,18 +175,33 @@ describe('uploadFile', () => {
     expect(sent.map((s) => query(s.url).get('offset'))).toEqual(['0', String(UPLOAD_CHUNK_BYTES), String(UPLOAD_CHUNK_BYTES)])
   })
 
-  it('a refusal fails with the host\'s words; a link that stays down fails after a few tries', async () => {
+  it('a refusal fails with the host\'s words; a link that stays down waits; a host write error fails after a few tries', async () => {
     answer = () => ({ status: 507, body: { error: { code: 'host_disk_full', message: "The session's host does not have room for this file." } } })
     await expect(uploadFile(bytes(5), { sessionId: 's' }, { uploadId: 'up-dddddddd', name: 'x', signal: new AbortController().signal, onProgress: () => {} }))
       .rejects.toMatchObject({ message: "The session's host does not have room for this file.", code: 'host_disk_full' })
 
+    // No budget (a composer's attachment): it keeps waiting, saying why, until removed.
     sent = []
     answer = () => ({ status: 503, body: { error: { code: 'bridge_offline', message: 'no link' } } })
-    const failing = uploadFile(bytes(5), { sessionId: 's' }, { uploadId: 'up-eeeeeeee', name: 'x', signal: new AbortController().signal, onProgress: () => {} })
+    const ctrl = new AbortController()
+    const waits: Array<string | null> = []
+    const waiting = uploadFile(bytes(5), { sessionId: 's' }, { uploadId: 'up-eeeeeeee', name: 'x', signal: ctrl.signal, onProgress: () => {}, onWaiting: (r) => waits.push(r) })
+    const removed = waiting.catch((e: unknown) => e)
+    for (let i = 0; i < 120; i++) await vi.advanceTimersByTimeAsync(1_000)
+    expect(sent.length).toBeGreaterThan(10)
+    expect(waits).toContain('no link')
+    ctrl.abort()
+    expect(await removed).toMatchObject({ name: 'AbortError' })
+
+    // A host that could not write the file for a reason it did not name: a few tries, then said.
+    sent = []
+    answer = () => ({ status: 502, body: { error: { code: 'upload_failed', message: "The session's host could not save the file (EACCES)." } } })
+    const failing = uploadFile(bytes(5), { sessionId: 's' }, { uploadId: 'up-eeeeeeef', name: 'x', signal: new AbortController().signal, onProgress: () => {} })
     const caught = failing.catch((e: unknown) => e)
     await settled(failing)
     const err = await caught
     expect(err).toBeInstanceOf(FileUploadError)
+    expect(err).toMatchObject({ message: "The session's host could not save the file (EACCES).", code: 'upload_failed' })
     expect(sent.length).toBe(4)
   })
 

@@ -19,6 +19,7 @@
 import { FILES_ATTACHED_LINE, attachmentHeaderBlock, splitAttachmentHeaders } from '@open-walnut/attachment-headers';
 import { getDeviceToken } from './device-token';
 import { TEST_RUN_HEADER, testRunLabel } from './test-run';
+import { CONNECTION_DROPPED, SIGN_IN_REFUSED, UploadAttemptError, transientStatus, withUploadRetry } from './upload-retry';
 
 /** One chunk, as the server takes it (UPLOAD_CHUNK_BYTES). */
 export const UPLOAD_CHUNK_BYTES = 2 * 1024 * 1024;
@@ -39,8 +40,8 @@ const MAX_NAME_BYTES = 200;
  * before a gigabyte).
  */
 const MAX_HASHED_BYTES = 64 * 1024 * 1024;
-/** Tries per chunk when the link drops (503) or the request fails outright. */
-const CHUNK_TRIES = 4;
+/** Tries for a chunk the host could not write for a reason it did not name (502 upload_failed). */
+const HOST_WRITE_TRIES = 4;
 
 /**
  * The name the host will save, by its rule (session-uploads.ts isUploadName): no
@@ -114,7 +115,7 @@ type ChunkOutcome =
   | { kind: 'reply'; reply: ChunkReply }
   | { kind: 'resume'; at: number }
   | { kind: 'restart' }
-  | { kind: 'retry'; message: string }
+  | { kind: 'retry'; message: string; code?: string; maxTries?: number }
   | { kind: 'fail'; message: string; code?: string };
 
 function chunkUrl(target: UploadTarget, uploadId: string, q: Record<string, string>): string {
@@ -138,7 +139,7 @@ function putChunk(url: string, body: Blob, signal: AbortSignal, onSent: (bytes: 
     const onAbort = () => xhr.abort();
     signal.addEventListener('abort', onAbort, { once: true });
     xhr.onabort = () => { signal.removeEventListener('abort', onAbort); reject(new DOMException('Upload cancelled', 'AbortError')); };
-    xhr.onerror = () => { signal.removeEventListener('abort', onAbort); resolve({ kind: 'retry', message: 'The connection to Walnut dropped' }); };
+    xhr.onerror = () => { signal.removeEventListener('abort', onAbort); resolve({ kind: 'retry', message: CONNECTION_DROPPED }); };
     xhr.ontimeout = xhr.onerror;
     xhr.onload = () => {
       signal.removeEventListener('abort', onAbort);
@@ -149,10 +150,17 @@ function putChunk(url: string, body: Blob, signal: AbortSignal, onSent: (bytes: 
       if (xhr.status === 409 && err?.code === 'upload_offset_mismatch') { resolve({ kind: 'resume', at: Math.max(0, Number(err.received ?? 0)) }); return; }
       if (xhr.status === 422) { resolve({ kind: 'restart' }); return; }
       const said = err?.message || (typeof json?.error === 'string' ? json.error : '');
-      if (xhr.status === 503 || xhr.status === 502 || xhr.status === 0) {
+      // A host that could not write the file for a reason it did not name (502
+      // upload_failed): it may clear (a daemon restarting), so a few tries, then the card says it.
+      if (xhr.status === 502 && err?.code === 'upload_failed') {
+        resolve({ kind: 'retry', message: said || 'The session\'s host could not save the file', code: 'upload_failed', maxTries: HOST_WRITE_TRIES });
+        return;
+      }
+      if (transientStatus(xhr.status)) {
         resolve({ kind: 'retry', message: said || 'The session\'s host is not reachable right now' });
         return;
       }
+      if (xhr.status === 401) { resolve({ kind: 'fail', message: SIGN_IN_REFUSED, code: 'unauthorized' }); return; }
       const message = said || `The upload was refused (error ${xhr.status})`;
       if (xhr.status === 404 && !target404Known(json)) {
         resolve({ kind: 'fail', message: 'This Walnut cannot take files yet: update it, then try again', code: 'not_supported' });
@@ -181,22 +189,20 @@ async function sha256Hex(file: Blob): Promise<string | undefined> {
   }
 }
 
-const pause = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
-  const t = setTimeout(resolve, ms);
-  signal.addEventListener('abort', () => { clearTimeout(t); reject(new DOMException('Upload cancelled', 'AbortError')); }, { once: true });
-});
-
 export interface UploadOptions {
   uploadId: string;
   name: string;
   signal: AbortSignal;
   /** Bytes the host holds so far (monotonic within one try). */
   onProgress: (sent: number) => void;
+  /** Told why while a dropped link or an unreachable host is waited out, and null when it tries again. */
+  onWaiting?: (reason: string | null) => void;
 }
 
 /**
  * Upload `file` and answer its path on the host. Resumes from what the host
- * holds; a chunk whose link dropped is sent again a few times before it fails.
+ * holds; a chunk whose link dropped, or whose host is not reachable for now, is
+ * sent again by itself once it is back (upload-retry.ts).
  * Rejects with FileUploadError (shown on the card) or an AbortError (removed).
  */
 export async function uploadFile(file: Blob, target: UploadTarget, opts: UploadOptions): Promise<string> {
@@ -205,16 +211,27 @@ export async function uploadFile(file: Blob, target: UploadTarget, opts: UploadO
   const sha256 = await sha256Hex(file);
   let offset = 0;
   let restarts = 0;
-  let tries = 0;
+  // A transient answer is thrown for the shared retry to wait out and send again.
+  const putRetried = (url: string, body: Blob, onSent: (bytes: number) => void) => withUploadRetry(async () => {
+    const out = await putChunk(url, body, opts.signal, onSent);
+    if (out.kind === 'retry') throw new UploadAttemptError(out.message, true, out.code ?? 'offline', out.maxTries);
+    return out;
+  }, { signal: opts.signal, onWaiting: opts.onWaiting });
   for (;;) {
     const end = Math.min(size, offset + UPLOAD_CHUNK_BYTES);
     const last = end === size;
     const q: Record<string, string> = { offset: String(offset), size: String(size), name: opts.name };
     if (last && sha256) q.sha256 = sha256;
     const at = offset;
-    const out = await putChunk(chunkUrl(target, opts.uploadId, q), file.slice(offset, end), opts.signal, (sent) => opts.onProgress(at + sent));
+    let out: Exclude<ChunkOutcome, { kind: 'retry' }>;
+    try {
+      out = await putRetried(chunkUrl(target, opts.uploadId, q), file.slice(offset, end), (sent) => opts.onProgress(at + sent));
+    } catch (err) {
+      // A host write error that stayed after its few tries: said on the card.
+      if (err instanceof UploadAttemptError) throw new FileUploadError(err.message, err.code);
+      throw err;
+    }
     if (out.kind === 'reply') {
-      tries = 0;
       if (out.reply.done && out.reply.path) { opts.onProgress(size); return out.reply.path; }
       offset = Math.max(offset, Math.min(size, out.reply.received));
       opts.onProgress(offset);
@@ -226,11 +243,6 @@ export async function uploadFile(file: Blob, target: UploadTarget, opts: UploadO
       if (++restarts > 1) throw new FileUploadError('The file arrived different from what was sent', 'upload_checksum_mismatch');
       offset = 0;
       opts.onProgress(0);
-      continue;
-    }
-    if (out.kind === 'retry') {
-      if (++tries >= CHUNK_TRIES) throw new FileUploadError(out.message, 'offline');
-      await pause(600 * 2 ** (tries - 1), opts.signal);
       continue;
     }
     throw new FileUploadError(out.message, out.code);
