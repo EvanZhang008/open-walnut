@@ -521,7 +521,7 @@ test('the terminal docked under Changed and Files; a path opens in Files; a sele
 test('stacked panes docked under Changed keep readable rows; New at the slot limit says why', async ({ page, browserName }) => {
   // Every socket the page opens, so the test can drop them (a real reconnect, no reload).
   const sockets: WebSocketRoute[] = []
-  await page.routeWebSocket('**/ws', (ws) => { sockets.push(ws); ws.connectToServer() })
+  await page.routeWebSocket(url => url.pathname === '/ws', (ws) => { sockets.push(ws); ws.connectToServer() })
   const sid = sidFor(browserName)
   await page.setViewportSize({ width: 1400, height: 900 })
   const errors = collectPageErrors(page)
@@ -561,8 +561,9 @@ test('stacked panes docked under Changed keep readable rows; New at the slot lim
   await expect(pane(term, 2).locator('.session-terminal-inline-note')).toContainText('The shell exited.', { timeout: 15_000 })
   expect(await rowsText(pane(term, 2))).not.toContain('dtach')
   // The connection drops and comes back: an ended terminal stays ended (only Restart starts a shell).
+  expect(sockets.some(ws => new URL(ws.url()).searchParams.has('lean')), 'the page client socket is captured before disconnecting').toBe(true)
   const opened = sockets.length
-  for (const ws of sockets) await ws.close({ code: 1012, reason: 'test disconnect' })
+  for (const ws of [...sockets]) await ws.close({ code: 1012, reason: 'test disconnect' })
   await expect.poll(() => sockets.length, { timeout: 30_000 }).toBeGreaterThan(opened)
   await expect(pane(term, 1).locator('.xterm-rows')).toBeVisible()
   await page.waitForTimeout(3_000)

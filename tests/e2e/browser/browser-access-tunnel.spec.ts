@@ -31,6 +31,7 @@ import { backToDevices, openWay } from './devices-ways-helpers'
 import { browserKindFromUserAgent } from '../../../src/core/browser-kind'
 import { expectQrEncodes } from './phone-link-qr-check'
 import { putExactSection } from './config-section-helpers'
+import { LEAN_SIGNATURE } from '../../../src/lib/ws-lean-protocol'
 
 test.setTimeout(180_000)
 
@@ -297,8 +298,14 @@ test.describe('Open from a browser', () => {
     const walnutSockets = () => sockets.filter((ws) => new URL(ws.url).pathname === '/ws')
     await expect.poll(() => walnutSockets().some((ws) => ws.answered), { timeout: 30_000 }).toBe(true)
     for (const ws of walnutSockets()) {
+      const query = new URL(ws.url).searchParams
+      // The lean signature is public protocol negotiation, never a sign-in credential.
+      expect([...query.entries()]).toEqual([['lean', LEAN_SIGNATURE]])
       expect(ws.url).not.toContain('token=')
-      expect(new URL(ws.url).search).toBe('')
+      const token = await phone.evaluate(() => localStorage.getItem('walnut.deviceToken'))
+      expect(token).toBeTruthy()
+      expect(ws.url).not.toContain(token!)
+      expect(ws.url).not.toContain(code)
     }
     await phone.waitForTimeout(1_500)
     await expect(notice).toBeHidden()
