@@ -53,6 +53,7 @@ import { agentCannotRun, localNoticeIsFailure, localNoticeShows } from '@/utils/
 import { useDialogFocus } from '@/hooks/useDialogFocus';
 import { hasActiveModalOverlay } from '@/hooks/useModalOverlay';
 import { navigateToTarget } from '@/utils/open-session';
+import { useYieldsToTaskOpen } from '@/hooks/useOpenTask';
 import { fetchSelfRepair, type SelfRepairInfo } from '@/api/config';
 import { startNotificationFix } from '@/api/notifications';
 import { log } from '@/utils/log';
@@ -137,6 +138,9 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
     },
   });
   const onClose = layer.close;
+  // A layer over Home: a task opened from inside it (a letter's task link, a card's pill) or
+  // from anywhere else opens on Home, and the panel gives way (useOpenTask.ts).
+  useYieldsToTaskOpen(onClose, open);
   const { hasIssues, health, loading: healthLoading } = useSystemHealth();
   // What is broken right now: it leads All and Errors, and counts on the Errors badge.
   const disabledHosts = useDisabledHosts(open);
