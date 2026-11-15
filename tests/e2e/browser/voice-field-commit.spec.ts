@@ -185,8 +185,10 @@ test('task Create waits for the title field mic, not only the sentence mic', asy
     await shot(page, 'task-create-waiting');
     lane.release();
     await expect.poll(() => sent.map((r) => r.title)).toEqual([prefix + FULL]);
-    await expect(input).toHaveValue('');
-    await expect(create).toBeDisabled();
+    // The calendar host closes the creator after the real task POST succeeds.
+    await expect(panel).not.toBeVisible();
+    const tasks = await page.request.get('/api/tasks');
+    expect((await tasks.json()).tasks.filter((t: { title: string }) => t.title === prefix + FULL)).toHaveLength(1);
     await shot(page, 'task-created');
   } finally {
     lane.release();
