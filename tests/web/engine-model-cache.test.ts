@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EngineModelCatalog } from '../../web/src/api/engine-model-cache';
 
+// The home folder rule reads this window's HOME from the working-dirs answer.
+const home = vi.hoisted(() => ({ localHome: undefined as string | undefined }));
+vi.mock('@/api/sessions', () => ({
+  peekWorkingDirs: () => (home.localHome ? { dirs: [], hosts: [], localHome: home.localHome } : null),
+}));
+
 class FakeStorage {
   private values = new Map<string, string>();
   getItem(key: string): string | null { return this.values.get(key) ?? null; }
@@ -65,6 +71,24 @@ describe('engine model catalog cache', () => {
       expect(cache.getCachedEngineModelCatalog('codex', cwd)).toBeNull();
     }
     expect(cache.getCachedEngineModelCatalog('Codex', '/workspace/alpha')).toBeNull();
+  });
+
+  it('reads the home folder as the engine catalog with no folder, which the server probes in the home', async () => {
+    home.localHome = '/home/sam';
+    try {
+      cache.recordEngineModelCatalog('codex', '/home/sam', catalog());
+      for (const cwd of [undefined, '~', '/home/sam', '/home/sam/']) {
+        expect(cache.getCachedEngineModelCatalog('codex', cwd)?.currentModelId).toBe('model-a');
+        expect(cache.catalogCwd(cwd)).toBeUndefined();
+      }
+      expect(persistedEntries().map((entry) => entry.cwd)).toEqual([undefined]);
+      // A folder under the home is its own catalog, and an empty folder stays distinct.
+      expect(cache.getCachedEngineModelCatalog('codex', '/home/sam/app')).toBeNull();
+      expect(cache.catalogCwd('/home/sam/app')).toBe('/home/sam/app');
+      expect(cache.catalogCwd('')).toBe('');
+    } finally {
+      home.localHome = undefined;
+    }
   });
 
   it('keeps omitted and empty working directories distinct across reloads', async () => {

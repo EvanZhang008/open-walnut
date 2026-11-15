@@ -11,7 +11,7 @@
  * Every interaction is a real UI action; page.goto('/') only for load.
  */
 import { test, expect, type Page, type Route } from '@playwright/test'
-import { openDraft } from './draft-helpers'
+import { openDraft, shownHomePath } from './draft-helpers'
 import { resetServerHostFixture } from './host-problems-helpers'
 import { dropFakes } from './route-teardown'
 
@@ -306,6 +306,9 @@ test('typing on while a host is pending stops the old poll: no request for the s
  * lists it UNDER THE HOME and never walks into it, so over HTTP it is a depth-1
  * entry with no preloaded children, while the real `~/workspace` has one.
  */
+/** The remote home those listings reveal; the field then shows it as `~` (path-selector/field-home.ts). */
+const ALICE_HOME = '/home/alice'
+const aliceShown = (abs: string): string => shownHomePath(abs, ALICE_HOME)
 function aliceHomeListing(prefix: string): { dirs: string[]; parent: string; exists: boolean } {
   const raw = prefix.endsWith('/') ? prefix : prefix.slice(0, prefix.lastIndexOf('/') + 1)
   const parent = raw.startsWith('~/') ? `/home/alice/${raw.slice(2)}` : raw
@@ -331,7 +334,7 @@ test('fresh remote host: a bare word lists the matching home folders, picking on
   await openPicker(page)
   await page.locator('.sps-host-tab', { hasText: HOST_LABEL }).click()
   // No history on this host: the picker opens on its home (~/ resolved remotely).
-  await expect(input(page)).toHaveValue('/home/alice/')
+  await expect(input(page)).toHaveValue(aliceShown('/home/alice/'))
   const mark = requests.length
 
   await input(page).fill('work')
@@ -349,7 +352,7 @@ test('fresh remote host: a bare word lists the matching home folders, picking on
   for (const r of requests.slice(mark)) expect(r.host).toBe(HOST)
 
   await rows.first().click()
-  await expect(input(page)).toHaveValue('/home/alice/workplace/')
+  await expect(input(page)).toHaveValue(aliceShown('/home/alice/workplace/'))
   // And it keeps drilling through the symlinked folder like any subdirectory.
   await expect(list(page).locator('.sps-path-item.sps-live', { hasText: 'walnut' })).toBeVisible()
 })
@@ -363,7 +366,7 @@ test('a bare word with nothing to match says so; an empty input shows no home fo
   })
   await openPicker(page)
   await page.locator('.sps-host-tab', { hasText: HOST_LABEL }).click()
-  await expect(input(page)).toHaveValue('/home/alice/')
+  await expect(input(page)).toHaveValue(aliceShown('/home/alice/'))
   await input(page).fill('zzqx')
   await expect(list(page).locator('.sps-empty')).toContainText('No history or home folder matches "zzqx"')
   await expect(list(page).locator('[data-section-id^="home:"]')).toHaveCount(0)

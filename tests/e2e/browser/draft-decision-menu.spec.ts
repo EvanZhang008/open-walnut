@@ -22,7 +22,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import {
   bootDecisions, chipLabel, dayWords, draftComposer, draftDecisionChip, draftDecisionChips,
-  draftMoreButton, draftPills, draftTaskMenu, isoDay, openDraft, openDraftSettings, typeAndSettle,
+  draftMoreButton, draftPills, draftTaskMenu, HOME_FOLDER, isoDay, openDraft, openDraftSettings, typeAndSettle,
   type ParseSource,
 } from './draft-helpers'
 import { createTaskForLater, pinnedTierOf } from './draft-outcome-helpers'
@@ -106,9 +106,10 @@ test('a fresh draft shows no chip for its Focus default; a landed parse orders l
 
   await typeAndSettle(page, mock, 'fix the flaky login test by friday, urgent')
   await expect(draftDecisionChips(panel)).toHaveCount(3)
-  // C4: the parse proposed no project, so still the folder pill alone.
+  // C4: the parse proposed no project, so still the folder pill alone, on the home folder a
+  // fresh draft starts in (draft-home-default.ts).
   await expect(draftPills(panel)).toHaveCount(1)
-  await expect(draftPills(panel).first()).toHaveText(/Choose folder/)
+  await expect(draftPills(panel).first()).toHaveText(HOME_FOLDER)
   // C35: DOM order = reading order.
   const order = await panel.locator('.draft-launch-bar').evaluate((bar) => {
     const pick = (sel: string) => bar.querySelector(sel)

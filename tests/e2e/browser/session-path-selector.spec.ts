@@ -16,15 +16,19 @@
  * `openPicker` and the locator SCOPES moved.
  */
 import { test, expect, type Page } from '@playwright/test'
-import { draftComposer, openDraft } from './draft-helpers'
+import { draftComposer, openDraft, shownHomePath } from './draft-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
 let fixtureRoot = '' // .../ps-fixture (parent of 'projects')
+let serverHome = '' // the server's HOME, which the field shows as `~` (path-selector/field-home.ts)
+/** What the field shows once the picker itself writes the absolute path `abs` (a Tab completion). */
+const shown = (abs: string): string => shownHomePath(abs, serverHome)
 
 test.beforeAll(async () => {
   const res = await fetch(`${API}/api/sessions/working-dirs`)
-  const body = (await res.json()) as { dirs: Array<{ cwd: string }> }
+  const body = (await res.json()) as { dirs: Array<{ cwd: string }>; localHome?: string }
+  serverHome = body.localHome ?? ''
   // Match the walnut seed specifically — other ps-fixture history entries exist
   // (e.g. monorepo-context-proj) and one may sort ahead of it, so `.includes`
   // alone would grab the wrong row and derive a bogus fixtureRoot.
@@ -127,7 +131,7 @@ test('exact leaf-prefix hit ranks first, above a high-frecency history subsequen
 
   // Tab lands on the exact-match dir, not the frequent unrelated one.
   await input(page).press('Tab')
-  await expect(input(page)).toHaveValue(`${fixtureRoot}/projects/mcps/`)
+  await expect(input(page)).toHaveValue(shown(`${fixtureRoot}/projects/mcps/`))
 })
 
 test('exact typed segment + deep highlighted row: Tab descends ONE level, never the full path', async ({ page }) => {
@@ -142,7 +146,7 @@ test('exact typed segment + deep highlighted row: Tab descends ONE level, never 
   await input(page).fill(`${fixtureRoot}/projects/walnut`)
   await expect(page.locator('.sps-path-list .sps-path-item').first()).toBeVisible()
   await input(page).press('Tab')
-  await expect(input(page)).toHaveValue(`${fixtureRoot}/projects/walnut/`)
+  await expect(input(page)).toHaveValue(shown(`${fixtureRoot}/projects/walnut/`))
   // Now browsing walnut/'s children: its real subdir shows, found by its full path
   // (a trailing-slash listing highlights no row, so every row reads relative "…/web/")
   await expect(page.locator('.sps-path-list .sps-path-item .sps-path-cwd[title$="/walnut/web/"]')).toBeVisible()
@@ -160,14 +164,14 @@ test('Tab case-corrects: lowercase typed segment completes to the REAL-cased dir
   await input(page).fill(`${fixtureRoot}/projects/acmec`)
   await expect(page.locator('.sps-ghost-text')).toHaveText('apsDev')
   await input(page).press('Tab')
-  await expect(input(page)).toHaveValue(`${fixtureRoot}/projects/AcmeCapsDev/`)
+  await expect(input(page)).toHaveValue(shown(`${fixtureRoot}/projects/AcmeCapsDev/`))
   // We're now correctly inside it: its real child lists (full path in the title)
   await expect(page.locator('.sps-path-list .sps-path-item .sps-path-cwd[title$="/AcmeCapsDev/src/"]')).toBeVisible()
 
   // Backspacing after the completion must not teleport the caret / rewrite the
   // input: delete one char → exactly one char shorter, caret stays put.
   await input(page).press('Backspace')
-  await expect(input(page)).toHaveValue(`${fixtureRoot}/projects/AcmeCapsDev`)
+  await expect(input(page)).toHaveValue(shown(`${fixtureRoot}/projects/AcmeCapsDev`))
 })
 
 test('Tab completes to the SAME candidate the ghost predicts (not the highlighted history row)', async ({ page }) => {
@@ -183,7 +187,7 @@ test('Tab completes to the SAME candidate the ghost predicts (not the highlighte
   await expect(page.locator('.sps-ghost-text')).toHaveText('s')
 
   await input(page).press('Tab')
-  await expect(input(page)).toHaveValue(`${fixtureRoot}/projects/wallets/`)
+  await expect(input(page)).toHaveValue(shown(`${fixtureRoot}/projects/wallets/`))
 })
 
 test('Enter also drills into the ghost candidate, matching the prediction', async ({ page }) => {
@@ -210,7 +214,7 @@ test('ArrowDown overrides the ghost highlight — explicit navigation wins for T
   // cursor, Tab must honor the highlighted row, not snap back to the ghost.
   await input(page).press('ArrowDown')
   await input(page).press('Tab')
-  await expect(input(page)).toHaveValue(`${fixtureRoot}/projects/wallets/`)
+  await expect(input(page)).toHaveValue(shown(`${fixtureRoot}/projects/wallets/`))
 })
 
 test('fuzzy (non-prefix) match still finds substring candidates', async ({ page }) => {

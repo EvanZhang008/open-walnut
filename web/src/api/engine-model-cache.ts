@@ -1,4 +1,5 @@
 import type { CodexModelInfo } from './sessions';
+import { isHomeFolder, knownHomeOf } from '@/utils/home-folder';
 
 export interface EngineModelCatalog {
   engine: string;
@@ -43,8 +44,18 @@ export function shouldInvalidateEngineCatalog(event: unknown): boolean {
   return changed;
 }
 
+/**
+ * The folder a catalog is kept and asked for under: the home reads as no folder, since the
+ * server probes an engine with no folder in this machine's home (engine-model-probe.ts). A New
+ * task starts on the home (draft-home-default.ts), so its picker and the engine's default-model
+ * line read ONE catalog with one request, not one each for `~` and for no folder.
+ */
+export function catalogCwd(cwd?: string): string | undefined {
+  return cwd && isHomeFolder(cwd, knownHomeOf(null)) ? undefined : cwd;
+}
+
 function cacheKey(engine: string, cwd?: string): string {
-  return JSON.stringify([engine, cwd ?? null]);
+  return JSON.stringify([engine, catalogCwd(cwd) ?? null]);
 }
 
 function parseCatalog(value: unknown, engine: string): EngineModelCatalog | null {
@@ -147,7 +158,7 @@ export function recordEngineModelCatalog(
   loadEntries();
   const key = cacheKey(engine, cwd);
   entries.delete(key);
-  entries.set(key, { cwd, catalog, fetchedAt: Date.now() });
+  entries.set(key, { cwd: catalogCwd(cwd), catalog, fetchedAt: Date.now() });
   trimEntries();
   persistEntries();
 }

@@ -22,6 +22,7 @@ import { engineEntry, type LaunchEngine } from '@/utils/engines';
 import { wsClient } from './ws';
 import { knownFallbackEngine } from './engine-fallback';
 import {
+  catalogCwd,
   clearEngineModelCatalogCache,
   getEngineModelCacheGeneration,
   getFreshEngineModelCatalog,
@@ -826,6 +827,7 @@ export async function fetchEngineModelCatalog(
   cwd?: string,
   opts?: { refresh?: boolean; timeoutMs?: number },
 ): Promise<EngineModelCatalog> {
+  cwd = catalogCwd(cwd);
   const cached = opts?.refresh ? null : getFreshEngineModelCatalog(engine, cwd);
   if (cached) return cached;
   const timeoutMs = opts?.timeoutMs ?? 20_000;

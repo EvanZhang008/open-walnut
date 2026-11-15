@@ -25,6 +25,7 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture, installBrowserAudit } from './codex-test-audit'
 import {
   REAL_PANEL, basenameOf, closeDraftModelPicker, draftCwdPill, draftEngineButton, draftModelPill, openDraft,
+  serverHome, shownHomePath,
 } from './draft-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -402,6 +403,8 @@ test('a newly typed path never confirms a stale listing parent or remembered eng
   const oldPath = `${fixtureRoot}/projects/walnut`
   const nextPath = `${fixtureRoot}/projects/another-workspace`
   const draft = await openDraftWithEngine(page, oldPath, 'pi')
+  // The field folds this server's HOME to `~` (path-selector/field-home.ts).
+  const nextShown = shownHomePath(nextPath, await serverHome(page))
   await draftCwdPill(draft).click()
   const picker = page.locator('.session-path-selector')
   const input = picker.locator('.sps-search-input')
@@ -416,7 +419,7 @@ test('a newly typed path never confirms a stale listing parent or remembered eng
   })
   try {
     await input.fill(nextPath)
-    await expect(input).toHaveValue(nextPath)
+    await expect(input).toHaveValue(nextShown)
     await input.press('Shift+Enter')
     await expect(picker).toBeHidden()
     // The engine picked before the move is still the launch's, not the new
@@ -424,7 +427,7 @@ test('a newly typed path never confirms a stale listing parent or remembered eng
     await expect(await draftEngineButton(page, draft, 'pi')).toHaveAttribute('aria-selected', 'true')
     await closeDraftModelPicker(page)
     await draftCwdPill(draft).click()
-    await expect(input).toHaveValue(nextPath)
+    await expect(input).toHaveValue(nextShown)
   } finally {
     release()
     await page.unrouteAll({ behavior: 'wait' })
