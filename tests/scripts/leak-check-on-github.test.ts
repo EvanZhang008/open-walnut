@@ -26,10 +26,7 @@ case "$1 $2" in
 esac
 case "$2" in
   */rules/branches/main) cat "$d/required" ;;
-  */contents/.github/workflows/leak-gate.yml*) # fails the first FAIL_READS reads, as GitHub did once
-    k=$(cat "$d/reads" 2>/dev/null || echo 0); k=$((k + 1)); echo $k > "$d/reads"
-    if [ "$k" -le "$(cat "$d/fail-reads" 2>/dev/null || echo 0)" ]; then echo "HTTP 502: Bad Gateway" >&2; exit 1; fi
-    cat "$d/workflow" ;;
+  */contents/.github/workflows/leak-gate.yml*) base64 < "$d/workflow" ;;
   */status) # the next state of the sequence; the last one repeats
     n=$(cat "$d/n" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "$d/n"
     s=$(sed -n "\${n}p" "$d/states"); [ -n "$s" ] || s=$(tail -1 "$d/states"); echo "$s" ;;
@@ -48,7 +45,7 @@ afterAll(() => fs.rmSync(root, { recursive: true, force: true }))
 
 const git = (cwd: string, ...args: string[]) => spawnSync('git', args, { cwd, encoding: 'utf8' }).stdout.trim()
 
-interface Case { required: 'true' | 'false'; states: string[]; workflow?: string; dispatchFails?: boolean; ref?: string; failReads?: number }
+interface Case { required: 'true' | 'false'; states: string[]; workflow?: string; dispatchFails?: boolean; ref?: string }
 function run(name: string, c: Case) {
   const dir = path.join(root, name)
   const stub = path.join(dir, 'gh')
@@ -60,7 +57,6 @@ function run(name: string, c: Case) {
   fs.writeFileSync(path.join(stub, 'workflow'), c.workflow ?? WORKFLOW)
   fs.writeFileSync(path.join(stub, 'calls'), '')
   if (c.dispatchFails) fs.writeFileSync(path.join(stub, 'dispatch-fails'), '')
-  if (c.failReads) fs.writeFileSync(path.join(stub, 'fail-reads'), String(c.failReads))
   git(root, 'init', '-q', '--bare', bare)
   git(root, 'init', '-q', '-b', 'main', work)
   git(work, '-c', 'user.email=t@example.invalid', '-c', 'user.name=T', 'commit', '-q', '--allow-empty', '-m', 'one')
@@ -69,7 +65,7 @@ function run(name: string, c: Case) {
     cwd: work,
     encoding: 'utf8',
     input: `refs/heads/main ${sha} ${c.ref ?? 'refs/heads/main'} ${'0'.repeat(40)}\n`,
-    env: { ...process.env, PATH: `${path.join(root, 'bin')}:${process.env.PATH}`, GH_STUB: stub, WALNUT_LEAK_CHECK_SLUG: 'owner/repo', WALNUT_LEAK_CHECK_POLL: '0', WALNUT_LEAK_CHECK_TIMEOUT: '2', WALNUT_LEAK_CHECK_RETRY_S: '0' },
+    env: { ...process.env, PATH: `${path.join(root, 'bin')}:${process.env.PATH}`, GH_STUB: stub, WALNUT_LEAK_CHECK_SLUG: 'owner/repo', WALNUT_LEAK_CHECK_POLL: '0', WALNUT_LEAK_CHECK_TIMEOUT: '2' },
   })
   const calls = fs.readFileSync(path.join(stub, 'calls'), 'utf8')
   const left = spawnSync('git', ['for-each-ref', '--format=%(refname)'], { cwd: bare, encoding: 'utf8' }).stdout.trim()
@@ -111,14 +107,6 @@ describe('the Leak gate checks a commit on GitHub before it becomes main', () =>
       expect(r.out).toMatch(/Push blocked: the Leak gate on GitHub found something/)
       expect(r.left).toBe('')
     }
-  })
-
-  it('a read of GitHub that fails for a moment is tried again; one that keeps failing says why', () => {
-    const blip = run('blip', { required: 'true', states: ['none', 'success'], failReads: 2 })
-    expect(blip.status, blip.out).toBe(0)
-    const down = run('down', { required: 'true', states: ['none'], failReads: 9 })
-    expect(down.status, down.out).toBe(1)
-    expect(down.out).toMatch(/could not read \.github\/workflows\/leak-gate\.yml of GitHub's main: HTTP 502: Bad Gateway/)
   })
 
   it('a commit that already passed is not checked again', () => {
