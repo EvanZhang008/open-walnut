@@ -46,9 +46,11 @@ struct ApprovalSheet: View {
                                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
                                 .accessibilityIdentifier("approval.detail")
                         } label: {
+                            // On the label, not the group: a group's identifier is given to its content too,
+                            // and the opened detail then read as approval.details (lane B, 2026-11-15).
                             Text(tech.signed ? "Details (signed)" : "Details").font(.subheadline)
+                                .accessibilityIdentifier("approval.details")
                         }
-                        .accessibilityIdentifier("approval.details")
                     }
                 }
                 .padding(20)
