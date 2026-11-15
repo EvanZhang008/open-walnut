@@ -106,15 +106,61 @@ export async function openThreadsSession(
     // 5s default missed it repeatedly in WebKit at load 70 (a readiness wait, not
     // an assertion about speed). A query typed right after mount can also be wiped
     // by a late state load, so type it again until the row is there.
-    await expect(async () => {
-      if (await search.inputValue() !== sessionId) await search.fill(sessionId)
-      await expect(task).toBeVisible({ timeout: 5_000 })
-    }).toPass({ timeout: 30_000 })
+    // Every step is bounded: an unbounded inputValue/fill that waits on a field it
+    // cannot use never returns, so toPass neither retried nor said why (CI,
+    // 2026-11-15: an 800px window failed with only "Timeout ... waiting on the
+    // predicate" and no search ever reached the server).
+    try {
+      await expect(async () => {
+        if (await search.inputValue({ timeout: 5_000 }) !== sessionId) await search.fill(sessionId, { timeout: 5_000 })
+        await expect(task).toBeVisible({ timeout: 5_000 })
+      }).toPass({ timeout: 30_000 })
+    } catch (err) {
+      throw new Error(`${err instanceof Error ? err.message : String(err)}\n\nThe task search, as the page has it: ${await describeSearchField(page)}`)
+    }
     await task.locator('.todo-item-title').click()
   }
   await expect(panel).toBeVisible({ timeout: 20_000 })
   if (readyText) await expect(panel.locator('.session-history')).toContainText(readyText, { timeout: 30_000 })
   return panel
+}
+
+/** Why the Home task search could not be used: how many fields, the first one's box, value and
+ *  hiding ancestors, the task panel's width and class, the viewport, and what holds the focus. */
+async function describeSearchField(page: Page): Promise<string> {
+  // A page whose main thread never yields answers nothing: say so instead of waiting out the test.
+  const frozen = new Promise<string>((resolve) => setTimeout(() => resolve('no answer from the page in 3s (its main thread is busy)'), 3_000))
+  try {
+    return await Promise.race([frozen, page.evaluate(() => {
+      const fields = document.querySelectorAll<HTMLInputElement>('.todo-search-input')
+      const input = fields[0]
+      const panel = document.querySelector<HTMLElement>('.main-page-todo')
+      const box = (el: Element | null | undefined) => {
+        if (!el) return 'none'
+        const r = el.getBoundingClientRect()
+        return `${Math.round(r.x)},${Math.round(r.y)} ${Math.round(r.width)}x${Math.round(r.height)}`
+      }
+      const hidden = input?.closest('[inert], .collapsed, [aria-hidden="true"]')
+      const style = input ? getComputedStyle(input) : null
+      const active = document.activeElement
+      return JSON.stringify({
+        fields: fields.length,
+        field: box(input),
+        value: input?.value ?? null,
+        display: style?.display ?? null,
+        visibility: style?.visibility ?? null,
+        checkVisibility: input && 'checkVisibility' in input ? input.checkVisibility() : null,
+        hiddenBy: hidden ? `${hidden.tagName.toLowerCase()}.${[...hidden.classList].join('.')}` : null,
+        toolbar: box(document.querySelector('.todo-panel-toolbar')),
+        panel: panel ? `${box(panel)} ${panel.className}` : 'none',
+        viewport: `${innerWidth}x${innerHeight}`,
+        active: active ? `${active.tagName.toLowerCase()}${active.className ? `.${String(active.className).split(' ').join('.')}` : ''}` : null,
+        path: location.pathname,
+      })
+    })])
+  } catch (err) {
+    return `unreadable (${err instanceof Error ? err.message : String(err)})`
+  }
 }
 
 /** The header pill: says the view a click switches TO. */
