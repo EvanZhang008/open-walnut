@@ -53,3 +53,21 @@ export async function openSessionBoard(page: Page, panel: Locator, beforeClick?:
   await expect(pane).toBeVisible({ timeout: 30_000 })
   return pane
 }
+
+/**
+ * A task reference on the Board (a card's title, the leader's button) opens that task's session on
+ * Home (useOpenTask), where the leader's column shows its chat in place of the Board. This brings the
+ * Cards back the way a user does (the leader's Board chip, then Cards); a Board on screen is left as
+ * it is. `leader` is the leader's session panel. Returns the `task-board-pane`.
+ */
+export async function backToBoard(page: Page, leader: Locator): Promise<Locator> {
+  const pane = page.getByTestId('task-board-pane')
+  const kanban = pane.getByTestId('board-kanban')
+  await expect(async () => {
+    if (await kanban.isVisible()) return
+    if (await pane.count() === 0) await openSessionBoard(page, leader)
+    await pane.getByTestId('board-view-cards').click({ timeout: 5_000 })
+    await expect(kanban).toBeVisible({ timeout: 5_000 })
+  }).toPass({ timeout: 60_000 })
+  return pane
+}

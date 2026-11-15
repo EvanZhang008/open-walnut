@@ -22,6 +22,7 @@ import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, leaveFullscreen } from './draft-helpers'
+import { backToBoard } from './board-view-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import {
   call, getSession, kanbanApi, pollUntil, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
@@ -119,7 +120,7 @@ async function cardMenu(page: Page, c: Locator, row: string): Promise<void> {
   await page.getByTestId(row).click()
 }
 
-test('C28: the leader moves and rewrites show as Changed with who and when; opening one and Mark all seen clear them', async ({ page }) => {
+test('C28: the leader moves and rewrites show as Changed with who and when; reading or opening one and Mark all seen clear them', async ({ page }) => {
   await seenAll()
   const [m1, m2, s1] = [team.all[10], team.all[11], team.all[12]]
   await leaderSet(m1, { lane: 'mitigating' })
@@ -134,10 +135,10 @@ test('C28: the leader moves and rewrites show as Changed with who and when; open
     await expect(card(pane, id).getByTestId('kanban-card-changed')).toHaveAttribute('title', new RegExp(`^Moved from Investigating by the leader · ${CLOCK}$`))
   }
   await expect(card(pane, s1).getByTestId('kanban-card-changed')).toHaveText(new RegExp(`^Summary by the leader ${CLOCK}$`))
-  // Opening a card clears its mark.
-  await card(pane, m1).getByTestId('kanban-card-title').click()
+  // Reading a card in place (its summary unfolds) clears its mark; the others stay.
+  await card(pane, s1).getByTestId('kanban-card-summary').click()
   await expect.poll(() => chipCount(changed), { timeout: 15_000 }).toBe(2)
-  await expect(card(pane, m1).getByTestId('kanban-card-changed')).toHaveCount(0)
+  await expect(card(pane, s1).getByTestId('kanban-card-changed')).toHaveCount(0)
   // The user's own move never counts, here or in another window.
   await cardMenu(page, card(pane, team.all[8]), 'kanban-card-menu-move')
   await page.locator('[data-testid="kanban-card-move-lane"][data-lane-id="mitigating"]').click()
@@ -150,6 +151,15 @@ test('C28: the leader moves and rewrites show as Changed with who and when; open
   await expect.poll(() => chipCount(changed), { timeout: 15_000 }).toBe(0)
   await expect(changed).toHaveAttribute('aria-pressed', 'false')
   await expect(pane.getByTestId('kanban-mark-seen')).toHaveCount(0)
+  // Opening a card clears its mark too. It opens the card's task on Home (useOpenTask), where the
+  // Board gives way, which ends the visit; back on the Board nothing reads as changed.
+  await leaderSet(m1, { lane: 'investigating' })
+  await expect.poll(() => chipCount(changed), { timeout: 30_000 }).toBe(1)
+  await card(pane, m1).getByTestId('kanban-card-title').click()
+  if (team.sessions[m1]) await expect(page.locator(`${REAL_PANEL}[data-session-id="${team.sessions[m1]}"]`)).toBeVisible({ timeout: 30_000 })
+  await backToBoard(page, page.locator(`${REAL_PANEL}[data-session-id="${team.leaderSid}"]`))
+  await expect.poll(() => chipCount(changed), { timeout: 15_000 }).toBe(0)
+  await expect(card(pane, m1).getByTestId('kanban-card-changed')).toHaveCount(0)
 })
 
 test('C61: the user message is not New output; the turn output shows once, as the unread dot', async ({ page }) => {

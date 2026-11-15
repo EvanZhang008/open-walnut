@@ -22,6 +22,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, leaveFullscreen } from './draft-helpers'
 import { stateCountLabel } from '../../../src/core/user-status'
+import { backToBoard } from './board-view-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { keepCornerToBoard } from './board-kanban-corner'
 import {
@@ -376,10 +377,14 @@ test('C39: the leader needing the user shows in the rollup, the count and its ow
   // Off the default view, the Status button carries the count. (The Custom view is disabled until
   // the leader writes a page, so the count is read from the Cards view this test is on.)
   await expect(pane.getByTestId('board-view-attention')).toHaveText(String(before + 1))
-  // The leader is this panel's own task: its button brings the leader's chat (the Chat tab) beside the board.
+  // The button is a task reference (useOpenTask): it opens the leader's session on Home, its
+  // chat in place of the Board. The Board chip brings the Cards back for the leader row.
   await lead.click()
-  await expect(page.locator('.session-panel-split.is-changed-open .session-panel-chat-col').first()).toBeVisible({ timeout: 15_000 })
-  await expect(pane.getByTestId('board-kanban')).toBeVisible()
+  const leadPanel = page.locator(`${REAL_PANEL}[data-session-id="${leadSid}"]`)
+  await expect(leadPanel).toBeVisible({ timeout: 15_000 })
+  await expect(leadPanel.getByText('Kanban leader ready').first()).toBeVisible({ timeout: 15_000 })
+  await expect(pane.getByTestId('board-kanban')).toHaveCount(0)
+  await backToBoard(page, leadPanel)
   // Allow from the leader row: the leader stops needing the user.
   const row = pane.getByTestId('kanban-leader-row')
   if (!(await row.isVisible())) await chip(pane, 'needs').click()

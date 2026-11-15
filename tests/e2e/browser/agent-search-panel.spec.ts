@@ -104,8 +104,9 @@ test('auto-triggers once after settle: skeleton, then clickable rows above the r
 
 test('clicking an AI row focuses the task like a normal result click', async ({ page }) => {
   // The instant lane ALSO returns the task here so its normal row is on
-  // screen — clicking the AI row must focus that same row (`task-focused`),
-  // proving the click path is identical to a normal result click.
+  // screen. The AI row is a task reference (useOpenTask): it opens the task on
+  // Home, so the search clears and the list's own row for it is focused
+  // (`task-focused`), the same row a normal result click lands on.
   await page.route('**/api/search?**', async (route) => {
     await route.fulfill({
       status: 200,
@@ -124,7 +125,11 @@ test('clicking an AI row focuses the task like a normal result click', async ({ 
   const normalRow = page.locator(`.todo-search-results .todo-panel-item[data-task-id="${TARGET_TASK_ID}"]`);
   await expect(normalRow).toBeVisible({ timeout: 10_000 });
   await row.click();
-  await expect(normalRow).toHaveClass(/task-focused/, { timeout: 10_000 });
+  // A locate from a task reference reveals its row behind no search (TodoPanel focus effect).
+  await expect(page.locator('.todo-search-input')).toHaveValue('', { timeout: 10_000 });
+  await expect(page.locator('.todo-search-results')).toHaveCount(0);
+  const listRow = page.locator(`#home-task-navigation .todo-panel-item[data-task-id="${TARGET_TASK_ID}"]`);
+  await expect(listRow.and(page.locator('.task-focused'))).toHaveCount(1, { timeout: 10_000 });
 });
 
 test('503 ai_disabled hides the panel and latches — no further requests', async ({ page }) => {

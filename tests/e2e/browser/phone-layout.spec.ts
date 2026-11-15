@@ -255,9 +255,8 @@ test('a task opens its session full screen with the composer in view, and closin
   expect(closeBox.height).toBeGreaterThanOrEqual(44)
   await close.click()
   await expect(column).toHaveCount(0)
-  // Back on the search it was opened from; Cancel returns to the board.
-  await expect(page.getByTestId('phone-search-layer')).toBeVisible()
-  await page.locator('.phone-search-cancel').click()
+  // The search gave way when the task opened (a layer over Home yields to a task open,
+  // useYieldsToTaskOpen), so Back lands on the board itself.
   await expect(page.getByTestId('phone-search-layer')).toHaveCount(0)
   await expectFillsUnderTopBar(page, board(page))
   expect(errors).toEqual([])
