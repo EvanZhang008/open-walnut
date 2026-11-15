@@ -1,8 +1,6 @@
-import type sharpType from 'sharp';
+import type { SharpFn } from '../core/components/sharp-type.js';
 import { log } from '../logging/index.js';
 import { componentStatus, ensureComponent, loadComponent, markBundledBroken, markInstalledBroken, whenComponentReady } from '../core/components/index.js';
-
-type SharpFn = typeof sharpType;
 
 /**
  * sharp is an optional part of Walnut. Running from source or an npm install,

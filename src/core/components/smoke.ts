@@ -6,6 +6,7 @@
  */
 
 import type { ComponentName } from './types.js';
+import type { SharpFn } from './sharp-type.js';
 
 export interface SmokeTarget {
   /** createRequire rooted in the component dir. */
@@ -59,7 +60,7 @@ export async function smokeComponent(name: ComponentName, target: SmokeTarget): 
     return 'transformers loads; onnxruntime ran a model on the CPU';
   }
   if (name === 'images') {
-    const sharp = target.require('sharp') as typeof import('sharp').default;
+    const sharp = target.require('sharp') as SharpFn;
     const png = await sharp({ create: { width: 3000, height: 2000, channels: 3, background: '#336699' } }).png().toBuffer();
     const small = await sharp(png).resize({ width: 1568, height: 1568, fit: 'inside' }).jpeg({ quality: 80 }).toBuffer();
     const meta = await sharp(small).metadata();

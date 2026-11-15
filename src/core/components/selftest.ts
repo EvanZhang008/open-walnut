@@ -10,6 +10,7 @@ import { componentStatus, holdComponentInstalls, loadComponent } from './index.j
 import { embeddingThroughWorker, type EmbedWorkerChoice } from './selftest-embedding.js';
 import { smokeComponent } from './smoke.js';
 import type { ComponentName } from './types.js';
+import type { SharpFn } from './sharp-type.js';
 
 export interface SelftestOptions {
   /** The embed worker to probe, and what runs it (default: this Walnut's own). */
@@ -34,7 +35,7 @@ export async function componentSelftest(name: ComponentName, opts: SelftestOptio
 }
 
 async function imagesThroughFeature(req: NodeJS.Require): Promise<string> {
-  const sharp = req('sharp') as typeof import('sharp').default;
+  const sharp = req('sharp') as SharpFn;
   const png = await sharp({ create: { width: 3000, height: 2000, channels: 3, background: '#2a6' } }).png().toBuffer();
   const { compressForApi, MAX_IMAGE_DIMENSION } = await import('../../utils/image-compress.js');
   const out = await compressForApi(png, 'image/png');
