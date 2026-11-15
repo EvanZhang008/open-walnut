@@ -50,7 +50,7 @@ final class ViewMemoryUITests: XCTestCase {
                      app.segmentedControls["org.node.tabs"]]
         let deadline = Date().addingTimeInterval(45)
         while Date() < deadline, !app.tabBars.buttons.allElementsBoundByIndex.contains(where: \.isSelected)
-                || (app.tabBars.buttons["Chat"].isSelected && !ready.contains(where: \.exists)) {
+                || (app.tab(.chat).isSelected && !ready.contains(where: \.exists)) {
             Thread.sleep(forTimeInterval: 0.25)
         }
         Thread.sleep(forTimeInterval: 1)

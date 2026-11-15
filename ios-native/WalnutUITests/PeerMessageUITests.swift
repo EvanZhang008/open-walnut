@@ -56,7 +56,7 @@ final class PeerMessageUITests: XCTestCase {
     }
 
     @MainActor private func enterSession(_ app: XCUIApplication) throws {
-        let tasks = app.tabBars.buttons["Tasks"]
+        let tasks = app.tab(.tasks)
         XCTAssertTrue(tasks.waitForExistence(timeout: 30)); tasks.tap()
         let scrim = element(app, "tasks.drawer.scrim")
         if !scrim.waitForExistence(timeout: 3) {

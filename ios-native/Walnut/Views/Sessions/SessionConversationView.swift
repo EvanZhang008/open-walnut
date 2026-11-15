@@ -760,11 +760,42 @@ struct SessionConversationView: View {
         return task
     }
 
-    /// The linked task read by id when the list does not carry it (whether it is an Org node).
+    /// The linked task read by id when the list does not carry it (whether it is an Org node),
+    /// read again while the page is up until it answers. One read that failed (a loaded phone, a
+    /// server restarting) left Main's chat without its Threads, Tasks and Brief bar for as long as
+    /// it stayed open (2026-11-15, CI: Main's chat opened and its bar never came).
     private func fetchLinkedTaskIfMissing() async {
-        guard fetchedTask == nil, linkedTask == nil, let taskId = session.taskId, tasksStore != nil else { return }
-        if let detail = try? await WalnutAPI().taskDetail(id: taskId) { fetchedTask = WalnutTask(detail: detail) }
+        guard let taskId = session.taskId, tasksStore != nil else { return }
+        var failures = 0
+        while fetchedTask == nil, linkedTask == nil, !Task.isCancelled {
+            do {
+                fetchedTask = WalnutTask(detail: try await WalnutAPI().taskDetail(id: taskId))
+                return
+            } catch {
+                failures += 1
+                guard let wait = Self.linkedTaskRetryDelay(after: error, failures: failures) else { return }
+                try? await Task.sleep(for: .seconds(wait))
+            }
+        }
     }
+
+    /// How long until the linked task is read again after `failures` failed reads, nil when
+    /// reading again cannot help (the page went away, the server said the task is not there or
+    /// not this phone's to read, or answered with something that is not a task) or after
+    /// `linkedTaskReadLimit` reads (about half a minute of trying).
+    nonisolated static func linkedTaskRetryDelay(after error: Error, failures: Int) -> TimeInterval? {
+        if error is CancellationError || failures >= linkedTaskReadLimit { return nil }
+        if let api = error as? APIError {
+            switch api {
+            case .cancelled, .notConfigured, .unauthorized, .badResponse: return nil
+            case .server(let status, _, _, _, _) where (400..<500).contains(status) && status != 408 && status != 429: return nil
+            default: break
+            }
+        }
+        return min(pow(2, Double(max(failures, 1) - 1)), 15)
+    }
+
+    nonisolated static let linkedTaskReadLimit = 6
 
     /// The longest the chat stays covered waiting for its page (a slow task read included).
     static let coverLimitSeconds = 4.0

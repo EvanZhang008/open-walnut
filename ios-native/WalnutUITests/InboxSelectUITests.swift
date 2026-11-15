@@ -161,7 +161,7 @@ final class InboxSelectUITests: XCTestCase {
         try await stub.reset()
         try await stub.call("POST", "__stub/inbox?seed=parity")
         let app = UITestLaunch.launch(["-walnut.serverUrl", server, "-walnut.deviceToken", token])
-        let tab = app.tabBars.buttons["Inbox"]
+        let tab = app.tab(.inbox)
         XCTAssertTrue(tab.waitForExistence(timeout: 60), "the tab bar never appeared")
         tab.tap()
         XCTAssertTrue(element(app, "inbox.filterBar").waitForExistence(timeout: 30), "no filter row on the Inbox")

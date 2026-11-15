@@ -2767,9 +2767,10 @@ final class ChatStore {
         forgetLiveTurn()
         // The lane line is read only while the screen shows it; a send into the turn
         // still on its way finishes on its own, and a followed one is read again when the
-        // screen is back (`resumeLaneFollow`).
+        // screen is back (`resumeLaneFollow`). A read already on its way is dropped too.
         laneFollow?.cancel()
         laneFollow = nil
+        laneQueue?.stopReading()
     }
 
     private func resumeStream() {

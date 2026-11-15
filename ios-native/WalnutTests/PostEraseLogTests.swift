@@ -142,7 +142,51 @@ final class PostEraseLogTests: XCTestCase {
         let gone = await waitFor(LocalDataReset.lateCacheClearDelay + 10) {
             URLCache.shared.cachedResponse(for: URLRequest(url: url)) == nil
         }
-        XCTAssertTrue(gone, "a response cached right after the erase survived it")
+        let cache = URLCache.shared
+        XCTAssertTrue(gone, "a response cached right after the erase survived it (memory \(cache.currentMemoryUsage) B, "
+                      + "disk \(cache.currentDiskUsage) B)")
+    }
+
+    /// The purge itself, on a cache of its own: what it held in memory and on disk is gone (a
+    /// fresh cache opened on the same folder finds nothing), and the cache keeps working, and
+    /// keeping, afterwards.
+    func testThePurgeEmptiesTheCacheInMemoryAndOnDiskAndLeavesItWorking() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("purge-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let cache = URLCache(memoryCapacity: 4 << 20, diskCapacity: 20 << 20, directory: folder)
+        func onDisk(_ request: URLRequest) -> Bool {
+            URLCache(memoryCapacity: 0, diskCapacity: 20 << 20, directory: folder).cachedResponse(for: request) != nil
+        }
+        func store(_ name: String) -> URLRequest {
+            let url = URL(string: "https://purge.walnut.invalid/\(name)")!
+            cache.storeCachedResponse(
+                CachedURLResponse(response: HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                                  data: Data(name.utf8)),
+                for: URLRequest(url: url))
+            return URLRequest(url: url)
+        }
+        let before = store("before")
+        XCTAssertNotNil(cache.cachedResponse(for: before), "the setup did not take")
+        // The disk write lands after the store returns.
+        let written = await waitFor(10) { onDisk(before) }
+        XCTAssertTrue(written, "the setup never reached the disk")
+
+        LocalDataReset.purgeHTTPCache(cache)
+        XCTAssertNil(cache.cachedResponse(for: before), "the purge left a response in memory")
+        let erased = await waitFor(10) { !onDisk(before) }
+        XCTAssertTrue(erased, "the purge left a response on disk")
+        XCTAssertEqual(cache.memoryCapacity, 4 << 20, "the purge shrank the cache for good")
+        let after = store("after")
+        XCTAssertNotNil(cache.cachedResponse(for: after), "the cache keeps nothing after a purge")
+    }
+
+    /// Every session the app loads through keeps no HTTP cache, so nothing it loads reaches one.
+    func testTheAppsSessionsKeepNoHTTPCache() {
+        let config = URLSessionConfiguration.default.keepingNoHTTPCache()
+        XCTAssertNil(config.urlCache)
+        XCTAssertEqual(config.requestCachePolicy, .reloadIgnoringLocalCacheData)
+        XCTAssertNil(AppHTTP.session.configuration.urlCache)
+        XCTAssertEqual(AppHTTP.session.configuration.requestCachePolicy, .reloadIgnoringLocalCacheData)
     }
 
     func testTheUnregisterResultNamesNoTokenAndNoServer() {

@@ -35,7 +35,7 @@ final class TalkToWalnutUITests: XCTestCase {
             "-walnut.debug.talkReplayFile", audio, "-walnut.debug.talkClearOutbox", "YES",
         ])
         XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 60), "Walnut never opened")
-        app.tabBars.buttons["Settings"].tap()
+        app.tab(.settings).tap()
         let row = element(app, "settings.talkToWalnut")
         for _ in 0..<6 where !row.isHittable { app.swipeUp() }
         row.tap()
@@ -96,7 +96,7 @@ final class TalkToWalnutUITests: XCTestCase {
         XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 60), "Walnut never opened")
         // A waiting take never pops a sheet: open the list from Settings,
         // making a take there first when none is kept (the server is unreachable).
-        app.tabBars.buttons["Settings"].tap()
+        app.tab(.settings).tap()
         let row = element(app, "settings.talkToWalnut")
         for _ in 0..<12 where !row.isHittable { app.swipeUp() }
         row.tap()

@@ -271,7 +271,8 @@ final class DemoModeTests: XCTestCase {
             var request = URLRequest(url: DemoMode.baseURL.appendingPathComponent(path))
             request.httpMethod = "POST"
             request.httpBody = Data("{}".utf8)
-            let (_, response) = try await URLSession.shared.data(for: request)
+            // The log upload's own session (`AppHTTP.session`).
+            let (_, response) = try await AppHTTP.session.data(for: request)
             XCTAssertTrue((200...299).contains((response as? HTTPURLResponse)?.statusCode ?? 0), path)
         }
 
@@ -280,7 +281,7 @@ final class DemoModeTests: XCTestCase {
             WalnutAPI.mediaURL(absolutePath: "/tmp/shot.png"),
             WalnutAPI.attachmentURL(rawPath: "photo.png", notePath: "Inbox.md"),
         ] {
-            let (data, response) = try await URLSession.shared.data(from: try XCTUnwrap(url))
+            let (data, response) = try await AppHTTP.session.data(from: try XCTUnwrap(url))
             XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
             XCTAssertNotNil(UIImage(data: data))
         }
@@ -626,7 +627,7 @@ final class DemoModeTests: XCTestCase {
     func testWhileInTheDemoEveryOtherHostIsRefusedLocally() async throws {
         XCTAssertTrue(DemoMode.isActive)
         let other = try XCTUnwrap(URL(string: "https://example.com/anything"))
-        for session in [URLSession.shared, URLSession(configuration: DemoMode.configured(.default))] {
+        for session in [URLSession.shared, AppHTTP.session, URLSession(configuration: DemoMode.configured(.default))] {
             do {
                 _ = try await session.data(from: other)
                 XCTFail("a request to another host must not go out in the demo")
@@ -634,7 +635,7 @@ final class DemoModeTests: XCTestCase {
                 XCTAssertEqual((error as? URLError)?.code, .notConnectedToInternet)
             }
         }
-        XCTAssertEqual(DemoURLProtocol.blockedByTheCodeUnderTest.map(\.host), ["example.com", "example.com"])
+        XCTAssertEqual(DemoURLProtocol.blockedByTheCodeUnderTest.map(\.host), ["example.com", "example.com", "example.com"])
         DemoURLProtocol.resetLog()
     }
 

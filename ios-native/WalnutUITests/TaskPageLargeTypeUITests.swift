@@ -101,7 +101,7 @@ final class TaskPageLargeTypeUITests: XCTestCase {
     /// The board drawer's first row, its long-press menu, Details.
     @MainActor
     private func openTaskPage(_ app: XCUIApplication) throws {
-        let tasks = app.buttons["Tasks"]
+        let tasks = app.tab(.tasks)
         XCTAssertTrue(tasks.waitForExistence(timeout: 30), "the tab bar never appeared")
         tasks.tap()
         let scrim = app.descendants(matching: .any)["tasks.drawer.scrim"]

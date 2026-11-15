@@ -84,7 +84,7 @@ enum DemoMode {
         return config
     }
 
-    /// `URLSession.shared` (the log uploader, the letter body download) only sees
+    /// `URLSession.shared` (whatever a framework loads through it) only sees
     /// globally registered protocols. Swift runs a static initializer once,
     /// thread-safely, so this is idempotent from any thread.
     private static let globalRegistration: Void = {

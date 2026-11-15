@@ -183,7 +183,7 @@ final class VoiceQuickActionUITests: XCTestCase {
         // caption waits cannot discover anything once the surface under test does
         // not exist.
         let tabBar = app.tabBars.firstMatch
-        let settingsTab = app.buttons["Settings"].firstMatch
+        let settingsTab = app.tab(.settings)
         XCTAssertTrue(
             tabBar.waitForExistence(timeout: 15) || settingsTab.waitForExistence(timeout: 5),
             "no tab bar 15s after launch: the app booted UNPAIRED into SetupView, so there is "

@@ -1050,7 +1050,7 @@ final class ModelPillHealUITests: XCTestCase {
         }
         XCTAssertTrue(waitUntil(timeout: 5) { !app.keyboards.element.exists }, "the keyboard would not go away")
 
-        let inbox = app.buttons["Inbox"]
+        let inbox = app.tab(.inbox)
         XCTAssertTrue(inbox.waitForExistence(timeout: 10), "no Inbox tab")
         inbox.tap()
         try await Task.sleep(for: .seconds(2))
@@ -1074,7 +1074,7 @@ final class ModelPillHealUITests: XCTestCase {
         XCTAssertTrue(hidden.isEmpty, "the hidden Chat composer asked the Mac \(hidden.count) time(s) while on Inbox")
         try await stub.screenshot(app, "model-pill-11-inbox-hidden-composer")
 
-        app.buttons["Chat"].tap()
+        app.tab(.chat).tap()
         XCTAssertTrue(
             waitUntil(timeout: 10) { ((try? self.syncEngineGets(stub).count) ?? 0) > asksBefore },
             "coming back to Chat did not re-ask a stale answer"
@@ -1100,7 +1100,7 @@ final class ModelPillHealUITests: XCTestCase {
         try await stub.setEngine("lane")
         try await stub.call("POST", "__stub/work-session?on=1")
         let app = try launchPaired()
-        let tasksTab = app.buttons["Tasks"]
+        let tasksTab = app.tab(.tasks)
         XCTAssertTrue(tasksTab.waitForExistence(timeout: 60), "the tab bar never appeared")
         tasksTab.tap()
         let row = app.descendants(matching: .any)
@@ -1123,7 +1123,7 @@ final class ModelPillHealUITests: XCTestCase {
         // two stream drops (the page closes its own stream once hidden, so these
         // find only the Chat tab's), and through a trip to the home screen, the
         // trigger that re-asks a composer on screen.
-        let inbox = app.buttons["Inbox"]
+        let inbox = app.tab(.inbox)
         inbox.tap()
         XCTAssertTrue(waitUntil(timeout: 5) { inbox.isSelected }, "the Inbox tab did not become selected")
         let leftAt = Date()
@@ -1253,7 +1253,7 @@ final class ModelPillHealUITests: XCTestCase {
 
     @MainActor
     private func openChatTab(_ app: XCUIApplication) {
-        let chat = app.buttons["Chat"]
+        let chat = app.tab(.chat)
         XCTAssertTrue(chat.waitForExistence(timeout: 60), "the tab bar never appeared")
         chat.tap()
     }

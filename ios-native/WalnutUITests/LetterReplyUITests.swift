@@ -707,7 +707,7 @@ final class LetterReplyUITests: XCTestCase {
     func testASlowPullOnTheInboxStillShowsTheNewLetter() async throws {
         let stub = try await prepared()
         let app = try launchPaired()
-        let tab = app.tabBars.buttons["Inbox"]
+        let tab = app.tab(.inbox)
         XCTAssertTrue(tab.waitForExistence(timeout: 60))
         tab.tap()
         let all = element(app, "inbox.filter.all")
@@ -1302,7 +1302,7 @@ final class LetterReplyUITests: XCTestCase {
     @MainActor
     func openChat(_ app: XCUIApplication) {
         dismissKeyboard(app)
-        let tab = app.tabBars.buttons["Chat"]
+        let tab = app.tab(.chat)
         XCTAssertTrue(tab.waitForExistence(timeout: 20), "no Chat tab")
         tab.tap()
         XCTAssertTrue(element(app, "chat.mic").waitForExistence(timeout: 20), "the chat composer has no mic")
@@ -1549,7 +1549,7 @@ final class LetterReplyUITests: XCTestCase {
 
     @MainActor
     func openLetter(_ app: XCUIApplication, _ id: String) {
-        let tab = app.tabBars.buttons["Inbox"]
+        let tab = app.tab(.inbox)
         XCTAssertTrue(tab.waitForExistence(timeout: 60), "the tab bar never appeared")
         if !tab.isSelected { tab.tap() }
         let all = element(app, "inbox.filter.all")

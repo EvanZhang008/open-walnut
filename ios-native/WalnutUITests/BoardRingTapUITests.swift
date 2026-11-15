@@ -69,7 +69,7 @@ final class BoardRingTapUITests: XCTestCase {
 
     /// Open the Tasks tab's board (its drawer) and wait for the board to have rows.
     private func board(_ app: XCUIApplication) throws -> XCUIElement {
-        let tasks = app.buttons["Tasks"]
+        let tasks = app.tab(.tasks)
         XCTAssertTrue(tasks.waitForExistence(timeout: 30), "the tab bar never appeared")
         tasks.tap()
         // The tab's page is a session; the board is the drawer, open on a fresh launch

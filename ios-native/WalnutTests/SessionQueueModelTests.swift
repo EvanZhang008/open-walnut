@@ -179,6 +179,39 @@ final class SessionQueueModelTests: XCTestCase {
         XCTAssertEqual(m.rows.map(\.id), ["qm-a"], "a stopped read emptied the line")
     }
 
+    /// The same for the read a send starts by itself when no clock runs (the CEO chat's
+    /// lane): it is no task of the screen's, so `stopReading` ends it, on its way or not yet
+    /// left (2026-11-15, CI: that read answered after the chat went away and turned Queued
+    /// into Delivered while nothing was on screen).
+    func testASendsOwnReadOnItsWayWhenTheScreenGoesChangesNothing() async {
+        let t = Transport()
+        let m = model(t)
+        let gate = CheckedContinuationGate()
+        t.readGate = gate
+        m.watch("qm-sent")
+        XCTAssertEqual(m.sendStates["qm-sent"], .pending)
+        // Let the send's read leave and wait at the gate, holding a line without the message.
+        for _ in 0..<500 where t.reads == 0 { try? await Task.sleep(for: .milliseconds(2)) }
+        XCTAssertEqual(t.reads, 1, "the send read its line")
+        m.stopReading()
+        t.readGate = nil
+        gate.open()
+        try? await Task.sleep(for: .milliseconds(60))
+        XCTAssertEqual(m.sendStates["qm-sent"], .pending, "a read stopped with the screen said Delivered")
+        await m.refresh()
+        XCTAssertEqual(m.sendStates["qm-sent"], .delivered, "the screen's next read says what the line holds")
+    }
+
+    func testASendsOwnReadThatHadNotLeftWhenTheScreenWentNeverLeaves() async {
+        let t = Transport()
+        let m = model(t)
+        m.watch("qm-sent")
+        m.stopReading()
+        try? await Task.sleep(for: .milliseconds(60))
+        XCTAssertEqual(t.reads, 0, "a read stopped before it left still went out")
+        XCTAssertEqual(m.sendStates["qm-sent"], .pending)
+    }
+
     // MARK: - Withdraw
 
     func testWithdrawRemovesTheRowAndTellsThePageWhichMessageWentAway() async {

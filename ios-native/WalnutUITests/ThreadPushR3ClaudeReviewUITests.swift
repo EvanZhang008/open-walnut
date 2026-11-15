@@ -15,7 +15,7 @@ final class ThreadPushR3ClaudeReviewUITests: ThreadPushUITestCase {
 
     func testAAAnotherVPsPushFromAnotherTabWhileOneVPsPageIsUp() throws {
         try openBarPage("AA")
-        app.tabBars.buttons["Inbox"].tap()
+        app.tab(.inbox).tap()
         Thread.sleep(forTimeInterval: 1.5)
         shot("AA-inbox")
         push(ids2[2], task: vp2)

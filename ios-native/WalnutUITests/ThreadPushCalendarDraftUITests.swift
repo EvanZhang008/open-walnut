@@ -10,7 +10,7 @@ final class ThreadPushCalendarDraftUITests: ThreadPushUITestCase {
 
     func testThreadPushKeepsAnUnsubmittedCalendarDraft() throws {
         try launchToVPChat("C")
-        app.tabBars.buttons["Tasks"].tap()
+        app.tab(.tasks).tap()
         let calendarButton = app.buttons["tasks.calendar"]
         // The Tasks tab may open on the session he last opened there: Back to its board.
         for _ in 0..<3 where !calendarButton.waitForExistence(timeout: 5) {

@@ -105,7 +105,7 @@ final class VoiceDictationUITests: XCTestCase {
     func testTaskDescriptionVoiceAppendsAfterTheText() throws {
         let app = try launchDemo()
         // The board lives in the Tasks drawer.
-        app.tabBars.buttons["Tasks"].tap()
+        app.tab(.tasks).tap()
         let scrim = all("tasks.drawer.scrim", in: app).firstMatch
         if !scrim.waitForExistence(timeout: 3) {
             let menu = app.buttons["tasks.menu"]
@@ -152,7 +152,7 @@ final class VoiceDictationUITests: XCTestCase {
     /// while it records, and nothing is sent.
     func testDecisionNoteVoiceWritesOnlyIntoTheNote() throws {
         let app = try launchDemo()
-        app.tabBars.buttons["Inbox"].tap()
+        app.tab(.inbox).tap()
         let row = all("inbox.row.l-merge", in: app).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 30), "the demo inbox should list the merge letter")
         row.tap()
@@ -210,7 +210,7 @@ final class VoiceDictationUITests: XCTestCase {
 
     /// Open the demo's chat with "Typed first" in the box and a take running.
     private func chatRecording(_ app: XCUIApplication) -> (composer: XCUIElement, send: XCUIElement) {
-        app.tabBars.buttons["Chat"].tap()
+        app.tab(.chat).tap()
         let composer = all("chat.composer", in: app).firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 30), "no chat composer")
         composer.tap()

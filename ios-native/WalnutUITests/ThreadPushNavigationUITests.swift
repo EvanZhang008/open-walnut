@@ -41,9 +41,9 @@ final class ThreadPushNavigationUITests: ThreadPushUITestCase {
         fixture?.holdAnswers { $0 == "GET" && $1 == slowRead }
         push(slowThread, task: OrgThreadsFixture.slowTaskID)
         XCTAssertTrue(opening.waitForExistence(timeout: 4), "X: nothing says the second open is on its way")
-        app.tabBars.buttons["Inbox"].tap()
+        app.tab(.inbox).tap()
         Thread.sleep(forTimeInterval: 1)
-        app.tabBars.buttons["Chat"].tap()
+        app.tab(.chat).tap()
         XCTAssertTrue(opening.waitForNonExistence(timeout: 3), "X: the open still says it is on its way after a tab switch")
         fixture?.releaseHeld()
         Thread.sleep(forTimeInterval: 3)

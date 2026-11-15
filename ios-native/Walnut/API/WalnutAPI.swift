@@ -13,7 +13,7 @@ struct WalnutAPI {
         config.timeoutIntervalForRequest = 30
         config.waitsForConnectivity = false
         if !protocolClasses.isEmpty { config.protocolClasses = protocolClasses + (config.protocolClasses ?? []) }
-        session = URLSession(configuration: DemoMode.configured(config))
+        session = URLSession(configuration: DemoMode.configured(config.keepingNoHTTPCache()))
     }
 
     // MARK: - Endpoints
@@ -759,7 +759,7 @@ struct WalnutAPI {
             let result = try await session.data(for: request)
             // Single funnel for HTTP outcomes — every endpoint in this client
             // goes through here, so no per-call-site instrumentation is needed.
-            // AppLog's own uploader uses URLSession.shared directly, so this
+            // AppLog's own uploader uses AppHTTP.session directly, so this
             // cannot recurse into log traffic about log traffic.
             Self.logOutcome(
                 status: (result.1 as? HTTPURLResponse)?.statusCode ?? -1,

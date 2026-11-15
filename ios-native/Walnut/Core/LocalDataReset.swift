@@ -222,32 +222,58 @@ enum LocalDataReset {
         return removed
     }
 
-    /// Cancel every load on `URLSession.shared` (letter bodies, the log upload).
-    /// The attachment loader cancels its own transfers in `eraseAll()`, and the
-    /// stores' API calls end with the lifecycle teardown that runs first.
+    /// The sessions the stores do not own: `AppHTTP.session` (letter bodies, recordings, session
+    /// media, the log upload) and `URLSession.shared`, which nothing of ours should use but a
+    /// framework may.
+    private static var sharedSessions: [URLSession] { [AppHTTP.session, URLSession.shared] }
+
+    /// Cancel every load on the shared sessions. The attachment loader cancels its own transfers
+    /// in `eraseAll()`, and the stores' API calls end with the lifecycle teardown that runs first.
     private static func cancelSharedSessionLoads() {
-        URLSession.shared.getAllTasks { tasks in
-            for task in tasks { task.cancel() }
+        for session in sharedSessions {
+            session.getAllTasks { tasks in
+                for task in tasks { task.cancel() }
+            }
         }
     }
 
     /// How long after the erase the HTTP cache is cleared one last time.
     static let lateCacheClearDelay: TimeInterval = 1
 
-    /// A response can still reach the HTTP cache after the erase: a transfer
-    /// that finished just before its cancellation writes its response a few
-    /// milliseconds later, and `removeAllCachedResponses()` itself finishes
-    /// deleting after it returns. So the cache is cleared now, again once the
-    /// shared session's cancellations have landed, and once more a moment later.
+    /// No session of the app writes to `URLCache` (`keepingNoHTTPCache`); this is the backstop
+    /// for one that does (a framework on `URLSession.shared`). A response can still reach the
+    /// cache after the erase: a transfer that finished just before its cancellation writes its
+    /// response a few milliseconds later, and `removeAllCachedResponses()` itself finishes
+    /// deleting after it returns. So the cache is cleared now, again once the shared session's
+    /// cancellations have landed, and once more a moment later.
     private static func clearHTTPCaches() {
-        URLCache.shared.removeAllCachedResponses()
+        purgeHTTPCache()
         URLSession.shared.getAllTasks { tasks in
             for task in tasks { task.cancel() }
-            URLCache.shared.removeAllCachedResponses()
+            purgeHTTPCache()
         }
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + lateCacheClearDelay) {
-            URLCache.shared.removeAllCachedResponses()
+            purgeHTTPCache()
         }
+    }
+
+    /// One purge at a time: the three passes above run on three threads, and two that overlapped
+    /// could each read the other's zero as the capacity to put back.
+    private static let purgeLock = NSLock()
+
+    /// Empty an HTTP cache in memory and on disk. `removeAllCachedResponses()` alone was not
+    /// enough on the iOS 26.0 simulator: a response stored after one call was still served by
+    /// `cachedResponse(for:)` after the next (2026-11-15, `PostEraseLogTests`, every run; iOS
+    /// 26.5 cleared it). Dropping the memory capacity to zero evicts what the memory cache holds,
+    /// and the date-bounded removal deletes the disk records by another path.
+    static func purgeHTTPCache(_ cache: URLCache = .shared) {
+        purgeLock.lock()
+        defer { purgeLock.unlock() }
+        cache.removeAllCachedResponses()
+        cache.removeCachedResponses(since: .distantPast)
+        let memory = cache.memoryCapacity
+        cache.memoryCapacity = 0
+        cache.memoryCapacity = memory
     }
 
     private static var defaultLocations: Locations {

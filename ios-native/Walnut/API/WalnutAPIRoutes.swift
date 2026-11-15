@@ -34,9 +34,7 @@ enum InstanceProbe {
         config.waitsForConnectivity = false
         config.httpShouldSetCookies = false
         config.httpCookieAcceptPolicy = .never
-        config.urlCache = nil
-        config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        return URLSession(configuration: DemoMode.configured(config), delegate: RefuseRedirects(), delegateQueue: nil)
+        return URLSession(configuration: DemoMode.configured(config.keepingNoHTTPCache()), delegate: RefuseRedirects(), delegateQueue: nil)
     }()
 
     /// The probe request. Pure and internal for WalnutTests: it must carry no

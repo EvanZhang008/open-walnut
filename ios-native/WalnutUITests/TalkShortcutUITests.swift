@@ -109,7 +109,7 @@ final class TalkShortcutUITests: XCTestCase {
 
         // Settings, Action Button: the waiting take comes first, then what it
         // does, the steps, and the other ways.
-        app.tabBars.buttons["Settings"].tap()
+        app.tab(.settings).tap()
         let row = element(app, "settings.talkToWalnut")
         for _ in 0..<6 where !row.isHittable { app.swipeUp() }
         row.tap()

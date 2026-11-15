@@ -497,7 +497,7 @@ final class AppLog: @unchecked Sendable {
             request.httpBody = body
         }
 
-        guard let (_, response) = try? await URLSession.shared.data(for: request),
+        guard let (_, response) = try? await AppHTTP.session.data(for: request),
               let http = response as? HTTPURLResponse
         else { return 0 } // keep lines queued; next trigger retries
 

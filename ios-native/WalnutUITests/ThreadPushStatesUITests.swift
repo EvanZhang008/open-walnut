@@ -217,7 +217,7 @@ final class ThreadPushStatesUITests: XCTestCase {
 
     func testLThePushClosesSheetsOnOtherTabsAndTheWorkCardList() throws {
         try launchToVPChat("L")
-        app.tabBars.buttons["Tasks"].tap()
+        app.tab(.tasks).tap()
         let plus = app.buttons["sessions.new"]
         // The Tasks tab may open on the session he last opened there: Back to its board.
         for _ in 0..<3 where !plus.waitForExistence(timeout: 5) {
@@ -232,7 +232,7 @@ final class ThreadPushStatesUITests: XCTestCase {
         push(ids[5])
         expectRevealed(ids[5], "L-over-draft")
         XCTAssertFalse(draft.exists, "L: the Tasks draft is still up")
-        XCTAssertTrue(poll(5) { app.tabBars.firstMatch.exists && app.tabBars.buttons["Chat"].isSelected },
+        XCTAssertTrue(poll(5) { app.tabBars.firstMatch.exists && app.tab(.chat).isSelected },
                       "L: Chat is not the tab in front, or the tab bar stayed hidden")
 
         openLink("walnut://work?list=working")

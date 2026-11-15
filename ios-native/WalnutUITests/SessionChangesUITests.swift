@@ -45,7 +45,7 @@ final class SessionChangesUITests: XCTestCase {
         let tryDemo = app.buttons["setup.tryDemo"]
         if tryDemo.waitForExistence(timeout: 15) { tryDemo.tap() }
         XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 60), "the demo never opened")
-        let tasks = app.tabBars.buttons["Tasks"]
+        let tasks = app.tab(.tasks)
         XCTAssertTrue(tasks.waitForExistence(timeout: 20))
         tasks.tap()
         if !element(app, "tasks.drawer.scrim").waitForExistence(timeout: 3) {

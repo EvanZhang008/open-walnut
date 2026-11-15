@@ -154,7 +154,7 @@ final class ThreadPushReviewUITests: XCTestCase {
     /// VP's chat.
     func testHAPushWhileAnotherTabIsInFrontAndBackAfter() throws {
         try launchToVPChat("H")
-        app.tabBars.buttons["Inbox"].tap()
+        app.tab(.inbox).tap()
         Thread.sleep(forTimeInterval: 1.5)
         shot("H-inbox")
         push(ids[6])

@@ -112,7 +112,7 @@ final class ChatPlaceUITests: XCTestCase {
             app.tabBars.buttons[tab].tap()
             pause(1.2)
             shutTasksDrawer(app)
-            let chatTab = app.tabBars.buttons["Chat"]
+            let chatTab = app.tab(.chat)
             XCTAssertTrue(chatTab.waitForExistence(timeout: 10), "\(step): no tab bar on \(tab)")
             chatTab.tap()
             pause(1.2)

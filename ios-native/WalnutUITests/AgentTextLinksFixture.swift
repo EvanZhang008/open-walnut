@@ -151,7 +151,7 @@ extension AgentTextLinksUITests {
 
     @MainActor func openBoard() -> XCUIApplication {
         let app = launch()
-        tap(app.tabBars.buttons["Tasks"], timeout: 40)
+        tap(app.tab(.tasks), timeout: 40)
         let board = app.buttons["tasks.empty.openBoard"].firstMatch
         let menu = app.buttons["tasks.menu"].firstMatch
         let anyRow = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'board.row.'")).firstMatch
@@ -217,7 +217,7 @@ extension AgentTextLinksUITests {
 
     @MainActor func openOrgTasks(_ org: Org) throws -> XCUIApplication {
         let app = launch()
-        tap(app.tabBars.buttons["Chat"], timeout: 40)
+        tap(app.tab(.chat), timeout: 40)
         tap(app.buttons["chat.menu"], timeout: 20)
         let picker = app.segmentedControls["chat.drawer.viewSwitch"]
         if picker.waitForExistence(timeout: 5), !picker.buttons["Org"].isSelected { picker.buttons["Org"].tap() }
@@ -229,7 +229,7 @@ extension AgentTextLinksUITests {
 
     @MainActor func openOrgThreads(_ org: Org) throws -> XCUIApplication {
         let app = launch()
-        tap(app.tabBars.buttons["Chat"], timeout: 40)
+        tap(app.tab(.chat), timeout: 40)
         tap(app.buttons["chat.menu"], timeout: 20)
         let picker = app.segmentedControls["chat.drawer.viewSwitch"]
         if picker.waitForExistence(timeout: 5), !picker.buttons["Org"].isSelected { picker.buttons["Org"].tap() }
@@ -267,7 +267,7 @@ extension AgentTextLinksUITests {
 
     @MainActor func openWorkCardNeeds() throws -> XCUIApplication {
         let app = launch()
-        XCTAssertTrue(app.tabBars.buttons["Tasks"].waitForExistence(timeout: 40))
+        XCTAssertTrue(app.tab(.tasks).waitForExistence(timeout: 40))
         app.open(try XCTUnwrap(URL(string: "walnut://work?list=needs")))
         XCTAssertTrue(element(app, "workcard.sheet").waitForExistence(timeout: 30), "the card link opened no work list")
         return app
@@ -304,7 +304,7 @@ extension AgentTextLinksUITests {
 
     @MainActor func openInbox() throws -> XCUIApplication {
         let app = launch()
-        tap(app.tabBars.buttons["Inbox"], timeout: 40)
+        tap(app.tab(.inbox), timeout: 40)
         XCTAssertTrue(element(app, "inbox.filterBar").waitForExistence(timeout: 30))
         let all = element(app, "inbox.filter.all")
         if all.waitForExistence(timeout: 5), all.isHittable { all.tap() }

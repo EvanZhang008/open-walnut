@@ -105,7 +105,7 @@ final class SessionMediaLoader {
 
     init(directory: URL = SessionMediaDownload.cacheDirectory,
          download: @escaping SessionMediaDownload.Download = { request in
-             try await URLSession.shared.download(for: request)
+             try await AppHTTP.session.download(for: request)
          },
          makeRequest: @escaping (String, String?) throws -> URLRequest = SessionMediaDownload.request,
          unauthorized: @escaping SessionMediaDownload.NotifyUnauthorized = SessionMediaDownload.notifyUnauthorized) {

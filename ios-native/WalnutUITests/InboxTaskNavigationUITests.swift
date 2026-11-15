@@ -144,7 +144,7 @@ final class InboxTaskNavigationUITests: XCTestCase {
 
     @MainActor
     private func openLetter(_ app: XCUIApplication, _ id: String) {
-        let inbox = app.tabBars.buttons["Inbox"]
+        let inbox = app.tab(.inbox)
         XCTAssertTrue(inbox.waitForExistence(timeout: 45))
         inbox.tap()
         let all = element(app, "inbox.filter.all")

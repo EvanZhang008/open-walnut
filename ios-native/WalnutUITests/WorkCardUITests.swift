@@ -47,7 +47,7 @@ final class WorkCardUITests: XCTestCase {
     /// Settings' Work card switch, scrolled into view.
     private func workCardSwitch(_ app: XCUIApplication) -> XCUIElement {
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "Walnut did not come back")
-        let tab = app.tabBars.buttons["Settings"]
+        let tab = app.tab(.settings)
         XCTAssertTrue(tab.waitForExistence(timeout: 10), "no Settings tab")
         // A tap right after the app comes forward can be lost: tap until Settings shows.
         for _ in 0..<3 where !tab.isSelected {
@@ -81,7 +81,7 @@ final class WorkCardUITests: XCTestCase {
         XCTAssertEqual(on.value as? String, "1")
         // Back on Chat, where the rest of the walk starts (a task opened from the card pushes
         // onto the Tasks tab and hides the tab bar there).
-        app.tabBars.buttons["Chat"].tap()
+        app.tab(.chat).tap()
         // The controller reads the numbers and starts the card.
         sleep(4)
         shot("1-app-open")

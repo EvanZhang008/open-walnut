@@ -331,7 +331,7 @@ final class MidTurnQueueUITests: XCTestCase {
     }
 
     private func openChatTab(_ app: XCUIApplication) {
-        let chat = app.buttons["Chat"]
+        let chat = app.tab(.chat)
         XCTAssertTrue(chat.waitForExistence(timeout: 60), "the tab bar never appeared")
         // Chat is the resting tab, but a warm launch can land anywhere, and a tap on
         // the tab already selected is a no-op.

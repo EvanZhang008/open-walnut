@@ -218,7 +218,11 @@ final class QuickQuestionRenameUITests: XCTestCase {
         editor.tap()
         assertStableKeyboard(app, message: "the description editor did not focus after one tap")
         editor.typeText("First tap")
-        XCTAssertTrue((editor.value as? String ?? "").contains("First tap"), "the editor reads \"\(editor.value ?? "")\"")
+        // The text view's accessibility value follows the typing a moment later: read once, the
+        // check could see it empty and the failure message, read next, "First tap" (2026-11-15,
+        // CI: "the editor reads \"First tap\""). The keyboard check above is what this test is about.
+        let typed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value CONTAINS %@", "First tap"), object: editor)
+        XCTAssertEqual(XCTWaiter.wait(for: [typed], timeout: 5), .completed, "the editor reads \"\(editor.value ?? "")\"")
         attach(app, "description-editor-first-tap")
         app.navigationBars.buttons["Cancel"].tap()
         XCTAssertTrue(edit.waitForExistence(timeout: 15), "cancel did not return to the task page")

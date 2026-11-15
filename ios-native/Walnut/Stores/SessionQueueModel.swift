@@ -77,6 +77,9 @@ final class SessionQueueModel {
     nonisolated(unsafe) static var deliveredSpan: TimeInterval = 2
 
     @ObservationIgnored private var pollTask: Task<Void, Never>?
+    /// A send's first read when no clock runs (the CEO chat's lane): held so that
+    /// `stopReading` ends it with the screen, as the clock's and the follow's reads end.
+    @ObservationIgnored private var sendRead: Task<Void, Never>?
     /// What the running clock asks each lap; nil while it is stopped.
     @ObservationIgnored private var turnRunning: (@MainActor () -> Bool)?
     @ObservationIgnored private var failures = 0
@@ -105,7 +108,13 @@ final class SessionQueueModel {
         // The clock may be in a long sleep (15 s with nothing running, a minute while the
         // server does not answer): a send starts it over, so its first read is now and the
         // next ones come at the fast pace (2026-11-11: a send waited out a 15 s sleep).
-        if pollTask != nil { runPoll() } else { Task { await refresh() } }
+        if pollTask != nil {
+            runPoll()
+        } else {
+            // A later send's read covers an earlier one's: it starts after both were accepted.
+            sendRead?.cancel()
+            sendRead = Task { [weak self] in await self?.refresh() }
+        }
     }
 
     /// The ids of the messages the session's own transcript holds (`walnutMessageId` on its
@@ -266,7 +275,8 @@ final class SessionQueueModel {
     }
 
     func refresh() async {
-        guard !restoring else { return }
+        // A read whose task was stopped before it left never leaves (`stopReading`).
+        guard !restoring, !Task.isCancelled else { return }
         let started = generation
         readsStarted &+= 1
         let read = readsStarted
@@ -323,7 +333,19 @@ final class SessionQueueModel {
         pollTask?.cancel()
         pollTask = nil
         turnRunning = nil
+        stopReading()
         clearUndo()
+    }
+
+    /// The screen went away: a read that started before this lands nothing (one still on its
+    /// way, whoever started it), and a send's first read that has not left yet never leaves. A
+    /// read started after this is the screen's again and lands as usual; what the line holds now
+    /// is read when the screen is back (2026-11-15: a send's first read, started just before the
+    /// chat went away, landed after it and turned a Queued bubble into Delivered unseen).
+    func stopReading() {
+        sendRead?.cancel()
+        sendRead = nil
+        generation += 1
     }
 
     // MARK: - Writing

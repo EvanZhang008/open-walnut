@@ -55,7 +55,7 @@ final class VoiceModeUITests: XCTestCase {
             UITestLaunch.serverURLArgument, Self.demoURL,
             "-walnut.deviceToken", Self.demoToken,
         ])
-        let chatTab = app.tabBars.buttons["Chat"]
+        let chatTab = app.tab(.chat)
         XCTAssertTrue(chatTab.waitForExistence(timeout: 60), "the demo never opened")
         chatTab.tap()
 

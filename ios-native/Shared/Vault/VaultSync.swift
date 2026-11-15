@@ -77,8 +77,18 @@ enum VaultSyncError: Error, Equatable {
 /// and the three this phone uses once on a private link to learn the Secret Key.
 struct VaultClient: Sendable {
     var server: VaultServer
-    var session: URLSession = .shared
+    var session: URLSession = VaultClient.uncached
     var timeout: TimeInterval = 20
+
+    /// The vault's answers are kept by the vault store alone, never in an HTTP cache: the
+    /// app's Disconnect erases that store, and this target (the AutoFill extension too) has no
+    /// `AppHTTP` to share (`tests/web/ios-no-http-cache-guard.test.ts`).
+    static let uncached: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: config)
+    }()
 
     private func request(_ method: String, _ path: String, body: [String: Any]? = nil, headers: [String: String] = [:]) async throws -> [String: Any] {
         var url = server.baseURL

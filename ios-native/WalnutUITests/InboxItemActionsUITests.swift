@@ -16,7 +16,7 @@ final class InboxItemActionsUITests: XCTestCase {
         return UITestLaunch.launch(["-walnut.serverUrl", server, "-walnut.deviceToken", token] + extra)
     }
     @MainActor static func openLetter(_ app: XCUIApplication) {
-        let inbox = app.tabBars.buttons["Inbox"]
+        let inbox = app.tab(.inbox)
         XCTAssertTrue(inbox.waitForExistence(timeout: 40)); inbox.tap()
         let all = element(app, "inbox.filter.all")
         XCTAssertTrue(all.waitForExistence(timeout: 15)); all.tap()

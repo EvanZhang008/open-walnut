@@ -75,7 +75,7 @@ private final class CappedDownloadDelegate: NSObject, URLSessionDataDelegate, @u
                     return
                 }
                 self.continuation = continuation
-                let session = URLSession(configuration: DemoMode.configured(.default), delegate: self, delegateQueue: nil)
+                let session = URLSession(configuration: DemoMode.configured(URLSessionConfiguration.default.keepingNoHTTPCache()), delegate: self, delegateQueue: nil)
                 self.session = session
                 let task = session.dataTask(with: request)
                 self.dataTask = task

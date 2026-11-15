@@ -23,7 +23,7 @@ final class ProjectLaunchDefaultsUITests: XCTestCase {
 
     /// The Tasks tab with its board drawer open.
     private func openBoard(_ app: XCUIApplication) {
-        let tasks = app.buttons["Tasks"]
+        let tasks = app.tab(.tasks)
         XCTAssertTrue(tasks.waitForExistence(timeout: 60), "the tab bar never appeared")
         tasks.tap()
         let scrim = app.descendants(matching: .any)["tasks.drawer.scrim"]

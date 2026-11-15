@@ -343,7 +343,7 @@ final class SendOnceUITests: XCTestCase {
     /// closed too (laid out off screen), so a tap waits for it to be hittable and opens
     /// the drawer again when a tap during the tab's own transition left it closed.
     private func openSession(_ app: XCUIApplication, _ entry: Seeded) -> Bool {
-        let tab = app.tabBars.buttons["Tasks"]
+        let tab = app.tab(.tasks)
         guard tab.waitForExistence(timeout: 60) else { log("no Tasks tab"); return false }
         tab.tap()
         sleep(2)
@@ -377,7 +377,7 @@ final class SendOnceUITests: XCTestCase {
     }
 
     private func openNewChat(_ app: XCUIApplication) -> Bool {
-        let tab = app.tabBars.buttons["Chat"]
+        let tab = app.tab(.chat)
         guard tab.waitForExistence(timeout: 60) else { log("no Chat tab"); return false }
         tab.tap()
         sleep(2)

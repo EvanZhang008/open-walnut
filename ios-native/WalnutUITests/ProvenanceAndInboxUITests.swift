@@ -526,7 +526,7 @@ final class ProvenanceAndInboxUITests: XCTestCase {
     /// only the badge is red).
     @MainActor
     private func inboxBadgeIsDrawn(_ app: XCUIApplication) -> Bool {
-        let tab = app.tabBars.buttons["Inbox"]
+        let tab = app.tab(.inbox)
         guard tab.waitForExistence(timeout: 10), let image = tab.screenshot().image.cgImage else { return false }
         let width = image.width, height = image.height
         var pixels = [UInt8](repeating: 0, count: width * height * 4)

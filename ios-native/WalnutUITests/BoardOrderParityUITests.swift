@@ -95,7 +95,7 @@ final class BoardOrderParityUITests: XCTestCase {
     // MARK: - Driving the board
 
     private func openTasks(_ app: XCUIApplication) {
-        let tasks = app.buttons["Tasks"]
+        let tasks = app.tab(.tasks)
         XCTAssertTrue(tasks.waitForExistence(timeout: 60), "the tab bar never appeared")
         tasks.tap()
     }

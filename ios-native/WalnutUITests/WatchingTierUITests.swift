@@ -79,7 +79,7 @@ final class WatchingTierUITests: XCTestCase {
             tokenField.typeText("chat-place-fixture")
             app.buttons["setup.connect"].tap()
         }
-        let tasks = app.buttons["Tasks"]
+        let tasks = app.tab(.tasks)
         XCTAssertTrue(tasks.waitForExistence(timeout: 60), "the tab bar never appeared")
         tasks.tap()
         if !element(app, "board.chip.all").waitForExistence(timeout: 5) {

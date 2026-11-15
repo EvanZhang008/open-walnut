@@ -184,7 +184,7 @@ extension WalnutAPI {
         var request = URLRequest(url: url)
         request.timeoutInterval = 120
         request.authorizeForWalnut(token: token)
-        let (temporary, response) = try await URLSession.shared.download(for: request)
+        let (temporary, response) = try await AppHTTP.session.download(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let data = try Data(contentsOf: temporary)
             let _: VoiceArchiveRecord = try Self.decode(VoiceArchiveRecord.self, data: data, response: response)

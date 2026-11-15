@@ -94,21 +94,6 @@ final class OrgThreadsSidewaysDragUITests: XCTestCase {
         return app
     }
 
-    private func openMainChat(_ app: XCUIApplication) {
-        let threads = element(app, "org.bar.threads")
-        if threads.waitForExistence(timeout: 8) { return }
-        app.leaveChatPeerForTheChat()
-        let menu = app.buttons["chat.menu"]
-        XCTAssertTrue(menu.waitForExistence(timeout: 60), "the chat never appeared")
-        menu.tap()
-        let picker = app.segmentedControls["chat.drawer.viewSwitch"]
-        if picker.waitForExistence(timeout: 5), picker.buttons["Org"].exists { picker.buttons["Org"].tap() }
-        let ceo = app.buttons["chat.drawer.org.ceo"]
-        XCTAssertTrue(ceo.waitForExistence(timeout: 30), "no Main row in the drawer's Org view")
-        ceo.tap()
-        XCTAssertTrue(threads.waitForExistence(timeout: 30), "Main's chat has no Threads, Tasks and Brief bar")
-    }
-
     private func attach(_ app: XCUIApplication, _ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name
@@ -143,7 +128,7 @@ final class OrgThreadsSidewaysDragUITests: XCTestCase {
 
     func testThreadsAndBriefDoNotMoveSideways() throws {
         let app = try launchPaired()
-        openMainChat(app)
+        app.openMainOrgChat()
         element(app, "org.bar.threads").tap()
         XCTAssertTrue(element(app, "org.node.page").waitForExistence(timeout: 15), "Threads on the bar opened no page")
         let card = element(app, "org.thread.\(Self.threadID)")

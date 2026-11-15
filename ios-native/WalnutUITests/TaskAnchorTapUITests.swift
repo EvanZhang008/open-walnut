@@ -620,7 +620,7 @@ final class TaskAnchorTapUITests: XCTestCase {
     }
 
     private func openRealRow(_ app: XCUIApplication, _ real: RealCopy) throws {
-        let tasks = app.tabBars.buttons["Tasks"]
+        let tasks = app.tab(.tasks)
         try requireReal(tasks.waitForExistence(timeout: 40), "the Tasks tab is missing")
         tasks.tap()
         let search = app.searchFields.firstMatch

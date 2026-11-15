@@ -53,7 +53,7 @@ final class RoutinesUITests: XCTestCase {
     }
 
     private func openRoutines(_ app: XCUIApplication) {
-        app.tabBars.buttons["Settings"].tap()
+        app.tab(.settings).tap()
         let entry = app.buttons["settings.routines"].firstMatch
         // Under the server's sections and Passwords: screens down at the largest text sizes,
         // where one swipe did not reach it. A drag of part of a screen at a time, so a swipe's
@@ -945,10 +945,17 @@ final class RoutinesUITests: XCTestCase {
         XCTAssertTrue(again.exists)
         XCTAssertEqual(again.value as? String, "Collapsed")
         XCTAssertFalse(element(app, "routines.row.r-acme-1").exists, "the fold did not survive a relaunch")
+        // As before the fold: clear of the bar (a tap under it goes to the bar) and high enough
+        // that the row it opens is drawn above the tab bar. `reveal` swipes a page at a time, and
+        // where a fling stops depends on how fast the simulator delivers it: on a loaded CI
+        // runner it left the header at the screen's foot, and the opened row below the fold was
+        // never drawn (2026-11-15, CI: "unfolding shows nothing").
+        place(app, again, low: 20, high: 300)
+        XCTAssertTrue(again.isHittable, "the Acme header went out of view after the relaunch")
         settle()
         shot("07a-acme-still-folded-after-relaunch")
         again.tap()
-        XCTAssertTrue(element(app, "routines.row.r-acme-1").waitForExistence(timeout: 5), "unfolding shows nothing")
+        XCTAssertTrue(element(app, "routines.row.r-acme-1").waitForExistence(timeout: 10), "unfolding shows nothing")
         shot("07-acme-unfolded-after-relaunch")
     }
 }

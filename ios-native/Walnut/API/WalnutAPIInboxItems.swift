@@ -21,7 +21,7 @@ extension WalnutAPI: InboxItemTransport {
             request.httpBody = try JSONEncoder().encode(body)
         }
         let config = URLSessionConfiguration.ephemeral; config.waitsForConnectivity = false
-        let session = suppliedSession ?? URLSession(configuration: DemoMode.configured(config))
+        let session = suppliedSession ?? URLSession(configuration: DemoMode.configured(config.keepingNoHTTPCache()))
         defer { if suppliedSession == nil { session.invalidateAndCancel() } }
         let (data, response) = try await session.data(for: request)
         return try Self.decode(T.self, data: data, response: response)

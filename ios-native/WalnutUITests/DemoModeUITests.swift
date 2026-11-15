@@ -149,7 +149,7 @@ final class DemoModeUITests: XCTestCase {
         openBoard(app)
 
         func assertTabBar(_ moment: String) {
-            let settings = app.tabBars.buttons["Settings"]
+            let settings = app.tab(.settings)
             let shown = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: settings)
             XCTAssertEqual(XCTWaiter().wait(for: [shown], timeout: 5), .completed, "\(moment): no tab bar")
         }
@@ -463,7 +463,7 @@ final class DemoModeUITests: XCTestCase {
         add(attachment)
         XCTAssertTrue(element(app, "newSessionChat.launching").waitForNonExistence(timeout: 30))
         XCTAssertTrue(app.buttons["session.menu"].exists)
-        let settings = app.tabBars.buttons["Settings"]
+        let settings = app.tab(.settings)
         let shown = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: settings)
         XCTAssertEqual(XCTWaiter().wait(for: [shown], timeout: 5), .completed)
     }
@@ -489,7 +489,7 @@ final class DemoModeUITests: XCTestCase {
             "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL",
             "-walnut.composerDrafts", "{}",
         ])
-        let tasks = app.tabBars.buttons["Tasks"]
+        let tasks = app.tab(.tasks)
         XCTAssertTrue(tasks.waitForExistence(timeout: 30))
         tasks.tap()
         if !element(app, "tasks.drawer.scrim").waitForExistence(timeout: 3) {

@@ -272,7 +272,7 @@ final class TalkRealServerUITests: XCTestCase {
         XCTAssertTrue(film("copy-done", seconds: 5) { title.exists && title.label == "Copied" }, "Copy did not say Copied")
         _ = film("copy-closes", seconds: 4) { !element(app, "talk.panel").exists }
         XCTAssertFalse(element(app, "talk.panel").exists, "the page stayed up after Copy")
-        app.tabBars.buttons["Settings"].tap()
+        app.tab(.settings).tap()
         let row = element(app, "settings.talkToWalnut")
         for _ in 0..<6 where !row.isHittable { app.swipeUp() }
         row.tap()
@@ -320,7 +320,7 @@ final class TalkRealServerUITests: XCTestCase {
     func testThePressRecordsRightAfterWalnutsOwnVoiceInput() throws {
         let app = UITestLaunch.launch(try pairing())
         XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 60), "Walnut never opened")
-        app.tabBars.buttons["Chat"].tap()
+        app.tab(.chat).tap()
         let microphone = element(app, "chat.mic")
         XCTAssertTrue(microphone.waitForExistence(timeout: 30), "no microphone in the chat")
         microphone.tap()

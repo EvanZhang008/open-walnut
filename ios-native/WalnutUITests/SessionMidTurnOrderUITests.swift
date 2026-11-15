@@ -291,7 +291,7 @@ final class SessionMidTurnOrderUITests: XCTestCase {
             app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)).tap()
             XCTAssertTrue(waitUntil(timeout: 10) { !app.keyboards.firstMatch.exists }, "the transcript tap did not dismiss the keyboard")
         }
-        let notes = app.buttons["Notes"]
+        let notes = app.tab(.notes)
         XCTAssertTrue(notes.waitForExistence(timeout: 10), "the tab bar is missing")
         notes.tap()
         XCTAssertTrue(waitUntil(timeout: 15) { !app.buttons["session.menu"].exists }, "leaving Tasks kept the session visible")
@@ -300,7 +300,7 @@ final class SessionMidTurnOrderUITests: XCTestCase {
     /// Tasks tab → the work task's row → its session page, waiting for the composer.
     @MainActor
     private func openSessionPage(_ app: XCUIApplication) throws {
-        let tasksTab = app.buttons["Tasks"]
+        let tasksTab = app.tab(.tasks)
         XCTAssertTrue(tasksTab.waitForExistence(timeout: 60), "the tab bar never appeared")
         tasksTab.tap()
         let scrim = element(app, "tasks.drawer.scrim")

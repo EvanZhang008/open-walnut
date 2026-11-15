@@ -50,7 +50,7 @@ enum LetterBodyDownload {
         // 30s request timeout would kill it mid-transfer.
         request.timeoutInterval = 300
 
-        let (downloaded, response) = try await URLSession.shared.download(for: request)
+        let (downloaded, response) = try await AppHTTP.session.download(for: request)
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
             try? FileManager.default.removeItem(at: downloaded)
             throw Failure.http(http.statusCode)

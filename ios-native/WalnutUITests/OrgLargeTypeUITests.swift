@@ -43,22 +43,6 @@ final class OrgLargeTypeUITests: XCTestCase {
         return app
     }
 
-    /// Main's chat, opened from the chat drawer's Org view (or already open from a last run).
-    private func openMainChat(_ app: XCUIApplication) {
-        let threads = element(app, "org.bar.threads")
-        if threads.waitForExistence(timeout: 8) { return }
-        app.leaveChatPeerForTheChat()
-        let menu = app.buttons["chat.menu"]
-        XCTAssertTrue(menu.waitForExistence(timeout: 60), "the chat never appeared")
-        menu.tap()
-        let picker = app.segmentedControls["chat.drawer.viewSwitch"]
-        if picker.waitForExistence(timeout: 5), picker.buttons["Org"].exists { picker.buttons["Org"].tap() }
-        let ceo = app.buttons["chat.drawer.org.ceo"]
-        XCTAssertTrue(ceo.waitForExistence(timeout: 30), "no Main row in the drawer's Org view")
-        ceo.tap()
-        XCTAssertTrue(threads.waitForExistence(timeout: 30), "Main's chat has no Threads, Tasks and Brief bar")
-    }
-
     private func attach(_ app: XCUIApplication, _ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name
@@ -68,7 +52,7 @@ final class OrgLargeTypeUITests: XCTestCase {
 
     func testTheOrgChatKeepsItsHeightAtTheLargestAccessibilitySize() throws {
         let app = try launchPaired(["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])
-        openMainChat(app)
+        app.openMainOrgChat()
         Thread.sleep(forTimeInterval: 1.5)
         attach(app, "org-chat-ax5")
         let screen = app.windows.firstMatch.frame
@@ -122,7 +106,7 @@ final class OrgLargeTypeUITests: XCTestCase {
     /// The fixture serves no transcript, so Main's chat is the empty one.
     func testTheEmptyOrgChatSaysWhatToDoAboveTheComposerAtTheLargestAccessibilitySize() throws {
         let app = try launchPaired(["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])
-        openMainChat(app)
+        app.openMainOrgChat()
         let line = app.staticTexts["Send a message to pick up where this session left off."]
         XCTAssertTrue(line.waitForExistence(timeout: 20), "the empty chat has no empty-state line")
         Thread.sleep(forTimeInterval: 1.5)
@@ -170,7 +154,7 @@ final class OrgLargeTypeUITests: XCTestCase {
     /// At the default size the bar keeps its words and the page its segments.
     func testTheOrgBarKeepsItsWordsAtTheDefaultSize() throws {
         let app = try launchPaired([])
-        openMainChat(app)
+        app.openMainOrgChat()
         let tasks = element(app, "org.bar.tasks")
         XCTAssertTrue(app.staticTexts["Tasks"].exists || tasks.staticTexts["Tasks"].exists, "the Tasks button lost its word")
         tasks.tap()

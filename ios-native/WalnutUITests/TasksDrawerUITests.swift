@@ -37,7 +37,7 @@ final class TasksDrawerUITests: XCTestCase {
 
     /// The Tasks tab with its drawer open, and the board's rows once it has three.
     private func openBoard(_ app: XCUIApplication) throws -> XCUIElementQuery {
-        let tasks = app.buttons["Tasks"]
+        let tasks = app.tab(.tasks)
         XCTAssertTrue(tasks.waitForExistence(timeout: 30), "the tab bar never appeared")
         tasks.tap()
         if !board(app).waitForExistence(timeout: 3) {
@@ -252,7 +252,7 @@ final class TasksDrawerUITests: XCTestCase {
         // reopens the newest session and the history survives: `RecentOpensTests`.)
         app.terminate()
         let again = launchDemo()
-        let tasks = again.buttons["Tasks"]
+        let tasks = again.tab(.tasks)
         XCTAssertTrue(tasks.waitForExistence(timeout: 30))
         tasks.tap()
         XCTAssertTrue(board(again).waitForExistence(timeout: 15), "the demo's tab did not open on the board")
@@ -348,7 +348,7 @@ final class TasksDrawerUITests: XCTestCase {
         ])
         // View choices survive process launches; the preceding custom Pin walk left
         // this board scoped to its two custom pins. Start the density walk in All.
-        let tasksTab = app.buttons["Tasks"]
+        let tasksTab = app.tab(.tasks)
         XCTAssertTrue(tasksTab.waitForExistence(timeout: 30))
         tasksTab.tap()
         if !board(app).waitForExistence(timeout: 3) { app.buttons["tasks.menu"].tap() }

@@ -51,7 +51,7 @@ final class MediaFileUITests: XCTestCase {
         }
         let app = UITestLaunch.launch(arguments)
         appUnderTest = app
-        let tasks = app.tabBars.buttons["Tasks"]
+        let tasks = app.tab(.tasks)
         XCTAssertTrue(tasks.waitForExistence(timeout: 40)); tasks.tap()
         let board = app.buttons["tasks.empty.openBoard"].firstMatch
         let menu = app.buttons["tasks.menu"].firstMatch

@@ -214,7 +214,7 @@ final class EventsFeedClient: @unchecked Sendable {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 3600
         config.timeoutIntervalForResource = 86_400
-        let session = URLSession(configuration: DemoMode.configured(config))
+        let session = URLSession(configuration: DemoMode.configured(config.keepingNoHTTPCache()))
         lock.lock()
         if generation == gen {
             liveSession = session

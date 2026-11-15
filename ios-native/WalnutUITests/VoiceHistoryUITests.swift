@@ -22,7 +22,7 @@ final class VoiceHistoryUITests: XCTestCase {
             tap(element(app, "chat.menu"), in: app)
             tap(element(app, "chat.drawer.scrim"), in: app)
         }
-        tap(app.tabBars.buttons["Settings"], in: app)
+        tap(app.tab(.settings), in: app)
         let history = element(app, "settings.voiceHistory")
         for _ in 0..<8 {
             if history.exists, history.frame.midY > 116,
@@ -53,7 +53,7 @@ final class VoiceHistoryUITests: XCTestCase {
             alert.buttons["Not Now"].tap()
             return true
         }
-        tap(app.tabBars.buttons["Chat"], in: app)
+        tap(app.tab(.chat), in: app)
         let microphone = element(app, "chat.mic")
         XCTAssertTrue(microphone.waitForExistence(timeout: 30))
         tap(microphone, in: app)

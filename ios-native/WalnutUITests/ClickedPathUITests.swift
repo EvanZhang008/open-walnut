@@ -38,7 +38,7 @@ final class ClickedPathUITests: XCTestCase {
         let app = UITestLaunch.launch(["-walnut.serverUrl", UITestLaunch.pairedServer(server), "-walnut.deviceToken", token])
         appUnderTest = app
 
-        let tasks = app.tabBars.buttons["Tasks"]
+        let tasks = app.tab(.tasks)
         XCTAssertTrue(tasks.waitForExistence(timeout: 40)); tasks.tap()
         let search = app.searchFields.firstMatch
         if !search.waitForExistence(timeout: 10) {
