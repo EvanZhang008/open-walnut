@@ -12,7 +12,8 @@ import { z } from 'zod'
 import { defineOp, type HttpBinding } from './registry.js'
 import { withOutcome } from './outcome.js'
 import { triggerRunState } from '../core/cron/trigger-run-state.js'
-import { TIME_LIMIT_MAX_S, testCallTimeoutMs } from '../core/cron/trigger-time-limit.js'
+import { TIME_LIMIT_DEFAULT_S, TIME_LIMIT_MAX_S, testCallTimeoutMs } from '../core/cron/trigger-time-limit.js'
+import { TRIGGER_DESCRIPTION_MAX, parseEveryMs } from '../core/routines/trigger-fields.js'
 import {
   byActivity, compactRow, everyLabel, filterWords, fullRow, matchesFilter, pageLimit, MAX_LIMIT,
   type ListedJob, type ListFilter,
@@ -26,7 +27,8 @@ const CHECK_CONTRACT =
   + 'NO items fires every single time (the script did its own judging). `input` goes to the AI THIS run; '
   + '`state` is the script talking to its NEXT run (stored verbatim, handed back on stdin). They are never '
   + 'merged. Non-zero exit, a timeout, no JSON on the last line, or over 64KB of stdout is a check error: '
-  + 'the first one is reported into this session, and five in a row stop the trigger and tell the user. '
+  + 'the first one is reported into this session, and five in a row stop the trigger and tell this session (or its lead); '
+  + 'trigger_update fixes its command, interval or time limit in place. '
   + 'One bad item does not fail the run: an id over 200 chars is shortened to a stable id (its head plus a '
   + 'hash, the original kept as fullId) and an item with no string id is dropped, each with a warning in the '
   + 'fire and on the History row; only output with no usable item left is an error.'
@@ -184,7 +186,7 @@ defineOp({
     return withOutcome(
       { ...(id ? { id } : {}), ...(b.job?.name ? { name: b.job.name } : {}), ...b },
       `${armed}${parked}${timeWarning}`,
-      `${timeWarning ? 'Fix the time limit first (trigger_test, then trigger_delete this one and arm the fixed one). ' : ''}${next} See its last check with trigger_list.`,
+      `${timeWarning ? `Fix the time limit first: trigger_test, then trigger_update '{"id":"${id}","timeoutSeconds":<seconds>}' (same id, nothing it saw is lost). ` : ''}${next} See its last check with trigger_list.`,
     )
   },
   tags: { readonly: false, remote: 'allow', destructive: false },
@@ -399,6 +401,8 @@ defineOp({
     const result = (body?.result ?? {}) as {
       parsed?: { warnings?: unknown } | null; wouldFire?: boolean; newItemCount?: number; error?: string | null
     }
+    // A test of an armed trigger (id) is fixed on that trigger, never armed a second time.
+    const armed = typeof id === 'string' && id.trim() ? id.trim() : ''
     const warnings = Array.isArray(result.parsed?.warnings) ? result.parsed.warnings.map(String) : []
     const repaired = warnings.length
       ? ` The daemon had to repair its output, so it still counts, but fix the script: ${warnings.join('; ')}.`
@@ -418,10 +422,14 @@ defineOp({
       !result.parsed
         ? 'Fix the script so its LAST stdout line is one JSON object with a boolean "fire", then test again.'
         : limit?.warning
-          ? 'Make it finish well inside its time limit (or pass a larger timeoutSeconds), test again, then arm it with the same timeoutSeconds.'
+          ? `Make it finish well inside its time limit (or pass a larger timeoutSeconds), test again, then ${armed
+            ? `give trigger ${armed} the same timeoutSeconds with trigger_update (same id, nothing it saw is lost).`
+            : 'arm it with the same timeoutSeconds.'}`
         : warnings.length
           ? 'Fix what the daemon repaired (keep each item id under 200 chars, every item an object with a string "id"), then test again.'
-          : 'Arm it with trigger_create (same run/cwd/host), then tell the user what is watched and how often.',
+          : armed
+            ? `Put this run and its settings on trigger ${armed} with trigger_update if they changed (same id, nothing it saw is lost); never arm a second one for it.`
+            : 'Arm it with trigger_create (same run/cwd/host), then tell the user what is watched and how often.',
     )
   },
   tags: { readonly: false, remote: 'allow', destructive: false },
@@ -473,6 +481,138 @@ defineOp({
         ? `Resumed "${job.name ?? args.id}": the first check runs within seconds, every ${everyLabel(job.schedule?.everyMs)} after that.`
         : `"${job.name ?? args.id}" was already running; nothing changed.`,
       'Tell the user it is running again. If the script kept failing before, check trigger_list for its next check.',
+    )
+  },
+  tags: { readonly: false, remote: 'allow', destructive: false },
+})
+
+/**
+ * What trigger_update may change, by its input field. A trigger_create field that is
+ * neither here nor in TRIGGER_UPDATE_NOT_EDITABLE fails tests/unit/ops/trigger-update.test.ts:
+ * a new way to set up a trigger must be a way to change one too, or say why not
+ * (2026-11-04: a too-short time limit could only be fixed by delete and arm again,
+ * which lost the trigger's id and what it had seen).
+ */
+export const TRIGGER_UPDATE_FIELDS = [
+  'every', 'timeoutSeconds', 'maxFiresPerDay', 'prompt', 'description', 'name', 'run', 'cwd',
+] as const
+
+/** trigger_create fields trigger_update leaves alone, each with why. */
+export const TRIGGER_UPDATE_NOT_EDITABLE: Record<string, string> = {
+  template: 'a template trigger is built from its params; arm a new one for other params',
+  params: 'a template trigger is built from its params; arm a new one for other params',
+  session: 'the task it wakes is the trigger\'s owner; arm one on the other task',
+  host: 'the host runs the check and keeps its seen items; a trigger on another host is a new trigger',
+  wait: 'parking is the task\'s, not the trigger\'s: task_update phase=WAITING',
+  wait_until: 'the clock is the task\'s: task_update wait_until',
+  watches: 'set once, when the trigger is armed',
+  id: 'the id is what an update keeps',
+}
+
+type TriggerJob = NonNullable<RoutineJobBody['job']> & {
+  description?: string
+  check?: { run?: string; cwd?: string; host?: string; timeoutSeconds?: number; maxFiresPerDay?: number; template?: unknown }
+  executor?: { type?: string; config?: Record<string, unknown> }
+}
+
+const UPDATE_LABELS: Record<(typeof TRIGGER_UPDATE_FIELDS)[number], string> = {
+  every: 'interval', timeoutSeconds: 'time limit', maxFiresPerDay: 'fire budget', prompt: 'prompt',
+  description: 'description', name: 'name', run: 'command', cwd: 'directory',
+}
+
+defineOp({
+  name: 'trigger_update',
+  title: 'Change a Walnut trigger in place',
+  description:
+    'Change a trigger without deleting it: its interval, time limit, fire budget, prompt, description, name, '
+    + 'command or directory. It keeps its id, the items it has seen and the script\'s cursor, so nothing it '
+    + 'already delivered fires again, and the daemon runs the new settings from its next check. Pass the id and '
+    + 'only the fields to change. Use it whenever a trigger needs a fix: a check killed at its time limit '
+    + '(raise timeoutSeconds), a source that needs a slower or faster poll, a fire budget that holds fires back, '
+    + 'a prompt that asks the wrong thing. A new trigger in its place would start with nothing seen, so change '
+    + 'this one. A new command or time limit is tried first with trigger_test. A paused or stopped '
+    + 'trigger stays off; trigger_resume starts it again.',
+  input: {
+    id: z.string().min(1).describe('Trigger (routine) id, as returned by trigger_create / trigger_list'),
+    every: z.union([z.number().int().positive(), z.string().min(1)]).optional()
+      .describe('New poll interval: "30s" | "5m" | "1h", or milliseconds. Minimum 10s'),
+    timeoutSeconds: z.number().int().positive().max(TIME_LIMIT_MAX_S).optional()
+      .describe(`New time limit for one check, in seconds (default 30, max ${TIME_LIMIT_MAX_S})`),
+    maxFiresPerDay: z.number().int().min(0).optional().describe('New fire budget: fires per 24h. 0 = unlimited'),
+    prompt: z.string().min(1).optional().describe('New message the session receives when it fires'),
+    description: z.string().min(1).optional().describe('New one or two plain sentences for the user: what it watches, when it fires, what the session does'),
+    name: z.string().min(1).optional().describe('New short label'),
+    run: z.string().min(1).optional().describe('New shell command for the check (try it with trigger_test first)'),
+    cwd: z.string().optional().describe('New working directory for the check; "" = none'),
+  },
+  handler: async (args, call) => {
+    const id = String(args.id)
+    const path = `/routines/${encodeURIComponent(id)}`
+    const current = (await call('GET', path) as { job?: TriggerJob } | undefined)?.job
+    if (!current) throw new Error(`no trigger ${id}; trigger_list shows the ids`)
+    if (!current.check) throw new Error(`${id} ("${current.name ?? ''}") is a scheduled routine, not a trigger`)
+    const given = TRIGGER_UPDATE_FIELDS.filter((f) => (args as Record<string, unknown>)[f] !== undefined)
+    if (given.length === 0) {
+      throw new Error(`nothing to change: pass at least one of ${TRIGGER_UPDATE_FIELDS.join(', ')}`)
+    }
+    if (current.check.template && (args.run !== undefined || args.cwd !== undefined)) {
+      throw new Error(`${id} is built from a plugin template, so Walnut writes its command; change its other fields here`)
+    }
+    const patch: Record<string, unknown> = {}
+    if (args.every !== undefined) {
+      const everyMs = parseEveryMs(args.every)
+      if (everyMs === null) throw new Error('every must be milliseconds, or a duration like "30s" / "5m" / "1h"')
+      patch.schedule = { kind: 'every', everyMs }
+    }
+    if (args.description !== undefined) {
+      const description = String(args.description).replace(/\s+/g, ' ').trim()
+      if (!description) throw new Error('description cannot be blank: one or two plain sentences saying what it watches')
+      if (description.length > TRIGGER_DESCRIPTION_MAX) {
+        throw new Error(`description is ${description.length} characters; the limit is ${TRIGGER_DESCRIPTION_MAX} (one or two sentences)`)
+      }
+      patch.description = description
+    }
+    if (args.name !== undefined) {
+      const name = String(args.name).trim()
+      if (!name) throw new Error('name cannot be blank: a few plain words naming what it watches')
+      patch.name = name
+    }
+    if (args.prompt !== undefined) {
+      if (!String(args.prompt).trim()) throw new Error('prompt cannot be blank: what the session should do when it fires')
+      const executor = current.executor ?? { type: 'session', config: {} }
+      patch.executor = { ...executor, config: { ...(executor.config ?? {}), prompt: String(args.prompt) } }
+    }
+    const checkFields = (['run', 'cwd', 'timeoutSeconds', 'maxFiresPerDay'] as const).filter((f) => args[f] !== undefined)
+    if (checkFields.length > 0) {
+      // The server replaces `check` wholesale, so the fields not named here are carried over.
+      const check: Record<string, unknown> = { ...current.check }
+      for (const f of checkFields) check[f] = f === 'run' ? String(args.run).trim() : args[f]
+      if (check.run === '') throw new Error('run cannot be blank: the shell command that decides whether to fire')
+      if (check.cwd === '') delete check.cwd
+      patch.check = check
+    }
+    const updated = (await call('PATCH', path, patch) as { job?: TriggerJob } | undefined)?.job ?? current
+    const state = triggerRunState(updated)
+    const name = updated.name ?? current.name ?? id
+    const changed = given.map((f) => UPDATE_LABELS[f]).join(', ')
+    const off = state === 'armed' ? '' : ` It is still ${state}: trigger_resume '{"id":"${id}"}' starts it again.`
+    const testIt = args.run !== undefined || args.timeoutSeconds !== undefined || args.cwd !== undefined
+      ? `Try the check under its new settings: walnut tools call trigger_test '${JSON.stringify({
+        run: updated.check?.run ?? '', id, timeoutSeconds: updated.check?.timeoutSeconds ?? TIME_LIMIT_DEFAULT_S,
+        // Its own host and directory: left out, trigger_test runs in the caller's.
+        ...(updated.check?.host ? { host: updated.check.host } : {}),
+        ...(updated.check?.cwd ? { cwd: updated.check.cwd } : {}),
+      }).replace(/'/g, "'\\''")}'. `
+      : ''
+    return withOutcome(
+      {
+        id: updated.id ?? id, name, state, changed: given,
+        ...(updated.schedule?.everyMs ? { every: everyLabel(updated.schedule.everyMs) } : {}),
+        timeLimit: updated.check?.timeoutSeconds ?? TIME_LIMIT_DEFAULT_S,
+      },
+      `Updated "${name}" in place (${changed}). Same id; it keeps the items it has seen and the script's cursor, `
+        + `so nothing it already delivered fires again.${state === 'armed' ? ' The daemon uses the new settings from its next check.' : ''}${off}`,
+      `${testIt}Tell the user in one line what changed. See its next check with trigger_list.`,
     )
   },
   tags: { readonly: false, remote: 'allow', destructive: false },

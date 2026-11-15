@@ -816,6 +816,31 @@ describe('pause and resume', () => {
     return json
   }
 
+  // 2026-11-04: a check killed at the 30 s default could only get more time by delete and
+  // create again, under a new id and with nothing seen.
+  it('trigger_update changes the limit, interval and prompt in place: same id, the daemon re-armed under it', async () => {
+    const id = await create('update in place')
+    try {
+      // The daemon keeps a trigger's seen items by its id, so the same id re-armed is what keeps them.
+      const out = await getOp('trigger_update')!.handler!(
+        { id, timeoutSeconds: 120, every: '10m', prompt: 'Retry the stage.' }, call,
+      ) as Record<string, unknown>
+      expect(out).toMatchObject({ id, state: 'armed', timeLimit: 120, every: '10m' })
+      const job = await jobState(id)
+      expect(job.id).toBe(id)
+      expect(job.check).toMatchObject({ run: 'bash paused.sh', host: '__local__', timeoutSeconds: 120 })
+      expect(job.schedule.everyMs).toBe(600_000)
+      expect(job.executor.config).toMatchObject({ target: taskId, prompt: 'Retry the stage.' })
+      const def = ((await compileTriggersForHost('__local__'))?.payload.triggers ?? []).find((t) => t.id === id)
+      expect(def).toMatchObject({ id, everyMs: 600_000 })
+      expect(JSON.stringify(def)).toContain('"timeoutSeconds":120')
+      // Nothing else of its kind was armed beside it.
+      expect((await armedIds()).filter((x) => x === id)).toHaveLength(1)
+    } finally {
+      await fetch(apiUrl(`/api/routines/${id}`), { method: 'DELETE' })
+    }
+  })
+
   it('toggle off stamps the pause and disarms the trigger; toggle on clears it and re-arms', async () => {
     const id = await create('toggle pause')
     try {

@@ -268,7 +268,12 @@ describe('every trigger write a session makes has an answer on its host', () => 
     const answered = new Set((listed.ok ? (listed.result.ops as Array<{ name: string }>) : []).map((o) => o.name))
     // A new trigger write op the host does not answer is a session left without its trigger
     // while the Mac sleeps (2026-11-03): answer it in offline-host-core.ts, or list it here with why.
-    const serverOnly: Record<string, string> = {}
+    const serverOnly: Record<string, string> = {
+      // An edit merges into the routine the server stores (its prompt, description, budget), which
+      // the host does not hold; and only the server stops a failing trigger, so while it is away
+      // none is stopped and the unchanged trigger keeps running until the edit can be made.
+      trigger_update: 'edits the server-stored routine; nothing is stopped while the server is away',
+    }
     expect(writes.filter((n) => !answered.has(n) && !serverOnly[n])).toEqual([])
   })
 })

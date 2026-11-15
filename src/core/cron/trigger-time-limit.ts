@@ -104,7 +104,7 @@ export function secondsLabel(ms: number): string {
 /** What to do about a run near or at its limit, in one sentence. */
 export function limitAdvice(limitS: number): string {
   return `Give every call in the script its own short timeout so its timeouts times its retries fit inside ${limitS} s, `
-    + `or arm the trigger with a larger timeoutSeconds (at most ${TIME_LIMIT_MAX_S}).`;
+    + `or give it a larger timeoutSeconds (at most ${TIME_LIMIT_MAX_S}; trigger_update changes an armed trigger's in place).`;
 }
 
 export interface LimitUse {

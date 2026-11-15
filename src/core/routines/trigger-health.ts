@@ -35,7 +35,7 @@ import type { TriggerCheckedApplied } from '../cron/trigger-apply.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import type { Task } from '../types.js';
 import { isLiveSessionStatus, pickDeliverySession } from './session-target.js';
-import { limitAdvice, timeLimitSeconds } from '../cron/trigger-time-limit.js';
+import { TIME_LIMIT_MAX_S, limitAdvice, timeLimitSeconds } from '../cron/trigger-time-limit.js';
 
 const kit = createEnvelopeKit();
 /** envelope-kit.ts NOTE_NOTIFICATION: the note every Walnut status notice carries. */
@@ -94,6 +94,26 @@ function testLine(applied: Applied, id: string): string {
   return `  walnut tools call trigger_test '${args.replace(/'/g, "'\\''")}'`;
 }
 
+/**
+ * How to change the trigger in place (trigger_update keeps its id and seen items). A run
+ * killed at its limit gets the call with a larger limit filled in.
+ */
+function updateLine(applied: Applied, id: string): string {
+  if (applied.killedAtLimit) {
+    const limitS = applied.timeLimitSeconds ?? timeLimitSeconds(null);
+    if (limitS >= TIME_LIMIT_MAX_S) {
+      return `Its limit is already the most a check may have (${TIME_LIMIT_MAX_S} s): make the script finish sooner `
+        + '(fewer calls per run, shorter timeouts), then change its command in place if it moved:\n'
+        + `  walnut tools call trigger_update '{"id":"${id}","run":"<the new command>"}'`;
+    }
+    const next = Math.min(TIME_LIMIT_MAX_S, Math.max(60, limitS * 2));
+    return `To give it more time, change its limit in place (same id, nothing it saw is lost):\n`
+      + `  walnut tools call trigger_update '${JSON.stringify({ id, timeoutSeconds: next })}'`;
+  }
+  return `If its command, interval or time limit is what is wrong, change it in place (same id, nothing it saw is lost):\n`
+    + `  walnut tools call trigger_update '{"id":"${id}", <the fields to change>}'`;
+}
+
 const isOpen = (t: Pick<Task, 'phase' | 'status'>): boolean => t.phase !== 'COMPLETE' && t.status !== 'done';
 
 /** `the trigger "X" (id) of your team's task "T" (tid), which is complete` */
@@ -129,13 +149,15 @@ export function buildCheckFailureNotice(
   const resume = `  walnut tools call trigger_resume '{"id":"${event.id}"}'`;
   const next = stage === 'disabled'
     ? owner
-      ? ['Next: fix the check, try it, then start the trigger again:', testLine(applied, event.id), resume]
-      : ['Next: if the work still needs this watch, fix the check, try it and start it again:', testLine(applied, event.id), resume,
+      ? ['Next: fix the check, try it, then start the trigger again:', testLine(applied, event.id), updateLine(applied, event.id), resume]
+      : ['Next: if the work still needs this watch, fix the check, try it and start it again:', testLine(applied, event.id),
+        updateLine(applied, event.id), resume,
         `If it does not, delete it:\n  walnut tools call trigger_delete '{"id":"${event.id}"}'`]
     : owner
-      ? ['Next: fix the check script and try it; the next scheduled check runs the fixed script:', testLine(applied, event.id)]
+      ? ['Next: fix the check script and try it; the next scheduled check runs the fixed script:', testLine(applied, event.id),
+        ...(applied.killedAtLimit ? [updateLine(applied, event.id)] : [])]
       : ['Next: fix the check script and try it, or pause the trigger if the work no longer needs it:', testLine(applied, event.id),
-        `  walnut tools call trigger_pause '{"id":"${event.id}"}'`];
+        `  walnut tools call trigger_pause '{"id":"${event.id}"}'`, ...(applied.killedAtLimit ? [updateLine(applied, event.id)] : [])];
   const titles = { failed: 'Trigger check failed', failing: 'Trigger keeps failing', disabled: 'Trigger stopped' } as const;
   const outcomes = { failed: 'check_failed', failing: 'check_failing', disabled: 'trigger_disabled' } as const;
   return kit.buildWalnutMessage({

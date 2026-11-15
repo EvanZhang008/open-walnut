@@ -174,7 +174,8 @@ stdout:  {"fire": true, "items": [{"id": "PR-123#c9", "title": "..."}], "input":
   minutes tell the session again; five in a row stop the trigger and tell it
   once more. When its task is complete or has no session, its lead hears
   instead. The user is never told: a trigger is its task's work. Fix the
-  script, then `trigger_resume`.
+  script (or its settings in place with `trigger_update`, e.g. a check killed
+  at its limit gets a larger `timeoutSeconds`), then `trigger_resume`.
 - **One bad item never fails a run.** An `id` over 200 characters is
   shortened to a stable id (its head plus a hash, the same every run, the
   original kept as `fullId`), and an item that is not an object with a string
@@ -192,7 +193,8 @@ stdout:  {"fire": true, "items": [{"id": "PR-123#c9", "title": "..."}], "input":
   retry runs. trigger_test says how long the run took against the limit and warns
   over half of it; trigger_list shows each trigger's `timeLimit` and `lastRun`; a
   killed run reads "check killed at the N s limit" in History and in the error
-  notice. Test with the `timeoutSeconds` you arm it with.
+  notice. Test with the `timeoutSeconds` you arm it with. A limit that turns out
+  too short is raised in place: `trigger_update '{"id":"...","timeoutSeconds":120}'`.
 - **Limits.** 30s timeout (max 300), one run at a time, never faster than
   every 10s, and a fire budget: `maxFiresPerDay` (default 24) fires in a burst,
   refilling at that many per 24 hours, so a spent budget gives back one fire
@@ -408,9 +410,10 @@ Re-check carefully before anything else:
    happened?
 2. If it has and no fire came, the trigger is wrong. Find out why (run the check
    with `trigger_test`, read its recent checks with
-   `trigger_list '{"name":"<its id>","full":true}'`), replace it
-   with a check that would have caught it (`trigger_delete`, then
-   `trigger_create`), and act on what happened.
+   `trigger_list '{"name":"<its id>","full":true}'`), change it to
+   a check that would have caught it (`trigger_update` with the new `run`,
+   `every` or `timeoutSeconds`; it keeps its id and what it has seen), and act
+   on what happened.
 3. If it has not, is the trigger still sound: armed (not paused or stopped),
    checking without errors, and watching every place and state that would count?
    Fix what is not.
@@ -471,6 +474,13 @@ task with them.
   what it saw and start over like a new trigger. Resuming a stopped trigger
   starts its error count over; fix the script first (`trigger_test`), or five
   more failures stop it again.
+- `trigger_update '{"id":"...","timeoutSeconds":120}'`: change a trigger in
+  place: `every`, `timeoutSeconds`, `maxFiresPerDay`, `prompt`, `description`,
+  `name`, `run`, `cwd`; pass only what changes. It keeps its id, the items it
+  has seen and the script's cursor, so nothing already delivered fires again.
+  Never delete and arm it again to change it. Try a new `run` or limit with
+  `trigger_test` first; a paused or stopped trigger stays off until
+  `trigger_resume`. The Routines card's Edit does the same for the user.
 - `trigger_delete '{"id":"..."}'`: remove it for good. The script file stays on
   disk.
 - When its task completes, Walnut pauses the task's triggers, and a reopen

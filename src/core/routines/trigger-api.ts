@@ -21,6 +21,7 @@ import { requireTriggerDaemon, triggerHost } from './trigger-daemon.js';
 import { createRoutine } from './routines-core.js';
 import type { CronJob } from '../cron/types.js';
 import { HOST_TRIGGER_ID_RE } from './host-trigger-id.js';
+import { TRIGGER_DESCRIPTION_MAX, parseEveryMs } from './trigger-fields.js';
 import { createTriggerLabel } from './trigger-label.js';
 import { ANSWER_MARGIN_MS, startTestRun, waitTestRun, type TestRunWait } from './trigger-test-run.js';
 import {
@@ -83,22 +84,7 @@ function str(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-/**
- * `every` accepts a number of ms or a short duration ("30s", "5m", "1h") — an
- * agent writes the second, a form posts the first.
- */
-export function parseEveryMs(raw: unknown): number | null {
-  if (typeof raw === 'number' && Number.isFinite(raw)) return Math.floor(raw);
-  const text = str(raw).toLowerCase();
-  if (!text) return null;
-  const match = /^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)?$/.exec(text);
-  if (!match) return null;
-  const n = Number(match[1]);
-  if (!Number.isFinite(n)) return null;
-  const unit = match[2] ?? 'ms';
-  const factor = unit === 'ms' ? 1 : unit === 's' ? 1_000 : unit === 'm' ? 60_000 : unit === 'h' ? 3_600_000 : 86_400_000;
-  return Math.floor(n * factor);
-}
+export { parseEveryMs } from './trigger-fields.js';
 
 /**
  * Run a check ONCE on its host, reading and writing no state.
@@ -419,12 +405,7 @@ async function parkForTrigger(taskId: string, opts: {
 /** Every trigger's name is a short label, never the prompt's opening (trigger-label.ts). */
 export const triggerLabels = createTriggerLabel();
 
-/**
- * The longest `description` trigger_create accepts. It is shown in full on the
- * Routines card and clamped to three lines in the task's trigger flyout, so it is
- * meant to be one or two sentences, not the script explained line by line.
- */
-export const TRIGGER_DESCRIPTION_MAX = 600;
+export { TRIGGER_DESCRIPTION_MAX } from './trigger-fields.js';
 
 export { HOST_TRIGGER_ID_RE } from './host-trigger-id.js';
 
