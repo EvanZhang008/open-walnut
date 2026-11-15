@@ -160,7 +160,7 @@ defineOp({
       + 'delivers the prompt when it fires. It keeps polling while Walnut restarts.'
     const timeWarning = b.timeLimit?.warning ? ` WARNING: ${b.timeLimit.warning}` : ''
     // A check on this session's own background job: Claude Code already wakes it when that ends.
-    // Read here, in the caller's own process, where the check's script is (core/routines/own-job-watch.ts).
+    // Its script is read only in a session's own process; through a host's gateway only the run line (core/routines/own-job-watch.ts).
     const a = (args ?? {}) as { run?: unknown; cwd?: unknown; template?: unknown }
     const ownJob = a.template ? null : ownJobWatchWarning({ run: a.run, cwd: a.cwd, sid: process.env.WALNUT_SESSION_ID })
     const ownJobWarning = ownJob ? ` WARNING: ${ownJob}` : ''

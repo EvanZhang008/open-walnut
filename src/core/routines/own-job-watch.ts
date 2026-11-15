@@ -6,9 +6,12 @@
  * 20-minute "validation completion" trigger on a session's own acceptance run fired four times
  * overnight, each turn an ack only). trigger_create warns (src/ops/triggers.ts).
  *
- * Read where the op runs: the caller's own process, on the host its check runs on by default.
- * The script a `run` names is read too, small files only, never in a place macOS guards (a read
- * there puts a dialog on the user's screen).
+ * Read where the op runs. A session on the server's own machine runs it in its own CLI or MCP
+ * process (its id in WALNUT_SESSION_ID), so the script a `run` names is read too: small files
+ * only, never in a place macOS guards (a read there puts a dialog on the user's screen). A session
+ * on another host reaches the op through its daemon's gateway, so the op runs on the server, which
+ * cannot read that host's files: only the `run` line itself is looked at then (a known gap: a check
+ * whose script alone names the job is not warned about there).
  */
 import fs from 'node:fs'
 import os from 'node:os'
