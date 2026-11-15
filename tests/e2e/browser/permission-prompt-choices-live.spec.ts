@@ -107,8 +107,12 @@ test('an option the request never offered is refused and the prompt stays', asyn
 
 test('the toast names the rule beside each remembering choice, and answering there sends it', async ({ page, request }) => {
   await isolateUiPrefs(page)
+  // The toast comes only from a live notification:new, so the page's own socket must be
+  // registered before the ask exists. '#root > *' is the static boot splash (index.html),
+  // there long before the app mounts and connects.
+  const pageSocket = page.waitForEvent('websocket', { predicate: (w) => new URL(w.url()).pathname === '/ws', timeout: 30_000 })
   await page.goto('/')
-  await expect(page.locator('#root > *').first()).toBeVisible({ timeout: 30_000 })
+  await (await pageSocket).waitForEvent('framereceived', { timeout: 30_000 })
   const sid = await askingSession(request, 'toast')
   // Scoped to this test's toast: asks other specs left on the shared server toast too.
   const toastCard = page.locator('.notification-toaster .nfc-perm-toast').filter({ hasText: `PW prompt choices toast ${NONCE}` })
