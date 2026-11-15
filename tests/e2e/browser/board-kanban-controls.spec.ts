@@ -378,11 +378,17 @@ test('C39: the leader needing the user shows in the rollup, the count and its ow
   // the leader writes a page, so the count is read from the Cards view this test is on.)
   await expect(pane.getByTestId('board-view-attention')).toHaveText(String(before + 1))
   // The button is a task reference (useOpenTask): it opens the leader's session on Home, its
-  // chat in place of the Board. The Board chip brings the Cards back for the leader row.
+  // chat in place of the Board, with the prompt the button named. The chat's earlier words are
+  // no proof: the fixture's streams carry no user rows, so its turns read as one turn whose words
+  // before the last answer fold away undrawn (web/src/utils/turn-shape.ts, `answered`), while a
+  // prompt stays outside every fold (session-worked-for.spec.ts). The Board chip brings the
+  // Cards back for the leader row.
   await lead.click()
   const leadPanel = page.locator(`${REAL_PANEL}[data-session-id="${leadSid}"]`)
   await expect(leadPanel).toBeVisible({ timeout: 15_000 })
-  await expect(leadPanel.getByText('Kanban leader ready').first()).toBeVisible({ timeout: 15_000 })
+  const leadPrompt = leadPanel.locator('.permission-request-card[data-prompt-tool="Bash"][data-prompt-pending="true"]')
+  await expect(leadPrompt).toBeVisible({ timeout: 15_000 })
+  expect(await leadPrompt.evaluate((c) => !!c.closest('[data-testid="turn-fold"]'))).toBe(false)
   await expect(pane.getByTestId('board-kanban')).toHaveCount(0)
   await backToBoard(page, leadPanel)
   // Allow from the leader row: the leader stops needing the user.
