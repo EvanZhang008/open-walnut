@@ -252,6 +252,11 @@ beforeEach(async () => {
     fs.mkdirSync(path.dirname(path.join(seed, 'scripts', f)), { recursive: true })
     fs.copyFileSync(path.join(REPO, 'scripts', f), path.join(seed, 'scripts', f))
   }
+  // The Leak gate's check before a push of main (scripts/leak-scan/check-on-github.sh): a stand-in
+  // that records the pre-push line it was given, and refuses when FAKE_LEAK_CHECK_FAIL is set.
+  fs.mkdirSync(path.join(seed, 'scripts', 'leak-scan'), { recursive: true })
+  fs.writeFileSync(path.join(seed, 'scripts', 'leak-scan', 'check-on-github.sh'),
+    `cat >> '${path.join(state, 'leak-check.log')}'\n[ -z "\${FAKE_LEAK_CHECK_FAIL:-}" ] || { echo 'Push blocked: the Leak gate on GitHub found something'; exit 1; }\n`)
   fs.writeFileSync(path.join(seed, 'package.json'), `${JSON.stringify({ name: 'open-walnut', version: '0.6.0', license: 'MIT' }, null, 2)}\n`)
   // What the launcher package carries beside its scripts.
   fs.writeFileSync(path.join(seed, 'README.md'), '# Open Walnut\n')
@@ -483,6 +488,20 @@ describe('release.yml promote steps', { timeout: 120_000 }, () => {
     expect(atOrigin('log', '-1', '--format=%s', 'main~1')).toBe("fix: a peer's change 0")
     expect(atOrigin('log', '-1', '--format=%s', 'main')).toBe(`release: ${VERSION}`)
     expect(atOrigin('show', 'main:peer-0.txt')).toBe('peer 0')
+  })
+
+  it("checks the release commit with the Leak gate before it pushes main, and a failed check keeps main as it was", async () => {
+    expect((await runStep(PUBLISH)).code).toBe(0)
+    expect((await runStep(TAG)).code).toBe(0)
+    const refused = await runStep(ROLL, { FAKE_LEAK_CHECK_FAIL: '1' })
+    expect(refused.code).toBe(1)
+    expect(atOrigin('rev-parse', 'main')).toBe(mainBefore)
+    const r = await runStep(ROLL)
+    expect(r.code, r.out).toBe(0)
+    const rolled = atOrigin('rev-parse', 'main')
+    expect(atOrigin('log', '-1', '--format=%s', 'main')).toBe(`release: ${VERSION}`)
+    const checked = fs.readFileSync(path.join(state, 'leak-check.log'), 'utf8').trim().split('\n')
+    expect(checked.at(-1)).toBe(`refs/heads/main ${rolled} refs/heads/main ${'0'.repeat(40)}`)
   })
 
   it('when main changed a workflow after the release, tags a child of it that carries main\'s workflows', async () => {
