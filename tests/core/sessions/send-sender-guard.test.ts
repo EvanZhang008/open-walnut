@@ -132,6 +132,8 @@ const CALL_SITES: Record<string, number> = {
   'src/core/sessions/lane-turn.ts': 3,             // frames the first line for its source; a joined message goes as its lane's source
   'src/core/sessions/letter-recheck.ts': 1,
   'src/core/sessions/machine-wake.ts': 1,
+  // A Walnut tool the CLI refused: one Walnut notice (walnut-notify) naming what to use instead.
+  'src/core/sessions/missing-walnut-tool.ts': 1,
   'src/core/sessions/needs-recheck.ts': 1,
   'src/core/sessions/promise-alarm.ts': 1,
   'src/core/sessions/session-request-notify.ts': 4, // and the 10-minute silent-target notice (remindSilent)
