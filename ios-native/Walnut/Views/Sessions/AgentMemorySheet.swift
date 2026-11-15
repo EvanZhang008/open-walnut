@@ -29,6 +29,9 @@ struct AgentMemorySheet: View {
     /// Who wrote the stored words (the user or an agent), for the header's source line.
     @State private var stored: OrgInstructions?
     @State private var confirmDiscard = false
+    /// Save waits for words still being spoken or transcribed into the instructions
+    /// (`DictationSendGate`).
+    @State private var sendGate = DictationSendGate()
 
     private static let maxChars = 4000
 
@@ -52,10 +55,15 @@ struct AgentMemorySheet: View {
                         Button("Try again") { Task { await load() } }
                             .accessibilityIdentifier("agentMemory.retry")
                     } else {
-                        TextField("What it owns, how it works, what to watch for", text: $text, axis: .vertical)
-                            .lineLimit(4...14)
-                            .disabled(saving)
-                            .accessibilityIdentifier("agentMemory.instructions")
+                        VoiceDictationField(
+                            text: $text, surface: "agent-instructions:\(taskId)", box: "agent-instructions",
+                            blocked: saving
+                        ) {
+                            TextField("What it owns, how it works, what to watch for", text: $text, axis: .vertical)
+                                .lineLimit(4...14)
+                                .disabled(saving)
+                                .accessibilityIdentifier("agentMemory.instructions")
+                        }
                     }
                     if !loading, !loadFailed, !fallback.isEmpty, !followsDefault {
                         Button("Restore Walnut's Default") { text = fallback }
@@ -129,13 +137,17 @@ struct AgentMemorySheet: View {
                     Text("It writes this itself; read only here.")
                 }
             }
+            .dictationSendGate(sendGate)
             // The session menu's name for it, so the two read the same.
             .navigationTitle("Core Instructions")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     // Unsaved words are asked about, never dropped silently.
-                    Button("Cancel") { if dirty && !loading && !loadFailed { confirmDiscard = true } else { dismiss() } }
+                    Button("Cancel") {
+                        sendGate.cancelWait()
+                        if dirty && !loading && !loadFailed { confirmDiscard = true } else { dismiss() }
+                    }
                         .disabled(saving)
                         .accessibilityIdentifier("agentMemory.cancel")
                 }
@@ -143,15 +155,21 @@ struct AgentMemorySheet: View {
                     if saving {
                         ProgressView()
                     } else {
-                        Button("Save") { Task { await save() } }
+                        Button {
+                            sendGate.send { _ in Task { await save() } }
+                        } label: {
+                            DictationSendLabel(gate: sendGate, title: "Save")
+                        }
                             .fontWeight(.semibold)
-                            .disabled(loading || loadFailed || !dirty || overLimit)
+                            // Live while words are being spoken in, even before they change the box.
+                            .disabled(loading || loadFailed
+                                      || ((!dirty || overLimit) && !sendGate.isDictating && !sendGate.isWaiting))
                             .accessibilityIdentifier("agentMemory.save")
                     }
                 }
             }
             // Only typed words hold the sheet: never while it loads or after a failed read.
-            .holdsNavigation(saving || (!loading && !loadFailed && dirty))
+            .holdsNavigation(saving || sendGate.isWaiting || (!loading && !loadFailed && dirty))
             .confirmationDialog("Discard your changes?", isPresented: $confirmDiscard, titleVisibility: .visible) {
                 Button("Discard Changes", role: .destructive) { dismiss() }
                 Button("Keep Editing", role: .cancel) {}

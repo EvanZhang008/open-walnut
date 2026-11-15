@@ -9,12 +9,14 @@
 .org-router-row:first-child { border-top: none; }
 .org-router-label { padding-top: 6px; font-weight: 500; color: var(--fg-secondary); }
 .org-router-value { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding-top: 6px; }
-.org-router-value:has(> input:not([type]):first-child, > .router-folders) { padding-top: 0; }
-.org-router-value > input:not([type]) {
+.org-router-value:has(> input:not([type]):first-child, > .mic-field:first-child, > .router-folders) { padding-top: 0; }
+.org-router-value > .mic-field { width: 100%; max-width: 380px; }
+.org-router-value > input:not([type]),
+.org-router-value > .mic-field > input:not([type]) {
   box-sizing: border-box; width: 100%; max-width: 380px; height: 30px; padding: 0 10px; font: inherit;
   color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
 }
-.org-router-value > input:not([type]):focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.org-router-value > input:not([type]):focus-visible, .org-router-value > .mic-field > input:not([type]):focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
 .org-router-hint { font-size: 12px; line-height: 1.45; color: var(--fg-secondary); }
 .org-router-sources { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
 .org-router-kind { margin-left: 4px; font-size: 12px; color: var(--fg-secondary); }
@@ -27,6 +29,8 @@
   width: 100%; max-width: 320px; margin: 0 0 6px; padding: 5px 8px; font: inherit; font-size: 13px;
   color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
 }
+.mic-field.org-router-link-filter-field { width: 100%; max-width: 320px; margin: 0 0 6px; }
+.org-router-link-filter-field > .org-router-link-filter { max-width: none; margin: 0; }
 .org-router-link-filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
 .org-router-link-list { max-height: 228px; overflow-y: auto; }
 .org-router-links .org-router-value > .org-router-hint { margin: 0 0 4px; }

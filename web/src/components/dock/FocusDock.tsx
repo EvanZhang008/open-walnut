@@ -4,6 +4,8 @@ import { draftKey } from '@/utils/drafts';
 import type { Task } from '@open-walnut/core';
 import { resolveTaskSessionId, taskStatusLabel } from '@/utils/session-status';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation } from '@/hooks/useSendAfterDictation';
 import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { useSessionSend } from '@/hooks/useSessionSend';
@@ -231,12 +233,14 @@ const DockQuickAdd = memo(function DockQuickAdd({ onAdd }: DockQuickAddProps) {
   const [open, setOpen] = useState(() => !!draft.text);
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
 
   useEffect(() => { if (open) inputRef.current?.focus(); }, [open]);
 
-  const submit = useCallback(async () => {
+  const submitNow = useCallback(async () => {
     const t = title.trim();
     if (!t || busy) return;
+    mic.current?.clear();
     setBusy(true);
     try {
       const sentKey = draft.key;
@@ -245,13 +249,15 @@ const DockQuickAdd = memo(function DockQuickAdd({ onAdd }: DockQuickAddProps) {
       setOpen(false);
     } catch {
       // onAdd rethrows after reporting the failure (useTasks.create → onOpError →
-      // toast). Swallow it here so the keydown handler's un-awaited submit() call
+      // toast). Swallow it here so the gate's un-awaited call
       // doesn't surface as an [unhandledrejection]; the form stays open with the
       // title intact so the user can retry.
     } finally {
       setBusy(false);
     }
   }, [title, busy, onAdd, draft]);
+  // Enter waits for a title still being dictated, then adds it.
+  const gate = useSendAfterDictation([mic], () => void submitNow(), draft.key);
 
   if (!open) {
     return (
@@ -268,21 +274,24 @@ const DockQuickAdd = memo(function DockQuickAdd({ onAdd }: DockQuickAddProps) {
 
   return (
     <div className="dock-quick-add-form">
-      <input
-        ref={inputRef}
-        type="text"
-        data-draft-key={draft.key ?? undefined}
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        placeholder="Add to Focus…"
-        aria-label="New focus task title"
-        {...NO_AUTOFILL_PROPS}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') { e.preventDefault(); submit(); }
-          if (e.key === 'Escape') { draft.clear(); setOpen(false); }
-        }}
-        onBlur={() => { if (!title.trim()) setOpen(false); }}
-      />
+      <MicField inline fieldClassName="dock-quick-add-field" boxRef={inputRef} text={title} setText={setTitle} handleRef={mic} target={draft.key} disabled={busy}>
+        <input
+          ref={inputRef}
+          type="text"
+          data-draft-key={draft.key ?? undefined}
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="Add to Focus…"
+          aria-label="New focus task title"
+          {...NO_AUTOFILL_PROPS}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); gate.send(); }
+            if (e.key === 'Escape') { draft.clear(); setOpen(false); }
+          }}
+          // An empty box closes when the person leaves it, never while its title is being dictated.
+          onBlur={() => { if (!title.trim() && !mic.current?.busy()) setOpen(false); }}
+        />
+      </MicField>
     </div>
   );
 });

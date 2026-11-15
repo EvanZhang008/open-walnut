@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, Fragment, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import { MicField, type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
+import { useSendAfterDictation } from '@/hooks/useSendAfterDictation';
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey, readDraft, writeDraft } from '@/utils/drafts';
 import { useNavigate } from 'react-router-dom';
@@ -265,11 +267,11 @@ function ProjectCell({ task, sourceByName, projectNames, onUpdate }: {
           onPointerDown={(e) => e.stopPropagation()}
         >
           {options.length > 6 && (
-            <input data-no-draft="search"
+            <MicInput fieldClassName="tp-proj-filter-field mic-field-compact" data-no-draft="search"
               className="tp-proj-filter"
               placeholder="Filter projects…"
               value={filter}
-              onChange={(e) => setFilter(e.target.value)}
+              setText={setFilter}
               autoFocus
             />
           )}
@@ -412,10 +414,31 @@ export function TasksPageTable({
   const ghostKeyRef = useRef(ghostDraft.key);
   ghostKeyRef.current = ghostDraft.key;
   const inputRef = useRef<HTMLInputElement>(null);
+  const ghostMic = useRef<BoxMicHandle | null>(null);
+  // The group the Enter was pressed in: the create may wait for a title still being dictated.
+  const ghostProject = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     if (addingIn !== null) inputRef.current?.focus();
   }, [addingIn]);
+
+  const createGhostNow = () => {
+    const title = draft.trim();
+    if (!title) return;
+    const project = ghostProject.current;
+    const sentKey = ghostDraft.key;
+    ghostMic.current?.clear();
+    setDraft('');
+    // A refused create puts the title back in its own group's draft, unless
+    // something new was typed there meanwhile.
+    void Promise.resolve(onCreate(title, project)).catch(() => {
+      if (sentKey === ghostKeyRef.current) setDraft((cur) => cur || title);
+      else if (sentKey && !readDraft(sentKey)) writeDraft(sentKey, title);
+    });
+    inputRef.current?.focus(); // re-arm for rapid entry
+  };
+  // Enter waits for a title still being dictated; another group's row never takes that wait.
+  const ghostGate = useSendAfterDictation([ghostMic], createGhostNow, ghostDraft.key);
 
   const handleGhostKey = (e: KeyboardEvent<HTMLInputElement>, project: string | undefined) => {
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
@@ -424,17 +447,8 @@ export function TasksPageTable({
       ghostDraft.clear();
       setAddingIn(null);
     } else if (e.key === 'Enter') {
-      const title = draft.trim();
-      if (!title) return;
-      const sentKey = ghostDraft.key;
-      setDraft('');
-      // A refused create puts the title back in its own group's draft, unless
-      // something new was typed there meanwhile.
-      void Promise.resolve(onCreate(title, project)).catch(() => {
-        if (sentKey === ghostKeyRef.current) setDraft((cur) => cur || title);
-        else if (sentKey && !readDraft(sentKey)) writeDraft(sentKey, title);
-      });
-      inputRef.current?.focus(); // re-arm for rapid entry
+      ghostProject.current = project;
+      ghostGate.send();
     }
   };
 
@@ -482,16 +496,19 @@ export function TasksPageTable({
         <span className="tp-cell-title">
           <span className="tp-gplus">＋</span>
           {editing ? (
-            <input
-              ref={inputRef}
-              className="tp-ghost-input"
-              data-draft-key={ghostDraft.key ?? undefined}
-              placeholder="Task title — Enter to create"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => handleGhostKey(e, project)}
-              onBlur={() => setAddingIn(null)}
-            />
+            <MicField inline fieldClassName="tp-ghost-field mic-field-compact" boxRef={inputRef} text={draft} setText={setDraft} handleRef={ghostMic} target={ghostDraft.key}>
+              <input
+                ref={inputRef}
+                className="tp-ghost-input"
+                data-draft-key={ghostDraft.key ?? undefined}
+                placeholder="Task title — Enter to create"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => handleGhostKey(e, project)}
+                // Leaving the row closes it, but a title being dictated keeps it open for its words.
+                onBlur={() => { if (!ghostMic.current?.busy()) setAddingIn(null); }}
+              />
+            </MicField>
           ) : (
             <span className="tp-ghost-text">New task… ({scopeLabel})</span>
           )}

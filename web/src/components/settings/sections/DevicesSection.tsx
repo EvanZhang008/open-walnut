@@ -28,6 +28,8 @@ import { SIGNED_IN_BROWSER, SignOutAllBrowsers, type SignOutResult } from './clo
 import { describeDevice, describeMacRow, reachWords, ROLE_NOTE, UNPAIR_SELF_WARNING, CLOUD_UNPAIRED_NOTICE, DEVICES_CHANGED_EVENT } from './cloud/device-rows-copy';
 
 import '@/styles/settings-sections-addons.css';
+import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 
 export { humanDeviceModel, describeDevice, describeMacRow, CLOUD_UNPAIRED_NOTICE, DEVICES_CHANGED_EVENT, UNPAIR_SELF_WARNING } from './cloud/device-rows-copy';
 
@@ -158,12 +160,14 @@ export function DevicesSection() {
     openQrDialog({ name, repair: true, target: kind, phase: 'ask', error: null });
   };
 
+  const nameMic = useRef<BoxMicHandle | null>(null);
   const addDevice = async () => {
     if (!newName.trim() || busy) return;
     // "My iPhone" is the natural shape; the server wants an id (N3-03).
     const name = deviceNameForServer(newName);
     if (!name) { setNameError('Use at least one letter or digit in the name.'); return; }
     setNameError(null);
+    nameMic.current?.clear();
     dismiss();
     // Only send an explicit target when one was actually offered — otherwise
     // let the server pick (it falls back to a token-only QR).
@@ -172,6 +176,8 @@ export function DevicesSection() {
     openQrDialog(dlg);
     await runMint(dlg);
   };
+  // Pair (the button, or Enter in the name) waits for a name still being dictated.
+  const addGate = useSendAfterDictation([nameMic], () => void addDevice());
 
   /**
    * Revoke EVERY credential behind a row. A phone paired to both this Mac and
@@ -472,23 +478,25 @@ export function DevicesSection() {
             error={nameError ?? undefined}
             control={
               <span className="settings-addons-inline devices-add-row">
-                <input
+                <MicInput fieldClassName="settings-mic-field settings-mic-field-short"
                   id="devices-new-name"
                   type="text"
                   data-draft-key={nameDraft.key ?? undefined}
                   className="settings-input settings-input--short"
                   value={newName}
                   placeholder="My iPhone"
-                  onChange={(e) => { setNewName(e.target.value); setNameError(null); }}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void addDevice(); } }}
+                  setText={(text) => { setNewName(text); setNameError(null); }}
+                  micRef={nameMic}
+                  onEnter={addGate.send}
                 />
                 <SettingsButton
                   variant="primary"
-                  disabled={!newName.trim()}
+                  disabled={!newName.trim() && !addGate.micBusy && !addGate.waiting}
                   title={newName.trim() ? undefined : 'Name the device first.'}
                   busy={busy}
                   busyLabel="Pairing..."
-                  onClick={() => void addDevice()}
+                  onClick={addGate.send}
+                  {...dictationWaitProps(addGate)}
                 >
                   Pair new device
                 </SettingsButton>

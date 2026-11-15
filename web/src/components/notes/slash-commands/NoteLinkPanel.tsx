@@ -7,6 +7,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import type { NoteListItem } from '@/api/notes-v2';
+import { MicInput } from '@/components/common/BoxMic';
 
 const MAX_RESULTS = 15;
 
@@ -87,13 +88,13 @@ export function NoteLinkPanel({ notes, onSelect, onBack }: NoteLinkPanelProps) {
         >
           &larr;
         </button>
-        <input
+        <MicInput fieldClassName="mic-field-grow mic-field-compact"
           data-no-draft="picker"
           ref={inputRef}
           className="notes-task-search-input"
           type="text"
           value={query}
-          onChange={e => setQuery(e.target.value)}
+          setText={setQuery}
           placeholder="Link to note..."
           autoComplete="off"
           spellCheck={false}

@@ -29,6 +29,7 @@ import { HighlightedTitle } from './HighlightedText';
 import { jumpNeedles, findQueries } from './jump-target';
 import { noteHitLabel, type NoteHitLabel } from '../../../../src/core/note-hit-label';
 import { log } from '@/utils/log';
+import { MicInput } from '@/components/common/BoxMic';
 
 interface CommandPaletteProps {
   /**
@@ -338,7 +339,7 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
       <div className="notes-cmdk" onMouseDown={(e) => e.stopPropagation()}>
         <div className="notes-cmdk-input-row">
           <span className="notes-cmdk-glyph" aria-hidden>{'⌘K'}</span>
-          <input data-no-draft="picker"
+          <MicInput fieldClassName="mic-field-grow" data-no-draft="picker"
             ref={inputRef}
             className="notes-cmdk-input"
             type="text"
@@ -346,7 +347,7 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
             placeholder="Jump to a note, or type to search…"
             autoComplete="off"
             spellCheck={false}
-            onChange={(e) => setQuery(e.target.value)}
+            setText={setQuery}
             onKeyDown={onInputKeyDown}
             onCompositionStart={() => { composingRef.current = true; }}
             onCompositionEnd={() => { composingRef.current = false; }}

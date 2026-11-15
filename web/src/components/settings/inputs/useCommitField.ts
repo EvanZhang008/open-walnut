@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
 import { saveErrorMessage, useRowFailure, useSettingsSaved } from '../settings-pane-context'
 import { couldntSave } from './useOptimisticSetting'
+import { useLeanCallback } from '@/hooks/useLeanCallback'
 
 export type CommitValue = string | number | undefined
 
@@ -172,5 +173,23 @@ export function useCommitField<T extends CommitValue>(
     'aria-invalid': error || rowFailure ? true : undefined,
   }
   const shownError = error ?? (rowFailure !== null ? couldntSave(rowFailure) : null)
-  return { inputProps, error: shownError, dirty: draft !== baselineRef.current, flush }
+  /** Words written into the field from outside a keystroke (the mic, a "use the default" link). */
+  const setText = useLeanCallback((text: string) => {
+    setDraft(text)
+    setError(null)
+    clearRowFailure()
+  }, [setDraft, clearRowFailure])
+  /**
+   * The same field as a MicInput (the composer's mic inside the box): Enter commits through the
+   * box's send gate, so words still being dictated are in first; the other keys behave as above.
+   */
+  const micInputProps = {
+    ...inputProps,
+    setText,
+    onEnter: () => { void flush() },
+    onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => {
+      if (e.key !== 'Enter' || optsRef.current.multiline) inputProps.onKeyDown(e)
+    },
+  }
+  return { inputProps, micInputProps, error: shownError, dirty: draft !== baselineRef.current, flush, setText }
 }

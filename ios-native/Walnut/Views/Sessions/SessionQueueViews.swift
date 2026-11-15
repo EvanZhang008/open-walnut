@@ -416,6 +416,9 @@ struct SessionQueuedMessageSheet: View {
     /// choose what to do with them.
     @State private var strandedWords: String?
     @FocusState private var focused: Bool
+    /// Save and Send now wait for words still being spoken or transcribed into the message
+    /// (`DictationSendGate`).
+    @State private var sendGate = DictationSendGate()
 
     private var row: SessionQueuedMessage? { queue.rows.first { $0.id == rowID } }
 
@@ -433,15 +436,22 @@ struct SessionQueuedMessageSheet: View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 14) {
                 if let row {
-                    TextEditor(text: $text)
-                        .focused($focused)
-                        .font(.body)
-                        .scrollContentBackground(.hidden)
-                        .padding(10)
-                        .frame(minHeight: 120, maxHeight: 220)
-                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .disabled(!row.canEdit || saving)
-                        .accessibilityIdentifier("session.queue.edit.text")
+                    // Walnut's mic under the box: spoken words land after what is typed and are
+                    // never saved or sent by themselves.
+                    VoiceDictationField(
+                        text: $text, surface: "queued-message:\(rowID)", box: "queued-message",
+                        placement: .below, blocked: !row.canEdit || saving, refocus: { focused = true }
+                    ) {
+                        TextEditor(text: $text)
+                            .focused($focused)
+                            .font(.body)
+                            .scrollContentBackground(.hidden)
+                            .padding(10)
+                            .frame(minHeight: 120, maxHeight: 220)
+                            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .disabled(!row.canEdit || saving)
+                            .accessibilityIdentifier("session.queue.edit.text")
+                    }
 
                     Text(caption(for: row))
                         .font(.footnote)
@@ -454,20 +464,29 @@ struct SessionQueuedMessageSheet: View {
                     VStack(spacing: 10) {
                         if row.canSendNow {
                             Button {
-                                if turnRunning { askInterrupt = true } else { Task { await sendNow(row) } }
+                                // The words being spoken land first; then the interrupt is asked.
+                                sendGate.send { _ in
+                                    guard let row = self.row, !emptied else { return }
+                                    if turnRunning { askInterrupt = true } else { Task { await sendNow(row) } }
+                                }
                             } label: {
-                                Label(turnRunning ? "Interrupt & send now" : "Send now", systemImage: "bolt.fill")
+                                DictationSendLabel(
+                                    gate: sendGate, title: turnRunning ? "Interrupt & send now" : "Send now",
+                                    systemImage: "bolt.fill"
+                                )
                                     .font(.body.weight(.semibold))
                                     .frame(maxWidth: .infinity, minHeight: 44)
                             }
                             .buttonStyle(.bordered)
                             .tint(Theme.tint)
                             .foregroundStyle(Theme.tint)
-                            .disabled(saving || queue.busyIds.contains(row.id) || emptied)
+                            .disabled(saving || queue.busyIds.contains(row.id)
+                                      || (emptied && !sendGate.isDictating && !sendGate.isWaiting))
                             .accessibilityIdentifier("session.queue.sendNow")
                         }
                         if row.canWithdraw {
                             Button(role: .destructive) {
+                                sendGate.cancelWait()
                                 Task {
                                     saving = true
                                     await queue.withdraw(row)
@@ -500,21 +519,29 @@ struct SessionQueuedMessageSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") {
+                        sendGate.cancelWait()
                         if changed || strandedWords != nil { askDiscard = true } else { dismiss() }
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        guard let row else { return }
-                        Task { await save(row) }
+                    Button {
+                        sendGate.send { _ in
+                            // Read again after a wait: the row may have gone out meanwhile.
+                            guard let row = self.row, changed else { return }
+                            Task { await save(row) }
+                        }
+                    } label: {
+                        DictationSendLabel(gate: sendGate, title: "Save")
                     }
-                    .disabled(!changed || saving || !(row?.canEdit ?? false))
+                    .disabled(saving || !(row?.canEdit ?? false)
+                              || (!changed && !sendGate.isDictating && !sendGate.isWaiting))
                     .accessibilityIdentifier("session.queue.save")
                 }
             }
         }
         .presentationBackground(Color(.systemBackground))
-        .holdsNavigation(changed || strandedWords != nil)
+        .dictationSendGate(sendGate)
+        .holdsNavigation(changed || strandedWords != nil || sendGate.isWaiting)
         .alert("Interrupt the agent?", isPresented: $askInterrupt) {
             Button("Keep waiting", role: .cancel) {}
             Button("Interrupt & send", role: .destructive) {

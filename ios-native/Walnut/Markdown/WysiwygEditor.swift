@@ -496,6 +496,7 @@ struct WysiwygEditor: UIViewRepresentable {
             }
             let editor = TableInlineEditor(
                 attachment: attachment, charIndex: index, in: textView,
+                dictation: parent.dictation,
                 onLiveResize: liveResize,
                 onCommit: { [weak self, weak textView] final in
                     guard let self, let textView else { return }

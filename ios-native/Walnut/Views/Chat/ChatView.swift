@@ -59,11 +59,8 @@ struct ChatView: View {
     @State private var sessionlessAsk: AskSummary?
     /// An org node (the CEO or a VP) with no session yet: its first message here starts one.
     @State private var sessionlessOrgNode: OrgNodeStart?
-    @State private var orgFirstMessageDraft = ""
     /// The page kept over the restored Org node's chat (`ViewMemory`), put back with it at launch only.
     @State private var restoredOrgPage: (sessionId: String, tab: OrgNodeTab)?
-    /// The node `orgFirstMessageDraft` was written for: the dialog for that node opens on it again.
-    @State private var orgFirstMessageFor: String?
     /// The org node a tap is opening; a newer tap, or any navigation of his own, replaces it.
     @State private var orgOpening: OrgOpening?
     /// The next change of `openedAskSession` is an open's (a tap, a link, a launch restore), not
@@ -90,7 +87,6 @@ struct ChatView: View {
     /// An Org node open that did not happen, shown over whichever page of this tab is in front
     /// (`OrgOpenNotice`); the chat's own error bar sits under a pushed session.
     @State private var orgOpenNotice: OrgOpenNotice?
-    @State private var firstMessageDraft = ""
     /// Talk to CEO's "Open chat" on an email (`ContentActionButtons`).
     @State private var contentLink = ContentActionLink.shared
 
@@ -355,22 +351,23 @@ struct ChatView: View {
                 }
             }
         }
-        .alert(sessionlessAsk?.title ?? "Start this conversation", isPresented: Binding(
-            get: { sessionlessAsk != nil },
-            set: { if !$0 { sessionlessAsk = nil } }
-        )) {
-            TextField("First message", text: $firstMessageDraft)
-            Button("Cancel", role: .cancel) { sessionlessAsk = nil }
-            Button("Send") {
-                let ask = sessionlessAsk
-                let text = firstMessageDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                sessionlessAsk = nil
-                guard let ask, !text.isEmpty else { return }
-                firstMessageDraft = ""
-                Task { await startAsk(ask, message: text) }
-            }
-        } message: {
-            Text("This conversation has not started yet. Its first message starts it.")
+        // The first-message prompts are small sheets with Walnut's mic (an alert hosts none); their
+        // words are kept per chat in the draft store (`PromptDraft`), so a push that closes one keeps
+        // them, and one chat's prompt (or a take finishing late) never touches another's words.
+        .sheet(item: $sessionlessAsk) { ask in
+            let key = Self.askFirstMessageKey(ask.id)
+            DictatedTextPrompt(
+                title: ask.title, message: "This conversation has not started yet. Its first message starts it.",
+                placeholder: "First message", text: PromptDraft.binding(key, prefix: Self.askFirstMessagePrefix),
+                surface: key, box: "ask-first-message",
+                confirmTitle: "Send", identifier: "chat.firstMessage", multiline: true,
+                onCancel: { sessionlessAsk = nil },
+                onConfirm: { text in
+                    sessionlessAsk = nil
+                    ComposerDrafts.shared.setDraft("", key: key)
+                    Task { await startAsk(ask, message: text) }
+                }
+            )
         }
         // MainTabView has brought this tab forward; the CEO's chat opens over it.
         .onChange(of: contentLink.chat) { _, request in
@@ -382,26 +379,23 @@ struct ChatView: View {
             if request != nil { openLinkedOrgNode() }
         }
         .onAppear { if orgLink.pending != nil { openLinkedOrgNode() } }
-        .alert(sessionlessOrgNode?.name ?? "Start this conversation", isPresented: Binding(
-            get: { sessionlessOrgNode != nil },
-            set: { if !$0 { sessionlessOrgNode = nil } }
-        )) {
-            TextField("First message", text: $orgFirstMessageDraft)
-            Button("Cancel", role: .cancel) {
-                sessionlessOrgNode = nil
-                orgFirstMessageDraft = ""
-            }
-            Button("Send") {
-                let node = sessionlessOrgNode
-                let text = orgFirstMessageDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                sessionlessOrgNode = nil
-                orgFirstMessageDraft = ""
-                guard let node, !text.isEmpty else { return }
-                Task { await startOrgNode(node, message: text) }
-            }
-            .disabled(orgFirstMessageDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        } message: {
-            Text("No chat with \(sessionlessOrgNode?.name ?? "it") yet. Its first message starts one.")
+        .sheet(item: $sessionlessOrgNode) { node in
+            let key = Self.orgFirstMessageKey(node.id)
+            DictatedTextPrompt(
+                title: node.name, message: "No chat with \(node.name) yet. Its first message starts one.",
+                placeholder: "First message", text: PromptDraft.binding(key, prefix: Self.orgFirstMessagePrefix),
+                surface: key, box: "org-first-message",
+                confirmTitle: "Send", identifier: "chat.orgFirstMessage", multiline: true,
+                onCancel: {
+                    sessionlessOrgNode = nil
+                    ComposerDrafts.shared.setDraft("", key: key)
+                },
+                onConfirm: { text in
+                    sessionlessOrgNode = nil
+                    ComposerDrafts.shared.setDraft("", key: key)
+                    Task { await startOrgNode(node, message: text) }
+                }
+            )
         }
     }
 
@@ -716,11 +710,8 @@ struct ChatView: View {
                 // The user moved on (another tap, another chat) while this was asked: drop it.
                 guard orgOpening?.token == token, openedAskSession?.id == shownAtTap else { return }
                 guard let sessionId = detail.currentSessionId else {
-                    // His first words for this node, from a dialog a push closed, come back.
-                    if orgFirstMessageFor != taskId {
-                        orgFirstMessageDraft = ""
-                        orgFirstMessageFor = taskId
-                    }
+                    // His first words for this node, from a dialog a push closed, come back: they
+                    // are kept per node (`orgFirstMessageKey`).
                     sessionlessOrgNode = OrgNodeStart(id: taskId, name: row.name, isCEO: row.kind == .ceo)
                     return
                 }
@@ -1455,7 +1446,15 @@ struct OrgOpening: Equatable {
 }
 
 /// An org node that has no session yet, waiting for its first message.
-struct OrgNodeStart: Equatable {
+extension ChatView {
+    /// Draft keys of the first-message prompts, one per chat; also the prompts' mic surfaces.
+    nonisolated static let askFirstMessagePrefix = "ask-first-message:"
+    nonisolated static let orgFirstMessagePrefix = "org-first-message:"
+    nonisolated static func askFirstMessageKey(_ askId: String) -> String { askFirstMessagePrefix + askId }
+    nonisolated static func orgFirstMessageKey(_ nodeId: String) -> String { orgFirstMessagePrefix + nodeId }
+}
+
+struct OrgNodeStart: Equatable, Identifiable {
     let id: String
     let name: String
     let isCEO: Bool

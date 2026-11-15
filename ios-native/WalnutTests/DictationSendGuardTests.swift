@@ -19,7 +19,9 @@ final class DictationSendGuardTests: XCTestCase {
         "Talk/TalkRecorder.swift":
             "Talk to Walnut has no text box: Send, a pause or a second press stops the recording first, then the words are made from the whole take and sent.",
         "Views/Inbox/InboxItemConfirmation.swift":
-            "The work goal is reviewed before anything is sent, and Review and Confirm are held while the goal records or transcribes.",
+            "The work goal and title are reviewed before anything is sent, and Review and Confirm are held while either field records or transcribes.",
+        "Views/Shared/VoiceSearch.swift":
+            "Search dictates only into the current filter and has no Send button; the shared lifecycle preserves an unfinished take when the search closes.",
     ]
 
     /// Mic boxes inside a gated file that are not under its gate, each with why.

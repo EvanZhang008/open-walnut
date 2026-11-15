@@ -8,6 +8,8 @@ import { SegmentedControl } from '../inputs/SegmentedControl';
 import { SettingsCheckbox } from '../inputs/SettingsCheckbox';
 import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
 import { useCommitField } from '../inputs/useCommitField';
+import { MicInput } from '@/components/common/BoxMic';
+import '@/styles/settings-mic.css';
 import { useSerialSave, type OnSave } from './GeneralSection';
 import { EngineSplitRow } from './EngineSplitRow';
 import { DefaultEngineRow } from './DefaultEngineRow';
@@ -288,15 +290,17 @@ export function SessionsSection({ config, onSave }: Props) {
           htmlFor="session-reply-language"
           error={replyLanguage.error}
           control={
-            <input
+            // The sentence can be spoken: Enter saves it once words still being dictated are in.
+            <MicInput
               id="session-reply-language"
               data-no-draft="autosave"
               data-testid="session-reply-language"
               type="text"
               className="settings-input settings-input--long"
+              fieldClassName="settings-mic-field settings-mic-field-long"
               placeholder="Answer me in Chinese; code and commits stay English."
               maxLength={300}
-              {...replyLanguage.inputProps}
+              {...replyLanguage.micInputProps}
             />
           }
         />

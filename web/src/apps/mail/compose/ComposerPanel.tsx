@@ -29,7 +29,7 @@ import {
   type KeyboardEvent,
   type RefObject,
 } from 'react';
-import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
+import { BoxMic, MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { ContextMenu } from '@/components/common/ContextMenu';
@@ -309,6 +309,7 @@ function ComposerForm({ composer, canSend, cannotSendTitle, senderAddressedBy }:
   const { fields } = composer;
   const bodyRef = useRef<HTMLTextAreaElement | null>(null);
   const mic = useRef<BoxMicHandle | null>(null);
+  const subjectMic = useRef<BoxMicHandle | null>(null);
   // Another draft in the same form: a dictation still on its way belonged to the old one.
   const shownDraft = useRef(composer.draftId);
   useEffect(() => {
@@ -328,8 +329,8 @@ function ComposerForm({ composer, canSend, cannotSendTitle, senderAddressedBy }:
       : noRecipient ? 'Add the address this reply goes to first' : 'Send this message now (⌘↩)')
     : cannotSendTitle;
   // Send (and ⌘↩) and Ask on phone each wait for a live dictation's words, then go.
-  const sendGate = useSendAfterDictation([mic], () => { void sendMailNow(); });
-  const askGate = useSendAfterDictation([mic], () => { void askMailOnPhone(); });
+  const sendGate = useSendAfterDictation([mic, subjectMic], () => { void sendMailNow(); }, composer.draftId);
+  const askGate = useSendAfterDictation([mic, subjectMic], () => { void askMailOnPhone(); }, composer.draftId);
 
   // ⌘↩ from anywhere in the form, which is what the Send button's title promises. A shortcut
   // advertised in a tooltip and implemented nowhere is the confident wrong answer this repo bans.
@@ -387,14 +388,17 @@ function ComposerForm({ composer, canSend, cannotSendTitle, senderAddressedBy }:
 
           <div className="mail-compose-field">
             <label className="mail-compose-label" htmlFor="mail-compose-subject">Subject</label>
-            <input
+            <MicInput
               data-no-draft="autosave"
               id="mail-compose-subject"
               className="mail-compose-input mail-compose-subject"
+              fieldClassName="mic-field-grow"
               data-testid="mail-compose-subject"
               type="text"
               value={fields.subject}
-              onChange={(event) => setMailComposerFields({ subject: event.target.value })}
+              micRef={subjectMic}
+              target={composer.draftId}
+              setText={(subject) => setMailComposerFields({ subject })}
             />
           </div>
         </div>

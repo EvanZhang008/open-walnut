@@ -9,6 +9,7 @@ import { HighlightedText, HighlightedTitle } from './HighlightedText';
 import { jumpNeedles, findQueries } from './jump-target';
 import { useConfirm, useAlert } from '@/hooks/useConfirm';
 import { copyTextDeferred } from '@/utils/clipboard';
+import { MicInput } from '@/components/common/BoxMic';
 
 /**
  * Folder expand/collapse persistence (Feature 3). The expanded-folders set is
@@ -868,11 +869,11 @@ export const NotesTreePanel = memo(function NotesTreePanel({
       >
         <FileIcon />
         {isRenaming ? (
-          <input data-no-draft="rename"
+          <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="rename"
             ref={renameInputRef}
             className="notes-tree-inline-input"
             value={renameValue}
-            onChange={e => setRenameValue(e.target.value)}
+            setText={setRenameValue}
             onKeyDown={e => {
               if (e.key === 'Enter') handleConfirmRename();
               if (e.key === 'Escape') setRenaming(null);
@@ -893,12 +894,12 @@ export const NotesTreePanel = memo(function NotesTreePanel({
       style={{ paddingLeft: `${12 + depth * 16}px` }}
     >
       <FolderIcon />
-      <input data-no-draft="rename"
+      <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="rename"
         ref={newItemInputRef}
         className="notes-tree-inline-input"
         placeholder="folder name"
         value={newItemName}
-        onChange={e => setNewItemName(e.target.value)}
+        setText={setNewItemName}
         onKeyDown={e => {
           if (e.key === 'Enter') handleConfirmNewItem();
           if (e.key === 'Escape') setCreatingIn(null);
@@ -931,11 +932,11 @@ export const NotesTreePanel = memo(function NotesTreePanel({
       </div>
 
       <div className="notes-tree-search">
-        <input data-no-draft="search"
+        <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="search"
           type="text"
           placeholder="Search notes..."
           value={searchQuery}
-          onChange={e => handleSearchChange(e.target.value)}
+          setText={handleSearchChange}
           onKeyDown={handleSearchKeyDown}
           className="notes-search-input"
           aria-label="Search notes"

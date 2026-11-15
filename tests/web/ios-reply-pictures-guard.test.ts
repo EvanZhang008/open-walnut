@@ -18,7 +18,7 @@ const IOS = path.resolve(import.meta.dirname, '../../ios-native/Walnut')
 
 /** Files whose text inputs write to an AI but stay text only, and why. */
 const TEXT_ONLY_TO_AI: Record<string, string> = {
-  'Views/Chat/ChatView.swift': "a system alert's one text field (the first message of a chat not started yet); the chat that opens next takes pictures",
+  'Views/Shared/DictatedTextPrompt.swift': "a short shared prompt for titles, names and an optional first message, replacing text-only system alerts; first-message routes carry text and the chat that opens next takes pictures",
   'Views/Sessions/Changes/DiffReviewViews.swift': "a line comment on a diff goes in the review message, text in the web diff's exact format; the session's composer takes pictures",
   'Views/Sessions/NewSessionSheet.swift': "a new session's optional first message rides the start route, which carries text only; the session's composer takes pictures",
   'Views/Sessions/SessionComposerSheets.swift': "a fork's optional first message rides the fork route, which carries text only; the fork's composer takes pictures",
@@ -32,14 +32,11 @@ const TEXT_ONLY_TO_AI: Record<string, string> = {
 const NOT_TO_AI: Record<string, string> = {
   'Views/Calendar/CalendarCreateSheet.swift': 'a calendar event',
   'Views/Calendar/CalendarRows.swift': 'a calendar event',
-  'Views/Chat/ChatDrawer.swift': "a chat's title",
   'Views/Inbox/InboxItemConfirmation.swift': "a mail item's task title and goal, kept on the item before any session exists",
   'Views/Inbox/InboxItemTaskSelector.swift': 'a task search',
   'Views/Notes/NoteEditorView.swift': 'a note (its editor takes pictures of its own)',
-  'Views/Notes/NotesView.swift': 'a note search',
   'Views/Passwords/PasswordsSetupView.swift': 'the master password and Secret Key, which open the vault on this phone and never go to an AI',
   'Views/Sessions/AgentMemorySheet.swift': "a task's agent memory, a document the agent reads, not a message",
-  'Views/Sessions/SessionLifecycleDialogs.swift': "a session's title",
   'Views/Sessions/SessionPathPicker.swift': 'a folder path',
   'Views/SetupView.swift': 'the pairing address and code',
   'Views/Tasks/TaskDetailSheet.swift': "a task's fields",

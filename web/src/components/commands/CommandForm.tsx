@@ -28,6 +28,8 @@ export function CommandForm({ command, onSave, onCancel }: CommandFormProps) {
   const [saving, setSaving] = useState(false);
   const contentRef = useRef<HTMLTextAreaElement | null>(null);
   const mic = useRef<BoxMicHandle | null>(null);
+  const descRef = useRef<HTMLInputElement | null>(null);
+  const descMic = useRef<BoxMicHandle | null>(null);
 
   const submitNow = useCallback(async () => {
     setError(null);
@@ -50,6 +52,7 @@ export function CommandForm({ command, onSave, onCancel }: CommandFormProps) {
     try {
       // A transcription still on its way lands after the save, unsaved: drop it now.
       mic.current?.clear();
+      descMic.current?.clear();
       await onSave({
         name: name.trim(),
         content: content.trim(),
@@ -63,7 +66,7 @@ export function CommandForm({ command, onSave, onCancel }: CommandFormProps) {
     }
   }, [name, description, content, onSave, nameDraft.key, descDraft.key, contentDraft.key, clearDrafts]);
   // Save while the mic records waits for the final words, then saves.
-  const gate = useSendAfterDictation([mic], () => void submitNow());
+  const gate = useSendAfterDictation([mic, descMic], () => void submitNow());
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     gate.send();
@@ -92,14 +95,17 @@ export function CommandForm({ command, onSave, onCancel }: CommandFormProps) {
           </div>
           <div className="form-group">
             <label htmlFor="cmd-desc">Description</label>
-            <input
-              id="cmd-desc"
-              data-draft-key={descDraft.key ?? undefined}
-              type="text"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Short description shown in autocomplete"
-            />
+            <MicField inline boxRef={descRef} text={description} setText={setDescription} handleRef={descMic}>
+              <input
+                ref={descRef}
+                id="cmd-desc"
+                data-draft-key={descDraft.key ?? undefined}
+                type="text"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Short description shown in autocomplete"
+              />
+            </MicField>
           </div>
         </div>
       </div>

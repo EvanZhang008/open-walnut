@@ -13,7 +13,7 @@
  * Every composer with a mic routes its send through this hook; the guard test
  * `tests/web/send-waits-for-dictation-ratchet.test.ts` lists them.
  */
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { DictationOutcome } from '@/hooks/useSpeechToText';
 import { log } from '@/utils/log';
 import '@/styles/dictation-wait.css';
@@ -100,6 +100,7 @@ export function useSendAfterDictation(mics: ReadonlyArray<ControlRef>, send: () 
   const cancel = useCallback(() => {
     if (!waitingRef.current) return;
     seq.current += 1;
+    dueRef.current = false;
     setWait(false);
     log.info('stt', 'send after dictation cancelled; the words stay in the box');
   }, [setWait]);
@@ -123,10 +124,10 @@ export function useSendAfterDictation(mics: ReadonlyArray<ControlRef>, send: () 
     void Promise.all(busy.map((c) => c.finish().catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }))))
       .then((outcomes) => {
         if (mine !== seq.current) return;
-        setWait(false);
         const failed = outcomes.find((o) => o.error);
         const ms = Math.round(performance.now() - startedAt);
         if (failed) {
+          setWait(false);
           log.warn('stt', `send after dictation held: the dictation ended on an error after ${ms}ms (${failed.error})`);
           return;
         }
@@ -137,10 +138,11 @@ export function useSendAfterDictation(mics: ReadonlyArray<ControlRef>, send: () 
   }, [busyControls, cancel, setWait]);
 
   useEffect(() => {
-    if (!dueRef.current) return;
+    if (!dueRef.current || !waitingRef.current) return;
     dueRef.current = false;
+    setWait(false);
     sendRef.current();
-  }, [due]);
+  }, [due, setWait]);
 
   // Esc cancels the wait, before the composer's own Esc handling sees it.
   useEffect(() => {
@@ -158,7 +160,8 @@ export function useSendAfterDictation(mics: ReadonlyArray<ControlRef>, send: () 
   useEffect(() => () => { seq.current += 1; dueRef.current = false; release(); }, [release]);
 
   const targetRef = useRef(target);
-  useEffect(() => {
+  // Cancel before passive delivery effects can observe a different object.
+  useLayoutEffect(() => {
     if (Object.is(targetRef.current, target)) return;
     targetRef.current = target;
     dueRef.current = false;

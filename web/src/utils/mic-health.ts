@@ -80,6 +80,45 @@ export function micHealthTrackEnded(prev: MicHealthState): MicTick {
 }
 
 /**
+ * What a stopped recording holds, decided once for every stop:
+ *  - 'audio': transcribe it. Also a take the analyser has not sampled yet
+ *    (no evidence either way) whose recorder gave bytes: its audio is never
+ *    dropped on a guess;
+ *  - 'empty': nothing was captured: no bytes before any sound, or only digital
+ *    zeros while the mic was still starting (under DEAD_FROM_START_TICKS, the
+ *    button still said "Starting the microphone"). Not a broken device, but the
+ *    person may have spoken into it, so it is an error: a waiting Send holds and
+ *    the words in the box stay;
+ *  - 'dead': zeros from the start for as long as the live warning needs
+ *    (DEAD_FROM_START_TICKS), or the track ended first: the device;
+ *  - 'lost': the mic carried sound but the recorder gave no bytes, so words
+ *    were said and are gone: an error.
+ * Every verdict but 'audio' shows an error; no stop ends silently. The stop used
+ * to call ANY take with no sound sampled yet dead, with no sample at all
+ * (2026-11-15: a Send 87 ms into a recording said "No sound detected from the
+ * microphone. Check your mic device" and never sent the clip to the engine), and
+ * to end a take with no bytes silently whatever the mic had heard, so a waiting
+ * Send went on without the words.
+ * `health` is null when no analyser ran (no Web Audio): bytes alone decide.
+ */
+export type TakeVerdict = 'audio' | 'empty' | 'dead' | 'lost';
+
+/** The error a stopped take shows; only 'audio' (it goes on to the engine) shows none. */
+export const TAKE_ERRORS: Record<TakeVerdict, string | null> = {
+  audio: null,
+  empty: 'Nothing was recorded: the microphone had not started yet. Record it again.',
+  dead: 'No sound detected from the microphone. Check your mic device (or restart the browser) and try again.',
+  lost: 'The recording came back empty although the mic heard sound. Record it again.',
+};
+
+export function classifyTake(bytes: number, health: MicHealthState | null): TakeVerdict {
+  const unsampled = !health || (!health.alive && health.deadTicks === 0 && !health.trackEnded);
+  if (unsampled) return bytes > 0 ? 'audio' : 'empty';
+  if (health.alive) return bytes > 0 ? 'audio' : 'lost';
+  return health.deadTicks >= DEAD_FROM_START_TICKS || health.trackEnded ? 'dead' : 'empty';
+}
+
+/**
  * RMS of an analyser's BYTE time-domain frame (128 = zero). Bytes on purpose:
  * the analyser truncates, so any negative sample reads 127 and a live mic's
  * noise floor (about 0.0003 in the user's recordings) lands near 0.0055, well

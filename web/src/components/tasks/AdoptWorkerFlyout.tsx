@@ -8,6 +8,7 @@ import { projectDisplayName } from '@/utils/project-display';
 import { adoptCandidates, resolveParent } from './adopt-candidates';
 import '@/styles/subtask-pill.css';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
+import { MicInput } from '@/components/common/BoxMic';
 
 /** Rows drawn at once; the filter narrows a longer list (the store can hold thousands). */
 const SHOWN_ROWS = 100;
@@ -122,11 +123,11 @@ export function AdoptWorkerFlyout({ open, anchorRef, anchorPoint, align, leader,
       onClick={(e) => e.stopPropagation()}
     >
       <div className="adopt-worker-title">Adopt a worker for &ldquo;{orgDisplayTitle(leader)}&rdquo;</div>
-      <input data-no-draft="search"
+      <MicInput fieldClassName="adopt-worker-filter-field mic-field-compact" data-no-draft="search"
         className="adopt-worker-filter"
         placeholder="Filter tasks…"
         value={filter}
-        onChange={(e) => { setFilter(e.target.value); setActive(0); setError(null); }}
+        setText={(text) => { setFilter(text); setActive(0); setError(null); }}
         onKeyDown={onFilterKey}
         aria-label="Filter tasks"
         autoFocus

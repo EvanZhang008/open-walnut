@@ -200,6 +200,8 @@ struct NoteDetailView: View {
         .voiceDictation(voice, surface: noteVoiceSurface) { dictation.insert($0) }
         .onAppear {
             dictation.onMicTap = { Task { _ = await voice.start() } }
+            // A second tap while a take records or is transcribed keeps the first take's target.
+            dictation.canStart = { voice.canStart }
         }
     }
 

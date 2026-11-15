@@ -15,6 +15,7 @@ import { ProjectSourceBadge } from './ProjectSourceBadge';
 import { ProjectKebabMenu, type ProjectMenuExtra } from './ProjectHeaderMenus';
 import { ProjectSourcePicker } from './ProjectSourcePicker';
 import { projectDisplayName } from '@/utils/project-display';
+import { MicInput } from '@/components/common/BoxMic';
 
 export interface RailProjectItem {
   /** Canonical project name (registry spelling when known). */
@@ -193,17 +194,19 @@ export function TasksPageRail({
     if (e.key === 'Escape') {
       e.stopPropagation();
       cancelCreate();
-    } else if (e.key === 'Enter') {
-      const name = draft.trim();
-      const source = draftSource;
-      if (!name) { cancelCreate(); return; }
-      // The name goes once the project is made; a refused create keeps it for the next try.
-      const sentKey = nameDraft.key;
-      setCreating(false);
-      setDraftSource('local');
-      void Promise.resolve(onCreateProject(name, source === 'local' ? undefined : source))
-        .then(() => nameDraft.clear(sentKey), () => {});
     }
+  };
+  // Enter (through the box's send gate, so a name still being dictated is in first) makes the project.
+  const createNow = () => {
+    const name = draft.trim();
+    const source = draftSource;
+    if (!name) { cancelCreate(); return; }
+    // The name goes once the project is made; a refused create keeps it for the next try.
+    const sentKey = nameDraft.key;
+    setCreating(false);
+    setDraftSource('local');
+    void Promise.resolve(onCreateProject(name, source === 'local' ? undefined : source))
+      .then(() => nameDraft.clear(sentKey), () => {});
   };
 
   const itemClass = (key: string | null) =>
@@ -246,14 +249,16 @@ export function TasksPageRail({
       <div className="tp-rail-newproj-wrap">
         {creating ? (
           <>
-            <input
+            <MicInput
               ref={inputRef}
               className="tp-rail-newproj-input"
               data-draft-key={nameDraft.key ?? undefined}
               placeholder="Project name…"
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              setText={setDraft}
               onKeyDown={handleCreateKey}
+              onEnter={createNow}
+              target={nameDraft.key}
               onBlur={() => setCreating(false)}
             />
             {/* provider claim for the new project; chips preventDefault on

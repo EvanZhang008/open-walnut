@@ -18,6 +18,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { listMailboxes, type MailboxDto } from '@/api/mail';
 import '@/styles/router-settings.css';
+import { MicInput } from '@/components/common/BoxMic';
 
 export const ROUTER_NO_INBOX_LINE = 'Inbox is not ticked: new Inbox mail of these mailboxes goes to no one. Tick Inbox to keep it.';
 export const ROUTER_NO_FOLDER_LINE = 'Pick at least one folder.';
@@ -186,7 +187,7 @@ export function RouterFolderPicker({ accounts, value, onChange, disabled, testId
   return (
     <div className="router-folder-picker" data-testid={testId} aria-busy={loading || undefined}>
       {total > FOLDER_FILTER_FROM && (
-        <input
+        <MicInput
           type="search"
           className="router-folder-filter"
           placeholder="Find a folder"
@@ -194,7 +195,7 @@ export function RouterFolderPicker({ accounts, value, onChange, disabled, testId
           data-no-draft="search"
           data-testid={`${testId}-filter`}
           value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+          setText={setFilter}
           onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}
         />
       )}

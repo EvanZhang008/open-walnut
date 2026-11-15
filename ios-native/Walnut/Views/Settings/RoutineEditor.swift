@@ -236,6 +236,11 @@ struct RoutineEditorSheet: View {
     /// screen still shows the schedule and what it sends (QA: eight tasks pushed them down).
     @State private var changingTask = false
     @FocusState private var searchFocused: Bool
+    @FocusState private var nameFocused: Bool
+    @FocusState private var sendsFocused: Bool
+    /// Save and Create wait for words still being spoken or transcribed into the name or what
+    /// it sends (`DictationSendGate`).
+    @State private var sendGate = DictationSendGate()
     /// Cancel or a swipe down with unsaved changes asks first (2026-11-04, QA: a swipe
     /// dropped them without a word).
     @State private var confirmDiscard = false
@@ -243,6 +248,10 @@ struct RoutineEditorSheet: View {
     private let api = WalnutAPI()
 
     private enum TaskLookup: Equatable { case loading, found, missing, failed }
+
+    /// The mic boxes' key: this routine, or a new one, so a take spoken into a new routine
+    /// never comes back into an edit of another (and the other way round).
+    private func voiceSurface(_ field: String) -> String { "routine-\(field):\(job?.id ?? "new")" }
 
     init(job: RoutineJob?, onSaved: @escaping (RoutineJob) -> Void) {
         self.job = job
@@ -268,17 +277,29 @@ struct RoutineEditorSheet: View {
                     }
                 }
                 Section("Name") {
-                    TextField("Morning briefing", text: $draft.name)
-                        .accessibilityIdentifier("routines.editor.name")
+                    VoiceDictationField(
+                        text: $draft.name, surface: voiceSurface("name"), box: "routine-name",
+                        blocked: saving, refocus: { nameFocused = true }
+                    ) {
+                        TextField("Morning briefing", text: $draft.name)
+                            .focused($nameFocused)
+                            .accessibilityIdentifier("routines.editor.name")
+                    }
                 }
                 if draft.canEditTarget { taskSection }
                 // What it does before when: typed into with the keyboard up, it is in view
                 // without the form scrolling the Name label under the bar (2026-11-05 review).
                 if draft.canEditSends {
                     Section {
-                        TextField("What should Walnut be told?", text: $draft.sends, axis: .vertical)
-                            .lineLimit(4...12)
-                            .accessibilityIdentifier("routines.editor.sends")
+                        VoiceDictationField(
+                            text: $draft.sends, surface: voiceSurface("sends"), box: "routine-sends",
+                            blocked: saving, refocus: { sendsFocused = true }
+                        ) {
+                            TextField("What should Walnut be told?", text: $draft.sends, axis: .vertical)
+                                .lineLimit(4...12)
+                                .focused($sendsFocused)
+                                .accessibilityIdentifier("routines.editor.sends")
+                        }
                     } header: {
                         Text(draft.isTrigger ? "What it sends when the check finds something" : "What it sends when it runs")
                     } footer: {
@@ -307,13 +328,14 @@ struct RoutineEditorSheet: View {
                     }
                 }
             }
+            .dictationSendGate(sendGate)
             .task(id: draft.target) { await lookUpTask() }
             .task(id: TaskSearchKey(open: changingTask || needsATask, query: taskQuery)) { await searchTasks() }
             .navigationTitle(job == nil ? "New Routine" : "Edit Routine")
             .navigationBarTitleDisplayMode(.inline)
             // Unsaved edits or a save running: a swipe down asks, and a push navigation waits
             // until he saves or closes it (it would close the sheet and drop the edits).
-            .holdsNavigation(saving || dirty)
+            .holdsNavigation(saving || dirty || sendGate.isWaiting)
             .background(SheetDismissAttempt {
                 guard dirty, !saving else { return }
                 // After the sheet has settled back: a dialog asked for while the drag's
@@ -333,7 +355,10 @@ struct RoutineEditorSheet: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { if dirty { confirmDiscard = true } else { dismiss() } }
+                    Button("Cancel") {
+                        sendGate.cancelWait()
+                        if dirty { confirmDiscard = true } else { dismiss() }
+                    }
                         .disabled(saving)
                         .accessibilityIdentifier("routines.editor.cancel")
                 }
@@ -341,9 +366,15 @@ struct RoutineEditorSheet: View {
                     if saving {
                         ProgressView()
                     } else {
-                        Button(job == nil ? "Create" : "Save") { Task { await save() } }
+                        Button {
+                            // Read again after a wait: save() checks the draft with the words in it.
+                            sendGate.send { _ in Task { await save() } }
+                        } label: {
+                            DictationSendLabel(gate: sendGate, title: job == nil ? "Create" : "Save")
+                        }
                             .fontWeight(.semibold)
-                            .disabled(!draft.isValid)
+                            // Live while words are being spoken in, even before they make it valid.
+                            .disabled(!draft.isValid && !sendGate.isDictating && !sendGate.isWaiting)
                             .accessibilityIdentifier("routines.editor.save")
                     }
                 }
@@ -385,12 +416,18 @@ struct RoutineEditorSheet: View {
                 .accessibilityIdentifier("routines.editor.changeTask")
             }
             if searching {
-                TextField("Find an open task by its title", text: $taskQuery)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.search)
-                    .focused($searchFocused)
-                    .accessibilityIdentifier("routines.editor.taskSearch")
+                // A title search is words, so it takes the mic too; it only filters the list.
+                VoiceDictationField(
+                    text: $taskQuery, surface: voiceSurface("task-search"), box: "routine-task-search",
+                    refocus: { searchFocused = true }
+                ) {
+                    TextField("Find an open task by its title", text: $taskQuery)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.search)
+                        .focused($searchFocused)
+                        .accessibilityIdentifier("routines.editor.taskSearch")
+                }
                 ForEach(choices) { hit in
                     Button {
                         pick(hit)

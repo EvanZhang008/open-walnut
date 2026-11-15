@@ -214,6 +214,8 @@ struct TasksView: View {
                 placement: .navigationBarDrawer(displayMode: .automatic),
                 prompt: "Search tasks & sessions"
             )
+            // Walnut's mic over the keyboard while the search is up: a task is found by its words.
+            .voiceSearch(text: $searchText, isPresented: $searchPresented, surface: "tasks-search", box: "tasks-search")
             .onChange(of: router.shownCount) {
                 // After the drawer has shut, not with it: the search's dismissal, run
                 // while the drawer shut, swallowed the tab bar's return

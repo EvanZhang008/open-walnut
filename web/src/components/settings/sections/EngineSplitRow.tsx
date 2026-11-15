@@ -4,7 +4,7 @@
  * compares how each did. An entry is an engine, or an engine on a named model ("Claude Code
  * on sonnet"), added in place. Saves on each change, like the default engine row above it.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Config } from '@open-walnut/core';
 import { SettingsRow } from '../SettingsSection';
 import { SettingsCheckbox } from '../inputs/SettingsCheckbox';
@@ -19,6 +19,8 @@ import { useModelOptions } from '@/components/sessions/path-selector/model-optio
 import { engineSplitProjectsSave, engineSplitSave, engineSplitSwitchSave, entryKey, entryOfKey, splitChecked, splitIsOff, splitProjectsOf, splitSize } from './engine-split-select';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import type { useSerialSave } from './GeneralSection';
+import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 
 const ROW_KEY = 'sessions.engine-split';
 const SWITCH_KEY = 'sessions.engine-split-switch';
@@ -85,8 +87,12 @@ export function EngineSplitRow({ config, save }: { config: Config; save: ReturnT
     if (!projectTyped || projectHas(projectTyped)) return;
     // Spelled as the project is, when it is one.
     setProjects([...projects, projectNames.find((n) => n.toLowerCase() === projectTyped.toLowerCase()) ?? projectTyped]);
+    projectMic.current?.clear();
     setAddProject('');
   };
+  // Add (the button, or Enter in the box) waits for a project name still being dictated.
+  const projectMic = useRef<BoxMicHandle | null>(null);
+  const addGate = useSendAfterDictation([projectMic], addOneProject);
   return (
     <>
       <SettingsRow
@@ -142,11 +148,11 @@ export function EngineSplitRow({ config, save }: { config: Config; save: ReturnT
         data-testid="engine-split-projects"
         control={(
           <span className="engine-split-add">
-            <input className="settings-input" aria-label="Project" placeholder="Project name" value={addProject} list="engine-split-project-names"
-              onChange={(ev) => setAddProject(ev.target.value)} onKeyDown={(ev) => { if (ev.key === 'Enter') addOneProject(); }}
+            <MicInput fieldClassName="settings-mic-field mic-field-grow" className="settings-input" aria-label="Project" placeholder="Project name" value={addProject} list="engine-split-project-names"
+              setText={setAddProject} micRef={projectMic} onEnter={addGate.send}
               data-testid="engine-split-project-input" data-no-draft="picker" />
             <datalist id="engine-split-project-names">{projectNames.filter((n) => !projectHas(n)).map((n) => <option key={n} value={n} />)}</datalist>
-            <SettingsButton disabled={!projectTyped || projectHas(projectTyped)} onClick={addOneProject} data-testid="engine-split-project-add">Add</SettingsButton>
+            <SettingsButton disabled={(!projectTyped || projectHas(projectTyped)) && !addGate.micBusy && !addGate.waiting} onClick={addGate.send} data-testid="engine-split-project-add" {...dictationWaitProps(addGate)}>Add</SettingsButton>
           </span>
         )}
       />

@@ -36,7 +36,7 @@ import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useDraftValue } from '@/hooks/useDraft';
 import { draftHash, draftKey } from '@/utils/drafts';
 import { SettingsButton } from '../inputs/SettingsButton';
-import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { MicField, type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import '@/styles/settings-mic.css';
 import {
@@ -207,6 +207,7 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
   const folderId = useId();
   const noteRef = useRef<HTMLInputElement | null>(null);
   const noteMic = useRef<BoxMicHandle | null>(null);
+  const newGroupMic = useRef<BoxMicHandle | null>(null);
   const dirtyRef = useRef(false);
   const lastEditAt = useRef(0);
   const markDirty = () => {
@@ -342,6 +343,7 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
     if (!canSave) return;
     const trimmed = note.trim();
     noteMic.current?.clear();
+    newGroupMic.current?.clear();
     props.onSave({
       when,
       then: target,
@@ -353,7 +355,8 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
     });
   };
   // Save while the note's mic records waits for the final words, then saves.
-  const saveGate = useSendAfterDictation([noteMic], save);
+  // Save (the button, or Enter in a text box) waits for the note's and the new group name's words.
+  const saveGate = useSendAfterDictation([noteMic, newGroupMic], save);
   // Enter in any text box of the editor saves, as the Save button would: what was typed is judged
   // at once (no wait for the pause), and nothing is saved while it has a problem.
   const onEditorKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -421,8 +424,8 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
         <MailRulesPicker ariaLabel="Goes to" value={then} options={targets} testId="mail-rule-then"
           onChange={(value) => { markDirty(); setThen(value); }} />
         {then === NEW_GROUP && (
-          <input type="text" className="settings-input" aria-label="New group name" maxLength={40} value={newGroup} data-draft-key={form.key ?? undefined}
-            data-testid="mail-rule-new-group" onChange={(event) => { markDirty(); setNewGroup(event.target.value); }} />
+          <MicInput fieldClassName="settings-mic-field" type="text" className="settings-input" aria-label="New group name" maxLength={40} value={newGroup} data-draft-key={form.key ?? undefined}
+            data-testid="mail-rule-new-group" micRef={newGroupMic} setText={(text) => { markDirty(); setNewGroup(text); }} />
         )}
       </div>
       {errorFor('then') && <p className="mail-rule-field-error" role="alert">{errorFor('then')}</p>}

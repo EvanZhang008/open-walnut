@@ -67,9 +67,9 @@ struct ChatDrawer: View {
     @State private var orgSettleUntil = Date.distantPast
 
     @State private var renameTarget: ConversationSummary?
-    @State private var renameDraft = ""
-    /// The chat `renameDraft` was written for: a rename a push closed opens on his words again.
-    @State private var renameDraftFor: String?
+    /// His rename words per chat (`PromptDrafts`): a rename a push closed opens on them again, and
+    /// a take finishing after one rename closed never writes into another chat's.
+    @State private var renameDrafts = PromptDrafts()
     @State private var deleteTarget: ConversationSummary?
     @State private var renameAskTarget: AskSummary?
     @State private var deleteAskTarget: AskSummary?
@@ -117,23 +117,24 @@ struct ChatDrawer: View {
         // taps (`chat.drawer.conversation.<id>`, `chat.drawer.newChat`).
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat.drawer")
-        .alert("Rename Conversation", isPresented: Binding(
-            get: { renameTarget != nil },
-            set: { if !$0 { renameTarget = nil } }
-        )) {
-            TextField("Title", text: $renameDraft)
-            Button("Cancel", role: .cancel) {
-                renameTarget = nil
-                renameDraftFor = nil
-            }
-            Button("Rename") {
-                renameDraftFor = nil
-                let target = renameTarget
-                let title = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                renameTarget = nil
-                guard let target, !title.isEmpty else { return }
-                Task { actionError = await chat.renameConversation(target.id, title: title) }
-            }
+        // Renames ask in a small sheet with Walnut's mic (an alert hosts none); a push that closes
+        // it keeps his words for the same chat (`renameDrafts`).
+        .sheet(item: $renameTarget) { target in
+            let key = Self.renameKey(conversation: target.id)
+            DictatedTextPrompt(
+                title: "Rename Conversation", placeholder: "Title", text: renameBinding(key),
+                surface: key, box: "chat-rename",
+                confirmTitle: "Rename", identifier: "chat.drawer.rename",
+                onCancel: {
+                    renameTarget = nil
+                    renameDrafts.end(key)
+                },
+                onConfirm: { title in
+                    renameDrafts.end(key)
+                    renameTarget = nil
+                    Task { actionError = await chat.renameConversation(target.id, title: title) }
+                }
+            )
         }
         .alert("Delete Conversation?", isPresented: Binding(
             get: { deleteTarget != nil },
@@ -149,23 +150,22 @@ struct ChatDrawer: View {
         } message: {
             Text(verbatim: "This permanently deletes \"\(deleteTarget?.title ?? "this conversation")\" and its history.")
         }
-        .alert("Rename Conversation", isPresented: Binding(
-            get: { renameAskTarget != nil },
-            set: { if !$0 { renameAskTarget = nil } }
-        )) {
-            TextField("Title", text: $renameDraft)
-            Button("Cancel", role: .cancel) {
-                renameAskTarget = nil
-                renameDraftFor = nil
-            }
-            Button("Rename") {
-                renameDraftFor = nil
-                let target = renameAskTarget
-                let title = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                renameAskTarget = nil
-                guard let target, !title.isEmpty else { return }
-                Task { actionError = await renameAsk(target, title: title) }
-            }
+        .sheet(item: $renameAskTarget) { target in
+            let key = Self.renameKey(ask: target.id)
+            DictatedTextPrompt(
+                title: "Rename Conversation", placeholder: "Title", text: renameBinding(key),
+                surface: key, box: "ask-rename",
+                confirmTitle: "Rename", identifier: "chat.drawer.renameAsk",
+                onCancel: {
+                    renameAskTarget = nil
+                    renameDrafts.end(key)
+                },
+                onConfirm: { title in
+                    renameDrafts.end(key)
+                    renameAskTarget = nil
+                    Task { actionError = await renameAsk(target, title: title) }
+                }
+            )
         }
         .alert("Delete Conversation?", isPresented: Binding(
             get: { deleteAskTarget != nil },
@@ -538,8 +538,7 @@ struct ChatDrawer: View {
     private func askMenu(_ ask: AskSummary) -> some View {
         if tasks != nil {
             Button {
-                if renameDraftFor != ask.id { renameDraft = ask.title }
-                renameDraftFor = ask.id
+                renameDrafts.open(Self.renameKey(ask: ask.id), seed: ask.title)
                 renameAskTarget = ask
             } label: {
                 Label("Rename", systemImage: "pencil")
@@ -551,6 +550,14 @@ struct ChatDrawer: View {
                 Label("Delete", systemImage: "trash")
             }
         }
+    }
+
+    /// One rename's words per object; also the prompt's mic surface.
+    nonisolated static func renameKey(conversation id: String) -> String { "chat-rename:\(id)" }
+    nonisolated static func renameKey(ask id: String) -> String { "ask-rename:\(id)" }
+
+    private func renameBinding(_ key: String) -> Binding<String> {
+        Binding(get: { renameDrafts[key] }, set: { renameDrafts[key] = $0 })
     }
 
     private func renameAsk(_ ask: AskSummary, title: String) async -> String? {
@@ -643,8 +650,7 @@ struct ChatDrawer: View {
     @ViewBuilder
     private func rowMenu(_ conversation: ConversationSummary) -> some View {
         Button {
-            if renameDraftFor != conversation.id { renameDraft = conversation.title ?? "" }
-            renameDraftFor = conversation.id
+            renameDrafts.open(Self.renameKey(conversation: conversation.id), seed: conversation.title ?? "")
             renameTarget = conversation
         } label: {
             Label("Rename", systemImage: "pencil")

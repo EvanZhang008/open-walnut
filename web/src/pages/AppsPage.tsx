@@ -39,6 +39,7 @@ import '@/plugins/dev-test-hooks'
 import '@/styles/settings-shell.css'
 import '@/styles/settings-controls.css'
 import '@/styles/apps-page.css'
+import { MicInput } from '@/components/common/BoxMic'
 
 /** Saves from this page report Saved / Not saved like a Settings pane does. */
 const APPS_PANE_ID = 'apps'
@@ -153,10 +154,10 @@ function AppsPageBody() {
           {!detailOpen && <SettingsSavedIndicator placement="header" />}
           <label className="apps-search">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" /></svg>
-            <input data-no-draft="search"
+            <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="search"
               type="search"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              setText={setQuery}
               onKeyDown={(e) => { if (e.key === 'Escape' && query) { e.stopPropagation(); setQuery('') } }}
               placeholder="Search apps and plugins"
               aria-label="Search apps and plugins"

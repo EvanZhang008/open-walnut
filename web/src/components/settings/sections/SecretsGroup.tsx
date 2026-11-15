@@ -26,6 +26,8 @@ import { BELOW_BAR_PX, landOnRow } from '@/utils/scroll-land';
 import { RemoveConfirmRow } from './RemoveConfirmRow';
 import { useHostSettings } from './host-settings-data';
 import { mergeSecretHosts, tickSecretHost } from './secret-hosts';
+import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
+import { dictationWaitProps, useSendAfterDictation } from '@/hooks/useSendAfterDictation';
 
 const LOCAL = '__local__';
 const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -100,6 +102,9 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
   const editSeq = useRef(0);
   const [error, setErrorState] = useState<{ field: Field; text: string } | null>(null);
   const [deleting, setDeleting] = useState<{ name: string; busy: boolean } | null>(null);
+  const descriptionMic = useRef<BoxMicHandle | null>(null);
+  const saveLatest = useRef<() => void>(() => {});
+  const saveGate = useSendAfterDictation([descriptionMic], () => saveLatest.current(), editing);
   const root = useRef<HTMLDivElement>(null);
   const group = useRef<HTMLDivElement>(null);
   // 2026-11-04 review: a refused Save put its reason above the group, off screen, and focus stayed on Save.
@@ -208,6 +213,8 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
     }
   };
 
+  saveLatest.current = () => void save();
+
   const remove = async (name: string) => {
     setError(null);
     setDeleting({ name, busy: true });
@@ -245,8 +252,9 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
         <SecretInput value={draft.value} onChange={(v) => edit({ ...draft, value: v })} saved={!isNew} aria-label="Secret value" aria-invalid={invalid('value')} data-testid="secret-value" />
       } />
       <SettingsRow label="What it is" htmlFor="secret-description" help="Sessions read this to know when to use it." control={
-        <input id="secret-description" type="text" data-no-draft="secret" className="settings-input settings-input--short" value={draft.description}
-          onChange={(e) => edit({ ...draft, description: e.target.value })} placeholder="GitHub, read only" data-testid="secret-description" />
+        <MicInput id="secret-description" type="text" data-no-draft="secret" className="settings-input settings-input--short" value={draft.description}
+          setText={(description) => edit({ ...draft, description })} micRef={descriptionMic} target={editing} micDisabled={busy}
+          placeholder="GitHub, read only" data-testid="secret-description" />
       } />
       <SettingsRow label="Who gets it" help="Sessions on the hosts ticked here can use it; unticking one removes its copy there." />
       {hostKeys.map((h) => (
@@ -262,7 +270,7 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
       <SettingsRow className="secret-editor-actions" error={error?.field === 'form' ? error.text : undefined} control={
         <>
           <SettingsButton variant="text" onClick={() => close()} disabled={busy} data-testid="secret-cancel">Cancel</SettingsButton>
-          <SettingsButton variant="primary" holdFocus busy={busy} busyLabel="Saving..." onClick={() => void save()} data-testid="secret-save">Save</SettingsButton>
+          <SettingsButton variant="primary" holdFocus busy={busy} busyLabel="Saving..." onClick={saveGate.send} {...dictationWaitProps(saveGate)} data-testid="secret-save">Save</SettingsButton>
         </>
       } />
     </div>

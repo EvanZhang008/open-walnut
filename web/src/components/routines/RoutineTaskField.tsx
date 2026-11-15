@@ -7,6 +7,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { apiGet } from '@/api/client';
+import { MicInput } from '@/components/common/BoxMic';
 
 interface TaskHit {
   id: string;
@@ -89,14 +90,14 @@ export function RoutineTaskField({ id, value, onChange }: { id: string; value: s
         </button>
       )}
       {listing && (<>
-      <input
+      <MicInput
         data-no-draft="search"
         id={id}
         autoFocus={choosing}
         type="search"
         className="routine-task-search"
         value={query}
-        onChange={(e) => setQuery(e.target.value)}
+        setText={setQuery}
         placeholder="Find an open task by its title"
         aria-label="Find an open task by its title"
         autoComplete="off"

@@ -24,6 +24,12 @@ struct InboxItemConfirmation: View {
     /// The work goal's recorder, held here so the footer can wait for a take:
     /// a plan reviewed or confirmed mid-take would go without the spoken words.
     @State private var goalVoice = VoiceRecorder()
+    /// The task title's recorder, held for the same reason: Review and Confirm wait while it
+    /// records or transcribes.
+    @State private var titleVoice = VoiceRecorder()
+    @FocusState private var titleFocused: Bool
+    /// Neither mic box has words on their way.
+    private var voiceIdle: Bool { goalVoice.state == .idle && titleVoice.state == .idle }
     private let goalAnchor = "work-goal-editor"
     private var retry: Bool { store.draft(key).input.retryStart == true }
     private var needsRecovery: Bool { retry && store.latest(key, lane: "task")?.canReviewStartRecovery == true }
@@ -31,7 +37,7 @@ struct InboxItemConfirmation: View {
     private func footer(_ state: InboxItemStore.State) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             if let plan = state.plan, !state.submittedPlans.contains(plan.id), !plan.isExpired() {
-                let enabled = !state.busy.contains("task") && state.preparedInput == store.draft(key).input && !state.submittedPlans.contains(plan.id) && goalVoice.state == .idle
+                let enabled = !state.busy.contains("task") && state.preparedInput == store.draft(key).input && !state.submittedPlans.contains(plan.id) && voiceIdle
                 Button(state.busy.contains("task") ? (action.intent == "create_task" && !retry ? "Creating…" : "Attaching…") : action.intent == "create_task" || retry ? "Confirm and start" : "Confirm attachment") {
                     confirm(plan)
                 }.buttonStyle(InboxItemPrimaryButtonStyle()).frame(maxWidth: .infinity, minHeight: 44)
@@ -44,7 +50,7 @@ struct InboxItemConfirmation: View {
                 Button("Check status") { Task { await store.query(key) } }.frame(minHeight: 44)
             } else {
                 if state.plan?.isExpired() == true { Text("This plan expired. Review the action again.").font(.caption).foregroundStyle(Theme.warning) }
-                let enabled = !state.busy.contains("prepare") && canReview(state) && goalVoice.state == .idle
+                let enabled = !state.busy.contains("prepare") && canReview(state) && voiceIdle
                 Button("Review action") { Task { await prepare() } }
                     .buttonStyle(InboxItemPrimaryButtonStyle()).frame(maxWidth: .infinity, minHeight: 44)
                     .disabled(!enabled)
@@ -103,8 +109,14 @@ struct InboxItemConfirmation: View {
                             }
                             if action.intent == "create_task" && !retry && state.existingWork == nil {
                                 Text("Task title").font(.caption)
-                                TextField("Task title", text: field(\.title)).textFieldStyle(.roundedBorder)
-                                    .accessibilityIdentifier("inbox.item.confirm.title")
+                                VoiceDictationField(
+                                    text: field(\.title), surface: "inbox-title:\(key.letter):\(key.item)",
+                                    box: "inbox-title", recorder: titleVoice, refocus: { titleFocused = true }
+                                ) {
+                                    TextField("Task title", text: field(\.title)).textFieldStyle(.roundedBorder)
+                                        .focused($titleFocused)
+                                        .accessibilityIdentifier("inbox.item.confirm.title")
+                                }
                                 Menu {
                                     Button("Inbox") { field(\.project).wrappedValue = "" }
                                     ForEach(state.projects.filter { !$0.name.isEmpty }, id: \.name) { project in

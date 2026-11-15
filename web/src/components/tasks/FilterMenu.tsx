@@ -33,6 +33,7 @@ import { DisplaySections, DisplayViewsPage, useMenuViews } from './DisplaySectio
 import { viewLabel } from './tab-bar-model';
 import '@/styles/filter-toolbar-base.css';
 import '@/styles/filter-bar.css';
+import { MicInput } from '@/components/common/BoxMic';
 
 export const PANEL_MENU_MAX_HEIGHT = 520;
 export const PANEL_MENU_WIDTH = 320;
@@ -260,7 +261,7 @@ export function PanelMenu({ filters: c, display: d, flashOption }: PanelMenuProp
     >
       <div className="fb-search fb-menu-search">
         <span className="fb-search-icon" aria-hidden="true">{ICON_SEARCH}</span>
-        <input data-no-draft="search"
+        <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="search"
           ref={inputRef}
           type="text"
           className="fb-search-input"
@@ -270,7 +271,7 @@ export function PanelMenu({ filters: c, display: d, flashOption }: PanelMenuProp
           aria-autocomplete="list"
           aria-activedescendant={searching && items.length > 0 ? searchHitId(activeIndex) : undefined}
           value={query}
-          onChange={(e) => onQuery(e.target.value)}
+          setText={onQuery}
           onKeyDown={onKeyDown}
         />
         {query && (

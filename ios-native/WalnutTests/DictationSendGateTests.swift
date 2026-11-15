@@ -161,6 +161,29 @@ final class DictationSendGateTests: XCTestCase {
         XCTAssertEqual(sent, ["Remind me to call the contractor"])
     }
 
+    func testDismissalDuringTheFinalRenderTurnCancelsTheSend() async throws {
+        let r = rig()
+        beginTake(r.voice)
+        var reachedFinalTurn = false
+        var release: CheckedContinuation<Void, Never>?
+        r.gate._testBeforeSend = {
+            reachedFinalTurn = true
+            await withCheckedContinuation { release = $0 }
+        }
+        var sent = 0
+        let task = try XCTUnwrap(r.gate.send { _ in sent += 1 })
+        await waitUntil("upload") { r.transcriber.isWaiting }
+        r.transcriber.answer("Words already landed")
+        await waitUntil("final render turn") { reachedFinalTurn }
+        XCTAssertTrue(r.gate.isWaiting, "the send remains cancellable until its action")
+        r.gate.cancelWait() // the sheet's onDisappear
+        release?.resume()
+        let outcome = await task.value
+        XCTAssertEqual(outcome, .cancelled)
+        XCTAssertEqual(sent, 0)
+        XCTAssertEqual(r.box.text, "Words already landed")
+    }
+
     // MARK: - Send while a transcription is already on its way
 
     func testSendAfterStopWaitsForTheStopsWordsWithoutInsertingTwice() async throws {

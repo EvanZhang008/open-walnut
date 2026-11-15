@@ -17,7 +17,9 @@
  * keeps what was typed. A save that answers after the dialog moved to another router writes nothing
  * onto that router: its state is keyed by the router it was sent for.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import type { Task } from '@open-walnut/core';
 import { routerAreaFolders, useRouterAreaNames } from './router-area-names';
 import { setRouterSettingsOpen } from './router-settings-open';
@@ -247,12 +249,15 @@ export function RouterSettingsBody({ id, draftKey: key, area, sources = [], valu
   const draftAttr = key ?? undefined;
   const staleChecked = stale.filter((r) => value.links.includes(r.id)).length;
   const shownLeads = linkFilterMatches(leads, value.links, linkFilter);
+  // Save waits for a name still being dictated; another router's form never takes that wait.
+  const nameMic = useRef<BoxMicHandle | null>(null);
+  const gate = useSendAfterDictation([nameMic], () => onSave(), key);
   return (
     <form
       id={id}
       className="org-router-settings-body"
       data-testid="org-router-settings-body"
-      onSubmit={(e) => { e.preventDefault(); onSave(); }}
+      onSubmit={(e) => { e.preventDefault(); gate.send(); }}
     >
       <div className="org-router-row">
         <span className="org-router-label">Area</span>
@@ -287,14 +292,16 @@ export function RouterSettingsBody({ id, draftKey: key, area, sources = [], valu
       <div className="org-router-row">
         <label className="org-router-label" htmlFor={`${id}-name`}>Name</label>
         <div className="org-router-value">
-          <input
+          <MicInput
             id={`${id}-name`}
             value={value.name}
             maxLength={ROUTER_NAME_MAX}
             data-draft-key={draftAttr}
             data-testid="org-router-name"
             disabled={busy}
-            onChange={(e) => { const name = e.target.value; onEdit((v) => ({ ...v, name })); }}
+            micRef={nameMic}
+            target={key}
+            setText={(name) => onEdit((v) => ({ ...v, name }))}
           />
         </div>
       </div>
@@ -323,16 +330,17 @@ export function RouterSettingsBody({ id, draftKey: key, area, sources = [], valu
           <p className="org-router-hint" data-testid="org-router-no-vps">{tasksLoading ? 'Loading the VPs…' : 'No open VP yet. A router works on its own.'}</p>
         )}
         {leads.length > LINK_FILTER_FROM && onLinkFilter && (
-          <input
+          <MicInput
             type="search"
             className="org-router-link-filter"
+            fieldClassName="org-router-link-filter-field"
             data-testid="org-router-link-filter"
             data-no-draft="search"
             placeholder="Find a VP"
             aria-label="Find a VP"
             value={linkFilter}
             disabled={busy}
-            onChange={(e) => onLinkFilter(e.target.value)}
+            setText={onLinkFilter}
             onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}
           />
         )}
@@ -359,7 +367,7 @@ export function RouterSettingsBody({ id, draftKey: key, area, sources = [], valu
       {error && <p className="org-router-error" role="alert" data-testid="org-router-error">{error}</p>}
       {!error && problem && dirty && <p className="org-router-error" data-testid="org-router-problem">{problem}</p>}
       <div className="org-router-actions">
-        <button type="submit" className="btn btn-sm btn-primary" data-testid="org-router-save" disabled={busy || !dirty || !!problem}>
+        <button type="submit" className="btn btn-sm btn-primary" data-testid="org-router-save" disabled={busy || ((!dirty || !!problem) && !gate.micBusy && !gate.waiting)} {...dictationWaitProps(gate)}>
           {busy ? 'Saving…' : 'Save'}
         </button>
         <button type="button" className="btn btn-sm" data-testid="org-router-discard" disabled={busy || !dirty} onClick={onDiscard}>

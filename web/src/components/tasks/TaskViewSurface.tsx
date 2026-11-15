@@ -18,6 +18,7 @@ import { buildTaskQueryContext, safeNormalizeTaskQuery } from './task-query-stat
 import type { TpSort } from './tasks-page-sort'
 import type { TaskViewProps } from '@/plugins/types'
 import '@/styles/tasks-page.css'
+import { MicInput } from '@/components/common/BoxMic'
 
 // The plugin contract's onOpenTask is not taken: a row opens on Home (TasksPageTable, useOpenTask).
 interface TaskViewSurfaceProps extends Omit<TaskViewProps, 'storageKey' | 'onOpenTask'> {
@@ -156,12 +157,12 @@ export function TaskViewSurface({
               Group
             </button>
           )}
-          <input data-no-draft="search"
+          <MicInput fieldClassName="plugin-task-search" data-no-draft="search"
             type="search"
             aria-label="Filter Plugin tasks"
             placeholder="Filter tasks…"
             value={localSearch}
-            onChange={(event) => setLocalSearch(event.target.value)}
+            setText={setLocalSearch}
           />
         </div>
       )}

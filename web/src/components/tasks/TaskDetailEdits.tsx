@@ -21,7 +21,7 @@ import { useDraft } from '@/hooks/useDraft';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { draftKey } from '@/utils/drafts';
 import { PHASE_LABELS } from '@/utils/session-status';
-import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
+import { BoxMic, type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
 import type { TaskPhase } from '@open-walnut/core';
 import { Section } from './TaskDetailRows';
 import { useOpenTask } from '@/hooks/useOpenTask';
@@ -142,11 +142,11 @@ export function TaskDependencies({ task, detail, onChanged, onError }: {
       ))}
       {picking ? (
         <div className="tdp-dep-picker">
-          <input
+          <MicInput
             data-no-draft="search"
             type="text"
             value={query}
-            onChange={(e) => search(e.target.value)}
+            setText={search}
             placeholder="Search tasks to depend on..."
             autoFocus
           />

@@ -9,7 +9,7 @@
  *   - TryVerdict: one line under the test field that says whether the title passes, why, and what
  *     is still to ask, led by a dot in the verdict's colour.
  */
-import { useLayoutEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent, type TextareaHTMLAttributes } from 'react'
+import { useLayoutEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent, type RefObject, type TextareaHTMLAttributes } from 'react'
 import { CloseGlyph } from '../settings-glyphs'
 import type { ProviderRules, RulesTest } from '@/api/private-tasks'
 
@@ -144,9 +144,13 @@ export function TryVerdict({ id, tone, text }: { id: string; tone: string; text:
   )
 }
 
-/** A textarea as tall as its text: the height follows every change and every width change. */
-export function GrowingTextarea({ value, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement> & { value: string }) {
-  const ref = useRef<HTMLTextAreaElement>(null)
+/**
+ * A textarea as tall as its text: the height follows every change and every width change.
+ * `boxRef` hands the box to its owner (the mic that writes into it).
+ */
+export function GrowingTextarea({ value, boxRef, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement> & { value: string; boxRef?: RefObject<HTMLTextAreaElement | null> }) {
+  const own = useRef<HTMLTextAreaElement>(null)
+  const ref = boxRef ?? own
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
@@ -158,7 +162,7 @@ export function GrowingTextarea({ value, ...rest }: TextareaHTMLAttributes<HTMLT
     const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(fit)
     ro?.observe(el)
     return () => ro?.disconnect()
-  }, [value])
+  }, [value, ref])
   // The value is its caller's: the caller's own data-draft-key or data-no-draft (in rest) wins.
   return <textarea ref={ref} value={value} rows={1} data-no-draft="mirror" {...rest} />
 }

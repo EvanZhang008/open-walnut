@@ -18,6 +18,7 @@ import { KanbanLaneMenu } from './KanbanLaneMenu';
 import { KANBAN_PANE_SELECTOR, emitKanbanToast } from './kanban-toasts';
 import { laneCountText } from './kanban-filter-model';
 import { stateCountLabel } from '@open-walnut/user-status';
+import { MicInput } from '@/components/common/BoxMic';
 
 /** Why `name` cannot name lane `laneId` ('' = it can). */
 export function laneNameError(lanes: readonly BoardLane[], laneId: string | null, name: string): string {
@@ -104,7 +105,7 @@ export function KanbanLaneHead({ lane: vm, lanes, index, mode, folded, onToggleF
   );
   const nameEl = renaming ? (
     <span className="kanban-lane-rename">
-      <input data-no-draft="rename"
+      <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="rename"
         ref={inputRef}
         className="kanban-lane-rename-input"
         data-testid="kanban-lane-rename-input"
@@ -112,7 +113,7 @@ export function KanbanLaneHead({ lane: vm, lanes, index, mode, folded, onToggleF
         aria-invalid={error ? true : undefined}
         maxLength={MAX_LANE_NAME + 10}
         value={draft}
-        onChange={(e) => { setDraft(e.target.value); if (error) setError(''); }}
+        setText={(text) => { setDraft(text); if (error) setError(''); }}
         onKeyDown={(e) => {
           e.stopPropagation();
           if (e.key === 'Enter') { e.preventDefault(); commitRename(); }

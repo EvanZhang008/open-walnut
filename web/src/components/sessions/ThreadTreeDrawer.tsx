@@ -36,6 +36,7 @@ import { log } from '@/utils/log';
 import { isModifierOnly, markKeyboardFocus } from '@/utils/keyboard-focus';
 import '@/styles/thread-stack.css';
 import { SELECTION_BAR_LAYERS } from './selection-bar-layers';
+import { MicInput } from '@/components/common/BoxMic';
 
 const EXIT_MS = 160;
 const LAZY_NAME_LIMIT = 10;
@@ -321,7 +322,7 @@ export function ThreadTreeDrawer(p: ThreadTreeDrawerProps) {
         )}
         <div className="thread-drawer-search">
           <ThreadSearchIcon size={13} />
-          <input data-no-draft="search"
+          <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="search"
             ref={searchRef}
             type="search"
             className="thread-drawer-search-input"
@@ -329,7 +330,7 @@ export function ThreadTreeDrawer(p: ThreadTreeDrawerProps) {
             aria-label="Search questions and pins"
             value={query}
             spellCheck={false}
-            onChange={(e) => setQuery(e.target.value)}
+            setText={setQuery}
             onKeyDown={onSearchKey}
           />
           {query && <button type="button" className="thread-drawer-search-clear" aria-label="Clear search" onClick={clearSearch}>Clear</button>}

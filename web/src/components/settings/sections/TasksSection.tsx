@@ -13,6 +13,8 @@ import { isMacPlatform } from '@/hooks/usePanelKeyRouter';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { SmartTaskCreation } from './SmartTaskCreation';
 import { useSerialSave, type OnSave } from './GeneralSection';
+import { MicInput } from '@/components/common/BoxMic';
+import '@/styles/settings-mic.css';
 
 interface Props {
   config: Config;
@@ -158,15 +160,16 @@ export function TasksSection({ config, onSave, onReload }: Props) {
           data-testid="settings-default-project-row"
           control={
             <>
-              <input
+              <MicInput
                 id="settings-project"
                 type="text"
                 data-no-draft="autosave"
                 className="settings-input settings-input--short"
+                fieldClassName="settings-mic-field settings-mic-field-short"
                 placeholder="Inbox"
                 list="settings-project-options"
                 autoComplete="off"
-                {...project.inputProps}
+                {...project.micInputProps}
               />
               <datalist id="settings-project-options">
                 {projects.projectNames.map((n) => (

@@ -31,6 +31,10 @@ struct CalendarCreateSheet: View {
     /// calendar quick add's default.
     @State private var syncLocal = false
     @FocusState private var titleFocused: Bool
+    @FocusState private var projectFocused: Bool
+    /// Add waits for words still being spoken or transcribed into the title or the project
+    /// (`DictationSendGate`).
+    @State private var sendGate = DictationSendGate()
     /// The slot as the sheet opened on it, for `edited`.
     private let seedStart: Date
     private let seedEnd: Date
@@ -71,6 +75,18 @@ struct CalendarCreateSheet: View {
         !creating && !title.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
+    /// The mic boxes' key: the slot the sheet opened on, so a take saved here comes back only
+    /// into a create sheet for the same slot.
+    private var voiceSlot: String { String(Int(seedStart.timeIntervalSince1970)) }
+
+    /// Add, after any words still being spoken have landed.
+    private func add() {
+        sendGate.send { _ in
+            guard canCreate else { return }
+            Task { await create() }
+        }
+    }
+
     /// Existing project names, A→Z (Inbox is the empty default, not a row).
     private var knownProjects: [String] {
         var seen = Set<String>()
@@ -89,11 +105,16 @@ struct CalendarCreateSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("What are you doing?", text: $title)
-                        .focused($titleFocused)
-                        .submitLabel(.done)
-                        .onSubmit { if canCreate { Task { await create() } } }
-                        .accessibilityIdentifier("calendar.create.title")
+                    VoiceDictationField(
+                        text: $title, surface: "calendar-create-title:\(voiceSlot)", box: "calendar-title",
+                        blocked: creating, refocus: { titleFocused = true }
+                    ) {
+                        TextField("What are you doing?", text: $title)
+                            .focused($titleFocused)
+                            .submitLabel(.done)
+                            .onSubmit { add() }
+                            .accessibilityIdentifier("calendar.create.title")
+                    }
                 } header: {
                     Text(CalendarCreate.label(for: draft, calendar: calendar))
                 }
@@ -117,12 +138,18 @@ struct CalendarCreateSheet: View {
                 }
 
                 Section {
-                    TextField("Inbox (default)", text: Binding(
-                        get: { knownProjects.contains(project) ? AskProjectName.display(project) : project },
-                        set: { project = $0 }
-                    ))
-                        .autocorrectionDisabled()
-                        .accessibilityIdentifier("calendar.create.project")
+                    VoiceDictationField(
+                        text: $project, surface: "calendar-create-project:\(voiceSlot)", box: "calendar-project",
+                        blocked: creating, refocus: { projectFocused = true }
+                    ) {
+                        TextField("Inbox (default)", text: Binding(
+                            get: { knownProjects.contains(project) ? AskProjectName.display(project) : project },
+                            set: { project = $0 }
+                        ))
+                            .autocorrectionDisabled()
+                            .focused($projectFocused)
+                            .accessibilityIdentifier("calendar.create.project")
+                    }
                     // The filtered-to project, one tap away — it leads the
                     // suggestions instead of pre-filling the field.
                     if !suggestedProject.isEmpty, !knownProjects.contains(suggestedProject) {
@@ -150,19 +177,23 @@ struct CalendarCreateSheet: View {
                     }
                 }
             }
+            .dictationSendGate(sendGate)
             .navigationTitle("New on Calendar")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { dismiss() }.disabled(creating)
+                    Button("Cancel") { sendGate.cancelWait(); dismiss() }.disabled(creating)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if creating {
                         ProgressView()
                     } else {
-                        Button("Add") { Task { await create() } }
+                        Button(action: add) {
+                            DictationSendLabel(gate: sendGate, title: "Add")
+                        }
                             .fontWeight(.semibold)
-                            .disabled(!canCreate)
+                            // Live while words are being spoken in, even into an empty title.
+                            .disabled(!canCreate && !sendGate.isDictating && !sendGate.isWaiting)
                             .accessibilityIdentifier("calendar.create.add")
                     }
                 }
@@ -170,7 +201,7 @@ struct CalendarCreateSheet: View {
             .onAppear { titleFocused = true }
             // His typed title, a moved time or a pick are not saved until Add: a push waits
             // for them (2026-11-08 review, round 3: it closed the sheet and they were gone).
-            .holdsNavigation(creating || edited)
+            .holdsNavigation(creating || edited || sendGate.isWaiting)
         }
         .accessibilityIdentifier("calendar.createSheet")
     }

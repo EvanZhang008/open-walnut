@@ -34,6 +34,7 @@ import { isPhoneLayout } from '@/hooks/usePhoneLayout';
 import { ICON_SEARCH, ICON_SLIDERS } from '@/components/common/Icons';
 import { GENERAL_AGENT_ID, type AskAgent } from './ask-walnut-slot-model';
 import { DrawerItem, heldRowView, TaskDot } from './AskWalnutDrawerItem';
+import { MicInput } from '@/components/common/BoxMic';
 
 /** A row in the drawer's list. The just-launched task is not in the store yet,
  *  so a row is `{ id, title }` plus the Task when the store has it. */
@@ -335,7 +336,7 @@ export function AskWalnutDrawer({
 
         <div className="ask-walnut-drawer-search">
           <span className="ask-walnut-drawer-search-ic" aria-hidden="true">{ICON_SEARCH}</span>
-          <input data-no-draft="search"
+          <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="search"
             ref={searchRef}
             type="search"
             className="ask-walnut-drawer-search-input"
@@ -345,7 +346,7 @@ export function AskWalnutDrawer({
             autoComplete="off"
             spellCheck={false}
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            setText={setQuery}
           />
         </div>
 

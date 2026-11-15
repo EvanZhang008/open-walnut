@@ -287,6 +287,9 @@ struct CalendarQuickAddRow: View {
     @State private var text = ""
     @State private var errorMessage: String?
     @FocusState private var focused: Bool
+    /// Return waits for words still being spoken or transcribed into the row
+    /// (`DictationSendGate`); the mic never adds the task by itself.
+    @State private var sendGate = DictationSendGate()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -294,20 +297,27 @@ struct CalendarQuickAddRow: View {
                 Image(systemName: "plus.circle.fill")
                     .font(.body)
                     .foregroundStyle(Theme.tint)
-                // The placeholder-contrast fix (`FieldPlaceholder`): this string is
-                // the only statement of WHICH DAY the task lands on, so it is
-                // held to the text bar rather than the platform's 30%-alpha
-                // placeholder (`FieldPlaceholder`).
-                TextField("", text: $text)
-                    .fieldPlaceholder(
-                        "Add task \(dayLabel == "today" ? "for today" : "on \(dayLabel)")…",
-                        showing: text.isEmpty
-                    )
-                    .focused($focused)
-                    .submitLabel(.done)
-                    .onSubmit(submit)
-                    .accessibilityIdentifier("calendar.quickAdd.field")
+                // Walnut's mic beside the field; the words land in it for Return to add.
+                VoiceDictationField(
+                    text: $text, surface: "calendar-quick-add:\(dayKey)", box: "calendar-quick-add",
+                    refocus: { focused = true }
+                ) {
+                    // The placeholder-contrast fix (`FieldPlaceholder`): this string is
+                    // the only statement of WHICH DAY the task lands on, so it is
+                    // held to the text bar rather than the platform's 30%-alpha
+                    // placeholder (`FieldPlaceholder`).
+                    TextField("", text: $text)
+                        .fieldPlaceholder(
+                            "Add task \(dayLabel == "today" ? "for today" : "on \(dayLabel)")…",
+                            showing: text.isEmpty
+                        )
+                        .focused($focused)
+                        .submitLabel(.done)
+                        .onSubmit { sendGate.send { _ in submit() } }
+                        .accessibilityIdentifier("calendar.quickAdd.field")
+                }
             }
+            .dictationSendGate(sendGate)
             if let errorMessage {
                 Text(errorMessage)
                     .font(.caption)

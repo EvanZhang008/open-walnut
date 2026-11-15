@@ -19,9 +19,9 @@ import { useSyntheticMic } from './stt-failure-helpers'
 
 export const SHOTS = '/tmp/send-waits-for-dictation/shots'
 /** What the live preview shows while recording. */
-const DRAFTED = 'deploy the'
+export const DRAFTED = 'deploy the'
 /** What the final pass hears in the whole clip. */
-const FULL = 'deploy the build to staging tonight'
+export const FULL = 'deploy the build to staging tonight'
 const TYPED = 'Note:'
 
 async function shot(page: Page, name: string): Promise<void> {
@@ -31,7 +31,7 @@ async function shot(page: Page, name: string): Promise<void> {
   await page.screenshot({ path: `${SHOTS}/${engine}-${name}.png`, timeout: 15_000 }).catch(() => {})
 }
 
-interface Lane {
+export interface Lane {
   /** Requests after this point wait for `release()`. Setting it also makes `final` true. */
   held: boolean
   /**
@@ -46,9 +46,12 @@ interface Lane {
   fail: boolean
   parked: Array<() => void>
   release: () => void
+  /** Requests that reached the engine so far, for a failure message to say which pass never came. */
+  arrivals: { draft: number; transcribe: number }
 }
 
-async function stubEngine(page: Page): Promise<Lane> {
+/** The canned engine with a hold (also used by voice-compose-everywhere.spec.ts). */
+export async function stubEngine(page: Page): Promise<Lane> {
   let held = false
   const lane: Lane = {
     get held() { return held },
@@ -57,10 +60,12 @@ async function stubEngine(page: Page): Promise<Lane> {
     fail: false,
     parked: [],
     release: () => { held = false; for (const go of lane.parked.splice(0)) go() },
+    arrivals: { draft: 0, transcribe: 0 },
   }
   await stubSttStatus(page)
   await page.route('**/api/stt/warmup', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }))
   const answer = async (route: Parameters<Parameters<Page['route']>[1]>[0], drafting: boolean) => {
+    lane.arrivals[drafting ? 'draft' : 'transcribe'] += 1
     if (lane.held) await new Promise<void>((go) => lane.parked.push(go))
     else if (drafting && !lane.final) {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: DRAFTED, durationMs: 40 }) })

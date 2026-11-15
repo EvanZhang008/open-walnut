@@ -6,7 +6,9 @@
  *
  * The fields are one draft (useDraftValue), so a failed create or a reload keeps what was typed.
  */
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import type { Task } from '@open-walnut/core';
 import { apiPost } from '@/api/client';
 import { useDraftValue } from '@/hooks/useDraft';
@@ -35,7 +37,8 @@ export function OrgRouterSetup({ tasks, onDone, onCancel }: {
   const [vpQuery, setVpQuery] = useState('');
   const shownLeads = linkFilterMatches(leads, draft.value.links, vpQuery);
   const existing = existingRouterFor(tasks, draft.value.area);
-  const save = async () => {
+  const nameMic = useRef<BoxMicHandle | null>(null);
+  const saveNow = async () => {
     // An area that has its router opens it: no POST, and the typed draft stays for a new area.
     if (existing) { onDone(existing.id); return; }
     const name = draft.value.name.trim();
@@ -55,9 +58,11 @@ export function OrgRouterSetup({ tasks, onDone, onCancel }: {
       setError(failure instanceof Error ? failure.message : 'Router setup failed.');
     } finally { setBusy(false); }
   };
+  // Create waits for a name still being dictated, then makes the router.
+  const gate = useSendAfterDictation([nameMic], () => void saveNow(), SETUP_KEY);
   // The area comes first: an area that already has its router offers to open it right there, and the
   // rest of the form (name, VP links) is for a new router only.
-  return <form className="org-router-setup" data-testid="org-router-setup" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+  return <form className="org-router-setup" data-testid="org-router-setup" onSubmit={(event) => { event.preventDefault(); gate.send(); }}>
     <h3>New router</h3>
     <p>A router sits beside the VPs, not under them. {ROUTER_LINK_NOTE}</p>
     <fieldset><legend>Area</legend>{AREAS.map((area) => <label key={area.id}>
@@ -70,12 +75,12 @@ export function OrgRouterSetup({ tasks, onDone, onCancel }: {
         <button type="button" className="btn btn-sm" onClick={onCancel}>Cancel</button>
       </div>
     </> : <>
-      <label>Name<input value={draft.value.name} maxLength={ROUTER_NAME_MAX} data-draft-key={draft.key ?? undefined} onChange={(event) => draft.setValue((value) => ({ ...value, name: event.target.value }))} data-testid="router-name" disabled={busy} /></label>
+      <label>Name<MicInput value={draft.value.name} maxLength={ROUTER_NAME_MAX} data-draft-key={draft.key ?? undefined} setText={(name) => draft.setValue((value) => ({ ...value, name }))} micRef={nameMic} data-testid="router-name" disabled={busy} /></label>
       <fieldset><legend>Works closely with (optional)</legend>
         {leads.length === 0 && <p data-testid="router-setup-no-vps">No open VP yet. A router works on its own.</p>}
         {leads.length > LINK_FILTER_FROM && (
-          <input type="search" className="org-router-link-filter" data-testid="router-setup-vp-filter" data-no-draft="search"
-            placeholder="Find a VP" aria-label="Find a VP" value={vpQuery} disabled={busy} onChange={(event) => setVpQuery(event.target.value)} />
+          <MicInput type="search" className="org-router-link-filter" fieldClassName="org-router-link-filter-field" data-testid="router-setup-vp-filter" data-no-draft="search"
+            placeholder="Find a VP" aria-label="Find a VP" value={vpQuery} disabled={busy} setText={setVpQuery} />
         )}
         <div className="org-router-link-list">
           {shownLeads.length === 0 && leads.length > 0 && <p className="org-router-hint" data-testid="router-setup-vp-none">No VP matches “{vpQuery.trim()}”.</p>}
@@ -87,7 +92,7 @@ export function OrgRouterSetup({ tasks, onDone, onCancel }: {
       <p>Created paused. It reads a message only after you confirm that message's area, or a rule does.</p>
       {error && <p ref={errorRef} role="alert" data-testid="router-setup-error">{error}</p>}
       <div className="org-router-setup-actions">
-        <button type="submit" className="btn btn-sm btn-primary" data-testid="router-setup-create" disabled={busy || !draft.value.name.trim()}>{busy ? 'Creating…' : 'Create router'}</button>
+        <button type="submit" className="btn btn-sm btn-primary" data-testid="router-setup-create" disabled={busy || (!draft.value.name.trim() && !gate.micBusy && !gate.waiting)} {...dictationWaitProps(gate)}>{busy ? 'Creating…' : 'Create router'}</button>
         <button type="button" className="btn btn-sm" onClick={onCancel} disabled={busy}>Cancel</button>
       </div>
     </>}

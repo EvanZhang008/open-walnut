@@ -18,6 +18,8 @@ import {
 } from '../../../../../src/core/boards/board-lanes';
 import { READ_ONLY_TITLE, type KanbanAddLaneProps } from './kanban-contract';
 import { laneNameError } from './KanbanLaneHead';
+import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 
 export const MAX_LANES_TITLE = `A board has at most ${MAX_LANES} lanes`;
 
@@ -42,6 +44,7 @@ export function KanbanAddLane({ lanes, mode, api, onAdded }: KanbanAddLaneProps)
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const nameMic = useRef<BoxMicHandle | null>(null);
   const full = lanes.length >= MAX_LANES;
   const blocked = api.readOnly ? READ_ONLY_TITLE : full ? MAX_LANES_TITLE : '';
   const kind = picked ?? defaultLaneKind(name);
@@ -52,6 +55,7 @@ export function KanbanAddLane({ lanes, mode, api, onAdded }: KanbanAddLaneProps)
     const err = laneNameError(lanes, null, name);
     if (err) { setError(err); inputRef.current?.focus(); return; }
     const lane: BoardLane = { id: makeLaneId(), name: name.trim(), kind };
+    nameMic.current?.clear();
     setSaving(true);
     const ok = await api.saveLanes(insertLane(lanes, lane));
     setSaving(false);
@@ -60,9 +64,11 @@ export function KanbanAddLane({ lanes, mode, api, onAdded }: KanbanAddLaneProps)
     close();
     onAdded(lane.id);
   };
+  // Add (the button, or Enter in the form) waits for a lane name still being dictated, then adds it.
+  const gate = useSendAfterDictation([nameMic], () => void add());
   const onKeyDown = (e: ReactKeyboardEvent) => {
     e.stopPropagation();
-    if (e.key === 'Enter') { e.preventDefault(); void add(); }
+    if (e.key === 'Enter') { e.preventDefault(); gate.send(); }
     if (e.key === 'Escape') { e.preventDefault(); close(); }
   };
   const onRadioKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -92,7 +98,7 @@ export function KanbanAddLane({ lanes, mode, api, onAdded }: KanbanAddLaneProps)
   return (
     <div className={`kanban-add-lane-wrap is-${mode} is-open`}>
       <div className="kanban-add-lane-form" data-testid="kanban-add-lane-form" onKeyDown={onKeyDown} onPointerDown={(e) => e.stopPropagation()}>
-        <input data-draft-key={nameDraft.key ?? undefined}
+        <MicInput fieldClassName="mic-field-compact" data-draft-key={nameDraft.key ?? undefined}
           ref={inputRef}
           className="kanban-add-lane-input"
           data-testid="kanban-add-lane-input"
@@ -102,7 +108,8 @@ export function KanbanAddLane({ lanes, mode, api, onAdded }: KanbanAddLaneProps)
           value={name}
           readOnly={saving}
           aria-invalid={error ? true : undefined}
-          onChange={(e) => { setName(e.target.value); if (error) setError(''); }}
+          setText={(text) => { setName(text); if (error) setError(''); }}
+          micRef={nameMic}
         />
         {error && <div className="kanban-lane-rename-error" data-testid="kanban-add-lane-error" role="alert">{error}</div>}
         <div className="kanban-add-lane-kinds" data-testid="kanban-add-lane-kinds" role="radiogroup" aria-label="Lane kind" onKeyDown={onRadioKey}>
@@ -124,7 +131,7 @@ export function KanbanAddLane({ lanes, mode, api, onAdded }: KanbanAddLaneProps)
           ))}
         </div>
         <div className="kanban-add-lane-actions">
-          <button type="button" className="kanban-btn is-primary" data-testid="kanban-add-lane-submit" aria-disabled={saving || undefined} onClick={() => void add()}>Add</button>
+          <button type="button" className="kanban-btn is-primary" data-testid="kanban-add-lane-submit" aria-disabled={saving || undefined} onClick={gate.send} {...dictationWaitProps(gate)}>Add</button>
           <button type="button" className="kanban-btn" data-testid="kanban-add-lane-cancel" onClick={close}>Cancel</button>
         </div>
       </div>

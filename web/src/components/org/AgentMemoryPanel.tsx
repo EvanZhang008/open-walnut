@@ -22,6 +22,8 @@ import { fetchTask } from '@/api/tasks';
 import { fetchAgentMemory, type AgentMemory } from '@/api/agent-memory';
 import { fetchGlobalMemory, fetchUserMemory } from '@/api/memory';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { log } from '@/utils/log';
 import { instructionsSource } from './instructions-source';
 import '@/styles/agent-memory.css';
@@ -134,6 +136,7 @@ export function AgentMemoryPanel({ task, onClose }: { task: Task; onClose: () =>
   const [readError, setReadError] = useState('');
   const [attempt, setAttempt] = useState(0);
   const area = useRef<HTMLTextAreaElement>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
   useEffect(() => {
     let live = true;
     setReadError('');
@@ -162,7 +165,7 @@ export function AgentMemoryPanel({ task, onClose }: { task: Task; onClose: () =>
     return () => { live = false; };
   }, [task.id]);
 
-  const save = async () => {
+  const saveNow = async () => {
     if (!dirty || busy || !fresh) return;
     setBusy(true);
     setNote(null);
@@ -181,6 +184,8 @@ export function AgentMemoryPanel({ task, onClose }: { task: Task; onClose: () =>
       setBusy(false);
     }
   };
+  // Save (the button, or Cmd/Ctrl+Enter) waits for words still being dictated, then saves them too.
+  const gate = useSendAfterDictation([mic], () => void saveNow(), task.id);
   const openMemory = (path: string) => {
     onClose();
     navigate(`/memory?path=${encodeURIComponent(path)}`);
@@ -213,26 +218,29 @@ export function AgentMemoryPanel({ task, onClose }: { task: Task; onClose: () =>
         <label className="am-field">
           <span className="am-label">Core instructions {fresh && <em className="am-source" data-testid="am-instructions-source">{instructionsSource({ followsDefault, edited: reads(text) !== saved, stored })}</em>}</span>
           <span className="am-hint">What {isMain ? 'the CEO' : 'this VP'} is told in every session: Walnut's default until you write your own. It reads an edit with its next message.</span>
-          <textarea
-            className="app-modal-input am-instructions"
-            data-no-draft="document"
-            value={text}
-            onChange={(e) => { setText(e.target.value); setNote(null); }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) { e.preventDefault(); void save(); }
-            }}
-            maxLength={ORG_INSTRUCTIONS_MAX}
-            rows={6}
-            // Read only, never disabled, while saving: WebKit blurs a disabled focused box.
-            readOnly={busy || !fresh}
-            ref={area}
-            data-testid="am-instructions"
-          />
+          {/* The composer's mic inside the box, as in every box where words are written. */}
+          <MicField boxRef={area} text={text} setText={(t) => { setText(t); setNote(null); }} handleRef={mic} target={task.id} disabled={busy || !fresh}>
+            <textarea
+              className="app-modal-input am-instructions"
+              data-no-draft="document"
+              value={text}
+              onChange={(e) => { setText(e.target.value); setNote(null); }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) { e.preventDefault(); gate.send(); }
+              }}
+              maxLength={ORG_INSTRUCTIONS_MAX}
+              rows={6}
+              // Read only, never disabled, while saving: WebKit blurs a disabled focused box.
+              readOnly={busy || !fresh}
+              ref={area}
+              data-testid="am-instructions"
+            />
+          </MicField>
           <span className="am-count am-right" aria-hidden="true">{text.length} / {ORG_INSTRUCTIONS_MAX}</span>
         </label>
         {fresh && !text.trim() && <p className="am-note" data-testid="am-default-hint">Empty: Walnut's default applies.</p>}
         {fresh && !followsDefault && (
-          <button type="button" className="am-link am-restore" disabled={busy} onClick={() => { setText(fallback); setNote(null); area.current?.focus(); }} data-testid="am-restore-default">
+          <button type="button" className="am-link am-restore" disabled={busy} onClick={() => { mic.current?.clear(); setText(fallback); setNote(null); area.current?.focus(); }} data-testid="am-restore-default">
             Restore Walnut's default
           </button>
         )}
@@ -249,7 +257,7 @@ export function AgentMemoryPanel({ task, onClose }: { task: Task; onClose: () =>
 
         <div className="app-modal-actions">
           <button type="button" className="app-modal-btn" onClick={onClose} disabled={busy}>{dirty ? 'Cancel' : 'Close'}</button>
-          <button type="button" className="app-modal-btn primary" onClick={() => { void save(); }} disabled={!dirty || busy || !fresh} data-testid="am-save">
+          <button type="button" className="app-modal-btn primary" onClick={gate.send} disabled={(!dirty && !gate.micBusy && !gate.waiting) || busy || !fresh} data-testid="am-save" {...dictationWaitProps(gate)}>
             {busy ? 'Saving…' : 'Save'}
           </button>
         </div>

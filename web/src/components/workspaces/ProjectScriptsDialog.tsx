@@ -18,6 +18,8 @@ import { ScriptCommand } from './ScriptCommand';
 import { allowScriptsFile, fetchScripts, saveProjectScripts, type ProjectScript, type ScriptsAnswer } from '@/api/workspaces';
 import { log } from '@/utils/log';
 import '@/styles/workspaces.css';
+import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 
 /** `timeout_sec` has no field here (the API sets it); an edit keeps it. */
 type Draft = { id?: string; name: string; command: string; setup: boolean; wait: boolean; teardown: boolean; timeout_sec?: number };
@@ -86,6 +88,7 @@ export function ProjectScriptsDialog({ project, cwd, host, onClose, onSaved }: {
   const [allowing, setAllowing] = useState(false);
   const confirm = useConfirm();
   const nameRef = useRef<HTMLInputElement>(null);
+  const nameMic = useRef<BoxMicHandle | null>(null);
   const commandRef = useRef<HTMLTextAreaElement>(null);
   const draftRef = useRef(draft);
   draftRef.current = draft;
@@ -159,8 +162,11 @@ export function ProjectScriptsDialog({ project, cwd, host, onClose, onSaved }: {
     }));
     const edited = fromDraft(draft);
     const next = draft.id ? list.map((s) => (s.id === draft.id ? edited : others.find((o) => o.id === s.id)!)) : [...others, edited];
+    nameMic.current?.clear();
     if (await save(next)) setDraft(null);
   }, [draft, list, save]);
+  // Save (the button, Enter, or Cmd/Ctrl+Enter in the command) waits for a name still being dictated.
+  const gate = useSendAfterDictation([nameMic], () => void submit(), editing?.id ?? (editing ? 'new' : null));
 
   const remove = useCallback(async (s: ProjectScript) => {
     const ok = await confirm({ title: `Delete the script "${s.name}"?`, message: s.command, confirmLabel: 'Delete', danger: true });
@@ -204,10 +210,11 @@ export function ProjectScriptsDialog({ project, cwd, host, onClose, onSaved }: {
   const takesOver = !!fileTwin && !(draft?.id && list.find((p) => p.id === draft.id)?.name.toLowerCase() === fileTwin.name.toLowerCase());
 
   const form = draft && (
-          <form className="project-scripts-form" data-testid="project-script-form" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
+          <form className="project-scripts-form" data-testid="project-script-form" onSubmit={(e) => { e.preventDefault(); gate.send(); }}>
             <label className="project-scripts-field">
               <span>Name</span>
-              <input ref={nameRef} className="app-modal-input" data-draft-key={kept.key ?? undefined} value={draft.name} maxLength={60} placeholder="e.g. Dev server" onChange={(e) => { setDraft({ ...draft, name: e.target.value }); if (badField === 'name') { setBadField(null); setError(null); } }} data-testid="project-script-name"
+              <MicInput ref={nameRef} className="app-modal-input" data-draft-key={kept.key ?? undefined} value={draft.name} maxLength={60} placeholder="e.g. Dev server" setText={(text) => { setDraft({ ...draft, name: text }); if (badField === 'name') { setBadField(null); setError(null); } }} data-testid="project-script-name"
+                micRef={nameMic} target={editing?.id ?? 'new'} onEnter={gate.send}
                 aria-invalid={badField === 'name' || undefined} />
               {projectClash && <small className="project-scripts-field-hint is-warn" data-testid="project-script-name-clash">
                 This project already has a script named "{projectClash.name}": give this one another name.
@@ -222,7 +229,7 @@ export function ProjectScriptsDialog({ project, cwd, host, onClose, onSaved }: {
                 ref={commandRef} className="app-modal-input project-scripts-textarea" data-draft-key={kept.key ?? undefined} value={draft.command} rows={3} maxLength={4000} spellCheck={false}
                 placeholder="bun run dev" onChange={(e) => { setDraft({ ...draft, command: e.target.value }); if (badField === 'command') { setBadField(null); setError(null); } }} data-testid="project-script-command"
                 aria-invalid={badField === 'command' || undefined}
-                onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void submit(); } }}
+                onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); gate.send(); } }}
               />
             </label>
             <div className="project-scripts-check">
@@ -256,7 +263,7 @@ export function ProjectScriptsDialog({ project, cwd, host, onClose, onSaved }: {
             {saveBlocked && !projectClash && <div className="project-scripts-save-hint" data-testid="project-script-save-hint">{saveBlocked}.</div>}
             <div className="app-modal-actions">
               <button type="button" className="app-modal-btn" onClick={() => { setDraft(null); setError(null); setBadField(null); }}>Cancel</button>
-              <button type="submit" className="app-modal-btn primary" disabled={saving || !draftReady} title={draftReady ? undefined : saveBlocked} data-testid="project-script-save">{saving ? 'Saving…' : takesOver ? (draft.id ? 'Save and replace' : 'Add and replace') : draft.id ? 'Save script' : 'Add script'}</button>
+              <button type="submit" className="app-modal-btn primary" disabled={saving || (!draftReady && !gate.micBusy && !gate.waiting)} title={draftReady ? undefined : saveBlocked} data-testid="project-script-save" {...dictationWaitProps(gate)}>{saving ? 'Saving…' : takesOver ? (draft.id ? 'Save and replace' : 'Add and replace') : draft.id ? 'Save script' : 'Add script'}</button>
             </div>
           </form>
   );

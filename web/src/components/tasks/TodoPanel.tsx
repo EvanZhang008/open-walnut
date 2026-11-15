@@ -1,5 +1,7 @@
 import { matchParentRef, refNamesId } from '../../../../src/lib/id-ref';
 import { useState, useMemo, useEffect, useLayoutEffect, useRef, useDeferredValue, memo, startTransition, type CSSProperties, type Dispatch, type SetStateAction, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
+import { MicField, MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation } from '@/hooks/useSendAfterDictation';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
 import { useScrollAnchor } from '@/hooks/useScrollAnchor';
@@ -2014,6 +2016,7 @@ function InlineAdd({ onAdd, draftId, label = 'Add to Focus…', openSignal, onOp
   const { text: value, setText: setValue } = draft;
   const [open, setOpen] = useState(() => !!draft.text);
   const inputRef = useRef<HTMLInputElement>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
 
   useEffect(() => { if (open) inputRef.current?.focus(); }, [open]);
   useEffect(() => {
@@ -2030,9 +2033,10 @@ function InlineAdd({ onAdd, draftId, label = 'Add to Focus…', openSignal, onOp
     }
   }, [openSignal, onOpenSignalConsumed]);
 
-  const submit = () => {
+  const submitNow = () => {
     const title = value.trim();
     if (!title) { setOpen(false); return; }
+    mic.current?.clear();
     // Clear optimistically (rapid multi-add is the common case) but PUT THE TEXT
     // BACK if the create rejects. onAdd is async and useTasks.create() rethrows
     // after reporting, so an unawaited call here both lost the user's typing and
@@ -2046,6 +2050,8 @@ function InlineAdd({ onAdd, draftId, label = 'Add to Focus…', openSignal, onOp
     });
     // Keep open for rapid multi-add; input stays focused.
   };
+  // Enter waits for a title still being dictated, then adds it.
+  const gate = useSendAfterDictation([mic], submitNow, draft.key);
 
   if (!open) {
     if (hideClosed) return null;
@@ -2059,20 +2065,23 @@ function InlineAdd({ onAdd, draftId, label = 'Add to Focus…', openSignal, onOp
 
   return (
     <div className="focus-inline-add">
-      <input
-        ref={inputRef}
-        type="text"
-        data-draft-key={draft.key ?? undefined}
-        value={value}
-        placeholder="Task title — Enter to add, Esc to close"
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-          if (e.key === 'Enter') { e.preventDefault(); submit(); }
-          if (e.key === 'Escape') { e.preventDefault(); draft.clear(); setOpen(false); }
-        }}
-        onBlur={() => { if (!value.trim()) setOpen(false); }}
-      />
+      <MicField inline fieldClassName="mic-field-compact" boxRef={inputRef} text={value} setText={setValue} handleRef={mic} target={draft.key}>
+        <input
+          ref={inputRef}
+          type="text"
+          data-draft-key={draft.key ?? undefined}
+          value={value}
+          placeholder="Task title — Enter to add, Esc to close"
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+            if (e.key === 'Enter') { e.preventDefault(); gate.send(); }
+            if (e.key === 'Escape') { e.preventDefault(); draft.clear(); setOpen(false); }
+          }}
+          // An empty row closes when the person leaves it, never while its title is being dictated.
+          onBlur={() => { if (!value.trim() && !mic.current?.busy()) setOpen(false); }}
+        />
+      </MicField>
     </div>
   );
 }
@@ -2125,18 +2134,21 @@ function NewProjectRow({ onCreated, onError, onClose }: { onCreated: (name: stri
     <div className="todo-new-project-wrap">
       <div className="todo-new-project-input-row">
         <span className="todo-new-project-icon">{ICONS.ICON_FOLDER}</span>
-        <input
+        <MicInput
           ref={inputRef}
           type="text"
+          fieldClassName="mic-field-grow mic-field-compact"
           data-draft-key={draft.key ?? undefined}
           value={value}
           disabled={busy}
           aria-label="New project name"
           placeholder="Project name (Enter to create)"
-          onChange={(e) => setValue(e.target.value)}
+          setText={setValue}
+          // Enter creates once a name still being dictated is in (the box's send gate).
+          onEnter={() => void submit()}
+          target={draft.key}
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-            if (e.key === 'Enter') { e.preventDefault(); void submit(); }
             if (e.key === 'Escape') { e.preventDefault(); draft.clear(); onClose(); }
           }}
           onBlur={() => { if (!value.trim()) onClose(); }}

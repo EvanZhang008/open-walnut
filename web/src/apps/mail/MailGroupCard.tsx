@@ -19,7 +19,7 @@ import { useCallback, useEffect, useId, useRef, useState, type RefObject } from 
 import { createPortal } from 'react-dom';
 import { getMailRules, putMailRules, renameMailGroup } from '@/api/mail-groups';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
-import { type BoxMicHandle } from '@/components/common/BoxMic';
+import { type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { AnswerBox } from '@/components/common/AnswerBox';
 import { log } from '@/utils/log';
@@ -216,7 +216,7 @@ export function MailGroupCard({ request }: { request: MailGroupCardRequest }) {
             />
           </>
         ) : (
-          <input
+          <MicInput
             id={fieldId}
             ref={(el) => { fieldRef.current = el; }}
             data-draft-key={draft.key ?? undefined}
@@ -226,8 +226,10 @@ export function MailGroupCard({ request }: { request: MailGroupCardRequest }) {
             data-testid="mail-group-card-name"
             maxLength={MAX_RENAME + 10}
             value={text}
-            onChange={(event) => setText(event.target.value)}
-            onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); gate.send(); } }}
+            setText={setText}
+            // The rename's own mic is the card's mic: Save and Enter wait for its words.
+            micRef={mic}
+            onEnter={gate.send}
           />
         )}
         {(error || renameProblem) && (

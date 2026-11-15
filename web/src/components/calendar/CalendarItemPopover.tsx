@@ -18,6 +18,8 @@ import './visibility.css';
 import { openTaskOnHome } from '@/utils/open-session';
 import { projectDisplayName } from '@/utils/project-display';
 import { useNavigate } from 'react-router-dom';
+import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 
 interface Props {
   item: CalendarItem;
@@ -51,6 +53,7 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
     { baseline: isEvent ? item.event.title : item.task.title },
   );
   const { text: title, setText: setTitle } = titleDraft;
+  const titleMic = useRef<BoxMicHandle | null>(null);
   // Deleting writes through to the REAL external calendar with no undo — a
   // single misclick must not be enough (same two-step as CalendarContextMenu).
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -98,6 +101,7 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
     if (isEvent) {
       if (!title.trim()) return;
       const sentKey = titleDraft.key;
+      titleMic.current?.clear();
       void Promise.resolve(onSaveEvent?.(item.event, { start: composeStart(), end: composeEnd(), title: title.trim() }))
         .then((ok) => { if (ok !== false) titleDraft.clear(sentKey); }, () => {});
     } else {
@@ -106,8 +110,11 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
     onClose();
   };
 
+  // Save (the button, or Enter in the popover) waits for a title still being dictated, then saves it.
+  const saveGate = useSendAfterDictation([titleMic], save);
+
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') save();
+    if (e.key === 'Enter') saveGate.send();
     if (e.key === 'Escape') onClose();
   };
 
@@ -236,14 +243,15 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
         onKeyDown={onKeyDown}
       >
         {isEvent ? (
-          <input
+          <MicInput
             data-draft-key={titleDraft.key ?? undefined}
             className="cal-item-title"
             value={title}
             disabled={readonly}
             maxLength={200}
             autoFocus={!readonly}
-            onChange={(e) => setTitle(e.target.value)}
+            setText={setTitle}
+            micRef={titleMic}
             style={{ borderLeft: `3px solid ${item.event.color ?? 'var(--accent)'}` }}
           />
         ) : (
@@ -313,7 +321,7 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
             <button className="cal-item-hide" onClick={() => { onHideEvent(item.event.id); onClose(); }}>Hide event</button>
           )}
           {!readonly && (
-            <button className="cal-item-save" disabled={invalid || (isEvent && !title.trim())} onClick={save}>
+            <button className="cal-item-save" disabled={invalid || (isEvent && !title.trim() && !saveGate.micBusy && !saveGate.waiting)} onClick={saveGate.send} {...dictationWaitProps(saveGate)}>
               Save
             </button>
           )}

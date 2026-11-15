@@ -9,7 +9,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { createElement } from '../../web/node_modules/react/index.js'
-import { renderToStaticMarkup } from '../../web/node_modules/react-dom/server.node.js'
+import { renderToStaticMarkup as renderStatic } from '../../web/node_modules/react-dom/server.node.js'
+import { MemoryRouter } from '../../web/node_modules/react-router-dom/dist/index.js'
+const renderToStaticMarkup = (node: React.ReactNode) => renderStatic(createElement(MemoryRouter, null, node))
 import type { Task } from '../../src/core/types.js'
 
 const { RouterSettingsBody, linkFilterMatches, mailAccountNames, LINK_FILTER_FROM, ROUTER_SETTINGS_OPEN_EVENT } = await import('../../web/src/components/org/OrgRouterSettings')

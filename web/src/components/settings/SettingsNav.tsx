@@ -27,6 +27,7 @@ import { APPS_PATH } from '@/utils/open-link'
 import { pageShortcutBlocked } from '@/utils/page-shortcut'
 import '@/styles/settings-nav.css'
 import '@/styles/settings-nav-state.css'
+import { MicInput } from '@/components/common/BoxMic'
 
 export { NAV_OWNER, resolvePane } from './settings-routing'
 
@@ -380,7 +381,7 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
       </button>
       <div className="settings-filter-wrap">
         <SettingsIcon glyph="magnifier" size={13} className="settings-filter-glyph" />
-        <input
+        <MicInput fieldClassName="mic-field-compact"
           ref={inputRef}
           type="search"
           data-no-draft="search"
@@ -396,7 +397,7 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
           autoComplete="off"
           spellCheck={false}
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          setText={setQuery}
           onKeyDown={onInputKey}
         />
         {query && (

@@ -1,9 +1,10 @@
-import { useState } from 'react';
-import { dictationWaitProps, type SendAfterDictation } from '@/hooks/useSendAfterDictation';
+import { useRef, useState } from 'react';
+import { dictationWaitProps, useSendAfterDictation, type SendAfterDictation } from '@/hooks/useSendAfterDictation';
 import { DatePicker, formatDateTimeDisplay } from '@/components/common/DatePicker';
 import { PinTierPicker } from '@/components/common/PinTierPicker';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { SyncChoiceField } from './SyncChoice';
+import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
 import {
   PRIORITY_CYCLE,
   PRIORITY_OPTIONS,
@@ -73,6 +74,12 @@ export function QuickTaskConfirm({
   const [startPickerOpen, setStartPickerOpen] = useState(false);
   const [endPickerOpen, setEndPickerOpen] = useState(false);
   const showPriority = useShowPriority();
+  const titleMic = useRef<BoxMicHandle | null>(null);
+  const projectMic = useRef<BoxMicHandle | null>(null);
+  // These fields feed the owner's sentence gate only after their own final words land.
+  const fieldsGate = useSendAfterDictation([titleMic, projectMic], onCreate, draftKey);
+  const createBusy = fieldsGate.micBusy || dictation?.micBusy;
+  const createWaiting = fieldsGate.waiting || dictation?.waiting;
 
   const priorityOption = PRIORITY_OPTIONS.find((option) => option.value === draft.priority);
   const priorityLabel = priorityOption ? `${priorityOption.icon} ${priorityOption.label}` : 'No priority';
@@ -97,14 +104,17 @@ export function QuickTaskConfirm({
     >
       <label className="qtc-confirm-field qtc-confirm-title-field">
         <span className="qtc-confirm-label">Title <AiBadge visible={draft.aiFields.has('title')} /></span>
-        <input
+        <MicInput
           className="qtc-confirm-input qtc-confirm-title"
           data-draft-key={draftKey}
           value={draft.title}
           maxLength={500}
           disabled={submitting}
           placeholder="Task title"
-          onChange={(event) => onChange({ title: event.target.value })}
+          setText={(text) => onChange({ title: text })}
+          micRef={titleMic}
+          target={draftKey}
+          onEnter={fieldsGate.send}
         />
         {draft.aiFields.has('title') && !!rawText.trim() && (
           <span className="qtc-confirm-was">was: &quot;{rawText}&quot;</span>
@@ -190,14 +200,17 @@ export function QuickTaskConfirm({
             Project <AiBadge visible={draft.aiFields.has('project')} />
             {showNewProjectBadge && <span className="qtc-confirm-new" title="This project doesn't exist yet — it will be created">new</span>}
           </span>
-          <input
+          <MicInput
             className="qtc-confirm-input qtc-confirm-project"
             data-draft-key={draftKey}
             value={draft.project ?? ''}
             list="qtc-project-options"
             disabled={submitting}
             placeholder="Inbox"
-            onChange={(event) => onChange({ project: event.target.value })}
+            setText={(text) => onChange({ project: text })}
+            micRef={projectMic}
+            target={draftKey}
+            onEnter={fieldsGate.send}
           />
           <datalist id="qtc-project-options">
             {projectOptions.map((project) => <option key={project} value={project} />)}
@@ -213,8 +226,8 @@ export function QuickTaskConfirm({
       />
 
       <div className="qtc-confirm-footer">
-        <button type="button" className="qtc-confirm-primary" disabled={submitting || (!draft.title.trim() && !dictation?.micBusy && !dictation?.waiting)} onClick={onCreate}
-          {...(dictation ? dictationWaitProps(dictation) : {})}>
+        <button type="button" className="qtc-confirm-primary" disabled={submitting || (!draft.title.trim() && !createBusy && !createWaiting)} onClick={fieldsGate.waiting ? fieldsGate.cancel : dictation?.waiting ? onCreate : fieldsGate.send}
+          {...dictationWaitProps({ waiting: !!createWaiting })}>
           {submitting ? 'Creating…' : 'Create'}
         </button>
         <span className="qtc-confirm-key-hint">Enter to create · Esc to close</span>

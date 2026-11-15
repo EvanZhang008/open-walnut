@@ -224,7 +224,7 @@ struct NewSessionChatView: View {
         }
         .onDisappear { pageLeft() }
         .sheet(isPresented: $showProjectPicker) {
-            TaskProjectPicker(current: project) { picked in project = picked }
+            TaskProjectPicker(current: project, voiceKey: "new-session") { picked in project = picked }
         }
         .sheet(isPresented: $showPathPicker) {
             SessionPathPicker(

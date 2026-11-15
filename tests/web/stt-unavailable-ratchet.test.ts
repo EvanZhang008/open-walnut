@@ -33,19 +33,25 @@ describe('voice unavailable: one rule per decision', () => {
     for (const f of samplers) expect(f.text).toMatch(/from '@\/utils\/mic-health'/);
   });
 
-  it('no-sound wording lives in mic-health.ts (plus the stop gate for a stream that never carried sound)', () => {
-    const ALLOWED: Record<string, string> = {
-      'utils/mic-health.ts': 'the live warnings',
-      // onstop's deadStream gate: the analyser never saw any signal this
-      // recording, so there is nothing to transcribe (and Whisper hallucinates on zeros).
-      'hooks/useSpeechToText.ts': 'stop gate for a never-alive stream',
-    };
+  it('no-sound wording lives in mic-health.ts only: the live warnings and the stop verdicts', () => {
     const wording = files.filter((f) => /No sound (from|detected)/i.test(f.text)).map((f) => f.rel).sort();
-    expect(wording).toEqual(Object.keys(ALLOWED).sort());
+    expect(wording).toEqual(['utils/mic-health.ts']);
+  });
+
+  // 2026-11-15: a Send 90 ms into a recording (the button still said "Starting the
+  // microphone") showed "No sound detected ... Check your mic device" and held the
+  // send, and a take whose recorder had no bytes yet ended silently whatever the mic
+  // had heard. The stop had its own two rules beside the live warning's 3 s one.
+  it('the stop decides what a take holds through classifyTake only, never its own size or silence check', () => {
     const hook = files.find((f) => f.rel === 'hooks/useSpeechToText.ts')!.text;
-    // The hook's only own no-sound line is the never-alive stop gate.
-    expect(hook.match(/No sound (from|detected)/gi)).toHaveLength(1);
-    expect(hook).toMatch(/const deadStream = analyserAttachedRef\.current && !sawAnyNonDeadRef\.current/);
+    const onstop = hook.slice(hook.indexOf('recorder.onstop'), hook.indexOf('recorder.onerror'));
+    expect(onstop).toMatch(/classifyTake\(blob\.size, health\)/);
+    expect(onstop).toMatch(/TAKE_ERRORS\[verdict\]/);
+    expect(onstop).not.toMatch(/blob\.size\s*(===|<=|<|==)\s*0/);
+    expect(onstop).not.toMatch(/setError\(\s*['"`]/);
+    // No other file judges a stopped take on its own.
+    expect(files.filter((f) => /\bclassifyTake\(/.test(f.text)).map((f) => f.rel).sort())
+      .toEqual(['hooks/useSpeechToText.ts', 'utils/mic-health.ts']);
   });
 
   it('every mic control decides availability through sttBlocksMic, never the raw status', () => {

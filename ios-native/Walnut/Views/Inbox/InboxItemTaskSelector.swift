@@ -17,6 +17,9 @@ struct InboxItemTaskSelector: View {
     @State private var searchGeneration = 0
     @FocusState private var searchFocused: Bool
     @State private var acceptingInput = true
+    /// Continue waits for words still being spoken into the search, so the list it leaves from
+    /// is the one for his whole query (`DictationSendGate`).
+    @State private var sendGate = DictationSendGate()
     private var footer: some View {
         let enabled = !loading && error == nil && store.draft(key).selected?.canAttach == true
         return VStack(alignment: .leading, spacing: 6) {
@@ -32,10 +35,14 @@ struct InboxItemTaskSelector: View {
                     }.frame(minHeight: 44)
                 }
             }
-            Button("Continue") {
-                if let selected = store.draft(key).selected, selected.canAttach {
-                    acceptingInput = false; searchFocused = false; onContinue(selected)
+            Button {
+                sendGate.send { _ in
+                    if let selected = store.draft(key).selected, selected.canAttach {
+                        acceptingInput = false; searchFocused = false; onContinue(selected)
+                    }
                 }
+            } label: {
+                DictationSendLabel(gate: sendGate, title: "Continue")
             }.buttonStyle(InboxItemPrimaryButtonStyle()).frame(minHeight: 44)
                 .disabled(!enabled)
                 .accessibilityIdentifier("inbox.item.tasks.continue")
@@ -65,9 +72,15 @@ struct InboxItemTaskSelector: View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Search tasks").font(.caption)
-                TextField("Search by title, project, or full task ID", text: query)
-                    .textFieldStyle(.roundedBorder).focused($searchFocused)
-                    .accessibilityIdentifier("inbox.item.tasks.search")
+                // Walnut's mic beside it: a title or a project is said as words.
+                VoiceDictationField(
+                    text: query, surface: "inbox-task-search:\(key.letter):\(key.item)", box: "inbox-task-search",
+                    refocus: { searchFocused = true }
+                ) {
+                    TextField("Search by title, project, or full task ID", text: query)
+                        .textFieldStyle(.roundedBorder).focused($searchFocused)
+                        .accessibilityIdentifier("inbox.item.tasks.search")
+                }
                 if loading { Text("Loading tasks…").font(.caption) }
                 if let error {
                     Text(error).font(.caption)
@@ -109,8 +122,9 @@ struct InboxItemTaskSelector: View {
                     }
                 }
             }.padding(16)
+            .dictationSendGate(sendGate)
             .navigationTitle("Choose a task").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { sendGate.cancelWait(); dismiss() } } }
             .safeAreaInset(edge: .bottom) { footer }
             .task(id: query.wrappedValue) {
                 do { try await Task.sleep(for: .milliseconds(200)) } catch { return }

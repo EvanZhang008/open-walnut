@@ -315,6 +315,9 @@ struct PermissionRequestCard: View {
     /// The note the deny carries to the agent (generic card).
     @State private var note = ""
     @FocusState private var noteFocused: Bool
+    /// The deny that carries the note waits for words still being spoken or transcribed into it
+    /// (`DictationSendGate`).
+    @State private var sendGate = DictationSendGate()
     /// A choice that writes a lasting rule, tapped once: the next tap within 5 s sends it.
     @State private var armed: String?
     @State private var armedAt = Date.distantPast
@@ -365,9 +368,26 @@ struct PermissionRequestCard: View {
         onRespond(choice.reply(note: note))
     }
 
-    /// The choice is off while a note is typed (the note goes with the deny).
+    /// The choice is off while a note is typed or spoken (the note goes with the deny), so an
+    /// allow never leaves without words still on their way.
     private func isOff(_ choice: PermissionChoice) -> Bool {
-        choice.allow && PermissionNote.message(note) != nil
+        choice.allow && (PermissionNote.message(note) != nil || sendGate.isDictating || sendGate.isWaiting)
+    }
+
+    /// Every choice goes through the gate: a deny tapped while the note is spoken waits for its
+    /// words and carries them; a second tap while it waits cancels.
+    private func tap(_ choice: PermissionChoice) {
+        sendGate.send { _ in send(choice) }
+    }
+
+    /// A deny's title says when it waits for the note's words.
+    @ViewBuilder
+    private func choiceTitle(_ choice: PermissionChoice) -> some View {
+        if choice.allow {
+            Text(choice.displayLabel(note: note))
+        } else {
+            DictationSendLabel(gate: sendGate, title: choice.displayLabel(note: note))
+        }
     }
 
     private var genericCard: some View {
@@ -402,6 +422,7 @@ struct PermissionRequestCard: View {
                 .disabled(answering)
             if noteChoice != nil { noteField }
         }
+        .dictationSendGate(sendGate)
         .padding(12)
         .background(Theme.warning.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay {
@@ -446,9 +467,9 @@ struct PermissionRequestCard: View {
     /// danger color on a quiet fill.
     private func choiceButton(_ choice: PermissionChoice) -> some View {
         Button {
-            send(choice)
+            tap(choice)
         } label: {
-            Text(choice.displayLabel(note: note))
+            choiceTitle(choice)
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
@@ -471,10 +492,10 @@ struct PermissionRequestCard: View {
     /// command's head and its wildcard both stay in view).
     private func choiceRow(_ choice: PermissionChoice) -> some View {
         Button {
-            send(choice)
+            tap(choice)
         } label: {
             VStack(alignment: .leading, spacing: 2) {
-                Text(choice.displayLabel(note: note))
+                choiceTitle(choice)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(choice.allow ? Theme.tint : Theme.danger)
                     .fixedSize(horizontal: false, vertical: true)
@@ -516,37 +537,45 @@ struct PermissionRequestCard: View {
 
     /// The person's words for the agent, sent with the deny that carries them.
     /// Return sends that deny with the note; an empty Return does nothing.
+    /// Walnut's mic beside it: spoken words land in the note for review, and only a deny sends them.
     private var noteField: some View {
-        TextField("Or tell the agent what to do instead", text: $note, axis: .vertical)
-            .lineLimit(1...3)
-            .font(.callout)
-            .textFieldStyle(.plain)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .submitLabel(.send)
-            .disabled(answering)
-            .focused($noteFocused)
-            // A vertical-axis field inserts the return key's newline instead of
-            // firing onSubmit: that newline is the send.
-            .onChange(of: note) { old, new in
-                onTypeInField?()
-                guard PermissionNote.isReturnKey(old: old, new: new) else {
-                    PermissionAnswerDrafts.shared.update(request.requestId) { $0.note = new }
-                    return
-                }
-                note = old
-                if let noteChoice, PermissionNote.message(old) != nil { send(noteChoice) }
+        VoiceDictationField(
+            text: $note, surface: "permission-note:\(request.requestId)", box: "permission-note",
+            blocked: answering, refocus: { noteFocused = true }
+        ) {
+            TextField("Or tell the agent what to do instead", text: $note, axis: .vertical)
+                .lineLimit(1...3)
+                .font(.callout)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .submitLabel(.send)
+                .disabled(answering)
+                .focused($noteFocused)
+                .accessibilityIdentifier("session.permission.note")
+        }
+        // A vertical-axis field inserts the return key's newline instead of
+        // firing onSubmit: that newline is the send.
+        .onChange(of: note) { old, new in
+            onTypeInField?()
+            guard PermissionNote.isReturnKey(old: old, new: new) else {
+                PermissionAnswerDrafts.shared.update(request.requestId) { $0.note = new }
+                return
             }
-            // His note, from a card a push or a swap took down, comes back with the request.
-            .onAppear {
-                if note.isEmpty, let kept = PermissionAnswerDrafts.shared.draft(request.requestId)?.note { note = kept }
-            }
-            .onChange(of: noteFocused) { _, focused in onFocusField?(focused ? noteFieldID : nil) }
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(PendingPermissionStack.contentSpace)) } action: { frame in
-                onFieldFrame?(noteFieldID, frame)
-            }
-            .accessibilityIdentifier("session.permission.note")
+            note = old
+            if let noteChoice, PermissionNote.message(old) != nil { tap(noteChoice) }
+        }
+        // His note, from a card a push or a swap took down, comes back with the request.
+        .onAppear {
+            if note.isEmpty, let kept = PermissionAnswerDrafts.shared.draft(request.requestId)?.note { note = kept }
+        }
+        .onChange(of: noteFocused) { _, focused in onFocusField?(focused ? noteFieldID : nil) }
+        // The whole box (the field and its mic) on screen, so the stack keeps it, with room for the
+        // recording outline, inside its box.
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(PendingPermissionStack.contentSpace)) } action: { frame in
+            onFieldFrame?(noteFieldID, frame)
+        }
     }
 }
 

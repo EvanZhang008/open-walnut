@@ -8,7 +8,7 @@
  * silently fails on the road.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchDevicesList } from './devices-list';
 import { log } from '@/utils/log';
 import { SettingsGroup, SettingsRow } from '../../SettingsSection';
@@ -17,6 +17,8 @@ import { PairingQrBlock } from './PairingQrBlock';
 import { usePairDevice, type PairingTarget } from './usePairDevice';
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
+import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 
 interface Props {
   /** Companion hostname, for the copy; pairing itself reads the server's target. */
@@ -50,6 +52,14 @@ export function PairPhoneCard({ domain }: Props) {
   }, [loadTargets]);
 
   const cloudTarget = targets?.find((t) => t.kind === 'cloud');
+  // Show pairing QR (the button, or Enter in the name) waits for a name still being dictated.
+  const nameMic = useRef<BoxMicHandle | null>(null);
+  const pairNow = () => {
+    if (!cloudTarget || !name.trim()) return;
+    nameMic.current?.clear();
+    void mint({ name, target: 'cloud' });
+  };
+  const pairGate = useSendAfterDictation([nameMic], pairNow);
 
   const note = cloudTarget
     ? <>Pairing against <code>{cloudTarget.origin.replace(/^https?:\/\//, '')}</code>; this QR works from anywhere, including cellular.</>
@@ -67,27 +77,24 @@ export function PairPhoneCard({ domain }: Props) {
           error={error ?? undefined}
           control={
             <span className="settings-addons-inline devices-add-row">
-              <input
+              <MicInput fieldClassName="settings-mic-field settings-mic-field-short"
                 id="cloud-pair-name"
                 type="text"
                 data-draft-key={nameDraft.key ?? undefined}
                 className="settings-input settings-input--short"
                 value={name}
                 placeholder="Device name, for example iPhone"
-                onChange={(e) => setName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    if (cloudTarget) void mint({ name, target: 'cloud' });
-                  }
-                }}
+                setText={setName}
+                micRef={nameMic}
+                onEnter={pairGate.send}
               />
               <SettingsButton
                 variant="primary"
-                disabled={!name.trim() || !cloudTarget}
+                disabled={(!name.trim() && !pairGate.micBusy && !pairGate.waiting) || !cloudTarget}
                 busy={busy}
                 busyLabel="Pairing..."
-                onClick={() => void mint({ name, target: 'cloud' })}
+                onClick={pairGate.send}
+                {...dictationWaitProps(pairGate)}
               >
                 Show pairing QR
               </SettingsButton>

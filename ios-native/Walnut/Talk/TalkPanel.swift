@@ -351,14 +351,29 @@ struct TalkReviewPage: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     /// The close button's circle, growing with the text size.
     @ScaledMetric(relativeTo: .body) private var closeSize: CGFloat = 34
+    /// Send and Copy wait for words still being spoken or transcribed into the correction
+    /// (`DictationSendGate`).
+    @State private var sendGate = DictationSendGate()
+    /// The mic's surface key: the dictation this page corrects, taken once when the page first
+    /// appears (`@State`, so a parent redraw that builds this view again keeps it).
+    @State private var voiceSurface: String
 
     init(talk: TalkSession, words: String, close: @escaping () -> Void) {
         self.talk = talk
         self.close = close
+        _voiceSurface = State(initialValue: Self.voiceSurface(reviewTake: talk.reviewTake))
         _text = State(initialValue: words)
     }
 
     private var empty: Bool { !TalkSession.hasWords(text) }
+
+    /// The page's dictation by its id; one that could not be kept gets a key of its own, so two
+    /// such pages never share a take.
+    nonisolated static func voiceSurface(reviewTake: String?) -> String {
+        "talk-review:\(reviewTake ?? "unsaved-\(UUID().uuidString)")"
+    }
+    /// Send and Copy stay live while words are being spoken in, even into an emptied box.
+    private var noWords: Bool { empty && !sendGate.isDictating && !sendGate.isWaiting }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -369,6 +384,7 @@ struct TalkReviewPage: View {
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
                 Button {
+                    sendGate.cancelWait()
                     talk.closeReview(text)
                     TalkPanel.shared.showKept()
                 } label: {
@@ -393,23 +409,31 @@ struct TalkReviewPage: View {
             .onTapGesture { editing = false }
             // Sized to the words (a one-line take is a one-line field), growing as they
             // grow, then scrolling inside; the buttons sit right under it.
-            TextField("Type your words", text: $text, axis: .vertical)
-                .font(.title3)
-                .lineSpacing(4)
-                .lineLimit(3...14)
-                .focused($editing)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                // A field: it reads as text to correct, not only to read.
-                .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color(uiColor: .secondarySystemBackground))
-                )
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
-                .padding(.bottom, 16)
-                .accessibilityLabel("Edit your words")
-                .accessibilityIdentifier("talk.review.text")
+            // Walnut's mic beside it, to say a correction or more words: they land after what
+            // is there, and only Send or Copy takes them.
+            VoiceDictationField(
+                text: $text, surface: voiceSurface, box: "talk-review",
+                refocus: { editing = true }
+            ) {
+                TextField("Type your words", text: $text, axis: .vertical)
+                    .font(.title3)
+                    .lineSpacing(4)
+                    .lineLimit(3...14)
+                    .focused($editing)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    // A field: it reads as text to correct, not only to read.
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color(uiColor: .secondarySystemBackground))
+                    )
+                    .accessibilityLabel("Edit your words")
+                    .accessibilityIdentifier("talk.review.text")
+            }
+            .dictationSendGate(sendGate)
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+            .padding(.bottom, 16)
             // The buttons stay at the bottom, under the thumb.
             Spacer(minLength: 0)
             if copyFailed {
@@ -455,18 +479,20 @@ struct TalkReviewPage: View {
     private var copyButton: some View {
         Button {
             editing = false
-            // A second tap after the words went (a quick double tap, VoiceOver) is no failure.
-            guard talk.isReviewing else { return }
-            copyFailed = !talk.copyReview(text)
-            UINotificationFeedbackGenerator().notificationOccurred(copyFailed ? .error : .success)
+            sendGate.send { _ in
+                // A second tap after the words went (a quick double tap, VoiceOver) is no failure.
+                guard talk.isReviewing, !empty else { return }
+                copyFailed = !talk.copyReview(text)
+                UINotificationFeedbackGenerator().notificationOccurred(copyFailed ? .error : .success)
+            }
         } label: {
-            buttonLabel("Copy", systemImage: "doc.on.doc")
+            waitingLabel("Copy", systemImage: "doc.on.doc")
                 .font(.headline)
                 .frame(maxWidth: .infinity, minHeight: 56)
         }
         .buttonStyle(.bordered)
         .buttonBorderShape(.roundedRectangle(radius: 16))
-        .disabled(empty)
+        .disabled(noWords)
         // One label, no separate one for the icon.
         .accessibilityLabel("Copy")
         .accessibilityIdentifier("talk.review.copy")
@@ -487,20 +513,33 @@ struct TalkReviewPage: View {
         }
     }
 
+    /// The button's own label, or the gate's "Waiting…" while it waits for words.
+    @ViewBuilder
+    private func waitingLabel(_ title: String, systemImage: String) -> some View {
+        if sendGate.isWaiting {
+            DictationSendLabel(gate: sendGate, title: title)
+        } else {
+            buttonLabel(title, systemImage: systemImage)
+        }
+    }
+
     private var sendButton: some View {
         Button {
             editing = false
-            let words = text
-            Task { await talk.sendReview(words) }
+            sendGate.send { _ in
+                // Read again after a wait: the spoken words are in the box now.
+                let words = text
+                Task { await talk.sendReview(words) }
+            }
         } label: {
-            buttonLabel("Send to CEO", systemImage: "arrow.up")
+            waitingLabel("Send to CEO", systemImage: "arrow.up")
                 .font(.headline)
-                .foregroundStyle(empty ? Color.secondary : TalkTone.onProminent)
+                .foregroundStyle(noWords ? Color.secondary : TalkTone.onProminent)
                 .frame(maxWidth: .infinity, minHeight: 56)
         }
         .buttonStyle(.borderedProminent)
         .buttonBorderShape(.roundedRectangle(radius: 16))
-        .disabled(empty)
+        .disabled(noWords)
         .accessibilityLabel("Send to CEO")
         .accessibilityIdentifier("talk.review.send")
     }

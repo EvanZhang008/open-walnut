@@ -13,7 +13,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  initialMicHealth, micHealthTick, micHealthTrackEnded, byteFrameRms,
+  initialMicHealth, micHealthTick, micHealthTrackEnded, byteFrameRms, classifyTake, TAKE_ERRORS,
   DEAD_STREAM_RMS, DEAD_FROM_START_TICKS, STALL_WARN_TICKS, STALL_LOG_TICKS,
   DEAD_MIC_WARNING, SILENT_AFTER_SOUND_WARNING, TRACK_ENDED_WARNING,
   type MicHealthState, type MicTick,
@@ -86,6 +86,52 @@ describe('mic health: a dead device still warns', () => {
     const ended = micHealthTrackEnded(first.state);
     expect(ended.warning).toBe(TRACK_ENDED_WARNING);
     expect(micHealthTick(ended.state, SPEECH).warning).toBe(TRACK_ENDED_WARNING);
+  });
+});
+
+// 2026-11-15 (voice-compose-everywhere.spec.ts, the retry): Send 87 ms after the
+// recording began, before the analyser's first sample, showed "No sound detected ...
+// Check your mic device", held the send and never sent the clip to the engine; a take
+// with no recorder bytes ended silently, so a waiting Send went on without the words.
+// The stop now judges a take by evidence only, and no stop but 'audio' is silent.
+describe('classifyTake: what a stopped recording holds', () => {
+  const after = (runs: Array<[number, number]>) => feed(runs).at(-1)?.state ?? initialMicHealth();
+
+  it('a take the analyser has not sampled yet goes to the engine when the recorder has bytes', () => {
+    expect(classifyTake(900, initialMicHealth())).toBe('audio');
+    expect(classifyTake(1, null)).toBe('audio');
+  });
+
+  it('a take with nothing captured is an error, never a silent end', () => {
+    expect(classifyTake(0, initialMicHealth())).toBe('empty');
+    expect(classifyTake(0, null)).toBe('empty');
+    // Only digital zeros while the mic was still starting: no words to hear, not a dead device either.
+    expect(classifyTake(900, after([[1, ZERO]]))).toBe('empty');
+    expect(classifyTake(900, after([[DEAD_FROM_START_TICKS - 1, ZERO]]))).toBe('empty');
+    expect(TAKE_ERRORS.empty).toBeTruthy();
+    expect(TAKE_ERRORS.empty).not.toMatch(/No sound detected|mic device/);
+  });
+
+  it('zeros from the start for as long as the live warning needs is a dead device, and says so', () => {
+    expect(classifyTake(4096, after([[DEAD_FROM_START_TICKS, ZERO]]))).toBe('dead');
+    expect(TAKE_ERRORS.dead).toMatch(/No sound detected/);
+    // A track that ended before any sound is the device too.
+    expect(classifyTake(0, micHealthTrackEnded(initialMicHealth()).state)).toBe('dead');
+  });
+
+  it('sound heard with recorder bytes is audio, even a short or quiet take, and even if it later went silent', () => {
+    expect(classifyTake(512, after([[1, NOISE]]))).toBe('audio');
+    expect(classifyTake(512, after([[2, SPEECH], [STALL_WARN_TICKS, ZERO]]))).toBe('audio');
+    expect(TAKE_ERRORS.audio).toBeNull();
+  });
+
+  it('sound heard but no recorder bytes is lost words, an error', () => {
+    expect(classifyTake(0, after([[3, SPEECH]]))).toBe('lost');
+    expect(TAKE_ERRORS.lost).toBeTruthy();
+  });
+
+  it('every verdict but audio shows an error', () => {
+    for (const [verdict, text] of Object.entries(TAKE_ERRORS)) expect(text === null, verdict).toBe(verdict === 'audio');
   });
 });
 

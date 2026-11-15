@@ -7,7 +7,7 @@ import { itemError } from '@/api/human-inbox-items';
 import { ItemOperationDetails } from './ItemOperationDetails';
 import { PHASE_TEXT, mailDateText } from './item-receipt-model';
 import { itemDraftKey, useItemDraft } from './item-drafts';
-import { type BoxMicHandle } from '@/components/common/BoxMic';
+import { type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
 import { AnswerBox } from '@/components/common/AnswerBox';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import '@/styles/inbox-mic.css';
@@ -25,6 +25,7 @@ export function ItemConfirmation({ draftKey, item, actionId, target, retry, agai
   const goalId = useId();
   const goalBox = useRef<HTMLTextAreaElement | null>(null);
   const goalMic = useRef<BoxMicHandle | null>(null);
+  const titleMic = useRef<BoxMicHandle | null>(null);
   const generation = useRef(0);
   const acknowledgedExisting = useRef(false);
   // A confirm pressed during a dictation, held until the plan for its words is ready.
@@ -78,6 +79,7 @@ export function ItemConfirmation({ draftKey, item, actionId, target, retry, agai
     setSubmitted(true); setError('');
     // The plan is frozen now: a transcription still on its way must not edit the goal.
     goalMic.current?.clear();
+    titleMic.current?.clear();
     try { await execute(plan, again ? 'read' : 'task'); }
     catch (err) { setError(itemError(err).message); setPlan(undefined); setSubmitted(false); }
   }
@@ -86,8 +88,9 @@ export function ItemConfirmation({ draftKey, item, actionId, target, retry, agai
   const workLocked = !!work && ['confirmed', 'deleted', 'unavailable'].includes(work.status) && !retry;
   const blocked = !presence.answers || !!restriction || submitted || submitting;
   const ready = !!plan && !loading && (again || !!goal.trim());
-  // Confirm waits for a live dictation's words; they change the goal, so it confirms once the plan for them is ready.
-  const gate = useSendAfterDictation([goalMic], () => {
+  // Confirm waits for a live dictation's words (the title's and the goal's); they change the plan, so it
+  // confirms once the plan for them is ready.
+  const gate = useSendAfterDictation([goalMic, titleMic], () => {
     if (!plan || loading) { confirmWhenReady.current = true; return; }
     if (ready && !blocked) void confirm();
   });
@@ -112,7 +115,7 @@ export function ItemConfirmation({ draftKey, item, actionId, target, retry, agai
       <p>{projectDisplayName(target.project)} · {PHASE_TEXT[target.phase] ?? target.phase}</p>
       <button type="button" className="hib-row-btn" onClick={onFind} disabled={submitting || submitted}>Choose another task</button></div>}
     {!again && !attach && !retry && !work && <>
-      <label>Task title<input data-draft-key={itemDraftKey(draftKey, `${field}title`)} value={title} readOnly={submitting || submitted} onChange={e => change(setTitle, e.target.value)} /></label>
+      <label>Task title<MicInput data-draft-key={itemDraftKey(draftKey, `${field}title`)} value={title} readOnly={submitting || submitted} setText={(text) => change(setTitle, text)} micRef={titleMic} /></label>
       <label>Project</label><div className="hii-projects" role="group" aria-label="Project">
         {(response?.projects ?? [{ name: '' }]).map(p => <button type="button" key={p.name} aria-pressed={project === p.name}
           className="hib-row-btn" disabled={submitting || submitted} onClick={() => change(setProject, p.name)}>{projectDisplayName(p.name)}</button>)}

@@ -20,6 +20,7 @@
 import { useState, useRef, useEffect, type CSSProperties, type FormEvent } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { MicInput } from '@/components/common/BoxMic';
 
 const ICON_LINE_DELETE = (
   <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
@@ -41,6 +42,9 @@ function SeparatorLabel({ id, label, onRename }: {
   onRename?: (id: string, label: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  // The heading being typed or dictated (the composer's mic sits in the box).
+  const [text, setText] = useState('');
+  const startEditing = () => { setText(label ?? ''); setEditing(true); };
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { if (editing) inputRef.current?.select(); }, [editing]);
   if (!onRename) {
@@ -61,7 +65,8 @@ function SeparatorLabel({ id, label, onRename }: {
         // reaches them starts a keyboard DRAG instead of submitting the name.
         onPointerDown={(e) => e.stopPropagation()} draggable={false}
         onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}>
-        <input data-no-draft="rename" ref={inputRef} className="tier-separator-label-input" defaultValue={label ?? ''}
+        <MicInput data-no-draft="rename" ref={inputRef} className="tier-separator-label-input" fieldClassName="tier-separator-label-field mic-field-compact"
+          value={text} setText={setText}
           placeholder="Heading…" autoFocus
           onBlur={commit}
           onKeyDown={(e) => {
@@ -74,7 +79,7 @@ function SeparatorLabel({ id, label, onRename }: {
   return label ? (
     <span className="tier-separator-label" title="Rename heading"
       onPointerDown={(e) => e.stopPropagation()}
-      onClick={(e) => { e.stopPropagation(); setEditing(true); }}>
+      onClick={(e) => { e.stopPropagation(); startEditing(); }}>
       {label}
     </span>
   ) : (
@@ -82,7 +87,7 @@ function SeparatorLabel({ id, label, onRename }: {
       draggable={false}
       onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
       onPointerDown={(e) => e.stopPropagation()}
-      onClick={(e) => { e.stopPropagation(); setEditing(true); }}>
+      onClick={(e) => { e.stopPropagation(); startEditing(); }}>
       {ICON_LINE_EDIT}
     </button>
   );

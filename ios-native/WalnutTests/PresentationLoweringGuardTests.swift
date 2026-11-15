@@ -86,9 +86,6 @@ final class PresentationLoweringGuardTests: XCTestCase {
         case parentKeeps
         /// Not presented: a tab's own page or a pushed page, which a push does not close.
         case notPresented
-        /// An alert's text field: an alert cannot hold, so its words stay in the state behind it
-        /// until his own Cancel or answer ends them, and it opens on them again.
-        case alert
     }
 
     private static let inputKeeping: [String: (keeps: Keeps, why: String)] = [
@@ -97,15 +94,14 @@ final class PresentationLoweringGuardTests: XCTestCase {
         "Walnut/Views/Calendar/CalendarFilterSheet.swift": (.savedOnChange, "each toggle is the calendar's filter, applied at once"),
         "Walnut/Views/Calendar/CalendarRows.swift": (.notPresented, "the month view's quick-add row, on the Calendar tab itself"),
         "Walnut/Views/Calendar/CalendarTabView.swift": (.notPresented, "the tab's own view switch"),
-        "Walnut/Views/Chat/ChatDrawer.swift": (.alert, "rename: renameDraftFor keeps his words for the same chat; the agent switch applies at once"),
-        "Walnut/Views/Chat/ChatView.swift": (.alert, "the first-message dialogs: their words stay for the same node (orgFirstMessageFor)"),
+        "Walnut/Views/Chat/ChatDrawer.swift": (.savedOnChange, "the agent switch applies at once; rename asks in a DictatedTextPrompt whose words stay per chat in renameDrafts (PromptDrafts)"),
         "Walnut/Views/Chat/ComposerView.swift": (.draft("ComposerDrafts"), "the composer's words and pictures; the camera holds a push while up"),
         "Walnut/Views/Inbox/CeoNoteSheet.swift": (.draft("ComposerDrafts"), "the note to the CEO, per letter"),
         "Walnut/Views/Inbox/InboxItemConfirmation.swift": (.draft("InboxItemStore"), "the item's fields, per item and action, in the app-wide store"),
         "Walnut/Views/Inbox/InboxItemTaskSelector.swift": (.draft("InboxItemStore"), "the search and the pick, in the app-wide store"),
         "Walnut/Views/Inbox/LetterReaderView.swift": (.notPresented, "a pushed page; its reply is kept by LetterReplyStore"),
         "Walnut/Views/Notes/NoteEditorView.swift": (.savedOnChange, "the raw Markdown sheet's edits are adopted on any dismiss (adoptRawEdits)"),
-        "Walnut/Views/Notes/NotesView.swift": (.alert, "New Note: the name stays until Create or Cancel; the search is the tab's own"),
+        "Walnut/Views/Notes/NotesView.swift": (.notPresented, "the search is the tab's own; New Note asks in a DictatedTextPrompt whose name stays in newNoteName until Create or Cancel"),
         "Walnut/Views/Org/OrgNodePage.swift": (.notPresented, "the page's own view switch"),
         "Walnut/Views/Org/OrgNodeTasksView.swift": (.savedOnChange, "its grouping is kept in AppStorage"),
         "Walnut/Views/Org/OrgThreadsView.swift": (.draft("ComposerDrafts"), "a Follow up's words and pictures, per thread"),
@@ -117,7 +113,6 @@ final class PresentationLoweringGuardTests: XCTestCase {
         "Walnut/Views/Sessions/PermissionRequestCard.swift": (.draft("PermissionAnswerDrafts"), "a note, the picks, other text and pictures, per request"),
         "Walnut/Views/Sessions/SessionComposerSheets.swift": (.holds, "a fork's words; a note changed from the saved one"),
         "Walnut/Views/Sessions/SessionExtrasSheets.swift": (.holds, "a side question being written"),
-        "Walnut/Views/Sessions/SessionLifecycleDialogs.swift": (.alert, "rename: only Cancel or Rename end the words"),
         "Walnut/Views/Sessions/SessionPathPicker.swift": (.holds, "a path typed and not picked"),
         "Walnut/Views/Sessions/SessionQueueViews.swift": (.holds, "a queued message changed from what is queued"),
         "Walnut/Views/Settings/AppleHealthView.swift": (.notPresented, "a Settings page; each switch is saved as it changes"),
@@ -126,6 +121,7 @@ final class PresentationLoweringGuardTests: XCTestCase {
         "Walnut/Views/Settings/RoutinesView.swift": (.notPresented, "a Settings page; each switch is saved as it changes"),
         "Walnut/Views/Settings/SettingsView.swift": (.notPresented, "the Settings tab itself"),
         "Walnut/Views/SetupView.swift": (.notPresented, "the pairing screen, shown before any push can come"),
+        "Walnut/Views/Shared/DictatedTextPrompt.swift": (.parentKeeps, "a binding into the presenter's state: renames (ChatDrawer, SessionLifecycleDialogs), first messages (ChatView, kept per chat in ComposerDrafts by PromptDraft) and a new note's name, which only Cancel or the answer end"),
         "Walnut/Views/Shared/ReplyPictures.swift": (.holds, "the camera holds a push while it is up; the pictures are their composer's"),
         "Walnut/Views/Tasks/TaskDetailSheet.swift": (.holds, "a title being renamed; a due day picked and not Set"),
         "Walnut/Views/Tasks/TaskFieldEditorSheet.swift": (.holds, "the description or note editor changed from where it started"),
@@ -163,7 +159,7 @@ final class PresentationLoweringGuardTests: XCTestCase {
                 XCTAssertGreaterThan(holds, 0, "\(path) is listed as holding a push but has no holdsNavigation")
             case .draft(let store):
                 XCTAssertGreaterThan(Self.count(store, in: code), 0, "\(path) is listed as keeping a draft in \(store) but never names it")
-            case .savedOnChange, .parentKeeps, .notPresented, .alert:
+            case .savedOnChange, .parentKeeps, .notPresented:
                 break
             }
         }

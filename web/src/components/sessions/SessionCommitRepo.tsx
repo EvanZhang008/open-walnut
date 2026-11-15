@@ -15,7 +15,7 @@ import {
   type RepoSelection,
 } from '@/components/sessions/sessionCommitModel';
 import { log } from '@/utils/log';
-import { BoxMic, MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { BoxMic, MicField, type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 
 const HUNK_PREVIEW_LINES = 40;
@@ -163,6 +163,7 @@ export function SessionCommitRepo(props: {
   const messageMic = useRef<BoxMicHandle | null>(null);
   const prBodyBox = useRef<HTMLTextAreaElement | null>(null);
   const prBodyMic = useRef<BoxMicHandle | null>(null);
+  const prTitleMic = useRef<BoxMicHandle | null>(null);
   const writeMessage = msgDraft.setText;
   const { job, begin } = useCommitJob(sessionId, props.initialJob);
   const [lastCommit, setLastCommit] = useState<{ sha: string; shortSha: string; subject: string; indexError?: string } | null>(null);
@@ -223,7 +224,7 @@ export function SessionCommitRepo(props: {
   const openPr = () => { prBodyMic.current?.clear(); onConfirm(null); void start({ action: 'pr', branch: repo.branch, title: prTitle, body: prBody }); };
   // Commit and Open PR pressed while their box's mic records wait for its last words.
   const commitGate = useSendAfterDictation([messageMic], commit);
-  const prGate = useSendAfterDictation([prBodyMic], openPr);
+  const prGate = useSendAfterDictation([prTitleMic, prBodyMic], openPr);
 
   const suggest = async () => {
     const { diff, files } = selectedDiffText(repo, sel);
@@ -331,7 +332,7 @@ export function SessionCommitRepo(props: {
       {confirm === 'pr' && repo.upstream && (
         <div className="scd-confirm" data-testid="scd-confirm" role="group" aria-label="Confirm pull request">
           <div>Open a pull request from <b>{repo.branch}</b> on <b>{repo.upstream.remote}</b>?</div>
-          <input className="app-modal-input" data-draft-key={prDraft.key ?? undefined} value={prTitle} onChange={(e) => setPrTitle(e.target.value)} placeholder="Title" aria-label="Pull request title" />
+          <MicInput className="app-modal-input" data-draft-key={prDraft.key ?? undefined} value={prTitle} setText={setPrTitle} micRef={prTitleMic} target={prDraft.key} placeholder="Title" aria-label="Pull request title" />
           <MicField boxRef={prBodyBox} text={prBody} setText={setPrBody} handleRef={prBodyMic}>
             <textarea ref={prBodyBox} className="scd-message" data-draft-key={prDraft.key ?? undefined} value={prBody} onChange={(e) => setPrBody(e.target.value)} placeholder="Description (optional)" rows={2} aria-label="Pull request description" />
           </MicField>

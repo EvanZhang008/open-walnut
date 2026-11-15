@@ -137,7 +137,11 @@ final class VoiceRecorder: NSObject {
     /// Everything with real cost is deferred to first actual use.
     @ObservationIgnored private lazy var api = WalnutAPI()
     /// Durable audio home. `.shared` in production; tests inject a temp dir.
-    @ObservationIgnored private let store: VoiceRecordingStore
+    @ObservationIgnored let store: VoiceRecordingStore
+    /// Permission and session activation yield before capture starts. Admit one
+    /// start across that interval, not only once state has become recording.
+    @ObservationIgnored private var starting = false
+    var canStart: Bool { state == .idle && !starting }
     /// Test seam — replaces the network upload so the persistence/retry state
     /// machine runs without a server. nil in production.
     @ObservationIgnored var uploadOverride: ((Data) async throws -> String)?
@@ -154,6 +158,9 @@ final class VoiceRecorder: NSObject {
     /// into the Personal AI chat and drop the text into the session's draft, with
     /// no user action at all.
     @ObservationIgnored var surface: String = ""
+    /// A plain field offers only its own saved takes. The chat keeps the global
+    /// recovery tray for older or orphaned recordings.
+    @ObservationIgnored var restrictRecoveryToSurface = false
 
     /// Does this recorder adopt takes with NO origin stamp? Exactly one composer
     /// may say yes: the one that serves the Home-screen voice quick action (the
@@ -210,6 +217,12 @@ final class VoiceRecorder: NSObject {
     /// `errorMessage`. NO duration limit: the take runs until the user stops
     /// it (or an interruption forces a graceful, preserving stop).
     func start() async -> Bool {
+        guard canStart else { return false }
+        starting = true
+        defer { starting = false }
+        #if DEBUG && targetEnvironment(simulator)
+        if let started = beginSilentUITestTake() { return started }
+        #endif
         ensureRegistered()
         ensureObservers()
         errorMessage = nil
@@ -540,10 +553,11 @@ final class VoiceRecorder: NSObject {
         surface.isEmpty ? nil : surface
     }
 
-    /// May this recorder count, retry or discard `recording`? Every take but a
-    /// Talk to Walnut one, which only the Talk recorder sees (`talkSurface`).
+    /// Plain fields count, retry and discard only their own takes. The global
+    /// chat recovery tray sees non-Talk takes; Talk retains its separate outbox.
     func showsHere(_ recording: VoiceRecordingStore.Recording) -> Bool {
-        (recording.surface == Self.talkSurface) == (surface == Self.talkSurface)
+        if restrictRecoveryToSurface { return !surface.isEmpty && recording.surface == surface }
+        return (recording.surface == Self.talkSurface) == (surface == Self.talkSurface)
     }
 
     /// May an AUTOMATIC drain (foreground, reconnect, appear) touch this take?
@@ -1020,6 +1034,9 @@ final class VoiceRecorder: NSObject {
     /// the session is switched off on a background thread, one switch-off at a
     /// time, in the queue the speaker shares (`AudioSessionHandoff`).
     private func deactivateSessionOffMain() {
+        #if DEBUG && targetEnvironment(simulator)
+        if isSilentUITestDictation { return }
+        #endif
         AudioSessionHandoff.deactivateOffMain()
     }
 

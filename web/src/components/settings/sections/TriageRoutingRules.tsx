@@ -3,7 +3,9 @@
  * triage batch reads (src/core/triage/routing-rules.ts). The user, Main and the VPs write the same
  * rules (ops triage_rule_set / triage_rule_delete); each row says who wrote it and what it routed.
  */
-import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { MicField, type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { SettingsGroup, SettingsLoadingRow, SettingsNotice } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
@@ -58,6 +60,8 @@ function RuleEditor({ rule, tasks, onSaved, onCancel }: {
   const from = useDraft(keys.from, { baseline: rule?.match.from ?? '' });
   const subject = useDraft(keys.subject, { baseline: rule?.match.subject ?? '' });
   const note = useDraft(keys.note, { baseline: rule?.note ?? '' });
+  const noteBox = useRef<HTMLTextAreaElement>(null);
+  const noteMic = useRef<BoxMicHandle | null>(null);
   const query = useDraft(keys.query);
   // The picked task is a choice, not typed text: plain state, so it never outlives this editor
   // (as a draft it came back in the next new rule, and "Change" could not clear it).
@@ -75,7 +79,7 @@ function RuleEditor({ rule, tasks, onSaved, onCancel }: {
   const listOpen = picking;
   // Enter saves from a text field, Escape cancels (the picker's own keys come first).
   const onFieldKey = (e: KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void save(); }
+    if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); gate.send(); }
     else if (e.key === 'Escape') { e.preventDefault(); clearAll(); onCancel(); }
   };
   const onPickerKey = (e: KeyboardEvent) => {
@@ -104,7 +108,7 @@ function RuleEditor({ rule, tasks, onSaved, onCancel }: {
   };
 
   const clearAll = () => discardEditorDrafts(id);
-  const save = async () => {
+  const saveNow = async () => {
     if (!from.text.trim() && !subject.text.trim()) { setError(ROUTING_COPY.matchRequired); return; }
     if (!taskId) { setError(ROUTING_COPY.taskRequired); return; }
     setSaving(true);
@@ -122,6 +126,9 @@ function RuleEditor({ rule, tasks, onSaved, onCancel }: {
       setSaving(false);
     }
   };
+
+  // Save (the button, or Enter in a field) waits for a note still being dictated, then saves it too.
+  const gate = useSendAfterDictation([noteMic], () => void saveNow(), keys.note);
 
   return (
     <div className="trr-editor" data-testid="triage-rule-editor" data-editor-id={id}>
@@ -155,11 +162,11 @@ function RuleEditor({ rule, tasks, onSaved, onCancel }: {
             // Focus left the search and its list (an option click keeps it inside): close the list.
             if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setPicking(false);
           }}>
-            <input className="settings-input" data-testid="triage-rule-task-search" data-draft-key={keys.query} value={query.text}
+            <MicInput fieldClassName="settings-mic-field trr-task-search-field" className="settings-input" data-testid="triage-rule-task-search" data-draft-key={keys.query} value={query.text}
               placeholder="Search your open tasks" autoFocus={!!changedFrom} onFocus={() => setPicking(true)} onKeyDown={onPickerKey}
               role="combobox" aria-label={ROUTING_COPY.task} aria-expanded={listOpen} aria-controls={`trr-picks-${id}`}
               aria-activedescendant={matches[active] ? `trr-pick-${id}-${matches[active]!.id}` : undefined}
-              onChange={(e) => { query.setText(e.target.value); setPicking(true); setActive(0); setError(null); }} />
+              setText={(text) => { query.setText(text); setPicking(true); setActive(0); setError(null); }} />
             {listOpen && (
               <div className="trr-picks" role="listbox" aria-label="Tasks" id={`trr-picks-${id}`}>
                 {matches.length === 0 && <div className="trr-pick-empty">No open task matches.</div>}
@@ -181,15 +188,17 @@ function RuleEditor({ rule, tasks, onSaved, onCancel }: {
       </div>
       <label className="trr-field">
         <span>{ROUTING_COPY.note}</span>
-        <textarea className="settings-input trr-note-input" rows={3} data-testid="triage-rule-note" onKeyDown={onFieldKey}
-          data-draft-key={keys.note} value={note.text} maxLength={500}
-          placeholder="optional, e.g. the contractor for the kitchen job" onChange={(e) => { note.setText(e.target.value); setError(null); }} />
+        <MicField fieldClassName="settings-mic-field trr-note-field" boxRef={noteBox} text={note.text} setText={(t) => { note.setText(t); setError(null); }} handleRef={noteMic} target={keys.note} disabled={saving}>
+          <textarea ref={noteBox} className="settings-input trr-note-input" rows={3} data-testid="triage-rule-note" onKeyDown={onFieldKey}
+            data-draft-key={keys.note} value={note.text} maxLength={500}
+            placeholder="optional, e.g. the contractor for the kitchen job" onChange={(e) => { note.setText(e.target.value); setError(null); }} />
+        </MicField>
       </label>
       {error && <p className="settings-row-error trr-error" role="alert" data-testid="triage-rule-error">{error}</p>}
       <div className="trr-editor-actions">
         {/* mousedown keeps focus where it is: closing the task list on blur moved these buttons
             under the pointer, and the first click landed nowhere. */}
-        <SettingsButton variant="primary" data-testid="triage-rule-save" onMouseDown={(e) => e.preventDefault()} busy={saving} busyLabel="Saving…" onClick={() => { void save(); }}>Save rule</SettingsButton>
+        <SettingsButton variant="primary" data-testid="triage-rule-save" onMouseDown={(e) => e.preventDefault()} busy={saving} busyLabel="Saving…" onClick={gate.send} {...dictationWaitProps(gate)}>Save rule</SettingsButton>
         <SettingsButton variant="text" onMouseDown={(e) => e.preventDefault()} onClick={() => { clearAll(); onCancel(); }}>Cancel</SettingsButton>
       </div>
     </div>

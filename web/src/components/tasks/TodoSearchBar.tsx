@@ -13,6 +13,7 @@ import { PhoneQueuedUpdatesPill } from './PhoneQueuedUpdatesPill';
 import { homeListScroller } from './phone-row-behavior';
 import { pageShortcutBlocked } from '@/utils/page-shortcut';
 import { isCommand } from '@/keyboard/shortcut-overrides';
+import { MicInput } from '@/components/common/BoxMic';
 
 /** A blur this soon after a keystroke, with no user gesture, was not the user's. */
 const TYPING_GUARD_MS = 2000;
@@ -149,7 +150,7 @@ export function TodoSearchBar({
   return (
     <div className="todo-search-bar">
       <span className="todo-search-icon">{ICON_SEARCH}</span>
-      <input data-no-draft="search"
+      <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="search"
         ref={inputRef}
         type={phone ? 'search' : 'text'}
         enterKeyHint={phone ? 'search' : undefined}
@@ -157,7 +158,7 @@ export function TodoSearchBar({
         placeholder={phone ? 'Search' : 'Search tasks...  \u2318K'}
         onFocus={phone ? openLayer : undefined}
         value={draftQuery}
-        onChange={(e) => updateQuery(e.target.value)}
+        setText={updateQuery}
         onKeyDown={handleKeyDown}
         onBlur={handleBlur}
       />

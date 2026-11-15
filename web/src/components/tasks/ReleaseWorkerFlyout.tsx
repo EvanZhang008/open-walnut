@@ -9,6 +9,7 @@ import { subtaskPlaceLabel } from './subtask-index';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { RELEASE_FILTER_FROM, releaseCandidates } from './team-menu-model';
 import '@/styles/subtask-pill.css';
+import { MicInput } from '@/components/common/BoxMic';
 
 /**
  * "Release a worker…": pick one of `leader`'s workers to let go. The worker
@@ -109,11 +110,11 @@ export function ReleaseWorkerFlyout({ open, anchorRef, leader, onClose, onPicked
     >
       <div className="adopt-worker-title">Release a worker of &ldquo;{orgDisplayTitle(leader)}&rdquo;</div>
       {all.length >= RELEASE_FILTER_FROM && (
-        <input data-no-draft="search"
+        <MicInput fieldClassName="adopt-worker-filter-field mic-field-compact" data-no-draft="search"
           className="adopt-worker-filter"
           placeholder="Filter workers…"
           value={filter}
-          onChange={(e) => { setFilter(e.target.value); setActive(0); setError(null); }}
+          setText={(text) => { setFilter(text); setActive(0); setError(null); }}
           onKeyDown={onFilterKey}
           aria-label="Filter workers"
           autoFocus

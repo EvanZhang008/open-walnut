@@ -62,6 +62,10 @@ private struct VoiceDictationLifecycle: ViewModifier {
     private func attach() {
         voice.surface = surface
         voice.ownsOrphanTakes = false
+        voice.restrictRecoveryToSurface = true
+        #if DEBUG && targetEnvironment(simulator)
+        voice.prepareSilentUITestTranscription()
+        #endif
         voice.onAutoStopText = { text in insert(text) }
         voice.onDrainedText = { text in insert(text) }
         voice.refreshPending()
@@ -155,9 +159,30 @@ struct VoiceDictationField<Field: View>: View {
     var revealID: String?
     @ViewBuilder var field: () -> Field
 
+    var body: some View {
+        VoiceDictationBody(
+            text: $text, surface: surface, box: box, placement: placement,
+            blocked: blocked, recorder: recorder, refocus: refocus,
+            revealID: revealID, field: field
+        )
+        // Recorder and callback identity follow the object, not the view seat.
+        // A late take retains the old binding instead of writing to the next box.
+        .id(surface)
+    }
+}
+
+private struct VoiceDictationBody<Field: View>: View {
+    @Binding var text: String
+    let surface: String
+    let box: String
+    let placement: VoiceDictationField<Field>.Placement
+    let blocked: Bool
+    let recorder: VoiceRecorder?
+    let refocus: (() -> Void)?
+    let revealID: String?
+    @ViewBuilder var field: () -> Field
     @State private var ownRecorder = VoiceRecorder()
     @FocusState private var focused: Bool
-    /// The screen's Send gate, when its Send waits for words spoken here.
     @Environment(\.dictationSendGate) private var sendGate
 
     private var voice: VoiceRecorder { recorder ?? ownRecorder }
@@ -217,7 +242,7 @@ struct VoiceDictationField<Field: View>: View {
         .voiceDictation(voice, surface: surface) { insert($0, focus: false) }
         // A Send that waits for this box's words puts them in the same way, quietly:
         // the box is about to be sent, so the keyboard stays where it is.
-        .joinsSendGate(sendGate, voice: voice) { insert($0, focus: false) }
+        .joinsSendGate(sendGate, voice: voice, key: surface) { insert($0, focus: false) }
         // A group, so the field, the mic and the notices keep their own identifiers.
         .accessibilityElement(children: .contain)
     }

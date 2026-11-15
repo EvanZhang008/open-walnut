@@ -15,6 +15,7 @@ import type { FilterBarController, FilterDim } from './filter-bar-types';
 import { COUNT_DIMS, FilterValueList, SEARCHABLE_DIMS, SEARCH_AFTER, useFilterWriter } from './FilterValueList';
 import { CustomTime, TimeBasis } from './FilterTimeControls';
 import type { RemoveHow } from './FilterOverflowMenu';
+import { MicInput } from '@/components/common/BoxMic';
 
 function searchWord(dim: FilterDim): string {
   if (dim === 'project') return 'projects';
@@ -62,7 +63,7 @@ export function FilterChipMenu({ controller: c, dim, anchorRef, onClose, onRemov
       {searchable && (
         <div className="fb-search fb-list-search">
           <span className="fb-search-icon" aria-hidden="true">{ICON_SEARCH}</span>
-          <input data-no-draft="search"
+          <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="search"
             ref={inputRef}
             type="text"
             className="fb-search-input"
@@ -70,7 +71,7 @@ export function FilterChipMenu({ controller: c, dim, anchorRef, onClose, onRemov
             aria-label={`Search ${searchWord(dim)}`}
             value={query}
             autoFocus
-            onChange={(e) => setQuery(e.target.value)}
+            setText={setQuery}
           />
           {query && (
             <button type="button" className="fb-search-clear" aria-label="Clear search" onClick={() => { setQuery(''); inputRef.current?.focus(); }}>

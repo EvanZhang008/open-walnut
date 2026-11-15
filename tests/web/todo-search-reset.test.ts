@@ -2,8 +2,10 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { parseHTML } from 'linkedom';
 import { act, createElement } from '../../web/node_modules/react/index.js';
 import { createRoot } from '../../web/node_modules/react-dom/client.js';
+import { MemoryRouter } from '../../web/node_modules/react-router-dom/dist/index.js';
 
 vi.mock('@/hooks/usePhoneLayout', () => ({ usePhoneLayout: () => false }));
+vi.mock('@/api/stt', () => ({ fetchSttStatus: async () => ({ engine: 'test', configured: true, available: true }) }));
 vi.mock('@/utils/log', () => ({ log: { info: vi.fn() } }));
 vi.mock('../../web/src/components/tasks/PhoneSearchLayer', () => ({ PhoneSearchLayer: () => null }));
 vi.mock('../../web/src/components/tasks/PhonePullToRefresh', () => ({ PhonePullToRefresh: () => null }));
@@ -26,7 +28,7 @@ function harness() {
     onQueryChange,
     onClear,
     async render(query: string, resetVersion: number) {
-      await act(async () => { root.render(createElement(TodoSearchBar, { query, resetVersion, onQueryChange, onClear, isSearching: false })); });
+      await act(async () => { root.render(createElement(MemoryRouter, null, createElement(TodoSearchBar, { query, resetVersion, onQueryChange, onClear, isSearching: false }))); });
     },
     input() { return container.querySelector('input')!; },
     async type(value: string) {
@@ -36,7 +38,7 @@ function harness() {
       await act(async () => { props.onChange({ target: { value } }); });
     },
     async clear() {
-      await act(async () => { container.querySelector('button')!.dispatchEvent(new window.Event('click', { bubbles: true })); });
+      await act(async () => { container.querySelector('.todo-search-clear')!.dispatchEvent(new window.Event('click', { bubbles: true })); });
     },
     async unmount() { await act(async () => { root.unmount(); }); container.remove(); },
   };

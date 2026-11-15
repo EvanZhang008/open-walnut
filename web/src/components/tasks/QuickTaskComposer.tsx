@@ -294,7 +294,7 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
   const gate = useSendAfterDictation([mic], () => create(draftRef.current));
 
   const handleContainerKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+    if (event.defaultPrevented || event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (event.key === 'Tab') {
       // Contain focus while the dialog is open — Tab must not reach background controls.
       const focusables = popoverRef.current?.querySelectorAll<HTMLElement>(

@@ -13,9 +13,16 @@ final class EditorDictationBridge {
     private(set) weak var textView: WalnutTextView?
     /// Starts a take. Set by the screen that owns the recorder.
     var onMicTap: (() -> Void)?
+    /// Whether a take may start now (the recorder is idle). A tap while a take records or is
+    /// transcribed changes nothing: not the caret, not the cell its words are for. nil = always.
+    var canStart: (() -> Bool)?
     /// Where the words go: the selection when the mic was tapped. nil = the
     /// end of the note.
     private var anchor: NSRange?
+    /// The table cell the mic was tapped in (`TableInlineEditor`): its words go at the end of
+    /// that cell. A cell gone by then (the table was finished meanwhile) sends them to the end
+    /// of the note, so spoken words are never dropped.
+    private weak var cell: UITextField?
     private var waiting: [String] = []
 
     func attach(_ textView: WalnutTextView) {
@@ -29,9 +36,20 @@ final class EditorDictationBridge {
     /// The bar's mic: remember the caret, put the keyboard away while the
     /// person speaks, start the take.
     func micTapped() {
-        guard let textView else { return }
+        guard let textView, canStart?() ?? true else { return }
         anchor = textView.selectedRange
+        // A take for the note's text: never the cell an earlier take was meant for.
+        cell = nil
         _ = textView.resignFirstResponder()
+        onMicTap?()
+    }
+
+    /// A table cell's mic (its keyboard's bar): the same take, its words for that cell.
+    func micTapped(in field: UITextField) {
+        guard textView != nil, canStart?() ?? true else { return }
+        cell = field
+        anchor = nil
+        _ = field.resignFirstResponder()
         onMicTap?()
     }
 
@@ -46,6 +64,19 @@ final class EditorDictationBridge {
         guard let textView, let coordinator = textView.coordinator, !waiting.isEmpty else { return }
         let pieces = waiting
         waiting = []
+        if let cell, cell.window != nil {
+            self.cell = nil
+            var text = cell.text ?? ""
+            for words in pieces {
+                if let joined = VoiceDictationText.appending(words, to: text) { text = joined }
+            }
+            cell.text = text
+            // The table editor reads its cells on this event, as it does for typing.
+            cell.sendActions(for: .editingChanged)
+            cell.becomeFirstResponder()
+            return
+        }
+        cell = nil
         var at = anchor ?? NSRange(location: textView.textStorage.length, length: 0)
         for words in pieces {
             at = coordinator.insertDictation(words, in: textView, at: at)

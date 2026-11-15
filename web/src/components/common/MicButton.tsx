@@ -6,7 +6,8 @@
  * Clicking it opens a dropdown with: retry models, vocabulary, copy audio path.
  */
 
-import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useId } from 'react';
+import { MicPopover, ownsMicControl } from '@/components/common/MicPopover';
 import { useNavigate } from 'react-router-dom';
 import { useSpeechToText } from '@/hooks/useSpeechToText';
 import { SttDiffModal } from '@/components/common/SttDiffModal';
@@ -87,6 +88,7 @@ function MicWaveform({ level }: { level: number }) {
 }
 
 export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, language, disabled, size = 'md', insertBox, onSettled }: MicButtonProps) {
+  const popupOwner = useId();
   /**
    * Did this recording deliver a FINAL text? Tracked because the mic now KEEPS the
    * user's selection (see the mousedown note below), and something has to release it
@@ -204,22 +206,6 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
   // menu is the fuller recovery surface (Redo, Insert) for the same clip.
   const showErrorBubble = !!error && !isRecording && !isTranscribing && !errorDismissed && !dropdownOpen;
 
-  // The bubble stays up while the user edits the words it is about, so it must
-  // not sit on the text box. A host whose mic lives UNDER its field (the chat
-  // composer) marks the field `data-mic-bubble-anchor`, and the bubble rises
-  // above it, following the field as it grows.
-  const [bubbleLift, setBubbleLift] = useState(0);
-  useLayoutEffect(() => {
-    const wrapper = wrapperRef.current;
-    const field = wrapper?.closest<HTMLElement>('[data-mic-bubble-anchor]');
-    if (!showErrorBubble || !wrapper || !field) { setBubbleLift(0); return; }
-    const measure = () => setBubbleLift(Math.max(0, wrapper.getBoundingClientRect().top - field.getBoundingClientRect().top));
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(field);
-    return () => ro.disconnect();
-  }, [showErrorBubble]);
-
   // Register this input as the sidebar Voice panel's insert target. Last mount
   // wins (the composer the user is looking at); onTranscribe already knows how
   // to insert at the caret of its own textarea.
@@ -266,7 +252,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
   useEffect(() => {
     if (!dropdownOpen) return;
     const handler = (e: MouseEvent) => {
-      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
+      if (wrapperRef.current && !ownsMicControl(wrapperRef.current.parentElement, e.target as Node)) {
         setDropdownOpen(false);
       }
     };
@@ -499,6 +485,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
   // Right-click opens the history/retry dropdown — a persistent entry point
   // that survives page reloads (the chevron only appears after a transcription).
   const handleContextMenu = (e: React.MouseEvent) => {
+    e.stopPropagation();
     if (sttUnavailable || isRecording) return;
     e.preventDefault();
     setShowChevron(true);
@@ -513,7 +500,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
   const fmtLatency = (ms?: number) => (typeof ms === 'number' ? `${(ms / 1000).toFixed(1)}s` : '');
 
   return (
-    <div className="mic-btn-wrapper" ref={wrapperRef}>
+    <div className="mic-btn-wrapper" ref={wrapperRef} data-mic-id={popupOwner}>
       <button
         className={btnClass}
         // THE BUTTON ONLY, never the wrapper: the wrapper also holds this mic's
@@ -548,31 +535,27 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
         )}
       </button>
       {slowStart && starting && (
-        <div className="mic-start-hint" role="status">
+        <MicPopover anchor={wrapperRef} owner={popupOwner} aboveField className="mic-start-hint" role="status">
           <span>Starting the microphone: speak when it turns red</span>
-        </div>
+        </MicPopover>
       )}
       {/* Non-destructive dead-mic warning — shown WHILE recording; recording is never
           auto-stopped, and this clears itself the moment sound is detected again. */}
       {isRecording && silenceWarning && (
-        <div className="mic-silence-warning" role="status">
+        <MicPopover anchor={wrapperRef} owner={popupOwner} aboveField className="mic-silence-warning" role="status">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
             <line x1="12" y1="9" x2="12" y2="13" />
             <line x1="12" y1="17" x2="12.01" y2="17" />
           </svg>
           <span>{silenceWarning}</span>
-        </div>
+        </MicPopover>
       )}
       {/* Transcription failure — visible bubble (title-attr tooltips are undiscoverable).
           Offers Retry when the audio is still held; dismissed by starting a new recording
           (toggleRecording clears error) or clicking ✕. */}
       {showErrorBubble && (
-        <div
-          className="mic-silence-warning mic-error-bubble"
-          role="alert"
-          style={bubbleLift ? { bottom: `calc(100% + ${bubbleLift + 6}px)` } : undefined}
-        >
+        <MicPopover anchor={wrapperRef} owner={popupOwner} aboveField className="mic-silence-warning mic-error-bubble" role="alert" onClose={() => setErrorDismissed(true)}>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="10" />
             <line x1="12" y1="8" x2="12" y2="12" />
@@ -587,7 +570,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
           <button type="button" className="mic-error-dismiss" aria-label="Dismiss" onClick={() => setErrorDismissed(true)}>
             ✕
           </button>
-        </div>
+        </MicPopover>
       )}
       {/* Chevron badge — appears after transcription (outside button to avoid nested interactive elements) */}
       {showChevron && !isRecording && !isTranscribing && (
@@ -606,7 +589,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
 
       {/* Dropdown */}
       {dropdownOpen && (
-        <div className="mic-retry-dropdown">
+        <MicPopover anchor={wrapperRef} owner={popupOwner} className="mic-retry-dropdown" onClose={() => setDropdownOpen(false)}>
           {/* Model retry */}
           <div className="mic-retry-header">Retry with model</div>
           {modelsLoading && <div className="mic-retry-item mic-retry-loading">Loading...</div>}
@@ -794,7 +777,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
               </button>
             </>
           )}
-        </div>
+        </MicPopover>
       )}
 
       {/* Full-size A/B diff popup (word-level, latency per engine) */}

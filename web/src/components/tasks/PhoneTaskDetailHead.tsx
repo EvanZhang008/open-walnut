@@ -13,6 +13,8 @@ import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { log } from '@/utils/log';
 import { isLeaderWords } from '@/api/leader-presence';
 import { PhonePhaseSheet } from './PhonePhaseSheet';
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation } from '@/hooks/useSendAfterDictation';
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'failed';
 
@@ -62,6 +64,11 @@ export function PhoneTaskDetailHead({ task }: { task: Task }) {
     }
   }, [draft, store, task.id, task.title]);
 
+  // The title can be dictated: Enter (done) waits for words still on their way, then saves by leaving the box.
+  const titleBox = useRef<HTMLTextAreaElement>(null);
+  const titleMic = useRef<BoxMicHandle | null>(null);
+  const titleGate = useSendAfterDictation([titleMic], () => titleBox.current?.blur(), task.id);
+
   const setPhase = useCallback((phase: string) => {
     if (store?.tasks.some((t) => t.id === task.id)) { store.setPhase(task.id, phase); return; }
     void apiUpdateTask(task.id, { phase }).catch((err) => {
@@ -74,7 +81,9 @@ export function PhoneTaskDetailHead({ task }: { task: Task }) {
   return (
     <div className="phone-detail-head" data-testid="phone-detail-head">
       <label className="phone-detail-title-label" htmlFor={`phone-detail-title-${task.id}`}>Title</label>
+      <MicField boxRef={titleBox} text={draft} setText={(t) => setDraft(t.replace(/\n/g, ' '))} handleRef={titleMic} target={task.id}>
       <textarea data-no-draft="autosave"
+        ref={titleBox}
         id={`phone-detail-title-${task.id}`}
         className="phone-detail-title"
         value={draft}
@@ -84,10 +93,11 @@ export function PhoneTaskDetailHead({ task }: { task: Task }) {
         onChange={(e) => setDraft(e.target.value.replace(/\n/g, ' '))}
         onBlur={() => { void commit(); }}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLTextAreaElement).blur(); }
-          if (e.key === 'Escape') { e.stopPropagation(); editingRef.current = false; setDraft(task.title); (e.target as HTMLTextAreaElement).blur(); }
+          if (e.key === 'Enter') { e.preventDefault(); titleGate.send(); }
+          if (e.key === 'Escape') { e.stopPropagation(); titleMic.current?.clear(); editingRef.current = false; setDraft(task.title); (e.target as HTMLTextAreaElement).blur(); }
         }}
       />
+      </MicField>
       {save !== 'idle' && (
         <p className={`phone-detail-save is-${save}`} role={save === 'failed' ? 'alert' : 'status'}>{save === 'failed' ? failedText : SAVE_TEXT[save]}</p>
       )}

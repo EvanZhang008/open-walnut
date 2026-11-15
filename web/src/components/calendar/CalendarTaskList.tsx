@@ -15,6 +15,7 @@ import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { PriorityBadge } from '@/components/common/PriorityBadge';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { projectDisplayName } from '@/utils/project-display';
+import { MicInput } from '@/components/common/BoxMic';
 
 const DONE_PHASES = new Set(['COMPLETE', 'CANCELLED']);
 
@@ -158,12 +159,12 @@ export const CalendarTaskList = memo(function CalendarTaskList({ tasks }: Props)
     <div className="cal-rail" data-testid="cal-rail">
       <div className="cal-rail-header">
         <span className="cal-rail-title">Unscheduled</span>
-        <input
+        <MicInput fieldClassName="mic-field-compact"
           data-no-draft="search"
           className="cal-rail-search"
           placeholder="Filter…"
           value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+          setText={setFilter}
         />
       </div>
       <div className="cal-rail-scroll">

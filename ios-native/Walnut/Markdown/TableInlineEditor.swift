@@ -26,6 +26,11 @@ final class TableInlineEditor: UIView, UITextFieldDelegate {
     /// Final write: non-nil table commits edits (+ autosave); nil deletes the
     /// table. The coordinator removes this overlay from the view tree.
     private let onCommit: (EditableTable?) -> Void
+    /// The note's own mic (`EditorDictationBridge`), offered on each cell's keyboard bar so
+    /// words can be said into a cell; nil = no mic.
+    private weak var dictation: EditorDictationBridge?
+    /// The cells' keyboard bar with the mic, one for every cell (only one is ever up).
+    private lazy var cellBar: UIToolbar = makeCellBar()
 
     private let gridBackground = GridBackgroundView()
     /// Row-major, header row first: `fields[row * columnCount + col]`.
@@ -41,9 +46,11 @@ final class TableInlineEditor: UIView, UITextFieldDelegate {
 
     init(
         attachment: TableAttachment, charIndex: Int, in textView: UITextView,
+        dictation: EditorDictationBridge? = nil,
         onLiveResize: @escaping (EditableTable) -> Void,
         onCommit: @escaping (EditableTable?) -> Void
     ) {
+        self.dictation = dictation
         self.attachment = attachment
         self.charIndex = charIndex
         self.textView = textView
@@ -221,6 +228,7 @@ final class TableInlineEditor: UIView, UITextFieldDelegate {
         field.autocapitalizationType = .sentences
         field.returnKeyType = .next
         field.delegate = self
+        if dictation != nil { field.inputAccessoryView = cellBar }
         field.accessibilityIdentifier = "table.cell.\(row).\(col)"
         field.addTarget(self, action: #selector(fieldChanged(_:)), for: .editingChanged)
         return field
@@ -245,6 +253,26 @@ final class TableInlineEditor: UIView, UITextFieldDelegate {
         for (i, field) in fields.enumerated() {
             setCell(field.text ?? "", row: i / cols, col: i % cols)
         }
+    }
+
+    // MARK: - Voice (the note's mic, for one cell)
+
+    private func makeCellBar() -> UIToolbar {
+        let bar = UIToolbar(frame: CGRect(x: 0, y: 0, width: 320, height: 44))
+        let mic = UIBarButtonItem(
+            image: UIImage(systemName: "mic"), style: .plain, target: self, action: #selector(cellMicTapped)
+        )
+        mic.accessibilityIdentifier = "voice-mic.table-cell"
+        mic.accessibilityLabel = "Voice input"
+        bar.items = [UIBarButtonItem(systemItem: .flexibleSpace), mic]
+        bar.sizeToFit()
+        return bar
+    }
+
+    /// The words go at the end of the cell being typed in; the take is the note's own.
+    @objc private func cellMicTapped() {
+        guard let cell = fields.first(where: \.isFirstResponder) else { return }
+        dictation?.micTapped(in: cell)
     }
 
     // MARK: - UITextFieldDelegate (Return = next cell / commit on last)

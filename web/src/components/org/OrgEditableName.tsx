@@ -4,6 +4,7 @@
  * name. A blank name goes back to the default (the server's rule, org-settings.ts).
  */
 import { useEffect, useRef, useState } from 'react';
+import { MicInput } from '@/components/common/BoxMic';
 
 interface Props {
   value: string;
@@ -44,18 +45,20 @@ export function OrgEditableName({ value, label, onSave, className = '', testId, 
     onSave(next).catch(() => setFailed(true));
   };
   return (
-    <input data-no-draft="rename"
+    <MicInput data-no-draft="rename"
       ref={input}
       className={`org-name-input ${className}`}
+      fieldClassName="mic-field-compact mic-field-grow"
       data-testid={`${testId}-input`}
       aria-label={`Rename ${label}`}
       value={draft}
       maxLength={maxLength}
       onClick={(e) => e.stopPropagation()}
-      onChange={(e) => setDraft(e.target.value)}
+      setText={setDraft}
+      // Enter saves once a name still being dictated is in (the box's send gate).
+      onEnter={commit}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') { e.preventDefault(); commit(); }
-        else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelled.current = true; setEditing(false); }
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelled.current = true; setEditing(false); }
       }}
       onBlur={commit}
     />

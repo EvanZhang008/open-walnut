@@ -8,8 +8,29 @@
 /* Block, so the wrapper is exactly the box: an inline-block textarea leaves a
    baseline gap under it and the mic, placed from the wrapper's bottom, sits on the border. */
 .mic-field > textarea { display: block; padding-right: 48px; }
+/* Over a box's own `padding` shorthand (`.oc-field textarea`, `textarea.settings-input`): which
+   file loads last must never decide whether typed words run under the mic. */
+.mic-field.mic-field-area > textarea { padding-right: 48px; }
+/* The wrapper takes the box's place in the layout (a page's own flex or width rule goes on the
+   wrapper, `fieldClassName`); the box fills it, over a page's own width or padding rule. */
+.mic-field.mic-field-inline > input { width: 100%; box-sizing: border-box; padding-right: 36px; }
+/* Inline in a row: the wrapper grows as the bare box did (`flex: 1`). */
+.mic-field-grow { flex: 1 1 auto; min-width: 0; }
 .mic-field-mic { position: absolute; right: 4px; }
 /* Left of the textarea's resize grip, which owns the corner. */
 .mic-field-area .mic-field-mic { bottom: 6px; right: 14px; }
 .mic-field-inline .mic-field-mic { top: 50%; transform: translateY(-50%); }
 .mic-field-mic .mic-btn { min-width: 28px; height: 28px; }
+/* A compact one-line box (a quick-add row at 12px): a smaller mic that fits its height. */
+.mic-field-compact .mic-field-mic .mic-btn { min-width: 22px; height: 22px; }
+.mic-field-compact .mic-field-mic { right: 2px; }
+.mic-field.mic-field-compact.mic-field-inline > input { padding-right: 28px; }
+
+/* Search boxes with their own clear (x) at the right edge: the clear sits left of the mic, and the
+   box keeps room for both. */
+.kanban-search-box .kanban-search-clear { right: 27px; }
+.kanban-search-box .mic-field.mic-field-inline > input.kanban-search { padding-right: 50px; }
+.notes-tree-search .notes-search-clear { right: 42px; }
+.notes-tree-search .mic-field.mic-field-inline > input.notes-search-input { padding-right: 54px; }
+.settings-container .settings-filter-wrap .settings-filter-clear { right: 28px; }
+.settings-container .settings-filter-wrap .mic-field.mic-field-inline > input.settings-filter { padding-right: 50px; }

@@ -37,6 +37,7 @@ import { useShowPriority } from '@/hooks/useShowPriority';
 import { STATUS_OPTIONS } from './TaskStatusControl';
 import { STATUS_FILTER_ORDER, foldQueryStatus, statusChipLabel } from './filter-bar-model';
 import { projectDisplayName } from '@/utils/project-display';
+import { MicInput } from '@/components/common/BoxMic';
 import {
   QUERY_PRIORITY_OPTIONS,
   QUERY_SORT_OPTIONS,
@@ -300,11 +301,11 @@ export function ViewDropdown({
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" aria-hidden>
               <circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" />
             </svg>
-            <input data-no-draft="search"
+            <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="search"
               ref={searchRef}
               autoFocus
               value={search}
-              onChange={(e) => { setSearch(e.target.value); setCursor(0); }}
+              setText={(text) => { setSearch(text); setCursor(0); }}
               onKeyDown={handleSearchKey}
               placeholder="Search all filters…"
               aria-label="Search filters"

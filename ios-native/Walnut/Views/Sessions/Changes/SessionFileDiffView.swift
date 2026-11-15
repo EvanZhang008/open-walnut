@@ -74,7 +74,7 @@ struct SessionFileDiffView: View {
         .toolbar { diffToolbar }
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar.dynamicTypeSize(...Self.largestChromeType) }
         .sheet(item: $composer) { target in
-            DiffCommentComposer(target: target, onAdd: { text in
+            DiffCommentComposer(target: target, sessionId: review.sessionId, onAdd: { text in
                 addComment(target, text)
             }, onSendNow: { text in
                 await sendNow(target, text)

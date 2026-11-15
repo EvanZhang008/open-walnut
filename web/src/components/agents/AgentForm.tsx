@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, type SetStateAction } from 'react';
-import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { MicField, type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { useDraftValue } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
@@ -102,10 +102,12 @@ export function AgentForm({ agent, cloneFrom, onSave, onCancel }: AgentFormProps
   const descMic = useRef<BoxMicHandle | null>(null);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
   const promptMic = useRef<BoxMicHandle | null>(null);
+  const nameMic = useRef<BoxMicHandle | null>(null);
 
   // Another agent fills the form (from the draft hook): a dictation on its way belongs to the old one.
   useEffect(() => {
     if (!source) return;
+    nameMic.current?.clear();
     descMic.current?.clear();
     promptMic.current?.clear();
   }, [source, cloneFrom]);
@@ -146,6 +148,7 @@ export function AgentForm({ agent, cloneFrom, onSave, onCancel }: AgentFormProps
     const sentKey = kept.key;
     try {
       // A transcription still on its way lands after the save, unsaved: drop it now.
+      nameMic.current?.clear();
       descMic.current?.clear();
       promptMic.current?.clear();
       await onSave(input);
@@ -158,7 +161,7 @@ export function AgentForm({ agent, cloneFrom, onSave, onCancel }: AgentFormProps
   }
 
   // Create/Update while a mic records waits for the final words, then saves.
-  const gate = useSendAfterDictation([descMic, promptMic], () => void submitNow());
+  const gate = useSendAfterDictation([nameMic, descMic, promptMic], () => void submitNow());
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     gate.send();
@@ -197,12 +200,14 @@ export function AgentForm({ agent, cloneFrom, onSave, onCancel }: AgentFormProps
             </div>
             <div className="form-group">
               <label htmlFor="agent-name">Name</label>
-              <input
+              <MicInput
                 data-draft-key={kept.key ?? undefined}
                 id="agent-name"
                 type="text"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                setText={setName}
+                micRef={nameMic}
+                onEnter={gate.send}
                 placeholder="e.g. Session Summarizer"
               />
             </div>

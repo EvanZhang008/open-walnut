@@ -28,9 +28,13 @@ import { PluginIcon, pluginTileTints } from '../PluginIcon'
 import { useSerialSave, type BuildPatch, type OnSave } from './GeneralSection'
 import { GrowingTextarea, HardRulesEditor, TryVerdict, summaryOf, verdictOf, wordsFromText, type AiAnswer } from './task-provider-parts'
 import { listTaskProviders, testProviderRules, type ProviderRules } from '@/api/private-tasks'
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic'
 import { log } from '@/utils/log'
 import '@/styles/settings-controls.css'
 import '@/styles/settings-task-providers.css'
+import '@/styles/settings-mic.css'
+import { MicInput } from '@/components/common/BoxMic'
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation'
 
 export { wordsFromText }
 
@@ -98,6 +102,8 @@ function ProviderCard({ provider: p, tint, save }: {
     { rowKey: key('ai-rule'), kind: 'text', multiline: true },
   )
   const ruleText = rule.inputProps.value
+  const ruleBox = useRef<HTMLTextAreaElement>(null)
+  const ruleMic = useRef<BoxMicHandle | null>(null)
   const isDefaultRule = !ruleText.trim() || ruleText.trim() === p.ai_rule_default
 
   // Which saved lines the server cannot use, and which one a typed title matches.
@@ -128,6 +134,11 @@ function ProviderCard({ provider: p, tint, save }: {
       .then((r) => settle(r.ai ?? { error: 'No answer' }))
       .catch((err) => settle({ error: err instanceof Error ? err.message : String(err) }))
   }
+  // Ask AI (the button, or Enter in the title) waits for words still being dictated into the title
+  // or the rule, then asks about the full words.
+  const sampleMic = useRef<BoxMicHandle | null>(null)
+  const askNow = () => { if (ai.value && sample.trim() && !match && answer !== 'asking') askAi() }
+  const askGate = useSendAfterDictation([sampleMic, ruleMic], askNow)
 
   const on = check.value
   const verdict = verdictOf({ sample, hardMatch: match, ai: ai.value, answer })
@@ -180,7 +191,8 @@ function ProviderCard({ provider: p, tint, save }: {
                     className="tp-link"
                     data-testid={id('ai-rule-reset')}
                     onClick={() => {
-                      rule.inputProps.onChange({ target: { value: p.ai_rule_default } } as Parameters<typeof rule.inputProps.onChange>[0])
+                      ruleMic.current?.clear()
+                      rule.setText(p.ai_rule_default)
                       void rule.flush()
                     }}
                   >
@@ -191,14 +203,18 @@ function ProviderCard({ provider: p, tint, save }: {
               htmlFor={id('ai-rule')}
               error={rule.error}
               control={(
-                <GrowingTextarea
-                  id={id('ai-rule')}
-                  data-testid={id('ai-rule')}
-                  data-no-draft="autosave"
-                  className="tp-ai-rule-text"
-                  maxLength={4000}
-                  {...rule.inputProps}
-                />
+                // The composer's mic inside the box: the rule is words, and it saves as typed words do (on leaving the box).
+                <MicField fieldClassName="settings-mic-field" boxRef={ruleBox} text={ruleText} setText={rule.setText} handleRef={ruleMic}>
+                  <GrowingTextarea
+                    boxRef={ruleBox}
+                    id={id('ai-rule')}
+                    data-testid={id('ai-rule')}
+                    data-no-draft="autosave"
+                    className="tp-ai-rule-text"
+                    maxLength={4000}
+                    {...rule.inputProps}
+                  />
+                </MicField>
               )}
             />
           )}
@@ -210,7 +226,7 @@ function ProviderCard({ provider: p, tint, save }: {
             control={(
               <div className="tp-try">
                 <div className="tp-try-field">
-                  <input
+                  <MicInput fieldClassName="settings-mic-field mic-field-grow"
                     id={id('try')}
                     data-testid={id('try')}
                     data-no-draft="autosave"
@@ -218,16 +234,18 @@ function ProviderCard({ provider: p, tint, save }: {
                     className="settings-input tp-try-input"
                     placeholder="A task title"
                     value={sample}
-                    onChange={(e) => setSample(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && ai.value && sample.trim() && !match && answer !== 'asking') askAi() }}
+                    setText={setSample}
+                    micRef={sampleMic}
+                    onEnter={askGate.send}
                   />
                   {ai.value && (
                     <SettingsButton
                       data-testid={id('ask-ai')}
-                      disabled={!sample.trim() || !!match || answer === 'asking'}
+                      disabled={(!sample.trim() || !!match || answer === 'asking') && !askGate.micBusy && !askGate.waiting}
                       busy={answer === 'asking'}
                       busyLabel="Asking"
-                      onClick={askAi}
+                      onClick={askGate.send}
+                      {...dictationWaitProps(askGate)}
                     >
                       Ask AI
                     </SettingsButton>

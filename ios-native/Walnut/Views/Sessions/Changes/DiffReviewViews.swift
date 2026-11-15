@@ -6,6 +6,9 @@ import UIKit
 /// swipe: the sheet holds while it has any, and Cancel asks first.
 struct DiffCommentComposer: View {
     let target: CommentComposerTarget
+    /// The session the review belongs to: part of the mic's surface key, so a saved take comes
+    /// back only into a comment box on this session's lines.
+    let sessionId: String
     let onAdd: (String) -> Void
     let onSendNow: (String) async -> Bool
     let onSave: (String) -> Void
@@ -15,13 +18,17 @@ struct DiffCommentComposer: View {
     @State private var sendFailed = false
     @State private var askDiscard = false
     @FocusState private var focused: Bool
+    /// Add, Send Now and Save wait for words still being spoken or transcribed into the comment
+    /// (`DictationSendGate`).
+    @State private var sendGate = DictationSendGate()
     @Environment(\.dismiss) private var dismiss
     /// The quote's height grows with the text size (96 points at the default).
     @ScaledMetric(relativeTo: .caption) private var quoteHeight: CGFloat = 96
 
-    init(target: CommentComposerTarget, onAdd: @escaping (String) -> Void,
+    init(target: CommentComposerTarget, sessionId: String, onAdd: @escaping (String) -> Void,
          onSendNow: @escaping (String) async -> Bool, onSave: @escaping (String) -> Void) {
         self.target = target
+        self.sessionId = sessionId
         self.onAdd = onAdd
         self.onSendNow = onSendNow
         self.onSave = onSave
@@ -29,6 +36,11 @@ struct DiffCommentComposer: View {
     }
 
     private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+    /// The box's stable key: the comment being edited, or the lines a new one is on.
+    private var voiceSurface: String { "diff-comment:\(sessionId):\(target.editing?.id ?? target.loc)" }
+    /// The buttons that take the words stay live while words are being spoken in.
+    private var noWords: Bool { trimmed.isEmpty && !sendGate.isDictating && !sendGate.isWaiting }
+
     private var dirty: Bool { trimmed != (target.editing?.comment ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
 
     var body: some View {
@@ -47,22 +59,27 @@ struct DiffCommentComposer: View {
                         .frame(maxHeight: min(quoteHeight, 160))
                         .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
                     }
-                    ZStack(alignment: .topLeading) {
-                        TextEditor(text: $text)
-                            .focused($focused)
-                            // While Send Now is out the words are the ones going.
-                            .disabled(sending)
-                            .frame(minHeight: 110)
-                            .scrollContentBackground(.hidden)
-                            .padding(6)
-                            .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-                            .accessibilityIdentifier("diff.comment.text")
-                        if text.isEmpty {
-                            Text("What should the agent know or change here?")
-                                .foregroundStyle(.tertiary)
-                                .padding(.horizontal, 11)
-                                .padding(.vertical, 14)
-                                .allowsHitTesting(false)
+                    VoiceDictationField(
+                        text: $text, surface: voiceSurface, box: "diff-comment", placement: .below,
+                        blocked: sending, refocus: { focused = true }
+                    ) {
+                        ZStack(alignment: .topLeading) {
+                            TextEditor(text: $text)
+                                .focused($focused)
+                                // While Send Now is out the words are the ones going.
+                                .disabled(sending)
+                                .frame(minHeight: 110)
+                                .scrollContentBackground(.hidden)
+                                .padding(6)
+                                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                                .accessibilityIdentifier("diff.comment.text")
+                            if text.isEmpty {
+                                Text("What should the agent know or change here?")
+                                    .foregroundStyle(.tertiary)
+                                    .padding(.horizontal, 11)
+                                    .padding(.vertical, 14)
+                                    .allowsHitTesting(false)
+                            }
                         }
                     }
                     if sendFailed {
@@ -91,11 +108,13 @@ struct DiffCommentComposer: View {
                 .padding(16)
             }
             .scrollDismissesKeyboard(.interactively)
+            .dictationSendGate(sendGate)
             .navigationTitle(target.editing == nil ? "Comment" : "Edit Comment")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
+                        sendGate.cancelWait()
                         if dirty { askDiscard = true } else { dismiss() }
                     }
                     .disabled(sending)
@@ -103,8 +122,15 @@ struct DiffCommentComposer: View {
                 }
                 if target.editing != nil {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Save") { onSave(trimmed) }
-                            .disabled(trimmed.isEmpty)
+                        Button {
+                            sendGate.send { _ in
+                                guard !trimmed.isEmpty else { return }
+                                onSave(trimmed)
+                            }
+                        } label: {
+                            DictationSendLabel(gate: sendGate, title: "Save")
+                        }
+                            .disabled(noWords)
                             .accessibilityIdentifier("diff.comment.save")
                     }
                 }
@@ -114,33 +140,39 @@ struct DiffCommentComposer: View {
                 Button("Keep Writing", role: .cancel) {}
             }
         }
-        .holdsNavigation(dirty || sending)
+        .holdsNavigation(dirty || sending || sendGate.isWaiting)
         .onAppear { focused = true }
     }
 
     private var sendNowButton: some View {
         Button {
-            Task { await sendNow() }
+            sendGate.send { _ in
+                guard !trimmed.isEmpty else { return }
+                Task { await sendNow() }
+            }
         } label: {
-            if sending { ProgressView() } else { Text("Send Now") }
+            if sending { ProgressView() } else { DictationSendLabel(gate: sendGate, title: "Send Now") }
         }
         // A plain grey button beside the primary one, not a faded tint.
         .buttonStyle(.bordered)
         .tint(Color(uiColor: .systemGray))
         .foregroundStyle(Color(uiColor: .label))
-        .disabled(trimmed.isEmpty || sending)
+        .disabled(noWords || sending)
         .accessibilityIdentifier("diff.comment.sendNow")
     }
 
     private var addButton: some View {
         Button {
-            onAdd(trimmed)
+            sendGate.send { _ in
+                guard !trimmed.isEmpty else { return }
+                onAdd(trimmed)
+            }
         } label: {
-            Label("Add to Review", systemImage: "plus.bubble")
+            DictationSendLabel(gate: sendGate, title: "Add to Review", systemImage: "plus.bubble")
         }
         .buttonStyle(.borderedProminent)
         .tint(Theme.tint)
-        .disabled(trimmed.isEmpty || sending)
+        .disabled(noWords || sending)
         .accessibilityIdentifier("diff.comment.add")
     }
 

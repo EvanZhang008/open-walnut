@@ -27,6 +27,11 @@ struct TaskDetailSheet: View {
     @State private var editingTitle = false
     @State private var titleDraft = ""
     @FocusState private var titleFocused: Bool
+    /// The title's own mic, held here so a blur while it records or transcribes does not commit
+    /// the title before its words land.
+    @State private var titleVoice = VoiceRecorder()
+    /// The title's commit (Return) waits for words still being spoken (`DictationSendGate`).
+    @State private var titleGate = DictationSendGate()
     /// Wave-1 detail plane: full-row readback + delete/field edits.
     @State private var detailController: TaskDetailController
     @State private var fallback: WalnutTask
@@ -144,7 +149,7 @@ struct TaskDetailSheet: View {
             // so the first tap on the project search lost the keyboard and reset the list
             // (2026-11-08, lane B simulator logs). Guard: tests/web/quick-question-name-guard.test.ts.
             .sheet(isPresented: $showProjectPicker) {
-                TaskProjectPicker(current: current.project) { picked in
+                TaskProjectPicker(current: current.project, voiceKey: "task:\(task.id)") { picked in
                     if picked != current.project { apply(.init(project: picked)) }
                 }
             }
@@ -161,7 +166,7 @@ struct TaskDetailSheet: View {
         }
         // A title being renamed is saved only on its commit: a push waits for it rather than
         // close the sheet over it (2026-11-08 review, round 3).
-        .holdsNavigation(editingTitle && titleDraft != current.title)
+        .holdsNavigation((editingTitle && titleDraft != current.title) || titleGate.isWaiting)
         // The Tasks drawer's "Recently opened", from every surface that shows this sheet.
         .onAppear { tasks.recents.recordTask(current) }
     }
@@ -340,22 +345,35 @@ struct TaskDetailSheet: View {
     /// Tap the title to rename it in place. Multi-line because task titles are
     /// sentences; committed on blur, and on the first newline the keyboard's
     /// return key inserts (a vertical-axis TextField does not fire onSubmit).
+    /// Walnut's mic sits beside it while it is edited: a blur while a take records or
+    /// transcribes waits for the words, and Return waits for them through the gate.
     @ViewBuilder
     private var titleView: some View {
         if editingTitle {
-            TextField("Title", text: $titleDraft, axis: .vertical)
-                .font(.title2.weight(.semibold))
-                .focused($titleFocused)
-                .submitLabel(.done)
-                .onSubmit { commitTitle() }
-                .onChange(of: titleDraft) { _, next in
-                    if next.contains(where: \.isNewline) { commitTitle() }
-                }
-                .onChange(of: titleFocused) { _, focused in
-                    if !focused { commitTitle() }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityIdentifier("task.title.edit")
+            VoiceDictationField(
+                text: $titleDraft, surface: "task-title:\(task.id)", box: "task-title",
+                recorder: titleVoice, refocus: { titleFocused = true }
+            ) {
+                TextField("Title", text: $titleDraft, axis: .vertical)
+                    .font(.title2.weight(.semibold))
+                    .focused($titleFocused)
+                    .submitLabel(.done)
+                    .onSubmit { titleGate.send { _ in commitTitle() } }
+                    .onChange(of: titleDraft) { _, next in
+                        guard next.contains(where: \.isNewline) else { return }
+                        // The return key's newline is the commit, never part of the title.
+                        titleDraft = next.split(whereSeparator: \.isNewline).joined(separator: " ")
+                        titleGate.send { _ in commitTitle() }
+                    }
+                    .onChange(of: titleFocused) { _, focused in
+                        // Not while the mic has words on their way: they land, then focus
+                        // comes back to the field, and the next blur commits.
+                        if !focused, titleVoice.state == .idle, !titleGate.isWaiting { commitTitle() }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("task.title.edit")
+            }
+            .dictationSendGate(titleGate)
         } else {
             Button {
                 titleDraft = current.title

@@ -63,6 +63,10 @@ final class DictationSendGate {
     /// replaced) never sends when its words come.
     @ObservationIgnored private var ticket = 0
     @ObservationIgnored private(set) var lastOutcome: Outcome?
+    #if DEBUG
+    /// Hold the final render turn to test cancellation when a sheet disappears.
+    @ObservationIgnored var _testBeforeSend: (() async -> Void)?
+    #endif
 
     /// The accessibility label of a Send button while it waits.
     nonisolated static let waitingLabel = "Waiting for your words, tap to cancel"
@@ -136,12 +140,19 @@ final class DictationSendGate {
                 }
             }
             guard let self, mine == self.ticket, self.isWaiting else { return .cancelled }
+            if outcome == .sentAfterWords {
+                // Keep the wait cancellable through the final render turn: a
+                // sheet dismissed here must never send after it has gone away.
+                await Task.yield()
+                #if DEBUG
+                await self._testBeforeSend?()
+                #endif
+                guard mine == self.ticket, self.isWaiting else { return .cancelled }
+            }
             self.isWaiting = false
             self.lastOutcome = outcome
             AppLog.info("voice", "send wait ended", ["outcome": String(describing: outcome)])
             guard outcome == .sentAfterWords else { return outcome }
-            // One turn for the box to take the words before the send reads it.
-            await Task.yield()
             action(true)
             return outcome
         }

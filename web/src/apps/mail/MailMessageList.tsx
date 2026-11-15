@@ -40,6 +40,7 @@ import { GroupHeader, MailSmartDraftsSections } from './MailSmartDraftsSections'
 import { FolderIcon, SearchIcon } from './mail-icons';
 import { MailGroupedList, MailGroupsFallback, useGroupedMode } from './MailGroupedList';
 import { MailViewMenu } from './MailGroupedHeader';
+import { MicInput } from '@/components/common/BoxMic';
 
 interface Props {
   snapshot: MailSnapshot;
@@ -183,7 +184,7 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
           onSubmit={(event) => { event.preventDefault(); void runMailSearch(draft); }}
         >
           <span className="mail-search-glyph" aria-hidden="true"><SearchIcon size={13} /></span>
-          <input
+          <MicInput fieldClassName="mic-field-grow mic-field-compact"
             data-no-draft="search"
             className="mail-search-input"
             data-testid="mail-search-input"
@@ -191,7 +192,7 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
             value={draft}
             placeholder="Search mail"
             aria-label="Search mail"
-            onChange={(event) => setDraft(event.target.value)}
+            setText={setDraft}
             onKeyDown={(event) => { if (event.key === 'Escape' && search.active) { event.preventDefault(); clear(); } }}
           />
         </form>

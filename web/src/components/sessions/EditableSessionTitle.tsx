@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, type KeyboardEvent } from 'react';
 import { renameSession } from '@/api/sessions';
 import { updateTask } from '@/api/tasks';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
+import { MicInput } from '@/components/common/BoxMic';
 
 interface EditableSessionTitleProps {
   sessionId: string;
@@ -66,11 +67,11 @@ export function EditableSessionTitle({ sessionId, taskId, title, className, onSa
 
   if (editing) {
     return (
-      <input data-no-draft="rename"
+      <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="rename"
         ref={inputRef}
         className="session-panel-title-input"
         value={value}
-        onChange={(e) => setValue(e.target.value)}
+        setText={setValue}
         onBlur={save}
         onKeyDown={handleKeyDown}
         disabled={saving}

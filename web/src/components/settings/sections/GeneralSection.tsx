@@ -13,6 +13,8 @@ import { setTaskbarHideRecentOnly, setTaskbarLeaving, useTaskbarSettings } from 
 import type { TaskbarLeaving } from '@/pages/sessionTaskbar';
 import { AppUpdateRow } from '../AppUpdateRow';
 import { ApprovalsAskRow } from './ApprovalsAskRow';
+import { MicInput } from '@/components/common/BoxMic';
+import '@/styles/settings-mic.css';
 import '@/styles/settings-sections-configure.css';
 
 export type SaveOpts = { rowKey?: string };
@@ -241,13 +243,14 @@ export function GeneralSection({ config, onSave }: Props) {
           htmlFor="settings-name"
           error={name.error}
           control={
-            <input
+            <MicInput
               id="settings-name"
               type="text"
               data-no-draft="autosave"
               className="settings-input settings-input--short"
+              fieldClassName="settings-mic-field settings-mic-field-short"
               placeholder="Your name"
-              {...name.inputProps}
+              {...name.micInputProps}
             />
           }
         />

@@ -9,7 +9,7 @@
  * under `draftKey` until the rule is saved).
  */
 import { useId, useRef, type RefObject } from 'react';
-import { type BoxMicHandle } from '@/components/common/BoxMic';
+import { type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
 import { AnswerBox } from '@/components/common/AnswerBox';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import {
@@ -55,10 +55,13 @@ export function MailCorrectStepWhere(props: StepWhereProps) {
   const next = canGoNext(value, newNameProblem);
   const whyRef = useRef<HTMLTextAreaElement | null>(null);
   const mic = useRef<BoxMicHandle | null>(null);
+  const nameMic = useRef<BoxMicHandle | null>(null);
   // Next moves the card to the rule step: a dictation still on its way stays out of it.
-  const goNextNow = () => { mic.current?.clear(); props.onNext(); };
-  // Next (and the new name's Enter) waits for a live dictation's words, so the note carries them.
-  const gate = useSendAfterDictation([mic], goNextNow);
+  // It runs on the render that holds the final words: a dictated name with a problem stays here.
+  const goNextNow = () => { if (!next) return; mic.current?.clear(); nameMic.current?.clear(); props.onNext(); };
+  // Next (and the new name's Enter) waits for a live dictation's words in the note and the new
+  // group's name, so the step carries them.
+  const gate = useSendAfterDictation([mic, nameMic], goNextNow);
   return (
     <div className="mail-correct-step" data-step="where">
       <p className="mail-correct-title" id={titleId}>{whereSentence(props.currentLabel)}</p>
@@ -93,7 +96,7 @@ export function MailCorrectStepWhere(props: StepWhereProps) {
         </label>
         {value === NEW_GROUP_VALUE && (
           <div className="mail-correct-new-group">
-            <input
+            <MicInput
               data-draft-key={props.draftKey ?? undefined}
               type="text"
               className="mail-correct-input"
@@ -102,8 +105,9 @@ export function MailCorrectStepWhere(props: StepWhereProps) {
               maxLength={MAX_GROUP_NAME}
               value={newName}
               autoFocus
-              onChange={(event) => props.onNewName(event.target.value)}
-              onKeyDown={(event) => { if (event.key === 'Enter' && next) { event.preventDefault(); gate.send(); } }}
+              setText={props.onNewName}
+              micRef={nameMic}
+              onEnter={() => { if (next) gate.send(); }}
             />
             {newNameProblem ? (
               <p className="mail-correct-field-error" role="alert" data-testid="mail-correct-new-group-error">{newNameProblem}</p>

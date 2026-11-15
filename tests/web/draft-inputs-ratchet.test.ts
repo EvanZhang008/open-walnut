@@ -85,10 +85,11 @@ export function boxSites(): BoxSite[] {
       const head = src.slice(src.lastIndexOf('\n', i - 1) + 1, i);
       return /^\s*(\*|\/\/|\/\*)/.test(head) || /(^|\s)\/\/\s/.test(head);
     };
-    for (const m of src.matchAll(/<(textarea|input|ChatInput)\b/g)) {
+    // A <MicInput> is an <input> (the mic inside it): its caller's tag carries the draft attributes.
+    for (const m of src.matchAll(/<(textarea|input|ChatInput|MicInput)\b/g)) {
       if (inComment(m.index!)) continue;
       const tag = openingTag(src, m.index!);
-      const kind = m[1] as BoxSite['kind'];
+      const kind = (m[1] === 'MicInput' ? 'input' : m[1]) as BoxSite['kind'];
       if (kind === 'input') {
         const t = /\btype=["']([\w-]+)["']/.exec(tag)?.[1];
         if (t && NON_TEXT_INPUT_TYPES.has(t)) continue;

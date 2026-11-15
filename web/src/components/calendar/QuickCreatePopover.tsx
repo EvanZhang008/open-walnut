@@ -15,6 +15,8 @@ import type { CreateTaskInput } from '@/api/tasks';
 import { listCalendarSources, type CalendarInfo } from '@/api/calendar';
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 
 export interface CreateSeed {
   /** Slot's date ("YYYY-MM-DD") or datetime ("…T09:00:00"). */
@@ -260,8 +262,11 @@ function EventCreateForm({
   const misordered = !allDay && !!startTime && !!endTime && endTime <= startTime;
   const invalid = incomplete || misordered;
 
-  const submit = async () => {
+  const titleBox = useRef<HTMLInputElement>(null);
+  const titleMic = useRef<BoxMicHandle | null>(null);
+  const submitNow = async () => {
     if (!title.trim() || !calendarId || submitting || invalid) return;
+    titleMic.current?.clear();
     setSubmitting(true);
     setError(null);
     try {
@@ -277,22 +282,27 @@ function EventCreateForm({
       setSubmitting(false);
     }
   };
+  // Enter and Create wait for a title still being dictated, then create the event.
+  const gate = useSendAfterDictation([titleMic], () => void submitNow());
 
   return (
     <div className="cal-event-form" role="dialog" aria-label="Add an event">
-      <input
-        data-draft-key={titleDraft.key ?? undefined}
-        className="cal-event-form-title"
-        placeholder="Event title…"
-        value={title}
-        autoFocus
-        maxLength={200}
-        onChange={(e) => setTitle(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') submit();
-          if (e.key === 'Escape') onClose();
-        }}
-      />
+      <MicField inline boxRef={titleBox} text={title} setText={setTitle} handleRef={titleMic} disabled={submitting}>
+        <input
+          ref={titleBox}
+          data-draft-key={titleDraft.key ?? undefined}
+          className="cal-event-form-title"
+          placeholder="Event title…"
+          value={title}
+          autoFocus
+          maxLength={200}
+          onChange={(e) => setTitle(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); gate.send(); }
+            if (e.key === 'Escape') onClose();
+          }}
+        />
+      </MicField>
       <div className="cal-event-form-when">
         {allDay ? (
           <>
@@ -330,7 +340,7 @@ function EventCreateForm({
       )}
       {error && <div className="cal-event-form-error">{error}</div>}
       <div className="cal-event-form-footer">
-        <button className="cal-event-form-create" disabled={!title.trim() || !calendarId || submitting || invalid} onClick={submit}>
+        <button className="cal-event-form-create" disabled={(!title.trim() && !gate.micBusy && !gate.waiting) || !calendarId || submitting || invalid} onClick={gate.send} {...dictationWaitProps(gate)}>
           {submitting ? 'Creating…' : 'Create event'}
         </button>
         <button onClick={() => { titleDraft.clear(); onClose(); }}>Cancel</button>

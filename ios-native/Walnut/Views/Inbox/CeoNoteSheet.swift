@@ -22,6 +22,8 @@ struct CeoNoteSheet: View {
     /// squeezes the attachment line or the box away.
     @ScaledMetric(relativeTo: .body) private var boxHeight: CGFloat = 150
     @State private var pictureNotice: String?
+    /// Send waits for words still being spoken or transcribed into the note (`DictationSendGate`).
+    @State private var sendGate = DictationSendGate()
 
     /// The server's cap on the note (`content-v1.ts`); longer words are refused, not cut.
     nonisolated static let noteLimit = 8_000
@@ -62,27 +64,34 @@ struct CeoNoteSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     attachment
-                    ZStack(alignment: .topLeading) {
-                        TextEditor(text: note)
-                            .font(.body)
-                            .focused($focused)
-                            .scrollContentBackground(.hidden)
-                            .padding(8)
-                            .background(Theme.tintSoft.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
-                            .accessibilityLabel("Message to the CEO")
-                            .accessibilityIdentifier("\(identifier).ceoNote")
-                        if note.wrappedValue.isEmpty {
-                            Text("What should the CEO do with this?")
+                    // Walnut's mic under the box: spoken words land after what is typed, kept
+                    // in the item's draft, and only Send sends them.
+                    VoiceDictationField(
+                        text: note, surface: key, box: "ceo-note", placement: .below,
+                        refocus: { focused = true }
+                    ) {
+                        ZStack(alignment: .topLeading) {
+                            TextEditor(text: note)
                                 .font(.body)
-                                .foregroundStyle(Theme.secondaryOnCard)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .padding(.horizontal, 13)
-                                .padding(.vertical, 16)
-                                .allowsHitTesting(false)
-                                .accessibilityHidden(true)
+                                .focused($focused)
+                                .scrollContentBackground(.hidden)
+                                .padding(8)
+                                .background(Theme.tintSoft.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+                                .accessibilityLabel("Message to the CEO")
+                                .accessibilityIdentifier("\(identifier).ceoNote")
+                            if note.wrappedValue.isEmpty {
+                                Text("What should the CEO do with this?")
+                                    .font(.body)
+                                    .foregroundStyle(Theme.secondaryOnCard)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .padding(.horizontal, 13)
+                                    .padding(.vertical, 16)
+                                    .allowsHitTesting(false)
+                                    .accessibilityHidden(true)
+                            }
                         }
+                        .frame(height: boxHeight)
                     }
-                    .frame(height: boxHeight)
                     HStack(spacing: 4) {
                         ReplyPictureButton(
                             images: pictures, notice: $pictureNotice, idPrefix: "\(identifier).ceoNote",
@@ -103,21 +112,29 @@ struct CeoNoteSheet: View {
                 .padding()
             }
             .scrollDismissesKeyboard(.interactively)
+            .dictationSendGate(sendGate)
             .navigationTitle("Talk to CEO")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") { sendGate.cancelWait(); dismiss() }
                         .accessibilityIdentifier("\(identifier).ceoNoteCancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Send") {
-                        let words = note.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                        dismiss()
-                        onSend(words, pictures.wrappedValue)
+                    Button {
+                        sendGate.send { _ in
+                            // Read again after a wait: the spoken words are in the draft now.
+                            guard Self.canSend(note.wrappedValue) else { return }
+                            let words = note.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                            dismiss()
+                            onSend(words, pictures.wrappedValue)
+                        }
+                    } label: {
+                        DictationSendLabel(gate: sendGate, title: "Send")
                     }
                     .fontWeight(.semibold)
-                    .disabled(!Self.canSend(note.wrappedValue))
+                    // Live while words are being spoken in, even into an empty box.
+                    .disabled(!Self.canSend(note.wrappedValue) && !sendGate.isDictating && !sendGate.isWaiting)
                     .accessibilityHint("Sends your message to the CEO with this email attached.")
                     .accessibilityIdentifier("\(identifier).ceoNoteSend")
                 }

@@ -9,11 +9,16 @@ import SwiftUI
 struct TaskProjectPicker: View {
     /// "" = Inbox.
     let current: String
+    /// What is being filed, e.g. "task:<id>" or "new-session": the mic's surface key, so a take
+    /// saved in one picker comes back only into the picker for the same thing.
+    let voiceKey: String
     let onPick: (String) -> Void
 
     @Environment(TasksStore.self) private var tasks
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
+    /// Create waits for words still being spoken or transcribed into the name (`DictationSendGate`).
+    @State private var sendGate = DictationSendGate()
 
     var body: some View {
         NavigationStack {
@@ -21,10 +26,14 @@ struct TaskProjectPicker: View {
                 HStack {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
-                    TextField("Search or new project name", text: $query)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .accessibilityIdentifier("task.project.search")
+                    VoiceDictationField(
+                        text: $query, surface: "project-picker:\(voiceKey)", box: "project-search"
+                    ) {
+                        TextField("Search or new project name", text: $query)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .accessibilityIdentifier("task.project.search")
+                    }
                 }
                 .padding(12)
                 .background(.background, in: RoundedRectangle(cornerRadius: 12))
@@ -42,9 +51,12 @@ struct TaskProjectPicker: View {
                             }
                             if let newName {
                                 Button {
-                                    pick(newName)
+                                    sendGate.send { _ in
+                                        // Read again after a wait: the spoken words are in the name now.
+                                        if let name = self.newName { pick(name) }
+                                    }
                                 } label: {
-                                    Label("Create \"\(newName)\"", systemImage: "plus.circle")
+                                    DictationSendLabel(gate: sendGate, title: "Create \"\(newName)\"", systemImage: "plus.circle")
                                         .font(.body)
                                         .foregroundStyle(Theme.tint)
                                 }
@@ -60,13 +72,14 @@ struct TaskProjectPicker: View {
                     }
                 }
             }
+            .dictationSendGate(sendGate)
             // A new project's name being typed is kept nowhere else: a push waits for it.
-            .holdsNavigation(!query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .holdsNavigation(!query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || sendGate.isWaiting)
             .navigationTitle("Project")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") { sendGate.cancelWait(); dismiss() }
                 }
             }
         }

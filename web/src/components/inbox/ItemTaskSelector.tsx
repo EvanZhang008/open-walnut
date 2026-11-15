@@ -7,6 +7,7 @@ import { ItemTaskPreview } from './ItemTaskPreview';
 import { PHASE_TEXT } from './item-receipt-model';
 import { projectDisplayName } from '@/utils/project-display';
 import { itemDraftKey, useItemDraft } from './item-drafts';
+import { MicInput } from '@/components/common/BoxMic';
 
 export function ItemTaskSelector({ open, letterId, itemId, onClose, onChoose, onNavigate }: {
   open: boolean; letterId: string; itemId: string; onClose: () => void; onChoose: (task: InboxTaskCandidate) => void;
@@ -74,7 +75,7 @@ export function ItemTaskSelector({ open, letterId, itemId, onClose, onChoose, on
     <div className="hii-selector" role="dialog" aria-modal="true" aria-label="Choose a task" ref={root}>
       <header><h2>Choose a task</h2><button type="button" className="hib-row-btn" onClick={onClose} aria-label="Close task selector">×</button></header>
       <label htmlFor={searchId} className={preview ? 'hii-hidden' : ''}>Search tasks
-        <input id={searchId} aria-label="Search tasks" ref={input} data-draft-key={itemDraftKey(draftKey, 'query')} value={query} placeholder="Search by title, project, or full task ID" onChange={e => setQuery(e.target.value)} />
+        <MicInput id={searchId} aria-label="Search tasks" ref={input} data-draft-key={itemDraftKey(draftKey, 'query')} value={query} placeholder="Search by title, project, or full task ID" setText={setQuery} />
       </label>
       {preview ? <div className="hii-selector-list"><ItemTaskPreview letterId={letterId} itemId={itemId} task={preview}
         onBack={() => setPreview(undefined)} onNavigate={onNavigate} /></div>

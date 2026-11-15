@@ -7,7 +7,8 @@
  * Keys stop here: Esc must cancel the edit only (not pop the page or close the
  * drawer), and arrows / printable keys must not drive the tree under it.
  */
-import { useEffect, useRef, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { MicInput } from '@/components/common/BoxMic';
 
 export interface ThreadInlineRenameProps {
   initial: string;
@@ -21,6 +22,8 @@ export interface ThreadInlineRenameProps {
 
 export function ThreadInlineRename({ initial, max, ariaLabel, className, placeholder, onSave, onCancel }: ThreadInlineRenameProps) {
   const ref = useRef<HTMLInputElement | null>(null);
+  // The words typed or dictated (the composer's mic sits in the box).
+  const [text, setText] = useState(initial);
   // Enter saves AND blurs; the blur must not save a second time.
   const settled = useRef(false);
 
@@ -47,16 +50,19 @@ export function ThreadInlineRename({ initial, max, ariaLabel, className, placeho
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     e.stopPropagation();
     if (e.nativeEvent.isComposing) return;
-    if (e.key === 'Enter') { e.preventDefault(); save(); }
-    else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    // Enter is the box's send gate (onEnter): a title still being dictated is in before it saves.
+    if (e.key === 'Escape') { e.preventDefault(); cancel(); }
   };
 
   return (
-    <input data-no-draft="rename"
+    <MicInput data-no-draft="rename"
       ref={ref}
       type="text"
       className={className ? `thread-inline-rename ${className}` : 'thread-inline-rename'}
-      defaultValue={initial}
+      fieldClassName="mic-field-compact mic-field-grow"
+      value={text}
+      setText={setText}
+      onEnter={save}
       maxLength={max}
       aria-label={ariaLabel}
       placeholder={placeholder}

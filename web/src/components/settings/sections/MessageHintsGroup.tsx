@@ -4,7 +4,9 @@
  * /api/v1/hints routes agents use through hint_list / hint_set / hint_reset, so a
  * person and an agent can never see two different rule sets.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { apiDelete, apiGet, apiPut } from '@/api/client';
 import { log } from '@/utils/log';
 import { useDraft } from '@/hooks/useDraft';
@@ -14,6 +16,7 @@ import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { SegmentedControl } from '../inputs/SegmentedControl';
 import { SettingsCheckbox } from '../inputs/SettingsCheckbox';
 import { setShowWalnutAdditions, useShowWalnutAdditions } from '@/hooks/useShowWalnutAdditions';
+import '@/styles/settings-mic.css';
 
 type Trigger = 'every_turn' | 'every_n_turns' | 'session_start' | 'after_compaction' | 'on_change' | 'on_drift' | 'on_request';
 type Role = 'main' | 'lead' | 'worker' | 'ask' | 'other';
@@ -73,8 +76,10 @@ function HintEditor({ hint, onSave, onReset }: {
   const textDraft = useDraft(hint.built_in ? null : draftKey('message-hint-text', hint.kind), { baseline: hint.text ?? '' });
   const { text, setText } = textDraft;
   const [busy, setBusy] = useState(false);
+  const textBox = useRef<HTMLTextAreaElement>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
   const toggle = <T,>(list: T[], v: T, on: boolean) => (on ? [...new Set([...list, v])] : list.filter((x) => x !== v));
-  const save = async () => {
+  const saveNow = async () => {
     setBusy(true);
     try {
       const n = Number(every);
@@ -90,6 +95,8 @@ function HintEditor({ hint, onSave, onReset }: {
       setBusy(false);
     }
   };
+  // Save waits for a hint's words still being dictated, then saves them too.
+  const gate = useSendAfterDictation([mic], () => void saveNow());
   return (
     <div className="message-hint-editor" data-testid={`message-hint-editor-${hint.kind}`}>
       <p className="settings-row-help">{hint.description}</p>
@@ -117,15 +124,18 @@ function HintEditor({ hint, onSave, onReset }: {
           label="Text"
           htmlFor={`hint-text-${hint.kind}`}
           control={(
-            <textarea
-              id={`hint-text-${hint.kind}`}
-              data-draft-key={textDraft.key ?? undefined}
-              className="settings-input settings-input--long"
-              rows={3}
-              maxLength={2000}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-            />
+            <MicField fieldClassName="settings-mic-field" boxRef={textBox} text={text} setText={setText} handleRef={mic} disabled={busy}>
+              <textarea
+                ref={textBox}
+                id={`hint-text-${hint.kind}`}
+                data-draft-key={textDraft.key ?? undefined}
+                className="settings-input settings-input--long"
+                rows={3}
+                maxLength={2000}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+              />
+            </MicField>
           )}
         />
       )}
@@ -178,7 +188,7 @@ function HintEditor({ hint, onSave, onReset }: {
         />
       ))}
       <div className="message-hint-actions">
-        <button type="button" className="settings-button settings-button-primary" disabled={busy} onClick={() => void save()} data-testid={`hint-save-${hint.kind}`}>
+        <button type="button" className="settings-button settings-button-primary" disabled={busy} onClick={gate.send} data-testid={`hint-save-${hint.kind}`} {...dictationWaitProps(gate)}>
           <span className="settings-button-label">Save</span>
         </button>
         {(hint.overridden || !hint.built_in) && (
@@ -201,6 +211,8 @@ export function MessageHintsGroup({ replyLanguage }: { replyLanguage?: string } 
   const textDraft = useDraft(draftKey('message-hint-new', 'text'));
   const { text: newKind, setText: setNewKind } = kindDraft;
   const { text: newText, setText: setNewText } = textDraft;
+  const newTextBox = useRef<HTMLInputElement>(null);
+  const newMic = useRef<BoxMicHandle | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -225,6 +237,14 @@ export function MessageHintsGroup({ replyLanguage }: { replyLanguage?: string } 
       return false;
     }
   };
+  const addNow = () => {
+    if (!newKind.trim() || !newText.trim()) return;
+    void put(newKind.trim(), { text: newText.trim() }).then((ok) => {
+      if (ok) { newMic.current?.clear(); kindDraft.clear(); textDraft.clear(); }
+    });
+  };
+  // Add (the button, or Enter in the text) waits for the hint's words still being dictated.
+  const addGate = useSendAfterDictation([newMic], addNow);
   const reset = async (kind: string) => {
     try {
       await apiDelete(`/api/v1/hints/${encodeURIComponent(kind)}`);
@@ -305,21 +325,26 @@ export function MessageHintsGroup({ replyLanguage }: { replyLanguage?: string } 
                 value={newKind}
                 onChange={(e) => setNewKind(e.target.value.toLowerCase())}
               />
-              <input
-                aria-label="Hint text"
-                data-testid="hint-new-text"
-                data-draft-key={textDraft.key ?? undefined}
-                className="settings-input settings-input--long"
-                placeholder="Keep answers short."
-                value={newText}
-                onChange={(e) => setNewText(e.target.value)}
-              />
+              <MicField inline fieldClassName="settings-mic-field message-hint-add-text" boxRef={newTextBox} text={newText} setText={setNewText} handleRef={newMic}>
+                <input
+                  ref={newTextBox}
+                  aria-label="Hint text"
+                  data-testid="hint-new-text"
+                  data-draft-key={textDraft.key ?? undefined}
+                  className="settings-input settings-input--long"
+                  placeholder="Keep answers short."
+                  value={newText}
+                  onChange={(e) => setNewText(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); addGate.send(); } }}
+                />
+              </MicField>
               <button
                 type="button"
                 className="settings-button settings-button-default"
                 data-testid="hint-add"
-                disabled={!newKind.trim() || !newText.trim()}
-                onClick={() => void put(newKind.trim(), { text: newText.trim() }).then((ok) => { if (ok) { kindDraft.clear(); textDraft.clear(); } })}
+                disabled={!newKind.trim() || (!newText.trim() && !addGate.micBusy && !addGate.waiting)}
+                onClick={addGate.send}
+                {...dictationWaitProps(addGate)}
               >
                 <span className="settings-button-label">Add</span>
               </button>

@@ -607,6 +607,11 @@ textarea.settings-input {
   flex: 0 0 140px;
   width: 140px;
 }
+/* The text box with its mic (MicField) takes the rest of the row, as the bare box did. */
+.message-hint-add > .message-hint-add-text {
+  flex: 1 1 240px;
+  min-width: 0;
+}
 
 /* Settings, Message hints: whose hint a row is. */
 .message-hint-origin-badge {

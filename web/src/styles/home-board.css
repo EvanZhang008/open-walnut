@@ -6,6 +6,7 @@
 .home-board-switch { display: flex; gap: 2px; padding: 3px; border-radius: 7px; background: var(--bg-secondary); }
 .home-board-switch button { padding: 5px 10px; border: 0; border-radius: 5px; color: var(--fg-muted); background: transparent; font: inherit; font-size: 12px; white-space: nowrap; }
 .home-board-switch button[aria-pressed="true"] { background: var(--bg); color: var(--fg); box-shadow: 0 1px 3px #0002; }
+.home-board-controls > .home-board-search { width: 150px; }
 .home-board-controls input { width: 150px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; font-size: 12px; }
 .home-board-close { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 5px; color: var(--fg-muted); background: transparent; }
 .home-board-close:hover { color: var(--fg); background: var(--bg-secondary); }
@@ -59,6 +60,7 @@
   .home-board-head { flex-wrap: wrap; padding: 12px; }
   .home-board-controls { flex-wrap: wrap; gap: 7px; width: 100%; margin-left: 0; }
   .home-board-controls input { flex: 1; min-width: 70px; width: auto; }
+  .home-board-controls > .home-board-search { flex: 1; min-width: 70px; width: auto; }
   .home-board-close { margin-left: auto; }
   .home-board-hint { flex-basis: 76px; padding: 9px 12px; }
 }

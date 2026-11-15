@@ -4,7 +4,8 @@
  * input clears and keeps focus for the next); a failure gives the title back
  * with `Couldn't add: <reason>`. `key:value` tokens in the title become tags
  * (G15): their chips show live under the input and × drops one (and its
- * token). No session starts.
+ * token). No session starts. The title can be dictated (the composer's mic inside the box): Enter
+ * waits for words still on their way, then adds.
  */
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
@@ -12,6 +13,8 @@ import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ICON_PLUS } from '@/components/common/Icons';
 import { TagChip } from '@/components/tasks/TagChip';
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation } from '@/hooks/useSendAfterDictation';
 import { READ_ONLY_TITLE, type KanbanWriteApi } from './kanban-contract';
 
 const TOKEN_RE = /(^|\s)([A-Za-z][A-Za-z0-9_-]*):(\S+)/g;
@@ -55,6 +58,7 @@ function KanbanAddTaskInner({ laneId, laneName, api, autoFocus: autoFocusProp }:
   const [error, setError] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
   const refocus = useRef(false);
   useEffect(() => { if (autoFocus) { setOpen(true); } }, [autoFocus]);
   useEffect(() => {
@@ -85,9 +89,10 @@ function KanbanAddTaskInner({ laneId, laneName, api, autoFocus: autoFocusProp }:
     return () => { ro?.disconnect(); mo?.disconnect(); cancelAnimationFrame(raf); };
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const submit = async () => {
+  const submitNow = async () => {
     if (!title || api.readOnly) return;
     const typed = text;
+    mic.current?.clear();
     setText('');
     setError('');
     inputRef.current?.focus();
@@ -97,6 +102,7 @@ function KanbanAddTaskInner({ laneId, laneName, api, autoFocus: autoFocusProp }:
       setError(`Couldn't add: ${r.error}`);
     }
   };
+  const gate = useSendAfterDictation([mic], () => void submitNow(), laneId);
 
   if (!open) {
     return (
@@ -109,17 +115,20 @@ function KanbanAddTaskInner({ laneId, laneName, api, autoFocus: autoFocusProp }:
   }
   return (
     <div ref={formRef} className="kanban-add-task-form" data-testid="kanban-add-task-form" onPointerDown={(e) => e.stopPropagation()}>
-      <input
-        ref={inputRef} className="kanban-add-task-input" data-testid="kanban-add-task-input" data-draft-key={draft.key ?? undefined} placeholder="Task title"
-        aria-label={`New task in ${laneName}`} value={text} maxLength={500}
-        onChange={(e) => { setText(e.target.value); if (error) setError(''); }}
-        onKeyDown={(e) => {
-          e.stopPropagation();
-          if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void submit(); }
-          if (e.key === 'Escape') { e.preventDefault(); setText(''); setError(''); refocus.current = true; setOpen(false); }
-        }}
-        onBlur={() => { if (!text.trim() && !error) setOpen(false); }}
-      />
+      <MicField inline boxRef={inputRef} text={text} setText={(t) => { setText(t); if (error) setError(''); }} handleRef={mic} target={laneId} disabled={api.readOnly}>
+        <input
+          ref={inputRef} className="kanban-add-task-input" data-testid="kanban-add-task-input" data-draft-key={draft.key ?? undefined} placeholder="Task title"
+          aria-label={`New task in ${laneName}`} value={text} maxLength={500}
+          onChange={(e) => { setText(e.target.value); if (error) setError(''); }}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); gate.send(); }
+            if (e.key === 'Escape') { e.preventDefault(); setText(''); setError(''); refocus.current = true; setOpen(false); }
+          }}
+          // An empty form closes when the person leaves it, never while its title is being dictated.
+          onBlur={() => { if (!text.trim() && !error && !mic.current?.busy()) setOpen(false); }}
+        />
+      </MicField>
       {tags.length > 0 && (
         <div className="kanban-add-task-tags" data-testid="kanban-add-task-tags">
           {tags.map((t) => (

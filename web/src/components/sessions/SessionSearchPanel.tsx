@@ -18,6 +18,7 @@ import { log } from '@/utils/log';
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { sessionRecordTitle } from '@/stores/entity-label-store';
+import { MicInput } from '@/components/common/BoxMic';
 
 interface SessionSearchPanelProps {
   open: boolean;
@@ -136,13 +137,13 @@ export function SessionSearchPanel({ open, onClose, onOpenSession }: SessionSear
     <div className="session-search-panel" ref={panelRef}>
       <div className="session-search-input-row">
         <span className="session-search-icon">{ICON_SEARCH}</span>
-        <input data-no-draft="search"
+        <MicInput fieldClassName="mic-field-grow" data-no-draft="search"
           ref={inputRef}
           type="text"
           className="session-search-input"
           placeholder="Search sessions — title, task, path, host…"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          setText={setQuery}
           onKeyDown={handleKeyDown}
           aria-label="Search sessions"
         />

@@ -7,7 +7,7 @@ import { testRoutineCheck } from '@/api/routines';
 import { describeSchedule, describeWake } from '@/utils/routine-format';
 import '@/styles/routine-description.css';
 import '@/styles/routine-mic.css';
-import { BoxMic, MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { BoxMic, MicField, type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps, useDictationGroup } from '@/hooks/useSendAfterDictation';
 import { useDraftValue } from '@/hooks/useDraft';
 import { draftHash, draftKey } from '@/utils/drafts';
@@ -305,12 +305,14 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
   const descMic = useRef<BoxMicHandle | null>(null);
   const instrRef = useRef<HTMLTextAreaElement | null>(null);
   const instrMic = useRef<BoxMicHandle | null>(null);
+  const nameMic = useRef<BoxMicHandle | null>(null);
   // Each executor textarea field has its own mic; Save waits on all of them as one.
   const { micOf: fieldMicOf, group: fieldMic } = useDictationGroup<BoxMicHandle>();
 
   // A new draft arrives (user drafted again): its own key brings its fields.
   useEffect(() => {
     if (!draft) return;
+    nameMic.current?.clear();
     descMic.current?.clear();
     instrMic.current?.clear();
     setCheckTest({ busy: false });
@@ -471,6 +473,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
     try {
       // Sent even when empty: on an edit that is how a cleared description is removed.
       // A transcription still on its way lands after the save, unsaved: drop it now.
+      nameMic.current?.clear();
       descMic.current?.clear();
       instrMic.current?.clear();
       await onSave({ name: name.trim(), description: description.trim(), schedule, executor, ...checkField });
@@ -482,7 +485,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
     }
   }
   // Save while a mic records waits for the final words, then saves.
-  const gate = useSendAfterDictation([descMic, instrMic, fieldMic], () => void submitNow());
+  const gate = useSendAfterDictation([nameMic, descMic, instrMic, fieldMic], () => void submitNow());
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     gate.send();
@@ -532,6 +535,19 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
         />
       );
     }
+    if (f.kind === 'text' && !['tools', 'target'].includes(f.name)) {
+      return <MicInput
+        data-draft-key={kept.key ?? undefined}
+        id={`routine-f-${f.name}`}
+        value={typeof value === 'string' ? value : ''}
+        setText={(next) => setField(f.name, next)}
+        placeholder={f.placeholder}
+        micRef={fieldMicOf(f.name)}
+        target={kept.key}
+        micDisabled={saving}
+        onEnter={gate.send}
+      />;
+    }
     return (
       <input
         data-draft-key={kept.key ?? undefined}
@@ -571,12 +587,14 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
 
           <div className="form-group">
             <label htmlFor="routine-name">Name *</label>
-            <input
+            <MicInput
               data-draft-key={kept.key ?? undefined}
               id="routine-name"
               type="text"
               value={name}
-              onChange={(e) => { setName(e.target.value); setFieldError((p) => (p?.id === 'routine-name' ? null : p)); }}
+              setText={(text) => { setName(text); setFieldError((p) => (p?.id === 'routine-name' ? null : p)); }}
+              micRef={nameMic}
+              onEnter={gate.send}
               placeholder="e.g. Briefing"
               aria-invalid={fieldError?.id === 'routine-name' || undefined}
             />

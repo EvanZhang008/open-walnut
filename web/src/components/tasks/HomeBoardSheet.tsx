@@ -20,6 +20,7 @@ import { boardMoveIds, buildHomeBoard, homeBoardTier, pinBoardColumns, type Boar
 import { projectDisplayName } from '@/utils/project-display';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import '@/styles/home-board.css';
+import { MicInput } from '@/components/common/BoxMic';
 
 function BoardTask({ family, mode, onOpen, onMove, onSnooze, onDone, depth = 0, folded, onFold, tierLabel, moving, snoozed }: {
   family: BoardFamily; mode: HomeBoardMode; onOpen: (task: Task) => void; snoozed: (task: Task) => boolean;
@@ -319,7 +320,7 @@ export function HomeBoardSheet() {
   }} role="dialog" aria-modal="true" aria-label="Task board" data-testid="home-board" data-mode={mode}>
     <header className="home-board-head"><h1>Board</h1><span className="home-board-count">{total} open {total === 1 ? 'task' : 'tasks'}{mode === 'status' && ` · ${completed} completed`}</span>
       <div className="home-board-controls"><div className="home-board-switch" aria-label="Group board"><button type="button" aria-pressed={mode === 'pin'} onClick={() => setMode('pin')}>By pin</button><button type="button" aria-pressed={mode === 'status'} onClick={() => setMode('status')}>By status</button><button type="button" aria-pressed={mode === 'sort'} onClick={() => setMode('sort')} title="Decide a few tasks at a time, one tap each">Sort</button></div>
-        <input data-no-draft="search" aria-label="Search board tasks" placeholder="Search tasks" value={query} onChange={e => setQuery(e.target.value)} />
+        <MicInput fieldClassName="home-board-search" data-no-draft="search" aria-label="Search board tasks" placeholder="Search tasks" value={query} setText={setQuery} />
         <button type="button" className="home-board-close" aria-label="Close board" title="Close board" onClick={fullscreen.exitFullscreen}>{ICON_CLOSE}</button>
       </div>
     </header>

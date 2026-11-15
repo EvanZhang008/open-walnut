@@ -16,6 +16,7 @@ import type { KanbanBoardVM } from './kanban-model';
 import { KanbanChanges } from './KanbanChanges';
 import { KANBAN_PANE_SELECTOR } from './kanban-toasts';
 import { pageShortcutBlocked } from '@/utils/page-shortcut';
+import { MicInput } from '@/components/common/BoxMic';
 
 export interface KanbanFiltersProps {
   board: KanbanBoardVM;
@@ -149,7 +150,7 @@ export function KanbanFilters({ board, filter, seen, mode, searchRef, onRevealCa
       )}
       <div className="kanban-search-box">
         <span className="kanban-search-icon" aria-hidden>{ICON_SEARCH}</span>
-        <input data-no-draft="search"
+        <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="search"
           ref={inputRef}
           type="text"
           className="kanban-search"
@@ -157,7 +158,7 @@ export function KanbanFilters({ board, filter, seen, mode, searchRef, onRevealCa
           placeholder="Search cards"
           aria-label="Search cards"
           value={filter.query}
-          onChange={(e) => filter.setQuery(e.target.value)}
+          setText={filter.setQuery}
           onKeyDown={(e) => {
             if (e.key !== 'Escape' || !filter.query) return;
             e.preventDefault();

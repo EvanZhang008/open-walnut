@@ -17,7 +17,7 @@ import { PcmCapture, type PcmSource } from '@/utils/pcm-stream';
 import { RecorderPcm, browserDecoder } from '@/utils/recorder-pcm';
 import { captureSeconds, describeShortSeconds, type CaptureSample } from '@/utils/capture-timeline';
 import { DICTATION_AUDIO_CONSTRAINTS } from '@/utils/mic-constraints';
-import { initialMicHealth, micHealthTick, micHealthTrackEnded, byteFrameRms, DEAD_STREAM_RMS, SAMPLE_INTERVAL_MS, type MicHealthState } from '@/utils/mic-health';
+import { initialMicHealth, micHealthTick, micHealthTrackEnded, byteFrameRms, classifyTake, TAKE_ERRORS, DEAD_STREAM_RMS, SAMPLE_INTERVAL_MS, type MicHealthState } from '@/utils/mic-health';
 import { log } from '@/utils/log';
 
 export interface UseSpeechToTextOptions {
@@ -221,10 +221,6 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
   // setInterval (NOT requestAnimationFrame) drives sampling — rAF is throttled/paused
   // when the tab is backgrounded or blurred, which previously broke silence detection.
   const sampleTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
-  // True once the signal rose above the dead-stream floor (incl. a live mic's noise
-  // floor). Distinguishes a truly dead stream from a quiet/short real recording so the
-  // onstop guard never drops genuine audio. Reset on each start.
-  const sawAnyNonDeadRef = useRef(false);
   // The mic warning's state for this recording (mic-health.ts), and when the
   // recorder started, to tell at stop how much audio the capture delivered.
   const micHealthRef = useRef<MicHealthState>(initialMicHealth());
@@ -376,7 +372,6 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
 
       // Set up Web Audio analyser for the live level meter + dead-mic warning.
       // Best-effort: if AudioContext is unavailable, recording still works (just no meter).
-      sawAnyNonDeadRef.current = false;
       analyserAttachedRef.current = false;
       micHealthRef.current = initialMicHealth();
       setMicLive(false);
@@ -467,7 +462,6 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
               });
             }
             micHealthRef.current = tick.state;
-            if (tick.state.alive) sawAnyNonDeadRef.current = true;
             if (tick.stallEndedTicks !== undefined) {
               log.warn('stt', `audio input went silent for ${tick.stallEndedTicks * SAMPLE_INTERVAL_MS}ms mid-recording, then came back (no warning shown)`, {
                 contextState: ctx.state,
@@ -506,7 +500,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
 
       recorder.onstop = async () => {
         // Recording is only ever stopped by the user (or unmount) — we never auto-stop.
-        const deadStream = analyserAttachedRef.current && !sawAnyNonDeadRef.current;
+        const health = analyserAttachedRef.current ? micHealthRef.current : null;
         stopStream();
         setIsRecording(false);
 
@@ -536,19 +530,17 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
         const discarded = discardedRef.current;
         if (discarded) discardedRef.current = false;
 
-        if (blob.size === 0) return;
-
-        // Don't transcribe a DEAD stream — Whisper hallucinates "you"/"thank you" on pure
-        // silence. `deadStream` = the analyser ran the whole time and never saw the signal
-        // rise above the dead-stream floor (pure-zero). We gate on the dead floor, NOT on
-        // whether real speech was detected, so a quiet or very short genuine recording is
-        // still transcribed.
-        if (deadStream) {
-          // Nothing to report when the text was already sent — the user is not
+        // One verdict for every stop (classifyTake, mic-health.ts). Never transcribe a
+        // take with no sound in it: Whisper hallucinates "you"/"thank you" on pure
+        // silence. The gate is the dead floor, NOT detected speech, so a quiet or
+        // short genuine recording is still transcribed.
+        const verdict = classifyTake(blob.size, health);
+        if (verdict !== 'audio') {
+          log.info('stt', `recording stopped with no audio to transcribe: ${verdict} (${blob.size} bytes, mic ${health ? (health.alive ? 'heard sound' : `silent for ${health.deadTicks} samples`) : 'not analysed'})`);
+          // Nothing to report when the text was already sent: the user is not
           // waiting on this recording, so an error would come out of nowhere.
-          if (isMountedRef.current && !discarded) {
-            setError('No sound detected from the microphone. Check your mic device (or restart the browser) and try again.');
-          }
+          const failure = TAKE_ERRORS[verdict];
+          if (failure && isMountedRef.current && !discarded) setError(failure);
           return;
         }
 

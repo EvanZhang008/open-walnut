@@ -1,0 +1,38 @@
+import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const app = join(import.meta.dirname, '../../ios-native/Walnut');
+const read = (file: string) => readFileSync(join(app, file), 'utf8');
+
+describe('shared iOS dictation lifecycle', () => {
+  it('keys recorder state and gate membership to the destination object', () => {
+    const source = read('Views/Shared/VoiceDictation.swift');
+    expect(source).toContain('private struct VoiceDictationBody');
+    expect(source).toContain('.id(surface)');
+    expect(source).toContain('.joinsSendGate(sendGate, voice: voice, key: surface)');
+    expect(source).toContain('voice.restrictRecoveryToSurface = true');
+    expect(source).toContain('voice.preserveAndStop(reason: "view-dismissed")');
+  });
+
+  it('allows the thread Send to wait even when the draft is empty', () => {
+    const source = read('Views/Org/OrgThreadsView.swift');
+    expect(source).toContain('surface: draftKey, box: "thread-follow-up"');
+    expect(source).toContain('sendGate.send { _ in sendNow() }');
+    expect(source).toContain('!sendGate.isDictating && !sendGate.isWaiting');
+    expect(source).toContain('.dictationSendGate(sendGate)');
+  });
+
+  it('keeps the UI-test capture silent and unavailable to phone/release builds', () => {
+    const source = read('Core/DebugDictationCapture.swift');
+    expect(source).toMatch(/^#if DEBUG && targetEnvironment\(simulator\)/);
+    expect(source).toContain('arguments.contains("-walnut.uiTestKeychain")');
+    expect(source).toContain('bool(forKey: "walnut.silentAudio")');
+    expect(source).toContain('uploadOverride =');
+    expect(source).toContain('_testBeginTake(');
+    const code = source.replace(/\/\/[^\n]*/g, '');
+    expect(code).not.toMatch(/AVAudioSession|AVAudioRecorder|AVAudioPlayer|activateSession|\.play\(/);
+    expect(read('Core/VoiceRecorder.swift')).toContain('#if DEBUG && targetEnvironment(simulator)\n        if let started = beginSilentUITestTake()');
+    expect(read('Core/VoiceRecorder.swift')).toContain('if isSilentUITestDictation { return }\n        #endif\n        AudioSessionHandoff.deactivateOffMain()');
+  });
+});

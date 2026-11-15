@@ -100,8 +100,9 @@ export function AnswerBox({
     onSubmit(t);
     mic.current?.clear();
   };
-  // Enter and the send button wait for a live dictation's words, then send.
-  const gate = useSendAfterDictation([mic], submitNow);
+  // Enter and the send button wait for a live dictation's words, then send. The draft key names
+  // what the box writes to: a box reused for another object drops the old one's words and wait.
+  const gate = useSendAfterDictation([mic], submitNow, draftKey);
   const submit = gate.send;
   return (
     <div
@@ -140,7 +141,7 @@ export function AnswerBox({
         {pictures && !readOnly && (
           <AttachPictureButton pictures={pictures} className="answer-box-attach" testId={testId ? `${testId}-attach` : 'answer-box-attach'} disabled={disabled || sending} />
         )}
-        <BoxMic boxRef={box} text={value} setText={onChange} handleRef={mic} disabled={disabled || sending || readOnly} />
+        <BoxMic boxRef={box} text={value} setText={onChange} handleRef={mic} target={draftKey} disabled={disabled || sending || readOnly} />
         {children}
         {onSubmit && sendLabel && (
           <button type="button" className="btn btn-sm btn-primary answer-box-send" data-testid={sendTestId} disabled={disabled || sending || (!value.trim() && !hasPictures && !gate.micBusy && !gate.waiting)} onClick={submit} {...dictationWaitProps(gate)}>

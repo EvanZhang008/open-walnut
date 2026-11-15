@@ -14958,6 +14958,8 @@ body.walnut-dragging {
   outline: none;
 }
 .tier-separator-label-input:focus { border-color: var(--accent); }
+/* The heading box with its mic (MicInput): the wrapper keeps the box's width, a little wider for the mic. */
+.tier-separator-label-field { width: 148px; }
 /* The floating copy under the cursor during a dnd-kit line drag. */
 .tier-separator-overlay {
   min-width: 160px;
@@ -15943,6 +15945,9 @@ a.task-kebab-info:hover {
   outline: none;
 }
 .task-kebab-project-filter:focus { border-color: var(--accent); }
+/* The filter with its mic (MicInput): the wrapper sticks, the box fills it. */
+.mic-field.task-kebab-project-filter-field { position: sticky; top: 0; margin: 6px 6px 4px; }
+.task-kebab-project-filter-field > .task-kebab-project-filter { position: static; margin: 0; }
 .task-kebab-project-opt {
   display: flex;
   align-items: center;
@@ -21789,6 +21794,10 @@ a.tag-chip:focus-visible,
   align-self: center;
   flex: 0 0 auto;
 }
+
+/* The box with its mic (MicField): the wrapper keeps the box's width, the box fills it. */
+.dock-quick-add-form > .dock-quick-add-field { width: 180px; }
+.dock-quick-add-form .dock-quick-add-field > input { width: 100%; }
 
 .dock-quick-add-form input {
   width: 180px;
@@ -32706,6 +32715,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 }
 
 .plugin-task-view-toolbar strong { margin-right: auto; }
+.plugin-task-view-toolbar > .plugin-task-search { min-width: 120px; max-width: 240px; }
 .plugin-task-view-toolbar input {
   min-width: 120px;
   max-width: 240px;

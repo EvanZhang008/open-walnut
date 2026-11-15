@@ -4,8 +4,14 @@
 
 /* Build a plugin: the field takes the row's free width, as the bare input did. */
 .build-plugin-form > .settings-mic-field { flex: 1; min-width: 0; }
-.build-plugin-form .settings-mic-field > input { width: 100%; padding-right: 32px; }
+.build-plugin-form .settings-mic-field.mic-field-inline > input { width: 100%; padding-right: 32px; }
 
 /* A long settings input keeps its width on the wrapper, so the mic sits inside the box. */
 .settings-mic-field-long { width: 380px; max-width: 100%; }
 .settings-mic-field-long > .settings-input.settings-input--long { width: 100%; }
+.settings-mic-field-short { width: 240px; max-width: 100%; }
+.settings-mic-field-short > .settings-input.settings-input--short { width: 100%; }
+
+/* A stacked row lets a long box size itself (`width: auto`); inside a MicField the wrapper takes
+   the row's width and the box fills it, so the mic stays inside the box's right edge. */
+.settings-row.settings-row-stacked > .settings-row-actions .mic-field > .settings-input--long { width: 100%; }

@@ -25,6 +25,7 @@ import { KebabIcon } from './KebabIcon';
 import { projectDisplayName } from '@/utils/project-display';
 import { rowAnchorOf, scrollMovedRow, type RowAnchor } from '@/utils/cursor-menu-scroll';
 import { PinShortcutChoices, PinTierButton, type PinChoice } from './PinShortcutChoices';
+import { MicInput } from '@/components/common/BoxMic';
 
 type TaskListProjection = Task & {
   /** Precomputed by fields=list because that projection intentionally omits ext. */
@@ -472,11 +473,11 @@ export function ProjectPickerFlyout({ open, anchorRef, anchorPoint, align, curre
       onPointerDown={(e) => e.stopPropagation()}
     >
       {options.length > 6 && (
-        <input data-no-draft="search"
+        <MicInput fieldClassName="task-kebab-project-filter-field mic-field-compact" data-no-draft="search"
           className="task-kebab-project-filter"
           placeholder="Filter projects…"
           value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+          setText={setFilter}
           autoFocus
         />
       )}
@@ -563,7 +564,7 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
       // The Project picker's option list is a separate portal (see
       // MoveToProjectSection) — clicks inside it are NOT "outside the menu". Same
       // for the Adopt a worker picker (TeamMenuItems).
-      if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout, .adopt-worker-flyout')) return;
+      if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout, .adopt-worker-flyout, .mic-popover')) return;
       closeMenu();
     };
     // Its Esc is its own (capture phase, consumed): the layer under it stays open (TaskQuickActions.tsx).
@@ -572,7 +573,7 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
       // A worker picker opened from the menu (Adopt, Release) is the layer on top and takes its own
       // Esc (its capture listener): the menu stays. The menu's other pickers (Project, a plugin
       // field) keep no Esc of their own, so one Esc closes them with the menu, as before.
-      if (document.querySelector('.adopt-worker-flyout')) return;
+      if (document.querySelector('.adopt-worker-flyout, .mic-popover')) return;
       e.preventDefault();
       e.stopPropagation();
       closeMenu();
@@ -593,7 +594,7 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
     const handleScroll = (e: Event) => {
       if (menuRef.current?.contains(e.target as Node)) return;
       // Scrolling the Project (or Adopt) flyout's own list is reading, not page scroll.
-      if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout, .adopt-worker-flyout')) return;
+      if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout, .adopt-worker-flyout, .mic-popover')) return;
       if (cursorAnchor) { if (scrollMovedRow(rowAnchor.current, e.target)) closeMenu(); return; }
       const r = btnRef.current?.getBoundingClientRect();
       if (r && (r.bottom < 0 || r.top > window.innerHeight)) closeMenu();

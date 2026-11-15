@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The session page's lifecycle prompts: Rename (PATCH title), Terminate's confirmation
+/// The session page's lifecycle prompts: Rename (PATCH title, a `DictatedTextPrompt`), Terminate's confirmation
 /// (it stops the process at once and sits last in the menu), and the 409 cron_owner
 /// ladder (confirm, then force-terminate). Kept out of SessionConversationView.body's
 /// modifier chain, which is at the type checker's limit.
@@ -13,18 +13,24 @@ struct SessionLifecycleDialogs: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            // A plain alert keeps the rename lightweight.
-            .alert("Rename Session", isPresented: $showRename) {
-                TextField("Title", text: $renameDraft)
-                // Both answers end the draft; a push that closed the alert leaves it, so the next
-                // Rename opens on his words (SessionConversationView fills it only when empty).
-                Button("Cancel", role: .cancel) { renameDraft = "" }
-                Button("Rename") {
-                    let title = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                    renameDraft = ""
-                    guard !title.isEmpty else { return }
-                    Task { await lifecycle.rename(title) }
-                }
+            // A small sheet with Walnut's mic (an alert hosts none). Both answers end the draft; a
+            // push that closed the sheet leaves it, so the next Rename opens on his words
+            // (SessionConversationView fills it only when empty).
+            .sheet(isPresented: $showRename) {
+                DictatedTextPrompt(
+                    title: "Rename Session", placeholder: "Title", text: $renameDraft,
+                    surface: "session-rename:\(lifecycle.sessionId)", box: "session-rename",
+                    confirmTitle: "Rename", identifier: "session.rename",
+                    onCancel: {
+                        renameDraft = ""
+                        showRename = false
+                    },
+                    onConfirm: { title in
+                        renameDraft = ""
+                        showRename = false
+                        Task { await lifecycle.rename(title) }
+                    }
+                )
             }
             // An alert, not a confirmationDialog: iOS 26 draws a page-level dialog as a popover
             // whose arrow points at the middle of the page and drops its Cancel button.

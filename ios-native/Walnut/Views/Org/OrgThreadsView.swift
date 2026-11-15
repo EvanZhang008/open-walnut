@@ -1173,6 +1173,7 @@ struct OrgThreadFollowUpSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var drafts = ComposerDrafts.shared
     @State private var pictureNotice: String?
+    @State private var sendGate = DictationSendGate()
     @State private var sends = OrgThreadFollowUpSends.shared
     @State private var failed = false
     /// The words that went out while he kept writing: the draft kept only what came after them.
@@ -1203,23 +1204,28 @@ struct OrgThreadFollowUpSheet: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
-                TextEditor(text: text)
-                    .focused($focused)
-                    .scrollContentBackground(.hidden)
-                    .frame(minHeight: 80, maxHeight: .infinity)
-                    .padding(8)
-                    .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-                    .overlay(alignment: .topLeading) {
-                        if text.wrappedValue.isEmpty {
-                            Text("Write your follow up")
-                                .font(.body)
-                                .foregroundStyle(.tertiary)
-                                .padding(.horizontal, 13)
-                                .padding(.vertical, 16)
-                                .allowsHitTesting(false)
+                VoiceDictationField(
+                    text: text, surface: draftKey, box: "thread-follow-up",
+                    placement: .below, blocked: sending, refocus: { focused = true }
+                ) {
+                    TextEditor(text: text)
+                        .focused($focused)
+                        .scrollContentBackground(.hidden)
+                        .frame(minHeight: 80, maxHeight: .infinity)
+                        .padding(8)
+                        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                        .overlay(alignment: .topLeading) {
+                            if text.wrappedValue.isEmpty {
+                                Text("Write your follow up")
+                                    .font(.body)
+                                    .foregroundStyle(.tertiary)
+                                    .padding(.horizontal, 13)
+                                    .padding(.vertical, 16)
+                                    .allowsHitTesting(false)
+                            }
                         }
-                    }
-                    .accessibilityIdentifier("org.thread.followUp.input")
+                        .accessibilityIdentifier("org.thread.followUp.input")
+                }
                 ReplyPictureStrip(images: images, notice: $pictureNotice, idPrefix: "org.thread.followUp")
                 ReplyPictureButton(
                     images: images, notice: $pictureNotice, idPrefix: "org.thread.followUp",
@@ -1250,42 +1256,50 @@ struct OrgThreadFollowUpSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(sending ? "Sending…" : "Send") {
-                        let key = draftKey
-                        guard sends.begin(key) else { return }
-                        failed = false
-                        sentNote = nil
-                        let words = text.wrappedValue, pictures = images.wrappedValue
-                        Task {
-                            let ok = await send(words, pictures)
-                            sends.end(key)
-                            guard ok else {
-                                failed = true
-                                return
-                            }
-                            // A receipt that comes late (he closed the composer while it was on its
-                            // way, came back and wrote more) never takes the newer words with it,
-                            // and never leaves the words that went out to be sent again.
-                            let after = OrgThreadFollowUpDraft.afterReceipt(
-                                sent: words, sentPictures: pictures.map(\.id),
-                                draft: drafts.draft(key), draftPictures: drafts.images(key).map(\.id))
-                            if after.words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, after.pictures.isEmpty {
-                                drafts.clear(key)
-                                dismiss()
-                                return
-                            }
-                            drafts.setDraft(after.words, key: key)
-                            drafts.setImages(drafts.images(key).filter { after.pictures.contains($0.id) }, key: key)
-                            if after.remainder {
-                                sentNote = "Sent: \u{201C}\(Self.clip(words))\u{201D}. What you wrote after it is still here."
-                            }
-                        }
+                    Button {
+                        sendGate.send { _ in sendNow() }
+                    } label: {
+                        DictationSendLabel(gate: sendGate, title: sending ? "Sending…" : "Send")
                     }
-                    .disabled(sending || (text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.wrappedValue.isEmpty))
+                    .disabled(sending || (!sendGate.isDictating && !sendGate.isWaiting && text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.wrappedValue.isEmpty))
                     .accessibilityIdentifier("org.thread.followUp.send")
                 }
             }
             .onAppear { focused = true }
+        }
+        .dictationSendGate(sendGate)
+        #if DEBUG && targetEnvironment(simulator)
+        .background(DebugUITestTouches().frame(width: 0, height: 0))
+        #endif
+    }
+
+    private func sendNow() {
+        let key = draftKey
+        guard sends.begin(key) else { return }
+        failed = false
+        sentNote = nil
+        let words = text.wrappedValue, pictures = images.wrappedValue
+        Task {
+            let ok = await send(words, pictures)
+            sends.end(key)
+            guard ok else {
+                failed = true
+                return
+            }
+            // A late receipt keeps newer words and never offers sent words again.
+            let after = OrgThreadFollowUpDraft.afterReceipt(
+                sent: words, sentPictures: pictures.map(\.id),
+                draft: drafts.draft(key), draftPictures: drafts.images(key).map(\.id))
+            if after.words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, after.pictures.isEmpty {
+                drafts.clear(key)
+                dismiss()
+                return
+            }
+            drafts.setDraft(after.words, key: key)
+            drafts.setImages(drafts.images(key).filter { after.pictures.contains($0.id) }, key: key)
+            if after.remainder {
+                sentNote = "Sent: \u{201C}\(Self.clip(words))\u{201D}. What you wrote after it is still here."
+            }
         }
     }
 

@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 import { ModalOverlayOwner, useModalOverlay } from '@/hooks/useModalOverlay';
 import { useDraft } from '@/hooks/useDraft';
 import { draftHash, draftKey } from '@/utils/drafts';
+import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
+import { dictationWaitProps, useSendAfterDictation } from '@/hooks/useSendAfterDictation';
 
 interface ConfirmDialogProps {
   title: string;
@@ -49,6 +51,7 @@ export function ConfirmDialog({
   const confirmRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
   const isPrompt = promptDefaultValue !== undefined;
   // A prompt's typed text is kept under its title and the value it started from
   // (the group or project being renamed, the link being edited), so a dialog that
@@ -84,6 +87,8 @@ export function ConfirmDialog({
     }
   };
 
+  const sendGate = useSendAfterDictation([mic], submit, draft.key);
+
   return createPortal(
     <ModalOverlayOwner.Provider value={modalOwner}>
       <div
@@ -99,16 +104,16 @@ export function ConfirmDialog({
             <div className="app-modal-message">{message}</div>
           )}
           {isPrompt && (
-            <input
+            <MicInput
               ref={inputRef}
               data-draft-key={draft.key ?? undefined}
               className="app-modal-input"
               value={value}
               placeholder={promptPlaceholder}
-              onChange={(e) => setValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') { e.preventDefault(); submit(); }
-              }}
+              setText={setValue}
+              micRef={mic}
+              target={draft.key}
+              onEnter={sendGate.send}
             />
           )}
           <div className="app-modal-actions">
@@ -120,8 +125,8 @@ export function ConfirmDialog({
             <button
               ref={confirmRef}
               className={`app-modal-btn primary${danger ? ' danger' : ''}`}
-              onClick={submit}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } }}
+              {...dictationWaitProps(sendGate)}
+              onClick={sendGate.send}
             >
               {confirmLabel}
             </button>

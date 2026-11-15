@@ -36,6 +36,7 @@ import { USER_STATE_LABELS, stateCountLabel } from '@open-walnut/user-status';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { TAB_DOT, stateTab, type KeptTask } from './org-task-tabs';
 import { ICON_EYE, ICON_LOCK } from '@/components/common/Icons';
+import { MicInput } from '@/components/common/BoxMic';
 
 const STATE_LABEL: Record<ChannelState, string> = {
   alert: 'Needs you', working: 'Working', quiet: 'Waiting', parked: 'Waiting',
@@ -310,14 +311,15 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
           <OrgSettingsMenu />
         </span>
       </header>
-      <input data-no-draft="search"
+      <MicInput data-no-draft="search"
         className="org-search"
+        fieldClassName="org-search-field"
         type="search"
         value={query}
         placeholder="Search VPs and routers…"
         aria-label="Search VPs and routers"
         data-testid="org-search"
-        onChange={(e) => onQuery(e.target.value)}
+        setText={onQuery}
       />
       <OrgReorgReminder vps={vps} onOpenChart={onOpenChart} />
       <div

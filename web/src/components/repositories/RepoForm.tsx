@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { MicField, type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { fetchRepository } from '@/api/repositories';
 import { useDraftValue } from '@/hooks/useDraft';
@@ -248,6 +248,8 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
   const descMic = useRef<BoxMicHandle | null>(null);
   const archRef = useRef<HTMLTextAreaElement | null>(null);
   const archMic = useRef<BoxMicHandle | null>(null);
+  const nameMic = useRef<BoxMicHandle | null>(null);
+  const techMic = useRef<BoxMicHandle | null>(null);
 
   useEffect(() => {
     if (!editSlug) return;
@@ -325,6 +327,8 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
       setError(null);
       const yaml = formToYaml({ ...form, hosts: validHosts });
       // A transcription still on its way lands after the save, unsaved: drop it now.
+      nameMic.current?.clear();
+      techMic.current?.clear();
       descMic.current?.clear();
       archMic.current?.clear();
       await onSave(trimmedSlug, yaml);
@@ -336,7 +340,7 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
     }
   }, [slug, form, onSave, draft]);
   // Save while a mic records waits for the final words, then saves.
-  const gate = useSendAfterDictation([descMic, archMic], () => void submitNow());
+  const gate = useSendAfterDictation([nameMic, techMic, descMic, archMic], () => void submitNow());
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     gate.send();
@@ -356,12 +360,14 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
       <div className="repo-form-row">
         <div className="repo-form-field repo-form-field-grow">
           <label htmlFor="repo-name">Name</label>
-          <input
+          <MicInput
             data-draft-key={draft.key ?? undefined}
             id="repo-name"
             type="text"
             value={form.name}
-            onChange={(e) => handleNameChange(e.target.value)}
+            setText={handleNameChange}
+            micRef={nameMic}
+            onEnter={gate.send}
             placeholder="My Project"
             className="repo-form-input"
             autoFocus
@@ -403,12 +409,14 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
       {/* Tech Stack */}
       <div className="repo-form-field">
         <label htmlFor="repo-tech">Tech Stack</label>
-        <input
+        <MicInput
           data-draft-key={draft.key ?? undefined}
           id="repo-tech"
           type="text"
           value={form.tech_stack}
-          onChange={(e) => updateField('tech_stack', e.target.value)}
+          setText={(text) => updateField('tech_stack', text)}
+          micRef={techMic}
+          onEnter={gate.send}
           placeholder="TypeScript, React, Node.js"
           className="repo-form-input"
         />

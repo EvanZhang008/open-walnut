@@ -9,6 +9,7 @@ import type { Task } from '@open-walnut/core';
 import { taskStatusLabel } from '@/utils/session-status';
 import { projectDisplayName } from '@/utils/project-display';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
+import { MicInput } from '@/components/common/BoxMic';
 
 const MAX_RESULTS = 15;
 
@@ -110,13 +111,13 @@ export function TaskSearchPanel({ tasks, focusedTaskId, onSelect, onBack }: Task
         >
           &larr;
         </button>
-        <input
+        <MicInput fieldClassName="mic-field-grow mic-field-compact"
           data-no-draft="picker"
           ref={inputRef}
           className="notes-task-search-input"
           type="text"
           value={query}
-          onChange={e => setQuery(e.target.value)}
+          setText={setQuery}
           placeholder="Search tasks..."
           autoComplete="off"
           spellCheck={false}

@@ -15,6 +15,7 @@ struct NotesView: View {
 
     @State private var path: [NotesRoute] = []
     @State private var searchText = ""
+    @State private var searchPresented = false
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -32,7 +33,10 @@ struct NotesView: View {
                         NoteDetailView(path: notePath, startEditing: true)
                     }
                 }
-                .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search")
+                .searchable(
+                    text: $searchText, isPresented: $searchPresented,
+                    placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search"
+                )
                 .overlay {
                     if !searchText.isEmpty {
                         NoteSearchView(query: searchText) { resultPath in
@@ -40,6 +44,8 @@ struct NotesView: View {
                         }
                     }
                 }
+                // Walnut's mic over the keyboard while the search is up, above the results.
+                .voiceSearch(text: $searchText, isPresented: $searchPresented, surface: "notes-search", box: "notes-search")
         }
     }
 }
@@ -99,13 +105,24 @@ struct FolderContentView: View {
                 .accessibilityIdentifier("notes.create")
             }
         }
-        .alert("New Note", isPresented: $showCreate) {
-            TextField("Title", text: $newNoteName)
-                .autocorrectionDisabled()
-            Button("Create") { createNote() }
-            Button("Cancel", role: .cancel) { newNoteName = "" }
-        } message: {
-            Text(isRoot ? "Created at the top level." : "Created in \(folderPath.components(separatedBy: "/").last ?? folderPath).")
+        // A small sheet with Walnut's mic (an alert hosts none); the name stays in this view's
+        // state until Create or Cancel, so a push that closes the sheet keeps it.
+        .sheet(isPresented: $showCreate) {
+            DictatedTextPrompt(
+                title: "New Note",
+                message: isRoot ? "Created at the top level." : "Created in \(folderPath.components(separatedBy: "/").last ?? folderPath).",
+                placeholder: "Title", text: $newNoteName,
+                surface: "new-note-title:\(folderPath)", box: "new-note-title",
+                confirmTitle: "Create", identifier: "notes.createPrompt", autocorrect: false,
+                onCancel: {
+                    newNoteName = ""
+                    showCreate = false
+                },
+                onConfirm: { _ in
+                    showCreate = false
+                    createNote()
+                }
+            )
         }
         .alert(
             "Delete Note",

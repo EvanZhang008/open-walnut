@@ -1,8 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
+import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { DRAWING_WIDTH, DRAWING_HEIGHT, DRAWING_TEXT_SIZE, drawingPoint, drawingTextLayout, hasDrawing, paintDrawing, paintDrawingItem, type DrawingItem, type DrawingPoint, type DrawingTool } from './drawing-model';
 import './drawing-pad.css';
+
+/** What a press asked of the open label, run once its dictated words are in. */
+type LabelAction = { kind: 'close' } | { kind: 'tool'; tool: DrawingTool } | { kind: 'undo' } | { kind: 'clear' } | { kind: 'canvas'; at: DrawingPoint };
 
 const undoKeyLabel = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform) ? '⌘Z' : 'Ctrl+Z';
 
@@ -37,6 +42,8 @@ function DrawingDialog({ items, onChange, onClose, onAttach, canAttach }: Dialog
   const canvas = useRef<HTMLCanvasElement>(null);
   const dialog = useRef<HTMLDivElement>(null);
   const textArea = useRef<HTMLTextAreaElement>(null);
+  // A label can be dictated: the composer's mic in the footer writes into the canvas text box.
+  const textMic = useRef<BoxMicHandle | null>(null);
   const stroke = useRef<{ id: number; item: Extract<DrawingItem, { points: DrawingPoint[] }> } | null>(null);
   const previousFocus = useRef(document.activeElement);
   const currentItems = useRef(items);
@@ -69,7 +76,7 @@ function DrawingDialog({ items, onChange, onClose, onAttach, canAttach }: Dialog
     commitText();
     onClose();
   };
-  useModalOverlay(close);
+  useModalOverlay(() => afterLabel({ kind: 'close' }));
   useLayoutEffect(() => {
     dialog.current?.focus();
     return () => {
@@ -120,13 +127,12 @@ function DrawingDialog({ items, onChange, onClose, onAttach, canAttach }: Dialog
   const pointerDown = (e: PointerEvent<HTMLCanvasElement>) => {
     if (busy || !textFits || e.button !== 0 || stroke.current) return;
     e.preventDefault();
-    commitText();
     const at = pointAt(e);
-    if (tool === 'text') {
-      // Leave room to type at the right and bottom edges.
-      setText({ at: { x: Math.min(at.x, DRAWING_WIDTH - 180), y: Math.min(at.y, DRAWING_HEIGHT - 60) }, value: '' });
-      return;
-    }
+    // A label still being dictated gets its words first: the press keeps it (and opens the next
+    // label at this point with the text tool) once they are in, and starts no stroke meanwhile.
+    if (textMic.current?.busy()) { afterLabel({ kind: 'canvas', at }); return; }
+    commitText();
+    if (tool === 'text') { openLabel(at); return; }
     dialog.current?.focus();
     e.currentTarget.setPointerCapture(e.pointerId);
     const item = { kind: tool, points: [at] };
@@ -173,6 +179,41 @@ function DrawingDialog({ items, onChange, onClose, onAttach, canAttach }: Dialog
     }
   };
 
+  // Leave room to type at the right and bottom edges.
+  const openLabel = (at: DrawingPoint) => setText({ at: { x: Math.min(at.x, DRAWING_WIDTH - 180), y: Math.min(at.y, DRAWING_HEIGHT - 60) }, value: '' });
+
+  // Every action that keeps the label (a canvas press, a tool, Undo, Clear, Close) waits for a label
+  // still being dictated, then runs on the render that holds its words: committing it now would keep
+  // the live preview and drop the final words with the mic. A second action while it waits replaces
+  // the first; Esc still cancels the label.
+  const pendingAction = useRef<LabelAction | null>(null);
+  const runAction = (action: LabelAction) => {
+    if (action.kind === 'close') close();
+    else if (action.kind === 'tool') chooseTool(action.tool);
+    else if (action.kind === 'undo') undo();
+    else if (action.kind === 'clear') clear();
+    else if (!busy && textFits) {
+      commitText();
+      if (tool === 'text') openLabel(action.at);
+      else dialog.current?.focus();
+    }
+  };
+  const actionGate = useSendAfterDictation([textMic], () => {
+    const action = pendingAction.current;
+    pendingAction.current = null;
+    if (action) runAction(action);
+  });
+  const afterLabel = (action: LabelAction) => {
+    if (!textMic.current?.busy()) { runAction(action); return; }
+    pendingAction.current = action;
+    if (!actionGate.waiting) actionGate.send();
+  };
+
+  // Keep text (Cmd/Ctrl+Enter) and Attach wait for a label still being dictated.
+  const keepTextNow = () => { if (textFits) { commitText(); dialog.current?.focus(); } };
+  const keepGate = useSendAfterDictation([textMic], keepTextNow);
+  const attachGate = useSendAfterDictation([textMic], () => void attach());
+
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     e.stopPropagation();
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
@@ -192,14 +233,14 @@ function DrawingDialog({ items, onChange, onClose, onAttach, canAttach }: Dialog
     }
     if (busy) return;
     if (e.target instanceof HTMLTextAreaElement) {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); if (textFits) { commitText(); dialog.current?.focus(); } }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); keepGate.send(); }
       return;
     }
-    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z') { e.preventDefault(); afterLabel({ kind: 'undo' }); }
     else if (!e.metaKey && !e.ctrlKey && !e.altKey) {
       const key = e.key.toLowerCase();
-      if (!e.shiftKey && (key === 'p' || key === 'e' || key === 't')) { e.preventDefault(); chooseTool(key === 'p' ? 'pen' : key === 'e' ? 'eraser' : 'text'); }
-      else if (e.shiftKey && e.key === 'Backspace') { e.preventDefault(); clear(); }
+      if (!e.shiftKey && (key === 'p' || key === 'e' || key === 't')) { e.preventDefault(); afterLabel({ kind: 'tool', tool: key === 'p' ? 'pen' : key === 'e' ? 'eraser' : 'text' }); }
+      else if (e.shiftKey && e.key === 'Backspace') { e.preventDefault(); afterLabel({ kind: 'clear' }); }
     }
   };
   const nonempty = hasDrawing(items) || !!text?.value.trim();
@@ -208,17 +249,17 @@ function DrawingDialog({ items, onChange, onClose, onAttach, canAttach }: Dialog
       <div ref={dialog} className="drawing-pad" role="dialog" aria-modal="true" aria-label="Drawing" tabIndex={-1}>
         <header className="drawing-pad-header">
           <h2>Drawing</h2>
-          <button type="button" onClick={close} disabled={busy} aria-label="Close drawing">×</button>
+          <button type="button" onClick={() => afterLabel({ kind: 'close' })} disabled={busy} aria-label="Close drawing">×</button>
         </header>
         <div className="drawing-pad-tools" role="toolbar" aria-label="Drawing tools">
           {(['pen', 'eraser', 'text'] as const).map((name) => (
-            <button key={name} type="button" aria-pressed={tool === name} aria-label={name === 'text' ? 'Text' : name === 'pen' ? 'Pen' : 'Eraser'} disabled={busy} onClick={() => chooseTool(name)}>
+            <button key={name} type="button" aria-pressed={tool === name} aria-label={name === 'text' ? 'Text' : name === 'pen' ? 'Pen' : 'Eraser'} disabled={busy} onClick={() => afterLabel({ kind: 'tool', tool: name })}>
               {name === 'pen' ? 'Pen' : name === 'eraser' ? 'Eraser' : 'Text'} <kbd>{name === 'pen' ? 'P' : name === 'eraser' ? 'E' : 'T'}</kbd>
             </button>
           ))}
           <span className="drawing-pad-tools-gap" />
-          <button type="button" disabled={busy || (!items.length && !text?.value.trim())} onClick={undo} aria-label="Undo" title="Undo (⌘Z / Ctrl+Z)">Undo <kbd>{undoKeyLabel}</kbd></button>
-          <button type="button" disabled={busy || !nonempty} onClick={clear} aria-label="Clear" title="Clear (Shift+Backspace)">Clear <kbd>⇧⌫</kbd></button>
+          <button type="button" disabled={busy || (!items.length && !text?.value.trim())} onClick={() => afterLabel({ kind: 'undo' })} aria-label="Undo" title="Undo (⌘Z / Ctrl+Z)">Undo <kbd>{undoKeyLabel}</kbd></button>
+          <button type="button" disabled={busy || !nonempty} onClick={() => afterLabel({ kind: 'clear' })} aria-label="Clear" title="Clear (Shift+Backspace)">Clear <kbd>⇧⌫</kbd></button>
         </div>
         <div className="drawing-pad-paper" data-tool={tool}>
           <canvas ref={canvas} width={DRAWING_WIDTH} height={DRAWING_HEIGHT} aria-label="Drawing canvas" onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerEnd} onPointerCancel={pointerEnd} onLostPointerCapture={pointerEnd} />
@@ -226,7 +267,8 @@ function DrawingDialog({ items, onChange, onClose, onAttach, canAttach }: Dialog
         </div>
         <footer className="drawing-pad-footer">
           <span role={error || !textFits ? 'alert' : undefined}>{!textFits ? 'This label is taller than the canvas. Shorten it or press Esc to cancel.' : error ?? (text ? 'Click the canvas or press ⌘Enter / Ctrl+Enter to keep text. Esc cancels text.' : 'Close keeps your sketch in this composer.')}</span>
-          <button type="button" className="drawing-pad-attach" onClick={() => void attach()} disabled={busy || !textFits || !nonempty || !canAttach} title={!canAttach ? 'Attachment limit reached' : 'Add this picture to your message'}>{busy ? 'Attaching…' : 'Attach drawing'}</button>
+          {text && <BoxMic boxRef={textArea} text={text.value} setText={(value) => setText((t) => (t ? { ...t, value } : t))} handleRef={textMic} target={text.at} disabled={busy} />}
+          <button type="button" className="drawing-pad-attach" onClick={attachGate.send} disabled={busy || ((!textFits || !nonempty || !canAttach) && !attachGate.waiting)} title={!canAttach ? 'Attachment limit reached' : 'Add this picture to your message'} {...dictationWaitProps(attachGate)}>{busy ? 'Attaching…' : 'Attach drawing'}</button>
         </footer>
       </div>
     </div>, document.body,

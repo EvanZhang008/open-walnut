@@ -5,6 +5,7 @@ import { useShowPriority } from '@/hooks/useShowPriority';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { useDraftValue } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
+import { MicInput } from '@/components/common/BoxMic';
 
 export interface TaskFormData {
   title: string;
@@ -43,6 +44,7 @@ export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProp
   const titleMic = useRef<BoxMicHandle | null>(null);
   const noteBox = useRef<HTMLTextAreaElement | null>(null);
   const noteMic = useRef<BoxMicHandle | null>(null);
+  const projectMic = useRef<BoxMicHandle | null>(null);
 
   const submitNow = () => {
     // The title's `required` is off while words are coming, so the browser's own prompt is asked here.
@@ -59,7 +61,7 @@ export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProp
     })).then(() => form.clear(sentKey), () => {});
   };
   // Save while a mic records waits for the final words, then submits.
-  const gate = useSendAfterDictation([titleMic, noteMic], submitNow);
+  const gate = useSendAfterDictation([titleMic, noteMic, projectMic], submitNow);
   const wordsComing = gate.micBusy || gate.waiting;
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -117,12 +119,13 @@ export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProp
 
         <div className="form-group">
           <label htmlFor="task-project">Project</label>
-          <input
+          <MicInput
             id="task-project"
             type="text"
             data-draft-key={form.key ?? undefined}
             value={project}
-            onChange={(e) => setProject(e.target.value)}
+            setText={setProject}
+            micRef={projectMic}
             list="projects-list"
             placeholder="Leave empty for Inbox"
           />

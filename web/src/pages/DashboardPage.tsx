@@ -48,6 +48,7 @@ import { visibleInterval } from '@/utils/page-visibility';
 import { projectDisplayName } from '@/utils/project-display';
 import { useUndoableTaskActions } from '@/undo/TaskUndoContext';
 import '@/styles/tasks-page.css';
+import { MicInput } from '@/components/common/BoxMic';
 
 const LS_GROUPED = 'walnut-tasks-page-grouped';
 const LS_COLLAPSED = 'walnut-tasks-page-collapsed';
@@ -483,12 +484,12 @@ export function DashboardPage() {
               )}
             </>
           )}
-          <input data-no-draft="search"
+          <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="search"
             className="tp-search"
             type="search"
             placeholder="Search tasks…"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            setText={setSearch}
           />
           <button type="button" className="tp-newtask-btn" onClick={() => setShowForm(true)}>＋ Task</button>
         </div>

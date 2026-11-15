@@ -35,6 +35,8 @@ import { useConfirm } from '@/hooks/useConfirm';
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
+import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
+import { dictationWaitProps, useSendAfterDictation } from '@/hooks/useSendAfterDictation';
 
 const BUILTIN_ROWS = [
   { id: 'focus', label: 'Focus', icon: ICON_TIER_FOCUS },
@@ -54,6 +56,7 @@ export function FocusTiersSection() {
   const newTier = useDraft(draftKey('focus-tier', 'new'));
   const { text: newLabel, setText: setNewLabel } = newTier;
   const [busy, setBusy] = useState(false);
+  const newMic = useRef<BoxMicHandle | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   // Escape cancels the inline edit; the input's blur then fires and must not commit.
@@ -96,6 +99,8 @@ export function FocusTiersSection() {
       setBusy(false);
     }
   };
+
+  const addGate = useSendAfterDictation([newMic], () => void handleAdd(), newTier.key);
 
   const startEdit = (tier: CustomTierDef) => {
     editCancelledRef.current = false;
@@ -186,14 +191,14 @@ export function FocusTiersSection() {
                   <span className="focus-tiers-name">
                     <span className="focus-tiers-icon todo-tier-icon-custom" aria-hidden="true">{ICON_TIER_CUSTOM}</span>
                     {editingId === t.id ? (
-                      <input
+                      <MicInput fieldClassName="settings-mic-field settings-mic-field-short"
                         data-no-draft="rename"
                         className="focus-tiers-edit-input settings-input settings-input--short"
                         aria-label={`Rename ${t.label}`}
                         value={editValue}
                         maxLength={LABEL_MAX}
                         autoFocus
-                        onChange={(e) => setEditValue(e.target.value)}
+                        setText={setEditValue}
                         onKeyDown={(e) => handleEditKeyDown(e, t.id)}
                         onBlur={() => void commitRename(t.id)}
                       />
@@ -223,7 +228,7 @@ export function FocusTiersSection() {
               htmlFor="focus-tiers-new"
               control={
                 <>
-                  <input
+                  <MicInput fieldClassName="settings-mic-field settings-mic-field-short"
                     id="focus-tiers-new"
                     type="text"
                     data-draft-key={newTier.key ?? undefined}
@@ -231,16 +236,18 @@ export function FocusTiersSection() {
                     value={newLabel}
                     maxLength={LABEL_MAX}
                     placeholder="For example Icebox"
-                    onChange={(e) => setNewLabel(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void handleAdd(); } }}
+                    setText={setNewLabel}
+                    micRef={newMic}
+                    target={newTier.key}
+                    onEnter={addGate.send}
                   />
                   <SettingsButton
                     variant="primary"
                     busy={busy}
                     busyLabel="Adding..."
-                    disabled={!newLabel.trim()}
-                    title={newLabel.trim() ? undefined : 'Name the tier first.'}
-                    onClick={() => void handleAdd()}
+                    disabled={!newLabel.trim() && !addGate.micBusy && !addGate.waiting}
+                    {...dictationWaitProps(addGate, newLabel.trim() ? undefined : 'Name the tier first.')}
+                    onClick={addGate.send}
                   >
                     Add tier
                   </SettingsButton>
