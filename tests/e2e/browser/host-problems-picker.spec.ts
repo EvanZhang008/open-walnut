@@ -430,7 +430,7 @@ test.describe('Settings host row head', () => {
     await page.waitForFunction(() => {
       const ws = (window as unknown as { __hpWs?: WebSocket }).__hpWs
       return !!ws && ws.readyState === WebSocket.OPEN
-    }, null, { timeout: 20_000 })
+    }, null, { timeout: 30_000 })
     await page.getByTestId('remote-hosts-add').first().click()
     await page.getByRole('menuitem', { name: /^Add an SSH host/ }).click()
     const aliasInput = page.locator('input[id^="rh-alias-"]').last()

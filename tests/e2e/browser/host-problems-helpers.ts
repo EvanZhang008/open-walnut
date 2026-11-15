@@ -315,7 +315,7 @@ export async function loadHome(page: Page): Promise<void> {
   await page.waitForFunction(() => {
     const ws = (window as unknown as { __hpWs?: WebSocket }).__hpWs
     return !!ws && ws.readyState === WebSocket.OPEN
-  }, null, { timeout: 20_000 })
+  }, null, { timeout: 30_000 })
 }
 
 /**

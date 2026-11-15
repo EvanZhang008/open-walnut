@@ -18,11 +18,13 @@ export async function injectEvent(page: Page, name: string, data: unknown) {
   );
 }
 
+/** The captured socket is open. The page opens it only once the app has booted, which a loaded CI
+ *  runner takes about 12 s to do: hence a cold boot's wait (tests/web/socket-open-wait-guard.test.ts). */
 export async function waitForWs(page: Page) {
   await page.waitForFunction(() => {
     const ws = (window as any).__capturedWs as WebSocket | undefined;
     return ws && ws.readyState === WebSocket.OPEN;
-  }, null, { timeout: 10000 });
+  }, null, { timeout: 30_000 });
 }
 
 export async function streamTools(page: Page, calls: (readonly [string, string, string?])[]) {

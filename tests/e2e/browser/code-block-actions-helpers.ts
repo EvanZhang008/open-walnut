@@ -188,7 +188,7 @@ export async function openSession(page: Page, opts: { width?: number; height?: n
   await page.waitForFunction(() => {
     const ws = (window as any).__capturedWs as WebSocket | undefined;
     return ws && ws.readyState === WebSocket.OPEN;
-  }, null, { timeout: 15_000 });
+  }, null, { timeout: 30_000 });
   await expect(page.locator('.session-history .md-code').first()).toBeVisible({ timeout: 15_000 });
   mkdirSync(SHOT_DIR, { recursive: true });
 }

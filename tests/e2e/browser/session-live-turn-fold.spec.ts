@@ -96,7 +96,7 @@ test('a received message and the tools the live turn runs for it are one fold ro
   await page.waitForFunction(() => {
     const ws = (window as any).__capturedWs as WebSocket | undefined;
     return ws && ws.readyState === WebSocket.OPEN;
-  }, null, { timeout: 10000 });
+  }, null, { timeout: 30_000 });
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`);
   const history = panel.locator('.session-history');
   await expect(history).toContainText('LIVE_ANSWER nothing is left.', { timeout: 15000 });
@@ -158,7 +158,7 @@ test('the fold stays one open row when a history read saves every call the live 
   });
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(`/sessions?id=${SESSION_ID}`);
-  await page.waitForFunction(() => (window as any).__capturedWs?.readyState === WebSocket.OPEN, null, { timeout: 10000 });
+  await page.waitForFunction(() => (window as any).__capturedWs?.readyState === WebSocket.OPEN, null, { timeout: 30_000 });
   const history = page.locator(`.session-panel[data-session-id="${SESSION_ID}"] .session-history`);
   await expect(history).toContainText('LIVE_ANSWER nothing is left.', { timeout: 15000 });
   for (const [id, toolName, input] of [
@@ -245,7 +245,7 @@ test('reasoning alone in the live fold is the row its saved message will be', as
   });
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(`/sessions?id=${SESSION_ID}`);
-  await page.waitForFunction(() => (window as any).__capturedWs?.readyState === WebSocket.OPEN, null, { timeout: 10000 });
+  await page.waitForFunction(() => (window as any).__capturedWs?.readyState === WebSocket.OPEN, null, { timeout: 30_000 });
   const history = page.locator(`.session-panel[data-session-id="${SESSION_ID}"] .session-history`);
   await expect(history).toContainText('LIVE_ANSWER nothing is left.', { timeout: 15000 });
   await injectEvent(page, 'session:thinking-delta', { sessionId: SESSION_ID, delta: 'LIVE_REASON weighing the note.', msgId: 'msg-live-think' });
@@ -270,7 +270,7 @@ test('reasoning alone in the live fold is the row its saved message will be', as
 test('a call still out when the turn ends stops the fold breathing', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(`/sessions?id=${SESSION_ID}`);
-  await page.waitForFunction(() => (window as any).__capturedWs?.readyState === WebSocket.OPEN, null, { timeout: 10000 });
+  await page.waitForFunction(() => (window as any).__capturedWs?.readyState === WebSocket.OPEN, null, { timeout: 30_000 });
   const history = page.locator(`.session-panel[data-session-id="${SESSION_ID}"] .session-history`);
   await expect(history).toContainText('LIVE_ANSWER nothing is left.', { timeout: 15000 });
   await injectEvent(page, 'session:tool-use', { sessionId: SESSION_ID, toolName: 'Bash', toolUseId: 'tool-out-1', input: { command: 'make check' } });

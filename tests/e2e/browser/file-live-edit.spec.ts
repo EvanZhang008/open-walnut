@@ -32,7 +32,7 @@ type EventWindow = Window & {
 }
 
 async function emitEvent(page: Page, name: string, data: Record<string, unknown>) {
-  await page.waitForFunction(() => (window as EventWindow).fileTestSocket?.readyState === 1, null, { timeout: 5000 })
+  await page.waitForFunction(() => (window as EventWindow).fileTestSocket?.readyState === 1, null, { timeout: 30_000 })
   await page.evaluate(({ name, data }) => {
     const socket = (window as EventWindow).fileTestSocket
     if (!socket) throw new Error('Missing fixture socket')

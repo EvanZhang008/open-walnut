@@ -60,7 +60,7 @@ async function openNoteAgentChat(page: Page): Promise<Record<string, string>> {
   await page.waitForFunction(() => {
     const ws = (window as any).__capturedWs as WebSocket | undefined
     return ws && ws.readyState === WebSocket.OPEN
-  }, null, { timeout: 5000 })
+  }, null, { timeout: 30_000 })
 
   await page.locator('a[href="/notes"]').first().click()
   // Whether the column is open is a synced UI pref, so the test before this one

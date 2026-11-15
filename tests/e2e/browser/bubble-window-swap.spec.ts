@@ -57,7 +57,7 @@ async function waitForWs(page: Page) {
   await page.waitForFunction(() => {
     const ws = (window as any).__capturedWs as WebSocket | undefined;
     return ws && ws.readyState === WebSocket.OPEN;
-  }, null, { timeout: 15000 });
+  }, null, { timeout: 30_000 });
 }
 
 async function sentIds(page: Page): Promise<string[]> {

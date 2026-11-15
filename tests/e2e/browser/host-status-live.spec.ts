@@ -104,7 +104,7 @@ async function waitForWs(page: Page): Promise<void> {
   await page.waitForFunction(() => {
     const ws = (window as unknown as { __hsWs?: WebSocket }).__hsWs
     return !!ws && ws.readyState === WebSocket.OPEN
-  }, null, { timeout: 20_000 })
+  }, null, { timeout: 30_000 })
 }
 
 /** Dispatch one `host:status` server frame on the captured socket. */

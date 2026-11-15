@@ -25,7 +25,7 @@ async function waitForWs(page: Page): Promise<void> {
   await page.waitForFunction(() => {
     const ws = (window as Window & { __capturedWs?: WebSocket }).__capturedWs
     return ws?.readyState === WebSocket.OPEN
-  }, null, { timeout: 10_000 })
+  }, null, { timeout: 30_000 })
 }
 
 async function mockSession(page: Page, messages: Record<string, unknown>[] = [

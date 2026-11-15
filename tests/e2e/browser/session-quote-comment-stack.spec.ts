@@ -479,7 +479,7 @@ test.describe('Selection pill: Quote and Comment stay on the passage and go with
       window.WebSocket = Kept
     })
     const serverEvent = async (name: string, data: Record<string, unknown>) => {
-      await page.waitForFunction(() => (window as unknown as { pwSocket?: WebSocket }).pwSocket?.readyState === 1, null, { timeout: 5_000 })
+      await page.waitForFunction(() => (window as unknown as { pwSocket?: WebSocket }).pwSocket?.readyState === 1, null, { timeout: 30_000 })
       await page.evaluate(({ name, data }) => {
         (window as unknown as { pwSocket: WebSocket }).pwSocket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'event', name, data }) }))
       }, { name, data })

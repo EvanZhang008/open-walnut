@@ -107,7 +107,7 @@ for (const theme of ['light', 'dark'] as const) {
     await page.setViewportSize({ width: 1280, height: 900 })
     await page.goto(`/sessions?id=${SESSION_ID}`)
     await page.evaluate((t) => { document.documentElement.dataset.theme = t }, theme)
-    await page.waitForFunction(() => (window as any).__capturedWs?.readyState === WebSocket.OPEN, null, { timeout: 10000 })
+    await page.waitForFunction(() => (window as any).__capturedWs?.readyState === WebSocket.OPEN, null, { timeout: 30_000 })
     const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
     const history = panel.locator('.session-history')
     await expect(history).toContainText('WF_ANSWER Both things', { timeout: 15000 })

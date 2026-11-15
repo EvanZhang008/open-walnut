@@ -91,7 +91,7 @@ async function waitForSubscription(page: Page, after = 0) {
   await page.waitForFunction((count) => {
     const ws = (window as any).__codexRetryWs as WebSocket | undefined;
     return ws?.readyState === WebSocket.OPEN && (window as any).__codexRetrySnapshotReplies > count;
-  }, after, { timeout: 15_000 });
+  }, after, { timeout: 30_000 });
 }
 
 async function reopenViaFinder(page: Page): Promise<Locator> {

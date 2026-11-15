@@ -42,7 +42,7 @@ async function waitForWs(page: Page) {
   await page.waitForFunction(() => {
     const ws = (window as any).__capturedWs as WebSocket | undefined;
     return ws && ws.readyState === WebSocket.OPEN;
-  }, null, { timeout: 10000 });
+  }, null, { timeout: 30_000 });
 }
 
 type HistoryRow = { role: 'user' | 'assistant'; text: string; timestamp: string; tools?: unknown[] };

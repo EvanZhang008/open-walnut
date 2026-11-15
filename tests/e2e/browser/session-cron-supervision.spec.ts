@@ -110,7 +110,7 @@ async function waitForWs(page: Page): Promise<void> {
   await page.waitForFunction(() => {
     const ws = (window as Window & { __capturedWs?: WebSocket }).__capturedWs
     return ws?.readyState === WebSocket.OPEN
-  }, null, { timeout: 20_000 })
+  }, null, { timeout: 30_000 })
 }
 
 async function pushCron(page: Page, metadata: SessionCronMetadata): Promise<void> {

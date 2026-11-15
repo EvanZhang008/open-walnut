@@ -123,7 +123,7 @@ async function endTurn(page: Page, sessionId: string) {
   await page.waitForFunction(() => {
     const ws = (window as any).__capturedWs as WebSocket | undefined;
     return ws && ws.readyState === WebSocket.OPEN;
-  }, null, { timeout: 15_000 });
+  }, null, { timeout: 30_000 });
   await page.evaluate((sid) => {
     const ws = (window as any).__capturedWs as WebSocket;
     ws.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'event', name: 'session:batch-completed', data: { sessionId: sid, count: 1 }, seq: Date.now() }) }));

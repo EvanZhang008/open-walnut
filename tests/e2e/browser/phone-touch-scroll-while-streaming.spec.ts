@@ -91,7 +91,7 @@ async function startStreaming(page: Page, repeat = 1) {
   await page.waitForFunction(() => {
     const ws = (window as unknown as { __capturedWs?: WebSocket }).__capturedWs
     return ws && ws.readyState === WebSocket.OPEN
-  }, null, { timeout: 15_000 })
+  }, null, { timeout: 30_000 })
   await page.evaluate((args) => {
     const w = window as unknown as { __capturedWs: WebSocket }
     const send = (delta: string) => w.__capturedWs.dispatchEvent(new MessageEvent('message', {

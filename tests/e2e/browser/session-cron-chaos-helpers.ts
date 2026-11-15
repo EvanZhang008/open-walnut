@@ -258,7 +258,7 @@ async function waitForWs(page: Page): Promise<void> {
   await page.waitForFunction(() => {
     const ws = (window as Window & { __chaosWs?: WebSocket }).__chaosWs
     return ws?.readyState === 1
-  }, null, { timeout: 20_000 })
+  }, null, { timeout: 30_000 })
 }
 
 /**

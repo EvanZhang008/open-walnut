@@ -73,7 +73,7 @@ async function openHomeWithSocket(page: import('@playwright/test').Page) {
   await page.waitForFunction(() => {
     const ws = (window as any).__capturedWs as WebSocket | undefined
     return ws && ws.readyState === WebSocket.OPEN
-  }, null, { timeout: 5000 })
+  }, null, { timeout: 30_000 })
 }
 
 /**

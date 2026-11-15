@@ -145,7 +145,7 @@ test('an opened run, an opened card and a folded diff stay as the reader left th
 
   await page.goto(`/sessions?id=${SESSION_ID}`);
   await page.waitForLoadState('networkidle');
-  await page.waitForFunction(() => (window as any).__capturedWs?.readyState === WebSocket.OPEN, null, { timeout: 10000 });
+  await page.waitForFunction(() => (window as any).__capturedWs?.readyState === WebSocket.OPEN, null, { timeout: 30_000 });
   const history = page.locator('.main-page-session-column .session-history').first();
   await expect(history).toContainText('Starting.');
 
