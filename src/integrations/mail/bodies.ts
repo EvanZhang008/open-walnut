@@ -23,6 +23,8 @@ import crypto from 'node:crypto'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import type { MailBody } from './types.js'
+import { plainTextOf } from '../../lib/message-text.js'
+export { htmlToText, plainTextOf } from '../../lib/message-text.js'
 
 /** Above this, a body is never parsed and never stored. Providers refuse it as `too-large`. */
 export const MAX_BODY_BYTES = 2 * 1024 * 1024
@@ -89,44 +91,6 @@ function clip(value: string, limit: number): { value: string; truncated: boolean
   return { value: buffer.subarray(0, limit).toString('utf8'), truncated: true }
 }
 
-const ENTITIES: Record<string, string> = {
-  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'", '#160': ' ',
-}
-
-/**
- * Enough HTML-to-text for a search index and a snippet, and deliberately not more.
- *
- * It runs on untrusted input in the server process, so it is a set of replacements over a
- * string with no parser and no DOM: nothing here can execute, fetch or recurse. Block-level
- * tags become newlines so that a sentence does not fuse with the next one, script and style
- * bodies go before anything else, and the remaining tags are dropped.
- */
-export function htmlToText(html: string): string {
-  return html
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    .replace(/<(script|style|head)\b[\s\S]*?<\/\1\s*>/gi, ' ')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/(p|div|li|tr|h[1-6]|blockquote|pre|table|section|article)\s*>/gi, '\n')
-    .replace(/<(li|tr)\b[^>]*>/gi, '\n')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&([a-zA-Z]+|#\d{1,6});/g, (whole, name: string) => {
-      const named = ENTITIES[name.toLowerCase()] ?? ENTITIES[name]
-      if (named !== undefined) return named
-      if (name.startsWith('#')) {
-        const code = Number(name.slice(1))
-        return Number.isInteger(code) && code > 0 && code < 0x110000 ? String.fromCodePoint(code) : ' '
-      }
-      return whole
-    })
-    // `\u00a0` as an ESCAPE, never the character: a literal non-breaking space inside a
-    // character class is invisible in every diff and every editor, and one deleted by a
-    // careless reformat would silently stop collapsing the whitespace HTML mail is full of.
-    .replace(/[ \t\u00a0]+/g, ' ')
-    .replace(/ ?\n ?/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-}
-
 /** The row's snippet: one line, whitespace collapsed, cut at the byte budget. */
 export function snippetOf(text: string): string {
   return clip(text.replace(/\s+/g, ' ').trim(), SNIPPET_MAX_BYTES).value
@@ -153,13 +117,6 @@ export function snippetForSubject(text: string, subject: string): string {
   const firstLine = at < 0 ? text : text.slice(0, at)
   if (normalized(firstLine) !== wanted) return snippetOf(text)
   return snippetOf(at < 0 ? '' : text.slice(at + 1))
-}
-
-/** The plain text a body contributes to FTS, whichever half the provider returned. */
-export function plainTextOf(body: Pick<MailBody, 'text' | 'html'>): string {
-  if (body.text && body.text.trim()) return body.text
-  if (body.html) return htmlToText(body.html)
-  return ''
 }
 
 /** Same-directory temp file then rename, so a reader of the path sees the old bytes or the new, never a truncated file. */

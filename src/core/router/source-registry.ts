@@ -22,6 +22,13 @@ export interface RouterItemContent {
   item: RouterItem;
   body: { text?: string; html?: string } | null;
   bodyAvailable: boolean;
+  /** Cache-only evidence, never a routing verdict or authority to act. */
+  headers?: {
+    listUnsubscribe?: { https?: string[]; mailto?: string[]; oneClick?: boolean; listId?: string };
+    bulkHeaders?: { precedence?: string; autoSubmitted?: string };
+  };
+  bodyUnavailableReason?: string;
+  bodyTruncated?: boolean;
   attachments: Array<{ filename?: string; mimeType?: string; bytes?: number }>;
   attachmentsAvailable: false;
 }

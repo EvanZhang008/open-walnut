@@ -14,6 +14,7 @@ import type { WalnutServerPluginApi } from '../../src/core/plugins/server-api.js
 import { currentRouterSources, readRouterItem, readRouterItemForDelivery, registerRouterSource, resolveRouterItem } from '../../src/core/router/source-registry.js';
 import type { RouterSource } from '../../src/core/router/types.js';
 import { MailBodyStore } from '../../src/integrations/mail/bodies.js';
+import { largeRouterMails } from '../fixtures/mail/large-router-mails.js';
 import { MailDatabase } from '../../src/integrations/mail/db.js';
 import { mailRouterKey, mailRowDeliveryVersion, registerMailRouterSource } from '../../src/integrations/mail/router-source.js';
 import { MailStore, type MessageWrite } from '../../src/integrations/mail/store.js';
@@ -389,6 +390,30 @@ describe('mail router source: mutable message handles', () => {
     const current = (await resolveRouterItem(unversioned(ACCOUNT_A, 'INBOX:1:10'))).source;
     expect(current.version).toBe(await versionNow(cache, ACCOUNT_A, 'INBOX:1:10'));
     expect((await readRouterItem(current)).body?.text).toBe('NEW_SNAPSHOT_CANARY');
+  });
+});
+
+describe('mail router source: bounded triage evidence', () => {
+  it.each(largeRouterMails)('exposes headers for a large $name without shortening the original', async (mail) => {
+    const cache = await openCache();
+    const write = envelope({ fromAddr: mail.sender, subject: mail.subject, payload: JSON.stringify(mail.payload) });
+    const rowid = await cache.store.insertMessage(write, NOW);
+    const stored = await storeBody(cache, write, mail);
+    await cache.store.setMessageBody(rowid, { bodyRef: stored.ref, bodyBytes: stored.bytes, snippet: stored.snippet, payload: JSON.stringify(mail.payload) });
+    const exact = source(ACCOUNT_A, write.messageId, await versionNow(cache, ACCOUNT_A, write.messageId));
+    const before = await flagState(cache, rowid);
+    const content = await readRouterItem(exact);
+    expect(content).toMatchObject({ headers: mail.payload });
+    expect(content.body).toEqual({ text: mail.text, html: mail.html });
+    expect((await readRouterItemForDelivery(exact)).body).toEqual(content.body);
+    expect(await flagState(cache, rowid)).toEqual(before);
+  });
+
+  it('reports the missing body reason while leaving the envelope readable', async () => {
+    const cache = await openCache();
+    const seeded = await seed(cache, {});
+    await cache.store.setMessageBodyError(seeded.rowid, 'too-large');
+    expect(await readRouterItem(seeded.source)).toMatchObject({ bodyAvailable: false, bodyUnavailableReason: 'too-large' });
   });
 });
 

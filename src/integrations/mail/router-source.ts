@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { registerRouterSource, RouterSourceError, type RouterNoiseOutcome } from '../../core/router/source-registry.js';
+import { registerRouterSource, RouterSourceError, type RouterItemContent, type RouterNoiseOutcome } from '../../core/router/source-registry.js';
 import type { RouterItem } from '../../core/router/types.js';
 import type { MailStore, MessageRow } from './store.js';
 import { MailBodySnapshotError, type MailBodyStore } from './bodies.js';
@@ -130,7 +130,16 @@ export function registerMailRouterSource(store: MailStore, bodies: MailBodyStore
           ...(typeof one.bytes === 'number' ? { bytes: one.bytes } : {}),
         }));
       } catch { /* A damaged metadata cache does not fetch from the provider. */ }
-      return { item: itemOf(row), body, bodyAvailable: !!body && (body.text !== undefined || body.html !== undefined), attachments, attachmentsAvailable: false as const };
+      let payload: Record<string, unknown> = {};
+      try { payload = JSON.parse(row.payload || '{}') ?? {}; } catch { /* Keep readable content when metadata is damaged. */ }
+      const bodyAvailable = !!body && (body.text !== undefined || body.html !== undefined);
+      return {
+        item: itemOf(row), body, bodyAvailable, attachments, attachmentsAvailable: false as const,
+        // Projected and bounded at the context edge; never copy unrelated payload fields.
+        headers: { listUnsubscribe: payload.listUnsubscribe, bulkHeaders: payload.bulkHeaders } as RouterItemContent['headers'],
+        ...(!bodyAvailable ? { bodyUnavailableReason: row.body_error || 'The email body is not cached.' } : {}),
+        ...(payload.bodyTruncated === true ? { bodyTruncated: true } : {}),
+      };
   };
   return registerRouterSource('mail', {
     async resolve(source) { return itemOf(await rowFor(source)); },

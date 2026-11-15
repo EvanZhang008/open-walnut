@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createMockConstants } from '../helpers/mock-constants.js';
 import { patchLegacyTask } from '../helpers/router-history-fixtures.js';
+import { largeRouterMails } from '../fixtures/mail/large-router-mails.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-router-area'));
 
@@ -118,6 +119,37 @@ describe('area routing on the real server', () => {
     expect(text).not.toContain('WORK_CANARY');
     expect(text).not.toContain('WORK_BODY_CANARY');
     expect(text).not.toContain(workId);
+  });
+
+  it.each(largeRouterMails)('returns readable bounded context for a large $name through the real router API', async (mail) => {
+    read.mockImplementationOnce(async (source) => ({
+      item: { ...itemFor(source), sender: mail.sender, subject: mail.subject },
+      body: { text: mail.text, html: mail.html }, bodyAvailable: true, headers: mail.payload,
+      attachments: [], attachmentsAvailable: false as const,
+    }));
+    const response = await call('GET', `${contextPath(personal)}&preview=1`, personalSid);
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    const result = JSON.parse(text);
+    expect(result.body.text).toBe(mail.text.slice(0, 6000));
+    expect(result.body).not.toHaveProperty('html');
+    expect(result.headers.bulkHeaders.precedence).toBe('bulk');
+    expect(result.item.sender).toBe(mail.sender);
+    expect(result.instructions).toContain('never hand an item on merely because it is long');
+    expect(result.trust).toContain('never authorization');
+    expect(text.length).toBeLessThan(14000);
+    expect(text).not.toContain('.layout');
+  });
+
+  it('keeps the full cached body for an older REST client that did not request a preview', async () => {
+    const mail = largeRouterMails[1];
+    read.mockImplementationOnce(async (source) => ({
+      item: itemFor(source), body: { text: mail.text, html: mail.html }, bodyAvailable: true,
+      attachments: [], attachmentsAvailable: false as const,
+    }));
+    const response = await call('GET', contextPath(personal), personalSid);
+    expect(response.status).toBe(200);
+    expect((await response.json()).body).toEqual({ text: mail.text, html: mail.html });
   });
 
   it('returns no content if the active router is paused while its source is being read', async () => {
@@ -254,4 +286,47 @@ describe('area routing on the real server', () => {
     const reread = await call('GET', contextPath(personal), personalSid);
     expect(await reread.json()).toMatchObject({ route: { status: 'not_routed' } });
   });
+  it('keeps every history owner match in preview mode without repeating long identities', async () => {
+    const { routerStore } = await import('../../src/core/router/runtime.js');
+    const store = routerStore('personal');
+    for (let i = 0; i < 14; i++) {
+      const source = { ...personal, message: `HISTORY:${i}`, version: `history-${i}` };
+      await store.recordLegacy({
+        ...itemFor(source), subject: `Earlier notification ${i}`,
+      }, { taskId: workId, reason: 'Handled by this existing task.', evidence: `fixture-${i}`, at: Date.now() - i * 1000 });
+    }
+    const response = await call('GET', `${contextPath(personal)}&preview=1`, personalSid);
+    expect(response.status).toBe(200);
+    const result = await response.json();
+    // An earlier test recorded this item's own receipt too; all fourteen seeded matches remain.
+    const seededHistory = result.senderHistory.filter((one: Record<string, unknown>) => String(one.subject).startsWith('Earlier notification '));
+    expect(seededHistory).toHaveLength(14);
+    expect(seededHistory.find((one: Record<string, unknown>) => one.subject === 'Earlier notification 13'))
+      .toMatchObject({ taskId: workId, targetOpen: true });
+    expect(result.senderHistory.every((one: Record<string, unknown>) => !('source' in one) && !('key' in one))).toBe(true);
+    expect(JSON.stringify(result).length).toBeLessThan(12000);
+  });
+
+  it('records a large promotion as noise once without rereading its full body', async () => {
+    const promotion = { ...personal, message: 'PROMOTION:1', version: 'promotion-1' };
+    await updateRouterAreas(WALNUT_HOME, (file) => ({ ...file, items: [...file.items, { source: promotion, areaId: 'personal' }] }));
+    clearLookups();
+    const response = await call('POST', '/api/v1/router/route', personalSid, {
+      source: promotion, not_routed: true, reason: 'Bulk event promotion: registration is optional and no action is needed.',
+    });
+    expect(response.status).toBe(200);
+    const result = await response.json();
+    expect(result.fresh).toBe(true);
+    expect(result.route).toMatchObject({ status: 'not_routed', reason: 'Bulk event promotion: registration is optional and no action is needed.' });
+    expect(result.route.taskId).toBeUndefined();
+    expect(result.route.messageId).toBeUndefined();
+    expect(read).not.toHaveBeenCalled();
+    const again = await call('POST', '/api/v1/router/route', personalSid, {
+      source: promotion, not_routed: true, reason: 'Bulk event promotion: registration is optional and no action is needed.',
+    });
+    expect(again.status).toBe(200);
+    expect((await again.json()).fresh).toBe(false);
+  });
+
+
 });

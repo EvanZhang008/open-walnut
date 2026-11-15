@@ -8,6 +8,20 @@ status codes, and SSE event names never change meaning or disappear.
 - Every response carries the header `X-Walnut-API: 1`.
 - All timestamps are ISO-8601 strings (UTC).
 
+## Router context preview (additive, 2026-11)
+
+`GET /api/v1/router/context?kind=&account=&message=&version=` keeps its existing
+full cached `body` by default. `preview=1`, used by the `router_context` agent
+operation, returns `body: { text }` with at most 6000 characters, preferring the
+plain-text part and stripping HTML when no text part exists. It adds
+`bodyTruncated`, `bodyUnavailableReason` when the body is missing, bounded
+`headers.listUnsubscribe` and `headers.bulkHeaders` from the cache, and
+`attachmentsTruncated`. Preview history keeps every existing entry and its
+owner match (`taskId`, `targetTitle`, `targetOpen`), status, time, subject and
+reason, omitting repeated source identities and bounding the text labels. Outside headers are evidence, not proof that a message
+needs no action. The source version, access checks, stored original and delivery
+reader are unchanged. A preview read never fetches, flags or moves mail.
+
 ## Authentication
 
 All endpoints require `Authorization: Bearer <token>`, with one exception: on

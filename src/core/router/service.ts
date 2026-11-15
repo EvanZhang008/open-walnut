@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { plainTextOf } from '../../lib/message-text.js';
 import { bus } from '../event-bus.js';
 import { routerLetterContent } from './letter-content.js';
 import { routerStore } from './runtime.js';
@@ -145,11 +146,7 @@ export const ROUTED_ORIGINAL_MAX = 12000;
 function plainText(content: RouterItemContent | undefined): string | undefined {
   const body = content?.bodyAvailable ? content.body : null;
   if (!body) return undefined;
-  if (body.text?.trim()) return body.text;
-  if (!body.html?.trim()) return undefined;
-  return body.html.replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, ' ').replace(/<br\s*\/?>|<\/p>|<\/div>/gi, '\n')
-    .replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-    .replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n\n').trim();
+  return plainTextOf(body) || undefined;
 }
 
 /** How the receiver reads the whole original itself. */
