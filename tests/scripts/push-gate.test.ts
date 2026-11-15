@@ -800,6 +800,7 @@ describe('the pre-push type check', () => {
     fs.writeFileSync(path.join(dir, 'scripts/push-gate.sh'), 'cat >/dev/null; exit 0\n')
     fs.mkdirSync(path.join(dir, 'scripts/leak-scan'), { recursive: true })
     fs.writeFileSync(path.join(dir, 'scripts/leak-scan/scan-push.sh'), 'cat >/dev/null; exit 0\n')
+    fs.writeFileSync(path.join(dir, 'scripts/leak-scan/check-on-github.sh'), 'cat >/dev/null; exit 0\n')
     fs.writeFileSync(path.join(dir, 'a.ts'), 'export const a = 1\n')
     git('add', '-A'); git('-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'base')
     const bin = path.join(dir, '.bin'); fs.mkdirSync(bin)

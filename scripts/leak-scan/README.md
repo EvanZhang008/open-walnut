@@ -15,6 +15,7 @@ Every way a change reaches GitHub runs it, and none can skip it:
 | a push | `.husky/pre-push` runs `scan-push.sh` first, before the type check: every commit and annotated tag the push publishes |
 | a land | the land runs `--range <main>..<tip> --strict` before it writes main |
 | GitHub | `.github/workflows/leak-gate.yml`: every push and pull request scans its new commits and the whole history; a schedule catches bot pushes |
+| GitHub's main | the "main leak gate" ruleset refuses a push of main whose commit has not passed "Scan new commits" (only the GitHub Actions app may skip it, for the release bot). Lands push straight to main, so `.husky/pre-push` runs `check-on-github.sh` first: the commit goes to a hidden `refs/leak-check/<sha>` ref and main's own `leak-gate.yml` is dispatched with `commit=<sha>`, scans it and writes that status |
 | an agent's edit | the maintainer's write-time hook runs `--text <path>` on the new content |
 
 It reads each commit one by one (a word added and removed inside one push is still public):
@@ -44,6 +45,7 @@ in `.gitleaksignore`, both bound to the old commit, so only new commits are judg
 | `leak-scan.mjs` | The CLI. Scans files and directories, opens `.tgz`/`.tar`/`.zip`/`.gz` (and mounts a `.dmg` on macOS), reads binaries through their printable runs. Exit 0 clean, 1 hits, 2 error. `--redact` prints the rule and the place, never the text. |
 | `scan-git.mjs` | The git gate (above). Exit 0 clean, 1 hits, 2 could not check. |
 | `scan-push.sh` | The pre-push half: reads a pre-push hook's refs and runs `scan-git.mjs` on each pushed range and tag. |
+| `check-on-github.sh` | The pre-push step that gets a commit its "Scan new commits" status from the Leak gate on main before it becomes main (above). |
 | `shapes.tsv` | Committed shape rules (credential formats), for everyone, contributors and forks included. |
 | `build-rules.mjs` | Compiles a private rule source (TSV, plus name lists) into the rule file the CLI reads. Terms are stored only as hashes. |
 | `../site-deploy.sh` | Deploys `site/` of a commit to Pages, after the scan passes on exactly the files it uploads. Refuses without rules. |

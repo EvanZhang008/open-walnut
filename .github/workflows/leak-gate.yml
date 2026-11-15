@@ -12,6 +12,12 @@ name: Leak gate
 # to it, the schedule, by hand): another branch's workflow file is its pusher's to edit, so it
 # runs the committed shapes and gitleaks, as a fork's pull request does. Output is redacted: the
 # rule and the file and line, never the text.
+#
+# A push of main needs this scan to have passed on its commit first (the "main leak gate" ruleset
+# requires "Scan new commits"; lands push straight to main, so the check cannot come after). The
+# pre-push hook (scripts/leak-scan/check-on-github.sh) puts the commit on a hidden
+# refs/leak-check/<sha> ref and dispatches this workflow on main with `commit`: main's own copy of
+# this file then scans it and writes the "Scan new commits" status on that commit.
 
 on:
   push:
@@ -19,12 +25,18 @@ on:
   schedule:
     - cron: '41 */6 * * *'
   workflow_dispatch:
+    inputs:
+      commit:
+        description: 'A commit to check before it is pushed to main (its new commits; writes the "Scan new commits" status)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
-  group: leak-gate-${{ github.event_name }}-${{ github.ref }}-${{ github.sha }}
+  group: leak-gate-${{ github.event_name }}-${{ github.ref }}-${{ github.sha }}-${{ inputs.commit }}
   cancel-in-progress: false
 
 jobs:
@@ -40,6 +52,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          ref: ${{ inputs.commit }}
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -59,15 +72,21 @@ jobs:
           BEFORE: ${{ github.event.before }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          COMMIT: ${{ inputs.commit }}
         run: |
           set -euo pipefail
           zero=0000000000000000000000000000000000000000
-          head=${PR_HEAD:-$GITHUB_SHA}
+          if [ -n "$COMMIT" ]; then
+            [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::commit must be a full sha: $COMMIT"; exit 1; }
+            git cat-file -e "$COMMIT^{commit}" 2>/dev/null || git fetch -q origin "$COMMIT"
+          fi
+          head=${COMMIT:-${PR_HEAD:-$GITHUB_SHA}}
           base=
           if [ "$EVENT" = pull_request ]; then base=$(git merge-base "$PR_BASE" "$head")
           elif [ "$EVENT" = push ] && [ -n "$BEFORE" ] && [ "$BEFORE" != "$zero" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then base=$BEFORE
-          elif [ "$EVENT" = push ]; then
-            # a new branch or tag: from the parent of its oldest commit no other branch holds
+          elif [ "$EVENT" = push ] || [ -n "$COMMIT" ]; then
+            # a new branch or tag, or a commit to check before main gets it: from the parent of
+            # its oldest commit no branch holds
             first=$(git rev-list --reverse --topo-order "$head" --not $(git for-each-ref --format='%(objectname)' refs/remotes/origin | grep -vx "$head" || true) | head -1)
             if [ -z "$first" ]; then base=$head; elif git rev-parse -q --verify "$first^" >/dev/null; then base=$(git rev-parse "$first^"); else base=$zero; fi
           fi
@@ -85,9 +104,11 @@ jobs:
           git archive "$from" scripts/leak-scan | tar -x -C "$judge"
           echo "judged by the scanner of $(git rev-parse --short "$from")"
       - name: Scan
+        id: scan
         env:
           LEAK_SCAN_RULES: ${{ (github.ref == 'refs/heads/main' && github.event_name != 'pull_request') && secrets.LEAK_SCAN_RULES || '' }}
           PART: ${{ matrix.part }}
+          COMMIT: ${{ inputs.commit }}
           BASE: ${{ steps.what.outputs.base }}
           HEAD_SHA: ${{ steps.what.outputs.head }}
           UPSTREAM: ${{ github.repository == 'EvanZhang008/open-walnut' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
@@ -97,10 +118,24 @@ jobs:
           if [ -n "$LEAK_SCAN_RULES" ]; then rules=(--rules-env LEAK_SCAN_RULES); export WALNUT_LEAK_STRICT=1
           elif [ "$UPSTREAM" = true ]; then echo "::error::The LEAK_SCAN_RULES secret is not set (scripts/leak-scan/README.md)"; exit 1
           fi
-          if [ "$PART" = "full history" ]; then
+          if [ "$PART" = "full history" ] && [ -n "$COMMIT" ]; then
+            echo "A commit checked before its push: its new commits are the check (the full history runs on the push of main)."
+          elif [ "$PART" = "full history" ]; then
             bun "$RUNNER_TEMP/judge/scripts/leak-scan/scan-git.mjs" --repo . --history "$HEAD_SHA" --redact "${rules[@]}"
           elif [ -z "$BASE" ] || [ "$BASE" = "$HEAD_SHA" ]; then
             echo "No new commits to scan."
           else
             bun "$RUNNER_TEMP/judge/scripts/leak-scan/scan-git.mjs" --repo . --range "$BASE..$HEAD_SHA" --redact "${rules[@]}"
           fi
+      - name: Report the check on the commit
+        if: always() && inputs.commit != '' && matrix.part == 'new commits' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ inputs.commit }}
+          OUTCOME: ${{ steps.scan.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ "$OUTCOME" = success ]; then state=success; desc='the leak scan passed'; else state=failure; desc="the leak scan did not pass ($OUTCOME)"; fi
+          gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$COMMIT" -f state="$state" -f context='Scan new commits' -f description="$desc" -f target_url="$RUN_URL" >/dev/null
+          echo "Scan new commits: $state on $COMMIT"

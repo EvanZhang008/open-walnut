@@ -20,7 +20,10 @@
 #    pushing to the public mirror. Absent for everyone else, so this hook
 #    degrades to just the type-check.
 #
-# 4. The test gate, last because it is the slowest: see scripts/push-gate.sh.
+# 4. The Leak gate's check on GitHub of a commit about to become main
+#    (scripts/leak-scan/check-on-github.sh): GitHub's ruleset refuses main without it.
+#
+# 5. The test gate, last because it is the slowest: see scripts/push-gate.sh.
 
 # The refs being pushed, read once: the scans and the test gate below all read them.
 refs=$(cat)
@@ -62,7 +65,11 @@ if [ -n "$scanner" ]; then
   printf '%s\n' "$refs" | "$scanner" "$@" || exit 1
 fi
 
-# 4. The test gate (scripts/push-gate.sh): CI's quick and frontend tiers and the browser specs a
+# 4. The Leak gate's check on GitHub (main's own Leak gate workflow scans the commit on a hidden
+#    refs/leak-check/<sha> ref and writes the "Scan new commits" status the ruleset requires).
+printf '%s\n' "$refs" | bash scripts/leak-scan/check-on-github.sh "$@" || exit 1
+
+# 5. The test gate (scripts/push-gate.sh): CI's quick and frontend tiers and the browser specs a
 #    push to main touches, on the commit being pushed, on GitHub's runners (a hidden
 #    refs/gate/<sha> ref and .github/workflows/push-gate.yml). Off unless `git config walnut.pushGate` is true, so a
 #    contributor's push is unchanged.

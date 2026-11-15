@@ -28,6 +28,7 @@ const HOOKS: Record<string, RegExp> = {
 const PUSH_SITES: Record<string, { lines: number; why: string }> = {
   '.github/workflows/release.yml': { lines: 2, why: 'the release tag and version commit, made by CI from main; the Leak gate schedule scans them (GITHUB_TOKEN pushes start no workflow)' },
   '.github/workflows/star-history.yml': { lines: 1, why: 'a generated SVG of public star counts; the Leak gate schedule scans it' },
+  'scripts/leak-scan/check-on-github.sh': { lines: 2, why: 'a hidden refs/leak-check/<sha> ref of a commit the same pre-push hook just scanned, for the Leak gate on main to check, and its deletion' },
   'scripts/cloud/setup.sh': { lines: 1, why: "the user's own private data hub on their EC2 box, never GitHub" },
   'scripts/push-gate-sweep.sh': { lines: 1, why: 'deletes gate refs, publishes nothing' },
   'scripts/push-gate.sh': { lines: 6, why: 'a gate ref, pushed only after the pre-push leak scan (the push being gated) or the private scanner passed on it; the other lines are messages' },
@@ -37,6 +38,7 @@ const PUSH_SITES: Record<string, { lines: number; why: string }> = {
 
 /** Every committed `--no-verify`, by file and count. Each skips hooks, so each must be safe. */
 const NO_VERIFY: Record<string, { lines: number; why: string }> = {
+  'scripts/leak-scan/check-on-github.sh': { lines: 2, why: 'inside the pre-push hook, after its leak scans passed on the same commit; a hidden ref, never a branch' },
   'scripts/push-gate-sweep.sh': { lines: 1, why: 'deleting a gate ref publishes nothing' },
   'scripts/push-gate.sh': { lines: 4, why: 'gate refs, after the leak scan of the same commits already ran (pre-push, or the private scanner just above them)' },
 }
