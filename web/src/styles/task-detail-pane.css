@@ -420,6 +420,9 @@
 .is-phone-layer .todo-detail-pane.tdp { height: auto; flex: 1; }
 .is-phone-layer .tdp-head { padding: 16px; }
 .is-phone-layer .tdp-main, .is-phone-layer .tdp-rail { padding: 16px; }
-.is-phone-layer .tdp-footer { padding: 12px 16px; }
+.is-phone-layer .tdp-footer { padding: 12px 16px; gap: 8px; }
+.is-phone-layer .tdp-footer button { min-width: 44px; min-height: 44px; }
+.is-phone-layer .tdp-footer .tdp-actions { flex-wrap: wrap; }
+.is-phone-layer .tdp-open-session { flex-shrink: 0; }
 
 .tdp-doc .notes-editor-meta { margin-left: auto; }

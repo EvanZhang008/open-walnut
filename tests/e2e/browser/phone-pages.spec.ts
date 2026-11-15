@@ -259,6 +259,12 @@ for (const size of SIZES) {
     const detail = page.locator('.task-detail-modal-overlay')
     await expect(detail.locator('.editor-mic-dock .mic-btn')).toHaveCount(2, { timeout: 20_000 })
     await expect(detail.locator('.box-mic .mic-btn')).toHaveCount(1)
+    // Footer actions stay finger-sized even when a new popup action is added.
+    for (const action of await detail.locator('.tdp-footer button').all()) {
+      const box = await action.boundingBox()
+      expect(box!.width, await action.innerText()).toBeGreaterThanOrEqual(44)
+      expect(box!.height, await action.innerText()).toBeGreaterThanOrEqual(44)
+    }
     await scan(page, '.task-detail-modal-overlay', `detail-${size.width}`)
     expect(errors).toEqual([])
   })
