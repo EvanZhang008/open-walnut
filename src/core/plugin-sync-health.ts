@@ -211,3 +211,33 @@ export function decideConnectionNotice(
   }
   return { recovered: false };
 }
+
+/**
+ * One warn line per failure streak for each kind of sync card.
+ *
+ * A failing sync republishes its card every time the 60 s absorber window
+ * opens, so a line logged at warn whenever a publish went through was one warn
+ * a minute for as long as the condition lasted (2026-11-15: an expired work
+ * sign-in logged "sync: repeating" about 60 times an hour all morning, beside
+ * the plugin's own lines that raised a log-spike alarm). The card already
+ * carries the condition; the log needs it once, when the streak starts, and
+ * the repeats are debug. A kind warns again only after its streak ends.
+ *
+ * Kinds are namespaced (`delta:<level>`, `reconcile`) so a delta success, which
+ * does not end a full-reconcile streak, resets only its own kinds.
+ */
+export class StreakWarnings {
+  private readonly warned = new Set<string>();
+
+  /** The level for a notice line: warn the first time `kind` publishes in its streak, debug after. */
+  levelFor(kind: string, published: boolean): 'warn' | 'debug' {
+    if (!published || this.warned.has(kind)) return 'debug';
+    this.warned.add(kind);
+    return 'warn';
+  }
+
+  /** The streak of every kind starting with `prefix` ended: their next publish warns again. */
+  reset(prefix: string): void {
+    for (const kind of this.warned) if (kind.startsWith(prefix)) this.warned.delete(kind);
+  }
+}

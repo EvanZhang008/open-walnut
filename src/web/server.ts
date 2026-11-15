@@ -105,7 +105,7 @@ import { registry } from '../core/integration-registry.js'
 import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, forgetBundledPlugin, getPluginLifecycleRecords, getPluginReloadIds, isPluginCatalogueLoading, loadNewPlugins, loadPlugins, migrateConfigToPlugins, pluginsKeepingTasks, reloadLoadedPlugin, reloadLoadedPlugins, runPluginMigrations, getUnconfiguredPlugins, pluginStarting } from '../core/integration-loader.js'
 import { disposeCoreServices, publishCalendarSource, publishFeatureNodes } from '../core/platform-services.js'
 import type { SyncPollContext } from '../core/integration-types.js'
-import { recordSyncSuccess, recordSyncFailure, decideSyncFailureNotice, decideConnectionNotice, getSyncHealth, reconcileCardWanted, type ConnectionWatch } from '../core/plugin-sync-health.js'
+import { recordSyncSuccess, recordSyncFailure, decideSyncFailureNotice, decideConnectionNotice, getSyncHealth, reconcileCardWanted, StreakWarnings, type ConnectionWatch } from '../core/plugin-sync-health.js'
 import { syncReconciler, type ReconcileTickOutcome } from '../core/sync-reconciler.js'
 import { integrationsRouter } from './routes/integrations.js'
 import { createPluginSourcesRouter } from './routes/plugin-sources.js'
@@ -6701,6 +6701,8 @@ function startPluginSyncPolling(): void {
     let recoveredOnce = false
     // Whether this plugin's "sign in again" card is up (see decideConnectionNotice).
     const connectionWatch: ConnectionWatch = { noticed: false }
+    // One warn per failure streak per card kind; the republishes are debug.
+    const streakWarnings = new StreakWarnings()
     const intervalMs = (plugin.config.sync_interval_ms as number) ?? SYNC_INTERVAL_MS
     const pushRetrySchedule = pushRetrySchedules.get(plugin.id) ?? new SyncRetrySchedule()
     pushRetrySchedules.set(plugin.id, pushRetrySchedule)
@@ -6971,6 +6973,9 @@ function startPluginSyncPolling(): void {
           // Step 3: Full reconciliation check (runs even if delta succeeded)
           try {
             reconcile = await syncReconciler.tick(plugin, ctx, { deltaFailed })
+            // Here, not after the finally: a completion in a tick whose delta threw
+            // skips the lines below and would leave the reconcile kind warned forever.
+            if (reconcile.status === 'completed') streakWarnings.reset('reconcile')
           } catch (reconcileErr) {
             log.web.debug(`${plugin.id} reconciler tick failed`, {
               error: reconcileErr instanceof Error ? reconcileErr.message : String(reconcileErr),
@@ -6994,7 +6999,7 @@ function startPluginSyncPolling(): void {
             dedupScope: `plugin:${plugin.id}:reconcile`,
             recoveryKey: `plugin:${plugin.id}`,
           })
-          log.web[published ? 'warn' : 'debug'](`${plugin.id} sync: full reconcile repeating`, {
+          log.web[streakWarnings.levelFor('reconcile', published)](`${plugin.id} sync: full reconcile repeating`, {
             pluginId: plugin.id, consecutiveFailures: reconcile.consecutiveFailures, retryInMs: reconcile.retryInMs, error: firstLine,
           })
         }
@@ -7022,6 +7027,7 @@ function startPluginSyncPolling(): void {
         const reconcileFailing = syncReconciler.hasOpenFailureStreak(plugin.id)
         const recovered = (consecutiveFailures > 0 || !recoveredOnce || reconcileRecovered) && !reconcileFailing
         consecutiveFailures = 0
+        streakWarnings.reset('delta:')
         recoveredOnce = true
         recordSyncSuccess(plugin.id)
         if (recovered) {
@@ -7084,9 +7090,9 @@ function startPluginSyncPolling(): void {
             recoveryKey: `plugin:${plugin.id}`,
             ...(notice.action ? { action: notice.action } : {}),
           })
-          // One warn per card the human actually got; the absorbed repeats in
-          // between are debug, or a 30s failing tick would fill the log.
-          log.web[published ? 'warn' : 'debug'](`${plugin.id} sync: ${notice.level}`, {
+          // One warn per streak for each card (StreakWarnings): the absorbed repeats
+          // and every later republish are debug, or a failing tick fills the log.
+          log.web[streakWarnings.levelFor(`delta:${notice.level}`, published)](`${plugin.id} sync: ${notice.level}`, {
             pluginId: plugin.id, consecutiveFailures, error: errorMsg,
             ...(notice.code ? { code: notice.code } : {}),
           })
