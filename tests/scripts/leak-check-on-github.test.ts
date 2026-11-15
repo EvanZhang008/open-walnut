@@ -83,6 +83,15 @@ describe('the Leak gate checks a commit on GitHub before it becomes main', () =>
     expect(prePush).toContain('bash scripts/leak-scan/check-on-github.sh "$@" || exit 1')
   })
 
+  it('every workflow that pushes gets the check first (the ruleset lets no bot skip it)', () => {
+    // the git push census of tests/scripts/leak-gate-paths.test.ts, over the workflows
+    const pushRe = /\bgit\b(?:\s+(?:-[cC]\s+\S+|--?[a-z-]+(?:=\S+)?))*\s+push\b/
+    const dir = path.join(REPO, '.github', 'workflows')
+    const pushers = fs.readdirSync(dir).filter((f) => fs.readFileSync(path.join(dir, f), 'utf8').split('\n').some((l) => !/^\s*#/.test(l) && pushRe.test(l)))
+    expect(pushers.sort()).toEqual(['release.yml', 'star-history.yml'])
+    for (const f of pushers) expect(fs.readFileSync(path.join(dir, f), 'utf8'), f).toContain('bash scripts/leak-scan/check-on-github.sh origin')
+  })
+
   it('a pass lets the push go on, and the hidden ref is gone afterwards', () => {
     const r = run('pass', { required: 'true', states: ['none', 'pending', 'success'] })
     expect(r.status, r.out).toBe(0)

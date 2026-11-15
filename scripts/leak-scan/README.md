@@ -15,7 +15,7 @@ Every way a change reaches GitHub runs it, and none can skip it:
 | a push | `.husky/pre-push` runs `scan-push.sh` first, before the type check: every commit and annotated tag the push publishes |
 | a land | the land runs `--range <main>..<tip> --strict` before it writes main |
 | GitHub | `.github/workflows/leak-gate.yml`: every push and pull request scans its new commits and the whole history; a schedule catches bot pushes |
-| GitHub's main | the "main leak gate" ruleset refuses a push of main whose commit has not passed "Scan new commits" (only the GitHub Actions app may skip it, for the release bot). Lands push straight to main, so `.husky/pre-push` runs `check-on-github.sh` first: the commit goes to a hidden `refs/leak-check/<sha>` ref and main's own `leak-gate.yml` is dispatched with `commit=<sha>`, scans it and writes that status |
+| GitHub's main | the "main leak gate" ruleset refuses a push of main whose commit has not passed "Scan new commits" (nobody may skip it; the release and star-history bots run the same check before their push). Lands push straight to main, so `.husky/pre-push` runs `check-on-github.sh` first: the commit goes to a hidden `refs/leak-check/<sha>` ref and main's own `leak-gate.yml` is dispatched with `commit=<sha>`, scans it and writes that status |
 | a change to the gate itself | a push that changes `.github/workflows/leak-gate.yml` or `scripts/leak-scan/` is refused by the maintainer's private push review unless he approves that exact push with Touch ID (GitHub runs the pushed copy of a workflow on a branch, so the gate's own files are his to change) |
 | an agent's edit | the maintainer's write-time hook runs `--text <path>` on the new content |
 

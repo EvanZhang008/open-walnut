@@ -834,6 +834,7 @@ jobs:
       - name: Roll CHANGELOG and package.json on main
         env:
           VERSION: ${{ needs.promote-plan.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           for attempt in 1 2 3 4 5; do
             git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main
@@ -841,7 +842,9 @@ jobs:
             if grep -qF "## [$VERSION]" CHANGELOG.md; then echo "main already says $VERSION"; exit 0; fi
             bun scripts/stable-promote.mjs roll --version "$VERSION" --notes "$RUNNER_TEMP/notes.md"
             git commit --quiet -am "release: $VERSION"
-            if git push --quiet origin main; then echo "main now says $VERSION"; exit 0; fi
+            # GitHub's main takes only a commit that passed the Leak gate (scripts/leak-scan/README.md)
+            if printf 'refs/heads/main %s refs/heads/main %040d\n' "$(git rev-parse HEAD)" 0 | bash scripts/leak-scan/check-on-github.sh origin "$(git remote get-url origin)" \
+              && git push --quiet origin main; then echo "main now says $VERSION"; exit 0; fi
             echo "main moved during the push; trying again ($attempt)"
             sleep $((attempt * 5))
           done

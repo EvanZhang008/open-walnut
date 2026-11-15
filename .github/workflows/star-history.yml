@@ -12,6 +12,8 @@ on:
 
 permissions:
   contents: write
+  # dispatches the Leak gate, whose "Scan new commits" check main's ruleset requires
+  actions: write
 
 concurrency:
   group: star-history
@@ -31,6 +33,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Commit changes
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [ -z "$(git status --porcelain -- docs/assets/star-history.svg)" ]; then
             echo "Star history is already current."
@@ -40,4 +44,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs/assets/star-history.svg
           git commit -m "docs: update star history"
+          # GitHub's main takes only a commit that passed the Leak gate (scripts/leak-scan/README.md)
+          printf 'refs/heads/main %s refs/heads/main %040d\n' "$(git rev-parse HEAD)" 0 | bash scripts/leak-scan/check-on-github.sh origin "$(git remote get-url origin)"
           git push
