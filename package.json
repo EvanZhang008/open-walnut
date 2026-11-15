@@ -148,9 +148,9 @@
     "@aws-sdk/client-s3": "^3.1110.0",
     "@aws-sdk/client-sts": "^3.996.0",
     "@aws-sdk/lib-storage": "^3.1110.0",
-    "@azure/msal-node": "^5.0.3",
+    "@azure/msal-node": "^7.2.2",
     "@google/generative-ai": "^0.24.1",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@mozilla/readability": "^0.6.0",
     "@slack/web-api": "^7.14.0",
     "@tiptap/extension-image": "^3.20.1",
@@ -167,10 +167,10 @@
     "imapflow": "^1.7.8",
     "js-yaml": "^4.1.0",
     "linkedom": "^0.18.12",
-    "mailparser": "^3.9.20",
+    "mailparser": "^3.14.3",
     "marked": "^15.0.12",
     "marked-terminal": "^7.3.0",
-    "nodemailer": "^9.1.1",
+    "nodemailer": "^10.5.0",
     "openai": "^6.29.0",
     "parse5": "8.0.0",
     "tldts": "7.4.19",
@@ -210,5 +210,8 @@
   "patchedDependencies": {
     "@anthropic-ai/claude-agent-sdk@0.2.50": "patches/@anthropic-ai%2Fclaude-agent-sdk@0.2.50.patch",
     "@agentclientprotocol/codex-acp@1.4.0": "patches/@agentclientprotocol%2Fcodex-acp@1.4.0.patch"
+  },
+  "overrides": {
+    "express-rate-limit": "^8.7.4"
   }
 }
