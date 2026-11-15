@@ -93,6 +93,28 @@ test('a cut-off Home row expands in place: it grows to its full title, pushes th
     await page.waitForTimeout(250)
     expect(await openInRow(titleOf(page, LONG_A))).toBe(true)
 
+    // A re-render under the resting pointer (a rename the server pushes) opens the row again on
+    // its new text in the same step: no painted frame shows it closed. It used to close and open
+    // again 300 ms later, so a hovered Board card shrank and regrew under a status push
+    // (2026-11-15, board-kanban-layout C67; truncation-peek.ts reopenInPlace).
+    await row(page, LONG_A).evaluate((el) => {
+      const w = window as unknown as { __peekMin: number; __peekStop: boolean }
+      w.__peekMin = Infinity
+      w.__peekStop = false
+      const tick = () => {
+        if (w.__peekStop) return
+        w.__peekMin = Math.min(w.__peekMin, el.isConnected ? el.getBoundingClientRect().height : 0)
+        requestAnimationFrame(tick)
+      }
+      requestAnimationFrame(tick)
+    })
+    expect((await request.patch(`/api/tasks/${made[0]}`, { data: { title: `${LONG_A}, renamed while open` } })).ok()).toBe(true)
+    await expect(titleOf(page, LONG_A)).toContainText('renamed while open', { timeout: 10_000 })
+    await page.waitForTimeout(400)
+    const lowest = await page.evaluate(() => { const w = window as unknown as { __peekMin: number; __peekStop: boolean }; w.__peekStop = true; return w.__peekMin })
+    expect(lowest, 'the open row never painted closed while it re-rendered').toBeGreaterThan(before.height + 8)
+    expect(await openInRow(titleOf(page, LONG_A))).toBe(true)
+
     // On to the next cut-off row: it opens and the first closes in the same step.
     const bRow = (await row(page, LONG_B).boundingBox())!
     const onB = { x: bRow.x + 120, y: bRow.y + bRow.height / 2 }

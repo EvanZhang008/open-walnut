@@ -95,6 +95,19 @@ async function toLayoutA(page: Page, pane: Locator): Promise<void> {
 const card = (pane: Locator, id: string) => pane.locator(`[data-testid="kanban-card"][data-task-id="${id}"]`)
 const rootWidth = (pane: Locator) => pane.getByTestId('kanban-root').evaluate((e) => e.clientWidth)
 const box = async (l: Locator) => { const b = (await l.boundingBox())!; return { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height) } }
+/** The box once a hover's in-place peek opened (truncation-peek.ts, 140 ms) and held for three reads. */
+async function settledBox(l: Locator) {
+  await l.page().waitForTimeout(400)
+  let last = await box(l)
+  let still = 0
+  for (let i = 0; i < 30 && still < 2; i++) {
+    await l.page().waitForTimeout(150)
+    const now = await box(l)
+    still = JSON.stringify(now) === JSON.stringify(last) ? still + 1 : 0
+    last = now
+  }
+  return last
+}
 
 /** No text runs out of its card, no two cards overlap (C37). */
 async function checkCards(pane: Locator): Promise<void> {
@@ -261,7 +274,8 @@ test('C67: a hover holds the layout while sessions push status and a card parks;
   await hovered.scrollIntoViewIfNeeded()
   const tb = (await hovered.getByTestId('kanban-card-title').boundingBox())!
   await page.mouse.move(tb.x + 10, tb.y + tb.height / 2)
-  const b0 = await box(hovered)
+  // A cut-off card opens in place under the pointer (67dc4025f): the pushes must move nothing after.
+  const b0 = await settledBox(hovered)
   let n = 0
   const pushes = setInterval(() => {
     n++
@@ -410,7 +424,8 @@ test('C96: 30s of status pushes: no task over 32ms, the hovered card holds still
   await hovered.scrollIntoViewIfNeeded()
   const hb = (await hovered.getByTestId('kanban-card-title').boundingBox())!
   await page.mouse.move(hb.x + 10, hb.y + hb.height / 2)
-  const b0 = await box(hovered)
+  // After the hover's own in-place peek (as C67): the pushes must move nothing from there.
+  const b0 = await settledBox(hovered)
   // The 30s of pushes stay clear of the wall clock minute: the minute tick (every relative time
   // on every card) is not a status push, and C96 measures what the pushes cost.
   const sec0 = new Date().getSeconds()

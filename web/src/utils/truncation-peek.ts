@@ -249,11 +249,34 @@ function renderAll(state: Active): void {
   state.marked = expandRow(state.key, state.hosts);
 }
 
+/**
+ * The open row's texts changed while it stays under the pointer (a status push re-rendered it, a
+ * late markdown pass replaced its nodes): it opens again on its new texts in this same task, so
+ * no frame shows it closed. Closing and reopening it later shrank and regrew a hovered Board card
+ * by 90px within a second, moving every card below it (2026-11-15, board-kanban-layout C67).
+ * False when it no longer has cut-off text there; then it is closed.
+ */
+function reopenInPlace(a: Active): boolean {
+  if (!a.key.isConnected || !a.marked.length || !pointer || !within(a.key, pointer)) return false;
+  collapseRow(a.marked);
+  a.marked = [];
+  const hosts = cutTextsIn(a.key);
+  if (!hosts.length || hosts.some((h) => h.isContentEditable)) return false;
+  a.hosts = hosts;
+  a.texts = hosts.map((h) => h.textContent ?? '');
+  a.titles.push(...takeTitles(a.key, a.key));
+  a.marked = expandRow(a.key, hosts);
+  return true;
+}
+
 /** The row it shows changed under the pointer (renamed, re-sorted, gone): the peek goes with it. */
 function watchActive(): void {
   observer ??= new MutationObserver(() => {
     const a = active;
-    if (a && (!a.key.isConnected || a.hosts.some((h, i) => !h.isConnected || h.isContentEditable || h.textContent !== a.texts[i]))) { close(true); settleSoon(); }
+    if (!a || !(!a.key.isConnected || a.hosts.some((h, i) => !h.isConnected || h.isContentEditable || h.textContent !== a.texts[i]))) return;
+    if (reopenInPlace(a)) return;
+    close(true);
+    settleSoon();
   });
   observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['contenteditable'] });
 }
