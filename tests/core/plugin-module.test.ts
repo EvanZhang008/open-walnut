@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { preparePluginModule } from '../../src/core/plugins/plugin-module.js'
-import { createPluginGeneration, resetGenerationStateForTesting } from '../../src/core/plugins/plugin-module-snapshot.js'
+import { createPluginGeneration, resetGenerationStateForTesting, setCopyRetryDelayForTesting } from '../../src/core/plugins/plugin-module-snapshot.js'
 import type { PluginManifest } from '../../src/core/integration-types.js'
 
 let tmp: string
@@ -24,6 +24,7 @@ beforeEach(async () => {
     return { outfile }
   })
   resetGenerationStateForTesting()
+  setCopyRetryDelayForTesting(1)
 })
 
 afterEach(async () => {
@@ -175,6 +176,30 @@ describe('preparePluginModule:reload isolation', () => {
     try {
       await expect(createPluginGeneration({ id: 'changing-plugin', dir, entryRelative: 'index.cjs', cacheRoot }))
         .rejects.toThrow('plugin source changed while it was being copied')
+    } finally { copy.mockRestore() }
+  })
+
+  // 2026-11-15: a deploy's plugin check failed because a task rebuilt the plugin's dist while it was
+  // copied. A write that ends during the copy is a reason to copy again, never a failed load.
+  it('copies again, whole, after a write that lands during the first copy', async () => {
+    const dir = await writePlugin('rebuilt-plugin', {
+      'index.cjs': 'module.exports = { activate() { return require("./dist/server.cjs") } }',
+      'dist/server.cjs': 'module.exports = "old build"',
+    })
+    const original = fsp.copyFile.bind(fsp)
+    let writes = 0
+    const copy = vi.spyOn(fsp, 'copyFile').mockImplementation(async (from, to, mode) => {
+      await original(from, to, mode)
+      // a build writes a new dist through a temp file and a rename, once, during the first copy
+      if (String(from).endsWith('server.cjs') && writes++ === 0) {
+        await fsp.writeFile(path.join(dir, 'dist', 'server.cjs.tmp'), 'module.exports = "new build"')
+        await fsp.rename(path.join(dir, 'dist', 'server.cjs.tmp'), path.join(dir, 'dist', 'server.cjs'))
+      }
+    })
+    try {
+      const generation = await createPluginGeneration({ id: 'rebuilt-plugin', dir, entryRelative: 'index.cjs', cacheRoot })
+      expect(await fsp.readFile(path.join(generation.root, 'dist', 'server.cjs'), 'utf8')).toBe('module.exports = "new build"')
+      expect(await fsp.readdir(path.join(cacheRoot, 'rebuilt-plugin')).catch(() => [])).toHaveLength(1)
     } finally { copy.mockRestore() }
   })
 

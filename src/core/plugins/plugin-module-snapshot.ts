@@ -2,10 +2,18 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { WALNUT_HOME } from '../../constants.js'
+import { createSubsystemLogger } from '../../logging/index.js'
+
+const log = createSubsystemLogger('plugin-loader')
 
 // A copied module graph refreshes Node's cache without changing resource-relative paths.
 
 const EXCLUDED = new Set(['.git', '.plugin-cache'])
+/** Copies of a plugin tried while its source keeps changing under the copy (createPluginGeneration). */
+const COPY_ATTEMPTS = 4
+let copyRetryDelayMs = 500
+/** Tests: the first wait between two copies (it doubles each time). */
+export function setCopyRetryDelayForTesting(ms: number): void { copyRetryDelayMs = ms }
 const STAMP = '.walnut-generation.json'
 
 export interface PluginGeneration {
@@ -323,20 +331,33 @@ export async function createPluginGeneration(options: {
   const root = path.join(generationsRoot(options.cacheRoot), id, `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`)
   const srcRoot = await fs.realpath(dir).catch(() => dir)
   if (root === srcRoot || root.startsWith(srcRoot + path.sep)) throw new Error('generation cache must live outside the plugin directory')
-  const before = await sourceSignature(srcRoot)
-  const ctx: WalkContext = {
-    srcRoot,
-    destRoot: root,
-    probe: { native: [], external: [], skipped: [] },
-    stopEarly: false,
-    linkReachable: runtimeFilters(srcRoot).linkReachable,
-  }
-  try {
-    await walk(srcRoot, root, ctx)
-    if (await sourceSignature(srcRoot) !== before) throw new Error('plugin source changed while it was being copied')
-  } catch (error) {
+  // A copy is kept only when the source did not change while it was made. A plugin is often a
+  // working tree someone builds in (2026-11-15: a deploy's plugin check failed because a task
+  // rebuilt that plugin's dist during the 52 s copy), so a changed source is copied again once it
+  // has been quiet a moment; only a source that keeps changing fails the load.
+  let ctx!: WalkContext
+  for (let attempt = 1; ; attempt++) {
+    const before = await sourceSignature(srcRoot)
+    ctx = {
+      srcRoot,
+      destRoot: root,
+      probe: { native: [], external: [], skipped: [] },
+      stopEarly: false,
+      linkReachable: runtimeFilters(srcRoot).linkReachable,
+    }
+    try {
+      await walk(srcRoot, root, ctx)
+      if (await sourceSignature(srcRoot) === before) break
+    } catch (error) {
+      await fs.rm(root, { recursive: true, force: true })
+      throw error
+    }
     await fs.rm(root, { recursive: true, force: true })
-    throw error
+    if (attempt >= COPY_ATTEMPTS) {
+      throw new Error(`plugin source changed while it was being copied (${COPY_ATTEMPTS} copies in a row: something keeps writing in ${srcRoot})`)
+    }
+    log.warn('plugin source changed while it was being copied; copying it again', { id, attempt })
+    await new Promise(resolve => setTimeout(resolve, copyRetryDelayMs * 2 ** (attempt - 1)))
   }
   await fs.writeFile(path.join(root, STAMP), JSON.stringify({ pid: process.pid, dir, createdAt: Date.now() }))
   await preserveModuleType(srcRoot, root)
