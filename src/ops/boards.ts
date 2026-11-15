@@ -24,6 +24,7 @@ import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 import { BOARD_GET_BUDGET, BOARD_PART_NAMES, defaultView, selectParts, type BoardPart } from './board-get-view.js';
+import { LIST_MAX } from '../lib/zod-rules.js'
 
 interface CallerMe {
   kind?: string
@@ -174,7 +175,7 @@ function itemsSummary(b: BoardBody, nowMs: number): string {
 const NO_BOARD_NEXT = 'Make one: read the skill (walnut tools call skill_read \'{"dirName":"walnut-board"}\'), then board_set.';
 const EDIT_NEXT = 'Keep it current with board_edit; answer the user\'s thread messages with board_post.';
 
-const PARTS_ARG = z.array(z.enum(BOARD_PART_NAMES)).min(1).optional().describe(
+const PARTS_ARG = z.array(z.enum(BOARD_PART_NAMES)).min(1).max(LIST_MAX).optional().describe(
   'Only these parts: html (the exact page and its version, read it before board_edit), threads, marks, projects, ' +
   'checks, choices, reminders, section_seen, tasks (the live state of each task the board names), lanes, cards, ' +
   'team, kanban_seen, kanban (the last four), all. Without it you get the whole board when it is small, else a summary');

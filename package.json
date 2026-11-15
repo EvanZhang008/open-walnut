@@ -175,7 +175,7 @@
     "parse5": "8.0.0",
     "tldts": "7.4.19",
     "ws": "^8.19.0",
-    "zod": "~4.3.6"
+    "zod": "~4.6.7"
   },
   "optionalDependencies": {
     "@huggingface/transformers": "^4.2.0",

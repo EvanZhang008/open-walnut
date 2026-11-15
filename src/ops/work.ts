@@ -13,6 +13,7 @@ import { WORK_PLACE_RULE } from '../core/work-place.js';
 import { leftOutLine, shapeHistory, type HistoryShape, type ShapeResult } from './task-history-shape.js';
 import { SESSION_ENGINE_IDS, SESSION_MODE_IDS } from '../core/types.js';
 import { CLAUDE_PLUGIN_ID_MAX_CHARS, CLAUDE_PLUGINS_OFF_MAX_ITEMS } from '../core/sessions/claude-plugins-off.js';
+import { isoDateTime, LIST_MAX } from '../lib/zod-rules.js'
 
 defineOp({
   name: 'task_start',
@@ -97,8 +98,8 @@ defineOp({
     reason: z.string().min(1).max(500).optional().describe('With force: what changed and why the complete task must act again. Shown to that task and the user'),
     messageId: z.string().regex(/^qm-[A-Za-z0-9-]{1,64}$/).optional().describe('Stable id for retry deduplication'),
     result: z.string().min(1).max(2000).optional().describe('With in_reply_to: one sentence saying what came of the work'),
-    evidence: z.union([z.string(), z.array(z.string())]).optional().describe('With in_reply_to: paths or links that show the result (a list, or one per line)'),
-    not_done: z.union([z.string(), z.array(z.string())]).optional().describe('With in_reply_to: what is NOT done or not verified (a list, or one per line). Non-empty = the reply reads as Partial'),
+    evidence: z.union([z.string(), z.array(z.string()).max(LIST_MAX)]).optional().describe('With in_reply_to: paths or links that show the result (a list, or one per line)'),
+    not_done: z.union([z.string(), z.array(z.string()).max(LIST_MAX)]).optional().describe('With in_reply_to: what is NOT done or not verified (a list, or one per line). Non-empty = the reply reads as Partial'),
     score: REVIEW_SCORE_INPUT.optional().describe('With in_reply_to, answering a review request: your verdict out of 10, e.g. {"function":8,"ux":7.5,"ui":9}. Usage & Costs compares the engines by it (function: does it do what the user asked, correctly; ux: how it feels to use; ui: how it looks; or the text "8/7.5/9")'),
     thread: THREAD_HANDOFF_ARG,
   },
@@ -270,11 +271,11 @@ defineOp({
     fresh: z.boolean().optional().describe('true: force a live transcript read on the primary box. false: never read live, '
       + 'only the saved copy (fast; limit and since then shape that copy). Unset: live only for limit or since'),
     all: z.boolean().optional().describe('Every session of the task, oldest first, not only the active one'),
-    before: z.string().datetime({ offset: true }).optional()
+    before: isoDateTime().optional()
       .describe('ISO time: the page of messages older than it (from a previous answer\'s older.before, or a time you know)'),
     limit: z.number().int().min(1).max(TRANSCRIPT_LIMIT_MAX).optional()
       .describe('The newest N messages (the human\'s, other sessions\' and the assistant\'s text), with the tool calls between them'),
-    since: z.string().datetime({ offset: true }).optional()
+    since: isoDateTime().optional()
       .describe('ISO time: only rows after it (the timestamp of the last row you read)'),
     compact: z.boolean().optional()
       .describe('Short form: message text kept, each tool call and thinking block folded to one line, a total of what was left out'),

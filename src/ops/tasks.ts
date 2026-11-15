@@ -3,6 +3,7 @@
  */
 
 import { z } from 'zod'
+import { LIST_MAX } from '../lib/zod-rules.js'
 import { REVIEW_SCORE_INPUT } from './review-score-input.js'
 import { handOffLine, type HandOffResult } from '../core/org/thread-follow.js'
 import { defineOp, type HttpBinding } from './registry.js'
@@ -453,7 +454,7 @@ defineOp({
   input: {
     ids: z.array(z.string().min(1)).min(1).max(MAX_BULK_GET_IDS)
       .describe(`Task ids (exact, or a unique id prefix) — 1 to ${MAX_BULK_GET_IDS} per call`),
-    fields: z.array(z.string().min(1)).optional()
+    fields: z.array(z.string().min(1)).max(LIST_MAX).optional()
       .describe(`Fields to return: ${BULK_GET_FIELDS.join(' | ')} | dates. Omit for the triage default (${DEFAULT_BULK_GET_FIELDS.join(', ')})`),
   },
   // Same server-root-absolute family as task_list: /api/tasks is the canonical
@@ -594,7 +595,7 @@ defineOp({
     start_date: z.string().optional().describe('When the work starts: YYYY-MM-DD or a full ISO-8601 datetime'),
     end_date: z.string().optional().describe('When the work ends: YYYY-MM-DD or a full ISO-8601 datetime'),
     description: z.string().optional().describe('Longer body text (write-only)'),
-    tags: z.array(z.string()).optional().describe('Initial task tags'),
+    tags: z.array(z.string()).max(LIST_MAX).optional().describe('Initial task tags'),
     local: z.boolean().optional().describe('true keeps the task out of the outside service its project syncs to (a private matter: the user\'s own promotion or performance, feedback on a colleague, pay, health, immigration, money, family, a job search, a personal side project). Default: the project\'s service, after Walnut checks it is not private'),
     pinned: z.boolean().optional().describe('Join the pinned board. Default: your task\'s (from inside a task), otherwise true. false keeps the task off the board'),
     // Exact ids only — this rides straight to the server, which validates
@@ -824,7 +825,7 @@ defineOp({
       + `With phase, moving another task that asks the user off NEED_ACTION after he wrote in it (409 user_spoke_since quotes his words): ${USER_WORDS_BACK}`),
     title: z.string().optional().describe('New title: a few words (under 60 characters from a session, the server cuts a longer one; <= 500)'),
     description: z.string().optional().describe('Replaces the description (write-only)'),
-    tags: z.array(z.string()).optional().describe('FULL replacement of the task tags, each key:value (e.g. team:marina, sev:2; a plain word is stored as label:<word>)'),
+    tags: z.array(z.string()).max(LIST_MAX).optional().describe('FULL replacement of the task tags, each key:value (e.g. team:marina, sev:2; a plain word is stored as label:<word>)'),
     force: z.boolean().optional().describe('With phase=COMPLETE on another task still in use or unfinished (409 task_in_use, the same check as task_complete): close it anyway. Needs `reason`'),
     reason: z.string().min(10).max(500).optional().describe('With force: who asked for the close and why it is right'),
     parent_task_id: z.string().optional().describe('Adopt or release: set to your own task id to make an existing task a worker of yours (it keeps its project and folder; its stops, completions, errors and waits then reach you), or "" to release it.'),
@@ -1236,8 +1237,8 @@ defineOp({
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
     result: z.string().min(1).max(2000).optional().describe('One sentence: what came of the work'),
-    evidence: z.union([z.string(), z.array(z.string())]).optional().describe('Paths or links that show the result (a list, or one per line)'),
-    not_done: z.union([z.string(), z.array(z.string())]).optional().describe('What is NOT done or not verified (a list, or one per line). Non-empty = Partial'),
+    evidence: z.union([z.string(), z.array(z.string()).max(LIST_MAX)]).optional().describe('Paths or links that show the result (a list, or one per line)'),
+    not_done: z.union([z.string(), z.array(z.string()).max(LIST_MAX)]).optional().describe('What is NOT done or not verified (a list, or one per line). Non-empty = Partial'),
     score: REVIEW_SCORE_INPUT.optional().describe('A reviewer closing its own review: the verdict out of 10, e.g. {"function":8,"ux":7.5,"ui":9}, when its reply did not carry it (function: does it do what the user asked, correctly; ux: how it feels to use; ui: how it looks; or the text "8/7.5/9")'),
     force: z.boolean().optional().describe('Complete another task still in use (409 task_in_use), or a task whose items for the user were named by a 409 owed_to_user. Needs `reason`'),
     reason: z.string().min(10).max(500).optional().describe('With force: who asked for the close and why it is right although the task is in use, or how the user\'s items were handled'),
@@ -1384,7 +1385,7 @@ defineOp({
       project: z.string().optional(),
       title: z.string().optional(),
       description: z.string().optional(),
-      tags: z.array(z.string()).optional(),
+      tags: z.array(z.string()).max(LIST_MAX).optional(),
       parent_task_id: z.string().optional(),
       watched_at: z.string().nullable().optional().describe(WATCHED_AT_DESCRIPTION),
       background_at: z.string().nullable().optional().describe(BACKGROUND_AT_DESCRIPTION),
@@ -1449,7 +1450,7 @@ defineOp({
     '(a 403 names the ids out of reach); on the Walnut host it is not limited.',
   input: {
     survivor_id: z.string().min(1).describe('Task id (or unique prefix) that survives the merge'),
-    victim_ids: z.array(z.string().min(1)).min(1).describe('Duplicate task ids to merge into the survivor and delete'),
+    victim_ids: z.array(z.string().min(1)).min(1).max(LIST_MAX).describe('Duplicate task ids to merge into the survivor and delete'),
   },
   // The one merge route is the legacy /api/tasks one; a v1 path 404s (the op
   // posted there until 2026-10-02 and never worked).

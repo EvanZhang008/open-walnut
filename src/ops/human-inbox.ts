@@ -32,6 +32,7 @@ import { MESSAGE_TEXT_HINT } from '../core/team-charter.js'
 import { USER_KINDS, USER_KIND_PARAM, USER_KIND_WHY_PARAM } from '../core/org/user-kind.js'
 import { withOutcome } from './outcome.js'
 import { PROOF_IN_PLACE_RULE } from '../core/org/thread-rules.js'
+import { LIST_MAX } from '../lib/zod-rules.js'
 
 /** The sender's open decision letter asking the same thing, from the send's answer (duplicate-letter.ts). */
 function openAskOf(body: unknown): { letterId: string; subject: string; sentAt: string; hint: string } | undefined {
@@ -97,11 +98,11 @@ defineOp({
       + '`walnut tools call human_inbox_send @/path/payload.json` (the file is transferred in '
       + 'batches for you, so size is not your problem).'),
     text: z.string().optional().describe('Short plain-text preview for the envelope row and the phone push'),
-    actions: z.array(ACTION).min(1).optional().describe(
+    actions: z.array(ACTION).min(1).max(LIST_MAX).optional().describe(
       'The options rendered as buttons. REQUIRED (at least one) when type=action_required, and '
       + 'rejected on any other type: a decision letter with no options is one the human cannot answer'),
     items: inboxItemsSchema.optional().describe('Independent email items. Supply exact account/message and safe display data for every email in a summary, with a mark_read action where it applies. Walnut adds Talk to CEO and New task to every item itself; task intents are dropped, and no tool, args, label or target on op actions. These do not answer the whole letter.'),
-    task_refs: z.array(z.string()).optional().describe('Task ids this letter is about; rendered as clickable pills'),
+    task_refs: z.array(z.string()).max(LIST_MAX).optional().describe('Task ids this letter is about; rendered as clickable pills'),
     pin: z.boolean().optional().describe('Pin it to the top of the inbox (digests, standing reports)'),
     user_asked: z.boolean().optional().describe(
       'The user themself asked this task for this letter or report. Only then does a report letter go out '

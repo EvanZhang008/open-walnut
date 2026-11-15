@@ -7,6 +7,7 @@
 import { z } from 'zod'
 import { defineOp } from './registry.js'
 import { withOutcome } from './outcome.js'
+import { LIST_MAX } from '../lib/zod-rules.js'
 
 const TRIGGERS = ['every_turn', 'every_n_turns', 'session_start', 'after_compaction', 'on_change', 'on_request'] as const
 const ROLES = ['main', 'lead', 'worker', 'ask', 'other'] as const
@@ -58,13 +59,13 @@ defineOp({
   input: {
     kind: z.string().min(2).describe('The hint kind, e.g. "rich-output", "brief", or a new one for a custom hint'),
     enabled: z.boolean().optional(),
-    triggers: z.array(z.enum(TRIGGERS)).optional().describe('When it is sent: any one that holds sends it'),
+    triggers: z.array(z.enum(TRIGGERS)).max(LIST_MAX).optional().describe('When it is sent: any one that holds sends it'),
     every_turns: z.number().int().min(1).max(1000).optional().describe('For every_n_turns'),
     placement: z.enum(['before', 'after']).optional().describe('Before or after the message text'),
     audience: z.object({
-      roles: z.array(z.enum(ROLES)).optional(),
-      agents: z.array(z.string()).optional().describe('Agent ids (console agents)'),
-      sessions: z.array(z.string()).optional().describe('Session ids'),
+      roles: z.array(z.enum(ROLES)).max(LIST_MAX).optional(),
+      agents: z.array(z.string()).max(LIST_MAX).optional().describe('Agent ids (console agents)'),
+      sessions: z.array(z.string()).max(LIST_MAX).optional().describe('Session ids'),
     }).optional().describe('Who gets it; an empty list means everyone'),
     text: z.string().optional().describe('A custom hint\'s text'),
     label: z.string().optional().describe('A custom hint\'s name in Settings'),

@@ -15,6 +15,7 @@
  */
 
 import { z } from 'zod'
+import { COLLECTION_MAX } from '../lib/zod-rules.js'
 
 type JsonSchema = Record<string, unknown>
 
@@ -52,7 +53,9 @@ export function jsonSchemaToZodType(input: unknown): z.ZodTypeAny {
     case 'number': return described(z.number())
     case 'integer': return described(z.number().int())
     case 'boolean': return described(z.boolean())
-    case 'array': return described(z.array(schema.items === undefined ? z.unknown() : jsonSchemaToZodType(schema.items)))
+    // A plugin's own maxItems when it gives one, never more than any op argument may hold.
+    case 'array': return described(z.array(schema.items === undefined ? z.unknown() : jsonSchemaToZodType(schema.items))
+      .max(typeof schema.maxItems === 'number' && schema.maxItems >= 0 ? Math.min(schema.maxItems, COLLECTION_MAX) : COLLECTION_MAX))
     // JSON Schema objects allow extra keys unless told otherwise; zod's `object`
     // STRIPS them. Stripping would silently empty a freeform payload bag on its
     // way to the handler, so nested objects stay loose and a `type: 'object'`

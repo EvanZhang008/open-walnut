@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
 import { runOutcome, stoppedEnd } from './host-exec-answers.js';
+import { LIST_MAX } from '../lib/zod-rules.js';
 
 const WAIT_FOR = z.object({
   output: z.string().min(1).max(200).optional().describe('A JavaScript regular expression (`/ready/i` is read as ready with the i flag; `/ready/` with no flags keeps its slashes), tested on each whole line of output on its own (a line ends at a newline or \\r; colour codes are removed first; a line is tested on its first 64 K characters)'),
@@ -107,7 +108,7 @@ defineOp({
   input: {
     host: z.string().min(1).describe('Host alias ("__local__" = the machine the Walnut server runs on, usually the Mac) or a selector like "@ios"'),
     command: z.string().optional().describe('A shell line, run by bash on that host after the user\'s login shell set up the environment'),
-    argv: z.array(z.string()).optional().describe('Instead of command: the program and its arguments, passed with no shell parsing'),
+    argv: z.array(z.string()).max(LIST_MAX).optional().describe('Instead of command: the program and its arguments, passed with no shell parsing'),
     cwd: z.string().optional().describe('Working directory on that host (absolute or ~/...; default the user\'s home)'),
     timeout_ms: z.number().int().min(1).optional().describe('The run\'s deadline in ms: default 120000 and at most 600000; with background:true default and at most 7200000 (a larger one runs with the most, and the answer says so)'),
     background: z.boolean().optional().describe('Start it and return a job_id at once; read it with host_exec_read'),
@@ -139,7 +140,7 @@ defineOp({
     grant_id: z.string().regex(/^xg-[A-Za-z0-9-]{4,64}$/).describe('The grant to run under (xg-...; host_exec_list on the host names this task\'s as grantId): this task\'s, on this host'),
     host: z.string().min(1).describe('The host the grant is for (an alias; "__local__" = the machine the Walnut server runs on, usually the Mac)'),
     command: z.string().optional().describe('A shell line, run by bash on that host after the user\'s login shell set up the environment'),
-    argv: z.array(z.string()).optional().describe('Instead of command: the program and its arguments, passed with no shell parsing'),
+    argv: z.array(z.string()).max(LIST_MAX).optional().describe('Instead of command: the program and its arguments, passed with no shell parsing'),
     cwd: z.string().optional().describe('Working directory on that host (absolute or ~/...; default the user\'s home)'),
     timeout_ms: z.number().int().min(1).optional().describe('The run\'s deadline in ms: default 120000 and at most 600000; with background:true default and at most 7200000 (a larger one runs with the most, and the answer says so)'),
     background: z.boolean().optional().describe('Start it and return a job_id at once; read it with host_exec_read'),

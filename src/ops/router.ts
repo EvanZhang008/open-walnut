@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { defineOp } from './registry.js';
+import { LIST_MAX } from '../lib/zod-rules.js';
 
 const source = z.object({ kind: z.enum(['mail', 'slack', 'wechat']), account: z.string().min(1).max(320), message: z.string().min(1).max(1000), version: z.string().min(1).max(200).optional() });
 
@@ -8,8 +9,8 @@ defineOp({
   description: 'Create a router beside the VPs, not under one: it is the triage for its mailboxes (or chats), and hands each new item straight to the task or VP that owns it. Zero or many VP links say which VPs it prefers, without granting data access. Starts paused. Repeating setup returns the area\'s existing router and never reconfigures it: empty sources keep the area\'s sources, while another host, other sources, name or links are refused (use router_update). Converts an existing local task only when task_id is given; its old conversation remains untouched.',
 
   input: { name: z.string().min(1).max(60), area_id: z.string().min(1).max(80), area_name: z.string().min(1).max(120),
-    host: z.string().min(1).max(200), links: z.array(z.string()).default([]),
-    sources: z.array(z.object({ kind: z.enum(['mail', 'slack', 'wechat']), account: z.string().min(1).max(320) })),
+    host: z.string().min(1).max(200), links: z.array(z.string()).max(LIST_MAX).default([]),
+    sources: z.array(z.object({ kind: z.enum(['mail', 'slack', 'wechat']), account: z.string().min(1).max(320) })).max(LIST_MAX),
     task_id: z.string().optional() },
   bind: { method: 'POST', path: '/org/routers' }, tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
@@ -17,7 +18,7 @@ defineOp({
 defineOp({
   name: 'router_list_self', title: 'List a task that routes by itself among the routers',
   description: 'Show an existing task that already routes or watches by itself (its own triggers, loops or trackers, on any host) among the Org page\'s routers, with the VPs it works with. Nothing of its session, triggers or work is started, stopped, paused or changed, and it stays work of its project; it gets no area, mail source or router profile (that is router_create, for a router Walnut feeds). Repeat to change its links or name; remove:true takes it off the list.',
-  input: { task_id: z.string().min(1).max(200), links: z.array(z.string()).default([]),
+  input: { task_id: z.string().min(1).max(200), links: z.array(z.string()).max(LIST_MAX).default([]),
     name: z.string().min(1).max(60).optional().describe('Its name on the Org page; default its title'),
     remove: z.boolean().optional().describe('Take it off the routers list; its work is untouched') },
   handler: async (args, call) => {
@@ -33,7 +34,7 @@ defineOp({
   name: 'router_update', title: 'Rename, relink, pause, resume or refilter a router',
   description: 'Change an existing router\'s name, the folders it watches, its VP links (zero or many open VPs; collaboration preferences, never ownership or data access) or whether it is paused. Pausing or resuming changes only this router\'s own assignment; no area, item or task moves. Resuming arms its daemon wake so confirmed pending items can be processed. Main, VPs and other tasks are refused.',
   input: { id: z.string().min(1).max(200).describe('The router\'s task id'), name: z.string().min(1).max(60).optional(),
-    links: z.array(z.string()).optional(), paused: z.boolean().optional(),
+    links: z.array(z.string()).max(LIST_MAX).optional(), paused: z.boolean().optional(),
     folders: z.array(z.string().min(1).max(200)).max(50).optional().describe('Which folders or labels of its mailboxes this router watches (names, or the role "inbox"); [] goes back to the plugin default, the Inbox') },
   bind: { method: 'PATCH', path: '/org/routers/:id' }, tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });

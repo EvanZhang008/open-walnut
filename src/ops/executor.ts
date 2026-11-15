@@ -33,6 +33,7 @@ import { selfCallRefusal } from './origin-policy.js'
 import { declaredKeysNote, invalidTypeHint, unknownKeyHint, unknownKeyNotes } from './arg-hints.js'
 import { isCallId, takeCallIdArg, writeOpId } from '../lib/op-call-id.js'
 import { runOnce } from './op-calls.js'
+import { COLLECTION_MAX, oversizedCollection } from '../lib/zod-rules.js'
 
 const DEFAULT_API_ROOT = 'http://127.0.0.1:3456'
 const REQUEST_TIMEOUT_MS = 10_000
@@ -372,7 +373,8 @@ function dropRetiredInput(op: WalnutOp, raw: Record<string, unknown>): Record<st
  * Validate `rawArgs` against `op`'s input exactly as every surface does: a
  * retired field is dropped, any other unknown key is refused (with a "did you
  * mean" hint when the intended key is clear, and always the keys it takes:
- * src/ops/arg-hints.ts). Nothing is rewritten or coerced.
+ * src/ops/arg-hints.ts). Nothing is coerced; the one rewrite is a schema's own
+ * transform, such as isoDateTime() adding `:00` seconds (src/lib/zod-rules.ts).
  */
 export function parseOpArgs(
   op: WalnutOp,
@@ -380,6 +382,9 @@ export function parseOpArgs(
 ): { ok: true; args: Record<string, unknown> } | { ok: false; message: string; invalidArgs: true } {
   const raw = rawArgs ?? {}
   const input = isPlainObject(raw) ? dropRetiredInput(op, raw) : raw
+  // Before zod, which walks every entry of a record or an unbounded list (lib/zod-rules.ts).
+  const oversized = oversizedCollection(input)
+  if (oversized) return { ok: false, message: `Invalid arguments for ${op.name}: ${oversized}: more than ${COLLECTION_MAX} entries`, invalidArgs: true }
   const parsed = z.object(op.input).strict().safeParse(input)
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => {

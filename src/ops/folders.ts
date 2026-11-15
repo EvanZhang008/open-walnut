@@ -11,6 +11,7 @@
 import { z } from 'zod';
 import { defineOp, type WalnutOp } from './registry.js';
 import { withOutcome } from './outcome.js';
+import { LIST_MAX } from '../lib/zod-rules.js';
 
 /** A row of GET /api/tasks/groups (task-manager's FolderListing). */
 interface FolderRow {
@@ -168,7 +169,7 @@ defineOp({
     'too (or move its whole folder with folder_move).',
   input: {
     id: FOLDER_ID.describe('Folder id (g_...), from folder_list'),
-    task_ids: z.array(z.string().min(1)).min(1).describe('Task ids or unique id prefixes'),
+    task_ids: z.array(z.string().min(1)).min(1).max(LIST_MAX).describe('Task ids or unique id prefixes'),
     move: z.boolean().optional().describe('true: a task in another project moves into the folder\'s project as well'),
   },
   handler: async ({ id, task_ids, move }, call) => {

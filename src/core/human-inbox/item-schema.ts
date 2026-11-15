@@ -1,10 +1,13 @@
 import { z } from 'zod';
+import { isoDateTime, LIST_MAX, utf16String } from '../../lib/zod-rules.js';
 import type { InboxLetterItem, LetterRecord } from './types.js';
 
-const safeText = (max: number) => z.string().max(max).transform(v => v.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ''));
+// Lengths count UTF-16 units, as letter-check.ts and the store do (lib/zod-rules.ts).
+const safeText = (max: number) => utf16String(max).transform(v => v.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ''));
 const id = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
-const timestamp = z.string().datetime({ offset: true });
-const sourceId = (max: number) => z.string().min(1).max(max).refine(value => !/[\u0000-\u001f\u007f]/.test(value), 'Source identifiers cannot contain control characters');
+// Stored items and receipts may hold minute-only times: read them, with :00 seconds.
+const timestamp = isoDateTime();
+const sourceId = (max: number) => utf16String(max).min(1).refine(value => !/[\u0000-\u001f\u007f]/.test(value), 'Source identifiers cannot contain control characters');
 export const inboxSourceSchema = z.object({ kind: z.literal('mail'), account: sourceId(1024), message: sourceId(4096) }).strict();
 export const inboxActionSchema = z.discriminatedUnion('kind', [
   z.object({ id, kind: z.literal('op'), intent: z.enum(['mark_read', 'find_task', 'create_task', 'attach_task']) }).strict(),
@@ -28,14 +31,14 @@ export const inboxItemSchema = z.object({
   }
 });
 const receiptSchema = z.object({
-  actionId: id, requestId: id, requestIds: z.array(id).optional(), planId: id, planVersion: z.number().int().positive(), revision: z.number().int().positive(), updatedAt: timestamp,
+  actionId: id, requestId: id, requestIds: z.array(id).max(LIST_MAX).optional(), planId: id, planVersion: z.number().int().positive(), revision: z.number().int().positive(), updatedAt: timestamp,
   status: z.enum(['pending', 'success', 'failure']), intent: z.enum(['mark_read', 'find_task', 'create_task', 'attach_task', 'reply_ai']),
   source: inboxSourceSchema, input: z.object({ goal: safeText(8000).optional(), title: safeText(300).optional(), project: safeText(300).optional(), selectedTaskId: z.string().optional(), retryStart: z.boolean().optional(), markReadAgain: z.boolean().optional() }).strict(),
   stage: z.enum(['accepted', 'marking_read', 'creating', 'starting', 'sending', 'delivering', 'finished']),
-  taskId: z.string().max(128).optional(), taskCreated: z.boolean().optional(), messageId: id.optional(), startAttemptId: z.string().optional(), startedAt: timestamp.optional(),
+  taskId: utf16String(128).optional(), taskCreated: z.boolean().optional(), messageId: id.optional(), startAttemptId: z.string().optional(), startedAt: timestamp.optional(),
   execution: z.enum(['starting', 'running', 'unconfirmed', 'not_started']).optional(), delivery: z.enum(['queued', 'deferred', 'skipped', 'failed', 'unconfirmed']).optional(),
-  reason: safeText(500).optional(), code: safeText(100).optional(), recovery: z.array(z.enum(['check_status', 'retry_mark_read', 'retry_create', 'retry_start', 'open_task', 'mark_read_again'])),
-  attempts: z.array(z.object({ requestId: id, status: z.enum(['pending', 'success', 'failure']), updatedAt: timestamp, execution: z.enum(['starting', 'running', 'unconfirmed', 'not_started']).optional(), reason: safeText(500).optional() })).optional(),
+  reason: safeText(500).optional(), code: safeText(100).optional(), recovery: z.array(z.enum(['check_status', 'retry_mark_read', 'retry_create', 'retry_start', 'open_task', 'mark_read_again'])).max(LIST_MAX),
+  attempts: z.array(z.object({ requestId: id, status: z.enum(['pending', 'success', 'failure']), updatedAt: timestamp, execution: z.enum(['starting', 'running', 'unconfirmed', 'not_started']).optional(), reason: safeText(500).optional() })).max(LIST_MAX).optional(),
 }).strict();
 export const inboxItemsSchema = z.array(inboxItemSchema).max(100);
 export const inboxPrepareSchema = z.object({
