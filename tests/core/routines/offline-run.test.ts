@@ -448,6 +448,23 @@ describe('offlineRoutineStartOf: the spec a host starts a detached run from', ()
   })
 })
 
+describe('the real wiring: primary SDK sessions do not disable detached CLI work', () => {
+  it.each([false, true])('keeps a trusted new worker eligible with session_server.enabled=%s', async enabled => {
+    await updateConfig({ hosts: { [HOST]: { hostname: 'cloudbox.example.test' } }, defaults: { engine: 'claude' }, session_server: { enabled } } as never)
+    const { hostReady: _real, ...facts } = deps()
+    __setOfflineRunDepsForTesting(facts)
+    try {
+      expect(await defaultOfflineRunDeps().hostReady(HOST)).toEqual({})
+      expect(await offlineRoutineStartOf(sessionJob(VP_REFLECTION), HOST)).not.toBeNull()
+      // A conversation already there keeps delivery, even with SDK enabled.
+      __setOfflineRunDepsForTesting({ ...facts, ownerSessions: async () => [{ process_status: 'idle', host: HOST }] })
+      expect(await offlineRoutineStartOf(sessionJob(VP_REFLECTION), HOST)).toBeNull()
+    } finally {
+      __setOfflineRunDepsForTesting(null)
+    }
+  })
+})
+
 describe('the real wiring: the org switch read from config', () => {
   it('org.enabled false in config: no run for the VP reflection; back on: it runs', async () => {
     const { orgEnabled: _real, ...facts } = deps()

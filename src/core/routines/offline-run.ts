@@ -428,7 +428,8 @@ function realDeps(): OfflineRunDeps {
       const config = await getConfig();
       if (isFallbackConfig(config)) return 'the config could not be read';
       if (!config.hosts?.[host]) return 'the host is not configured';
-      if (config.session_server?.enabled) return 'a session server runs sessions another way';
+      // This is a new daemon-owned worker, not the owner's SDK conversation.
+      // The primary's session-server setting does not disable the trusted CLI template.
       if (normalizeEngine(resolveDefaultEngine(config, { host })) !== undefined) return 'its engine is not Claude Code';
       const effort = config.agent?.session_effort;
       return effort && VALID_SESSION_EFFORT_IDS.has(effort) ? { effort } : {};

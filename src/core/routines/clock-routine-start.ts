@@ -28,8 +28,8 @@ import { promptOf } from './trigger-push.js';
  * Eligible only when the host can do what this Mac would do: an ordinary routine (no
  * console agent, no title template), instructions short enough to go inline (the Mac
  * spills longer ones to a file here) and naming no task or project pill (the Mac adds
- * their cards), an absolute folder, the Claude Code engine for that host, and no SDK
- * session server (which would run it another way).
+ * their cards), an absolute folder and the Claude Code engine for that host. This is a
+ * fresh daemon-owned CLI run, independent of the primary's SDK session-server setting.
  */
 export async function routineStartOf(job: CronJob, host: string, home: string = WALNUT_HOME, at?: { cwd: string }): Promise<ClockStartSpec | null> {
   if (job.executor?.type !== 'claude-code' || !host || host === '__local__') return null;
@@ -47,7 +47,7 @@ export async function routineStartOf(job: CronJob, host: string, home: string = 
     import('../config-manager.js'), import('../agents/default-engine.js'), import('../agents/engine-registry.js'), import('../types.js'),
   ]);
   const config = await getConfig();
-  if (isFallbackConfig(config) || !config.hosts?.[host] || config.session_server?.enabled) return null;
+  if (isFallbackConfig(config) || !config.hosts?.[host]) return null;
   if (normalizeEngine(resolveDefaultEngine(config, { host })) !== undefined) return null;
   const title = (typeof c.taskTitle === 'string' && c.taskTitle.trim()) || `Routine: ${job.name}`;
   const project = (typeof c.project === 'string' && c.project.trim()) || 'Routines';

@@ -11,7 +11,10 @@ const TWINS = (process.env.REPLICA_CLUSTER_TWINS ?? 'standalone').split(',').fil
 const PROMPT = 'Read the server notes and write the scheduled report.'
 const EVERY = 10 * 60_000
 
-const seedClockFacts: SeedMac = ({ base, env }) => {
+const seedClockFacts: SeedMac = ({ base, macData, env }) => {
+  // Production enables the primary SDK session server. Detached runs still
+  // use the daemon's trusted CLI template while both primary processes sleep.
+  fs.appendFileSync(path.join(macData, 'config.yaml'), '\nsession_server:\n  enabled: true\n  port: 7891\n')
   const home = path.join(base, 'hh')
   fs.mkdirSync(path.join(home, '.open-walnut'), { recursive: true })
   const hook = path.join(base, 'mh', 'clock-facts.mts')
