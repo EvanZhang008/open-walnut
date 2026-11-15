@@ -248,8 +248,8 @@ function latestOf(nodes: readonly OrgTaskNode[], byId: ReadonlyMap<string, Task>
     const task = byId.get(a.taskId);
     // A live prompt or a failure is as new as the task's last move; a status ask has its own time.
     const at = a.kind === 'needs' && task ? newsItem(task as TeamNewsTask).at : taskTime(task);
-    // A lead's row is an entry to the owning task, not another wording of its decision.
-    if (node?.org_role && a.kind === 'needs' && a.ask) return { text: `Asked in ${a.title}`, at, task: a.title };
+    // Another task's decision is a pointer; reading and the node's own asks keep their action.
+    if (node?.org_role && a.taskId !== node.id && a.kind === 'needs' && a.ask && !a.toRead) return { text: `Asked in ${a.title}`, at, task: a.title };
     return a.kind === 'needs' && a.ask ? { text: `${alertCategoryLabel(a) ?? 'Needs you'}: ${a.ask}`, at, task: a.title } : { text: alertText(a), at };
   }
   const top = teamNews(nodes.map((n) => byId.get(n.id)).filter((t): t is Task => !!t) as TeamNewsTask[])[0];

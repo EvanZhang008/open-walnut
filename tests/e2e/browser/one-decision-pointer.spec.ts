@@ -74,3 +74,64 @@ test('a linked review decision has one task ask and a lead-thread pointer that r
     for (const id of made.reverse()) await request.delete(`/api/tasks/${id}?force=true`);
   }
 });
+
+test('a lead entry distinguishes a worker decision from a result, an answer and its own decision', async ({ page, request }, testInfo) => {
+  const project = `Decision actions ${Date.now().toString(36)}-${process.pid}`;
+  const made: string[] = [];
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const statuses = new Map<string, Record<string, unknown>>();
+  try {
+    const leadRes = await request.post('/api/v1/org/projects', { data: { name: project } });
+    expect(leadRes.ok(), await leadRes.text()).toBe(true);
+    const lead = (await leadRes.json()).task.id as string; made.push(lead);
+    const ownerRes = await request.post('/api/tasks', { data: { title: 'Decision action owner', project, source: 'local' } });
+    expect(ownerRes.ok(), await ownerRes.text()).toBe(true);
+    const owner = (await ownerRes.json()).task.id as string; made.push(owner);
+    // The renderer consumes derived statuses, not the report writer. Override only this test's
+    // rows, including the legacy read shape, without editing the fixture's stored user statuses.
+    await page.route((url) => url.pathname.endsWith('/api/tasks'), async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      for (const task of body.tasks) {
+        const status = statuses.get(task.id);
+        if (status) { task.user_status = status; task.phase = status.state === 'working' ? 'IN_PROGRESS' : 'NEED_ACTION'; }
+      }
+      await route.fulfill({ response, json: body });
+    });
+    const quiet = { state: 'working', now: 'Ready', at: new Date().toISOString() };
+    statuses.set(lead, quiet);
+    statuses.set(owner, { state: 'needs', source: 'session', ask: 'Choose one supplier?', at: new Date().toISOString() });
+    await isolateUiPrefs(page);
+    await page.setViewportSize({ width: 1100, height: 800 });
+    await loadHome(page);
+    await page.getByTestId('sidebar-org').click();
+    const channel = page.locator(`[data-testid="org-channel"][data-key="project:${project.toLowerCase()}"]`);
+    await channel.click();
+    await expect(channel).toContainText('Asked in Decision action owner');
+    await expect(channel).not.toContainText('Choose one supplier?');
+    for (const [status, line] of [
+      [{ state: 'read', toRead: 'result', waitingOn: 'The result is ready' }, 'Can close: The result is ready'],
+      [{ state: 'waiting', toRead: 'answer', waitingOn: 'It answered your question' }, 'Take a look: It answered your question'],
+    ] as const) {
+      statuses.set(owner, { ...status, at: new Date().toISOString() });
+      await page.reload();
+      await expect(channel).toContainText(line);
+      await expect(channel).not.toContainText('Asked in');
+      await channel.click();
+      await expect(channel).toContainText(line);
+      await channel.screenshot({ path: testInfo.outputPath(`${status.toRead}-action.png`) });
+      await expect(channel).toContainText(line);
+    }
+    statuses.set(owner, quiet);
+    statuses.set(lead, { state: 'needs', source: 'session', ask: 'Choose the garden budget?', at: new Date().toISOString() });
+    await page.reload();
+    await expect(channel).toContainText('Decide: Choose the garden budget?');
+    await expect(channel).not.toContainText('Asked in');
+    await channel.click();
+    await page.screenshot({ path: testInfo.outputPath('own-decision.png') });
+    expect(errors).toEqual([]);
+  } finally {
+    for (const id of made.reverse()) await request.delete(`/api/tasks/${id}?force=true`);
+  }
+});

@@ -98,12 +98,15 @@ describe('org chart cards', () => {
     expect(one.newsAt).toBe(Date.parse(at(30)))
     expect(one.line).toBe('1 Working · 1 Waiting / snoozed')
     // Several projects on one card: the one that needs the user leads, named.
-    const ask = t('Seeds', { phase: 'NEED_ACTION', title: 'Pick a supplier', user_status: { state: 'needs', ask: 'Choose one of two quotes', at: at(5) } as never })
+    const ask = t('Seeds', { phase: 'NEED_ACTION', title: 'Pick a supplier', user_status: { state: 'needs', source: 'session', ask: 'Choose one of two quotes', at: at(5) } as never })
     const vp = { ...gardenLead, org_leads: ['Seeds'] }
     const both = cardsOf([signed, busy, ask, vp]).find((c) => c.name === 'Garden')!
-    // Its line says what to do with it (Decide), then the ask (2026-11-03).
-    expect([both.news, both.newsTask]).toEqual(['Seeds · Decide: Choose one of two quotes', 'Pick a supplier'])
-    expect(both.projects.map((p) => p.news)).toEqual(['The check passed; only your signature is left.', 'Decide: Choose one of two quotes'])
+    // A worker's decision stays on its owning task, not on its lead's card.
+    expect([both.news, both.newsTask]).toEqual(['Seeds · Asked in Pick a supplier', 'Pick a supplier'])
+    expect(both.projects.map((p) => p.news)).toEqual(['The check passed; only your signature is left.', 'Asked in Pick a supplier'])
+    expect(both.news).not.toContain(ask.user_status!.ask)
+    expect(both.needsYou).toBe(1)
+    expect(both.newsAt).toBe(Date.parse(at(5)))
   })
 
   it('a task with only something to read counts in the card\'s Needs you, its news led by what to do with it', () => {
@@ -112,6 +115,26 @@ describe('org chart cards', () => {
     expect(card.needsYou).toBe(1)
     expect([card.news, card.newsTask]).toEqual(['Can close: The result is ready', 'Order seeds'])
     expect(card.line).not.toContain('To read')
+  })
+
+  it.each([
+    ['result', 'read', 'Can close: The result is ready'],
+    ['answer', 'waiting', 'Take a look: It answered your question'],
+  ] as const)('a %s to read keeps its action label instead of becoming a decision pointer', (toRead, state, news) => {
+    const read = t('Seeds', { phase: 'NEED_ACTION', title: 'Read the update', updated_at: '2026-10-26T12:40:00.000Z', user_status: { state, toRead, waitingOn: toRead === 'result' ? 'The result is ready' : 'It answered your question', at: '2026-10-26T12:40:00.000Z' } as never })
+    const card = cardsOf([read, seedsLead]).find((c) => c.name === 'Seeds')!
+    expect(card.news).toBe(news)
+    expect(card.newsTask).toBe(read.title)
+    expect(card.needsYou).toBe(1)
+    expect(card.newsAt).toBe(Date.parse(read.user_status!.at!))
+  })
+
+  it('a lead keeps its own decision text because its card is the owning entry', () => {
+    const lead = { ...seedsLead, phase: 'NEED_ACTION' as const, user_status: { state: 'needs', ask: 'Choose the garden budget', at: '2026-10-26T12:40:00.000Z' } as never }
+    const card = cardsOf([lead]).find((c) => c.name === 'Seeds')!
+    expect(card.news).toBe('Decide: Choose the garden budget')
+    expect(card.newsTask).toBe('Seeds VP')
+    expect(card.needsYou).toBe(1)
   })
 
   it('a VP the user named carries that name; a VP made only to put projects under lists none until one is dragged there', () => {
