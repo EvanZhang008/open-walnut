@@ -31,6 +31,29 @@ function hasHostDaemon(env: NodeJS.ProcessEnv): boolean {
 }
 
 /**
+ * A trigger check's call to a task-only host op (lib/task-host-ops.ts), handed to the daemon that
+ * runs the check (WALNUT_CHECK_TOKEN and WALNUT_CHECK_SOCKET, trigger-check-core.ts checkCallers):
+ * it says which trigger the call came from, so the call acts for that trigger's task. Null outside
+ * a check (a session's own id always wins), or when that daemon's socket is gone.
+ */
+export async function callThroughCheckDaemon(
+  name: string,
+  args: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+  opts: { json?: boolean } = {},
+): Promise<number | null> {
+  if ((env.WALNUT_SESSION_ID ?? '').trim() || !(env.WALNUT_CHECK_TOKEN ?? '').trim()) return null
+  const socket = (env.WALNUT_CHECK_SOCKET ?? '').trim()
+  try {
+    if (!socket || !fs.statSync(socket).isSocket()) return null
+  } catch {
+    return null
+  }
+  const { runWalnutCli } = await import('../providers/wn-cli.js')
+  return runWalnutCli(['tools', 'call', name, JSON.stringify(args ?? {}), ...(opts.json ? ['--json'] : [])])
+}
+
+/**
  * Hand the call to this session's host daemon. Returns the exit code, or null
  * when there is no daemon to ask (then the caller reports its own error).
  */

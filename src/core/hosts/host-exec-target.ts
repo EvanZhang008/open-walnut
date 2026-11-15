@@ -25,6 +25,10 @@ export async function callerOf(sid: string | undefined): Promise<Caller> {
   const { resolveCaller } = await import('../sessions/session-send-core.js')
   const c = await resolveCaller(sid)
   if (c.kind !== 'session' || !c.record.taskId) {
+    // A trigger check's call acts for its trigger's task (trigger-caller.ts); a person's never does.
+    const { triggerCallerInScope } = await import('./trigger-caller.js')
+    const check = c.kind === 'human' ? null : await triggerCallerInScope()
+    if (check) return check
     throw new HostExecError('host_exec runs for a task\'s session; a person runs commands in their own terminal', 403, 'session_only')
   }
   const { getTask } = await import('../task-manager.js')

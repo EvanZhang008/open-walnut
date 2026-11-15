@@ -35,7 +35,9 @@ async function answer(req: Request, res: Response, next: NextFunction, work: () 
     import('../../core/hosts/host-exec.js'), import('../../lib/answer-by.js'),
   ])
   try {
-    res.json(await withAnswerBy(parseAnswerBy(req.headers[ANSWER_BY_HEADER]), work))
+    // A trigger check's call acts for its trigger's task (trigger-caller.ts): its token rides along.
+    const { CALLER_TRIGGER_HEADER, withTriggerCaller } = await import('../../core/hosts/trigger-caller.js')
+    res.json(await withAnswerBy(parseAnswerBy(req.headers[ANSWER_BY_HEADER]), () => withTriggerCaller(req.headers[CALLER_TRIGGER_HEADER], work)))
   } catch (err) {
     if (err instanceof HostExecError) {
       res.status(err.status).json({ error: err.message, code: err.code, ...err.data })

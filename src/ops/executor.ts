@@ -79,7 +79,7 @@ export const CALLER_PLUGIN_HEADER = 'x-walnut-plugin-id'
  * route may LOWER trust on it, never raise it.
  */
 interface CallerProvenance {
-  host?: string; proof?: string; sid?: string; explicitSid?: string; callerKind: 'person' | 'agent'; pluginId?: string; origin: string; beforeMutation?: () => Promise<void>; sender?: string
+  host?: string; proof?: string; trigger?: string; sid?: string; explicitSid?: string; callerKind: 'person' | 'agent'; pluginId?: string; origin: string; beforeMutation?: () => Promise<void>; sender?: string
   /** The op call's id (src/lib/op-call-id.ts): each write it makes carries an op id derived from it. */
   callId?: string
   /** Writes made so far per route, for those op ids. */
@@ -164,6 +164,8 @@ async function rawRequest(
         ...(prov.pluginId ? { [CALLER_PLUGIN_HEADER]: prov.pluginId } : {}),
         // A host daemon's word on the asking process, by a token only this process holds (relay-proof.ts).
         ...(prov.proof ? { 'x-walnut-caller-proof': prov.proof } : {}),
+        // A trigger check's call, by a token only this process holds (core/hosts/trigger-caller.ts).
+        ...(prov.trigger ? { 'x-walnut-caller-trigger': prov.trigger } : {}),
         // No session and no person behind it: a script or a scheduled job (src/lib/cli-sender.ts).
         ...(!prov.sid && prov.callerKind === 'agent' ? { [CALLER_KIND_HEADER]: 'automation', ...(prov.sender ? { [SENDER_LABEL_HEADER]: prov.sender } : {}) } : {}),
         ...(selfToken ? { Authorization: `Bearer ${selfToken}` } : {}),
@@ -299,6 +301,8 @@ export interface ExecuteOpOptions {
   callerHost?: string
   /** A relayed caller proof's token (core/approvals/relay-proof.ts): only the gateway relay sets it. */
   callerProof?: string
+  /** A relayed trigger check's token (core/hosts/trigger-caller.ts): only the gateway relay sets it. */
+  callerTrigger?: string
   /**
    * REQUIRED: who this call acts for (src/lib/caller-origin.ts). `__local__` only
    * for a caller on this Mac; a gateway call passes its host, a route passes the
@@ -443,6 +447,7 @@ export async function executeOp(
       origin,
       ...(options.sender ? { sender: options.sender } : {}),
       ...(options.callerProof ? { proof: options.callerProof } : {}),
+      ...(options.callerTrigger ? { trigger: options.callerTrigger } : {}),
       ...(once ? { callId: once } : {}),
     }
     const outcome = await humanCallerScope.run(human, () => explicitCallerScope.run({ sid: explicitSid, kind: callerKind, ...(pluginId ? { pluginId } : {}) }, () => runOp(op, args, base, prov)))

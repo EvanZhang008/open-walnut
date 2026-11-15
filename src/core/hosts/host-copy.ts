@@ -151,7 +151,9 @@ async function theCaller(sid: string | undefined): Promise<{ caller: Caller; own
   }
   const { resolveCaller } = await import('../sessions/session-send-core.js')
   const c = await resolveCaller(sid)
-  const raw = c.kind === 'session' && typeof c.record.host === 'string' ? c.record.host.trim() : ''
+  // A trigger check's call (trigger-caller.ts) is on the host its check runs on.
+  if (c.kind !== 'session') return { caller, own: caller.host }
+  const raw = typeof c.record.host === 'string' ? c.record.host.trim() : ''
   return { caller, own: !raw ? null : raw === 'local' ? LOCAL : raw }
 }
 

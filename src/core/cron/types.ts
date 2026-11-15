@@ -442,6 +442,15 @@ export type CronJob = {
    * Main, read at the sweep; with none of them, the user's notifications.
    */
   ownerTaskId?: string;
+  /**
+   * The task a trigger's check acts for when it calls an op that runs only for a task (host_exec and
+   * its family, host_copy, host_http, host_mcp_*: core/hosts/trigger-caller.ts). Written by the
+   * server only, never from a request: the task whose session wrote the check (its create, or the
+   * change that gave it its command, directory or host), or the owner a person picked. Unlike
+   * ownerTaskId, which a caller may set, a session cannot point it at another task's grants.
+   * '' means no task; absent means a trigger saved before the field existed (trigger-caller.ts).
+   */
+  checkActsFor?: string;
   state: CronJobState;
 };
 

@@ -278,11 +278,14 @@ routinesV1Router.patch('/routines/:id', async (req: Request, res: Response, next
     const id = validRid(req, res)
     if (!id) return
     if (CLOUD_MODE) {
-      await relayControlAction(res, 'server.routines.patch', SERVER_RELAY_SID, { id, body: req.body ?? {} }, 200)
+      // Who wrote a check is whose grants it uses (CronJob.checkActsFor), so the leader hears the caller.
+      const sid = callerSid(req)
+      await relayControlAction(res, 'server.routines.patch', SERVER_RELAY_SID, { id, body: req.body ?? {}, ...(sid ? { callerSid: sid } : {}) }, 200)
       return
     }
     const { patchRoutine } = await import('../../core/routines/routines-core.js')
-    await runLocal(res, next, 200, () => patchRoutine(id, req.body, requestOrigin(req)))
+    const sid = callerSid(req)
+    await runLocal(res, next, 200, () => patchRoutine(id, req.body, requestOrigin(req), sid ? { callerSid: sid } : undefined))
   } catch (err) {
     next(err)
   }

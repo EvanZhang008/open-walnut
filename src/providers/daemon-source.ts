@@ -234,7 +234,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'ports-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'transcript-archive-v1', 'host-cache-prune-v1', 'host-exec-v1', 'host-exec-v2', 'host-exec-wait-v1', 'host-exec-group-v1', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'history-ready-v1', 'history-ready-subagent-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'acp-model-catalog-v1', 'acp-light-bounds-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'ports-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'transcript-archive-v1', 'host-cache-prune-v1', 'host-exec-v1', 'host-exec-v2', 'host-exec-wait-v1', 'host-exec-group-v1', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'history-ready-v1', 'history-ready-subagent-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'trigger-caller-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'acp-model-catalog-v1', 'acp-light-bounds-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -7162,6 +7162,19 @@ function handleGatewayLine(line, respond) {
     req.args = Object.assign({}, req.args);
     delete req.args.callerProof;
   }
+  // trigger-caller-v1: nor triggerCaller, which only a check run's token earns (checkCallers).
+  if (req.args && typeof req.args === 'object' && 'triggerCaller' in req.args) {
+    req.args = Object.assign({}, req.args);
+    delete req.args.triggerCaller;
+  }
+  var check = checkCallers ? checkCallers.resolve(req.sid) : undefined;
+  if (check !== undefined) {
+    // A trigger check's call: external as before, with the trigger this daemon ran it for.
+    var call = triggerCheckCore.checkGatewayCall(req.op, req.args || {}, check);
+    if (call.local) return respond({ ok: true, result: {} });
+    logMsg('info', 'gateway: trigger check caller', check ? { op: req.op, trigger: check.id, kind: check.kind } : { op: req.op, ended: true });
+    return sendGatewayRequest(req.op, EXTERNAL_CALLER_SID, call.args, respond, gatewayCallPlan(req.waitMs, GATEWAY_HUB_TIMEOUT_MS, Date.now()));
+  }
   if (pluginJobs.isRunSid(req.sid)) {
     var jobHome = pluginJobs.homeOfRun(req.sid);
     if (!jobHome) return respond(gatewayError('unknown_caller', 'no plugin job of this daemon runs under this id'));
@@ -9487,9 +9500,16 @@ async function runTrigger(entry) {
   // re-arm has already read from that file.
   var stillArmed = function () { return armedTriggers.get(triggerKey(entry.home, entry.def.id)) === entry; };
   try {
-    var proc = await triggerCheckCore.runCheckProcess(entry.def.check, triggerCheckCore.buildCheckStdin(entry.state, startedAt), Object.assign({
-      env: { WALNUT_TRIGGER_ID: entry.def.id, WALNUT_TRIGGER_NAME: entry.def.name },
-    }, checkRunFence()));
+    // Its walnut calls act for this trigger's task (trigger-caller-v1), only while it runs.
+    var runCaller = checkRunCaller({ kind: 'armed', id: entry.def.id });
+    var proc;
+    try {
+      proc = await triggerCheckCore.runCheckProcess(entry.def.check, triggerCheckCore.buildCheckStdin(entry.state, startedAt), Object.assign({
+        env: Object.assign({ WALNUT_TRIGGER_ID: entry.def.id, WALNUT_TRIGGER_NAME: entry.def.name }, runCaller.env),
+      }, checkRunFence()));
+    } finally {
+      runCaller.release();
+    }
     var parsed = triggerCheckCore.parseCheckStdout(proc.stdout);
     var error = triggerCheckCore.checkErrorOf(proc, parsed);
     var now = Date.now();
@@ -9936,7 +9956,8 @@ async function cmdTriggersTest(ws, id, cmd) {
   var home = triggerCommandHome(ws, id, cmd, 'triggers.test');
   if (home === null) return;
   try {
-    var result = await runTriggerTest(cmd.check, triggerIdOf(cmd) || undefined, home);
+    var asked = typeof triggerCheckCore.testCheckCaller === 'function' ? triggerCheckCore.testCheckCaller(cmd.checkCaller) : undefined;
+    var result = await runTriggerTest(cmd.check, triggerIdOf(cmd) || undefined, home, asked);
     sendOk(ws, id, { result: result });
   } catch (err) {
     sendError(ws, id, err && err.message ? err.message : String(err));
@@ -9944,7 +9965,7 @@ async function cmdTriggersTest(ws, id, cmd) {
 }
 
 // One test run (triggers.test, and trigger_test while the Walnut is away); rejects with the refusal.
-async function runTriggerTest(check, targetId, home) {
+async function runTriggerTest(check, targetId, home, checkCaller) {
   if (!triggerCheckCore) throw new Error('triggers unsupported: trigger-check-core sidecar not loaded');
   var raw = check;
   if (!raw || typeof raw !== 'object' || typeof raw.run !== 'string' || !raw.run.trim()) {
@@ -9962,12 +9983,19 @@ async function runTriggerTest(check, targetId, home) {
     var held = targetId ? triggerFor(home || '', targetId) : undefined;
     var entry = held && armedTriggers.get(triggerKey(held.home, held.def.id)) === held ? held : undefined;
     var state = entry ? entry.state : triggerCheckCore.emptyHostState(now);
-    var proc = await triggerCheckCore.runCheckProcess(spec, triggerCheckCore.buildCheckStdin(state, now), Object.assign({
-      env: {
-        WALNUT_TRIGGER_ID: entry ? entry.def.id : (targetId || 'trigger-test'),
-        WALNUT_TRIGGER_NAME: entry ? entry.def.name : 'trigger test',
-      },
-    }, checkRunFence()));
+    // A test the server asked for a task's session acts for that task, as the trigger will.
+    var testCaller = checkRunCaller(checkCaller);
+    var proc;
+    try {
+      proc = await triggerCheckCore.runCheckProcess(spec, triggerCheckCore.buildCheckStdin(state, now), Object.assign({
+        env: Object.assign({
+          WALNUT_TRIGGER_ID: entry ? entry.def.id : (targetId || 'trigger-test'),
+          WALNUT_TRIGGER_NAME: entry ? entry.def.name : 'trigger test',
+        }, testCaller.env),
+      }, checkRunFence()));
+    } finally {
+      testCaller.release();
+    }
     var parsed = triggerCheckCore.parseCheckStdout(proc.stdout);
     var error = triggerCheckCore.checkErrorOf(proc, parsed);
     var output = parsed.ok ? parsed.output : null;
@@ -14324,6 +14352,15 @@ try { historyReadyCore = require(path.join(__dirname, 'history-ready-core.cjs'))
 // server refuses trigger_create for this host until the next auto-deploy.
 let triggerCheckCore = null;
 try { triggerCheckCore = require(path.join(__dirname, 'trigger-check-core.cjs')); } catch (err) { triggerCheckCore = null; }
+// The live trigger check runs' gateway tokens (trigger-caller-v1; twin of daemon-standalone.ts).
+// null with a sidecar too old to have them: its checks' calls stay external, as before.
+var checkCallers = triggerCheckCore && typeof triggerCheckCore.createCheckCallers === 'function' ? triggerCheckCore.createCheckCallers() : null;
+// A check run's env: its token and this daemon's socket, so its walnut calls act for its trigger's task.
+function checkRunCaller(caller) {
+  if (!checkCallers || !caller) return { env: {}, release: function () {} };
+  var minted = checkCallers.mint(caller);
+  return { env: triggerCheckCore.checkCallerEnv(minted.sid, GATEWAY_SOCK_PATH), release: minted.release };
+}
 
 // ACP supervision sidecar (acp-daemon-core.cjs): the same acp-daemon.ts the binary
 // twin compiles in. The local daemon gets it from local-daemon.ts; a remote deploy
@@ -14412,6 +14449,8 @@ function daemonCapabilities() {
   // A subagent's view ('history-ready-subagent-v1'), only from a sidecar that knows agentId.
   if (historyReadyCore && historyReadyCore.READY_SUBAGENT_V1 === true) caps.push('history-ready-subagent-v1');
   if (triggerCheckCore) caps.push('triggers-v1');
+  // A check's calls act for its trigger's task only with a sidecar that mints their tokens.
+  if (checkCallers) caps.push('trigger-caller-v1');
   // Host delivery needs the envelope builder the newer sidecar carries.
   if (triggerCheckCore && typeof triggerCheckCore.claimFires === 'function' && typeof triggerCheckCore.buildTriggerMessage === 'function') caps.push('trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1');
   if (triggerCheckCore && typeof triggerCheckCore.applyClockFire === 'function' && typeof triggerCheckCore.buildScheduledMessage === 'function') caps.push('clock-routine-v1');

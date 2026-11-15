@@ -324,6 +324,14 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
         return
       }
     }
+    // A trigger check's call to an op that runs only for a task goes through the check's daemon,
+    // which says which trigger it ran (core/hosts/trigger-caller.ts); over HTTP it would be nobody's.
+    const { isTaskHostOpPath } = await import('../lib/task-host-ops.js')
+    if (isTaskHostOpPath(op?.bind?.path)) {
+      const { callThroughCheckDaemon } = await import('./tools-daemon-fallback.js')
+      const code = await callThroughCheckDaemon(name, { ...parsed, ...(callId ? { _call_id: callId } : {}) }, process.env, { json: output.json })
+      if (code !== null) { answered(); process.exitCode = code; return }
+    }
     // A separate process: the server re-judges its socket, and can only lower this.
     const { LOCAL_ORIGIN } = await import('../lib/caller-origin.js')
     // Outside every session and with no terminal, the call is a script's, never the user's.

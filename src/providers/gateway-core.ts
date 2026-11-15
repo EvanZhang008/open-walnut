@@ -96,6 +96,27 @@ export function isExternalCallerSid(sid: string): boolean {
  * both twins, and the server reads it only from a daemon that advertises this capability.
  */
 export const CALLER_PROOF_CAPABILITY = 'caller-proof-v1';
+/** A daemon that relays a trigger check's calls with `triggerCaller` and drops a forged one (trigger-check-core.ts, same value). */
+export const TRIGGER_CALLER_CAPABILITY = 'trigger-caller-v1';
+
+/**
+ * A relayed payload as the server may read it: callerProof and triggerCaller are a daemon's own
+ * word, and a daemon too old to drop one a caller wrote passes it on, so each is kept only from a
+ * daemon that says its capability. Undefined for a payload that is not an object.
+ */
+export function vouchedGatewayPayload(payload: unknown, has: (capability: string) => boolean): Record<string, unknown> | undefined {
+  if (typeof payload !== 'object' || payload === null) return undefined;
+  let body = payload as Record<string, unknown>;
+  if ('callerProof' in body && !has(CALLER_PROOF_CAPABILITY)) {
+    const { callerProof: _dropped, ...rest } = body;
+    body = rest;
+  }
+  if ('triggerCaller' in body && !has(TRIGGER_CALLER_CAPABILITY)) {
+    const { triggerCaller: _dropped, ...rest } = body;
+    body = rest;
+  }
+  return body;
+}
 /** The ops whose server side reads the proof: the rest relay as before, with no process lookup. */
 export const CALLER_PROOF_OPS: readonly string[] = ['approval_request', 'approval_consume'];
 

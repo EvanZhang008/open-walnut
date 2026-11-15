@@ -286,7 +286,7 @@ export async function getRoutine(id: string): Promise<{ job: unknown }> {
  * `origin`: who asks (a route passes the request's); omitted = the server's own code.
  * `opts.id`: the id a host gave a trigger it created while this server was away (trigger-api.ts).
  */
-export async function createRoutine(body: unknown, origin?: string, opts?: { id?: string; callerSid?: string }): Promise<{ job: unknown }> {
+export async function createRoutine(body: unknown, origin?: string, opts?: { id?: string; callerSid?: string; checkCallerSid?: string }): Promise<{ job: unknown }> {
   refuseRoutineWriteOnReplica();
   if (isCompanion()) return owned(await (await companion()).companionRoutineWrite('create', { body: body ?? {} }) as { job: unknown });
   const service = await requireCronService();
@@ -298,6 +298,12 @@ export async function createRoutine(body: unknown, origin?: string, opts?: { id?
     const { callerTaskOf } = await import('../sessions/user-spoke.js');
     const owner = await callerTaskOf(opts.callerSid);
     if (owner) input.ownerTaskId = owner;
+  }
+  if (input) {
+    // Never from the request: the server says whose grants a check uses (trigger-caller.ts).
+    delete input.checkActsFor;
+    // '' is stored too: "this check acts for no task", never read as a trigger from before the field.
+    if (input.check) input.checkActsFor = await checkActsForOf(input, origin, opts?.checkCallerSid ?? opts?.callerSid);
   }
   // normalize() passes through schedule-less objects; createJob would then
   // TypeError on input.schedule.kind — a caller mistake, so reject as 400.
@@ -317,8 +323,55 @@ export async function createRoutine(body: unknown, origin?: string, opts?: { id?
   }
 }
 
+/**
+ * The task a check acts for (CronJob.checkActsFor) when `callerSid` writes it: that session's task;
+ * for a person or this Mac's own code, the task they made it for (its owner, else the task it
+ * delivers into); for anyone else (a program on another host), none. '' for none.
+ */
+async function checkActsForOf(job: Pick<CronJob, 'ownerTaskId' | 'executor'>, origin: string | undefined, callerSid: string | undefined): Promise<string> {
+  const sid = callerSid?.trim();
+  if (sid && sid !== 'external') {
+    const { callerTaskOf } = await import('../sessions/user-spoke.js');
+    return (await callerTaskOf(sid).catch(() => null)) ?? '';
+  }
+  // A person, or a program on this Mac with no session (which could name any session's id anyway).
+  const { isLocalOrigin } = await import('../../lib/caller-origin.js');
+  const o = checkCallerOrigin(origin);
+  if (!isLocalOrigin(o) && o !== REMOTE_HTTP_ORIGIN) return '';
+  const { routineOwnerTaskId } = await import('../cron/run-log.js');
+  return routineOwnerTaskId(job) ?? '';
+}
+
+/**
+ * A patch never names checkActsFor itself. A new command, directory or host is the writer's check
+ * now, so it acts for the writer; a check removed acts for no one; a legacy trigger (no
+ * checkActsFor) keeps, from its first change on, the task it acted for before it.
+ */
+async function settleCheckActsFor(patch: Record<string, unknown>, before: CronJob | null, origin: string | undefined, callerSid: string | undefined): Promise<void> {
+  delete patch.checkActsFor;
+  if (!before) return;
+  if ('check' in patch && !patch.check) {
+    if (before.checkActsFor !== undefined) patch.checkActsFor = '';
+    return;
+  }
+  const next = ('check' in patch ? patch.check : before.check) as TriggerCheck | undefined;
+  if (!next) return;
+  if (checkCommandChanged(next, before.check)) {
+    const owner = 'ownerTaskId' in patch ? patch.ownerTaskId as string | undefined : before.ownerTaskId;
+    const executor = (patch.executor ?? before.executor) as CronJob['executor'];
+    patch.checkActsFor = await checkActsForOf({ ownerTaskId: owner, executor }, origin, callerSid);
+    return;
+  }
+  // Any change to a trigger saved before the field freezes what it acted for, so a later owner or
+  // target a caller writes never becomes its grants ('' when it acted for none).
+  if (before.checkActsFor === undefined) {
+    const { legacyCheckActsFor } = await import('../hosts/trigger-caller.js');
+    patch.checkActsFor = legacyCheckActsFor(before) ?? '';
+  }
+}
+
 /** `origin`: who asks (a route passes the request's); omitted = the server's own code. */
-export async function patchRoutine(id: string, body: unknown, origin?: string, opts?: { expectedRevision?: string }): Promise<{ job: unknown }> {
+export async function patchRoutine(id: string, body: unknown, origin?: string, opts?: { expectedRevision?: string; callerSid?: string }): Promise<{ job: unknown }> {
   refuseRoutineWriteOnReplica();
   if (isCompanion()) {
     if (opts?.expectedRevision !== undefined) throw new SessionControlError('Conditional routine changes must run on the primary.', 501);
@@ -332,6 +385,7 @@ export async function patchRoutine(id: string, body: unknown, origin?: string, o
   // Read BEFORE the write: a patch that moves a trigger to another host must
   // also push the host it is leaving, or that daemon keeps polling forever.
   const before = await findJob(service, id);
+  await settleCheckActsFor(patch as unknown as Record<string, unknown>, before, origin, opts?.callerSid);
   assertWakeNotOnCheck(patch, before ?? undefined);
   await validateCheckForSave(patch, body, before ?? undefined, origin);
   try {
@@ -504,7 +558,7 @@ export async function handleRoutinesRelayAction(
     case 'executors': return await listRoutineExecutors();
     case 'get': return await getRoutine(id) as unknown as Record<string, unknown>;
     case 'create': return await createRoutine(p.body, origin, typeof p.callerSid === 'string' ? { callerSid: p.callerSid } : undefined) as unknown as Record<string, unknown>;
-    case 'patch': return await patchRoutine(id, p.body, origin) as unknown as Record<string, unknown>;
+    case 'patch': return await patchRoutine(id, p.body, origin, typeof p.callerSid === 'string' ? { callerSid: p.callerSid } : undefined) as unknown as Record<string, unknown>;
     case 'delete': return await deleteRoutine(id) as unknown as Record<string, unknown>;
     case 'toggle': return await toggleRoutine(id) as unknown as Record<string, unknown>;
     case 'run': return await runRoutineNow(id, typeof p.catchUpMs === 'number' ? { catchUpMs: p.catchUpMs } : {}) as unknown as Record<string, unknown>;

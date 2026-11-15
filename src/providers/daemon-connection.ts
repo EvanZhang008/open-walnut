@@ -73,7 +73,7 @@ import {
 } from './daemon-file-fetch.js'
 import { singleFile } from '../lib/single-file.js'
 import { buildTurnRetryEnv } from './daemon-core.js'
-import { CALLER_PROOF_CAPABILITY } from './gateway-core.js'
+import { vouchedGatewayPayload } from './gateway-core.js'
 import type { LineFate } from './line-fate-core.js'
 import type { SshTarget } from './session-io.js'
 import {
@@ -3550,12 +3550,8 @@ export class DaemonConnection {
     try {
       const { handleGatewayCapability } = await import('../core/peers/capability-router.js')
       const [{ withAnswerBy }, { gatewayHubTimeoutMs }] = await Promise.all([import('../lib/answer-by.js'), import('./gateway-core.js')])
-      let body = typeof payload === 'object' && payload !== null ? payload as Record<string, unknown> : undefined
-      // A daemon too old to read its socket's peer passes on whatever the caller wrote there.
-      if (body && 'callerProof' in body && !this.hasCapability(CALLER_PROOF_CAPABILITY)) {
-        const { callerProof: _dropped, ...rest } = body
-        body = rest
-      }
+      // What only a daemon writes (callerProof, triggerCaller), kept only from one that says it drops a forged one.
+      const body = vouchedGatewayPayload(payload, (c) => this.hasCapability(c))
       const outcome = await withAnswerBy(receivedAt + gatewayHubTimeoutMs(), () => handleGatewayCapability(
         capability,
         callerSid,
@@ -3571,6 +3567,8 @@ export class DaemonConnection {
       } else {
         log.session.warn('DaemonConnection: gateway relay refused', {
           host: this.hostKey, relayId, capability, callerSid, errorCode: outcome.error.code,
+          // Which op, so a burst of refusals names what keeps asking (2026-11-14: only "tools.call").
+          ...(capability === 'tools.call' && typeof body?.name === 'string' ? { op: body.name.slice(0, 80) } : {}),
         })
         reply = { relayId, error: outcome.error.message, errorCode: outcome.error.code }
         const detail: Record<string, unknown> = {

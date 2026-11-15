@@ -181,6 +181,12 @@ import {
   MIN_EVERY_MS,
   PENDING_FIRE_REPLAY_MS,
   TRIGGER_STATE_TTL_MS,
+  checkCallerEnv,
+  checkGatewayCall,
+  createCheckCallers,
+  testCheckCaller,
+  withoutTriggerCaller,
+  type CheckCaller,
   type PendingFire,
   type TriggerCheckSpec,
   type TriggerDef,
@@ -368,6 +374,8 @@ const GATEWAY_SOCK_PATH = (demoQuiesce.isDemo
   : null) || path.join(DAEMON_DIR, GATEWAY_SOCKET_FILENAME)
 const GATEWAY_SHIM_DIR = path.join(path.dirname(GATEWAY_SOCK_PATH), 'bin')
 const GATEWAY_SHIM_PATH = path.join(GATEWAY_SHIM_DIR, 'walnut')
+/** The live trigger check runs' gateway tokens (trigger-check-core.ts checkCallers). Mirror daemon-source.ts. */
+const checkCallers = createCheckCallers()
 // Where Walnut saves a session's pictures on this host (user-line-images-core.ts):
 // the server's images dir (it names this dir to its daemon), an upload from another
 // machine, and image.save. Both spellings of a symlinked /tmp.
@@ -5914,6 +5922,16 @@ function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => voi
   const req = parsed.request
   // caller-proof-v1: only this daemon writes callerProof, on any path the line takes.
   req.args = withoutCallerProof(req.args)
+  // trigger-caller-v1: nor triggerCaller, which only a check run's token earns (checkCallers).
+  req.args = withoutTriggerCaller(req.args)
+  const check = checkCallers.resolve(req.sid)
+  if (check !== undefined) {
+    // A trigger check's call: `external` as before, with the trigger this daemon ran it for.
+    const call = checkGatewayCall(req.op, req.args, check)
+    if (call.local) return respond({ ok: true, result: {} })
+    logMsg('info', 'gateway: trigger check caller', { op: req.op, ...(check ? { trigger: check.id, kind: check.kind } : { ended: true }) })
+    return sendGatewayRequest(req.op, EXTERNAL_CALLER_SID, call.args, respond, gatewayCallPlan(req.waitMs, gatewayHubTimeoutMs(), Date.now()))
+  }
   if (pluginJobs.isRunSid(req.sid)) {
     const home = pluginJobs.homeOfRun(req.sid)
     if (!home) return respond(gatewayError('unknown_caller', 'no plugin job of this daemon runs under this id'))
@@ -8060,11 +8078,13 @@ async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'qu
   // re-arm has already read from that file.
   const stillArmed = () => armedTriggers.get(triggerKey(entry.home, entry.def.id)) === entry
   try {
+    // Its `walnut` calls act for this trigger's task (trigger-caller-v1), only while it runs.
+    const caller = checkCallers.mint({ kind: 'armed', id: entry.def.id })
     const proc = await runCheckProcess(entry.def.check, buildCheckStdin(entry.state, startedAt), {
-      env: { WALNUT_TRIGGER_ID: entry.def.id, WALNUT_TRIGGER_NAME: entry.def.name },
+      env: { WALNUT_TRIGGER_ID: entry.def.id, WALNUT_TRIGGER_NAME: entry.def.name, ...checkCallerEnv(caller.sid, GATEWAY_SOCK_PATH) },
       templateShimDir: GATEWAY_SHIM_DIR,
       ...checkRunFence(),
-    })
+    }).finally(() => caller.release())
     const parsed = parseCheckStdout(proc.stdout)
     const error = checkErrorOf(proc, parsed)
     const now = Date.now()
@@ -8532,7 +8552,7 @@ async function cmdTriggersTest(ws: ServerWebSocket<WsData>, id: number, cmd: Rec
   const home = triggerCommandHome(ws, id, cmd, 'triggers.test')
   if (home === null) return
   try {
-    const result = await runTriggerTest(cmd.check, triggerIdOf(cmd) || undefined, home)
+    const result = await runTriggerTest(cmd.check, triggerIdOf(cmd) || undefined, home, testCheckCaller(cmd.checkCaller))
     sendOk(ws, id, { result: result as unknown as Record<string, unknown> })
   } catch (err) {
     sendError(ws, id, (err as Error).message)
@@ -8540,7 +8560,7 @@ async function cmdTriggersTest(ws: ServerWebSocket<WsData>, id: number, cmd: Rec
 }
 
 /** One test run (triggers.test, and trigger_test while the Walnut is away); rejects with the refusal. */
-async function runTriggerTest(check: unknown, targetId: string | undefined, home = ''): Promise<TriggersTestResult> {
+async function runTriggerTest(check: unknown, targetId: string | undefined, home = '', checkCaller?: CheckCaller): Promise<TriggersTestResult> {
   const raw = check as Record<string, unknown> | undefined
   if (!raw || typeof raw !== 'object' || typeof raw.run !== 'string' || !raw.run.trim()) {
     throw new Error('triggers.test: check.run is required')
@@ -8560,14 +8580,17 @@ async function runTriggerTest(check: unknown, targetId: string | undefined, home
     const held = targetId ? triggerFor(home, targetId) : undefined
     const entry = held && armedTriggers.get(triggerKey(held.home, held.def.id)) === held ? held : undefined
     const state = entry ? entry.state : emptyHostState(now)
+    // A test the server asked for a task's session acts for that task, as the trigger will.
+    const caller = checkCaller ? checkCallers.mint(checkCaller) : null
     const proc = await runCheckProcess(spec, buildCheckStdin(state, now), {
       env: {
         WALNUT_TRIGGER_ID: entry ? entry.def.id : (targetId ?? 'trigger-test'),
         WALNUT_TRIGGER_NAME: entry ? entry.def.name : 'trigger test',
+        ...(caller ? checkCallerEnv(caller.sid, GATEWAY_SOCK_PATH) : {}),
       },
       templateShimDir: GATEWAY_SHIM_DIR,
       ...checkRunFence(),
-    })
+    }).finally(() => caller?.release())
     const parsed = parseCheckStdout(proc.stdout)
     const error = checkErrorOf(proc, parsed)
     const output = parsed.ok ? parsed.output : null

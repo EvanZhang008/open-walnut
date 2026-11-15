@@ -181,7 +181,8 @@ export function createCronRouter(cronServiceArg: CronService): Router {
   // PATCH /api/cron/:id — update job
   router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      res.json(await patchRoutine(req.params.id as string, req.body, requestOrigin(req)))
+      const sid = callerSid(req)
+      res.json(await patchRoutine(req.params.id as string, req.body, requestOrigin(req), sid ? { callerSid: sid } : undefined))
     } catch (err) {
       handleCoreError(res, next, err)
     }

@@ -100,6 +100,11 @@ Pick the source the user is already signed in to, in this order:
    `curl -s -X POST "${WALNUT_SERVER_URL:-http://127.0.0.1:3456}/api/plugin-runtime/<plugin>/ops/<op>" -H 'content-type: application/json' -d '{...}'`.
    Core data (tasks, notes) is `walnut tools call <op>`. A check on another host
    cannot reach this loopback; arm it with `host: "__local__"` from a session here.
+   A check's `walnut` calls act for its trigger's task, with that task's grants:
+   `host_exec_read` on a job you started, `host_exec`, `host_http` and `host_copy`
+   work from a check as from your session (`trigger_test` from your session too).
+   Never print `fire: false` when such a call fails: let the error show, so a
+   refused call reads as a broken check, not as "nothing yet".
 3. **An MCP server the user has** (`claude mcp list`, `~/.claude.json`, the
    project's `.mcp.json`): start it from the script and speak JSON-RPC over its
    stdio, one call per run (template below). Use the same command and env the

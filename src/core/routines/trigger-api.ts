@@ -156,18 +156,31 @@ export async function testRoutineCheck(
     timeoutSeconds: clampTimeoutSeconds(rawCheck.timeoutSeconds),
   };
   const id = str(b.id);
+  // Asked by a task's session: the check's `walnut` calls act for that task, as they will once it
+  // is armed (core/hosts/trigger-caller.ts), so a test shows what the trigger will see.
+  const checkCaller = await testCheckCallerFor(callerSid, host, check.timeoutSeconds);
   // The one synchronous "run a command on a host" the API offers: it leaves a
   // trace like every other execution path does (who asked is in the request log
   // by reqId; this line says what ran, where).
   log.web.info('trigger check test', { host, run: run.slice(0, 200), ...(cwd ? { cwd } : {}), ...(id ? { jobId: id } : {}) });
   const started = startTestRun<FinishedTest>(
     { host, limitSeconds: check.timeoutSeconds, startedAt: Date.now() },
-    () => runTestOnce(host, conn, { check, ...(id ? { triggerId: id } : {}), home: WALNUT_HOME }),
+    () => runTestOnce(host, conn, { check, ...(id ? { triggerId: id } : {}), ...(checkCaller ? { checkCaller } : {}), home: WALNUT_HOME }),
   );
   return answerOf((await waitTestRun<FinishedTest>(started, answerBy))!);
 }
 
 type FinishedTest = { result: TriggersTestResult; timeLimit: TestTimeLimit };
+
+/** The test run id a task's session's test runs under (trigger-caller.ts), or undefined for anyone else. */
+async function testCheckCallerFor(callerSid: string | undefined, host: string, limitSeconds: number): Promise<string | undefined> {
+  if (!callerSid) return undefined;
+  const { callerTaskOf } = await import('../sessions/user-spoke.js');
+  const taskId = await callerTaskOf(callerSid).catch(() => undefined);
+  if (!taskId) return undefined;
+  const { noteTestRun } = await import('../hosts/trigger-caller.js');
+  return noteTestRun(taskId, host, limitSeconds);
+}
 
 /** A test run that is still going when its caller must be answered. */
 export interface TestPending {
@@ -195,7 +208,7 @@ function answerOf(waited: TestRunWait<FinishedTest>): TestCheckAnswer {
 async function runTestOnce(
   host: string,
   conn: Awaited<ReturnType<typeof requireTriggerDaemon>>,
-  params: { check: { run: string; cwd?: string; timeoutSeconds: number }; triggerId?: string; home: string },
+  params: { check: { run: string; cwd?: string; timeoutSeconds: number }; triggerId?: string; checkCaller?: string; home: string },
 ): Promise<FinishedTest> {
   const reply = await sendTestRun(host, conn, params);
   const payload = record(reply.result) ?? reply;
@@ -251,7 +264,7 @@ export interface TestTimeLimit {
 async function sendTestRun(
   host: string,
   first: Awaited<ReturnType<typeof requireTriggerDaemon>>,
-  params: { check: { run: string; cwd?: string; timeoutSeconds: number }; triggerId?: string; home: string },
+  params: { check: { run: string; cwd?: string; timeoutSeconds: number }; triggerId?: string; checkCaller?: string; home: string },
 ): Promise<Record<string, unknown>> {
   const deadlineMs = testRunDeadlineMs(params.check.timeoutSeconds);
   const { linkFailureKind } = await import('../../providers/link-failure.js');
@@ -556,7 +569,9 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
       ...(fromTemplate ? { template: fromTemplate.template } : {}),
     },
     executor: { type: 'session', config: { target: resolved.target, prompt } },
-  }, origin, hostId ? { id: hostId } : undefined);
+  // The session that wrote the check is whose grants it uses (CronJob.checkActsFor); the owner
+  // stays as it was (the task it delivers into hears of a missed run).
+  }, origin, { ...(hostId ? { id: hostId } : {}), ...(callerSid ? { checkCallerSid: callerSid } : {}) });
 
   if (watches) {
     const jobId = (created.job as { id?: string } | undefined)?.id;

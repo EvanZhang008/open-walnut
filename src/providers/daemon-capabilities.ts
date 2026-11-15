@@ -688,6 +688,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'triggers-v1',
   'trigger-claim-v1',
   'trigger-host-resume-v1',
+  // 'trigger-caller-v1' (trigger-check-core.ts checkCallers): a check run's `walnut` calls carry
+  // a token this daemon minted, and it relays them as `external` plus `triggerCaller`, the trigger
+  // (or the server's test run) it ran the check for; it drops any `triggerCaller` a caller wrote.
+  // The server reads `triggerCaller` only from a daemon that says this (an older one passes on
+  // whatever a caller wrote) and runs host_exec, host_copy, host_http and host_mcp_* for that
+  // trigger's task (src/core/hosts/trigger-caller.ts). Sidecar-gated in the source twin.
+  'trigger-caller-v1',
   // 'offline-triggers-v1': while a Walnut does not answer this host, the host
   // answers its sessions' trigger_list and trigger_test itself (the checks run
   // here), and takes trigger_pause / trigger_resume / trigger_delete at once,

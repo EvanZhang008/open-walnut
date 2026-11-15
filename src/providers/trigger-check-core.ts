@@ -297,6 +297,12 @@ export interface TriggersTestPayload {
   check: TriggerCheckSpec;
   /** When set, `newItemCount` is measured against that trigger's seen set. */
   triggerId?: string;
+  /**
+   * The server's id for this one test run (trigger-caller.ts), when a task's session asked it:
+   * the check's `walnut` calls then act for that task (checkCallers below). An older daemon
+   * ignores it and the check's calls stay `external`.
+   */
+  checkCaller?: string;
 }
 
 export interface TriggersTestResult {
@@ -932,6 +938,101 @@ export function clampTimeoutSeconds(v: unknown): number {
 export function templateCheckEnv(run: string, env: NodeJS.ProcessEnv, shimDir: string | undefined): NodeJS.ProcessEnv {
   if (!shimDir || !/^\s*walnut trigger-check /.test(run)) return env;
   return { ...env, PATH: env.PATH ? `${shimDir}:${env.PATH}` : shimDir };
+}
+
+// ── Who a check's `walnut` calls act for (trigger-caller-v1) ──
+//
+// A check runs for no session, so its `walnut` calls reached the server as `external`, and the
+// ops that run only for a task (host_exec, host_copy, host_http, host_mcp_*) refused every one
+// with 403 session_only. The scripts swallowed the refusal as `fire: false`, so a trigger watching
+// a job on another host never fired (2026-11-14: ~50 refusals an hour from 10+ triggers).
+//
+// Now the daemon gives each check run a token in WALNUT_CHECK_TOKEN and its gateway socket in
+// WALNUT_CHECK_SOCKET, names nothing else reads: the CLI sends a task-only host op through that
+// socket with the token as its caller id (wn-cli.ts, commands/tools.ts), and every other call of
+// the check goes as it always did (a session id in the env would have changed how the installed
+// CLI labels and routes all of them, and what git hooks and guards think it is). A call carrying a live
+// token still goes up as `external`, so every other op answers it as before, and the daemon adds
+// what it vouches for: `triggerCaller`, the trigger (or the server's test run) it started that
+// process for. The server reads it only from a daemon that says trigger-caller-v1 and acts for
+// that trigger's task, with that task's own grants (src/core/hosts/trigger-caller.ts).
+
+export const TRIGGER_CALLER_CAPABILITY = 'trigger-caller-v1';
+export const CHECK_CALLER_SID_PREFIX = 'trigger-check:';
+/** The server's id of one test run (trigger-caller.ts mints them). */
+export const CHECK_TEST_RUN_RE = /^tt-[A-Za-z0-9_-]{8,64}$/;
+
+/** What a daemon vouches a check's call came from: an armed trigger, or one test run. */
+export interface CheckCaller { kind: 'armed' | 'test'; id: string }
+
+export function isCheckCaller(v: unknown): v is CheckCaller {
+  if (!v || typeof v !== 'object') return false;
+  const c = v as Record<string, unknown>;
+  if (typeof c.id !== 'string' || !c.id || c.id.length > 200 || !/^[A-Za-z0-9_.:-]+$/.test(c.id)) return false;
+  return c.kind === 'armed' || (c.kind === 'test' && CHECK_TEST_RUN_RE.test(c.id));
+}
+
+/** The checkCaller of a triggers.test command, or undefined when it names none or a malformed one. */
+export function testCheckCaller(raw: unknown): CheckCaller | undefined {
+  return typeof raw === 'string' && CHECK_TEST_RUN_RE.test(raw) ? { kind: 'test', id: raw } : undefined;
+}
+
+export interface CheckCallers {
+  /** A token for one run; `release` once the run's process closed. */
+  mint(caller: CheckCaller): { sid: string; release(): void };
+  /**
+   * undefined: `sid` is no check's (handle it as before). null: a check's, but its run is over
+   * (a child it left behind), so it vouches for nothing. Else what the daemon started it for.
+   */
+  resolve(sid: unknown): CheckCaller | null | undefined;
+  /** Live runs, for tests. */
+  size(): number;
+}
+
+export function createCheckCallers(token: () => string = () => randomBytes(18).toString('hex')): CheckCallers {
+  const live = new Map<string, CheckCaller>();
+  return {
+    mint(caller) {
+      const sid = CHECK_CALLER_SID_PREFIX + token();
+      live.set(sid, { kind: caller.kind, id: caller.id });
+      return { sid, release: () => { live.delete(sid); } };
+    },
+    resolve(sid) {
+      if (typeof sid !== 'string' || !sid.startsWith(CHECK_CALLER_SID_PREFIX)) return undefined;
+      return live.get(sid) ?? null;
+    },
+    size: () => live.size,
+  };
+}
+
+export const CHECK_TOKEN_ENV = 'WALNUT_CHECK_TOKEN';
+export const CHECK_SOCKET_ENV = 'WALNUT_CHECK_SOCKET';
+
+/** The env a check run gets so its `walnut` calls carry its token to this daemon. */
+export function checkCallerEnv(sid: string, gatewaySocket: string | undefined): Record<string, string> {
+  return { [CHECK_TOKEN_ENV]: sid, ...(gatewaySocket ? { [CHECK_SOCKET_ENV]: gatewaySocket } : {}) };
+}
+
+/**
+ * A check's gateway call as the daemon relays it: `external`, with `triggerCaller` on a
+ * tools.call when the run is live. Anything the caller itself wrote there is dropped.
+ * `local`: answered here, never relayed (op_card_record: a chat card for a session, and a
+ * check is none; the server refuses it, which only made noise).
+ */
+export function checkGatewayCall(
+  op: string, args: Record<string, unknown>, caller: CheckCaller | null,
+): { local: true } | { local: false; args: Record<string, unknown> } {
+  const { triggerCaller: _forged, ...rest } = args;
+  if (op === 'tools.call' && rest.name === 'op_card_record') return { local: true };
+  if (op !== 'tools.call' || !caller) return { local: false, args: rest };
+  return { local: false, args: { ...rest, triggerCaller: { kind: caller.kind, id: caller.id } } };
+}
+
+/** Every gateway call: the caller may never write `triggerCaller` itself. */
+export function withoutTriggerCaller(args: Record<string, unknown>): Record<string, unknown> {
+  if (!('triggerCaller' in args)) return args;
+  const { triggerCaller: _forged, ...rest } = args;
+  return rest;
 }
 
 /**

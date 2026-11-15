@@ -424,9 +424,13 @@ export function resolveWalnutCliEndpoint(
   probe: (socketPath: string) => WalnutSocketInfo | null,
   callerUid: number,
 ): WalnutCliEndpoint {
-  const sid = (env.WALNUT_SESSION_ID ?? '').trim() || EXTERNAL_CALLER_SID
-  const external = sid === EXTERNAL_CALLER_SID
-  const injected = (env.WALNUT_AGENT_SOCKET ?? '').trim()
+  const session = (env.WALNUT_SESSION_ID ?? '').trim()
+  // A trigger check's run (trigger-check-core.ts checkCallers): its daemon's token and socket, so the
+  // daemon can say which trigger the call came from. A session's own id always wins.
+  const check = session ? '' : (env.WALNUT_CHECK_TOKEN ?? '').trim()
+  const sid = session || check || EXTERNAL_CALLER_SID
+  const external = !session
+  const injected = (session ? env.WALNUT_AGENT_SOCKET ?? '' : check ? env.WALNUT_CHECK_SOCKET ?? '' : env.WALNUT_AGENT_SOCKET ?? '').trim()
   if (injected) return { ok: true, socketPath: injected, sid, external }
 
   // The first well-known socket that exists: /tmp/open-walnut, then the

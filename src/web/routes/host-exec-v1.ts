@@ -61,7 +61,9 @@ async function answer(req: Request, res: Response, next: NextFunction, work: () 
   const note = async (refused: boolean) => (await notes)[refused ? 1 : 0]
   try {
     // The header is this request's whole deadline: nothing ambient from another request counts.
-    const body = await withAnswerBy(parseAnswerBy(req.headers[ANSWER_BY_HEADER]), work, { fresh: true })
+    // A trigger check's call acts for its trigger's task (trigger-caller.ts): its token rides along.
+    const { CALLER_TRIGGER_HEADER, withTriggerCaller } = await import('../../core/hosts/trigger-caller.js')
+    const body = await withAnswerBy(parseAnswerBy(req.headers[ANSWER_BY_HEADER]), () => withTriggerCaller(req.headers[CALLER_TRIGGER_HEADER], work), { fresh: true })
     const said = await note(false)
     res.json(said && body && typeof body === 'object' && !Array.isArray(body) ? { note: said, ...body } : body)
   } catch (err) {

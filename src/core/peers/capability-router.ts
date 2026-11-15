@@ -316,12 +316,17 @@ async function handleToolsCall(
   // The daemon's word on the asking process (caller-proof-v1), for the approvals route to read.
   const { holdRelayProof } = await import('../approvals/relay-proof.js');
   const proofToken = holdRelayProof(payload.callerProof, callerSid, host);
+  // What the daemon vouches a trigger check's call came from (trigger-caller.ts), with the host that relayed it.
+  // Only for an op that runs only for a task (lib/task-host-ops.ts): no other op reads it.
+  const { isTaskHostOpPath } = await import('../../lib/task-host-ops.js');
+  const { holdRelayTrigger } = await import('../hosts/trigger-caller.js');
+  const triggerToken = isTaskHostOpPath(op.bind?.path) ? holdRelayTrigger(payload.triggerCaller, host) : undefined;
   // The call's id, chosen by the caller's client (src/lib/op-call-id.ts): a resend of the
   // same call runs it at most once, and op_result reads what it did.
   const { isCallId } = await import('../../lib/op-call-id.js');
   const callId = isCallId(payload.callId) ? payload.callId : undefined;
   const r = await withTestRun(testRun, () => executeOp(name, (args ?? {}) as Record<string, unknown>, {
-  callerSid, callerHost: host, origin: hostOrigin(host), ...(proofToken ? { callerProof: proofToken } : {}), ...(callId ? { callId } : {}),
+  callerSid, callerHost: host, origin: hostOrigin(host), ...(proofToken ? { callerProof: proofToken } : {}), ...(triggerToken ? { callerTrigger: triggerToken } : {}), ...(callId ? { callId } : {}),
 }));
   // The server's own call to its API went out and got no answer: the caller hears the answer
   // was lost (hub_timeout), so its client names the call id and the read, never a bare error.
