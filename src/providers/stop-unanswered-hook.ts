@@ -60,18 +60,46 @@ export const ASK_IDS_SCRIPT =
   + 'a=${r% *}; d=${r#* }; '
   + 'if [ -n "$a" ]; then q=",\\"asked\\":\\"$a\\",\\"answered\\":\\"$d\\""; fi; fi; '
 
-export const STOP_UNANSWERED_HOOK_COMMAND =
-  'in=$(cat); case "$in" in *\'"stop_hook_active":true\'*|*\'"stop_hook_active": true\'*) exit 0;; esac; '
+/**
+ * Adds `,"tmp_paths":"<a>|<b>"` to `$q`: the paths in /tmp or /var/folders that the turn's final
+ * text (`last_assistant_message`) names and that exist on this host, read here because only the
+ * session's own host can say they exist (a moved file or an example stays quiet). open_items judges
+ * which of them is a draft, plan or evidence file and puts its note first in the one block reason
+ * (src/lib/tmp-draft-path.ts stopTmpPathNote). 2026-11-04: a task asked the user a question naming
+ * the temp folder its draft was in, and nothing flagged it. A path starts only where a path can
+ * (never the tail of a/tmp/x; a JSON escape before it is a space), and trailing punctuation is
+ * dropped. At most 50 candidates; an input over 400 KB is never read.
+ */
+export const TMP_PATHS_SCRIPT =
+  'if [ -n "$WALNUT_TASK_DIR" ] && [ "$WALNUT_TMP_WRITE_NOTE" != 0 ] && [ ${#in} -le 400000 ]; then case "$in" in *\'"last_assistant_message"\'*/tmp/*|*\'"last_assistant_message"\'*/var/folders/*) '
+  + 'p=$(printf \'%s\' "$in" | tr \'\\n\' \' \' | sed -nE \'s/.*"last_assistant_message"[[:space:]]*:[[:space:]]*"(([^"\\\\]|\\\\.)*)".*/\\1/p\' | sed -E \'s/\\\\[nrt]/ /g\' '
+  + '| grep -oE \'(^|[^A-Za-z0-9_.~/-])/(private/)?(tmp|var/folders)/[^] <>(){}[|,;*`\\\\]+\' | head -n 50 '
+  // No `case` inside $(...): macOS /bin/sh (bash 3.2) misreads its `)` there.
+  // Each path once, at most 5 that exist, each under 1000 characters; one glued to a non-ASCII
+  // word (CJK text right after it) is tried without that tail.
+  + '| sed -E "s/^[^/]*//; s/[.:!?\']+\\$//" | awk \'!s[$0]++\' | { n=0; while [ $n -lt 5 ] && IFS= read -r x; do '
+  + '[ ${#x} -le 1000 ] || continue; [ -e "$x" ] || x=$(printf \'%s\' "$x" | LC_ALL=C sed \'s/[^ -~].*//; s/[.:!?]*$//\'); '
+  + '[ -n "$x" ] && [ -e "$x" ] && { printf \'%s|\' "$x"; n=$((n+1)); }; done; }); '
+  + '[ -n "$p" ] && q="$q,\\"tmp_paths\\":\\"${p%|}\\""; ;; esac; fi; '
+
+/** The Stop hook's command; `tmpPaths` false (WALNUT_TMP_WRITE_NOTE=0 on the server) leaves the temp paths out. */
+export function stopHookCommand(tmpPaths: boolean): string {
+  return 'in=$(cat); case "$in" in *\'"stop_hook_active":true\'*|*\'"stop_hook_active": true\'*) exit 0;; esac; '
   // The Ask here thread ids the transcript was asked (a user line's `<walnut-ask thread=`) and
   // answered inside their tag (an assistant line's `<walnut-ask-answer thread=`), read here, on
   // the session's own host, from the CLI's own transcript (sessions/ask-unanswered.ts).
   + ASK_IDS_SCRIPT
+  // The temp paths the turn's final text names, for the note on a draft kept there.
+  + (tmpPaths ? TMP_PATHS_SCRIPT : '')
   // Only a block answer is printed: an older walnut, server or host copy that answers with
   // anything else (an error, the whole open-items read) leaves the turn alone.
   + 'out=$(walnut tools call open_items "{\\"hook\\":\\"stop\\"$q}" 2>/dev/null); '
   // An older server that knows no lists refuses the call: ask again without them.
   + 'case "$out" in *nrecognized*) [ -n "$q" ] && out=$(walnut tools call open_items "{\\"hook\\":\\"stop\\"}" 2>/dev/null);; esac; '
   + 'case "$out" in *\'"decision"\'*) printf \'%s\\n\' "$out";; esac; exit 0'
+}
+
+export const STOP_UNANSWERED_HOOK_COMMAND = stopHookCommand(true)
 
 /** Seconds the CLI waits for the hook before it gives up on it and lets the turn end: the bound
  *  on what a slow or frozen server can add to any turn end (a normal answer takes well under one). */
@@ -80,6 +108,6 @@ const HOOK_TIMEOUT_SECS = 5
 export function stopUnansweredHooks(env: NodeJS.ProcessEnv = process.env): Record<string, unknown> | null {
   if (env.WALNUT_STOP_UNANSWERED === '0') return null
   return {
-    Stop: [{ hooks: [{ type: 'command', command: STOP_UNANSWERED_HOOK_COMMAND, timeout: HOOK_TIMEOUT_SECS }] }],
+    Stop: [{ hooks: [{ type: 'command', command: stopHookCommand(env.WALNUT_TMP_WRITE_NOTE !== '0'), timeout: HOOK_TIMEOUT_SECS }] }],
   }
 }

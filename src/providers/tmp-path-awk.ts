@@ -76,5 +76,16 @@ function volatile(p) {
 
 /** An awk program as one single-quoted sh word. */
 export function shQuoteAwk(program: string): string {
-  return `'${program.replace(/'/g, `'\\''`)}'`
+  return `'${slimAwk(program).replace(/'/g, `'\\''`)}'`
+}
+
+/**
+ * An awk program without its comment lines and indentation: it rides every session's settings,
+ * and every host spawn template must stay under one argv string's room (host-start-core.ts
+ * MAX_TEMPLATE_STRING; 2026-11-15 the hooks stood 600 bytes under it). Safe in awk: no string or
+ * regex spans a line, so a line whose first character past the indentation is `#` is a comment,
+ * and indentation is never inside a token.
+ */
+export function slimAwk(program: string): string {
+  return program.split('\n').filter((l) => !/^[ \t]*#/.test(l)).map((l) => l.replace(/^[ \t]+/, '')).filter((l) => l !== '').join('\n')
 }

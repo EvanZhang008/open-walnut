@@ -14,6 +14,7 @@ import { leftOutLine, shapeHistory, type HistoryShape, type ShapeResult } from '
 import { SESSION_ENGINE_IDS, SESSION_MODE_IDS } from '../core/types.js';
 import { CLAUDE_PLUGIN_ID_MAX_CHARS, CLAUDE_PLUGINS_OFF_MAX_ITEMS } from '../core/sessions/claude-plugins-off.js';
 import { isoDateTime, LIST_MAX } from '../lib/zod-rules.js'
+import { TASK_DIR_VAR, stopTmpPathNote } from '../lib/tmp-draft-path.js';
 
 defineOp({
   name: 'task_start',
@@ -534,6 +535,7 @@ defineOp({
       + 'stop = at a turn end, only whether a request to you or an Ask here question is still unanswered, as a Stop hook\'s block answer'),
     asked: z.string().max(4000).optional().describe('Set by the Stop hook: the Ask here thread ids your transcript was asked, comma separated'),
     answered: z.string().max(4000).optional().describe('Set by the Stop hook: the Ask here thread ids your transcript answered inside their tag, comma separated'),
+    tmp_paths: z.string().max(8000).optional().describe('Set by the Stop hook: the temp-dir paths your final text names that exist on your host, | separated'),
     full: z.boolean().optional().describe(
       'Everything Walnut restates after a compaction, uncut (your core instructions, what is open, changed instructions, '
       + 'hints, teams, MEMORY.md), as `text`: read it when the restatement says it was cut'),
@@ -546,7 +548,12 @@ defineOp({
     // open, and `{}` (nothing injected, no error row) when nothing is.
     if (args.hook === 'stop') {
       const stop = open.stop as { reason?: unknown } | null | undefined;
-      return stop && typeof stop.reason === 'string' ? { decision: 'block', reason: stop.reason } : {};
+      // A draft in a temp dir the turn's text names goes first in the one reason (tmp-draft-path.ts).
+      const own = process.env.WALNUT_TASK_DIR?.trim();
+      const tmpNote = process.env.WALNUT_TMP_WRITE_NOTE === '0' ? null
+        : stopTmpPathNote(args.tmp_paths, { taskDir: own || TASK_DIR_VAR, ...(own && process.env.TMPDIR ? { tmpdir: process.env.TMPDIR } : {}) });
+      const reason = [tmpNote, stop && typeof stop.reason === 'string' ? stop.reason : null].filter(Boolean).join(' ');
+      return reason ? { decision: 'block', reason } : {};
     }
     if (args.hook === 'compact') {
       return text ? { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } } : {};

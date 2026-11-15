@@ -10,7 +10,8 @@
  * Why (2026-10-26): a Slack draft and a plan file in /tmp were deleted by the
  * temp cleaner the same day.
  *
- * MACHINE SAFETY: the hook only reads its stdin; nothing here writes a file.
+ * MACHINE SAFETY: the hook only reads its stdin (and tests a folder with `test -d`);
+ * the only file made is one empty temp folder of the cp case, removed after it.
  */
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
@@ -184,11 +185,73 @@ describe.each(SHELLS)('/tmp write note under %s', (shell) => {
   })
 })
 
+// [Bash command, the file it wrote that is noted, or null when quiet]
+const BASH_CASES: Array<[string, string | null]> = [
+  ['echo hi > /tmp/x/plan.md', '/tmp/x/plan.md'],
+  ['echo hi >>/tmp/x/notes.txt', '/tmp/x/notes.txt'],
+  ["cat > /tmp/y/handoff.md <<'EOF'\nbody names /tmp/z/draft.md and > /tmp/z/plan.md\nEOF", '/tmp/y/handoff.md'],
+  ['gh pr view 1 2>/dev/null | tee -a /tmp/r/report.txt', '/tmp/r/report.txt'],
+  ['cp README.md /tmp/x/summary.txt', '/tmp/x/summary.txt'],
+  ['cd /tmp/w && echo x > pr-body.txt', '/tmp/w/pr-body.txt'],
+  ['echo x > "$TMPDIR/commit-msg"', '/var/folders/ab/T/commit-msg'],
+  ['FOO=1 sudo install -m 644 a /private/tmp/memo.txt', '/private/tmp/memo.txt'],
+  ['cp -t /tmp/x a/notes.md b.png', '/tmp/x/notes.md'],
+  ['mv --target-directory=/tmp/y draft.txt', '/tmp/y/draft.txt'],
+  ['mv a.md /tmp/q/', '/tmp/q/a.md'],
+  ['(cd /tmp && cat a > slack-draft.md)', '/tmp/slack-draft.md'],
+  ['echo x > "/tmp/a b/plan.md"', '/tmp/a b/plan.md'],
+  // Quiet: screenshots, logs, data dumps, reading a draft, durable places, unknown words.
+  ['echo hi > /tmp/shot.png', null],
+  ['npm test > /tmp/x/out.log 2>&1', null],
+  ['gh api repos/o/r/pulls/1/comments > /tmp/pr-comments.json', null],
+  ['npx jest --json > /tmp/jest-report.json 2>&1', null],
+  ['git diff > /tmp/x/plan.patch', null],
+  ['cat /tmp/x/plan.md', null],
+  ['echo "write to /tmp/x/plan.md"', null],
+  ['git commit -m "x > /tmp/y/plan.md"', null],
+  ["echo 'a; b > /tmp/notes.md' | wc -l", null],
+  ['mv /tmp/a/plan.md "$WALNUT_TASK_DIR/"', null],
+  ['cp /tmp/a/plan.md ~/notes/', null],
+  ['echo x > /home/u/repo/plan.md', null],
+  ['d=$(mktemp -d); echo x > "$d/plan.md"', null],
+  ['echo x > /tmpfoo/plan.md', null],
+  ['ls >/dev/null 2>&1', null],
+]
+
+function bashPayload(command: string, cwd = '/home/u/repo'): string {
+  return JSON.stringify({ session_id: 's', transcript_path: '/x.jsonl', cwd, permission_mode: 'bypassPermissions', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command, description: 'x' }, tool_response: { stdout: 'wrote /tmp/x/plan.md', stderr: '', interrupted: false }, tool_use_id: 't' })
+}
+
+describe.each(SHELLS)('the same note after a Bash command under %s', (shell) => {
+  it.each(BASH_CASES)('%s', (command, noted) => {
+    const r = run(shell, bashPayload(command))
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stderr).toBe('')
+    if (noted) {
+      expect(r.note).toContain(`Walnut note: you wrote ${noted} in a temp directory`)
+      expect(r.note).toContain(`'${TASK_DIR}/'`)
+    } else expect(r.stdout).toBe('')
+  })
+
+  it('a relative target is read against the cwd', () => {
+    expect(run(shell, bashPayload('echo x > notes.md', '/tmp/work')).note).toContain('/tmp/work/notes.md')
+    expect(run(shell, bashPayload('echo x > notes.md')).stdout).toBe('')
+  })
+
+  it('a cp into an existing temp folder judges the file it lands as', () => {
+    const dir = fs.mkdtempSync('/tmp/walnut-note-cp-')
+    try {
+      expect(run(shell, bashPayload(`cp a/plan.md ${dir}`)).note).toContain(`you wrote ${dir}/plan.md`)
+      expect(run(shell, bashPayload(`mv shot.png ${dir}`)).stdout).toBe('')
+    } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+
 describe('tmpWriteNoteHooks', () => {
-  it('is a PostToolUse hook on Write only, off with WALNUT_TMP_WRITE_NOTE=0', () => {
+  it('is a PostToolUse hook on Write and Bash, off with WALNUT_TMP_WRITE_NOTE=0', () => {
     const hooks = tmpWriteNoteHooks({}) as { PostToolUse: Array<{ matcher: string; hooks: Array<{ type: string; command: string }> }> }
     expect(Object.keys(hooks)).toEqual(['PostToolUse'])
-    expect(hooks.PostToolUse[0].matcher).toBe('Write')
+    expect(hooks.PostToolUse.map((g) => g.matcher)).toEqual(['Write|Bash'])
     expect(hooks.PostToolUse[0].hooks[0]).toMatchObject({ type: 'command', command: TMP_WRITE_NOTE_COMMAND })
     expect(tmpWriteNoteHooks({ WALNUT_TMP_WRITE_NOTE: '0' })).toBeNull()
   })

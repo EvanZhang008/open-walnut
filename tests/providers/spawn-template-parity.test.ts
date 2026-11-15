@@ -174,7 +174,7 @@ describe('a filled template equals what claude-code-session.ts builds', () => {
           ...(c.env.WALNUT_TYPECHECK_GUARD === '0' ? [] : ['Bash']), ...(c.env.WALNUT_CODEX_PROVIDER_GUARD === '0' ? [] : ['Bash']),
         ])
         expect(settings.hooks?.PostToolUse?.map((g) => g.matcher)).toEqual([
-          ...(c.env.WALNUT_TMP_WRITE_NOTE === '0' ? [] : ['Write']), ...(c.env.WALNUT_CLONE_IDENTITY === '0' ? [] : ['Bash']),
+          ...(c.env.WALNUT_TMP_WRITE_NOTE === '0' ? [] : ['Write|Bash']), ...(c.env.WALNUT_CLONE_IDENTITY === '0' ? [] : ['Bash']),
         ])
         expect(((settings.hooks as { Stop?: unknown[] } | undefined)?.Stop ?? []).length).toBe(c.env.WALNUT_STOP_UNANSWERED === '0' ? 0 : 1)
         // A remote host's session never carries the Mac's API root.

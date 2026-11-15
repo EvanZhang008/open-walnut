@@ -86,7 +86,7 @@ const COMPACT_HOOK = {
 const GUARD = { matcher: 'Bash', hooks: [{ type: 'command', command: GIT_TMP_GUARD_COMMAND, timeout: 10 }] }
 // Then the guard refusing a write to Walnut's approval records (approvals-guard-hook.ts).
 const APPROVALS_GUARD = { matcher: 'Bash|Write|Edit|MultiEdit|NotebookEdit', hooks: [{ type: 'command', command: APPROVALS_GUARD_COMMAND, timeout: 10 }] }
-const WRITE_NOTE = { matcher: 'Write', hooks: [{ type: 'command', command: TMP_WRITE_NOTE_COMMAND, timeout: 10 }] }
+const WRITE_NOTE = { matcher: 'Write|Bash', hooks: [{ type: 'command', command: TMP_WRITE_NOTE_COMMAND, timeout: 10 }] }
 const CLONE_IDENTITY = { matcher: 'Bash', hooks: [{ type: 'command', command: CLONE_IDENTITY_COMMAND, timeout: 10 }] }
 // Then the guard refusing a walnut call the shell would cut a "$14.99" from (shell-dollar-guard-hook.ts).
 const DOLLAR_GUARD = { matcher: 'Bash', hooks: [{ type: 'command', command: SHELL_DOLLAR_GUARD_COMMAND, timeout: 10 }] }
