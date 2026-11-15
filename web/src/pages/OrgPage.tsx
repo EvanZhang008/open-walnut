@@ -11,8 +11,9 @@
  * task store with the server's own function (@open-walnut/org-tree), and what
  * waits on a prompt comes from the session status store. The selection, tab and
  * opened task ride the URL (?node=…&tab=…&open=…), so a reload or Back keeps them.
- * A task reference clicked on the page opens on Home (useOpenTask); a session a chat names
- * and a letter's Answer open in the side panel, so the user stays here (a
+ * A task clicked anywhere on the page opens here, in the side panel (useOpenTask ->
+ * openTaskHere, which this page answers through onOpenTaskOnPage), as do a session a chat names
+ * and a letter's Answer, so the user stays here (a
  * narrow window lays it over the detail). A wide window keeps a strip of side panels:
  * the one `open` names plus the ones the user locked (org-side-columns.ts), saved in the
  * layout record so the pins come back after a restart. On a phone the list, the detail and the
@@ -66,6 +67,8 @@ import { OrgRouterSetup } from '@/components/org/OrgRouterSetup';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { useRouterAreaNames } from '@/components/org/router-area-names';
 import { onOpenOnPage } from '@/utils/taskbar-minimize';
+import { onOpenTaskOnPage, type OpenTaskOptions } from '@/utils/open-session';
+import { yieldFullscreen } from '@/hooks/useFullscreen';
 import '@/styles/org-page.css';
 
 /** The page's own panes (the dividers below): the list, the node between, an opened task. */
@@ -420,8 +423,8 @@ export function OrgPage() {
   }, [channels, tasks]);
   /** A letter's Answer: the task beside the page opens on its session's Inbox tab. */
   const [sideInbox, setSideInbox] = useState<{ taskId: string; n: number } | null>(null);
-  /** Answer on another task's letter (OrgNodeDetail's alert rows). A letter open, not a task
-   *  reference: a task reference anywhere on the page opens on Home (useOpenTask). */
+  /** Answer on another task's letter (OrgNodeDetail's alert rows): the task opens beside the page
+   *  on its session's Inbox tab. */
   const openLetterOf = useCallback((taskId: string) => {
     const node = nodeOf((t) => t.id === taskId);
     // A node lists its own letter on its chat, with Answer there.
@@ -437,6 +440,22 @@ export function OrgPage() {
     recordTaskOpened(tasks.find((t) => resolveTaskSessionId(t) === sessionId)?.id);
     openSide({ kind: 'session', id: sessionId });
   }, [nodeOf, select, openSide, tasks]);
+  /** A task clicked anywhere on this page (a chat's pill, a thread's chip, a Tasks row, a Board card,
+   *  the Brief, a notice, search): it opens here, never on Home (2026-11-15, the user: "if we click in
+   *  te org seciton the taks need ot open in org that is only difference, all other page go to home").
+   *  Main or a lead is a node of the page and is selected; any other task opens beside the page. */
+  const openTaskOnOrg = useCallback((taskId: string, opts?: OpenTaskOptions) => {
+    // A full-screen sheet (a node's chat, its side bar) would cover what opens: leave it first.
+    yieldFullscreen('org-open-task');
+    if (opts?.sessionId) { openSession(opts.sessionId); return; }
+    const node = nodeOf((t) => t.id === taskId);
+    // The node already shown keeps its tab and its side panel (a pill of its own task in its chat).
+    if (node) { if (node.key !== shownKey.current) select(node.key); return; }
+    setSideInbox(null);
+    recordTaskOpened(taskId);
+    openSide({ kind: 'task', id: taskId });
+  }, [openSession, nodeOf, select, openSide]);
+  useEffect(() => onOpenTaskOnPage(openTaskOnOrg), [openTaskOnOrg]);
   // A chip on the app's taskbar opens here the way the page opens any session (AppTaskbar.tsx):
   // a node's own chat selects its node, never a second copy beside the page.
   useEffect(() => onOpenOnPage(openSession), [openSession]);

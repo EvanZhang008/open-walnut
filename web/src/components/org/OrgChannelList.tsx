@@ -141,7 +141,7 @@ function KeptWhy({ watched, locked }: { watched: boolean; locked: boolean }) {
 }
 
 /** The tasks kept in view under one row (keptByRow), as its own children. Inside the list's listbox each
- *  is an option of a group (all a listbox may hold): Enter opens it on Home (useOpenTask); on a watched one Delete stops
+ *  is an option of a group (all a listbox may hold): Enter opens it (useOpenTask: beside the page); on a watched one Delete stops
  *  watching it, and the × is the pointer's way to the same. A task only locked goes once its panel is
  *  unlocked, where it was locked. */
 function KeptChildren({ row, kept, open, onUnwatch }: { row: ChannelRow; kept: readonly KeptTask[]; open?: ReadonlySet<string>; onUnwatch: (taskId: string) => void }) {

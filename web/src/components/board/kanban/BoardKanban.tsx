@@ -102,7 +102,7 @@ export function BoardKanban({
     const s = storeRef.current;
     if (s?.tasks.some((t) => t.id === taskId && t.unread)) s.update(taskId, { unread: false });
   }, []);
-  /** A card, its session link, the leader's row: the task on Home (useOpenTask), the session named if one was. */
+  /** A card, its session link, the leader's row: the task opened where the Board is (useOpenTask), the session named if one was. */
   const openSession = useCallback((taskId: string, sessionId?: string) => {
     markRead(taskId);
     log.info('board', 'kanban card session opened', { taskId: ownerId, cardTaskId: taskId, sessionId: sessionId ?? '' });

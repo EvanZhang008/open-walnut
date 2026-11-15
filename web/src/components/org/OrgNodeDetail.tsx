@@ -83,7 +83,7 @@ interface Props {
   onTabUsed: (key: string) => void;
   onSelect: (key: string) => void;
   /** A letter another task wrote: its Answer, on that task's session Inbox tab (OrgPage). A letter,
-   *  not a task reference: a task reference opens on Home (useOpenTask). */
+   *  not a task reference: a task reference opens beside the page (useOpenTask). */
   onOpenLetterOf: (taskId: string) => void;
   /** Open a session a chat names: the page's side panel. */
   onOpenSession: (sessionId: string) => void;
@@ -187,7 +187,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   // What opens instead of this node or beside it (another node, a letter's panel, the chat this
   // fills) lies under a full-screen sheet, its side bar's or its chat's: leave it first, as a home
   // column does (useFullscreen's COLUMN-OPEN EXIT), or the click reads as nothing happened. A task
-  // reference goes Home (useOpenTask), whose column open yields it there.
+  // clicked on the page opens beside it (useOpenTask -> OrgPage's openTaskOnOrg, which yields it).
   const onSelect = (key: string) => { yieldFullscreen('org-select-node'); selectRow(key); };
   const openLetter = (taskId: string) => { yieldFullscreen('org-open-letter'); onOpenLetterOf(taskId); };
   const openTask = useOpenTask();
@@ -418,7 +418,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
     <TeamBoard
       columns={columns}
       emptyText={row.kind === 'main' ? 'No project has open work yet.' : 'Nothing open here.'}
-      // A project's row is a node of this page (the page's own navigation); a task opens on Home.
+      // A project's row is a node of this page (the page's own navigation); a task opens beside the page.
       onPick={(it) => { if (it.rowKey) onSelect(it.rowKey); else openTask(it.id); }}
     />
   );

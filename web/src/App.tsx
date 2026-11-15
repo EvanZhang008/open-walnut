@@ -8,7 +8,7 @@ import { AppHostPage } from './apps/AppHostPage';
 import { syncAppCommands } from './apps/commands';
 import { ensureCoreAppsRegistered } from './apps/core-apps';
 import { useAppCatalog } from './apps/hooks';
-import { navigateToTarget, openSessionOnHome, openTaskOnHome } from './utils/open-session';
+import { navigateToTarget, openSessionOnHome, openTaskHere } from './utils/open-session';
 import { rememberLocation } from './utils/last-location';
 import { pageKeyForPath, recordVisit } from './api/page-visits';
 import { parseSessionInboxTarget } from './components/inbox/session-inbox-link';
@@ -76,7 +76,7 @@ function TaskRedirect() {
   const navigate = useNavigate();
   useEffect(() => {
     const go = (to: string) => navigate(to, { replace: true });
-    if (id) withRecentHumanInput(() => openTaskOnHome(id, go));
+    if (id) withRecentHumanInput(() => openTaskHere(id, go));
     else go('/');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
@@ -96,8 +96,8 @@ function useOpenTaskRequests(navigate: (to: string) => void, inPopout: boolean):
     channel.onmessage = (e: MessageEvent) => {
       const { ask, taskId, human } = (e.data ?? {}) as { ask?: string; taskId?: string; human?: boolean };
       if (!ask || !taskId) return;
-      if (human === true) withRecentHumanInput(() => openTaskOnHome(taskId, navigateRef.current));
-      else openTaskOnHome(taskId, navigateRef.current);
+      if (human === true) withRecentHumanInput(() => openTaskHere(taskId, navigateRef.current));
+      else openTaskHere(taskId, navigateRef.current);
       channel.postMessage({ answer: ask });
       try { window.focus(); } catch { /* the browser decides */ }
     };

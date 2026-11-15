@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { openTaskOnHome } from '@/utils/open-session';
+import { openTaskHere } from '@/utils/open-session';
 
 /**
  * Last-resort handler for task pills (`a.task-link`) on surfaces that render
@@ -12,7 +12,7 @@ import { openTaskOnHome } from '@/utils/open-session';
  *
  * Listens on `document` in the bubble phase, so it runs after React's own root
  * listener and acts only when no surface handler already called preventDefault.
- * A plain click opens the task on Home (openTaskOnHome, the one task open;
+ * A plain click opens the task on Home (openTaskHere, the one task open;
  * there is no task page); in a pop-out window that opens it in the app's own
  * window, so the pop-out keeps what it shows. Modifier clicks keep the browser's open-in-new-tab
  * behavior, and the href's `/tasks/<id>` lands on Home there too.
@@ -40,7 +40,7 @@ export function useTaskLinkClickFallback(navigate: (to: string) => void): void {
       if (Math.hypot(e.clientX - was.x, e.clientY - was.y) >= 4) return;
       const under = document.elementFromPoint(e.clientX, e.clientY)?.closest(PILL) as HTMLAnchorElement | null;
       if (under?.dataset.taskId !== was.id) return;
-      openTaskOnHome(was.id, navigateRef.current);
+      openTaskHere(was.id, navigateRef.current);
     };
     const onClick = (e: MouseEvent) => {
       if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -48,7 +48,7 @@ export function useTaskLinkClickFallback(navigate: (to: string) => void): void {
       const taskId = anchor?.dataset.taskId;
       if (!taskId) return;
       e.preventDefault();
-      openTaskOnHome(taskId, navigateRef.current);
+      openTaskHere(taskId, navigateRef.current);
     };
     document.addEventListener('pointerdown', onDown, true);
     document.addEventListener('pointerup', onUp, true);

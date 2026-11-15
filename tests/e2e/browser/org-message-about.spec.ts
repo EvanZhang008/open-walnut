@@ -3,7 +3,7 @@
  * 2026-10-31, the user decided it: the node's session ends its message with a hidden
  * `<walnut-about tasks="…"/>` line; Walnut takes it off and draws the tasks under the message.
  *   - the reply's text never shows the line; the pills read as the tasks' live names
- *   - a click on a pill opens that task on Home
+ *   - a click on a pill opens that task beside the page
  * The mock CLI echoes the message it was sent, so a message ending in the line gives a reply
  * ending in it. The fixture is shared, so this file makes its own project and removes what it made.
  */
@@ -75,12 +75,8 @@ test('a VP\'s reply shows the tasks it is about as live pills, and the line neve
   const reply = chat.locator('.session-msg').filter({ has: page.getByTestId('msg-about') })
   await expect(reply).not.toContainText('walnut-about')
   await about.screenshot({ path: `test-results/org-message-about-${test.info().project.name}.png` })
-  // A pill opens its task on Home, as every task reference does (useOpenTask): the task has no
-  // session, so it is selected in Home's list; no side panel opens. A real press and release, as a
-  // person clicks: the pill must still be there at the release.
+  // A pill opens its task beside the page. A real press and release, as a person clicks: the pill must still be there at the release.
   await about.locator(`a.task-link[data-task-id="${ids.move}"]`).click()
-  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
-  await expect(page.locator(`#home-task-navigation [data-task-id="${ids.move}"]`).and(page.locator('.task-focused, .todo-pinned-card-active'))).toHaveCount(1, { timeout: 30_000 })
-  await expect(page.getByTestId('org-side')).toHaveCount(0)
-  await expect(page.locator('.task-detail-modal')).toHaveCount(0)
+  await expect(page.getByTestId('org-side')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('org-side-title')).toHaveText(`Book the movers ${STAMP}`)
 })

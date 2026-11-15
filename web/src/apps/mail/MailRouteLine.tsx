@@ -10,7 +10,7 @@ import { useNavigate } from 'react-router-dom';
 import type { MailRouteDto, MailRoutingCoverage } from '@/api/mail';
 import { apiGet } from '@/api/client';
 import { fetchTask } from '@/api/tasks';
-import { openTaskOnHome } from '@/utils/open-session';
+import { openTaskHere } from '@/utils/open-session';
 import { mailRouteAction, mailRouteView, orgNodePath, outgoingRouteView, routerPathOf, type MailRouteAction, type MailRouteLink } from './mail-route-model';
 
 const stop = (event: SyntheticEvent) => { event.stopPropagation(); };
@@ -40,7 +40,7 @@ export function MailRouteLine({ route, surface, subject, routingArea, routingCov
     if (link.kind === 'task') {
       // Its details open too: a routed task often has no session yet, and a bare highlight in the
       // task list reads as nothing happened.
-      openTaskOnHome(link.id, navigate, { detail: true });
+      openTaskHere(link.id, navigate, { detail: true });
       return;
     }
     void fetchTask(link.id)

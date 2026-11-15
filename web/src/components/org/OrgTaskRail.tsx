@@ -133,7 +133,7 @@ export function OrgWatchToggle({ task, className = '' }: { task: Task; className
 /** A section other than Needs you: one row per task, its own line, when it last moved, its eye. On
  *  Watching each row wears the dot and the line of its own state. */
 function TaskTabList({ tasks, tab, now }: { tasks: readonly Task[]; tab: Exclude<OrgRailTab, 'needs'>; now: number }) {
-  // A row is a task reference: it opens on Home, wherever the rail is hosted.
+  // A row is a task reference: it opens where the rail is (useOpenTask: beside the page on Org).
   const onOpen = useOpenTask();
   return (
     <ul className="org-task-list" data-testid="org-task-list" data-tab={tab}>

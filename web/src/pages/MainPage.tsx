@@ -2528,8 +2528,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // held until the task arrives, for a bounded while, rather than dropped on the first miss. The panel
   // the person was reading is not on Home, so its session opens here too: an ask in the chat slot,
   // where every ask lives, anything else in a session column.
-  // `openSession` (a task link from the Inbox, `openTaskOnHome`): open the task's own session too, as a
-  // click on its row does. `openDetail` (a "Details" off Home, `openTaskOnHome(..., { detail: true })`)
+  // `openSession` (a task link from the Inbox, `openTaskHere`): open the task's own session too, as a
+  // click on its row does. `openDetail` (a "Details" off Home, `openTaskHere(..., { detail: true })`)
   // opens the task's details popup over it too. `detailOnly` (a session menu's Details on Home,
   // handleOpenTaskDetailById): open the details popup and nothing else, no locate, no session.
   type PendingLocate = { recordOpen?: (id: string) => void; taskId: string; sessionId?: string; openSession?: boolean; openDetail?: boolean; detailOnly?: boolean; until: number; reading?: true };
@@ -2665,7 +2665,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, []);
 
   // Open the full-screen task detail modal for a taskId (used by the Session panel
-  // kebab "Details"). Unlike a task-ref click (openTaskOnHome) this OPENS the detail (no
+  // kebab "Details"). Unlike a task-ref click (openTaskHere) this OPENS the detail (no
   // suppressDetail) and does not touch the session panel rotation. The menu reads the
   // session's own task, so Details can be tapped before Home's list has it (a cold deep
   // link on a slow link) or for a task the list never carries: held like a locate and

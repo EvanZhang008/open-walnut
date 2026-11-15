@@ -28,6 +28,7 @@ import { ICON_PHASE_IN_PROGRESS, ICON_TO_READ } from '@/components/common/Icons'
 import { AgentText } from '@/components/common/AgentText';
 import { taskTextSource, type AgentTextSource } from '@/utils/agent-text-source';
 import { OPEN_CENTER_EVENT, OPEN_FILE_EVENT } from '@/utils/open-anywhere';
+import { TASK_OPEN_EVENT } from '@/utils/open-session';
 import '@/styles/task-status.css';
 
 const OPEN_DELAY_MS = 250;
@@ -136,14 +137,14 @@ export function WaitingChip({ task, compact = false }: { task: Task | null | und
     // Close after the viewer takes over, not while its source lookup is still in flight.
     window.addEventListener(OPEN_FILE_EVENT, onViewerOpen);
     window.addEventListener(OPEN_CENTER_EVENT, onViewerOpen);
-    window.addEventListener('main:locate-task', onViewerOpen);
+    window.addEventListener(TASK_OPEN_EVENT, onViewerOpen);
     // Capture phase: every pill on a row stops its own pointerdown (see LeaderPill.tsx).
     document.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('keydown', onKey, true);
     return () => {
       window.removeEventListener(OPEN_FILE_EVENT, onViewerOpen);
       window.removeEventListener(OPEN_CENTER_EVENT, onViewerOpen);
-      window.removeEventListener('main:locate-task', onViewerOpen);
+      window.removeEventListener(TASK_OPEN_EVENT, onViewerOpen);
       document.removeEventListener('pointerdown', onPointerDown, true);
       document.removeEventListener('keydown', onKey, true);
     };

@@ -1,20 +1,23 @@
 /**
- * A click on a task reference, wherever it is drawn, goes to Home with that task's session open,
- * and nothing else: no second details popup, no side panel, no Org node (2026-11-13, the user:
+ * A click on a task reference goes to Home with that task's session open, and nothing else: no
+ * second details popup, no peek (2026-11-13, the user:
  * "why I clcik the taskroute to it jump this task detail I want it direct to go task ... We want
  * to clcik go to taht sesison in home that is it"; and "in this task detail I clcik the session,
- * the panle shoujdl be gone and jump to that task directly").
+ * the panle shoujdl be gone and jump to that task directly"). The one exception is the Org page: a
+ * task clicked there opens there, beside the node's chat (2026-11-15, the user: "if we click in te
+ * org seciton the taks need ot open in org that is only difference, all other page go to home").
  *
- * Every task-ref click goes through one action, `openTaskOnHome` (web/src/utils/open-session.ts);
+ * Every task-ref click goes through one action, `openTaskHere` (web/src/utils/open-session.ts);
  * tests/web/task-ref-click-guard.test.ts fails on a click handler that goes around it. This spec
  * clicks the real references a person clicks: in a task's details (the "Answered for you" chip,
- * its session row, its parent row), in an Org thread, in the Brief and in a notice.
+ * its session row, its parent row), in an Org thread, the Org Tasks tab, the Brief and in a notice.
  */
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { loadHome } from './draft-helpers'
 import { endRunningTurn, interruptTurn, startRunningTurn } from './status-section-helpers'
 import { openAllTurnFolds, revealCard } from './turn-fold-helpers'
+import { openTaskFromRail } from './org-view-helpers'
 
 test.setTimeout(240_000)
 test.describe.configure({ mode: 'default' })
@@ -133,7 +136,15 @@ async function openOrgNode(page: Page, project: string): Promise<void> {
   await expect(page.getByTestId('org-detail')).toHaveAttribute('data-key', key)
 }
 
-test('the Org page: a chip in a thread\'s reply, a thread\'s task row and a chip in the Brief each open that session on Home', async ({ page, request }) => {
+/** Still the Org page, the session open beside the node's chat, Home untouched. */
+async function expectBesideOnOrg(page: Page, sid: string): Promise<void> {
+  await expect(page.getByTestId('org-side').first()).toHaveAttribute('data-session-id', sid, { timeout: 20_000 })
+  expect(new URL(page.url()).pathname).toBe('/org')
+  await expect(page.getByTestId('org-detail')).toBeVisible()
+  await expect(detail(page)).toHaveCount(0)
+}
+
+test('the Org page: a thread reply chip, a thread task row, a Tasks row and a Brief chip open beside the node; the same chip on Home opens on Home', async ({ page, request }) => {
   const stamp = Date.now()
   const project = `RefOrg${stamp}`
   const target = await newTask(`Org target ${stamp}`, project)
@@ -156,20 +167,29 @@ test('the Org page: a chip in a thread\'s reply, a thread\'s task row and a chip
   const card = page.locator(`[data-testid="org-thread"][data-thread-id="${thread.id}"]`)
   await expect(card).toBeVisible({ timeout: 30_000 })
   await card.getByTestId('org-thread-reply').locator(`a.task-link[data-task-id="${target}"]`).click()
-  await expectOnHome(page, targetSid)
+  await expectBesideOnOrg(page, targetSid)
 
   // 2. The thread's task row.
-  await openOrgNode(page, project)
   await expect(card).toBeVisible({ timeout: 30_000 })
   await card.locator(`[data-task-id="${other}"]`).first().click()
-  await expectOnHome(page, otherSid)
+  await expectBesideOnOrg(page, otherSid)
 
-  // 3. A chip in the Brief.
+  // 3. A row of the node's Tasks tab.
+  await openTaskFromRail(page, target, () => expectBesideOnOrg(page, targetSid))
+
+  // 4. A chip in the Brief.
   await openOrgNode(page, project)
   await page.getByTestId('org-detail').getByTestId('org-top-brief').click()
   const brief = page.getByTestId('org-brief-body')
   await expect(brief).toContainText('the export is half done', { timeout: 30_000 })
   await brief.locator(`a.task-link[data-task-id="${target}"]`).click()
+  await expectBesideOnOrg(page, targetSid)
+
+  // 5. Home: a task reference on any other page still opens on Home (a details popup's session row).
+  await page.locator('.sidebar-home-group a').first().click()
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
+  await openDetails(page, target, `Org target ${stamp}`)
+  await detail(page).locator('.todo-detail-session-item').first().click()
   await expectOnHome(page, targetSid)
 })
 

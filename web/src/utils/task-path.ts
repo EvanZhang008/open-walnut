@@ -9,7 +9,7 @@
  * notification, the phone or an outside deep link still lands on the task.
  *
  * Code never builds the path by hand: a link's `href` uses `taskPath`, and a click
- * calls `openTaskOnHome` (utils/open-session.ts). tests/web/task-page-guard.test.ts
+ * calls `openTaskHere` (utils/open-session.ts). tests/web/task-page-guard.test.ts
  * fails on a new `/tasks/<id>` literal anywhere else in web/src.
  */
 export const TASK_PATH_PREFIX = '/tasks/';

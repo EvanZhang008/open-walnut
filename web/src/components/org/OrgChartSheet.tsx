@@ -7,7 +7,7 @@
  *   └ one card per VP: its avatar, name, how many it has open and what it is doing, then the
  *     projects it leads (its own included) (OrgChartVp.tsx); an open card holds Open chat and
  *     its menu, an open project every task in it as a tree with each one's status icon, and a
- *     task opens on Home (OrgChartProject.tsx)
+ *     task opens beside the Org page (OrgChartProject.tsx)
  *
  * Drag a project onto another VP's card to put it under that VP (or use the move menu: a
  * right-click on it); drag it
@@ -50,7 +50,7 @@ interface Props {
   tasks: readonly Task[];
   onClose: () => void;
   /** Open a card on the Org page (a channel row's key): the page's own navigation between its
-   *  nodes, not a task reference (a task in a card opens on Home, OrgChartProject). */
+   *  nodes, not a task reference (a task in a card opens beside the page, OrgChartProject). */
   onPick: (key: string) => void;
   /** Open on this move's question (the Org list's right-click menu). */
   startWith?: ChartStart;

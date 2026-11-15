@@ -11,14 +11,19 @@
  * passed its own action down, and every new host was a new chance to pick a different one.
  *
  * Every member now calls the function `useOpenTask()` returns (web/src/hooks/useOpenTask.ts), which
- * is `openTaskOnHome` (web/src/utils/open-session.ts): Home, the task's session open, every details
- * popup closed. This test reads every web/src source file with the TypeScript parser and fails on:
+ * is `openTaskHere` (web/src/utils/open-session.ts): on the Org page the task opens beside the page,
+ * in Org's own columns; on every other page, Home, the task's session open, every details popup
+ * closed (2026-11-15, the user: "if we click in te org seciton the taks need ot open in org that is
+ * only difference, all other page go to home"). This test reads every web/src source file with the
+ * TypeScript parser and fails on:
  *   1. a name of the callback family anywhere (a prop, a parameter, a property, a variable);
  *   2. a task pill (`className` with `task-link`) whose own onClick opens something else;
  *   3. a TaskOpenerContext provider outside web/src/popout/ (windows that have no Home);
  *   4. useEntityClickHandler taking a task callback again;
  *   5. a Find on Home (`locateTaskOnHome`) or a raw `main:locate-task` outside the places listed
- *      with why: either one is how a click goes around the one action.
+ *      with why: either one is how a click goes around the one action;
+ *   6. on the Org page, a way to Home that is not one of the page's named Home buttons, or a page
+ *      opener that goes to Home: a task clicked on Org opens in Org.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -87,9 +92,9 @@ function declaredNames(f: (typeof FILES)[number]): Hit[] {
   return hits;
 }
 
-/** Names this file binds to the one action: `const x = useOpenTask()`, or openTaskOnHome itself. */
+/** Names this file binds to the one action: `const x = useOpenTask()`, or openTaskHere itself. */
 function openers(f: (typeof FILES)[number]): Set<string> {
-  const out = new Set<string>(['openTaskOnHome']);
+  const out = new Set<string>(['openTaskHere']);
   const visit = (node: ts.Node): void => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
       && ts.isCallExpression(node.initializer) && node.initializer.expression.getText(f.source) === 'useOpenTask') {
@@ -149,8 +154,32 @@ const LOCATES: Record<string, string> = {
   'components/transfer/TransferDialogHost.tsx': 'after a transfer: shows the task it made, no click on a reference',
   'components/chat/AskObjectDrawer.tsx': "a toast's Find on Home, after an ask became a task",
 };
-/** Where the event itself is spoken: its sender, Home (its listener), the hook layers yield with, and the Waiting card that closes on it. */
-const LOCATE_EVENT = new Set(['utils/open-session.ts', 'pages/MainPage.tsx', 'hooks/useOpenTask.ts', 'components/tasks/WaitingChip.tsx']);
+/** Where the event itself is spoken: its sender and Home (its listener). A layer closes on TASK_OPEN_EVENT (useYieldsToTaskOpen). */
+const LOCATE_EVENT = new Set(['utils/open-session.ts', 'pages/MainPage.tsx']);
+
+/** The Org page: the page itself and everything under components/org/. */
+const ORG_PAGE = /^(pages\/OrgPage\.tsx|components\/org\/.+)$/;
+/** Calls that go to Home (or leave the page) from the Org page. */
+const HOME_GOER = /^(?:\w+OnHome|navigateToTarget|openTaskInApp)$/;
+function homeGoers(f: (typeof FILES)[number]): Hit[] {
+  const hits: Hit[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression.getText(f.source);
+      if (HOME_GOER.test(callee)) hits.push({ file: f.rel, line: at(f, node), what: callee });
+      else if (callee === 'navigate' && node.arguments[0] && /^['"`]\/['"`]$/.test(node.arguments[0].getText(f.source))) hits.push({ file: f.rel, line: at(f, node), what: "navigate('/')" });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(f.source);
+  return hits;
+}
+/** Each way to Home on the Org page, `<file> <call>`, with why: a button that says Home, never a task click. */
+const ORG_HOME_BUTTONS: Record<string, string> = {
+  "pages/OrgPage.tsx navigate('/')": "chatOnHome: a task-with-no-session's Start a chat, opened on Home's composer (org:chat)",
+  'components/org/OrgSidePanel.tsx openSessionOnHome': "the side panel's Home button (aria-label \"Open on Home\")",
+  'components/org/OrgSidePanel.tsx locateTaskOnHome': "the side panel's Find on Home button and its session's Locate",
+};
 
 const fmt = (hits: Hit[]) => hits.map((h) => `web/src/${h.file}:${h.line}  ${h.what}`).join('\n');
 
@@ -177,7 +206,24 @@ describe('a task-ref click has one action', () => {
     const stale = Object.keys(LOCATES).filter((rel) => !FILES.find((f) => f.rel === rel)?.text.match(/\blocateTaskOnHome\(/));
     expect(stale, 'a listed Find on Home is gone: drop it from LOCATES').toEqual([]);
     const raw = FILES.filter((f) => !LOCATE_EVENT.has(f.rel) && /['"]main:locate-task['"]/.test(f.text)).map((f) => f.rel);
-    expect(raw, 'send it through openTaskOnHome; close a layer with useYieldsToTaskOpen').toEqual([]);
+    expect(raw, 'send it through openTaskHere; close a layer with useYieldsToTaskOpen').toEqual([]);
+  });
+
+  it('on the Org page a task opens in Org: the page answers every open, and its only ways to Home are its named Home buttons', () => {
+    const org = FILES.filter((f) => ORG_PAGE.test(f.rel));
+    expect(org.length).toBeGreaterThan(10);
+    const hits = org.flatMap((f) => homeGoers(f).filter((h) => !ORG_HOME_BUTTONS[`${f.rel} ${h.what}`]));
+    expect(hits, `a task clicked on the Org page opens on the Org page (call useOpenTask()); an explicit Home button is listed in ORG_HOME_BUTTONS with why:\n${fmt(hits)}`).toEqual([]);
+    const stale = Object.keys(ORG_HOME_BUTTONS).filter((k) => { const [rel, what] = k.split(' '); const f = org.find((x) => x.rel === rel); return !f || !homeGoers(f).some((h) => h.what === what); });
+    expect(stale, 'a listed Org Home button is gone: drop it from ORG_HOME_BUTTONS').toEqual([]);
+    const page = FILES.find((f) => f.rel === 'pages/OrgPage.tsx')!;
+    expect(page.text).toMatch(/useEffect\(\(\) => onOpenTaskOnPage\(openTaskOnOrg\), \[openTaskOnOrg\]\)/);
+    const opener = localDeclaration(page, 'openTaskOnOrg') ?? '';
+    expect(opener).toMatch(/openSide\(/);
+    expect(opener, 'the Org page opener never goes to Home').not.toMatch(/OnHome|navigate\(|navigateToTarget|openTaskHere/);
+    // The one decision consults the page before Home: the page event is sent, and Home only when no page took it.
+    const decision = localDeclaration(FILES.find((f) => f.rel === 'utils/open-session.ts')!, 'openTaskHere') ?? '';
+    expect(decision).toMatch(/dispatchEvent\(onPage\);\s*if \(onPage\.defaultPrevented\) return;[\s\S]*main:locate-task[\s\S]*navigate\('\/'\)/);
   });
 
   it('useEntityClickHandler opens a task pill itself', () => {

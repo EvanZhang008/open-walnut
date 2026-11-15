@@ -68,19 +68,21 @@ export const taskRow = (scope: Page | Locator, taskId: string, tab?: OrgSectionT
 export const taskOpener = (scope: Page | Locator, taskId: string): Locator =>
   scope.locator(`[data-testid="org-task-row"][data-task-id="${taskId}"], [data-testid="org-alert"][data-task-id="${taskId}"] [data-testid="org-alert-link"]`).first()
 
-/** Clicks a task in the side bar's All tasks, wherever its state draws it (every section opened
- *  first). A task reference: it opens on Home (useOpenTask, 2026-11-13), so the Org page goes. */
-export async function clickTaskInRail(page: Page, taskId: string): Promise<void> {
-  await openTasksBy(page, 'all')
-  await openAllSections(page)
-  await taskOpener(page, taskId).click()
+/** Opens a task beside the page from the side bar's All tasks, wherever its state draws it (every
+ *  section opened first; a click that lands while the list redraws is tried again). A task clicked
+ *  on the Org page opens there (useOpenTask, 2026-11-15). */
+export async function openTaskFromRail(scope: Page | Locator, taskId: string, opened: () => Promise<void>): Promise<void> {
+  await openTasksBy(scope, 'all')
+  await expect(async () => {
+    await openAllSections(scope)
+    await taskOpener(scope, taskId).click({ timeout: 3_000 })
+    await opened()
+  }).toPass({ timeout: 30_000 })
 }
 
 /** Opens a task (or a session) in the panel beside the Org page through the page's own place in
  *  the URL (`open=task:<id>` / `open=session:<sid>`), in-app as the router navigates, no reload.
- *  A task reference (a row, a chip) no longer opens there, it opens on Home (useOpenTask,
- *  2026-11-13); what still does is a letter's Answer, a session a chat names, a taskbar chip and a
- *  reload of the page, so a spec of the panel itself (its lock, its strip, its layout) opens it so. */
+ *  A spec of the panel itself (its lock, its strip, its layout) opens it so, without a click. */
 export async function openBeside(page: Page, target: `task:${string}` | `session:${string}`): Promise<void> {
   await expect(page.getByTestId('org-page')).toBeVisible({ timeout: 30_000 })
   await page.evaluate((t) => {

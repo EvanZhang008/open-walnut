@@ -67,6 +67,7 @@ export function locateTaskOnHome(
 ): void {
   // A pop-out has no Home: the app's own window finds it (a pop-out session's Locate).
   if (window.location && isPopoutPath(window.location.pathname)) { openTaskInApp(taskId); return; }
+  window.dispatchEvent(new CustomEvent(TASK_OPEN_EVENT, { detail: { taskId } }));
   window.dispatchEvent(new CustomEvent('main:locate-task', {
     detail: { taskId, ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}) },
   }));
@@ -82,19 +83,49 @@ export interface OpenTaskOptions {
 }
 
 /**
- * Open a task on the HOME page from anywhere: its session in a column (the one named, else its
- * own), the task selected in the task panel, every details popup closed, then go home. A task
- * with no session is only selected, as a click on its row does.
- *
- * What every task link and task click does, wherever it is (2026-10-26, the user: "Inbox directly
- * jumping to the home page is better"; 2026-11-02, everywhere, and the separate task page is gone;
- * 2026-11-13, "We want to clcik go to taht sesison in home that is it"). Components reach it through
- * `useOpenTask` (hooks/useOpenTask.ts), never through a callback prop. In a pop-out tab there is no
- * Home: the app's own window opens it (openTaskInApp). Same window-event bridge as
- * `locateTaskOnHome`, which it extends with the task's session.
+ * Every task open, whichever page it comes from: a layer over the page (a dialog, a sheet, a
+ * details popup) closes on it (useYieldsToTaskOpen). Sent before the task opens, in the same tick.
  */
-export function openTaskOnHome(taskId: string, navigate: (to: string) => void, opts?: OpenTaskOptions): void {
+export const TASK_OPEN_EVENT = 'walnut:task-open';
+
+const OPEN_TASK_ON_PAGE = 'walnut:open-task-on-page';
+
+/**
+ * The page on screen that opens tasks in its own columns answers here (the Org page,
+ * pages/OrgPage.tsx); returns the unsubscribe. Only a page mounted while it is the route registers,
+ * so the answer is always the page the click was made on.
+ */
+export function onOpenTaskOnPage(handler: (taskId: string, opts?: OpenTaskOptions) => void): () => void {
+  const listener = (e: Event) => {
+    const d = (e as CustomEvent<{ taskId?: unknown; opts?: OpenTaskOptions }>).detail;
+    if (!d || typeof d.taskId !== 'string' || !d.taskId) return;
+    e.preventDefault();
+    handler(d.taskId, d.opts);
+  };
+  window.addEventListener(OPEN_TASK_ON_PAGE, listener);
+  return () => window.removeEventListener(OPEN_TASK_ON_PAGE, listener);
+}
+
+/**
+ * THE task open: what every task link and task click does, wherever it is. The task opens on the
+ * page it was clicked on when that page opens tasks itself (the Org page: beside the node's chat,
+ * in its own columns), and on HOME from every other page: its session in a column (the one named,
+ * else its own), the task selected in the task panel, every details popup closed. A task with no
+ * session is only selected, as a click on its row does.
+ *
+ * 2026-10-26, the user: "Inbox directly jumping to the home page is better"; 2026-11-02, everywhere,
+ * and the separate task page is gone; 2026-11-13, "We want to clcik go to taht sesison in home that
+ * is it"; 2026-11-15, "if we click in te org seciton the taks need ot open in org that is only
+ * difference, all other page go to home". Components reach it through `useOpenTask`
+ * (hooks/useOpenTask.ts), never through a callback prop. In a pop-out tab there is no Home: the
+ * app's own window opens it (openTaskInApp).
+ */
+export function openTaskHere(taskId: string, navigate: (to: string) => void, opts?: OpenTaskOptions): void {
   if (window.location && isPopoutPath(window.location.pathname)) { openTaskInApp(taskId); return; }
+  window.dispatchEvent(new CustomEvent(TASK_OPEN_EVENT, { detail: { taskId } }));
+  const onPage = new CustomEvent(OPEN_TASK_ON_PAGE, { detail: { taskId, ...(opts ? { opts } : {}) }, cancelable: true });
+  window.dispatchEvent(onPage);
+  if (onPage.defaultPrevented) return;
   window.dispatchEvent(new CustomEvent('main:locate-task', {
     detail: { taskId, openSession: true, ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}), ...(opts?.detail ? { openDetail: true } : {}) },
   }));
@@ -131,7 +162,7 @@ export function openDraftSessionOnHome(project: string | undefined, navigate: (t
 export function navigateToTarget(to: string, navigate: (to: string) => void): void {
   const taskId = taskIdOfPath(to);
   if (taskId) {
-    openTaskOnHome(taskId, navigate);
+    openTaskHere(taskId, navigate);
     return;
   }
   const m = /^\/sessions\?(.+)$/.exec(to);

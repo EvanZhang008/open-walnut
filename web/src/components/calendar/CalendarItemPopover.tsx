@@ -15,7 +15,7 @@ import { draftKey } from '@/utils/drafts';
 import type { CalendarItem } from './calendar-items';
 import { calendarEventNeedsApproval, type CalendarEvent } from '@/api/calendar';
 import './visibility.css';
-import { openTaskOnHome } from '@/utils/open-session';
+import { openTaskHere } from '@/utils/open-session';
 import { projectDisplayName } from '@/utils/project-display';
 import { useNavigate } from 'react-router-dom';
 import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
@@ -353,7 +353,7 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
             </button>
           )}
           {!isEvent && (
-            <button className="cal-item-open" onClick={() => openTaskOnHome(item.task.id, navigate)}>
+            <button className="cal-item-open" onClick={() => openTaskHere(item.task.id, navigate)}>
               Open task
             </button>
           )}

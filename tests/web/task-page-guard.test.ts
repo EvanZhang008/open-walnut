@@ -9,7 +9,7 @@
  *
  * The class: code in web/src that names a task by building `/tasks/<id>` itself. Every
  * member now goes through web/src/utils/task-path.ts (`taskPath` for an href or a deep link,
- * `openTaskOnHome` for a click), and `/tasks/:id` is a redirect shim that opens the task on
+ * `openTaskHere` for a click), and `/tasks/:id` is a redirect shim that opens the task on
  * Home, so old links, notifications and outside deep links keep working. This test lists
  * every quoted `/tasks/` literal in web/src code and fails on one outside task-path.ts, and
  * pins the route to the shim and the page file to gone.
@@ -89,7 +89,7 @@ describe('no task page', () => {
         offenders.push(`web/src/${rel}:${lit.line}: ${JSON.stringify(lit.text)}`);
       }
     }
-    // A link's href uses taskPath(id); a click calls openTaskOnHome(id, navigate)
+    // A link's href uses taskPath(id); a click calls openTaskHere(id, navigate)
     // (utils/open-session.ts), which selects the task on Home and opens its session.
     expect(offenders).toEqual([]);
   });
@@ -111,7 +111,7 @@ describe('no task page', () => {
   it('routes /tasks/:id to the shim that opens the task on Home, and the page is gone', () => {
     const app = readFileSync(join(WEB_SRC, 'App.tsx'), 'utf8');
     expect(app).toMatch(/<Route path="\/tasks\/:id" element={<TaskRedirect \/>} \/>/);
-    expect(app).toMatch(/function TaskRedirect\(\)[\s\S]*?openTaskOnHome\(id,/);
+    expect(app).toMatch(/function TaskRedirect\(\)[\s\S]*?openTaskHere\(id,/);
     expect(existsSync(join(WEB_SRC, 'pages/TaskDetailPage.tsx'))).toBe(false);
     const importers = sourceFiles(WEB_SRC).filter((f) => /from ['"][^'"]*TaskDetailPage['"]|PopoutTaskDetail/.test(readFileSync(f, 'utf8')));
     expect(importers.map((f) => relative(WEB_SRC, f))).toEqual([]);

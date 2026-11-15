@@ -24,7 +24,7 @@ const h = vi.hoisted(() => ({
 }))
 vi.mock('@/api/files', () => ({ locatePath: h.locatePath }))
 vi.mock('@/utils/open-anywhere', () => ({ openFileAnywhere: h.openFileAnywhere, claimAgentLinkClick: (e: unknown) => { h.claimed.push(e) } }))
-vi.mock('@/utils/open-session', () => ({ openTaskOnHome: vi.fn() }))
+vi.mock('@/utils/open-session', () => ({ openTaskHere: vi.fn() }))
 vi.mock('@/utils/log', () => ({ log: { info: vi.fn(), warn: h.warn, error: vi.fn(), debug: vi.fn() } }))
 
 const { MemoryRouter } = await import('../../web/node_modules/react-router-dom')

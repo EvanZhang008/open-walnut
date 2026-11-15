@@ -11,7 +11,7 @@ import { SettingsGroup, SettingsLoadingRow, SettingsEmpty, SettingsNotice } from
 import { SegmentedControl } from '@/components/settings/inputs/SegmentedControl';
 import { fetchEngineCompare, type EngineCompare, type EngineCompareRow, type EngineCompareTask, type ReviewScore } from '@/api/usage';
 import { usePageView } from '@/utils/view-memory';
-import { openTaskOnHome } from '@/utils/open-session';
+import { openTaskHere } from '@/utils/open-session';
 import { formatTokens } from '@/utils/format';
 
 function money(usd: number): string {
@@ -288,7 +288,7 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
                 <tbody>
                   {data.tasks.map((t) => (
                     <tr data-peek-row="" key={t.taskId} className="usage-line" data-task={t.taskId}>
-                      <td><button type="button" className="usage-ec-open" onClick={() => openTaskOnHome(t.taskId, navigate)}>{t.title}</button>
+                      <td><button type="button" className="usage-ec-open" onClick={() => openTaskHere(t.taskId, navigate)}>{t.title}</button>
                         <span className="usage-ec-sub">{[label(t.key), t.project || 'Inbox', t.done ? hours(t.hours) : t.notStarted ? 'never started' : 'open', t.split ? 'split' : '',
                           t.reviews ? `${t.reviews} review${t.reviews === 1 ? '' : 's'}${t.reviewCostUsd ? ` (${money(t.reviewCostUsd)})` : ''}` : '',
                           t.score ? `scored ${scoreNamed(t.score)}${scoredByText(t.scoredFamilies)}${t.scorePartial ? ' (partial, not in the median)' : ''}` : '', t.followUps ? `${t.followUps} of your messages` : '',

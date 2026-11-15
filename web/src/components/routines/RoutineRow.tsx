@@ -18,7 +18,7 @@ import {
   describeAuditEntry, describeExecutorBadge, describeFireTally, describeLastCheck, describeRoutineTiming, describeRunTime,
 } from '@/utils/routine-format';
 import { describeMissed, describeRunEntry, runEntryFailed } from '@/utils/routine-runs';
-import { openSessionOnHome, openTaskOnHome } from '@/utils/open-session';
+import { openSessionOnHome, openTaskHere } from '@/utils/open-session';
 import {
   collapseRepeats, healthLabel, historyWords, nameTaskIn, offLabel, quietReason, routineError, routineHealth, rowTiming, runOutcome, runStamp, settledRun,
 } from './routine-groups';
@@ -331,7 +331,7 @@ export function RoutineRow({
                 )}
                 <button type="button" className="btn btn-sm" onClick={() => onEdit(routine)}>Edit</button>
                 {owner && (
-                  <button type="button" className="btn btn-sm" onClick={() => openTaskOnHome(owner.taskId, navigate)}>Open task</button>
+                  <button type="button" className="btn btn-sm" onClick={() => openTaskHere(owner.taskId, navigate)}>Open task</button>
                 )}
                 <button type="button" className="btn btn-sm routine-delete" onClick={() => setConfirmDelete(true)}>Delete</button>
               </>

@@ -1,6 +1,7 @@
 /**
- * THE way a click on a task reference opens that task: Home, with the task's session open in
- * its column (or the task selected in the list when it has none), and nothing else. A task-ref
+ * THE way a click on a task reference opens that task: on the Org page, beside the node's chat in
+ * Org's own columns; on every other page, Home, with the task's session open in its column (or the
+ * task selected in the list when it has none). One decision, in `openTaskHere`. A task-ref
  * pill in agent text, a chip in a details popup, a thread, the Brief, a Board card, a letter, a
  * search result, an Org rail row: every one calls the function this hook returns.
  *
@@ -18,7 +19,7 @@
 import { createContext, useContext, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
-import { openTaskOnHome, type OpenTaskOptions } from '@/utils/open-session';
+import { openTaskHere, TASK_OPEN_EVENT, type OpenTaskOptions } from '@/utils/open-session';
 
 export type { OpenTaskOptions };
 export type OpenTask = (taskId: string, opts?: OpenTaskOptions) => void;
@@ -27,17 +28,17 @@ export type OpenTask = (taskId: string, opts?: OpenTaskOptions) => void;
 export const TaskOpenerContext = createContext<OpenTask | null>(null);
 
 /**
- * A layer over Home (a dialog, a sheet, a details popup a component keeps itself) closes when a
+ * A layer over the page (a dialog, a sheet, a details popup a component keeps itself) closes when a
  * task opens from anywhere, a pill inside it included: the task is what the person asked to see,
- * and Home under the layer is where it opens. `openTaskOnHome` sends `main:locate-task`.
+ * and the page under the layer is where it opens. `openTaskHere` sends TASK_OPEN_EVENT.
  */
 export function useYieldsToTaskOpen(close: () => void, active = true): void {
   useEffect(() => {
     if (!active) return;
     // Called bare: a close that takes an optional argument must not read the event as one.
     const onOpen = () => close();
-    window.addEventListener('main:locate-task', onOpen);
-    return () => window.removeEventListener('main:locate-task', onOpen);
+    window.addEventListener(TASK_OPEN_EVENT, onOpen);
+    return () => window.removeEventListener(TASK_OPEN_EVENT, onOpen);
   }, [close, active]);
 }
 
@@ -48,6 +49,6 @@ export function useOpenTask(): OpenTask {
   // Lean: runs the latest render's navigate and host, holds no render alive.
   return useLeanCallback((taskId: string, opts?: OpenTaskOptions) => {
     if (host) host(taskId, opts);
-    else openTaskOnHome(taskId, navigate, opts);
+    else openTaskHere(taskId, navigate, opts);
   }, []);
 }

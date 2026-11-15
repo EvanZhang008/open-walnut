@@ -1,8 +1,7 @@
 /**
  * The Org page's side panel: a session named in a chat, a taskbar chip, or Answer on another
- * task's letter opens here, so the user stays on the Org page. A task reference (a chip, a card,
- * a row naming a task) does not: it opens on Home (useOpenTask, 2026-11-13). A task with a
- * session shows that session (the same embedded SessionPanel
+ * task's letter opens here, so the user stays on the Org page. A task clicked anywhere on
+ * the page opens here too (useOpenTask, 2026-11-15). A task with a session shows that session (the same embedded SessionPanel
  * as the Ask Walnut slot, with its own close, popout and fullscreen), and a Home button
  * opens it on home instead. A task with no session shows what it is and how to start one.
  * Minimize (the panel's default) puts the session on the taskbar and closes the panel. On a

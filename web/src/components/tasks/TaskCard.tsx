@@ -11,7 +11,7 @@ import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { ICON_TRASH } from '../common/Icons';
-import { openTaskOnHome } from '@/utils/open-session';
+import { openTaskHere } from '@/utils/open-session';
 import { projectDisplayName } from '@/utils/project-display';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 
@@ -126,7 +126,7 @@ export function TaskCard({ task, onComplete, onDelete, childStats, groupInfo, is
       onSelectToggle(task.id);
       return;
     }
-    openTaskOnHome(task.id, navigate);
+    openTaskHere(task.id, navigate);
   };
 
   return (
@@ -154,7 +154,7 @@ export function TaskCard({ task, onComplete, onDelete, childStats, groupInfo, is
       onClick={handleCardClick}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter') openTaskOnHome(task.id, navigate); }}
+      onKeyDown={(e) => { if (e.key === 'Enter') openTaskHere(task.id, navigate); }}
     >
       <button
         className="task-checkbox"

@@ -179,7 +179,7 @@ import { FLAT_BATCH_KEY, FRESH_BATCH, LIST_BATCH, cutListBatch, isPastBatch, typ
 import { BUILTIN_TIERS, isBuiltinTier, isRetiredTier, type FocusTier, type CustomTierDef } from '@/api/focus';
 import { useInlineTitleEdit } from './useInlineTitleEdit';
 import { useTaskCircle } from '@/hooks/useSessionStatus';
-import { openTaskOnHome } from '@/utils/open-session';
+import { openTaskHere } from '@/utils/open-session';
 import { projectDisplayName, taskProjectLabel } from '@/utils/project-display';
 
 type Task = CoreTask & {
@@ -6866,12 +6866,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // A Recent row the board list does not carry (finished long ago, opened from search) opens
   // the way any task link does, by id: Home reads it and opens its session, or its details
   // when it has none; its "Details" asks for the details by name.
-  const openUnlistedTask = useLeanCallback((task: Task) => { openTaskOnHome(task.id, navigate); }, [navigate]);
-  const openUnlistedDetail = useLeanCallback((task: Task) => { openTaskOnHome(task.id, navigate, { detail: true }); }, [navigate]);
+  const openUnlistedTask = useLeanCallback((task: Task) => { openTaskHere(task.id, navigate); }, [navigate]);
+  const openUnlistedDetail = useLeanCallback((task: Task) => { openTaskHere(task.id, navigate, { detail: true }); }, [navigate]);
 
   const handleExpandDetail = useLeanCallback((task: Task) => {
     setDetailTarget(null);
-    onFocusTask ? onFocusTask(task) : openTaskOnHome(task.id, navigate);
+    onFocusTask ? onFocusTask(task) : openTaskHere(task.id, navigate);
   }, [onFocusTask, navigate]);
   // A row opened from Recent keeps its place while the list is on screen (useRecentOpenedTasks).
   const { hold: holdRecentRow, outside: recentOutside } = recentOpened;

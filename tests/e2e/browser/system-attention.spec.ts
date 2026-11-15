@@ -210,7 +210,7 @@ for (const section of ['All', 'System']) {
     await pickRail(page, section);
     await page.locator('.notification-panel').getByRole('button', { name: 'Fix with agent for Alpha box', exact: true }).click();
     await expect(page.locator('.notification-panel')).toHaveCount(0);
-    // The task opens on Home, located and selected (navigateToTarget -> openTaskOnHome); there is
+    // The task opens on Home, located and selected (navigateToTarget -> openTaskHere); there is
     // no task page.
     await expect.poll(() => new URL(page.url()).pathname).toBe('/');
     await expect(page.locator(`.todo-panel [data-task-id="${taskId}"]`)

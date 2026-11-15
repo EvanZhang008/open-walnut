@@ -13,7 +13,7 @@ import { renderToStaticMarkup } from '../../web/node_modules/react-dom/server.no
 import type { Approval } from '../../web/src/api/approvals';
 
 vi.mock('../../web/src/components/approvals/approvals-store', () => ({ closeApproval: vi.fn(), openApproval: vi.fn() }));
-vi.mock('@/utils/open-session', () => ({ openTaskOnHome: vi.fn() }));
+vi.mock('@/utils/open-session', () => ({ openTaskHere: vi.fn() }));
 
 const { MemoryRouter } = await import('../../web/node_modules/react-router-dom');
 const { ApprovalContextRows, detailText, gitOperation, prettyJson, shortPath, summaryOf } = await import('../../web/src/components/approvals/approval-context');

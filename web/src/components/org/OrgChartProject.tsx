@@ -3,7 +3,7 @@
  * it has open; opened, every task in it as a tree (workers under their team), each row its
  * title and its status as an icon in the row (2026-11-08, the user: "just list all the tasks",
  * each task with its status, and the hierarchy is the point; the chart is a glance, not a place
- * to decide, so no counts, asks or status words in it). A task opens on Home (useOpenTask). The
+ * to decide, so no counts, asks or status words in it). A task opens beside the page (useOpenTask). The
  * move under another VP is a drag or a right-click on the row. Every VP card lists its
  * projects, its own included. Each row remembers whether it was open (usePageViewOf).
  */
@@ -67,7 +67,7 @@ interface Props {
   dragging: boolean;
   onDragStart: (e: DragEvent, p: VpProject) => void;
   onDragEnd: () => void;
-  /** Close the chart: a task clicked here opens on Home, which the sheet would cover. */
+  /** Close the chart: a task clicked here opens beside the page, which the sheet would cover. */
   onLeave: () => void;
   /** Open the menu that moves it under another VP, when it can move (at the control, or where the pointer is). */
   onMove?: (from: HTMLElement, point?: { x: number; y: number }) => void;

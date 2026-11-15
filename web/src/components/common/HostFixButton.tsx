@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { getHostFixSnapshot, hostFixTargetKey, runHostFix, subscribeHostFix, type FixTarget } from '@/utils/host-fix-store';
 import { openSessionOnHome } from '@/utils/open-session';
 import { taskPath } from '@/utils/task-path';
-import { openTaskOnHome } from '@/utils/open-session';
+import { openTaskHere } from '@/utils/open-session';
 import { useLocalAgentBlocked } from '@/utils/local-agent-runnable';
 
 export function HostFixButton({ target, name, onNavigate }: { target: FixTarget; name: string; onNavigate?: (to: string) => void }) {
@@ -22,7 +22,7 @@ export function HostFixButton({ target, name, onNavigate }: { target: FixTarget;
     if (onNavigate) {
       onNavigate(result.sessionId ? `/sessions?id=${encodeURIComponent(result.sessionId)}` : taskPath(result.taskId));
     } else if (result.sessionId) openSessionOnHome(result.sessionId, navigate);
-    else openTaskOnHome(result.taskId, navigate);
+    else openTaskHere(result.taskId, navigate);
   };
   const label = snapshot.pending ? 'Starting...' : 'Fix with agent';
   if (agentBlocked && !snapshot.pending) return null;
