@@ -221,5 +221,7 @@ test('the list answers completedWithinDays with the count it left out', async ()
   const body = (await res.json()) as { tasks: Array<{ id: string }>; completedHidden: number; total: number }
   expect(body.tasks.map((t) => t.id)).toEqual([open.id])
   expect(body.completedHidden).toBe(1)
-  expect(body.total).toBe(2)
+  // `total` counts only the rows this filtered list can return (src/core/task-query-page.ts);
+  // what the window left out is `completedHidden`.
+  expect(body.total).toBe(1)
 })
