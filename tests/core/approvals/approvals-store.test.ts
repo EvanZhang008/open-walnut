@@ -429,9 +429,13 @@ describe('strict single-use approvals', () => {
     const a = await createApproval({ ...base, detail: context })
     // One pending Face ID ask per account (biometric-fence.ts): the first is withdrawn before the second.
     await cancelApproval(a.approval.id, a.waitToken, 'test')
-    // The stubbed person acts after the withdrawal (Date.now() at the next ask is later).
-    await new Promise((r) => setTimeout(r, 5))
-    const b = await createApproval({ ...base, detail: context })
+    // Advance only the clock: the stubbed person acts after the recorded withdrawal.
+    const afterCancel = Date.now() + 1
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(afterCancel)
+    let b: Awaited<ReturnType<typeof createApproval>>
+    try { b = await createApproval({ ...base, detail: context }) }
+    finally { vi.useRealTimers() }
     expect(Date.parse(a.approval.expiresAt) - Date.parse(a.approval.createdAt)).toBe(300_000)
     const envelope = JSON.parse(a.approval.detail!)
     expect(envelope).toMatchObject({ version: 'walnut-single-use-v1', ...owner, signingKeyId: key.id, context })

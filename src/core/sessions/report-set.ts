@@ -13,6 +13,7 @@ import { userKindVerdict } from '../org/user-kind.js';
 import { ASK_KINDS, ASK_MORE_MAX, ASK_OPTIONS_MAX, type AskKind, type AskOption, type StatusLineBy, type StatusReport, type WaitKind } from '../user-status.js';
 import { needsSinceOf, settleCheck, type UserSaid } from './user-spoke.js';
 import { stampSaidDecision } from '../ask-decision.js';
+import { withFileLock } from '../../utils/file-lock.js';
 
 export interface ReportChange {
   state: 'needs' | 'working' | 'waiting';
@@ -157,7 +158,6 @@ export async function setTaskReport(
   taskId: string, raw: unknown, setter: ReportSetter | null, nowMs = Date.now(),
 ): Promise<{ task: Task; phase: string | null; userSaid?: UserSaid }> {
   if ((raw as ReportChange | null)?.same_as) {
-    const { withFileLock } = await import('../../utils/file-lock.js');
     const { WALNUT_HOME } = await import('../../constants.js');
     // Two tasks referencing each other must recheck under the same lock, not both pass on stale reads.
     return withFileLock(`${WALNUT_HOME}/cache/decision-owner.json`, () => saveTaskReport(taskId, raw, setter, nowMs));

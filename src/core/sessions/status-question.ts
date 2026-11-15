@@ -21,6 +21,7 @@ import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import { STATUS_RULE_VERSION, type StatusReport } from '../user-status.js';
 import { setReportPending } from './report-pending.js';
+import { withFileLock } from '../../utils/file-lock.js';
 
 /** A turn end this quiet is the end (the CLI's own follow-up turn starts within ~3 s). */
 export const STATUS_SETTLE_MS = 5_000;
@@ -59,7 +60,6 @@ export async function applyStatusAnswer(
   taskId: string, sessionId: string, report: StatusReport, turnEndedMs: number, opts: { midTurn?: boolean } = {},
 ): Promise<boolean> {
   if (report.same_as) {
-    const { withFileLock } = await import('../../utils/file-lock.js');
     const { WALNUT_HOME } = await import('../../constants.js');
     return withFileLock(`${WALNUT_HOME}/cache/decision-owner.json`, () => saveStatusAnswer(taskId, sessionId, report, turnEndedMs, opts));
   }
