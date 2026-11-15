@@ -521,7 +521,7 @@ test('a reload mid-upload says the file is missing instead of sending the words 
   await expect.poll(async () => (await h.sent()).length).toBe(1)
 })
 
-test('a send that fails while the next message is typed keeps both: the failed words go back in front', async ({ page }) => {
+test('a send that fails while the next message is typed keeps both: the failed words in their own row, the typed ones in the box', async ({ page }) => {
   const h = await open(page)
   await page.evaluate(() => sessionStorage.setItem('pw-hold-send', '1'))
   const input = composer(page).locator('textarea')
@@ -535,8 +535,13 @@ test('a send that fails while the next message is typed keeps both: the failed w
     const id = (window as any).__lastSendId
     ws.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'res', id, ok: false, error: 'refused' }) }))
   })
-  await expect(input).toHaveValue('first message\n\nsecond message')
-  await expect(composer(page).locator('.chat-attachments-note')).toContainText('did not send')
+  // A session send's refused words live on in their own row, with Retry; the words typed since
+  // stay in the box, alone (ChatInput.tsx sendWith, useSessionSend).
+  const failed = page.locator('.session-msg-failed').filter({ hasText: 'first message' })
+  await expect(failed).toHaveCount(1)
+  await expect(failed.locator('.session-msg-failed-badge')).toContainText('Send failed')
+  await expect(failed.getByRole('button', { name: 'Retry', exact: true })).toBeVisible()
+  await expect(input).toHaveValue('second message')
 })
 
 test('words typed on after Enter go with the message: the auto-send waits for a pause in typing', async ({ page }) => {

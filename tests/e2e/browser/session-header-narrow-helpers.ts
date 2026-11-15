@@ -174,7 +174,8 @@ async function nextFrames(page: Page): Promise<void> {
 
 /** Clamp the column and wait for the header to settle (two identical reads, each after two frames). */
 async function settleAt(page: Page, panel: Locator, width: number | null): Promise<HeaderState> {
-  await clampColumn(page, width)
+  // The width itself: this spec's column is its own session's, not the composer spec's.
+  await clampColumn(page, width, { exact: true })
   await nextFrames(page)
   let last = await headerState(panel)
   await expect.poll(async () => {

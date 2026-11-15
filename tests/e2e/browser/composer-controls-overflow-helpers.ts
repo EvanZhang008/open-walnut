@@ -87,9 +87,14 @@ export async function openControlsSession(
 export const COLUMN_NAME_ONLY = 260;
 export const COLUMN_MODEL_IN_MENU = 220;
 
-/** Clamp every session column to `px`, or lift the clamp with null. */
-export async function clampColumn(page: Page, px: number | null): Promise<void> {
-  const width = px === COLUMN_NAME_ONLY || px === COLUMN_MODEL_IN_MENU
+/**
+ * Clamp every session column to `px`, or lift the clamp with null. The two named shapes
+ * (COLUMN_NAME_ONLY, COLUMN_MODEL_IN_MENU) are measured on the controls session's composer;
+ * `exact` clamps to `px` itself, for a spec whose column is another session's (that session's
+ * panel need not be on screen).
+ */
+export async function clampColumn(page: Page, px: number | null, opts: { exact?: boolean } = {}): Promise<void> {
+  const width = !opts.exact && (px === COLUMN_NAME_ONLY || px === COLUMN_MODEL_IN_MENU)
     ? await page.locator(`.main-page-session-column .session-panel[data-session-id="${CTRL_SESSION}"]`).evaluate((panel, width) => {
       const column = panel.closest('.main-page-session-column')!;
       const bar = panel.querySelector('.composer-controls-bar')!;

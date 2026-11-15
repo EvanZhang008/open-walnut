@@ -35,6 +35,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { test, expect, devices, type Browser, type BrowserContext, type Page } from '@playwright/test'
 import { putExactSection } from './config-section-helpers'
+import { presetReturningFolds } from './status-section-helpers'
 
 test.setTimeout(600_000)
 test.describe.configure({ mode: 'serial' })
@@ -203,6 +204,10 @@ async function signedInPhone(browser: Browser, page: Page, tunnelUrl: string): P
   expect(res.ok()).toBe(true)
   const { code } = await res.json() as { code: string }
   const ctx = await browser.newContext(phoneDevice())
+  // Its first visit would store the first-use folds (every region folded, first-visit-folds.ts)
+  // once the board's first load is in, and the runs start from this storage: it visits as the
+  // returning person it stands for, so no run inherits a folded board by how fast it paired.
+  await presetReturningFolds(ctx)
   const phone = await ctx.newPage()
   await phone.goto(`${tunnelUrl}/#pair=${code}`)
   await expect(phone.locator('.phone-topbar')).toBeVisible({ timeout: 90_000 })
@@ -218,6 +223,11 @@ test('boot through a 150 ms tunnel: cold and warm, 5 runs each (C48), no desktop
     const cold: Run[] = []
     for (let i = 0; i < RUNS; i++) {
       const ctx = await browser.newContext({ ...phoneDevice(), storageState })
+      // A returning person's phone: these contexts start from the signed-in phone's own storage,
+      // which the config's storageState (a returning visitor's folds) never reaches, and a first
+      // visit folds every region of a board with work (3b4b4403a), leaving no row to time. The
+      // pairing visit kept the returning folds (signedInPhone); this keeps them if it did not.
+      await presetReturningFolds(ctx)
       await slowNetwork(ctx)
       await ctx.addInitScript(PROBE)
       const p = await ctx.newPage()
@@ -227,6 +237,7 @@ test('boot through a 150 ms tunnel: cold and warm, 5 runs each (C48), no desktop
     }
     const warm: Run[] = []
     const ctx = await browser.newContext({ ...phoneDevice(), storageState })
+    await presetReturningFolds(ctx)
     await slowNetwork(ctx)
     await ctx.addInitScript(PROBE)
     const p = await ctx.newPage()
