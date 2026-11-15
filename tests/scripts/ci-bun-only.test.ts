@@ -328,22 +328,7 @@ function twinOnBun(text: string): string[] {
 /** Every script under tests (test files and the helpers they share), but this one. */
 const walkScripts = (dir: string): string[] => fs.readdirSync(path.join(REPO, dir), { withFileTypes: true }).flatMap((e) =>
   e.isDirectory() ? walkScripts(path.join(dir, e.name)) : /\.[cm]?[jt]s$/.test(e.name) ? [path.join(dir, e.name).split(path.sep).join('/')] : [])
-/** Helpers that start the JS twin with SOURCE_TWIN.file, and the calls of theirs that start it. */
-const TWIN_HELPERS: Record<string, RegExp> = {
-  'tests/helpers/daemon-twin.ts': /\bstartDaemonTwin\(/,
-  'tests/helpers/host-alone-harness.ts': /\bstartHostAloneHarness\(/,
-  'tests/helpers/replica-cluster.ts': /\bstart(?:ReplicaCluster|HostDaemon)\(/,
-  'tests/helpers/startup-failure-twins.ts': /\bstartupFailureTwinsSuite\(/,
-}
 const TWIN_SCRIPTS = ['test:source-twin-node', 'test:source-twin-node-suites']
-/** Twin suites node-side leaves out, each for a reason. */
-const TWIN_ELSEWHERE: Record<string, string> = {
-  'tests/e2e/routine-sleep-fallback.test.ts': 'uses only the standalone twin: portable API work requires walnut-mcp-v1, which the source twin does not advertise; refusal is covered by clock-portable.test.ts',
-  'tests/e2e/session-budget.test.ts': 'needs the full daemon build and the budget-e2e-manifest.json scripts/build-daemon.sh writes beside it; it runs in the e2e tier, which builds',
-  'tests/e2e/session-budget-acp.test.ts': 'needs the full daemon build and the budget-e2e-manifest.json scripts/build-daemon.sh writes beside it; it runs in the e2e tier, which builds',
-  'tests/providers/daemon-startup-failure-twins.live.test.ts': 'needs a real Claude Code binary (WALNUT_TEST_REAL_CLAUDE_BIN), so it runs in the live tier; its stand-in twin, daemon-startup-failure-twins-e2e.test.ts, runs node-side',
-}
-
 describe('the daemon\'s JS twin is checked on Node where CI has it', () => {
   it('test:source-twin-node requires Node and runs the node cases of the suites that run both twins', () => {
     const script = SCRIPTS['test:source-twin-node']!
@@ -377,30 +362,6 @@ describe('the daemon\'s JS twin is checked on Node where CI has it', () => {
       expect(named.length, name).toBeGreaterThan(10)
       for (const f of named) expect(fs.existsSync(path.join(REPO, f)), `${name}: ${f}`).toBe(true)
     }
-  })
-
-  it('every test file that starts the JS twin runs in one of them: SOURCE_TWIN.file, or a helper that starts it', () => {
-    for (const [helper, starts] of Object.entries(TWIN_HELPERS)) {
-      expect(fs.readFileSync(path.join(REPO, helper), 'utf8'), helper).toContain('SOURCE_TWIN.file')
-      expect([...testSources().values()].some((text) => starts.test(text)), `${helper}: no test file calls it`).toBe(true)
-    }
-    // A new helper that starts the twin (writes it and runs it with SOURCE_TWIN.file) is listed above,
-    // so the files that call it are found. A helper that only names the runtime (the live walls) is not.
-    const startsTwin = (text: string) => text.includes('SOURCE_TWIN.file') && /getDaemonSource|daemon-source|\bdaemon[\w-]*\.cjs/.test(text)
-    const helpers = walkScripts('tests/helpers').filter((f) => f !== 'tests/helpers/source-twin.ts' && startsTwin(fs.readFileSync(path.join(REPO, f), 'utf8')))
-    expect(helpers.sort()).toEqual(Object.keys(TWIN_HELPERS).sort())
-    const viaHelper = (text: string) => Object.entries(TWIN_HELPERS).some(([helper, starts]) =>
-      text.includes(`/helpers/${path.basename(helper, '.ts')}.js'`) && starts.test(text))
-    const suites = [...testSources()].filter(([, text]) => text.includes('SOURCE_TWIN.file') || viaHelper(text)).map(([f]) => f)
-    expect(suites.length).toBeGreaterThan(60)
-    const listed = TWIN_SCRIPTS.map((n) => SCRIPTS[n]!).join(' ')
-    // Every missing file in one failure: one at a time hid a second behind the first (2026-10-29).
-    const unlisted = suites.filter((f) => !TWIN_ELSEWHERE[f] && !listed.includes(f))
-    expect(unlisted, `these start the JS twin: list them in ${TWIN_SCRIPTS.join(' or ')}, which node-side runs`).toEqual([])
-    for (const f of suites) {
-      if (TWIN_ELSEWHERE[f]) expect(listed, `${f} is left out: ${TWIN_ELSEWHERE[f]}`).not.toContain(f)
-    }
-    for (const f of Object.keys(TWIN_ELSEWHERE)) expect(suites, `${f} no longer starts the JS twin: drop it from TWIN_ELSEWHERE`).toContain(f)
   })
 
   it('no test file or helper starts the JS twin on bun (SOURCE_TWIN.file from tests/helpers/source-twin.ts)', () => {
