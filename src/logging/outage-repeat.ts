@@ -19,11 +19,20 @@
  * fold it into that card anyway (inHostCard), so no card is lost. Every other
  * line is unchanged.
  *
+ * The dial of a host's link says so itself: a line that carries `linkFailure` (the
+ * one-line summary of why the link would not come up) and `host` is the producer of
+ * that outage, whatever its words. A host whose SSH login expired is dialled again
+ * every minute by whoever needs it (the pool caches a failure for 60s), and on
+ * 2026-11-14 each of those dials wrote "DaemonConnection: connect failed" at warn
+ * again, 50 an hour for one expired certificate, and the log-spike alarm rang. Its
+ * repeats are folded the same way, keyed by the summary too, so a NEW cause (the
+ * login renewed, now the network is down) is told at once.
+ *
  * The memory lives on globalThis, as the logger's sink and tap do (subsystem.ts):
  * a plugin bundle has its own copy of this module and must share one outage.
  * The error-cause helpers it reads are pure.
  */
-import { causeKeyForError, namesLinkDown } from '../core/notifications/error-cause.js';
+import { causeKeyForError, linkCauseKey, namesLinkDown } from '../core/notifications/error-cause.js';
 
 /** How long one told line covers its repeats. Past it the outage is told again (twice an hour at most per kind). */
 export const OUTAGE_REPEAT_WINDOW_MS = 30 * 60_000;
@@ -80,16 +89,27 @@ export function outageRepeatOf(
   now: number = Date.now(),
 ): string | null {
   if (level === 'error' && !inHostCard(subsystem, meta)) return null;
+  const hostHint = typeof meta?.host === 'string' ? meta.host : undefined;
+  const linkFailure = meta?.linkFailure;
+  if (typeof linkFailure === 'string') {
+    const cause = linkCauseKey(hostHint);
+    // Digits differ between two tellings of one cause (a port, a timeout, "42s ago").
+    const sameCause = linkFailure.slice(0, MAX_FIELD_CHARS).replace(/\d+/g, '#');
+    return cause ? toldRepeat(`${cause}\u0000${level}\u0000${subsystem}\u0000${message}\u0000${sameCause}`, cause, now) : null;
+  }
   const text = outageText(message, meta);
   // The bridge's own test for a host card (log-error-bridge.ts): the text says the link is
   // down, not just an errno one command can hit on a connected host (that stays its session's).
   if (!namesLinkDown(text)) return null;
-  const hostHint = typeof meta?.host === 'string' ? meta.host : undefined;
   const cause = causeKeyForError({ text, ...(hostHint ? { host: hostHint } : {}) });
   if (!cause) return null;
-  const told = toldMap();
   // By level too: a quiet warn told first must not quiet the error that raises the card.
-  const key = `${cause}\u0000${level}\u0000${subsystem}\u0000${message}`;
+  return toldRepeat(`${cause}\u0000${level}\u0000${subsystem}\u0000${message}`, cause, now);
+}
+
+/** `cause` when `key` (which starts with it) was told inside the window; else records it as told now. */
+function toldRepeat(key: string, cause: string, now: number): string | null {
+  const told = toldMap();
   const last = told.get(key);
   if (last !== undefined && now - last < OUTAGE_REPEAT_WINDOW_MS) return cause;
   if (told.size >= MAX_REMEMBERED) {

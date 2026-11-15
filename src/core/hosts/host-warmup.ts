@@ -471,9 +471,10 @@ export class HostWarmup {
         const retryAt = CREDENTIAL_WAIT_KINDS.has(kind) ? this.armCredentialWait(host) : undefined
         if (retryAt === undefined) this.clearCredentialWait(host.key, true)
         this.record(host.key, 'failed', message, true, retryAt)
-        // Expected at startup (host asleep, VPN down) — warn, never throw.
+        // Expected at startup (host asleep, VPN down) — warn, never throw. Once per outage:
+        // the same failure re-dialled on the credential schedule is folded (outage-repeat.ts).
         this.logger.warn('host warmup: connect failed', {
-          host: host.key, elapsedMs: this.now() - started, error: message,
+          host: host.key, elapsedMs: this.now() - started, error: message, linkFailure: message,
           consecutiveFailures: this.failures.get(host.key)?.count, kind,
           ...(retryAt !== undefined ? { credentialRetryInMs: retryAt - this.now() } : {}),
         })

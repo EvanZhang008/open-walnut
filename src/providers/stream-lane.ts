@@ -328,6 +328,8 @@ export class StreamLane {
     }
     log.session.warn(wasUp ? 'stream lane: dropped, dialing again' : 'stream lane: dial failed, trying again', {
       host: this.opts.hostKey, why, waitMs: wait,
+      // A dial that keeps failing for one cause is told once per outage (outage-repeat.ts).
+      ...(!wasUp ? { linkFailure: why } : {}),
       ...(wasUp ? laneUploadSummary(this.sentByPurpose, this.upAt, Date.now()) : {}),
     })
     this.retryTimer = setTimeout(() => { this.retryTimer = null; void this.dial() }, wait)

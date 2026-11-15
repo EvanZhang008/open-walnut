@@ -108,6 +108,12 @@ function usableHost(host: string | undefined): string | null {
   return h;
 }
 
+/** The `host:<alias>` cause for a host's own link failure, or undefined for the local host or none. */
+export function linkCauseKey(host: string | undefined): string | undefined {
+  const h = usableHost(host);
+  return h ? hostCauseKey(h) : undefined;
+}
+
 /**
  * True when the text is one of the link-down producers above (deploy or start
  * of the daemon failed, the cached connection failure, no connection at all),

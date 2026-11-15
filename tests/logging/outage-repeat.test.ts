@@ -109,6 +109,106 @@ describe('a host outage repeated by many sessions', () => {
   });
 });
 
+describe('a host link dialled again for the same failure (linkFailure)', () => {
+  // The 2026-11-14 line, word for word but for the host: an expired SSH certificate,
+  // dialled again every minute as the pool's 60s failure cache ran out.
+  const RAW = 'Command failed: ssh dev@devbox.example sh -s\ndev@devbox.example: Permission denied (publickey).\nwalnut-ssh-evidence: cert-expired (SSH certificate expired at 2026-11-14 22:30)';
+  const SUMMARY = 'dev@devbox.example: Permission denied (publickey). [walnut-ssh-evidence: cert-expired (SSH certificate expired at 2026-11-14 22:30)]';
+  const MSG = 'DaemonConnection: connect failed (full error logged once, summary cached)';
+  const dial = (host = 'devbox', linkFailure = SUMMARY) =>
+    createSubsystemLogger('session').warn(MSG, { host, error: RAW, linkFailure });
+
+  it('is warned once per outage, the repeats written at info saying why (50 an hour before)', () => {
+    for (let i = 0; i < 50; i++) dial();
+    expect(tapped).toEqual([{ level: 'warn', subsystem: 'session', message: MSG }]);
+    expect(written).toHaveBeenCalledTimes(50);
+    expect(written.mock.calls[0][0].level).toBe('warn');
+    expect(written.mock.calls.slice(1).every((c) => c[0].level === 'info' && c[0].outageRepeat === 'host:devbox')).toBe(true);
+  });
+
+  it('a new cause is told at once; digits alone (a port, a timeout) are not a new cause', () => {
+    dial('devbox', 'timed out after 15000ms');
+    dial('devbox', 'timed out after 15001ms');
+    dial('devbox', 'Connection closed by UNKNOWN port 65535');
+    dial();
+    expect(tapped).toHaveLength(3);
+  });
+
+  it('each host on its own, told again after the host recovered or the window passed, never for the local host', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-14T15:00:00Z'));
+    dial(); dial('otherbox'); dial(); dial('otherbox');
+    expect(tapped).toHaveLength(2);
+    releaseOutageRepeats(['host:devbox']);
+    dial(); dial('otherbox');
+    expect(tapped).toHaveLength(3);
+    vi.setSystemTime(new Date(Date.now() + OUTAGE_REPEAT_WINDOW_MS + 1));
+    dial('otherbox');
+    expect(tapped).toHaveLength(4);
+    for (let i = 0; i < 3; i++) dial('__local__');
+    expect(tapped).toHaveLength(7);
+  });
+});
+
+/**
+ * The class: a warn about a host's link that would not come up, written on every dial.
+ * Each such line in src/ names its failure in `linkFailure`, or the logger cannot fold
+ * it and one standing outage (an expired login, a machine offline) rings the log-spike
+ * alarm again. A new member (a new "... connect failed" / "dial failed" warn) fails here
+ * until it carries the field, or is listed below with why it is not about a host link.
+ */
+describe('every dial-failure warn names its failure for the fold', () => {
+  const NOT_A_HOST_LINK = new Set([
+    'backup: google drive connect failed', // a cloud drive's API, no host link
+  ]);
+  const DIAL_FAILED = /\b(?:connect|reconnect|ControlMaster|dial) failed\b/;
+
+  function sourceFiles(dir: string): string[] {
+    return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = path.join(dir, e.name);
+      return e.isDirectory() ? sourceFiles(p) : /\.tsx?$/.test(e.name) ? [p] : [];
+    });
+  }
+
+  /** The argument text of the call whose `(` is at `open`, to its matching `)` (strings skipped). */
+  function callArgs(text: string, open: number): string {
+    let depth = 0;
+    for (let i = open; i < text.length; i++) {
+      const c = text[i];
+      if (c === "'" || c === '"' || c === '`') {
+        for (i++; i < text.length && text[i] !== c; i++) if (text[i] === '\\') i++;
+      } else if (c === '(') depth++;
+      else if (c === ')' && --depth === 0) return text.slice(open + 1, i);
+    }
+    return text.slice(open + 1);
+  }
+
+  it('finds the known members, and each carries linkFailure', () => {
+    const root = path.resolve(__dirname, '../..');
+    const found: string[] = [];
+    const missing: string[] = [];
+    for (const file of sourceFiles(path.join(root, 'src'))) {
+      const text = fs.readFileSync(file, 'utf8');
+      const call = /\.(?:warn|error)\(/g;
+      for (let m = call.exec(text); m; m = call.exec(text)) {
+        const args = callArgs(text, m.index + m[0].length - 1);
+        // The message: every string literal before the meta object (a ternary picks one of two).
+        const head = args.split('{')[0];
+        const messages = [...head.matchAll(/(['"`])((?:(?!\1).)*)\1/g)].map((x) => x[2]).filter((x) => DIAL_FAILED.test(x) && !NOT_A_HOST_LINK.has(x));
+        if (messages.length === 0) continue;
+        const where = `${path.relative(root, file)}: ${messages.join(' | ')}`;
+        found.push(where);
+        if (!/\blinkFailure\b/.test(args)) missing.push(where);
+      }
+    }
+    expect(missing).toEqual([]);
+    // The scan itself still sees the members this guard was written for.
+    for (const known of ['connect failed (full error logged once', 'ControlMaster failed', 'reconnect failed, will retry', 'host warmup: connect failed', 'stream lane: dial failed']) {
+      expect(found.some((f) => f.includes(known))).toBe(true);
+    }
+  });
+});
+
 describe('lines that are not a host outage keep their level', () => {
   it('a repeated error that names no link failure', () => {
     for (let i = 0; i < 3; i++) createSubsystemLogger('session').error('transport start failed', { taskId: `t${i}`, host: 'devbox', error: 'folder is gone' });

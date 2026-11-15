@@ -4086,8 +4086,9 @@ export class DaemonConnection {
         host: this.hostKey, socketPath, ...(previousLastWords ? { previousMasterSaid: previousLastWords.slice(-300) } : {}),
       })
     } catch (err) {
+      const error = err instanceof Error ? err.message : String(err)
       log.session.warn('DaemonConnection: ControlMaster failed, falling back to individual connections', {
-        host: this.hostKey, error: err instanceof Error ? err.message : String(err),
+        host: this.hostKey, error, linkFailure: summarizeConnectFailure(error),
       })
       this._controlPath = null
     }
@@ -8448,6 +8449,7 @@ export class DaemonConnection {
     })
     log.session.warn('DaemonConnection: reconnect failed, will retry', {
       host: this.hostKey,
+      linkFailure: summarizeConnectFailure(msg),
       attempt: this._reconnectAttempts,
       stuckForMs: this._disconnectedSince ? Date.now() - this._disconnectedSince : null,
       error: msg,
@@ -10114,9 +10116,10 @@ async function getDaemonConnectionOrThrow(hostKey: string, sshTarget: SshTarget)
     // already populated (getDaemonConnectState folds the cache in).
     notifyDaemonPhaseChange(hostKey)
     noteFirstConnectFailed(hostKey, mine)
-    // The full text, once, where it actually happened.
+    // The full text, once per outage, where it actually happened: `linkFailure` lets the
+    // logger fold the same failure dialled again a minute later (outage-repeat.ts).
     log.session.warn('DaemonConnection: connect failed (full error logged once, summary cached)', {
-      host: hostKey, error: raw,
+      host: hostKey, error: raw, linkFailure: summarizeConnectFailure(raw),
     })
     throw err
   })
