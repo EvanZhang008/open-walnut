@@ -16,6 +16,7 @@
  */
 import { test, expect, type Page } from '@playwright/test'
 import { goToSessionFolder } from './todo-panel-helpers'
+import { copyEditorSelection, selectTextInEditor } from './prosemirror-caret'
 import { readFile, writeFile } from 'node:fs/promises'
 
 const SID = 'pw-vscode-session'
@@ -63,40 +64,6 @@ async function open(p: Page, text: string) {
   return { abs, name, panel }
 }
 
-/** Select `needle` in the editor's DOM; returns nothing, the caller copies. */
-async function select(p: Page, needle: string) {
-  await expect(preview(p)).toContainText(needle)
-  await p.evaluate((needle) => {
-    const root = document.querySelector('.fv-wysiwyg-editor .ProseMirror') as HTMLElement
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
-    let node: Text | null = null
-    while ((node = walker.nextNode() as Text | null)) {
-      const i = node.data.indexOf(needle)
-      if (i < 0) continue
-      const range = document.createRange()
-      range.setStart(node, i)
-      range.setEnd(node, i + needle.length)
-      const sel = window.getSelection()!
-      sel.removeAllRanges()
-      sel.addRange(range)
-      root.focus()
-      ;(window as any).__copied = undefined
-      document.addEventListener('copy', (e) => {
-        ;(window as any).__copied = e.clipboardData?.getData('text/plain')
-      }, { once: true })
-      return
-    }
-    throw new Error(`text not in editor: ${needle}`)
-  }, needle)
-}
-
-/** ⌘C on the current selection; returns the text/plain flavour ProseMirror wrote. */
-async function copySelection(p: Page): Promise<string> {
-  await p.keyboard.press('ControlOrMeta+C')
-  await expect.poll(() => p.evaluate(() => (window as any).__copied)).not.toBeUndefined()
-  return p.evaluate(() => (window as any).__copied as string)
-}
-
 test.describe.configure({ timeout: 120_000 })
 
 test.beforeEach(async ({ page, baseURL }) => {
@@ -115,8 +82,8 @@ test('copying an arrow sentence and pasting it into the composer keeps the arrow
   const { panel } = await open(page, DOC)
 
   // Whole sentence, from one paragraph.
-  await select(page, SENTENCE)
-  const copied = await copySelection(page)
+  await selectTextInEditor(preview(page), SENTENCE)
+  const copied = await copyEditorSelection(page)
   expect(copied).toBe(SENTENCE)
   expect(copied).not.toContain('&gt;')
 
@@ -129,14 +96,14 @@ test('copying an arrow sentence and pasting it into the composer keeps the arrow
   await page.screenshot({ path: `${SCREENSHOT_DIR}/composer-after-paste.png`, fullPage: false })
 
   // Words around an arrow inside a table cell copy as those words.
-  await select(page, 'Rev1 -> Rev2')
-  expect(await copySelection(page)).toBe('Rev1 -> Rev2')
+  await selectTextInEditor(preview(page), 'Rev1 -> Rev2')
+  expect(await copyEditorSelection(page)).toBe('Rev1 -> Rev2')
 })
 
 test('typing an arrow in the editor writes the arrow to disk', async ({ page }) => {
   const { abs } = await open(page, DOC)
 
-  await select(page, 'original.')
+  await selectTextInEditor(preview(page), 'original.')
   await page.keyboard.insertText('A -> B, x < y.')
   await expect(preview(page)).toContainText('Editable line: A -> B, x < y.')
   // No Save to press: the edit is written on its own once typing stops.

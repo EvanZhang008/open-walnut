@@ -583,14 +583,16 @@
    centered ::before (hit testing counts it), so rows do not grow. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel) :is(
-    .msg-copy-btn, .chat-plus-btn, .mic-btn, .mode-toggle-pill, .session-detail-model-pill
+    .msg-copy-btn, .chat-plus-btn, .mic-btn, .mode-toggle-pill, .session-detail-model-pill,
+    .composer-direct-control
   ),
   .phone-topbar .phone-bar-slot .task-action-btn {
     position: relative;
   }
 
   .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel) :is(
-    .msg-copy-btn, .chat-plus-btn, .mic-btn, .mode-toggle-pill, .session-detail-model-pill
+    .msg-copy-btn, .chat-plus-btn, .mic-btn, .mode-toggle-pill, .session-detail-model-pill,
+    .composer-direct-control
   )::before,
   .phone-topbar .phone-bar-slot .task-action-btn::before {
     content: '';
@@ -605,8 +607,13 @@
     transform: translateY(-50%);
   }
 
-  .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel) .mode-toggle-pill {
+  /* Note and btw on the input box (ComposerDirectControl) stand side by side with a
+     2 px gap; each is 44 wide for real so a tap on one never lands on the other. */
+  .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel) :is(.mode-toggle-pill, .composer-direct-control) {
     min-width: 44px;
+  }
+  .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel) .composer-direct-control {
+    justify-content: center;
   }
 
   .phone-topbar .phone-bar-slot .task-action-btn {

@@ -4,6 +4,7 @@
  */
 import { expect, type Page } from '@playwright/test'
 import zlib from 'node:zlib'
+import { EDITOR_IMG } from './prosemirror-caret'
 
 const API = 'http://localhost:3457'
 
@@ -99,7 +100,7 @@ export async function openNote(page: Page, root: string, firstLine = 'Image form
 
 /** Every visible <img> in the editor that finished loading with real pixels. */
 export async function drawn(page: Page): Promise<number> {
-  return page.locator('.notes-editor-pane .notes-editor .tiptap img').evaluateAll((imgs) =>
+  return page.locator(`.notes-editor-pane .notes-editor .tiptap ${EDITOR_IMG}`).evaluateAll((imgs) =>
     (imgs as HTMLImageElement[]).filter((i) => !i.hidden && i.complete && i.naturalWidth > 0).length)
 }
 

@@ -812,6 +812,73 @@ describe('a key the editor handles itself, right after a click', () => {
   })
 })
 
+describe('a selection put into an editor by range', () => {
+  // ProseMirror notes the page's selection when the editor gains focus and, 20 ms later,
+  // writes its own back over it when the page's has not moved since (prosemirror-view
+  // 1.42.9). A range put in BEFORE focus() is that unmoved selection, so the editor kept
+  // its caret at the top: file-angle-brackets copied "" and typed before the heading
+  // (2026-11-15). selectTextInEditor (prosemirror-caret.ts) focuses first and waits for
+  // the editor to hold the range.
+  const RANGE = /\.addRange\(|\.setBaseAndExtent\(/
+  const offendersOf = (file: string, text: string): string[] => {
+    const lines = text.split('\n')
+    const out: string[] = []
+    lines.forEach((line, i) => {
+      if (!RANGE.test(line)) return
+      // The rest of the same callback: up to the line that closes it.
+      for (let j = i + 1; j < Math.min(lines.length, i + 12); j++) {
+        const code = lines[j]!.trim()
+        if (/^\}\s*,|^\}\)/.test(code)) break
+        if (/\.focus\(\)/.test(code)) { out.push(`${file}:${j + 1}: ${code}`); break }
+      }
+    })
+    return out
+  }
+
+  it('no spec focuses an editor after putting its range in', () => {
+    const editorSpecs = sources.filter(({ text }) => /\.tiptap\b|ProseMirror|notes-editor|fv-wysiwyg-editor/.test(text))
+    expect(editorSpecs.flatMap(({ file, text }) => offendersOf(file, text))).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const spec = [
+      '      sel.removeAllRanges()',
+      '      sel.addRange(range)',
+      '      root.focus()',
+      '      return',
+      '    }',
+      '  }, needle)',
+      '    root.focus()',
+      '    sel.addRange(range)',
+      '  }, needle)',
+      '  await editor.focus()',
+    ].join('\n')
+    expect(offendersOf('x.spec.ts', spec)).toEqual(['x.spec.ts:3: root.focus()'])
+  })
+})
+
+describe('a picture inside an editor', () => {
+  // prosemirror-view 1.42.6 puts a hidden <img class="ProseMirror-separator"> in front of an
+  // image at the start of a block in WebKit and Firefox, so a bare `img` under the editor
+  // matched it first: file-image-refresh waited for the hidden separator to show
+  // (2026-11-15). EDITOR_IMG (prosemirror-caret.ts) or a class or attribute names the picture.
+  const BARE = /(?:\.ProseMirror|\.tiptap|fv-wysiwyg-editor|\.notes-editor)\b[^'"`\n]*\simg(?![\w.[:#-])/
+  const offendersOf = (file: string, text: string): string[] => text.split('\n')
+    .flatMap((line, i) => BARE.test(line) && !line.trim().startsWith('//') && !line.trim().startsWith('*') ? [`${file}:${i + 1}: ${line.trim()}`] : [])
+
+  it('no editor locator takes a bare img', () => {
+    expect(sources.flatMap(({ file, text }) => offendersOf(file, text))).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    expect(offendersOf('x.spec.ts', "  const img = page.locator('.fv-wysiwyg-editor img').first()")).toHaveLength(1)
+    expect(offendersOf('x.spec.ts', "  page.locator('.notes-editor .tiptap img')")).toHaveLength(1)
+    expect(offendersOf('x.spec.ts', "  page.locator(`.fv-wysiwyg-editor ${EDITOR_IMG}`)")).toEqual([])
+    expect(offendersOf('x.spec.ts', "  page.locator('.ProseMirror img[alt=\"pic\"]')")).toEqual([])
+    expect(offendersOf('x.spec.ts', "  page.locator('.ProseMirror img.notes-wikiembed-img')")).toEqual([])
+  })
+})
+
 describe('a row or a project header of the /tasks table', () => {
   // The table renders only what is in view once it holds more than 200 items, and the shared
   // fixture passes that on CI after a shard's earlier specs added their tasks: a header or a row

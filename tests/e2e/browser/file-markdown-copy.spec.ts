@@ -15,8 +15,8 @@
  * the text/plain flavour ProseMirror hands the clipboard.
  */
 import { test, expect, type Page } from '@playwright/test'
-import type { Editor } from '@tiptap/core'
 import { goToSessionFolder } from './todo-panel-helpers'
+import { copyEditorSelection, selectTextInEditor } from './prosemirror-caret'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -38,48 +38,10 @@ async function openFilesPanel(page: Page) {
   return explorer
 }
 
-/**
- * Select `needle` inside the editor's DOM and copy it with the browser's copy
- * command. Returns the text/plain flavour ProseMirror put on the clipboard,
- * read off the copy event itself (no clipboard permission dance, and it is the
- * exact string the OS clipboard receives).
- */
+/** Select `needle` in the editor and copy it with the browser's copy command. */
 async function selectAndCopy(page: Page, needle: string): Promise<string> {
-  const editor = page.locator('.fv-wysiwyg-editor .ProseMirror')
-  await expect(editor).toContainText(needle)
-  await page.evaluate((needle) => {
-    const root = document.querySelector('.fv-wysiwyg-editor .ProseMirror') as HTMLElement
-    root.focus()
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
-    let node: Text | null = null
-    while ((node = walker.nextNode() as Text | null)) {
-      const i = node.data.indexOf(needle)
-      if (i < 0) continue
-      const range = document.createRange()
-      range.setStart(node, i)
-      range.setEnd(node, i + needle.length)
-      const sel = window.getSelection()!
-      sel.removeAllRanges()
-      sel.addRange(range)
-      ;(window as any).__copied = undefined
-      document.addEventListener('copy', (e) => {
-        ;(window as any).__copied = e.clipboardData?.getData('text/plain')
-      }, { once: true })
-      return
-    }
-    throw new Error(`text not in editor: ${needle}`)
-  }, needle)
-  await expect.poll(() => editor.evaluate((root) => {
-    const view = (root as HTMLElement & { editor: Editor }).editor.view
-    const { from, to } = view.state.selection
-    return {
-      dom: window.getSelection()?.toString(),
-      editor: view.state.doc.textBetween(from, to),
-    }
-  })).toEqual({ dom: needle, editor: needle })
-  await page.keyboard.press('ControlOrMeta+C')
-  await expect.poll(() => page.evaluate(() => (window as any).__copied)).not.toBeUndefined()
-  return page.evaluate(() => (window as any).__copied as string)
+  await selectTextInEditor(page.locator('.fv-wysiwyg-editor .ProseMirror'), needle)
+  return copyEditorSelection(page)
 }
 
 test.describe.configure({ timeout: 90_000 })

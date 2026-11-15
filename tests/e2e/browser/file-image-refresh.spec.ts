@@ -25,6 +25,7 @@
  */
 import { devices, test, expect, type Locator, type Page } from '@playwright/test'
 import { goToSessionFolder } from './todo-panel-helpers'
+import { EDITOR_IMG } from './prosemirror-caret'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import zlib from 'node:zlib'
@@ -159,7 +160,7 @@ async function openDocWithPicture(page: Page): Promise<Fixture> {
   await docRow.click()
 
   // Plain markdown opens in the WYSIWYG editor; the image is a real <img>.
-  const img = page.locator('.fv-wysiwyg-editor img').first()
+  const img = page.locator(`.fv-wysiwyg-editor ${EDITOR_IMG}`).first()
   await expect(img).toBeVisible({ timeout: 15_000 })
   await expect.poll(() => embeddedWidth(img), { timeout: 10_000 }).toBe(1)
   await baseline
