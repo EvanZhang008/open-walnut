@@ -15,6 +15,7 @@
  * daemon or in either server, whatever the speed of the slowest hop.
  */
 
+import net from 'node:net'
 import { Duplex } from 'node:stream'
 import type { UploadPacer } from './upload-pacer.js'
 
@@ -48,6 +49,12 @@ export interface StreamEndpointOptions {
 
 export interface StreamEndpoint {
   open(to: StreamPeer, opts?: { purpose?: string }): Promise<Duplex>
+  /**
+   * A stream to a TCP port on the daemon's own loopback ('port-stream-v1',
+   * stream-relay-core.ts): what an `ssh -L` gives, through the link. `host` is
+   * 127.x, ::1 or localhost; the daemon refuses anything else.
+   */
+  openPort(port: number, host: string): Promise<Duplex>
   /** One frame from the link; true when it was a stream frame. */
   handle(msg: Record<string, unknown>): boolean
   /** The link went down: every stream on it ends. */
@@ -210,19 +217,27 @@ class Endpoint implements StreamEndpoint {
   }
 
   open(to: StreamPeer, opts: { purpose?: string } = {}): Promise<Duplex> {
+    return this.openFrame({ to, ...(opts.purpose ? { purpose: opts.purpose } : {}) }, `the ${to}`, opts.purpose ?? '')
+  }
+
+  openPort(port: number, host: string): Promise<Duplex> {
+    return this.openFrame({ to: 'port', port, host }, `port ${port} on the host`, '')
+  }
+
+  private openFrame(fields: Record<string, unknown>, what: string, purpose: string): Promise<Duplex> {
     const sid = `o${++this.counter}`
-    const stream = new LinkStream(this, sid, opts.purpose ?? '')
+    const stream = new LinkStream(this, sid, purpose)
     this.streams.set(sid, stream)
     return new Promise<Duplex>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.opening.delete(sid)
         stream.destroy()
-        reject(new Error(`no answer from the ${to} within ${Math.round(this.openTimeoutMs / 1000)}s`))
+        reject(new Error(`no answer from ${what} within ${Math.round(this.openTimeoutMs / 1000)}s`))
       }, this.openTimeoutMs)
       timer.unref?.()
       this.opening.set(sid, { resolve, reject, timer, stream })
       try {
-        this.send({ cmd: 'stream.open', sid, to, ...(opts.purpose ? { purpose: opts.purpose } : {}) })
+        this.send({ cmd: 'stream.open', sid, ...fields })
       } catch (err) {
         clearTimeout(timer)
         this.opening.delete(sid)
@@ -316,4 +331,59 @@ export function spliceStream(stream: Duplex, socket: Duplex): void {
   socket.on('close', () => { if (!stream.writableEnded) stream.destroy() })
   stream.pipe(socket)
   socket.pipe(stream)
+}
+
+export interface LoopbackForward {
+  /** The 127.0.0.1 port that forwards. */
+  readonly port: number
+  readonly listening: boolean
+  /** Connections plugged in now. */
+  connections(): number
+  /** Stop listening and cut every connection (what killing an `ssh -L` does). */
+  close(): void
+}
+
+/**
+ * Listen on 127.0.0.1 (a free port) and plug every connection into a stream of
+ * its own from `open` (a port stream, say): a local forward with no ssh. A
+ * connection whose stream cannot open (the link is down, nothing listens there)
+ * is closed, and the next one tries again, so the same port works again once the
+ * link is back.
+ */
+export function listenLoopback(
+  open: () => Promise<Duplex>,
+  onRefused?: (err: Error) => void,
+): Promise<LoopbackForward> {
+  const live = new Set<net.Socket>()
+  const server = net.createServer({ allowHalfOpen: true }, (socket) => {
+    live.add(socket)
+    socket.on('close', () => live.delete(socket))
+    // Until the splice listens, an error here must not throw in the server.
+    socket.on('error', () => {})
+    open().then((stream) => {
+      if (socket.destroyed) { stream.destroy(); return }
+      spliceStream(stream, socket)
+    }, (err: Error) => {
+      onRefused?.(err)
+      socket.destroy()
+    })
+  })
+  return new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject)
+      server.on('error', () => {})
+      const addr = server.address()
+      const port = typeof addr === 'object' && addr ? addr.port : 0
+      resolve({
+        port,
+        get listening() { return server.listening },
+        connections: () => live.size,
+        close: () => {
+          server.close()
+          for (const s of [...live]) s.destroy()
+        },
+      })
+    })
+  })
 }

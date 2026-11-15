@@ -559,7 +559,9 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       const relay = createRelay<string>({ send: (link, ev) => sent.push(`${link}:${ev}`), log: () => {} })
       relay.open('a', 'o1', 'b', {})
       relay.open('a', 'o1', 'b', {})
-      if (sent.join(',') !== 'b:stream-open,a:stream-close' || relay.count() !== 1) throw new Error('stream relay did not build')
+      // A port stream of a relay without `connect` is refused, never dialled.
+      relay.openPort('a', 'o2', 8080, '127.0.0.1')
+      if (sent.join(',') !== 'b:stream-open,a:stream-close,a:stream-close' || relay.count() !== 1) throw new Error('stream relay did not build')
     }
     // Leader book smoke: a reconstructed book must refuse a companion claim for
     // a Walnut it does not know, without touching disk.
@@ -5826,6 +5828,8 @@ function cmdFollowerReport(ws, cmd) {
 var streamRelay = (__CREATE_STREAM_RELAY__)({
   send: function (ws, ev, data) { sendEvent(ws, ev, data); },
   log: function (level, msg, data) { logMsg(level, msg, data); },
+  // Port streams (port-stream-v1): the relay picks the loopback address.
+  connect: function (port, host) { return net.connect({ port: port, host: host, allowHalfOpen: true }); },
 });
 
 function primaryClientFor(home) {
@@ -5973,6 +5977,12 @@ function releaseLaneOpens(home, only) {
 }
 
 function openStreamNow(ws, cmd) {
+  // A TCP port on this host's loopback (port-stream-v1): the primary's own socket only.
+  // Twin of daemon-standalone.ts.
+  if (cmd.to === 'port') {
+    if (!isServerClient(ws)) return streamRelay.open(ws, cmd.sid, null, {}, 'only the Walnut server linked here opens a port stream');
+    return streamRelay.openPort(ws, cmd.sid, cmd.port, cmd.host);
+  }
   var target = streamTarget(ws, cmd.to);
   var purpose = typeof cmd.purpose === 'string' ? cmd.purpose.slice(0, 32) : undefined;
   if (target.why) return streamRelay.open(ws, cmd.sid, null, {}, target.why);

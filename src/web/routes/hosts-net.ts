@@ -112,9 +112,14 @@ hostsNetRouter.delete('/invites/:id', async (req, res) => {
 hostsNetRouter.post('/sync', async (req, res) => {
   try {
     const enable = (req.body ?? {}).enable === true
-    const state = await within(WRITE_DEADLINE_MS, syncNet({ enable }))
+    const adopt = (req.body ?? {}).adopt
+    if (adopt !== undefined && (!Array.isArray(adopt) || adopt.length > 8 || adopt.some((name) => typeof name !== 'string' || !/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}$/.test(name)))) {
+      res.status(400).json({ error: 'adopt must name at most eight existing host aliases', code: 'bad_adopt' }); return
+    }
+    // Reuses the existing sync door: only hosts already on the member list may move.
+    const state = await within(WRITE_DEADLINE_MS, syncNet({ enable, ...(adopt ? { adopt } : {}) }))
     // Turning it on that did not work is a refusal, not a state to read.
-    if (enable && state.error) { res.status(502).json({ error: state.error, code: 'net_unavailable' }); return }
+    if ((enable || adopt?.length) && state.error) { res.status(502).json({ error: state.error, code: 'net_unavailable' }); return }
     res.json(state)
   } catch (err) {
     sendError(req, res, err)

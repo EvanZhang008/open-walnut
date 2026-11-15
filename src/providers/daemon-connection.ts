@@ -36,7 +36,8 @@ import crypto from 'node:crypto'
 import net from 'node:net'
 import type { Duplex } from 'node:stream'
 import { log } from '../logging/index.js'
-import { createStreamEndpoint, spliceStream, type StreamEndpoint } from '../lib/link-stream.js'
+import { createStreamEndpoint, listenLoopback, spliceStream, type StreamEndpoint } from '../lib/link-stream.js'
+import { bareHost, isLoopbackHostname } from '../core/service-url.js'
 import { registerForwardSocket } from '../lib/forward-lane-ports.js'
 import { bulkForwardHook, laneForwardForTesting, sshLaneForward, StreamLane, type LaneForward } from './stream-lane.js'
 import { getDaemonSource, resolveDaemonSourceVersion } from './daemon-source.js'
@@ -3604,11 +3605,18 @@ export class DaemonConnection {
   // ensurePortForward rather than by the reconnect loop.
   // Keyed by `<target>:<remotePort>` — the host-side address ssh connects to.
   // `evictable` = a service-preview forward (bounded, oldest first), never the
-  // embedded VS Code one.
-  private portForwards = new Map<string, { localPort: number; proc: ChildProcess; evictable: boolean }>()
+  // embedded VS Code one. An SSH host's forward is an `ssh -L`; a host network
+  // machine's is a 127.0.0.1 listener whose connections are port streams on the
+  // daemon link ('port-stream-v1'). `stop` ends it with its connections, `alive`
+  // says whether it still forwards.
+  private portForwards = new Map<string, { localPort: number; evictable: boolean; stop: () => void; alive: () => Promise<boolean> }>()
   // Concurrent calls for one key share a single dial (a double click or a Retry
   // while resolving would otherwise spawn two ssh and orphan one).
   private portForwardDials = new Map<string, Promise<number>>()
+  // Bumped per key by closePortForward and for every key by disconnect: a dial
+  // that started under an older generation stops what it made instead of keeping it.
+  private portForwardGens = new Map<string, number>()
+  private portForwardEpoch = 0
   private static readonly MAX_EVICTABLE_FORWARDS = 12
 
   /**
@@ -3620,19 +3628,28 @@ export class DaemonConnection {
    * 127.0.0.1 reaches a service bound to loopback or to every interface; the
    * service-preview path passes the host's own name when the model wrote the
    * URL with it, so a service bound to one external interface still answers.
+   *
+   * A host network machine (no SSH) forwards through its daemon link instead:
+   * the daemon connects to the port on its own loopback, and only there, so a
+   * `target` that is not loopback is refused (the service preview then tries
+   * its next address), and so is a daemon without 'port-stream-v1'.
    */
   ensurePortForward(remotePort: number, target = '127.0.0.1', opts: { evictable?: boolean } = {}): Promise<number> {
-    // A forward is an `ssh -L`; the cloud box is reached over the daemon
-    // tunnel only, so there is nothing to forward through. Say so plainly.
-    if (this.noSsh) {
-      return Promise.reject(new Error(this.isCloudTunnel
-        ? 'Port forwarding is not available on Cloud: this Mac reaches it through the cloud companion, not SSH'
-        : `Port forwarding is not available on ${this.hostKey}: this Mac reaches it over the host network, not SSH`))
+    // The cloud box is reached through the cloud companion only: nothing to forward through.
+    if (this.noSsh && !this.isNetHost) {
+      return Promise.reject(new Error('Port forwarding is not available on Cloud: this Mac reaches it through the cloud companion, not SSH'))
+    }
+    let netHost: string | null = null
+    if (this.isNetHost) {
+      const host = this.netForwardHost(remotePort, target)
+      if (host instanceof Error) return Promise.reject(host)
+      netHost = host
     }
     const key = `${target}:${remotePort}`
     const dialing = this.portForwardDials.get(key)
     if (dialing) return dialing
-    const dial = this.dialPortForward(key, remotePort, target, opts.evictable === true)
+    const evictable = opts.evictable === true
+    const dial = (netHost !== null ? this.dialNetPortForward(key, remotePort, netHost, evictable) : this.dialPortForward(key, remotePort, target, evictable))
       .finally(() => { if (this.portForwardDials.get(key) === dial) this.portForwardDials.delete(key) })
     this.portForwardDials.set(key, dial)
     return dial
@@ -3642,6 +3659,10 @@ export class DaemonConnection {
 
   /** Run a POSIX sh script on the host (see sshExec): the host server's install and port checks. */
   runRemoteScript(script: string, timeoutMs = 30_000): Promise<string> {
+    if (this.isNetHost) {
+      if (!this.hasCapability('host-exec-v1')) return Promise.reject(new Error(`${this.hostKey} needs a daemon update to run host scripts over the host network`))
+      return import('./daemon-net-update-io.js').then(({ createNetUpdateIo }) => createNetUpdateIo(this).run(script, timeoutMs))
+    }
     if (this.noSsh) return Promise.reject(new Error(this.noSshSentence))
     return this.sshExec(script, timeoutMs)
   }
@@ -3658,9 +3679,24 @@ export class DaemonConnection {
     remotePath: string, data: Buffer,
     opts: { sha256?: string; onProgress?: (sent: number, total: number) => void } = {},
   ): Promise<{ skipped: boolean }> {
-    if (this.noSsh) throw new Error(this.noSshSentence)
+    if (this.noSsh && !this.isNetHost) throw new Error(this.noSshSentence)
     const sha = (opts.sha256 ?? await sha256Hex(data)).toLowerCase()
     if (!/^[0-9a-f]{64}$/.test(sha)) throw new Error('uploadFile: sha256 must be 64 hex characters')
+    if (this.isNetHost) {
+      if (!this.hasCapability('fs-write-part-v1') || !this.hasCapability('host-exec-v1')) throw new Error(`${this.hostKey} needs a daemon update to upload files over the host network`)
+      if (opts.sha256 && await sha256Hex(data) !== sha) throw new Error('uploadFile: sha256 does not match the data')
+      const there = parseUploadPrecheck(await this.runRemoteScript(uploadPrecheckScript(remotePath, sha), 60_000))
+      if (there?.sha === sha && there.size === data.length) {
+        opts.onProgress?.(data.length, data.length)
+        return { skipped: true }
+      }
+      opts.onProgress?.(0, data.length)
+      const { writeFileInParts } = await import('../core/transfer/daemon-transfer-client.js')
+      const written = await writeFileInParts(this.hostKey, remotePath, data)
+      if (written.done !== true || written.sha256 !== sha) throw new Error('uploadFile: the host did not confirm the checked file')
+      opts.onProgress?.(data.length, data.length)
+      return { skipped: false }
+    }
     const there = parseUploadPrecheck(await this.sshExec(uploadPrecheckScript(remotePath, sha), 60_000))
     if (there && there.sha === sha && there.size === data.length) {
       log.session.info('DaemonConnection: upload skipped, the host already has the file', { host: this.hostKey, bytes: data.length, remotePath })
@@ -3799,26 +3835,95 @@ export class DaemonConnection {
   /** Drop one forward (a service probe found nothing behind it). */
   closePortForward(remotePort: number, target = '127.0.0.1'): void {
     const key = `${target}:${remotePort}`
+    // A dial still in flight for it stops what it makes, and the next call dials anew.
+    this.portForwardGens.set(key, (this.portForwardGens.get(key) ?? 0) + 1)
+    this.portForwardDials.delete(key)
     const fwd = this.portForwards.get(key)
     if (!fwd) return
     this.portForwards.delete(key)
-    try { fwd.proc.kill('SIGTERM') } catch {}
+    fwd.stop()
+  }
+
+  /** The generation a dial for `key` starts under (portForwardGens, portForwardEpoch). */
+  private portForwardGen(key: string): string {
+    return `${this.portForwardEpoch}:${this.portForwardGens.get(key) ?? 0}`
+  }
+
+  /**
+   * Keep a forward a dial just made, unless it was closed or the connection torn
+   * down meanwhile: then it is stopped at once and the dial fails, never orphaned.
+   */
+  private keepPortForward(key: string, gen: string, entry: { localPort: number; evictable: boolean; stop: () => void; alive: () => Promise<boolean> }): void {
+    if (this._destroyed || this.portForwardGen(key) !== gen) {
+      entry.stop()
+      throw new Error(`port forward to ${this.hostKey} was closed while it was opening`)
+    }
+    this.portForwards.get(key)?.stop()
+    this.portForwards.set(key, entry)
+    if (entry.evictable) this.evictOldPortForwards()
+  }
+
+  /** A live forward for `key`, refreshed as the most recent; a dead one is dropped. */
+  private async reusePortForward(key: string): Promise<number | null> {
+    const existing = this.portForwards.get(key)
+    if (!existing) return null
+    const alive = await existing.alive()
+    // Closed, evicted or replaced while it was asked: never put it back.
+    if (this.portForwards.get(key) !== existing) return null
+    if (alive) {
+      // Refresh recency (Map order is the eviction order).
+      this.portForwards.delete(key)
+      this.portForwards.set(key, existing)
+      return existing.localPort
+    }
+    this.portForwards.delete(key)
+    existing.stop()
+    return null
+  }
+
+  /**
+   * The loopback host a host network machine's daemon connects to for `target`,
+   * or why this forward cannot be: a bad port, an address that is not the
+   * machine's own loopback, or a daemon older than 'port-stream-v1'.
+   */
+  private netForwardHost(remotePort: number, target: string): string | Error {
+    if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) {
+      return new Error(`Port forwarding needs a TCP port from 1 to 65535, not ${String(remotePort).slice(0, 24)}`)
+    }
+    if (!isLoopbackHostname(target)) {
+      return new Error(`Port forwarding on ${this.hostKey} goes over the host network and reaches only its own loopback (127.0.0.1, localhost, ::1), not ${target.slice(0, 120)}`)
+    }
+    if (!this.hasCapability('port-stream-v1')) {
+      return new Error(`Port forwarding on ${this.hostKey} goes over the host network and needs a newer Walnut daemon there; it updates when this Mac reconnects to it`)
+    }
+    const h = bareHost(target)
+    return /^127(?:\.\d{1,3}){3}$/.test(h) || h === '::1' ? h : 'localhost'
+  }
+
+  /**
+   * A host network machine's forward: a 127.0.0.1 listener here whose every
+   * connection is a port stream to `host:remotePort` on that machine, through
+   * this connection's daemon link. It outlives a link drop (its connections end
+   * with the link), so the same local port answers again once the link is back.
+   */
+  private async dialNetPortForward(key: string, remotePort: number, host: string, evictable: boolean): Promise<number> {
+    const gen = this.portForwardGen(key)
+    const reused = await this.reusePortForward(key)
+    if (reused !== null) return reused
+    let refusals = 0
+    const fwd = await listenLoopback(() => this.streamEndpoint().openPort(remotePort, host), (err) => {
+      // One line per streak start, not one per refused browser connection.
+      if (refusals++ % 50 === 0) log.session.warn('DaemonConnection: port stream refused', { host: this.hostKey, remotePort, target: host, error: err.message, refusals })
+    })
+    this.keepPortForward(key, gen, { localPort: fwd.port, evictable, stop: () => fwd.close(), alive: async () => fwd.listening })
+    log.session.info('DaemonConnection: port forward created over the host network', { host: this.hostKey, localPort: fwd.port, remotePort, target: host })
+    return fwd.port
   }
 
   private async dialPortForward(key: string, remotePort: number, target: string, evictable: boolean): Promise<number> {
-    const existing = this.portForwards.get(key)
-    if (existing && existing.proc.exitCode === null) {
-      // Verify it still accepts connections — an ssh that lost its transport
-      // can linger with exitCode null while the forward is dead.
-      if (await this.waitForTunnel(existing.localPort, 1_500)) {
-        // Refresh recency (Map order is the eviction order).
-        this.portForwards.delete(key)
-        this.portForwards.set(key, existing)
-        return existing.localPort
-      }
-      try { existing.proc.kill('SIGTERM') } catch {}
-      this.portForwards.delete(key)
-    }
+    const gen = this.portForwardGen(key)
+    const reused = await this.reusePortForward(key)
+    if (reused !== null) return reused
 
     const { createServer } = await import('node:net')
     const localPort = await new Promise<number>((resolve, reject) => {
@@ -3850,23 +3955,25 @@ export class DaemonConnection {
     let stderrTail = ''
     proc.stderr?.on('data', (chunk: Buffer) => { stderrTail = (stderrTail + chunk.toString()).slice(-2_000) })
     proc.unref()
+    const stop = () => { try { proc.kill('SIGTERM') } catch {} }
     proc.on('exit', (code) => {
       log.session.warn('DaemonConnection: port forward died', {
         host: this.hostKey, code, localPort, remotePort, target, stderr: stderrTail.trim().slice(-300),
       })
       const cur = this.portForwards.get(key)
-      if (cur?.proc === proc) this.portForwards.delete(key)
+      if (cur?.stop === stop) this.portForwards.delete(key)
     })
 
     const ready = await this.waitForTunnel(localPort, 10_000)
     if (!ready) {
-      try { proc.kill('SIGTERM') } catch {}
+      stop()
       const why = stderrTail.trim().split('\n').pop()
       const lost = ownedMaster && !fs.existsSync(ownedMaster) ? ' (SSH master lost)' : ''
       throw new Error(`port forward to ${this.hostKey} ${target}:${remotePort} not accepting connections after 10s${lost}${why ? ` (${why})` : ''}`)
     }
-    this.portForwards.set(key, { localPort, proc, evictable })
-    if (evictable) this.evictOldPortForwards()
+    // An ssh that lost its transport can linger with exitCode null while the forward is dead.
+    const alive = async () => proc.exitCode === null && await this.waitForTunnel(localPort, 1_500)
+    this.keepPortForward(key, gen, { localPort, evictable, stop, alive })
     log.session.info('DaemonConnection: port forward created', {
       host: this.hostKey, localPort, remotePort, target,
     })
@@ -3878,7 +3985,7 @@ export class DaemonConnection {
     const evictable = [...this.portForwards].filter(([, f]) => f.evictable)
     for (const [key, fwd] of evictable.slice(0, Math.max(0, evictable.length - DaemonConnection.MAX_EVICTABLE_FORWARDS))) {
       this.portForwards.delete(key)
-      try { fwd.proc.kill('SIGTERM') } catch {}
+      fwd.stop()
       log.session.info('DaemonConnection: port forward evicted', { host: this.hostKey, key })
     }
   }
@@ -3973,9 +4080,10 @@ export class DaemonConnection {
     }
 
     // Kill auxiliary port forwards (embedded VS Code iframes go stale with us)
-    for (const [, fwd] of this.portForwards) {
-      try { fwd.proc.kill('SIGTERM') } catch {}
-    }
+    // A dial still in flight stops what it makes (keepPortForward).
+    this.portForwardEpoch += 1
+    this.portForwardDials.clear()
+    for (const [, fwd] of this.portForwards) fwd.stop()
     this.portForwards.clear()
 
     // Stop SSH ControlMaster (fire-and-forget — cleanup only), or leave it for the

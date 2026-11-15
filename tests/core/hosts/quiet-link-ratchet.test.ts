@@ -65,6 +65,7 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
   'src/core/human-inbox/item-status.ts': { calls: 1, kind: 'wake-recheck', why: 'a session state read under 1.5 s; a lost one answers unavailable' },
   'src/core/transcript-archive-sweep.ts': { calls: 2, kind: 'wake-recheck', why: 'a background history archive pass under its own timeout; a lost one is logged and the next pass runs it again' },
   'src/core/net/net-mac.ts': { calls: 5, kind: 'wake-recheck', why: 'best-effort host network config pushes and status reads; a lost push is logged' },
+  'src/core/net/net-adopt.ts': { calls: 2, kind: 'wake-recheck', why: 'a read-only net.identity proof on an existing link under 5 s; a lost read refuses adoption, with no config write or new dial' },
   'src/core/net/net-seen.ts': { calls: 2, kind: 'wake-recheck', why: 'status reads under 10 s; a lost one reads as no answer' },
   'src/core/offline-handover.ts': { calls: 1, kind: 'wake-recheck', why: 'a copy pushed after a drain, fire and forget; a lost one only delays it' },
   'src/core/remote-image-mirror.ts': { calls: 1, kind: 'wake-recheck', why: 'image reads under boundHostRead; a lost read answers degraded' },

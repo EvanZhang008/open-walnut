@@ -29,7 +29,7 @@ import {
   fetchRecentlyMissing, noteFetchMissing, noteFetchFound, isNotFoundReply, startMirrorDownload,
 } from '../core/remote-image-mirror.js'
 import { log } from '../logging/index.js'
-import { getConnectedDaemonConnection, getDaemonConnection, getDirectDaemonConnection, readDaemonLineFate, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
+import { getConnectedDaemonConnection, getDirectDaemonConnection, readDaemonLineFate, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
 import { BudgetCheckingError, BudgetPausedError, ClaudeRuntimeMissingError, cliStoppedBeforeFirstLine, cliStoppedSentence, startFailureSentence, heldByAnotherProcess, holderKindOf, holderPidOf, isDaemonCommandOutcomeUnknown, sendMayHaveLanded, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
 import { InheritedSessionRefusedError } from './ephemeral-session-gate.js'
 import { linkFailureKind } from './link-failure.js'
@@ -360,7 +360,10 @@ export class RemoteSessionManager implements SessionManager {
         await this.conn.connectDirect(this._directWsUrl)
       }
     } else if (this.sshTarget) {
-      this.conn = await getDaemonConnection(this.hostKey, this.sshTarget)
+      // A running session survives its host adopting a network link: the alias's
+      // current transport, not the SSH target captured at session construction.
+      const { link } = await import('../core/hosts/link.js')
+      this.conn = await link(this.hostKey)
     } else {
       throw new Error(`RemoteSessionManager: no directWsUrl and no sshTarget for host "${this.hostKey}"`)
     }

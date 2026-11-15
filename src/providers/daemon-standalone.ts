@@ -4490,6 +4490,8 @@ function cmdFollowerReport(ws: ServerWebSocket<WsData>, cmd: Record<string, unkn
 const streamRelay = createStreamRelay<ServerWebSocket<WsData>>({
   send: (ws, ev, data) => sendEvent(ws, ev, data),
   log: (level, msg, data) => logMsg(level, msg, data),
+  // Port streams ('port-stream-v1'): the relay picks the loopback address.
+  connect: (port, host) => net.connect({ port, host, allowHalfOpen: true }),
 })
 
 /** The primary's socket for `home` that was heard last. */
@@ -4647,6 +4649,11 @@ function releaseLaneOpens(home: string, only?: { ws: ServerWebSocket<WsData>; cm
 }
 
 function openStreamNow(ws: ServerWebSocket<WsData>, cmd: Record<string, unknown>) {
+  // A TCP port on this host's loopback ('port-stream-v1'): the primary's own socket only.
+  if (cmd.to === 'port') {
+    if (!isServerClient(ws)) return streamRelay.open(ws, cmd.sid, null, {}, 'only the Walnut server linked here opens a port stream')
+    return streamRelay.openPort(ws, cmd.sid, cmd.port, cmd.host)
+  }
   const target = streamTarget(ws, cmd.to)
   const purpose = typeof cmd.purpose === 'string' ? cmd.purpose.slice(0, 32) : undefined
   if ('why' in target) return streamRelay.open(ws, cmd.sid, null, {}, target.why)

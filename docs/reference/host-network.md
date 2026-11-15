@@ -25,6 +25,29 @@ secrets and the host's MCP servers all work. Hosts reached over SSH keep working
 | Join on Windows | `src/core/net/net-join-ps1.ts`, `scripts/join.ps1` | The PowerShell twin: readies WSL and its own Linux, then runs the join above inside it (below) |
 | Walnut for Windows | `desktop-windows/` | The app a PC downloads and double-clicks: the same steps run hidden, then its own Walnut's console or this PC's join |
 
+## Moving an existing SSH host
+
+Join the machine with an invite named after its existing host alias first. It gets a
+separate network row until the old host proves its identity. Then call the existing
+`POST /api/hosts/net/sync` with `{"adopt":["devbox"]}`. The sync asks the old, already
+connected daemon for `net.identity`, matches it to the joined member, and atomically
+moves that endpoint into the original alias, keeping its label, server and other
+settings. A missing link, a different key or a concurrent hostname change refuses the
+move. Normal syncs never adopt hosts automatically.
+
+Sessions keep their alias and use its current transport on reconnect. The SSH login
+stays available in the user's SSH config for manual recovery, but Walnut never falls
+back to it automatically: an expired certificate cannot hold the network link up.
+Older Walnut versions fail promptly on the row's `.walnut-net.invalid` hostname,
+rather than silently starting an SSH connection.
+
+Service previews and embedded editors forward through this same daemon link with
+`port-stream-v1`. The local listener binds only to 127.0.0.1, and the daemon connects
+only to its own loopback (localhost, 127.x or ::1), never another machine. A daemon
+without that capability reports that it needs an update. Existing SSH hosts keep
+using their SSH forwards. Host-server installation scripts and checked file uploads
+also use the daemon on network hosts, not a second SSH connection.
+
 ## Joining a machine
 
 1. Settings > Remote Hosts > Machines that joined with a link > Add a machine. The Mac

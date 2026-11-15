@@ -90,6 +90,11 @@ export async function link(host: string): Promise<DaemonConnection> {
   return dc.getDaemonConnection(key, await remoteTarget(key))
 }
 
+/** A transport change must not redial the alias using a cached SSH target. */
+export function forgetLinkTarget(host: string): void {
+  targets.delete(host)
+}
+
 /** Tests: forget the cached targets. */
 export function resetLinkTargetsForTest(): void {
   targets.clear()

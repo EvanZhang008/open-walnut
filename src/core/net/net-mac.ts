@@ -218,16 +218,19 @@ async function pushToHosts(s: NetState): Promise<void> {
  * `enable` turns the network on first; a sync already running without it is waited for,
  * then one runs.
  */
-export async function syncNet(opts: { enable?: boolean } = {}): Promise<NetState> {
+export async function syncNet(opts: { enable?: boolean; adopt?: string[] } = {}): Promise<NetState> {
   if (opts.enable) {
     if (syncing) await syncing.catch(() => {})
     await setEnabled(true)
   }
+  // Each explicit adoption owns a pass. Several callers waking from the same
+  // previous sync must not report another caller's adoption as their own.
+  if (opts.adopt?.length) while (syncing) await syncing.catch(() => {})
   syncing ??= runSync(opts)
   return syncing
 }
 
-function runSync(opts: { enable?: boolean }): Promise<NetState> {
+function runSync(opts: { enable?: boolean; adopt?: string[] }): Promise<NetState> {
   return (async () => {
     try {
       const { getConfig } = await import('../config-manager.js')
@@ -277,7 +280,14 @@ function runSync(opts: { enable?: boolean }): Promise<NetState> {
       const conf = await local.send('net.configure', macConfig(state), 30_000) as { ok?: boolean; error?: string }
       if (!conf.ok) throw new NetError(500, 'net_start_failed', `This machine's walnut-net: ${conf.error ?? 'did not start'}`)
       appliedRelay = state.relay
-      const changed = await reconcileHosts(state.members)
+      const { verifiedAdoptions } = await import('./net-adopt.js')
+      const adopt = opts.adopt?.length ? await verifiedAdoptions(((await getConfig()).hosts ?? {}) as HostRows, state.members, opts.adopt) : []
+      if (opts.adopt?.some((name) => !adopt.some((entry) => entry.host === name))) throw new NetError(409, 'identity_not_verified', 'Every adopted host must be connected and prove the joined machine is the same host; nothing was changed.')
+      const changed = await reconcileHosts(state.members, { adopt })
+      if (adopt.length) {
+        const { connectHostNow } = await import('../hosts/host-connect-action.js')
+        await Promise.all(adopt.map((entry) => connectHostNow(entry.host)))
+      }
       if (changed.added.length || changed.removed.length) log.session.info('net: hosts updated from the member list', changed)
       await keepWhere(new Set(state.members.map((m) => m.id)))
       if (!relayMoved) void pushToHosts({ ...state })
@@ -292,7 +302,7 @@ function runSync(opts: { enable?: boolean }): Promise<NetState> {
         retry = setTimeout(() => { retry = null; if (state.enabled) void syncNet() }, BOOT_RETRY_MS)
         retry.unref?.()
       }
-      if (err instanceof NetError && opts.enable) throw err
+      if (err instanceof NetError && (opts.enable || opts.adopt?.length)) throw err
     } finally {
       syncing = null
     }

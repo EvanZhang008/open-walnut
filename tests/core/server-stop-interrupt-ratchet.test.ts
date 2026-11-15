@@ -242,6 +242,7 @@ describe('a long transfer waits out a dropped link', () => {
       'src/core/transfer/transfer.ts': { count: 3, way: 'writeTargetFile: in parts that wait inside a wait; task_transfer writes its transcript under withLinkWait' },
       'src/core/sessions/engine-switch-io.ts': { count: 1, way: 'the switch\'s transcript, in prepare: a move runs it under withLinkWait (runEngineSwitch), a plain switch keeps one try' },
       'src/core/hosts/host-mcp-images.ts': { count: 1, way: 'one picture for a tool\'s answer, its own deadline; no wait' },
+      'src/providers/daemon-connection.ts': { count: 1, way: 'joined-host server upload: checked parts with three attempts per part; a dropped link fails the install and the existing manager retries on reconnect' },
       // The receivers: the daemon twins and the core they share.
       'src/providers/daemon-source.ts': { count: 1, way: 'the receiver' },
       'src/providers/daemon-standalone.ts': { count: 1, way: 'the receiver' },

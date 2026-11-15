@@ -27,7 +27,6 @@ const repoRoot = path.resolve(__dirname, '../../..')
 /** Files that may call getDaemonConnection, and why. */
 const DIAL_ALLOWED: Record<string, string> = {
   'src/core/hosts/link.ts': 'the link layer',
-  'src/providers/remote-session-manager.ts': 'a session transport, handed the target link.ts built (linkTarget)',
   'src/web/local-daemon-lane.ts': 'the local lane, an injected pool over loopback only',
   'src/core/hosts/host-connect-action.ts': 'a person\'s Connect now starts the dial before it answers, with linkTarget\'s target',
 }

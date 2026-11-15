@@ -17,15 +17,44 @@
  * daemon. `end` is one side's FIN; the pair is forgotten once both ends ended,
  * or at a `close` (an abort, with an optional error), or when either link drops.
  *
+ * A port stream ('port-stream-v1') has a TCP connection as its other end: the
+ * primary asks for `stream.open {sid, to: 'port', port, host}` and the daemon
+ * connects to that port on its OWN loopback (127.0.0.0/8, ::1; `localhost`
+ * tries 127.0.0.1 then ::1), never another address. It is what an `ssh -L` gives
+ * a host reached over SSH, for a host reached over the host network (a service
+ * preview, the embedded VS Code). The daemon then keeps the same window the
+ * other end keeps: it stops reading the socket while WINDOW bytes it sent are
+ * not acked, and acks the link's bytes only once the socket took them. FINs pass
+ * both ways (half close); a socket error, an abort or a link drop closes the
+ * stream, and a connected socket is reset then, never ended as if the request were done.
+ *
  * Shared by both daemon twins: daemon-standalone.ts imports it, daemon-source.ts
  * inlines its `toString()` through `__CREATE_STREAM_RELAY__`. So the factory
  * body references NOTHING at module scope.
  */
 
+/** The TCP socket a port stream plugs into (node:net Socket, opened with allowHalfOpen). */
+export interface PortSocket {
+  on(ev: 'connect' | 'end' | 'close', fn: () => void): unknown
+  on(ev: 'data', fn: (chunk: Uint8Array) => void): unknown
+  on(ev: 'error', fn: (err: Error & { code?: string }) => void): unknown
+  write(chunk: Uint8Array, cb: (err?: Error | null) => void): boolean
+  end(): void
+  destroy(): void
+  /** An abort (RST), so the service never takes a cut stream for a finished one. */
+  resetAndDestroy?(): void
+  pause(): void
+  resume(): void
+}
+
 export interface StreamRelayDeps<L> {
   /** Send one event frame to a link (the daemon's sendEvent). */
   send: (link: L, ev: string, data: Record<string, unknown>) => void
   log: (level: 'info' | 'warn' | 'error', msg: string, data?: Record<string, unknown>) => void
+  /** Connect to `port` on `host` (a loopback address the relay chose). Without it, port streams are refused. */
+  connect?: (port: number, host: string) => PortSocket
+  /** How long a port stream waits for its connection (default 8s, under the opener's 10s). */
+  connectTimeoutMs?: number
 }
 
 export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
@@ -39,6 +68,188 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
   interface Pair { a: End; b: End; accepted: boolean }
   const byLink = new Map<L, Map<string, Pair>>()
   let counter = 0
+
+  // Port streams: one TCP connection on this host's loopback per stream.
+  const MAX_PORTS_PER_LINK = 128
+  const PORT_WINDOW = 256 * 1024
+  /** Pieces as link-stream.ts sends them: their base64 stays under MAX_DATA_CHARS. */
+  const PORT_PIECE = 48 * 1024
+  const PORT_CONNECT_MS = deps.connectTimeoutMs ?? 8_000
+  interface PortEnd {
+    link: L; sid: string; port: number; sock: PortSocket | null
+    connected: boolean; unacked: number; paused: boolean
+    /** The link's FIN went into the socket / the socket's FIN went to the link. */
+    linkEnded: boolean; sockEnded: boolean
+    /** An earlier address refused (localhost's 127.0.0.1): the answer if the next one fails too. */
+    refused: boolean
+    timer: ReturnType<typeof setTimeout> | null
+  }
+  const portsByLink = new Map<L, Map<string, PortEnd>>()
+
+  /** The loopback addresses a port stream to `host` may try, in order; null: not this host's loopback. */
+  function loopbackHosts(host: unknown): string[] | null {
+    if (host === undefined || host === 'localhost') return ['127.0.0.1', '::1']
+    if (host === '::1' || host === '[::1]') return ['::1']
+    if (typeof host === 'string' && /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) && host.split('.').every((o) => Number(o) <= 255)) return [host]
+    return null
+  }
+
+  /** One id space per link: a pair's id and a port stream's id never meet. */
+  function sidInUse(link: L, sid: string): boolean {
+    return (byLink.get(link)?.has(sid) ?? false) || (portsByLink.get(link)?.has(sid) ?? false)
+  }
+
+  function portTracked(end: PortEnd): boolean {
+    return portsByLink.get(end.link)?.get(end.sid) === end
+  }
+
+  function forgetPort(end: PortEnd): void {
+    if (end.timer) { clearTimeout(end.timer); end.timer = null }
+    const m = portsByLink.get(end.link)
+    if (!m || m.get(end.sid) !== end) return
+    m.delete(end.sid)
+    if (m.size === 0) portsByLink.delete(end.link)
+  }
+
+  /**
+   * Cut a port stream's socket: a reset once connected (a FIN would tell the
+   * service the request ended well), a plain destroy while it still connects.
+   */
+  function cutSocket(end: PortEnd): void {
+    const sock = end.sock
+    if (!sock) return
+    try {
+      if (end.connected && typeof sock.resetAndDestroy === 'function') sock.resetAndDestroy()
+      else sock.destroy()
+    } catch {
+      try { sock.destroy() } catch { /* already gone */ }
+    }
+  }
+
+  /** End a port stream at both sides: the link hears `error`, the socket is cut. */
+  function abortPort(end: PortEnd, error: string): void {
+    if (!portTracked(end)) return
+    forgetPort(end)
+    deps.send(end.link, 'stream-close', { sid: end.sid, error })
+    cutSocket(end)
+  }
+
+  function socketError(err: Error & { code?: string }, port: number): string {
+    if (err.code === 'ECONNREFUSED') return `nothing is listening on port ${port} on this host`
+    return `port ${port} on this host: ${String(err.message || err.code || 'connection failed').slice(0, 160)}`
+  }
+
+  function dialPort(end: PortEnd, hosts: string[], i: number): void {
+    const connect = deps.connect
+    if (!connect) return
+    let sock: PortSocket
+    try {
+      sock = connect(end.port, hosts[i])
+    } catch (err) {
+      abortPort(end, socketError(err as Error, end.port))
+      return
+    }
+    end.sock = sock
+    const mine = () => end.sock === sock && portTracked(end)
+    sock.on('connect', () => {
+      if (!mine()) return
+      if (end.timer) { clearTimeout(end.timer); end.timer = null }
+      end.connected = true
+      deps.send(end.link, 'stream-accept', { sid: end.sid })
+    })
+    sock.on('data', (chunk) => {
+      if (!mine()) return
+      for (let off = 0; off < chunk.length; off += PORT_PIECE) {
+        const piece = chunk.subarray(off, off + PORT_PIECE)
+        deps.send(end.link, 'stream-data', { sid: end.sid, d: Buffer.from(piece.buffer, piece.byteOffset, piece.length).toString('base64') })
+        end.unacked += piece.length
+      }
+      if (end.unacked > PORT_WINDOW && !end.paused) { end.paused = true; sock.pause() }
+    })
+    sock.on('end', () => {
+      if (!mine() || end.sockEnded) return
+      end.sockEnded = true
+      deps.send(end.link, 'stream-end', { sid: end.sid })
+      if (end.linkEnded) forgetPort(end)
+    })
+    sock.on('error', (err) => {
+      if (!mine()) return
+      // `localhost` is 127.0.0.1 or ::1: a server on one of them refuses on the other.
+      if (!end.connected && err.code === 'ECONNREFUSED' && i + 1 < hosts.length) { end.refused = true; dialPort(end, hosts, i + 1); return }
+      // ::1 may not exist at all (EADDRNOTAVAIL): the refusal on 127.0.0.1 is the answer then.
+      abortPort(end, !end.connected && end.refused ? socketError(Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }), end.port) : socketError(err, end.port))
+    })
+    sock.on('close', () => {
+      // Closed without an error and without both FINs (a reset): the link hears it.
+      if (mine()) abortPort(end, 'the connection on this host closed')
+    })
+  }
+
+  /**
+   * `from` (the primary, checked by the caller) asks for a stream to `port` on
+   * this host's loopback. Refused (a `stream-close` with why) for a bad port, a
+   * host that is not loopback, or a daemon without `connect`.
+   */
+  function openPort(from: L, sid: unknown, port: unknown, host: unknown): void {
+    if (typeof sid !== 'string' || !OPENER_SID.test(sid)) return
+    const refuse = (error: string) => deps.send(from, 'stream-close', { sid, error })
+    if (sidInUse(from, sid)) return refuse('that stream id is already in use')
+    if (!deps.connect) return refuse('this daemon opens no port streams')
+    if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) {
+      return refuse(`not a TCP port: ${String(port).slice(0, 24)}`)
+    }
+    const hosts = loopbackHosts(host)
+    if (!hosts) return refuse('a port stream reaches only this host\'s own loopback (127.0.0.1, localhost or ::1)')
+    if ((portsByLink.get(from)?.size ?? 0) >= MAX_PORTS_PER_LINK) return refuse('too many port streams on this link')
+    const end: PortEnd = { link: from, sid, port, sock: null, connected: false, unacked: 0, paused: false, linkEnded: false, sockEnded: false, refused: false, timer: null }
+    let m = portsByLink.get(from)
+    if (!m) { m = new Map(); portsByLink.set(from, m) }
+    m.set(sid, end)
+    const timer = setTimeout(() => {
+      end.timer = null
+      if (!end.connected) abortPort(end, `nothing answered on port ${port} on this host within ${Math.round(PORT_CONNECT_MS / 1000)}s`)
+    }, PORT_CONNECT_MS)
+    timer.unref?.()
+    end.timer = timer
+    dialPort(end, hosts, 0)
+  }
+
+  /** A frame from the link for one of its port streams. */
+  function portFrame(end: PortEnd, kind: string, msg: Record<string, unknown>): void {
+    const sock = end.sock
+    if (kind === 'data') {
+      if (!end.connected || end.linkEnded || !sock || typeof msg.d !== 'string' || msg.d.length > MAX_DATA_CHARS) {
+        deps.log('warn', 'stream relay: a bad data frame ends the port stream', { sid: end.sid, port: end.port })
+        abortPort(end, 'bad data frame')
+        return
+      }
+      const buf = Buffer.from(msg.d, 'base64')
+      if (buf.length === 0) return
+      // Acked once the socket took it: a slow reader here slows the sender there.
+      sock.write(buf, (err) => { if (!err && portTracked(end)) deps.send(end.link, 'stream-ack', { sid: end.sid, n: buf.length }) })
+      return
+    }
+    if (kind === 'ack') {
+      const n = msg.n
+      if (typeof n !== 'number' || !(n > 0) || n > 64 * 1024 * 1024) return
+      end.unacked = Math.max(0, end.unacked - n)
+      if (end.paused && end.unacked <= PORT_WINDOW) { end.paused = false; sock?.resume() }
+      return
+    }
+    if (kind === 'end') {
+      if (end.linkEnded) return
+      if (!end.connected || !sock) { abortPort(end, 'ended before it was open'); return }
+      end.linkEnded = true
+      sock.end()
+      if (end.sockEnded) forgetPort(end)
+      return
+    }
+    if (kind === 'close') {
+      forgetPort(end)
+      cutSocket(end)
+    }
+    // 'accept' is the daemon's own word here: nothing to do.
+  }
 
   function onLink(link: L): Map<string, Pair> {
     let m = byLink.get(link)
@@ -74,7 +285,7 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
    */
   function open(from: L, sid: unknown, to: L | null, meta: Record<string, unknown>, why?: string): void {
     if (typeof sid !== 'string' || !OPENER_SID.test(sid)) return
-    if (byLink.get(from)?.has(sid)) {
+    if (sidInUse(from, sid)) {
       deps.send(from, 'stream-close', { sid, error: 'that stream id is already in use' })
       return
     }
@@ -96,6 +307,8 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
   function frame(from: L, kind: string, msg: Record<string, unknown>): void {
     const sid = msg.sid
     if (typeof sid !== 'string') return
+    const port = portsByLink.get(from)?.get(sid)
+    if (port) { portFrame(port, kind, msg); return }
     const hit = find(from, sid)
     if (!hit) {
       // A late frame for a stream that is gone: say so, except to a close (no echo loop).
@@ -140,6 +353,14 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
 
   /** A link closed: every stream on it ends at its other side too. */
   function dropLink(link: L): void {
+    const ports = portsByLink.get(link)
+    if (ports) {
+      portsByLink.delete(link)
+      for (const end of ports.values()) {
+        if (end.timer) { clearTimeout(end.timer); end.timer = null }
+        cutSocket(end)
+      }
+    }
     const m = byLink.get(link)
     if (!m) return
     for (const pair of [...m.values()]) {
@@ -151,14 +372,17 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
 
   return {
     open,
+    openPort,
     frame,
     dropLink,
-    /** Open streams, on one link or in all. */
+    /** Open streams, on one link or in all (a port stream counts once). */
     count: (link?: L): number => {
-      if (link !== undefined) return byLink.get(link)?.size ?? 0
+      if (link !== undefined) return (byLink.get(link)?.size ?? 0) + (portsByLink.get(link)?.size ?? 0)
       let n = 0
       for (const m of byLink.values()) n += m.size
-      return n / 2
+      let ports = 0
+      for (const m of portsByLink.values()) ports += m.size
+      return n / 2 + ports
     },
   }
 }

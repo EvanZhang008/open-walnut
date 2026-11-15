@@ -37,6 +37,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import net from 'node:net'
+import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -276,6 +277,44 @@ suite(`host network with no companion: a ticket joins a machine (relay: ${RELAY}
     const own = ((await hostRpc('net.status')) as { node?: { addrs?: string[] } }).node?.addrs ?? []
     await waitFor(async () => own.every((a) => !/^[\d.]+:\d+$/.test(a) || config().includes(a)), 30_000, 'the Mac to note where the machine listens')
   }, 300_000)
+
+  it('service preview uses the real network link while every SSH login is refused', async () => {
+    const { importSessionRecord } = await import('../../src/core/session-tracker.js')
+    const sid = 'host-network-preview'
+    await importSessionRecord({ claudeSessionId: sid, taskId: '', project: 'Fixture', cwd: host.home, host: machine })
+    const service = http.createServer((req, res) => res.end(`network preview ${req.url}`))
+    await new Promise<void>((resolve) => service.listen(0, '127.0.0.1', resolve))
+    const port = (service.address() as net.AddressInfo).port
+    const sshBefore = isolation!.calls().length
+    try {
+      for (const page of ['/first?q=1', '/again']) {
+        const response = await api(`/api/sessions/${sid}/service-preview`, {
+          method: 'POST', body: JSON.stringify({ url: `http://localhost:${port}${page}` }),
+        })
+        const preview = await response.json() as { url: string; host: string; via: string; reachability: string }
+        expect(response.status, JSON.stringify(preview)).toBe(200)
+        expect(preview).toMatchObject({ host: machine, via: 'tunnel', reachability: 'ok' })
+        expect(await (await fetch(preview.url)).text()).toBe(`network preview ${page}`)
+      }
+      const empty = net.createServer()
+      await new Promise<void>((resolve) => empty.listen(0, '127.0.0.1', resolve))
+      const emptyPort = (empty.address() as net.AddressInfo).port
+      await new Promise<void>((resolve) => empty.close(() => resolve()))
+      const unavailable = await api(`/api/sessions/${sid}/service-preview`, {
+        method: 'POST', body: JSON.stringify({ url: `http://localhost:${emptyPort}/` }),
+      })
+      expect(unavailable.status).toBe(502)
+      expect(await unavailable.json()).toMatchObject({ code: 'unreachable' })
+      // Budget GET follows the same current host target, even when its former SSH login fails.
+      // This new fixture session has no budget: absent=null is the older-client contract.
+      const budget = await api(`/api/usage/sessions/${sid}?absent=null`)
+      expect(budget.status, await budget.clone().text()).toBe(200)
+      expect(await budget.json()).toBeNull()
+      expect(isolation!.calls().length).toBe(sshBefore)
+    } finally {
+      await new Promise<void>((resolve) => service.close(() => resolve()))
+    }
+  }, 120_000)
 
   it('the same command again says the link is spent, and the machine keeps its network', async () => {
     const r = await runJoin(ticket)

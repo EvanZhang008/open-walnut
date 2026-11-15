@@ -451,6 +451,15 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // the primary while it answers its beats. Both twins. Optional: without it
   // streams ride the session link.
   'stream-lane-v1',
+  // 'port-stream-v1' (stream-relay-core.ts openPort): the primary, on its own
+  // server socket (never the bridge, a follower, a lane or a probe), may open
+  // `stream.open {sid, to: 'port', port, host}`: the daemon connects to that TCP
+  // port on its OWN loopback only (127.0.0.0/8, ::1, localhost) and carries the
+  // bytes as a stream, the same window and FINs both ways. A host network
+  // machine's service preview and embedded VS Code ride it, where an SSH host
+  // uses `ssh -L`. Both twins. Optional: without it the Mac says the daemon
+  // there needs an update.
+  'port-stream-v1',
   // 'client-role-v1': a test server (an ephemeral one attached read only to a host it
   // shares with the real Walnut) may say `client.role {role: 'probe'}` on each of its
   // sockets. A probe keeps its commands but is never taken for the Walnut's server:

@@ -4,6 +4,7 @@
  * cloud companion the machines that joined this Mac (`net.joined`, the list itself).
  */
 import type { NetMember } from './net-mac.js'
+import { adoptHostRows, type HostAdoption } from './net-adopt.js'
 
 /**
  * The hostname of a host network row: a name that never resolves (`.invalid`), so an
@@ -36,15 +37,23 @@ function freeAlias(name: string, hosts: HostRows): string {
  * (a row keeps its name). A row whose machine the list lacks stays (syncNet puts it back
  * on the list); only `drop`, the machine Remove takes out, loses its row.
  */
-export async function reconcileHosts(members: NetMember[], opts: { drop?: string } = {}): Promise<{ added: string[]; removed: string[] }> {
+export async function reconcileHosts(members: NetMember[], opts: { drop?: string; adopt?: HostAdoption[] } = {}): Promise<{ added: string[]; removed: string[] }> {
   const { modifyConfigDoc } = await import('../config-store.js')
   let wrote = false
   const out = await modifyConfigDoc((doc) => {
     wrote = false
-    const hosts: HostRows = doc.hosts && typeof doc.hosts === 'object' && !Array.isArray(doc.hosts) ? { ...(doc.hosts as HostRows) } : {}
+    let hosts: HostRows = doc.hosts && typeof doc.hosts === 'object' && !Array.isArray(doc.hosts) ? { ...(doc.hosts as HostRows) } : {}
     const added: string[] = []
     const removed: string[] = []
     let changed = false
+    for (const adoption of opts.adopt ?? []) {
+      if (adoption.endpoint === opts.drop || !members.some((m) => m.role === 'host' && m.id === adoption.endpoint)) continue
+      const next = adoptHostRows(hosts, adoption)
+      if (next === hosts) continue
+      hosts = next
+      removed.push(adoption.joined)
+      changed = true
+    }
     const byEndpoint = new Map<string, string>()
     for (const [alias, h] of netRows(hosts)) {
       if (opts.drop && h.endpoint === opts.drop) { delete hosts[alias]; removed.push(alias); continue }
@@ -85,6 +94,16 @@ export async function reconcileHosts(members: NetMember[], opts: { drop?: string
   // not at the next config change (a joined machine's status stayed stale).
   if (wrote) {
     const { bus, EventNames } = await import('../event-bus.js')
+    const [{ dropDaemonConnection }, { forgetLinkTarget }] = await Promise.all([
+      import('../../providers/daemon-connection.js'), import('../hosts/link.js'),
+    ])
+    for (const adoption of opts.adopt ?? []) {
+      if (!out.removed.includes(adoption.joined)) continue
+      forgetLinkTarget(adoption.host)
+      forgetLinkTarget(adoption.joined)
+      dropDaemonConnection(adoption.joined)
+      dropDaemonConnection(adoption.host)
+    }
     bus.emit(EventNames.CONFIG_CHANGED, { key: 'hosts' }, ['web-ui'], { source: 'host-network' })
   }
   return out

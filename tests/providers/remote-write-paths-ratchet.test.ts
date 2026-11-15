@@ -36,7 +36,7 @@ const CONNECTION: Record<string, Entry> = {
   detectRemoteArch: { count: 1, kind: 'read', why: '`uname -m`' },
   _bootStart: { count: 2, kind: 'not-for-test-server', why: 'its off() answers for an isolated daemon before anything runs' },
   runRemoteScript: { count: 2, kind: 'transport', why: 'the host server handle; that handle is only given for a shared host or the replica check' },
-  uploadFile: { count: 2, kind: 'transport', why: 'writes the path its caller names; callers are listed here' },
+  uploadFile: { count: 3, kind: 'transport', why: 'writes the path its caller names; joined hosts precheck through runRemoteScript and write through the same checked parts client; callers are listed here' },
   hostServerHandle: { count: 2, kind: 'not-for-test-server', why: 'hostServerConnected runs only for a shared host or the replica check (its own root)' },
   dialPortForward: { count: 1, kind: 'transport', why: 'a port forward, no remote command' },
   retireIsolatedDaemon: { count: 1, kind: 'own-root', why: 'buildIsolatedRetireScript behind isOwnIsolatedRoot' },
