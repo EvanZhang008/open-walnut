@@ -105,6 +105,16 @@ describe('log-error → notification bridge', () => {
     expect(feed).toHaveLength(0);
   });
 
+  it('legacy managed daemon deferrals stay quiet, but failed updates still notify', async () => {
+    const logger = createSubsystemLogger('session');
+    logger.error('DaemonConnection: managed daemon update was deferred; use `walnut daemon install --yes --executable <daemon binary>` on that host.');
+    logger.error('Managed local daemon version differs; automatic update was deferred; use walnut daemon install --yes --executable <daemon binary>');
+    await new Promise(r => setTimeout(r, 150));
+    expect((await listNotifications()).feed).toHaveLength(0);
+    logger.error('Managed daemon update failed: the readiness check timed out');
+    await vi.waitFor(async () => expect((await listNotifications()).feed).toHaveLength(1));
+  });
+
   it('notif-subsystem errors are excluded (no self-loop)', async () => {
     const logger = createSubsystemLogger('notif');
     logger.error('store write failed');

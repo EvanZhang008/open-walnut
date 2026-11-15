@@ -82,7 +82,6 @@ import {
   classifyServiceTakeover,
   daemonServiceConfigPaths,
   serviceTakeoverEvidence,
-  serviceTakeoverInstruction,
   type ServiceProbeState,
   type ServiceTakeover,
 } from './local-daemon.js'
@@ -295,8 +294,8 @@ async function relayedRowOvertakenByStop(messageId: string): Promise<boolean> {
  * is not usable — so walnut refuses the unmanaged alternative (nohup deploy, or
  * killing the managed process to redeploy) instead of silently doing it.
  *
- * `kind` lets callers recognize it without string matching; the message names
- * the evidence and the exact `walnut daemon …` command to run on that host.
+ * `kind` lets callers recognize it without string matching; the message preserves
+ * the service evidence without asking the user to replace the daemon manually.
  */
 export class DaemonServiceNotReadyError extends Error {
   readonly kind = 'service-not-ready'
@@ -305,11 +304,11 @@ export class DaemonServiceNotReadyError extends Error {
   readonly unknown: string[]
 
   constructor(hostKey: string, what: string, takeover: ServiceTakeover) {
-    // Only a config Walnut actually saw makes "runs as an OS service" a fact.
+    // Service failures are repaired by Walnut's service path, never by an unmanaged replacement.
     const claim = takeover.present.length ? 'runs' : 'may run'
     super(
       `remote host '${hostKey}' ${claim} the walnut session daemon as an OS service `
-      + `(${serviceTakeoverEvidence(takeover)}) — ${what}. Run on that host: ${serviceTakeoverInstruction()}`,
+      + `(${serviceTakeoverEvidence(takeover)}): ${what}. Walnut keeps the service configuration and checks again when the host reconnects.`,
     )
     this.name = 'DaemonServiceNotReadyError'
     this.hostKey = hostKey
@@ -474,11 +473,6 @@ function bootStartOff(): boolean {
   return ['0', 'false', 'off', 'no'].includes((process.env.WALNUT_DAEMON_BOOT_START ?? '').trim().toLowerCase())
 }
 
-/**
- * The service a server may update on a remote host: exactly one config of
- * Walnut's, a user unit or the cron boot script (a system unit needs sudo, and
- * two configs are the user's to sort out). Null: leave it alone.
- */
 /** How often one connection revives a host's service that has no daemon running. */
 export const REVIVE_EVERY_MS = 5 * 60_000
 
@@ -490,15 +484,16 @@ export function reviveScopeOf(present: string[]): 'user' | 'cron' | null {
   const [user, system, cron] = daemonServiceConfigPaths('linux', '$HOME')
   const [agent] = daemonServiceConfigPaths('darwin', '$HOME')
   const has = (file: string) => present.includes(file)
-  const userish = has(user) || has(agent)
-  if (has(system) || userish === has(cron)) return null
-  return userish ? 'user' : 'cron'
+  if (has(system) || [user, agent, cron].filter(has).length !== 1) return null
+  return has(cron) ? 'cron' : 'user'
 }
 
+/** SSH deployment carries Linux artifacts; remote Macs use their host-network update path. */
 export function managedUpdateScope(present: string[]): 'user' | 'cron' | null {
   const [user, system, cron] = daemonServiceConfigPaths('linux', '$HOME')
+  const [agent] = daemonServiceConfigPaths('darwin', '$HOME')
   const has = (file: string) => present.includes(file)
-  if (has(system) || has(user) === has(cron)) return null
+  if (has(system) || has(agent) || has(user) === has(cron)) return null
   return has(user) ? 'user' : 'cron'
 }
 
@@ -4753,8 +4748,9 @@ export class DaemonConnection {
           const updated = await this.updateManagedDaemon(takeover, expected, gate, remoteVersion)
           if (updated === 'held') return false
           if (updated) { this.noteDaemonReplaced(); return true }
-          log.session.error(
-            'DaemonConnection: managed daemon update was deferred; use `walnut daemon install --yes --executable <daemon binary>` on that host.',
+          // No safe user-level service is known. Keep serving without publishing a retry as an error.
+          log.session.info(
+            'DaemonConnection: managed daemon update not available for this service; the running daemon keeps serving',
             {
               host: this.hostKey,
               expected,
@@ -5459,7 +5455,17 @@ export class DaemonConnection {
     takeover: ServiceTakeover, expected: string, gate?: () => UpgradeHold, remoteVersion = '',
   ): Promise<boolean | 'held'> {
     // An ephemeral server never updates a box's service daemon, a lifted host's included.
-    if (this.isReadOnlyRemote || IS_EPHEMERAL || takeover.unknown.length) return false
+    if (this.isReadOnlyRemote || IS_EPHEMERAL) return false
+    // Known unsupported or conflicting services remain off limits even if another path is unreadable.
+    const [user, system, cron] = daemonServiceConfigPaths('linux', '$HOME')
+    const [agent] = daemonServiceConfigPaths('darwin', '$HOME')
+    const present = (file: string) => takeover.present.includes(file)
+    if (present(system) || present(agent) || (present(user) && present(cron))) return false
+    if (takeover.unknown.length) {
+      this.postponeUpgrade('the service config could not be read; the running daemon keeps serving', expected, remoteVersion,
+        { delayMs: DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS })
+      return 'held'
+    }
     const scope = managedUpdateScope(takeover.present)
     if (!scope) return false
     // An earlier update whose answer did not come in time left its record on the host: judged
@@ -5484,7 +5490,11 @@ export class DaemonConnection {
         { delayMs: backoffLeftMs(failedHere) })
       return 'held'
     }
-    if (!(await this.hasDaemonBinary())) return false
+    if (!(await this.hasDaemonBinary())) {
+      this.postponeUpgrade('the daemon artifact is not available; the running daemon keeps serving', expected, remoteVersion,
+        { delayMs: DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS })
+      return 'held'
+    }
     // The last update's probation still watches the new daemon there (daemon-update-probation.ts):
     // its copies are the way back from a build that fails late, and this update's snapshot would
     // take them. Nothing is uploaded; asked again after its end (2026-11-05 review 6: an update

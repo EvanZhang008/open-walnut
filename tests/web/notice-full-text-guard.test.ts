@@ -161,19 +161,20 @@ describe('every corner notice shows its whole message', () => {
     expect(wholeTitle('Short title', `Short title and more\n[x]`)).toEqual({ title: 'Short title', detail: 'Short title and more\n[x]' });
   });
 
-  it('words the deferred daemon update plainly, with its command to copy', () => {
+  it('renders old deferred daemon logs without asking for a terminal command', () => {
     const h = humanizeErrorNotification({
       title: 'DaemonConnection: managed daemon update was deferred; use `walnut daemon install --yes --executable <daemon binary>` on that host.',
       subsystem: 'session',
       meta: { host: 'devbox', expected: '2.3.0', remoteVersion: '2.2.9' },
     });
-    expect(h.title).toBe('The daemon on devbox needs an update');
-    expect(h.message).toBe("Set <daemon binary> to the new daemon file's path, then run on devbox: `walnut daemon install --yes --executable <daemon binary>`. It runs 2.2.9, Walnut 2.3.0.");
+    expect(h.title).toBe('The daemon update on devbox is pending');
+    expect(h.message).toContain('No terminal command is needed.');
+    expect(h.message).not.toContain('walnut daemon');
     // This machine's own daemon says it in other words; the same card.
     const local = humanizeErrorNotification({ title: 'Managed local daemon version differs; automatic update was deferred; use walnut daemon install --yes --executable <daemon binary>', subsystem: 'session', meta: {} });
-    expect(local.title).toBe("This machine's daemon needs an update");
-    expect(local.message).toContain('then run on this machine: `walnut daemon install --yes --executable <daemon binary>`');
-    expect(noticeParts(h.message).filter((p) => 'command' in p)).toEqual([{ command: 'walnut daemon install --yes --executable <daemon binary>' }]);
+    expect(local.title).toBe("This machine's daemon update is pending");
+    expect(local.message).toContain('No terminal command is needed.');
+    expect(noticeParts(h.message).filter((p) => 'command' in p)).toEqual([]);
   });
 
   it('lays a raw log line\'s JSON out one field a line', () => {

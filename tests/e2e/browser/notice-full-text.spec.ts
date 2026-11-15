@@ -20,8 +20,8 @@ const META = '[session] {"host":"devbox","expected":"2.3.0","remoteVersion":"2.2
 const DETAIL = `${LINE}\n${META}`
 const BODY = 'The host keeps its older daemon until it is installed again.'
 // What the server now makes of that line (humanize.ts managed-daemon-update-deferred).
-const HUMAN_TITLE = 'The daemon on devbox needs an update'
-const HUMAN_BODY = `Set <daemon binary> to the new daemon file's path, then run on devbox: \`${COMMAND}\`. It runs 2.2.9, Walnut 2.3.0.`
+const HUMAN_TITLE = 'The daemon update on devbox is pending'
+const HUMAN_BODY = 'No terminal command is needed. The running daemon keeps serving while Walnut checks the update.'
 
 async function routeSocket(page: Page): Promise<() => WebSocketRoute | null> {
   let socket: WebSocketRoute | null = null
@@ -134,7 +134,7 @@ test('beside an approval card and in a narrow window the toast keeps its words a
   await expectDetailsOpens(page, toast, `${SHOTS}/${info.project.name}-narrow-details.png`)
 })
 
-test('the daemon card reads plainly, its command one click away, and a log alone says Show log', async ({ page }, info) => {
+test('the daemon card reads plainly without a CLI step, and a log alone says Show log', async ({ page }, info) => {
   await page.setViewportSize({ width: 1280, height: 800 })
   const sock = await routeSocket(page)
   await boot(page, sock)
@@ -142,10 +142,16 @@ test('the daemon card reads plainly, its command one click away, and a log alone
   const toast = page.locator('.corner-stack .notification-toast', { hasText: HUMAN_TITLE })
   await expect(toast).toBeVisible()
   await expectInside(toast)
-  await expect(toast.locator('.notification-toast-body .notice-cmd-code')).toContainText('walnut daemon install')
-  await expect(toast.getByTestId('notice-copy-command')).toBeVisible()
+  await expect(toast).toContainText('No terminal command is needed.')
+  await expect(toast.getByTestId('notice-copy-command')).toHaveCount(0)
+  await expect(toast.locator('.notification-toast-body .notice-cmd-code')).toHaveCount(0)
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-human.png`, clip: { x: 0, y: 450, width: 900, height: 350 } })
-  await expectDetailsOpens(page, toast, `${SHOTS}/${info.project.name}-human-log.png`, 'It runs 2.2.9, Walnut 2.3.0.')
+  await toast.screenshot({ path: info.outputPath('daemon-notice.png') })
+  // Keep the accepted state visible in the proof video before dismissing it.
+  await page.waitForTimeout(1500)
+  await toast.getByTestId('notice-details').click()
+  await expect(toast.getByTestId('notification-toast-detail')).toContainText('"host": "devbox"')
+  await page.screenshot({ path: `${SHOTS}/${info.project.name}-human-log.png`, clip: { x: 0, y: 450, width: 900, height: 350 } })
   await toast.locator('.notification-toast-close').click()
   // A notice whose words fit and that keeps a log: what opens is the log, and the toggle says so.
   sock()!.send(noticeEvent('short', { title: 'Sync paused', body: 'It resumes on its own.', detail: META }))

@@ -217,8 +217,7 @@ export function classifyServiceConfigError(err: unknown): ServiceProbeState {
 }
 
 export function serviceTakeoverInstruction(): string {
-  return 'Use the service instead: `walnut daemon status`, `walnut daemon restart --yes`, '
-    + 'or `walnut daemon update --yes --executable <daemon binary>` to move it to a new build. '
+  return 'Walnut checks the existing service again when it reconnects. '
     + 'Automatic updates preserve enabled and stopped choices and never start an unmanaged replacement.'
 }
 
@@ -1006,9 +1005,8 @@ export class LocalDaemon {
   }
 
   /** The service of Walnut's this daemon runs under: exactly one config (the LaunchAgent, the user unit, or the cron boot script), never a system unit. */
-  private managedScope(): 'user' | 'cron' | null {
+  private managedScope(takeover = this.detectServiceTakeover()): 'user' | 'cron' | null {
     if (!isProductionDaemonDir(this.daemonDir)) return null
-    const takeover = this.detectServiceTakeover()
     const configs = daemonServiceConfigPaths()
     const present = configs.filter((config) => takeover.present.includes(config))
     if (takeover.unknown.length || present.length !== 1) return null
@@ -1055,7 +1053,7 @@ export class LocalDaemon {
         await this.adoptAfterManagedUpdate()
       } else if (this._managedSkipLogged !== `${running}>${expected}`) {
         this._managedSkipLogged = `${running}>${expected}`
-        log.session.error('Managed local daemon version differs; automatic update was deferred; use walnut daemon install --yes --executable <daemon binary>', { running, expected })
+        log.session.info('local daemon: managed update not available for this service; the running daemon keeps serving', { running, expected })
       }
     })()
     void run.finally(() => { if (this._managedUpdate === run) this._managedUpdate = null })
@@ -1074,7 +1072,16 @@ export class LocalDaemon {
 
   private async updateManagedDaemon(binaryPath: string, expected: string): Promise<number | null | 'busy' | 'later' | 'backoff'> {
     if (binaryPath.endsWith('.cjs')) return null
-    const scope = this.managedScope()
+    const takeover = this.detectServiceTakeover()
+    // An unreadable config is temporary, never permission to overwrite a service.
+    if (isProductionDaemonDir(this.daemonDir) && takeover.unknown.length) {
+      if (this._managedSkipLogged !== `unreadable>${expected}`) {
+        this._managedSkipLogged = `unreadable>${expected}`
+        log.session.info('local daemon: managed update postponed because the service config could not be read; checking again', { expected, unknown: takeover.unknown })
+      }
+      return 'later'
+    }
+    const scope = this.managedScope(takeover)
     if (!scope) return null
     if (this._lastManagedUpdate?.expected === expected && Date.now() - this._lastManagedUpdate.at < LOCAL_MANAGED_UPDATE_COOLDOWN_MS) return 'later'
     if (this._managedFail === undefined) this._managedFail = await readBuildBackoff(`local:${this.daemonDir}`)

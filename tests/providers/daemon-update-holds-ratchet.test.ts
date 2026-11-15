@@ -111,7 +111,7 @@ describe('daemon update holds', () => {
   // An update not done can also be a plain `return false` with a log line and no clock (2026-11-06
   // round 3 review: the cooldown and the "refusing to loop" exits). Every log of an update deferred,
   // refused or held must sit next to a listed hold, or be a listed stop that says why no clock is needed.
-  const STOP_WORDS = /\b(deferred|DEFERRED|refusing|not updated)\b|\bheld by\b/
+  const STOP_WORDS = /\b(deferred|DEFERRED|refusing|not updated|not available)\b|\bheld by\b/
   const logsOfUpdatesNotDone = () => {
     const out: Array<{ file: string; line: number; text: string; nearHold: boolean }> = []
     for (const [file, re] of Object.entries(SITES)) {
@@ -138,6 +138,28 @@ describe('daemon update holds', () => {
       expect(found.filter((f) => f.file === st.file && f.text.includes(st.near)).length, `listed stop ${st.file} "${st.near}" must be exactly one log line`).toBe(1)
       expect(st.why.length).toBeGreaterThan(10)
     }
+  })
+
+  it('an internal update deferral never becomes an error notification or advice to run a CLI command', () => {
+    for (const f of logsOfUpdatesNotDone()) {
+      // A refused replacement after a real failed attempt is a failure, not an internal wait.
+      if (/refusing to loop/.test(f.text)) continue
+      expect(f.text, `${f.file}:${f.line} turns an internal update deferral into an error notification`).not.toMatch(/log\.session\.error\(/)
+      expect(f.text, `${f.file}:${f.line} asks the user to perform an internal update`).not.toMatch(/walnut daemon (?:install|update|restart)/)
+    }
+    for (const file of Object.keys(SITES)) {
+      const text = read(file)
+      const logs = text.split('\n').filter((line) => /log\.session\.(?:error|warn|info)\(/.test(line))
+      for (const line of logs.filter((s) => /update|upgrade/i.test(s) && /postponed|skipped|deferred|held/i.test(s))) {
+        expect(line, `${file} publishes an internal update wait as an error`).not.toMatch(/log\.session\.error\(/)
+      }
+    }
+    const local = read('src/providers/local-daemon.ts')
+    const instruction = local.slice(local.indexOf('export function serviceTakeoverInstruction()'), local.indexOf('export function serviceTakeoverEvidence('))
+    expect(instruction).not.toMatch(/walnut daemon (?:install|update|restart)/)
+    const remote = read('src/providers/daemon-connection.ts')
+    const errorClass = remote.slice(remote.indexOf('export class DaemonServiceNotReadyError'), remote.indexOf('export class DaemonServiceProbeError'))
+    expect(errorClass).not.toMatch(/Run on that host|serviceTakeoverInstruction/)
   })
 
   it('a bounded wait names a limit defined where it says', () => {

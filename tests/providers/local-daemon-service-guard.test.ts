@@ -188,13 +188,12 @@ describe('service-takeover classification (pure)', () => {
     expect(classifyServiceConfigError(null)).toBe('unknown')
   })
 
-  it('the refusal names service commands and preserves service ownership', () => {
+  it('the refusal preserves service ownership without asking for a CLI step', () => {
     const message = localServiceTakeoverMessage('spawn', {
       managed: true, present: ['/tmp/open-walnut/daemon.service'], unknown: [],
     })
-    expect(message).toContain('walnut daemon restart --yes')
-    expect(message).toContain('walnut daemon status')
-    expect(message).toContain('walnut daemon update --yes --executable')
+    expect(message).not.toContain('walnut daemon')
+    expect(message).toContain('checks the existing service again')
     expect(message).toContain('preserve enabled and stopped choices')
     expect(message).toContain('never start an unmanaged replacement')
     expect(message).toContain('/tmp/open-walnut/daemon.service')
@@ -270,7 +269,7 @@ describe('LocalDaemon — OS-managed daemons are left alone', () => {
     const daemon = daemonIn(tmpDir)
     const spawnDaemon = vi.spyOn(priv(daemon), 'spawnDaemon')
 
-    await expect(daemon.ensureRunning()).rejects.toThrow(/walnut daemon restart --yes/)
+    await expect(daemon.ensureRunning()).rejects.toThrow(/checks the existing service again/)
     expect(spawnDaemon).toHaveBeenCalledTimes(0)
     expect(spawnSpy).toHaveBeenCalledTimes(0)
   })
@@ -415,6 +414,32 @@ describe('LocalDaemon managed service updates', () => {
     expect(error).not.toHaveBeenCalled()
   })
 
+  it.each(['source artifact', 'unreadable config'])('a managed update skipped for %s keeps serving without error notifications or CLI advice', async (kind) => {
+    const daemon = new LocalDaemon({ daemonDir: PROD_DAEMON_DIR, binaryPath: '/fixture/daemon' })
+    vi.spyOn(priv(daemon), 'detectServiceTakeover').mockReturnValue({
+      managed: true, present: [daemonServiceConfigPaths()[0]], unknown: kind === 'unreadable config' ? ['/fixture/config'] : [],
+    })
+    const internals = daemon as unknown as { startManagedUpdate(path: string, expected: string, running: string | null): void; scheduleUpgradeRecheck(): void }
+    const recheck = vi.spyOn(internals, 'scheduleUpgradeRecheck').mockImplementation(() => {})
+    const error = vi.spyOn(log.session, 'error').mockImplementation(() => {})
+    const info = vi.spyOn(log.session, 'info').mockImplementation(() => {})
+    for (let n = 0; n < 2; n++) {
+      internals.startManagedUpdate(kind === 'source artifact' ? '/fixture/daemon.cjs' : '/fixture/daemon', 'new-version', 'old-version')
+      await daemon.managedUpdatePending
+    }
+    expect(localUpdate).not.toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalled()
+    expect(info.mock.calls.some(([line]) => /walnut daemon/.test(String(line)))).toBe(false)
+    if (kind === 'unreadable config') {
+      expect(recheck).toHaveBeenCalledTimes(2)
+      expect(info).toHaveBeenCalledTimes(1)
+      expect(info.mock.calls[0][1]).toMatchObject({ unknown: ['/fixture/config'] })
+    } else {
+      expect(info).toHaveBeenCalledTimes(1)
+      expect(recheck).not.toHaveBeenCalled()
+    }
+  })
+
   // 2026-11-04 review 4: startServer awaits ensureRunning() before it listens, and that waited on
   // the whole managed update (the trial, two stays, a ready wait of up to 60 s; up to 15 min for
   // the runner). On a loaded Mac that passed the deploy's readiness window, which rolled it back.
@@ -492,8 +517,8 @@ describe('LocalDaemon managed service updates', () => {
     vi.spyOn(log.session, 'error').mockImplementation(() => {})
     const start = vi.spyOn(priv(daemon), 'spawnDaemon').mockResolvedValue(1234)
     localRevive.mockResolvedValue({ outcome: 'down', words: 'no daemon answered within 30 s, and there was no earlier service config to go back to' })
-    await expect(internals.ensureRunningInner()).rejects.toThrow(/walnut daemon restart --yes/)
-    await expect(internals.ensureRunningInner()).rejects.toThrow(/walnut daemon restart --yes/)
+    await expect(internals.ensureRunningInner()).rejects.toThrow(/checks the existing service again/)
+    await expect(internals.ensureRunningInner()).rejects.toThrow(/checks the existing service again/)
     expect(localRevive).toHaveBeenCalledTimes(1)
     expect(start).not.toHaveBeenCalled()
   })

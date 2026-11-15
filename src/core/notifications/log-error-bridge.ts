@@ -35,7 +35,7 @@ import { setErrorNotificationSink, type ErrorNotifyPayload } from '../../logging
 import { redactSensitiveText } from '../../logging/redact.js';
 import { releaseOutageRepeats } from '../../logging/outage-repeat.js';
 import { upsertNotification } from './store.js';
-import { hostOutageCopy, humanizeErrorNotification } from './humanize.js';
+import { hostOutageCopy, humanizeErrorNotification, isManagedDaemonUpdateDeferred } from './humanize.js';
 import { causeKeyForError, hostOfCauseKey, namesLinkDown } from './error-cause.js';
 import { withOriginNote } from './origin.js';
 import { log } from '../../logging/index.js';
@@ -316,7 +316,7 @@ export function installLogErrorNotifications(
     // (e.g. server.ts's 'Subagent Error' with task ref + deep links) opt out
     // with `skipNotify: true` in the log meta — otherwise every such failure
     // lands in the feed TWICE under two different dedup keys.
-    if (payload.meta?.skipNotify === true) return;
+    if (payload.meta?.skipNotify === true || isManagedDaemonUpdateDeferred(payload.message)) return;
     const now = Date.now();
     let dedupKey = `logerr:${payload.subsystem}:${djb2(dedupFingerprint(payload))}`;
 

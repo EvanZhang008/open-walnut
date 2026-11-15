@@ -35,6 +35,11 @@
  *     runtime, so no plugin name appears anywhere in this file.
  */
 
+/** Legacy producers logged a routine managed update skip as an error. It is not a user action. */
+export function isManagedDaemonUpdateDeferred(title: string): boolean {
+  return /^(?:DaemonConnection: managed daemon update was deferred;|Managed local daemon version differs; automatic update was deferred;)/i.test(title)
+}
+
 export interface HumanizedError {
   /** The family this error belongs to — the Errors rail groups by it. */
   category: string;
@@ -394,23 +399,16 @@ const RULES: Rule[] = [
     },
   },
   {
-    // A host's daemon runs another version than this Walnut's, and Walnut left it in place
-    // (daemon-connection.ts). The card says that plainly and gives the command to run there.
+    // Preserve old server titles for callers that render them directly, without a manual install step.
     id: 'managed-daemon-update-deferred',
     category: CATEGORY_SESSIONS,
-    // Both producers: a remote host's (daemon-connection.ts) and this machine's (local-daemon.ts).
-    match: (i) => has(i.title, 'update was deferred') && has(i.title, 'daemon'),
+    match: (i) => isManagedDaemonUpdateDeferred(i.title),
     render: (i) => {
       const local = has(i.title, 'local daemon');
       const host = str(i.meta?.host);
-      const remote = str(i.meta?.remoteVersion);
-      const expected = str(i.meta?.expected);
-      const versions = remote && expected ? `It runs ${remote}, Walnut ${expected}.` : 'It runs another version than Walnut.';
-      const command = /`([^`]+)`/.exec(i.title)?.[1] ?? 'walnut daemon install --yes --executable <daemon binary>';
       return {
-        title: local ? 'This machine\'s daemon needs an update' : host ? `The daemon on ${host} needs an update` : 'A host\'s daemon needs an update',
-        // What to fill in leads, so a toast cut to its first lines still says it before Copy.
-        message: `${command.includes('<daemon binary>') ? 'Set <daemon binary> to the new daemon file\'s path, then run' : 'Run'} on ${local ? 'this machine' : host ?? 'that host'}: \`${command}\`. ${versions}`,
+        title: local ? 'This machine\'s daemon update is pending' : host ? `The daemon update on ${host} is pending` : 'A host\'s daemon update is pending',
+        message: 'No terminal command is needed. The running daemon keeps serving while Walnut checks the update.',
       };
     },
   },

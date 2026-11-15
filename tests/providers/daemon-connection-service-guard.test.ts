@@ -173,6 +173,10 @@ describe('remote service probe (pure)', () => {
 
   it('updates exactly one config of Walnut\'s from the server: a user unit or the cron boot script, never a system unit', () => {
     const [user, system, cron] = ['$HOME/.config/systemd/user/open-walnut-daemon.service', '/etc/systemd/system/open-walnut-daemon.service', '$HOME/.local/share/open-walnut/daemon/daemon-boot.sh']
+    const agent = '$HOME/Library/LaunchAgents/dev.openwalnut.session-daemon.plist'
+    expect(managedUpdateScope([agent])).toBeNull()
+    expect(managedUpdateScope([agent, user])).toBeNull()
+    expect(managedUpdateScope([agent, cron])).toBeNull()
     expect(managedUpdateScope([user])).toBe('user')
     expect(managedUpdateScope([cron])).toBe('cron')
     expect(managedUpdateScope(['/tmp/open-walnut/daemon.service', cron])).toBe('cron')
@@ -242,7 +246,8 @@ describe('DaemonConnection — managed host, daemon not answering', () => {
     const error = await (priv(conn).checkDaemonRunning() as Promise<unknown>).catch((e: unknown) => e)
     expect(error).toBeInstanceOf(DaemonServiceNotReadyError)
     expect((error as DaemonServiceNotReadyError).kind).toBe('service-not-ready')
-    expect((error as Error).message).toContain('walnut daemon restart --yes')
+    expect((error as Error).message).not.toContain('walnut daemon')
+    expect((error as Error).message).toContain('checks again when the host reconnects')
   })
 
   it('the strict path surfaces the same error (never an SSH misdiagnosis)', async () => {
@@ -643,18 +648,67 @@ describe('DaemonConnection — managed host with a live daemon', () => {
     expect(destructive(seen)).toEqual([])
   })
 
-  it('a version-skewed managed daemon is reused, never stopped, and logged loudly', async () => {
+  it('a service with no safe update scope keeps serving without an error notification or CLI advice', async () => {
     const conn = new DaemonConnection('devbox', TARGET)
     vi.spyOn(priv(conn), 'getExpectedDaemonVersion').mockReturnValue(EXPECTED_VERSION)
     const seen = stubSsh(conn, { probe: managedProbe(), status: RUNNING_STATUS, version: 'walnut-daemon-old00000' })
     const errorLog = vi.spyOn(log.session, 'error').mockImplementation(() => {})
+    const info = vi.spyOn(log.session, 'info').mockImplementation(() => {})
 
     await expect(priv(conn).checkDaemonRunning()).resolves.toBe(32100)
     expect(destructive(seen)).toEqual([])
-    expect(errorLog).toHaveBeenCalledTimes(1)
-    expect(String(errorLog.mock.calls[0][0])).toContain('walnut daemon install --yes --executable')
-    // A service Walnut SAW is a verdict, not a postponement: no clock re-asks it.
+    expect(errorLog).not.toHaveBeenCalled()
+    expect(info).toHaveBeenCalledWith(expect.stringContaining('managed daemon update not available'), expect.objectContaining({ host: 'devbox' }))
+    expect(info.mock.calls.some(([line]) => /walnut daemon/.test(String(line)))).toBe(false)
+    // No known user-level service exists to replace. A timer cannot grant a safe scope.
     expect(state(conn).upgradeRecheckTimer).toBeNull()
+  })
+
+  it.each(['unreadable config', 'missing artifact'])('a temporary managed update prerequisite (%s) retries without stopping the daemon or reporting an error', async (kind) => {
+    const conn = new DaemonConnection('devbox', TARGET)
+    vi.spyOn(priv(conn), 'getExpectedDaemonVersion').mockReturnValue(EXPECTED_VERSION)
+    const binary = vi.spyOn(priv(conn), 'hasDaemonBinary').mockResolvedValue(false)
+    vi.spyOn(priv(conn), 'getLocalBinaryPath').mockResolvedValue('/fixture/daemon')
+    const user = '$HOME/.config/systemd/user/open-walnut-daemon.service'
+    const routes = {
+      probe: probeReply(kind === 'unreadable config' ? { unknown: [user] } : { present: [user] }),
+      status: RUNNING_STATUS, version: 'old-version',
+    }
+    const seen = stubSsh(conn, routes)
+    const errorLog = vi.spyOn(log.session, 'error').mockImplementation(() => {})
+    const postpone = vi.spyOn(priv(conn), 'postponeUpgrade')
+    vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+    vi.spyOn(log.session, 'info').mockImplementation(() => {})
+    managedUpdate.mockReset()
+    for (let n = 0; n < 2; n++) await expect(priv(conn).checkDaemonRunning()).resolves.toBe(32100)
+    expect(postpone).toHaveBeenCalledTimes(2)
+    expect(postpone.mock.calls[0][0]).toContain(kind === 'unreadable config' ? 'service config could not be read' : 'daemon artifact is not available')
+    expect(errorLog).not.toHaveBeenCalled()
+    expect(managedUpdate).not.toHaveBeenCalled()
+    expect(destructive(seen)).toEqual([])
+    expect(postpone.mock.calls.every((call) => (call[3] as { delayMs: number }).delayMs === 10 * 60_000)).toBe(true)
+    expect(state(conn).upgradeRecheckTimer).not.toBeNull()
+    // The next ordinary check after recovery uses the service transaction, not an unmanaged stop.
+    routes.probe = probeReply({ present: [user] })
+    binary.mockResolvedValue(true)
+    managedUpdate.mockImplementation(async () => { routes.version = EXPECTED_VERSION })
+    await expect(priv(conn).checkDaemonRunning()).resolves.toBe(32100)
+    expect(managedUpdate).toHaveBeenCalledTimes(1)
+    expect(errorLog).not.toHaveBeenCalled()
+    expect(state(conn).upgradeRecheckTimer).toBeNull()
+    conn.disconnect()
+  })
+
+  it('a remote Mac LaunchAgent never receives a Linux artifact through the SSH update path', async () => {
+    const conn = new DaemonConnection('devmac', TARGET)
+    vi.spyOn(priv(conn), 'getExpectedDaemonVersion').mockReturnValue(EXPECTED_VERSION)
+    vi.spyOn(priv(conn), 'getLocalBinaryPath').mockResolvedValue('/fixture/daemon')
+    const routes = { probe: probeReply({ present: ['$HOME/Library/LaunchAgents/dev.openwalnut.session-daemon.plist'] }), status: RUNNING_STATUS, version: 'old-version' }
+    const seen = stubSsh(conn, routes)
+    managedUpdate.mockReset().mockImplementation(async () => { routes.version = EXPECTED_VERSION })
+    await expect(priv(conn).checkDaemonRunning()).resolves.toBe(32100)
+    expect(managedUpdate).not.toHaveBeenCalled()
+    expect(destructive(seen)).toEqual([])
   })
 
   it('a matching version logs nothing and still refuses to upgrade itself', async () => {
