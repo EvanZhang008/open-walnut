@@ -253,6 +253,11 @@ final class SessionChangesUITests: XCTestCase {
         shot(app, "c2-compare-picker")
         commit.tap()
         XCTAssertTrue(text(app, containing: "Commit 4f2c9e1").waitForExistence(timeout: 10), "the commit is not the comparison")
+        // The pick ends the search: a search left active kept its field and keyboard over
+        // the diff, on the selection bar, and Copy below never got its tap.
+        let keyboardGone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.keyboards.firstMatch)
+        XCTAssertEqual(XCTWaiter().wait(for: [keyboardGone], timeout: 5), .completed,
+                       "the picker's search stayed active after the pick")
         let table = element(app, "changes.file.\(Self.tablePath)")
         XCTAssertTrue(table.waitForExistence(timeout: 20))
         table.tap()

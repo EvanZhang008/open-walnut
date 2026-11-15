@@ -368,6 +368,8 @@ struct DiffComparePickerView: View {
     let pick: (DiffCompare) -> Void
 
     @State private var query = ""
+    /// The search is active (its field focused, the keyboard up).
+    @State private var searching = false
 
     var body: some View {
         List {
@@ -380,7 +382,7 @@ struct DiffComparePickerView: View {
                         Section("Branches") {
                             ForEach(branches, id: \.self) { ref in
                                 Button {
-                                    pick(ref.name == refs.defaultRef ? .branch(ref: nil) : .branch(ref: ref.name))
+                                    choose(ref.name == refs.defaultRef ? .branch(ref: nil) : .branch(ref: ref.name))
                                 } label: {
                                     HStack {
                                         VStack(alignment: .leading, spacing: 2) {
@@ -409,7 +411,7 @@ struct DiffComparePickerView: View {
                         Section("Commits") {
                             ForEach(commits, id: \.sha) { commit in
                                 Button {
-                                    pick(.commit(sha: commit.sha))
+                                    choose(.commit(sha: commit.sha))
                                 } label: {
                                     HStack {
                                     // Explicit colors: a button's label takes the tint otherwise.
@@ -450,10 +452,21 @@ struct DiffComparePickerView: View {
         }
         // A field under the title, as the app's other searches: left to iOS 26, a sheet
         // folds it into a round bottom-bar button with no glyph that reads as nothing.
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Branch, commit or message")
+        .searchable(text: $query, isPresented: $searching, placement: .navigationBarDrawer(displayMode: .always), prompt: "Branch, commit or message")
         .navigationTitle("Compare With")
         .navigationBarTitleDisplayMode(.inline)
         .task { if model.refs == nil { await model.loadRefs() } }
+    }
+
+    /// A pick pops this page, so the search ends first. Popped while active, its field and
+    /// keyboard stayed over the diff the pick led to and took the taps meant for that
+    /// page's selection bar (CI, from 2026-11-11: "Copy said nothing").
+    private func choose(_ option: DiffCompare) {
+        searching = false
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
+        )
+        pick(option)
     }
 
     /// The comparison on the page now (a short sha matches its full one).

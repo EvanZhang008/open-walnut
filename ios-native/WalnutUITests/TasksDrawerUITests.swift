@@ -265,9 +265,15 @@ final class TasksDrawerUITests: XCTestCase {
 
     // MARK: - Gestures inside the drawer
 
-    /// A sideways drag on the chip rail scrolls the rail; only a drag elsewhere closes
-    /// the drawer.
-    func testADragOnTheChipRailDoesNotCloseTheDrawer() throws {
+    /// A sideways drag on a chip rail that scrolls is the rail's, never a close. A rail
+    /// whose chips all fit does not scroll (`.scrollBounceBehavior(.basedOnSize)`), so the
+    /// same drag closes the drawer as a drag anywhere else does (`DrawerCloseExemption`).
+    ///
+    /// The demo's rail fits on a phone since Parked left the board (2026-11-12: All, Focus
+    /// and Satellite); a narrow phone or a larger text size can still overflow it. The
+    /// overflow case with real data runs on the Pin fixture
+    /// (`testThePinnedChipRailStaysVisibleAfterVerticalAndDiagonalDrags`).
+    func testADragOnTheChipRailIsTheRailsOnlyWhileItScrolls() throws {
         let app = launchDemo()
         _ = try openBoard(app)
         let bar = app.descendants(matching: .any)["board.bandBar"]
@@ -276,10 +282,26 @@ final class TasksDrawerUITests: XCTestCase {
         let deadline = Date().addingTimeInterval(5)
         while bar.frame.minX < 0, Date() < deadline { usleep(100_000) }
         let railFrame = bar.frame
+        // A clipped chip still reports its full frame, so the chips' extent says whether
+        // the rail has anything to scroll to.
+        let chips = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'board.chip.'"))
+        let all = app.buttons["board.chip.all"]
+        XCTAssertTrue(all.waitForExistence(timeout: 5), "no All chip on the rail")
+        let filters = app.buttons["board.filters"]
+        let railEnd = filters.exists ? filters.frame.minX : railFrame.maxX
+        let chipsEnd = chips.allElementsBoundByIndex.map(\.frame.maxX).max() ?? 0
+        let scrolls = chipsEnd > railEnd + 1
+        let allBefore = all.frame.minX
         let from = bar.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5))
         from.press(forDuration: 0.05, thenDragTo: from.withOffset(CGVector(dx: -200, dy: 0)))
-        XCTAssertTrue(board(app).waitForExistence(timeout: 2),
-                      "a drag on the chip rail closed the drawer (rail at \(railFrame))")
+        if scrolls {
+            XCTAssertTrue(board(app).waitForExistence(timeout: 2),
+                          "a drag on the scrolling chip rail closed the drawer (rail at \(railFrame), chips to \(chipsEnd))")
+            XCTAssertLessThan(all.frame.minX, allBefore - 30, "the drag did not scroll the rail")
+        } else {
+            waitGone(board(app),
+                     "a drag on a chip rail that cannot scroll left the drawer open (rail at \(railFrame), chips to \(chipsEnd))")
+        }
     }
 
     func testTheInlineChipRailStaysVisibleAcrossThePinHandoff() throws {
