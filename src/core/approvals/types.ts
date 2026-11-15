@@ -126,6 +126,8 @@ export interface ApprovalRecord {
   /** Turning approvals off (ask-me.ts requestAskMeOff): a device's signed Approve turns the switch off. */
   turnsAskMeOff?: true
   canceledReason?: string
+  /** When it was withdrawn (absent on one an older Walnut canceled). */
+  canceledAt?: string
   /**
    * The test run that asked (core/test-run.ts): such an approval is shown only to that test
    * run and never pushed, so a test or a demo on the user's own Walnut never reaches their

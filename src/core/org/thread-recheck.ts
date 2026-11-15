@@ -103,7 +103,7 @@ export async function runThreadRecheck(nowMs = Date.now()): Promise<string[]> {
     for (const node of nodes) {
       const file = await store.readThreads(node.id).catch(() => null);
       if (!file?.threads.length) continue;
-      const due = threadsDueRecheck(file.threads, nowMs, all);
+      const due = threadsDueRecheck(await store.withTaskAsks(node.id, file.threads, all), nowMs, all);
       if (!due.length) continue;
       const { getSessionsForTask } = await import('../session-tracker.js');
       const { pickDeliverySession } = await import('../routines/session-target.js');

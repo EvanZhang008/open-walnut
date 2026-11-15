@@ -18,6 +18,7 @@ import { WALNUT_HOME } from '../../constants.js'
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js'
 import { bus } from '../event-bus.js'
 import { tellAskerLater } from './tell-asker.js'
+import { fenceRefusal, fenceSkipped, fenced, readActivity, type FenceRefusal, type FenceSubject, type UserActivity } from './biometric-fence.js'
 import { log } from '../../logging/index.js'
 import { answerMessage, approvalDigest, verifySignature } from './digest.js'
 import {
@@ -165,6 +166,8 @@ export interface CreateInput {
   outsideSwitch?: boolean
 }
 
+const fenceError = (r: FenceRefusal) => new ApprovalError(409, r.code, r.message)
+
 /** Whether a viewer (its test-run label, or none for the person) sees this approval. */
 export function visibleTo(rec: Pick<ApprovalRecord, 'testRun'>, viewer: string | undefined): boolean {
   return (rec.testRun ?? undefined) === (viewer ?? undefined)
@@ -250,6 +253,10 @@ export async function createApproval(input: CreateInput): Promise<{ approval: Ap
     || !singleUseDetailMatches(detail, input.requester, signers) || !Number.isFinite(timeout) || timeout > 300_000)) {
     throw new ApprovalError(400, 'strict_approval_required', 'Single-use approvals need a task session, a signing key, detail and biometric mode, with at most five minutes to use them.')
   }
+  // One Face ID / Touch ID ask per account, only to a person who is there (biometric-fence.ts).
+  const subject: FenceSubject & { detail?: string } = { singleUse: input.singleUse, mode: input.mode, unasked: input.unasked, requester: input.requester, testRun: input.testRun, ...signers, detail }
+  const fence = fenced(subject) && !fenceSkipped()
+  const activity: UserActivity | null = fence ? await readActivity() : null
   const now = Date.now()
   const id = 'apr-' + crypto.randomBytes(9).toString('base64url')
   const createdAt = new Date(now).toISOString()
@@ -283,6 +290,8 @@ export async function createApproval(input: CreateInput): Promise<{ approval: Ap
   let settled: ApprovalRecord[] = []
   await serial(() => updateJsonFile<ApprovalsFile>(approvalsFile(), EMPTY, (file) => {
     settled = settleClock(file, now)
+    const held = fence ? fenceRefusal(file, subject, now, activity) : null
+    if (held) throw fenceError(held)
     // A looping script must not flood the phone: past the cap a new ask is refused.
     const open = file.approvals.filter((a) => a.status === 'pending' && (a.testRun ?? null) === (rec.testRun ?? null)).length
     if (!rec.unasked && open >= APPROVAL_PENDING_MAX) {
@@ -555,6 +564,7 @@ export async function cancelInternal(id: string, reason: string): Promise<Approv
     if (rec.status === 'pending') {
       rec.status = 'canceled'
       rec.canceledReason = reason.slice(0, 200)
+      rec.canceledAt = new Date().toISOString()
       out = rec
     }
     return file

@@ -285,7 +285,9 @@ export interface FoldContext {
   prev?: UserStatus | null;
   /** The asking task's own word, from its current report while its ask is that report's (same_as,
    *  ask_distinct); null otherwise. */
-  declared?: (taskId: string) => Pick<StatusReport, 'same_as' | 'ask_distinct'> | null | undefined;
+  declared?: (taskId: string) => Pick<StatusReport, 'same_as' | 'ask_distinct' | 'decision_owner'> | null | undefined;
+  /** Explicit owner reference after team and open-decision validation. */
+  decisionOwner?: RelativeAsk;
   /** When a person last wrote to that task's sessions (ISO): the evidence an answer went there. */
   personInputAt?: (taskId: string) => string | null | undefined;
   /** Whether that task still holds this ask while it is not shown (its turn runs on it, its report
@@ -366,15 +368,20 @@ export function foldSameAsk(selfId: string, derived: UserStatus, asks: readonly 
   const draftStillLocal = (ask: string): boolean => !isLocalDraftAsk(ask) || localDraftContext(derived.ask!, draftContext);
   const same = (a: RolledAsk): boolean => {
     if (!draftStillLocal(a.ask)) return false;
-    // One sign-in is one ask, however each task words it (sign-in-ask.ts).
-    if (bothSignIn(a)) return true;
     const theirs = ctx.declared?.(a.id);
+    if (theirs?.decision_owner?.taskId === selfId) return false;
+    // Hard identity cannot be waived by a model's generic "different" label.
+    if (bothSignIn(a) || (derived.decision?.id && derived.decision.id === a.decision?.id)
+      || sameAskText(derived.ask, a.ask)) return true;
     if (theirs?.ask_distinct) return false;
     return own?.same_as === a.id || theirs?.same_as === selfId || sameAskText(derived.ask, a.ask);
   };
   const pick = (): { hit: RolledAsk; team?: true } | undefined => {
-    // Its own word first; a "different" from either side is never folded (a sign-in ask always is).
-    if (own?.ask_distinct && !ownSignIn) return undefined;
+    if (ctx.decisionOwner) return { hit: ctx.decisionOwner, team: true };
+    // "Different" protects genuinely different decisions, not duplicate stable ids or exact asks.
+    const hardSame = (a: RolledAsk): boolean => bothSignIn(a)
+      || !!(derived.decision?.id && derived.decision.id === a.decision?.id) || sameAskText(derived.ask, a.ask);
+    if (own?.ask_distinct && !ownSignIn && !asks.some(hardSame) && !(ctx.relatives ?? []).some(hardSame)) return undefined;
     // Below it first: the deepest task shows it.
     const below = asks.find(same);
     if (below) return { hit: below };

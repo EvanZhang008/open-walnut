@@ -591,6 +591,8 @@ describe('every path that tells an ask changed compares the decision', () => {
       'src/core/routines/trigger-api.ts': 'a watch armed on an ask with no decision id',
       'src/core/org/team-asks.ts': 'the user\'s and peers\' messages into a team, not a task\'s ask of the user',
       'src/core/org/team-note.ts': 'the user\'s and peers\' messages into a team, not a task\'s ask of the user',
+      'src/core/org/thread-task-ask.ts': 'a legacy thread linked to a task has no shared decision id; a conservative match establishes an owner pointer, never an ask-change notification',
+      'src/core/decision-owner.ts': 'an explicit owner reference stored before decision ids uses the exact saved ask key; stable decision ids are compared first, never ask-change notifications',
     }
     const users = filesWith(WORDS)
     expect(users.filter((f) => !Object.hasOwn(ALLOWED, f)), 'a new comparison of ask words: compare the decision (ask-decision.ts taskDecision, decisionMoved) instead, or list it here with why the words are right').toEqual([])

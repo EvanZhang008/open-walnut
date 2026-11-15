@@ -29,7 +29,8 @@ import { routineRunToClose } from './routines/run-close.js';
 import { deriveUserStatus, fallbackUserState, reportIsCurrent, rollUpAsks, TURN_TO_READ, type UserStatus, type UserStatusInput } from './user-status.js';
 import { answeredAbove, answerContextOf, answerFor, answersOf, askKey, foldSameAsk, withdrawnAtOf, type RelativeAsk } from './same-ask.js';
 import { isSignInAsk, signInWaitWords, type SignInState } from './sign-in-ask.js';
-import { relativeAsksIndex } from './same-ask-tree.js';
+import { relativeAsksIndex, treeAround } from './same-ask-tree.js';
+import { resolveDecisionOwner } from './decision-owner.js';
 import { isReportPending, onReportPendingChange } from './sessions/report-pending.js';
 import type { Task } from './types.js';
 import type { ThreadCounts } from './org/thread-view.js';
@@ -154,7 +155,13 @@ function dropSlow(...kinds: SlowSource[]): void {
  *  bumps the node's generation, so a read begun before it is never cached over it. */
 const nodeThreads = new Map<string, ThreadCounts>();
 const threadsGen = new Map<string, number>();
+const threadOwners = new Map<string, Set<string>>();
 let threadsGenAll = 0;
+
+/** A derived owner status changes its linked nodes too, including this sync's own accepted writes. */
+function ownerThreadsChanged(taskId: string): void {
+  for (const [node, owners] of threadOwners) if (owners.has(taskId)) { threadsChanged(node); mark(node); }
+}
 
 function threadsChanged(taskId?: string): void {
   if (taskId) { nodeThreads.delete(taskId); threadsGen.set(taskId, (threadsGen.get(taskId) ?? 0) + 1); }
@@ -165,13 +172,20 @@ async function readNodeThreads(tasks: readonly Task[]): Promise<Map<string, Thre
   const out = new Map<string, ThreadCounts>();
   const nodes = tasks.filter((t) => (t.org_role === 'main' || t.org_role === 'lead') && t.phase !== 'COMPLETE');
   if (!nodes.length) return out;
-  const { readThreads } = await import('./org/threads-store.js');
+  const { readThreads, withTaskAsks } = await import('./org/threads-store.js');
   const { threadCounts } = await import('./org/thread-view.js');
+  // A targeted status pass may contain only the lead. Its linked owners still belong in the read.
+  let all: readonly Task[] | undefined;
   for (const t of nodes) {
     let hit = nodeThreads.get(t.id);
     if (!hit) {
       const gen = `${threadsGenAll}:${threadsGen.get(t.id) ?? 0}`;
-      const read = await safely('threads', async () => threadCounts((await readThreads(t.id)).threads), null);
+      const read = await safely('threads', async () => {
+        all ??= await (await import('./task-manager.js')).listTasks();
+        const threads = (await readThreads(t.id)).threads;
+        threadOwners.set(t.id, new Set(threads.flatMap((row) => [...(row.tasks ?? []), ...(row.askOwner ? [row.askOwner.task] : [])])));
+        return threadCounts(await withTaskAsks(t.id, threads, all));
+      }, null);
       // An unreadable file is not cached (the next pass tries again), nor a read a change overtook.
       if (read && gen === `${threadsGenAll}:${threadsGen.get(t.id) ?? 0}`) nodeThreads.set(t.id, read);
       hit = read ?? undefined;
@@ -686,7 +700,7 @@ export async function readFoldEvidence(facts: StatusFacts, targets: readonly Tas
 }
 
 /** A task's own word on sameness (FOR_USER_ASK_SAME), only while its shown ask is that report's. */
-function declaredOf(t: Task | undefined): Pick<NonNullable<Task['status_report']>, 'same_as' | 'ask_distinct'> | null {
+function declaredOf(t: Task | undefined): Pick<NonNullable<Task['status_report']>, 'same_as' | 'ask_distinct' | 'decision_owner'> | null {
   const r = t?.status_report;
   if (!t || !r || t.user_status?.source !== 'session') return null;
   return reportIsCurrent({ report: r, phaseChangedAt: t.phase_changed_at }) ? r : null;
@@ -762,9 +776,18 @@ export function statusOf(
   const children = (childrenOf.get(task.id) ?? []).filter((child) => child.router_area_id === task.router_area_id);
   const asks = task.org_role ? [] : rollUpAsks(children, task.id);
   const withAsks = asks.length ? { ...derived, asks } : derived;
-  const folded = foldSameAsk(task.id, withAsks, asks, {
-    report: reportIsCurrent(input) ? task.status_report ?? null : null,
+  // Org nodes keep their question in chat, not Needs you. It is still the same decision when
+  // an owning worker already asks it, so turn that chat question into a pointer too.
+  const forFold: UserStatus = task.org_role && derived.chatAsk && !derived.chatAskFrom
+    ? { ...withAsks, state: 'needs', source: 'session', ask: derived.chatAsk } : withAsks;
+  const nodeAsks = task.org_role && facts.tasksById
+    ? treeAround(task.id, [...facts.tasksById.values()]).flatMap(({ task: t }) => t.user_status?.state === 'needs' && t.user_status.ask && (t.user_status.source === 'session' || t.user_status.source === 'choice')
+      ? [{ id: t.id, title: t.title, ask: t.user_status.ask, ...(t.user_status.decision ? { decision: t.user_status.decision } : {}) }] : []) : asks;
+  const foldedChat = foldSameAsk(task.id, forFold, nodeAsks, {
+    report: reportIsCurrent(input) ? task.status_report?.decision_owner && !explicitDecisionOwner(task, facts)
+      ? { ...task.status_report, same_as: undefined } : task.status_report ?? null : null,
     prev: task.user_status ?? null,
+    decisionOwner: explicitDecisionOwner(task, facts),
     declared: (id) => declaredOf(facts.tasksById?.get(id)),
     personInputAt: (id) => facts.personInputAt?.get(id),
     stillAsks: (id, ask) => stillAsksOf(facts.tasksById?.get(id), ask, nowMs),
@@ -776,13 +799,26 @@ export function statusOf(
     withdrawnAt: (id, ask) => withdrawnAtOf(facts.tasksById?.get(id)?.asks_withdrawn, ask),
     signIn: (ask) => isSignInAsk(ask, facts.loginWords ?? []),
   });
-  const own = signInHeld(answeredAbove(folded, answersOf(task), nowMs, facts.personInputAt?.get(task.id)), facts);
+  const folded = task.org_role && foldedChat.sameAsk
+    ? (() => { const { chatAsk: _ask, chatAskFrom: _from, ...rest } = derived; return { ...rest, sameAsk: foldedChat.sameAsk, kind: 'task' as const, waitingOn: foldedChat.waitingOn }; })()
+    : task.org_role ? withAsks : foldedChat;
+  const owned = explicitDecisionOwner(task, facts);
+  const canonical = owned && folded.sameAsk?.id === owned.id
+    ? { ...folded, asks: (folded.asks ?? []).filter((a) => a.id !== task.id && (!derived.decision?.id || a.decision?.id !== derived.decision.id)) } : folded;
+  const own = signInHeld(answeredAbove(canonical, answersOf(task), nowMs, facts.personInputAt?.get(task.id)), facts);
   // The experiment: a leader's status follows its workers (worker-status.ts). Main and a VP keep
   // their own rule (orgNodeNeverNeeds, their Threads); a worker not derived yet reads its phase.
   if (!facts.followWorkers || task.org_role || !children.length) return { input, status: own };
   const workers = children.map((c): UserStatus => c.phase === 'COMPLETE' || c.status === 'done'
     ? { state: 'done' } : c.user_status ?? { state: fallbackUserState(c.phase, c.status) });
   return { input, status: workerStatus(own, workers, { hasLeader: !!task.parent_task_id }), own };
+}
+
+function explicitDecisionOwner(task: Task, facts: StatusFacts): RelativeAsk | undefined {
+  const ref = task.status_report?.decision_owner;
+  if (!reportIsCurrent({ report: task.status_report, phaseChangedAt: task.phase_changed_at })) return undefined;
+  if (!ref || !facts.tasksById) return undefined;
+  return resolveDecisionOwner(task, ref.taskId, [...facts.tasksById.values()], ref);
 }
 
 /** Every task's sign-in asks beside its teammates', when its own ask is one (one sign-in is one ask). */
@@ -891,6 +927,7 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
       // With the experiment on, a parent later in this pass reads the accepted child status.
       if (facts.followWorkers) task.user_status = next;
       changed += 1;
+      ownerThreadsChanged(task.id);
       // Its leader carries its questions (rollUpAsks): re-derived in the next pass, one level each.
       if (task.parent_task_id) mark(task.parent_task_id);
       // The tasks whose same ask waits on it (same-ask.ts) read its new status in the next pass.
@@ -981,6 +1018,8 @@ function onEvent(event: { name: string; data: unknown; source?: string }): void 
       // A finished or moved subtask's question leaves its leader's list (rollUpAsks); the event
       // names only the new parent, so a former one drops it at the minute sweep.
       mark(d.task?.parent_task_id);
+      // Thread ask pointers depend on linked task decisions, not only thread-file writes.
+      if (typeof d.task?.id === 'string') ownerThreadsChanged(d.task.id);
       return;
     case EventNames.CONFIG_CHANGED:
       // Every status is derived again only when the experiment was switched (worker-status.ts).
@@ -1099,5 +1138,6 @@ export function stopUserStatusSync(): void {
   all = false;
   for (const t of settleTimers.values()) clearTimeout(t);
   settleTimers.clear();
+  threadOwners.clear();
   dropSlow();
 }

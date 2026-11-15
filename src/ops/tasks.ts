@@ -772,6 +772,7 @@ const REPORT_CHANGE = z.object({
     .describe('With needs, the same decision: what is really new about it (a new fact, option or deadline), one line. Other words are not new'),
   user_kind: z.enum(USER_KINDS).optional().describe(`With needs, set by a task: required. ${USER_KIND_PARAM}`),
   user_kind_why: z.string().max(300).optional().describe(USER_KIND_WHY_PARAM),
+  same_as: z.string().max(200).optional().describe('With needs: the task in your team that owns this same decision. Keep it as a pointer, not a second Needs you ask. Its current decision must still be open.'),
   same_ask_reason: z.string().max(300).optional()
     .describe('With needs: only when a task in its tree already asks the user the same (409 same_ask) and this is really a different decision: one line saying why'),
   user_words: z.string().max(4000).optional()

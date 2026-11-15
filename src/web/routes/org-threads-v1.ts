@@ -10,13 +10,16 @@
  *                                                          `shown` is his view's rule over all of them; 503 primary_only on every replica)
  *   GET   /api/v1/tasks/:id/threads/:thread                { task_id, thread }  (one thread whole, its `shown` as above)
  *   POST  /api/v1/tasks/:id/threads                        { text, images?, thread? } -> file one of his messages
- *   PATCH /api/v1/tasks/:id/threads/:thread                { title?, ask?, state?, user_kind?, user_kind_why?, same_ask_reason?, reply?, tasks?, add_tasks?, known?, close?, user_words?, reopen?, snooze?, pin?, merge_into? }
+ *   PATCH /api/v1/tasks/:id/threads/:thread                { title?, ask?, state?, user_kind?, user_kind_why?, same_ask_reason?, ask_owner?, reply?, tasks?, add_tasks?, known?, close?, user_words?, reopen?, snooze?, pin?, merge_into? }
  *   POST  /api/v1/tasks/:id/threads/open                   { title, text, from, ref?, state?, user_kind?, user_kind_why?, same_ask_reason?, tasks? } -> the node opens one itself
  *   POST  /api/v1/tasks/:id/threads/:thread/split          { message } -> that message becomes its own thread
  *   POST  /api/v1/tasks/:id/threads/:thread/move           { to, why? } -> it goes to another node's Threads with its work
  *                                                          (core/org/thread-follow.ts): `to` a node, a task in its team, a project or a VP's name
  *   PUT   /api/v1/tasks/:id/threads/:thread/follow-ups/:messageId -> the message with that id, relayed
  *                                                          by the companion, is his Follow up in this thread
+ *
+ * Every thread read here carries `askedIn` when a task already asks him its decision (projected,
+ * never stored: core/org/thread-task-ask.ts), so `shown`, the counts and a client agree.
  *
  * The caller comes from `x-walnut-caller-sid`: none = the user. Writes answer 501 on every replica.
  * The session that wrote a summary or a first post is the caller's own, read from its session
@@ -27,7 +30,7 @@ import type { Task } from '../../core/types.js'
 import { log } from '../../logging/index.js'
 import { resolveThreadCaller, type ThreadCaller } from '../../core/org/thread-caller.js'
 import { ThreadError, THREAD_ID_RE, THREAD_MESSAGE_ID_RE, sortedThreads, type OrgThread, type ThreadPatch, type ThreadSource, type ThreadState, type ThreadWriter } from '../../core/org/threads-model.js'
-import { fileThreadMessage, mergeThread, openNodeThread, patchThread, readThreads, splitThread } from '../../core/org/threads-store.js'
+import { fileThreadMessage, mergeThread, openNodeThread, patchThread, readThreads, splitThread, withTaskAsks } from '../../core/org/threads-store.js'
 import { resolveThreadAnswers } from '../../core/org/thread-answers.js'
 import { cardView, sharedAnswers, shownToHim, threadCounts } from '../../core/org/thread-view.js'
 import { followerName, isFollower } from '../../core/server-role.js'
@@ -107,7 +110,7 @@ orgThreadsV1Router.get('/tasks/:id/threads', route(async (req, res) => {
   // phone while its header counted four (2026-11-06): it says it cannot answer instead.
   if (isFollower()) throw primaryOnly('get the threads from')
   const file = await readThreads(task.id)
-  const all = sortedThreads(file.threads)
+  const all = await withTaskAsks(task.id, sortedThreads(file.threads))
   // `shown`: his view shows it, judged over ALL the node's threads (an answer shared with a closed
   // thread counts), the rule `user_status.threads` counts by, so a client's list and its count agree.
   const shared = sharedAnswers(all)
@@ -173,7 +176,7 @@ orgThreadsV1Router.get('/tasks/:id/threads/:thread', route(async (req, res) => {
   const task = await nodeTask(req)
   if (isFollower()) throw primaryOnly('get the threads from')
   const id = threadIdOf(req)
-  const all = (await readThreads(task.id)).threads
+  const all = await withTaskAsks(task.id, (await readThreads(task.id)).threads)
   const thread = all.find((t) => t.id === id)
   if (!thread) throw new RouteError(404, 'no_thread', `No thread ${id} on this node.`)
   const shared = sharedAnswers(all)
@@ -229,8 +232,13 @@ orgThreadsV1Router.post('/tasks/:id/threads/open', route(async (req, res) => {
     ...(str(b, 'same_ask_reason') ? { same_ask_reason: str(b, 'same_ask_reason') } : {}),
   }, by, source)
   log.task.info('org thread opened by the node', { taskId: task.id, threadId: thread.id, by, from: thread.opener?.from })
-  res.status(201).json({ task_id: task.id, thread })
+  res.status(201).json({ task_id: task.id, thread: await projected(task.id, thread) })
 }))
+
+/** One thread just written, as the reads return it (with `askedIn`), so a client's copy stays the same. */
+async function projected(taskId: string, thread: OrgThread): Promise<OrgThread> {
+  return (await withTaskAsks(taskId, [thread]))[0] ?? thread
+}
 
 orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) => {
   const task = await nodeTask(req)
@@ -239,7 +247,7 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
   const { by, source } = await callerOf(req)
   const mergeInto = str(b, 'merge_into')
   const patch: ThreadPatch = {}
-  for (const k of ['title', 'ask', 'reply', 'state', 'close', 'known', 'snooze', 'user_kind', 'user_kind_why', 'same_ask_reason', 'user_words'] as const) {
+  for (const k of ['title', 'ask', 'reply', 'state', 'close', 'known', 'snooze', 'user_kind', 'user_kind_why', 'same_ask_reason', 'ask_owner', 'user_words'] as const) {
     const v = str(b, k)
     if (v !== undefined) (patch as Record<string, unknown>)[k] = v
   }
@@ -260,9 +268,9 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
     if (!THREAD_ID_RE.test(mergeInto)) throw new RouteError(400, 'bad_request', `Not a thread id: ${mergeInto}`)
     thread = await mergeThread(task.id, id, mergeInto, by)
   }
-  if (!thread) throw new RouteError(400, 'bad_request', 'Nothing to change: pass title, ask, state, reply, tasks, add_tasks, known, close, reopen, snooze, pin or merge_into.')
+  if (!thread) throw new RouteError(400, 'bad_request', 'Nothing to change: pass title, ask, ask_owner, state, reply, tasks, add_tasks, known, close, reopen, snooze, pin or merge_into.')
   log.task.info('org thread updated', { taskId: task.id, threadId: id, by, fields: Object.keys(patch), mergeInto })
-  res.json({ task_id: task.id, thread, ...(mergeInto ? { merged: id } : {}) })
+  res.json({ task_id: task.id, thread: await projected(task.id, thread), ...(mergeInto ? { merged: id } : {}) })
 }))
 
 orgThreadsV1Router.post('/tasks/:id/threads/:thread/split', route(async (req, res) => {

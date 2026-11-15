@@ -269,6 +269,23 @@ export interface OrgThread {
   movedTo?: ThreadMove;
   /** It came from this node with its work: his messages and that node's answers came with it. */
   movedFrom?: ThreadMove;
+  /** The node said this thread's ask is the decision a task of its team already asks (thread-task-ask.ts). */
+  askOwner?: ThreadAskOwner;
+}
+
+/**
+ * The task whose Needs you asks the decision a thread waits on him for (patch `ask_owner`,
+ * threads-store.ts): the thread reads as a pointer to that ask, not a second ask, while that task
+ * still asks it (thread-task-ask.ts threadAskedIn). `decision`/`ask`: that task's decision id and
+ * words when it was named, so a different decision there later restores the thread's own ask.
+ * An older build keeps it unread (normalizeThread spreads unknown fields).
+ */
+export interface ThreadAskOwner {
+  task: string;
+  decision?: string;
+  ask?: string;
+  at: string;
+  by: ThreadWriter;
 }
 
 export interface ThreadRecheck {
@@ -408,6 +425,7 @@ function normalizeThread(t: unknown): OrgThread | null {
   if (next.reactedAt !== undefined && !(isStr(next.reactedAt) && Number.isFinite(Date.parse(next.reactedAt)))) delete next.reactedAt;
   if (!validMove(next.movedTo)) delete next.movedTo;
   if (!validMove(next.movedFrom)) delete next.movedFrom;
+  if (next.askOwner && !(typeof next.askOwner === 'object' && isStr(next.askOwner.task) && next.askOwner.task && isStr(next.askOwner.at))) delete next.askOwner;
   return next;
 }
 
@@ -666,6 +684,8 @@ export interface ThreadPatch {
   same_ask_reason?: string;
   /** With close from a node: his own words asking for it (closeAskOf). Never stored. */
   user_words?: string;
+  /** The task that already asks the user this thread's decision ("" clears it): stored as `askOwner` by threads-store.ts, never by updateThread. */
+  ask_owner?: string;
 }
 
 /**
