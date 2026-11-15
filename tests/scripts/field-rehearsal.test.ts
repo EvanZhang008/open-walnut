@@ -16,7 +16,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { fieldDistBin, fieldVersions, packVersion, readFieldJson, writeFieldJson } from '../../scripts/release-rehearsal/field-packs.mjs'
-import { FIELD_SCENARIOS, REHEARSAL_ROUTER, ROUTER_AREAS, ROUTER_STORE_VERSION, TASK_STORE, judgeDaemon, judgeRouterRefusal, judgeRouterServedBack, nodeForm, pruneToLogs, releaseArchive, startFrom, startPointsOf } from '../../scripts/release-rehearsal/field.mjs'
+import { FIELD_SCENARIOS, REHEARSAL_ROUTER, ROUTER_AREAS, ROUTER_STORE_VERSION, TASK_STORE, judgeDaemon, judgeRouterRefusal, judgeRouterServedBack, nodeForm, pruneToLogs, releaseArchive, shareOf, startFrom, startPointsOf } from '../../scripts/release-rehearsal/field.mjs'
 import { TASK_DB_MAX_SUPPORTED_VERSION, TASK_DB_ROUTER_VERSION, TASK_DB_SCHEMA_VERSION } from '../../src/core/task-db-version.js'
 import { normalizeRouterAreas, routerAreasPath } from '../../src/core/router/areas.js'
 import { routerTaskDbPath } from '../../src/core/router/data-version.js'
@@ -43,6 +43,24 @@ describe('fieldVersions', () => {
     expect(compareVersions(fieldVersions(['0.6.18', '0.6.18']).release, '0.6.18')).toBeGreaterThan(0)
     expect(fieldVersions([null, '0.6.14']).release).toBe('0.6.15-rehearsal.1')
     expect(() => fieldVersions([null])).toThrow('no version to go above')
+  })
+})
+
+describe('shareOf', () => {
+  const points = ['0.6.32', '0.6.33-nightly.20261115.1248', '0.6.19']
+  it('the legs of a split take every start point exactly once, in order', () => {
+    for (const legs of [1, 2, 3, 4]) {
+      const all = Array.from({ length: legs }, (_, k) => shareOf(points, `${k + 1}/${legs}`)).flat()
+      expect(all.sort()).toEqual([...points].sort())
+    }
+    expect(shareOf(points, '2/3')).toEqual(['0.6.33-nightly.20261115.1248'])
+    expect(shareOf(points, '3/4')).toEqual(['0.6.19'])
+    expect(shareOf(points, '4/4')).toEqual([])
+  })
+
+  it('no share is every point, and a malformed one is refused', () => {
+    expect(shareOf(points)).toEqual(points)
+    for (const bad of ['0/3', '4/3', '1', 'a/b', '1/0']) expect(() => shareOf(points, bad), bad).toThrow('--field-share')
   })
 })
 

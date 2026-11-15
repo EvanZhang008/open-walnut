@@ -581,14 +581,20 @@ jobs:
   # its own npm into its prefix. Then the release's own updater takes the
   # version after it (scripts/release-rehearsal/field.mjs).
   field:
-    name: Release rehearsal, field update (${{ matrix.os }})
+    name: Release rehearsal, field update (${{ matrix.os }}, ${{ matrix.leg }} of ${{ matrix.legs }})
     runs-on: ${{ matrix.os }}
     needs: build
     timeout-minutes: 90
     strategy:
       fail-fast: false
+      # Linux splits the start points into legs (run.mjs --field-share): three of them in one job
+      # ran 87 of its 90 minutes on 2026-11-15. macOS ran them all in 32.
       matrix:
-        os: [ubuntu-24.04, macos-26]
+        include:
+          - { os: ubuntu-24.04, leg: 1, legs: 3 }
+          - { os: ubuntu-24.04, leg: 2, legs: 3 }
+          - { os: ubuntu-24.04, leg: 3, legs: 3 }
+          - { os: macos-26, leg: 1, legs: 1 }
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -611,12 +617,12 @@ jobs:
       # What the user runs; the updater inside the installed package calls it too.
       - run: npm install -g npm@12
       - name: Update the releases on npm today to it, fresh and in use, as a user's machine would
-        run: bun scripts/release-rehearsal/run.mjs --field latest --field-packs "$RUNNER_TEMP/field/field.json" --work "$RUNNER_TEMP/field-run" --keep
+        run: bun scripts/release-rehearsal/run.mjs --field latest --field-packs "$RUNNER_TEMP/field/field.json" --work "$RUNNER_TEMP/field-run" --keep --field-share ${{ matrix.leg }}/${{ matrix.legs }}
       - name: Upload field logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: field-logs-${{ matrix.os }}
+          name: field-logs-${{ matrix.os }}-${{ matrix.leg }}
           path: |
             ${{ runner.temp }}/field-run/*/*.txt
             ${{ runner.temp }}/field-run/*/daemon/*.log

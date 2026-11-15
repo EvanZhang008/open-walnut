@@ -21,7 +21,7 @@ const VETTED: Record<string, string> = {
   'onboarding-start-log-${{ matrix.os }}': 'the fresh-machine server log',
   'remote-host-logs': 'the remote host leg\'s daemon and server logs',
   'rehearsal-logs-${{ matrix.os }}': 'the release rehearsal logs',
-  'field-logs-${{ matrix.os }}': 'the field update logs',
+  'field-logs-${{ matrix.os }}-${{ matrix.leg }}': 'the field update logs of one leg',
   'live-logs-${{ matrix.os }}': 'the live update logs (isolated homes, a mock claude, test tasks only)',
   'archive-logs-${{ matrix.target }}': 'the archive build logs',
   'browser-report-${{ matrix.shard }}': 'the Playwright JSON report the browser baseline reads',

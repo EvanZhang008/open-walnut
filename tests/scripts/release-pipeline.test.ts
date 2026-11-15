@@ -894,7 +894,14 @@ describe('ci.yml', () => {
 
   it('the field rehearsal updates npm\'s versions to this commit as a release publishes it, above them, on Linux and macOS', () => {
     const job = doc.jobs.field!
-    expect(job.strategy!.matrix.os).toEqual(['ubuntu-24.04', 'macos-26'])
+    // Each system's legs take every share of the start points once (run.mjs --field-share).
+    const legs = (job.strategy!.matrix as unknown as { include: Array<{ os: string; leg: number; legs: number }> }).include
+    expect([...new Set(legs.map((l) => l.os))]).toEqual(['ubuntu-24.04', 'macos-26'])
+    for (const os of ['ubuntu-24.04', 'macos-26']) {
+      const mine = legs.filter((l) => l.os === os)
+      expect(new Set(mine.map((l) => l.legs)).size, os).toBe(1)
+      expect(mine.map((l) => l.leg).sort(), os).toEqual(Array.from({ length: mine[0]!.legs }, (_, k) => k + 1))
+    }
     const steps = job.steps.map((s) => s.run ?? '')
     // The launcher and platform packages of this commit, compiled at versions above npm's latest and nightly.
     const build = steps.findIndex((r) => r.includes('scripts/release-rehearsal/field-packs.mjs build'))
@@ -907,6 +914,7 @@ describe('ci.yml', () => {
     expect(steps[rehearse]).toContain('--field-packs "$RUNNER_TEMP/field/field.json"')
     // Every scenario, every start point: nothing narrows it in CI.
     expect(steps[rehearse]).not.toMatch(/--field-only|--field-from/)
+    expect(steps[rehearse]).toContain('--field-share ${{ matrix.leg }}/${{ matrix.legs }}')
     expect(steps[build]).not.toContain('--version')
     expect(job.steps.some((s) => s['continue-on-error'])).toBe(false)
     expect(job.needs).toBe('build')

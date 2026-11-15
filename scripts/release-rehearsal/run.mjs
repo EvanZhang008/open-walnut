@@ -55,7 +55,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { readPackedManifest, startRegistry } from './registry.mjs'
 import { rehearseBinary } from './binary.mjs'
-import { FIELD_SCENARIOS, rehearseField } from './field.mjs'
+import { FIELD_SCENARIOS, rehearseField, shareOf } from './field.mjs'
 import { failureLogs } from './failure-logs.mjs'
 import { readFieldJson } from './field-packs.mjs'
 import { rehearseRuntime } from './runtime.mjs'
@@ -65,7 +65,7 @@ import { compareVersions } from './version-order.mjs'
 import { allowedScripts } from '../stable-promote.mjs'
 
 function parseArgs(argv) {
-  const out = { current: null, older: null, field: null, fieldPacks: null, fieldFrom: null, fieldOnly: null, work: null, keep: false, runtime: false, runtimePacks: null, archive: null, binary: null, live: null, liveVideo: null }
+  const out = { current: null, older: null, field: null, fieldPacks: null, fieldFrom: null, fieldOnly: null, fieldShare: null, work: null, keep: false, runtime: false, runtimePacks: null, archive: null, binary: null, live: null, liveVideo: null }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--packs') {
@@ -78,6 +78,7 @@ function parseArgs(argv) {
     else if (a === '--field-packs') out.fieldPacks = path.resolve(argv[++i])
     else if (a === '--field-from') out.fieldFrom = argv[++i].split(',').filter(Boolean)
     else if (a === '--field-only') out.fieldOnly = argv[++i].split(',').filter(Boolean)
+    else if (a === '--field-share') out.fieldShare = argv[++i]
     else if (a === '--work') out.work = path.resolve(argv[++i])
     else if (a === '--keep') out.keep = true
     else if (a === '--runtime') out.runtime = true
@@ -95,6 +96,9 @@ function parseArgs(argv) {
   // The field update goes to the release as it is published now; a Node package of this commit is not that.
   if (out.field && !out.fieldPacks) throw new Error('--field latest updates to the launcher and platform packages field-packs.mjs builds: pass --field-packs <field.json>')
   if (out.fieldPacks && out.field !== 'latest') throw new Error('--field-packs needs --field latest')
+  if (out.fieldShare && !out.fieldPacks) throw new Error('--field-share splits a field run: it needs --field latest --field-packs <field.json>')
+  if (out.fieldShare && out.fieldFrom) throw new Error('--field-share splits the start points npm names; --field-from names them by hand')
+  if (out.fieldShare) shareOf([], out.fieldShare)
   for (const k of out.fieldOnly ?? []) if (!FIELD_SCENARIOS.includes(k)) throw new Error(`--field-only takes ${FIELD_SCENARIOS.join(', ')}, not ${k}`)
   return out
 }
@@ -251,6 +255,7 @@ async function main() {
   const fieldOpts = {
     ...(opts.fieldFrom ? { points: opts.fieldFrom } : {}),
     ...(opts.fieldOnly ? { only: opts.fieldOnly } : {}),
+    ...(opts.fieldShare ? { share: opts.fieldShare } : {}),
   }
   if (!opts.current) {
     process.stdout.write(`rehearsing the field update to ${opts.fieldPacks} in ${work}\n`)

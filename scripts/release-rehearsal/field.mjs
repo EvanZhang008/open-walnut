@@ -142,6 +142,20 @@ export function startFrom(release, found, given = null) {
   return { points: kept, later }
 }
 
+/**
+ * The start points of leg `i` of `n` (`--field-share i/n`): every n-th point from the i-th, so the
+ * legs of a CI matrix together update from every point once. 2026-11-15: three start points
+ * (latest, a nightly with its own code, the newest Node form) ran 87 minutes in one Linux job and
+ * hit its 90 minute limit after the last scenario passed.
+ */
+export function shareOf(points, share = null) {
+  if (!share) return points
+  const m = /^([1-9]\d*)\/([1-9]\d*)$/.exec(share)
+  if (!m || Number(m[1]) > Number(m[2])) throw new Error(`--field-share takes <leg>/<legs> with 1 <= leg <= legs, not ${share}`)
+  const [leg, legs] = [Number(m[1]), Number(m[2])]
+  return points.filter((_, k) => k % legs === leg - 1)
+}
+
 export async function fetchStartPoints({ upstream = UPSTREAM, fetchImpl = fetch, waits } = {}) {
   const res = await outsideFetch(`${upstream}/${PACKAGE}`, { headers: { accept: 'application/vnd.npm.install-v1+json' } }, { timeoutMs: 60_000, fetchImpl, waits })
   if (!res.ok) throw new Error(`the registry answered HTTP ${res.status} for ${PACKAGE}`)
@@ -869,7 +883,7 @@ export function pruneToLogs(dir) {
  * Run the field scenarios. `fieldJson` is field-packs.mjs's field.json; `opts`:
  * `upstream` (the real registry), `releases` (where GitHub Releases' assets
  * are), `points` (start versions instead of the registry's), `only` (scenario
- * names). Returns how many were expected.
+ * names), `share` (this leg's share of the start points, shareOf). Returns how many were expected.
  */
 export async function rehearseField({ work, fieldJson, scenario, walnuts, opts = {} }) {
   const o = { upstream: UPSTREAM, releases: RELEASE_DOWNLOADS, only: null, ...opts }
@@ -879,9 +893,10 @@ export async function rehearseField({ work, fieldJson, scenario, walnuts, opts =
     const found = await fetchStartPoints({ upstream: o.upstream })
     // Set only once the check passed: a failed field-start runs no scenario.
     const start = startFrom(field.release.version, found, o.points)
-    points = start.points
+    points = shareOf(start.points, o.share)
     const later = start.later.length ? `; not from ${start.later.join(', ')}, published after ${field.release.version} was picked` : ''
-    return `from ${points.join(', ')} (npm latest ${found.latest}, nightly ${found.nightly}, newest Node form ${found.lastNode}) to ${field.release.version}${field.next ? `, then ${field.next.version}` : ''}${later}`
+    const share = o.share ? `leg ${o.share} of ${start.points.join(', ')}: ` : ''
+    return `${share}from ${points.join(', ') || 'none (the other legs take every start point)'} (npm latest ${found.latest}, nightly ${found.nightly}, newest Node form ${found.lastNode}) to ${field.release.version}${field.next ? `, then ${field.next.version}` : ''}${later}`
   })
   if (!points) return 1
   const kinds = {
