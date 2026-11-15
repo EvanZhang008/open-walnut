@@ -51,6 +51,11 @@ export interface HostProfile {
    * record that the host connected before, in any earlier run of the server.
    */
   connectedAt?: string;
+  /**
+   * Other aliases a daemon confirmed reach the same daemon as this one, each with what both
+   * rows connected to then (same-daemon-record.ts). One trigger set is pushed for all of them.
+   */
+  sameDaemon?: Record<string, { self: string; other: string; at: string }>;
   updatedAt: string;
 }
 

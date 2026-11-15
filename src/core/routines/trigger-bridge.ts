@@ -16,10 +16,13 @@ import type { TriggerEvent } from '../../providers/trigger-check-core.js';
  * push). `clock`: whether that daemon said it holds clock routines
  * (clock-routine-v1); `fresh`: the first push on this connection; `hostStart`: the
  * daemon can start a claude-code routine's run itself and holds this Mac's routine
- * spawn template (clock-host-start-v1). The result's `applied` / `rejected` take the
- * daemon's answer.
+ * spawn template (clock-host-start-v1); `sameDaemon`: every host alias that reaches this
+ * same daemon process, `host` included (the daemon holds one set for all of them). The
+ * result's `applied` / `rejected` take the daemon's answer.
  */
-export type TriggerPayloadProvider = (host: string, opts?: { clock?: 'yes' | 'no' | 'unknown'; fresh?: boolean; hostStart?: boolean }) => Promise<{
+export type TriggerPayloadProvider = (host: string, opts?: {
+  clock?: 'yes' | 'no' | 'unknown'; fresh?: boolean; hostStart?: boolean; sameDaemon?: readonly string[];
+}) => Promise<{
   payload: { version: 1; triggers: unknown[] };
   hash: string;
   applied?: (reply: Record<string, unknown>) => Promise<void>;

@@ -15,9 +15,9 @@
  *     words are right there, and every writer of a task's report stamps the decision. A new path, a
  *     new comparison of words, or a new writer fails here until it compares the decision.
  */
-import { describe, it, expect, beforeEach } from 'vitest'
-import fs from 'node:fs'
+import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
 import path from 'node:path'
+import { loadSources, type SourceSet } from '../helpers/source-files.js'
 import type { Task } from '../../src/core/types.js'
 import { deriveUserStatus, type StatusReport } from '../../src/core/user-status.js'
 import { readStatusReport } from '../../src/core/session-hooks/builtins.js'
@@ -528,18 +528,12 @@ describe('what keeps the decision quiet survives', () => {
 
 // \u2500\u2500 The paths, from the source \u2500\u2500
 
-function srcFiles(dir: string): string[] {
-  const out: string[] = []
-  for (const e of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
-    const rel = `${dir}/${e.name}`
-    if (e.isDirectory()) out.push(...srcFiles(rel))
-    else if (/\.(ts|tsx)$/.test(e.name)) out.push(rel)
-  }
-  return out
-}
-const FILES = [...srcFiles('src'), ...srcFiles('web/src')]
-const code = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
-const filesWith = (re: RegExp) => FILES.filter((f) => re.test(code(f))).sort()
+// Read once, in parallel, before any guard asks (helpers/source-files.ts): five scans of
+// about 4,500 files, each read anew, ran out the 15 s on a loaded machine.
+let sources: SourceSet | undefined
+beforeAll(async () => { sources = await loadSources(ROOT, ['src', 'web/src']) })
+const code = (rel: string) => sources!.code(rel)
+const filesWith = (re: RegExp) => sources!.filesWith(re)
 
 describe('every path that tells an ask changed compares the decision', () => {
   it('each caller of a "moved" primitive is listed with the decision check it runs', () => {

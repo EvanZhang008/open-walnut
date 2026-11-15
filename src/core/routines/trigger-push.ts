@@ -1,8 +1,8 @@
 /**
- * Compiling the armed trigger set for ONE host (`triggers.configure`).
+ * Compiling the armed trigger set for ONE daemon (`triggers.configure`).
  *
- * The daemon on a host holds the authoritative set for that host and nothing
- * else: it persists it, arms its own timers from it, and keeps polling while the
+ * A daemon holds one authoritative set per Walnut, including every alias that
+ * reaches it: it persists it, arms its own timers from it, and keeps polling while the
  * server restarts. So this is a full replacement, not a delta, and it is
  * recomputed from the cron store every time.
  *
@@ -21,6 +21,7 @@ import { DELIVER_PROMPT_MAX, FIRE_BUDGET_UNLIMITED, clampTimeoutSeconds } from '
 import type { TriggerDef, TriggerDeliverSpec, TriggersConfigurePayload } from '../../providers/trigger-check-core.js';
 import { cloudModeSkipsJob } from '../cron/jobs.js';
 import type { CronJob } from '../cron/types.js';
+import type { HostClocks } from './clock-placement.js';
 
 /** The routine's own instruction text, whichever executor holds it. */
 export function promptOf(job: CronJob): string {
@@ -90,14 +91,27 @@ export function wireFireCap(stored: number): number {
   return cap > 0 ? cap : FIRE_BUDGET_UNLIMITED;
 }
 
-export function compileTriggerDefs(jobs: CronJob[], host: string, clockDefs: TriggerDef[] = []): CompiledTriggers {
-  const triggers = jobs
-    .map((job) => triggerDefOf(job, host))
+/**
+ * The set for one daemon: the checks of every host alias in `hosts` (one alias, or all
+ * the aliases that reach the same daemon, which keeps one set for all of them), and the
+ * clock defs placed there. One def per id, the first kept.
+ */
+export function compileTriggerDefs(jobs: CronJob[], hosts: string | readonly string[], clockDefs: TriggerDef[] = []): CompiledTriggers {
+  const aliases = typeof hosts === 'string' ? [hosts] : hosts;
+  const seen = new Set<string>();
+  const triggers = aliases
+    .flatMap((host) => jobs.map((job) => triggerDefOf(job, host)))
     .filter((def): def is TriggerDef => def !== null)
     .concat(clockDefs)
+    .filter((def) => !seen.has(def.id) && !!seen.add(def.id))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const hash = createHash('sha256').update(JSON.stringify(triggers)).digest('hex').slice(0, 16);
   return { payload: { version: 1, triggers }, hash };
+}
+
+/** `host` first, then the other aliases of its daemon, each once. */
+function aliasesOf(host: string, sameDaemon: readonly string[] | undefined): string[] {
+  return [host, ...(sameDaemon ?? []).filter((h) => h !== host)].filter((h, i, all) => all.indexOf(h) === i);
 }
 
 /**
@@ -105,14 +119,19 @@ export function compileTriggerDefs(jobs: CronJob[], host: string, clockDefs: Tri
  *
  * null is load-bearing: an empty set would DISARM every trigger on that host,
  * and a connect that lands while the server is still booting must not do that.
+ *
+ * `sameDaemon`: the aliases that reach this same daemon process (daemon-connection.ts
+ * sameDaemonHosts). The daemon keeps one set per Walnut, so the set is all of theirs:
+ * pushed under one alias alone, it would disarm the others' (2026-11-15).
  */
 export async function compileTriggersForHost(
   host: string,
-  opts: { clock?: 'yes' | 'no' | 'unknown'; fresh?: boolean; hostStart?: boolean } = {},
+  opts: { clock?: 'yes' | 'no' | 'unknown'; fresh?: boolean; hostStart?: boolean; sameDaemon?: readonly string[] } = {},
 ): Promise<CompiledTriggers | null> {
   const { getCronService } = await import('../../web/routes/cron.js');
   const service = getCronService();
   if (!service) return null;
+  const aliases = aliasesOf(host, opts.sameDaemon);
   // As stored: a recompute here would move a slot that is due right now past the
   // timer about to run it (or past the daemon about to be handed it).
   const jobs = await service.list({ includeDisabled: true, recompute: false });
@@ -120,9 +139,31 @@ export async function compileTriggersForHost(
   // writes the handover under the cron lock BEFORE this set goes out.
   // Only the Mac hands clocks out; any other server pushes its checks alone.
   const { isFollower } = await import('../server-role.js');
-  if (isFollower()) return compileTriggerDefs(jobs, host);
+  if (isFollower()) return compileTriggerDefs(jobs, aliases);
   const { placeClocksForHost, noteWatchedTasks } = await import('./clock-placement.js');
   noteWatchedTasks(jobs);
-  const clocks = await placeClocksForHost(service, host, jobs, opts.clock ?? 'unknown', undefined, { fresh: opts.fresh === true, hostStart: opts.hostStart === true });
-  return { ...compileTriggerDefs(jobs, host, clocks.defs), applied: clocks.applied, rejected: clocks.rejected };
+  // Each alias's clocks are placed as its own (a clock's holder is the alias), one after
+  // another: each placement reads the store after the one before handed its clocks over.
+  const placed: HostClocks[] = [];
+  for (const alias of aliases) {
+    const seen = alias === host ? jobs : await service.list({ includeDisabled: true, recompute: false });
+    // A refusal is forgotten only for the alias whose link is new; the daemon of the others did not change.
+    placed.push(await placeClocksForHost(service, alias, seen, opts.clock ?? 'unknown', undefined, {
+      fresh: opts.fresh === true && alias === host, hostStart: opts.hostStart === true,
+    }));
+  }
+  if (placed.length === 1) {
+    return { ...compileTriggerDefs(jobs, aliases, placed[0].defs), applied: placed[0].applied, rejected: placed[0].rejected };
+  }
+  // One reply for the whole set: each alias settles the clocks it holds (settleClocks reads only those).
+  const each = async (run: (p: HostClocks) => Promise<void>): Promise<void> => {
+    const errors: unknown[] = [];
+    for (const p of placed) await run(p).catch((err: unknown) => { errors.push(err); });
+    if (errors.length) throw errors[0];
+  };
+  return {
+    ...compileTriggerDefs(jobs, aliases, placed.flatMap((p) => p.defs)),
+    applied: (reply) => each((p) => p.applied(reply)),
+    rejected: () => each((p) => p.rejected()),
+  };
 }

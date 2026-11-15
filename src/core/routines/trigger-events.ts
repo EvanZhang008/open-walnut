@@ -203,7 +203,7 @@ async function recordHostDelivery(host: string, group: TriggerFiredEvent[]): Pro
       delivered: { sessionId: h.sessionId, text },
       deliveredAtMs: h.atMs,
     };
-  }, { fromHost: host });
+  }, { fromHost: await clockOwnerAlias(host, head) });
   log.cron.info('trigger fire recorded: delivered on host', {
     host, jobId: head.id, epoch: head.epoch, seqs, sessionId: h.sessionId, messageId: h.messageId,
     ...(h.started ? { started: true, taskId: h.taskId } : {}),
@@ -287,6 +287,28 @@ async function wakeParkedTarget(job: CronJob, h: HostDelivery): Promise<void> {
   }
 }
 
+/**
+ * The alias a clock fire's run is judged under (clock-fire.ts clockTenureOf): the link it came in
+ * on, or the alias holding that clock when it is another alias of the same daemon (daemon-connection.ts
+ * sameDaemonHosts). That daemon holds one set for all its aliases and sends each fire to every
+ * link, so a clock held under `<name>-net` may arrive on the SSH link. Never a host of another daemon.
+ */
+async function clockOwnerAlias(host: string, head: TriggerFiredEvent): Promise<string> {
+  if (!head.clock) return host;
+  const service = await resolveService();
+  const job = service ? (await service.list({ includeDisabled: true, recompute: false }).catch(() => [])).find((j) => j.id === head.id) : undefined;
+  const mark = head.clock.fromMs;
+  const owners = [
+    mark === job?.state?.clockFromMs ? job?.state?.clockHost : undefined,
+    mark === job?.state?.clockReturned?.fromMs ? job?.state?.clockReturned?.host : undefined,
+  ].filter((h): h is string => !!h);
+  if (owners.includes(host)) return host;
+  if (owners.length === 0) return host;
+  const { sameDaemonHosts } = await import('../../providers/daemon-connection.js');
+  const same = await sameDaemonHosts(host).catch(() => [host]);
+  return owners.find((h) => same.includes(h)) ?? host;
+}
+
 async function deliverFires(host: string, batch: TriggerFiredEvent[]): Promise<void> {
   const head = batch[0];
   if (!head) return;
@@ -325,7 +347,7 @@ async function deliverFires(host: string, batch: TriggerFiredEvent[]): Promise<v
     }
     const { runExecutor } = await import('./registry.js');
     return await runExecutor(job, job.executor, message);
-  }, { fromHost: host });
+  }, { fromHost: await clockOwnerAlias(host, head) });
   // A clock run left for the daemon's replay is never acked (clock-fire.ts `held`).
   const held = new Set(applied.heldSeqs ?? []);
 

@@ -100,6 +100,36 @@ The trigger id rides `triggerId`, never `id`: a daemon frame is `{id, cmd, ...pa
 
 Daemon state lives in its own directory (`triggers.json` for the set, `trigger-state/<id>.json` for `seen`, `state`, `fires today`, `pendingFires`, `consecutiveErrors`). Loaded at boot so checks keep running while the server is down; the next `triggers.configure` replaces the set. The per-trigger files must outlive a reboot, which the production runtime dir (`/tmp/open-walnut`) does not: the production daemon keeps them in `~/.open-walnut/tmp/trigger-state/`, a service daemon in its state dir, an isolated daemon dir inside itself. A file still in the old dir is moved the first time its trigger is armed. (2026-10-06: a reboot emptied `/tmp`, and a watch re-reported every item it had already reported and restarted the week its script was counting.) Capability `triggers-v1`; an older daemon makes `trigger_create` for that host answer 400 with "upgrade the daemon on <host> (it auto-deploys on the next send)".
 
+### Several host aliases, one daemon
+
+The daemon keeps ONE set per Walnut, whichever socket pushed it, so two host aliases that reach
+the same daemon (an SSH row and the `-net` row of one machine) must push the same set: one alias's
+own set would disarm the other's (2026-11-15: the net row's empty push replaced the SSH row's 78
+triggers). `sameDaemonHosts` (daemon-connection.ts) names the aliases of one daemon from the
+daemon's own word only, the instance id each live link's successful hello gave. Such a pair is
+recorded in both host profiles (`sameDaemon`, core/hosts/same-daemon-record.ts) only when each
+link's target at that hello still matches its current row. Each edge records what that dial reaches (its
+network key, or the user, host and port `ssh -G` resolves for it with ~/.ssh/config applied; a
+name ssh cannot resolve is never recorded), so a daemon restart or a server that just started
+keeps the pair while only one of its links is up, in either order. A row that now connects
+anywhere else voids the record; two aliases up on different daemon processes refuse it and drop
+it. Valid edges are followed transitively, so three aliases seen in overlapping pairs also return
+as one set. Hello carries no stable machine id, so nothing is joined from a hostname or an address.
+
+Every push under any of them is the set of all of them (`compileTriggersForHost` `sameDaemon`:
+every alias's checks, and each alias's clocks placed and settled under its own alias from the one
+reply). Pushes to one daemon process run one at a time and compile once their turn comes, so a
+set compiled before a sibling's push landed never replaces it; a link that comes up makes each
+sibling ask the daemon again (a probe) instead of trusting the hash it sent last; a change of an
+alias whose link is down goes through a sibling. One link of the daemon (the first of its
+aliases with a link up) speaks for its routine template and whether it starts runs, so every
+alias's push compiles the same starts, each start still naming its own alias. The daemon sends
+each fire to every link, so a clock fire is judged under the alias holding that clock when that
+alias is one of the same daemon (trigger-events.ts clockOwnerAlias), never under another daemon's.
+
+Not covered: two aliases never up on one daemon process together since their rows last changed.
+Until they are, nothing says they are one daemon, and the first to push sends its own set.
+
 ### Reconnect also restores quiet check status
 
 A disconnected server cannot tell that a quiet host kept checking. The daemon keeps its latest

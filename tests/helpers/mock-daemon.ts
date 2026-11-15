@@ -174,8 +174,11 @@ export class MockDaemon {
   /** Connection-order index per live socket (never reused). */
   private _connIndices = new WeakMap<WebSocket, number>()
   private _connSeq = 0
-  /** Stable instance id reported by `hello` (daemon-identity checks). */
-  readonly instanceId = `mock-${crypto.randomBytes(4).toString('hex')}`
+  /** Stable instance id reported by `hello` (daemon-identity checks); newProcess() mints another. */
+  private _instanceId = `mock-${crypto.randomBytes(4).toString('hex')}`
+  get instanceId(): string { return this._instanceId }
+  /** The next `hello`, on every socket, answers as a new daemon process would (a restart or an update). */
+  newProcess(): void { this._instanceId = `mock-${crypto.randomBytes(4).toString('hex')}` }
   /** When true, `hello` reports a DIFFERENT instanceId (bulk-channel identity-mismatch tests). */
   private _helloInstanceMismatch = false
   /** Bridge liveness reported by `bridge.configure` replies (Mac-side visibility tests). */

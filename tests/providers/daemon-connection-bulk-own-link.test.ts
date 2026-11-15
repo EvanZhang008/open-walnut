@@ -216,24 +216,40 @@ describe('DaemonConnection: the bulk channel on a connection of its own', () => 
     const file = path.join(os.tmpdir(), `bulk-own-${process.pid}-${Date.now()}.bin`)
     fs.writeFileSync(file, Buffer.alloc(300 * 1024, 7))
     try {
-      const c = conn as unknown as { _heardBytes: number; _ownBulkHeardBytes: number; _lastReplyAt: number }
-      // Let the connect's own pushes (hooks, bridge, slice) answer first: quiet for 500 ms.
-      let last = c._lastReplyAt
-      let quietSince = Date.now()
-      await waitFor(() => {
-        if (c._lastReplyAt !== last) { last = c._lastReplyAt; quietSince = Date.now() }
-        return Date.now() - quietSince >= 500
-      }, 10_000, 'the session link to go quiet')
+      const c = conn as unknown as {
+        _heardBytes: number; _ownBulkHeardBytes: number; _lastReplyAt: number
+        pendingCommands: Map<number, { cmd?: string }>
+        resolveCommandFrame(msg: Record<string, unknown>): boolean
+      }
+      // Each reply that wrote the session link's last answer, by the command it answered. Replies of
+      // the connect's own pushes (hooks, bridge, a paced host copy) may still land on the session link
+      // during the read, and rightly write it; the read's own reply, on the bulk socket, must not.
+      // Counted per write, not per change: two replies in one millisecond write the same value.
+      const moved: string[] = []
+      let frame: string | undefined
+      let lastReplyAt = c._lastReplyAt
+      Object.defineProperty(conn, '_lastReplyAt', {
+        configurable: true, enumerable: true,
+        get: () => lastReplyAt,
+        set: (v: number) => { lastReplyAt = v; if (frame !== undefined) moved.push(frame) },
+      })
+      const resolve = c.resolveCommandFrame.bind(conn)
+      c.resolveCommandFrame = (msg) => {
+        frame = (typeof msg.id === 'number' ? c.pendingCommands.get(msg.id)?.cmd : undefined) ?? '?'
+        try { return resolve(msg) } finally { frame = undefined }
+      }
       const heard = c._heardBytes
       const own = c._ownBulkHeardBytes
-      const replyAt = c._lastReplyAt
       const read = await conn.send('fs.read', { path: file, encoding: 'base64' })
       expect(read.ok).toBe(true)
       expect(c._ownBulkHeardBytes - own).toBeGreaterThan(300 * 1024)
       // The session link heard at most its own small frames meanwhile, not the 400 KB reply.
       expect(c._heardBytes - heard).toBeLessThan(20_000)
       // Nor is the reply an answer of the session link (checkUpstream reads _lastReplyAt).
-      expect(c._lastReplyAt).toBe(replyAt)
+      expect(moved).not.toContain('fs.read')
+      // A reply on the session link still counts: the watch above sees what it should.
+      expect((await conn.send('ping', {})).ok).toBe(true)
+      expect(moved).toContain('ping')
     } finally {
       fs.rmSync(file, { force: true })
     }
@@ -349,11 +365,19 @@ describe('DaemonConnection: the bulk channel on a connection of its own', () => 
     await connectWithForward()
     forwards[0].cut()
     await waitFor(() => forwards.length === 2 && conn.bulkChannelActive, 5_000, 'first redial')
+    // The last dial began more than the base delay ago, as it does when the redial's own connection
+    // took that long to come up (a loaded machine): the upload below may then dial at once.
+    ;(conn as unknown as { bulkLastDialAt: number }).bulkLastDialAt -= 400
     const cutAt = Date.now()
     forwards[1].cut()
+    // An upload that waits for the channel meanwhile (a background copy, as a connect's own are)
+    // does not dial past the backoff: each dial is a new SSH login.
+    await waitFor(() => !conn.bulkChannelActive, 5_000, 'the channel down')
+    const upload = conn.send('fs.writePart', { path: '/tmp/o7', offset: 0, data: 'AAAA' }).catch(() => null)
     // Two short lives in a row: the redial waits twice the base delay (600 ms here, not 300).
     await waitFor(() => forwards.length === 3, 5_000, 'second redial')
     expect(Date.now() - cutAt).toBeGreaterThanOrEqual(550)
+    await upload
   })
 
   it('O4: a forward that cannot open leaves the bulk channel on the session link, with no wait', async () => {

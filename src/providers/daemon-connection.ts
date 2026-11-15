@@ -815,6 +815,10 @@ export class DaemonConnection {
    * previously surfaced as stale-state bugs.
    */
   private _daemonInstanceId: string | null = null
+  /** A successful hello on the current transport, not a cached id from the prior link. */
+  private _helloConfirmed = false
+  private _helloTargetIdentity: string | null = null
+  get helloTargetIdentity(): string | null { return this._helloConfirmed ? this._helloTargetIdentity : null }
   /** Daemon start timestamp from the most recent successful `hello`. */
   private _daemonStartedAt: number | null = null
   /** The daemon's own build, from hello (the fleet view shows it). */
@@ -865,6 +869,12 @@ export class DaemonConnection {
   /** The push in flight, for pushTriggersNow callers that wait for it. */
   private triggersPushDone: Promise<void> | null = null
   private lastTriggersPushHash: string | null = null
+  /**
+   * Another alias of this daemon came up (sameDaemonHosts): the next push asks the daemon
+   * whether it holds this set (a probe, no set crosses) instead of trusting the hash
+   * this link sent last, which the other alias's push may have replaced.
+   */
+  private triggersRecheck = false
   /** Each trigger's hash in the set last pushed, so a push says which ones changed (changedTriggerIds). */
   private lastTriggerDefHashes = new Map<string, string>()
   /** host.slice serialization (see pushHostSlice) — same three fields, same reasons. */
@@ -1573,6 +1583,13 @@ export class DaemonConnection {
   /** False until a `hello` handshake has SUCCEEDED on this connection. All
    *  connect paths attempt it, so false = the daemon answered no hello. */
   get capabilitiesKnown(): boolean { return this._capabilities !== null }
+  /**
+   * The daemon process this link is up on, as the hello that brought the link up named it; null
+   * while down, or while the id held is an older one (a hello that failed keeps the last id).
+   */
+  get liveInstanceId(): string | null {
+    return this._connected && this._helloConfirmed ? this._daemonInstanceId : null
+  }
   get daemonStartup(): string { return this._daemonStartup }
   get serviceExecutable(): string | null { return this._serviceExecutable }
   /** Whether the host's daemon starts after a reboot, as the host last said (remote-boot-start.ts); null before it was asked. */
@@ -1714,7 +1731,7 @@ export class DaemonConnection {
     this._connected = value
     if (changed) this._connectionEpoch++
     // Uploads waiting for the bulk channel meet the lost link now, not at the end of their wait.
-    if (!value) { this.bulkOwnLink = false; this.releaseBulkWaiters() }
+    if (!value) { this._helloConfirmed = false; this.bulkOwnLink = false; this.releaseBulkWaiters() }
     if (changed && value) this._bootStart?.schedule()
     if (changed && value) this.netUpdater?.schedule()
     if (value) {
@@ -1793,6 +1810,16 @@ export class DaemonConnection {
     // triggers.json must be corrected by the server's own view.
     if (changed) this.lastTriggersPushHash = null
     if (changed && value) this.pushTriggers()
+    // Another alias of the same daemon holds the same set (sameDaemonHosts): this link's
+    // first push may replace what that alias sent, so each one connected asks again.
+    if (changed && value) {
+      void this.sameDaemonHosts().then((hosts) => {
+        for (const host of hosts) {
+          const sibling = host === this.hostKey ? null : getConnectedDaemonConnection(host)
+          if (sibling && sibling !== this) sibling.recheckTriggers()
+        }
+      })
+    }
     // And for the offline host: first take back what the daemon did while we
     // were away, then hand it a fresh read copy (docs/plan/daemon-first-hosts.md).
     if (changed) {
@@ -2081,50 +2108,12 @@ export class DaemonConnection {
       try {
         do {
           this.triggersPushRerun = false
-          const { getTriggerPayloadProvider } = await import('../core/routines/trigger-bridge.js')
-          const provider = getTriggerPayloadProvider()
-          if (!provider) return
-          // Clock routines go only to a daemon that said it holds them (clock-routine-v1).
-          const clock = !this.capabilitiesKnown ? 'unknown' : this.hasCapability('clock-routine-v1') ? 'yes' : 'no'
-          const hostStart = clock === 'yes' && await this.routineHostStart()
-          const compiled = await provider(this.hostKey, { clock, fresh: this.lastTriggersPushHash === null, hostStart })
-          if (!compiled) return
-          if (compiled.hash === this.lastTriggersPushHash) continue
-          // A daemon that still holds this set under its name configures it from its copy
-          // (triggers-probe-v1): a reconnect or restart sends no set. Else the set goes, named.
-          const probes = this.hasCapability(TRIGGERS_PROBE_CAPABILITY)
-          const fresh = this.lastTriggersPushHash === null
-          // Only the first push on a connection can be held: later ones are changes.
-          const probe = probes && fresh
-            ? await this.send('triggers.configure', { probe: true, hash: compiled.hash, home: WALNUT_HOME, replayChecks: true })
-            : null
-          // `home`: the daemon keeps one set per Walnut (walnut-scope-core.ts).
-          const reply = probe?.ok === true && probe.held === true ? probe : await this.send('triggers.configure', {
-            config: compiled.payload as unknown as Record<string, unknown>,
-            home: WALNUT_HOME,
-            // Routine edits must not replay status or accelerate an unrelated failed check.
-            ...(fresh ? { replayChecks: true } : {}),
-            ...(probes ? { pushHash: compiled.hash } : {}),
-          })
-          if (reply.ok !== true) {
-            log.session.warn('DaemonConnection: triggers push rejected', {
-              host: this.hostKey, error: typeof reply.error === 'string' ? reply.error : undefined,
-            })
-            await compiled.rejected?.().catch((err: unknown) => log.session.warn('DaemonConnection: clock handover revert failed', {
-              host: this.hostKey, error: err instanceof Error ? err.message : String(err),
-            }))
-            continue
-          }
-          this.lastTriggersPushHash = compiled.hash
-          // The daemon's own word on the clocks it holds and gave back.
-          await compiled.applied?.(reply).catch((err: unknown) => log.session.warn('DaemonConnection: clock settle failed', {
-            host: this.hostKey, error: err instanceof Error ? err.message : String(err),
-          }))
-          const changed = this.changedTriggerIds(compiled.payload.triggers)
-          log.session.info('DaemonConnection: triggers pushed', {
-            host: this.hostKey, hash: compiled.hash, triggers: compiled.payload.triggers.length, held: reply === probe,
-            ...(reply === probe ? {} : { changed: changed.slice(0, 8), changedCount: changed.length }),
-          })
+          // One push at a time per daemon process, compiled once the gate is ours: another
+          // alias of this daemon may be pushing (sameDaemonHosts), and a set compiled
+          // before its push landed would replace it with an older view.
+          const instance = this.liveInstanceId
+          const step = await runInTriggerPushGate(instance ? `instance:${instance}` : `host:${this.hostKey}`, () => this.pushTriggersOnce())
+          if (step === 'stop') return
         } while (this.triggersPushRerun)
       } catch (err) {
         log.session.warn('DaemonConnection: triggers push failed', {
@@ -2137,6 +2126,85 @@ export class DaemonConnection {
     })()
     this.triggersPushDone = done
     return done
+  }
+
+  /**
+   * Push again after another alias of this daemon came up: its first push may have replaced
+   * what this link sent, so the hash this link remembers no longer says what the daemon holds.
+   * The daemon is asked first (a probe), so a set it holds already does not cross again.
+   */
+  recheckTriggers(): void {
+    this.triggersRecheck = true
+    this.pushTriggers()
+  }
+
+  /** One compile and send of the armed set, inside this daemon's push gate. 'stop': no provider or no cron engine. */
+  private async pushTriggersOnce(): Promise<'stop' | 'next'> {
+    if (!this._connected) return 'stop'
+    const epoch = this._connectionEpoch
+    const recheck = this.triggersRecheck
+    this.triggersRecheck = false
+    const { getTriggerPayloadProvider } = await import('../core/routines/trigger-bridge.js')
+    const provider = getTriggerPayloadProvider()
+    if (!provider) return 'stop'
+    // Clock routines go only to a daemon that said it holds them (clock-routine-v1).
+    const clock = !this.capabilitiesKnown ? 'unknown' : this.hasCapability('clock-routine-v1') ? 'yes' : 'no'
+    const fresh = this.lastTriggersPushHash === null
+    const sameDaemon = await this.sameDaemonHosts()
+    // One link of the daemon speaks for its routine template (one per Walnut there) and so for
+    // whether it starts runs: every alias's push then compiles the same starts, and the template
+    // never swings between links. The first of its aliases with a link up, else this one.
+    const speaker = sameDaemon.map((h) => h === this.hostKey ? (this._connected ? this : null) : getConnectedDaemonConnection(h)).find((c) => !!c) ?? this
+    const hostStart = clock === 'yes' && await speaker.routineHostStart()
+    const compiled = await provider(this.hostKey, { clock, fresh, hostStart, sameDaemon })
+    if (!compiled) return 'stop'
+    // A queued or slow compile belongs to the link that started it, never a later reconnect.
+    if (!this._connected || this._connectionEpoch !== epoch) return 'stop'
+    if (!recheck && compiled.hash === this.lastTriggersPushHash) return 'next'
+    // A daemon that still holds this set under its name configures it from its copy
+    // (triggers-probe-v1): a reconnect or restart sends no set. Else the set goes, named.
+    const probes = this.hasCapability(TRIGGERS_PROBE_CAPABILITY)
+    // Only the first push on a connection can be held, or one after another alias of this
+    // daemon pushed: later ones are changes.
+    const probe = probes && (fresh || recheck)
+      ? await this.send('triggers.configure', { probe: true, hash: compiled.hash, home: WALNUT_HOME, ...(fresh ? { replayChecks: true } : {}) })
+      : null
+    if (!this._connected || this._connectionEpoch !== epoch) return 'stop'
+    // `home`: the daemon keeps one set per Walnut (walnut-scope-core.ts).
+    const reply = probe?.ok === true && probe.held === true ? probe : await this.send('triggers.configure', {
+      config: compiled.payload as unknown as Record<string, unknown>,
+      home: WALNUT_HOME,
+      // Routine edits must not replay status or accelerate an unrelated failed check.
+      ...(fresh ? { replayChecks: true } : {}),
+      ...(probes ? { pushHash: compiled.hash } : {}),
+    })
+    if (reply.ok !== true) {
+      log.session.warn('DaemonConnection: triggers push rejected', {
+        host: this.hostKey, error: typeof reply.error === 'string' ? reply.error : undefined,
+      })
+      await compiled.rejected?.().catch((err: unknown) => log.session.warn('DaemonConnection: clock handover revert failed', {
+        host: this.hostKey, error: err instanceof Error ? err.message : String(err),
+      }))
+      return 'next'
+    }
+    if (!this._connected || this._connectionEpoch !== epoch) return 'stop'
+    this.lastTriggersPushHash = compiled.hash
+    // The daemon's own word on the clocks it holds and gave back.
+    await compiled.applied?.(reply).catch((err: unknown) => log.session.warn('DaemonConnection: clock settle failed', {
+      host: this.hostKey, error: err instanceof Error ? err.message : String(err),
+    }))
+    const changed = this.changedTriggerIds(compiled.payload.triggers)
+    log.session.info('DaemonConnection: triggers pushed', {
+      host: this.hostKey, hash: compiled.hash, triggers: compiled.payload.triggers.length, held: reply === probe,
+      ...(sameDaemon.length > 1 ? { sameDaemon } : {}),
+      ...(reply === probe ? {} : { changed: changed.slice(0, 8), changedCount: changed.length }),
+    })
+    return 'next'
+  }
+
+  /** The host aliases that reach this connection's daemon (sameDaemonHostsOf). */
+  sameDaemonHosts(): Promise<string[]> {
+    return sameDaemonHostsOf(this.hostKey, this.liveInstanceId)
   }
 
   /**
@@ -5811,6 +5879,7 @@ export class DaemonConnection {
   }
 
   private async verifyCapabilities(): Promise<boolean> {
+    this._helloConfirmed = false
     try {
       const helloAt = Date.now()
       const res = await this._sendHandshake('hello', serverHello(this.isReadOnlyRemote))
@@ -5875,7 +5944,12 @@ export class DaemonConnection {
           newStartedAt,
         })
       }
+      const record = await import('../core/hosts/same-daemon-record.js')
+      this._helloTargetIdentity = await (this.sshTarget
+        ? record.targetIdentityOf(this.hostKey, this.sshTarget)
+        : record.configuredIdentityOf(this.hostKey)).catch(() => null)
       this._daemonInstanceId = newInstanceId
+      this._helloConfirmed = true
       this._daemonStartedAt = newStartedAt
       log.session.info('DaemonConnection: capability handshake OK', {
         host: this.hostKey,
@@ -8168,9 +8242,14 @@ export class DaemonConnection {
     this.bulkRedialTimer.unref?.()
   }
 
-  /** An upload waits for the bulk channel: dial now, unless a dial ran within the base redial delay. */
+  /**
+   * An upload waits for the bulk channel: dial now, unless a dial ran within the base redial delay,
+   * or own connections keep ending soon (the redial waiting is their backoff: each dial is a fresh
+   * SSH login, and an upload that skipped it dialled again at the base pace; O7).
+   */
   private dialBulkSoon(): void {
     if (!this.bulkRedialTimer || this.bulkChannelActive) return
+    if (this.bulkShortLives >= 2) return
     if (Date.now() - this.bulkLastDialAt < DaemonConnection.BULK_REDIAL_DELAY_MS) return
     clearTimeout(this.bulkRedialTimer)
     this.bulkRedialTimer = null
@@ -10079,9 +10158,15 @@ export function pushDaemonHooksToAllHosts(): void {
  * touches a check job (and after an auto-disable). Fire-and-forget and
  * hash-skipped; a cold host simply keeps polling its persisted set until it
  * reconnects, which is the behaviour the daemon's own persistence exists for.
+ * Every connected alias of the same daemon pushes too (sameDaemonHosts): they all carry
+ * this host's set, and this host's own link may be the one that is down.
  */
 export function pushTriggersToHost(hostKey: string): void {
-  getConnectedDaemonConnection(hostKey)?.pushTriggers()
+  void sameDaemonHosts(hostKey).then((hosts) => {
+    for (const host of hosts) getConnectedDaemonConnection(host)?.pushTriggers()
+  }).catch((err) => log.session.warn('DaemonConnection: trigger push routing failed', {
+    host: hostKey, error: err instanceof Error ? err.message : String(err),
+  }))
 }
 
 /** Push one host's bridge config now ('__local__' for this machine): its machine credential was minted anew. */
@@ -10768,6 +10853,89 @@ export function getConnectedDaemonConnection(hostKey: string): DaemonConnection 
     if (pooled.connected && pooled.host === hostKey) return pooled
   }
   return null
+}
+
+/**
+ * Every host alias of this Walnut that reaches the same daemon as `hostKey`, sorted, `hostKey`
+ * included. The daemon keeps ONE armed trigger set per Walnut, so every alias of it must push
+ * the same set (2026-11-15: a machine joined as `<name>-net` beside its SSH row, and the net
+ * link's push of its own empty set replaced the SSH row's 78 triggers).
+ *
+ * The evidence is the daemon's own word, never a hostname or an address:
+ *  - the instance id its current hello gave on each live pooled connection (a random id per
+ *    process). Such a pair is recorded in both host profiles;
+ *  - a pair recorded so (core/hosts/same-daemon-record.ts) while both rows still connect where
+ *    they did, so a daemon restart, or a server that just started, keeps the pair while only
+ *    one of its links is up. Refused, and dropped, once `hostKey` is up on one process and the
+ *    other alias on another.
+ * Neither (a daemon older than the id, a pair never seen up together): `hostKey` alone.
+ */
+export function sameDaemonHosts(hostKey: string): Promise<string[]> {
+  const own = pooledFor(hostKey)
+  return sameDaemonHostsOf(hostKey, own?.liveInstanceId ?? null)
+}
+
+/** The pooled connection for an alias, under its own key or a `direct:` one; a connected one first. */
+function pooledFor(host: string): DaemonConnection | null {
+  const all = [connectionPool.get(host), ...[...connectionPool].filter(([key, c]) => key.startsWith('direct:') && c.host === host).map(([, c]) => c)]
+    .filter((c): c is DaemonConnection => !!c)
+  return all.find((c) => c.connected) ?? all[0] ?? null
+}
+
+/**
+ * `live`: the process this link's current hello confirmed. Only live hellos establish a pair;
+ * a down link uses its target-bound profile record, never its cached process id.
+ */
+export async function sameDaemonHostsOf(hostKey: string, live: string | null): Promise<string[]> {
+  const hosts = new Set<string>([hostKey])
+  const confirmed: string[] = []
+  if (live) {
+    for (const conn of connectionPool.values()) {
+      if (conn.host !== hostKey && conn.liveInstanceId === live && !hosts.has(conn.host)) { hosts.add(conn.host); confirmed.push(conn.host) }
+    }
+  }
+  try {
+    const record = await import('../core/hosts/same-daemon-record.js')
+    if (confirmed.length > 0) {
+      const dialled = new Map([hostKey, ...confirmed].map((h) => [h, pooledFor(h)?.helloTargetIdentity ?? null]))
+      if (live && pooledFor(hostKey)?.liveInstanceId === live && confirmed.every((h) => pooledFor(h)?.liveInstanceId === live)) {
+        await record.rememberSameDaemon(hostKey, confirmed, dialled)
+      }
+    }
+    // Validated edges are transitive: A-B and B-C still describe one daemon when only A returns.
+    const pending = [...hosts]
+    for (let i = 0; i < pending.length; i++) {
+      const from = pending[i]
+      for (const other of await record.recordedSameDaemon(from)) {
+        const conn = pooledFor(other)
+        const theirs = conn?.liveInstanceId ?? null
+        if (live && pooledFor(hostKey)?.liveInstanceId === live && theirs && theirs !== live) {
+          log.session.warn('DaemonConnection: two aliases recorded as one daemon are up on different daemons; no longer one trigger set', {
+            host: from, other, instanceId: live, otherInstanceId: theirs,
+          })
+          await record.forgetSameDaemon(from, other)
+          continue
+        }
+        if (!hosts.has(other)) { hosts.add(other); pending.push(other) }
+      }
+    }
+  } catch (err) {
+    // A profile or config that cannot be read joins nothing from a record; the daemon's live word still holds.
+    log.session.warn('DaemonConnection: same-daemon record unreadable', { host: hostKey, error: err instanceof Error ? err.message : String(err) })
+  }
+  return [...hosts].sort()
+}
+
+/** One trigger push at a time per daemon process (DaemonConnection.pushTriggersNow), by gate key. */
+const triggerPushGates = new Map<string, Promise<unknown>>()
+
+function runInTriggerPushGate<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prev = triggerPushGates.get(key) ?? Promise.resolve()
+  const run = prev.then(fn, fn)
+  const tail = run.catch(() => undefined)
+  triggerPushGates.set(key, tail)
+  void tail.then(() => { if (triggerPushGates.get(key) === tail) triggerPushGates.delete(key) })
+  return run
 }
 
 /** Existing evidence only: never dials, attaches, starts a CLI or writes a user line. */
