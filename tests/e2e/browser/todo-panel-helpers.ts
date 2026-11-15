@@ -153,12 +153,17 @@ export async function selectSection(
   await closeDisplayMenu(page)
 }
 
-/** Files opens at host HOME; enter the session's real folder through the path picker. */
+/**
+ * Files opens at host HOME; enter the session's real folder through the path picker. The
+ * session is read from the server the page itself was loaded from, so a spec with a fixture
+ * server of its own (not the config's baseURL) reads its own session.
+ */
 export async function goToSessionFolder(explorer: Locator): Promise<void> {
   const panel = explorer.locator('xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " session-panel ")][1]')
   const sessionId = await panel.getAttribute('data-session-id')
   expect(sessionId).toBeTruthy()
-  const response = await explorer.page().request.get(`/api/sessions/${encodeURIComponent(sessionId!)}`)
+  const page = explorer.page()
+  const response = await page.request.get(new URL(`/api/sessions/${encodeURIComponent(sessionId!)}`, page.url()).href)
   expect(response.ok()).toBe(true)
   const body = await response.json()
   const cwd = body.session?.cwd

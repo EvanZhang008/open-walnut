@@ -24,6 +24,7 @@ import fs from 'node:fs/promises'
 import net from 'node:net'
 import { devices, expect, test, type BrowserContext, type Locator, type Page } from '@playwright/test'
 import { bunRuntime } from '../../helpers/bun-runtime.js'
+import { goToSessionFolder } from './todo-panel-helpers'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 
@@ -123,18 +124,25 @@ async function openFile(panel: Locator): Promise<void> {
   await panel.locator('.session-action-chip', { hasText: /^Files$/ }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 20_000 })
+  // Files opens on the host's HOME; the file sits in the session's folder.
+  await goToSessionFolder(explorer)
   await explorer.locator('.session-file-explorer-node .sfe-name', { hasText: new RegExp(`^${FILE.replace('.', '\\.')}$`) }).first().click()
   await expect(explorer.locator('.session-file-explorer-node.selected .sfe-name')).toHaveText(FILE, { timeout: 20_000 })
 }
 
-/** The panel as it was left: full screen, Files beside the chat, the file open. */
+/**
+ * The panel as it was left: full screen, Files beside the chat, the file open. Files comes back on
+ * the host's HOME, as every open of it does, and resumes the file it was reading (the session's
+ * remembered file, SessionFileExplorer.tsx): the viewer names it, whatever folder the tree shows.
+ */
 async function expectKept(panel: Locator): Promise<void> {
   await expect(panel).toBeVisible({ timeout: 30_000 })
   await expect(panel).toHaveClass(FS, { timeout: 20_000 })
   await expect(panel.locator('.session-action-chip.session-action-chip-active')).toHaveText('Files')
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 20_000 })
-  await expect(explorer.locator('.session-file-explorer-node.selected .sfe-name')).toHaveText(FILE, { timeout: 20_000 })
+  await expect(explorer.getByTestId('fv-doc-bar')).toContainText(FILE, { timeout: 20_000 })
+  await expect(explorer.locator('.fv-source-editor .cm-content')).toContainText('"name"', { timeout: 20_000 })
 }
 
 async function shot(page: Page, name: string): Promise<void> {

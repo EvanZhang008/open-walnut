@@ -171,11 +171,16 @@ test('recorded walkthrough: create, edit, keep unsaved work, live save + merge, 
     await page.unroute('**/api/file-content*', blockWrites)
     await panel.getByRole('button', { name: 'Files', exact: true }).click()
     await expect(panel.locator('.session-file-explorer')).toBeVisible({ timeout: 15_000 })
+    // Files opens on HOME and resumes the file it was reading, so the restore (and its 4 s
+    // "Draft restored" note) can land while the tree still moves to the session's folder:
+    // watch for the note from the moment Files opens.
+    const draftNote = page.locator('.fv-draft-note', { hasText: 'Draft restored' })
+    const noteShown = draftNote.waitFor({ state: 'visible', timeout: 20_000 })
     await goToSessionFolder(explorer)
     // The unsaved line came back, and the app SAYS it restored it rather than
     // leaving the user to assume their save had worked.
     await expect(editor).toContainText('This line was never saved.', { timeout: 15_000 })
-    await expect(page.locator('.fv-draft-note')).toBeVisible()
+    await noteShown
     await beat(page, 1500)
     await page.screenshot({ path: `${OUT_DIR}/tour-1-draft-restored.png` })
 

@@ -5,6 +5,7 @@ import { expect, test, type BrowserContext, type Locator, type Page } from '@pla
 import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { showCustomBoard } from './board-view-helpers'
 import { leaveFullscreen } from './draft-helpers'
+import { goToSessionFolder } from './todo-panel-helpers'
 
 /**
  * Plugin link handlers (`walnut.ui.link`, web/src/plugins/link-handlers.ts and
@@ -471,6 +472,8 @@ test('the HTML preview\'s page hands its links to the same handlers: a click ope
   await col.getByRole('button', { name: 'Files' }).first().click()
   const explorer = col.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
+  // Files opens on the host's HOME; the report sits in the session's folder.
+  await goToSessionFolder(explorer)
   await explorer.locator('.sfe-name', { hasText: 'links.html' }).click()
   const inner = col.frameLocator('iframe.fv-html-preview')
   await expect(inner.locator('h1')).toHaveText('Report links', { timeout: 15_000 })

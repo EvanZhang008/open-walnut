@@ -15,6 +15,7 @@
  */
 import { test, expect, type Page } from '@playwright/test'
 import { dragPhrase } from './selection-helpers'
+import { goToSessionFolder } from './todo-panel-helpers'
 
 const SESSION_ID = 'pw-changed-session'
 const TASK_ID = 'pw-task-changed'
@@ -186,6 +187,8 @@ test('right-click menu works on the diff and on the Files viewer', async ({ page
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
+  // Files opens on the host's HOME; the file sits in the session's folder.
+  await goToSessionFolder(explorer)
   const row = explorer.locator('.session-file-explorer-node', { hasText: 'sync-caller.go' }).first()
   await expect(row).toBeVisible({ timeout: 10_000 })
   await row.click()
