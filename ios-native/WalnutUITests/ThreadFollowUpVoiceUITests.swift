@@ -42,19 +42,24 @@ final class ThreadFollowUpVoiceUITests: ThreadPushUITestCase {
         let list = el("org.threads")
         let window = app.windows.firstMatch
         let bar = app.tabBars.firstMatch
-        for _ in 0..<24 {
-            let top = max(app.navigationBars.firstMatch.frame.maxY, window.frame.minY + 80)
-            let bottom = bar.exists ? bar.frame.minY : window.frame.maxY - 20
-            if follow.isHittable && follow.frame.minY >= top && follow.frame.maxY <= bottom { break }
+        let viewSwitch = el("org.node.tabs")
+        let jumps = el("org.threads.jumps")
+        let top = max(list.frame.minY, max(viewSwitch.frame.maxY, jumps.exists ? jumps.frame.maxY : 0)) + 12
+        let bottom = (bar.exists ? bar.frame.minY : window.frame.maxY - 20) - 12
+        for _ in 0..<18 {
+            if follow.frame.minY >= top && follow.frame.maxY <= bottom { break }
             let below = follow.frame.maxY > bottom
-            let fromY = below ? bottom - 70 : top + 70
-            let toY = below ? top + 90 : bottom - 90
-            list.coordinate(withNormalizedOffset: .zero)
-                .withOffset(CGVector(dx: list.frame.width / 2, dy: fromY - list.frame.minY))
-                .press(forDuration: 0.05, thenDragTo: list.coordinate(withNormalizedOffset: .zero)
-                    .withOffset(CGVector(dx: list.frame.width / 2, dy: toY - list.frame.minY)))
+            let fromY = below ? bottom - 45 : top + 45
+            let toY = below ? top + 45 : bottom - 45
+            // Coordinates are screen points. The accessibility container's
+            // normalized origin can be the content origin, above the viewport.
+            app.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: window.frame.midX, dy: fromY))
+                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: .zero)
+                    .withOffset(CGVector(dx: window.frame.midX, dy: toY)))
         }
-        XCTAssertTrue(follow.isHittable, "Follow up must be reached by scrolling the actual thread list")
+        XCTAssertGreaterThanOrEqual(follow.frame.minY, top, "Follow up must clear the sticky header")
+        XCTAssertLessThanOrEqual(follow.frame.maxY, bottom, "Follow up must clear the tab bar")
         touch(follow)
         XCTAssertTrue(el("org.thread.followUp.input").waitForExistence(timeout: 15))
         let mic = el("voice-mic.thread-follow-up")
