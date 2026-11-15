@@ -54,13 +54,18 @@ describe('an isolated connection writes only under its own root', () => {
     const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-iso-conn-home-')))
     cleanup.push(home)
     const scripts: string[] = []
+    // The host is a Linux box: the probe's `uname` says so on any machine the test runs on (since
+    // ff6fe355f a probe that reads Darwin ends the connect before the install, as it should).
+    const fakeBin = path.join(home, 'fake-bin')
+    fs.mkdirSync(fakeBin)
+    fs.writeFileSync(path.join(fakeBin, 'uname'), '#!/bin/sh\ncase "$1" in -m) echo x86_64 ;; *) echo Linux ;; esac\n', { mode: 0o755 })
     const conn = new DaemonConnection('devbox', target)
     expect(conn.isolation).toMatchObject({ mode: 'isolated', key })
     vi.spyOn(priv(conn), 'sshExec').mockImplementation(async (script: unknown) => {
       const s = String(script)
       scripts.push(s)
       // The dir probe runs for real, in a temp HOME; everything else gets a reply that ends its step.
-      if (s.includes('walnut-dir-probe v1')) return execFileSync('/bin/sh', ['-s'], { input: s, encoding: 'utf-8', env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: home } })
+      if (s.includes('walnut-dir-probe v1')) return execFileSync('/bin/sh', ['-s'], { input: s, encoding: 'utf-8', env: { PATH: guardedPath([fakeBin], '/usr/bin:/bin'), HOME: home } })
       if (s.includes('walnut-live')) return 'walnut-live none\n'
       return ''
     })
