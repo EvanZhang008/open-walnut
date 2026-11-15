@@ -9,7 +9,8 @@ description: >-
   Also when the user says "snooze until", "wait until", "park this until",
   "come back to this when". Use it on your own, without being asked, whenever
   the rest of the work waits on something outside the session (a review, a
-  merge, a deploy, a build, a reply). A trigger does not park the task: park it
+  merge, a deploy, CI, a reply); never on this session's own background command
+  or subagent, which wakes it when done. A trigger does not park the task: park it
   yourself once only that wait is left (never the main agent's task), and the fire brings it back. Check trigger_templates first: a plugin
   (Slack channel, new mail) may already offer the watch with no script.
 ---
@@ -208,7 +209,7 @@ stdout:  {"fire": true, "items": [{"id": "PR-123#c9", "title": "..."}], "input":
 - **Pick the budget for the source.** A busy source checked often (a chat
   channel, a mailbox) can fire on most checks, so set `maxFiresPerDay` to the
   checks per day it runs: 288 for every 5 minutes, 96 for every 15. Keep the
-  default for things that change a few times a day (a PR, a build). `0` = no
+  default for things that change a few times a day (a PR, a CI run). `0` = no
   limit. The user can change it later on the Routines page (Edit, "Fires per
   day"), and Walnut tells them the first time each day the budget holds a fire.
 
@@ -352,7 +353,8 @@ that answered them on their list when its report says waiting). A park:
   `task_update '{"id":"<this task's id>","phase":"NEED_ACTION"}'`.
 
 **Only for a wait outside Walnut and the user.** Park on a pipeline or CI run,
-a build, a deploy, a CR or PR review, a Slack or mail reply, another task. When
+a build on CI or another host, a deploy, a CR or PR review, a Slack or mail
+reply, another task. When
 the next move is the user's (they paste a file, review, decide, sign in), the
 task is Needs you: set `task_update` NEED_ACTION and say what you need, never
 Waiting, even with no rush. Walnut enforces it: a park with nothing outside
@@ -364,14 +366,19 @@ user's list. A trigger with `watches` (the user's ask or a letter) never parks.
 **Your own build is still your work.** A build, test run, CI run, deploy or land
 of your own change, which you act on when it ends, is not a wait: the user reads
 the task as Working (2026-11-02, the user: "wait is just actually waiting, if it
-is running it should be in progress"). Arm the trigger on it and park as usual
-so the session can go idle, and say so in the turn-end report:
+is running it should be in progress"). One that runs in this session (a
+`run_in_background` command, a subagent) needs no trigger and no `wait_until`:
+Claude Code wakes the session when it finishes, so just end the turn (2026-11-15:
+a 20-minute trigger on a session's own acceptance run woke it four times for
+nothing). Arm a trigger only on what runs outside this session (CI, a deploy
+queue, another host, a person), park as usual so the session can go idle, and
+say so in the turn-end report:
 `FOR_USER_STATE: working`, with what runs in `FOR_USER_NOW` (or
 `FOR_USER_WAITING_ON: own: the build of my change`), never `outside:`. Waiting
 is for a real block: a person's review or reply, another team, a set time.
 
 **Use it on your own.** When the rest of the work waits on something outside
-this session (a review, a merge, a deploy, a build, a CI run, a reply from a
+this session (a review, a merge, a deploy, a CI run, a reply from a
 person), do not ask the user to watch it or to "make a trigger": write the
 check, arm it, and end the turn. That is what keeps their list short. Ask one
 short question only when you genuinely cannot tell what to watch (which PR,

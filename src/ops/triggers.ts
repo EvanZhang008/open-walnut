@@ -14,6 +14,7 @@ import { withOutcome } from './outcome.js'
 import { triggerRunState } from '../core/cron/trigger-run-state.js'
 import { TIME_LIMIT_DEFAULT_S, TIME_LIMIT_MAX_S, testCallTimeoutMs } from '../core/cron/trigger-time-limit.js'
 import { TRIGGER_DESCRIPTION_MAX, parseEveryMs } from '../core/routines/trigger-fields.js'
+import { ownJobWatchWarning } from '../core/routines/own-job-watch.js'
 import {
   byActivity, compactRow, everyLabel, filterWords, fullRow, matchesFilter, pageLimit, MAX_LIMIT,
   type ListedJob, type ListFilter,
@@ -96,7 +97,9 @@ defineOp({
     + 'While you or the user still have work on this task, leave wait out, and park it later with task_update '
     + 'phase=WAITING once only the wait is left. The main agent\'s task is never parked. '
     + 'Use it on your own whenever the rest of the work is waiting on something outside this session '
-    + '(a review, a merge, a deploy, a build, someone\'s reply): do not ask the user to watch it. '
+    + '(a review, a merge, a deploy, CI, another host, someone\'s reply): do not ask the user to watch it. '
+    + 'Never for this session\'s own background command (run_in_background) or subagent: Claude Code wakes the '
+    + 'session when it finishes, so a trigger on it only wakes the session for nothing. '
     + 'It works while the Walnut server is away too: the host your session runs on arms the check at once and '
     + 'Walnut records it, with the same id, when the server is back (the answer then says queued).',
   input: {
@@ -156,6 +159,11 @@ defineOp({
     const armed = `Trigger armed on ${b.host ?? 'its host'}: the daemon there runs the check every ${every}${limit}, and `
       + 'delivers the prompt when it fires. It keeps polling while Walnut restarts.'
     const timeWarning = b.timeLimit?.warning ? ` WARNING: ${b.timeLimit.warning}` : ''
+    // A check on this session's own background job: Claude Code already wakes it when that ends.
+    // Read here, in the caller's own process, where the check's script is (core/routines/own-job-watch.ts).
+    const a = (args ?? {}) as { run?: unknown; cwd?: unknown; template?: unknown }
+    const ownJob = a.template ? null : ownJobWatchWarning({ run: a.run, cwd: a.cwd, sid: process.env.WALNUT_SESSION_ID })
+    const ownJobWarning = ownJob ? ` WARNING: ${ownJob}` : ''
     const off = `Turn it off with walnut tools call trigger_delete '{"id":"${id}"}' once it has done its job.`
     const w = b.wait
     // What the call did to the task is said in the outcome, so the model never
@@ -184,9 +192,11 @@ defineOp({
     // The id at the top level too: trigger_pause/resume/delete take it, and a
     // caller reading `.id` should not have to know the job sits under `.job`.
     return withOutcome(
-      { ...(id ? { id } : {}), ...(b.job?.name ? { name: b.job.name } : {}), ...b },
-      `${armed}${parked}${timeWarning}`,
-      `${timeWarning ? `Fix the time limit first: trigger_test, then trigger_update '{"id":"${id}","timeoutSeconds":<seconds>}' (same id, nothing it saw is lost). ` : ''}${next} See its last check with trigger_list.`,
+      { ...(id ? { id } : {}), ...(b.job?.name ? { name: b.job.name } : {}), ...b, ...(ownJob ? { ownJobWarning: ownJob } : {}) },
+      `${armed}${parked}${timeWarning}${ownJobWarning}`,
+      ownJob
+        ? `Unless it also watches something outside this session, delete it now: walnut tools call trigger_delete '{"id":"${id}"}'${w?.parked ? ', then take the task out of Waiting (task_update phase=IN_PROGRESS): your own job is your work' : ''}, and end your turn; this session's own background job wakes it when it finishes.`
+        : `${timeWarning ? `Fix the time limit first: trigger_test, then trigger_update '{"id":"${id}","timeoutSeconds":<seconds>}' (same id, nothing it saw is lost). ` : ''}${next} See its last check with trigger_list.`,
     )
   },
   tags: { readonly: false, remote: 'allow', destructive: false },

@@ -378,7 +378,10 @@ describe('buildSessionContext (identity note)', () => {
     // 10500 → 10800 (2026-11-11) for the safeguard switch line: refused sessions kept retrying ("I can't
     // switch models directly myself") until the user typed /model; Walnut now switches after two, and a
     // session may ask its lead to switch it sooner.
-    expect(systemPrompt.length).toBeLessThan(10800)
+    // 10800 → 11000 (2026-11-15) for the session's own background jobs: they wake it when they finish,
+    // so no trigger or clock on them (a 20-minute trigger on a session's own acceptance run fired four
+    // times overnight, each turn an ack only). 10,977.
+    expect(systemPrompt.length).toBeLessThan(11000)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {
@@ -415,8 +418,19 @@ describe('buildSessionContext (identity note)', () => {
     // wait must not run for days, and each time it runs out the session re-checks.
     for (const id of ['', await seedTask('marina')]) {
       const { systemPrompt } = await buildSessionContext(id)
-      expect(systemPrompt).toMatch(/give it a short wait_until for when you expect it/i)
+      expect(systemPrompt).toMatch(/give a trigger's park a short wait_until for when you expect it/i)
       expect(systemPrompt).toMatch(/when the clock runs out first, check the thing and the trigger before parking again/i)
+    }
+  })
+
+  it('never sends a session to arm a trigger or a clock on its own background job', async () => {
+    // 2026-11-15, the org reflection: a task armed a 20-minute trigger on its own background
+    // acceptance run; it fired four times overnight and each turn was only an ack. Claude Code
+    // already wakes the session when its own background command or subagent finishes.
+    for (const id of ['', await seedTask('marina')]) {
+      const { systemPrompt } = await buildSessionContext(id)
+      expect(systemPrompt).toMatch(/This session's own background commands and subagents wake it when they finish: never arm a trigger or a short wait_until for them, just end the turn/)
+      expect(systemPrompt).toMatch(/a trigger is for what runs outside this session \(CI, a deploy, another host, a person\)/)
     }
   })
 

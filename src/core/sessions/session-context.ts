@@ -683,12 +683,15 @@ export function composeInstructions(task: InstructionTask | undefined, state: Pr
     + 'Words: a "subagent" is Claude Code\'s Agent tool inside this session, '
     + 'never a Walnut task; a "subtask", "worker" or "task" is a Walnut task.\n\n'
     // Waiting is the session's job (see 6 above). Not Main's: it never parks (2e).
-    + (mainAgent ? '' : 'When the rest of the work waits on something outside Walnut and the user (a build, '
+    + (mainAgent ? '' : 'When the rest of the work waits on something outside Walnut and the user (CI, '
     + 'a review, a reply), never ask the user to watch it: arm a trigger yourself '
     + '(walnut-trigger skill). It does not park this task: pass wait:true only once nothing is left for '
     + 'the user to read, never when answering them; the fire brings it back. A build, test run, CI run, deploy or '
     + 'land of your own change is still your work: the user reads the task as Working, so its status says working, '
-    + 'never waiting. Give it a short wait_until for when you expect it; when the clock '
+    + 'never waiting. This session\'s own background commands and subagents wake it when they finish: '
+    + 'never arm a trigger or a short wait_until for them, just end the turn; a trigger is for what runs '
+    + 'outside this session (CI, a deploy, another host, a person). Give a trigger\'s park a short '
+    + 'wait_until for when you expect it; when the clock '
     + 'runs out first, check the thing and the trigger before parking again. When the next move is the '
     + 'user\'s (input, a review, a decision), it is Needs you (NEED_ACTION), never Waiting.\n\n')
     // The inbox (see 6b above).

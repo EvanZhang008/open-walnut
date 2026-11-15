@@ -10,6 +10,7 @@
 import os from 'node:os'
 import path from 'node:path'
 import { HostExecError } from './host-exec.js'
+import { macPlace, type MacSide } from './mac-places.js'
 import type { SendGate } from '../transfer/daemon-transfer-client.js'
 
 const PROBE_MS = 15_000
@@ -63,19 +64,7 @@ export function refuseProtected(host: string, p: string): void {
 
 // ── macOS places a program may not read or write without the person's OK (TCC) ──
 
-/**
- * Under a home directory: touching what is in them shows a permission dialog on that Mac's
- * screen. The same list as host_exec's (PROTECTED_IN_HOME in src/providers/host-exec-guards.ts,
- * not exported; tests/core/hosts/host-copy.test.ts fails when the two differ).
- */
-export const MAC_PROTECTED_IN_HOME = [
-  'Desktop', 'Documents', 'Downloads', 'Pictures', 'Movies', 'Music',
-  'Library/Mail', 'Library/Messages', 'Library/Safari', 'Library/Containers', 'Library/Group Containers',
-  'Library/Calendars', 'Library/Application Support/AddressBook', 'Library/Mobile Documents', 'Library/CloudStorage',
-]
-
-/** What host_copy knows of a Mac: its home when Walnut has seen it (null: only `~/...` and /Users/<name>/... are read). */
-export interface MacSide { home: string | null }
+export { MAC_PROTECTED_IN_HOME, macPlace, type MacSide } from './mac-places.js'
 
 /**
  * Whether `host` is a Mac, as this server knows it: this machine by its own platform, another
@@ -93,26 +82,6 @@ export async function macSide(host: string): Promise<MacSide | null> {
   }
   if (platform !== 'darwin') return null
   return { home: typeof probed?.home === 'string' && probed.home.startsWith('/') ? probed.home.replace(/\/+$/, '') : null }
-}
-
-const inside = (rel: string, root: string) => rel === root || rel.startsWith(`${root}/`)
-
-/** The guarded place `p` is in on a Mac (e.g. "~/Downloads", "/Volumes"), or null. */
-export function macPlace(p: string, mac: MacSide): string | null {
-  const norm = path.posix.normalize(p).replace(/\/+$/, '') || '/'
-  if (norm === '/Volumes' || norm.startsWith('/Volumes/')) return '/Volumes'
-  if (norm.split('/').some((s) => s.endsWith('.photoslibrary'))) return 'a Photos library'
-  // The part under a home: ~/..., the Mac's own home, or any /Users/<name>/... (another person's home too).
-  let rel: string | null = null
-  if (norm === '~' || norm.startsWith('~/')) rel = norm.slice(2)
-  else if (mac.home && inside(norm, mac.home)) rel = norm.slice(mac.home.length + 1)
-  else {
-    const m = /^\/Users\/[^/]+(?:\/(.*))?$/.exec(norm)
-    if (m) rel = m[1] ?? ''
-  }
-  if (rel === null) return null
-  const root = MAC_PROTECTED_IN_HOME.find((r) => inside(rel!, r))
-  return root ? `~/${root}` : null
 }
 
 /**

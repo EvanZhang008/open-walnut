@@ -7,7 +7,7 @@
  *
  * Waiting on the user's input, review or decision is Needs you (NEED_ACTION), always. A wait is
  * outside when the session names one (another task, its lead, the machine, or an outside thing: a
- * pipeline, a build, a deploy, a CR or PR review, a Slack or mail reply), or when the task has
+ * pipeline, CI, a deploy, a CR or PR review, a Slack or mail reply), or when the task has
  * something armed for one: a trigger of its own that does not watch the user's ask or letter, a
  * request it sent that is still unanswered, a subtask at work. Every path that parks a task asks
  * here (report-phase.ts, the session PATCH in api-v1.ts, trigger-api.ts, the trigger-held waits
@@ -93,7 +93,7 @@ export const WAIT_ON_USER_MESSAGE =
   'Nothing outside Walnut and the user is armed for this task (no trigger of its own, no unanswered request, '
   + 'no subtask at work), so WAITING would take it off the user\'s list while it may need them. When the next move '
   + 'is the user\'s (their input, review or decision), set phase=NEED_ACTION. When you wait on an outside thing '
-  + '(a pipeline, a build, a deploy, a CR or PR review, a Slack or mail reply, another task), arm a trigger on it '
+  + '(a pipeline, a build on CI or another host, a deploy, a CR or PR review, a Slack or mail reply, another task), arm a trigger on it '
   + '(trigger_create with wait:true parks the task), or pass waiting_on naming it, with a short wait_until.';
 
 /** The refusal a lead's park without a trigger of its own gets (parksOnlyOnTrigger). */
