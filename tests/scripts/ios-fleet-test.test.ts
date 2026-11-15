@@ -262,6 +262,15 @@ describe('ios-fleet-test.sh', () => {
     expect(r2.stderr).not.toContain('same_host')
     expect(r2.calls.filter((c) => c.op === 'host_copy' && (c.args.to_host === '__local__' || c.args.from_host === '__local__'))).toHaveLength(2)
     expect(r2.stderr).toContain('Passed: 41 passed')
+    // A task on that Mac itself: its task directory IS ~/.local/state/open-walnut/tasks/<id>,
+    // so the sources are already where the run reads them; the copy must not refuse to copy a
+    // file onto itself (2026-11-15: "SameFileError ... could not send the sources to __local__").
+    const ownTask = path.join(dir, '.local', 'state', 'open-walnut', 'tasks', 'task-own')
+    fs.mkdirSync(ownTask, { recursive: true })
+    const r3 = run(['unit'], alone, SCRIPT, { WALNUT_TASK_DIR: ownTask })
+    expect(r3.status, r3.stderr).toBe(0)
+    expect(r3.stderr).not.toContain('SameFileError')
+    expect(r3.stderr).toContain('Passed: 41 passed')
   })
 
   it('a start Walnut never took is asked again; one that may have reached the Mac is not', () => {

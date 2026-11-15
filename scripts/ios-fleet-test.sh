@@ -170,7 +170,8 @@ import json, os, shutil, sys
 a = json.load(sys.stdin)
 src, dst = os.path.expanduser(a["from"]), os.path.expanduser(a["to"])
 os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
-shutil.copyfile(src, dst)
+# The task directory is the same path on its own Mac: the file is there already.
+if not (os.path.exists(dst) and os.path.samefile(src, dst)): shutil.copyfile(src, dst)
 print(json.dumps({"outcome": "Copied on this computer to " + dst}))'
       return
     fi
