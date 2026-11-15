@@ -9,9 +9,12 @@
  * wins on specificity whatever the order. Pinned on every surface that uses it:
  *
  *   1. the Ask slot's first-paint view (the board is still loading);
- *   2. the Ask slot's pending view (a New chat launch is in flight);
- *   3. the Ask drawer's "Loading your asks" line;
- *   4. Mail's Ask drawer while its session starts.
+ *   2. the Ask drawer's "Loading your asks" line;
+ *   3. Mail's Ask drawer while its session starts.
+ *
+ * The Ask slot's pending view (a New chat launch is in flight) draws no ring at all since
+ * 3b4b4403a: it says "Starting ..." over a SetupProgress sweep, a 6px bar (AskWalnutSlot.tsx).
+ * Its case pins that no ring of either size is back there, and the bar's height.
  *
  * Each case holds the request that ends the state, so the state is on screen for
  * as long as the test needs. It saves a cropped shot of the surface and the boxes
@@ -124,12 +127,17 @@ test.describe('the Ask slot and drawer', () => {
     await composer.press('Enter')
     const pending = page.getByTestId('ask-walnut-pending')
     await expect(pending).toBeVisible({ timeout: 30_000 })
-    const size = await record(page, 'slot-pending', pending.locator('.ask-walnut-pending-status'), pending, {
-      menu: pending.getByTestId('ask-walnut-menu'), echo: pending.locator('.ask-walnut-pending-echo'),
-    })
+    const status = pending.locator('.ask-walnut-pending-status')
+    const progress = status.locator('.setup-progress[data-progress="unknown"]')
+    await expect(progress).toBeVisible()
+    await expect(progress.locator('.setup-progress-label')).toHaveText(/^Starting .+\.\.\.$/)
+    await expect(status.locator('.spinner')).toHaveCount(0)
+    const bar = await progress.locator('.setup-progress-track').evaluate((el) => (el as HTMLElement).offsetHeight)
+    const box = (await pending.boundingBox())!
+    await page.screenshot({ path: path.join(SHOTS, `slot-pending-${test.info().project.name}.png`), clip: { x: Math.max(0, box.x), y: Math.max(0, box.y), width: Math.min(box.width, 1280), height: box.height } })
     launch.open()
     await answered
-    expect(size).toEqual({ w: 12, h: 12 })
+    expect(bar).toBe(6)
   })
 })
 

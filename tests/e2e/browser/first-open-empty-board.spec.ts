@@ -40,6 +40,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { CHAT_VISIBLE_KEY, DRAFT_PANEL, draftComposer, openAskWalnutDrawer } from './draft-helpers'
 import { openHome } from './home-navigation-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { routeHealth } from './host-problems-helpers'
 
 const SHOTS = '/tmp/onboarding-walk/home'
 
@@ -432,6 +433,10 @@ test('an npm install sees where the clone will land, and Start targets it', asyn
 test('an npm install also gets Customize Walnut in the Ask Walnut drawer', async ({ page, baseURL }) => {
   await emptyBoardFor(page)
   await selfRepairAs(page, npmInstall, null)
+  // Past first-run setup: Claude Code here is checked and signed in, so the slot is the Ask slot,
+  // not the welcome card (first-use.ts firstUseNeedsSetup), and its menu opens the drawer. This
+  // board's socket is stubbed, so the check's own push never arrives to end "Checking your AI...".
+  await routeHealth(page, 'ready')
   await page.addInitScript((key) => { if (localStorage.getItem(key) === null) localStorage.setItem(key, 'true') }, CHAT_VISIBLE_KEY)
   await openFirstScreen(page, baseURL!)
   const drawer = await openAskWalnutDrawer(page)
