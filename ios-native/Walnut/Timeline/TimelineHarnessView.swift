@@ -62,7 +62,6 @@ struct TimelineHarnessView: View {
             ScrollView {
                 LetterMarkdownBody(markdown: store.tableLetter)
                     .padding(16)
-                    .pageWidth()
             }
             .accessibilityIdentifier("harness.letterSheet")
         }

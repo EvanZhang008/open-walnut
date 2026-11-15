@@ -47,7 +47,6 @@ struct OrgBriefView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .pageWidth()
         }
         .refreshable { await load() }
         .task(id: taskId) { await load() }

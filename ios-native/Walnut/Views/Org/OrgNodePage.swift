@@ -231,6 +231,9 @@ struct OrgNodePage: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Color(uiColor: .systemGroupedBackground))
+        // Threads, Tasks and Brief scroll up and down only: a sideways drag over them is reading,
+        // never Back, which stays the button and the swipe from the left edge (`ReadingPageSwipe.swift`).
+        .noContentSwipeBack()
         .navigationTitle(route.name)
         .navigationBarTitleDisplayMode(.inline)
         .task {

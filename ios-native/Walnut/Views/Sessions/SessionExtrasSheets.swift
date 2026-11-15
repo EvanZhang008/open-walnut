@@ -170,7 +170,6 @@ struct SessionPlanSheet: View {
                 } else if let plan {
                     MarkdownView(blocks: MarkdownParser.parse(plan.content), linkSource: plan.linkSource(requestedSessionID: sessionId), lazy: true)
                         .padding(16)
-                        .pageWidth()
                 } else if let emptyText {
                     ContentUnavailableView {
                         Label("No plan", systemImage: "list.bullet.clipboard")

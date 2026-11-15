@@ -99,6 +99,8 @@ struct LetterReaderView: View {
 
     var body: some View {
         panes
+        // A sideways drag over the letter is reading, never Back (`ReadingPageSwipe.swift`).
+        .noContentSwipeBack()
         // A reply on record whose delivery is still running: re-read the letter
         // until the outcome is in, so "Sending" turns into what happened.
         .modifier(LetterDeliveryWatch(
@@ -207,7 +209,6 @@ struct LetterReaderView: View {
                             .id(Self.boxId)
                     }
                 }
-                .pageWidth()
             }
             // The page's frame is what shows: it starts under the navigation bar
             // and ends at the reply box (and the keyboard). Its safe-area insets,
@@ -274,7 +275,6 @@ struct LetterReaderView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 4)
                 .padding(.bottom, 16)
-                .pageWidth()
                 .id(Self.contentId)
             }
             .scrollDismissesKeyboard(.interactively)

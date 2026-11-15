@@ -1,8 +1,9 @@
 import XCTest
 
-/// A sideways drag on the Org page's Threads and Brief moves nothing (2026-11-15, the user: "为什么
-/// ... 我可以左右滑 ... 它不就是上下的一个滑动吗"; his screenshot had every card slid right, its words
-/// cut at the edge). Main's Threads and Brief here hold what showed it: long absolute paths of video
+/// A sideways drag on the Org page's Threads and Brief moves nothing (2026-11-15, the user asked why he
+/// could swipe it left and right when it should only scroll up and down; his screenshot had every card slid right, its words
+/// cut at the edge). Before the fix, the drag right here slid the whole page off and went Back: iOS 26's
+/// content pop (`ReadingPageSwipe.swift`). The swipe from the left edge still goes Back. Main's Threads and Brief here hold what showed it: long absolute paths of video
 /// files, a long URL, a code line, a wide table, a task chip and a follow-up with its answer. Each
 /// view is dragged left and right with a real finger; the card and the Brief's text stay where they
 /// were, inside the screen. `OrgThreadsPageWidthTests` checks the page's scroll width itself.
@@ -117,8 +118,8 @@ final class OrgThreadsSidewaysDragUITests: XCTestCase {
 
     /// Drags a finger across `target` sideways, held a moment at the end, then lets go.
     private func dragSideways(_ target: XCUIElement, from: CGFloat, to: CGFloat) {
-        let start = target.coordinate(withNormalizedOffset: CGVector(dx: from, dy: 0.3))
-        let end = target.coordinate(withNormalizedOffset: CGVector(dx: to, dy: 0.32))
+        let start = target.coordinate(withNormalizedOffset: CGVector(dx: from, dy: 0.45))
+        let end = target.coordinate(withNormalizedOffset: CGVector(dx: to, dy: 0.47))
         start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.8)
     }
 
@@ -148,11 +149,18 @@ final class OrgThreadsSidewaysDragUITests: XCTestCase {
         let card = element(app, "org.thread.\(Self.threadID)")
         XCTAssertTrue(card.waitForExistence(timeout: 20), "the long thread's card is not on the page")
         // Its summary open, so the long paths, the code and the table are on screen.
+        // By its place: the card is one accessibility container, and XCUITest calls the button
+        // inside it not hittable although a finger reaches it.
         let expand = element(app, "org.thread.summary.expand")
-        if expand.waitForExistence(timeout: 3) { expand.tap() }
+        XCTAssertTrue(expand.waitForExistence(timeout: 5), "the long summary has no Expand")
+        expand.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let conversation = element(app, "org.thread.conversation")
+        if conversation.waitForExistence(timeout: 3) {
+            conversation.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.5)).tap()
+        }
         Thread.sleep(forTimeInterval: 1)
         attach(app, "threads-long-paths")
-        assertStaysPut(app, drag: card, marker: card, "threads card")
+        assertStaysPut(app, drag: element(app, "org.threads"), marker: card, "threads card")
 
         let brief = app.segmentedControls["org.node.tabs"].buttons["Brief"]
         XCTAssertTrue(brief.waitForExistence(timeout: 10), "no Brief in the page's view switch")
@@ -162,5 +170,13 @@ final class OrgThreadsSidewaysDragUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 1)
         attach(app, "brief-long-paths")
         assertStaysPut(app, drag: element(app, "org.brief"), marker: text, "brief text")
+
+        // Back is still the swipe from the screen's left edge.
+        let window = app.windows.firstMatch
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.005, dy: 0.5))
+            .press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)),
+                   withVelocity: .fast, thenHoldForDuration: 0)
+        XCTAssertTrue(element(app, "org.node.page").waitForNonExistence(timeout: 5), "a swipe from the left edge no longer goes Back")
+        attach(app, "edge-swipe-back")
     }
 }

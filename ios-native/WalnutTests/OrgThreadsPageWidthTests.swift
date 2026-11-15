@@ -3,24 +3,27 @@ import SwiftUI
 import UIKit
 @testable import Walnut
 
-/// THE THREADS PAGE SCROLLS UP AND DOWN, NEVER SIDEWAYS.
+/// THE THREADS PAGE'S CONTENT FITS THE SCREEN.
 ///
-/// 2026-11-15, the user on the Org page's Threads: "为什么 ... 我可以左右滑 ... 它不就是上下的一个
-/// 滑动吗". His screenshot had every card slid right under a drag, its words cut at the right edge;
-/// the cards held long absolute paths of video files, a task chip and a quoted message. A vertical
-/// ScrollView scrolls sideways as soon as its content's frame is wider than the screen, so this
-/// lays the real page out in a phone-sized and a tablet-sized window with the content that showed it
-/// (unbroken paths and URLs, a code line, a wide table, a long chip, a long follow-up) and checks
-/// both the page (its scroll view's content is no wider than the scroll view) and each card (it fits
-/// the width it is given, so its words wrap inside it rather than running past the edge).
+/// 2026-11-15, the user asked why the Org page's Threads moved left and right when it should
+/// only scroll up and down; his screenshot had every card slid right, its words cut at the edge,
+/// on cards with long absolute paths, a task chip and a quoted message. The cause was iOS 26's
+/// content pop (`ReadingPageSwipe.swift`, `OrgThreadsSidewaysDragUITests`), not content wider than
+/// the screen: on his real threads the page measured 390 pt in a 390 pt window before the fix too.
+/// This keeps it that way. It lays the real page out in a phone-sized and a tablet-sized window
+/// with long unbroken paths and URLs, a code line, a wide table, a long chip and a long follow-up,
+/// and checks the page (its scroll view's content is no wider than the scroll view), each card,
+/// the whole summary its Expand shows and the whole conversation (each fits the width it is given,
+/// so its words wrap inside it, and a page that ever did scroll sideways has no wider content to show).
 @MainActor
 final class OrgThreadsPageWidthTests: XCTestCase {
     private static let path = "/Users/someone/.local/state/open-walnut/tasks/51f06886-908d-5ed0-a367-2c2f05e6d7b7/clips/router-dialog-folders-webkit.mp4"
     private static let url = "https://example.com/a/very/long/address/without/any/spaces/" + String(repeating: "segment-", count: 12) + "end"
 
+    /// Paths, a URL, a code line and a table, plus CJK text with no spaces (escaped test data).
     private static var reply: String {
         """
-        Shipped: the router settings now open in one dialog in the middle of the screen. 已上线：router 设置现在是一个屏幕中间的单独弹窗。在 Apps › Mail 和 Org 页打开的都是这一个，存的是同一份设置。
+        Shipped: the router settings now open in one dialog in the middle of the screen. \u{5DF2}\u{4E0A}\u{7EBF}\u{FF1A}router \u{8BBE}\u{7F6E}\u{73B0}\u{5728}\u{662F}\u{4E00}\u{4E2A}\u{5C4F}\u{5E55}\u{4E2D}\u{95F4}\u{7684}\u{5355}\u{72EC}\u{5F39}\u{7A97}\u{3002}\u{5728} Apps \u{203A} Mail \u{548C} Org \u{9875}\u{6253}\u{5F00}\u{7684}\u{90FD}\u{662F}\u{8FD9}\u{4E00}\u{4E2A}\u{FF0C}\u{5B58}\u{7684}\u{662F}\u{540C}\u{4E00}\u{4EFD}\u{8BBE}\u{7F6E}\u{3002}
 
         - Open the dialog, the folders load, tick two, save, open again: \(path)
         - A failed read and Try again: \(path.replacingOccurrences(of: "folders", with: "error-retry"))
@@ -86,6 +89,22 @@ final class OrgThreadsPageWidthTests: XCTestCase {
                                          "at \(width) pt the Threads page is \(s.contentSize.width) pt wide: it scrolls sideways")
             }
             window.isHidden = true
+        }
+    }
+
+    /// What a card shows once opened fits too: the summary whole (its Expand) and the whole
+    /// conversation. His screenshot was of an opened summary; a folded card is a preview only.
+    func testOpenedSummaryAndConversationFitThePhoneWidth() throws {
+        let threads = try threads()
+        let tasks = TasksStore()
+        let inner: CGFloat = 390 - 32 - 28
+        for t in threads {
+            let whole = UIHostingController(rootView: LetterMarkdownBody(markdown: t.reply ?? "").markdownBodyFont(.subheadline).environment(tasks))
+                .sizeThatFits(in: CGSize(width: inner, height: 100_000))
+            XCTAssertLessThanOrEqual(whole.width, inner + 0.5, "thread \(t.id): its whole summary is \(whole.width) pt wide in a \(inner) pt column")
+            let conversation = UIHostingController(rootView: OrgThreadConversation(thread: t, shared: [], name: "Growth VP", now: Date()).environment(tasks))
+                .sizeThatFits(in: CGSize(width: inner, height: 100_000))
+            XCTAssertLessThanOrEqual(conversation.width, inner + 0.5, "thread \(t.id): its conversation is \(conversation.width) pt wide in a \(inner) pt column")
         }
     }
 
