@@ -666,6 +666,7 @@ let healthMonitor: SessionHealthMonitor | null = null
 let changesPrewarmer: import('../core/session-changes-prewarm.js').SessionChangesPrewarmer | null = null
 let historyReadyRefresher: import('../core/history-ready-refresh.js').HistoryReadyRefresher | null = null
 let stopSessionGitStatus: (() => void) | null = null
+let stopMissingWalnutTool: (() => void) | null = null
 let unsubscribeMemoryPressure: (() => void) | null = null
 let sessionReaper: SessionReaper | null = null
 /** Primary box only: warms every configured host's daemon at startup. */
@@ -4385,6 +4386,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     stopSessionGitStatus?.()
     stopSessionGitStatus = startSessionGitStatus()
 
+    // -- A session calling a Walnut tool its CLI does not offer is told what to use instead --
+    if (!isFollower()) {
+      const { startMissingWalnutTool } = await import('../core/sessions/missing-walnut-tool.js')
+      stopMissingWalnutTool?.()
+      stopMissingWalnutTool = startMissingWalnutTool()
+    }
+
     // -- Start side-thread manager --
     // Side threads are taskless hidden forks, so no other reaper will ever touch
     // them: this owns their standby TTL, live cap and idle retirement, and sweeps
@@ -7282,6 +7290,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   }
   stopSessionGitStatus?.()
   stopSessionGitStatus = null
+  stopMissingWalnutTool?.()
+  stopMissingWalnutTool = null
   if (historyReadyRefresher) {
     historyReadyRefresher.stop()
     historyReadyRefresher = null

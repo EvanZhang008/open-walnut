@@ -8720,6 +8720,9 @@ export class ClaudeCodeSession {
               toolUseId: block.tool_use_id,
               result: resultContent.slice(0, 2000),
               ...(userParentToolUseId ? { parentToolUseId: userParentToolUseId } : {}),
+              // Readers that act on a result (missing-walnut-tool.ts) need both: a failed call, and not a replay.
+              ...((block as { is_error?: boolean }).is_error === true ? { isError: true } : {}),
+              ...(this._isReplayedByOffset() === true ? { replayed: true } : {}),
             }, ['main-ai'], { source: 'session-runner' })
           }
         }
@@ -15626,7 +15629,7 @@ export class SessionRunner {
    * the new CLI holds and carries no notice of its own prompt. Never throws.
    */
   private async resumeSpawnPrompt(sessionId: string, stored: string | undefined): Promise<string | undefined> {
-    if (!stored) return stored
+    if (!stored) return this.resumeOwedPrompt(sessionId, stored)
     try {
       const { getSessionByClaudeId, updateSessionRecord } = await import('../core/session-tracker.js')
       const record = await getSessionByClaudeId(sessionId)
@@ -15644,6 +15647,30 @@ export class SessionRunner {
       return fresh
     } catch (err) {
       log.session.warn('resume: prompt refresh failed, replaying the stored prompt', { sessionId, error: err instanceof Error ? err.message : String(err) })
+      return stored
+    }
+  }
+
+  /**
+   * A task session whose record holds no prompt, though a start would have given it one (its
+   * isolating profile was dropped since: prompt-refresh.ts promptOwedOnResume), resumes on the
+   * current session context, stored before the spawn like a refresh. Never throws.
+   */
+  private async resumeOwedPrompt(sessionId: string, stored: string | undefined): Promise<string | undefined> {
+    try {
+      const { getSessionByClaudeId, updateSessionRecord } = await import('../core/session-tracker.js')
+      const record = await getSessionByClaudeId(sessionId)
+      if (!record) return stored
+      const { missingResumePrompt } = await import('../core/sessions/prompt-refresh.js')
+      const fresh = await missingResumePrompt(record)
+      if (!fresh) return stored
+      await updateSessionRecord(sessionId, { appliedAppendSystemPrompt: fresh })
+      log.session.info('resume: builds the Walnut prompt the session had none of (its own-prompt profile is gone)', {
+        sessionId, taskId: record.taskId, promptLength: fresh.length,
+      })
+      return fresh
+    } catch (err) {
+      log.session.warn('resume: building the missing prompt failed, resuming without one', { sessionId, error: err instanceof Error ? err.message : String(err) })
       return stored
     }
   }

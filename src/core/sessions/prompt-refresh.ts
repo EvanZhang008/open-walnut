@@ -160,3 +160,35 @@ export async function freshResumePrompt(
   const fresh = callerPrompt !== null ? `${callerPrompt}${TASK_CONTEXT_JOIN}${ctx.systemPrompt}` : ctx.systemPrompt;
   return Buffer.byteLength(fresh, 'utf8') <= PROMPT_MAX_BYTES && fresh !== stored ? fresh : null;
 }
+
+export type MissingPromptRecord = RefreshRecord & Partial<Pick<SessionRecord, 'cwd' | 'host' | 'profile'>>;
+
+/**
+ * True when a resume of this session must build Walnut's session context because the record holds
+ * none, while a start of it would have given it one (sync, pure): a task session, not a lane, not
+ * an ACP engine, and no profile that brings its own prompt (slim, a replacing or caller prompt, an
+ * area role).
+ *
+ * Why (2026-11-14): a task the mail router had made ran isolated, its prompt in its profile and none
+ * stored. The router simplification dropped that profile so the task would resume with its full
+ * tools, but the resume replays only a STORED prompt, so it came back with no Walnut instructions at
+ * all: it kept calling the retired router_work, never knew task_update or task_complete, and stayed
+ * open asking the user to close it by hand.
+ */
+export function promptOwedOnResume(record: MissingPromptRecord): boolean {
+  // '' is a prompt-less spawn's read-back (spawn-prefix.ts): owed for a task session too. A side
+  // thread, which must copy its parent's prompt byte for byte, has no task and stays as it is.
+  if (record.appliedAppendSystemPrompt) return false;
+  if (!record.taskId || record.lane || isAcpEngine(resolveEngine(record.engine))) return false;
+  const profile = record.profile;
+  return !profile?.slim && !profile?.systemPrompt && !profile?.areaRole;
+}
+
+/** The session context a resume of such a session runs on (promptOwedOnResume), or null. */
+export async function missingResumePrompt(record: MissingPromptRecord): Promise<string | null> {
+  if (!promptOwedOnResume(record)) return null;
+  const { buildSessionContext } = await import('./session-context.js');
+  const ctx = await buildSessionContext(record.taskId!, record.cwd ?? undefined, record.host ?? undefined);
+  const prompt = ctx.systemPrompt;
+  return prompt && Buffer.byteLength(prompt, 'utf8') <= PROMPT_MAX_BYTES ? prompt : null;
+}

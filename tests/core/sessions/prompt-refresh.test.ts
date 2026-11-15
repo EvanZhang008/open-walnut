@@ -24,7 +24,7 @@ import { addTask } from '../../../src/core/task-manager.js'
 import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../../src/core/session-tracker.js'
 import { buildSessionContext } from '../../../src/core/sessions/session-context.js'
 import {
-  MIN_REFRESH_DEBT_BYTES, ORG_NODE_REFRESH_HORIZON, TASK_CONTEXT_JOIN, freshResumePrompt, nothingReadSinceCompaction,
+  MIN_REFRESH_DEBT_BYTES, ORG_NODE_REFRESH_HORIZON, TASK_CONTEXT_JOIN, freshResumePrompt, missingResumePrompt, nothingReadSinceCompaction, promptOwedOnResume,
   promptDebtBytes, refreshHorizon, refreshOnResume, refreshPays, replayBuysNothing,
 } from '../../../src/core/sessions/prompt-refresh.js'
 import { instructionNoticeFor } from '../../../src/core/sessions/instruction-notice.js'
@@ -177,5 +177,63 @@ describe('every resume spawn that replays a stored prompt asks for the current o
     const readers = members.filter((m) => /await this\.resolveResumeArgs\(/.test(m))
     expect(readers.length).toBeGreaterThanOrEqual(2)
     for (const m of readers) expect(m, m.slice(0, 80)).toMatch(/this\.resumeSpawnPrompt\(/)
+  })
+})
+
+describe('missingResumePrompt: a task session with no stored prompt resumes on Walnut\'s', () => {
+  // 2026-11-14: a router-made task's isolating profile was dropped by the router simplification; its
+  // record stored no prompt, so it resumed with no Walnut instructions and could not close itself.
+  async function bare(profile?: Parameters<typeof updateSessionRecord>[1]['profile']) {
+    const { task } = await addTask({ title: 'Lambda notice', project: 'marina' })
+    const sid = randomUUID()
+    await createSessionRecord(sid, task.id, task.project, WALNUT_HOME)
+    if (profile) await updateSessionRecord(sid, { profile })
+    return { sid, task, rec: (await getSessionByClaudeId(sid))! }
+  }
+
+  it('builds the session context, which names the CLI fallback and the lead route', async () => {
+    const { rec, task } = await bare({ mcpServers: { walnut: { command: '/bin/sh', args: ['-c', 'true'] } } })
+    expect(rec.appliedAppendSystemPrompt).toBeUndefined()
+    expect(promptOwedOnResume(rec)).toBe(true)
+    const prompt = await missingResumePrompt(rec)
+    expect(prompt).toBe((await buildSessionContext(task.id)).systemPrompt)
+    expect(prompt).toContain('walnut tools call <op>')
+    expect(prompt).toContain('task_send')
+  })
+
+  it('leaves alone a session whose profile brings its own prompt, a lane, a taskless one, or a stored one', async () => {
+    const { rec } = await bare()
+    expect(promptOwedOnResume({ ...rec, profile: { slim: true } })).toBe(false)
+    expect(promptOwedOnResume({ ...rec, profile: { systemPrompt: 'Own words', systemPromptMode: 'replace' } })).toBe(false)
+    expect(promptOwedOnResume({ ...rec, profile: { areaId: 'personal', areaRole: 'router' } })).toBe(false)
+    expect(promptOwedOnResume({ ...rec, lane: 'chat' })).toBe(false)
+    expect(promptOwedOnResume({ ...rec, taskId: undefined as unknown as string })).toBe(false)
+    expect(promptOwedOnResume({ ...rec, appliedAppendSystemPrompt: 'stored' })).toBe(false)
+    // '' is a prompt-less spawn's read-back: owed for a task session; a side thread (no task) keeps it.
+    expect(promptOwedOnResume({ ...rec, appliedAppendSystemPrompt: '' })).toBe(true)
+    expect(promptOwedOnResume({ ...rec, appliedAppendSystemPrompt: '', taskId: '' })).toBe(false)
+    expect(await missingResumePrompt({ ...rec, profile: { slim: true } })).toBeNull()
+  })
+
+  it('a receiver profile the router simplification drops leaves a session that resumes with the prompt', async () => {
+    const { runRouterSimplify } = await import('../../../src/core/router/simplify-migration.js')
+    const receiver = {
+      areaId: 'personal', areaRole: 'work', areaPolicyVersion: 1, slim: true, systemPromptMode: 'replace',
+      systemPrompt: 'Use router_item and router_work.', tools: [''], allowedTools: ['mcp__walnut__router_item', 'mcp__walnut__router_work'],
+    } as unknown as Parameters<typeof updateSessionRecord>[1]['profile']
+    const { sid, rec } = await bare(receiver)
+    expect(promptOwedOnResume(rec)).toBe(false)
+    await runRouterSimplify({ home: WALNUT_HOME, listTasks: async () => [] })
+    const after = (await getSessionByClaudeId(sid))!
+    expect(after.profile).toBeUndefined()
+    expect(promptOwedOnResume(after)).toBe(true)
+    expect(await missingResumePrompt(after)).toContain('walnut tools call <op>')
+    // The resume stores it; a rollback puts the receiver profile back without that prompt.
+    await updateSessionRecord(sid, { appliedAppendSystemPrompt: (await missingResumePrompt(after))! })
+    const { restoreRouterSimplify } = await import('../../../src/core/router/simplify-migration.js')
+    await restoreRouterSimplify({ home: WALNUT_HOME })
+    const back = (await getSessionByClaudeId(sid))!
+    expect(back.profile?.areaRole).toBe('work')
+    expect(back.appliedAppendSystemPrompt).toBeUndefined()
   })
 })

@@ -71,7 +71,9 @@ function defaults(deps: RouterSimplifyDeps): Required<RouterSimplifyDeps> {
     }),
     setProfile: deps.setProfile ?? (async (sessionId, profile) => {
       const { updateSessionRecord } = await import('../session-tracker.js');
-      await updateSessionRecord(sessionId, { profile });
+      // A restored receiver profile carries its own prompt: the Walnut prompt a resume of this build
+      // stored for it since (prompt-refresh.ts promptOwedOnResume) goes, or the older build replays both.
+      await updateSessionRecord(sessionId, profile ? { profile, appliedAppendSystemPrompt: undefined } : { profile });
     }),
     now: deps.now ?? (() => new Date()),
     cancelApproval: deps.cancelApproval ?? (async (approvalId, reason) => {
