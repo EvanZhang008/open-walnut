@@ -7,6 +7,7 @@
 import { StepIcon } from './StepIcon';
 import { useCallback, useContext, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Link } from 'react-router-dom';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { fetchConfig, fetchFreshConfig, updateConfig } from '@/api/config';
 import { fetchSession } from '@/api/sessions';
 import { useEvent } from '@/hooks/useWebSocket';
@@ -57,8 +58,8 @@ export function IdleCompactSetting() {
   // The setting as this row shows it, kept beside the state so a config:changed that comes back
   // during a save compares with what the save set.
   const shown = useRef<IdleSetting | null>(null);
-  const show = useCallback((s: IdleSetting | null) => { shown.current = s; setSetting(s); }, []);
-  const read = useCallback(async (fresh: boolean): Promise<IdleSetting | null> => {
+  const show = useLeanCallback((s: IdleSetting | null) => { shown.current = s; setSetting(s); }, []);
+  const read = useLeanCallback(async (fresh: boolean): Promise<IdleSetting | null> => {
     try {
       const s = settingOf(await (fresh ? fetchFreshConfig() : fetchConfig()));
       setReadError(null);
