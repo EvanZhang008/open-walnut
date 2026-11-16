@@ -18,7 +18,11 @@
  * spawn; `awaitSpawn()` exposes it, and the delivery paths await it first.
  *
  * What's real: ClaudeCodeSession.send(), awaitSpawn(), and isolated SQLite persistence.
- * What's mocked: the transport and cwd pre-flight.
+ * What's mocked: the transport and the host pre-flights (cwd, launch mode).
+ *
+ * Every wait for the spawn waits on transport.start() being entered, never on a
+ * clock: the pre-spawn steps before it grow with the product, and a 1 s poll
+ * turned red when a host read joined them (2026-11-10 launch mode).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMockConstants } from '../helpers/mock-constants.js';
@@ -30,11 +34,15 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-spawn-barrie
 const calls: string[] = [];
 /** Resolves the pending transport.start() — the test controls spawn duration. */
 let releaseStart: (() => void) | null = null;
+/** Settles when transport.start() is entered: the spawn's own event. */
+let startEntered: Promise<void>;
+let markStartEntered: () => void = () => {};
 
 vi.mock('../../src/providers/session-manager.js', () => ({
   createSessionManager: () => ({
     start: async () => {
       calls.push('start');
+      markStartEntered();
       await new Promise<void>((resolve) => { releaseStart = resolve; });
       calls.push('start:resolved');
       return { pid: 4242, outputFile: '/tmp/spawn-barrier.jsonl', fileSize: 0 };
@@ -65,6 +73,11 @@ vi.mock('../../src/providers/session-manager.js', () => ({
 vi.mock('../../src/utils/cwd-check.js', () => ({
   checkCwdExists: async () => ({ ok: true }),
 }));
+// The launch-mode pre-flight reads this machine's engine settings through a real local
+// daemon and runs the local Claude check; none of that is the barrier under test.
+vi.mock('../../src/providers/claude-launch-mode.js', () => ({
+  resolveClaudeLaunchMode: async () => ({ mode: 'default', source: 'engine' }),
+}));
 
 import { ClaudeCodeSession, SessionRunner, sessionRunner } from '../../src/providers/claude-code-session.js';
 import * as tracker from '../../src/core/session-tracker.js';
@@ -76,6 +89,7 @@ import { log } from '../../src/logging/index.js';
 beforeEach(() => {
   calls.length = 0;
   releaseStart = null;
+  startEntered = new Promise<void>((resolve) => { markStartEntered = resolve; });
 });
 
 describe('spawn window — awaitSpawn() barrier', () => {
@@ -111,7 +125,7 @@ describe('spawn window — awaitSpawn() barrier', () => {
     expect(session.sessionId).toBe(preassignedSessionId);
 
     // Spawn is in flight and has NOT resolved yet.
-    await vi.waitFor(() => expect(calls).toContain('start'));
+    await startEntered;
     expect(calls).not.toContain('start:resolved');
 
     // User types in that window. awaitSpawn() must not resolve yet...
@@ -149,7 +163,7 @@ describe('spawn window — awaitSpawn() barrier', () => {
       undefined, undefined, undefined, false, undefined, undefined, undefined,
       undefined, { preassignedSessionId },
     );
-    await vi.waitFor(() => expect(calls).toContain('start'));
+    await startEntered;
     releaseStart!();
     await session.sessionReady;
     try {
@@ -183,7 +197,7 @@ describe('spawn window — awaitSpawn() barrier', () => {
     bus.emit(EventNames.SESSION_START, {
       taskId: '', message: '', cwd: '/tmp', lane: 'test-spawn-window-lane', preassignedSessionId: sid,
     }, ['session-runner'], { source: 'test' });
-    await vi.waitFor(() => expect(calls).toContain('start'), { timeout: 5000 });
+    await startEntered;
 
     // The relayed turn's message arrives while the spawn is still in flight.
     const queued = await sendMessageToSession(sid, 'hello from the phone', { source: 'test' });
@@ -259,7 +273,7 @@ describe('spawn window — awaitSpawn() barrier', () => {
       undefined, undefined, undefined, false, undefined, undefined, undefined,
       undefined, { preassignedSessionId: '99999999-8888-4777-8666-555555555555' },
     );
-    await vi.waitFor(() => expect(calls).toContain('start'));
+    await startEntered;
     releaseStart!();
     await vi.waitFor(() => expect(calls).toContain('start:resolved'));
 
@@ -277,7 +291,7 @@ describe('spawn window — awaitSpawn() barrier', () => {
       undefined, undefined, undefined, false, undefined, undefined, undefined,
       undefined, { preassignedSessionId: '22222222-3333-4444-8555-666666666666' },
     );
-    await vi.waitFor(() => expect(calls).toContain('start'));
+    await startEntered;
 
     // Wait BEFORE the spawn settles — this is the real ordering (user types during
     // the window), and it proves the barrier is swallow-only: `.then(noop, noop)`.
