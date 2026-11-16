@@ -28,7 +28,7 @@ import { execFile } from 'node:child_process'
 import { log } from '../logging/index.js'
 import { observe } from './observability/metrics.js'
 import { noteSleepSinceLastLook } from '../lib/sleep-ledger.js'
-import { stallMetricOf } from './stall-cause.js'
+import { HISTOGRAM_STALL_MESSAGE, PROBE_LATE_MESSAGE, stallMetricOf } from './stall-cause.js'
 
 /** Loop delay above this (ms) in a window is reported as a stall. */
 const STALL_THRESHOLD_MS = 250
@@ -273,11 +273,11 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
           if (slept) {
             log.web.info('system sleep detected via kern.waketime (histogram window dropped)', { maxMs: payload.maxMs })
           } else {
-            log.web.warn('event-loop stall detected (histogram)', payload)
+            log.web.warn(HISTOGRAM_STALL_MESSAGE, payload)
           }
         })
       } else {
-        log.web.warn('event-loop stall detected (histogram)', payload)
+        log.web.warn(HISTOGRAM_STALL_MESSAGE, payload)
       }
     }
     histogram.reset()
@@ -326,7 +326,7 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
           ...(hold ? { hold } : {}),
         }
         const report = (): void => {
-          log.web.warn('event-loop blocked (probe late)', payload)
+          log.web.warn(PROBE_LATE_MESSAGE, payload)
           // Health: Walnut's own stalls and the machine's are counted apart
           // (stall-cause.ts), so a starved server opens no "fix Walnut" task.
           observe(stallMetricOf(hold), payload.lateByMs)

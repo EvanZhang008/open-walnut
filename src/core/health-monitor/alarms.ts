@@ -9,7 +9,21 @@
  */
 
 import type { AlarmDef } from './types.js'
-import { STALL_MACHINE_METRIC, STALL_OWN_METRIC } from '../stall-cause.js'
+import {
+  HISTOGRAM_STALL_MESSAGE, PROBE_LATE_MESSAGE, STALL_LOG_SUBSYSTEM, STALL_MACHINE_METRIC, STALL_OWN_METRIC,
+} from '../stall-cause.js'
+import { signatureKey } from './signature.js'
+
+/**
+ * The stalls the event-loop monitor logs. The probe line is the event the two stall
+ * alarms judge (by length and cause). The histogram line reports the same holds from a
+ * 5 s window; one it sees and the probe misses is under the probe's 1 s interval, so
+ * under the stall alarms' 1 s threshold too.
+ */
+const STALL_LOG_LINES = [
+  signatureKey(STALL_LOG_SUBSYSTEM, PROBE_LATE_MESSAGE),
+  signatureKey(STALL_LOG_SUBSYSTEM, HISTOGRAM_STALL_MESSAGE),
+]
 
 export const BUILTIN_ALARMS: readonly AlarmDef[] = [
   {
@@ -35,7 +49,7 @@ export const BUILTIN_ALARMS: readonly AlarmDef[] = [
     description: 'The longest event-loop hold in each minute that Walnut\'s own work caused (code, garbage collection or a blocking call). While it is high every page and every send waits.',
     metric: STALL_OWN_METRIC, kind: 'gauge', stat: 'max', periodMin: 1, comparison: '>', threshold: 1000,
     evaluationPeriods: 10, datapointsToAlarm: 6, missing: 'notBreaching',
-    unit: 'ms', action: { then: 'fix-task' },
+    unit: 'ms', action: { then: 'fix-task' }, logLines: STALL_LOG_LINES,
   },
   {
     // The machine's share of the stalls (stall-cause.ts): no Walnut code ran in
@@ -46,7 +60,7 @@ export const BUILTIN_ALARMS: readonly AlarmDef[] = [
     description: 'The longest event-loop delay in each minute while the machine did not run the server (CPU or memory pressure, swap). Walnut code was not running; pages and sends still wait.',
     metric: STALL_MACHINE_METRIC, kind: 'gauge', stat: 'max', periodMin: 1, comparison: '>', threshold: 1000,
     evaluationPeriods: 10, datapointsToAlarm: 6, missing: 'notBreaching',
-    unit: 'ms', action: { then: 'none' },
+    unit: 'ms', action: { then: 'none' }, logLines: STALL_LOG_LINES,
   },
   {
     id: 'send.delivery',
@@ -145,6 +159,13 @@ export function setCustomAlarms(defs: readonly AlarmDef[]): void {
 /** Every alarm with a def of its own: the built-ins, then the person's own. */
 export function allAlarms(): readonly AlarmDef[] {
   return custom.length ? [...BUILTIN_ALARMS, ...custom] : BUILTIN_ALARMS
+}
+
+/** Each kind of log line an alarm watches (AlarmDef.logLines) → the first alarm that does. */
+export function logLineOwners(defs: readonly AlarmDef[] = allAlarms()): Map<string, AlarmDef> {
+  const out = new Map<string, AlarmDef>()
+  for (const d of defs) for (const sig of d.logLines ?? []) if (!out.has(sig)) out.set(sig, d)
+  return out
 }
 
 /** A built-in's or a custom alarm's def by its id. */

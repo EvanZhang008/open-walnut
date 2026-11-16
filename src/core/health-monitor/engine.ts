@@ -12,7 +12,7 @@
  */
 
 import { log } from '../../logging/index.js'
-import { allAlarms } from './alarms.js'
+import { allAlarms, logLineOwners } from './alarms.js'
 import { flapHeld, sameEpisode } from './transitions.js'
 import { MinuteCollector, type SignatureCount } from './collect.js'
 import { evaluateAlarm, fillPattern, indexRows, matchSeries, MINUTE_MS, parseSeriesKey, type RowIndex } from './evaluate.js'
@@ -225,9 +225,21 @@ export class HealthMonitor {
       const lb = this.logHours.meta[signatureId(b)]?.level === 'error' ? 0 : 1
       return la - lb || (last60.get(b) ?? 0) - (last60.get(a) ?? 0)
     })
+    // A kind another alarm judges (AlarmDef.logLines) gets no log alarm of its own; one
+    // raised before that alarm claimed it goes back to OK, so its card and task close.
+    const owners = logLineOwners()
+    for (const inst of Object.values(this.state.alarms)) {
+      const owner = inst.signature ? owners.get(inst.signature) : undefined
+      if (!owner || inst.state === 'OK') continue
+      const kind = inst.defId === 'log.chronic' ? 'chronic' : 'spike'
+      const level = this.logHours.meta[signatureId(inst.signature!)]?.level ?? 'warn'
+      const reason = `left to the "${owner.title}" alarm (${owner.id}), which judges each of these lines`
+      await this.apply(logDef(kind, inst.signature!, level), inst.id, undefined, 'OK', inst.value, reason, now, inst.signature)
+    }
     // The cap is on log alarms ringing now; ones back to OK are forgotten by forgetLogAlarms.
     let active = Object.values(this.state.alarms).filter((a) => a.signature && a.state === 'ALARM').length
     for (const sig of ranked) {
+      if (owners.has(sig)) continue
       const sid = signatureId(sig)
       const level = this.logHours.meta[sid]?.level ?? 'warn'
       // spike

@@ -75,6 +75,13 @@ export interface AlarmDef {
   action: AlarmAction
   /** A task that owns this problem from the start (a custom alarm's config); an override wins. */
   ownerTask?: string
+  /**
+   * The kinds of warn/error line (signature.ts keys) that record one event of
+   * what this alarm measures. The log alarms (log-alarms.ts) leave these kinds
+   * to it: counting them again by volume alone would ring on what this alarm
+   * already judged harmless (a short hold, the machine's share).
+   */
+  logLines?: readonly string[]
 }
 
 export interface AlarmHistoryEntry {

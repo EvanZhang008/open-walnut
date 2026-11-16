@@ -42,6 +42,28 @@ function maxKeyOf(name: string, labels: Record<string, string> | undefined): str
   return null
 }
 
+/** Label sets that pick a health series in maxKeyOf, for healthSeriesNamesOf. */
+const LABEL_PROBES: ReadonlyArray<Record<string, string> | undefined> = [
+  undefined,
+  ...['stdin', 'mid-turn', 'resume'].flatMap((path): Array<Record<string, string>> => [{ path }, { path, cause: 'machine' }]),
+]
+
+/**
+ * The names of every health series a registry metric or gauge lands under (its
+ * labels left out). The guard test that ties each alarm's log lines to it
+ * (tests/core/health-monitor/log-line-owners.test.ts) reads this.
+ */
+export function healthSeriesNamesOf(name: string): string[] {
+  const out = new Set<string>()
+  if (COUNTERS.has(name)) out.add(name)
+  for (const labels of LABEL_PROBES) {
+    const k = maxKeyOf(name, labels)
+    if (k) out.add(k)
+  }
+  if (out.size === 0) out.add(name) // a gauge (reportGauge) is its own series
+  return [...out]
+}
+
 /** The most kinds of log line one minute keeps; the rest count under `log.other`. */
 const MAX_SIGNATURES_PER_MINUTE = 200
 

@@ -267,6 +267,33 @@ describe('health monitor engine', () => {
     expect(Object.keys(h2.m.alarms).filter((id) => id.startsWith('log.spike:old'))).toEqual([])
   })
 
+  it('a kind of line another alarm judges (logLines) never raises a log alarm; one raised before goes back to OK', async () => {
+    // 2026-11-16: 30 "probe late" lines an hour against a normal of 4 rang the log spike
+    // while the stall alarm, which judges each of those holds, read OK.
+    const sig = signatureKey('web', 'event-loop blocked (probe late)')
+    const owner = BUILTIN_ALARMS.find((d) => d.logLines?.includes(sig))
+    expect(owner?.id).toBe('eventloop.stall')
+    const fresh = signatureKey('session', 'gateway relay refused')
+    const hours: Record<string, Record<string, number>> = {}
+    for (let d = 1; d <= 3; d++) hours[String(hourStart(START + 30 * 60_000) - d * DAY_MS)] = { [signatureId(sig)]: 4, [signatureId(fresh)]: 4 }
+    await fs.writeFile(path.join(dir, 'log-hours.json'), JSON.stringify({ version: 1, hours, meta: {} }))
+    const spikeId = `log.spike:${signatureId(sig)}`
+    const ringing = { id: spikeId, defId: 'log.spike', state: 'ALARM', since: START - 60_000, value: 30, evaluatedAt: START - 60_000, history: [], actions: [{ at: START - 60_000, kind: 'fix-task', ok: true, taskId: 'fix-1' }], signature: sig, fixTaskId: 'fix-1' }
+    await fs.writeFile(path.join(dir, 'state.json'), JSON.stringify({ version: 1, alarms: { [spikeId]: ringing }, overrides: {}, events: [], fixes: [] }))
+    const h = await harness()
+    h.open.add('fix-1'); h.live.add('fix-1')
+    const web = createSubsystemLogger('web')
+    const session = createSubsystemLogger('session')
+    // 3 a minute of each: 60 in 20 minutes, far above the normal of 4 (alarm at 30)
+    await minutes(h, 20, () => { for (let k = 0; k < 3; k++) { web.warn('event-loop blocked (probe late)', { lateByMs: 400 }); session.warn('gateway relay refused') } })
+    expect(h.m.alarms[spikeId].state).toBe('OK')
+    expect(h.m.alarms[spikeId].history.at(-1)?.reason).toContain('eventloop.stall')
+    expect(h.m.alarms[`log.chronic:${signatureId(sig)}`]).toBeUndefined()
+    expect(h.fixes.map((f) => f.alarmId)).not.toContain(spikeId)
+    // the same volume of a kind no alarm claims still rings
+    expect(h.m.alarms[`log.spike:${signatureId(fresh)}`]?.state).toBe('ALARM')
+  })
+
   it('a log spike still going on stays in ALARM across a restart', async () => {
     const sig = signatureKey('session', 'gateway relay refused')
     const hours: Record<string, Record<string, number>> = {}

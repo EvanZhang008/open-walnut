@@ -22,6 +22,17 @@ export type StallCause = 'own' | 'machine'
 export const STALL_OWN_METRIC = 'eventloop.stall.own'
 export const STALL_MACHINE_METRIC = 'eventloop.stall.machine'
 
+/**
+ * The warn lines the event-loop monitor writes for each stall it sees (subsystem
+ * `web`). They are the per-event record of what the two stall alarms judge, so
+ * the log alarms leave them to those (AlarmDef.logLines): 2026-11-16 the log
+ * spike rang on 30 "probe late" lines in an hour, 24 of them holds under a
+ * second and 6 the machine's, while the stall alarm read OK.
+ */
+export const STALL_LOG_SUBSYSTEM = 'web'
+export const PROBE_LATE_MESSAGE = 'event-loop blocked (probe late)'
+export const HISTOGRAM_STALL_MESSAGE = 'event-loop stall detected (histogram)'
+
 /** Every verdict, classified. A new verdict fails to compile until it is listed here. */
 export const CAUSE_OF_VERDICT: Readonly<Record<HoldVerdict, StallCause>> = {
   cpu: 'own',
