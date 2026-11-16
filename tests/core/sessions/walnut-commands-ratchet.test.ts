@@ -16,8 +16,8 @@ import path from 'node:path';
 import { frameForSource } from '../../../src/core/sessions/send-frame.js';
 import { isPersonSource } from '../../../src/core/sessions/send-sent-by.js';
 import {
-  LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS, LEGACY_IDLE_COMPACT_HISTORY_TEXTS, WALNUT_COMMANDS, WALNUT_COMMAND_HISTORY_TEXT, WALNUT_COMMAND_MARK, isWalnutCommandNotice,
-  walnutCommandNotice, walnutNoticeKind,
+  CONTROL_REQUESTS, LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS, LEGACY_IDLE_COMPACT_HISTORY_TEXTS, WALNUT_COMMANDS, WALNUT_COMMAND_HISTORY_TEXT, WALNUT_COMMAND_MARK,
+  isWalnutCommandNotice, settingChangeNotice, walnutCommandNotice, walnutNoticeKind,
 } from '../../../src/core/sessions/walnut-commands.js';
 import { HISTORY_CACHE_SCHEMA } from '../../../src/core/history-disk-cache.js';
 import { parseSessionMessages } from '../../../src/core/session-history.js';
@@ -26,6 +26,7 @@ import { IDLE_COMPACT_SOURCE, IDLE_COMPACT_TEXT } from '../../../src/core/sessio
 import { CONTEXT_COMPACT_SOURCE, CONTEXT_COMPACT_TEXT } from '../../../src/core/sessions/context-full-recovery.js';
 import { isHistoryUserTurn } from '../../../src/lib/history-turn-window.js';
 import { withoutWalnutRows } from '../../../src/core/sessions/session-extras.js';
+import { transcriptSentBy } from '../../../src/core/sessions/transcript-sent-by.js';
 
 const ROOT = path.resolve(__dirname, '../../..');
 const SID = 'd60bf2be-bcf6-4a0f-8ef4-ca151e942068';
@@ -185,7 +186,7 @@ describe('every listed command reads as Walnut\'s notice', () => {
     // LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS (LEGACY_IDLE_COMPACT_HISTORY_TEXTS for the idle one), then
     // update this pin.
     expect({ schema: HISTORY_CACHE_SCHEMA, notices: [...WALNUT_COMMANDS.map((c) => c.notice), WALNUT_COMMAND_HISTORY_TEXT] }).toEqual({
-      schema: 14,
+      schema: 15,
       notices: [
         'Walnut sent /compact while the session was idle, before its prompt cache would expire, so the next message reads a summary instead of the whole conversation.',
         'Claude Code answered "Prompt is too long", so Walnut asked it to compact this conversation.',
@@ -208,5 +209,58 @@ describe('every listed command reads as Walnut\'s notice', () => {
     expect(walnutCommandNotice(`<command-name>/compact</command-name><command-args>${WALNUT_COMMAND_MARK} later.</command-args>`)).toBe(WALNUT_COMMAND_HISTORY_TEXT);
     expect(walnutCommandNotice('/compact')).toBeUndefined();
     expect(walnutCommandNotice(`/clear ${WALNUT_COMMAND_MARK}`)).toBeUndefined();
+  });
+});
+
+/**
+ * The lines Claude Code 2.1.322 files when a control request changes a setting (read from a real
+ * session, 2026-11-16: an agent's POST /api/v1/sessions/:id/model): a caveat, the command line under
+ * no origin, and its output, all user rows.
+ */
+function settingLines(command: string, args: string) {
+  const base = { sessionId: SID, isSidechain: false, userType: 'external', entrypoint: 'sdk-cli', cwd: '/w', promptId: 'p-1' };
+  const name = command.slice(1);
+  return [
+    { type: 'user', uuid: 'u-1', parentUuid: null, timestamp: '2026-11-16T16:50:00.000Z', ...base, message: { role: 'user', content: 'Reply with the single word: ok' } },
+    { type: 'assistant', uuid: 'a-1', parentUuid: 'u-1', timestamp: '2026-11-16T16:50:01.000Z', ...base, message: { id: 'msg_1', role: 'assistant', content: [{ type: 'text', text: 'ok' }] } },
+    { type: 'user', uuid: 'c-1', parentUuid: 'a-1', timestamp: '2026-11-16T16:54:02.810Z', ...base, isMeta: true, message: { role: 'user', content: '<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request, and its output goes straight to the user. It\'s recorded here as context for later messages.</local-command-caveat>' } },
+    { type: 'user', uuid: 'm-1', parentUuid: 'c-1', timestamp: '2026-11-16T16:54:02.810Z', ...base, message: { role: 'user', content: `<command-name>${command}</command-name>\n            <command-message>${name}</command-message>\n            <command-args>${args}</command-args>` } },
+    { type: 'user', uuid: 'o-1', parentUuid: 'm-1', timestamp: '2026-11-16T16:54:02.810Z', ...base, message: { role: 'user', content: `<local-command-stdout>Set model to \`${args}\`</local-command-stdout>` } },
+  ].map((l) => JSON.stringify(l)).join('\n') + '\n';
+}
+
+describe('a line the CLI files for a setting Walnut changed is nobody\'s words', () => {
+  const rows = Object.entries(CONTROL_REQUESTS).flatMap(([kind, k]) => k.rows.map((r) => ({ kind, ...r })));
+
+  it('a model change files one, and it is listed', () => {
+    expect(rows.map((r) => [r.kind, r.command])).toEqual([['apply_flag_settings', '/model']]);
+  });
+
+  for (const r of rows) {
+    it(`${r.kind} → ${r.command}: a notice in the history, no row of the person's on the phone, never read as the person`, () => {
+      const jsonl = settingLines(r.command, 'claude-sonnet-5-5');
+      const history = parseSessionMessages(jsonl);
+      expect(history.filter((m) => m.role === 'user' && m.text.includes(r.command))).toEqual([]);
+      expect(history.filter((m) => m.role === 'system' && m.text === r.notice('claude-sonnet-5-5')).map((m) => m.systemVariant)).toEqual(['info']);
+      expect(r.notice('claude-sonnet-5-5')).toBe(settingChangeNotice(`${r.command} claude-sonnet-5-5`));
+      expect(settingChangeNotice(`${r.command} opus[1m]`)).toBe(r.notice('opus[1m]'));
+      // The words before it stay the person's.
+      expect(history.find((m) => m.role === 'user')?.text).toBe('Reply with the single word: ok');
+      const phone = transcriptFromJsonl(SID, jsonl) as { messages: Array<{ role: string; text: string; sentBy?: string }> };
+      expect(phone.messages.filter((m) => m.role === 'user').map((m) => [m.text, m.sentBy])).toEqual([['Reply with the single word: ok', 'person']]);
+      // Any reader that keeps it as a user row, in either form, reads the CLI's line.
+      for (const text of [`${r.command} claude-sonnet-5-5`, `<command-name>${r.command}</command-name>\n  <command-args>claude-sonnet-5-5</command-args>`]) {
+        expect(transcriptSentBy({ role: 'user', text }), text).toBe('cli');
+      }
+    });
+  }
+
+  it('Walnut\'s own command lines read as an agent\'s to any reader that keeps them as user rows', () => {
+    for (const c of WALNUT_COMMANDS) expect(transcriptSentBy({ role: 'user', text: c.text }), c.source).toBe('agent');
+    // The person's own commands stay his: a bare /compact, one with his words, a skill.
+    for (const text of ['/compact', '/compact keep the open review comments', '/review the auth change', '/model', '/model is wrong, please use opus for this', '/model-review x']) {
+      expect(transcriptSentBy({ role: 'user', text }), text).toBe('person');
+      expect(settingChangeNotice(text), text).toBeUndefined();
+    }
   });
 });

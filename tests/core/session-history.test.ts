@@ -311,7 +311,8 @@ describe('readSessionHistory', () => {
     const messages = await readSessionHistory('s-injected', '/test');
     expect(messages.map(m => m.text)).toEqual([
       'real question',
-      '/model sonnet',
+      // A model change the CLI filed for a control request: Walnut's notice, nobody's words (walnut-commands.ts).
+      'Walnut asked Claude Code to use sonnet.',
       '/compact',
       '! which claude',
       '[Teammate ui-dev] Task #3 frontend done',

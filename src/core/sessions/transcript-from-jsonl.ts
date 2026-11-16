@@ -13,8 +13,9 @@ import { transcriptSentBy, personTextOf, type TranscriptSentBy } from './transcr
 import { nonHumanOrigin } from '../../lib/history-session-envelope.js'
 import { InjectedLines, type InjectedCarrier } from './transcript-injected.js'
 import { hookContextText, walnutAddedOf, type WalnutAddedItem } from '../../lib/walnut-added.js'
-import { walnutCommandNotice } from './walnut-commands.js'
+import { settingChangeNotice, walnutCommandNotice } from './walnut-commands.js'
 import { cliErrorRowText } from './cli-error-reply.js'
+import { transformInjectedUserText } from '../history-parse.js'
 
 export const TRANSCRIPT_TAIL_ROWS = 200
 // Tail-only read: ~200 rendered rows fit comfortably in the last 512KB even
@@ -124,8 +125,13 @@ export function transcriptFromJsonl(sessionId: string, main: string): Record<str
         const text = content.trim()
         // A command Walnut sent itself is its notice, never the person's message; the phone draws
         // no notice rows, as the primary's projection leaves its system rows out (sessions/walnut-commands.ts).
-        if (walnutCommandNotice(text)) continue
-        if (text && !isInterruptMarker(text)) messages.push(withMessageId(userRow(text, timestamp, nonHumanOrigin(parsed.origin)), parsed))
+        if (walnutCommandNotice(text) || settingChangeNotice(text)) continue
+        // The CLI's own plumbing (a local command's caveat and output, a task notification) is
+        // nobody's message, as the primary's parser hides it; a command line reads as typed.
+        const injected = transformInjectedUserText(text)
+        if (injected === null) continue
+        const shown = injected !== undefined && text.startsWith('<command-') ? injected : text
+        if (shown && !isInterruptMarker(shown)) messages.push(withMessageId(userRow(shown, timestamp, nonHumanOrigin(parsed.origin)), parsed))
       } else if (Array.isArray(content)) {
         for (const block of content) {
           const b = block as { type?: string; text?: string }

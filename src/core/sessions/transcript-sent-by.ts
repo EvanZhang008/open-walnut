@@ -20,6 +20,7 @@
 import { isHistorySentRow, isHistoryUserTurn } from '../../lib/history-turn-window.js'
 import { typedUserText } from '../../lib/history-injected-banner.js'
 import { parseSessionEnvelopes } from '../../lib/history-session-envelope.js'
+import { settingChangeNotice, walnutCommandNotice } from './walnut-commands.js'
 
 export type TranscriptSentBy = 'person' | 'agent' | 'cli'
 
@@ -31,6 +32,14 @@ export type TranscriptSentBy = 'person' | 'agent' | 'cli'
 const AUTOMATED_LINE = /^\[Walnut [^\]\n]{1,80} automated message, not from the user\]/
 
 export function transcriptSentBy(row: { role: string; text: string; injected?: boolean; agentOrigin?: boolean }): TranscriptSentBy {
+  // A command line nobody typed (sessions/walnut-commands.ts): one Walnut sent itself (a compaction)
+  // is an agent's, and the one the CLI files for a setting Walnut changed (a model switch) is the
+  // CLI's own, whoever asked for the change. Read by its words alone, as every reader of a
+  // transcript sees them, so a reader that keeps such a row as a user row still never reads a person.
+  if (row.role === 'user') {
+    if (walnutCommandNotice(row.text)) return 'agent'
+    if (settingChangeNotice(row.text)) return 'cli'
+  }
   // The CLI's own `origin` (or another session's mail tag) says a person did not type it: that
   // holds whatever the text looks like, so a tag nobody listed yet is still not a person.
   if (row.agentOrigin && isHistorySentRow(row)) return 'agent'

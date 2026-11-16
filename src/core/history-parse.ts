@@ -29,7 +29,7 @@ import { hookFailureNotice } from './stream/hook-notice.js';
 import { computeRewindDeadSet, queueEnqueueKey, type SkippedRewindCut } from './transcript-chain.js';
 import { isCacheWarmupText } from './sessions/side-thread-warmup.js';
 import { IDLE_COMPACT_HISTORY_TEXT, IDLE_COMPACT_UUID_PREFIX } from './sessions/prompt-cache.js';
-import { isWalnutCommandNotice, walnutCommandNotice } from './sessions/walnut-commands.js';
+import { commandTagLine, isWalnutCommandNotice, settingChangeNotice, walnutCommandNotice } from './sessions/walnut-commands.js';
 import { messageAbout, readAboutTag } from './org/message-about.js';
 import { CLI_ERROR_PREFIX, isCliErrorReply } from './sessions/cli-error-reply.js';
 import { SIDE_THREAD_DIGEST_TAG, stripSideThreadDigestRequest } from './sessions/side-thread-digest.js';
@@ -39,7 +39,7 @@ import { SIDE_THREAD_DIGEST_TAG, stripSideThreadDigestRequest } from './sessions
  * view, a daemon's ready view) written under another number is dropped, never served. The bump
  * log lives beside HISTORY_CACHE_SCHEMA's re-export in history-disk-cache.ts.
  */
-export const HISTORY_CACHE_SCHEMA = 14;
+export const HISTORY_CACHE_SCHEMA = 15;
 
 /** The other sends' uuids on a user line Claude Code merged from several queued sends. */
 function mergedSendUuidsOf(raw: { mergedSendUuids?: unknown }): string[] | undefined {
@@ -380,12 +380,8 @@ export function transformInjectedUserText(text: string): string | null | undefin
   }
   // Both orderings exist in the corpus: <command-name> first (Mac) and
   // <command-message> first (remote). Extract by tag, not by position.
-  if (/^<command-(name|message|args)>/.test(text)) {
-    const name = text.match(/<command-name>([\s\S]*?)<\/command-name>/)?.[1]?.trim();
-    if (!name) return null; // command-message/args without a name — nothing to show
-    const args = text.match(/<command-args>([\s\S]*?)<\/command-args>/)?.[1]?.trim();
-    return args ? `${name} ${args}` : name;
-  }
+  // command-message/args without a name: nothing to show.
+  if (/^<command-(name|message|args)>/.test(text)) return commandTagLine(text) ?? null;
   if (text.startsWith('<teammate-message')) {
     const id = text.match(/teammate_id="([^"]*)"/)?.[1];
     const body = text
@@ -1490,8 +1486,11 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
     // words say so, and it is Walnut's notice, never the user's message (sessions/walnut-commands.ts).
     // Before the words, the idle compaction's bare `/compact` was known only by its uuid, which the
     // CLI keeps for a line it reads at once (not for one it queued first).
+    // A setting Walnut changed through a control request (a model switch), which the CLI files as a
+    // command line of its own, reads the same way: a notice, never anyone's words.
     const walnutNotice = msg.role !== 'user' ? undefined
-      : walnutCommandNotice(text) ?? (mapMsgId.startsWith(IDLE_COMPACT_UUID_PREFIX) && text.trim() === '/compact' ? IDLE_COMPACT_HISTORY_TEXT : undefined);
+      : walnutCommandNotice(text) ?? settingChangeNotice(text)
+        ?? (mapMsgId.startsWith(IDLE_COMPACT_UUID_PREFIX) && text.trim() === '/compact' ? IDLE_COMPACT_HISTORY_TEXT : undefined);
     if (walnutNotice) {
       result.push({ role: 'system', text: walnutNotice, timestamp: msg.timestamp, msgId: mapMsgId, systemVariant: 'info' });
       resultParentIds.push(msg.parentToolUseId);

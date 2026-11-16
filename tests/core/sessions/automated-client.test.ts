@@ -19,6 +19,7 @@ import {
 import { attributedUnlessAutomated, frameForSource, frameStartData, frameStartText, readsAsPerson } from '../../../src/core/sessions/send-frame.js';
 import { transcriptSentBy } from '../../../src/core/sessions/transcript-sent-by.js';
 import { isPersonSendSource as isPhasePersonSend } from '../../../src/core/phase.js';
+import { CONTROL_REQUESTS } from '../../../src/core/sessions/walnut-commands.js';
 import { AUTOMATED_HEADER, AUTOMATED_PARAM } from '../../../web/src/api/test-run.js';
 import { initWithAutomated } from '../../../web/src/api/auth-fetch.js';
 
@@ -184,5 +185,22 @@ describe('ratchet: who a person is gets decided through the rule', () => {
       if (n) found[path.relative(ROOT, f)] = n;
     }
     expect(found).toEqual(allowed);
+  });
+
+  it('every control request Walnut sends the CLI is listed with the lines it makes the CLI file', () => {
+    // 2026-11-16: an agent's model switch (apply_flag_settings) made the CLI file "/model
+    // claude-sonnet-5-5" with no origin, and every transcript read it as the person typing it. Each
+    // control request is read from the source (a request object names its subtype first; an event
+    // or answer names its type first) and must be listed in CONTROL_REQUESTS, whose lines read as
+    // nobody's words (tests/core/sessions/walnut-commands-ratchet.test.ts). A new one fails here
+    // until it says what, if anything, it makes the CLI write into the transcript.
+    // The CLI's question to Walnut, and Walnut's answer to one (`control_response`): no request.
+    const fromCli = new Set(['can_use_tool', 'success']);
+    const sent = new Set<string>();
+    for (const f of walk(path.join(ROOT, 'src'))) {
+      for (const m of fs.readFileSync(f, 'utf8').matchAll(/\{\s*subtype:\s*'([a-z_]+)'/g)) if (!fromCli.has(m[1]!)) sent.add(m[1]!);
+    }
+    expect([...sent].sort()).toEqual(Object.keys(CONTROL_REQUESTS).sort());
+    for (const [kind, k] of Object.entries(CONTROL_REQUESTS)) expect(k.why.length, kind).toBeGreaterThan(5);
   });
 });

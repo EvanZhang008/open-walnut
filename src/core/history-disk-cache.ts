@@ -73,6 +73,9 @@ import { HISTORY_CACHE_SCHEMA } from './history-parse.js';
  * 14 (2026-11-14): `mergedUuids` on a user line Claude Code merged from several queued sends
  * (its `mergedSendUuids`). A version-13 parse lacks them, so the line proves only its own send.
  *
+ * 15 (2026-11-16): the line the CLI files for a model change (`/model <model>`, sessions/walnut-commands.ts
+ * settingChangeNotice) is a notice row ("Walnut asked Claude Code to use ..."), no longer a user row read as the person's.
+ *
  * The number itself lives in history-parse.ts, beside the parser it versions: the session
  * daemon's ready views (src/providers/history-ready-core.ts) carry it too.
  */
