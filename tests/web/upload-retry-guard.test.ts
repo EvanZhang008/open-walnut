@@ -72,6 +72,14 @@ describe('every upload path goes through the shared retry', () => {
     expect(Object.keys(UPLOAD_ROUTES).filter((k) => !found.includes(k))).toEqual([])
   })
 
+  it('the shared retry imports no socket client at load time', () => {
+    // 2026-11-16: a static import of ./ws pulled the WS client and its imports into every
+    // module that uploads (the notes API), and the notes round-trip suite could not load them.
+    const src = code(fs.readFileSync(path.join(ROOT, 'web/src/api/upload-retry.ts'), 'utf8'))
+    expect(src).not.toMatch(/^\s*import\b[^;]*from\s+['"]\.\/(?:ws|client)['"]/m)
+    expect(src).toMatch(/import\(['"]\.\/ws['"]\)/)
+  })
+
   it('every web file that sends to an upload route goes through withUploadRetry', () => {
     const paths = [...new Set(Object.values(UPLOAD_ROUTES))]
     const offenders: string[] = []

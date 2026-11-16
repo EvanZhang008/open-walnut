@@ -16,7 +16,6 @@
  * Guard: tests/web/upload-retry-guard.test.ts fails when a file under web/src
  * calls an upload route without importing this module.
  */
-import { wsClient } from './ws';
 
 /** What an attachment says while it waits to try again. */
 export const UPLOAD_WAITING = 'Waiting for Walnut to reconnect';
@@ -77,14 +76,25 @@ export function uploadRetryDelay(i: number): number {
 /**
  * Called once when Walnut is likely back: the page's socket reconnected, or the
  * browser came back online. Answers the unsubscribe.
+ *
+ * The socket client is loaded only here, when an upload already waits: the
+ * modules that upload (the notes API among them) stay free of it, and of what it
+ * imports (2026-11-16: the notes round-trip suite could not load ws.ts's imports).
  */
 function onLikelyBack(cb: () => void): () => void {
-  const onState = (state: string) => { if (state === 'connected') cb(); };
-  wsClient.onConnectionChange(onState);
+  let stopped = false;
+  let offWs = () => {};
+  void import('./ws').then(({ wsClient }) => {
+    if (stopped) return;
+    const onState = (state: string) => { if (state === 'connected') cb(); };
+    wsClient.onConnectionChange(onState);
+    offWs = () => wsClient.offConnectionChange(onState);
+  }, () => { /* no socket client here: the timer and the online event still wake it */ });
   const hasWindow = typeof window !== 'undefined' && typeof window.addEventListener === 'function';
   if (hasWindow) window.addEventListener('online', cb);
   return () => {
-    wsClient.offConnectionChange(onState);
+    stopped = true;
+    offWs();
     if (hasWindow) window.removeEventListener('online', cb);
   };
 }
