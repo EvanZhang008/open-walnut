@@ -94,7 +94,23 @@ const FLUSH_DEBOUNCE_MS = 800;
 // the page. So this page keeps every value it wrote (or adopted from the server) and reads its own
 // value first; another tab's write (a real `storage` event) hands the key back to storage. Values
 // are the same strings the writer passed: kept by reference, they cost no copy.
-const pageWrites = new Map<string, string | null>();
+//
+// A storage that put a key back holds a value this page already knew there: what the key held when
+// the page first wrote it (what was on disk), or one of its own later writes. Any other value is
+// someone else's write that raised no event here: an extension's content script writing this page's
+// storage from its own world (2026-11-16: the password extension hands the page its browser key that
+// way, and the page kept reading the "no key" it had written itself), or another tab whose event has
+// not arrived yet. That value is storage's again, as before this layer.
+interface PageWrite {
+  mine: string | null;
+  /** False once another writer's value is in storage: storage's again until this page writes. */
+  held: boolean;
+  /** Values a put-back can bring, kept across another writer's turn (the disk may still hold one). */
+  known: Array<string | null>;
+}
+const pageWrites = new Map<string, PageWrite>();
+/** Values per key a put-back can bring: what the page first found there, then its latest writes. */
+const KNOWN_MAX = 8;
 /** Keys whose stored value went back on this page (logged once each). */
 const lostWrites = new Set<string>();
 
@@ -106,32 +122,51 @@ function noteLost(key: string, mine: string | null, now: string | null): void {
   });
 }
 
-/** This page's value of a key: its own last write, else what storage holds. */
+/** This page's value of a key: its own last write, unless someone else wrote it since; else what storage holds. */
 function localGet(key: string): string | null {
-  if (pageWrites.has(key)) {
-    const mine = pageWrites.get(key) ?? null;
-    let now: string | null = mine;
-    try { now = rawGet.call(localStorage, key); } catch { /* storage off */ }
-    if (now !== mine) noteLost(key, mine, now);
-    return mine;
-  }
-  return rawGet.call(localStorage, key);
+  const w = pageWrites.get(key);
+  let now: string | null;
+  try { now = rawGet.call(localStorage, key); } catch (err) { if (w?.held) return w.mine; throw err; }
+  if (!w?.held || now === w.mine) return now;
+  if (!w.known.includes(now)) { w.held = false; return now; }
+  noteLost(key, w.mine, now);
+  return w.mine;
+}
+function remember(w: PageWrite, value: string | null): void {
+  if (w.known.includes(value)) return;
+  w.known.push(value);
+  // The first stays: it is what the disk held when this page started writing the key.
+  if (w.known.length > KNOWN_MAX) w.known.splice(1, 1);
+}
+function keep(key: string, value: string | null, before: string | null): void {
+  const w = pageWrites.get(key);
+  if (!w) { pageWrites.set(key, { mine: value, held: true, known: before === value ? [value] : [before, value] }); return; }
+  // What storage held just before: another writer's value this page never read is one a put-back can bring too.
+  remember(w, before);
+  remember(w, value);
+  w.mine = value;
+  w.held = true;
+}
+function storedNow(key: string): string | null {
+  try { return rawGet.call(localStorage, key); } catch { return null; }
 }
 /** Writes that throw (quota, storage off) are not kept: the caller is told, as before. */
 function localSet(key: string, value: string): void {
+  const before = storedNow(key);
   rawSet.call(localStorage, key, value);
-  pageWrites.set(key, String(value));
+  keep(key, String(value), before);
 }
 function localRemove(key: string): void {
+  const before = storedNow(key);
   rawRemove.call(localStorage, key);
-  pageWrites.set(key, null);
+  keep(key, null, before);
 }
 
 /** Another tab of this browser wrote: storage holds its value now, not this page's. */
 function onOtherTabWrite(e: StorageEvent): void {
   try { if (e.storageArea !== localStorage) return; } catch { return; }
-  if (e.key === null) pageWrites.clear();
-  else pageWrites.delete(e.key);
+  if (e.key === null) for (const w of pageWrites.values()) w.held = false;
+  else { const w = pageWrites.get(e.key); if (w) w.held = false; }
 }
 // From the first write on (the drafts adopt theirs before the wrap), and once per page: a hot
 // reload replaces the listener, never adds a second one. Capture: it runs before any page's own

@@ -952,12 +952,18 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   // Graduated session area width — use total session count (not visible) so tabbed
   // sessions still get full width. Only auto-set when count increases.
-  // The columns a load restores are not opened by the user: the first count is taken as it is,
-  // so the width they dragged is kept across a reload (2026-11-15: it went back every load).
+  // The columns a load restores are not opened by the user: a width kept from before (dragged, or
+  // set for these columns last time) stays across a reload (2026-11-15: it went back every load);
+  // with none kept, the restored columns get their graduated width as before.
   const prevColCountRef = useRef<number | null>(null);
+  const sessionWidthKept = sessionPanel.custom;
   useEffect(() => {
     const count = sessionColumns.length + (triagePanelOpen ? 1 : 0);
-    if (prevColCountRef.current === null) { prevColCountRef.current = count; return; }
+    if (prevColCountRef.current === null) {
+      prevColCountRef.current = count;
+      if (!sessionWidthKept && count > 0) sessionPanel.setPct(sessionWidthForCount(count));
+      return;
+    }
     if (count === prevColCountRef.current) return;
     const prev = prevColCountRef.current;
     prevColCountRef.current = count;
@@ -965,7 +971,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     if (count > prev && count > 0) {
       sessionPanel.setPct(sessionWidthForCount(count));
     }
-  }, [sessionColumns.length, triagePanelOpen, sessionPanel.setPct]);
+  }, [sessionColumns.length, triagePanelOpen, sessionPanel.setPct, sessionWidthKept]);
 
   // Swap in the layout saved for THIS column count. Layouts are stored per count,
   // so opening a 3rd panel doesn't destroy the 2-column split the user tuned —

@@ -21,9 +21,14 @@ vi.mock('@/api/device-token', () => ({ getDeviceToken: () => null }))
 
 /** Keys the storage refuses, as a full one does. */
 const refuse = new Set<string>()
+/** Reads that throw, as a storage the browser turned off does. */
+let refuseReads = false
 class MapStorage {
   m = new Map<string, string>()
-  getItem(k: string): string | null { return this.m.has(k) ? this.m.get(k)! : null }
+  getItem(k: string): string | null {
+    if (refuseReads) throw new Error('SecurityError')
+    return this.m.has(k) ? this.m.get(k)! : null
+  }
   setItem(k: string, v: string): void {
     if (refuse.has(k)) throw new Error('QuotaExceededError')
     this.m.set(k, String(v))
@@ -53,6 +58,7 @@ const RAIL = 'open-walnut-view:org.node.railHidden'
 
 beforeEach(async () => {
   refuse.clear()
+  refuseReads = false
   local = new MapStorage()
   // What the disk held when the storage locked: the side bar open.
   local.m.set(RAIL, JSON.stringify([['project:walnut', false]]))
@@ -112,16 +118,58 @@ describe('a write the storage drops', () => {
     localStorage.setItem('open-walnut-y', 'mine')
     // Its own merge events carry no storage area.
     win.dispatchEvent(new FakeStorageEvent('storage', { key: 'open-walnut-y', newValue: 'mine' }))
-    local.m.set('open-walnut-y', 'theirs')
+    revert('open-walnut-y', null)
     expect(localStorage.getItem('open-walnut-y')).toBe('mine')
-    // Another tab wrote it: storage holds that tab's value now.
-    win.dispatchEvent(new FakeStorageEvent('storage', { key: 'open-walnut-y', newValue: 'theirs', storageArea: local }))
-    expect(localStorage.getItem('open-walnut-y')).toBe('theirs')
+    // Another tab wrote it: storage holds that tab's value now, even its put-back to the old one.
+    win.dispatchEvent(new FakeStorageEvent('storage', { key: 'open-walnut-y', newValue: null, storageArea: local }))
+    expect(localStorage.getItem('open-walnut-y')).toBeNull()
     // A clear in another tab hands every key back.
     localStorage.setItem('open-walnut-z', 'mine')
     local.m.clear()
     win.dispatchEvent(new FakeStorageEvent('storage', { key: null, storageArea: local }))
     expect(localStorage.getItem('open-walnut-z')).toBeNull()
+  })
+
+  it('a value no write of this page put there is someone else\'s (an extension\'s content script, a tab whose event has not arrived): storage wins', () => {
+    // The page forgot its browser key; the extension then writes a new one from its own world.
+    localStorage.setItem('walnut.vault.browser', 'old-key')
+    localStorage.removeItem('walnut.vault.browser')
+    local.m.set('walnut.vault.browser', 'handed-key')
+    expect(localStorage.getItem('walnut.vault.browser')).toBe('handed-key')
+    // And from then on storage holds the key: a later put-back of it is not this page's to undo.
+    local.m.delete('walnut.vault.browser')
+    expect(localStorage.getItem('walnut.vault.browser')).toBeNull()
+    // A put-back to one of this page's own earlier writes is still a lost write.
+    localStorage.setItem('open-walnut-w', '1')
+    localStorage.setItem('open-walnut-w', '2')
+    localStorage.setItem('open-walnut-w', '3')
+    revert('open-walnut-w', '2')
+    expect(localStorage.getItem('open-walnut-w')).toBe('3')
+    // What the disk held before this page's first write stays known after many writes.
+    local.m.set('open-walnut-v', 'disk')
+    for (let i = 0; i < 40; i++) localStorage.setItem('open-walnut-v', `w${i}`)
+    revert('open-walnut-v', 'disk')
+    expect(localStorage.getItem('open-walnut-v')).toBe('w39')
+  })
+
+  it('another tab\'s turn on a key does not forget what the disk held: a later write of this page still survives a put-back', () => {
+    local.m.set('open-walnut-k', 'disk')
+    localStorage.setItem('open-walnut-k', 'A')
+    // Another tab writes B (it never reaches the disk either), and its event arrives.
+    local.m.set('open-walnut-k', 'B')
+    win.dispatchEvent(new FakeStorageEvent('storage', { key: 'open-walnut-k', newValue: 'B', storageArea: local }))
+    localStorage.setItem('open-walnut-k', 'C')
+    revert('open-walnut-k', 'disk')
+    expect(localStorage.getItem('open-walnut-k')).toBe('C')
+    // The other tab's value is one a put-back can bring too.
+    revert('open-walnut-k', 'B')
+    expect(localStorage.getItem('open-walnut-k')).toBe('C')
+  })
+
+  it('a read storage refuses still answers this page\'s own value', () => {
+    localStorage.setItem('open-walnut-r', 'mine')
+    refuseReads = true
+    try { expect(localStorage.getItem('open-walnut-r')).toBe('mine') } finally { refuseReads = false }
   })
 
   it('the write stamps keep another tab\'s stamp that storage holds before its event arrives', () => {

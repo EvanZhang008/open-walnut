@@ -107,7 +107,8 @@ async function noAdvance(page: Page) {
       const config = { ...(body.config ?? {}), ui: { ...(body.config?.ui ?? {}), next_after_complete: false } }
       await route.fulfill({ response: res, json: { ...body, config } })
     } catch (err) {
-      if (!page.isClosed()) throw err
+      // The page may be closing (not yet closed) when the read comes back.
+      if (!page.isClosed() && !/has been closed/.test(String(err))) throw err
     }
   })
 }

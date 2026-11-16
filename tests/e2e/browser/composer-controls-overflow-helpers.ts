@@ -1,6 +1,7 @@
 // Shared fixture and measurements for the composer controls in Chromium and WebKit.
 import { expect, type Locator, type Page } from '@playwright/test';
 import fs from 'node:fs/promises';
+import { isolateUiPrefs } from './todo-panel-helpers';
 
 export const CTRL_SESSION = 'pw-composer-controls';
 export const CTRL_FILLER = 'pw-composer-controls-filler';
@@ -62,6 +63,10 @@ export async function openControlsSession(
   opts: { narrow: boolean; width?: number; columns?: string[] },
 ): Promise<Locator> {
   const ids = opts.columns ?? (opts.narrow ? [CTRL_SESSION, CTRL_FILLER] : [CTRL_SESSION]);
+  // The widths below assume the Home chat spot closed, as the fixture seeds it. The fixture's
+  // prefs are shared: another spec's last write (a pagehide flush past its own route) opened the
+  // spot here and took the columns' room (2026-11-16, CI). This page keeps its own prefs.
+  await isolateUiPrefs(page);
   await page.addInitScript((list) => {
     sessionStorage.setItem('open-walnut-home-session-columns', JSON.stringify(list.map((id: string) => ({ id, locked: false }))));
   }, ids);
