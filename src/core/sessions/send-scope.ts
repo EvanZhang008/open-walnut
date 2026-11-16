@@ -49,15 +49,18 @@ export interface ScopeRef {
 const NOT_A_KEY = new Set([
   'UTF', 'ISO', 'SHA', 'AES', 'RFC', 'HTTP', 'HTTPS', 'TLS', 'SSL', 'RSA', 'GPT', 'MD', 'CRC', 'IEEE', 'ECMA',
   'ES', 'WCAG', 'ARM', 'AL', 'IPV', 'TCP', 'UDP', 'DDR', 'PCI', 'USB', 'HDMI', 'BASE', 'CP', 'WIN', 'UTC', 'GMT',
+  'COVID', 'PEP', 'TOP', 'GB', 'MB', 'KB', 'TB', 'GPU', 'CPU', 'RAM', 'CVE', 'ID', 'NO', 'PAGE', 'STEP', 'ROUND',
 ]);
 
 const REVIEW_RE = /\b(CR|PR|MR)[-\s]?#?(\d{3,})\b/gi;
 const PULL_URL_RE = /\/pull\/(\d{2,})\b/g;
-const KEY_RE = /\b([A-Z][A-Z0-9]{1,9})-(\d{2,})\b/g;
-const TICKET_WORD_RE = /\b(?:ticket|incident|issue|case|sev[\d.]*|lse|coe|tt)\s*(?:#|no\.?|id|number)?\s*[:#]?\s*([A-Za-z]?\d{5,})\b/gi;
+/** An issue key: a letters-only project prefix (X86-64, A100-40 and AL2-2023 are not keys). */
+const KEY_RE = /\b([A-Z]{2,10})-(\d{2,})\b/g;
+const CVE_RE = /\bCVE-(\d{4})-(\d{4,})\b/g;
+const TICKET_WORD_RE = /\b(?:ticket|incident|issue|sev[\d.]*)\s*(?:#|no\.?|id|number)?\s*[:#]?\s*([A-Za-z]?\d{5,})\b|\bcase\s*(?:#|id\b)\s*:?\s*([A-Za-z]?\d{5,})\b/gi;
 const TICKET_WORD_ZH_RE = /(?:\u5de5\u5355|\u4e8b\u6545|\u4e8b\u4ef6|\u95ee\u9898\u5355|\u5355\u53f7)\s*(?:\u53f7)?\s*[:\uff1a#]?\s*([A-Za-z]?\d{5,})/g;
-/** A path into a Walnut task's own directory (`.../tasks/<task id>/...`): that task's work. */
-const TASK_DIR_RE = /\/tasks\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|m[a-z0-9]{6,8}-[a-z0-9]{4})(?=\/|\s|$|[),.;:'"`])/g;
+/** A path into a Walnut task's own directory (`.../tasks/<task id>/...`): that task's work. An API path is not. */
+const TASK_DIR_RE = /(?<!\/api(?:\/v1)?)\/tasks\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|m[a-z0-9]{6,8}-[a-z0-9]{4})(?=\/|\s|$|[),.;:'"`])/g;
 
 const digitsOf = (s: string): string | undefined => {
   const d = s.replace(/\D/g, '');
@@ -75,8 +78,12 @@ export function extractScopeRefs(text: string): ScopeRef[] {
     if (/^(CR|PR|MR)$/.test(prefix) || NOT_A_KEY.has(prefix)) continue;
     add({ kind: 'ticket', ref: `${prefix}-${m[2]}`, digits: digitsOf(m[2]) });
   }
+  for (const m of text.matchAll(CVE_RE)) add({ kind: 'ticket', ref: `CVE-${m[1]}-${m[2]}` });
   for (const re of [TICKET_WORD_RE, TICKET_WORD_ZH_RE]) {
-    for (const m of text.matchAll(re)) add({ kind: 'ticket', ref: m[1].toUpperCase(), digits: digitsOf(m[1]) });
+    for (const m of text.matchAll(re)) {
+      const id = m[1] ?? m[2];
+      if (id) add({ kind: 'ticket', ref: id.toUpperCase(), digits: digitsOf(id) });
+    }
   }
   for (const m of text.matchAll(TASK_DIR_RE)) add({ kind: 'task_files', ref: m[1] });
   return [...out.values()];
@@ -126,8 +133,9 @@ type TaskLookup = (id: string) => Promise<Task | undefined>;
 
 interface ScopeDeps {
   getTask: TaskLookup;
-  /** Previews of earlier requests sent to this task (what it was already given). */
-  priorAsks: (taskId: string) => Promise<string[]>;
+  /** What earlier requests carried for this task: sent to it (their previews), its own answers
+   *  (result, evidence, not done), and what its own session asked of others. */
+  priorAsks: (taskId: string, sessionIds: readonly string[]) => Promise<string[]>;
   goesUp: (from: string | undefined, to: string) => Promise<boolean>;
 }
 
@@ -135,9 +143,15 @@ async function defaultDeps(): Promise<ScopeDeps> {
   const { getTask } = await import('../task-manager.js');
   return {
     getTask: (id) => getTask(id).catch(() => undefined),
-    priorAsks: async (taskId) => {
+    priorAsks: async (taskId, sessionIds) => {
       const { listAllSessionRequests } = await import('../session-requests.js');
-      return (await listAllSessionRequests()).filter((r) => r.toTaskId === taskId).map((r) => r.preview ?? '');
+      const own = new Set(sessionIds);
+      const out: string[] = [];
+      for (const r of await listAllSessionRequests()) {
+        if (r.toTaskId === taskId) out.push(r.preview ?? '', r.reply ? JSON.stringify(r.reply) : '');
+        else if (own.has(r.fromSessionId)) out.push(r.preview ?? '');
+      }
+      return out;
     },
     goesUp: async (from, to) => (await import('./reply-direction.js')).goesUp(from, to),
   };
@@ -145,7 +159,22 @@ async function defaultDeps(): Promise<ScopeDeps> {
 
 let injectedDeps: ScopeDeps | null = null;
 /** Tests only: replace the store reads. */
-export function _injectScopeDepsForTesting(deps: ScopeDeps | null): void { injectedDeps = deps; }
+export function _injectScopeDepsForTesting(deps: ScopeDeps | null): void { injectedDeps = deps; passedRefs.clear(); }
+
+/**
+ * Refs a send to an open task carried once it passed (held, or sent with same_deliverable): its
+ * later follow-ups name them too, before its note holds them, and a request keeps only a preview.
+ * In memory, per target, the newest REMEMBERED_MAX refs; after a restart the note decides alone.
+ */
+const passedRefs = new Map<string, string[]>();
+const REMEMBERED_MAX = 50;
+function remember(targetId: string, refs: readonly ScopeRef[]): void {
+  const prev = passedRefs.get(targetId) ?? [];
+  const next = [...prev.filter((r) => !refs.some((x) => x.ref === r)), ...refs.map((r) => r.ref)].slice(-REMEMBERED_MAX);
+  passedRefs.delete(targetId);
+  passedRefs.set(targetId, next);
+  while (passedRefs.size > 2000) passedRefs.delete(passedRefs.keys().next().value!);
+}
 
 const isOrgNode = (t: Pick<Task, 'org_role'> | undefined) => t?.org_role === 'main' || t?.org_role === 'lead';
 
@@ -164,7 +193,8 @@ async function judge(input: ScopeCheckInput, deps: ScopeDeps): Promise<ScopeVerd
   if (input.callerTaskId === target.id) return { kind: 'pass' };
   if (await deps.goesUp(input.callerTaskId, target.id)) return { kind: 'pass' };
   const caller = input.callerTaskId ? await deps.getTask(input.callerTaskId) : undefined;
-  const held = heldText(target, await deps.priorAsks(target.id));
+  const sessions = [target.session_id, ...(target.session_ids ?? [])].filter((x): x is string => !!x);
+  const held = [heldText(target, await deps.priorAsks(target.id, sessions)), ...(passedRefs.get(target.id) ?? [])].join('\n');
   // A worker's own refs are its own work (a dependency note between owners); a lead's hold every team's.
   const callerHeld = caller && !isOrgNode(caller) ? heldText(caller) : '';
   const targetLine = await lineage(target, deps.getTask);
@@ -177,14 +207,17 @@ async function judge(input: ScopeCheckInput, deps: ScopeDeps): Promise<ScopeVerd
       if (!owner) continue; // not a task of this Walnut: a path, nothing more
       if (owner.id === caller?.id || isOrgNode(owner)) continue;
       // The target's own family: itself, a task above it, or one of its subtasks.
-      if (targetLine.has(owner.id) || (await lineage(owner, deps.getTask)).has(target.id)) continue;
+      const ownerLine = await lineage(owner, deps.getTask);
+      if (targetLine.has(owner.id) || ownerLine.has(target.id)) continue;
+      // Two of the sender's own subtasks (a reviewer reading the implementer's brief): its team's work.
+      if (caller && ownerLine.has(caller.id) && targetLine.has(caller.id)) continue;
       titles.set(ref.ref, owner.title);
     } else if (callerHeld && holdsRef(callerHeld, ref)) {
       continue;
     }
     foreign.push(ref);
   }
-  if (!foreign.length) return { kind: 'pass' };
+  if (!foreign.length) { remember(target.id, refs); return { kind: 'pass' }; }
   const named = foreign.slice(0, REFS_SHOWN).map((r) => describeRef(r, titles.get(r.ref)));
   const more = foreign.length > REFS_SHOWN ? ` and ${foreign.length - REFS_SHOWN} more` : '';
   const why = (input.sameDeliverable ?? '').replace(/\s+/g, ' ').trim();
@@ -194,6 +227,7 @@ async function judge(input: ScopeCheckInput, deps: ScopeDeps): Promise<ScopeVerd
         message: `same_deliverable needs a reason (at least ${SAME_DELIVERABLE_MIN} characters): why ${named.join(', ')} belong to "${target.title}"'s own deliverable.`,
         detail: {} };
     }
+    remember(target.id, refs);
     return { kind: 'lead',
       line: `The sender says this is your own deliverable ("${why.slice(0, 300)}"), though it names ${named.join(', ')}${more}, which your task did not hold yet. If it is not, tell the sender it belongs in a task of its own.` };
   }
@@ -204,7 +238,7 @@ async function judge(input: ScopeCheckInput, deps: ScopeDeps): Promise<ScopeVerd
       + `Its deliverable: "${deliverable}". The same package, component or file is not the same deliverable: the fix for another `
       + 'incident, ticket or code review is new work, so task_create it (two owners whose changes depend on each other coordinate with '
       + 'task_send). If it really is this task\'s own deliverable (its own revision, a follow-up of its request), send it again with '
-      + 'same_deliverable:"<why>".',
+      + 'same_deliverable:"<why>" (also for evidence that only informs this task\'s own work).',
     detail: { taskId: target.id, deliverable, refs: foreign.map((r) => ({ kind: r.kind, ref: r.ref, ...(titles.has(r.ref) ? { title: titles.get(r.ref) } : {}) })) },
   };
 }

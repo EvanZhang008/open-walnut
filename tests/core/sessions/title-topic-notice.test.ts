@@ -21,7 +21,7 @@ vi.mock('../../../src/core/sessions/session-send-core.js', () => ({
 }))
 
 import { noticeTitleTopic, TITLE_TOPIC_SOURCE, titleTopicNotes } from '../../../src/core/sessions/title-topic-notice.js'
-import { _resetLeadTrafficForTesting, noteSent } from '../../../src/core/org/lead-traffic.js'
+import { _resetLeadTrafficForTesting, noteSent, notePeerNote } from '../../../src/core/org/lead-traffic.js'
 import { applyTitleDirective } from '../../../src/core/session-hooks/builtins.js'
 
 const LOGO = 'mlogo001-aaaa'
@@ -39,7 +39,7 @@ beforeEach(() => {
 
 describe('a self-report that appends a topic tells the task and its latest sender', () => {
   it('the logo task that gained "Website Launch" after the lead\'s message', async () => {
-    noteSent(LEAD, LOGO)
+    notePeerNote(LEAD, LOGO)
     tasks.get(LOGO)!.title = 'Logo redesign for the bakery'
     await applyTitleDirective(LOGO, 'topic: Website Launch', 'Logo redesign for the bakery')
     expect(sends).toHaveLength(2)
@@ -60,7 +60,7 @@ describe('a self-report that appends a topic tells the task and its latest sende
   })
 
   it('a rewrite, an unchanged title and a covered topic tell nobody', async () => {
-    noteSent(LEAD, REVIEW)
+    notePeerNote(LEAD, REVIEW)
     await applyTitleDirective(REVIEW, 'rewrite: Router poller read access', 'CR: router poller ListBucket')
     await applyTitleDirective(REVIEW, 'unchanged', 'CR: router poller ListBucket')
     await applyTitleDirective(REVIEW, 'topic: Poller ListBucket', 'CR: router poller ListBucket')
@@ -68,12 +68,20 @@ describe('a self-report that appends a topic tells the task and its latest sende
   })
 
   it('a sender older than the window, or complete, is not told', async () => {
-    noteSent(LEAD, LOGO, Date.now() - 7 * 3600_000)
+    notePeerNote(LEAD, LOGO, Date.now() - 7 * 3600_000)
     await noticeTitleTopic({ taskId: LOGO, from: 'a', to: 'a · B', topic: 'B' })
     expect(sends.map((s) => s.to)).toEqual([LOGO])
     sends.length = 0
-    noteSent(LEAD, LOGO)
+    notePeerNote(LEAD, LOGO)
     tasks.get(LEAD)!.phase = 'COMPLETE'
+    await noticeTitleTopic({ taskId: LOGO, from: 'a', to: 'a · B', topic: 'B' })
+    expect(sends.map((s) => s.to)).toEqual([LOGO])
+  })
+})
+
+describe('only a peer note is a hand-off', () => {
+  it('a reply from a reviewer to its leader does not make the reviewer the sender', async () => {
+    noteSent(REVIEW, LOGO)
     await noticeTitleTopic({ taskId: LOGO, from: 'a', to: 'a · B', topic: 'B' })
     expect(sends.map((s) => s.to)).toEqual([LOGO])
   })

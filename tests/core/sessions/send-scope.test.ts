@@ -139,6 +139,38 @@ describe('normal follow-ups of the same deliverable are never refused', () => {
   })
 })
 
+describe('what the review of 2026-11-16 found refused wrongly', () => {
+  it('a follow-up of a ref that passed before (with same_deliverable) is not refused again', async () => {
+    const first = await checkSendScope({ callerTaskId: LEAD, targetTaskId: REVIEW_TASK, text: 'Answer the comment on CR-555000444',
+      sameDeliverable: 'It is the CR 2 of your own request, opened by the reviewer' })
+    expect(first.kind).toBe('lead')
+    expect((await checkSendScope({ callerTaskId: LEAD, targetTaskId: REVIEW_TASK, text: 'CR-555000444: one more comment' })).kind).toBe('pass')
+  })
+
+  it('a number the target reported in its own answer, before its note holds it', async () => {
+    let seen: readonly string[] = []
+    _injectScopeDepsForTesting({
+      getTask: async (id) => tasks.get(id),
+      priorAsks: async (_id, sessions) => { seen = sessions; return ['{"result":"Draft CR-555000777 is up"}'] },
+      goesUp: async () => false,
+    })
+    tasks.get(REVIEW_TASK)!.session_id = 'sess-review'
+    expect((await checkSendScope({ callerTaskId: LEAD, targetTaskId: REVIEW_TASK, text: 'CR-555000777 looks right' })).kind).toBe('pass')
+    expect(seen).toContain('sess-review')
+  })
+
+  it('a leader pointing one of its subtasks at another subtask\'s files (a reviewer reading the brief)', async () => {
+    const IMPL = 'ffff5555-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+    const REVIEWER = 'abab6666-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+    tasks.set(IMPL, task({ id: IMPL, parent_task_id: PEER, title: 'Implement the alarm wording' }))
+    tasks.set(REVIEWER, task({ id: REVIEWER, parent_task_id: PEER, title: 'Review the alarm wording' }))
+    // Handed by someone who leads neither, they are another task's work.
+    expect((await checkSendScope({ callerTaskId: LEAD, targetTaskId: REVIEWER, text: `Read /x/tasks/${IMPL}/brief.md` })).kind).toBe('refuse')
+    const v = await checkSendScope({ callerTaskId: PEER, targetTaskId: REVIEWER, text: `Read /x/tasks/${IMPL}/brief.md and review it.` })
+    expect(v.kind).toBe('pass')
+  })
+})
+
 describe('same_deliverable', () => {
   it('needs a reason, then leads the delivered text with one line naming the refs', async () => {
     const short = await checkSendScope({ callerTaskId: LEAD, targetTaskId: REVIEW_TASK, text: 'Take CR-555000444', sameDeliverable: 'yes' })
@@ -158,7 +190,7 @@ describe('same_deliverable', () => {
 describe('what counts as a ref', () => {
   it('reads code reviews, pull requests, issue keys, tickets and incidents (English and Chinese), and task files', () => {
     expect(extractScopeRefs(REF_SAMPLES.join('\n')).map((r) => r.ref)).toEqual([
-      'CR-123456', 'PR-4321', 'MR-9999', 'PR-77', 'ABC-42', '31415926', '27182818', '16180339', '14142135', '17320508',
+      'CR-123456', 'PR-4321', 'MR-9999', 'PR-77', 'ABC-42', 'CVE-2026-12345', '31415926', '27182818', '16180339', '16180340', '14142135', '17320508',
       INVESTIGATOR, 'mabcdef1-zz99',
     ])
   })

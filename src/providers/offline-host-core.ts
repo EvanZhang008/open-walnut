@@ -1882,7 +1882,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (args.in_reply_to === undefined) {
       if (args.same_deliverable !== undefined) return null
       const said = `${typeof args.title === 'string' ? args.title : ''}\n${text}`
-      if (/\b(?:CR|PR|MR)[-\s]?#?\d{3,}\b|\/pull\/\d{2,}\b|\b(?:ticket|incident|issue|case|sev[\d.]*|lse|coe|tt)\s*(?:#|no\.?|id|number)?\s*[:#]?\s*[a-z]?\d{5,}\b|(?:\u5de5\u5355|\u4e8b\u6545|\u4e8b\u4ef6|\u95ee\u9898\u5355|\u5355\u53f7)\s*(?:\u53f7)?\s*[:\uff1a#]?\s*[a-z]?\d{5,}|\/tasks\/(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|m[a-z0-9]{6,8}-[a-z0-9]{4})/i.test(said)
+      if (/\b(?:CR|PR|MR)[-\s]?#?\d{3,}\b|\/pull\/\d{2,}\b|\b(?:ticket|incident|issue|case|sev[\d.]*)\s*(?:#|no\.?|id|number)?\s*[:#]?\s*[a-z]?\d{5,}\b|(?:\u5de5\u5355|\u4e8b\u6545|\u4e8b\u4ef6|\u95ee\u9898\u5355|\u5355\u53f7)\s*(?:\u53f7)?\s*[:\uff1a#]?\s*[a-z]?\d{5,}|\/tasks\/(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|m[a-z0-9]{6,8}-[a-z0-9]{4})/i.test(said)
         || /\b[A-Z][A-Z0-9]{1,9}-\d{2,}\b/.test(said)) return null
     }
     // So does a structured reply (result / evidence / not_done): the server keeps its fields

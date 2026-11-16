@@ -16,6 +16,8 @@
  */
 
 const lastSent = new Map<string, number>();
+/** One task's peer note to another (work handed on, never a reply or Walnut's notice): to -> {from, at}. */
+const lastHandedBy = new Map<string, { from: string; at: number }>();
 const MAX_PAIRS = 5_000;
 
 const OPEN = /^\s*<walnut-message\b[^>]*>/;
@@ -53,7 +55,9 @@ export async function noteQueuedMessage(sessionId: string, enqueued: string, atM
     if (!from) return;
     const { getSessionByClaudeId } = await import('../session-tracker.js');
     const to = (await getSessionByClaudeId(sessionId))?.taskId;
-    if (to) noteSent(from, to, atMs);
+    if (!to) return;
+    noteSent(from, to, atMs);
+    if (attr(OPEN.exec(enqueued)?.[0] ?? '', 'kind') === 'peer-note') notePeerNote(from, to, atMs);
   } catch {
     // Not knowing only means the wait is told, as before.
   }
@@ -66,18 +70,22 @@ export function workerToldLead(workerTaskId: string, leadTaskId: string): boolea
   return up > (lastSent.get(key(leadTaskId, workerTaskId)) ?? -Infinity);
 }
 
-/** The task whose message to `toTaskId` was queued last, within `withinMs` (title-topic-notice.ts). */
+/** Stamp one task's peer note to another: work it handed on. */
+export function notePeerNote(fromTaskId: string, toTaskId: string, atMs = Date.now()): void {
+  if (!fromTaskId || !toTaskId || fromTaskId === toTaskId) return;
+  lastHandedBy.delete(toTaskId);
+  lastHandedBy.set(toTaskId, { from: fromTaskId, at: atMs });
+  while (lastHandedBy.size > MAX_PAIRS) lastHandedBy.delete(lastHandedBy.keys().next().value!);
+}
+
+/** The task whose peer note to `toTaskId` came last, within `withinMs` (title-topic-notice.ts). A reply is no hand-off. */
 export function latestSenderTo(toTaskId: string, withinMs: number, nowMs = Date.now()): string | null {
-  let best: { from: string; at: number } | null = null;
-  const tail = `>${toTaskId}`;
-  for (const [k, at] of lastSent) {
-    if (!k.endsWith(tail) || nowMs - at > withinMs || (best && best.at >= at)) continue;
-    best = { from: k.slice(0, -tail.length), at };
-  }
-  return best?.from ?? null;
+  const last = lastHandedBy.get(toTaskId);
+  return last && nowMs - last.at <= withinMs ? last.from : null;
 }
 
 /** Tests: forget every stamp. */
 export function _resetLeadTrafficForTesting(): void {
   lastSent.clear();
+  lastHandedBy.clear();
 }
