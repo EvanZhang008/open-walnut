@@ -100,9 +100,9 @@ export function registerWholeClipScenarios(): void {
     const sent = captureSends(page)
     const d = await openComposer(page)
     // One mic in the composer: dictating to the clipboard is the iPhone's Action Button.
-    await expect(d.panel.locator('.mic-btn-wrapper')).toHaveCount(1)
+    await expect(d.composer.locator('.mic-btn-wrapper')).toHaveCount(1)
     await expect(d.panel.getByTitle(/clipboard/i)).toHaveCount(0)
-    const send = d.panel.locator('.chat-send-btn-icon').first()
+    const send = d.send
     for (let round = 1; round <= 2; round++) {
       seen.stopped = false
       seen.draftsAfterStop = []
@@ -184,7 +184,7 @@ export function registerWholeClipScenarios(): void {
     await d.bubble.getByRole('button', { name: 'Retry' }).click()
     await expect(d.textarea).toHaveValue(WHOLE, { timeout: 20_000 })
     await expect(d.bubble).toBeHidden()
-    await d.panel.locator('.chat-send-btn-icon').first().click()
+    await d.send.click()
     await expect.poll(() => sent.length, { timeout: 10_000 }).toBe(1)
     expect(sent[0]).toBe(WHOLE)
   })

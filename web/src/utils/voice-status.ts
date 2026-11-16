@@ -42,7 +42,7 @@ export function subscribeVoiceStatus(fn: (s: VoiceStatus) => void): () => void {
 // Board card that happened to render last would otherwise take the composer's.
 
 type InsertFn = (text: string) => void;
-interface InsertTarget { fn: InsertFn; box?: () => Element | null }
+interface InsertTarget { fn: InsertFn; box?: () => Element | null; selected: boolean }
 let insertTargets: InsertTarget[] = [];
 
 function onFocusIn(e: FocusEvent): void {
@@ -52,8 +52,11 @@ function onFocusIn(e: FocusEvent): void {
   // Typing anywhere else (the composer, which names no box) gives Insert back to
   // the newest composer, not to a box that was focused earlier.
   if (!hit && isEditable(el)) hit = [...insertTargets].reverse().find((t) => !t.box);
-  if (!hit || insertTargets[insertTargets.length - 1] === hit) return;
-  insertTargets = [...insertTargets.filter((t) => t !== hit), hit];
+  if (!hit) return;
+  hit.selected = true;
+  if (insertTargets[insertTargets.length - 1] !== hit) {
+    insertTargets = [...insertTargets.filter((t) => t !== hit), hit];
+  }
 }
 function isEditable(el: Node): boolean {
   const e = el as Partial<HTMLElement> & { tagName?: string };
@@ -63,7 +66,8 @@ let listening = false;
 
 /** Returns the unregister, for the input's unmount. */
 export function registerVoiceInsertTarget(fn: InsertFn, box?: () => Element | null): () => void {
-  const target: InsertTarget = { fn, box };
+  // Legacy composers retain their default. Named fields must first receive focus.
+  const target: InsertTarget = { fn, box, selected: !box };
   if (box) {
     insertTargets.unshift(target);
     if (!listening && typeof document !== 'undefined') {
@@ -78,7 +82,13 @@ export function registerVoiceInsertTarget(fn: InsertFn, box?: () => Element | nu
 
 /** Insert into the last-focused chat input. Returns false if none registered. */
 export function insertVoiceText(text: string): boolean {
-  const insertTarget = insertTargets[insertTargets.length - 1];
+  const insertTarget = [...insertTargets].reverse().find((target) => {
+    if (!target.selected) return false;
+    if (!target.box) return true;
+    const box = target.box();
+    return !!box && box.isConnected && box.getClientRects().length > 0
+      && !(box as HTMLInputElement).disabled && !(box as HTMLInputElement).readOnly;
+  });
   if (!insertTarget) return false;
   try {
     insertTarget.fn(text);

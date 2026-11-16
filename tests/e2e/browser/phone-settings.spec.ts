@@ -18,6 +18,7 @@ import { findSmallTargets, findSmallText } from './phone-helpers'
 import { isolateUiPrefsContext } from './status-section-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { putExactSection } from './config-section-helpers'
+import { clearBesideMic } from './search-mic-layout-helpers'
 
 test.setTimeout(240_000)
 
@@ -241,6 +242,8 @@ test.describe('on the computer Walnut runs on, phone sized', () => {
       expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0)
       expect(await findSmallTargets(page, '.settings-nav'), 'list targets').toEqual([])
       expect(await findSmallText(page, 12, '.settings-nav'), 'list text').toEqual([])
+      await clearBesideMic(page.getByTestId('settings-filter'), page.locator('.settings-filter-clear'),
+        'voice', `${test.info().project.name}-settings-${size.width}`)
       await openPane(page, 'settings-nav-devices', 'Phones & Cloud')
       await landedTab(page)
       // The tab bar scrolls sideways on its own; the Devices tab holds the most rows.

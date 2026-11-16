@@ -88,6 +88,7 @@ export const REGISTRY: Record<string, { check: string; optional?: true }> = {
   'Secrets/button:Edit <secret>': { check: 'opens the editor on that secret; Escape closes it, focus back on Edit' },
   'Secrets/button:Replace': { check: 'a value field, focused' },
   'Secrets/button.secret-toggle': { check: 'shows the typed value, hides it again' },
+  'Secrets/button.mic-btn': { check: 'on "What it is" only (never the name or the value); Tab reaches it and goes on to the first host; unconfigured voice: takes you to Settings > Voice', optional: true },
   'Secrets/button#secret-cancel': { check: 'closes the editor, saves nothing, takes a refusal with it, focus back on Add' },
   'Secrets/button#secret-add': { check: 'opens the editor for a new secret, Name focused, no old refusal; Escape is Cancel' },
   'Secrets/button#secret-save': { check: 'an empty Save: the first field refused, in view and focused, why beside it; a valid one saves (routed)' },

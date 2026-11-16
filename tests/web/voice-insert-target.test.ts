@@ -6,8 +6,13 @@
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 class FakeNode {
+  isConnected = true
+  visible = true
+  disabled = false
+  readOnly = false
   constructor(private readonly kids: FakeNode[] = [], readonly tagName?: string) {}
   contains(n: unknown): boolean { return n === this || this.kids.some((k) => k.contains(n)) }
+  getClientRects(): unknown[] { return this.visible ? [{}] : [] }
 }
 let focusIn: ((e: { target: unknown }) => void) | null = null
 
@@ -80,6 +85,35 @@ describe('voice insert target', () => {
     focusIn?.({ target: new FakeNode([], 'BUTTON') })
     insertVoiceText('i')
     expect(got).toEqual(['box:g', 'composer:h', 'box:i'])
+  })
+
+  it('mounting only named fields never captures history text before focus', async () => {
+    const { registerVoiceInsertTarget, insertVoiceText } = await load()
+    const got: string[] = []
+    const box = new FakeNode([], 'INPUT')
+    unregister.push(registerVoiceInsertTarget((t) => got.push(t), () => box as unknown as Element))
+    expect(insertVoiceText('copy this')).toBe(false)
+    expect(got).toEqual([])
+    focusIn?.({ target: box })
+    expect(insertVoiceText('chosen')).toBe(true)
+    expect(got).toEqual(['chosen'])
+  })
+
+  it('a selected field that becomes hidden, disconnected or blocked cannot receive history', async () => {
+    const { registerVoiceInsertTarget, insertVoiceText } = await load()
+    const got: string[] = []
+    const box = new FakeNode([], 'INPUT')
+    unregister.push(registerVoiceInsertTarget((t) => got.push(t), () => box as unknown as Element))
+    focusIn?.({ target: box })
+    for (const key of ['visible', 'isConnected', 'disabled', 'readOnly'] as const) {
+      const original = box[key]
+      box[key] = key === 'visible' || key === 'isConnected' ? false : true
+      expect(insertVoiceText(key)).toBe(false)
+      box[key] = original
+    }
+    expect(got).toEqual([])
+    expect(insertVoiceText('ready again')).toBe(true)
+    expect(got).toEqual(['ready again'])
   })
 
   it('no target at all reports false (the panel falls back to the clipboard)', async () => {

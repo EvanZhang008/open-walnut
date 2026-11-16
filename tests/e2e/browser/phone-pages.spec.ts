@@ -16,6 +16,7 @@ import fs from 'node:fs/promises'
 import net from 'node:net'
 import { expect, test, type Page, type Request } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { clearBesideMic } from './search-mic-layout-helpers'
 import {
   PHONE, backButton, expectNoHorizontalOverflow, findSmallTargets, findSmallText, menuButton, openDrawer,
 } from './phone-helpers'
@@ -258,7 +259,10 @@ for (const size of SIZES) {
     // on a fast machine while the editors' mics were 28 px wide (2026-11-05 CI).
     const detail = page.locator('.task-detail-modal-overlay')
     await expect(detail.locator('.editor-mic-dock .mic-btn')).toHaveCount(2, { timeout: 20_000 })
-    await expect(detail.locator('.box-mic .mic-btn')).toHaveCount(1)
+    // Each plain-text field owns one mic: the title now dictates too.
+    await expect(title.locator('..').locator('.box-mic .mic-btn')).toHaveCount(1)
+    await expect(detail.locator('.tdp-note-add .box-mic .mic-btn')).toHaveCount(1)
+    await expect(detail.locator('.box-mic .mic-btn')).toHaveCount(2)
     // Footer actions stay finger-sized even when a new popup action is added.
     for (const action of await detail.locator('.tdp-footer button').all()) {
       const box = await action.boundingBox()
@@ -288,7 +292,18 @@ async function stubSearch(page: Page): Promise<void> {
 }
 
 async function openSearch(page: Page): Promise<void> {
-  await page.locator('.todo-search-input').tap()
+  const input = page.locator('.todo-search-input')
+  const mic = input.locator('..').locator('.mic-btn')
+  const box = (await input.boundingBox())!
+  const button = (await mic.boundingBox())!
+  expect(button.width).toBeGreaterThanOrEqual(44)
+  expect(button.height).toBeGreaterThanOrEqual(44)
+  expect(await input.evaluate((el) => {
+    const r = el.getBoundingClientRect()
+    return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === el
+  }), 'the text field has its own tappable centre, not the mic over it').toBe(true)
+  expect(button.x + button.width).toBeLessThanOrEqual(box.x + box.width + 1)
+  await input.tap()
   await expect(page.getByTestId('phone-search-layer')).toBeVisible()
   await expect(page.locator('.phone-search-input')).toBeFocused()
 }
@@ -479,6 +494,8 @@ for (const size of SIZES) {
     await drawerGone(page)
     await expect(page.locator('.notes-tree-pane').getByText(name, { exact: true }).first()).toBeVisible({ timeout: 15_000 })
     await scan(page, '.notes-split-view', `notes-tree-${size.width}`)
+    await clearBesideMic(page.getByRole('textbox', { name: 'Search notes', exact: true }),
+      page.locator('.notes-search-clear'), name, `${test.info().project.name}-notes-${size.width}`)
     await page.locator('.notes-tree-pane').getByText(name, { exact: true }).first().tap()
     await expect(page.locator('.notes-editor-pane .ProseMirror')).toBeVisible({ timeout: 15_000 })
     await scan(page, '.notes-split-view', `notes-note-${size.width}`)

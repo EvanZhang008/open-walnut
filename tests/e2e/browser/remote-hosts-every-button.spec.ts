@@ -24,7 +24,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 import { fixtureCounters, hostFixture, openHostParts, resetServerHostFixture } from './host-problems-fixture-helpers'
 import { askThenCancel, expectFocusKept, fleetAddsUp, fleetNow, fleetStat, flip, isChromium, openFixturePane, paneKeys, pick, row, shot } from './remote-hosts-every-button-helpers'
 import {
-  checkAddHost, checkJoinLink, checkMoreSettings, checkSecrets, expectRing, joinPress, type StepCtx,
+  checkAddHost, checkJoinLink, checkMoreSettings, checkSecrets, checkSecretsMic, expectRing, joinPress, type StepCtx,
 } from './remote-hosts-every-button-steps'
 import { checkAlphaRow } from './remote-hosts-every-button-rows'
 import { checkBetaThisHost } from './remote-hosts-every-button-host'
@@ -704,19 +704,22 @@ test.describe('Settings > Remote Hosts: every button', () => {
       ran('Footer/button#remote-hosts-copy-diagnostics')
     })
 
-    await test.step('Details\' note mic (last: it leaves the pane)', async () => {
+    await test.step('Details\' note mic, then Secrets\' description mic (last: each leaves the pane)', async () => {
       await pick(page, row(page, 'devbox'), 'Details')
       await openHostParts(page.locator('[data-testid="rh-details"][data-host="devbox"]'), ['knows'])
       const mic = page.getByTestId('host-profile-devbox').locator('button.mic-btn')
       await expect(page.locator('[data-testid="rh-details"][data-host="devbox"]').getByTestId('host-system-line')).toBeVisible()
       // Linux WebKit has no recorder, so no mic; Chromium must show it.
       if (isChromium(page)) await expect(mic).toHaveCount(1)
-      else if (await mic.count() === 0) return
-      await sweep()
-      await expect(mic).toHaveAttribute('aria-label', 'Set up dictation')
-      await mic.click()
-      await expect.poll(() => new URL(page.url()).hash).toBe('#stt')
-      ran('Hosts/button.mic-btn')
+      if (await mic.count() > 0) {
+        await sweep()
+        await expect(mic).toHaveAttribute('aria-label', 'Set up dictation')
+        await mic.click()
+        await expect.poll(() => new URL(page.url()).hash).toBe('#stt')
+        ran('Hosts/button.mic-btn')
+      }
+      // Back on Remote Hosts by its nav entry: the secret editor's mic.
+      await checkSecretsMic(ctx)
     })
 
     await test.step('every button seen has a check that ran, and every registered button was seen', async () => {

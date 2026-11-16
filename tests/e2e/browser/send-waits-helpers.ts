@@ -12,10 +12,10 @@
  * is the real app. The engine is canned and HELD from the moment Send is pressed,
  * so the test sees the wait itself before it lets the final words through.
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { openSession, stubSttStatus } from './voice-selection-helpers'
-import { useSyntheticMic } from './stt-failure-helpers'
+import { stubSttStatus } from './voice-selection-helpers'
+import { openComposer as openDictation, useSyntheticMic, type Dictation } from './stt-failure-helpers'
 
 export const SHOTS = '/tmp/send-waits-for-dictation/shots'
 /** What the live preview shows while recording. */
@@ -83,7 +83,7 @@ export async function stubEngine(page: Page): Promise<Lane> {
   return lane
 }
 
-interface Composer { panel: Locator; mic: Locator; textarea: Locator; send: Locator; bubble: Locator; sent: string[] }
+interface Composer extends Dictation { sent: string[] }
 
 async function openComposer(page: Page, sid: string, taskId: string): Promise<Composer> {
   const sent: string[] = []
@@ -96,16 +96,7 @@ async function openComposer(page: Page, sid: string, taskId: string): Promise<Co
   }))
   // The dictation's own log lines, printed with the run: what the stop decided and when the send went.
   page.on('console', (m) => { if (/\[stt\]/.test(m.text())) console.log(`[send-waits] ${m.text()}`) })
-  await page.goto('/')
-  const panel = await openSession(page, sid, taskId)
-  return {
-    panel,
-    mic: panel.locator('.mic-btn-wrapper .mic-btn').first(),
-    textarea: panel.locator('.chat-input-textarea').first(),
-    send: panel.locator('.chat-send-btn-icon').first(),
-    bubble: panel.locator('.mic-error-bubble').first(),
-    sent,
-  }
+  return { ...await openDictation(page, sid, taskId), sent }
 }
 
 /** Type a few words, start the mic and wait for the live preview after them. */

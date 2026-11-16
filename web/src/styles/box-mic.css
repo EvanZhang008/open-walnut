@@ -34,3 +34,46 @@
 .notes-tree-search .mic-field.mic-field-inline > input.notes-search-input { padding-right: 54px; }
 .settings-container .settings-filter-wrap .settings-filter-clear { right: 28px; }
 .settings-container .settings-filter-wrap .mic-field.mic-field-inline > input.settings-filter { padding-right: 50px; }
+
+/* Shared fields also live outside phone overlay layers (Home, Settings, Notes).
+   Their touch target belongs to the component, not one page's mobile selector. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .box-mic .mic-btn-wrapper .mic-btn,
+  .mic-field .mic-field-mic .mic-btn-wrapper .mic-btn {
+    min-width: 44px;
+    min-height: 44px;
+    width: 44px;
+    height: 44px;
+    justify-content: center;
+  }
+  .mic-field.mic-field-inline > input,
+  .mic-field.mic-field-compact.mic-field-inline > input {
+    min-height: 44px;
+    padding-right: 52px;
+  }
+  .mic-field.mic-field-area > textarea { padding-right: 62px; }
+  /* Clear and mic each own a full touch target, including while a query is present.
+     Notes positions Clear relative to its padded search row, not the input. */
+  .kanban-search-box .kanban-search-clear,
+  .settings-container .settings-filter-wrap .settings-filter-clear {
+    right: 48px;
+    width: 44px;
+    height: 44px;
+  }
+  .notes-tree-search .notes-search-clear {
+    right: 62px;
+    width: 44px;
+    height: 44px;
+  }
+  .kanban-search-box .mic-field.mic-field-inline > input.kanban-search,
+  .notes-tree-search .mic-field.mic-field-inline > input.notes-search-input,
+  .settings-container .settings-filter-wrap .mic-field.mic-field-inline > input.settings-filter {
+    padding-right: 96px;
+  }
+  /* A search door in a crowded toolbar must retain a text-sized click area.
+     Otherwise the 44px mic covers the centre of its shrunken input at 320px. */
+  .app-shell-navigation .todo-panel-toolbar .todo-search-bar {
+    min-width: 148px;
+  }
+  .app-shell-navigation .todo-panel-toolbar { flex-wrap: wrap; }
+}

@@ -16,7 +16,8 @@
  */
 import { expect, test, type Page, type Locator } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { openSession, stubSttStatus } from './voice-selection-helpers'
+import { composerMic, openSession, stubSttStatus, type ComposerMic } from './voice-selection-helpers'
+import { loadHome } from './draft-helpers'
 
 export const SHOTS = '/tmp/stt-failure-recovery/shots'
 /** What the live preview shows while recording. */
@@ -132,26 +133,23 @@ export async function stubEngine(page: Page, previewText = DRAFTED): Promise<Eng
   return lane
 }
 
-export interface Dictation { panel: Locator; mic: Locator; textarea: Locator; bubble: Locator }
+export interface Dictation extends ComposerMic { panel: Locator; bubble: Locator }
 
 /** The bubble stays up while the user edits, so it must sit above the text box, not on it. */
 export async function expectBubbleClearOfTextBox(d: Dictation): Promise<void> {
-  const box = (await d.panel.locator('.chat-input-box').first().boundingBox())!
+  const box = (await d.composer.boundingBox())!
   await expect.poll(async () => {
     const b = (await d.bubble.boundingBox())!
     return b.y + b.height <= box.y
   }).toBe(true)
 }
 
-export async function openComposer(page: Page): Promise<Dictation> {
-  await page.goto('/')
-  const panel = await openSession(page)
-  return {
-    panel,
-    mic: panel.locator('.mic-btn-wrapper .mic-btn').first(),
-    textarea: panel.locator('.chat-input-textarea').first(),
-    bubble: panel.locator('.mic-error-bubble').first(),
-  }
+/** Load Home, open the session and take its composer's mic (the panel's other mics are not it). */
+export async function openComposer(page: Page, sid?: string, taskId?: string): Promise<Dictation> {
+  await loadHome(page)
+  const panel = await openSession(page, sid, taskId)
+  const c = await composerMic(panel)
+  return { ...c, panel, bubble: c.popover('mic-error-bubble') }
 }
 
 /** Start recording and wait until at least one live preview is in the box. */
@@ -209,13 +207,14 @@ export function registerSttFailureScenarios(): void {
 
     // The voice history (right-click on the mic) marks the row as partial.
     await d.mic.click({ button: 'right' })
-    const row = d.panel.locator('.mic-retry-dropdown .mic-history-item').first()
+    const menu = d.popover('mic-retry-dropdown')
+    const row = menu.locator('.mic-history-item').first()
     await expect(row).toContainText(`Partial: ${DRAFTED}`)
     // The menu opens where the bubble sits; the bubble steps aside meanwhile.
     await expect(d.bubble).toBeHidden()
     await shot(page, 'partial-01b-history')
     await d.textarea.click()
-    await expect(d.panel.locator('.mic-retry-dropdown')).toBeHidden()
+    await expect(menu).toBeHidden()
     await expect(d.bubble).toBeVisible()
 
     lane.phase = 'recovered'

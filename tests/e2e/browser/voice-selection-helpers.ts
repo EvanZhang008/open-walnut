@@ -63,6 +63,41 @@ export async function openSession(page: Page, sid = SESSION_ID, taskId = TASK_ID
   return panel
 }
 
+/**
+ * The session's message composer and ITS mic. The panel has more than one mic (the
+ * title and note fields dictate too), so a panel-wide `.mic-btn` is not the composer's:
+ * the composer is the `.chat-input-box` that holds the message textarea, and its mic
+ * sits in that box's controls. Strict locators: a second match fails the test.
+ *
+ * A mic's bubbles and menu (error, silence warning, start hint, retry menu) are
+ * portalled to <body> so a scrolling field cannot clip them; each carries its mic's
+ * id in `data-mic-owner` (MicPopover.tsx), so `popover` finds THIS mic's one by owner.
+ */
+export interface ComposerMic {
+  composer: Locator
+  wrapper: Locator
+  mic: Locator
+  textarea: Locator
+  send: Locator
+  popover: (className: string) => Locator
+}
+
+export async function composerMic(panel: Locator): Promise<ComposerMic> {
+  const composer = panel.locator('.chat-input-box').filter({ has: panel.page().locator('textarea.chat-input-textarea') })
+  const wrapper = composer.locator('.chat-input-controls .mic-btn-wrapper')
+  await expect(wrapper).toHaveCount(1)
+  const owner = await wrapper.getAttribute('data-mic-id')
+  expect(owner, 'the composer mic names the popovers it owns').toBeTruthy()
+  return {
+    composer,
+    wrapper,
+    mic: wrapper.locator('.mic-btn'),
+    textarea: composer.locator('textarea.chat-input-textarea'),
+    send: composer.locator('.chat-send-btn-icon'),
+    popover: (className) => panel.page().locator(`.mic-popover.${className}[data-mic-owner="${owner}"]`),
+  }
+}
+
 /** Scroll with a REAL wheel gesture: the timeline follows the bottom, and a
  *  programmatic scrollTop write is snapped straight back to the end. */
 export async function wheel(page: Page, panel: Locator, dy: number): Promise<void> {

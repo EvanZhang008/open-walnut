@@ -14,6 +14,7 @@ import { openSessionBoard } from './board-view-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { call, kanbanApi, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
 import { keepCornerToBoard } from './board-kanban-corner'
+import { clearBesideMic } from './search-mic-layout-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -288,12 +289,19 @@ test('C95: a double click on a section head renames nothing; Add lane scrolls in
   await call(api, 'PUT', `/api/v1/tasks/${team.leader}/board/lanes`, { lanes: lanesAtStart })
   await expect(fresh).toHaveCount(0, { timeout: 15_000 })
 
+  await clearBesideMic(pane.getByTestId('kanban-search'), pane.locator('.kanban-search-clear'),
+    'ledger', `${test.info().project.name}-board-520`)
+
   // Tab from the search box to the 6th lane: one stop per card lane and its Add task (G35); a
   // card's own controls are not on the way. The lane heads' fold and kebab buttons (KanbanLaneHead)
   // are stops too: counted apart, the budget of 15 is for the rest.
   // WebKit keeps Safari's default: Tab skips buttons, Option+Tab reaches every control.
   const tab = browserName === 'webkit' ? 'Alt+Tab' : 'Tab'
   await pane.getByTestId('kanban-search').focus()
+  // The search field's own mic is the first keyboard stop, not a lane action.
+  const searchMic = pane.getByTestId('kanban-search').locator('..').locator('.mic-btn')
+  await page.keyboard.press(tab)
+  await expect(searchMic).toBeFocused()
   const path: string[] = []
   while (path.length < 40) {
     await page.keyboard.press(tab)

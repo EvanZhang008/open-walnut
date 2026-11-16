@@ -5,10 +5,11 @@
  * which checks every key against the spec's REGISTRY).
  * No tests in this file (Playwright refuses a test() call from an imported module).
  */
-import { expect, type APIRequestContext, type Page } from '@playwright/test'
+import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
+import { openRemoteHosts } from './host-problems-fixture-helpers'
 import { expectFormLanded, shotPart } from './remote-hosts-said-once'
 import {
-  WINDOWS_APP, askThenCancel, expectCopied, expectOpensTab, netCommand, netLink, netWindows, openGroup, openMore, shot, type PaneRoutes,
+  WINDOWS_APP, askThenCancel, expectCopied, expectOpensTab, isChromium, netCommand, netLink, netWindows, openGroup, openMore, shot, type PaneRoutes,
 } from './remote-hosts-every-button-helpers'
 
 export interface StepCtx {
@@ -474,6 +475,7 @@ export async function checkSecrets(ctx: StepCtx): Promise<void> {
   await expect(value).toBeFocused()
   ctx.ran('Secrets/button:Replace')
   await value.fill('s3cret-value')
+  await expectDescriptionMicOnly(page, editor)
   const eye = editor.locator('button.secret-toggle')
   await eye.click()
   await expect(value).toHaveAttribute('type', 'text')
@@ -552,4 +554,53 @@ export async function checkSecrets(ctx: StepCtx): Promise<void> {
   await expect(added).toHaveCount(0)
   await expectRing(page, addBtn)
   ctx.ran('Secrets/button:Delete <secret>', 'Secrets/button#secret-delete-confirm-cancel', 'Secrets/button#secret-delete-confirm-remove')
+}
+
+/**
+ * The secret editor's one mic is on "What it is": never on the name, the value or the variable
+ * (a secret's value is pasted, never spoken to a speech engine). Chromium must show it; Linux
+ * WebKit has no recorder, so no mic at all. Returns the description's mic.
+ */
+export async function expectDescriptionMicOnly(page: Page, editor: Locator): Promise<Locator> {
+  // `has` is matched inside each field, so it names the box alone (an `editor.` chain looked for
+  // the whole Secrets group inside the field and found nothing).
+  const mic = editor.locator('.mic-field').filter({ has: page.getByTestId('secret-description') }).locator('button.mic-btn')
+  for (const id of ['secret-name', 'secret-value', 'secret-env']) {
+    const box = editor.getByTestId(id)
+    if (await box.count() === 0) continue
+    expect(await box.evaluate((el) => !!el.closest('.mic-field')), `${id} carries no mic`).toBe(false)
+  }
+  if (isChromium(page)) await expect(mic).toHaveCount(1)
+  await expect(editor.locator('button.mic-btn'), 'the description\'s mic is the editor\'s only one').toHaveCount(await mic.count())
+  return mic
+}
+
+/**
+ * Secrets' description mic, as Details' note mic: from the keyboard, Tab goes from the box to its
+ * mic and on to the first host's tick; with voice not set up, a press takes you to Settings >
+ * Voice. That leaves the pane, so the spec runs it last, coming back to Remote Hosts by its nav.
+ */
+export async function checkSecretsMic(ctx: StepCtx): Promise<void> {
+  const { page } = ctx
+  await openRemoteHosts(page)
+  await openMore(page)
+  const sec = page.getByTestId('fleet-secrets')
+  await sec.getByTestId('secret-add').click()
+  const editor = sec.getByTestId('secret-editor')
+  await expect(editor.getByTestId('secret-name')).toBeFocused()
+  const mic = await expectDescriptionMicOnly(page, editor)
+  if (await mic.count() === 0) return
+  await ctx.sweep()
+  await expect(mic).toHaveAttribute('aria-label', 'Set up dictation')
+  // WebKit's Tab passes over buttons by default: the order is Chromium's to prove.
+  if (isChromium(page)) {
+    await editor.getByTestId('secret-description').focus()
+    await page.keyboard.press('Tab')
+    await expect(mic).toBeFocused()
+    await page.keyboard.press('Tab')
+    await expect(editor.getByRole('checkbox').first()).toBeFocused()
+  }
+  await mic.click()
+  await expect.poll(() => new URL(page.url()).hash).toBe('#stt')
+  ctx.ran('Secrets/button.mic-btn')
 }

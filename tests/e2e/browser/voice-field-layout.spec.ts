@@ -3,6 +3,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { loadHome } from './draft-helpers';
 import { isolateUiPrefs } from './todo-panel-helpers';
 import { stubSttStatus } from './voice-selection-helpers';
+import { clearBesideMic } from './search-mic-layout-helpers';
 
 // Linux WebKit has no MediaRecorder. This only checks painting/focus/popover
 // placement with its capability visible; actual capture is accepted in Chromium.
@@ -72,4 +73,49 @@ test('Settings filter and focus-tier name keep their mics inside their fields', 
   await page.keyboard.press('Escape');
   await expect(popup).not.toBeVisible();
   await expect(input).toBeVisible();
+});
+
+for (const width of [320, 390]) {
+  test(`phone search Clear and mic keep separate targets at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await loadHome(page);
+    await page.getByRole('button', { name: 'Menu', exact: true }).click();
+    await page.locator('#primary-sidebar a[href^="/settings"]').click();
+    await clearBesideMic(page.getByTestId('settings-filter'), page.locator('.settings-filter-clear'),
+      'voice', `${test.info().project.name}-layout-settings-${width}`);
+    await page.getByRole('button', { name: 'Menu', exact: true }).click();
+    await page.locator('#primary-sidebar a[href="/notes"]').click();
+    await clearBesideMic(page.getByRole('textbox', { name: 'Search notes', exact: true }),
+      page.locator('.notes-search-clear'), 'invoice', `${test.info().project.name}-layout-notes-${width}`);
+  });
+}
+
+test('a tall coarse-pointer tablet keeps the desktop compact mic', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1024, height: 1366 }, hasTouch: true });
+  try {
+    const page = await context.newPage();
+    await isolateUiPrefs(page);
+    await stubSttStatus(page);
+    // No capture in this layout probe. Linux WebKit needs the capability visible only.
+    await page.addInitScript(() => {
+      if (typeof MediaRecorder === 'undefined') {
+        Object.defineProperty(window, 'MediaRecorder', { value: class {
+          static isTypeSupported() { return true; }
+          constructor() { throw new Error('Layout test never captures audio'); }
+        } });
+      }
+      if (!navigator.mediaDevices) Object.defineProperty(navigator, 'mediaDevices', { value: {} });
+      if (!navigator.mediaDevices.getUserMedia) navigator.mediaDevices.getUserMedia = () => Promise.reject(new Error('Layout test never captures audio'));
+    });
+    await loadHome(page);
+    await page.locator('a[href^="/settings"]').first().click();
+    await expect(page.locator('.settings-layout')).not.toHaveAttribute('data-phone-settings', /list|pane/);
+    const mic = page.getByTestId('settings-filter').locator('..').locator('.mic-btn');
+    await expect(mic).toBeVisible();
+    const box = (await mic.boundingBox())!;
+    expect(box.width).toBeLessThan(44);
+    expect(box.height).toBeLessThan(44);
+  } finally {
+    await context.close();
+  }
 });

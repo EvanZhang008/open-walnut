@@ -57,13 +57,13 @@ export function registerMicStallScenarios(): void {
     await useControllableMic(page, 0.3)
     const lane = await stubEngine(page)
     const d = await openComposer(page)
-    const warning = d.panel.locator('.mic-silence-warning')
+    const warning = d.popover('mic-silence-warning')
 
     await d.mic.click()
     await expect(d.mic).toHaveClass(/mic-recording/, { timeout: 15_000 })
     await page.waitForTimeout(1500)
     // A mic that opens at once never shows the slow-start note.
-    await expect(d.panel.locator('.mic-start-hint')).toHaveCount(0)
+    await expect(d.popover('mic-start-hint')).toHaveCount(0)
     // The stall: digital zero for 6 s, the longest the user's recordings lost.
     await setGain(page, 0)
     const deadline = Date.now() + 6000
@@ -116,7 +116,7 @@ export function registerMicStallScenarios(): void {
     await page.waitForTimeout(1200)
     await expect(d.mic).toHaveClass(/mic-starting/)
     // Slow to open: the button says in words to wait.
-    const hint = page.locator('.mic-start-hint')
+    const hint = d.popover('mic-start-hint')
     await expect(hint).toHaveText('Starting the microphone: speak when it turns red')
     await shot(page, 'mic-starting-grey')
     // The headset's first sound.
@@ -164,12 +164,12 @@ export function registerMicStallScenarios(): void {
     await expect(d.mic).toHaveClass(/mic-starting/, { timeout: 1000 })
     await expect(d.mic).not.toHaveClass(/mic-recording/)
     await expect(d.mic).toHaveAttribute('title', 'Starting the microphone: speak when it turns red')
-    await expect(page.locator('.mic-start-hint')).toBeVisible({ timeout: 2000 })
+    await expect(d.popover('mic-start-hint')).toBeVisible({ timeout: 2000 })
     await shot(page, 'mic-opening-grey')
     // The stream opens with sound: red, the note gone.
     await expect(d.mic).toHaveClass(/mic-recording/, { timeout: 15_000 })
     await expect(d.mic).not.toHaveClass(/mic-starting/, { timeout: 3000 })
-    await expect(page.locator('.mic-start-hint')).toHaveCount(0)
+    await expect(d.popover('mic-start-hint')).toHaveCount(0)
     await d.mic.click()
   })
 
@@ -187,7 +187,7 @@ export function registerMicStallScenarios(): void {
     await expect(d.mic).not.toHaveClass(/mic-starting/, { timeout: 1000 })
     await page.waitForTimeout(2000)
     await expect(d.mic).not.toHaveClass(/mic-recording/)
-    await expect(page.locator('.mic-start-hint')).toHaveCount(0)
+    await expect(d.popover('mic-start-hint')).toHaveCount(0)
     const tracks = await page.evaluate(() =>
       ((window as unknown as { __micStreams?: MediaStream[] }).__micStreams ?? []).flatMap((s) => s.getTracks().map((t) => t.readyState)))
     expect(tracks.length, 'the browser opened the mic once').toBe(1)
@@ -204,7 +204,7 @@ export function registerMicStallScenarios(): void {
     await useControllableMic(page, 0)
     await stubEngine(page)
     const d = await openComposer(page)
-    const warning = d.panel.locator('.mic-silence-warning')
+    const warning = d.popover('mic-silence-warning')
 
     await d.mic.click()
     await expect(d.mic).toHaveClass(/mic-recording/, { timeout: 15_000 })
