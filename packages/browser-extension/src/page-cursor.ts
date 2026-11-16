@@ -52,10 +52,11 @@ const LOOK_READ_MS = 250
 const TILT_MIN_PX = 24
 /**
  * With no new step here for this long the agent is not working in this page now (its turn ended,
- * it waits for the person, it went away): the cursor fades out. Long enough to stay between the
- * quick steps of one action; a step after a longer think draws it again where it acts.
+ * it waits for the person, it went away): the cursor fades out. Long enough to stay through the
+ * agent's think between steps (2026-11-16, the user: "10s is not enoght at least 40s"); a step
+ * after a longer think draws it again where it acts.
  */
-export const IDLE_MS = 10_000
+export const IDLE_MS = 40_000
 /**
  * Real input this soon after a step drew the cursor is the agent's own (agent-trusted.ts: the
  * debugger presses where the page just placed it); a drag's own length is added. Each such input

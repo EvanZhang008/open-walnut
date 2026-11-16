@@ -804,17 +804,17 @@ test('fill_code types the saved login\'s one-time code into the page; the agent 
 })
 
 test('the cursor goes by itself once the agent stops acting, and gets out of the person\'s way (2026-11-15)', async () => {
-  test.setTimeout(90_000)
+  test.setTimeout(150_000)
   const tab = agentPage()!
   const cursor = tab.locator('walnut-ext[data-walnut-cursor]')
   const snap = (await act(tab, { action: 'snapshot', tab: agentTab })).body.snapshot as string
   const who = refOf(snap, /textbox "Your name"/)
   expect((await act(tab, { action: 'hover', tab: agentTab, ref: who })).status).toBe(200)
   await expect(cursor).toHaveCount(1)
-  // No new step and no message: it fades out on its own (page-cursor.ts IDLE_MS, 10 s), the tab still held.
-  await tab.waitForTimeout(4000)
+  // No new step and no message: it fades out on its own (page-cursor.ts IDLE_MS, 40 s), the tab still held.
+  await tab.waitForTimeout(30_000)
   await expect(cursor).toHaveCount(1)
-  await expect.poll(() => cursor.count(), { timeout: 15_000 }).toBe(0)
+  await expect.poll(() => cursor.count(), { timeout: 20_000 }).toBe(0)
   expect((await act(tab, { action: 'tabs' })).body.tabs.map((t: { id: number }) => t.id)).toContain(agentTab)
   // The next step draws it again; the person's own pointer coming over it takes it away at once.
   expect((await act(tab, { action: 'hover', tab: agentTab, ref: who })).status).toBe(200)

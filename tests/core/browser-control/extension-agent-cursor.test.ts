@@ -275,6 +275,10 @@ describe('the cursor goes when the agent stops working here (2026-11-15: it stay
   const reduce = () => { g.matchMedia = (q: string) => ({ matches: q.includes('reduce') }) }
   afterEach(() => { vi.useRealTimers() })
 
+  it('stays at least 40 s after the last step, so it does not blink out while the agent thinks (2026-11-16, the user: "10s is not enoght at least 40s")', () => {
+    expect(cur.IDLE_MS).toBeGreaterThanOrEqual(40_000)
+  })
+
   it('with no new step for IDLE_MS it is gone by itself, with no message: every way control ends (turn over, task done, session dead, link lost, any new one) is a silence', async () => {
     reduce()
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
