@@ -307,12 +307,15 @@
 .home-navigation-scroll .todo-group-project:focus-within .focus-inline-add-trigger { opacity: 1; }
 
 /* The leftmost Home column, beside the rail (MainPage renders it first). */
-.home-companion { flex: 0 0 400px; width: 400px; max-width: 100%; min-height: 0; height: 100%; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--bg); }
+/* The agenda and the scratchpad are two side bars in one row, the scratchpad right of the agenda
+   (HomeCompanionPanel.tsx CompanionColumn, 2026-11-16: "side bar should be independent, new one
+   on the right, instead of top and bottom"). Each is as wide as it was dragged
+   (--side-bar-pane-width) and scrolls on its own; the row is as wide as the side bars it shows. */
+.home-companion, .page-side-bar { flex: 0 0 auto; max-width: 100%; min-height: 0; height: 100%; display: flex; flex-direction: row; background: var(--bg); }
 .home-companion[hidden], .home-companion [hidden] { display: none !important; }
-.home-companion-body, .home-companion-content { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-.home-companion .cal-side-panel { width: 100% !important; flex: 1; min-width: 0; border: 0; border-right: 0; }
-/* Agenda and scratchpad on together share the column, agenda on top. */
-.home-companion-body-calendar + .home-companion-scratchpad { border-top: 1px solid var(--border); }
+.side-bar-pane { flex: 0 0 var(--side-bar-pane-width, 400px); width: var(--side-bar-pane-width, 400px); min-width: 0; min-height: 0; position: relative; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--bg); }
+.home-companion-body, .home-companion-content { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+.home-companion .cal-side-panel, .page-side-bar .cal-side-panel { width: 100% !important; flex: 1; min-width: 0; border: 0; border-right: 0; }
 /* The window's one scratchpad editor sits in a box ScratchpadHost moves between the columns: it
    fills the slot as the section did, so the note's body keeps a bounded height and scrolls. */
 .scratchpad-host { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
@@ -333,25 +336,25 @@
 /* A narrow window overlays the column from the task panel's right edge (the panel's width
    rides in as --home-companion-left, a % of .main-page like the panel's own width). */
 @media (max-width: 1100px) {
-  .home-companion { position: absolute; top: 0; left: var(--home-companion-left, 0); bottom: 0; z-index: 45; box-shadow: 10px 0 36px rgb(0 0 0 / 10%); }
+  .home-companion { position: absolute; top: 0; left: var(--home-companion-left, 0); bottom: 0; z-index: 45; box-shadow: 10px 0 36px rgb(0 0 0 / 10%); max-width: calc(100% - var(--home-companion-left, 0px)); }
+  /* Two side bars over a narrow window share what is left of it rather than run past its edge. */
+  .home-companion .side-bar-pane, .page-side-bar .side-bar-pane { flex-shrink: 1; }
 }
 /* A phone stacks the task panel above the rest, so the overlay starts at the left edge. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .home-companion { left: 0; }
 }
-/* Every page but Home: the Agenda and Scratchpad side bar on the page's left edge, beside the
-   rail that opens it (PageSideBar.tsx; Home keeps .home-companion). Its width is the page's own
-   (--page-side-bar-width), dragged on its right edge. */
+/* Every page but Home: the Agenda and Scratchpad side bars on the page's left edge, beside the
+   rail that opens them (PageSideBar.tsx; Home keeps .home-companion), each as wide as that page
+   kept it. */
 .main-content-row { flex: 1; display: flex; min-width: 0; min-height: 0; position: relative; }
-.page-side-bar { flex: 0 0 var(--page-side-bar-width, 400px); width: var(--page-side-bar-width, 400px); max-width: 100%; min-height: 0; display: flex; flex-direction: column; position: relative; border-right: 1px solid var(--border); background: var(--bg); }
-.page-side-bar .cal-side-panel { width: 100% !important; flex: 1; min-width: 0; border: 0; border-right: 0; }
-/* The unified resize gutter (globals.css): no layout width, a +-3px grab zone on the border line,
-   a 3px accent bar while hovered or dragged. */
-.page-side-bar-resize { position: absolute; top: 0; bottom: 0; right: 0; width: 0; z-index: 5; cursor: col-resize; touch-action: none; }
-.page-side-bar-resize::before { content: ''; position: absolute; top: 0; bottom: 0; left: -3px; right: -3px; cursor: col-resize; }
-.page-side-bar-resize::after { content: ''; position: absolute; top: 0; bottom: 0; left: -2px; width: 3px; background: var(--accent); opacity: 0; transition: opacity .15s; pointer-events: none; }
-.page-side-bar-resize:hover::after, .page-side-bar-resize.resizing::after, .page-side-bar-resize:focus-visible::after { opacity: .5; }
-.page-side-bar-resize:focus-visible { outline: none; }
+/* Each side bar's resize handle on its right edge, the unified resize gutter (globals.css): no
+   layout width, a +-3px grab zone on the border line, a 3px accent bar while hovered or dragged. */
+.side-bar-pane-resize { position: absolute; top: 0; bottom: 0; right: 0; width: 0; z-index: 5; cursor: col-resize; touch-action: none; }
+.side-bar-pane-resize::before { content: ''; position: absolute; top: 0; bottom: 0; left: -3px; right: -3px; cursor: col-resize; }
+.side-bar-pane-resize::after { content: ''; position: absolute; top: 0; bottom: 0; left: -2px; width: 3px; background: var(--accent); opacity: 0; transition: opacity .15s; pointer-events: none; }
+.side-bar-pane-resize:hover::after, .side-bar-pane-resize.resizing::after, .side-bar-pane-resize:focus-visible::after { opacity: .5; }
+.side-bar-pane-resize:focus-visible { outline: none; }
 /* A narrow window lays the side bar over the page from its left edge, as Home does its column. */
 @media (max-width: 1100px) {
   .page-side-bar { position: absolute; top: 0; left: 0; bottom: 0; z-index: 45; box-shadow: 10px 0 36px rgb(0 0 0 / 10%); }

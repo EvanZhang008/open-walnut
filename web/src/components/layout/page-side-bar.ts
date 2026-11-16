@@ -3,11 +3,16 @@
  * rail's Agenda and Scratchpad: "extract it to global, any page can show this side bar, I find I
  * sometimes need it for the org page").
  *
- * Home keeps its own column (HomeCompanionPanel, right of the task panel, under Home's own flags).
- * Every other page gets the same two panes in one column on its left edge, beside the rail that
- * opens them, without leaving the page. What is open there, and how wide the column is, is kept
- * PER PAGE through view memory (utils/view-memory.ts): the Agenda open on Org stays closed on
- * Notes, and both come back as left after another page, a reload or a restart.
+ * Home keeps its own place (HomeCompanionPanel, right of the task panel, under Home's own flags).
+ * Every other page gets the same two panes on its left edge, beside the rail that opens them,
+ * without leaving the page. What is open there is kept PER PAGE through view memory
+ * (utils/view-memory.ts): the Agenda open on Org stays closed on Notes, and both come back as
+ * left after another page, a reload or a restart.
+ *
+ * The two panes are two side bars side by side, the Scratchpad right of the Agenda, never one
+ * column stacked (2026-11-16, the user: "side bar should be independent, new one on the right,
+ * instead of top and bottom"). Each has its own width, dragged on its own right edge and kept
+ * per page, Home's under the id `home` (its panes' flags stay Home's own).
  */
 import { useCallback } from 'react';
 import { shownText, storedView, usePageViewOf, viewKey, writeView } from '@/utils/view-memory';
@@ -15,16 +20,23 @@ import { shownText, storedView, usePageViewOf, viewKey, writeView } from '@/util
 export interface PageSideBarView {
   agenda: boolean;
   scratchpad: boolean;
-  /** The column's width in px; absent until the user drags it. */
+  /** The Agenda's width in px; absent until the user drags it. Before the panes were two side
+   *  bars it was the one column's width, so a Scratchpad with no width of its own starts here. */
   width?: number;
+  /** The Scratchpad's width in px; absent until the user drags it. */
+  scratchpadWidth?: number;
 }
+
+export type SideBarPane = 'agenda' | 'scratchpad';
 
 export const SIDE_BAR_CLOSED: PageSideBarView = { agenda: false, scratchpad: false };
 export const SIDE_BAR_WIDTH_DEFAULT = 400;
 export const SIDE_BAR_WIDTH_MIN = 280;
 export const SIDE_BAR_WIDTH_MAX = 720;
-/** A column never takes more than this share of the window, so the page keeps room. */
+/** A side bar alone never takes more than this share of the window, so the page keeps room. */
 export const SIDE_BAR_WINDOW_SHARE = 0.5;
+/** Each of the two side by side never takes more than this share. */
+export const SIDE_BAR_PAIR_SHARE = 0.3;
 
 /** Sent after the side bar opens, closes or changes width, so the full screen area follows it. */
 export const SIDE_BAR_LAYOUT_EVENT = 'page-side-bar:layout';
@@ -60,14 +72,20 @@ export function sideBarPageOf(pathname: string): string | null {
 export function isPageSideBarView(v: unknown): v is PageSideBarView {
   if (!v || typeof v !== 'object') return false;
   const r = v as Record<string, unknown>;
-  return typeof r.agenda === 'boolean' && typeof r.scratchpad === 'boolean'
-    && (r.width === undefined || (typeof r.width === 'number' && Number.isFinite(r.width)));
+  const px = (v: unknown) => v === undefined || (typeof v === 'number' && Number.isFinite(v));
+  return typeof r.agenda === 'boolean' && typeof r.scratchpad === 'boolean' && px(r.width) && px(r.scratchpadWidth);
 }
 
-/** The width that shows in a window `windowWidth` px wide. */
-export function sideBarWidth(stored: number | undefined, windowWidth: number): number {
-  const max = Math.max(SIDE_BAR_WIDTH_MIN, Math.min(SIDE_BAR_WIDTH_MAX, Math.floor(windowWidth * SIDE_BAR_WINDOW_SHARE)));
+/** The width that shows in a window `windowWidth` px wide; `paired` while both side bars show. */
+export function sideBarWidth(stored: number | undefined, windowWidth: number, paired = false): number {
+  const share = paired ? SIDE_BAR_PAIR_SHARE : SIDE_BAR_WINDOW_SHARE;
+  const max = Math.max(SIDE_BAR_WIDTH_MIN, Math.min(SIDE_BAR_WIDTH_MAX, Math.floor(windowWidth * share)));
   return Math.round(Math.min(max, Math.max(SIDE_BAR_WIDTH_MIN, stored ?? SIDE_BAR_WIDTH_DEFAULT)));
+}
+
+/** The width kept for one pane (the Scratchpad falls back to the old one-column width). */
+export function storedPaneWidth(view: PageSideBarView, pane: SideBarPane): number | undefined {
+  return pane === 'agenda' ? view.width : view.scratchpadWidth ?? view.width;
 }
 
 const VIEW_KEY = viewKey('side-bar', 'view');
@@ -87,19 +105,36 @@ export function setSideBarPane(page: string, pane: 'agenda' | 'scratchpad', open
   if (prev[pane] !== open) writeView(VIEW_KEY, page, { ...prev, [pane]: open });
 }
 
-/** The side bar of `page` (Home's id is never written), with a setter per pane and the width. */
+/**
+ * `view` with one pane's width set (the same object when nothing changes). A scratchpad that still
+ * reads the old one-column width keeps it when the agenda is dragged: that drag is the agenda's own.
+ */
+export function withPaneWidth(view: PageSideBarView, pane: SideBarPane, width: number): PageSideBarView {
+  if (pane === 'scratchpad') return view.scratchpadWidth === width ? view : { ...view, scratchpadWidth: width };
+  if (view.width === width) return view;
+  return view.scratchpadWidth === undefined && view.width !== undefined
+    ? { ...view, width, scratchpadWidth: view.width }
+    : { ...view, width };
+}
+
+/** The view id of a page's side bars: Home's widths are kept under `home`. */
+export const HOME_SIDE_BAR_ID = 'home';
+
+/**
+ * The side bars of `page` (null on Home), with a setter per pane and one per pane's width. Home's
+ * panes are opened by Home's own flags, so on Home only the widths are written.
+ */
 export function usePageSideBar(page: string | null) {
-  const [view, setView] = usePageViewOf<PageSideBarView>('side-bar', 'view', page ?? 'home', SIDE_BAR_CLOSED, isPageSideBarView);
-  const setPane = useCallback((pane: 'agenda' | 'scratchpad', open: boolean | ((prev: boolean) => boolean)) => {
+  const [view, setView] = usePageViewOf<PageSideBarView>('side-bar', 'view', page ?? HOME_SIDE_BAR_ID, SIDE_BAR_CLOSED, isPageSideBarView);
+  const setPane = useCallback((pane: SideBarPane, open: boolean | ((prev: boolean) => boolean)) => {
     if (page === null) return;
     setView((prev) => {
       const next = typeof open === 'function' ? open(prev[pane]) : open;
       return next === prev[pane] ? prev : { ...prev, [pane]: next };
     });
   }, [page, setView]);
-  const setWidth = useCallback((width: number) => {
-    if (page === null) return;
-    setView((prev) => (prev.width === width ? prev : { ...prev, width }));
-  }, [page, setView]);
+  const setWidth = useCallback((pane: SideBarPane, width: number) => {
+    setView((prev) => withPaneWidth(prev, pane, width));
+  }, [setView]);
   return { view, setPane, setWidth };
 }

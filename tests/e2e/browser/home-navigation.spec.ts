@@ -1194,7 +1194,7 @@ test('Locate never moves or opens a session column, in an unlocked column or the
   expect(errors).toEqual([]);
 });
 
-test('the Scratchpad is a side bar in its own rail group, sharing the Home side column with the agenda', async ({ page, baseURL }) => {
+test('the Scratchpad is a side bar in its own rail group, right of the agenda on Home', async ({ page, baseURL }) => {
   const original = (await (await page.request.get('/api/notes/global')).json()).content as string;
   const line = `Scratchpad line ${test.info().project.name} ${Date.now()}`;
   try {
@@ -1238,17 +1238,18 @@ test('the Scratchpad is a side bar in its own rail group, sharing the Home side 
     await page.keyboard.press('Escape');
     await expect(pane).toBeVisible();
 
-    // With the agenda on too, both share the column, agenda on top.
+    // With the agenda on too, the two are side by side, the scratchpad its own side bar on the right.
     await page.getByTestId('sidebar-toggle-calendar').click();
     const calendar = page.getByTestId('cal-side-panel');
     await expect(calendar).toBeVisible();
     const [cal, pad, column] = await Promise.all([calendar, pane, page.locator('.home-companion')].map(l => l.boundingBox()));
-    expect(cal!.y + cal!.height).toBeLessThanOrEqual(pad!.y + 1);
-    // The shared column starts at the task panel's right edge.
+    expect(pad!.x).toBeGreaterThanOrEqual(cal!.x + cal!.width - 2);
+    expect(Math.abs(pad!.y - cal!.y)).toBeLessThanOrEqual(1);
+    // The row starts at the task panel's right edge.
     const todoBox = (await page.locator('.main-page-todo').boundingBox())!;
     expect(Math.abs(column!.x - (todoBox.x + todoBox.width))).toBeLessThanOrEqual(1);
-    expect(cal!.height).toBeGreaterThan(column!.height * 0.3);
-    expect(pad!.height).toBeGreaterThan(column!.height * 0.3);
+    expect(cal!.height).toBeGreaterThan(column!.height * 0.9);
+    expect(pad!.height).toBeGreaterThan(column!.height * 0.9);
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
     await page.mouse.move(900, 500);
     await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-scratchpad-with-agenda.png`, clip: { x: 0, y: 0, width: 1280, height: 840 } });

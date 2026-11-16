@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   SIDE_BAR_WIDTH_DEFAULT, SIDE_BAR_WIDTH_MAX, SIDE_BAR_WIDTH_MIN,
-  isPageSideBarView, sideBarPageOf, sideBarWidth,
+  isPageSideBarView, sideBarPageOf, sideBarWidth, storedPaneWidth, withPaneWidth,
 } from '../../web/src/components/layout/page-side-bar'
 
 describe('sideBarPageOf', () => {
@@ -37,11 +37,13 @@ describe('isPageSideBarView', () => {
   it('reads what this build writes', () => {
     expect(isPageSideBarView({ agenda: true, scratchpad: false })).toBe(true)
     expect(isPageSideBarView({ agenda: false, scratchpad: true, width: 360 })).toBe(true)
+    expect(isPageSideBarView({ agenda: true, scratchpad: true, width: 360, scratchpadWidth: 300 })).toBe(true)
   })
 
   it('reads anything else as nothing kept', () => {
     for (const v of [null, undefined, 1, 'open', [], {}, { agenda: true }, { agenda: 'yes', scratchpad: false },
-      { agenda: true, scratchpad: false, width: '360px' }, { agenda: true, scratchpad: false, width: Number.NaN }]) {
+      { agenda: true, scratchpad: false, width: '360px' }, { agenda: true, scratchpad: false, width: Number.NaN },
+      { agenda: true, scratchpad: true, scratchpadWidth: '300' }]) {
       expect(isPageSideBarView(v), JSON.stringify(v)).toBe(false)
     }
   })
@@ -61,5 +63,31 @@ describe('sideBarWidth', () => {
   it('never takes more than half the window, and never less than its minimum', () => {
     expect(sideBarWidth(700, 1000)).toBe(500)
     expect(sideBarWidth(400, 400)).toBe(SIDE_BAR_WIDTH_MIN)
+  })
+})
+
+describe('two side bars side by side', () => {
+  it('each keeps its own width; a scratchpad never dragged starts at the old one-column width', () => {
+    expect(storedPaneWidth({ agenda: true, scratchpad: true, width: 520, scratchpadWidth: 340 }, 'agenda')).toBe(520)
+    expect(storedPaneWidth({ agenda: true, scratchpad: true, width: 520, scratchpadWidth: 340 }, 'scratchpad')).toBe(340)
+    expect(storedPaneWidth({ agenda: true, scratchpad: true, width: 520 }, 'scratchpad')).toBe(520)
+    expect(storedPaneWidth({ agenda: true, scratchpad: true }, 'scratchpad')).toBeUndefined()
+  })
+
+  it('a drag of one side bar never moves the other, an old one-column width included', () => {
+    const old = { agenda: true, scratchpad: true, width: 520 }
+    const dragged = withPaneWidth(old, 'agenda', 400)
+    expect(storedPaneWidth(dragged, 'agenda')).toBe(400)
+    expect(storedPaneWidth(dragged, 'scratchpad')).toBe(520)
+    expect(withPaneWidth(dragged, 'scratchpad', 300)).toEqual({ agenda: true, scratchpad: true, width: 400, scratchpadWidth: 300 })
+    expect(withPaneWidth({ agenda: true, scratchpad: true }, 'agenda', 450)).toEqual({ agenda: true, scratchpad: true, width: 450 })
+    expect(withPaneWidth(dragged, 'agenda', 400)).toBe(dragged)
+  })
+
+  it('never takes more than 30% of the window each while both show', () => {
+    expect(sideBarWidth(700, 1440, true)).toBe(432)
+    expect(sideBarWidth(700, 1440, false)).toBe(700)
+    expect(sideBarWidth(undefined, 1440, true)).toBe(SIDE_BAR_WIDTH_DEFAULT)
+    expect(sideBarWidth(400, 800, true)).toBe(SIDE_BAR_WIDTH_MIN)
   })
 })

@@ -7,7 +7,9 @@
  *  1. on Org the rail's Agenda opens the day agenda on the page's left edge, the page stays on screen
  *     beside it (no trip home), the toggle reads pressed; its × closes it and gives the focus back to
  *     the toggle; the toggle closes it too; Escape inside it closes it;
- *  2. the Scratchpad opens under the agenda in the same column with the caret in it, and what is typed
+ *  2. the Scratchpad opens as its own side bar right of the agenda (never under it: 2026-11-16, the
+ *     user: "side bar should be independent, new one on the right, instead of top and bottom"), full
+ *     height, with the caret in it, and what is typed
  *     there is saved and is the same note Home's Scratchpad shows; the window has ONE scratchpad
  *     editor wherever it shows, so a line typed on Home whose save is still in flight and a line
  *     typed on Org right after both reach the note (two editors, two savers: one line was lost);
@@ -15,12 +17,15 @@
  *     one editor survives a switch to the phone layout with a save under way and newer words pending;
  *  3. each page keeps its own: the agenda open on Org is shut on Notes, Notes' scratchpad is shut on
  *     Org, and both come back as left after another page and a reload;
- *  4. the column's width is dragged on its right edge, kept per page across a reload, the other page
+ *  4. a side bar's width is dragged on its right edge, kept per page across a reload, the other page
  *     keeps the default, and it never takes more than half the window;
+ *  4b. with both open each side bar has its own width, handle and scrolling: a drag of one leaves the
+ *     other's width, a scroll of one leaves the other's place, both are kept across a reload, and
+ *     closing the agenda leaves the scratchpad as wide as it was; Home's two side bars likewise;
  *  5. a full screen sheet on the page lies beside the side bar (it stays usable, like the rail), in a
  *     wide window and in a narrow one, where the side bar lies over the page instead of narrowing it;
  *  6. (with 5) a narrow window lays it over the page instead of narrowing the page;
- *  7. Home is as before: its own column right of the task panel, its own flags, no page side bar.
+ *  7. Home is as before: its own side bars right of the task panel, its own flags, no page side bar.
  */
 import fs from 'node:fs'
 import { expect, test, type Page } from '@playwright/test'
@@ -85,6 +90,91 @@ async function goOrg(page: Page) {
   await expect(page.locator('.org-page')).toBeVisible()
 }
 
+/**
+ * The two side bars side by side, the scratchpad right of the agenda, both the row's full height
+ * (the guard against their going back to one column, agenda on top).
+ */
+async function expectSideBySide(page: Page, testId: string) {
+  const r = await page.evaluate((id) => {
+    const box = (sel: string) => { const b = document.querySelector(`[data-testid="${sel}"]`)!.getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height } }
+    return { row: box(id), a: box(`${id}-calendar`), s: box(`${id}-scratchpad`) }
+  }, testId)
+  const msg = JSON.stringify(r)
+  expect(r.s.x, `the scratchpad starts at the agenda's right edge (${msg})`).toBeGreaterThanOrEqual(r.a.x + r.a.w - 2)
+  expect(Math.abs(r.s.y - r.a.y), `side by side, not one under the other (${msg})`).toBeLessThanOrEqual(1)
+  for (const pane of [r.a, r.s]) expect(Math.abs(pane.h - r.row.h), `each the row's full height (${msg})`).toBeLessThanOrEqual(2)
+  expect(Math.abs(r.row.w - (r.a.w + r.s.w)), `the row is the two side bars (${msg})`).toBeLessThanOrEqual(3)
+}
+
+/** The widths of the two side bars of `testId` (`page-side-bar` or `home-companion`). */
+async function paneWidths(page: Page, testId: string) {
+  return page.evaluate((id) => ({
+    agenda: Math.round(document.querySelector(`[data-testid="${id}-calendar-bar"]`)!.getBoundingClientRect().width),
+    scratchpad: Math.round(document.querySelector(`[data-testid="${id}-scratchpad-bar"]`)!.getBoundingClientRect().width),
+  }), testId)
+}
+
+/** Drag a side bar's right-edge handle `dx` px with a real mouse. */
+async function dragHandle(page: Page, handleTestId: string, dx: number) {
+  const pane = (await page.getByTestId(handleTestId).locator('..').boundingBox())!
+  const x = pane.x + pane.width
+  const y = pane.y + pane.height / 2
+  await page.mouse.move(x, y)
+  await page.mouse.down()
+  await page.mouse.move(x + dx / 2, y, { steps: 4 })
+  await page.mouse.move(x + dx, y, { steps: 4 })
+  await page.mouse.up()
+}
+
+/**
+ * A scroll in one side bar leaves the other where it was: the scratchpad's note body and the
+ * agenda's own scroller each move alone.
+ */
+async function expectScrollsApart(page: Page, testId: string) {
+  const r = await page.evaluate((id) => {
+    const note = document.querySelector<HTMLElement>(`[data-testid="${id}-scratchpad"] .global-notes-body`)!
+    const spacer = document.createElement('div')
+    spacer.style.cssText = 'flex: 0 0 4000px; height: 4000px; min-height: 4000px'
+    note.appendChild(spacer)
+    const agenda = [...document.querySelectorAll<HTMLElement>(`[data-testid="${id}-calendar"] *`)]
+      .find((el) => el.scrollHeight > el.clientHeight + 20 && /auto|scroll/.test(getComputedStyle(el).overflowY))!
+    const agendaBefore = agenda.scrollTop
+    note.scrollTop = 600
+    const afterNote = { note: note.scrollTop, agenda: agenda.scrollTop }
+    agenda.scrollTop = agendaBefore + 120
+    const afterAgenda = { note: note.scrollTop, agenda: agenda.scrollTop }
+    note.scrollTop = 0
+    agenda.scrollTop = agendaBefore
+    spacer.remove()
+    return { agendaBefore, afterNote, afterAgenda }
+  }, testId)
+  const msg = JSON.stringify(r)
+  expect(r.afterNote.note, msg).toBeGreaterThan(0)
+  expect(r.afterNote.agenda, `the note's scroll leaves the agenda (${msg})`).toBe(r.agendaBefore)
+  expect(r.afterAgenda.agenda, msg).not.toBe(r.agendaBefore)
+  expect(r.afterAgenda.note, `the agenda's scroll leaves the note (${msg})`).toBe(r.afterNote.note)
+}
+
+/**
+ * In a narrow window the two side bars lie over the page and share what is left of the window
+ * (each at 280px they once ran past its right edge); the wide window gets its widths back.
+ */
+async function expectNarrowFits(page: Page, testId: string) {
+  const before = await paneWidths(page, testId)
+  for (const width of [1000, 800]) {
+    await page.setViewportSize({ width, height: 800 })
+    await expect.poll(async () => page.evaluate((id) => {
+      const row = document.querySelector(`[data-testid="${id}"]`)!.getBoundingClientRect()
+      return Math.round(row.right) <= window.innerWidth
+    }, testId), `the side bars stay inside a ${width}px window`).toBe(true)
+    const w = await paneWidths(page, testId)
+    expect(Math.min(w.agenda, w.scratchpad), `both stay readable at ${width}px`).toBeGreaterThan(150)
+    await expectSideBySide(page, testId)
+  }
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await expect.poll(() => paneWidths(page, testId)).toEqual(before)
+}
+
 /** The bar's right edge and the page area's left edge, read in one frame. */
 async function edges(page: Page) {
   return page.evaluate(() => {
@@ -131,7 +221,7 @@ test('the Agenda opens beside the Org page and closes three ways', async ({ page
   await expect(agendaPane(page)).toBeHidden()
 })
 
-test('the Scratchpad opens under the agenda, takes the caret, and is the same note as Home\'s', async ({ page }) => {
+test('the Scratchpad opens right of the agenda, takes the caret, and is the same note as Home\'s', async ({ page }) => {
   await openOrg(page)
   await agendaToggle(page).click()
   await scratchToggle(page).click()
@@ -139,11 +229,7 @@ test('the Scratchpad opens under the agenda, takes the caret, and is the same no
   const editor = scratchPane(page).locator('.notes-editor .tiptap')
   await expect(editor).toBeFocused()
   await expectScratchpadScrolls(page, 'page-side-bar-scratchpad')
-  // Agenda on top, scratchpad below, one column.
-  const a = (await agendaPane(page).boundingBox())!
-  const s = (await scratchPane(page).boundingBox())!
-  expect(s.y).toBeGreaterThanOrEqual(a.y + a.height - 1)
-  expect(Math.round(s.x)).toBe(Math.round(a.x))
+  await expectSideBySide(page, 'page-side-bar')
 
   const line = `side bar line ${Date.now().toString(36)}`
   const saved = page.waitForResponse(res => new URL(res.url()).pathname === '/api/notes/global' && res.request().method() === 'PUT')
@@ -306,7 +392,7 @@ test('the width is dragged on its edge and kept per page', async ({ page }) => {
   await openOrg(page)
   await agendaToggle(page).click()
   await expect(agendaPane(page)).toBeVisible()
-  const handle = page.getByTestId('page-side-bar-resize')
+  const handle = page.getByTestId('page-side-bar-calendar-resize')
   const box = (await bar(page).boundingBox())!
   const x = box.x + box.width
   const y = box.y + box.height / 2
@@ -357,6 +443,63 @@ test('the width is dragged on its edge and kept per page', async ({ page }) => {
   await goOrg(page)
   await agendaToggle(page).click()
   await expect(bar(page)).toBeHidden()
+})
+
+test('the two side bars each keep their own width, handle and scrolling', async ({ page }) => {
+  await openOrg(page)
+  await agendaToggle(page).click()
+  await scratchToggle(page).click()
+  await expect(scratchPane(page)).toBeVisible()
+  await expectSideBySide(page, 'page-side-bar')
+  await expectScrollsApart(page, 'page-side-bar')
+  await expect.poll(() => paneWidths(page, 'page-side-bar')).toEqual({ agenda: 400, scratchpad: 400 })
+  // The scratchpad's own edge narrows it alone; the page moves over with it.
+  await dragHandle(page, 'page-side-bar-scratchpad-resize', -60)
+  await expect.poll(() => paneWidths(page, 'page-side-bar')).toEqual({ agenda: 400, scratchpad: 340 })
+  // The agenda's edge widens it alone; the scratchpad keeps its width beside it.
+  await dragHandle(page, 'page-side-bar-calendar-resize', 20)
+  await expect.poll(() => paneWidths(page, 'page-side-bar')).toEqual({ agenda: 420, scratchpad: 340 })
+  await expectSideBySide(page, 'page-side-bar')
+  await expect.poll(async () => { const e = await edges(page); return e.areaLeft - e.barRight }).toBeLessThanOrEqual(1)
+  // Two side by side never take more than 30% of the window each.
+  await dragHandle(page, 'page-side-bar-scratchpad-resize', 400)
+  await expect.poll(() => paneWidths(page, 'page-side-bar')).toEqual({ agenda: 420, scratchpad: 432 })
+  await dragHandle(page, 'page-side-bar-scratchpad-resize', -92)
+  await expect.poll(() => paneWidths(page, 'page-side-bar')).toEqual({ agenda: 420, scratchpad: 340 })
+  await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-org-two-bars.png`, clip: { x: 0, y: 0, width: 1280, height: 900 } })
+
+  await page.reload()
+  await expect(scratchPane(page)).toBeVisible({ timeout: 30_000 })
+  await expect.poll(() => paneWidths(page, 'page-side-bar')).toEqual({ agenda: 420, scratchpad: 340 })
+  await expectSideBySide(page, 'page-side-bar')
+  await expectNarrowFits(page, 'page-side-bar')
+  // Closing the agenda leaves the scratchpad as it was, now first on the edge.
+  await agendaToggle(page).click()
+  await expect(agendaPane(page)).toBeHidden()
+  await expect.poll(async () => (await edges(page)).barWidth).toBe(340)
+  await agendaToggle(page).click()
+  await expect.poll(() => paneWidths(page, 'page-side-bar')).toEqual({ agenda: 420, scratchpad: 340 })
+  await agendaToggle(page).click()
+  await scratchToggle(page).click()
+  await expect(bar(page)).toBeHidden()
+
+  // Home's two side bars are the same: side by side right of the task panel, each its own width.
+  await page.getByTestId('sidebar-core-app-home').click()
+  await expect(page).toHaveURL(/\/$/)
+  await agendaToggle(page).click()
+  await scratchToggle(page).click()
+  await expect(page.getByTestId('home-companion-scratchpad')).toBeVisible()
+  await expectSideBySide(page, 'home-companion')
+  await expectScrollsApart(page, 'home-companion')
+  await dragHandle(page, 'home-companion-scratchpad-resize', -48)
+  await expect.poll(() => paneWidths(page, 'home-companion')).toEqual({ agenda: 400, scratchpad: 352 })
+  await page.reload()
+  await expect(page.getByTestId('home-companion-scratchpad')).toBeVisible({ timeout: 30_000 })
+  await expect.poll(() => paneWidths(page, 'home-companion')).toEqual({ agenda: 400, scratchpad: 352 })
+  await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-home-two-bars.png`, clip: { x: 0, y: 0, width: 1280, height: 900 } })
+  await expectNarrowFits(page, 'home-companion')
+  await agendaToggle(page).click()
+  await scratchToggle(page).click()
 })
 
 test('a full screen sheet lies beside the side bar, and a narrow window overlays the page', async ({ page }) => {
