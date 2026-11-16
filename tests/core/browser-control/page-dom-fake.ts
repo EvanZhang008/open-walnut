@@ -121,6 +121,15 @@ export function installFakePage(url = 'https://shop.example.test/cart'): FakePag
     }
     return hit
   }
+  // Every box at the point, the topmost (last in the document) first.
+  document.elementsFromPoint = (x: number, y: number) => {
+    const hits: Element[] = []
+    for (const el of document.querySelectorAll('*')) {
+      const r = rectOf(el)
+      if (r.width > 0 && r.height > 0 && x >= r.left && x < r.right && y >= r.top && y < r.bottom) hits.unshift(el)
+    }
+    return hits
+  }
   document.execCommand = (cmd: string, _ui?: boolean, value?: string) => {
     const el = document.activeElement as Element
     if (cmd === 'insertText' && el) el.textContent = `${el.textContent ?? ''}${value ?? ''}`

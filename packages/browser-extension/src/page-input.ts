@@ -27,7 +27,7 @@ export function scrollableFrom(el: Element): Element {
 
 /** `scroll {ref | x, y, direction...}`: the box at that element or point scrolls, not the page (a list, a side panel). */
 export function scrollIn(args: Record<string, unknown>): Record<string, unknown> {
-  const el = typeof args.x === 'number' && typeof args.y === 'number' ? document.elementFromPoint(args.x, args.y) : pa.byRef(args.ref)
+  const el = typeof args.x === 'number' && typeof args.y === 'number' ? pa.pointAt(args.x, args.y) : pa.byRef(args.ref)
   if (!el) throw new pa.PageError(`Nothing at ${String(args.x)},${String(args.y)}.`, 'nothing_there')
   const box = scrollableFrom(el)
   const page = box === document.scrollingElement || box === document.documentElement
@@ -124,7 +124,7 @@ const middle = (el: Element) => { const r = el.getBoundingClientRect(); return {
 
 /** What a press at a point would hit: the element itself (or inside it), else what covers it. */
 function uncovered(el: Element, x: number, y: number, name: string): void {
-  const top = document.elementFromPoint(x, y)
+  const top = pa.pointAt(x, y)
   if (top && top !== el && !el.contains(top) && !top.contains(el)) {
     throw new pa.PageError(`${name} is covered by ${pa.roleOf(top)} "${pa.clip(pa.nameOf(top), 60)}" (${top.tagName.toLowerCase()}): close or scroll it first.`, 'covered')
   }
@@ -154,7 +154,7 @@ export function dragPoints(args: Record<string, unknown>): DragPoints {
   const before = fromEl.getBoundingClientRect()
   let to: { el: Element; x: number; y: number }
   if (typeof args.to_x === 'number' && typeof args.to_y === 'number') {
-    const el = document.elementFromPoint(args.to_x, args.to_y)
+    const el = pa.pointAt(args.to_x, args.to_y)
     if (!el) throw new pa.PageError(`Nothing at ${args.to_x},${args.to_y}.`, 'nothing_there')
     to = { el, x: args.to_x, y: args.to_y }
   } else {

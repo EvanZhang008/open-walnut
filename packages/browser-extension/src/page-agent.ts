@@ -11,6 +11,40 @@
 
 import { walnutFilled } from './form-detect'
 
+// ── what is at a point ──
+
+/**
+ * Walnut's own furniture that moves out of an agent's way (the agent tab's pill with Stop,
+ * content.ts showAgentMark). 2026-11-16, in the person's Chrome: the pill, wide with its task's
+ * name, lay over a page's link, so the agent's hover there was refused as covered, and a real
+ * click there would have pressed Stop.
+ */
+const outOfTheWay = new Map<Element, (x: number, y: number) => unknown>()
+/** `host`: the element of Walnut's that moves (`fn` moves it when (x, y) falls on it). */
+export function makeWayFor(host: Element, fn: (x: number, y: number) => unknown): () => void {
+  outOfTheWay.set(host, fn)
+  return () => { if (outOfTheWay.get(host) === fn) outOfTheWay.delete(host) }
+}
+
+/**
+ * What an agent's step at (x, y) lands on. Walnut's furniture there moves away first, so the step
+ * reaches the page, never Walnut's own Stop. Every point an agent acts on is looked up here
+ * (tests/core/browser-control/extension-point-at-guard.test.ts).
+ */
+export function pointAt(x: number, y: number): Element | null {
+  for (const fn of outOfTheWay.values()) fn(x, y)
+  return document.elementFromPoint(x, y)
+}
+
+/**
+ * What a step at (x, y) would reach, without moving anything (annotate only looks): the page
+ * under Walnut's furniture that makes way, which pointAt moves first. Anything else there (the
+ * save bar, a menu) still covers it, as it would a step.
+ */
+export function pageAt(x: number, y: number): Element | null {
+  return document.elementsFromPoint(x, y).find((el) => !outOfTheWay.has(el)) ?? null
+}
+
 const refs = new Map<string, WeakRef<Element>>()
 const refOf = new WeakMap<Element, string>()
 let next = 1
@@ -233,14 +267,14 @@ export function mouse(el: Element, type: string, x: number, y: number): void {
 /** The element a ref or a point names, and the point a pointer would use on it (refused when something covers it). */
 export function target(args: { ref?: unknown; x?: unknown; y?: unknown }): { el: Element; x: number; y: number } {
   if (typeof args.x === 'number' && typeof args.y === 'number') {
-    const el = document.elementFromPoint(args.x, args.y)
+    const el = pointAt(args.x, args.y)
     if (!el) throw new PageError(`Nothing at ${args.x},${args.y}.`, 'nothing_there')
     return { el, x: args.x, y: args.y }
   }
   const el = byRef(args.ref)
   const { x, y } = centerOf(el)
   // What is really under the point (a cookie banner, an overlay) is what a click would hit.
-  const top = document.elementFromPoint(x, y)
+  const top = pointAt(x, y)
   if (top && top !== el && !el.contains(top) && !top.contains(el)) {
     throw new PageError(`${String(args.ref)} is covered by ${roleOf(top)} "${clip(nameOf(top), 60)}" (${top.tagName.toLowerCase()}): close or scroll it first.`, 'covered')
   }

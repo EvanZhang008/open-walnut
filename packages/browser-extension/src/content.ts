@@ -35,6 +35,7 @@ import * as pageAgent from './page-agent'
 import { runPageOp } from './page-ops'
 import { pageDigest } from './page-probe'
 import { cursorMask, cursorOff, listenCursor } from './page-cursor'
+import { wayMaker } from './mark-way'
 import { walnutAddress } from './walnut-address'
 import { siteKey } from '../../../src/core/vault/url-match'
 import { initPageBrowserKey } from './page-browser-key'
@@ -338,6 +339,8 @@ function hideBar(): void {
 // ── an agent's tab: the frame around it says so, and Stop gives it back to the person ──
 
 let agentMark: Host | null = null
+/** Ends the pill's moving out of the agent's way (pageAgent.makeWayFor). */
+let markWay: (() => void) | null = null
 /** What the pill shows now: the agent's tab, or the person's while they took it over. */
 let agentMarkKey = ''
 function showAgentMark(on: boolean, who?: string, mode?: string): void {
@@ -345,7 +348,7 @@ function showAgentMark(on: boolean, who?: string, mode?: string): void {
   if (mode === 'driving') cursorOff()
   if (SELF !== 'top') return
   const key = `${mode === 'driving' ? 'driving' : 'agent'}\0${who ?? ''}`
-  if (!on || (agentMark && agentMarkKey !== key)) { if (agentMark) { dropHost(agentMark); agentMark = null } }
+  if (!on || (agentMark && agentMarkKey !== key)) { if (agentMark) { dropHost(agentMark); agentMark = null; markWay?.(); markWay = null } }
   if (!on) return
   if (agentMark) return
   agentMarkKey = key
@@ -355,6 +358,8 @@ function showAgentMark(on: boolean, who?: string, mode?: string): void {
   hostStyle(host, 'z-index: 2147483645 !important; inset: 0 !important; pointer-events: none !important;')
   const style = document.createElement('style')
   style.textContent = `.edge{position:fixed;inset:0;border:3px solid #8a5a2b;border-radius:2px;pointer-events:none;box-sizing:border-box}
+.pill.up{top:14px;bottom:auto}
+.pill.away{visibility:hidden}
 .pill{position:fixed;right:14px;bottom:14px;display:flex;gap:10px;align-items:center;padding:7px 8px 7px 12px;background:#2b2118;color:#fff;font:600 12.5px/1.2 -apple-system,system-ui,"Segoe UI",sans-serif;border-radius:999px;box-shadow:0 6px 20px rgba(0,0,0,.25);pointer-events:auto}
 .stop{all:unset;cursor:pointer;background:#fff;color:#2b2118;border-radius:999px;padding:4px 10px;font:700 12px/1.2 -apple-system,system-ui,sans-serif}
 .stop:focus-visible{outline:2px solid #e8b46a}`
@@ -382,6 +387,11 @@ function showAgentMark(on: boolean, who?: string, mode?: string): void {
   edge.className = 'edge'
   root.append(style, edge, pill)
   agentMark = host
+  // A step of the agent's at the pill: the pill moves out of its way first (mark-way.ts).
+  markWay = pageAgent.makeWayFor(host.el, wayMaker(() => pill.getBoundingClientRect(), (p) => {
+    pill.classList.toggle('up', p === 'up')
+    pill.classList.toggle('away', p === 'away')
+  }))
   // The page may take the frame away: it comes back while the tab is an agent's.
   markWatch.observe(document.documentElement, { childList: true })
 }

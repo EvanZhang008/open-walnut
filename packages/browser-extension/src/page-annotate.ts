@@ -22,7 +22,7 @@ export function annotate(): { boxes: LabelBox[]; vw: number; vh: number; more?: 
     if (r.bottom <= 0 || r.right <= 0 || r.top >= innerHeight || r.left >= innerWidth) continue
     const cx = Math.min(Math.max(r.left + r.width / 2, 0), innerWidth - 1)
     const cy = Math.min(Math.max(r.top + r.height / 2, 0), innerHeight - 1)
-    const top = document.elementFromPoint(cx, cy)
+    const top = pa.pageAt(cx, cy)
     if (top && top !== el && !el.contains(top) && !top.contains(el)) continue
     if (pa.roleOf(el) === 'generic' && !pa.nameOf(el).trim()) continue
     found.push({ el, r })

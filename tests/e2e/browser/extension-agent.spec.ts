@@ -825,6 +825,53 @@ test('the cursor goes by itself once the agent stops acting, and gets out of the
   await expect.poll(() => cursor.count(), { timeout: 2000 }).toBe(0)
 })
 
+test('the agent tab\'s pill moves out of the agent\'s way; a step there never presses Stop (2026-11-16)', async () => {
+  const tab = agentPage()!
+  // Real input on for this one (an earlier test turned it off): a step at the pill is a real press.
+  const realInput = async (on: boolean) => {
+    const p = await popup()
+    await p.getByRole('button', { name: 'Settings' }).click()
+    const box = p.getByTestId('popup-trusted')
+    if ((await box.isChecked()) !== on) await p.getByText('Let agents use real mouse and keys', { exact: true }).click()
+    await expect(box).toBeChecked({ checked: on })
+    await p.close()
+  }
+  const wasOn = await (async () => { const p = await popup(); await p.getByRole('button', { name: 'Settings' }).click(); const on = await p.getByTestId('popup-trusted').isChecked(); await p.close(); return on })()
+  await realInput(true)
+  try {
+    // A control under the pill in the bottom right corner (the pill with Stop, a closed shadow root).
+    await tab.evaluate(() => {
+      const b = document.createElement('button')
+      b.id = 'corner'; b.textContent = 'Corner action'
+      b.style.cssText = 'position:fixed;right:20px;bottom:18px;width:220px;height:26px'
+      b.onclick = (e) => { b.textContent = `Corner clicked, trusted ${e.isTrusted}` }
+      document.body.append(b)
+    })
+    const at = () => tab.evaluate(() => {
+      const hit = (x: number, y: number) => document.elementFromPoint(x, y)?.tagName.toLowerCase()
+      return { bottom: hit(innerWidth - 60, innerHeight - 28), top: hit(innerWidth - 60, 28) }
+    })
+    expect((await at()).bottom).toBe('walnut-ext')
+    // In front, so the click is real input (a covered window gets the page's events instead).
+    await tab.bringToFront()
+    const snap = (await act(tab, { action: 'snapshot', tab: agentTab })).body.snapshot as string
+    const r = await act(tab, { action: 'click', tab: agentTab, ref: refOf(snap, /button "Corner action"/) })
+    expect(r.status, JSON.stringify(r.body)).toBe(200)
+    // The real click reached the page's button, not the pill or its Stop (a click that missed would
+    // have fallen back to the page's events: trusted false).
+    await expect(tab.locator('#corner')).toHaveText('Corner clicked, trusted true')
+    // The pill went to the top; the tab is still the agent's.
+    expect(await at()).toEqual({ bottom: 'button', top: 'walnut-ext' })
+    expect((await act(tab, { action: 'tabs' })).body.tabs.map((t: { id: number }) => t.id)).toContain(agentTab)
+    // Once that click is past (mark-way.ts RECENT_MS), a step where it is now sends it back down.
+    await tab.waitForTimeout(3200)
+    const vw = await tab.evaluate(() => innerWidth)
+    expect((await act(tab, { action: 'hover', tab: agentTab, x: vw - 60, y: 28 })).status).toBe(200)
+    expect((await at()).bottom).toBe('walnut-ext')
+    await tab.evaluate(() => document.getElementById('corner')?.remove())
+  } finally { await realInput(wasOn) }
+})
+
 test('the agent tab wears a frame; Stop gives it back to the person', async () => {
   const tab = agentPage()!
   // The agent points at something: its cursor is there until Stop.
