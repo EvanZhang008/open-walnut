@@ -122,12 +122,14 @@ describe('every box for an AI takes pictures', () => {
   it('the Talk to CEO box sends its pictures with the note, all the way to the route', () => {
     // The box hands its pictures to sendToCeo, which posts them as `images`, which the route
     // passes to the send into Main's (or the test stand-in's) chat.
-    expect(read('components/content/CeoComposer.tsx')).toMatch(/sendToCeo\(req\.item, words, sentPictures\)/)
+    expect(read('components/content/CeoComposer.tsx')).toMatch(/sendToCeo\(req\.item, words, sentPictures, target\)/)
     expect(read('components/content/CeoComposer.tsx')).toMatch(/const sentPictures = pictures\.images/)
     expect(read('utils/content-actions.ts')).toMatch(/'\/api\/v1\/content\/ceo', \{ item, note: words, \.\.\.\(pictures\.length > 0 \? \{ images: pictures \}/)
     const route = fs.readFileSync(path.resolve(WEB_SRC, '../../src/web/routes/content-v1.ts'), 'utf8')
     expect(route).toMatch(/const images = extractValidImages\(req\.body\?\.images\)/)
     expect(route).toMatch(/sendToMain\(text, images, source\)/)
+    // A VP or router picked in the box's To row gets them too.
+    expect(route).toMatch(/sendToTaskChat\(await getTask\(target\.id\), text, source, images\)/)
     expect(route).toMatch(/sendToTaskChat\(standIn, [^)]*, source, images\)/)
   })
 

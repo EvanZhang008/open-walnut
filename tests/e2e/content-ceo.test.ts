@@ -10,6 +10,10 @@
  *   - the pictures the person added go with the note: saved, and named ahead of the words the way a
  *     chat send names them; anything that is not a picture is dropped
  *   - a marked test run talks to a stand-in test task, never the real Main, and reuses it
+ *   - the box's To row: the targets are the CEO, each area router and each VP once; `to` sends to
+ *     that node's chat as the person's message, names it in the answer, and a `to` outside the org
+ *     (a plain task, an unknown id) is refused before any send
+ *   - a Walnut mail link rides with its mail_read call
  * The session start is stubbed (it would spawn a CLI).
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
@@ -33,7 +37,7 @@ vi.mock('../../src/core/sessions/task-start.js', async (importOriginal) => {
 
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
-import { getTask, listTasks, updateTaskRaw } from '../../src/core/task-manager.js'
+import { addTask, getTask, listTasks, updateTaskRaw } from '../../src/core/task-manager.js'
 import { newTaskDraftText, normalizeContentItem } from '../../src/core/content-actions/content-item.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { getQueue } from '../../src/core/session-message-queue.js'
@@ -111,6 +115,7 @@ describe('POST /api/v1/content/ceo', () => {
     expect(message).toContain('Title: Benefits enrollment closes Nov 15')
     expect(message.match(/<\/external-content>/g)).toHaveLength(1)
     expect(message).toContain('Open in Walnut: /mail?account=a1&message=m1')
+    expect(message).toContain('Read it whole: mail_read {"account":"a1","message":"m1"}')
   })
 
   it('sends the pictures the person added with the note', async () => {
@@ -187,6 +192,86 @@ describe('POST /api/v1/content/ceo', () => {
       const both = await Promise.all([post({ item: ITEM }, headers), post({ item: ITEM }, headers)])
       for (const one of both) expect((await one.json() as { taskId: string }).taskId).toBe(body.taskId)
     }
+  })
+})
+
+describe('Talk to: the CEO, a router or a VP (GET /content/targets, POST /content/ceo `to`)', () => {
+  interface Target { id: string; kind: string; name: string; areaId?: string }
+  const targets = async () => (await (await fetch(`http://localhost:${port}/api/v1/content/targets`)).json() as { targets: Target[] }).targets
+
+  it('offers the CEO, every area router and every VP once; a router that routes for itself is not one', async () => {
+    const { task: vp } = await addTask({ title: 'Alpha VP', project: 'Alpha', source: 'local', org_role: 'lead' } as never)
+    await addTask({ title: 'Alpha work', project: 'Alpha', source: 'local' })
+    const { task: router } = await addTask({ title: 'Team mail router', project: 'Alpha', source: 'local', org_role: 'router' } as never)
+    await updateTaskRaw(router.id, { router_area_id: 'team', router_paused: false } as never)
+    const { task: self } = await addTask({ title: 'Watch leader', project: 'Alpha', source: 'local' })
+    await updateTaskRaw(self.id, { self_router: { links: [] } } as never)
+    const list = await targets()
+    expect(list[0]).toMatchObject({ kind: 'ceo', name: 'CEO' })
+    expect(list.filter((t) => t.kind === 'router')).toEqual([{ id: router.id, kind: 'router', name: 'Team mail router', areaId: 'team' }])
+    expect(list.filter((t) => t.id === vp.id)).toEqual([{ id: vp.id, kind: 'vp', name: 'Alpha VP' }])
+    expect(list.some((t) => t.id === self.id)).toBe(false)
+    expect(new Set(list.map((t) => t.id)).size).toBe(list.length)
+  })
+
+  it("sends to the picked VP's live chat as the person's message, starts a router with it, and names who it reached", async () => {
+    const list = await targets()
+    const vp = list.find((t) => t.kind === 'vp')!
+    const sid = '22222222-3333-4444-8555-666666666666'
+    await createSessionRecord(sid, vp.id, vp.name, WALNUT_HOME)
+    await updateTaskRaw(vp.id, { session_id: '', exec_session_id: '', session_ids: [sid] } as never)
+    await updateSessionRecord(sid, { process_status: 'idle' } as never)
+    starts.length = 0
+    const res = await post({ item: ITEM, note: 'Please take this one.', to: vp.id })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ taskId: vp.id, sessionId: sid, started: false, to: { id: vp.id, kind: 'vp', name: vp.name } })
+    expect(starts).toHaveLength(0)
+    const queue = await getQueue(sid)
+    const queued = queue[queue.length - 1]!
+    expect(queued.sentBy).toBe('person')
+    // The person's words lead (a VP's own hints may follow them, as on any send of theirs).
+    expect(personTextOf(queued.message).startsWith('Please take this one.')).toBe(true)
+    expect(queued.message).toContain('Read it whole: mail_read {"account":"a1","message":"m1"}')
+
+    // A router's conversation is its own (router/history-write.ts): one with none is started with it.
+    const router = list.find((t) => t.kind === 'router')!
+    const asked = await post({ item: ITEM, note: 'Why did this go to Alpha?', to: router.id })
+    expect(asked.status).toBe(200)
+    expect(await asked.json()).toMatchObject({ taskId: router.id, to: { id: router.id, kind: 'router', name: 'Team mail router' } })
+    expect(starts).toHaveLength(1)
+    expect(starts[0].taskIdPrefix).toBe(router.id)
+    const message = String(starts[0].message)
+    expect(personTextOf(message)).toBe('Why did this go to Alpha?')
+    expect(message).toContain('Summary: Pick a plan by Friday.')
+    expect(message).toContain('Read it whole: mail_read {"account":"a1","message":"m1"}')
+  })
+
+  it('refuses a `to` outside the org before any send, and takes the CEO by its id or "main"', async () => {
+    const { task: plain } = await addTask({ title: 'Just a task', project: 'Alpha', source: 'local' })
+    starts.length = 0
+    for (const to of [plain.id, 'nope-0000', 42]) {
+      const r = await post({ item: ITEM, note: 'hi', to })
+      expect(r.status).toBe(400)
+      expect((await r.json() as { code: string }).code).toBe('bad_target')
+    }
+    expect(starts).toHaveLength(0)
+    const ceo = (await targets())[0]!
+    for (const to of [ceo.id, 'main']) {
+      const body = await (await post({ item: ITEM, note: 'hi', to })).json() as { to?: { kind: string } }
+      expect(body.to?.kind).toBe('ceo')
+    }
+  })
+
+  it('a marked test run talks to the stand-in for the VP it picked, never the VP', async () => {
+    const vp = (await targets()).find((t) => t.kind === 'vp')!
+    starts.length = 0
+    const res = await post({ item: ITEM, note: 'Test the VP pick', to: vp.id }, { 'x-walnut-test-run': 'content-ceo-probe' })
+    const body = await res.json() as { taskId: string; testRun?: boolean; to?: { id: string } }
+    expect(body.testRun).toBe(true)
+    expect(body.taskId).not.toBe(vp.id)
+    expect(body.to?.id).toBe(vp.id)
+    const queue = (await listTasks()).find((t) => t.id === body.taskId)
+    expect(queue?.title).toBe(TEST_RUN_CEO_TITLE)
   })
 })
 

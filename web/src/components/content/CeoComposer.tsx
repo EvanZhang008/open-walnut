@@ -11,6 +11,11 @@
  * draft store per piece of content, so a box closed by mistake (or a reload) opens again with them;
  * its pictures are kept while the page lives. Enter makes a new line, Cmd/Ctrl+Enter or Send sends
  * (as the Org thread's Follow up, the other box with its own Send row).
+ *
+ * The To row picks who reads it: the CEO, a router, or any VP (2026-11-16, the user: "talk to
+ * router, talk to COE ... or talk to any VP by selection"). One press on a name, no menu: the org
+ * has a handful of nodes, and every one is in sight. It opens on the one asked for (the Mail
+ * reader's Ask router opens on the router of the mail's area), else on the CEO.
  */
 import { useEffect, useRef, useState } from 'react';
 import { useMenuPlacement } from '@/hooks/useMenuPlacement';
@@ -21,7 +26,7 @@ import type { BoxMicHandle } from '@/components/common/BoxMic';
 import { useImageAttachments } from '@/components/common/image-attachments';
 import type { ImageAttachment } from '@/api/chat';
 import { draftHash, draftKey } from '@/utils/drafts';
-import { CEO_NOTE_MAX, sendToCeo, type CeoComposerRequest } from '@/utils/content-actions';
+import { CEO_NOTE_MAX, CEO_TARGET, cachedContentTargets, fetchContentTargets, pickTarget, sendToCeo, targetWords, type CeoComposerRequest, type ContentTarget } from '@/utils/content-actions';
 import '@/styles/content-actions.css';
 
 // One kept note per piece of content: two mails with one subject are two items.
@@ -40,6 +45,24 @@ export function CeoComposer({ req, onClose }: { req: CeoComposerRequest; onClose
   const boxRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const noTrigger = useRef<HTMLElement>(null);
+  const [targets, setTargets] = useState<ContentTarget[]>(() => cachedContentTargets() ?? [CEO_TARGET]);
+  // A box opened for a router waits for the list before it can send: until then it names no router.
+  const [loaded, setLoaded] = useState(() => cachedContentTargets() !== null);
+  // Who it goes to: what the box opened on until the person presses another name. Kept as the
+  // target itself, so a list that arrives later never moves a pick (the CEO's id differs before
+  // its task exists).
+  const [chosen, setChosen] = useState<ContentTarget | null>(null);
+  const opensOn = req.to;
+  useEffect(() => {
+    let live = true;
+    void fetchContentTargets().then((list) => { if (live) { setTargets(list); setLoaded(true); } });
+    return () => { live = false; };
+  }, []);
+  const target = chosen
+    ? (targets.find((t) => t.id === chosen.id) ?? (chosen.kind === 'ceo' ? pickTarget(targets) : chosen))
+    : pickTarget(targets, opensOn);
+  const waitingForList = !!opensOn && !loaded;
+  const who = targetWords(target);
 
   // Pictures of an earlier open of this item come back; the current ones are kept for the next.
   const { set: setPictures, images } = pictures;
@@ -88,12 +111,12 @@ export function CeoComposer({ req, onClose }: { req: CeoComposerRequest; onClose
 
   const words = note.trim();
   const send = () => {
-    if (!words || sending) return;
+    if (!words || sending || waitingForList) return;
     setSending(true);
     setError(null);
     const sentKey = draft.key;
     const sentPictures = pictures.images;
-    sendToCeo(req.item, words, sentPictures).then(
+    sendToCeo(req.item, words, sentPictures, target).then(
       () => { draft.clear(sentKey, note); keptPictures.delete(key); pictures.clear(); onClose(true); },
       (err: unknown) => { setSending(false); setError(err instanceof Error && err.message ? err.message : 'Not sent'); },
     );
@@ -108,8 +131,10 @@ export function CeoComposer({ req, onClose }: { req: CeoComposerRequest; onClose
       ref={boxRef}
       className={`ceo-composer${req.anchor ? '' : ' ceo-composer-centered'}`}
       role="dialog"
-      aria-label="Talk to CEO"
+      aria-label={`Talk to ${who}`}
       data-testid="ceo-composer"
+      data-target-id={target.id}
+      data-target-kind={target.kind}
       // A portal under the page: keep a drag or a row's own click handler from taking this press.
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
@@ -120,8 +145,27 @@ export function CeoComposer({ req, onClose }: { req: CeoComposerRequest; onClose
         : undefined}
     >
       <div className="ceo-composer-head">
-        <span>Talk to CEO</span>
+        <span>Talk to {target.kind === 'ceo' ? 'CEO' : target.name}</span>
         <button type="button" className="ceo-composer-close" aria-label="Close" disabled={sending} onClick={() => onClose(false)}>×</button>
+      </div>
+      <div className="ceo-composer-to" role="radiogroup" aria-label="Send to" data-testid="ceo-composer-to">
+        {targets.map((one) => (
+          <button
+            key={one.id}
+            type="button"
+            role="radio"
+            aria-checked={one.id === target.id}
+            className="ceo-composer-to-btn"
+            data-testid="ceo-composer-to-option"
+            data-target-id={one.id}
+            data-target-kind={one.kind}
+            disabled={sending}
+            title={one.kind === 'router' ? `${one.name}: ask why it routed this, or where it should go` : `Send this to ${targetWords(one)}`}
+            onClick={() => { setChosen(one); inputRef.current?.focus(); }}
+          >
+            {one.name}
+          </button>
+        ))}
       </div>
       <AnswerBox
         boxRef={inputRef}
@@ -133,7 +177,7 @@ export function CeoComposer({ req, onClose }: { req: CeoComposerRequest; onClose
         minRows={3}
         maxRows={10}
         maxLength={CEO_NOTE_MAX}
-        placeholder="What do you want to tell the CEO about this?"
+        placeholder={`What do you want to tell ${who} about this?`}
         value={note}
         readOnly={sending}
         onChange={draft.setText}
@@ -151,7 +195,7 @@ export function CeoComposer({ req, onClose }: { req: CeoComposerRequest; onClose
       <div className="ceo-composer-foot">
         <span className="ceo-composer-hint">⌘↵ to send</span>
         <button type="button" className="content-action-btn" disabled={sending} onClick={() => onClose(false)}>Cancel</button>
-        <button type="button" className="content-action-btn ceo-composer-send" data-testid="ceo-composer-send" disabled={(!words && !gate.micBusy && !gate.waiting) || sending} onClick={gate.send} {...dictationWaitProps(gate)}>
+        <button type="button" className="content-action-btn ceo-composer-send" data-testid="ceo-composer-send" disabled={(!words && !gate.micBusy && !gate.waiting) || sending || waitingForList} onClick={gate.send} {...dictationWaitProps(gate)}>
           {sending ? 'Sending…' : 'Send'}
         </button>
       </div>

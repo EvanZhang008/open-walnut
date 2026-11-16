@@ -29,6 +29,7 @@ import { MailSortLine } from './MailSortLine';
 import { getMailSnapshot, type MailOpenMessage } from './mail-store';
 import { mailboxRoleOf, outgoingKind, showsRouteLine } from './mail-route-model';
 import { MailRouteLine } from './MailRouteLine';
+import { MailAskRouter } from './MailAskRouter';
 import { openFinishUnsubscribeAsk, unsubscribeFromMessage } from './mail-unsubscribe-actions';
 import {
   unsubscribeHandsOverToAsk,
@@ -130,6 +131,7 @@ export function MailReaderHead({ open, message, accounts, providers }: Props) {
       </div>
 
       {routed && <MailRouteLine route={message.route} unavailable={message.routingUnavailable} surface="reader" subject={message.subject} routingArea={message.routingArea} routingCoverage={message.routingCoverage} />}
+      {routed && <MailAskRouter key={`${open.accountId}\u0000${open.messageId}`} message={message} bodyText={bodyQuoteText(open.body)} />}
       {outgoing && <MailRouteLine route={undefined} outgoing={outgoing} surface="reader" />}
       {message.invite && canAnswerInvites(providers, open.accountId) && (
         <MailInviteCard accountId={open.accountId} messageId={open.messageId} kind={message.invite.kind} />
@@ -305,7 +307,8 @@ function rawDate(message: Message): string {
 }
 
 /**
- * Reply, Reply all, Forward, Talk to CEO / New task, and the read flag.
+ * Reply, Reply all, Forward, Talk to CEO (the CEO, a VP or a router, picked in its box) / New task,
+ * and the read flag.
  *
  * The three send actions are disabled rather than hidden when the account cannot send: a missing
  * button is a mystery, and the fix (add SMTP settings) belongs next to the thing it unlocks.

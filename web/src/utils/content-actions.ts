@@ -9,9 +9,11 @@
  *   - Talk to CEO: a box opens where it was clicked (CeoComposer); the person writes what they
  *     want to tell the CEO, the item rides along as attached context, and nothing is sent until
  *     they press Send (2026-11-03, the user: "I definitely have something to say ... at least
- *     give me an input box"). Send posts both, with any pictures the person added
- *     (`POST /api/v1/content/ceo { item, note, images? }`); the
- *     server puts their words, then the framed item, into the main agent's chat as their message;
+ *     give me an input box"). The box's To row picks who reads it: the CEO (the default), a router
+ *     or any VP (2026-11-16, the user: "talk to router, talk to COE ... or talk to any VP by
+ *     selection"). Send posts both, with any pictures the person added
+ *     (`POST /api/v1/content/ceo { item, note, images?, to? }`); the
+ *     server puts their words, then the framed item, into that node's chat as their message;
  *     a toast says so and opens that chat.
  *   - New task: the home page's draft column opens with the title and context filled in and the
  *     caret after them (MainPage hears CONTENT_NEW_TASK_EVENT). The person writes the prompt,
@@ -20,7 +22,7 @@
  * The box, the toast and the navigation need the app shell; ContentActionsHost registers them.
  */
 import { newTaskDraftText, normalizeContentItem, type ContentItem } from '@open-walnut/content-item';
-import { apiPost } from '@/api/client';
+import { apiGet, apiPost } from '@/api/client';
 import type { ImageAttachment } from '@/api/chat';
 import { openSessionOnHome } from '@/utils/open-session';
 import { log } from '@/utils/log';
@@ -44,7 +46,7 @@ export interface ContentNewTaskDetail {
 }
 
 export const CONTENT_ACTION_WORDS: Record<ContentActionId, { label: string; description: string }> = {
-  talk_to_ceo: { label: 'Talk to CEO', description: 'Write to the CEO, with this attached' },
+  talk_to_ceo: { label: 'Talk to CEO', description: 'Write to the CEO, a VP or a router, with this attached' },
   new_task: { label: 'New task', description: 'Open a new task draft with this filled in' },
 };
 
@@ -62,13 +64,74 @@ export interface ContentAnchor {
   y: number;
 }
 
+/** One node of the org the box writes to (GET /api/v1/content/targets). */
+export interface ContentTarget {
+  id: string;
+  kind: 'ceo' | 'vp' | 'router';
+  name: string;
+  /** A router's area (the Mail reader's Ask router picks the router of the mail's area). */
+  areaId?: string;
+}
+
+/** Who the box opens addressed to: a node by id, or the router of an area. Absent: the CEO. */
+export type ContentTargetPick = { id: string } | { areaId: string };
+
+/** The CEO before the org answers (and when it cannot): the box always has someone to write to. */
+export const CEO_TARGET: ContentTarget = { id: 'main', kind: 'ceo', name: 'CEO' };
+
 /** One open Talk to CEO box. `done` says whether it was sent. */
 export interface CeoComposerRequest {
   item: ContentItem;
   anchor: ContentAnchor | null;
   /** The button it was opened from: a press on it closes the box instead of reopening it. */
   owner?: HTMLElement | null;
+  /** Who it opens addressed to; the person can pick another in the box. */
+  to?: ContentTargetPick;
   done(sent: boolean): void;
+}
+
+/** The org changes rarely; a box opened twice in a minute asks once. */
+const TARGETS_FRESH_MS = 60_000;
+let targetsCache: { at: number; list: Promise<ContentTarget[]> } | null = null;
+
+/** The CEO, the routers and the VPs; the CEO alone when the server cannot say. */
+export function fetchContentTargets(): Promise<ContentTarget[]> {
+  if (targetsCache && Date.now() - targetsCache.at < TARGETS_FRESH_MS) return targetsCache.list;
+  const list = apiGet<{ targets?: ContentTarget[] }>('/api/v1/content/targets', undefined, { quietStatuses: [501], timeoutMs: 8_000 })
+    .then((body) => {
+      const targets = Array.isArray(body?.targets) ? body.targets.filter((t) => t && typeof t.id === 'string' && typeof t.name === 'string') : [];
+      targetsKnown = targets.length > 0 ? targets : [CEO_TARGET];
+      return targetsKnown;
+    })
+    .catch((err: unknown) => {
+      log.warn('content-actions', 'talk to targets not read', { error: errorWords(err) });
+      targetsCache = null;
+      return [CEO_TARGET];
+    });
+  targetsCache = { at: Date.now(), list };
+  return list;
+}
+
+/** What the box knew last, so a box opened again starts on the real list rather than the CEO alone. */
+export function cachedContentTargets(): ContentTarget[] | null {
+  return targetsKnown;
+}
+let targetsKnown: ContentTarget[] | null = null;
+
+/** The router that decides for an area, if the org has one. Never another area's. */
+export function routerOfArea(targets: readonly ContentTarget[], areaId: string): ContentTarget | undefined {
+  return targets.find((t) => t.kind === 'router' && t.areaId === areaId);
+}
+
+/**
+ * The target a box opens on: the one asked for, else the CEO. An area with no router of its own
+ * opens on the CEO, never on another area's router.
+ */
+export function pickTarget(targets: readonly ContentTarget[], to?: ContentTargetPick): ContentTarget {
+  const ceo = targets.find((t) => t.kind === 'ceo') ?? CEO_TARGET;
+  if (!to) return ceo;
+  if ('id' in to) return targets.find((t) => t.id === to.id) ?? ceo;
+  return routerOfArea(targets, to.areaId) ?? ceo;
 }
 
 interface Runtime {
@@ -105,15 +168,18 @@ interface CeoAnswer {
   started: boolean;
   held?: boolean;
   testRun?: boolean;
+  /** The node it reached (an older server sends none: the CEO). */
+  to?: { id: string; kind: ContentTarget['kind']; name: string };
 }
 
-/** Main's chat in the chat slot; a test run's stand-in in its own column. */
+/** That node's chat (Main's in the chat slot); a test run's stand-in in its own column. */
 function openCeoChat(answer: CeoAnswer): void {
   if (answer.testRun && answer.sessionId) {
     openSessionOnHome(answer.sessionId, navigate);
     return;
   }
-  window.dispatchEvent(new CustomEvent('org:chat', { detail: { taskId: 'main' } }));
+  const taskId = answer.to && answer.to.kind !== 'ceo' ? answer.to.id : 'main';
+  window.dispatchEvent(new CustomEvent('org:chat', { detail: { taskId } }));
   if (window.location.pathname !== '/') navigate('/');
 }
 
@@ -138,13 +204,13 @@ function recentPointer(): ContentAnchor | null {
 }
 
 /** Opens the Talk to CEO box; resolves true once the person sent it, false when they closed it. */
-export function openCeoComposer(raw: ContentItem, anchor?: ContentAnchor | null, owner?: HTMLElement | null): Promise<boolean> {
+export function openCeoComposer(raw: ContentItem, anchor?: ContentAnchor | null, owner?: HTMLElement | null, to?: ContentTargetPick): Promise<boolean> {
   const item = itemOf(raw);
   if (!runtime) return Promise.reject(new Error('Talk to CEO is not ready yet'));
   const at = anchor === undefined ? recentPointer() : anchor;
   return new Promise<boolean>((resolve) => {
-    runtime!.composer({ item, anchor: at, owner, done: resolve });
-    log.info('content-actions', 'talk to ceo box opened', { source: item.source, anchored: !!at });
+    runtime!.composer({ item, anchor: at, owner, ...(to ? { to } : {}), done: resolve });
+    log.info('content-actions', 'talk to ceo box opened', { source: item.source, anchored: !!at, to: to ? ('id' in to ? to.id : `area:${to.areaId}`) : 'ceo' });
   });
 }
 
@@ -163,35 +229,41 @@ export function talkToCeo(raw: ContentItem): Promise<boolean> {
 /** The longest note the box takes (the server's CEO_NOTE_MAX). */
 export const CEO_NOTE_MAX = 8000;
 
+/** "the CEO", "Walnut VP", "Personal mail router": how a sentence names the node. */
+export function targetWords(target: Pick<ContentTarget, 'kind' | 'name'>): string {
+  return target.kind === 'ceo' ? 'the CEO' : target.name;
+}
+
 /**
- * Send: the person's words, their pictures (as a chat send carries them) and the item to the CEO.
- * Throws (after its toast) when not sent.
+ * Send: the person's words, their pictures (as a chat send carries them) and the item to the CEO,
+ * or to the VP or router picked in the box. Throws (after its toast) when not sent.
  */
-export async function sendToCeo(raw: ContentItem, note: string, images: readonly ImageAttachment[] = []): Promise<void> {
+export async function sendToCeo(raw: ContentItem, note: string, images: readonly ImageAttachment[] = [], target: ContentTarget = CEO_TARGET): Promise<void> {
   const item = itemOf(raw);
   const words = note.trim();
-  if (!words) throw new Error('Write what you want to tell the CEO');
+  const who = targetWords(target);
+  if (!words) throw new Error(`Write what you want to tell ${who}`);
   let answer: CeoAnswer;
   try {
     const pictures = images.filter((img) => img.data).map(({ data, mediaType }) => ({ data, mediaType }));
-    answer = await apiPost<CeoAnswer>('/api/v1/content/ceo', { item, note: words, ...(pictures.length > 0 ? { images: pictures } : {}) }, { timeoutMs: 30_000 });
+    answer = await apiPost<CeoAnswer>('/api/v1/content/ceo', { item, note: words, ...(pictures.length > 0 ? { images: pictures } : {}), ...(target.kind !== 'ceo' ? { to: target.id } : {}) }, { timeoutMs: 30_000 });
   } catch (err) {
-    log.warn('content-actions', 'talk to ceo failed', { source: item.source, error: errorWords(err) });
-    runtime?.toast({ severity: 'error', title: 'Not sent to the CEO', body: errorWords(err), dedupKey: `content-ceo-error:${item.title}` });
+    log.warn('content-actions', 'talk to ceo failed', { source: item.source, to: target.id, error: errorWords(err) });
+    runtime?.toast({ severity: 'error', title: `Not sent to ${who}`, body: errorWords(err), dedupKey: `content-ceo-error:${item.title}` });
     throw err;
   }
-  log.info('content-actions', 'talk to ceo sent', { source: item.source, images: images.length, taskId: answer.taskId, sessionId: answer.sessionId, held: !!answer.held, testRun: !!answer.testRun });
+  log.info('content-actions', 'talk to ceo sent', { source: item.source, to: answer.to?.id ?? 'main', images: images.length, taskId: answer.taskId, sessionId: answer.sessionId, held: !!answer.held, testRun: !!answer.testRun });
   runtime?.toast(answer.held
     ? {
-      severity: 'warning', title: 'Not sent: the CEO is waiting on your answer',
-      body: 'Answer it in the CEO chat, then send this again.',
+      severity: 'warning', title: `Not sent: ${who} is waiting on your answer`,
+      body: 'Answer it in that chat, then send this again.',
       action: { label: 'Open chat', run: () => openCeoChat(answer) }, dedupKey: `content-ceo:${item.title}`,
     }
     : {
-      severity: 'success', title: answer.testRun ? 'Sent to the CEO stand-in (test run)' : 'Sent to the CEO', body: item.title,
+      severity: 'success', title: answer.testRun ? `Sent to the stand-in for ${who} (test run)` : `Sent to ${who}`, body: item.title,
       action: { label: 'Open chat', run: () => openCeoChat(answer) }, dedupKey: `content-ceo:${item.title}`,
     });
-  if (answer.held) throw new Error('The CEO is waiting on your answer');
+  if (answer.held) throw new Error(`${who === 'the CEO' ? 'The CEO' : who} is waiting on your answer`);
 }
 
 function localTime(iso: string): string {

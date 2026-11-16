@@ -86,8 +86,9 @@ describe('content never becomes a task on its own', () => {
     expect(callers).toEqual(['web/src/utils/content-actions.ts'])
     const src = fs.readFileSync(path.join(ROOT, callers[0]), 'utf8')
     expect(src.match(/'\/api\/v1\/content\/ceo'/g)).toHaveLength(1)
-    // The words always go; the person's pictures (if any) ride beside them.
-    expect(src).toMatch(/apiPost<CeoAnswer>\('\/api\/v1\/content\/ceo', \{ item, note: words(, \.\.\.\(pictures\.length > 0 \? \{ images: pictures \} : \{\}\))? \}/)
+    // The words always go; the person's pictures (if any) and the VP or router picked in the box's
+    // To row (if not the CEO) ride beside them.
+    expect(src).toMatch(/apiPost<CeoAnswer>\('\/api\/v1\/content\/ceo', \{ item, note: words(, \.\.\.\(pictures\.length > 0 \? \{ images: pictures \} : \{\}\))?(, \.\.\.\(target\.kind !== 'ceo' \? \{ to: target\.id \} : \{\}\))? \}/)
     // talkToCeo (buttons, menus, plugins) only opens the box.
     expect(src).toMatch(/export function talkToCeo\(raw: ContentItem\): Promise<boolean> \{\n  return openCeoComposer\(raw\);\n\}/)
   })

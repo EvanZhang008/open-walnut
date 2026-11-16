@@ -1,8 +1,15 @@
 /**
- * Content actions on the server: "Talk to CEO" for one piece of content a plugin shows.
+ * Content actions on the server: "Talk to CEO" for one piece of content a plugin shows, to the CEO
+ * or to any other node of the org the person picks in the box (a VP, a router).
  *
- *   POST /api/v1/content/ceo { item, note, images? } → { taskId, sessionId, started, noted?, held?, testRun? }
+ *   GET  /api/v1/content/targets → { targets: [{ id, kind: 'ceo'|'vp'|'router', name, areaId? }] }
+ *   POST /api/v1/content/ceo { item, note, images?, to? } → { taskId, sessionId, started, noted?, held?, testRun?, to? }
  *   POST /api/v1/content/draft { item, sent? } → { text }
+ *
+ * `to` names one of the targets by its task id (2026-11-16, the user: "a button to talk to router,
+ * talk to CEO, create new task, or talk to any VP by selection"); absent, or the CEO's id, it is the
+ * CEO, as before. Only the org's own nodes are offered or taken: this is the box that hands content
+ * to the org, not a way to write into any task's chat. The answer names the node it reached (`to`).
  *
  * The person wrote `note` in the Talk to CEO box and pressed Send (2026-11-03, the user: "I
  * definitely have something to say ... at least give me an input box"), so the message goes into
@@ -29,6 +36,7 @@ import { extractValidImages } from './session-send-v1.js'
 import { ceoContentText, ceoRequestText, newTaskDraftText, normalizeContentItem } from '../../core/content-actions/content-item.js'
 import { createEnvelopeKit } from '../../core/peers/envelope-kit.js'
 import type { Task } from '../../core/types.js'
+import { CEO_LABEL, VP_LABEL } from '../../core/org/org-tree.js'
 
 export const contentV1Router = Router()
 
@@ -68,12 +76,70 @@ function noteOf(raw: unknown): { note?: string } | { error: string } {
 /** The stand-in's title: what the test run's own chat shows instead of the real CEO. */
 export const TEST_RUN_CEO_TITLE = 'CEO (test run stand-in)'
 
-const TEST_RUN_CEO_NOTE = kit.buildWalnutMessage({
-  kind: 'notification',
-  attrs: { from: 'Walnut', outcome: 'test-run', note: 'a test of the Talk to CEO button' },
-  body: 'Test run: you stand in for the CEO in an automated test of the "Talk to CEO" button. '
-    + 'Reply with one short line saying what you received, and take no other action.',
+function testRunNote(name: string): string {
+  return kit.buildWalnutMessage({
+    kind: 'notification',
+    attrs: { from: 'Walnut', outcome: 'test-run', note: 'a test of the Talk to CEO button' },
+    body: `Test run: you stand in for ${name === CEO_LABEL ? 'the CEO' : name} in an automated test of the "Talk to CEO" button. `
+      + 'Reply with one short line saying what you received, and take no other action.',
+  })
+}
+
+/** One node of the org the box can write to. */
+export interface ContentTarget {
+  id: string
+  kind: 'ceo' | 'vp' | 'router'
+  /** What the box shows: "CEO", "Walnut VP" (or the name the user gave it), the router's name. */
+  name: string
+  /** A router's area: the Mail reader picks the router of the area that routed the mail. */
+  areaId?: string
+}
+
+/** The sentinel id of the CEO before the main agent's task exists (it is made on the first send). */
+const CEO_ID = 'main'
+
+/**
+ * Who the box offers, from the org chart the Org page draws: the CEO, every router of an area (a task
+ * that routes for itself is a team's work, not a router to ask), then every VP once (one VP may lead
+ * several projects).
+ */
+export async function contentTargets(): Promise<ContentTarget[]> {
+  const { getOrgTree } = await import('../../core/org/org-store.js')
+  const tree = await getOrgTree()
+  const out: ContentTarget[] = [{ id: tree.main?.id ?? CEO_ID, kind: 'ceo', name: CEO_LABEL }]
+  const seen = new Set(out.map((t) => t.id))
+  const add = (t: ContentTarget) => { if (!seen.has(t.id)) { seen.add(t.id); out.push(t) } }
+  for (const r of tree.routers ?? []) {
+    if (!r.self) add({ id: r.id, kind: 'router', name: r.name || r.title, ...(r.areaId ? { areaId: r.areaId } : {}) })
+  }
+  for (const p of tree.projects) {
+    if (p.lead) add({ id: p.lead.id, kind: 'vp', name: p.lead.name ? `${p.lead.name} ${VP_LABEL}` : p.lead.title })
+  }
+  return out
+}
+
+contentV1Router.get('/content/targets', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (role() !== 'leader') {
+      res.status(501).json({ error: 'The org runs on your Mac, not on this replica', code: 'not_supported_cloud' })
+      return
+    }
+    res.json({ targets: await contentTargets() })
+  } catch (err) {
+    next(err)
+  }
 })
+
+/** The node `to` names: the CEO when absent; null when it names nothing the box offers. */
+async function targetOf(raw: unknown): Promise<ContentTarget | null> {
+  const targets = await contentTargets()
+  const ceo = targets[0]!
+  if (raw === undefined || raw === null || raw === '') return ceo
+  if (typeof raw !== 'string') return null
+  const id = raw.trim()
+  if (id === CEO_ID) return ceo
+  return targets.find((t) => t.id === id) ?? null
+}
 
 contentV1Router.post('/content/ceo', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -91,20 +157,37 @@ contentV1Router.post('/content/ceo', async (req: Request, res: Response, next: N
       res.status(400).json({ error: noted.error, code: 'bad_note' })
       return
     }
+    const target = await targetOf(req.body?.to)
+    if (!target) {
+      res.status(400).json({ error: 'to names no CEO, VP or router of the org', code: 'bad_target' })
+      return
+    }
     const text = ceoMessage(item, noted.note)
     const images = extractValidImages(req.body?.images)
     const source = routeSource('ui', req.headers)
     const { sendToMain, sendToTaskChat } = await import('./quick-input-v1.js')
+    const to = { id: target.id, kind: target.kind, name: target.name }
     const standIn = await testRunCeo()
     if (standIn) {
-      const sent = await sendToTaskChat(standIn, `${text}\n\n${TEST_RUN_CEO_NOTE}`, source, images)
-      log.web.info('content: talk to ceo (test run stand-in)', { taskId: sent.taskId, sessionId: sent.sessionId, source: item.source, noted: !!noted.note, images: images.length })
-      res.json({ taskId: sent.taskId, sessionId: sent.sessionId, started: sent.started, ...(noted.note ? { noted: true } : {}), ...(sent.held ? { held: true } : {}), testRun: true })
+      const standInText = `${text}\n\n${testRunNote(target.name)}`
+      const sent = await sendToTaskChat(standIn, standInText, source, images)
+      log.web.info('content: talk to ceo (test run stand-in)', { taskId: sent.taskId, sessionId: sent.sessionId, to: target.id, source: item.source, noted: !!noted.note, images: images.length })
+      res.json({ taskId: sent.taskId, sessionId: sent.sessionId, started: sent.started, ...(noted.note ? { noted: true } : {}), ...(sent.held ? { held: true } : {}), testRun: true, to })
       return
     }
-    const sent = await sendToMain(text, images, source)
-    log.web.info('content: talk to ceo', { taskId: sent.taskId, sessionId: sent.sessionId, held: !!sent.held, source: item.source, noted: !!noted.note, images: images.length })
-    res.json({ taskId: sent.taskId, sessionId: sent.sessionId, started: sent.started, ...(noted.note ? { noted: true } : {}), ...(sent.held ? { held: true } : {}) })
+    if (target.kind !== 'ceo' && (await import('../../core/test-run.js')).ambientTestRun()) {
+      res.status(409).json({ error: 'A test run without its stand-in never writes into a VP or router chat', code: 'test_run_unmarked' })
+      return
+    }
+    let sent
+    if (target.kind === 'ceo') {
+      sent = await sendToMain(text, images, source)
+    } else {
+      const { getTask } = await import('../../core/task-manager.js')
+      sent = await sendToTaskChat(await getTask(target.id), text, source, images)
+    }
+    log.web.info('content: talk to ceo', { taskId: sent.taskId, sessionId: sent.sessionId, to: target.id, kind: target.kind, held: !!sent.held, source: item.source, noted: !!noted.note, images: images.length })
+    res.json({ taskId: sent.taskId, sessionId: sent.sessionId, started: sent.started, ...(noted.note ? { noted: true } : {}), ...(sent.held ? { held: true } : {}), to })
   } catch (err) {
     next(err)
   }
