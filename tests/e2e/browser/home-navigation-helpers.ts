@@ -23,6 +23,21 @@ export async function openHome(page: Page, baseURL: string, timeout = 45_000): P
   await expect(displayButton(page)).toBeVisible({ timeout })
 }
 
+/**
+ * The board's task list is in the page. useTasks adopts its first answer in a transition
+ * (hooks/useTasks.ts), and a busy main thread holds that transition back well after the
+ * columns have drawn their chats: on a 4-CPU CI runner the answer had come and the page still
+ * held no task 2 s later, so a complete in a column found no task and the advance an empty
+ * Needs you queue (2026-11-13: keyboard-triage and column-complete-close, every CI run). The
+ * Display menu draws its Collapse row only once the list holds projects, so a spec that read
+ * page one right after the toolbar showed found no Collapse row (display-menu, most CI runs).
+ * A spec that acts on the list or reads what it decides starts once it is in.
+ * The list's loading spinner goes in the same commit that brings the rows.
+ */
+export async function waitForBoardList(page: Page): Promise<void> {
+  await expect(page.locator('.todo-panel-list > .empty-state .spinner')).toHaveCount(0, { timeout: 30_000 })
+}
+
 /** Opens the Display menu (filters, sort, group, view, layout) on its first page. */
 export async function openViewMenu(page: Page): Promise<void> {
   await openDisplayMenu(page)

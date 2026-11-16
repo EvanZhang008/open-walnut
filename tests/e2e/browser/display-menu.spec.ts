@@ -10,7 +10,7 @@
  */
 import { test, expect, type Page, type Locator } from '@playwright/test'
 import { isolateUiPrefs, openListProject } from './todo-panel-helpers'
-import { openHome } from './home-navigation-helpers'
+import { openHome, waitForBoardList } from './home-navigation-helpers'
 import {
   displayButton, displayMenu, filterRow, filterSearch, openDisplayMenu, closeDisplayMenu,
   openViewsPage, setStatus, viewRow, viewsPage,
@@ -36,6 +36,8 @@ async function boot(page: Page, baseURL: string, extra?: Record<string, string>)
     } catch { /* ignore */ }
   }, [QUICK_VIEWS_KEY, extra ?? {}] as const)
   await openHome(page, baseURL, 90_000)
+  // Page one's last row (Collapse all) depends on the list's projects: read it once they are in.
+  await waitForBoardList(page)
 }
 
 /** Create tasks in one fresh project; returns their ids in creation order. */

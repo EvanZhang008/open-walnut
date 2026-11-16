@@ -27,9 +27,9 @@ test.setTimeout(150_000)
 const readMode = async (page: Page) => (await (await page.request.get('/api/config')).json())?.config?.ui?.session_panels
 async function writeMode(page: Page, mode: string | undefined) {
   const config = (await (await page.request.get('/api/config')).json()).config
-  const ui = { ...config.ui }
-  if (mode === undefined) delete ui.session_panels
-  else ui.session_panels = mode
+  // This write carries no Origin, so the server merges the section
+  // (src/core/config-section-write.ts): a key left out is kept, and only null removes it.
+  const ui = { ...config.ui, session_panels: mode ?? null }
   expect((await page.request.put('/api/config', { data: { ui } })).ok()).toBe(true)
   await expect.poll(() => readMode(page), { timeout: 30_000 }).toBe(mode)
 }

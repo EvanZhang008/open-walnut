@@ -1,6 +1,6 @@
 {
   "suite": "playwright: chromium, chromium-host-fixture",
-  "count": 225,
+  "count": 224,
   "failures": [
     "action-cards-and-time.spec.ts :: suggest action cards › card renders, its button runs the real op, and the receipt survives a reload",
     "action-cards-and-time.spec.ts :: time tracking › real interaction earns human time banked against the right task and kind",
@@ -48,7 +48,6 @@
     "context-inspector.spec.ts :: GET /api/context with no params still answers for the configured default",
     "custom-focus-tiers.spec.ts :: settings CRUD: create, rename, and the tier appears across the UI",
     "display-menu.spec.ts :: keyboard reaches every Display control, with a visible ring and readable checks in both themes",
-    "display-menu.spec.ts :: page one keeps its height and every row in place in every view; the View page scrolls the long tail (30 custom tiers)",
     "draft-quick-parse-off.spec.ts :: opening a draft with an empty composer fires no quick-parse and no config read",
     "engine-settings-popover-r2.spec.ts :: engine settings popover: review round two › rows get more than half the box, the repo segment always shows, About is a glyph after the switch",
     "engine-settings-popover-r2.webkit.spec.ts :: webkit: rows over half the box; the repo segment shows at 1280 and at 420 wide",
@@ -275,7 +274,6 @@
     "context-inspector.spec.ts :: GET /api/context with no params still answers for the configured default": "Error: section \"userProfile\" is missing",
     "custom-focus-tiers.spec.ts :: settings CRUD: create, rename, and the tier appears across the UI": "Error: expect(locator).toBeVisible() failed",
     "display-menu.spec.ts :: keyboard reaches every Display control, with a visible ring and readable checks in both themes": "Error: expect(received).toBeGreaterThanOrEqual(expected)",
-    "display-menu.spec.ts :: page one keeps its height and every row in place in every view; the View page scrolls the long tail (30 custom tiers)": "Error: expect(received).toBeLessThan(expected)",
     "draft-quick-parse-off.spec.ts :: opening a draft with an empty composer fires no quick-parse and no config read": "Error: the gate must be read AFTER the empty check, never before it",
     "engine-settings-popover-r2.spec.ts :: engine settings popover: review round two › rows get more than half the box, the repo segment always shows, About is a glyph after the switch": "Error: expect(received).toBe(expected) // Object.is equality",
     "engine-settings-popover-r2.webkit.spec.ts :: webkit: rows over half the box; the repo segment shows at 1280 and at 420 wide": "Error: expect(locator).toHaveText(expected) failed",

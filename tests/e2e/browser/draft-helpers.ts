@@ -32,6 +32,7 @@
 
 import { expect, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { waitForBoardList } from './home-navigation-helpers'
 
 /** The chat spot's layout key. Absent = open, on Main (web/src/pages/home-panel-flags.ts). */
 export const CHAT_VISIBLE_KEY = 'open-walnut-home-chat-visible'
@@ -594,19 +595,6 @@ function requestSettles(page: Page, url: RegExp): () => Promise<void> {
       page.off('requestfailed', done)
     }
   }
-}
-
-/**
- * The board's task list is in the page. useTasks adopts its first answer in a transition
- * (hooks/useTasks.ts), and a busy main thread holds that transition back well after the
- * columns have drawn their chats: on a 4-CPU CI runner the answer had come and the page still
- * held no task 2 s later, so a complete in a column found no task and the advance an empty
- * Needs you queue (2026-11-13: keyboard-triage and column-complete-close, every CI run). A spec
- * that acts on the list (complete, go on to the next task, locate a row) starts once it is in.
- * The list's loading spinner goes in the same commit that brings the rows.
- */
-export async function waitForBoardList(page: Page): Promise<void> {
-  await expect(page.locator('.todo-panel-list > .empty-state .spinner')).toHaveCount(0, { timeout: 30_000 })
 }
 
 /** Seed the home column queue so `sids` panels mount on load. Call BEFORE goto. */

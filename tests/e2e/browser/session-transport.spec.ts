@@ -19,7 +19,7 @@
 import fs from 'node:fs/promises'
 import { test, expect } from '@playwright/test'
 import { presetPanelView } from './todo-panel-helpers'
-import { waitForBoardList } from './draft-helpers'
+import { waitForBoardList } from './home-navigation-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
