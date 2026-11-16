@@ -17,7 +17,7 @@ const REPO = path.join(import.meta.dirname, '..', '..')
 const DIR = path.join(REPO, '.github', 'workflows')
 
 interface Step { uses?: string; run?: string; if?: string; name?: string; env?: Record<string, string> }
-interface Job { if?: string; steps?: Step[] }
+interface Job { if?: string; 'runs-on'?: string; steps?: Step[] }
 interface Workflow { name?: string; on?: Record<string, unknown>; jobs: Record<string, Job> }
 const read = (file: string) => parseYaml(fs.readFileSync(path.join(DIR, file), 'utf8')) as Workflow
 const audit = read('leak-audit.yml')
@@ -69,6 +69,17 @@ describe('leak-audit.yml', () => {
     // Walnut's own dist in the runtime is scanned; only the packages it carries are left out
     const scan = audit.jobs['release-assets']!.steps!.find((s) => (s.run ?? '').includes('leak-scan.mjs'))!
     expect(scan.run).toContain('--skip-deps')
+  })
+
+  // 2026-11-16 (Leak audit runs 43888612916, 43913188949 and a third): the job ran on macOS only to
+  // mount the Mac app's .dmg, and no macOS runner took it. It runs on Linux and unpacks the .dmg.
+  it('scans release assets on Linux, with 7-Zip for the .dmg and GNU date for the window', () => {
+    const job = audit.jobs['release-assets']!
+    expect(job['runs-on']).toBe('ubuntu-latest')
+    const runs = job.steps!.map((s) => s.run ?? '').join('\n')
+    expect(runs).toContain('7zip')
+    expect(runs).not.toMatch(/date [^\n]*-v-/)
+    expect(runs).toContain("date -u -d '26 hours ago'")
   })
 
   // 2026-11-12 (Leak audit runs 43240007914 and three more): a fork's pull request runs

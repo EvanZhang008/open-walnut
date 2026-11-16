@@ -9,7 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { binaryHits, compileRules, loadRules, scanText, printableRuns, runOffset, termKey } from '../../scripts/leak-scan/core.mjs'
-import { detachDmg, reapStale, scanPaths } from '../../scripts/leak-scan/leak-scan.mjs'
+import { detachDmg, reapStale, scanPaths, sevenZip } from '../../scripts/leak-scan/leak-scan.mjs'
 import { parseSource } from '../../scripts/leak-scan/build-rules.mjs'
 
 const REPO = path.join(import.meta.dirname, '..', '..')
@@ -522,7 +522,7 @@ describe('leak-scan: a scanned .dmg that will not detach', () => {
     const bare = src.split('\n').filter((l) => /['"]detach['"]/.test(l) && !/exec\('hdiutil', \['detach', mnt, '-force'\]\)/.test(l))
     expect(bare).toEqual([])
     // the walk detaches through scanPaths' `detach` (detachDmg by default), the reaper directly
-    expect(src).toContain('detach = detachDmg }')
+    expect(src).toMatch(/detach = detachDmg[,}]/)
     expect(src).toContain('const e = detach(mnt)')
     expect(src).toContain('mountedAt(mnt, dir) && detachDmg(mnt, { waits: [] })')
   })
@@ -551,6 +551,57 @@ describe('leak-scan: a scanned .dmg that will not detach', () => {
       } finally {
         if (mnt) { execFileSync('hdiutil', ['detach', mnt, '-force']); fs.rmSync(path.dirname(mnt), { recursive: true, force: true }) }
       }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// 2026-11-16: the release audit ran on macOS only to mount the Mac app's .dmg, and failed three
+// times in a day when no macOS runner took the job. Off macOS a .dmg is unpacked with 7-Zip.
+describe('leak-scan: a .dmg off macOS', () => {
+  it('finds 7-Zip on PATH, the current 7zz before p7zip\'s 7z, and nothing on an empty PATH', () => {
+    const dir = tmp()
+    try {
+      const bin = (n: string) => { const p = path.join(dir, n); fs.writeFileSync(p, '#!/bin/sh\n'); fs.chmodSync(p, 0o755) }
+      expect(sevenZip(dir)).toBeNull()
+      bin('7z')
+      expect(sevenZip(dir)).toBe('7z')
+      bin('7zz')
+      expect(sevenZip(dir)).toBe('7zz')
+      expect(sevenZip('')).toBeNull()
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('is a skip, never a silent pass, with no 7-Zip', () => {
+    const dir = tmp()
+    try {
+      const dmg = path.join(dir, 'x.dmg')
+      fs.writeFileSync(dmg, 'not really an image')
+      const skipped: { why: string }[] = []
+      const stats = scanPaths(rules(), [dmg], { platform: 'linux', unpacker: () => null, onSkip: (s: { why: string }) => skipped.push(s) })
+      expect(stats.skipped).toBe(1)
+      expect(skipped[0].why).toContain('7-Zip')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it.runIf(process.platform === 'darwin' && sevenZip() !== null)('reads the files inside, the way a mount does', () => {
+    const dir = tmp()
+    try {
+      const src = path.join(dir, 'src')
+      fs.mkdirSync(path.join(src, 'App.app', 'Contents'), { recursive: true })
+      fs.writeFileSync(path.join(src, 'App.app', 'Contents', 'notes.txt'), 'mail me at someone@acmecorp.example\n')
+      const dmg = path.join(dir, 'x.dmg')
+      execFileSync('hdiutil', ['create', '-quiet', '-format', 'UDZO', '-srcfolder', src, '-volname', 'x', dmg])
+      const hits: { file: string; label: string }[] = []
+      const stats = scanPaths(rules(), [dmg], { platform: 'linux', onHit: (h: { file: string; label: string }) => hits.push(h) })
+      expect(stats.skipped).toBe(0)
+      expect(hits.map((h) => h.label)).toEqual(['corp-email'])
+      expect(hits[0].file).toMatch(/x\.dmg!.*notes\.txt$/)
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }

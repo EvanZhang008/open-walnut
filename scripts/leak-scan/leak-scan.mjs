@@ -8,7 +8,8 @@
  *       [--redact | --count-only] [--exclude <name>]... [--skip-deps] [--skip-ok] [--min-files <n>] <path>...
  *
  * A path is a file or a directory; .tgz/.tar.gz/.tar/.zip/.gz files are opened and their
- * contents scanned (nested up to 3 levels), and a .dmg is mounted read-only on macOS.
+ * contents scanned (nested up to 3 levels), and a .dmg is mounted read-only on macOS or
+ * unpacked with 7-Zip elsewhere (`7zz`, or `7z`; the same files, byte for byte).
  * Binary files are scanned through their printable runs, as `strings` shows them. Every
  * file and directory name is scanned too. --skip-deps leaves out the dependencies a package
  * carries (a node_modules directory beside a package.json): a release's runtime holds the
@@ -81,6 +82,17 @@ function archiveKind(p) {
   return null
 }
 
+/** The 7-Zip command on PATH (`7zz`, the current one, before p7zip's `7z`), or null. */
+export function sevenZip(pathEnv = process.env.PATH ?? '') {
+  for (const name of ['7zz', '7z']) {
+    for (const d of pathEnv.split(path.delimiter)) {
+      if (!d) continue
+      try { fs.accessSync(path.join(d, name), fs.constants.X_OK); return name } catch {}
+    }
+  }
+  return null
+}
+
 function quietExec(cmd, args) {
   execFileSync(cmd, args, { stdio: ['ignore', 'ignore', 'pipe'], maxBuffer: 16 * 1024 * 1024 })
 }
@@ -149,7 +161,7 @@ function scanFile(rules, file, shown, report, seen) {
   return true
 }
 
-export function scanPaths(rules, inputs, { exclude = [], skipDeps = false, onHit, onSkip, onWarn, detach = detachDmg } = {}) {
+export function scanPaths(rules, inputs, { exclude = [], skipDeps = false, onHit, onSkip, onWarn, detach = detachDmg, platform = process.platform, unpacker = sevenZip } = {}) {
   const stats = { files: 0, bytes: 0, copies: 0, deps: 0, hits: 0, skipped: 0, labels: new Map() }
   const seen = new Set()
   const report = (shown, h, text) => {
@@ -191,8 +203,14 @@ export function scanPaths(rules, inputs, { exclude = [], skipDeps = false, onHit
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${TMP_PREFIX}${process.pid}-`))
     let stuck = false
     try {
-      if (kind === 'dmg') {
-        if (process.platform !== 'darwin') return skip(shown, 'a .dmg opens only on macOS')
+      if (kind === 'dmg' && platform !== 'darwin') {
+        // Off macOS a .dmg is unpacked, not mounted, so the scan needs no macOS runner (2026-11-16:
+        // the release audit failed three times in a day for want of one).
+        const unpack = unpacker()
+        if (!unpack) return skip(shown, 'a .dmg opens on macOS, or with 7-Zip (7zz or 7z), and neither is here')
+        quietExec(unpack, ['x', '-y', '-bso0', '-bsp0', `-o${dir}`, real])
+        walk(dir, `${shown}!`, null, depth + 1)
+      } else if (kind === 'dmg') {
         const mnt = path.join(dir, 'mnt')
         fs.mkdirSync(mnt)
         quietExec('hdiutil', ['attach', '-readonly', '-nobrowse', '-noautoopen', '-mountpoint', mnt, real])
