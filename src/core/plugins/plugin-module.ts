@@ -45,9 +45,9 @@ interface LoadOptions {
   cacheRoot?: string
   replacement?: boolean
   /**
-   * For a builtin: the host's own import of the plugin module. Evaluating the
-   * plugin's dist file instead gives it a private copy of every core module it
-   * imports (see src/integrations/host-modules.ts).
+   * For a builtin: the host's own import of the plugin module, so it shares the
+   * host's core modules (src/integrations/host-modules.ts). The build ships no
+   * file of its own for such a builtin, so none is looked for.
    */
   hostModule?: () => Promise<Record<string, any>>
 }

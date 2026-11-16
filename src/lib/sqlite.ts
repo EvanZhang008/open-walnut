@@ -59,7 +59,7 @@ const require = createRequire(import.meta.url)
 /**
  * The file a worker thread loads to get this module (a worker shares nothing
  * with the bundle that starts it). Unbundled, that is this file. Inside a tsup
- * bundle (dist/cli.js, dist/web/server.js, dist/integrations/<id>/index.js)
+ * bundle (dist/cli.js, dist/web/server.js)
  * it is the module's own build, dist/lib/sqlite.js, a few levels up; from a
  * plugin bundle in <package>/.plugin-cache, <package>/dist/lib/sqlite.js.
  * null when none is found. `here` is the file this code runs from (tests pass one).

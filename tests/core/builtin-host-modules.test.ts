@@ -8,9 +8,9 @@ import type { PluginManifest } from '../../src/core/integration-types.js'
 
 const INTEGRATIONS_DIR = path.join(import.meta.dirname, '..', '..', 'src', 'integrations')
 
-// Every built-in plugin directory the build turns into its own bundle must be
-// importable through the host instead. A directory missing here would load
-// `dist/integrations/<id>/index.js` at runtime and run a private copy of every
+// Every built-in plugin directory must be importable through the host. The build
+// ships no file of its own for one (tsup.config.ts), so a directory missing here
+// cannot load from a built package, and from source runs a private copy of every
 // core module it imports (its own task store cache and SQLite connection: the
 // ms-todo rescan storm of 2026-09-29).
 describe('built-in plugins load as host modules', () => {

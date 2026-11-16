@@ -1629,7 +1629,8 @@ async function prepareGeneration(
   const hostModule = builtin ? BUILTIN_HOST_MODULES[path.basename(dir)] : undefined;
   // A web-only builtin (no server entry) evaluates nothing, so it needs no row.
   if (builtin && !hostModule && manifest.server) {
-    log.warn('builtin plugin is not in the host module table; loading its own bundle (duplicate core modules)', {
+    // Built, it has no file of its own either (tsup.config.ts), so it fails to load; from source it runs a private copy of core.
+    log.error('builtin plugin is not in the host module table (src/integrations/host-modules.ts)', {
       pluginId: manifest.id, dir,
     });
   }

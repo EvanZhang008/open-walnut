@@ -13,15 +13,14 @@
  * `dist/integrations/` and the web-module route already serves any active plugin
  * with a `web` entry, regardless of where it was discovered
  * (src/core/integration-loader.ts, src/core/plugins/plugin-web-module.ts). All that
- * was missing is the artifact: `tsup` only picks up `src/integrations/<id>/index.ts`,
- * and the manifest copy loop in package.json copies only manifest.json plus a plugin's own
+ * was missing is the artifact: `tsup` builds no plugin at all (built-ins load through
+ * the host bundle, src/integrations/host-modules.ts), and the manifest copy loop in package.json copies only manifest.json plus a plugin's own
  * `skills/` dir (added when the calendar became a plugin and brought its skill along).
  *
  * Two traps this file encodes:
  *
- *  - A web-only plugin has no `index.ts`, so tsup creates no output directory for
- *    it. The copy MUST mkdir -p; the existing loop does not, and only works
- *    because tsup made the directory first.
+ *  - Nothing else creates a web-only plugin's output directory, so the copy MUST
+ *    mkdir -p.
  *  - Failing loudly matters more than shipping. A missing bundle is invisible at
  *    runtime — the plugin loads with no App and the Settings row simply is not
  *    there — so every step is verified here, where the build can still fail.
