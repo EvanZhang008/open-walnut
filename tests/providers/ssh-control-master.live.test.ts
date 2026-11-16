@@ -19,6 +19,7 @@ import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import { accountInfo } from '../../src/lib/account.js'
 import {
   cancelRecordedForwards, controlSocketPath, exitControlMaster, probeControlMaster, recordForward, startControlMaster,
 } from '../../src/providers/ssh-control-master.js'
@@ -70,7 +71,7 @@ describe.skipIf(!enabled)('a real OpenSSH ControlMaster', () => {
     await until('sshd to listen', () => listening(port))
     sshArgs = ['-F', '/dev/null', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null',
       '-o', 'LogLevel=ERROR', '-i', path.join(dir, 'client_key'), '-p', String(port)]
-    host = `${os.userInfo().username}@127.0.0.1`
+    host = `${accountInfo().username}@127.0.0.1`
     socket = controlSocketPath({ hostKey: 'loopback', target: `${host}:${port}`, home: dir })
   })
 

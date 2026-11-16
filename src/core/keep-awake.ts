@@ -30,7 +30,6 @@
 
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import os from 'node:os';
 import { accountInfo } from '../lib/account.js';
 import { log } from '../logging/index.js';
 
@@ -198,7 +197,7 @@ export function getSudoSetupCommand(): string {
 
 /** The account's name for the sudoers line; $USER's word only if the passwd lookup could not run. */
 function accountName(): string {
-  try { return accountInfo().username; } catch { return os.userInfo().username; }
+  try { return accountInfo().username; } catch { return process.env.USER ?? ''; }
 }
 
 /**

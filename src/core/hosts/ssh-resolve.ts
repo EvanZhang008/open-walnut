@@ -12,7 +12,7 @@
  * (never on the event loop), and the answer is kept for a few seconds per name.
  */
 import { execFile } from 'node:child_process'
-import os from 'node:os'
+import { accountInfo } from '../../lib/account.js'
 
 export interface SshResolved {
   name: string
@@ -73,5 +73,5 @@ export function resolveSshName(name: string, deps: { run?: SshGRun; now?: () => 
 }
 
 function safeLocalUser(): string {
-  try { return os.userInfo().username } catch { return process.env.USER ?? '' }
+  try { return accountInfo().username } catch { return process.env.USER ?? '' }
 }

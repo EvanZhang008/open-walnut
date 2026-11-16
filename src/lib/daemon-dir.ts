@@ -39,6 +39,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { accountInfo } from './account.js'
 import { DAEMON_SERVICE_UNIT_NAME, daemonServiceConfigFiles, readDaemonServiceDir, serviceConfigRunsAs } from '../providers/daemon-service-config.js'
 
 /** The shared default. Remote hosts call it PROD_REMOTE_DAEMON_DIR. */
@@ -76,7 +77,7 @@ export const realDaemonDirDeps: DaemonDirDeps = {
     try { process.kill(pid, 0); return true } catch { return false }
   },
   uid: () => (typeof process.getuid === 'function' ? process.getuid() : null),
-  userName: () => { try { return os.userInfo().username } catch { return null } },
+  userName: () => { try { return accountInfo().username } catch { return null } },
   platform: process.platform,
   bootTimeMs: () => Date.now() - os.uptime() * 1000,
 }

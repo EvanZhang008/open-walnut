@@ -28,6 +28,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
+import { accountInfo } from '../lib/account.js'
 import { WebSocket } from '#ws'
 import { log } from '../logging/index.js'
 import { HoldNews, holdLog } from './daemon-hold-news.js'
@@ -181,7 +182,7 @@ export function daemonServiceConfigPaths(
 
 function serviceAccount(): { name: string | null; uid: number | null } {
   let name: string | null = null
-  try { name = os.userInfo().username } catch { /* no passwd entry */ }
+  try { name = accountInfo().username } catch { /* no passwd entry */ }
   return { name, uid: typeof process.getuid === 'function' ? process.getuid() : null }
 }
 

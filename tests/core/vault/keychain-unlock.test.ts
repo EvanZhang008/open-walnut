@@ -9,6 +9,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { accountInfo } from '../../../src/lib/account.js'
 import { derivePasswordKey, randomBytes, toB64 } from '../../../src/core/vault/crypto.js'
 import { closeVault, isOpen, resetVaultForTest, setupVault } from '../../../src/core/vault/store.js'
 import { setVaultRunnerForTest, type VaultRunner } from '../../../src/core/vault/child-run.js'
@@ -65,8 +66,8 @@ describe('unlock from the keychain', () => {
     // The default length (48 h) has a clock.
     expect(r.session.expiresAt).toEqual(expect.any(String))
     // Presence first (no secret), then the one read (keychain-secret.ts).
-    expect(calls[0]).toEqual(['security', 'find-generic-password', '-s', KEYCHAIN_SERVICE, '-a', os.userInfo().username])
-    expect(calls[1]).toEqual(['security', 'find-generic-password', '-s', KEYCHAIN_SERVICE, '-a', os.userInfo().username, '-w'])
+    expect(calls[0]).toEqual(['security', 'find-generic-password', '-s', KEYCHAIN_SERVICE, '-a', accountInfo().username])
+    expect(calls[1]).toEqual(['security', 'find-generic-password', '-s', KEYCHAIN_SERVICE, '-a', accountInfo().username, '-w'])
     expect(JSON.stringify(r)).not.toContain(MASTER)
   })
 

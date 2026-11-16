@@ -16,7 +16,7 @@
  *   ("No such item", exit 44, is an answer, not a failure.)
  * tests/providers/claude-check-core.test.ts's class guard lists this file as the only reader.
  */
-import os from 'node:os'
+import { accountInfo } from '../../lib/account.js'
 import { runVaultHelper } from './child-run.js'
 import { IS_DEMO } from '../../constants.js'
 
@@ -33,7 +33,7 @@ const NOT_FOUND = 44
 const gaveUp = new Map<string, number>()
 
 export function keychainAccount(): string {
-  try { return os.userInfo().username } catch { return process.env.USER ?? '' }
+  try { return accountInfo().username } catch { return process.env.USER ?? '' }
 }
 
 /** Tests: forget the failed reads. */

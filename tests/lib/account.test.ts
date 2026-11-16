@@ -3,7 +3,7 @@
  * os.userInfo() answers $USER and $HOME, so a process started with a fake HOME
  * and no USER (a test, an ephemeral server) must still see the real account.
  */
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -83,5 +83,16 @@ console.log(JSON.stringify({ account: accountInfo(), envHome: os.homedir(), envU
     } finally {
       fs.rmSync(fake, { recursive: true, force: true })
     }
+  })
+})
+
+// 2026-11-16: on a Linux dev host's container (no USER set) a test rendered a hook for the user
+// "unknown" and the hook failed. bun's os.userInfo().username is $USER's word; every reader of the
+// account's name asks accountInfo() instead. Only the test above, showing what bun says, reads it.
+describe('every reader of the account name', () => {
+  it('asks accountInfo(), never os.userInfo().username', () => {
+    const out = execFileSync('git', ['grep', '-nE', String.raw`userInfo\(\)\.username|\busername\b[^}]*\}\s*=\s*(os\.)?userInfo\(\)`, '--', 'src', 'tests'], { cwd: ROOT, encoding: 'utf8' }).trim()
+    const sites = out.split('\n').filter(line => line && !line.startsWith('tests/lib/account.test.ts:'))
+    expect(sites, 'use accountInfo() from src/lib/account.ts: under bun os.userInfo().username is $USER, or "unknown"').toEqual([])
   })
 })
