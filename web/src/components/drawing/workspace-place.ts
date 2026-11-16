@@ -17,6 +17,9 @@ export interface WorkspaceViewKeys {
   fullScreenKey: string | null;
   /** Whether the file shown here is the one this scope's App page opens next. */
   keepsLastDocument: boolean;
+  /** The key of "assistant shown"; null: no assistant here (beside a session the session is the
+   *  assistant, and the composer's dialog and a note's preview are too small for a chat). */
+  assistantKey: string | null;
 }
 
 export function workspacePlace(input: { draftId?: string; sessionId?: string; hasClose?: boolean; preview?: boolean }): WorkspacePlace {
@@ -26,12 +29,12 @@ export function workspacePlace(input: { draftId?: string; sessionId?: string; ha
 }
 
 const KEYS: Record<WorkspacePlace, WorkspaceViewKeys> = {
-  app: { place: 'app', filesKey: 'filesShown', filesDefault: true, fullScreenKey: 'fullScreen', keepsLastDocument: true },
+  app: { place: 'app', filesKey: 'filesShown', filesDefault: true, fullScreenKey: 'fullScreen', keepsLastDocument: true, assistantKey: 'assistantShown' },
   // Beside a session the pane is narrow, so the list starts hidden there.
-  beside: { place: 'beside', filesKey: 'filesShownBeside', filesDefault: false, fullScreenKey: 'fullScreenBeside', keepsLastDocument: true },
-  composer: { place: 'composer', filesKey: 'filesShownInComposer', filesDefault: false, fullScreenKey: 'fullScreenInComposer', keepsLastDocument: false },
+  beside: { place: 'beside', filesKey: 'filesShownBeside', filesDefault: false, fullScreenKey: 'fullScreenBeside', keepsLastDocument: true, assistantKey: null },
+  composer: { place: 'composer', filesKey: 'filesShownInComposer', filesDefault: false, fullScreenKey: 'fullScreenInComposer', keepsLastDocument: false, assistantKey: null },
   // The note tree is already beside the preview, so its own list starts hidden.
-  preview: { place: 'preview', filesKey: 'filesShownInPreview', filesDefault: false, fullScreenKey: null, keepsLastDocument: false },
+  preview: { place: 'preview', filesKey: 'filesShownInPreview', filesDefault: false, fullScreenKey: null, keepsLastDocument: false, assistantKey: null },
 };
 
 export function workspaceViewKeys(place: WorkspacePlace): WorkspaceViewKeys {

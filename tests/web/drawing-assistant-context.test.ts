@@ -36,7 +36,7 @@ describe('the drawing assistant', () => {
 
   it('opens only in the App page, never beside a session, in the composer or in a preview', () => {
     const workspace = read('web/src/components/drawing/DrawingWorkspace.tsx')
-    expect(workspace).toMatch(/const canAssist = place === 'app' && !!currentPath;/)
+    expect(workspace).toMatch(/const canAssist = view\.assistantKey !== null && !!currentPath;/)
     expect(workspace).toMatch(/lazy\(\(\) => import\('\.\/DrawingAssistant'\)\)/)
   })
 

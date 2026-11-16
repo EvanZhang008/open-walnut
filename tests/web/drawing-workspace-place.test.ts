@@ -31,6 +31,12 @@ describe('drawing workspace places', () => {
     expect(files.filter((k) => full.includes(k))).toEqual([]);
   });
 
+  it('shows the assistant in the App page only, under a key of its own', () => {
+    expect(PLACES.filter((p) => workspaceViewKeys(p).assistantKey !== null)).toEqual(['app']);
+    const app = workspaceViewKeys('app');
+    expect([app.filesKey, app.fullScreenKey]).not.toContain(app.assistantKey);
+  });
+
   it('never starts the preview in full screen and never moves the App page from it', () => {
     const preview = workspaceViewKeys('preview');
     const app = workspaceViewKeys('app');

@@ -197,11 +197,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   // The file this place showed last (the App's page, a pane without a document of its own).
   const [lastDocument, setLastDocument] = usePageViewOf<string>('drawing', 'lastDocument', scopeId, '', isText);
   // Each place keeps its own choices (workspace-place.ts); a note's preview shares none with the App page.
-  const place = workspacePlace({ draftId, sessionId, hasClose: Boolean(onClose), preview });
-  const view = workspaceViewKeys(place);
-  // The assistant chat lives in the App's page only: beside a session the session itself is the
-  // assistant, and the composer's dialog and a note's preview are too small for a chat.
-  const [assistantKept, setAssistantShown] = usePageView<boolean>('drawing', 'assistantShown', false, isBoolean);
+  const view = workspaceViewKeys(workspacePlace({ draftId, sessionId, hasClose: Boolean(onClose), preview }));
+  // The assistant chat lives in the App's page only (workspace-place.ts `assistantKey`).
+  const [assistantKept, setAssistantShown] = usePageView<boolean>('drawing', view.assistantKey ?? 'assistantUnkept', false, isBoolean);
   const [filesShown, setFilesShown] = usePageView<boolean>('drawing', view.filesKey, view.filesDefault, isBoolean);
   const [keptFullScreen, setKeptFullScreen] = usePageView<boolean>('drawing', view.fullScreenKey ?? 'fullScreenUnkept', false, isBoolean);
   const [previewFullScreen, setPreviewFullScreen] = useState(false);
@@ -587,7 +585,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const currentPath = shownPath;
 
   const canRename = !!currentPath && state !== 'loading' && state !== 'missing' && state !== 'error';
-  const canAssist = place === 'app' && !!currentPath;
+  const canAssist = view.assistantKey !== null && !!currentPath;
   const assistantShown = canAssist && assistantKept;
 
   return (
