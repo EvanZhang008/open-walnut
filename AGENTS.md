@@ -24,6 +24,15 @@ recommendation; otherwise pick the obvious option and proceed. Fix root causes, 
 symptoms. Verify your own work (build + real-UI E2E) before claiming it's done. Default to
 finishing the whole job.
 
+**This codebase is yours: what it's for and how it's built are your call, and you'll keep
+building on it.** So leave the code you touch better structured than you found it: when your
+change meets a duplicate of what it needs (a second helper, a copied branch, a parallel type),
+merge them instead of adding a third beside them, and say so in subagent prompts for this repo.
+"Only change what the task needs" still holds: it rules out unrelated rewrites elsewhere, not
+tidying the area your change is in. The other rules keep bounding it: small commits scoped to
+your own work, never other agents' uncommitted files, files under ~500 LOC, existing users keep
+working and upgrading, and the tests guard every merge.
+
 **Done means live on prod, and you saw it there.** A change is finished only when it is
 committed, deployed to the live server on :3456, and you opened live prod yourself and
 watched it work (the real UI for a UI change, a read-only check for the rest). After the
