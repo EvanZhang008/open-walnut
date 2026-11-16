@@ -187,39 +187,8 @@ consoleExtrasV1Router.get('/integrations', async (_req: Request, res: Response, 
 // uiHints + masked current values) for a data-driven settings form.
 consoleExtrasV1Router.get('/integrations/settings', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const { registry } = await import('../../core/integration-registry.js')
-    const { getUnconfiguredPlugins } = await import('../../core/integration-loader.js')
-    const { getConfig } = await import('../../core/config-manager.js')
-    const config = await getConfig()
-    const pluginConfigs = (config.plugins ?? {}) as Record<string, Record<string, unknown>>
-
-    const { maskPluginFormValues: maskValues } = await import('../../core/config-secret-shape.js')
-
-    const loaded = registry.getAll()
-      .filter((p) => p.id !== 'local')
-      .map((p) => ({
-        id: p.id,
-        name: p.name,
-        description: p.description,
-        status: 'loaded' as const,
-        missing: [] as string[],
-        configSchema: p.configSchema ?? null,
-        uiHints: p.uiHints ?? null,
-        values: maskValues(pluginConfigs[p.id] ?? {}),
-      }))
-
-    const unconfigured = getUnconfiguredPlugins().map((p) => ({
-      id: p.id,
-      name: p.name,
-      description: p.description,
-      status: 'needs-config' as const,
-      missing: p.missing,
-      configSchema: p.configSchema ?? null,
-      uiHints: p.uiHints ?? null,
-      values: maskValues(pluginConfigs[p.id] ?? {}),
-    }))
-
-    res.json([...loaded, ...unconfigured])
+    const { pluginSettingsEntries } = await import('../../core/plugins/plugin-settings.js')
+    res.json((await pluginSettingsEntries()).map(({ plugin: _plugin, ...entry }) => entry))
   } catch (err) {
     next(err)
   }

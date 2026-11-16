@@ -130,6 +130,8 @@ describe('the source: config:changed carries a config only through the helper', 
       'src/commands/demo-routes.ts',
       'src/core/approvals/ask-me.ts',
       'src/core/config-broadcast.ts',
+      // An AI's plugin_settings_set: the one plugin section it wrote.
+      'src/core/plugins/plugin-settings.ts',
       'src/core/plugins/server-api.ts',
       'src/core/stt/auto-setup.ts',
       'src/web/routes/config.ts',

@@ -37,6 +37,12 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
+    id: 'plugin_ai_configure',
+    name: 'Configure plugins with AI',
+    description: 'A "Configure with AI" button on each plugin\'s page in Apps opens a chat beside it: say what to change and Walnut changes the plugin\'s settings, which the page shows at once. Any chat can configure a plugin the same way, with this switch on or off.',
+    default: false,
+  },
+  {
     id: 'drawing_app',
     name: 'Drawing app',
     description: 'An editable hand-drawn whiteboard saved in Notes, as an app and beside a session.',

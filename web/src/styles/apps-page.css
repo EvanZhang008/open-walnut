@@ -12,6 +12,26 @@
   --fg-muted: var(--settings-help-fg);
 }
 
+/* The page and, while "Configure with AI" is open, its chat beside it (PluginAskDrawer). */
+.apps-page-shell {
+  position: relative;
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+.apps-page-shell > .apps-page { flex: 1 1 auto; min-width: 0; }
+.apps-ask-panel {
+  flex: 0 0 min(440px, 42%);
+  height: 100%;
+  min-width: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+}
+/* Too narrow for two columns: the chat covers the page until it is closed. */
+@media (max-width: 760px) {
+  .apps-ask-panel { position: absolute; inset: 0; z-index: 2; border-left: 0; }
+}
+
 .apps-page-inner {
   max-width: 1040px;
   margin: 0 auto;

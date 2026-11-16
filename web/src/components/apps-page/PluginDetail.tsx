@@ -41,8 +41,12 @@ import { TaskProviderRulesGroup } from '@/components/settings/sections/TaskProvi
 import { PluginSettingsPanels, usePluginSettingsPanels } from './PluginSettingsPanels'
 import { CorePluginPanel, hasCorePluginPanel } from './core-plugin-panels'
 
-export function PluginDetail({ store, pluginId, config, onSave, onBack, onOpen, focusPanel }: {
+export function PluginDetail({ store, pluginId, config, onSave, onBack, onOpen, focusPanel, onConfigureWithAi, askOpen = false }: {
   store: PluginStore
+  /** Opens or closes the chat about this plugin's settings beside the page (absent: the experiment is off). */
+  onConfigureWithAi?: () => void
+  /** That chat is open now. */
+  askOpen?: boolean
   pluginId: string
   /** A panel an old Settings link named (`?panel=`): scrolled to once it shows. */
   focusPanel?: string | null
@@ -74,10 +78,12 @@ export function PluginDetail({ store, pluginId, config, onSave, onBack, onOpen, 
   }
   // Keyed by plugin: moving to another plugin's page (a part, a dependency) must never carry
   // this one's armed Remove along with it.
-  return <PluginDetailBody key={row.id} store={store} row={row} config={config} onSave={onSave} onBack={onBack} onOpen={onOpen} back={back} focusPanel={focusPanel} />
+  return <PluginDetailBody key={row.id} store={store} row={row} config={config} onSave={onSave} onBack={onBack} onOpen={onOpen} back={back} focusPanel={focusPanel} onConfigureWithAi={onConfigureWithAi} askOpen={askOpen} />
 }
 
-function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, focusPanel }: {
+function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, focusPanel, onConfigureWithAi, askOpen }: {
+  onConfigureWithAi?: () => void
+  askOpen: boolean
   store: PluginStore
   focusPanel?: string | null
   row: RegistryRow
@@ -313,6 +319,12 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
               </label>
             ) : null)}
             {apps[0] && <SettingsButton variant="primary" onClick={() => navigate(apps[0].path)} data-testid={`plugin-open-app-${row.id}`}>Open App</SettingsButton>}
+            {/* Only a plugin that runs, or waits for its settings, has settings an AI can change. */}
+            {row.installed && (on || needsSetup) && onConfigureWithAi && (
+              <SettingsButton onClick={onConfigureWithAi} aria-pressed={askOpen} data-testid={`plugin-configure-ai-${row.id}`} title={`Tell Walnut what to change in ${row.name}'s settings`}>
+                Configure with AI
+              </SettingsButton>
+            )}
             {failed && (
               <SettingsButton
                 data-testid={`plugin-try-again-${row.id}`}

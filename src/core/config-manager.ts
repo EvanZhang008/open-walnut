@@ -390,6 +390,19 @@ export async function patchPluginConfig(
   pluginId: string,
   patch: Record<string, unknown>,
 ): Promise<{ config: Record<string, unknown>; changed: boolean }> {
+  return editPluginConfig(pluginId, (current) => ({ ...current, ...patch }))
+}
+
+/**
+ * Read-modify-write one Plugin namespace under the config write lock: `edit` gets the stored
+ * section (`{}` when there is none) and returns the next one, or null to write nothing. It may
+ * run again when config.yaml changed between the read and the write (modifyConfigDoc), so it
+ * must be a pure function of what it is given.
+ */
+export async function editPluginConfig(
+  pluginId: string,
+  edit: (current: Record<string, unknown>) => Record<string, unknown> | null,
+): Promise<{ config: Record<string, unknown>; changed: boolean }> {
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(pluginId)) throw new Error(`Invalid plugin id: ${pluginId}`);
   return modifyConfigDoc<{ config: Record<string, unknown>; changed: boolean }>((existing) => {
     const plugins = existing.plugins && typeof existing.plugins === 'object' && !Array.isArray(existing.plugins)
@@ -397,7 +410,8 @@ export async function patchPluginConfig(
       : {};
     const had = plugins[pluginId] && typeof plugins[pluginId] === 'object';
     const current = had ? plugins[pluginId] : {};
-    const next = { ...current, ...patch };
+    const next = edit(structuredClone(current));
+    if (next === null) return { write: false, result: { config: current, changed: false } };
     const changed = !had || !isDeepStrictEqual(current, next);
     if (!changed) return { write: false, result: { config: next, changed } };
     plugins[pluginId] = next;

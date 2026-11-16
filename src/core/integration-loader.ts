@@ -35,6 +35,7 @@ import { remoteSyncIsolationReason } from './remote-sync-isolation.js';
 import { getVersion, isVersionKnown } from './version.js';
 import { createSubsystemLogger } from '../logging/index.js';
 import { getConfig, migrateStoredConfig, updatePluginConfig } from './config-manager.js';
+import { validateConfigValue } from './plugins/plugin-config-schema.js';
 import { isHostReplicaProgram } from './server-role.js';
 import { bulkMigrateTasks } from './task-manager.js';
 import { ensureExtIndexes } from './task-db.js';
@@ -1047,65 +1048,6 @@ export function validatePluginEntryPath(raw: unknown): { ok: true; rel: string }
   if (segments.length === 0) return { ok: false, error: 'must name a file' };
   if (segments.some((segment) => segment === '..')) return { ok: false, error: 'must not contain ".." segments' };
   return { ok: true, rel: segments.join('/') };
-}
-
-// ── Basic JSON Schema validation (type-only, no ajv needed) ──
-
-function validateConfigValue(value: unknown, schema: Record<string, unknown>, fieldPath: string): string[] {
-  const errors: string[] = [];
-  const schemaType = schema.type as string | undefined;
-
-  if (schemaType) {
-    const actualType = Array.isArray(value) ? 'array' : typeof value;
-    if (schemaType === 'integer') {
-      if (typeof value !== 'number' || !Number.isInteger(value)) {
-        errors.push(`${fieldPath}: expected integer, got ${typeof value}`);
-      }
-    } else if (actualType !== schemaType) {
-      errors.push(`${fieldPath}: expected ${schemaType}, got ${actualType}`);
-    }
-  }
-
-  // Validate object properties
-  if (schemaType === 'object' && typeof value === 'object' && value !== null) {
-    const properties = schema.properties as Record<string, Record<string, unknown>> | undefined;
-    const required = schema.required as string[] | undefined;
-
-    if (required) {
-      for (const key of required) {
-        if (!(key in (value as Record<string, unknown>))) {
-          errors.push(`${fieldPath}.${key}: required field missing`);
-        }
-      }
-    }
-
-    if (properties) {
-      for (const [key, propSchema] of Object.entries(properties)) {
-        const propValue = (value as Record<string, unknown>)[key];
-        if (propValue !== undefined) {
-          errors.push(...validateConfigValue(propValue, propSchema, `${fieldPath}.${key}`));
-        }
-      }
-    }
-  }
-
-  // Validate array items
-  if (schemaType === 'array' && Array.isArray(value)) {
-    const itemSchema = schema.items as Record<string, unknown> | undefined;
-    if (itemSchema) {
-      for (let i = 0; i < value.length; i++) {
-        errors.push(...validateConfigValue(value[i], itemSchema, `${fieldPath}[${i}]`));
-      }
-    }
-  }
-
-  // Enum validation
-  const enumValues = schema.enum as unknown[] | undefined;
-  if (enumValues && !enumValues.includes(value)) {
-    errors.push(`${fieldPath}: value must be one of [${enumValues.join(', ')}]`);
-  }
-
-  return errors;
 }
 
 /**

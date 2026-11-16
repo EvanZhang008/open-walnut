@@ -2683,6 +2683,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1', contentV1Router)
   app.use('/api/v1', orgV1Router)
   app.use('/api/v1', (await import('./routes/health-monitor-v1.js')).healthMonitorV1Router)
+  // Every plugin's settings for an AI: the plugin_settings ops.
+  app.use('/api/v1', (await import('./routes/plugin-settings-v1.js')).pluginSettingsV1Router)
   // Personal AI conversation management (additive, Wave 1): rename/delete/stop/
   // answer — A-class (the replica runs its own Personal AI).
   app.use('/api/v1', personalAiV1Router)

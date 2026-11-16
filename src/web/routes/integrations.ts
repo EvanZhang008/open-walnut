@@ -9,10 +9,8 @@
 
 import { Router } from 'express';
 import { registry } from '../../core/integration-registry.js';
-import { getUnconfiguredPlugins } from '../../core/integration-loader.js';
-import { getConfig } from '../../core/config-manager.js';
 import { integrationList } from '../../core/plugins/integration-list.js';
-import { maskPluginFormValues } from '../../core/config-secret-shape.js';
+import { pluginSettingsEntries } from '../../core/plugins/plugin-settings.js';
 import { getSyncHealth } from '../../core/plugin-sync-health.js';
 import type { RegisteredPlugin } from '../../core/integration-types.js';
 import { log } from '../../logging/index.js';
@@ -49,49 +47,23 @@ integrationsRouter.get('/task-fields', (_req, res) => {
 // a save that carries the mask back keeps the stored value (PUT /api/config).
 
 integrationsRouter.get('/settings', async (_req, res) => {
-  const config = await getConfig();
-  const pluginConfigs = (config.plugins ?? {}) as Record<string, Record<string, unknown>>;
-
   // List entries show their tails here: this route's callers read the same tails in GET /api/config.
-  const maskValues = (values: Record<string, unknown>) => maskPluginFormValues(values, { listTails: true });
-
-  const loaded = registry.getAll()
-    .filter(p => p.id !== 'local')
-    .map(p => ({
-      id: p.id,
-      name: p.name,
-      description: p.description,
-      status: 'loaded' as const,
-      missing: [] as string[],
-      configSchema: p.configSchema ?? null,
-      uiHints: p.uiHints ?? null,
-      values: maskValues(pluginConfigs[p.id] ?? {}),
-      // What the plugin actually contributes. A deep-capability plugin
-      // (ui/tools/skills, no sync) has no display badge and no config schema, so
-      // without this it would render as an empty card that looks broken.
-      capabilities: p.capabilities ?? ['sync'],
-      tools: p.tools?.map(t => t.name) ?? [],
-      hasApp: !!p.uiApp,
-      hasSkills: !!p.hasSkills,
-      // A conventional skills/ dir and a runtime registry.skill() registration are
-      // different claims — a plugin can contribute skills with hasSkills false.
-      registeredSkills: !!p.registeredSkills,
-      // Has an account link the Settings row can show (GET …/:id/connection).
-      connection: !!p.connection,
-    }));
-
-  const unconfigured = getUnconfiguredPlugins().map(p => ({
-    id: p.id,
-    name: p.name,
-    description: p.description,
-    status: 'needs-config' as const,
-    missing: p.missing,
-    configSchema: p.configSchema ?? null,
-    uiHints: p.uiHints ?? null,
-    values: maskValues(pluginConfigs[p.id] ?? {}),
-  }));
-
-  res.json([...loaded, ...unconfigured]);
+  const entries = await pluginSettingsEntries({ listTails: true });
+  res.json(entries.map(({ plugin: p, ...entry }) => (p ? {
+    ...entry,
+    // What the plugin actually contributes. A deep-capability plugin
+    // (ui/tools/skills, no sync) has no display badge and no config schema, so
+    // without this it would render as an empty card that looks broken.
+    capabilities: p.capabilities ?? ['sync'],
+    tools: p.tools?.map(t => t.name) ?? [],
+    hasApp: !!p.uiApp,
+    hasSkills: !!p.hasSkills,
+    // A conventional skills/ dir and a runtime registry.skill() registration are
+    // different claims — a plugin can contribute skills with hasSkills false.
+    registeredSkills: !!p.registeredSkills,
+    // Has an account link the Settings row can show (GET …/:id/connection).
+    connection: !!p.connection,
+  } : entry)));
 });
 
 // ── Account link (PluginConnection) ──────────────────────────────────────────

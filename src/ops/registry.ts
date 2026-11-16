@@ -194,6 +194,11 @@ export function countOwnerOps(owner: string): number {
   return ops.ownedBy(owner).length
 }
 
+/** The names of the ops one owner (a plugin id) holds now. */
+export function opNamesOwnedBy(owner: string): string[] {
+  return ops.ownedBy(owner).map((entry) => entry.key)
+}
+
 /** By default list only current ops; old names still run through getOp. */
 export function listOps(options: { includeDeprecated?: boolean } = {}): WalnutOp[] {
   return ops.values().filter((op) => options.includeDeprecated || !op.deprecated)

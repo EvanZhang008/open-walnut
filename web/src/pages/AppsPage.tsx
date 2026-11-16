@@ -28,6 +28,9 @@ import { usePageView } from '@/utils/view-memory'
 import { PluginStoreGrid, type PluginStoreSummary } from '@/components/apps-page/PluginStoreGrid'
 import { PluginDetail } from '@/components/apps-page/PluginDetail'
 import { usePluginStore } from '@/components/apps-page/usePluginStore'
+import { PluginAskDrawer } from '@/components/apps-page/PluginAskDrawer'
+import { useExperimental } from '@/hooks/useExperimental'
+import { useLeanCallback } from '@/hooks/useLeanCallback'
 import { SettingsLoadingRow } from '@/components/settings/SettingsSection'
 import {
   SettingsPaneProvider,
@@ -100,6 +103,19 @@ function AppsPageBody() {
     setParams({ [key]: value }, { state: { fromApps: true } })
   }, [detailOpen, setParams])
   const openPlugin = useCallback((id: string) => openDetail('plugin', id), [openDetail])
+  // "Configure with AI" (experiment plugin_ai_configure): a chat about the open plugin beside its
+  // page, kept in the address (`&ask=1`) so a reload or a link opens it again.
+  const aiConfigure = useExperimental('plugin_ai_configure')
+  const askRow = aiConfigure && pluginId && params.get('ask') === '1' ? store.rows.find((row) => row.id === pluginId && row.installed) : undefined
+  const setAsk = useLeanCallback((open: boolean) => {
+    if (!pluginId) return
+    // Only `ask` changes: the other params (`panel`) and the entry's own state (`fromApps`) stay, so
+    // Back still returns to the grid.
+    const next = new URLSearchParams(params)
+    if (open) next.set('ask', '1')
+    else next.delete('ask')
+    setParams(next, { replace: true, state: window.history.state?.usr })
+  }, [pluginId, params, setParams])
   const openApp = useCallback((key: string) => openDetail('app', key), [openDetail])
   // Back goes back when the grid is what came before (so the browser's Back agrees), and
   // to the grid otherwise (a deep link, a reload).
@@ -133,12 +149,13 @@ function AppsPageBody() {
   ]
 
   return (
+    <div className="apps-page-shell" data-ask-open={askRow ? 'true' : undefined}>
     <div className="apps-page" data-testid="apps-page" ref={scrollRef}>
       {detailOpen && (
         <div className="apps-page-inner apps-page-inner--detail">
           <div className="apps-detail-saved"><SettingsSavedIndicator placement="header" /></div>
           {pluginId && config ? (
-            <PluginDetail store={store} pluginId={pluginId} config={config} onSave={paneSave} onBack={closeDetail} onOpen={openPlugin} focusPanel={params.get('panel')} />
+            <PluginDetail store={store} pluginId={pluginId} config={config} onSave={paneSave} onBack={closeDetail} onOpen={openPlugin} focusPanel={params.get('panel')} onConfigureWithAi={aiConfigure ? () => setAsk(!askRow) : undefined} askOpen={!!askRow} />
           ) : pluginId ? (
             <SettingsLoadingRow>Loading plugin...</SettingsLoadingRow>
           ) : (
@@ -214,6 +231,12 @@ function AppsPageBody() {
           </section>
         )}
       </div>
+    </div>
+    {askRow && (
+      <aside className="apps-ask-panel" data-testid="plugin-ask-panel" aria-label={`Configure ${askRow.name} with AI`}>
+        <PluginAskDrawer plugin={{ id: askRow.id, name: askRow.name, description: askRow.description }} onClose={() => setAsk(false)} />
+      </aside>
+    )}
     </div>
   )
 }

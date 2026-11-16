@@ -16,41 +16,10 @@
  */
 
 import { holdsEditedMask, isSecretKey } from '../../../../src/core/config-secret-shape';
+import { fieldBounds, fieldKindFor, type PluginFieldSchema } from '../../../../src/core/plugins/plugin-config-schema';
 
-export interface PluginFieldSchema {
-  type?: string;
-  default?: unknown;
-  items?: { type?: string };
-  /** JSON Schema bounds for a number or integer. The input carries them and a save clamps to them. */
-  minimum?: number;
-  maximum?: number;
-  multipleOf?: number;
-}
-
-/** The `min` / `max` / `step` a numeric input gets. Absent bounds stay absent. */
-export function fieldBounds(schema: PluginFieldSchema | undefined): { min?: number; max?: number; step?: number } {
-  const kind = fieldKindFor(schema);
-  if (kind !== 'number' && kind !== 'integer') return {};
-  const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
-  const min = num(schema?.minimum);
-  const max = num(schema?.maximum);
-  const step = num(schema?.multipleOf) ?? (kind === 'integer' ? 1 : undefined);
-  return { ...(min !== undefined ? { min } : {}), ...(max !== undefined ? { max } : {}), ...(step !== undefined ? { step } : {}) };
-}
-
-export type PluginFieldKind = 'boolean' | 'text' | 'number' | 'integer' | 'list';
-
-/** The control for this schema, or `null` for "config.yaml only". */
-export function fieldKindFor(schema: PluginFieldSchema | undefined): PluginFieldKind | null {
-  switch (schema?.type) {
-    case 'boolean': return 'boolean';
-    case 'string': return 'text';
-    case 'number': return 'number';
-    case 'integer': return 'integer';
-    case 'array': return schema.items?.type === 'string' ? 'list' : null;
-    default: return null;
-  }
-}
+// One reading of a field's schema for the form, the loader and the AI's plugin_settings_set.
+export { fieldBounds, fieldKindFor, type PluginFieldKind, type PluginFieldSchema } from '../../../../src/core/plugins/plugin-config-schema';
 
 /**
  * What the textarea shows. The stored value is an array (it came off the wire) until the user types,

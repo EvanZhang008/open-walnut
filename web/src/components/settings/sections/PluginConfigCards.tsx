@@ -29,6 +29,7 @@ import {
   type PluginFieldSchema,
 } from '../plugin-config-fields';
 import { PLUGINS_CHANGED_EVENT, emitPluginsChanged } from '@/utils/plugin-events';
+import { useEvent } from '@/hooks/useWebSocket';
 import { draftKey, readDraft, readDraftJson, writeDraftJson } from '@/utils/drafts';
 import { DRAFT_FLUSH_EVENT, noteDraftWrite, type DraftFlushDetail } from '@/utils/unsaved-work';
 
@@ -154,10 +155,15 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
   // (a calendar hidden from Calendar Accounts) would put its old value back.
   const touched = useRef<Record<string, Set<string>>>({});
 
+  // Only the newest read paints: reads now run on every config:changed, and an older one landing late
+  // would put back values that have changed since.
+  const readSeq = useRef(0);
   const refresh = useCallback(() => {
+    const seq = ++readSeq.current;
     fetch('/api/integrations/settings')
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data: PluginSettingsMeta[]) => {
+        if (seq !== readSeq.current) return;
         const wanted = scope ? new Set(scope.split(',')) : null;
         const visible = data.filter(p =>
           !excludeIds.includes(p.id)
@@ -171,7 +177,15 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
         // in the draft store (typed before a reload) come back as edits.
         const kept = Object.fromEntries(visible.map(p => [p.id, readDraftJson<Record<string, unknown>>(pluginDraftKey(p.id)) ?? {}]));
         for (const [id, fields] of Object.entries(kept)) for (const k of Object.keys(fields)) (touched.current[id] ??= new Set()).add(k);
-        setDrafts(d => Object.fromEntries(visible.map(p => [p.id, { ...p.values, ...kept[p.id], ...d[p.id] }])));
+        // A field the user has not touched shows what is stored now, so a change made elsewhere (an AI's
+        // plugin_settings_set, another window) appears at once; a touched one keeps what was typed.
+        setDrafts(d => Object.fromEntries(visible.map(p => {
+          const edits = touched.current[p.id] ?? new Set<string>();
+          const typed = Object.fromEntries(Object.entries(d[p.id] ?? {}).filter(([k]) => edits.has(k)));
+          // Never the old draft's other keys: one the server no longer holds (an AI's unset) would
+          // otherwise ride the next Save back into config.yaml.
+          return [p.id, { ...p.values, ...kept[p.id], ...typed }];
+        })));
       })
       // A failed refetch keeps the fields already shown; only a first load can fail.
       .catch(() => { setPhase((current) => (current === 'ready' ? current : 'failed')); });
@@ -185,6 +199,9 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
     window.addEventListener(PLUGINS_CHANGED_EVENT, refresh);
     return () => window.removeEventListener(PLUGINS_CHANGED_EVENT, refresh);
   }, [refresh]);
+
+  // Settings changed outside this form (an AI, another window, the plugin itself): show them.
+  useEvent('config:changed', refresh);
 
   const setField = (pluginId: string, key: string, value: unknown) => {
     (touched.current[pluginId] ??= new Set()).add(key);
