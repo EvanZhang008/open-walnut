@@ -9,12 +9,66 @@
  * the way a pin on Home works with a panel count of one (panelBudget grants the free slot
  * beside the pins). Slot ids are the `?open=` strings, `task:<id>` / `session:<id>`. The
  * strip is a layout record field (`orgColumns`), so the pins survive a restart.
+ *
+ * Each pin belongs to the node it was locked under and stands only beside that node (2026-11-16,
+ * the user: "the page I lock shows on every VP ... I locked it under this VP, it should only show
+ * under this VP"): the record keeps every node's pins in one list, each slot naming its `node`.
  */
 import type { Task } from '@open-walnut/core';
 import { removeSessionColumn, replaceSessionColumn, toggleLockSlot, type SessionSlot } from '@/pages/sessionColumns';
 import { isPlaceholderColumnId } from '@/utils/column-ids';
 import { shownText, storedView, viewKey, writeView } from '@/utils/view-memory';
 import { isStringArray } from '@/hooks/usePersistentState';
+
+/** A pin of the Org page: a locked slot and the node (`ChannelRow.key`) it was locked under. */
+export interface OrgPin extends SessionSlot { node?: string }
+
+/** The pins that stand beside `node`, in their order. */
+export function pinsOfNode(pins: readonly OrgPin[], node: string): OrgPin[] {
+  return pins.filter((p) => p.node === node);
+}
+
+/**
+ * Every pin with `node`'s replaced by `next`, where `node`'s stood (at the end when it had none): the
+ * other nodes' stay as they are, so switching between nodes rewrites nothing.
+ */
+export function setNodePins(pins: readonly OrgPin[], node: string, next: readonly SessionSlot[]): OrgPin[] {
+  const mine = next.map((s) => ({ id: s.id, locked: s.locked, node }));
+  const rest = pins.filter((p) => p.node !== node);
+  // Every pin before the node's first is another node's, so its index in `rest` is the same.
+  const at = pins.findIndex((p) => p.node === node);
+  const cut = at === -1 ? rest.length : at;
+  return [...rest.slice(0, cut), ...mine, ...rest.slice(cut)];
+}
+
+/**
+ * Pins whose node is unknown go to the node they belong to: one saved before pins had a node, or
+ * locked under a node the page no longer has (a project renamed, a VP or a router removed), which
+ * nothing could show or unlock. Each goes to the row that holds its task (`ownerOf`, the row the
+ * list hangs its lock under), else `fallback` (the node selected now). One pin per node and id: two
+ * windows, or an older build, can leave the same panel saved twice. Returns `pins` itself when
+ * nothing changes.
+ */
+export function adoptLegacyPins(
+  pins: readonly OrgPin[],
+  ownerOf: (id: string) => string | undefined,
+  fallback: string,
+  known: (node: string) => boolean = () => true,
+): readonly OrgPin[] {
+  const seen = new Set<string>();
+  let changed = false;
+  const out: OrgPin[] = [];
+  for (const p of pins) {
+    const keep = !!p.node && known(p.node);
+    const node = keep ? p.node! : ownerOf(p.id) ?? fallback;
+    const key = `${node}\u0000${p.id}`;
+    if (!keep) changed = true;
+    if (seen.has(key)) { changed = true; continue; }
+    seen.add(key);
+    out.push(keep ? p : { ...p, node });
+  }
+  return changed ? out : pins;
+}
 
 /** Two slot ids that show the same session (`task:<id>` of a task whose session is `session:<sid>`). */
 export type SameSession = (a: string, b: string) => boolean;

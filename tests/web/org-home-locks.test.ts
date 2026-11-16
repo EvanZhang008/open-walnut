@@ -78,7 +78,8 @@ describe('the panels Home locked, beside their node', () => {
     // Unlocked or closed on the Org page, one leaves it, and its kept row with it.
     expect(page).toMatch(/if \(homeIdsOf\(id\)\.length && strip\.some\(\(c\) => c\.id === id && c\.locked\)\) \{ closePanel\(id\); return; \}/)
     expect(page).toMatch(/lockedTaskIds\(\[\.\.\.pins, \.\.\.homeLocksHere\]/)
-    expect(page).toMatch(/orgStripView\(\[\.\.\.fromHome, \.\.\.pins\.filter/)
-    expect(page).toMatch(/writeStrip\(strip\.filter\(\(s\) => !fromHome\.some/)
+    // The strip holds the node's own pins (org-pins-per-node.test.ts) beside Home's.
+    expect(page).toMatch(/orgStripView\(\[\.\.\.fromHome, \.\.\.shownPins\.filter/)
+    expect(page).toMatch(/const own = strip\.filter\(\(s\) => !fromHome\.some/)
   })
 })

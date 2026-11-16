@@ -35,6 +35,12 @@ import { isPlaceholderColumnId, isWorkspaceWaitColumnId } from './column-ids';
 export interface LayoutSlot {
   id: string;
   locked: boolean;
+  /**
+   * The Org node (`ChannelRow.key`) a panel beside the Org page was locked under: it shows only
+   * there (2026-11-16, the user: "I locked it under this VP, it should only show under this VP").
+   * Home's columns never carry one; an Org pin saved before has none (org-side-columns adoptLegacyPins).
+   */
+  node?: string;
 }
 
 export const LAYOUT_PREFIX = 'open-walnut-layout:';
@@ -165,7 +171,8 @@ export function parseSlots(value: unknown): LayoutSlot[] {
   for (const entry of value) {
     if (typeof entry === 'string' && entry) out.push({ id: entry, locked: false });
     else if (entry && typeof entry === 'object' && typeof (entry as LayoutSlot).id === 'string' && (entry as LayoutSlot).id) {
-      out.push({ id: (entry as LayoutSlot).id, locked: !!(entry as LayoutSlot).locked });
+      const { id, locked, node } = entry as LayoutSlot;
+      out.push(typeof node === 'string' && node ? { id, locked: !!locked, node } : { id, locked: !!locked });
     }
   }
   return out;
@@ -180,7 +187,8 @@ export function readColumns(field: LayoutField, stores: LayoutStores = {}): Layo
  * left out, except a launch waiting for its workspace, which is keyed by its task.
  */
 export function writeColumns(field: LayoutField, cols: readonly LayoutSlot[], store: Store | null = local()): void {
-  const persistable = cols.filter((s) => !isPlaceholderColumnId(s.id) || isWorkspaceWaitColumnId(s.id)).map((s) => ({ id: s.id, locked: s.locked }));
+  const persistable = cols.filter((s) => !isPlaceholderColumnId(s.id) || isWorkspaceWaitColumnId(s.id))
+    .map((s) => (s.node ? { id: s.id, locked: s.locked, node: s.node } : { id: s.id, locked: s.locked }));
   writeLayoutField(field, persistable.length > 0 ? persistable : null, store);
 }
 
@@ -195,6 +203,9 @@ export function dropSavedColumn(field: LayoutField, id: string, store: Store | n
   if (cols.some((c) => c.id === id)) writeColumns(field, cols.filter((c) => c.id !== id), store);
 }
 
+/** One slot of a strip: its id under its Org node (one task can be locked beside two nodes). */
+const slotKey = (s: LayoutSlot): string => `${s.node ?? ''}\u0000${s.id}`;
+
 /**
  * A strip writer for one window. It writes the window's strip, plus every pin another window
  * saved that this one does not show and never let go of: with two windows open (the Mac app
@@ -205,13 +216,13 @@ export function createStripWriter(field: LayoutField): (cols: readonly LayoutSlo
   let prevLocked = new Set<string>();
   const released = new Set<string>();
   return (cols, store = local()) => {
-    const locked = new Set(cols.filter((c) => c.locked).map((c) => c.id));
-    for (const id of prevLocked) if (!locked.has(id)) released.add(id);
-    for (const id of locked) released.delete(id);
+    const locked = new Set(cols.filter((c) => c.locked).map(slotKey));
+    for (const k of prevLocked) if (!locked.has(k)) released.add(k);
+    for (const k of locked) released.delete(k);
     prevLocked = locked;
-    const shown = new Set(cols.map((c) => c.id));
+    const shown = new Set(cols.map(slotKey));
     const kept = readColumns(field, { local: store, session: null })
-      .filter((s) => s.locked && !shown.has(s.id) && !released.has(s.id));
+      .filter((s) => s.locked && !shown.has(slotKey(s)) && !released.has(slotKey(s)));
     writeColumns(field, kept.length > 0 ? [...cols, ...kept] : cols, store);
   };
 }

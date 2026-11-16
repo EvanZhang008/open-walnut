@@ -109,6 +109,12 @@ export function lockedTaskIds(slots: readonly LayoutSlot[], tasks: readonly Task
   return slotTaskIds(slots.filter((s) => s.locked), tasks);
 }
 
+/** The task one panel of a strip shows (`task:<id>`, `session:<id>` or a bare session id), if known. */
+export function slotTask(id: string, tasks: readonly Task[]): Task | undefined {
+  const taskId = slotTaskIds([{ id, locked: false }], tasks)[0];
+  return taskId ? tasks.find((t) => t.id === taskId) : undefined;
+}
+
 /** The tasks a strip's panels show, locked or not, in strip order (the same id rules as lockedTaskIds). */
 export function slotTaskIds(slots: readonly LayoutSlot[], tasks: readonly Task[]): string[] {
   if (!slots.length) return [];
@@ -147,11 +153,19 @@ export interface KeptTask { task: Task; watched: boolean; locked: boolean }
 /**
  * The tasks hung under each row of the Org list (2026-11-02, the user: "if a taks is lock also show here,
  * show icon of watch or lock"), each under one row: the VP whose work holds its project (its own or one
- * it leads), else the CEO. The watched ones first in the order they were watched, then the ones only
+ * it leads), else the CEO; a task only locked hangs under the node it was locked beside, where its panel
+ * stands (2026-11-16, pins kept per node). The watched ones first in the order they were watched, then the ones only
  * locked, in their lock order. A lead's or Main's own task is its row already, so a lock alone never
  * hangs it under one.
  */
-export function keptByRow(main: ChannelRow | null, rows: readonly ChannelRow[], tasks: readonly Task[], locked: readonly string[] = []): Map<string, KeptTask[]> {
+export function keptByRow(
+  main: ChannelRow | null,
+  rows: readonly ChannelRow[],
+  tasks: readonly Task[],
+  locked: readonly string[] = [],
+  /** The row a task is locked beside on the Org page (its pin's node): a task only locked hangs there. */
+  lockedAt: ReadonlyMap<string, string> = new Map(),
+): Map<string, KeptTask[]> {
   const rowKeyOf = taskRowKey(main, rows);
   const lockedSet = new Set(locked);
   const byId = locked.length ? new Map(tasks.map((t) => [t.id, t])) : new Map<string, Task>();
@@ -159,8 +173,10 @@ export function keptByRow(main: ChannelRow | null, rows: readonly ChannelRow[], 
   const lockedOnly = locked.map((id) => byId.get(id))
     .filter((t): t is Task => !!t && !isWatched(t) && !t.plugin_only && !t.org_role);
   const out = new Map<string, KeptTask[]>();
+  const rowKeys = new Set([main?.key, ...rows.map((r) => r.key)]);
   for (const t of [...watched, ...lockedOnly]) {
-    const key = rowKeyOf(t);
+    const at = isWatched(t) ? undefined : lockedAt.get(t.id);
+    const key = at && rowKeys.has(at) ? at : rowKeyOf(t);
     if (key) out.set(key, [...(out.get(key) ?? []), { task: t, watched: isWatched(t), locked: lockedSet.has(t.id) }]);
   }
   return out;

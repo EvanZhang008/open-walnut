@@ -26,7 +26,7 @@ import path from 'node:path'
 import { expect, test, type APIRequestContext, type Browser, type BrowserContext, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { homeColumns, loadHome, lockLeftmostPanel, seedColumns, setPanelMode } from './draft-helpers'
-import { openBeside } from './org-view-helpers'
+import { openBeside, openTaskFromRail } from './org-view-helpers'
 import { holdPanelCountLock } from './panel-count-lock'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -35,8 +35,11 @@ const SIDS = ['pw-normal-session', 'pw-plan-session-completed'] as const
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
 const PROJECT = `Layout pins ${STAMP}`
 const rowKey = `project:${PROJECT.toLowerCase()}`
+// A second VP, for the pins kept per node.
+const PROJECT_B = `Layout pins b ${STAMP}`
+const rowKeyB = `project:${PROJECT_B.toLowerCase()}`
 const made: string[] = []
-const ids = { alpha: '', alphaSid: '', beta: '' }
+const ids = { alpha: '', alphaSid: '', beta: '', gamma: '' }
 
 test.describe.configure({ mode: 'serial' })
 // The panel count is one value the whole fixture shares: hold it while this file runs.
@@ -231,15 +234,20 @@ test.describe('Org', () => {
   test.beforeAll(async ({ request }) => {
     const { fixtureRoot } = await discoverBrowserFixture(TEST_PORT)
     const cwd = `${fixtureRoot}/projects/walnut`
-    const create = async (title: string) => {
-      const { task } = await post<{ task: { id: string } }>(request, '/api/tasks', { title, project: PROJECT, source: 'local' })
+    const create = async (title: string, project = PROJECT) => {
+      const { task } = await post<{ task: { id: string } }>(request, '/api/tasks', { title, project, source: 'local' })
       made.push(task.id)
       return task.id
     }
     ids.alpha = await create(`Pin alpha ${STAMP}`)
     ids.beta = await create(`Pin beta ${STAMP}`)
-    const contact = await post<{ task: { id: string } }>(request, '/api/v1/org/contact', { to: PROJECT })
-    made.push(contact.task.id)
+    ids.gamma = await create(`Pin gamma ${STAMP}`, PROJECT_B)
+    // Two tasks, as the first project: a project of one task has that task as its contact, no VP.
+    await create(`Pin delta ${STAMP}`, PROJECT_B)
+    for (const to of [PROJECT, PROJECT_B]) {
+      const contact = await post<{ task: { id: string } }>(request, '/api/v1/org/contact', { to })
+      made.push(contact.task.id)
+    }
     ids.alphaSid = (await post<{ sessionId: string }>(request, '/api/sessions/quick-start', { cwd, message: `Pin alpha ready ${STAMP}`, taskId: ids.alpha })).sessionId
   })
 
@@ -247,8 +255,11 @@ test.describe('Org', () => {
   async function openLead(page: Page): Promise<void> {
     await loadHome(page)
     await page.getByTestId('sidebar-org').click()
-    await page.locator(`[data-testid="org-channel"][data-key="${rowKey}"]`).click()
-    await expect(page.getByTestId('org-detail-title')).toHaveText(`${PROJECT} VP`)
+    await pickNode(page, rowKey, PROJECT)
+  }
+  async function pickNode(page: Page, key: string, project: string): Promise<void> {
+    await page.locator(`[data-testid="org-channel"][data-key="${key}"]`).click()
+    await expect(page.getByTestId('org-detail-title')).toHaveText(`${project} VP`)
   }
   /** Open a task beside the page (a task reference opens on Home now; the page's own place still
    *  opens it here) and wait for the URL to hold it. */
@@ -285,7 +296,7 @@ test.describe('Org', () => {
     await openFromTasks(page, ids.beta)
     await expect.poll(() => stripTargets(page)).toEqual(expected)
     await expect.poll(() => savedField(page.request, 'open-walnut-layout:org-columns'), { timeout: 15_000 })
-      .toContain(`{"id":"task:${ids.alpha}","locked":true}`)
+      .toContain(`{"id":"task:${ids.alpha}","locked":true,"node":"${rowKey}"}`)
 
     // A new browser opens /org with nothing local: the pin is back (the free panel rode the
     // URL and this device's place, which a new browser does not have).
@@ -311,6 +322,90 @@ test.describe('Org', () => {
         .not.toContain(ids.alpha)
     } finally {
       await ctx.close()
+    }
+  })
+
+  // 2026-11-16, the user: "the page I lock shows on every VP ... I locked it under this VP, it
+  // should only show under this VP". Each pin stands beside the node it was locked under, only there.
+  test('a panel locked under one VP stands only beside that VP, through switches and a reload', async ({ page }) => {
+    await page.setViewportSize({ width: 1600, height: 900 })
+    await optIn(page)
+    await openLead(page)
+    // Lock alpha under the first VP, from a real click on its row in All tasks.
+    await openTaskFromRail(page, ids.alpha, () => expect(side(page)).toHaveAttribute('data-session-id', ids.alphaSid, { timeout: 5_000 }))
+    await side(page).locator('.session-panel-lock').click()
+    await expect.poll(() => stripTargets(page)).toEqual([`task:${ids.alpha}*`])
+    await page.screenshot({ path: `${SHOTS}/5-org-pin-under-a.png`, scale: 'css' })
+
+    // The second VP shows none of it; lock gamma there.
+    await pickNode(page, rowKeyB, PROJECT_B)
+    await expect.poll(() => stripTargets(page)).toEqual([])
+    await openTaskFromRail(page, ids.gamma, () => expect(side(page).getByTestId('org-side-title')).toHaveText(`Pin gamma ${STAMP}`, { timeout: 5_000 }))
+    await side(page).getByTestId('org-side-lock').click()
+    await expect.poll(() => stripTargets(page)).toEqual([`task:${ids.gamma}*`])
+    await page.screenshot({ path: `${SHOTS}/6-org-pin-under-b.png`, scale: 'css' })
+
+    // Back and forth: each VP shows its own pin, nothing of the other's.
+    for (let round = 0; round < 2; round++) {
+      await pickNode(page, rowKey, PROJECT)
+      await expect.poll(() => stripTargets(page)).toEqual([`task:${ids.alpha}*`])
+      await pickNode(page, rowKeyB, PROJECT_B)
+      await expect.poll(() => stripTargets(page)).toEqual([`task:${ids.gamma}*`])
+    }
+    await expect.poll(() => savedField(page.request, 'open-walnut-layout:org-columns'), { timeout: 15_000 })
+      .toContain(`{"id":"task:${ids.alpha}","locked":true,"node":"${rowKey}"}`)
+    await expect.poll(() => savedField(page.request, 'open-walnut-layout:org-columns'), { timeout: 15_000 })
+      .toContain(`{"id":"task:${ids.gamma}","locked":true,"node":"${rowKeyB}"}`)
+
+    // A reload comes back on the second VP with its pin; the first still has its own.
+    await page.reload()
+    await expect(page.getByTestId('org-detail-title')).toHaveText(`${PROJECT_B} VP`, { timeout: 30_000 })
+    await expect.poll(() => stripTargets(page), { timeout: 25_000 }).toEqual([`task:${ids.gamma}*`])
+    await pickNode(page, rowKey, PROJECT)
+    await expect.poll(() => stripTargets(page)).toEqual([`task:${ids.alpha}*`])
+    await page.screenshot({ path: `${SHOTS}/7-org-pins-after-reload.png`, scale: 'css' })
+
+    // A task of the first VP locked beside the second stands only there, and the list hangs its lock
+    // under the second VP's row, where its panel is.
+    await pickNode(page, rowKeyB, PROJECT_B)
+    await openBeside(page, `task:${ids.beta}`)
+    await side(page).filter({ has: page.getByTestId('org-side-title').filter({ hasText: `Pin beta ${STAMP}` }) }).getByTestId('org-side-lock').click()
+    await expect.poll(() => stripTargets(page)).toEqual([`task:${ids.beta}*`, `task:${ids.gamma}*`])
+    await expect(page.locator(`[data-testid="org-watched"][data-key="${rowKeyB}"] [data-testid="org-watched-item"][data-task-id="${ids.beta}"]`)).toBeVisible()
+    await expect(page.locator(`[data-testid="org-watched"][data-key="${rowKey}"] [data-testid="org-watched-item"][data-task-id="${ids.beta}"]`)).toHaveCount(0)
+    await pickNode(page, rowKey, PROJECT)
+    await expect.poll(() => stripTargets(page)).toEqual([`task:${ids.alpha}*`])
+    await pickNode(page, rowKeyB, PROJECT_B)
+    await expect.poll(() => stripTargets(page)).toEqual([`task:${ids.beta}*`, `task:${ids.gamma}*`])
+    await side(page).filter({ has: page.getByTestId('org-side-title').filter({ hasText: `Pin beta ${STAMP}` }) }).getByTestId('org-side-lock').click()
+    await pickNode(page, rowKey, PROJECT)
+
+    // Unlocking under one VP leaves the other's pin standing.
+    await side(page).locator('.session-panel-lock').click()
+    await expect.poll(() => stripTargets(page)).toEqual([`task:${ids.alpha}`])
+    await pickNode(page, rowKeyB, PROJECT_B)
+    await expect.poll(() => stripTargets(page)).toEqual([`task:${ids.gamma}*`])
+    await side(page).getByTestId('org-side-lock').click()
+    await expect.poll(() => stripTargets(page)).toEqual([`task:${ids.gamma}`])
+  })
+
+  // Pins saved before pins had a node: each goes to the VP whose project holds its task.
+  test('pins saved before they had a node go to the VP of their task', async ({ browser, baseURL, request }) => {
+    const legacy = JSON.stringify({ v: 1, value: [{ id: `task:${ids.alpha}`, locked: true }, { id: `task:${ids.gamma}`, locked: true }] })
+    const res = await request.put('/api/ui-prefs', { data: { prefs: { 'open-walnut-layout:org-columns': { v: legacy, ts: Date.now() } } } })
+    expect(res.ok()).toBe(true)
+    const ctx = await freshContext(browser, baseURL)
+    try {
+      const fresh = await ctx.newPage()
+      await openLead(fresh)
+      await expect.poll(() => stripTargets(fresh), { timeout: 25_000 }).toEqual([`task:${ids.alpha}*`])
+      await pickNode(fresh, rowKeyB, PROJECT_B)
+      await expect.poll(() => stripTargets(fresh)).toEqual([`task:${ids.gamma}*`])
+      await expect.poll(() => savedField(fresh.request, 'open-walnut-layout:org-columns'), { timeout: 15_000 })
+        .toContain(`{"id":"task:${ids.alpha}","locked":true,"node":"${rowKey}"}`)
+    } finally {
+      await ctx.close()
+      await request.put('/api/ui-prefs', { data: { prefs: { 'open-walnut-layout:org-columns': { v: JSON.stringify({ v: 1, value: null }), ts: Date.now() } } } })
     }
   })
 })
