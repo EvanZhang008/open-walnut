@@ -22,12 +22,11 @@ import path from 'node:path'
 import { log } from '../../logging/index.js'
 import { engineCaps } from '../agents/engine-registry.js'
 import type { SessionMode } from '../types.js'
-import { LightSubagentError, type LightRunResult, type LightRunSpec, type ReturnedFile } from './types.js'
+import { LightSubagentError, SUBAGENT_LANE_PREFIX, type LightRunResult, type LightRunSpec, type ReturnedFile } from './types.js'
 import type { WorkCopy } from './work-copy.js'
 
 const LOCAL = '__local__'
-/** The lane of a subagent's session (core/sessions: a lane is kept out of the lists and the capacity count). */
-export const SUBAGENT_LANE_PREFIX = 'subagent:'
+export { SUBAGENT_LANE_PREFIX }
 /** What comes back of one run at most. */
 const MAX_FILES = 20
 const MAX_TOTAL_BYTES = 4 * 1024 ** 3

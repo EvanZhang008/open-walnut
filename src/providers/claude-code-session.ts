@@ -131,6 +131,7 @@ import { matchesUsageLimitText, parseUsageLimitReset } from './usage-limit-text.
 import { processActionsRefused, refuseProcessAction } from '../core/sessions/replica-process-guard.js'
 import { walnutApiEnvForSession } from '../lib/self-api-root.js'
 import { joinQueuedRows } from '../lib/ai-only-envelope.js'
+import { isSubagentLane } from '../core/subagents/types.js'
 import { sessionSettingsHooks } from './session-settings-hooks.js'
 import { orgRoleOfPrompt } from '../core/org/org-prompt-role.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort, StatusReason, StatusChangedBy, SessionErrorKind, SessionTurnSpeed } from '../core/types.js'
@@ -3038,7 +3039,7 @@ export class ClaudeCodeSession {
     // Main's or a VP's session (read from its own prompt) is reminded of its first rule by hooks too.
     // Its own readback too (own-readback-hook.ts), when its prompt says so.
     const hookPrompt = slim ? '' : [profile?.systemPrompt ?? '', ...appendParts].join('\n\n')
-    const settingsHooks = slim ? undefined : sessionSettingsHooks(process.env, { orgRole: orgRoleOfPrompt(hookPrompt), prompt: hookPrompt })
+    const settingsHooks = slim ? undefined : sessionSettingsHooks(process.env, { orgRole: orgRoleOfPrompt(hookPrompt), prompt: hookPrompt, subagent: isSubagentLane(this._lane) })
     if (settingsHooks) sessionSettings.hooks = settingsHooks
     if (Object.keys(sessionSettings).length > 0) {
       args.push('--settings', JSON.stringify(sessionSettings))

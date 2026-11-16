@@ -8,6 +8,15 @@
  */
 import type { SessionEngine } from '../types.js'
 
+/**
+ * The lane of a subagent's session (core/subagents/on-host.ts; core/sessions: a lane is kept out
+ * of the lists and the capacity count). Its `walnut` calls act as its caller's, so it gets none of
+ * the hooks that read "what is still open for you" (session-settings-hooks.ts): those are its
+ * caller's, and answering them would take over its own answer.
+ */
+export const SUBAGENT_LANE_PREFIX = 'subagent:'
+export function isSubagentLane(lane: string | undefined): boolean { return !!lane?.startsWith(SUBAGENT_LANE_PREFIX) }
+
 export type LightSubagentStatus = 'running' | 'completed' | 'failed' | 'stopped'
 
 /** Why a run could not start or did not finish, as one code a caller can branch on. */
