@@ -143,12 +143,17 @@ struct ApprovalSheet: View {
         case let .answer(approve, blocked):
             VStack(spacing: 10) {
                 if let blocked {
-                    Label(blocked, systemImage: "info.circle")
-                        .font(.subheadline)
-                        .foregroundStyle(.primary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .accessibilityIdentifier("approval.blocked")
+                    // The words carry the identifier, not a Label: a Label hands it to its icon too, and
+                    // the element found then reads as the symbol's name ("Info"; CI, 2026-11-16).
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: "info.circle").accessibilityHidden(true)
+                        Text(blocked)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("approval.blocked")
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 let buttons = stacked ? AnyLayout(VStackLayout(spacing: 10)) : AnyLayout(HStackLayout(spacing: 12))
                 buttons {
@@ -163,12 +168,15 @@ struct ApprovalSheet: View {
             .transition(.opacity)
         case let .ended(line, status):
             VStack(spacing: 10) {
-                Label(line, systemImage: status == "approved" ? "checkmark.circle.fill" : "xmark.circle")
-                    .font(.headline)
-                    .foregroundStyle(status == "approved" ? .green : status == "denied" ? .red : .secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .multilineTextAlignment(.center)
-                    .accessibilityIdentifier("approval.result")
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: status == "approved" ? "checkmark.circle.fill" : "xmark.circle").accessibilityHidden(true)
+                    Text(line)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.center)
+                        .accessibilityIdentifier("approval.result")
+                }
+                .font(.headline)
+                .foregroundStyle(status == "approved" ? .green : status == "denied" ? .red : .secondary)
                 Button { center.close(approval) } label: { Text("Done").frame(maxWidth: .infinity) }
                     .buttonStyle(.bordered)
                     .controlSize(.large)

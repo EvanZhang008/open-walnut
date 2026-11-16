@@ -159,9 +159,9 @@ final class ApprovalSheetUITests: XCTestCase {
     }
 
     /// The end of a request: one line saying which, across the bar, with Done, and no answer buttons.
-    private func assertEnded(_ app: XCUIApplication, saying words: String, file: StaticString = #filePath, line: UInt = #line) {
-        let result = app.descendants(matching: .any)["approval.result"].firstMatch
-        XCTAssertTrue(result.waitForExistence(timeout: 15), "the sheet never showed its end", file: file, line: line)
+    private func assertEnded(_ app: XCUIApplication, saying words: String, within timeout: TimeInterval = 15, file: StaticString = #filePath, line: UInt = #line) {
+        let result = app.staticTexts["approval.result"]
+        XCTAssertTrue(result.waitForExistence(timeout: timeout), "the sheet never showed its end", file: file, line: line)
         XCTAssertTrue(result.label.contains(words), result.label, file: file, line: line)
         XCTAssertFalse(result.label.contains("a device"), result.label, file: file, line: line)
         XCTAssertFalse(app.buttons["approval.deny"].exists, "an ended request kept its Deny", file: file, line: line)
@@ -188,7 +188,7 @@ final class ApprovalSheetUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "walnut-single-use-v1")).firstMatch.exists)
         // This simulator has no Face ID: Approve stays beside Deny, dimmed, under where to approve it.
         assertBothButtons(app, approveEnabled: false)
-        let blocked = app.descendants(matching: .any)["approval.blocked"].firstMatch
+        let blocked = app.staticTexts["approval.blocked"]
         XCTAssertTrue(blocked.exists)
         XCTAssertTrue(blocked.label.contains("Walnut Mac app with Touch ID"), blocked.label)
         Thread.sleep(forTimeInterval: 2)
@@ -234,7 +234,7 @@ final class ApprovalSheetUITests: XCTestCase {
     func testATapApprovalApprovesAndSaysWhere() throws {
         let app = try openSheet(serving: Self.leakGate(mode: "tap"))
         assertBothButtons(app, approveEnabled: true)
-        XCTAssertFalse(app.descendants(matching: .any)["approval.blocked"].firstMatch.exists, "a tap approval said this phone cannot approve it")
+        XCTAssertFalse(app.staticTexts["approval.blocked"].exists, "a tap approval said this phone cannot approve it")
         Thread.sleep(forTimeInterval: 2)
         app.buttons["approval.approve"].tap()
         assertEnded(app, saying: "Approved on iPhone 17 Pro with a tap")
@@ -247,7 +247,8 @@ final class ApprovalSheetUITests: XCTestCase {
         expiresAfterFirstRead = 35
         let app = try openSheet(serving: Self.leakGate(mode: "tap"))
         assertBothButtons(app, approveEnabled: true)
-        assertEnded(app, saying: "Expired: nobody answered in time")
+        // Its time runs out 35 s after the app first read it: wait past that, not the default 15 s.
+        assertEnded(app, saying: "Expired: nobody answered in time", within: 60)
         XCTAssertTrue(lock.withLock { answered.isEmpty })
         Thread.sleep(forTimeInterval: 2)
     }
