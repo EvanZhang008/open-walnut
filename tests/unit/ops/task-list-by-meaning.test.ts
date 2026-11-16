@@ -13,6 +13,7 @@ import { getOp } from '../../../src/ops/index.js'
 const Q = '\u9762\u5305\u5e97'
 const OLD = { id: 'mold0001-aaaa', title: `2024 ${Q} menu`, project: 'Design', phase: 'COMPLETE' }
 const OPEN = { id: 'mopen001-aaaa', title: 'Logo redesign · Bakery Website Launch', project: 'Design', phase: 'IN_PROGRESS' }
+const VP = { id: 'mvp00001-aaaa', title: 'Design VP', project: 'Design', phase: 'IN_PROGRESS', org_role: 'lead' }
 const DONE_TOO = { id: 'mdone001-aaaa', title: 'Old bakery menu print', project: 'Design', phase: 'COMPLETE' }
 
 function server(opts: { search?: 'ok' | 'fail' | 'slow' } = {}) {
@@ -25,10 +26,10 @@ function server(opts: { search?: 'ok' | 'fail' | 'slow' } = {}) {
       if (opts.search === 'slow') await new Promise((r) => setTimeout(r, 6_000))
       return { results: [
         { type: 'task', taskId: OLD.id }, { type: 'memory', title: 'x' },
-        { type: 'task', taskId: DONE_TOO.id }, { type: 'task', taskId: OPEN.id },
+        { type: 'task', taskId: DONE_TOO.id }, { type: 'task', taskId: VP.id }, { type: 'task', taskId: OPEN.id },
       ] }
     }
-    if (path.includes('ids=')) return { tasks: [DONE_TOO, OPEN], total: 2 }
+    if (path.includes('ids=')) return { tasks: [DONE_TOO, VP, OPEN], total: 3 }
     return { tasks: [OLD], total: 1 }
   }
   return { call, paths }
@@ -41,7 +42,7 @@ async function list(args: Record<string, unknown>, opts: Parameters<typeof serve
 }
 
 describe('task_list q adds the open tasks search finds by meaning', () => {
-  it('finds the English-titled open task for a Chinese word, leaving out finished ones and title hits', async () => {
+  it('finds the English-titled open task for a Chinese word, leaving out finished ones, org nodes and title hits', async () => {
     const { result, paths } = await list({ q: Q })
     expect(result.tasks.map((t: { id: string }) => t.id)).toEqual([OLD.id])
     expect(result.by_meaning.map((t: { id: string }) => t.id)).toEqual([OPEN.id])

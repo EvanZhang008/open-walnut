@@ -429,8 +429,9 @@ async function openTasksByMeaning(call: OpCall, q: string, rows: unknown[]): Pro
       const { path } = materializeBinding(TASK_LIST_BINDING, { ids, limit: ids.length })
       const listed = await call('GET', path) as { tasks?: Array<Record<string, unknown>> } | undefined
       const byId = new Map((listed?.tasks ?? []).map((t) => [String(t.id), t] as const))
-      // Search's order, open tasks only: a finished one owns nothing new.
-      return ids.map((id) => byId.get(id)).filter((t): t is Record<string, unknown> => !!t && t.phase !== 'COMPLETE')
+      // Search's order, open tasks only: a finished one owns nothing new, and Main or a VP owns no deliverable.
+      return ids.map((id) => byId.get(id))
+        .filter((t): t is Record<string, unknown> => !!t && t.phase !== 'COMPLETE' && t.org_role !== 'main' && t.org_role !== 'lead')
         .slice(0, BY_MEANING_MAX).map((t) => leanTaskRow(t) as Record<string, unknown>)
     })()
     return (await Promise.race([work, late])) ?? []
