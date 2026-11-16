@@ -191,8 +191,9 @@ test.describe('Slice 1 fixes, round 3', () => {
     const panel = await openDense(page, 720, 'room')
     await panel.locator('button[title="Expand to full screen"]').click()
     await expect(panel).toHaveClass(/open-walnut-fullscreen/)
-    // The sheet is wide enough for pages side by side: the page asked on is
-    // left of the new question, the panel's own page on the right.
+    // The sheet is wide enough for three pages side by side: the pages asked on
+    // are left of the new question, the panel's own page (mainPage) on the right.
+    // Each Esc still goes back one level, whichever pages sit left of it.
     const right = mainPage(panel)
     const history = right.locator('.session-history')
     // Where the sentence sits on SCREEN: a pop keeps it there (landingTarget),
@@ -218,7 +219,12 @@ test.describe('Slice 1 fixes, round 3', () => {
       await page.mouse.move(10, 10)
     }
     for (let i = chain.length - 1; i >= 0; i--) {
-      await history.click({ position: { x: 5, y: 5 } }).catch(() => {})
+      // A click on the page's own timeline, then Esc. Clear of its left edge: the
+      // divider before the page straddles the boundary (9px wide, 5 of them over
+      // the page) and takes a click there. With three pages (32ce33c2b) a click at
+      // x 5 waited on it for the whole 240 s budget; the timeout makes a covered
+      // timeline fail here in seconds.
+      await history.click({ position: { x: 24, y: 5 }, timeout: 5_000 })
       await page.keyboard.press('Escape')
       await expect(right.locator('.thread-stack')).toHaveAttribute('data-thread-depth', String(i))
       await page.waitForTimeout(400)

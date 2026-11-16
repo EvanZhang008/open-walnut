@@ -15,6 +15,7 @@
 import fs from 'node:fs/promises'
 import { test, expect, type Page } from '@playwright/test'
 import type { FeedRecord } from '../../../web/src/contexts/notifications/NotificationProvider'
+import { serveNoWaitingApprovals } from './approvals-lock'
 
 const SCREENSHOT_DIR = '/tmp/notif-bell-badge'
 
@@ -34,6 +35,8 @@ async function stubNotifications(page: Page, feed: FeedRecord[]): Promise<void> 
   await page.route('**/api/notifications/mark-read', async (route) => {
     await route.fulfill({ json: { unreadCount: 0 } })
   })
+  // The bell counts waiting approvals too: serve none, as the feed above is all it may count.
+  await serveNoWaitingApprovals(page)
 }
 
 function errorRecord(id: string, t: number): FeedRecord {

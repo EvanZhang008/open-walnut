@@ -22,6 +22,7 @@ import { expect, type APIRequestContext, type Locator, type Page } from '@playwr
 import {
   CHAT_VISIBLE_KEY, connected, failed, outdated, setup, signedOut, type HS, type Hosts, type LocalState,
 } from './host-problems-helpers'
+import { serveNoWaitingApprovals } from './approvals-lock'
 import { bell, openBell } from './host-problems-fixture-helpers'
 import { presetPanelView } from './todo-panel-helpers'
 
@@ -167,9 +168,7 @@ export async function seedFeed(page: Page, feed: Array<Record<string, unknown>>)
     ? route.fulfill({ json: { feed, unreadCount: feed.filter((f) => !f.read).length } })
     : route.fallback())
   await page.route('**/api/notifications/mark-read', (route) => route.fulfill({ json: { unreadCount: 0 } }))
-  await page.route((url) => url.pathname === '/api/v1/approvals', (route) => route.request().method() === 'GET'
-    ? route.fulfill({ json: { approvals: [], keys: [] } })
-    : route.fallback())
+  await serveNoWaitingApprovals(page)
 }
 
 /**

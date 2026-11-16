@@ -9,7 +9,7 @@
  * answers or clears approvals calls `holdApprovalsLock()` once at its top level, before its own
  * hooks; tests/web/approvals-lock-guard.test.ts fails on one that does not.
  */
-import { test, type APIRequestContext } from '@playwright/test'
+import { test, type APIRequestContext, type Page } from '@playwright/test'
 import { specLock } from './spec-lock'
 
 const lock = specLock('approvals')
@@ -43,4 +43,18 @@ export function holdApprovalsLock(scope: 'file' | 'test', opts: { clear?: boolea
   test.afterEach(async ({ request }) => {
     try { if (opts.clear) await denyAllWaiting(request) } finally { lock.release() }
   })
+}
+
+/**
+ * Serve this page an empty list of waiting approvals, so it counts only what it seeded. The bell
+ * counts waiting approvals beside its asks and letters (NotificationProvider attentionCount), and
+ * the fixture's list holds whatever another file is waiting on at that moment (CI run 43870885580:
+ * notice-full-text's approval made notification-bell-badge read 3 for its 2). A page stub never
+ * touches the server's list, so it needs no lock. Use it with a stubbed feed in any spec that
+ * reads the bell's exact number or name.
+ */
+export async function serveNoWaitingApprovals(page: Page): Promise<void> {
+  await page.route((url) => url.pathname === '/api/v1/approvals', (route) => route.request().method() === 'GET'
+    ? route.fulfill({ json: { approvals: [], keys: [], askMe: true } })
+    : route.fallback())
 }

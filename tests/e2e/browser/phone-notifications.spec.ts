@@ -13,6 +13,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Page, type WebSocketRoute } from '@playwright/test'
 import type { FeedRecord } from '../../../web/src/contexts/notifications/NotificationProvider'
+import { serveNoWaitingApprovals } from './approvals-lock'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import {
   PHONE, backButton, expectNoHorizontalOverflow, findSmallTargets, findSmallText, menuButton, openDrawer,
@@ -58,6 +59,8 @@ async function bootWithFeed(page: Page, feed: FeedRecord[]): Promise<{ lane: Lan
   })
   await page.route('**/api/notifications', (route) => route.fulfill({ json: { feed, unreadCount: feed.filter((f) => !f.read).length } }))
   await page.route('**/api/notifications/mark-read', (route) => route.fulfill({ json: { unreadCount: 0 } }))
+  // Both bells count waiting approvals too: serve none, so they count only the feed above.
+  await serveNoWaitingApprovals(page)
   await page.route('**/api/sessions/*/permission', async (route) => {
     if (route.request().method() !== 'POST') return route.fallback()
     lane.answers.push(route.request().postData() ?? '')

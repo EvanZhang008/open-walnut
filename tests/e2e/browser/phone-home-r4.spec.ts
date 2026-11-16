@@ -50,13 +50,20 @@ async function seedRecentWithOpenTasks(page: Page): Promise<void> {
   await seedRecentOpened(page, ordered.slice(0, 30).map((t) => t.id))
 }
 
+/**
+ * How long the first load is watched: as long as firstLoadResult waits for the strip. A fixed 6 s
+ * ended before the first paint of a cold load (alone on a fresh fixture the strip came at 9.4 and
+ * 10.4 s), so nothing was recorded and R3-02 read undefined (CI run 43870885580).
+ */
+const FIRST_LOAD_MS = 30_000
+
 /** Slow the first task list (the window where the old home painted controls, then pushed them down) and record every move. */
 async function watchFirstLoad(page: Page): Promise<void> {
   await page.route('**/api/tasks?**', async (route) => {
     await new Promise((r) => setTimeout(r, 700))
     await route.continue()
   })
-  await page.addInitScript(() => {
+  await page.addInitScript((watchMs) => {
     const w = window as unknown as { __firstTop: Record<string, number>; __moved: string[]; __first: Record<string, number> }
     w.__firstTop = {}; w.__moved = []; w.__first = {}
     const t0 = performance.now()
@@ -77,14 +84,14 @@ async function watchFirstLoad(page: Page): Promise<void> {
           if (!(sel in w.__first) && sc.querySelector(sel)) w.__first[sel] = Math.round(performance.now() - t0)
         }
       }
-      if (performance.now() - t0 < 6000) requestAnimationFrame(tick)
+      if (performance.now() - t0 < watchMs) requestAnimationFrame(tick)
     }
     requestAnimationFrame(tick)
-  })
+  }, FIRST_LOAD_MS)
 }
 
 async function firstLoadResult(page: Page): Promise<{ moved: string[]; first: Record<string, number> }> {
-  await expect(page.locator('.phone-needs-you')).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('.phone-needs-you')).toBeVisible({ timeout: FIRST_LOAD_MS })
   await page.waitForTimeout(1500)
   return page.evaluate(() => {
     const w = window as unknown as { __moved: string[]; __first: Record<string, number> }
