@@ -22,6 +22,23 @@
 .sidebar.collapsed .sidebar-side-bar-group { border: 1px solid var(--border); border-radius: 10px; padding: 2px; margin: 4px -3px; }
 .sidebar.collapsed .sidebar-group-caption { display: none; }
 .sidebar.collapsed .sidebar-side-bar-group .sidebar-link { padding: 7px 0; }
+/* Open apps (experiment apps_stay_open, Sidebar.tsx): a row per app opened and not closed yet. */
+.sidebar-open-apps { margin: 6px 0 4px; padding-top: 6px; border-top: 1px solid var(--border); }
+.sidebar-open-app { position: relative; }
+.sidebar-open-app .sidebar-link { padding-right: 34px; }
+.sidebar-open-app-close {
+  position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
+  width: 22px; height: 22px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted); cursor: pointer;
+  opacity: 0;
+}
+.sidebar-open-app-close svg { width: 14px; height: 14px; }
+.sidebar-open-app:hover .sidebar-open-app-close, .sidebar-open-app-close:focus-visible { opacity: 1; }
+.sidebar-open-app-close:hover { color: var(--fg); background: var(--bg-tertiary); }
+@media (hover: none) { .sidebar-open-app-close { opacity: 1; } }
+.sidebar.collapsed .sidebar-open-apps { padding-top: 4px; }
+.sidebar.collapsed .sidebar-open-app .sidebar-link { padding-right: 0; }
+.sidebar.collapsed .sidebar-open-app-close { display: none; }
 
 .app-shell-navigation .todo-panel { min-height: 0; background: transparent; }
 .app-shell-navigation .todo-panel-toolbar { gap: 8px; padding: 7px 8px 6px 12px; flex-wrap: nowrap; }

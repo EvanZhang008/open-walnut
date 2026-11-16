@@ -1,0 +1,276 @@
+/**
+ * The composer's Draw with the drawing_app experiment on: the drawing workspace in a dialog, on
+ * the real editor, with real pointer and keyboard input. Runs on its own server with the real
+ * Drawing plugin (plugin-mic-server.ts, PW_PLUGIN_FIXTURE=drawing); with the experiment off the classic
+ * pad is covered by session-drawing.spec.ts and drawing-pad-lifecycle.spec.ts.
+ *
+ * Covers: the first stroke saves a file in Notes without a Save press, shapes, text (several
+ * lines, CJK), arrow, pen and eraser, select and move, undo and redo, zoom and pan that save
+ * nothing, PNG and SVG export with the fonts loaded from this Walnut (no request leaves it),
+ * dark theme, close and reopen on the same file, a change elsewhere taken in while clean, a 409
+ * with Keep mine, resize, and Attach PNG letting go of the file.
+ */
+import { test, expect, type Page, type Locator } from '@playwright/test';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { seedColumns } from './draft-helpers';
+import { startSessionAt, panelFor, openPlusMenu } from './engine-settings-popover-helpers';
+import { useDrawingFixture } from './plugin-fixture';
+
+const SHOTS = '/tmp/drawing-composer';
+/** Two CJK characters (test data): the text tool and the SVG export must keep them. */
+const CJK = '\u4f60\u597d';
+const fixture = useDrawingFixture();
+// One server per worker: the file's tests run in order on it.
+test.describe.configure({ mode: 'default', timeout: 240_000 });
+test.use({ viewport: { width: 1280, height: 900 } });
+
+interface Doc { path: string; title: string; revision: string; scene: { elements: Array<{ id: string; type: string; x: number; text?: string; isDeleted?: boolean }> } }
+
+async function shot(page: Page, name: string) {
+  await fs.mkdir(SHOTS, { recursive: true });
+  await page.screenshot({ path: `${SHOTS}/${name}.png`, scale: 'css' });
+}
+
+async function openSession(page: Page) {
+  const sid = await startSessionAt(page.request, path.join(fixture.home(), 'projects'), 'claude');
+  await seedColumns(page, [sid]);
+  await page.evaluate((url) => { location.href = url; }, `${fixture.base()}/`);
+  const panel = panelFor(page, sid);
+  await expect(panel.locator('.chat-plus-btn')).toBeVisible({ timeout: 60_000 });
+  return panel;
+}
+
+async function openDraw(page: Page, panel: Locator) {
+  const menu = await openPlusMenu(panel);
+  await menu.getByRole('menuitem', { name: 'Draw', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Drawing', exact: true });
+  await expect(dialog.locator('.drawing-workspace')).toBeVisible({ timeout: 60_000 });
+  await expect(dialog.locator('canvas.excalidraw__canvas.interactive')).toBeVisible({ timeout: 60_000 });
+  return dialog;
+}
+
+const status = (dialog: Locator) => dialog.locator('.drawing-workspace-status');
+const ws = (dialog: Locator) => dialog.locator('.drawing-workspace');
+
+async function canvasBox(dialog: Locator) {
+  return (await dialog.locator('canvas.excalidraw__canvas.interactive').boundingBox())!;
+}
+
+/**
+ * Every x below is measured from LEFT, not from the canvas edge: a picked tool opens
+ * Excalidraw's properties panel over the canvas's left 220 px and its menu button sits in the
+ * top-left corner, so a pointer there lands on the panel and never draws.
+ */
+const LEFT = 260;
+
+/** Focus the canvas with a click on an empty spot, clear of the panel and the toolbar. */
+async function focusCanvas(dialog: Locator) {
+  await dialog.locator('canvas.excalidraw__canvas.interactive').click({ position: { x: LEFT, y: 300 } });
+}
+
+/** A tool by its shortcut, then a drag from (x1,y1) to (x2,y2) in canvas pixels (x from LEFT). */
+async function drag(page: Page, dialog: Locator, key: string, [x1, y1]: [number, number], [x2, y2]: [number, number]) {
+  const box = await canvasBox(dialog);
+  await page.keyboard.press(key);
+  await page.mouse.move(box.x + LEFT + x1, box.y + y1);
+  await page.mouse.down();
+  await page.mouse.move(box.x + LEFT + x2, box.y + y2, { steps: 12 });
+  await page.mouse.up();
+}
+
+async function saved(dialog: Locator) {
+  await expect(status(dialog)).toHaveText('Saved', { timeout: 30_000 });
+  await expect(ws(dialog)).toHaveAttribute('data-save-state', 'saved');
+}
+
+async function onServer(page: Page, dialog: Locator): Promise<Doc> {
+  const p = await ws(dialog).getAttribute('data-drawing-path');
+  expect(p).toBeTruthy();
+  const res = await page.request.get(`/api/drawings/file?path=${encodeURIComponent(p!)}`);
+  expect(res.ok(), await res.text()).toBe(true);
+  return await res.json() as Doc;
+}
+
+test.describe('Draw in the composer (drawing_app)', () => {
+  test('draw, edit, export, theme, reopen, change elsewhere, conflict and attach', async ({ page }) => {
+    const errors: string[] = [];
+    const outside: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    page.on('request', (r) => { const u = new URL(r.url()); if (!['localhost', '127.0.0.1'].includes(u.hostname) && u.protocol.startsWith('http')) outside.push(r.url()); });
+    await page.route(/esm\.sh|unpkg\.com|jsdelivr\.net/, (route) => route.abort());
+
+    const panel = await openSession(page);
+    const dialog = await openDraw(page, panel);
+    await expect(status(dialog)).toHaveText('Saved to Notes when you draw');
+    expect(await ws(dialog).getAttribute('data-drawing-path')).toBeNull();
+
+    // The first shape makes the file, in the session's task, with no Save press.
+    await focusCanvas(dialog);
+    await drag(page, dialog, 'r', [120, 120], [300, 220]);
+    await saved(dialog);
+    let doc = await onServer(page, dialog);
+    expect(doc.path).toMatch(/\.excalidraw$/);
+    expect(doc.scene.elements.map((e) => e.type)).toEqual(['rectangle']);
+
+    // Text: several lines, CJK (test data in escapes).
+    const box = await canvasBox(dialog);
+    await page.keyboard.press('t');
+    await page.mouse.click(box.x + LEFT + 420, box.y + 140);
+    const editor = dialog.locator('textarea.excalidraw-wysiwyg');
+    await expect(editor).toBeVisible();
+    await editor.fill(`Order -> review\nrating, user\n${CJK}`);
+    await editor.press('Escape');
+    // Arrow, pen, then the eraser across the pen stroke.
+    await drag(page, dialog, 'a', [300, 170], [420, 170]);
+    await drag(page, dialog, 'p', [150, 320], [320, 360]);
+    await saved(dialog);
+    doc = await onServer(page, dialog);
+    expect(doc.scene.elements.map((e) => e.type).sort()).toEqual(['arrow', 'freedraw', 'rectangle', 'text']);
+    expect(doc.scene.elements.find((e) => e.type === 'text')?.text).toContain(CJK);
+    await drag(page, dialog, 'e', [140, 340], [330, 340]);
+    await saved(dialog);
+    doc = await onServer(page, dialog);
+    expect(doc.scene.elements.some((e) => e.type === 'freedraw')).toBe(false);
+
+    // Undo brings the stroke back, redo erases it again.
+    const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+    await page.keyboard.press(`${mod}+z`);
+    await saved(dialog);
+    expect((await onServer(page, dialog)).scene.elements.some((e) => e.type === 'freedraw')).toBe(true);
+    await page.keyboard.press(`${mod}+Shift+z`);
+    await saved(dialog);
+    expect((await onServer(page, dialog)).scene.elements.some((e) => e.type === 'freedraw')).toBe(false);
+
+    // Select and move the rectangle.
+    const x0 = doc.scene.elements.find((e) => e.type === 'rectangle')!.x;
+    await drag(page, dialog, 'v', [200, 121], [260, 151]);
+    await saved(dialog);
+    doc = await onServer(page, dialog);
+    expect(doc.scene.elements.find((e) => e.type === 'rectangle')!.x).toBeGreaterThan(x0 + 30);
+
+    // Zoom and pan change the view only: no new revision.
+    await page.keyboard.press(`${mod}+=`);
+    const b = await canvasBox(dialog);
+    await page.mouse.move(b.x + 600, b.y + 400);
+    await page.mouse.wheel(0, 200);
+    await page.waitForTimeout(2_000);
+    expect((await onServer(page, dialog)).revision).toBe(doc.revision);
+
+    // Fonts come from this Walnut; exports work with them, and nothing left the machine.
+    expect(await page.evaluate(() => document.fonts.check('20px Excalifont'))).toBe(true);
+    const [png] = await Promise.all([page.waitForEvent('download'), dialog.getByRole('button', { name: 'PNG', exact: true }).click()]);
+    const pngBytes = await fs.readFile((await png.path())!);
+    expect(pngBytes.subarray(1, 4).toString()).toBe('PNG');
+    const [svg] = await Promise.all([page.waitForEvent('download'), dialog.getByRole('button', { name: 'SVG', exact: true }).click()]);
+    const svgText = await fs.readFile((await svg.path())!, 'utf8');
+    expect(svgText).toContain('<svg');
+    expect(svgText).toContain('@font-face');
+    expect(svgText).toContain(CJK);
+    expect(outside).toEqual([]);
+
+    // Dark theme follows the console's.
+    await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
+    await expect(dialog.locator('.excalidraw.theme--dark')).toBeVisible();
+    await shot(page, 'dark');
+    await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
+
+    // Resize: the editor keeps filling the dialog.
+    await page.setViewportSize({ width: 900, height: 700 });
+    await expect.poll(async () => (await canvasBox(dialog)).width).toBeGreaterThan(500);
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    // Close and Draw again: the same file.
+    const filePath = doc.path;
+    await dialog.getByRole('button', { name: 'Close drawing' }).click();
+    await expect(dialog).toHaveCount(0);
+    const again = await openDraw(page, panel);
+    await expect(ws(again)).toHaveAttribute('data-drawing-path', filePath);
+    await saved(again);
+
+    // Changed elsewhere while clean (an agent's append, the server's own op): the editor itself
+    // takes it in, not only the server: its revision is the new one.
+    const current = await onServer(page, again);
+    const appended = await page.request.post('/api/drawings/append', {
+      data: { path: filePath, revision: current.revision, elements: [{ type: 'rectangle', x: 600, y: 400, width: 80, height: 60 }] },
+    });
+    expect(appended.ok(), await appended.text()).toBe(true);
+    const changed = await appended.json() as Doc;
+    expect(changed.scene.elements.length).toBe(current.scene.elements.length + 1);
+    const added = changed.scene.elements.find((e) => !current.scene.elements.some((c) => c.id === e.id))!;
+    await expect(ws(again)).toHaveAttribute('data-drawing-revision', changed.revision, { timeout: 20_000 });
+    await expect(ws(again)).toHaveAttribute('data-save-state', 'saved');
+
+    // A 409 on a shape both sides changed: the person moves every shape, and while that save is
+    // on its way (held here) an agent moves the appended one too, then the save goes on. A shape
+    // only one side changed merges by itself (drawing-merge.ts); this one waits for Keep mine.
+    const THEIRS_X = 999;
+    const addedX = async () => (await onServer(page, again)).scene.elements.find((e) => e.id === added.id)?.x;
+    let raced = false;
+    await page.route('**/api/drawings/file', async (route) => {
+      const sent = route.request().method() === 'PUT' ? route.request().postDataJSON() as { scene: Doc['scene'] } : null;
+      const moved = sent?.scene.elements.find((e) => e.id === added.id);
+      if (!raced && moved && moved.x !== added.x) {
+        raced = true;
+        const latest = await (await page.request.get(`/api/drawings/file?path=${encodeURIComponent(filePath)}`)).json() as Doc;
+        const other = await page.request.post('/api/drawings/update', {
+          data: { path: filePath, revision: latest.revision, update: [{ id: added.id, x: THEIRS_X }] },
+        });
+        expect(other.ok(), await other.text()).toBe(true);
+      }
+      await route.continue();
+    });
+    await focusCanvas(again);
+    await page.keyboard.press(`${mod}+a`);
+    await page.keyboard.press('Shift+ArrowRight');
+    await expect.poll(() => raced, { timeout: 20_000 }).toBe(true);
+    const conflict = again.locator('.drawing-workspace-conflict');
+    await expect(conflict).toBeVisible({ timeout: 20_000 });
+    await expect(conflict).toContainText('One shape was changed both here and somewhere else');
+    await shot(page, 'conflict');
+    expect(await addedX()).toBe(THEIRS_X);
+    await page.unroute('**/api/drawings/file');
+    await again.getByRole('button', { name: 'Keep mine', exact: true }).click();
+    await saved(again);
+    const mine = await addedX();
+    expect(mine).toBeGreaterThan(added.x);
+    expect(mine).not.toBe(THEIRS_X);
+
+    // Attach PNG: the picture joins the message, the file stays, the next Draw is new.
+    await again.getByRole('button', { name: 'Attach PNG', exact: true }).click();
+    await expect(again).toHaveCount(0);
+    await expect(panel.locator('.chat-image-preview')).toHaveCount(1);
+    const fresh = await openDraw(page, panel);
+    await expect(status(fresh)).toHaveText('Saved to Notes when you draw');
+    await shot(page, 'fresh-after-attach');
+    const kept = await page.request.get(`/api/drawings/file?path=${encodeURIComponent(filePath)}`);
+    expect(kept.ok()).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  test('a failed save retries, and edits a reload interrupted come back and are saved', async ({ page }) => {
+    const panel = await openSession(page);
+    let dialog = await openDraw(page, panel);
+    await focusCanvas(dialog);
+    await drag(page, dialog, 'r', [120, 120], [300, 220]);
+    await saved(dialog);
+    const filePath = (await onServer(page, dialog)).path;
+
+    // Saves fail: the edit is kept and said to be retrying.
+    await page.route('**/api/drawings/file', (route) => (route.request().method() === 'PUT' ? route.abort('connectionrefused') : route.continue()));
+    await drag(page, dialog, 'o', [400, 120], [520, 220]);
+    await expect(status(dialog)).toHaveText('Not saved, retrying', { timeout: 20_000 });
+    await shot(page, 'offline-retrying');
+    // The page reloads before any save got through.
+    await page.reload();
+    await page.unroute('**/api/drawings/file');
+    // The panel's locator names the session, so it finds the column again after the reload.
+    await expect(panel.locator('.chat-plus-btn')).toBeVisible({ timeout: 60_000 });
+    dialog = await openDraw(page, panel);
+    await expect(ws(dialog)).toHaveAttribute('data-drawing-path', filePath);
+    await saved(dialog);
+    const doc = await onServer(page, dialog);
+    expect(doc.scene.elements.map((e) => e.type).sort()).toEqual(['ellipse', 'rectangle']);
+    await shot(page, 'recovered-after-reload');
+  });
+});

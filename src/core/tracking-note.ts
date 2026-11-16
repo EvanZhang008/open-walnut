@@ -64,6 +64,8 @@ function projectSafeName(raw: string): string {
     .replace(/\.{2,}/g, '.')
     .trim()
     .slice(0, 60)
+    // A cut through an emoji leaves half a surrogate pair, which no file system can name.
+    .replace(/[\uD800-\uDBFF]$/, '')
     .trim();
 }
 
@@ -98,9 +100,19 @@ function isUsableSegment(folded: string): boolean {
  * those: it has no registry row, so it can hold no metadata key either.
  */
 export function trackingNotePathFor(project: string): string | null {
+  const folder = projectNotesFolderFor(project);
+  return folder ? `${folder}/${TRACKING_NOTE_FILENAME}` : null;
+}
+
+/**
+ * A project's own folder in the vault (`Projects/<folded name>`), where its tracking note and
+ * the files Walnut keeps for its tasks (drawings) live. `null` for Inbox and for a name that
+ * cannot be a folder, by the same rule as the tracking note.
+ */
+export function projectNotesFolderFor(project: string): string | null {
   const folded = projectSafeName(project ?? '');
   if (!isUsableSegment(folded)) return null;
-  return `${TRACKING_NOTE_DIR}/${folded}/${TRACKING_NOTE_FILENAME}`;
+  return `${TRACKING_NOTE_DIR}/${folded}`;
 }
 
 /**

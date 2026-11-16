@@ -313,6 +313,13 @@ const ATTACHMENT_MIME: Record<string, string> = {
   xls: 'application/vnd.ms-excel',
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   ppt: 'application/vnd.ms-powerpoint',
+  // An editable drawing's scene (core/drawings/): JSON, read by the drawing editor, never run.
+  excalidraw: 'application/json',
+}
+
+/** An editable drawing's scene file (core/drawings/): moved and deleted with its companion note. */
+function isDrawingScene(p: string): boolean {
+  return /\.excalidraw$/i.test(p)
 }
 
 /** A vault file the attachment route serves (by its extension): what the companion's copy carries. */
@@ -324,7 +331,7 @@ export const MAX_SERVED_ATTACHMENT_BYTES = 50 * 1024 * 1024
 // Extensions the browser can render inline; everything else downloads.
 // heic/heif are inline for iOS (native decode) and for the iOS app, which hands
 // the bytes to ImageIO — it decodes heic fine.
-const INLINE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'tif', 'tiff', 'bmp', 'avif', 'svg', 'pdf'])
+const INLINE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'tif', 'tiff', 'bmp', 'avif', 'svg', 'pdf', 'excalidraw'])
 
 /** Image extensions the attachment route serves inline: what every notes image surface must draw. */
 export const INLINE_IMAGE_EXTS: readonly string[] = [...INLINE_EXTS].filter((e) => ATTACHMENT_MIME[e]?.startsWith('image/'))
@@ -805,11 +812,18 @@ export async function deleteNoteAttachment(relPath: unknown): Promise<{ ok: true
   if (typeof relPath !== 'string' || !relPath) throw new NotesOpError('path required', 400)
   const fullPath = resolveSafePath(relPath)
   if (!fullPath || fullPath.endsWith('.md')) throw new NotesOpError('invalid path', 400)
+  const drawing = isDrawingScene(fullPath)
   try {
-    await fsp.unlink(fullPath)
+    // A drawing is deleted under its note lock, so a save in flight cannot put it back.
+    await (drawing ? withUserFileLock(fullPath, () => fsp.unlink(fullPath)) : fsp.unlink(fullPath))
   } catch (err: any) {
     if (err.code === 'ENOENT') throw new NotesOpError('Attachment not found', 404)
     throw err
+  }
+  // A drawing's companion note (only one Walnut made for it) goes with it.
+  if (drawing) {
+    const { deleteDrawingCompanion } = await import('../../core/drawings/companion-sync.js')
+    await deleteDrawingCompanion(toRelPath(fullPath), (abs) => deleteNoteFile(abs))
   }
   try {
     const { deleteAttachmentText } = await import('../../core/notes-index.js')
@@ -956,13 +970,25 @@ export async function moveNote(from: unknown, to: unknown): Promise<{ ok: true }
     // ENOENT is expected — destination is free, proceed
   }
 
-  // Move file
+  // Move file. A drawing moves under its note lock, so a save in flight cannot recreate it at
+  // the old path; its companion note follows below.
   await fsp.mkdir(path.dirname(toFile), { recursive: true })
-  await fsp.rename(fromFile, toFile)
+  if (isDrawingScene(fromFile)) await withUserFileLock(fromFile, () => fsp.rename(fromFile, toFile))
+  else await fsp.rename(fromFile, toFile)
   invalidateNotesTree()
 
   const fromRel = toRelPath(fromFile)
   const toRel = toRelPath(toFile)
+  if (isDrawingScene(fromFile) && isDrawingScene(toFile)) {
+    const { moveDrawingCompanion } = await import('../../core/drawings/companion-sync.js')
+    const companion = await moveDrawingCompanion(fromRel, toRel)
+    if (companion) {
+      updateNotePath(companion.from, companion.to)
+      scheduleNotesIndexUpdate(companion.from)
+      scheduleNotesIndexUpdate(companion.to)
+      await pruneFavoriteNotes({ kind: 'rename', relPath: companion.from, toRel: companion.to })
+    }
+  }
   // Index bookkeeping is notes-only — attachments aren't in the structural
   // index, and reconciling a binary file would just churn.
   if (!isAttachment) {

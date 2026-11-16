@@ -9,6 +9,7 @@
  * - 'inbox'    → SessionInboxPane (the letters THIS session wrote to the human)
  * - 'web'      → SessionWebView (a host:port service the session started, SSH-tunnelled when remote)
  * - 'board'    → TaskBoardPane (the task's Board: the page its leader keeps, with threads and marks)
+ * - 'app'      → SessionPluginAppPane (a plugin App's `sessionPane`; which App and document: panel-view.ts `app`)
  *
  * A single `activeView` state drives which one is open (null = none). Opening any
  * view promotes the panel to fullscreen (useFullscreen); the chat moves into the
@@ -18,4 +19,4 @@
  * branch in the diff column. Nothing here is Code-specific — Code's keep-alive
  * exists only because remounting its iframe reboots the VS Code workbench.
  */
-export type SessionSplitView = 'changed' | 'files' | 'terminal' | 'code' | 'inbox' | 'web' | 'board';
+export type SessionSplitView = 'changed' | 'files' | 'terminal' | 'code' | 'inbox' | 'web' | 'board' | 'app';

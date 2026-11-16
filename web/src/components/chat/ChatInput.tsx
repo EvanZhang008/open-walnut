@@ -2025,7 +2025,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <DrawingPad draftId={draftKey ?? sessionMentionSelfId ?? 'drawing'} open={drawingOpen} onClose={() => { setDrawingOpen(false); textareaRef.current?.focus(); }} onAttach={(file) => attachments.add([file])} canAttach={!disabled && !atAttachLimit} />
+      <DrawingPad draftId={draftKey ?? sessionMentionSelfId ?? 'drawing'} taskId={mentionSelfTaskId} sessionId={sessionMentionSelfId} open={drawingOpen} onClose={() => { setDrawingOpen(false); textareaRef.current?.focus(); }} onAttach={(file) => attachments.add([file])} canAttach={!disabled && !atAttachLimit} />
       {paletteOpen && (
         <CommandPalette
           commands={paletteResults}

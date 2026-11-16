@@ -13,13 +13,19 @@
  * Reads PW_PLUGIN_MIC_PORT; prints `PLUGIN_MIC_READY <json>` when it is serving.
  * PW_PLUGIN_FIXTURE=session links fixtures/plugin-session-plugin instead (an App
  * hosting a SessionView, plugin-session-fullscreen.spec.ts) and seeds the sessions
- * it and the home page show.
+ * it and the home page show. PW_PLUGIN_FIXTURE=session-pane links
+ * fixtures/plugin-session-pane-plugin (Apps with a pane beside a session's chat,
+ * session-app-pane.spec.ts) with the same sessions. PW_PLUGIN_FIXTURE=drawing links the
+ * bundled Drawing plugin (plugin-store/walnut-drawing, built first when its dist is missing or
+ * stale) with the drawing_app and apps_stay_open experiments on, and runs sessions on the repo's
+ * mock CLI (drawing-app-integration.spec.ts, drawing-composer.spec.ts).
  */
 
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fixtureHome } from './fixture-home'
+import { ensureDrawingPluginBuilt } from './drawing-plugin-build'
 
 const port = Number(process.env.PW_PLUGIN_MIC_PORT ?? 3462)
 // Its own home for real: Bun reads HOME only at startup (fixture-home.ts).
@@ -42,6 +48,7 @@ await fs.rm(tmpBase, { recursive: true, force: true })
 await fs.mkdir(path.join(tmpBase, 'tasks'), { recursive: true })
 await fs.mkdir(path.join(tmpBase, 'plugins'), { recursive: true })
 
+const drawingFixture = process.env.PW_PLUGIN_FIXTURE === 'drawing'
 const mockMainAgent = path.join(repoRoot, 'tests/providers/mock-main-agent.mjs')
 await fs.writeFile(path.join(tmpBase, 'config.yaml'), JSON.stringify({
   version: 1,
@@ -53,8 +60,18 @@ await fs.writeFile(path.join(tmpBase, 'config.yaml'), JSON.stringify({
     triage: { debounce_minutes: 0 },
   },
   providers: { 'plugin-mic-cli': { api: 'claude-cli', claude_cli_command: mockMainAgent } },
+  ...(drawingFixture ? { experimental: { drawing_app: true, apps_stay_open: true }, plugins: { 'walnut-drawing': { enabled: true } } } : {}),
 }, null, 2))
-const sessionFixture = process.env.PW_PLUGIN_FIXTURE === 'session'
+const paneFixture = process.env.PW_PLUGIN_FIXTURE === 'session-pane'
+const sessionFixture = process.env.PW_PLUGIN_FIXTURE === 'session' || paneFixture
+const fixtureDir = (dir: string) => path.join(repoRoot, 'tests/e2e/browser/fixtures', dir)
+const fixturePlugin = drawingFixture
+  ? { source: await ensureDrawingPluginBuilt(repoRoot), id: 'walnut-drawing' }
+  : paneFixture
+    ? { source: fixtureDir('plugin-session-pane-plugin'), id: 'plugin-session-pane-fixture' }
+    : sessionFixture
+      ? { source: fixtureDir('plugin-session-plugin'), id: 'plugin-session-fixture' }
+      : { source: fixtureDir('plugin-mic-plugin'), id: 'plugin-mic-fixture' }
 const now = new Date().toISOString()
 // Two stopped sessions with their tasks: one for the plugin's SessionView, one for a home column.
 const seeded = sessionFixture ? [
@@ -83,11 +100,39 @@ if (sessionFixture) {
 
 // Installed the documented author way: a symlink in the data home's plugins/ directory,
 // which is exactly what `walnut-plugin link` writes.
-await fs.symlink(
-  path.join(repoRoot, `tests/e2e/browser/fixtures/${sessionFixture ? 'plugin-session-plugin' : 'plugin-mic-plugin'}`),
-  path.join(tmpBase, 'plugins', sessionFixture ? 'plugin-session-fixture' : 'plugin-mic-fixture'),
-  'dir',
-)
+await fs.symlink(fixturePlugin.source, path.join(tmpBase, 'plugins', fixturePlugin.id), 'dir')
+
+if (drawingFixture) {
+  // The drawing specs start real sessions (a task's composer, a session beside the Drawing App):
+  // the repo's mock CLI answers them, through the same two seams as test-server.ts (the runner's
+  // command, and the daemon's `start` argv), plus a `claude` on PATH for the setup health.
+  const mockCli = path.join(repoRoot, 'tests/providers/mock-claude.mjs')
+  const binDir = path.join(tmpBase, 'bin')
+  await fs.mkdir(binDir, { recursive: true })
+  const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
+  await fs.writeFile(path.join(binDir, 'claude'), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(mockCli)} "$@"\n`, { mode: 0o755 })
+  process.env.PATH = `${binDir}${path.delimiter}${process.env.PATH ?? ''}`
+  process.env.MOCK_CLAUDE_PLAIN_ECHO = '1'
+  process.env.WALNUT_TASK_DIR_ROOT = path.join(tmpBase, 'task-dirs')
+  delete process.env.WALNUT_TASK_DIR
+  // A session's working folder (drawing-composer.spec.ts starts one in <home>/projects).
+  await fs.mkdir(path.join(tmpBase, 'projects'), { recursive: true })
+  // The Home chat slot starts closed, as on the shared fixture, so a session column has the room.
+  await fs.mkdir(path.join(tmpBase, 'config', 'share'), { recursive: true })
+  await fs.writeFile(path.join(tmpBase, 'config', 'share', 'ui-prefs.json'), JSON.stringify({ 'open-walnut-home-chat-visible': { v: 'false', ts: 1 } }, null, 2))
+  const { sessionRunner } = await import('../../../src/providers/claude-code-session.js')
+  sessionRunner.setCliCommand(mockCli)
+  const { DaemonConnection } = await import('../../../src/providers/daemon-connection.js')
+  const daemonSend = DaemonConnection.prototype.send
+  DaemonConnection.prototype.send = function (command, payload, ...rest) {
+    if (command === 'start') {
+      const args = payload.args as string[]
+      if (args?.[0] !== 'claude') throw new Error('Unexpected fixture executable')
+      payload = { ...payload, args: [process.execPath, mockCli, ...args.slice(1)] }
+    }
+    return daemonSend.call(this, command, payload, ...rest)
+  }
+}
 
 const { startServer, stopServer } = await import('../../../src/web/server.js')
 const apiServer = await startServer({ port: 0, dev: true })

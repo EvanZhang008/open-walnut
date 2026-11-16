@@ -1,0 +1,11 @@
+{
+  "id": "plugin-session-pane-fixture",
+  "name": "Session Pane Fixture",
+  "description": "Browser-test plugin: two Apps that draw a pane beside a session's chat (AppContribution.sessionPane) and one that does not.",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "engines": {
+    "walnut": ">=0.3.2"
+  },
+  "web": "web.mjs"
+}

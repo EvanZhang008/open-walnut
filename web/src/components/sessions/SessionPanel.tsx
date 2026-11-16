@@ -145,7 +145,9 @@ import { usePendingCardTool } from '@/hooks/usePendingCardTool';
 import '@/styles/phone-session.css';
 import { useFullscreen, useSheetPlace } from '@/hooks/useFullscreen';
 import { fullscreenPlace } from '@/hooks/fullscreen-owner';
-import { usePanelView, TERMINAL_DOCK_VIEWS } from './panel-view';
+import { usePanelView, TERMINAL_DOCK_VIEWS, withPanelApp, withPanelAppDoc } from './panel-view';
+import { SessionPluginAppPane } from './SessionPluginAppPane';
+import { SESSION_APP_OPEN_EVENT, sessionAppOpenRequest } from './session-app-open';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { useHeightVar } from '@/hooks/useHeightVar';
 import { useSessionPlan } from '@/hooks/useSessionPlan';
@@ -623,7 +625,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const { isFullscreen, shownFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen({ keepAcrossRoutes: true, place: sheetAt, phoneLayer: !!(phoneLayer || phoneHostSlot) });
   // What the panel shows beside its chat, kept for this place (panel-view.ts).
   const panelView = usePanelView(sheetAt);
-  const { activeView, setActiveView, fileViewTarget: keptFileTarget, setFileViewTarget, webRequest, setWebRequest, inboxLetterId, setInboxLetterId, terminalDock, setTerminalDock } = panelView;
+  const { activeView, setActiveView, fileViewTarget: keptFileTarget, setFileViewTarget, webRequest, setWebRequest, inboxLetterId, setInboxLetterId, terminalDock, setTerminalDock, panelApp, setPanelApp } = panelView;
   // A file a click opened before this panel mounted is not a click now: the explorer reopens
   // what was read last (it keeps that itself, and the user may have browsed on), so the kept
   // target only roots it on another host. A click in this mount gets a new nonce.
@@ -1719,6 +1721,40 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     // still leave full screen.
     if (next) { if (!isPhoneLayout()) enterFullscreen(); applyOpenCollapse(next); } else { collapseChat(false); }
   }, [enterFullscreen, fileViewTarget, activeView, applyOpenCollapse, collapseChat, inset, session?.taskId, sessionId, locateOwnTask]);
+
+  // The App view (a plugin App's session pane, SessionPluginAppPane): `key` is the App's
+  // registry key. The menu's row toggles like every view row (the same App again closes it);
+  // a request from elsewhere (openSessionApp, with a document) only opens. The pane takes the
+  // focus once per such open, never when a kept view brings it back on a reload.
+  const appFocusWanted = useRef(false);
+  const takeAppFocus = useLeanCallback(() => {
+    const wanted = appFocusWanted.current;
+    appFocusWanted.current = false;
+    return wanted;
+  }, []);
+  const openAppView = useLeanCallback((key: string, opts?: { documentPath?: string; toggle?: boolean }) => {
+    if (opts?.toggle && activeView === 'app' && panelApp?.key === key) { toggleView('app'); return; }
+    setPanelApp((prev) => (opts?.documentPath ? withPanelAppDoc(prev, key, opts.documentPath) : withPanelApp(prev, key)));
+    log.info('session-panel', 'app view open', { sessionId, appKey: key, withDocument: !!opts?.documentPath });
+    if (activeView === 'app') return;
+    appFocusWanted.current = true;
+    toggleView('app');
+  }, [activeView, panelApp?.key, setPanelApp, toggleView, sessionId]);
+  const setAppDocument = useLeanCallback((key: string, path: string | null) => {
+    setPanelApp((prev) => withPanelAppDoc(prev, key, path));
+  }, [setPanelApp]);
+  const openAppViewRef = useRef(openAppView);
+  openAppViewRef.current = openAppView;
+  useEffect(() => {
+    if (inset) return;
+    const onOpen = (event: Event) => {
+      const request = sessionAppOpenRequest(event);
+      if (!request || request.sessionId !== sessionId) return;
+      openAppViewRef.current(request.appKey, request.documentPath ? { documentPath: request.documentPath } : undefined);
+    };
+    window.addEventListener(SESSION_APP_OPEN_EVENT, onOpen);
+    return () => window.removeEventListener(SESSION_APP_OPEN_EVENT, onOpen);
+  }, [inset, sessionId]);
 
   // A project script from the Scripts chip: open the terminal (once) and type it there.
   // The run's id lets its result say whether it was typed (running) or never was (not run).
@@ -2979,6 +3015,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           locateOwnTask(taskId);
         },
       } : undefined}
+      apps={inset ? undefined : { keptKey: panelApp?.key ?? null, onOpen: (key) => openAppView(key, { toggle: true }) }}
       onPopout={inset ? undefined : () => openPopout('session', { id: sessionId, host: session?.host, cwd: session?.cwd })}
       onFullscreen={inset || phoneWidth ? undefined : (shownFullscreen ? exitFullscreen : enterFullscreen)}
       fullscreenLabel={shownFullscreen ? 'Exit full screen' : 'Full screen'}
@@ -3825,6 +3862,21 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                         onOpenLetter={setInboxLetterId}
                         onNavigate={(to) => navigateToTarget(to, navigate)}
                         onOpenFile={handleLetterFileOpen}
+                        barRightSlot={chatBarSlot}
+                      />
+                    )}
+                    {activeView === 'app' && (
+                      <SessionPluginAppPane
+                        sessionId={sessionId}
+                        taskId={session?.taskId ?? undefined}
+                        cwd={session?.cwd ?? undefined}
+                        host={session?.host ?? undefined}
+                        paneId={sheetAt}
+                        record={panelApp}
+                        onPickApp={(key) => openAppView(key)}
+                        onDocumentPathChange={setAppDocument}
+                        onClose={() => toggleView('app')}
+                        takeFocus={takeAppFocus}
                         barRightSlot={chatBarSlot}
                       />
                     )}

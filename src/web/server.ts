@@ -1802,6 +1802,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Task Board writes carry up to 1 MiB of html; their own cap and a v1-shaped 413.
   app.use(BOARD_BODY_PATH, boardJsonParser)
   app.use(BOARD_BODY_PATH, boardPayloadTooLargeHandler)
+  // A drawing save can carry megabytes of scene: its routes take the body as text, so the
+  // scene is parsed once, off the event loop when it is large (core/drawings/scene-codec.ts).
+  app.use('/api/drawings', express.text({ type: 'application/json', limit: '15mb' }))
   app.use(express.json({ limit: '15mb' }))
   // Default API responses to no-store so the browser HTTP cache never
   // revalidates/synthesizes them (see the etag note above — same incident).
@@ -2412,6 +2415,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/keep-awake', (await import('./routes/keep-awake.js')).keepAwakeRouter)
   app.use('/api/notes', notesRouter)
   app.use('/api/notes-v2', notesV2Router)
+  app.use('/api/drawings', (await import('./routes/drawings.js')).drawingsRouter)
   app.use('/api/mention-sources', mentionSourcesRouter)
   app.use('/api/repositories', repositoriesRouter)
   app.use('/api/integrations', integrationsRouter)

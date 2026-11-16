@@ -72,6 +72,40 @@ const publicMicIsHostMic: HostMicButton = null as unknown as PublicMicButton
 void hostMicIsPublicMic
 void publicMicIsHostMic
 
+// An App's session pane and the drawing view: the public props are the ones the host draws,
+// field for field (a field missing on the host side is one the pane never gets).
+type PublicSessionAppProps = import('../../packages/plugin-api/src/web.js').SessionAppProps
+type HostSessionAppProps = import('../../web/src/plugins/types.js').PluginSessionAppProps
+type PaneSdkOnly = ExpectNever<Exclude<keyof PublicSessionAppProps, keyof HostSessionAppProps>>
+type PaneHostOnly = ExpectNever<Exclude<keyof HostSessionAppProps, keyof PublicSessionAppProps>>
+type PublicSessionPane = NonNullable<import('../../packages/plugin-api/src/web.js').AppContribution['sessionPane']>
+type HostSessionPane = NonNullable<Parameters<HostWebApi['ui']['app']>[0]['sessionPane']>
+const hostPaneIsPublic: PublicSessionPane = null as unknown as HostSessionPane
+const publicPaneIsHost: HostSessionPane = null as unknown as PublicSessionPane
+void (null as unknown as PaneSdkOnly)
+void (null as unknown as PaneHostOnly)
+void hostPaneIsPublic
+void publicPaneIsHost
+const paneApp = hostApi.ui.app({
+  id: 'sketch',
+  title: 'Sketch',
+  component: () => null,
+  sessionPane: ({ sessionId, paneId, documentPath, onDocumentPathChange, onClose }) => {
+    const id: string = `${sessionId}:${paneId}`
+    const doc: string | undefined = documentPath
+    onDocumentPathChange(doc ?? null)
+    void id; void onClose
+    return null
+  },
+})
+void paneApp
+type PublicDrawingView = NonNullable<PublicWebApi['ui']['views']['DrawingView']>
+type HostDrawingView = HostWebApi['ui']['views']['DrawingView']
+const hostDrawingIsPublic: PublicDrawingView = null as unknown as HostDrawingView
+const publicDrawingIsHost: HostDrawingView = null as unknown as PublicDrawingView
+void hostDrawingIsPublic
+void publicDrawingIsHost
+
 hostApi.ui.slot({
   id: 'record', target: 'dialog', title: 'Record',
   component: ({ args, close, navigate }) => {

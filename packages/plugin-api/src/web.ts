@@ -35,11 +35,49 @@ export interface AppProps {
  */
 export type AppPlacement = 'sidebar' | 'settings'
 
+/**
+ * What your App's session pane gets: the App drawn beside one session's chat, in the split
+ * the session panel uses for Files and Terminal. The person opens it from the session's ⋮
+ * menu (Open); Walnut keeps which App and which document were open with the panel's view,
+ * so the pane comes back after a reload, a plugin reload or a restart.
+ */
+export interface SessionAppProps {
+  sessionId: string
+  /** The session's task, when it has one. */
+  taskId?: string
+  /** The session's working directory, once known. */
+  cwd?: string
+  /** The host the session runs on (absent: this computer). */
+  host?: string
+  /** Your App's own page (`/apps/<plugin>~<id>`): `navigate(basePath)` opens the standalone App. */
+  basePath: string
+  /**
+   * A stable id of this pane: the panel's place and the session. Pass it as the `id` of
+   * `walnut.ui.useView` and `walnut.ui.useDraft` to keep a choice per pane instead of per App.
+   */
+  paneId: string
+  /** The document the pane shows, as you named it through `onDocumentPathChange`. Opaque to Walnut. Absent: none chosen. */
+  documentPath?: string
+  /** Say which document the pane shows now (null: none), so Walnut opens the same one next time. */
+  onDocumentPathChange(path: string | null): void
+  /** Navigate within the console (an App path, `/tasks/<id>`, ...). */
+  navigate(path: string, options?: { replace?: boolean }): void
+  /** Close the pane; the session's chat stays. */
+  onClose(): void
+}
+
 export interface AppContribution {
   id: string
   title: string
   icon?: PluginComponent<{ size?: number }>
   component: PluginComponent<AppProps>
+  /**
+   * The same App drawn beside a session's chat (see SessionAppProps). Optional, and only
+   * offered where the host knows it: a host older than this field ignores it, and the App's
+   * own page works the same either way. Draw it in the pane's box only; it is unmounted when
+   * the person closes the pane, opens another view there, or your plugin reloads.
+   */
+  sessionPane?: PluginComponent<SessionAppProps>
   badge?: AppBadge
   order?: number
   fullBleed?: boolean
@@ -171,6 +209,36 @@ export interface TerminalViewProps {
   sessionId: string
   label?: string
   host?: string
+}
+
+/** What a drawing reports to its host as it changes (see DrawingViewProps.onState). */
+export interface DrawingViewState {
+  path: string
+  title: string
+  revision: string
+  text: string
+  elementCount: number
+  unsaved: boolean
+}
+
+/**
+ * Walnut's drawing canvas, so a small plugin can show one without bundling the editor.
+ * Optional on the views object: a host older than it does not have it, so feature-detect.
+ */
+export interface DrawingViewProps {
+  taskId?: string
+  sessionId?: string
+  /** The drawing to open. */
+  documentPath?: string
+  /** A draft's own id, for a drawing not saved yet. */
+  draftId?: string
+  onClose?(): void
+  /** Store a pasted or dropped file; resolve with where it is kept, or null when it was not kept. */
+  onAttach?(file: File): Promise<string | null>
+  canAttach?: boolean
+  onState?(state: DrawingViewState): void
+  /** The person picked another drawing (at once, not with the state updates); null: none open. */
+  onDocumentPathChange?(path: string | null): void
 }
 
 /**
@@ -406,6 +474,8 @@ export interface WebUiService {
     AskObjectView?: PluginComponent<AskObjectViewProps>
     /** Dictation into your own text box (see MicButtonProps). Optional on the views object: feature-detect. */
     MicButton?: PluginComponent<MicButtonProps>
+    /** Walnut's drawing canvas (see DrawingViewProps). Optional on the views object: feature-detect. */
+    DrawingView?: PluginComponent<DrawingViewProps>
     /**
      * Your plugin's generated Settings form (manifest `configSchema` + `uiHints`), the same rows
      * your plugin's page in Apps draws under Settings, with their Save. Render it inside your own

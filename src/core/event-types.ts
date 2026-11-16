@@ -1237,6 +1237,17 @@ export interface NotesUpdatedEvent {
  * delete/move) or this event; a plain note body edit does NOT fire it (that
  * would refetch the whole tree on every keystroke's debounced save).
  */
+/**
+ * A drawing's scene changed on disk (src/core/drawings/store.ts). An open editor that is clean
+ * takes the new revision at once instead of waiting for its poll.
+ */
+export interface DrawingUpdatedEvent {
+  /** Vault-relative `.excalidraw` path. */
+  path: string;
+  /** The scene's revision after the write. */
+  revision: string;
+}
+
 export interface NotesTreeChangedEvent {
   /** Vault-relative path of the new/changed file (informational; FE just refetches). */
   path: string;
@@ -1513,6 +1524,7 @@ export interface EventPayloadMap {
 
   'notes:updated': NotesUpdatedEvent;
   'notes:tree-changed': NotesTreeChangedEvent;
+  'drawings:updated': DrawingUpdatedEvent;
 
   'memory:updated': MemoryUpdatedEvent;
 

@@ -1,4 +1,4 @@
-import { APP_PLACEMENTS, type AppPlacement, type RegisteredApp } from './registry'
+import { APP_PLACEMENTS, appPathMatches, type AppPlacement, type RegisteredApp } from './registry'
 
 export const APP_PREFERENCES_KEY = 'open-walnut-app-preferences-v1'
 
@@ -285,5 +285,154 @@ export function resolveApps(apps: RegisteredApp[], preferences: AppPreferences):
     discoverable,
     hidden: all.filter(isHidden),
     sidebar: pinned.filter((app) => !offSidebar(app)),
+  }
+}
+
+/**
+ * The app whose page `pathname` is, by the LONGEST matching path: `/apps/<id>` is the
+ * App's page, never the Apps page's (`/apps`) or Home's (`/`). Today the exact paths
+ * already keep them apart; the longest match keeps that true when a new app nests its
+ * path under another's.
+ */
+export function findAppByPath<T extends Pick<RegisteredApp, 'path' | 'exactPath'>>(apps: readonly T[], pathname: string): T | undefined {
+  let best: T | undefined
+  for (const app of apps) {
+    if (!appPathMatches(app, pathname)) continue
+    if (!best || app.path.length > best.path.length) best = app
+  }
+  return best
+}
+
+/* ── App activity: the apps open on the Sidebar, the recently used and the pinned ── */
+
+/**
+ * Their own keys, apart from the preferences above: the activity changes on every app
+ * opened, and the catalogue re-resolves on every preferences change. Device-local (no
+ * `open-walnut-` prefix, see utils/ui-prefs-sync.ts): what is open belongs to this
+ * window's device. An older build never reads them, so going back loses nothing it knew.
+ *
+ * The pins are a record of their own because they are the person's choice and the
+ * activity is written on every navigation, in every tab: two tabs writing one record at
+ * the same moment can lose one write (localStorage has no cross-tab transaction), and
+ * that must never be a pin. Kept apart, a pin is written only by a pin click.
+ */
+export const APP_ACTIVITY_KEY = 'walnut:app-activity-v1'
+export const APP_PINS_KEY = 'walnut:app-pins-v1'
+export const APP_ACTIVITY_VERSION = 1
+/** How many recently used apps are kept and shown. */
+export const APP_RECENT_MAX = 12
+/** A bound on every stored list, so a hand-edited or corrupt record stays small. */
+const APP_ACTIVITY_LIST_MAX = 64
+
+export interface AppActivity {
+  version: typeof APP_ACTIVITY_VERSION
+  /** Opened and not closed yet, in the order they were first opened. */
+  open: string[]
+  /** Most recent first; closing an app keeps it here. */
+  recent: string[]
+}
+
+/** Pinned on the Apps page, in the order they were pinned. Not the Sidebar's pin. */
+export interface AppPins {
+  version: typeof APP_ACTIVITY_VERSION
+  pinned: string[]
+}
+
+export interface ResolvedAppActivity {
+  /** Open apps that have no Sidebar row of their own, so the Sidebar draws one for them. */
+  open: RegisteredApp[]
+  /** Recently used, most recent first, leaving out the pinned ones (they have their own list). */
+  recent: RegisteredApp[]
+  pinned: RegisteredApp[]
+}
+
+export function createAppActivity(): AppActivity {
+  return { version: APP_ACTIVITY_VERSION, open: [], recent: [] }
+}
+
+export function createAppPins(): AppPins {
+  return { version: APP_ACTIVITY_VERSION, pinned: [] }
+}
+
+/** The record's object, or null for a malformed or unknown-version one (read as empty). */
+function activityRecord(raw: string | null): Record<string, unknown> | null {
+  if (!raw) return null
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown> | null
+    return value && typeof value === 'object' && value.version === APP_ACTIVITY_VERSION ? value : null
+  } catch {
+    return null
+  }
+}
+
+/** A bad list reads as empty alone; the good ones of the record are kept. */
+export function parseAppActivity(raw: string | null): AppActivity {
+  const value = activityRecord(raw)
+  if (!value) return createAppActivity()
+  return {
+    version: APP_ACTIVITY_VERSION,
+    open: uniqueStrings(value.open).slice(0, APP_ACTIVITY_LIST_MAX),
+    recent: uniqueStrings(value.recent).slice(0, APP_RECENT_MAX),
+  }
+}
+
+export function parseAppPins(raw: string | null): AppPins {
+  const value = activityRecord(raw)
+  if (!value) return createAppPins()
+  return { version: APP_ACTIVITY_VERSION, pinned: uniqueStrings(value.pinned).slice(0, APP_ACTIVITY_LIST_MAX) }
+}
+
+/**
+ * Home, Apps and Settings (the locked apps) are how you get anywhere; they are always on
+ * the Sidebar, so they are never "open" and never fill the recent list.
+ */
+export function tracksAppActivity(app: Pick<RegisteredApp, 'lockVisibility'>): boolean {
+  return !app.lockVisibility
+}
+
+/** Opening returns the same record when nothing changes, so a re-render writes nothing. */
+export function openAppActivity(activity: AppActivity, key: string): AppActivity {
+  if (!key) return activity
+  const isOpen = activity.open.includes(key)
+  if (isOpen && activity.recent[0] === key) return activity
+  return {
+    ...activity,
+    open: isOpen ? activity.open : [...activity.open, key].slice(-APP_ACTIVITY_LIST_MAX),
+    recent: [key, ...without(activity.recent, key)].slice(0, APP_RECENT_MAX),
+  }
+}
+
+/** Closing only takes the Sidebar row away: the app stays recent. */
+export function closeAppActivity(activity: AppActivity, key: string): AppActivity {
+  if (!activity.open.includes(key)) return activity
+  return { ...activity, open: without(activity.open, key) }
+}
+
+export function setAppPinned(pins: AppPins, key: string, pinned: boolean): AppPins {
+  if (!key || pins.pinned.includes(key) === pinned) return pins
+  return {
+    ...pins,
+    pinned: pinned ? [...pins.pinned, key].slice(-APP_ACTIVITY_LIST_MAX) : without(pins.pinned, key),
+  }
+}
+
+/**
+ * Keys become apps here, and only apps that can be opened now: an unknown key (a plugin
+ * turned off or removed, a webview still loading) or a hidden app is left out of every
+ * list but kept in the record, so it comes back when its app does.
+ */
+export function resolveAppActivity(
+  activity: AppActivity,
+  pins: AppPins,
+  resolved: Pick<ResolvedApps, 'discoverable' | 'sidebar'>,
+): ResolvedAppActivity {
+  const byKey = new Map(resolved.discoverable.filter(tracksAppActivity).map((app) => [app.key, app]))
+  const pick = (keys: string[]) => keys.map((key) => byKey.get(key)).filter((app): app is RegisteredApp => Boolean(app))
+  const onSidebar = new Set(resolved.sidebar.map((app) => app.key))
+  const pinnedKeys = new Set(pins.pinned)
+  return {
+    open: pick(activity.open).filter((app) => !onSidebar.has(app.key)),
+    recent: pick(activity.recent).filter((app) => !pinnedKeys.has(app.key)),
+    pinned: pick(pins.pinned),
   }
 }

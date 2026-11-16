@@ -5,14 +5,16 @@ import { linkTargetFor } from '@/utils/last-location';
 import { isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
 import { useAudioCapture } from '@/hooks/useAudioCapture';
-import { useAppCatalog } from '@/apps/hooks';
+import { useAppActivity, useAppCatalog } from '@/apps/hooks';
 import { appPathMatches } from '@/apps/registry';
 import { useRailItemsShown } from '@/apps/rail-items';
 import { CalendarIcon, PuzzleIcon } from '@/apps/icons';
 import {
+  markAppClosed,
   moveAppPreference,
   resetAppOrder,
   updateAppDisposition,
+  updateAppOnSidebar,
 } from '@/apps/store';
 import type { RegisteredApp } from '@/apps/registry';
 import { useNotifications, attentionHeld, quietLabel, railBadge, railCount, railDot } from '@/contexts/notifications';
@@ -74,6 +76,8 @@ export function Sidebar({
 }: SidebarProps) {
   const { hasIssues, health, loading: healthLoading } = useSystemHealth();
   const apps = useAppCatalog();
+  // Experiment apps_stay_open: apps opened from anywhere, kept here until closed (empty when off).
+  const activity = useAppActivity(apps);
   // Built-in rail entries the user took off the rail on the Apps page (apps/rail-items.ts).
   const railShown = useRailItemsShown();
   const navigate = useNavigate();
@@ -302,6 +306,19 @@ export function Sidebar({
   const buildAppMenu = (app: RegisteredApp): ContextMenuItem[] => {
     const list = apps.sidebar;
     const index = list.findIndex((item) => item.key === app.key);
+    if (index === -1 && activity.open.some((item) => item.key === app.key)) {
+      return [
+        { key: 'title', section: true, label: app.title },
+        {
+          key: 'keep', label: 'Keep on sidebar',
+          title: 'Gives the app its own sidebar row, which stays after you close it',
+          onSelect: () => { updateAppOnSidebar(app, true); markAppClosed(app.key); },
+        },
+        { key: 'close', label: 'Close', onSelect: () => closeOpenApp(app) },
+        { divider: true },
+        { key: 'manage', label: 'Manage apps…', onSelect: () => navigate('/apps') },
+      ];
+    }
     return [
       { key: 'title', section: true, label: app.title },
       {
@@ -326,6 +343,74 @@ export function Sidebar({
       { divider: true },
       { key: 'manage', label: 'Manage apps…', onSelect: () => navigate('/apps') },
     ];
+  };
+
+  // One rail row for an app, the same for a Sidebar app and an open one (apps_stay_open).
+  const appLink = (app: RegisteredApp) => {
+    const Icon = app.icon;
+    const icon = Icon ? (
+      app.kind === 'native' && app.pluginId ? (
+        <PluginBoundary
+          pluginId={app.pluginId}
+          pluginName={app.pluginName ?? app.title}
+          resetKey={app.generation}
+          compact
+          fallback={<PuzzleIcon />}
+        >
+          <Icon size={18} />
+        </PluginBoundary>
+      ) : <Icon size={18} />
+    ) : app.iconUrl ? (
+      <img src={app.iconUrl} alt="" className="sidebar-app-icon" />
+    ) : <PuzzleIcon />;
+    // Where the link goes: the section's remembered location (Calendar's
+    // view+date, Settings' pane, …), the bare path when there is none. While
+    // ON the app the link points at the current URL, so clicking the active
+    // icon is a no-op instead of a reset to an older remembered state.
+    const onThisApp = app.path !== '/' && appPathMatches(app, location.pathname);
+    const hostDot = railDot(hostAttention, quietNow) && app.kind === 'core' && app.path === '/settings';
+    const badge = railBadge(app.badge, quietNow);
+    const target = app.path === '/' ? '/'
+      : onThisApp ? `${location.pathname}${location.search}${location.hash}`
+      : hostDot ? hostSettingsHref()
+      : linkTargetFor(app.path);
+    return (
+      <NavLink
+        key={`${app.key}:${app.generation}`}
+        to={target}
+        end={app.path === '/' || app.exactPath}
+        className={navLinkClass}
+        data-testid={app.kind === 'core'
+          ? `sidebar-core-app-${app.id}`
+          : `sidebar-app-${app.kind === 'webview' ? app.id : app.key}`}
+        data-app-kind={app.kind}
+        // The link carries the one name; the dot inside it is decorative.
+        {...(hostDot ? { 'aria-label': `${app.title}: remote hosts need attention` } : {})}
+        onContextMenu={(e) => appMenu.open(e, app)}
+      >
+        {icon}
+        <span className="sidebar-label">{app.title}</span>
+        {hostDot && (
+          <HostStatusDot dot={{ kind: 'warn', title: `${app.title}: remote hosts need attention` }} className="sidebar-host-dot" decorative />
+        )}
+        {badge === 'dot' ? (
+          <span className="notification-badge-dot" />
+        ) : typeof badge === 'number' && badge > 0 ? (
+          <span className="notification-badge-count">{badge > 99 ? '99+' : badge}</span>
+        ) : badge && typeof badge === 'object' ? (
+          // A status, not a count: muted so it never reads as things to deal with.
+          <span className="notification-badge-count notification-badge-muted" data-testid={`sidebar-app-badge-${app.key}`}>{badge.text}</span>
+        ) : null}
+      </NavLink>
+    );
+  };
+
+  const openApps = activity.open.filter((app) => !(phone && isDesktopOnlyApp(app)));
+  // Closing the app on screen also leaves it: its page with no row would be a page you
+  // cannot get back to from the rail. The Apps page keeps it under Recently used.
+  const closeOpenApp = (app: RegisteredApp) => {
+    markAppClosed(app.key);
+    if (appPathMatches(app, window.location.pathname)) navigate('/apps');
   };
 
   return (
@@ -358,62 +443,7 @@ export function Sidebar({
             (declared by its plugin, or chosen in an older build) has no row here;
             it opens from the Apps page until the user switches it on there. */}
         {apps.sidebar.filter((app) => !(phone && isDesktopOnlyApp(app))).map((app) => {
-          const Icon = app.icon;
-          const icon = Icon ? (
-            app.kind === 'native' && app.pluginId ? (
-              <PluginBoundary
-                pluginId={app.pluginId}
-                pluginName={app.pluginName ?? app.title}
-                resetKey={app.generation}
-                compact
-                fallback={<PuzzleIcon />}
-              >
-                <Icon size={18} />
-              </PluginBoundary>
-            ) : <Icon size={18} />
-          ) : app.iconUrl ? (
-            <img src={app.iconUrl} alt="" className="sidebar-app-icon" />
-          ) : <PuzzleIcon />;
-          // Where the link goes: the section's remembered location (Calendar's
-          // view+date, Settings' pane, …), the bare path when there is none. While
-          // ON the app the link points at the current URL, so clicking the active
-          // icon is a no-op instead of a reset to an older remembered state.
-          const onThisApp = app.path !== '/' && appPathMatches(app, location.pathname);
-          const hostDot = railDot(hostAttention, quietNow) && app.kind === 'core' && app.path === '/settings';
-          const badge = railBadge(app.badge, quietNow);
-          const target = app.path === '/' ? '/'
-            : onThisApp ? `${location.pathname}${location.search}${location.hash}`
-            : hostDot ? hostSettingsHref()
-            : linkTargetFor(app.path);
-          const link = (
-            <NavLink
-              key={`${app.key}:${app.generation}`}
-              to={target}
-              end={app.path === '/' || app.exactPath}
-              className={navLinkClass}
-              data-testid={app.kind === 'core'
-                ? `sidebar-core-app-${app.id}`
-                : `sidebar-app-${app.kind === 'webview' ? app.id : app.key}`}
-              data-app-kind={app.kind}
-              // The link carries the one name; the dot inside it is decorative.
-              {...(hostDot ? { 'aria-label': `${app.title}: remote hosts need attention` } : {})}
-              onContextMenu={(e) => appMenu.open(e, app)}
-            >
-              {icon}
-              <span className="sidebar-label">{app.title}</span>
-              {hostDot && (
-                <HostStatusDot dot={{ kind: 'warn', title: `${app.title}: remote hosts need attention` }} className="sidebar-host-dot" decorative />
-              )}
-              {badge === 'dot' ? (
-                <span className="notification-badge-dot" />
-              ) : typeof badge === 'number' && badge > 0 ? (
-                <span className="notification-badge-count">{badge > 99 ? '99+' : badge}</span>
-              ) : badge && typeof badge === 'object' ? (
-                // A status, not a count: muted so it never reads as things to deal with.
-                <span className="notification-badge-count notification-badge-muted" data-testid={`sidebar-app-badge-${app.key}`}>{badge.text}</span>
-              ) : null}
-            </NavLink>
-          );
+          const link = appLink(app);
           return app.path === '/' ? (
             <Fragment key={`${app.key}:${app.generation}`}>
               <div className="sidebar-home-group">{link}{homePanelToggles}</div>
@@ -422,6 +452,26 @@ export function Sidebar({
             </Fragment>
           ) : link;
         })}
+        {openApps.length > 0 && (
+          <div className="sidebar-open-apps" role="group" aria-label="Open apps" data-testid="sidebar-open-apps">
+            <div className="sidebar-group-caption sidebar-label" aria-hidden="true">Open</div>
+            {openApps.map((app) => (
+              <div key={`${app.key}:${app.generation}`} className="sidebar-open-app" data-testid={`sidebar-open-app-${app.key}`}>
+                {appLink(app)}
+                <button
+                  type="button"
+                  className="sidebar-open-app-close"
+                  onClick={() => closeOpenApp(app)}
+                  aria-label={`Close ${app.title}`}
+                  title={`Close ${app.title}`}
+                  data-testid={`sidebar-open-app-close-${app.key}`}
+                >
+                  <CloseIcon />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </nav>
 
       {/* Notification — bottom area. Recording is started from Settings → Audio
@@ -522,6 +572,14 @@ function HamburgerIcon() {
   );
 }
 
+
+function CloseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+      <path d="M7 7l10 10M17 7L7 17" />
+    </svg>
+  );
+}
 
 function ChatBubbleIcon() {
   return (

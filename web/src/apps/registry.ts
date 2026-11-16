@@ -1,9 +1,16 @@
 import type { ComponentType } from 'react'
 import type { PluginApp } from '@/api/apps'
 import { disposable } from '@/plugins/disposable'
+import type {
+  PluginAppBadge,
+  PluginAppContribution,
+  PluginAppPlacement,
+  PluginAppProps,
+  PluginSessionAppProps,
+} from '@/plugins/types'
 
 /** A number is a count (red); `{ text }` is a short muted status such as a countdown. */
-export type AppBadge = number | 'dot' | null | { text: string }
+export type AppBadge = PluginAppBadge
 export const APP_BADGE_TEXT_MAX = 6
 export type AppKind = 'core' | 'native' | 'webview'
 
@@ -15,28 +22,17 @@ export type AppKind = 'core' | 'native' | 'webview'
  * Command Palette entry, same owner lifecycle — so moving its row can never change what
  * it can do.
  */
-export type AppPlacement = 'sidebar' | 'settings'
+export type AppPlacement = PluginAppPlacement
 
 export const APP_PLACEMENTS: readonly AppPlacement[] = ['sidebar', 'settings']
 
-export interface AppComponentProps {
-  basePath: string
-  subpath: string
-  search: string
-  navigate(path: string, options?: { replace?: boolean }): void
-}
-
-export interface AppContribution {
-  id: string
-  title: string
-  icon?: ComponentType<{ size?: number }>
-  component: ComponentType<AppComponentProps>
-  badge?: AppBadge
-  order?: number
-  fullBleed?: boolean
-  /** Default 'settings' (off the Sidebar, opened from the Apps page): ask for a Sidebar row with 'sidebar'. The person can switch it either way. */
-  placement?: AppPlacement
-}
+// One definition each, the host's mirror of the public plugin API (plugins/types.ts), so the
+// registry, the host API and the contract typecheck cannot drift apart.
+export type AppComponentProps = PluginAppProps
+/** What an App's pane beside a session's chat gets (SessionPluginAppPane). */
+export type SessionAppProps = PluginSessionAppProps
+/** placement default 'settings' (off the Sidebar, opened from the Apps page); the person can switch it either way. */
+export type AppContribution = PluginAppContribution
 
 export interface CoreAppContribution {
   id: string
@@ -75,6 +71,8 @@ export interface RegisteredApp {
   icon?: ComponentType<{ size?: number }>
   iconUrl?: string | null
   component?: ComponentType<AppComponentProps>
+  /** Native plugin Apps only: the App drawn beside a session's chat (`sessionPaneApps`). */
+  sessionPane?: ComponentType<SessionAppProps>
   badge: AppBadge
   order: number
   fullBleed: boolean
@@ -149,6 +147,11 @@ function resolvePlacement(value: AppPlacement | undefined): AppPlacement {
   return value
 }
 
+/** Where an App's `navigate(target)` goes: a `/path` as is, anything else under the App's own path. */
+export function appNavigateTarget(appPath: string, target: string): string {
+  return target.startsWith('/') ? target : `${appPath}/${target.replace(/^\.\//, '').replace(/^\//, '')}`
+}
+
 /** Is `pathname` this app's page? Its subtree counts unless the app is exact (or Home). */
 export function appPathMatches(app: Pick<RegisteredApp, 'path' | 'exactPath'>, pathname: string): boolean {
   if (app.path === '/' || app.exactPath) return pathname === app.path
@@ -200,6 +203,7 @@ export class AppRegistry {
       routeId,
       icon: contribution.icon,
       component: contribution.component,
+      ...(contribution.sessionPane ? { sessionPane: contribution.sessionPane } : {}),
       badge: contribution.badge ?? null,
       order: contribution.order ?? 500,
       fullBleed: contribution.fullBleed ?? true,
@@ -331,6 +335,17 @@ export function filterAppsByPlugin(apps: RegisteredApp[], activeKey: string): Re
   if (!apps.some((app) => app.requiresPlugin)) return apps
   const active = new Set(activeKey ? activeKey.split(',') : [])
   return apps.filter((app) => !app.requiresPlugin || active.has(app.requiresPlugin))
+}
+
+/**
+ * The Apps a session panel can open beside its chat: native plugin Apps that brought a
+ * `sessionPane`, in catalogue order. Read from the resolved catalogue, so an App whose
+ * plugin is off is not offered. Returns one shared empty array when there are none.
+ */
+const NO_PANE_APPS: RegisteredApp[] = []
+export function sessionPaneApps(apps: RegisteredApp[]): RegisteredApp[] {
+  const found = apps.filter((app) => app.kind === 'native' && !!app.sessionPane && !!app.pluginId)
+  return found.length ? found : NO_PANE_APPS
 }
 
 export function findHostedAppByRouteId(

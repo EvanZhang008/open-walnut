@@ -5,7 +5,8 @@
  * location"): the split view open beside the chat (Changed, Files, Terminal, Inbox, Web, Code,
  * Board), the file a click opened in Files, the service open in Web, the letter open in Inbox,
  * whether the user hid the chat beside it, the terminal docked under Changed / Files / Web
- * (and its height), and Tree Mode's split (tree-split-state.ts). A panel
+ * (and its height), Tree Mode's split (tree-split-state.ts), and the plugin App open in the
+ * App view with the document each App showed there (`app`). A panel
  * that mounts again (a plugin reloaded, a page reload, another page and back, the app
  * restarted) shows it as it was left. The file the
  * explorer shows after browsing, its tree and its history are the explorer's own
@@ -17,11 +18,27 @@
  */
 import { useCallback, useMemo, type Dispatch, type SetStateAction } from 'react';
 import { usePageViewOf } from '@/utils/view-memory';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import type { SessionSplitView } from './sessionSplitView';
 import type { WebViewRequest } from './SessionWebView';
 import { NO_TREE_SPLIT, isTreeSplitRecord, sameTreeSplit, type TreeSplitRecord } from '@/utils/tree-split-state';
 
-export const PANEL_VIEWS: readonly SessionSplitView[] = ['changed', 'files', 'terminal', 'code', 'inbox', 'web', 'board'];
+export const PANEL_VIEWS: readonly SessionSplitView[] = ['changed', 'files', 'terminal', 'code', 'inbox', 'web', 'board', 'app'];
+
+/**
+ * The App view's choice: which App (its registry key, `<plugin>:<app>`) and, per App, the
+ * document it last showed (opaque to Walnut). Kept while the App's plugin is off, so turning
+ * it back on brings the pane back as it was.
+ */
+export interface PanelAppRecord {
+  key: string;
+  docs?: Record<string, string>;
+}
+
+/** Bounds of what a kept App record may hold (a plugin names its documents; keep them small). */
+export const PANEL_APP_KEY_MAX = 200;
+export const PANEL_APP_DOC_MAX = 4096;
+export const PANEL_APP_DOCS_MAX = 32;
 
 /** A file a click opened in the Files view. */
 export interface PanelFileTarget {
@@ -48,6 +65,44 @@ export interface PanelViewRecord {
   terminalDock?: TerminalDockRecord;
   /** The chat's reading split (SessionReaderPane): open or not, which way, and the reading pane's share. */
   reader?: ReaderSplitRecord;
+  /** The App view's App and documents (absent: none picked yet). */
+  app?: PanelAppRecord | null;
+}
+
+export function isPanelApp(v: unknown): v is PanelAppRecord {
+  if (!v || typeof v !== 'object') return false;
+  const r = v as Record<string, unknown>;
+  if (typeof r.key !== 'string' || !r.key || r.key.length > PANEL_APP_KEY_MAX) return false;
+  if (r.docs === undefined) return true;
+  if (!r.docs || typeof r.docs !== 'object' || Array.isArray(r.docs)) return false;
+  const docs = Object.entries(r.docs as Record<string, unknown>);
+  return docs.length <= PANEL_APP_DOCS_MAX
+    && docs.every(([k, d]) => k.length <= PANEL_APP_KEY_MAX && typeof d === 'string' && d.length > 0 && d.length <= PANEL_APP_DOC_MAX);
+}
+
+/** `record` showing App `key`, its document unchanged. */
+export function withPanelApp(record: PanelAppRecord | null | undefined, key: string): PanelAppRecord {
+  if (record?.key === key) return record;
+  return record?.docs ? { key, docs: record.docs } : { key };
+}
+
+/**
+ * `record` with App `key`'s document set (null forgets it). The newest App's document is kept
+ * last, and the oldest are dropped past PANEL_APP_DOCS_MAX; a path over the cap is not kept.
+ */
+export function withPanelAppDoc(record: PanelAppRecord | null | undefined, key: string, doc: string | null): PanelAppRecord {
+  const base = withPanelApp(record, key);
+  const prev = base.docs ?? {};
+  const next = doc || null;
+  // Not keepable, the same one again, or nothing to forget: no write.
+  if (next !== null && next.length > PANEL_APP_DOC_MAX) return base;
+  if (next !== null ? prev[key] === next : !(key in prev)) return base;
+  const docs = { ...prev };
+  delete docs[key];
+  if (next !== null) docs[key] = next;
+  const keys = Object.keys(docs);
+  for (const old of keys.slice(0, Math.max(0, keys.length - PANEL_APP_DOCS_MAX))) delete docs[old];
+  return Object.keys(docs).length ? { key: base.key, docs } : { key: base.key };
 }
 
 export interface ReaderSplitRecord {
@@ -115,10 +170,11 @@ export function isPanelView(v: unknown): v is PanelViewRecord {
     && (r.chatHidden === undefined || typeof r.chatHidden === 'boolean')
     && (r.tree === undefined || isTreeSplitRecord(r.tree))
     && (r.terminalDock === undefined || isTerminalDock(r.terminalDock))
-    && (r.reader === undefined || isReaderSplit(r.reader));
+    && (r.reader === undefined || isReaderSplit(r.reader))
+    && (r.app === undefined || r.app === null || isPanelApp(r.app));
 }
 
-type Field = Exclude<keyof PanelViewRecord, 'chatHidden' | 'tree' | 'terminalDock' | 'reader'>;
+type Field = Exclude<keyof PanelViewRecord, 'chatHidden' | 'tree' | 'terminalDock' | 'reader' | 'app'>;
 
 /** One field's setter over the record, `useState` style (a value or an updater). */
 function fieldSetter<K extends Field>(set: Dispatch<SetStateAction<PanelViewRecord>>, key: K): Dispatch<SetStateAction<NonNullable<PanelViewRecord[K]> | null>> {
@@ -162,8 +218,17 @@ export function usePanelView(place: string) {
       return next.on === cur.on && next.orient === cur.orient && next.share === cur.share ? prev : { ...prev, reader: next };
     });
   }, [setRecord]);
+  const setPanelApp = useLeanCallback((update: (prev: PanelAppRecord | null) => PanelAppRecord | null) => {
+    setRecord((prev) => {
+      const cur = prev.app ?? null;
+      const next = update(cur);
+      return next === cur ? prev : { ...prev, app: next };
+    });
+  }, [setRecord]);
   return {
     activeView: record.view,
+    panelApp: record.app ?? null,
+    setPanelApp,
     readerSplit: record.reader ?? NO_READER,
     setReaderSplit,
     terminalDock: record.terminalDock ?? { on: false },

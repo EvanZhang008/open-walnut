@@ -62,7 +62,7 @@ async function tryLoadSharp(): Promise<SharpFn | null> {
 }
 
 /** sharp, once it loads; null while it does not (asked again on the next image). Never throws. */
-async function loadSharp(): Promise<SharpFn | null> {
+export async function loadSharp(): Promise<SharpFn | null> {
   if (sharpForTests !== undefined) return sharpForTests;
   if (sharpFn) return sharpFn;
   sharpLoading ??= tryLoadSharp()

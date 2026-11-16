@@ -1021,6 +1021,16 @@ export function activate(walnut: WalnutWebApi) {
 
 Treat `subpath` as your own router input. Keep it a plain string comparison for a few tabs, and reach for a small switch only when the App really has several screens.
 
+### An App beside a session
+
+An App may also contribute `sessionPane`, a component Walnut hosts beside a session's chat in the existing split layout. This is the same App registration, not another plugin type or a separate route. Apps without it keep their current behavior. The session's Apps picker lists only enabled native Apps that declared a pane.
+
+`SessionAppProps` identifies the `sessionId` and, when present, `taskId`. It also carries the App's route context, an optional `documentPath` selected by the host, and `onClose`. Keep the document identity separate from the component's mount: a late request for the previous file must not replace the current file. Walnut remembers the selected App and document per session and place. Disabling the plugin removes its pane without affecting the chat.
+
+Use `walnut.appState.publish` to share a small status with the agent on that task, and plugin ops to read or change the actual document. Do not put full documents into app state. A write should check the revision returned by the last read; a conflict is a reason to re-read, not to overwrite.
+
+Drawing is a worked example in `plugin-store/walnut-drawing`: its App and session pane both render the host's optional `walnut.ui.views.DrawingView`. The large editor is loaded on demand by Walnut, so the plugin module stays small. Feature-detect the view on older hosts and show a clear update message when it is absent.
+
 ### Badges
 
 A badge is a number, `'dot'`, `{ text }`, or `null`. A number is a count and draws red, like unread mail. `{ text: '24m' }` is a short status that is not a count (a countdown, a mode) and draws muted; the text is 1 to 6 characters. A non-integer or negative number, or text outside that length, is refused at the call. Set an initial value on the contribution, then move it with the handle as state changes, and clear it with `null` when the user has seen whatever it was counting.
@@ -1414,7 +1424,7 @@ Discovery and reload are different operations: `POST /api/plugin-runtime/discove
 
 ### Bundled store
 
-The repo folder `plugin-store/` holds plugins that ship inside every Walnut build but are not loaded by default. Each one uses the same layout as `examples/plugins/<id>/`, and the folder name must equal the manifest `id`. The build (`scripts/ship-store-plugins.mjs`, run by `bun run build` and `bun run web:build`) builds each one with `walnut-plugin build`, checks its declared `server` and `web` artifacts, and copies `manifest.json`, `README.md`, `dist/` and `skills/` to `dist/plugin-store/<id>/`.
+The repo folder `plugin-store/` holds plugins that ship inside every Walnut build but are not loaded by default. Drawing (`walnut-drawing`) is a bundled App that also contributes a session pane and revision-checked diagram tools. Each one uses the same layout as `examples/plugins/<id>/`, and the folder name must equal the manifest `id`. The build (`scripts/ship-store-plugins.mjs`, run by `bun run build` and `bun run web:build`) builds each one with `walnut-plugin build`, checks its declared `server` and `web` artifacts, and copies `manifest.json`, `README.md`, `dist/` and `skills/` to `dist/plugin-store/<id>/`.
 
 In Apps, a bundled plugin lists under Available with an **Install** button:
 

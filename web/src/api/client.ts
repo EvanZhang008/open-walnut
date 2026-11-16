@@ -535,7 +535,7 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
   return data;
 }
 
-export function apiGet<T>(path: string, params?: Record<string, string>, opts?: { signal?: AbortSignal; timeoutMs?: number; quietStatuses?: number[]; priority?: 'low'; onDispatch?: () => void }): Promise<T> {
+export function apiGet<T>(path: string, params?: Record<string, string>, opts?: { signal?: AbortSignal; timeoutMs?: number; quietStatuses?: number[]; priority?: 'low'; onDispatch?: () => void; headers?: Record<string, string> }): Promise<T> {
   const url = params ? `${path}?${new URLSearchParams(params)}` : path;
   return request<T>('GET', url, undefined, opts);
 }

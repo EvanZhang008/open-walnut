@@ -90,7 +90,7 @@ async function openComposer(page: Page, cwd = '/fixture', host?: string) {
     contentType: 'text/html',
     body: '<!doctype html><meta charset="utf-8"><div id="root"></div><script src="/__composer-input-test.js"></script>',
   }))
-  await page.route('**/__composer-input-test.js', route => route.fulfill({ contentType: 'text/javascript', body: script }))
+  await page.route('**/__composer-input-test.js', route => route.fulfill({ contentType: 'text/javascript; charset=utf-8', body: script }))
   await page.route('**/api/stt/status', route => route.fulfill({ json: { available: false } }))
   await page.route('**/api/files/list?**', route => {
     const dir = new URL(route.request().url()).searchParams.get('path')

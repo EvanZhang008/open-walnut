@@ -5,6 +5,7 @@ import { PluginAppPage } from '@/pages/PluginAppPage'
 import { PluginBounds } from '@/plugins/PluginBounds'
 import { useWebPluginRuntime } from '@/plugins/hooks'
 import { useAppCatalog } from './hooks'
+import { appNavigateTarget } from './registry'
 
 export function AppHostPage() {
   const params = useParams<{ appId: string; '*': string }>()
@@ -43,12 +44,7 @@ export function AppHostPage() {
           basePath={app.path}
           subpath={subpath}
           search={location.search}
-          navigate={(target, options) => {
-            const path = target.startsWith('/')
-              ? target
-              : `${app.path}/${target.replace(/^\.\//, '').replace(/^\//, '')}`
-            navigate(path, options)
-          }}
+          navigate={(target, options) => navigate(appNavigateTarget(app.path, target), options)}
         />
       </PluginBounds>
     </PluginBoundary>

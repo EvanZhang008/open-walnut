@@ -309,6 +309,12 @@ export function createWebPluginApi(
         if (!contribution.title?.trim()) throw new Error('Plugin App title is required')
         if (contribution.icon) validateComponent(contribution.icon)
         validateComponent(contribution.component)
+        // Optional and additive: an App without it keeps only its page.
+        if (contribution.sessionPane !== undefined) {
+          try { validateComponent(contribution.sessionPane) } catch {
+            throw new Error('Plugin App sessionPane must be a React component')
+          }
+        }
         validateAppBadge(contribution.badge)
         if (contribution.order !== undefined && !Number.isFinite(contribution.order)) {
           throw new Error('Plugin App order must be finite')

@@ -11,9 +11,9 @@
 import { useSyncExternalStore, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Config } from '@open-walnut/core'
-import { useAppCatalog } from '@/apps/hooks'
+import { useAppCatalog, useAppPagePins } from '@/apps/hooks'
 import { appOnSidebar } from '@/apps/preferences'
-import { getAppPreferences, subscribeAppPreferences, updateAppOnSidebar } from '@/apps/store'
+import { getAppPreferences, subscribeAppPreferences, updateAppOnSidebar, updateAppPinned } from '@/apps/store'
 import { SettingsGroup, SettingsLoadingRow, SettingsRow, SettingsTag } from '@/components/settings/SettingsSection'
 import { SettingsButton } from '@/components/settings/inputs/SettingsButton'
 import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch'
@@ -90,6 +90,7 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
   const navigate = useNavigate()
   const catalog = useAppCatalog()
   const preferences = useSyncExternalStore(subscribeAppPreferences, getAppPreferences, getAppPreferences)
+  const pagePins = useAppPagePins()
   const tints = pluginTileTints(store.rows)
   const parentOf = partParents(store.installed)
   const parentId = parentOf.get(row.id)
@@ -193,6 +194,12 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
               <>
                 <span className="apps-app-switch-label">Show on the sidebar</span>
                 <ToggleSwitch checked={shown} onChange={(next) => updateAppOnSidebar(app, next)} aria-label={`Show ${app.title} on the sidebar`} data-testid={`apps-app-toggle-${app.key}`} />
+                {/* Experiment apps_stay_open: the Apps page's own Pinned list, a way back before the App was ever opened. */}
+                {pagePins && (
+                  <SettingsButton onClick={() => updateAppPinned(app.key, !pagePins.includes(app.key))} aria-pressed={pagePins.includes(app.key)} data-testid={`apps-app-pin-${app.key}`}>
+                    {pagePins.includes(app.key) ? 'Unpin from Apps' : 'Pin on Apps'}
+                  </SettingsButton>
+                )}
                 <SettingsButton variant="primary" onClick={() => navigate(app.path)} data-testid={`apps-app-open-${app.key}`}>Open</SettingsButton>
               </>
             }

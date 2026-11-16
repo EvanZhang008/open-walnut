@@ -1,4 +1,7 @@
-import { useEffect, useReducer, useState } from 'react';
+import { lazy, Suspense, useEffect, useReducer, useState } from 'react';
+import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+
+const DrawingWorkspace = lazy(() => import('@/components/drawing/DrawingWorkspace').then((module) => ({ default: module.DrawingWorkspace })));
 import { attachmentUrl, revealNote } from '@/api/notes-v2';
 import { browserCanInlinePdf } from '@/utils/pdf-support';
 import { NOTE_IMAGE_EXTS } from './notes-image-types';
@@ -42,6 +45,10 @@ export function AttachmentPreview({ notePath, findQuery }: { notePath: string; f
   // <iframe> is a silent download, so route those users to the open card
   // (local app via /reveal) instead of downloading on every tree click.
   const isPdf = ext === 'pdf' && browserCanInlinePdf();
+
+  if (ext === 'excalidraw') {
+    return <Suspense fallback={<LoadingSpinner />}><DrawingWorkspace key={notePath} documentPath={notePath} /></Suspense>;
+  }
 
   return (
     <div className="notes-editor-panel">

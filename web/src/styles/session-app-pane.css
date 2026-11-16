@@ -1,0 +1,97 @@
+/* A plugin App beside a session's chat (components/sessions/SessionPluginAppPane.tsx). */
+.session-app-pane {
+  width: 100%;
+  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.session-app-pane-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+  /* Shared bar height (see .session-inbox-bar / the file explorer toolbar). */
+  min-height: var(--split-bar-h, 43px);
+}
+
+.session-app-pane-title,
+.session-app-pane-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.session-app-pane-title {
+  font-weight: 600;
+  color: var(--fg);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Many Apps scroll sideways in one row; the bar never grows a second line. */
+.session-app-pane-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.session-app-pane-tab {
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.session-app-pane-tab:hover { color: var(--fg); background: var(--bg-hover); }
+.session-app-pane-tab.is-active { color: var(--fg); font-weight: 600; background: var(--bg-tertiary); }
+
+.session-app-pane-bar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* The App's box: it scrolls itself and draws nowhere past its edges (plugin-bounds.css). */
+.session-app-pane-box {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  clip-path: inset(0);
+}
+
+.session-app-pane-focus {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  outline: none;
+}
+
+.session-app-pane-empty {
+  padding: 24px 18px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--fg-muted);
+  max-width: 46em;
+}

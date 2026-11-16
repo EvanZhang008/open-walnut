@@ -1,0 +1,18 @@
+{
+  "id": "walnut-drawing",
+  "name": "Drawing",
+  "category": "other",
+  "description": "An editable hand-drawn whiteboard saved in Notes, opened as an app or beside a session. Shapes, text, arrows, pen, zoom and image export.",
+  "version": "0.1.0",
+  "icon": "icon.svg",
+  "apiVersion": 1,
+  "engines": { "walnut": ">=0.4.5" },
+  "server": "dist/server.mjs",
+  "web": "dist/web.mjs",
+  "settingsIn": "app",
+  "build": { "server": "src/server.ts", "web": "src/web.tsx" },
+  "catalog": {
+    "adds": ["App", "Session pane", "Agent tools", "Skill"],
+    "docs": "plugin-store/walnut-drawing/README.md"
+  }
+}

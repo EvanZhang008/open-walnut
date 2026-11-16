@@ -15,7 +15,7 @@ import { FocusBarProvider, useFocusBarContext } from '@/contexts/FocusBarContext
 import { lockScroll, unlockScroll } from '@/hooks/useModalOverlay';
 import { perf } from '@/utils/perf-logger';
 import { installTimeTracker } from '@/utils/time-tracking';
-import { useAppCatalog } from '@/apps/hooks';
+import { useAppCatalog, useTrackOpenedApp } from '@/apps/hooks';
 import { hydrateHostStatus } from '@/hooks/useHostStatus';
 import { startHostDismissPruner } from '@/utils/host-banner-dismiss';
 import { HostBannerAnnouncer } from '../common/HostBannerAnnouncer';
@@ -96,6 +96,8 @@ function AppShellInner({ children }: AppShellProps) {
   const apps = useAppCatalog();
   const isMainPage = location.pathname === '/';
   const activeApp = apps.findByPath(location.pathname);
+  // Experiment apps_stay_open: the app on screen stays on the Sidebar until it is closed.
+  useTrackOpenedApp(activeApp, apps.hidden);
   const isFullBleed = activeApp?.fullBleed ?? location.pathname.startsWith('/apps/');
   const focusBar = useFocusBarContext();
   const contentRef = useRef<HTMLDivElement>(null);

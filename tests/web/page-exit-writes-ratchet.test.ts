@@ -37,6 +37,8 @@ const KNOWN: Record<string, 'client' | 'raw' | 'local'> = {
   // The folds' last action goes into localStorage; its server copy rides ui-prefs-sync's keepalive
   // flush, which carries it because the same write runs at visibilitychange to hidden, before pagehide.
   'components/tasks/useFoldStore.ts': 'local',
+  // Unsaved drawing edits go to the draft store (localStorage); its server mirror is drafts.ts's.
+  'components/drawing/DrawingWorkspace.tsx': 'local',
 }
 
 function walk(dir: string): string[] {

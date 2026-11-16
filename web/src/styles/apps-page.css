@@ -565,3 +565,55 @@
 /* The next step after a plugin that brings a tunnel: the browser link page. */
 .apps-expose-guide { margin: 12px 0; }
 .apps-expose-guide .settings-notice-action .settings-button { text-decoration: none; white-space: nowrap; }
+
+/* ── Pinned and Recently used (AppQuickOpen.tsx, experiment apps_stay_open) ── */
+.apps-quick-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+.apps-quick-tile {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border-radius: 10px;
+  background: var(--settings-group-bg);
+}
+.apps-quick-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 4px 9px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.apps-quick-open:hover { background: var(--accent-subtle); }
+.apps-quick-icon { flex: none; display: inline-flex; }
+.apps-quick-icon svg, .apps-quick-icon img { width: 18px; height: 18px; }
+.apps-quick-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.apps-quick-pin {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin-right: 6px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.apps-quick-pin:hover { color: var(--fg); background: var(--bg-tertiary); }
+.apps-quick-pin.is-on { color: var(--accent); }

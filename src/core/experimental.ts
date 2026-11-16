@@ -24,6 +24,18 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'A new task whose folder is in a git repository, or one a workspace plugin claims, starts in its own workspace (a git worktree, or the plugin\'s), so tasks never edit the same checkout. A project\'s settings can turn it on or off for that project; a start can opt out with workspace: false.',
     default: false,
   },
+  {
+    id: 'apps_stay_open',
+    name: 'Open apps stay on the sidebar',
+    description: 'An app you open keeps a row on the sidebar until you close it, wherever you go next. The Apps page shows the apps you used recently and the ones you pinned there, to open again in one click.',
+    default: false,
+  },
+  {
+    id: 'drawing_app',
+    name: 'Drawing app',
+    description: 'An editable hand-drawn whiteboard saved in Notes, as an app and beside a session.',
+    default: false,
+  },
 ] as const;
 
 export type ExperimentalFeatureId = typeof EXPERIMENTAL_FEATURES[number]['id'];

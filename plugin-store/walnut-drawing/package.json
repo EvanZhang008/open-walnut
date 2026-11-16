@@ -1,0 +1,9 @@
+{
+  "name": "walnut-drawing-plugin",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "files": ["manifest.json", "icon.svg", "dist", "skills", "README.md"],
+  "scripts": { "build": "walnut-plugin build", "validate": "walnut-plugin validate", "typecheck": "tsc --noEmit -p tsconfig.json" },
+  "devDependencies": { "@open-walnut/plugin-api": "0.1.0", "@open-walnut/plugin-cli": "0.1.0", "@types/node": "^22.0.0", "@types/react": "^19.0.0", "react": "^19.0.0", "typescript": "^5.8.0" }
+}

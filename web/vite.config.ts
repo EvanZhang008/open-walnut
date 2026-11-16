@@ -2,10 +2,10 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import { restateOwnOrigin } from './dev-proxy-origin';
-import { pdfAssets } from './pdf-assets';
+import { excalidrawAssets, pdfAssets } from './vendor-assets';
 
 export default defineConfig({
-  plugins: [react(), pdfAssets()],
+  plugins: [react(), pdfAssets(), excalidrawAssets()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src'),

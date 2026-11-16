@@ -1,0 +1,134 @@
+/* The drawing workspace (DrawingWorkspace.tsx). It fills the box it is given: an App page, a
+   session pane, a note preview, or the composer's Draw dialog. The editor's own UI lives inside
+   `.excalidraw`; nothing here styles it. */
+.drawing-workspace {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 320px;
+  min-width: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+}
+.drawing-workspace button {
+  background: var(--bg-secondary);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font: inherit;
+  white-space: nowrap;
+}
+.drawing-workspace button:disabled { opacity: .45; cursor: default; }
+.drawing-workspace button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.drawing-workspace-files {
+  flex: 0 0 220px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+.drawing-workspace-files-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 10px 8px;
+  font-weight: 600;
+}
+.drawing-workspace-files-note { margin: 4px 12px; color: var(--fg-muted); font-size: 12px; }
+.drawing-workspace-files-note[role="alert"] { color: var(--danger, #c73333); }
+.drawing-workspace-file-list { list-style: none; margin: 0; padding: 0 6px 8px; overflow-y: auto; }
+.drawing-workspace .drawing-workspace-file {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  margin: 1px 0;
+  padding: 6px 8px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+.drawing-workspace .drawing-workspace-file:hover { background: var(--bg-hover); }
+.drawing-workspace .drawing-workspace-file[aria-current="true"] { background: var(--accent-subtle); color: var(--accent-text); }
+.drawing-workspace-file-title { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.drawing-workspace-file-time { color: var(--fg-muted); font-size: 11px; }
+
+.drawing-workspace-main { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.drawing-workspace-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.drawing-workspace .drawing-workspace-files-toggle { border: 0; background: transparent; padding: 4px 6px; }
+.drawing-workspace-title {
+  margin: 0;
+  min-width: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+}
+.drawing-workspace-status { color: var(--fg-muted); font-size: 12px; white-space: nowrap; }
+.drawing-workspace-status[data-state="conflict"],
+.drawing-workspace-status[data-state="offline"],
+.drawing-workspace-status[data-state="missing"],
+.drawing-workspace-status[data-state="error"] { color: var(--danger, #c73333); }
+.drawing-workspace-bar-gap { flex: 1; }
+.drawing-workspace .drawing-workspace-attach { background: var(--accent); color: #fff; border-color: var(--accent); }
+.drawing-workspace .drawing-workspace-close { border: 0; background: transparent; font-size: 20px; line-height: 1; padding: 2px 6px; }
+
+.drawing-workspace-conflict {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--accent-subtle);
+}
+.drawing-workspace-conflict span { flex: 1 1 260px; }
+.drawing-workspace-warning { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px; color: var(--fg-secondary); border-bottom: 1px solid var(--border); background: var(--bg-secondary); }
+.drawing-workspace-warning span { flex: 1; }
+.drawing-workspace-notice { margin: 0; padding: 6px 10px; color: var(--danger, #c73333); font-size: 12px; border-bottom: 1px solid var(--border); }
+
+.drawing-workspace-canvas { position: relative; flex: 1 1 auto; min-height: 240px; }
+.drawing-canvas-host { position: absolute; inset: 0; }
+.drawing-workspace-empty, .drawing-workspace-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--fg-muted);
+  text-align: center;
+  padding: 16px;
+}
+.drawing-workspace-credit {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 3px 10px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+}
+.drawing-workspace-credit a { color: var(--fg-muted); text-decoration: none; }
+.drawing-workspace-credit a:hover { text-decoration: underline; }
+
+@media (max-width: 640px) {
+  .drawing-workspace-files { flex-basis: 170px; }
+  .drawing-workspace-title { max-width: 30%; }
+}

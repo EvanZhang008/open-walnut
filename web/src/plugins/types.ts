@@ -17,11 +17,30 @@ export interface PluginAppProps {
 /** Which surface carries the App's entry row. See packages/plugin-api web.ts. */
 export type PluginAppPlacement = 'sidebar' | 'settings'
 
+/**
+ * Mirrors `@open-walnut/plugin-api`'s `SessionAppProps` (see ChatViewProps for why it must):
+ * an App's pane beside one session's chat (components/sessions/SessionPluginAppPane.tsx).
+ */
+export interface PluginSessionAppProps {
+  sessionId: string
+  taskId?: string
+  cwd?: string
+  host?: string
+  basePath: string
+  paneId: string
+  documentPath?: string
+  onDocumentPathChange(path: string | null): void
+  navigate(path: string, options?: { replace?: boolean }): void
+  onClose(): void
+}
+
 export interface PluginAppContribution {
   id: string
   title: string
   icon?: ComponentType<{ size?: number }>
   component: ComponentType<PluginAppProps>
+  /** Optional: the App beside a session's chat. A plugin without it keeps only its page. */
+  sessionPane?: ComponentType<PluginSessionAppProps>
   badge?: PluginAppBadge
   order?: number
   fullBleed?: boolean
@@ -212,6 +231,30 @@ export interface SessionViewProps {
   onToggleLock?(): void
 }
 
+/** Mirrors `@open-walnut/plugin-api`'s `DrawingViewState`. */
+export interface DrawingViewState {
+  path: string
+  title: string
+  revision: string
+  text: string
+  elementCount: number
+  unsaved: boolean
+}
+
+/** Mirrors `@open-walnut/plugin-api`'s `DrawingViewProps` (see ChatViewProps for why it must). */
+export interface DrawingViewProps {
+  taskId?: string
+  sessionId?: string
+  documentPath?: string
+  draftId?: string
+  onClose?(): void
+  onAttach?(file: File): Promise<string | null>
+  canAttach?: boolean
+  onState?(state: DrawingViewState): void
+  /** The person picked another drawing (at once, not with the state updates); null: none open. */
+  onDocumentPathChange?(path: string | null): void
+}
+
 export type TaskViewCompletion = 'todo' | 'in_progress' | 'complete'
 export type TaskViewPhase = 'TODO' | 'WAITING' | 'IN_PROGRESS' | 'NEED_ACTION' | 'COMPLETE'
 export type TaskViewPriority = 'immediate' | 'important' | 'backlog' | 'none'
@@ -328,6 +371,8 @@ export interface PluginViews {
   AskObjectView: ComponentType<AskObjectViewProps>
   /** Dictation into the plugin's own text box: the composer's mic (BoxMic). */
   MicButton: ComponentType<MicButtonProps>
+  /** Walnut's drawing canvas, loaded on first use so a plugin bundle never carries the editor. */
+  DrawingView: ComponentType<DrawingViewProps>
   /** The plugin's own generated Settings form (manifest configSchema + uiHints), as rows. */
   PluginSettingsView: ComponentType<Record<string, never>>
   /** The two content actions (Talk to CEO, New task) as buttons, for one piece of content. */

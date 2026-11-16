@@ -50,6 +50,8 @@ export const ATTACHMENT_EXTS = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'pdf',
   'tif', 'tiff', 'bmp', 'avif', 'svg',
   'docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt',
+  // An editable drawing (a JSON scene, core/drawings/): Notes opens it in the drawing editor.
+  'excalidraw',
 ])
 
 export function isAttachmentFile(name: string): boolean {

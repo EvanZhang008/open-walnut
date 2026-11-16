@@ -10,7 +10,15 @@ import { PluginSettingsForm } from '@/components/settings/PluginSettingsForm'
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic'
 import { ContentActionButtons } from '@/components/content/ContentActionButtons'
 import type { ContentItem } from '@/utils/content-actions'
-import { useCallback, useRef, type RefObject } from 'react'
+import { lazy, Suspense, useCallback, useRef, type RefObject } from 'react'
+import type { DrawingViewProps } from '../../../packages/plugin-api/src/web'
+import { LoadingSpinner } from '@/components/common/LoadingSpinner'
+
+const DrawingWorkspace = lazy(() => import('@/components/drawing/DrawingWorkspace').then((module) => ({ default: module.DrawingWorkspace })))
+
+function DrawingView(props: DrawingViewProps) {
+  return <Suspense fallback={<LoadingSpinner />}><DrawingWorkspace {...props} /></Suspense>
+}
 import type {
   AskObjectViewProps,
   ChatViewProps,
@@ -155,6 +163,7 @@ export function createPluginViews(pluginId: string): PluginViews {
     MicButton,
     PluginSettingsView,
     ContentActions,
+    DrawingView,
   }
 }
 

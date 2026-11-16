@@ -112,6 +112,23 @@ async function home(page: Page): Promise<void> {
   }
 }
 
+/**
+ * Waits until the fixture server holds the page's own Apps preferences. The page mirrors them
+ * to ui-prefs after an 800 ms debounce (ui-prefs-sync.ts), and a test that ends on a switch
+ * click closes its page before that write leaves: the next test's page then boots from the
+ * older value (here, Tasks still off the sidebar). A test that ends on a preference change
+ * calls this last.
+ */
+async function serverHoldsAppPreferences(page: Page): Promise<void> {
+  const key = 'open-walnut-app-preferences-v1'
+  await expect.poll(async () => {
+    const local = await page.evaluate((k) => localStorage.getItem(k), key)
+    const res = await page.request.get(`http://127.0.0.1:${fixture!.port}/api/ui-prefs`)
+    const body = await res.json() as { prefs?: Record<string, { v?: string | null }> }
+    return body.prefs?.[key]?.v === local
+  }, { timeout: 15_000 }).toBe(true)
+}
+
 /** The Apps page, the way a user opens it: the sidebar's Apps entry. */
 async function openApps(page: Page): Promise<void> {
   await page.getByTestId('sidebar-core-app-apps').click()
@@ -212,6 +229,8 @@ test('a built-in card switch takes it off the sidebar, a reload keeps it off, an
     await expect(orgEntry).toBeVisible({ timeout: 15_000 })
     await expect(page.getByTestId('apps-builtin-org')).toHaveAttribute('data-shown', 'true')
   }
+  // The next tests start from Tasks and Org on the sidebar, so the last switch must reach the server.
+  await serverHoldsAppPreferences(page)
 })
 
 test('Home, Apps and Settings always stay on the sidebar: a lock, never a switch', async ({ page }) => {
@@ -460,4 +479,165 @@ test("a plugin panel that throws stays inside its own box; the rest of the plugi
   await expect(page.getByTestId('plugin-row-walnut-time')).toBeVisible()
   await page.evaluate(() => (window as PanelWindow).__panelDisposers?.forEach((d) => d.dispose()))
   await expect(panel).toHaveCount(0)
+})
+
+/**
+ * Experiment apps_stay_open (src/core/experimental.ts, off by default). With it on, an App
+ * opened from any way in keeps a row under the Sidebar's Open group until the person closes
+ * it; leaving for another page never closes it. The Apps page leads with Pinned and Recently
+ * used, a closed App stays recent, and a reload keeps all three. With it off the rail and the
+ * page are what they were, and the stored state is still there when it is turned on again.
+ * The Time App declares `placement: 'settings'`, so it has no Sidebar row of its own.
+ */
+async function setAppsStayOpen(page: Page, on: boolean): Promise<void> {
+  const res = await page.request.put(`http://127.0.0.1:${fixture!.port}/api/config`, { data: { experimental: { apps_stay_open: on } } })
+  expect(res.ok()).toBe(true)
+}
+
+test('an opened App stays on the Sidebar until closed, and the Apps page finds it again', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  await setAppsStayOpen(page, true)
+  try {
+    await home(page)
+    const openGroup = page.getByTestId('sidebar-open-apps')
+    const openRow = page.getByTestId(`sidebar-open-app-${TIME_APP}`)
+    const openLink = openRow.getByTestId(`sidebar-app-${TIME_APP}`)
+    const recentTile = page.getByTestId(`apps-quick-recent-${TIME_APP}`)
+    const pinnedTile = page.getByTestId(`apps-quick-pinned-${TIME_APP}`)
+    const appsEntry = page.getByTestId('sidebar-core-app-apps')
+    await expect(openGroup).toHaveCount(0)
+
+    // Opened from its card: a row under Open, the active one.
+    await openApps(page)
+    await expect(page.getByTestId('apps-recent')).toHaveCount(0)
+    await page.getByTestId('plugin-card-open-walnut-time').click()
+    await expect(page).toHaveURL(/\/apps\/walnut-time~main/)
+    await expect(openLink).toHaveClass(/\bactive\b/)
+    await expect(appsEntry).not.toHaveClass(/\bactive\b/)
+
+    // Going elsewhere never closes it.
+    await page.getByTestId('sidebar-core-app-home').click()
+    await expect(openRow).toBeVisible()
+    await expect(openLink).not.toHaveClass(/\bactive\b/)
+    await page.getByTestId('sidebar-core-app-settings').click()
+    await expect(openRow).toBeVisible()
+    // On the Apps page the Apps entry is the active one (longest path match), and the App is recent.
+    await openApps(page)
+    await expect(appsEntry).toHaveClass(/\bactive\b/)
+    await expect(openLink).not.toHaveClass(/\bactive\b/)
+    await expect(recentTile).toBeVisible()
+
+    // A reload keeps the row. Pin moves the tile to Pinned, and a reload keeps that too.
+    await page.reload()
+    await expect(openRow).toBeVisible({ timeout: 60_000 })
+    await page.getByTestId(`apps-quick-pin-${TIME_APP}`).click()
+    await expect(pinnedTile).toBeVisible()
+    await expect(recentTile).toHaveCount(0)
+    await page.reload()
+    await expect(pinnedTile).toBeVisible({ timeout: 60_000 })
+
+    // Closing the App on screen takes its row away and leaves for the Apps page, where it is still pinned.
+    await openLink.click()
+    await expect(page).toHaveURL(/\/apps\/walnut-time~main/)
+    await openRow.hover()
+    await page.getByTestId(`sidebar-open-app-close-${TIME_APP}`).click()
+    await expect(openRow).toHaveCount(0)
+    await expect(page).toHaveURL(/\/apps$/)
+    await expect(pinnedTile).toBeVisible()
+    await page.reload()
+    await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 60_000 })
+    await expect(openGroup).toHaveCount(0)
+
+    // Opened again from Pinned: the row is back. Unpinned, it is under Recently used.
+    await pinnedTile.getByRole('button', { name: 'Open Time' }).click()
+    await expect(page).toHaveURL(/\/apps\/walnut-time~main/)
+    await expect(openRow).toBeVisible()
+    await openApps(page)
+    await page.getByTestId(`apps-quick-pin-${TIME_APP}`).click()
+    await expect(pinnedTile).toHaveCount(0)
+    await expect(recentTile).toBeVisible()
+
+    // The row's menu closes it too, from another page: the page stays where it is.
+    await page.getByTestId('sidebar-core-app-home').click()
+    await openLink.click({ button: 'right' })
+    const menu = page.getByTestId('sidebar-app-ctx-menu')
+    await expect(menu.getByRole('menuitem', { name: 'Keep on sidebar' })).toBeVisible()
+    await expect(menu.getByRole('menuitem', { name: 'Move up' })).toHaveCount(0)
+    await menu.getByRole('menuitem', { name: 'Close' }).click()
+    await expect(openRow).toHaveCount(0)
+    await expect(page).toHaveURL(/\/$/)
+
+    // Off: the rail and the page are as before; on again, what was stored is back.
+    await page.getByTestId('sidebar-core-app-apps').click()
+    await page.getByTestId('plugin-card-open-walnut-time').click()
+    await expect(openRow).toBeVisible()
+    await setAppsStayOpen(page, false)
+    await page.reload()
+    await expect(page.locator('.sidebar')).toBeVisible({ timeout: 60_000 })
+    await expect(page.getByTestId('app-host-native')).toBeVisible({ timeout: 60_000 })
+    await expect(openGroup).toHaveCount(0)
+    await openApps(page)
+    await expect(page.getByTestId('apps-recent')).toHaveCount(0)
+    await expect(page.getByTestId('apps-pinned')).toHaveCount(0)
+    await expect(page.getByTestId('sidebar-core-app-tasks')).toBeVisible()
+    await setAppsStayOpen(page, true)
+    await page.reload()
+    await expect(openRow).toBeVisible({ timeout: 60_000 })
+    await expect(recentTile).toBeVisible()
+    expect(pageErrors).toEqual([])
+  } finally {
+    await setAppsStayOpen(page, false)
+  }
+})
+
+test('a corrupt or stale open-apps record never breaks the rail or the Apps page', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  await setAppsStayOpen(page, true)
+  try {
+    // An App that is gone, a locked one and junk: none draws a row or a tile.
+    await page.addInitScript(() => {
+      if (sessionStorage.getItem('seeded-activity')) return
+      sessionStorage.setItem('seeded-activity', '1')
+      localStorage.setItem('walnut:app-activity-v1', JSON.stringify({ version: 1, open: ['gone:app', 'core:home', 7], recent: ['gone:app', 'core:settings'] }))
+      localStorage.setItem('walnut:app-pins-v1', JSON.stringify({ version: 1, pinned: 'nope' }))
+    })
+    await home(page)
+    await expect(page.getByTestId('sidebar-core-app-home')).toBeVisible()
+    await expect(page.getByTestId('sidebar-open-apps')).toHaveCount(0)
+    await openApps(page)
+    await expect(page.getByTestId('apps-recent')).toHaveCount(0)
+    await expect(page.getByTestId('apps-pinned')).toHaveCount(0)
+    // A record that is not JSON at all reads as empty, and opening an App still works.
+    await page.evaluate(() => localStorage.setItem('walnut:app-activity-v1', '{not json'))
+    await page.reload()
+    await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 60_000 })
+    await page.getByTestId('plugin-card-open-walnut-time').click()
+    await expect(page.getByTestId(`sidebar-open-app-${TIME_APP}`)).toBeVisible()
+    expect(pageErrors).toEqual([])
+  } finally {
+    await setAppsStayOpen(page, false)
+  }
+})
+
+test('an App can be pinned on the Apps page from its plugin page before it was ever opened', async ({ page }) => {
+  await setAppsStayOpen(page, true)
+  try {
+    await home(page)
+    await openApps(page)
+    await expect(page.getByTestId('apps-pinned')).toHaveCount(0)
+    await openPluginDetail(page, 'walnut-time')
+    const pin = page.getByTestId(`apps-app-pin-${TIME_APP}`)
+    await expect(pin).toHaveText('Pin on Apps')
+    await pin.click()
+    await expect(pin).toHaveText('Unpin from Apps')
+    await backToApps(page)
+    await expect(page.getByTestId(`apps-quick-pinned-${TIME_APP}`)).toBeVisible()
+    // Pinning here never touches the Sidebar: the App still has no row of its own, and none under Open.
+    await expect(page.getByTestId(`sidebar-app-${TIME_APP}`)).toHaveCount(0)
+    await expect(page.getByTestId('sidebar-open-apps')).toHaveCount(0)
+  } finally {
+    await setAppsStayOpen(page, false)
+  }
 })

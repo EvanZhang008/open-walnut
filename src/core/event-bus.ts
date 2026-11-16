@@ -153,6 +153,8 @@ export const EventNames = {
   // Notes events
   NOTES_UPDATED: 'notes:updated',
   NOTES_TREE_CHANGED: 'notes:tree-changed',
+  /** A drawing scene's bytes changed (any writer: the editor, an agent's edit). */
+  DRAWING_UPDATED: 'drawings:updated',
 
   // Config events
   CONFIG_CHANGED: 'config:changed',

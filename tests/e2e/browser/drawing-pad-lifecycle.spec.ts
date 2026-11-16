@@ -9,7 +9,7 @@ test.beforeAll(async () => {
       contents: `
         import React, {useState} from 'react';
         import {createRoot} from 'react-dom/client';
-        import {DrawingPad} from './src/components/chat/DrawingPad';
+        import {ClassicDrawingPad as DrawingPad} from './src/components/chat/ClassicDrawingPad';
         function App() {
           const [open, setOpen] = useState(false);
           const [draft, setDraft] = useState('a');
@@ -32,8 +32,10 @@ test.beforeAll(async () => {
 });
 
 test('draft switching preserves each sketch and an old attachment cannot close the new drawing', async ({ page }) => {
-  await page.route('**/__drawing-lifecycle', r => r.fulfill({ contentType: 'text/html', body: '<!doctype html><div id="root"></div><script src="/__drawing-lifecycle.js"></script>' }));
-  await page.route('**/__drawing-lifecycle.js', r => r.fulfill({ contentType: 'text/javascript', body: script }));
+  await page.route('**/__drawing-lifecycle', r => r.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><div id="root"></div><script src="/__drawing-lifecycle.js"></script>' }));
+  // The bundle carries raw non-ASCII regex ranges (the dictation's CJK test); without a charset
+  // the browser reads it as Latin-1 and the script dies on an invalid character class.
+  await page.route('**/__drawing-lifecycle.js', r => r.fulfill({ contentType: 'text/javascript; charset=utf-8', body: script }));
   await page.evaluate(() => { location.href = 'http://localhost:3457/__drawing-lifecycle'; });
   await page.getByRole('button', { name: 'Draw', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Drawing', exact: true });

@@ -17,6 +17,7 @@ import { useSessionServers } from '@/hooks/useSessionServers';
 import { openable, serversSummary } from './session-server-label';
 import { PanelCountRow, SessionViewItems, ViewsBadge, type SessionViewItemsProps } from './SessionKebabSection';
 import type { SessionSplitView } from './sessionSplitView';
+import { PaneAppIcon, useSessionPaneApps } from './SessionPluginAppPane';
 
 const OPEN_ICON = (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -32,6 +33,11 @@ const WINDOW_ICON = (
 const BOARD_ICON = (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <rect x="3" y="4" width="18" height="16" rx="2.5" /><path d="M9 4v16M15 4v16" />
+  </svg>
+);
+const APPS_ICON = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="3" y="3" width="18" height="18" rx="3" /><path d="M12 8v8M8 12h8" />
   </svg>
 );
 const PLAN_ICON = (
@@ -59,6 +65,11 @@ export interface SessionMenuOpenProps {
   inset?: boolean;
   /** "Exit full screen" while the panel is full screen. */
   fullscreenLabel?: string;
+  /**
+   * The App view (plugin Apps with a session pane): the App it shows or would show, and
+   * the opener (the same row again closes it, as every view row does). Absent: not offered here.
+   */
+  apps?: { keptKey: string | null; onOpen: (key: string) => void };
 }
 
 function Row({ icon, label, active, disabled, why, onClick, testId, trailing }: {
@@ -92,6 +103,22 @@ export function SessionMenuOpen(p: SessionMenuOpenProps) {
   const webCount = listed.filter(openable).length;
   const hintCount = webCount > 0 ? String(webCount) : summary;
   const view = (v: SessionSplitView) => () => { close(); views.onToggleView(v); };
+  // One row for the App view, never one per App: with one App it is that App, with several it
+  // is Apps (the pane's own tabs switch between them), so the menu does not grow with plugins.
+  const paneApps = useSessionPaneApps();
+  const appsRow = p.apps && paneApps.length > 0 ? (() => {
+    const only = paneApps.length === 1 ? paneApps[0] : null;
+    const target = only?.key ?? (paneApps.some((a) => a.key === p.apps!.keptKey) ? p.apps!.keptKey! : paneApps[0].key);
+    return (
+      <Row
+        icon={only ? <PaneAppIcon app={only} size={14} fallback={APPS_ICON} /> : APPS_ICON}
+        label={only ? only.title : 'Apps'}
+        active={views.activeView === 'app' && (!only || p.apps!.keptKey === only.key)}
+        onClick={() => { close(); p.apps!.onOpen(target); }}
+        testId="session-menu-apps"
+      />
+    );
+  })() : null;
   const windows = [
     p.onPopout && <Row key="popout" icon={ICON_NEW_TAB} label="Open in new tab" onClick={() => { close(); p.onPopout!(); }} testId="session-menu-popout" />,
     p.onFullscreen && <Row key="full" icon={ICON_EXPAND} label={p.fullscreenLabel ?? 'Full screen'} onClick={() => { close(); p.onFullscreen!(); }} testId="session-menu-fullscreen" />,
@@ -103,7 +130,7 @@ export function SessionMenuOpen(p: SessionMenuOpenProps) {
       {p.locate && <Row icon={ICON_LOCATE} label={p.locate.label} disabled={!!p.locate.waiting} why={p.locate.waiting ?? undefined} onClick={() => { close(); p.locate!.onClick(); }} testId="session-menu-locate" />}
       <KebabGroup
         label="Open"
-        hint={`changed · files${p.board !== 'none' ? ' · board' : ''} · inbox · code · web${hintCount ? ` (${hintCount})` : ''}`}
+        hint={`changed · files${p.board !== 'none' ? ' · board' : ''}${appsRow ? ' · apps' : ''} · inbox · code · web${hintCount ? ` (${hintCount})` : ''}`}
         icon={OPEN_ICON}
         testId="session-kebab-open"
         openWhen={summary !== null}
@@ -116,6 +143,7 @@ export function SessionMenuOpen(p: SessionMenuOpenProps) {
           <Row icon={BOARD_ICON} label="Board" active={views.activeView === 'board'} disabled={p.board === 'waiting'} why="Not written yet"
             onClick={() => { close(); if (p.onBoard) p.onBoard(); else views.onToggleView('board'); }} testId="session-menu-board" />
         )}
+        {appsRow}
         {p.onPlan && <Row icon={PLAN_ICON} label="Plan" onClick={() => { close(); p.onPlan!(); }} testId="session-menu-plan" />}
         {!p.inset && <div className="task-kebab-group-sep" role="separator" />}
         <SessionViewItems {...views} onAfterAction={close} />
