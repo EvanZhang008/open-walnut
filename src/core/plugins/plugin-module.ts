@@ -151,10 +151,13 @@ export async function preparePluginModule(options: LoadOptions): Promise<PluginM
       : []
     : ['index.ts', 'plugin.ts', 'index.js', 'plugin.js', 'index.mjs']
   if (candidates.length === 0) return { activate: null, deactivate: null }
+  // A builtin with a host module is part of the host bundle: the build ships no file of its
+  // own for it (tsup.config.ts), so there is no entry on disk to look for.
+  const hostOnly = builtin && options.hostModule ? [candidates[0]!] : null
   const errors: string[] = []
-  for (const filename of candidates) {
+  for (const filename of hostOnly ?? candidates) {
     const entry = path.join(dir, filename)
-    if (!await fs.stat(entry).then(stat => stat.isFile()).catch(() => false)) continue
+    if (!hostOnly && !await fs.stat(entry).then(stat => stat.isFile()).catch(() => false)) continue
     let loaded: Loaded | undefined
     try {
       // A builtin is Walnut's own code: host updates arrive with a restart, not a reload.

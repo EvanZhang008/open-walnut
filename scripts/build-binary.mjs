@@ -205,8 +205,8 @@ async function stageTree(root, { version, sidecars, sqliteDylib }) {
   for (const f of ['daemon.version']) fs.rmSync(path.join(dist, 'daemon-binaries', f), { force: true })
 
   // Built-in plugins: manifest, icon and skills from disk; their code is in the
-  // host bundle (src/integrations/host-modules.ts), so the server entry the
-  // manifest names is only a placeholder that keeps the existence check true.
+  // host bundle (src/integrations/host-modules.ts), and the loader looks for no
+  // file of theirs (src/core/plugins/plugin-module.ts), the same as the npm package.
   const integrations = path.join(repo, 'src/integrations')
   for (const id of fs.readdirSync(integrations)) {
     const src = path.join(integrations, id)
@@ -217,8 +217,6 @@ async function stageTree(root, { version, sidecars, sqliteDylib }) {
     fs.copyFileSync(manifestFile, path.join(out, 'manifest.json'))
     if (fs.existsSync(path.join(src, 'icon.svg'))) fs.copyFileSync(path.join(src, 'icon.svg'), path.join(out, 'icon.svg'))
     for (const sub of ['skills', 'agent-skills']) if (fs.existsSync(path.join(src, sub))) copyDir(path.join(src, sub), path.join(out, sub))
-    const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'))
-    if (manifest.server && fs.existsSync(path.join(src, 'index.ts'))) fs.writeFileSync(path.join(out, manifest.server), MODULE_PLACEHOLDER)
   }
   for (const shipped of ['dist/integrations/walnut-time', 'dist/plugin-store']) {
     const from = path.join(repo, shipped)

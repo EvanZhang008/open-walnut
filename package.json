@@ -68,6 +68,7 @@
     "dist/daemon-binaries/dtach-*",
     "!dist/**/*.map",
     "!dist/**/*.gz",
+    "!dist/binary-stage",
     "patches",
     "scripts/postinstall.mjs",
     "infra/bin",

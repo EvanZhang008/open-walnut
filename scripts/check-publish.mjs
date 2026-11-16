@@ -13,6 +13,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CLI_FAST_PRAGMA } from './build-cli-fast.mjs';
+import { packageContentProblems } from './package-contents.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -151,6 +152,12 @@ const leaked = files.filter((f) => /^dist\/daemon-binaries\/daemon-(linux|darwin
   || /^infra\/(node_modules|cdk\.out|test)\//.test(f) || f === 'infra/cdk.context.json');
 if (leaked.length) {
   console.error('check-publish: tarball leaks excluded artifacts:\n' + leaked.slice(0, 10).map((m) => `  - ${m}`).join('\n'));
+  process.exit(1);
+}
+
+const contentProblems = packageContentProblems(pack.files);
+if (contentProblems.length) {
+  console.error('check-publish: the tarball holds files it should not:\n' + contentProblems.slice(0, 10).map((m) => `  - ${m}`).join('\n'));
   process.exit(1);
 }
 

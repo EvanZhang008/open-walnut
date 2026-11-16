@@ -36,7 +36,7 @@ describe('built-in plugins load as host modules', () => {
     try {
       const dir = path.join(tmp, 'sample')
       await fsp.mkdir(dir)
-      // The file exists (the entry check still runs) but would throw if imported.
+      // The file would throw if imported.
       await fsp.writeFile(path.join(dir, 'index.js'), 'throw new Error("plugin file was evaluated")\n')
       const activate = () => 'host'
       const functions = await preparePluginModule({
@@ -48,6 +48,44 @@ describe('built-in plugins load as host modules', () => {
         hostModule: async () => ({ activate }),
       })
       expect(functions.activate).toBe(activate)
+    } finally {
+      await fsp.rm(tmp, { recursive: true, force: true })
+    }
+  })
+
+  it('a builtin with a host module needs no file on disk (the build ships none for it)', async () => {
+    const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'host-module-'))
+    try {
+      const dir = path.join(tmp, 'sample')
+      await fsp.mkdir(dir)
+      const activate = () => 'host'
+      const functions = await preparePluginModule({
+        dir,
+        builtin: true,
+        manifest: { id: 'sample', name: 'Sample', apiVersion: 1, server: 'index.js' } as PluginManifest,
+        bundle: async () => ({ error: 'not used' }),
+        deadline: async <T>(pending: Promise<T>) => pending,
+        hostModule: async () => ({ activate }),
+      })
+      expect(functions.activate).toBe(activate)
+    } finally {
+      await fsp.rm(tmp, { recursive: true, force: true })
+    }
+  })
+
+  it('a non-builtin with no file still fails, whatever the host table holds', async () => {
+    const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'host-module-'))
+    try {
+      const dir = path.join(tmp, 'sample')
+      await fsp.mkdir(dir)
+      await expect(preparePluginModule({
+        dir,
+        builtin: false,
+        manifest: { id: 'sample', name: 'Sample', apiVersion: 1, server: 'index.js' } as PluginManifest,
+        bundle: async () => ({ error: 'not used' }),
+        deadline: async <T>(pending: Promise<T>) => pending,
+        hostModule: async () => ({ activate: () => 'host' }),
+      })).rejects.toThrow(/no valid entry point/)
     } finally {
       await fsp.rm(tmp, { recursive: true, force: true })
     }

@@ -41,6 +41,8 @@ function buildCliFast(): void {
 }
 
 async function afterBuild(): Promise<void> {
+  // An older build (clean: false) left these; the package must not ship them.
+  removeStalePluginBundles();
   try {
     buildCliFast();
   } catch (err) {
@@ -52,11 +54,18 @@ async function afterBuild(): Promise<void> {
   await stampBuildInfo();
 }
 
-// Discover all integration plugin entry points (each dir with index.ts)
+// Built-in plugins are NOT entries either: the host imports them as its own modules
+// (src/integrations/host-modules.ts) and never reads a file of theirs. As entries each
+// was a 23 MB private copy of core that nothing loaded, four of them about 92 MB of a
+// 199 MB npm package (2026-11-16). dist/integrations/<id>/ keeps the manifest, icon,
+// skills and web entry the build script copies there.
 const integrationsDir = 'src/integrations';
-const pluginEntries = fs.readdirSync(integrationsDir, { withFileTypes: true })
-  .filter(d => d.isDirectory() && fs.existsSync(path.join(integrationsDir, d.name, 'index.ts')))
-  .map(d => path.join(integrationsDir, d.name, 'index.ts'));
+function removeStalePluginBundles(): void {
+  for (const d of fs.readdirSync(integrationsDir, { withFileTypes: true })) {
+    if (!d.isDirectory()) continue;
+    for (const f of ['index.js', 'index.js.map']) fs.rmSync(path.join(outDir, 'integrations', d.name, f), { force: true });
+  }
+}
 
 // Built-in actions are NOT separate entries: they load through the host bundle
 // (src/actions/builtin-modules.ts), so they share its module instances. As their
@@ -75,7 +84,6 @@ export default defineConfig({
     // dist/lib/sqlite.js: what a worker thread loads to open SQLite on bun
     // (sqliteModuleFile in src/lib/sqlite.ts; the plugin database worker).
     'src/lib/sqlite.ts',
-    ...pluginEntries,
   ],
   format: ['esm'],
   target: 'node22',
