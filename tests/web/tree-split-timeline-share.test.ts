@@ -40,7 +40,7 @@ describe('the timeline share', () => {
 
 describe('the left half reads the panel\'s timeline and fetches nothing', () => {
   it('a reader opens no history request and no stream of its own', () => {
-    expect(SCH).toMatch(/useSessionHistory\(readTimeline \? null : sessionId, historyVersion\)/);
+    expect(SCH).toMatch(/useSessionHistory\(readTimeline \? null : sessionId, historyVersion, routeShown\)/);
     expect(SCH).toMatch(/useSessionStream\(readTimeline \? null : sessionId\)/);
   });
 

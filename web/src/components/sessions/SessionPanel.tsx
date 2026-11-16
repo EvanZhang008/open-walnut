@@ -2,7 +2,8 @@ import { countRender } from '@/utils/render-count';
 import { useCoalescedRefresh } from '@/hooks/useCoalescedRefresh';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
 import { sameJson } from '@/utils/same-json';
-import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, Component, lazy, Suspense, type ReactNode, type ErrorInfo, type MouseEvent as ReactMouseEvent, type MutableRefObject, type CSSProperties, memo } from 'react';
+import { useState, useContext, useEffect, useLayoutEffect, useCallback, useRef, useMemo, Component, lazy, Suspense, type ReactNode, type ErrorInfo, type MouseEvent as ReactMouseEvent, type MutableRefObject, type CSSProperties, memo } from 'react';
+import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { stableHtml } from '@/hooks/useStableHtml';
 import { PauseGlyphIcon, PlayGlyphIcon, WarningTriangleIcon } from '@/components/common/PhoneIcons';
 import { ContextFullBanner } from './ContextFullBanner';
@@ -767,12 +768,14 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   };
   useEffect(() => { setModeSwitchError(undefined); setModeSwitchBusy(false); }, [settingsSessionId]);
 
-  // Fetch messages for the UserMessagesSummary
+  // Fetch messages for the UserMessagesSummary. A column of the hidden home page waits to be
+  // shown for its full read (SessionChatHistory reads the same, through the same request).
+  const routeShownForHistory = useContext(RouteShownContext) !== false;
   const {
     messages: historyMessages, loading: historyLoading,
     phase2Pending: historyPhase2Pending, olderHidden: historyOlderHidden,
     olderWindowed: historyOlderWindowed, initialUserText: historyInitialUserText,
-  } = useSessionHistory(sessionId);
+  } = useSessionHistory(sessionId, 0, routeShownForHistory);
   // A refused send that history shows the server took after all: its restored draft goes.
   useEffect(() => { if (!historyLoading) settleConfirmedDrafts(sessionId, historyMessages); }, [sessionId, historyMessages, historyLoading]);
   // A send whose acknowledgement was lost reads as failed until history shows its

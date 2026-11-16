@@ -872,7 +872,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   }, [openLightbox]);
 
-  const ownHistory = useSessionHistory(readTimeline ? null : sessionId, historyVersion);
+  // Off Home, the home page stays mounted but hidden: its columns read no layout (2026-11-11:
+  // four hidden columns' polls read scrollHeight 16 times a second while the person was on Org),
+  // and no history past their saved copy and first screen until Home shows them (2026-11-16: two
+  // columns behind the Org page pulled 4 to 16 MB each from clouddev on every load and reconnect,
+  // on the link the chats on screen were reading through).
+  const routeShown = useContext(RouteShownContext) !== false;
+  const ownHistory = useSessionHistory(readTimeline ? null : sessionId, historyVersion, routeShown);
   // A reader shows the publisher's history; until the publisher's first commit it
   // is still loading (never an empty session).
   const history = readTimeline ? (shared?.history ?? { ...ownHistory, loading: true, firstCheckPending: true }) : ownHistory;
@@ -976,9 +982,6 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   }, [textlessReplyIds, blocks]);
   const foregroundActive = useForegroundActive(sessionId);
   const containerRef = useRef<HTMLDivElement>(null);
-  // Off Home, the home page stays mounted but hidden: its columns read no layout (2026-11-11:
-  // four hidden columns' polls read scrollHeight 16 times a second while the person was on Org).
-  const routeShown = useContext(RouteShownContext) !== false;
   const routeShownRef = useRef(routeShown);
   routeShownRef.current = routeShown;
 
