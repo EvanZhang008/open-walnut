@@ -81,7 +81,7 @@ function inSight(el: Element): boolean {
 }
 
 /** The stack's one width (corner-stack.css), never wider than the window allows. */
-const STACK_WIDTH_PX = 380;
+const STACK_WIDTH_PX = 440;
 /** A window this short keeps the stack to its short forms as soon as two kinds show. */
 const SHORT_WINDOW_PX = 720;
 /** Where a page's own content lives: the app's main area, or a full-screen sheet over it. */

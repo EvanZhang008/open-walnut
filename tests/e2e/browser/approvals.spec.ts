@@ -387,11 +387,11 @@ test('the stack: a toast and an approval card share the top of the window, cente
   const placed = async (w: number) => {
     const b = (await card.boundingBox())!
     const centered = Math.abs(b.x + b.width / 2 - w / 2) <= 1
-    const ok = b.y <= 24 && centered && Math.round(b.width) === Math.min(380, w - 32)
+    const ok = b.y <= 24 && centered && Math.round(b.width) === Math.min(440, w - 32)
     return ok ? 'top center' : `card x${Math.round(b.x)} y${Math.round(b.y)} w${Math.round(b.width)} in ${w}`
   }
   for (const [name, b] of [['card', c], ['toast', t]] as const) {
-    expect(Math.round(b.width), `${name} has the stack's one width`).toBe(380)
+    expect(Math.round(b.width), `${name} has the stack's one width`).toBe(440)
     expect(Math.abs(b.x + b.width / 2 - vp.width / 2), `${name} is centered in the window`).toBeLessThanOrEqual(1)
     expect(overlaps(b, sidebar), `${name} covers no part of the sidebar`).toBe(false)
   }
@@ -421,7 +421,7 @@ test('the stack: a toast and an approval card share the top of the window, cente
   await expect.poll(async () => {
     const p = (await center.boundingBox())!
     const r = await stack.evaluate((el) => { const b = el.getBoundingClientRect(); return { left: b.left, width: b.width } })
-    return r.left >= p.x + p.width + 8 && Math.round(r.width) === 380
+    return r.left >= p.x + p.width + 8 && Math.round(r.width) === 440
   }).toBe(true)
   // Its line opens the request over it; Escape closes that top layer alone, then the center.
   await center.getByTestId('approval-summary').click()
@@ -578,7 +578,7 @@ test('a narrow corner (a page\'s left column): the card reads the whole action a
     if (!el) { el = document.createElement('style'); el.id = 'pw-corner-width'; document.head.append(el) }
     el.textContent = `.corner-stack { width: ${w}px !important; }`
   }, px)
-  await width(380)
+  await width(440)
   await expect.poll(() => text.evaluate((e) => getComputedStyle(e).whiteSpace)).toBe('normal')
   expect(await text.evaluate((e) => e.scrollWidth <= e.clientWidth + 1)).toBe(true)
 

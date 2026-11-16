@@ -15,7 +15,7 @@
   left: var(--corner-stack-from, 0px);
   right: 0;
   margin: 0 auto;
-  width: min(380px, calc(100vw - 32px));
+  width: min(440px, calc(100vw - 32px));
   /* Over a full-screen sheet (9001), under every modal's mask (9300 and up) and menus (9999):
      a dialog dims it, a picker opens over it. */
   z-index: 9200;

@@ -37,6 +37,9 @@ const ALERT_RENDER_SITES: Record<string, Record<string, string>> = {
   },
   SetupBanner: { 'web/src/components/common/FirstUseSetup.tsx': "the first-use card's install step (onboarding, not an alert)" },
   FoundHostPrompts: { 'web/src/pages/MainPage.tsx': "the task panel's top row only (checked below)" },
+  // An approval request is a notification too (2026-11-16, the user: "can we make this weider bro,
+  // just liek normal notificaotom why so narrw here"): its card is in the notice stack, never a column.
+  ApprovalPrompts: { 'web/src/App.tsx': 'mounted once; its card renders through <CornerSlot> (checked below)' },
 };
 
 /** What a chat or session component must not import: a whole module ('*') or the named alert parts of one.
@@ -115,6 +118,19 @@ describe('app-level alerts stay out of chat, session and task columns', () => {
     const all = [...page.matchAll(/<FoundHostPrompts\b/g)].map((m) => m.index!);
     expect(all.length).toBeGreaterThan(0);
     expect(all.filter((i) => i < start || i > end), 'FoundHostPrompts outside the task panel').toEqual([]);
+  });
+
+  it("the approval card renders only inside the notice stack's slot", () => {
+    const src = read('web/src/components/approvals/ApprovalPrompts.tsx');
+    const slot = src.indexOf('<CornerSlot order={CORNER_ORDER.approvals}');
+    expect(slot, 'the approval card left the notice stack').toBeGreaterThan(-1);
+    const end = src.indexOf('</CornerSlot>', slot);
+    // ApprovalBody in the page: the stack's card, or the approval dialog the card opens (a modal).
+    const bodies = [...src.matchAll(/<ApprovalBody\b/g)].map((m) => m.index!);
+    const dialog = src.indexOf('function ApprovalDialog(');
+    const dialogEnd = src.indexOf('\nfunction ', dialog + 10);
+    const outside = bodies.filter((i) => !(i > slot && i < end) && !(i > dialog && i < (dialogEnd < 0 ? src.length : dialogEnd)));
+    expect(outside, 'an ApprovalBody outside the notice stack and its dialog').toEqual([]);
   });
 
   it('the deleted Home card does not come back', () => {

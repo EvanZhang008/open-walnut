@@ -216,7 +216,7 @@ describe('one corner for every notice', () => {
     const stack = cssRules('web/src/styles/corner-stack.css').find((r) => r.selector === '.corner-stack')!;
     expect(stack.body).toMatch(/top:\s*12px/);
     expect(has(stack.body, 'bottom')).toBe(false);
-    expect(stack.body).toMatch(/width:\s*min\(380px, calc\(100vw - 32px\)\)/);
+    expect(stack.body).toMatch(/width:\s*min\(440px, calc\(100vw - 32px\)\)/);
     // Centered between its left edge (the window's, or the open notification center's right) and the window's right.
     expect(stack.body).toMatch(/left:\s*var\(--corner-stack-from, 0px\)/);
     expect(stack.body).toMatch(/right:\s*0/);

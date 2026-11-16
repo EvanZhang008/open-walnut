@@ -40,7 +40,7 @@ async function measure(page: Page) {
 test.describe.configure({ timeout: 90_000 })
 
 for (const width of [1280, 1100]) {
-  test(`a toast on Home stays at the top center, 380px wide, with the right panel empty or holding a session (${width}px)`, async ({ page }, info) => {
+  test(`a toast on Home stays at the top center, 440px wide, with the right panel empty or holding a session (${width}px)`, async ({ page }, info) => {
     await page.setViewportSize({ width, height: 800 })
     const sock = await routeSocket(page)
     await page.route('**/api/quiet*', (r) => r.fulfill({ json: { quiet: false } }))
@@ -78,10 +78,10 @@ for (const width of [1280, 1100]) {
     for (const [name, m] of [['no column', empty], ['session column', open]] as const) {
       expect(m.top, `${name}: at the top`).toBeLessThanOrEqual(24)
       expect(m.offCenter, `${name}: centered in the window`).toBeLessThanOrEqual(1)
-      expect(m.width, `${name}: the one width`).toBe(380)
+      expect(m.width, `${name}: the one width`).toBe(440)
     }
     expect(open.left).toBeCloseTo(empty.left, 0)
     const t = (await toast.boundingBox())!
-    expect(Math.round(t.width), 'the toast fills the stack').toBe(380)
+    expect(Math.round(t.width), 'the toast fills the stack').toBe(440)
   })
 }
