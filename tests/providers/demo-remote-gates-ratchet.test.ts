@@ -94,7 +94,8 @@ describe('remote-host gates and the Demo', () => {
         expect(call, path.relative(ROOT, file)).toContain('demo: demoIsolationInput(IS_DEMO)')
       }
     }
-    expect(calls).toBeGreaterThanOrEqual(3)
+    // The connection's and the terminal's (plugin hosts.run reaches a host through the link since 2026-11-16).
+    expect(calls).toBeGreaterThanOrEqual(2)
     const dc = 'src/providers/daemon-connection.ts'
     expect(bodyOf(dc, 'ephemeralRemoteRefused')).toContain("this.isolation.mode === 'off'")
     expect(bodyOf(dc, 'isReadOnlyRemote')).toContain("this.isolation.mode !== 'isolated'")

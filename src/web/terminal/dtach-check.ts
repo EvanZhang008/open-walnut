@@ -111,12 +111,13 @@ async function noTerminalOn(host: string): Promise<SshFailedResult | null> {
   try { def = (await getConfig()).hosts?.[host] } catch { return null }
   if (!def || hostOffersTerminal(def)) return null
   const label = def.label ?? host
+  const via = def.transport === 'net' ? 'the host network' : 'the cloud companion'
   return {
     ok: false,
     code: 'SSH_FAILED',
     host,
-    detail: `A terminal is not available on ${label}: this Mac reaches it through the cloud companion, not SSH`,
-    hint: `${label} runs this session through the cloud companion, which has no SSH, so there is no terminal there. Files and Changes still work.`,
+    detail: `A terminal is not available on ${label}: this Mac reaches it through ${via}, not SSH`,
+    hint: `${label} runs this session through ${via}, which has no SSH, so there is no terminal there. Files and Changes still work.`,
   }
 }
 

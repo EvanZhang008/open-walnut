@@ -80,7 +80,6 @@ const FILES: Record<string, Entry> = {
   'src/providers/remote-sh.ts': { count: 4, kind: 'transport', why: 'runSshBounded and runRemoteSh themselves: ssh with the caller\'s args, `sh -s` with the caller\'s script' },
   'src/core/host-server/manager.ts': { count: 13, kind: 'not-for-test-server', why: 'acts only on a host handle hostServerConnected gave it (shared host or the replica check\'s own root)' },
   'src/core/plugin-jobs/manager.ts': { count: 2, kind: 'not-for-test-server', why: 'plugin jobs do not run on a test server (pluginJobsOffReason); bundles go to the daemon\'s own dir' },
-  'src/core/plugins/plugin-hosts.ts': { count: 1, kind: 'gated', why: 'runOnPluginHost refuses a host whose isolation is off' },
   'src/core/hosts/ssh-cert-expiry-alert.ts': { count: 1, kind: 'read', why: '`ssh host true`: does the sign-in work' },
   'src/providers/ssh-credential-evidence.ts': { count: 2, kind: 'local', why: '`ssh -G`, reads this machine\'s ssh config' },
   'src/core/hosts/ssh-key-of.ts': { count: 1, kind: 'local', why: '`ssh -G <alias>`, reads which key this machine\'s ssh offers a host (first-run walkthrough)' },
@@ -150,7 +149,6 @@ describe('remote write paths ratchet', () => {
     expect(helped.length, 'an update record read that is not through ownUpdateRecord').toBe(reads.length)
     expect(dc).toMatch(/opts\.isolated = \{ root, runtimeDir: isolatedLayout\(root\)\.runtimeDir \}/)
     expect(fs.readFileSync(path.join(ROOT, 'src/core/plugin-jobs/index.ts'), 'utf-8')).toMatch(/plugin jobs do not run on a test server/)
-    expect(fs.readFileSync(path.join(ROOT, 'src/core/plugins/plugin-hosts.ts'), 'utf-8')).toMatch(/remoteIsolationFor\(/)
     expect(fs.readFileSync(path.join(ROOT, 'src/web/terminal/spawn.ts'), 'utf-8')).toMatch(/remoteIsolationFor\(/)
     // A test daemon's identity never reaches its sessions (a nested test server's daemon would claim it).
     for (const twin of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {

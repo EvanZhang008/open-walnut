@@ -32,19 +32,21 @@
  * `endGroup`, 'host-exec-group-v1', `version` 4): host-exec-group.ts.
  */
 import fs from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import path from 'node:path'
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import { ensureTaskDir } from './task-dir-core.js'
 import { permissionMessage, permissionRisk } from './host-exec-guards.js'
 import { cltInstalled, cltMessage, cltStubRun, loginPath, type CltFs } from './host-exec-clt.js'
 import { IDLE_WINDOW_MS, createPromptWatcher, macPromptProbe, type PromptBlock, type PromptProbe } from './host-exec-watch.js'
-import { bad, commandLine, findBash, openRunLog, readLogLines, resolveCwd, shellPlan, tailLines, type ExecError } from './host-exec-line.js'
+import { bad, commandLine, findBash, openRunLog, readLogLines, resolveCwd, shellPlan, shellQuote, tailLines, type ExecError } from './host-exec-line.js'
 import { waitBefore, waitOnJob, type HeldBefore, type WaitedFor } from './host-exec-wait.js'
 import { createMatcher, type MatcherStart } from './host-exec-matcher.js'
 import { stuckFileLooks } from './host-exec-probe.js'
 import { watchShellEnd } from './host-exec-group.js'
 import { jobView, type Job, type JobView, type RunReply } from './host-exec-job.js'
 import { createRecall } from './host-exec-recall.js'
+import { checkScriptInput, runBoundedScript, SCRIPT_REMOTE_MAX_OUTPUT, type ScriptResult } from './host-script-core.js'
 
 export type { JobView, RunReply } from './host-exec-job.js'
 
@@ -130,9 +132,10 @@ export interface RunRequest {
 /**
  * Bumped when exec.* changes what a server may rely on: 2 = bash after the login shell,
  * WALNUT_TASK_DIR; 3 = exec.read `until` (host-exec-wait.ts, 'host-exec-wait-v1'); 4 = exec.run
- * `endGroup` (host-exec-group.ts, 'host-exec-group-v1').
+ * `endGroup` (host-exec-group.ts, 'host-exec-group-v1'); 5 = exec.script (host-script-core.ts,
+ * 'host-script-v1').
  */
-export const HOST_EXEC_VERSION = 4
+export const HOST_EXEC_VERSION = 5
 
 export function createHostExec(deps: HostExecDeps) {
   const now = deps.now ?? Date.now
@@ -457,6 +460,8 @@ export function createHostExec(deps: HostExecDeps) {
       stop(j, 'asked')
       n++
     }
+    // A plugin's script keeps no log: it is only stopped (its answer says timedOut).
+    for (const s of [...scripts]) { s(); n++ }
     return n
   }
 
@@ -477,9 +482,44 @@ export function createHostExec(deps: HostExecDeps) {
     return v as T
   }
 
+  /**
+   * exec.script ('host-script-v1'): a plugin's short script (`walnut.hosts.run`, through
+   * src/core/hosts/host-script.ts), run as host_exec runs a line (the login shell first, then
+   * bash) but bounded in memory with its stdout and stderr apart: no job, no log file, no audit
+   * line, so a plugin that polls neither fills the disk nor pushes a task's jobs out of `jobs`.
+   */
+  const scripts = new Set<() => void>()
+  async function script(req: Record<string, unknown>): Promise<ScriptResult | ExecError> {
+    const input = checkScriptInput(req)
+    if ('error' in input) return bad(input.error)
+    const cwd = resolveCwd(req.cwd, deps.home)
+    if (typeof cwd !== 'string') return cwd
+    // A place macOS guards shows a dialog on this Mac's screen, and the script waits on it.
+    if (mac && req.allowPrompts !== true) {
+      const risk = permissionRisk(input.script, cwd, deps.home)
+      if (risk) return bad(permissionMessage(risk, 'this Mac'), 'may_prompt')
+    }
+    // What the login profile prints comes before the mark, and is not the script's stdout.
+    const mark = `walnut-script-${randomBytes(9).toString('hex')}`
+    const login = deps.shell || '/bin/sh'
+    // The script comes on fd 3, so the profile, which has no stdin, never reads it; the script reads it as its stdin, as with ssh.
+    const plan = shellPlan(login, bashPath(), `printf '%s\\n' ${mark}; exec sh -s --${input.args.map((a) => ` ${shellQuote(a)}`).join('')} <&3 3<&-`)
+    let stopIt: (() => void) | null = null
+    const run = runBoundedScript({
+      spawn: deps.spawn, command: login, argv: plan.args, env: { ...deps.env, ...plan.env }, cwd,
+      killGroup: deps.killGroup, stdoutAfter: mark, scriptOnFd3: true, onStop: (s) => { stopIt = s },
+    }, { ...input, maxOutputBytes: Math.min(input.maxOutputBytes, SCRIPT_REMOTE_MAX_OUTPUT) })
+    const stopper = () => stopIt?.()
+    scripts.add(stopper)
+    try { return await run } finally { scripts.delete(stopper) }
+  }
+
   return {
     version: HOST_EXEC_VERSION,
     run: (req: RunRequest) => thrown<RunReply>(run(req)),
+    script: (req: Record<string, unknown>) => thrown<ScriptResult>(script(req)),
+    /** Plugin scripts running now (exec.script): a handover waits for them as for jobs. */
+    scripts: () => scripts.size,
     read: (req: Parameters<typeof read>[0]) => thrown(read(req)),
     kill: (req: { jobId?: unknown; taskId?: unknown }) => thrown<JobView>(stopJob(req)),
     list: async (req: { taskId?: unknown } = {}) => ({ jobs: list(req) }),
@@ -491,7 +531,7 @@ export function createHostExec(deps: HostExecDeps) {
     /** File looks in flight `minAgeMs` or more (default STUCK_LOOK_MS; 0: any) in the thread pool: node's exit would wait on them (daemon-source.ts). */
     stuck: (minAgeMs?: number) => stuckFileLooks(Date.now(), minAgeMs) > 0,
     /** End the matcher process (the daemon's shutdown, tests). */
-    close: () => matcher?.close(),
+    close: () => { for (const s of [...scripts]) s(); matcher?.close() },
   }
 }
 

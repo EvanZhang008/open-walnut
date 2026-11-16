@@ -338,8 +338,16 @@ function offHostStatus(hostKey: string, def: HostDef, now: number): HostStatus {
  * other way (the cloud box, through the companion's daemon tunnel) cannot.
  */
 export function hostOffersTerminal(def: HostDef): boolean {
-  // The cloud box and a machine on the host network have no SSH door (the terminal is ssh + dtach).
-  return def.cloud_box !== true && def.transport !== 'net'
+  return hostHasSshRoute(def)
+}
+
+/**
+ * Whether this machine reaches the host over SSH at all. The cloud box (through the companion)
+ * and a machine on the host network (its hostname a placeholder, `<alias>.walnut-net.invalid`)
+ * have no SSH door: a command, a copy or a link for them goes through link(host), never ssh.
+ */
+export function hostHasSshRoute(def: Pick<HostDef, 'cloud_box' | 'transport'> | undefined): boolean {
+  return !!def && def.cloud_box !== true && def.transport !== 'net'
 }
 
 /**

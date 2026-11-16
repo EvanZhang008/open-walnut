@@ -143,6 +143,11 @@ export async function buildSessionVscodeUri(
   if (!hostDef?.hostname) {
     throw new SessionVscodeUriError(`Unknown session host alias: ${host}`, 400)
   }
+  // VS Code opens a remote folder over SSH (Remote-SSH); a host with no SSH door has no such link.
+  const { hostHasSshRoute } = await import('./hosts/host-status.js')
+  if (!hostHasSshRoute(hostDef)) {
+    throw new SessionVscodeUriError(`VS Code opens a remote folder over SSH, and this Mac reaches ${hostDef.label ?? host} ${hostDef.transport === 'net' ? 'through the host network' : 'through the cloud companion'}, not SSH`, 400)
+  }
 
   const target: SshTarget = linkTarget(host, config)
   // Widen to the Like interface: link returns the concrete class, whose Promise

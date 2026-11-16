@@ -151,7 +151,7 @@ function refuse(id: string, cmd: string): never {
 export function gateSessionCommand(scope: GateScope, cmd: string, params: Record<string, unknown>, enabled: boolean = IS_EPHEMERAL): GateAttempt | undefined {
   const canonicalCommand = canonical(cmd, params)
   if (canonicalCommand && (INPUT_COMMANDS.has(canonicalCommand)
-    || ['start', 'acpStart', 'acpNewSession', 'oneshot.run', 'oneshot.prewarm', 'exec.run'].includes(canonicalCommand))) assertDemoAdmission()
+    || ['start', 'acpStart', 'acpNewSession', 'oneshot.run', 'oneshot.prewarm', 'exec.run', 'exec.script'].includes(canonicalCommand))) assertDemoAdmission()
   if (skipped(scope, enabled)) return undefined
   const host = scope.host
   const sid = str(params.sid)

@@ -75,7 +75,10 @@ interface SshTarget { host: string; user?: string; port?: number }
 async function sshTargetOf(sourceHost: string): Promise<SshTarget | null> {
   if (sourceHost === LOCAL_HOST) return null;
   const { getConfig } = await import('../config-manager.js');
-  const def = (await getConfig()).hosts?.[sourceHost] as { hostname?: string; user?: string; port?: number } | undefined;
+  const def = (await getConfig()).hosts?.[sourceHost] as { hostname?: string; user?: string; port?: number; transport?: 'ssh' | 'net'; cloud_box?: boolean } | undefined;
+  // No SSH door (the host network, the cloud box): the copy goes through the links (relayFile).
+  const { hostHasSshRoute } = await import('../hosts/host-status.js');
+  if (def && !hostHasSshRoute(def)) return null;
   const hostname = def?.hostname || sourceHost;
   if (!/^[A-Za-z0-9._-]+$/.test(hostname)) return null;
   return { host: hostname, ...(def?.user ? { user: def.user } : {}), ...(def?.port ? { port: def.port } : {}) };

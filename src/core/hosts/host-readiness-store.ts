@@ -71,7 +71,7 @@ export const prebuiltFor = new Map<string, boolean>()
 /** Hosts where the prebuilt was offered and did not run (an older glibc, say). */
 export const prebuiltUnusable = new Set<string>()
 /** Per host: how its lines were worded (label, target, prebuilt), so a floor change rewords with no RPC. */
-export const problemCtx = new Map<string, { prebuiltDtach: boolean; hostLabel?: string; sshTarget?: string }>()
+export const problemCtx = new Map<string, { prebuiltDtach: boolean; hostLabel?: string; sshTarget?: string; terminals?: false }>()
 
 /** The stored answer with the fix state merged in, as every surface reads it. */
 export function getHostReadiness(host: string, now: number = Date.now()): HostReadiness | undefined {

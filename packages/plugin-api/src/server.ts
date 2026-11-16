@@ -253,10 +253,12 @@ export interface HostService {
   /** This machine first, then every host in Settings, Hosts. */
   list(): Promise<HostInfo[]>
   get(alias: string): Promise<HostInfo | null>
-  /** Run a short script on a host: over ssh for a remote one (key auth only, it never
-   *  prompts), directly for this machine. The only output is what comes back; a failure to
-   *  connect is a nonzero `code` with ssh's words in `stderr`. Throws for a host Walnut does
-   *  not know. Not available on a replica. */
+  /** Run a short script on a host: on another host through Walnut's link to its daemon, as
+   *  host_exec runs a command (a host on the host network works like an SSH one; it never
+   *  prompts), directly for this machine. The only output is what comes back; a host Walnut
+   *  cannot reach now, or one that could not run it, is `code` 255 with the reason in `stderr`;
+   *  on another host stdout is kept up to 12 MB.
+   *  Throws for a host Walnut does not know. Not available on a replica. */
   run(alias: string, input: HostRunInput): Promise<HostRunResult>
 }
 

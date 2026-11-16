@@ -165,7 +165,7 @@ That route answers at `/api/plugins/my-plugin/status`. That WebSocket method is 
 | API | Purpose |
 |---|---|
 | `walnut.tasks` | Read, query, create, update, complete, and delete tasks; file, tag, pin and date tasks into a project or a folder in batches; list, create and delete folders; list and ensure pin groups; keep tasks to the plugin's own view. |
-| `walnut.hosts` | List the hosts in Settings, Hosts, and run a short script on one (over ssh for a remote host). |
+| `walnut.hosts` | List the hosts in Settings, Hosts, and run a short script on one (through the host's link, as host_exec does). |
 | `walnut.macos` | Read a file macOS keeps behind Full Disk Access through Walnut's one grant for it, after saying why. Mac only. |
 | `walnut.mcp` | Run a stdio MCP server Walnut keeps alive for you, call any registered server's tools, and choose what Walnut sessions may call on it. |
 | `walnut.expose` | Add a tunnel provider: the command that puts this server one address away from a browser anywhere, which Walnut runs and keeps connected. |
@@ -210,7 +210,7 @@ Tasks your plugin made before it declared the option stay on the board until it 
 
 #### Hosts
 
-`walnut.hosts.list()` returns this machine (`__local__`) and every host in Settings, Hosts, with its hostname, user and port. `walnut.hosts.run(alias, { script, args })` runs a POSIX `sh` script on one: over ssh for a remote host (key auth only, it never prompts), directly for this machine. Arguments arrive as `$1`, `$2`, … exactly as passed, so a plugin never quotes anything for a remote shell. The run is bounded: `timeoutMs` (default 60 s, at most 10 minutes) and `maxOutputBytes` (default 8 MB) end it with `timedOut` or `truncated` rather than letting it hang or fill memory. A failure to connect is a nonzero `code` with ssh's words in `stderr`; a host Walnut does not know throws. Keep the work on the host and print a small answer: a script that reads a local database and prints one JSON line costs one connection, where copying the database over costs every byte of it.
+`walnut.hosts.list()` returns this machine (`__local__`) and every host in Settings, Hosts, with its hostname, user and port. `walnut.hosts.run(alias, { script, args })` runs a POSIX `sh` script on one: on another host through Walnut's link to that host's daemon, the way host_exec runs a command (so a host on the host network works like an SSH one; it never prompts), directly for this machine. Arguments arrive as `$1`, `$2`, … exactly as passed, so a plugin never quotes anything for a remote shell. The run is bounded: `timeoutMs` (default 60 s, at most 10 minutes) and `maxOutputBytes` (default 8 MB) end it with `timedOut` or `truncated` rather than letting it hang or fill memory. A host Walnut cannot reach now, or one that could not run the script (its daemon not updated yet to one that runs plugin scripts: it updates on its next connect), is `code` 255 with the reason in `stderr`; a host Walnut does not know throws. On another host the run starts after the user's login shell set up the environment, as host_exec's does (what the profile prints is not in `stdout`), a script on a Mac that would read a place macOS guards is refused (code 255), stdout is kept up to 12 MB there, and the run keeps no job, log or audit line on the host. Keep the work on the host and print a small answer: a script that reads a local database and prints one JSON line costs one connection, where copying the database over costs every byte of it.
 
 #### Binary HTTP responses
 

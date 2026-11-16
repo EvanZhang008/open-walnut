@@ -104,6 +104,31 @@ function rpc(cmd: Record<string, unknown>, timeoutMs = 60_000): Promise<Record<s
 }
 
 describe.each(TWINS)('$name', (twin) => {
+  it('runs a plugin script with its streams apart, and keeps no job, log or audit line of it', async () => {
+    const dir = path.join(root, `${twin.name.replace(/\W+/g, '-')}-script`)
+    const home = await boot(twin, dir)
+    // What a login profile prints is not the script's stdout.
+    fs.writeFileSync(path.join(home, '.profile'), 'echo profile-noise\n')
+    const hello = await rpc({ cmd: 'hello' })
+    expect(hello.capabilities as string[]).toContain('host-script-v1')
+
+    const r = await rpc({ cmd: 'exec.script', script: 'for a in "$@"; do printf "[%s]" "$a"; done; pwd; echo oops >&2; exit 7', args: ["it's", 'a b', '$(echo no)', ''] })
+    expect(r).toMatchObject({ ok: true, code: 7, stdout: `[it's][a b][$(echo no)][]${fs.realpathSync(home)}\n`, stderr: 'oops\n', timedOut: false, truncated: false })
+
+    // The cap ends the run, the deadline stops its whole group.
+    expect(await rpc({ cmd: 'exec.script', script: 'while :; do echo 0123456789; done', maxOutputBytes: 25 }))
+      .toMatchObject({ ok: true, code: null, truncated: true, stdout: '0123456789\n0123456789\n012' })
+    const t0 = Date.now()
+    expect(await rpc({ cmd: 'exec.script', script: 'echo started; sleep 30 & sleep 30', timeoutMs: 1000 }))
+      .toMatchObject({ ok: true, code: null, timedOut: true, stdout: 'started\n' })
+    expect(Date.now() - t0).toBeLessThan(10_000)
+    expect(await rpc({ cmd: 'exec.script', script: ' ' })).toMatchObject({ ok: false, code: 'bad_request', error: expect.stringMatching(/needs a script/) })
+
+    expect((await rpc({ cmd: 'exec.list' })).jobs).toEqual([])
+    const execDirs = [path.join(dir, 'daemon', 'host-exec'), path.join(home, '.open-walnut', 'tmp', 'host-exec')]
+    for (const d of execDirs) expect(fs.existsSync(d) ? fs.readdirSync(d).filter((n) => n.endsWith('.log')) : []).toEqual([])
+  })
+
   it('runs a command for another host and keeps its log and audit', async () => {
     const dir = path.join(root, twin.name.replace(/\W+/g, '-'))
     const home = await boot(twin, dir)

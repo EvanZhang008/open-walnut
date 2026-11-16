@@ -91,10 +91,10 @@ export async function recomputeHostReadinessFloors(floorArg?: ClaudeCliFloor | n
 }
 
 /** Test and fixture seam: store an answer as if a preflight had returned it. */
-export function setHostReadinessForTest(host: string, parsed: HostPreflightResult, ctx: { hostLabel?: string; sshTarget?: string; floor?: ClaudeCliFloor | null } = {}, at: number = Date.now()): HostReadiness {
-  problemCtx.set(host, { prebuiltDtach: false, hostLabel: ctx.hostLabel, sshTarget: ctx.sshTarget })
+export function setHostReadinessForTest(host: string, parsed: HostPreflightResult, ctx: { hostLabel?: string; sshTarget?: string; terminals?: false; floor?: ClaudeCliFloor | null } = {}, at: number = Date.now()): HostReadiness {
+  problemCtx.set(host, { prebuiltDtach: false, hostLabel: ctx.hostLabel, sshTarget: ctx.sshTarget, ...(ctx.terminals === false ? { terminals: false as const } : {}) })
   const judged = ctx.floor === undefined ? parsed : judgeAgainstFloor(parsed, ctx.floor)
-  store.set(host, { ...judged, checkedAt: at, problems: readinessProblems(judged, { hostLabel: ctx.hostLabel, sshTarget: ctx.sshTarget, floorModel: ctx.floor?.model }) })
+  store.set(host, { ...judged, checkedAt: at, problems: readinessProblems(judged, { hostLabel: ctx.hostLabel, sshTarget: ctx.sshTarget, floorModel: ctx.floor?.model, ...(ctx.terminals === false ? { terminals: false } : {}) }) })
   notifyReadiness(host)
   return getHostReadiness(host, at)!
 }

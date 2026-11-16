@@ -266,7 +266,8 @@ export function hintForKind(kind: HostConnectErrorKind, sshTarget: string, targe
     case 'timeout': return `Connecting to ${who} took too long. The host may be unreachable (VPN?), or a first-time daemon install is still running; Retry in a moment.`
     case 'not_linux': return `${who} is not a Linux machine. Walnut sets up SSH hosts on Linux only; add a Mac with Settings › Remote Hosts › Add host › Join a machine with a link, and run its one command there.`
     case 'runtime': return 'The session daemon needs bun or node on the host, and neither could run there. Install one (`curl -fsSL https://bun.sh/install | bash`, or Node.js from your package manager), then Retry.'
-    case 'daemon': return 'SSH works but the session daemon did not come up. Retry; if it keeps failing, check daemon-start.log in the daemon directory on the host (/tmp/open-walnut, or ~/.cache/open-walnut when /tmp is unusable).'
+    case 'daemon': if (target.net) return `${who} answers on the host network, but its Walnut daemon did not. Check that Walnut is running on that machine, then Retry.`
+      return 'SSH works but the session daemon did not come up. Retry; if it keeps failing, check daemon-start.log in the daemon directory on the host (/tmp/open-walnut, or ~/.cache/open-walnut when /tmp is unusable).'
     case 'listing': return `${who} is connected, but this directory could not be listed. Check that the path exists and is readable there, then Retry.`
     case 'cloud_update': return `The cloud companion (Settings › Phones & Cloud › Cloud Companion) runs an older Walnut build that cannot host this Mac's sessions. Deploy the current build there; ${who} connects on its own once it answers.`
     case 'cloud_exec_off': return `The cloud companion (Settings › Phones & Cloud › Cloud Companion) is not set up to run sessions. Set \`cloud.exec.enabled: true\` in its config.yaml and restart it, then Retry.`
@@ -274,6 +275,8 @@ export function hintForKind(kind: HostConnectErrorKind, sshTarget: string, targe
     case 'cloud_tunnel': return `Walnut reaches ${who} through the cloud companion, not SSH. Check that the companion is up and this Mac is still paired with it (Settings › Phones & Cloud › Cloud Companion), then Retry.`
     case 'unknown':
     default:
+      // A machine on the host network has no SSH to try by hand.
+      if (target.net) return `Retry, and if it keeps failing check that ${who} is awake and online: this Mac reaches it over the host network, not SSH.`
       return `Retry, and if it keeps failing run \`ssh ${sshTarget}\` from a terminal to see what SSH itself says.`
   }
 }

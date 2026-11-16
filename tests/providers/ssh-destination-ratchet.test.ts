@@ -36,7 +36,6 @@ const INLINE_DEST_ALLOWED: Record<string, string> = {
   'src/core/hosts/host-status.ts': 'text naming the target in the host status',
   'src/core/diagnostics/render.ts': 'a diagnostics table cell',
   'src/core/hosts/host-warmup.ts': 'error classification text',
-  'src/core/plugins/plugin-hosts.ts': 'a plugin\'s host run, from the plugin host shape (no found-host flag)',
 }
 
 const EXEMPT = new Set(['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts'])

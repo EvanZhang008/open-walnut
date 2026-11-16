@@ -1063,15 +1063,16 @@ export class DaemonConnection {
    * and so are fs.writePart (a relayed file chunk, transfer-core.ts),
    * attachments.put (a 2 MB chunk of a note's picture, attachment-replica.ts); fs.write
    * and the replicas' manifests ride here only when big (BULK_WHEN_BIG). mcp.call and
-   * mcp.result answer with a tool's images, up to 3 MB of base64 (host-mcp-core.ts).
+   * mcp.result answer with a tool's images, up to 3 MB of base64 (host-mcp-core.ts); exec.script
+   * with a plugin script's stdout, up to 12 MB, after a wait of up to 10 minutes (host-script-core.ts).
    */
-  private static readonly BULK_COMMANDS = new Set(['fs.read', 'fs.readRange', 'fs.readImage', 'git.diff', 'changes.compute', 'changes.file', 'transcript.rewindProbe', 'replica.put', 'fs.writePart', 'attachments.put', 'upload.part', 'mcp.call', 'mcp.result'])
+  private static readonly BULK_COMMANDS = new Set(['fs.read', 'fs.readRange', 'fs.readImage', 'git.diff', 'changes.compute', 'changes.file', 'transcript.rewindProbe', 'replica.put', 'fs.writePart', 'attachments.put', 'upload.part', 'mcp.call', 'mcp.result', 'exec.script'])
   /**
    * Bulk commands that wait for their answer on purpose (an MCP call held up to its caller's
    * budget): nothing arriving before their deadline says nothing about the bulk socket, so
    * their timeout never terminates it (that would fail every other bulk command on it).
    */
-  private static readonly BULK_WAITS = new Set(['mcp.call', 'mcp.result'])
+  private static readonly BULK_WAITS = new Set(['mcp.call', 'mcp.result', 'exec.script'])
   /**
    * Bulk commands whose REQUEST is the big frame (a file part, a batch of rows, a
    * picture part). While the bulk channel rides its own SSH connection (bulkForward)

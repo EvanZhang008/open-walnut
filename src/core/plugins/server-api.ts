@@ -887,7 +887,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         return getPluginHost(alias)
       },
       async run(alias: string, input: { script: string; args?: string[]; timeoutMs?: number; maxOutputBytes?: number }) {
-        // A replica has no ssh of its own to the user's hosts; it reaches them through daemons.
+        // A replica does not run commands on the user's hosts for plugins: the primary does.
         if (isFollower()) throw new Error('hosts.run is not available on a replica.')
         const { runOnPluginHost } = await import('./plugin-hosts.js')
         return runOnPluginHost(alias, input)

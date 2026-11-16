@@ -2748,6 +2748,8 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'exec.read': return replyTransfer(ws, id as number, 'exec.read', () => hostExec.read(cmd), false)
     case 'exec.kill': return replyTransfer(ws, id as number, 'exec.kill', () => hostExec.kill(cmd), false)
     case 'exec.list': return replyTransfer(ws, id as number, 'exec.list', () => hostExec.list(cmd), false)
+    // A plugin's short script (host-script-v1, host-script-core.ts): the same rule as exec.*.
+    case 'exec.script': return replyTransfer(ws, id as number, 'exec.script', () => hostExec.script(cmd), false)
     // A task on another host calling this host's MCP servers and web services (host-mcp-v1,
     // host-http-v1). The same rule as exec.*: only the trusted walnut socket asks, after the
     // server checked the user's grant. Keep in sync with daemon-source.ts.
@@ -3114,13 +3116,14 @@ async function cmdServiceHandover(ws: ServerWebSocket<WsData>, id: number, cmd: 
     acp.workers.size ? `${acp.workers.size} ACP worker(s)` : '',
     relaying ? 'relay requests' : '',
     hostExec.running() ? `${hostExec.running()} host_exec run(s)` : '',
+    hostExec.scripts?.() ? `${hostExec.scripts()} plugin script(s)` : '',
   ].filter(Boolean)
   if (force && busyWith.length) logMsg('warn', 'service.update: forced, going over its own work', { busyWith })
   if (!force && (acp.workers.size || relaying)) {
     return sendError(ws, id, 'service.handover: active ACP workers or relay requests must finish first')
   }
   // A host_exec run shares this daemon's pipes and ends with it (each ends by its own deadline).
-  if (!force && hostExec.running()) return sendError(ws, id, 'service.handover: running host_exec jobs must finish first')
+  if (!force && (hostExec.running() || hostExec.scripts?.())) return sendError(ws, id, 'service.handover: running host_exec jobs must finish first')
   if (process.platform !== 'linux' && process.platform !== 'darwin') return sendError(ws, id, 'service.handover: unsupported platform')
   // Pause before the first await so the handover RPC does not count itself in the wait set.
   // A Claude Code install in flight (up to 45 minutes) is not waited for: the shutdown
@@ -3146,7 +3149,7 @@ async function cmdServiceHandover(ws: ServerWebSocket<WsData>, id: number, cmd: 
     throw error
   } finally { clearTimeout(timer) }
   // Drained, the swap goes ahead: each run it ends says why in its own log.
-  if (force && hostExec.running()) hostExec.endForUpdate?.('the daemon on this host is being replaced by an update that had waited hours for its work to end, and this run was stopped with it. Run it again if it is still needed.')
+  if (force && (hostExec.running() || hostExec.scripts?.())) hostExec.endForUpdate?.('the daemon on this host is being replaced by an update that had waited hours for its work to end, and this run was stopped with it. Run it again if it is still needed.')
   const location = { stateDir: cmd.stateDir, uid: os.userInfo().uid, instanceId: DAEMON_INSTANCE_ID }
   if (updating) serviceUpdateRequested = true
   try {

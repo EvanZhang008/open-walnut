@@ -44,6 +44,7 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
   'src/core/hosts/host-exec.ts': { calls: 4, kind: 'checks', why: 'dial() itself: every run, read and list here follows its quiet check' },
   'src/core/hosts/host-exec-jobs.ts': { calls: 3, kind: 'checks', why: 'job reads and kills go through dial()' },
   'src/core/hosts/host-http.ts': { calls: 1, kind: 'checks', why: 'the request goes through dial()' },
+  'src/core/hosts/host-script.ts': { calls: 1, kind: 'checks', why: 'a plugin script run goes through dial()' },
   'src/core/hosts/host-mcp.ts': { calls: 3, kind: 'checks', why: 'every MCP list and call goes through dial()' },
   'src/core/session-service-preview.ts': { calls: 1, kind: 'checks', why: 'hostLinkAnswers asks the link before a port forward is opened on it' },
   'src/core/session-vscode-embed.ts': { calls: 1, kind: 'checks', why: 'hostLinkAnswers asks the link before code-server is set up on it' },

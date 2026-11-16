@@ -234,7 +234,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'ports-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'transcript-archive-v1', 'host-cache-prune-v1', 'host-exec-v1', 'host-exec-v2', 'host-exec-wait-v1', 'host-exec-group-v1', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'history-ready-v1', 'history-ready-subagent-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'trigger-caller-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'acp-model-catalog-v1', 'acp-light-bounds-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'ports-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'transcript-archive-v1', 'host-cache-prune-v1', 'host-exec-v1', 'host-exec-v2', 'host-exec-wait-v1', 'host-exec-group-v1', 'host-script-v1', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'history-ready-v1', 'history-ready-subagent-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'trigger-caller-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'acp-model-catalog-v1', 'acp-light-bounds-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -4388,7 +4388,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'transcript.restore': return cmdTranscriptRestore(ws, id, cmd);
     // A command for a task on another host (host-exec-v1); not bridge- or
     // follower-reachable: only the trusted walnut socket asks. Mirrors daemon-standalone.ts.
-    case 'exec.run': case 'exec.read': case 'exec.kill': case 'exec.list': {
+    case 'exec.run': case 'exec.read': case 'exec.kill': case 'exec.list': case 'exec.script': {
       if (!hostExec) return sendError(ws, id, cmd.cmd + ' unsupported: host-exec-core sidecar not loaded');
       const op = cmd.cmd.slice(5);
       return replyTransfer(ws, id, cmd.cmd, function () { return hostExec[op](cmd); }, false);
@@ -4774,13 +4774,14 @@ async function cmdServiceHandover(ws, id, cmd) {
     acp && acp.workers.size ? acp.workers.size + ' ACP worker(s)' : '',
     relaying ? 'relay requests' : '',
     hostExec && hostExec.running() ? hostExec.running() + ' host_exec run(s)' : '',
+    hostExec && typeof hostExec.scripts === 'function' && hostExec.scripts() ? hostExec.scripts() + ' plugin script(s)' : '',
   ].filter(Boolean);
   if (force && busyWith.length) logMsg('warn', 'service.update: forced, going over its own work', { busyWith: busyWith });
   if (!force && ((acp && acp.workers.size) || relaying)) {
     return sendError(ws, id, 'service.handover: active ACP workers or relay requests must finish first');
   }
   // A host_exec run shares this daemon's pipes and ends with it (each ends by its own deadline).
-  if (!force && hostExec && hostExec.running()) return sendError(ws, id, 'service.handover: running host_exec jobs must finish first');
+  if (!force && hostExec && (hostExec.running() || (typeof hostExec.scripts === 'function' && hostExec.scripts()))) return sendError(ws, id, 'service.handover: running host_exec jobs must finish first');
   if (process.platform !== 'linux' && process.platform !== 'darwin') return sendError(ws, id, 'service.handover: unsupported platform');
   // Pause before the first await so the handover RPC does not count itself in the wait set.
   // A Claude Code install in flight (up to 45 minutes) is not waited for: the shutdown
@@ -4806,7 +4807,7 @@ async function cmdServiceHandover(ws, id, cmd) {
     throw error;
   } finally { clearTimeout(timer); }
   // Drained, the swap goes ahead: each run it ends says why in its own log (an older sidecar has no endForUpdate).
-  if (force && hostExec && hostExec.running() && typeof hostExec.endForUpdate === 'function') hostExec.endForUpdate('the daemon on this host is being replaced by an update that had waited hours for its work to end, and this run was stopped with it. Run it again if it is still needed.');
+  if (force && hostExec && (hostExec.running() || (typeof hostExec.scripts === 'function' && hostExec.scripts())) && typeof hostExec.endForUpdate === 'function') hostExec.endForUpdate('the daemon on this host is being replaced by an update that had waited hours for its work to end, and this run was stopped with it. Run it again if it is still needed.');
   const location = { stateDir: cmd.stateDir, uid: os.userInfo().uid, instanceId: DAEMON_INSTANCE_ID };
   if (updating) serviceUpdateRequested = true;
   try {
@@ -14470,6 +14471,7 @@ function daemonCapabilities() {
   if (hostExec && hostExec.version >= 2) caps.push('host-exec-v2');
   if (hostExec && hostExec.version >= 3) caps.push('host-exec-wait-v1');
   if (hostExec && hostExec.version >= 4) caps.push('host-exec-group-v1');
+  if (hostExec && hostExec.version >= 5 && typeof hostExec.script === 'function') caps.push('host-script-v1');
   if (netSupervisor) caps.push('net-v1');
   if (netSupervisor && typeof netSupervisor.join === 'function') caps.push('net-join-v1');
   if (hostMcp) caps.push('host-mcp-v1');

@@ -96,7 +96,7 @@ describe('the final Demo daemon command boundary while stopping', () => {
     for (const [cmd, params] of [
       ['start', fresh(OTHER)], ['acpStart', { sid: 'new-rt', adapterCmd: ADAPTER }],
       ['acpNewSession', { sid: NEW }], ['send', { sid: NEW }],
-      ['oneshot.run', {}], ['exec.run', {}],
+      ['oneshot.run', {}], ['exec.run', {}], ['exec.script', {}],
     ] as Array<[string, Record<string, unknown>]>) {
       expect(() => gate(A, cmd, params)).toThrow(/Demo is stopping/)
       expect(() => gateSessionCommand(A, cmd, params, false)).toThrow(/Demo is stopping/)

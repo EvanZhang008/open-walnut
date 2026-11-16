@@ -62,7 +62,10 @@ const HEALTHY_RECHECK_MS = 10 * 60_000
 /** How a host's lines name it: its label, the ssh target a user types, and the model floor. */
 export interface HostContext {
   label?: string
+  /** What follows `ssh` to reach the host; none for a host with no SSH route (the host network, the cloud box). */
   sshTarget?: string
+  /** This host can open a terminal (hostOffersTerminal); false: dtach is moot there. */
+  terminals?: boolean
   floor: ClaudeCliFloor | null
   /** config.hosts[].shell_setup: the preflight runs it first, as a session spawn does. */
   shellSetup?: string
@@ -98,11 +101,14 @@ async function defaultHostContext(host: string): Promise<HostContext> {
   try {
     const { getConfig } = await import('../config-manager.js')
     const hosts = (await getConfig()).hosts ?? {}
-    const def = Object.hasOwn(hosts, host) ? hosts[host] as { hostname?: unknown; user?: unknown; port?: unknown; label?: unknown; shell_setup?: unknown } : undefined
+    const def = Object.hasOwn(hosts, host) ? hosts[host] as { hostname?: unknown; user?: unknown; port?: unknown; label?: unknown; shell_setup?: unknown; transport?: 'ssh' | 'net'; cloud_box?: boolean } : undefined
     const label = typeof def?.label === 'string' && def.label ? def.label : host
     const shellSetup = typeof def?.shell_setup === 'string' && def.shell_setup.trim() ? def.shell_setup : undefined
     const wsl = await probedWsl(host)
-    return { label, sshTarget: sshTargetText(def, host), floor, ...(shellSetup ? { shellSetup } : {}), ...(wsl ? { wsl } : {}) }
+    const { hostHasSshRoute } = await import('./host-status.js')
+    // Not configured here (a replica's copy may not list a host): SSH as before.
+    const ssh = !def || hostHasSshRoute(def)
+    return { label, ...(ssh ? { sshTarget: sshTargetText(def, host) } : { terminals: false }), floor, ...(shellSetup ? { shellSetup } : {}), ...(wsl ? { wsl } : {}) }
   } catch {
     return { label: host, sshTarget: host, floor }
   }
@@ -163,6 +169,11 @@ function defaultOnFixed(host: string, action: HostFixAction): void {
     .catch(() => { /* no terminal module in this process */ })
 }
 
+/** A host with no terminal (no SSH route) gets no dtach fix. */
+function terminalsOf(host: string): { terminals?: false } {
+  return problemCtx.get(host)?.terminals === false ? { terminals: false } : {}
+}
+
 /**
  * Start an autofix round when this answer has problems a fix can address and
  * the daemon can run fixes. Fire-and-forget: the caller (a connect, a human
@@ -184,11 +195,11 @@ function maybeStartAutofix(host: string, conn: PreflightConnection, answer: Host
   // The ask's own clock (the click's Date.now), not the round's injectable one. It is used up
   // when its fix starts (onStart), so a later connect installs nothing by itself.
   const agents = () => agentsAskedNow(host)
-  if (!fresh && !nextFixAction(answer, tried, { prebuiltDtach: prebuiltDtach(), agents: agents() })) return
+  if (!fresh && !nextFixAction(answer, tried, { prebuiltDtach: prebuiltDtach(), agents: agents(), ...terminalsOf(host) })) return
   const triedNow = tried
   const round = (async () => {
     if (fresh) await recallFailedFixes(host, triedNow, now())
-    if (!nextFixAction(answer, triedNow, { prebuiltDtach: prebuiltDtach(), agents: agents() })) return
+    if (!nextFixAction(answer, triedNow, { prebuiltDtach: prebuiltDtach(), agents: agents(), ...terminalsOf(host) })) return
     let def: { autofix?: unknown } | undefined
     try {
       def = await (opts.hostSettings ?? defaultHostSettings)(host)
@@ -365,10 +376,10 @@ export function refreshHostReadiness(
         && !!(await (opts.findPrebuilt ?? defaultFindPrebuilt)(parsed.platform, parsed.arch).catch(() => null))
       if (superseded()) { recheck = true; return null }
       prebuiltFor.set(host, prebuilt)
-      problemCtx.set(host, { prebuiltDtach: prebuilt, hostLabel: ctx.label, sshTarget: ctx.sshTarget })
+      problemCtx.set(host, { prebuiltDtach: prebuilt, hostLabel: ctx.label, sshTarget: ctx.sshTarget, ...(ctx.terminals === false ? { terminals: false } : {}) })
       store.set(host, {
         ...parsed, checkedAt: now(), probeEpoch: epoch,
-        problems: readinessProblems(parsed, { prebuiltDtach: prebuilt, hostLabel: ctx.label, sshTarget: ctx.sshTarget, floorModel: ctx.floor?.model }),
+        problems: readinessProblems(parsed, { prebuiltDtach: prebuilt, hostLabel: ctx.label, sshTarget: ctx.sshTarget, floorModel: ctx.floor?.model, ...(ctx.terminals === false ? { terminals: false } : {}) }),
       })
       const readiness = getHostReadiness(host)!
       log.session.info('host preflight', {

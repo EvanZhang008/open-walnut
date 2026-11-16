@@ -650,6 +650,14 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // it the server says so in the answer (`groupKept`). Sidecar-gated in the source twin
   // (host-exec-core.cjs `version` 4).
   'host-exec-group-v1',
+  // 'host-script-v1' — a plugin's short script (`walnut.hosts.run`, src/core/hosts/host-script.ts):
+  // `exec.script {script, args, timeoutMs, maxOutputBytes, cwd?}` runs `sh -s -- ARGS` with the
+  // script on stdin after the login shell set up the environment, and answers `{code, stdout,
+  // stderr, timedOut, truncated}`: stdout kept up to its cap (a run past it ends), the last 4000
+  // characters of stderr, the run's process group stopped at its deadline (10 min at most). No
+  // job, log file or audit line is kept (host-script-core.ts). Same reach as exec.*: not bridge-
+  // or follower-reachable. Sidecar-gated in the source twin (host-exec-core.cjs `version` 5).
+  'host-script-v1',
   // 'net-v1' — the host network (net-core.ts): the daemon runs walnut-net (iroh) while
   // the server configured it: `net.configure {relays, relayRoots, members, enabled}`
   // writes its config (members with `accept: true` may open streams to this daemon;
