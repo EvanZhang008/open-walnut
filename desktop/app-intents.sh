@@ -3,6 +3,13 @@
 # swiftc, so they are spelled out here. The metadata processor ships only with full Xcode: on a
 # Mac without it the app builds the same, and its actions are not listed (a warning says so).
 
+# The Swift module the app's intents live in. swiftc names a module after its output file unless
+# told, and the processor matches the constants to types by module: a release binary written as
+# Walnut_arm64 listed no action (Release archives run 43839271955).
+# Every compile of the app passes -module-name "$WALNUT_MODULE", each architecture alike, so the
+# types the listed actions name are the ones in the binary.
+WALNUT_MODULE=Walnut
+
 # app_intents_swift_flags <obj dir>: prints, one per line, the swiftc flags that make the compiler
 # write the intents' constant values and the linker the list of frameworks it used.
 app_intents_swift_flags() {
@@ -10,7 +17,7 @@ app_intents_swift_flags() {
     mkdir -p "$obj"
     printf '%s\n' '["AppIntent","EntityQuery","AppEntity","TransientEntity","AppEnum","AppShortcutProviding","AppShortcutsProvider","AnyResolverProviding","AppIntentsPackage","DynamicOptionsProvider","_IntentValueRepresentable","_AssistantIntentsProvider","_GenerativeFunctionExtractable","IntentValueQuery","Resolver","AppExtension","ExtensionPointDefining"]' > "$obj/protocols.json"
     # Whole-module: one constant-values file for the module, which is what the processor reads.
-    printf '%s\n' -wmo -emit-const-values-path "$obj/Walnut.swiftconstvalues" \
+    printf '%s\n' -module-name "$WALNUT_MODULE" -wmo -emit-const-values-path "$obj/Walnut.swiftconstvalues" \
         -Xfrontend -const-gather-protocols-file -Xfrontend "$obj/protocols.json" \
         -Xlinker -dependency_info -Xlinker "$obj/dependency_info.dat"
 }
@@ -42,7 +49,7 @@ app_intents_metadata() {
     : > "$obj/metadata.txt"
     : > "$obj/static-metadata.txt"
     if "$tool" --toolchain-dir "$(dirname "$(dirname "$(dirname "$tool")")")" \
-        --module-name Walnut --sdk-root "$sdk" ${xcode_version:+--xcode-version "$xcode_version"} \
+        --module-name "$WALNUT_MODULE" --sdk-root "$sdk" ${xcode_version:+--xcode-version "$xcode_version"} \
         --platform-family macOS --deployment-target "${triple##*macos}" \
         --bundle-identifier "$bundle_id" --output "$app/Contents/Resources" \
         --target-triple "$triple" --binary-file "$binary" \

@@ -72,10 +72,16 @@ swiftc -O -o "$MACOS/${APP_NAME}_arm64" "${SOURCES[@]}" -D WALNUT_APP "${INTENTS
     "${FRAMEWORKS[@]}" -target arm64-apple-macos12.0
 
 echo "Compiling for x86_64..."
-swiftc -O -o "$MACOS/${APP_NAME}_x86_64" "${SOURCES[@]}" -D WALNUT_APP \
+swiftc -O -o "$MACOS/${APP_NAME}_x86_64" "${SOURCES[@]}" -D WALNUT_APP -module-name "$WALNUT_MODULE" \
     "${FRAMEWORKS[@]}" -target x86_64-apple-macos12.0
 
 app_intents_metadata "$APP_BUNDLE" "$MACOS/${APP_NAME}_arm64" "$INTENTS_OBJ" arm64-apple-macos12.0 com.local.walnut-desktop "${SOURCES[@]}"
+# A release built where the processor exists ships its actions or stops: a warning alone let every
+# release go out without them.
+if [ ! -d "$RESOURCES/Metadata.appintents" ] && xcrun --find appintentsmetadataprocessor >/dev/null 2>&1; then
+    echo "The Spotlight actions were not listed; see $INTENTS_OBJ/metadata.log" >&2
+    exit 1
+fi
 
 echo "Creating universal binary..."
 lipo -create "$MACOS/${APP_NAME}_arm64" "$MACOS/${APP_NAME}_x86_64" \
