@@ -63,6 +63,8 @@ let gen = 0;
 const result = (extra: Record<string, unknown> = {}) => bus.emit(EventNames.SESSION_RESULT, {
   sessionId: SID, taskId: 't-mr', turnGen: ++gen, result: 'done', isError: false, ...extra,
 }, ['*'], { source: 'session-runner' });
+/** A message reached the session (the queue's delivery). */
+const took = () => bus.emit(EventNames.SESSION_MESSAGES_DELIVERED, { sessionId: SID, messageIds: [`m-${gen}`] }, ['*'], { source: 'test' });
 const refused = () => result({ result: "API Error: Opus 5.5's safeguards flagged this message", isError: true, safeguardStop: { category: 'reasoning_extraction' } });
 
 describe('who picked a model', () => {
@@ -102,7 +104,12 @@ describe('a lead switches a session\'s model', () => {
     await applySessionModelChange(SID, 'sonnet', { choice: 'agent' });
     expect((await rec()).cliModel).toBe('sonnet');
     expect((await rec()).modelTemporary).toMatchObject({ from: null, to: 'sonnet', by: 'agent' });
-    // A refused or failed turn answered nothing: the switch still holds.
+    // The turn that was already running when the lead switched took nothing after it: not its turn.
+    result();
+    await pause();
+    expect((await rec()).cliModel).toBe('sonnet');
+    // The lead's message reaches it. A refused or failed turn answered nothing: the switch still holds.
+    took();
     refused();
     result({ isError: true });
     result({ interrupted: true });
@@ -121,6 +128,7 @@ describe('a lead switches a session\'s model', () => {
   it('a quiet turn of Walnut\'s own (an idle compaction) is not the turn the switch was for', async () => {
     stops.push(startModelRestore().stop);
     await applySessionModelChange(SID, 'sonnet', { choice: 'agent' });
+    took();
     beginQuietTurn(SID, 'idle-compact', 'idle-compact', Date.now());
     result();
     await pause();
@@ -132,6 +140,7 @@ describe('a lead switches a session\'s model', () => {
     await applySessionModelChange(SID, 'sonnet', { choice: 'agent' });
     await applySessionModelChange(SID, 'global.anthropic.claude-fable-5-2[1m]', { choice: 'person' });
     expect((await rec()).modelTemporary ?? null).toBeNull();
+    took();
     result();
     await pause();
     expect((await rec()).cliModel).toBe('global.anthropic.claude-fable-5-2[1m]');
@@ -141,9 +150,44 @@ describe('a lead switches a session\'s model', () => {
     await updateSessionRecord(SID, { cliModel: 'sonnet' });
     stops.push(startModelRestore().stop);
     await applySessionModelChange(SID, 'opus', { choice: 'agent' });
+    took();
     result();
     await until(async () => !(await rec()).modelTemporary, 'the switch back');
     expect((await rec()).cliModel).toBe('sonnet');
+  });
+  it('a model moved elsewhere since (a /model typed in the session) is kept; only the mark goes', async () => {
+    stops.push(startModelRestore().stop);
+    await applySessionModelChange(SID, 'sonnet', { choice: 'agent' });
+    // The CLI now answers on Fable although the record still says Sonnet.
+    await updateSessionRecord(SID, { model: 'global.anthropic.claude-fable-5-2' });
+    took(); result();
+    await until(async () => !(await rec()).modelTemporary, 'the mark cleared');
+    expect((await rec()).cliModel).toBe('sonnet');
+    await applySessionModelChange(SID, 'sonnet', { choice: 'agent' });
+    await updateSessionRecord(SID, { model: 'claude-sonnet-5-5', cliModel: 'haiku' });
+    took(); result();
+    await until(async () => !(await rec()).modelTemporary, 'the mark cleared');
+    expect((await rec()).cliModel).toBe('haiku');
+  });
+
+  it('a switch back that does not take leaves the record on the model the CLI runs, and stops after a few tries', async () => {
+    const kept: string[] = [];
+    let record = { claudeSessionId: SID, taskId: 't-mr', cliModel: 'sonnet', modelTemporary: { from: null, to: 'sonnet', by: 'agent', at: new Date(Date.now() - 1000).toISOString() } } as SessionRecord;
+    const h = startModelRestore({
+      getSession: async () => record,
+      applyModel: async () => false,
+      keepModel: async (_id, m) => { kept.push(m); },
+      clearMark: async () => { record = { ...record, modelTemporary: null }; },
+      held: async () => false,
+      emitNote: () => {},
+    });
+    stops.push(h.stop);
+    h.instance.handleEvent({ name: EventNames.SESSION_MESSAGES_DELIVERED, data: { sessionId: SID, messageIds: ['x'] } } as never);
+    expect(await h.instance.restore(SID)).toBe('not-applied');
+    expect(await h.instance.restore(SID)).toBe('not-applied');
+    expect(await h.instance.restore(SID)).toBe('gave-up');
+    expect(kept).toEqual(['sonnet', 'sonnet', 'sonnet']);
+    expect(record.modelTemporary).toBeNull();
   });
 });
 
@@ -170,7 +214,8 @@ describe('the safeguard switch moves a session, then the next turn is on Opus 5.
     expect((await rec()).cliModel).toBe('global.anthropic.claude-fable-5-2[1m]');
     expect((await rec()).modelTemporary).toMatchObject({ from: null, by: 'safeguard-switch' });
     expect(sends[0]).toContain('for this turn; Walnut moves you back after it');
-    // Fable answers the resend: that was its one turn.
+    // Fable takes and answers the resend: that was its one turn.
+    took();
     result();
     await until(async () => !(await rec()).modelTemporary, 'the switch back');
     expect((await rec()).cliModel).toBe('default');

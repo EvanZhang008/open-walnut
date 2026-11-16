@@ -3592,7 +3592,7 @@ export interface TemporaryModel {
   /** The model it was switched to. */
   to: string;
   by: 'safeguard-switch' | 'agent';
-  /** When it was switched: a turn that ended before this is not the temporary turn. */
+  /** When it was switched: only a turn that took a message after this is the temporary turn. */
   at: string;
 }
 

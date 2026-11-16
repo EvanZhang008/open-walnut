@@ -26,6 +26,7 @@ import { randomUUID } from 'node:crypto'
 import { bus, EventNames, type BusEvent } from '../event-bus.js'
 import { log } from '../../logging/index.js'
 import type { SafeguardSwitchState, SessionRecord } from '../types.js'
+import { resolveModelSwitchValue } from '../types.js'
 import { isQuietTurn } from './quiet-turn.js'
 import { markTemporary, tracksTemporaryModel } from './model-restore.js'
 import { reportHeldTurnFailed } from './context-full-recovery.js'
@@ -467,7 +468,7 @@ export class SafeguardSwitch {
     const at = new Date(this.deps.now()).toISOString()
     // The fallback holds for this work only: after its next clean turn the session goes back (model-restore.ts).
     if (tracksTemporaryModel(rec!)) {
-      await this.deps.saveSession(sessionId, { modelTemporary: markTemporary(rec!, picked.row.id, 'safeguard-switch', at) }).catch(() => {})
+      await this.deps.saveSession(sessionId, { modelTemporary: markTemporary(rec!, resolveModelSwitchValue(picked.row.id) ?? picked.row.id, 'safeguard-switch', at) }).catch(() => {})
     }
     // The new model starts one short of a switch: refusing the resend itself is the second refusal of these words.
     const carried: Streak = { count: 0, since: at, ...(streak.category ? { category: streak.category } : {}), families: [] }
