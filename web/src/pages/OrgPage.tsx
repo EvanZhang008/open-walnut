@@ -444,7 +444,7 @@ export function OrgPage() {
    *  the Brief, a notice, search): it opens here, never on Home (2026-11-15, the user: "if we click in
    *  te org seciton the taks need ot open in org that is only difference, all other page go to home").
    *  Main or a lead is a node of the page and is selected; any other task opens beside the page. */
-  const openTaskOnOrg = useCallback((taskId: string, opts?: OpenTaskOptions) => {
+  const openTaskOnOrg = useLeanCallback((taskId: string, opts?: OpenTaskOptions) => {
     // A full-screen sheet (a node's chat, its side bar) would cover what opens: leave it first.
     yieldFullscreen('org-open-task');
     if (opts?.sessionId) { openSession(opts.sessionId); return; }
