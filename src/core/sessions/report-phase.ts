@@ -143,11 +143,16 @@ export async function applyReportPhase(
   }
   if (!next || next === task.phase || !reportMayMovePhase(task, turnEndedAt, next, report.state)) return null;
   const { readMarkerForPhase } = await import('../phase.js');
+  // leaveHeld: the turn's own report is the session machine's exit from a wait (reportMayMovePhase
+  // lets a parked task out only for a stop on the user). Without it the raw write's held-phase
+  // guard, which keeps a sync pull from waking a WAITING task, dropped the phase and kept the rest,
+  // so the call read as moved while the ask stayed under Waiting (2026-11-16: a lead's review of
+  // three draft CRs sat there for hours). The stored phase is what counts, not `changed`.
   const res = await updateTaskRaw(taskId, { phase: next, ...readMarkerForPhase(next) }, {
-    emitEvent: true, push: true, source: 'status-report',
+    emitEvent: true, push: true, source: 'status-report', leaveHeld: true,
     shouldUpdate: (cur) => reportMayMovePhase(cur, turnEndedAt, next, report.state) && cur.phase === task.phase,
   });
-  if (!res?.changed) return null;
+  if (!res?.changed || res.task?.phase !== next) return null;
   log.session.info('status report moved the phase', { taskId, sessionId, from: task.phase, to: next, state: report.state });
   return next;
 }
@@ -193,9 +198,13 @@ export async function applyStoredReports(): Promise<number> {
     // debounce plus the ask), so a phase set earlier than that is an older turn's, and one set
     // later is someone else's.
     if (!Number.isFinite(at) || !Number.isFinite(phaseAt) || phaseAt < at - STORED_REPORT_WINDOW_MS) continue;
+    // The move guard is against the turn's end, not the report's later write: a person's park in
+    // between is a later move, which the live path refuses and this pass must too.
+    const ended = Date.parse(report.turn_ended_at ?? '');
+    const turnEndedAt = Number.isFinite(ended) ? ended : at;
     const next = phaseForReport(report, task, false, 'unknown');
-    if (!next || next === task.phase || !reportMayMovePhase(task, at, next, report.state)) continue;
-    if (await applyReportPhase(task.id, task.session_id ?? '', report, at).catch(() => null)) moved++;
+    if (!next || next === task.phase || !reportMayMovePhase(task, turnEndedAt, next, report.state)) continue;
+    if (await applyReportPhase(task.id, task.session_id ?? '', report, turnEndedAt).catch(() => null)) moved++;
   }
   if (moved) log.task.info('status reports moved phases at start', { moved });
   return moved;

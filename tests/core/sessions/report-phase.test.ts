@@ -139,6 +139,11 @@ describe('applyReportPhase', () => {
     expect(await applyReportPhase(id, SID, report({ state: 'waiting', waiting_kind: 'you' }), ended)).toBeNull()
     expect((await getTask(id)).phase).toBe('WAITING')
     expect(await applyReportPhase(id, SID, report({ state: 'needs', ask: 'Approve?' }), ended)).toBe('NEED_ACTION')
+    // The store holds it, not only the return value (2026-11-16: the raw write's held-phase guard
+    // dropped the phase while the call said it moved, and a lead's review ask sat under Waiting).
+    const t = await getTask(id)
+    expect(t.phase).toBe('NEED_ACTION')
+    expect(t.wait_until).toBeUndefined()
   })
 
   it('Main is not handed to the user for waiting on their next message', async () => {
@@ -166,5 +171,20 @@ describe('applyStoredReports', () => {
     for (const id of [old, later, working]) expect((await getTask(id)).phase).toBe('NEED_ACTION')
     // Again: nothing more.
     expect(await applyStoredReports()).toBe(0)
+  })
+
+  it('never brings back a task someone parked between the turn end and its needs report', async () => {
+    // The turn ended 6 minutes ago, a person parked it 4 minutes ago, its needs report came 2 minutes ago.
+    const parked = await taskAt('WAITING', 4 * MIN, {
+      status_report: { ...report({ state: 'needs', ask: 'Approve?' }, 2 * MIN), turn_ended_at: new Date(Date.now() - 6 * MIN).toISOString() },
+    })
+    expect(await applyStoredReports()).toBe(0)
+    expect((await getTask(parked)).phase).toBe('WAITING')
+    // Parked before the turn ended: the needs report is the wait's exit.
+    const stale = await taskAt('WAITING', 7 * MIN, {
+      status_report: { ...report({ state: 'needs', ask: 'Approve?' }, 2 * MIN), turn_ended_at: new Date(Date.now() - 6 * MIN).toISOString() },
+    })
+    expect(await applyStoredReports()).toBe(1)
+    expect((await getTask(stale)).phase).toBe('NEED_ACTION')
   })
 })
