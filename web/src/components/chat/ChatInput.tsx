@@ -12,6 +12,7 @@ import { DrawingPad } from './DrawingPad';
 import { detectSlashCommand } from './slash-trigger';
 import { FileMentionPopup, type FileMentionHandle } from './FileMentionPopup';
 import { MentionPalette, type MentionPaletteHandle } from './MentionPalette';
+import { useRoomAbove } from '@/hooks/useRoomAbove';
 import { composeRefs, inlineRefs, type InlineRefSplit, type RefTable } from './composer-refs';
 import { fileRefsIn } from './composer-ref-pills';
 import { useComposerPills } from './useComposerPills';
@@ -989,6 +990,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
   // The last key switched the palette's source tab: ←/→ keep switching tabs.
   const mentionTabSwitchedRef = useRef(false);
   const mentionOpenRef = useRef(false);
+  // The popovers above the composer stop at the window's top (hooks/useRoomAbove.ts).
+  useRoomAbove(containerRef, paletteOpen || mentionOpen);
   mentionOpenRef.current = mentionOpen;
   const mentionKindRef = useRef<'palette' | 'recents'>('palette');
   mentionKindRef.current = mentionKind;

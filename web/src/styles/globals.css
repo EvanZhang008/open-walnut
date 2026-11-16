@@ -8148,12 +8148,21 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   box-shadow: var(--card-shadow-hover);
   z-index: 50;
   overflow: hidden;
+  /* Never past the window's top: the list gives up height first, the tabs and hint bar stay
+     (--composer-popover-room, ChatInput's useRoomAbove). */
+  display: flex;
+  flex-direction: column;
+  max-height: var(--composer-popover-room, none);
 }
+.mention-palette > .mention-tabs,
+.mention-palette > .mention-hintbar { flex-shrink: 0; }
 .mention-list {
   /* Tall enough for the shared row budget (groupRowBudget: Tasks and Files,
      5 rows each, plus their heads) with NO scrolling — both groups must be
      visible at once. */
   max-height: min(560px, 60vh);
+  min-height: 0;
+  flex: 0 1 auto;
   overflow-y: auto;
   padding: 4px;
 }
@@ -17713,10 +17722,17 @@ a.task-kebab-info:hover {
   box-shadow: var(--card-shadow-hover);
   z-index: 50;
   overflow: hidden;
+  /* Never past the window's top (--composer-popover-room, ChatInput's useRoomAbove). */
+  display: flex;
+  flex-direction: column;
+  max-height: var(--composer-popover-room, none);
 }
+.command-palette-wrap > :not(.command-palette) { flex-shrink: 0; }
 
 .command-palette {
   max-height: 280px;
+  min-height: 0;
+  flex: 0 1 auto;
   overflow-y: auto;
   padding: 4px;
 }
@@ -17895,7 +17911,8 @@ a.task-kebab-info:hover {
   border-radius: var(--radius-md);
   box-shadow: var(--card-shadow-hover);
   height: 420px;
-  max-height: 65vh;
+  /* Never past the window's top either (--composer-popover-room, ChatInput's useRoomAbove). */
+  max-height: min(65vh, var(--composer-popover-room, 65vh));
   overflow: hidden;
   z-index: 50;
 }
