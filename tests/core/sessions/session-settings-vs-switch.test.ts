@@ -119,9 +119,8 @@ describe('a session-setting change never touches a pending switch', () => {
         const before = structuredClone((await getTask(t.taskId)).engine_switch) as EngineSwitchState;
         expect(before.state).toBe('pending');
         // Whether the change applies (no live CLI here) is not this test's question: only that the
-        // switch is untouched, either way.
+        // switch is untouched, either way. Each change awaits its own writes before it answers.
         await run(t.sid).catch(() => {});
-        await new Promise((r) => setTimeout(r, 20));
         expect((await getTask(t.taskId)).engine_switch).toEqual(before);
         // The session is still the task's, in its turn: nothing restarted it.
         expect(await getSessionByClaudeId(t.sid)).toMatchObject({ process_status: 'running' });
