@@ -131,6 +131,14 @@ function fakeCheckout(dir: string): void {
     'const listeners = []',
     'module.exports = { _instrumentation: { addListener: (l) => listeners.push(l) }, listeners }',
   ].join('\n'))
+  // Every real playwright-core has its WebKit browser type here, and on a Mac the preload's other
+  // half (pw-noactivate-core.ts) patches it; without it that half warns into the runner's output.
+  const webkit = path.join(core, 'lib', 'server', 'webkit')
+  fs.mkdirSync(webkit, { recursive: true })
+  fs.writeFileSync(path.join(webkit, 'webkit.js'), [
+    'class WebKit { async _prepareToLaunch() { return {} } amendEnvironment(env) { return env } }',
+    'module.exports = { WebKit }',
+  ].join('\n'))
   const report = (load: string) => [
     `const core = require(${load})`,
     'const l = core.listeners[0]',
