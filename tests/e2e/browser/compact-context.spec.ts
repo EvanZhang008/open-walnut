@@ -92,6 +92,24 @@ async function idleCompactionConfig(request: APIRequestContext): Promise<IdleCom
   return body.config?.session?.idle_compaction
 }
 
+/** The idle compaction at its defaults (on, at the default share), or off. */
+async function resetIdleCompaction(request: APIRequestContext, enabled = true): Promise<void> {
+  const body = await (await request.get('/api/config')).json() as { config?: { session?: Record<string, unknown> } }
+  const session = body.config?.session ?? {}
+  const res = await request.put('/api/config', { data: { session: { ...session, idle_compaction: { enabled } } } })
+  expect(res.ok()).toBe(true)
+  await expect.poll(async () => {
+    const ic = await idleCompactionConfig(request)
+    return `${ic?.enabled !== false}:${ic?.limit_percent ?? null}`
+  }, { timeout: 10_000 }).toBe(`${enabled}:null`)
+}
+
+// One server, one idle compaction setting: the tests take turns. On a server whose idle compaction
+// fires right after a turn (the nightly's WALNUT_IDLE_COMPACT_LEAD_MS), a test that is not about it
+// turns it off first, or Walnut compacts its session before it clicks (2026-11-16: "Already
+// compacted" at a load of 124); the Settings and row tests write the setting and need it on.
+test.describe.configure({ mode: 'serial' })
+
 /** A compaction shows under a line that names it (SystemGroupRun, fold-steps.ts): open it when it is a fold. */
 const COMPACT_FOLD = /^(Context compacted|Compacted by Walnut while idle)( \u00b7 .*)?$/
 async function openNotices(panel: Locator) {
@@ -106,6 +124,7 @@ test.beforeAll(async () => { await fs.mkdir(SHOTS, { recursive: true }) })
 
 test('the + menu compacts the session without typing /compact', async ({ page, request }, info) => {
   test.setTimeout(120_000)
+  await resetIdleCompaction(request, false)
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
   await page.setViewportSize({ width: 1280, height: 800 })
@@ -174,6 +193,7 @@ test('the + menu compacts the session without typing /compact', async ({ page, r
 // cache almost expired"): once the cache has expired, Walnut neither compacts nor shows anything.
 test('a cold cache: no line above the composer, and no /compact sent', async ({ page, request }, info) => {
   test.setTimeout(120_000)
+  await resetIdleCompaction(request, false)
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
   await page.setViewportSize({ width: 1280, height: 800 })
@@ -198,6 +218,7 @@ test('a cold cache: no line above the composer, and no /compact sent', async ({ 
 
 test('Settings has the idle compaction switch and its threshold', async ({ page, request }, info) => {
   test.setTimeout(60_000)
+  await resetIdleCompaction(request)
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/settings')
   await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 30_000 })
@@ -240,6 +261,8 @@ test('the idle compaction row says why it ran and changes its setting in place',
   test.skip(!process.env.WALNUT_IDLE_COMPACT_LEAD_MS || !process.env.MOCK_CONTEXT_WINDOW,
     'needs WALNUT_IDLE_COMPACT_LEAD_MS and MOCK_CONTEXT_WINDOW on the test server')
   test.setTimeout(120_000)
+  // From the defaults, whatever a try before this one left (its 99% would keep 400K from compacting).
+  await resetIdleCompaction(request)
   const errors: string[] = []
   // A reload or a navigation cancels the requests in flight; WebKit reports each ("... due to access
   // control checks"). Those are the browser's, not the page's.

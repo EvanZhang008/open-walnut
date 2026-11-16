@@ -52,7 +52,7 @@ import { framingLabel, splitComposedFraming } from '@open-walnut/composed-framin
 import { splitRiders } from '@open-walnut/history-walnut-riders';
 import '@/styles/session-riders.css';
 import { ProcessFoldRow } from './TurnFolds';
-import { CLI_ERROR_VARIANT, envelopeSteps, foldStepsPhrase, systemRowVariant, systemRunLabel, systemRunShows } from './fold-steps';
+import { CLI_ERROR_VARIANT, COMPACTION_PENDING_RUN_ID, envelopeSteps, foldStepsPhrase, systemRowVariant, systemRunDisclosureId, systemRunLabel, systemRunShows, type SystemRunIdentity } from './fold-steps';
 import { IdleCompactLine } from './IdleCompactLine';
 import { isIdleCompactLine } from '../../../../src/core/sessions/prompt-cache';
 import { QUESTION_BANNER_RE, stripQuestionTag } from '@/utils/question-tag';
@@ -564,10 +564,7 @@ export function SystemLineCollapsible({ variant, message, detail, time, noticeId
   );
 }
 
-export interface SystemGroupMember {
-  variant: string;
-  message: string;
-  detail?: string;
+export interface SystemGroupMember extends SystemRunIdentity {
   time?: string;
   key?: string;
 }
@@ -585,6 +582,8 @@ export function systemGroupMemberFromHistory(message: SessionHistoryMessage): Sy
     detail: message.systemDetail ?? (isVerbose ? text : undefined),
     time: formatTime(message.timestamp),
     key: message.msgId ?? message.walnutMessageId,
+    ...(message.msgId ? { id: message.msgId } : {}),
+    ...(isVerbose ? { text } : {}),
   };
 }
 
@@ -593,7 +592,7 @@ export const SystemGroupRun = memo(function SystemGroupRun({ members }: { member
   const inFold = useInFoldBody();
   // Closed until the reader opens it, an idle compaction's run too (2026-11-09, the user: "no, auto hide
   // cusotmer cna open if needed"; tests/web/notice-rows-start-closed.test.ts).
-  const [open, setOpen] = useRowDisclosure(members[0] ? disclosureIds.content(`sysrun-${members[0].variant}`, members[0].message) : undefined, false);
+  const [open, setOpen] = useRowDisclosure(systemRunDisclosureId(members), false, { standIn: COMPACTION_PENDING_RUN_ID });
   const toggle = () => setOpen((o) => !o);
   const allErrors = members.length > 0 && members.every((member) => member.variant === 'error' || member.variant === CLI_ERROR_VARIANT);
   // A compaction's run says so (its explanation and numbers are inside).

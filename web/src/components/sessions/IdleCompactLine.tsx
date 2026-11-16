@@ -5,7 +5,7 @@
  * the setting that decides it, the same value Settings -> Sessions edits.
  */
 import { StepIcon } from './StepIcon';
-import { useCallback, useContext, useEffect, useState, type KeyboardEvent } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { fetchConfig, fetchFreshConfig, updateConfig } from '@/api/config';
 import { fetchSession } from '@/api/sessions';
@@ -52,16 +52,37 @@ export function IdleCompactSetting() {
   const [saved, setSaved] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // A read that failed, apart from what the row said about the reader's own input: the next good read clears it.
+  const [readError, setReadError] = useState<string | null>(null);
+  // The setting as this row shows it, kept beside the state so a config:changed that comes back
+  // during a save compares with what the save set.
+  const shown = useRef<IdleSetting | null>(null);
+  const show = useCallback((s: IdleSetting | null) => { shown.current = s; setSetting(s); }, []);
+  const read = useCallback(async (fresh: boolean): Promise<IdleSetting | null> => {
+    try {
+      const s = settingOf(await (fresh ? fetchFreshConfig() : fetchConfig()));
+      setReadError(null);
+      return s;
+    } catch {
+      setReadError('Could not read the setting.');
+      return null;
+    }
+  }, []);
   const load = useCallback((fresh = false) => {
-    (fresh ? fetchFreshConfig() : fetchConfig()).then((c) => {
-      const s = settingOf(c);
-      setSetting(s);
+    void read(fresh).then((s) => {
+      if (!s) return;
+      const was = shown.current;
+      // The echo of this row's own save (every save sends config:changed) changes nothing: what the
+      // row said about it stays ("set to 99%"), and so does what the reader types. It cleared them
+      // when the echo came back late (2026-11-16, nightly compact-context).
+      if (was && was.enabled === s.enabled && was.percent === s.percent) return;
+      show(s);
       setDraft(String(s.percent));
       // What it says is about the setting as it was: a change made elsewhere clears it.
       setError(null);
       setNote(null);
-    }).catch(() => setError('Could not read the setting.'));
-  }, []);
+    });
+  }, [read, show]);
   useEffect(() => { load(); }, [load]);
   useEvent('config:changed', useCallback((data: unknown) => {
     const { key } = (data ?? {}) as { key?: string };
@@ -72,15 +93,23 @@ export function IdleCompactSetting() {
   const save = async (patch: { enabled?: boolean; limit_percent?: number }) => {
     setBusy(true);
     setError(null);
+    // Shown before it is sent: its config:changed can come back before the PUT answers.
+    const before = shown.current;
+    if (before) show({ enabled: patch.enabled ?? before.enabled, percent: patch.limit_percent ?? before.percent });
     try {
       const c = await fetchFreshConfig();
       await updateConfig({
         session: { ...(c.session ?? {}), idle_compaction: { ...(c.session?.idle_compaction ?? {}), ...patch } },
       } as Partial<Config>);
-      setSetting((s) => (s ? { enabled: patch.enabled ?? s.enabled, percent: patch.limit_percent ?? s.percent } : s));
       setSaved(true);
       setTimeout(() => setSaved(false), 1500);
     } catch (err) {
+      // Not saved: the row shows the setting in force now (another place may have changed it
+      // meanwhile), then says why.
+      const now = (await read(true)) ?? before;
+      show(now);
+      if (now) setDraft(String(now.percent));
+      setNote(null);
       setError(`Could not save: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setBusy(false);
@@ -108,7 +137,8 @@ export function IdleCompactSetting() {
     if (e.key === 'Escape' && setting) { setDraft(String(setting.percent)); setError(null); }
   };
 
-  if (!setting) return error ? <div className="idle-compact-error">{error}</div> : null;
+  const problem = error ?? readError;
+  if (!setting) return problem ? <div className="idle-compact-error">{problem}</div> : null;
   return (
     <div className="idle-compact-setting" data-testid="idle-compact-setting">
       <div className="idle-compact-setting-row">
@@ -138,8 +168,8 @@ export function IdleCompactSetting() {
         Claude Code would compact by itself; Walnut compacts before that, and not at all when the limit is unknown.{' '}
         <Link to="/settings#sessions">All session settings</Link>
       </div>
-      {error && <div className="idle-compact-error" role="alert">{error}</div>}
-      {note && !error && <div className="idle-compact-setting-help" role="status">{note}</div>}
+      {problem && <div className="idle-compact-error" role="alert">{problem}</div>}
+      {note && !problem && <div className="idle-compact-setting-help" role="status">{note}</div>}
     </div>
   );
 }

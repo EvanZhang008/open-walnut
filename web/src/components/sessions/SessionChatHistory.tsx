@@ -6297,6 +6297,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           message: member.block.message,
           detail: member.block.detail,
           key: `stream-system-${member.index}`,
+          ...(member.block.uuid ? { id: member.block.uuid } : {}),
         }];
       });
       return (

@@ -18,6 +18,7 @@ import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, COMPACTION_FAILED_MESSAGE, COMPA
 import { isIdleCompactLine } from '../../../../src/core/sessions/prompt-cache';
 import { walnutNoticeKind } from '../../../../src/core/sessions/walnut-commands';
 import { isRuleDenied, isUserDenied, type ToolRunMember } from './tool-run-phrase';
+import { disclosureIds } from './row-disclosure';
 
 /** The variant a row of Claude Code's own error reply ("Prompt is too long") draws with: an error line in the notice grey. */
 export const CLI_ERROR_VARIANT = 'cli-error';
@@ -151,15 +152,59 @@ export function foldStepsPhrase(steps: readonly FoldStep[], waiting: ReadonlySet
   return acks > 0 ? 'Acknowledged' : EMPTY_FOLD_PHRASE;
 }
 
+/** A run's rows of a compaction that finished (Claude Code's "Context compacted"). */
+function finishedCompactions<T extends { variant: string; message: string }>(members: readonly T[]): T[] {
+  return members.filter((m) => m.variant === 'compact' && m.message === COMPACTED_MESSAGE);
+}
+
 /**
  * The rows a run shows when opened: all of them, except the finished compaction's own row when its
  * line names Walnut's compaction with the size (one finished compaction, its size known), since that
  * line already says it. Walnut's notice of why stays.
  */
 export function systemRunShows<T extends { variant: string; message: string; detail?: string }>(members: readonly T[]): readonly T[] {
-  const done = members.filter((m) => m.variant === 'compact' && m.message === COMPACTED_MESSAGE);
+  const done = finishedCompactions(members);
   if (done.length !== 1 || !done[0]!.detail || !members.some((m) => walnutCompactLine(m.message))) return members;
   return members.filter((m) => m !== done[0]);
+}
+
+/** A run member as its open state knows it (SystemGroupMember). */
+export interface SystemRunIdentity {
+  variant: string;
+  message: string;
+  detail?: string;
+  /** The row's own id, the same live and saved: the CLI line's uuid, which the history row keeps as its msgId. */
+  id?: string;
+  /** The row's whole words when `message` is cut. */
+  text?: string;
+}
+
+/** The id a compaction still running keeps its run under, until the row that ends it comes. */
+export const COMPACTION_PENDING_RUN_ID = 'sysrun-compaction-pending';
+const ENDS_COMPACTION = new Set([COMPACTED_MESSAGE, COMPACTION_STOPPED_MESSAGE, COMPACTION_FAILED_MESSAGE]);
+
+/**
+ * The id a run of runtime rows keeps its open state under: the same for the live run and the saved
+ * run that replaces it once the history is read again. Their rows differ in words (Walnut's live
+ * note "Compacting this idle session ..." is the saved "Walnut sent /compact ..."; a long saved
+ * notice is cut to its first words), so an id from the first row's words closed the run a reader had
+ * just opened (2026-11-16, nightly compact-context). A compaction that ended is known by the row that
+ * ended it (the boundary's uuid, which both carry); one still running by COMPACTION_PENDING_RUN_ID, which
+ * SystemGroupRun uses as a stand-in (row-disclosure.ts): it is forgotten once no run shows it, so a
+ * later compaction starts closed. Any other
+ * run is known by its first row's whole words.
+ */
+export function systemRunDisclosureId(members: readonly SystemRunIdentity[]): string | undefined {
+  const first = members[0];
+  if (!first) return undefined;
+  if (!members.some((m) => m.variant === 'compact' || walnutCompactLine(m.message))) return disclosureIds.content('sysrun', first.text ?? first.message);
+  // The boundary is a CLI line with a uuid on both sides, whatever came after it (an error of the next call).
+  const boundary = finishedCompactions(members).filter((m) => m.id).pop();
+  if (boundary) return `sysrun-compaction-${boundary.id}`;
+  // A stop, a failure or an error is known by its words (a stop and a failure are live rows only).
+  const end = members.filter((m) => (m.variant === 'compact' && ENDS_COMPACTION.has(m.message)) || m.variant === 'error' || m.variant === CLI_ERROR_VARIANT).pop();
+  if (!end) return COMPACTION_PENDING_RUN_ID;
+  return disclosureIds.content('sysrun-compaction', `${end.message}|${end.detail ?? ''}`);
 }
 
 /**
@@ -171,7 +216,7 @@ export function systemRunLabel(members: readonly { variant: string; message: str
   const lines = new Set<CompactLine>(members.flatMap((m) => { const l = walnutCompactLine(m.message); return l ? [l] : []; }));
   const walnut = members.filter((m) => walnutCompactLine(m.message)).length;
   const compacts = members.filter((m) => m.variant === 'compact');
-  const done = compacts.filter((m) => m.message === COMPACTED_MESSAGE);
+  const done = finishedCompactions(compacts);
   const more = (named: number) => {
     const n = members.length - named - walnut;
     return n > 0 ? ` \u00b7 ${n} more` : '';

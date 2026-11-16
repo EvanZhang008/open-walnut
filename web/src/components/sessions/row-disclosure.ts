@@ -15,7 +15,7 @@
  * `tests/web/row-disclosure-ratchet.test.ts` fails on a new open/expanded state
  * in a row component that keeps it in the component alone.
  */
-import { createContext, useCallback, useContext, useState, type SyntheticEvent } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, type SyntheticEvent } from 'react';
 
 /** The session whose rows these are (SessionChatHistory, the lane viewers). */
 export const RowDisclosureScope = createContext<string | null>(null);
@@ -49,7 +49,13 @@ function remember(store: Map<string, boolean>, id: string, value: boolean): void
  * shows the same thing in this session. With no id or no scope it is plain
  * local state.
  */
-export function useRowDisclosure(id: string | undefined, initial: boolean): [boolean, (next: boolean | ((open: boolean) => boolean)) => void] {
+export function useRowDisclosure(id: string | undefined, initial: boolean, opts?: {
+  /** An id that only stands for the row until it gets its own (a compaction still running): the
+   *  row keeps its own state when it leaves it, and nothing stays under it once no row shows it,
+   *  so the next row that takes it starts as designed. A row that replaces this one in the same
+   *  commit still reads it: it renders before this one's cleanup runs. */
+  standIn?: string;
+}): [boolean, (next: boolean | ((open: boolean) => boolean)) => void] {
   const scope = useContext(RowDisclosureScope);
   const store = scope ? scopeStore(scope) : null;
   const [open, setOpen] = useState(() => (store && id ? store.get(id) : undefined) ?? initial);
@@ -62,11 +68,13 @@ export function useRowDisclosure(id: string | undefined, initial: boolean): [boo
   if (shownId !== id) {
     setShownId(id);
     const known = store && id ? store.get(id) : undefined;
-    if (known !== undefined) {
+    if (known !== undefined && !(opts?.standIn && shownId === opts.standIn)) {
       current = known;
       if (known !== open) setOpen(known);
     } else if (store && id) remember(store, id, open);
   }
+  const standIn = opts?.standIn;
+  useEffect(() => () => { if (store && standIn && id === standIn) store.delete(id); }, [store, id, standIn]);
   const set = useCallback((next: boolean | ((open: boolean) => boolean)) => {
     setOpen((prev) => {
       const value = typeof next === 'function' ? next(prev) : next;
