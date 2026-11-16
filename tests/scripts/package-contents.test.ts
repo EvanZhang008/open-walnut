@@ -7,7 +7,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { LARGE_BUNDLES, LARGE_FILE_BYTES, packageContentProblems } from '../../scripts/package-contents.mjs'
+import { DUPLICATE_FILE_BYTES, LARGE_BUNDLES, LARGE_FILE_BYTES, PACKAGE_LIMIT_BYTES, PACKAGE_MARGIN_BYTES, packageContentProblems } from '../../scripts/package-contents.mjs'
 import { BUILTIN_HOST_MODULES } from '../../src/integrations/host-modules.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
@@ -59,9 +59,35 @@ describe('check-publish refuses a big file that is not an entry bundle', () => {
     expect(packageContentProblems(staged)).toEqual(['300 files of dist/binary-stage/, a compiled-file build\'s staging tree'])
   })
 
-  it('check-publish runs the rule on the real pack listing', () => {
+  it('two big files with the same content are one problem naming both, whatever their names', () => {
+    const problems = packageContentProblems([
+      ...ok.map((f, i) => ({ ...f, hash: `h${i}` })),
+      { path: 'dist/web/static/a.js', size: 2 * MB, hash: 'same' },
+      { path: 'dist/vendor/a-copy.js', size: 2 * MB, hash: 'same' },
+    ])
+    expect(problems).toEqual(['2 copies of one 2.0 MB file: dist/web/static/a.js, dist/vendor/a-copy.js'])
+  })
+
+  it('small files may repeat (a LICENSE, an icon)', () => {
+    expect(packageContentProblems([
+      { path: 'a/LICENSE', size: DUPLICATE_FILE_BYTES - 1, hash: 'same' },
+      { path: 'b/LICENSE', size: DUPLICATE_FILE_BYTES - 1, hash: 'same' },
+    ])).toEqual([])
+  })
+
+  it('a package within the margin of the limit is refused, one just outside it is not', () => {
+    const edge = PACKAGE_LIMIT_BYTES - PACKAGE_MARGIN_BYTES
+    expect(packageContentProblems(ok, edge)).toEqual([])
+    const [problem] = packageContentProblems(ok, edge + 1)
+    expect(problem).toContain('within 20.0 MB of the 200.0 MB limit')
+  })
+
+  it('check-publish runs the rules on the real pack listing, hashing every big file', () => {
     const script = fs.readFileSync(path.join(ROOT, 'scripts/check-publish.mjs'), 'utf8')
-    expect(script).toContain('packageContentProblems(pack.files)')
+    expect(script).toContain('packageContentProblems(hashed, pack.unpackedSize)')
+    expect(script).toMatch(/f\.size >= DUPLICATE_FILE_BYTES[\s\S]*createHash\('sha256'\)/)
+    // The limit has one home: package-contents.mjs.
+    expect(script).not.toMatch(/200 \* 1024 \* 1024/)
   })
 
   it('package.json leaves the staging tree out', () => {

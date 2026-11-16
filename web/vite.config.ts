@@ -4,6 +4,10 @@ import path from 'path';
 import { restateOwnOrigin } from './dev-proxy-origin';
 import { excalidrawAssets, pdfAssets } from './vendor-assets';
 import { bundleTrim } from './bundle-trim';
+import { ensureBuildHeap } from './build-heap';
+
+// Before anything is read: a build on a small default heap reruns itself with room (see the module).
+ensureBuildHeap();
 
 export default defineConfig({
   // bundleTrim: code of bundled packages Walnut never reaches stays out of the build (see the module).

@@ -13,7 +13,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CLI_FAST_PRAGMA } from './build-cli-fast.mjs';
-import { packageContentProblems } from './package-contents.mjs';
+import { createHash } from 'node:crypto';
+import { DUPLICATE_FILE_BYTES, packageContentProblems } from './package-contents.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -155,18 +156,18 @@ if (leaked.length) {
   process.exit(1);
 }
 
-const contentProblems = packageContentProblems(pack.files);
+// The content of every big file, so two copies of one file are found whatever their names.
+const hashed = pack.files.map((f) => f.size >= DUPLICATE_FILE_BYTES
+  ? { ...f, hash: createHash('sha256').update(readFileSync(join(root, f.path))).digest('hex') }
+  : f);
+const contentProblems = packageContentProblems(hashed, pack.unpackedSize);
 if (contentProblems.length) {
-  console.error('check-publish: the tarball holds files it should not:\n' + contentProblems.slice(0, 10).map((m) => `  - ${m}`).join('\n'));
+  console.error('check-publish: the package is refused:\n' + contentProblems.slice(0, 10).map((m) => `  - ${m}`).join('\n'));
   process.exit(1);
 }
 
 const totalMB = (pack.unpackedSize / 1024 / 1024).toFixed(1);
 console.log(`check-publish: OK — ${pack.entryCount} files, ${totalMB} MB unpacked.`);
-if (pack.unpackedSize > 200 * 1024 * 1024) {
-  console.error('check-publish: unpacked size exceeds 200MB — something large slipped into the tarball.');
-  process.exit(1);
-}
 
 /** dtach-<platform>-<arch> for this machine, in Node's words; null when none is built. */
 function hostPrebuiltDtachName() {
