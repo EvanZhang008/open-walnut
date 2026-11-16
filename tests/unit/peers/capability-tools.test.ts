@@ -135,6 +135,27 @@ describe('gateway tools.call — policy gates', () => {
     } finally { fetcher.mockRestore(); }
   });
 
+  it('an op the API answers with a status says which, so the relay log does not count it as a refusal', async () => {
+    // 2026-11-15: 826 `api GET /api/sessions/<id>` 404s were logged as relay refusals ("internal").
+    const answer = (status: number) => new Response(JSON.stringify({ error: 'Session not found' }), { status });
+    const fetcher = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(answer(404))
+      .mockResolvedValueOnce(answer(404))
+      .mockResolvedValueOnce(answer(503));
+    try {
+      const viaApi = await handleGatewayCapability('tools.call', CALLER,
+        { name: 'api', args: { method: 'GET', path: '/api/sessions/no-such-session' } }, 'devbox', deps());
+      expect(viaApi).toMatchObject({ ok: false, opStatus: 404, error: { code: 'internal' } });
+      const bound = await handleGatewayCapability('tools.call', CALLER, { name: 'task_get', args: { id: 'no-such-task' } }, 'devbox', deps());
+      expect(bound).toMatchObject({ ok: false, opStatus: 404, error: { code: 'internal' } });
+      // A server fault keeps its number too; the relay log tells the two apart (isOpAnswerStatus).
+      const down = await handleGatewayCapability('tools.call', CALLER, { name: 'task_get', args: { id: 'any' } }, 'devbox', deps());
+      expect(down).toMatchObject({ ok: false, opStatus: 503 });
+      // The wire error never carries it: older CLIs read the same reply as before.
+      if (!viaApi.ok) expect(Object.keys(viaApi.error)).not.toContain('opStatus');
+    } finally { fetcher.mockRestore(); }
+  });
+
   it('refuses a remote-denied (destructive) op with a local-CLI pointer', async () => {
     const r = await handleGatewayCapability(
       'tools.call', CALLER, { name: 'task_delete', args: { id: 'x' } }, 'devbox', deps(),

@@ -76,6 +76,7 @@ import {
 import { singleFile } from '../lib/single-file.js'
 import { buildTurnRetryEnv } from './daemon-core.js'
 import { vouchedGatewayPayload } from './gateway-core.js'
+import { createRefusalLog, isOpAnswerStatus } from './gateway-refusal-log.js'
 import type { LineFate } from './line-fate-core.js'
 import type { SshTarget } from './session-io.js'
 import {
@@ -690,6 +691,24 @@ const bulkOwnEverUpHosts = new Set<string>()
  * until the relay ended it 11 minutes later.
  */
 const BULK_FORWARD_FORBIDDEN = /administratively prohibited|forwarding (?:is )?disabled|refused local port forward/i
+
+/** Folds a looping caller's refusals to one line every few minutes; shared by every host's link. */
+const gatewayRefusalLog = createRefusalLog()
+let gatewayRefusalSweep: ReturnType<typeof setInterval> | null = null
+
+/** Write how many refusals a window left out once it ends, so a caller that stopped still has its count. */
+function sweepGatewayRefusalsLater(): void {
+  if (gatewayRefusalSweep) return
+  gatewayRefusalSweep = setInterval(() => {
+    for (const s of gatewayRefusalLog.sweep()) {
+      log.session.info('DaemonConnection: gateway relay refusals left out of the log', {
+        host: s.host, callerSid: s.callerSid, errorCode: s.code, suppressed: s.suppressed,
+      })
+    }
+    if (gatewayRefusalLog.size() === 0 && gatewayRefusalSweep) { clearInterval(gatewayRefusalSweep); gatewayRefusalSweep = null }
+  }, 60_000)
+  gatewayRefusalSweep.unref?.()
+}
 
 export class DaemonConnection {
   private ws: WebSocket | null = null
@@ -3629,15 +3648,28 @@ export class DaemonConnection {
         meta,
       // Fresh: this relay's own deadline, never one of a call still running in whose context the link was made.
       ), { fresh: true })
+      // Which op, so a burst of refusals names what keeps asking (2026-11-14: only "tools.call").
+      const op = capability === 'tools.call' && typeof body?.name === 'string' ? { op: body.name.slice(0, 80) } : {}
       if (outcome.ok) {
         log.session.info('DaemonConnection: gateway relay handled', { host: this.hostKey, relayId, capability, callerSid })
         reply = { relayId, result: outcome.result }
       } else {
-        log.session.warn('DaemonConnection: gateway relay refused', {
-          host: this.hostKey, relayId, capability, callerSid, errorCode: outcome.error.code,
-          // Which op, so a burst of refusals names what keeps asking (2026-11-14: only "tools.call").
-          ...(capability === 'tools.call' && typeof body?.name === 'string' ? { op: body.name.slice(0, 80) } : {}),
-        })
+        // One line per caller and reason every few minutes, with the count left out (gateway-refusal-log.ts).
+        const answered = isOpAnswerStatus(outcome.opStatus)
+        const seen = gatewayRefusalLog.admit(this.hostKey, callerSid, answered ? `status:${outcome.opStatus}` : outcome.error.code)
+        sweepGatewayRefusalsLater()
+        // The relay worked and the API answered (a 404 for a missing id): the op's answer, not a refusal (2026-11-15).
+        if (seen.write && answered) {
+          log.session.info('DaemonConnection: gateway relay handled, the op answered an error', {
+            host: this.hostKey, relayId, capability, callerSid, status: outcome.opStatus, ...op,
+            ...(seen.suppressed > 0 ? { suppressed: seen.suppressed } : {}),
+          })
+        } else if (seen.write) {
+          log.session.warn('DaemonConnection: gateway relay refused', {
+            host: this.hostKey, relayId, capability, callerSid, errorCode: outcome.error.code, ...op,
+            ...(seen.suppressed > 0 ? { suppressed: seen.suppressed } : {}),
+          })
+        }
         reply = { relayId, error: outcome.error.message, errorCode: outcome.error.code }
         const detail: Record<string, unknown> = {
           ...(typeof outcome.error.detail === 'object' && outcome.error.detail !== null ? outcome.error.detail as Record<string, unknown> : {}),

@@ -21,7 +21,12 @@ import { GATEWAY_WRITE_MAX_PER_WINDOW, PeerThrottle } from './peer-throttle.js';
 
 export type CapabilityOutcome =
   | { ok: true; result: Record<string, unknown> }
-  | { ok: false; error: GatewayError };
+  /**
+   * `opStatus`: the op ran and Walnut's API answered it with this HTTP status (a 404 for an id
+   * that does not exist). Never sent on the wire: the relay's log reads it, so an op's own
+   * answer is not counted as the relay refusing the call.
+   */
+  | { ok: false; error: GatewayError; opStatus?: number };
 
 /** What the host's daemon says about a relay beside the caller's own payload. */
 export interface GatewayRelayMeta {
@@ -335,7 +340,11 @@ async function handleToolsCall(
     return err('hub_timeout', `the Walnut server's own call to its API got no answer, so ${name} may have run: ${r.message}`, r.result === undefined ? undefined : { detail: r.result });
   }
   // Arguments the op does not take are the caller's to fix (bad_request), never an internal fault.
-  if (!r.ok) return err(r.invalidArgs ? 'bad_request' : 'internal', r.message, r.result === undefined ? undefined : { detail: r.result });
+  // The code stays what older CLIs already read; `opStatus` tells the relay's log the API answered.
+  if (!r.ok) {
+    const out = err(r.invalidArgs ? 'bad_request' : 'internal', r.message, r.result === undefined ? undefined : { detail: r.result });
+    return typeof r.status === 'number' && !out.ok ? { ...out, opStatus: r.status } : out;
+  }
   // GatewayResponse.result must be an object — wrap non-object op results.
   const result = (typeof r.result === 'object' && r.result !== null && !Array.isArray(r.result))
     ? r.result as Record<string, unknown>
