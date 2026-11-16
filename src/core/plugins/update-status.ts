@@ -331,41 +331,8 @@ export function deriveUpdateState(raw: RawCheck, prev?: UpdateState): UpdateStat
 
 // ── Deadlines and unattended git ──
 
-/**
- * Race `p` against a clock. On timeout the caller's fallback answers and the original
- * promise is left to settle on its own (its rejection is swallowed so nothing goes
- * unhandled). This is how every route here answers degraded instead of hanging.
- */
-export function withDeadline<T>(p: Promise<T>, ms: number, onTimeout: () => T): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    let settled = false
-    const timer = setTimeout(() => {
-      if (settled) return
-      settled = true
-      p.catch(() => undefined)
-      try {
-        resolve(onTimeout())
-      } catch (error) {
-        reject(error)
-      }
-    }, ms)
-    timer.unref?.()
-    p.then(
-      (value) => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        resolve(value)
-      },
-      (error) => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        reject(error)
-      },
-    )
-  })
-}
+// The deadline helper lives in src/lib/with-deadline.ts (shared with session routes).
+export { withDeadline } from '../../lib/with-deadline.js'
 
 /**
  * The environment for a fetch nobody is watching: no terminal prompt, a no-op askpass,

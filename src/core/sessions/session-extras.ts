@@ -20,6 +20,7 @@ import { SessionControlError } from './session-controls.js';
 import { CLAUDE_SESSION_MODES, changeSessionMode, persistSessionModeChange } from './session-lifecycle.js';
 import { bus, EventNames } from '../event-bus.js';
 import { log } from '../../logging/index.js';
+import { withDeadline } from '../../lib/with-deadline.js';
 import type { SessionEffort, SessionEngine, SessionMode, SessionRecord } from '../types.js';
 import { VALID_SESSION_EFFORT_IDS, SESSION_MODE_LABELS } from '../types.js';
 import { listLocalDirs, listRemoteDirs } from './dir-listing.js';
@@ -316,16 +317,16 @@ export async function getSessionWorkflowPayload(sessionId: string): Promise<Reco
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const record = await getSessionByClaudeId(sessionId);
   const { reconstructWorkflowProgress } = await import('../session-history.js');
-  const payload = await Promise.race([
+  // withDeadline clears its clock when the read settles: the warning means the
+  // read really outran the deadline (a bare race logged it after every read).
+  const payload = await withDeadline<unknown>(
     reconstructWorkflowProgress(sessionId, record?.cwd, record?.host),
-    new Promise<null>((resolve) => {
-      const t = setTimeout(() => {
-        log.web.warn('workflow reconstruct timed out — answering empty', { sessionId, host: record?.host });
-        resolve(null);
-      }, WORKFLOW_RECONSTRUCT_TIMEOUT_MS);
-      t.unref?.();
-    }),
-  ]);
+    WORKFLOW_RECONSTRUCT_TIMEOUT_MS,
+    () => {
+      log.web.warn('workflow reconstruct timed out — answering empty', { sessionId, host: record?.host });
+      return null;
+    },
+  );
   return (payload as Record<string, unknown> | null) ?? null;
 }
 
