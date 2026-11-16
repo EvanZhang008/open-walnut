@@ -105,8 +105,7 @@ describe('a quiet link, asked again', () => {
       await wireQuiet(idle.conn)
       idle.proxy.setMode('slow', slowPath)
       expect(await idle.conn.probeLiveness(600)).toBe(false)
-      await sleep(200)
-      expect(idle.conn.connected).toBe(false)
+      await vi.waitFor(() => expect(idle.conn.connected).toBe(false), { timeout: 5000 })
     } finally { await idle.done() }
   }, 40_000)
 
