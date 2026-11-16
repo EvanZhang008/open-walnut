@@ -486,7 +486,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     // own read when it began one, else a fresh one.
     let firstScreenRead: Promise<SessionHistoryResult> | null = takeSessionOpenHistory(sessionId);
     const startFirstScreen = () => firstScreenRead
-      ??= fetchSessionHistory(sessionId, { source: 'streams', tail: HISTORY_TAIL_LIMIT, signal: controller.signal });
+      ??= fetchSessionHistory(sessionId, { source: 'streams', tail: HISTORY_TAIL_LIMIT, signal: controller.signal, interactive: enabled });
 
     // Adopt a cached entry (memory or IndexedDB) for instant display, then
     // background-verify against the server. One body for both tiers so their

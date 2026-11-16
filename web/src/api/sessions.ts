@@ -1,5 +1,5 @@
 import { INITIAL_HISTORY_TURNS } from '@open-walnut/history-turn-window';
-import { apiGet, apiPatch, apiPost, apiPut, ApiError } from './client';
+import { apiGet, apiPatch, apiPost, apiPut, ApiError, fetchLaneRaised, type FetchLane } from './client';
 import type { SessionSummary, SessionRecord, SessionEffort, SessionModelCatalogEntry, SessionEngine, SessionCronMetadata, Task } from '@open-walnut/core';
 import type { ImageAttachment } from './chat';
 import type { SessionHistoryMessage } from '@/types/session';
@@ -273,6 +273,9 @@ interface InflightHistory {
   promise: Promise<SessionHistoryResult>;
   subscribers: number;
   controller: AbortController;
+  /** Its claim to the connection kept for a read the person waits on: raised when such a caller
+   *  joins it while it still waits (else that caller would wait behind the shared slots). */
+  lane: FetchLane;
 }
 const inflightHistory = new Map<string, InflightHistory>();
 
@@ -316,6 +319,9 @@ export async function fetchSessionHistory(
      *  render freeze to a ~100KB tail. */
     tail?: number;
     turns?: number;
+    /** The person is waiting on this read (the first screen of the chat they opened): it takes
+     *  the connection kept for such a read (api/client.ts INTERACTIVE_RESERVED). */
+    interactive?: boolean;
   },
 ): Promise<SessionHistoryResult> {
   const params: Record<string, string> = {};
@@ -344,6 +350,7 @@ export async function fetchSessionHistory(
     const controller = new AbortController();
     const created: InflightHistory = {
       controller,
+      lane: { interactive: opts?.interactive === true },
       subscribers: 0,
       promise: undefined as unknown as Promise<SessionHistoryResult>,
     };
@@ -351,10 +358,13 @@ export async function fetchSessionHistory(
     // SUCCESSOR entry can occupy this key before this promise settles — an
     // unconditional delete here would evict that live successor and break
     // coalescing for every caller after it (duplicate whale fetches).
-    created.promise = fetchSessionHistoryRaw(sessionId, params, opts?.source, opts?.tail, controller.signal)
+    created.promise = fetchSessionHistoryRaw(sessionId, params, opts?.source, opts?.tail, controller.signal, created.lane)
       .finally(() => { if (inflightHistory.get(key) === created) inflightHistory.delete(key); });
     inflightHistory.set(key, created);
     entry = created;
+  } else if (opts?.interactive && !entry.lane.interactive) {
+    entry.lane.interactive = true;
+    fetchLaneRaised();
   }
   const live = entry;
   live.subscribers++;
@@ -381,6 +391,7 @@ async function fetchSessionHistoryRaw(
   source: 'streams' | undefined,
   tail: number | undefined,
   signal: AbortSignal,
+  lane?: FetchLane,
 ): Promise<SessionHistoryResult> {
   // Remote sessions + fork chains can take 20-30s on first load (SSH pulls 3+ MB JSONL
   // serially through a corporate proxy). Streams path is local-only and fast; full path may be
@@ -411,7 +422,7 @@ async function fetchSessionHistoryRaw(
     initialUserText?: string;
     total?: number;
   }>(
-    `/api/sessions/${sessionId}/history`, params, { signal, timeoutMs },
+    `/api/sessions/${sessionId}/history`, params, { signal, timeoutMs, ...(lane ? { lane } : {}) },
   );
   if (res.historyUnavailable) {
     throw new Error(`HISTORY_UNAVAILABLE:${res.historyUnavailable}`);

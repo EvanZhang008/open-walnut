@@ -27,7 +27,7 @@ import {
   resetIntegrationsCacheForTesting,
   type IntegrationMeta,
 } from '../../web/src/hooks/useIntegrations';
-import { apiGet, getFetchQueueStats } from '../../web/src/api/client';
+import { apiGet, getFetchQueueStats, SHARED_FETCH_SLOTS } from '../../web/src/api/client';
 
 const INTEGRATIONS_PATH = '/api/integrations';
 
@@ -209,17 +209,17 @@ describe('useIntegrations issues one request per page', () => {
   });
 
   it('the request goes through the admission gate, not around it via bare fetch', async () => {
-    // Starting state: cold cache, then the six-slot pool is saturated by other
-    // traffic. A bare `window.fetch` (the old implementation) would dispatch
+    // Starting state: cold cache, then the shared slots (all but the one kept for a
+    // chat's first screen) are saturated by other traffic. A bare `window.fetch` (the old implementation) would dispatch
     // immediately and be invisible to the gate; an apiGet must WAIT in the queue.
-    const blockers = Array.from({ length: 6 }, (_, i) => apiGet(`/api/blocker${i}`).catch(() => {}));
+    const blockers = Array.from({ length: SHARED_FETCH_SLOTS }, (_, i) => apiGet(`/api/blocker${i}`).catch(() => {}));
     await tick();
-    expect(getFetchQueueStats()).toEqual({ inFlight: 6, queued: 0 });
+    expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS, queued: 0 });
 
     const text = await mount(20);
     await tick();
     expect(integrationRequests()).toBe(0);
-    expect(getFetchQueueStats()).toEqual({ inFlight: 6, queued: 1 });
+    expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS, queued: 1 });
 
     // Freeing one connection dispatches it — proof the gate owns this request.
     pending.shift()!.resolve(jsonResponse({}));

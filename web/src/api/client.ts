@@ -22,20 +22,32 @@ import { quietRetryDelays, quietlyRetryable } from './background-retry';
 // A third class, `priority: 'low'`, is for GETs nobody is looking at yet: the
 // "/" palette's skill and slash-command lists, a reload's workflow
 // reconstruction. They get a slot only while no normal request is waiting, and
-// never more than MAX_LOW_PRIORITY_IN_FLIGHT at once, so at least four slots
-// always stay free for what paints the screen. Without the cap a reload handed
+// never more than MAX_LOW_PRIORITY_IN_FLIGHT at once, so at least three shared
+// slots (and the kept one, INTERACTIVE_RESERVED) always stay free for what paints the screen. Without the cap a reload handed
 // the first slot to a 1.2MB skill list (11s under load) and two more to the
 // session palette (13.5s): the task list and the draft's quick folders queued
 // behind them and showed up 10.8s / 5s after the refresh (2026-09-23).
 const MAX_CONCURRENT_FETCHES = 6;
 const MAX_LOW_PRIORITY_IN_FLIGHT = 2;
+// One slot is kept for a read the person is waiting on (`priority: 'interactive'`: the first screen
+// of a chat on screen); every other request shares the rest. On 2026-11-16 the six slots were held
+// by draft saves of 3 to 12 s and remote reads of 4 to 9 s, and a chat's first-screen read waited
+// 1.25 s for one of them to end (its open took 3.8 s, the server's part 0.7 s). The kept slot is
+// such a read's only privilege: in the shared slots it waits its turn among the normal reads, so a
+// page that opens eight chats at once does not hold back its task list behind them.
+const INTERACTIVE_RESERVED = 1;
+const MAX_SHARED_FETCHES = MAX_CONCURRENT_FETCHES - INTERACTIVE_RESERVED;
 const MAX_QUEUE_WAIT_MS = 20_000;
 // Low requests yield to every normal one, so on a busy page they can
 // legitimately wait longer than a normal request ever should.
 const MAX_LOW_QUEUE_WAIT_MS = 60_000;
 const QUEUE_DEPTH_WARN_STEP = 10;
 
-type FetchPriority = 'urgent' | 'normal' | 'low';
+type FetchPriority = 'interactive' | 'urgent' | 'normal' | 'low';
+
+/** A read's claim to the kept slot, which its owner may raise while it waits (a read the person
+ *  now waits on joined it: api/sessions.ts coalescing); `fetchLaneRaised()` then looks again. */
+export interface FetchLane { interactive: boolean }
 
 interface FetchAdmission {
   deadline: number;
@@ -44,7 +56,7 @@ interface FetchAdmission {
 }
 
 interface QueuedFetch {
-  dispatch: () => void;
+  dispatch: (slot: FetchSlot) => void;
   callerSignal?: AbortSignal;
   onCallerAbort?: () => void;
   waitTimer: ReturnType<typeof setTimeout>;
@@ -56,10 +68,33 @@ interface QueuedFetch {
   expire: () => void;
   /** `METHOD /path`, for the queue's test hook. */
   label: string;
+  /** May take the kept slot (INTERACTIVE_RESERVED). */
+  lane: FetchLane;
 }
 
 let inFlightFetches = 0;
 let inFlightLowFetches = 0;
+/** In flight with an interactive lane; the first INTERACTIVE_RESERVED of them sit in the kept slot. */
+let inFlightInteractiveFetches = 0;
+
+/** A granted connection, handed back as it was counted (a lane raised after dispatch counts nothing). */
+interface FetchSlot { low: boolean; interactive: boolean }
+
+/** Shared slots in use: every fetch in flight but those in the kept slot. */
+function sharedInUse(): number {
+  return inFlightFetches - Math.min(inFlightInteractiveFetches, INTERACTIVE_RESERVED);
+}
+
+function keptSlotFree(): boolean {
+  return inFlightInteractiveFetches < INTERACTIVE_RESERVED && inFlightFetches < MAX_CONCURRENT_FETCHES;
+}
+
+function takeSlot(low: boolean, interactive: boolean): FetchSlot {
+  inFlightFetches++;
+  if (low) inFlightLowFetches++;
+  if (interactive) inFlightInteractiveFetches++;
+  return { low, interactive };
+}
 const fetchQueue: QueuedFetch[] = [];
 const lowFetchQueue: QueuedFetch[] = [];
 
@@ -72,13 +107,11 @@ function startQueued(next: QueuedFetch, low: boolean): void {
   if (next.callerSignal && next.onCallerAbort) {
     next.callerSignal.removeEventListener('abort', next.onCallerAbort);
   }
-  inFlightFetches++;
-  if (low) inFlightLowFetches++;
-  next.dispatch();
+  next.dispatch(takeSlot(low, !low && next.lane.interactive));
 }
 
-function eligibleIndex(queue: QueuedFetch[]): number {
-  return queue.findIndex((entry) => !entry.read || !readsSuspended());
+function eligibleIndex(queue: QueuedFetch[], interactiveOnly = false): number {
+  return queue.findIndex((entry) => (!entry.read || !readsSuspended()) && (!interactiveOnly || entry.lane.interactive));
 }
 
 function pumpFetchQueue(): void {
@@ -86,7 +119,7 @@ function pumpFetchQueue(): void {
   for (const queue of [fetchQueue, lowFetchQueue]) {
     for (const entry of [...queue]) if (Date.now() >= entry.admission.deadline) entry.expire();
   }
-  while (inFlightFetches < MAX_CONCURRENT_FETCHES) {
+  while (sharedInUse() < MAX_SHARED_FETCHES) {
     const normal = eligibleIndex(fetchQueue);
     const low = eligibleIndex(lowFetchQueue);
     if (normal >= 0) {
@@ -97,6 +130,17 @@ function pumpFetchQueue(): void {
       break;
     }
   }
+  // The kept slot: the first waiting read the person waits on.
+  while (keptSlotFree()) {
+    const interactive = eligibleIndex(fetchQueue, true);
+    if (interactive < 0) break;
+    startQueued(fetchQueue.splice(interactive, 1)[0], false);
+  }
+}
+
+/** A waiting read's lane was raised to interactive: it may take the kept slot now. */
+export function fetchLaneRaised(): void {
+  pumpFetchQueue();
 }
 
 function fetchAdmission(priority: FetchPriority): FetchAdmission {
@@ -104,22 +148,23 @@ function fetchAdmission(priority: FetchPriority): FetchAdmission {
   return { deadline: Date.now() + waitMs, waitMs, suspended: false };
 }
 
-function acquireFetchSlot(priority: FetchPriority, label: string, callerSignal?: AbortSignal, write = false, read = false, admission = fetchAdmission(priority)): Promise<void> {
+function acquireFetchSlot(priority: FetchPriority, label: string, callerSignal?: AbortSignal, write = false, read = false, admission = fetchAdmission(priority), lane: FetchLane = { interactive: priority === 'interactive' }): Promise<FetchSlot> {
   if (read && readsSuspended()) admission.suspended = true;
   if (callerSignal?.aborted) {
     return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
   }
   const low = priority === 'low';
-  const free = inFlightFetches < MAX_CONCURRENT_FETCHES && eligibleIndex(fetchQueue) < 0;
+  // A shared slot when nothing waits ahead; else the kept one, for a read the person waits on.
+  const interactive = lane.interactive && !low;
+  const free = (sharedInUse() < MAX_SHARED_FETCHES && eligibleIndex(fetchQueue) < 0)
+    || (interactive && keptSlotFree() && eligibleIndex(fetchQueue, true) < 0);
   if (!(read && readsSuspended()) && Date.now() < admission.deadline && free
     && (!low || (eligibleIndex(lowFetchQueue) < 0 && inFlightLowFetches < MAX_LOW_PRIORITY_IN_FLIGHT))) {
-    inFlightFetches++;
-    if (low) inFlightLowFetches++;
-    return Promise.resolve();
+    return Promise.resolve(takeSlot(low, interactive));
   }
   const queue = low ? lowFetchQueue : fetchQueue;
   const { waitMs } = admission;
-  return new Promise<void>((resolve, reject) => {
+  return new Promise<FetchSlot>((resolve, reject) => {
     const expire = () => {
       clearTimeout(entry.waitTimer);
       const idx = queue.indexOf(entry);
@@ -141,6 +186,7 @@ function acquireFetchSlot(priority: FetchPriority, label: string, callerSignal?:
       admission,
       expire,
       label,
+      lane,
       waitTimer: setTimeout(expire, Math.max(0, admission.deadline - Date.now())),
     };
     if (callerSignal) {
@@ -155,7 +201,7 @@ function acquireFetchSlot(priority: FetchPriority, label: string, callerSignal?:
     }
     if (priority === 'urgent') queue.unshift(entry);
     else queue.push(entry);
-    if (!low && fetchQueue.length % QUEUE_DEPTH_WARN_STEP === 0) {
+    if (queue === fetchQueue && fetchQueue.length % QUEUE_DEPTH_WARN_STEP === 0) {
       console.warn('[api] fetch queue backing up', {
         queued: fetchQueue.length, queuedLow: lowFetchQueue.length, inFlight: inFlightFetches,
       });
@@ -179,9 +225,10 @@ function sendQueuedWritesNow(): void {
   }
 }
 
-function releaseFetchSlot(priority: FetchPriority): void {
+function releaseFetchSlot(slot: FetchSlot): void {
   inFlightFetches--;
-  if (priority === 'low') inFlightLowFetches--;
+  if (slot.low) inFlightLowFetches--;
+  if (slot.interactive) inFlightInteractiveFetches--;
   pumpFetchQueue();
 }
 
@@ -190,6 +237,9 @@ export function getFetchQueueStats(): { inFlight: number; queued: number } {
   // `queued` counts BOTH lanes: callers use it as "is anything still waiting".
   return { inFlight: inFlightFetches, queued: fetchQueue.length + lowFetchQueue.length };
 }
+
+/** Test hook — how many fetches the requests that are not `priority: 'interactive'` share. */
+export const SHARED_FETCH_SLOTS = MAX_SHARED_FETCHES;
 
 /** Test hook — `METHOD /path` of every request still waiting for a slot, both lanes. */
 export function queuedFetchLabels(): string[] {
@@ -280,11 +330,15 @@ interface RequestExtra {
   quietStatuses?: number[];
   background?: boolean;
   readOnly?: boolean;
-  /** Yield to every normal request; POST also requires background: true. */
-  priority?: 'low';
+  /** 'low': yield to every normal request (a POST also needs background: true). 'interactive': a
+   *  GET the person is waiting on right now, which takes the slot kept for it. */
+  priority?: 'low' | 'interactive';
   /** A write safe to send twice that the browser makes on its own (a draft, a settings sync):
    *  tried again quietly on a failure a moment can cure (background-retry.ts). Reads always are. */
   quietRetry?: boolean;
+  /** The read's claim to the kept slot, held by its caller so it can raise it while the read waits
+   *  (`priority: 'interactive'` is the same claim, fixed). */
+  lane?: FetchLane;
   /** Called the moment the request leaves the admission queue for the network —
    *  the earliest the server can see it. A caller reasoning about "is this
    *  response newer than X" needs this, not the time it CALLED the API: a call
@@ -311,7 +365,7 @@ function priorityOf(method: string, extra?: RequestExtra): FetchPriority {
     if (!extra?.background) return 'urgent';
     return extra.priority === 'low' ? 'low' : 'normal';
   }
-  return extra?.priority === 'low' ? 'low' : 'normal';
+  return extra?.priority === 'low' ? 'low' : extra?.priority === 'interactive' ? 'interactive' : 'normal';
 }
 
 async function request<T>(method: string, path: string, body?: unknown, extra?: RequestExtra): Promise<T> {
@@ -358,9 +412,10 @@ async function requestOnce<T>(method: string, path: string, body?: unknown, extr
   }
   const priority = priorityOf(method, extra);
   const admission = fetchAdmission(priority);
+  const lane = extra?.lane ?? { interactive: priority === 'interactive' };
   let retryWithToken: RetryWithToken | null = null;
   for (;;) {
-    await acquireFetchSlot(priority, `${method} ${path}`, extra?.signal, outlives, read, admission);
+    const slot = await acquireFetchSlot(priority, `${method} ${path}`, extra?.signal, outlives, read, admission, lane);
     try {
       // Release a granted slot before rejoining the queue with the same deadline.
       if (read && readsSuspended()) { admission.suspended = true; continue; }
@@ -372,7 +427,7 @@ async function requestOnce<T>(method: string, path: string, body?: unknown, extr
       if (err instanceof RetryWithToken) retryWithToken = err;
       else if (err !== RETRY_WITH_CACHE_BYPASS) throw err;
     } finally {
-      releaseFetchSlot(priority);
+      releaseFetchSlot(slot);
     }
     break;
   }
@@ -555,7 +610,7 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
   return data;
 }
 
-export function apiGet<T>(path: string, params?: Record<string, string>, opts?: { signal?: AbortSignal; timeoutMs?: number; quietStatuses?: number[]; priority?: 'low'; onDispatch?: () => void; headers?: Record<string, string> }): Promise<T> {
+export function apiGet<T>(path: string, params?: Record<string, string>, opts?: { signal?: AbortSignal; timeoutMs?: number; quietStatuses?: number[]; priority?: 'low' | 'interactive'; lane?: FetchLane; onDispatch?: () => void; headers?: Record<string, string> }): Promise<T> {
   const url = params ? `${path}?${new URLSearchParams(params)}` : path;
   return request<T>('GET', url, undefined, opts);
 }
@@ -568,7 +623,7 @@ export async function apiGetText(path: string, params?: Record<string, string>, 
   if (deviceToken) headers['Authorization'] = `Bearer ${deviceToken}`;
   const admission = fetchAdmission('normal');
   for (;;) {
-    await acquireFetchSlot('normal', `GET ${path}`, undefined, false, true, admission);
+    const slot = await acquireFetchSlot('normal', `GET ${path}`, undefined, false, true, admission);
     try {
       if (readsSuspended()) { admission.suspended = true; continue; }
       let res: Response;
@@ -588,7 +643,7 @@ export async function apiGetText(path: string, params?: Record<string, string>, 
       }
       return await res.text();
     } finally {
-      releaseFetchSlot('normal');
+      releaseFetchSlot(slot);
     }
   }
 }

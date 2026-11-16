@@ -5,6 +5,8 @@
  * failure while the page stays is still logged as one.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+// The fetches every request but a chat's first screen shares (one more is kept for that read).
+import { SHARED_FETCH_SLOTS as SHARED } from '../../web/src/api/client'
 
 let win: EventTarget
 let frames: FrameRequestCallback[]
@@ -126,7 +128,7 @@ describe('cancelled navigation read admission', () => {
       ? new Promise<Response>(resolve => { held.push(() => resolve(new Response('{}'))) })
       : Promise.resolve(new Response(url === '/api/text' ? 'Restored report' : '{"restored":true}')))
     vi.stubGlobal('fetch', fetch)
-    const active = Array.from({ length: 6 }, (_, i) => readOutcome(apiGet(`/api/active/${i}`)))
+    const active = Array.from({ length: SHARED }, (_, i) => readOutcome(apiGet(`/api/active/${i}`)))
     await drainMicrotasks()
     const onDispatch = vi.fn()
     const reads = [readOutcome(apiGet('/api/normal', undefined, { onDispatch })),
@@ -134,18 +136,18 @@ describe('cancelled navigation read admission', () => {
     win.dispatchEvent(new Event('beforeunload'))
     held.forEach(release => release())
     await Promise.all(active)
-    expect(fetch).toHaveBeenCalledTimes(6)
+    expect(fetch).toHaveBeenCalledTimes(SHARED)
     expect(onDispatch).not.toHaveBeenCalled()
     expect(getFetchQueueStats()).toEqual({ inFlight: 0, queued: 3 })
     expect(getLowFetchQueueStats()).toEqual({ inFlight: 0, queued: 1 })
     frames[0](0)
     expect(await Promise.all(reads)).toEqual([{ kind: 'resolved', value: { restored: true } },
       { kind: 'resolved', value: { restored: true } }, { kind: 'resolved', value: 'Restored report' }])
-    expect(fetch.mock.calls.slice(6).map(call => call[0])).toEqual(['/api/normal', '/api/text', '/api/low'])
+    expect(fetch.mock.calls.slice(SHARED).map(call => call[0])).toEqual(['/api/normal', '/api/text', '/api/low'])
     expect(onDispatch).toHaveBeenCalledTimes(2)
     showPage()
     await drainMicrotasks()
-    expect(fetch).toHaveBeenCalledTimes(9)
+    expect(fetch).toHaveBeenCalledTimes(SHARED + 3)
     expect(getFetchQueueStats()).toEqual({ inFlight: 0, queued: 0 })
     expect(getLowFetchQueueStats()).toEqual({ inFlight: 0, queued: 0 })
   })
@@ -158,24 +160,24 @@ describe('cancelled navigation read admission', () => {
         ? new Promise<Response>(resolve => held.push(() => resolve(new Response('{}'))))
         : Promise.resolve(new Response('{}')))
       vi.stubGlobal('fetch', fetch)
-      const active = Array.from({ length: 6 }, (_, i) => readOutcome(apiGet(`/api/active/${i}`)))
+      const active = Array.from({ length: SHARED }, (_, i) => readOutcome(apiGet(`/api/active/${i}`)))
       await drainMicrotasks()
       const read = readOutcome(apiPost('/api/files/list-many', { paths: [] }, { background: true, readOnly: true }))
       win.dispatchEvent(new Event(edge))
       held.forEach(release => release())
       await Promise.all(active)
-      expect(fetch).toHaveBeenCalledTimes(6)
+      expect(fetch).toHaveBeenCalledTimes(SHARED)
       const lateRead = readOutcome(apiPost('/api/files/exists', { paths: [] }, { background: true, readOnly: true }))
       const save = apiPost('/api/page-visits', { keys: ['page:home'] }, { background: true, keepalive: true })
       await save
-      expect(fetch.mock.calls.map(call => call[0])).toEqual([...Array.from({ length: 6 }, (_, i) => `/api/active/${i}`), '/api/page-visits'])
+      expect(fetch.mock.calls.map(call => call[0])).toEqual([...Array.from({ length: SHARED }, (_, i) => `/api/active/${i}`), '/api/page-visits'])
       expect(fetch.mock.calls.at(-1)?.[1]?.keepalive).toBe(true)
       expect(getFetchQueueStats()).toEqual({ inFlight: 0, queued: 2 })
       if (edge === 'beforeunload') frames[0](0)
       else showPage()
       expect((await Promise.all([read, lateRead])).map(outcome => outcome.kind)).toEqual(['resolved', 'resolved'])
-      expect(fetch.mock.calls.slice(7).map(call => call[0])).toEqual(['/api/files/list-many', '/api/files/exists'])
-      expect(fetch.mock.calls.slice(7).every(call => !call[1]?.keepalive)).toBe(true)
+      expect(fetch.mock.calls.slice(SHARED + 1).map(call => call[0])).toEqual(['/api/files/list-many', '/api/files/exists'])
+      expect(fetch.mock.calls.slice(SHARED + 1).every(call => !call[1]?.keepalive)).toBe(true)
       expect(getFetchQueueStats()).toEqual({ inFlight: 0, queued: 0 })
     })
   }
@@ -285,7 +287,7 @@ describe('GETs resume after document restore', () => {
         if (url.startsWith('/api/active/')) return new Promise<Response>((_resolve, reject) => { rejects.push(reject) })
         return Promise.resolve(new Response('{}', { status: 200 }))
       }))
-      const active = Array.from({ length: 6 }, (_, i) => readOutcome(apiGet(`/api/active/${i}`)))
+      const active = Array.from({ length: SHARED }, (_, i) => readOutcome(apiGet(`/api/active/${i}`)))
       await drainMicrotasks()
       const queued = [
         readOutcome(apiGet('/api/queued/normal')),
@@ -295,11 +297,11 @@ describe('GETs resume after document restore', () => {
       rejects.forEach(reject => reject(failure === 'AbortError'
         ? new DOMException('The document left.', 'AbortError') : new TypeError('Load failed')))
       await Promise.all(active)
-      expect(calls).toHaveLength(6)
+      expect(calls).toHaveLength(SHARED)
       expect(getFetchQueueStats()).toEqual({ inFlight: 0, queued: 2 })
       showPage()
       expect((await Promise.all(queued)).map(result => result.kind)).toEqual(['resolved', 'resolved'])
-      expect(calls.slice(6)).toEqual(['/api/queued/normal', '/api/queued/low'])
+      expect(calls.slice(SHARED)).toEqual(['/api/queued/normal', '/api/queued/low'])
       expect(getFetchQueueStats()).toEqual({ inFlight: 0, queued: 0 })
     })
   }
@@ -464,9 +466,10 @@ describe('writes made as the page goes', () => {
       for (let i = 0; i < 5; i++) await Promise.resolve()
       expect(calls.find((c) => c.url === '/api/page-visits')?.init.keepalive).toBe(true)
       expect(calls.find((c) => c.url === '/api/config')?.init.keepalive).toBe(true)
-      expect(calls.filter((c) => c.url.startsWith('/api/slow/'))).toHaveLength(6)
+      expect(calls.filter((c) => c.url.startsWith('/api/slow/'))).toHaveLength(SHARED)
       expect(calls.map((c) => c.url)).not.toContain('/api/files/list-many')
-      expect(getFetchQueueStats().queued).toBe(3)
+      // The slow GETs past the shared slots, and the read-only listing.
+      expect(getFetchQueueStats().queued).toBe(8 - SHARED + 1)
       if (edge === 'pagehide') showPage()
       expect((await Promise.all([visits, save])).map(result => result.kind)).toEqual(['resolved', 'resolved'])
       hold = false

@@ -7,7 +7,7 @@ const primes = new Map<string, Prime>();
 /** Start the first read at the click, before mounting a dense Home page's column. */
 export function primeSessionOpenHistory(sessionId: string): void {
   if (getHistoryCache(sessionId) || primes.has(sessionId)) return;
-  const promise = fetchSessionHistory(sessionId, { source: 'streams', tail: HISTORY_TAIL_LIMIT });
+  const promise = fetchSessionHistory(sessionId, { source: 'streams', tail: HISTORY_TAIL_LIMIT, interactive: true });
   promise.catch(() => {});
   const timer = setTimeout(() => { if (primes.get(sessionId)?.promise === promise) primes.delete(sessionId); }, 30_000);
   primes.set(sessionId, { promise, timer });

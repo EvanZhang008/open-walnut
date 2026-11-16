@@ -61,15 +61,16 @@ test('a visit batch still waiting for a connection when the page reloads reaches
   const key = `page:exitq${Date.now().toString(36)}`
   // A string, so the import reaches the browser as written: the app's own module instances
   // (the fixture serves the SPA through Vite in dev mode).
-  const inFlight = await page.evaluate(`(async () => {
+  const { inFlight, shared } = await page.evaluate(`(async () => {
     const client = await import('/src/api/client.ts')
     for (let i = 0; i < 2; i++) client.apiGet('/api/held-read/low' + i, undefined, { priority: 'low' }).catch(() => undefined)
     for (let i = 0; i < 40; i++) client.apiGet('/api/held-read/' + i).catch(() => undefined)
     const visits = await import('/src/api/page-visits.ts')
     visits.recordVisit(${JSON.stringify(key)})
-    return client.getFetchQueueStats().inFlight
-  })()`) as number
-  expect(inFlight).toBeGreaterThanOrEqual(6)
+    return { inFlight: client.getFetchQueueStats().inFlight, shared: client.SHARED_FETCH_SLOTS }
+  })()`) as { inFlight: number; shared: number }
+  // Every shared slot is held (one more stays kept for a chat's first screen).
+  expect(inFlight).toBeGreaterThanOrEqual(shared)
   // The batch's timer fired and the batch waits in the low lane behind the held reads: proven,
   // so the reload below tests the queued write and not the exit edge's own flush. The held
   // routes take no real browser connection; this pins the client's own queue.

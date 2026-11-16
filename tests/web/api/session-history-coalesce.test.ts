@@ -16,11 +16,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(),
+  fetchLaneRaised: vi.fn(),
 }));
 
 vi.mock('@/api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/client')>();
-  return { ...actual, apiGet: mocks.apiGet };
+  return { ...actual, apiGet: mocks.apiGet, fetchLaneRaised: mocks.fetchLaneRaised };
 });
 
 // flight-recorder is dynamically imported inside the fetch; stub it so the
@@ -65,6 +66,30 @@ describe('fetchSessionHistory coalescing', () => {
     calls[0].resolve({ ...RESPONSE, firstPaintSource: 'ready', snapshot: '2026-01-01T00:00:00Z' });
     expect(await read).toMatchObject({ firstPaintSource: 'ready', snapshot: '2026-01-01T00:00:00Z' });
     expect(mocks.apiGet.mock.calls[0][1]).toMatchObject({ source: 'streams', screen: '1' });
+  });
+
+  // 2026-11-16 22:06Z: a chat's first-screen read waited 1.25 s for a connection behind draft saves.
+  it("a first-screen read the person waits on asks for the kept connection; others share the rest", async () => {
+    const calls = deferApiGet();
+    void fetchSessionHistory('kept-slot', { source: 'streams', tail: 400, interactive: true });
+    void fetchSessionHistory('shared-slot', { tail: 400, turns: 10 });
+    expect(mocks.apiGet.mock.calls[0][2]).toMatchObject({ lane: { interactive: true } });
+    expect(mocks.apiGet.mock.calls[1][2]).toMatchObject({ lane: { interactive: false } });
+    calls.forEach((c) => c.resolve(RESPONSE));
+  });
+
+  it('a read the person waits on that joins a waiting shared read raises its claim to the kept connection', async () => {
+    const calls = deferApiGet();
+    const behind = fetchSessionHistory('raised-slot', { source: 'streams', tail: 400 });
+    const lane = mocks.apiGet.mock.calls[0][2].lane;
+    expect(lane).toEqual({ interactive: false });
+    const clicked = fetchSessionHistory('raised-slot', { source: 'streams', tail: 400, interactive: true });
+    expect(mocks.apiGet).toHaveBeenCalledTimes(1);
+    expect(lane).toEqual({ interactive: true });
+    // The gate looks again now, not at the next released connection.
+    expect(mocks.fetchLaneRaised).toHaveBeenCalledTimes(1);
+    calls[0].resolve(RESPONSE);
+    await Promise.all([behind, clicked]);
   });
 
   it('two concurrent identical requests share ONE network call and both resolve', async () => {

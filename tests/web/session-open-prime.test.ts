@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 const mocks = vi.hoisted(() => ({ read: vi.fn(), cache: vi.fn() }));
 vi.mock('../../web/src/api/sessions', () => ({ fetchSessionHistory: mocks.read, HISTORY_TAIL_LIMIT: 400 }));
 vi.mock('../../web/src/cache/session-cache', () => ({ getHistoryCache: mocks.cache }));
@@ -44,5 +46,19 @@ describe('history started at the open click', () => {
     expect(takeSessionOpenHistory('wrong-prime')).toBeNull();
     await vi.advanceTimersByTimeAsync(30_000);
     expect(takeSessionOpenHistory('other-prime')).toBeNull();
+  });
+
+  // 2026-11-16 22:06Z: a chat's first-screen read waited 1.25 s in the browser's connection queue
+  // behind draft saves and remote reads. The read the click starts takes the connection kept for it.
+  it("the click's read takes the connection kept for a chat's first screen", () => {
+    mocks.cache.mockReturnValue(null);
+    mocks.read.mockReturnValue(Promise.resolve({ messages: [] }));
+    primeSessionOpenHistory('kept-slot-prime');
+    expect(mocks.read).toHaveBeenCalledWith('kept-slot-prime', expect.objectContaining({ source: 'streams', interactive: true }));
+  });
+
+  it("a shown chat's own first-screen read (no click began one) takes it too", () => {
+    const hook = fs.readFileSync(path.join(__dirname, '..', '..', 'web/src/hooks/useSessionHistory.ts'), 'utf8');
+    expect(hook).toMatch(/const startFirstScreen = \(\) => firstScreenRead\s*\?\?= fetchSessionHistory\(sessionId, \{[^}]*source: 'streams'[^}]*interactive: enabled[^}]*\}\)/);
   });
 });

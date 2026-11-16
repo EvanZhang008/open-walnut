@@ -5,7 +5,10 @@
  * queue inside the browser with their 15s abort timers already running, so a
  * burst (WS-reconnect refresh × open sessions) turned into "FAILED after 15s"
  * for requests the server never saw. The client now gates concurrency itself:
- *  - at most 6 fetches dispatched at once, the rest queue client-side
+ *  - at most 6 fetches dispatched at once, the rest queue client-side: every
+ *    request shares 5 of them (SHARED_FETCH_SLOTS) and the 6th is kept for a
+ *    `priority: 'interactive'` GET, the read the person is waiting on; in the shared
+ *    slots it waits its turn (2026-11-16, see the reserved-slot block at the end)
  *  - the timeout timer starts at DISPATCH, not at enqueue
  *  - writes (non-GET) jump the queue ahead of background GETs, UNLESS the caller
  *    marks them `background: true` (2026-09-17 — see the `background` block below)
@@ -18,7 +21,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // jsdom-free: the client only needs fetch/AbortSignal/performance, all present
 // in the node test environment.
-import { apiGet, apiPost, getFetchQueueStats, getLowFetchQueueStats } from '../../web/src/api/client';
+import { apiGet, apiPost, fetchLaneRaised, getFetchQueueStats, getLowFetchQueueStats, SHARED_FETCH_SLOTS, type FetchLane } from '../../web/src/api/client';
 // The real product call site for `background: true`. tasks.ts pulls in the session
 // status store, which is DOM-free too, so it loads in this tier unchanged.
 import { quickParseTask } from '../../web/src/api/tasks';
@@ -130,7 +133,7 @@ describe('suspended GET admission', () => {
       if (url.startsWith('/api/block/')) return new Promise<Response>(resolve => { pending.push(() => resolve(jsonResponse({}))); });
       return Promise.resolve(jsonResponse({}));
     }));
-    const blockers = Array.from({ length: 6 }, (_, i) => client.apiGet(`/api/block/${i}`).catch(() => undefined));
+    const blockers = Array.from({ length: client.SHARED_FETCH_SLOTS }, (_, i) => client.apiGet(`/api/block/${i}`).catch(() => undefined));
     await vi.advanceTimersByTimeAsync(0);
     const reads = [client.apiGet('/api/held-normal').catch(error => error),
       client.apiGet('/api/held-low', undefined, { priority: 'low' }).catch(error => error)];
@@ -141,11 +144,11 @@ describe('suspended GET admission', () => {
     await Promise.all(blockers);
     await vi.advanceTimersByTimeAsync(0);
     await Promise.all(posts);
-    expect(calls.slice(6)).toEqual(['/api/post-normal', '/api/post-low']);
+    expect(calls.slice(client.SHARED_FETCH_SLOTS)).toEqual(['/api/post-normal', '/api/post-low']);
     expect(client.getFetchQueueStats()).toEqual({ inFlight: 0, queued: 2 });
     win.dispatchEvent(new Event('pageshow'));
     await Promise.all(reads);
-    expect(calls.slice(8)).toEqual(['/api/held-normal', '/api/held-low']);
+    expect(calls.slice(client.SHARED_FETCH_SLOTS + 2)).toEqual(['/api/held-normal', '/api/held-low']);
     expect(client.getLowFetchQueueStats()).toEqual({ inFlight: 0, queued: 0 });
     expect(client.getFetchQueueStats()).toEqual({ inFlight: 0, queued: 0 });
   });
@@ -193,17 +196,17 @@ describe('fetch admission control', () => {
     await Promise.all(reads);
   });
 
-  it('dispatches at most 6 concurrent fetches; the rest wait client-side', async () => {
-    const results = Array.from({ length: 10 }, (_, i) => apiGet(`/api/t${i}`).catch(() => {}));
+  it('normal fetches fill every shared slot and no more; the rest wait client-side', async () => {
+    const results = Array.from({ length: SHARED_FETCH_SLOTS + 4 }, (_, i) => apiGet(`/api/t${i}`).catch(() => {}));
     await new Promise((r) => setTimeout(r, 0));
 
-    expect(fetchMock).toHaveBeenCalledTimes(6);
-    expect(getFetchQueueStats()).toEqual({ inFlight: 6, queued: 4 });
+    expect(fetchMock).toHaveBeenCalledTimes(SHARED_FETCH_SLOTS);
+    expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS, queued: 4 });
 
     // Completing one dispatches exactly one more.
     pending.shift()!.resolve(jsonResponse({}));
     await new Promise((r) => setTimeout(r, 0));
-    expect(fetchMock).toHaveBeenCalledTimes(7);
+    expect(fetchMock).toHaveBeenCalledTimes(SHARED_FETCH_SLOTS + 1);
 
     for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
     await new Promise((r) => setTimeout(r, 0));
@@ -212,7 +215,7 @@ describe('fetch admission control', () => {
   });
 
   it('non-GET jumps the queue ahead of waiting GETs', async () => {
-    const all = Array.from({ length: 8 }, (_, i) => apiGet(`/api/g${i}`).catch(() => {}));
+    const all = Array.from({ length: SHARED_FETCH_SLOTS + 2 }, (_, i) => apiGet(`/api/g${i}`).catch(() => {}));
     await new Promise((r) => setTimeout(r, 0));
     expect(getFetchQueueStats().queued).toBe(2);
 
@@ -223,7 +226,7 @@ describe('fetch admission control', () => {
     pending.shift()!.resolve(jsonResponse({}));
     await new Promise((r) => setTimeout(r, 0));
     const dispatched = fetchMock.mock.calls.map((c) => String(c[0]));
-    expect(dispatched[6]).toBe('/api/write-op');
+    expect(dispatched[SHARED_FETCH_SLOTS]).toBe('/api/write-op');
 
     for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
     await new Promise((r) => setTimeout(r, 0));
@@ -232,7 +235,7 @@ describe('fetch admission control', () => {
   });
 
   it('caller abort while queued removes the entry without dispatching', async () => {
-    const blockers = Array.from({ length: 6 }, (_, i) => apiGet(`/api/b${i}`).catch(() => {}));
+    const blockers = Array.from({ length: SHARED_FETCH_SLOTS }, (_, i) => apiGet(`/api/b${i}`).catch(() => {}));
     await new Promise((r) => setTimeout(r, 0));
 
     const ctrl = new AbortController();
@@ -256,7 +259,7 @@ describe('fetch admission control', () => {
     // timeout that waits ~400ms in the queue must NOT fail — proof the timer
     // only starts at dispatch. Under the old model (timer starts at enqueue)
     // it would be long dead before dispatch.
-    const blockers = Array.from({ length: 6 }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
+    const blockers = Array.from({ length: SHARED_FETCH_SLOTS }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
     await new Promise((r) => setTimeout(r, 0));
 
     const waited = apiGet('/api/waited', undefined, { timeoutMs: 150 });
@@ -285,6 +288,7 @@ describe('fetch admission control', () => {
 
   it('a request that waits out the queue budget fails as a retryable TimeoutError AND names itself in the log', async () => {
     // The 2026-09-17 folder-registry outage: six slow requests pinned the pool
+    // (today the shared slots are what pins it)
     // while a boot burst queued behind them; everything past 20s was rejected
     // HERE, before attemptRequest, so no "[api] … FAILED" line was ever written
     // and the only evidence was the server's request log NOT containing the
@@ -294,7 +298,7 @@ describe('fetch admission control', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     vi.useFakeTimers();
     try {
-      const blockers = Array.from({ length: 6 }, (_, i) => apiGet(`/api/pinned${i}`).catch(() => {}));
+      const blockers = Array.from({ length: SHARED_FETCH_SLOTS }, (_, i) => apiGet(`/api/pinned${i}`).catch(() => {}));
       await vi.advanceTimersByTimeAsync(0);
       const starved = apiGet('/api/tasks/groups').then(() => 'ok', (e: unknown) => e);
       await vi.advanceTimersByTimeAsync(0);
@@ -315,7 +319,7 @@ describe('fetch admission control', () => {
       const line = errorSpy.mock.calls.find((c) => String(c[0]).includes('/api/tasks/groups'));
       expect(line, 'a queue rejection must be logged with the request it killed').toBeDefined();
       expect(String(line![0])).toContain('GET /api/tasks/groups rejected after 20000ms in the connection queue (pool saturated)');
-      expect(line![1]).toEqual({ queued: 0, queuedLow: 0, inFlight: 6, priority: 'normal' });
+      expect(line![1]).toEqual({ queued: 0, queuedLow: 0, inFlight: SHARED_FETCH_SLOTS, priority: 'normal' });
 
       for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
       await vi.advanceTimersByTimeAsync(0);
@@ -335,26 +339,26 @@ describe('fetch admission control', () => {
   // half, and the slot accounting when a queued background write is aborted.
 
   it('a background write stays FIFO while a normal write still jumps the queue', async () => {
-    // Starting state: gate idle. Six GETs take every slot, then two more GETs
+    // Starting state: gate idle. GETs take every shared slot, then two more GETs
     // queue (these are "the screen"), then one background POST, then one ordinary
     // (user-action) POST.
-    const blockers = Array.from({ length: 6 }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
+    const blockers = Array.from({ length: SHARED_FETCH_SLOTS }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
     await new Promise((r) => setTimeout(r, 0));
-    expect(getFetchQueueStats()).toEqual({ inFlight: 6, queued: 0 });
-    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS, queued: 0 });
+    expect(fetchMock).toHaveBeenCalledTimes(SHARED_FETCH_SLOTS);
 
     const paints = [apiGet('/api/paint0').catch(() => {}), apiGet('/api/paint1').catch(() => {})];
     const background = apiPost('/api/tasks/quick-parse', { text: 'x' }, { background: true }).catch(() => {});
     const userWrite = apiPost('/api/tasks/save', { text: 'x' }).catch(() => {});
     await new Promise((r) => setTimeout(r, 0));
-    expect(getFetchQueueStats()).toEqual({ inFlight: 6, queued: 4 });
+    expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS, queued: 4 });
 
     // Free the pool one connection at a time and record the dispatch order.
     for (let i = 0; i < 4; i++) {
       pending.shift()!.resolve(jsonResponse({}));
       await new Promise((r) => setTimeout(r, 0));
     }
-    const order = fetchMock.mock.calls.slice(6).map((c) => String(c[0]));
+    const order = fetchMock.mock.calls.slice(SHARED_FETCH_SLOTS).map((c) => String(c[0]));
     expect(order).toEqual([
       '/api/tasks/save',      // user action — still jumps to the front
       '/api/paint0',          // …then the screen, in the order it asked
@@ -371,17 +375,17 @@ describe('fetch admission control', () => {
   it('quickParseTask is wired as a background write, so it does not outrank the screen', async () => {
     // Starting state: gate idle. Same assertion as above but through the real
     // product call site — the flag is only useful if the caller actually passes it.
-    const blockers = Array.from({ length: 6 }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
+    const blockers = Array.from({ length: SHARED_FETCH_SLOTS }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
     await new Promise((r) => setTimeout(r, 0));
 
     const paint = apiGet('/api/files/list', { path: '/' }).catch(() => {});
     const parse = quickParseTask('lunch with sam tomorrow 12pm').catch(() => {});
     await new Promise((r) => setTimeout(r, 0));
-    expect(getFetchQueueStats()).toEqual({ inFlight: 6, queued: 2 });
+    expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS, queued: 2 });
 
     pending.shift()!.resolve(jsonResponse({}));
     await new Promise((r) => setTimeout(r, 0));
-    expect(String(fetchMock.mock.calls[6][0])).toBe('/api/files/list?path=%2F');
+    expect(String(fetchMock.mock.calls[SHARED_FETCH_SLOTS][0])).toBe('/api/files/list?path=%2F');
 
     for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
     await new Promise((r) => setTimeout(r, 0));
@@ -389,31 +393,31 @@ describe('fetch admission control', () => {
     await Promise.all([...blockers, paint, parse]);
   });
 
-  it('background writes saturating all 6 slots cannot starve a GET behind them', async () => {
-    // Starting state: gate idle. Six background POSTs (the per-keystroke parse
-    // burst) hold every connection; a GET queues; then ANOTHER keystroke's POST
+  it('background writes saturating every shared slot cannot starve a GET behind them', async () => {
+    // Starting state: gate idle. Background POSTs (the per-keystroke parse
+    // burst) hold every shared connection; a GET queues; then ANOTHER keystroke's POST
     // arrives. Under the old "every non-GET is urgent" rule that late POST
     // unshifted ahead of the GET, and a continuous sentence repeated that forever
     // — the GET was starved for as long as the user kept typing.
-    const saturate = Array.from({ length: 6 }, (_, i) =>
+    const saturate = Array.from({ length: SHARED_FETCH_SLOTS }, (_, i) =>
       apiPost(`/api/tasks/quick-parse?k=${i}`, { text: `k${i}` }, { background: true }).catch(() => {}));
     await new Promise((r) => setTimeout(r, 0));
-    expect(getFetchQueueStats()).toEqual({ inFlight: 6, queued: 0 });
+    expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS, queued: 0 });
 
     const paint = apiGet('/api/tasks/groups').catch(() => {});
     const laterKeystroke = apiPost('/api/tasks/quick-parse?k=6', { text: 'k6' }, { background: true }).catch(() => {});
     await new Promise((r) => setTimeout(r, 0));
-    expect(getFetchQueueStats()).toEqual({ inFlight: 6, queued: 2 });
+    expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS, queued: 2 });
 
     pending.shift()!.resolve(jsonResponse({}));
     await new Promise((r) => setTimeout(r, 0));
     // Queue order, not write-priority order: the GET is next.
-    expect(String(fetchMock.mock.calls[6][0])).toBe('/api/tasks/groups');
+    expect(String(fetchMock.mock.calls[SHARED_FETCH_SLOTS][0])).toBe('/api/tasks/groups');
     expect(fetchMock.mock.calls.map((c) => String(c[0]))).not.toContain('/api/tasks/quick-parse?k=6');
 
     pending.shift()!.resolve(jsonResponse({}));
     await new Promise((r) => setTimeout(r, 0));
-    expect(String(fetchMock.mock.calls[7][0])).toBe('/api/tasks/quick-parse?k=6');
+    expect(String(fetchMock.mock.calls[SHARED_FETCH_SLOTS + 1][0])).toBe('/api/tasks/quick-parse?k=6');
 
     for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
     await new Promise((r) => setTimeout(r, 0));
@@ -426,7 +430,7 @@ describe('fetch admission control', () => {
     // queued — the common case, since the composer aborts the previous parse on
     // every new fire. If that path forgot the accounting, the pool would shrink by
     // one connection per keystroke and the app would wedge with zero in flight.
-    const blockers = Array.from({ length: 6 }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
+    const blockers = Array.from({ length: SHARED_FETCH_SLOTS }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
     await new Promise((r) => setTimeout(r, 0));
 
     const ctrl = new AbortController();
@@ -434,11 +438,11 @@ describe('fetch admission control', () => {
       background: true, signal: ctrl.signal,
     });
     await new Promise((r) => setTimeout(r, 0));
-    expect(getFetchQueueStats()).toEqual({ inFlight: 6, queued: 1 });
+    expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS, queued: 1 });
 
     ctrl.abort();
     await expect(superseded).rejects.toMatchObject({ name: 'AbortError' });
-    expect(getFetchQueueStats()).toEqual({ inFlight: 6, queued: 0 });
+    expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS, queued: 0 });
     expect(fetchMock.mock.calls.map((c) => String(c[0]))).not.toContain('/api/tasks/quick-parse');
 
     // Drain the pool: accounting must return to exactly zero…
@@ -447,12 +451,12 @@ describe('fetch admission control', () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(getFetchQueueStats()).toEqual({ inFlight: 0, queued: 0 });
 
-    // …and all six connections must still be acquirable afterwards.
-    const after = Array.from({ length: 6 }, (_, i) => apiGet(`/api/after${i}`).catch(() => {}));
+    // …and every shared connection must still be acquirable afterwards.
+    const after = Array.from({ length: SHARED_FETCH_SLOTS }, (_, i) => apiGet(`/api/after${i}`).catch(() => {}));
     await new Promise((r) => setTimeout(r, 0));
-    expect(getFetchQueueStats()).toEqual({ inFlight: 6, queued: 0 });
-    expect(fetchMock.mock.calls.slice(-6).map((c) => String(c[0]))).toEqual(
-      Array.from({ length: 6 }, (_, i) => `/api/after${i}`));
+    expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS, queued: 0 });
+    expect(fetchMock.mock.calls.slice(-SHARED_FETCH_SLOTS).map((c) => String(c[0]))).toEqual(
+      Array.from({ length: SHARED_FETCH_SLOTS }, (_, i) => `/api/after${i}`));
 
     for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
     await Promise.all(after);
@@ -474,7 +478,7 @@ describe('fetch admission control', () => {
     expect(getLowFetchQueueStats()).toEqual({ inFlight: 2, queued: 3 });
     expect(getFetchQueueStats()).toEqual({ inFlight: 2, queued: 3 });
 
-    // The other four connections stay free for what paints the screen: a
+    // The other shared connections stay free for what paints the screen: a
     // normal GET leaves immediately, ahead of every queued low one.
     const paint = apiGet('/api/tasks').catch(() => {});
     await tick();
@@ -499,23 +503,23 @@ describe('fetch admission control', () => {
   });
 
   it('a queued low GET never leaves ahead of a queued normal one, whatever the arrival order', async () => {
-    // Starting state: six normal reads hold the pool. A low read queues FIRST,
+    // Starting state: normal reads hold every shared slot. A low read queues FIRST,
     // then a normal one.
-    const hold = Array.from({ length: 6 }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
+    const hold = Array.from({ length: SHARED_FETCH_SLOTS }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
     await tick();
     const low = apiGet('/api/skills', undefined, { priority: 'low' }).catch(() => {});
     const normal = apiGet('/api/working-dirs').catch(() => {});
     await tick();
-    expect(getFetchQueueStats()).toEqual({ inFlight: 6, queued: 2 });
+    expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS, queued: 2 });
 
     pending.shift()!.resolve(jsonResponse({}));
     await tick();
-    expect(urls()[6]).toBe('/api/working-dirs');
+    expect(urls()[SHARED_FETCH_SLOTS]).toBe('/api/working-dirs');
     expect(urls()).not.toContain('/api/skills');
 
     pending.shift()!.resolve(jsonResponse({}));
     await tick();
-    expect(urls()[7]).toBe('/api/skills');
+    expect(urls()[SHARED_FETCH_SLOTS + 1]).toBe('/api/skills');
 
     for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
     await Promise.all([...hold, low, normal]);
@@ -544,7 +548,7 @@ describe('fetch admission control', () => {
   });
 
   it('onDispatch fires when the request leaves the queue, not when it is asked for', async () => {
-    const hold = Array.from({ length: 6 }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
+    const hold = Array.from({ length: SHARED_FETCH_SLOTS }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
     await tick();
     const onDispatch = vi.fn();
     const queued = apiGet('/api/tasks', undefined, { onDispatch }).catch(() => {});
@@ -554,7 +558,7 @@ describe('fetch admission control', () => {
     pending.shift()!.resolve(jsonResponse({}));
     await tick();
     expect(onDispatch).toHaveBeenCalledTimes(1);
-    expect(urls()[6]).toBe('/api/tasks');
+    expect(urls()[SHARED_FETCH_SLOTS]).toBe('/api/tasks');
 
     for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
     await Promise.all([...hold, queued]);
@@ -592,5 +596,169 @@ describe('fetch admission control', () => {
     await tick();
     for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
     await Promise.all(again);
+  });
+
+  // ── reserved interactive slot (2026-11-16) ─────────────────────────────────
+  // Jumping the queue was not enough: draft saves (3 to 12 s) and remote reads
+  // (4 to 9 s) held all six connections, and a chat's first-screen read waited
+  // 1.25 s for one of them to end. One slot is now kept for `priority: 'interactive'`.
+
+  describe('reserved interactive slot', () => {
+    const interactive = (path: string, signal?: AbortSignal) =>
+      apiGet(path, undefined, { priority: 'interactive', signal });
+    const release = (url: string) => {
+      const idx = pending.findIndex((p) => p.url === url);
+      pending.splice(idx, 1)[0].resolve(jsonResponse({}));
+    };
+
+    it('with every shared slot held by slow GETs and more normal GETs queued, an interactive GET dispatches at once', async () => {
+      const hold = Array.from({ length: SHARED_FETCH_SLOTS }, (_, i) => apiGet(`/api/slow${i}`).catch(() => {}));
+      const queued = [apiGet('/api/queued0').catch(() => {}), apiGet('/api/queued1').catch(() => {})];
+      await tick();
+      expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS, queued: 2 });
+
+      const onDispatch = vi.fn();
+      const read = apiGet('/api/chat/first-screen', undefined, { priority: 'interactive', onDispatch }).catch(() => {});
+      await tick();
+      // Nothing was released: it took the reserved slot, not a shared one, and did not wait behind the queue.
+      expect(onDispatch).toHaveBeenCalledTimes(1);
+      expect(urls()[SHARED_FETCH_SLOTS]).toBe('/api/chat/first-screen');
+      expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS + 1, queued: 2 });
+
+      for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+      await tick();
+      for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+      await Promise.all([...hold, ...queued, read]);
+    });
+
+    it.each([
+      ['background writes', (i: number) => apiPost(`/api/drafts/save?k=${i}`, { text: `k${i}` }, { background: true })],
+      ['urgent writes', (i: number) => apiPost(`/api/tasks/save?k=${i}`, { text: `k${i}` })],
+    ])('with every shared slot held by %s, an interactive GET still dispatches at once', async (_kind, write) => {
+      const hold = Array.from({ length: SHARED_FETCH_SLOTS }, (_, i) => write(i).catch(() => {}));
+      // One more write of the same kind waits; urgent ones sit at the head of the shared queue.
+      const waitingWrite = write(SHARED_FETCH_SLOTS).catch(() => {});
+      await tick();
+      expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS, queued: 1 });
+
+      const read = interactive('/api/chat/first-screen').catch(() => {});
+      await tick();
+      expect(urls()).toHaveLength(SHARED_FETCH_SLOTS + 1);
+      expect(urls()[SHARED_FETCH_SLOTS]).toBe('/api/chat/first-screen');
+      expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS + 1, queued: 1 });
+
+      for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+      await tick();
+      for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+      await Promise.all([...hold, waitingWrite, read]);
+    });
+
+    it('normal requests never take the reserved slot: with every shared slot in flight, the next fetch waits for an interactive GET', async () => {
+      const hold = Array.from({ length: SHARED_FETCH_SLOTS }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
+      const waiting = [
+        apiGet('/api/normal-read').catch(() => {}),
+        apiPost('/api/user-write', { x: 1 }).catch(() => {}),
+        apiPost('/api/tasks/quick-parse', { text: 'x' }, { background: true }).catch(() => {}),
+      ];
+      await tick();
+      await tick();
+      // A free connection exists, yet none of the waiting requests may use it.
+      expect(fetchMock).toHaveBeenCalledTimes(SHARED_FETCH_SLOTS);
+      expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS, queued: 3 });
+
+      const read = interactive('/api/chat/first-screen').catch(() => {});
+      await tick();
+      expect(fetchMock).toHaveBeenCalledTimes(SHARED_FETCH_SLOTS + 1);
+      expect(urls()[SHARED_FETCH_SLOTS]).toBe('/api/chat/first-screen');
+      expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS + 1, queued: 3 });
+
+      for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+      await tick();
+      for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+      await Promise.all([...hold, ...waiting, read]);
+    });
+
+    it('when the reserved slot is busy too, a second interactive GET waits its turn among the normal GETs and takes the reserved slot when it frees', async () => {
+      const hold = Array.from({ length: SHARED_FETCH_SLOTS }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
+      const first = interactive('/api/chat/a').catch(() => {});
+      await tick();
+      expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS + 1, queued: 0 });
+
+      const normals = [apiGet('/api/normal0').catch(() => {}), apiGet('/api/normal1').catch(() => {})];
+      const second = interactive('/api/chat/b').catch(() => {});
+      await tick();
+      expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS + 1, queued: 3 });
+      expect(urls()).not.toContain('/api/chat/b');
+
+      // A shared slot frees: the normal GET that came first takes it (a page that opens many
+      // chats at once does not hold back its other reads behind them).
+      release('/api/hold0');
+      await tick();
+      expect(urls()[SHARED_FETCH_SLOTS + 1]).toBe('/api/normal0');
+      expect(urls()).not.toContain('/api/chat/b');
+
+      // The reserved slot frees: the interactive GET takes it, ahead of the normal still waiting.
+      release('/api/chat/a');
+      await tick();
+      expect(urls()[SHARED_FETCH_SLOTS + 2]).toBe('/api/chat/b');
+      expect(urls()).not.toContain('/api/normal1');
+      expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS + 1, queued: 1 });
+
+      for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+      await tick();
+      for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+      await Promise.all([...hold, first, ...normals, second]);
+    });
+
+    it('a waiting read whose lane is raised (a read the person waits on joined it) takes the reserved slot at once', async () => {
+      const hold = Array.from({ length: SHARED_FETCH_SLOTS }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
+      const ahead = apiGet('/api/normal-ahead').catch(() => {});
+      const lane: FetchLane = { interactive: false };
+      const read = apiGet('/api/chat/first-screen', undefined, { lane }).catch(() => {});
+      await tick();
+      expect(urls()).not.toContain('/api/chat/first-screen');
+      expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS, queued: 2 });
+
+      lane.interactive = true;
+      fetchLaneRaised();
+      await tick();
+      expect(urls()[SHARED_FETCH_SLOTS]).toBe('/api/chat/first-screen');
+      expect(urls()).not.toContain('/api/normal-ahead');
+
+      for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+      await tick();
+      for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+      await Promise.all([...hold, ahead, read]);
+    });
+
+    it('aborting a queued interactive GET removes it and leaks no slot', async () => {
+      const hold = Array.from({ length: SHARED_FETCH_SLOTS }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
+      const first = interactive('/api/chat/a').catch(() => {});
+      await tick();
+      const ctrl = new AbortController();
+      const aborted = interactive('/api/chat/left', ctrl.signal);
+      await tick();
+      expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS + 1, queued: 1 });
+
+      ctrl.abort();
+      await expect(aborted).rejects.toMatchObject({ name: 'AbortError' });
+      expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS + 1, queued: 0 });
+
+      for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+      await Promise.all([...hold, first]);
+      await tick();
+      expect(getFetchQueueStats()).toEqual({ inFlight: 0, queued: 0 });
+      expect(urls()).not.toContain('/api/chat/left');
+
+      // Every shared slot and the reserved one are still acquirable.
+      const after = Array.from({ length: SHARED_FETCH_SLOTS }, (_, i) => apiGet(`/api/after${i}`).catch(() => {}));
+      const again = interactive('/api/chat/again').catch(() => {});
+      await tick();
+      expect(getFetchQueueStats()).toEqual({ inFlight: SHARED_FETCH_SLOTS + 1, queued: 0 });
+      expect(urls().slice(-1)).toEqual(['/api/chat/again']);
+
+      for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+      await Promise.all([...after, again]);
+    });
   });
 });
