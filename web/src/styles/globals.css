@@ -2634,7 +2634,11 @@ select {
   outline: none;
   overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-width: thin;
+}
+
+/* Firefox only: elsewhere ::-webkit-scrollbar draws it (Thin Scrollbars, top). */
+@supports not selector(::-webkit-scrollbar) {
+  .session-notes-textarea { scrollbar-width: thin; }
 }
 
 /* ── Collapsed-URL note editor (CollapsibleUrlEditor) ──
