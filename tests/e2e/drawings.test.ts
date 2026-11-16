@@ -118,7 +118,8 @@ describe('drawings end to end', () => {
     expect((await call('POST', '/api/drawings', { taskId: 'nope-0000' })).status).toBe(404)
     expect((await call('GET', '/api/drawings/file?path=..%2F..%2Fetc%2Fpasswd.excalidraw')).status).toBe(400)
     const inbox = await call('POST', '/api/drawings', {})
-    expect(inbox.body.path).toBe('inbox/Untitled drawing.excalidraw')
+    // No title, no task, no first text: named by the date, never "Untitled drawing".
+    expect(inbox.body.path).toMatch(/^inbox\/Drawing \d{4}-\d\d-\d\d \d\d\.\d\d( \d+)?\.excalidraw$/)
     const huge = { ...inbox.body.scene, files: { f: { dataURL: 'x'.repeat(10 * 1024 * 1024) } } }
     const res = await call('PUT', '/api/drawings/file', { path: inbox.body.path, revision: inbox.body.revision, scene: huge })
     expect(res.status).toBe(413)

@@ -121,7 +121,7 @@ describe('a pop-out loads only its own view', () => {
 
   it('PopoutRoot loads its views through popout-views.ts, never by a static import', () => {
     const root = staticImports(path.join(WEB, 'popout/PopoutRoot.tsx')).map(rel)
-    expect(root.filter((f) => /^popout\/Popout(ExtPanel|ExtTasks|FileView|GlobalNotes|Note|Session|Task)\.tsx$/.test(f))).toEqual([])
+    expect(root.filter((f) => /^popout\/Popout(AppView|ExtPanel|ExtTasks|FileView|GlobalNotes|Note|Session|Task)\.tsx$/.test(f))).toEqual([])
   })
 
   it('a pop-out mounts every host App mounts for one (2026-11-09: no plugin dialog drew in a pop-out)', () => {

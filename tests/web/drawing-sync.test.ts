@@ -6,14 +6,20 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ApiError } from '../../web/src/api/client';
 import { DrawingConflictError, type DrawingApi } from '../../web/src/components/drawing/drawing-api';
 import { emptyScene, parseScene, sceneFromEditor, type DrawingDocument, type DrawingScene } from '../../web/src/components/drawing/drawing-scene';
-import { DrawingSync, fileDraftKey, sketchDraftKey, type DraftStore, type DrawingSnapshot, type DrawingSource } from '../../web/src/components/drawing/drawing-sync';
+import { DrawingSync, fileDraftKey, hasUnsavedSketch, newSketchKey, sketchDraftKey, type DraftStore, type DrawingSnapshot, type DrawingSource } from '../../web/src/components/drawing/drawing-sync';
 
-type Op = 'get' | 'put' | 'create';
+type Op = 'get' | 'put' | 'create' | 'rename';
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 
 class FakeServer implements DrawingApi {
   files = new Map<string, DrawingDocument>();
-  calls: Array<{ op: Op; path?: string; revision?: string; scene?: DrawingScene; known?: string }> = [];
+  calls: Array<{ op: Op; path?: string; revision?: string; scene?: DrawingScene; known?: string; title?: string; firstText?: string; taskId?: string; clientId?: string }> = [];
+  /** The next answers of an op are lost on the way back: the server did the work, the caller sees a network failure. */
+  lose: Partial<Record<Op, number>> = {};
+  /** Creates by id, as the server remembers them (store.ts createDrawing). */
+  private created = new Map<string, string>();
+  /** The appState a new file gets (the server's name mode). */
+  createAppState: Record<string, unknown> = {};
   hold = false;
   /** The next answers carry this Notes-entry warning (the scene itself saved). */
   indexWarning: string | null = null;
@@ -38,7 +44,9 @@ class FakeServer implements DrawingApi {
     const exec = () => {
       const failure = this.fail[op]?.shift();
       if (failure) throw failure;
-      return fn();
+      const value = fn();
+      if (this.lose[op]) { this.lose[op]!--; throw new TypeError('Failed to fetch'); }
+      return value;
     };
     if (!this.hold) return Promise.resolve().then(exec);
     return new Promise<T>((resolve, reject) => this.held.push(() => { try { resolve(exec()); } catch (e) { reject(e); } }));
@@ -58,9 +66,31 @@ class FakeServer implements DrawingApi {
       return { ...this.writeElsewhere(path, scene), ...(this.indexWarning ? { indexWarning: this.indexWarning } : {}) };
     });
   }
-  create(input: { taskId?: string; sessionId?: string }) {
-    return this.run('create', { op: 'create' }, () => this.add(`${input.taskId ? `Tasks/${input.taskId}` : 'Inbox'}/drawing-${this.next++}.excalidraw`, emptyScene(), 'Untitled drawing'));
+  create(input: { taskId?: string; sessionId?: string; firstText?: string; title?: string; clientId?: string }) {
+    return this.run('create', { op: 'create', firstText: input.firstText, taskId: input.taskId, title: input.title, clientId: input.clientId }, () => {
+      const made = input.clientId ? this.created.get(input.clientId) : undefined;
+      if (made && this.files.has(made)) return clone(this.files.get(made)!);
+      const scene = emptyScene();
+      scene.appState = { ...scene.appState, ...this.createAppState };
+      const doc = this.add(`${input.taskId ? `Tasks/${input.taskId}` : 'Inbox'}/drawing-${this.next++}.excalidraw`, scene, input.title ?? 'Drawing 2026-11-16 10.00');
+      if (input.clientId) this.created.set(input.clientId, doc.path);
+      return doc;
+    });
   }
+  rename(path: string, revision: string, title: string) {
+    return this.run('rename', { op: 'rename', path, revision, title }, () => {
+      const doc = this.files.get(path);
+      if (!doc) throw new ApiError(404, 'Not found');
+      if (doc.revision !== revision) throw new DrawingConflictError(clone(doc));
+      const to = `${path.slice(0, path.lastIndexOf('/') + 1)}${title}.excalidraw`;
+      this.files.delete(path);
+      const scene = { ...clone(doc.scene), appState: { ...doc.scene.appState, walnutTitle: 'set' } };
+      const moved = { path: to, title, revision: `r${++this.rev}`, scene };
+      this.files.set(to, moved);
+      return clone(moved);
+    });
+  }
+  renames() { return this.calls.filter((c) => c.op === 'rename'); }
   async list() { return []; }
   puts() { return this.calls.filter((c) => c.op === 'put'); }
   async release(n = Infinity) {
@@ -71,6 +101,8 @@ class FakeServer implements DrawingApi {
 class MemoryStore implements DraftStore {
   map = new Map<string, string>();
   refuse = false;
+  adopted: string[] = [];
+  adopt(key: string) { this.adopted.push(key); }
   read(key: string) { return this.map.get(key) ?? ''; }
   write(key: string, text: string) {
     if (this.refuse) return;
@@ -599,5 +631,292 @@ describe("the composer's sketch", () => {
     const sent = server.puts()[0].scene!;
     expect(sent.appState).toEqual({ viewBackgroundColor: '#eee', customTool: 'x' });
     expect(sent.extra).toEqual({ libraryVersion: 3 });
+  });
+});
+
+const text = (id: string, words: string, x = 0, y = 0, version = 1) => ({ id, type: 'text', x, y, width: 50, height: 20, text: words, originalText: words, version, versionNonce: version + 100 });
+
+describe('naming', () => {
+  it("a file Walnut named follows its first text line once, after a save; the new path is adopted", async () => {
+    server.add('Inbox/d.excalidraw', parseScene({ elements: [], appState: { walnutTitle: 'auto' } })!, 'Drawing 2026-11-16 10.00');
+    const sync = await openShown('Inbox/d.excalidraw');
+    sync.edit(sceneOf(text('t', 'Order review\nsecond line', 10, 40), text('u', 'later', 0, 300)), last().sceneKey);
+    await tick(1_000);
+    // The editor reports only its own view settings: the name mode comes from the loaded file.
+    expect(server.puts()[0].scene!.appState.walnutTitle).toBe('auto');
+    expect(server.renames()).toHaveLength(1);
+    expect(server.renames()[0]).toMatchObject({ path: 'Inbox/d.excalidraw', title: 'Order review' });
+    expect(last()).toMatchObject({ path: 'Inbox/Order review.excalidraw', title: 'Order review', state: 'saved', unsaved: false });
+    // The next edit saves to the new path, carrying the name mode the server set.
+    sync.edit(sceneOf(text('t', 'Order review\nsecond line', 10, 40), text('u', 'later', 0, 300), rect('r')), last().sceneKey);
+    await tick(1_000);
+    const lastPut = server.puts().at(-1)!;
+    expect(lastPut.path).toBe('Inbox/Order review.excalidraw');
+    expect(lastPut.scene!.appState.walnutTitle).toBe('set');
+    // Once: a changed first line never renames again.
+    sync.edit(sceneOf(text('t', 'Another title', 10, 40, 2)), last().sceneKey);
+    await tick(1_000);
+    expect(server.renames()).toHaveLength(1);
+  });
+
+  it('never renames a name a person set, or a file with no text', async () => {
+    server.add('Inbox/set.excalidraw', parseScene({ elements: [], appState: { walnutTitle: 'set' } })!, 'My plan');
+    const a = await openShown('Inbox/set.excalidraw');
+    a.edit(sceneOf(text('t', 'Something else')), last().sceneKey);
+    await tick(1_000);
+    server.add('Inbox/auto.excalidraw', parseScene({ elements: [], appState: { walnutTitle: 'auto' } })!, 'Drawing 1');
+    const b = await openShown('Inbox/auto.excalidraw');
+    b.edit(sceneOf(rect('r')), last().sceneKey);
+    await tick(1_000);
+    expect(server.puts()).toHaveLength(2);
+    expect(server.renames()).toHaveLength(0);
+  });
+
+  it('waits while a text box is open, then renames', async () => {
+    server.add('Inbox/d.excalidraw', parseScene({ elements: [], appState: { walnutTitle: 'auto' } })!, 'Drawing 1');
+    let editing = true;
+    const sync = new DrawingSync({ kind: 'file', path: 'Inbox/d.excalidraw' }, { api: server, store, onChange: (s) => seen.push(s), canAutoRename: () => !editing });
+    await sync.start();
+    sync.edit(clone(last().scene!), last().sceneKey);
+    sync.edit(sceneOf(text('t', 'Hel')), last().sceneKey);
+    await tick(1_000);
+    expect(server.renames()).toHaveLength(0);
+    editing = false;
+    sync.edit(sceneOf(text('t', 'Hello world', 0, 0, 2)), last().sceneKey);
+    await tick(1_000);
+    expect(server.renames().map((r) => r.title)).toEqual(['Hello world']);
+  });
+
+  it('a rename that waited for a text box runs when the box closes, though closing it saves nothing more', async () => {
+    server.add('Inbox/d.excalidraw', parseScene({ elements: [], appState: { walnutTitle: 'auto' } })!, 'Plan the review');
+    let editing = true;
+    const sync = new DrawingSync({ kind: 'file', path: 'Inbox/d.excalidraw' }, { api: server, store, onChange: (s) => seen.push(s), canAutoRename: () => !editing });
+    await sync.start();
+    sync.edit(clone(last().scene!), last().sceneKey);
+    // The whole text is typed and saved while its box is still open.
+    sync.edit(sceneOf(text('t', 'Order\nreview')), last().sceneKey);
+    await tick(1_000);
+    expect(last()).toMatchObject({ state: 'saved', unsaved: false });
+    expect(server.renames()).toHaveLength(0);
+    // The box closes with nothing new to save.
+    editing = false;
+    sync.textEditEnded();
+    await tick(1_000);
+    expect(server.renames().map((r) => r.title)).toEqual(['Order']);
+    expect(server.puts()).toHaveLength(1);
+  });
+
+  it('a 409 on rename with the same content is retried once on the newer revision; changed content is not renamed over', async () => {
+    server.add('Inbox/d.excalidraw', parseScene({ elements: [], appState: { walnutTitle: 'set' } })!, 'Plan');
+    const sync = await openShown('Inbox/d.excalidraw');
+    // The revision moved with nothing changed (a repaired Notes entry).
+    const doc = server.files.get('Inbox/d.excalidraw')!;
+    server.files.set('Inbox/d.excalidraw', { ...doc, revision: 'r99' });
+    expect(await sync.rename('Plan B')).toBeNull();
+    expect(server.renames().map((r) => r.revision)).toEqual(['r1', 'r99']);
+    expect(last()).toMatchObject({ path: 'Inbox/Plan B.excalidraw', title: 'Plan B' });
+
+    server.add('Inbox/e.excalidraw', sceneOf(rect('a')), 'E');
+    const other = await openShown('Inbox/e.excalidraw');
+    server.writeElsewhere('Inbox/e.excalidraw', sceneOf(rect('a'), rect('agent')));
+    const before = server.renames().length;
+    expect(await other.rename('E2')).toMatch(/changed somewhere else/);
+    expect(server.renames().length - before).toBe(1);
+    expect(server.files.has('Inbox/e.excalidraw')).toBe(true);
+  });
+
+  it('a manual rename saves what is on screen first, and the old file draft is cleared', async () => {
+    server.add('Inbox/d.excalidraw', sceneOf(rect('a')), 'Plan');
+    const sync = await openShown('Inbox/d.excalidraw');
+    sync.edit(sceneOf(rect('a'), rect('b')), last().sceneKey);
+    expect(await sync.rename('  Better   plan ')).toBeNull();
+    expect(server.calls.map((c) => c.op).filter((o) => o !== 'get')).toEqual(['put', 'rename']);
+    expect(server.renames()[0].title).toBe('Better plan');
+    expect(server.files.get('Inbox/Better plan.excalidraw')!.scene.elements.map((e) => e.id)).toEqual(['a', 'b']);
+    expect(store.read(fileDraftKey('Inbox/d.excalidraw'))).toBe('');
+  });
+
+  it('follows a rename made elsewhere and reads the file at its new path', async () => {
+    server.add('Inbox/d.excalidraw', sceneOf(rect('a')), 'Plan');
+    const sync = await openShown('Inbox/d.excalidraw');
+    const moved = await server.rename('Inbox/d.excalidraw', 'r1', 'Moved');
+    sync.followMove('Inbox/d.excalidraw', moved.path);
+    await tick(10);
+    expect(last()).toMatchObject({ path: 'Inbox/Moved.excalidraw', title: 'Moved', revision: moved.revision, state: 'saved' });
+  });
+});
+
+describe('a rename made elsewhere while a save is out', () => {
+  it('a save that found the old path gone leaves "missing" once the move is heard, and saves at the new path', async () => {
+    server.add('Inbox/d.excalidraw', sceneOf(rect('a')), 'Plan');
+    const sync = await openShown('Inbox/d.excalidraw');
+    sync.edit(sceneOf(rect('a'), rect('b')), last().sceneKey);
+    const moved = await server.rename('Inbox/d.excalidraw', 'r1', 'Moved');
+    await tick(1_000);
+    expect(last().state).toBe('missing');
+    sync.followMove('Inbox/d.excalidraw', moved.path);
+    await tick(10);
+    expect(last()).toMatchObject({ path: 'Inbox/Moved.excalidraw', state: 'saved', unsaved: false, error: null });
+    expect(server.files.get('Inbox/Moved.excalidraw')!.scene.elements.map((e) => e.id)).toEqual(['a', 'b']);
+    // The 5 s poll reads the new path.
+    server.writeElsewhere('Inbox/Moved.excalidraw', sceneOf(rect('a'), rect('b'), rect('agent')));
+    await sync.refresh();
+    expect(server.calls.at(-1)).toMatchObject({ op: 'get', path: 'Inbox/Moved.excalidraw' });
+    expect(last().scene!.elements.map((e) => e.id)).toEqual(['a', 'b', 'agent']);
+  });
+
+  it('a 404 that answers a save sent before the move was heard is saved again at the new path', async () => {
+    server.add('Inbox/d.excalidraw', sceneOf(rect('a')), 'Plan');
+    const sync = await openShown('Inbox/d.excalidraw');
+    server.hold = true;
+    sync.edit(sceneOf(rect('a'), rect('b')), last().sceneKey);
+    await tick(1_000);
+    expect(server.held).toHaveLength(1);
+    server.hold = false;
+    const moved = await server.rename('Inbox/d.excalidraw', 'r1', 'Moved');
+    sync.followMove('Inbox/d.excalidraw', moved.path);
+    await server.release();
+    await tick(10);
+    expect(last()).toMatchObject({ path: 'Inbox/Moved.excalidraw', state: 'saved', unsaved: false });
+    expect(server.files.get('Inbox/Moved.excalidraw')!.scene.elements.map((e) => e.id)).toEqual(['a', 'b']);
+  });
+});
+
+describe('a create whose answer was lost', () => {
+  const key = sketchDraftKey('draft-lost');
+
+  it('is sent again with the same id, so the server answers the file it made: never a second one', async () => {
+    const sync = open({ kind: 'sketch', key });
+    await sync.start();
+    server.lose.create = 1;
+    sync.edit(sceneOf(rect('a')), last().sceneKey);
+    await tick(1_000);
+    expect(last().state).toBe('offline');
+    expect(server.files.size).toBe(1);
+    await tick(2_000);
+    const creates = server.calls.filter((c) => c.op === 'create');
+    expect(creates).toHaveLength(2);
+    expect(creates[0].clientId).toBeTruthy();
+    expect(creates[1].clientId).toBe(creates[0].clientId);
+    expect(server.files.size).toBe(1);
+    expect(last()).toMatchObject({ state: 'saved', path: 'Inbox/drawing-1.excalidraw' });
+  });
+
+  it('keeps its id in the draft, so a reload sends the same one', async () => {
+    const sync = open({ kind: 'sketch', key });
+    await sync.start();
+    server.lose.create = 1;
+    sync.edit(sceneOf(rect('a')), last().sceneKey);
+    await tick(1_000);
+    const first = server.calls.find((c) => c.op === 'create')!.clientId;
+    expect(JSON.parse(store.read(key)).createId).toBe(first);
+    sync.dispose();
+    await settle();
+    const again = open({ kind: 'sketch', key });
+    await again.start();
+    await tick(10);
+    expect(server.calls.filter((c) => c.op === 'create').map((c) => c.clientId)).toEqual([first, first]);
+    expect(server.files.size).toBe(1);
+    expect(last()).toMatchObject({ state: 'saved', path: 'Inbox/drawing-1.excalidraw' });
+  });
+});
+
+describe('closing right after typing', () => {
+  it('runs the auto-rename with the final save, and the next controller on the old path follows it', async () => {
+    server.add('Inbox/d.excalidraw', parseScene({ elements: [], appState: { walnutTitle: 'auto' } })!, 'Drawing 2026-11-16 10.00');
+    const sync = await openShown('Inbox/d.excalidraw');
+    sync.edit(sceneOf(text('t', 'Order review')), last().sceneKey);
+    await tick(100);
+    sync.dispose();
+    await tick(1_000);
+    expect(server.renames().map((r) => r.title)).toEqual(['Order review']);
+    expect(server.files.get('Inbox/Order review.excalidraw')!.scene.elements.map((e) => e.id)).toEqual(['t']);
+    const next = open({ kind: 'file', path: 'Inbox/d.excalidraw' });
+    await next.start();
+    expect(last()).toMatchObject({ path: 'Inbox/Order review.excalidraw', state: 'saved' });
+  });
+
+  it('runs a rename that waited for a text box when the editor closes, and never one for a name a person set', async () => {
+    server.add('Inbox/d.excalidraw', parseScene({ elements: [], appState: { walnutTitle: 'auto' } })!, 'Drawing 1');
+    const sync = new DrawingSync({ kind: 'file', path: 'Inbox/d.excalidraw' }, { api: server, store, onChange: (s) => seen.push(s), canAutoRename: () => false });
+    await sync.start();
+    sync.edit(clone(last().scene!), last().sceneKey);
+    sync.edit(sceneOf(text('t', 'Hello world')), last().sceneKey);
+    await tick(1_000);
+    expect(server.renames()).toHaveLength(0);
+    sync.dispose();
+    await tick(10);
+    expect(server.renames().map((r) => r.title)).toEqual(['Hello world']);
+
+    server.add('Inbox/set.excalidraw', parseScene({ elements: [], appState: { walnutTitle: 'set' } })!, 'My plan');
+    const set = await openShown('Inbox/set.excalidraw');
+    set.edit(sceneOf(text('t', 'Something else')), last().sceneKey);
+    set.dispose();
+    await tick(1_000);
+    expect(server.renames()).toHaveLength(1);
+  });
+
+  it("a sketch's draft names the renamed file, so the next Draw opens it", async () => {
+    const key = sketchDraftKey('draft-close');
+    server.createAppState = { walnutTitle: 'auto' };
+    const sync = open({ kind: 'sketch', key });
+    await sync.start();
+    sync.edit(sceneOf(text('t', 'Queue design')), last().sceneKey);
+    await tick(100);
+    sync.dispose();
+    await tick(1_000);
+    expect(server.renames().map((r) => r.title)).toEqual(['Queue design']);
+    expect(JSON.parse(store.read(key))).toEqual({ v: 1, path: 'Inbox/Queue design.excalidraw' });
+  });
+});
+
+describe("a gone tab's drafts", () => {
+  it('are offered to the store when a file or a sketch opens', async () => {
+    server.add('Inbox/a.excalidraw', sceneOf(rect('a')));
+    await open({ kind: 'file', path: 'Inbox/a.excalidraw' }).start();
+    await open({ kind: 'sketch', key: sketchDraftKey('d9') }).start();
+    expect(store.adopted).toEqual([fileDraftKey('Inbox/a.excalidraw'), sketchDraftKey('d9')]);
+  });
+});
+
+describe('"New drawing" is a sketch until its first content', () => {
+  const key = newSketchKey('task:t1');
+
+  it('makes no file when nothing is drawn, then one with its first text and the place it belongs to', async () => {
+    server.createAppState = { walnutTitle: 'auto' };
+    const sync = open({ kind: 'sketch', key, fresh: 1 }, { taskId: 't1' });
+    await sync.start();
+    await tick(5_000);
+    expect(server.calls.filter((c) => c.op === 'create')).toHaveLength(0);
+    sync.edit(sceneOf(text('t', 'Payments flow\nv2'), rect('r')), last().sceneKey);
+    await tick(1_000);
+    const creates = server.calls.filter((c) => c.op === 'create');
+    expect(creates).toEqual([expect.objectContaining({ taskId: 't1', firstText: 'Payments flow\nv2' })]);
+    // The created file is named by the server ('auto'), and the save carries that mode.
+    expect(server.puts()[0].scene!.appState.walnutTitle).toBe('auto');
+  });
+
+  it('a fresh New starts blank over a sketch already in Notes, and keeps one that is not', async () => {
+    const first = open({ kind: 'sketch', key, fresh: 1 }, { taskId: 't1' });
+    await first.start();
+    first.edit(sceneOf(rect('a')), last().sceneKey);
+    await tick(1_000);
+    expect(last().state).toBe('saved');
+    first.dispose();
+    const second = open({ kind: 'sketch', key, fresh: 2 }, { taskId: 't1' });
+    await second.start();
+    expect(last()).toMatchObject({ state: 'sketch', path: null });
+    expect(last().scene!.elements).toHaveLength(0);
+    // Offline: the new sketch is not in Notes, so the next New keeps it and says so.
+    server.fail.create = Array.from({ length: 5 }, () => new TypeError('Failed to fetch'));
+    second.edit(sceneOf(rect('b')), last().sceneKey);
+    await tick(1_000);
+    second.flushDraft();
+    second.dispose();
+    expect(hasUnsavedSketch(store, key)).toBe(true);
+    const third = open({ kind: 'sketch', key, fresh: 3 }, { taskId: 't1' });
+    await third.start();
+    expect(last().scene!.elements.map((e) => e.id)).toEqual(['b']);
+    expect(last().error).toMatch(/not in Notes yet/);
   });
 });

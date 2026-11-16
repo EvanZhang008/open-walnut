@@ -16,6 +16,7 @@ Drawing is an editable whiteboard, not a chat image. The App and the session pan
    - `add`: new shapes, as for append below. Give each a temporary `id` (for example `"box1"`), and give arrows `start: {id}` and `end: {id}` to connect shapes; the answer's `idMap` gives the real ids.
 5. Use `walnut_drawing_append` when you only add and change nothing. Use `walnut_drawing_create` only when a new drawing is what the person asked for; pass the task or session so the file belongs to their work (no task means Inbox).
 6. After any edit, render again and look at the result before you tell the person it is done.
+7. Use `walnut_drawing_rename` to rename a drawing to a clear title (a few words that say what it shows); keep using the new `path` it returns.
 
 Every write sends the revision from your last read. A stale revision is refused: read again (the person may have just drawn something) and redo the edit on the new scene. Never overwrite the whole scene to make an edit pass, and never remove elements the person did not ask you to change. If app state says unsaved, let the person's edits save first.
 

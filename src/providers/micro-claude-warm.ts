@@ -44,6 +44,7 @@ import {
   type StreamingBlock,
 } from './claude-stream-parser.js';
 import { prewarmOneShot, startOneShot, _resetLocalOneShotForTest, type OneShotHandle } from './oneshot-client.js';
+import { streamJsonUserLine } from './stream-json-input.js';
 
 export interface WarmSpec {
   /** REPLACES the CLI system prompt (slim child). */
@@ -252,7 +253,7 @@ export async function runWarmMicroClaude(opts: WarmRunOptions): Promise<WarmRunR
       args: built.args,
       cwd: built.cwd,
       env: built.env,
-      input: JSON.stringify({ type: 'user', message: { role: 'user', content: opts.prompt } }) + '\n',
+      input: streamJsonUserLine(opts.prompt),
       // Single-use child: stdin ends at its result line, a straggler is SIGTERMed.
       endOnResult: true,
       ...(warmDisabled() ? {} : { warmKey: built.warmKey, ...(opts.keepWarm ? { warmKeep: true } : {}) }),

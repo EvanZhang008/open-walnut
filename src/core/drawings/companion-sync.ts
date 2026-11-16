@@ -128,6 +128,28 @@ export async function companionPathForeign(sceneRel: string): Promise<boolean> {
   }
 }
 
+/**
+ * Whether a renamed scene may not go to `sceneRel` because of its companion path: anything is there
+ * (ours, someone else's, a leftover whose scene was deleted outside Walnut, a link), so the
+ * companion could not follow and would be left behind. `ownSceneRel`'s own companion does not
+ * count (a change of letter case only: on a case-insensitive disk both paths are that one file).
+ */
+export async function companionPathTaken(sceneRel: string, ownSceneRel?: string): Promise<boolean> {
+  try {
+    const abs = await resolveVaultFile(companionPathFor(sceneRel))
+    const there = await fsp.lstat(abs).catch((err: NodeJS.ErrnoException) => {
+      if (err.code === 'ENOENT') return null
+      throw err
+    })
+    if (!there) return false
+    if (!ownSceneRel) return true
+    const mine = await fileIdentity(await resolveVaultFile(companionPathFor(ownSceneRel)))
+    return !(mine && mine.ino === there.ino)
+  } catch {
+    return true
+  }
+}
+
 /** Facts about a scene file on disk, for a companion refresh outside a save. */
 async function factsOnDisk(sceneRel: string): Promise<SceneFacts> {
   const { bytes, identity } = await readSceneFile(await resolveVaultFile(sceneRel))
@@ -151,6 +173,15 @@ export async function moveDrawingCompanion(fromScene: string, toScene: string): 
     moved = await withUserFileLock(fromAbs, async () => {
       const current = await readOrNull(fromAbs)
       if (current === null || !isOwnCompanion(current, fromScene)) return false
+      if (from.toLowerCase() === to.toLowerCase()) {
+        // Only the letter case changes: on a case-insensitive disk both paths are this one file.
+        const there = await fileIdentity(toAbs)
+        const mine = await fileIdentity(fromAbs)
+        if (there && (!mine || there.ino !== mine.ino)) return false
+        await replaceAtomically(fromAbs, retargetCompanion(current, toScene))
+        await fsp.rename(fromAbs, toAbs)
+        return true
+      }
       if (!(await createExclusively(toAbs, retargetCompanion(current, toScene)))) return false
       await fsp.unlink(fromAbs)
       return true

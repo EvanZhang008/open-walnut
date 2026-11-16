@@ -30,8 +30,8 @@ export function activate(walnut: WalnutServerApi): void {
     },
     {
       name: 'create', title: 'Create a drawing', readonly: false, remote: 'allow',
-      description: 'Create an empty editable drawing in the Notes vault. A task or session places it in its project and task folder; otherwise it goes to Inbox. Returns its path, scene and revision.',
-      inputSchema: { type: 'object', properties: { ...contextProperties, title: { type: 'string', description: 'The drawing title' } }, additionalProperties: false },
+      description: 'Create an empty editable drawing in the Notes vault. A task or session places it in its project and task folder; otherwise it goes to Inbox. Give it a clear title; without one it is named after the task (or the date). Returns its path, scene and revision.',
+      inputSchema: { type: 'object', properties: { ...contextProperties, title: { type: 'string', description: 'The drawing title: a few words that say what it shows' } }, additionalProperties: false },
       handler: (args, ctx) => ctx.call('POST', '/api/drawings', args),
     },
     {
@@ -72,6 +72,17 @@ export function activate(walnut: WalnutServerApi): void {
         }, required: ['path', 'revision'], additionalProperties: false,
       },
       handler: (args, ctx) => ctx.call('POST', '/api/drawings/update', args),
+    },
+    {
+      name: 'rename', title: 'Rename a drawing', readonly: false, remote: 'allow',
+      description: 'Give a drawing a clear title. It stays in its folder (a taken name gets a number), its Notes entry follows, and the answer has its new path: use that path from now on. Send the exact revision from your last read; a stale revision is refused.',
+      inputSchema: {
+        type: 'object', properties: {
+          path: pathProperty, revision: revisionProperty,
+          title: { type: 'string', description: 'The new title, a few words that say what the drawing shows' },
+        }, required: ['path', 'revision', 'title'], additionalProperties: false,
+      },
+      handler: (args, ctx) => ctx.call('POST', '/api/drawings/rename', args),
     },
   ]
   for (const op of ops) walnut.registry.op(op)

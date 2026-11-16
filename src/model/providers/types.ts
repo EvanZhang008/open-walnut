@@ -146,6 +146,11 @@ export interface AdapterCallOptions {
    *  a local process (claude-cli) start background calls in the utility QoS band
    *  when the deploy raised the server above it (src/lib/background-qos.ts). */
   purpose?: CallPurpose;
+  /** `send`: the prompt's pictures reach the model as pictures. Only the claude-cli adapter reads
+   *  it (the API adapters send image blocks anyway): without it the CLI gets the text prompt alone,
+   *  as it always did; with it, one stream-json user message with the image blocks (cliTurnInput).
+   *  Only a caller that needs the model to see a picture sets it (the drawing's diagram call). */
+  images?: 'send';
 }
 
 export type CallPurpose = 'interactive' | 'background';

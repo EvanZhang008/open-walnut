@@ -17,6 +17,7 @@ import { JsonlTailer } from '../core/jsonl-tailer.js'
 import { SESSION_STREAMS_DIR } from '../constants.js'
 import { log } from '../logging/index.js'
 import { NODE_DISCOVERY_SHELL } from './host-runtime-core.js'
+import { streamJsonUserLine } from './stream-json-input.js'
 
 // ── SessionIO interface ──
 
@@ -179,11 +180,7 @@ export class LocalIO implements SessionIO {
       return
     }
 
-    const payload = JSON.stringify({
-      type: 'user',
-      message: { role: 'user', content: message },
-    })
-    const buf = Buffer.from(payload + '\n')
+    const buf = Buffer.from(streamJsonUserLine(message))
 
     try {
       // O_NONBLOCK prevents event-loop deadlock when payload > pipe buffer (16KB on macOS).
@@ -232,11 +229,7 @@ export class LocalIO implements SessionIO {
       log.session.debug('LocalIO write skipped: no pipe', { messageLength: message.length })
       return false
     }
-    const payload = JSON.stringify({
-      type: 'user',
-      message: { role: 'user', content: message },
-    })
-    const buf = Buffer.from(payload + '\n')
+    const buf = Buffer.from(streamJsonUserLine(message))
     try {
       const fd = fs.openSync(this.pipePath, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
       try {

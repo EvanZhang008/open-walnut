@@ -5,7 +5,26 @@ import { PluginAppPage } from '@/pages/PluginAppPage'
 import { PluginBounds } from '@/plugins/PluginBounds'
 import { useWebPluginRuntime } from '@/plugins/hooks'
 import { useAppCatalog } from './hooks'
-import { appNavigateTarget } from './registry'
+import { appNavigateTarget, type RegisteredApp } from './registry'
+
+/**
+ * A built-in app's page, drawn the same in the console (App.tsx, one route per core app) and in
+ * an app's own window (popout/PopoutAppView.tsx). Its navigation is the router's it is drawn in.
+ */
+export function CoreAppView({ app }: { app: RegisteredApp }) {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const CoreApp = app.component
+  if (!CoreApp) return null
+  return (
+    <CoreApp
+      basePath={app.path}
+      subpath=""
+      search={location.search}
+      navigate={(target, options) => navigate(target, options)}
+    />
+  )
+}
 
 export function AppHostPage() {
   const params = useParams<{ appId: string; '*': string }>()

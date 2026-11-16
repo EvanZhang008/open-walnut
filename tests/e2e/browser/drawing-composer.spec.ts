@@ -75,8 +75,28 @@ async function drag(page: Page, dialog: Locator, key: string, [x1, y1]: [number,
   await page.keyboard.press(key);
   await page.mouse.move(box.x + LEFT + x1, box.y + y1);
   await page.mouse.down();
+  // A person's press rests a moment before it moves; WebKit otherwise ran the first moves before
+  // the editor had taken the press (a move by 5 px of the 60 asked for).
+  await page.waitForTimeout(60);
   await page.mouse.move(box.x + LEFT + x2, box.y + y2, { steps: 12 });
   await page.mouse.up();
+}
+
+/** An item of the drawing's own menu (the editor's hamburger). */
+async function fromMenu(dialog: Locator, name: string) {
+  await dialog.getByTestId('main-menu-trigger').click();
+  await dialog.locator('.dropdown-menu').getByText(name, { exact: true }).click();
+}
+
+/** The view the editor shows, from the data attributes its box carries (ExcalidrawCanvas.tsx). */
+async function viewOf(dialog: Locator) {
+  const host = dialog.locator('.drawing-canvas-host');
+  return {
+    instance: await host.getAttribute('data-editor-instance'),
+    zoom: await host.getAttribute('data-zoom'),
+    scrollX: await host.getAttribute('data-scroll-x'),
+    scrollY: await host.getAttribute('data-scroll-y'),
+  };
 }
 
 async function saved(dialog: Locator) {
@@ -159,10 +179,12 @@ test.describe('Draw in the composer (drawing_app)', () => {
 
     // Fonts come from this Walnut; exports work with them, and nothing left the machine.
     expect(await page.evaluate(() => document.fonts.check('20px Excalifont'))).toBe(true);
-    const [png] = await Promise.all([page.waitForEvent('download'), dialog.getByRole('button', { name: 'PNG', exact: true }).click()]);
+    // Export lives in the drawing's menu; the header has no PNG or SVG button.
+    await expect(dialog.locator('.drawing-workspace-bar').getByRole('button', { name: /^(PNG|SVG)$/ })).toHaveCount(0);
+    const [png] = await Promise.all([page.waitForEvent('download'), fromMenu(dialog, 'Download PNG')]);
     const pngBytes = await fs.readFile((await png.path())!);
     expect(pngBytes.subarray(1, 4).toString()).toBe('PNG');
-    const [svg] = await Promise.all([page.waitForEvent('download'), dialog.getByRole('button', { name: 'SVG', exact: true }).click()]);
+    const [svg] = await Promise.all([page.waitForEvent('download'), fromMenu(dialog, 'Download SVG')]);
     const svgText = await fs.readFile((await svg.path())!, 'utf8');
     expect(svgText).toContain('<svg');
     expect(svgText).toContain('@font-face');
@@ -272,5 +294,155 @@ test.describe('Draw in the composer (drawing_app)', () => {
     const doc = await onServer(page, dialog);
     expect(doc.scene.elements.map((e) => e.type).sort()).toEqual(['ellipse', 'rectangle']);
     await shot(page, 'recovered-after-reload');
+  });
+  test('full screen in the dialog keeps the editor and its view, both ways', async ({ page }) => {
+    const panel = await openSession(page);
+    const dialog = await openDraw(page, panel);
+    await focusCanvas(dialog);
+    await drag(page, dialog, 'r', [120, 120], [300, 220]);
+    await saved(dialog);
+    // The toolbar shows no shortcut digits; the tooltip still names the key.
+    await expect(dialog.locator('.ToolIcon__keybinding').first()).toBeHidden();
+    await expect(dialog.locator('label[title*="Rectangle"]').first()).toHaveAttribute('title', /R|2/);
+    // Zoom in and pan, so the view is not the default one.
+    await page.keyboard.press('ControlOrMeta+=');
+    await page.keyboard.press('ControlOrMeta+=');
+    await page.mouse.move((await canvasBox(dialog)).x + LEFT + 200, (await canvasBox(dialog)).y + 300);
+    await page.mouse.wheel(0, 120);
+    await expect(dialog.locator('.drawing-canvas-host')).not.toHaveAttribute('data-zoom', '1');
+    const before = await viewOf(dialog);
+    await shot(page, 'fullscreen-before');
+
+    await dialog.getByRole('button', { name: 'Full screen', exact: true }).click();
+    await expect(ws(dialog)).toHaveAttribute('data-fullscreen', 'true');
+    const box = (await ws(dialog).boundingBox())!;
+    expect(box).toMatchObject({ x: 0, y: 0, width: 1280, height: 900 });
+    expect(await viewOf(dialog)).toEqual(before);
+    await shot(page, 'fullscreen-on');
+    // Escape in the editor is the editor's (deselect), not a way out of full screen.
+    await focusCanvas(dialog);
+    await page.keyboard.press('Escape');
+    await expect(ws(dialog)).toHaveAttribute('data-fullscreen', 'true');
+    // The shortcut toggles it back.
+    await page.keyboard.press('ControlOrMeta+Shift+F');
+    await expect(ws(dialog)).toHaveAttribute('data-fullscreen', 'false');
+    expect(await viewOf(dialog)).toEqual(before);
+    await page.keyboard.press('ControlOrMeta+Shift+F');
+    await expect(ws(dialog)).toHaveAttribute('data-fullscreen', 'true');
+    await dialog.getByRole('button', { name: 'Exit full screen', exact: true }).click();
+    await expect(ws(dialog)).toHaveAttribute('data-fullscreen', 'false');
+    expect(await viewOf(dialog)).toEqual(before);
+    await shot(page, 'fullscreen-after');
+  });
+
+  test('a press outside closes the dialog only when it starts and ends outside, and everything is saved', async ({ page }) => {
+    const panel = await openSession(page);
+    const dialog = await openDraw(page, panel);
+    await focusCanvas(dialog);
+    await drag(page, dialog, 'r', [120, 120], [300, 220]);
+    await saved(dialog);
+
+    // A stroke that starts on the canvas and ends outside the dialog keeps it open.
+    const cb = await canvasBox(dialog);
+    await page.keyboard.press('p');
+    await page.mouse.move(cb.x + LEFT + 200, cb.y + 400);
+    await page.mouse.down();
+    await page.mouse.move(4, 4, { steps: 16 });
+    await page.mouse.up();
+    await expect(dialog).toBeVisible();
+    await saved(dialog);
+    const doc = await onServer(page, dialog);
+    expect(doc.scene.elements.some((e) => e.type === 'freedraw')).toBe(true);
+    await shot(page, 'outside-drag-kept-open');
+    // A press that starts outside and ends inside keeps it open too.
+    await page.mouse.move(6, 450);
+    await page.mouse.down();
+    await page.mouse.move(cb.x + LEFT + 300, cb.y + 300, { steps: 8 });
+    await page.mouse.up();
+    await expect(dialog).toBeVisible();
+
+    // A press that begins and ends outside closes it; the file has everything.
+    await page.mouse.click(6, 450);
+    await expect(dialog).toHaveCount(0);
+    const res = await page.request.get(`/api/drawings/file?path=${encodeURIComponent(doc.path)}`);
+    const kept = await res.json() as Doc;
+    expect(kept.scene.elements.filter((e) => !e.isDeleted).map((e) => e.type).sort()).toEqual(['freedraw', 'rectangle']);
+    // Draw again opens the same file.
+    const again = await openDraw(page, panel);
+    await expect(ws(again)).toHaveAttribute('data-drawing-path', doc.path);
+  });
+
+  test('Draw in a task session saves in Notes under Projects/<project>/<task>/, named from its first text; rename from the title', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    const res = await page.request.post('/api/sessions/quick-start', {
+      data: { cwd: path.join(fixture.home(), 'projects'), message: 'Plan the review service', project: 'Drawing Fixture', engine: 'claude' },
+    });
+    expect(res.ok(), await res.text()).toBe(true);
+    const { sessionId, taskId } = await res.json() as { sessionId: string; taskId: string };
+    expect(taskId).toBeTruthy();
+    await seedColumns(page, [sessionId]);
+    await page.evaluate((url) => { location.href = url; }, `${fixture.base()}/`);
+    const panel = panelFor(page, sessionId);
+    await expect(panel.locator('.chat-plus-btn')).toBeVisible({ timeout: 60_000 });
+    const dialog = await openDraw(page, panel);
+    await expect(status(dialog)).toHaveText('Saved to Notes when you draw');
+
+    // The first content is text: the file is named from it, in the task's folder of its project.
+    await focusCanvas(dialog);
+    const box = await canvasBox(dialog);
+    await page.keyboard.press('t');
+    await page.mouse.click(box.x + LEFT + 200, box.y + 200);
+    const editor = dialog.locator('textarea.excalidraw-wysiwyg');
+    await expect(editor).toBeVisible();
+    await editor.fill('Order -> review\nrating, user');
+    await editor.press('Escape');
+    await saved(dialog);
+    // The auto name renames the file right after its first save: a moment where the path on screen is gone.
+    await expect.poll(async () => {
+      const p = await ws(dialog).getAttribute('data-drawing-path');
+      const res = p ? await page.request.get(`/api/drawings/file?path=${encodeURIComponent(p)}`) : null;
+      return res?.ok() ? (await res.json() as Doc).title : '';
+    }, { timeout: 30_000 }).toMatch(/^Order/);
+    const named = await onServer(page, dialog);
+    expect(named.path).toMatch(/^Projects\/Drawing Fixture\/[^/]+\/Order[^/]*\.excalidraw$/);
+    expect(path.basename(path.dirname(named.path))).toMatch(new RegExp(`\\(${taskId.replace(/[^A-Za-z0-9_-]/g, '-')}\\)$`));
+    const bar = dialog.locator('.drawing-workspace-bar');
+    await expect(bar.locator('.drawing-workspace-title')).toHaveText(named.title);
+    await shot(page, 'task-named');
+
+    // Rename from the title: Enter saves, the file moves in the same folder.
+    await bar.getByRole('button', { name: /^Rename drawing/ }).click();
+    const input = bar.getByRole('textbox', { name: 'Drawing name' });
+    await input.fill('Review service');
+    await input.press('Enter');
+    await expect(bar.locator('.drawing-workspace-title')).toHaveText('Review service', { timeout: 30_000 });
+    await expect(ws(dialog)).toHaveAttribute('data-drawing-path', /Review service\.excalidraw$/);
+    const renamed = await onServer(page, dialog);
+    expect(path.dirname(renamed.path)).toBe(path.dirname(named.path));
+    expect((await page.request.get(`/api/drawings/file?path=${encodeURIComponent(named.path)}`)).status()).toBe(404);
+    // Escape in the name field cancels; the name stays.
+    await bar.getByRole('button', { name: /^Rename drawing/ }).click();
+    await bar.getByRole('textbox', { name: 'Drawing name' }).fill('Not this');
+    await bar.getByRole('textbox', { name: 'Drawing name' }).press('Escape');
+    await expect(bar.locator('.drawing-workspace-title')).toHaveText('Review service');
+    await expect(dialog).toBeVisible();
+    await shot(page, 'task-renamed');
+
+    // Closed, it is in Notes under the project and the task's folder.
+    await dialog.getByRole('button', { name: 'Close drawing' }).click();
+    await expect(dialog).toHaveCount(0);
+    if (await page.locator('.sidebar.collapsed').count()) await page.locator('.sidebar-collapse-btn').click();
+    await page.getByTestId('sidebar-core-app-notes').click();
+    const folders = ['Projects', 'Projects/Drawing Fixture', path.dirname(renamed.path)];
+    for (const folder of folders) {
+      const node = page.locator(`.notes-tree-folder[data-node-path="${folder}"]`);
+      await expect(node).toBeVisible({ timeout: 30_000 });
+      if (!(await node.locator('.notes-tree-arrow.expanded').count())) await node.click();
+    }
+    await expect(page.locator('.notes-tree-name').filter({ hasText: 'Review service.excalidraw' })).toBeVisible({ timeout: 30_000 });
+    await page.waitForTimeout(800);
+    await shot(page, 'task-in-notes');
+    expect(errors).toEqual([]);
   });
 });

@@ -259,7 +259,8 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   { method: 'POST', pattern: '/api/v1/notes', away: 'note-write' },
   { method: 'DELETE', pattern: '/api/v1/notes/:path+', away: 'note-write' },
   { method: W, pattern: '/api/notes-v2/*', away: 'needs-leader', why: 'note_changes_need_mac' },
-  // Drawings are scene files in the leader's Notes vault, read and written there only (routes/drawings.ts).
+  // Drawings are scene files in the leader's Notes vault, read and written there only (routes/drawings.ts);
+  // the shared library, the public catalog proxy and the diagram model call live there too.
   // The trailing `*` also covers the bare `/api/drawings` (list and create).
   { method: '*', pattern: '/api/drawings/*', away: 'needs-leader', why: 'drawings_need_leader' },
   { method: W, pattern: '/api/v1/notes/*', away: 'needs-leader', why: 'note_changes_need_mac' },

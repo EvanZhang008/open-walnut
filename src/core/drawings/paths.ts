@@ -18,8 +18,9 @@ import { projectNotesFolderFor } from '../tracking-note.js'
 import { DrawingInputError, SCENE_EXT } from './scene.js'
 
 export const INBOX_FOLDER = 'inbox'
-export const DEFAULT_DRAWING_TITLE = 'Untitled drawing'
 const MAX_SEGMENT = 80
+/** The longest title Walnut picks by itself (from the first text, or the task's title). */
+export const AUTO_TITLE_MAX = 60
 const MAX_PATH = 1024
 
 /**
@@ -32,6 +33,10 @@ export function foldName(raw: string, max = MAX_SEGMENT): string | null {
   const folded = Array.from(
     raw
       .normalize('NFC')
+      // Arrows people type in a diagram's first line ("Order -> review") read as arrows in the name.
+      .replace(/<->/g, '\u2194')
+      .replace(/->|=>/g, '\u2192')
+      .replace(/<-/g, '\u2190')
       // eslint-disable-next-line no-control-regex
       .replace(/[\u0000-\u001f\u007f/\\:*?"<>|]/g, '-')
       .replace(/\s+/g, ' ')
@@ -57,6 +62,16 @@ export function taskIdOfFolder(name: string): string | null {
   return TASK_FOLDER_RE.exec(name)?.[1] ?? null
 }
 
+/** The task a vault path is filed under: the nearest folder named for a task, or undefined. */
+export function taskIdOfPath(rel: string): string | undefined {
+  const parts = rel.split('/').slice(0, -1)
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const id = taskIdOfFolder(parts[i]!)
+    if (id) return id
+  }
+  return undefined
+}
+
 /** Whether `name` is the folder of the task with this id. */
 export function isTaskFolder(name: string, taskId: string): boolean {
   return taskIdOfFolder(name) === folderSafeId(taskId)
@@ -76,9 +91,45 @@ export function taskFolderFor(task: TaskPlacement): string {
   return `${root}/${name}`
 }
 
-/** The scene file name for a title. */
-export function sceneFileName(title: string | undefined, n = 1): string {
-  const base = foldName(title ?? '') ?? DEFAULT_DRAWING_TITLE
+/**
+ * How a drawing got its title, kept in `scene.appState.walnutTitle`: `set` by a person or an
+ * agent (never renamed by itself), `auto` when Walnut picked it (the editor renames it once to
+ * the scene's first text).
+ */
+export type TitleSource = 'set' | 'auto'
+
+/** The first non-empty line of a text, folded into a name of at most AUTO_TITLE_MAX characters. */
+export function firstLineName(text: string): string | null {
+  for (const line of text.split(/\r\n|\r|\n/)) {
+    const name = foldName(line.replace(/\t/g, ' '), AUTO_TITLE_MAX)
+    if (name) return name
+  }
+  return null
+}
+
+function pad(n: number): string {
+  return String(n).padStart(2, '0')
+}
+
+/** "Drawing YYYY-MM-DD HH.mm" in local time: the last fallback, never "Untitled drawing". */
+export function datedDrawingTitle(now: Date): string {
+  return `Drawing ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}.${pad(now.getMinutes())}`
+}
+
+/**
+ * The title Walnut picks for a new drawing nobody named: the first line of its first text, else
+ * the task's title, else the date and time.
+ */
+export function autoDrawingTitle(input: { firstText?: string; taskTitle?: string; now?: Date }): string {
+  return (input.firstText ? firstLineName(input.firstText) : null)
+    ?? (input.taskTitle ? foldName(input.taskTitle, AUTO_TITLE_MAX) : null)
+    ?? datedDrawingTitle(input.now ?? new Date())
+}
+
+/** The scene file name for a title (already checked to fold to a name); `n > 1` numbers it. */
+export function sceneFileName(title: string, n = 1): string {
+  const base = foldName(title)
+  if (!base) throw new DrawingInputError('title has no characters a file name can use')
   return `${n > 1 ? `${base} ${n}` : base}${SCENE_EXT}`
 }
 

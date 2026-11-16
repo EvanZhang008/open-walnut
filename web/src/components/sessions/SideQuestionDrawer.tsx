@@ -951,6 +951,7 @@ export function SideQuestionDrawer({
               mentionCwd={cwd}
               mentionHost={host}
               draftKey={sessionId ? `side-thread-draft:${sessionId}` : undefined}
+              drawingTarget={sessionId ? { sessionId } : undefined}
               isStreaming={!!activeThreadSid && threadStreaming}
               onStop={activeThread?.threadSessionId
                 ? () => { void stopTurn(activeThread.threadSessionId); }

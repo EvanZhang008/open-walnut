@@ -1,0 +1,8 @@
+/* An app's own window (PopoutAppView.tsx): the app fills the window, as it fills the console's page area. */
+.popout-root:has(> .popout-app) {
+  padding: 0;
+  overflow: hidden;
+}
+.popout-app {
+  height: 100%;
+}

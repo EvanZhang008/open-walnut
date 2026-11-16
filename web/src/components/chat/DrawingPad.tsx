@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { useExperimental } from '@/hooks/useExperimental';
 import type { DrawingWorkspaceProps } from '@/components/drawing/DrawingWorkspace';
+import { OutsidePress } from '@/components/drawing/drawing-overlay';
 import { ClassicDrawingPad, type ClassicDrawingPadProps } from './ClassicDrawingPad';
 import './drawing-pad.css';
 
@@ -18,6 +19,11 @@ interface Props extends ClassicDrawingPadProps {
  * dialog, the same one the Drawing App shows: its sketch is kept in the draft store per draft,
  * Save makes it a drawing file in the task, and Attach PNG adds it to the message. The classic
  * pad stays mounted either way, so a sketch it holds survives the experiment being switched.
+ *
+ * The dialog closes with its × button, Escape outside the editor, or a press that begins and ends
+ * outside it (a stroke or a text selection dragged out of it never closes it). Closing unmounts
+ * the workspace, whose controller writes the sketch to the tab's store and saves it once more
+ * (DrawingSync.dispose); offline, the sketch stays with the draft and the next Draw shows it.
  */
 export function DrawingPad({ open, draftId, onClose, onAttach, canAttach, taskId, sessionId }: Props) {
   const appOn = useExperimental('drawing_app');
@@ -38,6 +44,7 @@ function DrawingAppDialog({ draftId, taskId, sessionId, onClose, onAttach, canAt
   const [Workspace, setWorkspace] = useState<WorkspaceModule | null>(null);
   const [failed, setFailed] = useState(false);
   const dialog = useRef<HTMLDivElement>(null);
+  const press = useRef(new OutsidePress()).current;
   const previousFocus = useRef(document.activeElement);
   const mounted = useRef(true);
   const load = () => {
@@ -63,7 +70,12 @@ function DrawingAppDialog({ draftId, taskId, sessionId, onClose, onAttach, canAt
     onClose();
   };
   return createPortal(
-    <div className="drawing-app-overlay" onPointerDown={(e) => { e.stopPropagation(); if (e.target === e.currentTarget) e.preventDefault(); }} onKeyDown={onKeyDown}>
+    <div className="drawing-app-overlay" onKeyDown={onKeyDown}
+      // The overlay itself is the outside: a press inside a portal of the editor (its menus and
+      // modals) reaches here through React with another target, so it counts as inside.
+      onPointerDown={(e) => { e.stopPropagation(); press.down(e.target === e.currentTarget); if (e.target === e.currentTarget) e.preventDefault(); }}
+      onPointerUp={(e) => { if (press.up(e.target === e.currentTarget)) onClose(); }}
+      onPointerCancel={() => press.cancel()}>
       <div ref={dialog} className="drawing-app-dialog" role="dialog" aria-modal="true" aria-label="Drawing" tabIndex={-1}>
         {Workspace
           ? <Workspace draftId={draftId} taskId={taskId} sessionId={sessionId} onClose={onClose} onAttach={onAttach} canAttach={canAttach} />

@@ -136,7 +136,8 @@ describe("a drawing's unsaved edits stay in this tab", () => {
     try {
       resetDrawingTabForTest();
       tabDrawingStore.write('file:Inbox/a.excalidraw', 'tab one');
-      const [key] = [...local.keys()];
+      // The tab's heartbeat (drawing-store.ts) is the other key it writes.
+      const [key] = [...local.keys()].filter((k) => !k.startsWith('walnut-drawing-alive:'));
       expect(key.startsWith(DRAWING_STORE_PREFIX)).toBe(true);
       expect(isDraftKey(key)).toBe(false);
       expect(syncable(key)).toBe(false);

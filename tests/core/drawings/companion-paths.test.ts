@@ -12,6 +12,9 @@ describe('paths', () => {
   it('folds a title into one safe name, keeping Unicode and never splitting an emoji', () => {
     expect(foldName('a/b\\c:d*e?f"g<h>i|j')).toBe('a-b-c-d-e-f-g-h-i-j')
     expect(foldName('  ..hidden  ')).toBe('hidden')
+    // A typed arrow stays an arrow, never '--' (\u2192 right, \u2190 left, \u2194 both).
+    expect(foldName('Order -> review => user')).toBe('Order \u2192 review \u2192 user')
+    expect(foldName('a <- b <-> c')).toBe('a \u2190 b \u2194 c')
     expect(foldName('trailing...')).toBe('trailing')
     expect(foldName('\u8bbe\u8ba1 caf\u00e9')).toBe('\u8bbe\u8ba1 caf\u00e9')
     expect(foldName('...')).toBeNull()

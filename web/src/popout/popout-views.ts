@@ -16,6 +16,7 @@ import type { ComponentType } from 'react';
 type Loader = () => Promise<ComponentType>;
 
 const LOADERS: Record<string, Loader> = {
+  app: () => import('./PopoutAppView').then((m) => m.PopoutAppView),
   'ext-panel': () => import('./PopoutExtPanel').then((m) => m.PopoutExtPanel),
   'ext-tasks': () => import('./PopoutExtTasks').then((m) => m.PopoutExtTasks),
   file: () => import('./PopoutFileView').then((m) => m.PopoutFileView),

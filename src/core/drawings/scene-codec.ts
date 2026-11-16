@@ -11,6 +11,8 @@
  *   encode   { scene, validate } -> { bytes, revision, texts }
  *   body     PUT body text -> { path, revision, bytes, newRevision, texts }   (the editor's save:
  *            the server thread never parses the scene at all)
+ *   library-read  library file bytes -> { revision, items }  (items: the libraryItems as JSON text)
+ *   library-body  PUT body text -> { revision, bytes, newRevision, items }  (library.ts)
  *
  * One implementation: `codecOp` below and the validator (scene.ts validateSceneShape) and text
  * reader (scene-text.ts sceneText) it calls are self-contained functions, and the worker runs
@@ -29,7 +31,10 @@ export const LARGE_SCENE_BYTES = 1024 * 1024
 const JOB_DEADLINE_MS = 30_000
 const IDLE_MS = 15_000
 
-export type CodecOp = 'hash' | 'inspect' | 'decode' | 'encode' | 'body'
+export type CodecOp = 'hash' | 'inspect' | 'decode' | 'encode' | 'body' | 'object' | 'library-read' | 'library-body'
+
+/** The largest library file (library.ts): over it a PUT is a 413. */
+export const MAX_LIBRARY_BYTES = 5 * 1024 * 1024
 
 interface CodecLib {
   validate: (raw: unknown, requireVersion: boolean) => DrawingScene
@@ -61,14 +66,48 @@ export function codecOp(op: string, input: unknown, lib: CodecLib): unknown {
     const bytes = encode(checked)
     return { bytes, revision: lib.hash(bytes), texts: lib.texts(checked) }
   }
-  if (op === 'body') {
+  const bodyObject = (text: string): Record<string, unknown> => {
     let body: unknown
-    try { body = JSON.parse(input as string) } catch { return fail('The request body is not JSON', 400) }
+    try { body = JSON.parse(text) } catch { return fail('The request body is not JSON', 400) }
     if (!body || typeof body !== 'object' || Array.isArray(body)) return fail('The request body must be an object', 400)
-    const { path, revision, scene } = body as Record<string, unknown>
+    return body as Record<string, unknown>
+  }
+  // Any drawing route's JSON body as an object (a diagram's pictures, an agent's edit).
+  if (op === 'object') return bodyObject(input as string)
+  if (op === 'body') {
+    const { path, revision, scene } = bodyObject(input as string)
     const checked = lib.validate(scene, false)
     const bytes = encode(checked)
     return { path, revision, bytes, newRevision: lib.hash(bytes), texts: lib.texts(checked) }
+  }
+  if (op === 'library-read' || op === 'library-body') {
+    // The library file (library.ts): `{type:'excalidrawlib', version:2, source, libraryItems}`.
+    const maxLibraryBytes = 5 * 1024 * 1024 // MAX_LIBRARY_BYTES: this body runs from its source in the worker
+    const items = (raw: unknown, where: string): unknown[] => {
+      if (!Array.isArray(raw)) return fail(`${where} must be an array`, 400)
+      raw.forEach((item, i) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) fail(`${where}[${i}] must be an object`, 400)
+        if (!Array.isArray((item as Record<string, unknown>).elements)) fail(`${where}[${i}].elements must be an array`, 400)
+      })
+      return raw
+    }
+    if (op === 'library-read') {
+      const bytes = input as string
+      let parsed: unknown
+      try { parsed = JSON.parse(bytes) } catch { return fail('The drawing library file is not JSON', 422) }
+      const doc = (parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}) as Record<string, unknown>
+      // An .excalidrawlib of version 1 keeps its items as bare element lists under `library`.
+      const list = Array.isArray(doc.libraryItems) ? doc.libraryItems
+        : Array.isArray(doc.library) ? (doc.library as unknown[]).map((elements, i) => ({ id: `item-${i}`, status: 'unpublished', elements, created: 0 }))
+          : fail('The drawing library file has no libraryItems', 422)
+      try { items(list, 'libraryItems') } catch (err) { return fail(`The drawing library file is not readable: ${(err as Error).message}`, 422) }
+      return { revision: lib.hash(bytes), items: JSON.stringify(list) }
+    }
+    const { revision, libraryItems } = bodyObject(input as string)
+    const list = JSON.stringify(items(libraryItems, 'libraryItems'))
+    const bytes = `{"type":"excalidrawlib","version":2,"source":"walnut","libraryItems":${list}}\n`
+    if (Buffer.byteLength(bytes) > maxLibraryBytes) return fail(`The drawing library may be at most ${maxLibraryBytes} bytes`, 413)
+    return { revision, bytes, newRevision: lib.hash(bytes), items: list }
   }
   return fail(`unknown codec step ${op}`, 400)
 }
@@ -100,6 +139,7 @@ let idle: NodeJS.Timeout | null = null
 let nextId = 1
 const pending = new Map<number, Pending>()
 let warned = false
+let workerJobs = 0
 
 /** Refusals from the worker carry the codec's status; anything else is the worker failing. */
 class CodecRefusal extends Error {
@@ -141,6 +181,7 @@ function inWorker(op: CodecOp, input: unknown): Promise<unknown> {
     const w = ensureWorker()
     if (idle) { clearTimeout(idle); idle = null }
     w.ref()
+    workerJobs++
     const id = nextId++
     const timer = setTimeout(() => {
       pending.delete(id)
@@ -184,6 +225,11 @@ export async function runCodec<T>(op: CodecOp, input: unknown, large: boolean): 
 /** Whether a scene of this many characters is large (UTF-16 length; a byte count is never smaller). */
 export function isLargeScene(chars: number): boolean {
   return chars > LARGE_SCENE_BYTES
+}
+
+/** For tests: how many steps were handed to the worker so far. */
+export function _workerJobCount(): number {
+  return workerJobs
 }
 
 /** For tests: whether the last large step really ran in the worker. */

@@ -9,6 +9,8 @@ import path from 'node:path'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('drawings-routes'))
+const model = vi.hoisted(() => ({ sendMessage: vi.fn() }))
+vi.mock('../../../src/model/model.js', () => ({ sendMessage: model.sendMessage }))
 const role = vi.hoisted(() => ({ follower: false }))
 vi.mock('../../../src/core/server-role.js', async (orig) => ({
   ...(await orig<typeof import('../../../src/core/server-role.js')>()),
@@ -27,14 +29,22 @@ vi.mock('../../../src/core/search/wiring.js', () => ({
 import express from 'express'
 import request from 'supertest'
 import { NOTES_DIR } from '../../../src/constants.js'
-import { drawingsRouter, ifNoneMatchNames } from '../../../src/web/routes/drawings.js'
+import { drawingBodyParsers, drawingsRouter, ifNoneMatchNames } from '../../../src/web/routes/drawings.js'
+import { _workerJobCount, LARGE_SCENE_BYTES } from '../../../src/core/drawings/scene-codec.js'
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { deleteNoteAttachment, moveNote, settleIndexBootstrap } from '../../../src/web/routes/notes-v2.js'
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
 import { addTask } from '../../../src/core/task-manager.js'
 import { closeDb } from '../../../src/core/task-db.js'
 import { classify } from '../../../src/replica/route-table.js'
+import { _setLibraryProxyForTests } from '../../../src/core/drawings/library-catalog.js'
+import { diagramTuning } from '../../../src/core/drawings/diagram.js'
+import { __setSharpForTests } from '../../../src/utils/image-compress.js'
 
+// The production wiring (server.ts): the drawing routes take their bodies as text, under their caps.
 const app = express()
+app.use('/api/drawings', drawingBodyParsers)
 app.use(express.json({ limit: '15mb' }))
 app.use('/api/drawings', drawingsRouter)
 app.use(errorHandler)
@@ -170,6 +180,51 @@ describe('drawing routes', () => {
     expect((await request(textApp).post('/api/drawings').set('Content-Type', 'application/json').send('{not json')).status).toBe(400)
   })
 
+  it('a repeated create id answers the file the first create made, never a second one', async () => {
+    const first = await request(app).post('/api/drawings').send({ clientId: 'create-route-1', firstText: 'Retry me' })
+    expect(first.status).toBe(200)
+    const again = await request(app).post('/api/drawings').send({ clientId: 'create-route-1', firstText: 'Retry me' })
+    expect(again.status).toBe(200)
+    expect(again.body.path).toBe(first.body.path)
+    expect((await fs.readdir(path.join(NOTES_DIR, 'inbox'))).filter((n) => n.startsWith('Retry me') && n.endsWith('.excalidraw'))).toEqual(['Retry me.excalidraw'])
+    expect((await request(app).post('/api/drawings').send({ clientId: 'bad id!' })).status).toBe(400)
+  })
+
+  it('parses a large body in the codec worker, never on the event loop', async () => {
+    const created = (await request(app).post('/api/drawings').send({ title: 'Large edit' })).body
+    const before = _workerJobCount()
+    const body = JSON.stringify({ path: created.path, revision: created.revision, title: 'Large edit renamed', pad: 'x'.repeat(LARGE_SCENE_BYTES + 1) })
+    const res = await request(app).post('/api/drawings/rename').set('Content-Type', 'application/json').send(body)
+    expect(res.status).toBe(200)
+    expect(res.body.path).toBe('inbox/Large edit renamed.excalidraw')
+    expect(_workerJobCount()).toBeGreaterThan(before)
+  })
+
+  it('caps a chunked diagram body as it streams: 413 past the cap', async () => {
+    model.sendMessage.mockReset()
+    model.sendMessage.mockResolvedValue({ content: [{ type: 'text', text: '[{"id":"a","type":"rectangle","x":0,"y":0,"width":10,"height":10}]' }] })
+    const server = app.listen(0)
+    try {
+      const { port } = server.address() as AddressInfo
+      const status = await new Promise<number>((resolve, reject) => {
+        // No Content-Length: Node sends it chunked, so only counting the bytes can stop it.
+        const req = http.request({ port, method: 'POST', path: '/api/drawings/diagram', headers: { 'Content-Type': 'application/json' } }, (res) => {
+          res.resume()
+          resolve(res.statusCode ?? 0)
+        })
+        req.on('error', (err) => (err as NodeJS.ErrnoException).code === 'ECONNRESET' || (err as NodeJS.ErrnoException).code === 'EPIPE' ? undefined : reject(err))
+        const chunk = 'x'.repeat(1024 * 1024)
+        // A valid request apart from its size: only the byte count refuses it.
+        req.write('{"mode":"text","prompt":"one box","pad":"')
+        for (let i = 0; i < 11; i++) req.write(chunk)
+        req.end('"}')
+      })
+      expect(status).toBe(413)
+    } finally {
+      await new Promise((resolve) => server.close(resolve))
+    }
+  })
+
   it('answers needs_leader on a replica instead of reading a copy', async () => {
     role.follower = true
     try {
@@ -182,7 +237,9 @@ describe('drawing routes', () => {
   })
 
   it('sends every drawing route to the leader on a replica, list and create included', () => {
-    for (const [method, url] of [['GET', '/api/drawings'], ['POST', '/api/drawings'], ['GET', '/api/drawings/file'], ['PUT', '/api/drawings/file'], ['POST', '/api/drawings/append'], ['POST', '/api/drawings/update'], ['GET', '/api/drawings/render']]) {
+    for (const [method, url] of [['GET', '/api/drawings'], ['POST', '/api/drawings'], ['GET', '/api/drawings/file'], ['PUT', '/api/drawings/file'], ['POST', '/api/drawings/append'], ['POST', '/api/drawings/update'], ['GET', '/api/drawings/render'],
+      ['POST', '/api/drawings/rename'], ['POST', '/api/drawings/diagram'], ['GET', '/api/drawings/library'], ['PUT', '/api/drawings/library'],
+      ['GET', '/api/drawings/library/catalog'], ['GET', '/api/drawings/library/fetch'], ['GET', '/api/drawings/library/preview']]) {
       expect(classify(method!, url!), `${method} ${url}`).toMatchObject({ cls: 'leader', away: 'needs-leader', why: 'drawings_need_leader' })
     }
   })
@@ -192,5 +249,109 @@ describe('drawing routes', () => {
     expect(ifNoneMatchNames('*', 'r')).toBe(true)
     expect(ifNoneMatchNames(' W/"r" ', 'r')).toBe(true)
     expect(ifNoneMatchNames('"a","b"', 'r')).toBe(false)
+  })
+
+  it('creates with a picked name and renames to the new path, 409 with the current drawing when stale', async () => {
+    const auto = await request(app).post('/api/drawings').send({ taskId, firstText: 'Cache layer\nmore' })
+    expect(auto.status).toBe(200)
+    expect(auto.body.path).toMatch(/\/Cache layer\.excalidraw$/)
+    expect(auto.body.scene.appState.walnutTitle).toBe('auto')
+    const renamed = await request(app).post('/api/drawings/rename').send({ path: auto.body.path, revision: auto.body.revision, title: 'Read cache' })
+    expect(renamed.status).toBe(200)
+    expect(Object.keys(renamed.body).sort()).toEqual(['path', 'revision', 'scene', 'taskId', 'title'])
+    expect(renamed.body.path).toBe(auto.body.path.replace('Cache layer.excalidraw', 'Read cache.excalidraw'))
+    expect(renamed.body.scene.appState.walnutTitle).toBe('set')
+    expect(renamed.headers.etag).toBe(`"${renamed.body.revision}"`)
+    await expect(fs.access(path.join(NOTES_DIR, auto.body.path.replace(/\.excalidraw$/, '.drawing.md')))).rejects.toThrow()
+    await fs.access(path.join(NOTES_DIR, renamed.body.path.replace(/\.excalidraw$/, '.drawing.md')))
+    const stale = await request(app).post('/api/drawings/rename').send({ path: renamed.body.path, revision: auto.body.revision, title: 'Again' })
+    expect(stale.status).toBe(409)
+    expect(stale.body.current.revision).toBe(renamed.body.revision)
+    expect((await request(app).post('/api/drawings/rename').send({ path: renamed.body.path, revision: renamed.body.revision, title: '...' })).status).toBe(400)
+    expect((await request(app).post('/api/drawings/rename').send({ path: 'inbox/none.excalidraw', revision: 'r', title: 'X' })).status).toBe(404)
+  })
+
+  it('keeps the shared library with CAS: 409 with the current list, 413 over the cap', async () => {
+    const first = await request(app).get('/api/drawings/library')
+    expect(first.status).toBe(200)
+    expect(first.body).toEqual({ revision: expect.any(String), libraryItems: [] })
+    const items = [{ id: 'i1', status: 'unpublished', created: 1, elements: [{ id: 'e1', type: 'rectangle', x: 0, y: 0 }] }]
+    const put = await request(app).put('/api/drawings/library').send({ revision: first.body.revision, libraryItems: items })
+    expect(put.status).toBe(200)
+    expect(put.body).toEqual({ revision: expect.any(String), libraryItems: items })
+    expect((await request(app).get('/api/drawings/library')).body).toEqual(put.body)
+    const stale = await request(app).put('/api/drawings/library').send({ revision: first.body.revision, libraryItems: [] })
+    expect(stale.status).toBe(409)
+    expect(stale.body).toEqual({ error: expect.stringMatching(/changed/), current: put.body })
+    const huge = await request(app).put('/api/drawings/library').send({ revision: put.body.revision, libraryItems: [{ ...items[0], name: 'x'.repeat(6 * 1024 * 1024) }] })
+    expect(huge.status).toBe(413)
+    expect((await request(app).put('/api/drawings/library').send({ revision: put.body.revision, libraryItems: 'no' })).status).toBe(400)
+  }, 30_000)
+
+  it('proxies the public catalog, a library and a preview, 503 fast when the site hangs', async () => {
+    const hits: string[] = []
+    _setLibraryProxyForTests({
+      fetch: async (url) => {
+        hits.push(url)
+        if (url.endsWith('libraries.json')) return new Response(JSON.stringify([{ id: 'x', name: 'X', source: 'a/x.excalidrawlib', preview: 'a/x.png' }]))
+        if (url.endsWith('.png')) return new Response(new Uint8Array([0x89, 0x50]))
+        return new Response('{"type":"excalidrawlib","libraryItems":[]}')
+      },
+    })
+    try {
+      const catalog = await request(app).get('/api/drawings/library/catalog')
+      expect(catalog.status).toBe(200)
+      expect(catalog.body.items[0]).toMatchObject({ id: 'x', source: 'a/x.excalidrawlib', preview: '/api/drawings/library/preview?source=a%2Fx.png' })
+      const lib = await request(app).get('/api/drawings/library/fetch?source=a%2Fx.excalidrawlib')
+      expect(lib.status).toBe(200)
+      expect(lib.headers['content-type']).toMatch(/application\/json/)
+      expect(lib.body).toEqual({ type: 'excalidrawlib', libraryItems: [] })
+      const preview = await request(app).get(catalog.body.items[0].preview)
+      expect(preview.status).toBe(200)
+      expect(preview.headers['content-type']).toBe('image/png')
+      expect(preview.headers['x-content-type-options']).toBe('nosniff')
+      expect((await request(app).get('/api/drawings/library/fetch?source=https%3A%2F%2Fevil.example%2Fx.excalidrawlib')).status).toBe(400)
+      expect((await request(app).get('/api/drawings/library/fetch?source=..%2Fx.excalidrawlib')).status).toBe(400)
+      expect(hits.every((u) => u.startsWith('https://libraries.excalidraw.com/'))).toBe(true)
+
+      _setLibraryProxyForTests({ deadlineMs: 50, fetch: (_url, init) => new Promise((_r, reject) => init.signal!.addEventListener('abort', () => reject(new Error('aborted')))) })
+      const started = Date.now()
+      const down = await request(app).get('/api/drawings/library/catalog')
+      expect(down.status).toBe(503)
+      expect(down.body.error).toMatch(/did not answer/)
+      expect(Date.now() - started).toBeLessThan(2000)
+    } finally {
+      _setLibraryProxyForTests(null)
+    }
+  })
+
+  it('makes a diagram from one model call: 200, 502 after two bad replies, 504 past the deadline, 413 oversize', async () => {
+    __setSharpForTests(null)
+    try {
+      model.sendMessage.mockReset()
+      model.sendMessage.mockResolvedValueOnce({ content: [{ type: 'text', text: '[{"id":"a","type":"rectangle","x":5,"y":5,"width":100,"height":50,"label":{"text":"A"}}]' }] })
+      const ok = await request(app).post('/api/drawings/diagram').send({ mode: 'text', prompt: 'one box' })
+      expect(ok.status).toBe(200)
+      expect(ok.body).toEqual({ elements: [{ id: 'a', type: 'rectangle', x: 0, y: 0, width: 100, height: 50, label: { text: 'A' } }] })
+
+      model.sendMessage.mockResolvedValue({ content: [{ type: 'text', text: 'nope' }] })
+      const bad = await request(app).post('/api/drawings/diagram').send({ mode: 'text', prompt: 'x' })
+      expect(bad.status).toBe(502)
+      expect(bad.body.error).toMatch(/usable diagram/)
+
+      diagramTuning.deadlineMs = 50
+      model.sendMessage.mockImplementation(({ signal }: { signal: AbortSignal }) => new Promise((resolve) => signal.addEventListener('abort', () => resolve({ content: [], aborted: true }))))
+      expect((await request(app).post('/api/drawings/diagram').send({ mode: 'text', prompt: 'x' })).status).toBe(504)
+
+      expect((await request(app).post('/api/drawings/diagram').send({ mode: 'text', prompt: 'x'.repeat(4001) })).status).toBe(413)
+      const pictures = { f: { id: 'f', mimeType: 'image/png', dataURL: 'x'.repeat(10 * 1024 * 1024 + 1) } }
+      expect((await request(app).post('/api/drawings/diagram').send({ mode: 'tidy', elements: [{ id: 'i', type: 'image', x: 0, y: 0, fileId: 'f' }], files: pictures })).status).toBe(413)
+      expect((await request(app).post('/api/drawings/diagram').send({ mode: 'paint' })).status).toBe(400)
+      // Nothing was written: no drawing appeared.
+      expect((await fs.readdir(path.join(NOTES_DIR, 'inbox'))).some((n) => n.includes('one box'))).toBe(false)
+    } finally {
+      diagramTuning.deadlineMs = 60_000
+      __setSharpForTests(undefined)
+    }
   })
 })

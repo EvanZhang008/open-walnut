@@ -234,6 +234,8 @@ export async function sendMessage(opts: {
   signal?: AbortSignal;
   /** `background` for a helper nobody waits on (AdapterCallOptions.purpose). */
   purpose?: CallPurpose;
+  /** `send` to have the model see the messages' pictures on every provider (AdapterCallOptions.images). */
+  images?: 'send';
   /** Record the call in the usage table under this feature (CallUsage). */
   usage?: CallUsage;
 }): Promise<ModelResult> {
@@ -244,6 +246,7 @@ export async function sendMessage(opts: {
     providerConfig, model, maxTokens,
     system: opts.system, messages: opts.messages, tools: opts.tools,
     signal: opts.signal, betas, thinking, purpose: opts.purpose,
+    ...(opts.images ? { images: opts.images } : {}),
   });
   recordCallUsage(opts.usage, result, model, startedAt);
   return result;

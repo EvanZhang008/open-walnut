@@ -155,6 +155,8 @@ export const EventNames = {
   NOTES_TREE_CHANGED: 'notes:tree-changed',
   /** A drawing scene's bytes changed (any writer: the editor, an agent's edit). */
   DRAWING_UPDATED: 'drawings:updated',
+  /** The shared drawing library changed (PUT /api/drawings/library). */
+  DRAWING_LIBRARY_UPDATED: 'drawings:library-updated',
 
   // Config events
   CONFIG_CHANGED: 'config:changed',

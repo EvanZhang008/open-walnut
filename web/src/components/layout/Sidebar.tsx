@@ -29,6 +29,8 @@ import { useRailPeek } from './useRailPeek';
 import { RailItemPill } from './RailItemPill';
 import { sideBarPageOf, toggleSideBarPane, usePageSideBar } from './page-side-bar';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
+import { openAppWindow } from '@/popout/openPopout';
+import { buildSidebarAppMenu } from './sidebar-app-menu';
 import { bellPresentation } from '@/utils/host-attention';
 import { useAttentionDots } from '@/hooks/useAttentionDots';
 import { useLocalClaudeRecheck } from '@/utils/local-claude-recheck';
@@ -290,59 +292,21 @@ export function Sidebar({
     if ((event.target as Element).closest('a[href], .sidebar-panel-toggle')) onNavigate();
   };
 
-  /**
-   * Right-click on an app icon. The rail is the one surface where "this is in the
-   * wrong place" is the obvious thought; the Apps page has the same on/off switch
-   * (and reordering lives only here). Ordering acts on the
-   * SIDEBAR list, so "up"/"down" mean what the user sees, and the item is dropped
-   * at the ends rather than offered as a no-op.
-   *
-   * Home and Settings carry lockVisibility (they are how you get back to
-   * everything else), so unpin/hide never appear for them — the same rule
-   * resolveApps already enforces, spelled out here so the menu can't offer an
-   * action that would silently do nothing.
-   */
-  const buildAppMenu = (app: RegisteredApp): ContextMenuItem[] => {
-    const list = apps.sidebar;
-    const index = list.findIndex((item) => item.key === app.key);
-    if (index === -1 && activity.open.some((item) => item.key === app.key)) {
-      return [
-        { key: 'title', section: true, label: app.title },
-        {
-          key: 'keep', label: 'Keep on sidebar',
-          title: 'Gives the app its own sidebar row, which stays after you close it',
-          onSelect: () => { updateAppOnSidebar(app, true); markAppClosed(app.key); },
-        },
-        { key: 'close', label: 'Close', onSelect: () => closeOpenApp(app) },
-        { divider: true },
-        { key: 'manage', label: 'Manage apps…', onSelect: () => navigate('/apps') },
-      ];
-    }
-    return [
-      { key: 'title', section: true, label: app.title },
-      {
-        key: 'up', label: 'Move up', when: index > 0,
-        onSelect: () => moveAppPreference(list, app.key, 'up'),
-      },
-      {
-        key: 'down', label: 'Move down', when: index >= 0 && index < list.length - 1,
-        onSelect: () => moveAppPreference(list, app.key, 'down'),
-      },
-      { key: 'reset-order', label: 'Reset sidebar order', onSelect: resetAppOrder },
-      { divider: true },
-      {
-        key: 'unpin', label: 'Unpin from sidebar', when: !app.lockVisibility,
-        title: 'Keeps the app on the Apps page and in the Command Palette',
-        onSelect: () => updateAppDisposition(app.key, 'unpinned'),
-      },
-      {
-        key: 'hide', label: 'Hide app', when: !app.lockVisibility, danger: true,
-        onSelect: () => updateAppDisposition(app.key, 'hidden'),
-      },
-      { divider: true },
-      { key: 'manage', label: 'Manage apps…', onSelect: () => navigate('/apps') },
-    ];
-  };
+  // Right-click on an app icon (sidebar-app-menu.ts says what each row does and when it shows).
+  const buildAppMenu = (app: RegisteredApp): ContextMenuItem[] => buildSidebarAppMenu(
+    app,
+    { sidebar: apps.sidebar, open: activity.open, phone },
+    {
+      openWindow: (item) => { openAppWindow(item.key); },
+      keepOnSidebar: (item) => { updateAppOnSidebar(item, true); markAppClosed(item.key); },
+      closeOpen: (item) => closeOpenApp(item),
+      move: moveAppPreference,
+      resetOrder: resetAppOrder,
+      unpin: (item) => updateAppDisposition(item.key, 'unpinned'),
+      hide: (item) => updateAppDisposition(item.key, 'hidden'),
+      manage: () => navigate('/apps'),
+    },
+  );
 
   // One rail row for an app, the same for a Sidebar app and an open one (apps_stay_open).
   const appLink = (app: RegisteredApp) => {

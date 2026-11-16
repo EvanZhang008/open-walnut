@@ -26,28 +26,28 @@
  */
 
 import fsp from 'node:fs/promises'
-import path from 'node:path'
-import { NOTES_DIR } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { withUserFileLock } from '../../utils/user-file-lock.js'
 import { bus, EventNames } from '../event-bus.js'
-import { getNotesTree, invalidateNotesTree, type TreeNode } from '../notes-tree.js'
+import { followMovedDrawingCompanion, followMovedNote } from '../note-moves.js'
+import { invalidateNotesTree } from '../notes-tree.js'
 import { companionPathFor } from './companion.js'
-import { companionKnownCurrent, companionPathForeign, resetCompanionCache, syncDrawingCompanion, type SceneFacts } from './companion-sync.js'
+import { companionKnownCurrent, companionPathForeign, companionPathTaken, resetCompanionCache, syncDrawingCompanion, type SceneFacts } from './companion-sync.js'
 import { applySceneEdit, checkSceneEdit, type SceneEdit } from './edit.js'
+import { locateTaskFolder, resetRevisionCache, resolveDrawingTask } from './list.js'
 import {
-  cleanScenePath, INBOX_FOLDER, isTaskFolder, sceneFileName, taskFolderFor, taskIdOfFolder,
-  titleOfScenePath, type TaskPlacement,
+  autoDrawingTitle, cleanScenePath, foldName, INBOX_FOLDER, sceneFileName, taskIdOfPath, titleOfScenePath, type TitleSource,
 } from './paths.js'
 import { isLargeScene, runCodec } from './scene-codec.js'
 import {
-  DrawingInputError, emptyScene, MAX_SCENE_BYTES, parseSceneBytes, sceneRevision, SCENE_EXT, serializeScene, type DrawingScene,
+  DrawingInputError, emptyScene, MAX_SCENE_BYTES, parseSceneBytes, sceneRevision, serializeScene, type DrawingScene,
 } from './scene.js'
 import {
-  createExclusively, ensureVaultDir, fileIdentity, isInside, readSceneFile, replaceAtomically, resolveVaultFile, vaultReal,
+  createExclusively, ensureVaultDir, fileIdentity, readSceneFile, replaceAtomically, resolveVaultFile,
 } from './vault-files.js'
 
 export { renderDrawing, drawingRenderDir, type DrawingRender } from './render-file.js'
+export { listDrawings, resolveDrawingTask, type DrawingListEntry } from './list.js'
 
 export interface DrawingDoc {
   path: string
@@ -62,14 +62,6 @@ export interface DrawingDoc {
   idMap?: Record<string, string>
 }
 
-export interface DrawingListEntry {
-  path: string
-  title: string
-  revision: string
-  updatedAt: string
-  taskId?: string
-}
-
 /** A stale revision: the drawing changed since the caller read it. */
 export class DrawingConflictError extends DrawingInputError {
   constructor(public readonly current: DrawingDoc) {
@@ -78,25 +70,19 @@ export class DrawingConflictError extends DrawingInputError {
   }
 }
 
-/** Scene files a list reads at once: a vault of thousands of drawings is read in bounded batches, never all at once. */
-const LIST_CONCURRENCY = 4
 const MAX_TITLE = 200
+/** firstText only names the drawing (its first line); a longer one is not a first text. */
+const MAX_FIRST_TEXT = 100_000
 const MAX_NAME_TRIES = 200
+/** How long, and for how many creates, a repeated create id answers with the file it made. */
+const CREATE_ID_TTL_MS = 10 * 60_000
+const CREATE_IDS_MAX = 500
 const SCENE_BYTES = Symbol('sceneBytes')
 
 function checkSize(bytes: string): void {
   if (Buffer.byteLength(bytes) > MAX_SCENE_BYTES) {
     throw new DrawingInputError(`The drawing would be larger than ${MAX_SCENE_BYTES} bytes`, 413)
   }
-}
-
-function taskIdOfPath(rel: string): string | undefined {
-  const parts = rel.split('/').slice(0, -1)
-  for (let i = parts.length - 1; i >= 0; i--) {
-    const id = taskIdOfFolder(parts[i]!)
-    if (id) return id
-  }
-  return undefined
 }
 
 function docOf(rel: string, bytes: string, revision: string, extra: { idMap?: Record<string, string> } = {}): DrawingDoc {
@@ -117,79 +103,6 @@ function docOf(rel: string, bytes: string, revision: string, extra: { idMap?: Re
 /** The exact scene bytes of a document, as they are on disk: what the route sends. */
 export function sceneBytesOf(doc: DrawingDoc): string {
   return (doc as unknown as Record<symbol, string | undefined>)[SCENE_BYTES] ?? serializeScene(doc.scene)
-}
-
-// ── Task context ────────────────────────────────────────────────────────────
-
-/**
- * The task a request names, by `taskId` or through `sessionId`. Null when it names neither.
- * A task or session that does not exist is a 404: a drawing meant for a task never lands in
- * Inbox by accident.
- */
-export async function resolveDrawingTask(input: { taskId?: unknown; sessionId?: unknown }): Promise<TaskPlacement | null> {
-  const { taskId, sessionId } = input
-  if (taskId !== undefined && taskId !== null && taskId !== '' && typeof taskId !== 'string') throw new DrawingInputError('taskId must be a string')
-  if (sessionId !== undefined && sessionId !== null && sessionId !== '' && typeof sessionId !== 'string') throw new DrawingInputError('sessionId must be a string')
-  let id = typeof taskId === 'string' && taskId ? taskId : undefined
-  if (!id && typeof sessionId === 'string' && sessionId) {
-    const { getSessionByClaudeId } = await import('../session-tracker.js')
-    const session = await getSessionByClaudeId(sessionId)
-    if (!session) throw new DrawingInputError(`Session not found: ${sessionId}`, 404)
-    if (!session.taskId) throw new DrawingInputError(`Session ${sessionId} belongs to no task`, 404)
-    id = session.taskId
-  }
-  if (!id) return null
-  const { getTask } = await import('../task-manager.js')
-  const { missingIsNull } = await import('../../lib/id-ref.js')
-  const task = await getTask(id).catch(missingIsNull)
-  if (!task) throw new DrawingInputError(`Task not found: ${id}`, 404)
-  return { id: task.id, title: task.title, project: task.project || '' }
-}
-
-function walkFiles(nodes: TreeNode[], visit: (node: TreeNode) => void): void {
-  for (const node of nodes) {
-    if (node.type === 'folder') walkFiles(node.children ?? [], visit)
-    else visit(node)
-  }
-}
-
-/** Every folder named for this task (`<title> (<id>)`), vault-relative. */
-function taskFolders(nodes: TreeNode[], taskId: string, out: string[] = []): string[] {
-  for (const node of nodes) {
-    if (node.type !== 'folder') continue
-    if (isTaskFolder(node.name, taskId)) out.push(node.path)
-    else taskFolders(node.children ?? [], taskId, out)
-  }
-  return out
-}
-
-/** The folder a task's drawings are in: the one already named for its id, else its new one. */
-async function locateTaskFolder(task: TaskPlacement): Promise<string> {
-  const expected = taskFolderFor(task)
-  const { tree } = await getNotesTree()
-  const found = taskFolders(tree, task.id)
-  if (found.includes(expected)) return expected
-  return found.sort()[0] ?? expected
-}
-
-// ── Revision cache (a list must not re-read every scene on every poll) ────────
-
-const revisionCache = new Map<string, { mtimeMs: number; size: number; revision: string }>()
-
-async function cachedRevision(abs: string): Promise<{ revision: string; mtimeMs: number } | null> {
-  let stat
-  try {
-    stat = await fsp.lstat(abs)
-  } catch {
-    return null
-  }
-  if (!stat.isFile() || stat.size > MAX_SCENE_BYTES) return null
-  const hit = revisionCache.get(abs)
-  if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) return { revision: hit.revision, mtimeMs: stat.mtimeMs }
-  const bytes = await fsp.readFile(abs, 'utf-8')
-  const revision = await runCodec<string>('hash', bytes, isLargeScene(bytes.length))
-  revisionCache.set(abs, { mtimeMs: stat.mtimeMs, size: stat.size, revision })
-  return { revision, mtimeMs: stat.mtimeMs }
 }
 
 /**
@@ -213,61 +126,81 @@ async function withCompanion(doc: DrawingDoc, facts: SceneFacts, create: boolean
 
 // ── Operations ───────────────────────────────────────────────────────────────
 
-export async function listDrawings(input: { taskId?: unknown; sessionId?: unknown }): Promise<DrawingListEntry[]> {
-  const task = await resolveDrawingTask(input)
-  const { tree } = await getNotesTree()
-  const roots = task ? taskFolders(tree, task.id).map((p) => `${p}/`) : null
-  const candidates: string[] = []
-  walkFiles(tree, (node) => {
-    if (!node.path.toLowerCase().endsWith(SCENE_EXT)) return
-    if (roots && !roots.some((r) => node.path.startsWith(r))) return
-    candidates.push(node.path)
-  })
-  const root = await vaultReal()
-  const entries = await mapBounded(candidates, LIST_CONCURRENCY, async (rel): Promise<DrawingListEntry | null> => {
-    const abs = path.join(NOTES_DIR, ...rel.split('/'))
-    try {
-      const realDir = await fsp.realpath(path.dirname(abs))
-      if (realDir !== root && !isInside(realDir, root)) return null
-    } catch {
-      return null
-    }
-    const rev = await cachedRevision(abs)
-    if (!rev) return null
-    const taskId = taskIdOfPath(rel)
-    return { path: rel, title: titleOfScenePath(rel), revision: rev.revision, updatedAt: new Date(rev.mtimeMs).toISOString(), ...(taskId ? { taskId } : {}) }
-  })
-  // Every drawing, newest first: none is hidden behind a cap.
-  return entries
-    .filter((e): e is DrawingListEntry => e !== null)
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.path.localeCompare(b.path))
+/** A title a caller gave: absent or blank is null (Walnut picks one); anything else must fold to a name. */
+function givenTitle(raw: unknown, field = 'title'): string | null {
+  if (raw === undefined || raw === null) return null
+  if (typeof raw !== 'string') throw new DrawingInputError(`${field} must be a string`)
+  if (raw.length > MAX_TITLE) throw new DrawingInputError(`${field} may be at most ${MAX_TITLE} characters`)
+  if (!raw.trim()) return null
+  if (!foldName(raw)) throw new DrawingInputError(`${field} has no characters a file name can use`)
+  return raw
 }
 
-/** `fn` over `items` with at most `limit` running at once, results in input order. */
-async function mapBounded<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out = new Array<R>(items.length)
-  let next = 0
-  const worker = async () => {
-    while (next < items.length) {
-      const i = next++
-      out[i] = await fn(items[i]!)
+/** The scene's appState with its title source (paths.ts TitleSource). */
+function withTitleSource(scene: DrawingScene, source: TitleSource): DrawingScene {
+  return { ...scene, appState: { ...scene.appState, walnutTitle: source } }
+}
+
+/**
+ * A new, empty drawing. Named by `title` when given (`walnutTitle: 'set'`); otherwise Walnut picks
+ * the name (`'auto'`): the first line of `firstText` (the first words the person wrote), else the
+ * task's title, else the date and time. A taken name is numbered (" 2", " 3"). `clientId` (the
+ * caller's own id for this create) makes a repeat of the same create answer the same file.
+ */
+export async function createDrawing(input: CreateInput, opts: { now?: Date } = {}): Promise<DrawingDoc> {
+  const clientId = createIdOf(input.clientId)
+  if (!clientId) return createNew(input, opts)
+  const now = Date.now()
+  // Oldest first (a Map keeps insertion order, and a repeat re-inserts): drop the expired.
+  for (const [id, entry] of recentCreates) {
+    if (now - entry.at <= CREATE_ID_TTL_MS) break
+    recentCreates.delete(id)
+  }
+  const seen = recentCreates.get(clientId)
+  const madePath = seen ? await seen.made : null
+  if (madePath) {
+    try {
+      return await readDrawing(madePath) as DrawingDoc
+    } catch (err) {
+      // Its file is gone since: the caller still has no drawing, so it gets a new one.
+      if (!(err instanceof DrawingInputError && err.status === 404)) throw err
     }
   }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
-  return out
+  const made = createNew(input, opts)
+  recentCreates.delete(clientId)
+  recentCreates.set(clientId, { at: now, made: made.then((doc) => doc.path, () => null) })
+  while (recentCreates.size > CREATE_IDS_MAX) recentCreates.delete(recentCreates.keys().next().value!)
+  return made
 }
 
-export async function createDrawing(input: { title?: unknown; taskId?: unknown; sessionId?: unknown }): Promise<DrawingDoc> {
-  if (input.title !== undefined && input.title !== null && typeof input.title !== 'string') throw new DrawingInputError('title must be a string')
-  if (typeof input.title === 'string' && input.title.length > MAX_TITLE) throw new DrawingInputError(`title may be at most ${MAX_TITLE} characters`)
+type CreateInput = { title?: unknown; taskId?: unknown; sessionId?: unknown; firstText?: unknown; clientId?: unknown }
+
+/**
+ * Creates by the caller's create id: a create whose answer was lost on the way and is sent again
+ * gets the file the first one made, never a second empty one. A repeat that arrives while the
+ * first is still running waits for it.
+ */
+const recentCreates = new Map<string, { at: number; made: Promise<string | null> }>()
+
+function createIdOf(raw: unknown): string | null {
+  if (raw === undefined || raw === null || raw === '') return null
+  if (typeof raw !== 'string' || !/^[A-Za-z0-9_-]{8,100}$/.test(raw)) throw new DrawingInputError('clientId must be 8 to 100 letters, digits, - or _')
+  return raw
+}
+
+async function createNew(input: CreateInput, opts: { now?: Date }): Promise<DrawingDoc> {
+  const title = givenTitle(input.title)
+  if (input.firstText !== undefined && input.firstText !== null && typeof input.firstText !== 'string') throw new DrawingInputError('firstText must be a string')
+  if (typeof input.firstText === 'string' && input.firstText.length > MAX_FIRST_TEXT) throw new DrawingInputError(`firstText may be at most ${MAX_FIRST_TEXT} characters`, 413)
   const task = await resolveDrawingTask(input)
+  const name = title ?? autoDrawingTitle({ firstText: input.firstText as string | undefined, taskTitle: task?.title, now: opts.now })
   const folder = task ? await locateTaskFolder(task) : INBOX_FOLDER
   await ensureVaultDir(folder)
-  const bytes = serializeScene(emptyScene())
+  const bytes = serializeScene(withTitleSource(emptyScene(), title ? 'set' : 'auto'))
   const revision = sceneRevision(bytes)
   rememberScene(revision)
   for (let n = 1; n <= MAX_NAME_TRIES; n++) {
-    const rel = `${folder}/${sceneFileName(input.title as string | undefined, n)}`
+    const rel = `${folder}/${sceneFileName(name, n)}`
     const abs = await resolveVaultFile(rel)
     // A companion path that is already someone else's note moves the name on too.
     if (await companionPathForeign(rel)) continue
@@ -310,16 +243,19 @@ export async function readDrawing(
 
 interface Encoded { bytes: string; revision: string; texts: string[]; idMap?: Record<string, string> }
 
-/** Save what `compute` makes of the current bytes, under the lock, if `revision` is still current. */
-async function changeScene(
-  rawPath: unknown,
+/**
+ * Run `fn` under the scene's note lock when `revision` is still the one on disk (CAS): `fn` gets the
+ * current bytes. A stale revision is a DrawingConflictError carrying the current document; a file
+ * that is not a scene is never handed to `fn`.
+ */
+async function underRevision<T>(
+  rel: string,
+  abs: string,
   revision: unknown,
-  compute: (bytes: string, large: boolean) => Promise<Encoded>,
-): Promise<DrawingDoc> {
-  const rel = cleanScenePath(rawPath)
+  fn: (bytes: string, large: boolean) => Promise<T>,
+): Promise<T> {
   if (typeof revision !== 'string' || !revision) throw new DrawingInputError('revision is required: read the drawing first')
-  const abs = await resolveVaultFile(rel)
-  const { doc, facts } = await withUserFileLock(abs, async () => {
+  return withUserFileLock(abs, async () => {
     // Re-checked under the lock: the file must still be a regular file inside the vault.
     await resolveVaultFile(rel)
     const { bytes } = await readSceneFile(abs)
@@ -336,6 +272,19 @@ async function changeScene(
       rememberScene(current)
     }
     if (current !== revision) throw new DrawingConflictError(docOf(rel, bytes, current))
+    return fn(bytes, large)
+  })
+}
+
+/** Save what `compute` makes of the current bytes, under the lock, if `revision` is still current. */
+async function changeScene(
+  rawPath: unknown,
+  revision: unknown,
+  compute: (bytes: string, large: boolean) => Promise<Encoded>,
+): Promise<DrawingDoc> {
+  const rel = cleanScenePath(rawPath)
+  const abs = await resolveVaultFile(rel)
+  const { doc, facts } = await underRevision(rel, abs, revision, async (bytes, large) => {
     const next = await compute(bytes, large)
     rememberScene(next.revision)
     checkSize(next.bytes)
@@ -349,6 +298,73 @@ async function changeScene(
     }
   })
   return withCompanion(doc, facts, true)
+}
+
+/**
+ * Put the drawing's new bytes at a free name for `title` in its own folder: in place when the name
+ * is its own (or differs only in letter case), else at the first free numbered name, created
+ * exclusively before the old file goes. Runs under the old file's lock. Returns the new path.
+ */
+async function placeRenamed(rel: string, abs: string, title: string, bytes: string): Promise<string> {
+  const folder = rel.split('/').slice(0, -1).join('/')
+  for (let n = 1; n <= MAX_NAME_TRIES; n++) {
+    const candidate = `${folder ? `${folder}/` : ''}${sceneFileName(title, n)}`
+    if (candidate === rel) {
+      await replaceAtomically(abs, bytes)
+      return rel
+    }
+    const candidateAbs = await resolveVaultFile(candidate)
+    if (candidate.toLowerCase() === rel.toLowerCase()) {
+      // Only the letter case changes: on a case-insensitive disk the candidate IS this file.
+      const there = await fileIdentity(candidateAbs)
+      const mine = await fileIdentity(abs)
+      if ((!there || (mine && there.ino === mine.ino)) && !(await companionPathTaken(candidate, rel))) {
+        await replaceAtomically(abs, bytes)
+        await fsp.rename(abs, candidateAbs)
+        return candidate
+      }
+      continue
+    }
+    // Anything at the candidate's companion path (even a leftover of ours) would leave the
+    // companion behind, so that name counts as taken.
+    if (await companionPathTaken(candidate)) continue
+    if (!(await createExclusively(candidateAbs, bytes))) continue
+    await fsp.unlink(abs)
+    return candidate
+  }
+  throw new DrawingInputError('Could not find a free name for the drawing', 409)
+}
+
+/**
+ * Rename a drawing (same folder): the scene moves to the first free name for `title` (" 2", " 3"),
+ * its companion note follows (with the Notes index and bookmarks), and the title counts as chosen
+ * (`walnutTitle: 'set'`). Only when `revision` is current; 400 for a title that cannot be a name.
+ */
+export async function renameDrawing(rawPath: unknown, revision: unknown, rawTitle: unknown): Promise<DrawingDoc> {
+  const rel = cleanScenePath(rawPath)
+  const title = givenTitle(rawTitle)
+  if (!title) throw new DrawingInputError('title is required')
+  const abs = await resolveVaultFile(rel)
+  const moved = await underRevision(rel, abs, revision, async (bytes, large) => {
+    const { scene } = await runCodec<{ scene: DrawingScene }>('decode', bytes, large)
+    const next = await runCodec<Encoded>('encode', { scene: withTitleSource(scene, 'set'), validate: false }, large)
+    checkSize(next.bytes)
+    rememberScene(next.revision)
+    const to = await placeRenamed(rel, abs, title, next.bytes)
+    const toAbs = await resolveVaultFile(to)
+    return { to, next, identity: await fileIdentity(toAbs) }
+  })
+  const { to, next, identity } = moved
+  if (to !== rel) {
+    invalidateNotesTree()
+    // The companion note follows, with the index and bookmarks (the same steps as a Notes move).
+    await followMovedDrawingCompanion(rel, to)
+    await followMovedNote(rel, to, { indexed: false })
+    bus.emit(EventNames.NOTES_TREE_CHANGED, { path: to }, ['web-ui'])
+  }
+  bus.emit(EventNames.DRAWING_UPDATED, { path: to, revision: next.revision, ...(to !== rel ? { from: rel } : {}) }, ['web-ui'])
+  log.memory.info('drawing renamed', { from: rel, to })
+  return withCompanion(docOf(to, next.bytes, next.revision), { revision: next.revision, texts: next.texts, identity }, true)
 }
 
 /** Replace the scene (the editor's save), only when `revision` is the one on disk. */
@@ -392,7 +408,8 @@ export { moveDrawingCompanion, deleteDrawingCompanion } from './companion-sync.j
 
 /** For tests: forget the in-memory caches (a test that swaps the vault). */
 export function resetDrawingCaches(): void {
-  revisionCache.clear()
+  resetRevisionCache()
   knownScenes.clear()
+  recentCreates.clear()
   resetCompanionCache()
 }

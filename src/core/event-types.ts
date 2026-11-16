@@ -1239,13 +1239,6 @@ export interface NotesUpdatedEvent {
 }
 
 /**
- * A file/folder appeared, moved, or was removed OUTSIDE the normal
- * PUT-content save path — e.g. a pasted image's `_attachment/` folder created
- * on first upload. The tree only refreshes on explicit user actions (create/
- * delete/move) or this event; a plain note body edit does NOT fire it (that
- * would refetch the whole tree on every keystroke's debounced save).
- */
-/**
  * A drawing's scene changed on disk (src/core/drawings/store.ts). An open editor that is clean
  * takes the new revision at once instead of waiting for its poll.
  */
@@ -1254,8 +1247,23 @@ export interface DrawingUpdatedEvent {
   path: string;
   /** The scene's revision after the write. */
   revision: string;
+  /** Set when a rename moved the drawing: its path before (an editor on it adopts `path`). */
+  from?: string;
 }
 
+/** The shared drawing library changed (src/core/drawings/library.ts): every open editor reloads it. */
+export interface DrawingLibraryUpdatedEvent {
+  /** The library's revision after the write. */
+  revision: string;
+}
+
+/**
+ * A file/folder appeared, moved, or was removed OUTSIDE the normal
+ * PUT-content save path — e.g. a pasted image's `_attachment/` folder created
+ * on first upload. The tree only refreshes on explicit user actions (create/
+ * delete/move) or this event; a plain note body edit does NOT fire it (that
+ * would refetch the whole tree on every keystroke's debounced save).
+ */
 export interface NotesTreeChangedEvent {
   /** Vault-relative path of the new/changed file (informational; FE just refetches). */
   path: string;
@@ -1533,6 +1541,7 @@ export interface EventPayloadMap {
   'notes:updated': NotesUpdatedEvent;
   'notes:tree-changed': NotesTreeChangedEvent;
   'drawings:updated': DrawingUpdatedEvent;
+  'drawings:library-updated': DrawingLibraryUpdatedEvent;
 
   'memory:updated': MemoryUpdatedEvent;
 

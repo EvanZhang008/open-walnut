@@ -4,7 +4,7 @@ import { useWebSocket } from './hooks/useWebSocket';
 import { FirstRunHost } from './components/first-run/FirstRunHost';
 import { Routes, Route, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type { NavigateFunction } from 'react-router-dom';
-import { AppHostPage } from './apps/AppHostPage';
+import { AppHostPage, CoreAppView } from './apps/AppHostPage';
 import { syncAppCommands } from './apps/commands';
 import { ensureCoreAppsRegistered } from './apps/core-apps';
 import { useAppCatalog } from './apps/hooks';
@@ -189,23 +189,9 @@ export function App() {
       </div>
       <Routes>
         <Route path="/" element={null} />
-        {apps.all.filter((app) => app.kind === 'core' && !app.persistent && app.component).map((app) => {
-          const CoreApp = app.component!;
-          return (
-            <Route
-              key={`${app.key}:${app.generation}`}
-              path={app.path}
-              element={(
-                <CoreApp
-                  basePath={app.path}
-                  subpath=""
-                  search={location.search}
-                  navigate={(target, options) => navigate(target, options)}
-                />
-              )}
-            />
-          );
-        })}
+        {apps.all.filter((app) => app.kind === 'core' && !app.persistent && app.component).map((app) => (
+          <Route key={`${app.key}:${app.generation}`} path={app.path} element={<CoreAppView app={app} />} />
+        ))}
         <Route path="/tasks/:id" element={<TaskRedirect />} />
         <Route path="/search" element={<Navigate to="/" replace />} />
         <Route path="/sessions" element={<SessionsRedirect />} />

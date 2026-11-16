@@ -44,6 +44,7 @@ import { isOfficeClipboardHtml } from '@/utils/html-to-markdown';
 import { useFocusRequest } from '@/utils/focus-when-shown';
 import { caretBackOnMount } from '@/utils/composer-caret-keep';
 import { caretOnEdgeLine, noteSentPrompt, recallPrompts, stepRecall, type RecallPos } from './prompt-recall';
+import { drawingPlace, type DrawingPlace } from './drawing-place';
 
 // Picture types, limit, read and paste rule are shared with every answer box (image-attachments.ts).
 
@@ -257,6 +258,8 @@ interface ChatInputProps {
    * Absent, the box takes pictures only.
    */
   fileTarget?: UploadTarget;
+  /** Where Draw saves its drawing when the composer names no task or session of its own (drawing-place.ts). */
+  drawingTarget?: DrawingPlace;
   onCommand?: (cmd: SlashCommand, args?: string) => void;
   onStop?: () => void;
   onInterruptSend?: (text: string, images?: ImageAttachment[], origin?: DraftOrigin) => void | Promise<boolean>;
@@ -441,7 +444,7 @@ interface ChatInputProps {
   promptRecallKey?: string;
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendInSplit, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, noteSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget, promptRecallKey }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendInSplit, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, noteSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget, drawingTarget, promptRecallKey }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
@@ -2025,7 +2028,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <DrawingPad draftId={draftKey ?? sessionMentionSelfId ?? 'drawing'} taskId={mentionSelfTaskId} sessionId={sessionMentionSelfId} open={drawingOpen} onClose={() => { setDrawingOpen(false); textareaRef.current?.focus(); }} onAttach={(file) => attachments.add([file])} canAttach={!disabled && !atAttachLimit} />
+      <DrawingPad draftId={draftKey ?? sessionMentionSelfId ?? 'drawing'} {...drawingPlace({ drawingTarget, mentionSelfTaskId, sessionMentionSelfId, fileTarget })} open={drawingOpen} onClose={() => { setDrawingOpen(false); textareaRef.current?.focus(); }} onAttach={(file) => attachments.add([file])} canAttach={!disabled && !atAttachLimit} />
       {paletteOpen && (
         <CommandPalette
           commands={paletteResults}

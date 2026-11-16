@@ -3358,6 +3358,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           <ChatInput
             // Any file goes to this session's host (api/file-upload.ts).
             fileTarget={{ sessionId }}
+            drawingTarget={{ taskId: session?.taskId ?? liveStatus?.taskId ?? undefined, sessionId }}
             // Same rule in the plan popup's composer: dictation keeps the passage.
             onDictationInsert={holdDictationSelection}
             // The session's own draft: the words follow between this box and the panel's composer.
@@ -4229,6 +4230,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             sendBlocked={macSessionAway}
             // Any file goes to this session's host (api/file-upload.ts).
             fileTarget={{ sessionId }}
+            drawingTarget={{ taskId: session?.taskId ?? liveStatus?.taskId ?? undefined, sessionId }}
             focusNonce={composerFocusNonce}
             promptRecallKey={plainChat ? undefined : sessionId}
             // Dictating into this box takes focus and so collapses the page's

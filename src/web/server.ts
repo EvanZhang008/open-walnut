@@ -1803,8 +1803,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use(BOARD_BODY_PATH, boardJsonParser)
   app.use(BOARD_BODY_PATH, boardPayloadTooLargeHandler)
   // A drawing save can carry megabytes of scene: its routes take the body as text, so the
-  // scene is parsed once, off the event loop when it is large (core/drawings/scene-codec.ts).
-  app.use('/api/drawings', express.text({ type: 'application/json', limit: '15mb' }))
+  // scene is parsed once, off the event loop when it is large (core/drawings/scene-codec.ts),
+  // each route under its own byte cap.
+  app.use('/api/drawings', (await import('./routes/drawings.js')).drawingBodyParsers)
   app.use(express.json({ limit: '15mb' }))
   // Default API responses to no-store so the browser HTTP cache never
   // revalidates/synthesizes them (see the etag note above — same incident).

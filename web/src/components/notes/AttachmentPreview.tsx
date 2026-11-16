@@ -47,7 +47,7 @@ export function AttachmentPreview({ notePath, findQuery }: { notePath: string; f
   const isPdf = ext === 'pdf' && browserCanInlinePdf();
 
   if (ext === 'excalidraw') {
-    return <Suspense fallback={<LoadingSpinner />}><DrawingWorkspace key={notePath} documentPath={notePath} /></Suspense>;
+    return <Suspense fallback={<LoadingSpinner />}><DrawingWorkspace key={notePath} documentPath={notePath} preview /></Suspense>;
   }
 
   return (

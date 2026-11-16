@@ -252,3 +252,47 @@ export function documentFrom(value: unknown): DrawingDocument | null {
     ...(typeof source.indexWarning === 'string' && source.indexWarning.trim() ? { indexWarning: source.indexWarning } : {}),
   };
 }
+
+/** A drawing's name is at most this long when Walnut picks it from the words on it. */
+export const TITLE_MAX = 60;
+
+/**
+ * The words of the first text on the drawing, as typed: the text element nearest the top, then
+ * the left (the order the companion note reads). Empty when there is none.
+ */
+export function firstText(scene: DrawingScene | null | undefined): string {
+  if (!scene) return '';
+  let best: { x: number; y: number; text: string } | null = null;
+  for (const el of scene.elements) {
+    if (el.type !== 'text' || el.isDeleted === true) continue;
+    const raw = typeof el.originalText === 'string' && el.originalText ? el.originalText : el.text;
+    if (typeof raw !== 'string' || !raw.trim()) continue;
+    const x = Number(el.x) || 0;
+    const y = Number(el.y) || 0;
+    if (!best || y < best.y || (y === best.y && x < best.x)) best = { x, y, text: raw };
+  }
+  return best?.text ?? '';
+}
+
+/** The first non-empty line of the first text, trimmed, at most TITLE_MAX characters. */
+export function firstTextLine(scene: DrawingScene | null | undefined): string {
+  const line = firstText(scene).split(/\r?\n/).map((l) => l.replace(/\s+/g, ' ').trim()).find(Boolean) ?? '';
+  return [...line].slice(0, TITLE_MAX).join('').trim();
+}
+
+/** How the file got its name: 'auto' (Walnut picked it, it may follow the first text) or 'set'. */
+export function titleMode(scene: DrawingScene | null | undefined): 'auto' | 'set' | null {
+  const mode = scene?.appState.walnutTitle;
+  return mode === 'auto' || mode === 'set' ? mode : null;
+}
+
+/**
+ * The name an automatic rename should give the drawing now, or null for none: only a name Walnut
+ * picked ('auto', never one a person set), only from a first text line, and only when it differs.
+ */
+export function autoRenameTitle(scene: DrawingScene | null | undefined, currentTitle: string): string | null {
+  if (titleMode(scene) !== 'auto') return null;
+  const line = firstTextLine(scene);
+  if (!line || line === currentTitle.trim()) return null;
+  return line;
+}

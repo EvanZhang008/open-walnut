@@ -1,6 +1,9 @@
 /* The drawing workspace (DrawingWorkspace.tsx). It fills the box it is given: an App page, a
-   session pane, a note preview, or the composer's Draw dialog. The editor's own UI lives inside
-   `.excalidraw`; nothing here styles it. */
+   session pane, a note preview, or the composer's Draw dialog; in full screen, the window.
+   The chrome is quiet on purpose (2026-11-16 design pass): Walnut's neutral ramp, one accent for
+   the current item and the one primary action, one 16px icon size, 28px controls, no filled
+   blocks. The canvas is the bright thing. The editor's own UI lives inside `.excalidraw`; only
+   its accent, its toolbar's shortcut digits and its Browse libraries button are tuned here. */
 .drawing-workspace {
   display: flex;
   width: 100%;
@@ -11,21 +14,76 @@
   color: var(--fg);
   font-size: 13px;
 }
-.drawing-workspace button {
-  background: var(--bg-secondary);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  padding: 5px 10px;
-  cursor: pointer;
+/* Full screen: the same element over the page area (drawing-overlay.ts lifts the ancestors that
+   would hold it in their box). Like every full screen in Walnut (styles/fullscreen-tab.css), the
+   sidebar beside it stays usable: AppShell writes the page area's left edge to --fullscreen-left.
+   From the composer's dialog, which already covers the window, it covers the window.
+   FULLSCREEN_Z there: above the page's sheets, under the composer's dialog and the menus over it. */
+.drawing-workspace[data-fullscreen="true"] {
+  position: fixed;
+  inset: 0 0 0 var(--fullscreen-left, 0px);
+  z-index: 9295;
+  width: auto;
+  height: auto;
+  border-radius: 0;
+}
+.drawing-app-dialog .drawing-workspace[data-fullscreen="true"] { left: 0; }
+
+/* Controls: three kinds, one height. Only Walnut's own: the editor's buttons keep their style. */
+.drawing-icon-button, .drawing-quiet-button, .drawing-primary-button, .drawing-name-button,
+.drawing-workspace-file, .drawing-diagram-pill {
   font: inherit;
   white-space: nowrap;
+  cursor: pointer;
 }
-.drawing-workspace button:disabled { opacity: .45; cursor: default; }
-.drawing-workspace button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.drawing-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-secondary);
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.drawing-icon-button:hover { background: var(--bg-hover); color: var(--fg); }
+.drawing-icon-button[aria-pressed="true"] { color: var(--fg); }
+.drawing-quiet-button,
+.drawing-primary-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.drawing-quiet-button {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+}
+.drawing-quiet-button:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+/* The one primary action (Attach PNG in the composer, Make diagram): the accent as ink on its own tint. */
+.drawing-primary-button {
+  border: 1px solid transparent;
+  background: var(--accent-subtle);
+  color: var(--accent-text);
+  font-weight: 500;
+}
+.drawing-primary-button:hover { border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+:is(.drawing-icon-button, .drawing-quiet-button, .drawing-primary-button):disabled { opacity: .45; cursor: default; }
+:is(.drawing-icon-button, .drawing-quiet-button, .drawing-primary-button, .drawing-name-button, .drawing-workspace-file, .drawing-diagram-pill):focus-visible,
+.drawing-library-dialog input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+/* The list of drawings. */
 .drawing-workspace-files {
-  flex: 0 0 220px;
+  flex: 0 0 232px;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -37,72 +95,121 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 10px 10px 8px;
-  font-weight: 600;
+  height: 44px;
+  padding: 0 8px 0 16px;
+  color: var(--fg-secondary);
+  font-size: 12px;
+  font-weight: 500;
 }
-.drawing-workspace-files-note { margin: 4px 12px; color: var(--fg-muted); font-size: 12px; }
+.drawing-workspace .drawing-workspace-new { border-color: transparent; color: var(--fg-secondary); padding: 0 8px; }
+.drawing-workspace .drawing-workspace-new:hover { color: var(--fg); }
+.drawing-workspace-files-note { margin: 4px 16px; color: var(--fg-muted); font-size: 12px; }
 .drawing-workspace-files-note[role="alert"] { color: var(--danger, #c73333); }
-.drawing-workspace-file-list { list-style: none; margin: 0; padding: 0 6px 8px; overflow-y: auto; }
+.drawing-workspace-file-list { list-style: none; margin: 0; padding: 0 8px 8px; overflow-y: auto; }
+.drawing-workspace-file-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 2px;
+  border-radius: 6px;
+}
+.drawing-workspace-file-row:hover { background: var(--bg-hover); }
+.drawing-workspace-file-row[aria-current="true"] { background: var(--accent-subtle); }
 .drawing-workspace .drawing-workspace-file {
   display: flex;
+  flex: 1 1 0;
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
-  width: 100%;
-  margin: 1px 0;
+  min-width: 0;
   padding: 6px 8px;
   border: 0;
+  border-radius: 6px;
   background: transparent;
+  color: var(--fg);
   text-align: left;
 }
-.drawing-workspace .drawing-workspace-file:hover { background: var(--bg-hover); }
-.drawing-workspace .drawing-workspace-file[aria-current="true"] { background: var(--accent-subtle); color: var(--accent-text); }
+.drawing-workspace-file-row[aria-current="true"] .drawing-workspace-file-title { color: var(--accent-text); }
 .drawing-workspace-file-title { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-.drawing-workspace-file-time { color: var(--fg-muted); font-size: 11px; }
+.drawing-workspace-file-time { color: var(--fg-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+/* The pencil shows on the row under the pointer or the keyboard. */
+.drawing-workspace .drawing-workspace-file-rename { opacity: 0; margin-right: 2px; }
+.drawing-workspace-file-row:hover .drawing-workspace-file-rename,
+.drawing-workspace .drawing-workspace-file-rename:focus-visible { opacity: 1; }
+.drawing-workspace-file-input { flex: 1 1 100%; margin: 2px 0; }
 
+/* The header. */
 .drawing-workspace-main { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .drawing-workspace-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
+  gap: 4px;
+  height: 44px;
+  flex: 0 0 auto;
+  padding: 0 8px;
   border-bottom: 1px solid var(--border);
-  flex-wrap: wrap;
 }
-.drawing-workspace .drawing-workspace-files-toggle { border: 0; background: transparent; padding: 4px 6px; }
 .drawing-workspace-title {
   margin: 0;
   min-width: 0;
-  max-width: 40%;
+  max-width: 50%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
 }
-.drawing-workspace-status { color: var(--fg-muted); font-size: 12px; white-space: nowrap; }
+.drawing-workspace .drawing-name-button {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-weight: inherit;
+  cursor: text;
+}
+.drawing-workspace .drawing-name-button:hover { background: var(--bg-hover); }
+.drawing-name-input {
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  outline: none;
+}
+.drawing-workspace-bar .drawing-name-input { flex: 0 1 320px; }
+.drawing-name-error { flex: 1 1 100%; padding: 0 8px 4px; color: var(--danger, #c73333); font-size: 11px; }
+.drawing-workspace-status { margin-left: 4px; color: var(--fg-muted); font-size: 12px; white-space: nowrap; }
 .drawing-workspace-status[data-state="conflict"],
 .drawing-workspace-status[data-state="offline"],
 .drawing-workspace-status[data-state="missing"],
 .drawing-workspace-status[data-state="error"] { color: var(--danger, #c73333); }
 .drawing-workspace-bar-gap { flex: 1; }
-.drawing-workspace .drawing-workspace-attach { background: var(--accent); color: #fff; border-color: var(--accent); }
-.drawing-workspace .drawing-workspace-close { border: 0; background: transparent; font-size: 20px; line-height: 1; padding: 2px 6px; }
+.drawing-workspace-attach { margin-right: 4px; }
 
+/* Notices under the header. */
 .drawing-workspace-conflict {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border);
-  background: var(--accent-subtle);
+  background: var(--bg-secondary);
 }
 .drawing-workspace-conflict span { flex: 1 1 260px; }
-.drawing-workspace-warning { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px; color: var(--fg-secondary); border-bottom: 1px solid var(--border); background: var(--bg-secondary); }
+.drawing-workspace-warning { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 12px; color: var(--fg-secondary); border-bottom: 1px solid var(--border); background: var(--bg-secondary); }
 .drawing-workspace-warning span { flex: 1; }
-.drawing-workspace-notice { margin: 0; padding: 6px 10px; color: var(--danger, #c73333); font-size: 12px; border-bottom: 1px solid var(--border); }
+.drawing-workspace-notice { margin: 0; padding: 6px 12px; color: var(--danger, #c73333); font-size: 12px; border-bottom: 1px solid var(--border); }
 
+/* The canvas and what sits on it. */
 .drawing-workspace-canvas { position: relative; flex: 1 1 auto; min-height: 240px; }
 .drawing-canvas-host { position: absolute; inset: 0; }
 .drawing-workspace-empty, .drawing-workspace-loading {
@@ -112,23 +219,223 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 12px;
   color: var(--fg-muted);
   text-align: center;
   padding: 16px;
 }
+.drawing-diagram-pill {
+  position: absolute;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  transform: translate(-100%, -100%);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-size: 12px;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 8%);
+}
+.drawing-diagram-pill[data-below="true"] { transform: translate(-100%, 0); }
+.drawing-diagram-pill:hover { background: var(--bg-secondary); }
+.drawing-diagram-note,
+.drawing-text-diagram {
+  position: absolute;
+  z-index: 4;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 10%);
+}
+.drawing-diagram-note {
+  bottom: 72px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 24px);
+  padding: 4px 4px 4px 12px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+.drawing-diagram-note[data-phase="error"] span { color: var(--danger, #c73333); }
+.drawing-text-diagram {
+  top: 72px;
+  width: min(420px, calc(100% - 24px));
+  padding: 12px;
+}
+.drawing-text-diagram textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  resize: vertical;
+}
+.drawing-text-diagram textarea:focus { outline: none; border-color: var(--accent); }
+.drawing-text-diagram-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+
 .drawing-workspace-credit {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
-  padding: 3px 10px;
+  padding: 2px 12px;
   border-top: 1px solid var(--border);
   font-size: 11px;
 }
 .drawing-workspace-credit a { color: var(--fg-muted); text-decoration: none; }
 .drawing-workspace-credit a:hover { text-decoration: underline; }
 
+/* The editor, in Walnut's accent. `.excalidraw.excalidraw` outranks its own theme rules, which
+   load later with the editor's chunk. */
+.drawing-workspace .excalidraw.excalidraw {
+  --color-primary: var(--accent);
+  --color-primary-darker: var(--accent-hover);
+  --color-primary-darkest: var(--accent-hover);
+  --color-primary-hover: var(--accent-hover);
+  --color-primary-light: var(--accent-subtle);
+  --color-primary-light-darker: var(--accent-subtle);
+  --color-surface-primary-container: var(--accent-subtle);
+  --color-on-primary-container: var(--accent-text);
+  --color-slider-track: var(--accent-subtle);
+}
+/* No shortcut digits under the tool icons; each icon's tooltip still names its key. */
+.drawing-workspace .excalidraw .ToolIcon__keybinding { display: none; }
+/* The Library panel's Browse libraries: a quiet outline, not a filled block. */
+.drawing-workspace .excalidraw .library-menu-browse-button {
+  height: 32px;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--fg);
+  font-weight: 500;
+  font-size: 12px;
+}
+.drawing-workspace .excalidraw .library-menu-browse-button:hover { background: var(--bg-hover); }
+/* The Library panel's section names are labels, not headlines in the accent; its open tab is a
+   quiet pressed state, not a filled accent block. */
+.drawing-workspace .excalidraw .library-menu-items-container__header {
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.drawing-workspace .excalidraw .library-menu-items__no-items__label {
+  color: var(--fg-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 6px;
+}
+.drawing-workspace .excalidraw .sidebar-tab-trigger[data-state=active] {
+  --button-bg: var(--bg-hover);
+  --button-hover-bg: var(--bg-hover);
+  --button-hover-color: var(--fg);
+  --button-border: transparent;
+  color: var(--fg);
+}
+/* The editor's own modals (Help, Clear canvas, Publish) open in the body: over the composer's
+   dialog (10020), not under it. */
+.excalidraw-modal-container { z-index: 10040 !important; }
+
+/* Browse libraries (LibraryBrowser.tsx): over everything a drawing opens in. */
+.drawing-library-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10030;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 30%);
+}
+.drawing-library-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(720px, 100%);
+  height: min(640px, calc(100dvh - 48px));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-size: 13px;
+  box-shadow: 0 16px 48px rgb(0 0 0 / 20%);
+}
+.drawing-library-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 52px;
+  flex: 0 0 auto;
+  padding: 0 12px 0 20px;
+  border-bottom: 1px solid var(--border);
+}
+.drawing-library-head h2 { margin: 0; font-size: 14px; font-weight: 500; }
+.drawing-library-search {
+  flex: 1;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+.drawing-library-search:focus { outline: none; border-color: var(--accent); }
+.drawing-library-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.drawing-library-note { display: flex; align-items: center; gap: 12px; margin: 0; padding: 20px; color: var(--fg-muted); }
+.drawing-library-note[role="alert"] { color: var(--danger, #c73333); }
+.drawing-library-list { list-style: none; margin: 0; padding: 8px 12px; }
+.drawing-library-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px;
+  border-radius: 8px;
+}
+.drawing-library-item:hover { background: var(--bg-hover); }
+.drawing-library-preview {
+  flex: 0 0 auto;
+  width: 104px;
+  height: 64px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  overflow: hidden;
+}
+.drawing-library-preview img { width: 100%; height: 100%; object-fit: contain; }
+.drawing-library-text { display: flex; flex: 1 1 auto; flex-direction: column; gap: 2px; min-width: 0; }
+.drawing-library-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drawing-library-meta { color: var(--fg-muted); font-size: 11px; }
+.drawing-library-desc { color: var(--fg-secondary); font-size: 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.drawing-library-error { color: var(--danger, #c73333); font-size: 11px; }
+.drawing-library-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 36px;
+  flex: 0 0 auto;
+  padding: 0 20px;
+  border-top: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+.drawing-library-foot [role="alert"] { color: var(--danger, #c73333); }
+.drawing-library-foot a { color: var(--fg-muted); }
+
 @media (max-width: 640px) {
-  .drawing-workspace-files { flex-basis: 170px; }
-  .drawing-workspace-title { max-width: 30%; }
+  .drawing-workspace-files { flex-basis: 176px; }
+  .drawing-workspace-title { max-width: 36%; }
+  .drawing-library-overlay { padding: 0; }
+  .drawing-library-dialog { height: 100dvh; border-radius: 0; }
+  .drawing-library-preview { width: 72px; height: 48px; }
 }

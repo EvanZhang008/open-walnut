@@ -229,13 +229,15 @@ export function SettingsPage() {
   const location = useLocation()
   // Router navigations update location.hash; a native `#x` link (or code
   // setting window.location.hash) fires hashchange. Either one drives the pane.
-  const [nativeHash, setNativeHash] = useState(() => window.location.hash)
+  // The router's hash, not the window's: in an app's own window (popout/PopoutAppView.tsx)
+  // Settings has a router of its own and the window's address never changes.
+  const [nativeHash, setNativeHash] = useState(() => location.hash)
   useEffect(() => {
     const onHash = () => setNativeHash(window.location.hash)
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
-  useEffect(() => setNativeHash(window.location.hash), [location.hash])
+  useEffect(() => setNativeHash(location.hash), [location.hash])
   const hash = nativeHash
   // Plugins live on the Apps page: an old `#plugin-store` or `#<plugin>:<panel>` link (a
   // notification, a bookmark, a plugin's own link) lands on that plugin's page there.

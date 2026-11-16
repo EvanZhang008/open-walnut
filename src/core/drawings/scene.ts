@@ -55,6 +55,17 @@ export class DrawingInputError extends Error {
   }
 }
 
+/**
+ * A step the server could not finish for a reason outside the caller's input: the public library
+ * site or the model did not answer (503, 504) or answered with something unusable (502).
+ */
+export class DrawingServiceError extends Error {
+  constructor(message: string, public readonly status: 502 | 503 | 504) {
+    super(message)
+    this.name = 'DrawingServiceError'
+  }
+}
+
 /** Every element type the library stores (element/types.ts ExcalidrawElement, minus `selection`). */
 export const ELEMENT_TYPES: ReadonlySet<string> = new Set([
   'rectangle', 'diamond', 'ellipse', 'text', 'line', 'arrow', 'freedraw', 'image', 'frame', 'magicframe', 'iframe', 'embeddable',

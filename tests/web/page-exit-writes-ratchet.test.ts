@@ -39,6 +39,8 @@ const KNOWN: Record<string, 'client' | 'raw' | 'local'> = {
   'components/tasks/useFoldStore.ts': 'local',
   // Unsaved drawing edits go to the draft store (localStorage); its server mirror is drafts.ts's.
   'components/drawing/DrawingWorkspace.tsx': 'local',
+  // Only removes this tab's heartbeat from localStorage, so a later tab may adopt its drafts at once.
+  'components/drawing/drawing-store.ts': 'local',
 }
 
 function walk(dir: string): string[] {

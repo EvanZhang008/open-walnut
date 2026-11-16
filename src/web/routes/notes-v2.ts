@@ -23,8 +23,9 @@ import { withUserFileLock } from '../../utils/user-file-lock.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { log } from '../../logging/index.js'
 import { timed } from '../../core/observability/metrics.js'
+import { followMovedDrawingCompanion, followMovedNote, pruneFavoriteNotes } from '../../core/note-moves.js'
 import { sortedByName } from '../../lib/dir-order.js'
-import { getConfig, updateConfig } from '../../core/config-manager.js'
+import { getConfig } from '../../core/config-manager.js'
 import {
   parseFrontmatter,
   readId,
@@ -68,7 +69,6 @@ import {
   findNoteIdsByName,
   countNotesUnderFolder,
   searchFolders,
-  updateNotePath,
   docCount,
   dbSizeBytes,
   getIndexMeta,
@@ -181,47 +181,6 @@ export function scheduleNotesWarmup(delayMs?: number): () => void {
   return () => {
     cancelTree()
     clearTimeout(timer)
-  }
-}
-
-/**
- * Keep the note BOOKMARKS in step with the vault when a note is deleted or
- * renamed. Favorites live in config (`favorites.notes`, vault-relative paths
- * WITH `.md`) and nothing in the notes routes used to touch them, so deleting a
- * bookmarked note left a live row in the Bookmarks group: clicking it opened a
- * blank editor and the first keystroke WROTE THE FILE BACK (a 404 read is how a
- * new note starts). The existing `config:changed` carries the correction, which
- * is why no new event is needed here.
- *
- * `rename` maps the entry to its new path instead of dropping it — a rename must
- * not silently un-bookmark. `prefix` handles a folder delete in one write.
- *
- * Best-effort: a favorites bookkeeping failure must never fail the delete/move
- * the user asked for.
- */
-async function pruneFavoriteNotes(
-  op: { kind: 'delete'; relPath: string } | { kind: 'rename'; relPath: string; toRel: string } | { kind: 'prefix'; prefix: string },
-): Promise<void> {
-  try {
-    const config = await getConfig()
-    const notes = config.favorites?.notes
-    if (!notes || notes.length === 0) return
-    let next: string[]
-    if (op.kind === 'prefix') {
-      next = notes.filter((p) => !p.startsWith(op.prefix))
-    } else if (op.kind === 'rename') {
-      next = notes.map((p) => (p === op.relPath ? op.toRel : p))
-    } else {
-      next = notes.filter((p) => p !== op.relPath)
-    }
-    if (next.length === notes.length && next.every((p, i) => p === notes[i])) return
-    await updateConfig({ favorites: { ...config.favorites, notes: next } })
-    bus.emit(EventNames.CONFIG_CHANGED, { key: 'favorites' }, ['web-ui'], { source: 'notes-v2' })
-    log.memory.info('Note bookmarks updated after a vault change', { op: op.kind })
-  } catch (err) {
-    log.memory.warn('notes-v2: favorites bookkeeping skipped', {
-      error: err instanceof Error ? err.message : String(err),
-    })
   }
 }
 
@@ -979,29 +938,10 @@ export async function moveNote(from: unknown, to: unknown): Promise<{ ok: true }
 
   const fromRel = toRelPath(fromFile)
   const toRel = toRelPath(toFile)
-  if (isDrawingScene(fromFile) && isDrawingScene(toFile)) {
-    const { moveDrawingCompanion } = await import('../../core/drawings/companion-sync.js')
-    const companion = await moveDrawingCompanion(fromRel, toRel)
-    if (companion) {
-      updateNotePath(companion.from, companion.to)
-      scheduleNotesIndexUpdate(companion.from)
-      scheduleNotesIndexUpdate(companion.to)
-      await pruneFavoriteNotes({ kind: 'rename', relPath: companion.from, toRel: companion.to })
-    }
-  }
-  // Index bookkeeping is notes-only — attachments aren't in the structural
-  // index, and reconciling a binary file would just churn.
-  if (!isAttachment) {
-    // Fast path: a one-row path update keeps the id (and all edges) intact.
-    updateNotePath(fromRel, toRel)
-    // Then reconcile both paths: the old path's index doc is removed (file
-    // gone), the new path indexes.
-    scheduleNotesIndexUpdate(fromRel)
-    scheduleNotesIndexUpdate(toRel)
-  }
-
-  // A bookmark follows its note through a rename/move.
-  await pruneFavoriteNotes({ kind: 'rename', relPath: fromRel, toRel })
+  if (isDrawingScene(fromFile) && isDrawingScene(toFile)) await followMovedDrawingCompanion(fromRel, toRel)
+  // Index bookkeeping is notes-only (attachments aren't in the structural index, and reconciling
+  // a binary file would just churn); a bookmark follows its note either way.
+  await followMovedNote(fromRel, toRel, { indexed: !isAttachment })
 
   log.memory.info('Note moved', { from, to })
   return { ok: true }

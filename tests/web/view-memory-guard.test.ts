@@ -48,6 +48,7 @@ const PASSING: Record<string, string> = {
   'components/sessions/PromptCards.tsx#keyPick': 'the choice a number key picked on an open prompt, waiting for Enter: a keyboard cursor, gone once it is answered',
   'components/chat/AskWalnutSlot.tsx#newMode': 'composing a new chat, one draft',
   'components/chat/ChatInput.tsx#drawingOpen': 'the drawing pad dialog, opened for one sketch in the composer',
+  'components/drawing/DrawingWorkspace.tsx#previewFullScreen': "a note's drawing preview in full screen: it starts in the note's panel on every open, by design (workspace-place.ts)",
   'components/chat/ComposerControlsBar.tsx#showDetail': 'the controls bar expanded for one compose',
   'components/chat/MentionPalette.tsx#pickedTab': 'the mention palette, a popover',
   'components/tasks/ProjectDetailPane.tsx#scriptsOpen': "the project's scripts dialog, open now",

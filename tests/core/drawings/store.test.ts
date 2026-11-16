@@ -61,11 +61,12 @@ describe('placement', () => {
     const b = await createDrawing({ title: 'Sketch' })
     expect(a.path).toBe('inbox/Sketch.excalidraw')
     expect(b.path).toBe('inbox/Sketch 2.excalidraw')
-    expect(a).toMatchObject({ title: 'Sketch', scene: emptyScene() })
+    expect(a).toMatchObject({ title: 'Sketch', scene: { ...emptyScene(), appState: { ...emptyScene().appState, walnutTitle: 'set' } } })
     expect(a.revision).toBe(sceneRevision(await read(a.path)))
     expect(a.indexWarning).toBeUndefined()
-    const untitled = await createDrawing({})
-    expect(untitled.path).toBe('inbox/Untitled drawing.excalidraw')
+    const untitled = await createDrawing({}, { now: new Date(2026, 10, 16, 9, 5) })
+    expect(untitled.path).toBe('inbox/Drawing 2026-11-16 09.05.excalidraw')
+    expect(untitled.scene.appState.walnutTitle).toBe('auto')
   })
 
   it('puts a task drawing in the task\'s real project and a folder named for its title and id', async () => {

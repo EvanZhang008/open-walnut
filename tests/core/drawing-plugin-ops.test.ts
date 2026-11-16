@@ -10,9 +10,9 @@ function setup() {
 }
 
 describe('Drawing plugin ops', () => {
-  it('registers list, read, create, append, render and update as one plugin capability', () => {
+  it('registers list, read, create, append, render, update and rename as one plugin capability', () => {
     const { ops, skill } = setup()
-    expect(ops.map((op) => op.name)).toEqual(['list', 'read', 'create', 'append', 'render', 'update'])
+    expect(ops.map((op) => op.name)).toEqual(['list', 'read', 'create', 'append', 'render', 'update', 'rename'])
     expect(ops.every((op) => op.remote === 'allow')).toBe(true)
     expect(ops.filter((op) => op.readonly).map((op) => op.name)).toEqual(['list', 'read', 'render'])
     expect(skill).toHaveBeenCalledOnce()
@@ -62,5 +62,16 @@ describe('Drawing plugin ops', () => {
     const args = { path: 'inbox/design.excalidraw', revision: 'r1', update: [{ id: 'a', text: 'Review' }], remove: ['s1'], add: [{ id: 'box1', type: 'rectangle' }] }
     await update.handler(args, { call })
     expect(call).toHaveBeenCalledExactlyOnceWith('POST', '/api/drawings/update', args)
+  })
+
+  it('renames through the revision-checked rename route', async () => {
+    const { ops } = setup()
+    const rename = ops.find((op) => op.name === 'rename')!
+    expect(rename.readonly).toBe(false)
+    expect(rename.inputSchema?.required).toEqual(['path', 'revision', 'title'])
+    const call = vi.fn().mockResolvedValue({ path: 'inbox/Login flow.excalidraw', revision: 'r2' })
+    const args = { path: 'inbox/Drawing 2026-11-16 09.05.excalidraw', revision: 'r1', title: 'Login flow' }
+    await rename.handler(args, { call })
+    expect(call).toHaveBeenCalledExactlyOnceWith('POST', '/api/drawings/rename', args)
   })
 })

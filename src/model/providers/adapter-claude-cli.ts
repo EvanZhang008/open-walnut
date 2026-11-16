@@ -42,6 +42,7 @@ import type {
 import { parseClaudeJsonlLine, type ClaudeStreamResult } from '../../providers/claude-stream-parser.js';
 import { WALNUT_UTILITY_ENTRYPOINT } from '../../providers/inline-subagent.js';
 import { startOneShot, type OneShotHandle } from '../../providers/oneshot-client.js';
+import { streamJsonUserLine } from '../../providers/stream-json-input.js';
 import { abortedResult } from './retry.js';
 import { log } from '../../logging/index.js';
 import { resolveClaudeCliExecutable } from '../../core/claude-cli-detect.js';
@@ -293,10 +294,13 @@ export class ClaudeCliAdapter implements ProtocolAdapter {
       && opts.messages.length > tracked.seenMessages;
 
     let prompt: string;
+    /** The messages the prompt carries: their pictures go along when the call sends them (cliTurnInput). */
+    let carried: MessageParam[] = opts.messages;
     let session: { flag: '--resume' | '--session-id'; id: string };
     if (overridePrompt && tracked) {
       // Corrective retry rides the same session — the broken turn is context.
       prompt = overridePrompt;
+      carried = [];
       session = { flag: '--resume', id: tracked.sessionId };
     } else if (canResume && tracked) {
       // Send only the NEW tail. A tool_result tail uses the protocol envelope;
@@ -310,6 +314,7 @@ export class ClaudeCliAdapter implements ProtocolAdapter {
       prompt = isToolResultTurn(last)
         ? serializeToolResults(last.content)
         : serializePrompt(tail);
+      carried = isToolResultTurn(last) ? [] : tail;
       session = { flag: '--resume', id: tracked.sessionId };
     } else {
       // Fresh session: replay full history, mint the id we'll resume later.
@@ -320,9 +325,10 @@ export class ClaudeCliAdapter implements ProtocolAdapter {
     }
     if (!prompt.trim()) prompt = '(continue)';
 
-    const args = [...buildArgs(opts), session.flag, session.id];
+    const turn = cliTurnInput(prompt, carried, opts.images);
+    const args = [...buildArgs(opts), ...turn.args, session.flag, session.id];
 
-    return this.withSlot(opts.purpose, opts.signal, () => this.execCli(command, args, env, prompt, opts.signal, onTextDelta, opts.purpose))
+    return this.withSlot(opts.purpose, opts.signal, () => this.execCli(command, args, env, turn.input, opts.signal, onTextDelta, opts.purpose))
       .then((result) => {
         // Track AFTER a successful turn: the CLI now knows the whole history
         // plus the assistant turn it just produced.
@@ -348,8 +354,9 @@ export class ClaudeCliAdapter implements ProtocolAdapter {
           const freshPrompt = serializePrompt(opts.messages)
             + (overridePrompt ? `\n\nUser: ${overridePrompt}` : '');
           const freshId = randomUUID();
-          const freshArgs = [...buildArgs(opts), '--session-id', freshId];
-          return this.withSlot(opts.purpose, opts.signal, () => this.execCli(command, freshArgs, env, freshPrompt || '(continue)', opts.signal, onTextDelta, opts.purpose))
+          const fresh = cliTurnInput(freshPrompt || '(continue)', opts.messages, opts.images);
+          const freshArgs = [...buildArgs(opts), ...fresh.args, '--session-id', freshId];
+          return this.withSlot(opts.purpose, opts.signal, () => this.execCli(command, freshArgs, env, fresh.input, opts.signal, onTextDelta, opts.purpose))
             .then((result) => {
               this.sessions.set(key, {
                 sessionId: freshId,
@@ -487,7 +494,8 @@ export class ClaudeCliAdapter implements ProtocolAdapter {
       };
 
       // The child is the local daemon's (oneshot-client.ts); the prompt rides
-      // its stdin (text input mode), which closes after it. The server's cwd,
+      // its stdin (text, or one stream-json user line when the call sends its
+      // pictures: cliTurnInput), which closes after it. The server's cwd,
       // as when it spawned the child itself: the CLI files its transcript (and
       // so --resume finds it) under the cwd, and the daemon's own is its dir.
       startOneShot({ command: cmd, args: cmdArgs, cwd: process.cwd(), env, input: prompt, endInput: true, maxMs: CLI_TURN_TIMEOUT_MS + 30_000 }, {
@@ -517,7 +525,7 @@ export function buildArgs(opts: AdapterCallOptions): string[] {
     '--verbose',                        // stream-json requires verbose for the full event stream
     '--include-partial-messages',       // stream text deltas as they arrive
     // Input stays default (text): we write the whole prompt to stdin and close.
-    // (stream-json INPUT would force us into a JSON envelope for no gain here.)
+    // A call that sends its pictures adds `--input-format stream-json` (cliTurnInput).
     '--tools', '',                      // disable ALL built-in tools (deny-all)
     // No --settings override: the user's settings.json (and so their auth) applies as-is.
   ];
@@ -577,6 +585,37 @@ export function buildSpawnEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Pro
   // scan (which otherwise lists every sdk-cli transcript in a real cwd).
   env.CLAUDE_CODE_ENTRYPOINT = WALNUT_UTILITY_ENTRYPOINT;
   return env;
+}
+
+const CLI_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+/** The pictures of the user messages a prompt carries (top-level image blocks with a base64 source; a tool result's stay flattened). */
+export function promptImages(messages: readonly MessageParam[]): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  for (const msg of messages) {
+    if (msg.role !== 'user' || !Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      const b = block as { type?: string; source?: { type?: string; media_type?: string; data?: unknown } };
+      if (b.type !== 'image' || b.source?.type !== 'base64' || typeof b.source.data !== 'string' || !b.source.data) continue;
+      if (!CLI_IMAGE_TYPES.has(b.source.media_type ?? '')) continue;
+      out.push({ type: 'image', source: { type: 'base64', media_type: b.source.media_type, data: b.source.data } });
+    }
+  }
+  return out;
+}
+
+/**
+ * What one turn writes to the CLI's stdin. By default the text prompt itself in the default text
+ * input mode, pictures or not (their text stays flattened by serializePrompt), as always. Only a
+ * caller that asked for its pictures (`images: 'send'`, AdapterCallOptions) whose messages carry
+ * some gets ONE stream-json user message (`--input-format stream-json`): the pictures as image
+ * blocks, then the same text as one text block; stdin closes after it, so the CLI answers that one
+ * message and exits.
+ */
+export function cliTurnInput(prompt: string, carried: readonly MessageParam[], send?: AdapterCallOptions['images']): { args: string[]; input: string } {
+  const images = send === 'send' ? promptImages(carried) : [];
+  if (images.length === 0) return { args: [], input: prompt };
+  return { args: ['--input-format', 'stream-json'], input: streamJsonUserLine([...images, { type: 'text', text: prompt }]) };
 }
 
 /**
