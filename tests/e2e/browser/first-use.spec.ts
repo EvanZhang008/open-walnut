@@ -322,13 +322,16 @@ for (const phase of ['install-runtime', 'failed'] as const) {
     const row = foundRow(page, 'devbox-1');
     await expect(row).toHaveCount(0);
 
-    // MainPage mounts this component in a different place when the task panel hides.
+    // The found-computers row lives only in the task panel since f208c9363 (an app-level alert is
+    // never a card over the quick chat): hiding the panel takes it away, nothing moves into the
+    // Ask Walnut slot, and showing the panel again remounts it with the same answers.
     await taskPanelToggle(page).click();
     await expect(taskPanelToggle(page)).toHaveAttribute('aria-expanded', 'false');
-    await expect(foundRow(page, 'devbox-2')).toBeVisible();
-    await expect(row).toHaveCount(0);
+    await expect(prompts(page)).toHaveCount(0);
     await taskPanelToggle(page).click();
     await expect(taskPanelToggle(page)).toHaveAttribute('aria-expanded', 'true');
+    await expect(foundRow(page, 'devbox-2')).toBeVisible();
+    await expect(row).toHaveCount(0);
     await page.reload();
     await expect(foundRow(page, 'devbox-2')).toBeVisible({ timeout: 60_000 });
     await expect(row).toHaveCount(0);
