@@ -164,6 +164,11 @@ stdout:  {"fire": true, "items": [{"id": "PR-123#c9", "title": "..."}], "input":
   whenever the thing you watch has identity (a comment, a message, a file, a
   build). With **no** `items`, `fire: true` fires EVERY time it is true, so only
   do that when the script itself decided "this is new".
+  Report an item every run while it stands: an id the script keeps reporting
+  is never delivered twice, and one it stopped reporting is forgotten after 30
+  days. In `input`, a line about an already-delivered item is dropped when it
+  holds the item's `id` or its `title` (24+ characters, a leading `[tag]` aside),
+  so write each item's line with its id or its title in it.
 - **`input` vs `state`.** `input` is the script talking to the AI **this run**
   (max 8 KB, free text). `state` is the script talking to its **next run** (a
   cursor, stored verbatim, handed back on stdin). They are never merged, and

@@ -528,6 +528,20 @@ export function fireBudgetNextAtMs(def: TriggerDef, state: TriggerHostState, now
   return nowMs + Math.ceil((over * FIRE_BUDGET_WINDOW_MS) / cap);
 }
 
+/**
+ * An id the script still reports stays remembered. A seen id was stamped only when it was first
+ * delivered, so an item a script reports on every run (a standing alert, an open issue it lists
+ * each time) aged out after SEEN_TTL_MS, or fell out of the SEEN_MAX newest, while the script
+ * still printed it, and was delivered again as if new (2026-11-16, a pipeline watch with 1,013
+ * seen ids, several of them reported on every run for weeks). Every run that reads the script's
+ * items stamps the ones already seen with its own time, whatever it decides; only an id the
+ * script stopped reporting ages out.
+ */
+export function refreshSeen(state: TriggerHostState, items: readonly TriggerItem[] | undefined, nowMs: number): void {
+  if (!items) return;
+  for (const it of items) if (it.id in state.seen && state.seen[it.id] < nowMs) state.seen[it.id] = nowMs;
+}
+
 export function pruneSeen(state: TriggerHostState, nowMs: number): void {
   const entries = Object.entries(state.seen).filter(([, at]) => nowMs - at <= SEEN_TTL_MS);
   entries.sort((a, b) => b[1] - a[1]);
@@ -684,6 +698,11 @@ export function boundedWarnings(warnings: readonly string[]): string[] {
 
 /** The shortest seen item id that marks an input line as already told (inputForNewItems). */
 export const SEEN_ID_MATCH_MIN = 6;
+/**
+ * The shortest item title (its leading "[tag]" aside) that marks an input line as about that
+ * item: long enough that it is the item's own words, not a phrase any line may hold.
+ */
+export const SEEN_TITLE_MATCH_MIN = 24;
 
 /** Does `line` name `id` as a whole token (not inside a longer id)? */
 function namesId(line: string, id: string): boolean {
@@ -699,24 +718,54 @@ function namesId(line: string, id: string): boolean {
 }
 
 /**
+ * The words of an item's title a line about it carries: the title without one leading
+ * "[tag]", since a script often writes its own line as "[tag] <its short id> <title>".
+ * Too short to be the item's own words: none.
+ */
+function titleWords(item: TriggerItem): string | undefined {
+  if (typeof item.title !== 'string') return undefined;
+  const words = item.title.replace(/^\s*\[[^\]\n]{1,40}\]\s*/, '').trim();
+  return words.length >= SEEN_TITLE_MATCH_MIN ? words : undefined;
+}
+
+interface ItemNames { id?: string; title?: string }
+
+function namesOf(items: readonly TriggerItem[], minId: number): ItemNames[] {
+  return items.map((it) => ({
+    ...(it.id && it.id.length >= minId ? { id: it.id } : {}),
+    ...(titleWords(it) ? { title: titleWords(it) } : {}),
+  }));
+}
+
+function namesItem(line: string, n: ItemNames): boolean {
+  return (!!n.id && namesId(line, n.id)) || (!!n.title && line.includes(n.title));
+}
+
+/**
  * A fire's `input` without what an earlier fire already told (2026-11-12, the org reflection: a
  * queue-result watch printed every result it still saw, newest first, so a fire for 1 new item
  * carried 13 results, three of them delivered hours before; 5 fires, 39.7K chars). The daemon
  * already drops seen items from `items`; the script's own words about them went out again in full.
- * A line naming an item the session was already given (an id of SEEN_ID_MATCH_MIN chars or
- * more), and no new one, is dropped, with the indented lines under it; a line naming no item (the
- * script's own words) stays. Nothing left: no input.
+ * A line naming an item the session was already given, and no new one, is dropped, with the
+ * indented lines under it; a line naming no item (the script's own words) stays. Nothing left: no
+ * input. A line names an item by its id (SEEN_ID_MATCH_MIN chars or more) or by its title
+ * (titleWords): 2026-11-16, a pipeline watch wrote each item's line as "[clear] <short id>
+ * <title>", never the item's id, so three issues it had reported days before came back in the
+ * text of every fire for a day and read as delivered again.
  */
-export function inputForNewItems(input: string, newIds: readonly string[], seenIds: readonly string[]): string | undefined {
-  const fresh = newIds.filter(Boolean);
-  // A short id ("12") is too likely to be some other number in the text: only a longer one drops a line.
-  const seen = seenIds.filter((id) => id.length >= SEEN_ID_MATCH_MIN && !fresh.includes(id));
+export function inputForNewItems(input: string, newItems: readonly TriggerItem[], seenItems: readonly TriggerItem[]): string | undefined {
+  const freshIds = new Set(newItems.map((it) => it.id));
+  // Any new id names its line, however short; only a longer seen one drops a line ("12" is too
+  // likely to be some other number in the text).
+  const fresh = namesOf(newItems, 1);
+  const seen = namesOf(seenItems.filter((it) => !freshIds.has(it.id)), SEEN_ID_MATCH_MIN)
+    .filter((n) => n.id || n.title);
   if (seen.length === 0) return input;
   const kept: string[] = [];
   let dropping = false;
   for (const line of input.split('\n')) {
-    const isNew = fresh.some((id) => namesId(line, id));
-    const isOld = !isNew && seen.some((id) => namesId(line, id));
+    const isNew = fresh.some((n) => namesItem(line, n));
+    const isOld = !isNew && seen.some((n) => namesItem(line, n));
     if (isOld) { dropping = true; continue; }
     // An indented line under a dropped one belongs to it ("  read it: ..."), unless it names a new item.
     if (dropping && !isNew && /^\s+\S/.test(line)) continue;
@@ -751,9 +800,9 @@ export function decideCheck(def: TriggerDef, output: TriggerCheckOutput, state: 
     }
   }
   if (fireBudgetNextAtMs(def, state, nowMs) > nowMs) return { kind: 'quiet', reason: 'rate-limited' };
-  const seenIds = output.items ? output.items.filter((it) => it.id in state.seen).map((it) => it.id) : [];
-  const input = output.input !== undefined && seenIds.length > 0
-    ? inputForNewItems(output.input, items.map((it) => it.id), seenIds)
+  const seenItems = output.items ? output.items.filter((it) => it.id in state.seen) : [];
+  const input = output.input !== undefined && seenItems.length > 0
+    ? inputForNewItems(output.input, items, seenItems)
     : output.input;
   return {
     kind: 'fire', items,
@@ -766,7 +815,8 @@ export function decideCheck(def: TriggerDef, output: TriggerCheckOutput, state: 
 /**
  * Record a completed check. `state` from the script replaces the stored one
  * when printed (null included); a script that prints no `state` key keeps the
- * previous cursor. Seen ids are written ONLY on a fire.
+ * previous cursor. New ids join the seen set ONLY on a fire; an id already seen that
+ * the script still reports is stamped again on every run (refreshSeen).
  *
  * A fire the budget held back keeps the previous cursor too: the script moved
  * its cursor past the items it just reported, and saving that would lose them
@@ -792,6 +842,8 @@ export function applyCheckOutcome(
   // A clock that jumped ahead and came back would otherwise freeze the drain
   // (elapsed stays 0) until it catches up with the stamp.
   if (state.budget.atMs > nowMs) state.budget = { used: state.budget.used, atMs: nowMs };
+  // Before the fire's new ids: refreshSeen only moves ids that were already seen.
+  refreshSeen(state, output.items, nowMs);
   if (decision.kind !== 'fire') return null;
 
   for (const it of decision.items) state.seen[it.id] = nowMs;
