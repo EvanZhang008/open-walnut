@@ -188,7 +188,7 @@ const DELEGATED: Record<string, { markers: string[]; why: string }> = {
     markers: ['<BodyArea', 'boxRef={bodyRef}', '<BoxMic'],
     why: 'the mail body lives in BodyArea; the panel hands it bodyRef, the ref its BoxMic writes into',
   },
-  'components/sessions/SessionNotes.tsx|CollapsibleUrlEditor placeholder="Session note…"': {
+  'components/sessions/SessionNotes.tsx|CollapsibleUrlEditor placeholder="Write a note for this session…"': {
     markers: ['<MicButton', 'onTranscribe={(text) => handleChange('],
     why: "the session note's MicButton appends the words to the note it autosaves",
   },

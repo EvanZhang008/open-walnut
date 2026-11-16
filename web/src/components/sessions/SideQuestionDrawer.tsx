@@ -936,6 +936,14 @@ export function SideQuestionDrawer({
             </label>
             <ChatInput
               onSend={(text, images) => submit(text, images)}
+              noteSlot={activeThreadSid ? (
+                <SessionNotesBar
+                  noteState={noteState}
+                  expanded={notesOpen}
+                  onToggleExpanded={() => setNotesOpen((o) => !o)}
+                  onCollapse={() => setNotesOpen(false)}
+                />
+              ) : undefined}
               placeholder={activeThread ? 'Follow up…' : 'Ask a side question…'}
               disabled={disabled || state.creating || isSideThreadReadOnly(activeThread)}
               showCommands={false}
@@ -1019,14 +1027,6 @@ export function SideQuestionDrawer({
                 </div>
               )}
             />
-            {activeThreadSid && (
-              <SessionNotesBar
-                noteState={noteState}
-                expanded={notesOpen}
-                onToggleExpanded={() => setNotesOpen((o) => !o)}
-                onCollapse={() => setNotesOpen(false)}
-              />
-            )}
           </div>
 
           {/* Pre-thread one-shot entries — read-only, promote still works. */}

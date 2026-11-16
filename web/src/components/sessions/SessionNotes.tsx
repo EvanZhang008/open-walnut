@@ -5,17 +5,26 @@ import { LinkifiedText } from '../common/LinkifiedText';
 import { CollapsibleUrlEditor, type CollapsibleUrlEditorHandle } from '../common/CollapsibleUrlEditor';
 
 /**
- * One reference note above the composer, shared by every session surface.
- * The label identifies it as a note, not an incoming or queued message. Its text
- * has no source or delivery metadata. Edit in place; the existing autosave keeps
- * the full text, including links and line breaks. Empty notes use the Note pill.
+ * One reference note, shared by every session surface. It is the top band of the
+ * composer card (ChatInput's `noteSlot`), so reading and editing are the same
+ * element: a small "Note" label with its controls on one row, then the text in
+ * the chat's own type. Edit in place; the autosave keeps the full text, links and
+ * line breaks included. Closing the editor trims leading blank lines and trailing
+ * whitespace. Empty notes use the Note pill.
  */
+
+/** The text a closed note keeps: no blank lines before it, no whitespace after it. */
+export function tidyNote(value: string): string {
+  return value.replace(/^(?:[ \t]*\r?\n)+/, '').replace(/\s+$/, '');
+}
 
 export interface SessionNoteState {
   note: string;
   hasNote: boolean;
   saveStatus: 'idle' | 'saving' | 'saved';
   handleChange: (value: string) => void;
+  /** Save now, tidied (the editor closed). */
+  finish: () => void;
 }
 
 export function useSessionNote(sessionId: string, initialNote?: string, onNoteChanged?: () => void): SessionNoteState {
@@ -24,16 +33,33 @@ export function useSessionNote(sessionId: string, initialNote?: string, onNoteCh
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const savedIndicatorRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const lastSavedRef = useRef(initialNote ?? '');
+  const noteRef = useRef(initialNote ?? '');
+  noteRef.current = note;
+  /** The value of the save in flight, so a second save of it is skipped. */
+  const sendingRef = useRef<string | null>(null);
+  /** Every value this hook sent for this session: the server's echo of one of them
+   *  is not news, and must not replace what the user typed since. */
+  const sentRef = useRef(new Set<string>());
+  const sessionRef = useRef(sessionId);
 
-  // Sync when session changes
+  // Sync when the session changes, or when the note changed elsewhere.
   useEffect(() => {
-    setNote(initialNote ?? '');
-    lastSavedRef.current = initialNote ?? '';
+    const next = initialNote ?? '';
+    if (sessionRef.current === sessionId && sentRef.current.has(next)) {
+      lastSavedRef.current = next;
+      return;
+    }
+    sessionRef.current = sessionId;
+    sentRef.current = new Set();
+    setNote(next);
+    lastSavedRef.current = next;
     setSaveStatus('idle');
   }, [sessionId, initialNote]);
 
   const saveNote = useCallback(async (value: string) => {
-    if (value === lastSavedRef.current) return;
+    if (value === lastSavedRef.current || value === sendingRef.current) return;
+    sendingRef.current = value;
+    sentRef.current.add(value);
     setSaveStatus('saving');
     try {
       await updateSession(sessionId, { human_note: value });
@@ -43,7 +69,10 @@ export function useSessionNote(sessionId: string, initialNote?: string, onNoteCh
       savedIndicatorRef.current = setTimeout(() => setSaveStatus('idle'), 2000);
       onNoteChanged?.();
     } catch {
+      sentRef.current.delete(value);
       setSaveStatus('idle');
+    } finally {
+      if (sendingRef.current === value) sendingRef.current = null;
     }
   }, [sessionId, onNoteChanged]);
 
@@ -51,6 +80,15 @@ export function useSessionNote(sessionId: string, initialNote?: string, onNoteCh
     setNote(value);
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => saveNote(value), 1000);
+  }, [saveNote]);
+
+  const finish = useCallback(() => {
+    clearTimeout(debounceRef.current);
+    // Opened and closed with no edit: nothing to write, not even the tidy-up.
+    if (noteRef.current === lastSavedRef.current && sendingRef.current === null) return;
+    const tidy = tidyNote(noteRef.current);
+    if (tidy !== noteRef.current) setNote(tidy);
+    void saveNote(tidy);
   }, [saveNote]);
 
   // Clear pending timers on unmount
@@ -61,7 +99,7 @@ export function useSessionNote(sessionId: string, initialNote?: string, onNoteCh
     };
   }, []);
 
-  return { note, hasNote: note.trim().length > 0, saveStatus, handleChange };
+  return { note, hasNote: note.trim().length > 0, saveStatus, handleChange, finish };
 }
 
 interface SessionNotesPartProps {
@@ -105,16 +143,17 @@ const NOTE_LINK_LABEL_MAX = 48;
 
 /** Slim always-visible row once a note exists (or while composing a new one). */
 export function SessionNotesBar({ noteState, expanded, onToggleExpanded, onCollapse }: SessionNotesPartProps) {
-  const { note, hasNote, saveStatus, handleChange } = noteState;
+  const { note, hasNote, saveStatus, handleChange, finish } = noteState;
   const editorRef = useRef<CollapsibleUrlEditorHandle>(null);
   const cardRef = useRef<HTMLDivElement>(null);
-  const collapse = onCollapse ?? onToggleExpanded;
+  const close = onCollapse ?? onToggleExpanded;
+  const collapse = useCallback(() => { finish(); close(); }, [finish, close]);
 
   // The collapsed view keeps the note's LINE STRUCTURE — a note is a checklist
   // ("1. … 2. … 3. …"), and folding it to one line destroyed the shape the user
   // typed. Each line is rendered separately so newlines survive visually; the
   // links are linkified inline within their own line, never lifted out.
-  const lines = useMemo(() => note.replace(/\s+$/, '').split('\n'), [note]);
+  const lines = useMemo(() => tidyNote(note).split('\n'), [note]);
 
   // Focus the editor the moment it opens. No setTimeout: the old 50ms delay
   // left focus parked on <body> right after the collapsed row unmounted, which
@@ -165,15 +204,12 @@ export function SessionNotesBar({ noteState, expanded, onToggleExpanded, onColla
       }}
     >
       <div className="session-notes-heading">
-        <span className="session-notes-label">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-            <path d="M14 2v6h6M8 13h8M8 17h6" />
-          </svg>
-          Session note
-        </span>
+        <span className="session-notes-label">Note</span>
         <span className="session-notes-heading-actions">
           {status}
+          {expanded && (
+            <MicButton size="sm" onTranscribe={(text) => handleChange(note ? note + ' ' + text : text)} />
+          )}
           <button type="button" className="session-notes-action" onClick={expanded ? collapse : onToggleExpanded}>
             {expanded ? 'Done' : 'Edit'}
           </button>
@@ -190,11 +226,8 @@ export function SessionNotesBar({ noteState, expanded, onToggleExpanded, onColla
             className="session-notes-textarea session-notes-editor"
             value={note}
             onChange={handleChange}
-            placeholder="Session note…"
+            placeholder="Write a note for this session…"
           />
-          <div className="session-notes-side">
-            <MicButton size="sm" onTranscribe={(text) => handleChange(note ? note + ' ' + text : text)} />
-          </div>
         </div>
       ) : (
         // Not a <button>: an <a> inside a button is invalid HTML and browsers

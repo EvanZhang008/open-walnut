@@ -129,7 +129,7 @@ export async function geometry(panel: Locator): Promise<Geometry> {
       lastRowBottom: last ? last.getBoundingClientRect().bottom : null,
       // Every row of chrome the composer block can carry, in DOM order.
       chrome: ([
-        ['notes bar', '.session-notes'],
+        ['note band (top of the input card)', '.session-notes'],
         ['send error', '.session-panel-input > .text-xs'],
         ['image strip', '.session-panel-input .chat-image-previews'],
         ['queue bar', '.session-panel-input .chat-queue-indicator'],

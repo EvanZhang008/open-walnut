@@ -136,7 +136,9 @@ test('note is labeled and edits in place without a second input outline', async 
   await page.request.patch('/api/sessions/pw-normal-session', { data: { human_note: note } })
   const panel = await openSeededSessionOnHome(page)
   const bar = panel.getByRole('region', { name: 'Session note', exact: true })
-  await expect(bar.locator('.session-notes-label')).toHaveText('Session note')
+  await expect(bar.locator('.session-notes-label')).toHaveText('Note')
+  // The note is the composer card's top band: inside the same box as the textarea.
+  await expect(panel.locator('.session-panel-input .chat-input-box > .session-notes')).toHaveCount(1)
   await expect(bar.locator('.session-notes-dot')).toHaveCount(0)
   await expect(bar.getByRole('button', { name: 'Edit', exact: true })).toBeVisible()
   await expect(bar.locator('.session-notes-preview')).toHaveText(note.replace('\n', ''))
@@ -153,6 +155,10 @@ test('note is labeled and edits in place without a second input outline', async 
       return { border: s.borderTopWidth, outline: s.outlineStyle, shadow: s.boxShadow }
     })
     expect(skin).toEqual({ border: '0px', outline: 'none', shadow: 'none' })
+    // Done and the mic (when dictation is offered here) share the label row;
+    // nothing floats beside the text.
+    await expect(bar.locator('.session-notes-body .mic-btn')).toHaveCount(0)
+    expect(await bar.locator('.mic-btn').count()).toBe(await bar.locator('.session-notes-heading .mic-btn').count())
     const box = (await bar.boundingBox())!
     const panelBox = (await panel.boundingBox())!
     expect(box.x + box.width).toBeLessThanOrEqual(panelBox.x + panelBox.width + 1)
@@ -160,6 +166,51 @@ test('note is labeled and edits in place without a second input outline', async 
     await expect(editor).toHaveCount(0)
     await expect(panel.locator('.session-panel-input textarea')).toHaveValue('Keep this composer draft')
   }
+  await page.request.patch('/api/sessions/pw-normal-session', { data: { human_note: '' } })
+})
+
+test('a long note wraps, scrolls only vertically, and is tidied when the editor closes', async ({ page }) => {
+  // The shape of the 2026-11-12 report: a leading blank line, a line ending in a space,
+  // paragraphs, a run of blank lines, a numbered list and trailing blank lines.
+  const long = 'x'.repeat(30)
+  const note = `\nnext ideally we can provide traffic shift, but how to do it, ${'like this '.repeat(12)}not the async, \n\nasync can only be controlled through gradual rollout, ${long}${long}${long}\n\nor sync can also have a single service, many pods\n\n\n\n2. Update design, review\n3. update plan, and break down the implementor\n\n\n`
+  await page.request.patch('/api/sessions/pw-normal-session', { data: { human_note: note } })
+  const panel = await openSeededSessionOnHome(page)
+  const bar = panel.getByRole('region', { name: 'Session note', exact: true })
+  // Read view: the leading blank line is not drawn, the view stays within 3 lines.
+  const preview = bar.locator('.session-notes-preview')
+  await expect(preview).toContainText('next ideally')
+  expect(await preview.locator('.session-notes-line').first().textContent()).toMatch(/^next ideally/)
+  expect((await preview.boundingBox())!.height).toBeLessThanOrEqual(13 * 1.55 * 3 + 7)
+
+  await bar.getByRole('button', { name: 'Edit', exact: true }).click()
+  const editor = bar.locator('.session-notes-editor')
+  await expect(editor).toBeFocused()
+  const box = await editor.evaluate((el) => ({ sw: el.scrollWidth, cw: el.clientWidth, ox: getComputedStyle(el).overflowX }))
+  expect(box.ox).toBe('hidden')
+  expect(box.sw).toBeLessThanOrEqual(box.cw + 1)
+  // Grows with the text up to its cap, then it alone scrolls (the band itself never does).
+  const scroll = await editor.evaluate((el) => ({ oy: getComputedStyle(el).overflowY, max: getComputedStyle(el).maxHeight, band: getComputedStyle(el.closest('.session-notes')!).overflowY }))
+  expect(scroll.oy).toBe('auto')
+  expect(scroll.max).not.toBe('none')
+  expect(scroll.band).toBe('visible')
+
+  // An edit, then Done: it saves at once, without the whitespace after the text.
+  await page.keyboard.press('Control+Home')
+  await page.keyboard.type('Plan:')
+  await bar.getByRole('button', { name: 'Done', exact: true }).click()
+  await expect(editor).toHaveCount(0)
+  await expect.poll(async () => (await (await page.request.get('/api/sessions/pw-normal-session')).json()).session?.human_note)
+    .toBe(('Plan:' + note).replace(/\s+$/, ''))
+  // Opened and closed with no edit: nothing is written.
+  const before = (await (await page.request.get('/api/sessions/pw-normal-session')).json()).session?.human_note
+  let patched = 0
+  page.on('request', (r) => { if (r.method() === 'PATCH' && r.url().includes('/api/sessions/pw-normal-session')) patched++ })
+  await bar.getByRole('button', { name: 'Edit', exact: true }).click()
+  await bar.getByRole('button', { name: 'Done', exact: true }).click()
+  await page.waitForTimeout(1500)
+  expect(patched).toBe(0)
+  expect((await (await page.request.get('/api/sessions/pw-normal-session')).json()).session?.human_note).toBe(before)
   await page.request.patch('/api/sessions/pw-normal-session', { data: { human_note: '' } })
 })
 

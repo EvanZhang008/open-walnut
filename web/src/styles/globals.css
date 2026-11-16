@@ -2512,85 +2512,88 @@ select {
   border-top: 1px solid var(--border);
 }
 
-/* Session notes are references, not a second chat input. The heading and
-   neutral rule stay in place while the body switches between reading/editing. */
+/* Session note: the top band of the composer card (ChatInput's noteSlot), so
+   the note and the box are one element: one glass, one radius, no second frame.
+   One row holds the label and its controls (Edit / Done, the mic while editing);
+   the text below it is set like the composer's own text and lines up with it.
+   Read and edit keep the same shape: editing only swaps the text for the editor. */
 
-.session-notes {
+.chat-input-box > .session-notes {
   flex-shrink: 0;
-  border-top: 1px solid var(--border);
-  padding: 6px 16px;
+  padding: 7px 12px 8px;
+  border-bottom: 0.5px solid var(--border);
 }
-
-.session-notes-toggle {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  width: 100%;
-  padding: 0 0 0 20px;
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-size: 12px;
-  text-align: left;
-  min-width: 0;
-}
+/* Under the note band the card's top corners are taken: a task pill is a plain row. */
+.chat-input-box > .session-notes ~ .chat-input-task-pill { border-radius: 0; }
 
 .session-notes-heading,
 .session-notes-label,
 .session-notes-heading-actions { display: flex; align-items: center; }
-.session-notes-heading { justify-content: space-between; gap: 8px; margin-bottom: 3px; }
-.session-notes-label { gap: 7px; font-size: 11px; font-weight: 500; color: var(--fg-muted); }
-.session-notes-heading-actions { gap: 8px; flex-shrink: 0; }
+.session-notes-heading { justify-content: space-between; gap: 8px; min-height: 22px; }
+.session-notes-label { font-size: 11.5px; font-weight: 600; letter-spacing: 0.01em; color: var(--fg-muted); }
+.session-notes-heading-actions { gap: 4px; flex-shrink: 0; margin-right: -6px; }
+.session-notes-heading-actions .mic-btn { min-width: 24px; height: 22px; padding: 0 5px; }
+.session-notes-heading-actions .mic-btn svg { width: 13px; height: 13px; }
 .session-notes-action {
-  padding: 2px 5px;
+  padding: 2px 6px;
   border: none;
-  border-radius: 4px;
+  border-radius: 6px;
   background: none;
-  color: var(--fg-secondary);
+  color: var(--fg-muted);
   font: inherit;
-  font-size: 11px;
+  font-size: 11.5px;
   cursor: pointer;
 }
+.session-notes.is-editing .session-notes-action { color: var(--accent); font-weight: 500; }
 .session-notes-action:hover { background: var(--bg-hover); color: var(--fg); }
 .session-notes-action:focus-visible,
 .session-notes-toggle:focus-visible { outline: 1px solid var(--fg-muted); outline-offset: 2px; }
 
-/* The collapsed note keeps the LINE STRUCTURE the user typed (a note is usually
-   a checklist). Bounded to 3 lines so the bar can't push the composer around;
-   the full text is in the textarea one click away.
-
-   max-height, NOT -webkit-line-clamp: the child lines are `display: block`, and
-   line-clamp only counts line boxes in an inline formatting context — with block
-   children it silently doesn't clamp at all (measured: a 12-line note rendered
-   216px tall). 3 lines x 1.5 line-height x 12px font = 54px. */
-.session-notes-preview {
-  color: var(--fg-secondary);
+.session-notes-toggle {
+  display: block;
+  width: 100%;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
   min-width: 0;
-  flex: 1;
-  line-height: 1.5;
-  max-height: 54px;
-  overflow: hidden;
 }
 
-/* One typed line = one rendered line. `display: block` on a span inside the
-   -webkit-box clamp keeps each note line on its own row without needing <br>
-   (which would break the token-per-span rendering). */
+/* The read view keeps the LINE STRUCTURE the user typed (a note is usually a
+   checklist), bounded to 3 lines with a soft fade so it never pushes the
+   composer around; the full text is in the editor one click away. A blank line
+   between paragraphs is a small gap, and a run of them counts once.
+
+   max-height, NOT -webkit-line-clamp: the child lines are `display: block`, and
+   line-clamp only counts line boxes in an inline formatting context. */
+.session-notes-preview {
+  display: block;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--fg-secondary);
+  min-width: 0;
+  max-height: calc(13px * 1.55 * 3 + 6px);
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
+}
+
+/* One typed line = one rendered line (no <br>, which would break the
+   token-per-span rendering of links). */
 .session-notes-line {
   display: block;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-
-/* An empty typed line (blank line between paragraphs) still deserves its height,
-   otherwise a note's spacing silently collapses. */
-.session-notes-line:empty::before {
-  content: '\200B';
-}
+.session-notes-line:empty { height: 6px; }
+.session-notes-line:empty + .session-notes-line:empty { display: none; }
 
 .session-notes-status {
   font-size: 11px;
   color: var(--fg-muted);
   flex-shrink: 0;
+  margin-right: 2px;
 }
 .session-notes-status-saved { color: var(--success); }
 
@@ -2608,36 +2611,30 @@ select {
   border-bottom-color: var(--accent);
 }
 
-.session-notes-body {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  padding: 0 0 0 20px;
-}
+.session-notes-body { min-width: 0; }
 
-.session-notes-side {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 4px;
-  flex-shrink: 0;
-}
-
+/* The editor grows with the text to a sensible height, then it alone scrolls.
+   Never sideways: it wraps, and WebKit's trailing preserved spaces in a
+   pre-wrap line no longer open a horizontal scrollbar (2026-11-12 report). */
 .session-notes-textarea {
-  flex: 1;
+  display: block;
+  width: 100%;
   min-width: 0;
-  min-height: 54px;
-  max-height: 180px;
+  min-height: calc(13px * 1.55);
+  max-height: min(40vh, 300px);
   padding: 0;
-  font-size: 12px;
+  font-size: 13px;
   font-family: inherit;
-  line-height: 1.5;
+  line-height: 1.55;
   color: var(--fg);
   background: transparent;
   border: none;
   border-radius: 0;
-  resize: vertical;
+  resize: none;
   outline: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 /* ── Collapsed-URL note editor (CollapsibleUrlEditor) ──
@@ -2646,9 +2643,7 @@ select {
    PLACE while the caret is inside them (.cue-active) and re-collapse on leave. */
 .session-notes-editor {
   white-space: pre-wrap;
-  overflow-wrap: break-word;
-  overflow-y: auto;
-  resize: none;
+  overflow-wrap: anywhere;
   cursor: text;
 }
 
@@ -30338,15 +30333,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   margin-top: calc(var(--sp-header-h, 76px) + 6px);
 }
 
-/* A reference strip, not an outlined input card stacked on the composer. */
-.session-panel-input .session-notes {
-  border: none;
-  border-left: 2px solid var(--border-strong);
-  border-radius: 0;
-  background: var(--bg-secondary);
-  padding: 4px 8px;
-  margin: 0 4px 8px;
-}
 .session-panel-input > .text-xs {
   background: var(--bg);
   border-radius: 8px;

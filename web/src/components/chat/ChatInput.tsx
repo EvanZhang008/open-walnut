@@ -377,6 +377,9 @@ interface ChatInputProps {
   /** A removable chip at the top of the box saying where the send goes (the
    *  session's question target). The owner renders it, × included. */
   contextPill?: React.ReactNode;
+  /** The session note: the top band of the composer card, above everything else in it
+   *  (SessionNotesBar), so the note and the box are one element. */
+  noteSlot?: React.ReactNode;
   /** Mounted controls shared by the add menu and the composer's direct buttons. */
   addMenuControls?: {
     handleRef: RefObject<ComposerControlsBarHandle | null>;
@@ -438,7 +441,7 @@ interface ChatInputProps {
   promptRecallKey?: string;
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendInSplit, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget, promptRecallKey }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendInSplit, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, noteSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget, promptRecallKey }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
@@ -1811,7 +1814,14 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
     pasteRichTextAsMarkdown(e, textareaRef.current);
   };
 
+  // Text dragged within (or into) the session note at the top of the card is the
+  // note editor's own drag: only files are the composer's.
+  const isNoteTextDrag = (e: DragEvent) =>
+    !Array.from(e.dataTransfer?.types ?? []).includes('Files')
+    && e.target instanceof Element && !!e.target.closest('.session-notes');
+
   const handleDragOver = (e: DragEvent) => {
+    if (isNoteTextDrag(e)) return;
     e.preventDefault();
     setDragOver(true);
   };
@@ -1824,6 +1834,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
   };
 
   const handleDrop = (e: DragEvent) => {
+    if (isNoteTextDrag(e)) return;
     e.preventDefault();
     setDragOver(false);
     const files = e.dataTransfer?.files;
@@ -2080,6 +2091,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
           spacer · mic · send. Mic stays next to send. */}
       <div className="chat-input-row">
         <div className="chat-input-box" data-mic-bubble-anchor="" data-light={light ? 'true' : undefined}>
+          {noteSlot}
           {contextPill}
           {/* Inline task context pill */}
           {focusedTask && onClearFocus && (

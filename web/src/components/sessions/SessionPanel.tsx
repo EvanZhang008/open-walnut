@@ -4115,15 +4115,6 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
         </div>
 
         <div className="session-panel-input" ref={composerWrapRef}>
-          {/* Sticky-note bar — always visible once a note exists (also hosts the
-              editor when opened from the pill/kebab while empty). Docked in the
-              composer block, above the input card. */}
-          <SessionNotesBar
-            noteState={noteState}
-            expanded={notesOpen}
-            onToggleExpanded={() => setNotesOpen(o => !o)}
-            onCollapse={() => setNotesOpen(false)}
-          />
           {sendError && !isFolderGoneReason(sendError) && (
             <div className="text-xs" style={{ color: 'var(--error)', padding: '4px 12px' }}>
               {sendError}
@@ -4182,6 +4173,14 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               </>
             ) : undefined}
             addMenuControls={plainChat ? undefined : { handleRef: composerControlsRef, ids: ['output', 'btw', ...(noteState.hasNote ? [] : ['note'])] }}
+            // The note is the composer card's top band, always shown once a note exists
+            // (and while composing a new one from the pill or the kebab).
+            noteSlot={<SessionNotesBar
+              noteState={noteState}
+              expanded={notesOpen}
+              onToggleExpanded={() => setNotesOpen(o => !o)}
+              onCollapse={() => setNotesOpen(false)}
+            />}
             contextPill={threads.composerTarget ? (
               <ComposerThreadPill target={threads.composerTarget} onOpen={openComposerTarget} onClear={clearComposerTarget} />
             ) : composerPill}
