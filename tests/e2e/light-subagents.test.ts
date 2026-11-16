@@ -17,7 +17,7 @@ import { startServer, stopServer } from '../../src/web/server.js'
 import { addTask, completeTask } from '../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
-import { _resetLightSubagentsForTest, _setLightRunnerForTest, _skipEngineCheckForTest, prune, detachAllLightSubagents } from '../../src/core/subagents/registry.js'
+import { _resetLightSubagentsForTest, _setKeepIdleMsForTest, _setLightRunnerForTest, _skipEngineCheckForTest, lightSubagentSettled, prune, detachAllLightSubagents } from '../../src/core/subagents/registry.js'
 import type { LightRunSpec } from '../../src/core/subagents/types.js'
 
 const SID = '5ab0a6e1-1111-4bbb-8ccc-dddddddddd01'
@@ -232,8 +232,13 @@ describe('light subagents', () => {
   })
 
   it('ended runs are dropped after their keep, whether or not the session starts another', async () => {
+    // An answered subagent stays open for more messages until it has been idle a while; only a
+    // closed one is ended, and kept for KEEP_ENDED_MS after that.
+    _setKeepIdleMsForTest(50)
     const r = await call('POST', '/api/v1/subagents', { engine: 'codex', prompt: 'kept a while' }, OTHER)
     const id = String(r.json.id)
+    await lightSubagentSettled(id)
+    _setKeepIdleMsForTest(null)
     prune()
     expect((await call('GET', `/api/v1/subagents/${id}`, undefined, OTHER)).status).toBe(200)
     prune(Date.now() + 7 * 3_600_000)

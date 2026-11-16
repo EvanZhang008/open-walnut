@@ -173,6 +173,18 @@ let skipEngineCheck = false
 
 /** Tests: run every subagent with this runner instead of a real engine. */
 export function _setLightRunnerForTest(fn: LightRunner | null): void { runnerOverride = fn }
+/** The test runner as a session: like a real one, its close ends once the turn still in flight has. */
+function testHandle(runner: LightRunner, spec: LightRunSpec): Handle {
+  let inFlight: Promise<unknown> = Promise.resolve()
+  return {
+    turn: (prompt, t) => {
+      const p = runner({ ...spec, prompt, signal: t.signal, deadlineAt: t.deadlineAt, onProgress: t.onProgress })
+      inFlight = p.catch(() => {})
+      return p
+    },
+    close: async () => { await inFlight; return true },
+  }
+}
 /** Tests: run on a mock adapter whatever the machine has installed. */
 export function _skipEngineCheckForTest(skip: boolean): void { skipEngineCheck = skip }
 /** Tests: this process "ends" (a restart): every run is forgotten here, its written state kept. */
@@ -310,9 +322,11 @@ function newLive(run: LightSubagentRun): Live {
   return { run, abort: new AbortController(), waiters: new Set(), handle: null, chain: Promise.resolve(), turnNo: run.turnsEnded + 1, tells: new Map(), pending: [], detached: false, closing: null, settled: false, settledP, settle }
 }
 
-/** A running slot for `sid`: subagents answering now (and starts still checking their engine), per session and in all. */
+/** A running slot for `sid`: subagents answering now (and starts still checking their engine), per session and in all.
+ *  A run told to stop holds its slot until its session is really gone (`settled`): its worker is
+ *  still ending, and freeing the slot at the stop let stopped-but-running workers pile up. */
 function assertSlot(sid: string): void {
-  const held = [...runs.values()].filter((l) => !l.settled && l.run.status === 'running')
+  const held = [...runs.values()].filter((l) => !l.settled && (l.run.status === 'running' || l.closing))
   const reservedAll = [...reserving.values()].reduce((a, b) => a + b, 0)
   if (held.filter((l) => l.run.parentSid === sid).length + (reserving.get(sid) ?? 0) >= MAX_RUNNING_PER_SESSION) {
     throw new LightSubagentError('too_many', `This session already has ${MAX_RUNNING_PER_SESSION} subagents answering at once: their answers come to you by themselves; send this when one has answered, or stop one (subagent_stop)`, 429)
@@ -441,7 +455,7 @@ async function execute(live: Live, callerSid: string): Promise<void> {
     if (run.grant) await stillGranted(run)
     if (runnerOverride) {
       const runner = runnerOverride
-      live.handle = { turn: (prompt, t) => runner({ ...spec, prompt, signal: t.signal, deadlineAt: t.deadlineAt, onProgress: t.onProgress }), close: async () => true }
+      live.handle = testHandle(runner, spec)
     } else {
       const { SubagentSession } = await import('./on-host.js')
       live.handle = new SubagentSession(spec)
@@ -895,7 +909,7 @@ async function takeUp(live: Live, s: SavedRun): Promise<boolean> {
     if (runnerOverride) {
       const runner = runnerOverride
       const spec = specOf(live, run.parentSid)
-      live.handle = { turn: (prompt, t) => runner({ ...spec, prompt, signal: t.signal, deadlineAt: t.deadlineAt, onProgress: t.onProgress }), close: async () => true }
+      live.handle = testHandle(runner, spec)
       found = true
     } else if (s.handle) {
       const { SubagentSession } = await import('./on-host.js')
