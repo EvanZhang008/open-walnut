@@ -386,7 +386,9 @@ describe('buildSessionContext (identity note)', () => {
     // 11100 → 11350 (2026-11-16) for the charter's done line: a look that turned into work is a pivot
     // of the goal, and done means it happened, not that the user's decision was handed on (a worker
     // handed a payment decision to its lead and closed, leaving nobody to pay once he answered).
-    expect(systemPrompt.length).toBeLessThan(11350)
+    // 11350 → 11450 (2026-11-16) for the safeguard line's order and one-turn rule: a lead moved a task to
+    // Sonnet and nothing moved it back, so the task woke on Sonnet hours later.
+    expect(systemPrompt.length).toBeLessThan(11450)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {

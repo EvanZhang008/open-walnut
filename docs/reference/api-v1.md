@@ -3516,6 +3516,12 @@ BOTH boxes:
   - `503 host_reconnecting` (2026-10): the record says a CLI runs and its host
     cannot be asked now. Nothing changed; the message names the host. Retry
     when it answers (the menu's `hostNote` says the same).
+  - Optional `user_words` (2026-11-16): a pick by a session or a script
+    (`x-walnut-caller-sid`, `x-walnut-caller-kind`) holds for one turn; after
+    the next turn that ends clean Walnut moves the session back to its own
+    model (`src/core/sessions/model-restore.ts`). A person's pick, or an
+    agent's that passes `user_words` quoting the user's ask, is the session's
+    own and is never moved back. Older clients send neither and keep working.
 - `POST /api/v1/sessions/:id/effort` body `{ "effort" }` →
   `200 { "effort", "appliedLive", "effectiveEffort"?, "overridden" }`
   - `effort`: `low|medium|high|xhigh|max`. A level the model doesn't support →

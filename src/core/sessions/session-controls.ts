@@ -37,6 +37,7 @@ import { rememberAskWalnutSessionPick } from './ask-walnut-launch.js';
 import { parseCompanionFields } from '../offline-merge/companion-op.js';
 import { RemoteReadError } from '../hosts/remote-read-error.js';
 import { isPersonSource } from './send-sent-by.js';
+import { markTemporary, tracksTemporaryModel, type ModelChoice } from './model-restore.js';
 
 export class SessionControlError extends Error {
   constructor(
@@ -296,8 +297,10 @@ export type ModelChangeResult =
 export async function applySessionModelChange(
   sessionId: string,
   rawModel: unknown,
-  /** `remember: false`: Walnut's own switch (safeguard-switch.ts), never a pick for the next Ask Walnut. */
-  opts: { remember?: boolean } = {},
+  /** `remember: false`: Walnut's own switch (safeguard-switch.ts), never a pick for the next Ask Walnut.
+   *  `choice`: who picked it (model-restore.ts modelChoiceOf): an agent's pick holds for one turn, a
+   *  person's is the session's own. Absent (Walnut's own switches): the one-turn mark is left as it is. */
+  opts: { remember?: boolean; choice?: ModelChoice } = {},
 ): Promise<ModelChangeResult> {
   if (typeof rawModel !== 'string' || !rawModel.trim()) {
     throw new SessionControlError('model must be a non-empty string', 400);
@@ -374,6 +377,11 @@ export async function applySessionModelChange(
   // for a value the CLI just refused — that must not become every future Ask
   // Walnut's default.
   if (!rejectedByCli && opts.remember !== false) await rememberAskWalnutSessionPick(sessionId, { model: rawModel });
+  // An agent's pick holds for one turn (model-restore.ts puts the session back); a person's is its own.
+  if (!rejectedByCli && opts.choice && tracksTemporaryModel(record)) {
+    const mark = opts.choice === 'agent' ? markTemporary(record, cliModel, 'agent', new Date().toISOString()) : null;
+    if (mark || record.modelTemporary) await updateSessionRecord(sessionId, { modelTemporary: mark });
+  }
 
   log.session.info('session model changed', { sessionId, model: rawModel, cliModel, appliedLive: applied, effectiveModel });
   return { model: rawModel, cliModel, appliedLive: applied, effectiveModel };
@@ -1195,7 +1203,9 @@ export async function handleSessionControlRelay(
     let result: Record<string, unknown>;
     switch (action) {
       case 'model':
-        result = await applySessionModelChange(sessionId, p.model) as unknown as Record<string, unknown>;
+        result = await applySessionModelChange(sessionId, p.model, {
+          ...(p.choice === 'agent' || p.choice === 'person' ? { choice: p.choice } : {}),
+        }) as unknown as Record<string, unknown>;
         break;
       case 'effort':
         result = await applySessionEffortChange(sessionId, p.effort) as unknown as Record<string, unknown>;

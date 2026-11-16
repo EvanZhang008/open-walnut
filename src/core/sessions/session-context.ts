@@ -120,7 +120,8 @@ export const DEMO_CONTEXT_LINE = '\n\nThis is Walnut Demo. Use the walnut CLI fo
 
 export const SAFEGUARD_SWITCH_RULE = 'When Claude Code answers "API Error: ...\'s safeguards flagged this message", Walnut moves this '
   + 'session to another model after two in a row and resends what got no answer; sooner, ask your lead to switch you '
-  + '(a lead uses the api op: POST /api/v1/sessions/<session id>/model).'
+  + '(a lead uses the api op: POST /api/v1/sessions/<session id>/model, the next of Opus, Fable, Sonnet); '
+  + 'a switch holds one turn, then Walnut moves it back.'
 
 export interface SessionContext {
   systemPrompt: string

@@ -757,6 +757,7 @@ let idleCompactionHandle: { stop: () => void } | null = null
 let promptRefreshRespawnHandle: { stop: () => void } | null = null
 let contextFullRecoveryHandle: { stop: () => void } | null = null
 let safeguardSwitchHandle: { stop: () => void } | null = null
+let modelRestoreHandle: { stop: () => void } | null = null
 let endpointWaitHandle: { stop: () => void } | null = null
 let usageLimitWaitHandle: { stop: () => void } | null = null
 let threadAiHandles: Array<{ stop: () => void }> = []
@@ -2238,6 +2239,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         gaveUp: (rec, words) => raiseHeldError(rec, words, 'safeguard-switch:gave-up', async () =>
           (await currentRecord(rec.claudeSessionId).catch(() => null))?.process_status !== 'running'),
       })
+      // A model the safeguard switch or an agent picked holds for one turn, then the session goes back
+      // to its own (src/core/sessions/model-restore.ts).
+      const { startModelRestore } = await import('../core/sessions/model-restore.js')
+      modelRestoreHandle = startModelRestore()
     }
     // A completed task's own "please check this" letters leave the inbox (src/core/human-inbox/complete-archive.ts).
     const { startCompleteArchive } = await import('../core/human-inbox/complete-archive.js')
@@ -7567,6 +7572,11 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
     safeguardSwitchHandle.stop()
     safeguardSwitchHandle = null
   }
+  if (modelRestoreHandle) {
+    modelRestoreHandle.stop()
+    modelRestoreHandle = null
+  }
+
   if (contextFullRecoveryHandle) {
     contextFullRecoveryHandle.stop()
     contextFullRecoveryHandle = null

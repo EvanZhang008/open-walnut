@@ -27,6 +27,7 @@ import { bus, EventNames, type BusEvent } from '../event-bus.js'
 import { log } from '../../logging/index.js'
 import type { SafeguardSwitchState, SessionRecord } from '../types.js'
 import { isQuietTurn } from './quiet-turn.js'
+import { markTemporary, tracksTemporaryModel } from './model-restore.js'
 import { reportHeldTurnFailed } from './context-full-recovery.js'
 import { noteTurnAttempt, turnRetryEnded, type TurnRetrier } from './turn-run.js'
 import { ANTHROPIC_DEFAULT_WINDOW, resolveContextWindow } from '../../providers/context-window.js'
@@ -464,6 +465,10 @@ export class SafeguardSwitch {
     const toName = modelName(picked.row)
     const owed = this.owed.get(sessionId) ?? []
     const at = new Date(this.deps.now()).toISOString()
+    // The fallback holds for this work only: after its next clean turn the session goes back (model-restore.ts).
+    if (tracksTemporaryModel(rec!)) {
+      await this.deps.saveSession(sessionId, { modelTemporary: markTemporary(rec!, picked.row.id, 'safeguard-switch', at) }).catch(() => {})
+    }
     // The new model starts one short of a switch: refusing the resend itself is the second refusal of these words.
     const carried: Streak = { count: 0, since: at, ...(streak.category ? { category: streak.category } : {}), families: [] }
     this.streak.set(sessionId, carried)
@@ -500,7 +505,7 @@ export class SafeguardSwitch {
     }
     // The switch is over once its note is in: the new model's own results are nobody's to hold.
     if (this.running.get(sessionId) === run) this.running.delete(sessionId)
-    await this.deps.tellLead(rec!, `${line} Walnut resent what got no answer; nothing for you to do.`).catch((err) => {
+    await this.deps.tellLead(rec!, `${line} Walnut resent what got no answer and moves it back after that turn; nothing for you to do.`).catch((err) => {
       log.session.warn('safeguard switch: lead not told', { sessionId, error: err instanceof Error ? err.message : String(err) })
     })
     log.session.info('safeguard switch: switched', { sessionId, taskId: rec!.taskId, from: fromName, to: toName, toId: picked.row.id, resent: owed.length })

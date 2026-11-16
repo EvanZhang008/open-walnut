@@ -5,7 +5,8 @@
  * functions in core/sessions/session-controls.ts.
  *
  *   GET  /sessions/:id/model-options → { models, current, currentEffort }
- *   POST /sessions/:id/model  { model }  → { model, cliModel, appliedLive, effectiveModel }
+ *   POST /sessions/:id/model  { model, user_words? }  → { model, cliModel, appliedLive, effectiveModel }
+ *        (a session's or script's pick holds for one turn unless user_words quotes the user's ask: model-restore.ts)
  *   POST /sessions/:id/effort { effort } → { effort, appliedLive, effectiveEffort, overridden }
  *   POST /sessions/:id/fork   { create_child_task?, task_id?, message?, title? }
  *        → 201 { sessionId, taskId, title, status, sourceSessionId, … }
@@ -224,6 +225,9 @@ sessionControlV1Router.post('/sessions/:id/model', async (req: Request, res: Res
     const sessionId = validSid(req, res)
     if (!sessionId) return
     const rawModel = (req.body ?? {}).model
+    // An agent's pick holds for one turn; a person's (or one quoting their user_words) is the session's own.
+    const { modelChoiceOf } = await import('../../core/sessions/model-restore.js')
+    const choice = modelChoiceOf(req.headers, req.body)
     if (await relaysToPrimary(sessionId)) {
       // While the companion leads the session's host, that host applies it.
       const viaHost = await companionLeadsHostOf(sessionId)
@@ -232,12 +236,12 @@ sessionControlV1Router.post('/sessions/:id/model', async (req: Request, res: Res
         res.status(a.status).json(a.body)
         return
       }
-      await relayControlAction(res, 'model', sessionId, { model: rawModel }, 200)
+      await relayControlAction(res, 'model', sessionId, { model: rawModel, choice }, 200)
       return
     }
     const { applySessionModelChange, SessionControlError } = await import('../../core/sessions/session-controls.js')
     try {
-      res.json(await applySessionModelChange(sessionId, rawModel))
+      res.json(await applySessionModelChange(sessionId, rawModel, { choice }))
     } catch (err) {
       if (err instanceof SessionControlError) {
         sendControlError(res, err)

@@ -212,6 +212,24 @@ describe('POST /api/v1/sessions/:id/model', () => {
     expect(res.body).toMatchObject({ model: 'opus-1m', cliModel: 'opus[1m]', appliedLive: false })
     const record = await getSessionByClaudeId('ctl-model-1')
     expect(record?.cliModel).toBe('opus[1m]')
+    // A person's pick is the session's own: nothing marks it for one turn.
+    expect(record?.modelTemporary ?? null).toBeNull()
+  })
+
+  // 2026-11-16: a lead moved a task to Sonnet over this route and nothing moved it back.
+  it('a session\'s pick holds for one turn; one quoting the user\'s words, or a person\'s, is the session\'s own', async () => {
+    await createSessionRecord('ctl-model-lead', 'task-ml', 'proj', '/tmp', { initialProcessStatus: 'stopped' })
+    const app = createApp()
+    const lead = (body: Record<string, unknown>) => request(app).post('/api/v1/sessions/ctl-model-lead/model')
+      .set('x-walnut-caller-sid', 'lead-session').send(body)
+    expect((await lead({ model: 'sonnet' })).status).toBe(200)
+    expect((await getSessionByClaudeId('ctl-model-lead'))?.modelTemporary).toMatchObject({ from: null, to: 'sonnet', by: 'agent' })
+    expect((await lead({ model: 'opus', user_words: 'put that task on opus' })).status).toBe(200)
+    expect((await getSessionByClaudeId('ctl-model-lead'))?.modelTemporary ?? null).toBeNull()
+    expect((await lead({ model: 'sonnet' })).status).toBe(200)
+    expect((await getSessionByClaudeId('ctl-model-lead'))?.modelTemporary).toMatchObject({ from: 'opus', to: 'sonnet' })
+    expect((await request(app).post('/api/v1/sessions/ctl-model-lead/model').send({ model: 'sonnet' })).status).toBe(200)
+    expect((await getSessionByClaudeId('ctl-model-lead'))?.modelTemporary ?? null).toBeNull()
   })
 
   it('400 bad_request for an invalid model value', async () => {

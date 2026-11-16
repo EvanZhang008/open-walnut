@@ -131,7 +131,7 @@ export function switchedLine(fromName: string, toName: string, count: number, ca
 
 /** The note that tells the session it moved and hands it what got no answer. Pure; exported for tests. */
 export function resendNoteText(fromName: string, toName: string, count: number, category: string | undefined, rows: ReadonlyArray<OwedWords>): string {
-  const head = `${switchedLine(fromName, toName, count, category)} You now run on ${toName}. `
+  const head = `${switchedLine(fromName, toName, count, category)} You run on ${toName} for this turn; Walnut moves you back after it. `
     + 'The refusal was the model\'s safety filter, not your work or a tool: do not quote or restate any model\'s internal reasoning, and work from the task, the repository and the messages.'
   if (rows.length === 0) {
     return `${head} No new message reached you in the refused turns; carry on with the work from where it stopped.`

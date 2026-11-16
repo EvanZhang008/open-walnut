@@ -3581,6 +3581,21 @@ export interface SafeguardSwitchState {
   switchingAt?: string;
 }
 
+/**
+ * The session runs on a model for one turn only (src/core/sessions/model-restore.ts): Walnut's
+ * safeguard switch moved it, or an agent (its lead) switched it. After the next turn that ends
+ * clean, Walnut puts it back on `from`. A person's own pick clears it.
+ */
+export interface TemporaryModel {
+  /** The session's cliModel before the first temporary switch; null: the engine's default. */
+  from: string | null;
+  /** The model it was switched to. */
+  to: string;
+  by: 'safeguard-switch' | 'agent';
+  /** When it was switched: a turn that ended before this is not the temporary turn. */
+  at: string;
+}
+
 export interface SessionRecord {
   claudeSessionId: string;
   taskId: string;
@@ -3848,6 +3863,8 @@ export interface SessionRecord {
   /** Turns the model's safeguards refused in a row, and the models Walnut switched the session to
    *  after two (src/core/sessions/safeguard-switch.ts). */
   safeguardSwitch?: SafeguardSwitchState;
+  /** A model that holds for one turn only; null or absent: the model is the session's own. */
+  modelTemporary?: TemporaryModel | null;
   /** Where this session stops when Claude Code's auto-compact is off for it: the CLI refuses every
    *  request at this many context tokens (sessions/context-full.ts hardStopTokens). Absent while
    *  auto-compact is on or its state is unknown. The context percentage is measured against it. */

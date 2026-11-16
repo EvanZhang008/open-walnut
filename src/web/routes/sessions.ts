@@ -2602,8 +2602,10 @@ sessionsRouter.post('/:sessionId/model', async (req: Request, res: Response, nex
   const { model: rawModel } = req.body as { model?: string }
   try {
     const { applySessionModelChange, SessionControlError } = await import('../../core/sessions/session-controls.js')
+    // An agent's pick holds for one turn; a person's (or one quoting their user_words) is the session's own.
+    const { modelChoiceOf } = await import('../../core/sessions/model-restore.js')
     try {
-      res.json(await applySessionModelChange(sessionId, rawModel))
+      res.json(await applySessionModelChange(sessionId, rawModel, { choice: modelChoiceOf(req.headers, req.body) }))
     } catch (err) {
       if (err instanceof SessionControlError) {
         res.status(err.statusCode).json({ error: err.message, ...(err.extra ?? {}) })
