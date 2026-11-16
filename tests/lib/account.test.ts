@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { accountInfo, parsePasswdLine } from '../../src/lib/account.js'
+import { accountInfo, knownAccount, parsePasswdLine, resetAccountForTest } from '../../src/lib/account.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const onBun = typeof (process.versions as { bun?: string }).bun === 'string'
@@ -94,5 +94,29 @@ describe('every reader of the account name', () => {
     const out = execFileSync('git', ['grep', '-nE', String.raw`userInfo\(\)\.username|\busername\b[^}]*\}\s*=\s*(os\.)?userInfo\(\)`, '--', 'src', 'tests'], { cwd: ROOT, encoding: 'utf8' }).trim()
     const sites = out.split('\n').filter(line => line && !line.startsWith('tests/lib/account.test.ts:'))
     expect(sites, 'use accountInfo() from src/lib/account.ts: under bun os.userInfo().username is $USER, or "unknown"').toEqual([])
+  })
+})
+
+// 2026-11-16 review: on bun a lookup that could not run is tried again every 30 s with a
+// spawnSync of up to 5 s; callers on a request's path read only what is already known.
+describe('knownAccount', () => {
+  it('never runs a lookup, and gives what accountInfo found', () => {
+    const isBun = typeof (process.versions as { bun?: string }).bun === 'string'
+    resetAccountForTest()
+    try {
+      if (isBun) expect(knownAccount()).toBeNull()
+      const found = accountInfo()
+      expect(knownAccount()).toEqual(found)
+    } finally {
+      resetAccountForTest()
+    }
+  })
+
+  it('is what every request-path reader of the name asks', () => {
+    for (const f of ['src/core/hosts/ssh-resolve.ts', 'src/core/vault/keychain-secret.ts', 'src/core/vault/keychain-unlock.ts', 'src/providers/local-daemon.ts']) {
+      const src = fs.readFileSync(path.join(import.meta.dirname, '..', '..', f), 'utf8')
+      expect(src, f).toContain('knownAccount()')
+      expect(src, f).not.toMatch(/accountInfo\(\)/)
+    }
   })
 })

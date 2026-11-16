@@ -107,6 +107,19 @@ export function accountInfo(): Account {
   return cached
 }
 
+/**
+ * The account as far as it is already known, without running anything: on Node the passwd entry
+ * (os.userInfo() reads it at once), on bun the entry accountInfo() read before, else null.
+ * For callers on a request's path: a lookup that could not run is tried again by accountInfo()
+ * every 30 s with a spawnSync of up to 5 s, which would freeze every route each time.
+ */
+export function knownAccount(): Account | null {
+  if (typeof (process.versions as { bun?: string }).bun !== 'string') {
+    try { return accountInfo() } catch { return null }
+  }
+  return cached && !(cached instanceof Error) ? cached : null
+}
+
 /** Tests only: forget the cached entry. */
 export function resetAccountForTest(): void {
   cached = null

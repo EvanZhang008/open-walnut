@@ -12,7 +12,7 @@
  * its own), and by the daily Bitwarden sync when the vault is locked. macOS and the primary only;
  * elsewhere every call answers `unavailable`.
  */
-import { accountInfo } from '../../lib/account.js'
+import { knownAccount } from '../../lib/account.js'
 import { runVaultHelper } from './child-run.js'
 import { IS_DEMO } from '../../constants.js'
 import { readKeychainSecret } from './keychain-secret.js'
@@ -38,7 +38,7 @@ export function keychainAvailable(): boolean {
 }
 
 function account(): string {
-  try { return accountInfo().username } catch { return process.env.USER ?? '' }
+  return knownAccount()?.username ?? process.env.USER ?? ''
 }
 
 /** The master password from the keychain, or null when there is none (or it cannot be read). */

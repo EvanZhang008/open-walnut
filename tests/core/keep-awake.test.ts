@@ -4,6 +4,7 @@
  * clock) is injected, so no test touches the real machine's power management.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { accountInfo, resetAccountForTest } from '../../src/lib/account.js';
 import {
   decideKeepAwake,
   pollKeepAwakeOnce,
@@ -382,9 +383,26 @@ darwinOnly('setup detection through the poll', () => {
 
 describe('getSudoSetupCommand', () => {
   it('scopes the rule to exactly the two pmset disablesleep commands', () => {
+    // The server's boot reads the passwd entry (daemon-dir); the route only reads what is known.
+    accountInfo();
     const cmd = getSudoSetupCommand();
+    expect(cmd.startsWith(`echo '${accountInfo().username} ALL=`)).toBe(true);
     expect(cmd).toContain('NOPASSWD: /usr/bin/pmset disablesleep 1, /usr/bin/pmset disablesleep 0');
     expect(cmd).toContain('/etc/sudoers.d/walnut-keep-awake');
     expect(cmd).toContain('chmod 440');
+  });
+
+  // 2026-11-16 review: with no known name the line was "' ALL=(ALL) NOPASSWD: ...'", a sudoers
+  // syntax error once pasted. No name, no command (Settings then shows no Run in Terminal row).
+  it.runIf(typeof (process.versions as { bun?: string }).bun === 'string')('offers no command when the account name is not known', () => {
+    const saved = process.env.USER;
+    resetAccountForTest();
+    delete process.env.USER;
+    try {
+      expect(getSudoSetupCommand()).toBe('');
+    } finally {
+      if (saved !== undefined) process.env.USER = saved;
+      resetAccountForTest();
+    }
   });
 });

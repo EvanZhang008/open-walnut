@@ -28,7 +28,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
-import { accountInfo } from '../lib/account.js'
+import { knownAccount } from '../lib/account.js'
 import { WebSocket } from '#ws'
 import { log } from '../logging/index.js'
 import { HoldNews, holdLog } from './daemon-hold-news.js'
@@ -181,8 +181,8 @@ export function daemonServiceConfigPaths(
 }
 
 function serviceAccount(): { name: string | null; uid: number | null } {
-  let name: string | null = null
-  try { name = accountInfo().username } catch { /* no passwd entry */ }
+  // Asked on the server's path: what is known, never a passwd lookup of its own.
+  const name = knownAccount()?.username ?? null
   return { name, uid: typeof process.getuid === 'function' ? process.getuid() : null }
 }
 

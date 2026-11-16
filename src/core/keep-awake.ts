@@ -30,7 +30,7 @@
 
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { accountInfo } from '../lib/account.js';
+import { accountInfo, knownAccount } from '../lib/account.js';
 import { log } from '../logging/index.js';
 
 const execFileAsync = promisify(execFileCb);
@@ -189,15 +189,19 @@ export function resetKeepAwakeForTest(): void {
   displaySleepRequestedForClosure = false;
 }
 
-/** The one-time root rule this feature needs, scoped to exactly two commands. */
+/**
+ * The one-time root rule this feature needs, scoped to exactly two commands. Empty when the
+ * account's name is not known: a line with no user is a sudoers syntax error once pasted.
+ */
 export function getSudoSetupCommand(): string {
   const user = accountName();
+  if (!user) return '';
   return `echo '${user} ALL=(ALL) NOPASSWD: /usr/bin/pmset disablesleep 1, /usr/bin/pmset disablesleep 0' | sudo tee /etc/sudoers.d/walnut-keep-awake >/dev/null && sudo chmod 440 /etc/sudoers.d/walnut-keep-awake`;
 }
 
 /** The account's name for the sudoers line; $USER's word only if the passwd lookup could not run. */
 function accountName(): string {
-  try { return accountInfo().username; } catch { return process.env.USER ?? ''; }
+  return knownAccount()?.username ?? process.env.USER ?? '';
 }
 
 /**

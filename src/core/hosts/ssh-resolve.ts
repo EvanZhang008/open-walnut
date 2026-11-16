@@ -12,7 +12,7 @@
  * (never on the event loop), and the answer is kept for a few seconds per name.
  */
 import { execFile } from 'node:child_process'
-import { accountInfo } from '../../lib/account.js'
+import { knownAccount } from '../../lib/account.js'
 
 export interface SshResolved {
   name: string
@@ -73,5 +73,6 @@ export function resolveSshName(name: string, deps: { run?: SshGRun; now?: () => 
 }
 
 function safeLocalUser(): string {
-  try { return accountInfo().username } catch { return process.env.USER ?? '' }
+  // A request's path (the hosts route): never a passwd lookup here, only what is known.
+  return knownAccount()?.username ?? process.env.USER ?? ''
 }

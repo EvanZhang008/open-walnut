@@ -262,7 +262,7 @@ export function AdvancedSection({ config, onSave }: Props) {
                   </SettingsButton>
                 } />
             )}
-            {needsSetup && kaSetupError && kaStatus && (
+            {needsSetup && kaSetupError && kaStatus?.sudoSetupCommand && (
               <SettingsRow indent wide label="Run in Terminal" data-testid="ka-setup-command"
                 help={<code className="settings-mono-value">{kaStatus.sudoSetupCommand}</code>}
                 control={<CopyButton text={kaStatus.sudoSetupCommand} data-testid="ka-setup-copy" />} />
