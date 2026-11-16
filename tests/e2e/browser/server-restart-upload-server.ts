@@ -20,7 +20,8 @@ import path from 'node:path'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { fixtureHome, fixtureRealHome } from './fixture-home'
 
-const port = Number(process.env.PW_TEST_PORT ?? 3542)
+// Its own port: it runs beside the daemon-swap fixture under one config (daemon-swap-upload.config.ts).
+const port = Number(process.env.RESTART_FIXTURE_PORT ?? 3542)
 if (port === 3456) throw new Error('Production port is forbidden')
 const manifest = process.env.RESTART_FIXTURE_MANIFEST
 if (!manifest) throw new Error('RESTART_FIXTURE_MANIFEST is required')

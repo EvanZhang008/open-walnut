@@ -4,7 +4,7 @@
  * "image.png: The connection to Walnut dropped" after a deploy restarted the
  * server; a manual Retry worked).
  *
- * Its own fixture (server-restart-upload.config.ts): a real production-mode
+ * Its own fixture (server-restart-upload-server.ts, run by daemon-swap-upload.config.ts): a real production-mode
  * server, stopped as a deploy stops it, its port closed for the gap a deploy
  * leaves, then started again on the same port. The person pastes a picture while
  * it is down into a new session's composer and presses Enter: the picture says it waits for the connection
@@ -18,11 +18,13 @@ import { draftComposer, draftCwdPill, openDraft, REAL_PANEL } from './draft-help
 
 interface Fixture { port: number; controlPort: number; root: string; project: string; gapMs: number }
 let fx: Fixture
-const port = Number(process.env.PW_TEST_PORT ?? 3542)
+const port = Number(process.env.RESTART_FIXTURE_PORT ?? 3542)
 const shots = process.env.PW_SCREENSHOT_DIR ?? '/tmp/server-restart-upload'
 const PICTURE = path.resolve(import.meta.dirname, '../../../docs/assets/workflow-viz.png')
 
-test.skip(!process.env.RESTART_FIXTURE_MANIFEST, 'Requires the server-restart-upload.config.ts fixture')
+test.skip(!process.env.RESTART_FIXTURE_MANIFEST, 'Requires the server-restart fixture of daemon-swap-upload.config.ts')
+// The config's baseURL is the daemon-swap fixture's: this spec's own server answers here.
+test.use({ baseURL: `http://localhost:${port}` })
 test.describe.configure({ mode: 'serial' })
 
 test.beforeAll(() => {
