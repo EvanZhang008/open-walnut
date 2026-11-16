@@ -12,7 +12,6 @@
  * aliases are both up on different daemon processes is dropped (forgetSameDaemon).
  */
 import { readHostProfile, updateHostProfile } from './host-profile.js';
-import { linkTarget } from './link.js';
 import type { SshTarget } from '../../providers/session-io.js';
 
 type HostRow = { hostname?: unknown; user?: unknown; port?: unknown; transport?: unknown; endpoint?: unknown } | undefined;
@@ -42,6 +41,9 @@ export async function linkIdentityOf(alias: string, row: HostRow): Promise<strin
   if (alias === '__local__') return 'local';
   if (!row) return null;
   try {
+    // Loaded when asked: a static import put link.ts into daemon-connection's own import graph, and
+    // tests that mock daemon-connection then reached a real dial (list-dirs-incomplete, list-dirs-no-dial).
+    const { linkTarget } = await import('./link.js');
     return await targetIdentityOf(alias, linkTarget(alias, { hosts: { [alias]: row } } as never));
   } catch { return null; }
 }
