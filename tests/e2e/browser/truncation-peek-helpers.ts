@@ -1,4 +1,5 @@
 import { expect, type APIRequestContext, type Locator, type Page, type TestInfo } from '@playwright/test'
+import { withCssColor } from './css-color'
 
 /** Old floating clones must never return. Kept as a negative assertion across surfaces. */
 export const peekPill = (page: Page): Locator => page.getByTestId('truncation-peek')
@@ -26,14 +27,12 @@ export const openInRow = (el: Locator): Promise<boolean> => el.evaluate((node) =
 })
 
 /** What the page shows of an open (or closed) peek on `row`. */
-export const peekState = (row: Locator) => row.evaluate((el) => {
+export const peekState = (row: Locator) => row.evaluate(withCssColor((toRgba) => (el: Element) => {
   const box = (r: DOMRect) => ({ x: r.x, y: r.y, width: r.width, height: r.height })
   const r = el.getBoundingClientRect()
   const open = [...(el.matches('[data-peek-open]') ? [el] : []), ...Array.from(el.querySelectorAll('[data-peek-open]'))]
   const at = document.elementFromPoint(r.right - 3, r.top + r.height / 2)
-  const color = getComputedStyle(el).backgroundColor
-  // rgb()/rgba() is what browsers report for the app's colours; anything else is not judged.
-  const bg = color === 'transparent' ? [0, 0, 0, 0] : /^rgba?\(/.test(color) ? color.match(/[\d.]+/g)!.map(Number) : null
+  const bg = toRgba(getComputedStyle(el).backgroundColor)
   return {
     box: box(r),
     expanded: el.hasAttribute('data-peek-expanded'),
@@ -46,11 +45,11 @@ export const peekState = (row: Locator) => row.evaluate((el) => {
     nowrap: open.every((o) => getComputedStyle(o).whiteSpace === 'nowrap'),
     // The widened part covers what is beside it: the row is on top at its own right edge.
     onTop: !!at && el.contains(at),
-    bgAlpha: bg ? (bg.length > 3 ? bg[3] : 1) : null,
-    bgLuma: bg ? (0.2126 * bg[0] + 0.7152 * bg[1] + 0.0722 * bg[2]) / 255 : null,
+    bgAlpha: bg[3],
+    bgLuma: (0.2126 * bg[0] + 0.7152 * bg[1] + 0.0722 * bg[2]) / 255,
     viewport: window.innerWidth,
   }
-})
+}))
 
 const near = (a: number, b: number) => Math.abs(a - b) <= EXACT
 
@@ -96,9 +95,9 @@ export async function expectWidensInPlace(row: Locator, before: Box, opts: { lab
   const p = s.placeholders[0]
   expect(p.empty && p.inert, `${label}: the placeholder is an empty, inert, hidden shell (no copied text)`).toBe(true)
   for (const k of ['x', 'y', 'width', 'height'] as const) expect(near(p.box[k], before[k]), `${label}: placeholder ${k} ${p.box[k]} vs ${before[k]}`).toBe(true)
-  if (s.bgAlpha !== null) expect(s.bgAlpha, `${label}: an opaque background, so nothing under it shows through`).toBeGreaterThan(0.95)
-  if (s.bgLuma !== null && opts.theme === 'dark') expect(s.bgLuma, `${label}: a dark background in the dark theme`).toBeLessThan(0.5)
-  if (s.bgLuma !== null && opts.theme === 'light') expect(s.bgLuma, `${label}: a light background in the light theme`).toBeGreaterThan(0.5)
+  expect(s.bgAlpha, `${label}: an opaque background, so nothing under it shows through`).toBeGreaterThan(0.95)
+  if (opts.theme === 'dark') expect(s.bgLuma, `${label}: a dark background in the dark theme`).toBeLessThan(0.5)
+  if (opts.theme === 'light') expect(s.bgLuma, `${label}: a light background in the light theme`).toBeGreaterThan(0.5)
   await expect(peekPill(row.page()), `${label}: no floating text pill`).toHaveCount(0)
   return b
 }
