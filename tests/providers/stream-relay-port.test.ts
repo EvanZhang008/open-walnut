@@ -122,8 +122,8 @@ describe('a port stream through the daemon', () => {
     })
     const s = await h.ep.openPort(port, '127.0.0.1')
     s.pause()
-    await new Promise((r) => setTimeout(r, 150))
-    expect(pauses).toBeGreaterThan(0)
+    // The backpressure reaches the far socket: wait for that, not a clock.
+    await vi.waitFor(() => expect(pauses).toBeGreaterThan(0), { timeout: 10_000 })
     // Nothing is lost while paused.
     const got = readAll(s)
     s.resume()

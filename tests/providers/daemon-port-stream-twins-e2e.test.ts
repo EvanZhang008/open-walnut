@@ -232,8 +232,8 @@ for (const twin of TWINS) {
       await expect(ep.openPort(svc, 'example.test')).rejects.toThrow(/only this host's own loopback/)
       await expect(ep.openPort(svc, '169.254.169.254')).rejects.toThrow(/only this host's own loopback/)
       const gone = await listen(() => {})
-      servers.pop()!.close()
-      await new Promise((r) => setTimeout(r, 50))
+      // Wait for the listener itself to close, not a clock.
+      await new Promise<void>((r) => servers.pop()!.close(() => r()))
       await expect(ep.openPort(gone, '127.0.0.1')).rejects.toThrow(/nothing is listening on port/)
       expect(dialled).toBe(0)
     }, 90_000)
