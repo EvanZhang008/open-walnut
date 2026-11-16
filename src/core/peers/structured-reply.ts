@@ -121,6 +121,12 @@ export interface TaskOwed {
    * (owed-to-user.ts leadsTask). Dropped as soon as any other closer is held by the same items.
    */
   toCloser?: true;
+  /**
+   * The items that came from the task's own conclusion (its not_done or result saying the user still
+   * decides, owed-waits.ts): they hold while a close still says so, and clear once its conclusion
+   * no longer does. Every other item holds until it is settled.
+   */
+  said?: string[];
   settled?: { at: string; by?: string; how: 'taken' | 'dropped'; note?: string };
 }
 

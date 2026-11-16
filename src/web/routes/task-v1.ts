@@ -278,7 +278,7 @@ taskV1Router.post('/tasks/:id/complete', async (req: Request, res: Response, nex
       // A session's close of a task that still holds something for the user keeps it open as
       // Partial and Needs you (core/sessions/owed-to-user.ts).
       const { admitSessionClose, closeWithSettle } = await import('../../core/sessions/owed-to-user.js')
-      const owed = await admitSessionClose(id, actorSid, { force: b.force === true, reason: typeof b.reason === 'string' ? b.reason : undefined, fields })
+      const owed = await admitSessionClose(id, actorSid, { force: b.force === true, reason: typeof b.reason === 'string' ? b.reason : undefined, fields, userWords: typeof b.user_words === 'string' ? b.user_words : undefined })
       if (!owed.ok) {
         sendError(res, 409, owed.code, owed.message, { items: owed.items })
         return

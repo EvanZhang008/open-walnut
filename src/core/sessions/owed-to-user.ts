@@ -25,9 +25,14 @@
  * and report-phase.ts keeps a later turn's report from moving it off NEED_ACTION. The not-done
  * settle (POST /tasks/:id/not-done), a person's close and a forced close end it.
  *
- * What counts (OWED_SOURCES): an open Progress item that names the user, the ask its status
+ * What counts (OwedSource): an open Progress item that names the user, the ask its status
  * makes of the user (its own report, a letter, a Board choice, a live prompt, a snoozed ask), an
- * unanswered decision letter it sent, an unanswered Board choice about it. A person's own
+ * unanswered decision letter it sent, an unanswered Board choice about it, an org node's thread
+ * waiting on the user that names it, and its own conclusion saying the user still has to decide or
+ * answer (its not_done or result: owed-waits.ts, 2026-11-16: a worker handed a
+ * payment decision to its lead and closed; the task that was to pay once he answered was gone).
+ * A forced close past them by anyone but the task's lead quotes the user's own words (user_words):
+ * only he settles what waits on him. A person's own
  * completion is never checked: they decided. Main and a lead are never held: they are never closed
  * as work, and their asks are their teams'. A session closing its OWN task with nothing owed is
  * still asked once to bring a note that reads as unfinished up to date (admitOwnNote, stale-note.ts:
@@ -41,7 +46,8 @@ import type { UserStatus } from '../user-status.js';
 import { userSaidLine } from './user-spoke.js';
 import type { OpenLineKind } from './stale-note.js';
 
-export type OwedSource = 'progress' | 'ask' | 'letter' | 'choice' | 'held';
+/** Every kind of thing a close owes the user. tests/e2e/owed-close.test.ts holds a close by each one. */
+export type OwedSource = 'progress' | 'ask' | 'letter' | 'choice' | 'thread' | 'decision' | 'held';
 export interface OwedItem { source: OwedSource; text: string }
 
 /**
@@ -102,8 +108,11 @@ export function statusAskItem(s: UserStatus | null | undefined): string | undefi
   return OWED_STATUS_SOURCES[s.source ?? 'session']?.owed === false ? undefined : s.ask;
 }
 
-/** Everything the task still holds for the user. Each store that cannot be read adds nothing. */
-export async function owedToUser(task: Task): Promise<OwedItem[]> {
+/**
+ * Everything the task still holds for the user. Each store that cannot be read adds nothing.
+ * `fields`: what the close itself brings (its not_done and result count with the stored ones).
+ */
+export async function owedToUser(task: Task, fields?: StructuredReply | null): Promise<OwedItem[]> {
   const out: OwedItem[] = [];
   const seen = new Set<string>();
   const add = (source: OwedSource, text: string | undefined) => {
@@ -113,10 +122,11 @@ export async function owedToUser(task: Task): Promise<OwedItem[]> {
     seen.add(key);
     out.push({ source, text: t });
   };
+  let name: string | undefined;
   try {
     const { extractProgressLines } = await import('../task-progress.js');
     const { refreshUserProfile } = await import('./user-profile-context.js');
-    const name = userNameOf((await refreshUserProfile().catch(() => null))?.text ?? '');
+    name = userNameOf((await refreshUserProfile().catch(() => null))?.text ?? '');
     for (const t of userProgressItems(task.note, name, extractProgressLines)) add('progress', t);
   } catch { /* unread: nothing */ }
   // Not the ask a hold of its own wrote (its status reads it back): the items it names come below.
@@ -136,10 +146,22 @@ export async function owedToUser(task: Task): Promise<OwedItem[]> {
     const all = await listTasks();
     const facts = await readStatusFacts([task], all.map((t) => t.id));
     for (const c of facts.choices?.get(task.id) ?? []) add('choice', `Answer the Board choice "${c.title}"`);
+    // Its own conclusion: what the close brings (its result and not_done, the new conclusion), else
+    // what its last result left open with what an earlier hold read from it. A close whose own
+    // conclusion no longer says so clears those.
+    const { decisionItems, threadWaitItems } = await import('./owed-waits.js');
+    const was = task.result_report;
+    const open = was && !was.settled ? [...ownNotDone(was), ...(openOwed(was)?.said ?? [])] : [];
+    const said = decisionItems(fields
+      ? { notDone: fields.not_done ?? [], result: fields.result }
+      : { notDone: open, result: was && !was.settled ? was.result : undefined }, name);
+    for (const t of said) add('decision', t);
+    for (const t of await threadWaitItems(task, all, said.length > 0)) add('thread', t.text);
   } catch { /* unread: nothing */ }
   // A hold stays until it is settled (a forced close with a reason, the not-done settle, a person's
   // close): what it named counts even after the line that named it changed.
-  for (const t of held?.items ?? []) add('held', t);
+  // What it read from its own conclusion holds only while the conclusion still says it (above).
+  for (const t of held?.items ?? []) if (!held!.said?.includes(t)) add('held', t);
   return out;
 }
 
@@ -177,6 +199,17 @@ export async function leadsTask(task: Pick<Task, 'id' | 'parent_task_id'>, close
     parent = (await read(parent).catch(() => null))?.parent_task_id;
   }
   return false;
+}
+
+/** Whether the closer is Main, the lead of its project's team, or a task in its parent chain (never another team's lead). */
+async function isAbove(task: Pick<Task, 'id' | 'parent_task_id' | 'project'>, closerTaskId: string): Promise<boolean> {
+  if (closerTaskId === task.id) return false;
+  const { getTask } = await import('../task-manager.js');
+  const closer = await getTask(closerTaskId).catch(() => null);
+  if (closer?.org_role === 'main') return true;
+  if (closer?.org_role === 'lead' && (closer.project ?? '').toLowerCase() === (task.project ?? '').toLowerCase()) return true;
+  const { leadChain } = await import('./owed-waits.js');
+  return (await leadChain(task, (id) => getTask(id).catch(() => null))).has(closerTaskId);
 }
 
 /** Who is closing: null for a person (never checked), else the closing session's task and session. */
@@ -252,9 +285,17 @@ async function holdOpen(task: Task, items: OwedItem[], closer: Closer, callerSid
   const by = `task:${closer.taskId}`;
   const closerWriter: Writer = { by, ...(closer.sessionId ? { sessionId: closer.sessionId } : {}) };
   const texts = items.map((i) => i.text);
-  const ask = cut(items.length === 1 && items[0].source !== 'progress' && items[0].source !== 'held'
-    ? items[0].text
-    : `Left for you when this task was closed: ${itemsText(items)}`);
+  // A thread's own words when one asks it, so that thread reads as a pointer to this task's ask
+  // (thread-task-ask.ts) and the user sees the decision once, where his answer reaches the work.
+  // Only when the rest restate it (the task's own words of that decision): another item of the user
+  // stays in the ask (2026-11-16 review).
+  const thread = items.find((i) => i.source === 'thread');
+  const restates = !!thread && items.every((i) => i === thread || i.source === 'decision' || (i.source === 'held' && i.text === thread.text));
+  const said = items.filter((i) => i.source === 'decision').map((i) => i.text);
+  const ask = cut(thread && restates ? thread.text
+    : items.length === 1 && items[0].source !== 'progress' && items[0].source !== 'held' && items[0].source !== 'decision'
+      ? items[0].text
+      : `Left for you when this task was closed: ${itemsText(items)}`);
   const at = new Date().toISOString();
   const { updateTask, updateTaskRaw } = await import('../task-manager.js');
   let phaseRead: Task['phase'] | undefined;
@@ -279,7 +320,7 @@ async function holdOpen(task: Task, items: OwedItem[], closer: Closer, callerSid
         via: 'complete', at, ...head,
         not_done: [...new Set([...own, ...texts])],
         ...(mixed ? { not_done_by: 'unknown' as const } : {}),
-        owed: ownedBy(same ? { ...open!, told, ...(renew ? { at } : {}) } : { items: texts, ask, at, by, told },
+        owed: ownedBy(withSaid(same ? { ...open!, told, ...(renew ? { at } : {}) } : { items: texts, ask, at, by, told }, said),
           byLead && (!same || open!.toCloser === true)),
       },
     };
@@ -297,6 +338,12 @@ async function holdOpen(task: Task, items: OwedItem[], closer: Closer, callerSid
   log.task.info('close held open: the user still has items of it', { taskId: task.id, by, items: items.map((i) => i.source), changed, toCloser: byLead });
 }
 
+/** The hold with the items it read from the task's conclusion (`said`), set or cleared. */
+function withSaid(owed: TaskOwed, said: readonly string[]): TaskOwed {
+  const { said: _was, ...rest } = owed;
+  return said.length ? { ...rest, said: [...said] } : rest;
+}
+
 /** The hold with `toCloser` set or cleared (a key never left as undefined in the store). */
 function ownedBy(owed: TaskOwed, toCloser: boolean): TaskOwed {
   const { toCloser: _was, ...rest } = owed;
@@ -311,7 +358,7 @@ function ownedBy(owed: TaskOwed, toCloser: boolean): TaskOwed {
  */
 export async function admitSessionClose(
   taskId: string, callerSid: string | undefined,
-  opts: { force?: boolean; reason?: string; fields?: StructuredReply | null } = {},
+  opts: { force?: boolean; reason?: string; fields?: StructuredReply | null; userWords?: string } = {},
 ): Promise<CloseAdmission> {
   const closer = await closerOf(callerSid);
   const { getTask } = await import('../task-manager.js');
@@ -330,7 +377,7 @@ export async function admitSessionClose(
   }
   const task = await getTask(taskId).catch(() => null);
   if (!task || task.phase === 'COMPLETE' || task.status === 'done' || task.org_role === 'main' || task.org_role === 'lead') return { ok: true };
-  const items = await owedToUser(task);
+  const items = await owedToUser(task, opts.fields);
   if (!items.length) return closer.taskId === task.id ? admitOwnNote(task, opts.fields) : { ok: true };
   const reason = (opts.reason ?? '').replace(/\s+/g, ' ').trim();
   const held = openOwed(task.result_report);
@@ -342,11 +389,19 @@ export async function admitSessionClose(
   const heldMs = held ? Date.parse(held.at) : NaN;
   const wroteSinceHold = !!said?.spokeSince && said.words.some((w) => !(Date.parse(w.at) <= heldMs));
   const told = !!held && (held.told ?? []).includes(closer.taskId) && items.every((i) => held.items.includes(i.text)) && !wroteSinceHold;
-  if (opts.force === true && reason.length >= REASON_MIN && told) {
+  const byLead = await leadsTask(task, closer.taskId, (id) => getTask(id)).catch(() => false);
+  // Only the user settles what waits on him: a force by its own session or a peer quotes his words,
+  // written since the hold named them (2026-11-16, the Walnut VP: "force only when Evan himself said
+  // it is no longer wanted"). A lead above it (its parent chain, or Main) settles its team's items
+  // itself, with a reason; another team's lead does not.
+  const forcing = opts.force === true && reason.length >= REASON_MIN && told;
+  const aboveIt = forcing && await isAbove(task, closer.taskId);
+  const { userWordsQuoted } = await import('./owed-waits.js');
+  const hisWords = forcing && (aboveIt || await userWordsQuoted(task, opts.userWords, closer.taskId, held!.at).catch(() => false));
+  if (forcing && hisWords) {
     log.task.info('task closed with items of the user settled by its closer', { taskId, by: closer.taskId, reason, items: items.map((i) => i.source) });
     return { ok: true, settle: { taskId: task.id, items, reason, by: `task:${closer.taskId}`, ...(closer.sessionId ? { sessionId: closer.sessionId } : {}) } };
   }
-  const byLead = await leadsTask(task, closer.taskId, (id) => getTask(id)).catch(() => false);
   let failed: string | undefined;
   try {
     await holdOpen(task, items, closer, callerSid, opts.fields, wroteSinceHold, byLead);
@@ -355,7 +410,9 @@ export async function admitSessionClose(
     log.task.warn('close held open, but recording it failed', { taskId, error: failed });
   }
   const forcedEarly = opts.force === true && !told;
+  const forcedUnquoted = forcing && !hisWords;
   const message = `Not closed: the user still has ${items.length} thing(s) of this task to do or decide: ${itemsText(items)}. `
+    + 'A task is done when what the user wanted has happened, not when his decision was handed on: while it waits on his answer it stays open, and his answer (in this task, or relayed by its lead) wakes it to carry on. '
     + (failed
       ? `Recording this on the task failed (${cut(failed, 160)}), so it may not show as Partial yet; tell the user. `
       : byLead
@@ -363,8 +420,11 @@ export async function admitSessionClose(
           + 'Settle each one (task_not_done_settle, or close again with force), and pass one on to the user only when it is really theirs (an outward send, spending, credentials, a fact only they have). '
         : 'It now reads Partial and stays in their Needs you (NEED_ACTION) until they are handled; tell the user if you have not. ')
     + (forcedEarly ? 'force settles only items already named to you, as these are now. ' : '')
+    + (forcedUnquoted ? 'force needs user_words: the user\'s own message, written since these were named (in this task, its lead\'s thread or your chat), that answers them or says they are no longer wanted, quoted exactly; none of his messages since has those words. A tool without user_words: run `walnut tools call task_complete \'<json>\'`. ' : '')
     + (said?.words.length ? `${userSaidLine(said)} Read his words before you settle anything in his place. ` : '')
-    + `If they are already done or no longer needed, close it again with force:true and a reason (${REASON_MIN}+ characters) saying so; the reason is kept as how they were settled.`;
+    + (byLead
+      ? `If they are already done or no longer needed, close it again with force:true and a reason (${REASON_MIN}+ characters) saying so; the reason is kept as how they were settled.`
+      : `Once the user answered them (or said they are no longer wanted) and you did what follows, close it again with force:true, a reason (${REASON_MIN}+ characters) and user_words quoting his message; until then end your turn with it open (its own Needs you ask, or WAITING on its lead to relay his answer). An item from your own not_done or result clears when your close no longer says it; others done some other way, ask your lead to settle.`);
   return { ok: false, code: 'owed_to_user', message, items };
 }
 
@@ -483,12 +543,23 @@ async function undoSettle(taskId: string, mark: { prev: TaskResultReport | undef
 export async function closeWithSettle<T>(settle: CloseSettle | undefined, fields: StructuredReply | null | undefined, close: () => Promise<T>): Promise<T> {
   if (!settle) return close();
   const mark = await recordSettle(settle, fields);
+  let out: T;
   try {
-    return await close();
+    out = await close();
   } catch (err) {
     await undoSettle(settle.taskId, mark);
     throw err;
   }
+  await quietThreadsOf(settle);
+  return out;
+}
+
+/** The threads that asked the user what this settle settled go quiet (owed-waits.ts quietSettledThreads). */
+async function quietThreadsOf(settle: CloseSettle): Promise<void> {
+  const by = settle.person ? (settle.by === 'human' ? 'human' : null) : settle.by.startsWith('task:') ? settle.by as `task:${string}` : null;
+  if (!by) return;
+  const { quietSettledThreads } = await import('./owed-waits.js');
+  await quietSettledThreads(settle.taskId, settle.items.map((i) => i.text), by).catch(() => 0);
 }
 
 /**
@@ -523,5 +594,6 @@ export async function settleBatch<T extends { changed: Array<{ id: string } | st
   }
   const done = new Set(result.changed.map((c) => (typeof c === 'string' ? c : c.id)));
   for (const [id, m] of marks) if (!done.has(id)) await undoSettle(id, m);
+  for (const s of settles.values()) if (done.has(s.taskId)) await quietThreadsOf(s);
   return result;
 }

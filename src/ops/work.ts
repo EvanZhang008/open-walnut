@@ -217,7 +217,8 @@ export function asksDecisionLine(line: string): string {
   return `Your message asks for a decision ("${shown.length > 160 ? `${shown.slice(0, 159).join('')}…` : shown.join('')}"). `
     + 'If it is the user\'s to make, a message to another task does not reach them: make it your own ask '
     + '(FOR_USER_ASK at the end of your turn, or task_report_set) so it is on their Needs you; if your lead already decided it, '
-    + 'drop it. If the task you wrote to decides it, nothing more is needed.';
+    + 'drop it. If the task you wrote to decides it itself, nothing more is needed. Handing the user\'s decision to your lead '
+    + 'does not finish your task: keep it open until the user answered and you did what follows.';
 }
 
 /** The route's own ceiling on the text rows one page reaches back for (TRANSCRIPT_VISIBLE_MAX). */

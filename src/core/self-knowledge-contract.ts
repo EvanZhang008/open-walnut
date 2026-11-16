@@ -73,7 +73,11 @@ import { TASK_ROUTING_CONTRACT } from './task-routing-contract.js';
 // package or file is not sharing a deliverable, task_get before handing, task_send's 409
 // scope_mismatch, and search (meaning, any language) to find an owner (a lead handed an outage
 // fix to an older code review's task in the same file; another missed an English-titled owner).
-export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 11_150;
+//
+// Raised to 11,400 on 2026-11-16 for the charter's done line: a look that turned into work is a
+// pivot of the goal, and done means it happened, not that the user's decision was handed on (a worker
+// handed a payment decision to its lead and closed, leaving nobody to pay once he answered).
+export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 11_400;
 
 // The phase LIST comes from PHASE_ORDER, so adding or removing a phase updates
 // this prompt with no second edit. The phases the prompt names are typed

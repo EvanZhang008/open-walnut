@@ -1269,10 +1269,13 @@ defineOp({
     '(a person wrote in it this week, its session was open in a terminal, it holds an org role or an armed trigger), ' +
     'or whose work is unfinished (a Partial result nobody settled, a request to it still unanswered, a turn running now), ' +
     'gets 409 task_in_use with the reasons: leave it open, or pass force:true with a reason. Open subtasks never block it. ' +
-    'A session closing a task (its own or another) that still holds something for the user (an open Progress item for them, ' +
-    'its Needs you ask, an unanswered decision letter it sent, an unanswered Board choice about it) gets 409 owed_to_user: ' +
-    'the task stays open as Partial and Needs you, with those items named. Tell the user. Once named, close it again with ' +
-    'force:true and a reason when they are done or no longer needed; the reason is kept as how they were settled. ' +
+    'Done means what the user wanted has happened, not that a decision of theirs was handed on. A session closing a task ' +
+    '(its own or another) that still holds something for the user (an open Progress item for them, its Needs you ask, an ' +
+    'unanswered decision letter it sent, an unanswered Board choice about it, a lead\'s thread waiting on the user that names ' +
+    'it, or its own not_done or result saying the user still has to decide or answer) gets 409 owed_to_user: the ' +
+    'task stays open as Partial and Needs you, with those items named, and the user\'s answer wakes it to carry on. Once named ' +
+    'and answered, close it again with force:true, a reason, and user_words quoting the user\'s own message that answered ' +
+    'them or dropped them; the task\'s lead settles its team\'s items with a reason alone. ' +
     'A session completing its OWN task whose note still reads as unfinished (a [TODO]/[WIP]/[WAIT]/[BLOCKED] Progress line, ' +
     '"waiting for", "pending", "is running", "you decide" in its Executive Summary) gets 409 stale_note once, naming the lines: ' +
     'update the note (task_note_write) and pass what is really open as not_done, then complete again; the same lines a second ' +
@@ -1286,8 +1289,9 @@ defineOp({
     evidence: z.union([z.string(), z.array(z.string()).max(LIST_MAX)]).optional().describe('Paths or links that show the result (a list, or one per line)'),
     not_done: z.union([z.string(), z.array(z.string()).max(LIST_MAX)]).optional().describe('What is NOT done or not verified (a list, or one per line). Non-empty = Partial'),
     score: REVIEW_SCORE_INPUT.optional().describe('A reviewer closing its own review: the verdict out of 10, e.g. {"function":8,"ux":7.5,"ui":9}, when its reply did not carry it (function: does it do what the user asked, correctly; ux: how it feels to use; ui: how it looks; or the text "8/7.5/9")'),
-    force: z.boolean().optional().describe('Complete another task still in use (409 task_in_use), or a task whose items for the user were named by a 409 owed_to_user. Needs `reason`'),
+    force: z.boolean().optional().describe('Complete another task still in use (409 task_in_use), or a task whose items for the user were named by a 409 owed_to_user. Needs `reason`, and for owed items `user_words` unless you lead the task'),
     reason: z.string().min(10).max(500).optional().describe('With force: who asked for the close and why it is right although the task is in use, or how the user\'s items were handled'),
+    user_words: z.string().max(4000).optional().describe('With force past a 409 owed_to_user: the user\'s own message (task_history rows with sentBy "person", or his thread messages) that answered the items or said they are no longer wanted, quoted exactly'),
   },
   // POST /complete, NOT PATCH {status:'done'}: only completeTask() semantics
   // surface a sync-push failure (the v1 PATCH swallows it via asyncPush).

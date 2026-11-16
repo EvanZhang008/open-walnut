@@ -3523,7 +3523,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       // (core/sessions/owed-to-user.ts).
       const { admitSessionClose } = await import('../../core/sessions/owed-to-user.js')
       const closeBody = (req.body ?? {}) as Record<string, unknown>
-      const owed = await admitSessionClose(id, actor, { force: closeBody.force === true, reason: typeof closeBody.reason === 'string' ? closeBody.reason : undefined })
+      const owed = await admitSessionClose(id, actor, { force: closeBody.force === true, reason: typeof closeBody.reason === 'string' ? closeBody.reason : undefined, userWords: typeof closeBody.user_words === 'string' ? closeBody.user_words : undefined })
       if (!owed.ok) { sendError(res, 409, owed.code, owed.message, { items: owed.items }); return }
       owedSettle = owed.settle
       // COMPLETE is verified: a standing Partial ends with it, as on POST /complete.

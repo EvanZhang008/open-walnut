@@ -1642,7 +1642,7 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
     if (req.body.phase === 'COMPLETE' || req.body.status === 'done') {
       const { callerSidOf } = await import('../../core/sessions/outside-wait.js')
       const { admitSessionClose } = await import('../../core/sessions/owed-to-user.js')
-      const owed = await admitSessionClose(id, callerSidOf(req.headers), { force: req.body.force === true, reason: typeof req.body.reason === 'string' ? req.body.reason : undefined })
+      const owed = await admitSessionClose(id, callerSidOf(req.headers), { force: req.body.force === true, reason: typeof req.body.reason === 'string' ? req.body.reason : undefined, userWords: typeof req.body.user_words === 'string' ? req.body.user_words : undefined })
       if (!owed.ok) { res.status(409).json({ error: owed.message, code: owed.code, items: owed.items }); return }
       owedSettle = owed.settle
     }
@@ -1729,7 +1729,7 @@ tasksRouter.post('/:id/complete', async (req: Request, res: Response, next: Next
     // A session's close of a task that still holds something for the user keeps it open (core/sessions/owed-to-user.ts).
     const { callerSidOf } = await import('../../core/sessions/outside-wait.js')
     const { admitSessionClose, closeWithSettle } = await import('../../core/sessions/owed-to-user.js')
-    const owed = await admitSessionClose(id, callerSidOf(req.headers), { force: req.body?.force === true, reason: typeof req.body?.reason === 'string' ? req.body.reason : undefined })
+    const owed = await admitSessionClose(id, callerSidOf(req.headers), { force: req.body?.force === true, reason: typeof req.body?.reason === 'string' ? req.body.reason : undefined, userWords: typeof req.body?.user_words === 'string' ? req.body.user_words : undefined })
     if (!owed.ok) { res.status(409).json({ error: owed.message, code: owed.code, items: owed.items }); return }
     const result = await closeWithSettle(owed.settle, null, () => completeTask(id))
     log.web.info('task completed via REST', { taskId: id })
@@ -1887,7 +1887,7 @@ tasksRouter.post('/:id/toggle-complete', async (req: Request, res: Response, nex
     // A session's close of a task that still holds something for the user keeps it open (core/sessions/owed-to-user.ts).
     const { callerSidOf } = await import('../../core/sessions/outside-wait.js')
     const { admitSessionClose, closeWithSettle } = await import('../../core/sessions/owed-to-user.js')
-    const owed = await admitSessionClose(id, callerSidOf(req.headers), { force: req.body?.force === true, reason: typeof req.body?.reason === 'string' ? req.body.reason : undefined })
+    const owed = await admitSessionClose(id, callerSidOf(req.headers), { force: req.body?.force === true, reason: typeof req.body?.reason === 'string' ? req.body.reason : undefined, userWords: typeof req.body?.user_words === 'string' ? req.body.user_words : undefined })
     if (!owed.ok) { res.status(409).json({ error: owed.message, code: owed.code, items: owed.items }); return }
     const result = await closeWithSettle(owed.settle, null, () => toggleComplete(id))
     res.json(result)
