@@ -97,8 +97,9 @@ describe('quick question and CEO display names', () => {
     expect(flow).not.toContain('search.coordinate(');
     expect(flow).not.toContain('rawSearch.coordinate(');
     expect(flow).toContain('the project search keyboard disappeared before typing');
-    expect(flow).toContain('XCTAssertEqual(search.value as? String, "Quick question")');
-    expect(flow).toContain('XCTAssertEqual(rawSearch.value as? String, "Ask Walnut")');
+    // The typed search is read by waiting for its value (ios-ui-test-typed-value-guard).
+    expect(flow).toContain('waitForValue(search, "Quick question")');
+    expect(flow).toContain('waitForValue(rawSearch, "Ask Walnut")');
   });
 
   it('the native task page raises every sheet from its root, never from inside its scroll content', () => {

@@ -7,7 +7,6 @@ import XCTest
 /// (2026-11-16, CI on iOS 26.5: "Ty" for "Typed without voice", "Q" for "Quick question"). A
 /// count or a fold state read after a tap lags the same way. Every such read waits here;
 /// `tests/web/ios-ui-test-typed-value-guard.test.ts` fails on a typed field read at once again.
-@MainActor
 func waitForValue(_ element: XCUIElement, _ value: String, timeout: TimeInterval = 15) -> Bool {
     let reads = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", value), object: element)
     return XCTWaiter().wait(for: [reads], timeout: timeout) == .completed
