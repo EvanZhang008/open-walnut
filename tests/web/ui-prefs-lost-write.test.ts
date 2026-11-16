@@ -86,6 +86,18 @@ describe('a write the storage drops', () => {
     expect(localStorage.getItem(RAIL)).toBe(JSON.stringify([['project:walnut', true]]))
   })
 
+  it('a key kept only on this device (a session panel\'s Reading split) is kept the same way', () => {
+    // The session panel's view (panel-view.ts): never mirrored to the server, so storage is its only copy.
+    const PANEL = 'open-walnut-view:panel.view'
+    expect(mod.syncable(PANEL)).toBe(false)
+    local.m.set(PANEL, JSON.stringify([['home-column:s-interview', { view: null }]]))
+    const disk = local.m.get(PANEL)!
+    viewMemory.writeView(PANEL, 'home-column:s-interview', { view: null, reader: { on: true, share: 0.6 } })
+    revert(PANEL, disk)
+    // The column shows another session and comes back: the panel mounts again.
+    expect(viewMemory.storedView(viewMemory.shownText(PANEL), 'home-column:s-interview', (v): v is { reader?: { on: boolean } } => !!v && typeof v === 'object')?.reader?.on).toBe(true)
+  })
+
   it('every reader gets the page\'s own value: the layout record and a removed key too', () => {
     layout.writeColumns('homeColumns', [{ id: 's-1', locked: true }])
     revert(layout.LAYOUT_FIELDS.homeColumns, null)
