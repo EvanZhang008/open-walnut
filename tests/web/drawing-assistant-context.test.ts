@@ -64,7 +64,7 @@ describe('a renamed drawing keeps its assistant conversation', () => {
 
   it('is followed by the workspace for one controller only (another drawing opened is not a rename)', () => {
     const workspace = read('web/src/components/drawing/DrawingWorkspace.tsx')
-    expect(workspace).toMatch(/before\.controller === controller && before\.path && path && before\.path !== path\) followDrawingRename\(before\.path, path\)/)
+    expect(workspace).toMatch(/before\.controller === controller && before\.path && path && before\.path !== path\) \{\s*followDrawingRename\(before\.path, path\)/)
   })
 
   it('Escape in the chat hands the keys back to the drawing, and an Escape elsewhere is left alone', () => {
@@ -92,11 +92,34 @@ describe("the editor's diagram asks go to the drawing's own session", () => {
   it('the App page routes Make a diagram and Text to diagram to the assistant, other places keep the one call', () => {
     const workspace = read('web/src/components/drawing/DrawingWorkspace.tsx')
     const make = workspace.slice(workspace.indexOf('const makeDiagram = async'))
-    expect(make.indexOf('if (canAssist) {')).toBeGreaterThan(0)
-    expect(make.indexOf('if (canAssist) {')).toBeLessThan(make.indexOf('requestDiagram('))
-    expect(make).toMatch(/setAssistantRequest\(\{ id: assistantAsks\.current, text \}\)/)
+    expect(make.indexOf('if (canAssist && currentPath) {')).toBeGreaterThan(0)
+    expect(make.indexOf('if (canAssist && currentPath) {')).toBeLessThan(make.indexOf('requestDiagram('))
+    expect(make).toMatch(/setAssistantRequest\(\{ id: assistantAsks\.current, text, path: /)
     const assistant = read('web/src/components/drawing/DrawingAssistant.tsx')
     expect(assistant).toMatch(/sendSessionMessage\(\{ sessionId: record\.sessionId, message: request\.text \}\)/)
     expect(assistant).toMatch(/updateTask\(taskId, \{ title: drawingTaskTitle\(title\) \}\)/)
+  })
+
+  // Review 2026-11-16: an ask must reach the drawing it was made on, once, and only from what the
+  // canvas shows; each line guards one way it went wrong.
+  it('an ask reaches the drawing it was made on, once, after the file holds the canvas', () => {
+    const workspace = read('web/src/components/drawing/DrawingWorkspace.tsx')
+    const make = workspace.slice(workspace.indexOf('const makeDiagram = async'))
+    // Saved first, and refused when not: the agent reads the file.
+    expect(make.indexOf('await sync.current?.saveAll()')).toBeLessThan(make.indexOf('setAssistantRequest('))
+    expect(make).toMatch(/if \(!saved\) \{ setDiagram\(\{ phase: 'error', message: NOT_SAVED_YET/)
+    // A rename moves the ask with the drawing; another drawing or a closed panel drops it.
+    expect(workspace).toMatch(/setAssistantRequest\(\(ask\) => \(ask\?\.path === from \? \{ \.\.\.ask, path \} : ask\)\)/)
+    expect(workspace).toMatch(/else if \(before\.controller !== controller\) setAssistantRequest\(null\)/)
+    expect(workspace).toMatch(/useEffect\(\(\) => \{ if \(!assistantShown\) setAssistantRequest\(null\); \}, \[assistantShown\]\)/)
+    // Text to diagram keeps its words until the assistant has them.
+    expect(workspace).toMatch(/else if \(textAskId\.current === id\) \{ setTextDialogOpen\(false\); diagramText\.clear\(\); \}/)
+    const assistant = read('web/src/components/drawing/DrawingAssistant.tsx')
+    expect(assistant).toMatch(/if \(!request \|\| request\.path !== path \|\| request\.id <= handled\.current\) return;\s*handled\.current = request\.id;/)
+    // Another drawing starts clean: no first question or task carried over.
+    expect(assistant).toMatch(/if \(shownKey !== objectKey\) \{\s*setShownKey\(objectKey\);\s*setTaskId\(recordedTask\(\)\);\s*setFirstAsk\(null\);/)
+    // Only a task this panel made is renamed, and the rename is remembered once it worked.
+    expect(assistant).toMatch(/if \(launchedHere\.current\) titleOnce\(record\.taskId, title\)/)
+    expect(assistant).toMatch(/\.then\(\(\) => \{\s*try \{ localStorage\.setItem\(TITLED_PREFIX \+ taskId, '1'\)/)
   })
 })

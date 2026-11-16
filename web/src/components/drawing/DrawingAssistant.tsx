@@ -21,8 +21,9 @@ import { isPopoutPath, openTaskInApp } from '@/popout/openPopout';
 import { log } from '@/utils/log';
 import { DRAWING_ASSISTANT_AGENT, drawingAssistantContext, drawingAssistantKey, drawingTaskTitle } from './drawing-assistant-context';
 
-/** A message the editor hands the assistant (Make a diagram, Text to diagram); `id` grows per ask. */
-export interface DrawingAssistantRequest { id: number; text: string }
+/** A message the editor hands the assistant (Make a diagram, Text to diagram); `id` grows per ask,
+ *  `path` is the drawing it is for (the editor moves it with a rename and drops it for another). */
+export interface DrawingAssistantRequest { id: number; text: string; path: string }
 
 export interface DrawingAssistantProps {
   /** The drawing file the chat is about. */
@@ -37,21 +38,24 @@ export interface DrawingAssistantProps {
   onLeave(): void;
 }
 
-/** Its asks are conversations, not work for the board: their task is not pinned. Module level, so
- *  it holds no render (useLeanCallback.ts). */
+/** Its asks are conversations, not work for the board: their task is not pinned. */
 function unpinned(body: AskSessionLaunch): AskSessionLaunch {
   return { ...body, taskMeta: { ...body.taskMeta, pinTier: null } };
 }
 
 const TITLED_PREFIX = 'walnut:drawing-task-titled:';
+const naming = new Set<string>();
 
-/** Name a drawing's new task after the drawing, once (the person may rename it after). */
+/** Name a task this panel just made after the drawing, once (the person may rename it after); a
+ *  failed rename is tried again the next time the task's session shows here. */
 function titleOnce(taskId: string, title: string): void {
-  try {
-    if (localStorage.getItem(TITLED_PREFIX + taskId)) return;
-    localStorage.setItem(TITLED_PREFIX + taskId, '1');
-  } catch { /* private mode: it may be named twice, never wrongly */ }
-  void updateTask(taskId, { title: drawingTaskTitle(title) }).catch((error: unknown) => {
+  try { if (localStorage.getItem(TITLED_PREFIX + taskId)) return; } catch { /* private mode */ }
+  if (naming.has(taskId)) return;
+  naming.add(taskId);
+  updateTask(taskId, { title: drawingTaskTitle(title) }).then(() => {
+    try { localStorage.setItem(TITLED_PREFIX + taskId, '1'); } catch { /* private mode: named once anyway */ }
+  }, (error: unknown) => {
+    naming.delete(taskId);
     log.warn('drawing', 'the drawing task could not be named', { taskId, error: String(error) });
   });
 }
@@ -60,21 +64,42 @@ export function DrawingAssistant({ path, title, request, onRequestDone, onClose,
   const panel = useRef<HTMLElement>(null);
   const openTask = useOpenTask();
   const objectKey = drawingAssistantKey(path);
-  const [taskId, setTaskId] = useState<string | null>(() => readAskSession({ agentId: DRAWING_ASSISTANT_AGENT, key: objectKey })?.taskId ?? null);
+  const recordedTask = () => readAskSession({ agentId: DRAWING_ASSISTANT_AGENT, key: objectKey })?.taskId ?? null;
+  const [taskId, setTaskId] = useState<string | null>(recordedTask);
   // A request before this drawing has a conversation is its first question (it launches the task).
   const [firstAsk, setFirstAsk] = useState<string | null>(null);
+  // Another drawing (or this one renamed) starts from its own conversation: never the last one's
+  // task or first question. A renamed drawing's task comes back through onRecord.
+  const [shownKey, setShownKey] = useState(objectKey);
+  const launchedHere = useRef(false);
+  if (shownKey !== objectKey) {
+    setShownKey(objectKey);
+    setTaskId(recordedTask());
+    setFirstAsk(null);
+    launchedHere.current = false;
+  }
   // The first question carries the drawing as it is named then (a rename since opening included).
   const prepareContext = useLeanCallback(async () => drawingAssistantContext(path, title), [path, title]);
+  const adjustLaunch = useLeanCallback((body: AskSessionLaunch) => {
+    launchedHere.current = true;
+    return unpinned(body);
+  }, []);
   const onRecord = useLeanCallback((record: { taskId: string }) => {
     setTaskId(record.taskId);
-    titleOnce(record.taskId, title);
+    // Only a task this panel made is named; an older one keeps the name it has.
+    if (launchedHere.current) titleOnce(record.taskId, title);
   }, [title]);
   const doneRef = useRef(onRequestDone);
   doneRef.current = onRequestDone;
+  // Each request goes in once, a re-run of the effect (React's dev double run) included.
+  const handled = useRef(0);
 
   const requestId = request?.id ?? 0;
+  const requestPath = request?.path;
   useEffect(() => {
-    if (!request) return;
+    // A request for another drawing waits: the editor moves it with a rename or drops it.
+    if (!request || request.path !== path || request.id <= handled.current) return;
+    handled.current = request.id;
     const done = (error?: string) => doneRef.current?.(request.id, error);
     const record = readAskSession({ agentId: DRAWING_ASSISTANT_AGENT, key: objectKey });
     if (record?.sessionId) {
@@ -89,7 +114,7 @@ export function DrawingAssistant({ path, title, request, onRequestDone, onClose,
     done();
     // One send per request id; the text and key of that request are read with it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [requestId]);
+  }, [requestId, requestPath, path]);
 
   const openOwnTask = () => {
     if (!taskId) return;
@@ -121,7 +146,7 @@ export function DrawingAssistant({ path, title, request, onRequestDone, onClose,
           contextBlock={drawingAssistantContext(path, title)}
           contextName="Drawing you are changing"
           prepareContext={prepareContext}
-          adjustLaunch={unpinned}
+          adjustLaunch={adjustLaunch}
           onRecord={onRecord}
           {...(firstAsk ? { preset: firstAsk, autoSend: true } : {})}
           // Escape in the chat hands the keys back to the drawing; an Escape anywhere else (the drawer

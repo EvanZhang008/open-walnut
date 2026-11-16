@@ -39,6 +39,8 @@ import { mergeScenes } from './drawing-merge';
 import { autoRenameTitle, sceneFingerprint, type DrawingDocument, type DrawingScene } from './drawing-scene';
 import { DrawingSyncBase } from './drawing-sync-base';
 
+export const NOT_SAVED_YET = 'This drawing has changes that are not saved yet. Try again once it says Saved.';
+
 export { fileDraftKey, sketchDraftKey, newSketchKey, hasUnsavedSketch, type DraftStore } from './drawing-drafts';
 export {
   DRAFT_DELAY_MS, SAVE_DELAY_MS, SAVE_MAX_WAIT_MS,
@@ -88,10 +90,9 @@ export class DrawingSync extends DrawingSyncBase {
     if (!name) return 'A drawing needs a name.';
     if (this.disposed) return null;
     if (!this.path) return 'Draw something first: the drawing goes to Notes then, and can be named.';
-    await this.save();
-    while (this.saving) await this.saving.catch(() => {});
+    const saved = await this.saveAll();
     if (this.disposed) return null;
-    if (!this.path || this.dirty || this.state() !== 'saved') return 'This drawing has changes that are not saved yet. Try again once it says Saved.';
+    if (!saved) return NOT_SAVED_YET;
     if (name === this.snap.title) return null;
     let failure: string | null = null;
     this.renameTried = true;
@@ -263,6 +264,14 @@ export class DrawingSync extends DrawingSyncBase {
       this.emit({ error: `The copy could not be made: ${drawingErrorMessage(err)}` });
       return null;
     }
+  }
+
+  /** Save now and say whether the server holds all of it: what someone about to read the file
+   *  (Walnut's agent, a rename) gets is what is on the canvas. */
+  async saveAll(): Promise<boolean> {
+    await this.save();
+    while (this.saving) await this.saving.catch(() => {});
+    return !!this.path && !this.dirty && this.state() === 'saved';
   }
 
   /**

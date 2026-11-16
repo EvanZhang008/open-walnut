@@ -26,7 +26,7 @@ import { timeAgo } from '@/utils/time';
 import { isBoolean, usePageView, usePageViewOf } from '@/utils/view-memory';
 import { DrawingConflictError, drawingApi, drawingErrorMessage, requestDiagram, type DrawingApi } from './drawing-api';
 import { exportFileName, sceneElementCount, sceneHasContent, sceneText, type DrawingListItem, type DrawingScene } from './drawing-scene';
-import { DrawingSync, hasUnsavedSketch, newSketchKey, sketchDraftKey, type DrawingSnapshot, type DrawingSource } from './drawing-sync';
+import { DrawingSync, NOT_SAVED_YET, hasUnsavedSketch, newSketchKey, sketchDraftKey, type DrawingSnapshot, type DrawingSource } from './drawing-sync';
 import { tabDrawingStore } from './drawing-store';
 import { addCatalogLibrary, tabLibrary } from './drawing-library';
 import { isFullscreenShortcut, liftFixedAncestors } from './drawing-overlay';
@@ -205,6 +205,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   // Make a diagram / Text to diagram handed to the assistant (a message, not a view choice).
   const [assistantRequest, setAssistantRequest] = useState<DrawingAssistantRequest | null>(null);
   const assistantAsks = useRef(0);
+  const textAskId = useRef<number | null>(null);
   const [filesShown, setFilesShown] = usePageView<boolean>('drawing', view.filesKey, view.filesDefault, isBoolean);
   const [keptFullScreen, setKeptFullScreen] = usePageView<boolean>('drawing', view.fullScreenKey ?? 'fullScreenUnkept', false, isBoolean);
   const [previewFullScreen, setPreviewFullScreen] = useState(false);
@@ -357,7 +358,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     const path = snap?.path ?? null;
     const controller = sync.current;
     const before = shownPathOf.current;
-    if (controller && before.controller === controller && before.path && path && before.path !== path) followDrawingRename(before.path, path);
+    if (controller && before.controller === controller && before.path && path && before.path !== path) {
+      followDrawingRename(before.path, path);
+      const from = before.path;
+      setAssistantRequest((ask) => (ask?.path === from ? { ...ask, path } : ask));
+    } else if (before.controller !== controller) setAssistantRequest(null);
     shownPathOf.current = { controller, path };
   }, [snap?.path]);
 
@@ -469,16 +474,19 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       return;
     }
     // In the App page the drawing's assistant does it, in its own session the person can read.
-    if (canAssist) {
-      await sync.current?.save();
+    if (canAssist && currentPath) {
+      // The agent reads the file: it must hold what is on the canvas first.
+      const saved = await sync.current?.saveAll();
       if (!mounted.current || canvas.current !== handle) return;
+      if (!saved) { setDiagram({ phase: 'error', message: NOT_SAVED_YET, retry: () => void makeDiagram(mode, prompt) }); return; }
       const text = drawingAssistantAsk(input
         ? { kind: 'tidy', selectedIds: input.selected ? input.elements.map((el) => String(el.id)) : null }
         : { kind: 'text', prompt });
       setAssistantShown(true);
       assistantAsks.current += 1;
-      setAssistantRequest({ id: assistantAsks.current, text });
-      if (mode === 'text') { setTextDialogOpen(false); diagramText.clear(); }
+      // Text to diagram keeps its words until the assistant has them.
+      textAskId.current = mode === 'text' ? assistantAsks.current : null;
+      setAssistantRequest({ id: assistantAsks.current, text, path: sync.current?.snapshot().path ?? currentPath });
       return;
     }
     diagramRun.current?.abort();
@@ -616,6 +624,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const canRename = !!currentPath && state !== 'loading' && state !== 'missing' && state !== 'error';
   const canAssist = view.assistantKey !== null && !!currentPath;
   const assistantShown = canAssist && assistantKept;
+  // A closed panel takes no ask: one left from before never lands on the next drawing it opens on.
+  useEffect(() => { if (!assistantShown) setAssistantRequest(null); }, [assistantShown]);
 
   return (
     <div ref={root} className="drawing-workspace" data-files-shown={filesShown ? 'true' : 'false'} data-theme-resolved={theme}
@@ -752,7 +762,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       {assistantShown && currentPath && (
         <Suspense fallback={<aside className="drawing-assistant" aria-label="Drawing assistant"><p className="drawing-workspace-files-note">Loading…</p></aside>}>
           <DrawingAssistant path={currentPath} title={title} onLeave={() => canvas.current?.focus()} request={assistantRequest}
-            onRequestDone={(id, error) => { if (error && mounted.current) setNotice(error); setAssistantRequest((now) => (now?.id === id ? null : now)); }}
+            onRequestDone={(id, error) => {
+              if (!mounted.current) return;
+              if (error) setNotice(error);
+              else if (textAskId.current === id) { setTextDialogOpen(false); diagramText.clear(); }
+              setAssistantRequest((now) => (now?.id === id ? null : now));
+            }}
             onClose={() => { setAssistantShown(false); requestAnimationFrame(() => canvas.current?.focus()); }} />
         </Suspense>
       )}
