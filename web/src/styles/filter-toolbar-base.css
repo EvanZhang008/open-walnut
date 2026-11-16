@@ -50,10 +50,7 @@
 .tp-btn svg { flex-shrink: 0; }
 .tp-btn-label { display: inline; }
 
-@container todo-toolbar (max-width: 419px) {
-  .tp-btn { padding: 0 6px; }
-  .tp-btn-label { display: none; }
-}
+/* A narrow toolbar folds the label to the icon: styles/toolbar-fit.css. */
 
 /* Count badge on a toolbar button (Filter: number of chips). Inline after the
    label (F40): it never sits on the button's border or ring. */

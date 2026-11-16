@@ -85,10 +85,12 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   await expect(homeToolbar(page).locator('.todo-search-input')).toBeVisible();
   // One base colour: the task column is the page background, not the grey secondary band.
   expect(await page.locator('.main-page-todo').evaluate(el => getComputedStyle(el).backgroundColor)).toBe('rgb(255, 255, 255)');
-  // The rail header and the task toolbar share one top line; the create button keeps its label.
+  // The rail header and the task toolbar share one top line; the create button keeps its
+  // name, and the search its readable width (its label folds first: toolbar-fit.spec.ts).
   const bottomOf = (selector: string) => page.locator(selector).first().evaluate(el => Math.round(el.getBoundingClientRect().bottom));
   expect(await bottomOf('.sidebar-header')).toBe(await bottomOf('#home-task-navigation .todo-panel-toolbar'));
-  await expect(homeToolbar(page).locator('.new-launcher-label')).toBeVisible();
+  await expect(homeToolbar(page).locator('.new-launcher-btn')).toHaveAttribute('aria-label', 'New task');
+  expect((await homeToolbar(page).locator('.todo-search-input').boundingBox())!.width).toBeGreaterThanOrEqual(112);
   // One quiet toolbar, no accent colour: New task is a bare word like Display, no frame
   // (2026-10-03: "keep the button, drop the box around it"), and the Display icon is the
   // same grey glyph as the hide button.

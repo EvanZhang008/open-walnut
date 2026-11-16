@@ -375,7 +375,7 @@ test('▶ on a title-only pinned tier card opens a bound draft, exactly like a l
 
 // ── 5. The toolbar names the task-first verb responsively (GAP-5) ─────────────
 
-test('the toolbar says "New task" until the panel is genuinely narrow', async ({ page }) => {
+test('the toolbar says "New task" until the search would be too narrow to read', async ({ page }) => {
   // Both exits from the draft create a task: one remains sessionless and one starts
   // a session. Name that shared object at normal widths, but keep the create action
   // reachable as a compact plus when the task panel has almost no horizontal room.
@@ -385,7 +385,8 @@ test('the toolbar says "New task" until the panel is genuinely narrow', async ({
     localStorage.setItem('open-walnut-todo-width', '25')
     localStorage.setItem('open-walnut-sidebar-collapsed', 'true')
   })
-  await page.setViewportSize({ width: 1440, height: 900 })
+  // A 25% panel of a 2400px window is 600px: room for every label beside a readable search.
+  await page.setViewportSize({ width: 2400, height: 900 })
   await loadHome(page)
 
   const toolbar = page.locator('.todo-panel-toolbar')
@@ -396,10 +397,8 @@ test('the toolbar says "New task" until the panel is genuinely narrow', async ({
   // the filters live in its menu, so there is no Filter button taking room from the search.
   const view = toolbar.getByRole('button', { name: 'Display', exact: true })
   const collapsedButtonPx = 28
-  const toolbarContentWidth = () => toolbar.evaluate((element) => {
-    const style = getComputedStyle(element)
-    return element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
-  })
+  // The field's readable width (hooks/useToolbarFit.ts TOOLBAR_FIT_MIN_INPUT_PX).
+  const readablePx = 112
 
   await expect(btn).toBeVisible({ timeout: 25_000 })
   await expect(label).toBeVisible()
@@ -409,31 +408,28 @@ test('the toolbar says "New task" until the panel is genuinely narrow', async ({
   await expect(search).toBeVisible()
   await expect(view).toBeVisible()
   await expect(toolbar.getByRole('button', { name: 'Filter', exact: true })).toHaveCount(0)
-  expect(await toolbarContentWidth()).toBeGreaterThan(275)
   const normalBox = await btn.boundingBox()
   const normalSearchBox = await search.boundingBox()
   expect(normalBox?.width ?? 0).toBeGreaterThan(collapsedButtonPx * 2)
-  // With one menu button the search input keeps its room (it measured ~113px).
-  expect(normalSearchBox?.width ?? 0).toBeGreaterThan(100)
+  expect(normalSearchBox?.width ?? 0).toBeGreaterThanOrEqual(readablePx)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/spec-06-toolbar-new-task-wide.png`, fullPage: false })
 
-  // With the pinned 25% panel and collapsed sidebar, a 4px viewport step moves
-  // the toolbar content box from 276px to 275px. This pins both sides of the
-  // container breakpoint instead of merely sampling far-away wide/narrow states.
-  await page.setViewportSize({ width: 1244, height: 900 })
-  await expect(label).toBeVisible()
-  expect(await toolbarContentWidth()).toBe(276)
-  const boundaryWideSearchBox = await search.boundingBox()
-  // The home toolbar's hide button costs 32px, so at the breakpoint the input is ~68px.
-  expect(boundaryWideSearchBox?.width ?? 0).toBeGreaterThan(60)
+  // The label folds exactly when the search would drop under its readable width (the
+  // toolbar's own measure, not a fixed breakpoint): narrow the window step by step and
+  // the field never shows under it while the label shows. tests/e2e/browser/toolbar-fit.spec.ts
+  // covers the fold order and typing.
+  for (let width = 2200; width >= 1240; width -= 120) {
+    await page.setViewportSize({ width, height: 900 })
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
+    if (await label.isVisible()) expect((await search.boundingBox())?.width ?? 0, `window ${width}px`).toBeGreaterThanOrEqual(readablePx)
+  }
 
-  await page.setViewportSize({ width: 1240, height: 900 })
+  // A 25% panel of a 1240px window (310px) folds New task to its plus.
   await expect(label).toBeHidden()
   await expect(btn).toBeVisible()
   await expect(btn.locator('svg')).toBeVisible()
   await expect(search).toBeVisible()
   await expect(view).toBeVisible()
-  expect(await toolbarContentWidth()).toBe(275)
   const narrowBox = await btn.boundingBox()
   const narrowSearchBox = await search.boundingBox()
   expect(narrowBox?.width ?? 0).toBeCloseTo(collapsedButtonPx, 0)

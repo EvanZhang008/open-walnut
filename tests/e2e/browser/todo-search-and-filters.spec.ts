@@ -53,10 +53,12 @@ test('search finds a future-start task that the Now date filter hides', async ({
   await expect(page.locator(`.todo-panel-item[data-task-id="${DEFERRED}"]`)).toHaveCount(0);
   await search(page, 'marmalade');
   await expect(hit(page, DEFERRED)).toBeVisible({ timeout: 10_000 });
-  // The typed text keeps room beside Filter and Display: on a narrow toolbar the
-  // field's own count folds away (the filter row carries it) and so does the
-  // New task label, until the query is cleared.
-  expect((await page.locator('.todo-search-input').boundingBox())?.width ?? 0).toBeGreaterThan(40);
+  // The typed text keeps room beside New task and Display: on this narrow toolbar the
+  // field's own count folds away (the filter row carries it) and both buttons fold to
+  // icons (toolbar-fit.spec.ts).
+  await expect(page.locator('.todo-panel-toolbar')).toHaveAttribute('data-toolbar-fold', '2');
+  expect((await page.locator('.todo-search-input').boundingBox())?.width ?? 0).toBeGreaterThan(70);
+  const foldTyped = await page.locator('.todo-panel-toolbar').getAttribute('data-toolbar-fold');
   await page.locator('.todo-panel-toolbar').screenshot({ path: `/tmp/filterbar/shots/search-narrow-toolbar-${test.info().project.name}.png` });
   await expect(page.getByTestId('filter-count')).toBeVisible();
   // The default Status is bypassed too: a completed title hit is findable.
@@ -66,8 +68,8 @@ test('search finds a future-start task that the Now date filter hides', async ({
   await page.locator('.todo-search-clear').click();
   await expect(page.locator(`.todo-panel-item[data-task-id="${DEFERRED}"]`)).toHaveCount(0);
   await expect(page.locator(`.todo-panel-item[data-task-id="${DONE}"]`)).toHaveCount(0);
-  // An empty query gives New task its label back.
-  await expect(page.locator('.todo-panel-toolbar .new-launcher-label')).toBeVisible();
+  // Clearing the query leaves the buttons as they were: the fold counts the room typing takes.
+  await expect(page.locator('.todo-panel-toolbar')).toHaveAttribute('data-toolbar-fold', foldTyped!);
 });
 
 test('search honors a Status chip the user added', async ({ page, baseURL }) => {

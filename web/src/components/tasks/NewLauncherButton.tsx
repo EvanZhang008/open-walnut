@@ -24,9 +24,10 @@ export function NewLauncherButton({ onOpen }: NewLauncherButtonProps) {
       onClick={onOpen}
       title="New task"
       aria-label="New task"
+      data-fit-button="2"
     >
       {ICON_PLUS}
-      <span className="new-launcher-label" aria-hidden="true">New task</span>
+      <span className="new-launcher-label" aria-hidden="true" data-fit-label="">New task</span>
       <ShortcutHint command="task.new" />
     </button>
   );

@@ -74,9 +74,10 @@ export function DisplayButton(props: DisplayButtonProps) {
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => onOpenChange(!open)}
+        data-fit-button="1"
       >
         {ICON_SLIDERS}
-        <span className="tp-btn-label">Display</span>
+        <span className="tp-btn-label" data-fit-label="">Display</span>
         {n > 0 && <span className="tp-badge" data-testid="filter-badge">{badgeText(n)}</span>}
       </button>
       {open && <PanelMenu filters={filters} display={props} flashOption={flashOption} />}

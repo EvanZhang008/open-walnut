@@ -41,9 +41,6 @@
 .app-shell-navigation .todo-panel-toolbar .new-launcher-btn:hover { background: var(--bg-hover); color: var(--fg); box-shadow: none; transform: none; }
 .app-shell-navigation .todo-panel-toolbar .new-launcher-btn:active { background: var(--bg-hover); box-shadow: inset 0 0 0 1px var(--border-strong); }
 .app-shell-navigation .todo-panel-toolbar .new-launcher-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-@container (max-width: 275px) {
-  .app-shell-navigation .todo-panel-toolbar .new-launcher-btn { border-radius: 6px; }
-}
 .app-shell-navigation .todo-panel-toolbar .vd-trigger-icon,
 .app-shell-navigation .todo-panel-toolbar .vd-trigger-icon.vd-has-filter { width: 24px; border-radius: 6px; color: var(--fg-muted); }
 .app-shell-navigation .todo-panel-toolbar .vd-trigger-icon:hover { color: var(--fg); background: var(--bg-hover); }
@@ -520,14 +517,11 @@
 }
 .todo-minibar-icon { display: inline-flex; margin-right: 4px; }
 .todo-minibar-icon svg { width: 12px; height: 12px; }
-/* Filter and Display took 32px from the search field. While a query is typed on
-   a narrow toolbar, the field gets that room back so the text stays visible: the
-   filter row already shows the result count (5.7), and New task folds to its
-   plus icon until the query is cleared. */
+/* On a narrow toolbar the result count gives its room to the typed text: the filter
+   row already shows it (5.7). New task and Display fold to icons while the field
+   would be too narrow to read (styles/toolbar-fit.css). */
 @container (max-width: 340px) {
   .app-shell-navigation .todo-panel-toolbar .todo-search-count { display: none; }
-  .app-shell-navigation .todo-panel-toolbar:has(.todo-search-clear) .new-launcher-label { display: none; }
-  .app-shell-navigation .todo-panel-toolbar:has(.todo-search-clear) .new-launcher-btn { width: 28px; padding: 0; }
 }
 /* A headless tier (5.10: the board uses one tier, so its heading is not drawn) has no
    tier heading to stick under: its project labels and scroll targets sit right under

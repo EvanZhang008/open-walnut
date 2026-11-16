@@ -1,0 +1,15 @@
+/*
+ * toolbar-fit: a toolbar row's labeled buttons fold to their icons while the search field
+ * beside them would be too narrow to read (hooks/useToolbarFit.ts sets the row's
+ * data-toolbar-fold to the number of steps taken). One rule for every such row; a row opts
+ * in by marking each button [data-fit-button="N"] (it folds from step N on, 1 first) and
+ * its words [data-fit-label]. The fold wins over a button's own padding wherever the row
+ * lives, hence the !important; each button keeps its own min-width (28px, 44px on a phone), and
+ * the 6px sides keep a count badge off the edge.
+ */
+[data-toolbar-fold='1'] [data-fit-button='1'],
+[data-toolbar-fold='2'] :is([data-fit-button='1'], [data-fit-button='2']),
+[data-toolbar-fold='3'] [data-fit-button] { padding: 0 6px !important; }
+[data-toolbar-fold='1'] [data-fit-button='1'] [data-fit-label],
+[data-toolbar-fold='2'] :is([data-fit-button='1'], [data-fit-button='2']) [data-fit-label],
+[data-toolbar-fold='3'] [data-fit-button] [data-fit-label] { display: none; }

@@ -146,6 +146,13 @@
     min-width: 44px;
   }
 
+  /* A phone types in its full-screen search layer, never in the row's field, so the row
+     keeps its fixed fold (useToolbarFit stays off): under 420px Display shows its icon alone. */
+  @container todo-toolbar (max-width: 419px) {
+    .app-shell-navigation .todo-panel .tp-btn { padding: 0 6px; }
+    .app-shell-navigation .todo-panel .tp-btn-label { display: none; }
+  }
+
   /* Section and project headings: the whole row is the fold target, so the
      chevron and the name inside it are pictures and the row grows to 44 px. */
   .app-shell-navigation .todo-panel .navigation-heading-open,

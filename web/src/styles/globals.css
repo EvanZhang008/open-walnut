@@ -23381,14 +23381,7 @@ a.tag-chip:focus-visible,
 }
 .new-launcher-btn svg,
 .new-launcher-label { display: block; }
-@container (max-width: 275px) {
-  .todo-panel-toolbar .new-launcher-label { display: none; }
-  .todo-panel-toolbar .new-launcher-btn {
-    width: 28px;
-    padding: 0;
-    border-radius: 50%;
-  }
-}
+/* A narrow toolbar folds the label to the plus icon: styles/toolbar-fit.css. */
 
 /* ── Todo-anchored launcher popover ──
    Card dropping DOWN from the toolbar with a Session | Task tab header;

@@ -89,6 +89,8 @@ import { taskMatchesDateTag } from './date-tag-search';
 import '@/styles/todo-search.css';
 import '@/styles/todo-empty-board.css';
 import '@/styles/row-pill-fit.css';
+import '@/styles/toolbar-fit.css';
+import { useToolbarFit } from '@/hooks/useToolbarFit';
 import { useTaskSearch } from '@/hooks/useTaskSearch';
 import {
   DndContext,
@@ -2336,6 +2338,15 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isOpe
 export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier: onSetTierProp, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, tabBarAlways = false, openSessionIds, openSessionTaskIds, openInWindowTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, onOpenSearchSession, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden, folderMeta, onCreateFolder, onDeleteFolder, onMoveFolderToProject, onSetFolderParent, banner }: TodoPanelProps) {
   const pinUndo = useTaskUndo();
   const pinBar = useFocusBarContextSafe();
+  // The search keeps a readable width: New task and Display fold to icons first (useToolbarFit.ts).
+  // A phone types in its full-screen search layer, never in this field: its row keeps the
+  // fixed fold in phone-pages.css.
+  const toolbarRef = useRef<HTMLDivElement | null>(null);
+  const phoneToolbar = usePhoneLayout();
+  useToolbarFit(toolbarRef, {
+    inputSelector: '.todo-search-input', typingSelector: '.todo-search-clear, .todo-search-count, .todo-search-spinner',
+    enabled: !phoneToolbar,
+  });
   const pinIntoTier = useLeanCallback((id: string, tier: FocusTier, order?: string[]) => {
     if (!pinBar) return;
     void (async () => {
@@ -8037,7 +8048,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       onPointerDownCapture={endLocateHold} onKeyDownCapture={endLocateHold}
       onWheelCapture={endLocateHold} onTouchStartCapture={endLocateHold}>
       <div className="fb-toolbar-scope">
-      <div className="todo-panel-toolbar">
+      <div className="todo-panel-toolbar" ref={toolbarRef}>
         <TodoSearchBar
           query={searchQuery}
           resetVersion={searchReset}

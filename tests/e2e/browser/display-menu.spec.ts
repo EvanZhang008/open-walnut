@@ -623,10 +623,10 @@ test('Display stays inside the viewport on both pages, never drags a row, and th
   await expect(displayMenu(page)).toBeVisible()
   await closeDisplayMenu(page)
 
-  // C58: a panel >= 420px wide spells the label; a narrower one keeps the icon alone.
-  // The container query reads the toolbar scope's width; size it like a wide and a narrow panel.
+  // C58: a wide panel spells the label; one where the search would drop under its readable
+  // width keeps the icon alone (hooks/useToolbarFit.ts measures the toolbar itself).
   const scope = page.locator('#home-task-navigation .fb-toolbar-scope').first()
-  await scope.evaluate((el) => { (el as HTMLElement).style.width = '480px' })
+  await scope.evaluate((el) => { (el as HTMLElement).style.width = '640px' })
   await expect(displayButton(page).locator('.tp-btn-label')).toHaveText('Display')
   await scope.evaluate((el) => { (el as HTMLElement).style.width = '400px' })
   await expect(displayButton(page).locator('.tp-btn-label')).toBeHidden()
