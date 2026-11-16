@@ -41,8 +41,10 @@ describe('drawing library store', () => {
       await vi.waitFor(() => expect(seen).toEqual([{ revision: saved.revision }]))
       // The same list again writes and announces nothing.
       expect(await writeLibrary(JSON.stringify({ revision: saved.revision, libraryItems: [item('a')] }))).toEqual(saved)
-      await new Promise((r) => setTimeout(r, 20))
-      expect(seen).toHaveLength(1)
+      // A real change after it is the next announcement: nothing came between (the bus keeps order).
+      const next = await writeLibrary({ revision: saved.revision, libraryItems: [item('a'), item('b')] })
+      await vi.waitFor(() => expect(seen).toHaveLength(2))
+      expect(seen).toEqual([{ revision: saved.revision }, { revision: next.revision }])
     } finally {
       bus.unsubscribe('library-test')
     }
