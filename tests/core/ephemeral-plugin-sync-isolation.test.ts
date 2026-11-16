@@ -29,6 +29,7 @@ vi.mock('../../src/core/config-manager.js', () => ({
   })),
   seedConfigDefaults: vi.fn(async () => {}),
   updatePluginConfig: vi.fn(async () => {}),
+  patchPluginConfig: vi.fn(async () => ({ config: {}, changed: false })),
 }))
 
 import { WALNUT_HOME } from '../../src/constants.js'

@@ -58,6 +58,7 @@ vi.mock('../../src/core/config-manager.js', () => ({
     plugins: {},
   })),
   updatePluginConfig: vi.fn(async (_id: string, patch: Record<string, unknown>) => patch),
+  patchPluginConfig: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ config: patch, changed: true })),
 }));
 
 import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js';

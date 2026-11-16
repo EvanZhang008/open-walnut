@@ -12,6 +12,7 @@ vi.mock('../../src/core/config-manager.js', async (importOriginal) => {
     ...actual,
     getConfig: vi.fn(async () => ({ version: 1, user: { name: 'test' }, defaults: { priority: 'none' }, provider: { type: 'bedrock' }, plugins: {} })),
     updatePluginConfig: vi.fn(async (_id: string, patch: Record<string, unknown>) => patch),
+    patchPluginConfig: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ config: patch, changed: true })),
   }
 })
 

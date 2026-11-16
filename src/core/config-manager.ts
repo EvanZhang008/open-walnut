@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { log } from '../logging/index.js';
 import { CONFIG_FILE, WALNUT_HOME } from '../constants.js';
 import {
@@ -377,18 +378,31 @@ export async function updatePluginConfig(
   pluginId: string,
   patch: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  return (await patchPluginConfig(pluginId, patch)).config;
+}
+
+/**
+ * updatePluginConfig, also saying whether the section changed: a patch with the values it
+ * already has (a plugin re-applying its settings at every reload) writes nothing, and its
+ * caller sends no config:changed to every client.
+ */
+export async function patchPluginConfig(
+  pluginId: string,
+  patch: Record<string, unknown>,
+): Promise<{ config: Record<string, unknown>; changed: boolean }> {
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(pluginId)) throw new Error(`Invalid plugin id: ${pluginId}`);
-  return modifyConfigDoc((existing) => {
+  return modifyConfigDoc<{ config: Record<string, unknown>; changed: boolean }>((existing) => {
     const plugins = existing.plugins && typeof existing.plugins === 'object' && !Array.isArray(existing.plugins)
       ? { ...(existing.plugins as Record<string, Record<string, unknown>>) }
       : {};
-    const current = plugins[pluginId] && typeof plugins[pluginId] === 'object'
-      ? plugins[pluginId]
-      : {};
+    const had = plugins[pluginId] && typeof plugins[pluginId] === 'object';
+    const current = had ? plugins[pluginId] : {};
     const next = { ...current, ...patch };
+    const changed = !had || !isDeepStrictEqual(current, next);
+    if (!changed) return { write: false, result: { config: next, changed } };
     plugins[pluginId] = next;
     existing.plugins = plugins;
-    return { write: true, result: next };
+    return { write: true, result: { config: next, changed } };
   });
 }
 

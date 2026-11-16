@@ -381,6 +381,28 @@ export async function writeConfigWithBackup(
   opts: { holdReplaced?: boolean } = {},
 ): Promise<{ outcome: 'written' | 'conflict'; replaced?: FileHandle }> {
   refuseConfigWriteOnReplica();
+  // A write that would leave config.yaml byte for byte as it is changes nothing: no
+  // rename and no config:changed for every client. Every writer (a host sighting, a
+  // plugin reload, a full save) goes through here. A file readable by others is still
+  // rewritten (0600: it holds keys), and a backup that fell behind is still brought up
+  // to it, since refreshConfigBackup leaves some outside edits to "the next write".
+  const now = await readConfigSnapshot(CONFIG_FILE);
+  const same = now.state === 'ok' && !now.changing && now.content === content
+    && (expected === undefined || (expected !== null && sameFileId(now.id!, expected)));
+  const privateMode = same && ((await fs.stat(CONFIG_FILE).catch(() => null))?.mode ?? 0o777) % 0o100 === 0;
+  if (same && privateMode) {
+    const backup = await fs.readFile(CONFIG_BACKUP_FILE, 'utf-8').catch(() => null);
+    if (backup !== content) {
+      try {
+        const seed = await configHistorySeed(CONFIG_BACKUP_FILE);
+        await writeFileAtomic(CONFIG_BACKUP_FILE, content, CONFIG_FILE_MODE);
+        await keepConfigVersion(content, seed);
+      } catch (err) {
+        log.session.warn('config-manager: failed to update config backup', { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return { outcome: 'written' };
+  }
   const seed = await configHistorySeed(CONFIG_FILE);
   const prevHash = ownWriteHash;
   ownWriteHash = configContentHash(content);

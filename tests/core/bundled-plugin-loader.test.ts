@@ -18,6 +18,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('bundled-loader-test
 vi.mock('../../src/core/config-manager.js', () => ({
   getConfig: vi.fn(async () => ({ version: 1, plugins: {} })),
   updatePluginConfig: vi.fn(async (_id: string, patch: Record<string, unknown>) => patch),
+  patchPluginConfig: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ config: patch, changed: true })),
 }))
 
 import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js'

@@ -10,6 +10,7 @@ vi.mock('../../src/core/config-manager.js', () => ({
   // (project and priority both fall back to it), and this mock replaces the whole module.
   getConfig: vi.fn(async () => ({ plugins: { 'sample-plugin': { color: 'blue' } }, defaults: {} })),
   updatePluginConfig: vi.fn(async (_id: string, patch: Record<string, unknown>) => patch),
+  patchPluginConfig: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ config: patch, changed: true })),
   // Reached only through the real task manager, which `tasks.create` opens. A no-op, because the
   // config this file cares about is the mocked pair above.
   seedConfigDefaults: vi.fn(async () => undefined),
@@ -231,6 +232,25 @@ describe('createServerPluginApi', () => {
 
     expect(await api.storage.readJson('state.json', {})).toEqual({ ready: true })
     expect(custom).toHaveBeenCalledWith({ ready: true })
+  })
+
+  it('config.patch tells clients only when the section changed (a reload re-applying settings is silent)', async () => {
+    const { patchPluginConfig } = await import('../../src/core/config-manager.js')
+    const { api } = setup()
+    const changes = vi.fn()
+    bus.subscribe('test-observer', (event) => {
+      if (event.name === EventNames.CONFIG_CHANGED) changes(event.data)
+    }, { global: true, interest: [EventNames.CONFIG_CHANGED] })
+
+    vi.mocked(patchPluginConfig).mockResolvedValueOnce({ config: { color: 'blue' }, changed: false })
+    await api.config.patch({ color: 'blue' })
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(changes).not.toHaveBeenCalled()
+
+    vi.mocked(patchPluginConfig).mockResolvedValueOnce({ config: { color: 'red' }, changed: true })
+    await api.config.patch({ color: 'red' })
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(changes).toHaveBeenCalledTimes(1)
   })
 
   /**

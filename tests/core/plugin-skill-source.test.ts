@@ -33,6 +33,7 @@ vi.mock('../../src/core/config-manager.js', () => ({
     plugins: {},
   })),
   updatePluginConfig: vi.fn(async (_id: string, patch: Record<string, unknown>) => patch),
+  patchPluginConfig: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ config: patch, changed: true })),
   seedConfigDefaults: vi.fn(async () => {}),
 }))
 

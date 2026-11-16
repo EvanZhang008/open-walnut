@@ -20,6 +20,7 @@ vi.mock('../../src/core/config-manager.js', async (importOriginal) => {
       plugins: {},
     })),
     updatePluginConfig: vi.fn(async (_id: string, patch: Record<string, unknown>) => patch),
+    patchPluginConfig: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ config: patch, changed: true })),
   }
 })
 

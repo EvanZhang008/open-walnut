@@ -43,7 +43,7 @@ import { createPluginNotifications } from './plugin-notifications.js'
 import { createPluginUi } from './plugin-status-items.js'
 import { bus, EventNames, type BusEvent } from '../event-bus.js'
 import type { HumanInboxAnsweredEvent } from '../event-types.js'
-import { getConfig, updatePluginConfig } from '../config-manager.js'
+import { getConfig, patchPluginConfig } from '../config-manager.js'
 import { emitConfigChanged } from '../config-broadcast.js'
 import { getVersion } from '../version.js'
 import { WALNUT_HOME } from '../../constants.js'
@@ -957,8 +957,9 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         return structuredClone((config.plugins?.[pluginId] ?? {}) as T)
       },
       async patch(partial: Record<string, unknown>) {
-        const next = await updatePluginConfig(pluginId, partial)
-        emitConfigChanged({ plugins: { [pluginId]: next } }, ['web-ui'], { source: `plugin/${pluginId}` })
+        const { config: next, changed } = await patchPluginConfig(pluginId, partial)
+        // A reload re-applying the same settings tells no client (and no onChange handler).
+        if (changed) emitConfigChanged({ plugins: { [pluginId]: next } }, ['web-ui'], { source: `plugin/${pluginId}` })
       },
       onChange(handler: (config: Record<string, unknown>) => void | Promise<void>) {
         assertLive('config.onChange')

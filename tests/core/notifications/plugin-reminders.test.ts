@@ -23,6 +23,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('plugin-reminders
 vi.mock('../../../src/core/config-manager.js', () => ({
   getConfig: vi.fn(async () => ({ plugins: {} })),
   updatePluginConfig: vi.fn(async (_id: string, patch: Record<string, unknown>) => patch),
+  patchPluginConfig: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ config: patch, changed: true })),
 }));
 
 import { WALNUT_HOME } from '../../../src/constants.js';
