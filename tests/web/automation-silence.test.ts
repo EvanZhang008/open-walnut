@@ -280,8 +280,8 @@ describe('the WebKit voice specs, the one place a test browser may make an Audio
   const CODE = /\.(ts|tsx|js|mjs|cjs)$/;
 
   it('the mark is written in one place, and only the listed specs claim it', () => {
-    expect(filesMatching(DIRS, /WalnutVoiceTest['"`][\s;),}]*$/m, CODE, /automation-silence\.test\.ts$/)).toEqual(['tests/e2e/browser/webkit-recorder.ts']);
-    expect(filesMatching(DIRS, /\bVOICE_TEST_(UA_MARK|USER_AGENT)\b/, CODE, /automation-silence\.test\.ts$|webkit-recorder\.ts$/)).toEqual(Object.keys(VOICE_TEST_SPECS).sort());
+    expect(filesMatching(DIRS, /WalnutVoiceTest['"`][\s;),}]*$/m, CODE, /automation-silence\.test\.ts$/, 'WalnutVoiceTest')).toEqual(['tests/e2e/browser/webkit-recorder.ts']);
+    expect(filesMatching(DIRS, /\bVOICE_TEST_(UA_MARK|USER_AGENT)\b/, CODE, /automation-silence\.test\.ts$|webkit-recorder\.ts$/, 'VOICE_TEST_')).toEqual(Object.keys(VOICE_TEST_SPECS).sort());
   });
 
   it('gets a context there, still wired through a gain of zero, and nothing else', async () => {
@@ -322,10 +322,33 @@ describe('the chime', () => {
 });
 
 /** Files under `dirs` (tracked or new) whose text matches `re`. */
-function filesMatching(dirs: string[], re: RegExp, exts: RegExp, skip: RegExp): string[] {
-  const out = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', ...dirs], { cwd: ROOT, encoding: 'utf8' });
-  return out.split('\n').filter((f) => f && exts.test(f) && !skip.test(f) && fs.existsSync(path.join(ROOT, f)))
-    .filter((f) => re.test(read(f))).sort();
+// The scans below read much of the repo, several over the same folders: each listing and each
+// file is read once per run. Read anew per scan, the voice-mark test alone read every file of
+// six folders twice and passed its time limit on a loaded machine (2026-11-11, 2026-11-16).
+const listings = new Map<string, string[]>();
+const contents = new Map<string, string>();
+// `literal`, a word every match of `re` holds, narrows the files read to those git finds it in.
+function filesMatching(dirs: string[], re: RegExp, exts: RegExp, skip: RegExp, literal?: string): string[] {
+  const key = [literal ?? '', ...dirs].join('\0');
+  let files = listings.get(key);
+  if (!files) {
+    const args = literal
+      ? ['grep', '-l', '-F', '--untracked', '-e', literal, '--', ...dirs]
+      : ['ls-files', '--cached', '--others', '--exclude-standard', ...dirs];
+    let out = '';
+    try { out = execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }); } catch (e) {
+      // git grep exits 1 when nothing holds the word.
+      if ((e as { status?: number }).status !== 1) throw e;
+    }
+    files = out.split('\n').filter((f) => f && fs.existsSync(path.join(ROOT, f)));
+    listings.set(key, files);
+  }
+  const text = (f: string) => {
+    let t = contents.get(f);
+    if (t === undefined) { t = read(f); contents.set(f, t); }
+    return t;
+  };
+  return files.filter((f) => exts.test(f) && !skip.test(f)).filter((f) => re.test(text(f))).sort();
 }
 
 describe('ratchet: every sound in the web app stays silent under automation', () => {
