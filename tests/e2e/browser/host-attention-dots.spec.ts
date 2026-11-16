@@ -17,7 +17,7 @@ import { connected, failed, isolatePrefs, resetServerHostFixture, routeHealth, s
 import { bell, loadApp, loadFixture, openBell } from './host-problems-fixture-helpers'
 import {
   FIXTURE_ORDER, askRecord, bellCount, bellDot, bpSetup, closePanel, endServerQuiet, errorsBadge, goRail, healthyGitSync, hostRowsOutsidePanel,
-  openProblems, openRow, openSystemHosts, panelLocalCard, panelProblems, pickRail, problemHosts, problemRow, railButton, settingsDot,
+  openProblems, openRow, openSystemHosts, panelLocalCard, panelProblems, pickRail, problemHosts, problemRow, railButton, seedFeed, settingsDot,
   settingsEntry, systemBadge, systemHostRow,
 } from './host-attention-helpers'
 
@@ -170,6 +170,7 @@ test.describe('Settings > Remote hosts (server fixture)', () => {
     // The server's fixture: Settings lists these hosts, so #rh-host-keybox is a real row.
     await loadFixture(request, 'host-problems')
     await isolatePrefs(page)
+    await seedFeed(page, [])
     await healthyGitSync(page)
     await routeHealth(page)
     await loadApp(page)

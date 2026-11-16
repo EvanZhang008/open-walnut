@@ -33,7 +33,7 @@ import {
   HEALTHY, bell, fixtureCounters, openBell, fixtureFile, hostFixture, hostRow, hostTab, isolatePrefs, loadApp, loadFixture,
   openHostDetails, openPicker, openRemoteHosts, picker, resetServerHostFixture, wireHost,
 } from './host-problems-fixture-helpers'
-import { closePanel, hostRowsOutsidePanel, openProblems, openRow, problemHosts, problemRow } from './host-attention-helpers'
+import { closePanel, hostRowsOutsidePanel, openProblems, openRow, problemHosts, problemRow, seedFeed } from './host-attention-helpers'
 
 const SHOTS = '/tmp/walnut-host-problems-slice/fix2'
 /** Key box refuses its key and takes no password: the Settings row leads with the walkthrough's headline (walkthroughOf). */
@@ -384,6 +384,7 @@ test.describe('where else a host problem shows', () => {
       signbox: { label: 'Sign box', hostname: 'sign.example.com', phase: 'connected', claude: { version: '2.1.281', auth: 'not-logged-in', installMethod: 'native' } },
     }))
     // The default Home layout: no card on the page ever covers a dot (host-attention.ts).
+    await seedFeed(page, [])
     await loadApp(page)
     await expect(hostRowsOutsidePanel(page)).toHaveCount(0)
     const entry = page.getByTestId('sidebar-core-app-settings')

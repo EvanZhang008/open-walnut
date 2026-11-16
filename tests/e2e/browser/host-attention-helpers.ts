@@ -155,12 +155,21 @@ export function hostErrorRecord(host: string, i: number, t = Date.now()): Record
   }
 }
 
-/** Serve the notifications feed (asks, error events) without touching the live socket. */
+/**
+ * Serve what the bell counts, without touching the live socket: the notifications feed (asks,
+ * error events) and the approval requests (no pending one). The fixture server holds every
+ * notice and approval an earlier spec on it left, so a test that reads the bell's number or
+ * name, or the Errors count, serves its page these (2026-11-16 CI: HD-8 and C67 read
+ * "Notifications, 191 waiting; ..." for their hosts only).
+ */
 export async function seedFeed(page: Page, feed: Array<Record<string, unknown>>): Promise<void> {
   await page.route('**/api/notifications', (route) => route.request().method() === 'GET'
     ? route.fulfill({ json: { feed, unreadCount: feed.filter((f) => !f.read).length } })
     : route.fallback())
   await page.route('**/api/notifications/mark-read', (route) => route.fulfill({ json: { unreadCount: 0 } }))
+  await page.route((url) => url.pathname === '/api/v1/approvals', (route) => route.request().method() === 'GET'
+    ? route.fulfill({ json: { approvals: [], keys: [] } })
+    : route.fallback())
 }
 
 /**

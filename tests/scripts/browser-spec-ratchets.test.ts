@@ -1296,25 +1296,35 @@ describe('a spec that turns Quiet on', () => {
   })
 })
 
-describe('a test that reads the Errors rail count', () => {
-  // The Errors badge counts the feed's error cards with the problem hosts, and the fixture
-  // server's feed holds every error an earlier spec on it left (2026-11-02 CI: BP-C58 read 6
-  // for its one host). A test that reads the count on a page serves that page its feed
-  // (bpSetup, or seedFeed for a page it loads itself).
+describe('a test that reads the Errors rail count or the bell', () => {
+  // The Errors badge counts the feed's error cards with the problem hosts, and the bell's number
+  // and name count the feed's asks with the pending approvals. The fixture server holds every
+  // error, ask and approval an earlier spec on it left (2026-11-02 CI: BP-C58 read 6 for its one
+  // host; 2026-11-16 CI: HD-8 and C67 read "Notifications, 191 waiting; remote hosts need
+  // attention"). A test that reads one of them on a page serves that page its feed (bpSetup, or
+  // seedFeed for a page it loads itself). The bell here is the desktop one
+  // (host-problems-fixture-helpers.ts); a spec with its own bell routes its own feed.
   const serves = (text: string, p: string): boolean => new RegExp(`\\b(?:bpSetup|seedFeed)\\(${p}\\b`).test(text)
-  const offendersOf = (text: string): string[] => {
+  const READS = [
+    /\berrorsBadge\((\w+)\)/g,
+    /\bbellCount\((\w+)\)/g,
+    /\bbell\((\w+)\)(?:,[^)]*)?\)\.(?:not\.)?toHaveAttribute\('(?:aria-label|title)'/g,
+  ]
+  const readsBell = (file: string, text: string): boolean => /import \{[^}]*\bbell\b[^}]*\} from '\.\/host-problems-fixture-helpers'/.test(text) || file === 'host-attention-helpers.ts'
+  const offendersOf = (text: string, file = 'x.spec.ts'): string[] => {
     // A beforeEach that serves `page` its feed covers every test's `page`.
     const hooked = (text.match(/test\.beforeEach\([^\n]*/g) ?? []).some((line) => serves(line, 'page'))
+    const reads = readsBell(file, text) ? READS : READS.slice(0, 2)
     return testBodies(text).flatMap((body) => {
-      const pages = new Set([...body.matchAll(/\berrorsBadge\((\w+)\)/g)].map((m) => m[1]!))
+      const pages = new Set(reads.flatMap((re) => [...body.matchAll(re)].map((m) => m[1]!)))
       return [...pages].filter((p) => !(hooked && p === 'page') && !serves(body, p)).map((p) => `${titleOf(body)} (${p})`)
     })
   }
 
   it('every one serves the page its feed', () => {
-    const readers = sources.filter(({ file, text }) => file.endsWith('.spec.ts') && /\berrorsBadge\(\w+\)/.test(text))
-    expect(readers.map(({ file }) => file)).toContain('notification-host-problems.spec.ts')
-    expect(readers.flatMap(({ file, text }) => offendersOf(text).map((t) => `${file}: ${t}`))).toEqual([])
+    const readers = sources.filter(({ file, text }) => file.endsWith('.spec.ts') && READS.some((re) => new RegExp(re.source).test(text)))
+    expect(readers.map(({ file }) => file)).toEqual(expect.arrayContaining(['notification-host-problems.spec.ts', 'host-attention-dots.spec.ts', 'host-problems-settings.spec.ts']))
+    expect(readers.flatMap(({ file, text }) => offendersOf(text, file).map((t) => `${file}: ${t}`))).toEqual([])
   })
 
   it('catches the shape it was written for', () => {
@@ -1331,6 +1341,20 @@ describe('a test that reads the Errors rail count', () => {
     expect(offendersOf(`test.beforeEach(async ({ page }) => { await seedFeed(page, []) })\n${spec}`)).toEqual([])
     // A second page reads its own count: it needs its own feed.
     expect(offendersOf(`x\n${spec.replace("expect(errorsBadge(page))", 'seedFeed(page, [])\n    await expect(errorsBadge(page2))')}`)).toHaveLength(1)
+    // The bell's name (HD-8, C67): read on a page that loaded the server's feed.
+    const named = [
+      "import { bell, loadApp } from './host-problems-fixture-helpers'",
+      "  test('C67: the bell names hosts', async ({ page }) => {",
+      '    await loadApp(page)',
+      "    await expect(bell(page)).toHaveAttribute('aria-label', 'Notifications: remote hosts need attention')",
+      '  })',
+    ].join('\n')
+    expect(offendersOf(named)).toHaveLength(1)
+    expect(offendersOf(named.replace('await loadApp(page)', 'await seedFeed(page, [])\n    await loadApp(page)'))).toEqual([])
+    expect(offendersOf(named.replace("toHaveAttribute('aria-label'", "toHaveAttribute('title'"))).toHaveLength(1)
+    expect(offendersOf(named.replace("expect(bell(page)).toHaveAttribute('aria-label', 'Notifications: remote hosts need attention')", "expect(bellCount(page)).toHaveCount(0)"))).toHaveLength(1)
+    // Another spec's own bell (the phone's) is not this one.
+    expect(offendersOf(named.replace("import { bell, loadApp } from './host-problems-fixture-helpers'", "const bell = (page: Page) => page.getByTestId('phone-bell')"))).toEqual([])
   })
 })
 
