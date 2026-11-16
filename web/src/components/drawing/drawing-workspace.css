@@ -310,8 +310,31 @@
   --color-on-primary-container: var(--accent-text);
   --color-slider-track: var(--accent-subtle);
 }
-/* No shortcut digits under the tool icons; each icon's tooltip still names its key. */
-.drawing-workspace .excalidraw .ToolIcon__keybinding { display: none; }
+/* Each tool shows its letter shortcut, not the editor's digit (1 to 0). The digit is the span's own
+   text, so it is sized away and the letter drawn after it; a tool with no letter (Image) shows none.
+   The letters are the editor's own keys (its SHAPES list), so pressing one picks that tool. */
+.drawing-workspace .excalidraw .ToolIcon__keybinding { font-size: 0; }
+.drawing-workspace .excalidraw .ToolIcon__keybinding::after { font-size: 0.625rem; }
+.drawing-workspace .excalidraw input[data-testid="toolbar-selection"] + .ToolIcon__icon .ToolIcon__keybinding::after { content: "V"; }
+.drawing-workspace .excalidraw input[data-testid="toolbar-rectangle"] + .ToolIcon__icon .ToolIcon__keybinding::after { content: "R"; }
+.drawing-workspace .excalidraw input[data-testid="toolbar-diamond"] + .ToolIcon__icon .ToolIcon__keybinding::after { content: "D"; }
+.drawing-workspace .excalidraw input[data-testid="toolbar-ellipse"] + .ToolIcon__icon .ToolIcon__keybinding::after { content: "O"; }
+.drawing-workspace .excalidraw input[data-testid="toolbar-arrow"] + .ToolIcon__icon .ToolIcon__keybinding::after { content: "A"; }
+.drawing-workspace .excalidraw input[data-testid="toolbar-line"] + .ToolIcon__icon .ToolIcon__keybinding::after { content: "L"; }
+.drawing-workspace .excalidraw input[data-testid="toolbar-freedraw"] + .ToolIcon__icon .ToolIcon__keybinding::after { content: "P"; }
+.drawing-workspace .excalidraw input[data-testid="toolbar-text"] + .ToolIcon__icon .ToolIcon__keybinding::after { content: "T"; }
+.drawing-workspace .excalidraw input[data-testid="toolbar-eraser"] + .ToolIcon__icon .ToolIcon__keybinding::after { content: "E"; }
+.drawing-workspace .excalidraw input[data-testid="toolbar-image"] + .ToolIcon__icon .ToolIcon__keybinding { display: none; }
+/* The extra tools menu opens from three dots, not a shapes icon that reads as one more tool. */
+.drawing-workspace .excalidraw .App-toolbar__extra-tools-trigger svg { display: none; }
+.drawing-workspace .excalidraw .App-toolbar__extra-tools-trigger::before {
+  content: "";
+  width: 20px;
+  height: 20px;
+  background-color: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Ccircle cx='10' cy='4.5' r='1.6'/%3E%3Ccircle cx='10' cy='10' r='1.6'/%3E%3Ccircle cx='10' cy='15.5' r='1.6'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Ccircle cx='10' cy='4.5' r='1.6'/%3E%3Ccircle cx='10' cy='10' r='1.6'/%3E%3Ccircle cx='10' cy='15.5' r='1.6'/%3E%3C/svg%3E") center / contain no-repeat;
+}
 /* The Library panel's Browse libraries: a quiet outline, not a filled block. */
 .drawing-workspace .excalidraw .library-menu-browse-button {
   height: 32px;
@@ -449,3 +472,28 @@
 /* !important: the editor's own item rule (.excalidraw .dropdown-menu .dropdown-menu-item-base) is as
    specific and its stylesheet loads after this one, so it won the cascade and the Mermaid row stayed. */
 .drawing-canvas-host .App-toolbar__extra-tools-dropdown [data-testid="toolbar-laser"] ~ * { display: none !important; }
+
+/* The assistant: a chat beside the canvas that changes this drawing (DrawingAssistant.tsx). */
+.drawing-workspace-assistant-toggle[aria-pressed="true"] { background: var(--bg-hover); color: var(--fg); }
+.drawing-assistant {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  width: clamp(300px, 30%, 420px);
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+}
+.drawing-assistant-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 40px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+.drawing-assistant-chat { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.drawing-assistant-chat > * { flex: 1 1 auto; min-height: 0; }

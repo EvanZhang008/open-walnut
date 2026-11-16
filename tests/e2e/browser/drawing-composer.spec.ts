@@ -301,8 +301,9 @@ test.describe('Draw in the composer (drawing_app)', () => {
     await focusCanvas(dialog);
     await drag(page, dialog, 'r', [120, 120], [300, 220]);
     await saved(dialog);
-    // The toolbar shows no shortcut digits; the tooltip still names the key.
-    await expect(dialog.locator('.ToolIcon__keybinding').first()).toBeHidden();
+    // The toolbar shows each tool's letter shortcut, not the editor's digit; the tooltip names it too.
+    const rectKey = dialog.locator('input[data-testid="toolbar-rectangle"] + .ToolIcon__icon .ToolIcon__keybinding');
+    expect(await rectKey.evaluate((el) => [getComputedStyle(el).fontSize, getComputedStyle(el, '::after').content])).toEqual(['0px', '"R"']);
     await expect(dialog.locator('label[title*="Rectangle"]').first()).toHaveAttribute('title', /R|2/);
     // Zoom in and pan, so the view is not the default one.
     await page.keyboard.press('ControlOrMeta+=');
