@@ -55,6 +55,9 @@ export const NOTICE_RIDES: readonly string[] = [
   'switch-expired', 'move-expired',
   // The task was adopted by a leader or released from one (adopt-notice.ts).
   'adopted', 'released',
+  // The machine has failed the session's own trigger's checks for hours (trigger-health.ts): nothing in
+  // the script to fix, so it waits for the next turn and wakes nobody (2026-11-16, a full disk woke nine).
+  'check_machine_fault',
 ];
 
 /** Notices that start a turn, each with why its reader must act now. */
