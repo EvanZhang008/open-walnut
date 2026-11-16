@@ -186,21 +186,38 @@ struct ApprovalSheet: View {
         }
     }
 
-    private func approveButton(_ style: ApproveStyle, blocked: Bool) -> some View {
-        Button { run("approve", signed: style == .faceID) } label: {
-            Group {
-                if style == .faceID {
-                    Label(working == "approve" ? "Face ID\u{2026}" : "Approve with Face ID", systemImage: "faceid")
-                } else {
-                    Text(working == "approve" ? "Approving\u{2026}" : "Approve")
-                }
+    @ViewBuilder private func approveButton(_ style: ApproveStyle, blocked: Bool) -> some View {
+        if blocked {
+            // Not this phone's to approve: still plainly a button, on one line, in a solid grey a person
+            // reads at a glance. The system's dimmed prominent style was near white and wrapped to two
+            // lines, and read as an empty box (lane B, 2026-11-16).
+            Button {} label: {
+                Label("Approve", systemImage: "faceid")
+                    .font(.body.weight(.semibold))
+                    .lineLimit(1)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 50)
+                    .background(Color(.tertiarySystemFill), in: Capsule())
             }
-            .frame(maxWidth: .infinity)
+            .buttonStyle(.plain)
+            .disabled(true)
+            .accessibilityIdentifier("approval.approve")
+        } else {
+            Button { run("approve", signed: style == .faceID) } label: {
+                Group {
+                    if style == .faceID {
+                        Label(working == "approve" ? "Face ID\u{2026}" : "Approve", systemImage: "faceid")
+                    } else {
+                        Text(working == "approve" ? "Approving\u{2026}" : "Approve")
+                    }
+                }
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .accessibilityIdentifier("approval.approve")
         }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-        .disabled(blocked)
-        .accessibilityIdentifier("approval.approve")
     }
 
     enum ApproveStyle: Equatable { case tap, faceID }

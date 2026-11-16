@@ -147,6 +147,14 @@ final class ApprovalSheetUITests: XCTestCase {
         return app
     }
 
+    /// A screenshot kept with the result (the fleet brings it back): the proof of what the person sees.
+    private func shot(_ app: XCUIApplication, _ name: String) {
+        let a = XCTAttachment(screenshot: app.screenshot())
+        a.name = name
+        a.lifetime = .keepAlways
+        add(a)
+    }
+
     /// Deny and Approve side by side on one row, both on screen; Approve dimmed when `approveEnabled` is false.
     private func assertBothButtons(_ app: XCUIApplication, approveEnabled: Bool, file: StaticString = #filePath, line: UInt = #line) {
         let deny = app.buttons["approval.deny"]
@@ -191,6 +199,7 @@ final class ApprovalSheetUITests: XCTestCase {
         let blocked = app.staticTexts["approval.blocked"]
         XCTAssertTrue(blocked.exists)
         XCTAssertTrue(blocked.label.contains("Walnut Mac app with Touch ID"), blocked.label)
+        shot(app, "push-1-waiting")
         Thread.sleep(forTimeInterval: 2)
 
         var details = app.buttons["Details (signed)"]
@@ -201,6 +210,7 @@ final class ApprovalSheetUITests: XCTestCase {
         XCTAssertTrue(detail.waitForExistence(timeout: 5))
         XCTAssertTrue(detail.label.contains("refs/heads/mainline"), detail.label)
         XCTAssertFalse(detail.label.contains("walnut-single-use-v1"), "Details holds the signed context, not its envelope")
+        shot(app, "push-2-details-open")
         Thread.sleep(forTimeInterval: 2)
         details.tap()
         XCTAssertTrue(detail.waitForNonExistence(timeout: 5))
@@ -209,6 +219,7 @@ final class ApprovalSheetUITests: XCTestCase {
         // Deny answers it and the sheet shows the end, across the bar.
         app.buttons["approval.deny"].tap()
         assertEnded(app, saying: "Denied on iPhone 17 Pro")
+        shot(app, "push-3-denied")
         XCTAssertEqual(lock.withLock { answered }, ["deny"])
         Thread.sleep(forTimeInterval: 2)
     }
@@ -224,9 +235,11 @@ final class ApprovalSheetUITests: XCTestCase {
                       "the asker's computer was named by its hash")
         XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "842f578d365e")).firstMatch.exists)
         assertBothButtons(app, approveEnabled: false)
+        shot(app, "leak-1-waiting")
         Thread.sleep(forTimeInterval: 3)
         app.buttons["approval.deny"].tap()
         assertEnded(app, saying: "Denied on iPhone 17 Pro")
+        shot(app, "leak-2-denied")
         Thread.sleep(forTimeInterval: 2)
     }
 
@@ -235,9 +248,11 @@ final class ApprovalSheetUITests: XCTestCase {
         let app = try openSheet(serving: Self.leakGate(mode: "tap"))
         assertBothButtons(app, approveEnabled: true)
         XCTAssertFalse(app.staticTexts["approval.blocked"].exists, "a tap approval said this phone cannot approve it")
+        shot(app, "tap-1-waiting")
         Thread.sleep(forTimeInterval: 2)
         app.buttons["approval.approve"].tap()
         assertEnded(app, saying: "Approved on iPhone 17 Pro with a tap")
+        shot(app, "tap-2-approved")
         XCTAssertEqual(lock.withLock { answered }, ["approve"])
         Thread.sleep(forTimeInterval: 2)
     }
@@ -248,7 +263,9 @@ final class ApprovalSheetUITests: XCTestCase {
         let app = try openSheet(serving: Self.leakGate(mode: "tap"))
         assertBothButtons(app, approveEnabled: true)
         // Its time runs out 35 s after the app first read it: wait past that, not the default 15 s.
+        shot(app, "expiry-1-waiting")
         assertEnded(app, saying: "Expired: nobody answered in time", within: 60)
+        shot(app, "expiry-2-expired")
         XCTAssertTrue(lock.withLock { answered.isEmpty })
         Thread.sleep(forTimeInterval: 2)
     }
