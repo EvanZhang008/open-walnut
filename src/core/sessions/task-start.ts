@@ -311,6 +311,9 @@ async function splitPick(task: Task, params: SessionStartParams) {
 const automaticStartFlights = new Map<string, Promise<SessionStartResult>>();
 
 export async function startSessionForTask(params: SessionStartParams): Promise<SessionStartResult> {
+  // A person's start from a browser under automation goes on as an agent's (automated-client.ts).
+  const { sendSourceOf } = await import('./send-sent-by.js');
+  if (params.source && sendSourceOf(params.source) !== params.source) params = { ...params, source: sendSourceOf(params.source) };
   const { isAutomaticStart } = await import('./host-admission.js');
   if (params.host !== undefined || params.cwd !== undefined || params.queuedAt || !await isAutomaticStart(params)) return startOrWait(params);
   const task = await getTask(params.taskIdPrefix);

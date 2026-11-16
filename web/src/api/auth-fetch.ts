@@ -22,7 +22,7 @@
 
 import { getDeviceToken, renewSignIn } from './device-token';
 import { getSignedOutReason, noteAuthRefusal } from './unpaired';
-import { TEST_RUN_HEADER, testRunLabel } from './test-run';
+import { AUTOMATED_HEADER, TEST_RUN_HEADER, automatedWindow, testRunLabel } from './test-run';
 import { readsSuspended, waitForReadablePage } from './read-lifecycle';
 
 const NO_TOKEN_PATHS = new Set(['/api/v1/browser-pair']);
@@ -94,6 +94,31 @@ export function initWithTestRun(
   return { ...init, headers };
 }
 
+/**
+ * The init that adds `x-walnut-automated: webdriver` (./test-run.ts automatedWindow) to a
+ * same-origin `/api/` call from a window automation drives, or null to leave it.
+ */
+export function initWithAutomated(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  pageHref: string,
+  automated: boolean,
+): RequestInit | null {
+  if (!automated) return null;
+  const raw = inputUrl(input);
+  if (raw === null) return null;
+  try {
+    const url = new URL(raw, pageHref);
+    if (url.origin !== new URL(pageHref).origin || !url.pathname.startsWith('/api/')) return null;
+  } catch {
+    return null;
+  }
+  const fromRequest = typeof Request !== 'undefined' && input instanceof Request ? input.headers : undefined;
+  const headers = new Headers(init?.headers ?? fromRequest);
+  headers.set(AUTOMATED_HEADER, 'webdriver');
+  return { ...init, headers };
+}
+
 /** A body fetch can send again: none, or one it did not consume as a stream. */
 function replayable(input: RequestInfo | URL, init: RequestInit | undefined): boolean {
   if (typeof Request !== 'undefined' && input instanceof Request) return false;
@@ -144,10 +169,12 @@ export function installAuthFetch(): void {
   installed = true;
   const original = window.fetch.bind(window);
   const testRun = testRunLabel();
+  const automated = automatedWindow();
   const send = (input: RequestInfo | URL, init: RequestInit | undefined, token: string | null) => {
     const href = window.location.href;
     const withToken = initWithDeviceToken(input, init, href, token);
-    const next = initWithTestRun(input, withToken ?? init, href, testRun) ?? withToken ?? init;
+    const withRun = initWithTestRun(input, withToken ?? init, href, testRun) ?? withToken ?? init;
+    const next = initWithAutomated(input, withRun, href, automated) ?? withRun;
     return { tokened: withToken !== null, response: original(input, next ?? init) };
   };
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {

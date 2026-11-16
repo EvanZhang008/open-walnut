@@ -19,6 +19,7 @@
 import { isHistoryUserTurn } from '../../lib/history-turn-window.js';
 import { buildPeerWrapper } from '../peers/peer-wrapper.js';
 import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
+import { ambientAutomatedClient, automatedClientLabel } from './automated-client.js';
 import { isPersonSource } from './send-sent-by.js';
 import { walnutCommandFor } from './walnut-commands.js';
 
@@ -57,9 +58,13 @@ export function frameAsWalnut(text: string, source: string | undefined, label?: 
   });
 }
 
-/** What a send of `source` puts into the session: a person's text as typed, anything else framed. */
+/**
+ * What a send of `source` puts into the session: a person's text as typed, anything else framed. A
+ * person's source sent by a browser under automation is not a person's (send-sent-by.ts).
+ */
 export function frameForSource(text: string, source: string | undefined): string {
-  return isPersonSource(source) ? text : frameAsWalnut(text, source);
+  // A person's route reached by a browser under automation (automated-client.ts) is named as that.
+  return isPersonSource(source) ? text : frameAsWalnut(text, source, automatedLabel());
 }
 
 /** The session behind a start or a send, as the peer envelope prints it. */
@@ -104,6 +109,22 @@ export function frameStartText(
     title: '', shortId: '', host: 'unknown', anonymous: true, automation: opts.source.slice('automation:'.length),
   });
   return frameForSource(text, opts.source);
+}
+
+/** The sender a browser under automation's framed text names, while its request is open. */
+function automatedLabel(): string | undefined {
+  const automated = ambientAutomatedClient();
+  return automated ? automatedClientLabel(automated) : undefined;
+}
+
+/**
+ * A start whose first message a person typed (the console's composer, a side question, the
+ * companion's chat) says so, unless a browser under automation typed it (automated-client.ts): then
+ * the runner frames it as Walnut's, named as that automation.
+ */
+export function attributedUnlessAutomated(source: string): { attributed?: true; attributionSource: string } {
+  const automated = ambientAutomatedClient();
+  return automated ? { attributionSource: automatedClientLabel(automated) } : { attributed: true, attributionSource: source };
 }
 
 /**

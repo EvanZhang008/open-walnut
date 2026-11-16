@@ -42,8 +42,8 @@ import { noteSettledLine, settledLineUuid } from './session-queue-lines.js';
 import { staleTriggerText } from './routines/trigger-stale.js';
 import type { PendingInstructionNotice } from './sessions/instruction-notice.js';
 import { leadsWithNotice, markNoticeDelivering } from './sessions/instruction-notice-flight.js';
-import { PERSON_SEND_SOURCES, queueSentBy } from './sessions/send-sent-by.js';
-import { frameForSource } from './sessions/send-frame.js';
+import { AUTOMATED_SEND_SOURCE, PERSON_SEND_SOURCES, isPersonSendSource, queueSentBy, sendSourceOf } from './sessions/send-sent-by.js';
+import { frameAsWalnut, frameForSource } from './sessions/send-frame.js';
 import { ambientTestRun } from './test-run.js';
 import { dropRepeatedHintBlocks, foldTidyIntoThreads, hintBlocksIn, replaceHintedText } from './hints/hint-format.js';
 import { noteUserActivity } from './self-update/idle-gate.js';
@@ -249,6 +249,8 @@ export async function sendMessageToSession(
 ): Promise<QueuedMessage> {
   // A stopping Demo takes no send, a timer's wake or retry included, before any side effect (sessions/demo-admission.ts).
   assertDemoAdmission();
+  // A person's source from a browser under automation goes on as an agent's (sessions/automated-client.ts).
+  if (opts?.source && sendSourceOf(opts.source) !== opts.source) opts = { ...opts, source: sendSourceOf(opts.source) };
   // A person's own words: they are using Walnut, so a live update waits (idle-gate.ts).
   if (queueSentBy(opts?.source) === 'person') noteUserActivity();
   // A send of anything but the quiet turn's own ends that quiet turn now, before any reader of
@@ -349,7 +351,10 @@ export async function sendMessageToSession(
   // Walnut's other notes and hints wait, as they are, for that message.
   const { rowRides, holdRidingNotice } = await import('./sessions/wake-policy.js');
   if (!opts?.wakeReason && !opts?.interrupt && !heldForMove && !heldForTurn
-    && !PERSON_SEND_SOURCES.has(opts?.source ?? '') && queueSentBy(opts?.source) !== 'person' && rowRides(framedBody)) {
+    // A person's words, and a browser under automation's (an agent's now, still a message to act on),
+    // are never a notice held for later.
+    && !PERSON_SEND_SOURCES.has(opts?.source ?? '') && opts?.source !== AUTOMATED_SEND_SOURCE
+    && queueSentBy(opts?.source) !== 'person' && rowRides(framedBody)) {
     await tellCarried('');
     if (opts?.stillWanted && !opts.stillWanted()) throw new SendNoLongerWantedError();
     holdRidingNotice(sessionId, framedBody);
@@ -367,7 +372,7 @@ export async function sendMessageToSession(
       ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
       ...(opts?.relayTaken ? { relayTaken: true } : {}),
       ...(opts?.lineUuid ? { lineUuid: opts.lineUuid } : {}),
-      ...(opts?.closesPrompt || PERSON_SEND_SOURCES.has(opts?.source ?? '') ? { closesPrompt: true } : {}),
+      ...(opts?.closesPrompt || isPersonSendSource(opts?.source) ? { closesPrompt: true } : {}),
       ...(queueSentBy(opts?.source) ? { sentBy: queueSentBy(opts?.source) } : {}),
       ...(heldForMove || heldForTurn ? { heldReason: heldForMove ?? heldForTurn } : {}),
     });
@@ -662,6 +667,11 @@ export async function editMessage(
 ): Promise<boolean> {
   let stored: string | undefined;
   let droppedBrief = false;
+  // An edit from a browser under automation is an agent's words, whoever's row it edits
+  // (sessions/automated-client.ts): framed, and it no longer answers the person's prompt.
+  const { ambientAutomatedClient, automatedClientLabel } = await import('./sessions/automated-client.js');
+  const automated = ambientAutomatedClient();
+  if (automated) newText = frameAsWalnut(newText, AUTOMATED_SEND_SOURCE, automatedClientLabel(automated));
   const ok = await mutateStore((s) => {
     const queue = s.queues[sessionId];
     if (!queue) return false;
@@ -677,6 +687,7 @@ export async function editMessage(
     // (sessions/queue-edit-frame.ts).
     if (newText.startsWith('/') && hasAiOnly(msg.message)) droppedBrief = !handOnBrief(queue, msg, queue.indexOf(msg));
     msg.message = newText.startsWith('/') ? newText : replaceHintedText(msg.message, keepAiOnly(msg.message, keepLeadingFrame(msg.message, newText)));
+    if (automated) { msg.sentBy = 'agent'; delete msg.closesPrompt; }
     stored = msg.message;
     return true;
   });

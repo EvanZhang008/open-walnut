@@ -50,17 +50,18 @@ export function parseTestRunLabel(raw: unknown): string | undefined {
 
 let markingCache: boolean | undefined;
 
-/** Whether this server turns test-run requests into test objects (see the file comment). */
-export async function testRunMarkingEnabled(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
-  const flag = env.WALNUT_TEST_RUN_MARK;
-  if (flag === '1') return true;
-  if (flag === '0') return false;
+/**
+ * Whether this server is the user's own install, not a throwaway one (an ephemeral child, the
+ * test runner, a data home in a temp or task dir, a fake HOME): the semantic lane's "is this a
+ * real install" test, without its own opt-in flag. Decided once per process. Shared with the
+ * automated-client rule (sessions/automated-client.ts).
+ */
+export async function isRealInstall(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
   if (markingCache !== undefined) return markingCache;
   const [{ semanticLaneDecision }, { IS_EPHEMERAL, WALNUT_HOME }] = await Promise.all([
     import('./search/semantic-default.js'),
     import('../constants.js'),
   ]);
-  // The semantic lane's "is this a real install" test, without its own opt-in flag.
   const decision = semanticLaneDecision({
     env: { ...env, WALNUT_SEARCH_V2_SEMANTIC: undefined },
     isEphemeral: IS_EPHEMERAL,
@@ -68,6 +69,14 @@ export async function testRunMarkingEnabled(env: NodeJS.ProcessEnv = process.env
   });
   markingCache = decision.reason === 'default';
   return markingCache;
+}
+
+/** Whether this server turns test-run requests into test objects (see the file comment). */
+export async function testRunMarkingEnabled(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  const flag = env.WALNUT_TEST_RUN_MARK;
+  if (flag === '1') return true;
+  if (flag === '0') return false;
+  return isRealInstall(env);
 }
 
 /**

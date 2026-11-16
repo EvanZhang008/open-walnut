@@ -43,6 +43,7 @@ import { writeJsonFile } from '../../utils/fs.js';
 import type { SessionProfile } from '../types.js';
 import type { LaneSession } from './personal-ai-lane.js';
 import { log } from '../../logging/index.js';
+import { attributedUnlessAutomated } from './send-frame.js';
 
 /**
  * Tools a companion chat turn may use without asking; under `dontAsk` everything
@@ -341,9 +342,8 @@ async function resolveCloudChatLane(
   bus.emit(EventNames.SESSION_START, {
     taskId: '',
     message,
-    // The companion's chat: a person typed it.
-    attributed: true,
-    attributionSource: 'cloud-chat:typed-message',
+    // The companion's chat: a person typed it, unless a browser under automation did.
+    ...attributedUnlessAutomated('cloud-chat:typed-message'),
     cwd,
     title,
     profile,

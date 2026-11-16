@@ -49,7 +49,7 @@ import {
   type ReplyOutbox,
   type SessionRequest,
 } from '../session-requests.js';
-import { queueSentBy } from './send-sent-by.js';
+import { queueSentBy, sendSourceOf } from './send-sent-by.js';
 import { assertAreaDelivery } from '../router/delivery-scope.js';
 import { frameForSource } from './send-frame.js';
 import { isPersonSource } from './send-sent-by.js';
@@ -469,6 +469,8 @@ export async function deliverToSession(
     wakeReason?: string;
   },
 ): Promise<{ delivery: 'queued' | 'deferred'; messageId?: string }> {
+  // A person's source from a browser under automation goes on as an agent's (automated-client.ts).
+  opts = { ...opts, source: sendSourceOf(opts.source) };
   const sid = target.claudeSessionId;
   // An answer for the user goes only into the live session it was checked against (ask-answer.ts).
   let guard: { stopFence: string | null; stillWanted: () => boolean } | undefined;

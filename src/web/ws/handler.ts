@@ -20,6 +20,7 @@ import { selectWsProtocol } from '../../lib/ws-bearer-protocol.js'
 import { upgradeCredential } from './upgrade-credential.js'
 import { leanShaper, newLeanState, wantsLean, type LeanState } from './lean-frames.js'
 import { SocketTraffic } from './traffic.js'
+import { automatedClientIsAgent, automatedClientOf, withAutomatedClient, type AutomatedClientKind } from '../../core/sessions/automated-client.js'
 import { authenticateFeatureNode, upgradeFeatureNode, startFeatureNodes, closeFeatureNodes } from './feature-node-runtime.js'
 import { BRIDGE_SESSION_STREAM_PATH, closeAllBridgeSessionStreams, handleBridgeSessionStreamUpgrade } from './bridge-session-stream.js'
 
@@ -49,6 +50,8 @@ interface Client {
   lean?: LeanState
   traffic: SocketTraffic
   socketId: string
+  /** Set when a browser under automation opened the socket (core/sessions/automated-client.ts). */
+  automated?: AutomatedClientKind
 }
 
 /** Close code of a socket whose device was signed out (revoked) while it was open. */
@@ -320,13 +323,19 @@ async function handleMessage(client: Client, raw: string): Promise<void> {
     return
   }
 
+  // A browser under automation's call runs as its own (core/sessions/automated-client.ts): nothing
+  // it sends reads as the person's. Only while the call is open, as an HTTP request's scope.
+  const automated = client.automated && await automatedClientIsAgent() ? client.automated : undefined
+  let open = true
   try {
-    const result = await handler(frame.payload, client.ws)
+    const result = await withAutomatedClient(automated, () => handler(frame.payload, client.ws), () => open)
     sendResponse(client.ws, frame.id, true, result ?? undefined)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     log.ws.error(`RPC handler error for "${frame.method}"`, { error: message })
     sendResponse(client.ws, frame.id, false, undefined, message)
+  } finally {
+    open = false
   }
 }
 
@@ -659,9 +668,10 @@ export function attachWss(server: HttpServer): WebSocketServer {
     let lean = false
     try { lean = wantsLean(new URL(request?.url ?? '/', 'http://ws.local')) } catch { /* a bad URL asks for nothing */ }
     const socketId = `${process.pid}-${++socketCounter}`
-    const client: Client = { ws, seq: 0, alive: true, mode: 'global', interest: new Set(), socketId, traffic: new SocketTraffic(), ...(device ? { device } : {}), ...(lean ? { lean: newLeanState() } : {}) }
+    const automated = automatedClientOf(request?.headers, request?.url)
+    const client: Client = { ws, seq: 0, alive: true, mode: 'global', interest: new Set(), socketId, traffic: new SocketTraffic(), ...(device ? { device } : {}), ...(lean ? { lean: newLeanState() } : {}), ...(automated ? { automated } : {}) }
     clients.add(client)
-    log.ws.info('client connected', { clientCount: clients.size, lean, socketId })
+    log.ws.info('client connected', { clientCount: clients.size, lean, socketId, ...(automated ? { automated } : {}) })
     // A browser's socket ends with its access token: the page renews and comes back (WS_RENEW_SIGN_IN).
     const accessUntil = (request as DeviceUpgrade | undefined)?.walnutAccessUntil
     const renewTimer = accessUntil === undefined ? null : setTimeout(() => {

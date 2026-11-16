@@ -68,7 +68,7 @@ describe('the raw passes of the send framing', () => {
       'if (walnutCommandFor(source, text)) return text;',
       'return buildWalnutMessage({',
     ]);
-    expect(returns('frameForSource')).toEqual(['return isPersonSource(source) ? text : frameAsWalnut(text, source);']);
+    expect(returns('frameForSource')).toEqual(['return isPersonSource(source) ? text : frameAsWalnut(text, source, automatedLabel());']);
     expect(returns('frameStartText')).toEqual([
       'if (!readsAsPerson(text)) return text;',
       'return buildPeerWrapper(text, {',

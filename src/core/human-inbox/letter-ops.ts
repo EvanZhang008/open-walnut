@@ -601,7 +601,13 @@ export async function savePicturesOnce(
 /** The task whose session `sid` is, as the record of who answered in the user's place. */
 export async function answeredByCaller(sid: string | undefined): Promise<LetterAnsweredBy | undefined> {
   const sessionId = sid?.trim();
-  if (!sessionId) return undefined;
+  if (!sessionId) {
+    // A browser under automation answering is not the user (sessions/automated-client.ts): named as
+    // that sender, decided while its request is open, so the delivery after the answer agrees.
+    const { ambientAutomatedClient, automatedClientLabel } = await import('../sessions/automated-client.js');
+    const automated = ambientAutomatedClient();
+    return automated ? { sessionId: 'browser-automation', name: automatedClientLabel(automated) } : undefined;
+  }
   try {
     return await withTimeout((async () => {
       const { getSessionByClaudeId } = await import('../session-tracker.js');

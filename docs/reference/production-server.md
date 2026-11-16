@@ -103,6 +103,24 @@ Throwaway servers (ephemeral, the test
 runner, a data home in a temp or task dir) ignore the header; `WALNUT_TEST_RUN_MARK=1` turns it on
 there, as `tests/e2e/test-run-objects.test.ts` does.
 
+**A browser under automation is never the user** (`src/core/sessions/automated-client.ts`;
+2026-11-16: a task recording a proof video drove headless Chromium on the user's own Walnut and
+typed into another task's composer twice; both rows read `sentBy: "person"`, and the "the user is
+using this task" guard then held that task's completion). On the user's own install, a request or
+socket call from a window with `navigator.webdriver` (the web app adds `x-walnut-automated:
+webdriver` to its `/api/` calls and `?automated=webdriver` to its socket) or with a `HeadlessChrome/`
+user agent runs in the automated-client scope: every person source reads as an agent's, its text is
+framed as Walnut's ("browser automation"), it answers no permission prompt, files no Thread and
+marks no task as one the user is using. `?walnut-test-run=0` never turns this off. A person's
+browsers and the Mac app's web view set neither mark. Throwaway servers let the automation stand
+in for the person (their specs type as "the person"); `WALNUT_AUTOMATED_CLIENT_AGENT=1` turns the
+rule on there (`tests/e2e/browser/automated-client-sender.spec.ts`), `=0` off anywhere.
+
+**A proof video that types into Walnut's UI is recorded on clouddev's isolated Walnut**, never in
+the Mac's live UI: `walnut-dev run --bg <name> bun run dev:ephemeral`, `walnut-dev logs <name>` for
+its port, `walnut-dev expose <name> <port>` for a URL, and the recording drives that. The Mac gets
+only the short read-only look after the land (no typing, no clicks that write).
+
 The launcher prints `{pid, port, tmpDir, daemonDir, pausedCronJobs, removedPushTokens}`. The
 server is isolated by construction, so nothing it does reaches the real Walnut:
 

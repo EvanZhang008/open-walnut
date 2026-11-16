@@ -21,6 +21,7 @@ import { engineCaps } from '../agents/engine-registry.js';
 import { SessionControlError } from './session-controls.js';
 import { log } from '../../logging/index.js';
 import type { SessionEffort, SessionOutputMode, SessionRecord } from '../types.js';
+import { attributedUnlessAutomated } from './send-frame.js';
 
 /** Lane namespace for every side-thread session. */
 export const SIDE_LANE_PREFIX = 'side:';
@@ -230,9 +231,8 @@ export async function forkSideThreadSession(
     preassignedSessionId: sessionId,
     taskId: '',
     message: opts?.message ?? '',
-    // The person's side question.
-    attributed: true,
-    attributionSource: 'side-thread:typed-message',
+    // The person's side question, unless a browser under automation typed it.
+    ...attributedUnlessAutomated('side-thread:typed-message'),
     cwd: parent.cwd,
     project: parent.project ?? '',
     title,

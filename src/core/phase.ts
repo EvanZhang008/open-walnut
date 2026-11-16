@@ -99,6 +99,7 @@
 import { log } from '../logging/index.js'
 import type { TaskPhase, TaskStatus, Task, TurnRetryReason } from './types.js';
 import { isQuietTurn } from './sessions/quiet-turn.js'
+import { queueSentBy } from './sessions/send-sent-by.js'
 import { isMainAgentTask } from './org/main-stays-active.js'
 import {
   consumeInterruptedWait, dropInterruptedWait, hasInterruptedWait, interruptedWaitLeftAt, markInterruptedByMessage,
@@ -385,9 +386,14 @@ export function isChatSendSource(source: string | undefined): boolean {
   return source === 'ui' || source === 'mobile' || source === 'cli' || source === 'api-v1' || source === 'chat'
 }
 
-/** A send a person made (the reopening sources but a peer's): it ends a wait for good. */
+/**
+ * A send a person made: a reopening source that send-sent-by.ts counts as a person's. It ends a wait
+ * for good and stamps the session's `humanInputAt` (the "a person wrote in it" fact task_complete
+ * reads). Never a peer's, a task calling a person's route (`api-agent`), or a browser under
+ * automation (2026-11-16: `api-agent` used to count, so an agent's call stamped the user's presence).
+ */
 export function isPersonSendSource(source: string | undefined): boolean {
-  return source !== 'peer' && sendSourceReopensTerminal(source)
+  return sendSourceReopensTerminal(source) && queueSentBy(source) === 'person'
 }
 
 /**

@@ -196,8 +196,8 @@ export async function noteTeamAsk(
     // The org is off (org-enabled.ts): no VP keeps its team's asks.
     const { isOrgEnabled } = await import('./org-enabled.js');
     if (!(await isOrgEnabled())) return;
-    const { PERSON_SEND_SOURCES } = await import('../session-message-queue.js');
-    const person = PERSON_SEND_SOURCES.has(source ?? '');
+    const { isPersonSendSource } = await import('../sessions/send-sent-by.js');
+    const person = isPersonSendSource(source);
     const peer = source === 'peer' ? peerNoteSender(enqueued) : null;
     if (!person && !peer) return;
     // The leader keeps the notes (pendingOrgDigest's rule): a replica's file nobody reads.

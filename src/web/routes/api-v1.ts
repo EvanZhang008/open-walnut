@@ -1966,8 +1966,11 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
     // On a CLOUD REPLICA the turn is relayed to the primary, which is the only
     // box that can run it — see routes/chat-turn-relay.ts.
     if (!waitForStart) decided = true
+    // Decided now, while the request is open: the turn runs after the 202, and a browser under
+    // automation's message stays an agent's there (core/sessions/automated-client.ts).
+    const { sendSourceOf } = await import('../../core/sessions/send-sent-by.js')
     void runApiV1TurnRouted(agentId, conversationId, text, turnId, imageData, claim, {
-      messageId, retryOfUnsure: unsureTurnId !== undefined, reportStart,
+      messageId, retryOfUnsure: unsureTurnId !== undefined, reportStart, source: sendSourceOf('api-v1'),
     })
       .catch((err) => {
         log.web.error('api-v1 turn failed', {
@@ -2073,10 +2076,12 @@ async function runApiV1TurnRouted(
     /** Hand the start's outcome to a POST still waiting to answer. True when it
      *  took it (the POST answers by it, so no SSE error is sent as well). */
     reportStart: (answer: TurnStartAnswer) => boolean
+    /** The send source the route decided (`api-v1`, or an automated browser's: send-sent-by.ts sendSourceOf). */
+    source?: string
   },
 ): Promise<void> {
   if (!CLOUD_MODE) {
-    await runApiV1Turn(agentId, conversationId, text, turnId, imageData, send?.messageId)
+    await runApiV1Turn(agentId, conversationId, text, turnId, imageData, send?.messageId, send?.source)
     return
   }
   const report = (answer: TurnStartAnswer): boolean => send?.reportStart(answer) ?? false
@@ -2400,6 +2405,7 @@ async function runApiV1LaneTurn(
   conversationId: string,
   message: string,
   turnId: string,
+  source = 'api-v1',
 ): Promise<void> {
   const { runLaneTurn } = await import('../../core/sessions/lane-turn.js')
   const { subscribeLaneTurnFrames } = await import('./lane-turn-sse.js')
@@ -2418,7 +2424,7 @@ async function runApiV1LaneTurn(
 
   try {
     const turn = await runLaneTurn(agentId, conversationId, message, {
-      source: 'api-v1',
+      source,
       onSessionId: (sid) => { laneSessionId = sid; relay.setSessionId(sid) },
       // The lane is still busy with an earlier turn that stalled: this one waits
       // for it (lane-turn-gate.ts). Say so, or the wait reads as a hang.
@@ -2544,6 +2550,8 @@ async function runApiV1Turn(
   /** The client's id for the message: written on its row, so the client can tell
    *  its own message apart from an identical one (GET .../messages `messageId`). */
   messageId?: string,
+  /** Who sent it, as the route decided (`api-v1` for a person). */
+  source = 'api-v1',
 ): Promise<void> {
   await enqueueAgentTurn(agentId, 'api-v1', async () => {
     let userContent: string | unknown[]
@@ -2612,7 +2620,7 @@ async function runApiV1Turn(
     const annotated = savedImages.length > 0 ? buildSessionImageContext(savedImages) + text : text
     const sessionMessage = !readsAsPerson(text) && readsAsPerson(annotated)
       ? frameAsWalnut(annotated, 'forwarded-message') : annotated
-    await runApiV1LaneTurn(agentId, conversationId, sessionMessage, turnId)
+    await runApiV1LaneTurn(agentId, conversationId, sessionMessage, turnId, source)
   })
 }
 

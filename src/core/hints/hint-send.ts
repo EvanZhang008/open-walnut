@@ -20,6 +20,7 @@ import { REFERENCE_CARDS_OPEN } from '../sessions/reference-cards.js';
 import type { Config, MessageHintRole, MessageHintTrigger, SessionHintState, SessionRecord, Task } from '../types.js';
 import { log } from '../../logging/index.js';
 import { ambientTestRun } from '../test-run.js';
+import { ambientAutomatedClient } from '../sessions/automated-client.js';
 import { composeHinted, parseHinted, renderHintBlock, splitHinted, type CarriedHint } from './hint-format.js';
 import { effectiveHints, hintApplies, needsTaskForAudience, type EffectiveHint, type HintTarget } from './hint-registry.js';
 import { dueReasons } from './hint-schedule.js';
@@ -383,6 +384,8 @@ export async function prepareHintedSend(
   opts: HintSendOptions = {},
 ): Promise<PreparedHintedSend> {
   const now = opts.now ?? Date.now;
+  // A browser under automation is never the person, whatever route it came through (automated-client.ts).
+  if (opts.sentBy === 'person' && ambientAutomatedClient()) opts = { ...opts, sentBy: 'agent' };
   if (message.startsWith('/') || record?.profile?.areaId) return escapedOnly(message);
   try {
     const config = opts.config !== undefined ? opts.config : await import('../config-manager.js').then((m) => m.getConfig()).catch(() => null);
@@ -482,7 +485,9 @@ export async function prepareStartHints<T extends StartHintData>(data: T, opts: 
   const none = { data, commit: async () => {} };
   // Who started the conversation is kept even when no hint rides its first message: the reply-language
   // check judges only a turn a person started (hints/reply-language-drift.ts), the first one included.
-  const sender = data.attributed ? 'person' as const : 'agent' as const;
+  // A start made inside a browser under automation's request is not a person's (sessions/automated-client.ts).
+  const personStart = !!data.attributed && !ambientAutomatedClient();
+  const sender = personStart ? 'person' as const : 'agent' as const;
   const bare = { data, commit: async (sessionId: string) => writeHintState(sessionId, (cur) => (
     cur.hintState?.lastSendBy === sender ? null
       : { hintState: advanceHintState(cur.hintState, cur, {}, { now: Date.now(), sentBy: sender, count: false }) })) };
@@ -497,7 +502,7 @@ export async function prepareStartHints<T extends StartHintData>(data: T, opts: 
     const { target, away, brief, threadsTidy } = await targetFor(sid, record, hints);
     const plan = planHints({
       hints, target, record, config, away, brief, threadsTidy, skip: carried,
-      ...(data.attributed ? { sentBy: 'person' as const, inChat: true } : { sentBy: 'agent' as const }),
+      ...(personStart ? { sentBy: 'person' as const, inChat: true } : { sentBy: 'agent' as const }),
       message: parseHinted(data.message).text,
     });
     if (!plan.carried.length) return bare;

@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { SessionRecord } from '../types.js';
-import { PERSON_SEND_SOURCES } from '../sessions/send-sent-by.js';
+import { isPersonSendSource } from '../sessions/send-sent-by.js';
 
 export const AREA_RECOVERY_SOURCES = new Set(['auto-recover', 'context-compact', 'context-recovery', 'safeguard-switch']);
 
@@ -41,7 +41,7 @@ export function assertAreaDelivery(
   if (!scopedArea && source !== ROUTER_RUNTIME_SOURCE) return false;
   const allowed = source === ROUTER_RUNTIME_SOURCE
     ? scopedArea && record?.profile?.areaRole === 'router' && isRouterWake(sessionId)
-    : PERSON_SEND_SOURCES.has(source ?? '') || AREA_RECOVERY_SOURCES.has(source ?? '');
+    : isPersonSendSource(source) || AREA_RECOVERY_SOURCES.has(source ?? '');
   if (!allowed) throw new Error(AREA_DELIVERY_REFUSED);
   return scopedArea;
 }

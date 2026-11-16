@@ -126,6 +126,7 @@ The full rehearsal of a real deploy away from production (`WALNUT_DEVPROD_REHEAR
 cleanup are in `docs/reference/production-server.md`.
 
 - **Live verification runs on an ephemeral server, never on :3456.** Anything that creates tasks, sessions, notes or cron jobs to prove a change runs on `bun run dev:ephemeral`; reading :3456 is fine. The ephemeral server is isolated by construction (own data copy, daemon, paused crons, no sync, no remote hosts, keyword search only).
+- **A proof video that types into Walnut's UI is recorded on clouddev's isolated Walnut** (`walnut-dev run --bg <name> bun run dev:ephemeral`), never in the Mac's live UI; there a browser under automation sends as an agent, framed (`src/core/sessions/automated-client.ts`). (`docs/reference/production-server.md`)
 - **A check that must write on :3456 runs as a test run** (`x-walnut-test-run: <label>`, `src/core/test-run.ts`): its objects stay off the user's board and are swept after 6 h; delete what you made anyway, never touch the user's own objects.
 - **Testing a task sync plugin** needs `WALNUT_ALLOW_REMOTE_SYNC_IN_TEST=1` and writes to the user's real account: change only tasks you created, clean them up, report what you removed.
 - **Deploys smoke-test, plugin-check and roll back.** dev-prod.sh proves prerequisites before the first destructive step, stays portable (Linux too), boots the new build in isolation before the kill and relaunches the last good build on failure.

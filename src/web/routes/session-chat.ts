@@ -33,6 +33,7 @@ import { refuseRealHomeWrite } from '../../providers/ephemeral-session-gate.js'
 import { broadcastEvent } from '../ws/handler.js'
 import { hasAiOnly, redactAiOnly } from '../../lib/ai-only-envelope.js'
 import { attachmentHeaderBlock } from '../../lib/attachment-headers.js'
+import { attributedUnlessAutomated } from '../../core/sessions/send-frame.js'
 
 const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 const MAX_SESSION_IMAGES = 5
@@ -93,9 +94,8 @@ export function registerSessionChatRpc(): void {
     bus.emit(EventNames.SESSION_START, {
       taskId: typeof data.taskId === 'string' ? data.taskId : '',
       message: data.message,
-      // The console's composer: a person typed it.
-      attributed: true,
-      attributionSource: 'ui:typed-message',
+      // The console's composer: a person typed it, unless a browser under automation did.
+      ...attributedUnlessAutomated('ui:typed-message'),
       cwd: typeof data.cwd === 'string' ? data.cwd : undefined,
       project: typeof data.project === 'string' ? data.project : undefined,
       mode: typeof data.mode === 'string' ? data.mode : undefined,
@@ -1050,6 +1050,10 @@ function startRemoteTeamAgentPolling(sessionId: string, agentName: string, opts:
 
 /** A message that switches the engine skips the hinted send: it is still filed (an Org node's thread, any other task's ask). Never throws. */
 async function fileSwitchedRequest(taskId: string, message: string): Promise<void> {
+  // Only the person's words are filed: never a browser under automation's or a test run's.
+  const { ambientAutomatedClient } = await import('../../core/sessions/automated-client.js')
+  const { ambientTestRun } = await import('../../core/test-run.js')
+  if (ambientAutomatedClient() || ambientTestRun() !== undefined) return
   try {
     const [{ getTask }, { prepareThreadCapture }] = await Promise.all([
       import('../../core/task-manager.js'), import('../../core/org/thread-capture.js'),

@@ -11,6 +11,7 @@ import { getUnpairedState, noteAuthRefusal, subscribeUnpaired } from './unpaired
 import { wsProtocolsFor } from '../../../src/lib/ws-bearer-protocol';
 import { LEAN_SIGNATURE, LeanFrameCache } from './ws-lean';
 import { mintOpId } from './op-id';
+import { AUTOMATED_PARAM, automatedWindow } from './test-run';
 import { leaderErrorMessage, WS_LEADER_AWAY, WS_LEADER_BACK } from './leader-presence';
 import { demoPageGeneration, initDemoGeneration, isDemoOrigin } from '../utils/demo-generation';
 
@@ -186,6 +187,8 @@ class WsClient {
     const params = new URLSearchParams();
     if (generation) params.set('demo-generation', generation);
     if (!this.leanOff) params.set('lean', LEAN_SIGNATURE);
+    // A window automation drives says so: nothing it sends is the person's (./test-run.ts automatedWindow).
+    if (automatedWindow()) params.set(AUTOMATED_PARAM, 'webdriver');
     const query = params.toString();
     const url = `${proto}://${window.location.host}/ws${query ? '?' + query : ''}`;
     this.lean.reset();

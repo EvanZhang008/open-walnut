@@ -88,3 +88,16 @@ export function withSendTestRun(payload: unknown, label: string | null = testRun
   if (!label || typeof payload !== 'object' || payload === null) return payload;
   return { ...(payload as Record<string, unknown>), testRun: label };
 }
+
+/** The header and socket parameter that say a browser under automation sent it (src/core/sessions/automated-client.ts). */
+export const AUTOMATED_HEADER = 'x-walnut-automated';
+export const AUTOMATED_PARAM = 'automated';
+
+/**
+ * Whether automation drives this window (`navigator.webdriver`): then nothing it sends is the
+ * person's words on the user's own Walnut. Unlike the test-run label, `?walnut-test-run=0` never
+ * turns it off: a demo recorded on the user's Walnut is still an agent typing.
+ */
+export function automatedWindow(): boolean {
+  return typeof navigator !== 'undefined' && navigator.webdriver === true;
+}

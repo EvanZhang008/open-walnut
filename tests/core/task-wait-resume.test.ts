@@ -57,8 +57,9 @@ describe('waitExitCause', () => {
 })
 
 describe('isPersonSendSource', () => {
-  it('is every reopening source but a peer task\'s', () => {
-    for (const source of REOPENING_SEND_SOURCES) expect(isPersonSendSource(source), source).toBe(source !== 'peer')
+  it('is every reopening source but a peer task\'s or a task calling a person\'s route', () => {
+    for (const source of REOPENING_SEND_SOURCES) expect(isPersonSendSource(source), source).toBe(source !== 'peer' && source !== 'api-agent')
+    expect(isPersonSendSource('browser-automation')).toBe(false)
     expect(isPersonSendSource(undefined)).toBe(false)
     expect(isPersonSendSource('walnut-notify')).toBe(false)
   })

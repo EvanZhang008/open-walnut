@@ -204,6 +204,8 @@ const SOURCE_SENDER: Record<string, 'person' | 'agent'> = {
   'brand-new-source': 'agent', 'background-work-ended': 'agent', 'idle-compact': 'agent', 'context-compact': 'agent', 'context-recovery': 'agent', 'safeguard-switch': 'agent', 'pr-watch': 'agent',
   // Bus tags of emits that are attributed on their own (START_EMITTERS), not send sources a person types into.
   'web-ui': 'agent', 'subagent-runner': 'agent',
+  // A person's source sent by a browser under automation (sessions/automated-client.ts, sendSourceOf).
+  'browser-automation': 'agent',
 };
 
 /** Files allowed to pass a person source to a send or a start. */

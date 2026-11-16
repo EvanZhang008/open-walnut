@@ -1928,6 +1928,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api', opIdMiddleware())
   // A test run's writes make test objects, kept off the user's board and swept (src/core/test-run.ts).
   app.use('/api', await (await import('./middleware/test-run.js')).testRunMiddleware())
+  // A browser under automation is never the person (src/core/sessions/automated-client.ts).
+  app.use('/api', await (await import('./middleware/automated-client.js')).automatedClientMiddleware())
 
   // -- Cron service --
   const cronService = new CronService({
