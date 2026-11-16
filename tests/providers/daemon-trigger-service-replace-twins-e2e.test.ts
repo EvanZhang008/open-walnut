@@ -196,7 +196,6 @@ describe.skipIf(!BUN)('a --service daemon replaced by the other twin', () => {
     // The replace: the old binary stops, the runtime dir goes with it, the other twin starts.
     await a.stop()
     fs.rmSync(RUN_DIR, { recursive: true, force: true })
-    await sleep(20) // a stamp of the next run is later than the first one's
     const b = await Daemon.start(second, env, RUN_DIR, HOME)
     expect(await configure(b)).toMatchObject({ ok: true, count: 1 })
 
