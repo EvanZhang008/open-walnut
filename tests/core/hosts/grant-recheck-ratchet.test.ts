@@ -37,6 +37,9 @@ const DISPATCH: Record<string, Array<{ after: string; check: string; send: strin
   'core/hosts/host-daemon-update.ts': [{ after: 'link(host)', check: 'assertStillGranted(', send: 'requestDaemonUpdate(gate)' }],
   // The copy checks once before the relay, then the relay asks its gate before every part.
   'core/hosts/host-copy.ts': [{ after: 'planTarget(', check: 'gate()', send: 'relayFile(job.fromHost' }],
+  // subagent_run with host: read again after the slot and the engine check, before the runner; the
+  // runner reads it again after the work copy and right before the session starts (on-host.ts stillGranted).
+  'core/subagents/registry.ts': [{ after: 'checkEngineOnHost(', check: 'stillGranted(run)', send: 'runner(spec)' }],
 }
 
 /** Every call in `src` that takes a grant to start work: grantFor with a preview, and pinnedGrant. */

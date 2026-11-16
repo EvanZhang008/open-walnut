@@ -1,7 +1,7 @@
 /**
  * Light subagents of the calling session (core/subagents). Additive to v1.
  *
- *   POST /api/v1/subagents            { engine, model?, effort?, prompt, description?, background?, timeout_min?, wait_ms?, tool_use_id? }
+ *   POST /api/v1/subagents            { engine?, host?, model?, effort?, prompt, description?, background?, timeout_min?, wait_ms?, tool_use_id? }
  *                                     → the run: its answer when it ended within the wait, else state running
  *   GET  /api/v1/subagents            → { subagents } this session's runs, running and recent
  *   GET  /api/v1/subagents/:id?wait_ms= → the run, after waiting up to wait_ms for it to end
@@ -59,7 +59,8 @@ subagentsV1Router.post('/subagents', (req, res, next) => answer(req, res, next, 
   const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
   if (typeof b.prompt !== 'string') throw new LightSubagentError('bad_request', 'prompt is required', 400)
   const run = await reg.startLightSubagent(callerSid(req), {
-    engine: String(b.engine ?? ''),
+    ...(str(b.engine) ? { engine: str(b.engine) } : {}),
+    ...(str(b.host) ? { host: str(b.host) } : {}),
     prompt: b.prompt,
     ...(str(b.model) ? { model: str(b.model) } : {}),
     ...(str(b.effort) ? { effort: str(b.effort) } : {}),
@@ -104,6 +105,7 @@ function view(reg: Registry, run: import('../../core/subagents/registry.js').Lig
     ...(run.model ? { model: run.model } : {}),
     ...(run.effort ? { effort: run.effort } : {}),
     host: run.host,
+    ...(run.fromHost ? { from_host: run.fromHost } : {}),
     description: run.description,
     elapsed_ms: (run.endedAt ?? Date.now()) - run.startedAt,
     tool_uses: run.toolUses,
@@ -113,6 +115,8 @@ function view(reg: Registry, run: import('../../core/subagents/registry.js').Lig
     ...(run.status === 'running' && run.text ? { saying: run.text.slice(-1_500) } : {}),
     ...(run.error ? { error: run.error, code: run.errorCode } : {}),
     ...(run.warnings.length ? { warnings: run.warnings } : {}),
+    ...(run.files.length ? { files: run.files } : {}),
+    ...(run.work.length ? { work: run.work } : {}),
     full_access: run.fullAccess,
   }
 }

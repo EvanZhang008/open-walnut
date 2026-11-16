@@ -1,9 +1,10 @@
 /**
  * Light subagents: one prompt a session runs inside its own turn on an engine of its
- * choice (Codex, OpenCode, Goose, Pi, Gemini, Claude), in its own directory on its own
- * host, the way Claude Code's Agent tool runs a subagent. No task, no session record,
- * no board row: a run lives in the server's memory, shows in the parent session's
- * Background tasks panel, and ends with its answer.
+ * choice (Codex, OpenCode, Goose, Pi, Gemini, Claude), the way Claude Code's Agent tool
+ * runs a subagent: in its own directory on its own host, or (`host`) on another host in
+ * a copy of its work there (on-host.ts). No task, no board row: a run lives in the
+ * server's memory, shows in the parent session's Background tasks panel, and ends with
+ * its answer.
  */
 import type { SessionEngine } from '../types.js'
 
@@ -21,6 +22,8 @@ export type LightSubagentErrorCode =
   | 'timed_out'
   | 'stopped'
   | 'engine_error'
+  /** The caller's work could not be copied to the other host, or set up there. */
+  | 'work_copy_failed'
 
 export class LightSubagentError extends Error {
   constructor(readonly code: LightSubagentErrorCode, message: string, readonly status = 409, readonly data: Record<string, unknown> = {}) {
@@ -38,6 +41,8 @@ export type LightProgress =
 export interface LightRunSpec {
   /** The worker's own id on the host (never a session id). */
   runtimeId: string
+  /** The run's id (sa-...), as its caller knows it. */
+  runId?: string
   engine: SessionEngine
   /** The parent session's host ('__local__' = this machine). */
   host: string
@@ -58,7 +63,21 @@ export interface LightRunSpec {
   callerSid: string
   /** When the run's own limit ends (epoch ms): the host's daemon stops the worker then too. */
   deadlineAt: number
+  /** When the run started (epoch ms). */
+  startedAt?: number
   parentTaskId?: string
+  /** The parent's Walnut mode: a session subagent (on-host.ts) runs in the same one when it never waits on a person. */
+  parentMode?: import('../types.js').SessionMode
+  /**
+   * Set when the run goes to another host than its parent's (`host`): it works there in a
+   * copy of the parent's work at `fromCwd` on `fromHost` (work-copy.ts), as a session of
+   * its own (on-host.ts), and the files it names come back to the parent's task directory.
+   */
+  away?: { fromHost: string; fromCwd: string }
+  /** With `away`: reads the caller's grant on that host again; throws once the user revoked it. Called right before the session starts there. */
+  stillGranted?: () => Promise<void>
+  /** The run has its answer: the caller gets it now, while the runner still cleans up (it holds its slot until then). */
+  onAnswer?: (result: LightRunResult) => void
   signal: AbortSignal
   onProgress: (p: LightProgress) => void
 }
@@ -68,7 +87,13 @@ export interface LightRunResult {
   tokens?: number
   /** Things the run went on without (an effort the engine does not offer). */
   warnings: string[]
+  /** A run on another host: the files it named, copied back (`to` is on the parent's host). */
+  files?: ReturnedFile[]
+  /** A run on another host: what of the parent's work it got, and what was left behind there. */
+  work?: string[]
 }
+
+export interface ReturnedFile { from: string; to: string; bytes: number }
 
 export type LightRunner = (spec: LightRunSpec) => Promise<LightRunResult>
 

@@ -84,7 +84,8 @@ defineOp({
     + 'already has, else a clone of the remote, then the commits, the changes and the untracked files); anything it could not set up becomes the new session\'s first steps. '
     + 'The old host\'s copies stay as they are. While the session is in a turn (an agent moving itself), the move waits for that turn to end (state pending). '
     + '`team: true` moves every open task under it too, one after another. Starts need no subtask budget: a move replaces a session, it adds none. '
-    + 'Use it when the user asks to move work to another machine, or when a host is overloaded (host_load says which). task_transfer (a NEW task) is only for when the user asks for a new task.',
+    + 'Use it when the user asks to move work to another machine, or when a host is overloaded (host_load says which). task_transfer (a NEW task) is only for when the user asks for a new task. '
+    + 'NEVER move a task to run ONE step elsewhere (UI tests on clouddev, an iOS build on a Mac): call subagent_run with `host` instead, which runs that step there in a copy of the work and brings its answer and files back into this turn.',
   input: {
     id: z.string().min(1).describe('Task id or unique prefix'),
     host: z.string().min(1).describe('Where it goes: a host alias, or "local" for this Mac'),

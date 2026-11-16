@@ -256,7 +256,7 @@ let sweepInFlight: Promise<SweepRow[]> | null = null
 /** One round now, joined by every caller while it runs (the timers below, the health monitor's disk fix). */
 export function sweepTaskDirsNow(): Promise<SweepRow[]> {
   // Transfer packs ride the same rounds: their own prune ran only when a new transfer started.
-  sweepInFlight ??= Promise.all([sweepTaskDirsOnce(), pruneTransfersQuietly()]).then(([rows]) => rows).finally(() => { sweepInFlight = null })
+  sweepInFlight ??= Promise.all([sweepTaskDirsOnce(), pruneTransfersQuietly(), sweepLeftSubagentRuns()]).then(([rows]) => rows).finally(() => { sweepInFlight = null })
   return sweepInFlight
 }
 
@@ -268,6 +268,14 @@ async function pruneTransfersQuietly(): Promise<void> {
   } catch { /* next round */ }
 }
 
+/** What subagents on other hosts left when this server did not finish them (a restart): core/subagents/left-runs.ts. */
+async function sweepLeftSubagentRuns(): Promise<void> {
+  try {
+    const [{ sweepLeftRuns }, { isLightSubagentLive }] = await Promise.all([import('./subagents/left-runs.js'), import('./subagents/registry.js')])
+    await sweepLeftRuns(isLightSubagentLive)
+  } catch { /* next round */ }
+}
+
 export function startTaskDirSweep(): { stop: () => void } {
   let stopped = false
   let lastRun = 0
@@ -276,6 +284,10 @@ export function startTaskDirSweep(): { stop: () => void } {
     lastRun = Date.now()
     void sweepTaskDirsNow().catch(() => { /* next round */ })
   }
+  // What subagents on other hosts left when this server stopped mid-run: soon after the start, not in 15 minutes.
+  let leftRuns: { stop: () => void } | null = null
+  void Promise.all([import('./subagents/left-runs.js'), import('./subagents/registry.js')])
+    .then(([l, r]) => { if (!stopped) leftRuns = l.startLeftRunsSweep(r.isLightSubagentLive) }).catch(() => {})
   const first = setTimeout(run, FIRST_SWEEP_MS)
   first.unref?.()
   const every = setInterval(run, SWEEP_EVERY_MS)
@@ -286,5 +298,5 @@ export function startTaskDirSweep(): { stop: () => void } {
     void localDiskLow().then((isLow) => { if (isLow) run() })
   }, LOW_DISK_CHECK_MS)
   low.unref?.()
-  return { stop: () => { stopped = true; clearTimeout(first); clearInterval(every); clearInterval(low) } }
+  return { stop: () => { stopped = true; leftRuns?.stop(); clearTimeout(first); clearInterval(every); clearInterval(low) } }
 }

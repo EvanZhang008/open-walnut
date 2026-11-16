@@ -11,6 +11,10 @@
  * request (2026-11-02, a pi session's task_send). `canonicalCallerSid` maps the runtime id to
  * the record's id once, at the edges a caller sid enters the server (the API middleware below
  * and the gateway relay), so no route has to know.
+ *
+ * The same edges map a subagent's session to the session that ran it (`setCallerAlias`): a
+ * subagent on another host is a session of its own there (core/subagents/on-host.ts), and its
+ * `walnut` calls act for its parent, as a Claude Code subagent's do.
  */
 
 import type { Request, Response, NextFunction } from 'express'
@@ -28,11 +32,19 @@ const CALLER_HEADER = 'x-walnut-caller-sid'
 const cache = new Map<string, { sid: string; kind: 'mapped' | 'pending' | 'none'; at: number }>()
 const CACHE_MAX = 512
 const UNMAPPED_TTL_MS = 10_000
+/** A subagent's own session id -> the session it acts for. Held only while the run lives. */
+const aliases = new Map<string, string>()
+
+/** `sid`'s calls act as `as` until cleared (a subagent's session, core/subagents/on-host.ts). */
+export function setCallerAlias(sid: string, as: string): void { aliases.set(sid, as) }
+export function clearCallerAlias(sid: string): void { aliases.delete(sid) }
 
 /** The record id for an ACP runtime id, else the sid unchanged. Never throws. */
 export function canonicalCallerSid(sid: string): string
 export function canonicalCallerSid(sid: string | undefined): string | undefined
 export function canonicalCallerSid(sid: string | undefined): string | undefined {
+  const as = sid ? aliases.get(sid) : undefined
+  if (as) return canonicalCallerSid(as)
   if (!sid || !sid.startsWith(RUNTIME_PREFIX)) return sid
   try {
     const db = getDb()
@@ -69,10 +81,10 @@ export function canonicalCallerSid(sid: string | undefined): string | undefined 
   }
 }
 
-/** API middleware: an ACP runtime id in the caller header becomes the session's record id. */
+/** API middleware: an ACP runtime id (or a subagent's session) in the caller header becomes the session's record id. */
 export function acpCallerSidMiddleware(req: Request, _res: Response, next: NextFunction): void {
   const raw = req.headers[CALLER_HEADER]
-  if (typeof raw === 'string' && raw.startsWith(RUNTIME_PREFIX)) {
+  if (typeof raw === 'string' && (raw.startsWith(RUNTIME_PREFIX) || aliases.has(raw.trim()))) {
     const sid = canonicalCallerSid(raw.trim())
     if (sid !== raw) req.headers[CALLER_HEADER] = sid
   }

@@ -246,7 +246,7 @@ Prefer the named operations below. Their schemas are the current source of truth
 | `op_result` | Read what an op call did, by its call id (read) | call_id (string): The call id (oc-…) the CLI or the MCP server printed |
 | `message_send_now` | Send a queued message now (write, primary-only) | id (string): The request id (rq-…) or the queued message id (qm-…); interrupt? (boolean): Stop the session's running turn first, so the message goes out in a fresh one (what the phone's Interrupt & send now does). Leave it out to wait for the turn to end. |
 | `app_state` | What the App beside you shows (read) | (none) |
-| `open_items` | What is still open for your task (read) | hook? (compact\|stop): Set by Walnut's own hooks: compact = after a compaction, in the JSON shape a Claude Code SessionStart hook prints; stop = at a turn end, only whether a request to you or an Ask here question is still unanswered, as a Stop hook's block answer; asked? (string): Set by the Stop hook: the Ask here thread ids your transcript was asked, comma separated; answered? (string): Set by the Stop hook: the Ask here thread ids your transcript answered inside their tag, comma separated; full? (boolean): Everything Walnut restates after a compaction, uncut (your core instructions, what is open, changed instructions, hints, teams, MEMORY.md), as `text`: read it when the restatement says it was cut |
+| `open_items` | What is still open for your task (read) | hook? (compact\|stop): Set by Walnut's own hooks: compact = after a compaction, in the JSON shape a Claude Code SessionStart hook prints; stop = at a turn end, only whether a request to you or an Ask here question is still unanswered, as a Stop hook's block answer; asked? (string): Set by the Stop hook: the Ask here thread ids your transcript was asked, comma separated; answered? (string): Set by the Stop hook: the Ask here thread ids your transcript answered inside their tag, comma separated; tmp_paths? (string): Set by the Stop hook: the temp-dir paths your final text names that exist on your host, \| separated; full? (boolean): Everything Walnut restates after a compaction, uncut (your core instructions, what is open, changed instructions, hints, teams, MEMORY.md), as `text`: read it when the restatement says it was cut |
 | `status_check` | Check every task's status against its facts (read) | (none) |
 | `task_dir` | Your task directory (read) | (none) |
 | `skill_read` | Read a Walnut skill (read) | dirName (string): Skill directory name |
@@ -361,7 +361,7 @@ Prefer the named operations below. Their schemas are the current source of truth
 | `task_sessions` | List the sessions a task held (read) | id (string): Task id or unique prefix |
 | `task_move` | Move a task to another host (write, primary-only) | id (string): Task id or unique prefix; host (string): Where it goes: a host alias, or "local" for this Mac; text? (string): The message the new session starts with; default: check the work is set up, then carry on; engine? (claude\|codex\|gemini\|opencode\|goose\|pi\|dsh\|custom): Engine on the new host; default the task's own; model? (string): Model for the new session; default the engine's; team? (boolean): Move every open task under this one too; user_request? (string): The user's words asking for the move, quoted (recorded with it); wait_ms? (integer): How long to wait for the move before answering "moving" (default 25000) |
 | `host_load` | How busy each host is (read) | (none) |
-| `subagent_run` | Run a subagent on another engine (write, primary-only) | engine (codex\|opencode\|goose\|pi\|gemini\|dsh\|custom\|claude): The engine: codex (GPT, e.g. Sol/Astra), opencode, goose, pi, gemini, dsh, custom, or claude; prompt (string): The whole task for the subagent: it sees nothing else of your conversation; model? (string): The model id on that engine (e.g. "gpt-6.1-sol" for codex); omit for the engine's default; effort? (string): Reasoning effort (e.g. low, medium, high, xhigh) where the engine has one; omit for its default; description? (string): A few words for the Background tasks panel (default: the prompt's first line); background? (boolean): Return at once; the answer comes as a notification when it ends (or read it with subagent_read); wait_ms? (integer): How long this call waits for the answer (default 600000; background: 0); timeout_min? (integer): The run's own limit in minutes (default 30): past it the run is stopped; tool_use_id? (string): Filled in by Walnut's MCP server: leave it out |
+| `subagent_run` | Run a subagent, on another engine or another host (write, primary-only) | engine? (codex\|opencode\|goose\|pi\|gemini\|dsh\|custom\|claude): The engine: claude (default), codex (GPT, e.g. Sol/Astra), opencode, goose, pi, gemini, dsh, or custom; host? (string): Run on this other host, in a copy of your work there: an alias (host_list) or a selector like "@ios"; omit for your own host; prompt (string): The whole task for the subagent: it sees nothing else of your conversation; model? (string): The model id on that engine (e.g. "gpt-6.1-sol" for codex); omit for the engine's default; effort? (string): Reasoning effort (e.g. low, medium, high, xhigh) where the engine has one; omit for its default; description? (string): A few words for the Background tasks panel (default: the prompt's first line); background? (boolean): Return at once; the answer comes as a notification when it ends (or read it with subagent_read); wait_ms? (integer): How long this call waits for the answer (default 600000; background: 0); timeout_min? (integer): The run's own limit in minutes (default 30): past it the run is stopped; tool_use_id? (string): Filled in by Walnut's MCP server: leave it out |
 | `subagent_read` | Read a subagent's state or answer (read, primary-only) | id? (string): The id subagent_run returned (sa-...); omit to list them all; wait_ms? (integer): Wait up to this long for it to end (default 0) |
 | `subagent_stop` | Stop a subagent (write, primary-only) | id (string): The id subagent_run returned (sa-...) |
 | `task_stop` | Stop a task's session (write) | id (string): Task id or unique prefix; force? (boolean): Stop even though the session owns scheduled jobs (cron). Default false |
@@ -742,6 +742,27 @@ answer into the same thread:
 ```bash
 walnut tools call human_inbox_reply '{"letter":"<letter-id>","text":"..."}'
 ```
+
+## One step on another host: subagent_run with host
+
+**Need another host for one step** (Playwright or WebKit UI tests on clouddev, an iOS
+build on a Mac, the user's own browser): call `subagent_run` with `host`, never
+`task_move`. One call, inside your turn, like your Agent tool:
+
+```bash
+walnut tools call subagent_run '{"host":"clouddev","prompt":"Run tests/e2e/browser/x.spec.ts in WebKit with video, and put the MP4 in your out folder. Say pass or fail with the error."}'
+```
+
+Walnut copies your work there (your folder's git repository: its commits, uncommitted
+changes and untracked files; your own folder stays as it is), runs the subagent in
+that copy as a session started the way a task's session starts there (Claude Code,
+its own default model, your permissions, and every tool, skill and MCP server a task
+session has on that host), and answers with its `answer` plus the files it put in its
+out folder or named by absolute path, copied into `$WALNUT_TASK_DIR/subagents/<id>/`
+(`files` lists them). The copy on that host is removed when it ends, so ask it to
+return a change as a patch file when you want it. The first use of a host other than
+yours asks the user for this task's grant there, the one `host_exec` uses.
+`task_move` is only for moving the whole task when the user asks for it.
 
 ## Commands on another host
 

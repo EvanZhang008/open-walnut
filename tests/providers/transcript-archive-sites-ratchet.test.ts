@@ -42,6 +42,7 @@ const SITES: Record<string, string> = {
   'src/utils/plan-message.ts': 'readSessionJsonlContent, daemon fs.* (restores)',
   'src/providers/path-resolve-core.ts': 'resolveJsonlPathHostLocal (restores)',
   'src/providers/transcript-rewind-core.ts': 'resolveJsonlPathHostLocal (restores)',
+  'src/core/subagents/on-host.ts': 'fs.find (restores) of its own session\'s transcript, a few minutes old, to remove it',
   'src/core/team-reader.ts': 'reads a session the history read already restored (the panel opens history first)',
   // Live sessions only: never older than the archive age.
   'src/providers/stream-fold-core.ts': 'live or resuming sessions; a resume restores before the fold reads the transcript',

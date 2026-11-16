@@ -11,7 +11,7 @@ import { log } from '../../logging/index.js'
 import { engineCaps } from '../agents/engine-registry.js'
 import type { BackgroundTaskInfo } from '../event-types.js'
 import type { SessionEngine } from '../types.js'
-import { LIGHT_SUBAGENT_ENGINES, LightSubagentError, type LightRunner, type LightRunSpec, type LightSubagentStatus } from './types.js'
+import { LIGHT_SUBAGENT_ENGINES, LightSubagentError, type LightRunner, type LightRunSpec, type LightSubagentStatus, type ReturnedFile } from './types.js'
 
 /** Running at once per parent session, and on this server. */
 export const MAX_RUNNING_PER_SESSION = 4
@@ -37,8 +37,14 @@ export interface LightSubagentRun {
   id: string
   parentSid: string
   parentTaskId?: string
+  /** Where it runs. */
   host: string
+  /** The parent's host, when the run went to another one (`host`): it works there in a copy of the parent's work. */
+  fromHost?: string
+  /** The caller's task's grant on that host (host_exec's), read again before work starts there. */
+  grant?: { taskId: string; id: string }
   cwd: string
+  parentMode?: import('../types.js').SessionMode
   engine: SessionEngine
   model?: string
   effort?: string
@@ -60,6 +66,9 @@ export interface LightSubagentRun {
   error?: string
   errorCode?: string
   warnings: string[]
+  /** A run on another host: the files it named, copied back to the parent's host, and what of the parent's work it got. */
+  files: ReturnedFile[]
+  work: string[]
   stoppedBy?: string
   /** Its end reached the parent (a call returned it, or the notification went in). */
   told: boolean
@@ -96,7 +105,10 @@ export function _resetLightSubagentsForTest(): void {
 }
 
 export interface StartLightSubagent {
-  engine: string
+  /** Default: claude. */
+  engine?: string
+  /** Another host to run on (an alias or a selector like "@ios"): it works there in a copy of the parent's work. */
+  host?: string
   model?: string
   effort?: string
   prompt: string
@@ -106,15 +118,16 @@ export interface StartLightSubagent {
   toolUseId?: string
 }
 
-export function engineLabel(run: Pick<LightSubagentRun, 'engine' | 'model'>): string {
+export function engineLabel(run: Pick<LightSubagentRun, 'engine' | 'model'> & Partial<Pick<LightSubagentRun, 'host' | 'fromHost'>>): string {
   const name = engineCaps(run.engine).displayName
-  return run.model ? `${name} · ${run.model}` : name
+  const label = run.model ? `${name} · ${run.model}` : name
+  return run.fromHost && run.host ? `${label} · on ${run.host === '__local__' ? 'this machine' : run.host}` : label
 }
 
 /** Start one run for the session `parentSid` (it must be a session Walnut knows). */
 export async function startLightSubagent(parentSid: string | undefined, req: StartLightSubagent): Promise<LightSubagentRun> {
   if (!parentSid) throw new LightSubagentError('no_session', 'A subagent runs inside a session: call it from a session (its WALNUT_SESSION_ID names it)', 400)
-  const engine = req.engine as SessionEngine
+  const engine = (req.engine || 'claude') as SessionEngine
   if (!LIGHT_SUBAGENT_ENGINES.includes(engine)) {
     throw new LightSubagentError('bad_request', `Unknown engine "${req.engine}". Engines: ${LIGHT_SUBAGENT_ENGINES.join(', ')}`, 400)
   }
@@ -126,9 +139,12 @@ export async function startLightSubagent(parentSid: string | undefined, req: Sta
   const sid = canonicalCallerSid(parentSid)
   const record = await getSessionByClaudeId(sid)
   if (!record) throw new LightSubagentError('no_session', `Session ${sid} is not one Walnut knows`, 404)
-  const host = !record.host || record.host === 'local' ? '__local__' : record.host
+  const ownHost = !record.host || record.host === 'local' ? '__local__' : record.host
   const cwd = record.cwd
   if (!cwd) throw new LightSubagentError('no_session', `Session ${sid} has no working directory`, 409)
+  // Another host: the one host_exec would run on, under the same grant (it is as strong as a command there).
+  const away = req.host?.trim() ? await awayHost(sid, req.host.trim(), prompt) : null
+  const host = away?.host ?? ownHost
   const { acpSupposedFullAccess } = await import('../../providers/acp-permission-posture.js')
   // The slot is taken with no await before it, and handed to the run with none after the
   // check: starts at once never pass the limit together.
@@ -154,6 +170,8 @@ export async function startLightSubagent(parentSid: string | undefined, req: Sta
     parentSid: sid,
     ...(record.taskId ? { parentTaskId: record.taskId } : {}),
     host, cwd, engine,
+    ...(away ? { fromHost: ownHost, grant: { taskId: away.taskId, id: away.grantId } } : {}),
+    ...(record.mode ? { parentMode: record.mode } : {}),
     ...(req.model ? { model: req.model } : {}),
     ...(req.effort ? { effort: req.effort } : {}),
     description: (req.description?.trim() || firstLine(prompt)).slice(0, 120),
@@ -168,6 +186,8 @@ export async function startLightSubagent(parentSid: string | undefined, req: Sta
     toolUses: 0,
     text: '',
     warnings: [],
+    files: [],
+    work: [],
     told: false,
   }
   let settle!: () => void
@@ -184,6 +204,43 @@ export async function startLightSubagent(parentSid: string | undefined, req: Sta
   })
   emitPanel(sid)
   return run
+}
+
+/**
+ * The host a `host` names for this session's subagent, after the same checks host_exec makes
+ * (a task's session, a host Walnut knows, the task's grant there), or null when it names the
+ * session's own host (the run goes on there as without one).
+ */
+async function awayHost(sid: string, raw: string, prompt: string): Promise<{ host: string; taskId: string; grantId: string } | null> {
+  const hx = await import('../hosts/host-exec.js')
+  try {
+    const caller = await hx.callerOf(sid)
+    let host: string
+    try {
+      host = await hx.targetHost(raw, caller)
+    } catch (err) {
+      if (err instanceof hx.HostExecError && err.code === 'same_host') return null
+      throw err
+    }
+    const grantId = await hx.grantFor(caller, host, `subagent_run: ${firstLine(prompt).slice(0, 160)}`)
+    return { host, taskId: caller.taskId, grantId }
+  } catch (err) {
+    if (err instanceof hx.HostExecError) {
+      throw new LightSubagentError(err.code as never, err.message.replace(/host_exec runs for a task's session/, 'A subagent on another host runs for a task\'s session'), err.status, err.data)
+    }
+    throw err
+  }
+}
+
+/** The run's grant on its host, read again (host_exec's assertStillGranted); a revoke ends the run. */
+async function stillGranted(run: LightSubagentRun): Promise<void> {
+  const hx = await import('../hosts/host-exec.js')
+  try {
+    await hx.assertStillGranted(run.grant!.taskId, run.host, run.grant!.id)
+  } catch (err) {
+    if (err instanceof hx.HostExecError) throw new LightSubagentError(err.code as never, err.message, err.status, err.data)
+    throw err
+  }
 }
 
 async function checkEngineOnHost(engine: SessionEngine, host: string): Promise<void> {
@@ -207,6 +264,7 @@ async function execute(live: Live, callerSid: string): Promise<void> {
   const { run } = live
   const spec: LightRunSpec = {
     runtimeId: `lsa-${run.id.slice(3)}-${crypto.randomBytes(3).toString('hex')}`,
+    runId: run.id,
     engine: run.engine, host: run.host, cwd: run.cwd,
     ...(run.model ? { model: run.model } : {}),
     ...(run.effort ? { effort: run.effort } : {}),
@@ -215,8 +273,13 @@ async function execute(live: Live, callerSid: string): Promise<void> {
     parentSid: run.parentSid,
     callerSid,
     deadlineAt: run.startedAt + run.timeoutMs,
+    startedAt: run.startedAt,
     ...(run.parentTaskId ? { parentTaskId: run.parentTaskId } : {}),
+    ...(run.parentMode ? { parentMode: run.parentMode } : {}),
+    ...(run.fromHost ? { away: { fromHost: run.fromHost, fromCwd: run.cwd } } : {}),
+    ...(run.grant ? { stillGranted: () => stillGranted(run) } : {}),
     signal: live.abort.signal,
+    onAnswer: (result) => takeResult(live, result),
     onProgress: (p) => {
       if (run.status !== 'running') return
       if (p.kind === 'text') run.text = p.text
@@ -226,17 +289,31 @@ async function execute(live: Live, callerSid: string): Promise<void> {
     },
   }
   try {
-    const runner = runnerOverride ?? (engineCaps(run.engine).runtimeKind === 'acp'
-      ? (await import('../../providers/light-subagent-acp.js')).runAcpLight
-      : (await import('../../providers/light-subagent-claude.js')).runClaudeLight)
-    const result = await runner(spec)
-    run.warnings.push(...result.warnings)
-    if (result.tokens) run.tokens = result.tokens
-    end(live, 'completed', { answer: result.answer })
+    // Another host, or Claude Code on a host other than this server's: a session there (on-host.ts).
+    const onHost = !!run.fromHost || (engineCaps(run.engine).runtimeKind === 'native' && run.host !== '__local__')
+    // The grant may have been revoked while the run waited for its slot: nothing starts there then.
+    if (run.grant) await stillGranted(run)
+    const runner = runnerOverride ?? (onHost
+      ? (await import('./on-host.js')).runOnHost
+      : engineCaps(run.engine).runtimeKind === 'acp'
+        ? (await import('../../providers/light-subagent-acp.js')).runAcpLight
+        : (await import('../../providers/light-subagent-claude.js')).runClaudeLight)
+    takeResult(live, await runner(spec))
   } catch (err) {
     const code = err instanceof LightSubagentError ? err.code : 'engine_error'
     end(live, live.abort.signal.aborted && run.stoppedBy ? 'stopped' : 'failed', { error: err instanceof Error ? err.message : String(err), errorCode: code })
   }
+}
+
+/** The run's answer: it completes now (a runner that still cleans up keeps its slot until it returns). */
+function takeResult(live: Live, result: import('./types.js').LightRunResult): void {
+  const { run } = live
+  if (run.status !== 'running') return
+  run.warnings.push(...result.warnings)
+  if (result.files) run.files = result.files
+  if (result.work) run.work = result.work
+  if (result.tokens) run.tokens = result.tokens
+  end(live, 'completed', { answer: result.answer })
 }
 
 function end(live: Live, status: Exclude<LightSubagentStatus, 'running'>, o: { answer?: string; error?: string; errorCode?: string }): void {
@@ -299,6 +376,17 @@ export function stopLightSubagent(parentSid: string | undefined, id: string, by:
 
 export function listLightSubagents(parentSid: string): LightSubagentRun[] {
   return [...runs.values()].map((l) => l.run).filter((r) => r.parentSid === parentSid).sort((a, b) => a.startedAt - b.startedAt)
+}
+
+/** Resolves once the run's worker returned (its cleanup done): tests, and a caller that must wait for it. */
+export function lightSubagentSettled(id: string): Promise<void> {
+  return runs.get(id)?.settledP ?? Promise.resolve()
+}
+
+/** A run this server still runs (its worker has not returned): the left-runs sweep leaves its folders alone. */
+export function isLightSubagentLive(id: string): boolean {
+  const live = runs.get(id)
+  return !!live && !live.settled
 }
 
 export function hasLightSubagent(parentSid: string, id: string): boolean {

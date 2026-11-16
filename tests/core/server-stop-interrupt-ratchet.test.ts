@@ -213,6 +213,7 @@ describe('a long transfer waits out a dropped link', () => {
     'src/core/transfer/transfer.ts': { count: 2, way: 'task_transfer: the transcript relay runs under withLinkWait, the workspace through moveWorkspace' },
     'src/core/sessions/start-placement.ts': { count: 3, way: 'a first start placed on another host: its own deadline (a start never hangs; task-start.ts runs it under noLinkWait), then it starts where the folder is' },
     'src/core/hosts/host-copy.ts': { count: 1, way: 'host_copy: its own deadline and grant gate; a dropped link answers "Copy it again"' },
+    'src/core/subagents/work-copy.ts': { count: 5, way: 'subagent_run with host: placeWorkCopy runs the copy under withLinkWait (2 min), inside the run\'s own deadline' },
   }
 
   it('every caller of a long transfer step is listed with how it handles a dropped link', () => {
