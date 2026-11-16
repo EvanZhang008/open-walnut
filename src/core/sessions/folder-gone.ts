@@ -102,10 +102,11 @@ export async function findTranscript(record: Pick<SessionRecord, 'claudeSessionI
  * first (a refusal from a stale cache must not mark a live folder), never throws, and
  * returns what it recorded.
  */
-export function noteFolderGone(sessionId: string, opts: { cwd?: string | null; host?: string | null } = {}): Promise<CwdGone | null> {
+export function noteFolderGone(sessionId: string, opts: { cwd?: string | null; host?: string | null; remake?: false } = {}): Promise<CwdGone | null> {
   // One refusal reaches this from more than one place (the spawn's catch and the queue's
   // settle): they share one probe.
-  const key = sessionId
+  // A remake's own fallback (remake: false) is not folded into the refusal it follows.
+  const key = opts.remake === false ? `${sessionId}\0no-remake` : sessionId
   const running = noting.get(key)
   if (running) return running
   const p = noteFolderGoneNow(sessionId, opts).finally(() => setTimeout(() => { if (noting.get(key) === p) noting.delete(key) }, 2_000).unref?.())
@@ -114,7 +115,7 @@ export function noteFolderGone(sessionId: string, opts: { cwd?: string | null; h
 }
 const noting = new Map<string, Promise<CwdGone | null>>()
 
-async function noteFolderGoneNow(sessionId: string, opts: { cwd?: string | null; host?: string | null }): Promise<CwdGone | null> {
+async function noteFolderGoneNow(sessionId: string, opts: { cwd?: string | null; host?: string | null; remake?: false }): Promise<CwdGone | null> {
   try {
     const { getSessionByClaudeId, updateSessionRecordConditionally } = await import('../session-tracker.js')
     const record = await getSessionByClaudeId(sessionId)
@@ -128,6 +129,12 @@ async function noteFolderGoneNow(sessionId: string, opts: { cwd?: string | null;
     const state = await folderState(cwd, host)
     if (state === 'present') await clearFolderGone(sessionId)
     if (state !== 'gone') return null
+    // A folder in the task's own workspace, which a cleanup removed: it is made again and what
+    // waited goes out then, so nothing is offered (workspaces/remake.ts).
+    if (record.taskId && opts.remake !== false) {
+      const { kickRemake } = await import('../workspaces/remake.js')
+      if (await kickRemake(record.taskId, sessionId, cwd, host).catch(() => false)) return null
+    }
     const history: CwdGone['history'] = historyInFolder(record)
       ? (await findTranscript({ ...record, cwd })).state
       : 'found'
@@ -216,12 +223,24 @@ async function continueNow(sessionId: string, opts: { by?: string }): Promise<Co
   if (!record.taskId) throw new SessionControlError('Session has no task, so it has no task directory to move to', 400)
   const from = record.cwd ?? ''
   if (!from) throw new SessionControlError('This session has no working folder recorded', 400)
-  const state = await folderState(from, record.host)
+  let state = await folderState(from, record.host)
+  // A folder in the task's own workspace, which a cleanup removed: made again where it was,
+  // and the session continues there (workspaces/remake.ts); any other folder is never recreated.
+  const remake = await import('../workspaces/remake.js')
+  if (state === 'gone') {
+    // A short wait: a route answers, it never hangs (the remake's end sends what waits).
+    const remade = await remake.remakeForGoneFolder(record.taskId, from, record.host, { waitMs: remake.BUTTON_WAIT_MS, resume: true })
+    if (remade === 'present') state = 'present'
+    if (remade === 'pending') throw new SessionControlError(`Walnut is making this task's workspace again at ${from}; the waiting messages go out when it is ready`, 409, { code: 'workspace_remaking' })
+  }
   if (state === 'present') {
     // Pressed twice, or the folder came back: whatever still waits on a gone folder goes
     // out now, so the button never leaves a message stuck behind a refusal.
     await clearFolderGone(sessionId)
-    const sent = await sendWaiting(sessionId, record.taskId, null)
+    const notice = await remake.workspaceRemakeNotice(sessionId)
+    const sent = await sendWaiting(sessionId, record.taskId, notice?.text ?? null)
+    if (sent > 0 && notice) await notice.markTold()
+    await remake.settleRemakeResume(record.taskId)
     if (sent > 0) return { status: 'continued', sessionId, cwd: from, from: record.folderMoved?.from ?? from, history: 'kept', sent }
     throw new SessionControlError(`The folder ${from} is there; send a message to continue in it`, 409, { code: 'folder_present' })
   }
@@ -363,7 +382,8 @@ async function sendWaiting(sessionId: string, taskId: string, notice: string | n
   if (notice) {
     await mutateStore((s) => {
       const row = s.queues[sessionId]?.find((m) => m.id === first.id)
-      if (row && !row.message.includes('outcome="folder-moved"')) row.message = `${notice}\n\n${row.message}`
+      const outcome = /outcome="([^"]+)"/.exec(notice)?.[1]
+      if (row && !(outcome && row.message.includes(`outcome="${outcome}"`))) row.message = `${notice}\n\n${row.message}`
     })
   }
   for (const row of rows) if (row.status === 'parked') await unparkMessage(sessionId, row.id)
@@ -455,6 +475,10 @@ export async function pendingFolderMovedNotice(sessionId: string): Promise<{ tex
     const record = await getSessionByClaudeId(sessionId)
     const moved = record?.folderMoved
     if (!moved || moved.told) {
+      // Its task's workspace was removed under it and is made again (workspaces/remake.ts).
+      const { workspaceRemakeNotice } = await import('../workspaces/remake.js')
+      const remade = await workspaceRemakeNotice(sessionId)
+      if (remade) return remade
       // A VP's or lead's move into its own folder found its history in two places: said once.
       const failed = record?.ownFolderMove
       if (failed?.why !== 'history-conflict' || failed.told) return null

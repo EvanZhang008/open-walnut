@@ -77,6 +77,18 @@ describe('every gone-folder refusal is recorded', () => {
     expect(lifecycle).toMatch(/restartSession[\s\S]*noteFolderGone\(sessionId\)[\s\S]*code: 'folder_gone'/)
   })
 
+  it('a gone folder inside the task\'s own workspace is made again, never offered away (workspaces/remake.ts)', () => {
+    // 2026-11-16: a completed task's cleaned-up workspace stopped every later message at the
+    // gone folder. The one recorder and the button hand such a folder to the remake, and the
+    // spawn's folder check waits for it before it refuses.
+    const read = (f: string) => fs.readFileSync(path.join(ROOT, f), 'utf8')
+    const gone = read('src/core/sessions/folder-gone.ts')
+    expect(gone).toMatch(/async function noteFolderGoneNow[\s\S]*?kickRemake\(/)
+    expect(gone).toMatch(/async function continueNow[\s\S]*?remakeForGoneFolder\(/)
+    const spawn = read('src/providers/claude-code-session.ts')
+    expect(spawn).toMatch(/checkCwdExists\(resolvedCwd[\s\S]{0,900}remakeForGoneFolder\([\s\S]{0,2500}new CwdMissingError\(/)
+  })
+
   it('the server, the web copy, the classifier and the never-ran test read the same words', () => {
     expect(WEB_RE.source).toBe(SERVER_RE.source)
     expect(WEB_RE.flags).toBe(SERVER_RE.flags)

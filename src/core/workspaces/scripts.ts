@@ -405,13 +405,13 @@ async function cleanupIfCompleted(taskId: string): Promise<boolean> {
 
 /** After its setup ended: a completed task's cleanup may go now, a start that waited may start. */
 async function afterSetup(taskId: string): Promise<void> {
+  const { launchPending } = await import('./manager.js')
+  // Made again for sessions whose messages wait for it: they go before any cleanup (remake.ts).
+  if ((await managerDeps().getTask(taskId))?.workspace?.remade?.resume) await launchPending(taskId)
   if (await cleanupIfCompleted(taskId)) return
   const task = await managerDeps().getTask(taskId)
   if (!task?.workspace) return
-  if (task.workspace.pending_start) {
-    const { launchPending } = await import('./manager.js')
-    await launchPending(taskId)
-  }
+  if (task.workspace.pending_start) await launchPending(taskId)
 }
 
 /**

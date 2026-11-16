@@ -68,6 +68,9 @@ async function completionCheck(taskId: string, grace: boolean): Promise<void> {
   if (!first || first.phase !== 'COMPLETE' || !first.workspace || !isLaunchReady(first.workspace)) return
   if (!(await madeHere(first.workspace))) return
   if (grace) await deps.sleep(COMPLETE_GRACE_MS)
+  // Made again for a session's waiting message: that session starts in it first (remake.ts).
+  const { remakeHoldsCleanup } = await import('./remake.js')
+  if (remakeHoldsCleanup(taskId, first.workspace)) return
   if (await deps.hasLiveSession(taskId)) {
     log.web.info('workspace cleanup waits: a session of the task is still alive in it', { taskId, root: first.workspace.root })
     return
@@ -169,6 +172,8 @@ export async function resumeWorkspaces(): Promise<void> {
     if (ws.state === 'creating' || ws.state === 'removing') void drive(task.id)
     // A setup or teardown the restart interrupted: its end launches or cleans up.
     else if (scriptRunning(ws)) void resumeScriptRuns(task)
+    // Made again for sessions whose messages wait for it: they go first (remake.ts).
+    else if (isLaunchReady(ws) && ws.remade?.resume) void launchPending(task.id)
     else if (task.phase === 'COMPLETE' && ws.state === 'ready') void onTaskCompleted(task.id, { grace: false })
     else if (isLaunchReady(ws) && ws.pending_start && !ws.launch_error) void launchPending(task.id)
   }

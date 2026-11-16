@@ -144,11 +144,18 @@ export function workspaceHoldAsk(ws: TaskWorkspace | undefined): string | null {
   return null
 }
 
+/** Is `p` the workspace root `root`, or inside it? */
+export function insideRoot(root: string | undefined, p: string | undefined): boolean {
+  if (!p || !root) return false
+  const r = root.replace(/\/+$/, '')
+  const target = p.replace(/\/+$/, '')
+  return target === r || target.startsWith(r + '/')
+}
+
 export function belongsToWorkspace(ws: TaskWorkspace, p: string | undefined): boolean {
   if (!p) return true
   const strip = (s: string) => s.replace(/\/+$/, '') || '/'
   const target = strip(p)
   if (target === strip(ws.anchor)) return true
-  const root = ws.root ? strip(ws.root) : ''
-  return !!root && (target === root || target.startsWith(root + '/'))
+  return insideRoot(ws.root, target)
 }

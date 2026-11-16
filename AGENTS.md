@@ -189,7 +189,7 @@ Sessions (`docs/reference/session-lifecycle.md`):
 - **task_history reads short when asked** (`compact`, `limit`, `since`). (`docs/reference/session-lifecycle.md`)
 - **A session hears where its task stands now when that moved**, and **a running session hears its default instructions that changed**. (`docs/reference/session-lifecycle.md`)
 - **Every task has a working directory that survives reboots** (`WALNUT_TASK_DIR`); no clone or commit in a temp dir. (`docs/reference/session-lifecycle.md`)
-- **A session whose working folder is gone keeps working** ("Continue in a new folder"; the old folder is never recreated). (`docs/reference/session-lifecycle.md`)
+- **A session whose working folder is gone keeps working** ("Continue in a new folder"; the old folder is never recreated, except the task's own workspace a cleanup removed, which is made again where it was: `workspaces/remake.ts`). (`docs/reference/session-lifecycle.md`)
 
 Machine guards (`docs/reference/agent-guards.md`):
 

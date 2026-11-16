@@ -237,6 +237,8 @@ export interface WorkspaceRequest {
   pending?: WorkspacePendingStart
   /** Made because the task is a code task, not asked for (default-isolation.ts). */
   byDefault?: boolean
+  /** Made again for sessions whose messages wait in the queue for it (remake.ts): its end sends them. */
+  resume?: boolean
 }
 
 /** Ask for a workspace and start making it. Answers at once with the task (state `creating`). */
@@ -260,6 +262,7 @@ export async function requestWorkspace(taskId: string, req: WorkspaceRequest): P
   const home = await deps.walnutHome()
   const written = await deps.write(task.id, (latest) => {
     if (latest && (isBusy(latest.state) || isLaunchReady(latest))) return null
+    const remade = remadeOf(latest, now, req.resume)
     return {
       provider: provider.id, provider_name: provider.displayName, host, home, anchor,
       repos: [], ...(Object.keys(inputs).length ? { inputs } : {}),
@@ -269,6 +272,7 @@ export async function requestWorkspace(taskId: string, req: WorkspaceRequest): P
         ? latest.name : workspaceName(task, req.pending?.message),
       ...(req.pending ?? latest?.pending_start ? { pending_start: req.pending ?? latest!.pending_start } : {}),
       ...(req.byDefault ? { by_default: true } : {}),
+      ...(remade ? { remade } : {}),
       created_at: now, updated_at: now,
     }
   })
@@ -276,6 +280,18 @@ export async function requestWorkspace(taskId: string, req: WorkspaceRequest): P
   log.web.info('workspace requested', { taskId: task.id, provider: provider.id, host, anchor, jobId })
   void drive(task.id)
   return written
+}
+
+/**
+ * A workspace made again where a cleanup removed one: the sessions that ran in the removed
+ * one hear so once (remake.ts). A failed remake's retry keeps what it was.
+ */
+function remadeOf(latest: TaskWorkspace | undefined, now: string, resume?: boolean): TaskWorkspace['remade'] {
+  if (latest?.state === 'removed' && latest.root && latest.created_at) {
+    return { from: latest.created_at, root: latest.root, at: now, ...(resume ? { resume: true } : {}) }
+  }
+  if (latest?.remade && !latest.remade.ready_at) return { ...latest.remade, ...(resume ? { resume: true } : {}) }
+  return undefined
 }
 
 /**
@@ -484,6 +500,7 @@ async function runCreate(task: Task, ws: TaskWorkspace): Promise<void> {
       base_ref: r.baseRef && typeof r.baseRef === 'object' ? r.baseRef as TaskWorkspace['base_ref'] : undefined,
       source_repo: typeof r.sourceRepo === 'string' ? r.sourceRepo : undefined,
       repos, progress: undefined, error: undefined, error_code: undefined, launch_error: undefined,
+      ...(cur.remade ? { remade: { ...cur.remade, ready_at: new Date(deps.now()).toISOString() } } : {}),
     })
     : null))
   if (!ready) {
@@ -497,9 +514,10 @@ async function runCreate(task: Task, ws: TaskWorkspace): Promise<void> {
     return
   }
   log.web.info('workspace ready', { taskId: task.id, provider: ws.provider, host: ws.host, root: r.root, cwd: r.cwd })
-  if (ready.phase === 'COMPLETE') {
+  if (ready.phase === 'COMPLETE' && !ready.workspace?.remade?.resume) {
     // Completed while the host was making it: its start is moot, and the completion
-    // cleanup (which skipped a workspace still being made) runs now.
+    // cleanup (which skipped a workspace still being made) runs now. One made again for
+    // a session's waiting message goes on: that message still runs (remake.ts).
     await deps.write(task.id, (cur) => (cur?.pending_start ? stamp(cur, { pending_start: undefined }) : null))
     const { onTaskCompleted } = await import('./cleanup.js')
     void onTaskCompleted(task.id)
@@ -513,7 +531,8 @@ async function runCreate(task: Task, ws: TaskWorkspace): Promise<void> {
   } catch (err) {
     log.web.warn('workspace setup could not run', { taskId: task.id, error: errText(err) })
   }
-  if ((await deps.getTask(task.id))?.workspace?.pending_start) await launchPending(task.id)
+  const after = (await deps.getTask(task.id))?.workspace
+  if (after?.pending_start || after?.remade?.resume) await launchPending(task.id)
 }
 
 /** Start the session that waited for the workspace (once: a live session means it already started). */
@@ -530,8 +549,15 @@ export async function launchPending(taskId: string): Promise<void> {
 }
 
 async function launchPendingOnce(taskId: string): Promise<void> {
-  const task = await deps.getTask(taskId)
-  const ws = task?.workspace
+  let task = await deps.getTask(taskId)
+  let ws = task?.workspace
+  // Sessions whose messages waited for it to be made again go first, whatever the phase (remake.ts).
+  if (task && ws?.remade?.resume && isLaunchReady(ws) && !setupHoldsLaunch(ws) && await madeHere(ws)) {
+    const { resumeAfterRemake } = await import('./remake.js')
+    await resumeAfterRemake(task.id)
+    task = await deps.getTask(taskId)
+    ws = task?.workspace
+  }
   const pending = ws?.pending_start
   if (!task || !ws || !pending || !isLaunchReady(ws)) return
   if (!(await madeHere(ws))) return

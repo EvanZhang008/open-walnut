@@ -3968,6 +3968,8 @@ export interface SessionRecord {
    *  host ('found' = it can continue in a new folder with its history, 'missing' = only a new
    *  conversation can carry the work on). `newCwd`: the task's own directory it would move to. */
   cwdGone?: { cwd: string; at: string; history: 'found' | 'missing' | 'unknown'; newCwd?: string };
+  /** The removal of its task's workspace this session was told about (workspaces/remake.ts): the removed one's created_at. */
+  workspaceTold?: string;
   /** Walnut moved this session to another folder: out of one that was gone (sessions/folder-gone.ts),
    *  or, `why: 'own-folder'`, a VP's or lead's out of a repository into its own task directory
    *  (sessions/org-own-folder.ts). `told` once a message into the session has carried the notice. */

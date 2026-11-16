@@ -19,7 +19,7 @@ import type { TaskWorkspace, WorkspacePendingStart } from './types.js'
 import { QuickStartError } from '../sessions/quick-start.js'
 import { WorkspaceError } from './daemon-client.js'
 import { findProvider, validateInputs } from './registry.js'
-import { belongsToWorkspace, isLaunchReady, needsCreation, setupBlocksLaunch, setupHoldsLaunch } from './decisions.js'
+import { belongsToWorkspace, insideRoot, isLaunchReady, needsCreation, setupBlocksLaunch, setupHoldsLaunch } from './decisions.js'
 import { deferStart, managerDeps, recordRequestFailure, requestWorkspace } from './manager.js'
 import { role } from '../server-role.js'
 
@@ -27,12 +27,6 @@ function normHost(host: string | undefined | null): string {
   return !host || host === 'local' ? '__local__' : host
 }
 
-function insideRoot(ws: TaskWorkspace, p: string | undefined): boolean {
-  if (!p || !ws.root) return false
-  const root = ws.root.replace(/\/+$/, '')
-  const target = p.replace(/\/+$/, '')
-  return target === root || target.startsWith(root + '/')
-}
 
 async function organizeUnfiled(taskId: string, cwd: string, message: string): Promise<void> {
   try {
@@ -58,7 +52,7 @@ export function workspaceStartPlace(task: Pick<Task, 'workspace'>, params: { cwd
   if (!isLaunchReady(ws)) return null
   if (params.cwd !== undefined && !belongsToWorkspace(ws, params.cwd)) return null
   if (params.host !== undefined && normHost(params.host) !== ws.host) return null
-  return { cwd: insideRoot(ws, params.cwd) ? params.cwd! : ws.cwd, host: ws.host === '__local__' ? '' : ws.host }
+  return { cwd: insideRoot(ws.root, params.cwd) ? params.cwd! : ws.cwd, host: ws.host === '__local__' ? '' : ws.host }
 }
 
 export interface DeferredTaskStart { taskId: string; title: string; started: false; preparing: true }
@@ -148,7 +142,7 @@ export async function mobileWorkspacePlace(taskId: string, cwd: string, host: st
   if (host !== undefined && normHost(host) !== ws.host) {
     throw new QuickStartError(`This task's workspace lives on ${ws.host === '__local__' ? 'this Mac' : ws.host}.`, 409)
   }
-  return { cwd: insideRoot(ws, cwd) ? cwd : ws.cwd, host: ws.host === '__local__' ? undefined : ws.host }
+  return { cwd: insideRoot(ws.root, cwd) ? cwd : ws.cwd, host: ws.host === '__local__' ? undefined : ws.host }
 }
 
 export interface QuickStartWorkspacePlan {
@@ -230,7 +224,7 @@ export async function workspaceLaunchPlan(body: Record<string, unknown>, ctx: {
   if (isLaunchReady(ws)) {
     if (normHost(ctx.host) !== ws.host) return refuse(409, `This task's workspace lives on ${ws.host === '__local__' ? 'this Mac' : ws.host}.`, 'host-mismatch')
     if (setupHoldsLaunch(ws) || setupBlocksLaunch(ws)) return begin(null)
-    return { cwd: insideRoot(ws, ctx.cwd) ? ctx.cwd : ws.cwd }
+    return { cwd: insideRoot(ws.root, ctx.cwd) ? ctx.cwd : ws.cwd }
   }
   if (ws.state === 'removing') return refuse(409, 'This task\'s workspace is being removed.', 'busy')
   return begin(null)

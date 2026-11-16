@@ -3262,7 +3262,15 @@ export class ClaudeCodeSession {
         await restoreOwnTaskDir(this.taskId, resolvedCwd, host).catch(() => false)
       }
       stepDone('taskDirMs')
-      const cwdCheck = await checkCwdExists(resolvedCwd, host, sshTarget)
+      let cwdCheck = await checkCwdExists(resolvedCwd, host, sshTarget)
+      // A folder in the task's isolated workspace, which a cleanup removed after the task was
+      // completed: the workspace is made again at the same path and the spawn waits for it
+      // (core/workspaces/remake.ts), so a message to a woken task runs instead of parking.
+      if (!cwdCheck.ok && this.taskId && isFolderGoneReason(cwdCheck.error)) {
+        const { remakeForGoneFolder, SPAWN_WAIT_MS } = await import('../core/workspaces/remake.js')
+        const remade = await remakeForGoneFolder(this.taskId, resolvedCwd, host, { waitMs: SPAWN_WAIT_MS, resume: true }).catch(() => 'no' as const)
+        if (remade === 'present') cwdCheck = await checkCwdExists(resolvedCwd, host, sshTarget)
+      }
       stepDone('cwdCheckMs')
       if (requestedMode === 'auto' && !slim) {
         const { getHostReadiness } = await import('../core/hosts/host-readiness.js')

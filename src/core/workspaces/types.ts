@@ -90,6 +90,14 @@ export interface TaskWorkspace {
   removal?: { trigger: 'manual' | 'complete'; from: 'ready' | 'kept' }
   pending_start?: WorkspacePendingStart
   /**
+   * Made again because a session of the task still had its folder in the one a cleanup
+   * removed (remake.ts). `from`: the removed one's created_at (the session hears about it
+   * once per removal); `root`: the folder it is made at again; `ready_at`: when it was
+   * ready, which holds the completion cleanup off a little while the session starts;
+   * `resume`: sessions wait in the queue for it, and its end sends what waited.
+   */
+  remade?: { from: string; root: string; at: string; ready_at?: string; resume?: boolean }
+  /**
    * Walnut made it because the task is a code task (default-isolation.ts), not because
    * someone asked: a creation that fails then starts the waiting session in the anchor
    * folder instead of leaving the task waiting for a Retry.
