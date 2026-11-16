@@ -52,6 +52,7 @@ const SESSION_FILES: Record<string, string> = {
   'utils/crash-report.ts': 'reads storage to report a crash',
   'utils/demo-generation.ts': 'a confirmed Demo resets this tab storage when its isolated data generation changes',
   'utils/layout-record.ts': 'adopts the pre-record sessionStorage keys once',
+  'components/drawing/drawing-store.ts': "the id of this tab, so two open tabs never write over each other's unsaved drawing; the drafts themselves are in localStorage",
   'utils/path-machine-memory.ts': "the machine this tab's user named for a path whose writer Walnut did not record: a per-tab answer to a question, not Home or Org layout",
   'utils/scroll-debug.ts': 'a debug timer',
   'utils/stale-assets.ts': 'reload bookkeeping of one tab',
@@ -63,6 +64,7 @@ const SESSION_FILES: Record<string, string> = {
 /** sessionStorage keys read or written directly by name. */
 const SESSION_KEYS: Record<string, string> = {
   'walnut-test-run': 'test-run marker',
+  'walnut-drawing-tab': 'the id of this tab for its unsaved drawing drafts (components/drawing/drawing-store.ts)',
   'walnut.vault.session': 'the Passwords unlock of this tab (a secret, never on disk)',
   'open-walnut-debug-crash-once': 'debug crash switch',
   'walnut.signedOut': 'sign-out notice',

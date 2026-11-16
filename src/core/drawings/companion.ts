@@ -123,8 +123,9 @@ export function retargetCompanion(content: string, toScenePath: string): string 
   const m = FRONTMATTER_RE.exec(content)
   if (!m) return content
   const line = yaml.dump({ drawing: sceneNameOf(toScenePath) }, { lineWidth: -1 }).trimEnd()
-  const inner = m[1]!.replace(/^drawing:.*$/m, line)
-  return content.slice(0, m.index) + m[0].replace(m[1]!, inner) + content.slice(m.index + m[0].length)
+  // Function replacements: a file name may hold `$&` or `$1`, which a string replacement would expand.
+  const inner = m[1]!.replace(/^drawing:.*$/m, () => line)
+  return content.slice(0, m.index) + m[0].replace(m[1]!, () => inner) + content.slice(m.index + m[0].length)
 }
 
 export type CompanionMerge =

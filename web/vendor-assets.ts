@@ -9,9 +9,25 @@ import type { Plugin } from 'vite';
  * page loads them from this Walnut and never from a CDN. The version in the path keeps an
  * open window's old files apart from a new build's.
  */
+/**
+ * The folder of an installed package. Node refuses `<pkg>/package.json` when the package's
+ * "exports" do not list it (@excalidraw/excalidraw does not), so start from its main entry and
+ * walk up to the package.json that names it.
+ */
+function packageRoot(require: NodeRequire, pkg: string): string {
+  let dir = path.dirname(require.resolve(pkg));
+  for (;;) {
+    const manifest = path.join(dir, 'package.json');
+    if (fs.existsSync(manifest) && (JSON.parse(fs.readFileSync(manifest, 'utf8')) as { name?: string }).name === pkg) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) throw new Error(`Could not find the package.json of ${pkg}`);
+    dir = parent;
+  }
+}
+
 function packageAssets(name: string, pkg: string, prefix: string, dirs: string[]): { plugin: Plugin; version: string } {
   const require = createRequire(import.meta.url);
-  const root = path.dirname(require.resolve(`${pkg}/package.json`));
+  const root = packageRoot(require, pkg);
   const { version } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as { version: string };
   const assets = new Map<string, string>();
   const walk = (dir: string, rel: string) => {

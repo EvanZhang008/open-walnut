@@ -67,7 +67,9 @@ export function testRunLabel(): string | null {
   let stored: string | null = null;
   try { stored = window.sessionStorage.getItem(PARAM); } catch { /* storage blocked */ }
   const webdriver = typeof navigator !== 'undefined' && navigator.webdriver === true;
-  const { label, store } = decideTestRun(window.location.href, stored, webdriver, webdriver ? browserId() : undefined);
+  // A window with no location (a test double, an embedding host) has no address to read a label from.
+  const href = typeof window.location?.href === 'string' ? window.location.href : '';
+  const { label, store } = decideTestRun(href, stored, webdriver, webdriver ? browserId() : undefined);
   try {
     if (store !== undefined) window.sessionStorage.setItem(PARAM, store);
   } catch { /* storage blocked: the label still holds for this load */ }
