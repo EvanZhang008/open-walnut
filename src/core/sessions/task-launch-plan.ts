@@ -1,8 +1,7 @@
 import { getProjectMetadata } from '../task-manager.js';
 import { QuickStartError } from './quick-start.js';
-import { recordedCwd } from './task-start.js';
 import { inheritedLaunchPair } from './caller-placement.js';
-import { ancestorFolderYields, defaultCwdOnHost, recordedCwdOnHost } from './launch-place.js';
+import { ancestorFolderYields, defaultCwdOnHost, recordedCwdOnHost, unnamedStartPlace } from './launch-place.js';
 import { resolveModelSwitchValue, VALID_SESSION_EFFORT_IDS, VALID_SESSION_MODEL_IDS, VALID_SESSION_MODE_IDS } from '../types.js';
 import type { Task } from '../types.js';
 import type { SessionStartParams } from './task-start.js';
@@ -56,13 +55,22 @@ export async function resolveTaskLaunchReadOnly(task: Task, params: SessionStart
   const wsPlace = workspaceStartPlace(task, params);
   // A start that names a host takes only a recorded folder that lives on it (launch-place.ts).
   const named = !wsPlace && params.host !== undefined;
+  // An unnamed start takes its recorded folder only where it lives (launch-place.ts unnamedStartPlace).
+  const unnamed = !wsPlace && params.cwd === undefined && !named ? await unnamedStartPlace(task, metadata?.default_host) : undefined;
   let cwd = wsPlace?.cwd ?? params.cwd
-    ?? (named ? await recordedCwdOnHost(task, params.host, metadata?.default_host) : await recordedCwd(task));
+    ?? (named ? await recordedCwdOnHost(task, params.host, metadata?.default_host) : unnamed?.cwd);
   // The creating session's place, when the task has no folder of its own: also over an
   // ancestor's folder on another host (launch-place.ts ancestorFolderYields).
   const fromRecord = !wsPlace && params.cwd === undefined && !!cwd;
   let pair = (!cwd || fromRecord) && params.host === undefined && params.callerSid
     ? await inheritedLaunchPair(params.callerSid, task).catch(() => undefined) : undefined;
+  // A recorded folder the default host lacks may live where the caller runs: there it wins over
+  // the caller's own folder, as any recorded place does (caller-placement.ts).
+  let recordHost = unnamed?.host;
+  if (pair && !cwd && !unnamed && !wsPlace && !named && params.cwd === undefined) {
+    const there = await recordedCwdOnHost(task, pair.host, metadata?.default_host).catch(() => undefined);
+    if (there) { cwd = there; recordHost = pair.host; pair = undefined; }
+  }
   if (pair && cwd) {
     const text = [task.title, task.description ?? '', params.message ?? ''].join('\n');
     const { needsMacTools } = await import('../hosts/placement.js');
@@ -74,7 +82,7 @@ export async function resolveTaskLaunchReadOnly(task: Task, params: SessionStart
     if (yields) cwd = undefined;
     else pair = undefined;
   }
-  const requestedHost = wsPlace ? wsPlace.host : params.host ?? (pair ? pair.host : metadata?.default_host);
+  const requestedHost = wsPlace ? wsPlace.host : params.host ?? (pair ? pair.host : (cwd ? recordHost : undefined) ?? metadata?.default_host);
   const host = requestedHost === '__local__' || requestedHost === 'local' ? '' : requestedHost;
   if (host) {
     const { getConfig } = await import('../config-manager.js');

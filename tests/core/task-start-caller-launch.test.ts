@@ -120,11 +120,13 @@ describe('a worker starting another task of its own project', () => {
   })
 
   it('a task with its own cwd keeps it and the project host', async () => {
+    remoteFolders.add('__local__:/repo/own')
     const launch = await launchOf({ id: 't-sib', title: 'Sibling', project: 'marina', cwd: '/repo/own' })
     expect(launch).toMatchObject({ cwd: '/repo/own', host: '' })
   })
 
   it('a parent chain cwd also counts as a place of its own', async () => {
+    remoteFolders.add('__local__:/repo/parent')
     tasks['t-parent'] = { id: 't-parent', title: 'Parent', project: 'marina', cwd: '/repo/parent' }
     const launch = await launchOf({ id: 't-child', title: 'Child', project: 'marina', parent_task_id: 't-parent' })
     expect(launch.cwd).toBe('/repo/parent')
@@ -213,8 +215,90 @@ describe('a start that names another host never takes a folder from another mach
   })
 
   it('a start with no host keeps the recorded folder on the default host, as before', async () => {
+    remoteFolders.add('__local__:/Users/me/marina')
     tasks['t-lead'] = { id: 't-lead', title: 'Lead', project: 'marina', cwd: '/Users/me/marina' }
     expect(await launchOf({ id: 't-sub2', title: 'Sub', project: 'marina', parent_task_id: 't-lead' })).toEqual({ cwd: '/Users/me/marina', host: '' })
     expect(mocks.ensureTaskDirOnHost).not.toHaveBeenCalled()
+  })
+})
+
+// 2026-11-16: the project's default_host moved from this Mac to devbox; tasks made before, never
+// started, still recorded the Mac checkout. Read as a folder on the new default host, their starts
+// died on "Working directory no longer exists on devbox". A folder no session ran in is looked up
+// on the host the start runs on.
+describe('a recorded folder no session ran in is a place only on a host that has it', () => {
+  const MAC = '/Users/me/marina'
+  beforeEach(() => {
+    mocks.getProjectMetadata.mockResolvedValue({ default_host: 'devbox', default_cwd: '/home/me/marina' })
+    remoteFolders.add(`__local__:${MAC}`)
+    // A person's start, or a lead's: no caller place to land beside.
+    mocks.resolveCaller.mockResolvedValue({ kind: 'human' })
+  })
+
+  it('a worker on this Mac starting it keeps the recorded folder here: a recorded place wins over the caller\'s', async () => {
+    callerSession()
+    expect(await launchOf({ id: 't-oldw', title: 'Old', project: 'marina', cwd: MAC })).toEqual({ cwd: MAC, host: '' })
+  })
+
+  it('a folder missing everywhere stays the default host\'s, so the start fails loudly there, as before', async () => {
+    expect(await launchOf({ id: 't-typo', title: 'Typo', project: 'marina', cwd: '/home/me/typo' }))
+      .toEqual({ cwd: '/home/me/typo', host: 'devbox' })
+    expect(await launchOf({ id: 't-typo2', title: 'Typo', project: 'marina', cwd: '/home/me/typo' }, { host: 'devbox' }))
+      .toEqual({ cwd: '/home/me/typo', host: 'devbox' })
+  })
+
+  it('a Mac folder a parent\'s session ran in here gives way on the default host: an unnamed start stays there', async () => {
+    tasks['t-macran'] = { id: 't-macran', title: 'Ran here', project: 'marina', cwd: MAC }
+    mocks.getSessionsForTask.mockImplementation(async (id: string) => (id === 't-macran'
+      ? [{ claudeSessionId: 's-mac', taskId: 't-macran', host: '__local__', cwd: MAC, process_status: 'idle', lastActiveAt: '2026-11-15T00:00:00Z' }]
+      : []))
+    expect(await launchOf({ id: 't-mackid', title: 'Kid', project: 'marina', parent_task_id: 't-macran' })).toEqual({ cwd: '/home/me/marina', host: 'devbox' })
+    // A worker on this Mac starting it keeps the parent's folder here.
+    callerSession()
+    expect(await launchOf({ id: 't-mackid2', title: 'Kid', project: 'marina', parent_task_id: 't-macran' })).toEqual({ cwd: MAC, host: '' })
+  })
+
+  it('the same Mac folder that the default host also has is kept there', async () => {
+    remoteFolders.add(`devbox:${MAC}`)
+    expect(await launchOf({ id: 't-both', title: 'Both', project: 'marina', cwd: MAC })).toEqual({ cwd: MAC, host: 'devbox' })
+  })
+
+  it('a start on the default host, named or not, takes the project default_cwd there', async () => {
+    expect(await launchOf({ id: 't-old', title: 'Old', project: 'marina', cwd: MAC }, { host: 'devbox' }))
+      .toEqual({ cwd: '/home/me/marina', host: 'devbox' })
+    expect(await launchOf({ id: 't-old2', title: 'Old', project: 'marina', cwd: MAC }))
+      .toEqual({ cwd: '/home/me/marina', host: 'devbox' })
+    // The same through the parent chain.
+    tasks['t-oldlead'] = { id: 't-oldlead', title: 'Lead', project: 'marina', cwd: MAC }
+    expect(await launchOf({ id: 't-oldkid', title: 'Kid', project: 'marina', parent_task_id: 't-oldlead' }))
+      .toEqual({ cwd: '/home/me/marina', host: 'devbox' })
+  })
+
+  it('a recorded folder that is on the default host is kept', async () => {
+    remoteFolders.add('devbox:/home/me/marina-wt')
+    expect(await launchOf({ id: 't-wt', title: 'Wt', project: 'marina', cwd: '/home/me/marina-wt' }))
+      .toEqual({ cwd: '/home/me/marina-wt', host: 'devbox' })
+    expect(await launchOf({ id: 't-wt2', title: 'Wt', project: 'marina', cwd: '/home/me/marina-wt' }, { host: 'devbox' }))
+      .toEqual({ cwd: '/home/me/marina-wt', host: 'devbox' })
+  })
+
+  it('a default host that cannot say keeps the recorded folder, as before', async () => {
+    __setFolderExistsForTesting(async () => undefined)
+    expect(await launchOf({ id: 't-quiet', title: 'Q', project: 'marina', cwd: '/home/me/marina-wt' }))
+      .toEqual({ cwd: '/home/me/marina-wt', host: 'devbox' })
+    expect(await launchOf({ id: 't-quiet2', title: 'Q', project: 'marina', cwd: '/home/me/marina-wt' }, { host: 'devbox' }))
+      .toEqual({ cwd: '/home/me/marina-wt', host: 'devbox' })
+  })
+
+  it('a folder a session ran in on the default host is kept without asking the host', async () => {
+    const probe = vi.fn(async () => false)
+    __setFolderExistsForTesting(probe)
+    tasks['t-ran2'] = { id: 't-ran2', title: 'Ran', project: 'marina', cwd: '/home/me/ran2' }
+    mocks.getSessionsForTask.mockImplementation(async (id: string) => (id === 't-ran2'
+      ? [{ claudeSessionId: 's-ran2', taskId: 't-ran2', host: 'devbox', cwd: '/home/me/ran2', process_status: 'idle', lastActiveAt: '2026-11-15T00:00:00Z' }]
+      : []))
+    expect(await launchOf({ id: 't-ran2kid', title: 'Kid', project: 'marina', parent_task_id: 't-ran2' }))
+      .toEqual({ cwd: '/home/me/ran2', host: 'devbox' })
+    expect(probe).not.toHaveBeenCalled()
   })
 })

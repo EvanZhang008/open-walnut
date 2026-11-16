@@ -14273,7 +14273,7 @@ export class SessionRunner {
           else {
             // A ready workspace names its own host; the rest live on the default host.
             const { unnamedStartPlace } = await import('../core/sessions/launch-place.js')
-            const place = await unnamedStartPlace(task)
+            const place = await unnamedStartPlace(task, metadata?.default_host as string | undefined)
             cwd = place?.cwd
             if (place?.host !== undefined) data.host = place.host === '__local__' ? '' : place.host
           }
@@ -14663,7 +14663,7 @@ export class SessionRunner {
           else {
             // A ready workspace names its own host; the rest live on the default host.
             const { unnamedStartPlace } = await import('../core/sessions/launch-place.js')
-            const place = await unnamedStartPlace(task)
+            const place = await unnamedStartPlace(task, metadata?.default_host as string | undefined)
             cwd = place?.cwd
             if (place?.host !== undefined) data.host = place.host === '__local__' ? '' : place.host
           }

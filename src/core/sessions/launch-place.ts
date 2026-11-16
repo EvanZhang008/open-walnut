@@ -7,9 +7,16 @@
  * A task stores a cwd but no host, and so does a project's `default_cwd`: both are
  * folders on the project's default host. A folder rides only to the host it lives on:
  *   - a task's (or an ancestor's) recorded cwd lives on the host one of that task's
- *     sessions ran in it, else on the project's default host, or on the named host when
- *     that folder exists there (a cwd someone set for it before any session ran);
+ *     sessions ran in it; a cwd no session ran in yet lives on this Mac (the machine the
+ *     server runs on) when the folder is here and the other host lacks it, else on the
+ *     project's default host, or on the named host when that folder exists there (a cwd
+ *     someone set for it before any session ran);
  *   - `default_cwd` lives on `default_host`.
+ * 2026-11-16: the Walnut project's default_host moved from the Mac to clouddev, and two
+ * tasks made days before, still waiting for a start, kept the Mac checkout as their cwd.
+ * Read as a folder on the (new) default host, both starts died on "Working directory no
+ * longer exists on clouddev". A folder missing everywhere still counts as the default
+ * host's, so its start fails loudly (or create_cwd makes it) instead of moving elsewhere.
  * A start that names another host takes neither: it runs in the task's own directory
  * there (the host's daemon makes it), never in a path from another machine.
  *
@@ -19,10 +26,12 @@
 import { normalizeHost } from '../transfer/planner.js';
 import type { Task } from '../types.js';
 
+const LOCAL = '__local__';
+
 type Chain = Pick<Task, 'id' | 'project' | 'cwd' | 'parent_task_id' | 'workspace'>;
 
-/** The host `cwd` (recorded on task `ownerId`) lives on: where its sessions ran in it, else the project's default host. */
-export async function hostOfRecordedCwd(ownerId: string, cwd: string, defaultHost: string | undefined): Promise<string> {
+/** The host a session of task `ownerId` last ran in `cwd` (or below it); undefined when none did. */
+async function hostWhereRan(ownerId: string, cwd: string): Promise<string | undefined> {
   try {
     const { getSessionsForTask } = await import('../session-tracker.js');
     const dir = cwd.replace(/\/+$/, '');
@@ -30,8 +39,25 @@ export async function hostOfRecordedCwd(ownerId: string, cwd: string, defaultHos
       .filter((s) => s.cwd && (s.cwd === dir || s.cwd.startsWith(`${dir}/`)))
       .sort((a, b) => (b.lastActiveAt ?? b.startedAt ?? '').localeCompare(a.lastActiveAt ?? a.startedAt ?? ''));
     if (ran[0]) return normalizeHost(ran[0].host);
-  } catch { /* no session store: the default host */ }
-  return normalizeHost(defaultHost);
+  } catch { /* no session store: nothing ran */ }
+  return undefined;
+}
+
+/** The host `cwd` (recorded on task `ownerId`) lives on: where its sessions ran in it, else the project's default host. */
+export async function hostOfRecordedCwd(ownerId: string, cwd: string, defaultHost: string | undefined): Promise<string> {
+  return (await hostWhereRan(ownerId, cwd)) ?? normalizeHost(defaultHost);
+}
+
+/** Whether a recorded folder (task `ownerId`'s, no workspace) is a place on `host`. */
+async function recordLivesOn(place: { cwd: string; ownerId: string }, host: string | undefined, defaultHost: string | undefined): Promise<boolean> {
+  const h = normalizeHost(host);
+  const ran = await hostWhereRan(place.ownerId, place.cwd);
+  // Where its sessions ran, or the same path on `host`.
+  if (ran !== undefined) return ran === h || (await folderOnHost(h, place.cwd)) === true;
+  // No session ran in it yet: a folder on this Mac belongs here unless `host` has it too.
+  if (h !== LOCAL && (await folderOnHost(LOCAL, place.cwd)) === true) return (await folderOnHost(h, place.cwd)) === true;
+  // The default host's, or a folder set by hand on `host`.
+  return normalizeHost(defaultHost) === h || (await folderOnHost(h, place.cwd)) === true;
 }
 
 /**
@@ -42,35 +68,46 @@ export async function recordedCwdOnHost(task: Chain, host: string | undefined, d
   const { recordedPlace } = await import('./task-start.js');
   const place = await recordedPlace(task);
   if (!place) return undefined;
-  // A ready workspace names its own host (workspaceStartPlace); the rest live on the default host or where they ran.
-  const lives = place.host ?? await hostOfRecordedCwd(place.ownerId, place.cwd, defaultHost);
-  if (lives === normalizeHost(host)) return place.cwd;
-  // A folder set for that host before any session ran in it: there when it exists there.
-  return !place.host && await folderExistsOn(host, place.cwd) ? place.cwd : undefined;
+  // A ready workspace names its own host (workspaceStartPlace).
+  if (place.host) return place.host === normalizeHost(host) ? place.cwd : undefined;
+  return await recordLivesOn(place, host, defaultHost) ? place.cwd : undefined;
 }
 
-type ExistsProbe = (host: string, dir: string) => Promise<boolean>;
+type ExistsProbe = (host: string, dir: string) => Promise<boolean | undefined>;
 let existsProbe: ExistsProbe | null = null;
 /** Test seam: whether a folder exists on a host. */
 export function __setFolderExistsForTesting(p: ExistsProbe | null): void { existsProbe = p; }
 
-/** Whether `dir` is a folder on `host`, asked of its daemon within 3 s; false when it cannot say. */
-async function folderExistsOn(host: string | undefined, dir: string): Promise<boolean> {
+const probed = new Map<string, { at: number; is: boolean }>();
+/**
+ * Whether `dir` is a folder on `host`: on this Mac a stat; elsewhere asked of the host's daemon
+ * within 3 s, a folder found kept 30 s (one start resolves its place several times); undefined when it
+ * cannot say.
+ */
+async function folderOnHost(host: string | undefined, dir: string): Promise<boolean | undefined> {
   const h = normalizeHost(host);
   if (existsProbe) return existsProbe(h, dir);
+  if (h === LOCAL) {
+    try { return (await import('node:fs')).statSync(dir).isDirectory(); } catch { return false; }
+  }
+  const key = `${h}\0${dir}`;
+  const hit = probed.get(key);
+  if (hit && Date.now() - hit.at < 30_000) return hit.is;
+  let is: boolean | undefined;
   try {
-    if (h === '__local__') return (await import('node:fs')).existsSync(dir);
     const { DaemonFileReader } = await import('../daemon-file-reader.js');
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const st = await Promise.race([
-      new DaemonFileReader(h).stat(dir),
-      new Promise<null>((r) => { timer = setTimeout(() => r(null), 3_000); timer.unref?.(); }),
+    is = await Promise.race([
+      new DaemonFileReader(h).stat(dir).then((st) => !!st),
+      new Promise<undefined>((r) => { timer = setTimeout(() => r(undefined), 3_000); timer.unref?.(); }),
     ]);
     if (timer) clearTimeout(timer);
-    return !!st;
   } catch {
-    return false;
+    is = undefined;
   }
+  // Only a folder found is kept: one made a moment later, or a host back from a reconnect, is asked again.
+  if (is) { if (probed.size > 500) probed.clear(); probed.set(key, { at: Date.now(), is }); }
+  return is;
 }
 
 /**
@@ -96,11 +133,19 @@ export async function ancestorFolderYields(
   return !(opts.macTools && lives === '__local__');
 }
 
-/** Where a start that names no host runs from the record: the folder, and the host when the record names one (a ready workspace). */
-export async function unnamedStartPlace(task: Chain): Promise<{ cwd: string; host?: string } | undefined> {
+/**
+ * Where a start that names no host runs from the record: the folder, and the host when the record
+ * names one (a ready workspace). Such a start runs on the project's default host, so a plain
+ * recorded folder that is not a place there (it lives on this Mac, or its sessions ran on another
+ * host, and the default host lacks it) gives way: the caller's place or the project's default_cwd
+ * applies. A folder missing everywhere stays, so its start fails loudly or create_cwd makes it.
+ */
+export async function unnamedStartPlace(task: Chain, defaultHost: string | undefined): Promise<{ cwd: string; host?: string } | undefined> {
   const { recordedPlace } = await import('./task-start.js');
   const place = await recordedPlace(task);
-  return place ? { cwd: place.cwd, ...(place.host ? { host: place.host } : {}) } : undefined;
+  if (!place) return undefined;
+  if (place.host) return { cwd: place.cwd, host: place.host };
+  return await recordLivesOn(place, defaultHost, defaultHost) ? { cwd: place.cwd } : undefined;
 }
 
 /** The project's default_cwd, when the start runs on its default_host. */
