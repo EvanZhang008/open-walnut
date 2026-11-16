@@ -662,7 +662,7 @@ function stripInputDecorations(text, hadQuestion) {
       continue;
     }
     if (t.startsWith('[Rich output mode')) continue;
-    if (/^\(Back to (the main conversation|the earlier (thread|question) about)/.test(t)) continue;
+    if (/^\(Back to (the main conversation|the earlier (thread|question)( thread="[0-9.]+")? about)/.test(t)) continue;
     out.push(lines[i]);
   }
   let body = out.join('\n').trim();

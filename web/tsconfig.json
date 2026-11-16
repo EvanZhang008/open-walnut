@@ -49,6 +49,7 @@
       "@open-walnut/history-walnut-riders": ["../src/lib/history-walnut-riders"],
       "@open-walnut/attachment-headers": ["../src/lib/attachment-headers"],
       "@open-walnut/walnut-added": ["../src/lib/walnut-added"],
+      "@open-walnut/composed-framing": ["../src/lib/composed-framing"],
       "@open-walnut/send-targets": ["../src/lib/send-targets"],
       "@open-walnut/three-way-merge": ["../src/lib/three-way-merge"],
       "@open-walnut/mail-subject-pattern": ["../src/integrations/mail/sort-regex-safety"]

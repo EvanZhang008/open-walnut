@@ -21,7 +21,7 @@
 import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  centreInHistory, DENSE_SESSION, FAILED_SESSION, mainComposer, mainPage, openThreadsSession, pinColumnWidth, passageRects, readRecord, resetThreadsFixture, selectPassage, modePill, openQuestionList, switchView, test, expectStackDepth,
+  centreInHistory, currentStack, DENSE_SESSION, FAILED_SESSION, mainComposer, mainPage, openThreadsSession, pinColumnWidth, passageRects, readRecord, resetThreadsFixture, selectPassage, modePill, openQuestionList, switchView, test, expectStackDepth,
 } from './threads-helpers'
 import { FAILED_ERROR_TEXT, FAILED_PASSAGES, PARKED_FOLLOW_UP, densePassage } from './threads-fixture'
 import { discoverBrowserFixture } from './codex-test-audit'
@@ -279,31 +279,58 @@ test.describe('Question stack: asking and sending', () => {
     expect(((await readRecord(request, SEND_SESSION)).threadAnchors ?? []).length).toBe(2)
   })
 
-  test('a send names where it goes back to, right after the previous send, before history catches up (C58)', async ({ page }) => {
+  // C58, and 2026-11-16 (the user: "why in tree mode it shows back to xx ... this should be
+  // hidden, collapse by default can open to see"; "it should have info for the ai to reply
+  // the message in correct format"): the line rides the send for the model, with the
+  // question's id, and the bubble shows the typed words under one closed marker.
+  test('a send names where it goes back to, before history catches up; the bubble folds that line (C58)', async ({ page }) => {
     await boot(page)
     const panel = await openThreadsSession(page, SEND_SESSION, SEND_TASK, READY)
     const history = mainPage(panel).locator('.session-history')
+    const marker = (scope: Locator, words: string) =>
+      scope.locator('.session-msg-user', { hasText: words }).locator('[data-testid="injected-banner"][data-banner-name="Sent with"]')
     await askAbout(page, panel, PHRASE, 'orientation question one')
     await expect(history).toContainText('processed your message', { timeout: 60_000 })
     await page.keyboard.press('Escape')
     await expectStackDepth(panel, 0)
-    // Root after a dive: the main-conversation line leads.
+    // Root after a dive: the main-conversation line leads the send, folded in the bubble.
     await send(panel, 'root after the dive')
-    await expect(history).toContainText('(Back to the main conversation)')
+    const rootMark = marker(history, 'root after the dive')
+    await expect(rootMark).toHaveCount(1)
+    await expect(rootMark.locator('.tool-run-label')).toHaveText('Sent to the main conversation')
+    await expect(history.locator('.session-msg-user', { hasText: 'root after the dive' })).not.toContainText('(Back to the main conversation)')
+    await rootMark.locator('.tool-run-toggle').click()
+    await expect(rootMark.locator('[data-testid="injected-banner-body"]')).toContainText('(Back to the main conversation)')
+    await page.waitForTimeout(600)
+    await rootMark.locator('.tool-run-toggle').click()
+    await expect(rootMark.locator('[data-testid="injected-banner-body"]')).toHaveCount(0)
     await expect(history).toContainText('processed your message: root after the dive', { timeout: 60_000 })
     // At once back on the question: the newest turn is root's (only the
-    // optimistic row says so yet), so the follow-up names its question.
+    // optimistic row says so yet), so the follow-up names its question, by its id.
     await askedRows(panel).first().click()
     await expectStackDepth(panel, 1)
+    const qPage = currentStack(panel)
     await send(panel, 'follow up check one')
-    await expect(history).toContainText('(Back to the earlier question about “', { timeout: 60_000 })
-    await expect(history).toContainText('follow up check one')
-    // The newest turn is now this page: no line.
-    await expect(history).toContainText('processed your message: follow up check one', { timeout: 60_000 })
+    const qMark = marker(qPage, 'follow up check one')
+    await expect(qMark).toHaveCount(1, { timeout: 60_000 })
+    await expect(qMark.locator('.tool-run-label')).toHaveText(/^Sent to question \d+(\.\d+)*$/)
+    await expect(qPage.locator('.session-msg-user', { hasText: 'follow up check one' })).not.toContainText('Back to the earlier question')
+    await qMark.locator('.tool-run-toggle').click()
+    await expect(qMark.locator('[data-testid="injected-banner-body"]')).toContainText(/\(Back to the earlier question thread="\d+(\.\d+)*" about “/)
+    await shot(page, 'c58-framing-open')
+    await page.waitForTimeout(600)
+    await qMark.locator('.tool-run-toggle').click()
+    await expect(qMark.locator('[data-testid="injected-banner-body"]')).toHaveCount(0)
+    // The reply files on this question's page.
+    await expect(qPage.locator('.session-history')).toContainText('processed your message: follow up check one', { timeout: 60_000 })
+    // The newest turn is now this page: no line, no marker.
     await send(panel, 'follow up check two')
-    await expect(history).toContainText('processed your message: follow up check two', { timeout: 60_000 })
+    await expect(qPage.locator('.session-history')).toContainText('processed your message: follow up check two', { timeout: 60_000 })
+    await expect(marker(qPage, 'follow up check two')).toHaveCount(0)
     await page.keyboard.press('Escape')
     await expectStackDepth(panel, 0)
+    // ...and never on the main conversation.
+    await expect(history).not.toContainText('processed your message: follow up check one')
   })
 
   test('every page keeps its own draft; an unsent page with text leaves a draft row that leads back', async ({ page, request }) => {

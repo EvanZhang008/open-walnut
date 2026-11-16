@@ -208,14 +208,22 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await expect(head.locator('.thread-map-num')).toHaveText(String(next))
     await shot(page, 'file-q-answered')
 
-    // Esc closes; the folded line's chevron shows the bubble, which names the file
-    // by its path from the session's cwd (a press in the chat would close an open card).
+    // Esc closes; the folded line's chevron shows the bubble. Its file line rides the
+    // send for the model and is folded under one closed marker (2026-11-16, the user:
+    // "this should be hidden, collapse by default can open to see"); opened, it names
+    // the file by its path from the session's cwd (a press in the chat would close an open card).
     await input.press('Escape')
     await expect(card).toHaveCount(0)
     await head.locator('.thread-turn-fold').click()
-    const asked = panel.locator('.session-history .session-msg--threaded').filter({ hasText: `About ${MD_FILE}:` })
-    await expect(asked).toHaveCount(1)
+    const framing = panel.locator('.session-history .session-msg--threaded [data-testid="injected-banner"][data-banner-name="Sent with"]')
+    await expect(framing).toHaveCount(1)
+    await expect(framing.locator('.tool-run-label')).toHaveText('About a passage of a file')
+    await expect(panel.locator('.session-history .session-msg--threaded').filter({ hasText: `About ${MD_FILE}:` })).toHaveCount(0)
+    await framing.locator('.tool-run-toggle').click()
+    const asked = framing.locator('[data-testid="injected-banner-body"]')
+    await expect(asked).toContainText(`About ${MD_FILE}:`)
     await expect(asked).not.toContainText('/projects/editor-fixture/')
+    await framing.locator('.tool-run-toggle').click()
     await head.locator('.thread-turn-fold').click()
     await expect(head).toHaveAttribute('data-folded', 'true')
     // The passage is marked and a click on it reopens the card.

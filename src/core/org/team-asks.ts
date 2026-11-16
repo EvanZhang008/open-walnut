@@ -30,6 +30,7 @@ import { withoutLeadingRiders } from '../../lib/history-walnut-riders.js';
 import { buildOrgTree, type OrgTaskNode } from './org-tree.js';
 import type { TeamAsk } from './team-note.js';
 import { ambientTestRun } from '../test-run.js';
+import { FILE_ABOUT_LINE_RE, ORIENTATION_LINE_RE } from '../../lib/composed-framing.js';
 
 const FILE = path.join(WALNUT_HOME, 'org', 'team-asks.json');
 // A note with nothing the lead must act on now waits up to an hour (team-note.ts), so the store
@@ -133,9 +134,9 @@ const firstLine = (text: string | undefined) => (text ?? '').split('\n').map((l)
 const QUESTION_BANNER = /^Question Q(\d{1,5})$/;
 /** What an old row kept of a question's message: the banner's first line. */
 const QUESTION_PLACEHOLDER = /^\[Question Q(\d{1,5})\]$/;
-/** Lines the composer puts before the words (web/src/utils/thread-tree.ts): where the message goes
+/** Lines the composer puts before the words (src/lib/composed-framing.ts): where the message goes
  *  back to, and the file it is about; then the passage, as a quote block. */
-const FRAME_LINE = /^(?:\(Back to the (?:main conversation|earlier (?:question|thread) about .*)\)|About `[^`\n]+`:)$/;
+const FRAME_LINE = { test: (line: string) => ORIENTATION_LINE_RE.test(line) || FILE_ABOUT_LINE_RE.test(line) };
 /** A line of the composer's quote block (quoteBlockOf: "> " before each line, ">" alone for a blank). */
 const QUOTE_LINE = /^>(?: |$)/;
 

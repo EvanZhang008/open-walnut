@@ -8,6 +8,7 @@
  */
 import { parseHinted, replaceHintBlocks } from '../core/hints/hint-format.js';
 import { splitLeadingBanners } from './history-injected-banner.js';
+import { framingLabel, splitComposedFraming } from './composed-framing.js';
 import { isEnvelopeOnly, parseSessionEnvelopes } from './history-session-envelope.js';
 import { splitLeadingRiders } from './history-walnut-riders.js';
 
@@ -20,6 +21,9 @@ function contextLabel(name: string): string {
   if (/^task context$/i.test(name)) return 'Task context';
   return name;
 }
+
+/** The composer's framing as one item (its label says where it was sent: framingLabel). */
+export const FRAMING_NAME = 'Sent with';
 
 /** The question-number banner: the turn's label already shows the number, so it is no addition to show. */
 const QUESTION_BANNER = /^Question Q\d{1,5}$/;
@@ -55,12 +59,22 @@ export function walnutAddedOf(text: string): WalnutAdded {
   const own = riders?.body ?? text;
   const banners = splitLeadingBanners(own);
   let textWithoutContext: string | undefined;
+  let body = own;
   if (banners) {
     for (const b of banners.banners) {
       if (QUESTION_BANNER.test(b.name.trim())) continue;
       items.push({ kind: 'context', name: b.name.trim(), label: contextLabel(b.name.trim()), text: b.body });
     }
-    textWithoutContext = text.slice(0, text.length - own.length) + banners.body;
+    body = banners.body;
+    textWithoutContext = text.slice(0, text.length - own.length) + body;
+  }
+  // The lines a Tree Mode or Ask here send put in front of the words (where it
+  // goes back to, the passage it is about): the bubble shows the words, and these
+  // one tap away (2026-11-16, the user: "this should be hidden, collapse by default").
+  const framing = splitComposedFraming(body);
+  if (framing && framing.words) {
+    items.push({ kind: 'context', name: FRAMING_NAME, label: framingLabel(framing), text: framing.framing });
+    textWithoutContext = text.slice(0, text.length - own.length) + framing.words;
   }
   return { items, ...(textWithoutContext !== undefined ? { textWithoutContext } : {}) };
 }

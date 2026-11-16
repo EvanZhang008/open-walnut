@@ -21,6 +21,7 @@ import { readAboutTag, stripAboutTag } from './message-about.js';
 import { userWordsOf } from './thread-capture.js';
 import { letterAnswerMissing, verifiedSource, type OrgThread, type ThreadAnswer, type ThreadMessage, type ThreadTextSource } from './threads-model.js';
 import { isQuietTurn } from '../sessions/quiet-turn.js';
+import { splitComposedFraming } from '../../lib/composed-framing.js';
 
 /** A transcript row as the projection gives it (session-projection.ts). */
 export interface AnswerRow {
@@ -63,12 +64,18 @@ function rowWords(row: AnswerRow, inChat: boolean): ReturnType<typeof userWordsO
   return userWordsOf(text, { inChat });
 }
 
+function withoutFraming(text: string): string {
+  return splitComposedFraming(text)?.words || text;
+}
+
 function rowMatches(row: AnswerRow, m: ThreadMessage): boolean {
   if (row.role !== 'user') return false;
   const words = rowWords(row, m.via !== 'letter');
   if (!words) return false;
-  const a = norm(words.text);
-  const b = norm(m.text);
+  // The composer's framing (a Tree Mode page's line) is on the filed message and off the row's
+  // `textWithoutContext`: both sides are compared without it.
+  const a = norm(withoutFraming(words.text));
+  const b = norm(withoutFraming(m.text));
   // Exactly his words: "this" is not the start of "this has subagent ...".
   if (!a && !b) return !!m.images?.length && words.images[0] === m.images[0];
   return a === b;

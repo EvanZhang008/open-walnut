@@ -174,6 +174,8 @@ SOURCES=(
   src/lib/history-walnut-riders.ts
   src/lib/turn-end-marker.ts
   src/lib/walnut-added.ts
+  src/lib/composed-framing.ts
+  src/lib/attachment-headers.ts
   src/core/transcript-chain-prefilter.ts
   src/core/bash-file-ops.ts
   src/providers/daemon-instance-lock.ts

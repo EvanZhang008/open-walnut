@@ -8,7 +8,8 @@
  */
 import { describe, it, expect } from 'vitest';
 import { splitIndexOf, splitTaggedReplies, type SplitRow } from '@/utils/tagged-reply-split';
-import { buildThreadTree, threadKeyOf, ROOT_THREAD_KEY } from '@/utils/thread-tree';
+import { buildThreadTree, composeOrientedText, threadKeyOf, ROOT_THREAD_KEY } from '@/utils/thread-tree';
+import { splitComposedFraming } from '@open-walnut/composed-framing';
 import { headsBySeq, withTagAnchors } from '@/utils/question-tag';
 import { deriveThreadStats } from '@/utils/thread-stack-state';
 import { cardTurnsOf } from '@/utils/thread-card';
@@ -324,5 +325,42 @@ describe('strict questions are answered by their tag alone', () => {
     const two = splitTaggedReplies([...rows]);
     expect(two).not.toBe(one);
     one.forEach((r, i) => expect(two[i]).toBe(r));
+  });
+});
+
+// 2026-11-16, the user: a send from a question page "should have info for the ai to
+// reply the message in correct format". The page's line names the question's id
+// (src/lib/composed-framing.ts), the hint on the same send names the tag with that
+// id, and the reply files by the id in its tag alone: on its own branch, never on
+// another one, never by the line's prose.
+describe('a follow-up sent from a question page is answered on that branch', () => {
+  const followUp = (thread: string, title: string) =>
+    composeOrientedText('And at night?', { latestKey: K7, currentKey: K6, titleOfKey: () => title, threadOfKey: () => thread });
+  const F6 = { ...A6, msgId: 'f6' };
+
+  it('the line and the hint name the same thread', () => {
+    const row = ask('f6', followUp('6', 'What is alpha'), '6', 'What is alpha');
+    expect(splitComposedFraming(row.text ?? '')?.thread).toBe('6');
+    expect((row as { hints?: Array<{ arg: string }> }).hints?.[0].arg).toBe('6');
+  });
+
+  it('a reply in thread 6\'s tag lands on 6; one in 7\'s lands on 7, not on 6', () => {
+    const rows = [
+      ...BASE,
+      ask('q6', 'What is alpha?', '6', 'What is alpha'),
+      reply('a1', span('6', 'What is alpha', 'Alpha means one.')),
+      ask('q7', 'What is beta?', '7', 'What is beta'),
+      reply('a2', span('7', 'What is beta', 'Beta means two.')),
+      ask('f6', followUp('6', 'What is alpha'), '6', 'What is alpha'),
+      reply('a3', span('6', 'What is alpha', 'At night it is cheaper.')),
+    ];
+    const r = read(rows, [A6, A7, F6]);
+    expect(r.keyOf('f6')).toBe(K6);
+    expect(r.words(K6)).toEqual(['Alpha means one.', 'At night it is cheaper.']);
+    expect(r.words(K7)).toEqual(['Beta means two.']);
+    // The same follow-up answered under the other question's tag: filed there, never on 6.
+    const wrong = read([...rows.slice(0, -1), reply('a3', span('7', 'What is beta', 'Misfiled.'))], [A6, A7, F6]);
+    expect(wrong.words(K6)).toEqual(['Alpha means one.']);
+    expect(wrong.words(K7)).toEqual(['Beta means two.', 'Misfiled.']);
   });
 });

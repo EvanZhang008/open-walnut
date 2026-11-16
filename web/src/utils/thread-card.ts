@@ -9,7 +9,8 @@ import type { ThreadMarkState } from '@/utils/thread-mark-state';
 import type { ThreadMetaIndex } from '@/utils/thread-meta';
 import { displayTitleOf, metaOf } from '@/utils/thread-meta';
 import type { ThreadNode, ThreadTree } from '@/utils/thread-tree';
-import { BACK_TO_MAIN_LINE, FILE_ABOUT_LINE_RE, ROOT_THREAD_KEY, fileOfParent, isTurnHead } from '@/utils/thread-tree';
+import { ROOT_THREAD_KEY, fileOfParent, isTurnHead } from '@/utils/thread-tree';
+import { splitComposedFraming } from '@open-walnut/composed-framing';
 import { splitAttachmentHeaders } from '@open-walnut/attachment-headers';
 import { stripQuestionTag } from '@/utils/question-tag';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
@@ -81,10 +82,6 @@ export function cardTurnsOf<M extends CardRowLike>(messages: readonly M[], node:
  * composed in front of it (the card already sits beside that passage) and
  * without the orientation line. The banner is stripped by the row renderer.
  */
-/** Both orientation lines a send can open with (thread-tree.ts: the anchored
- *  "thread" form and the page's "question" form). */
-const BACK_TO_LINE_RE = /^\(Back to the earlier (?:thread|question) about /;
-
 export function questionBodyOf(text: string): string {
   return questionPartsOf(text).body;
 }
@@ -125,31 +122,11 @@ export function questionPartsOf(text: string): QuestionParts {
   return { body: rest || (had ? '' : text.trim()), images, files };
 }
 
-/** The text with the lines a send composed in front of the words taken off. */
+/** The text with the lines a send composed in front of the words taken off
+ *  (src/lib/composed-framing.ts, the one parser every reader shares). */
 function composedLinesOff(text: string): string {
-  const lines = text.split('\n');
-  let i = 0;
-  const skipBlank = () => { while (i < lines.length && !lines[i].trim()) i++; };
-  skipBlank();
-  // The reply-tag banner, when the raw text still carries it.
-  if (i < lines.length && /^\[Question Q\d{1,5}\]\s*$/.test(lines[i])) {
-    const close = lines.findIndex((l, k) => k > i && /^\[\/Question Q\d{1,5}\]\s*$/.test(l));
-    if (close > i) { i = close + 1; skipBlank(); }
-  }
-  if (i < lines.length && (BACK_TO_LINE_RE.test(lines[i]) || lines[i] === BACK_TO_MAIN_LINE)) {
-    i++;
-    skipBlank();
-  }
-  // A file question names its file ahead of the quote (the card sits in that file).
-  if (i < lines.length && FILE_ABOUT_LINE_RE.test(lines[i])) {
-    i++;
-    skipBlank();
-  }
-  if (i < lines.length && lines[i].startsWith('>')) {
-    while (i < lines.length && lines[i].startsWith('>')) i++;
-    skipBlank();
-  }
-  return lines.slice(i).join('\n').trim();
+  const split = splitComposedFraming(text, { quoteAlone: true });
+  return split ? split.words : text;
 }
 
 export interface CardAnchorRect {

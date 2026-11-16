@@ -48,6 +48,7 @@ import { splitLeadingBanners } from '@open-walnut/history-injected-banner';
 import { attachmentParts } from '@/api/file-upload';
 import { MessageAttachments } from './MessageAttachments';
 import { injectedContextLabel } from '@open-walnut/walnut-added';
+import { framingLabel, splitComposedFraming } from '@open-walnut/composed-framing';
 import { splitRiders } from '@open-walnut/history-walnut-riders';
 import '@/styles/session-riders.css';
 import { ProcessFoldRow } from './TurnFolds';
@@ -1350,10 +1351,23 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
   }, [isUser, ownText]);
   // A question about a FILE passage opens with ``About `<absolute path>`:``; the
   // bubble shows that path relative to the session's cwd.
-  const bodyText = useMemo(() => {
+  // A Tree Mode or Ask here send leads the words with lines the model reads (where
+  // it goes back to, `thread="6"`, the passage it is about: src/lib/composed-framing.ts).
+  // The bubble shows the words, and those lines behind one closed marker above them
+  // (2026-11-16, the user: "this should be hidden, collapse by default, can open to see").
+  const framing = useMemo(() => {
     const body = bannerSplit ? bannerSplit.body : ownText;
+    const split = isUser && body ? splitComposedFraming(body) : null;
+    return split && split.words ? split : null;
+  }, [bannerSplit, ownText, isUser]);
+  const framingBanner = useMemo(
+    () => (framing ? { name: 'Sent with', label: framingLabel(framing), body: shortenFileAboutLine(framing.framing, sessionCwd), raw: framing.framing } : null),
+    [framing, sessionCwd],
+  );
+  const bodyText = useMemo(() => {
+    const body = framing ? framing.words : bannerSplit ? bannerSplit.body : ownText;
     return isUser && body ? shortenFileAboutLine(body, sessionCwd) : body;
-  }, [bannerSplit, ownText, isUser, sessionCwd]);
+  }, [framing, bannerSplit, ownText, isUser, sessionCwd]);
   // The attachments a person sent ride in front of their words as headers
   // naming the saved paths (`[Images attached …]`, `[Files attached …]`): drawn
   // as pictures and file cards above the words instead of as path lists.
@@ -1532,6 +1546,9 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
           // they copied off a web page render as DOM rather than as the text
           // they can see they pasted.
           <>
+            {framingBanner && (
+              <InjectedBannerRow banner={framingBanner} disclosureId={disclosureIds.added(`${message.walnutMessageId ?? message.msgId ?? message.timestamp}-framing`)} />
+            )}
             {attachmentSplit && (
               <MessageAttachments images={attachmentSplit.images} files={attachmentSplit.files} host={sessionHost} {...(onFileOpen ? { onFileOpen } : {})} />
             )}

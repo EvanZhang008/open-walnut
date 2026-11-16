@@ -23,6 +23,11 @@
 import type { SessionPinnedQuote, SessionThreadAnchor } from '@/types/session';
 import { pinLabelFor } from '@/utils/pin-label';
 import { sendUuidsOfRow } from '@/utils/send-uuids';
+import {
+  BACK_TO_MAIN_LINE, FILE_ABOUT_LINE_RE, backToQuestionLine, backToThreadLine, fileAboutLine,
+} from '@open-walnut/composed-framing';
+
+export { BACK_TO_MAIN_LINE, FILE_ABOUT_LINE_RE };
 
 /** NUL — the one separator that cannot appear inside a msgId or a passage (same
  *  reasoning, and the same character, as pinKeyOf's key shape). */
@@ -465,9 +470,8 @@ export interface ComposerThreadAnchor {
 /** The line a file question's send opens with, so the model knows WHICH file the
  *  quoted passage is from: `About \`<path>:<line>\`:`. The card strips it. */
 export function fileAboutLineOf(path: string, line?: number): string {
-  return `About \`${line ? `${path}:${line}` : path}\`:`;
+  return fileAboutLine(line ? `${path}:${line}` : path);
 }
-export const FILE_ABOUT_LINE_RE = /^About `[^`\n]+`:\s*$/;
 
 /**
  * The About line as a bubble shows it: the path relative to the session's cwd
@@ -518,9 +522,9 @@ export function quoteBlockOf(quote: SessionPinnedQuote): string {
 /**
  * The text actually sent for an anchored message.
  *
- * Everything it adds is VISIBLE in the bubble — the model and the human read the
- * same message, which is the whole reason this is composed at send time instead
- * of hidden in a side channel:
+ * Everything it adds rides the message itself, so the transcript keeps what the
+ * model read; the bubble folds these lines behind "Walnut added" and shows the
+ * person's words (src/lib/composed-framing.ts splits them, 2026-11-16):
  *
  *  - a fresh selection quotes the passage, so the reply is about that passage;
  *  - returning to a thread that is NOT where the model currently is leads with
@@ -539,7 +543,7 @@ export function composeAnchoredText(
     if (filePath !== null) parts.push(fileAboutLineOf(filePath, anchor.line));
     if (anchor.quote) parts.push(quoteBlockOf(anchor.quote));
   } else if (threadKeyOf(anchor) !== latestKey) {
-    parts.push(`(Back to the earlier thread about “${anchor.label}”)`);
+    parts.push(backToThreadLine(anchor.label));
     if (filePath !== null) parts.push(fileAboutLineOf(filePath, anchor.line));
     if (anchor.quote) parts.push(quoteBlockOf(anchor.quote));
   }
@@ -557,25 +561,25 @@ export function newUserUuid(): string | undefined {
   return undefined;
 }
 
-/** First line of the text the model reads when the subject changes. */
-export const BACK_TO_MAIN_LINE = '(Back to the main conversation)';
-
 /**
  * Re-orientation for a send from a stack page (spec 5.4). The model reads ONE
  * linear context, so when the newest turn is elsewhere the message leads with a
  * visible line naming where it goes back to:
- *  - root page, newest turn in a question: `(Back to the main conversation)`;
- *  - a question page, newest turn elsewhere: `(Back to the earlier question
- *    about “<title>”)` with the page's display title;
+ *  - root page, newest turn in a question: BACK_TO_MAIN_LINE;
+ *  - a question page, newest turn elsewhere: backToQuestionLine, `(… question
+ *    thread="6" about “<title>”)` with the page's display title and the
+ *    question's id, the one its `question` hint names in `<walnut-ask thread=…>`
+ *    (src/lib/composed-framing.ts): the model reads where it goes back to and the
+ *    tag its answer belongs in from the same id;
  *  - the newest turn is on this page: the message as typed.
  */
 export function composeOrientedText(
   message: string,
-  opts: { latestKey: string; currentKey: string; titleOfKey: (key: string) => string },
+  opts: { latestKey: string; currentKey: string; titleOfKey: (key: string) => string; threadOfKey?: (key: string) => string },
 ): string {
   if (opts.latestKey === opts.currentKey) return message;
   if (opts.currentKey === ROOT_THREAD_KEY) return `${BACK_TO_MAIN_LINE}\n\n${message}`;
-  return `(Back to the earlier question about “${opts.titleOfKey(opts.currentKey)}”)\n\n${message}`;
+  return `${backToQuestionLine(opts.titleOfKey(opts.currentKey), opts.threadOfKey?.(opts.currentKey))}\n\n${message}`;
 }
 
 /** Whitespace-collapsed NFKC form: two selections of one passage compare equal

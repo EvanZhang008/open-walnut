@@ -137,3 +137,19 @@ describe('which messages are still looked for', () => {
     expect(done.size).toBe(0)
   })
 })
+
+// 2026-11-16 review: a message sent from a Tree Mode page is filed with the composer's line in
+// front, and the transcript row's `textWithoutContext` (walnut-added.ts) leaves it out: the two
+// still match.
+describe('a message sent from a Tree Mode page', () => {
+  it('matches its row with the line on either side', () => {
+    const sent = '(Back to the earlier question thread="6" about “Restart order”)\n\nAnd on restart?'
+    for (const row of [
+      { ...person(24, sent), textWithoutContext: 'And on restart?' },
+      person(24, sent),
+    ]) {
+      const got = answersFromRows([m('tm-9', 24, sent)], [row, says(25, 'It replays the log first.')], { wholeUntil: END })
+      expect(got.get('tm-9')?.text).toBe('It replays the log first.')
+    }
+  })
+})

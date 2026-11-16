@@ -68,6 +68,7 @@ export default defineConfig({
       '@open-walnut/history-walnut-riders': path.resolve(__dirname, '../src/lib/history-walnut-riders.ts'),
       '@open-walnut/attachment-headers': path.resolve(__dirname, '../src/lib/attachment-headers.ts'),
       '@open-walnut/walnut-added': path.resolve(__dirname, '../src/lib/walnut-added.ts'),
+      '@open-walnut/composed-framing': path.resolve(__dirname, '../src/lib/composed-framing.ts'),
       '@open-walnut/send-targets': path.resolve(__dirname, '../src/lib/send-targets.ts'),
       '@open-walnut/three-way-merge': path.resolve(__dirname, '../src/lib/three-way-merge.ts'),
       // Same reason: the Settings rule editor refuses a subject pattern with the server's own check.

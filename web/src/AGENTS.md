@@ -423,7 +423,14 @@ show inline after the open ones, other completed hits that show the query fold i
   **Asking opens a page before anything is written**: a pending page (`pending:<parent>:<hash>`)
   holds the quote head and an empty composer; the first send does ONE PATCH carrying
   `thread_anchors` + `thread_meta` together, and the text the model sees is composed into the
-  visible message (`composeAnchoredText` / `composeOrientedText`), never a hidden side channel.
+  message itself (`composeAnchoredText` / `composeOrientedText`), never a hidden side channel.
+  **Those lines are written and read by ONE module, `src/lib/composed-framing.ts`**: a question
+  page's line names the question's id (`thread="6"`, the id its `question` hint and answer tag
+  carry), and every reader splits them off with it: the bubble folds them under one closed
+  "Sent to question 6" marker (2026-11-16, the user: "this should be hidden, collapse by
+  default"), the phone gets them as an `added` item, titles and cards drop them. A lone leading
+  quote stays in the bubble (a passage comment quotes the same way). Ratchet:
+  `tests/web/composed-framing.test.ts` (no other file spells the line).
   The same passage asked twice goes to the existing page (one passage, one mark, one page).
   **Live blocks belong to the page of the turn that wrote them.** A queued question never claims
   the running answer, and a FINISHED turn's blocks stay on its page until the transcript absorbs

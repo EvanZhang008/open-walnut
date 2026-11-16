@@ -45,6 +45,7 @@ export default defineConfig({
       '@open-walnut/history-walnut-riders': path.resolve(import.meta.dirname, 'src/lib/history-walnut-riders.ts'),
       '@open-walnut/attachment-headers': path.resolve(import.meta.dirname, 'src/lib/attachment-headers.ts'),
       '@open-walnut/walnut-added': path.resolve(import.meta.dirname, 'src/lib/walnut-added.ts'),
+      '@open-walnut/composed-framing': path.resolve(import.meta.dirname, 'src/lib/composed-framing.ts'),
       '@open-walnut/send-targets': path.resolve(import.meta.dirname, 'src/lib/send-targets.ts'),
       '@open-walnut/outbound-send-call': path.resolve(import.meta.dirname, 'src/lib/outbound-send-call.ts'),
       '@open-walnut/three-way-merge': path.resolve(import.meta.dirname, 'src/lib/three-way-merge.ts'),

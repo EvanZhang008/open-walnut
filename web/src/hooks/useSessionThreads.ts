@@ -560,7 +560,7 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
   /**
    * One send path for the composer (spec 5.4, 7.2).
    *  - Root page: a plain send; when the newest turn is in a question, the text
-   *    leads with `(Back to the main conversation)` (composeOrientedText).
+   *    leads with BACK_TO_MAIN_LINE (composeOrientedText).
    *  - Pending page (the first send of an Ask): a pre-assigned uuid names the
    *    row before it exists, the text quotes the passage (composeAnchoredText),
    *    the anchor and the question's meta go out in ONE PATCH, and the page
@@ -633,7 +633,7 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
       metaEntries.push({ headId: userUuid, status: 'open', titleState: 'pending', question: message.slice(0, 400), seq, thread });
     } else {
       thread = threadIdOfKey(r, key, issuedRef.current);
-      text = keepCommandFirst(message, (t) => composeOrientedText(t, { latestKey, currentKey: key, titleOfKey }));
+      text = keepCommandFirst(message, (t) => composeOrientedText(t, { latestKey, currentKey: key, titleOfKey, threadOfKey: () => thread }));
       if (node && statusOf(node, r.meta.index) === 'older') metaEntries.push({ headId: node.headId, status: 'open' });
     }
     persistAnchor(anchor, metaEntries);
