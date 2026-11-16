@@ -203,16 +203,16 @@ test('task, letter and external URL links activate through pointer and keyboard 
   const external = await popup;
   await expect(external.getByRole('heading', { name: 'External design' })).toBeVisible();
   await external.close();
-  // A task link opens on Home as every task reference does (useOpenTask, 178667afb), never a
-  // panel beside the Org page: the worker has no session, so it is selected in Home's list.
-  const onHome = async () => {
-    await expect.poll(() => new URL(page.url()).pathname).toBe('/');
-    await expect(page.locator(`#home-task-navigation [data-task-id="${workerId}"]`).and(page.locator('.task-focused, .todo-pinned-card-active'))).toHaveCount(1, { timeout: 15_000 });
-    await expect(page.getByTestId('org-side')).toHaveCount(0);
+  // A task link clicked on the Org page opens there, beside the node's chat (useOpenTask,
+  // 56685857d); only a task clicked on another page goes to Home.
+  const besideOrg = async () => {
+    await expect(page.getByTestId('org-side')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('org-side-title')).toHaveText(`Output worker ${stamp}`);
+    expect(new URL(page.url()).pathname).toBe('/org');
     await expect(page.locator('.task-detail-modal')).toHaveCount(0);
   };
   await click(page, summary.locator('a.task-link'));
-  await onHome();
+  await besideOrg();
   await threads(page);
   const composer = page.getByRole('textbox', { name: /^Send a message to this session/ }).first();
   await tabTo(page, composer, summary.locator('a.letter-link'));
@@ -221,7 +221,7 @@ test('task, letter and external URL links activate through pointer and keyboard 
   await closeLinkedLetter(page);
   await tabTo(page, composer, summary.locator('a.task-link'));
   await page.keyboard.press('Enter');
-  await onHome();
+  await besideOrg();
   await threads(page);
   await tabTo(page, composer, website);
   const keyboardPopup = context.waitForEvent('page', { timeout: 15_000 });
