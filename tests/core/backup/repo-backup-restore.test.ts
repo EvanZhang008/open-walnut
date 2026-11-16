@@ -238,7 +238,7 @@ describe('retention', () => {
     expect(kept.size).toBeLessThanOrEqual(11);
     // Never two kept in one day.
     expect(days.size).toBe(kept.size);
-    const weeks = new Set(keptDates.map(isoWeekKey));
+    const weeks = new Set(keptDates.map((d) => isoWeekKey(d)));
     expect(weeks.size).toBeGreaterThanOrEqual(4);
   });
 
@@ -246,6 +246,8 @@ describe('retention', () => {
     expect(isoWeekKey(new Date(2026, 11, 31))).toBe('2026-W53');
     expect(isoWeekKey(new Date(2027, 0, 4))).toBe('2027-W1');
     expect(isoWeekKey(new Date(2025, 11, 29))).toBe('2026-W1');
+    // Read in UTC only when asked: 23:30 UTC on a Sunday is still that week there.
+    expect(isoWeekKey(new Date(Date.UTC(2026, 10, 15, 23, 30)), { utc: true })).toBe('2026-W46');
   });
 
   it('prune forgets old snapshots, frees their packs, and every kept one still restores', async () => {

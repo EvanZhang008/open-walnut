@@ -31,8 +31,10 @@ const dayKey = (d: Date, utc: boolean): string => utc
   ? `${d.getUTCFullYear()}-${d.getUTCMonth() + 1}-${d.getUTCDate()}`
   : `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
 
-/** ISO 8601 week ("2026-W45"), in local time unless `utc`. */
-export function isoWeekKey(d: Date, utc = false): string {
+/** ISO 8601 week ("2026-W45"), in local time unless `utc`. The zone is an option, not a second
+ *  positional flag: `dates.map(isoWeekKey)` passed each index as it and read all but the first
+ *  date in UTC (2026-11-16, the retention test in a US time zone). */
+export function isoWeekKey(d: Date, { utc = false }: { utc?: boolean } = {}): string {
   const t = utc
     ? new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()))
     : new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
@@ -65,7 +67,7 @@ export function selectKept(items: ReadonlyArray<{ id: string; createdAt: string 
       kept.add(s.id);
     }
     if (policy.oldestOfDay && days.has(dk)) oldest.set(dk, s.id);
-    const wk = isoWeekKey(d, utc);
+    const wk = isoWeekKey(d, { utc });
     if (!weeks.has(wk) && weeks.size < policy.weekly) {
       weeks.add(wk);
       kept.add(s.id);
