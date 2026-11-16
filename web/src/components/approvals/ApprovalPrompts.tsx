@@ -107,6 +107,15 @@ export function ApprovalButtons({ a, s }: { a: Approval; s: ApprovalsState }) {
           Unlock to approve
         </button>
       )}
+      {/* Approve and Deny always come together (2026-11-15, the user, on a sheet that showed Deny
+          alone: "你那个到底在哪里"): one this window cannot approve keeps its Approve, dimmed, and the
+          note above says where to approve it. */}
+      {!kind && !unlockUndecided(s, a) && !unlockApproves(s, a) && (
+        <button type="button" className="approval-btn approval-btn-approve" data-testid="approval-approve-elsewhere" disabled
+          title={noApproveReason(s, a)}>
+          Approve
+        </button>
+      )}
       {kind && (
         <button type="button" className="approval-btn approval-btn-approve" disabled={!!working}
           onClick={(e) => { e.stopPropagation(); void decideApproval(a, 'approve', kind === 'touch-id'); }}>

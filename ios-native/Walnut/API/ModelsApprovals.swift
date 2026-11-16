@@ -13,6 +13,8 @@ struct ApprovalRequester: Codable, Equatable, Hashable {
     let sessionId: String?
     let cwd: String?
     let command: String?
+    /// Asked on the computer the Walnut server runs on (its host name there is often a container's hash).
+    var local: Bool? = nil
 }
 
 /// What Walnut read when it was asked (src/core/approvals/asker-context.ts); only the parts the
@@ -136,7 +138,8 @@ struct Approval: Codable, Identifiable, Equatable, Hashable {
         if let title = requester.taskTitle, !title.isEmpty { who = "Task \u{201C}\(title)\u{201D}" }
         else if let command = requester.command, !command.isEmpty { who = command }
         else { who = "A script" }
-        return "\(who) on \(requester.host)"
+        // A container's hash (842f578d365e) tells the person nothing: say which computer it is.
+        return "\(who) on \(requester.local == true ? "the computer Walnut runs on" : requester.host)"
     }
 
     var expiresDate: Date? { ApprovalDates.parse(expiresAt) }

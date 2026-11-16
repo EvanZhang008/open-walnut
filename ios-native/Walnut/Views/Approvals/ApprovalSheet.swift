@@ -85,7 +85,7 @@ struct ApprovalSheet: View {
                 if !stacked { Spacer() }
                 if approval.isPending, let end = approval.expiresDate {
                     TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                        Text(Self.left(until: end, now: ctx.date))
+                        Text(end <= ctx.date ? "Expired" : Self.left(until: end, now: ctx.date))
                             .font(.footnote.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
@@ -124,48 +124,95 @@ struct ApprovalSheet: View {
         }
     }
 
-    @ViewBuilder private var footer: some View {
-        if approval.isPending {
+    /// The bottom bar, read again every second: a request whose time ran out while the sheet is
+    /// open says so at once instead of keeping buttons that can only fail (2026-11-15).
+    private var footer: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { ctx in
+            let state = Self.footer(for: approval, now: ctx.date, canSign: center.canSign(approval),
+                                    whereToApprove: center.whereToApprove(approval))
+            footerBody(state)
+                // The whole bar, in every state: the end state once drew as a small box in the
+                // middle of the bar (the user, 2026-11-15: "just a small box of deny").
+                .frame(maxWidth: .infinity)
+                .animation(.easeInOut(duration: 0.2), value: state)
+        }
+    }
+
+    @ViewBuilder private func footerBody(_ state: Footer) -> some View {
+        switch state {
+        case let .answer(approve, blocked):
             VStack(spacing: 10) {
-                if approval.isBiometric && !center.canSign(approval) {
-                    Text(center.whereToApprove(approval))
-                        .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                if let blocked {
+                    Label(blocked, systemImage: "info.circle")
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("approval.blocked")
                 }
                 let buttons = stacked ? AnyLayout(VStackLayout(spacing: 10)) : AnyLayout(HStackLayout(spacing: 12))
                 buttons {
+                    // Approve and Deny always come together; one this phone cannot approve keeps its
+                    // Approve, dimmed, under the line that says where to approve it.
                     if !stacked { denyButton }
-                    if !approval.isBiometric {
-                        Button { run("approve", signed: false) } label: {
-                            Text(working == "approve" ? "Approving…" : "Approve").frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                        .accessibilityIdentifier("approval.approve")
-                    } else if center.canSign(approval) {
-                        Button { run("approve", signed: true) } label: {
-                            Label(working == "approve" ? "Face ID…" : "Approve with Face ID", systemImage: "faceid")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                        .accessibilityIdentifier("approval.approve")
-                    }
-                    // Stacked, Approve leads and Deny comes under it.
+                    approveButton(approve, blocked: blocked != nil)
                     if stacked { denyButton }
                 }
                 .disabled(working != nil)
             }
-        } else {
+            .transition(.opacity)
+        case let .ended(line, status):
             VStack(spacing: 10) {
-                Label(Self.endLine(approval), systemImage: approval.status == "approved" ? "checkmark.circle.fill" : "xmark.circle")
+                Label(line, systemImage: status == "approved" ? "checkmark.circle.fill" : "xmark.circle")
                     .font(.headline)
-                    .foregroundStyle(approval.status == "approved" ? .green : approval.status == "denied" ? .red : .secondary)
+                    .foregroundStyle(status == "approved" ? .green : status == "denied" ? .red : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.center)
                     .accessibilityIdentifier("approval.result")
-                Button("Done") { center.close(approval) }
+                Button { center.close(approval) } label: { Text("Done").frame(maxWidth: .infinity) }
                     .buttonStyle(.bordered)
                     .controlSize(.large)
+                    .accessibilityIdentifier("approval.done")
             }
+            .transition(.opacity)
         }
+    }
+
+    private func approveButton(_ style: ApproveStyle, blocked: Bool) -> some View {
+        Button { run("approve", signed: style == .faceID) } label: {
+            Group {
+                if style == .faceID {
+                    Label(working == "approve" ? "Face ID\u{2026}" : "Approve with Face ID", systemImage: "faceid")
+                } else {
+                    Text(working == "approve" ? "Approving\u{2026}" : "Approve")
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .disabled(blocked)
+        .accessibilityIdentifier("approval.approve")
+    }
+
+    enum ApproveStyle: Equatable { case tap, faceID }
+
+    /// What the bottom bar offers for one approval at one moment.
+    enum Footer: Equatable {
+        /// Still waiting: Deny and Approve, always both. `blocked`: why this phone cannot approve
+        /// it and where to (Approve then shows dimmed).
+        case answer(approve: ApproveStyle, blocked: String?)
+        /// Answered, withdrawn or out of time: one line that says which, and Done. No answer buttons.
+        case ended(line: String, status: String)
+    }
+
+    static func footer(for a: Approval, now: Date, canSign: Bool, whereToApprove: @autoclosure () -> String) -> Footer {
+        if a.isPending, let end = a.expiresDate, end <= now {
+            return .ended(line: "Expired: nobody answered in time", status: "expired")
+        }
+        guard a.isPending else { return .ended(line: endLine(a), status: a.status) }
+        guard a.isBiometric else { return .answer(approve: .tap, blocked: nil) }
+        return .answer(approve: .faceID, blocked: canSign ? nil : whereToApprove())
     }
 
     private var denyButton: some View {
@@ -198,15 +245,27 @@ struct ApprovalSheet: View {
         return String(format: "%d:%02d left", s / 60, s % 60)
     }
 
+    /// Where it was answered, as the person knows the device: the Mac app's own name is its host's
+    /// (a hash in a container), so it is called the Mac app; a phone by its name.
+    static func deviceWords(_ answer: ApprovalAnswerRecord) -> String? {
+        if answer.device.kind == "mac-app" { return "in the Walnut Mac app" }
+        let name = answer.device.name.trimmingCharacters(in: .whitespaces)
+        return name.isEmpty || name == "unknown" ? nil : "on \(name)"
+    }
+
     static func endLine(_ a: Approval) -> String {
         switch a.status {
         case "approved":
             let how = a.answer?.mode != "biometric" ? "with a tap"
                 : a.answer?.device.kind == "mac-app" ? "with Touch ID" : "with Face ID"
-            return "Approved on \(a.answer?.device.name ?? "a device") \(how)"
-        case "denied": return "Denied on \(a.answer?.device.name ?? "a device")"
+            guard let device = a.answer.flatMap(deviceWords) else { return "Approved" }
+            return "Approved \(device) \(how)"
+        case "denied":
+            guard let device = a.answer.flatMap(deviceWords) else { return "Denied" }
+            return "Denied \(device)"
         case "expired": return "Expired: nobody answered in time"
-        default: return "Withdrawn by the script"
+        case "canceled": return "Withdrawn: the script stopped asking"
+        default: return "No longer waiting for an answer"
         }
     }
 }

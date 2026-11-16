@@ -140,8 +140,13 @@ final class ApprovalCenter {
 
     /// Where to approve one this phone cannot sign, naming the device that can (never a bare Deny).
     func whereToApprove(_ a: Approval) -> String {
-        if let reason = signReason { return reason }
         let onMac = "in the Walnut Mac app with Touch ID"
+        // Why this phone cannot sign, and always where it can be approved instead.
+        if let reason = signReason {
+            let signers = keys.filter { a.boundTo.contains($0.id) }
+            let boundToPhone = !signers.isEmpty && signers.allSatisfy { $0.kind == "iphone" }
+            return boundToPhone ? reason : "\(reason) Or approve it \(onMac)."
+        }
         if !a.boundTo.isEmpty && !a.boundTo.contains(myKey?.id ?? "") {
             let kind = keys.first { a.boundTo.contains($0.id) }?.kind
             return "Approve it \(kind == "iphone" ? "on the iPhone it names, with Face ID" : onMac): only that device can sign this one."

@@ -5,7 +5,7 @@
  *
  *  - tap: Approve and Deny each reach the asker, used once;
  *  - biometric with no signing device: the card asks for a tap and says why;
- *  - biometric with a device: a browser offers no Approve, says to use Face ID, and Deny works;
+ *  - biometric with a device: a browser's Approve is dimmed beside Deny, the card says to use Face ID, and Deny works;
  *  - Needs you: one line on Home (counted there, no title or buttons of its own) whose click
  *    opens the dialog in the order the requests came, the corner card on every page holding the
  *    buttons and staying until it is answered, and
@@ -231,7 +231,9 @@ test('biometric: a tap with a reason when no device signs, then Face ID only onc
   await expect(bioCard).toBeVisible({ timeout: 15_000 })
   await expect(bioCard.locator('.approval-kicker')).toContainText('Face ID')
   await expect(bioCard.locator('.approval-note')).toContainText('Approve it on your iPhone with Face ID')
-  await expect(bioCard.getByRole('button', { name: /Approve/ })).toHaveCount(0)
+  // Approve stays beside Deny, dimmed: never Deny alone (2026-11-15).
+  await expect(bioCard.getByTestId('approval-approve-elsewhere')).toBeDisabled()
+  await expect(bioCard.locator('.approval-btn-approve:not([disabled])')).toHaveCount(0)
   await bioCard.getByRole('button', { name: 'Deny' }).click()
   expect((await waitFor(request, bio.approval.id, bio.waitToken)).approval.status).toBe('denied')
 })
@@ -824,7 +826,8 @@ test('with a device that signs, turning approvals off waits for its Face ID, fro
     await expect.poll(async () => (await (await request.get(`/api/v1/approvals/${first.approval.id}`)).json()).approval.status).toBe('approved')
     const dialog = page.getByTestId('approval-dialog')
     await expect(dialog).toContainText('Turn approvals off', { timeout: 15_000 })
-    await expect(dialog.getByRole('button', { name: /^Approve/ })).toHaveCount(0)
+    await expect(dialog.getByTestId('approval-approve-elsewhere')).toBeDisabled()
+    await expect(dialog.locator('.approval-btn-approve:not([disabled])')).toHaveCount(0)
     await expect(page.getByTestId('approval-stopped-asking')).toHaveCount(0)
     expect(await askMeNow()).toBe(true)
     if (process.env.APR_SHOTS) await dialog.screenshot({ path: `${process.env.APR_SHOTS}/turn-off-dialog.png` })
