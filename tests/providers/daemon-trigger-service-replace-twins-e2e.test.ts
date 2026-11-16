@@ -187,10 +187,11 @@ describe.skipIf(!BUN)('a --service daemon replaced by the other twin', () => {
     expect(await a.rpc({ cmd: 'triggers.ack', triggerId: ID, seq: told.seq, home: WALNUT })).toMatchObject({ acked: true })
     expect(fs.existsSync(stateFile), `the memory is in the install root: ${stateFile}`).toBe(true)
     const before = readState()
-    for (const name of ['.open-walnut/tmp/trigger-state', '.local/state']) {
-      const p = path.join(HOME, name, `${ID}.json`)
-      expect(fs.existsSync(p), `nothing under ${p}`).toBe(false)
-    }
+    // Every copy of it in the whole tree is in the install root (the Walnut's own, and the shared
+    // one a downgraded daemon reads): none in the runtime dir, none under HOME.
+    const copies = (fs.readdirSync(t, { recursive: true }) as string[]).filter((f) => path.basename(f) === `${ID}.json`).map((f) => path.join(t, f))
+    expect(copies).toContain(stateFile)
+    for (const c of copies) expect(c.startsWith(path.join(STATE_DIR, 'trigger-state') + path.sep), `${c} is in the install root`).toBe(true)
 
     // The replace: the old binary stops, the runtime dir goes with it, the other twin starts.
     await a.stop()

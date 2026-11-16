@@ -86,11 +86,13 @@ describe('an id the script keeps reporting stays seen', () => {
     expect(state.seen['kept-1']).toBe(NOW + 20 * DAY);
   });
 
-  it('a stamp never moves back (a clock that jumped back)', () => {
+  it('a stamp a clock that ran ahead left is brought back to now, so the id can still age out', () => {
     const state = emptyHostState(NOW);
+    run(state, { fire: true, items: [{ id: 'a' }] }, NOW + 365 * DAY);
     run(state, { fire: true, items: [{ id: 'a' }] }, NOW);
-    run(state, { fire: true, items: [{ id: 'a' }] }, NOW - 60_000);
     expect(state.seen.a).toBe(NOW);
+    run(state, { fire: true, items: [{ id: 'b' }] }, NOW + 31 * DAY);
+    expect(state.seen.a, 'not reported for 31 days: forgotten').toBeUndefined();
   });
 
   // The class: every outcome of a run that read the script's items. A new outcome added to
@@ -171,6 +173,19 @@ describe('a line about a seen item leaves the input, by its id or its title', ()
     expect(inputForNewItems(text, [fresh], [old])).toBe(text);
     // The same title on a new and an old item: the line is the new one's.
     expect(inputForNewItems('[open] 1 ' + old.title.slice(7), [{ ...fresh, title: old.title }], [old])).toBe('[open] 1 ' + old.title.slice(7));
+  });
+
+  // 2026-11-16 review: a new item named in its line only by a short title, or by its title cut
+  // short, lost that line to an old item whose title the line also held.
+  it('a new item named by a short title, or by its title cut short, keeps its line', () => {
+    const old = { id: 'blocked|app|beta|1', title: '[blocked] web-app release blocked at the beta stage' };
+    const line = '[blocked] a1 web-app release blocked at the beta stage: rollback failed';
+    expect(inputForNewItems(line, [{ id: 'n1', title: 'rollback failed' }], [old])).toBe(line);
+    const cut = '- b2 web-app release blocked at the beta stage: integration te...';
+    expect(inputForNewItems(cut, [{ id: 'n2', title: '[blocked] web-app release blocked at the beta stage: integration tests failed' }], [old])).toBe(cut);
+    // The old item's own line still goes.
+    expect(inputForNewItems(`${line}\n[blocked] c3 web-app release blocked at the beta stage`, [{ id: 'n3', title: 'rollback failed' }], [old]))
+      .toBe(line);
   });
 
   it('a short title is no proof a line is about it; an item with no title is matched by id only', () => {

@@ -539,7 +539,9 @@ export function fireBudgetNextAtMs(def: TriggerDef, state: TriggerHostState, now
  */
 export function refreshSeen(state: TriggerHostState, items: readonly TriggerItem[] | undefined, nowMs: number): void {
   if (!items) return;
-  for (const it of items) if (it.id in state.seen && state.seen[it.id] < nowMs) state.seen[it.id] = nowMs;
+  // Always this run's time, a stamp from a clock that ran ahead included: left in the future it
+  // would never age out, and would head the SEEN_MAX newest for as long as the clock was ahead.
+  for (const it of items) if (it.id in state.seen) state.seen[it.id] = nowMs;
 }
 
 export function pruneSeen(state: TriggerHostState, nowMs: number): void {
@@ -722,19 +724,19 @@ function namesId(line: string, id: string): boolean {
  * "[tag]", since a script often writes its own line as "[tag] <its short id> <title>".
  * Too short to be the item's own words: none.
  */
-function titleWords(item: TriggerItem): string | undefined {
+function titleWords(item: TriggerItem, min: number): string | undefined {
   if (typeof item.title !== 'string') return undefined;
   const words = item.title.replace(/^\s*\[[^\]\n]{1,40}\]\s*/, '').trim();
-  return words.length >= SEEN_TITLE_MATCH_MIN ? words : undefined;
+  return words.length >= min ? words : undefined;
 }
 
 interface ItemNames { id?: string; title?: string }
 
-function namesOf(items: readonly TriggerItem[], minId: number): ItemNames[] {
-  return items.map((it) => ({
-    ...(it.id && it.id.length >= minId ? { id: it.id } : {}),
-    ...(titleWords(it) ? { title: titleWords(it) } : {}),
-  }));
+function namesOf(items: readonly TriggerItem[], minId: number, minTitle: number): ItemNames[] {
+  return items.map((it) => {
+    const title = titleWords(it, minTitle);
+    return { ...(it.id && it.id.length >= minId ? { id: it.id } : {}), ...(title ? { title } : {}) };
+  });
 }
 
 function namesItem(line: string, n: ItemNames): boolean {
@@ -755,10 +757,15 @@ function namesItem(line: string, n: ItemNames): boolean {
  */
 export function inputForNewItems(input: string, newItems: readonly TriggerItem[], seenItems: readonly TriggerItem[]): string | undefined {
   const freshIds = new Set(newItems.map((it) => it.id));
-  // Any new id names its line, however short; only a longer seen one drops a line ("12" is too
-  // likely to be some other number in the text).
-  const fresh = namesOf(newItems, 1);
-  const seen = namesOf(seenItems.filter((it) => !freshIds.has(it.id)), SEEN_ID_MATCH_MIN)
+  // Keeping a line is the safe side, so a new item claims its line on less: any id, and a title
+  // of SEEN_ID_MATCH_MIN chars. Only a longer seen id or title drops a line ("12" is too likely to
+  // be some other number in the text).
+  const fresh = namesOf(newItems, 1, SEEN_ID_MATCH_MIN);
+  const freshTitles = fresh.flatMap((n) => (n.title ? [n.title] : []));
+  const seen = namesOf(seenItems.filter((it) => !freshIds.has(it.id)), SEEN_ID_MATCH_MIN, SEEN_TITLE_MATCH_MIN)
+    // An old title inside a new one ("X blocked" and "X blocked: rollback failed") is no proof:
+    // the line may be the new item's, its title cut short by the script.
+    .map((n) => (n.title && freshTitles.some((t) => t.includes(n.title!)) ? { ...n, title: undefined } : n))
     .filter((n) => n.id || n.title);
   if (seen.length === 0) return input;
   const kept: string[] = [];
