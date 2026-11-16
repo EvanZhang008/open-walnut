@@ -623,8 +623,8 @@ final class RoutinesUITests: XCTestCase {
         let search = app.textFields["routines.editor.taskSearch"]
         search.tap()
         search.typeText("firmware")
-        let narrowed = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: element(app, "routines.editor.taskHit.t-router-swap"))
-        wait(for: [narrowed], timeout: 5)
+        // The search goes to the server and back: on a busy CI simulator that took longer than 5 s.
+        XCTAssertTrue(waitToMatch(element(app, "routines.editor.taskHit.t-router-swap"), "exists == false"), "the search never narrowed the list")
         let hit = element(app, "routines.editor.taskHit.t-router-fw")
         XCTAssertTrue(hit.exists, "the search lost its match")
         let sent = try XCTUnwrap(store.taskQueries.last { $0["q"] == "firmware" }, "the search never reached the server")
@@ -675,8 +675,9 @@ final class RoutinesUITests: XCTestCase {
         let upper = element(app, "routines.row.r-acme-1")
         reveal(app, upper)
         nudge(app, upper)
+        waitStill(upper)
         upper.tap()
-        XCTAssertTrue(app.buttons["routines.edit.r-acme-1"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["routines.edit.r-acme-1"].waitForExistence(timeout: 15), "the tapped row did not open")
         settle()
         let lower = element(app, "routines.row.r-acme-3")
         reveal(app, lower)
@@ -693,7 +694,9 @@ final class RoutinesUITests: XCTestCase {
         // Read as fast as the frames come: no read may find it moved (QA saw one frame off).
         var reads: [CGFloat] = []
         for _ in 0..<6 { reads.append(lower.frame.minY) }
-        XCTAssertTrue(app.buttons["routines.edit.r-acme-3"].waitForExistence(timeout: 5))
+        // A tap on CI returns only once the app is idle (5.7 s there), so the row's details get the
+        // shared wait, not 5 s.
+        XCTAssertTrue(app.buttons["routines.edit.r-acme-3"].waitForExistence(timeout: 15), "the tapped row did not open")
         usleep(250_000)
         reads.append(lower.frame.minY)
         for y in reads { XCTAssertEqual(y, before, accuracy: 4, "the tapped row moved while the row above closed: \(reads)") }
@@ -734,12 +737,15 @@ final class RoutinesUITests: XCTestCase {
         place(app, lower)
         settle()
         XCTAssertFalse(tall.isHittable, "the tall row's line is on screen: the row tapped is not far below it")
+        waitStill(lower)
         let before = lower.frame.minY
         shot("33b-tall-row-before")
         lower.tap()
         var reads: [CGFloat] = []
         for _ in 0..<6 { reads.append(lower.frame.minY) }
-        XCTAssertTrue(app.buttons["routines.edit.r-acme-3"].waitForExistence(timeout: 5))
+        // A tap on CI returns only once the app is idle (5.7 s there), so the row's details get the
+        // shared wait, not 5 s.
+        XCTAssertTrue(app.buttons["routines.edit.r-acme-3"].waitForExistence(timeout: 15), "the tapped row did not open")
         usleep(250_000)
         reads.append(lower.frame.minY)
         for y in reads { XCTAssertEqual(y, before, accuracy: 4, "the tapped row moved while the tall row closed: \(reads)") }

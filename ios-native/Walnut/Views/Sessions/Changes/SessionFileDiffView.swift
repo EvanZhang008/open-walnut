@@ -528,7 +528,7 @@ struct SessionFileDiffView: View {
     private func flash(_ text: String) {
         notice = text
         Task {
-            try? await Task.sleep(for: .seconds(2.5))
+            try? await Task.sleep(for: .seconds(NoticeTiming.seconds(2.5)))
             if notice == text { notice = nil }
         }
     }
