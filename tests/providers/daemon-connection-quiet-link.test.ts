@@ -84,6 +84,45 @@ describe('a quiet link, asked again', () => {
     } finally { await done() }
   }, 20_000)
 
+  // 2026-11-16 18:57Z: a 143 MB upload rode clouddev's host network link; its read probe got no pong
+  // in 3 s (the ping waited behind the upload) and closed a link that was carrying it.
+  it('a host network link this Mac is still sending on is busy, not dead: the read probe leaves it up; with nothing going up it is closed', async () => {
+    const slowPath = { delayMs: 1_500, bytesPerSec: 256 * 1024, shared: true, queueBytes: 64 * 1024 }
+    const { conn, proxy, done } = await linked('pcbox', true)
+    try {
+      await wireQuiet(conn)
+      // A slow path, alive: every chunk waits 1.5 s, 256 KB/s each way, and it pushes back.
+      proxy.setMode('slow', slowPath)
+      void conn.send('fs.writePart', { path: '/tmp/q', offset: 0, data: 'A'.repeat(3 * 1024 * 1024) }, 60_000).catch(() => null)
+      await sleep(300)
+      expect(await conn.probeLiveness(600)).toBe(false)   // no pong in time: the caller hears so
+      await sleep(200)
+      expect(conn.connected).toBe(true)                  // and the link carrying the upload stays
+    } finally { await done() }
+    // The same slow path with nothing going up: the pong comes after the deadline, and the link is closed.
+    const idle = await linked('pcbox-idle', true)
+    try {
+      await wireQuiet(idle.conn)
+      idle.proxy.setMode('slow', slowPath)
+      expect(await idle.conn.probeLiveness(600)).toBe(false)
+      await sleep(200)
+      expect(idle.conn.connected).toBe(false)
+    } finally { await idle.done() }
+  }, 40_000)
+
+  it('after a network change, a host network link that went dark is closed even while this Mac was sending on it (review)', async () => {
+    const { conn, proxy, done } = await linked('pcbox-moved', true)
+    try {
+      await wireQuiet(conn)
+      void conn.send('fs.writePart', { path: '/tmp/q', offset: 0, data: 'A'.repeat(1024 * 1024) }, 60_000).catch(() => null)
+      await sleep(200)
+      await blackhole(proxy)
+      noteHostSignal(Date.now())
+      expect(await conn.recheckQuiet({ quietMs: 0, deadlineMs: 300 })).toBe('dropped')
+      expect(conn.connected).toBe(false)
+    } finally { await done() }
+  }, 30_000)
+
   it('a silent SSH host is only reported silent and left to its ping loop: a busy daemon can hold a pong there', async () => {
     const { conn, proxy, done } = await linked()
     try {

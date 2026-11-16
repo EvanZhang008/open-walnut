@@ -1758,6 +1758,8 @@ export class DaemonConnection {
     const changed = this._connected !== value
     this._connected = value
     if (changed) this._connectionEpoch++
+    // What went on the last connection's path says nothing about the next one (probe exemption).
+    if (changed && value) this.sentPerSecond = []
     // Uploads waiting for the bulk channel meet the lost link now, not at the end of their wait.
     if (!value) { this._helloConfirmed = false; this.bulkOwnLink = false; this.releaseBulkWaiters() }
     if (changed && value) this._bootStart?.schedule()
@@ -3076,7 +3078,10 @@ export class DaemonConnection {
       const timer = setTimeout(onTimeout, timeoutMs)
 
       this.pendingCommands.set(id, { resolve, reject, timer, cmd, startedAt, traceId, socket: sentOn, bulk: !!bulkSocket })
-      if (!this.ownBulkSocket(sentOn)) this.mainSentByCmd.set(cmd, (this.mainSentByCmd.get(cmd) ?? 0) + message.length)
+      if (!this.ownBulkSocket(sentOn)) {
+        this.mainSentByCmd.set(cmd, (this.mainSentByCmd.get(cmd) ?? 0) + message.length)
+        this.noteLinkSent(message.length)
+      }
       if (ownBulk) this.bulkOwnWritten += message.length
       sentOn.send(message)
     })
@@ -3087,9 +3092,32 @@ export class DaemonConnection {
     return this.bulkSocketOwn && !!socket && socket === this.bulkWs
   }
 
+  /** What this Mac has written on the link: its main socket and a bulk socket that rides the same path. */
+  private linkBytesWritten(ws: WebSocket): number {
+    return socketBytesWritten(ws) + socketBytesWritten(this.sharedBulkWs)
+  }
+
   /** The bulk socket when it shares the session link's connection (its bytes are that link's), else null. */
   private get sharedBulkWs(): WebSocket | null {
     return this.bulkSocketOwn ? null : this.bulkWs
+  }
+
+  /** Bytes put on the session link's path, per second, for the last few seconds (sentOnLinkWithin). */
+  private sentPerSecond: Array<[number, number]> = []
+  private noteLinkSent(bytes: number): void {
+    const second = Math.floor(Date.now() / 1000)
+    const last = this.sentPerSecond[this.sentPerSecond.length - 1]
+    if (last && last[0] === second) last[1] += bytes
+    else this.sentPerSecond.push([second, bytes])
+    const oldest = second - Math.ceil(DaemonConnection.PROBE_SENDING_LOOKBACK_MS / 1000)
+    while (this.sentPerSecond.length > 0 && this.sentPerSecond[0][0] < oldest) this.sentPerSecond.shift()
+  }
+  /** Bytes this Mac put on the session link's path within the last `ms`. */
+  private sentOnLinkWithin(ms: number): number {
+    const from = Math.floor((Date.now() - ms) / 1000)
+    let n = 0
+    for (const [second, bytes] of this.sentPerSecond) if (second >= from) n += bytes
+    return n
   }
 
   /** A command other than `except` waits on the bulk socket now (its reply can be MB-scale). */
@@ -3595,7 +3623,7 @@ export class DaemonConnection {
       for (let round = 1; round <= DaemonConnection.UPSTREAM_MAX_ROUNDS; round++) {
         const startedAt = Date.now()
         const readAt = socketBytesRead(ws) + socketBytesRead(this.sharedBulkWs)
-        const wroteAt = socketBytesWritten(ws) + socketBytesWritten(this.sharedBulkWs)
+        const wroteAt = this.linkBytesWritten(ws)
         const deadlineMs = Math.min(15_000, Math.max(5_000, 2 * this.roundTripMs + 500))
         try {
           await this.send('ping', {}, deadlineMs)
@@ -3608,7 +3636,7 @@ export class DaemonConnection {
         if (this.ws !== ws || !this._connected || this._lastReplyAt >= startedAt) return
         const spent = Date.now() - since >= DaemonConnection.UPSTREAM_DEAD_MS
         const sending = [...this.pendingCommands.values()].some((p) => p.bulk && !this.ownBulkSocket(p.socket))
-          || socketBytesWritten(ws) + socketBytesWritten(this.sharedBulkWs) - wroteAt >= DaemonConnection.UPSTREAM_BUSY_BYTES
+          || this.linkBytesWritten(ws) - wroteAt >= DaemonConnection.UPSTREAM_BUSY_BYTES
         if (sending) {
           if (spent) return
           continue
@@ -3893,6 +3921,7 @@ export class DaemonConnection {
           const message = JSON.stringify(frame)
           assertFrameFits(message, 'a stream frame', this.hostKey)
           this.mainSentByCmd.set('stream', (this.mainSentByCmd.get('stream') ?? 0) + message.length)
+          this.noteLinkSent(message.length)
           ws.send(message)
         },
         // A host server's browser reaching this Mac: into the tunnel port, which
@@ -9546,6 +9575,13 @@ export class DaemonConnection {
    * answered since a signal gets one more window, with one more ping, before the close (`settled`):
    * the deadline scales with round trips measured before the signal, on what may have been another
    * path (review 6: a network change to a healthy path with a 3.5 s round trip was closed at 3 s).
+   * Nor does it close a link this Mac is still sending on: PROBE_SENDING_BYTES put on it in the
+   * last PROBE_SENDING_LOOKBACK_MS can hold the ping behind them past any deadline (2026-11-16
+   * 18:57Z: a 143 MB upload of a host server's build rode clouddev's host network link, its read
+   * probe got no pong in 3 s, and closed it). A path that died stops the sending, so a later
+   * probe still closes it; a check after a wake or a network change closes it whatever was sent
+   * before. Its bytes are counted as they are handed to the socket, never by what
+   * the socket took: a local forward (walnut-net) takes megabytes at once, whatever the path does.
    */
   private startProbe(requestedMs: number, countMiss: boolean, kind: 'read' | 'check'): LivenessProbe | null {
     const ws = this.ws
@@ -9611,13 +9647,17 @@ export class DaemonConnection {
       const heardSome = kind === 'check' && (pongOnly ? this._lastByteAt >= settledAt : anyByte())
       // The relay itself said nothing either: no proof the far side is gone (review 3).
       const relayQuiet = relay !== null && !relay()
-      const closing = this.noSsh && !superseded && !relayQuiet && !heardSome
+      // A read's probe only: after a wake or a network change (a check), bytes sent before it went
+      // into the old path and say nothing of the new one (review: the check must still close fast).
+      const sending = kind === 'read' && this.sentOnLinkWithin(DaemonConnection.PROBE_SENDING_LOOKBACK_MS) >= DaemonConnection.PROBE_SENDING_BYTES
+      const closing = this.noSsh && !superseded && !relayQuiet && !heardSome && !sending
       // Unproven since a signal, the deadline came from the old path's round trips: one more window.
       const confirm = closing && !confirmed && !this.provenSinceSignal()
       log.session.warn('DaemonConnection: no answer to a liveness probe', {
         host: this.hostKey, kind, deadlineMs, roundTripMs: this.roundTripMs, closing: closing && !confirm, extended, pongOnly,
         ...(confirm ? { confirming: true } : {}), ...(confirmed ? { confirmed: true } : {}), ...(superseded ? { superseded: true } : {}),
         ...(relay ? { relayAnswered: !relayQuiet } : {}), ...(heardSome ? { otherSocketHeard: true } : {}),
+        ...(sending ? { stillSending: true } : {}),
       })
       if (!superseded) this._silentVerdict = { at: Date.now(), heard: this._heardBytes, mainBytes: socketBytesRead(ws) }
       if (confirm) {
@@ -9753,6 +9793,9 @@ export class DaemonConnection {
 
   /** At most this long for a probe, whatever the round trip (a link slower than that reads as silent). */
   static readonly PROBE_DEADLINE_MAX_MS = 20_000
+  /** What this Mac put on the link within PROBE_SENDING_LOOKBACK_MS that says it is busy sending, not dead. */
+  static PROBE_SENDING_BYTES = 256 * 1024
+  static PROBE_SENDING_LOOKBACK_MS = 10_000
   /** Round trips kept (the longest of them is the link's). */
   private static readonly RTT_SAMPLES_KEPT = 8
   /** A longer "round trip" is a sleep or a stall, not the link. */
