@@ -82,6 +82,7 @@ export function fullConfigFixture(): Record<string, unknown> {
     self_repair: { enabled: false },
     updates: { auto: true },
     approvals: { ask_me: true },
+    outbound: { sensitive_check: true, sensitive_phrases: ['acme lantern'] },
     ui: { session_panels: 'auto', show_priority: true },
     tag_display: { 'ticket-id:*': 'value' },
     tag_links: { 'ticket:*': 'https://tickets.example.com/{value}' },

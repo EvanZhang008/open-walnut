@@ -33,6 +33,11 @@ export interface RouterItem {
   sender: string
   subject: string
   preview?: string
+  /**
+   * How the receiver reads the whole original itself (a tool call, a permalink), given by the
+   * source. Unset: Walnut names the source's own read (mail: mail_read).
+   */
+  reference?: string
 }
 
 /**

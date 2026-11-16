@@ -131,7 +131,8 @@ describe('the folder picker', () => {
     // The one save: the router's own route, read back before the draft clears.
     expect(dialog).toMatch(/apiPatch<[^>]*>\(`\/api\/v1\/org\/routers\//)
     // New folders are read back before the draft clears, and shown as sent if that read fails.
-    expect(dialog).toMatch(/setSavedFolders\(sent\);\s*\n\s*await refreshRouterAreas\(\)\.catch\([^\n]*\n\s*\}\s*\n[^\n]*\n\s*form\.clear\(sentKey, sentText\)/)
+    // New chat filters are read back the same way (the area's sources carry them).
+    expect(dialog).toMatch(/setSavedFolders\(sent\);\s*\n\s*await refreshRouterAreas\(\)\.catch\([^\n]*\n\s*\} else if \(patch\.filters\) \{\s*\n\s*await refreshRouterAreas\(\)\.catch\([^\n]*\n\s*\}\s*\n[^\n]*\n\s*form\.clear\(sentKey, sentText\)/)
     expect(dialog).toContain('role="dialog"')
     expect(dialog).toContain('aria-modal="true"')
     // The Mail plugin's page draws it, gated on the plugin running.

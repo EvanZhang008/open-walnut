@@ -20,6 +20,8 @@
 .org-router-hint { font-size: 12px; line-height: 1.45; color: var(--fg-secondary); }
 .org-router-sources { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
 .org-router-kind { margin-left: 4px; font-size: 12px; color: var(--fg-secondary); }
+.org-router-filter { display: flex; flex-wrap: wrap; gap: 2px 12px; margin: 2px 0 4px; }
+.org-router-filter .org-router-check { font-size: 13px; }
 .org-router-link-out { color: var(--accent); text-decoration: none; }
 .org-router-link-out:hover { text-decoration: underline; }
 .org-router-check { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 13px; }

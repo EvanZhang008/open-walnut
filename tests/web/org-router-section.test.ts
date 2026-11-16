@@ -516,3 +516,96 @@ describe('router settings', () => {
     expect(fs.existsSync(path.join(ROOT, 'web/src/components/org/OrgRouterRules.tsx'))).toBe(false)
   })
 })
+
+describe('router settings: which chat messages each chat account takes', () => {
+  const { filterTicks, filterInclude, sourceKey, shownRouterValue, editRouterValue, ROUTER_NO_FILTER_LINE, ROUTER_CHAT_SOURCES_NOTE, CHAT_FILTER_KINDS } = settingsMod
+  const SLACK = { kind: 'slack', account: 'T0TEAM' }
+  const KEY = sourceKey(SLACK)
+  const ALL = CHAT_FILTER_KINDS.map((one) => one.label)
+  const base = { name: 'Personal router', links: [], paused: false, folders: ['inbox'] }
+
+  it('shows a saved include as ticks (none saved ticks every kind), and saves every kind as [] (takes all)', () => {
+    expect(ALL).toEqual(['dm', 'mention', 'watched'])
+    expect(filterTicks(undefined)).toEqual(ALL)
+    expect(filterTicks([])).toEqual(ALL)
+    expect(filterTicks(['dm', 'dm', 'mention'])).toEqual(['dm', 'mention'])
+    expect(filterInclude(['watched', 'mention', 'dm'])).toEqual([])
+    expect(filterInclude(['dm', 'dm'])).toEqual(['dm'])
+    // A label the boxes do not show (a channel the person named elsewhere) is kept, never folded to "all".
+    expect(filterInclude([...ALL, 'channel:releases'])).toEqual([...ALL, 'channel:releases'])
+    expect(sourceKey(SLACK)).toBe('slack\nT0TEAM')
+  })
+
+  it('reads the baseline filters from the area\'s chat sources only', () => {
+    const r = task('r', { router_paused: false })
+    expect(routerBaseline(r, [], [{ kind: 'mail', account: 'desk@example.invalid' }])).not.toHaveProperty('filters')
+    expect(routerBaseline(r, [], [{ kind: 'mail', account: 'desk@example.invalid' }, { ...SLACK, include: ['dm'] }, { kind: 'wechat', account: 'wx-1' }]).filters)
+      .toEqual({ [KEY]: ['dm'], 'wechat\nwx-1': ALL })
+  })
+
+  it('sends only the accounts whose filter changed, as the saved include, and never an account it does not read', () => {
+    const saved = { ...base, filters: { [KEY]: ALL, 'wechat\nwx-1': ['dm'] } }
+    expect(routerPatch(saved, { ...saved })).toBeNull()
+    // Same set in another order is no change.
+    expect(routerPatch(saved, { ...saved, filters: { ...saved.filters, [KEY]: ['watched', 'dm', 'mention'] } })).toBeNull()
+    expect(routerPatch(saved, { ...saved, filters: { ...saved.filters, [KEY]: ['dm', 'mention'] } }))
+      .toEqual({ filters: [{ kind: 'slack', account: 'T0TEAM', include: ['dm', 'mention'] }] })
+    // Ticking every kind again is saved as [] (takes all).
+    expect(routerPatch(saved, { ...saved, filters: { ...saved.filters, 'wechat\nwx-1': ALL } }))
+      .toEqual({ filters: [{ kind: 'wechat', account: 'wx-1', include: [] }] })
+    expect(routerPatch(saved, { ...saved, filters: { ...saved.filters, 'slack\nT0GONE': ['dm'] } })).toBeNull()
+    expect(routerPatch(saved, { ...saved, paused: true, filters: { ...saved.filters, [KEY]: ['mention'] } }))
+      .toEqual({ paused: true, filters: [{ kind: 'slack', account: 'T0TEAM', include: ['mention'] }] })
+  })
+
+  it('refuses an account with nothing ticked', () => {
+    expect(routerFormProblem({ ...base, filters: { [KEY]: [] } })).toBe(ROUTER_NO_FILTER_LINE)
+    expect(ROUTER_NO_FILTER_LINE).toBe('Tick at least one kind of message for each chat account, or pause the router.')
+    expect(routerFormProblem({ ...base, filters: { [KEY]: ['dm'] } })).toBe('')
+  })
+
+  it('untouched filters follow the saved value; the first change marks them typed and keeps only accounts still read', () => {
+    const saved = { ...base, filters: { [KEY]: ALL } }
+    const nameOnly = editRouterValue(saved, saved, (v) => ({ ...v, name: 'Renamed' }))
+    expect(nameOnly.filtersTyped).toBeUndefined()
+    // A save elsewhere changed the filter: the untouched draft shows it and sends nothing for it.
+    const after = { ...saved, filters: { [KEY]: ['dm'] } }
+    expect(shownRouterValue(nameOnly, after).filters).toEqual({ [KEY]: ['dm'] })
+    expect(routerPatch(after, shownRouterValue(nameOnly, after))).toEqual({ name: 'Renamed' })
+
+    const ticked = editRouterValue(saved, saved, (v) => ({ ...v, filters: { [KEY]: ['mention'] } }))
+    expect(ticked.filtersTyped).toBe(true)
+    expect(routerPatch(saved, shownRouterValue(ticked, saved))).toEqual({ filters: [{ kind: 'slack', account: 'T0TEAM', include: ['mention'] }] })
+    // The account left the router: its typed ticks are dropped; a new account shows its saved ticks.
+    const moved = { ...base, filters: { 'wechat\nwx-1': ['dm'] } }
+    expect(shownRouterValue(ticked, moved).filters).toEqual({ 'wechat\nwx-1': ['dm'] })
+    expect(shownRouterValue(ticked, base)).not.toHaveProperty('filters')
+  })
+
+  it('renders one group of boxes per chat account, ticked as the value says, with the chat note', () => {
+    const noop = () => {}
+    const html = renderToStaticMarkup(createElement(RouterSettingsBody, {
+      id: 'org-router-settings-r', draftKey: 'draft:org-router-settings:r', area: 'personal',
+      sources: [{ kind: 'mail', account: 'desk@example.invalid' }, SLACK],
+      value: { ...base, filters: { [KEY]: ['dm', 'watched'] } }, leads: [], stale: [], busy: false, error: '', problem: '', dirty: false,
+      justSaved: false, tasksLoading: false, onEdit: noop, onToggleLink: noop, onSave: noop, onDiscard: noop,
+    } as Parameters<typeof RouterSettingsBody>[0]))
+    expect(html.match(/data-testid="org-router-filter"/g)).toHaveLength(1)
+    expect(html).toContain('aria-label="Messages it takes from T0TEAM"')
+    for (const words of ['Direct messages', 'Mentions of you', 'Watched channels']) expect(html).toContain(words)
+    const box = (label: string) => {
+      const input = new RegExp(`data-label="${label}"><input([^>]*)>`).exec(html)?.[1]
+      expect(input, label).toBeDefined()
+      return / checked=""/.test(input!)
+    }
+    expect([box('dm'), box('mention'), box('watched')]).toEqual([true, false, true])
+    expect(html).toContain(ROUTER_CHAT_SOURCES_NOTE)
+    expect(html).toContain('data-kind="slack"')
+  })
+
+  it('keeps a chat account\'s include from the areas list', () => {
+    expect(names.areaSourcesOf({ areas: [{ id: 'personal', sources: [{ ...SLACK, include: ['dm', 7, '', 'mention'] }, { kind: 'wechat', account: 'wx-1', include: [] }] }] }))
+      .toEqual({ personal: [{ ...SLACK, include: ['dm', 'mention'] }, { kind: 'wechat', account: 'wx-1' }] })
+  })
+})
+

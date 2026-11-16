@@ -6,6 +6,24 @@ import { ensureRouterDataVersion, RouterDataVersionError } from './data-version.
 export interface RouterAreaSource {
   kind: RouterSourceKind
   account: string
+  /**
+   * The arrivals of this account the router takes, by the labels its source gives each one (a chat
+   * source: "dm", "mention", "channel:<name>"). An arrival is taken when it carries one of them.
+   * Unset: what the source sends by default. An older Walnut drops the list, which reads as unset.
+   */
+  include?: string[]
+  /** When `include` last changed (ms): the missed-message check never reaches back past it. */
+  includeAt?: number
+}
+
+export const ROUTER_INCLUDE_MAX = 50
+export const ROUTER_LABEL_MAX = 200
+
+/** Whether an arrival with these labels is one the account's router takes (no list: all of them). */
+export function sourceTakes(source: Pick<RouterAreaSource, 'include'> | undefined, labels: readonly string[]): boolean {
+  if (!source?.include?.length) return true
+  const wanted = new Set(source.include.map((one) => one.toLowerCase()))
+  return labels.some((label) => wanted.has(label.toLowerCase()))
 }
 
 export interface RouterArea {
@@ -105,6 +123,9 @@ export const ROUTER_AREA_HOST_MAX = 200
 const TASK_ID_MAX = 200
 const ACCOUNT_MAX = 320
 const MESSAGE_MAX = 1000
+/** The longest account id and message id an item may name (a plugin intake checks against these). */
+export const ROUTER_ACCOUNT_MAX = ACCOUNT_MAX
+export const ROUTER_MESSAGE_MAX = MESSAGE_MAX
 export const ROUTER_CANONICAL_KEY_MAX = 2048
 const AREA_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,79}$/
 export const ROUTER_RULE_ID_PATTERN = /^[A-Za-z0-9][\w.-]{0,59}$/
@@ -182,7 +203,14 @@ function normalizeArea(value: unknown, index: number): RouterArea {
     const key = accountKey(kind, account)
     if (seen.has(key)) throw invalid(`${sourceField} repeats ${kind} account in area ${id}`)
     seen.add(key)
-    return { kind, account }
+    if (source.includeAt !== undefined && (typeof source.includeAt !== 'number' || !Number.isFinite(source.includeAt) || source.includeAt < 0)) {
+      throw invalid(`${sourceField}.includeAt must be a time in milliseconds`)
+    }
+    const at = typeof source.includeAt === 'number' ? { includeAt: source.includeAt } : {}
+    if (source.include === undefined) return { kind, account, ...at }
+    if (!Array.isArray(source.include) || source.include.length > ROUTER_INCLUDE_MAX) throw invalid(`${sourceField}.include must be a list of at most ${ROUTER_INCLUDE_MAX} labels`)
+    const include = [...new Set(source.include.map((one, n) => plainString(one, `${sourceField}.include[${n}]`, ROUTER_LABEL_MAX, { trimmed: true }).trim()))]
+    return include.length ? { kind, account, include, ...at } : { kind, account, ...at }
   })
   if (value.folders === undefined) return { id, name, host, taskIds, sources }
   if (!Array.isArray(value.folders) || value.folders.length > ROUTER_FOLDERS_MAX) throw invalid(`${field}.folders must be a list of at most ${ROUTER_FOLDERS_MAX} folders`)

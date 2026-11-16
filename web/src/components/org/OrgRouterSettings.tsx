@@ -6,7 +6,8 @@
  * one form and one saved value.
  *
  * The dialog shows the area (set at creation, read only), the mailboxes it reads, the folders it
- * watches (picked from the mailboxes' own folder lists, RouterFolderPicker), its name, Paused, and
+ * watches (picked from the mailboxes' own folder lists, RouterFolderPicker), which messages of each
+ * chat account it takes (direct messages, mentions, watched channels), its name, Paused, and
  * the VPs it works with first; Save sends PATCH /api/v1/org/routers/:id with the changed fields only.
  *
  * A link is preferred collaboration, never ownership and never access to a VP's data. A link that
@@ -21,7 +22,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import type { Task } from '@open-walnut/core';
-import { routerAreaFolders, useRouterAreaNames } from './router-area-names';
+import { routerAreaFolders, routerAreaSources, useRouterAreaNames, type RouterAreaSourceRow } from './router-area-names';
 import { setRouterSettingsOpen } from './router-settings-open';
 import { areaIdWords, routerStateWord, vpLinkCount } from './org-channels-model';
 import { RouterFolderPicker, ROUTER_NO_FOLDER_LINE, folderList, sameFolders } from './RouterFolderPicker';
@@ -38,6 +39,10 @@ export interface RouterSettingsValue {
   /** Set once the person changed the folders; while unset the folders follow the saved value (a
    *  save made in the other place included) and are never sent back. */
   foldersFrom?: string[] | string;
+  /** Per chat account (`kind\naccount`), the labels of the arrivals it takes, as ticked. */
+  filters?: Record<string, string[]>;
+  /** Set once the person changed a filter; while unset the filters follow the saved value. */
+  filtersTyped?: boolean;
 }
 
 export interface RouterSettingsPatch {
@@ -45,7 +50,31 @@ export interface RouterSettingsPatch {
   links?: string[];
   paused?: boolean;
   folders?: string[];
+  filters?: Array<{ kind: string; account: string; include: string[] }>;
 }
+
+/** The kinds of chat arrival a filter ticks, by the label the chat source gives each. */
+export const CHAT_FILTER_KINDS: ReadonlyArray<{ label: string; words: string }> = [
+  { label: 'dm', words: 'Direct messages' },
+  { label: 'mention', words: 'Mentions of you' },
+  { label: 'watched', words: 'Watched channels' },
+];
+const CHAT_LABELS = CHAT_FILTER_KINDS.map((one) => one.label);
+
+export const sourceKey = (src: { kind: string; account: string }) => `${src.kind}\n${src.account}`;
+
+/** A saved `include` as the boxes show it: unset ticks every kind. */
+export function filterTicks(include: readonly string[] | undefined): string[] {
+  return include?.length ? [...new Set(include)] : [...CHAT_LABELS];
+}
+
+/** The ticks as the saved `include`: every kind and nothing else is [] (takes all). */
+export function filterInclude(ticks: readonly string[]): string[] {
+  const set = [...new Set(ticks)];
+  return CHAT_LABELS.every((label) => set.includes(label)) && set.every((label) => CHAT_LABELS.includes(label)) ? [] : set;
+}
+
+const sameList = (a: readonly string[], b: readonly string[]) => a.length === b.length && [...a].sort().every((one, i) => one === [...b].sort()[i]);
 
 /** What a link points at now: an open VP, or something that is no longer one. */
 export type RouterLinkState = 'open' | 'closed' | 'not-vp' | 'missing';
@@ -64,13 +93,23 @@ export const ROUTER_SETTINGS_OPEN_EVENT = 'org:router-settings-open';
 
 /** What "Reads from" means: every new mail of these accounts, in the folders it watches. */
 export const ROUTER_SOURCES_NOTE = 'It reads every new mail of these accounts in the folders it watches.';
+/** With a chat account among them: what each one's ticks mean. */
+export const ROUTER_CHAT_SOURCES_NOTE = 'It reads every new mail of these accounts in the folders it watches, and the ticked kinds of message of each chat account.';
+const SOURCE_KIND_WORDS: Record<string, string> = { mail: 'Mail', slack: 'Slack', wechat: 'WeChat' };
+
+export const ROUTER_NO_FILTER_LINE = 'Tick at least one kind of message for each chat account, or pause the router.';
 
 export const ROUTER_LINK_NOTE = 'Links name the VPs it works with first. A link gives no ownership and no access to a VP\'s data.';
 
 /** The router's saved settings, as the form's baseline. */
-export function routerBaseline(task: Pick<Task, 'org_name' | 'title' | 'router_links' | 'router_paused'>, folders: readonly string[] = []): RouterSettingsValue {
+export function routerBaseline(task: Pick<Task, 'org_name' | 'title' | 'router_links' | 'router_paused'>, folders: readonly string[] = [],
+  sources: readonly RouterAreaSourceRow[] = []): RouterSettingsValue {
   // Nothing saved means the plugin's default, the Inbox: shown as the Inbox ticked.
-  return { name: task.org_name || task.title, links: [...(task.router_links ?? [])], paused: task.router_paused !== false, folders: folders.length ? folderList(folders) : ['inbox'] };
+  const chats = sources.filter((src) => src.kind !== 'mail');
+  return {
+    name: task.org_name || task.title, links: [...(task.router_links ?? [])], paused: task.router_paused !== false, folders: folders.length ? folderList(folders) : ['inbox'],
+    ...(chats.length ? { filters: Object.fromEntries(chats.map((src) => [sourceKey(src), filterTicks(src.include)])) } : {}),
+  };
 }
 
 /** Only the fields that changed (null: nothing to save). Links compare as a set. */
@@ -83,19 +122,34 @@ export function routerPatch(saved: RouterSettingsValue, edited: RouterSettingsVa
   if (a.length !== b.length || a.some((id, i) => id !== b[i])) patch.links = [...new Set(edited.links)];
   if (edited.paused !== saved.paused) patch.paused = edited.paused;
   if (!sameFolders(folderList(saved.folders ?? []), folderList(edited.folders ?? []))) patch.folders = folderList(edited.folders ?? []);
+  const filters = Object.entries(edited.filters ?? {}).flatMap(([key, ticks]) => {
+    const before = saved.filters?.[key];
+    if (!before || sameList(filterInclude(before), filterInclude(ticks))) return [];
+    const [kind, ...rest] = key.split('\n');
+    return [{ kind: kind!, account: rest.join('\n'), include: filterInclude(ticks) }];
+  });
+  if (filters.length) patch.filters = filters;
   return Object.keys(patch).length ? patch : null;
 }
 
 /** The form as shown: a draft holds the folders only once they were typed; untouched, they are
  *  the saved ones (a save in Apps › Mail included), so an older draft never sends them back. */
 export function shownRouterValue(draft: RouterSettingsValue, saved: RouterSettingsValue): RouterSettingsValue {
-  return draft.foldersFrom === undefined ? { ...draft, folders: saved.folders } : { ...draft, folders: folderList(draft.folders ?? []) };
+  const shown = draft.foldersFrom === undefined ? { ...draft, folders: saved.folders } : { ...draft, folders: folderList(draft.folders ?? []) };
+  // Untouched filters are the saved ones; a typed draft keeps only the accounts still read.
+  if (!draft.filtersTyped) {
+    if (saved.filters) shown.filters = saved.filters; else delete shown.filters;
+  } else if (saved.filters) {
+    shown.filters = Object.fromEntries(Object.keys(saved.filters).map((key) => [key, draft.filters?.[key] ?? saved.filters![key]!]));
+  } else delete shown.filters;
+  return shown;
 }
 
 /** One edit of the draft; the first change to the folders marks them typed. */
 export function editRouterValue(draft: RouterSettingsValue, saved: RouterSettingsValue, next: (v: RouterSettingsValue) => RouterSettingsValue): RouterSettingsValue {
   const shown = shownRouterValue(draft, saved);
-  const edited = next(shown);
+  let edited = next(shown);
+  if (!shown.filtersTyped && JSON.stringify(edited.filters ?? null) !== JSON.stringify(shown.filters ?? null)) edited = { ...edited, filtersTyped: true };
   return shown.foldersFrom === undefined && !sameFolders(folderList(edited.folders ?? []), folderList(shown.folders ?? []))
     ? { ...edited, foldersFrom: folderList(saved.folders ?? []) } : edited;
 }
@@ -106,6 +160,7 @@ export function routerFormProblem(edited: RouterSettingsValue): string {
   if (!name) return 'Give the router a name.';
   if (name.length > ROUTER_NAME_MAX) return `A router name is at most ${ROUTER_NAME_MAX} characters.`;
   if (edited.folders !== undefined && folderList(edited.folders).length === 0) return ROUTER_NO_FOLDER_LINE;
+  if (Object.values(edited.filters ?? {}).some((ticks) => ticks.length === 0)) return ROUTER_NO_FILTER_LINE;
   return '';
 }
 
@@ -156,7 +211,9 @@ export function useRouterSaved(router: Task, tasks: readonly Task[], tasksLoadin
   // The area's own name ("Personal"), never its id; the id stays until the areas list answers.
   const areaNames = useRouterAreaNames([area]);
   const savedFolders = (routerAreaFolders()[area] ?? []).join('\n');
-  const baseline = useMemo(() => routerBaseline(router, savedFolders ? savedFolders.split('\n') : []), [router, savedFolders, areaNames]);
+  const savedSources = JSON.stringify(routerAreaSources()[area] ?? []);
+  const baseline = useMemo(() => routerBaseline(router, savedFolders ? savedFolders.split('\n') : [], JSON.parse(savedSources) as RouterAreaSourceRow[]),
+    [router, savedFolders, savedSources, areaNames]);
   const areaLabel = (area && (areaNames[area] || areaIdWords(area))) || area;
   const savedStale = routerLinkRows(baseline.links, tasks).filter((r) => r.state !== 'open' && !(tasksLoading && r.state === 'missing')).length;
   return { area, areaLabel, baseline, savedStale };
@@ -270,9 +327,34 @@ export function RouterSettingsBody({ id, draftKey: key, area, sources = [], valu
         <span className="org-router-label">Reads from</span>
         <div className="org-router-value">
           {sources.length
-            ? <ul className="org-router-sources">{sources.map((src) => <li key={`${src.kind}\n${src.account}`} data-account={src.account}>{(src.kind === 'mail' && sourceNames[src.account]) || src.account} <span className="org-router-kind">{src.kind === 'slack' ? 'Slack' : 'Mail'}</span></li>)}</ul>
+            ? <ul className="org-router-sources">{sources.map((src) => (
+              <li key={sourceKey(src)} data-account={src.account} data-kind={src.kind}>
+                {(src.kind === 'mail' && sourceNames[src.account]) || src.account} <span className="org-router-kind">{SOURCE_KIND_WORDS[src.kind] ?? src.kind}</span>
+                {src.kind !== 'mail' && value.filters?.[sourceKey(src)] && (
+                  <span className="org-router-filter" role="group" aria-label={`Messages it takes from ${src.account}`} data-testid="org-router-filter">
+                    {CHAT_FILTER_KINDS.map((one) => {
+                      const ticks = value.filters![sourceKey(src)]!;
+                      return (
+                        <label key={one.label} className="org-router-check" data-label={one.label}>
+                          <input type="checkbox" checked={ticks.includes(one.label)} data-draft-key={draftAttr} disabled={busy}
+                            onChange={(e) => {
+                              const on = e.target.checked;
+                              onEdit((v) => {
+                                const now = v.filters?.[sourceKey(src)] ?? ticks;
+                                const next = on ? [...new Set([...now, one.label])] : now.filter((label) => label !== one.label);
+                                return { ...v, filters: { ...(v.filters ?? {}), [sourceKey(src)]: next } };
+                              });
+                            }} />
+                          {one.words}
+                        </label>
+                      );
+                    })}
+                  </span>
+                )}
+              </li>
+            ))}</ul>
             : <span className="org-router-hint">No account yet. The Mail plugin adds each mailbox here.</span>}
-          <span className="org-router-hint">{ROUTER_SOURCES_NOTE}</span>
+          <span className="org-router-hint">{sources.some((src) => src.kind !== 'mail') ? ROUTER_CHAT_SOURCES_NOTE : ROUTER_SOURCES_NOTE}</span>
         </div>
       </div>
       {sources.some((src) => src.kind === 'mail') && (

@@ -31,6 +31,12 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
+    id: 'router_chat_sources',
+    name: 'Router reads chat messages',
+    description: 'New direct messages, mentions and watched-channel messages from a connected chat (Slack) go to your router, the one that reads your mail, which hands each one with its link to the task or VP that owns it. Each chat account can be filtered in Router settings. Off: the chat plugin keeps its own letters.',
+    default: false,
+  },
+  {
     id: 'drawing_app',
     name: 'Drawing app',
     description: 'An editable hand-drawn whiteboard saved in Notes, as an app and beside a session.',

@@ -250,6 +250,7 @@
 .org-router-overview-facts > div { display: contents; }
 .org-router-overview-facts dt { font-weight: 600; }
 .org-router-overview-facts dd { margin: 0; min-width: 0; }
+.org-router-overview-checked-line { display: block; }
 .org-router-overview-next { margin-top: 8px !important; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .org-chat-start-actions { display: flex; gap: 8px; }
 .org-router-setup-actions { display: flex; gap: 8px; margin-top: 4px; }

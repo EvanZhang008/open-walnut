@@ -1468,6 +1468,8 @@ export interface Config {
    *  recorded as done without asking; true: every one asks. A script's `walnut approve` asks
    *  either way. Only a person changes it (routes/config.ts). */
   approvals?: { ask_me?: boolean };
+  /** Outward text (core/outbound/sensitive-hold.ts): `sensitive_check: false` turns the personal-matter hold off; `sensitive_phrases` adds the person's own phrases. */
+  outbound?: { sensitive_check?: boolean; sensitive_phrases?: string[] };
   /** Passwords (core/vault/). `unlock_for`: "Keep Passwords unlocked" (core/vault/unlock-length.ts:
    *  idle, 1h, 12h, 48h (default), restart, always). `auto_lock_minutes`: the idle choice's minutes
    *  (default 15, at most 720); a config with only it reads `idle`. `bitwarden_daily`: sync from

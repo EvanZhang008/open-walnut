@@ -8,6 +8,7 @@
  *   What     one line: it reads the mail assigned to its area and hands each one on; it does no work itself
  *   State    Paused / Running, checking every 5 minutes (last check 2 min ago) / Not running yet
  *   Routed   N so far: how many went to a task, needed nothing, failed; the newest, when and to which task
+ *   Missed   the hourly check: per account, what its source saw in the last day against what the router had
  *   Next     with nothing assigned: how mail reaches it, with Open Mail
  *
  * Read on mount, when Paused changes, every minute and when the window comes back; a failed read keeps the last one and says so.
@@ -31,13 +32,26 @@ export interface RouterSummary {
   latest?: { at: number; status: string; taskId?: string; taskTitle?: string };
   wake: { armed: boolean; everyMs?: number; lastCheckAt?: number; nextAt?: number };
   session: { started: boolean; state?: string };
+  /** The last missed-message check: per account, what its source saw against what reached the router. */
+  reconcile?: { at: number; sinceMs: number; accounts: RouterReconcileAccount[] };
+}
+
+export interface RouterReconcileAccount {
+  kind: string;
+  account: string;
+  saw: number;
+  filtered: number;
+  had: number;
+  missed: number;
+  entered: number;
+  error?: string;
 }
 
 const REFRESH_MS = 60_000;
 
 /** What a router is, in its own words (the page's first line). */
 export function routerWhatLine(title: string, area: string): string {
-  return `${title} reads the mail you assign to ${area} and hands each one to the task or VP that should own it. It does none of the work itself.`;
+  return `${title} reads the mail and messages that reach ${area} and hands each one to the task or VP that should own it. It does none of the work itself.`;
 }
 
 function everyWords(ms: number | undefined): string {
@@ -49,19 +63,19 @@ function everyWords(ms: number | undefined): string {
 /** Whether it runs and when it last looked for mail. */
 export function routerStateLine(s: RouterSummary, now = Date.now()): string {
   if (s.paused) return 'Paused: it reads nothing until you turn Paused off in Router settings.';
-  if (s.blocked) return `Not reading mail now: ${s.blocked}`;
+  if (s.blocked) return `Not reading now: ${s.blocked}`;
   const checked = s.wake.lastCheckAt ? ` (last check ${timeAgo(new Date(s.wake.lastCheckAt).toISOString(), { now })})` : '';
   const every = everyWords(s.wake.everyMs);
-  if (!s.wake.armed) return 'Ready, but its check for new mail is off: nothing will hand it mail. Turn Paused on and off again in Router settings.';
-  const look = `It checks for new ${s.areaName} mail${every ? ` ${every}` : ''}${checked}.`;
-  return s.session.started ? `Running. ${look}` : `Not running yet: it starts when mail for ${s.areaName} arrives. ${look}`;
+  if (!s.wake.armed) return 'Ready, but its check for new messages is off: nothing will hand it any. Turn Paused on and off again in Router settings.';
+  const look = `It checks for new ${s.areaName} messages${every ? ` ${every}` : ''}${checked}.`;
+  return s.session.started ? `Running. ${look}` : `Not running yet: it starts when a message for ${s.areaName} arrives. ${look}`;
 }
 
-/** What it routed so far; "0 emails so far" says plainly it has had nothing to do. */
+/** What it routed so far (mail and chat messages alike); "No messages so far" says plainly it has had nothing to do. */
 export function routerRoutedLine(s: RouterSummary, now = Date.now()): string {
   const c = s.counts;
   const total = c.routed + c.not_routed + c.routing + c.failed + c.unknown;
-  if (total === 0) return 'No email so far.';
+  if (total === 0) return 'No messages so far.';
   const parts = [
     c.routed ? `${c.routed} handed to a task` : '',
     c.not_routed ? `${c.not_routed} needed nothing` : '',
@@ -69,7 +83,7 @@ export function routerRoutedLine(s: RouterSummary, now = Date.now()): string {
     c.failed ? `${c.failed} failed` : '',
     c.unknown ? `${c.unknown} not confirmed delivered` : '',
   ].filter(Boolean);
-  const head = `${total} ${total === 1 ? 'email' : 'emails'}: ${parts.join(', ')}.`;
+  const head = `${total} ${total === 1 ? 'message' : 'messages'}: ${parts.join(', ')}.`;
   const latest = s.latest;
   if (!latest) return head;
   const when = timeAgo(new Date(latest.at).toISOString(), { now });
@@ -83,9 +97,33 @@ export function routerNextLine(s: RouterSummary): string {
   return `Nothing is assigned to ${s.areaName} yet, so it has nothing to route. To give it mail, open an email in Mail and choose ${s.areaName} on its route line.`;
 }
 
+const KIND_NAMES: Record<string, string> = { mail: 'Mail', slack: 'Slack', wechat: 'WeChat' };
+
+/**
+ * The last missed-message check, one sentence per account: what the source saw in the last day
+ * against what reached the router. '' when no account was checked.
+ */
+export function routerCheckedLines(s: RouterSummary, now = Date.now()): string[] {
+  const r = s.reconcile;
+  if (!r?.accounts.length) return [];
+  const when = timeAgo(new Date(r.at).toISOString(), { now });
+  const perKind = new Map<string, number>();
+  for (const one of r.accounts) perKind.set(one.kind, (perKind.get(one.kind) ?? 0) + 1);
+  return r.accounts.map((one) => {
+    const name = `${KIND_NAMES[one.kind] ?? one.kind}${(perKind.get(one.kind) ?? 0) > 1 ? ` (${one.account})` : ''}`;
+    if (one.error) return `${name}: could not count what it saw (${one.error}), checked ${when}.`;
+    const left = one.filtered ? ` ${one.filtered} more left out by its filter.` : '';
+    if (one.missed === 0) {
+      return `${name} saw ${one.saw} in the last day and the router had ${one.saw === 1 ? 'it' : `all ${one.saw}`}, checked ${when}.${left}`;
+    }
+    const late = one.entered === one.missed ? `all ${one.missed} entered now` : `${one.entered} of them entered now`;
+    return `${name} saw ${one.saw} in the last day; the router had ${one.had}, so ${one.missed} missed, ${late}, checked ${when}.${left}`;
+  });
+}
+
 /** What its empty chat says instead of "No conversation history found" (also after a new session, so no claim about past mail). */
 export function routerEmptyChatLine(area: string): string {
-  return `Nothing in this conversation yet. It starts when the next mail you assigned to ${area} reaches the router.`;
+  return `Nothing in this conversation yet. It starts when the next message for ${area} reaches the router.`;
 }
 
 /** `paused` is the task's own flag: a save of Router settings reads the state again at once. */
@@ -125,6 +163,7 @@ export function OrgRouterOverview({ routerId, title, links, paused }: { routerId
     );
   }
   const next = routerNextLine(s);
+  const checkedLines = routerCheckedLines(s);
   return (
     <section className="org-router-overview" data-testid="org-router-overview" aria-label={`${title}: state`}>
       <p className="org-router-overview-what" data-testid="org-router-overview-what">{routerWhatLine(title, s.areaName)}</p>
@@ -132,8 +171,11 @@ export function OrgRouterOverview({ routerId, title, links, paused }: { routerId
         <div><dt>State</dt><dd data-testid="org-router-overview-state">{routerStateLine(s)}</dd></div>
         <div><dt>Routed</dt><dd data-testid="org-router-overview-routed">
           {routerRoutedLine(s)}
-          {s.waiting === null ? <> Could not count the mail waiting for its next check.</> : s.waiting > 0 && <> {s.waiting} waiting for its next check.</>}
+          {s.waiting === null ? <> Could not count the messages waiting for its next check.</> : s.waiting > 0 && <> {s.waiting} waiting for its next check.</>}
         </dd></div>
+        {checkedLines.length > 0 && <div><dt>Missed</dt><dd data-testid="org-router-overview-checked">
+          {checkedLines.map((line) => <span key={line} className="org-router-overview-checked-line">{line} </span>)}
+        </dd></div>}
         {links.length > 0 && <div><dt>Works with</dt><dd data-testid="org-router-overview-links">{links.join(', ')}</dd></div>}
       </dl>
       {next && (

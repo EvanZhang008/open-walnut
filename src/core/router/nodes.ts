@@ -4,6 +4,7 @@ import { withOrgLock, OrgError, orgTasks } from '../org/org-store.js';
 import { readRouterAreas, updateRouterAreas, normalizeRouterAreas, taskArea, ensureAreasDataVersion, type RouterArea, type RouterAreasFile } from './areas.js';
 import { assertIsolatedHistory } from './history-isolation.js';
 import type { Task } from '../types.js';
+import type { RouterSourceKind } from './types.js';
 
 export interface RouterNodeInput {
   name: string;
@@ -27,6 +28,11 @@ export interface RouterNodePatch {
   paused?: boolean;
   /** The folders or labels it watches (names, or the role "inbox"); [] goes back to the plugin's default. */
   folders?: string[];
+  /**
+   * Per chat account, the labels of the arrivals it takes ("dm", "mention", "watched",
+   * "channel:<name>"); [] takes every arrival its source sends. Mail filters by folders instead.
+   */
+  filters?: Array<{ kind: RouterSourceKind; account: string; include: string[] }>;
 }
 
 const NAME_MAX = 60;
@@ -209,6 +215,29 @@ export async function updateRouterNode(taskId: string, patch: RouterNodePatch, o
       }).catch((error: unknown) => {
         if (error instanceof OrgError) throw error;
         throw new OrgError('bad_folders', 400, error instanceof Error ? error.message : String(error));
+      });
+    }
+    if (patch.filters !== undefined) {
+      // A chat account's own filter (2026-11-16, the Slack source: "per-router filter rules"):
+      // the intake reads it at the next arrival (plugin-intake.ts).
+      await updateRouterAreas(WALNUT_HOME, (current) => {
+        const area = current.areas.find((one) => one.id === assignment.areaId);
+        if (!area) throw new OrgError('router_unassigned', 409, 'This router has no area assignment. Finish its setup first.');
+        for (const filter of patch.filters!) {
+          if (filter.kind === 'mail') throw new OrgError('bad_filters', 400, 'A mailbox is filtered by the folders it watches, not by labels.');
+          const entry = area.sources.find((one) => one.kind === filter.kind && one.account === filter.account);
+          if (!entry) throw new OrgError('bad_filters', 400, `This router does not read the ${filter.kind} account ${filter.account}.`);
+          // Lower case: the intake matches labels without case, and the boxes show what is stored.
+          const include = [...new Set(filter.include.map((one) => one.trim().toLowerCase()).filter(Boolean))];
+          const before = JSON.stringify([...(entry.include ?? [])].sort());
+          if (include.length) entry.include = include;
+          else delete entry.include;
+          if (JSON.stringify([...include].sort()) !== before) entry.includeAt = Date.now();
+        }
+        return current;
+      }).catch((error: unknown) => {
+        if (error instanceof OrgError) throw error;
+        throw new OrgError('bad_filters', 400, error instanceof Error ? error.message : String(error));
       });
     }
     const links = patch.links === undefined ? undefined : await openLeadLinks(patch.links);

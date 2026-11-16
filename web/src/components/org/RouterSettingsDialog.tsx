@@ -90,6 +90,8 @@ export function RouterSettingsDialog({ router, tasks, tasksLoading = false, onCl
         const sent = folderList(patch.folders);
         if (live.current) setSavedFolders(sent);
         await refreshRouterAreas().catch(() => { /* the saved folders stay shown */ });
+      } else if (patch.filters) {
+        await refreshRouterAreas().catch(() => { /* the next read shows them */ });
       }
       // Only this router's draft, and only as it was sent (useDraft's sentKey rule).
       form.clear(sentKey, sentText);

@@ -20,6 +20,8 @@ import { DaemonFileReader } from '../../src/core/daemon-file-reader.js';
 import { routerStore } from '../../src/core/router/runtime.js';
 import { routerKey, routerMessageId } from '../../src/core/router/store.js';
 import type { RouterItem, RouterSource } from '../../src/core/router/types.js';
+import { routerAreasPath } from '../../src/core/router/areas.js';
+import path from 'node:path';
 
 let base = '';
 let vpId = '';
@@ -113,4 +115,17 @@ describe('the router node summary', () => {
       find.mockRestore();
     }
   });
+
+  it('carries the last missed-message check as counts only, and none before the first', async () => {
+    const id = await createRouter('checked');
+    expect((await (await summary(id)).json()).reconcile).toBeUndefined();
+    const report = {
+      areaId: 'checked', at: Date.now() - 60_000, sinceMs: Date.now() - 86_400_000, untilMs: Date.now() - 360_000,
+      accounts: [{ kind: 'slack', account: 'T0TEAM', saw: 12, filtered: 2, had: 11, missed: 1, entered: 1 }],
+    };
+    await fs.writeFile(path.join(path.dirname(routerAreasPath(WALNUT_HOME)), 'reconcile-checked.json'), JSON.stringify(report));
+    const body = await (await summary(id)).json();
+    expect(body.reconcile).toEqual({ at: report.at, sinceMs: report.sinceMs, accounts: report.accounts });
+  });
 });
+

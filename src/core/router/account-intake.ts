@@ -95,6 +95,13 @@ async function pickArea(file: RouterAreasFile, kind: RouterSourceKind, routerOpe
     if (await openRouter(area)) candidates.push(area);
   }
   if (boundAreas.size === 0 && candidates.length === 1) return candidates[0];
+  // A kind no area takes yet (Slack beside a mail router) joins the person's one router, if there is
+  // exactly one: one router for every inbound channel (2026-11-16, the Slack source), never a second.
+  if (boundAreas.size === 0 && candidates.length === 0) {
+    const open: RouterArea[] = [];
+    for (const area of file.areas) if (area.host === '__local__' && await openRouter(area)) open.push(area);
+    if (open.length === 1) return open[0];
+  }
   // Several routers could take it, or none: the Mail router's own area takes the rest.
   const mail = file.areas.find((one) => one.id === ACCOUNT_ROUTER_AREA.id);
   if (mail && await openRouter(mail)) return mail;

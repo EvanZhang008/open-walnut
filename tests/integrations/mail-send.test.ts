@@ -702,6 +702,36 @@ describe('with approvals off, an agent\'s send goes out with no letter', () => {
       if (before === undefined) delete process.env.WALNUT_APPROVALS_ASK; else process.env.WALNUT_APPROVALS_ASK = before;
     }
   });
+
+  it('a mail that reads as personal still waits for the person, and its letter says why first', async () => {
+    const before = process.env.WALNUT_APPROVALS_ASK;
+    process.env.WALNUT_APPROVALS_ASK = '0';
+    const { _resetAskMeLatchForTesting } = await import('../../src/core/approvals/ask-me.js');
+    _resetAskMeLatchForTesting();
+    try {
+      const draft = await newDraft({ subject: 'Draft of my promotion doc', bodyMarkdown: 'Could you read it before Friday?' });
+      const { listApprovals } = await import('../../src/core/approvals/store.js');
+      const unaskedBefore = (await listApprovals({ status: 'all' })).filter((a) => a.unasked === 'mailSend').length;
+      const asked = await requestSend(draft) as { status: number; body: { letterId?: string; sent?: SendShape; draft?: DraftShape } };
+      expect(asked.status).toBe(200);
+      expect(asked.body.sent).toBeUndefined();
+      expect(asked.body.letterId).toBeTruthy();
+      // Nothing went out, and nothing is listed as sent unasked.
+      expect(callsFor(draft.draftId)).toHaveLength(0);
+      expect(await sendsOf(draft.draftId)).toHaveLength(0);
+      expect((await listApprovals({ status: 'all' })).filter((a) => a.unasked === 'mailSend')).toHaveLength(unaskedBefore);
+      expect(await draftOf(draft.draftId)).toMatchObject({ state: 'pending_approval', letterId: asked.body.letterId });
+      const body = await letterBody(asked.body.letterId!);
+      expect(body.split('\n')[0]).toMatch(/^\*\*Held for you\*\*: .*promotion doc/);
+      expect(body).toContain('Answering Send sends exactly this');
+
+      // Send on the letter sends it once, as any approval does.
+      expect(await answer(asked.body.letterId!, 'send')).toBe(200);
+      await expect.poll(() => callsFor(draft.draftId).length, { timeout: 15_000 }).toBe(1);
+    } finally {
+      if (before === undefined) delete process.env.WALNUT_APPROVALS_ASK; else process.env.WALNUT_APPROVALS_ASK = before;
+    }
+  });
 });
 
 describe('the console can send without a letter', () => {

@@ -94,6 +94,7 @@ const FEATURE: Record<string, string> = {
   summary: 'Summaries', organize: 'Organizing sessions', 'commit-message': 'Commit messages', memory: 'Memory upkeep',
   transfer: 'Session transfer', 'routine-draft': 'Routine drafts', 'host-learning': 'Host learning',
   'privacy-check': 'Private task checks',
+  'outbound-check': 'Personal-matter checks before a send',
   'reply-language': 'Reply language rewrites',
 };
 const ENGINE: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', goose: 'Goose' };

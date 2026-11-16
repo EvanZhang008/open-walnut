@@ -24,7 +24,7 @@ import { removePluginOps } from '../../src/ops/registry.js'
 import { PluginContext, type PluginLogger } from '../../src/core/plugins/plugin-context.js'
 import { createServerPluginApi } from '../../src/core/plugins/server-api.js'
 import { IntegrationRegistry } from '../../src/core/integration-registry.js'
-import { currentRouterSources, readRouterItem, resolveRouterItem, RouterSourceError } from '../../src/core/router/source-registry.js'
+import { currentRouterSources, hasRouterRecent, readRouterItem, readRouterItemForDelivery, recentRouterSources, resolveRouterItem, RouterSourceError } from '../../src/core/router/source-registry.js'
 import type { PluginRouterItemContent, PluginRouterSource, PluginRouterSourceAdapter } from '../../packages/plugin-api/src/server.js'
 import { createTestPluginApi } from './plugin-test-utils.js'
 
@@ -199,3 +199,65 @@ describe('registry.routerSource', () => {
     expect(read).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('the router and letters doors a chat plugin uses', () => {
+  it('passes recent() and readForDelivery() through, checked, and withdraws them with the plugin', async () => {
+    const { context, api } = pluginApi('chat-plugin')
+    const recent = vi.fn(async (account: string, sinceMs: number, untilMs: number) => {
+      expect(typeof account).toBe('string')
+      expect(typeof sinceMs).toBe('number')
+      expect(typeof untilMs).toBe('number')
+      return [{ ...source, labels: ['dm'] }, { ...source, account: 'T-other' }].slice(0, account === 'T-fixture' ? 1 : 2)
+    })
+    const readForDelivery = vi.fn(async (one: PluginRouterSource) => {
+      expect(Object.isFrozen(one)).toBe(true)
+      return { ...contentOf(one), body: { text: 'fetched body' } }
+    })
+    api.registry.routerSource!('slack', { ...cacheAdapter(), recent, readForDelivery })
+    expect(hasRouterRecent('slack')).toBe(true)
+    expect(await recentRouterSources('slack', 'T-fixture', 10, 20)).toEqual([{ source, labels: ['dm'] }])
+    expect(recent).toHaveBeenCalledWith('T-fixture', 10, 20)
+    // An answer naming another account is refused whole.
+    await expect(recentRouterSources('slack', 'T-x', 10, 20)).rejects.toMatchObject({ code: 'source_unavailable' })
+    expect((await readRouterItemForDelivery(source)).body).toEqual({ text: 'fetched body' })
+    await context.dispose()
+    expect(hasRouterRecent('slack')).toBe(false)
+  })
+
+  it('router.intake takes only the kind this plugin serves, refuses mail, and is refused after dispose', async () => {
+    // A plugin id no other test here registered a kind under.
+    const { context, api } = pluginApi('intake-plugin')
+    // wechat is served by no plugin in this file: refused.
+    await expect(api.router!.intake('wechat', 'wx-fixture', [])).rejects.toThrow(/needs this plugin to serve that kind first/)
+    expect(api.router).toBeDefined()
+    // Not serving slack (an earlier test's plugin did): refused, before anything is read.
+    await expect(api.router!.intake('slack', 'T-fixture', [])).rejects.toThrow(/needs this plugin to serve that kind first/)
+    await expect(api.router!.intake('mail', 'desk@example.invalid', [])).rejects.toBeInstanceOf(TypeError)
+    api.registry.routerSource!('slack', cacheAdapter())
+    await expect(api.router!.intake('slack', 'T-fixture', [{ message: '' }])).rejects.toThrow(/message id/)
+    // Serving it: the call reaches the intake, which is off until the person turns the experiment on.
+    expect(await api.router!.intake('slack', 'T-fixture', [{ message: 'C1/1', labels: ['dm'] }])).toEqual({ taken: false, reason: 'off' })
+    await context.dispose()
+    await expect(api.router!.intake('slack', 'T-fixture', [])).rejects.toThrow()
+  })
+
+  it('another plugin\'s intake for a kind it does not serve is refused; the newest registration owns the kind', async () => {
+    const owner = pluginApi('owner-plugin')
+    const other = pluginApi('other-plugin')
+    owner.api.registry.routerSource!('slack', cacheAdapter())
+    await expect(other.api.router!.intake('slack', 'T-fixture', [{ message: 'C1/1' }])).rejects.toThrow(/needs this plugin to serve that kind first/)
+    expect(await owner.api.router!.intake('slack', 'T-fixture', [])).toEqual({ taken: false, reason: 'off' })
+    // A later registration by the other plugin takes the kind over, and the first one's intake is refused.
+    other.api.registry.routerSource!('slack', cacheAdapter())
+    await expect(owner.api.router!.intake('slack', 'T-fixture', [])).rejects.toThrow(/needs this plugin to serve that kind first/)
+    expect(await other.api.router!.intake('slack', 'T-fixture', [])).toEqual({ taken: false, reason: 'off' })
+  })
+
+  it('letters.sensitiveHold holds a personal text and passes ordinary work', async () => {
+    const { api } = pluginApi('chat-plugin')
+    expect(await api.letters.sensitiveHold!('Can you review my promotion doc before Friday?')).toMatchObject({ reason: expect.stringContaining('promotion doc') })
+    expect(await api.letters.sensitiveHold!('The deploy finished, all checks green.')).toBeNull()
+    expect(await api.letters.sensitiveHold!(7 as unknown as string)).toBeNull()
+  })
+})
+

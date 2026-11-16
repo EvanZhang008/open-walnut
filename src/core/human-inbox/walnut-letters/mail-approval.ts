@@ -26,6 +26,8 @@ export interface ApprovalLetterInput {
   subject: string;
   bodyMarkdown: string;
   isReply: boolean;
+  /** The switch is off, but the text looked personal (core/outbound/sensitive-hold.ts): why it waits. */
+  heldBecause?: string;
 }
 
 /** How much draft body rides the letter. Past this the human is reading, not deciding. */
@@ -43,6 +45,8 @@ export interface MailApprovalWords {
   cc: string;
   bcc: string;
   subjectLabel: string;
+  /** The first line when the switch was off and the text looked personal. */
+  held: (reason: string) => string;
   contract: string;
   /** Fixed ids: the handler switches on them. */
   actions: ReadonlyArray<{ id: 'send' | 'edit' | 'discard'; label: string; description: string }>;
@@ -84,6 +88,7 @@ export const MAIL_APPROVAL_WORDS: ByLang<MailApprovalWords> = {
     cc: '**Cc**: ',
     bcc: '**Bcc**: ',
     subjectLabel: '**Subject**: ',
+    held: (reason) => `**Held for you**: your approvals are off, but this looks personal, so it waits for your yes. ${reason}`,
     contract: 'Answering Send sends exactly this. Answering Edit puts the draft back in the Mail console,'
       + ' and answering Discard throws it away without sending anything.',
     actions: [
@@ -128,6 +133,7 @@ export const MAIL_APPROVAL_WORDS: ByLang<MailApprovalWords> = {
     cc: '**抄送**：',
     bcc: '**密送**：',
     subjectLabel: '**主题**：',
+    held: (reason) => `**先等你确认**：你关了审批，但这封邮件看起来涉及个人事务，所以没有直接发出。${reason}`,
     contract: '选“发送”会原样发出上面这封邮件。选“编辑”会把草稿放回邮件控制台，选“丢弃”会直接删掉草稿，什么都不发。',
     actions: [
       { id: 'send', label: '发送', description: '现在就按上面显示的内容发出' },
@@ -169,6 +175,7 @@ export const MAIL_APPROVAL = letterKind<ApprovalLetterInput>({
       ? `${input.bodyMarkdown.slice(0, LETTER_BODY_MAX_CHARS)}\n\n${w.truncated}`
       : input.bodyMarkdown;
     const lines = [
+      ...(input.heldBecause ? [w.held(escapeMarkdown(input.heldBecause)), ''] : []),
       w.from(escapeMarkdown(input.accountLabel), escapeMarkdown(input.accountAddress)),
       `${w.to}${input.to.map(addressLine).join(', ') || (input.isReply ? w.replyAddressed : w.nobody)}`,
       ...(input.cc.length ? [`${w.cc}${input.cc.map(addressLine).join(', ')}`] : []),
@@ -205,6 +212,7 @@ export const MAIL_APPROVAL = letterKind<ApprovalLetterInput>({
       subject: '',
       bodyMarkdown: 'Thanks!',
       isReply: true,
+      heldBecause: 'It mentions "promotion doc", which reads as a personal or sensitive matter.',
     },
   ],
   stillNeeded: {

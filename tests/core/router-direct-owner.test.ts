@@ -12,7 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { readRouterAreas, updateRouterAreas, type RouterAreasFile } from '../../src/core/router/areas.js'
-import { ROUTED_ORIGINAL_MAX, routeItem, routedText, type RouterDeliveryDeps } from '../../src/core/router/service.js'
+import { ROUTED_ORIGINAL_MAX, routeItem, routedReference, routedText, type RouterDeliveryDeps } from '../../src/core/router/service.js'
 import type { RouterItemContent } from '../../src/core/router/source-registry.js'
 import { RouterStore, routerKey } from '../../src/core/router/store.js'
 import type { RouterItem, RouterRoute, RouterSource } from '../../src/core/router/types.js'
@@ -196,5 +196,31 @@ describe('what the owner reads', () => {
     const f = fakes(null)
     await routeItem(decide(ITEMS[0]!, 'owner'), deps(f))
     expect(f.send.mock.calls[0]![1]).toContain('(The body is not cached yet: read it with the reference above.)')
+  })
+})
+
+describe('the routed text names the kind of item and the source\'s own reference', () => {
+  const route = { reason: 'r' } as RouterRoute
+  const chat = (kind: RouterSource['kind']): RouterSource => ({ kind, account: 'T0TEAM', message: 'D1/1700000000.000100' })
+
+  it('a mail with no reference of its own: an email, read with mail_read', () => {
+    const text = routedText(itemFor(ITEMS[0]!), route, BRIEF)
+    expect(text.split('\n')[0]).toBe('The router hands you this incoming email: it is yours to handle from here (do the work, hand it on, or ask your VP).')
+    expect(text).toContain(`Reference: mail_read {"account":"${DESK}","message":"INBOX:1:1"}`)
+  })
+
+  it('a chat message: named by its channel, with the permalink the source gave', () => {
+    const permalink = 'https://acme.example.invalid/archives/D1/p1700000000000100'
+    const text = routedText({ ...itemFor(chat('slack')), subject: '', reference: permalink }, route, BRIEF)
+    expect(text.split('\n')[0]).toBe('The router hands you this incoming Slack message: it is yours to handle from here (do the work, hand it on, or ask your VP).')
+    expect(text).toContain(`Reference: ${permalink}`)
+    expect(text).not.toContain('mail_read')
+    expect(text).toContain('Subject: (no subject)')
+    expect(routedText(itemFor(chat('wechat')), route, BRIEF).split('\n')[0]).toMatch(/^The router hands you this incoming WeChat message:/)
+  })
+
+  it('with no reference, a chat item is named by its kind and identity; a given reference wins, even for mail', () => {
+    expect(routedReference({ source: chat('slack') })).toBe('slack {"account":"T0TEAM","message":"D1/1700000000.000100"}')
+    expect(routedReference({ source: ITEMS[0]!, reference: 'mail_read {"account":"x","message":"y"}' })).toBe('mail_read {"account":"x","message":"y"}')
   })
 })

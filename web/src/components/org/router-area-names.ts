@@ -8,7 +8,9 @@ import { apiGet } from '@/api/client';
 
 export type RouterAreaNames = Readonly<Record<string, string>>;
 /** The accounts an area lists as its sources (`kind`: mail or slack), in the order the file keeps them. */
-export type RouterAreaSources = Readonly<Record<string, ReadonlyArray<{ kind: string; account: string }>>>;
+export type RouterAreaSources = Readonly<Record<string, ReadonlyArray<RouterAreaSourceRow>>>;
+/** One account an area reads; `include` (a chat account's filter): the labels of the arrivals it takes, unset for all. */
+export interface RouterAreaSourceRow { kind: string; account: string; include?: string[] }
 /** The folders or labels each area's router watches; an area with none watches the plugin's default (the Inbox). */
 export type RouterAreaFolders = Readonly<Record<string, readonly string[]>>;
 
@@ -70,15 +72,17 @@ export function areaRoutersOf(body: unknown): Record<string, string> {
   return out;
 }
 
-export function areaSourcesOf(body: unknown): Record<string, Array<{ kind: string; account: string }>> {
-  const out: Record<string, Array<{ kind: string; account: string }>> = {};
+export function areaSourcesOf(body: unknown): Record<string, RouterAreaSourceRow[]> {
+  const out: Record<string, RouterAreaSourceRow[]> = {};
   const list = (body as { areas?: unknown } | null)?.areas;
   if (!Array.isArray(list)) return out;
   for (const a of list as Array<{ id?: unknown; sources?: unknown }>) {
     if (typeof a?.id !== 'string' || !a.id) continue;
     out[a.id] = (Array.isArray(a.sources) ? a.sources : []).flatMap((one) => {
-      const src = one as { kind?: unknown; account?: unknown };
-      return typeof src?.kind === 'string' && typeof src.account === 'string' && src.account ? [{ kind: src.kind, account: src.account }] : [];
+      const src = one as { kind?: unknown; account?: unknown; include?: unknown };
+      if (typeof src?.kind !== 'string' || typeof src.account !== 'string' || !src.account) return [];
+      const include = Array.isArray(src.include) ? src.include.filter((label): label is string => typeof label === 'string' && !!label) : [];
+      return [{ kind: src.kind, account: src.account, ...(include.length ? { include } : {}) }];
     });
   }
   return out;

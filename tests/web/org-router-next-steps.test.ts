@@ -42,9 +42,9 @@ describe('router settings', () => {
     expect(mailAccountNames([{ accountId: 'dense:harbour', address: 'harbour@example.invalid', displayName: 'Harbour mail' }, { accountId: 'x', displayName: 'Only name' }, { accountId: 'y' }]))
       .toEqual({ 'dense:harbour': 'harbour@example.invalid', x: 'Only name' })
     const html = body({ sources: [{ kind: 'mail', account: 'dense:harbour' }, { kind: 'mail', account: 'other' }, { kind: 'slack', account: 'T0FIX' }], sourceNames: { 'dense:harbour': 'harbour@example.invalid', T0FIX: 'no' } })
-    expect(html).toContain('data-account="dense:harbour">harbour@example.invalid')
-    expect(html).toContain('data-account="other">other')
-    expect(html).toContain('data-account="T0FIX">T0FIX')
+    expect(html).toContain('data-account="dense:harbour" data-kind="mail">harbour@example.invalid')
+    expect(html).toContain('data-account="other" data-kind="mail">other')
+    expect(html).toContain('data-account="T0FIX" data-kind="slack">T0FIX')
   })
 
   it('show a VP finder past LINK_FILTER_FROM VPs, and keep linked VPs in sight whatever is typed', () => {

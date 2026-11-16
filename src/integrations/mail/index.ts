@@ -40,6 +40,7 @@ import { MailSync, mailSyncForTesting, setActiveMailSync } from './sync.js'
 import { createMailTools } from './tools.js'
 import { MailUnsubscribe } from './unsubscribe.js'
 import { asksPerson, recordUnasked } from '../../core/approvals/ask-me.js'
+import { sensitiveHold } from '../../core/outbound/sensitive-hold.js'
 
 /**
  * The Mail base, as a capability plugin.
@@ -224,6 +225,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   const approvals = new MailApprovals({
     store, service, drafts, sends, letters: walnut.letters, events, log: walnut.log, asksPerson,
     recordUnasked: (what) => recordUnasked('mailSend', { what }),
+    sensitiveHold,
   })
   // Leaving a mailing list. Its own module because it is the one part of this plugin that opens a url
   // a STRANGER wrote from inside the user's network, and every rule about that lives together in

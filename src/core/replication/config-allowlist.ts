@@ -88,6 +88,8 @@ const ALLOW: Record<string, AllowSpec> = {
   keep_awake: { enabled: true, battery_floor_pct: true, offline_grace_minutes: true, linger_minutes: true },
   updates: { auto: true },
   approvals: { ask_me: true },
+  // The partner of the switch above: a replica that sends holds the same personal-matter texts.
+  outbound: { sensitive_check: true, sensitive_phrases: true },
 }
 export const CONFIG_COPY_ALLOWLIST: Readonly<Record<string, AllowSpec>> = Object.freeze(ALLOW)
 

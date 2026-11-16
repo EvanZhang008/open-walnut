@@ -150,10 +150,16 @@ function plainText(content: RouterItemContent | undefined): string | undefined {
 }
 
 /** How the receiver reads the whole original itself. */
-export function routedReference(source: RouterSource): string {
+export function routedReference(item: Pick<RouterItem, 'source' | 'reference'>): string {
+  // The source knows how its own item is read (a chat's thread read, a permalink).
+  if (item.reference) return item.reference;
+  const { source } = item;
   if (source.kind === 'mail') return `mail_read ${JSON.stringify({ account: source.account, message: source.message })}`;
   return `${source.kind} ${JSON.stringify({ account: source.account, message: source.message })}`;
 }
+
+/** What the owner is told the item is: an email, or a chat message of its channel. */
+const ITEM_NOUN: Record<RouterSource['kind'], string> = { mail: 'email', slack: 'Slack message', wechat: 'WeChat message' };
 
 /** One line of outside text as a quoted label: no newline in it can start a line of the message. */
 const quoted = (value: string | undefined, empty: string) => (value ? JSON.stringify(value) : empty);
@@ -169,9 +175,9 @@ export function routedText(item: RouterItem, route: RouterRoute, brief: string, 
   const clipped = original && original.length > ROUTED_ORIGINAL_MAX;
   const attachments = (content?.attachments ?? []).map((one) => one.filename).filter((name): name is string => !!name);
   return [
-    'The mail router hands you this incoming item: it is yours to handle from here (do the work, hand it on, or ask your VP).',
+    `The router hands you this incoming ${ITEM_NOUN[item.source.kind] ?? 'item'}: it is yours to handle from here (do the work, hand it on, or ask your VP).`,
     `Why you: ${route.reason}`,
-    `Reference: ${routedReference(item.source)}`,
+    `Reference: ${routedReference(item)}`,
     `From: ${quoted(item.sender, '(unknown)')}`,
     `Subject: ${quoted(item.subject, '(no subject)')}`,
     attachments.length ? `Attachments: ${attachments.map((name) => JSON.stringify(name)).join(', ')}` : '',

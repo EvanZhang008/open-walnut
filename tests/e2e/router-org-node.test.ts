@@ -357,6 +357,58 @@ describe('the folders a router watches (PATCH /api/v1/org/routers/:id)', () => {
   });
 });
 
+describe('which chat messages a router takes (PATCH filters)', () => {
+  const SLACK = { kind: 'slack', account: 'T0TEAM' };
+  let routerId = '';
+  beforeAll(async () => {
+    const response = await create('chats', [], { sources: [{ kind: 'mail', account: 'chats-fixture@example.com' }, SLACK] });
+    expect(response.status).toBe(201);
+    routerId = (await response.json()).task.id;
+  });
+  const sources = async () => (await readRouterAreas(WALNUT_HOME)).areas.find((one) => one.id === 'chats')!.sources;
+
+  it('saves a chat account\'s include, trimmed, lower case and once each, stamping when the set changed; [] goes back to every arrival', async () => {
+    const at0 = Date.now();
+    const response = await patch(routerId, { filters: [{ ...SLACK, include: [' DM ', 'mention', 'dm'] }] });
+    expect(response.status).toBe(200);
+    const [mail, chat] = await sources();
+    expect(mail).toEqual({ kind: 'mail', account: 'chats-fixture@example.com' });
+    expect(chat).toEqual({ ...SLACK, include: ['dm', 'mention'], includeAt: expect.any(Number) });
+    expect(chat!.includeAt!).toBeGreaterThanOrEqual(at0);
+    // The same set again (another order, another case) is no change: the stamp stays.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect((await patch(routerId, { filters: [{ ...SLACK, include: ['Mention', 'dm'] }] })).status).toBe(200);
+    const again = (await sources())[1]!;
+    expect([...again.include!].sort()).toEqual(['dm', 'mention']);
+    expect(again.includeAt).toBe(chat!.includeAt);
+    expect((await patch(routerId, { filters: [{ ...SLACK, include: [] }] })).status).toBe(200);
+    const cleared = (await sources())[1]!;
+    expect(cleared).toEqual({ ...SLACK, includeAt: expect.any(Number) });
+    expect(cleared.includeAt!).toBeGreaterThan(chat!.includeAt!);
+  });
+
+  it('refuses mail, an account the router does not read and a malformed list, changing nothing', async () => {
+    await patch(routerId, { filters: [{ ...SLACK, include: ['dm'] }] });
+    const before = await readRouterAreas(WALNUT_HOME);
+    const bad: unknown[] = [
+      'dm', {}, [null], [{ kind: 'mail', account: 'chats-fixture@example.com', include: ['inbox'] }],
+      [{ kind: 'teams', account: 'T0TEAM', include: [] }], [{ kind: 'slack', include: [] }], [{ kind: 'slack', account: '', include: [] }],
+      [{ ...SLACK, include: 'dm' }], [{ ...SLACK, include: [''] }], [{ ...SLACK, include: ['line\nbreak'] }], [{ ...SLACK, include: ['x'.repeat(201)] }],
+      [{ ...SLACK, include: Array.from({ length: 51 }, (_, i) => `l${i}`) }], Array.from({ length: 51 }, () => ({ ...SLACK, include: [] })),
+      [{ kind: 'slack', account: 'T0GONE', include: ['dm'] }],
+    ];
+    for (const filters of bad) {
+      const response = await patch(routerId, { filters });
+      expect(response.status, JSON.stringify(filters).slice(0, 80)).toBe(400);
+    }
+    expect(await readRouterAreas(WALNUT_HOME)).toEqual(before);
+    // Behind the route, the core refuses mail too: a mailbox is filtered by its folders.
+    await expect(updateRouterNode(routerId, { filters: [{ kind: 'mail', account: 'chats-fixture@example.com', include: ['dm'] }] }))
+      .rejects.toMatchObject({ code: 'bad_filters' });
+    expect(await readRouterAreas(WALNUT_HOME)).toEqual(before);
+  });
+});
+
 describe('gone routes of the old triage hop', () => {
   it('has no item assignment or rules routes any more', async () => {
     for (const [method, path] of [['POST', '/api/v1/router/assign'], ['GET', '/api/v1/router/rules'], ['POST', '/api/v1/router/rules']]) {

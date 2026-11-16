@@ -1,6 +1,8 @@
 import { ROUTER_SOURCE_KINDS, type RouterItem, type RouterSource } from './types.js';
 // The areas registry's ROUTER_CANONICAL_KEY_MAX, kept here so plugin bundles never load the registry module.
 const SCOPE_KEY_MAX = 2048;
+/** A reference is one line the receiver runs or opens: a tool call or a permalink. */
+const REFERENCE_MAX = 500;
 
 /** A plugin's item keeps its exact source, and a scope key it gives is a short plain string. */
 function checkedItem(item: RouterItem, source: RouterSource): RouterItem {
@@ -10,6 +12,10 @@ function checkedItem(item: RouterItem, source: RouterSource): RouterItem {
   if (item.source.kind !== source.kind || item.source.account !== source.account || item.source.message !== source.message
     || (source.version !== undefined && item.source.version !== source.version)) {
     throw new Error('Routing source identity does not match the requested item.');
+  }
+  const reference: unknown = item.reference;
+  if (reference !== undefined && (typeof reference !== 'string' || !reference || reference.length > REFERENCE_MAX || /[\u0000-\u001f\u007f]/.test(reference))) {
+    throw new Error('Routing source gave an unusable reference for this item.');
   }
   const scope: unknown = item.scopeKey;
   if (scope !== undefined && (typeof scope !== 'string' || !scope || scope.length > SCOPE_KEY_MAX || /[\u0000-\u001f\u007f]/.test(scope))) {
@@ -58,6 +64,13 @@ export interface RouterSourceAdapter {
    * read, then move it from the inbox to the archive). Never deletes and never sends anything.
    */
   noise?(source: RouterSource): Promise<RouterNoiseOutcome>;
+  /**
+   * What the source itself saw arrive for one account between two times, with the labels its intake
+   * gives each, from its own record (never a
+   * fetch that marks anything read): the router's hourly check compares it with what reached the
+   * router, and enters what is missing (reconcile.ts). Unset: that source is not checked.
+   */
+  recent?(account: string, sinceMs: number, untilMs: number): Promise<Array<RouterSource & { labels?: string[] }>>;
 }
 
 /** What a source did with an item its router judged noise; `note` says why a step was not taken. */
@@ -71,6 +84,8 @@ const host = globalThis as typeof globalThis & { __walnutRouterSources?: Map<Rou
 // Built-in plugins are separate bundles, but their registrations belong to this server process.
 const adapters = host.__walnutRouterSources ??= new Map<RouterSource['kind'], RouterSourceAdapter>();
 
+const ADAPTER_KEYS = new Set(['resolve', 'read', 'readForDelivery', 'currentSources', 'relocate', 'noise', 'recent']);
+
 /** Plugins cross this boundary untyped, so unknown hooks are refused. */
 export function assertRouterSource(kind: unknown, adapter: unknown): asserts adapter is RouterSourceAdapter {
   if (typeof kind !== 'string' || !(ROUTER_SOURCE_KINDS as readonly string[]).includes(kind)) {
@@ -78,11 +93,12 @@ export function assertRouterSource(kind: unknown, adapter: unknown): asserts ada
   }
   if (!adapter || typeof adapter !== 'object') throw new TypeError('A routing source adapter must be an object with resolve() and an optional read().');
   for (const key of Object.keys(adapter)) {
-    if (key !== 'resolve' && key !== 'read' && key !== 'readForDelivery' && key !== 'currentSources' && key !== 'relocate' && key !== 'noise') {
-      throw new TypeError(`A routing source adapter takes only resolve(), read(), readForDelivery(), currentSources(), relocate() and noise(), not "${key}".`);
+    if (!ADAPTER_KEYS.has(key)) {
+      throw new TypeError(`A routing source adapter takes only resolve(), read(), readForDelivery(), currentSources(), relocate(), noise() and recent(), not "${key}".`);
     }
   }
-  const { resolve, read, currentSources, relocate, noise, readForDelivery } = adapter as Record<string, unknown>;
+  const { resolve, read, currentSources, relocate, noise, readForDelivery, recent } = adapter as Record<string, unknown>;
+  if (recent !== undefined && typeof recent !== 'function') throw new TypeError('A routing source adapter\'s recent must be a function when given.');
   if (readForDelivery !== undefined && typeof readForDelivery !== 'function') throw new TypeError('A routing source adapter\'s readForDelivery must be a function when given.');
   if (relocate !== undefined && typeof relocate !== 'function') throw new TypeError('A routing source adapter\'s relocate must be a function when given.');
   if (noise !== undefined && typeof noise !== 'function') throw new TypeError('A routing source adapter\'s noise must be a function when given.');
@@ -262,5 +278,56 @@ export async function handleRouterNoise(source: RouterSource, timeoutMs = ROUTER
     };
   } catch (error) {
     return { read: false, archived: false, note: (error instanceof Error ? error.message : String(error)).slice(0, 200) };
+  } finally { if (timer) clearTimeout(timer); }
+}
+
+/** Whether this kind's source can say what it saw arrive (the hourly missed-message check). */
+export function hasRouterRecent(kind: RouterSource['kind']): boolean {
+  return typeof adapters.get(kind)?.recent === 'function';
+}
+
+/** One arrival a source saw, with the labels a router's filter reads (plugin-intake.ts). */
+export interface RouterRecentArrival { source: RouterSource; labels: string[] }
+
+/** The most items one recent() answer may name; more is refused whole. */
+export const ROUTER_RECENT_MAX = 1000;
+
+/**
+ * What one account's source saw arrive since `sinceMs`, checked: only that kind and account, each
+ * message once. Throws RouterSourceError when the source cannot answer (the check then says it
+ * could not count, never that nothing was missed).
+ */
+export async function recentRouterSources(kind: RouterSource['kind'], account: string, sinceMs: number, untilMs: number): Promise<RouterRecentArrival[]> {
+  const adapter = adapters.get(kind);
+  if (!adapter?.recent) throw new RouterSourceError('source_unavailable', `The ${kind} integration cannot say what arrived.`);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const answer: unknown = await Promise.race([
+      adapter.recent(account, sinceMs, untilMs),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Routing source recent check timed out.')), 20_000); }),
+    ]);
+    if (!Array.isArray(answer) || answer.length > ROUTER_RECENT_MAX) throw new Error('Routing source gave no usable list of recent items.');
+    const seen = new Set<string>();
+    const out: RouterRecentArrival[] = [];
+    for (const one of answer as unknown[]) {
+      const raw = (one && typeof one === 'object' ? one : {}) as Record<string, unknown>;
+      if (raw.kind !== kind || raw.account !== account || typeof raw.message !== 'string' || !raw.message
+        || (raw.version !== undefined && (typeof raw.version !== 'string' || !raw.version))) {
+        throw new Error('Routing source named a recent item of another account or with no message id.');
+      }
+      const source: RouterSource = { kind, account, message: raw.message, ...(raw.version !== undefined ? { version: raw.version as string } : {}) };
+      const labels = raw.labels === undefined ? [] : raw.labels;
+      if (!Array.isArray(labels) || labels.length > 20 || !labels.every((label) => typeof label === 'string' && !!label && label.length <= 200)) {
+        throw new Error('Routing source gave a recent item with unusable labels.');
+      }
+      const id = identityOf(source);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push({ source, labels: labels as string[] });
+    }
+    return out;
+  } catch (error) {
+    if (error instanceof RouterSourceError) throw error;
+    throw new RouterSourceError('source_unavailable', error instanceof Error ? error.message : String(error));
   } finally { if (timer) clearTimeout(timer); }
 }

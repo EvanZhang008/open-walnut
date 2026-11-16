@@ -91,6 +91,9 @@ import type {
 let appStateGenerationSeq = 0
 
 /** Plugins already warned about agentContext — once each, not once per reload. */
+/** Which plugin last registered each router source kind: the only one whose router.intake that kind takes. */
+const routerSourceOwners = new Map<string, string>()
+
 const agentContextWarned = new Set<string>()
 
 interface ContributionCollector {
@@ -1016,6 +1019,22 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
      * filter instead of "anything external". A plugin letter therefore has no origin session to
      * deliver a choice to, and the bus event is the return path by design.
      */
+    /**
+     * The inbound router: a channel's new arrivals enter the person's router the way new mail does
+     * (core/router/plugin-intake.ts). Serve the items themselves with registry.routerSource.
+     */
+    router: {
+      async intake(kind: RouterSourceKind, account: string, arrivals: Array<{ message: string; version?: string; labels?: string[] }>) {
+        assertLive('router.intake')
+        // Only the plugin that serves this kind's items may enter them: another plugin could
+        // otherwise bind made-up accounts into the person's router.
+        if (routerSourceOwners.get(kind) !== pluginId) {
+          throw new TypeError(`router.intake("${String(kind)}") needs this plugin to serve that kind first (registry.routerSource).`)
+        }
+        const { routerIntake } = await import('../router/plugin-intake.js')
+        return routerIntake(kind, account, arrivals)
+      },
+    },
     letters: {
       /**
        * Whether a step the plugin would ask about waits for the person now: the person's one
@@ -1025,6 +1044,15 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
       async asksPerson(): Promise<boolean> {
         const { asksPerson } = await import('../approvals/ask-me.js')
         return asksPerson()
+      },
+      /**
+       * Whether an outward text looks personal or sensitive (promotion, pay, health and the rest:
+       * core/outbound/sensitive-hold.ts): the step then waits for the person even with the switch
+       * off, and the reason leads the letter. Null: nothing found.
+       */
+      async sensitiveHold(text: string): Promise<{ reason: string } | null> {
+        const { sensitiveHold } = await import('../outbound/sensitive-hold.js')
+        return sensitiveHold(typeof text === 'string' ? text : '')
       },
       async recordUnasked(input: { what: string; detail?: string }): Promise<void> {
         const what = typeof input?.what === 'string' ? input.what.trim() : ''
@@ -1408,15 +1436,23 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         // pass the same adapter object, and the adapter gets a frozen copy of the source, so it
         // cannot rewrite what its answer is checked against.
         assertRouterSource(kind, adapter)
-        const { resolve, read, currentSources } = adapter
+        const { resolve, read, currentSources, readForDelivery, recent } = adapter
         const copy = (source: RouterSource): RouterSource => Object.freeze({ kind: source.kind, account: source.account, message: source.message,
           ...(source.version !== undefined ? { version: source.version } : {}) })
         const wrapped: RouterSourceAdapter = {
           resolve: (source) => resolve.call(adapter, copy(source)),
           ...(read ? { read: (source: RouterSource) => read.call(adapter, copy(source)) } : {}),
+          ...(readForDelivery ? { readForDelivery: (source: RouterSource) => readForDelivery.call(adapter, copy(source)) } : {}),
           ...(currentSources ? { currentSources: (sources: readonly RouterSource[]) => currentSources.call(adapter, sources.map(copy)) } : {}),
+          ...(recent ? { recent: (account: string, sinceMs: number, untilMs: number) => recent.call(adapter, String(account), Number(sinceMs), Number(untilMs)) } : {}),
         }
-        return own(toDisposable(registerRouterSource(kind, wrapped)))
+        routerSourceOwners.set(kind, pluginId)
+        const handle = registerRouterSource(kind, wrapped)
+        return own(toDisposable(() => {
+          // Its intake right ends with its source, unless a later registration took the kind.
+          if (routerSourceOwners.get(kind) === pluginId) routerSourceOwners.delete(kind)
+          handle()
+        }))
       },
       wsMethod(id: string, handler: (payload: unknown) => unknown | Promise<unknown>) {
         assertLive(`registry.wsMethod("${id}")`)

@@ -62,6 +62,36 @@ describe('approval letter', () => {
   });
 });
 
+describe('approval letter held by the personal-matter check', () => {
+  const reason = 'It mentions "promotion doc", which reads as a personal or sensitive matter.';
+
+  it('leads with why it waits, in English, before the From line; without a reason it is unchanged', () => {
+    const en = MAIL_APPROVAL.render('en', { ...approval, heldBecause: reason });
+    const lines = en.markdown.split('\n');
+    expect(lines[0]).toMatch(/^\*\*Held for you\*\*: your approvals are off, but this looks personal, so it waits for your yes\. /);
+    expect(lines[0]).toContain('It mentions');
+    expect(lines[0]).toContain('promotion doc');
+    expect(lines[1]).toBe('');
+    expect(lines[2]).toBe('**From**: Work mail (me@example.invalid)');
+    expect(en.subject).toBe('Approve this message: Quarterly numbers');
+    expect(MAIL_APPROVAL.render('en', approval).markdown).not.toContain('Held for you');
+  });
+
+  it('leads with it in Chinese too, with the reason', () => {
+    const zh = MAIL_APPROVAL.render('zh', { ...approval, heldBecause: reason });
+    const first = zh.markdown.split('\n')[0]!;
+    expect(first.startsWith('**\u5148\u7b49\u4f60\u786e\u8ba4**\uff1a')).toBe(true);
+    expect(first).toContain('promotion doc');
+    expect(first).toMatch(HAN);
+    expect(zh.markdown).not.toContain('Held for you');
+  });
+
+  it('escapes the reason, so it cannot forge markup in the letter', () => {
+    const en = MAIL_APPROVAL.render('en', { ...approval, heldBecause: '<b>x</b>' });
+    expect(en.markdown.split('\n')[0]).not.toContain('<b>');
+  });
+});
+
 const unsubscribe = {
   accountLabel: 'Personal mail',
   sender: { name: 'Marina Weekly', address: 'weekly@lists.example.invalid' },

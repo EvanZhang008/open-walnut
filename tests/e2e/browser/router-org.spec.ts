@@ -233,9 +233,9 @@ for (const area of AREAS) {
     expect(await page.getByTestId('org-channel').filter({ hasText: name }).count()).toBe(0);
     await expect(page.getByTestId('org-rail-toggle')).toHaveCount(0);
     // Its page says what it is and where it stands (2026-11-11: it said only "No conversation history found").
-    await expect(page.getByTestId('org-router-overview-what')).toContainText(`reads the mail you assign to ${area.label}`);
+    await expect(page.getByTestId('org-router-overview-what')).toContainText(`reads the mail and messages that reach ${area.label}`);
     await expect(page.getByTestId('org-router-overview-state')).toHaveText(/^Paused: it reads nothing/);
-    await expect(page.getByTestId('org-router-overview-routed')).toHaveText('No email so far.');
+    await expect(page.getByTestId('org-router-overview-routed')).toHaveText('No messages so far.');
     await expect(page.getByText('No conversation history found')).toHaveCount(0);
 
     // Settings: an empty name cannot be saved, Discard brings the saved name back, a rename is saved.

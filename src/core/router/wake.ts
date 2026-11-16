@@ -61,6 +61,8 @@ export interface RouterWakeDeps {
   followOpen?(areaId: string): Promise<number>;
   /** After a wake listed these items: the refused deliveries among them have had their one retry offered. */
   offerRetries?(areaId: string, sources: readonly RouterSource[]): Promise<void>;
+  /** The hourly missed-arrival check (reconcile.ts), started in the background; absent = none. */
+  reconcile?(areaId: string): Promise<void>;
 }
 
 function defaultDeps(): RouterWakeDeps {
@@ -95,6 +97,10 @@ function defaultDeps(): RouterWakeDeps {
     },
     nonce: () => randomUUID(),
     currentSources: currentRouterSources,
+    async reconcile(areaId) {
+      const { reconcileIfDue } = await import('./reconcile.js');
+      await reconcileIfDue(areaId);
+    },
     async followOpen(areaId) {
       const { followOpenArrivals } = await import('./account-intake.js');
       return await followOpenArrivals(areaId, { routesFor: (id, sources) => this.routesFor(id, sources) });
@@ -215,6 +221,8 @@ export async function checkRouterPending(params: Record<string, string>, deps: R
   routerAreaId(areaId);
   // First, so an arrival a filter moved is pending at its new copy (a failure only waits for the next check).
   await deps.followOpen?.(areaId).catch(() => 0);
+  // Never awaited: a slow source must not hold this check; what it enters wakes the router itself.
+  void deps.reconcile?.(areaId).catch(() => undefined);
   const gate = await routerWakeGate(areaId, deps);
   if (!gate.ready) return { fire: false };
   // No items: the daemon's seen set never swallows a source whose routing is unfinished.

@@ -622,6 +622,12 @@ export interface LettersService {
    * `detail`. Absent on an older host: skip it. Never throws.
    */
   recordUnasked?(input: { what: string; detail?: string }): Promise<void>
+  /**
+   * Whether an outward text looks personal or sensitive (promotion, performance, pay, health,
+   * immigration, family, a job search): ask the person even with the switch off, with the reason
+   * at the top of the letter. Null: nothing found. Absent on an older host: skip it.
+   */
+  sensitiveHold?(text: string): Promise<{ reason: string } | null>
   send(input: LetterSendInput): Promise<{ letterId: string }>
   /** Add a turn to the letter's thread, so the human sees what happened after they answered. */
   reply(letterId: string, input: { markdown?: string; html?: string; text?: string; items?: InboxLetterItem[] }): Promise<void>
@@ -1412,6 +1418,8 @@ export interface PluginRouterItem {
   sender: string
   subject: string
   preview?: string
+  /** One line the receiver runs or opens to read the whole original (a tool call, a permalink). */
+  reference?: string
 }
 
 /** An item's cached content. Attachments are metadata only; their bytes are never read. */
@@ -1435,6 +1443,37 @@ export interface PluginRouterSourceAdapter {
   read?(source: PluginRouterSource): Promise<PluginRouterItemContent>
   /** Cache-only batch check: return the given sources that are still the current cached delivery. */
   currentSources?(sources: readonly PluginRouterSource[]): Promise<PluginRouterSource[]>
+  /** As read, but may fetch a body the cache does not hold yet (read only, never marking it read). */
+  readForDelivery?(source: PluginRouterSource): Promise<PluginRouterItemContent>
+  /**
+   * What your source saw arrive for one account between two times, from your own record, with the
+   * labels router.intake would have given each: Walnut's hourly check enters what never reached the router. Absent on Walnut before 2026-11-16.
+   */
+  recent?(account: string, sinceMs: number, untilMs: number): Promise<Array<PluginRouterSource & { labels?: string[] }>>
+}
+
+/** One new arrival of an account, with the labels a router's filter can name ("dm", "mention"). */
+export interface PluginRouterArrival {
+  message: string
+  version?: string
+  labels?: string[]
+}
+
+export type PluginRouterIntakeResult =
+  /** `skipped`: the message ids the account's filter leaves out; handle those your own way. */
+  | { taken: true; areaId: string; entered: number; filtered: number; skipped: string[] }
+  /** `off`: the person has not turned the router on for chats; `closed`: its router task is closed. */
+  | { taken: false; reason: 'off' | 'replica' | 'test_run' | 'choose' | 'none' | 'closed' }
+
+/** The inbound router. Absent on Walnut before 2026-11-16: call it as `walnut.router?.intake(...)`. */
+export interface RouterService {
+  /**
+   * Enter one account's new arrivals into the person's router (the one that reads mail), bound on
+   * the first call. Walnut resolves and reads each through your registry.routerSource adapter.
+   * `taken: false` with `none`: there is no router to join, keep your own handling. Register
+   * `registry.routerSource` for the kind first: only the plugin serving a kind may enter it.
+   */
+  intake(kind: PluginRouterSourceKind, account: string, arrivals: PluginRouterArrival[]): Promise<PluginRouterIntakeResult>
 }
 
 export interface RegistryService {
@@ -1826,6 +1865,8 @@ export interface WalnutServerApi {
   readonly ui: UiService
   readonly appState: AppStateService
   readonly letters: LettersService
+  /** The inbound router. Absent on Walnut before 2026-11-16: `walnut.router?.intake(...)`. */
+  readonly router?: RouterService
   readonly ops: OpsService
   readonly services: ServicesService
   readonly events: EventApi

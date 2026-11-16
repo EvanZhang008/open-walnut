@@ -67,6 +67,7 @@ export const CONFIG_SECTION_WRITE: { readonly [K in keyof Required<Config>]: Con
   user: 'merge',
   org: 'merge',
   approvals: 'merge',
+  outbound: 'merge',
   passwords: 'merge',
   defaults: 'merge',
   provider: 'merge',

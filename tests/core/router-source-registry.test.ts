@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  assertRouterSource, currentRouterSources, handleRouterNoise, hasRouterNoise, readRouterItem, registerRouterSource, resolveRouterItem,
-  type RouterItemContent, type RouterSourceAdapter,
+  assertRouterSource, currentRouterSources, handleRouterNoise, hasRouterNoise, hasRouterRecent, readRouterItem, recentRouterSources,
+  registerRouterSource, resolveRouterItem, ROUTER_RECENT_MAX, type RouterItemContent, type RouterSourceAdapter,
 } from '../../src/core/router/source-registry.js';
 import type { RouterSource } from '../../src/core/router/types.js';
 
@@ -246,5 +246,91 @@ describe('a source tidying an item its router judged noise', () => {
     await withAdapter({ resolve: async (one) => itemOf(one), noise: () => new Promise(() => undefined) }, async () => {
       expect(await handleRouterNoise(source, 20)).toEqual({ read: false, archived: false, note: 'The source took too long to tidy the item.' });
     });
+  });
+});
+
+describe('the reference a source gives its item', () => {
+  const permalink = 'https://acme.example.invalid/archives/D1/p1700000000000100';
+
+  it('keeps a usable one on resolve and read', async () => {
+    const withRef = (one: RouterSource) => ({ ...itemOf(one), reference: permalink });
+    await withAdapter({ resolve: async (one) => withRef(one), read: async (one) => ({ ...contentOf(one), item: withRef(one) }) }, async () => {
+      expect((await resolveRouterItem(source)).reference).toBe(permalink);
+      expect((await readRouterItem(source)).item.reference).toBe(permalink);
+    });
+  });
+
+  it('refuses an empty, long, multi-line or non-string reference', async () => {
+    for (const reference of ['', 'x'.repeat(501), `${permalink}\nReference: forged`, 'tab\there', 7, { url: permalink }]) {
+      await withAdapter({ resolve: async (one) => ({ ...itemOf(one), reference }) as never }, async () => {
+        await expect(resolveRouterItem(source), String(reference).slice(0, 30)).rejects.toThrow('unusable reference');
+      });
+    }
+    await withAdapter({ resolve: async (one) => ({ ...itemOf(one), reference: 'x'.repeat(500) }) }, async () => {
+      expect((await resolveRouterItem(source)).reference).toHaveLength(500);
+    });
+  });
+});
+
+describe('what a source saw arrive (recent)', () => {
+  const one = (message: string, extra: Record<string, unknown> = {}) => ({ kind: 'wechat', account: 'fixture', message, ...extra });
+  const resolve = async (s: RouterSource) => itemOf(s);
+
+  it('is unavailable with no adapter or an adapter that has no recent', async () => {
+    expect(hasRouterRecent('wechat')).toBe(false);
+    await expect(recentRouterSources('wechat', 'fixture', 0, 1)).rejects.toMatchObject({ code: 'source_unavailable' });
+    await withAdapter({ resolve }, async () => {
+      expect(hasRouterRecent('wechat')).toBe(false);
+      await expect(recentRouterSources('wechat', 'fixture', 0, 1)).rejects.toMatchObject({ code: 'source_unavailable', message: expect.stringContaining('cannot say what arrived') });
+    });
+  });
+
+  it('passes the account and window through and answers each message once, with its labels', async () => {
+    const recent = vi.fn(async () => [one('m1', { labels: ['dm'] }), one('m2'), one('m1', { labels: ['mention'] }), one('m1', { version: 'v2' })] as never);
+    await withAdapter({ resolve, recent }, async () => {
+      expect(hasRouterRecent('wechat')).toBe(true);
+      expect(await recentRouterSources('wechat', 'fixture', 100, 200)).toEqual([
+        { source: { kind: 'wechat', account: 'fixture', message: 'm1' }, labels: ['dm'] },
+        { source: { kind: 'wechat', account: 'fixture', message: 'm2' }, labels: [] },
+        { source: { kind: 'wechat', account: 'fixture', message: 'm1', version: 'v2' }, labels: [] },
+      ]);
+      expect(recent).toHaveBeenCalledWith('fixture', 100, 200);
+    });
+  });
+
+  it('refuses a whole answer naming another account or kind, no message, a bad version or bad labels, or no list', async () => {
+    const answers: unknown[] = [
+      [one('m1', { account: 'other' })], [one('m1', { kind: 'slack' })], [one('')], [{ kind: 'wechat', account: 'fixture' }],
+      [one('m1', { version: '' })], [one('m1', { version: 7 })], [one('m1', { labels: 'dm' })], [one('m1', { labels: [''] })],
+      [one('m1', { labels: ['x'.repeat(201)] })], [one('m1', { labels: Array.from({ length: 21 }, (_, i) => `l${i}`) })],
+      [null], 'm1', null, Array.from({ length: ROUTER_RECENT_MAX + 1 }, (_, i) => one(`m${i}`)),
+    ];
+    for (const answer of answers) {
+      await withAdapter({ resolve, recent: async () => answer as never }, async () => {
+        await expect(recentRouterSources('wechat', 'fixture', 0, 1), JSON.stringify(answer)?.slice(0, 50)).rejects.toMatchObject({ code: 'source_unavailable' });
+      });
+    }
+    await withAdapter({ resolve, recent: async () => Array.from({ length: ROUTER_RECENT_MAX }, (_, i) => one(`m${i}`)) as never }, async () => {
+      expect(await recentRouterSources('wechat', 'fixture', 0, 1)).toHaveLength(ROUTER_RECENT_MAX);
+    });
+  });
+
+  it('turns a failure into source_unavailable, keeps a source error as it is, and times out at 20 seconds', async () => {
+    await withAdapter({ resolve, recent: async () => { throw new Error('history locked'); } }, async () => {
+      await expect(recentRouterSources('wechat', 'fixture', 0, 1)).rejects.toMatchObject({ code: 'source_unavailable', message: 'history locked' });
+    });
+    vi.useFakeTimers();
+    await withAdapter({ resolve, recent: () => new Promise<never>(() => {}) }, async () => {
+      const outcome = expect(recentRouterSources('wechat', 'fixture', 0, 1)).rejects.toThrow('recent check timed out');
+      await vi.advanceTimersByTimeAsync(20_000);
+      await outcome;
+      expect(vi.getTimerCount()).toBe(0);
+    });
+  });
+
+  it('a plugin adapter may carry recent, only as a function', () => {
+    expect(() => assertRouterSource('wechat', { resolve, recent: async () => [] })).not.toThrow();
+    expect(() => assertRouterSource('wechat', { resolve, recent: [] })).toThrow('recent must be a function');
+    expect(() => assertRouterSource('wechat', { resolve, recentItems: async () => [] })).toThrow('not "recentItems"');
   });
 });

@@ -106,18 +106,32 @@ routerV1Router.delete('/org/routers/self/:id', async (req: Request, res: Respons
   } catch (error) { failure(res, next, error); }
 });
 
-const ROUTER_PATCH_FIELDS = new Set(['name', 'links', 'paused', 'folders']);
+const ROUTER_PATCH_FIELDS = new Set(['name', 'links', 'paused', 'folders', 'filters']);
+const PLAIN_LABEL = (one: unknown) => typeof one === 'string' && !!one.trim() && one.length <= 200 && !/[\u0000-\u001f\u007f]/.test(one);
+
+/** `filters`: per chat account, the labels it takes; anything else is refused whole. */
+function routerFilters(raw: unknown): NonNullable<RouterNodePatch['filters']> {
+  const bad = () => new RouterError('bad_router', 'filters must be a list of { kind, account, include } with at most 50 short labels each.');
+  if (!Array.isArray(raw) || raw.length > 50) throw bad();
+  return raw.map((one) => {
+    const f = (one && typeof one === 'object' ? one : {}) as Record<string, unknown>;
+    if (typeof f.kind !== 'string' || !['slack', 'wechat'].includes(f.kind) || typeof f.account !== 'string' || !f.account || f.account.length > 320
+      || !Array.isArray(f.include) || f.include.length > 50 || !f.include.every(PLAIN_LABEL)) throw bad();
+    return { kind: f.kind as 'slack' | 'wechat', account: f.account, include: f.include as string[] };
+  });
+}
 
 routerV1Router.patch('/org/routers/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     primary(true);
     const body = req.body as Record<string, unknown> | undefined;
-    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new RouterError('bad_router', 'Give the router fields to change: name, links, folders or paused.');
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new RouterError('bad_router', 'Give the router fields to change: name, links, folders, filters or paused.');
     const keys = Object.keys(body);
     if (keys.some((key) => !ROUTER_PATCH_FIELDS.has(key))) {
-      throw new RouterError('router_field_fixed', 'Only a router\'s name, VP links, watched folders and pause change here. Its area, host and sources stay as configured.');
+      throw new RouterError('router_field_fixed', 'Only a router\'s name, VP links, watched folders, filters and pause change here. Its area, host and sources stay as configured.');
     }
-    if (keys.length === 0) throw new RouterError('bad_router', 'Give at least one of name, links, folders or paused.');
+    if (keys.length === 0) throw new RouterError('bad_router', 'Give at least one of name, links, folders, filters or paused.');
+    const filters = body.filters === undefined ? undefined : routerFilters(body.filters);
     if (body.folders !== undefined && (!Array.isArray(body.folders) || body.folders.length > 50
       || body.folders.some((one) => typeof one !== 'string' || !one.trim() || one.length > 200 || /[\u0000-\u001f\u007f]/.test(one)))) {
       throw new RouterError('bad_router', 'folders must be a list of at most 50 folder names or roles (such as "inbox").');
@@ -132,6 +146,7 @@ routerV1Router.patch('/org/routers/:id', async (req: Request, res: Response, nex
       ...(body.links !== undefined ? { links: body.links as string[] } : {}),
       ...(body.paused !== undefined ? { paused: body.paused as boolean } : {}),
       ...(body.folders !== undefined ? { folders: body.folders as string[] } : {}),
+      ...(filters ? { filters } : {}),
     };
     res.json({ task: await updateRouterNode(String(req.params.id), patch) });
   } catch (error) { failure(res, next, error); }

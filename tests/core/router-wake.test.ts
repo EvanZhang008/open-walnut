@@ -259,6 +259,18 @@ describe('checkRouterPending', () => {
     await expect(checkRouterPending({ areaId: 'personal' }, deps({ task: { org_role: 'lead' } }))).rejects.toThrow(/not a local router/)
     await expect(checkRouterPending({ areaId: 'personal' }, deps({ task: { source: 'external' } }))).rejects.toThrow(/not a local router/)
   })
+
+  it('starts the hourly missed-message check for its area without waiting on it, and a failing check never fails the wake', async () => {
+    const asked: string[] = []
+    const slow = deps()
+    // A source that never answers: the wake still decides.
+    slow.reconcile = async (areaId) => { asked.push(areaId); await new Promise(() => undefined) }
+    expect(await checkRouterPending({ areaId: 'personal' }, slow)).toEqual({ fire: true, input: ROUTER_WAKE_INPUT })
+    expect(asked).toEqual(['personal'])
+    const broken = deps({ routes: [route(mail('INBOX:1:0'), 'routed'), route(mail('INBOX:1:1'), 'routed'), route(mail('INBOX:1:2'), 'routed')] })
+    broken.reconcile = async () => { throw new Error('source down') }
+    expect(await checkRouterPending({ areaId: 'personal' }, broken)).toEqual({ fire: false })
+  })
 })
 
 describe('router executor', () => {

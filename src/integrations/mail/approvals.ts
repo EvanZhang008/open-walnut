@@ -126,6 +126,8 @@ export class MailApprovals {
     asksPerson?: () => Promise<boolean>
     /** Lists a send that went ahead with approvals off where the person reads them (Settings, General). */
     recordUnasked?: (what: string) => Promise<void>
+    /** Whether an outward text reads as personal: then it asks even with the switch off. */
+    sensitiveHold?: (text: string) => Promise<{ reason: string } | null>
   }) {}
 
   private get now(): number {
@@ -142,7 +144,16 @@ export class MailApprovals {
    */
   async requestSend(draftId: string, revision: number): Promise<{ draft: DraftDto; letterId: string; sent?: SendDto }> {
     // A last attempt that may have landed (`unknown`) is the person's to judge, switch or not.
-    if (this.deps.asksPerson && (await this.deps.drafts.require(draftId)).state !== 'unknown' && !(await this.deps.asksPerson())) {
+    const current = await this.deps.drafts.require(draftId)
+    const switchOff = !!this.deps.asksPerson && current.state !== 'unknown' && !(await this.deps.asksPerson())
+    // With the switch off, a mail that reads as personal (promotion, pay, health...) still waits for
+    // the person, and its letter says why (core/outbound/sensitive-hold.ts).
+    let heldBecause: string | undefined
+    if (switchOff && this.deps.sensitiveHold) {
+      const dto = this.deps.drafts.toDto(current)
+      heldBecause = (await this.deps.sensitiveHold(`${dto.subject}\n\n${dto.bodyMarkdown}`).catch(() => ({ reason: 'The personal-matter check failed, so it waits for you.' })))?.reason
+    }
+    if (switchOff && !heldBecause) {
       // Approvals are off: the agent's send goes out now, through the same ledger, with the switch
       // as its authorisation (`approval_ref` says so, for whoever later asks who sent it).
       const { send, draft } = await this.consoleSend(draftId, revision, undefined, 'approvals-off')
@@ -176,6 +187,7 @@ export class MailApprovals {
       subject: dto.subject,
       bodyMarkdown: dto.bodyMarkdown,
       isReply: !!dto.inReplyTo,
+      ...(heldBecause ? { heldBecause } : {}),
     })
     const sent = await this.deps.letters.send({
       subject: letter.subject,

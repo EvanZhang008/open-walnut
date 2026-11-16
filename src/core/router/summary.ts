@@ -12,6 +12,7 @@ import { activeRouter, allAreaItems, readRouterAreas, taskArea } from './areas.j
 import { routerStore } from './runtime.js';
 import { ROUTER_PAUSED_REASON, pendingCount, routerReadiness, routerWakeJobId } from './wake.js';
 import type { RouterRouteStatus } from './types.js';
+import { readReconcileReport, type RouterReconcileAccount } from './reconcile.js';
 
 export interface RouterNodeSummary {
   areaId: string;
@@ -32,6 +33,8 @@ export interface RouterNodeSummary {
   wake: { armed: boolean; everyMs?: number; lastCheckAt?: number; nextAt?: number };
   /** Its own conversation: started (a live CLI, idle or at work), or not. */
   session: { started: boolean; state?: string };
+  /** The last missed-arrival check (reconcile.ts): per account, what its source saw against what the router had. */
+  reconcile?: { at: number; sinceMs: number; accounts: RouterReconcileAccount[] };
 }
 
 export class RouterSummaryError extends Error {
@@ -45,11 +48,12 @@ export async function routerNodeSummary(taskId: string, home = WALNUT_HOME): Pro
   const area = taskArea(file, taskId);
   const assignment = area ? file.routers.find((r) => r.taskId === taskId && r.areaId === area.id) : undefined;
   if (!area || !assignment) throw new RouterSummaryError('not_router', 'This task is not a router of any area.');
-  const [overview, readiness, wake, session] = await Promise.all([
+  const [overview, readiness, wake, session, checked] = await Promise.all([
     routerStore(area.id, home).overview(),
     routerReadiness(area.id, taskId),
     wakeOf(taskId),
     sessionOf(taskId),
+    readReconcileReport(area.id, home),
   ]);
   const paused = activeRouter(file, area.id)?.taskId !== taskId || (!readiness.ready && readiness.reason === ROUTER_PAUSED_REASON);
   const blocked = !paused && !readiness.ready ? readiness.reason : undefined;
@@ -71,6 +75,7 @@ export async function routerNodeSummary(taskId: string, home = WALNUT_HOME): Pro
     areaId: area.id, areaName: area.name || area.id, paused, ...(blocked ? { blocked } : {}), sources: area.sources.length,
     assigned: allAreaItems(file).filter((item) => item.areaId === area.id).length,
     waiting, counts, ...(latest ? { latest } : {}), wake, session,
+    ...(checked ? { reconcile: { at: checked.at, sinceMs: checked.sinceMs, accounts: checked.accounts } } : {}),
   };
 }
 

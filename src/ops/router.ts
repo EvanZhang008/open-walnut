@@ -32,10 +32,12 @@ defineOp({
 
 defineOp({
   name: 'router_update', title: 'Rename, relink, pause, resume or refilter a router',
-  description: 'Change an existing router\'s name, the folders it watches, its VP links (zero or many open VPs; collaboration preferences, never ownership or data access) or whether it is paused. Pausing or resuming changes only this router\'s own assignment; no area, item or task moves. Resuming arms its daemon wake so confirmed pending items can be processed. Main, VPs and other tasks are refused.',
+  description: 'Change an existing router\'s name, the folders it watches, which chat messages it takes (filters), its VP links (zero or many open VPs; collaboration preferences, never ownership or data access) or whether it is paused. Pausing or resuming changes only this router\'s own assignment; no area, item or task moves. Resuming arms its daemon wake so confirmed pending items can be processed. Main, VPs and other tasks are refused.',
   input: { id: z.string().min(1).max(200).describe('The router\'s task id'), name: z.string().min(1).max(60).optional(),
     links: z.array(z.string()).max(LIST_MAX).optional(), paused: z.boolean().optional(),
-    folders: z.array(z.string().min(1).max(200)).max(50).optional().describe('Which folders or labels of its mailboxes this router watches (names, or the role "inbox"); [] goes back to the plugin default, the Inbox') },
+    folders: z.array(z.string().min(1).max(200)).max(50).optional().describe('Which folders or labels of its mailboxes this router watches (names, or the role "inbox"); [] goes back to the plugin default, the Inbox'),
+    filters: z.array(z.object({ kind: z.enum(['slack', 'wechat']), account: z.string().min(1).max(320), include: z.array(z.string().min(1).max(200)).max(50) })).max(50).optional()
+      .describe('Per chat account it reads, which arrivals it takes, by label: "dm", "mention", "watched" (a watched channel), "channel:<name>"; include [] takes every arrival') },
   bind: { method: 'PATCH', path: '/org/routers/:id' }, tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
