@@ -71,6 +71,10 @@ struct LinkPolicy {
     func verdict(for request: LinkRequest) -> LinkVerdict {
         let url = request.url
         let scheme = url.scheme?.lowercased() ?? ""
+        // No scheme is nothing to open: `window.open('', name)` (how a page asks whether a named
+        // window is open) arrives as an EMPTY url, and handing that to macOS showed Finder's
+        // "The application can't be opened. -50" on every "Open in new window" (2026-11-16).
+        if scheme.isEmpty { return .ignore }
         if !LinkPolicy.inPageSchemes.contains(scheme) {
             return .openExternally
         }

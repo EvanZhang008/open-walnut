@@ -126,7 +126,16 @@ describe('openAppWindow', () => {
     expect(hashed.location.replace).not.toHaveBeenCalled()
   })
 
-  it('opens the address itself where an empty open gives no window (the Mac app), the same address each time', () => {
+  it('in the Mac app, opens the address itself and never an empty one (that reached macOS as a -50 dialog)', () => {
+    stubWindow([null, null])
+    ;(g.window as { webkit?: unknown }).webkit = { messageHandlers: { walnutChrome: {} } }
+    openAppWindow('core:calendar')
+    openAppWindow('core:calendar')
+    expect(open.mock.calls.map((c) => c[0])).toEqual([URL_OF, URL_OF])
+    expect(open.mock.calls[0]![1]).toBe('walnut-app-core:calendar')
+  })
+
+  it('opens the address itself where an empty open gives no window (an older shell), the same address each time', () => {
     stubWindow([null, null, null, null])
     openAppWindow('core:calendar')
     openAppWindow('core:calendar')
@@ -141,6 +150,8 @@ describe('the Mac app opens and refinds the window by its address', () => {
   const policy = read('desktop/LinkPolicy.swift')
 
   it('a same-origin window.open becomes an app window, and an empty one is cancelled', () => {
+    // An empty address (window.open('', name)) is nothing to open: cancelled, never handed to macOS.
+    expect(policy).toMatch(/if scheme\.isEmpty \{ return \.ignore \}/)
     expect(policy).toMatch(/if request\.targetsNewWindow \{\s*if isAppOrigin\(url\) \{ return \.openInAppWindow \}/)
     expect(read('desktop/main.swift')).toMatch(/linkPolicy\.isSameWindowTarget\(current, url\)/)
   })

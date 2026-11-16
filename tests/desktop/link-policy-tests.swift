@@ -36,6 +36,12 @@ struct LinkPolicyTests {
         precondition(LinkPolicy(appPort: 4567).verdict(for: req("http://localhost:4567/popout", newWindow: true)) == .openInAppWindow)
         precondition(policy.verdict(for: req("http://localhost.example.com:3456/popout", newWindow: true)) == .openExternally)
         precondition(policy.verdict(for: req("about:blank", click: false, newWindow: true)) == .ignore)
+        // `window.open('', name)` reaches the app as an empty url (WKWebView, checked 2026-11-16): it
+        // opens nothing, in a new window or in place, and never reaches macOS (Finder's -50 dialog).
+        let empty = CFURLCreateWithBytes(nil, "", 0, CFStringBuiltInEncodings.UTF8.rawValue, nil)! as URL
+        for (click, newWindow) in [(false, true), (true, true), (false, false), (true, false)] {
+            precondition(policy.verdict(for: LinkRequest(url: empty, isLinkClick: click, targetsNewWindow: newWindow, isMainFrame: true)) == .ignore)
+        }
         precondition(policy.verdict(for: req("data:text/html,test", newWindow: true)) == .ignore)
         precondition(policy.verdict(for: req("blob:http://localhost:3456/abc", newWindow: true)) == .ignore)
 

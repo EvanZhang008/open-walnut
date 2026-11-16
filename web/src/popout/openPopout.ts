@@ -17,6 +17,7 @@
  */
 
 import { hasRecentHumanInput } from '@/utils/recent-opened';
+import { inMacApp } from '@/utils/mac-app';
 import { taskPath } from '@/utils/task-path';
 import { CORNER_ORDER, appendToCornerStack } from '@/components/common/corner-stack';
 
@@ -130,14 +131,16 @@ function showsAppWindow(win: Window, url: string): boolean {
  * A browser hands back an open window of the same name for an empty address without loading
  * anything, so a second click keeps where the person was in the app; a blank answer is a new
  * window, sent to the app's address, and so is a window of that name that no longer shows the app
- * (showsAppWindow). The Mac app answers an empty open with no window
- * (LinkPolicy.swift: an empty window.open is cancelled), so the address itself opens there, and
- * the Mac app brings forward the window that already shows it.
+ * (showsAppWindow). The Mac app is never asked the empty open: it finds windows by address, not by
+ * name, so it gets the address itself and brings forward the window that already shows it. (An
+ * empty open there reached macOS as an empty address: Finder's "The application can't be opened.
+ * -50" on every click, 2026-11-16, in app builds before LinkPolicy.swift cancelled it.)
  */
 export function openAppWindow(appKey: string): Window | null {
   const name = appWindowName(appKey);
   const features = appWindowFeatures(window);
   const url = new URL(appWindowPath(appKey), window.location.origin).href;
+  if (inMacApp(window)) return window.open(url, name, features);
   let existing: Window | null = null;
   try { existing = window.open('', name, features); } catch { existing = null; }
   if (existing) {
