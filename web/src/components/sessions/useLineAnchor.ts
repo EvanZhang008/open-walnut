@@ -35,7 +35,7 @@
  * The reader's own input, or a new row, lets go of it.
  */
 import { useEffect, useRef, type MutableRefObject, type RefObject } from 'react';
-import { applyLineAnchor, lineAnchorDrift, readLineAnchor, type LineAnchor } from './line-anchor';
+import { applyLineAnchor, followsAtResize, lineAnchorDrift, readLineAnchor, type LineAnchor } from './line-anchor';
 import { READER_SCROLL_EVENT } from './phone-session-layer';
 
 /** Frames the anchor is applied again after a resize (WebKit's revert). */
@@ -172,7 +172,8 @@ export function useLineAnchor({ containerRef, isAtBottom, shown, selectionActive
         chase(() => putBack(a), a);
         return;
       }
-      const follows = following || (isAtBottom.current && !clamped);
+      // A follow read before another writer took the box off the end is stale (followsAtResize).
+      const follows = followsAtResize({ following, atBottom: isAtBottom.current, clamped, top, topAtRead, offEnd: offEnd() });
       if (follows) {
         if (widthChanged && !selectionActive()) chase(() => { el.scrollTop = el.scrollHeight; isAtBottom.current = true; });
         else readSoon(); // a height change alone: Path B-2 owns it

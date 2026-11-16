@@ -184,3 +184,32 @@ export function lineAnchorDrift(el: HTMLElement, a: LineAnchor): number | null {
   const top = anchorTop(a, el);
   return top === null ? null : (top - visibleTop(el)) - a.dy;
 }
+
+/**
+ * Whether a box that changed size still follows its end (useLineAnchor's resize).
+ * `following` is what the last read saw, before the change: WebKit dispatches the
+ * scroll of a shrink's clamp to the end before the ResizeObserver, and the follow
+ * paths take that clamp for the reader arriving there, so a box that did not follow
+ * keeps its line (`clamped`). A follow read before another writer took the box off
+ * the end since (a kept reading place restored in a box that just mounted, before
+ * its first read) is stale: that place stands. A box mounts following, and its size
+ * settles a frame or two after its page is shown (Main moving into Tree Mode's left
+ * page, a reload): in WebKit that resize came before the first read, and the stale
+ * follow sent every such box to its end (2026-11-16, session-reading-place.spec.ts).
+ */
+export function followsAtResize(s: {
+  /** The box followed its end at the last read. */
+  following: boolean;
+  /** The follow paths' state now. */
+  atBottom: boolean;
+  /** The resize only lowered scrollTop to the new maximum. */
+  clamped: boolean;
+  /** scrollTop now and at the last read. */
+  top: number;
+  topAtRead: number;
+  /** The box is more than 2px from its end now. */
+  offEnd: boolean;
+}): boolean {
+  const leftEnd = s.following && !s.atBottom && !s.clamped && Math.abs(s.top - s.topAtRead) > 1 && s.offEnd;
+  return !leftEnd && (s.following || (s.atBottom && !s.clamped));
+}
