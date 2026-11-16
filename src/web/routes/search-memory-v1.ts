@@ -39,6 +39,7 @@
  * Frozen-contract note: everything here is additive (docs/reference/api-v1.md).
  */
 
+import { logRouteError } from './route-error-log.js'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { followerKind, isFollower } from '../../core/server-role.js'
@@ -538,9 +539,7 @@ searchMemoryV1Router.use((err: unknown, _req: Request, res: Response, _next: Nex
   // failed: the app's error handler answers it 503 (needs_leader with its why, or
   // host_reconnecting), never a 500 card (middleware/link-failure-answer.ts).
   if (handsToAppErrorHandler(err) && !res.headersSent) { _next(err); return }
-  log.web.error('api-v1 search/memory route error', {
-    error: err instanceof Error ? err.message : String(err),
-  })
+  logRouteError(err, 'api-v1 search/memory route error', res)
   if (res.headersSent) {
     res.end()
     return

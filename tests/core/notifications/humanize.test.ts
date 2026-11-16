@@ -297,37 +297,6 @@ describe('server lifecycle', () => {
   });
 });
 
-describe('route errors', () => {
-  it('keeps the terse endpoint title but drops the per-occurrence latency', () => {
-    const out = humanizeErrorNotification({
-      title: 'PUT /api/ui-prefs → 500 (139ms)',
-      subsystem: 'web',
-      recoveryKey: 'route:PUT /api/ui-prefs',
-      meta: { reqId: 'a5b8', bodyBytes: 190 },
-    });
-    expect(out).toEqual({
-      category: 'API',
-      title: 'PUT /api/ui-prefs → 500',
-      message: 'This API endpoint is failing (HTTP 500).',
-    });
-  });
-
-  it('reads the status from the meta when the title has none', () => {
-    const out = humanizeErrorNotification({
-      title: 'GET /api/v1/search', subsystem: 'web', meta: { status: 501 },
-    });
-    expect(out.message).toBe('This API endpoint is failing (HTTP 501).');
-  });
-
-  it('every HTTP method is recognized', () => {
-    for (const method of ['GET', 'PUT', 'POST', 'DELETE', 'PATCH']) {
-      const out = humanizeErrorNotification({ title: `${method} /api/x → 503 (2ms)`, subsystem: 'web' });
-      expect(out.title).toBe(`${method} /api/x → 503`);
-      expect(out.category).toBe('API');
-    }
-  });
-});
-
 describe('titles that are already human', () => {
   it('passes a producer-written title + body through, adding only a category', () => {
     const body = 'Git history compaction failed: push of compacted history failed. The data repo will grow.';

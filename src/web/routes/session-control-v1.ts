@@ -26,6 +26,7 @@
  * Frozen-contract note: everything here is additive (docs/reference/api-v1.md).
  */
 
+import { logRouteError } from './route-error-log.js'
 import { routeSource } from '../../core/sessions/send-sent-by.js'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
@@ -383,9 +384,7 @@ sessionControlV1Router.use((err: unknown, _req: Request, res: Response, _next: N
   // failed: the app's error handler answers it 503 (needs_leader with its why, or
   // host_reconnecting), never a 500 card (middleware/link-failure-answer.ts).
   if (handsToAppErrorHandler(err) && !res.headersSent) { _next(err); return }
-  log.web.error('api-v1 session control error', {
-    error: err instanceof Error ? err.message : String(err),
-  })
+  logRouteError(err, 'api-v1 session control error', res)
   if (res.headersSent) {
     res.end()
     return

@@ -308,8 +308,6 @@ const starts = (t: string, prefix: string): boolean =>
 const has = (t: string, needle: string): boolean =>
   t.toLowerCase().includes(needle.toLowerCase());
 
-/** A route-error title: `GET /api/x → 500 (8ms)`. */
-const ROUTE_TITLE_RE = /^(GET|PUT|POST|DELETE|PATCH|HEAD|OPTIONS)\s+\//;
 /** `subscriber "main-ai" threw on event "subagent:result" (async)`. */
 const BUS_TITLE_RE = /^subscriber\s+"([^"]+)"\s+threw\s+on\s+event\s+"([^"]+)"/i;
 
@@ -556,26 +554,6 @@ const RULES: Rule[] = [
       return {
         title: 'Walnut stopped unexpectedly',
         message: firstSentence(metaError(i.meta)) || `The server process ended: ${reason}`,
-      };
-    },
-  },
-
-  // ── API ──
-  {
-    id: 'route-5xx',
-    category: CATEGORY_API,
-    match: (i) => ROUTE_TITLE_RE.test(i.title.trim()),
-    render: (i) => {
-      // The endpoint + status IS the terse human title here — only the
-      // per-occurrence latency tail is dropped (it made every repeat look like
-      // a different problem).
-      const title = i.title.trim().replace(/\s*\(\d+(?:\.\d+)?m?s\)\s*$/, '');
-      const status = /→\s*(\d{3})/.exec(title)?.[1] ?? metaStatus(i.meta)?.toString();
-      return {
-        title,
-        message: status
-          ? `This API endpoint is failing (HTTP ${status}).`
-          : 'This API endpoint is failing.',
       };
     },
   },

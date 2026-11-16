@@ -24,7 +24,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { WALNUT_HOME } from '../../constants.js'
 import { readJsonFile, writeJsonFile } from '../../utils/fs.js'
-import { withFileLock } from '../../utils/file-lock.js'
+import { withFileLock, FileLockTimeoutError } from '../../utils/file-lock.js'
 import { log } from '../../logging/index.js'
 import { testRunPrefsRead, testRunPrefsWrite } from '../../core/test-run-prefs.js'
 
@@ -175,11 +175,91 @@ draftsRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
       res.json({ ok: true })
       return
     }
-    await withFileLock(DRAFTS_FILE(), async () => {
-      await writeJsonFile(DRAFTS_FILE(), mergeDrafts(await loadDrafts(), patch as Record<string, unknown>))
-    })
+    await saveDrafts(patch as Record<string, unknown>)
     res.json({ ok: true })
   } catch (err) {
+    if (err instanceof DraftsBusyError) {
+      // The browser still holds every word and tries again: a busy store is not a failure.
+      res.setHeader('Retry-After', '5')
+      res.status(503).json({ error: 'drafts store is busy, try again', retry: true })
+      return
+    }
     next(err)
   }
 })
+
+// ── One writer per process ──
+//
+// 2026-11-16: on a loaded Mac (every route seconds slow) each PUT held drafts.json's lock
+// for 3 to 12 s, and the PUTs of every open window queued on it one by one, each polling the
+// lock on its own, until one waited past the lock's 10 s and answered 500. Now one writer per
+// process takes the lock, and every PUT that arrived by then goes into its one read and write.
+// A lock that stays busy (another process holds it) is tried again until the PUT's deadline,
+// then the PUT answers 503 `retry: true` (busy now: the browser tries again quietly), never a
+// 500. The deadline stays under the browser's timeout for a draft save (web/src/utils/drafts.ts).
+
+/** How long one PUT's words may wait for the file, one try for the lock, and the waits between tries. */
+export const draftsSaveTiming = { deadlineMs: 12_000, lockWaitMs: 4_000, backoffMs: [250, 1_000, 2_000] }
+
+/** The drafts store stayed locked past its deadline: the caller tries again later. */
+export class DraftsBusyError extends Error {
+  constructor() { super('drafts store is busy'); this.name = 'DraftsBusyError' }
+}
+
+interface Waiter { resolve: () => void; reject: (err: unknown) => void; deadline: number }
+let queued: Record<string, DraftEntry> = {}
+let waiters: Waiter[] = []
+let draining = false
+
+/** Keep the newer write of each valid key (a tie goes to the later patch, as mergeDrafts). */
+function foldPatch(into: Record<string, DraftEntry>, patch: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(patch)) {
+    if (!draftKeyAllowed(key) || !validEntry(value)) continue
+    const have = into[key]
+    if (!have || value.ts >= have.ts) into[key] = { v: value.v, ts: value.ts }
+  }
+}
+
+/** Merge a patch into drafts.json; resolves once a write that holds it is on disk. */
+export function saveDrafts(patch: Record<string, unknown>, deadlineMs = draftsSaveTiming.deadlineMs): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    foldPatch(queued, patch)
+    waiters.push({ resolve, reject, deadline: Date.now() + deadlineMs })
+    if (!draining) { draining = true; void drain() }
+  })
+}
+
+async function drain(): Promise<void> {
+  let attempt = 0
+  while (waiters.length > 0) {
+    let mine: Waiter[] = []
+    const soonest = Math.min(...waiters.map((w) => w.deadline))
+    try {
+      await withFileLock(DRAFTS_FILE(), async () => {
+        // Taken once the lock is ours, so every PUT that arrived while we waited is in it.
+        const batch = queued
+        mine = waiters
+        queued = {}
+        waiters = []
+        await writeJsonFile(DRAFTS_FILE(), mergeDrafts(await loadDrafts(), batch))
+      }, { timeoutMs: Math.max(1, Math.min(draftsSaveTiming.lockWaitMs, soonest - Date.now())) })
+      attempt = 0
+      for (const w of mine) w.resolve()
+    } catch (err) {
+      // The read or the write failed (not the lock): these PUTs answer it; the browser keeps its words.
+      if (mine.length > 0) { for (const w of mine) w.reject(err); continue }
+      if (!(err instanceof FileLockTimeoutError)) { for (const w of waiters) w.reject(err); waiters = []; queued = {}; continue }
+      // Still locked by another process: those past their deadline answer busy, the rest wait on.
+      const now = Date.now()
+      const late = waiters.filter((w) => w.deadline <= now)
+      waiters = waiters.filter((w) => w.deadline > now)
+      for (const w of late) w.reject(new DraftsBusyError())
+      log.web.warn('drafts.json lock busy; trying again', { keys: Object.keys(queued).length, waiting: waiters.length, gaveUp: late.length })
+      if (waiters.length === 0) { queued = {}; break }
+      const { backoffMs } = draftsSaveTiming
+      await new Promise((r) => setTimeout(r, backoffMs[Math.min(attempt++, backoffMs.length - 1)]))
+    }
+  }
+  // Cleared in the same step that saw no waiter left, so a PUT that comes next starts a new drain.
+  draining = false
+}

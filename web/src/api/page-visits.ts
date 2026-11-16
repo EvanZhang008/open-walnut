@@ -47,7 +47,7 @@ function send(): void {
   const keys = pending.splice(0, pending.length);
   if (!keys.length) return;
   // keepalive: a batch still in flight when the page reloads or closes is not cancelled.
-  apiPost('/api/page-visits', { keys }, { background: true, priority: 'low', timeoutMs: 10_000, keepalive: true })
+  apiPost('/api/page-visits', { keys }, { background: true, quietRetry: true, priority: 'low', timeoutMs: 10_000, keepalive: true })
     .catch((err) => log.info('page-visits', 'visit batch not recorded', { error: err instanceof Error ? err.message : String(err), count: keys.length }));
 }
 

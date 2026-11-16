@@ -19,7 +19,7 @@
  * reached a slow Mac, and the Mac's applied-ops ledger with its in-flight op-id
  * reservation (WP9) applies the action once.
  */
-import { ApiError } from './client';
+import { ApiError } from './api-error';
 import { mintOpId } from './op-id';
 
 /** The replica's error code and `sent` flag, when the body has its shape ({ error: { code, sent } }). */

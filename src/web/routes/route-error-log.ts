@@ -8,7 +8,12 @@
  * handled failure so the request logger does not mint a `route:` card either
  * (2026-10-28: one expired sign-in showed as two "Api-v1 … error" cards plus an
  * "endpoint failing" card, all red for 48h after the user had signed in again).
- * Everything else keeps the funnel's own title at error.
+ * Everything else keeps the funnel's own title at error, in the log only: a failed request
+ * never raises a card by itself (2026-11-16, the user, on a raw `PUT /api/drafts → 500` card:
+ * "only error useful to customer"). A request nobody clicked is retried by the browser
+ * (web/src/api/background-retry.ts), and an action the person took says what it lost where
+ * they took it. Every router's error funnel logs through here
+ * (tests/web/route-failure-log-only.test.ts).
  */
 import type { Response } from 'express'
 import { log } from '../../logging/index.js'
@@ -22,5 +27,5 @@ export function logRouteError(err: unknown, fallbackTitle: string, res?: Respons
     log.web.warn(`${fallbackTitle}: task sync push failed`, { pluginId: err.pluginId, error: message })
     return
   }
-  log.web.error(fallbackTitle, { error: message })
+  log.web.error(fallbackTitle, { error: message, skipNotify: true })
 }

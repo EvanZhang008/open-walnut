@@ -308,8 +308,9 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
       // never reach the sink, and their per-request detail is what makes the
       // request log useful. Only the notification path needs stable identity.
       const key = routeRecoveryKey(method, url)
+      // A failed request is logged, never carded by itself (routes/route-error-log.ts).
       log.web.error(routeLogMessage(method, url, status), {
-        ...meta, ms: duration, url, recoveryKey: key,
+        ...meta, ms: duration, url, recoveryKey: key, skipNotify: true,
       })
       routeHealth.observe(key, true)
     } else {

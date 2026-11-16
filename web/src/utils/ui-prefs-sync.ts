@@ -290,7 +290,7 @@ async function flush() {
   try {
     // keepalive: a navigation that starts while the batch is in flight (a click on a link, a
     // reload) must not cancel it, or the change is lost and WebKit logs the cancel as an error.
-    await apiPut('/api/ui-prefs', { prefs }, { keepalive: true });
+    await apiPut('/api/ui-prefs', { prefs }, { keepalive: true, background: true, quietRetry: true });
   } catch {
     // Offline / transient failure: drop silently — localStorage still has the
     // truth for this browser; the next write re-syncs the touched keys.
@@ -496,7 +496,7 @@ function applyLatePrefs(prefs: Record<string, PrefEntry>): void {
   heldKeys.clear();
   clearTimeout(retryTimer);
   listenUntilRead(false);
-  if (Object.keys(push).length > 0) void apiPut('/api/ui-prefs', { prefs: push }).catch(() => {});
+  if (Object.keys(push).length > 0) void apiPut('/api/ui-prefs', { prefs: push }, { background: true, quietRetry: true }).catch(() => {});
   for (const key of changed) {
     try { window.dispatchEvent(new StorageEvent('storage', { key, newValue: localGet(key) })); } catch { /* no DOM */ }
   }
@@ -544,7 +544,7 @@ export async function initUiPrefsSync(): Promise<void> {
       serverRead = true;
       listenUntilRead(false);
       watchInteraction(false);
-      if (Object.keys(push).length > 0) void apiPut('/api/ui-prefs', { prefs: push }).catch(() => {});
+      if (Object.keys(push).length > 0) void apiPut('/api/ui-prefs', { prefs: push }, { background: true, quietRetry: true }).catch(() => {});
     } catch (err) {
       if (settledRefusal(err)) {
         giveUpReading();

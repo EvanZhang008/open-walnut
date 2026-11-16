@@ -73,7 +73,8 @@ export function errorHandler(err: Error, req: Request, res: Response, _next: Nex
     detail: message,
     url: req.originalUrl,
     ...(aborted ? { type: 'request.aborted' } : {}),
-    ...(status >= 500 ? { stack: err.stack, recoveryKey: routeRecoveryKey(req.method, req.originalUrl) } : {}),
+    // A failed request is logged, never carded by itself (routes/route-error-log.ts).
+    ...(status >= 500 ? { stack: err.stack, recoveryKey: routeRecoveryKey(req.method, req.originalUrl), skipNotify: true } : {}),
   }
   const line = routeLogMessage(req.method, req.originalUrl, status)
   // A task change whose sync push failed is already carded at the source, keyed

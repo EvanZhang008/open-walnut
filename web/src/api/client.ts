@@ -4,18 +4,9 @@ import { asDeadlineError } from '../utils/request-failure';
 import { mintOpId, isWriteMethod, OP_ID_HEADER, WAIT_HEADER, DEFAULT_WRITE_WAIT_MS } from './op-id';
 import { leaderErrorMessage, noteResponseHeaders } from './leader-presence';
 import { readsSuspended, onReadLifecycle } from './read-lifecycle';
+import { ApiError } from './api-error';
+import { quietRetryDelays, quietlyRetryable } from './background-retry';
 
-class ApiError extends Error {
-  constructor(
-    public status: number,
-    message: string,
-    /** Parsed error-response JSON, when the server sent one (e.g. { error, hint }). */
-    public body?: unknown,
-  ) {
-    super(message);
-    this.name = 'ApiError';
-  }
-}
 
 // ── Fetch admission control ────────────────────────────────────────────────
 // Browsers allow only 6 HTTP/1.1 connections per origin. Excess fetches queue
@@ -291,6 +282,9 @@ interface RequestExtra {
   readOnly?: boolean;
   /** Yield to every normal request; POST also requires background: true. */
   priority?: 'low';
+  /** A write safe to send twice that the browser makes on its own (a draft, a settings sync):
+   *  tried again quietly on a failure a moment can cure (background-retry.ts). Reads always are. */
+  quietRetry?: boolean;
   /** Called the moment the request leaves the admission queue for the network —
    *  the earliest the server can see it. A caller reasoning about "is this
    *  response newer than X" needs this, not the time it CALLED the API: a call
@@ -324,6 +318,32 @@ async function request<T>(method: string, path: string, body?: unknown, extra?: 
   // One op id per user action that writes, minted before the queue so every
   // attempt of this call carries the same one (a host replica dedupes by it).
   if (isWriteMethod(method) && !extra?.opId) extra = { ...extra, opId: mintOpId() };
+  // A read, or a write that asks for it, is tried again quietly before it fails (background-retry.ts).
+  if (method !== 'GET' && !extra?.quietRetry) return requestOnce<T>(method, path, body, extra);
+  const write = isWriteMethod(method) && extra?.readOnly !== true;
+  const delays = quietRetryDelays();
+  for (let i = 0; ; i++) {
+    try {
+      return await requestOnce<T>(method, path, body, extra);
+    } catch (err) {
+      const going = readsSuspended() || exitEdge || extra?.signal?.aborted === true;
+      if (i >= delays.length || going || !quietlyRetryable(err, { write, quietStatuses: extra?.quietStatuses })) throw err;
+      console.warn(`[api] ${method} ${path} failed (${err instanceof Error ? err.message : String(err)}); trying again in ${delays[i]}ms`);
+      await waitOrAbort(delays[i], extra?.signal);
+    }
+  }
+}
+
+function waitOrAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(); }, ms);
+    const onAbort = () => { clearTimeout(timer); reject(new DOMException('The operation was aborted.', 'AbortError')); };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/** One attempt of a call: the admission queue, the sign-in renewal and the cache-race resend. */
+async function requestOnce<T>(method: string, path: string, body?: unknown, extra?: RequestExtra): Promise<T> {
   const read = method === 'GET' || extra?.readOnly === true;
   const write = isWriteMethod(method) && !read;
   const outlives = write && (!extra?.background || extra?.keepalive === true);
@@ -366,11 +386,11 @@ async function request<T>(method: string, path: string, body?: unknown, extra?: 
         throw retryWithToken.refusal;
       }
     }
-    return request<T>(method, path, body, { ...extra, tokenRetried: true });
+    return requestOnce<T>(method, path, body, { ...extra, tokenRetried: true });
   }
   // Cache-race retry re-enters through the gate (fresh slot, fresh timer) —
   // retrying while still holding the slot would double-book the pool.
-  return request<T>(method, path, body, { ...extra, cacheBypass: true });
+  return requestOnce<T>(method, path, body, { ...extra, cacheBypass: true });
 }
 
 /** fetch, and once more without keepalive when keepalive refused it (its in-flight budget was full). */
@@ -576,7 +596,7 @@ export async function apiGetText(path: string, params?: Record<string, string>, 
 // quietStatuses is offered here for the same reason apiGet offers it: a POST can have a DESIGNED
 // non-2xx outcome (a refused credential, a capability the provider does not have), and those must
 // not land in the error-log audit as if something broke.
-export function apiPost<T>(path: string, body?: unknown, opts?: { timeoutMs?: number; quietStatuses?: number[]; signal?: AbortSignal; background?: boolean; readOnly?: boolean; priority?: 'low'; opId?: string; keepalive?: boolean }): Promise<T> {
+export function apiPost<T>(path: string, body?: unknown, opts?: { timeoutMs?: number; quietStatuses?: number[]; signal?: AbortSignal; background?: boolean; readOnly?: boolean; priority?: 'low'; opId?: string; keepalive?: boolean; quietRetry?: boolean }): Promise<T> {
   return request<T>('POST', path, body, opts);
 }
 
@@ -587,7 +607,7 @@ export function apiPatch<T>(path: string, body?: unknown, opts?: { timeoutMs?: n
   return request<T>('PATCH', path, body, opts);
 }
 
-export function apiPut<T>(path: string, body?: unknown, opts?: { timeoutMs?: number; opId?: string; headers?: Record<string, string>; keepalive?: boolean }): Promise<T> {
+export function apiPut<T>(path: string, body?: unknown, opts?: { timeoutMs?: number; opId?: string; headers?: Record<string, string>; keepalive?: boolean; background?: boolean; priority?: 'low'; quietStatuses?: number[]; quietRetry?: boolean }): Promise<T> {
   return request<T>('PUT', path, body, opts);
 }
 

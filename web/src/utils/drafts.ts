@@ -320,7 +320,9 @@ function emit(key: string): void {
 /** When this browser last wrote each draft key (deletes included). */
 const META_KEY = 'walnut-drafts-meta';
 const FLUSH_DEBOUNCE_MS = 800;
+/** After a failed save (the request's own quiet retries spent), the next waits, doubling to the cap. */
 const RETRY_MS = 5_000;
+const RETRY_MAX_MS = 60_000;
 const PULL_MIN_GAP_MS = 3_000;
 /** The server keeps a removal 30 days; a stamp for a key with no words here goes after that. */
 const META_KEEP_MS = 30 * 86_400_000;
@@ -340,24 +342,47 @@ function writeMeta(meta: Record<string, number>): void {
 let pending = new Map<string, DraftEntry>();
 let flushTimer: ReturnType<typeof setTimeout> | undefined;
 let started = false;
+/** The save on its way, if any: one at a time, so a slow server gets one PUT per window, not one per pause. */
+let inFlight: Promise<void> | null = null;
+/** The words of that save: a page leaving meanwhile sends them again with keepalive. */
+let sending: Map<string, DraftEntry> | null = null;
+let failures = 0;
 
 function schedule(ms: number): void {
   clearTimeout(flushTimer);
   flushTimer = setTimeout(() => { void flush(); }, ms);
 }
 
+/** The wait after `n` failed saves in a row: 5 s, 10 s, 20 s ... up to a minute. */
+export function draftRetryDelay(n: number): number {
+  return Math.min(RETRY_MAX_MS, RETRY_MS * 2 ** Math.max(0, n - 1));
+}
+
 async function flush(): Promise<void> {
-  if (pending.size === 0) return;
+  // Words typed while a save is out go in the next one, sent when it is back.
+  if (inFlight || pending.size === 0) return;
   const batch = pending;
   pending = new Map();
-  try {
-    await apiPut('/api/drafts', { drafts: Object.fromEntries(batch) });
-  } catch (err) {
-    // Kept for the next try: this browser still has every word, the server catches up.
-    for (const [key, entry] of batch) foldPending(pending, key, entry);
-    log.warn('drafts', 'draft mirror write failed, retrying', { keys: batch.size, error: err instanceof Error ? err.message : String(err) });
-    schedule(RETRY_MS);
-  }
+  sending = batch;
+  inFlight = (async () => {
+    try {
+      // A save nobody clicked: tried again quietly first (api/background-retry.ts), and a
+      // failure is only logged. The words stay in this browser whatever the server says.
+      // keepalive: a reload while it is out does not cancel it. The timeout outlasts the
+      // server's own wait for a busy file (routes/drafts.ts), so a busy store answers 503.
+      await apiPut('/api/drafts', { drafts: Object.fromEntries(batch) }, { background: true, quietRetry: true, keepalive: true, timeoutMs: 20_000 });
+      failures = 0;
+    } catch (err) {
+      // Kept for the next try, under anything typed since (the newer stamp wins).
+      for (const [key, entry] of batch) foldPending(pending, key, entry);
+      failures++;
+      log.warn('drafts', 'draft mirror write failed, retrying', { keys: batch.size, failures, error: err instanceof Error ? err.message : String(err) });
+    }
+  })();
+  await inFlight;
+  inFlight = null;
+  sending = null;
+  if (pending.size > 0) schedule(failures > 0 ? draftRetryDelay(failures) : 0);
 }
 
 function onWrite(key: string, value: string | null): void {
@@ -384,9 +409,12 @@ function onWrite(key: string, value: string | null): void {
 }
 
 function flushKeepalive(): void {
-  if (pending.size === 0) return;
+  // The save still on its way goes too: the page leaving may cut it.
+  const all = new Map(sending ?? []);
+  for (const [key, entry] of pending) foldPending(all, key, entry);
+  if (all.size === 0) return;
   clearTimeout(flushTimer);
-  const entries = [...pending].sort((a, b) => b[1].ts - a[1].ts);
+  const entries = [...all].sort((a, b) => b[1].ts - a[1].ts);
   const body: Record<string, DraftEntry> = {};
   let bytes = 16;
   for (const [key, entry] of entries) {

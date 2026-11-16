@@ -580,44 +580,25 @@ describe('Notification feed API', () => {
     await fs.writeFile(UI_PREFS_FILE, '{"cut off mid-write": ');
   }
 
-  it('ROUTE: repeated 5xx on one endpoint = ONE card, retired by the next success', async () => {
-    // Driven through the SERVER's real request-logger middleware — the failing-route
-    // memory lives inside that module, so a test that logged the line itself would
-    // pass while production's recovery edge stayed unwired.
-    const key = PREFS_ROUTE_KEY;
+  it('ROUTE: a 5xx on an endpoint is logged, never carded (2026-11-16: a draft save showed a raw 500 card)', async () => {
+    // Driven through the SERVER's real middleware (errorHandler and requestLogger both log
+    // the 500 at error level). The line stays in the log; the browser retries a request
+    // nobody clicked, and an action the person took says what it lost where they took it.
+    const { createSubsystemLogger } = await import('../../src/logging/index.js');
     try {
       await breakPrefsFile();
-
-      // Three occurrences with different query strings and latencies. Under the OLD
-      // log shape (`GET /api/ui-prefs?attempt=0 → 500 (23ms)`) each hashed to its own
-      // card — that is how one broken endpoint became nine unresolved cards in the
-      // live feed.
       for (const attempt of [0, 1, 2]) {
         const res = await fetch(apiUrl(`/api/ui-prefs?attempt=${attempt}`));
         expect(res.status).toBe(500);
         await delay(30);
       }
-
-      const failing = await pollFeed((f) => f.feed.some((n) => n.recoveryKey === key));
-      const cards = failing.feed.filter((n) => n.recoveryKey === key);
-      // ONE card for one condition, whatever the latency and query were.
-      expect(cards).toHaveLength(1);
-      expect(cards[0].title).toBe('GET /api/ui-prefs → 500');
-      expect(cards[0].title).not.toMatch(/ms\)/);
-      expect(cards[0].resolved).toBeUndefined();
-      const dedupKey = cards[0].dedupKey;
-
-      // File valid again → the SAME endpoint now answers <500, and the middleware's
-      // failing→healthy edge fires publishRecovery through the injected publisher.
+      // A card raised after the 500s: once it is in the feed, any card the 500s had raised is too.
+      createSubsystemLogger('route-e2e').error('Sentinel failure after the route 500s');
+      const feed = await pollFeed((f) => f.feed.some((n) => n.title === 'Sentinel failure after the route 500s'));
+      expect(feed.feed.some((n) => n.title === 'Sentinel failure after the route 500s')).toBe(true);
+      expect(feed.feed.filter((n) => n.recoveryKey === PREFS_ROUTE_KEY || /→ 5\d\d/.test(n.title))).toEqual([]);
       await fs.writeFile(UI_PREFS_FILE, '{}');
-      const ok = await fetch(apiUrl('/api/ui-prefs'));
-      expect(ok.status).toBe(200);
-
-      const settled = await pollFeed((f) =>
-        f.feed.some((n) => n.dedupKey === dedupKey && n.resolved === 'recovered'));
-      const rec = settled.feed.find((n) => n.dedupKey === dedupKey)!;
-      expect(rec.resolved).toBe('recovered');
-      expect(rec.severity).toBe('info');
+      expect((await fetch(apiUrl('/api/ui-prefs'))).status).toBe(200);
     } finally {
       await fs.rm(UI_PREFS_FILE, { force: true });
     }
@@ -653,17 +634,13 @@ describe('Notification feed API', () => {
       stubUsedPct(40);
       await handle!.poll();
 
-      // A real endpoint failure AFTER the 507s: once its card is in the feed, any
-      // card the 507s had raised would be in it too.
-      await breakPrefsFile();
-      expect((await fetch(apiUrl('/api/ui-prefs?after=507'))).status).toBe(500);
-      const feed = await pollFeed((f) =>
-        f.feed.some((n) => n.recoveryKey === PREFS_ROUTE_KEY && n.resolved === undefined));
-      expect(feed.feed.some((n) => n.recoveryKey === PREFS_ROUTE_KEY && n.resolved === undefined)).toBe(true);
+      // A card raised AFTER the 507s: once it is in the feed, any card the 507s had
+      // raised would be in it too.
+      const { createSubsystemLogger } = await import('../../src/logging/index.js');
+      createSubsystemLogger('route-e2e').error('Sentinel failure after the 507s');
+      const feed = await pollFeed((f) => f.feed.some((n) => n.title === 'Sentinel failure after the 507s'));
+      expect(feed.feed.some((n) => n.title === 'Sentinel failure after the 507s')).toBe(true);
       expect(feed.feed.filter((n) => n.recoveryKey === 'route:POST /api/tasks')).toEqual([]);
-
-      await fs.writeFile(UI_PREFS_FILE, '{}');
-      expect((await fetch(apiUrl('/api/ui-prefs'))).status).toBe(200);
     } finally {
       _setStatfsForTest(null);
       resetDiskWatermarkForTest();

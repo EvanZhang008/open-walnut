@@ -14,7 +14,9 @@ import request from 'supertest';
 import { WALNUT_HOME } from '../../../src/constants.js';
 import {
   draftsRouter, DRAFTS_FILE, mergeDrafts, mirrorServes, pruneDrafts, MAX_DRAFT_LEN, MAX_DRAFTS, TOMBSTONE_DAYS,
+  saveDrafts, draftsSaveTiming, DraftsBusyError,
 } from '../../../src/web/routes/drafts.js';
+import { withFileLock } from '../../../src/utils/file-lock.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 
 function createApp() {
@@ -122,5 +124,90 @@ describe('/api/drafts', () => {
     // And the next save works.
     expect((await request(createApp()).put('/api/drafts').send({ drafts: { 'draft:a': { v: 'x', ts: Date.now() } } })).status).toBe(200);
     expect((await request(createApp()).get('/api/drafts')).body.drafts['draft:a'].v).toBe('x');
+  });
+});
+
+/**
+ * 2026-11-16: on a loaded Mac each save held drafts.json's lock for seconds, the saves of
+ * every window queued on it one by one, and one that waited past the lock's 10 s answered
+ * 500 (a red card for a draft save). A save that arrives while the file is busy now folds
+ * into one write, and a lock that stays busy answers 503 (try again), never a 500.
+ */
+describe('drafts saves while the file is busy', () => {
+  const timing = { ...draftsSaveTiming, backoffMs: [...draftsSaveTiming.backoffMs] };
+  afterEach(() => { Object.assign(draftsSaveTiming, timing); vi.restoreAllMocks(); });
+
+  /** Hold drafts.json's lock as another writer would, for `ms`. */
+  function holdLock(ms: number): Promise<void> {
+    let held!: () => void;
+    const taken = new Promise<void>((r) => { held = r; });
+    void withFileLock(DRAFTS_FILE(), () => { held(); return new Promise((r) => setTimeout(r, ms)); });
+    return taken;
+  }
+
+  it('forty saves that arrive while the lock is held all land, in one or two writes, none failing', async () => {
+    await fs.mkdir(`${WALNUT_HOME}/local`, { recursive: true });
+    const writes = vi.spyOn(fs, 'rename');
+    await holdLock(1500);
+    const app = createApp();
+    const results = await Promise.all(Array.from({ length: 40 }, (_, i) =>
+      request(app).put('/api/drafts').send({ drafts: { [`draft:k${i}`]: { v: `t${i}`, ts: i + 1 } } })));
+    expect(results.map((r) => r.status)).toEqual(Array(40).fill(200));
+    const disk = JSON.parse(await fs.readFile(DRAFTS_FILE(), 'utf8'));
+    expect(Object.keys(disk)).toHaveLength(40);
+    expect(writes.mock.calls.filter(([, to]) => to === DRAFTS_FILE()).length).toBeLessThanOrEqual(2);
+  });
+
+  it('the newer words of one key win when two saves of it fold together', async () => {
+    await holdLock(300);
+    await Promise.all([
+      saveDrafts({ 'draft:a': { v: 'newer', ts: 20 } }),
+      saveDrafts({ 'draft:a': { v: 'older', ts: 10 } }),
+      saveDrafts({ 'draft:a': { v: 'oldest', ts: 5 } }),
+    ]);
+    expect(JSON.parse(await fs.readFile(DRAFTS_FILE(), 'utf8'))['draft:a']).toEqual({ v: 'newer', ts: 20 });
+  });
+
+  it('a save made right after another one settled is written too (a drain that just ended starts again)', async () => {
+    await saveDrafts({ 'draft:first': { v: '1', ts: 1 } });
+    await saveDrafts({ 'draft:second': { v: '2', ts: 2 } });
+    await Promise.resolve().then(() => saveDrafts({ 'draft:third': { v: '3', ts: 3 } }));
+    const disk = JSON.parse(await fs.readFile(DRAFTS_FILE(), 'utf8'));
+    expect(Object.keys(disk).sort()).toEqual(['draft:first', 'draft:second', 'draft:third']);
+  });
+
+  it('a write that fails (not the lock) answers the PUTs in it, and the next save works', async () => {
+    await fs.mkdir(`${WALNUT_HOME}/local`, { recursive: true });
+    const real = fs.rename.bind(fs);
+    let failed = false;
+    const rename = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (to === DRAFTS_FILE() && !failed) { failed = true; throw Object.assign(new Error('disk full'), { code: 'ENOSPC' }); }
+      return real(from, to);
+    });
+    await expect(saveDrafts({ 'draft:a': { v: 'x', ts: 1 } })).rejects.toThrow('disk full');
+    rename.mockRestore();
+    await saveDrafts({ 'draft:b': { v: 'y', ts: 2 } });
+    expect(JSON.parse(await fs.readFile(DRAFTS_FILE(), 'utf8'))['draft:b'].v).toBe('y');
+  });
+
+  it('a lock busy past one wait is tried again, and the words land once it frees', async () => {
+    Object.assign(draftsSaveTiming, { lockWaitMs: 150, backoffMs: [50] });
+    await holdLock(500);
+    await saveDrafts({ 'draft:late': { v: 'kept', ts: 1 } });
+    expect(JSON.parse(await fs.readFile(DRAFTS_FILE(), 'utf8'))['draft:late'].v).toBe('kept');
+  });
+
+  it('a lock busy past the deadline answers 503 with Retry-After, not 500, and the next save works', async () => {
+    Object.assign(draftsSaveTiming, { lockWaitMs: 100, deadlineMs: 250, backoffMs: [50] });
+    await holdLock(1500);
+    await expect(saveDrafts({ 'draft:x': { v: 'a', ts: 1 } })).rejects.toBeInstanceOf(DraftsBusyError);
+    const res = await request(createApp()).put('/api/drafts').send({ drafts: { 'draft:y': { v: 'b', ts: 2 } } });
+    expect(res.status).toBe(503);
+    expect(res.headers['retry-after']).toBe('5');
+    expect(res.body.retry).toBe(true);
+    await new Promise((r) => setTimeout(r, 1500));
+    const ok = await request(createApp()).put('/api/drafts').send({ drafts: { 'draft:z': { v: 'c', ts: 3 } } });
+    expect(ok.status).toBe(200);
+    expect(JSON.parse(await fs.readFile(DRAFTS_FILE(), 'utf8'))['draft:z'].v).toBe('c');
   });
 });

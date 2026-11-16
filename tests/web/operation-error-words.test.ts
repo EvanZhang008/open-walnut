@@ -40,3 +40,31 @@ describe('readErrorWords (a status read while Walnut is down)', () => {
     expect(bar).toMatch(/stale && unreachable \? 'Walnut is not reachable'/);
   });
 });
+
+describe('a server\'s raw internals never reach the person as they are (2026-11-16)', () => {
+  // The drafts card showed the raw answer: a lock timeout with its file path, and a stack.
+  const INTERNALS = [
+    'File lock timeout after 10000ms: /home/acme/.open-walnut/local/drafts.json.lock',
+    '{"reqId":"6437bcce","detail":"boom"}',
+    'FileLockTimeoutError: boom\n    at withFileLock (/x/walnut:502:717338)',
+    'Internal Server Error',
+  ];
+
+  it('an action the person took says the change was not saved, in words', async () => {
+    const { SERVER_FAULT_OPERATION_MESSAGE } = await import('../../web/src/utils/operation-error-words');
+    for (const m of INTERNALS) expect(operationErrorWords(m)).toBe(SERVER_FAULT_OPERATION_MESSAGE);
+    expect(operationErrorWords('Task not found')).toBe('Task not found');
+  });
+
+  it('a message that did not go out says it is kept and how to send it again', async () => {
+    const { sendFailureWords } = await import('../../web/src/utils/operation-error-words');
+    for (const m of INTERNALS) {
+      const words = sendFailureWords(m);
+      expect(words).toMatch(/Your message is kept: press Retry/);
+      expect(words).not.toMatch(/lock|reqId|withFileLock|Internal Server Error/);
+    }
+    expect(sendFailureWords('Failed to fetch')).toMatch(/^Walnut did not answer/);
+    expect(sendFailureWords(undefined)).toMatch(/press Retry/);
+    expect(sendFailureWords('Session not found')).toBe('Session not found');
+  });
+});

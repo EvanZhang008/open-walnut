@@ -24,6 +24,29 @@ export function readErrorWords(message: string): string {
   return isBrowserNetworkMessage(message) ? UNREACHABLE_READ_MESSAGE : message;
 }
 
+/** What an action the person took says when the server failed on its side (its raw words stay in the log). */
+export const SERVER_FAULT_OPERATION_MESSAGE = 'Walnut hit a problem on its side, so this did not go through. Try again.';
+
 export function operationErrorWords(message: string): string {
-  return NETWORK_MESSAGES.test(message.trim()) ? UNREACHABLE_OPERATION_MESSAGE : message;
+  if (NETWORK_MESSAGES.test(message.trim())) return UNREACHABLE_OPERATION_MESSAGE;
+  return looksInternal(message.trim()) ? SERVER_FAULT_OPERATION_MESSAGE : message;
+}
+
+/**
+ * Why a message the person sent did not go out, in words (the failed bubble's badge, beside
+ * its Retry). The browser's network message and a server's raw internals (a JSON body, a
+ * stack, a file lock's path) never reach the person as they are: they stay in the log.
+ */
+export function sendFailureWords(message: string | undefined): string {
+  const text = (message ?? '').trim();
+  if (!text) return 'Your message is kept: press Retry to send it again.';
+  if (isBrowserNetworkMessage(text)) return 'Walnut did not answer. Your message is kept: press Retry to send it again.';
+  if (looksInternal(text)) return 'Walnut hit a problem on its side. Your message is kept: press Retry to send it again.';
+  return text;
+}
+
+/** A server's internals rather than a sentence for a person: a JSON body, a stack, a lock timeout, a bare status text. */
+function looksInternal(text: string): boolean {
+  return /^[{[]/.test(text) || /\n\s+at\s/.test(text) || /^File lock timeout\b/i.test(text)
+    || /^(Internal Server Error|Bad Gateway|Service Unavailable|Gateway Timeout)$/i.test(text);
 }

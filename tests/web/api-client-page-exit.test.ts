@@ -76,12 +76,17 @@ describe('requests cut by the page leaving', () => {
   it('the same failures while the page stays are logged, and a back-forward restore counts as staying', async () => {
     const { apiGet } = await loadClient()
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch') }))
+    // While the page stays, a dropped connection is tried again quietly (background-retry.ts).
+    const { quietRetryTiming } = await import('../../web/src/api/background-retry')
+    quietRetryTiming.delaysMs = [5, 5]
     await expect(apiGet('/api/tasks')).rejects.toBeInstanceOf(TypeError)
     win.dispatchEvent(new Event('pagehide'))
     win.dispatchEvent(new Event('pageshow'))
     vi.stubGlobal('fetch', vi.fn(async () => cutBody()))
     await expect(apiGet('/api/sessions/s1/supervision')).rejects.toBeDefined()
     expect(errors.map((e) => String(e[0]))).toEqual([
+      expect.stringContaining('GET /api/tasks FAILED'),
+      expect.stringContaining('GET /api/tasks FAILED'),
       expect.stringContaining('GET /api/tasks FAILED'),
       expect.stringContaining('JSON parse failed'),
       expect.stringContaining('JSON parse failed'),

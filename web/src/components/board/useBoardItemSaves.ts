@@ -58,7 +58,8 @@ export function useBoardItemSaves(
     drafts.current = new Map();
     for (const [markId, note] of left) {
       log.info('board', 'unsaved note saved on leave', { taskId: ownerId, markId, chars: note.length });
-      apiPut(`${boardPath(ownerId)}/marks/${encodeURIComponent(markId)}`, { note }).catch((err: unknown) => {
+      // Nobody waits on it any more: a failure a moment can cure is tried again quietly (the same note, safe twice).
+      apiPut(`${boardPath(ownerId)}/marks/${encodeURIComponent(markId)}`, { note }, { quietRetry: true, keepalive: true }).catch((err: unknown) => {
         log.error('board', 'unsaved note save failed', { taskId: ownerId, markId, error: boardErrorMessage(err) });
       });
     }

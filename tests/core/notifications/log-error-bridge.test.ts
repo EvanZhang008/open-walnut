@@ -205,19 +205,19 @@ describe('log-error → notification bridge', () => {
 
     const logger = createSubsystemLogger('bridge-test');
     const meta = { recoveryKey: 'route:GET /api/flappy', error: 'boom' };
-    logger.error('GET /api/flappy → 500', meta);
+    logger.error('Flappy endpoint failed', meta);
     await feedAfterFlush();
     expect(events).toEqual(['notification:new']);
 
     // Still absorbed while armed…
-    logger.error('GET /api/flappy → 500', meta);
+    logger.error('Flappy endpoint failed', meta);
     await new Promise(r => setTimeout(r, 150));
     expect(events).toEqual(['notification:new']);
 
     // …released by the recovery, so the next failure folds and re-broadcasts.
     await recoverNotifications(['route:GET /api/flappy']);
     releaseAbsorbedKeys(['route:GET /api/flappy']);
-    logger.error('GET /api/flappy → 500', meta);
+    logger.error('Flappy endpoint failed', meta);
     await vi.waitFor(() => {
       expect(events).toEqual(['notification:new', 'notification:updated']);
     }, { timeout: 10_000, interval: 10 });
@@ -512,14 +512,13 @@ describe('humanized copy on the way into the feed', () => {
 
   it('derives the category from the recoveryKey the same log call produced', async () => {
     const logger = createSubsystemLogger('web');
-    logger.error('GET /api/ui-prefs → 500', {
+    logger.error('Preferences could not be saved', {
       reqId: 'a1', recoveryKey: 'route:GET /api/ui-prefs',
     });
 
     const feed = await feedAfterFlush();
     expect(feed[0].category).toBe('API');
-    expect(feed[0].title).toBe('GET /api/ui-prefs → 500');
-    expect(feed[0].body).toBe('This API endpoint is failing (HTTP 500).');
+    expect(feed[0].title).toBe('Preferences could not be saved');
   });
 
   it("groups a plugin's whole family under the plugin's own name", async () => {
@@ -726,11 +725,11 @@ describe('causeKey derivation through the sink', () => {
     expect(feed[0].causeKey).toBe('host:devbox');
   });
 
-  it('finds the host inside meta.message on a route-style card', async () => {
-    // The route middleware's card is keyed by ROUTE and knows no host field; the
-    // connectivity text arrives only as prose in the meta.
+  it('finds the host inside meta.message on a card keyed by a route', async () => {
+    // A card keyed by a ROUTE knows no host field; the connectivity text arrives
+    // only as prose in the meta.
     const logger = createSubsystemLogger('web');
-    logger.error('GET /api/x → 500', {
+    logger.error('Daemon deploy failed', {
       recoveryKey: 'route:GET /api/x',
       message: 'Failed to deploy daemon source to devbox: Command failed: ssh',
     });
@@ -942,15 +941,15 @@ describe('task sync push failure: ONE card at the source, keyed to its plugin, r
     expect((await listNotifications()).feed).toHaveLength(0);
   });
 
-  it('a non-sync throw keeps the funnel title, is carded, and is not marked handled', async () => {
+  it('a non-sync throw keeps the funnel title in the log, raises no card, and is not marked handled', async () => {
+    // A failed request is logged, never carded by itself (2026-11-16, route-error-log.ts).
     const { logRouteError } = await import('../../../src/web/routes/route-error-log.js');
     const headers = new Map<string, string>();
     const res = { headersSent: false, setHeader: (k: string, v: string) => { headers.set(k, v); } } as never;
     logRouteError(new Error('boom'), 'api-v1 unhandled error', res);
+    createSubsystemLogger('bridge-test').error('Sentinel after the funnel');
     const feed = await feedAfterFlush();
-    expect(feed).toHaveLength(1);
-    expect(feed[0].recoveryKey).toBeUndefined();
-    expect(feed[0].title).toBe('Api-v1 unhandled error');
+    expect(feed.map((n) => n.title)).toEqual(['Sentinel after the funnel']);
     expect(headers.size).toBe(0);
   });
 });
@@ -1000,3 +999,4 @@ describe('adoptKeylessTaskSyncCards (cards an older build wrote without the plug
       .toEqual(['logerr:web:legacy-1', 'logerr:web:legacy-2']);
   });
 });
+

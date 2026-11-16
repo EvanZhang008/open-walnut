@@ -3,6 +3,7 @@ import { useCoalescedRefresh } from '@/hooks/useCoalescedRefresh';
 import { startTransition, useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore, useContext, memo, isValidElement, type MutableRefObject, type ReactNode } from 'react';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { pageOfStreamBlock } from '@/utils/stream-block-page';
+import { sendFailureWords } from '@/utils/operation-error-words';
 import { useDraft } from '@/hooks/useDraft';
 import { useHostStatus } from '@/hooks/useHostStatus';
 import { draftHash, draftKey, writeDraft, type DraftOrigin } from '@/utils/drafts';
@@ -5949,8 +5950,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         {isFolderGoneReason(m.failedError)
           ? `Not delivered: this session's folder is gone${goneFolderOf(m.failedError) ? ` (${goneFolderOf(m.failedError)})` : ''}. The message is kept and goes out once the session continues in a new folder.`
           : m.parked
-            ? `Not delivered. Auto-retry stopped${m.failedError ? ` (${m.failedError})` : ''}`
-            : `Send failed${m.failedError ? `: ${m.failedError}` : ''}`}
+            ? `Not delivered. Auto-retry stopped${m.failedError ? ` (${sendFailureWords(m.failedError)})` : ''}`
+            : `Send failed: ${sendFailureWords(m.failedError)}`}
       </div>
       <div className="session-msg-queued-actions">
         {isFolderGoneReason(m.failedError)

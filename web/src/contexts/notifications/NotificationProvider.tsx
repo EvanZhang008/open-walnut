@@ -43,6 +43,7 @@ import { armChime, playChime } from '@/utils/chime';
 import { NotificationContext } from './notification-context';
 import { pendingAt, useApprovals, type ApprovalsState } from '@/components/approvals/approvals-store';
 import { randomId } from '@/utils/random-id';
+import { operationErrorWords } from '@/utils/operation-error-words';
 
 export interface NotificationContextValue {
   /** Current top-right toast stack. */
@@ -246,7 +247,12 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const notify = useCallback((input: NotificationInput) => {
+  const notify = useCallback((raw: NotificationInput) => {
+    // An error card the web app raises for the person's own action says what happened in
+    // words: a server's raw internals (a JSON body, a stack, a lock's path) stay in the log
+    // (operation-error-words.ts). One place for every such card.
+    const input = raw.kind === 'operation-error' && !raw.fromServer && raw.body
+      ? { ...raw, body: operationErrorWords(raw.body) } : raw;
     const persistent = input.persistent ?? IS_PERSISTENT[input.kind];
     // Toast policy: only what needs a human NOW interrupts (permissions, hard
     // errors, hooks, the two ephemeral kinds). Routine automation — a cron run,

@@ -19,7 +19,8 @@ export function OperationErrorBridge() {
 
   useEffect(() => {
     if (!operationError) return;
-    // A failed connection reads as words, never the browser's "Load failed" (N25).
+    // In words: a failed connection, a server's internals (N25). notify() does the same for
+    // every card; it is applied here too so the dedup key is the words, not the raw text.
     const body = operationErrorWords(operationError);
     notify({
       kind: 'operation-error', severity: 'error', title: 'Action failed',
