@@ -33,6 +33,12 @@ The task's session panel shows a live picture of your tab (the Browser view) wit
 - `upload e5 ./invoice.pdf` puts a file from your machine into a file field (10 MB in all);
   `upload --selector '#image-upload' ./a.png` reaches a file field the page hides behind a
   button of its own (snapshot does not list it).
+- A bigger file, or one on the browser's machine (the Mac when you work on a cloud box):
+  `upload --selector '#file' --trusted --path '/Users/name/Desktop/demo.mov'`. The browser reads
+  it there, any size, and nothing crosses to your machine. A file your task did not download
+  waits for the user's yes (a notification naming your task, the file and the site; the shell
+  command waits for it); their yes holds for a day for that file. One file per path, never a
+  folder. The answer lists each file with its size (`files`); 0 bytes means the path was wrong.
 - `resize 1280 900` sizes Walnut's agent window (`--viewport`: the page itself gets that size),
   never the user's own window.
 - `downloads --wait` waits for the download your click started and gives its file path.

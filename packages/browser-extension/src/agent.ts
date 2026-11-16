@@ -28,6 +28,7 @@ import { CHANGE_ACTS, withChange } from './agent-change'
 import { screenshot } from './agent-shot'
 import { downloadsAction, watchDownloads } from './agent-downloads'
 import { DEBUGGER_OPS, TRUSTED_OPS, defaultTrustedAct, trustedAct, trustedByDefault, trustedReady } from './agent-trusted'
+import { fileAccessOn } from './agent-upload'
 import { fillFrames } from './bg-fill'
 import { inHandedReach } from './agent-tab-kind'
 import { openInAgentWindow, resizeAgentWindow, windowOf } from './agent-window'
@@ -500,6 +501,10 @@ export async function agentLoop(): Promise<void> {
           // The Browser view's picture stream and Take over (agent-view.ts, agent-takeover.ts); drag,
           // zoom, labels, typing at a point or slowly, dialog read, scroll in a box (input-v2.ts on the server).
           'view-stream', 'takeover', 'input-v2',
+          // A trusted upload takes a file the person said yes to (agent-upload.ts), and can hand the
+          // page a file from disk only with "Allow access to file URLs" on.
+          'upload-granted',
+          ...(await fileAccessOn() ? ['file-access'] : []),
           // A covered window's frame says whether live pictures could show it, and view_grant opens
           // the page that turns them on (agent-live.ts, grant-open.ts); Chrome only (the debugger).
           ...(isFirefox ? [] : ['live-pictures']),

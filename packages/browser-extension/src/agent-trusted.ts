@@ -25,15 +25,15 @@
  * the cursor and again with the debugger attached): it waits for the person's yes.
  * `evaluate` runs the page's own JavaScript, so only in a tab an agent opened, never the person's
  * (nor one their tab opened), and never on a site where fill_login put a password in. A trusted
- * upload sends only files this task's own downloads wrote.
+ * upload sends only a file this task's own downloads wrote or one the person said yes to (agent-upload.ts).
  */
 import { more } from './agent-api'
 import { realInputOn } from './trusted-switch'
 import { isFirefox, type Tab } from './ext'
-import { cdpClick, cdpEvaluate, cdpHover, cdpPress, cdpType, cdpUpload, cdpWheel } from './cdp'
+import { cdpClick, cdpEvaluate, cdpHover, cdpPress, cdpSetFiles, cdpType, cdpWheel } from './cdp'
 import { run, watched } from './agent-debugger'
 import { ACTING_MS, AgentError, acting, agentWindowId, checkPage, filledHere, frameOp, nearPerson, personsTab, reached, settled, where, WALNUT_PAGE, type AgentTab, type WireCommand } from './agent-shared'
-import { downloadedFiles } from './agent-downloads'
+import { allowedPaths } from './agent-upload'
 import { openedSince, outwardHeld, refByText } from './agent-page'
 import { barCancelled, comboModifiers } from './cdp'
 import { cancelKnown } from './agent-live'
@@ -285,16 +285,13 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
         break
       }
       case 'upload': {
-        const paths = Array.isArray(a.paths) ? (a.paths as unknown[]).filter((p): p is string => typeof p === 'string' && p.length > 0) : []
-        if (!paths.length) throw new AgentError('A trusted upload takes paths of files on the browser\'s own machine (paths); to send the bytes, upload without trusted.', 'bad_request')
-        // Only what this task downloaded: any other file on the person's machine is theirs.
-        const mine = await downloadedFiles(rec.owner)
-        const other = paths.filter((p) => !mine.includes(p))
-        if (other.length) throw new AgentError(`A trusted upload sends only files this task downloaded (downloads lists them); not ${other.slice(0, 3).join(', ')}. Send other files as bytes, without trusted.`, 'path_not_allowed')
+        const paths = await allowedPaths(a, rec.owner)
         const markId = crypto.randomUUID().replace(/-/g, '')
         const l = await locate({ mark: markId, cursor: 'move', ...(typeof a.selector === 'string' && a.ref === undefined ? { selector: a.selector } : {}) })
-        await run(tabId, rec.owner, (send) => cdpUpload(send, markId, paths))
-        out = { uploaded: paths, into: l.what, trusted: true }
+        const files = await run(tabId, rec.owner, (send) => cdpSetFiles(send, markId, paths))
+        // A path the browser's machine has no file at reads as an empty file: said, never a success.
+        const empty = files.filter((f) => f.bytes === 0).map((f) => f.name)
+        out = { uploaded: paths, into: l.what, trusted: true, files, ...(empty.length ? { empty, note: `${empty.join(', ')} came to 0 bytes: check the path is right on the browser's machine.` } : {}) }
         break
       }
       default: throw new AgentError(`${c.action} has no real-input form.`, 'bad_action')

@@ -134,7 +134,7 @@ export async function testRoutineCheck(
   // The directory trigger_create would arm it in (the calling session's, when it names none), so the
   // test runs where the trigger will, and its time is remembered under the same check.
   const cwd = str(rawCheck.cwd) || (templateCheck ? '' : caller.cwd);
-  if (!exemptTemplateRun({ run, cwd, host }, checkCallerOrigin(origin))) assertCheckHostAllowed(host, origin);
+  if (!exemptTemplateRun({ run, cwd, host }, checkCallerOrigin(origin))) await assertCheckHostAllowed(host, origin);
   const conn = await requireTriggerDaemon(host);
   const check = {
     run,

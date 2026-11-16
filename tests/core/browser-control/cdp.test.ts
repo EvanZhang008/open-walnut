@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  CdpError, EVAL_MAX, cdpClick, cdpDialog, cdpDrag, cdpEvaluate, cdpHover, cdpPress, cdpType, cdpUpload, cdpWheel, dragPath, parseCombo, withDebugger,
+  CdpError, EVAL_MAX, cdpClick, cdpDialog, cdpDrag, cdpEvaluate, cdpHover, cdpPress, cdpType, cdpSetFiles, cdpWheel, dragPath, parseCombo, withDebugger,
 } from '../../../packages/browser-extension/src/cdp'
 
 function fakeDebugger(answers: Record<string, unknown | ((p: Record<string, unknown>) => unknown)> = {}, opts: { attachFails?: string } = {}) {
@@ -120,16 +120,44 @@ describe('the command sequences', () => {
     expect(big.json).toHaveLength(EVAL_MAX)
   })
 
-  it('upload: finds the marked file input and sets the paths', async () => {
-    const f = fakeDebugger({ 'DOM.getDocument': { root: { nodeId: 1 } }, 'DOM.querySelector': { nodeId: 42 } })
-    await withDebugger(f.dbg, 1, (send) => cdpUpload(send, 'abc123', ['/home/me/a.pdf']))
-    expect(f.log.slice(1, -1)).toEqual([
-      ['DOM.getDocument', { depth: 0 }],
-      ['DOM.querySelector', { nodeId: 1, selector: '[data-walnut-upload="abc123"]' }],
-      ['DOM.setFileInputFiles', { nodeId: 42, files: ['/home/me/a.pdf'] }],
-    ])
-    const g = fakeDebugger({ 'DOM.getDocument': { root: { nodeId: 1 } }, 'DOM.querySelector': { nodeId: 0 } })
-    expect((await withDebugger(g.dbg, 1, (send) => cdpUpload(send, 'abc123', ['/x'])).catch((e) => e)).code).toBe('stale_ref')
+  const uploadBase = { 'DOM.getDocument': { root: { nodeId: 1 } }, 'DOM.querySelector': { nodeId: 42 }, 'Page.getFrameTree': { frameTree: { frame: { id: 'F1' } } },
+    'Page.createIsolatedWorld': { executionContextId: 9 }, 'DOM.resolveNode': { object: { objectId: 'target-1' } }, 'Runtime.evaluate': { result: { objectId: 'probe-1' } } }
+  /** The probe's read answers `read`; the move into the page's field answers how many it holds. */
+  const calls = (read: unknown, held = 1) => (p: Record<string, unknown>) => ({ result: { value: p.objectId === 'probe-1' ? read : held } })
+
+  it('upload: Chrome reads the files into a field of Walnut\'s own in an isolated world, then they move to the page\'s', async () => {
+    const f = fakeDebugger({ ...uploadBase, 'Runtime.callFunctionOn': calls([{ name: 'a.pdf', bytes: 12, readable: true }]) })
+    expect(await withDebugger(f.dbg, 1, (send) => cdpSetFiles(send, 'abc123', ['/home/me/a.pdf']))).toEqual([{ name: 'a.pdf', bytes: 12 }])
+    expect(f.log.find((l) => l[0] === 'DOM.querySelector')?.[1]).toEqual({ nodeId: 1, selector: '[data-walnut-upload="abc123"]' })
+    expect(f.log.find((l) => l[0] === 'DOM.resolveNode')?.[1]).toEqual({ nodeId: 42, executionContextId: 9 })
+    expect(f.log.find((l) => l[0] === 'Runtime.evaluate')?.[1]).toMatchObject({ contextId: 9 })
+    // The files go into the probe, never straight into the page's field.
+    expect(f.log.filter((l) => l[0] === 'DOM.setFileInputFiles').map((l) => l[1])).toEqual([{ objectId: 'probe-1', files: ['/home/me/a.pdf'] }])
+    const move = f.log.filter((l) => l[0] === 'Runtime.callFunctionOn').at(-1)![1]!
+    expect(move).toMatchObject({ objectId: 'target-1', arguments: [{ objectId: 'probe-1' }] })
+    const gone = fakeDebugger({ ...uploadBase, 'DOM.querySelector': { nodeId: 0 } })
+    expect((await withDebugger(gone.dbg, 1, (send) => cdpSetFiles(send, 'abc123', ['/x'])).catch((e) => e)).code).toBe('stale_ref')
+  })
+
+  it('upload: a folder, a file that cannot be read, or anything but the named files leaves the page untouched', async () => {
+    for (const read of [
+      [{ name: 'a', bytes: 1, readable: true }, { name: 'b', bytes: 1, readable: true }],
+      [{ name: 'other', bytes: 1, readable: true }],
+      [{ name: 'me', bytes: 4096, readable: false }],
+    ]) {
+      const f = fakeDebugger({ ...uploadBase, 'Runtime.callFunctionOn': calls(read) })
+      const err = await withDebugger(f.dbg, 1, (send) => cdpSetFiles(send, 'm', [read[0].name === 'other' ? '/Users/me/a' : read[0].name === 'me' ? '/Users/me' : '/Users/me/a'])).catch((e) => e)
+      expect(err.code, JSON.stringify(read)).toBe('bad_request')
+      expect(f.log.filter((l) => l[0] === 'Runtime.callFunctionOn').map((l) => l[1]!.objectId)).toEqual(['probe-1'])
+    }
+  })
+
+  it('upload: Chrome without file access says how to turn it on, and the page is untouched', async () => {
+    const off = fakeDebugger({ ...uploadBase, 'Runtime.callFunctionOn': calls([]), 'DOM.setFileInputFiles': new Error('Not allowed') })
+    const err = await withDebugger(off.dbg, 1, (send) => cdpSetFiles(send, 'm', ['/Users/me/a'])).catch((e) => e)
+    expect(err.code).toBe('file_access_off')
+    expect(err.message).toMatch(/Allow access to file URLs/)
+    expect(off.methods()).not.toContain('Runtime.callFunctionOn')
   })
 
   it('type slowly: the same keys, with the delay between them and none before the first', async () => {

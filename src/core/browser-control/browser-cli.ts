@@ -27,7 +27,7 @@ export const BROWSER_USAGE = [
   '  scroll [up|down|left|right|top|bottom] [<ref> | --at X,Y] [--amount N | --by PX]',
   '  click --at X,Y | click-label <N>;  type <text> --at X,Y [--slowly];  drag <ref|X,Y> <ref|X,Y> [--steps N]',
   '  screenshot [<file>] [--full] [--annotate];  zoom <X> <Y> <W> <H> [<file>]   (default: a .jpg in $WALNUT_TASK_DIR/shots)',
-  '  upload <ref> <file>... | --selector <css> <file>...   (10 MB in all; --trusted --path P: a file on the browser\'s machine)',
+  '  upload <ref> <file>... | --selector <css> <file>...   (10 MB in all; --trusted --path P: a file on the browser\'s machine, any size, after the person\'s yes)',
   '  downloads [--wait] [--ms N];  resize <width> <height> [--viewport]',
   '  fill-login [--item <id|name>] [--fresh-sign-in];  fill-code [--item <id|name>];  request-sign-in [<what>] [--site S]',
   '  open <url> --record;  network [--url part] [--method M] [--status 4xx] [--type XHR] [--limit N] [--include-static] [--stop]',
@@ -270,7 +270,7 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
   return { ok: false, error: `unknown action ${verb}` }
 }
 
-const REFUSED = new Set(['window_hidden', 'input_dropped', 'site_denied', 'not_your_tab', 'test_run', 'which_tab', 'person_is_here', 'trusted_off', 'denied', 'agents_off', 'agent_never', 'which_login', 'other_site', 'agents_tab_only', 'site_open_in_person_tab', 'not_agent_opened', 'filled_here', 'request_site_not_allowed', 'recording_cancelled', 'person_window', 'person_driving'])
+const REFUSED = new Set(['window_hidden', 'input_dropped', 'site_denied', 'not_your_tab', 'test_run', 'which_tab', 'person_is_here', 'trusted_off', 'denied', 'agents_off', 'agent_never', 'which_login', 'other_site', 'agents_tab_only', 'site_open_in_person_tab', 'not_agent_opened', 'filled_here', 'request_site_not_allowed', 'recording_cancelled', 'person_window', 'person_driving', 'path_not_allowed', 'file_access_off'])
 
 const MIME: Record<string, string> = {
   '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
@@ -279,6 +279,10 @@ const MIME: Record<string, string> = {
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '.md': 'text/markdown', '.svg': 'image/svg+xml',
 }
 
+/** A bigger file goes by its path on the browser's machine, which reads it there. */
+const BIG_UPLOAD = `the files come to more than ${UPLOAD_MAX_BYTES / 1024 / 1024} MB. A bigger file on the browser's machine goes by its path: `
+  + 'upload --selector <css> --trusted --path <its full path> (a file this task did not download waits for the person\'s yes)'
+
 /** The files of an upload, read here (the CLI runs where the agent works) and sent as base64. */
 function readUpload(paths: string[], cwd: string): { files: Array<{ name: string; type: string; base64: string }> } | { error: string } {
   const files: Array<{ name: string; type: string; base64: string }> = []
@@ -286,9 +290,10 @@ function readUpload(paths: string[], cwd: string): { files: Array<{ name: string
   for (const p of paths) {
     const file = path.resolve(cwd, p)
     let buf: Buffer
+    // Sized before it is read: a screen recording of a few hundred MB is never loaded to be refused.
+    try { total += fs.statSync(file).size } catch (err) { return { error: `cannot read ${p}: ${(err as Error).message}` } }
+    if (total > UPLOAD_MAX_BYTES) return { error: BIG_UPLOAD }
     try { buf = fs.readFileSync(file) } catch (err) { return { error: `cannot read ${p}: ${(err as Error).message}` } }
-    total += buf.length
-    if (total > UPLOAD_MAX_BYTES) return { error: `the files come to more than ${UPLOAD_MAX_BYTES / 1024 / 1024} MB` }
     files.push({ name: path.basename(file), type: MIME[path.extname(file).toLowerCase()] ?? 'application/octet-stream', base64: buf.toString('base64') })
   }
   return { files }

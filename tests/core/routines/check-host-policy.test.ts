@@ -11,6 +11,10 @@ import { describe, it, expect, vi } from 'vitest'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-check-host-policy'))
+// remote-dev and remote-dev-net are two aliases of one daemon process, as its hellos would say.
+vi.mock('../../../src/providers/daemon-connection.js', () => ({
+  oneDaemon: async (a: string, b: string) => a === b || (new Set([a, b]).size === 2 && [a, b].every((h) => h === 'remote-dev' || h === 'remote-dev-net')),
+}))
 
 import {
   assertCheckHostAllowed, checkCallerOrigin, checkCommandChanged, checkHostRefusal,
@@ -56,22 +60,25 @@ describe('who may run a check where', () => {
   })
 
   it('the refusal is a 403, and the origin in effect can only lower who asks', async () => {
-    expect(() => assertCheckHostAllowed('__local__', REMOTE)).toThrow(SessionControlError)
-    try {
-      assertCheckHostAllowed('__local__', REMOTE)
-    } catch (err) {
-      expect((err as SessionControlError).statusCode).toBe(403)
-    }
-    expect(() => assertCheckHostAllowed('__local__', LOCAL_ORIGIN)).not.toThrow()
+    await expect(assertCheckHostAllowed('__local__', REMOTE)).rejects.toThrow(SessionControlError)
+    await expect(assertCheckHostAllowed('__local__', REMOTE)).rejects.toMatchObject({ statusCode: 403 })
+    await expect(assertCheckHostAllowed('__local__', LOCAL_ORIGIN)).resolves.toBeUndefined()
     // Omitted = the server's own code, unless a lower origin is in effect.
     expect(checkCallerOrigin(undefined)).toBe(LOCAL_ORIGIN)
     expect(checkCallerOrigin('')).toBe(UNKNOWN_ORIGIN)
     await withCallerOrigin(REMOTE, async () => {
       expect(checkCallerOrigin(undefined)).toBe(REMOTE)
       expect(checkCallerOrigin(LOCAL_ORIGIN)).toBe(REMOTE)
-      expect(() => assertCheckHostAllowed('__local__', undefined)).toThrow(/runs on this Mac/)
-      expect(() => assertCheckHostAllowed('remote-dev', LOCAL_ORIGIN)).not.toThrow()
+      await expect(assertCheckHostAllowed('__local__', undefined)).rejects.toThrow(/runs on this Mac/)
+      await expect(assertCheckHostAllowed('remote-dev', LOCAL_ORIGIN)).resolves.toBeUndefined()
     })
+  })
+
+  it('a session\'s call over another alias of its host\'s own daemon may arm a check there; another daemon\'s may not', async () => {
+    await expect(assertCheckHostAllowed('remote-dev', hostOrigin('remote-dev-net'))).resolves.toBeUndefined()
+    await expect(assertCheckHostAllowed('remote-dev-net', REMOTE)).resolves.toBeUndefined()
+    await expect(assertCheckHostAllowed('other-box', REMOTE)).rejects.toMatchObject({ statusCode: 403 })
+    await expect(assertCheckHostAllowed('__local__', hostOrigin('remote-dev-net'))).rejects.toThrow(/runs on this Mac/)
   })
 })
 

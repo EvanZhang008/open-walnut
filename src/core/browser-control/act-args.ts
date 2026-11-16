@@ -65,7 +65,7 @@ export function cleanArgs(b: Record<string, unknown>): Record<string, unknown> {
       total += Math.floor(base64.length * 3 / 4)
       return { name: str(f.name, 255), type: str(f.type, 200) ?? '', base64 }
     })
-    if (total > UPLOAD_MAX_BYTES) throw new BrowserError(`The files come to ${Math.round(total / 1024 / 1024)} MB; an upload takes at most ${UPLOAD_MAX_BYTES / 1024 / 1024} MB in all.`, 413, 'too_big')
+    if (total > UPLOAD_MAX_BYTES) throw new BrowserError(`The files come to ${Math.round(total / 1024 / 1024)} MB; an upload takes at most ${UPLOAD_MAX_BYTES / 1024 / 1024} MB in all. A bigger file on the browser's machine goes by its path: trusted: true with paths (a file this task did not download waits for the person's yes).`, 413, 'too_big')
   }
   return out
 }

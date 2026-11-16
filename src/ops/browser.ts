@@ -23,7 +23,7 @@ function dialogLine(body: Record<string, unknown>): string {
 
 function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>): { outcome: string; next: string } {
   if (body.status === 'needs_ok') {
-    if (body.code === 'outward_needs_ok') {
+    if (body.code === 'outward_needs_ok' || body.code === 'upload_needs_ok') {
       return {
         outcome: String(body.error ?? 'Waiting for the person to approve this step (a notification on their Mac and phone).'),
         next: `Call ${String(args.action)} again with the same arguments, request "${String(body.request ?? '')}" and wait_ms up to 25000 until it goes through (the ask stays open ${String(body.waitsMinutes ?? 10)} minutes). Do not ask them in chat as well.`,
@@ -124,7 +124,7 @@ function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>)
           : body.page_text ? 'Read page_text; act again by ref (snapshot lists them).' : 'snapshot to act on what is there now, or text to read it.',
       }
     }
-    case 'upload': return { outcome: `Put ${(body.uploaded as unknown[] | undefined)?.length ?? 0} file(s) into ${body.into ?? 'the field'}${tab}.`, next: 'snapshot to see what the page made of it.' }
+    case 'upload': return { outcome: `Put ${(body.uploaded as unknown[] | undefined)?.length ?? 0} file(s) into ${body.into ?? 'the field'}${tab}.${typeof body.note === 'string' ? ` ${body.note}` : ''}`, next: 'snapshot to see what the page made of it.' }
     case 'downloads': return body.finished
       ? { outcome: `Finished: ${(body.finished as { filename?: string }).filename ?? '?'}.`, next: 'Read the file at that path if it is on this machine.' }
       : { outcome: `${(body.downloads as unknown[] | undefined)?.length ?? 0} download(s) of this task.`, next: 'downloads with wait to wait for the next one to finish.' }
@@ -241,7 +241,7 @@ defineOp({
     format: z.enum(['jpeg', 'png']).optional().describe('screenshot / zoom: the image format (default jpeg)'),
     files: z.array(z.object({ name: z.string().max(255), type: z.string().max(200).optional(), base64: z.string().max(14_000_000) })).max(20).optional()
       .describe('upload: the files, their bytes as base64 (10 MB in all)'),
-    paths: z.array(z.string().max(4000)).max(20).optional().describe('upload with trusted: files on the browser\'s own machine'),
+    paths: z.array(z.string().max(4000)).max(20).optional().describe('upload with trusted: full paths of files on the browser\'s own machine, any size; one this task did not download waits for the person\'s yes (needs_ok)'),
     all: z.boolean().optional().describe('tabs: every tab of the browser (the user\'s too), title and address only; snapshot / text: the whole page, not only what is on screen or the main content'),
     wait: z.boolean().optional().describe('downloads: wait for the next one to finish'),
     request: z.string().max(100).optional().describe('fill_login, fill_code, request_sign_in, or a click / press / type that waits for the user: the request id from needs_ok, to wait for their answer'),

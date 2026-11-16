@@ -105,7 +105,7 @@ export async function requesterOf(req: Request, body: Record<string, unknown>) {
     const caller = await resolveCaller(sid)
     // A session id is a name, not a proof: it counts only from the host that session runs on, so
     // a script on one host cannot take another host's session (and its task's grants) by naming it.
-    if (caller.kind === 'session' && hostOrigin(caller.record.host || LOCAL_ORIGIN) === origin) {
+    if (caller.kind === 'session' && await (await import('../../core/hosts/session-host-origin.js')).fromHost(caller.record.host, origin)) {
       out.sessionId = sid
       out.taskId = caller.record.taskId
       // A stopped session's pid may belong to anything by now.

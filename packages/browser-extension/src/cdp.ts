@@ -374,10 +374,54 @@ export async function cdpEvaluate(send: Send, expression: string): Promise<{ val
   return { value, type }
 }
 
-/** Files on the browser's own machine into the file input the page marked. */
-export async function cdpUpload(send: Send, mark: string, paths: string[]): Promise<void> {
+/** Chrome hands the page a file from disk through the debugger only with this switch on (DOM.setFileInputFiles answers "Not allowed"). */
+export const FILE_ACCESS_WORDS = 'Chrome lets Walnut put a file from this computer into a page only with file access on, and only the person can turn it on: '
+  + 'in Chrome, open the Extensions page (chrome://extensions), click Details on Walnut, and turn on "Allow access to file URLs". Then call upload again.'
+
+const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p
+
+/**
+ * Files on the browser's own machine into the file input the page marked. Chrome reads them into a
+ * field of Walnut's own first, made in an isolated world the page's script cannot reach or fake: it
+ * takes no folder (a page could flip its own field to webkitdirectory between a check and the set,
+ * and one path would read a whole tree, review 2026-11-16), and it must hold exactly one readable
+ * file per path, by name. Only then do the files move to the page's field, with its input and
+ * change events; a refusal leaves the page untouched. Answers each file with its size.
+ */
+export async function cdpSetFiles(send: Send, mark: string, paths: string[]): Promise<Array<{ name: string; bytes: number }>> {
   const doc = await send('DOM.getDocument', { depth: 0 }) as { root: { nodeId: number } }
   const q = await send('DOM.querySelector', { nodeId: doc.root.nodeId, selector: `[data-walnut-upload="${mark}"]` }) as { nodeId: number }
   if (!q?.nodeId) throw new CdpError('The file field is gone: snapshot again.', 'stale_ref')
-  await send('DOM.setFileInputFiles', { nodeId: q.nodeId, files: paths })
+  const tree = await send('Page.getFrameTree') as { frameTree: { frame: { id: string } } }
+  const world = await send('Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: 'walnut-upload' }) as { executionContextId: number }
+  const target = await send('DOM.resolveNode', { nodeId: q.nodeId, executionContextId: world.executionContextId }) as { object: { objectId: string } }
+  const made = await send('Runtime.evaluate', {
+    expression: '(() => { const i = document.createElement("input"); i.type = "file"; i.multiple = true; return i })()', contextId: world.executionContextId,
+  }) as { result?: { objectId?: string } }
+  const probe = made?.result?.objectId
+  if (!probe) throw new CdpError('Could not make a field to read the files into.', 'browser_error')
+  try {
+    await send('DOM.setFileInputFiles', { objectId: probe, files: paths })
+  } catch (err) {
+    if (/not allowed/i.test(String((err as Error)?.message))) throw new CdpError(FILE_ACCESS_WORDS, 'file_access_off')
+    throw err
+  }
+  // A folder given as a path reads as an entry that cannot be read.
+  const r = await send('Runtime.callFunctionOn', {
+    objectId: probe, awaitPromise: true, returnByValue: true,
+    functionDeclaration: 'async function () { const out = []; for (const f of Array.from(this.files || [])) { let readable = true; try { await f.slice(0, 1).arrayBuffer() } catch { readable = false } out.push({ name: f.name, bytes: f.size, readable }) } return out }',
+  }) as { result?: { value?: unknown } }
+  const v = r?.result?.value
+  const read = Array.isArray(v) ? v.filter((f): f is { name: string; bytes: number; readable: boolean } => typeof f?.name === 'string' && typeof f?.bytes === 'number') : []
+  if (read.length !== paths.length || read.map((f) => f.name).sort().join('\n') !== paths.map(baseName).sort().join('\n')) {
+    throw new CdpError(`Chrome did not read exactly the files named (it read ${read.length}); nothing was put in the page. Name single files, never a folder.`, 'bad_request')
+  }
+  const unreadable = read.filter((f) => !f.readable).map((f) => f.name)
+  if (unreadable.length) throw new CdpError(`${unreadable.join(', ')} cannot be read as a file (a folder, or no such file); nothing was put in the page.`, 'bad_request')
+  const moved = await send('Runtime.callFunctionOn', {
+    objectId: target.object.objectId, arguments: [{ objectId: probe }], returnByValue: true,
+    functionDeclaration: 'function (probe) { this.files = probe.files; this.dispatchEvent(new Event("input", { bubbles: true })); this.dispatchEvent(new Event("change", { bubbles: true })); return this.files ? this.files.length : 0 }',
+  }) as { result?: { value?: unknown } }
+  if (moved?.result?.value !== paths.length) throw new CdpError('The page\'s field did not take the files.', 'browser_error')
+  return read.map(({ name, bytes }) => ({ name, bytes }))
 }

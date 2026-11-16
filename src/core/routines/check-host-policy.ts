@@ -26,6 +26,7 @@ import {
   LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN, ambientCallerOrigin, hostOrigin, isLocalOrigin, lowerOrigin,
 } from '../../lib/caller-origin.js';
 import { SessionControlError } from '../sessions/session-controls.js';
+import { fromHost } from '../hosts/session-host-origin.js';
 
 const LOCAL_HOST = '__local__';
 const HOST_PREFIX = 'host:';
@@ -54,10 +55,14 @@ export function checkHostRefusal(checkHost: string, origin: string): string | nu
   return `${rule} A session on host ${own} may run checks on its own host: pass host "${own}".`;
 }
 
-/** Throw the refusal as a 403 before anything asks a daemon. */
-export function assertCheckHostAllowed(checkHost: string, origin: string | undefined): void {
-  const refusal = checkHostRefusal(checkHost, checkCallerOrigin(origin));
-  if (refusal) throw new SessionControlError(refusal, 403);
+/**
+ * Throw the refusal as a 403 before anything asks a daemon. A session's call that came in over
+ * another alias of the check host's own daemon is from that host (session-host-origin.ts).
+ */
+export async function assertCheckHostAllowed(checkHost: string, origin: string | undefined): Promise<void> {
+  const from = checkCallerOrigin(origin);
+  const refusal = checkHostRefusal(checkHost, from);
+  if (refusal && !(await fromHost(checkHost.trim() || LOCAL_HOST, from))) throw new SessionControlError(refusal, 403);
 }
 
 interface CheckCommand { run?: unknown; cwd?: unknown; host?: unknown }

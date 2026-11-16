@@ -160,7 +160,7 @@ async function validateCheckForSave(
     // rebuilt from its cleaned params (trigger-templates.ts exemptTemplateRun).
     const templateRun = exemptTemplateRun(check, checkCallerOrigin(origin));
     if (templateRun) check.run = templateRun;
-    else assertCheckHostAllowed(host, origin);
+    else await assertCheckHostAllowed(host, origin);
   }
   await requireTriggerDaemon(host);
   return host;

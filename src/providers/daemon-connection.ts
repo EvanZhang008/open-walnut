@@ -10939,6 +10939,22 @@ export function sameDaemonHosts(hostKey: string): Promise<string[]> {
   return sameDaemonHostsOf(hostKey, own?.liveInstanceId ?? null)
 }
 
+/**
+ * Whether host aliases `a` and `b` reach one daemon process: both links up on the same process (its
+ * hellos named it), or, with `b`'s link down, the pair the daemon confirmed before
+ * (sameDaemonHosts). A session's call relayed over one alias's link is then the session's own,
+ * though Walnut started it through the other (2026-11-16: clouddev and newdev are one box; a
+ * clouddev session's browser tabs came in over newdev and belonged to no task).
+ */
+export async function oneDaemon(a: string, b: string): Promise<boolean> {
+  if (a === b) return true
+  const live = pooledFor(a)?.liveInstanceId ?? null
+  if (!live) return false
+  const theirs = pooledFor(b)?.liveInstanceId ?? null
+  if (theirs) return theirs === live
+  return (await sameDaemonHostsOf(a, live).catch(() => [a])).includes(b)
+}
+
 /** The pooled connection for an alias, under its own key or a `direct:` one; a connected one first. */
 function pooledFor(host: string): DaemonConnection | null {
   const all = [connectionPool.get(host), ...[...connectionPool].filter(([key, c]) => key.startsWith('direct:') && c.host === host).map(([, c]) => c)]

@@ -478,6 +478,12 @@ browserV1Router.post('/browser/act', (req, res, next) => {
     const v2 = await import('../../core/browser-control/input-v2.js')
     const needs = v2.needsInputV2(action, args)
     if (needs && !h.hasCap(c.device, v2.INPUT_V2)) throw new h.BrowserError(v2.outdatedWords(needs, c.label), 409, 'extension_outdated', { needs })
+    // A trusted upload of a file on the browser's machine: the person says yes to the files that are
+    // not the task's own downloads (upload-grants.ts), and only those go with it (`granted_paths`).
+    if (action === 'upload' && args.trusted === true && Array.isArray(args.paths) && args.paths.length && h.hasCap(c.device, 'upload-granted')) {
+      const held = await uploadGate(req, res, b, args, { device: c.device, owner, tab, requester, left })
+      if (held) return undefined
+    }
     // The person signs in themselves (Take over in the task's Browser view), the agent waits: never a request to the page.
     if (action === 'request_sign_in') return signInAct(res, b, { device: c.device, label: c.label, owner, tab: tab!, left: left() })
     const own = await walnutAddresses(req)
@@ -690,6 +696,64 @@ browserV1Router.post('/browser/act', (req, res, next) => {
     return { browser: c.label, ...(r as Record<string, unknown>), ...extra }
   })
 })
+
+/**
+ * A trusted upload's files that are not the task's own downloads wait for the person's yes
+ * (upload-grants.ts). True when the call was answered here (a 202 that waits for them); a refusal
+ * throws. With every file let through, they ride the command as `granted_paths`.
+ */
+async function uploadGate(req: Request, res: Response, b: Record<string, unknown>, args: Record<string, unknown>,
+  at: { device: string; owner: string; tab: number | undefined; requester: import('../../core/approvals/types.js').ApprovalRequester; left: () => number }): Promise<boolean> {
+  const h = await hub()
+  const ug = await import('../../core/browser-control/upload-grants.js')
+  const paths = args.paths as string[]
+  const odd = paths.find((p) => !ug.isFilePath(p))
+  if (odd) throw new h.BrowserError(`A trusted upload takes the full path of one file on the browser's machine, as it is (never a folder, a relative path, or one with hidden characters): not ${JSON.stringify(odd)}.`, 400, 'bad_request')
+  if (!h.hasCap(at.device, ug.FILE_ACCESS)) {
+    throw new h.BrowserError('Chrome lets Walnut put a file from this computer into a page only with file access on, and only the person can turn it on: '
+      + 'in Chrome, open the Extensions page (chrome://extensions), click Details on Walnut, and turn on "Allow access to file URLs". Then call upload again.', 409, 'file_access_off')
+  }
+  const taskId = at.requester.taskId
+  // The site the file goes into: the person's yes is for that site only.
+  const s = await sites()
+  const tabUrl = at.tab !== undefined ? h.viewOf(at.owner).tabs.find((t) => t.tab === at.tab && t.device === at.device)?.url : undefined
+  const site = (tabUrl ? s.siteOf(tabUrl) : '') ?? ''
+  let need = taskId ? paths.filter((p) => !ug.grantedOf(taskId, site, [p]).length) : paths
+  if (need.length) {
+    // The task's own downloads need no yes (the extension checks them itself).
+    const allow = { ...s.allowOf(await s.readSites()), walnut: await walnutAddresses(req) }
+    const dl = await h.send(at.device, 'downloads', { owner: at.owner }, allow, 8000).catch(() => undefined) as { downloads?: Array<{ filename?: unknown; state?: unknown }> } | undefined
+    const mine = new Set((dl?.downloads ?? []).filter((d) => d.state === 'complete' && typeof d.filename === 'string').map((d) => d.filename as string))
+    need = need.filter((p) => !mine.has(p))
+  }
+  const granted = paths.filter((p) => !need.includes(p) && taskId && ug.grantedOf(taskId, site, [p]).length)
+  if (need.length) {
+    if (!taskId) throw new h.BrowserError('A trusted upload of a file on the browser\'s machine is for a task\'s session, which the person can see asking: this caller is no task\'s.', 403, 'path_not_allowed')
+    if (ug.deniedOf(taskId, site, need).length) throw new h.BrowserError('The person said no to uploading these files here within the hour. Do not ask again for them; tell them in one line what you needed instead.', 403, 'denied')
+    const request = typeof b.request === 'string' ? b.request.slice(0, 100) : undefined
+    if (request) {
+      const state = await ug.answerUpload({ id: request, taskId, site, paths: need, holdMs: Math.max(0, Math.min(25_000, Number(b.wait_ms) || 0, at.left() - 40_000)) })
+      if (state === 'denied') throw new h.BrowserError('The person said no to uploading these files. Do not ask again for them; tell them in one line what you needed instead.', 403, 'denied')
+      if (state === 'pending') { res.status(202).json(await waitBody(request)); return true }
+      if (state === 'approved') { granted.push(...need); need = [] }
+    }
+    if (need.length) {
+      const ask = await ug.askUpload({ taskId, paths: need, site, requester: at.requester, ...(ambientTestRun() ? { testRun: ambientTestRun()! } : {}) })
+      log.web.info('browser trusted upload asks the person', { device: at.device, owner: at.owner, files: need.length, site, request: ask.id, reused: ask.reused })
+      res.status(202).json(await waitBody(ask.id))
+      return true
+    }
+  }
+  if (granted.length) {
+    args.granted_paths = granted
+    log.web.info('browser trusted upload goes with the person\'s yes', { device: at.device, owner: at.owner, files: granted.length, site })
+  }
+  return false
+  async function waitBody(id: string): Promise<Record<string, unknown>> {
+    return { status: 'needs_ok', code: 'upload_needs_ok', request: id, waitsMinutes: ug.ASK_MS / 60_000,
+      error: `Waiting for the person to let this task upload the file from their computer into ${site || 'this page'}. ${await ug.whereAskedNow()}; the ask stays open ${ug.ASK_MS / 60_000} minutes.` }
+  }
+}
 
 /**
  * `request_sign_in {tab, text?}`: the person signs in themselves (core/browser-control/sign-in-ask.ts).
