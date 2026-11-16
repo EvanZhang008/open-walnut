@@ -1,15 +1,14 @@
 import { test, expect, type Page } from '@playwright/test'
-import { build } from 'esbuild'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { discoverFixtureRoot, loadHome, openDraftOnCwd } from './draft-helpers'
 import { startSessionAt, openPanels, composerTextarea } from './engine-settings-popover-helpers'
+import { bundleWebFixture } from './web-fixture-bundle'
 
 let script = ''
 
 test.beforeAll(async () => {
-  const result = await build({
-    stdin: {
+  script = await bundleWebFixture({
       contents: `
         import React, {useState, useSyncExternalStore} from 'react';
         import {createRoot} from 'react-dom/client';
@@ -61,27 +60,12 @@ test.beforeAll(async () => {
         }
         createRoot(document.getElementById('root')).render(<App />);
       `,
-      resolveDir: path.resolve('web'),
-      sourcefile: 'composer-input-fixture.tsx',
-      loader: 'tsx',
-    },
-    bundle: true,
-    jsx: 'automatic',
-    write: false,
-    loader: { '.css': 'empty' },
-    format: 'iife',
-    platform: 'browser',
+    sourcefile: 'composer-input-fixture.tsx',
     alias: {
-      react: path.resolve('web/node_modules/react'),
-      'react-dom': path.resolve('web/node_modules/react-dom'),
-      '@': path.resolve('web/src'),
       '@open-walnut/core': path.resolve('src/core/types.ts'),
       '@open-walnut/task-query': path.resolve('src/core/task-query.ts'),
     },
-    define: { 'process.env.NODE_ENV': '"production"', 'import.meta.env.DEV': 'false' },
-    logLevel: 'silent',
   })
-  script = result.outputFiles[0].text
   expect(script).toContain('createRoot')
 })
 

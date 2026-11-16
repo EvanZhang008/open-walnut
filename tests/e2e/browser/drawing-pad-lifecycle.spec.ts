@@ -1,12 +1,10 @@
 import { test, expect } from '@playwright/test';
-import { build } from 'esbuild';
-import path from 'node:path';
+import { bundleWebFixture } from './web-fixture-bundle';
 
 let script = '';
 test.beforeAll(async () => {
-  const result = await build({
-    stdin: {
-      contents: `
+  script = await bundleWebFixture({
+    contents: `
         import React, {useState} from 'react';
         import {createRoot} from 'react-dom/client';
         import {ClassicDrawingPad as DrawingPad} from './src/components/chat/ClassicDrawingPad';
@@ -23,12 +21,8 @@ test.beforeAll(async () => {
         }
         createRoot(document.getElementById('root')).render(<App />);
       `,
-      resolveDir: path.resolve('web'), sourcefile: 'drawing-fixture.tsx', loader: 'tsx',
-    }, bundle: true, jsx: 'automatic', write: false, loader: { '.css': 'empty' }, format: 'iife', platform: 'browser',
-    alias: { react: path.resolve('web/node_modules/react'), 'react-dom': path.resolve('web/node_modules/react-dom'), '@': path.resolve('web/src') },
-    define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent',
+    sourcefile: 'drawing-fixture.tsx',
   });
-  script = result.outputFiles[0].text;
 });
 
 test('draft switching preserves each sketch and an old attachment cannot close the new drawing', async ({ page }) => {
