@@ -247,14 +247,4 @@ final class InboxSelectUITests: XCTestCase {
         }
         chip.tap()
     }
-
-    @MainActor
-    private func waitForValue(_ element: XCUIElement, _ value: String, timeout: TimeInterval = 15) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if (element.value as? String) == value { return true }
-            usleep(200_000)
-        }
-        return (element.value as? String) == value
-    }
 }

@@ -400,6 +400,8 @@ struct DiffComparePickerView: View {
     let pick: (DiffCompare) -> Void
 
     @State private var query = ""
+    /// The search field has the keyboard (its focus, not whether the search is presented).
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         List {
@@ -483,6 +485,7 @@ struct DiffComparePickerView: View {
         // A field under the title, as the app's other searches: left to iOS 26, a sheet
         // folds it into a round bottom-bar button with no glyph that reads as nothing.
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Branch, commit or message")
+        .searchFocused($searchFocused)
         .navigationTitle("Compare With")
         .navigationBarTitleDisplayMode(.inline)
         .task { if model.refs == nil { await model.loadRefs() } }
@@ -497,6 +500,9 @@ struct DiffComparePickerView: View {
     /// screen with the pick made (CI and lane B, 2026-11-15 and 11-16: "the commit is not the
     /// comparison").
     private func choose(_ option: DiffCompare) {
+        // Focus, not presentation: iOS 26.5 kept the keyboard up after a resign sent to the
+        // responder chain alone (CI 2026-11-16: "the picker's search stayed active after the pick").
+        searchFocused = false
         UIApplication.shared.sendAction(
             #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
         )

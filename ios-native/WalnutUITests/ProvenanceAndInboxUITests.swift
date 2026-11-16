@@ -602,11 +602,6 @@ final class ProvenanceAndInboxUITests: XCTestCase {
         return condition()
     }
 
-    @MainActor
-    private func waitForValue(_ element: XCUIElement, _ value: String, timeout: TimeInterval = 15) -> Bool {
-        waitUntil(timeout: timeout) { (element.value as? String) == value }
-    }
-
     private func waitForDisappearance(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
         waitUntil(timeout: timeout) { !element.exists }
     }

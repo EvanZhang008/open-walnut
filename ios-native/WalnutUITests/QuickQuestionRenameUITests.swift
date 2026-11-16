@@ -171,7 +171,7 @@ final class QuickQuestionRenameUITests: XCTestCase {
         XCTAssertLessThan(abs(selected.frame.minY - rowBefore), 200, "the list jumped when the search was tapped")
         attach(app, "project-search-first-tap-keyboard")
         search.typeText("Quick question")
-        XCTAssertEqual(search.value as? String, "Quick question")
+        XCTAssertTrue(waitForValue(search, "Quick question"), "the field does not read what was typed: \(search.value ?? "nil")")
         XCTAssertTrue(picker.buttons["Quick question"].exists)
         XCTAssertFalse(app.buttons["task.project.create"].exists, "the display name must not create a duplicate project")
         attach(app, "project-picker-quick-question")
@@ -185,7 +185,7 @@ final class QuickQuestionRenameUITests: XCTestCase {
         assertStableKeyboard(app, message: "the reopened project search did not focus after one tap")
         attach(app, "project-search-reopened-first-tap-keyboard")
         rawSearch.typeText("Ask Walnut")
-        XCTAssertEqual(rawSearch.value as? String, "Ask Walnut")
+        XCTAssertTrue(waitForValue(rawSearch, "Ask Walnut"), "the field does not read what was typed: \(rawSearch.value ?? "nil")")
         let storedRow = picker.buttons["Quick question"]
         XCTAssertTrue(storedRow.waitForExistence(timeout: 15))
         XCTAssertFalse(app.buttons["task.project.create"].exists)

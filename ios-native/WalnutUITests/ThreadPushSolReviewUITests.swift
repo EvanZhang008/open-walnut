@@ -84,7 +84,7 @@ final class ThreadPushSolReviewUITests: XCTestCase {
         let draft = "Please keep this unsent draft while I read the new push."
         input.tap()
         input.typeText(draft)
-        XCTAssertEqual(input.value as? String, draft)
+        XCTAssertTrue(waitForValue(input, draft), "the field does not read what was typed: \(input.value ?? "nil")")
         shot("draft-before-push")
 
         push(ids[9])

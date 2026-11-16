@@ -777,15 +777,6 @@ final class DemoModeUITests: XCTestCase {
         XCTAssertFalse(app.tabBars.firstMatch.exists)
     }
 
-    private func waitForValue(_ element: XCUIElement, _ value: String, timeout: TimeInterval = 15) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if (element.value as? String) == value { return true }
-            usleep(200_000)
-        }
-        return (element.value as? String) == value
-    }
-
     /// The screens added after the first submission, in the demo: Inbox letters marked
     /// without opening them (a right swipe, Select, two fingers dragged down the rows),
     /// the Tasks search finding finished work behind "Completed (1)", and the Recently

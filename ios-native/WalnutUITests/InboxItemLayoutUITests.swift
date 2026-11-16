@@ -19,7 +19,7 @@ final class InboxItemLayoutUITests: XCTestCase {
         XCTAssertEqual(goal.value as? String, "", "each launch must start with an independent blank goal")
         let approvedGoal = "Review the update\nKeep the existing source\nDo not execute this draft"
         InboxItemActionsUITests.reveal(app, goal); goal.tap(); goal.typeText(approvedGoal)
-        XCTAssertEqual(goal.value as? String, approvedGoal)
+        XCTAssertTrue(waitForValue(goal, approvedGoal), "the field does not read what was typed: \(goal.value ?? "nil")")
         let review = InboxItemActionsUITests.element(app, "inbox.item.confirm.prepare")
         XCTAssertGreaterThan(goal.frame.height, 0, "the editor viewport must remain visible")
         XCTAssertLessThanOrEqual(goal.frame.maxY, review.frame.minY, "the editor viewport must stay above the footer while typing")
@@ -135,7 +135,7 @@ final class InboxItemLayoutUITests: XCTestCase {
         let search = InboxItemActionsUITests.element(app, "inbox.item.tasks.search")
         XCTAssertTrue(search.waitForExistence(timeout: 15))
         search.tap(); search.typeText(targetB)
-        XCTAssertEqual(search.value as? String, targetB)
+        XCTAssertTrue(waitForValue(search, targetB), "the field does not read what was typed: \(search.value ?? "nil")")
         let select = InboxItemActionsUITests.element(app, "inbox.item.tasks.select.\(targetB)")
         XCTAssertTrue(select.waitForExistence(timeout: 15))
         InboxItemActionsUITests.reveal(app, select); select.tap()
@@ -156,7 +156,7 @@ final class InboxItemLayoutUITests: XCTestCase {
         let approvedGoal = "QA largest dark draft\nKeep the exact source\nDo not execute this draft"
         XCTAssertEqual(approvedGoal.count, 69)
         InboxItemActionsUITests.reveal(app, goal); goal.tap(); goal.typeText(approvedGoal)
-        XCTAssertEqual(goal.value as? String, approvedGoal)
+        XCTAssertTrue(waitForValue(goal, approvedGoal), "the field does not read what was typed: \(goal.value ?? "nil")")
         assertDarkGoalViewport(app, goal: goal)
         captureDarkState(app, "\(name)-typed-exact-69")
         let cancel = InboxItemActionsUITests.element(app, "inbox.item.confirm.cancel")

@@ -282,7 +282,7 @@ final class ThreadFollowUpVoiceUITests: ThreadPushUITestCase {
         let input = el("org.thread.followUp.input")
         input.tap()
         input.typeText("Typed without voice")
-        XCTAssertEqual(input.value as? String, "Typed without voice")
+        XCTAssertTrue(waitForValue(input, "Typed without voice"), "the field does not read what was typed: \(input.value ?? "nil")")
         XCTAssertEqual(sent.count, 0)
     }
 }
