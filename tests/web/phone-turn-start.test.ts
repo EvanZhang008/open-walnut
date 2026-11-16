@@ -91,6 +91,7 @@ const READER_SCROLLS: Record<string, string> = {
   'web/src/hooks/usePhoneRestore.ts': "a reload puts back the reader's own saved place",
   'web/src/components/sessions/SessionChatHistory.tsx': 'the open-time landing, decided by phoneTurnStartStep',
   'web/src/components/sessions/useReadingPlace.ts': "a page put back where the reader left it (reading-place.ts)",
+  'web/src/components/sessions/useLineAnchor.ts': "a resize put the reader's top line back, off the end (line-anchor.ts)",
 }
 
 function sources(dir: string, out: string[] = []): string[] {

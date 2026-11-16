@@ -178,11 +178,12 @@ describe('reading split: ratchets', () => {
     expect(history).toMatch(/if \(publishTimeline\) \{\s*const sentAt = publishTimeline\.sentAt;/)
   })
 
-  it('turning the split lands the pane again on what it showed (its width changes, its text rewraps)', () => {
+  it('turning the split keeps the pane mounted, so its top line holds through the rewrap (useLineAnchor)', () => {
     const split = read('components/sessions/useReaderSplit.ts')
     const fn = split.slice(split.indexOf('const setOrient = useCallback'), split.indexOf('const share = clampReaderShare'))
-    expect(fn).toMatch(/readerPlaceFrom\(box\)/)
-    expect(fn).toMatch(/landing\.current = \{ pageKey, place \};\s*setLand\(\(n\) => n \+ 1\);/)
+    // A re-landing remount puts the pane back by row (a whole reply) and loses the line being read.
+    expect(fn).not.toMatch(/setLand\(/)
+    expect(read('components/sessions/SessionChatHistory.tsx')).toMatch(/useLineAnchor\(\{ containerRef, isAtBottom, shown: routeShown, selectionActive, onResized: readingPlace\.resized \}\)/)
   })
 
   it('never offered in Tree Mode (its pages are their own split)', () => {

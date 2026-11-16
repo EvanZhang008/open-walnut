@@ -78,6 +78,7 @@ import { ThreadStackHeader } from './ThreadStackHeader';
 import { isSidePage, useTreeHalf } from './tree-half-context';
 import { placeKeyOf, readerPlaceKey } from './reading-place';
 import { useReadingPlace } from './useReadingPlace';
+import { useLineAnchor } from './useLineAnchor';
 import { ThreadTurnLabel } from './ThreadTurnLabel';
 import { foldGroupOf, foldOpenKeys, foldParts, isFolded } from '@/utils/thread-fold';
 import { WORKING_LEAD, envelopeSteps, foldStepsPhrase, secondsBetween, walnutCompactLine, workedForLead, type FoldStep } from './fold-steps';
@@ -1763,6 +1764,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // below is the chat's, and a release would write "at the bottom" under its key.
   const { carryRow: carryPlaceRow } = readingPlace;
   const releasePlace = readerPane ? NOOP_RELEASE : readingPlace.release;
+  // The top line stays the top line when the box changes size (fullscreen, the
+  // window, the panel's width, the split's divider and its turn): line-anchor.ts.
+  useLineAnchor({ containerRef, isAtBottom, shown: routeShown, selectionActive, onResized: readingPlace.resized });
   const placeHeldFn = useCallback(() => readingPlace.held.current, [readingPlace.held]);
   /** The page's landing is not the load's to make: a question page, or a kept place. */
   const landingOwnedRef = useRef(() => onQuestionPageRef.current || readingPlace.held.current);

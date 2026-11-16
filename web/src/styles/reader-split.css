@@ -1,5 +1,5 @@
 /* The chat's reading split (components/sessions/reader-split.tsx): the reading
-   pane above the chat (or left of it), a hairline divider, then the panel's own
+   pane above the chat (or left of it), the divider's grip band, then the panel's own
    timeline and composer. The column is a grid while it shows (the base rule is
    shared with Tree Mode's split in tree-split.css); every child has its place.
 
@@ -20,7 +20,7 @@
 /* One above the other: bar, reading pane, divider, chat, composer. */
 .session-panel-chat-col.is-reader-stack {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto minmax(72px, var(--reader-a, 1fr)) 0 minmax(120px, var(--reader-b, 1fr)) auto;
+  grid-template-rows: auto minmax(72px, var(--reader-a, 1fr)) var(--reader-grip) minmax(120px, var(--reader-b, 1fr)) auto;
 }
 .session-panel-chat-col.is-reader-stack > .session-reader-pane { grid-area: 2 / 1 / 3 / 2; }
 .session-panel-chat-col.is-reader-stack > .session-reader-divider { grid-area: 3 / 1 / 4 / 2; }
@@ -29,7 +29,7 @@
 
 /* Side by side: the reading pane left, full height; the chat and its composer right. */
 .session-panel-chat-col.is-reader-side {
-  grid-template-columns: minmax(240px, var(--reader-a, 1fr)) 0 minmax(320px, var(--reader-b, 1fr));
+  grid-template-columns: minmax(240px, var(--reader-a, 1fr)) var(--reader-grip) minmax(320px, var(--reader-b, 1fr));
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 .session-panel-chat-col.is-reader-side > .session-reader-pane { grid-area: 2 / 1 / 4 / 2; }
@@ -91,23 +91,58 @@
 }
 .session-reader-body .session-history { flex: 1; overflow-y: auto; }
 
-/* The divider: a hairline with a comfortable grab zone that takes no layout space. */
+/* The divider: a grip band (2026-11-16, the user picked design 1 of ten: "recommend
+   is good, go", after "make this line of split bit more obvious"). The old 1px
+   hairline at 12% between two white panes did not read as a split at all. An 8px
+   band in the secondary surface, a strong hairline on each edge and a short grip
+   bar in its middle; one step darker on hover, accent while dragging. Its grab
+   zone reaches 4px past each edge. */
+.session-panel-chat-col.has-reader { --reader-grip: 8px; }
 .session-reader-divider {
   position: relative;
   z-index: 3;
-  background: var(--border);
+  background: var(--bg-secondary);
   touch-action: none;
+  transition: background-color 0.12s;
 }
-.is-reader-stack > .session-reader-divider { height: 1px; margin-top: -1px; cursor: row-resize; }
-.is-reader-side > .session-reader-divider { width: 1px; margin-left: -1px; cursor: col-resize; }
+.is-reader-stack > .session-reader-divider {
+  height: var(--reader-grip);
+  border-block: 1px solid var(--border-strong);
+  cursor: row-resize;
+}
+.is-reader-side > .session-reader-divider {
+  width: var(--reader-grip);
+  border-inline: 1px solid var(--border-strong);
+  cursor: col-resize;
+}
 .session-reader-divider::before {
   content: '';
   position: absolute;
-  inset: -5px 0;
+  inset: -4px 0;
 }
-.is-reader-side > .session-reader-divider::before { inset: 0 -5px; }
-.session-reader-divider:hover,
-.is-reader-dragging > .session-reader-divider { background: var(--accent); }
+.is-reader-side > .session-reader-divider::before { inset: 0 -4px; }
+.session-reader-divider::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--fg-muted);
+  transform: translate(-50%, -50%);
+  transition: background-color 0.12s;
+  pointer-events: none;
+}
+.is-reader-side > .session-reader-divider::after { width: 4px; height: 36px; }
+.session-reader-divider:hover { background: var(--bg-tertiary); }
+.session-reader-divider:hover::after { background: var(--fg-secondary); }
+.is-reader-dragging > .session-reader-divider {
+  background: var(--bg-secondary);
+  background-image: linear-gradient(var(--accent-subtle), var(--accent-subtle));
+  border-color: var(--accent);
+}
+.is-reader-dragging > .session-reader-divider::after { background: var(--accent); }
 .is-reader-dragging { user-select: none; }
 .is-reader-dragging.is-reader-stack { cursor: row-resize; }
 .is-reader-dragging.is-reader-side { cursor: col-resize; }

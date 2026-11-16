@@ -75,6 +75,9 @@ export interface ReadingPlaceApi {
   adopt: () => void;
   /** The reader asked for the end (a send, the arrow): the kept place lets go now. */
   release: () => void;
+  /** The box changed size and its top line was put back (useLineAnchor): a hold on
+   *  the kept place stops, since its row share would move that line again. */
+  resized: () => void;
   /** The view is about to switch for a gesture on this row (an Ask inline from
    *  Tree Mode): that row keeps its height on screen in the new view. */
   carryRow: (msgId: string) => void;
@@ -131,6 +134,9 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
     const startedAt = performance.now();
     let until = startedAt + HOLD_MS;
     let lastTop = Math.round(el.getBoundingClientRect().top);
+    // A change of the box's width rewraps its rows: the line on top is useLineAnchor's
+    // to keep then, and this row-share hold would move it (its rAF runs first).
+    const width = el.clientWidth;
     const stop = () => {
       cancelAnimationFrame(raf);
       for (const t of HOLD_STOPPERS) el.removeEventListener(t, onInput);
@@ -146,7 +152,7 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
         // Stop the initial bottom pin even if this hold was hidden before its first frame.
         el.dispatchEvent(new Event(READER_SCROLL_EVENT));
       }
-      if (!shownRef.current) { stop(); return; }
+      if (!shownRef.current || el.clientWidth !== width) { stop(); return; }
       isAtBottom.current = false;
       // The bar above the box still settling (a path bar leaving): hold on.
       const top = Math.round(el.getBoundingClientRect().top);
@@ -361,5 +367,6 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
       from: keyRef.current,
     };
   }, [containerRef, boxId]);
-  return { held, placeAt, adopt, release, keep, carryRow };
+  const resized = useCallback(() => { if (hold.current) stopHold(); }, [stopHold]);
+  return { held, placeAt, adopt, release, keep, carryRow, resized };
 }

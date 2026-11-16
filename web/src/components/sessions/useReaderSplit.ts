@@ -86,17 +86,13 @@ export function useReaderSplit(a: UseReaderSplitArgs) {
   /**
    * Turning the split changes the pane's width, so its text rewraps and the line being read
    * would slide away (2026-11-12 prod recording: side by side moved it from the top to the
-   * bottom). What it shows now lands again in the new width, as a new place does.
+   * bottom). The pane stays mounted: its timeline keeps its top line through the change of
+   * size (useLineAnchor), as it does for fullscreen and the window. A remount here re-landed
+   * by row, a whole reply, and lost the line (2026-11-15).
    */
   const setOrient = useCallback((next: 'stack' | 'side') => {
-    const box = colRef.current?.querySelector<HTMLElement>('.session-reader-body .session-history');
-    const place = box ? readerPlaceFrom(box) : null;
-    if (place) {
-      landing.current = { pageKey, place };
-      setLand((n) => n + 1);
-    }
     setRecord((prev) => ({ ...prev, orient: next }));
-  }, [colRef, pageKey, setRecord]);
+  }, [setRecord]);
 
   const share = clampReaderShare(record.share);
   /** The drag in progress ends here (pointer up, cancel, capture lost, or the panel going). */

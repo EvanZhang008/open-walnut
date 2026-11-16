@@ -1094,6 +1094,27 @@ await fs.writeFile(
         note: '',
         subtasks: [],
       },
+      {
+        // Dense transcript fixture (session-reader-line-anchor.spec.ts): long, dense
+        // replies that rewrap at every width, for the split's top-line anchor.
+        id: 'pw-task-dense-split',
+        title: 'Dense split fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-dense-split-session'],
+        active_session_ids: [],
+        session_id: 'pw-dense-split-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
       // Whale transcript fixtures (whale-history.spec.ts, and its own copy for whale-anchor-reach.spec.ts).
       whaleTask(new Date().toISOString()),
       whaleTask(new Date().toISOString(), 'anchor'),
@@ -3024,6 +3045,44 @@ if (process.env.PW_AGENT_TEXT_ENTRIES === '1') {
     ].join('\n')
   }
   await fs.writeFile(path.join(jsonlDir, 'pw-outline-window-session.jsonl'), longTranscript('pw-outline-window-session', '0199bd', 230))
+  // Long, dense replies (session-reader-line-anchor.spec.ts): CJK runs (built from code
+  // points) mixed with ASCII words, headings, lists and inline code, so every width
+  // change rewraps every row, as the user's interview reviews do.
+  const denseTranscript = (sessionId: string, u: string, pairs: number): string => {
+    const cjk = (seed: number, n: number) => Array.from({ length: n }, (_, k) => String.fromCodePoint(0x4e00 + ((seed * 131 + k * 197) % 2400))).join('')
+    const para = (i: number, j: number) => `${cjk(i * 7 + j, 36)} \`review_votes(review_id, voter_id)\` ${cjk(i * 11 + j, 28)}, dense line ${j} of reply ${i + 1}. ${cjk(i * 13 + j, 42)}`
+    const reply = (i: number) => [
+      `**Dense reply ${i + 1}** ${para(i, 0)}`,
+      `### Part A of reply ${i + 1}`,
+      ...Array.from({ length: 5 }, (_, j) => `- **Point ${j + 1}.** ${para(i, j + 1)}`),
+      `### Part B of reply ${i + 1}`,
+      ...Array.from({ length: 4 }, (_, j) => `${j + 1}. ${para(i, j + 10)} ${para(i, j + 20)}`),
+      para(i, 30),
+    ].join('\n\n')
+    const stamp = (i: number, offsetMs: number) => new Date(sessionFixtureNow - 60_000 + i * 1_000 + offsetMs).toISOString()
+    return [
+      ...Array.from({ length: pairs }, (_, i) => [
+        JSON.stringify({
+          type: 'user',
+          uuid: `${u}02-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+          parentUuid: i === 0 ? null : `${u}03-0000-4aaa-8bbb-${String(i - 1).padStart(12, '0')}`,
+          sessionId,
+          timestamp: stamp(i, 0),
+          message: { role: 'user', content: `dense ask ${i + 1}` },
+        }),
+        JSON.stringify({
+          type: 'assistant',
+          uuid: `${u}03-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+          parentUuid: `${u}02-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+          sessionId,
+          timestamp: stamp(i, 400),
+          message: { role: 'assistant', content: [{ type: 'text', text: reply(i) }] },
+        }),
+      ]).flat(),
+      '',
+    ].join('\n')
+  }
+  await fs.writeFile(path.join(jsonlDir, 'pw-dense-split-session.jsonl'), denseTranscript('pw-dense-split-session', '0199a7', 12))
   await fs.writeFile(path.join(jsonlDir, `${WHALE_SESSION}.jsonl`), whaleJsonl(sessionFixtureNow))
   await fs.writeFile(path.join(jsonlDir, `${WHALE_ANCHOR_SESSION}.jsonl`), whaleJsonl(sessionFixtureNow, WHALE_ANCHOR_SESSION))
   await fs.writeFile(path.join(jsonlDir, `${WHALE_GAP_SESSION}.jsonl`), whaleJsonl(sessionFixtureNow, WHALE_GAP_SESSION))
@@ -4247,6 +4306,19 @@ await fs.writeFile(
         messageCount: 460,
         cwd: vscodeFixtureRoot,
         title: 'Outline window fixture session',
+      },
+      {
+        claudeSessionId: 'pw-dense-split-session',
+        taskId: 'pw-task-dense-split',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 27_000).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        messageCount: 24,
+        cwd: vscodeFixtureRoot,
+        title: 'Dense split fixture session',
       },
       {
         claudeSessionId: 'pw-stream-select-session',
