@@ -475,7 +475,11 @@ test.describe('Draw in the composer (drawing_app)', () => {
     await page.keyboard.press('v');
     await page.keyboard.press('ControlOrMeta+a');
     await dialog.getByRole('button', { name: 'Make a diagram' }).click();
-    await expect.poll(async () => (await onServer(page, dialog)).scene.elements.filter((e) => !e.isDeleted).length, { timeout: 30_000 }).toBeGreaterThan(2);
+    // The answer's words can rename an auto-named sketch: a read between the rename and the path
+    // the dialog shows next is retried, not failed.
+    const liveCount = async () => { try { return (await onServer(page, dialog)).scene.elements.filter((e) => !e.isDeleted).length; } catch { return -1; } };
+    await expect.poll(liveCount, { timeout: 30_000 }).toBeGreaterThan(2);
+    await saved(dialog);
     expect(sent!.mode).toBe('tidy');
     expect(sent!.elements).toHaveLength(2);
     const right = Math.max(...before.map((e) => e.x));
@@ -486,7 +490,7 @@ test.describe('Draw in the composer (drawing_app)', () => {
     await expect(dialog.getByRole('complementary', { name: 'Drawing assistant' })).toHaveCount(0);
     await shot(page, 'composer-diagram');
     await page.keyboard.press('ControlOrMeta+z');
-    await expect.poll(async () => (await onServer(page, dialog)).scene.elements.filter((e) => !e.isDeleted).length, { timeout: 30_000 }).toBe(2);
+    await expect.poll(liveCount, { timeout: 30_000 }).toBe(2);
     expect(errors).toEqual([]);
   });
 });
