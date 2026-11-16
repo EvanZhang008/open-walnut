@@ -89,7 +89,41 @@ const LAST_RUN_FILE = 'walnut-last-maintenance';
  */
 export const REWRITE_MAINTENANCE_DELAY_MS = 60_000;
 
-export type MaintenanceReason = 'interval' | 'size' | 'debris' | 'backup' | 'rewrite' | 'forced';
+export type MaintenanceReason = 'interval' | 'size' | 'debris' | 'backup' | 'rewrite' | 'loose' | 'forced';
+
+/**
+ * Loose objects (`git count-objects -v` size) past this are packed by an incremental repack
+ * between the weekly gcs. git-sync turns `gc.auto` off and commits multi-MB JSON files all day,
+ * and packDirBytes never sees loose objects: on 2026-11-16 the Mac's data repo held 2.5 GB of
+ * them while its disk sat at 99%; one `repack -d` packed them into 20 MB.
+ */
+export const LOOSE_TRIGGER_BYTES = 1024 * 1024 * 1024;
+
+/** The `size:` line of `git count-objects -v` (KiB) in bytes; 0 when absent. Exported for tests. */
+export function parseLooseBytes(countObjects: string): number {
+  const m = /^size:\s*(\d+)/m.exec(countObjects);
+  return m ? Number(m[1]) * 1024 : 0;
+}
+
+async function looseBytes(repoDir: string): Promise<number> {
+  try {
+    return parseLooseBytes(await execGitGroup('git count-objects -v', { cwd: repoDir, timeout: 60_000 }));
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Pack what is loose into one new pack and drop the loose copies (`-d`), without `-a`: it never
+ * rewrites the big pack, so it needs only the new pack's space and minutes, not the full gc's.
+ * Unreachable loose objects stay for the weekly gc's age-gated prune.
+ */
+async function runIncrementalRepack(repoDir: string): Promise<void> {
+  await execGitGroup(
+    'nice -n 10 git -c pack.threads=1 -c pack.windowMemory=256m repack -d -q',
+    { cwd: repoDir, timeout: GC_TIMEOUT_MS },
+  );
+}
 
 export interface MaintenanceResult {
   repo: string;
@@ -437,7 +471,7 @@ export function sweepKilledGcPacks(gitDir: string, before: Set<string>): number 
  */
 export async function maintainRepo(
   repoDir: string,
-  opts: { pauseSync?: boolean; force?: boolean; afterRewrite?: boolean } = {},
+  opts: { pauseSync?: boolean; force?: boolean; afterRewrite?: boolean; looseTriggerBytes?: number } = {},
 ): Promise<MaintenanceResult> {
   const gitDir = resolveGitDir(repoDir);
   const result: MaintenanceResult = {
@@ -451,7 +485,9 @@ export async function maintainRepo(
   // act on whatever repository the directory sits inside (git-sync isOwnRepoPrefix).
   if (gitDir === repoDir && !fs.existsSync(path.join(repoDir, 'HEAD'))) return result;
 
-  const due = opts.force ? 'forced' : maintenanceDue(gitDir, Date.now(), { afterRewrite: opts.afterRewrite });
+  let due: MaintenanceReason | null = opts.force ? 'forced' : maintenanceDue(gitDir, Date.now(), { afterRewrite: opts.afterRewrite });
+  const looseBackoff = (() => { const f = readLastRun(gitDir).failedAt; return f !== undefined && Date.now() - f < FAILED_GC_BACKOFF_MS })();
+  if (!due && !looseBackoff && await looseBytes(repoDir) >= (opts.looseTriggerBytes ?? LOOSE_TRIGGER_BYTES)) due = 'loose';
   if (!due) return result;
   result.reason = due;
   result.packBytesBefore = packDirBytes(gitDir);
@@ -473,11 +509,17 @@ export async function maintainRepo(
   }
   const tmpPacksBefore = tmpPackNames(gitDir);
   try {
-    await expireBackupBranch(repoDir);
-    await expireCompactionBackups(repoDir);
-    await runGc(repoDir);
-    result.ran = true;
-    writeLastRun(gitDir, { at: Date.now(), packBytesAfter: packDirBytes(gitDir) });
+    if (due === 'loose') {
+      // Not a gc: the weekly clock and the size trigger's floor stay as the last gc left them.
+      await runIncrementalRepack(repoDir);
+      result.ran = true;
+    } else {
+      await expireBackupBranch(repoDir);
+      await expireCompactionBackups(repoDir);
+      await runGc(repoDir);
+      result.ran = true;
+      writeLastRun(gitDir, { at: Date.now(), packBytesAfter: packDirBytes(gitDir) });
+    }
   } catch (err) {
     result.error = err instanceof Error ? err.message : String(err);
     log.git.warn('git-maintenance gc failed', { repo: repoDir, error: result.error });

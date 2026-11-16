@@ -36,6 +36,7 @@ import {
   DEBRIS_COUNT_TRIGGER,
   COMPACTION_BACKUP_MAX_AGE_DAYS,
   FAILED_GC_BACKOFF_MS,
+  parseLooseBytes,
 } from '../../src/integrations/git-maintenance.js';
 import { WALNUT_HOME } from '../../src/constants.js';
 
@@ -371,6 +372,31 @@ describe('maintainRepo', () => {
     } finally {
       await fsp.rm(bare, { recursive: true, force: true });
     }
+  });
+
+  it('between weekly gcs, loose objects past the line are packed by an incremental repack that leaves the gc clock alone', async () => {
+    await maintainRepo(repo, { force: true })
+    const lastGc = readLastRun(gitDir)
+    for (let i = 0; i < 3; i++) {
+      await fsp.writeFile(path.join(repo, `g${i}.json`), JSON.stringify({ i, pad: 'x'.repeat(5000) }))
+      run(`git add -A && git commit -q -m g${i}`, repo)
+    }
+    const loose = parseLooseBytes(run('git count-objects -v', repo))
+    expect(loose).toBeGreaterThan(0)
+    // under the line: nothing runs
+    expect((await maintainRepo(repo, { pauseSync: true, looseTriggerBytes: loose + 1 })).ran).toBe(false)
+    const result = await maintainRepo(repo, { pauseSync: true, looseTriggerBytes: loose })
+    expect(result.error).toBeUndefined()
+    expect(result).toMatchObject({ ran: true, reason: 'loose' })
+    expect(parseLooseBytes(run('git count-objects -v', repo))).toBe(0)
+    expect(readLastRun(gitDir)).toEqual(lastGc)
+    expect(run('git fsck --no-progress', repo)).not.toMatch(/missing|error/i)
+    expect(run('git log --oneline', repo).split('\n').length).toBe(4)
+  });
+
+  it('parseLooseBytes reads the size line of git count-objects -v in KiB', () => {
+    expect(parseLooseBytes('count: 97089\nsize: 2663424\nin-pack: 1\n')).toBe(2663424 * 1024)
+    expect(parseLooseBytes('')).toBe(0)
   });
 
   it('does nothing when not due and not forced', async () => {
