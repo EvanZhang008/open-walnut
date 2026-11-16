@@ -32,6 +32,8 @@ interface Entry {
   /** When the reads started failing after a good one (0: they do not). */
   failingSince: number;
   retry: ReturnType<typeof setTimeout> | null;
+  /** A read asked for by a session event, waiting for the rest of its burst (refreshSessionSupervisionSoon). */
+  soon: ReturnType<typeof setTimeout> | null;
 }
 
 /**
@@ -43,6 +45,12 @@ interface Entry {
  */
 export const READ_FAILURE_GRACE_MS = 8_000;
 const READ_RETRY_MS = 1_500;
+/**
+ * A send changes a session's status three or four times within a second (queued, running,
+ * idle), and each change was a read of its own (2026-11-16, task 9bceb9f2: four a send). One read
+ * for the burst, once it has gone quiet this long.
+ */
+const EVENT_REREAD_MS = 250;
 
 const entries = new Map<string, Entry>();
 
@@ -53,7 +61,7 @@ class StaleSupervisionRead extends Error {
 function entryFor(sid: string): Entry {
   let entry = entries.get(sid);
   if (!entry) {
-    entry = { snapshot: EMPTY, listeners: new Set(), holds: 0, revision: 0, read: null, refreshAgain: false, actionError: null, timer: null, failingSince: 0, retry: null };
+    entry = { snapshot: EMPTY, listeners: new Set(), holds: 0, revision: 0, read: null, refreshAgain: false, actionError: null, timer: null, failingSince: 0, retry: null, soon: null };
     entries.set(sid, entry);
   }
   return entry;
@@ -88,6 +96,8 @@ export function subscribeSessionSupervision(sid: string, listener: () => void): 
       entry.timer = null;
       if (entry.retry) clearTimeout(entry.retry);
       entry.retry = null;
+      if (entry.soon) clearTimeout(entry.soon);
+      entry.soon = null;
       release(sid, entry);
     }
   };
@@ -109,6 +119,17 @@ export function holdSessionSupervision(sid: string): () => void {
     entry.holds -= 1;
     release(sid, entry);
   };
+}
+
+/** A read for a session event: one for a burst of them (EVENT_REREAD_MS), only while someone reads. */
+export function refreshSessionSupervisionSoon(sid: string): void {
+  const entry = entries.get(sid);
+  if (!entry?.listeners.size) return;
+  if (entry.soon) clearTimeout(entry.soon);
+  entry.soon = setTimeout(() => {
+    entry.soon = null;
+    if (entry.listeners.size) void refreshSessionSupervision(sid);
+  }, EVENT_REREAD_MS);
 }
 
 export function refreshSessionSupervision(sid: string): Promise<void> {

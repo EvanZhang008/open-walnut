@@ -4,7 +4,7 @@ import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useActiveSessionCron } from '@/hooks/useSessionStatus';
 import {
-  changeSessionSupervision, getSessionSupervision, holdSessionSupervision, refreshSessionSupervision,
+  changeSessionSupervision, getSessionSupervision, holdSessionSupervision, refreshSessionSupervision, refreshSessionSupervisionSoon,
   subscribeSessionSupervision, type SupervisionSnapshot,
 } from '@/stores/session-supervision-store';
 import '@/styles/session-supervision.css';
@@ -62,9 +62,9 @@ export function useSessionSupervision(sid: string): SupervisionSnapshot {
   const snapshot = useSyncExternalStore(subscribe, read, read);
   useEvent('session:status-changed', (data) => {
     const event = data as { sessionId?: string };
-    if (shown && event.sessionId === sid) void refreshSessionSupervision(sid);
+    if (shown && event.sessionId === sid) refreshSessionSupervisionSoon(sid);
   });
-  useEvent('_ws:reconnected', () => { if (shown) void refreshSessionSupervision(sid); });
+  useEvent('_ws:reconnected', () => { if (shown) refreshSessionSupervisionSoon(sid); });
   return snapshot;
 }
 

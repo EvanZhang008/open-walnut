@@ -13,9 +13,10 @@
  * Three guards, on the production bundle:
  *  - what draws: an agent's status write draws the task list once and no open chat; Cmd+N
  *    and typing draw no task list at all (src: web/src/utils/render-count.ts counts draws);
- *  - what a send asks the server: the chat's history and its session record twice each at
- *    most (before: three history reads and four or five record reads per send, each history
- *    read about 360 ms on the Mac, each answer drawing the chat again);
+ *  - what a send asks the server: the chat's history, its session record and its supervision
+ *    twice each at most (before: three history reads, four or five record reads and four
+ *    supervision reads per send, each history read about 360 ms on the Mac, each answer
+ *    drawing the chat again);
  *  - how long: typing, Cmd+N, a send and a chat's opening against their budgets while the
  *    production mix of socket frames arrives.
  */
@@ -275,12 +276,12 @@ test('an agent status write draws the task list once and no open chat; Cmd+N and
   expect({ MainPage: afterDraft.MainPage ?? 0, TodoPanel: afterDraft.TodoPanel ?? 0 }, JSON.stringify(afterDraft)).toEqual({ MainPage: 0, TodoPanel: 0 })
 })
 
-test('a send reads its chat\'s history and session record at most twice each', async ({ page }) => {
+test('a send reads its chat\'s history, session record and supervision at most twice each', async ({ page }) => {
   await openHome(page, [])
   const box = page.locator(`${REAL_PANEL} textarea.chat-input-textarea`).first()
   const history = `/api/sessions/${CHAT}/history`
   const record = `/api/sessions/${CHAT}`
-  const perSend: Array<{ history: number; record: number; all: string[] }> = []
+  const perSend: Array<{ history: number; record: number; supervision: number; all: string[] }> = []
   for (let i = 0; i < 3; i++) {
     await box.fill(`guard send ${i} ${Date.now()}`)
     await quiet(page)
@@ -295,7 +296,7 @@ test('a send reads its chat\'s history and session record at most twice each', a
     const until = Date.now() + 15_000
     while (Date.now() < until && !(all.includes(`GET ${history}`) && Date.now() - lastAt > 1_000)) await page.waitForTimeout(100)
     page.off('request', on)
-    perSend.push({ history: all.filter((r) => r === `GET ${history}`).length, record: all.filter((r) => r === `GET ${record}`).length, all })
+    perSend.push({ history: all.filter((r) => r === `GET ${history}`).length, record: all.filter((r) => r === `GET ${record}`).length, supervision: all.filter((r) => r === `GET ${record}/supervision`).length, all })
   }
   const seen = JSON.stringify(perSend)
   // Each send turns the chat over once, so it reads history at least once: a zero would mean
@@ -303,6 +304,8 @@ test('a send reads its chat\'s history and session record at most twice each', a
   for (const s of perSend) expect(s.history, seen).toBeGreaterThan(0)
   for (const s of perSend) expect(s.history, `history reads per send: ${seen}`).toBeLessThanOrEqual(2)
   for (const s of perSend) expect(s.record, `session record reads per send: ${seen}`).toBeLessThanOrEqual(2)
+  // The auto-restart bar's state: one read for the send's status changes (before: one each, four a send).
+  for (const s of perSend) expect(s.supervision, `supervision reads per send: ${seen}`).toBeLessThanOrEqual(2)
 })
 
 test('typing, Cmd+N, a send and a chat opening stay within budget while agents write', async ({ page, browserName }) => {

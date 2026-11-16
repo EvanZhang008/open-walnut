@@ -187,6 +187,8 @@ describe('session recovery status off the page on show', () => {
     expect(sessionsApi.fetchSessionSupervision).toHaveBeenCalledTimes(2);
     expect(seenSupervision['home-supervision'].value?.supervision?.generation).toBe(2);
     await emit('session:status-changed', { sessionId: sid });
+    // An event's read waits out the rest of its burst (EVENT_REREAD_MS), then goes.
+    await tick(300);
     expect(sessionsApi.fetchSessionSupervision).toHaveBeenCalledTimes(3);
   });
 
@@ -198,6 +200,7 @@ describe('session recovery status off the page on show', () => {
     expect(sessionsApi.fetchSessionSupervision.mock.calls.length - start).toBe(4);
     // A reconnect reaches Org's copy only: one read, not one per copy.
     await emit('_ws:reconnected', {});
+    await tick(300);
     expect(sessionsApi.fetchSessionSupervision.mock.calls.length - start).toBe(5);
     // Home coming back while Org already polls adds no read of its own.
     await draw(org('supervision'), home('supervision', true));

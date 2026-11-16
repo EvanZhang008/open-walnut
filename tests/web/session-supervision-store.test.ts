@@ -22,6 +22,7 @@ import {
   getSessionSupervision,
   subscribeSessionSupervision,
   refreshSessionSupervision,
+  refreshSessionSupervisionSoon,
   changeSessionSupervision,
   stopSupervisedSession,
   holdSessionSupervision,
@@ -539,5 +540,30 @@ describe('session-supervision store \u2014 a server restart', () => {
     expect(r.snap.loading).toBe(false);
     expect(r.snap.unavailable).toBe(true);
     expect(r.snap.value?.supervision?.enabled).toBe(true);
+  });
+});
+
+describe('session-supervision store: a burst of session events is one read', () => {
+  it('reads once for the status changes of one send, and not at all with no reader', async () => {
+    const SID = 'sess-burst-1';
+    const col = reader(SID);
+    await flush();
+    expect(api.fetchSessionSupervision).toHaveBeenCalledTimes(1); // the subscribe's own read
+    // A send: queued, running, idle and the turn's end, 30 to 200 ms apart (four reads before).
+    for (const gap of [0, 40, 120, 200]) { await vi.advanceTimersByTimeAsync(gap); refreshSessionSupervisionSoon(SID); }
+    expect(api.fetchSessionSupervision).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(api.fetchSessionSupervision).toHaveBeenCalledTimes(2);
+    expect(col.snap.loading).toBe(false);
+
+    // The reader leaves with a read still waiting: it never goes out.
+    refreshSessionSupervisionSoon(SID);
+    col.off();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(api.fetchSessionSupervision).toHaveBeenCalledTimes(2);
+    // An event for a session nobody reads makes no entry and no read.
+    refreshSessionSupervisionSoon('sess-nobody');
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(api.fetchSessionSupervision).toHaveBeenCalledTimes(2);
   });
 });
