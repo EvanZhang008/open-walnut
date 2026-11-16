@@ -130,7 +130,7 @@ CONTAINER_ID="$(docker run -d --rm \
   -p 127.0.0.1::22 \
   -e WALNUT_ONBOARDING_AUTHORIZED_KEY="$(cat "$WORK/id_ed25519.pub")" \
   "$IMAGE")"
-PORT="$(docker port "$CONTAINER_ID" 22/tcp | head -n 1 | sed 's/.*://')"
+PORT="$(docker port "$CONTAINER_ID" 22/tcp | sed -n 1p | sed 's/.*://')"
 case "$PORT" in ''|*[!0-9]*) die "could not read the container's ssh port (got '$PORT')" ;; esac
 echo "remote-host: container ${CONTAINER_ID:0:12} serves ssh on 127.0.0.1:$PORT"
 

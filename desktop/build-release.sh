@@ -39,7 +39,7 @@ ENTITLEMENTS="$SCRIPT_DIR/Walnut.entitlements"
 # The carried file's own: what its JavaScript engine needs under the hardened runtime.
 FILE_ENTITLEMENTS="$SCRIPT_DIR/walnut-file.entitlements"
 # A bundle version is numbers and dots only: a nightly's "-nightly.…" goes.
-APP_VERSION="${WALNUT_APP_VERSION:-$(sed -n 's/^  "version": *"\([^"]*\)".*/\1/p' "$SCRIPT_DIR/../package.json" | head -1)}"
+APP_VERSION="${WALNUT_APP_VERSION:-$(sed -n 's/^  "version": *"\([^"]*\)".*/\1/p' "$SCRIPT_DIR/../package.json" | sed -n 1p)}"
 APP_VERSION="${APP_VERSION%%-*}"
 case "$APP_VERSION" in
     '' | *[!0-9.]*) echo "Not a version: '$APP_VERSION'" >&2; exit 1 ;;

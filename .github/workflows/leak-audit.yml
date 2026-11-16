@@ -104,7 +104,7 @@ jobs:
         with:
           bun-version: 1.4.4
       - name: 7-Zip, to unpack a .dmg
-        run: command -v 7zz >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq 7zip; }; 7zz | head -2
+        run: command -v 7zz >/dev/null || command -v 7z >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq 7zip; }; "$(command -v 7zz || command -v 7z)" | sed -n 1,2p
       - name: Download them, with their text
         run: |
           set -euo pipefail

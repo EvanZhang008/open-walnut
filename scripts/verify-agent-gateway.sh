@@ -98,7 +98,7 @@ if [ ! -x "$WN_SHIM" ]; then
   exit 1
 fi
 echo "-- wn --help (first lines) --"
-"$WN_SHIM" --help | head -5
+"$WN_SHIM" --help | sed -n 1,5p
 
 echo "-- wn peers list (fake sid → expect exit 6 unknown_caller path) --"
 set +e

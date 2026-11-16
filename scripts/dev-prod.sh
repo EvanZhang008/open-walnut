@@ -327,7 +327,7 @@ if [[ "${WALNUT_DEVPROD_FORCE:-0}" != "1" ]]; then
       exit 0
     fi
   done
-  listener_pid="$(listener_pids | head -n 1)"
+  listener_pid="$(listener_pids | sed -n 1p)"
   if [[ -n "$listener_pid" ]]; then
     etime="$(ps -o etime= -p "$listener_pid" 2>/dev/null | tr -d '[:space:]')"
     # etime formats: SS / MM:SS / HH:MM:SS / DD-HH:MM:SS — only the colon-less
@@ -600,7 +600,7 @@ active_turn_count() {
   [[ -n "$body" ]] || return 0
   printf '%s' "$body" \
     | sed -n 's/.*"activeTurns"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
-    | head -n 1
+    | sed -n 1p
   return 0
 }
 
@@ -2232,7 +2232,7 @@ listener_under_job_host() {
     && [[ "$(ps -o command= -p "$2" 2>/dev/null || true)" == *"/Walnut.app/Contents/MacOS/Walnut --session-host -- "* ]]
 }
 if (( use_launchd )); then
-  listener_now="$(listener_pids | head -n 1)"
+  listener_now="$(listener_pids | sed -n 1p)"
   if [[ -n "$listener_now" ]] && job_info="$(launchctl print "$LAUNCHD_DOMAIN/$LAUNCH_LABEL" 2>/dev/null)"; then
     job_pid_now="$(printf '%s\n' "$job_info" | launchd_print_pid || true)"
     job_serves=0
@@ -2336,7 +2336,7 @@ if [[ "$SERVE_ROOT" != "$REPO_ROOT" ]]; then
   fi
 fi
 
-pid="$(listener_pids | head -n 1)"
+pid="$(listener_pids | sed -n 1p)"
 date +%s > "$SUCCESS_STAMP"
 echo "Server ready (PID: $pid, $RUNTIME_DESC)"
 if [[ -n "$CLI_NOT_PUBLISHED" ]]; then

@@ -294,7 +294,7 @@ fi
 if [ ! -x "$CADDY_BIN" ]; then
   tmp="$(mktemp -d)"
   url="$(curl -fsSL https://api.github.com/repos/caddyserver/caddy/releases/latest \
-    | grep -o "https://[^\"]*linux_${CADDY_ARCH}\\.tar\\.gz" | head -1)"
+    | grep -o "https://[^\"]*linux_${CADDY_ARCH}\\.tar\\.gz" | sed -n 1p)"
   [ -n "$url" ] || { echo "FATAL: could not resolve latest Caddy linux_$CADDY_ARCH release"; exit 1; }
   echo "downloading $url"
   curl -fsSL "$url" -o "$tmp/caddy.tar.gz"

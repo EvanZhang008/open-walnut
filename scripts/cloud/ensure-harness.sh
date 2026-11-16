@@ -322,7 +322,7 @@ version_of() {
   [ -x "$1" ] || return 0
   local out
   out="$(as_walnut ${PROBE_TIMEOUT[@]+"${PROBE_TIMEOUT[@]}"} "$1" --version </dev/null 2>/dev/null | head -n 1 || true)"
-  printf '%s\n' "$out" | sed -nE 's/^[^0-9]*([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -n 1
+  printf '%s\n' "$out" | sed -nE 's/^[^0-9]*([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | sed -n 1p
 }
 
 # True when dotted version $1 >= $2 (numeric per field; no sort -V, not portable).
