@@ -24,7 +24,7 @@ import {
   sessionInboxLetterHref, SESSION_INBOX_LINK_EVENT,
   SESSION_INBOX_LINK_TTL_MS, SESSION_SURFACE_PATH,
 } from '../../web/src/components/inbox/session-inbox-link';
-import { navigateToTarget } from '../../web/src/utils/open-session';
+import { navigateToTarget, TASK_OPEN_EVENT } from '../../web/src/utils/open-session';
 
 function letter(over: Partial<LetterEnvelope> & { id: string }): LetterEnvelope {
   return {
@@ -309,10 +309,14 @@ describe('navigateToTarget', () => {
     navigateToTarget('/tasks/mt-1', (to) => navigated.push(to));
     navigateToTarget('/tasks/mt%3A2?from=inbox', (to) => navigated.push(to));
     expect(navigated).toEqual(['/', '/']);
-    expect(dispatched).toEqual([
-      { type: 'main:locate-task', detail: { taskId: 'mt-1', openSession: true } },
-      { type: 'main:locate-task', detail: { taskId: 'mt:2', openSession: true } },
-    ]);
+    // Each open: layers yield (TASK_OPEN_EVENT), the page on screen is asked first (the Org page opens
+    // it there; no page here takes it), then Home locates the task with its session.
+    const opened = (taskId: string) => [
+      { type: TASK_OPEN_EVENT, detail: { taskId } },
+      { type: 'walnut:open-task-on-page', detail: { taskId } },
+      { type: 'main:locate-task', detail: { taskId, openSession: true } },
+    ];
+    expect(dispatched).toEqual([...opened('mt-1'), ...opened('mt:2')]);
   });
 
   it('leaves other targets alone, the task list included', () => {

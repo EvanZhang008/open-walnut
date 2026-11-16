@@ -10,6 +10,7 @@ vi.mock('@/components/tasks/TaskStatusControl', () => ({ formatWaitUntil: () => 
 vi.mock('@/components/routines/TriggerPill', () => ({ triggerPillTitle: () => '' }));
 const { WaitingChip } = await import('../../web/src/components/tasks/WaitingChip');
 const { OPEN_CENTER_EVENT, OPEN_FILE_EVENT } = await import('../../web/src/utils/open-anywhere');
+const { TASK_OPEN_EVENT } = await import('../../web/src/utils/open-session');
 
 beforeAll(() => {
   const dom = parseHTML('<!DOCTYPE html><html><body></body></html>');
@@ -17,7 +18,8 @@ beforeAll(() => {
 });
 
 describe('a viewer opened from the wait card', () => {
-  it.each([OPEN_FILE_EVENT, OPEN_CENTER_EVENT, 'main:locate-task'])('closes the card only once %s takes over, clearing its pending hover timer', async (event) => {
+  // A task open from any page (TASK_OPEN_EVENT), on Home or on the Org page.
+  it.each([OPEN_FILE_EVENT, OPEN_CENTER_EVENT, TASK_OPEN_EVENT])('closes the card only once %s takes over, clearing its pending hover timer', async (event) => {
     const container = document.createElement('div');
     document.body.appendChild(container);
     const root = createRoot(container);
