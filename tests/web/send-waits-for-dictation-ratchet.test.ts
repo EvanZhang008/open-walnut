@@ -203,6 +203,10 @@ const SELF_GATED: Record<string, Role> = {
   'components/board/kanban/KanbanLaneHead.tsx|MicInput data-testid="kanban-lane-rename-input"': LEAVE,
   'components/calendar/CalendarTaskList.tsx|MicInput placeholder="Filter…"': FILTER,
   'components/chat/AskWalnutDrawer.tsx|MicInput data-testid="ask-walnut-search"': FILTER,
+  // A drawing's name (the title, a list row): Enter or leaving the box renames it, Escape keeps the old name.
+  'components/drawing/DrawingWorkspace.tsx|MicInput aria-label=label': LEAVE,
+  // The library catalog's search narrows the list of libraries as the words come; nothing sends them.
+  'components/drawing/LibraryBrowser.tsx|MicInput aria-label="Search libraries"': FILTER,
   'components/inbox/ItemTaskSelector.tsx|MicInput id=searchId': FILTER,
   'components/notes/CommandPalette.tsx|MicInput placeholder="Jump to a note, or type to search…"': FILTER,
   'components/notes/NotesTreePanel.tsx|MicInput className="notes-tree-inline-input"': LEAVE,
