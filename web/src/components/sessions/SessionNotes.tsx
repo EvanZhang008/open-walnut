@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { updateSession } from '@/api/sessions';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { MicButton } from '../common/MicButton';
 import { LinkifiedText } from '../common/LinkifiedText';
 import { CollapsibleUrlEditor, type CollapsibleUrlEditorHandle } from '../common/CollapsibleUrlEditor';
@@ -82,7 +83,7 @@ export function useSessionNote(sessionId: string, initialNote?: string, onNoteCh
     debounceRef.current = setTimeout(() => saveNote(value), 1000);
   }, [saveNote]);
 
-  const finish = useCallback(() => {
+  const finish = useLeanCallback(() => {
     clearTimeout(debounceRef.current);
     // Opened and closed with no edit: nothing to write, not even the tidy-up.
     if (noteRef.current === lastSavedRef.current && sendingRef.current === null) return;
@@ -147,7 +148,7 @@ export function SessionNotesBar({ noteState, expanded, onToggleExpanded, onColla
   const editorRef = useRef<CollapsibleUrlEditorHandle>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const close = onCollapse ?? onToggleExpanded;
-  const collapse = useCallback(() => { finish(); close(); }, [finish, close]);
+  const collapse = useLeanCallback(() => { finish(); close(); }, [finish, close]);
 
   // The collapsed view keeps the note's LINE STRUCTURE — a note is a checklist
   // ("1. … 2. … 3. …"), and folding it to one line destroyed the shape the user

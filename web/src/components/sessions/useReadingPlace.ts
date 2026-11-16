@@ -27,6 +27,7 @@
  */
 import { useCallback, useContext, useEffect, useLayoutEffect, useRef, type MutableRefObject, type RefObject } from 'react';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { applyPlace, flushPlaces, getPlace, placeDrift, readPlace, setPlace, type ReadingPlace } from './reading-place';
 import { READER_SCROLL_EVENT } from './phone-session-layer';
 
@@ -367,6 +368,6 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
       from: keyRef.current,
     };
   }, [containerRef, boxId]);
-  const resized = useCallback(() => { if (hold.current) stopHold(); }, [stopHold]);
+  const resized = useLeanCallback(() => { if (hold.current) stopHold(); }, [stopHold]);
   return { held, placeAt, adopt, release, keep, carryRow, resized };
 }
