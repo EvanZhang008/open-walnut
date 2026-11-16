@@ -38,12 +38,14 @@ export function BrowserExtensionGroup({ status }: { status?: ExtensionStatus | n
   const [browser, setBrowser] = useState<ExtBrowser>(detectBrowser())
   const [devices, setDevices] = useState<ExtDevice[] | null>(null)
   const [error, setError] = useState('')
+  /** The list could not be read: said only while there is no list to show (a later read that works clears it). */
+  const [loadError, setLoadError] = useState('')
   const [busy, setBusy] = useState('')
 
   const refresh = useCallback(() => {
     fetchDevicesList<{ devices: ExtDevice[] }>()
-      .then((r) => setDevices(r.devices.filter((d) => d.name.startsWith('extension-'))))
-      .catch((err) => setError(saveErrorMessage(err)))
+      .then((r) => { setDevices(r.devices.filter((d) => d.name.startsWith('extension-'))); setLoadError('') })
+      .catch((err) => setLoadError(saveErrorMessage(err)))
   }, [])
   // A browser connected meanwhile (the person is installing it in another window) shows within seconds.
   useEffect(() => {
@@ -76,7 +78,7 @@ export function BrowserExtensionGroup({ status }: { status?: ExtensionStatus | n
         data-testid="ext-browsers"
         footer={shipped ? <>This Walnut ships version {shipped.version} (build {shipped.build.slice(0, 7)}). An extension set up from Walnut&apos;s folder updates itself with every Walnut update.</> : undefined}
       >
-        {rows === null && <SettingsRow label="Loading…" control={null} />}
+        {rows === null && <SettingsRow label={loadError ? 'Could not read the connected browsers' : 'Loading…'} help={loadError || undefined} control={null} />}
         {rows?.length === 0 && (
           <SettingsRow
             data-testid="ext-none"
