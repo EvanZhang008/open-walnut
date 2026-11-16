@@ -160,6 +160,41 @@ test('a cut-off Home row widens in place: as tall as it was, nothing below moves
   }
 })
 
+test('a press whose release never reached the page does not keep rows closed: the next resting pointer widens a row', async ({ page, baseURL, request }) => {
+  // 2026-11-16, the user in the Mac app: "my mouse is over here, but it won't auto expand". A
+  // press the page never saw end (a native right-click menu takes the mouse-up, a drag ends
+  // outside the window, the app loses focus mid-press) left the peek waiting for a release forever.
+  const made = [await createTask(request, LONG_A), await createTask(request, LONG_B)]
+  try {
+    await isolateUiPrefs(page)
+    await openHome(page, baseURL!)
+    await showAllSections(page)
+    for (const t of [LONG_A, LONG_B]) await expect(row(page, t)).toBeVisible({ timeout: 20_000 })
+    await row(page, LONG_A).evaluate((el) => el.scrollIntoView({ block: 'center' }))
+    const lostPress = (button: number) => page.evaluate((b) => document.body.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, pointerType: 'mouse', button: b, buttons: b === 2 ? 2 : 1, clientX: 1200, clientY: 780,
+    })), button)
+    for (const [label, lose] of [
+      ['a right-click whose menu took the release', () => lostPress(2)],
+      ['a press that lost its release outside the window', () => lostPress(0)],
+      ['a press ended by the window losing focus', async () => { await lostPress(0); await page.evaluate(() => window.dispatchEvent(new Event('blur'))) }],
+    ] as const) {
+      for (const t of [LONG_A, LONG_B]) {
+        await page.mouse.move(1200, 780)
+        await expect(row(page, t)).not.toHaveAttribute('data-peek-expanded')
+        const before = await box(row(page, t))
+        await lose()
+        const c = await centerOf(page, titleOf(page, t))
+        await page.mouse.move(c.x, c.y, { steps: 5 })
+        await expectWidensInPlace(row(page, t), before, { label: `${label}: ${t.slice(0, 16)}` })
+      }
+    }
+    await page.mouse.move(1200, 780)
+  } finally {
+    for (const id of made) await request.delete(`/api/tasks/${id}?force=true`).catch(() => undefined)
+  }
+})
+
 test('moving down a list: one row open at a time, no row and no scroll moves, and a press keeps the row as it is', async ({ page, baseURL, request }) => {
   const titles = ['delta', 'epsilon', 'zeta', 'eta'].map((w) => `${WORD} ${w}: Sort the attic boxes by room, label each one, and write the list of what goes to the charity shop`)
   const made: string[] = []

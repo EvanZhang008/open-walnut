@@ -97,9 +97,10 @@ describe('all truncation peeks widen the real row, never taller, never cloned te
     const row = read('utils/truncation-peek-row.ts');
     expect(row).toContain("row.setAttribute('popover', 'manual')");
     expect(row).toContain('row.showPopover()');
-    // The placeholder is a shallow shell: no copied text, controls or ids.
-    expect(row).toContain('row.cloneNode(false)');
-    expect(row).not.toMatch(/cloneNode\((true)?\)/);
+    // The placeholder is a bare element of the row's tag: nothing copied from the row, so no row
+    // selector finds it (2026-11-16, mail-context-independent V-C42: `.mail-row` matched it first).
+    expect(row).toContain('document.createElement(row.localName)');
+    expect(row).not.toMatch(/cloneNode/);
     expect(row).toContain("'data-peek-placeholder'");
     expect(row).toContain("'--peek-height', `${rect.height}px`");
     // Nothing scrolls the list to make up for a height that no longer changes.

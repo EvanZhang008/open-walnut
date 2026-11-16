@@ -38,7 +38,11 @@ export function expandRow(row: Element, hosts: HTMLElement[], animate = true): R
   // getComputedStyle is live: inserting a spacer changes :first-child/:last-child rules.
   // Snapshot before touching the list, including every text's original height.
   const computed = getComputedStyle(row);
-  const heldProps = ['display', 'flex', 'align-self', 'grid-area', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left'];
+  // Everything that places the row among its neighbours: the placeholder has no class of its own.
+  const heldProps = ['display', 'flex', 'align-self', 'justify-self', 'grid-area', 'order', 'float', 'vertical-align',
+    'margin-top', 'margin-right', 'margin-bottom', 'margin-left'];
+  // A row taken out of the flow keeps its placeholder out of it too, at the same place.
+  if (computed.position === 'absolute' || computed.position === 'fixed') heldProps.push('position', 'top', 'right', 'bottom', 'left');
   const held = heldProps.map(prop => [prop, computed.getPropertyValue(prop)] as const);
   const cs = { display: computed.display, border: computed.border, padding: computed.padding };
   const hostHeights = hosts.map(host => host.getBoundingClientRect().height);
@@ -59,15 +63,13 @@ export function expandRow(row: Element, hosts: HTMLElement[], animate = true): R
     const overflow = getComputedStyle(el).overflowY;
     if (overflow === 'auto' || overflow === 'scroll') { set(el, 'overflow-anchor', 'none'); break; }
   }
-  // A shallow copy only: never duplicate text, controls, ids or accessibility content.
-  const placeholder = row.cloneNode(false) as HTMLElement;
-  for (const attr of Array.from(placeholder.attributes)) {
-    if (attr.name === 'id' || attr.name === 'title' || attr.name.startsWith('data-')) placeholder.removeAttribute(attr.name);
-  }
+  // A bare element of the row's tag (a list item stays a list item): no class, id, role, text or
+  // controls copied, so no selector written for the row (`.mail-row`, `[data-task-id]`, a role)
+  // ever finds its placeholder. Its box comes only from the values held above.
+  const placeholder = document.createElement(row.localName);
   placeholder.setAttribute('data-peek-placeholder', '');
   placeholder.setAttribute('aria-hidden', 'true');
   placeholder.inert = true;
-  placeholder.style.cssText = '';
   for (const [prop, value] of held) placeholder.style.setProperty(prop, value, 'important');
   placeholder.style.setProperty('box-sizing', 'border-box', 'important');
   placeholder.style.setProperty('width', `${rect.width}px`, 'important');

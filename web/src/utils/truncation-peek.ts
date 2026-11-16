@@ -303,6 +303,7 @@ function onOver(e: PointerEvent): void {
   if (e.pointerType === 'touch') { hidePeek(); return; }
   // A press in progress: a click lands on the row as it is; a drag closes it (onMove).
   if (e.buttons !== 0) return;
+  releaseLostPress();
   pointer = { x: e.clientX, y: e.clientY };
   const target = e.target instanceof Element ? e.target : null;
   if (lingering && target) {
@@ -394,6 +395,8 @@ function onDown(e: PointerEvent): void {
 function onMove(e: PointerEvent): void {
   if (e.pointerType === 'touch') return;
   pointer = { x: e.clientX, y: e.clientY };
+  // The press ended unheard: take this move as the pointer arriving where it is, open row and all.
+  if (e.buttons === 0 && releaseLostPress()) { onOver(e); return; }
   if (pressed && e.buttons !== 0 && downAt && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 4) {
     dragged = true;
     hidePeek();
@@ -405,6 +408,19 @@ function onUp(): void {
   pressed = false;
   // After a drag the rows are where it dropped them: start over from what the pointer is on.
   if (dragged) { dragged = false; hidePeek(); settleSoon(); }
+}
+
+/**
+ * A press whose release the page never heard (a native right-click menu takes the mouse-up, a
+ * drag ends outside the window, the app loses focus mid-press) must not keep every row closed:
+ * the pointer moving with no button held proves the press is over. True when one was pending.
+ */
+function releaseLostPress(): boolean {
+  if (!pressed) return false;
+  pressed = false;
+  dragged = false;
+  downAt = null;
+  return true;
 }
 
 function onOut(e: PointerEvent): void {
@@ -447,6 +463,8 @@ export function installTruncationPeek(): void {
   document.addEventListener('wheel', hideAndSettle, { capture: true, passive: true });
   document.addEventListener('scroll', hideAndSettle, { capture: true, passive: true });
   window.addEventListener('resize', hideAndSettle);
+  // A button may still be held across a blur; the next move with none held ends the press.
   window.addEventListener('blur', hidePeek);
   document.addEventListener('visibilitychange', hidePeek);
+  document.addEventListener('dragend', () => { releaseLostPress(); hidePeek(); settleSoon(); }, { capture: true, passive: true });
 }

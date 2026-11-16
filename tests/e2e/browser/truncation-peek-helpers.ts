@@ -40,6 +40,7 @@ export const peekState = (row: Locator) => row.evaluate(withCssColor((toRgba) =>
     expandedCount: document.querySelectorAll('[data-peek-expanded]').length,
     placeholders: Array.from(document.querySelectorAll<HTMLElement>('[data-peek-placeholder]')).map((p) => ({
       box: box(p.getBoundingClientRect()), empty: p.childNodes.length === 0, inert: p.inert && p.getAttribute('aria-hidden') === 'true',
+      attrs: p.getAttributeNames().sort(),
     })),
     openCount: open.length,
     nowrap: open.every((o) => getComputedStyle(o).whiteSpace === 'nowrap'),
@@ -94,6 +95,8 @@ export async function expectWidensInPlace(row: Locator, before: Box, opts: { lab
   expect(s.placeholders.length, `${label}: one placeholder holds its place`).toBe(1)
   const p = s.placeholders[0]
   expect(p.empty && p.inert, `${label}: the placeholder is an empty, inert, hidden shell (no copied text)`).toBe(true)
+  // Nothing of the row's own (class, id, role, data-*): a selector written for the row never finds it.
+  expect(p.attrs, `${label}: the placeholder carries none of the row's attributes`).toEqual(['aria-hidden', 'data-peek-placeholder', 'inert', 'style'])
   for (const k of ['x', 'y', 'width', 'height'] as const) expect(near(p.box[k], before[k]), `${label}: placeholder ${k} ${p.box[k]} vs ${before[k]}`).toBe(true)
   expect(s.bgAlpha, `${label}: an opaque background, so nothing under it shows through`).toBeGreaterThan(0.95)
   if (opts.theme === 'dark') expect(s.bgLuma, `${label}: a dark background in the dark theme`).toBeLessThan(0.5)
