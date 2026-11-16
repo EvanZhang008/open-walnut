@@ -305,8 +305,24 @@ async function resolvePackage(root: string, from: string, name: string): Promise
   }
 }
 
-async function sourceSignature(root: string): Promise<string> {
+/**
+ * How far back a file's time must be from the start of a copy for the signature to vouch for it.
+ * File times are coarse on many systems (Linux stamps a write with the kernel's tick clock, a few
+ * ms; some filesystems keep whole seconds or two), so two writes of the same size inside one tick
+ * leave the same signature. A file stamped this close to the copy's start is compared byte for byte
+ * with its copy instead (git's "racily clean" index entries, the same problem).
+ */
+const RACY_WINDOW_NS = 2_000_000_000n
+
+interface SourceSignature {
+  text: string
+  /** Regular files (relative paths) stamped at or after the `since` time asked for. */
+  recent: string[]
+}
+
+async function sourceSignature(root: string, sinceNs: bigint): Promise<SourceSignature> {
   const parts: string[] = []
+  const recent: string[] = []
   async function visit(dir: string): Promise<void> {
     const entries = await fs.readdir(dir, { withFileTypes: true })
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
@@ -314,11 +330,23 @@ async function sourceSignature(root: string): Promise<string> {
       const target = path.join(dir, entry.name)
       const stat = await fs.lstat(target, { bigint: true })
       parts.push(`${path.relative(root, target)}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`)
+      if (stat.isFile() && (stat.mtimeNs >= sinceNs || stat.ctimeNs >= sinceNs)) recent.push(path.relative(root, target))
       if (entry.isDirectory()) await visit(target)
     }
   }
   await visit(root)
-  return JSON.stringify(parts)
+  return { text: JSON.stringify(parts), recent }
+}
+
+/** True when every recently stamped source file the copy holds has the same bytes as its copy. */
+async function recentFilesMatch(srcRoot: string, destRoot: string, recent: string[]): Promise<boolean> {
+  for (const relative of recent) {
+    const copy = await fs.readFile(path.join(destRoot, relative)).catch(() => null)
+    if (copy === null) continue // left out of the copy (a filtered path): its bytes do not matter
+    const source = await fs.readFile(path.join(srcRoot, relative)).catch(() => null)
+    if (source === null || !source.equals(copy)) return false
+  }
+  return true
 }
 
 export async function createPluginGeneration(options: {
@@ -337,7 +365,9 @@ export async function createPluginGeneration(options: {
   // has been quiet a moment; only a source that keeps changing fails the load.
   let ctx!: WalkContext
   for (let attempt = 1; ; attempt++) {
-    const before = await sourceSignature(srcRoot)
+    // A file stamped near this moment may change again inside the same clock tick unseen.
+    const sinceNs = BigInt(Date.now()) * 1_000_000n - RACY_WINDOW_NS
+    const before = await sourceSignature(srcRoot, sinceNs)
     ctx = {
       srcRoot,
       destRoot: root,
@@ -347,7 +377,8 @@ export async function createPluginGeneration(options: {
     }
     try {
       await walk(srcRoot, root, ctx)
-      if (await sourceSignature(srcRoot) === before) break
+      const after = await sourceSignature(srcRoot, sinceNs)
+      if (after.text === before.text && await recentFilesMatch(srcRoot, root, after.recent)) break
     } catch (error) {
       await fs.rm(root, { recursive: true, force: true })
       throw error

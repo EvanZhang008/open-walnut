@@ -169,14 +169,45 @@ describe('preparePluginModule:reload isolation', () => {
       'lib/helper.cjs': 'module.exports = 1',
     })
     const original = fsp.copyFile.bind(fsp)
+    // New bytes on every copy, the same size each time: a writer that really keeps changing it.
+    let n = 0
     const copy = vi.spyOn(fsp, 'copyFile').mockImplementation(async (from, to, mode) => {
       await original(from, to, mode)
-      if (String(from).endsWith('helper.cjs')) await fsp.writeFile(String(from), 'module.exports = 200')
+      if (String(from).endsWith('helper.cjs')) await fsp.writeFile(String(from), `module.exports = ${200 + n++}`)
     })
     try {
       await expect(createPluginGeneration({ id: 'changing-plugin', dir, entryRelative: 'index.cjs', cacheRoot }))
         .rejects.toThrow('plugin source changed while it was being copied')
     } finally { copy.mockRestore() }
+  })
+
+  // 2026-11-16: on a Linux host a write is stamped with the kernel's tick clock, so a same-size write
+  // in the tick of the one before it left the signature unchanged and a stale copy was kept. File
+  // times here are cut to whole seconds, the coarsest a filesystem keeps them, so it holds everywhere.
+  it('sees a same-size change that file times are too coarse to show', async () => {
+    const dir = await writePlugin('coarse-clock-plugin', {
+      'index.cjs': 'module.exports = { activate() { return require("./lib/helper.cjs") } }',
+      'lib/helper.cjs': 'module.exports = 100',
+    })
+    const second = 1_000_000_000n
+    const lstat = fsp.lstat.bind(fsp)
+    const coarse = vi.spyOn(fsp, 'lstat').mockImplementation((async (file: Parameters<typeof fsp.lstat>[0], opts?: { bigint?: boolean }) => {
+      const stat = await lstat(file, { bigint: true })
+      if (!opts?.bigint) return lstat(file)
+      return Object.assign(stat, { mtimeNs: stat.mtimeNs / second * second, ctimeNs: stat.ctimeNs / second * second })
+    }) as typeof fsp.lstat)
+    const original = fsp.copyFile.bind(fsp)
+    let writes = 0
+    const copy = vi.spyOn(fsp, 'copyFile').mockImplementation(async (from, to, mode) => {
+      await original(from, to, mode)
+      // One same-size rewrite during the first copy, inside the same second as the file's last write.
+      if (String(from).endsWith('helper.cjs') && writes++ === 0) await fsp.writeFile(String(from), 'module.exports = 101')
+    })
+    try {
+      const generation = await createPluginGeneration({ id: 'coarse-clock-plugin', dir, entryRelative: 'index.cjs', cacheRoot })
+      expect(await fsp.readFile(path.join(generation.root, 'lib', 'helper.cjs'), 'utf8')).toBe('module.exports = 101')
+      expect(writes).toBeGreaterThan(1)
+    } finally { copy.mockRestore(); coarse.mockRestore() }
   })
 
   // 2026-11-15: a deploy's plugin check failed because a task rebuilt the plugin's dist while it was
