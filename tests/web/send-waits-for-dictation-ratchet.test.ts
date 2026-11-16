@@ -210,6 +210,7 @@ const SELF_GATED: Record<string, Role> = {
   'components/inbox/ItemTaskSelector.tsx|MicInput id=searchId': FILTER,
   'components/notes/CommandPalette.tsx|MicInput placeholder="Jump to a note, or type to search…"': FILTER,
   'components/notes/NotesTreePanel.tsx|MicInput className="notes-tree-inline-input"': LEAVE,
+  'components/notes/NotesTreePanel.tsx|MicInput className="notes-tree-inline-input"#2': LEAVE,
   'components/notes/NotesTreePanel.tsx|MicInput placeholder="folder name"': LEAVE,
   'components/notes/NotesTreePanel.tsx|MicInput aria-label="Search notes"': FILTER,
   'components/notes/slash-commands/NoteLinkPanel.tsx|MicInput placeholder="Link to note..."': FILTER,
