@@ -243,17 +243,26 @@ test('a question card sends its answer and its picture as one message', async ({
   await expect(card.locator('.answer-box-pictures img')).toHaveCount(1)
   await beat(page, 1500)
   await shot(card, 'question-before-submit')
-  // An upload that fails answers nothing and keeps the words and the picture for the next try.
-  await page.route('**/api/images/upload', (route) => route.fulfill({ status: 503, json: { error: 'test: upload refused' } }))
+  // An upload the server refuses answers nothing and keeps the words and the picture for the next try.
+  // A refusal, not a 503: since c04850b81 a dropped connection or a restarting server is waited out
+  // (web/src/api/upload-retry.ts), which the next step checks.
+  await page.route('**/api/images/upload', (route) => route.fulfill({ status: 400, json: { error: 'test: upload refused' } }))
   await card.locator('.permission-request-btn--allow').click()
   await expect(card.locator('.permission-request-btn--allow')).toBeEnabled({ timeout: 20_000 })
   expect(permissionBodies).toHaveLength(0)
   await expect(box).toHaveValue(`Like this one (${NONCE})`)
   await expect(card.locator('.answer-box-pictures img')).toHaveCount(1)
   await page.unroute('**/api/images/upload')
+  // A server between restarts (503) is waited out: nothing is answered while it is away, and the
+  // same answer goes on by itself once it is back, with no second press.
+  let unavailable = 0
+  await page.route('**/api/images/upload', (route) => { unavailable++; return route.fulfill({ status: 503, json: { error: 'test: restarting' } }) })
   await card.locator('.permission-request-btn--allow').click()
+  await expect.poll(() => unavailable, { timeout: 20_000 }).toBeGreaterThanOrEqual(2)
+  expect(permissionBodies).toHaveLength(0)
+  await page.unroute('**/api/images/upload')
 
-  await expect.poll(() => permissionBodies.length, { timeout: 20_000 }).toBe(1)
+  await expect.poll(() => permissionBodies.length, { timeout: 30_000 }).toBe(1)
   const body = permissionBodies[0]!
   expect(body.answers).toEqual({ 'Which validation target?': `Like this one (${NONCE})` })
   expect(body.imageRefs).toHaveLength(1)
