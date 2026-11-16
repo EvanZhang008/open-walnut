@@ -639,6 +639,20 @@ test.describe('Drawing real plugin acceptance', () => {
     await expect(panel).toBeHidden()
     await toggle.click()
     await expect(workspace(page).getByRole('complementary', { name: 'Drawing assistant' }).getByText('Make the label bigger').first()).toBeVisible({ timeout: 30_000 })
+
+    // Renamed: the same drawing at a new path keeps its conversation.
+    await workspace(page).getByRole('button', { name: /^Rename drawing:/ }).click()
+    const name = workspace(page).getByRole('textbox', { name: 'Drawing name' })
+    await name.fill('Assistant renamed')
+    await name.press('Enter')
+    await expect.poll(() => workspace(page).getAttribute('data-drawing-path'), { timeout: 30_000 }).not.toBe(drawingPath)
+    await expect(workspace(page).getByRole('complementary', { name: 'Drawing assistant' }).getByText('Make the label bigger').first()).toBeVisible({ timeout: 30_000 })
+
+    // Escape in the chat hands the keys back to the drawing: R then picks the rectangle.
+    await workspace(page).getByRole('complementary', { name: 'Drawing assistant' }).locator('textarea').first().click()
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('r')
+    await expect(workspace(page).locator('input[data-testid="toolbar-rectangle"]')).toBeChecked()
     expect(errors).toEqual([])
   })
 })
