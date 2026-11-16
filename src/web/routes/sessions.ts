@@ -1314,16 +1314,13 @@ sessionsRouter.get('/:sessionId', async (req: Request, res: Response, next: Next
       })
       return
     }
-    let session = resolution.status === 'found' ? resolution.session : null
-    if (!session) {
-      // Record lost but transcript may survive (inc-2026-08-10 "Untitled
-      // session"): self-heal from the canonical JSONL instead of 404ing a
-      // session whose /history still renders. Cheap on genuine 404s — the
-      // recovery module negative-caches misses. Runs after prefix resolution
-      // because recovery needs the full id to find the transcript.
-      const { recoverSessionRecordFromJsonl } = await import('../../core/sessions/session-record-recovery.js')
-      session = await recoverSessionRecordFromJsonl(requestedId)
-    }
+    // A read never writes a record. This route used to rebuild a missing row from
+    // any transcript on disk, so a script that looked up every transcript id
+    // (2026-11-16: 2998 ids, one agent) minted 129 records for Walnut's own
+    // helper calls and other Walnut servers' sessions. A lost row is rebuilt only
+    // where this Walnut's own queue holds a message for the session (processNext);
+    // here a missing record is a plain 404 that costs no disk probe.
+    const session = resolution.status === 'found' ? resolution.session : null
     if (!session) {
       res.status(404).json({ error: 'session not found' })
       return

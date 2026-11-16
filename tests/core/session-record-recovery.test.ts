@@ -270,17 +270,19 @@ describe('destructive-op audit trail + rename queue migration', () => {
   });
 });
 
-describe('GET /api/sessions/:sessionId self-heal (route integration)', () => {
-  it('returns 200 with a recovered record instead of 404 when the JSONL survives', async () => {
+describe('GET /api/sessions/:sessionId never self-heals (route integration)', () => {
+  it('404s a missing record even when its transcript survives, and writes nothing', async () => {
     const express = (await import('express')).default;
     const request = (await import('supertest')).default;
     const { sessionsRouter } = await import('../../src/web/routes/sessions.js');
     const { errorHandler } = await import('../../src/web/middleware/error-handler.js');
     const { bus } = await import('../../src/core/event-bus.js');
-    // Router-only fixture — a prior startServer() in this worker must not
+    // Router-only fixture: a prior startServer() in this worker must not
     // let its runner react to this test's bus traffic.
     bus.unsubscribe('session-runner');
 
+    // 2026-11-16: one agent's script looked up every transcript id through this
+    // route and it minted 129 records for helper calls and other Walnuts' sessions.
     const sid = '62c34a16-fdb2-4f3d-9acd-3acc8c049cdb';
     await writeCanonicalJsonl(sid, sampleJsonl());
 
@@ -290,10 +292,8 @@ describe('GET /api/sessions/:sessionId self-heal (route integration)', () => {
     app.use(errorHandler);
 
     const res = await request(app).get(`/api/sessions/${sid}`);
-    expect(res.status).toBe(200);
-    expect(res.body.session.claudeSessionId).toBe(sid);
-    expect(res.body.session.title).toContain('Investigate whether the 2025 T1');
-    expect(res.body.session.process_status).toBe('stopped');
+    expect(res.status).toBe(404);
+    expect(await getSessionByClaudeId(sid)).toBeNull();
   });
 
   it('still 404s a session with no transcript anywhere', async () => {

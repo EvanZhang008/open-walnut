@@ -18,14 +18,20 @@
  * The transcript is the durable source of truth, so when a lookup misses and
  * the JSONL exists, rebuild a minimal 'stopped' record from its evidence
  * instead of failing. Deliberately NARROW:
- *   - Only fires on a MISS from an explicit recovery call site (route /
- *     processNext), never inside getSessionByClaudeId — hot paths (status
- *     snapshots, health scans) must not pay a disk probe per miss.
+ *   - Only fires where this Walnut holds evidence it owned the session: a
+ *     delivery of a message its own queue holds for it (processNext). Never on
+ *     a read: GET /api/sessions/:id used to rebuild from any transcript on disk,
+ *     and one agent's script that looked up 2998 transcript ids (2026-11-16)
+ *     minted 129 records, 111 for Walnut's own helper calls and 18 for other
+ *     Walnut servers' sessions and probes, which share ~/.claude/projects. The
+ *     callers are pinned by tests/core/sessions/session-record-recovery-guard.test.ts.
+ *   - Never inside getSessionByClaudeId: hot paths (status snapshots, health
+ *     scans) must not pay a disk probe per miss.
  *   - Local-only probe: without a record there is no host to route a remote
  *     find to; every known loss case is local. A remote session's record loss
  *     still 404s (recovering it would require asking every configured host).
- *   - In-flight dedup + a short negative cache so a 404-polling UI (the panel
- *     retries every 500ms) can't stampede the disk or the write lock.
+ *   - In-flight dedup + a short negative cache so a retried delivery can't
+ *     stampede the disk or the write lock.
  */
 
 import { log } from '../../logging/index.js'
