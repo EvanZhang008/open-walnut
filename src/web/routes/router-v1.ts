@@ -312,6 +312,9 @@ routerV1Router.post('/router/route', async (req: Request, res: Response, next: N
     // The person's letter is the router's brief: one off the user's reply language gets a note (hints/reply-language-drift.ts).
     const { letterLanguageNote } = await import('../../core/hints/reply-language-drift.js');
     const replyLanguage = forUser && result.fresh ? await letterLanguageNote([reason, b.text]) : null;
-    res.status(result.route.status === 'routed' ? 202 : 200).json({ ...result, route, ...(replyLanguage ? { reply_language: replyLanguage } : {}) });
+    // A letter to the person is recorded as not_routed (nothing was handed to a task); `letter` says
+    // it went out, so the router does not read that status as "the person never heard" (2026-11-16).
+    const letter = forUser && result.fresh ? { letter: 'sent' as const } : {};
+    res.status(result.route.status === 'routed' ? 202 : 200).json({ ...result, route, ...letter, ...(replyLanguage ? { reply_language: replyLanguage } : {}) });
   } catch (error) { failure(res, next, error); }
 });

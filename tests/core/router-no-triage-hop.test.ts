@@ -37,6 +37,7 @@ const DESK = 'desk@marina.example.invalid'
 const item = (message: string): RouterSource => ({ kind: 'mail', account: DESK, message, version: `v-${message}` })
 const HTTP_ITEM = item('INBOX:1:1')
 const CORE_ITEM = item('INBOX:1:2')
+const LETTER_ITEM = item('INBOX:1:3')
 
 let base = ''
 let routerId = ''
@@ -55,7 +56,7 @@ beforeAll(async () => {
     areas: [{ id: 'mail', name: 'Mail', host: '__local__', taskIds: [routerId], sources: [{ kind: 'mail', account: DESK }] }],
     routers: [{ taskId: routerId, areaId: 'mail', paused: false }],
     items: [],
-    openItems: [{ source: HTTP_ITEM, areaId: 'mail' }, { source: CORE_ITEM, areaId: 'mail' }],
+    openItems: [{ source: HTTP_ITEM, areaId: 'mail' }, { source: CORE_ITEM, areaId: 'mail' }, { source: LETTER_ITEM, areaId: 'mail' }],
   }))
   await taskManager.updateTaskRaw(routerId, { org_role: 'router', router_area_id: 'mail', router_paused: false }, { source: 'router-areas', emitEvent: false })
   stopSource = registerRouterSource('mail', {
@@ -91,6 +92,17 @@ describe('the router never makes work (POST /api/v1/router/route)', () => {
       expect((await response.json()).error.code).toBe('bad_decision')
     }
     expect(await routerStore('mail').getSource(HTTP_ITEM)).toBeUndefined()
+  })
+
+  it('a letter to the person answers letter: sent beside its not_routed route, once', async () => {
+    const body = { source: LETTER_ITEM, for_user: true, reason: 'Only the person can approve', text: 'Approve the dock slot change.' }
+    const first = await post('/api/v1/router/route', body)
+    expect(first.status).toBe(200)
+    const answer = await first.json()
+    expect([answer.route.status, answer.fresh, answer.letter]).toEqual(['not_routed', true, 'sent'])
+    // A repeat finds the receipt: nothing new was sent, so it claims no letter.
+    const again = await (await post('/api/v1/router/route', body)).json()
+    expect([again.fresh, again.letter]).toEqual([false, undefined])
   })
 
   it('router_route takes no new_task_title, and no router_item or router_work op exists', () => {
