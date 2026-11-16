@@ -206,7 +206,8 @@ export function opaqueId(word, parts) {
 }
 
 /**
- * Finds every rule hit in a text. Returns [{ label, offset, length }], offsets into `text`.
+ * Finds every rule hit in a text. Returns [{ label, offset, length, term? }], offsets into
+ * `text`; `term` marks a hit of a term rule (a word or phrase), not of a regex.
  * `base` is added to every offset (for a text that is one chunk of a larger file).
  */
 export function scanText(rules, text, base = 0) {
@@ -285,7 +286,7 @@ export function scanText(rules, text, base = 0) {
       for (const [label, s, e] of found) {
         // a case-sensitive term is an acronym; one that ends an UPPER_SNAKE name (MAX_BARS) is a word of it
         if (mode === 's' && plain[s - 1] === '_') continue
-        hits.push({ label, offset: base + s, length: e - s })
+        hits.push({ label, offset: base + s, length: e - s, term: true })
       }
     }
   }
@@ -391,7 +392,13 @@ export function readsAsText(run, at, length) {
  */
 export function binaryHits(rules, runs) {
   return scanText(rules, runs.text).filter((h) => {
-    if (h.length > CHANCE_WORD_MAX) return true
+    // A term is short by its letters and digits, not by the bytes it spans: a two-word term
+    // matched across the high bytes between them (2026-11-16, Release run 43830277905: three
+    // letters and digits spanning eight bytes of compressed data in all six files of the
+    // stable 0.6.33) is as much chance as a three-letter word. A regex hit keeps its span:
+    // its punctuation is the shape it matches (an address, a key), never chance.
+    const size = h.term ? runs.text.slice(h.offset, h.offset + h.length).replace(/[^A-Za-z0-9]/g, '').length : h.length
+    if (size > CHANCE_WORD_MAX) return true
     const spot = runSpot(runs, h.offset)
     if (!spot || spot.run.length < TEXT_RUN_MIN) return false
     return readsAsText(spot.run, spot.at, h.length)

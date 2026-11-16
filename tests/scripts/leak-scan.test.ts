@@ -175,6 +175,27 @@ describe('leak-scan rules', () => {
     expect(binaryHits(rules(), text).map((h) => h.label)).toEqual(['tool', 'acronym'])
   })
 
+  it('counts a short two-word term in a binary by its letters, not the bytes between them', () => {
+    // 2026-11-16: a two-word term of three letters and digits matched across the high bytes
+    // between them, spanning 8 bytes of a short run of compressed data, in all six compiled
+    // files of a stable: longer than CHANCE_WORD_MAX by its span, so the chance filter let it by.
+    const pairRules = loadRules(compileRules(parseSource('pair\tterm\tq 7z\nip\tregex\t\\b10\\.\\d+\\.\\d+\\.\\d+')))
+    const noise = Buffer.concat([Buffer.from('q', 'latin1'), Buffer.from([0xc3, 0x9e, 0xc2, 0xb0, 0xc3, 0xae]), Buffer.from('7z ;X', 'latin1')])
+    const runs = printableRuns(Buffer.concat([Buffer.from([0x01]), noise, Buffer.from([0x01])]))
+    const raw = scanText(pairRules, runs.text)
+    expect(raw.map((h) => h.label)).toEqual(['pair'])
+    expect(raw[0]!.length).toBeGreaterThan(5)
+    expect(binaryHits(pairRules, runs)).toEqual([])
+    // the same pair in a real string still counts, with a high byte between its words too
+    const real = printableRuns(Buffer.concat([Buffer.from([0x01]), Buffer.from('the q\u00e9 7z settings were saved for this account', 'utf8'), Buffer.from([0x01])]))
+    const realHits = binaryHits(pairRules, real)
+    expect(realHits.map((h) => h.label)).toEqual(['pair'])
+    expect(realHits[0]!.length).toBeGreaterThan(5)
+    // a regex hit keeps its span: an address in a short C string of a binary still counts
+    const ip = printableRuns(Buffer.concat([Buffer.from([0]), Buffer.from('10.0.0.1', 'latin1'), Buffer.from([0])]))
+    expect(binaryHits(pairRules, ip).map((h) => h.label)).toEqual(['ip'])
+  })
+
   it('counts a short word in a long run of random printable bytes only when it sits among words', () => {
     // 2026-10-31: a three-letter term stood inside a long run of random letters, digits and
     // punctuation in all six compiled files of a build. That run was 70% "plain" characters,
