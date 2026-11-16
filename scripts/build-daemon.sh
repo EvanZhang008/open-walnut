@@ -130,6 +130,7 @@ SOURCES=(
   src/providers/host-exec-matcher.ts
   src/providers/host-exec-group.ts
   src/providers/host-exec-job.ts
+  src/providers/host-exec-recall.ts
   src/providers/host-exec-run-id.ts
   src/providers/net-core.ts
   src/providers/net-binary.ts

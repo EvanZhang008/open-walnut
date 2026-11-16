@@ -403,6 +403,8 @@ export async function jobAnswer(host: string, jobId: string, reply: Record<strin
     ...(reply.running === true && reply.killed === true ? { stopAsked: true } : {}),
     // It ended because host_exec_stop asked (the only sender of exec.kill).
     ...(reply.running !== true && reply.killed === true ? { stoppedByCall: true } : {}),
+    // The daemon that ran it stopped first (an update or a crash): no exit was kept (host-exec-recall.ts).
+    ...(reply.running !== true && reply.daemonEnded === true ? { daemonEnded: true } : {}),
     ...(reply.running === true && typeof reply.deadlineInMs === 'number' ? { deadlineInMs: reply.deadlineInMs } : {}),
     ...(named ? { failedStep: named } : {}),
   }

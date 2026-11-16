@@ -42,6 +42,11 @@ export interface JobView {
   shellExited?: true
   /** While its shell runs: how long to its deadline (0: it is being stopped there), in this host's time. */
   deadlineInMs?: number
+  /**
+   * The daemon that ran it stopped before it ended (an update or a crash), so no exit was kept: it
+   * reads ended, as of its log's last write (host-exec-recall.ts).
+   */
+  daemonEnded?: true
 }
 
 export interface RunReply extends JobView {
@@ -87,6 +92,8 @@ export interface Job {
   timer: ReturnType<typeof setTimeout> | null
   /** Reads of it waiting on a wait_for now (host-exec-core.ts caps them). */
   waits: number
+  /** Read back from the audit with no end line (host-exec-recall.ts): it ended with the daemon that ran it. */
+  daemonEnded?: true
 }
 
 export function jobView(j: Job, now: number): JobView {
@@ -98,5 +105,6 @@ export function jobView(j: Job, now: number): JobView {
     leftBehind: j.leftBehind, ...(j.leftCommands ? { leftCommands: j.leftCommands } : {}), ...(j.outputCut ? { outputCut: true as const } : {}),
     ...(running && j.shellExitedAt !== null ? { shellExited: true as const } : {}),
     ...(running && j.shellExitedAt === null ? { deadlineInMs: Math.max(0, j.startedAt + j.timeoutMs - now) } : {}),
+    ...(j.daemonEnded ? { daemonEnded: true as const } : {}),
   }
 }

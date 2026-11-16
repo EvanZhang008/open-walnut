@@ -172,6 +172,8 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/host-exec-group.ts',
   // A job as the daemon keeps it and as an answer shows it.
   'src/providers/host-exec-job.ts',
+  // A job an earlier daemon here ran, read back from the audit.
+  'src/providers/host-exec-recall.ts',
   // The id of a host_exec run, chosen by the CLI and the MCP server bundled into the binary.
   'src/providers/host-exec-run-id.ts',
   // The host network (net.*): bundled into the binary AND shipped as net-core.cjs,

@@ -93,6 +93,7 @@ function endedWords(b: Record<string, unknown>): string {
   if (b.timedOut) return 'stopped at its deadline'
   if (b.blocked) return 'was stopped at a dialog'
   // host_exec_stop ended it (2026-11-05 review: "ended by SIGTERM" sent the reader to find out why).
+  if (b.daemonEnded) return 'lost its daemon before it ended (a daemon update or restart), so no exit code was kept'
   if (b.stoppedByCall) return `was stopped by host_exec_stop${typeof b.signal === 'string' ? ` (${b.signal})` : typeof b.exitCode === 'number' ? ` (exit ${b.exitCode})` : ''}`
   if (b.exitCode === null || b.exitCode === undefined) return b.signal ? `ended by ${String(b.signal)}` : 'ended without an exit code'
   return `exited ${String(b.exitCode)}`

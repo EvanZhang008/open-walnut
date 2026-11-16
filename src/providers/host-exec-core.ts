@@ -44,6 +44,7 @@ import { createMatcher, type MatcherStart } from './host-exec-matcher.js'
 import { stuckFileLooks } from './host-exec-probe.js'
 import { watchShellEnd } from './host-exec-group.js'
 import { jobView, type Job, type JobView, type RunReply } from './host-exec-job.js'
+import { createRecall } from './host-exec-recall.js'
 
 export type { JobView, RunReply } from './host-exec-job.js'
 
@@ -97,6 +98,8 @@ export interface HostExecDeps {
   promptCheckMs?: number
   /** How to start the wait_for matcher process: this daemon run again as one; without it no output wait can run here. */
   matcher?: MatcherStart | (() => MatcherStart)
+  /** Whether a pid runs (default: signal 0); asked of the daemon that wrote a run's start line (host-exec-recall.ts). */
+  pidAlive?: (pid: number) => boolean
 }
 
 export interface RunRequest {
@@ -159,12 +162,22 @@ export function createHostExec(deps: HostExecDeps) {
     plan: (line) => { const login = deps.shell || '/bin/sh'; const p = shellPlan(login, bashPath(), line); return { cmd: login, args: p.args, env: p.env } },
   })))()
 
+  const auditFile = path.join(deps.stateDir, 'host-exec-audit.jsonl')
   function audit(line: Record<string, unknown>): void {
     try {
       fs.mkdirSync(deps.stateDir, { recursive: true, mode: 0o700 })
-      fs.appendFileSync(path.join(deps.stateDir, 'host-exec-audit.jsonl'), JSON.stringify({ at: new Date(now()).toISOString(), ...line }) + '\n', { mode: 0o600 })
+      fs.appendFileSync(auditFile, JSON.stringify({ at: new Date(now()).toISOString(), ...line }) + '\n', { mode: 0o600 })
     } catch { /* the audit never fails a run */ }
   }
+  // The jobs an earlier daemon here ran, read back from the audit (host-exec-recall.ts): a daemon
+  // update never turns a finished run into "no job".
+  const recall = createRecall({
+    auditFile, stateDir: deps.stateDir, taskDirRoot: deps.taskDirRoot, keepMs: KEEP_FINISHED_MS, defaultTimeoutMs: BACKGROUND_MAX_MS, now,
+    selfPid: process.pid,
+    alive: deps.pidAlive ?? ((pid) => { if (pid <= 1) return false; try { process.kill(pid, 0); return true } catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM' } }),
+  })
+  /** A job this daemon runs or ran, else one an earlier daemon here ran. */
+  const jobOf = (id: string): Job | undefined => jobs.get(id) ?? recall.get(id)
 
   function prune(): void {
     const t = now()
@@ -219,7 +232,8 @@ export function createHostExec(deps: HostExecDeps) {
     const timeoutMs = Math.min(asked, cap)
     const tailMax = typeof req.maxOutputBytes === 'number' && req.maxOutputBytes > 0 ? Math.min(req.maxOutputBytes, OUTPUT_MAX_BYTES) : OUTPUT_MAX_BYTES
     const id = typeof req.jobId === 'string' && JOB_ID_RE.test(req.jobId) ? req.jobId : `hx-${now().toString(36)}-${(++seq).toString(36)}`
-    if (jobs.has(id) || starting.has(id)) return bad(`job ${id} already exists`, 'job_exists')
+    // One an earlier daemon here ran counts too: a call resent after an update never runs it twice.
+    if (jobs.has(id) || starting.has(id) || recall.get(id)) return bad(`job ${id} already exists`, 'job_exists')
     // Held from here until the job is in `jobs` (or nothing ran): the id check and the record are
     // one step to any other run, whatever this one awaits in between.
     let settle = () => {}
@@ -271,7 +285,11 @@ export function createHostExec(deps: HostExecDeps) {
     }
     const caller = req.caller ?? {}
     const who = { task: typeof caller.task === 'string' ? caller.task.slice(0, 128) : null, host: typeof caller.host === 'string' ? caller.host.slice(0, 200) : null }
-    audit({ event: 'start', jobId: id, ...who, cwd, command: line.slice(0, 2000), background, timeoutMs, shell: plan.shell })
+    // What a later daemon needs to answer for this run (host-exec-recall.ts): whose it is and where its log is.
+    audit({
+      event: 'start', jobId: id, ...who, taskId: job.taskId, startedAt: job.startedAt, daemonPid: process.pid, cwd, command: line.slice(0, 2000), background, timeoutMs,
+      shell: plan.shell, loginShell: plan.loginShell, taskDir, logFile,
+    })
 
     let child: ChildProcess
     try {
@@ -348,7 +366,7 @@ export function createHostExec(deps: HostExecDeps) {
 
   /** The job, when it exists and the asking task (if named) is the one that started it. */
   function own(jobId: unknown, taskId: unknown): Job | undefined {
-    const j = typeof jobId === 'string' ? jobs.get(jobId) : undefined
+    const j = typeof jobId === 'string' ? jobOf(jobId) : undefined
     if (!j) return undefined
     if (typeof taskId === 'string' && taskId && j.taskId !== taskId) return undefined
     return j
@@ -420,7 +438,8 @@ export function createHostExec(deps: HostExecDeps) {
   function list(req: { taskId?: unknown } = {}): JobView[] {
     prune()
     const task = typeof req.taskId === 'string' && req.taskId ? req.taskId : null
-    return [...jobs.values()].filter((j) => task === null || j.taskId === task).sort((a, b) => b.startedAt - a.startedAt).map(view)
+    const earlier = recall.list((id) => jobs.has(id))
+    return [...jobs.values(), ...earlier].filter((j) => task === null || j.taskId === task).sort((a, b) => b.startedAt - a.startedAt).map(view)
   }
 
   /**
