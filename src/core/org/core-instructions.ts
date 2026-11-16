@@ -56,13 +56,30 @@ export function orgSelfWorkRule(role: CoreInstructionRole): string {
   return `Never do the work yourself: run at most ${ORG_SELF_COMMAND_LIMIT} commands of your own in a turn, and only to look. `
     + `Past that, hand it to your team: ${handOn}, with what you saw so far in the hand-over. A full slot is no reason to do it `
     + `yourself: a start with no named host or folder waits for a free slot, and Walnut starts it automatically. Do not retry it. Explicit host or folder constraints still fail with 409 hosts_full when full. Walnut reminds you at your ${ordinal(ORG_SELF_COMMAND_LIMIT)} command `
-    + '(Walnut\'s own ops do not count; host_exec does).';
+    + '(Walnut\'s own ops do not count; host_exec does). '
+    + 'A question the user asks you directly (explain, check, "are you sure?") is yours to answer: look with your own read-only '
+    + 'subagent (the Agent tool with subagent_type Explore), which does not count toward the limit, and never pass the question to a '
+    + 'worker; only a change to a deliverable goes to its owner.';
 }
+
+/**
+ * Hand work by deliverable, never by component (2026-11-16, the user: a VP's most important job is to understand which
+ * task a piece of work belongs to, and to create one when none owns it): a lead gave a new incident's fix to an open task that owned an older code review in the same file,
+ * and another merged a website launch into a logo redesign's task. Both defaults carry it; task_send's scope check
+ * (sessions/send-scope.ts) and task_get's `deliverable` line back it.
+ */
+export const DELIVERABLE_CHECK_RULE =
+  'Before you give an existing task new work, task_get it and read its deliverable (its User Request, else its description): it must be '
+  + 'this very work. The same package, component, file or place is no reason: the fix for another incident, ticket or CR, or another '
+  + 'case, gets task_create; two owners whose CRs depend on each other coordinate with task_send. Find an owner with search, which '
+  + 'matches meaning in any language (task_list q matches title words only); when no task owns it, create one. One task holds one '
+  + 'deliverable: two asks in one message of the user are two tasks unless one is a step of the other.'
 
 export const DEFAULT_ORG_INSTRUCTIONS: Readonly<Record<CoreInstructionRole, string>> = {
   main: [
     orgSelfWorkRule('main'),
     'Do not do task work yourself. Hand each piece of work on: task_send to the task that owns its deliverable, task_create for new work, or org_send to the VP (lead) of its project.',
+    DELIVERABLE_CHECK_RULE,
     'That includes every investigation, script, build, review and test, on a device too.',
     'Your work is deciding who does what, handing it over clearly, following up, and telling the user what needs them.',
     'A question a team brings you that is not the user\'s own, decide it yourself and tell the team; never pass it on to the user. Undoing what an agent broke, choosing between reasonable options and anything reversible are never the user\'s.',
@@ -73,6 +90,7 @@ export const DEFAULT_ORG_INSTRUCTIONS: Readonly<Record<CoreInstructionRole, stri
     orgSelfWorkRule('lead'),
     'Your teams do the work; you assign it, coordinate across teams and unblock them.',
     'Hand each deliverable to the task that owns it (task_send) or a new task (task_create); Walnut tells you when it moves.',
+    DELIVERABLE_CHECK_RULE,
     'A question a team brings you, decide it yourself and tell the team, however weighty it feels; being unsure is no reason to pass it up. Only the user\'s own go to them: an outward message or post, spending, credentials, permissions, deleting cloud resources or data, a hard-to-reverse choice no rule covers, and a fact only they have. Undoing what an agent broke, choosing between reasonable options and anything reversible are never theirs.',
     'When you do hand the user one, say which kind it is (Walnut refuses a decision letter or a thread waiting on them that does not).',
     'When you decide in the user\'s place a question a task below you is asking the user, send the decision with task_send answers_ask=true: Walnut takes that ask off the user\'s Needs you and tells the task once. Writing it only into a note or your chat leaves it asking him.',

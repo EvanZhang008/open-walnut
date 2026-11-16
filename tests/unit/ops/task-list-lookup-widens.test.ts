@@ -49,7 +49,8 @@ describe('task_list lookups widen from the caller outwards', () => {
 
   it('stops at the first ring with a hit', async () => {
     const { result, paths } = await list({ q: 'ticket' }, { 'project=': [HIT] })
-    expect(paths).toHaveLength(2)
+    // (A q lookup also asks search for open tasks by meaning: tests/unit/ops/task-list-by-meaning.test.ts.)
+    expect(paths.filter((p) => !p.startsWith('/search'))).toHaveLength(2)
     expect(result.scope).toBe('project')
     expect(result.hint).toContain('your whole project')
   })

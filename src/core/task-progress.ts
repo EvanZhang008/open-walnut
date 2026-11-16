@@ -11,7 +11,7 @@
  * with STATUS one of DONE / WIP / TODO / BLOCKED / WAIT.
  */
 
-import { parseNoteSections } from './session-hooks/builtins.js';
+import { parseNoteSections } from './note-sections.js';
 
 /** The bracketed labels the Progress contract allows, normalized to upper case. */
 export const PROGRESS_STATUSES = ['DONE', 'WIP', 'WAIT', 'TODO', 'BLOCKED'] as const;

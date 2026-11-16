@@ -66,6 +66,17 @@ export function workerToldLead(workerTaskId: string, leadTaskId: string): boolea
   return up > (lastSent.get(key(leadTaskId, workerTaskId)) ?? -Infinity);
 }
 
+/** The task whose message to `toTaskId` was queued last, within `withinMs` (title-topic-notice.ts). */
+export function latestSenderTo(toTaskId: string, withinMs: number, nowMs = Date.now()): string | null {
+  let best: { from: string; at: number } | null = null;
+  const tail = `>${toTaskId}`;
+  for (const [k, at] of lastSent) {
+    if (!k.endsWith(tail) || nowMs - at > withinMs || (best && best.at >= at)) continue;
+    best = { from: k.slice(0, -tail.length), at };
+  }
+  return best?.from ?? null;
+}
+
 /** Tests: forget every stamp. */
 export function _resetLeadTrafficForTesting(): void {
   lastSent.clear();

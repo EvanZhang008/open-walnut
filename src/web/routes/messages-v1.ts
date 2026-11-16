@@ -1,7 +1,7 @@
 /**
  * /api/v1/messages + /api/v1/requests — the unified send surface.
  *
- *   POST /messages        { to?, text, title?, wake?, expect_reply?, reply_timeout?, in_reply_to?, hands_on?, answers_ask?, withdraw_ask?, force?, reason?, messageId?, thread? }
+ *   POST /messages        { to?, text, title?, wake?, expect_reply?, reply_timeout?, in_reply_to?, hands_on?, answers_ask?, withdraw_ask?, force?, reason?, same_deliverable?, messageId?, thread? }
  *                         → 202 SessionSendResult (session-send-core.ts), with `thread_handoff` when a Thread
  *                         of the sender's went with it (core/org/thread-follow.ts)
  *   GET  /requests/:id    → { request, delivery? } — status read for `walnut wait rq-…`;
@@ -71,6 +71,9 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
         title: str(b.title),
         force: b.force === true,
         reason: str(b.reason),
+        // An agent's task_send names no work its open target does not hold (sessions/send-scope.ts).
+        checkScope: true,
+        ...(typeof b.same_deliverable === 'string' ? { sameDeliverable: b.same_deliverable } : {}),
         messageId: str(b.messageId),
         // A note that asks nothing starts no turn (sessions/quiet-notes.ts): wake=false, or a
         // script's note that ends "No reply needed".

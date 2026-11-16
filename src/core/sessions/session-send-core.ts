@@ -71,7 +71,7 @@ export class SendError extends Error {
       | 'target_archived' | 'task_starting' | 'self_send' | 'queue_full' | 'throttled' | 'delivery_failed'
       | 'unknown_request' | 'request_already_settled' | 'not_request_target' | 'origin_session_gone'
       | 'parent_complete' | 'target_complete' | 'lead_handed_over' | 'org_off' | 'not_above' | 'no_open_ask' | 'user_words' | 'user_spoke_since' | 'area_forbidden' | 'cross_area'
-      | 'human_approval' | 'not_confirmed',
+      | 'human_approval' | 'not_confirmed' | 'scope_mismatch',
     message: string,
     public statusCode = 400,
     public detail?: Record<string, unknown>,
@@ -110,6 +110,10 @@ export interface SessionSendInput {
    *  `reason` (why it must act again), which leads the delivered text. */
   force?: boolean;
   reason?: string;
+  /** task_send's scope check (send-scope.ts): set by the route for a session's own send. */
+  checkScope?: boolean;
+  /** After a 409 scope_mismatch: why the refs it named are the target's own deliverable. */
+  sameDeliverable?: string;
   /** Idempotency id (qm-…) forwarded to the durable queue. */
   messageId?: string;
   /** A reply's structured fields (peers/structured-reply.ts): `inReplyTo` sends only. The asker
@@ -703,6 +707,30 @@ async function admitCompleteTarget(
   return check.text(text);
 }
 
+/**
+ * A session's task_send that names work its open target does not hold (send-scope.ts): refused
+ * with 409 scope_mismatch, or, with same_deliverable, led by one line naming it. Returns the text.
+ */
+async function admitSendScope(caller: CallerIdentity, targetTaskId: string | undefined, input: SessionSendInput, text: string): Promise<string> {
+  if (!input.checkScope || caller.kind !== 'session' || !targetTaskId) return text;
+  const { checkSendScope } = await import('./send-scope.js');
+  const verdict = await checkSendScope({
+    callerTaskId: caller.record.taskId, targetTaskId,
+    text: [input.title ?? '', input.text].join('\n'), sameDeliverable: input.sameDeliverable,
+  });
+  if (verdict.kind === 'refuse') {
+    log.session.info('session_send: refused, names work its target does not hold', {
+      targetTaskId, callerSessionId: caller.record.claudeSessionId, code: verdict.code, detail: verdict.detail,
+    });
+    throw new SendError(verdict.code, verdict.message, verdict.status, verdict.detail);
+  }
+  if (verdict.kind !== 'lead') return text;
+  log.session.info('session_send: sent as the same deliverable', {
+    targetTaskId, callerSessionId: caller.record.claudeSessionId, reason: input.sameDeliverable,
+  });
+  return `${verdict.line}\n\n${text}`;
+}
+
 /** The caller's task is the parent of `taskId` (a stored parent id may be a legacy prefix). */
 async function callerLeads(caller: CallerIdentity, taskId: string | undefined): Promise<boolean> {
   if (caller.kind !== 'session' || !caller.record.taskId || !taskId) return false;
@@ -959,7 +987,8 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
   await refuseSendToCompleteParent(caller, target.taskId ?? target.session.taskId);
   await refuseOrgNodeWhileOff(caller, input.source, target.taskId ?? target.session.taskId);
   const admitted = await admitRetiredLead(caller, target.taskId ?? target.session.taskId, input, text);
-  const body = await admitCompleteTarget(caller, target.taskId ?? target.session.taskId, input, admitted, 'send');
+  const completeAdmitted = await admitCompleteTarget(caller, target.taskId ?? target.session.taskId, input, admitted, 'send');
+  const body = await admitSendScope(caller, target.taskId ?? target.session.taskId, input, completeAdmitted);
 
   // Envelope + throttle apply exactly when the SPEAKER is not the human:
   // another session (named peer-note) or an unidentified process (anonymous).

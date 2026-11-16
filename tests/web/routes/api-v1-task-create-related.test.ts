@@ -159,6 +159,32 @@ describe('a session create that looks like open work is refused, nothing made', 
 })
 
 describe('confirm', () => {
+  // 2026-11-16: a lead's FIRST create of an on-call task carried confirm_new, so last week's owner
+  // of the same on-call work was never shown. confirm_new answers a list the session has read.
+  it('confirm_new sent blind (no list seen yet) still shows the related open tasks first, then counts', async () => {
+    const other = (await addTask({ title: 'Keyboard layout follow-ups', project: 'marina', parent_task_id: parentId })).task
+    const fresh = await session(other.id, 'marina')
+    const before = await count()
+    const body = { title: 'Fix the iOS keyboard layout', confirm_new: true, new_reason: 'a separate fix from the open one, I am sure' }
+    const blind = await post(body, fresh)
+    expect(blind.status).toBe(409)
+    expect(blind.json.error.code).toBe('related_open_tasks')
+    expect(blind.json.error.message).toMatch(/^confirm_new counts only after you have read the related open tasks/)
+    expect(blind.json.candidates.length).toBeGreaterThan(0)
+    expect(await count()).toBe(before)
+    const seen = await post(body, fresh)
+    expect(seen.status).toBe(201)
+    expect((await getTask(seen.json.task.id)).description).toContain('Created as new work, not an existing open task: a separate fix')
+  })
+
+  it('confirm_new sent blind with nothing related creates at once, keeping its reason', async () => {
+    const other = (await addTask({ title: 'Garden notes', project: 'marina' })).task
+    const fresh = await session(other.id, 'marina')
+    const r = await post({ title: 'Quarterly garden photos album', confirm_new: true, new_reason: 'nothing like it is open anywhere' }, fresh)
+    expect(r.status).toBe(201)
+    expect((await getTask(r.json.task.id)).description).toContain('nothing like it is open anywhere')
+  })
+
   it('confirm_new without a reason, or a short one, is a 400 and creates nothing', async () => {
     const before = await count()
     const none = await post({ title: 'Fix the iOS keyboard layout bug', confirm_new: true }, worker.sid)

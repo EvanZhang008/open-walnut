@@ -639,7 +639,7 @@ export function composeInstructions(task: InstructionTask | undefined, state: Pr
       // for the third one's follow-up. A subtask is a teammate, not a step.
       + 'A task you create is a teammate owning one area with a clear goal, never a '
       + 'step: one per ask (ask the user before splitting). The same deliverable '
-      + 'continues its task (task_send); when the user asks for a task for an independent goal, make a new one '
+      + 'continues its task (task_send; task_get it first: the same file or package is not the same deliverable); when the user asks for a task for an independent goal, make a new one '
       + 'with a fresh session, even in an area a teammate already owns. It '
       + 'lands beside yours: same project, folder and board tier, same host and '
       + 'directory. Omit project; name another only when the user asked for it, quoting their words in user_words.\n\n'

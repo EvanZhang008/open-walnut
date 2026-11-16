@@ -215,7 +215,7 @@ describe('buildSessionContext (identity note)', () => {
     // and the third one's follow-up became a fourth task in the second's area.
     const { systemPrompt } = await buildSessionContext('')
     expect(systemPrompt).toMatch(/a task you create is a teammate owning one area with a clear goal, never a step/i)
-    expect(systemPrompt).toMatch(/one per ask \(ask the user before splitting\)\. The same deliverable continues its task \(task_send\); when the user asks for a task for an independent goal, make a new one with a fresh session, even in an area a teammate already owns/i)
+    expect(systemPrompt).toMatch(/one per ask \(ask the user before splitting\)\. The same deliverable continues its task \(task_send; task_get it first: the same file or package is not the same deliverable\); when the user asks for a task for an independent goal, make a new one with a fresh session, even in an area a teammate already owns/i)
     // The signal is the user naming the parts, not "talking to each part".
     expect(systemPrompt).toMatch(/names the parts they want as tasks/i)
     expect(systemPrompt).not.toMatch(/talk to each part/i)
@@ -381,7 +381,9 @@ describe('buildSessionContext (identity note)', () => {
     // 10800 → 11000 (2026-11-15) for the session's own background jobs: they wake it when they finish,
     // so no trigger or clock on them (a 20-minute trigger on a session's own acceptance run fired four
     // times overnight, each turn an ack only). 10,977.
-    expect(systemPrompt.length).toBeLessThan(11000)
+    // 11000 → 11100 (2026-11-16) for the deliverable check in the work rule: task_get first, the same
+    // file or package is not the same deliverable (a lead handed an outage fix to a code review's task).
+    expect(systemPrompt.length).toBeLessThan(11100)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {

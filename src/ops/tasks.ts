@@ -17,6 +17,7 @@ import { USER_KINDS, USER_KIND_PARAM, USER_KIND_WHY_PARAM } from '../core/org/us
 import { laneById, normalizeLanes, placeCard } from '../core/boards/board-lanes.js'
 import { agentMemoryWriterNote, type AgentMemory } from '../core/sessions/agent-memory.js'
 import { USER_SPOKE_TEXT, USER_WORDS_BACK, userSaidLine, type UserSaid } from '../core/sessions/user-spoke.js'
+import { deliverableLine } from '../core/task-deliverable.js'
 import type { OpCall } from './core.js'
 import {
   BULK_GET_FIELDS,
@@ -262,7 +263,7 @@ defineOp({
     blocked: z.boolean().optional().describe('Tasks blocked/unblocked by incomplete dependencies'),
     parent_task_id: z.string().optional().describe('Children of this parent task (exact id)'),
     group_id: z.string().optional().describe('Members of a virtual group (exact id, e.g. "g_xxx")'),
-    q: z.string().optional().describe('Case-insensitive substring on the task title'),
+    q: z.string().optional().describe('Case-insensitive substring on the task title (title words only; the answer adds `by_meaning`: open tasks search finds for q by meaning, in any language)'),
     ids: z.string().optional().describe('Comma list of exact task ids — fetch a specific set in one call'),
     time_basis: TIME_BASIS.optional().describe('Which timestamp the window filters: created | updated | created_or_updated | due | completed'),
     last_hours: z.number().int().positive().optional().describe('Relative window: the last N hours'),
@@ -373,9 +374,15 @@ defineOp({
     const rows = args.fields === 'full'
       ? tasks.map((t) => t && typeof t === 'object' && !Array.isArray(t) ? taskView(t as Record<string, unknown>) : t)
       : tasks.map(leanTaskRow)
+    // q matches title words only: the open tasks search finds by meaning (any language) that q missed.
+    const byMeaning = typeof args.q === 'string' && args.q.trim() ? await openTasksByMeaning(call, args.q.trim(), rows) : []
     const hints = [
       scopeNote ?? '',
       body?.visibility_note ?? '',
+      byMeaning.length
+        ? `q matches title words only; by_meaning lists ${byMeaning.length} open task(s) search finds by meaning (any language) that q missed: `
+          + 'task_get them before you create a task or decide none owns this.'
+        : '',
       widenedFrom
         ? `Nothing in your ${widenedFrom} matched ${lookupLabel(args)}, so this searched ${appliedScope === 'all' ? 'the whole board' : 'your whole project'}.`
         : defaulted ? scopeDefaultHint(appliedScope as string | undefined, you) : '',
@@ -394,10 +401,45 @@ defineOp({
       ...(body?.board ? { board: body.board } : {}),
       ...(hints.length ? { hint: hints.join(' ') } : {}),
       tasks: rows,
+      ...(byMeaning.length ? { by_meaning: byMeaning } : {}),
     }
   },
   tags: { readonly: true, remote: 'allow' },
 })
+
+/** How long task_list waits for search's by-meaning rows before it answers without them. */
+const BY_MEANING_DEADLINE_MS = 4_000
+const BY_MEANING_MAX = 5
+
+/**
+ * Open tasks `search` finds for q that the title filter missed (2026-11-16: a lead looked for an
+ * owner with task_list q=<a Chinese word> and found only finished tasks, since the open one's title
+ * was English; search matches meaning across languages). Best
+ * effort: nothing when search is slow or fails.
+ */
+async function openTasksByMeaning(call: OpCall, q: string, rows: unknown[]): Promise<Array<Record<string, unknown>>> {
+  const seen = new Set(rows.map((r) => (r && typeof r === 'object' ? String((r as { id?: unknown }).id ?? '') : '')).filter(Boolean))
+  let timer: NodeJS.Timeout | undefined
+  const late = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), BY_MEANING_DEADLINE_MS); timer.unref?.() })
+  try {
+    const work = (async () => {
+      const found = await call('GET', `/search?q=${encodeURIComponent(q)}&types=task&limit=12&semanticWaitMs=2500`) as { results?: Array<{ type?: string; taskId?: string }> } | undefined
+      const ids = [...new Set((found?.results ?? []).filter((r) => r.type === 'task' && r.taskId && !seen.has(r.taskId)).map((r) => r.taskId!))]
+      if (!ids.length) return []
+      const { path } = materializeBinding(TASK_LIST_BINDING, { ids, limit: ids.length })
+      const listed = await call('GET', path) as { tasks?: Array<Record<string, unknown>> } | undefined
+      const byId = new Map((listed?.tasks ?? []).map((t) => [String(t.id), t] as const))
+      // Search's order, open tasks only: a finished one owns nothing new.
+      return ids.map((id) => byId.get(id)).filter((t): t is Record<string, unknown> => !!t && t.phase !== 'COMPLETE')
+        .slice(0, BY_MEANING_MAX).map((t) => leanTaskRow(t) as Record<string, unknown>)
+    })()
+    return (await Promise.race([work, late])) ?? []
+  } catch {
+    return []
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
 
 defineOp({
   name: 'task_get',
@@ -406,7 +448,8 @@ defineOp({
     'Full detail for one task, including description, note, summary, execution, and ' +
     'dependency/child/parent decorations that the list view omits. The id accepts a unique prefix. ' +
     `What it asks the user now is task.user_status; ${SUMMARY_IS_HISTORY} ` +
-    'The task is under `task`; its id, title and phase are repeated at the top level.',
+    'The task is under `task`; its id, title and phase are repeated at the top level, with `deliverable`: one line of what it was made to produce ' +
+    '(its note\'s User Request, else its description). Hand it new work only when that line is this work.',
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
   },
@@ -421,8 +464,10 @@ defineOp({
     const view = taskView(task)
     const execution = view.execution as { state: string }
     const id = taskId(task) || String(args.id ?? '')
+    // What it was made to produce, beside its title: hand it new work only when this is that work.
+    const deliverable = deliverableLine(task)
     return withOutcome(
-      { ...headline(view), ...b, task: view },
+      { ...headline(view), ...(deliverable ? { deliverable } : {}), ...b, task: view },
       `Task phase: ${phase}. Execution: ${execution.state}.`,
       execution.state === 'not_started'
         ? dispatchHint(id)

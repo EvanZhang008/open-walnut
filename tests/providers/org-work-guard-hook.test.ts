@@ -79,6 +79,11 @@ const CALLS: Array<[string, Record<string, unknown>, boolean]> = [
   ['Glob', { pattern: '**/*.ts' }, true],
   ['Edit', { file_path: '/home/u/repo/src/x.ts', old_string: 'a', new_string: 'b' }, true],
   ['Agent', { description: 'investigate', prompt: 'find it' }, true],
+  ['Agent', { description: 'fix it', prompt: 'edit x', subagent_type: 'general-purpose' }, true],
+  // A read-only subagent answers the user's direct question (2026-11-16): looking, never counted.
+  ['Agent', { description: 'check the claim', prompt: 'read x', subagent_type: 'Explore' }, false],
+  ['Agent', { description: 'plan', prompt: 'read x', subagent_type: 'Plan' }, false],
+  ['Task', { description: 'check', prompt: 'read x', subagent_type: 'Explore' }, false],
   ['WebFetch', { url: 'https://example.com' }, true],
   ['Monitor', { command: 'tail -f log' }, true],
   ['mcp__playwright__browser_click', { ref: 'e1' }, true],
@@ -169,6 +174,19 @@ describe.each(SHELLS)('the org work reminder under %s', (shell) => {
     call(shell, tool, input); call(shell, tool, input)
     expect(call(shell, tool, input) !== '').toBe(counts)
     expect(call(shell, tool, input)).toBe('')
+  })
+
+  it('the calls a subagent makes inside are its own, never the lead\'s (the hook input names its agent_id)', () => {
+    const inside = (command: string) => {
+      const input = JSON.stringify({ ...JSON.parse(payload('Bash', { command, description: 'd' })), agent_id: 'a-1', agent_type: 'Explore' })
+      const r = spawnSync(shell, ['-c', orgWorkGuardCommand('lead')], { input, encoding: 'utf8', env: env() })
+      expect(r.status).toBe(0)
+      return r.stdout
+    }
+    for (let i = 0; i < 6; i++) expect(inside('ls /var/log')).toBe('')
+    // The lead's own count is untouched: its 3rd own command is still the one reminded.
+    call(shell, ...bash('ls')); call(shell, ...bash('ls'))
+    expect(call(shell, ...bash('ls'))).toBe(orgWorkReminder('lead'))
   })
 
   it('a payload it cannot read says nothing (fail open)', () => {

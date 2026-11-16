@@ -20,7 +20,7 @@
  * Quoted lines ("> ...") and code fences are never read: they hold someone else's words or output.
  * Guard test: tests/core/stale-note.test.ts (a corpus of open and closed lines, the four cases).
  */
-import { parseNoteSections } from '../session-hooks/builtins.js';
+import { parseNoteSections } from '../note-sections.js';
 
 export type OpenLineKind = 'open' | 'stale' | 'question';
 export interface OpenNoteLine { kind: OpenLineKind; text: string }

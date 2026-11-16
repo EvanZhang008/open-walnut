@@ -1875,6 +1875,16 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     // that runs (session-send-core.ts, ask-answer.ts answerReach): the server's alone to decide.
     if (args.answers_ask !== undefined) return null
     if (args.withdraw_ask !== undefined) return null
+    // A send that names a code review, ticket or incident by number, or another task's files, is the
+    // server's scope check's to judge (core/sessions/send-scope.ts), and so is one that answers it
+    // (same_deliverable). Inline, as the factory references nothing at module scope: a superset of
+    // the server's patterns (tests/providers/offline-host-scope-refs.test.ts keeps it one).
+    if (args.in_reply_to === undefined) {
+      if (args.same_deliverable !== undefined) return null
+      const said = `${typeof args.title === 'string' ? args.title : ''}\n${text}`
+      if (/\b(?:CR|PR|MR)[-\s]?#?\d{3,}\b|\/pull\/\d{2,}\b|\b(?:ticket|incident|issue|case|sev[\d.]*|lse|coe|tt)\s*(?:#|no\.?|id|number)?\s*[:#]?\s*[a-z]?\d{5,}\b|(?:\u5de5\u5355|\u4e8b\u6545|\u4e8b\u4ef6|\u95ee\u9898\u5355|\u5355\u53f7)\s*(?:\u53f7)?\s*[:\uff1a#]?\s*[a-z]?\d{5,}|\/tasks\/(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|m[a-z0-9]{6,8}-[a-z0-9]{4})/i.test(said)
+        || /\b[A-Z][A-Z0-9]{1,9}-\d{2,}\b/.test(said)) return null
+    }
     // So does a structured reply (result / evidence / not_done): the server keeps its fields
     // on the request and the replier's task, where the Board reads Partial.
     if (args.result !== undefined || args.evidence !== undefined || args.not_done !== undefined || args.score !== undefined) return null

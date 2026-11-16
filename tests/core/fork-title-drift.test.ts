@@ -27,6 +27,8 @@ vi.mock('../../src/core/task-manager.js', () => ({
   getTask: getTaskMock,
   updateTask: updateTaskMock,
 }));
+// Who hears of an added topic: tests/core/sessions/title-topic-notice.test.ts.
+vi.mock('../../src/core/sessions/title-topic-notice.js', () => ({ noticeTitleTopic: async () => {} }));
 
 import { applyTitleDirective } from '../../src/core/session-hooks/builtins.js';
 import { appendTopicToTitle } from '../../src/core/fork-title.js';

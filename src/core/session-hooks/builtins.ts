@@ -236,25 +236,8 @@ export function forgetFinalSummary(sessionId: string): void {
  *  the full note is re-fed on every fire. */
 export const NOTE_REORG_CAP = 6000; // chars
 
-/** The six canonical NOTE sections, in render order. The NOTE is the task's single
- *  living document (design session 2026-07-18, replaces the summary+milestones pair):
- *  Executive Summary = for the human scanning; User Request = concise restatement of
- *  the user's request (intent, NOT a verbatim quote) + acceptance criteria (search
- *  entry point; rewritten on pivot with a "(pivoted from: …)" trace); Context =
- *  self-contained background, frozen once right; Progress = bulleted per-workitem lines
- *  with a bracketed status label ([DONE]/[WIP]/[TODO]/[BLOCKED]/[WAIT]); References =
- *  curated markdown-link list of every external artifact (ticket/issue/incident ids,
- *  PRs, docs) with its id AND title as plain text — the "find this task by that id"
- *  surface (added 2026-08-20, user request; OPTIONAL — old five-section notes keep
- *  parsing and the section renders only when present); Work Log = append-only
- *  did/found/result entries carrying every external ID and decision (never commit
- *  hashes, no timestamps).
- *  Renamed 2026-07-22: "Goal" → "User Request" (user feedback). Old notes with a
- *  "## Goal" header keep parsing (normalized to User Request on the next assemble). */
-export const NOTE_SECTIONS = [
-  'Executive Summary', 'User Request', 'Context', 'Progress', 'References', 'Work Log',
-] as const;
-export type NoteSection = (typeof NOTE_SECTIONS)[number];
+export { NOTE_SECTIONS, parseNoteSections, type NoteSection } from '../note-sections.js';
+import { NOTE_SECTIONS, parseNoteSections, type NoteSection } from '../note-sections.js';
 
 /** Report label per note section (what the session answers with). */
 const NOTE_LABELS: Record<NoteSection, string> = {
@@ -379,7 +362,7 @@ WORK_LOG: \`append: <one entry>\` — what you DID, what you FOUND (conclusions,
 NEVER delete facts: when something is superseded, update it in place and keep an "(was: …)" trace.
 
 Then these status fields (same plain-label format):
-${title ? `TITLE: The task's current title is: "${title}". Default answer: \`unchanged\` — a title should almost never change, and when it must, PREFER \`topic:\` over \`rewrite:\`: the original name is usually good, so keep it and add to it. Three exceptions: (a) the work CHANGED DIRECTION or gained a focus the title doesn't cover, or what the task DELIVERS now (your EXEC_SUMMARY, every workstream) is something a person describing it would not find under this title → answer \`topic: <1-3 words>\` naming that deliverable as a whole, never this turn's step (a task that grew from an API inventory into keeping the app up while the main computer sleeps is "· Sleep Failover", not "· Live E2E Isolation") (English Title Case, one word if it's enough). It lands at the END as "<original title> · New Topic"; a title carries at most ONE such topic, so a newer one REPLACES the previous one, and the original head is NEVER dropped — it is the keyword people find the task by — so brevity is everything; (b) the title is VAGUE and you now know the real subject — it names only an activity or a source ("Handle Slack thread request", "Investigate the issue") because the first message was just a pointer, and this turn revealed what it's actually about → answer \`rewrite: <new title>\` naming the specific subject ("CoreDNS OOM Slack thread"), 2-6 words, no filler verbs like Handle/Process/Address. Do this the FIRST turn you know — a vague title is a bug, not something to preserve; (c) the title has grown long/stale/confusing as a whole → answer \`rewrite: <new title>\` (short, plain, still findable by someone searching for the ORIGINAL work). Never rewrite a title the human just set; when in doubt (except case b), \`unchanged\`.
+${title ? `TITLE: The task's current title is: "${title}". Default answer: \`unchanged\` — a title should almost never change, and when it must, PREFER \`topic:\` over \`rewrite:\`: the original name is usually good, so keep it and add to it. Three exceptions: (a) the work CHANGED DIRECTION or gained a focus the title doesn't cover, or what the task DELIVERS now (your EXEC_SUMMARY, every workstream) is something a person describing it would not find under this title → answer \`topic: <1-3 words>\` naming that deliverable as a whole, never this turn's step (a task that grew from an API inventory into keeping the app up while the main computer sleeps is "· Sleep Failover", not "· Live E2E Isolation") (English Title Case, one word if it's enough). A SECOND deliverable someone handed you (another incident's fix, another review or ticket, another case that only shares a file, a package or a place) is no topic of this task: answer \`unchanged\` and tell its sender it belongs in a task of its own. It lands at the END as "<original title> · New Topic"; a title carries at most ONE such topic, so a newer one REPLACES the previous one, and the original head is NEVER dropped — it is the keyword people find the task by — so brevity is everything; (b) the title is VAGUE and you now know the real subject — it names only an activity or a source ("Handle Slack thread request", "Investigate the issue") because the first message was just a pointer, and this turn revealed what it's actually about → answer \`rewrite: <new title>\` naming the specific subject ("CoreDNS OOM Slack thread"), 2-6 words, no filler verbs like Handle/Process/Address. Do this the FIRST turn you know — a vague title is a bug, not something to preserve; (c) the title has grown long/stale/confusing as a whole → answer \`rewrite: <new title>\` (short, plain, still findable by someone searching for the ORIGINAL work). Never rewrite a title the human just set; when in doubt (except case b), \`unchanged\`.
 ` : ''}OVERVIEW: 1-2 short sentences — what this WHOLE session is about and where it stands overall, for a user re-opening it after a while ("Reworking the composer layout so the scrollbar ends at the last row; fix landed, waiting on review"). Always answer this; never "unchanged".
 LINKS: At most 3, the most important first, and only the links the user will come back to across turns: the external links this task is ABOUT or PRODUCED (the issue or ticket driving it, a pull request or code review it opened, its design doc or thread), and the documents the user reviews (an HTML explainer, a design doc, a plan, a report) by ABSOLUTE path, one per line: "- <kind>: <url or /absolute/path> (<name>)", kind says what it is in one lowercase word, two at most joined by a hyphen (issue, pr, cr, ticket, incident, thread, design-doc, report, plan, notes), never a bare "file", "link" or file type; name says which one it is in 1 to 3 words that tell it from the task's other links ("Test matrix r5", "Fix plan r5b", "Retry design"). Never a screenshot or image, a log, a script, a config or a data file. Only links new since your last report; not every page you read or file you touched along the way. \`unchanged\` when none are new.
 RECAP: ONE line, as simple as possible — what just happened in your latest turn(s), for a user re-opening this session ("Fixed the timeout bug, tests green, awaiting commit approval"). Always answer this; never "unchanged".${tipLanguage}
@@ -607,35 +590,6 @@ function readAskShape(report: string, read: (label: string) => string | undefine
   const more = extractField(report, 'FOR_USER_ASK_MORE').replace(/[^\S\n]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
   if (more && !/^(none|n\/a|unchanged)\b\.?$/i.test(more)) out.ask_more = more.slice(0, cutEnd(more, 2000));
   return out;
-}
-
-/** Split an existing NOTE into its canonical sections. Content before the
- *  first known "## <Section>" header (or a note with no headers at all — the
- *  pre-migration free-form case) is returned under `preamble`. Exported for tests. */
-export function parseNoteSections(note: string): { sections: Partial<Record<NoteSection, string>>; preamble: string } {
-  const sections: Partial<Record<NoteSection, string>> = {};
-  // Header must be recognized at end-of-string too (`(?:\n|$)`): a note ending with
-  // an empty section (`…\n## Work Log` after trim) otherwise leaves that header text
-  // inside the previous section's body, and the next assemble fabricates a SECOND
-  // `## Work Log` header — corruption that compounds on every fire.
-  // "Goal" is the pre-2026-07-22 name of "User Request" — old notes keep parsing
-  // and are silently normalized to the new header on the next assemble.
-  const headerRe = /(?:^|\n)##\s+(Executive Summary|User Request|Goal|Context|Progress|References|Work Log)[^\S\n]*(?:\n|$)/g;
-  const hits: { name: NoteSection; start: number; bodyStart: number }[] = [];
-  for (let m = headerRe.exec(note); m; m = headerRe.exec(note)) {
-    const name = (m[1] === 'Goal' ? 'User Request' : m[1]) as NoteSection;
-    hits.push({ name, start: m.index, bodyStart: m.index + m[0].length });
-  }
-  const preamble = note.slice(0, hits.length ? hits[0].start : note.length).trim();
-  for (let i = 0; i < hits.length; i++) {
-    const end = i + 1 < hits.length ? hits[i + 1].start : note.length;
-    const body = note.slice(hits[i].bodyStart, end).trim();
-    // Duplicate headers (e.g. produced by the pre-fix EOF bug above): merge bodies
-    // instead of last-wins, so the earlier section's content is never dropped.
-    const prev = sections[hits[i].name];
-    sections[hits[i].name] = prev && body ? `${prev}\n${body}` : (prev || body);
-  }
-  return { sections, preamble };
 }
 
 /** Per-section answer from a self-report: unchanged | append (Work Log) | new content. */
@@ -870,6 +824,13 @@ export async function applyTitleDirective(taskId: string, directive: string, exp
     log.session.info('task title updated from self-report TITLE directive', {
       taskId, kind, from: fresh.title, to: next,
     });
+    // A second topic may be a second deliverable: the task and its latest sender hear of it.
+    if (kind === 'topic') {
+      const { noticeTitleTopic } = await import('../sessions/title-topic-notice.js');
+      const sep = next.lastIndexOf(' · ');
+      const topic = sep >= 0 ? next.slice(sep + 3) : value;
+      await noticeTitleTopic({ taskId, from: fresh.title, to: next, topic });
+    }
   } catch (err) {
     log.session.debug('title directive skipped', {
       taskId, error: err instanceof Error ? err.message : String(err),

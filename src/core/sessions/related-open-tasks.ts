@@ -93,6 +93,23 @@ export function _injectRelatedLookupForTesting(fn: Lookup | null): void { inject
 
 const isSession = (caller: CallerPlacement): caller is Extract<CallerPlacement, { session: unknown }> => 'session' in caller;
 
+/** How long a shown list keeps a session's confirm_new good. In memory: after a restart it is shown once more. */
+export const RELATED_LIST_SEEN_MS = 30 * 60 * 1000;
+const listShownAt = new Map<string, number>();
+
+function noteRelatedListShown(sessionId: string, now = Date.now()): void {
+  listShownAt.set(sessionId, now);
+  for (const [sid, at] of listShownAt) if (now - at > RELATED_LIST_SEEN_MS) listShownAt.delete(sid);
+}
+
+function sawRelatedList(sessionId: string, now = Date.now()): boolean {
+  const at = listShownAt.get(sessionId);
+  return at !== undefined && now - at <= RELATED_LIST_SEEN_MS;
+}
+
+/** Tests: forget which sessions were shown a list. */
+export function _resetRelatedListsShownForTesting(): void { listShownAt.clear(); }
+
 /** The confirm fields as the body sent them: a 400 message, or what they say. */
 export function readConfirm(body: { confirm_new?: unknown; new_reason?: unknown }): { error: string } | { confirm: boolean; reason: string } {
   const { confirm_new: confirm, new_reason: reason } = body;
@@ -127,11 +144,17 @@ export async function relatedOpenTasksGate(args: {
   const confirm = readConfirm(args.body);
   if ('error' in confirm) return { kind: 'bad_request', message: confirm.error };
   if (!isSession(args.caller)) return { kind: 'proceed' };
-  if (confirm.confirm) {
+  // confirm_new answers a list the caller has read: only after this session met the 409 lately.
+  // Sent blind (2026-11-16: a lead's FIRST create of an on-call task carried it, and last week's
+  // owner was never shown), the check runs anyway and a found list is shown first.
+  if (confirm.confirm && sawRelatedList(args.caller.session.id)) {
     log.web.info('related open tasks check: confirmed as new work', { callerSid: args.caller.session.id, newReason: confirm.reason });
     return { kind: 'proceed', footer: newReasonFooter(confirm.reason) };
   }
-  if (process.env.WALNUT_RELATED_CHECK === '0') return { kind: 'proceed', skipped: 'disabled' };
+  const blind = confirm.confirm;
+  const proceed = (gate: Extract<RelatedGate, { kind: 'proceed' }> = { kind: 'proceed' }): RelatedGate =>
+    (blind ? { ...gate, footer: newReasonFooter(confirm.reason) } : gate);
+  if (process.env.WALNUT_RELATED_CHECK === '0') return proceed({ kind: 'proceed', skipped: 'disabled' });
   const caller = args.caller;
   const callerTask = 'task' in caller ? caller.task : undefined;
   const input: LookupInput = {
@@ -149,7 +172,7 @@ export async function relatedOpenTasksGate(args: {
     if (args.idempotentId) {
       const { getTask } = await import('../task-manager.js');
       const existing = await getTask(args.idempotentId).catch(() => undefined);
-      if (existing?.id === args.idempotentId) return { kind: 'proceed' };
+      if (existing?.id === args.idempotentId) return proceed();
     }
     const lookup = injectedLookup ?? findRelatedOpenTasks;
     const stop = { stopped: false };
@@ -160,14 +183,17 @@ export async function relatedOpenTasksGate(args: {
     if (result === 'timeout') {
       stop.stopped = true;
       log.web.warn('related open tasks check timed out; creating without it', { callerSid: caller.session.id, deadlineMs: deadline });
-      return { kind: 'proceed', skipped: 'timeout' };
+      return proceed({ kind: 'proceed', skipped: 'timeout' });
     }
-    log.web.info('related open tasks check', { callerSid: caller.session.id, candidates: result.length, ms: Date.now() - started });
-    if (result.length === 0) return { kind: 'proceed' };
-    return { kind: 'refuse', candidates: result, ...refusalText(args.title, result) };
+    log.web.info('related open tasks check', { callerSid: caller.session.id, candidates: result.length, ms: Date.now() - started, blind });
+    if (result.length === 0) return proceed();
+    noteRelatedListShown(caller.session.id);
+    const text = refusalText(args.title, result);
+    return { kind: 'refuse', candidates: result, ...text,
+      ...(blind ? { message: `confirm_new counts only after you have read the related open tasks, and this create had not seen them yet. ${text.message}` } : {}) };
   } catch (err) {
     log.web.warn('related open tasks check failed; creating without it', { error: err instanceof Error ? err.message : String(err) });
-    return { kind: 'proceed', skipped: 'error' };
+    return proceed({ kind: 'proceed', skipped: 'error' });
   } finally {
     if (timer) clearTimeout(timer);
   }

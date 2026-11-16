@@ -68,7 +68,12 @@ import { TASK_ROUTING_CONTRACT } from './task-routing-contract.js';
 // Raised to 10,650 on 2026-11-09 for two charter lines: review stops after 3 rounds and no
 // brief raises the cap (two tasks reached rounds 9 and 12 under a lead's old "6"), and a
 // message the user says reached the wrong chat is forwarded, never sent back to him. It renders 10,588.
-export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 10_650;
+//
+// Raised to 11,150 on 2026-11-16 for the task routing contract's deliverable check: sharing a
+// package or file is not sharing a deliverable, task_get before handing, task_send's 409
+// scope_mismatch, and search (meaning, any language) to find an owner (a lead handed an outage
+// fix to an older code review's task in the same file; another missed an English-titled owner).
+export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 11_150;
 
 // The phase LIST comes from PHASE_ORDER, so adding or removing a phase updates
 // this prompt with no second edit. The phases the prompt names are typed

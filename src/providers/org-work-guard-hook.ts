@@ -28,8 +28,10 @@
  *
  * What counts: a command (a Bash command with anything but Walnut ops in it, Monitor), host_exec /
  * host_mcp_call / host_http however they are called (`walnut tools call host_exec` too), reading, searching or editing files outside the task's own
- * directory and Claude Code's per-project store (tool results, memory), web fetches, subagents, and
- * any other MCP server's tool. What does not: Walnut's own ops (the `walnut` CLI, `walnut-cloud
+ * directory and Claude Code's per-project store (tool results, memory), web fetches, a subagent that may
+ * change things (its start; the calls it makes inside are its own), and any other MCP server's tool. What
+ * does not: a read-only subagent (Explore, Plan: how a lead answers the user's direct question itself,
+ * 2026-11-16), the calls inside any subagent, Walnut's own ops (the `walnut` CLI, `walnut-cloud
  * start|send`, every other mcp__walnut__ tool), reading back a command's output, a picture the user
  * sent, and Claude Code's bookkeeping tools (ToolSearch, Skill, todo and task lists, crons, wakeups,
  * plan mode, questions). A Bash command is free only when every simple command in it is a Walnut op
@@ -130,8 +132,12 @@ function scan(s,   n, i, c, q, cur, w, nw, piped, pipew, anyw, work, r, hd, tab,
   }
   return work ? "work" : anyw ? "w" : "none"
 }
-function verdict(   tool, p, op) {
+function verdict(   tool, p, op, st) {
   tool = jstr(in_, "tool_name")
+  # A subagent's own calls (the hook input names its agent_id): the Agent call that started it counted.
+  if (jstr(in_, "agent_id") != "") return "free"
+  # A read-only subagent answers the user's direct question: looking, never counted.
+  if (tool == "Agent" || tool == "Task") { st = jstr(in_, "subagent_type"); if (st == "Explore" || st == "Plan") return "free" }
   if (tool ~ /^(ToolSearch|Skill|TodoWrite|TodoRead|TaskStop|TaskOutput|TaskCreate|TaskUpdate|TaskList|TaskGet|BashOutput|KillShell|KillBash|CronCreate|CronDelete|CronList|ScheduleWakeup|SendMessage|AskUserQuestion|EnterPlanMode|ExitPlanMode|ListMcpResourcesTool|ReadMcpResourceTool)$/) return "free"
   if (tool ~ /^mcp__walnut__/) { op = substr(tool, 14); return op ~ /^(host_exec|host_exec_pinned|host_mcp_call|host_http)$/ ? "count" : "free" }
   if (tool == "Bash") return walnut_only(jstr(in_, "command")) ? "free" : "count"

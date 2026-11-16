@@ -42,7 +42,10 @@ defineOp({
   description:
     'Message another task (never your own): continue its SAME deliverable, ask for evidence, or reply to a request. ' +
     'An independent goal needs task_create and a fresh session, not the old area owner. ' +
-    'Before continuation read task_get to confirm scope and the exact id; never pick by title alone. When another task is the caller, the ' +
+    'Before continuation read task_get to confirm scope and the exact id (its `deliverable` line must be this work); never pick by title alone. ' +
+    'The same package, component or file is not the same deliverable: a message naming a code review, ticket or incident number, or another ' +
+    'task\'s files, that an open target does not hold is refused (409 scope_mismatch, nothing sent): task_create that work, or pass ' +
+    'same_deliverable:"<why>" when it really is the target\'s own. When another task is the caller, the ' +
     'text is delivered as a <walnut-message kind="peer-note"> envelope, and the receiver treats it as the user\'s ' +
     'request: every task works for the same user. ' +
     'Work handed down or across asks the receiver to reply BY DEFAULT, with a Walnut fallback notification if it ' +
@@ -97,6 +100,7 @@ defineOp({
       + `and after 409 user_spoke_since: ${USER_WORDS_BACK} His messages in that task newer than the words you quote must be quoted too (409 user_spoke_since names them).`),
     force: z.boolean().optional().describe('Send to (or answer) a task that is COMPLETE, which reopens it. Needs `reason`'),
     reason: z.string().min(1).max(500).optional().describe('With force: what changed and why the complete task must act again. Shown to that task and the user'),
+    same_deliverable: z.string().min(10).max(500).optional().describe('After 409 scope_mismatch only: why the code reviews, tickets, incidents or other task\'s files it named ARE this task\'s own deliverable (its own revision, a follow-up of its request). Leads the delivered text. Another deliverable needs task_create instead'),
     messageId: z.string().regex(/^qm-[A-Za-z0-9-]{1,64}$/).optional().describe('Stable id for retry deduplication'),
     result: z.string().min(1).max(2000).optional().describe('With in_reply_to: one sentence saying what came of the work'),
     evidence: z.union([z.string(), z.array(z.string()).max(LIST_MAX)]).optional().describe('With in_reply_to: paths or links that show the result (a list, or one per line)'),
