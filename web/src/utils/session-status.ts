@@ -140,13 +140,14 @@ export const PHASE_LABELS: Record<TaskPhase, string> = {
  * To read drawn as Needs you (`shownState`), a wait read as Not started, Snoozed or Waiting.
  * `snoozed`: the caller's reading of the start date, for a task the server has not derived yet.
  */
-export function taskStatusLabel(task: Pick<Task, 'phase' | 'status' | 'user_status'>, snoozed = false): string {
+export function taskStatusLabel(task: Pick<Task, 'phase' | 'status' | 'user_status'> & Partial<Pick<Task, 'session_id'>>, snoozed = false): string {
   const state = shownState(taskUserState(task, snoozed));
   if (state !== 'waiting') return USER_STATE_LABELS[state];
   const us = task.user_status;
   const isSnoozed = us ? !!us.snoozed : snoozed;
   if (!isSnoozed && us?.limit) return LIMITED_LABEL;
-  if (!isSnoozed && (us ? us.kind === 'not-started' : task.phase === 'TODO')) return NOT_STARTED_LABEL;
+  // Not started means no session (2026-11-16): a TODO with one is not, as on the server.
+  if (!isSnoozed && (us ? us.kind === 'not-started' : task.phase === 'TODO' && !task.session_id)) return NOT_STARTED_LABEL;
   return stateWord('waiting', isSnoozed);
 }
 

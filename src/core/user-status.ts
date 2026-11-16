@@ -264,6 +264,9 @@ export interface UserStatusInput {
   startQueue?: { host?: string; reason?: string } | null;
   /** Its last start was refused or failed and no session ran since: why ("Did not start: ..."). */
   startFailed?: string | null;
+  /** Its start is on the way: the start made its session record and the CLI is not up yet
+   *  (Task.last_start 'starting', or the record still `awaiting_spawn`). */
+  startInFlight?: boolean;
   /** Its session's process status (running / idle / stopped / error). */
   processStatus?: string;
   /** Its session's own work that runs on after its turn (sessions/outliving-work.ts): a background
@@ -818,7 +821,22 @@ export function queuedWaitingOn(q: { host?: string; reason?: string }): string {
   return `Waiting for a free slot on ${host}${q.reason ? ` (${q.reason})` : ''}: Walnut starts it automatically when there is room`;
 }
 
-export function deriveUserStatus(input: UserStatusInput, nowMs: number = Date.now()): UserStatus {
+/**
+ * A task with a session was started, whatever its phase says: Not started means no session ever
+ * ran it (2026-11-16, the user: "not starrted means no sesisonc reate"). A TODO with one (a session
+ * imported from outside Walnut, a completed task reopened, a side thread promoted) is read as a
+ * turn that ended: Working while it runs, else what that turn left (a result to read, its lead to
+ * look, the user's next message for Main or a lead). Not a start on the way (derive reads it as
+ * Working) nor one that failed (its record never ran a turn; derive says why). Exported for the
+ * guard test.
+ */
+export function startedPhaseOf(input: UserStatusInput): UserStatusInput {
+  if (input.phase !== 'TODO' || !input.hasSession || input.startInFlight || input.startFailed) return input;
+  return { ...input, phase: 'NEED_ACTION' };
+}
+
+export function deriveUserStatus(raw: UserStatusInput, nowMs: number = Date.now()): UserStatus {
+  const input = startedPhaseOf(raw);
   const derived = orgNodeNeverNeeds(hostDownOver(derive(input, nowMs), input), input);
   // A thread's ask is the thread; the node's own report words are no line of it.
   const line = derived.source === 'thread' ? null : lineOf(input, derived);
@@ -1155,7 +1173,8 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   // Its start did not happen (no host had room, the spawn failed) and nothing ran since: the row
   // says why, so its lead and the user see it (2026-11-06, the user: a start that did not start is
   // an error). A person's own mark of Needs you still says so.
-  if (input.startFailed && !input.hasSession && !input.markedByPerson) {
+  // A TODO's start that made a session record before it failed: that record never ran a turn.
+  if (input.startFailed && (!input.hasSession || input.phase === 'TODO') && !input.markedByPerson) {
     return strip({ state: 'waiting', kind: 'not-started', waitingOn: clipped(input.startFailed.startsWith('Did not start') ? input.startFailed : `Did not start: ${input.startFailed}`, 240), ...w });
   }
 
@@ -1284,6 +1303,9 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     return strip({ state: 'waiting', kind: 'stuck', waitingOn: 'It stopped, and nothing will wake it', ...w });
   }
 
+  // Its start is on the way (the CLI comes up next): Working, never Not started.
+  if (input.phase === 'TODO' && input.hasSession && input.startInFlight) return strip({ state: 'working', ...w });
+  // Only a TODO no session ever ran reaches here (startedPhaseOf).
   if (input.phase === 'TODO') return strip({ state: 'waiting', kind: 'not-started', waitingOn: 'Not started yet', ...w });
 
   // WAITING (and any phase an older writer left): on what, from the facts first, then its words.

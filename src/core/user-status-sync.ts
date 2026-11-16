@@ -530,6 +530,7 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
     phase: task.phase,
     status: task.status,
     hasSession: own.length > 0 || !!task.session_id,
+    ...(task.last_start?.state === 'starting' || main?.errorReason === 'awaiting_spawn' ? { startInFlight: true } : {}),
     ...(task.start_queue ? { startQueue: { host: task.start_queue.host, reason: task.start_queue.reason } } : {}),
     ...(task.last_start?.state === 'failed' && task.last_start.error ? { startFailed: task.last_start.error } : {}),
     processStatus: anyRunning ? 'running' : main?.processStatus,

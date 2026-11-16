@@ -32,6 +32,7 @@ import { fixtureHome, fixtureRealHome } from './fixture-home'
 import { buildCompareFixture, compareFixtureTask } from './compare-fixture'
 import { writeHealthMonitorSeed } from './health-monitor-fixture'
 import { REAL_VOICE_STT, realVoiceInstall } from './real-voice-fixture'
+import { oldImportRecord, oldImportTask, writeImportedRunTranscripts } from './imported-run-fixture'
 
 // Set WALNUT_HOME to temp dir BEFORE importing server modules.
 // Ephemeral identity is argv-based (see IS_EPHEMERAL in src/constants.ts) — the
@@ -1119,6 +1120,8 @@ await fs.writeFile(
       whaleTask(new Date().toISOString()),
       whaleTask(new Date().toISOString(), 'anchor'),
       whaleTask(new Date().toISOString(), 'gap'),
+      // An import an older importer left as Not started (imported-run-status.spec.ts).
+      oldImportTask(new Date().toISOString()),
       {
         // Same-browser task-store fixture (task-store-same-browser-instant.spec).
         // Its OWN task: that spec renames and completes it mid-run, which would
@@ -4082,6 +4085,7 @@ await fs.writeFile(
   JSON.stringify({
     version: 2,
     sessions: [
+      oldImportRecord(new Date().toISOString()),
       {
         claudeSessionId: 'pw-vscode-session',
         taskId: 'pw-task-vscode',
@@ -5584,6 +5588,7 @@ const mockDaemon = WIRE_MOCK_DAEMON
       turnSnapshotRoot: TURN_SNAPSHOT_ROOT,
     })
   : null
+await writeImportedRunTranscripts(tmpBase, Date.now())
 const MOCK_CLI = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../providers/mock-claude.mjs')
 sessionRunner.setCliCommand(MOCK_CLI)
 if (!mockDaemon) {

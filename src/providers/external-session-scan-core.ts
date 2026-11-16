@@ -409,6 +409,13 @@ const BUILTIN_CLI_COMMANDS = new Set([
   'settings',
 ])
 
+/** The body of a text that opens with the walnut-message envelope Walnut writes. */
+function walnutEnvelopeBody(text: string): string | undefined {
+  const match = /^\s*<walnut-message(?:\s[^>]*)?>([\s\S]*?)<\/walnut-message>/.exec(text)
+  // The envelope escapes only the tag's own leading bracket in its body (envelope-kit.ts escapeBody): undo that.
+  return match ? match[1].replace(/&lt;(\/?walnut-message)/gi, '<$1').replace(/&amp;lt;(\/?walnut-message)/gi, '&lt;$1') : undefined
+}
+
 function extractTag(text: string, tag: string): string | undefined {
   const match = new RegExp('<' + tag + '(?:\\s[^>]*)?>([\\s\\S]*?)</' + tag + '>').exec(text)
   return match ? match[1] : undefined
@@ -420,6 +427,17 @@ function extractTag(text: string, tag: string): string | undefined {
  * anything the skip rule matches yields null (keep looking).
  */
 function titleFromText(text: string): string | null {
+  // Walnut's own message envelope (send-frame.ts) is Walnut's format, not the
+  // CLI's: its body is what the sender asked, so it is read through the same
+  // rule. A program's run Walnut files (a plugin's claimed import) often opens
+  // with one, and the CLI's tag rule alone left it titled "<Engine> session <id>"
+  // forever (2026-11-16). Never a recursion past one level: a body that opens
+  // with a tag is skipped like any other.
+  const envelope = walnutEnvelopeBody(text)
+  if (envelope !== undefined) {
+    const body = envelope.trim()
+    return body && !SKIP_FIRST_PROMPT_PATTERN.test(body) && !isLegacyPreamble(body) ? body : null
+  }
   const commandName = extractTag(text, 'command-name')
   if (commandName !== undefined) {
     if (BUILTIN_CLI_COMMANDS.has(commandName.trim().replace(/^\//, ''))) return null

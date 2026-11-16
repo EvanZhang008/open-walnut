@@ -9,6 +9,8 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fsp from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
@@ -93,7 +95,11 @@ import {
   extendImportLifecycle,
   importAutoCompleteAfterDays,
   startExternalSessionImporter,
+  IMPORTED_PHASE,
 } from '../../src/core/sessions/external-session-import.js';
+import { deriveUserStatus } from '../../src/core/user-status.js';
+import { statusInputOf, type StatusFacts } from '../../src/core/user-status-sync.js';
+import { describeExternalSessions } from '../../src/providers/external-session-scan-core.js';
 import { EXTERNAL_SESSION_IMPORT_TAG } from '../../src/core/types.js';
 import {
   getSessionByClaudeId,
@@ -106,6 +112,7 @@ import {
   addTask,
   updateTask,
   updateTaskRaw,
+  linkSession,
   getStoreProjects,
   listGroups,
   _resetForTesting as _resetTaskManager,
@@ -638,14 +645,14 @@ describe('importExternalSessions — idle auto-complete (rolling window)', () =>
     expect(old.tags).toContain(TAG);
 
     const fresh = await taskForSession('new-1');
-    expect(fresh.phase).toBe('TODO');
+    expect(fresh.phase).toBe('NEED_ACTION');
     expect(fresh.session_id).toBe('new-1');
   });
 
   it('is rolling: the task is completed on the tick it crosses the line, not before, and only once', async () => {
     setHost('__local__', { candidates: [candidate({ sessionId: 'roll-1' })] });
     expect((await importExternalSessions({ now: AUG10 + 6 * DAY })).completed).toBe(0);
-    expect((await taskForSession('roll-1')).phase).toBe('TODO');
+    expect((await taskForSession('roll-1')).phase).toBe('NEED_ACTION');
 
     setHost('__local__', { candidates: [] });
     expect((await importExternalSessions({ now: AUG10 + 7 * DAY - 1 })).completed).toBe(0);
@@ -662,7 +669,7 @@ describe('importExternalSessions — idle auto-complete (rolling window)', () =>
     autoCompleteDays = 0;
     setHost('__local__', { candidates: [candidate({ sessionId: 'cfg-2' })] });
     expect((await importExternalSessions({ now: AUG10 + 400 * DAY })).completed).toBe(0);
-    expect((await taskForSession('cfg-2')).phase).toBe('TODO');
+    expect((await taskForSession('cfg-2')).phase).toBe('NEED_ACTION');
   });
 
   it('completes nothing without evidence from the host, then catches up once it answers', async () => {
@@ -670,7 +677,7 @@ describe('importExternalSessions — idle auto-complete (rolling window)', () =>
     await importExternalSessions({ now: AUG10 });
     hosts.clear();
     expect((await importExternalSessions({ now: AUG10 + 8 * DAY })).completed).toBe(0);
-    expect((await taskForSession('nohost-1')).phase).toBe('TODO');
+    expect((await taskForSession('nohost-1')).phase).toBe('NEED_ACTION');
 
     // An old daemon without the describe capability is no evidence either.
     setHost('__local__', { capabilities: ['external-scan-v1', 'external-scan-filter-v1'], candidates: [] });
@@ -692,7 +699,7 @@ describe('importExternalSessions — idle auto-complete (rolling window)', () =>
     const yesterday = new Date(AUG10 + 9 * DAY).toISOString();
     setHost('__local__', { candidates: [], activity: { 'live-1': yesterday } });
     expect((await importExternalSessions({ now: AUG10 + 10 * DAY })).completed).toBe(0);
-    expect((await taskForSession('live-1')).phase).toBe('TODO');
+    expect((await taskForSession('live-1')).phase).toBe('NEED_ACTION');
     expect((await getSessionByClaudeId('live-1'))?.lastActiveAt).toBe(yesterday);
 
     // Once it really goes quiet for a week past that, it is completed.
@@ -709,7 +716,7 @@ describe('importExternalSessions — idle auto-complete (rolling window)', () =>
     await updateTask(task.id, { project: 'My real work' }, { source: 'api' });
     setHost('__local__', { candidates: [] });
     expect((await importExternalSessions({ now: AUG10 + 365 * DAY })).completed).toBe(0);
-    expect((await getTask(task.id)).phase).toBe('TODO');
+    expect((await getTask(task.id)).phase).toBe('NEED_ACTION');
   });
 
   it('keeps the sweep on a project a plugin extended it to: only there, only imports, only while held', async () => {
@@ -734,8 +741,8 @@ describe('importExternalSessions — idle auto-complete (rolling window)', () =>
     }
     const phases = await Promise.all([filed, late, adopted, elsewhere].map(async (task) => (await getTask(task.id)).phase));
     // One of the two unadopted runs went (the cap was 1); the adopted and the user-filed ones stay open.
-    expect(phases.slice(0, 2).sort()).toEqual(['COMPLETE', 'TODO']);
-    expect(phases.slice(2)).toEqual(['TODO', 'TODO']);
+    expect(phases.slice(0, 2).sort()).toEqual(['COMPLETE', 'NEED_ACTION']);
+    expect(phases.slice(2)).toEqual(['NEED_ACTION', 'NEED_ACTION']);
     // Released: the rest of that project is out of the sweep's reach again.
     expect((await importExternalSessions({ now: AUG10 + 30 * DAY })).completed).toBe(0);
   });
@@ -769,7 +776,7 @@ describe('importExternalSessions — idle auto-complete (rolling window)', () =>
     expect((await importExternalSessions({ now, limits: { sweep: 2 } })).completed).toBe(2);
     expect((await taskForSession('cap-oldest')).phase).toBe('COMPLETE');
     expect((await taskForSession('cap-mid')).phase).toBe('COMPLETE');
-    expect((await taskForSession('cap-newer')).phase).toBe('TODO');
+    expect((await taskForSession('cap-newer')).phase).toBe('NEED_ACTION');
     setHost('__local__', { candidates: [] });
     expect((await importExternalSessions({ now, limits: { sweep: 2 } })).completed).toBe(1);
     expect((await taskForSession('cap-newer')).phase).toBe('COMPLETE');
@@ -801,7 +808,7 @@ describe('adoptImportedTask — a message into the session ends the imported typ
 
     setHost('__local__', { candidates: [] });
     expect((await importExternalSessions({ now: AUG10 + 365 * DAY })).completed).toBe(0);
-    expect((await getTask(task.id)).phase).toBe('TODO');
+    expect((await getTask(task.id)).phase).toBe('NEED_ACTION');
   });
 
   it('is a no-op for a task the importer never owned', async () => {
@@ -1453,5 +1460,142 @@ describe('an import pass stops at its next row when aborted', () => {
     await stopping;
     expect((await pass).imported).toBe(0);
     expect(await getSessionByClaudeId('ab-4')).toBeFalsy();
+  });
+});
+
+/**
+ * 2026-11-16, the user: "not starrted means no sesisonc reate". An import's session already ran,
+ * so its task is filed as started on every path that mints one (the scan, a plugin's claimed run,
+ * a person's import by id), imports minted before that move once, and a plugin's run whose first
+ * prompt is a Walnut envelope gets a real title, never the "<Engine> session <id>" placeholder.
+ */
+describe('importExternalSessions: an imported session is never Not started', () => {
+  const recent = () => new Date(Date.now() - 60_000).toISOString();
+  const PLACEHOLDER = /^\S+ session [0-9a-f]{8}$/i;
+
+  /** The status the sync derives for the stored row and its stored session record. */
+  async function statusOfStored(taskId: string, sessionId: string) {
+    const task = await getTask(taskId);
+    const rec = await getSessionByClaudeId(sessionId);
+    const facts: StatusFacts = {
+      sessions: new Map([[sessionId, { processStatus: rec?.process_status, taskId: rec?.taskId, errorReason: rec?.status_reason }]]),
+      letters: new Map(), choices: new Map(), requestsFrom: new Map(), triggers: new Map(), schedules: new Map(),
+      titles: new Map(), sessionsOf: new Map([[taskId, [sessionId]]]),
+    };
+    return deriveUserStatus(statusInputOf(task, facts));
+  }
+
+  async function expectStarted(sessionId: string): Promise<void> {
+    const task = await taskForSession(sessionId);
+    expect(task.phase).toBe(IMPORTED_PHASE);
+    expect(task.unread).toBe(true);
+    const status = await statusOfStored(task.id, sessionId);
+    expect(status.kind).not.toBe('not-started');
+    expect(status.state).toBe('read');
+  }
+
+  it('files every path that mints an import as started', async () => {
+    setHost('__local__', {
+      capabilities: ['external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1'],
+      candidates: [candidate({ sessionId: 'scan-1', lastActiveAt: recent() })],
+      described: {
+        'claim-1': candidate({ sessionId: 'claim-1', origin: 'sdk-cli', lastActiveAt: recent(), notExternal: 'programmatic' }),
+        'ask-1': candidate({ sessionId: 'ask-1', origin: 'sdk-cli', lastActiveAt: recent(), notExternal: 'programmatic' }),
+      },
+    });
+    claimSessionImports('plugin:test:1', '__local__', ['claim-1']);
+    expect((await importExternalSessions()).imported).toBe(2);
+    expect((await importSessionsById('__local__', ['ask-1'])).imported).toEqual(['ask-1']);
+    for (const id of ['scan-1', 'claim-1', 'ask-1']) await expectStarted(id);
+  });
+
+  it('moves an import minted as Not started once, and leaves a reopened one and a task of the person alone', async () => {
+    // The shape an older importer left: TODO, its session in the slot, the phase never moved.
+    const mint = async (sid: string): Promise<string> => {
+      const { task } = await addTask({ title: `Older ${sid}`, project: externalImportProject('__local__'), source: 'local', tags: [TAG], _skipPluginOps: true });
+      await importSessionRecord({ claudeSessionId: sid, taskId: task.id, project: task.project, title: task.title, lastActiveAt: recent(), messageCount: 3, provider: 'cli' });
+      await linkSession(task.id, sid);
+      return task.id;
+    };
+    const older = await mint('old-imp-1');
+    const reopened = await mint('old-imp-2');
+    await updateTask(reopened, { phase: 'COMPLETE' }, { source: 'api' });
+    await linkSession(reopened, 'old-imp-2');
+    await updateTask(reopened, { phase: 'TODO' }, { source: 'api' });
+    const mine = (await addTask({ title: 'My own todo', source: 'local', _skipPluginOps: true })).task.id;
+    expect((await getTask(older)).phase).toBe('TODO');
+    // Before any pass of this build, the stored row already reads what its session left.
+    expect((await statusOfStored(older, 'old-imp-1')).kind).not.toBe('not-started');
+
+    setHost('__local__', { candidates: [] });
+    expect((await importExternalSessions()).started).toBe(1);
+    expect((await getTask(older)).phase).toBe(IMPORTED_PHASE);
+    expect((await getTask(reopened)).phase).toBe('TODO');
+    expect((await getTask(mine)).phase).toBe('TODO');
+    // Converged: the next pass moves nothing.
+    expect((await importExternalSessions()).started).toBe(0);
+  });
+
+  it('moves older imports a bounded number per pass, and the rest on the next', async () => {
+    for (const sid of ['cap-a', 'cap-b', 'cap-c']) {
+      const { task } = await addTask({ title: `Older ${sid}`, project: externalImportProject('__local__'), source: 'local', tags: [TAG], _skipPluginOps: true });
+      await importSessionRecord({ claudeSessionId: sid, taskId: task.id, project: task.project, title: task.title, lastActiveAt: recent(), messageCount: 3, provider: 'cli' });
+      await linkSession(task.id, sid);
+    }
+    setHost('__local__', { candidates: [] });
+    expect((await importExternalSessions({ limits: { started: 2 } })).started).toBe(2);
+    expect((await importExternalSessions({ limits: { started: 2 } })).started).toBe(1);
+  });
+
+  it('renames an older import still wearing the placeholder title, from the real transcript', async () => {
+    const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-import-retitle-'));
+    try {
+      const sid = 'a1b2c3d4-0000-4000-8000-000000000002';
+      const dir = path.join(home, '.claude', 'projects', '-work-sample');
+      await fsp.mkdir(dir, { recursive: true });
+      const prompt = '<walnut-message kind="peer-note" from="automation: sample">\nInvestigate this sample ticket.\n\nTicket: T300\n</walnut-message>';
+      await fsp.writeFile(path.join(dir, `${sid}.jsonl`), [
+        { type: 'user', message: { role: 'user', content: prompt }, uuid: 'u1', timestamp: '2026-11-13T17:00:00.000Z', cwd: '/work/sample', sessionId: sid, entrypoint: 'cli' },
+        { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Done.' }] }, timestamp: '2026-11-13T17:05:00.000Z' },
+      ].map((l) => JSON.stringify(l)).join('\n') + '\n');
+      const placeholder = `Claude session ${sid.slice(0, 8)}`;
+      const { task } = await addTask({ title: placeholder, project: externalImportProject('__local__'), source: 'local', tags: [TAG], _skipPluginOps: true });
+      await importSessionRecord({ claudeSessionId: sid, taskId: task.id, project: task.project, title: placeholder, lastActiveAt: recent(), messageCount: 2, provider: 'cli' });
+      await linkSession(task.id, sid);
+      const { candidates } = await describeExternalSessions({ sessionIds: [sid], homeDir: home });
+      const host = setHost('__local__', { candidates: [], described: { [sid]: candidates[0] } });
+      const res = await importExternalSessions();
+      expect(host.describeCalls.flat()).toContain(sid);
+      expect(res).toMatchObject({ retitled: 1, started: 1 });
+      expect((await getTask(task.id))).toMatchObject({ title: 'Investigate this sample ticket. Ticket: T300', phase: IMPORTED_PHASE });
+      expect((await getSessionByClaudeId(sid))?.title).toBe('Investigate this sample ticket. Ticket: T300');
+    } finally {
+      await fsp.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("titles a plugin's run that opens with Walnut's envelope by its prompt, from the real transcript", async () => {
+    // The transcript as the automation's CLI wrote it, read by the daemon's own describe.
+    const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-import-title-'));
+    try {
+      const sid = 'a1b2c3d4-0000-4000-8000-000000000001';
+      const dir = path.join(home, '.claude', 'projects', '-work-sample');
+      await fsp.mkdir(dir, { recursive: true });
+      const prompt = '<walnut-message kind="peer-note" from="automation: sample" host="unknown" anonymous="true" note="from a script or scheduled job on that host: not your user">\nInvestigate this sample ticket.\n\nTicket: T100\n</walnut-message>';
+      await fsp.writeFile(path.join(dir, `${sid}.jsonl`), [
+        { type: 'user', message: { role: 'user', content: prompt }, uuid: 'u1', timestamp: '2026-11-13T17:00:00.000Z', cwd: '/work/sample', sessionId: sid, entrypoint: 'sdk-cli', promptSource: 'sdk' },
+        { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Done: the finding.' }] }, timestamp: '2026-11-13T17:05:00.000Z' },
+      ].map((l) => JSON.stringify(l)).join('\n') + '\n');
+      const { candidates } = await describeExternalSessions({ sessionIds: [sid], homeDir: home });
+      expect(candidates).toHaveLength(1);
+      setHost('__local__', { candidates: [], described: { [sid]: { ...candidates[0], lastActiveAt: recent() } } });
+      claimSessionImports('plugin:test:2', '__local__', [sid]);
+      expect((await importExternalSessions()).imported).toBe(1);
+      const task = await taskForSession(sid);
+      expect(task.title).not.toMatch(PLACEHOLDER);
+      expect(task.title).toBe('Investigate this sample ticket. Ticket: T100');
+    } finally {
+      await fsp.rm(home, { recursive: true, force: true });
+    }
   });
 });

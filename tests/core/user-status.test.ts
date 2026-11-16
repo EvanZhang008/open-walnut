@@ -19,7 +19,8 @@ describe('the state is the phase', () => {
       hasSession: true, processStatus: 'idle', openLetter: 'Pick a design', openChoice: 'Which host?',
       report: report({ state: 'needs', ask: 'Approve?' }), triggers: ['CI watch'], openWorkers: 2,
     }
-    const want = { TODO: 'waiting', IN_PROGRESS: 'waiting', WAITING: 'waiting', NEED_ACTION: 'needs', COMPLETE: 'done' }
+    // A TODO with a session was started (2026-11-16, startedPhaseOf): it reads as a turn that ended.
+    const want = { TODO: 'needs', IN_PROGRESS: 'waiting', WAITING: 'waiting', NEED_ACTION: 'needs', COMPLETE: 'done' }
     for (const phase of PHASES) expect(deriveUserStatus({ phase, ...noisy }, NOW).state, phase).toBe(want[phase])
   })
 

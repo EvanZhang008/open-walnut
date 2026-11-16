@@ -415,15 +415,35 @@ describe('scanExternalSessions — title rule (CLI parity)', () => {
     expect(await titleOf('cont-3')).toBeUndefined()
   })
 
-  it('skips any line that opens with a markup tag, as the CLI does (Walnut envelopes included)', async () => {
+  it('skips any line that opens with a markup tag, as the CLI does (Walnut injections included)', async () => {
     transcript('warm-1', [user('<walnut-cache-warmup>This is a cache warm-up from Walnut.</walnut-cache-warmup>'), assistant, user('look at the failing build'), assistant])
     transcript('digest-1', [user('<walnut-side-thread-digest>summary</walnut-side-thread-digest>'), assistant, user('next step please'), assistant])
     transcript('ctx-1', [user('<context_entry> You are an agent</context_entry>'), assistant, user('check the queue'), assistant])
-    transcript('only-tag', [user('<walnut-message from="task x">please rebase</walnut-message>'), assistant])
+    transcript('only-tag', [user('<walnut-cache-warmup>warm</walnut-cache-warmup>'), assistant])
     expect(await titleOf('warm-1')).toBe('look at the failing build')
     expect(await titleOf('digest-1')).toBe('next step please')
     expect(await titleOf('ctx-1')).toBe('check the queue')
     expect(await titleOf('only-tag')).toBeUndefined()
+  })
+
+  // 2026-11-16: a plugin's claimed runs open with Walnut's own message envelope (an automation's
+  // prompt), and skipping it as a tag left every such import titled "Claude session <id>".
+  it("titles by the body of Walnut's own message envelope, and still skips a body that is markup", async () => {
+    const prompt = 'Investigate this sample ticket.\n\nTicket: T100 (id: 0000-1111)\n\nUse the investigate skill.'
+    transcript('env-1', [user(`<walnut-message kind="peer-note" from="automation: sample" host="unknown" anonymous="true" note="from a script or scheduled job on that host: not your user">\n${prompt}\n</walnut-message>\nReply when done: none`), assistant])
+    transcript('env-2', [user('<walnut-message from="task x">please rebase</walnut-message>'), assistant])
+    transcript('env-3', [user('<walnut-message from="task x"><walnut-cache-warmup>w</walnut-cache-warmup></walnut-message>'), assistant, user('then fix the parser'), assistant])
+    transcript('env-4', [user('<walnut-message from="task x">   </walnut-message>'), assistant])
+    // The envelope escapes its own tag in a body (envelope-kit.ts escapeBody); the title reads it back.
+    transcript('env-5', [user('<walnut-message from="task x">quote &lt;walnut-message&gt; and &amp;lt;walnut-message here</walnut-message>'), assistant])
+    expect(await titleOf('env-1')).toBe('Investigate this sample ticket. Ticket: T100 (id: 0000-1111) Use the investigate skill.')
+    expect(await titleOf('env-2')).toBe('please rebase')
+    expect(await titleOf('env-3')).toBe('then fix the parser')
+    expect(await titleOf('env-4')).toBeUndefined()
+    expect(await titleOf('env-5')).toBe('quote <walnut-message&gt; and &lt;walnut-message here')
+    // describe (the by-id re-read that renames an import with a placeholder title) reads the same rule.
+    const { candidates } = await describeExternalSessions({ sessionIds: ['env-1'], homeDir: home })
+    expect(candidates[0]?.title).toBe('Investigate this sample ticket. Ticket: T100 (id: 0000-1111) Use the investigate skill.')
   })
 
   it('skips interrupt markers', async () => {

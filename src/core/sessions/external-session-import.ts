@@ -19,7 +19,9 @@
  *      so imported sessions behave exactly like native ones — status circle,
  *      click-through, resume. The run that makes a host's project puts it under
  *      the VP of the other import projects (import-project-vp.ts).
- *   4. Import each candidate as a `stopped` session record with its real title.
+ *   4. Import each candidate as a `stopped` session record with its real title,
+ *      its task filed as started (IMPORTED_PHASE): its session already ran, and
+ *      Not started means no session ever did.
  *   5. Record the run's folders in frequent-dirs (one write), so a user whose
  *      history lives in their own Claude Code install finds those folders as
  *      quick paths in the folder picker.
@@ -86,6 +88,8 @@ const PER_RUN_IMPORT_LIMIT = 100;
 const SWEEP_LIMIT_PER_RUN = 300;
 /** Per-run cap on folder backfills for imports that predate cwd folders. */
 const FOLDER_BACKFILL_LIMIT_PER_RUN = 300;
+/** Older Not started imports filed as started per run (fileOlderImportsAsStarted). */
+const STARTED_BACKFILL_LIMIT_PER_RUN = 100;
 /** Per-run cap on imports re-read to check they really were outside sessions. */
 const AUDIT_LIMIT_PER_RUN = 100;
 /** Claimed sessions looked up per host per run (sessionImports.include). */
@@ -187,6 +191,53 @@ export interface ExternalImportResult {
   projectByHost: Record<string, string>;
   /** v1 bucket tasks removed this run (their sessions re-import per-task). */
   cleanedLegacyBuckets: number;
+  /** Older imports still filed as Not started, moved to IMPORTED_PHASE this run. */
+  started: number;
+}
+
+/**
+ * The phase an imported session's task is filed in. Its session already ran (it
+ * may still run in a terminal, which the importer cannot see), so it is never
+ * TODO: Not started means no session (2026-11-16, the user: "not starrted means
+ * no sesisonc reate"). Its last turn ended outside Walnut, so what it left is
+ * there to read, as for a turn Walnut ran; the idle sweep closes it later.
+ */
+export const IMPORTED_PHASE = 'NEED_ACTION' as const;
+
+/**
+ * File one imported task as started: TODO to IMPORTED_PHASE, only while it is
+ * still the TODO the importer minted (no phase move since, which a person's
+ * reopen or a turn would be). Raw write, like the sweep's.
+ */
+async function fileAsStarted(taskId: string, emitEvent: boolean): Promise<boolean> {
+  const { updateTaskRaw } = await import('../task-manager.js');
+  const res = await updateTaskRaw(taskId, { phase: IMPORTED_PHASE, ...readMarkerForPhase(IMPORTED_PHASE) }, {
+    emitEvent, push: false, source: EXTERNAL_IMPORT_EVENT_SOURCE,
+    shouldUpdate: (current) => current.phase === 'TODO' && !current.phase_changed_at && !!current.session_id,
+  });
+  return res.changed;
+}
+
+/**
+ * The one-time move of imports minted before IMPORTED_PHASE (they sat under Not
+ * started with a finished session, 2026-11-16): every held import still in the
+ * TODO it was minted in, with its session in the slot. Bounded per run like the
+ * folder backfill; runs every tick and finds nothing once an install has converged.
+ */
+async function fileOlderImportsAsStarted(imports: Task[], limit: number): Promise<number> {
+  let moved = 0;
+  for (const task of imports) {
+    if (moved >= limit) break;
+    if (task.phase !== 'TODO' || task.phase_changed_at || !task.session_id || isLegacyBucket(task)) continue;
+    try {
+      if (await fileAsStarted(task.id, false)) moved++;
+    } catch (err) {
+      log.session.warn('external import could not file an older import as started', {
+        taskId: task.id, error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return moved;
 }
 
 /**
@@ -983,6 +1034,7 @@ async function importCandidate(
   }
 
   await linkSession(task.id, candidate.sessionId);
+  await fileAsStarted(task.id, true);
   return 'imported';
 }
 
@@ -995,7 +1047,7 @@ export interface ImportExternalSessionsOptions {
   /** Clock for the idle sweep (tests advance it; production leaves it unset). */
   now?: number;
   /** Per-run caps (test seam; production uses the module constants). */
-  limits?: { sweep?: number; folderBackfill?: number; retitle?: number; audit?: number };
+  limits?: { sweep?: number; folderBackfill?: number; retitle?: number; audit?: number; started?: number };
   /**
    * Ends the pass at its next row: the server's shutdown aborts it, so a stop never
    * waits on a whole pass (2026-11-12: a deploy's smoke boot bailed waiting on one).
@@ -1014,7 +1066,7 @@ async function runImport(options: ImportExternalSessionsOptions): Promise<Extern
   const now = options.now ?? Date.now();
   const result: ExternalImportResult = {
     imported: 0, retitled: 0, completed: 0, foldered: 0, removed: 0, skipped: 0, hostsScanned: [], hostsSkipped: [],
-    truncated: false, projectByHost: {}, cleanedLegacyBuckets: 0,
+    truncated: false, projectByHost: {}, cleanedLegacyBuckets: 0, started: 0,
   };
 
   const { getConfig } = await import('../config-manager.js');
@@ -1047,17 +1099,19 @@ async function runImport(options: ImportExternalSessionsOptions): Promise<Extern
   if (stopped('folders')) return result;
   const kept = result.removed > 0 ? await queryTasks({ tagsAll: [HOLDER_TAG] }) : imports;
   result.foldered = await backfillImportFolders(folders, kept, options.limits?.folderBackfill ?? FOLDER_BACKFILL_LIMIT_PER_RUN);
+  if (stopped('started')) return result;
+  result.started = await fileOlderImportsAsStarted(kept, options.limits?.started ?? STARTED_BACKFILL_LIMIT_PER_RUN);
   if (stopped('sweep')) return result;
   result.completed = await sweepIdleImports(kept, idleMs, now, options.limits?.sweep ?? SWEEP_LIMIT_PER_RUN);
 
-  if (result.imported > 0 || result.retitled > 0 || result.completed > 0 || result.foldered > 0 || result.removed > 0) {
+  if (result.imported > 0 || result.retitled > 0 || result.completed > 0 || result.foldered > 0 || result.removed > 0 || result.started > 0) {
     // One coarse refresh — addTask already emitted per-task events; this nudges
     // list surfaces that coalesce on task:updated (and is the ONLY signal for the
     // sweep/backfill writes, which deliberately emit nothing per row).
     bus.emit(EventNames.TASK_UPDATED, {}, [], { source: EXTERNAL_IMPORT_EVENT_SOURCE });
     log.session.info('imported external sessions', {
       imported: result.imported, retitled: result.retitled, completed: result.completed,
-      foldered: result.foldered, removed: result.removed, skipped: result.skipped,
+      foldered: result.foldered, removed: result.removed, skipped: result.skipped, started: result.started,
       hosts: result.hostsScanned.join(','),
       projects: Object.values(result.projectByHost).join(','),
     });
