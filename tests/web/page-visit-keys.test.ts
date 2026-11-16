@@ -17,7 +17,7 @@ const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
 
 /** `{ id: 'notes', title: 'Notes', path: '/notes', … }` entries of CORE_APPS. */
 function coreApps(): Array<{ id: string; title: string; path: string }> {
-  const src = read('web/src/apps/core-apps.tsx')
+  const src = read('web/src/apps/core-app-list.ts')
   return [...src.matchAll(/id: '([^']+)', title: '([^']+)', path: '([^']+)'/g)].map((m) => ({ id: m[1]!, title: m[2]!, path: m[3]! }))
 }
 

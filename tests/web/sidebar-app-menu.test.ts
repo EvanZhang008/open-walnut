@@ -11,7 +11,7 @@ import type { AppKind, RegisteredApp } from '../../web/src/apps/registry.js'
 import type { ContextMenuItem } from '../../web/src/utils/context-menu.js'
 
 // The built-in apps, read from their source without loading every page it imports.
-const CORE_SRC = fs.readFileSync(path.resolve(__dirname, '../../web/src/apps/core-apps.tsx'), 'utf8')
+const CORE_SRC = fs.readFileSync(path.resolve(__dirname, '../../web/src/apps/core-app-list.ts'), 'utf8')
 const CORE_APPS = [...CORE_SRC.slice(CORE_SRC.indexOf('export const CORE_APPS')).matchAll(/id: '([^']+)', title: '([^']+)', path: '([^']+)'/g)]
   .map((m) => ({ id: m[1]!, title: m[2]!, path: m[3]! }))
 

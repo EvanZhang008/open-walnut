@@ -15,11 +15,11 @@
  * The app's open/closed record (apps_stay_open, apps/store.ts) belongs to the console's
  * sidebar: this window neither opens nor closes the app there.
  */
-import { useEffect, useMemo, useRef } from 'react';
+import { Suspense, useEffect, useMemo, useRef } from 'react';
 import { Route, Routes, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import type { NavigateFunction } from 'react-router-dom';
 import { AppHostPage, CoreAppView } from '@/apps/AppHostPage';
-import { ensureCoreAppsRegistered } from '@/apps/core-apps';
+import { ensureCoreAppsRegisteredLazily, preloadCoreScreen } from '@/apps/core-apps-lazy';
 import { useAppCatalog } from '@/apps/hooks';
 import type { RegisteredApp } from '@/apps/registry';
 import { useWebPluginRuntime } from '@/plugins/runtime-store';
@@ -36,8 +36,10 @@ import { appWindowPlaceKey, appWindowStart, isPlaceInApp } from './app-window-pl
 import { AppOwnRouter } from './AppOwnRouter';
 import './popout-app.css';
 
-// The console registers these in App.tsx, which a pop-out window never loads.
-ensureCoreAppsRegistered();
+// The console registers these in App.tsx, which a pop-out window never loads. Only this window's
+// own screen is loaded, started now, alongside the shell (core-apps-lazy.tsx).
+ensureCoreAppsRegisteredLazily();
+preloadCoreScreen(new URLSearchParams(window.location.search).get('app') ?? '');
 
 export function PopoutAppView() {
   const [params] = useSearchParams();
@@ -83,7 +85,9 @@ function AppWindow({ appKey }: { appKey: string }) {
       data-app-key={app.key}
       style={app.fullBleed ? { padding: 0, overflow: 'hidden' } : undefined}
     >
-      <AppRouter key={app.key} app={app} leave={leave} />
+      <Suspense fallback={null}>
+        <AppRouter key={app.key} app={app} leave={leave} />
+      </Suspense>
     </div>
   );
 }

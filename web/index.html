@@ -57,6 +57,12 @@
     <script>
       // The reload right after a sign-in (api/browser-pair.ts marks it): one line under the
       // logo, so the hand-off from "Signing in" reads as progress, not a stalled page.
+      // A pop-out window (one app, a session, the extension's panel) draws its view within a moment
+      // of opening: the launch logo there only flashes before it, so its page stays plain.
+      if (location.pathname === '/popout' || location.pathname.indexOf('/popout/') === 0) {
+        var splash = document.querySelector('.boot-splash');
+        if (splash) splash.removeChild(splash.firstElementChild);
+      }
       try {
         if (sessionStorage.getItem('walnut.openingAfterSignIn')) {
           sessionStorage.removeItem('walnut.openingAfterSignIn');

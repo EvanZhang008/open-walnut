@@ -32,6 +32,24 @@ async function isolateContextPrefs(context: BrowserContext): Promise<void> {
   })
 }
 
+/**
+ * What a window showed while it loaded: whether the launch logo was on the page when its HTML
+ * was read (the view draws after that), so a pop-out that shows the logo is seen.
+ */
+async function recordBootFrame(context: BrowserContext): Promise<void> {
+  await context.addInitScript(() => {
+    // The dev server serves every module on its own: more than the default 250 entries.
+    performance.setResourceTimingBufferSize(10_000)
+    document.addEventListener('DOMContentLoaded', () => {
+      const w = window as Window & { __bootFrame?: { splash: boolean; logo: boolean } }
+      w.__bootFrame = { splash: !!document.querySelector('[data-testid="boot-splash"]'), logo: !!document.querySelector('[data-testid="boot-splash"] img') }
+    })
+  })
+}
+
+/** The scripts a window fetched, by path (the dev server serves each module at its own path). */
+const fetchedScripts = (p: Page) => p.evaluate(() => performance.getEntriesByType('resource').map((r) => new URL(r.name).pathname))
+
 async function openAppMenu(page: Page, testId: string) {
   await page.getByTestId(testId).click({ button: 'right' })
   const menu = page.getByTestId('sidebar-app-ctx-menu')
@@ -51,8 +69,11 @@ test('Notes opens alone in a window of its own; a second open brings that window
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
   await isolateContextPrefs(context)
+  await recordBootFrame(context)
   await openHome(page, baseURL!)
   const homeUrl = page.url()
+  // The console's own load shows the launch logo (the check below sees a logo where there is one).
+  expect(await page.evaluate(() => (window as Window & { __bootFrame?: { logo: boolean } }).__bootFrame?.logo)).toBe(true)
 
   const popupEvent = page.waitForEvent('popup')
   await openInNewWindow(page, 'sidebar-core-app-notes')
@@ -78,6 +99,15 @@ test('Notes opens alone in a window of its own; a second open brings that window
   await expect(popup.locator('.main-page-wrapper')).toHaveCount(0)
   await expect(popup).toHaveTitle(/Notes · Walnut/)
   await popup.screenshot({ path: `${SHOTS}/notes-window.png` })
+
+  // It drew the app without the launch logo first, and fetched Notes alone: no other built-in
+  // screen (tests/web/popout-loads-one-screen.test.ts names the cause).
+  expect(await popup.evaluate(() => (window as Window & { __bootFrame?: { logo: boolean } }).__bootFrame?.logo)).toBe(false)
+  const scripts = await fetchedScripts(popup)
+  expect(scripts).toContain('/src/pages/NotesPage.tsx')
+  for (const other of ['/src/pages/DashboardPage.tsx', '/src/pages/SettingsPage.tsx', '/src/pages/RoutinesPage.tsx', '/src/apps/mail/MailApp.tsx']) {
+    expect(scripts, `the Notes window fetched ${other}`).not.toContain(other)
+  }
 
   // The console stayed where it was.
   expect(page.url()).toBe(homeUrl)

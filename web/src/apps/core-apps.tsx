@@ -1,27 +1,21 @@
-import { Navigate } from 'react-router-dom'
-import { appRegistry, type AppComponentProps, type CoreAppContribution } from './registry'
-import { HomeIcon, TasksIcon, NotesIcon, CalendarIcon, MailIcon, ScheduleIcon, SettingsIcon, AppsIcon, PasswordsIcon } from './icons'
+/**
+ * The console's built-in apps with every screen loaded (the sidebar can go to any of them).
+ * The list itself (names, paths, rail order) is core-app-list.ts; a pop-out window of one app
+ * loads only that app's screen (core-apps-lazy.ts).
+ */
+import type { AppComponentProps } from './registry'
+import { registerCoreApps } from './core-app-list'
 import { MailApp } from './mail/MailApp'
 import { attachMailBadge } from './mail/mail-live'
-import { DashboardPage } from '@/pages/DashboardPage'
+import { TasksApp } from './TasksApp'
 import { NotesPage } from '@/pages/NotesPage'
 import { CalendarPage } from '@/pages/CalendarPage'
 import { RoutinesPage } from '@/pages/RoutinesPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { AppsPage } from '@/pages/AppsPage'
 import { PasswordsApp as PasswordsView } from '@/components/passwords/PasswordsApp'
-import { usePhoneLayout } from '@/hooks/usePhoneLayout'
 
 const EmptyApp = (_props: AppComponentProps) => null
-/**
- * N2-16: on a phone the home screen IS the task list. The dashboard (a project
- * rail beside a wide table) stays off the drawer, and a link that still lands
- * on /tasks (a project mention in chat, a deleted task, a command) goes home.
- */
-function TasksApp(_props: AppComponentProps) {
-  const phone = usePhoneLayout()
-  return phone ? <Navigate to="/" replace /> : <DashboardPage />
-}
 const NotesApp = (_props: AppComponentProps) => <NotesPage />
 const CalendarApp = (_props: AppComponentProps) => <CalendarPage />
 const RoutinesApp = (_props: AppComponentProps) => <RoutinesPage />
@@ -29,56 +23,22 @@ const SettingsApp = (_props: AppComponentProps) => <SettingsPage />
 const AppsApp = (_props: AppComponentProps) => <AppsPage />
 const PasswordsApp = (_props: AppComponentProps) => <PasswordsView />
 
-/**
- * Rail order (top → bottom): Home, Notes, Calendar, Tasks, Routines, Apps, Settings.
- * Home first because it is the landing surface; Notes/Calendar next because they
- * are read all day; Tasks after them (the Home Todo panel already covers the
- * common task reads, so /tasks is the deeper stop); Settings always last.
- *
- * These numbers are only the DEFAULT — a stored per-user order wins. A stored v1
- * order froze the previous default, so `parseAppPreferences` drops core keys when
- * migrating v1 → v2 (see preferences.ts) or this change would never reach an
- * existing client.
- */
-export const CORE_APPS: CoreAppContribution[] = [
-  {
-    id: 'home', title: 'Home', path: '/', icon: HomeIcon, component: EmptyApp,
-    order: 10, fullBleed: true, persistent: true, lockVisibility: true,
-  },
-  { id: 'notes', title: 'Notes', path: '/notes', icon: NotesIcon, component: NotesApp, order: 20, fullBleed: true },
-  { id: 'calendar', title: 'Calendar', path: '/calendar', icon: CalendarIcon, component: CalendarApp, order: 30 },
-  // The Mail console is core code (it needs host components a plugin bundle cannot import)
-  // gated on the mail PLUGIN, which owns the model, the cache and every route it reads.
-  // fullBleed: it is a three-pane console that owns its own scroll containers.
-  {
-    id: 'mail', title: 'Mail', path: '/mail', icon: MailIcon, component: MailApp,
-    order: 35, requiresPlugin: 'mail', fullBleed: true,
-  },
-  { id: 'tasks', title: 'Tasks', path: '/tasks', icon: TasksIcon, component: TasksApp, order: 40 },
-  { id: 'routines', title: 'Routines', path: '/routines', icon: ScheduleIcon, component: RoutinesApp, order: 50 },
-  // Passwords (components/passwords/): it owns its three panes and their scroll.
-  { id: 'passwords', title: 'Passwords', path: '/passwords', icon: PasswordsIcon, component: PasswordsApp, order: 60, fullBleed: true },
-  // Apps manages everything else on the rail (built-in apps, plugins and their Apps), so
-  // it can never be hidden: it is the way back to whatever was hidden. `exactPath`:
-  // every plugin App lives under /apps/<id>, which is not the Apps page.
-  {
-    id: 'apps', title: 'Apps', path: '/apps', icon: AppsIcon, component: AppsApp,
-    order: 990, lockVisibility: true, exactPath: true, fullBleed: true,
-  },
-  {
-    id: 'settings', title: 'Settings', path: '/settings', icon: SettingsIcon, component: SettingsApp,
-    order: 1000, lockVisibility: true,
-  },
-]
-
 export function ensureCoreAppsRegistered(): void {
-  for (const app of CORE_APPS) {
-    if (appRegistry.findByKey(`core:${app.id}`)) continue
-    const handle = appRegistry.registerCore(app)
+  registerCoreApps({
+    home: EmptyApp,
+    notes: NotesApp,
+    calendar: CalendarApp,
+    mail: MailApp,
+    tasks: TasksApp,
+    routines: RoutinesApp,
+    passwords: PasswordsApp,
+    apps: AppsApp,
+    settings: SettingsApp,
+  }, (id, handle) => {
     // The badge handle is only obtainable HERE, at registration. Mail keeps it and publishes the
     // unread total from the same mailbox rows the pane renders, so the sidebar number and the
     // mailbox badges are one arithmetic and cannot drift. This also installs mail's session-scoped
     // live wiring, which is what lets the badge move in a tab that never opened Mail.
-    if (app.id === 'mail') attachMailBadge(handle)
-  }
+    if (id === 'mail') attachMailBadge(handle)
+  })
 }
