@@ -126,7 +126,7 @@ describe('the program side', () => {
   it('every Claude Code spawn path gets the /tmp git guard and the /tmp write note next to the compact hook', () => {
     const hooks = sessionSettingsHooks({}) as Record<string, Array<{ matcher: string }>>
     expect(hooks.PreToolUse[0].matcher).toBe('Bash')
-    expect(hooks.PostToolUse[0].matcher).toBe('Write')
+    expect(hooks.PostToolUse[0].matcher).toBe('Write|Bash')
     expect(hooks.SessionStart[0].matcher).toBe('compact')
     for (const file of ['src/providers/claude-code-session.ts', 'src/providers/spawn-template.ts']) {
       expect(read(file), file).toMatch(/sessionSettingsHooks\(/)
