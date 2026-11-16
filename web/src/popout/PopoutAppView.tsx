@@ -15,7 +15,7 @@
  * The app's open/closed record (apps_stay_open, apps/store.ts) belongs to the console's
  * sidebar: this window neither opens nor closes the app there.
  */
-import { Suspense, useEffect, useMemo, useRef } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { Route, Routes, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import type { NavigateFunction } from 'react-router-dom';
 import { AppHostPage, CoreAppView } from '@/apps/AppHostPage';
@@ -93,13 +93,12 @@ function AppWindow({ appKey }: { appKey: string }) {
 }
 
 function AppRouter({ app, leave }: { app: RegisteredApp; leave: NavigateFunction }) {
-  const start = useMemo(() => {
+  // Read once per window: AppRouter is keyed by the app, and later moves are the router's own.
+  const [start] = useState(() => {
     let kept: string | null = null;
     try { kept = sessionStorage.getItem(appWindowPlaceKey(app.key)); } catch { /* private browsing */ }
     return appWindowStart(app, kept, linkTargetFor(app.path));
-    // The start is read once per app; later moves are the router's.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [app.key]);
+  });
   return (
     <AppOwnRouter start={start}>
       <AppRoutes app={app} leave={leave} />

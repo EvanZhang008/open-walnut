@@ -32,6 +32,7 @@
 import express, { Router, type NextFunction, type Request, type Response } from 'express'
 import { isFollower } from '../../core/server-role.js'
 import { isNeedsLeaderError, NeedsLeaderError } from '../../core/replication/needs-leader.js'
+import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
 import {
   appendToDrawing, createDrawing, DrawingConflictError, editDrawing, listDrawings, readDrawing, renameDrawing, renderDrawing,
   sceneBytesOf, writeDrawing, writeDrawingBody, type DrawingDoc,
@@ -97,6 +98,8 @@ drawingBodyParsers.use('/diagram', express.text({ type: 'application/json', limi
 drawingBodyParsers.use(express.text({ type: 'application/json', limit: MAX_DRAWING_BODY }))
 drawingBodyParsers.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
   if (isNeedsLeaderError(err)) { next(err); return }
+  // A host link failure belongs to the app's error handler (503 host_reconnecting).
+  if (handsToAppErrorHandler(err)) { next(err); return }
   if ((err as { type?: string }).type !== 'entity.too.large') { next(err); return }
   res.status(413).json({
     error: _req.path.startsWith('/diagram')
