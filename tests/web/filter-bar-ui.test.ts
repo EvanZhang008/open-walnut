@@ -364,7 +364,9 @@ describe('FilterValuesPage: the second page', () => {
 })
 
 describe('FilterBar: the filter row', () => {
-  it('a hidden task panel never reads its list geometry while rendering', () => {
+  // Shown or hidden: the scroll box is read in an effect after the commit (2026-11-16, task
+  // 9bceb9f2: read in the render, it laid the page out mid-render on every draw of the bar).
+  it('the task panel never reads its list geometry while rendering, hidden or shown', () => {
     const root = dom('<div></div>').querySelector('div')! as HTMLElement
     let reads = 0
     Object.defineProperty(root, 'scrollHeight', { get: () => { reads++; return 1000 } })
@@ -373,7 +375,7 @@ describe('FilterBar: the filter row', () => {
     renderToStaticMarkup(createElement(RouteShownContext.Provider, { value: false }, createElement(FilterBar, { controller: c })))
     expect(reads).toBe(0)
     renderToStaticMarkup(createElement(RouteShownContext.Provider, { value: true }, createElement(FilterBar, { controller: c })))
-    expect(reads).toBeGreaterThan(0)
+    expect(reads).toBe(0)
   })
   it('renders nothing with no chip, menu closed, no view item, no search', () => {
     expect(renderToStaticMarkup(createElement(FilterBar, { controller: controller() }))).toBe('')

@@ -254,6 +254,7 @@ export function useThreadMarks(args: UseThreadMarksArgs): ThreadMarkTipStore {
   }, []);
 
   // Derive + paint, and re-derive whenever the text under the ranges changes.
+  const derivedOnce = useRef(false);
   useEffect(() => {
     const el = containerRef.current;
     const layer = argsRef.current.live?.layerRef.current ?? null;
@@ -265,6 +266,7 @@ export function useThreadMarks(args: UseThreadMarksArgs): ThreadMarkTipStore {
       return;
     }
     const derive = () => {
+      derivedOnce.current = true;
       const out: ThreadMark[] = [];
       for (const s of argsRef.current.specs) {
         const range = argsRef.current.locatePassage({ msgId: s.parentMsgId, quote: s.quote });
@@ -283,14 +285,24 @@ export function useThreadMarks(args: UseThreadMarksArgs): ThreadMarkTipStore {
       paintLive();
       argsRef.current.onDerived?.(out);
     };
-    derive();
+    // The chat's first derive waits for the frame after this commit: right after its rows mount
+    // the page's styles are not computed yet, and the highlight's visibility check
+    // (highlight-visibility.ts) computed them all inside the commit's task, a second time when
+    // that commit's own re-render changed them again (2026-11-16, task 9bceb9f2: 330 ms of a
+    // 1.0 s task on a 4x slower CPU). After the frame's own style pass the check reads them as is.
+    // Only the first: nothing is painted yet to go missing for a frame, while a later run (its
+    // cleanup just cleared the marks) derives at once, so they never blink.
     let raf = 0;
+    let first: ReturnType<typeof setTimeout> | undefined;
+    if (derivedOnce.current) derive();
+    else raf = requestAnimationFrame(() => { raf = 0; first = setTimeout(derive, 0); });
     const mo = new MutationObserver(() => {
       if (!raf) raf = requestAnimationFrame(() => { raf = 0; derive(); });
     });
     mo.observe(el, { childList: true, subtree: true, characterData: true });
     return () => {
       mo.disconnect();
+      clearTimeout(first);
       if (raf) cancelAnimationFrame(raf);
       setPanelMarks(panelKey, []);
       if (layer) paintLiveBars(layer, []);

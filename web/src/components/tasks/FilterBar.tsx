@@ -160,17 +160,17 @@ export function FilterBar({ controller: c }: FilterBarProps) {
   const inFlowHeight = useRef(0);
 
   // C41: the list's first visible row keeps its screen place whenever the row's
-  // in-flow height changes (the scroll box sits below it). The box is taken at
-  // render time: a parent's inline ref callback is detached (null) while this
-  // layout effect runs and re-attached after it.
+  // in-flow height changes (the scroll box sits below it). The box is the one that
+  // scrolled the list as of the last commit shown: a parent's inline ref callback is
+  // detached (null) while this layout effect runs and re-attached after it, so it is
+  // read in a passive effect, once every ref is back. It used to be read in the render,
+  // where it made the browser lay the page out mid-render on every draw of the bar
+  // (2026-11-16, task 9bceb9f2: 150 ms of a boot task on a 4x slower CPU). Hidden, the
+  // last box stays: the DOM is not laid out then.
   // A list at its top stays at its top: there the first row IS the top, and
   // scrolling it by the row's height slid it under the stuck headings (2026-10-04:
   // "N Waiting hidden" revealed a pinned card that the Pinned heading covered).
   const scrollerRef = useRef<HTMLElement | null>(null);
-  const wasShown = useRef(routeShown);
-  // On return the DOM is still hidden until commit. Keep the last actual scroll box.
-  if (routeShown && wasShown.current) scrollerRef.current = listScroller(c.listScrollRef.current) ?? scrollerRef.current;
-  wasShown.current = routeShown;
   useLayoutEffect(() => {
     if (!routeShown) return;
     const h = !visible ? 0 : c.rowRef.current?.offsetHeight ?? 0;
@@ -178,6 +178,9 @@ export function FilterBar({ controller: c }: FilterBarProps) {
     inFlowHeight.current = h;
     const el = scrollerRef.current;
     if (el?.isConnected && Math.abs(delta) >= 1 && el.scrollTop > 0) el.scrollTop += delta;
+  });
+  useEffect(() => {
+    if (routeShown) scrollerRef.current = listScroller(c.listScrollRef.current) ?? scrollerRef.current;
   });
 
   // Only a pointer removal from the row itself holds the row (the pointer is on

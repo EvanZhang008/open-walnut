@@ -6,7 +6,7 @@ import './utils/trace-dispatchers';
 // Second: starts loading the app this window shows (App, or a pop-out's own view) while the
 // rest of this entry evaluates (boot-shell.ts).
 import { isPopoutWindow, loadPluginLoader, shellReady } from './boot-shell';
-import { StrictMode, type ComponentType } from 'react';
+import { StrictMode, startTransition, useLayoutEffect, type ComponentType } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import { AppErrorBoundary } from './components/common/AppErrorBoundary';
@@ -151,6 +151,17 @@ function startWebPlugins(): void {
   });
 }
 
+/** Ends the boot's react-mount phase at the tree's first commit (a later remount ends nothing). */
+let mountCommitted = false;
+function MountCommitted(): null {
+  useLayoutEffect(() => {
+    if (mountCommitted) return;
+    mountCommitted = true;
+    endPhase('boot:react-mount');
+  }, []);
+  return null;
+}
+
 function bootApp(): void {
   // A browser signed in with a code renews its sign-in before it runs out (api/device-token.ts).
   startSignInRenewal();
@@ -249,9 +260,9 @@ function bootApp(): void {
   Promise.all([initUiPrefsSync().catch(() => undefined), initDraftSync().catch(() => undefined), shown]).then(([, , Shell]) => {
     endPhase('boot:ui-prefs-sync');
     startPhase('boot:react-mount');
-    // react-mount phase ends on the first post-render macrotask — everything
-    // between is the synchronous initial render + effects of the whole tree.
-    setTimeout(() => endPhase('boot:react-mount'), 0);
+    // The react-mount phase ends with the first commit of the tree (MountCommitted, below):
+    // the mount is a transition drawn in slices, so the first macrotask after it no longer
+    // marks its end.
     // onUncaughtError / onCaughtError: React 19 reports render errors via
     // window.reportError by default — which bypasses the console monkey-patch, so
     // crashes never reached the server log. Route them through console.error.
@@ -277,10 +288,14 @@ function bootApp(): void {
             </AppErrorBoundary>
           </ConfirmProvider>
         </BrowserRouter>
+        <MountCommitted />
       </StrictMode>,
     );
     let generation = 0;
-    renderApp(generation);
+    // A transition: React draws the whole tree in slices of a few ms, so a key or a click during
+    // the mount goes first. Drawn at once it was one task of 1.2 to 1.3 s on a 4x slower CPU at
+    // the user's density (2026-11-16, task 9bceb9f2). The late-prefs remount below stays urgent.
+    startTransition(() => renderApp(generation));
     // The prefs read at boot timed out and answered later (ui-prefs-sync.ts): mount once more
     // on them, unless that would lose unsaved text or the console has gone (signed out).
     setLatePrefsHost({
