@@ -169,8 +169,11 @@ describe('saving', () => {
       const count = seen.length
       // The same bytes again (an editor re-saving what is on disk) write nothing and announce nothing.
       await writeDrawing(doc.path, edited.revision, edited.scene)
-      await new Promise((resolve) => setTimeout(resolve, 50))
-      expect(seen.length).toBe(count)
+      // A real change after it: once its event is in, the same-bytes save before it was judged, and
+      // the only new event is the change's (the bus delivers in order).
+      const next = await editDrawing(doc.path, edited.revision, { add: [{ type: 'rectangle', x: 40, y: 0, width: 20, height: 20, text: 'B' }] })
+      await vi.waitFor(() => expect(seen).toContainEqual({ path: doc.path, revision: next.revision }))
+      expect(seen.slice(count)).toEqual([{ path: doc.path, revision: next.revision }])
     } finally {
       bus.unsubscribe('drawing-updated-test')
     }
@@ -230,8 +233,7 @@ describe('the companion note', () => {
       expect(md).toContain('- Queue < !-- end -- >')
       expect(md).toContain(`/apps/walnut-drawing~main?path=${encodeURIComponent(doc.path)}`)
       expect(md).toContain(`revision=${saved.revision}`)
-      await new Promise((r) => setTimeout(r, 20))
-      expect(events.some((e) => e.source === `notes/${companionPathFor(doc.path).replace(/\.md$/, '')}`)).toBe(true)
+      await vi.waitFor(() => expect(events.some((e) => e.source === `notes/${companionPathFor(doc.path).replace(/\.md$/, '')}`)).toBe(true))
     } finally {
       bus.unsubscribe('drawing-test')
     }
