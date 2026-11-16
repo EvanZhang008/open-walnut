@@ -627,7 +627,7 @@ export function NotesPage() {
     setAttachmentFind(q ? { path, query: q } : null);
     openInTab(path, 'attachment');
   }, [openInTab]);
-  const handleFollowLink = useCallback((path: string) => {
+  const handleFollowLink = useLeanCallback((path: string) => {
     if (path !== activePath) followedLinkRef.current = true;
     handleSelect(path);
   }, [handleSelect, activePath]);

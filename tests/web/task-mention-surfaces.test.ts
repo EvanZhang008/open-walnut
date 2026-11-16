@@ -59,6 +59,7 @@ const CHAT: Record<string, string> = {
 /** Not chat: what they render, and why task names do not belong there. */
 const NOT_CHAT: Record<string, string> = {
   'web/src/utils/markdown.ts': 'the pipeline itself',
+  'web/src/components/notes/extensions/math-render.ts': 'KaTeX markup for a formula in a note, made by KaTeX from its latex, never chat text',
   'web/src/components/org/org-brief-sources.ts': 'uses the official lexer and shared rendered links to map writers, not an independent renderer',
   'web/src/api/mail.ts': 'mail bodies from outside senders',
   'web/src/apps/mail/mail-sanitize.ts': 'the mail app sanitizer for outside senders',

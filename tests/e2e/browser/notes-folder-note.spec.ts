@@ -43,7 +43,7 @@ test.afterAll(async () => {
 })
 
 const row = (page: Page, path: string) => page.locator(`.notes-tree-body [data-node-path="${path}"]`)
-const editor = (page: Page) => page.locator('.notes-editor .tiptap').first()
+const editor = (page: Page) => page.locator('.notes-editor-pane .notes-editor .tiptap').first()
 
 test('a folder with a same-named note is one row that opens the note', async ({ page }) => {
   const errors: string[] = []

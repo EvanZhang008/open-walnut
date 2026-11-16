@@ -466,7 +466,7 @@ async function linkWhereNotesAre(notes: NotesService, content: string, planned: 
     out.push(content.slice(last, m.index! + 2))
     last = m.index! + 2 + m[1].length
     const from = !(await exists(target)) ? origin(target) : null
-    out.push(from && await exists(from) ? m[1].replace(target, from) : m[1])
+    out.push(from && await exists(from) ? m[1].replace(target, () => from) : m[1])
   }
   out.push(content.slice(last))
   return out.join('')

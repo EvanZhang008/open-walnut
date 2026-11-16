@@ -67,7 +67,7 @@ export function withBody(content: string, sourceId: string, body: string): strin
   const head = content.slice(0, content.length - bodyOf(content).length)
   const key = `${sourceId}_hash`
   const stamped = new RegExp(`^${key}:.*$`, 'm')
-  return (stamped.test(head) ? head.replace(stamped, `${key}: ${yamlString(bodyHash(body))}`) : head) + body
+  return (stamped.test(head) ? head.replace(stamped, () => `${key}: ${yamlString(bodyHash(body))}`) : head) + body
 }
 
 export function frontmatterValue(content: string, key: string): string | undefined {

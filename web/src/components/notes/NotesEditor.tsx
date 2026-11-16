@@ -6,6 +6,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useEditor, EditorContent } from '@tiptap/react';
 import type { Editor } from '@tiptap/core';
 import { Selection } from '@tiptap/pm/state';
@@ -268,7 +269,7 @@ export function NotesEditor({ content, readOnly = false, onDirty, placeholder, c
   // has loaded, and for a link to a file that is not a note.
   const onWikiLinkMissingRef = useRef(onWikiLinkMissing);
   onWikiLinkMissingRef.current = onWikiLinkMissing;
-  const isMissingLink = useCallback((target: string): boolean | null => {
+  const isMissingLink = useLeanCallback((target: string): boolean | null => {
     const notes = wikiLinkNotesRef.current;
     if (!notes?.length) return null;
     const bare = target.replace(/#.*$/, '').trim();

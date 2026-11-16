@@ -325,7 +325,7 @@ export function useNoteContent(notePath: string | null) {
    *      a `PUT …/Projects/Life/Election.md` landing AFTER `Note moved`).
    * Also cancels the timer + clears dirty so no scheduled save targets oldPath.
    */
-  const hasUnsavedEdits = useCallback(() => dirtyRef.current || !!timerRef.current || savingRef.current, []);
+  const hasUnsavedEdits = useLeanCallback(() => dirtyRef.current || !!timerRef.current || savingRef.current, []);
 
   const markMovedAway = useCallback(async (oldPath: string) => {
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }

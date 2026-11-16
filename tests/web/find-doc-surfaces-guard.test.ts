@@ -33,6 +33,8 @@ const KNOWN: Record<string, How> = {
   'web/src/components/common/CollapsibleUrlEditor.tsx': { kind: 'not-a-document', why: 'a one-line field for a URL' },
   'web/src/components/notes/WikiEmbedView.tsx': { kind: 'not-a-document', why: 'contentEditable={false} on an embed inside a note, searched with the note' },
   'web/src/components/tasks/useInlineTitleEdit.ts': { kind: 'not-a-document', why: 'a task title being renamed' },
+  'web/src/components/notes/extensions/math-render.ts': { kind: 'not-a-document', why: 'contentEditable false on a rendered formula inside a note; its latex source is the note text the find searches' },
+  'web/src/components/notes/extensions/callout-node.ts': { kind: 'not-a-document', why: 'contenteditable false on the fold button of a callout inside a note, which holds no words' },
 }
 
 const MOUNTS = [

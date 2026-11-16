@@ -9,7 +9,8 @@
  */
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { CLOUD_MODE, NOTES_DIR } from '../../constants.js'
+import { NOTES_DIR } from '../../constants.js'
+import { isFollower } from '../server-role.js'
 import { computeContentHash } from '../../utils/file-ops.js'
 
 export interface PluginNoteEntry {
@@ -59,7 +60,7 @@ function rel(full: string): string {
 }
 
 function assertWritable(call: string): void {
-  if (CLOUD_MODE) throw Object.assign(new Error(`notes.${call} is not available on a replica; notes are written on the primary Walnut.`), { code: 'replica' })
+  if (isFollower()) throw Object.assign(new Error(`notes.${call} is not available on a replica; notes are written on the primary Walnut.`), { code: 'replica' })
 }
 
 function notePathOf(p: string): string {

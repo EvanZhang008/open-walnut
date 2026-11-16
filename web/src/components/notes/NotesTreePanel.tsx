@@ -847,11 +847,11 @@ export const NotesTreePanel = memo(function NotesTreePanel({
             </span>
             {folderNote ? <FolderNoteIcon /> : <FolderIcon />}
             {isRenamingFolderNote ? (
-              <input data-no-draft="rename"
+              <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="rename"
                 ref={renameInputRef}
                 className="notes-tree-inline-input"
                 value={renameValue}
-                onChange={e => setRenameValue(e.target.value)}
+                setText={setRenameValue}
                 onKeyDown={e => {
                   if (e.key === 'Enter') handleConfirmRename();
                   if (e.key === 'Escape') setRenaming(null);
