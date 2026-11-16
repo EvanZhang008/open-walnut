@@ -38,12 +38,20 @@ describe('dialLocalDaemon', () => {
   it('waits for a start in flight and dials the address it ends on', async () => {
     daemon.wsUrl = 'ws://localhost:1111'
     let done!: () => void
-    daemon.starting = new Promise<number>((resolve) => { done = () => { daemon.wsUrl = 'ws://localhost:2222'; resolve(2222) } })
-    const dialled = dialLocalDaemon(async (url) => url)
-    // The start ends only after the dial has had every chance to read the address.
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    const start = new Promise<number>((resolve) => { done = () => { daemon.wsUrl = 'ws://localhost:2222'; resolve(2222) } })
+    // The start ends only once the dial waits on it (it takes the start's .catch), not after a clock.
+    let waiting!: () => void
+    const atWait = new Promise<void>((resolve) => { waiting = resolve })
+    daemon.starting = Object.assign(start, {
+      catch: (onRejected: (reason: unknown) => unknown) => { waiting(); return Promise.prototype.catch.call(start, onRejected) },
+    })
+    const dial = vi.fn(async (url: string) => url)
+    const dialled = dialLocalDaemon(dial)
+    await atWait
+    expect(dial).not.toHaveBeenCalled()
     done()
     expect(await dialled).toBe('ws://localhost:2222')
+    expect(dial).toHaveBeenCalledTimes(1)
   })
 
   it('an address that refuses is checked with ensureRunning and dialled once more where it serves now', async () => {
