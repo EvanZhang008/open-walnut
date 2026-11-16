@@ -30773,20 +30773,24 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   color: var(--fg);
 }
 
-/* --- chips ---------------------------------------------------------------- */
+/* --- chips ----------------------------------------------------------------
+   A desktop-calendar block: a soft wash of the calendar's colour, a solid bar
+   on its leading edge, the title in a deep shade of the same colour and the
+   time under it. The bar is an inset shadow, not a border, so a block's text
+   column is the same width whether or not it has one. */
 .cal-chip {
   --cal-chip-tint: var(--accent);
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  border-radius: 6px;
-  padding: 2px 6px;
-  background: color-mix(in srgb, var(--cal-chip-tint) 16%, var(--card-bg));
-  border-left: 3px solid var(--cal-chip-tint);
-  color: var(--fg);
+  gap: 0;
+  border-radius: 5px;
+  padding: 2px 6px 2px 8px;
+  background: color-mix(in srgb, var(--cal-chip-tint) 17%, var(--bg));
+  box-shadow: inset 3px 0 0 var(--cal-chip-tint);
+  color: color-mix(in srgb, var(--cal-chip-tint) 45%, var(--fg));
   font-size: 11.5px;
-  line-height: 1.25;
+  line-height: 15px;
   cursor: grab;
   user-select: none;
   touch-action: none;
@@ -30808,13 +30812,35 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 600;
 }
 
 .cal-chip-time {
   flex-shrink: 0;
-  font-weight: 600;
+  font-weight: 500;
   font-size: 10.5px;
-  color: color-mix(in srgb, var(--cal-chip-tint) 80%, var(--fg));
+  color: color-mix(in srgb, var(--cal-chip-tint) 70%, var(--fg));
+}
+
+/* A time-grid block: the title wraps over the lines its height leaves it
+   (--cal-title-lines from CalendarChip), the time and place take one each. */
+.cal-chip[data-lines] .cal-chip-body {
+  display: block;
+}
+
+.cal-chip[data-lines] .cal-chip-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--cal-title-lines, 1);
+  line-clamp: var(--cal-title-lines, 1);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.cal-chip-range {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cal-chip-compact {
@@ -30842,7 +30868,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
 .cal-chip-readonly {
   cursor: default;
-  opacity: 0.9;
 }
 
 .cal-chip-ghosted {
@@ -30850,8 +30875,8 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 }
 
 .cal-chip-location {
-  font-size: 10px;
-  color: var(--fg-muted);
+  font-size: 10.5px;
+  color: color-mix(in srgb, var(--cal-chip-tint) 45%, var(--fg-muted));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -30907,18 +30932,23 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .cal-grid-dayhead {
   flex: 1;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: center;
   gap: 5px;
   padding: 6px 0;
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--fg-muted);
 }
 
 .cal-grid-dayhead .cal-grid-daynum {
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 500;
   color: var(--fg);
+}
+
+.cal-grid-dayhead.today .cal-grid-dayname {
+  color: var(--error);
+  font-weight: 600;
 }
 
 .cal-grid-dayhead.today .cal-grid-daynum {
@@ -30940,16 +30970,23 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   overflow-y: auto;
   /* Match .cal-grid-scroll's reserved scrollbar gutter (see .cal-grid-header). */
   scrollbar-gutter: stable;
-  border-bottom: 2px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  position: relative;
+  z-index: 1;
 }
 
 .cal-allday-label {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: flex-end;
-  padding-right: 6px;
-  font-size: 10px;
+  padding: 5px 6px 0 0;
+  font-size: 10.5px;
   color: var(--fg-muted);
+}
+
+.cal-allday-cell .cal-chip {
+  background: color-mix(in srgb, var(--cal-chip-tint) 24%, var(--bg));
 }
 
 .cal-allday-cells {
@@ -31038,34 +31075,18 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
 .cal-grid-hourlabel {
   position: absolute;
-  top: -6px;
-  right: 6px;
-  font-size: 10px;
+  top: -7px;
+  right: 7px;
+  font-size: 10.5px;
   color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
 }
 
+/* Hour lines are a background (grid-controls.css), not 24 divs per column. */
 .cal-grid-cols {
   position: relative;
   display: flex;
   flex: 1;
-  /* hour + half-hour lines without 48 divs per column */
-  background-image:
-    repeating-linear-gradient(
-      to bottom,
-      var(--border) 0,
-      var(--border) 1px,
-      transparent 1px,
-      transparent 48px
-    ),
-    repeating-linear-gradient(
-      to bottom,
-      transparent 0,
-      transparent 24px,
-      color-mix(in srgb, var(--border) 45%, transparent) 24px,
-      color-mix(in srgb, var(--border) 45%, transparent) 25px,
-      transparent 25px,
-      transparent 48px
-    );
 }
 
 .cal-day-col {
@@ -31075,8 +31096,8 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   border-left: 1px solid var(--border);
 }
 
-.cal-day-col-today {
-  background: color-mix(in srgb, var(--accent) 3%, transparent);
+.cal-day-col-weekend {
+  background: color-mix(in srgb, var(--fg) 2.5%, transparent);
 }
 
 .cal-day-col.cal-dropover {
@@ -31122,13 +31143,39 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
-.cal-create-sel {
+/* The block being created: a drag selection, then the popover's placeholder
+   (QuickCreatePopover) at the same place. Solid in the calendar's colour,
+   white text, lifted over the blocks around it. */
+.cal-create-placeholder,
+.cal-day-col .cal-create-placeholder {
   position: absolute;
   left: 2px;
   right: 2px;
-  border-radius: 6px;
-  border: 1.5px dashed var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  z-index: 5;
+  background: var(--cal-chip-tint);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  color: #fff;
+  pointer-events: none;
+  cursor: default;
+}
+
+/* A short block: title and time side by side. */
+.cal-chip-oneline {
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.cal-create-placeholder .cal-chip-time {
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.cal-create-placeholder.cal-chip-compact {
+  position: relative;
+  left: auto;
+  right: auto;
+  flex: 0 0 auto;
 }
 
 .cal-now-line {
@@ -31136,18 +31183,39 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   left: 0;
   right: 0;
   height: 0;
-  border-top: 2px solid var(--error);
+  border-top: 1.5px solid var(--error);
   z-index: 4;
+  pointer-events: none;
+}
+
+.cal-now-line-faint {
+  border-top: 1px solid color-mix(in srgb, var(--error) 35%, transparent);
+  z-index: 3;
 }
 
 .cal-now-dot {
   position: absolute;
   left: -4px;
-  top: -5px;
+  top: -4.75px;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--error);
+}
+
+/* The time now, in the hour ruler, on the line (the hour label it covers hides). */
+.cal-now-label {
+  position: absolute;
+  right: 5px;
+  transform: translateY(-50%);
+  padding: 0 2px;
+  background: var(--bg);
+  color: var(--error);
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  z-index: 1;
 }
 
 /* --- popovers (overflow, quick create) — floating layers get menu glass ------- */
@@ -31157,8 +31225,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   z-index: 999;
 }
 
-.cal-overflow-popover,
-.cal-create-popover {
+.cal-overflow-popover {
   position: fixed;
   z-index: 1000;
   min-width: 240px;
@@ -31185,8 +31252,23 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   color: var(--fg-muted);
 }
 
+/* The new-item popover: beside the block it creates, an arrow pointing at it
+   (.cal-create-arrow), grouped cards inside. */
 .cal-create-popover {
-  padding: 0;
+  --cal-pop-border: color-mix(in srgb, var(--fg) 13%, transparent);
+  position: fixed;
+  z-index: 1000;
+  box-sizing: border-box;
+  width: 330px;
+  max-width: calc(100vw - 16px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--cal-pop-border);
+  background: var(--card-bg);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.2), 0 1px 3px rgba(0, 0, 0, 0.08);
   /* useMenuPlacement caps height — scroll internally so the footer buttons
      never land outside the viewport */
   overflow-y: auto;
@@ -31198,13 +31280,34 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
 .cal-create-popover .quick-task-composer {
   position: static;
-  width: 340px;
-  /* 100%, not 80vw: the popover maxes at 340px MINUS its 1px borders, so a
-     hard 340px child overflows by 2px (see overflow-x note above). */
+  width: 100%;
   max-width: 100%;
+  padding: 0;
   box-shadow: none;
   border: none;
 }
+
+/* The popover's own Event | Task switch says what is being added. */
+.cal-create-popover .quick-task-composer .qtc-header {
+  display: none;
+}
+
+/* The arrow: a square turned 45°, its outer half outside the popover's edge,
+   in the popover's colour, with the popover's border on its two outer sides. */
+.cal-create-arrow {
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  background: var(--overlay-glass-bg, var(--card-bg));
+  border: 0 solid color-mix(in srgb, var(--fg) 13%, transparent);
+  transform: translate(-50%, -50%) rotate(45deg);
+  pointer-events: none;
+}
+
+.cal-create-arrow[data-edge='left'] { border-left-width: 1px; border-bottom-width: 1px; }
+.cal-create-arrow[data-edge='right'] { border-top-width: 1px; border-right-width: 1px; }
+.cal-create-arrow[data-edge='top'] { border-top-width: 1px; border-left-width: 1px; }
+.cal-create-arrow[data-edge='bottom'] { border-right-width: 1px; border-bottom-width: 1px; }
 
 /* --- homepage day-agenda side panel ------------------------------------------- */
 .cal-side-panel {
@@ -31332,98 +31435,324 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   }
 }
 
-/* --- quick-create Task|Event tabs + event form ------------------------------- */
+/* --- new-item popover: Event | Task switch + event form ---------------------- */
 .cal-create-tabs {
   display: flex;
-  gap: 2px;
-  padding: 6px 6px 0;
+  flex-shrink: 0;
+  padding: 2px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
 }
 
 .cal-create-tabs button {
   flex: 1;
   height: 26px;
   border: none;
-  border-radius: 7px;
+  border-radius: 6px;
   background: transparent;
-  color: var(--fg-muted);
-  font-size: 12.5px;
+  color: var(--fg);
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
 }
 
 .cal-create-tabs button.active {
-  background: var(--bg-secondary);
-  color: var(--fg);
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
 }
 
 .cal-event-form {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px;
-  width: 340px;
-  /* See .cal-create-popover .quick-task-composer — a hard 340px overflows the
-     popover's 338px content box and spawns scrollbars. */
-  max-width: 100%;
   box-sizing: border-box;
+  width: 100%;
+}
+
+/* A group of fields: a light rounded card, a hairline between its rows. */
+.cal-form-card {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--fg) 4.5%, transparent);
+}
+
+.cal-form-card > * + * {
+  border-top: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+.cal-form-card .mic-field {
+  display: flex;
+  align-items: center;
+  width: 100%;
 }
 
 .cal-event-form-title {
+  flex: 1;
+  min-width: 0;
   width: 100%;
-  height: 32px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
+  height: 38px;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
   color: var(--fg);
-  font-size: 13px;
+  font-size: 17px;
+  font-weight: 600;
 }
 
-.cal-event-form-when {
-  font-size: 12px;
+.cal-form-card :is(input, button):focus {
+  /* A field in a card reads as text, the way a calendar's popover does: no
+     glow, the caret (and the time parts' own tint) show where typing goes. */
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.cal-event-form-title::placeholder {
+  color: color-mix(in srgb, var(--fg) 35%, transparent);
+}
+
+.cal-form-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cal-form-row:disabled {
+  color: var(--fg-muted);
+  cursor: default;
+}
+
+.cal-cal-dot {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  border-radius: 50%;
+}
+
+.cal-cal-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cal-cal-chevrons {
+  width: 8px;
+  height: 12px;
+  flex-shrink: 0;
   color: var(--fg-muted);
 }
 
-.cal-event-form select {
-  height: 30px;
+.cal-cal-list {
+  box-sizing: border-box;
+  min-width: 240px;
+  max-width: 320px;
+  padding: 4px;
+  overflow-y: auto;
+  border-radius: 9px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background-color: var(--bg);
+  background: var(--card-bg);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+}
+
+.cal-cal-option {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
   color: var(--fg);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cal-cal-option:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.cal-cal-option:hover .cal-cal-account {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+/* The current calendar is shown by colour, never a checkmark. */
+.cal-cal-option[aria-selected='true'] {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.cal-cal-account {
+  flex-shrink: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+
+/* Under a flyout (the calendar list, the month): a click outside closes the
+   flyout alone, never the popover under it. */
+.cal-flyout-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+}
+
+/* The date and times on one line that reads as text; each part is edited in place. */
+.cal-event-form-when {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0 2px;
+  min-height: 36px;
+  margin: 0 -5px;
+  font-size: 13px;
+  color: var(--fg);
+}
+
+.cal-when-times {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.cal-when-part,
+.cal-when-time {
+  height: 26px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.cal-when-time-wrap {
+  position: relative;
+  display: inline-flex;
+  border-radius: 6px;
+}
+
+.cal-when-time-text {
+  height: 26px;
+  padding: 0 5px;
+  line-height: 26px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Resting: the field fills the text's box, its own digits clear, the text shows. */
+.cal-when-time-wrap .cal-when-time {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  padding: 0 3px;
+  color: transparent;
+  cursor: text;
+}
+
+/* Editing: the field shows at its own width and the text steps aside. */
+.cal-when-time-wrap:focus-within .cal-when-time {
+  position: static;
+  width: 6.4em;
+  color: inherit;
+}
+
+.cal-when-time-wrap:focus-within .cal-when-time-text {
+  display: none;
+}
+
+.cal-when-time-wrap:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+.cal-when-time::-webkit-calendar-picker-indicator {
+  display: none;
+}
+
+.cal-when-part:hover,
+.cal-when-time:hover,
+.cal-when-time:focus {
+  outline: none;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+.cal-when-dash {
+  color: var(--fg-muted);
+}
+
+.cal-when-allday {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
   font-size: 12.5px;
-  padding: 0 22px 0 6px;
-  background-position: right 6px center;
+  color: var(--fg-muted);
+  cursor: pointer;
 }
 
 .cal-event-form-error {
+  padding: 4px 0;
   font-size: 12px;
   color: var(--error);
 }
 
+.cal-event-form-error-box {
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--error) 9%, transparent);
+}
+
 .cal-event-form-footer {
   display: flex;
+  justify-content: flex-end;
   gap: 8px;
 }
 
-.cal-event-form-footer button {
+.cal-form-btn {
   height: 28px;
-  padding: 0 12px;
+  padding: 0 14px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 7px;
   background: var(--card-bg);
   color: var(--fg);
-  font-size: 12.5px;
+  font-size: 13px;
   cursor: pointer;
 }
 
 .cal-event-form-create {
-  background: var(--accent) !important;
-  border-color: var(--accent) !important;
-  color: #fff !important;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
 }
 
 .cal-event-form-create:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: default;
 }
 

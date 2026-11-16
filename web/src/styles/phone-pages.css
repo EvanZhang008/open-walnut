@@ -831,6 +831,7 @@
   .app-shell-navigation .cal-grid-controls .cal-hours-toggle,
   .app-shell-navigation .cal-grid-gutter,
   .app-shell-navigation .cal-grid-hourlabel,
+  .app-shell-navigation .cal-now-label,
   .app-shell-navigation .cal-grid-range-end,
   .app-shell-navigation .cal-chip-title {
     font-size: 12px;

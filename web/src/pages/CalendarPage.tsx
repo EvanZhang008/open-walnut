@@ -440,6 +440,7 @@ export function CalendarPage() {
                 onCreate={openCreate}
                 onContextMenu={openContextMenu}
                 onItemClick={openItemPopover}
+                canCreateEvent={canCreateEvent}
               />
             )}
           </div>

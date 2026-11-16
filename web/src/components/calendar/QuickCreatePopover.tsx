@@ -1,89 +1,130 @@
 /**
- * QuickCreatePopover — clicking/drag-selecting empty calendar space opens
- * this portal-anchored creator: a Task tab (QuickTaskComposer with the slot's
- * dates pre-seeded) and an Event tab (title + target calendar → EventKit
- * write-back, shown only when a writable calendar source is connected).
+ * QuickCreatePopover — clicking or drag-selecting empty calendar space opens
+ * this creator, laid out like a desktop calendar's new-event popover:
+ *  - a placeholder block appears in the grid at once, at the slot being
+ *    created, and follows the form (title, times, calendar colour);
+ *  - the popover opens BESIDE that block with an arrow pointing at it, never
+ *    over it (useMenuPlacement `beside`);
+ *  - an Event | Task switch on top. Event is the default; the last one the user
+ *    picked is kept (usePageView), so it survives a reload and an app restart.
+ * The Event side is EventCreateForm; the Task side is QuickTaskComposer with the
+ * slot's dates pre-seeded. Event shows only while a writable calendar exists.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task } from '@open-walnut/core';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import type { PlacementArrow } from '@/hooks/menu-placement-beside';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { QuickTaskComposer } from '@/components/tasks/QuickTaskComposer';
 import type { CreateTaskInput } from '@/api/tasks';
-import { listCalendarSources, type CalendarInfo } from '@/api/calendar';
-import { useDraft } from '@/hooks/useDraft';
-import { draftKey } from '@/utils/drafts';
-import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
-import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
+import { usePageView } from '@/utils/view-memory';
+import { clockRange, minutesOfDay } from '@/utils/calendar-date';
+import { EventCreateForm, type CreateEventInput, type EventPreview } from './EventCreateForm';
+
+export type CreateKind = 'event' | 'task';
+/** A block shorter than this shows its title and time on one line. */
+export const ONE_LINE_BELOW_PX = 30;
+export const isCreateKind = (v: unknown): v is CreateKind => v === 'event' || v === 'task';
+
+/** Where the grid draws the block being created while the popover is open. */
+export interface CreatePlaceholder {
+  /** A time-grid day column (timed) or an all-day cell (a chip in its list). */
+  host: HTMLElement;
+  /** Timed hosts: minute from the column's day start → px from its top. */
+  minuteToPx?: (min: number) => number;
+  /** The host's day: a column runs past midnight, so tomorrow's 1 AM sits at its minute 1500. */
+  day?: string;
+}
 
 export interface CreateSeed {
   /** Slot's date ("YYYY-MM-DD") or datetime ("…T09:00:00"). */
   start: string;
   /** Present when the user drag-selected a range. */
   end?: string;
-  /** Element to anchor the popover to (small anchors: month cells, all-day cells). */
+  /** Element to anchor the popover to (small anchors: month cells). */
   anchorEl?: HTMLElement;
   /**
-   * Pointer coords to anchor to instead — REQUIRED for time-grid slots: the
-   * column element is a day tall, so an element anchor would place the popover
-   * at the column's bottom, far from the clicked slot (and off screen).
+   * Pointer coords to anchor to instead, when there is no placeholder (a
+   * context-menu "New…" outside the time grid). Never a day column: it is a
+   * day tall, and the popover would land at its bottom.
    */
   anchorPoint?: { x: number; y: number };
-  /** Open on this tab (context menu's "New event…" goes straight to Event). */
-  tab?: 'task' | 'event';
+  /** Draw a placeholder block here and anchor the popover beside it. */
+  placeholder?: CreatePlaceholder;
+  /** Open on this side (the context menu's "New event…" / "New task…"); it becomes the kept choice. */
+  tab?: CreateKind;
 }
 
 interface Props {
   seed: CreateSeed;
   onClose: () => void;
   onCreateTask: (input: CreateTaskInput) => Promise<Task>;
-  /** Present when the calendar source is writable — enables the Event tab. */
-  onCreateEvent?: (input: { calendarId: string; title: string; start: string; end: string; allDay?: boolean }) => Promise<unknown>;
+  /** Present when the calendar source is writable — enables the Event side. */
+  onCreateEvent?: (input: CreateEventInput) => Promise<unknown>;
 }
 
 export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent }: Props) {
   const { tasks } = useTasksContext();
   const projectRegistry = useProjectRegistry();
+  // Event by default; the last side the user picked after that (2026-11-16, the
+  // user: "default event instead of task", and remember the one chosen).
+  const [kind, setKind] = usePageView<CreateKind>('calendar', 'createKind', 'event', isCreateKind);
+  // A context menu's "New event…" / "New task…" opens on that side and makes it
+  // the kept choice; a click on the switch then wins as usual.
+  const [openedAs, setOpenedAs] = useState(seed.tab);
+  useEffect(() => {
+    if (seed.tab) setKind(seed.tab);
+  }, [seed.tab, setKind]);
+  const pick = (k: CreateKind) => {
+    setOpenedAs(undefined);
+    setKind(k);
+  };
+  // The page's canCreateEvent gate is OPTIMISTIC while calendar sources load; if
+  // it settles to "no writable source", the Task side shows (the kept choice stays).
+  const shown: CreateKind = onCreateEvent ? (openedAs ?? kind) : 'task';
+
+  const blockRef = useRef<HTMLDivElement | null>(null);
   const anchorRef = useRef<HTMLElement | null>(seed.anchorEl ?? null);
   const menuRef = useRef<HTMLDivElement | null>(null);
-  const placement = useMenuPlacement(true, anchorRef, menuRef, {
-    anchorPoint: seed.anchorPoint ?? null,
-    // Open rightward from the click: right-aligned (the default) covered the
-    // very day column being scheduled, hiding which day you clicked.
+  const anchorPoint = useMemo(
+    () => (seed.placeholder || seed.anchorEl || !seed.anchorPoint ? null : seed.anchorPoint),
+    [seed.placeholder, seed.anchorEl, seed.anchorPoint],
+  );
+  // The placeholder is committed with the popover (a portal in the same render),
+  // so the hook's layout pass already finds it.
+  const [preview, setPreview] = useState<EventPreview | null>(null);
+  // No calendar can take an event: open on Task this time (the kept choice stays).
+  const onNoCalendar = useCallback(() => setOpenedAs((cur) => cur ?? 'task'), []);
+  const placement = useMenuPlacement(true, seed.placeholder ? blockRef : anchorRef, menuRef, {
+    anchorPoint,
+    beside: !anchorPoint,
+    gap: anchorPoint ? 2 : 12,
     align: 'left',
+    onAnchorLost: onClose,
+    // The block moves with the form's day and start time: follow it.
+    anchorKey: preview ? `${preview.day}|${preview.allDay}|${preview.startMin}` : undefined,
   });
-  const [tab, setTab] = useState<'task' | 'event'>(seed.tab && onCreateEvent ? seed.tab : 'task');
 
-  // The page's canCreateEvent gate is OPTIMISTIC while calendar sources load.
-  // If it settles to "no writable source" while the user sits on the Event tab,
-  // onCreateEvent flips to undefined — without this fallback the tab bar
-  // unmounts but the event form stays, and Create throws a raw TypeError into
-  // the form ("onCreateEvent is not a function") with the user stranded.
-  useEffect(() => {
-    if (!onCreateEvent && tab === 'event') setTab('task');
-  }, [onCreateEvent, tab]);
+  const onPreview = useCallback((p: EventPreview) => setPreview(p), []);
 
   // Window-level Escape: the composer/form inputs handle Escape only while
-  // focused — after clicking non-focusable popover chrome (tabs, header, the
-  // when-line) focus sits on <body> and Escape went dead, leaving the modal
-  // backdrop swallowing every grid click. Same pattern as CalendarItemPopover.
+  // focused; after clicking non-focusable popover chrome focus sits on <body>.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      // A flyout's own Escape (EventCreateForm) stops the event before it gets here.
+      if (e.key === 'Escape' && !e.isComposing) onClose();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
-  // Flat list of existing project names for the composer's datalist. Project is
-  // the single grouping layer; Inbox is the absence of one, so '' never appears.
-  // Registry first (an existing-but-EMPTY project must not be badged "new" in the
-  // confirm step), then names seen on tasks as a fallback while that fetch is in
-  // flight. Deduped case-insensitively, canonical registry spelling winning.
+  // Flat list of existing project names for the composer's datalist. Registry
+  // first (an existing-but-EMPTY project must not be badged "new"), then names
+  // seen on tasks while that fetch is in flight. Deduped case-insensitively.
   const projectOptions = useMemo(() => {
-    const seen = new Map<string, string>(); // lowercase → canonical/first spelling
+    const seen = new Map<string, string>();
     for (const name of projectRegistry.projectNames) {
       if (name.trim()) seen.set(name.trim().toLowerCase(), name.trim());
     }
@@ -95,20 +136,15 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
     return [...seen.values()].sort((a, b) => a.localeCompare(b));
   }, [tasks, projectRegistry.projectNames]);
 
-  // A drag-selected range is the task's working block (start→end), NOT a
-  // deadline — seeding it as due_date invented a due the user never asked for.
-  const initialDates = useMemo(
-    () => ({ start: seed.start, end: seed.end }),
-    [seed.start, seed.end]
-  );
+  // A drag-selected range is the task's working block (start→end), NOT a deadline.
+  const initialDates = useMemo(() => ({ start: seed.start, end: seed.end }), [seed.start, seed.end]);
 
   return createPortal(
     <>
       {/* Instinctive double-clicks must not toggle-close: the popover the 1st
-          click opened puts this backdrop under the 2nd click, which then undid
-          everything (customer finding: "double-click leaves you with nothing").
-          detail>1 = later clicks of a multi-click — swallow them. mousedown too:
-          QuickTaskComposer closes itself on any document mousedown outside. */}
+          click opened puts this backdrop under the 2nd click. detail>1 = later
+          clicks of a multi-click: swallow them. mousedown too: QuickTaskComposer
+          closes itself on any document mousedown outside. */}
       <div
         className="cal-popover-backdrop"
         onMouseDown={(e) => {
@@ -120,40 +156,59 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
         onClick={(e) => {
           if (e.detail <= 1) onClose();
         }}
-        // Same as CalendarItemPopover: no browser menu on the backdrop.
         onContextMenu={(e) => {
           e.preventDefault();
           onClose();
         }}
       />
-      <div className="cal-create-popover" ref={menuRef} style={menuPlacementStyle(placement)}>
+      {seed.placeholder && (
+        <PlaceholderBlock
+          blockRef={blockRef}
+          placeholder={seed.placeholder}
+          seed={seed}
+          kind={shown}
+          preview={shown === 'event' ? preview : null}
+        />
+      )}
+      <div
+        className="cal-create-popover"
+        ref={menuRef}
+        style={menuPlacementStyle(placement)}
+        data-kind={shown}
+        onPointerDown={(e) => e.stopPropagation()}
+        // QuickTaskComposer closes on any document mousedown outside itself; the
+        // popover's own padding, gaps and scrollbar are not outside.
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         {onCreateEvent && (
           <div
             className="cal-create-tabs"
             role="tablist"
-            // The tabs sit INSIDE this popover but OUTSIDE QuickTaskComposer's
-            // root div, and the composer closes on any document mousedown
-            // outside itself — so without this, clicking "Event" closed the
-            // whole popover before the tab could switch.
-            onMouseDown={(e) => e.stopPropagation()}
+            aria-label="New item kind"
           >
-            <button role="tab" aria-selected={tab === 'task'} className={tab === 'task' ? 'active' : ''} onClick={() => setTab('task')}>
-              Task
-            </button>
-            <button role="tab" aria-selected={tab === 'event'} className={tab === 'event' ? 'active' : ''} onClick={() => setTab('event')}>
+            <button role="tab" aria-selected={shown === 'event'} className={shown === 'event' ? 'active' : ''} onClick={() => pick('event')}>
               Event
+            </button>
+            <button role="tab" aria-selected={shown === 'task'} className={shown === 'task' ? 'active' : ''} onClick={() => pick('task')}>
+              Task
             </button>
           </div>
         )}
-        {tab === 'task' || !onCreateEvent ? (
+        {/* The event form stays mounted while Task shows, so a switch there and
+            back keeps the times and calendar the user set. */}
+        {onCreateEvent && (
+          <div className="cal-create-side" hidden={shown !== 'event'}>
+            <EventCreateForm seed={seed} onClose={onClose} onCreateEvent={onCreateEvent} onPreview={onPreview} onNoCalendar={onNoCalendar} active={shown === 'event'} />
+          </div>
+        )}
+        {shown === 'task' && (
           <QuickTaskComposer
             open
             onClose={onClose}
             projectOptions={projectOptions}
             initialDates={initialDates}
             onCreate={async (input) => {
-              // pinnedTier needs the Focus Bar plumbing MainPage owns — out of
-              // scope on the calendar.
+              // pinnedTier needs the Focus Bar plumbing MainPage owns: out of scope here.
               await onCreateTask({
                 title: input.title,
                 priority: input.priority,
@@ -166,196 +221,88 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
               onClose();
             }}
           />
-        ) : (
-          <EventCreateForm seed={seed} onClose={onClose} onCreateEvent={onCreateEvent!} />
         )}
       </div>
+      {/* After the popover, at its z-index: over its border, under a flyout opened from it. */}
+      <PopoverArrow arrow={placement?.arrow} />
     </>,
     document.body
   );
 }
 
-/** Minimal event creator: title + writable target calendar; times from the slot. */
-function EventCreateForm({
-  seed,
-  onClose,
-  onCreateEvent,
-}: {
-  seed: CreateSeed;
-  onClose: () => void;
-  onCreateEvent: NonNullable<Props['onCreateEvent']>;
-}) {
-  // The new event's title is a draft until it is created or Cancel is pressed;
-  // Esc or a click outside keeps it for the next slot the popover opens on.
-  const titleDraft = useDraft(draftKey('calendar-event', 'new'));
-  const { text: title, setText: setTitle } = titleDraft;
-  const [calendars, setCalendars] = useState<CalendarInfo[] | null>(null);
-  const [calendarId, setCalendarId] = useState('');
-  const [defaultWarning, setDefaultWarning] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    listCalendarSources()
-      .then((res) => {
-        if (!alive) return;
-        const defaultId = res.defaultCalendar?.id ?? null;
-        // The default stays pickable even when hidden in Walnut: the user chose it on purpose.
-        const writable = res.calendars.filter((c) => !c.readonly && (!c.hidden || c.id === defaultId));
-        setCalendars(writable);
-        // The configured default, not whichever calendar macOS happens to list first (that
-        // order is EventKit's, and on a Mac with a work account it can be the work calendar).
-        // A default that is set but unusable preselects nothing: the server refuses to guess
-        // a replacement, so the form must not guess one either.
-        if (res.defaultCalendar?.configuredId && !defaultId) {
-          setDefaultWarning(res.defaultCalendar.warning ?? 'The default calendar cannot be used. Pick a calendar.');
-          return;
-        }
-        const preselect = writable.find((c) => c.id === defaultId) ?? writable[0];
-        if (preselect) setCalendarId(preselect.id);
-      })
-      .catch(() => alive && setCalendars([]));
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  const allDay = !seed.start.includes('T');
-  const day = seed.start.slice(0, 10);
-  // Editable times: a meeting is rarely exactly the clicked slot + 1h, and
-  // without these every new event was silently forced to one hour.
-  const [startTime, setStartTime] = useState(() => (allDay ? '' : seed.start.slice(11, 16)));
-  const [endTime, setEndTime] = useState(() => {
-    if (allDay) return '';
-    const end = seed.end ?? addHourLocal(seed.start);
-    return end.slice(11, 16);
-  });
-  // Editing Start keeps the duration (same macOS-Calendar behavior as the item
-  // popover) — holding End fixed dead-ended "the meeting is 3h later" edits in
-  // "End must be after start." Duration = intent: only explicit End edits set it,
-  // and Start edits don't shift a misordered End (the user is mid-correction).
-  const toMin = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
-  const [durMin, setDurMin] = useState(() => (allDay || !startTime || !endTime ? 0 : Math.max(0, toMin(endTime) - toMin(startTime))));
-  const changeStart = (newStart: string) => {
-    // Skip the shift only on a REAL misorder (both fields filled, end<=start —
-    // the user is mid-correction). A transiently blank field (Chromium emits
-    // '' between keystrokes; Backspace-retype) must NOT disarm the shift.
-    const misorderedNow = !!startTime && !!endTime && endTime <= startTime;
-    if (newStart && durMin > 0 && !misorderedNow) {
-      const shifted = Math.min(toMin(newStart) + durMin, 23 * 60 + 59);
-      const pad = (n: number) => String(n).padStart(2, '0');
-      setEndTime(`${pad(Math.floor(shifted / 60))}:${pad(shifted % 60)}`);
-    }
-    setStartTime(newStart);
-  };
-  const changeEnd = (newEnd: string) => {
-    if (newEnd && startTime) {
-      const d = toMin(newEnd) - toMin(startTime);
-      if (d > 0) setDurMin(d);
-    }
-    setEndTime(newEnd);
-  };
-  // A cleared time input (Backspace mid-retype) must gate Create too —
-  // submitting a blank composes '<day>T:00' and surfaces a raw server 400.
-  const incomplete = !allDay && (!startTime || !endTime);
-  const misordered = !allDay && !!startTime && !!endTime && endTime <= startTime;
-  const invalid = incomplete || misordered;
-
-  const titleBox = useRef<HTMLInputElement>(null);
-  const titleMic = useRef<BoxMicHandle | null>(null);
-  const submitNow = async () => {
-    if (!title.trim() || !calendarId || submitting || invalid) return;
-    titleMic.current?.clear();
-    setSubmitting(true);
-    setError(null);
-    try {
-      const start = allDay ? day : `${day}T${startTime}:00`;
-      const end = allDay ? (seed.end ?? day) : `${day}T${endTime}:00`;
-      const sentKey = titleDraft.key;
-      await onCreateEvent({ calendarId, title: title.trim(), start, end, allDay });
-      titleDraft.clear(sentKey);
-      onClose();
-    } catch (err) {
-      // 400, not 200: a refused write names its fix at the end of a ~170-character message.
-      setError(String((err as Error).message ?? err).slice(0, 400));
-      setSubmitting(false);
-    }
-  };
-  // Enter and Create wait for a title still being dictated, then create the event.
-  const gate = useSendAfterDictation([titleMic], () => void submitNow());
-
+/** The arrow on the popover's edge, pointing at the block (a sibling: the popover clips its own overflow). */
+function PopoverArrow({ arrow }: { arrow?: PlacementArrow }) {
+  if (!arrow) return null;
   return (
-    <div className="cal-event-form" role="dialog" aria-label="Add an event">
-      <MicField inline boxRef={titleBox} text={title} setText={setTitle} handleRef={titleMic} disabled={submitting}>
-        <input
-          ref={titleBox}
-          data-draft-key={titleDraft.key ?? undefined}
-          className="cal-event-form-title"
-          placeholder="Event title…"
-          value={title}
-          autoFocus
-          maxLength={200}
-          onChange={(e) => setTitle(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); gate.send(); }
-            if (e.key === 'Escape') onClose();
-          }}
-        />
-      </MicField>
-      <div className="cal-event-form-when">
-        {allDay ? (
-          <>
-            {day}
-            {seed.end && seed.end !== day ? ` – ${seed.end}` : ' (all-day)'}
-          </>
-        ) : (
-          <>
-            <span>{day}</span>
-            <input type="time" value={startTime} onChange={(e) => changeStart(e.target.value)} aria-label="Start time" />
-            <span className="cal-item-dash">–</span>
-            <input type="time" value={endTime} onChange={(e) => changeEnd(e.target.value)} aria-label="End time" />
-          </>
-        )}
-      </div>
-      {misordered && <div className="cal-event-form-error">End must be after start.</div>}
-      <select
-        value={calendarId}
-        disabled={!calendars?.length}
-        onChange={(e) => setCalendarId(e.target.value)}
-        aria-label="Calendar"
-        data-testid="cal-event-form-calendar"
-      >
-        {calendars === null && <option>Loading calendars…</option>}
-        {calendars?.length === 0 && <option>No writable calendar</option>}
-        {!!calendars?.length && !calendarId && <option value="">Pick a calendar</option>}
-        {calendars?.map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.title} ({c.account}){c.default ? ' · default' : ''}
-          </option>
-        ))}
-      </select>
-      {defaultWarning && !calendarId && (
-        <div className="cal-event-form-error" data-testid="cal-event-form-default-warning">{defaultWarning}</div>
-      )}
-      {error && <div className="cal-event-form-error">{error}</div>}
-      <div className="cal-event-form-footer">
-        <button className="cal-event-form-create" disabled={(!title.trim() && !gate.micBusy && !gate.waiting) || !calendarId || submitting || invalid} onClick={gate.send} {...dictationWaitProps(gate)}>
-          {submitting ? 'Creating…' : 'Create event'}
-        </button>
-        <button onClick={() => { titleDraft.clear(); onClose(); }}>Cancel</button>
-      </div>
-    </div>
+    <div
+      className="cal-create-arrow"
+      data-edge={arrow.edge}
+      style={{ position: 'fixed', left: arrow.x, top: arrow.y, zIndex: 9999 }}
+      aria-hidden="true"
+    />
   );
 }
 
-function addHourLocal(iso: string): string {
-  const [day, time] = iso.split('T');
-  const [h, m] = time.split(':').map(Number);
-  // Clamp to 23:59, not "hour 23 same minute": the latter seeded a ZERO-length
-  // 23:00–23:00 range for 22:30+ slots — the form opened pre-broken with
-  // 'End must be after start.' before the user touched anything.
-  const mins = Math.min(h * 60 + m + 60, 23 * 60 + 59);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${day}T${pad(Math.floor(mins / 60))}:${pad(mins % 60)}:00`;
+/**
+ * The block being created, drawn in the grid itself (a portal into the day
+ * column or all-day cell), so it sits exactly where the event will land and
+ * scrolls with the grid. Event side: the form's live title, times and colour.
+ */
+function PlaceholderBlock({
+  blockRef,
+  placeholder,
+  seed,
+  kind,
+  preview,
+}: {
+  blockRef: React.Ref<HTMLDivElement>;
+  placeholder: CreatePlaceholder;
+  seed: CreateSeed;
+  kind: CreateKind;
+  preview: EventPreview | null;
+}) {
+  const seedDay = seed.start.slice(0, 10);
+  const hostDay = placeholder.day ?? seedDay;
+  const timedHost = !!placeholder.minuteToPx;
+  const seedStart = seed.start.includes('T') ? minutesOfDay(seed.start) : null;
+  const seedEnd = seed.end?.includes('T')
+    ? (seed.end.slice(0, 10) > seedDay ? 24 * 60 : minutesOfDay(seed.end))
+    : seedStart === null ? null : Math.min(seedStart + (kind === 'event' ? 60 : 30), 24 * 60);
+  const day = preview?.day ?? seedDay;
+  // Whole days from the host's day to the item's: 0 (its day) or 1 (the hours past midnight).
+  const offset = Math.round((Date.parse(`${day}T00:00:00`) - Date.parse(`${hostDay}T00:00:00`)) / 86_400_000);
+  const shift = (m: number | null) => (m === null ? null : m + offset * 24 * 60);
+  const startMin = shift(preview ? preview.startMin : seedStart);
+  const endMin = shift(preview ? preview.endMin : seedEnd);
+  const allDay = preview ? preview.allDay : seedStart === null;
+  // Off this host's day or kind (the date was moved, all-day toggled): keep the
+  // box for the arrow, but draw nothing where the item will not be.
+  const away = (timedHost ? offset < 0 || offset > 1 : offset !== 0) || allDay === timedHost;
+  const title = preview?.title || (kind === 'event' ? 'New Event' : 'New Task');
+  const style: React.CSSProperties & Record<string, string | number> = {};
+  if (preview?.color && kind === 'event') style['--cal-chip-tint'] = preview.color;
+  if (timedHost && startMin !== null) {
+    const top = placeholder.minuteToPx!(startMin);
+    const bottom = placeholder.minuteToPx!(Math.max(endMin ?? startMin + 30, startMin + 15));
+    style.top = top;
+    style.height = Math.max(bottom - top, 18);
+  }
+  if (away) style.visibility = 'hidden';
+  const oneLine = typeof style.height === 'number' && style.height < ONE_LINE_BELOW_PX;
+  return createPortal(
+    <div
+      ref={blockRef}
+      className={`cal-chip cal-create-placeholder${timedHost ? '' : ' cal-chip-compact'}${oneLine ? ' cal-chip-oneline' : ''}`}
+      data-testid="cal-create-placeholder"
+      data-kind={kind}
+      style={style}
+      aria-hidden="true"
+    >
+      <span className="cal-chip-title">{title}</span>
+      {timedHost && startMin !== null && endMin !== null && endMin > startMin && (
+        <span className="cal-chip-time">{clockRange(startMin % 1440, endMin - (startMin - (startMin % 1440)))}</span>
+      )}
+    </div>,
+    placeholder.host,
+  );
 }

@@ -39,12 +39,15 @@
  */
 
 import { isPhoneLayout } from './usePhoneLayout';
+import { besidePlacement, sameArrow, verticalArrow, type PlacementArrow } from './menu-placement-beside';
 import { useState, useRef, useLayoutEffect, type CSSProperties, type RefObject } from 'react';
 
 export interface MenuPlacement {
   top: number;
   right: number;
   maxHeight: number;
+  /** Only with `beside`: where the popover's arrow sits, pointing at the anchor. */
+  arrow?: PlacementArrow;
 }
 
 export interface MenuPlacementOptions {
@@ -128,6 +131,19 @@ export interface MenuPlacementOptions {
    * the same row. The flip/clamp/maxHeight rules are unchanged either way.
    */
   preferSide?: 'up' | 'down';
+  /**
+   * Open to the SIDE of the anchor (right, else left) with an arrow pointing at
+   * it, like a calendar's new-event popover next to the block it creates; when
+   * neither side has room, below/above as usual (centered, still with an arrow).
+   * The result carries `arrow` (menu-placement-beside.ts). `gap` must hold it.
+   */
+  beside?: boolean;
+  /**
+   * Re-place when this changes: an anchor that MOVES without resizing or
+   * scrolling (a placeholder block following the form's start time) fires
+   * nothing the hook listens to.
+   */
+  anchorKey?: string | number;
   /**
    * The box the menu must fit in. 'visual' (the default in phone layout): the
    * part of the screen the keyboard leaves, under the phone's top bar, so a
@@ -305,7 +321,7 @@ export function useMenuPlacement(
 ): MenuPlacement | null {
   const {
     gap = 2, margin = 8, minHeight = 180, anchorPoint = null, align = 'right', preferSide = 'down',
-    edgeOverflow = 'flip', verticalAnchorRef, onAnchorLost, boundsRef,
+    edgeOverflow = 'flip', verticalAnchorRef, onAnchorLost, boundsRef, beside = false, anchorKey,
   } = options;
   const bounds = options.bounds ?? (isPhoneLayout() ? 'visual' : 'layout');
   const [placement, setPlacement] = useState<MenuPlacement | null>(null);
@@ -419,10 +435,20 @@ export function useMenuPlacement(
           })()
         : [0, 0];
 
-      const next = computePlacement({
+      const vp = bounds === 'visual' ? visualBounds() : { height: window.innerHeight, top: 0 };
+      const naturalHeight = menu ? menu.scrollHeight + aboveY + borderY : 0;
+      const menuWidth = menu ? menu.offsetWidth : 0;
+      const besideAt = beside && 'left' in r && r.left !== undefined
+        ? besidePlacement({
+            anchor: { top: r.top, bottom: r.bottom, left: r.left, right: r.right },
+            naturalHeight, menuWidth, viewportWidth: window.innerWidth,
+            viewportHeight: vp.height, topInset: vp.top, gap, margin,
+          })
+        : null;
+      const stacked = besideAt ? null : computePlacement({
         anchor: { top: r.top, bottom: r.bottom, right: r.right, ...('left' in r ? { left: r.left } : {}) },
-        naturalHeight: menu ? menu.scrollHeight + aboveY + borderY : 0,
-        menuWidth: menu ? menu.offsetWidth : 0,
+        naturalHeight,
+        menuWidth,
         viewportWidth: window.innerWidth,
         ...(boundsRef?.current?.isConnected
           ? (() => {
@@ -443,13 +469,18 @@ export function useMenuPlacement(
           : bounds === 'visual'
             ? (() => { const b = visualBounds(); return { viewportHeight: b.height, topInset: b.top }; })()
             : { viewportHeight: window.innerHeight }),
-        gap, margin, minHeight: bounds === 'visual' ? Math.min(minHeight, 132) : minHeight, align, preferSide, edgeOverflow,
+        gap, margin, minHeight: bounds === 'visual' ? Math.min(minHeight, 132) : minHeight,
+        align: beside ? 'center' : align, preferSide, edgeOverflow,
         forceSide: sideRef.current,
       });
+      const next: MenuPlacement = besideAt
+        ?? (beside
+          ? { ...stacked!, arrow: verticalArrow(stacked!, r, menuWidth, naturalHeight, window.innerWidth) }
+          : stacked!);
       // Latch on the first pass only — but not before the menu has been measured,
       // or we'd freeze a side chosen from naturalHeight 0 (which always "fits
       // below") and never reconsider once the real height is known.
-      if (menu && sideRef.current === null) sideRef.current = next.side;
+      if (menu && sideRef.current === null && stacked) sideRef.current = stacked.side;
 
       // ⚠️ LOAD-BEARING, not a micro-optimisation: the ResizeObserver below
       // watches the very element whose size we set (we apply maxHeight → its box
@@ -459,8 +490,9 @@ export function useMenuPlacement(
       // state update. Remove it and you get an infinite render loop.
       setPlacement((prev) =>
         prev && prev.top === next.top && prev.right === next.right && prev.maxHeight === next.maxHeight
+          && sameArrow(prev.arrow, next.arrow)
           ? prev
-          : next);
+          : { top: next.top, right: next.right, maxHeight: next.maxHeight, ...(next.arrow ? { arrow: next.arrow } : {}) });
     };
 
     place();
@@ -540,7 +572,7 @@ export function useMenuPlacement(
       document.removeEventListener('transitionend', onScrollOrResize, true);
       if (bounds === 'visual') window.visualViewport?.removeEventListener('resize', onScrollOrResize);
     };
-  }, [open, triggerRef, menuRef, gap, margin, minHeight, anchorPoint, align, preferSide, edgeOverflow, verticalAnchorRef, bounds, boundsRef]);
+  }, [open, triggerRef, menuRef, gap, margin, minHeight, anchorPoint, align, preferSide, edgeOverflow, verticalAnchorRef, bounds, boundsRef, beside, anchorKey]);
 
   return placement;
 }

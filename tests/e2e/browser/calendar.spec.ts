@@ -226,6 +226,8 @@ test.describe('Calendar view', () => {
     const point = await columnPoint(page, today, 14)
 
     await page.mouse.click(point.x, point.y)
+    // The popover opens on Event (the default); a task is one switch away.
+    await page.locator('.cal-create-popover').getByRole('tab', { name: 'Task', exact: true }).click()
     const composer = page.locator('.cal-create-popover .quick-task-composer')
     await expect(composer).toBeVisible()
 
@@ -353,7 +355,7 @@ test.describe('Calendar view', () => {
     const input = popover.locator('.cal-event-form-title')
     await input.fill(title)
     // writable-calendar select is populated from /api/calendar/sources
-    await expect(popover.locator('select')).toBeEnabled()
+    await expect(popover.getByTestId('cal-event-form-calendar')).toBeEnabled()
     await popover.locator('.cal-event-form-create').click()
 
     await expect
@@ -790,7 +792,7 @@ test.describe('Calendar view', () => {
     const end = popover.locator('input[aria-label="End time"]')
     await expect(end).toHaveValue('12:00') // default = slot + 1h
     await end.fill('13:30')
-    await expect(popover.locator('select')).toBeEnabled()
+    await expect(popover.getByTestId('cal-event-form-calendar')).toBeEnabled()
     await popover.locator('.cal-event-form-create').click()
 
     await expect
@@ -958,7 +960,7 @@ test.describe('Calendar view', () => {
     // Clicking an empty slot opens the quick-create popover
     const point = await columnPoint(page, today, 18, panel)
     await page.mouse.click(point.x, point.y)
-    await expect(page.locator('.cal-create-popover .quick-task-composer')).toBeVisible()
+    await expect(page.locator('.cal-create-popover .cal-event-form')).toBeVisible()
     await page.keyboard.press('Escape')
 
     // Toggle closes
@@ -1228,6 +1230,7 @@ test.describe('Calendar view', () => {
     await page.mouse.move(col.x + col.width / 2, scroll.y + 196, { steps: 8 })
     await page.mouse.up()
 
+    await page.locator('.cal-create-popover').getByRole('tab', { name: 'Task', exact: true }).click()
     const chips = page.locator('.cal-create-popover .qtc-chip')
     await expect(chips.first()).toBeVisible()
     const labels = await chips.allTextContents()

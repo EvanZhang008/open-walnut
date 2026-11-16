@@ -297,6 +297,7 @@ test.describe('Every input box keeps its unsent draft', () => {
       const day = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`
       const slot = await calendarEmptySlotPoint(page, day)
       await page.mouse.click(slot.x, slot.y)
+      await page.locator('.cal-create-popover').getByRole('tab', { name: 'Task', exact: true }).click()
       const composer = page.locator('.cal-create-popover .quick-task-composer')
       await expect(composer).toBeVisible()
       return composer

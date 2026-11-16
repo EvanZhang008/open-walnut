@@ -28,6 +28,8 @@ import { useResizableHeight } from '@/hooks/useResizableHeight';
 import {
   SLOT_MINUTES,
   SNAP_MINUTES,
+  clockLabel,
+  clockRange,
   formatDateOnly,
   layoutDayEvents,
   weekRange,
@@ -38,7 +40,8 @@ import { timeGridItems } from './calendar-items';
 import './grid-controls.css';
 import type { CalendarItem } from './calendar-items';
 import { CalendarChip } from './CalendarChip';
-import type { CreateSeed } from './QuickCreatePopover';
+import { isCreateKind, ONE_LINE_BELOW_PX, type CreateKind, type CreateSeed } from './QuickCreatePopover';
+import { usePageView } from '@/utils/view-memory';
 
 export const SLOT_PX = 24;
 const CLICK_TOLERANCE_PX = 4;
@@ -85,6 +88,8 @@ interface Props {
   onItemClick?: (item: CalendarItem, el: HTMLElement) => void;
   /** Homepage agenda only: let the all-day area grow to ten rows and resize. */
   resizableAllDay?: boolean;
+  /** False when no calendar can take an event: a new item can only be a task. */
+  canCreateEvent?: boolean;
 }
 
 interface ChipDrag {
@@ -107,6 +112,14 @@ interface CreateDrag {
   pointer: { x: number; y: number };
 }
 
+/** Whole 15 px text lines a block of this height holds (the chip decides what fits). */
+const chipLines = (height: number) => Math.max(1, Math.floor((height - 4) / 15));
+
+function isWeekend(day: string): boolean {
+  const dow = new Date(`${day}T00:00:00`).getDay();
+  return dow === 0 || dow === 6;
+}
+
 function hourLabel(hour: number): string {
   const h = hour % 24;
   if (h === 0) return '12 AM';
@@ -114,12 +127,9 @@ function hourLabel(hour: number): string {
   return h < 12 ? `${h} AM` : `${h - 12} PM`;
 }
 
-function minsToLabel(mins: number): string {
-  const h24 = Math.floor(mins / 60) % 24;
-  const m = mins % 60;
-  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
-  return `${h12}:${String(m).padStart(2, '0')} ${h24 < 12 ? 'AM' : 'PM'}`;
-}
+const minsToLabel = (mins: number) => clockLabel(mins, true);
+/** Hour labels this close to the now-line give way to its time label. */
+const NOW_LABEL_CLEAR_PX = 10;
 
 const AllDayCell = memo(function AllDayCell({
   day,
@@ -207,7 +217,7 @@ const DayColumn = memo(function DayColumn({
   return (
     <div
       ref={setNodeRef}
-      className={`cal-day-col${isToday ? ' cal-day-col-today' : ''}${isOver ? ' cal-dropover' : ''}`}
+      className={`cal-day-col${isToday ? ' cal-day-col-today' : ''}${isWeekend(day) ? ' cal-day-col-weekend' : ''}${isOver ? ' cal-dropover' : ''}`}
       data-day={day}
       onPointerDown={(e) => {
         // Empty-space only: chips call stopPropagation in their handler below.
@@ -229,6 +239,7 @@ const DayColumn = memo(function DayColumn({
           <CalendarChip
             key={it.id}
             item={it}
+            lines={chipLines(height)}
             ghosted={ghostItemId === it.id}
             style={{
               top,
@@ -237,7 +248,7 @@ const DayColumn = memo(function DayColumn({
               width: `calc(${widthPct}% - 4px)`,
               // Whole 15 px title lines the chip holds: a narrow phone chip wraps
               // its title over them (phone-pages-r3.css).
-              '--cal-chip-lines': Math.max(1, Math.floor((height - 4) / 15)),
+              '--cal-chip-lines': chipLines(height),
             } as React.CSSProperties}
             onMovePointerDown={(e, item) => {
               e.stopPropagation();
@@ -266,6 +277,7 @@ export const TimeGrid = memo(function TimeGrid({
   onContextMenu,
   onItemClick,
   resizableAllDay = false,
+  canCreateEvent = true,
 }: Props) {
   const { zoom, fullDay } = useCalendarGridSettings();
   const startMinute = 0;
@@ -362,6 +374,8 @@ export const TimeGrid = memo(function TimeGrid({
       setNowMin(n.getHours() * 60 + n.getMinutes());
     }, 60_000);
   }, []);
+
+  const showNow = dayList.includes(todayStr) && nowMin >= startMinute && nowMin < endMinute;
 
   const { allDayByDay, timedByDay } = useMemo(() => {
     const allDay = new Map<string, CalendarItem[]>();
@@ -515,6 +529,18 @@ export const TimeGrid = memo(function TimeGrid({
   );
 
   // ---- drag-to-create gesture --------------------------------------------------
+  // The kind a new item will be (the popover's kept Event | Task choice), so the
+  // block being dragged reads "New Event" or "New Task" before the popover opens.
+  const [keptKind] = usePageView<CreateKind>('calendar', 'createKind', 'event', isCreateKind);
+  const createKind: CreateKind = canCreateEvent ? keptKind : 'task';
+  /** Where the popover draws the block being created: the day's column, minute → px. */
+  const timedPlaceholder = useCallback(
+    (day: string) => {
+      const host = colsRef.current?.querySelector<HTMLElement>(`.cal-day-col[data-day="${day}"]`);
+      return host ? { host, day, minuteToPx: (m: number) => gridY(m, startMinute, slotPx) } : undefined;
+    },
+    [startMinute, slotPx]
+  );
   const createRef = useRef<CreateDrag | null>(null);
   const [createSel, setCreateSel] = useState<CreateDrag | null>(null);
 
@@ -533,10 +559,12 @@ export const TimeGrid = memo(function TimeGrid({
       createRef.current = null;
       setCreateSel(null);
       if (!sel || canceled) return;
+      const placeholder = timedPlaceholder(sel.day);
       if (!sel.moved) {
         onCreate({
           start: gridLocalIso(sel.day, sel.anchorMin),
           anchorPoint: sel.pointer,
+          placeholder,
         });
       } else {
         // Selection endpoints snap to SNAP_MINUTES (15), not SLOT_MINUTES (30)
@@ -546,6 +574,7 @@ export const TimeGrid = memo(function TimeGrid({
           start: gridLocalIso(sel.day, sel.startMin),
           end: gridLocalIso(sel.day, sel.endMin),
           anchorPoint: sel.pointer,
+          placeholder,
         });
       }
     },
@@ -568,8 +597,9 @@ export const TimeGrid = memo(function TimeGrid({
     [createGesture, minAtY, endMinute, publishMetrics]
   );
 
+
   const handleAllDayEmptyClick = useCallback(
-    (day: string, el: HTMLElement) => onCreate({ start: day, anchorEl: el }),
+    (day: string, el: HTMLElement) => onCreate({ start: day, anchorEl: el, placeholder: { host: el } }),
     [onCreate]
   );
 
@@ -587,19 +617,20 @@ export const TimeGrid = memo(function TimeGrid({
       const mins = Math.min(endMinute - SLOT_MINUTES, gridSnapMinute(minAtY(day, e.clientY), SLOT_MINUTES, endMinute));
       onContextMenu(
         { x: e.clientX, y: e.clientY },
-        { seed: { start: gridLocalIso(day, mins), anchorPoint: { x: e.clientX, y: e.clientY } } }
+        { seed: { start: gridLocalIso(day, mins), anchorPoint: { x: e.clientX, y: e.clientY }, placeholder: timedPlaceholder(day) } }
       );
     },
-    [onContextMenu, minAtY, endMinute, publishMetrics]
+    [onContextMenu, minAtY, endMinute, publishMetrics, timedPlaceholder]
   );
 
   const handleAllDayContextMenu = useCallback(
     (e: React.MouseEvent, day: string) => {
       if (!onContextMenu) return;
       e.preventDefault();
+      const host = e.currentTarget as HTMLElement;
       onContextMenu(
         { x: e.clientX, y: e.clientY },
-        { seed: { start: day, anchorPoint: { x: e.clientX, y: e.clientY } } }
+        { seed: { start: day, anchorPoint: { x: e.clientX, y: e.clientY }, placeholder: { host } } }
       );
     },
     [onContextMenu]
@@ -668,9 +699,19 @@ export const TimeGrid = memo(function TimeGrid({
         <div className="cal-grid-ruler" style={{ height: gridY(endMinute, startMinute, slotPx) }}>
           {hours.map((h) => (
             <div key={h} className="cal-grid-hour" style={{ height: slotPx * 2 }}>
-              <span className="cal-grid-hourlabel">{hourLabel(h)}</span>
+              <span
+                className="cal-grid-hourlabel"
+                style={showNow && Math.abs(gridY(h * 60, startMinute, slotPx) - gridY(nowMin, startMinute, slotPx)) < NOW_LABEL_CLEAR_PX ? { visibility: 'hidden' } : undefined}
+              >
+                {hourLabel(h)}
+              </span>
             </div>
           ))}
+          {showNow && (
+            <span className="cal-now-label" data-testid="cal-now-label" style={{ top: gridY(nowMin, startMinute, slotPx) }}>
+              {clockLabel(nowMin, true)}
+            </span>
+          )}
           <span className="cal-grid-range-end">{hourLabel(endMinute / 60)}</span>
         </div>
         <div className="cal-grid-cols" ref={colsRef} style={{ height: gridY(endMinute, startMinute, slotPx) }}>
@@ -741,21 +782,24 @@ export const TimeGrid = memo(function TimeGrid({
           {createSel && (
             <GridOverlay day={createSel.day} dayList={dayList}>
               <div
-                className="cal-create-sel"
+                className={`cal-chip cal-create-placeholder cal-create-sel${gridY(createSel.endMin, createSel.startMin, slotPx) < ONE_LINE_BELOW_PX ? ' cal-chip-oneline' : ''}`}
+                data-kind={createKind}
                 style={{
                   top: gridY(createSel.startMin, startMinute, slotPx),
                   height: gridY(createSel.endMin, createSel.startMin, slotPx),
                 }}
               >
-                <span className="cal-drop-time">
-                  {minsToLabel(createSel.startMin)} – {minsToLabel(createSel.endMin)}
-                </span>
+                <span className="cal-chip-title">{createKind === 'task' ? 'New Task' : 'New Event'}</span>
+                <span className="cal-chip-time">{clockRange(createSel.startMin, createSel.endMin)}</span>
               </div>
             </GridOverlay>
           )}
 
-          {/* now line */}
-          {dayList.includes(todayStr) && nowMin >= startMinute && nowMin < endMinute && (
+          {/* now line: faint across the week, solid with a dot on today */}
+          {showNow && days > 1 && (
+            <div className="cal-now-line cal-now-line-faint" style={{ top: gridY(nowMin, startMinute, slotPx) }} />
+          )}
+          {showNow && (
             <GridOverlay day={todayStr} dayList={dayList}>
               <div className="cal-now-line" style={{ top: gridY(nowMin, startMinute, slotPx) }}>
                 <span className="cal-now-dot" />

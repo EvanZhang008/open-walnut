@@ -230,3 +230,17 @@ describe('layoutDayEvents overlap lanes', () => {
     expect(layoutDayEvents([]).size).toBe(0);
   });
 });
+
+describe('clock labels', () => {
+  it('reads a range the way a calendar block does', async () => {
+    const { clockLabel, clockRange, longDayLabel } = await import('../../web/src/utils/calendar-date')
+    expect(clockLabel(9 * 60)).toBe('9 AM')
+    expect(clockLabel(9 * 60, true)).toBe('9:00 AM')
+    expect(clockLabel(0)).toBe('12 AM')
+    expect(clockLabel(12 * 60 + 5)).toBe('12:05 PM')
+    expect(clockRange(9 * 60 + 15, 9 * 60 + 45)).toBe('9:15 – 9:45 AM')
+    expect(clockRange(11 * 60 + 30, 13 * 60)).toBe('11:30 AM – 1:00 PM')
+    expect(clockRange(23 * 60, 24 * 60)).toBe('11:00 PM – 12:00 AM')
+    expect(longDayLabel('2026-11-16')).toBe('Nov 16, 2026')
+  })
+})

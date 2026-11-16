@@ -74,6 +74,7 @@ test('calendar day and task scheduling survive closing the panel without leaked 
   await calendar.locator('.cal-allday-cell').click({ position: { x: 8, y: 8 } });
   const creator = page.locator('.cal-create-popover');
   await expect(creator).toBeVisible();
+  await creator.getByRole('tab', { name: 'Task', exact: true }).click();
   await creator.getByPlaceholder('Task title', { exact: true }).fill('Companion scheduled task');
   const saved = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/tasks');
   await creator.getByRole('button', { name: 'Create', exact: true }).click();

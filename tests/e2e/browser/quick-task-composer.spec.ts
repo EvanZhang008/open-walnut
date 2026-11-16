@@ -29,6 +29,8 @@ async function openComposer(page: Page): Promise<void> {
   const day = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`
   const slot = await calendarEmptySlotPoint(page, day)
   await page.mouse.click(slot.x, slot.y)
+  // The popover opens on Event (the default): these specs are about the Task side.
+  await page.locator('.cal-create-popover').getByRole('tab', { name: 'Task', exact: true }).click()
   await expect(page.locator('.cal-create-popover .quick-task-composer')).toBeVisible()
 }
 

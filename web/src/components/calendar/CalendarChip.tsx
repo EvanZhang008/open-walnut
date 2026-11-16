@@ -6,15 +6,8 @@
  * one per chip.
  */
 import { memo, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
+import { clockLabel, clockRange } from '@/utils/calendar-date';
 import type { CalendarItem } from './calendar-items';
-
-function timeLabel(startMin: number): string {
-  const h24 = Math.floor(startMin / 60) % 24;
-  const m = startMin % 60;
-  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
-  const ampm = h24 < 12 ? 'AM' : 'PM';
-  return m === 0 ? `${h12} ${ampm}` : `${h12}:${String(m).padStart(2, '0')} ${ampm}`;
-}
 
 export interface CalendarChipProps {
   item: CalendarItem;
@@ -22,6 +15,11 @@ export interface CalendarChipProps {
   style?: CSSProperties;
   /** Compact single-line variant for month cells / all-day row. */
   compact?: boolean;
+  /**
+   * Time-grid blocks: whole text lines the block's height holds. The title takes
+   * what the time and location lines leave, so no line is ever cut in half.
+   */
+  lines?: number;
   /** The view is previewing this chip elsewhere — render the original ghosted. */
   ghosted?: boolean;
   onMovePointerDown?: (e: ReactPointerEvent, item: CalendarItem) => void;
@@ -36,6 +34,7 @@ export const CalendarChip = memo(function CalendarChip({
   item,
   style,
   compact,
+  lines,
   ghosted,
   onMovePointerDown,
   onResizePointerDown,
@@ -58,6 +57,12 @@ export const CalendarChip = memo(function CalendarChip({
     .join(' ');
 
   const tint = isEvent ? item.event.color : undefined;
+  // A timed block: title first, then its time, then where (each only when a whole line is left).
+  const block = !compact && lines !== undefined;
+  const showTime = block && !item.allDay && lines >= 2;
+  const location = isEvent ? item.event.location : undefined;
+  const showLocation = block && !!location && lines >= (showTime ? 3 : 2);
+  const titleLines = block ? Math.max(1, lines - (showTime ? 1 : 0) - (showLocation ? 1 : 0)) : 1;
 
   return (
     <div data-peek-row=""
@@ -65,7 +70,8 @@ export const CalendarChip = memo(function CalendarChip({
       // click-open detail, not a hover expansion that covers the next event. List chips grow.
       data-peek={style?.top !== undefined ? 'off' : undefined}
       className={cls}
-      style={tint ? ({ ...style, '--cal-chip-tint': tint } as CSSProperties) : style}
+      style={{ ...style, ...(tint ? { '--cal-chip-tint': tint } : {}), ...(block ? { '--cal-title-lines': titleLines } : {}) } as CSSProperties}
+      data-lines={block ? lines : undefined}
       data-item-id={item.id}
       data-day={item.day}
       aria-label={isDue ? `Due: ${title}` : title}
@@ -90,12 +96,15 @@ export const CalendarChip = memo(function CalendarChip({
             <path d="M5 3v18h2v-7h11l-3-4.5L18 5H7V3H5z" />
           </svg>
         )}
-        {!item.allDay && compact && <span className="cal-chip-time">{timeLabel(item.startMin)}</span>}
+        {!item.allDay && compact && <span className="cal-chip-time">{clockLabel(item.startMin)}</span>}
         <span className="cal-chip-title">{title}</span>
       </span>
-      {isEvent && !compact && item.event.location && (
-        <span className="cal-chip-location">{item.event.location}</span>
+      {showTime && (
+        <span className="cal-chip-time cal-chip-range">
+          {isDue ? `Due ${clockLabel(item.startMin)}` : clockRange(item.startMin, item.endMin)}
+        </span>
       )}
+      {(block ? showLocation : !compact && !!location) && <span className="cal-chip-location">{location}</span>}
       {(isEvent || item.kind === 'task-start') && !item.allDay && !compact && !readonly && onResizePointerDown && (
         <div
           className="cal-chip-resize-handle"

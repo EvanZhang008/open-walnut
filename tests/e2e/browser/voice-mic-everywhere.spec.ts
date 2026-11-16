@@ -583,6 +583,7 @@ test.describe('Tasks', () => {
     const hour = 14
     const slot = await calendarEmptySlotPoint(page, today, hour)
     await page.mouse.click(slot.x, slot.y)
+    await page.locator('.cal-create-popover').getByRole('tab', { name: 'Task', exact: true }).click()
     const composer = page.locator('.cal-create-popover .quick-task-composer')
     await expect(composer).toBeVisible()
     await expectMicField(page, 'calendar-quick-create', composer.locator('.qtc-mic-field'))

@@ -117,7 +117,7 @@ test('quick-create preselects the default calendar and the event lands there', a
 
   // No default: unchanged behaviour, the first writable calendar.
   let popover = await openEventForm()
-  await expect(popover.getByTestId('cal-event-form-calendar')).toHaveValue('cal-work')
+  await expect(popover.getByTestId('cal-event-form-calendar')).toHaveAttribute('data-value', 'cal-work')
   await page.keyboard.press('Escape')
   await expect(popover).toHaveCount(0)
 
@@ -126,8 +126,8 @@ test('quick-create preselects the default calendar and the event lands there', a
   await setDefault('cal-personal')
   popover = await openEventForm()
   const select = popover.getByTestId('cal-event-form-calendar')
-  await expect(select).toHaveValue('cal-personal')
-  await expect(select.locator('option:checked')).toHaveText('Personal (iCloud) · default')
+  await expect(select).toHaveAttribute('data-value', 'cal-personal')
+  await expect(select).toContainText('Personal (iCloud) · default')
   await shot(page, 'quick-create-default', popover)
 
   const title = `DefaultCal ${Date.now()}`
@@ -148,7 +148,7 @@ test('quick-create preselects the default calendar and the event lands there', a
   await page.keyboard.press('Escape')
   // From 21:00: the event just made sits earlier.
   const again = await openEventForm(21)
-  await expect(again.getByTestId('cal-event-form-calendar')).toHaveValue('cal-personal')
+  await expect(again.getByTestId('cal-event-form-calendar')).toHaveAttribute('data-value', 'cal-personal')
   await page.keyboard.press('Escape')
 
   // Clean the shared fixture: the event is a Walnut-created private block.
@@ -178,14 +178,15 @@ test('quick-create picks nothing when the configured default is unusable, and sa
   await popover.locator('.cal-create-tabs button:has-text("Event")').click()
 
   const select = popover.getByTestId('cal-event-form-calendar')
-  await expect(select).toHaveValue('')
-  await expect(select.locator('option:checked')).toHaveText('Pick a calendar')
+  await expect(select).toHaveAttribute('data-value', '')
+  await expect(select).toContainText('Pick a calendar')
   await expect(popover.getByTestId('cal-event-form-default-warning')).toHaveText(warning)
   await popover.locator('.cal-event-form-title').fill('Unusable default probe')
   await expect(popover.locator('.cal-event-form-create')).toBeDisabled()
 
   // Picking one clears the warning and enables Create; nothing is created by this test.
-  await select.selectOption('cal-home')
+  await select.click()
+  await page.locator('.cal-cal-option[data-calendar-id="cal-home"]').click()
   await expect(popover.getByTestId('cal-event-form-default-warning')).toHaveCount(0)
   await expect(popover.locator('.cal-event-form-create')).toBeEnabled()
   await page.keyboard.press('Escape')

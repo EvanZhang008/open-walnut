@@ -182,3 +182,27 @@ export function layoutDayEvents(items: LaneInput[]): Map<string, LanePlacement> 
   flush();
   return placements;
 }
+
+/** A minute of the day as a clock label: "9 AM", "9:15 AM"; `full` keeps ":00" ("9:00 AM"). */
+export function clockLabel(mins: number, full = false): string {
+  const h24 = Math.floor(mins / 60) % 24;
+  const m = mins % 60;
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  const ampm = h24 < 12 ? 'AM' : 'PM';
+  return m === 0 && !full ? `${h12} ${ampm}` : `${h12}:${String(m).padStart(2, '0')} ${ampm}`;
+}
+
+/** A time range the way a calendar block reads it: "9:15 – 9:45 AM", "11:30 AM – 1 PM". */
+export function clockRange(startMin: number, endMin: number): string {
+  const sameHalf = Math.floor(startMin / 720) === Math.floor((endMin % 1440) / 720) && endMin < 1440;
+  const start = clockLabel(startMin, true);
+  return sameHalf ? `${start.replace(/ [AP]M$/, '')} – ${clockLabel(endMin, true)}` : `${start} – ${clockLabel(endMin, true)}`;
+}
+
+/** A day ("YYYY-MM-DD") as a calendar reads it: "Nov 16, 2026". */
+export function longDayLabel(day: string): string {
+  const [y, m, d] = day.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  if (Number.isNaN(date.getTime())) return day;
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}

@@ -248,6 +248,7 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
             onContextMenu={(point, target) => setCtxTarget({ point, ...target })}
             onItemClick={(item, anchorEl) => setOpenItem({ item, anchorEl })}
             resizableAllDay
+            canCreateEvent={canCreateEvent}
           />
         </DndContext>
       </div>

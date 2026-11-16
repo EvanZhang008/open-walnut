@@ -114,7 +114,7 @@ test('late events, midnight resizing, and next-day creation use the displayed wa
     await expect(popover).toBeVisible();
     await popover.getByRole('tab', { name: 'Event', exact: true }).click();
     await expect(popover.locator('input[type="time"]').first()).toHaveValue('02:00');
-    await expect(popover.locator('.cal-event-form-when')).toContainText(day(1));
+    await expect(popover.getByRole('button', { name: 'Date', exact: true })).toHaveAttribute('data-day', day(1));
     await page.keyboard.press('Escape');
   } finally { for (const id of ids) await fetch(`${API}/api/calendar/events/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
 });
