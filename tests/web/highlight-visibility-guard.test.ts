@@ -160,6 +160,11 @@ const NO_PAINTED_WORDS: Record<string, string> = {
   // A tree line's take-out arrow, shown on the line's hover (WorkerFoldTree.tsx).
   'web/src/styles/worker-fold.css :: .worker-fold-action': CONTROL,
   'web/src/styles/human-inbox-items.css :: .hii-inert-slot': SLOT,
+  // The split inbox's row buttons, shown on the row's hover; hidden, they still hold their width.
+  'web/src/styles/inbox-split.css :: .hib-index-row .hib-row-actions': CONTROL,
+  'web/src/styles/inbox-split.css :: .hib-inbox-pane[data-density="compact"] .hib-row-actions': CONTROL,
+  // The empty, inert copy that holds a widened row's place in the list (truncation-peek-row.ts).
+  'web/src/styles/truncation-peek.css :: [data-peek-placeholder]': SLOT,
   'web/src/styles/launch-source.css :: .launch-source-tag.is-placeholder': SLOT,
   "web/src/styles/composer-controls.css :: .composer-control[data-add-menu='true'] > .mode-toggle-pill, .composer-control[data-add-menu='true'] > .session-notes-pill, .composer-control[data-add-menu='true'] > .side-question-root > .side-question-pill": CONTROL,
   'web/src/styles/board-kanban.css :: .board-kanban .kanban-card-actions': CONTROL,

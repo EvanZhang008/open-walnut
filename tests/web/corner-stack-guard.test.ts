@@ -39,6 +39,7 @@ const CORNER_ALLOWED: Record<string, string> = {
   '.phone-search-layer': 'the phone search layer',
   '.phone-plan-layer': 'the phone plan layer',
   '.task-board-dock': 'the phone board dock inside a session layer',
+  '[data-peek-expanded][popover]': 'a hovered row widened in the top layer at its own measured place in the list, not a notice',
   '.stale-build-pill': 'the update notice: docked in the sidebar bottom row (or the pop-out dock) on desktop, floats only on the phone, which has no dock',
 };
 

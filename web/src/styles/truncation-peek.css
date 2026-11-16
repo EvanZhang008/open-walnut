@@ -3,20 +3,20 @@
 [data-peek-expanded][popover] {
   position: fixed !important;
   inset: auto !important;
-  top: var(--peek-top) !important;
-  left: var(--peek-left) !important;
-  width: var(--peek-width) !important;
+  top: var(--peek-top, auto) !important;
+  left: var(--peek-left, auto) !important;
+  width: var(--peek-width, auto) !important;
   min-width: 0 !important;
   max-width: none !important;
-  height: var(--peek-height) !important;
-  min-height: var(--peek-height) !important;
-  max-height: var(--peek-height) !important;
+  height: var(--peek-height, 0) !important;
+  min-height: var(--peek-height, 0) !important;
+  max-height: var(--peek-height, none) !important;
   box-sizing: border-box !important;
-  display: var(--peek-display) !important;
+  display: var(--peek-display, block) !important;
   margin: 0 !important;
-  padding: var(--peek-padding) !important;
-  border: var(--peek-border) !important;
-  background: var(--peek-background) !important;
+  padding: var(--peek-padding, 0) !important;
+  border: var(--peek-border, 0) !important;
+  background: var(--peek-background, var(--bg)) !important;
   overflow: hidden !important;
   transform: none !important;
   transition: none !important;
@@ -41,9 +41,9 @@
   line-clamp: none !important;
   overflow-wrap: normal !important;
   min-width: 0 !important;
-  height: var(--peek-text-height) !important;
-  min-height: var(--peek-text-height) !important;
-  max-height: var(--peek-text-height) !important;
+  height: var(--peek-text-height, 0) !important;
+  min-height: var(--peek-text-height, 0) !important;
+  max-height: var(--peek-text-height, none) !important;
   flex-shrink: 0 !important;
 }
 [data-peek-open] * {

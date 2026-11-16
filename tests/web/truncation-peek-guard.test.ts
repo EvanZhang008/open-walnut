@@ -105,7 +105,7 @@ describe('all truncation peeks widen the real row, never taller, never cloned te
 
   it('the styles hold the exact height and keep every open text on one line', () => {
     const css = read('styles/truncation-peek.css');
-    expect(css).toMatch(/\[data-peek-expanded\][^{]*\{[^}]*height:\s*var\(--peek-height\)\s*!important/);
+    expect(css).toMatch(/\[data-peek-expanded\][^{]*\{[^}]*height:\s*var\(--peek-height, 0\)\s*!important/);
     expect(css).toMatch(/\[data-peek-open\]\s*\{[^}]*white-space:\s*nowrap\s*!important/);
     expect(css).toContain('[data-peek-placeholder]');
     const split = read('styles/inbox-split.css');
