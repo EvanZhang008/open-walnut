@@ -24,7 +24,7 @@ test.setTimeout(120_000)
  */
 async function isolateContextPrefs(context: BrowserContext): Promise<void> {
   await context.addInitScript(() => { localStorage.setItem('open-walnut-sidebar-collapsed', 'false') })
-  await context.route(/\/api\/ui-prefs(\?|$)/, async (route) => {
+  await context.route('**/api/ui-prefs*', async (route) => {
     const body = route.request().method() === 'GET'
       ? JSON.stringify({ prefs: { 'open-walnut-home-chat-visible': { v: 'false', ts: 1 } } })
       : '{"ok":true}'

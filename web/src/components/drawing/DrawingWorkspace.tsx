@@ -16,6 +16,8 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useDraft } from '@/hooks/useDraft';
+import { MicField, MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
+import { dictationWaitProps, useSendAfterDictation } from '@/hooks/useSendAfterDictation';
 import { draftKey } from '@/utils/drafts';
 import { useEvent } from '@/hooks/useWebSocket';
 import { log } from '@/utils/log';
@@ -116,8 +118,9 @@ function NameField({ value, label, className, onCommit, onDone }: {
     if (e.key === 'Enter') { e.preventDefault(); void commit(); }
     if (e.key === 'Escape') { e.preventDefault(); done.current = true; onDone(null); }
   };
-  return <input className={`${className} drawing-name-input`} aria-label={label} value={draft} maxLength={120} autoFocus data-no-draft="rename"
-    onFocus={(e) => e.currentTarget.select()} onChange={(e) => setDraft(e.target.value)} onKeyDown={onKeyDown} onBlur={() => void commit()} />;
+  // A name is words: the mic too. Its wrapper takes the field's place in the row (`className`).
+  return <MicInput fieldClassName={`${className} drawing-name-field`} className="drawing-name-input" aria-label={label} value={draft} setText={setDraft}
+    maxLength={120} autoFocus data-no-draft="rename" onFocus={(e) => e.currentTarget.select()} onKeyDown={onKeyDown} onBlur={() => void commit()} />;
 }
 
 /** One drawing in the list: open it, or rename it (the pencil, or a double click). */
@@ -220,6 +223,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const [textDialogOpen, setTextDialogOpen] = useState(false);
   // The description typed for Text to diagram is kept like any unsent words, per place.
   const diagramText = useDraft(draftKey('drawing-diagram', scopeId));
+  const diagramBox = useRef<HTMLTextAreaElement | null>(null);
+  const diagramMic = useRef<BoxMicHandle | null>(null);
   const [diagram, setDiagram] = useState<DiagramRun | null>(null);
   const [titleEditing, setTitleEditing] = useState(false);
   const diagramRun = useRef<AbortController | null>(null);
@@ -429,6 +434,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   };
 
   /** "Make a diagram" (from the selection, or the whole drawing) and "Text to diagram". */
+  // Make diagram (or Cmd+Enter) while the mic records waits for the final words, then runs once.
+  const textGate = useSendAfterDictation([diagramMic], () => {
+    if (diagramText.text.trim() && diagram?.phase !== 'running') void makeDiagram('text', diagramText.text);
+  }, diagramText.key);
   const makeDiagram = async (mode: 'tidy' | 'text', prompt = '') => {
     const handle = canvas.current;
     if (!handle) return;
@@ -666,16 +675,20 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           )}
           {textDialogOpen && (
             <form className="drawing-text-diagram" aria-label="Text to diagram"
-              onSubmit={(e) => { e.preventDefault(); if (diagramText.text.trim() && diagram?.phase !== 'running') void makeDiagram('text', diagramText.text); }}
+              onSubmit={(e) => { e.preventDefault(); textGate.send(); }}
               onKeyDown={(e) => {
                 if (e.key === 'Escape' && !e.nativeEvent.isComposing) { e.preventDefault(); e.stopPropagation(); setTextDialogOpen(false); }
                 if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); e.currentTarget.requestSubmit(); }
               }}>
-              <textarea aria-label="Describe the diagram" placeholder="Describe the diagram, for example: order service calls payment, then shipping" value={diagramText.text}
-                data-draft-key={diagramText.key ?? undefined} maxLength={4_000} rows={3} autoFocus onChange={(e) => diagramText.setText(e.target.value)} />
+              <MicField fieldClassName="drawing-text-diagram-field" boxRef={diagramBox} text={diagramText.text} setText={diagramText.setText} handleRef={diagramMic}
+                target={diagramText.key} disabled={diagram?.phase === 'running'}>
+                <textarea ref={diagramBox} aria-label="Describe the diagram" placeholder="Describe the diagram, for example: order service calls payment, then shipping" value={diagramText.text}
+                  data-draft-key={diagramText.key ?? undefined} maxLength={4_000} rows={3} autoFocus onChange={(e) => diagramText.setText(e.target.value)} />
+              </MicField>
               <div className="drawing-text-diagram-actions">
                 <button type="button" className="drawing-quiet-button" onClick={() => setTextDialogOpen(false)}>Cancel</button>
-                <button type="submit" className="drawing-primary-button" disabled={!diagramText.text.trim() || diagram?.phase === 'running'}>Make diagram</button>
+                <button type="submit" className="drawing-primary-button" disabled={(!diagramText.text.trim() && !textGate.micBusy) || diagram?.phase === 'running'}
+                  {...dictationWaitProps(textGate)}>Make diagram</button>
               </div>
             </form>
           )}

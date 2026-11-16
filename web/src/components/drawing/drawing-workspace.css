@@ -184,7 +184,8 @@
   font: inherit;
   outline: none;
 }
-.drawing-workspace-bar .drawing-name-input { flex: 0 1 320px; }
+.drawing-workspace-bar .drawing-name-field { flex: 0 1 320px; }
+.drawing-name-field > .drawing-name-input { width: 100%; }
 .drawing-name-error { flex: 1 1 100%; padding: 0 8px 4px; color: var(--danger, #c73333); font-size: 11px; }
 .drawing-workspace-status { margin-left: 4px; color: var(--fg-muted); font-size: 12px; white-space: nowrap; }
 .drawing-workspace-status[data-state="conflict"],
@@ -269,6 +270,7 @@
   width: min(420px, calc(100% - 24px));
   padding: 12px;
 }
+.drawing-text-diagram-field { display: block; }
 .drawing-text-diagram textarea {
   display: block;
   width: 100%;
@@ -379,8 +381,9 @@
   border-bottom: 1px solid var(--border);
 }
 .drawing-library-head h2 { margin: 0; font-size: 14px; font-weight: 500; }
+.drawing-library-search-field { flex: 1; }
 .drawing-library-search {
-  flex: 1;
+  width: 100%;
   height: 28px;
   padding: 0 10px;
   border: 1px solid var(--border);
