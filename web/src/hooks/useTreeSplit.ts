@@ -13,7 +13,8 @@
  * slides them (`retarget`, called by the stack for every navigation): moving
  * along the path never collapses the split.
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import type { ThreadStackApi } from '@/contexts/SessionThreadsContext';
 import type { ThreadMetaIndex } from '@/utils/thread-meta';
 import type { ThreadTree } from '@/utils/thread-tree';
@@ -184,7 +185,7 @@ export function useTreeSplit(a: UseTreeSplitArgs): TreeSplit {
   const live = useRef({ trail, shownIndex, split, bar, stack, panes, room, paneKeys });
   live.current = { trail, shownIndex, split, bar, stack, panes, room, paneKeys };
 
-  const goTo = useCallback((t: number, via: string) => {
+  const goTo = useLeanCallback((t: number, via: string) => {
     const { trail: tr, shownIndex: at, stack: s } = live.current;
     const key = tr[t];
     if (key === undefined || t === at) return;
@@ -192,7 +193,7 @@ export function useTreeSplit(a: UseTreeSplitArgs): TreeSplit {
     else s.pushTo(key, via);
   }, []);
 
-  const moveBy = useCallback((dir: -1 | 1) => {
+  const moveBy = useLeanCallback((dir: -1 | 1) => {
     const l = live.current;
     if (!l.bar) return false;
     const t = pairMoveTarget(l.trail.length, l.shownIndex, dir, l.panes);
@@ -200,14 +201,14 @@ export function useTreeSplit(a: UseTreeSplitArgs): TreeSplit {
     return true;
   }, [goTo]);
 
-  const goToSegment = useCallback((j: number) => {
+  const goToSegment = useLeanCallback((j: number) => {
     const l = live.current;
     const t = segmentTarget(l.trail.length, j, l.shownIndex, l.panes);
     if (t === null) { const key = l.trail[j]; if (key !== undefined) onFocusPaneRef.current(key); return; }
     goTo(t, 'path-bar');
   }, [goTo]);
 
-  const pickAtLevel = useCallback((j: number, key: string) => {
+  const pickAtLevel = useLeanCallback((j: number, key: string) => {
     const l = live.current;
     if (!levelPickMoves(l.trail, j, key)) {
       if (l.paneKeys.includes(key)) onFocusPaneRef.current(key);
@@ -217,11 +218,11 @@ export function useTreeSplit(a: UseTreeSplitArgs): TreeSplit {
     l.stack.pushTo(key, 'path-bar-list');
   }, [goToSegment]);
 
-  const openSplit = useCallback(() => {
+  const openSplit = useLeanCallback(() => {
     setRecord((prev) => withPaneCap(prev, MAX_PANES));
   }, [setRecord]);
 
-  const retarget = useCallback((toPath: readonly string[], via: string): NavRetarget | null => {
+  const retarget = useLeanCallback((toPath: readonly string[], via: string): NavRetarget | null => {
     const l = live.current;
     if (!stackModeRef.current) return null;
     const r = retargetNav({ path: l.stack.path, trail: l.trail, panes: l.panes, room: l.room, toPath, via });
@@ -236,7 +237,7 @@ export function useTreeSplit(a: UseTreeSplitArgs): TreeSplit {
   // `swaps`: a swap's new page -> the page it came from and the right page then,
   // so a swap back in a left column goes down to where the reader was.
   const [swaps, setSwaps] = useState<ReadonlyMap<string, { from: string; leaf: string }>>(() => new Map());
-  const headOf = useCallback((key: string) => tree.byKey.get(key)?.headId, [tree]);
+  const headOf = useLeanCallback((key: string) => tree.byKey.get(key)?.headId, [tree]);
   const siblings = useMemo(
     () => (stackMode && treeReady
       ? paneSiblings(tree, paneKeys, hiddenKeys, {
@@ -253,7 +254,7 @@ export function useTreeSplit(a: UseTreeSplitArgs): TreeSplit {
   const sibSig = siblings.map((x) => (x.partner ? `${x.partner.key}\u0001${a.answeredAtOf(x.partner.key) ?? ''}` : '')).join('\n');
   // eslint-disable-next-line react-hooks/exhaustive-deps -- read through the signature
   useEffect(() => { for (const x of siblingsRef.current) if (x.partner) markViewedRef.current(x.partner.key); }, [sibSig]);
-  const swapSibling = useCallback((column: number) => {
+  const swapSibling = useLeanCallback((column: number) => {
     const sib = siblingsRef.current[column]?.partner;
     const l = live.current;
     const from = l.paneKeys[column];
@@ -266,16 +267,16 @@ export function useTreeSplit(a: UseTreeSplitArgs): TreeSplit {
     log.info('threads', 'tree sibling swapped', { sessionId: a.sessionId, from, to: sib.key, column });
     l.stack.pushTo(to, 'sibling');
   }, [a.sessionId, swaps, tree]);
-  const focusMain = useCallback(() => {
+  const focusMain = useLeanCallback(() => {
     requestAnimationFrame(() => panelRef.current?.querySelector<HTMLTextAreaElement>(MAIN_COMPOSER)?.focus({ preventScroll: true }));
   }, [panelRef]);
-  const closeSibling = useCallback((column: number) => {
+  const closeSibling = useLeanCallback((column: number) => {
     const head = headOf(live.current.paneKeys[column] ?? '');
     if (!head) return;
     setRecord((prev) => withSiblingOff(prev, head, true));
     focusMain();
   }, [setRecord, headOf, focusMain]);
-  const showSibling = useCallback((column: number) => {
+  const showSibling = useLeanCallback((column: number) => {
     const l = live.current;
     const head = headOf(l.paneKeys[column] ?? '');
     if (!head) return;
@@ -285,14 +286,14 @@ export function useTreeSplit(a: UseTreeSplitArgs): TreeSplit {
       .map(headOf).filter((h): h is string => !!h);
     setRecord((prev) => withSiblingOff(prev, head, false, shut));
   }, [setRecord, headOf]);
-  const setSiblingShare = useCallback((share: number, commit: boolean) => {
+  const setSiblingShare = useLeanCallback((share: number, commit: boolean) => {
     const s = clampSiblingShare(share);
     if (!commit) { setDragShare(s); return; }
     setDragShare(null);
     setRecord((prev) => (prev.siblingShare === s ? prev : { ...prev, siblingShare: s }));
   }, [setRecord]);
 
-  const closePane = useCallback((key: string) => {
+  const closePane = useLeanCallback((key: string) => {
     const l = live.current;
     const column = l.paneKeys.indexOf(key);
     const above = siblingsRef.current[column]?.partner?.key;
@@ -344,7 +345,7 @@ export function useTreeSplit(a: UseTreeSplitArgs): TreeSplit {
   );
   const boundsRef = useRef(bounds);
   boundsRef.current = bounds;
-  const setBound = useCallback((i: number, share: number, width: number, commit: boolean) => {
+  const setBound = useLeanCallback((i: number, share: number, width: number, commit: boolean) => {
     const n = live.current.panes;
     if (n < 2) return;
     const next = moveBound(boundsRef.current, n, i, share, width);

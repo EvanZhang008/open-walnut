@@ -6,7 +6,8 @@
  * it too. It sits on the right edge of page `index + 1` (its grid column), over
  * its border. The places are kept for the user once the drag ends.
  */
-import { memo, useCallback, useRef, type KeyboardEvent, type PointerEvent } from 'react';
+import { memo, useRef, type KeyboardEvent, type PointerEvent } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { defaultBounds } from '@/utils/tree-split-state';
 
 const KEY_STEP = 0.05;
@@ -24,20 +25,20 @@ export const TreeSplitDivider = memo(function TreeSplitDivider(p: {
   const { onShare, share, index, panes } = p;
   const drag = useRef<{ id: number; last: number } | null>(null);
   /** The share under the pointer: the column is the divider's parent. */
-  const shareAt = useCallback((el: HTMLElement, x: number): { share: number; width: number } | null => {
+  const shareAt = useLeanCallback((el: HTMLElement, x: number): { share: number; width: number } | null => {
     const r = el.parentElement?.getBoundingClientRect();
     if (!r || r.width < 80) return null;
     return { share: (x - r.left) / r.width, width: r.width };
   }, []);
   const widthOf = (el: HTMLElement) => el.parentElement?.getBoundingClientRect().width ?? 0;
-  const onDown = useCallback((e: PointerEvent<HTMLDivElement>) => {
+  const onDown = useLeanCallback((e: PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     e.preventDefault();
     drag.current = { id: e.pointerId, last: share };
     e.currentTarget.setPointerCapture?.(e.pointerId);
     e.currentTarget.dataset.dragging = 'true';
   }, [share]);
-  const onMove = useCallback((e: PointerEvent<HTMLDivElement>) => {
+  const onMove = useLeanCallback((e: PointerEvent<HTMLDivElement>) => {
     const d = drag.current;
     if (d?.id !== e.pointerId) return;
     const at = shareAt(e.currentTarget, e.clientX);
@@ -45,7 +46,7 @@ export const TreeSplitDivider = memo(function TreeSplitDivider(p: {
     d.last = at.share;
     onShare(index, at.share, at.width, false);
   }, [shareAt, onShare, index]);
-  const onUp = useCallback((e: PointerEvent<HTMLDivElement>) => {
+  const onUp = useLeanCallback((e: PointerEvent<HTMLDivElement>) => {
     const d = drag.current;
     if (d?.id !== e.pointerId) return;
     drag.current = null;
@@ -55,7 +56,7 @@ export const TreeSplitDivider = memo(function TreeSplitDivider(p: {
     const at = e.type === 'pointerup' ? shareAt(e.currentTarget, e.clientX) : null;
     onShare(index, at?.share ?? d.last, at?.width ?? widthOf(e.currentTarget), true);
   }, [onShare, shareAt, index]);
-  const onKey = useCallback((e: KeyboardEvent<HTMLDivElement>) => {
+  const onKey = useLeanCallback((e: KeyboardEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget) return;
     const to = e.key === 'ArrowLeft' ? share - KEY_STEP
       : e.key === 'ArrowRight' ? share + KEY_STEP
@@ -64,7 +65,7 @@ export const TreeSplitDivider = memo(function TreeSplitDivider(p: {
     e.preventDefault();
     onShare(index, to, widthOf(e.currentTarget), true);
   }, [onShare, share, index, panes]);
-  const reset = useCallback((e: { currentTarget: HTMLElement }) => {
+  const reset = useLeanCallback((e: { currentTarget: HTMLElement }) => {
     onShare(index, defaultBounds(panes)[index] ?? share, widthOf(e.currentTarget), true);
   }, [onShare, index, panes, share]);
   return (

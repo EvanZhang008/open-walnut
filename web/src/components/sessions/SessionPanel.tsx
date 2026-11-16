@@ -1278,10 +1278,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // with room for two) the page whose row offers Split.
   const { showSibling: showTreeSiblingAt } = treeSplit;
   const rightSiblingClosed = treeSiblings[lastColumn]?.closed === true;
-  const showTreeSibling = useMemo(
-    () => (rightSiblingClosed ? () => showTreeSiblingAt(lastColumn) : undefined),
-    [rightSiblingClosed, showTreeSiblingAt, lastColumn],
-  );
+  const showRightSibling = useLeanCallback(() => showTreeSiblingAt(lastColumn), [showTreeSiblingAt, lastColumn]);
+  const showTreeSibling = rightSiblingClosed ? showRightSibling : undefined;
   const rightHalf = useMemo<TreeHalf | null>(() => {
     const sib = showTreeSibling ? { onShowSibling: showTreeSibling } : {};
     if (treeLeftShown) return { side: 'R', ...(rightNumber ? { number: rightNumber } : {}), onClose: closeRightHalf, ...sib };

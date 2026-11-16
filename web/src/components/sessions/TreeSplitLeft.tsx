@@ -35,7 +35,8 @@
  * selection, other just voice and send"), except Main's, which gets the panel's
  * full controls (`fullComposer`).
  */
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import type { ImageAttachment } from '@/api/chat';
 import type { DraftOrigin } from '@/utils/drafts';
 import { ChatInput } from '@/components/chat/ChatInput';
@@ -165,16 +166,16 @@ export const TreeSplitLeft = memo(function TreeSplitLeft(p: TreeSplitLeftProps) 
   const pinned = usePinnedThreads(base, p.leftKey, p.rightKey, p.side === 'S', p.landSeq);
   const { onClose, onCloseAt, onSwapAt, onShowSibling, siblingColumn = 0, leftKey: pageKey, where } = p;
   const closes = !!(onClose || onCloseAt);
-  const close = useCallback(() => (onCloseAt ? onCloseAt(siblingColumn) : onClose?.(pageKey)), [onClose, onCloseAt, siblingColumn, pageKey]);
-  const swap = useCallback(() => onSwapAt?.(siblingColumn), [onSwapAt, siblingColumn]);
-  const show = useCallback(() => onShowSibling?.(siblingColumn), [onShowSibling, siblingColumn]);
+  const close = useLeanCallback(() => (onCloseAt ? onCloseAt(siblingColumn) : onClose?.(pageKey)), [onClose, onCloseAt, siblingColumn, pageKey]);
+  const swap = useLeanCallback(() => onSwapAt?.(siblingColumn), [onSwapAt, siblingColumn]);
+  const show = useLeanCallback(() => onShowSibling?.(siblingColumn), [onShowSibling, siblingColumn]);
   const half = useMemo<TreeHalf>(() => ({
     side: p.side, ...(p.number ? { number: p.number } : {}), ...(closes ? { onClose: close } : {}),
     ...(where ? { where } : {}), ...(onSwapAt ? { onSwap: swap } : {}), ...(onShowSibling ? { onShowSibling: show } : {}),
   }), [p.side, p.number, closes, close, where, onSwapAt, swap, onShowSibling, show]);
   const [scrollNonce, setScrollNonce] = useState(0);
   const [focusNonce, setFocusNonce] = useState(0);
-  const requestFocus = useCallback(() => setFocusNonce((x) => x + 1), []);
+  const requestFocus = useLeanCallback(() => setFocusNonce((x) => x + 1), []);
   // A move to this page: focus its composer (the timeline stays where it is) and flash it.
   const rootRef = useRef<HTMLDivElement>(null);
   const { focusSeq, flash } = p;
@@ -198,12 +199,12 @@ export const TreeSplitLeft = memo(function TreeSplitLeft(p: TreeSplitLeftProps) 
     ? MAIN_HALF_PLACEHOLDER
     : followUpPlaceholder(displayTitleOf(base.tree.byKey.get(leftKey), base.metaIndex).title);
   const { onSendFor, onInterruptSendFor } = p;
-  const send = useCallback(async (text: string, images?: ImageAttachment[], origin?: DraftOrigin): Promise<boolean> => {
+  const send = useLeanCallback(async (text: string, images?: ImageAttachment[], origin?: DraftOrigin): Promise<boolean> => {
     const ok = await onSendFor(leftKey, text, images, origin);
     if (ok) setScrollNonce((x) => x + 1);
     return ok;
   }, [onSendFor, leftKey]);
-  const interruptSend = useCallback((text: string, images?: ImageAttachment[], origin?: DraftOrigin) => onInterruptSendFor(leftKey, text, images, origin), [onInterruptSendFor, leftKey]);
+  const interruptSend = useLeanCallback((text: string, images?: ImageAttachment[], origin?: DraftOrigin) => onInterruptSendFor(leftKey, text, images, origin), [onInterruptSendFor, leftKey]);
   return (
     <div
       className={`tree-split-left${p.side === 'S' ? ' tree-split-sibling' : ''}`}
