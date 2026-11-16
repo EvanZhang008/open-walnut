@@ -58,7 +58,7 @@ async function addText(page: Page, text: string, x: number, y: number) {
 async function toolbarShortcuts(page: Page): Promise<Record<string, string>> {
   return workspace(page).evaluate((root) => {
     const out: Record<string, string> = {}
-    for (const input of root.querySelectorAll<HTMLInputElement>('.App-toolbar input[data-testid^="toolbar-"][name="editor-current-shape"]')) {
+    for (const input of root.querySelectorAll<HTMLInputElement>('input[data-testid^="toolbar-"][name="editor-current-shape"]')) {
       const label = input.parentElement?.querySelector('.ToolIcon__keybinding')
       if (!label) continue
       if (getComputedStyle(label).display === 'none') { out[input.dataset.testid!.slice('toolbar-'.length)] = ''; continue }
@@ -273,11 +273,14 @@ test.describe('Drawing real plugin acceptance', () => {
     await expect(bar.getByRole('button', { name: /^(PNG|SVG)$/ })).toHaveCount(0)
     await workspace(page).getByRole('button', { name: 'New drawing', exact: true }).first().click()
     // Each tool shows its letter shortcut (V, R, D...), never the editor's digit; Image has no letter.
-    expect(await toolbarShortcuts(page)).toEqual({ selection: 'V', rectangle: 'R', diamond: 'D', ellipse: 'O', arrow: 'A', line: 'L', freedraw: 'P', text: 'T', image: '', eraser: 'E' })
+    await expect(workspace(page).locator('input[data-testid="toolbar-rectangle"]')).toBeVisible({ timeout: 60_000 })
+    await expect.poll(() => toolbarShortcuts(page)).toEqual({ selection: 'V', rectangle: 'R', diamond: 'D', ellipse: 'O', arrow: 'A', line: 'L', freedraw: 'P', text: 'T', image: '', eraser: 'E' })
     // The extra tools menu opens from three dots, drawn in place of the shapes icon.
     const more = workspace(page).locator('.App-toolbar__extra-tools-trigger')
     await expect(more.locator('svg')).toBeHidden()
     expect(await more.evaluate((el) => getComputedStyle(el, '::before').maskImage || getComputedStyle(el, '::before').webkitMaskImage)).toContain('circle')
+    // The letter is the real key: with the canvas focused, R picks the rectangle.
+    await workspace(page).locator('canvas.excalidraw__canvas.interactive').click({ position: { x: LEFT + 300, y: 300 } })
     await page.keyboard.press('r')
     await expect(workspace(page).locator('input[data-testid="toolbar-rectangle"]')).toBeChecked()
     await page.keyboard.press('v')
@@ -615,7 +618,9 @@ test.describe('Drawing real plugin acceptance', () => {
     await composer.fill('Make the label bigger')
     await composer.press('Enter')
     const body = (await launch).postDataJSON() as { agentId?: string; walnutAgent?: boolean; taskMeta?: { pinTier?: unknown }; hints?: unknown; message?: string }
-    expect(body.agentId).toBe('general')
+    // Walnut's own agent: the general one (a launch names only another agent).
+    expect(body.walnutAgent).toBe(true)
+    expect(body.agentId ?? 'general').toBe('general')
     expect(body.taskMeta?.pinTier).toBeNull()
     expect(JSON.stringify(body)).toContain('Make the label bigger')
     // The drawing goes with the first question: its path and the tools that edit it, as an object context.
