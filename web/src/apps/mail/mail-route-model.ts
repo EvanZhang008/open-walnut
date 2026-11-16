@@ -9,7 +9,21 @@ import type { MailboxDto, MailboxRole, MailMessageDto, MailRouteDto, MailRouteSt
 import { ORG_MAIN_NODE, orgProjectNode } from '@open-walnut/org-tree';
 import { formatMailDate } from './mail-format';
 
-export interface MailRouteLink { kind: 'task' | 'vp'; id: string }
+export interface MailRouteLink { kind: 'task' | 'vp' | 'letter'; id: string }
+
+/**
+ * The first of the reader's two layers (2026-11-16, the user: "first does it go to processed by router
+ * abc, and then the decision"): which router decided this message, and when. Only a message with a
+ * decision has one; a line with none says on its own that no router has processed it yet.
+ */
+export interface MailRouteBy {
+  lead: string;
+  name: string;
+  /** The router's task, while it exists: its name opens the router on the Org page. */
+  routerId?: string;
+  when?: string;
+  text: string;
+}
 
 /** The Org page with its router setup open. */
 export const ORG_ROUTER_SETUP_PATH = '/org?router_setup=1';
@@ -28,6 +42,8 @@ export interface MailRouteView {
   text: string;
   /** The line plus when the router decided, for the tooltip and the accessible label. */
   title: string;
+  /** Which router decided it (the reader's first layer); absent while none has. */
+  by?: MailRouteBy;
 }
 
 const KNOWN: readonly MailRouteStatus[] = ['routing', 'routed', 'not_routed', 'failed', 'unknown'];
@@ -59,11 +75,20 @@ export function mailRouteView(
   // no router routed it and why.
   if (!route) {
     const reason = coverage && Object.hasOwn(COVERAGE_REASON, coverage) ? COVERAGE_REASON[coverage] : '';
-    return build('none', reason ? 'Not routed' : 'No router has seen this', undefined, null, reason);
+    return build('none', reason ? 'Not processed' : 'No router has seen this', undefined, null, reason);
   }
+  return withBy(decisionView(route), route, area);
+}
+
+/** The second layer: what the router decided. */
+function decisionView(route: MailRouteDto): MailRouteView {
   const status: MailRouteStatus = KNOWN.includes(route.status) ? route.status : 'unknown';
   const reason = clean(route.reason);
   const at = route.at;
+  // A letter to the person is recorded as not routed (no task has it); it reads as what it is.
+  if (status === 'not_routed' && clean(route.letterId)) {
+    return build(status, 'Letter to you', undefined, { kind: 'letter', id: clean(route.letterId) }, reason, at);
+  }
   if (status === 'routing') return build(status, 'Delivery not confirmed', undefined, null, 'Do not resend before checking', at);
   if (status === 'not_routed') return build(status, 'Not routed', undefined, null, reason || 'No reason given', at);
   if (status === 'failed') {
@@ -120,6 +145,18 @@ export function routerPathOf(body: unknown, areaId: string): string {
   return pick ? `/org?node=${encodeURIComponent(`router:${pick.taskId}`)}` : '/org';
 }
 
+/** Puts the router that decided it in front, for the reader's first line and every tooltip. */
+function withBy(view: MailRouteView, route: MailRouteDto, area?: { name?: string } | null): MailRouteView {
+  const named = clean(route.router?.name);
+  const areaName = clean(area?.name);
+  const name = named || (areaName ? `the ${areaName} router` : 'a router');
+  const lead = route.origin === 'legacy' ? 'Recorded by' : 'Processed by';
+  const when = typeof route.at === 'number' ? formatMailDate(route.at) : '';
+  const routerId = route.router?.available && clean(route.router.id) ? clean(route.router.id) : undefined;
+  const text = `${lead} ${name}` + (when ? ` · ${when}` : '');
+  return { ...view, title: `${lead} ${name} · ${view.title}`, by: { lead, name, ...(routerId ? { routerId } : {}), ...(when ? { when } : {}), text } };
+}
+
 function build(
   status: MailRouteView['status'],
   lead: string,
@@ -169,7 +206,7 @@ export function outgoingKind(
 }
 
 export function outgoingRouteView(kind: 'sent' | 'draft'): MailRouteView {
-  return build('none', 'Not routed', undefined, null, kind === 'draft'
+  return build('none', 'Not processed', undefined, null, kind === 'draft'
     ? 'A draft. Routers read only mail you receive'
     : 'You sent this. Routers read only mail you receive');
 }

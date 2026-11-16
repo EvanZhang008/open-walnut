@@ -87,6 +87,10 @@ export interface MailMessageDto {
     /** `legacy`: handled before the router and recorded after the fact; never delivered by the router. */
     origin?: 'legacy'
     evidence?: string
+    /** The router that decided it; an older server sends none. */
+    router?: { id: string; name: string; available: boolean }
+    /** Not routed, and sent to the person as this inbox letter. */
+    letterId?: string
   }
   /**
    * How this message can be unsubscribed from, and whether it already was.

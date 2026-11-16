@@ -28,8 +28,9 @@ export interface RouterSummary {
   assigned: number;
   /** null: could not be read. */
   waiting: number | null;
-  counts: { routed: number; not_routed: number; routing: number; failed: number; unknown: number };
-  latest?: { at: number; status: string; taskId?: string; taskTitle?: string };
+  /** `letters` (an older server sends none): of the not_routed ones, those sent to the person as a letter. */
+  counts: { routed: number; not_routed: number; routing: number; failed: number; unknown: number; letters?: number };
+  latest?: { at: number; status: string; taskId?: string; taskTitle?: string; letter?: boolean };
   wake: { armed: boolean; everyMs?: number; lastCheckAt?: number; nextAt?: number };
   session: { started: boolean; state?: string };
   /** The last missed-message check: per account, what its source saw against what reached the router. */
@@ -75,10 +76,12 @@ export function routerStateLine(s: RouterSummary, now = Date.now()): string {
 export function routerRoutedLine(s: RouterSummary, now = Date.now()): string {
   const c = s.counts;
   const total = c.routed + c.not_routed + c.routing + c.failed + c.unknown;
+  const letters = Math.min(c.not_routed, Math.max(0, c.letters ?? 0));
   if (total === 0) return 'No messages so far.';
   const parts = [
     c.routed ? `${c.routed} handed to a task` : '',
-    c.not_routed ? `${c.not_routed} needed nothing` : '',
+    letters ? `${letters} sent to you as a letter` : '',
+    c.not_routed - letters ? `${c.not_routed - letters} needed nothing` : '',
     c.routing ? `${c.routing} being handed on` : '',
     c.failed ? `${c.failed} failed` : '',
     c.unknown ? `${c.unknown} not confirmed delivered` : '',
@@ -87,7 +90,7 @@ export function routerRoutedLine(s: RouterSummary, now = Date.now()): string {
   const latest = s.latest;
   if (!latest) return head;
   const when = timeAgo(new Date(latest.at).toISOString(), { now });
-  const where = latest.taskTitle ? ` to ${latest.taskTitle}` : latest.status === 'not_routed' ? ', needed nothing' : '';
+  const where = latest.taskTitle ? ` to ${latest.taskTitle}` : latest.letter ? ', sent to you as a letter' : latest.status === 'not_routed' ? ', needed nothing' : '';
   return `${head} Last one ${when}${where}.`;
 }
 

@@ -10,6 +10,7 @@ import type { Task } from '../types.js';
 import { WALNUT_HOME } from '../../constants.js';
 import { readRouterAreas, sourceArea, activeRouter, type RouterAreasFile, RouterAreaError } from './areas.js';
 import { RouteLockBusyError, withLedgerRouteLock } from './route-lock.js';
+import { routerLetterOpKey } from './letter-receipts.js';
 
 /**
  * Send refusals that end a handoff as failed rather than unknown. The archived-target refusal never comes back
@@ -25,20 +26,32 @@ export class RouterError extends Error {
 
 export interface RouterRouteView extends RouterRoute {
   target?: { id: string; title: string; kind: 'task' | 'vp'; available: boolean };
+  /** The router that decided it, by its name now (`available: false` once its task is gone). */
+  router?: { id: string; name: string; available: boolean };
 }
 
-export async function routeViews(routes: RouterRoute[]): Promise<RouterRouteView[]> {
-  const ids = [...new Set(routes.flatMap((route) => route.taskId ? [route.taskId] : []))];
-  const { queryTasksSlim } = await import('../task-manager.js');
-  const tasks = ids.length ? await queryTasksSlim({ ids }) : [];
+/**
+ * Routes as the person reads them: each target and deciding router by name, and whether a not_routed
+ * item went to the person as a letter (letter-receipts.ts; `home` names the ledger it writes back to).
+ */
+export async function routeViews(routes: RouterRoute[], opts: { home?: string } = {}): Promise<RouterRouteView[]> {
+  const ids = [...new Set(routes.flatMap((route) => [route.taskId, route.byTaskId].filter((id): id is string => !!id)))];
+  const [{ queryTasksSlim }, { withLetterReceipts }] = await Promise.all([import('../task-manager.js'), import('./letter-receipts.js')]);
+  const [tasks, answered] = await Promise.all([
+    ids.length ? queryTasksSlim({ ids }) : [],
+    withLetterReceipts(routes, { store: (areaId) => routerStore(areaId, opts.home) }),
+  ]);
   const byId = new Map(tasks.map((task) => [task.id, task]));
-  return routes.map((route) => {
+  return answered.map((route) => {
     const task = route.taskId ? byId.get(route.taskId) : undefined;
+    const router = route.byTaskId ? byId.get(route.byTaskId) : undefined;
     return { ...route, ...(route.taskId ? { target: {
       id: route.taskId,
       title: task?.org_name || task?.title || route.taskId,
       kind: task?.org_role === 'lead' || task?.org_role === 'main' ? 'vp' as const : 'task' as const,
       available: !!task,
+    } } : {}), ...(route.byTaskId ? { router: {
+      id: route.byTaskId, name: router?.org_name || router?.title || 'Router', available: !!router,
     } } : {}) };
   });
 }
@@ -68,7 +81,7 @@ export interface RouterDeliveryDeps {
   /** How long to wait for the area's route lock; default ROUTE_LOCK_WAIT_MS. */
   routeLockWaitMs?: number;
   /** Sends the person's letter for a for_user decision; default: one inbox letter per item. */
-  letter?: (areaId: string, item: RouterItem, route: RouterRoute, brief: string, callerSid?: string) => Promise<void>;
+  letter?: (areaId: string, item: RouterItem, route: RouterRoute, brief: string, callerSid?: string) => Promise<string>;
   /**
    * Tidies an item the router judged noise (mail: mark read, archive). Default: the source's hook,
    * when the person turned on the experiment; null turns it off.
@@ -79,16 +92,17 @@ export interface RouterDeliveryDeps {
 }
 
 /** The router's one letter for an item only the person can act on: who sent it, its subject, why, and what to do. */
-async function routerLetter(areaId: string, item: RouterItem, route: RouterRoute, brief: string, callerSid?: string): Promise<void> {
+async function routerLetter(areaId: string, item: RouterItem, route: RouterRoute, brief: string, callerSid?: string): Promise<string> {
   const [{ sendLetterOnce }, { walnutLetterLanguage }] = await Promise.all([
     import('../human-inbox/store.js'), import('../human-inbox/walnut-letters/languages.js'),
   ]);
-  await sendLetterOnce({
+  const sent = await sendLetterOnce({
     ...routerLetterContent(item, route, brief, await walnutLetterLanguage()),
     type: 'review',
     ...(route.byTaskId ? { taskRefs: [route.byTaskId] } : {}),
     sender: { sessionId: callerSid?.trim() || 'external', ...(route.byTaskId ? { taskId: route.byTaskId } : {}) },
-  }, { opKey: `router-letter:${areaId}:${route.key}` });
+  }, { opKey: routerLetterOpKey(areaId, route.key) });
+  return sent.letter.id;
 }
 
 /** Whether a task is a router: its own org role, or an assignment in the registry. */
@@ -194,9 +208,11 @@ export function routedText(item: RouterItem, route: RouterRoute, brief: string, 
 
 async function announce(route: RouterRoute, deps: RouterDeliveryDeps): Promise<void> {
   const getTask = deps.getTask ?? (await import('../task-manager.js')).getTask;
-  const task = route.taskId ? await getTask(route.taskId).catch(() => undefined) : undefined;
+  const [task, router] = await Promise.all([route.taskId, route.byTaskId].map((id) => id ? getTask(id).catch(() => undefined) : undefined));
+  // The same shape routeViews gives, so a live line and a reloaded one read alike.
   const view = { ...route, ...(route.taskId ? { target: { id: route.taskId, title: task?.org_name || task?.title || route.taskId,
-    kind: task?.org_role === 'lead' ? 'vp' as const : 'task' as const, available: !!task } } : {}) };
+    kind: task?.org_role === 'lead' || task?.org_role === 'main' ? 'vp' as const : 'task' as const, available: !!task } } : {}),
+    ...(route.byTaskId ? { router: { id: route.byTaskId, name: router?.org_name || router?.title || 'Router', available: !!router } } : {}) };
   bus.emit('router:item-changed', { source: route.source, route: view }, ['web-ui'], { source: 'router' });
 }
 
@@ -314,6 +330,15 @@ async function routeItemLocked(input: RouteItemInput, deps: RouterDeliveryDeps, 
   const key = previous?.key ?? item.key;
   // Area and access are checked by now; binding lets readers by source (wake) find the receipt.
   if (previous) await bindSource(store, input.source, previous.key);
+  // A letter whose send failed after its claim (its row still says pending) goes out on the router's
+  // next for_user call: one letter per item ever, by its op key, so a sent one is never sent twice.
+  if (previous && !input.retry && input.forUser && previous.letterPending) {
+    const letterId = await (deps.letter ?? routerLetter)(area.id, item, previous, input.text!, input.callerSid);
+    if (letterId) await store.noteLetter([previous.key], letterId);
+    const route = (letterId ? await store.get(previous.key) : undefined) ?? previous;
+    if (letterId) await announce(route, deps);
+    return { route, fresh: false };
+  }
   if (previous && !input.retry) return { route: previous, fresh: false };
   if (input.retry && (!previous || previous.status !== 'failed')) {
     throw new RouterError('retry_not_safe', 'Only a refused delivery may retry. Check an uncertain delivery before sending again.', 409);
@@ -328,13 +353,21 @@ async function routeItemLocked(input: RouteItemInput, deps: RouterDeliveryDeps, 
       ...(input.notRouted ? {} : { taskId: targetId }),
       reason: input.reason.trim(),
       ...(input.byTaskId ? { byTaskId: input.byTaskId } : {}),
+      ...(input.forUser ? { letter: true } : {}),
     }));
   if (!claimed.route) throw new RouterError('route_missing', 'The route disappeared during the retry.', 409);
   if (!claimed.fresh || claimed.route.status === 'not_routed') {
-    if (claimed.fresh) await announce(claimed.route, deps);
-    // Once per item (the claim's winner, under a fixed op key): the person reads it in the inbox.
-    if (claimed.fresh && input.forUser) await (deps.letter ?? routerLetter)(area.id, item, claimed.route, input.text!, input.callerSid);
-    return { route: claimed.route, fresh: claimed.fresh };
+    if (!(claimed.fresh && input.forUser)) {
+      if (claimed.fresh) await announce(claimed.route, deps);
+      return { route: claimed.route, fresh: claimed.fresh };
+    }
+    // Once per item (the claim's winner, under a fixed op key): the person reads it in the inbox, and
+    // the item's line says it went to them (its letter's id on the row).
+    const letterId = await (deps.letter ?? routerLetter)(area.id, item, claimed.route, input.text!, input.callerSid);
+    if (letterId) await store.noteLetter([claimed.route.key], letterId);
+    const route = (letterId ? await store.get(claimed.route.key) : undefined) ?? claimed.route;
+    await announce(route, deps);
+    return { route, fresh: true };
   }
   await announce(claimed.route, deps);
   try {

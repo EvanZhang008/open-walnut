@@ -3,7 +3,7 @@ import { expect, test, type Page, type Request as PwRequest } from '@playwright/
 import { MailFixtureServer, type MailFixture, showAllMail } from './mail-review-helpers';
 
 type MailItem = { accountId: string; messageId: string; subject: string };
-type RoutedFixture = MailFixture & { routerRows: { ownerId: string; vpId: string; rows: Array<MailItem & { status: string }>; queued: MailItem; unassigned: MailItem[] } };
+type RoutedFixture = MailFixture & { routerRows: { ownerId: string; vpId: string; routerId: string; rows: Array<MailItem & { status: string; letterId?: string }>; queued: MailItem; unassigned: MailItem[] } };
 let server: MailFixtureServer;
 let fixture: RoutedFixture;
 test.describe.configure({ mode: 'serial' });
@@ -109,6 +109,10 @@ for (const status of ['task', 'vp', 'legacy', 'not_routed', 'failed', 'unknown',
     }
     await row.click();
     await expect(page.getByTestId('mail-reader-route')).toHaveText(words);
+    // The first layer: which router processed it, above its decision (a receipt after the fact was recorded).
+    const by = page.getByTestId('mail-reader-route-by');
+    await expect(by).toContainText(`${status === 'legacy' ? 'Recorded by' : 'Processed by'} ${status === 'legacy' ? 'the Personal router' : 'Personal mail router'}`);
+    expect((await by.boundingBox())!.y).toBeLessThan((await page.getByTestId('mail-reader-route').boundingBox())!.y);
     await expect(page.getByTestId('mail-reader-route')).toHaveAttribute('data-route-area', 'personal');
     if (status === 'failed') await expect(page.getByTestId('mail-reader-route')).toContainText('Receiver was not ready');
     if (status === 'not_routed') await expect(page.getByTestId('mail-reader-route')).toContainText('Newsletter');
@@ -139,7 +143,8 @@ test('a mail with no receipt says on its row and in the reader that it was not r
   const row = rowOf(page, item);
   await row.scrollIntoViewIfNeeded();
   await expect(row).toBeVisible();
-  const notRouted = /^Not routed · No (area chosen for this message|router reads this account)$/;
+  // No router has it, so nothing was decided: it was not processed, and the line has no first layer.
+  const notRouted = /^Not processed · No (area chosen for this message|router reads this account)$/;
   const rowLine = row.getByTestId('mail-row-route');
   await expect(rowLine).toHaveAttribute('data-route-status', 'none');
   await expect(rowLine).toHaveText(notRouted);
@@ -150,6 +155,7 @@ test('a mail with no receipt says on its row and in the reader that it was not r
   await expect(reader).toHaveAttribute('data-route-status', 'none');
   await expect(reader).toHaveText(notRouted);
   expect((await reader.textContent())?.trim()).toBe((await rowLine.textContent())?.trim());
+  await expect(page.getByTestId('mail-reader-route-by')).toHaveCount(0);
   await page.setViewportSize({ width: 900, height: 760 });
   await page.mouse.wheel(0, 500);
   await page.reload();
@@ -471,5 +477,33 @@ test('a group read to zero under the pointer keeps its receipt row until the poi
   await expect(page.locator(`[data-testid="mail-row"][data-account-id="${item!.accountId}"][data-message-id="${item!.messageId}"]`)).toHaveCount(0);
   await expect(page.getByTestId('mail-reader-route')).toHaveText(routeWords);
   await capture(page, { path: '/tmp/router-mail/grouped-released.png' });
+  expect(errors).toEqual([]);
+});
+
+// 2026-11-16, the user on a DoorDash invitation the router had sent him as a letter, shown as a grey
+// "Not routed": "can we have 2 status, first does it go to processed by router abc, and then the decision".
+test('a letter to the person reads as one, under the router that processed it; both open what they name', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await enterMail(page);
+  const item = fixture.routerRows.rows.find((one) => one.status === 'letter')!;
+  const row = rowOf(page, item);
+  await row.scrollIntoViewIfNeeded();
+  const rowLine = row.getByTestId('mail-row-route');
+  await expect(rowLine).toHaveText('Letter to you · Only the person can accept the invitation');
+  await expect(rowLine).toHaveAttribute('data-route-letter', item.letterId!);
+  await expect(rowLine).not.toContainText('Not routed');
+  await row.click();
+  const by = page.getByTestId('mail-reader-route-by');
+  await expect(by).toContainText('Processed by Personal mail router');
+  await expect(page.getByTestId('mail-reader-route')).toHaveText('Letter to you · Only the person can accept the invitation');
+  await capture(page, { path: '/tmp/router-mail/letter-two-layers.png' });
+  // The decision opens the letter in the notification center, the router's name its Org page.
+  await page.getByTestId('mail-reader-route-letter').click();
+  await expect(page.locator('.hib-reader')).toContainText('Only the person can accept the invitation', { timeout: 15000 });
+  await page.getByRole('button', { name: 'Close letter', exact: true }).click();
+  await openItem(page, item);
+  await page.getByTestId('mail-reader-route-router').click();
+  await expect(page).toHaveURL(new RegExp(`node=router%3A${fixture.routerRows.routerId}`));
   expect(errors).toEqual([]);
 });

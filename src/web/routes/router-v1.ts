@@ -8,7 +8,7 @@ import { routerAccess } from '../../core/router/access.js';
 import { routeItem, routeViews, RouterError } from '../../core/router/service.js';
 import { RouterAreaError, readRouterAreas, updateRouterAreas, normalizeRouterAreas, assertNoReassignment, sourceArea, ensureAreasDataVersion } from '../../core/router/areas.js';
 import { WALNUT_HOME } from '../../constants.js';
-import type { RouterSource } from '../../core/router/types.js';
+import { ROUTER_SOURCE_KINDS, type RouterSource } from '../../core/router/types.js';
 import { sendV1Error } from './v1-control-relay.js';
 import { createRouterNode, updateRouterNode, type RouterNodePatch } from '../../core/router/nodes.js';
 import { setSelfRouter, clearSelfRouter } from '../../core/router/self-router.js';
@@ -159,6 +159,31 @@ routerV1Router.get('/router/areas', async (req: Request, res: Response, next: Ne
     // Only a router's own isolated session keeps to its routing context.
     await refuseRouterSession(req, 'A router reads only its own routing context, not the router registry.');
     res.json(await readRouterAreas(WALNUT_HOME));
+  } catch (error) { failure(res, next, error); }
+});
+
+// GET /api/v1/router/routes?kind=&account=&messages=<JSON array of message ids> → { routes: { [message]: { route?, area? } } }:
+// where the router sent each item (a Slack message's route line), the same view Mail's rows carry.
+routerV1Router.get('/router/routes', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    primary();
+    await refuseRouterSession(req, 'A router reads only its own routing context.');
+    const kind = String(req.query.kind ?? '');
+    const account = String(req.query.account ?? '');
+    let messages: unknown;
+    try { messages = JSON.parse(String(req.query.messages ?? '[]')); } catch { messages = null; }
+    if (!(ROUTER_SOURCE_KINDS as readonly string[]).includes(kind) || !account || !Array.isArray(messages)
+      || messages.some((one) => typeof one !== 'string' || !one)) {
+      res.status(400).json({ error: 'Give kind, account and messages (a JSON array of message ids).', code: 'bad_request' });
+      return;
+    }
+    const { itemRoutes, ITEM_ROUTES_MAX } = await import('../../core/router/item-routes.js');
+    if (messages.length > ITEM_ROUTES_MAX) {
+      res.status(400).json({ error: `At most ${ITEM_ROUTES_MAX} messages at once.`, code: 'bad_request' });
+      return;
+    }
+    const sources = (messages as string[]).map((message) => ({ kind: kind as RouterSource['kind'], account, message }));
+    res.json({ routes: await itemRoutes(sources, WALNUT_HOME) });
   } catch (error) { failure(res, next, error); }
 });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { RouterArea } from '../../src/core/router/areas.js'
-import { isRouterAreaSession, routerAreaProfile } from '../../src/core/router/session-policy.js'
+import { isRouterAreaSession, routerAreaProfile, routerLaunchTools } from '../../src/core/router/session-policy.js'
 import type { SessionEngine, SessionProfile, SessionRecord } from '../../src/core/types.js'
 
 type PolicyRecord = Pick<SessionRecord, 'profile' | 'host' | 'engine'>
@@ -28,7 +28,10 @@ describe('routerAreaProfile', () => {
     expect(profile.systemPromptMode).toBe('replace')
     // `--tools ''`: every built-in tool is gone, the explicit MCP mount stays.
     expect(profile.tools).toEqual([''])
+    // The record keeps its two routing tools (a rolled-back build still knows it); the lookups ride the launch.
     expect(profile.allowedTools).toEqual(['mcp__walnut__router_context', 'mcp__walnut__router_route'])
+    expect(routerLaunchTools(profile)).toEqual(['mcp__walnut__router_context', 'mcp__walnut__router_route', 'mcp__walnut__search', 'mcp__walnut__task_get'])
+    expect(routerLaunchTools({ allowedTools: ['Read'] })).toEqual(['Read'])
     expect(Object.keys(profile.mcpServers ?? {})).toEqual(['walnut'])
   })
 
@@ -43,6 +46,20 @@ describe('routerAreaProfile', () => {
     expect(prompt).toMatch(/you are the triage/)
     expect(prompt).toMatch(/you never create tasks/)
     expect(prompt).not.toMatch(/new_task_title/)
+  })
+
+  // 2026-11-16: a DoorDash interview invitation went to the person as a letter while the open
+  // "Interview" task owned it ("this is fucking the interview why not route to interview").
+  it('tells the router to search for the open task that owns the matter, and to prefer it over a letter', () => {
+    const prompt = routerAreaProfile('personal').systemPrompt ?? ''
+    expect(prompt).toContain('search')
+    expect(prompt).toContain('task_get')
+    const owner = prompt.indexOf('1) An open task that owns this matter')
+    const letter = prompt.indexOf('2) With no such task, when only the person can act')
+    expect(owner).toBeGreaterThan(0)
+    expect(letter).toBeGreaterThan(owner)
+    expect(prompt).toMatch(/even when only the person can act in the end/)
+    expect(prompt).toMatch(/Never add a conflict, mistake or risk you have not checked/)
   })
 
   it('names the area in its prompt, so two areas never share one profile', () => {
@@ -72,6 +89,9 @@ describe('isRouterAreaSession', () => {
     ['the full built-in tool set (tools empty)', withProfile((p) => ({ ...p, tools: [] }))],
     ['ToolSearch in place of no tools', withProfile((p) => ({ ...p, tools: ['ToolSearch'] }))],
     ['an extra pre-approved MCP tool', withProfile((p) => ({ ...p, allowedTools: [...p.allowedTools!, 'mcp__walnut__task_send'] }))],
+    ['a reordered tool list', withProfile((p) => ({ ...p, allowedTools: [...p.allowedTools!].reverse() }))],
+    ['a repeated tool', withProfile((p) => ({ ...p, allowedTools: [...p.allowedTools!, 'mcp__walnut__search'] }))],
+    ['only one routing tool', withProfile((p) => ({ ...p, allowedTools: ['mcp__walnut__router_context'] }))],
     ['a pre-approved built-in tool', withProfile((p) => ({ ...p, allowedTools: [...p.allowedTools!, 'Bash'] }))],
     ['an extra MCP server', withProfile((p) => ({ ...p, mcpServers: { ...p.mcpServers, other: { command: '/bin/true', args: [] } } }))],
     ['a changed walnut MCP command', withProfile((p) => ({ ...p, mcpServers: { walnut: { command: '/bin/sh', args: ['-c', 'exec walnut mcp-server'] } } }))],

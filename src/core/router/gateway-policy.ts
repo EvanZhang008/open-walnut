@@ -1,8 +1,29 @@
 import { WALNUT_HOME } from '../../constants.js';
 import { readRouterAreas, taskArea, type RouterAreasFile } from './areas.js';
 import type { SessionRecord, Task } from '../types.js';
+import { ROUTER_LOOKUP_OPS } from './decision-rules.js';
 
-export const ROUTER_AREA_OPS = new Set(['router_context', 'router_route']);
+/** A router's ops: its two routing tools and its read-only lookups (decision-rules.ts). Nothing that writes or sends. */
+export const ROUTER_AREA_OPS: ReadonlySet<string> = new Set(['router_context', 'router_route', ...ROUTER_LOOKUP_OPS]);
+
+/**
+ * The HTTP routes each router op reaches (the ops' own bindings, as the `/api` mount sees them), so a
+ * router session's direct request is held to the same ops its tool list is.
+ */
+export const ROUTER_AREA_ROUTES: ReadonlyArray<{ op: string; method: string; path: RegExp; query?: (query: Record<string, unknown>) => boolean }> = [
+  { op: 'router_context', method: 'GET', path: /^\/v1\/router\/context$/ },
+  { op: 'router_route', method: 'POST', path: /^\/v1\/router\/route$/ },
+  // Tasks only: memory and other sessions' transcripts (another router's included) stay out of reach.
+  { op: 'search', method: 'GET', path: /^\/v1\/search$/, query: (q) => q.types === 'task' },
+  // A task id (a uuid or a base36 id, a digit in each), never a sibling route such as /tasks/enriched.
+  { op: 'task_get', method: 'GET', path: /^\/tasks\/(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]+$/ },
+];
+
+/** Whether a router session holding these ops may make this request. */
+export function routerRequestAllowed(ops: ReadonlySet<string>, method: string, path: string, query: Record<string, unknown> = {}): boolean {
+  return ROUTER_AREA_ROUTES.some((route) => ops.has(route.op) && route.method === method && route.path.test(path)
+    && (!route.query || route.query(query)));
+}
 /** No op at all: an area trace that cannot be read, or that names two areas. */
 const NO_OPS: ReadonlySet<string> = new Set<string>();
 

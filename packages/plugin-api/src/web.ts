@@ -489,7 +489,22 @@ export interface WebUiService {
      * see `walnut.content`. Optional on the views object: feature-detect.
      */
     ContentActions?: PluginComponent<ContentActionsViewProps>
+    /**
+     * Where Walnut's router sent one incoming item of yours (a chat message you entered with
+     * `walnut.router.intake`): which router processed it, then what it decided, the same line Mail
+     * shows. It renders nothing for an item no router reads. Optional on the views object: feature-detect.
+     */
+    RouteLine?: PluginComponent<RouteLineViewProps>
   }
+}
+
+/** One item as your plugin entered it into the router: its kind, account and message id. */
+export interface RouteLineViewProps {
+  kind: 'slack' | 'mail' | 'wechat'
+  account: string
+  message: string
+  /** `reader`: both layers, for a message's own view; `row` (default): the decision on one line. */
+  surface?: 'row' | 'reader'
 }
 
 /** A login to keep in the person's Passwords: the exact title and its password, nothing else. */

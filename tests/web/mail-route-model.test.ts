@@ -60,8 +60,8 @@ describe('one mail route line', () => {
     expect(outgoingKind({ flags: [] }, { role: 'sent' })).toBe('sent');
     expect(outgoingKind({ flags: [] }, { role: 'drafts' })).toBe('draft');
     expect(outgoingKind({ flags: ['\\Draft'] })).toBe('draft');
-    expect(outgoingRouteView('sent')).toMatchObject({ status: 'none', lead: 'Not routed', link: null });
-    expect(outgoingRouteView('sent').text).toBe('Not routed · You sent this. Routers read only mail you receive');
+    expect(outgoingRouteView('sent')).toMatchObject({ status: 'none', lead: 'Not processed', link: null });
+    expect(outgoingRouteView('sent').text).toBe('Not processed · You sent this. Routers read only mail you receive');
     expect(outgoingRouteView('draft').text).toContain('A draft');
   });
 });
@@ -119,7 +119,9 @@ describe('the route line on every surface', () => {
       const reader = inRouter(createElement(MailRouteLine, { route: undefined, surface: 'reader', routingCoverage }));
       for (const html of [row, reader]) {
         expect(html).toContain('data-route-status="none"');
-        expect(html).toContain('Not routed');
+        // No router has it, so nothing was decided: the line says it was not processed, never a decision.
+        expect(html).toContain('Not processed');
+        expect(html).not.toContain('Not routed');
         expect(html).toContain(COVERAGE_REASON[routingCoverage]);
         expect(html).not.toContain('route-action');
       }
@@ -203,5 +205,69 @@ describe('the route line on every surface', () => {
     for (const rel of ['web/src/apps/mail/MailRouteLine.tsx', 'web/src/apps/mail/MailMessageRow.tsx', 'web/src/apps/mail/MailGroupLine.tsx', 'web/src/apps/mail/MailReaderHead.tsx']) {
       expect(code(rel), rel).not.toMatch(/routingHandoff|handoff=|MailRouterAssignment|\/api\/v1\/router\/assign|openApproval/);
     }
+  });
+});
+
+// 2026-11-16, the user on a DoorDash invitation the router had sent him as a letter, shown as a grey
+// "Not routed": "can we have 2 status, first does it go to processed by router abc, and then the decision".
+describe('two layers: which router processed it, then what it decided', () => {
+  const router = { id: 'router-1', name: 'Personal mail router', available: true };
+  it('a letter to the person reads as a letter, never as not routed', () => {
+    const view = mailRouteView(route({ status: 'not_routed', reason: 'Only the person can accept', letterId: 'lt-1', byTaskId: 'router-1', router } as Partial<MailRouteDto>));
+    expect(view).toMatchObject({ status: 'not_routed', lead: 'Letter to you', link: { kind: 'letter', id: 'lt-1' } });
+    expect(view.text).toBe('Letter to you · Only the person can accept');
+    expect(view.text).not.toContain('Not routed');
+    // Noise with no letter stays not routed.
+    expect(mailRouteView(route({ status: 'not_routed', reason: 'Newsletter' })).lead).toBe('Not routed');
+  });
+  it('names the router that decided, first, on every decided state', () => {
+    for (const status of ['routed', 'not_routed', 'failed', 'routing', 'unknown'] as const) {
+      const view = mailRouteView(route({ status, router }));
+      expect(view.by, status).toMatchObject({ lead: 'Processed by', name: 'Personal mail router', routerId: 'router-1' });
+      expect(view.title, status).toMatch(/^Processed by Personal mail router · /);
+    }
+    // An older server names no router: the area's router stands for it, never a made-up name.
+    expect(mailRouteView(route({}), false, { name: 'Personal' }).by?.name).toBe('the Personal router');
+    expect(mailRouteView(route({})).by?.name).toBe('a router');
+    // A router whose task is gone keeps its name with no link.
+    expect(mailRouteView(route({ router: { ...router, available: false } })).by?.routerId).toBeUndefined();
+    // A receipt recorded after the fact was recorded, not processed.
+    expect(mailRouteView(route({ origin: 'legacy', router })).by?.lead).toBe('Recorded by');
+  });
+  it('a message no router decided has no first layer: its one line says so', () => {
+    expect(mailRouteView(undefined).by).toBeUndefined();
+    expect(mailRouteView(undefined, true).by).toBeUndefined();
+    expect(mailRouteView(undefined, false, { name: 'Personal' }).by).toBeUndefined();
+    expect(outgoingRouteView('sent').by).toBeUndefined();
+  });
+  it('the reader draws both layers in order; a row keeps one line', () => {
+    const decided = route({ status: 'not_routed', reason: 'Only the person can accept', letterId: 'lt-1', router } as Partial<MailRouteDto>);
+    const reader = inRouter(createElement(MailRouteLine, { route: decided, surface: 'reader' }));
+    expect(reader.indexOf('data-testid="mail-reader-route-by"')).toBeGreaterThanOrEqual(0);
+    expect(reader.indexOf('data-testid="mail-reader-route-by"')).toBeLessThan(reader.indexOf('data-testid="mail-reader-route"'));
+    expect(reader).toContain('Personal mail router');
+    expect(reader).toContain('data-testid="mail-reader-route-letter"');
+    const row = inRouter(createElement(MailRouteLine, { route: decided, surface: 'row' }));
+    expect(row).not.toContain('mail-reader-route-by');
+    expect(row).toContain('Letter to you');
+  });
+});
+
+describe('the class: every surface that words a not_routed route knows a letter', () => {
+  // A letter to the person is stored as not_routed (no task has it); a surface that words that
+  // status without reading the letter calls a handled item "needed nothing" (2026-11-16).
+  it('each web file that branches on not_routed also reads the letter', () => {
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+        const rel = `${dir}/${entry.name}`;
+        if (entry.isDirectory()) walk(rel);
+        else if (/\.tsx?$/.test(entry.name) && !/\.test\./.test(entry.name)) files.push(rel);
+      }
+    };
+    walk('web/src');
+    const branching = files.filter((rel) => /===\s*'not_routed'|'not_routed'\s*\)|c\.not_routed/.test(code(rel)));
+    expect(branching.length).toBeGreaterThanOrEqual(2);
+    for (const rel of branching) expect(code(rel), rel).toMatch(/letter/i);
   });
 });

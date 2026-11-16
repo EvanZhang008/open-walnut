@@ -526,7 +526,24 @@ export async function lettersOfSender(sender: LetterRecord['sender']): Promise<L
   return (await readStore()).letters.filter(l => senderKey(l.sender) === key);
 }
 
+/**
+ * The letters these op keys sent, by op key, in one read of the index; a key with none is absent.
+ * An index that cannot be read throws (readStore answers an empty store), so a caller never takes
+ * an unreadable index for "no letter".
+ */
+export async function findLetterIdsByOps(opKeys: readonly string[]): Promise<Map<string, string>> {
+  const wanted = new Set(opKeys.filter(Boolean));
+  const found = new Map<string, string>();
+  if (wanted.size === 0) return found;
+  const raw = await readJsonFile<unknown>(INDEX_FILE, null, { readErrors: 'throw' });
+  for (const letter of normalizeStore(raw).letters) {
+    if (letter.createdByOp && wanted.has(letter.createdByOp)) found.set(letter.createdByOp, letter.id);
+  }
+  return found;
+}
+
 /** The letter a journal op already sent (`createdByOp`), or null. */
+
 export async function findLetterByOp(opKey: string): Promise<LetterRecord | null> {
   if (!opKey) return null;
   return (await readStore()).letters.find(l => l.createdByOp === opKey) ?? null;

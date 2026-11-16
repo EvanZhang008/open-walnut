@@ -36,7 +36,7 @@ import { frameStartData } from '../core/sessions/send-frame.js'
 import { assertDemoAdmission } from '../core/sessions/demo-admission.js'
 import { CostWatermark } from '../core/usage/cost-watermark.js'
 import { readUserSettingsEnv, slimChildSettingsArg } from './inline-subagent.js'
-import { isRouterAreaSession } from '../core/router/session-policy.js'
+import { isRouterAreaSession, routerAreaProfile, routerLaunchTools } from '../core/router/session-policy.js'
 import { idRefErrorStatus } from '../lib/id-ref.js'
 import { requestTagOn, requestTagValue, withRequestTagHeaders } from '../core/sessions/request-tag.js'
 import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, COMPACTION_FAILED_MESSAGE, COMPACTION_STOPPED_DETAIL, COMPACTION_STOPPED_MESSAGE, compactedDetail, firstSightingOfLine } from '../core/stream/compaction-notice.js'
@@ -3008,7 +3008,9 @@ export class ClaudeCodeSession {
       // A respawn without mounts: nothing requested, so nothing reads as refused.
       this._requestedMcpServers = []
     }
-    if (profile?.allowedTools?.length) args.push('--allowedTools', profile.allowedTools.join(','))
+    // A router's read-only lookups ride the launch, never its stored profile (session-policy.ts).
+    const launchTools = routerLaunchTools(profile)
+    if (launchTools.length) args.push('--allowedTools', launchTools.join(','))
     // The AVAILABLE built-in set. A pre-approval list cannot take anything away:
     // the CLI still auto-allows read-only Bash in the cwd under any mode.
     if (profile?.tools && profile.tools.length > 0) {
@@ -15517,6 +15519,7 @@ export class SessionRunner {
     // runs unscoped. Every other session keeps the old fallback (defaults on a read failure).
     const live = this.findSessionByClaudeId(sessionId)
     let areaBound = !!live?.areaId
+    let currentAreaProfile: import('../core/types.js').SessionProfile | undefined
     try {
       const { getSessionByClaudeId: getSession } = await import('../core/session-tracker.js')
       // An unreadable session store cannot say whether this was an area session.
@@ -15564,6 +15567,8 @@ export class SessionRunner {
             || task.org_role !== 'router' || !isRouterAreaSession(record, area)) {
             throw new Error('The saved session does not match its isolated area policy')
           }
+          // Proven the area's router: it resumes with today's router profile (its prompt and lookups), never an older build's.
+          currentAreaProfile = routerAreaProfile(area.id)
           const { link } = await import('../core/hosts/link.js')
           if (!(await link('__local__')).hasCapability('walnut-mcp-v1')) {
             throw new Error('This daemon cannot serve isolated routing tools. Update Walnut before resuming this area conversation.')
@@ -15578,7 +15583,7 @@ export class SessionRunner {
       if (record?.effort) {
         resolvedEffort = record.effort
       }
-      if (record?.profile) resolvedProfile = record.profile
+      if (record?.profile) resolvedProfile = currentAreaProfile ?? record.profile
       if (record?.lane) resolvedLane = record.lane
       // In-place rewind pending window: until the first turn completes after a
       // rewind, every cold --resume must carry --resume-session-at, or a CLI

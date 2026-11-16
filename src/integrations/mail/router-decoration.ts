@@ -34,13 +34,14 @@ export async function decorateMailRoutes(messages: MailMessageDto[], home: strin
   await Promise.all([...groups].map(async ([areaId, group]) => {
     try {
       const ledger = await routerStore(areaId, home).getSources(group.map(messageSource));
-      const views = new Map((await routeViews([...new Map([...ledger.values()].map((route) => [route.key, route])).values()]))
+      const views = new Map((await routeViews([...new Map([...ledger.values()].map((route) => [route.key, route])).values()], { home }))
         .map((view) => [view.key, view]));
       for (const [source, route] of ledger) {
         const view = views.get(route.key)!;
         routes.set(JSON.stringify([areaId, source]), {
           areaId, status: view.status, taskId: view.taskId, target: view.target, reason: view.reason,
           at: view.at, ruleId: view.ruleId, error: view.error,
+          ...(view.router ? { router: view.router } : {}), ...(view.letterId ? { letterId: view.letterId } : {}),
           ...(view.origin === 'legacy' ? { origin: 'legacy' as const, evidence: view.evidence } : {}),
         });
       }

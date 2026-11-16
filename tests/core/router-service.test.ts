@@ -273,7 +273,7 @@ describe('a route inside one Area', () => {
 
   it('a decision only the person can act on sends them one letter with the brief and records it handled', async () => {
     const f = fakes()
-    const letter = vi.fn(async () => undefined)
+    const letter = vi.fn(async () => 'lt-fixture')
     const d = deps(f, { letter })
     const key = routerKey(P_ITEM)
     const decide = () => routeItem({ source: P_ITEM, forUser: true, reason: 'A bill only the person can pay', text: 'Pay the dock fee by Friday.', byTaskId: 'task-p-router' }, d)
@@ -291,7 +291,7 @@ describe('a route inside one Area', () => {
 
   it('a letter to the person names no target or retry, and needs its brief', async () => {
     const f = fakes()
-    const letter = vi.fn(async () => undefined)
+    const letter = vi.fn(async () => 'lt-fixture')
     const d = deps(f, { letter })
     const base = { source: P_ITEM, forUser: true, reason: 'Only the person', text: 'Reply to the dock.' }
     for (const extra of [{ retry: true }, { taskId: 'task-p-worker' }]) {
@@ -582,7 +582,7 @@ describe('noise the router decides', () => {
   it('never tidies routed work or a letter to the person, and a hook that throws leaves the decision as recorded', async () => {
     const f = fakes()
     const noise = vi.fn(async () => { throw new Error('mail server down') })
-    const letter = vi.fn(async () => undefined)
+    const letter = vi.fn(async () => 'lt-fixture')
     const d = deps(f, { noise, letter, awaitNoise: true })
     await routeItem(input(), d)
     await routeItem({ source: P_ITEM_2, forUser: true, reason: 'A bill only the person can pay', text: 'Pay it by Friday.', byTaskId: 'task-p-router' }, d)

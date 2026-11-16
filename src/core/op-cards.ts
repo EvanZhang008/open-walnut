@@ -120,7 +120,7 @@ export const OP_CARDS: Record<string, OpCardSpec> = {
   // A mail or Slack item handed to the task that takes it, with the router's brief.
   router_route: {
     kind: 'send', to: ['task_id'], toFromResult: ['taskId', 'targetTaskId'],
-    toLabel: (a) => (a.not_routed === true ? 'Not routed' : undefined),
+    toLabel: (a) => (a.for_user === true ? 'Letter to you' : a.not_routed === true ? 'Not routed' : undefined),
     title: (a) => s(a.new_task_title) ?? s(a.reason), detail: (a) => s(a.text) ?? s(a.reason),
   },
   triage_route: { kind: 'send', toFromResult: ['taskId', 'targetTaskId'], title: (a) => s(a.item), detail: (a) => s(a.text) },

@@ -211,7 +211,7 @@ describe('area session spawn argv', () => {
     expect(args).toContain('--strict-mcp-config')
     expect(args).toContain('--disable-slash-commands')
     expect(JSON.parse(flagValue(args, '--mcp-config')!)).toEqual({ mcpServers: { walnut: hostWalnutMcpServer() } })
-    expect(flagValue(args, '--allowedTools')).toBe('mcp__walnut__router_context,mcp__walnut__router_route')
+    expect(flagValue(args, '--allowedTools')).toBe('mcp__walnut__router_context,mcp__walnut__router_route,mcp__walnut__search,mcp__walnut__task_get')
     expect(flagValue(args, '--system-prompt')).toBe(routerAreaProfile(AREA_ID).systemPrompt)
     expect(args).not.toContain('--append-system-prompt')
     expect(args).not.toContain('--fork-session')
@@ -371,6 +371,14 @@ describe('resolveResumeArgs fails closed for area sessions', () => {
   it('resumes a valid area record with its exact profile', async () => {
     areaTask()
     h.records.set(SID, { claudeSessionId: SID, taskId: 't-router', cwd: WALNUT_HOME, profile: routerAreaProfile(AREA_ID) })
+    const resolved = await runner.resolveResumeArgs(SID)
+    expect(resolved.profile).toEqual(routerAreaProfile(AREA_ID))
+  })
+
+  // An older build saved the router with its old prompt: it resumes with today's prompt (its lookups ride every launch).
+  it('resumes a router saved by an older build with today\'s router profile', async () => {
+    areaTask()
+    h.records.set(SID, { claudeSessionId: SID, taskId: 't-router', cwd: WALNUT_HOME, profile: { ...routerAreaProfile(AREA_ID), systemPrompt: 'An older router prompt.' } })
     const resolved = await runner.resolveResumeArgs(SID)
     expect(resolved.profile).toEqual(routerAreaProfile(AREA_ID))
   })

@@ -71,6 +71,12 @@ export interface RouterRoute {
   evidence?: string
   /** `legacy`: recorded after the fact for an item handled before the router, never delivered by it. Absent: a normal route. */
   origin?: 'legacy'
+  /** A not_routed item the router sent the person as an inbox letter: that letter's id. */
+  letterId?: string
+  /** A not_routed row an older build wrote: whether a letter went out is not known yet (letter-receipts.ts looks once). */
+  letterUnchecked?: true
+  /** A letter to the person whose send has not been confirmed: the router's next for_user call sends it (once, by its op key). */
+  letterPending?: true
 }
 
 /** A receipt for an item handled before the router: written by `recordLegacy` only, never through `claim`. */
@@ -88,6 +94,8 @@ export interface RouterDecision {
   ruleId?: string
   byTaskId?: string
   status: 'routing' | 'not_routed'
+  /** A not_routed decision whose letter to the person is being sent: its id is noted once sent (`noteLetter`). */
+  letter?: boolean
 }
 
 export interface RouterSettlePatch {

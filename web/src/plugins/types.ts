@@ -1,4 +1,5 @@
 import type { ContentAction, ContentItem } from '../../../packages/plugin-api/src/content-actions'
+import type { RouteLineViewProps } from '../../../packages/plugin-api/src/web'
 import type { ComponentType, RefObject } from 'react'
 
 export interface Disposable {
@@ -377,6 +378,8 @@ export interface PluginViews {
   PluginSettingsView: ComponentType<Record<string, never>>
   /** The two content actions (Talk to CEO, New task) as buttons, for one piece of content. */
   ContentActions: ComponentType<{ item: ContentItem; size?: 'buttons' | 'compact' }>
+  /** Where Walnut's router sent one item (which router processed it, then its decision), Mail's own line. */
+  RouteLine: ComponentType<RouteLineViewProps>
 }
 
 export interface WalnutWebApiHost {

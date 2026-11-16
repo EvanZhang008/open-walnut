@@ -866,7 +866,7 @@ describe('source versions', () => {
       { key: KEY_A, source_version: '' },
       { key: KEY_B, source_version: 'vb' },
     ])
-    expect((await raw.get<{ version: number }>('SELECT MAX(version) AS version FROM _walnut_plugin_migrations'))!.version).toBe(4)
+    expect((await raw.get<{ version: number }>('SELECT MAX(version) AS version FROM _walnut_plugin_migrations'))!.version).toBe(5)
   })
 
   it('reads an alias an older Walnut wrote into the v2 table after the migration, for unversioned sources only', async () => {
@@ -1038,7 +1038,7 @@ describe('legacy receipts', () => {
     expect(await ledger.recordLegacy(item(source), HANDLED)).toEqual({ fresh: false, route: expected })
     const raw = rawClient()
     expect(await raw.get('SELECT receipt_origin, evidence FROM router_items')).toEqual({ receipt_origin: 'router', evidence: null })
-    expect((await raw.get<{ version: number }>('SELECT MAX(version) AS version FROM _walnut_plugin_migrations'))!.version).toBe(4)
+    expect((await raw.get<{ version: number }>('SELECT MAX(version) AS version FROM _walnut_plugin_migrations'))!.version).toBe(5)
   })
 })
 
@@ -1089,7 +1089,7 @@ describe('hasRouterDecisions', () => {
 
 describe('overview (the router page summary)', () => {
   it('reads zero and no newest row for an empty area', async () => {
-    expect(await store().overview()).toEqual({ counts: {} })
+    expect(await store().overview()).toEqual({ counts: {}, letters: 0 })
   })
 
   it('counts each state and names the newest row by its latest change', async () => {
@@ -1106,7 +1106,7 @@ describe('overview (the router page summary)', () => {
   it('leaves out legacy receipts: work handled before the router is no decision of its own', async () => {
     const ledger = store()
     await ledger.recordLegacy(item(mail('crew', 'old')), { taskId: 'task-desk', reason: 'Handled before the router', evidence: 'Reply in the desk thread', at: 9_000 })
-    expect(await ledger.overview()).toEqual({ counts: {} })
+    expect(await ledger.overview()).toEqual({ counts: {}, letters: 0 })
     await ledger.claim(item(mail('crew', 'new')), { status: 'not_routed', reason: 'newsletter' }, 2_000)
     const view = await ledger.overview()
     expect(view.counts).toEqual({ not_routed: 1 })

@@ -137,9 +137,17 @@ ALTER TABLE router_items ADD COLUMN evidence TEXT;
 ALTER TABLE router_items ADD COLUMN receipt_origin TEXT NOT NULL DEFAULT 'router';
 `,
   },
+  {
+    // A letter to the person: its inbox id; 'pending' = being sent; '' = none; NULL = not known (an older build's row).
+    version: 5,
+    sql: `ALTER TABLE router_items ADD COLUMN letter_id TEXT;`,
+  },
 ]
 
 export const ROUTER_EVIDENCE_MAX = 2000
+
+/** A for_user row whose letter is being sent (no letter id yet). */
+const LETTER_PENDING = 'pending'
 
 /** The version part of a source's identity: `''` for a source without one. */
 function versionOf(source: RouterSource): string {
@@ -179,7 +187,7 @@ export class RouterStoreError extends Error {
   }
 }
 
-const COLUMNS = 'key, kind, account, message, source_version, thread_key, sender, subject, status, task_id, reason, rule_id, by_task_id, message_id, error, at, evidence, receipt_origin'
+const COLUMNS = 'key, kind, account, message, source_version, thread_key, sender, subject, status, task_id, reason, rule_id, by_task_id, message_id, error, at, evidence, receipt_origin, letter_id'
 
 interface RouterRow extends Record<string, unknown> {
   key: string
@@ -200,6 +208,7 @@ interface RouterRow extends Record<string, unknown> {
   at: number
   evidence: string | null
   receipt_origin: string | null
+  letter_id: string | null
 }
 
 /** `%` and `:` escaped in each part, so the joined key splits back into exactly one source. */
@@ -282,11 +291,14 @@ function rowToRoute(row: RouterRow, areaId: string): RouterRoute {
     ...(row.error !== null ? { error: row.error } : {}),
     ...(row.evidence !== null && row.evidence !== undefined ? { evidence: row.evidence } : {}),
     ...(row.receipt_origin === 'legacy' ? { origin: 'legacy' as const } : {}),
+    ...(row.status === 'not_routed' && row.letter_id && row.letter_id !== LETTER_PENDING ? { letterId: row.letter_id } : {}),
+    ...(row.status === 'not_routed' && row.letter_id === LETTER_PENDING ? { letterPending: true as const } : {}),
+    ...(row.status === 'not_routed' && (row.letter_id === null || row.letter_id === undefined) ? { letterUnchecked: true as const } : {}),
   }
 }
 
 /** The insert both `claim` and `recordLegacy` use: a row only when its source names no other key, never over an existing row. */
-const INSERT_ITEM = `INSERT INTO router_items (${COLUMNS}, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?`
+const INSERT_ITEM = `INSERT INTO router_items (${COLUMNS}, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?`
   + ` WHERE COALESCE(${RESOLVE_SOURCE}, ?) = ? ON CONFLICT(key) DO NOTHING`
 
 export class RouterStore {
@@ -446,6 +458,9 @@ export class RouterStore {
     } else {
       throw new TypeError('Router claim status must be routing or not_routed')
     }
+    if (decision.letter !== undefined && (decision.status !== 'not_routed' || typeof decision.letter !== 'boolean')) throw new TypeError('Only a not_routed decision sends a letter')
+    // A letter's id is noted once it is sent ('pending' until then); any other not_routed row has none.
+    const letterId = decision.status !== 'not_routed' ? null : decision.letter ? LETTER_PENDING : ''
     const at = stamp(now)
     const client = await this.open()
     // One transaction, so a row is never made for a source that names another key.
@@ -453,7 +468,7 @@ export class RouterStore {
       {
         sql: INSERT_ITEM,
         params: [key, item.source.kind, item.source.account, item.source.message, versionOf(item.source), threadKey, sender, subject,
-          decision.status, taskId, reason, ruleId, byTaskId, messageId, null, at, null, 'router', at, ...resolveParams(item.source), key, key],
+          decision.status, taskId, reason, ruleId, byTaskId, messageId, null, at, null, 'router', letterId, at, ...resolveParams(item.source), key, key],
       },
       { sql: BIND_SOURCE, params: bindParams(item.source, key, at) },
     ])
@@ -479,7 +494,7 @@ export class RouterStore {
       {
         sql: INSERT_ITEM,
         params: [key, item.source.kind, item.source.account, item.source.message, versionOf(item.source), threadKey, sender, subject,
-          'routed', taskId, reason, null, byTaskId, null, null, at, evidence, 'legacy', at, ...resolveParams(item.source), key, key],
+          'routed', taskId, reason, null, byTaskId, null, null, at, evidence, 'legacy', null, at, ...resolveParams(item.source), key, key],
       },
       { sql: BIND_SOURCE, params: bindParams(item.source, key, at) },
     ])
@@ -491,16 +506,18 @@ export class RouterStore {
    * the router page's summary (no item words). Legacy receipts (work handled before the router
    * existed) are no decision of its own and are left out.
    */
-  async overview(): Promise<{ counts: Partial<Record<RouterRouteStatus, number>>; latest?: RouterRoute }> {
+  async overview(): Promise<{ counts: Partial<Record<RouterRouteStatus, number>>; letters: number; latest?: RouterRoute }> {
     const client = await this.open()
     const rows = await client.all<{ status: string; n: number }>("SELECT status, COUNT(*) AS n FROM router_items WHERE receipt_origin IS NOT 'legacy' GROUP BY status")
+    // Of the not_routed ones, those that went to the person as a letter.
+    const letters = await client.get<{ n: number }>(`SELECT COUNT(*) AS n FROM router_items WHERE status = 'not_routed' AND COALESCE(letter_id, '') NOT IN ('', '${LETTER_PENDING}')`)
     const counts: Partial<Record<RouterRouteStatus, number>> = {}
     for (const row of rows) {
       const status = (ROUTE_STATUSES as readonly string[]).includes(row.status) ? row.status as RouterRouteStatus : 'unknown'
       counts[status] = (counts[status] ?? 0) + Number(row.n)
     }
     const latest = await client.get<RouterRow>(`SELECT ${COLUMNS} FROM router_items WHERE receipt_origin IS NOT 'legacy' ORDER BY at DESC, key DESC LIMIT 1`)
-    return { counts, ...(latest ? { latest: rowToRoute(latest, this.areaId) } : {}) }
+    return { counts, letters: Number(letters?.n ?? 0), ...(latest ? { latest: rowToRoute(latest, this.areaId) } : {}) }
   }
 
   /**
@@ -579,6 +596,29 @@ export class RouterStore {
     )
     const row = await client.get<RouterRow>(`SELECT ${COLUMNS} FROM router_items WHERE key = ?`, [key])
     return row ? rowToRoute(row, this.areaId) : undefined
+  }
+
+  /** Not_routed rows whose letter nobody has looked up yet (an older build wrote them), at most `limit`. */
+  async uncheckedLetters(limit = ROUTER_HISTORY_MAX): Promise<RouterRoute[]> {
+    const client = await this.open()
+    const rows = await client.all<RouterRow>(`SELECT ${COLUMNS} FROM router_items WHERE status = 'not_routed' AND letter_id IS NULL LIMIT ?`, [limit])
+    return rows.map((row) => rowToRoute(row, this.areaId))
+  }
+
+  /**
+   * Notes the person's letter for a not_routed row (`letterId`), or that it has none (`''`). A known
+   * letter is never replaced, and none is never written over one.
+   */
+  async noteLetter(keys: readonly string[], letterId: string): Promise<number> {
+    if (keys.length === 0) return 0
+    text('letter id', letterId)
+    const client = await this.open()
+    const updated = await client.run(
+      `UPDATE router_items SET letter_id = ? WHERE status = 'not_routed' AND key IN (SELECT value FROM json_each(?))
+        AND ${letterId ? `(letter_id IS NULL OR letter_id IN ('', '${LETTER_PENDING}'))` : 'letter_id IS NULL'}`,
+      [letterId, JSON.stringify(keys)],
+    )
+    return updated.changes
   }
 
   /**

@@ -525,10 +525,13 @@ async function seedRouterRows() {
       sources: [...new Set(listed.map((m) => m.accountId))].map((account) => ({ kind: 'mail' as const, account })) } : area),
     // Only the six routed rows, one queued row and the legacy row are the router's: every other message of
     // the same accounts reads as one its router never took.
-    openItems: [...messages.slice(0, 7), messages[14]!]
+    openItems: [...messages.slice(0, 7), messages[10]!, messages[14]!]
       .map((m) => ({ areaId: 'personal', source: { kind: 'mail' as const, account: m.accountId, message: m.messageId, version: m.deliveryVersion } })),
   }))
   const ledger = routerStore('personal', tmpBase)
+  const { readRouterAreas } = await import('../../../src/core/router/areas.js')
+  // Every seeded decision is this router's, so the reader's first layer names it.
+  const routerId = (await readRouterAreas(tmpBase)).routers.find((one) => one.areaId === 'personal')!.taskId
   const cases = ['task', 'vp', 'not_routed', 'failed', 'unknown', 'routing'] as const
   const rows = []
   for (let i = 0; i < cases.length; i++) {
@@ -537,18 +540,30 @@ async function seedRouterRows() {
     // Resolved at the confirmed version: a row that moved since the fresh read fails the seed here.
     const item = await resolveRouterItem({ kind: 'mail', account: m.accountId, message: m.messageId, version: m.deliveryVersion })
     const claim = await ledger.claim(item, status === 'not_routed'
-      ? { status, reason: 'Newsletter, no action needed' }
-      : { status: 'routing', taskId: status === 'vp' ? vp.id : owner.id, reason: 'Existing thread owner' })
+      ? { status, reason: 'Newsletter, no action needed', byTaskId: routerId }
+      : { status: 'routing', taskId: status === 'vp' ? vp.id : owner.id, reason: 'Existing thread owner', byTaskId: routerId })
     if (status !== 'not_routed' && status !== 'routing') await ledger.settle(item.key, claim.route.messageId!,
       { status: status === 'task' || status === 'vp' ? 'routed' : status, ...(status === 'failed' ? { error: 'Receiver was not ready' } : {}) })
     rows.push({ ...m, status })
   }
+  // A letter to the person (for_user): recorded not routed, with the letter the router sent under its own op key.
+  const lettered = messages[10]!
+  const letterItem = await resolveRouterItem({ kind: 'mail', account: lettered.accountId, message: lettered.messageId, version: lettered.deliveryVersion })
+  const letterClaim = await ledger.claim(letterItem, { status: 'not_routed', reason: 'Only the person can accept the invitation', byTaskId: routerId, letter: true })
+  const { sendLetterOnce } = await import('../../../src/core/human-inbox/store.js')
+  const { routerLetterOpKey } = await import('../../../src/core/router/letter-receipts.js')
+  const { routerLetterContent } = await import('../../../src/core/router/letter-content.js')
+  // The router's own letter, as service.ts sends it.
+  const sentLetter = await sendLetterOnce({ ...routerLetterContent(letterItem, letterClaim.route, 'Accept the dock invitation.'), type: 'review',
+    sender: { sessionId: 'external', taskId: routerId }, taskRefs: [routerId] }, { opKey: routerLetterOpKey('personal', letterClaim.route.key) })
+  await ledger.noteLetter([letterClaim.route.key], sentLetter.letter.id)
+  rows.push({ ...lettered, status: 'letter', letterId: sentLetter.letter.id })
   const legacy = messages[14]!
   const legacyItem = await resolveRouterItem({ kind: 'mail', account: legacy.accountId, message: legacy.messageId, version: legacy.deliveryVersion })
   await ledger.recordLegacy(legacyItem, { taskId: owner.id, reason: 'Handled before the router', evidence: 'The prior task recorded its review', at: Date.now() - 60_000 })
   rows.push({ ...legacy, status: 'legacy' })
   const pick = (m: (typeof messages)[number]) => ({ accountId: m.accountId, messageId: m.messageId, subject: m.subject })
-  return { ownerId: owner.id, vpId: vp.id, rows, queued: pick(messages[6]!), unassigned: messages.slice(7, 10).map(pick) }
+  return { ownerId: owner.id, vpId: vp.id, routerId, rows, queued: pick(messages[6]!), unassigned: messages.slice(7, 10).map(pick) }
 }
 
 const routerRows = process.env.PW_MAIL_ROUTER === '1' ? await seedRouterRows() : null

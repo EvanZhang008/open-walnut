@@ -238,7 +238,7 @@ describe('area routing on the real server', () => {
   }
 
   const blocked: Array<[string, string, unknown?]> = [
-    ['GET', '/api/v1/tasks'], ['GET', `/api/v1/search?q=PRIVATE_CANARY`],
+    ['GET', '/api/v1/tasks'],
     ['GET', '/api/v1/router/areas'], ['GET', '/api/config'],
     ['POST', '/api/v1/tasks', { title: 'Escape attempt' }],
     ['POST', '/api/v1/tasks/send', { to: 'other', text: 'PRIVATE_CANARY' }],
@@ -251,6 +251,21 @@ describe('area routing on the real server', () => {
       expect(await response.text()).not.toContain('PRIVATE_CANARY');
     });
   }
+
+  // 2026-11-16 (the user: it can search, as his Slack monitor does): a router finds
+  // an item's owner itself, with Walnut's search and one task's details; it still writes nothing else.
+  it('lets a router session search all tasks and read one, and nothing more', async () => {
+    const found = await call('GET', '/api/v1/search?q=Garden&types=task', personalSid);
+    expect(found.status).toBe(200);
+    // Tasks only: memory and session transcripts stay out of a router's reach.
+    expect((await call('GET', '/api/v1/search?q=PRIVATE_CANARY', personalSid)).status).toBe(403);
+    expect((await call('GET', '/api/v1/search?q=PRIVATE_CANARY&types=session', personalSid)).status).toBe(403);
+    const one = await call('GET', `/api/tasks/${workId}`, personalSid);
+    expect(one.status).toBe(200);
+    for (const [method, path, body] of [['PATCH', `/api/v1/tasks/${workId}`, { title: 'Renamed' }], ['GET', `/api/tasks/${workId}/history`], ['POST', '/api/v1/tasks', { title: 'Escape attempt' }]] as const) {
+      expect((await call(method, path, personalSid, body)).status, `${method} ${path}`).toBe(403);
+    }
+  });
 
   it('refuses an area session widening its own registry and leaves it unchanged', async () => {
     const before = await readRouterAreas(WALNUT_HOME);
@@ -275,8 +290,8 @@ describe('area routing on the real server', () => {
     expect(await list.text()).toContain(routedId);
     const org = await call('GET', '/api/v1/org', vpSid);
     expect(org.status).toBe(200);
-    // A router's own session is still held to its two tools.
-    expect((await call('GET', `/api/tasks/${routedId}`, personalSid)).status).toBe(403);
+    // A router's own session reads a task (its owner lookup) but still changes none.
+    expect((await call('PATCH', `/api/v1/tasks/${routedId}`, personalSid, { title: 'Renamed' })).status).toBe(403);
   });
 
   it('records no-action without a model run or delivery and shows the same ledger on reread', async () => {

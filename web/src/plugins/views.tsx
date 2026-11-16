@@ -9,6 +9,7 @@ import { AskObjectDrawer } from '@/components/chat/AskObjectDrawer'
 import { PluginSettingsForm } from '@/components/settings/PluginSettingsForm'
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic'
 import { ContentActionButtons } from '@/components/content/ContentActionButtons'
+import { RouteLine } from '@/components/router/RouteLine'
 import type { ContentItem } from '@/utils/content-actions'
 import { lazy, Suspense, useCallback, useRef, type RefObject } from 'react'
 import type { DrawingViewProps } from '../../../packages/plugin-api/src/web'
@@ -164,6 +165,7 @@ export function createPluginViews(pluginId: string): PluginViews {
     PluginSettingsView,
     ContentActions,
     DrawingView,
+    RouteLine,
   }
 }
 

@@ -240,6 +240,10 @@ export interface MailRouteDto {
   /** `legacy`: handled before the router and recorded after the fact; an older server never sends it. */
   origin?: 'legacy';
   evidence?: string;
+  /** The router that decided it; an older server sends none. */
+  router?: { id: string; name: string; available: boolean };
+  /** Not routed, and sent to the person as this inbox letter; an older server sends none. */
+  letterId?: string;
 }
 
 export type MailInviteResponse = 'accept' | 'tentative' | 'decline';

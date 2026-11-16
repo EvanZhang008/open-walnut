@@ -27,8 +27,9 @@ export interface RouterNodeSummary {
   assigned: number;
   /** Confirmed items with no route yet (what the next wake hands it); null when that could not be read, 0 while paused. */
   waiting: number | null;
-  counts: Record<'routed' | 'not_routed' | 'routing' | 'failed' | 'unknown', number>;
-  latest?: { at: number; status: RouterRouteStatus; taskId?: string; taskTitle?: string };
+  /** `letters`: of the not_routed ones, those the router sent the person as an inbox letter. */
+  counts: Record<'routed' | 'not_routed' | 'routing' | 'failed' | 'unknown' | 'letters', number>;
+  latest?: { at: number; status: RouterRouteStatus; taskId?: string; taskTitle?: string; letter?: true };
   /** Its wake: the check that hands it waiting items. */
   wake: { armed: boolean; everyMs?: number; lastCheckAt?: number; nextAt?: number };
   /** Its own conversation: started (a live CLI, idle or at work), or not. */
@@ -41,13 +42,15 @@ export class RouterSummaryError extends Error {
   constructor(readonly code: 'not_router', message: string, readonly status = 404) { super(message); }
 }
 
-const ZERO = { routed: 0, not_routed: 0, routing: 0, failed: 0, unknown: 0 };
+const ZERO = { routed: 0, not_routed: 0, routing: 0, failed: 0, unknown: 0, letters: 0 };
 
 export async function routerNodeSummary(taskId: string, home = WALNUT_HOME): Promise<RouterNodeSummary> {
   const file = await readRouterAreas(home);
   const area = taskArea(file, taskId);
   const assignment = area ? file.routers.find((r) => r.taskId === taskId && r.areaId === area.id) : undefined;
   if (!area || !assignment) throw new RouterSummaryError('not_router', 'This task is not a router of any area.');
+  const { ensureLetterReceipts } = await import('./letter-receipts.js');
+  await ensureLetterReceipts(routerStore(area.id, home));
   const [overview, readiness, wake, session, checked] = await Promise.all([
     routerStore(area.id, home).overview(),
     routerReadiness(area.id, taskId),
@@ -61,10 +64,11 @@ export async function routerNodeSummary(taskId: string, home = WALNUT_HOME): Pro
   const waiting = paused ? 0 : await pendingCount(file, area).catch(() => null);
   const counts = { ...ZERO };
   for (const [status, n] of Object.entries(overview.counts)) counts[status as keyof typeof ZERO] += n ?? 0;
+  counts.letters = overview.letters;
   let latest: RouterNodeSummary['latest'];
   if (overview.latest) {
     const one = overview.latest;
-    latest = { at: one.at, status: one.status, ...(one.taskId ? { taskId: one.taskId } : {}) };
+    latest = { at: one.at, status: one.status, ...(one.taskId ? { taskId: one.taskId } : {}), ...(one.letterId ? { letter: true as const } : {}) };
     if (one.taskId) {
       const { getTask } = await import('../task-manager.js');
       const title = await getTask(one.taskId).then((t) => t.title).catch(() => undefined);

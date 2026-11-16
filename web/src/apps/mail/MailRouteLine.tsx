@@ -11,6 +11,8 @@ import type { MailRouteDto, MailRoutingCoverage } from '@/api/mail';
 import { apiGet } from '@/api/client';
 import { fetchTask } from '@/api/tasks';
 import { openTaskHere } from '@/utils/open-session';
+import { openLetterAnywhere } from '@/utils/open-anywhere';
+import './mail-route.css';
 import { mailRouteAction, mailRouteView, orgNodePath, outgoingRouteView, routerPathOf, type MailRouteAction, type MailRouteLink } from './mail-route-model';
 
 const stop = (event: SyntheticEvent) => { event.stopPropagation(); };
@@ -37,6 +39,7 @@ export function MailRouteLine({ route, surface, subject, routingArea, routingCov
   const view = outgoing ? outgoingRouteView(outgoing) : mailRouteView(route, unavailable, routingArea, routingCoverage);
   const Tag = surface === 'row' ? 'span' : 'p';
   const go = (link: MailRouteLink) => {
+    if (link.kind === 'letter') { openLetterAnywhere(link.id); return; }
     if (link.kind === 'task') {
       // Its details open too: a routed task often has no session yet, and a bare highlight in the
       // task list reads as nothing happened.
@@ -66,6 +69,7 @@ export function MailRouteLine({ route, surface, subject, routingArea, routingCov
       data-testid={surface === 'row' ? 'mail-row-route' : 'mail-reader-route'}
       data-route-status={view.status}
       data-route-area={route?.areaId}
+      {...(view.link?.kind === 'letter' ? { 'data-route-letter': view.link.id } : {})}
       {...(route?.target ? {
         'data-target-kind': route.target.kind,
         'data-target-id': route.target.id,
@@ -73,8 +77,22 @@ export function MailRouteLine({ route, surface, subject, routingArea, routingCov
       } : {})}
       title={view.title}
     >
-      <span className="mail-route-mark" data-route-status={view.status} aria-hidden="true" />
-      <span className="mail-route-lead">{view.lead}</span>
+      <span className="mail-route-mark" data-route-status={view.status} {...(view.link?.kind === 'letter' ? { 'data-route-letter': '' } : {})} aria-hidden="true" />
+      {view.link?.kind === 'letter' ? (
+        <button
+          type="button"
+          className="mail-route-link mail-route-lead"
+          data-testid={`${surface === 'row' ? 'mail-row' : 'mail-reader'}-route-letter`}
+          title={view.title}
+          aria-label="Open the letter"
+          onPointerDown={stop}
+          onMouseDown={stop}
+          onKeyDown={stopActivation}
+          onClick={(event) => { event.stopPropagation(); event.preventDefault(); go(view.link!); }}
+        >
+          {view.lead}
+        </button>
+      ) : <span className="mail-route-lead">{view.lead}</span>}
       {view.name && ' '}
       {view.name && (view.link ? (
         <button
@@ -82,7 +100,7 @@ export function MailRouteLine({ route, surface, subject, routingArea, routingCov
           className="mail-route-link"
           data-testid={`${surface === 'row' ? 'mail-row' : 'mail-reader'}-route-link`}
           title={view.title}
-          aria-label={view.link.kind === 'vp' ? `Open ${view.name} in Org` : `Open task ${view.name}`}
+          aria-label={view.link.kind === 'vp' ? `Open ${view.name} in Org` : view.link.kind === 'letter' ? 'Open the letter' : `Open task ${view.name}`}
           onPointerDown={stop}
           onMouseDown={stop}
           onKeyDown={stopActivation}
@@ -122,6 +140,25 @@ export function MailRouteLine({ route, surface, subject, routingArea, routingCov
       {action.label}
     </button>
   ) : null;
+  // The reader's first layer: which router decided it, above what it decided (the row keeps one line).
+  const by = surface === 'reader' && view.by ? (
+    <p className="mail-route-by" data-testid="mail-reader-route-by" title={view.by.text}>
+      <span className="mail-route-by-lead">{view.by.lead}</span>{' '}
+      {view.by.routerId ? (
+        <button
+          type="button"
+          className="mail-route-link mail-route-by-name"
+          data-testid="mail-reader-route-router"
+          aria-label={`Open ${view.by.name} in Org`}
+          onKeyDown={stopActivation}
+          onClick={(event) => { event.stopPropagation(); navigate(`/org?node=${encodeURIComponent(`router:${view.by!.routerId}`)}`); }}
+        >
+          {view.by.name}
+        </button>
+      ) : <span className="mail-route-by-name">{view.by.name}</span>}
+      {view.by.when && <><span className="mail-route-by-sep" aria-hidden="true"> · </span><span className="mail-route-by-when">{view.by.when}</span></>}
+    </p>
+  ) : null;
   // One foot under the line, so the step reads as part of it.
-  return next ? <>{line}<div className="mail-route-foot" data-testid="mail-reader-route-foot">{next}</div></> : line;
+  return <>{by}{line}{next && <div className="mail-route-foot" data-testid="mail-reader-route-foot">{next}</div>}</>;
 }
