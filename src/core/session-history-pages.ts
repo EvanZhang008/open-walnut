@@ -69,7 +69,11 @@ export async function readSessionHistoryBefore(
   cwd: string | undefined,
   host: string | undefined,
   before: string,
-  want: { minMessages: number; minText: number; isText: (m: SessionHistoryMessage) => boolean },
+  want: {
+    minMessages: number; minText: number; isText: (m: SessionHistoryMessage) => boolean;
+    /** Fewer windows than MAX_WINDOWS_PER_PAGE for this page (a byte budget). */
+    maxWindows?: number;
+  },
   /** Lines starting from here on are already in hand (a tail window's start): read only
    *  before it. Ignored when the file is no longer the one that window was read from. */
   held?: HistoryWindowStart,
@@ -112,7 +116,8 @@ export async function readSessionHistoryBefore(
   let collected: SessionHistoryMessage[] = [];
   let windows = 0;
   let reachedStart = false;
-  for (; k >= 0 && windows < MAX_WINDOWS_PER_PAGE; k--) {
+  const windowCap = Math.max(1, Math.min(want.maxWindows ?? MAX_WINDOWS_PER_PAGE, MAX_WINDOWS_PER_PAGE));
+  for (; k >= 0 && windows < windowCap; k--) {
     const messages = await read(k);
     if (!messages) return null;
     windows++;

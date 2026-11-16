@@ -1731,7 +1731,11 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
             const { readSessionHistoryBefore } = await import('../../core/session-history-pages.js')
             const backfillAt = Date.now()
             const page = await readSessionHistoryBefore(sessionId, record.cwd, record.host, before,
-              { minMessages: 0, minText: turnCount, isText: isMainTurn }, history.windowStart)
+              // One window: the cold read's own byte budget. 2026-11-16: a 440 MB tool-heavy
+              // session's ten turns spanned more than 16 MB, so every page load of its (hidden)
+              // column pulled four windows, 5 s on the host link, and still fell short. What is
+              // older stays one "Load earlier" away (the answer stays windowed).
+              { minMessages: 0, minText: turnCount, isText: isMainTurn, maxWindows: 1 }, history.windowStart)
             backfill = { ms: Date.now() - backfillAt, windows: page?.windowsRead ?? 0, messages: page?.messages.length ?? 0 }
             if (page?.messages.length) {
               const keyOf = (m: SessionHistoryMessage) => m.msgId ? `${m.msgId}|${m.timestamp}|${m.role}` : undefined

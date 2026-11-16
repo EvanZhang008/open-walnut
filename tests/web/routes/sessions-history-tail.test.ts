@@ -178,6 +178,8 @@ describe('GET /:sessionId/history?tail=N', () => {
     expect(res.status).toBe(200);
     const { readSessionHistoryBefore } = await import('../../../src/core/session-history-pages.js');
     expect(vi.mocked(readSessionHistoryBefore).mock.calls.at(-1)?.[5]).toEqual({ byte: 48_906_261, epoch: 'e' });
+    // One window of older bytes at most: the cold read's budget.
+    expect(vi.mocked(readSessionHistoryBefore).mock.calls.at(-1)?.[4]).toMatchObject({ maxWindows: 1 });
   });
 
   it('rejects malformed turn budgets', async () => {

@@ -40,6 +40,16 @@ describe('readSessionHistoryBefore endByte', () => {
     expect(ranges.filter(([a, b]) => b > a)[0]).toEqual([8 * MB, 12 * MB]);
   });
 
+  it('maxWindows bounds one page to that many window reads', async () => {
+    const many = { minMessages: 50, minText: 50, isText: () => true };
+    const capped = await readSessionHistoryBefore('s', undefined, 'h', '2026-01-09T00:00:00Z', { ...many, maxWindows: 1 }, { byte: 9 * MB - 1 });
+    expect(capped?.windowsRead).toBe(1);
+    expect(capped?.reachedStart).toBe(false);
+    ranges.length = 0; _resetHistoryPagesForTests();
+    const full = await readSessionHistoryBefore('s', undefined, 'h', '2026-01-09T00:00:00Z', many, { byte: 9 * MB - 1 });
+    expect(full?.windowsRead).toBe(3);
+  });
+
   it('a held start from another file incarnation is ignored', async () => {
     await readSessionHistoryBefore('s', undefined, 'h', '2026-01-09T00:00:00Z', want, { byte: 7 * MB, epoch: 'old' });
     expect(ranges.filter(([a, b]) => b > a)[0]).toEqual([8 * MB, 12 * MB]);
