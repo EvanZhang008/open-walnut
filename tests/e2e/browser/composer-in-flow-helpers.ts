@@ -109,8 +109,13 @@ export type Geometry = {
   arrowBottom: number | null;
 };
 
+/** The session note's row: since 761925565 it is the top band of the input card. One name, read by
+ *  the geometry and required by the scroller check below. */
+const NOTE_BAND = 'note band (top of the input card)';
+const INPUT_CARD = 'input card';
+
 export async function geometry(panel: Locator): Promise<Geometry> {
-  return panel.evaluate((p) => {
+  return panel.evaluate((p, { noteBand, inputCard }) => {
     const hist = p.querySelector<HTMLElement>('.session-history')!;
     const input = p.querySelector<HTMLElement>('.session-panel-input')!;
     const h = hist.getBoundingClientRect();
@@ -129,11 +134,11 @@ export async function geometry(panel: Locator): Promise<Geometry> {
       lastRowBottom: last ? last.getBoundingClientRect().bottom : null,
       // Every row of chrome the composer block can carry, in DOM order.
       chrome: ([
-        ['note band (top of the input card)', '.session-notes'],
+        [noteBand, '.session-notes'],
         ['send error', '.session-panel-input > .text-xs'],
         ['image strip', '.session-panel-input .chat-image-previews'],
         ['queue bar', '.session-panel-input .chat-queue-indicator'],
-        ['input card', '.session-panel-input .chat-input-box'],
+        [inputCard, '.session-panel-input .chat-input-box'],
       ] as const).flatMap(([label, sel]) => {
         const el = p.querySelector<HTMLElement>(sel);
         return el ? [{ label, top: el.getBoundingClientRect().top }] : [];
@@ -141,7 +146,7 @@ export async function geometry(panel: Locator): Promise<Geometry> {
       arrowVisible: !!arrow && arrow.classList.contains('visible'),
       arrowBottom: arrow ? arrow.getBoundingClientRect().bottom : null,
     };
-  });
+  }, { noteBand: NOTE_BAND, inputCard: INPUT_CARD });
 }
 
 export async function expectAtEnd(panel: Locator): Promise<void> {
@@ -158,17 +163,17 @@ export async function expectScrollerEndsAtComposer(panel: Locator): Promise<Geom
   expect(g.lastRowBottom!, 'the newest row is fully above the composer').toBeLessThanOrEqual(g.composerTop);
   // The thumb's end IS the last row's end, give or take the row gap + padding.
   expect(g.scrollerBottom - g.lastRowBottom!, 'nothing but the base padding below the newest row').toBeLessThanOrEqual(24);
-  // …and that holds for EVERY row of chrome, not just the input card: the notes
-  // bar, the recap tip and the rest ride inside the composer block, so the
+  // …and that holds for EVERY row of chrome, not just the input card: the note
+  // band, the recap tip and the rest ride inside the composer block, so the
   // scrollbar ends above all of them (asked directly, 2026-09-18: "can it also
   // respect the notes and whatever"). A row that moved out of the block would
   // sit inside the scroller's box again and the thumb would run alongside it.
-  // The notes bar is the row to require: unlike the recap tip it has no dismiss
+  // The note band is the row to require: unlike the recap tip it has no dismiss
   // state, so "the fixture really has chrome above the input card" cannot become
   // a tripwire for an unrelated change to the tip. Whatever else renders is
   // still checked by the loop below.
   expect(g.chrome.map((c) => c.label), 'the fixture renders chrome above the input card')
-    .toEqual(expect.arrayContaining(['notes bar', 'input card']));
+    .toEqual(expect.arrayContaining([NOTE_BAND, INPUT_CARD]));
   for (const row of g.chrome) {
     expect(row.top, `${row.label} (top ${row.top}) is below the scroller's end (${g.scrollerBottom})`)
       .toBeGreaterThanOrEqual(g.scrollerBottom - 1);
