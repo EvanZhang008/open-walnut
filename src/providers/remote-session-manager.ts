@@ -351,6 +351,28 @@ export class RemoteSessionManager implements SessionManager {
    * or test mode, SSH tunnel for remote production hosts.
    */
   private async ensureConnected(): Promise<DaemonConnection> {
+    if (this.followsLocalDaemon) return this.connectLocalDaemon()
+    return this.connectTransport()
+  }
+
+  /**
+   * Set by createSessionManager for a local session whose address is the local daemon's, not a
+   * caller's: the address is read again at every connect. A session made while the daemon was
+   * starting again kept the gone one's address and failed its start with ECONNREFUSED, though a
+   * new daemon was up a second later (2026-11-16, nightly server-restart-upload).
+   */
+  followsLocalDaemon = false
+
+  /** Dials the local daemon where it serves now (local-daemon-dial.ts). */
+  private async connectLocalDaemon(): Promise<DaemonConnection> {
+    const { dialLocalDaemon } = await import('./local-daemon-dial.js')
+    return dialLocalDaemon((wsUrl) => {
+      this._directWsUrl = wsUrl
+      return this.connectTransport()
+    })
+  }
+
+  private async connectTransport(): Promise<DaemonConnection> {
     if (this._directWsUrl) {
       // __local__ goes through the pool: ONE shared connection per wsUrl. A
       // private `new DaemonConnection` here leaked one never-destroyed instance

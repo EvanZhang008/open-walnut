@@ -518,7 +518,10 @@ export function createSessionManager(
   if (!wsUrl) {
     throw new Error('Local daemon not running. Call localDaemon.ensureRunning() before creating sessions.')
   }
-  return new RemoteSessionManager(tmpId, '__local__', null, wsUrl, cli)
+  const manager = new RemoteSessionManager(tmpId, '__local__', null, wsUrl, cli)
+  // The daemon's address, not a caller's: read again at each connect (a restart moves it).
+  manager.followsLocalDaemon = !directWsUrl
+  return manager
 }
 
 /**

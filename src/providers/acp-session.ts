@@ -50,8 +50,8 @@ import {
   inspectExecutable,
   resolveOverridePath,
 } from '../core/agents/engine-probe.js'
-import { localDaemon } from './local-daemon.js'
 import { getDirectDaemonConnection, DaemonConnection, type DaemonEvent } from './daemon-connection.js'
+import { getLocalDaemonConnection } from './local-daemon-dial.js'
 import { AcpJournalProjector } from './acp-journal-projector.js'
 import { AcpStreamNormalizer } from './acp-stream-normalizer.js'
 import { AcpTurnSpeedMeter } from '../core/sessions/acp-turn-speed.js'
@@ -917,13 +917,9 @@ export class AcpSession {
   private async ensureConn(): Promise<DaemonConnection> {
     if (this.conn?.connected) return this.conn
     if (this.remote && !this.cfg.directWsUrl) return this.adoptConn(await (await import('../core/hosts/link.js')).link(this.host))
-    const wsUrl = this.cfg.directWsUrl || localDaemon.wsUrl
-    if (!wsUrl) {
-      await localDaemon.ensureRunning()
-    }
-    const finalUrl = this.cfg.directWsUrl || localDaemon.wsUrl
-    if (!finalUrl) throw new Error('AcpSession: local daemon not running')
-    return this.adoptConn(await getDirectDaemonConnection('__local__', finalUrl))
+    if (this.cfg.directWsUrl) return this.adoptConn(await getDirectDaemonConnection('__local__', this.cfg.directWsUrl))
+    // The daemon's address now, never one read before it started again (local-daemon-dial.ts).
+    return this.adoptConn(await getLocalDaemonConnection())
   }
 
   private adoptConn(conn: DaemonConnection): DaemonConnection {

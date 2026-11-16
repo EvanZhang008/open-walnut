@@ -37,6 +37,8 @@ describe('feature node service', () => {
       client.dispose()
     }
     expect(() => service.api.createClient()).toThrow('limit')
+    // The dial reads the daemon's address after any start in flight (local-daemon-dial.ts).
+    await vi.advanceTimersByTimeAsync(0)
     expect(state.connect).toHaveBeenCalledTimes(1)
     expect(await Promise.all(results)).toEqual(Array.from({ length: 64 }, () => ({ success: false, code: 'cancelled' })))
     release({ connected: true, hasCapability: () => false, send: vi.fn() })

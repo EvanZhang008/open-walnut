@@ -171,9 +171,7 @@ async function dialJobHosts(): Promise<void> {
     for (const key of want) {
       try {
         if (key === LOCAL_HOST) {
-          const { localDaemon } = await import('../../providers/local-daemon.js')
-          if (!localDaemon.wsUrl) await localDaemon.ensureRunning()
-          if (localDaemon.wsUrl) await dc.getDirectDaemonConnection(LOCAL_HOST, localDaemon.wsUrl)
+          await (await import('../../providers/local-daemon-dial.js')).getLocalDaemonConnection()
           continue
         }
         if (dc.isDaemonConnected(key)) continue

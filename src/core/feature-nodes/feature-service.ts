@@ -4,7 +4,7 @@ import type { ReadCall } from './calls.js'
 import type { JsonValue, Outcome } from './protocol.js'
 import { role } from '../server-role.js'
 import { localDaemon } from '../../providers/local-daemon.js'
-import { getDirectDaemonConnection } from '../../providers/daemon-connection.js'
+import { getLocalDaemonConnection } from '../../providers/local-daemon-dial.js'
 
 export interface FeatureClientApi {
   register(contract: ReadContract): { dispose(): void }
@@ -23,7 +23,7 @@ export function createFeatureNodesService(): { api: CoreFeatureNodesApi; dispose
     if (closed || role() !== 'leader' || !localDaemon.wsUrl) return
     if (connection?.connected) return
     if (!connecting) {
-      const source = getDirectDaemonConnection('__local__', localDaemon.wsUrl).then((value) => {
+      const source = getLocalDaemonConnection().then((value) => {
         if (!closed) connection = value
       }, () => {}).finally(() => { connecting = undefined })
       connecting = source

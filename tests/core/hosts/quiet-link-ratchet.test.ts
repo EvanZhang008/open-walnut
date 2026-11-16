@@ -31,10 +31,12 @@ const DIAL_MODULE = 'src/core/hosts/host-exec.ts'
 const LOOKUPS = new Set([
   'getDaemonConnection', 'getDirectDaemonConnection', 'peekDaemonConnection',
   'getConnectedDaemonConnection', 'getPooledSnapshotConnection', 'listConnectedDaemonsByHost',
+  // The local daemon at its current address (src/providers/local-daemon-dial.ts).
+  'getLocalDaemonConnection', 'dialLocalDaemon',
 ])
 
 /** The transport and the link layer themselves: they hand links out, they send no work of their own. */
-const EXEMPT = new Set(['src/providers/daemon-connection.ts', LINK_MODULE])
+const EXEMPT = new Set(['src/providers/daemon-connection.ts', LINK_MODULE, 'src/providers/local-daemon-dial.ts'])
 
 type Kind = 'checks' | 'wake-recheck' | 'local' | 'no-send'
 const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
@@ -99,9 +101,9 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
   'src/core/usage/collection.ts': { calls: 1, kind: 'wake-recheck', why: 'a periodic usage scan; a lost one leaves the host unverified until the next pass' },
   'src/core/usage/session-budget.ts': { calls: 3, kind: 'wake-recheck', why: 'budget reads and sets; a lost set answers refresh first, a revision guards a resend' },
   'src/core/workspaces/daemon-client.ts': { calls: 2, kind: 'wake-recheck', why: 'workspace jobs a person starts; a lost one is a host-timeout they retry' },
-  'src/providers/acp-session.ts': { calls: 2, kind: 'wake-recheck', why: 'ACP sends carry a command id the daemon dedupes; the journal is followed again after a reconnect' },
+  'src/providers/acp-session.ts': { calls: 3, kind: 'wake-recheck', why: 'ACP sends carry a command id the daemon dedupes; the journal is followed again after a reconnect' },
   'src/providers/cwd-check.ts': { calls: 1, kind: 'wake-recheck', why: 'a path probe under 5 s before a spawn, which goes on without an answer' },
-  'src/providers/remote-session-manager.ts': { calls: 3, kind: 'wake-recheck', why: 'session start, send and stop; an unanswered send is asked again with dedupe, so it lands once; and the local daemon\'s task directory root, read off its link, for the files a message ships' },
+  'src/providers/remote-session-manager.ts': { calls: 5, kind: 'wake-recheck', why: 'session start, send and stop; an unanswered send is asked again with dedupe, so it lands once; and the local daemon\'s task directory root, read off its link, for the files a message ships' },
   'src/web/routes/files.ts': { calls: 1, kind: 'wake-recheck', why: 'file reads under boundHostRead; a lost read answers degraded' },
   'src/web/routes/media-v1.ts': { calls: 1, kind: 'wake-recheck', why: 'image reads under boundHostRead; a miss answers none' },
   'src/web/routes/replicas-status.ts': { calls: 2, kind: 'wake-recheck', why: 'a log tail read; a dead link answers 504 after 10 s' },

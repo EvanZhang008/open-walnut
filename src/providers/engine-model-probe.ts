@@ -34,8 +34,7 @@ import {
   type AcpModelInfo,
 } from './acp-worker/protocol.js'
 import { log } from '../logging/index.js'
-import { localDaemon } from './local-daemon.js'
-import { getDirectDaemonConnection } from './daemon-connection.js'
+import { getLocalDaemonConnection } from './local-daemon-dial.js'
 import { mapCodexCatalog, resolveCodexEngine } from './codex-engine-config.js'
 
 export interface EngineModelCatalog {
@@ -270,9 +269,7 @@ async function probeEngine(engine: SessionEngine, cwd?: string): Promise<EngineM
     : undefined
   const env = mergeAcpSpawnEnv(process.env, { ...(overlay ?? {}), ...(provider ?? {}), ...(managed ?? {}) })
   if (codexPath) {
-    if (!localDaemon.wsUrl) await localDaemon.ensureRunning()
-    if (!localDaemon.wsUrl) throw new Error('local daemon not running')
-    const conn = await getDirectDaemonConnection('__local__', localDaemon.wsUrl)
+    const conn = await getLocalDaemonConnection()
     if (conn.hasCapability('acp-model-catalog-v1')) {
       const response = await conn.send('acpModelCatalog', { binary: codexPath, cwd: probeCwd, env: { ...(overlay ?? {}), ...(managed ?? {}) } })
       if (!response.ok) throw new Error(response.error || 'Codex model catalog failed')
