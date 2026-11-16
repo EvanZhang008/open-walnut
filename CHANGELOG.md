@@ -6,6 +6,503 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.33] - 2026-11-16
+
+### Added
+
+- Add split reader with kept density choices
+- Redesign the task popup with document and relationship columns
+- Each mailbox's router and its watched folders on the Mail plugin page, and a cleaner router settings form
+- One strict leak scan on every path to GitHub
+- A first connect keeps going in a floating card, with its progress bar
+- New note makes Untitled.md at once and names it after its title
+- A byte progress bar for the first connect, Add all, and plainer setup words
+- A released build's host downloads the daemon file itself, with progress numbers
+- The phone shows the summary too, on its approval sheet and in its one push
+- Dictate opens one page with the words, Send to CEO and Copy; Queued clears on delivery
+- Keep dated copies of config.yaml so one bad write never takes the only good one
+- Mail goes straight from the mailbox to its router, and the router hands it to its owner
+- Code tasks start in an isolated workspace by default
+- Record each agent browser step and play it back in the task's Browser view
+- The dialog leads with a summary of what the step does and why
+- Answers_ask settles every ask the user's Needs you shows, where it lives
+- A cut-off task row expands in place instead of floating a pill
+- Keyboard shortcuts you can change, Cmd+N new task, Cmd+W close column, and the Cmd hints back
+- A project can leave Claude Code plugins out of its sessions, and config can cap the skill listing
+- One task_send answers several requests, each asker reads it once
+- Group the Routines page by project, one line per routine
+- The dialog leads with the task and the repo path; the command and the signed detail fold under one Details
+- A new user gets going in one clear step, plus a shared Demo
+- The mode pill opens a menu of modes, and Snooze and Add a trigger sit on the + menu itself
+- Two pin tiers with saved first-level shortcuts, Parked retired from menus
+- A task row whose text is cut off expands as a whole under the pointer
+- The mail router tidies the noise it decides, and a refused delivery gets one retry
+- Say what stop asking did, with Undo, and list what went ahead unasked in Settings
+- One switch, off by default: agents' steps go ahead without asking
+- A plain dialog, devices you set up sign at once, and approvals any of several keys may sign
+- Cap every always-loaded prompt block; the rest goes to a memory folder
+- A reading split in the chat: read a message on top, ask below
+- A leaner + menu, with Note and btw on the input box
+- A cut-off row shows its full text in place on hover, like the side bar's pill, instead of a native tooltip
+- A session runs a light subagent on another engine inside its own turn
+- The Background tasks panel shows a subagent's effort
+- A task that already routes by itself is listed among the Org page's routers, its work untouched
+- Pick the reasoning effort when a task is created
+- The note above the composer reads as a labeled reference note
+- A mail only the person can act on becomes one inbox letter, and every item gets a decision
+- A session's own close asks once to update a note that still reads as unfinished
+- A session refused twice by the model's safeguards switches model by itself
+- Idle sessions on this machine exit, and a live process limit
+- One click connects a session's host from its panel
+- A long-lived session moves onto its current prompt after a compaction
+- A Background group on the home task list for long-running work
+- The parent and child pages are equal width, with a divider that drags
+- The session timeline reads as the web's: "Worked for" fold line, flat step rows
+- A timed snooze says its hour when closed
+- The Mac app is the first Touch ID signer by itself
+- Take a worker out and put it back with arrows at the line's end, hinted at once
+- The folded team line counts only who needs the user
+- Snooze until picks a day at an hour of your own
+- Long hook scripts ride files of their own, so the settings have room again
+- Per-project default engine, model and permission mode
+- Visibly wait for capacity and place unpinned work on a free host
+- The review sidebar's divider drags to resize, and a card keeps the reader's newest ask inside its reply box
+- Sessions start in Claude Code's own default mode, else Auto, changeable in Settings and per session
+- Encrypted backups to Cloudflare R2, Google Drive and S3, with restore
+- Wire permanent ask withdrawals through task sends
+- Tree Mode shows the current page and the one before it, in Conversation Mode's colours
+- A missed run is told to its owner, else the task it delivers into, else Main
+- A command a Codex turn leaves running keeps the task working and wakes it when it ends
+- A Codex session talks to codex app-server itself, without the codex-acp adapter
+- Experimental switches; leader status can follow its workers
+- New task picks its folder and project, and the next task starts in the same place
+- Every step of a turn is one row, and a finished turn reads "Worked for"
+- A deploy ceiling holds production to commits a test of main passed; the push gate runs since a commit
+- With every tool folded, the bar folds the Terminal toggle too and closes its gaps
+- Starred sounds, pause the block's music, a goal for each block
+- Keep carries a task's directory and exported variables to its next call on a host
+- Wait_for returns when output matches, a port listens or a file appears
+- Snooze until offers tomorrow 8 AM, 12 PM and 6 PM
+- Old session history moves to S3-compatible storage after the archive, and comes back when opened
+- Two taskbar switches in Settings: no bar with only Recent (on by default), and closed sessions as Recent pills or bar chips
+- The agent cursor ships as the Walnut badge
+- Sketch explanations and attach them as pictures
+- The split shares only the projects it names
+- The taskbar's Recent shows two pills, the rest in one "N more" menu
+- Watch and Locate leave the session header for its kebab, by name
+- The file's name comes first: the document bar folds its tools into ⋯ one at a time while the name is cut
+- Dictate to Clipboard, the Action Button's second shortcut
+- A phone message written during a turn goes straight into it
+- An ask the user withdrew for good stays answered past the hold
+- Compress Claude Code history older than 60 days in place, restore it on open
+- An answer given in the user's place can be taken back
+- Every Walnut op card shows what was sent, however the call was made
+
+### Fixed
+
+- A missed run's time reads the same on every runtime's ICU
+- A run that falls back to its own Mac no longer copies the sources onto themselves
+- The notification panel gives way when a task opens on Home
+- A New task on the home folder reads one model catalog; folder specs expect the home as ~
+- The trigger caller twins test runs on Node as well
+- Let a trigger check's host ops act for its task
+- Keep phone detail footer actions finger-sized
+- Stop a moving conversation sample from re-sending the whole trigger set
+- Allow detached clock runs with primary SDK sessions
+- Read durable host capabilities before sleep delegation
+- Keep layout callbacks lean
+- A restart that killed an idle session is no turn error
+- Stop legacy replica pulls from filling the data hub disk
+- A target that is away is one note per outage, not a warn per kind per round
+- The approval sheet folds a signed envelope under Details and shows the Repo line
+- A full disk no longer refuses writes carried to the Mac
+- A Walnut control line is never an approval's reason
+- Read the identity and message of commits that add no file
+- The held tool catalog twins test runs on Node as well
+- A menu a button opens is never closed by a scroll the page makes
+- A big relay answer rides the host's bulk channel, not its session link
+- The found-host alert starts after the local-network letter, and the corner guard lists the connect card
+- One host outage is told once per kind of line, not once per session
+- A host's daemon holds the tool catalog, so each session start no longer uploads it
+- Let private documents sync without credential holds
+- A completion edge with no completed_at takes the child's own
+- The working line names a running subagent before its time and tokens
+- A host read that only found the host away logs at info, not warn
+- A task parked again after an interruption keeps its own clock
+- The selection menu reads the editor's view only once it is mounted
+- A same-machine match is live only, and a not-Linux mark clears with its target
+- A found host Walnut cannot set up leaves the lists for one notification
+- The auto-opened first draft takes the caret only when nothing else holds it
+- The corner card leads with the summary too, whole, and its kicker names one way to approve
+- The request in words is always read whole; Details holds only the technical part
+- The reply-language check is listed in the session ratchets, and Settings shows its row
+- Guarantee certificate warning delivery before expiry
+- A stopped queue read changes nothing; the Dictate page is listed as keeping its words
+- The reply-language correction quotes the line that broke it
+- Transfer packs stop piling up on a host
+- A reply off the user's reply language is corrected, and only then
+- A run fails on the flaky record only for a file that flaked in it, and the status contract scan stops timing out
+- Any failed second connection but a forbidden forward holds background uploads off the session link
+- The local Claude Code re-check asks nothing while the Mac is away
+- Big automatic copies wait off the session link while its own bulk connection will not open
+- Skip unchanged host address set writes
+- Routines passes main's iOS guards and UI tests on CI
+- A config flipping between a few states no longer fills its dated copies with repeats
+- The config history folder name comes from a leaf module, so the compiled file starts again
+- The owed-reply sweep asks whether a row went out, not for its line to resend
+- The owner gets each mail once with its original, and the deep test's guards know the new letter
+- A partial section write keeps the rest of the section
+- An owed answer is delivered once, where the asker reads now
+- An answer owes its delivery in the settle's own write
+- A message during the phase's look drops the hand-back it was about to hold
+- A held hand-back never replays over a turn that moved on
+- A hand-back the turn record held goes ahead once the retrier lets go
+- An own bulk connection a refused login closes is dialled again, and background uploads wait for it
+- Completing a task announces the sessions it stops
+- Route private data holds to their writer quietly
+- Keep alert check details out of bootstrap budgets
+- A running turn's fold is one line, the running step only inside it
+- Sends Claude Code merged into one line all leave the bottom of the chat
+- Replay store counts writes during a sweep once; replay card meets the web ratchets
+- A service daemon update reconnects in seconds, and uploads learn each host's pace
+- No menu marks its current choice with a checkmark; an on/off toggle is a switch
+- A withdrawn letter's reason is a phrase in the letter language, and an answer in the user's place is named words only
+- Preserve reactions and require new words to reappear
+- Grow whole truncated cards in flow
+- Check security alerts against recorded agent actions
+- A written summary rings no phone, never lands on an expired ask, and reads the session as data
+- The current item is shown by colour, with no checkmark and no column for one
+- Project summaries are the Mac's; say what backup-leader runs
+- Daemon.port goes in by rename, so a starter never reads it empty
+- The attachment viewer's name drops its repeated title
+- Every task reference click opens that task's session on Home, and nothing else
+- Keep hidden task filter geometry idle through route changes
+- Validate subagent contents before restoring cached operations
+- Pause hidden session polls and layout reads without losing state
+- Resume validated parse checkpoints after daemon restart
+- A mail with a big attachment shows its body, and an attachment opens only when clicked
+- A chat the page keeps mounted but hidden is not timed as a visible open
+- A broken config costs a spawn only the listing cap, never the project's plugin choice
+- Isolate lean caches and guard reconnect compatibility
+- A page is sent only the background rows and large task fields that changed since its socket last heard them
+- Let supervisors manage routed task lifecycles
+- A run's first message keeps the fence Walnut built and frames only its own words
+- A transcript read with no link to its host is not a warn on every read
+- A transcript known to be over the read ceiling goes straight to its tail
+- Every exit handler follows one rule for a failed turn, and an exit code never replaces its words
+- A failed turn stays failed, in its words, when its CLI ends after it
+- Warn once per lenient SKILL.md, not on every list rebuild
+- Count and page only visible task matches
+- A turn end asks only what that turn asked
+- Probe liveness concurrently and warn on slow ticks by budget share
+- Close the gaps an independent review found
+- A stopped worker whose watch already fired wakes its lead
+- No empty clock wakes for leads, ack-only wakes, or the same clock twice
+- One completion notice when a second edge comes while the first is sent
+- Keep portable scheduled work running during host sleep
+- Derive placement from instructions before attribution
+- Keep attribution checks compatible with launch factories
+- Preserve first-message authors across every launch path
+- Deep-test ratchets and the iOS build after the grouped Routines page
+- A daemon update or a reconnect re-sends no skills, templates or trigger set the host still holds
+- A quick-start task's words title reads the person's own words, references as labels
+- One find step opens a shut fold and the card inside it, then lands
+- The task panel and Home page no longer keep every earlier render alive
+- Find opens a turn's fold, and a stopped turn's words stay its answer
+- The approvals row's help fits three lines at 660px
+- A question card hidden while its passage is away re-checks the highlight registry
+- Keep every phone letter control at the shared touch target size
+- A controls row that wraps gives the model pill the room of its own line
+- Holding Cmd alone no longer shows number badges on the session columns
+- Use capable hosts and merge delayed scheduled runs
+- The dialog's fields keep their own class, and its warnings stay in sight
+- With approvals off a lead settles an outward ask without the user's words
+- Ssh to the person's own hosts runs under their HOME, so a proxy finds its login
+- A session start names its long arguments by hash once the host holds them, and an empty copy no longer hides who owns outside calls
+- A held update warns once, not every minute it is asked again
+- Regenerate the parser version after 5c8d01e5d edited history-walnut-riders.ts
+- The permission-mode menu is as compact as the model menu beside it
+- A reply still streaming never folds away, and a watched reply's words keep their fold
+- Placement packs against the target too, and a shared checkout's other changes are named, never lost silently
+- A shared checkout carries only the session's own files, and a bundle is based on what the target holds
+- A link wait's bound counts awake time, and a big bundle gets its own deadline
+- A refetch before a chat's first load lands no longer hides its cached copy
+- A new connection never joins a host's handover that rides a connection already gone
+- The machine-sized live limit and idle exit never apply on an isolated server
+- A slow IndexedDB open no longer holds a chat's first screen
+- Turning the reading split keeps the message being read in view
+- A stale record warns once, and a slow phase never holds the health monitor
+- Mirror downloads run a few per host, so a replay that names thousands of pictures no longer buries the host's link
+- The approvals guard refuses only a command that names the approvals folder itself, not a read of the approvals route beside the data folder
+- A /model click in the command palette keeps the picker it opens
+- A task row also expands with the pointer on its project name
+- A read never waits behind uploads on the paced bulk connection
+- Caller-proof-v1 is host-dependent, so a shared host's daemon is updated again
+- A send into a session the server re-attaches waits seconds, not minutes, for the host's optional reads
+- An explicit walnut approve always asks; the switch covers only Walnut's own asks
+- A right-click on a word opens the row's menu in WebKit
+- A live session's empty read never replaces its saved copy
+- A resume's delivery wait leaves out time a row was held and a host link no server saw up
+- Show clean letter summaries and expand formatted bodies in place
+- The spawn templates stop flipping with the link's speed, and big gateway answers go gzipped
+- The companion's skills index names each skill; list the own-folder links and the notes folder lock
+- The Approvals row names hosts by their label, and its search words no longer make General beat Sessions for agent
+- An automated notice carries only what its reader has not seen, and wakes no one when it asks nothing
+- A row hidden for a moment keeps its direct buttons where they were, so an open settings dialog stays in place
+- A turn's steps are one fold in every shape, and an opened fold stays open
+- A long working directory under a temp root keeps its tail, so two repos there stay apart in the settings subtitle
+- Read a VP's role-word names without building the old title form
+- A slow history source answers the saved copy within the deadline, and fresh:false skips the live read
+- A call from outside any session is its Walnut's when the other copies on the host are stale
+- A cut final part stays final, and a move leaves the link wait at its start
+- A part cut by a dropped link no longer fails a task move
+- A read waiting behind paced upload parts counts what is queued ahead, and its timeout never ends a channel that still moves
+- A rollback never stops on a name the deploy sets, and the removal ratchet counts its call
+- A row with no room yet folds no direct button, and a folded btw row shows only its unread count
+- Note and btw fold into the + menu before the model pill gives up its place or its percentage
+- The Mac app keeps its signing key while it still needs Touch ID, and a replaced key stays as a retired row
+- The memory folder asks isFollower(), not isCompanion()
+- Review fixes for the signed turn-off
+- Turning approvals off needs a device's signature, and sessions cannot write the approval records
+- A deploy or a dropped link no longer fails a task move
+- A long subagent transcript is read on its host, never moved across the link whole
+- A run's end never wakes a stopped or finished parent, and a stop is recorded as one
+- On boot, retire the Mac keys an older Walnut kept after a newer enrollment, and withdraw their asks
+- A Mac that enrolls a newer key from its own app retires its earlier keys and their asks
+- A server that restarted asks a host's daemon what it holds before sending the skills and spawn templates again
+- A light subagent's Codex env and end notice are listed in their ratchets
+- An old daemon's refusal names only the way out it has
+- Note_edit and every computed .replace insert text literally, $ patterns included
+- A node started in its task's isolated workspace keeps that folder on resume
+- An own-folder move is undone only when no CLI started, and a split history is told once
+- Move a node's conversation only when no CLI holds it, and only a picked folder is the person's
+- VPs and leads run in their own task directory, never a repository
+- Start the steps' clock after stopServer's entry fence
+- The host-down notice counts its grace from the drop, not from the first failed redial
+- An app update ends the old app's session hosts, and no copy of the app is kept
+- The ready view's version lists name session-effort.ts, which the parser bundles
+- The effort registry is its own module, so types.ts leaves the parser's version closure
+- A SendMessage-continued agent shows its own Agent call's settings, never the message
+- The stop-asking note counts the other requests still waiting
+- Review round 2: one honest note after stop asking, the line card's sentence in two lines, and the record opens
+- A failed read keeps the list Settings showed
+- The Settings list of steps that went ahead reads again while in sight
+- The line card keeps one line, its whole sentence on hover
+- Keep the line card compact, and Settings shows the switch the server really uses
+- An overflow file's agent scope never ends in a dash, so the folder always knows the file
+- A placeholder task id keeps its context; an ask keeps its routing rules
+- Never cut a rule or the user's words; caps count characters; a true rollback switch
+- The Ask here hint is one short self-contained line on its thread's messages
+- Every video gets a seek bar that scrubs the picture while dragged
+- An HTML preview keeps the place being read, and the pane around it stays put
+- A mail router's idle start of itself or its receiver never waits for a host slot, so a routed mail's delivery does not fail
+- An arrival a filter moves out of the inbox before the router wakes follows its mail to the new copy
+- Main and every VP are reached by name through org_send and task_send
+- A composer that stays on the page but loses the caret gets it back at the next key
+- No deploy run of the walnut file asks again for local network access
+- A task link a person clicks in a Board message counts as their open
+- Callers of one engine model catalog share a read on its way
+- Every upload frame to a host stays at most 1 MB
+- The bulk channel's own SSH connection uploads at a steady pace
+- The type check guard reads ps with one -o per column, so Linux procps sees every column
+- A press outside the composer ends the caret rescue, so a Save that re-keys it leaves the caret alone
+- A comment two windows both sent keeps the first send's words with its stamp
+- A press before a focus request lands ends it, so a menu opened then keeps its focus
+- The prompt-refresh respawn reads only the outliving-work API, and a resume decides on the record's cache facts
+- The session host connect row reads the replica role from useIsReplicaServer
+- Every new mail of a mailbox reaches its mail router
+- A source search that fails while the server restarts is asked again
+- The no-conversation history answer only for an idle-started session or a router, on this machine
+- Keep background uploads to a host off its session link and under the relay's long-run rate
+- A short guide and a smaller default snapshot
+- Every step before a turn's answer is one fold, live and saved
+- A new user's first open lands on New task, not the CEO chat
+- The Closed sessions go to help is one sentence, so it fits three lines at 660px
+- The hub's Walnut tools load on demand, not up front
+- A fold control's hint stays whole in a narrow column, and a tree line keeps its title
+- A message reaches a quiet or busy session without needless waits
+- A session runs one type check at a time, the machine one per 16 GB
+- Pace background uploads to a host below the rate its relay cuts
+- The kept view and the host's ready view hold the main conversation's turns too
+- The split's left half lands on the passage asked about, not at Main's end
+- Load earlier turns always opens rows; the window rebuilds only when the question anchors change
+- The first screen counts the main conversation's turns, not a question's follow-ups
+- Find falls back to the words on controls when no text holds the whole phrase
+- The remote history Profile select takes the short inputs' width, so its label keeps its share of the row at 660px
+- Step rows stay 44 px tall on a phone
+- A session never starts or sets work looser than its own mode
+- A test run's sends never write the person's Recent; tests follow the person-only rule
+- Mail read or marked unread on another device shows here on IMAP accounts
+- Keep big uploads off a host's session link, and wait out short drops in the panel
+- A step whose answer the page lost says whether it ran, and a failed --read is not exit 0
+- The task list no longer keeps every earlier render alive on each task update
+- The page memory notice shows at most once per page process, only when the quiet swap cannot happen
+- A CLI still booting is never reaped for reading its first line late
+- A slow resume counts only the resume path's own wait
+- Keep accepted runs waiting for capacity without losing their batches
+- A session with no conversation yet answers its history at once, and a transcript find walks one level
+- A path in a known writer's words opens from the machine that has it, asking the writer's first
+- Every row is one line or two, notices after the words fold, a thought shows once
+- An audio run is judged by the tests it runs, not the task's words
+- The task page's eye and status circle are whole and tappable at every text size
+- Code stays readable at the largest text sizes, and each block keeps its Wrap
+- A session fed only by its host's own delivery gets the Walnut tools at a turn end
+- Remote history status answers within its deadline and counts in the background
+- The worker fold tree reads its state words from worker-fold.ts
+- A reworded instruction line is told once, as its new wording
+- The compare picker's search sits under its title
+- One repo reached through a symlink is one group
+- Backup keeps its viewed tab in view memory, not sessionStorage
+- A folded worker's line names its state with the shared section labels
+- The retire script runs the daemon stop as a function, so macOS /bin/sh parses it
+- Order Recent by the person's own touches, never agent updates
+- Main is green again past the Experimental switches
+- The Mac's bash 3.2 names a strict step right, and a Mac takes over a lock left before its boot
+- Cmd+Shift+D before the board's first list completes the column's task
+- The browser recheck runs a serial spec's new failure with its whole file
+- The browser baseline runs a new failure again alone before it counts
+- The list holds the rows being read in WebKit too, by hand
+- The list draws a new order in the render that makes it
+- The stream snapshot is read just before its answer, and an empty one keeps the column's text
+- A column opened mid-reply keeps the reply's text so far
+- A session's walnut call reaches only its own Walnut's server
+- A session with no transcript yet reads as no conversation, never History unavailable
+- The probation counts restarts from the daemon the tail judged
+- A probation reads the daemon it counts restarts from before it says it is at work
+- Keep unanswered requests open while work continues
+- A host's walnut file builds the daemon this server runs, and one that does not is never sent
+- The home page's columns read no layout while hidden behind another page
+- An owed ask the lead was told of is not news again when it comes back
+- Refuse foreground input started by a package runner or python -m
+- Reasoning held for its flush is neither lost nor doubled when a snapshot is adopted
+- A streaming column folds deltas in batches, and the render filter joins no strings it cannot match
+- A replaced page ends with its swap: unloaded at once, its process ended once the new page loads
+- A composer replaced under the caret keeps the keys typed after it; the typing gate runs short of CPU and memory
+- Composer handlers rebuild the text from the box, and a typed key fits the box once
+- The typing record names a key-eating handler wherever it listens
+- The typing record no longer counts an "@" or "/" pick as lost text
+- The held deploy's line names the ceiling commit once
+- A missed-run notification's reason keeps one full stop
+- A timeline placeholder shows every word above the composer at every type size
+- A fold counts failed calls apart from error lines, as the web does
+- Only a footer that ends main is the page's; a quote's, card's or modal's footer is read, and a device names whose tabs count
+- A page's footer inside main is not its main text, and a thin page lists what to act on
+- Help and guide say every command names its tab with several tabs or subagents, and show a short read
+- A step that names no tab acts only in the task's one tab; with several it lists them
+- The notification bridge reads the system center only in a bundled app
+- A running session whose init lacks the Walnut tools gets them, whatever its profile says
+- Watching follows the open tier tab, like every other section
+- The mic stays grey until it hears, so the first words are not said into nothing
+- The side bar's names keep room in macOS's font
+- The panel's New task launches what its bar shows: Sync and the popup's whole place
+- Hold a pending pin undo through list reads
+- Show pin choices directly in task menus
+- A refresh tells a same-decision revision as its fact, buttons are no news, and Walnut's Brief lines follow the Brief's language once per task
+- Keep owned code reviews out of outward approvals
+- An ask the task answered is owed to no one, and the lead's note reads the same value
+- The card typed in near the view's foot rises instead of squeezing its conversation; one-line placeholder
+- A run's own line reads chevron first, like the turn's fold line
+- A message received in an opened fold is a row, with no copy or time line under it
+- A scroll check that runs out of time on a slow page keeps the new server; only a transcript that does not scroll rolls back
+- A deploy waits while memory is tight, as it waits on a busy load, up to the busy gap
+- GitHub's main is read again when a read fails, with git's own words in the log, before a land is refused
+- A failed tier whose job GitHub does not list is named, never skipped
+- Remote Hosts opens on its dashboard again
+- A tier of snoozed tasks keeps its board chip; the Tasks drawer UI tests run in the demo
+- The archive build and the components gate ride out a network blip
+- Every replica, not only the cloud companion, rides out a short drop to the Mac and keeps Threads on the Mac
+- An update held or deferred on the host uses no forced try, and a build's day off ends on a clock
+- A test server's isolated daemon never acts on the real server's update records
+- Keep confirms each save on the host, ends at once under a DEBUG trap that skips it, and carries GLOBIGNORE
+- Keep's save looks up no function and traces nowhere, and one pointer names one snapshot
+- Keep runs in its kept directory, and its save cannot trace, be aliased or change the run
+- A host_exec refused busy is asked again while the call has time
+- A service update never stops the old daemon for one that cannot serve
+- A link that went quiet is asked before work goes on it, and a wake rechecks every link
+- A router's Org page says what it is, whether it runs and what it routed
+- The remote history download stream is heard at once, and the history fetch relay names its deadline on its call line
+- Remote history trusts only an ETag equal to the md5, and every storage wait ends at its deadline
+- Remote history is checked by its content, a different local copy keeps both, every storage call has a deadline
+- The history archive keeps its clock across restarts, so frequent deploys never starve its passes
+- Page-event Enter never clicks or sends what a person's Enter would not
+- The note on the person's own tabs of a site is told in full once, then one line
+- Reads keep dates and shadow-root words, find gives the short match, snapshot means on screen
+- Enter as page events submits a formless search box, and says what it did
+- An extension reload keeps the agent window, its holdings and its tidy-up
+- The Browser view popover pairs with the servers popover
+- Serve bounded previews before cold chat refreshes
+- The op card record carries a call id, like every other tools.call write
+- No Walnut tool answer is too big to read; board_get answers a summary for a big board
+- Walnut tool answers say the fix: bad_request, what to do instead, no stale status
+- Every Claude Code session gets the Walnut tools, old ones too; the CLI reads as the same op
+- The Routers section sits below every VP on the Org list
+- Injection only is its own capability, and only a catalog Codex loaded is put back
+- One steer try per turn, a lost model catalog is written again, and a fold counts failed calls apart from error lines
+- Steer only an adapter that says it never starts a turn of its own
+- A message that meets the end of a live turn goes into the next turn, once, with no error
+- A failed session is retried once by Walnut, then its lead retries it, never the user
+- A Side threads sheet in full screen is never cut at its column's edge
+- An ACP session is never run as a Claude Code CLI
+- A commit that changes a dependency patch installs in the clone, so the patch reaches production
+- The draft's picker says what runs on the fallback, and its pill names the model as the list does
+- An open draft reads the fallback again when the config changes
+- The fallback banner names the session's own model, and a switch keeps the panel's title
+- The fallback tag shows in every task list, and one model has one name
+- Ask in the mail drawer puts the caret in the draft composer again
+- The taskbar's dots wear the task status in the task pills' colors: red needs you, green working, blue done, grey only a wait
+- Watch writes for one task go out one at a time, the latest click last
+- A worker picker over a kebab keeps its own Esc; an older Watch echo never undoes the latest click; the Recent menu scrolls to the focused row
+- A kebab's Esc closes only the kebab; Locate waits disabled in it; a pending Watch survives the menu; the Recent menu works by keyboard
+- The Recent "N more" menu is solid, as every overlay is
+- The taskbar store compares lists by content before writing, and an older failed Watch write leaves the latest click's state
+- A taskbar chip on the Org page opens the page's own way; the Org node header has Watch; the bar writes only what changed
+- A live turn's sends fold into the turn from the first frame
+- An op card's recorded title and summary read as words whichever CLI made the record
+- An expired login always reaches the one sign-in letter, whoever owns the reminder
+- A failed tools call reads as one JSON error, and raw task-link anchors become task pills everywhere
+- A thread the node opened after his last message ends that conversation
+- His message goes to the thread he is on, and the Follow up box names its thread
+- A host's bulk channel rides an SSH connection of its own, so uploads no longer drop the session link
+- The per-turn ask count survives a restart, so a deploy every 20 minutes no longer re-asks the same turn
+- The card being typed in keeps its box on screen, so the timeline stays
+- An App state card names the App, and a card's summary never shows a body's hidden style or script
+- Every received message folds as the sent card does, inside the turn
+- An op card's summary reads a task chip as its label and drops other markup
+- The land layer follows every import chain short of the shared modules, not one step
+- A typed key that misses its box says where it went; Home's keys no longer set state while typing
+- A phone's file download and Threads refresh survive a short link drop to the Mac
+- A sticky header's menu reads the row on screen under it, not its whole block
+- A menu on a sticky header closes only once the content under it moved
+- A stamp older than a week reuses one date formatter
+- In the engine split group only the entries take the checklist look, and a long entry wraps
+- The Share new tasks entries are a checklist group, like Session modes
+- The Action Button page's result line is one accessibility element
+- App Shortcuts refresh at launch; Talk UI tests wait for the Shortcuts index and clean up a kept dictation
+- A run recorded off its slot grid covers the slot it falls in
+- A thread card keeps its height when a fold opens or closes
+- A Follow up's announcement waits at most 3 s, and a held send keeps its card until the Mac files it
+- A phone Follow up through the companion files under its thread, and its card leaves at once
+- Not started is its own group on the team status page and the Org node's tasks
+- A Recent list the web deleted (v: null) reads as empty instead of failing the read
+- "nothing new" in the user's language names no new fact
+- The user's own message lifts a withdrawal on the status and at the gate
+- The report gate judges an answer with the report's decision; the user lifts a withdrawal
+- A new fact on an answered decision asks it again, and only A to Z is a name
+- A withdrawal is never undone by a later plain answer or pushed out
+- An answer holds a reworded ask only on strict evidence
+- An ask answered for the user stays answered when it is asked again in other words
+- The build prune never takes a compiled file's runtime tree, and a tree that lost files unpacks again
+- The archive's restore stream is heard, and the bounded-read test stubs the restore hook
+- A history restore never replaces a file a writer made, and the archive goes only when a kept file holds its bytes
+- The history archive removes originals only in a later pass, and never merges or drops a copy
+- The history archive never loses a write made while it runs, and usage reads archived sessions
+- A turn end reads the CLI's settings at most once per 15 minutes in one process
+- Read live task status before reporting old session notices
+- Describe refused starts and quiet unchanged thread checks
+- Speech models let go of their memory after 10 idle minutes
+- Op cards record the session CLI's own calls and never show one call's words under another
+- The keyboard spec runs as the Mac app in Chromium too, and a late refusal takes the typed text back
+
 ## [0.6.32] - 2026-11-12
 
 ### Added
