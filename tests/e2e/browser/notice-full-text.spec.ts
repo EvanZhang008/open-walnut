@@ -10,6 +10,7 @@ import { holdApprovalsLock } from './approvals-lock'
 import { pausePageClock } from './page-clock'
 import { PHONE } from './phone-helpers'
 import { openKebabGroup } from './kebab-group-helpers'
+import { STACK_WIDTH_PX } from '../../../web/src/components/common/corner-stack-width'
 
 const SHOTS = '/tmp/notice-full-text'
 const COMMAND = 'walnut daemon install --yes --executable <daemon binary>'
@@ -218,12 +219,13 @@ test.describe('on a phone', () => {
 
 /** The stack's place as one string: at the top, centered in the window, its one width. */
 async function topCenter(page: Page): Promise<string> {
-  return page.evaluate(() => {
+  // The product's one width (380px until f208c9363 widened it so approval titles fit two lines).
+  return page.evaluate((stackWidth) => {
     const r = document.querySelector('.corner-stack')!.getBoundingClientRect()
-    const want = Math.min(380, window.innerWidth - 32)
+    const want = Math.min(stackWidth, window.innerWidth - 32)
     const ok = r.top <= 24 && Math.abs(r.left + r.width / 2 - window.innerWidth / 2) <= 1 && Math.round(r.width) === want
     return ok ? 'top center' : `stack x${Math.round(r.left)} y${Math.round(r.top)} w${Math.round(r.width)} in ${window.innerWidth}`
-  })
+  }, STACK_WIDTH_PX)
 }
 
 // 2026-11-16, the user: "just show like noticiaton overlap on the top nice unified, just like IOS

@@ -21,6 +21,7 @@ import { createPortal } from 'react-dom';
 import { PHONE_LAYOUT_QUERY } from '@/hooks/usePhoneLayout';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
 import '@/styles/corner-stack.css';
+import { STACK_WIDTH_PX } from './corner-stack-width';
 
 /** Where each kind sits in the stack: higher is nearer the top edge. */
 export const CORNER_ORDER = {
@@ -80,8 +81,6 @@ function inSight(el: Element): boolean {
   return !!hit && el.contains(hit);
 }
 
-/** The stack's one width (corner-stack.css), never wider than the window allows. */
-const STACK_WIDTH_PX = 440;
 /** A window this short keeps the stack to its short forms as soon as two kinds show. */
 const SHORT_WINDOW_PX = 720;
 /** Where a page's own content lives: the app's main area, or a full-screen sheet over it. */
