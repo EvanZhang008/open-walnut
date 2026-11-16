@@ -25,7 +25,7 @@ vi.mock('../../../src/core/session-history-pages.js', () => ({
     beforeCalls.push(before);
     return older;
   },
-  isPastFullReadCeiling: async () => false,
+  olderPageRead: async () => 'full' as const,
 }));
 
 vi.mock('../../../src/core/sessions/session-lifecycle.js', async (importOriginal) => {

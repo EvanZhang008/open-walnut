@@ -752,24 +752,28 @@ export async function buildSessionTranscript(
   let windowed = isWindowedHistory(history)
   if (bounds && bounds.start === 0 && windowed && opts?.before) {
     // Past the full read's byte ceiling the full read only serves the same tail
-    // again, so a file that large is paged in bounded windows instead.
-    const { readSessionHistoryBefore, isPastFullReadCeiling } = await import('./session-history-pages.js')
-    if (!(await isPastFullReadCeiling(sessionId, record?.cwd, record?.host))) {
+    // again, and a large file on another host is too slow to read whole for one
+    // page (session-history-pages.ts olderPageRead): both page in bounded windows.
+    const { readSessionHistoryBefore, olderPageRead } = await import('./session-history-pages.js')
+    const how = await olderPageRead(sessionId, record?.cwd, record?.host)
+    const before = opts.before
+    const readWindows = () => readSessionHistoryBefore(sessionId, record?.cwd, record?.host, before, {
+      minMessages: TRANSCRIPT_TAIL,
+      minText: Math.min(opts.visible ?? 0, TRANSCRIPT_VISIBLE_MAX),
+      isText: isVisibleHistoryMessage,
+    })
+    let older = how === 'full' ? null : await readWindows()
+    // Windows cannot read every session (in-place rewinds): the full read can, under its ceiling.
+    if (!older && how !== 'windows-only') {
       history = await readSessionHistory(sessionId, record?.cwd, record?.host, record?.outputFile, { skipSubagents: true })
       windowed = isWindowedHistory(history)
       bounds = transcriptSliceBounds(history, opts)
+      if (bounds.start === 0 && windowed && how === 'full') older = await readWindows()
     }
-    if (bounds.start === 0 && windowed) {
-      const older = await readSessionHistoryBefore(sessionId, record?.cwd, record?.host, opts.before, {
-        minMessages: TRANSCRIPT_TAIL,
-        minText: Math.min(opts.visible ?? 0, TRANSCRIPT_VISIBLE_MAX),
-        isText: isVisibleHistoryMessage,
-      })
-      if (older) {
-        history = older.messages
-        windowed = !older.reachedStart
-        bounds = transcriptSliceBounds(history, opts)
-      }
+    if (older) {
+      history = older.messages
+      windowed = !older.reachedStart
+      bounds = transcriptSliceBounds(history, opts)
     }
   }
   const tail = opts?.full

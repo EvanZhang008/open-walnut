@@ -17,6 +17,8 @@ export interface JsonlRangeReader {
 }
 
 const CHUNK = 1024 * 1024;
+/** The shortest read: most lines fit, so a head read rarely takes a second one. */
+const MIN_CHUNK = 64 * 1024;
 /** Result lines a window may take past its end (and its successor skips). */
 const MAX_RESULT_LINES = 64;
 
@@ -40,12 +42,32 @@ class LineCursor {
   private eof = false;
   read = 0;
 
-  constructor(private reader: JsonlRangeReader, private path: string, private pos: number) {
+  /**
+   * `stop` sizes the reads: up to it a read takes what is left of the window (at
+   * least MIN_CHUNK, at most CHUNK). Past it only the rest of one line and the
+   * results after it are wanted, so reads start at MIN_CHUNK and double up to
+   * CHUNK (a long line still costs few round trips). A head read for a window's
+   * first timestamp then costs a short read, not a whole chunk.
+   */
+  constructor(private reader: JsonlRangeReader, private path: string, private pos: number, private stop = Infinity) {
     this.bufStart = pos;
   }
 
-  /** The next line (without its newline) and where it starts; null at EOF. */
-  async next(): Promise<{ text: string; start: number } | null | 'unreadable'> {
+  private pastChunk = MIN_CHUNK;
+
+  private chunkAt(at: number): number {
+    if (at < this.stop) return Math.min(CHUNK, Math.max(MIN_CHUNK, this.stop - at + 1));
+    const n = this.pastChunk;
+    this.pastChunk = Math.min(CHUNK, n * 2);
+    return n;
+  }
+
+  /**
+   * The next line (without its newline), where it starts, and whether its
+   * newline was there (a last line without one may still be being written);
+   * null at EOF.
+   */
+  async next(): Promise<{ text: string; start: number; whole: boolean } | null | 'unreadable'> {
     for (;;) {
       const nl = this.buf.indexOf(0x0a, this.pos - this.bufStart);
       if (nl >= 0 || (this.eof && this.pos - this.bufStart < this.buf.length)) {
@@ -53,10 +75,11 @@ class LineCursor {
         const start = this.pos;
         const text = this.buf.subarray(this.pos - this.bufStart, endIdx).toString('utf-8');
         this.pos = this.bufStart + endIdx + 1;
-        return { text, start };
+        return { text, start, whole: nl >= 0 };
       }
       if (this.eof) return null;
-      const res = await this.reader.readRangeBytes(this.path, this.bufStart + this.buf.length, CHUNK);
+      const at = this.bufStart + this.buf.length;
+      const res = await this.reader.readRangeBytes(this.path, at, this.chunkAt(at));
       if (!res) return 'unreadable';
       this.read += res.buf.length;
       // Drop what was already handed out before growing the buffer.
@@ -71,13 +94,18 @@ class LineCursor {
 /**
  * The window's lines joined by newlines, or null when the file cannot be read
  * or the window would materialize more than `limit` bytes.
+ *
+ * `complete` says the window can never change: a whole line after it was read
+ * (so every line it owns was whole, and an append-only file only grows past it).
+ * A window that ran into the end of the file may still gain a line or the
+ * rest of one, so a caller keeping windows keeps only complete ones.
  */
 export async function readJsonlLineWindow(
   reader: JsonlRangeReader, path: string, start: number, stop: number, limit: number,
-): Promise<string | null> {
+): Promise<{ text: string; complete: boolean } | null> {
   // From one byte early: the first "line" is then the rest of the line holding
   // byte start-1, which the window before owns (empty when `start` is a line start).
-  const cursor = new LineCursor(reader, path, start > 0 ? start - 1 : 0);
+  const cursor = new LineCursor(reader, path, start > 0 ? start - 1 : 0, stop);
   const out: string[] = [];
   let bytes = 0;
   let line = await cursor.next();
@@ -105,5 +133,69 @@ export async function readJsonlLineWindow(
     line = await cursor.next();
     if (line === 'unreadable') return null;
   }
-  return out.join('\n');
+  // The line after the window decides ownership (a tool result would belong to
+  // it), so it must be whole too: half written, it cannot be told apart yet.
+  return { text: out.join('\n'), complete: line !== null && line.whole };
+}
+
+/**
+ * Complete windows already read, kept by text (oldest out first).
+ *
+ * A page of older history on a remote host costs whole windows over the tunnel
+ * (4 MB each, about 1.5 s at the ~2.5 MB/s measured from a dev host), and the
+ * route answering it gives up at its 5 s deadline while the read goes on. Kept
+ * nowhere, that finished read was thrown away and the retry paid for it again:
+ * 2026-11-16, an agent paging back through four 15 to 45 MB sessions got the
+ * same 503 for twenty minutes. A complete window never changes (see
+ * readJsonlLineWindow), so its text is kept: the read the deadline cut off
+ * answers the retry. Text, not parsed rows, so whatever is merged into a
+ * window's parse later (synthetic user lines) is never served stale.
+ */
+const KEPT_WINDOWS_MAX_CHARS = 32 * 1024 * 1024;
+const keptWindows = new Map<string, string>();
+let keptChars = 0;
+
+function keepWindow(key: string, text: string): void {
+  const prev = keptWindows.get(key);
+  if (prev !== undefined) keptChars -= prev.length;
+  keptWindows.delete(key);
+  if (text.length > KEPT_WINDOWS_MAX_CHARS) return;
+  keptWindows.set(key, text);
+  keptChars += text.length;
+  while (keptChars > KEPT_WINDOWS_MAX_CHARS) {
+    const oldest = keptWindows.keys().next();
+    if (oldest.done) break;
+    keptChars -= keptWindows.get(oldest.value)?.length ?? 0;
+    keptWindows.delete(oldest.value);
+  }
+}
+
+/**
+ * readJsonlLineWindow, served from the kept windows when this exact window of
+ * this file incarnation (`file`: host, path and epoch) was read complete before.
+ * Without an epoch a file cannot be told from its replacement, so nothing is kept.
+ */
+export async function readKeptJsonlLineWindow(
+  reader: JsonlRangeReader, path: string, file: string | undefined, start: number, stop: number, limit: number,
+): Promise<string | null> {
+  const key = file === undefined ? undefined : `${file}\u0000${start}\u0000${stop}`;
+  if (key !== undefined) {
+    const kept = keptWindows.get(key);
+    if (kept !== undefined) {
+      if (kept.length > limit) return null;
+      keptWindows.delete(key);
+      keptWindows.set(key, kept);
+      return kept;
+    }
+  }
+  const got = await readJsonlLineWindow(reader, path, start, stop, limit);
+  if (!got) return null;
+  if (key !== undefined && got.complete) keepWindow(key, got.text);
+  return got.text;
+}
+
+/** Test seam: forget every kept window. */
+export function _resetKeptWindowsForTests(): void {
+  keptWindows.clear();
+  keptChars = 0;
 }

@@ -33,7 +33,7 @@ vi.mock('../../../src/core/session-history-pages.js', () => ({
     if (pageAnswer instanceof Error) throw pageAnswer;
     return pageAnswer;
   },
-  isPastFullReadCeiling: async () => true,
+  olderPageRead: async () => 'windows-only' as const,
 }));
 
 vi.mock('../../../src/core/sessions/session-lifecycle.js', async (importOriginal) => {

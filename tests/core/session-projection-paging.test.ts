@@ -29,6 +29,7 @@ vi.mock('../../src/core/session-tracker.js', () => ({
 }));
 
 import { CLAUDE_HOME } from '../../src/constants.js';
+import { DaemonFileReader } from '../../src/core/daemon-file-reader.js';
 import { encodeProjectPath, type SessionHistoryMessage } from '../../src/core/session-history.js';
 import {
   buildSessionTranscript,
@@ -40,6 +41,10 @@ const tmpBase = path.dirname(CLAUDE_HOME);
 
 beforeEach(async () => {
   seq = 0;
+  const { _resetKeptWindowsForTests } = await import('../../src/core/jsonl-window.js');
+  const { _resetHistoryPagesForTests } = await import('../../src/core/session-history-pages.js');
+  _resetKeptWindowsForTests();
+  _resetHistoryPagesForTests();
   await fsp.rm(tmpBase, { recursive: true, force: true });
   await fsp.mkdir(tmpBase, { recursive: true });
 });
@@ -250,6 +255,100 @@ describe('before: older pages', () => {
     expect(t.messages.length).toBeLessThan(100);
     expect(t.truncated).toBe(true);
   }, 60_000);
+});
+
+/**
+ * What one older page costs on a file past the full read's ceiling, in bytes read.
+ *
+ * 2026-11-16: an agent paged back through 15 to 45 MB sessions on a dev host and
+ * every page answered 503 for twenty minutes. A page found its window by reading
+ * every 4 MB window back from the end (about 1.5 s each over the tunnel), and the
+ * route's 5 s deadline threw the finished read away, so the retry paid it again.
+ * These pin that a cold page costs a few window heads plus the windows it
+ * returns, at any depth, and that a retry reads no window again.
+ */
+describe('an older page costs the windows it returns, not the depth', () => {
+  const WINDOW = 4 * 1024 * 1024;
+  let bytes = 0;
+  beforeEach(() => {
+    bytes = 0;
+    const real = DaemonFileReader.prototype.readRangeBytes;
+    vi.spyOn(DaemonFileReader.prototype, 'readRangeBytes').mockImplementation(async function (this: DaemonFileReader, p, start, length) {
+      const got = await real.call(this, p, start, length);
+      bytes += got?.buf.length ?? 0;
+      return got;
+    });
+    process.env.WALNUT_MAX_FILE_READ_BYTES = String(6 * 1024 * 1024);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env.WALNUT_MAX_FILE_READ_BYTES;
+  });
+
+  /** A ~22 MB session (six windows); the timestamp of a turn end at `fraction` of it. */
+  async function deepSession(): Promise<{ at: (fraction: number) => string }> {
+    const lines = busySession(36, 100, 'q'.repeat(6000));
+    await writeJsonl('s-deep', lines);
+    const file = path.join(CLAUDE_HOME, 'projects', encodeProjectPath(CWD), 's-deep.jsonl');
+    expect((await fsp.stat(file)).size).toBeGreaterThan(5 * WINDOW);
+    return { at: (f) => (lines[Math.floor(lines.length * f)] as { timestamp: string }).timestamp };
+  }
+
+  it('a cold page deep in the file reads window heads and its own windows only', async () => {
+    const { at } = await deepSession();
+    await buildSessionTranscript('s-deep', { rich: true, visible: 3 });
+    for (const f of [0.05, 0.4, 0.75]) {
+      const { _resetKeptWindowsForTests } = await import('../../src/core/jsonl-window.js');
+      const { _resetHistoryPagesForTests } = await import('../../src/core/session-history-pages.js');
+      _resetKeptWindowsForTests();
+      _resetHistoryPagesForTests();
+      bytes = 0;
+      const page = await buildSessionTranscript('s-deep', { rich: true, before: at(f), visible: 3 });
+      expect(page.messages.length, `page at ${f}`).toBeGreaterThan(0);
+      expect(page.messages.every((m) => m.timestamp < at(f)), `page at ${f}`).toBe(true);
+      // Reading back from the end cost (6 - k) windows: 20 MB for the page at 0.05.
+      // At most two windows and a few heads, wherever the page is.
+      expect(bytes, `bytes for the page at ${f}`).toBeLessThan(2 * WINDOW + 4 * 1024 * 1024);
+    }
+  }, 120_000);
+
+  it('a retried page reads no window again', async () => {
+    const { at } = await deepSession();
+    await buildSessionTranscript('s-deep', { rich: true, visible: 3 });
+    const first = await buildSessionTranscript('s-deep', { rich: true, before: at(0.3), visible: 50 });
+    bytes = 0;
+    const again = await buildSessionTranscript('s-deep', { rich: true, before: at(0.3), visible: 50 });
+    expect(again.messages).toEqual(first.messages);
+    expect(bytes).toBeLessThan(1024 * 1024);
+  }, 120_000);
+
+  it('past its time budget a page that holds a row stops adding windows', async () => {
+    const { at } = await deepSession();
+    const { readSessionHistoryBefore } = await import('../../src/core/session-history-pages.js');
+    const want = { minMessages: 100_000, minText: 0, isText: () => true };
+    const full = await readSessionHistoryBefore('s-deep', CWD, undefined, at(0.9), want);
+    bytes = 0;
+    const short = await readSessionHistoryBefore('s-deep', CWD, undefined, at(0.9), want, undefined, 0);
+    expect(short!.messages.length).toBeGreaterThan(0);
+    expect(short!.messages.length).toBeLessThan(full!.messages.length);
+    expect(short!.reachedStart).toBe(false);
+    // The short page is the newest part of the full one: the next page goes on from it.
+    expect(short!.messages).toEqual(full!.messages.slice(-short!.messages.length));
+  }, 120_000);
+});
+
+describe('olderPageRead: which read an older page takes', () => {
+  it('a large file on another host pages in windows; a local one or a small one reads whole', async () => {
+    const { olderPageReadFor } = await import('../../src/core/session-history-pages.js');
+    const MB = 1024 * 1024;
+    expect(olderPageReadFor(25 * MB, 'devbox', 32 * MB)).toBe('windows');
+    expect(olderPageReadFor(5 * MB, 'devbox', 32 * MB)).toBe('full');
+    expect(olderPageReadFor(25 * MB, undefined, 32 * MB)).toBe('full');
+    expect(olderPageReadFor(25 * MB, '__local__', 32 * MB)).toBe('full');
+    expect(olderPageReadFor(25 * MB, '', 32 * MB)).toBe('full');
+    expect(olderPageReadFor(40 * MB, undefined, 32 * MB)).toBe('windows-only');
+    expect(olderPageReadFor(40 * MB, 'devbox', 32 * MB)).toBe('windows-only');
+  });
 });
 
 describe('since: a refetch that overlaps what the client holds', () => {

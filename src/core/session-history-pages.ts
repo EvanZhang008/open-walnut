@@ -7,15 +7,24 @@
  * older could ever be read (measured: a 61 MB session's tail held 95 messages).
  * Here the file is read in 4 MB windows aligned to absolute byte offsets, so
  * window k is the same bytes however much the file grows after it, and each
- * window's earliest timestamp is remembered: the next page jumps straight to the
- * window it needs instead of reading back from the end again.
+ * window's first timestamp is remembered: the next page jumps straight to the
+ * window it needs.
  */
 import { readSessionHistoryRange, type HistoryWindowStart, type SessionHistoryMessage } from './session-history.js';
 
 const WINDOW_BYTES = 4 * 1024 * 1024;
 /** Most windows one page reads, so a tap costs at most this many bounded reads. */
 const MAX_WINDOWS_PER_PAGE = 4;
+/**
+ * Past this, a page that holds a row stops reading more windows. Under the
+ * transcript route's 5 s deadline with room for the window it is reading.
+ */
+const PAGE_READ_BUDGET_MS = 2_500;
+/** What a window's first timestamp is read from: a head, far less than the window. */
+const HEAD_BYTES = 64 * 1024;
 const MAX_INDEXED_SESSIONS = 50;
+/** Largest file on another host an older page reads whole: about 3 s over the tunnel. */
+const REMOTE_FULL_READ_MAX_BYTES = 8 * 1024 * 1024;
 
 interface WindowIndex {
   /** File incarnation the offsets belong to; a different one starts over. */
@@ -40,16 +49,32 @@ function indexFor(key: string, epoch: string | undefined): WindowIndex {
 }
 
 /**
- * Is this session's file too large for the full read (DaemonFileReader's byte
- * ceiling)? false when it cannot tell, so the caller keeps the full read.
+ * How an older page of this session's file is read: 'full' (one full read, kept
+ * by the parse cache), 'windows' (bounded windows, the full read as a fallback),
+ * or 'windows-only' (past DaemonFileReader's byte ceiling, the full read would
+ * only serve the tail again). 'full' when it cannot tell.
+ *
+ * A file on another host past REMOTE_FULL_READ_MAX_BYTES pages in windows too:
+ * the full read is the whole file over the tunnel, about 10 s for the 25 MB one
+ * of 2026-11-16, so its first page missed the route's 5 s deadline every time.
  */
-export async function isPastFullReadCeiling(
+export async function olderPageRead(
   sessionId: string, cwd: string | undefined, host: string | undefined,
-): Promise<boolean> {
+): Promise<'full' | 'windows' | 'windows-only'> {
   const probe = await readSessionHistoryRange(sessionId, cwd, host, 0, 0).catch(() => null);
-  if (!probe) return false;
+  if (!probe) return 'full';
   const { DaemonFileReader } = await import('./daemon-file-reader.js');
-  return probe.fileSize > DaemonFileReader.maxReadBytes();
+  return olderPageReadFor(probe.fileSize, host, DaemonFileReader.maxReadBytes());
+}
+
+/** olderPageRead's choice for a file of this size on this host, under this byte ceiling. */
+export function olderPageReadFor(
+  fileSize: number, host: string | undefined, ceiling: number,
+): 'full' | 'windows' | 'windows-only' {
+  if (fileSize > ceiling) return 'windows-only';
+  // The same test as hosts/remote-read-bound.ts isRemoteHost, without its imports.
+  const remote = host !== undefined && host !== '' && host !== '__local__';
+  return remote && fileSize > REMOTE_FULL_READ_MAX_BYTES ? 'windows' : 'full';
 }
 
 /** Test seam: forget every window index. */
@@ -61,8 +86,17 @@ export function _resetHistoryPagesForTests(): void {
  * History messages strictly older than `before`, oldest first, enough for one
  * page: at least `minMessages` of them and `minText` a reader sees as text, or
  * everything back to the start of the file, or what MAX_WINDOWS_PER_PAGE
- * windows hold. `reachedStart` says the first window was read. null = this
- * session cannot be read in windows (see readSessionHistoryRange).
+ * windows hold, or what was read by PAGE_READ_BUDGET_MS. `reachedStart` says the
+ * first window was read. null = this session cannot be read in windows (see
+ * readSessionHistoryRange).
+ *
+ * What one page may cost is bounded, because the route answering it gives up at
+ * 5 s and a remote window costs about 1.5 s over the tunnel. It used to find its
+ * window by reading every window back from the end, so a page deep in a 45 MB
+ * file read ten windows before its first row (2026-11-16: 503 on every retry for
+ * twenty minutes). Now it binary-searches the windows by their first timestamp,
+ * read from a head of each window, and stops adding windows past the budget once
+ * it holds a row; a short page is still a page, and the next one goes on from it.
  */
 export async function readSessionHistoryBefore(
   sessionId: string,
@@ -77,7 +111,9 @@ export async function readSessionHistoryBefore(
   /** Lines starting from here on are already in hand (a tail window's start): read only
    *  before it. Ignored when the file is no longer the one that window was read from. */
   held?: HistoryWindowStart,
+  budgetMs = PAGE_READ_BUDGET_MS,
 ): Promise<{ messages: SessionHistoryMessage[]; reachedStart: boolean; windowsRead: number } | null> {
+  const startedAt = Date.now();
   const key = `${sessionId}@${host ?? '__local__'}`;
   // A zero-length read answers the file's size (and whether it is readable).
   const probe = await readSessionHistoryRange(sessionId, cwd, host, 0, 0);
@@ -92,27 +128,47 @@ export async function readSessionHistoryBefore(
     if (last?.n === n) return last.messages;
     // The window still starts at n * WINDOW_BYTES, so its firstTs keeps its meaning;
     // only its end is cut where the caller's bytes begin.
-    const got = await readSessionHistoryRange(sessionId, cwd, host, n * WINDOW_BYTES, cutAt === undefined ? (n + 1) * WINDOW_BYTES : Math.min((n + 1) * WINDOW_BYTES, cutAt));
+    const end = cutAt === undefined ? (n + 1) * WINDOW_BYTES : Math.min((n + 1) * WINDOW_BYTES, cutAt);
+    const got = await readSessionHistoryRange(sessionId, cwd, host, n * WINDOW_BYTES, end);
     if (!got || got.epoch !== idx.epoch) return null; // unreadable, or replaced mid-page
     windowsRead++;
-    // A window cut short may hold no line start at all: that says nothing about the whole window.
-    if (cutAt === undefined || got.messages.length > 0) idx.firstTs.set(n, got.messages[0]?.timestamp ?? null);
+    // "No timestamp" says nothing about a window cut short, nor about the last
+    // window, which may still gain lines; only below both it is final.
+    if (got.firstTimestamp || (end === (n + 1) * WINDOW_BYTES && end < got.fileSize)) {
+      idx.firstTs.set(n, got.firstTimestamp ?? null);
+    }
     last = { n, messages: got.messages };
     return got.messages;
   };
-  // The newest window holding something older than `before`. Time grows with
-  // the offset, so a window known to start at or after `before` rules out every
-  // window above it too.
-  let k = Math.max(0, Math.floor((stopAt - 1) / WINDOW_BYTES));
-  for (const [n, ts] of idx.firstTs) {
-    if (typeof ts === 'string' && ts >= before && n <= k) k = Math.max(0, n - 1);
+  /** Window n's first timestamp, from its head when not known yet; null = none in it. */
+  const head = async (n: number): Promise<string | null | 'unreadable'> => {
+    const known = idx.firstTs.get(n);
+    if (known !== undefined) return known;
+    const got = await readSessionHistoryRange(sessionId, cwd, host, n * WINDOW_BYTES, Math.min(n * WINDOW_BYTES + HEAD_BYTES, stopAt));
+    if (!got || got.epoch !== idx.epoch) return 'unreadable';
+    // A head with no timestamp says nothing about the window: read it whole.
+    if (got.firstTimestamp) {
+      idx.firstTs.set(n, got.firstTimestamp);
+      return got.firstTimestamp;
+    }
+    const whole = await read(n);
+    return whole === null ? 'unreadable' : idx.firstTs.get(n) ?? whole[0]?.timestamp ?? null;
+  };
+  // The newest window holding something older than `before`: the last one whose
+  // first timestamp is older. Time grows with the offset, so that holds for every
+  // window up to it and none after. A window without timestamps counts as older,
+  // which can only start the page a window too new (it holds no rows), never
+  // skip one. Window 0 always holds the start of the file.
+  let lo = 0;
+  let hi = Math.max(0, Math.floor((stopAt - 1) / WINDOW_BYTES));
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    const ts = await head(mid);
+    if (ts === 'unreadable') return null;
+    if (ts === null || ts < before) lo = mid;
+    else hi = mid - 1;
   }
-  while (k > 0) {
-    const messages = await read(k);
-    if (!messages) return null;
-    if (messages.length > 0 && messages[0].timestamp < before) break;
-    k--;
-  }
+  let k = lo;
   let collected: SessionHistoryMessage[] = [];
   let windows = 0;
   let reachedStart = false;
@@ -124,6 +180,7 @@ export async function readSessionHistoryBefore(
     collected = messages.filter((m) => m.timestamp < before).concat(collected);
     if (k === 0) reachedStart = true;
     if (collected.length >= want.minMessages && collected.filter(want.isText).length >= want.minText) break;
+    if (collected.length > 0 && Date.now() - startedAt >= budgetMs) break;
   }
   return { messages: collected, reachedStart, windowsRead };
 }

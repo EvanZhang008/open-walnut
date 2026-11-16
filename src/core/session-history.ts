@@ -1338,7 +1338,7 @@ export async function readSessionHistoryRange(
   host: string | undefined,
   start: number,
   end: number,
-): Promise<{ messages: SessionHistoryMessage[]; fileSize: number; epoch?: string } | null> {
+): Promise<{ messages: SessionHistoryMessage[]; fileSize: number; epoch?: string; firstTimestamp?: string } | null> {
   if (await getInPlaceRewinds(sessionId)) return null;
   const daemonHost = host ?? '__local__';
   const { DaemonFileReader } = await import('./daemon-file-reader.js');
@@ -1348,8 +1348,9 @@ export async function readSessionHistoryRange(
   const statPath = st.path;
   const stop = Math.min(end, st.size);
   if (start >= stop) return { messages: [], fileSize: st.size, epoch: st.epoch };
-  const { readJsonlLineWindow } = await import('./jsonl-window.js');
-  const text = await readJsonlLineWindow(reader, statPath, start, stop, DaemonFileReader.maxReadBytes());
+  const { readKeptJsonlLineWindow } = await import('./jsonl-window.js');
+  const file = st.epoch === undefined ? undefined : `${daemonHost}\u0000${statPath}\u0000${st.epoch}`;
+  const text = await readKeptJsonlLineWindow(reader, statPath, file, start, stop, DaemonFileReader.maxReadBytes());
   if (text === null) return null;
   const stamps = text.match(/"timestamp":"([^"]+)"/g) ?? [];
   const first = stamps[0]?.slice(13, -1);
@@ -1368,7 +1369,7 @@ export async function readSessionHistoryRange(
     bindEchoClaims(sessionId, messages);
   } catch { /* best-effort, as on the tail window */ }
   markWindowedRead(messages);
-  return { messages, fileSize: st.size, epoch: st.epoch };
+  return { messages, fileSize: st.size, epoch: st.epoch, ...(first ? { firstTimestamp: first } : {}) };
 }
 
 /**
