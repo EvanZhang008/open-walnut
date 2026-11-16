@@ -296,8 +296,7 @@ describe('an older page costs the windows it returns, not the depth', () => {
 
   it('a cold page deep in the file reads window heads and its own windows only', async () => {
     const { at } = await deepSession();
-    await buildSessionTranscript('s-deep', { rich: true, visible: 3 });
-    for (const f of [0.05, 0.4, 0.75]) {
+    for (const f of [0.05, 0.4, 0.75, 0.97]) {
       const { _resetKeptWindowsForTests } = await import('../../src/core/jsonl-window.js');
       const { _resetHistoryPagesForTests } = await import('../../src/core/session-history-pages.js');
       _resetKeptWindowsForTests();
@@ -306,8 +305,9 @@ describe('an older page costs the windows it returns, not the depth', () => {
       const page = await buildSessionTranscript('s-deep', { rich: true, before: at(f), visible: 3 });
       expect(page.messages.length, `page at ${f}`).toBeGreaterThan(0);
       expect(page.messages.every((m) => m.timestamp < at(f)), `page at ${f}`).toBe(true);
-      // Reading back from the end cost (6 - k) windows: 20 MB for the page at 0.05.
-      // At most two windows and a few heads, wherever the page is.
+      // Reading back from the end cost (6 - k) windows: 20 MB for the page at 0.05,
+      // after the 4 MB newest tail. Cold, with nothing read before it: at most two
+      // windows and a few heads, wherever the page is, and never the tail first.
       expect(bytes, `bytes for the page at ${f}`).toBeLessThan(2 * WINDOW + 4 * 1024 * 1024);
     }
   }, 120_000);

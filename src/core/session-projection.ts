@@ -735,46 +735,55 @@ export async function buildSessionTranscript(
   // was an empty transcript on a session with a full visible conversation
   // (2026-08-16: cache/transcripts/<sid>.json stuck at messages:[] while the
   // web console showed the whole thread). Same branch the /history route takes.
-  let history: import('./session-history.js').SessionHistoryMessage[]
-  if (record && engineCaps(record.engine).historySource === 'acp-journal') {
-    const { readAcpSessionHistory } = await import('../providers/acp-session-history.js')
-    history = await readAcpSessionHistory(record)
-  } else {
-    // Tail-bounded: this export keeps only the last TRANSCRIPT_TAIL messages, so
-    // whales must not be fully transferred per sweep (pre-fix: the 60s sweep
-    // full-read every alive session — dominant share of 167 GB/day of reads).
-    history = await readSessionHistoryTail(sessionId, record?.cwd, record?.host, record?.outputFile, undefined, { poll: true }) ?? []
-  }
+  let history: import('./session-history.js').SessionHistoryMessage[] = []
   const paging = opts?.before !== undefined || opts?.visible !== undefined || opts?.since !== undefined
-  let bounds = paging ? transcriptSliceBounds(history, opts!) : null
-  // A whale's tail read is a bounded window: a page that reaches its start may
-  // still have older messages before it, which only the full read holds.
-  let windowed = isWindowedHistory(history)
-  if (bounds && bounds.start === 0 && windowed && opts?.before) {
-    // Past the full read's byte ceiling the full read only serves the same tail
-    // again, and a large file on another host is too slow to read whole for one
-    // page (session-history-pages.ts olderPageRead): both page in bounded windows.
-    const { readSessionHistoryBefore, olderPageRead } = await import('./session-history-pages.js')
-    const how = await olderPageRead(sessionId, record?.cwd, record?.host)
-    const before = opts.before
-    const readWindows = () => readSessionHistoryBefore(sessionId, record?.cwd, record?.host, before, {
-      minMessages: TRANSCRIPT_TAIL,
-      minText: Math.min(opts.visible ?? 0, TRANSCRIPT_VISIBLE_MAX),
-      isText: isVisibleHistoryMessage,
-    })
-    let older = how === 'full' ? null : await readWindows()
+  let bounds: { start: number; end: number } | null = null
+  let windowed = false
+  const acp = !!record && engineCaps(record.engine).historySource === 'acp-journal'
+  /** An older page read in bounded windows, set when that read answered. */
+  let older: { messages: typeof history; reachedStart: boolean } | null = null
+  // Past the full read's byte ceiling the full read only serves the same tail
+  // again, and a large file on another host is too slow to read whole for one
+  // page (session-history-pages.ts olderPageRead): both page in bounded windows.
+  const pages = opts?.before !== undefined && !acp ? await import('./session-history-pages.js') : null
+  const before = opts?.before
+  const readWindows = () => pages!.readSessionHistoryBefore(sessionId, record?.cwd, record?.host, before!, {
+    minMessages: TRANSCRIPT_TAIL,
+    minText: Math.min(opts?.visible ?? 0, TRANSCRIPT_VISIBLE_MAX),
+    isText: isVisibleHistoryMessage,
+  })
+  const how = pages ? await pages.olderPageRead(sessionId, record?.cwd, record?.host) : 'full'
+  // Such a page goes straight to its windows: the newest tail it would read first
+  // is a window of its own (about 1.5 s over the tunnel), and a page from far back
+  // finds none of its rows there. 2026-11-16: with the tail read first, a cold page
+  // of a 41 MB session on a dev host took longer than the route's 5 s deadline.
+  if (pages && how !== 'full') older = await readWindows()
+  if (!older) {
+    if (acp) {
+      const { readAcpSessionHistory } = await import('../providers/acp-session-history.js')
+      history = await readAcpSessionHistory(record!)
+    } else {
+      // Tail-bounded: this export keeps only the last TRANSCRIPT_TAIL messages, so
+      // whales must not be fully transferred per sweep (pre-fix: the 60s sweep
+      // full-read every alive session — dominant share of 167 GB/day of reads).
+      history = await readSessionHistoryTail(sessionId, record?.cwd, record?.host, record?.outputFile, undefined, { poll: true }) ?? []
+    }
+    bounds = paging ? transcriptSliceBounds(history, opts!) : null
+    // A whale's tail read is a bounded window: a page that reaches its start may
+    // still have older messages before it, which only the full read holds.
+    windowed = isWindowedHistory(history)
     // Windows cannot read every session (in-place rewinds): the full read can, under its ceiling.
-    if (!older && how !== 'windows-only') {
+    if (pages && bounds && bounds.start === 0 && windowed && how !== 'windows-only') {
       history = await readSessionHistory(sessionId, record?.cwd, record?.host, record?.outputFile, { skipSubagents: true })
       windowed = isWindowedHistory(history)
-      bounds = transcriptSliceBounds(history, opts)
+      bounds = transcriptSliceBounds(history, opts!)
       if (bounds.start === 0 && windowed && how === 'full') older = await readWindows()
     }
-    if (older) {
-      history = older.messages
-      windowed = !older.reachedStart
-      bounds = transcriptSliceBounds(history, opts)
-    }
+  }
+  if (older) {
+    history = older.messages
+    windowed = !older.reachedStart
+    bounds = transcriptSliceBounds(history, opts!)
   }
   const tail = opts?.full
     ? history
