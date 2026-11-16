@@ -890,13 +890,33 @@ test('the agent tab wears a frame; Stop gives it back to the person', async () =
   await expect.poll(() => tab.locator('walnut-ext[data-walnut-cursor]').count(), { timeout: 10_000 }).toBe(0)
 })
 
+/** This spec's extension's device id (extension-xxxxxx), from the connection its background keeps (secret-store.ts). */
+async function ownDevice(): Promise<string> {
+  const sw = ctx.serviceWorkers()[0]
+  const id = await sw.evaluate(() => new Promise<string | undefined>((resolve, reject) => {
+    const req = indexedDB.open('walnut', 1)
+    req.onerror = () => reject(req.error)
+    req.onsuccess = () => {
+      const get = req.result.transaction('kv', 'readonly').objectStore('kv').get('connection')
+      get.onsuccess = () => { req.result.close(); resolve((get.result as { deviceId?: string } | undefined)?.deviceId) }
+      get.onerror = () => reject(get.error)
+    }
+  }))
+  expect(id).toMatch(/^extension-[0-9a-f]{6}$/)
+  return id!
+}
+
 test('Settings, Browser extension shows the browser and the allowed site; Remove takes it off', async () => {
   const page = await ctx.newPage()
   await page.goto(`${base}/settings#browser`)
   const now = page.locator('.settings-row', { hasText: 'Browsers that let agents in now' })
   await expect(now).toContainText(/Walnut extension \(Chrome on/, { timeout: 20_000 })
   // Your browsers: this one, connected, with the version it runs (its update check or its poll said it: extension-seen.ts).
-  const mine = page.getByTestId('ext-browsers').locator('.settings-row', { hasText: /Walnut extension \(Chrome on/ })
+  // Found by its own device id: the other specs on the shared fixture server pair extensions of
+  // the same name, so the list holds several "Walnut extension (Chrome on ...)" rows.
+  const mine = page.getByTestId('ext-browsers').locator(`.settings-row[data-device="${await ownDevice()}"]`)
+  await expect(mine).toHaveCount(1)
+  await expect(mine).toContainText(/Walnut extension \(Chrome on/)
   await expect(mine).toContainText(/Connected\. Version \d+\.\d+\.\d+/, { timeout: 20_000 })
   await expect(mine).toContainText('Agents on')
   await expect(page.getByTestId('ext-features')).toContainText('Agents use your browser')
