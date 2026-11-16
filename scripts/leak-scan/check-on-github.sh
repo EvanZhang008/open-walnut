@@ -17,6 +17,8 @@
 # GitHub (no gh, no answer in time) is said and the push goes on; a failed scan is refused always.
 #   WALNUT_LEAK_CHECK_TIMEOUT   seconds to wait for the check (default 600)
 #   WALNUT_LEAK_CHECK_POLL      seconds between looks (default 5)
+#   WALNUT_LEAK_CHECK_RETRY_S   a failed read of GitHub is tried twice more, after this and twice
+#                               this many seconds (default 3)
 #   WALNUT_LEAK_CHECK_SLUG      owner/repo on GitHub, when the push URL is not a GitHub URL (tests).
 #                               Naming another repository skips nothing: GitHub's own ruleset
 #                               judges the commit on the repository main is pushed to.
@@ -58,10 +60,25 @@ if ! { command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; }; then
   say "gh is not installed or not signed in, so the Leak gate cannot check this commit first; GitHub refuses the push of main if its ruleset requires that check"
   exit 0
 fi
-r=$(gh api "repos/$slug/rules/branches/main" --jq "[.[] | select(.type == \"required_status_checks\") | .parameters.required_status_checks[].context] | index(\"$CHECK\") != null" 2>/dev/null) \
+# gh, tried again while GitHub or the credential helper fails for a moment (2026-11-15 20:45Z: one
+# read of the workflow failed and refused a land that a push a minute later sent). Its last error
+# is kept in a file (gh_try runs in a $(...) subshell), and gh_err reads it for the message.
+RETRY_S=${WALNUT_LEAK_CHECK_RETRY_S:-3}
+err_file=$(mktemp "${TMPDIR:-/tmp}/leak-check-err.XXXXXX")
+trap 'rm -f "$err_file"' EXIT
+gh_err() { tr '\n' ' ' < "$err_file" | sed 's/ *$//' | cut -c1-200; }
+gh_try() {
+  local n out
+  for n in 1 2 3; do
+    if out=$(gh "$@" 2>"$err_file"); then printf '%s\n' "$out"; return 0; fi
+    [ $n = 3 ] || sleep $((n * RETRY_S))
+  done
+  return 1
+}
+r=$(gh_try api "repos/$slug/rules/branches/main" --jq "[.[] | select(.type == \"required_status_checks\") | .parameters.required_status_checks[].context] | index(\"$CHECK\") != null") \
   && { [ "$r" = true ] && required=yes || required=no; }
-wf=$(gh api "repos/$slug/contents/.github/workflows/leak-gate.yml?ref=main" --jq .content 2>/dev/null | base64 --decode 2>/dev/null)
-[ -n "$wf" ] || trouble "GitHub's main has no readable .github/workflows/leak-gate.yml"
+wf=$(gh_try api "repos/$slug/contents/.github/workflows/leak-gate.yml?ref=main" -H 'Accept: application/vnd.github.raw')
+[ -n "$wf" ] || trouble "could not read .github/workflows/leak-gate.yml of GitHub's main: $(gh_err)"
 printf '%s\n' "$wf" | grep -qE '^      commit:' || trouble "the Leak gate on GitHub's main takes no commit to check yet"
 
 # success, failure, pending or none: the newest "Scan new commits" status on the commit, else the
@@ -78,6 +95,7 @@ state_of() {
 hidden=()
 cleanup() {
   local h
+  rm -f "$err_file"
   for h in ${hidden[@]+"${hidden[@]}"}; do git push -q --no-verify "$url" ":$h" >/dev/null 2>&1 || true; done
 }
 trap cleanup EXIT
@@ -91,7 +109,7 @@ for sha in "${shas[@]}"; do
   git push -q --no-verify "$url" "$sha:$ref" 2>/dev/null || trouble "could not put $short on $ref"
   hidden+=("$ref")
   since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  gh workflow run leak-gate.yml -R "$slug" --ref main -f commit="$sha" >/dev/null 2>&1 || trouble "could not start the Leak gate for $short"
+  gh_try workflow run leak-gate.yml -R "$slug" --ref main -f commit="$sha" >/dev/null || trouble "could not start the Leak gate for $short: $(gh_err)"
   say "checking $short on GitHub (the Leak gate on main, up to ${TIMEOUT}s)…"
   start=$(date +%s) st=pending
   while :; do
