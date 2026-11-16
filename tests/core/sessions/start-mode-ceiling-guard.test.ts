@@ -47,7 +47,7 @@ const SESSION_START_EMITS: Record<string, { count: number; why: string }> = {
   'src/core/sessions/personal-ai-lane.ts': { count: 2, why: 'the Personal AI\'s own lanes, in their fixed mode' },
   'src/core/sessions/cloud-chat-lane.ts': { count: 1, why: 'the companion\'s chat lane, in its fixed mode' },
   'src/core/ai/ai-agent.ts': { count: 1, why: 'the Personal AI agent\'s own start' },
-  'src/core/subagents/on-host.ts': { count: 1, why: 'a subagent on another host: subagentMode never runs above its caller (bypass only for a full-access caller)' },
+  'src/core/subagents/on-host.ts': { count: 1, why: 'a Walnut subagent (Claude Code, or an ACP engine that names its own session): subagentMode never runs above its caller (bypass only for a full-access caller)' },
 }
 
 /** Routes (src/web/routes) whose mode changes are not a session's request. */

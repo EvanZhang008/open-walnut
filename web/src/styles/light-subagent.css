@@ -29,3 +29,37 @@
   text-transform: uppercase;
   color: var(--fg-secondary);
 }
+
+/* A Walnut subagent row says what it is (KindPill): a hidden Walnut session, not a CLI
+   agent, in Walnut's amber; the host it runs on, when not this machine, in neutral. Words,
+   not code: the chips read in the UI font. In the list the chips take their own line under
+   the title; in the reader's head the title keeps its width and the timing line gives way. */
+.bg-task-kind.bg-task-kind--walnut,
+.bg-task-kind.bg-task-kind--host { font-family: inherit; font-size: 10.5px; }
+.bg-task-kind.bg-task-kind--walnut { background: rgba(196, 122, 30, 0.14); color: #9A5B12; font-weight: 600; }
+.bg-task-kind.bg-task-kind--host { background: var(--bg-tertiary); color: var(--fg-secondary); }
+[data-theme="dark"] .bg-task-kind.bg-task-kind--walnut { color: #E8A557; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .bg-task-kind.bg-task-kind--walnut { color: #E8A557; }
+}
+.bg-task-row-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding-left: 17px; }
+.bg-tasks-detail-head--walnut .bg-tasks-detail-title { flex-shrink: 0; max-width: 40%; }
+.bg-tasks-detail-head--walnut > .wf-modal-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* A Walnut subagent's own session in the reader (WalnutSubagentChat): the normal chat
+   view fills the column, the chat scrolls inside it and the composer stays at its foot,
+   so the column itself neither scrolls nor pads. */
+.bg-tasks-detail-body.bg-tasks-detail-body--chat {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+.bg-tasks-subagent-chat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+.bg-tasks-subagent-chat > .session-panel { flex: 1 1 auto; height: auto; min-height: 0; }

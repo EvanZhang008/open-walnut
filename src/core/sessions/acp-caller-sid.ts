@@ -45,6 +45,13 @@ export function canonicalCallerSid(sid: string | undefined): string | undefined
 export function canonicalCallerSid(sid: string | undefined): string | undefined {
   const as = sid ? aliases.get(sid) : undefined
   if (as) return canonicalCallerSid(as)
+  const record = recordOfRuntime(sid)
+  // An ACP subagent's calls carry its runtime id: its record is the one aliased to its caller.
+  const recordAs = record && record !== sid ? aliases.get(record) : undefined
+  return recordAs ? canonicalCallerSid(recordAs) : record
+}
+
+function recordOfRuntime(sid: string | undefined): string | undefined {
   if (!sid || !sid.startsWith(RUNTIME_PREFIX)) return sid
   try {
     const db = getDb()

@@ -22,6 +22,8 @@ export interface LeftRun {
   sessionId?: string
   /** The session's work folder: Claude Code's per-folder data for it goes too. */
   sessionCwd?: string
+  /** Its lane, named before an ACP engine names its session: the sweep finds the session by it. */
+  lane?: string
 }
 
 const FILE = () => path.join(WALNUT_HOME, 'subagent-runs.json')
@@ -59,12 +61,13 @@ function change(fn: (rows: LeftRun[]) => LeftRun[]): Promise<void> {
 }
 
 /** Add to (or start) the run's entry. */
-export function noteLeft(id: string, add: { dir?: { host: string; dir: string }; sessionId?: string; sessionCwd?: string }): Promise<void> {
+export function noteLeft(id: string, add: { dir?: { host: string; dir: string }; sessionId?: string; sessionCwd?: string; lane?: string }): Promise<void> {
   return change((rows) => {
     const row = rows.find((r) => r.id === id) ?? (rows.push({ id, at: Date.now(), dirs: [] }), rows[rows.length - 1]!)
     if (add.dir && !row.dirs.some((d) => d.host === add.dir!.host && d.dir === add.dir!.dir)) row.dirs.push(add.dir)
     if (add.sessionId) row.sessionId = add.sessionId
     if (add.sessionCwd) row.sessionCwd = add.sessionCwd
+    if (add.lane) row.lane = add.lane
     return rows
   })
 }
@@ -81,14 +84,14 @@ export function dropLeftDirNamed(id: string, host: string, name: string): Promis
 
 /** The run cleaned up after itself (whatever is still named stays for the sweep). */
 export function settleLeft(id: string): Promise<void> {
-  return change((rows) => rows.filter((r) => r.id !== id || r.dirs.length > 0 || !!r.sessionId))
+  return change((rows) => rows.filter((r) => r.id !== id || r.dirs.length > 0 || !!r.sessionId || !!r.lane))
 }
 
 /** The session part is retired. */
 export function dropLeftSession(id: string): Promise<void> {
   return change((rows) => rows.map((r) => {
     if (r.id !== id) return r
-    const { sessionId: _s, sessionCwd: _c, ...rest } = r
+    const { sessionId: _s, sessionCwd: _c, lane: _l, ...rest } = r
     return rest
   }).filter((r) => r.id !== id || r.dirs.length > 0))
 }
@@ -101,9 +104,15 @@ export async function sweepLeftRuns(isLive: (id: string) => boolean): Promise<nu
   let settled = 0
   for (const row of rows) {
     try {
-      if (row.sessionId) {
+      // An ACP session started but not named yet when the run ended: found by its lane.
+      const sessionId = row.sessionId ?? (row.lane ? (await (await import('../session-tracker.js')).getSessionByLane(row.lane))?.claudeSessionId : undefined)
+      if (sessionId) {
+        // Named in the ledger at once: once archived it is no longer found by its lane.
+        if (!row.sessionId) await noteLeft(row.id, { sessionId })
         const { retireSubagentSession } = await import('./on-host.js')
-        await retireSubagentSession(row.sessionId, 'subagent_left', row.sessionCwd)
+        if (await retireSubagentSession(sessionId, 'subagent_left', row.sessionCwd)) await dropLeftSession(row.id)
+      } else if (row.lane && Date.now() - row.at > 10 * 60_000) {
+        // Its start never made a session in ten minutes: nothing is left of it.
         await dropLeftSession(row.id)
       }
       const { removeRunDirOn } = await import('./work-copy.js')

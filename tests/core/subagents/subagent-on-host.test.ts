@@ -39,6 +39,10 @@ const W = vi.hoisted(() => {
     removed: [] as Array<{ host: string; path: string }>,
     /** Its owner does not confirm the CLI ended (terminateSession's 'pending'). */
     stopUnconfirmed: false,
+    /** Messages sent into a session after its start (a follow-up turn), and what the fake session does with one. */
+    sends: [] as Array<{ sid: string; text: string }>,
+    delivered: [] as Array<{ sid: string; text: string; messageId?: string }>,
+    onSend: null as null | ((sid: string, text: string) => void),
   }
 })
 
@@ -93,6 +97,30 @@ vi.mock('../../../src/core/hosts/link.js', async (orig) => {
   const real = await orig<Record<string, unknown>>()
   return { ...real, link: async (h: string) => { throw new Error(`no real link to ${h} in this test`) } }
 })
+// A message into a live session (a follow-up turn): the fake session answers it.
+vi.mock('../../../src/core/session-message-queue.js', async (orig) => {
+  const real = await orig<Record<string, unknown>>()
+  return {
+    ...real,
+    sendMessageToSession: async (sid: string, text: string) => {
+      W.sends.push({ sid, text })
+      setTimeout(() => W.onSend?.(sid, text), 20)
+      return { id: null }
+    },
+  }
+})
+// The caller's session as the end notice reaches it (registry.ts tellParent).
+vi.mock('../../../src/core/sessions/session-send-core.js', async (orig) => {
+  const real = await orig<Record<string, unknown>>()
+  return {
+    ...real,
+    // As the message queue does: a row whose id is queued already is that row (a second notice under the same id is lost).
+    deliverToSession: async (target: { claudeSessionId: string }, o: { busText: string; messageId?: string }) => {
+      if (!o.messageId || !W.delivered.some((d) => d.messageId === o.messageId)) W.delivered.push({ sid: target.claudeSessionId, text: o.busText, messageId: o.messageId })
+      return { delivery: 'queued' }
+    },
+  }
+})
 vi.mock('../../../src/core/sessions/session-lifecycle.js', () => ({
   terminateSession: async (sid: string) => { W.stops.push(sid); return { status: W.stopUnconfirmed ? 'pending' : 'terminated', sessionId: sid } },
 }))
@@ -107,7 +135,7 @@ import { __setTransferConnectionResolverForTesting, type TransferConn } from '..
 import { createTransferPack, type TransferPackDeps } from '../../../src/providers/transfer-pack-core.js'
 import { createTransferCore, type TransferCoreDeps } from '../../../src/providers/transfer-core.js'
 import { recordRepoPath, repoKey } from '../../../src/core/hosts/host-profile.js'
-import { _resetLightSubagentsForTest, _setLightRunnerForTest, _skipEngineCheckForTest, lightSubagentSettled, markTold, startLightSubagent, waitLightSubagent, stopLightSubagent, getLightSubagent } from '../../../src/core/subagents/registry.js'
+import { _closeOrphansForTest, _resetLightSubagentsForTest, _setKeepIdleMsForTest, _setLightRunnerForTest, _skipEngineCheckForTest, lightSubagentRows, lightSubagentSettled, markTold, sendLightSubagent, startLightSubagent, waitLightSubagent, stopLightSubagent, getLightSubagent } from '../../../src/core/subagents/registry.js'
 import { _setSubagentStarterForTest, _setLateStopCheckMsForTest, SUBAGENT_LANE_PREFIX } from '../../../src/core/subagents/on-host.js'
 import { canonicalCallerSid } from '../../../src/core/sessions/acp-caller-sid.js'
 import { grant, revokeGrant, findGrant } from '../../../src/core/hosts/exec-grants.js'
@@ -229,7 +257,10 @@ beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
   await fsp.mkdir(WALNUT_HOME, { recursive: true })
   for (const h of Object.values(W.homes)) { fs.rmSync(h, { recursive: true, force: true }); fs.mkdirSync(h, { recursive: true }) }
-  W.stops.length = 0; W.removed.length = 0; starts.length = 0; seen = null; W.stopUnconfirmed = false
+  W.stops.length = 0; W.removed.length = 0; starts.length = 0; seen = null; W.stopUnconfirmed = false; W.sends.length = 0; W.delivered.length = 0
+  behave = async () => 'done'
+  // A follow-up into the fake session: it answers with what it was told.
+  W.onSend = (sid, text) => bus.emit(EventNames.SESSION_RESULT, { sessionId: sid, result: `heard: ${text}`, isError: false }, ['main-ai'], { source: 'test' })
   __setTransferConnectionResolverForTesting(async (host) => (W.homes[host] ? [daemonFor(host)] : []))
   _skipEngineCheckForTest(true)
   _setLateStopCheckMsForTest(50)
@@ -247,13 +278,21 @@ beforeEach(async () => {
         cwd, files: tree(cwd), status: execFileSync('git', ['status', '--porcelain'], { cwd, env: gitChildEnv(env) }).toString('utf8'), branch: git(cwd, ['branch', '--show-current']),
         log: git(cwd, ['log', '--format=%s']), b: fs.readFileSync(path.join(cwd, 'src', 'b.txt'), 'utf8'),
       }
-      const sessionId = String(start.preassignedSessionId)
-      // What Claude Code keeps of a session in a folder: its project folder (slug of the path), file history, session env.
-      const slug = cwd.replace(/[^a-zA-Z0-9]/g, '-')
-      write(path.join(W.homes.cloud, '.claude', 'projects', slug, `${sessionId}.jsonl`), '{}\n')
-      write(path.join(W.homes.cloud, '.claude', 'projects', slug, sessionId, 'subagents', 'agent-1.jsonl'), '{}\n')
-      write(path.join(W.homes.cloud, '.claude', 'file-history', sessionId, 'f1'), 'x')
-      write(path.join(W.homes.cloud, '.claude', 'session-env', sessionId, 'env'), 'x')
+      const home = W.homes[start.host ? String(start.host) : '__local__']!
+      let sessionId = String(start.preassignedSessionId ?? '')
+      if (start.engine === 'claude') {
+        // What Claude Code keeps of a session in a folder: its project folder (slug of the path), file history, session env.
+        const slug = cwd.replace(/[^a-zA-Z0-9]/g, '-')
+        write(path.join(home, '.claude', 'projects', slug, `${sessionId}.jsonl`), '{}\n')
+        write(path.join(home, '.claude', 'projects', slug, sessionId, 'subagents', 'agent-1.jsonl'), '{}\n')
+        write(path.join(home, '.claude', 'file-history', sessionId, 'f1'), 'x')
+        write(path.join(home, '.claude', 'session-env', sessionId, 'env'), 'x')
+      } else {
+        // An ACP engine names its own session at establish, under the lane it was started in (acp-session.ts).
+        sessionId = `acp-provider-${crypto.randomUUID()}`
+        await createSessionRecord(sessionId, '', '', cwd, { lane: String(start.lane), mode: start.mode as never, ...(start.host ? { host: String(start.host) } : {}) })
+        await updateSessionRecord(sessionId, { acpRuntimeId: `acp-rt-${sessionId}` } as never)
+      }
       const text = await behave(start)
       if (text === null) bus.emit(EventNames.SESSION_ERROR, { sessionId, error: 'the CLI died' }, ['main-ai'], { source: 'test' })
       else bus.emit(EventNames.SESSION_RESULT, { sessionId, result: text, isError: false }, ['main-ai'], { source: 'test' })
@@ -263,6 +302,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   _setSubagentStarterForTest(null)
+  _setKeepIdleMsForTest(null)
   _skipEngineCheckForTest(false)
   _resetLightSubagentsForTest()
   __setTransferConnectionResolverForTesting(null)
@@ -272,11 +312,11 @@ afterEach(async () => {
 })
 afterAll(() => { if (W.root.includes('walnut-subagent-host-')) fs.rmSync(W.root, { recursive: true, force: true }) })
 
-/** What the cloud host holds of runs now: the transfers folder's entries, and Claude Code's own per-session files. */
-function cloudRunDirs(): string[] {
-  const dir = path.join(W.homes.cloud, '.open-walnut-transfers')
+/** What a host holds of runs now: the transfers folder's entries, and Claude Code's own per-session files. */
+function cloudRunDirs(host = 'cloud'): string[] {
+  const dir = path.join(W.homes[host]!, '.open-walnut-transfers')
   const claude = ['projects', 'file-history', 'session-env'].flatMap((d) => {
-    const f = path.join(W.homes.cloud, '.claude', d)
+    const f = path.join(W.homes[host]!, '.claude', d)
     return fs.existsSync(f) ? fs.readdirSync(f).map((e) => `.claude/${d}/${e}`) : []
   })
   return [...(fs.existsSync(dir) ? fs.readdirSync(dir) : []), ...claude]
@@ -287,9 +327,11 @@ function localRunDirs(): string[] {
   return fs.existsSync(dir) ? fs.readdirSync(dir) : []
 }
 
+/** Run one prompt to its answer, then close the subagent (it would stay open for more messages). */
 async function runToEnd(prompt: string, more: { cwd?: string } = {}): Promise<ReturnType<typeof getLightSubagent>> {
   const run = await startLightSubagent(SID, { host: 'cloud', prompt, ...more })
   await waitLightSubagent(run, 60_000)
+  if (!getLightSubagent(SID, run.id).closed) stopLightSubagent(SID, run.id, 'the test')
   await lightSubagentSettled(run.id)
   // Its end reached its caller here: no notification goes into the session after the test.
   markTold(getLightSubagent(SID, run.id))
@@ -488,10 +530,190 @@ describe('subagent_run on another host', () => {
       await waitLightSubagent(run, 10_000)
       expect(run.fromHost).toBeUndefined()
       expect(getLightSubagent(SID, run.id).answer).toBe(`ran in ${checkout} on __local__`)
+      stopLightSubagent(SID, run.id, 'the test')
       await lightSubagentSettled(run.id)
       markTold(getLightSubagent(SID, run.id))
     } finally { _setLightRunnerForTest(null) }
   })
+
+  it('stays open after its answer: a follow-up goes into the same session, keeps the copy, and answers; closing it then leaves nothing', async () => {
+    behave = async (start) => {
+      const out = /put .* in (\S+?), or name/i.exec(String(start.message))?.[1]!
+      write(path.join(out, 'first.txt'), 'turn 1')
+      return 'first answer'
+    }
+    const run = await startLightSubagent(SID, { host: 'cloud', prompt: 'Start.' })
+    await waitLightSubagent(run, 60_000)
+    expect(run.status, run.error).toBe('completed')
+    expect(run.answer).toContain('first answer')
+    const sid = String(starts[0]!.preassignedSessionId)
+    // Still open: its session lives (no stop yet), its copy is still there, the panel row names its session.
+    expect(W.stops).toEqual([])
+    expect(cloudRunDirs().filter((d) => d.startsWith('xf-')).length).toBe(1)
+    expect(lightSubagentRows(SID)[0]).toMatchObject({ walnutSessionId: sid, host: 'cloud', engine: 'claude', taskType: 'walnut_subagent' })
+    expect(canonicalCallerSid(sid)).toBe(SID)
+    // The follow-up: a message into the SAME session (no second start), with its answer back.
+    const { turn } = sendLightSubagent(SID, run.id, { message: 'And now the second part.' })
+    expect(turn).toBe(2)
+    await waitLightSubagent(run, 60_000, turn)
+    expect(run.status, run.error).toBe('completed')
+    expect(run.answer).toBe('heard: And now the second part.')
+    expect(starts.length).toBe(1)
+    expect(W.sends.filter((m) => m.sid === sid).map((m) => m.text)).toEqual(['And now the second part.'])
+    // The file of turn 1 came back once, not again with turn 2.
+    expect(tree(path.join(W.homes.__local__, 'tasks', taskId, 'subagents', run.id))).toEqual(['first.txt'])
+    markTold(run)
+    // Closing it removes everything, and its calls no longer act for the caller.
+    stopLightSubagent(SID, run.id, 'the test')
+    await lightSubagentSettled(run.id)
+    expect(getLightSubagent(SID, run.id).closed).toBe(true)
+    expect(W.stops).toEqual([sid])
+    expect(cloudRunDirs()).toEqual([])
+    expect(listLeftRuns()).toEqual([])
+    expect(canonicalCallerSid(sid)).toBe(sid)
+    expect(lightSubagentRows(SID)[0]).toMatchObject({ closed: true })
+    expect(lightSubagentRows(SID)[0]).not.toHaveProperty('walnutSessionId')
+    // A closed subagent takes no more messages.
+    expect(() => sendLightSubagent(SID, run.id, { message: 'Still there?' })).toThrow(expect.objectContaining({ code: 'closed' }))
+  }, 90_000)
+
+  it('a message sent while it is still answering waits for that answer, and each answer reaches the caller as it was', async () => {
+    await updateSessionRecord(SID, { process_status: 'idle' } as never)
+    let release!: () => void
+    behave = () => new Promise<string>((resolve) => { release = () => resolve('first, late') })
+    const run = await startLightSubagent(SID, { host: 'cloud', prompt: 'Long one.', background: true })
+    for (let i = 0; i < 400 && starts.length === 0; i++) await new Promise((r) => setTimeout(r, 50))
+    const { turn } = sendLightSubagent(SID, run.id, { message: 'Then this.' })
+    // Not sent: the first turn still runs (the message goes only after its answer, checked below).
+    expect(run.status).toBe('running')
+    expect(W.sends).toEqual([])
+    release()
+    await waitLightSubagent(run, 60_000, 1)
+    await waitLightSubagent(run, 60_000, turn)
+    expect(run.answer).toBe('heard: Then this.')
+    expect(W.sends.map((m) => m.text)).toEqual(['Then this.'])
+    // Nothing returned either answer: each came to the caller by itself, as it was when its turn ended
+    // (never the next turn's state), each under its own id.
+    const mine = () => W.delivered.filter((d) => d.messageId?.startsWith(`sa-end-${run.id}-`))
+    for (let i = 0; i < 300 && mine().length < 2; i++) await new Promise((r) => setTimeout(r, 50))
+    expect(mine().map((d) => d.messageId)).toEqual([`sa-end-${run.id}-1`, `sa-end-${run.id}-2`])
+    expect(mine()[0]!.text).toContain('first, late')
+    expect(mine()[0]!.text).not.toMatch(/failed|closed/i)
+    expect(mine()[1]!.text).toContain('heard: Then this.')
+    stopLightSubagent(SID, run.id, 'the test')
+    await lightSubagentSettled(run.id)
+    expect(cloudRunDirs()).toEqual([])
+  }, 90_000)
+
+  it('a read while a later turn runs never takes an earlier turn\'s answer from the caller', async () => {
+    await updateSessionRecord(SID, { process_status: 'idle' } as never)
+    let releaseThird!: () => void
+    W.onSend = (sid, text) => {
+      const answer = () => bus.emit(EventNames.SESSION_RESULT, { sessionId: sid, result: `heard: ${text}`, isError: false }, ['main-ai'], { source: 'test' })
+      if (text === 'Third.') releaseThird = answer
+      else answer()
+    }
+    const run = await startLightSubagent(SID, { host: 'cloud', prompt: 'First.', background: true })
+    await waitLightSubagent(run, 60_000, 1)
+    sendLightSubagent(SID, run.id, { message: 'Second.' })
+    sendLightSubagent(SID, run.id, { message: 'Third.' })
+    await waitLightSubagent(run, 60_000, 2)
+    for (let i = 0; i < 100 && run.status !== 'running'; i++) await new Promise((r) => setTimeout(r, 10))
+    // Turn 3 runs now: a look at the run (as subagent_read does) marks nothing of turn 2.
+    expect(run.status).toBe('running')
+    markTold(run)
+    const mine = () => W.delivered.filter((d) => d.messageId?.startsWith(`sa-end-${run.id}-`))
+    for (let i = 0; i < 300 && mine().length < 2; i++) await new Promise((r) => setTimeout(r, 50))
+    expect(mine().map((d) => d.messageId)).toEqual([`sa-end-${run.id}-1`, `sa-end-${run.id}-2`])
+    expect(mine()[1]!.text).toContain('heard: Second.')
+    for (let i = 0; i < 100 && !releaseThird; i++) await new Promise((r) => setTimeout(r, 50))
+    releaseThird()
+    await waitLightSubagent(run, 60_000, 3)
+    stopLightSubagent(SID, run.id, 'the test')
+    await lightSubagentSettled(run.id)
+    expect(cloudRunDirs()).toEqual([])
+  }, 90_000)
+
+  it('is closed by itself after its idle time, and when its caller\'s session is gone', async () => {
+    _setKeepIdleMsForTest(300)
+    const idle = await startLightSubagent(SID, { host: 'cloud', prompt: 'Idle.' })
+    await waitLightSubagent(idle, 60_000)
+    markTold(idle)
+    await lightSubagentSettled(idle.id)
+    expect(getLightSubagent(SID, idle.id).closed).toBe(true)
+    expect(cloudRunDirs()).toEqual([])
+    _setKeepIdleMsForTest(null)
+    const orphan = await startLightSubagent(SID, { host: 'cloud', prompt: 'Orphan.' })
+    await waitLightSubagent(orphan, 60_000)
+    markTold(orphan)
+    await _closeOrphansForTest()
+    expect(getLightSubagent(SID, orphan.id).closed).toBe(false)
+    await updateSessionRecord(SID, { archived: true } as never)
+    await _closeOrphansForTest()
+    await lightSubagentSettled(orphan.id)
+    expect(getLightSubagent(SID, orphan.id).closed).toBe(true)
+    expect(cloudRunDirs()).toEqual([])
+    expect(listLeftRuns()).toEqual([])
+  }, 90_000)
+
+  it('without host: a session of its own on the caller\'s host, in the caller\'s folder, with nothing copied', async () => {
+    const run = await startLightSubagent(SID, { prompt: 'Here.' })
+    await waitLightSubagent(run, 60_000)
+    expect(run.status, run.error).toBe('completed')
+    expect(starts[0]).toMatchObject({ taskId: '', engine: 'claude', cwd: checkout, mode: 'bypass' })
+    expect(starts[0]).not.toHaveProperty('host')
+    expect(cloudRunDirs()).toEqual([])
+    expect(localRunDirs()).toEqual([])
+    markTold(run)
+    stopLightSubagent(SID, run.id, 'the test')
+    await lightSubagentSettled(run.id)
+    const sid = String(starts[0]!.preassignedSessionId)
+    expect(W.stops).toEqual([sid])
+    // Its own files are gone; the caller's folder's project folder (its own sessions') stays.
+    const left = execFileSync('find', [path.join(W.homes.__local__, '.claude')], { encoding: 'utf8' }).split('\n').filter((f) => f.includes(sid))
+    expect(left).toEqual([])
+  }, 90_000)
+
+  it('on another engine: the same hidden session, started on that engine, its own session id taken from its record', async () => {
+    const run = await startLightSubagent(SID, { host: 'cloud', engine: 'codex', prompt: 'On Codex.' })
+    await waitLightSubagent(run, 60_000)
+    expect(run.status, run.error).toBe('completed')
+    expect(starts[0]).toMatchObject({ engine: 'codex', host: 'cloud', taskId: '' })
+    expect(starts[0]).not.toHaveProperty('preassignedSessionId')
+    const sid = String(lightSubagentRows(SID)[0]!.walnutSessionId)
+    expect(sid.startsWith('acp-provider-')).toBe(true)
+    // Its calls act for the caller, by its record id and by the runtime id the daemon knows it by.
+    expect(canonicalCallerSid(sid)).toBe(SID)
+    expect(canonicalCallerSid(`acp-rt-${sid}`)).toBe(SID)
+    const { turn } = sendLightSubagent(SID, run.id, { message: 'More.' })
+    await waitLightSubagent(run, 60_000, turn)
+    expect(run.answer).toBe('heard: More.')
+    markTold(run)
+    stopLightSubagent(SID, run.id, 'the test')
+    await lightSubagentSettled(run.id)
+    expect(W.stops).toEqual([sid])
+    expect(cloudRunDirs()).toEqual([])
+  }, 90_000)
+
+  it('NO POLLING: a background run\'s answer reaches the idle caller by itself, and nothing tells it to read or wait', async () => {
+    await updateSessionRecord(SID, { process_status: 'idle' } as never)
+    const run = await startLightSubagent(SID, { host: 'cloud', prompt: 'In the background.', background: true })
+    expect(run.status).toBe('running')
+    const mine = () => W.delivered.filter((d) => d.messageId?.startsWith(`sa-end-${run.id}-`))
+    for (let i = 0; i < 300 && mine().length === 0; i++) await new Promise((r) => setTimeout(r, 50))
+    // Its answer went into the caller's session with no read of it: the only way it learns of it.
+    expect(mine().map((d) => d.sid)).toEqual([SID])
+    expect(mine()[0]!.text).toContain('done')
+    expect(mine()[0]!.text).toContain('subagent_send')
+    expect(mine()[0]!.text).not.toMatch(/subagent_read|wait_ms/)
+    // And a follow-up's answer comes back the same way.
+    const { turn } = sendLightSubagent(SID, run.id, { message: 'Again.' })
+    for (let i = 0; i < 300 && mine().length < 2; i++) await new Promise((r) => setTimeout(r, 50))
+    expect(turn).toBe(2)
+    expect(mine()[1]!.text).toContain('heard: Again.')
+    stopLightSubagent(SID, run.id, 'the test')
+    await lightSubagentSettled(run.id)
+  }, 90_000)
 
   it('refuses a host Walnut does not know before anything moves', async () => {
     await expect(startLightSubagent(SID, { host: 'nowhere', prompt: 'x' })).rejects.toMatchObject({ code: 'unknown_host' })

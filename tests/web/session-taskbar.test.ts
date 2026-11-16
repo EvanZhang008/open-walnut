@@ -152,6 +152,7 @@ describe('the taskbar is global (2026-11-08, the user: "this should be global")'
     'notes': { minimize: true, why: 'the Notes chat' },
     'plugin:${pluginId}': { minimize: true, why: "a plugin page's session view" },
     'org-node-card': { minimize: false, why: 'inset: a card inside the node page, not a window of its own' },
+    'subagent-pane': { minimize: false, why: "inset: a Walnut subagent's session inside the Background tasks reader, not a window of its own" },
     'popout': { minimize: false, why: "a pop-out window: the taskbar is the main window's" },
   };
 

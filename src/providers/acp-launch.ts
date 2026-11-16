@@ -1,7 +1,7 @@
 /**
  * What an ACP engine's worker is launched with: its commands and the operator's env
  * overlay, read from walnut config. One copy for every launcher: a task session
- * (acp-session.ts) and a light subagent (core/subagents/light-subagent-acp.ts).
+ * (acp-session.ts).
  */
 import fsModule from 'node:fs'
 import type { SessionEngine } from '../core/types.js'

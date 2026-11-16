@@ -38,6 +38,14 @@ export interface BackgroundTask {
   spawnDepth?: number;
   /** A light subagent's prompt (taskType walnut_subagent). */
   prompt?: string;
+  /** A Walnut subagent's own (hidden) session: its conversation, which the panel shows and the user can write in (taskType walnut_subagent). */
+  walnutSessionId?: string;
+  /** The host a Walnut subagent runs on, when it is not the parent's. */
+  host?: string;
+  /** A Walnut subagent's engine (claude, codex, ...). */
+  engine?: string;
+  /** A Walnut subagent that was closed: its session is gone, only its last answer is kept. */
+  closed?: boolean;
 }
 
 /** A phase in a dynamic workflow (mirrors backend WorkflowPhaseInfo). */

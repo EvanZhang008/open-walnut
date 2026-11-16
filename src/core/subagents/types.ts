@@ -33,6 +33,8 @@ export type LightSubagentErrorCode =
   | 'engine_error'
   /** The caller's work could not be copied to the other host, or set up there. */
   | 'work_copy_failed'
+  /** A message to a subagent that was closed (stopped, idle too long, its session gone). */
+  | 'closed'
 
 export class LightSubagentError extends Error {
   constructor(readonly code: LightSubagentErrorCode, message: string, readonly status = 409, readonly data: Record<string, unknown> = {}) {
@@ -85,8 +87,6 @@ export interface LightRunSpec {
   away?: { fromHost: string; fromCwd: string }
   /** With `away`: reads the caller's grant on that host again; throws once the user revoked it. Called right before the session starts there. */
   stillGranted?: () => Promise<void>
-  /** The run has its answer: the caller gets it now, while the runner still cleans up (it holds its slot until then). */
-  onAnswer?: (result: LightRunResult) => void
   signal: AbortSignal
   onProgress: (p: LightProgress) => void
 }

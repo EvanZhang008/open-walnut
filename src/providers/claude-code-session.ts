@@ -223,6 +223,18 @@ export async function buildAcpStartExtras(data: { lane?: string; walnutAgent?: b
   disableProjectInstructions?: true
   walnutMcpServer?: import('./acp-worker/protocol.js').AcpMcpServer
 }> {
+  // A Walnut subagent's lane is a task session's start in all but its task (core/subagents/on-host.ts):
+  // Walnut's tools and the project's own instructions, never the Personal AI's lane bundle.
+  if (data.lane && isSubagentLane(data.lane)) {
+    try {
+      return { lane: data.lane, walnutMcpServer: await acpWalnutMcpServer() }
+    } catch (error) {
+      log.session.warn('acp: a subagent launches without Walnut tools — the MCP mount could not be resolved', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return { lane: data.lane }
+    }
+  }
   if (data.lane) return buildAcpLaneConfig(data.lane)
   if (!data.walnutAgent) return {}
   try {
@@ -13412,7 +13424,7 @@ export class SessionRunner {
         providerSessionId: record.claudeSessionId,
         runtimeId: record.acpRuntimeId,
         acpConfig: record.acpConfig,
-        ...(record.lane ? await buildAcpLaneConfig(record.lane) : {}),
+        ...(record.lane ? await buildAcpStartExtras({ lane: record.lane }) : {}),
         directWsUrl: this._testDaemonUrl,
         artifacts: this._testAcpArtifacts,
         onWorkerDead: (s) => this.scheduleAcpDrainAfterDeath(s),

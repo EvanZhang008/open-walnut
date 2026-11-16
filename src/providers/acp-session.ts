@@ -22,6 +22,7 @@
  * the legacy `claudeSessionId` record field). Never renamed, never conflated.
  */
 
+import { isSubagentLane } from '../core/subagents/types.js'
 import crypto from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
@@ -1665,7 +1666,8 @@ export class AcpSession {
     // session gets (walnut gateway + skill pointer); lanes get the self-knowledge
     // contract instead (they ARE the personal AI — the hint would be circular).
     let defaultInstructions: string | undefined
-    if (this.cfg.lane) {
+    // A Walnut subagent's lane gets a task session's context, not the Personal AI's contract.
+    if (this.cfg.lane && !isSubagentLane(this.cfg.lane)) {
       defaultInstructions = renderSelfKnowledgeContract()
     } else {
       try {
@@ -1699,7 +1701,7 @@ export class AcpSession {
    * gets its persona that way already.
    */
   private contextRidesFirstPrompt(): boolean {
-    return this.engineId !== 'codex' && !this.cfg.lane && !!this.taskId
+    return this.engineId !== 'codex' && (this.cfg.lane ? isSubagentLane(this.cfg.lane) : !!this.taskId)
   }
 
   /**

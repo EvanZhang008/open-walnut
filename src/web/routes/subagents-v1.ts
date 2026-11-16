@@ -1,15 +1,17 @@
 /**
- * Light subagents of the calling session (core/subagents). Additive to v1.
+ * Walnut subagents of the calling session (core/subagents). Additive to v1.
  *
  *   POST /api/v1/subagents            { engine?, host?, cwd?, model?, effort?, prompt, description?, background?, timeout_min?, wait_ms?, tool_use_id? }
  *                                     → the run: its answer when it ended within the wait, else state running
+ *   POST /api/v1/subagents/:id/message { message, background?, wait_ms? } → its answer to the message, as above
  *   GET  /api/v1/subagents            → { subagents } this session's runs, running and recent
  *   GET  /api/v1/subagents/:id?wait_ms= → the run, after waiting up to wait_ms for it to end
  *   POST /api/v1/subagents/:id/stop   → { stopped, state }
  *
  * The caller is the session in `x-walnut-caller-sid`. A wait never outlasts the caller's
  * own deadline (src/lib/answer-by.ts: a session on another host, whose gateway gives up
- * at 20 s), so a long run answers "running" in time and is read again.
+ * at 20 s), so a long run answers "running" in time; its answer then comes into the caller's
+ * session by itself when it ends (registry.ts tellParent), nothing has to read it.
  */
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { isFollower } from '../../core/server-role.js'
@@ -87,6 +89,16 @@ subagentsV1Router.get('/subagents/:id', (req, res, next) => answer(req, res, nex
   return view(reg, run)
 }))
 
+subagentsV1Router.post('/subagents/:id/message', (req, res, next) => answer(req, res, next, async (deadline) => {
+  const reg = await import('../../core/subagents/registry.js')
+  const { LightSubagentError } = await import('../../core/subagents/types.js')
+  const b = (req.body ?? {}) as Record<string, unknown>
+  if (typeof b.message !== 'string') throw new LightSubagentError('bad_request', 'message is required', 400)
+  const { run, turn } = reg.sendLightSubagent(callerSid(req), String(req.params.id), { message: b.message })
+  await reg.waitLightSubagent(run, waitFor(b.wait_ms, b.background === true ? 0 : MAX_WAIT_MS, deadline), turn)
+  return view(reg, run, { turn })
+}))
+
 subagentsV1Router.post('/subagents/:id/stop', (req, res, next) => answer(req, res, next, async () => {
   const reg = await import('../../core/subagents/registry.js')
   const sid = callerSid(req)
@@ -96,12 +108,27 @@ subagentsV1Router.post('/subagents/:id/stop', (req, res, next) => answer(req, re
 
 type Registry = typeof import('../../core/subagents/registry.js')
 
-/** A run as the caller reads it. Returning an ended run tells the parent it ended (unless `peek`). */
-function view(reg: Registry, run: import('../../core/subagents/registry.js').LightSubagentRun, o: { peek?: boolean } = {}): Record<string, unknown> {
-  if (!o.peek) reg.markTold(run)
+/**
+ * A run as the caller reads it, at caller turn `turn` (default: the latest it was asked): that
+ * turn's answer as it ended, else running. Returning a turn's end tells the parent it has it
+ * (unless `peek`), so its notice is not sent too.
+ */
+function view(reg: Registry, run: import('../../core/subagents/registry.js').LightSubagentRun, o: { peek?: boolean; turn?: number } = {}): Record<string, unknown> {
+  const turn = o.turn ?? run.turns
+  const ended = reg.turnResult(run, turn)
+  if (!o.peek && ended) reg.markTold(run, turn)
+  // Closed before this message ran (an earlier turn failed or was stopped, or it was closed).
+  const missed = !ended && run.closed
+  const state = ended ? ended.status : missed ? 'stopped' : 'running'
+  const error = ended?.error ?? (missed ? `It was closed before this message ran${run.error ? ` (${run.error})` : ''}` : undefined)
+  // What it says now belongs to this turn only while this turn is the one running.
+  const current = !ended && !missed && run.turnsEnded === turn - 1 && run.status === 'running'
   return {
     id: run.id,
-    state: run.status,
+    state,
+    open: !run.closed,
+    turn,
+    turns: run.turns,
     engine: run.engine,
     ...(run.model ? { model: run.model } : {}),
     ...(run.effort ? { effort: run.effort } : {}),
@@ -112,9 +139,9 @@ function view(reg: Registry, run: import('../../core/subagents/registry.js').Lig
     tool_uses: run.toolUses,
     ...(run.lastTool ? { last_tool: run.lastTool } : {}),
     ...(run.tokens ? { tokens: run.tokens } : {}),
-    ...(run.status === 'completed' ? { answer: run.answer ?? '' } : {}),
-    ...(run.status === 'running' && run.text ? { saying: run.text.slice(-1_500) } : {}),
-    ...(run.error ? { error: run.error, code: run.errorCode } : {}),
+    ...(state === 'completed' ? { answer: ended?.answer ?? '' } : {}),
+    ...(current && run.text ? { saying: run.text.slice(-1_500) } : {}),
+    ...(error ? { error, code: ended?.errorCode ?? (missed ? 'closed' : undefined) } : {}),
     ...(run.warnings.length ? { warnings: run.warnings } : {}),
     ...(run.files.length ? { files: run.files } : {}),
     ...(run.work.length ? { work: run.work } : {}),

@@ -180,6 +180,7 @@ export const OP_CARDS: Record<string, OpCardSpec> = {
  */
 export const NOT_CARDED: Record<string, string> = {
   subagent_run: 'its description is a few words for the Background tasks panel; the prompt goes to an engine, never a person',
+  subagent_send: 'the message goes to the session\'s own subagent (its conversation shows in the Background tasks panel), never a person',
   task_update: 'edits a task field; its description is no message',
   agent_skill_write: 'the session writes its own skill',
   triage_rule_set: 'saves a routing rule; its note is the rule\'s own',

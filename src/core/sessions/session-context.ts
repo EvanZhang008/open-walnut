@@ -680,7 +680,8 @@ export function composeInstructions(task: InstructionTask | undefined, state: Pr
     + approvalsLine(currentApprovalsAsk())
     // The two words the user reaches for, pinned to the two different things
     // (2026-09-30: "use a subagent" was answered with a Walnut subtask).
-    + 'Words: a "subagent" is Claude Code\'s Agent tool inside this session, '
+    // subagent_run: the native Agent tool first, a Walnut subagent only where it cannot go (T3 Code's rule too).
+    + 'Words: a "subagent" is your Agent tool (subagent_run only for another host or engine), '
     + 'never a Walnut task; a "subtask", "worker" or "task" is a Walnut task.\n\n'
     // Waiting is the session's job (see 6 above). Not Main's: it never parks (2e).
     + (mainAgent ? '' : 'When the rest of the work waits on something outside Walnut and the user (CI, '

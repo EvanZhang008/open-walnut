@@ -23,7 +23,8 @@
  * is gone still lists its agents from history, with their transcripts readable.
  */
 
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import type { BackgroundTask } from '@/hooks/useBackgroundTasks';
@@ -131,12 +132,30 @@ function buildRows(tasks: readonly BackgroundTask[], known: KnownAgent[]): Row[]
 }
 
 /** The pill the reader's header wears: an agent's subagent type (accent), `Command`
- *  (amber) for a shell command. List rows need it only for agents: the tab names the rest. */
+ *  (amber) for a shell command. List rows need it only for agents: the tab names the rest.
+ *  A Walnut subagent says so first (`Walnut subagent`), then its engine, then its host
+ *  when it runs on another machine: it is a hidden Walnut session, not a CLI agent. */
 function KindPill({ row }: { row: Row }) {
   if (row.isCommand) return <span className="bg-task-kind bg-task-kind--command" title="Background shell command">Command</span>;
+  if (row.task && isWalnutSubagent(row.task)) return <WalnutSubagentChips engineLabel={row.subagentType} host={row.task.host} />;
   if (row.isAgent && row.subagentType) return <span className="task-group-agent-type" title="Subagent type">{row.subagentType}</span>;
   if (row.isAgent) return <span className="task-group-agent-type" title="Subagent">Agent</span>;
   return <span className="bg-task-kind bg-task-kind--task" title="Background task">Task</span>;
+}
+
+/** `Walnut subagent`, its engine, and the host it runs on when not this machine (by its label). */
+function WalnutSubagentChips({ engineLabel, host }: { engineLabel?: string; host?: string }) {
+  const hostName = useHostDisplayLabel(host);
+  // The engine label may name the host itself (`Codex · gpt-6.1-sol · on clouddev`): the host chip says it once.
+  const suffix = host ? [host, hostName].map((name) => ' · on ' + name).find((end) => engineLabel?.endsWith(end)) : undefined;
+  const engine = suffix ? engineLabel!.slice(0, -suffix.length) : engineLabel;
+  return (
+    <>
+      <span className="bg-task-kind bg-task-kind--walnut" title="A Walnut subagent: its own hidden Walnut session">Walnut subagent</span>
+      {engine && <span className="task-group-agent-type" title="Engine">{engine}</span>}
+      {host && <span className="bg-task-kind bg-task-kind--host" title={`Runs on ${hostName}`}>on {hostName}</span>}
+    </>
+  );
 }
 
 /** A shell command's reader: the command it ran and what it printed, straight from
@@ -190,6 +209,28 @@ function LightSubagentDetail({ task, sessionId }: { task: BackgroundTask; sessio
   );
 }
 
+/** A Walnut subagent's own session, the normal chat view: its whole conversation, live
+ *  while it runs, and the composer to write to it, as for any Walnut session (it is a
+ *  hidden, taskless one). A plain chat: the reader's head above already names it, so the
+ *  panel draws no header of its own; inset: no split views, popout or full screen inside a
+ *  dialog; no onClose, so nothing in it closes the dialog. */
+function WalnutSubagentChat({ walnutSessionId }: { walnutSessionId: string }) {
+  return (
+    <div className="bg-tasks-subagent-chat" data-testid="walnut-subagent-chat">
+      <Suspense fallback={<div className="wf-modal-loading">Loading the conversation…</div>}>
+        <SessionPanel key={walnutSessionId} sessionId={walnutSessionId} viewPlace="subagent-pane" embedded inset plainChat
+          emptyHistory="The subagent has not written anything yet." />
+      </Suspense>
+    </div>
+  );
+}
+
+/** Loaded on use, not imported: the chat draws this panel (SessionChatHistory hosts it), so a
+ *  static import would make the session panel a module of its own chat rows (an import cycle,
+ *  and every composer control inside the rows' closure, tests/web/row-disclosure-ratchet.test.ts).
+ *  The module is in the app already, so the load is one microtask. */
+const SessionPanel = lazy(() => import('./SessionPanel').then((m) => ({ default: m.SessionPanel })));
+
 /** ONE 1s clock per panel for the elapsed counters; armed only while a row runs. */
 function useSecondTick(enabled: boolean): number {
   const [now, setNow] = useState(() => Date.now());
@@ -235,6 +276,8 @@ const TaskListRow = memo(function TaskListRow({
     );
   }
   const meta = rowMeta(row, now);
+  // A Walnut subagent's three chips get a line of their own: beside the title they left it a few letters.
+  const walnut = !!row.task && isWalnutSubagent(row.task);
   return (
     <button data-peek-row=""
       className={`bg-task-row bg-task-row-${row.status} ${selected ? 'bg-task-row--selected' : ''}`}
@@ -244,8 +287,9 @@ const TaskListRow = memo(function TaskListRow({
       <div className="bg-task-row-head">
         <StatusDot status={row.status} />
         <span className="bg-task-row-name">{row.title}</span>
-        <KindPill row={row} />
+        {!walnut && <KindPill row={row} />}
       </div>
+      {walnut && <div className="bg-task-row-chips"><KindPill row={row} /></div>}
       <div className="bg-task-row-meta">
         {meta.map((seg, i) => <span key={i} className="wf-agent-row-meta-item">{seg}</span>)}
       </div>
@@ -396,7 +440,7 @@ export function BackgroundTasksPanel({
           </div>
           <div className="bg-tasks-detail">
             {selected && (
-              <div className="bg-tasks-detail-head">
+              <div className={`bg-tasks-detail-head${selected.task && isWalnutSubagent(selected.task) ? ' bg-tasks-detail-head--walnut' : ''}`}>
                 <StatusDot status={selected.status} />
                 <span className="bg-tasks-detail-title">{selected.title}</span>
                 <KindPill row={selected} />
@@ -409,13 +453,15 @@ export function BackgroundTasksPanel({
                 )}
               </div>
             )}
-            <div className="bg-tasks-detail-body">
+            <div className={`bg-tasks-detail-body${selected?.task && isWalnutSubagent(selected.task) && selected.task.walnutSessionId && !selected.task.closed ? ' bg-tasks-detail-body--chat' : ''}`}>
               {target ? (
                 <div className="bg-tasks-transcript" {...(liveLane ? { 'data-live-lane': '' } : {})}>
                   <TranscriptBody key={selectedToolUseId ?? target.agentId} target={target} sessionId={sessionId} {...(liveLane ? { liveLane } : {})} />
                 </div>
               ) : selected?.isCommand && selected.task ? (
                 <CommandDetail row={selected} source={source} />
+              ) : selected?.task && isWalnutSubagent(selected.task) && selected.task.walnutSessionId && !selected.task.closed ? (
+                <WalnutSubagentChat walnutSessionId={selected.task.walnutSessionId} />
               ) : selected?.task && isWalnutSubagent(selected.task) ? (
                 <LightSubagentDetail task={selected.task} sessionId={sessionId} />
               ) : selected ? (

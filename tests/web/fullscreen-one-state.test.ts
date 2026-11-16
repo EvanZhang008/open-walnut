@@ -191,6 +191,7 @@ describe('one full screen for the tab', () => {
     const HOSTS = [
       'components/chat/AskObjectDrawer.tsx', // an object's ask drawer
       'components/chat/AskWalnutSlot.tsx', // the Ask slot
+      'components/sessions/BackgroundTasksPanel.tsx', // a Walnut subagent's own session in the Background tasks reader
       'components/sessions/SessionPanel.tsx', // its own wrapper export
       'components/org/OrgNodeDetail.tsx', // an Org node
       'components/org/OrgSidePanel.tsx', // the Org side panel

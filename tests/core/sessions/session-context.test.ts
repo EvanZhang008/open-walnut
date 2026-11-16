@@ -169,7 +169,7 @@ describe('buildSessionContext (identity note)', () => {
     const { task: ask } = await addTask({ title: 'Chat', project: 'Ask Walnut', walnut_agent: true })
     for (const id of ['', await seedTask('marina'), ask.id]) {
       const { systemPrompt } = await buildSessionContext(id)
-      expect(systemPrompt).toMatch(/a "subagent" is Claude Code's Agent tool inside this session, never a Walnut task/)
+      expect(systemPrompt).toMatch(/a "subagent" is your Agent tool \(subagent_run only for another host or engine\), never a Walnut task/)
       expect(systemPrompt).toMatch(/a "subtask", "worker" or "task" is a Walnut task/)
     }
   })

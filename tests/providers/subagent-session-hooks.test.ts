@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import { sessionSettingsHooks } from '../../src/providers/session-settings-hooks.js'
 import { isSubagentLane, SUBAGENT_LANE_PREFIX } from '../../src/core/subagents/types.js'
 
-const env = { PATH: '/usr/bin:/bin' } as NodeJS.ProcessEnv
+const env = {} as NodeJS.ProcessEnv
 const commands = (hooks: Record<string, unknown> | null): string[] => JSON.stringify(hooks ?? {}).match(/"command":"(?:[^"\\]|\\.)*"/g) ?? []
 
 describe('the hooks of a subagent\'s session', () => {

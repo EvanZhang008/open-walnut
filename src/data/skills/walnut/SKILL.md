@@ -361,9 +361,10 @@ Prefer the named operations below. Their schemas are the current source of truth
 | `task_sessions` | List the sessions a task held (read) | id (string): Task id or unique prefix |
 | `task_move` | Move a task to another host (write, primary-only) | id (string): Task id or unique prefix; host (string): Where it goes: a host alias, or "local" for this Mac; text? (string): The message the new session starts with; default: check the work is set up, then carry on; engine? (claude\|codex\|gemini\|opencode\|goose\|pi\|dsh\|custom): Engine on the new host; default the task's own; model? (string): Model for the new session; default the engine's; team? (boolean): Move every open task under this one too; user_request? (string): The user's words asking for the move, quoted (recorded with it); reason? (string): Why, in a few words ("to run browser tests"): the session shows who asked and why, so the user never reads it as their own doing; wait_ms? (integer): How long to wait for the move before answering "moving" (default 25000) |
 | `host_load` | How busy each host is (read) | (none) |
-| `subagent_run` | Run a subagent, on another engine or another host (write, primary-only) | engine? (codex\|opencode\|goose\|pi\|gemini\|dsh\|custom\|claude): The engine: claude (default), codex (GPT, e.g. Sol/Astra), opencode, goose, pi, gemini, dsh, or custom; host? (string): Run on this other host, in a copy of your work there: an alias (host_list) or a selector like "@ios"; omit for your own host; cwd? (string): The folder it runs in, an absolute path on your host (with `host`: the folder whose work is copied there); omit for your session's working directory. Name it when your work is in another folder than the one your session started in (a clone in your task directory); prompt (string): The whole task for the subagent: it sees nothing else of your conversation; model? (string): The model id on that engine (e.g. "gpt-6.1-sol" for codex); omit for the engine's default; effort? (string): Reasoning effort (e.g. low, medium, high, xhigh) where the engine has one; omit for its default; description? (string): A few words for the Background tasks panel (default: the prompt's first line); background? (boolean): Return at once; the answer comes as a notification when it ends (or read it with subagent_read); wait_ms? (integer): How long this call waits for the answer (default 600000; background: 0); timeout_min? (integer): The run's own limit in minutes (default 30): past it the run is stopped; tool_use_id? (string): Filled in by Walnut's MCP server: leave it out |
-| `subagent_read` | Read a subagent's state or answer (read, primary-only) | id? (string): The id subagent_run returned (sa-...); omit to list them all; wait_ms? (integer): Wait up to this long for it to end (default 0) |
-| `subagent_stop` | Stop a subagent (write, primary-only) | id (string): The id subagent_run returned (sa-...) |
+| `subagent_run` | Run a subagent on another host or another engine (write, primary-only) | engine? (codex\|opencode\|goose\|pi\|gemini\|dsh\|custom\|claude): The engine: claude (default), codex (GPT, e.g. Sol/Astra), opencode, goose, pi, gemini, dsh, or custom; host? (string): Run on this other host, in a copy of your work there: an alias (host_list) or a selector like "@ios"; omit for your own host; cwd? (string): The folder it runs in, an absolute path on your host (with `host`: the folder whose work is copied there); omit for your session's working directory. Name it when your work is in another folder than the one your session started in (a clone in your task directory); prompt (string): The whole task for the subagent: it sees nothing else of your conversation; model? (string): The model id on that engine (e.g. "gpt-6.1-sol" for codex); omit for the engine's default; effort? (string): Reasoning effort (e.g. low, medium, high, xhigh) where the engine has one; omit for its default; description? (string): A few words for the Background tasks panel (default: the prompt's first line); background? (boolean): Return at once; its answer comes into this session by itself when it ends (do not poll); wait_ms? (integer): How long this call waits for the answer (default 600000; background: 0); timeout_min? (integer): The run's own limit in minutes (default 30): past it the run is stopped; tool_use_id? (string): Filled in by Walnut's MCP server: leave it out |
+| `subagent_send` | Tell a subagent more (write, primary-only) | id (string): The id subagent_run returned (sa-...); message (string): What to tell it: it sees this and its own conversation so far; background? (boolean): Return at once; its answer comes into this session by itself; wait_ms? (integer): How long this call waits for the answer (default 600000; background: 0) |
+| `subagent_read` | Look at a subagent (read, primary-only) | id? (string): The id subagent_run returned (sa-...); omit to list them all |
+| `subagent_stop` | Stop and close a subagent (write, primary-only) | id (string): The id subagent_run returned (sa-...) |
 | `task_stop` | Stop a task's session (write) | id (string): Task id or unique prefix; force? (boolean): Stop even though the session owns scheduled jobs (cron). Default false |
 | `team_stop` | Stop a task and everything it handed out (write) | id (string): Task id or unique prefix: the top of the team; when? (now\|turn_end): now (default): stop at once; turn_end: a running turn finishes first; include_self? (boolean): Stop the task itself too (default true); false stops only what it handed out; sessions? (stop\|keep): stop (default): stop the live sessions too; keep: pause only the routines, triggers and clocks that would wake the team |
 | `team_resume` | Resume a team that was stopped (write) | id (string): Task id or unique prefix: the task team_stop was called on |
@@ -743,28 +744,36 @@ answer into the same thread:
 walnut tools call human_inbox_reply '{"letter":"<letter-id>","text":"..."}'
 ```
 
-## One step on another host: subagent_run with host
+## Subagents on another host or engine: subagent_run
 
-**Need another host for one step** (Playwright or WebKit UI tests on clouddev, an iOS
-build on a Mac, the user's own browser): call `subagent_run` with `host`, never
-`task_move`. One call, inside your turn, like your Agent tool:
+**Use your own Agent tool for subagents.** `subagent_run` is for the step that must run
+on **another host** (Playwright or WebKit UI tests on clouddev, an iOS build on a Mac,
+the user's own browser; never `task_move` for one step) or on **another engine**
+(`engine: "codex"` for GPT models). It behaves like your Agent tool:
 
 ```bash
 walnut tools call subagent_run '{"host":"clouddev","prompt":"Run tests/e2e/browser/x.spec.ts in WebKit with video, and put the MP4 in your out folder. Say pass or fail with the error."}'
 ```
 
-Walnut copies your work there (your folder's git repository: its commits, uncommitted
-changes and untracked files; your own folder stays as it is), runs the subagent in
-that copy as a session started the way a task's session starts there (Claude Code,
-its own default model, your permissions, and every tool, skill and MCP server a task
-session has on that host), and answers with its `answer` plus the files it put in its
-out folder or named by absolute path, copied into `$WALNUT_TASK_DIR/subagents/<id>/`
-(`files` lists them). The copy on that host is removed when it ends, so ask it to
-return a change as a patch file when you want it. The first use of a host other than
-yours asks the user for this task's grant there, the one `host_exec` uses.
-Your work is in another folder than the one your session started in (a clone in your
-task directory)? Name it with `"cwd":"/abs/path/to/clone"`: that folder is the one copied.
-`task_move` is only for moving the whole task when the user asks for it.
+- **Its answer comes back by itself.** The call waits for it (up to 10 minutes); a run
+  still going when the call returns, or one started with `background: true`, sends its
+  answer into your session when it ends and wakes it if it is idle. Never poll it:
+  carry on or end your turn.
+- **Talk to it.** It keeps its context after it answers:
+  `walnut tools call subagent_send '{"id":"sa-...","message":"Now run it in Chromium too"}'`
+  answers the same way. It is closed after an hour with no message, by `subagent_stop`,
+  or when your session ends.
+- **It is a hidden Walnut task session**: started the way a task's session starts on
+  that host (Claude Code with its own default model unless you name an engine, your
+  permissions, every tool, skill and MCP server a task session has there), no board row.
+  The user sees its conversation, and can write to it, in your Background tasks panel.
+- **With `host`**, Walnut copies your work there (your folder's git repository: commits,
+  uncommitted changes and untracked files; `"cwd":"/abs/path"` names another folder, such
+  as a clone in your task directory). Files it puts in its out folder or names by absolute
+  path come back into `$WALNUT_TASK_DIR/subagents/<id>/` (`files` lists them). The copy is
+  removed when it is closed, so ask it to return a change as a patch file. The first use
+  of a host other than yours asks the user for this task's grant there, the one
+  `host_exec` uses. `task_move` is only for moving the whole task when the user asks.
 
 ## Commands on another host
 

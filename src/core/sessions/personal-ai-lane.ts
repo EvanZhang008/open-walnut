@@ -712,7 +712,7 @@ export async function refreshWalnutSessionProfile(sessionId: string): Promise<vo
  * a record with, so the lane binding rides the SESSION_START event and the
  * record appears when the worker establishes (see AcpSession.adoptSessionResponse).
  */
-async function waitForLaneRecord(lane: string, timeoutMs: number, engineLabel: string): Promise<string> {
+export async function waitForLaneRecord(lane: string, timeoutMs: number, engineLabel: string): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const record = await getSessionByLane(lane);

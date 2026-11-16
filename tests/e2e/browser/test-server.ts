@@ -2109,6 +2109,16 @@ for (const sessionId of ['chromium', 'webkit'].flatMap(b => [`pw-workflow-switch
     '',
   ].join('\n'))
 }
+// light-subagent-panel.spec.ts: a Walnut subagent's own session (a hidden, taskless lane
+// session), whose conversation the parent's Background tasks panel shows and writes to.
+for (const browser of ['chromium', 'webkit']) {
+  const sessionId = `pw-walnut-subagent-${browser}`
+  await fs.writeFile(path.join(tmpBase, '.claude', 'projects', workflowFixtureRoot.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`), [
+    JSON.stringify({ type: 'user', sessionId, uuid: `${sessionId}-user`, parentUuid: null, timestamp: new Date(sessionFixtureNow - 90_000).toISOString(), message: { role: 'user', content: 'Review the diff in src/core/subagents for races between a stop and the end of the run.' } }),
+    JSON.stringify({ type: 'assistant', sessionId, uuid: `${sessionId}-assistant`, parentUuid: `${sessionId}-user`, timestamp: new Date(sessionFixtureNow - 80_000).toISOString(), message: { role: 'assistant', content: [{ type: 'text', text: 'Subagent finding: the stop path races the final answer in registry.ts.' }] } }),
+    '',
+  ].join('\n'))
+}
 await fs.writeFile(
   path.join(workflowDir, 'subagents', 'workflows', 'wf_fixture-run', 'agent-wf-fixture-agent-2-7.jsonl'),
   [
@@ -4530,6 +4540,20 @@ await fs.writeFile(
         messageCount: 2,
         cwd: cwd ?? workflowFixtureRoot,
         title,
+      })),
+      ...['chromium', 'webkit'].map(browser => ({
+        claudeSessionId: `pw-walnut-subagent-${browser}`,
+        taskId: '',
+        lane: `subagent:sa-0a1b2c3d4e-${browser}`,
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(sessionFixtureNow - 90_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 80_000).toISOString(),
+        messageCount: 2,
+        cwd: workflowFixtureRoot,
+        title: 'Review the stop path',
       })),
       {
         claudeSessionId: 'pw-normal-session',

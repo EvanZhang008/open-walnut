@@ -59,14 +59,16 @@ export function _setSubagentStarterForTest(fn: Starter | null): void { starterOv
  */
 export function sessionStartData(o: {
   sessionId: string; lane: string; host: string; cwd: string; message: string; title: string
-  mode: SessionMode; model?: string; effort?: string
+  mode: SessionMode; model?: string; effort?: string; engine?: import('../types.js').SessionEngine
 }): Record<string, unknown> {
+  const native = !o.engine || engineCaps(o.engine).runtimeKind === 'native'
   return {
     taskId: '', message: o.message, cwd: o.cwd, title: o.title, lane: o.lane, mode: o.mode,
     ...(o.host !== LOCAL ? { host: o.host } : {}),
     ...(o.model ? { model: o.model } : {}),
     ...(o.effort ? { effort: o.effort } : {}),
-    engine: 'claude', preassignedSessionId: o.sessionId,
+    // An ACP engine names its own session id at establish (no preassigned one).
+    engine: native ? 'claude' : o.engine, ...(native ? { preassignedSessionId: o.sessionId } : {}),
     // The lane turn framed it as Walnut's already (lane-turn.ts frameForSource): not framed twice.
     attributed: true, attributionSource: 'subagent', namingMessage: o.title,
   }
@@ -89,162 +91,263 @@ export function subagentPreamble(o: { host: string; copy: WorkCopy | null }): st
   return lines.join('\n')
 }
 
-export async function runOnHost(spec: LightRunSpec): Promise<LightRunResult> {
-  const runId = spec.runId ?? spec.runtimeId
-  const left = await import('./left-runs.js')
-  let copy: WorkCopy | null = null
-  const work: string[] = []
-  try {
-    if (spec.away) {
-      const { placeWorkCopy } = await import('./work-copy.js')
-      copy = await placeWorkCopy({ runId, fromHost: spec.away.fromHost, fromCwd: spec.away.fromCwd, toHost: spec.host, signal: spec.signal })
-      work.push(...copy.lines)
-    }
-    if (spec.signal.aborted) throw new LightSubagentError('stopped', 'The run was stopped', 409)
-    const cwd = copy?.cwd ?? spec.cwd
-    let result: LightRunResult
-    // The copy took time: the user may have revoked the grant there since.
-    await spec.stillGranted?.()
-    if (engineCaps(spec.engine).runtimeKind === 'native') {
-      result = await runInSession({ ...spec, cwd }, copy, runId)
-    } else {
-      // Another engine: its worker on that host, in the copy (light-subagent-acp.ts).
-      const { runAcpLight } = await import('../../providers/light-subagent-acp.js')
-      const prompt = copy ? `${subagentPreamble({ host: spec.host, copy })}\n\n${spec.prompt}` : spec.prompt
-      result = await runAcpLight({ ...spec, cwd, prompt })
-    }
-    const files = copy && spec.away ? await bringBack(spec, copy, result.answer) : { files: [], notes: [] }
-    work.push(...files.notes)
-    const answer = files.files.length || files.notes.length
-      ? `${result.answer}\n\n[Walnut] ${files.files.length ? `Files copied back to ${spec.away!.fromHost === LOCAL ? 'this machine' : spec.away!.fromHost}:\n${files.files.map((f) => `- ${f.from} -> ${f.to}`).join('\n')}` : ''}${files.notes.length ? `\n${files.notes.join('\n')}` : ''}`
-      : result.answer
-    const done: LightRunResult = { ...result, answer, ...(files.files.length ? { files: files.files } : {}), ...(work.length ? { work } : {}) }
-    // The caller has it now; removing the copy below never costs it the answer.
-    spec.onAnswer?.(done)
-    return done
-  } finally {
-    if (copy) {
-      const { removeWorkCopy } = await import('./work-copy.js')
-      const gone = await removeWorkCopy(copy, runId)
-      if (!gone) log.agent.warn('subagent on host: its copy is still on the host; the next sweep removes it', { runId, host: copy.host, dir: copy.runDir })
-    }
-    await left.settleLeft(runId).catch(() => {})
-    // Something could not be removed (a host offline): the sweep comes back for it.
-    if (left.listLeftRuns().some((r) => r.id === runId)) left.scheduleLeftRunsSweep()
-  }
+/** What one turn of a subagent's session gets from its run (registry.ts). */
+export interface SubagentTurnSpec {
+  signal: AbortSignal
+  /** This turn's own limit (epoch ms). */
+  deadlineAt: number
+  onProgress: LightRunSpec['onProgress']
 }
 
-/** The run as a session on its host; its answer is its turn's result. */
-async function runInSession(spec: LightRunSpec, copy: WorkCopy | null, runId: string): Promise<LightRunResult> {
-  const { bus, EventNames } = await import('../event-bus.js')
-  const { runLaneTurn } = await import('../sessions/lane-turn.js')
-  const { setCallerAlias, clearCallerAlias } = await import('../sessions/acp-caller-sid.js')
-  const left = await import('./left-runs.js')
-  const sessionId = crypto.randomUUID()
-  const lane = `${SUBAGENT_LANE_PREFIX}${spec.runtimeId}`
-  const mode = subagentMode(spec.fullAccess, spec.parentMode)
-  const title = `Subagent ${spec.runtimeId}`
-  const message = `${subagentPreamble({ host: spec.host, copy })}\n\n${spec.prompt}`
-  // Its calls act for the parent from its first line on.
-  setCallerAlias(sessionId, spec.callerSid)
-  let answerSoFar = ''
-  let tokens: number | undefined
-  const sub = `subagent-${spec.runtimeId}`
-  bus.subscribe(sub, (event) => {
-    const d = event.data as { sessionId?: string; delta?: string; toolName?: string; parentToolUseId?: string; inputTokens?: number }
-    if (d?.sessionId !== sessionId || d.parentToolUseId) return
-    if (event.name === EventNames.SESSION_TEXT_DELTA && typeof d.delta === 'string') {
-      answerSoFar += d.delta
-      spec.onProgress({ kind: 'text', text: answerSoFar.slice(-PROGRESS_TEXT_MAX) })
-    } else if (event.name === EventNames.SESSION_TOOL_USE && d.toolName) {
-      answerSoFar = ''
-      spec.onProgress({ kind: 'tool', toolName: d.toolName })
-    } else if (event.name === EventNames.SESSION_USAGE_UPDATE && typeof d.inputTokens === 'number' && d.inputTokens > 0) {
-      tokens = d.inputTokens
-      spec.onProgress({ kind: 'tokens', tokens })
-    }
-  }, { global: true, interest: [EventNames.SESSION_TEXT_DELTA, EventNames.SESSION_TOOL_USE, EventNames.SESSION_USAGE_UPDATE] })
-  /** Its record's write, once begun: from then on the session is retired, whichever way the run ends. */
-  let recording: Promise<unknown> | null = null
-  let started = false
-  let retiring: Promise<void> | null = null
-  const retire = (reason: string): Promise<void> => {
-    if (!recording) return Promise.resolve()
-    const made = recording
-    retiring ??= (async () => {
-      // A stop while the record is still being written retires it once it is there.
-      await made.catch(() => {})
-      const { getSessionByClaudeId } = await import('../session-tracker.js')
-      const spawned = !!(await getSessionByClaudeId(sessionId).catch(() => null))?.pid
-      let gone = await retireSubagentSession(sessionId, reason, spec.cwd)
-      // Started but not spawned yet when it was stopped: the CLI the runner may spawn after the
-      // stop is stopped and its files removed too (the sweep has it otherwise).
-      if (started && !spawned && reason === 'subagent_stopped') {
-        await new Promise((r) => setTimeout(r, lateStopCheckMs).unref?.())
-        gone = (await retireSubagentSession(sessionId, reason, spec.cwd)) && gone
-      }
-      // Kept for the sweep while its host could not be reached.
-      if (gone) await left.dropLeftSession(runId)
-    })().catch((err: unknown) => {
-      log.agent.warn('subagent on host: retiring its session failed; the sweep tries again', { sessionId, error: err instanceof Error ? err.message : String(err) })
-    })
-    return retiring
+/** How long an ACP engine's first start may take before its session record exists (personal-ai-lane.ts waits as long). */
+const ACP_START_WAIT_MS = 90_000
+
+/**
+ * One subagent: a hidden session (a lane: no task, no board row, no list) that lives past its
+ * answer, so its caller (subagent_send) and the user (its conversation in the Background tasks
+ * panel) can talk to it again, with its context. The first turn places the work copy (on another
+ * host) and starts the session the way a task's session starts; every later turn is a message
+ * into the same session. `close` stops it and removes everything of it.
+ */
+export class SubagentSession {
+  /** Its session's record id, once it started. */
+  sessionId?: string
+  /** When its session last did anything (a turn the user wrote in its conversation counts too). */
+  activeAt = Date.now()
+  private copy: WorkCopy | null = null
+  private placed = false
+  private readonly runId: string
+  private readonly lane: string
+  /** Names already used in the caller's folder for this run's files, and what came back (path -> size:mtime). */
+  private readonly used = new Set<string>()
+  private readonly returned = new Map<string, string>()
+  private progress: LightRunSpec['onProgress'] | null = null
+  private answerSoFar = ''
+  private tokens: number | undefined
+  private sub: string | null = null
+  /** Its record's write (native) or its start (ACP), once begun: from then on the session is retired when it closes. */
+  private recording: Promise<unknown> | null = null
+  private started = false
+  private closing: Promise<boolean> | null = null
+
+  constructor(private readonly spec: LightRunSpec) {
+    this.runId = spec.runId ?? spec.runtimeId
+    this.lane = `${SUBAGENT_LANE_PREFIX}${spec.runtimeId}`
   }
-  const onAbort = () => { void retire('subagent_stopped') }
-  spec.signal.addEventListener('abort', onAbort, { once: true })
-  try {
-    const { createSessionRecord } = await import('../session-tracker.js')
-    // A stop ends the wait at once: the session is being stopped (onAbort), and the turn's own
-    // watch ends with its death in the background.
+
+  get closed(): boolean { return !!this.closing }
+
+  /** One turn: the first prompt, or a later message. Its answer, with the files it named copied back. */
+  async turn(prompt: string, t: SubagentTurnSpec): Promise<LightRunResult> {
+    if (this.closing) throw new LightSubagentError('stopped', 'This subagent was closed', 409)
+    const spec = this.spec
+    const work: string[] = []
+    const first = !this.placed
+    if (first) {
+      if (spec.away) {
+        const { placeWorkCopy } = await import('./work-copy.js')
+        this.copy = await placeWorkCopy({ runId: this.runId, fromHost: spec.away.fromHost, fromCwd: spec.away.fromCwd, toHost: spec.host, signal: t.signal })
+        work.push(...this.copy.lines)
+      }
+      this.placed = true
+      if (t.signal.aborted) throw new LightSubagentError('stopped', 'The run was stopped', 409)
+      // The copy took time: the user may have revoked the grant there since.
+      await spec.stillGranted?.()
+    }
+    const message = first ? `${subagentPreamble({ host: spec.host, copy: this.copy })}\n\n${prompt}` : prompt
+    this.progress = t.onProgress
+    this.answerSoFar = ''
+    let answer: string
+    try {
+      answer = await this.runTurn(message, t)
+    } finally {
+      this.progress = null
+    }
+    const files = this.copy && spec.away ? await bringBack(spec, this.copy, answer, { used: this.used, returned: this.returned, deadlineAt: t.deadlineAt, signal: t.signal }) : { files: [], notes: [] }
+    work.push(...files.notes)
+    const text = files.files.length || files.notes.length
+      ? `${answer}\n\n[Walnut] ${files.files.length ? `Files copied back to ${spec.away!.fromHost === LOCAL ? 'this machine' : spec.away!.fromHost}:\n${files.files.map((f) => `- ${f.from} -> ${f.to}`).join('\n')}` : ''}${files.notes.length ? `\n${files.notes.join('\n')}` : ''}`
+      : answer
+    return { answer: text, ...(this.tokens ? { tokens: this.tokens } : {}), warnings: [], ...(files.files.length ? { files: files.files } : {}), ...(work.length ? { work } : {}) }
+  }
+
+  /** Stop its session, archive it, remove its transcript and its copy. True when nothing of it is left. */
+  close(reason: string): Promise<boolean> {
+    this.closing ??= this.retireAll(reason).catch((err: unknown) => {
+      log.agent.warn('subagent: closing it failed; the sweep tries again', { runId: this.runId, error: err instanceof Error ? err.message : String(err) })
+      return false
+    })
+    return this.closing
+  }
+
+  private async retireAll(reason: string): Promise<boolean> {
+    const left = await import('./left-runs.js')
+    let gone = true
+    // A start still under way finishes first (watch and the alias check `closing` and stand down).
+    await this.recording?.catch(() => {})
+    if (this.sub) { (await import('../event-bus.js')).bus.unsubscribe(this.sub); this.sub = null }
+    // An ACP engine that had not named its session yet: it is found by its lane (or by the sweep later).
+    if (!this.sessionId && this.started && engineCaps(this.spec.engine).runtimeKind !== 'native') {
+      const { getSessionByLane } = await import('../session-tracker.js')
+      this.sessionId = (await getSessionByLane(this.lane).catch(() => null))?.claudeSessionId
+      // Named in the ledger at once: once archived it is no longer found by its lane.
+      if (this.sessionId) await left.noteLeft(this.runId, { sessionId: this.sessionId })
+    }
+    {
+      const sessionId = this.sessionId
+      if (sessionId) {
+        const { getSessionByClaudeId } = await import('../session-tracker.js')
+        const spawned = !!(await getSessionByClaudeId(sessionId).catch(() => null))?.pid
+        gone = await retireSubagentSession(sessionId, reason, this.cwdOfSession())
+        // Started but not spawned yet when it was stopped: the CLI the runner may spawn after the
+        // stop is stopped and its files removed too (the sweep has it otherwise).
+        if (this.started && !spawned && reason === 'subagent_stopped') {
+          await new Promise((r) => setTimeout(r, lateStopCheckMs).unref?.())
+          gone = (await retireSubagentSession(sessionId, reason, this.cwdOfSession())) && gone
+        }
+        // Kept for the sweep while its host could not be reached.
+        if (gone) await left.dropLeftSession(this.runId)
+        // Its calls act for the caller until its CLI is gone.
+        ;(await import('../sessions/acp-caller-sid.js')).clearCallerAlias(sessionId)
+      } else if (this.started) {
+        gone = false
+      }
+    }
+    // Its session is gone before its folder is removed: a CLI still in its turn could write there again.
+    if (this.copy) {
+      const { removeWorkCopy } = await import('./work-copy.js')
+      const removed = await removeWorkCopy(this.copy, this.runId)
+      if (!removed) log.agent.warn('subagent: its copy is still on the host; the next sweep removes it', { runId: this.runId, host: this.copy.host, dir: this.copy.runDir })
+      gone = removed && gone
+    }
+    await left.settleLeft(this.runId).catch(() => {})
+    // Something could not be removed (a host offline): the sweep comes back for it.
+    if (left.listLeftRuns().some((r) => r.id === this.runId)) left.scheduleLeftRunsSweep()
+    return gone
+  }
+
+  private cwdOfSession(): string { return this.copy?.cwd ?? this.spec.cwd }
+
+  /** Its progress while a turn of the caller's runs (the panel row), for the session's whole life. */
+  private async watch(sessionId: string): Promise<void> {
+    const { bus, EventNames } = await import('../event-bus.js')
+    if (this.closing) return
+    this.sub = `subagent-${this.spec.runtimeId}`
+    bus.subscribe(this.sub, (event) => {
+      const d = event.data as { sessionId?: string; delta?: string; toolName?: string; parentToolUseId?: string; inputTokens?: number }
+      if (d?.sessionId !== sessionId) return
+      this.activeAt = Date.now()
+      if (d.parentToolUseId) return
+      const progress = this.progress
+      if (event.name === EventNames.SESSION_TEXT_DELTA && typeof d.delta === 'string') {
+        this.answerSoFar += d.delta
+        progress?.({ kind: 'text', text: this.answerSoFar.slice(-PROGRESS_TEXT_MAX) })
+      } else if (event.name === EventNames.SESSION_TOOL_USE && d.toolName) {
+        this.answerSoFar = ''
+        progress?.({ kind: 'tool', toolName: d.toolName })
+      } else if (event.name === EventNames.SESSION_USAGE_UPDATE && typeof d.inputTokens === 'number' && d.inputTokens > 0) {
+        this.tokens = d.inputTokens
+        progress?.({ kind: 'tokens', tokens: d.inputTokens })
+      }
+    }, { global: true, interest: [EventNames.SESSION_TEXT_DELTA, EventNames.SESSION_TOOL_USE, EventNames.SESSION_USAGE_UPDATE] })
+  }
+
+  /**
+   * The session's first start: as a task's session starts, taskless, in its own lane. All of it is
+   * `recording` from its first line, so a close meanwhile waits for it and then retires whatever it made.
+   */
+  private mint(firstMessage: string, signal: AbortSignal): Promise<string> {
+    const made = this.startSession(firstMessage, signal)
+    this.recording = made
+    return made
+  }
+
+  private async startSession(firstMessage: string, signal: AbortSignal): Promise<string> {
+    const spec = this.spec
+    const { bus, EventNames } = await import('../event-bus.js')
+    const { setCallerAlias } = await import('../sessions/acp-caller-sid.js')
+    const left = await import('./left-runs.js')
+    const mode = subagentMode(spec.fullAccess, spec.parentMode)
+    const title = `Subagent ${spec.runtimeId}`
+    const cwd = this.cwdOfSession()
+    const native = engineCaps(spec.engine).runtimeKind === 'native'
+    const start = sessionStartData({ sessionId: '', lane: this.lane, host: spec.host, cwd, message: firstMessage, title, mode, model: spec.model, effort: spec.effort, engine: spec.engine })
+    /** Nothing starts once the run was stopped or closed, whatever await it came in. */
+    const go = () => {
+      if (signal.aborted || this.closing) throw new LightSubagentError('stopped', 'The run was stopped', 409)
+      this.started = true
+      if (starterOverride) starterOverride(start)
+      else bus.emit(EventNames.SESSION_START, start as never, ['session-runner'], { source: 'subagent' })
+    }
+    if (native) {
+      const sessionId = crypto.randomUUID()
+      start.preassignedSessionId = sessionId
+      // Its calls act for the parent from its first line on.
+      setCallerAlias(sessionId, spec.callerSid)
+      this.sessionId = sessionId
+      // Named for the sweep before it exists, then the record (as ai-agent.ts mints a lane), then the start.
+      await left.noteLeft(this.runId, { sessionId, sessionCwd: cwd })
+      const { createSessionRecord } = await import('../session-tracker.js')
+      await createSessionRecord(sessionId, '', '', cwd, {
+        title, lane: this.lane, mode, ...(spec.host !== LOCAL ? { host: spec.host } : {}),
+        initialProcessStatus: 'idle', initialStatusReason: 'awaiting_spawn',
+      })
+      await this.watch(sessionId)
+      await spec.stillGranted?.()
+      go()
+      return sessionId
+    }
+    // An ACP engine names its own session at establish: the record appears under the lane (personal-ai-lane.ts).
+    await spec.stillGranted?.()
+    // Named by its lane before it starts: a session that comes up after the wait gave up is still found.
+    await left.noteLeft(this.runId, { lane: this.lane, sessionCwd: cwd })
+    const { waitForLaneRecord } = await import('../sessions/personal-ai-lane.js')
+    go()
+    const sid = await waitForLaneRecord(this.lane, ACP_START_WAIT_MS, engineCaps(spec.engine).displayName)
+    setCallerAlias(sid, spec.callerSid)
+    this.sessionId = sid
+    await left.noteLeft(this.runId, { sessionId: sid, sessionCwd: cwd })
+    await this.watch(sid)
+    return sid
+  }
+
+  /** One turn on the session: its answer. A stop ends the wait at once (the run closes it). */
+  private async runTurn(message: string, t: SubagentTurnSpec): Promise<string> {
+    const spec = this.spec
+    const { runLaneTurn } = await import('../sessions/lane-turn.js')
     let rejectStop!: (e: Error) => void
     const stopped = new Promise<never>((_r, reject) => { rejectStop = reject })
     stopped.catch(() => {})
     const onStop = () => rejectStop(new LightSubagentError('stopped', 'The run was stopped', 409))
-    if (spec.signal.aborted) onStop()
-    else spec.signal.addEventListener('abort', onStop, { once: true })
-    const turnP = runLaneTurn('subagent', lane, message, {
+    if (t.signal.aborted) onStop()
+    else t.signal.addEventListener('abort', onStop, { once: true })
+    const engine = engineCaps(spec.engine).runtimeKind === 'native' ? 'claude' : spec.engine
+    const turnP = runLaneTurn('subagent', this.lane, message, {
       source: 'subagent',
-      timeoutMs: Math.max(60_000, spec.deadlineAt - Date.now()),
+      timeoutMs: Math.max(60_000, t.deadlineAt - Date.now()),
       target: {
         // `firstMessage`: the message framed as Walnut's (sessions/send-frame.ts), never as the user's.
         resolve: async (firstMessage) => {
-          if (spec.signal.aborted) throw new LightSubagentError('stopped', 'The run was stopped', 409)
-          // Named for the sweep before it exists, then the record (as ai-agent.ts mints a lane), then the start.
-          await left.noteLeft(runId, { sessionId, sessionCwd: spec.cwd })
-          recording = createSessionRecord(sessionId, '', '', spec.cwd, {
-            title, lane, mode, ...(spec.host !== LOCAL ? { host: spec.host } : {}),
-            initialProcessStatus: 'idle', initialStatusReason: 'awaiting_spawn',
-          })
-          await recording
-          if (spec.signal.aborted) throw new LightSubagentError('stopped', 'The run was stopped', 409)
-          const start = sessionStartData({ sessionId, lane, host: spec.host, cwd: spec.cwd, message: firstMessage, title, mode, model: spec.model, effort: spec.effort })
-          await spec.stillGranted?.()
-          started = true
-          if (starterOverride) starterOverride(start)
-          else bus.emit(EventNames.SESSION_START, start as never, ['session-runner'], { source: 'subagent' })
-          return { sessionId, created: true, engine: 'claude' }
+          if (t.signal.aborted || this.closing) throw new LightSubagentError('stopped', 'The run was stopped', 409)
+          if (this.sessionId) return { sessionId: this.sessionId, created: false, engine }
+          return { sessionId: await this.mint(firstMessage, t.signal), created: true, engine }
         },
         catchUp: async (_sid, m) => ({ message: m }),
       },
     })
     turnP.catch(() => {})
-    const turn = await Promise.race([turnP, stopped]).finally(() => spec.signal.removeEventListener('abort', onStop))
-    if (spec.signal.aborted) throw new LightSubagentError('stopped', 'The run was stopped', 409)
+    const turn = await Promise.race([turnP, stopped]).finally(() => t.signal.removeEventListener('abort', onStop))
+    if (t.signal.aborted) throw new LightSubagentError('stopped', 'The run was stopped', 409)
     if (turn.resultText === null) {
       const where = spec.host === LOCAL ? 'this machine' : spec.host
+      const name = engineCaps(spec.engine).displayName
       const why = turn.failure === 'timeout' ? 'it ran out of its time'
-        : turn.failure === 'died' ? `its Claude Code process on ${where} ended before it answered`
+        : turn.failure === 'died' ? `its ${name} process on ${where} ended before it answered`
           : turn.failure === 'stalled' ? 'it went silent for 15 minutes'
             : `its session on ${where} did not answer (${turn.failure ?? 'unknown'})`
-      throw new LightSubagentError(turn.failure === 'timeout' ? 'timed_out' : 'engine_error', `Claude Code on ${where}: ${why}`)
+      throw new LightSubagentError(turn.failure === 'timeout' ? 'timed_out' : 'engine_error', `${name} on ${where}: ${why}`)
     }
-    return { answer: turn.resultText.trim(), ...(tokens ? { tokens } : {}), warnings: [] }
-  } finally {
-    spec.signal.removeEventListener('abort', onAbort)
-    bus.unsubscribe(sub)
-    clearCallerAlias(sessionId)
-    // Its session is gone before its folder is removed: a CLI still in its turn could write there again.
-    await retire(spec.signal.aborted ? 'subagent_stopped' : 'subagent_done')
+    return turn.resultText.trim()
   }
 }
 
@@ -328,12 +431,15 @@ export function freeName(name: string, used: Set<string>): string {
   return pick
 }
 
+/** What a subagent's turns share when they bring files back: the names used in the caller's folder, and what came back already. */
+interface BringBackState { used: Set<string>; returned: Map<string, string>; deadlineAt: number; signal: AbortSignal }
+
 /**
  * The files the run named, copied back into the caller's task directory: everything in its
  * out folder (two levels deep), and every absolute path its answer names that is a file there.
  * A file that could not come back is a note, never a failure of the run.
  */
-async function bringBack(spec: LightRunSpec, copy: WorkCopy, answer: string): Promise<{ files: ReturnedFile[]; notes: string[] }> {
+async function bringBack(spec: LightRunSpec, copy: WorkCopy, answer: string, o: BringBackState): Promise<{ files: ReturnedFile[]; notes: string[] }> {
   const fromHost = spec.away!.fromHost
   const notes: string[] = []
   const { DaemonFileReader } = await import('../daemon-file-reader.js')
@@ -363,15 +469,18 @@ async function bringBack(spec: LightRunSpec, copy: WorkCopy, answer: string): Pr
   if (outside.length) notes.push(`Not copied back (outside the run's own folder, and not written by it): ${outside.slice(0, 5).join(', ')}${outside.length > 5 ? ', ...' : ''}.`)
   if (named.length === 0) return { files: [], notes }
   const { probe } = await import('../hosts/host-copy-paths.js')
-  const found: Array<{ from: string; size: number }> = []
+  const found: Array<{ from: string; size: number; key: string }> = []
   let total = 0
   for (const p of named) {
     if (found.length >= MAX_FILES) { notes.push(`More than ${MAX_FILES} files were named: the rest stayed and were removed with the copy.`); break }
     const at = await probe(copy.host, p).catch(() => ({ at: 'missing' as const, size: undefined }))
     if (at.at !== 'file' || at.size === undefined) continue
+    // A file an earlier turn brought back, unchanged since: not copied again.
+    const key = `${at.size}:${(await reader.stat(p).catch(() => null))?.mtimeMs ?? ''}`
+    if (o.returned.get(p) === key) continue
     if (total + at.size > MAX_TOTAL_BYTES) { notes.push(`${p} was not copied back: over ${MAX_TOTAL_BYTES / 1024 ** 3} GB in all.`); continue }
     total += at.size
-    found.push({ from: p, size: at.size })
+    found.push({ from: p, size: at.size, key })
   }
   if (found.length === 0) return { files: [], notes }
   if (!spec.parentTaskId) return { files: [], notes: [`${found.length} file(s) were named, but the calling session has no task directory to copy them into.`] }
@@ -381,21 +490,22 @@ async function bringBack(spec: LightRunSpec, copy: WorkCopy, answer: string): Pr
   const dest = `${taskDir}/subagents/${spec.runId ?? spec.runtimeId}`
   await new DaemonFileReader(fromHost).ensureDir(dest)
   const { copyBetweenHosts, copyResult } = await import('../hosts/host-copy.js')
-  const used = new Set<string>()
+  const used = o.used
   const files: ReturnedFile[] = []
-  // The copies end before the run's own limit, so its answer is never lost to a slow copy.
-  const until = spec.deadlineAt - COPY_MARGIN_MS
+  // The copies end before the turn's own limit, so its answer is never lost to a slow copy.
+  const until = o.deadlineAt - COPY_MARGIN_MS
   for (const [i, f] of found.entries()) {
-    if (spec.signal.aborted) break
+    if (o.signal.aborted) break
     if (Date.now() >= until) { notes.push(`The run's time was nearly up: ${found.length - i} file(s) were not copied back (${found.slice(i, i + 3).map((x) => x.from).join(', ')}).`); break }
     const to = `${dest}/${freeName(path.posix.basename(f.from), used)}`
     try {
       let r = await copyBetweenHosts({ from_host: copy.host, from: f.from, to_host: fromHost, to }, spec.parentSid)
-      while (r.running && !spec.signal.aborted && Date.now() < until) {
+      while (r.running && !o.signal.aborted && Date.now() < until) {
         r = await copyResult({ copy_id: r.copyId, wait_ms: Math.max(1_000, Math.min(COPY_WAIT_MS, until - Date.now())) }, spec.parentSid)
       }
       if (r.running) { notes.push(`${f.from} was still copying to ${to} when the run had to end (host_copy_result copy_id ${String(r.copyId)}).`); continue }
       files.push({ from: f.from, to: String(r.to ?? to), bytes: typeof r.bytes === 'number' ? r.bytes : f.size })
+      o.returned.set(f.from, f.key)
     } catch (err) {
       notes.push(`${f.from} was not copied back: ${err instanceof Error ? err.message : String(err)}`)
     }
