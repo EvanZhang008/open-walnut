@@ -3,9 +3,11 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import { restateOwnOrigin } from './dev-proxy-origin';
 import { excalidrawAssets, pdfAssets } from './vendor-assets';
+import { bundleTrim } from './bundle-trim';
 
 export default defineConfig({
-  plugins: [react(), pdfAssets(), excalidrawAssets()],
+  // bundleTrim: code of bundled packages Walnut never reaches stays out of the build (see the module).
+  plugins: [bundleTrim(), react(), pdfAssets(), excalidrawAssets()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src'),

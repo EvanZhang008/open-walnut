@@ -347,6 +347,9 @@ export default function ExcalidrawCanvas({ scene, sceneKey, theme, autoFocus = f
         canvasActions: { loadScene: false, saveToActiveFile: false, export: false, saveAsImage: true, clearCanvas: true, changeViewBackgroundColor: true },
       }}
       handleKeyboardGlobally={false}
+      // No editor AI: Walnut's own Make a diagram / Text to diagram ask Walnut's server, and the
+      // editor's Mermaid half is left out of the build (web/bundle-trim.ts).
+      aiEnabled={false}
       autoFocus={autoFocus}
     >
       <MainMenu>

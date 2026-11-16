@@ -439,3 +439,8 @@
   .drawing-library-dialog { height: 100dvh; border-radius: 0; }
   .drawing-library-preview { width: 72px; height: 48px; }
 }
+
+/* The editor's "Generate" group in its extra-tools menu (the Mermaid dialog) comes after the laser
+   pointer. Walnut leaves Mermaid out of the build (web/bundle-trim.ts) and makes diagrams from the
+   drawing menu, so the group is hidden. Guard: tests/web/bundle-trim.test.ts. */
+.drawing-canvas-host .App-toolbar__extra-tools-dropdown [data-testid="toolbar-laser"] ~ * { display: none; }
