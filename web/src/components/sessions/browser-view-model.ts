@@ -66,6 +66,130 @@ export function replayTimeLine(at: string, now: number): string {
   return same ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
 }
 
+/** What a step's icon draws (SessionBrowserReplay.tsx STEP_ICONS). */
+export type ReplayStepIcon = 'open' | 'click' | 'tab' | 'link' | 'type' | 'clear' | 'key' | 'down' | 'up' | 'go' | 'reload' | 'back' | 'form' | 'upload' | 'step';
+
+/**
+ * A step in plain words (2026-11-15, the user: "descriptions like click xx do xx"): what the agent
+ * did, then where, from the step's recorded label (replay-store.ts stepLabel, the extension's
+ * `said` words: page-agent.ts, agent-trusted.ts, page-input.ts). The label stays the tooltip.
+ */
+export function replayStepWords(step: Pick<ReplayStep, 'action' | 'label' | 'url' | 'title' | 'ok' | 'code' | 'tab'>, before?: Pick<ReplayStep, 'url' | 'title' | 'tab'>): { icon: ReplayStepIcon; title: string; detail: string } {
+  const out = wordsOf(step, before);
+  if (!step.ok) out.detail = `failed${step.code ? `: ${step.code.replace(/_/g, ' ')}` : ''}`;
+  return out;
+}
+
+const quote = (s: string) => `“${s}”`;
+const KEY_NAMES: Record<string, string> = { Enter: 'Return', Meta: 'Command', Control: 'Control', Alt: 'Option', ArrowDown: 'Down Arrow', ArrowUp: 'Up Arrow', ArrowLeft: 'Left Arrow', ArrowRight: 'Right Arrow' };
+// "Shift++" is Shift and the + key.
+const keyName = (k: string) => k.split(/\+(?=.)/).map((p) => KEY_NAMES[p] ?? (p.length === 1 ? p.toUpperCase() : p)).join('-');
+const pageName = (s: Pick<ReplayStep, 'title' | 'url'>) => s.title?.trim() || (s.url ?? '').replace(/^https?:\/\//, '') || 'the page';
+const hostOf = (u?: string) => (u ?? '').replace(/^https?:\/\//, '').split('/')[0];
+
+function wordsOf(s: Pick<ReplayStep, 'action' | 'label' | 'url' | 'title' | 'tab'>, before?: Pick<ReplayStep, 'url' | 'title' | 'tab'>): { icon: ReplayStepIcon; title: string; detail: string } {
+  const label = s.label ?? '';
+  // "<role> "<name>"", as the page names an element.
+  const named = /^(\w[\w ]*?) "(.*)"$/;
+  switch (s.action) {
+    case 'open': return { icon: 'open', title: `Opened ${pageName(s)}`, detail: hostOf(s.url) };
+    case 'navigate':
+      // A reload only when nothing differs: the address is kept without its query, so a new
+      // search on the same page reads as a go by its new title.
+      return before?.url && before.url === s.url && before.tab === s.tab && before.title === s.title
+        ? { icon: 'reload', title: `Reloaded ${pageName(s)}`, detail: hostOf(s.url) }
+        : { icon: 'go', title: `Went to ${pageName(s)}`, detail: hostOf(s.url) };
+    case 'back': return { icon: 'back', title: 'Went back', detail: s.title ? `to ${s.title}` : '' };
+    case 'click': {
+      const m = named.exec(label.replace(/^Click /, ''));
+      if (!m) return { icon: 'click', title: 'Clicked', detail: label.replace(/^Click ?/, '') };
+      const [, role, name] = m;
+      if (!name.trim()) return { icon: 'click', title: `Clicked a ${role}`, detail: '' };
+      if (role === 'tab') return { icon: 'tab', title: `Clicked the ${quote(name)} tab`, detail: '' };
+      if (role === 'link') return { icon: 'link', title: `Clicked the ${quote(name)} link`, detail: '' };
+      if (role === 'option' || role === 'menuitem') return { icon: 'click', title: `Chose ${quote(name)}`, detail: '' };
+      if (role === 'combobox' || role === 'listbox') return { icon: 'click', title: `Opened the ${quote(name)} list`, detail: '' };
+      if (role === 'textbox' || role === 'searchbox') return { icon: 'click', title: `Clicked in ${quote(name)}`, detail: '' };
+      if (role === 'checkbox' || role === 'radio' || role === 'switch') return { icon: 'click', title: `Clicked ${quote(name)}`, detail: role };
+      return { icon: 'click', title: `Clicked ${quote(name)}`, detail: role === 'button' ? '' : role };
+    }
+    case 'type': {
+      // "one key at a time" comes before the field (page-input.ts) or after it (agent-trusted.ts).
+      const slow = /, one key at a time/.test(label);
+      const m = /^Type (\d+) characters?(?:,? into (.*))?$/.exec(label.replace(/, one key at a time/, ''));
+      if (!m) return { icon: 'type', title: 'Typed', detail: label.replace(/^Type ?/, '') };
+      const field = m[2] ? named.exec(m[2])?.[2] ?? m[2] : '';
+      if (m[1] === '0') return { icon: 'clear', title: field ? `Cleared ${quote(field)}` : 'Cleared the field', detail: '' };
+      return { icon: 'type', title: `Typed ${m[1]} character${m[1] === '1' ? '' : 's'}`, detail: [field ? `in ${quote(field)}` : '', slow ? 'one key at a time' : ''].filter(Boolean).join(', ') };
+    }
+    case 'press': {
+      const key = label.replace(/^Press ?/, '').trim();
+      return { icon: 'key', title: key && key !== 'a key' ? `Pressed ${keyName(key)}` : 'Pressed a key', detail: '' };
+    }
+    case 'scroll': {
+      const edge = /to the (top|bottom)/.exec(label);
+      const dir = /^Scroll (up|down|left|right)/.exec(label)?.[1];
+      const at = /at (\d+) of (\d+)/.exec(label);
+      const px = /(\d+) px/.exec(label);
+      const title = edge ? `Scrolled to the ${edge[1]}` : `Scrolled ${dir ?? ''}`.trim();
+      const detail = at && Number(at[2]) > 0 && !edge ? `${Math.round((Number(at[1]) / Number(at[2])) * 100)}% into the page` : px ? `by ${px[1]} px` : '';
+      return { icon: edge?.[1] === 'top' || dir === 'up' ? 'up' : dir === 'left' ? 'back' : dir === 'right' ? 'go' : 'down', title, detail };
+    }
+    case 'select': return { icon: 'click', title: `Chose ${label.replace(/^Select ?/, '').trim() || 'an option'}`, detail: '' };
+    case 'hover': return { icon: 'click', title: label.replace(/^Hover ?/, '').trim() ? `Pointed at ${label.replace(/^Hover ?/, '').trim()}` : 'Pointed at the page', detail: '' };
+    case 'drag': return { icon: 'click', title: `Dragged ${label.replace(/^Drag ?/, '').trim() || 'on the page'}`, detail: '' };
+    case 'fill_form': return { icon: 'form', title: label.replace(/^Fill /, 'Filled '), detail: '' };
+    case 'upload': return { icon: 'upload', title: label.replace(/^Upload /, 'Uploaded '), detail: '' };
+    case 'fill_login': return { icon: 'form', title: 'Filled in the sign-in', detail: '' };
+    case 'fill_code': return { icon: 'form', title: 'Filled in the one-time code', detail: '' };
+    case 'dialog': return { icon: 'click', title: label.startsWith('Dismiss') ? 'Dismissed a dialog' : 'Answered a dialog', detail: '' };
+    default: return { icon: 'step', title: label || s.action, detail: '' };
+  }
+}
+
+/** On the ruler, a pause longer than this is drawn as this long, with its real length written on it. */
+export const RULER_FOLD_S = 45;
+
+/**
+ * The replay's time ruler (design 4, 2026-11-15): each step at its real time from the first, a
+ * long pause folded to RULER_FOLD_S (a task's steps may be days apart), and steps at least 1 s apart
+ * (steps within one second never sit on each other). `at` is 0 to 1 per step;
+ * each fold's middle and real length.
+ */
+export function replayRuler(steps: readonly Pick<ReplayStep, 'at'>[]): { at: number[]; folds: Array<{ at: number; seconds: number }>; seconds: number } {
+  const t = steps.map((s) => Date.parse(s.at) / 1000);
+  const drawn: number[] = [];
+  const folds: Array<{ mid: number; seconds: number }> = [];
+  let sum = 0;
+  t.forEach((x, i) => {
+    const gap = i && Number.isFinite(x) && Number.isFinite(t[i - 1]) ? Math.max(0, x - t[i - 1]) : 0;
+    if (gap > RULER_FOLD_S) folds.push({ mid: sum + RULER_FOLD_S / 2, seconds: gap });
+    // At least 1 s apart: steps within a second never draw on top of each other.
+    if (i) sum += Math.max(1, Math.min(gap, RULER_FOLD_S));
+    drawn.push(sum);
+  });
+  const total = sum || 1;
+  const first = t.find(Number.isFinite) ?? 0;
+  const last = [...t].reverse().find(Number.isFinite) ?? first;
+  return { at: drawn.map((d) => (steps.length > 1 ? d / total : 0)), folds: folds.map((f) => ({ at: f.mid / total, seconds: f.seconds })), seconds: Math.max(0, last - first) };
+}
+
+/** A length of time, short: 87 s, 3 min, 5 h, 2 d. */
+export function spanLine(seconds: number): string {
+  if (seconds < 120) return `${Math.round(seconds)} s`;
+  if (seconds < 120 * 60) return `${Math.round(seconds / 60)} min`;
+  if (seconds < 48 * 3600) return `${Math.round(seconds / 3600)} h`;
+  return `${Math.round(seconds / 86_400)} d`;
+}
+
+/** A step's time in the list: from the first step (m:ss) while the whole run is under an hour, else its clock time. */
+export function stepTimeLine(at: string, first: string, runSeconds: number, now: number): string {
+  if (runSeconds >= 3600) return replayTimeLine(at, now);
+  const s = Math.max(0, Math.round((Date.parse(at) - Date.parse(first)) / 1000));
+  if (!Number.isFinite(s)) return '';
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
 /** Why a step has no picture of its own, for the line under the last one shown. */
 export const NO_STEP_PICTURE = 'No picture of this step (the tab could not be pictured then): the last one before it shows.';
 /** The replay with nothing in it. */

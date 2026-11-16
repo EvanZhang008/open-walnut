@@ -78,6 +78,26 @@ export function __setSharpForTests(sharp: SharpFn | null | undefined): void {
   if (sharp === undefined) { sharpFn = null; warnedFor = null; }
 }
 
+/** A thumbnail waits this long at most for sharp to load (its download on a compiled install). */
+const THUMB_SHARP_WAIT_MS = 2000;
+
+/**
+ * A small JPEG of a picture, at most `width` px wide (the Browser replay's filmstrip,
+ * browser-view-v1.ts); null when sharp is not there yet or cannot read it (never the full
+ * picture in its place: hundreds of those would fill the page's memory).
+ */
+export async function thumbnailJpeg(buffer: Buffer, width: number): Promise<Buffer | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const sharp = await Promise.race([loadSharp(), new Promise<null>((r) => { timer = setTimeout(() => r(null), THUMB_SHARP_WAIT_MS); })]);
+  clearTimeout(timer);
+  if (!sharp) return null;
+  try {
+    return await sharp(buffer).resize({ width, withoutEnlargement: true }).jpeg({ quality: 62 }).toBuffer();
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Bedrock hard limit: 5,242,880 bytes for base64-encoded image data.
  * We target slightly below to leave headroom.

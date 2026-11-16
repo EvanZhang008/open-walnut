@@ -189,4 +189,73 @@ describe('the Browser replay\'s words (SessionBrowserReplay.tsx)', () => {
     expect(browserChipLook([])).toBeNull()
     expect(REPLAY_LOOK).toMatchObject({ label: 'Replay', tone: 'ended' })
   })
+
+  it('says each recorded step in plain words, from the labels the recorder writes', async () => {
+    const { replayStepWords } = await import('../../web/src/components/sessions/browser-view-model')
+    const w = (action: string, label: string, more: Record<string, unknown> = {}, before?: { url?: string }) =>
+      replayStepWords({ action, label, ok: true, ...more }, before)
+    // Labels as replay-store.ts stepLabel and the extension's `said` words write them (real ones from 11-14).
+    expect(w('open', 'Open 127.0.0.1:38167/context-text.html', { url: 'http://127.0.0.1:38167/context-text.html', title: 'Context text' }))
+      .toEqual({ icon: 'open', title: 'Opened Context text', detail: '127.0.0.1:38167' })
+    expect(w('click', 'Click tab "Main (CEO)"')).toMatchObject({ icon: 'tab', title: 'Clicked the \u201cMain (CEO)\u201d tab' })
+    expect(w('click', 'Click button "Continue"')).toEqual({ icon: 'click', title: 'Clicked \u201cContinue\u201d', detail: '' })
+    expect(w('click', 'Click link "Skill list"').title).toBe('Clicked the \u201cSkill list\u201d link')
+    expect(w('click', 'Click option "United States +1"').title).toBe('Chose \u201cUnited States +1\u201d')
+    expect(w('click', 'Click combobox "Country*"').title).toBe('Opened the \u201cCountry*\u201d list')
+    expect(w('click', 'Click at 120, 40')).toEqual({ icon: 'click', title: 'Clicked', detail: 'at 120, 40' })
+    expect(w('type', 'Type 12 characters into textbox "Email"')).toEqual({ icon: 'type', title: 'Typed 12 characters', detail: 'in \u201cEmail\u201d' })
+    expect(w('type', 'Type 7 characters, one key at a time, into combobox "Location (City)*"').detail).toBe('in \u201cLocation (City)*\u201d, one key at a time')
+    expect(w('type', 'Type 0 characters into searchbox "Search"')).toMatchObject({ icon: 'clear', title: 'Cleared \u201cSearch\u201d' })
+    expect(w('type', 'Type').title).toBe('Typed')
+    expect(w('press', 'Press Enter').title).toBe('Pressed Return')
+    expect(w('press', 'Press Meta+r').title).toBe('Pressed Command-R')
+    expect(w('scroll', 'Scroll down 1 screen(s); at 489 of 9010')).toEqual({ icon: 'down', title: 'Scrolled down', detail: '5% into the page' })
+    expect(w('scroll', 'Scroll down 500 px over searchbox "Search"')).toEqual({ icon: 'down', title: 'Scrolled down', detail: 'by 500 px' })
+    expect(w('scroll', 'Scroll to the top; at 0 of 1020')).toEqual({ icon: 'up', title: 'Scrolled to the top', detail: '' })
+    // A navigate to the address it was on is a reload; to another, a go.
+    const page = { url: 'https://en.wikipedia.org/wiki/Walnut', title: 'Walnut - Wikipedia', tab: 7 }
+    expect(w('navigate', 'Go to en.wikipedia.org/wiki/Walnut', page, page).title).toBe('Reloaded Walnut - Wikipedia')
+    expect(w('navigate', 'Go to en.wikipedia.org/wiki/Walnut', page, { url: 'https://example.com/' })).toEqual({ icon: 'go', title: 'Went to Walnut - Wikipedia', detail: 'en.wikipedia.org' })
+    expect(w('back', 'Back', { title: 'Juglans regia - Wikipedia' }).detail).toBe('to Juglans regia - Wikipedia')
+    expect(w('fill_form', 'Fill 4 fields').title).toBe('Filled 4 fields')
+    // "one key at a time" after the field (agent-trusted.ts), an empty name, bare actions, odd keys.
+    expect(w('type', 'Type 7 characters into combobox "City", one key at a time')).toEqual({ icon: 'type', title: 'Typed 7 characters', detail: 'in \u201cCity\u201d, one key at a time' })
+    expect(w('click', 'Click button ""').title).toBe('Clicked a button')
+    expect(w('click', 'Click button "Say "hi""').title).toBe('Clicked \u201cSay "hi"\u201d')
+    expect(w('select', 'Select').title).toBe('Chose an option')
+    expect(w('hover', 'Hover').title).toBe('Pointed at the page')
+    expect(w('press', 'Press ').title).toBe('Pressed a key')
+    expect(w('press', 'Press Shift++').title).toBe('Pressed Shift-+')
+    expect(w('scroll', 'Scroll right 300 px').icon).toBe('go')
+    // A reload only when the tab, the address and the title are the same: the address is kept
+    // without its query, so a new search on the same page is a go.
+    const was = { url: 'https://example.com/search', title: 'Results for a', tab: 1 }
+    expect(w('navigate', 'Go to example.com/search', { url: was.url, title: 'Results for a', tab: 1 }, was).title).toBe('Reloaded Results for a')
+    expect(w('navigate', 'Go to example.com/search', { url: was.url, title: 'Results for b', tab: 1 }, was).title).toBe('Went to Results for b')
+    expect(w('navigate', 'Go to example.com/search', { url: was.url, title: 'Results for a', tab: 2 }, was).title).toBe('Went to Results for a')
+    expect(w('something_new', 'Something new').title).toBe('Something new')
+    // A failed step says so, with its code.
+    expect(replayStepWords({ action: 'type', label: 'Type', ok: false, code: 'element_gone' }).detail).toBe('failed: element gone')
+  })
+
+  it('draws the ruler at real times, a long pause folded with its length', async () => {
+    const { RULER_FOLD_S, replayRuler, spanLine, stepTimeLine } = await import('../../web/src/components/sessions/browser-view-model')
+    const at = (s: number) => new Date(Date.UTC(2026, 10, 14, 17, 0, 0) + s * 1000).toISOString()
+    const r = replayRuler([0, 10, 20, 20 + 300, 330].map((s) => ({ at: at(s) })))
+    // Steps in one second sit 1 s apart, never on each other.
+    expect(new Set(replayRuler([0, 0, 0].map((s) => ({ at: at(s) }))).at).size).toBe(3)
+    // Drawn: 0, 10, 20, then the 300 s pause as RULER_FOLD_S, then 10 more.
+    const total = 20 + RULER_FOLD_S + 10
+    expect(r.at.map((x) => Math.round(x * total))).toEqual([0, 10, 20, 20 + RULER_FOLD_S, total])
+    expect(r.folds).toEqual([{ at: (20 + RULER_FOLD_S / 2) / total, seconds: 300 }])
+    expect(r.seconds).toBe(330)
+    // One step, none, a bad time: no NaN anywhere.
+    expect(replayRuler([{ at: at(0) }])).toEqual({ at: [0], folds: [], seconds: 0 })
+    expect(replayRuler([])).toEqual({ at: [], folds: [], seconds: 0 })
+    expect(replayRuler([{ at: at(0) }, { at: 'bad' }, { at: at(5) }]).at.every(Number.isFinite)).toBe(true)
+    expect([87, 300, 5 * 3600, 3 * 86_400].map(spanLine)).toEqual(['87 s', '5 min', '5 h', '3 d'])
+    // Times in the list: m:ss from the first step under an hour, else the clock time.
+    expect(stepTimeLine(at(125), at(0), 900, Date.now())).toBe('2:05')
+    expect(stepTimeLine(at(125), at(0), 7200, Date.now())).not.toBe('2:05')
+  })
 })

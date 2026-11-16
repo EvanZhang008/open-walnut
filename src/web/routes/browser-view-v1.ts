@@ -12,7 +12,8 @@
  *   POST /api/v1/browser/view/push   the extension's pictures while someone watches (browser-view-stream.ts)
  *   POST /api/v1/browser/handback    the extension: the person pressed Hand back on the tab's own pill
  *   GET  /api/v1/browser/view/replay?task=<id>          the task's recorded steps, oldest first (a person's request only)
- *   GET  /api/v1/browser/view/replay/frame?task=&id=    one step's picture (a person's request only)
+ *   GET  /api/v1/browser/view/replay/frame?task=&id=[&size=thumb]    one step's picture, or its
+ *        filmstrip thumbnail, THUMB_W px wide (a person's request only)
  *   POST /api/v1/browser/view/replay  the extension's picture of an agent's step (core/browser-control/replay-store.ts)
  *
  * A tab id is unique within one browser only: a frame and a Stop name the browser (device) too, and
@@ -36,7 +37,10 @@ import { endSignIn, openAsk } from '../../core/browser-control/sign-in-ask.js'
 
 const hub = () => import('../../core/browser-control/hub.js')
 const replays = () => import('../../core/browser-control/replay-store.js')
+/** The replay's filmstrip thumbnails: this wide (shown at 56 px, sharp on a 2x screen and up close). */
+const THUMB_W = 240
 const sites = () => import('../../core/browser-control/sites.js')
+const images = () => import('../../utils/image-compress.js')
 
 export interface ViewDeps {
   personCaller: (req: Request) => boolean
@@ -324,8 +328,11 @@ export function mountBrowserView(r: Router, d: ViewDeps): void {
       const taskId = taskOf(req.query.task)
       const id = typeof req.query.id === 'string' ? req.query.id.slice(0, 40) : ''
       if (!taskId || !id) throw new h.BrowserError('Which task and step: ?task=<id>&id=<step>.', 400, 'bad_request')
-      const pic = await (await replays()).stepPicture(taskId, id)
-      if (!pic) throw new h.BrowserError('That step has no picture (deleted after the days kept, or never taken).', 404, 'no_picture')
+      const found = await (await replays()).stepPicture(taskId, id)
+      if (!found) throw new h.BrowserError('That step has no picture (deleted after the days kept, or never taken).', 404, 'no_picture')
+      const pic = req.query.size === 'thumb' ? await (await images()).thumbnailJpeg(found, THUMB_W) : found
+      // No thumbnail (image resizing not there yet): the filmstrip leaves that frame empty.
+      if (!pic) throw new h.BrowserError('No thumbnail of that step now (image resizing is not available).', 404, 'no_thumbnail')
       // JSON, as the live frame: the web's client adds the device's token, which an <img> would not.
       res.setHeader('Cache-Control', 'private, max-age=3600')
       return { id, image: `data:image/jpeg;base64,${pic.toString('base64')}` }

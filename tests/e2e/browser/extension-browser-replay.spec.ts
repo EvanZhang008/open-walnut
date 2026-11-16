@@ -205,7 +205,12 @@ test('an agent\'s browser steps are recorded and play back in the task\'s Browse
   const img = (await first.json()).image as string
   expect(img).toMatch(/^data:image\/jpeg;base64,/)
   const bytes = Buffer.from(img.split(',')[1], 'base64').length
-  console.log(`[browser replay] step picture: ${bytes} bytes`)
+  // The filmstrip's thumbnail of it: a smaller JPEG.
+  const thumb = (await (await page.request.get(`${base}/api/v1/browser/view/replay/frame?task=${taskId}&id=${got[0].id}&size=thumb`)).json()).image as string
+  expect(thumb).toMatch(/^data:image\/jpeg;base64,/)
+  const thumbBytes = Buffer.from(thumb.split(',')[1], 'base64').length
+  expect(thumbBytes).toBeLessThan(bytes)
+  console.log(`[browser replay] step picture: ${bytes} bytes, its thumbnail ${thumbBytes}`)
   // An agent is refused the pictures, as it is the live frame.
   expect((await page.request.get(`${base}/api/v1/browser/view/replay?task=${taskId}`, { headers: { 'x-walnut-caller-sid': sid } })).status()).toBe(403)
 
@@ -219,12 +224,25 @@ test('an agent\'s browser steps are recorded and play back in the task\'s Browse
   await expect(replay(page)).toBeVisible()
   const where = replay(page).getByTestId('session-browser-replay-where')
   await expect(where).toContainText('step 4 of 4')
-  await expect(replay(page).getByTestId('session-browser-replay-step')).toContainText(`Go to login.bank.test:${port}/statement`)
+  // The step in plain words (browser-view-model.ts replayStepWords); the recorded label is its tooltip.
+  const said = replay(page).getByTestId('session-browser-replay-step')
+  await expect(said).toContainText('Went to Statement for October')
+  await expect(said).toHaveAttribute('title', `Go to login.bank.test:${port}/statement`)
   await expect(replay(page).getByTestId('session-browser-replay-title')).toHaveText('Statement for October')
   const pic = replay(page).getByTestId('session-browser-replay-picture')
   await expect(pic).toBeVisible({ timeout: 20_000 })
   await expect(pic).toHaveAttribute('data-step', got[3].id)
   await expect(rows(page)).toHaveCount(4)
+  await expect(rows(page).nth(1)).toContainText('Typed 12 characters')
+  await expect(rows(page).nth(2)).toContainText('Clicked \u201cContinue\u201d')
+  // The filmstrip: a frame per step, each with its thumbnail, the last one current.
+  const frames = replay(page).getByTestId('session-browser-replay-strip').locator('button')
+  await expect(frames).toHaveCount(4)
+  await expect(frames.nth(3)).toHaveAttribute('aria-current', 'step')
+  await expect(frames.nth(0).locator('img')).toBeVisible({ timeout: 20_000 })
+  // The ruler: a tick per step.
+  const ticks = replay(page).getByTestId('session-browser-replay-tick')
+  await expect(ticks).toHaveCount(4)
   await page.screenshot({ path: path.join(SHOTS, 'replay-last.png') })
 
   // The scrubber steps back with the arrow keys: the picture and the words follow.
@@ -236,36 +254,58 @@ test('an agent\'s browser steps are recorded and play back in the task\'s Browse
   await expect(replay(page).getByTestId('session-browser-replay-title')).toHaveText('Sign in to Test Bank')
   await page.keyboard.press('ArrowRight')
   await expect(where).toContainText('step 2 of 4')
-  await expect(replay(page).getByTestId('session-browser-replay-step')).toContainText('Type 12 characters into textbox "Email"')
+  await expect(said).toContainText('Typed 12 characters')
+  await expect(said).toContainText('in \u201cEmail\u201d')
   await expect(pic).toHaveAttribute('data-step', got[1].id, { timeout: 20_000 })
-  // A step in the list goes to it.
+  // A step in the list goes to it, and the filmstrip and the ruler show the same step.
   await press(page, rows(page).nth(2))
   await expect(where).toContainText('step 3 of 4')
   await expect(rows(page).nth(2)).toHaveAttribute('aria-current', 'step')
-  // Previous and next.
-  await press(page, replay(page).getByTestId('session-browser-replay-prev'))
+  await expect(frames.nth(2)).toHaveAttribute('aria-current', 'step')
+  await expect(ticks.nth(2)).toHaveClass(/is-on/)
+  await expect(pic).toHaveAttribute('data-step', got[2].id, { timeout: 20_000 })
+  // A frame of the filmstrip goes to it.
+  await press(page, frames.nth(0))
+  await expect(where).toContainText('step 1 of 4')
+  await expect(rows(page).nth(0)).toHaveAttribute('aria-current', 'step')
+  await expect(pic).toHaveAttribute('data-step', got[0].id, { timeout: 20_000 })
+  // A tick of the ruler goes to it.
+  await press(page, ticks.nth(1))
   await expect(where).toContainText('step 2 of 4')
-  await press(page, replay(page).getByTestId('session-browser-replay-next'))
+  await expect(rows(page).nth(1)).toHaveAttribute('aria-current', 'step')
+  await expect(frames.nth(1)).toHaveAttribute('aria-current', 'step')
+  // The keys step back and on.
+  await press(page, scrub)
+  await page.keyboard.press('ArrowLeft')
+  await expect(where).toContainText('step 1 of 4')
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('ArrowRight')
   await expect(where).toContainText('step 3 of 4')
 
   // Play from the start at 4 steps a second: it runs to the last step and stops.
-  await press(page, replay(page).getByTestId('session-browser-replay-speed-4'))
+  const speed = replay(page).getByTestId('session-browser-replay-speed')
+  await expect(speed).toHaveText('1\u00d7')
+  await press(page, speed)
+  await press(page, speed)
+  await expect(speed).toHaveText('4\u00d7')
   await press(page, scrub)
   await page.keyboard.press('End')
   await expect(where).toContainText('step 4 of 4')
   const play = replay(page).getByTestId('session-browser-replay-play')
   await press(page, play)
-  await expect(play).toHaveText('Pause')
+  await expect(play).toHaveAttribute('aria-pressed', 'true')
   await expect(where).toContainText('step 1 of 4')
   await expect(where).toContainText('step 4 of 4', { timeout: 10_000 })
-  await expect(play).toHaveText('Play', { timeout: 10_000 })
+  await expect(play).toHaveAttribute('aria-pressed', 'false', { timeout: 10_000 })
+  await expect(rows(page).nth(3)).toHaveAttribute('aria-current', 'step')
   // Pause on the way at 1 step a second: it stays where it was paused.
   const stepNow = async () => Number(/step (\d+) of/.exec((await where.textContent()) ?? '')?.[1] ?? 0)
-  await press(page, replay(page).getByTestId('session-browser-replay-speed-1'))
+  await press(page, speed)
+  await expect(speed).toHaveText('1\u00d7')
   await press(page, play)
   await expect.poll(stepNow, { intervals: [50], timeout: 5000 }).toBeGreaterThan(1)
   await press(page, play)
-  await expect(play).toHaveText('Play')
+  await expect(play).toHaveAttribute('aria-pressed', 'false')
   const paused = await stepNow()
   await page.waitForTimeout(1500)
   expect(await stepNow()).toBe(paused)
@@ -273,6 +313,12 @@ test('an agent\'s browser steps are recorded and play back in the task\'s Browse
   // Larger, and dark.
   await press(page, replay(page).getByTestId('session-browser-replay-size'))
   await expect(replay(page)).toHaveClass(/session-browser-card--large/)
+  // Larger: the list of steps beside the picture, on its right, as tall as the rest.
+  const listBox = (await replay(page).getByTestId('session-browser-replay-list').boundingBox())!
+  const shotBox = (await replay(page).getByTestId('session-browser-replay-shot').boundingBox())!
+  expect(listBox.x).toBeGreaterThan(shotBox.x + shotBox.width)
+  expect(listBox.height).toBeGreaterThan(shotBox.height)
+  await page.screenshot({ path: path.join(SHOTS, 'replay-large.png') })
   await page.emulateMedia({ colorScheme: 'dark' })
   await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'))
   await page.screenshot({ path: path.join(SHOTS, 'replay-dark-large.png') })
