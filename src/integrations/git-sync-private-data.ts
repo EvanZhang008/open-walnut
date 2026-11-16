@@ -48,7 +48,9 @@ async function recover(root: string, aside: string, original: string): Promise<s
         await fsp.link(tmp, restored);
       }
     }
-    return path.relative(root, restored);
+    // `restored` sits under the resolved folder, so it is relative to the resolved root (a data
+    // folder under a symbolic link, as macOS /var is, would otherwise climb out with `../`).
+    return path.relative(rootReal, restored).split(path.sep).join('/');
   } finally { await fsp.rm(tmp, { force: true }); }
 }
 

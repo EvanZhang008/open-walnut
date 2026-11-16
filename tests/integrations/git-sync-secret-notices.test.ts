@@ -103,6 +103,26 @@ describe('private data does not hold credentials', () => {
     expect(await git(['diff', '--cached', '--name-only'])).toContain('notes/ordinary.md');
   });
 
+  it('a data folder reached through a symbolic link records recovery paths inside the folder', async () => {
+    // macOS temp folders sit under /var, a link to /private/var: the recovered copy is built on
+    // the resolved path, so its recorded path must be relative to the resolved folder too.
+    const link = `${WALNUT_HOME}-link`;
+    await fs.rm(link, { force: true }); await fs.symlink(WALNUT_HOME, link, 'dir');
+    try {
+      const viaLink = async (args: string[], input?: string) => execFileSync('git', args, { cwd: link, encoding: 'utf8', input, stdio: ['pipe', 'pipe', 'pipe'] });
+      const aside = 'notes/deep/a.md.conflicted-secret-old'; await write(aside, fake());
+      await fs.writeFile(holdsPath(), JSON.stringify({ version: 2, holds: { [aside]: { asideOf: 'notes/deep/a.md' } } }));
+      await releasePrivateDataHolds(viaLink, link);
+      const record = JSON.parse(await fs.readFile(holdsPath(), 'utf8'));
+      expect(record.privateDataReleased).toBe(true);
+      expect(record.recovered).toHaveLength(1);
+      expect(record.recovered[0].target).toMatch(/^notes\/deep\/a\.md\.recovered-private-data-[0-9a-f]{16}$/);
+      expect(await fs.readFile(path.join(link, record.recovered[0].target), 'utf8')).toBe(fake());
+      expect(await commitIfDirty()).toBe(true);
+      expect(await head(record.recovered[0].target)).toBe(fake());
+    } finally { await fs.rm(link, { force: true }); }
+  });
+
   it('corrupt hold metadata never blocks private data and sidecar discovery is narrowly scoped', async () => {
     await fs.writeFile(holdsPath(), '{bad metadata');
     await write('notes/ordinary.md', fake());
