@@ -370,7 +370,10 @@ boardV1Router.post('/tasks/:id/board/threads/:thread', route(async (req, res) =>
   const images = await saveAnswerPictures(b)
   const message = await postBoardMessage(task.id, thread, { author, ...(caller.kind === 'task' || (caller.kind === 'agent' && caller.untracked) ? { sessionId: caller.sessionId } : {}), text: b.text, ...(images.length ? { images } : {}) })
   if (caller.kind !== 'human') {
-    res.status(201).json({ message, delivery: { state: 'stored' } })
+    // The user reads the thread: a session's post off his reply language gets one note (hints/reply-language-drift.ts).
+    const { messageLanguageNote } = await import('../../core/hints/reply-language-drift.js')
+    const replyLanguage = await messageLanguageNote(header(req, 'x-walnut-caller-sid'), [b.text], 'Board post')
+    res.status(201).json({ message, delivery: { state: 'stored' }, ...(replyLanguage ? { reply_language: replyLanguage } : {}) })
     return
   }
   res.status(201).json({ message, delivery: await deliverToLeader(task, thread, message) })

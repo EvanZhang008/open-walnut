@@ -519,6 +519,25 @@ taskV1Router.put('/tasks/:id/report', async (req: Request, res: Response, next: 
   }
 })
 
+/**
+ * A session's start message to another task, off the user's reply language: the note for its answer
+ * (hints/reply-language-drift.ts). A message that is the task's own description is the brief
+ * task_create starts it with, which may sync to a tracker colleagues read, so it is not judged.
+ */
+async function startLanguageNote(callerSid: string | undefined, taskId: string, message: string | undefined): Promise<string | null> {
+  if (!callerSid || !message?.trim()) return null
+  // The start already happened: nothing here may turn its answer into an error.
+  try {
+    const { getTask } = await import('../../core/task-manager.js')
+    const description = await getTask(taskId).then((t) => t.description, () => undefined)
+    if (description?.trim() === message.trim()) return null
+    const { messageLanguageNote } = await import('../../core/hints/reply-language-drift.js')
+    return await messageLanguageNote(callerSid, [message])
+  } catch {
+    return null
+  }
+}
+
 taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: NextFunction) => {
   try {
     // Class C on a REPLICA: a replica does not run the leader's session starts, so
@@ -599,7 +618,8 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
         })
         return
       }
-      res.status(202).json(threadHandoff ? { ...started, thread_handoff: threadHandoff } : started)
+      const replyLanguage = await startLanguageNote(callerSid, started.taskId, str('message'))
+      res.status(202).json({ ...started, ...(threadHandoff ? { thread_handoff: threadHandoff } : {}), ...(replyLanguage ? { reply_language: replyLanguage } : {}) })
     } catch (err) {
       if (err instanceof SessionExistsError) {
         // What to do instead, never a dead end: the caller's own open ask to it, or how to send (session-exists-hint.ts).

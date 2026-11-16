@@ -5,7 +5,7 @@ import { engineCaps } from '../core/agents/engine-registry.js'
 import { fallbackStartWords } from '../core/agents/fallback-engine-words.js'
 import type { EngineFallbackNote } from '../core/types.js'
 import type { WalnutOp } from './registry.js'
-import { REPLY_ARRIVES_HINT, SUBTASK_WATCH_HINT, withOutcome } from './outcome.js'
+import { REPLY_ARRIVES_HINT, SUBTASK_WATCH_HINT, withLanguageNote, withOutcome } from './outcome.js'
 import { summaryAt } from '../core/user-status.js'
 
 type Call = Parameters<NonNullable<WalnutOp['handler']>>[1]
@@ -182,7 +182,8 @@ export async function startTask(id: string, body: Record<string, unknown>, call:
   if (queued && typeof queued === 'object') return withOutcome({ ...started, execution: { state: 'queued' } }, ...queuedOutcome(String(started.taskId), queued))
   // Old servers only confirm that the request was accepted; a pre-assigned id does not prove the process has started.
   const state = started.started === true ? 'running' : 'starting'
-  return withOutcome(
+  // A start message off the user's reply language: the route's note leads `next` (hints/reply-language-drift.ts).
+  return withLanguageNote(withOutcome(
     { ...started, execution: { state } },
     (started.continued === true
       ? `Task ${started.taskId} already had its conversation; the message continued it (a task has one active session; task_switch_engine changes its engine).`
@@ -194,5 +195,5 @@ export async function startTask(id: string, body: Record<string, unknown>, call:
     typeof started.requestId === 'string'
       ? `Reply request: ${started.requestId}. ${REPLY_ARRIVES_HINT} ${SUBTASK_WATCH_HINT}`
       : `Read task_get for its execution state. Add context with task_send using task id ${started.taskId}.`,
-  )
+  ), started)
 }

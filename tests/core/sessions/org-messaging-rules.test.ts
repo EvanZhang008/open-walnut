@@ -19,7 +19,9 @@ import { instructionNoticeFor } from '../../../src/core/sessions/instruction-not
 describe('the org messaging rules ride the default instructions', () => {
   it('Main and a lead write their chat in the user\'s language; a worker is not told so', () => {
     expect(ORG_REPLY_LANGUAGE_LINE).toMatch(/whoever started the turn/)
-    expect(ORG_REPLY_LANGUAGE_LINE).toMatch(/stays in English/)
+    // 2026-11-16: what it sends other tasks follows the user's language too, never "stays in English".
+    expect(ORG_REPLY_LANGUAGE_LINE).toMatch(/What you send to other tasks \(task_send, org_send, a reply\) is in it too/)
+    expect(ORG_REPLY_LANGUAGE_LINE).not.toMatch(/English/)
     expect(defaultInstructions({ org_role: 'main', project: 'Main' })).toContain(ORG_REPLY_LANGUAGE_LINE.trim())
     expect(defaultInstructions({ org_role: 'lead', project: 'Walnut' })).toContain(ORG_REPLY_LANGUAGE_LINE.trim())
     expect(defaultInstructions({ project: 'Walnut' })).not.toContain(ORG_REPLY_LANGUAGE_LINE.trim())

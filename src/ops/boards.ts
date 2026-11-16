@@ -21,7 +21,7 @@
 import { z } from 'zod';
 import type { OpCall } from './core.js';
 import { defineOp } from './registry.js';
-import { withOutcome } from './outcome.js';
+import { withLanguageNote, withOutcome } from './outcome.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 import { BOARD_GET_BUDGET, BOARD_PART_NAMES, defaultView, selectParts, type BoardPart } from './board-get-view.js';
 import { LIST_MAX } from '../lib/zod-rules.js'
@@ -332,11 +332,11 @@ defineOp({
       text: args.text,
     }) as Record<string, unknown> & { message?: { id?: string } };
     const id = typeof body.message?.id === 'string' ? body.message.id : '';
-    return withOutcome(
+    return withLanguageNote(withOutcome(
       { task_id: target.taskId, ...body },
       `Posted ${id ? `${id} ` : ''}in thread "${String(args.thread)}" of ${boardOfPossessive(target)}.`,
       'If the answer changed a status or a decision, update that section with board_edit too.',
-    );
+    ), body);
   },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });

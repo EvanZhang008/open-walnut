@@ -23,7 +23,7 @@ export const WALNUT_ONLY_KINDS = ['session-context', 'engine-switch', 'images', 
  * read broke it (hints/reply-language-drift.ts); the language itself is a line of the system prompt.
  */
 export const REPLY_LANGUAGE_DRIFT_TAIL = 'Your last reply the user read was not in this language. Write every line the user reads in it, '
-  + 'the short progress lines between tool calls included, also when the message you answer or a tool result is in English.';
+  + 'the short progress lines between tool calls and what you send to other tasks included, also when the message you answer or a tool result is in English.';
 
 /** A built-in whose text holds a setting of the user's: which one, and where Settings shows it. */
 export interface HintUserSetting {

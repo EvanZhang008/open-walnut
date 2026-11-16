@@ -8,7 +8,8 @@
  * stays English"), so the language it asks for is read from the language names it
  * mentions; a rule that names none is never judged. Code, inline code, links,
  * paths and HTML are left out before counting, because they are English in every
- * language. A short reply proves nothing either way.
+ * language, and so are quoted words (they keep the language they were said in).
+ * A short reply proves nothing either way.
  */
 
 export type Script = 'han' | 'kana' | 'hangul' | 'latin' | 'cyrillic';
@@ -52,7 +53,11 @@ function prose(reply: string): string {
     .replace(/`[^`\n]*`/g, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/https?:\/\/\S+/g, ' ')
-    .replace(/(?:^|\s)[\w.~-]*\/[\w./-]+/g, ' ');
+    .replace(/(?:^|\s)[\w.~-]*\/[\w./-]+/g, ' ')
+    // Quoted words keep their own language (a message to another task quotes the user's English
+    // exactly, a reply quotes an error): a blockquote line and a span in double quotes are left out.
+    .replace(/^[ \t]*>.*$/gm, ' ')
+    .replace(/"[^"\n]*"|“[^”]*”|「[^」]*」/g, ' ');
 }
 
 export function scriptCounts(text: string): Record<Script, number> {

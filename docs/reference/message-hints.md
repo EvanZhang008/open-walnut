@@ -23,8 +23,13 @@ that is off the language (code, paths and links do not count) gets one short cor
 read with the next tool result (native Claude Code sessions; again only after two more lines off,
 at most two a turn); a turn that still ended off marks the drift, and the next message carries the
 `reply-language` hint, whose one trigger is `on_drift`. A letter a session writes him
-(`human_inbox_send`, `human_inbox_reply`, a router's `for_user` brief) that is off gets a note in
-the op's answer. A session that keeps the language gets nothing. The hint's Settings switch turns
+(`human_inbox_send`, `human_inbox_reply`, a router's `for_user` brief, a thread post, a Brief, a
+Board post) that is off gets a note in the op's answer, and so does a message it sends another task
+(`task_send`, `org_send`, a reply, a start's own message; 2026-11-16: 87 of 114 overnight peer notes
+were English and each receiver answered on in English), since the user reads those chats too. Quoted
+words, code, paths and links do not count. Every op that carries a session's words is listed as
+judged or exempt in `tests/core/hints/reply-language-letter-ops-guard.test.ts`. A session that keeps
+the language gets nothing. The hint's Settings switch turns
 all of it off.
 
 Every hint costs every session that gets it on every message it rides. Add one only

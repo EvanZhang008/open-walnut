@@ -278,7 +278,7 @@ export const BRIEF_LINE =
 export const ORG_REPLY_LANGUAGE_LINE =
   'The user reads your chat (the Org page, the phone), so every reply you write here is to them, whoever started '
   + 'the turn (the user, a Walnut notice, a worker\'s message, a trigger): write it, every line down to a short progress '
-  + 'note between tool calls, in the language they asked replies in (their reply language and standing rules). What you send to other tasks (task_send, org_send) stays in English.\n\n'
+  + 'note between tool calls, in the language they asked replies in (their reply language and standing rules). What you send to other tasks (task_send, org_send, a reply) is in it too: the user reads those chats.\n\n'
 
 /**
  * One fault, one owner (2026-10-30 org review: "the same deliverable continues its exact task" sent each

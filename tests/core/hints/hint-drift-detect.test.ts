@@ -22,6 +22,16 @@ describe('detectLanguageDrift', () => {
     expect(detectLanguageDrift(RULE, reply)).toBe(false);
   });
 
+  it('quoted words keep their own language: an English quote in Chinese is fine, English around a Chinese quote is not', () => {
+    const quoting = '用户原话："please make every message to another task follow my language, and tell the sender when it does not"。\n'
+      + '> The deploy finished at 06:40 and every check on the live server passed.\n我的理解：发给其他任务的消息也用中文。';
+    expect(detectLanguageDrift(RULE, quoting)).toBe(false);
+    // 2026-11-16 overnight: the user's Chinese quoted exactly, then the decisions in English.
+    const wrapped = 'Evan (11-16, exact, voice): "\u4f60\u4e0d\u8981\u8ba9\u6211\u53bb\u505a\u8fd9\u4e2a\uff0c\u6211\u653e\u90a3\u4e48\u591a\u662f\u6709\u539f\u56e0\u7684"\n\n'
+      + 'Decisions: compaction limits stay exactly as he set them, and build cache-aware delivery next.';
+    expect(detectLanguageDrift(RULE, wrapped)).toBe(true);
+  });
+
   it('a short reply proves nothing', () => {
     expect(detectLanguageDrift(RULE, 'Done.')).toBe(false);
   });

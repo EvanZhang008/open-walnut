@@ -58,7 +58,8 @@ export function replyLanguageLine(text: string | null): string {
   const version = `v${createHash('sha1').update(text).digest('hex').slice(0, 8)}`
   const tagged = text.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => `[${version}] ${l}`).join('\n')
   return `Reply language, the user's setting (${version}): it covers every line the user reads, the short progress `
-    + `lines between tool calls included. Each line of this version starts with [${version}]:\n${tagged}\n\n`
+    + 'lines between tool calls and what you send to other tasks (task_send, org_send, a reply) included: the user reads those chats too. '
+    + `Each line of this version starts with [${version}]:\n${tagged}\n\n`
 }
 
 /** The last Approvals switch read, for the sync prompt builders (true until one is read: ask). */

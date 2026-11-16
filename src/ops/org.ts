@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { startTask, THREAD_HANDOFF_ARG } from './task-execution.js';
 import { handOffLine, type HandOffResult } from '../core/org/thread-follow.js';
-import { NO_REPLY_ASKED, sendBehindSlowHostLine, REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
+import { NO_REPLY_ASKED, sendBehindSlowHostLine, REPLY_ARRIVES_HINT, withLanguageNote, withOutcome } from './outcome.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 
 defineOp({
@@ -75,8 +75,8 @@ defineOp({
       // The contact's host did not take its last message in time: this one waits behind it.
       const waiting = sendBehindSlowHostLine(sent?.waiting, sent?.requestId, sent?.messageId);
       const moved = sent?.thread_handoff ? ` ${handOffLine(sent.thread_handoff as HandOffResult)}` : '';
-      return withOutcome({ ...(sent ?? {}), contact }, `Message queued for ${who}. Do NOT resend.${waiting ? ` ${waiting}` : ''}${moved}`,
-        asked ? `You asked for a reply (${sent.requestId}). ${REPLY_ARRIVES_HINT}` : NO_REPLY_ASKED);
+      return withLanguageNote(withOutcome({ ...(sent ?? {}), contact }, `Message queued for ${who}. Do NOT resend.${waiting ? ` ${waiting}` : ''}${moved}`,
+        asked ? `You asked for a reply (${sent.requestId}). ${REPLY_ARRIVES_HINT}` : NO_REPLY_ASKED), sent);
     };
     if (contact.started) return send();
     try {
@@ -86,7 +86,8 @@ defineOp({
         ...(thread ? { thread } : {}),
       }, call);
       const askedStart = typeof (started as { requestId?: unknown })?.requestId === 'string'
-      return withOutcome({ ...started, contact }, `Started ${who} with your message.`, askedStart ? REPLY_ARRIVES_HINT : NO_REPLY_ASKED);
+      // startTask already put a note on its own `next`; this answer is built anew, so it carries it again.
+      return withLanguageNote(withOutcome({ ...started, contact }, `Started ${who} with your message.`, askedStart ? REPLY_ARRIVES_HINT : NO_REPLY_ASKED), started);
     } catch (err) {
       // It has a session after all (one the contact read did not see, or a start that
       // won the race): a running task gets the message the way task_send gives it.

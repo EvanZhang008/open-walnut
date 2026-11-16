@@ -6,7 +6,7 @@ import type { OpCall } from './core.js';
 import { defineOp, getOp } from './registry.js';
 import { startTask, TASK_START_INPUT, THREAD_HANDOFF_ARG } from './task-execution.js';
 import { handOffLine, type HandOffResult } from '../core/org/thread-follow.js';
-import { deliveryWaitLine, NO_REPLY_ASKED, sendBehindSlowHostLine, REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
+import { deliveryWaitLine, NO_REPLY_ASKED, sendBehindSlowHostLine, REPLY_ARRIVES_HINT, withLanguageNote, withOutcome } from './outcome.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 import { USER_SPOKE_TEXT, USER_WORDS_BACK, userSaidLine, type UserSaid } from '../core/sessions/user-spoke.js';
 import { WORK_PLACE_RULE } from '../core/work-place.js';
@@ -105,86 +105,90 @@ defineOp({
     thread: THREAD_HANDOFF_ARG,
   },
   bind: { method: 'POST', path: '/messages' },
-  mapResult: ({ body, args }) => {
-    const b = (body ?? {}) as Record<string, unknown>;
-    const delivery = typeof b.delivery === 'string' ? b.delivery : '';
-    // The send result names its target `targetSessionId` (session-send-core.ts);
-    // fall back to whatever handle the caller used.
-    const target = typeof b.targetSessionId === 'string' && b.targetSessionId
-      ? b.targetSessionId
-      : String(args.to ?? args.in_reply_to ?? 'the session');
-    // The target's host did not take its last message in time: this one waits behind it.
-    const waiting = sendBehindSlowHostLine(b.waiting, b.requestId, b.messageId);
-    const said = userSaidLine(b.userSaid as UserSaid | undefined);
-    if (delivery === 'held') {
-      return withOutcome(
-        { ...b },
-        `Note held for ${b.targetTaskId || target}: it asks for no reply, so it starts no turn and rides that task's next message (folded with your other such notes). Do NOT resend.`,
-        'Nothing to wait for: no reply comes back.',
-      );
-    }
-    if (delivery === 'settled') {
-      const who = b.targetTaskId || target;
-      const s = (b.settled ?? {}) as { via?: string; board?: string; choice?: string; tool?: string; letterId?: string; settled?: boolean };
-      const where = s.via === 'board_choice' ? `its Board choice ${s.choice} on ${s.board} was answered and its Board's task told`
-        : s.via === 'question' ? 'its AskUserQuestion prompt was answered with your words'
-          : s.via === 'prompt_denied' ? `its ${s.tool} prompt was denied, with your answer as the reason (allowing a tool stays the user's)`
-            : s.via === 'letter' ? `its letter ${s.letterId} was ${s.settled ? 'settled' : 'answered'}, and the task told on the letter's own path`
-              : 'it was settled where it lives';
-      return withOutcome(
-        { ...b },
-        `${b.withdrawn === true ? 'Withdrawn' : 'Answered'} for the user on ${who}: ${where}. Walnut took the ask off the user's Needs you.${said ? ` ${said}` : ''}`,
-        'Nothing to wait for. Do NOT resend.',
-      );
-    }
-    if (delivery === 'recorded') {
-      const who = b.targetTaskId || target;
-      return withOutcome(
-        { ...b },
-        `${b.withdrawn === true ? 'Permanent withdrawal' : 'Answer'} recorded on ${who}: Walnut took its ask off the user's Needs you. Not delivered: the task is ${b.notWoken === 'complete' ? 'COMPLETE' : 'not running'}, so no turn was started and it does not know yet.${said ? ` ${said}` : ''}`,
-        `Nothing to wait for. If it must act on this answer, task_start ${who} with the answer in the message${b.notWoken === 'complete' ? ' (it reopens)' : ''}. Do NOT resend.`,
-      );
-    }
-    return withOutcome(
-      { ...b },
-      delivery === 'deferred'
-        ? `Message queued for ${target}: it is parked on a human permission prompt, so the text lands after the human answers. Do NOT resend.`
-        : `Message queued for ${b.targetTaskId || b.taskId || target}${args.force === true ? ' (forced: if it was complete, this reopens it)' : ''}. Accepted for delivery, not a completed reply. Do NOT resend.`
-          + (waiting ? ` ${waiting}` : '') + (said ? ` ${said}` : ''),
-      (args.in_reply_to && (Array.isArray(args.not_done) ? args.not_done.length > 0 : typeof args.not_done === 'string' && args.not_done.trim() !== '')
-        ? 'Marked Partial: the Board and the Brief list what is not done. ' : '')
-      + (typeof b.requestId === 'string' && b.requestId
-        ? `You asked for a reply (${b.requestId}). ${REPLY_ARRIVES_HINT}`
-        : args.in_reply_to ? REPLY_ARRIVES_HINT : NO_REPLY_ASKED)
-        + (typeof b.sameAnswerAs === 'string' && b.sameAnswerAs
-          ? (b.sameAnswerAs === b.repliedTo
-            ? ` These are the same words you already answered ${b.repliedTo} with: they were not delivered again.`
-            : ` These are the same words as your answer to ${b.sameAnswerAs}, which its asker already has: ${b.repliedTo} is settled by it too, and the asker read one line naming it, not the answer twice.`)
-          : '')
-        + (Array.isArray(b.answered) && b.answered.length > 1
-          ? ` This one answer settled ${b.answered.length} requests (${b.answered.join(', ')}); each asker reads it once. Do not answer them again one by one.`
-          : '')
-        + (Array.isArray(b.notAnswered) && b.notAnswered.length
-          ? ` It did NOT settle ${b.notAnswered.join(', ')}${b.notAnsweredWhy ? ` (${b.notAnsweredWhy})` : ''}: send the answer again with in_reply_to ${JSON.stringify(b.notAnswered)} only.`
-          : '')
-        + (Array.isArray(b.answeredFor) && b.answeredFor.length
-          ? ` It answered ${b.answeredFor.join(', ')} too, so it went straight to the original asker (${b.targetTaskId || target}); the task that handed it to you got one line saying so.`
-          : '')
-        + (b.withdrawn === true ? ' The user withdrew this ask for good; Walnut recorded the withdrawal and told the task.'
-          : args.answers_ask === true ? ' It answers that task\'s ask of the user: Walnut took it off the user\'s Needs you and told the task.' : '')
-        + (typeof b.openAsk === 'string' && b.openAsk
-          ? ` That task still asks the user: "${b.openAsk.replace(/\s+/g, ' ').slice(0, 160)}". If your message decides it, send one more short line with answers_ask: true naming the answer: only that takes it off the user's Needs you, and without it the user is asked again.`
-          : '')
-        + (typeof b.asksDecision === 'string' && b.asksDecision ? ` ${asksDecisionLine(b.asksDecision)}` : '')
-        + (Array.isArray(b.handedOn) && b.handedOn.length ? ` Handed on: ${b.handedOn.join(', ')} now wait for this task's answer, which goes straight to their asker; you read one line. Handed to several tasks, each answer comes to you: combine them and answer.` : '')
-        + (Array.isArray(b.handOnRefused) && b.handOnRefused.length
-          ? ` Not handed on: ${(b.handOnRefused as { id: string; reason: string }[]).map((r) => `${r.id} (${r.reason})`).join(', ')}.`
-          : '')
-        + (b.thread_handoff ? ` ${handOffLine(b.thread_handoff as HandOffResult)}` : ''),
-    );
-  },
+  // A message off the user's reply language: the route's note leads `next` (hints/reply-language-drift.ts).
+  mapResult: ({ body, args }) => withLanguageNote(sendOutcome(body, args), body),
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
+
+/** What a task_send answer says: the delivery, what comes back and what to do next. */
+function sendOutcome(body: unknown, args: Record<string, unknown>) {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const delivery = typeof b.delivery === 'string' ? b.delivery : '';
+  // The send result names its target `targetSessionId` (session-send-core.ts);
+  // fall back to whatever handle the caller used.
+  const target = typeof b.targetSessionId === 'string' && b.targetSessionId
+    ? b.targetSessionId
+    : String(args.to ?? args.in_reply_to ?? 'the session');
+  // The target's host did not take its last message in time: this one waits behind it.
+  const waiting = sendBehindSlowHostLine(b.waiting, b.requestId, b.messageId);
+  const said = userSaidLine(b.userSaid as UserSaid | undefined);
+  if (delivery === 'held') {
+    return withOutcome(
+      { ...b },
+      `Note held for ${b.targetTaskId || target}: it asks for no reply, so it starts no turn and rides that task's next message (folded with your other such notes). Do NOT resend.`,
+      'Nothing to wait for: no reply comes back.',
+    );
+  }
+  if (delivery === 'settled') {
+    const who = b.targetTaskId || target;
+    const s = (b.settled ?? {}) as { via?: string; board?: string; choice?: string; tool?: string; letterId?: string; settled?: boolean };
+    const where = s.via === 'board_choice' ? `its Board choice ${s.choice} on ${s.board} was answered and its Board's task told`
+      : s.via === 'question' ? 'its AskUserQuestion prompt was answered with your words'
+        : s.via === 'prompt_denied' ? `its ${s.tool} prompt was denied, with your answer as the reason (allowing a tool stays the user's)`
+          : s.via === 'letter' ? `its letter ${s.letterId} was ${s.settled ? 'settled' : 'answered'}, and the task told on the letter's own path`
+            : 'it was settled where it lives';
+    return withOutcome(
+      { ...b },
+      `${b.withdrawn === true ? 'Withdrawn' : 'Answered'} for the user on ${who}: ${where}. Walnut took the ask off the user's Needs you.${said ? ` ${said}` : ''}`,
+      'Nothing to wait for. Do NOT resend.',
+    );
+  }
+  if (delivery === 'recorded') {
+    const who = b.targetTaskId || target;
+    return withOutcome(
+      { ...b },
+      `${b.withdrawn === true ? 'Permanent withdrawal' : 'Answer'} recorded on ${who}: Walnut took its ask off the user's Needs you. Not delivered: the task is ${b.notWoken === 'complete' ? 'COMPLETE' : 'not running'}, so no turn was started and it does not know yet.${said ? ` ${said}` : ''}`,
+      `Nothing to wait for. If it must act on this answer, task_start ${who} with the answer in the message${b.notWoken === 'complete' ? ' (it reopens)' : ''}. Do NOT resend.`,
+    );
+  }
+  return withOutcome(
+    { ...b },
+    delivery === 'deferred'
+      ? `Message queued for ${target}: it is parked on a human permission prompt, so the text lands after the human answers. Do NOT resend.`
+      : `Message queued for ${b.targetTaskId || b.taskId || target}${args.force === true ? ' (forced: if it was complete, this reopens it)' : ''}. Accepted for delivery, not a completed reply. Do NOT resend.`
+        + (waiting ? ` ${waiting}` : '') + (said ? ` ${said}` : ''),
+    (args.in_reply_to && (Array.isArray(args.not_done) ? args.not_done.length > 0 : typeof args.not_done === 'string' && args.not_done.trim() !== '')
+      ? 'Marked Partial: the Board and the Brief list what is not done. ' : '')
+    + (typeof b.requestId === 'string' && b.requestId
+      ? `You asked for a reply (${b.requestId}). ${REPLY_ARRIVES_HINT}`
+      : args.in_reply_to ? REPLY_ARRIVES_HINT : NO_REPLY_ASKED)
+      + (typeof b.sameAnswerAs === 'string' && b.sameAnswerAs
+        ? (b.sameAnswerAs === b.repliedTo
+          ? ` These are the same words you already answered ${b.repliedTo} with: they were not delivered again.`
+          : ` These are the same words as your answer to ${b.sameAnswerAs}, which its asker already has: ${b.repliedTo} is settled by it too, and the asker read one line naming it, not the answer twice.`)
+        : '')
+      + (Array.isArray(b.answered) && b.answered.length > 1
+        ? ` This one answer settled ${b.answered.length} requests (${b.answered.join(', ')}); each asker reads it once. Do not answer them again one by one.`
+        : '')
+      + (Array.isArray(b.notAnswered) && b.notAnswered.length
+        ? ` It did NOT settle ${b.notAnswered.join(', ')}${b.notAnsweredWhy ? ` (${b.notAnsweredWhy})` : ''}: send the answer again with in_reply_to ${JSON.stringify(b.notAnswered)} only.`
+        : '')
+      + (Array.isArray(b.answeredFor) && b.answeredFor.length
+        ? ` It answered ${b.answeredFor.join(', ')} too, so it went straight to the original asker (${b.targetTaskId || target}); the task that handed it to you got one line saying so.`
+        : '')
+      + (b.withdrawn === true ? ' The user withdrew this ask for good; Walnut recorded the withdrawal and told the task.'
+        : args.answers_ask === true ? ' It answers that task\'s ask of the user: Walnut took it off the user\'s Needs you and told the task.' : '')
+      + (typeof b.openAsk === 'string' && b.openAsk
+        ? ` That task still asks the user: "${b.openAsk.replace(/\s+/g, ' ').slice(0, 160)}". If your message decides it, send one more short line with answers_ask: true naming the answer: only that takes it off the user's Needs you, and without it the user is asked again.`
+        : '')
+      + (typeof b.asksDecision === 'string' && b.asksDecision ? ` ${asksDecisionLine(b.asksDecision)}` : '')
+      + (Array.isArray(b.handedOn) && b.handedOn.length ? ` Handed on: ${b.handedOn.join(', ')} now wait for this task's answer, which goes straight to their asker; you read one line. Handed to several tasks, each answer comes to you: combine them and answer.` : '')
+      + (Array.isArray(b.handOnRefused) && b.handOnRefused.length
+        ? ` Not handed on: ${(b.handOnRefused as { id: string; reason: string }[]).map((r) => `${r.id} (${r.reason})`).join(', ')}.`
+        : '')
+      + (b.thread_handoff ? ` ${handOffLine(b.thread_handoff as HandOffResult)}` : ''),
+  );
+}
 
 defineOp({
   ...getOp('task_start')!,

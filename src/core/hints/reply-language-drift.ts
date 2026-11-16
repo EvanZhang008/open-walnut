@@ -17,8 +17,13 @@
  *     hint (hint-registry.ts, its one trigger `on_drift`) with the correction.
  *   - A letter a session writes the user (human_inbox_send, human_inbox_reply, a router's for_user
  *     brief): one off gets a note in the op's answer, the next tool result its writer reads.
+ *   - A message a session sends another task (task_send, org_send, a reply, a start's message, a
+ *     Board post; 2026-11-16, the org reflection: 87 of 114 overnight peer notes and replies were
+ *     English, and each receiver answered on in English, 67 drifts marked in a day): the same note
+ *     in the send's answer. The user reads those chats too. The class guard is
+ *     tests/core/hints/reply-language-letter-ops-guard.test.ts.
  *
- * The Settings switch of the `reply-language` hint turns all three off. The correction's words are
+ * The Settings switch of the `reply-language` hint turns every one of them off. The correction's words are
  * Walnut's English followed by the user's own rule (2026-11-05, the user: no language of Walnut's
  * own in the product).
  */
@@ -76,7 +81,7 @@ const deliveredBy = new Map<string, boolean>();
 /** The correction's fixed words; the user's rule follows them. */
 export function liveCorrectionText(said: string): string {
   return `Your line just now was not in the user's language: "${said}". Write every line from here on in it, `
-    + 'the short ones between tool calls included, also when a tool result or a message you received is in English.';
+    + 'the short ones between tool calls and what you send to other tasks included, also when a tool result or a message you received is in English.';
 }
 /** Said in English in every language: the tag is the same in all. */
 export const LIVE_LATE_LINE = 'If your turn had already ended when this arrived, reply with only <walnut-turn status="agent-ack"/>.';
@@ -91,11 +96,15 @@ export function liveCorrectionMessage(rule: string, said: string): string {
   });
 }
 
-/** The note a letter (a thread post, a Brief) off the language gets in its op's answer. */
+/** The note a letter (a thread post, a Brief, a message to another task) off the language gets in its op's answer. */
 export function letterLanguageNoteText(rule: string, what = 'letter'): string {
   return `Reply language: this ${what} is not in the user's language. It went out as written; write every letter, `
-    + `thread post, Brief and line the user reads in it from now on (an English quote or draft inside one is fine). ${rule}`;
+    + 'thread post, Brief, message to another task and line the user reads in it from now on (the user reads those chats too; '
+    + `code, commands, paths and quoted words keep their own language). ${rule}`;
 }
+
+/** What a message to another task is called in the note. */
+export const MESSAGE_WHAT = 'message to another task';
 
 let ruleCache: { rule: string | null; enabled: boolean; at: number } | null = null;
 /** The rule and the switch; kept 30 s for the per-tool-call path, emptied on a settings change. A letter reads fresh. */
@@ -119,7 +128,7 @@ function readable(text: string): string {
  * A letter's words (subject, body, preview), judged as one: the note for its op's answer when it is
  * off the user's language, else null. Never throws.
  */
-export async function letterLanguageNote(parts: ReadonlyArray<unknown>, what = 'letter'): Promise<string | null> {
+export async function letterLanguageNote(parts: ReadonlyArray<unknown>, what = 'letter', callerSid?: string): Promise<string | null> {
   try {
     // A body may be megabytes of inline media: its head is enough to tell, and the event loop stays free.
     const text = parts.filter((p): p is string => typeof p === 'string' && !!p.trim())
@@ -127,7 +136,27 @@ export async function letterLanguageNote(parts: ReadonlyArray<unknown>, what = '
     if (!text) return null;
     const { rule, enabled } = await currentRule(true);
     if (!rule || !enabled) return null;
-    return languageDrift(rule, readable(text)) === true ? letterLanguageNoteText(rule, what) : null;
+    if (languageDrift(rule, readable(text)) !== true) return null;
+    log.session.info('reply-language: sent off the language, the writer told', { what, ...(callerSid ? { sessionId: callerSid } : {}) });
+    return letterLanguageNoteText(rule, what);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A message a session sends another task (its title, text and a reply's result and not_done), or
+ * a post the user reads, judged as a letter is: the note for its answer, else null. Only a live
+ * session's own words are judged: the user's own CLI, a script, an App relaying someone's words
+ * or a session an engine switch replaced get none. Never throws.
+ */
+export async function messageLanguageNote(callerSid: string | undefined, parts: ReadonlyArray<unknown>, what = MESSAGE_WHAT): Promise<string | null> {
+  if (!callerSid?.trim()) return null;
+  try {
+    const { trustedCallerSessionId } = await import('../sessions/session-send-core.js');
+    const sid = await trustedCallerSessionId(callerSid);
+    if (!sid) return null;
+    return await letterLanguageNote(parts.flatMap((p) => (Array.isArray(p) ? p : [p])), what, sid);
   } catch {
     return null;
   }

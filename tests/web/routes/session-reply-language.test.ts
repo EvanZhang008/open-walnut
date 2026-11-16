@@ -144,7 +144,7 @@ describe('replyLanguageText', () => {
 describe('the system prompt carries it', () => {
   it('the block is the setting in its words, with what it covers, tagged with its version', () => {
     const v = /\((v[0-9a-f]{8})\)/.exec(PROMPT_LINE)![1]
-    expect(PROMPT_LINE).toBe(`${PROMPT_HEAD}${v}): it covers every line the user reads, the short progress lines between tool calls included. Each line of this version starts with [${v}]:\n[${v}] ${RULE}`)
+    expect(PROMPT_LINE).toBe(`${PROMPT_HEAD}${v}): it covers every line the user reads, the short progress lines between tool calls and what you send to other tasks (task_send, org_send, a reply) included: the user reads those chats too. Each line of this version starts with [${v}]:\n[${v}] ${RULE}`)
     expect(replyLanguageLine('Answer in French.')).not.toContain(v)
     expect(replyLanguageLine(null)).toBe('')
     expect(replyLanguageLine('')).toBe('')

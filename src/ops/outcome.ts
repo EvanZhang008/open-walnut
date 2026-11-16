@@ -62,6 +62,15 @@ export function withOutcome<T extends Record<string, unknown>>(
 }
 
 /**
+ * A send or post whose words were off the user's reply language (the route's `reply_language`,
+ * hints/reply-language-drift.ts): its note leads `next`, the line the writer acts on.
+ */
+export function withLanguageNote<T extends { next: string }>(result: T, body: unknown): T {
+  const note = (body as { reply_language?: unknown } | null | undefined)?.reply_language
+  return typeof note === 'string' && note ? { ...result, next: `${note} ${result.next}` } : result
+}
+
+/**
  * What a message still waits on, for the agent that sent it: the words the user's bubble
  * shows, the next try Walnut makes by itself, and how to send it now. '' when nothing holds it.
  * (request_get and message_send_now; a fresh send says it in sendBehindSlowHostLine.)
