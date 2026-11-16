@@ -497,3 +497,6 @@
 }
 .drawing-assistant-chat { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .drawing-assistant-chat > * { flex: 1 1 auto; min-height: 0; }
+.drawing-assistant-intro { padding: 4px 4px 0; color: var(--fg-secondary); font-size: 13px; line-height: 1.5; }
+.drawing-assistant-intro p { margin: 0 0 8px; }
+.drawing-assistant-intro ul { margin: 0; padding-left: 18px; color: var(--fg-muted); }

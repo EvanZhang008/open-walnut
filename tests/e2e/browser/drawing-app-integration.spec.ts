@@ -611,6 +611,9 @@ test.describe('Drawing real plugin acceptance', () => {
     const composer = panel.locator('textarea').first()
     await expect(composer).toBeVisible({ timeout: 30_000 })
     await expect(composer).toHaveAttribute('placeholder', /Ask for a change/)
+    // Its own starter text, not Walnut's general asks ("Schedule my day" means nothing here).
+    await expect(panel.getByText('Tell Walnut what to change in this drawing.', { exact: false })).toBeVisible()
+    await expect(panel.getByText('Schedule my day')).toHaveCount(0)
     await shot(page, 'assistant-open')
 
     const context = page.waitForRequest((req) => req.method() === 'POST' && new URL(req.url()).pathname === '/api/v1/hints/context')

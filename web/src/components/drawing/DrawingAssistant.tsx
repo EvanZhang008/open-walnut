@@ -53,6 +53,16 @@ export function DrawingAssistant({ path, title, onClose }: DrawingAssistantProps
           onClose={() => { (document.activeElement as HTMLElement | null)?.blur(); }}
           plainChat
           noQuote
+          intro={(
+            <div className="drawing-assistant-intro">
+              <p>Tell Walnut what to change in this drawing. Each edit shows on the canvas as it is made.</p>
+              <ul>
+                <li>Align the boxes and space them evenly</li>
+                <li>Add a cache between the API and the database</li>
+                <li>Turn my sketch into a clean diagram</li>
+              </ul>
+            </div>
+          )}
           composerPlaceholder="Ask for a change: align the boxes, add a cache between API and DB…"
         />
       </div>

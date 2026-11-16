@@ -102,6 +102,9 @@ export interface AskObjectDrawerProps {
   composerBar?: ReactNode;
   /** In plain chat: no quote of the object over the first question (the host names it in the composer). */
   noQuote?: boolean;
+  /** In plain chat with no quote: what the empty conversation shows in place of Walnut's starter
+   *  asks ("Schedule my day" means nothing to a drawing's assistant). */
+  intro?: ReactNode;
   /** The quote's own ×: the host leaves what it quotes out of the first question (the side panel's selection). */
   onDropQuote?: () => void;
   /**
@@ -529,7 +532,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
           draft={askDraft.draft}
           autoFocus
           {...(backButton ? { headerLeading: backButton } : {})}
-          {...(props.plainChat && props.noQuote ? {} : { intro: quoteCard })}
+          {...(props.plainChat && props.noQuote ? (props.intro ? { intro: props.intro } : {}) : { intro: quoteCard })}
           onStart={onStart}
           onSaveAsTask={onSaveAsTask}
           onClose={onClose}
