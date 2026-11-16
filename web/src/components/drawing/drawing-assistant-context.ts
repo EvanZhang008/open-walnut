@@ -3,9 +3,19 @@
  * conversation is remembered under. Pure, so the words the agent reads are tested as they are.
  */
 
+import { moveAskSession } from '@/components/chat/ask-object-session';
+
+/** The console's own Walnut, the same one Ask Walnut and Mail's questions talk to. */
+export const DRAWING_ASSISTANT_AGENT = 'general';
+
 /** One remembered conversation per drawing file. */
 export function drawingAssistantKey(path: string): string {
   return `drawing:${path}`;
+}
+
+/** The same drawing under a new name (renamed here, elsewhere or by Walnut): its conversation follows. */
+export function followDrawingRename(from: string, to: string): void {
+  moveAskSession({ agentId: DRAWING_ASSISTANT_AGENT, key: drawingAssistantKey(from) }, { agentId: DRAWING_ASSISTANT_AGENT, key: drawingAssistantKey(to) });
 }
 
 /**

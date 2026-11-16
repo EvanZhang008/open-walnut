@@ -44,3 +44,30 @@ describe('the drawing assistant', () => {
     expect(read('web/src/components/drawing/DrawingAssistant.tsx')).toMatch(/taskMeta: \{ \.\.\.body\.taskMeta, pinTier: null \}/)
   })
 })
+
+describe('a renamed drawing keeps its assistant conversation', () => {
+  it('moves the remembered session to the new path, never over one the new path has', async () => {
+    const { moveAskSession, readAskSession, writeAskSession } = await import('../../web/src/components/chat/ask-object-session.js')
+    const mem = new Map<string, string>()
+    const storage = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v) }, removeItem: (k: string) => { mem.delete(k) } }
+    const scope = (p: string) => ({ agentId: 'general', key: drawingAssistantKey(p) })
+    writeAskSession(scope('a.excalidraw'), { taskId: 't1', sessionId: 's1', asked: [], at: 1 }, storage)
+    moveAskSession(scope('a.excalidraw'), scope('b.excalidraw'), storage)
+    expect(readAskSession(scope('b.excalidraw'), storage)?.sessionId).toBe('s1')
+    expect(readAskSession(scope('a.excalidraw'), storage)).toBeNull()
+    // The new path already has its own: kept, and the old one is let go.
+    writeAskSession(scope('c.excalidraw'), { taskId: 't2', sessionId: 's2', asked: [], at: 1 }, storage)
+    writeAskSession(scope('d.excalidraw'), { taskId: 't3', sessionId: 's3', asked: [], at: 1 }, storage)
+    moveAskSession(scope('c.excalidraw'), scope('d.excalidraw'), storage)
+    expect(readAskSession(scope('d.excalidraw'), storage)?.sessionId).toBe('s3')
+  })
+
+  it('is followed by the workspace for one controller only (another drawing opened is not a rename)', () => {
+    const workspace = read('web/src/components/drawing/DrawingWorkspace.tsx')
+    expect(workspace).toMatch(/before\.controller === controller && before\.path && path && before\.path !== path\) followDrawingRename\(before\.path, path\)/)
+  })
+
+  it('Escape in the chat hands the keys back to the drawing, and an Escape elsewhere is left alone', () => {
+    expect(read('web/src/components/drawing/DrawingAssistant.tsx')).toMatch(/onClose=\{\(\) => \{ if \(panel\.current\?\.contains\(document\.activeElement\)\) onLeave\(\); \}\}/)
+  })
+})

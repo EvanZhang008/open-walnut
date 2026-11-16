@@ -107,6 +107,22 @@ export function forgetAskSession(
   try { storage?.removeItem(storeKey(scope)); } catch { /* see writeAskSession */ }
 }
 
+/**
+ * The object was renamed (a drawing's path is its key): its remembered conversation goes with it,
+ * unless the new name already has one of its own.
+ */
+export function moveAskSession(
+  from: AskSessionScope,
+  to: AskSessionScope,
+  storage: AskSessionStorage | undefined = browserStorage(),
+): void {
+  if (storeKey(from) === storeKey(to)) return;
+  const record = readAskSession(from, storage);
+  if (!record) return;
+  if (!readAskSession(to, storage)) writeAskSession(to, record, storage);
+  forgetAskSession(from, storage);
+}
+
 /** Has this canned question already been sent into the remembered session? */
 export function askSessionAsked(record: AskSessionRecord | null, preset: string): boolean {
   return Boolean(record && preset && record.asked.includes(presetLatchName(preset)));

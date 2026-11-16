@@ -10,19 +10,19 @@
 import { useCallback, useRef } from 'react';
 import { AskObjectDrawer } from '@/components/chat/AskObjectDrawer';
 import type { AskSessionLaunch } from '@/components/chat/ask-object-session';
-import { drawingAssistantContext, drawingAssistantKey } from './drawing-assistant-context';
-
-/** The console's own Walnut, the same one Ask Walnut and Mail's questions talk to. */
-export const DRAWING_ASSISTANT_AGENT = 'general';
+import { DRAWING_ASSISTANT_AGENT, drawingAssistantContext, drawingAssistantKey } from './drawing-assistant-context';
 
 export interface DrawingAssistantProps {
   /** The drawing file the chat is about. */
   path: string;
   title: string;
   onClose(): void;
+  /** Escape in the chat: the keys go back to the drawing. */
+  onLeave(): void;
 }
 
-export function DrawingAssistant({ path, title, onClose }: DrawingAssistantProps) {
+export function DrawingAssistant({ path, title, onClose, onLeave }: DrawingAssistantProps) {
+  const panel = useRef<HTMLElement>(null);
   const latest = useRef({ path, title });
   latest.current = { path, title };
   // The first question carries the drawing as it is named then (a rename since opening included).
@@ -30,7 +30,7 @@ export function DrawingAssistant({ path, title, onClose }: DrawingAssistantProps
   const adjustLaunch = useCallback((body: AskSessionLaunch): AskSessionLaunch => ({ ...body, taskMeta: { ...body.taskMeta, pinTier: null } }), []);
   const objectKey = drawingAssistantKey(path);
   return (
-    <aside className="drawing-assistant" aria-label="Drawing assistant">
+    <aside ref={panel} className="drawing-assistant" aria-label="Drawing assistant">
       <div className="drawing-assistant-head">
         <span>Assistant</span>
         <button type="button" className="drawing-icon-button" aria-label="Close assistant" title="Close assistant" onClick={onClose}>
@@ -49,8 +49,9 @@ export function DrawingAssistant({ path, title, onClose }: DrawingAssistantProps
           contextName="Drawing you are changing"
           prepareContext={prepareContext}
           adjustLaunch={adjustLaunch}
-          // Escape leaves the composer; the panel closes only from its own button.
-          onClose={() => { (document.activeElement as HTMLElement | null)?.blur(); }}
+          // Escape in the chat hands the keys back to the drawing; an Escape anywhere else (the drawer
+          // hears every one on the page) is the canvas's own. The panel closes only from its button.
+          onClose={() => { if (panel.current?.contains(document.activeElement)) onLeave(); }}
           plainChat
           noQuote
           intro={(

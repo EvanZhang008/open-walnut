@@ -32,6 +32,7 @@ import { addCatalogLibrary, tabLibrary } from './drawing-library';
 import { isFullscreenShortcut, liftFixedAncestors } from './drawing-overlay';
 import { LibraryBrowser } from './LibraryBrowser';
 import { workspacePlace, workspaceViewKeys } from './workspace-place';
+import { followDrawingRename } from './drawing-assistant-context';
 import type { CanvasMenu, DrawingCanvasHandle, ExcalidrawCanvasProps } from './ExcalidrawCanvas';
 
 // The chat (SessionPanel and its composer) loads only when the assistant is opened.
@@ -344,6 +345,17 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       window.removeEventListener('focus', tick);
     };
   }, [refreshList]);
+
+  // The same drawing under a new path (one controller, renamed here, elsewhere or by Walnut): its
+  // assistant conversation follows it. Another drawing opened is another controller.
+  const shownPathOf = useRef<{ controller: DrawingSync | null; path: string | null }>({ controller: null, path: null });
+  useEffect(() => {
+    const path = snap?.path ?? null;
+    const controller = sync.current;
+    const before = shownPathOf.current;
+    if (controller && before.controller === controller && before.path && path && before.path !== path) followDrawingRename(before.path, path);
+    shownPathOf.current = { controller, path };
+  }, [snap?.path]);
 
   // The server says this drawing changed (an agent's edit): take it now, not at the next poll.
   // The callback is read fresh on every event, so it always compares against the shown revision.
@@ -722,7 +734,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       </section>
       {assistantShown && currentPath && (
         <Suspense fallback={<aside className="drawing-assistant" aria-label="Drawing assistant"><p className="drawing-workspace-files-note">Loading…</p></aside>}>
-          <DrawingAssistant path={currentPath} title={title} onClose={() => { setAssistantShown(false); requestAnimationFrame(() => canvas.current?.focus()); }} />
+          <DrawingAssistant path={currentPath} title={title} onLeave={() => canvas.current?.focus()}
+            onClose={() => { setAssistantShown(false); requestAnimationFrame(() => canvas.current?.focus()); }} />
         </Suspense>
       )}
       {libraryDialogOpen && <LibraryBrowser onClose={() => setLibraryDialogOpen(false)} onAdded={() => canvas.current?.openLibrary()} />}
