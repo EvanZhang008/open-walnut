@@ -150,7 +150,7 @@ final class SessionStopSteerUITests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 10), "the queued message did not open")
         attach(app, "4-edit-sheet")
         editor.tap()
-        editor.press(forDuration: 1.0)
+        longPress(editor, 1.0)
         if app.menuItems["Select All"].waitForExistence(timeout: 2) { app.menuItems["Select All"].tap() }
         editor.typeText("Skip the shards older than a week")
         element(app, "session.queue.save").tap()
@@ -431,7 +431,7 @@ final class SessionStopSteerUITests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         XCTAssertTrue(editor.isEnabled, "a message a Stop set aside can still be corrected")
         editor.tap()
-        editor.press(forDuration: 1.0)
+        longPress(editor, 1.0)
         if app.menuItems["Select All"].waitForExistence(timeout: 2) { app.menuItems["Select All"].tap() }
         editor.typeText("Then check the archive from last year")
         // Closing with words not saved asks before it throws them away.

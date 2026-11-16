@@ -118,7 +118,7 @@ final class TaskPageLargeTypeUITests: XCTestCase {
         }
         let ready = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: row)
         XCTAssertEqual(XCTWaiter().wait(for: [ready], timeout: 10), .completed, "the first row never became hittable")
-        row.press(forDuration: 1.0)
+        longPress(row, 1.0)
         let details = app.buttons["Details, dates & priority"]
         XCTAssertTrue(details.waitForExistence(timeout: 5), "no Details item in the row menu")
         details.tap()

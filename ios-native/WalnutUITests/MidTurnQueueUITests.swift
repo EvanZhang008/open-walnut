@@ -390,7 +390,7 @@ final class MidTurnQueueUITests: XCTestCase {
         // synthesized key events and non-ASCII through a different path that can
         // deliver nothing at all.
         UIPasteboard.general.string = text
-        field.press(forDuration: 1.2)
+        longPress(field, 1.2)
         let paste = app.menuItems["Paste"].firstMatch
         if paste.waitForExistence(timeout: 5) {
             paste.tap()

@@ -218,7 +218,7 @@ final class DemoModeUITests: XCTestCase {
         let row = element(app, "board.row.t-crash")
         scrollBoard(to: row, in: app)
         XCTAssertTrue(row.waitForExistence(timeout: 30))
-        row.press(forDuration: 1)
+        longPress(row, 1)
         app.buttons["Details, dates & priority"].tap()
         let sheet = app.navigationBars["Task"]
         XCTAssertTrue(sheet.waitForExistence(timeout: 10))
@@ -244,7 +244,7 @@ final class DemoModeUITests: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
         sheet.buttons["Done"].tap()
-        row.press(forDuration: 1)
+        longPress(row, 1)
         app.buttons["Details, dates & priority"].tap()
         XCTAssertTrue(sheet.waitForExistence(timeout: 10))
         XCTAssertTrue(pin.label.hasPrefix("Pin"))
@@ -291,7 +291,7 @@ final class DemoModeUITests: XCTestCase {
         search.typeText("Legacy pin compatibility")
         let hit = element(app, "board.row.\(taskId)")
         XCTAssertTrue(hit.waitForExistence(timeout: 30))
-        hit.press(forDuration: 1)
+        longPress(hit, 1)
         let move = app.buttons["Move to Tier"].firstMatch
         XCTAssertTrue(move.waitForExistence(timeout: 5), "a pinned row must offer its tier menu")
         move.tap()
@@ -328,7 +328,7 @@ final class DemoModeUITests: XCTestCase {
         satelliteChip.tap()
         let row = element(app, "board.row.\(taskId)")
         scrollBoard(to: row, in: app)
-        row.press(forDuration: 1)
+        longPress(row, 1)
         app.buttons["Details, dates & priority"].tap()
         let sheet = app.navigationBars["Task"]
         XCTAssertTrue(sheet.waitForExistence(timeout: 10))
@@ -402,7 +402,7 @@ final class DemoModeUITests: XCTestCase {
         customChip.tap()
         scrollBoard(to: row, in: app)
         XCTAssertTrue(row.isHittable)
-        row.press(forDuration: 1)
+        longPress(row, 1)
         app.buttons["Details, dates & priority"].tap()
         XCTAssertTrue(sheet.waitForExistence(timeout: 10))
         XCTAssertTrue(pin.label.hasPrefix("Pin"))
@@ -423,7 +423,7 @@ final class DemoModeUITests: XCTestCase {
         let cached = element(offline, "board.row.\(taskId)")
         scrollBoard(to: cached, in: offline)
         XCTAssertTrue(cached.waitForExistence(timeout: 10), "offline cache lost the pin")
-        cached.press(forDuration: 1)
+        longPress(cached, 1)
         offline.buttons["Details, dates & priority"].tap()
         let offlinePin = offline.buttons["task.prop.board"]
         XCTAssertTrue(offlinePin.waitForExistence(timeout: 10))
@@ -587,7 +587,7 @@ final class DemoModeUITests: XCTestCase {
             XCTAssertLessThan(mover.frame.minY, below.frame.minY, "\(moment): the row is below its place")
         }
 
-        mover.press(forDuration: 1.2)
+        longPress(mover, 1.2)
         let moveTo = app.buttons["Move to Tier"]
         XCTAssertTrue(moveTo.waitForExistence(timeout: 5), "no Move to Tier in the row's menu")
         moveTo.tap()
@@ -709,7 +709,7 @@ final class DemoModeUITests: XCTestCase {
         XCTAssertTrue(draftComposer.waitForExistence(timeout: 10), "no composer on the create page")
         draftComposer.tap()
         draftComposer.typeText("Order new garden hose")
-        XCTAssertTrue(saveTodo.isEnabled, "Save as todo stayed dimmed with words typed")
+        XCTAssertTrue(waitToMatch(saveTodo, "isEnabled == true"), "Save as todo stayed dimmed with words typed")
         saveTodo.tap()
         XCTAssertTrue(element(app, "newSessionChat.pathPill").waitForNonExistence(timeout: 10),
                       "the create page did not close")

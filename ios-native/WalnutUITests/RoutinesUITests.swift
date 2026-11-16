@@ -333,7 +333,7 @@ final class RoutinesUITests: XCTestCase {
         reveal(app, edit)
         nudge(app, delete)
         settle()
-        XCTAssertTrue(edit.isHittable)
+        XCTAssertTrue(waitToMatch(edit, "isHittable == true"), "Edit is not tappable at this size")
         XCTAssertLessThanOrEqual(delete.frame.maxY, tabTop(app), "Delete is under the tab bar")
         // Two even lines at this size: Run now and Edit, Open task and Delete.
         let run = app.buttons["routines.run.r-router"]
@@ -408,9 +408,9 @@ final class RoutinesUITests: XCTestCase {
         // At its end, so the deletes take the whole name.
         name.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
         name.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 40))
-        XCTAssertFalse(app.buttons["routines.editor.save"].isEnabled, "Save is on with no name")
+        XCTAssertTrue(waitToMatch(app.buttons["routines.editor.save"], "isEnabled == false"), "Save is on with no name")
         name.typeText("Payments pipeline watch")
-        XCTAssertTrue(app.buttons["routines.editor.save"].isEnabled)
+        XCTAssertTrue(waitToMatch(app.buttons["routines.editor.save"], "isEnabled == true"), "Save stayed off with a name")
         shot("12-edit-sheet")
         // Under its Task and Schedule: the trigger's check command.
         // A drag on the sheet, above the keyboard: an app-wide swipe with the keyboard up
@@ -449,11 +449,11 @@ final class RoutinesUITests: XCTestCase {
         XCTAssertFalse(save.isEnabled, "Create is on for an empty routine")
         name.tap()
         name.typeText("Stretch break")
-        XCTAssertFalse(save.isEnabled, "Create is on with nothing to send")
+        XCTAssertTrue(waitToMatch(save, "isEnabled == false"), "Create is on with nothing to send")
         let sends = app.textFields["routines.editor.sends"].exists ? app.textFields["routines.editor.sends"] : app.textViews["routines.editor.sends"]
         sends.tap()
         sends.typeText("Remind me to stand up and stretch.")
-        XCTAssertTrue(save.isEnabled)
+        XCTAssertTrue(waitToMatch(save, "isEnabled == true"), "Create stayed off with a name and words to send")
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Runs in Home Chat")).firstMatch.exists,
                       "the sheet does not name where it runs as the row does")
         shot("14-new-routine-sheet")

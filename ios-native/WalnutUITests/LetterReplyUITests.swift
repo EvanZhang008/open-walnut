@@ -1600,7 +1600,7 @@ final class LetterReplyUITests: XCTestCase {
         let landed = fieldText(field).count - before.count
         if landed > 0 { field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: landed)) }
         UIPasteboard.general.string = text
-        field.press(forDuration: 1.2)
+        longPress(field, 1.2)
         let paste = app.menuItems["Paste"].firstMatch
         if paste.waitForExistence(timeout: 5) { paste.tap() }
         XCTAssertTrue(waitUntil(timeout: 5) { self.fieldText(field) == before + text },
@@ -1617,7 +1617,7 @@ final class LetterReplyUITests: XCTestCase {
         let landed = fieldText(field).count - before.count
         if landed > 0 { field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: landed)) }
         UIPasteboard.general.string = text
-        field.press(forDuration: 1.2)
+        longPress(field, 1.2)
         let paste = app.menuItems["Paste"].firstMatch
         if paste.waitForExistence(timeout: 5) { paste.tap() }
         XCTAssertTrue(waitUntil(timeout: 5) { self.fieldText(field) == before + text },

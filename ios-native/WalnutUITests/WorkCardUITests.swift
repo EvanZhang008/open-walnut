@@ -105,7 +105,7 @@ final class WorkCardUITests: XCTestCase {
         // Held, the island opens up with every count, each its own link.
         XCUIDevice.shared.press(.home)
         sleep(2)
-        count(springboard, "Needs you").press(forDuration: 1.2)
+        longPress(count(springboard, "Needs you"), 1.2)
         let expandedWorking = count(springboard, "Working")
         XCTAssertTrue(expandedWorking.waitForExistence(timeout: 5), "the island did not open up")
         sleep(1)

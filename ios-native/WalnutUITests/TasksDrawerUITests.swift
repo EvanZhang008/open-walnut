@@ -120,7 +120,7 @@ final class TasksDrawerUITests: XCTestCase {
     /// Open the task's details through the row's long-press menu, then close the sheet.
     private func openDetails(_ app: XCUIApplication, row: XCUIElement) {
         waitHittable(row)
-        row.press(forDuration: 1.0)
+        longPress(row, 1.0)
         let details = app.buttons["Details, dates & priority"]
         XCTAssertTrue(details.waitForExistence(timeout: 5), "no Details item in the row menu")
         details.tap()
@@ -233,7 +233,7 @@ final class TasksDrawerUITests: XCTestCase {
 
         // …and the details row's long press opens the details.
         openRecents(app)
-        app.descendants(matching: .any)["tasks.recents.row.\(detailsId)"].press(forDuration: 1.0)
+        longPress(app.descendants(matching: .any)["tasks.recents.row.\(detailsId)"], 1.0)
         let details = app.buttons["Task Details"]
         XCTAssertTrue(details.waitForExistence(timeout: 5), "no Task Details in the row's menu")
         details.tap()

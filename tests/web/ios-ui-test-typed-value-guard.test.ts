@@ -7,6 +7,10 @@
  * ThreadFollowUpVoiceUITests read "Ty" for "Typed without voice", QuickQuestionRenameUITests "Q"
  * for "Quick question"). The class: `<field>.typeText(...)` followed within two lines by
  * `XCTAssertEqual(<field>.value as? String, ...)`. One shared wait, no private copies.
+ *
+ * A button's state that follows the typing lags the same way (RoutinesUITests: Save still on
+ * right after the name was deleted), so `XCTAssertTrue/False(<any>.isEnabled` within two lines
+ * after a `typeText` is the same mistake: wait with `waitToMatch(button, "isEnabled == ...")`.
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
@@ -27,7 +31,8 @@ export function typedThenReadAtOnce(src: string): number[] {
     if (!typed) return
     const field = typed[1].replace(/[.]/g, '\\.')
     const readAtOnce = new RegExp(`XCTAssertEqual\\(\\s*${field}\\.value as\\? String`)
-    for (let j = i + 1; j <= i + 2 && j < lines.length; j++) if (readAtOnce.test(lines[j])) found.push(j + 1)
+    const stateAtOnce = /XCTAssert(?:True|False)\(\s*[\w.\[\]"]+\.isEnabled\b/
+    for (let j = i + 1; j <= i + 2 && j < lines.length; j++) if (readAtOnce.test(lines[j]) || stateAtOnce.test(lines[j])) found.push(j + 1)
   })
   return found
 }
@@ -38,6 +43,9 @@ describe('iOS UI tests: a typed field is read by waiting for its value', () => {
     expect(typedThenReadAtOnce('app.field.typeText("a")\n\nXCTAssertEqual(app.field.value as? String, "a")')).toEqual([3])
     expect(typedThenReadAtOnce('input.typeText("a")\nXCTAssertTrue(waitForValue(input, "a"))')).toEqual([])
     expect(typedThenReadAtOnce('input.typeText("a")\nXCTAssertEqual(other.value as? String, "a")')).toEqual([])
+    expect(typedThenReadAtOnce('name.typeText("a")\nXCTAssertFalse(app.buttons["save"].isEnabled, "on")')).toEqual([2])
+    expect(typedThenReadAtOnce('name.typeText("a")\nXCTAssertTrue(save.isEnabled)')).toEqual([2])
+    expect(typedThenReadAtOnce('name.typeText("a")\nXCTAssertTrue(waitToMatch(save, "isEnabled == true"))')).toEqual([])
   })
 
   it('no UI test reads a field at once after typing into it', () => {
@@ -45,8 +53,10 @@ describe('iOS UI tests: a typed field is read by waiting for its value', () => {
     expect(found, 'wait for it: XCTAssertTrue(waitForValue(field, expected), ...) (WalnutUITests/ElementWaits.swift)').toEqual([])
   })
 
-  it('the wait is defined once, in the shared helper', () => {
-    const defs = files.filter((f) => /func waitForValue\(/.test(read(f)))
-    expect(defs).toEqual([HELPER])
+  it('the waits are defined once, in the shared helper', () => {
+    for (const fn of ['waitForValue', 'waitToMatch']) {
+      const defs = files.filter((f) => new RegExp(`func ${fn}\\(`).test(read(f)))
+      expect(defs, fn).toEqual([HELPER])
+    }
   })
 })

@@ -361,7 +361,7 @@ final class VoiceQuickActionUITests: XCTestCase {
                 settle += 1
             }
             guard !icon.frame.isEmpty, icon.isHittable else { continue }
-            icon.press(forDuration: 1.2)
+            longPress(icon, 1.2)
             // "Edit Home Screen" is in EVERY icon context menu, so its presence
             // means the menu is up — independent of whether our item is there.
             if board.buttons["Edit Home Screen"].waitForExistence(timeout: 5) {

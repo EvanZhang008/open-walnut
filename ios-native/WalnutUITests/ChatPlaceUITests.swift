@@ -84,12 +84,14 @@ final class ChatPlaceUITests: XCTestCase {
     private func openDrawer(_ app: XCUIApplication, view: String) {
         let menu = app.buttons["chat.menu"]
         XCTAssertTrue(menu.waitForExistence(timeout: 20))
+        // Just back on the chat, the page may still be sliding in: a tap then opened no drawer
+        // (2026-11-16, CI on iOS 26.5), so the button holds still first.
+        waitStill(menu)
         menu.tap()
         let picker = app.segmentedControls["chat.drawer.viewSwitch"]
-        if picker.waitForExistence(timeout: 5) {
-            let segment = picker.buttons[view]
-            if segment.exists, !segment.isSelected { segment.tap() }
-        }
+        XCTAssertTrue(picker.waitForExistence(timeout: 10), "the chat drawer did not open")
+        let segment = picker.buttons[view]
+        if segment.exists, !segment.isSelected { segment.tap() }
     }
 
     /// The Tasks tab with nothing in Recently opened shows its board drawer first, and

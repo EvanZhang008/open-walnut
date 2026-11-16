@@ -114,7 +114,7 @@ final class VoiceDictationUITests: XCTestCase {
         }
         let row = all("board.row.t-offline", in: app).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 30), "the demo board should list the offline-grid task")
-        row.press(forDuration: 1)
+        longPress(row, 1)
         app.buttons["Details, dates & priority"].tap()
 
         let edit = all("task.editDescription", in: app).firstMatch

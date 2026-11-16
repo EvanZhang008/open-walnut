@@ -266,7 +266,7 @@ final class SessionChangesUITests: XCTestCase {
         // card edits it; x removes one, and Undo brings it back.
         let first = element(app, "diff.line.n1")
         XCTAssertTrue(first.waitForExistence(timeout: 20))
-        first.press(forDuration: 1.0)
+        longPress(first, 1.0)
         XCTAssertTrue(text(app, containing: "1 line selected").waitForExistence(timeout: 5), "a long press selected nothing")
         XCTAssertTrue(element(app, "diff.selection.copy").exists, "no Copy in the selection bar")
         beat()
@@ -274,7 +274,7 @@ final class SessionChangesUITests: XCTestCase {
         // Copy takes the line and says so; a second long press selects it again.
         element(app, "diff.selection.copy").tap()
         XCTAssertTrue(element(app, "diff.notice").waitForExistence(timeout: 5), "Copy said nothing")
-        first.press(forDuration: 1.0)
+        longPress(first, 1.0)
         XCTAssertTrue(element(app, "diff.comment").waitForExistence(timeout: 5))
         element(app, "diff.comment").tap()
         let box = element(app, "diff.comment.text")

@@ -113,7 +113,7 @@ final class PeerMessageUITests: XCTestCase {
             XCTAssertEqual(description.frame.height, frame.height, accuracy: 1)
             checkPrivateTextIsAbsent(app)
         }
-        description.press(forDuration: 1.2)
+        longPress(description, 1.2)
         XCTAssertFalse(app.menuItems.firstMatch.exists)
         XCTAssertEqual(description.frame.height, frame.height, accuracy: 1)
         checkPrivateTextIsAbsent(app)
@@ -239,7 +239,7 @@ final class PeerMessageUITests: XCTestCase {
         app.buttons["chat.send"].tap()
         let failed = app.textViews.matching(NSPredicate(format: "value CONTAINS 'Normal retry message.'")).firstMatch
         XCTAssertTrue(failed.waitForExistence(timeout: 20))
-        failed.press(forDuration: 1.2)
+        longPress(failed, 1.2)
         let retry = app.buttons["Retry"]
         XCTAssertTrue(retry.waitForExistence(timeout: 10))
         _ = try request("send-fault?on=0", method: "POST")
@@ -407,7 +407,7 @@ final class PeerMessageUITests: XCTestCase {
         XCTAssertTrue(requests.contains { $0.path.hasSuffix("/transcript") && $0.scenario == "updated" && $0.status == 200 && $0.at >= arrivedAt })
         let updated = descriptions(app).matching(NSPredicate(format: "label CONTAINS 'Updated after refresh'")).firstMatch
         let frame = updated.frame
-        updated.tap(); updated.press(forDuration: 1.2)
+        updated.tap(); longPress(updated, 1.2)
         XCTAssertFalse(app.menuItems.firstMatch.exists)
         XCTAssertEqual(updated.frame.height, frame.height, accuracy: 1)
         checkPrivateTextIsAbsent(app)

@@ -54,7 +54,7 @@ final class PrivateTasksUITests: XCTestCase {
     private func openSync(_ app: XCUIApplication, _ taskId: String, expecting label: String) -> XCUIElement {
         let target = row(app, taskId)
         XCTAssertTrue(target.waitForExistence(timeout: 45), "no board row for \(taskId)")
-        target.press(forDuration: 1.2)
+        longPress(target, 1.2)
         let sync = app.buttons[label]
         XCTAssertTrue(sync.waitForExistence(timeout: 10), "the menu has no \"\(label)\" row")
         return sync
@@ -92,7 +92,7 @@ final class PrivateTasksUITests: XCTestCase {
         XCTAssertTrue(row(app, synced).waitForExistence(timeout: 20))
         var syncedAgain = false
         for _ in 0..<5 {
-            row(app, synced).press(forDuration: 1.2)
+            longPress(row(app, synced), 1.2)
             if app.buttons["Sync: Syncs to Tracker"].waitForExistence(timeout: 6) { syncedAgain = true; break }
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)).tap()
             sleep(2)
