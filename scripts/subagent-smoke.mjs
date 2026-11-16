@@ -1,14 +1,15 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Real end-to-end smoke of Walnut subagents (subagent_run), run on the host of a real caller
  * session against the production server. Every case starts a real subagent as that session
  * (WALNUT_SESSION_ID, the way the session's own `walnut` calls do) and checks that its end
  * comes back into the caller by itself: a foreground call returns the answer, and a background
  * run's end shows up in the caller's own conversation (task_history) with nothing read or polled
- * by the caller. This script itself reads subagent_read only to time each run.
+ * by the caller. This script reads a run (subagent_read, as the caller) only after its end was
+ * told: a read before that takes the end, as it would for the caller, and nothing is told then.
  *
- *   node scripts/subagent-smoke.mjs --caller-task <task id> [--engines claude,codex]
- *     [--hosts __local__,clouddev] [--only name,name] [--out DIR] [--restart-wait-min N]
+ *   bun scripts/subagent-smoke.mjs --caller-task <task id> [--caller <its session id>] [--engines claude,codex]
+ *     [--hosts __local__,clouddev] [--only name,name] [--out DIR] [--batch N] [--restart-wait-min N]
  *
  * Cases (each engine x host): fg (foreground), bg (background, caller idle), followup (a message
  * to a finished run), busy (background while the caller is mid-turn). Once: fail (its CLI is
@@ -32,7 +33,7 @@ const only = args.only ? new Set(args.only.split(',')) : null
 const out = path.resolve(args.out ?? `subagent-smoke-${new Date().toISOString().replace(/[:.]/g, '-')}`)
 fs.mkdirSync(out, { recursive: true })
 
-function walnut(op, input, sid) {
+function walnutOnce(op, input, sid) {
   const env = { ...process.env, ...(sid ? { WALNUT_SESSION_ID: sid } : {}) }
   try {
     const text = execFileSync('walnut', ['tools', 'call', op, JSON.stringify(input)], { env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 15 * 60_000 })
@@ -42,12 +43,23 @@ function walnut(op, input, sid) {
     try { return JSON.parse(text) } catch { return { error: text.slice(0, 2000) } }
   }
 }
+/** A server restart (a deploy) mid-matrix: the call is made again once it answers (up to 5 minutes). */
+function walnut(op, input, sid) {
+  for (let i = 0; ; i++) {
+    const r = walnutOnce(op, input, sid)
+    if (!JSON.stringify(r).includes('hub_unreachable') || i >= 30) return r
+    execFileSync('sleep', ['10'])
+  }
+}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const iso = (t) => (t ? new Date(t).toISOString() : '')
 
-const task = walnut('task_get', { id: callerTask })
-const caller = (task.task ?? task).session_id
-if (!caller) { console.error(`task ${callerTask} has no session`); process.exit(2) }
+/** The caller task's session: --caller, else the one task_sessions names first (its current one). */
+const caller = args.caller ?? (() => {
+  const text = JSON.stringify(walnut('task_sessions', { id: callerTask }))
+  return /"(?:sessionId|session_id|claudeSessionId|id)":"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"/.exec(text)?.[1]
+})()
+if (!caller) { console.error(`task ${callerTask} has no session: pass --caller <session id>`); process.exit(2) }
 console.log(`caller ${caller} (task ${callerTask}); results in ${out}`)
 
 /** When the caller's own conversation got the end of `id` (turn > 1: "answered your message"). */
@@ -65,14 +77,8 @@ async function waitTold(id, turn, ms) {
     await sleep(15_000)
   }
 }
-async function waitEnd(id, ms) {
-  const until = Date.now() + ms
-  for (;;) {
-    const r = walnut('subagent_read', { id }, caller)
-    if ((r.state && r.state !== 'running') || r.error || Date.now() > until) return r
-    await sleep(10_000)
-  }
-}
+/** The run as it ended, read once its end was told (or its wait ran out). */
+const readRun = (id) => walnut('subagent_read', { id }, caller)
 
 const results = []
 function record(c, o) {
@@ -87,7 +93,7 @@ async function runCase(c) {
   const r = walnut('subagent_run', {
     prompt: c.prompt, description: `smoke ${c.name}`, engine: c.engine,
     ...(c.host !== '__local__' ? { host: c.host } : {}),
-    background: c.background, ...(c.timeoutMin ? { timeout_min: c.timeoutMin } : {}),
+    background: c.background, ...(c.timeoutMin ? { timeout_min: c.timeoutMin } : {}), ...(c.model ? { model: c.model } : {}),
   }, caller)
   const id = r.id
   if (!id) return record(c, { id: null, started: iso(started), verdict: 'FAIL', why: `no run: ${JSON.stringify(r).slice(0, 300)}` })
@@ -96,8 +102,8 @@ async function runCase(c) {
     const ok = r.state === c.expect && (c.expect !== 'completed' || String(r.answer ?? '').includes(c.token))
     return record(c, { id, started: iso(started), ended: iso(Date.now()), told: 'returned in the call', state: r.state, verdict: ok ? 'PASS' : 'FAIL', answer: String(r.answer ?? r.error ?? '').slice(0, 200) })
   }
-  const end = await waitEnd(id, (c.waitMin ?? 20) * 60_000)
-  const told = await waitTold(id, 1, 5 * 60_000)
+  const told = await waitTold(id, 1, (c.waitMin ?? 20) * 60_000)
+  const end = readRun(id)
   const okState = end.state === c.expect && (c.expect !== 'completed' || String(end.answer ?? '').includes(c.token))
   const row = { id, started: iso(started), ended: iso(end.elapsed_ms ? started + end.elapsed_ms : Date.now()), told: iso(told), state: end.state, code: end.code, answer: String(end.answer ?? end.error ?? '').slice(0, 200) }
   if (c.followup) {
@@ -120,12 +126,19 @@ for (const engine of engines) for (const host of hosts) {
   cases.push({
     name: `busy-${tag}`, engine, host, background: true, prompt: `Run the shell command \`sleep 20\`, then reply with exactly one line: PONG ${tag}-busy`, token: `PONG ${tag}-busy`, expect: 'completed',
     // The caller is mid-turn when the end comes.
-    during: async () => { walnut('task_send', { id: callerTask, message: 'Smoke test: run the shell command `sleep 90`, then reply with one line "busy done". Nothing else.', expect_reply: false }) },
+    during: async () => { walnut('task_send', { to: callerTask, text: 'Smoke test: run the shell command `sleep 90`, then reply with one line "busy done". Nothing else.', expect_reply: false }) },
   })
 }
 const first = { engine: engines[0], host: hosts[hosts.length - 1] }
-cases.push({ name: 'fail', ...first, background: true, prompt: 'Run this shell command exactly, nothing else: kill -9 $PPID', token: '', expect: 'failed' })
-cases.push({ name: 'timeout', ...first, background: true, timeoutMin: 1, prompt: 'Run the shell command `sleep 150`, then reply with exactly one line: PONG timeout', token: '', expect: 'failed', waitMin: 6 })
+// Fail and time out on codex when it is in the matrix: Claude Code's own hooks may refuse a foreground
+// sleep, and it falls back to its default model for one it does not know.
+const odd = engines.includes('codex') ? { engine: 'codex', host: hosts[0] } : first
+// A model the engine does not have: its session fails to answer (an agent refuses to kill its own CLI).
+cases.push({ name: 'fail', ...odd, background: true, model: 'no-such-model-smoke', prompt: 'Reply with exactly one line: PONG fail', token: '', expect: 'failed' })
+cases.push({
+  name: 'timeout', ...odd, background: true, timeoutMin: 1, token: '', expect: 'failed', waitMin: 6,
+  prompt: 'Run the shell command `sleep 150` in the foreground and wait for it to finish (not in the background; give the shell tool a timeout of 200000 ms if it takes one), then reply with exactly one line: PONG timeout',
+})
 if (args['compact-cmd']) {
   cases.push({
     name: 'compact', ...first, background: true, prompt: 'Run the shell command `sleep 120`, then reply with exactly one line: PONG compact', token: 'PONG compact', expect: 'completed',
@@ -142,11 +155,13 @@ if (args['restart-wait-min'] || args['restart-cmd']) {
 }
 
 const todo = cases.filter((c) => !only || only.has(c.name))
-// Background cases run side by side (a session keeps 4 answering at once); the rest one by one.
+// Background cases run side by side (a session keeps 4 answering at once: --batch leaves room for
+// another run of the same caller, a restart case in a second invocation); the rest one by one.
+const batch = Number(args.batch ?? 4)
 const fg = todo.filter((c) => !c.background)
 const bg = todo.filter((c) => c.background)
 for (const c of fg) await runCase(c)
-for (let i = 0; i < bg.length; i += 4) await Promise.all(bg.slice(i, i + 4).map((c) => runCase(c)))
+for (let i = 0; i < bg.length; i += batch) await Promise.all(bg.slice(i, i + batch).map((c) => runCase(c)))
 
 const esc = (s) => String(s ?? '').replace(/[&<>]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[ch])
 const html = `<!doctype html><meta charset="utf-8"><title>Walnut subagent smoke</title>
