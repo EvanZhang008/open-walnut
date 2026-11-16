@@ -703,6 +703,20 @@ export function resolveModelSwitchValue(raw: string): string | null {
   return trimmed;
 }
 
+/**
+ * Whether `raw` names a Claude model: a picker alias (opus, sonnet-1m), its CLI form (opus[1m]), or
+ * a full id that names a Claude family (claude-opus-5-5, global.anthropic.claude-opus-5-5, a Bedrock
+ * ARN). Claude Code gives no error for a name it does not know: through Bedrock it answers on its
+ * default model (2026-11-16, `claude -p --model no-such-model-smoke` answered on Opus, is_error
+ * false), so a caller that asks for a model must be refused here, before anything starts.
+ */
+export function isClaudeModelName(raw: string): boolean {
+  const m = raw.trim();
+  if (VALID_SESSION_MODEL_IDS.has(m) || Object.values(SESSION_MODEL_CLI_MAP).includes(m)) return true;
+  if (resolveModelSwitchValue(m) === null) return false;
+  return /claude[-._]?(?:\d[\w.-]*[-._])?(?:opus|sonnet|haiku|fable)/i.test(m) || /^arn:aws[\w-]*:bedrock:/i.test(m);
+}
+
 /** Settings > Sessions, "When it is out of usage": the engine (and model) a new task starts on. */
 export interface FallbackEngineSetting {
   engine: SessionEngine;

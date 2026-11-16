@@ -224,6 +224,15 @@ export async function startLightSubagent(parentSid: string | undefined, req: Sta
   const prompt = (req.prompt ?? '').trim()
   if (!prompt) throw new LightSubagentError('bad_request', 'prompt is empty', 400)
   if (prompt.length > PROMPT_MAX) throw new LightSubagentError('bad_request', `prompt is over ${PROMPT_MAX} characters: put the material in a file and name it`, 400)
+  // Claude Code answers on its default model for a name it does not know: refused here, as an engine refuses one.
+  if (req.model && engineCaps(engine).runtimeKind === 'native') {
+    const { isClaudeModelName, VALID_SESSION_MODEL_IDS } = await import('../types.js')
+    if (!isClaudeModelName(req.model)) {
+      throw new LightSubagentError('model_unavailable',
+        `Claude Code has no model "${req.model}": name one of ${[...VALID_SESSION_MODEL_IDS].join(', ')}, or a full Claude model id such as claude-opus-5-5; omit model for its default`,
+        400, { models: [...VALID_SESSION_MODEL_IDS] })
+    }
+  }
   const { getSessionByClaudeId } = await import('../session-tracker.js')
   const { canonicalCallerSid } = await import('../sessions/acp-caller-sid.js')
   const sid = canonicalCallerSid(parentSid)
