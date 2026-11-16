@@ -17,7 +17,7 @@ import { startServer, stopServer } from '../../src/web/server.js'
 import { addTask, completeTask } from '../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
-import { _resetLightSubagentsForTest, _setLightRunnerForTest, _skipEngineCheckForTest, prune, stopAllLightSubagents } from '../../src/core/subagents/registry.js'
+import { _resetLightSubagentsForTest, _setLightRunnerForTest, _skipEngineCheckForTest, prune, detachAllLightSubagents } from '../../src/core/subagents/registry.js'
 import type { LightRunSpec } from '../../src/core/subagents/types.js'
 
 const SID = '5ab0a6e1-1111-4bbb-8ccc-dddddddddd01'
@@ -70,7 +70,8 @@ beforeAll(async () => {
     // A live session between turns, the one a background agent's end is told to.
     await updateSessionRecord(sid, { process_status: 'idle' } as never)
   }
-  await updateSessionRecord(STOPPED_PARENT, { process_status: 'stopped' } as never)
+  // Stopped by its user: a session Walnut stopped (its idle exit, a restart) is resumed by the notice instead.
+  await updateSessionRecord(STOPPED_PARENT, { process_status: 'stopped', status_reason: 'user_stopped' } as never)
   // An ACP parent started in bypass whose user then picked read-only in its engine's own Mode control.
   await updateSessionRecord(ACP_PARENT, { engine: 'opencode', acpConfig: { mode: 'read-only' }, acpRuntimeId: 'acp-light-parent-runtime' } as never)
   bus.subscribe('light-subagents-test', (e) => { sent.push(JSON.stringify(e.data ?? {})) }, { global: true, interest: [EventNames.SESSION_SEND] })
@@ -241,7 +242,7 @@ describe('light subagents', () => {
   // Every way a run's end could reach a session that must not hear it: none wakes or reopens it.
   it.each([
     ['its task is complete', DONE_PARENT],
-    ['its session is stopped', STOPPED_PARENT],
+    ['its session was stopped by its user', STOPPED_PARENT],
   ])('a run whose end no call returned is not told when %s', async (_why, sid) => {
     const prompt = `hold quiet ${sid.slice(9, 13)}`
     const r = await call('POST', '/api/v1/subagents', { engine: 'codex', prompt, background: true }, sid)
@@ -260,17 +261,19 @@ describe('light subagents', () => {
     expect((await call('GET', `/api/v1/subagents/${id}`, undefined, sid)).json).toMatchObject({ state: 'completed', answer: `answer to ${prompt}` })
   })
 
-  // Every stop path records a stop, never an engine error.
-  it('a stop from the panel, from subagent_stop and from the server records code stopped', async () => {
+  // Every stop path records a stop, never an engine error; a server stop is no stop at all.
+  it('a stop from the panel and from subagent_stop records code stopped, and the server stopping leaves a run running', async () => {
     const start = async (prompt: string) => String((await call('POST', '/api/v1/subagents', { engine: 'codex', prompt, background: true }, OTHER)).json.id)
     const panel = await start('hold stop code panel')
     expect((await call('POST', `/api/v1/sessions/${OTHER}/background-tasks/${panel}/stop`, {}, null)).status).toBe(200)
     const own = await start('hold stop code own')
     expect((await call('POST', `/api/v1/subagents/${own}/stop`, {}, OTHER)).json).toMatchObject({ stopped: true })
     const server = await start('hold stop code server')
-    await stopAllLightSubagents('the server stopped', 3_000)
-    for (const id of [panel, own, server]) {
+    await detachAllLightSubagents('the server stopped')
+    for (const id of [panel, own]) {
       expect((await call('GET', `/api/v1/subagents/${id}`, undefined, OTHER)).json).toMatchObject({ state: 'stopped', code: 'stopped' })
     }
+    // Written down for the next server, never stopped (its session runs on in the daemon).
+    expect((await call('GET', `/api/v1/subagents/${server}`, undefined, OTHER)).json).toMatchObject({ state: 'running' })
   })
 })

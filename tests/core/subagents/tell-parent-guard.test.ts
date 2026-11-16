@@ -1,8 +1,9 @@
 /**
  * A light subagent's end reaches its parent session only through the one gate
- * (parentHearsNothing in src/core/subagents/registry.ts): never into a stopped session or one
- * whose task is COMPLETE, and only into the session still live when the row is stored
- * (liveOnly). A stop is recorded as a stop on every path: end() alone writes the error code.
+ * (parentHearsNothing in src/core/subagents/registry.ts): never into a session its user stopped,
+ * an archived one, or one whose task is COMPLETE; into a live session only while it is still
+ * live when the row is stored (liveOnly). A session Walnut stopped (its idle exit, a restart) is
+ * resumed by it, as by any message: its caller still waits for that answer. A stop is recorded as a stop on every path: end() alone writes the error code.
  * A new way to put a line into a session, or a new writer of the code, fails here.
  */
 import fs from 'node:fs'
@@ -45,10 +46,12 @@ describe('a light subagent tells its parent only through the gate', () => {
     expect(tell.indexOf('parentHearsNothing(')).toBeLessThan(tell.indexOf('deliverToSession('))
   })
 
-  it('the gate refuses a stopped or archived session and a COMPLETE task', () => {
+  it('the gate refuses a session its user stopped, an archived one, and a COMPLETE task', () => {
     const reg = files.find((f) => f.file.endsWith('/registry.ts'))!.code
     const gate = reg.slice(reg.indexOf('export async function parentHearsNothing('), reg.indexOf('async function tellParent('))
     expect(gate).toMatch(/isLiveSessionStatus\(/)
+    expect(gate).toMatch(/PERSON_STOPS\.has\(/)
+    expect(reg).toMatch(/const PERSON_STOPS = new Set\(\['user_stopped', 'user_terminated'\]\)/)
     expect(gate).toMatch(/archived/)
     expect(gate).toMatch(/phase === 'COMPLETE'/)
   })

@@ -4314,6 +4314,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // -- Init SubagentRunner + SessionRunner --
   subagentRunner.init()
   sessionRunner.init(reconnectable)
+  // The Walnut subagents the server before this one let go: listed again now (before the left-runs
+  // sweep's first round, which would retire a session no run holds), taken up once sessions are reattached.
+  void import('../core/subagents/registry.js').then((m) => m.restoreLightSubagents(sessionRunner.startupRecoveryDone)).catch((err: unknown) => {
+    log.web.warn('Walnut subagents could not be taken up after the restart', { error: err instanceof Error ? err.message : String(err) })
+  })
 
   // -- Connect to SDK session server (if enabled) --
   try {
@@ -7173,8 +7178,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   // While every socket still stands: each feature node gets a 1012 close and the connection
   // journal says why this server stops (a deploy, an update, a signal). Bounded under a second.
   await shutdownStep('feature nodes', async () => (await import('./ws/feature-node-runtime.js')).stopFeatureNodes(opts.reason))
-  // Light subagents live in this server's memory: stop them (and their workers) while the links are up.
-  await shutdownStep('light subagents', async () => (await import('../core/subagents/registry.js')).stopAllLightSubagents('the server stopped', 3_000), { budgetMs: 4_000 })
+  // Walnut subagents outlive the server: written down and let go (their sessions run on in the daemon), taken up by the next one.
+  await shutdownStep('light subagents', async () => (await import('../core/subagents/registry.js')).detachAllLightSubagents('the server stopped'), { budgetMs: 4_000 })
   ;(await import('../core/net/net-mac.js')).stopNet()
   // The lock-screen card's clock: its bus subscription and timers belong to this server.
   ;(await import('../core/push/work-card.js')).stopWorkCard()

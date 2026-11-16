@@ -41,7 +41,7 @@ const W = vi.hoisted(() => {
     stopUnconfirmed: false,
     /** Messages sent into a session after its start (a follow-up turn), and what the fake session does with one. */
     sends: [] as Array<{ sid: string; text: string }>,
-    delivered: [] as Array<{ sid: string; text: string; messageId?: string }>,
+    delivered: [] as Array<{ sid: string; text: string; messageId?: string; liveOnly?: boolean }>,
     onSend: null as null | ((sid: string, text: string) => void),
   }
 })
@@ -115,8 +115,8 @@ vi.mock('../../../src/core/sessions/session-send-core.js', async (orig) => {
   return {
     ...real,
     // As the message queue does: a row whose id is queued already is that row (a second notice under the same id is lost).
-    deliverToSession: async (target: { claudeSessionId: string }, o: { busText: string; messageId?: string }) => {
-      if (!o.messageId || !W.delivered.some((d) => d.messageId === o.messageId)) W.delivered.push({ sid: target.claudeSessionId, text: o.busText, messageId: o.messageId })
+    deliverToSession: async (target: { claudeSessionId: string }, o: { busText: string; messageId?: string; liveOnly?: unknown }) => {
+      if (!o.messageId || !W.delivered.some((d) => d.messageId === o.messageId)) W.delivered.push({ sid: target.claudeSessionId, text: o.busText, messageId: o.messageId, liveOnly: !!o.liveOnly })
       return { delivery: 'queued' }
     },
   }
@@ -126,17 +126,17 @@ vi.mock('../../../src/core/sessions/session-lifecycle.js', () => ({
 }))
 
 import { WALNUT_HOME } from '../../../src/constants.js'
-import { addTask } from '../../../src/core/task-manager.js'
+import { addTask, getTask, updateTaskRaw } from '../../../src/core/task-manager.js'
 import { closeDb as closeTaskDb } from '../../../src/core/task-db.js'
 import { closeDb as closeSessionDb } from '../../../src/core/session-db.js'
-import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../../src/core/session-tracker.js'
+import { createSessionRecord, getSessionByClaudeId, renameSessionId, updateSessionRecord } from '../../../src/core/session-tracker.js'
 import { bus, EventNames } from '../../../src/core/event-bus.js'
 import { __setTransferConnectionResolverForTesting, type TransferConn } from '../../../src/core/transfer/daemon-transfer-client.js'
 import { createTransferPack, type TransferPackDeps } from '../../../src/providers/transfer-pack-core.js'
 import { createTransferCore, type TransferCoreDeps } from '../../../src/providers/transfer-core.js'
 import { recordRepoPath, repoKey } from '../../../src/core/hosts/host-profile.js'
-import { _closeOrphansForTest, _resetLightSubagentsForTest, _setKeepIdleMsForTest, _setLightRunnerForTest, _skipEngineCheckForTest, lightSubagentRows, lightSubagentSettled, markTold, sendLightSubagent, startLightSubagent, waitLightSubagent, stopLightSubagent, getLightSubagent } from '../../../src/core/subagents/registry.js'
-import { _setSubagentStarterForTest, _setLateStopCheckMsForTest, SUBAGENT_LANE_PREFIX } from '../../../src/core/subagents/on-host.js'
+import { _closeOrphansForTest, _forgetLightSubagentsForTest, detachAllLightSubagents, hasRunningLightSubagents, restoreLightSubagents, RESUME_PROMPT, _resetLightSubagentsForTest, _setKeepIdleMsForTest, _setLightRunnerForTest, _skipEngineCheckForTest, lightSubagentRows, lightSubagentSettled, markTold, sendLightSubagent, startLightSubagent, waitLightSubagent, stopLightSubagent, getLightSubagent } from '../../../src/core/subagents/registry.js'
+import { _setSubagentStarterForTest, _setLateStopCheckMsForTest, _setResumeCheckMsForTest, SUBAGENT_LANE_PREFIX } from '../../../src/core/subagents/on-host.js'
 import { canonicalCallerSid } from '../../../src/core/sessions/acp-caller-sid.js'
 import { grant, revokeGrant, findGrant } from '../../../src/core/hosts/exec-grants.js'
 import { listLeftRuns, noteLeft, sweepLeftRuns } from '../../../src/core/subagents/left-runs.js'
@@ -720,3 +720,178 @@ describe('subagent_run on another host', () => {
     expect(cloudRunDirs()).toEqual([])
   })
 })
+
+/**
+ * A deploy restarts Walnut's server many times a day while a subagent's session runs on in its
+ * host's daemon (2026-11-16: sa-82bc6450d3, a codex run started from Evan's Interview session,
+ * was stopped by a deploy 11 minutes in, its end never reached the session, and it was gone from
+ * its list). Every run outlives the server, any engine, any host: it is listed again, the turn the
+ * restart cut off is answered, and its end reaches its caller by itself.
+ */
+describe('a Walnut subagent outlives the server', () => {
+  /** The server stops (writes its runs down and lets go) and a new one starts and takes them up. */
+  async function restart(): Promise<void> {
+    await detachAllLightSubagents('the test restarts the server')
+    _forgetLightSubagentsForTest()
+    await restoreLightSubagents()
+  }
+  const told = (id: string) => W.delivered.filter((d) => d.messageId?.startsWith(`sa-end-${id}-`))
+  async function until(ok: () => boolean, ms = 20_000): Promise<void> {
+    for (let i = 0; i < ms / 50 && !ok(); i++) await new Promise((r) => setTimeout(r, 50))
+  }
+  let release: (() => void) | null = null
+  const hold = () => { behave = () => new Promise<string>((resolve) => { release = () => resolve('the cut-off answer') }) }
+  beforeEach(() => _setResumeCheckMsForTest(50))
+  afterEach(() => { release?.(); release = null; _setResumeCheckMsForTest(null) })
+
+  it.each([['claude'], ['codex']] as const)('on %s: a restart mid-turn keeps it listed, the cut-off turn is answered, and its caller is told by itself', async (engine) => {
+    await updateSessionRecord(SID, { process_status: 'idle' } as never)
+    hold()
+    const run = await startLightSubagent(SID, { host: 'cloud', engine, prompt: 'A long job.', background: true })
+    await until(() => starts.length > 0 && !!lightSubagentRows(SID)[0]?.walnutSessionId)
+    const sid = String(lightSubagentRows(SID)[0]!.walnutSessionId)
+    // Its CLI is in the turn (what its record says while it answers).
+    await updateSessionRecord(sid, { process_status: 'running', pid: 4242, status_reason: 'session_started' } as never)
+    // While it answers, its caller's process stays alive for the answer (the idle exit leaves it).
+    expect(hasRunningLightSubagents(SID)).toBe(true)
+    await restart()
+    // The new server lists it, running, in the same session; its calls still act for the caller.
+    expect(lightSubagentRows(SID).map((r) => [r.taskId, r.status, r.walnutSessionId])).toEqual([[run.id, 'running', sid]])
+    expect(canonicalCallerSid(sid)).toBe(SID)
+    expect(W.stops).toEqual([])
+    // Its session is still in that turn: nothing is sent into it (a message would join the turn and
+    // every later answer would be taken for the message before it); its own end is its answer.
+    expect(W.sends).toEqual([])
+    release!()
+    await until(() => told(run.id).length > 0)
+    expect(told(run.id).map((d) => d.sid)).toEqual([SID])
+    expect(told(run.id)[0]!.text).toContain('the cut-off answer')
+    expect(W.sends).toEqual([])
+    await updateSessionRecord(sid, { process_status: 'idle' } as never)
+    // Nothing started a second session, and it still takes a message with its context.
+    expect(starts).toHaveLength(1)
+    const now = getLightSubagent(SID, run.id)
+    const { turn } = sendLightSubagent(SID, run.id, { message: 'After the restart.' })
+    await waitLightSubagent(now, 30_000, turn)
+    expect(now.answer).toBe('heard: After the restart.')
+    markTold(now)
+    expect(hasRunningLightSubagents(SID)).toBe(false)
+    stopLightSubagent(SID, run.id, 'the test')
+    await lightSubagentSettled(run.id)
+    expect(W.stops).toEqual([sid])
+  }, 90_000)
+
+  it('a turn that ended while the server was down (its session idle, no end seen) is asked again, and the answer is told', async () => {
+    await updateSessionRecord(SID, { process_status: 'idle' } as never)
+    hold()
+    const run = await startLightSubagent(SID, { host: 'cloud', prompt: 'Ends in the gap.', background: true })
+    await until(() => starts.length > 0 && !!lightSubagentRows(SID)[0]?.walnutSessionId)
+    const sid = String(lightSubagentRows(SID)[0]!.walnutSessionId)
+    await detachAllLightSubagents('the test restarts the server')
+    _forgetLightSubagentsForTest()
+    // The session ends its turn while no server listens: its result is never seen.
+    const quiet = behave
+    release!(); release = null
+    await new Promise((r) => setTimeout(r, 100))
+    behave = quiet
+    await updateSessionRecord(sid, { process_status: 'idle', pid: 4242, status_reason: 'turn_completed' } as never)
+    W.sends.length = 0
+    await restoreLightSubagents()
+    await until(() => told(run.id).length > 0)
+    expect(W.sends.map((m) => [m.sid, m.text])).toEqual([[sid, expect.stringContaining(RESUME_PROMPT)]])
+    expect(told(run.id)[0]!.text).toContain(`heard: ${RESUME_PROMPT}`)
+    stopLightSubagent(SID, run.id, 'the test')
+    await lightSubagentSettled(run.id)
+  }, 90_000)
+
+  it('a start the restart came before (its CLI never spawned) ends as failed, and its caller is told', async () => {
+    await updateSessionRecord(SID, { process_status: 'idle' } as never)
+    hold()
+    const run = await startLightSubagent(SID, { host: 'cloud', prompt: 'Never spawned.', background: true })
+    await until(() => starts.length > 0 && !!lightSubagentRows(SID)[0]?.walnutSessionId)
+    await restart()
+    await until(() => told(run.id).length > 0)
+    expect(told(run.id)[0]!.text).toMatch(/failed: Walnut's server restarted before its session had started/)
+    await lightSubagentSettled(run.id)
+  }, 90_000)
+
+  it('an end the restart came before telling is told by the next server', async () => {
+    await updateSessionRecord(SID, { process_status: 'idle' } as never)
+    const run = await startLightSubagent(SID, { host: 'cloud', prompt: 'Quick.', background: true })
+    await waitLightSubagent(run, 30_000)
+    expect(run.status).toBe('completed')
+    // Within the grace before the notice: the server stops now.
+    await restart()
+    await until(() => told(run.id).length > 0)
+    expect(told(run.id).map((d) => [d.sid, d.messageId])).toEqual([[SID, `sa-end-${run.id}-1`]])
+    expect(told(run.id)[0]!.text).toContain('done')
+    stopLightSubagent(SID, run.id, 'the test')
+    await lightSubagentSettled(run.id)
+  }, 90_000)
+
+  it('a message sent before the restart runs after the cut-off turn, and both answers are told', async () => {
+    await updateSessionRecord(SID, { process_status: 'idle' } as never)
+    hold()
+    const run = await startLightSubagent(SID, { host: 'cloud', prompt: 'First.', background: true })
+    await until(() => starts.length > 0 && !!lightSubagentRows(SID)[0]?.walnutSessionId)
+    await updateSessionRecord(String(lightSubagentRows(SID)[0]!.walnutSessionId), { pid: 4242, status_reason: 'session_started' } as never)
+    sendLightSubagent(SID, run.id, { message: 'Second.' })
+    await restart()
+    release!()
+    await until(() => told(run.id).length >= 2)
+    expect(told(run.id).map((d) => d.messageId)).toEqual([`sa-end-${run.id}-1`, `sa-end-${run.id}-2`])
+    expect(told(run.id)[1]!.text).toContain('heard: Second.')
+    stopLightSubagent(SID, run.id, 'the test')
+    await lightSubagentSettled(run.id)
+  }, 90_000)
+
+  it('a turn whose time ran out while the server was down ends as timed out, and its caller is told', async () => {
+    await updateSessionRecord(SID, { process_status: 'idle' } as never)
+    hold()
+    const run = await startLightSubagent(SID, { host: 'cloud', prompt: 'Slow.', background: true })
+    await until(() => starts.length > 0 && !!lightSubagentRows(SID)[0]?.walnutSessionId)
+    await updateSessionRecord(String(lightSubagentRows(SID)[0]!.walnutSessionId), { pid: 4242, status_reason: 'session_started' } as never)
+    run.turnDeadlineAt = Date.now() - 1
+    await restart()
+    await until(() => told(run.id).length > 0)
+    expect(told(run.id)[0]!.text).toMatch(/failed: It ran out of its 30 minutes/)
+    await lightSubagentSettled(run.id)
+    expect(getLightSubagent(SID, run.id)).toMatchObject({ status: 'failed', errorCode: 'timed_out', closed: true })
+  }, 90_000)
+
+  it('its caller\'s session came back as a new one (a resume, a compaction that renamed it): the end goes to its task\'s session', async () => {
+    hold()
+    const run = await startLightSubagent(SID, { host: 'cloud', prompt: 'Across a rename.', background: true })
+    await until(() => starts.length > 0)
+    const NEW = '5ab0a6e1-aaaa-4bbb-8ccc-dddddddddd99'
+    await renameSessionId(SID, NEW)
+    // The task's session is the new one (what a resume under a new id writes).
+    if ((await getTask(taskId))?.session_id !== NEW) await updateTaskRaw(taskId, { session_id: NEW } as never)
+    expect((await getTask(taskId))?.session_id).toBe(NEW)
+    expect(await getSessionByClaudeId(SID)).toBeFalsy()
+    await updateSessionRecord(NEW, { process_status: 'idle' } as never)
+    release!()
+    await until(() => told(run.id).length > 0)
+    expect(told(run.id).map((d) => d.sid)).toEqual([NEW])
+    // The run follows its caller: listed in the new session's panel.
+    expect(lightSubagentRows(NEW).map((r) => r.taskId)).toEqual([run.id])
+    stopLightSubagent(NEW, run.id, 'the test')
+    await lightSubagentSettled(run.id)
+  }, 90_000)
+
+  it.each([
+    ['Walnut stopped it (its idle exit)', 'idle_timeout', true],
+    ['the server restart stopped it', 'server_restart', true],
+    ['its user stopped it', 'user_stopped', false],
+  ] as const)('a caller whose session %s: told %s', async (_why, reason, hears) => {
+    await updateSessionRecord(SID, { process_status: 'stopped', status_reason: reason } as never)
+    const run = await startLightSubagent(SID, { host: 'cloud', prompt: `Stopped caller ${reason}.`, background: true })
+    await waitLightSubagent(run, 30_000)
+    await until(() => told(run.id).length > 0, hears ? 20_000 : 4_000)
+    // Into a session Walnut stopped, the notice resumes it (not live-only); a person's stop stays.
+    expect(told(run.id).map((d) => [d.sid, d.liveOnly])).toEqual(hears ? [[SID, false]] : [])
+    stopLightSubagent(SID, run.id, 'the test')
+    await lightSubagentSettled(run.id)
+  }, 90_000)
+})
+

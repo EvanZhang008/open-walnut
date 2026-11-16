@@ -183,6 +183,7 @@ describe('the decisions go through the shared definition', () => {
 /** Files that read a raw signal of such work, by role. A new one is listed here with its reason. */
 const RAW_READERS: Record<string, string> = {
   'src/core/sessions/outliving-work.ts': 'the shared definition',
+  'src/core/subagents/on-host.ts': 'a turn a restart cut off waits for its own end: it skips an intermediate result (teamActive), as lane-turn.ts does',
   'src/core/sessions/idle-compaction.ts': 'skips an intermediate result (teamActive) and a session with an armed CLI cron, which a /compact would run beside',
   'src/providers/claude-code-session.ts': 'the live runner: keeps the signals and its turn-over rules',
   'src/providers/acp-session.ts': 'the ACP runner: a turn whose own command runs on (direct Codex) says so on its session:result',

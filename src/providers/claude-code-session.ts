@@ -132,6 +132,7 @@ import { processActionsRefused, refuseProcessAction } from '../core/sessions/rep
 import { walnutApiEnvForSession } from '../lib/self-api-root.js'
 import { joinQueuedRows } from '../lib/ai-only-envelope.js'
 import { isSubagentLane } from '../core/subagents/types.js'
+import { hasRunningLightSubagents } from '../core/subagents/registry.js'
 import { sessionSettingsHooks } from './session-settings-hooks.js'
 import { orgRoleOfPrompt } from '../core/org/org-prompt-role.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort, StatusReason, StatusChangedBy, SessionErrorKind, SessionTurnSpeed } from '../core/types.js'
@@ -13095,9 +13096,9 @@ export class SessionRunner {
    *  In memory: the health monitor's tick has pulled the daemon's task state just before. */
   hasWorkOutlivingTurn(claudeSessionId: string): boolean {
     const native = this.findSessionByClaudeId(claudeSessionId)
-    if (native) return native.workOutlivesTurn
+    if (native) return native.workOutlivesTurn || hasRunningLightSubagents(claudeSessionId)
     // An ACP session reports none but a command its last turn left running (no loop among them).
-    return (this.acpSessions.get(claudeSessionId)?.outlivingWork.length ?? 0) > 0
+    return (this.acpSessions.get(claudeSessionId)?.outlivingWork.length ?? 0) > 0 || hasRunningLightSubagents(claudeSessionId)
   }
 
   /** The prompt cache facts of the session's last live request (sessions/prompt-cache.ts); undefined when unknown here. */
@@ -13107,9 +13108,12 @@ export class SessionRunner {
 
   /** Which of the session's own work runs on after its turn; empty when none or no runner holds it. */
   outlivingWorkOf(claudeSessionId: string): OutlivingSource[] {
-    return this.findSessionByClaudeId(claudeSessionId)?.outlivingWork
+    const own = this.findSessionByClaudeId(claudeSessionId)?.outlivingWork
       ?? this.acpSessions.get(claudeSessionId)?.outlivingWork
       ?? []
+    // Its Walnut subagents still answering (core/subagents/registry.ts): its own background work, as a
+    // background Agent is; their answers come into this session by themselves.
+    return hasRunningLightSubagents(claudeSessionId) && !own.includes('background') ? [...own, 'background'] : own
   }
 
   /** Side questions and control requests the session's CLI has not answered yet; 0 when no runner holds it. */

@@ -35,6 +35,8 @@ export type LightSubagentErrorCode =
   | 'work_copy_failed'
   /** A message to a subagent that was closed (stopped, idle too long, its session gone). */
   | 'closed'
+  /** This server is stopping: the next one takes the subagent up (registry.ts). */
+  | 'restarting'
 
 export class LightSubagentError extends Error {
   constructor(readonly code: LightSubagentErrorCode, message: string, readonly status = 409, readonly data: Record<string, unknown> = {}) {
@@ -89,6 +91,8 @@ export interface LightRunSpec {
   stillGranted?: () => Promise<void>
   signal: AbortSignal
   onProgress: (p: LightProgress) => void
+  /** What a restart must keep changed (its session named, its copy placed, a file returned): the registry writes it down. */
+  onState?: () => void
 }
 
 export interface LightRunResult {
@@ -107,3 +111,7 @@ export interface ReturnedFile { from: string; to: string; bytes: number }
 export type LightRunner = (spec: LightRunSpec) => Promise<LightRunResult>
 
 export const LIGHT_SUBAGENT_ENGINES: readonly SessionEngine[] = ['codex', 'opencode', 'goose', 'pi', 'gemini', 'dsh', 'custom', 'claude']
+
+/** What a turn a restart cut off is asked again, once its session is idle and its own end was not seen. */
+export const RESUME_PROMPT = '[Walnut] Walnut\'s server restarted while you were answering, so the answer you were working on was not received. '
+  + 'If you had finished, send that final answer again, in full. If not, carry on, and end with your whole answer.'

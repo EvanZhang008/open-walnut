@@ -22,7 +22,7 @@ import path from 'node:path'
 import { log } from '../../logging/index.js'
 import { engineCaps } from '../agents/engine-registry.js'
 import type { SessionMode } from '../types.js'
-import { LightSubagentError, SUBAGENT_LANE_PREFIX, type LightRunResult, type LightRunSpec, type ReturnedFile } from './types.js'
+import { LightSubagentError, RESUME_PROMPT, SUBAGENT_LANE_PREFIX, type LightRunResult, type LightRunSpec, type ReturnedFile } from './types.js'
 import type { WorkCopy } from './work-copy.js'
 
 const LOCAL = '__local__'
@@ -42,6 +42,10 @@ export function subagentMode(fullAccess: boolean, parentMode: SessionMode | unde
   if (fullAccess) return 'bypass'
   return parentMode === 'auto' ? 'auto' : 'dontAsk'
 }
+
+/** How often a turn cut off by a restart looks at its session (cutOffAnswer). */
+let resumeCheckMs = 3_000
+export function _setResumeCheckMsForTest(ms: number | null): void { resumeCheckMs = ms ?? 3_000 }
 
 /** After a stop that came between a start and its spawn, the session is stopped again this much later. */
 let lateStopCheckMs = 10_000
@@ -99,6 +103,23 @@ export interface SubagentTurnSpec {
   onProgress: LightRunSpec['onProgress']
 }
 
+/**
+ * What of a subagent's session outlives this server (registry.ts writes it to disk): a deploy
+ * restarts the server while the session runs on in its host's daemon, and the next server
+ * takes it up from here.
+ */
+export interface SubagentSessionState {
+  runtimeId: string
+  callerSid: string
+  sessionId?: string
+  copy: WorkCopy | null
+  placed: boolean
+  started: boolean
+  activeAt: number
+  used: string[]
+  returned: Array<[string, string]>
+}
+
 /** How long an ACP engine's first start may take before its session record exists (personal-ai-lane.ts waits as long). */
 const ACP_START_WAIT_MS = 90_000
 
@@ -137,6 +158,54 @@ export class SubagentSession {
 
   get closed(): boolean { return !!this.closing }
 
+  /** What the next server needs to take this session up again (restore). */
+  state(): SubagentSessionState {
+    return {
+      runtimeId: this.spec.runtimeId, callerSid: this.spec.callerSid,
+      ...(this.sessionId ? { sessionId: this.sessionId } : {}),
+      copy: this.copy, placed: this.placed, started: this.started, activeAt: this.activeAt,
+      used: [...this.used], returned: [...this.returned],
+    }
+  }
+
+  /**
+   * This server's session of a subagent a server before it started (registry.ts restore):
+   * the session ran on in its host's daemon, so it is taken up as it is, never started again.
+   */
+  static async restore(spec: LightRunSpec, saved: SubagentSessionState): Promise<SubagentSession> {
+    const s = new SubagentSession({ ...spec, runtimeId: saved.runtimeId, callerSid: saved.callerSid })
+    s.copy = saved.copy
+    s.placed = saved.placed
+    s.started = saved.started
+    if (saved.activeAt) s.activeAt = saved.activeAt
+    for (const u of saved.used) s.used.add(u)
+    for (const [k, v] of saved.returned) s.returned.set(k, v)
+    s.sessionId = saved.sessionId
+    // A native start written down whose CLI never spawned (the server stopped first): never started.
+    if (s.sessionId && engineCaps(spec.engine).runtimeKind === 'native') {
+      const { getSessionByClaudeId } = await import('../session-tracker.js')
+      const rec = await getSessionByClaudeId(s.sessionId).catch(() => undefined)
+      if (rec && !rec.pid && rec.status_reason === 'awaiting_spawn') s.started = false
+    }
+    // An ACP engine that had not named its session before the restart: it is found by its lane.
+    if (!s.sessionId && s.started) {
+      const { getSessionByLane } = await import('../session-tracker.js')
+      s.sessionId = (await getSessionByLane(s.lane).catch(() => null))?.claudeSessionId
+    }
+    if (s.sessionId) {
+      ;(await import('../sessions/acp-caller-sid.js')).setCallerAlias(s.sessionId, saved.callerSid)
+      await s.watch(s.sessionId)
+      await s.hearEnd(s.sessionId)
+    }
+    return s
+  }
+
+  /** This server stops and the session runs on: its bus subscription goes, everything else stays. */
+  async detach(): Promise<void> {
+    if (this.sub) { (await import('../event-bus.js')).bus.unsubscribe(this.sub); this.sub = null }
+    if (this.hearSub) { (await import('../event-bus.js')).bus.unsubscribe(this.hearSub); this.hearSub = null }
+  }
+
   /** One turn: the first prompt, or a later message. Its answer, with the files it named copied back. */
   async turn(prompt: string, t: SubagentTurnSpec): Promise<LightRunResult> {
     if (this.closing) throw new LightSubagentError('stopped', 'This subagent was closed', 409)
@@ -150,11 +219,13 @@ export class SubagentSession {
         work.push(...this.copy.lines)
       }
       this.placed = true
+      spec.onState?.()
       if (t.signal.aborted) throw new LightSubagentError('stopped', 'The run was stopped', 409)
       // The copy took time: the user may have revoked the grant there since.
       await spec.stillGranted?.()
     }
-    const message = first ? `${subagentPreamble({ host: spec.host, copy: this.copy })}\n\n${prompt}` : prompt
+    // The preamble goes with the message that starts the session.
+    const message = !this.started && !this.sessionId ? `${subagentPreamble({ host: spec.host, copy: this.copy })}\n\n${prompt}` : prompt
     this.progress = t.onProgress
     this.answerSoFar = ''
     let answer: string
@@ -163,8 +234,102 @@ export class SubagentSession {
     } finally {
       this.progress = null
     }
+    return this.finish(answer, t, work)
+  }
+
+  /** Whether a restart left it a session to take up (its start reached its host). */
+  get taken(): boolean { return !!this.sessionId && this.started }
+
+  /**
+   * The turn a restart cut off (registry.ts restore): its session ran on in its host's daemon. Its
+   * own end is waited for (the session runner reattached it, and an ACP engine replays its journal
+   * once attached); only once the session reads idle with no end seen is it asked again
+   * (RESUME_PROMPT). Never asked while it is still in that turn: a message into a turn joins it,
+   * and every answer after would be taken for the message before it.
+   */
+  async resume(t: SubagentTurnSpec): Promise<LightRunResult> {
+    if (this.closing) throw new LightSubagentError('stopped', 'This subagent was closed', 409)
+    this.progress = t.onProgress
+    this.answerSoFar = ''
+    let answer: string
+    try {
+      answer = (await this.cutOffAnswer(t)) ?? await this.runTurn(RESUME_PROMPT, t)
+    } finally {
+      this.progress = null
+    }
+    return this.finish(answer, t, [])
+  }
+
+  /** The end of the turn a restart cut off, heard from the moment the session is taken up (it may come before resume asks). */
+  private heard: { result: string | null } | null = null
+  private hearSub: string | null = null
+  private async hearEnd(sid: string): Promise<void> {
+    const { bus, EventNames } = await import('../event-bus.js')
+    const { isQuietTurn } = await import('../sessions/quiet-turn.js')
+    this.hearSub = `subagent-heard-${this.spec.runtimeId}`
+    bus.subscribe(this.hearSub, (event) => {
+      const d = event.data as { sessionId?: string; result?: string; teamActive?: boolean; errorKind?: string; turnGen?: unknown }
+      // A quiet turn of Walnut's own (an idle compaction) is not its answer.
+      if (d?.sessionId !== sid || this.heard || isQuietTurn(sid, d.turnGen)) return
+      if (event.name === EventNames.SESSION_RESULT) { if (!d.teamActive) this.heard = { result: String(d.result ?? '').trim() } }
+      else if (d.errorKind !== 'delivery_failed') this.heard = { result: null }
+    }, { global: true, interest: [EventNames.SESSION_RESULT, EventNames.SESSION_ERROR] })
+  }
+
+  private async cutOffAnswer(t: SubagentTurnSpec): Promise<string | null> {
+    const sid = this.sessionId!
+    const { bus, EventNames } = await import('../event-bus.js')
+    if (this.hearSub) { bus.unsubscribe(this.hearSub); this.hearSub = null }
+    if (this.heard) return this.heard.result
+    const { getSessionByClaudeId } = await import('../session-tracker.js')
+    const native = engineCaps(this.spec.engine).runtimeKind === 'native'
+    const { isQuietTurn } = await import('../sessions/quiet-turn.js')
+    return new Promise<string | null>((resolve, reject) => {
+      const name = `subagent-resume-${this.spec.runtimeId}`
+      let done = false
+      let idleSeen = 0
+      const finish = (fn: () => void) => {
+        if (done) return
+        done = true
+        bus.unsubscribe(name)
+        clearInterval(tick)
+        t.signal.removeEventListener('abort', onAbort)
+        fn()
+      }
+      const onAbort = () => finish(() => reject(new LightSubagentError('stopped', 'The run was stopped', 409)))
+      bus.subscribe(name, (event) => {
+        const d = event.data as { sessionId?: string; result?: string; teamActive?: boolean; errorKind?: string; turnGen?: unknown }
+        if (d?.sessionId !== sid || isQuietTurn(sid, d.turnGen)) return
+        if (event.name === EventNames.SESSION_RESULT) {
+          if (!d.teamActive) finish(() => resolve(String(d.result ?? '').trim()))
+        } else if (d.errorKind !== 'delivery_failed') finish(() => resolve(null))
+      }, { global: true, interest: [EventNames.SESSION_RESULT, EventNames.SESSION_ERROR] })
+      const check = async () => {
+        if (done) return
+        if (Date.now() >= t.deadlineAt) { finish(() => reject(new LightSubagentError('timed_out', 'It ran out of its time'))); return }
+        const rec = await getSessionByClaudeId(sid).catch(() => undefined)
+        if (rec === null) { finish(() => reject(new LightSubagentError('engine_error', 'Its session is gone'))); return }
+        // Idle on two looks in a row (a replayed end comes in between): its end was not seen.
+        if (rec && rec.process_status !== 'running') { if (++idleSeen >= 2) finish(() => resolve(null)) } else idleSeen = 0
+      }
+      const tick = setInterval(() => void check(), resumeCheckMs)
+      tick.unref?.()
+      if (t.signal.aborted) onAbort()
+      else t.signal.addEventListener('abort', onAbort, { once: true })
+      void check()
+      // An ACP session is attached on use: its journal then replays the turn's end.
+      if (!native && !starterOverride) {
+        void import('../../providers/claude-code-session.js').then((m) => m.sessionRunner.findOrAttachAcpSession(sid)).catch(() => {})
+      }
+    })
+  }
+
+  /** A turn's answer, with the files it named copied back. */
+  private async finish(answer: string, t: SubagentTurnSpec, work: string[]): Promise<LightRunResult> {
+    const spec = this.spec
     const files = this.copy && spec.away ? await bringBack(spec, this.copy, answer, { used: this.used, returned: this.returned, deadlineAt: t.deadlineAt, signal: t.signal }) : { files: [], notes: [] }
     work.push(...files.notes)
+    if (files.files.length) spec.onState?.()
     const text = files.files.length || files.notes.length
       ? `${answer}\n\n[Walnut] ${files.files.length ? `Files copied back to ${spec.away!.fromHost === LOCAL ? 'this machine' : spec.away!.fromHost}:\n${files.files.map((f) => `- ${f.from} -> ${f.to}`).join('\n')}` : ''}${files.notes.length ? `\n${files.notes.join('\n')}` : ''}`
       : answer
@@ -186,6 +351,7 @@ export class SubagentSession {
     // A start still under way finishes first (watch and the alias check `closing` and stand down).
     await this.recording?.catch(() => {})
     if (this.sub) { (await import('../event-bus.js')).bus.unsubscribe(this.sub); this.sub = null }
+    if (this.hearSub) { (await import('../event-bus.js')).bus.unsubscribe(this.hearSub); this.hearSub = null }
     // An ACP engine that had not named its session yet: it is found by its lane (or by the sweep later).
     if (!this.sessionId && this.started && engineCaps(this.spec.engine).runtimeKind !== 'native') {
       const { getSessionByLane } = await import('../session-tracker.js')
@@ -276,6 +442,7 @@ export class SubagentSession {
     const go = () => {
       if (signal.aborted || this.closing) throw new LightSubagentError('stopped', 'The run was stopped', 409)
       this.started = true
+      spec.onState?.()
       if (starterOverride) starterOverride(start)
       else bus.emit(EventNames.SESSION_START, start as never, ['session-runner'], { source: 'subagent' })
     }
@@ -306,6 +473,7 @@ export class SubagentSession {
     const sid = await waitForLaneRecord(this.lane, ACP_START_WAIT_MS, engineCaps(spec.engine).displayName)
     setCallerAlias(sid, spec.callerSid)
     this.sessionId = sid
+    spec.onState?.()
     await left.noteLeft(this.runId, { sessionId: sid, sessionCwd: cwd })
     await this.watch(sid)
     return sid

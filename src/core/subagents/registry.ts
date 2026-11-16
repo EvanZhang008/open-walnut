@@ -4,7 +4,15 @@
  * session's host or another one, that lives past its answer: its caller talks to it again with
  * subagent_send, the user in its conversation in the Background tasks panel, and it keeps its
  * context. It is closed (its session stopped and removed, its copy too) when it is stopped, after
- * KEEP_IDLE_MS with no turn, when its caller's session is gone, or when the server stops.
+ * KEEP_IDLE_MS with no turn, or when its caller's session is gone for good.
+ *
+ * It outlives this server: a deploy restarts the server many times a day while the subagent's
+ * session runs on in its host's daemon (sessions are detached, never killed, on a stop). Each
+ * run's state is written to disk as it changes (subagents-open.json); a stopping server only
+ * writes it down and lets go, and the next one takes every run up again (restoreLightSubagents):
+ * a turn the restart cut off is asked again of the same session, and an end not yet told to
+ * its caller is told then (2026-11-16: sa-82bc6450d3, a codex run of 60 minutes, was stopped by
+ * a deploy 11 minutes in and its caller never heard of it).
  *
  * Each caller turn's answer goes back to the caller by itself, as a native background agent's
  * does: in the call that waits for it, or, when nothing waited (background, or a wait that ran
@@ -13,12 +21,15 @@
  * or poll it.").
  */
 import crypto from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
+import { WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { engineCaps } from '../agents/engine-registry.js'
 import type { BackgroundTaskInfo } from '../event-types.js'
 import type { SessionEngine } from '../types.js'
-import { LIGHT_SUBAGENT_ENGINES, LightSubagentError, type LightRunner, type LightRunResult, type LightRunSpec, type LightSubagentStatus, type ReturnedFile } from './types.js'
-import type { SubagentTurnSpec } from './on-host.js'
+import { LIGHT_SUBAGENT_ENGINES, LightSubagentError, RESUME_PROMPT, type LightRunner, type LightRunResult, type LightRunSpec, type LightSubagentStatus, type ReturnedFile } from './types.js'
+import type { SubagentSessionState, SubagentTurnSpec } from './on-host.js'
 
 /** Running at once per parent session, and on this server. */
 export const MAX_RUNNING_PER_SESSION = 4
@@ -40,6 +51,8 @@ const ANSWER_KEEP_MAX = 200_000
 const PROMPT_KEPT_MAX = 4_000
 /** A run whose end nobody read in this long is told to the parent session. */
 const TELL_GRACE_MS = 3_000
+const TELL_TRIES = 5
+const TELL_RETRY_MS = 60_000
 const PANEL_EMIT_GAP_MS = 400
 const PROMPT_MAX = 200_000
 const ANSWER_SHOWN_MAX = 60_000
@@ -88,6 +101,8 @@ export interface LightSubagentRun {
   closed: boolean
   /** When its latest turn began or ended. */
   activeAt: number
+  /** The running turn's own limit (epoch ms). */
+  turnDeadlineAt?: number
 }
 
 /** One caller turn as it ended: what a call or the notice about it says. */
@@ -99,6 +114,8 @@ export interface TurnEnd {
   /** The notice's body; its last line (talk to it again, or it is closed) is read when it is sent. */
   body: string
   told: boolean
+  /** Deliveries that failed (its host's link, the session store): tried again a minute later, a few times. */
+  tries?: number
 }
 
 /** One subagent's session (on-host.ts SubagentSession), or a test runner standing in for it. */
@@ -108,7 +125,13 @@ interface Handle {
   readonly activeAt?: number
   turn(prompt: string, t: SubagentTurnSpec): Promise<LightRunResult>
   close(reason: string): Promise<boolean>
+  /** What a restart keeps (absent: a test runner, kept as nothing). */
+  state?(): SubagentSessionState
+  detach?(): Promise<void>
+  /** The turn a restart cut off: its own end, or, its session idle with none seen, the answer to RESUME_PROMPT. */
+  resume?(t: SubagentTurnSpec): Promise<LightRunResult>
 }
+export { RESUME_PROMPT }
 
 interface Live {
   run: LightSubagentRun
@@ -124,6 +147,10 @@ interface Live {
   turnNo: number
   /** Each ended caller turn as it ended (a later turn changes the run, never this), and whether its end reached the caller. */
   tells: Map<number, TurnEnd>
+  /** Messages sent while a turn ran, in order, each run after the one before. */
+  pending: Array<{ turn: number; message: string }>
+  /** This server let it go (it stops): nothing of this process acts on it any more. */
+  detached: boolean
   closing: Promise<void> | null
   /** It is closed and its session gone (a running slot is held only while a turn runs). */
   settled: boolean
@@ -148,12 +175,21 @@ let skipEngineCheck = false
 export function _setLightRunnerForTest(fn: LightRunner | null): void { runnerOverride = fn }
 /** Tests: run on a mock adapter whatever the machine has installed. */
 export function _skipEngineCheckForTest(skip: boolean): void { skipEngineCheck = skip }
+/** Tests: this process "ends" (a restart): every run is forgotten here, its written state kept. */
+export function _forgetLightSubagentsForTest(): void {
+  for (const live of runs.values()) { live.detached = true; if (live.timer) clearTimeout(live.timer); if (live.idleTimer) clearTimeout(live.idleTimer) }
+  runs.clear()
+  reserving.clear()
+}
 export function _resetLightSubagentsForTest(): void {
-  for (const live of runs.values()) { live.abort.abort(); if (live.timer) clearTimeout(live.timer); if (live.idleTimer) clearTimeout(live.idleTimer) }
+  for (const live of runs.values()) { live.detached = true; live.abort.abort(); if (live.timer) clearTimeout(live.timer); if (live.idleTimer) clearTimeout(live.idleTimer) }
   runs.clear()
   reserving.clear()
   for (const t of emitTimers.values()) clearTimeout(t)
   emitTimers.clear()
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
+  letGo = false
+  fs.rmSync(STATE_FILE(), { force: true })
 }
 
 export interface StartLightSubagent {
@@ -244,10 +280,9 @@ export async function startLightSubagent(parentSid: string | undefined, req: Sta
     closed: false,
     activeAt: Date.now(),
   }
-  let settle!: () => void
-  const settledP = new Promise<void>((r) => { settle = r })
-  const live: Live = { run, abort: new AbortController(), waiters: new Set(), handle: null, chain: Promise.resolve(), turnNo: 1, tells: new Map(), closing: null, settled: false, settledP, settle }
+  const live = newLive(run)
   runs.set(run.id, live)
+  save()
   armPrune()
   log.agent.info('light subagent started', { id: run.id, parentSid: sid, engine, model: run.model, host, cwd, background: run.background })
   // The session keeps this many open: the oldest idle one goes first.
@@ -258,6 +293,12 @@ export async function startLightSubagent(parentSid: string | undefined, req: Sta
   live.chain = execute(live, record.acpRuntimeId || sid)
   emitPanel(sid)
   return run
+}
+
+function newLive(run: LightSubagentRun): Live {
+  let settle!: () => void
+  const settledP = new Promise<void>((r) => { settle = r })
+  return { run, abort: new AbortController(), waiters: new Set(), handle: null, chain: Promise.resolve(), turnNo: run.turnsEnded + 1, tells: new Map(), pending: [], detached: false, closing: null, settled: false, settledP, settle }
 }
 
 /** A running slot for `sid`: subagents answering now (and starts still checking their engine), per session and in all. */
@@ -291,7 +332,9 @@ export function sendLightSubagent(parentSid: string | undefined, id: string, req
   const turn = ++run.turns
   if (live.idleTimer) { clearTimeout(live.idleTimer); live.idleTimer = undefined }
   run.activeAt = Date.now()
-  live.chain = live.chain.then(() => (live.closing ? undefined : runTurn(live, message)))
+  live.pending.push({ turn, message })
+  live.chain = live.chain.then(() => runNext(live))
+  save()
   log.agent.info('light subagent message', { id, parentSid: run.parentSid, turn })
   return { run, turn }
 }
@@ -350,9 +393,16 @@ async function checkEngineOnHost(engine: SessionEngine, host: string): Promise<v
     409, { engines: usable })
 }
 
-async function execute(live: Live, callerSid: string): Promise<void> {
+/** The next message sent while a turn ran, once that turn ended. */
+async function runNext(live: Live): Promise<void> {
+  if (live.closing || live.detached || !live.handle) return
+  const next = live.pending.shift()
+  if (next) await runTurn(live, next.message)
+}
+
+function specOf(live: Live, callerSid: string): LightRunSpec {
   const { run } = live
-  const spec: LightRunSpec = {
+  return {
     runtimeId: `lsa-${run.id.slice(3)}-${crypto.randomBytes(3).toString('hex')}`,
     runId: run.id,
     engine: run.engine, host: run.host, cwd: run.cwd,
@@ -370,7 +420,13 @@ async function execute(live: Live, callerSid: string): Promise<void> {
     ...(run.grant ? { stillGranted: () => stillGranted(run) } : {}),
     signal: live.abort.signal,
     onProgress: () => {},
+    onState: () => save(),
   }
+}
+
+async function execute(live: Live, callerSid: string): Promise<void> {
+  const { run } = live
+  const spec = specOf(live, callerSid)
   try {
     // The grant may have been revoked while the run waited for its slot: nothing starts there then.
     if (run.grant) await stillGranted(run)
@@ -381,6 +437,7 @@ async function execute(live: Live, callerSid: string): Promise<void> {
       const { SubagentSession } = await import('./on-host.js')
       live.handle = new SubagentSession(spec)
     }
+    save()
   } catch (err) {
     const code = err instanceof LightSubagentError ? err.code : 'engine_error'
     end(live, live.abort.signal.aborted && run.stoppedBy ? 'stopped' : 'failed', { error: err instanceof Error ? err.message : String(err), errorCode: code })
@@ -391,9 +448,9 @@ async function execute(live: Live, callerSid: string): Promise<void> {
 }
 
 /** One caller turn: the first prompt or a later message. A turn that fails or is stopped closes the subagent. */
-async function runTurn(live: Live, prompt: string, first = false): Promise<void> {
+async function runTurn(live: Live, prompt: string, first = false, resume = false): Promise<void> {
   const { run } = live
-  if (live.closing || !live.handle) return
+  if (live.closing || live.detached || !live.handle) return
   // Never closed as idle while it answers.
   if (live.idleTimer) { clearTimeout(live.idleTimer); live.idleTimer = undefined }
   live.turnNo = run.turnsEnded + 1
@@ -408,13 +465,17 @@ async function runTurn(live: Live, prompt: string, first = false): Promise<void>
     emitPanel(run.parentSid)
   }
   const timeoutMin = Math.round(run.timeoutMs / 60_000)
-  live.timer = setTimeout(() => end(live, 'failed', { error: `It ran out of its ${timeoutMin} minutes and was stopped`, errorCode: 'timed_out' }), run.timeoutMs)
+  // A turn taken up again after a restart keeps the limit it began with.
+  if (!resume || !run.turnDeadlineAt) run.turnDeadlineAt = Date.now() + run.timeoutMs
+  const deadlineAt = run.turnDeadlineAt
+  live.timer = setTimeout(() => end(live, 'failed', { error: `It ran out of its ${timeoutMin} minutes and was stopped`, errorCode: 'timed_out' }), Math.max(0, deadlineAt - Date.now()))
   live.timer.unref?.()
+  save()
   const signal = live.abort.signal
   try {
-    const result = await live.handle.turn(prompt, {
+    const spec: SubagentTurnSpec = {
       signal,
-      deadlineAt: Date.now() + run.timeoutMs,
+      deadlineAt,
       onProgress: (p) => {
         if (run.status !== 'running' || signal.aborted) return
         if (p.kind === 'text') run.text = p.text
@@ -422,7 +483,8 @@ async function runTurn(live: Live, prompt: string, first = false): Promise<void>
         else if (p.kind === 'tokens') run.tokens = p.tokens
         emitPanel(run.parentSid)
       },
-    })
+    }
+    const result = resume && live.handle.resume ? await live.handle.resume(spec) : await live.handle.turn(prompt, spec)
     takeResult(live, result)
   } catch (err) {
     const code = err instanceof LightSubagentError ? err.code : 'engine_error'
@@ -430,12 +492,14 @@ async function runTurn(live: Live, prompt: string, first = false): Promise<void>
   } finally {
     notifyWaiters(live)
   }
+  if (live.detached) return
   if (run.status === 'completed') armIdle(live)
   else await closeRun(live, run.status === 'stopped' ? 'subagent_stopped' : 'subagent_failed')
 }
 
 /** Close the subagent: its session stopped and removed, its copy too. Its row stays, with its last answer. */
 function closeRun(live: Live, reason: string): Promise<void> {
+  if (live.detached) return Promise.resolve()
   live.closing ??= (async () => {
     const { run } = live
     if (live.idleTimer) { clearTimeout(live.idleTimer); live.idleTimer = undefined }
@@ -451,6 +515,7 @@ function closeRun(live: Live, reason: string): Promise<void> {
       live.settled = true
       live.settle()
       log.agent.info('light subagent closed', { id: run.id, parentSid: run.parentSid, reason, turns: run.turnsEnded })
+      save()
       notifyWaiters(live)
       emitPanel(run.parentSid)
       prune()
@@ -463,7 +528,7 @@ function closeRun(live: Live, reason: string): Promise<void> {
 function armIdle(live: Live): void {
   if (live.idleTimer) clearTimeout(live.idleTimer)
   live.idleTimer = undefined
-  if (live.closing || live.run.status === 'running') return
+  if (live.closing || live.detached || live.run.status === 'running') return
   const left = keepIdleMs - (Date.now() - Math.max(live.run.activeAt, live.handle?.activeAt ?? 0))
   if (left <= 0) { void closeRun(live, 'subagent_idle'); return }
   live.idleTimer = setTimeout(() => armIdle(live), left)
@@ -489,7 +554,7 @@ function takeResult(live: Live, result: LightRunResult): void {
 
 function end(live: Live, status: Exclude<LightSubagentStatus, 'running'>, o: { answer?: string; error?: string; errorCode?: string }): void {
   const { run } = live
-  if (run.status !== 'running') return
+  if (run.status !== 'running' || live.detached) return
   run.status = status
   run.endedAt = Date.now()
   run.activeAt = run.endedAt
@@ -514,11 +579,12 @@ function end(live: Live, status: Exclude<LightSubagentStatus, 'running'>, o: { a
     body: endNotice(run, turn), told: false,
   }
   live.tells.set(turn, tell)
+  save()
   const waited = live.waiters.size > 0
   notifyWaiters(live)
   emitPanel(run.parentSid)
   // Nobody took it from a call: tell the parent, unless a read takes it first.
-  setTimeout(() => { if (!tell.told) void tellParent(run, turn, tell) }, waited ? TELL_GRACE_MS * 2 : TELL_GRACE_MS).unref?.()
+  setTimeout(() => { if (!tell.told && !live.detached) void tellParent(run, turn, tell) }, waited ? TELL_GRACE_MS * 2 : TELL_GRACE_MS).unref?.()
 }
 
 /** The run of `parentSid` named `id` (a session never reads another's run). */
@@ -554,13 +620,14 @@ export async function waitLightSubagent(run: LightSubagentRun, ms: number, turn 
 /** The caller is answered with this run's end: the parent knows it now. */
 export function markTold(run: LightSubagentRun, turn = run.turns): void {
   const tell = runs.get(run.id)?.tells.get(turn)
-  if (tell) tell.told = true
+  if (tell && !tell.told) { tell.told = true; save() }
 }
 
 /** Stop the subagent (a running turn ends as stopped) and close it. `stopped`: it was open. */
 export function stopLightSubagent(parentSid: string | undefined, id: string, by: string): { stopped: boolean; status: LightSubagentStatus } {
   const run = getLightSubagent(parentSid, id)
   const live = runs.get(id)!
+  if (live.detached) throw new LightSubagentError('restarting', 'Walnut\'s server is restarting: stop it again in a moment', 503)
   if (live.closing) return { stopped: false, status: run.status }
   const wasRunning = run.status === 'running'
   if (wasRunning) {
@@ -662,7 +729,6 @@ export function prune(now = Date.now()): void {
 async function closeOrphans(): Promise<void> {
   const open = [...runs.values()].filter((l) => !l.closing && l.run.status !== 'running')
   if (open.length === 0) return
-  const { getSessionByClaudeId } = await import('../session-tracker.js')
   // No session store to read (starting, failing): nothing can be decided this round.
   if (!(await import('../session-db.js')).getDb()) return
   for (const l of open) {
@@ -670,7 +736,7 @@ async function closeOrphans(): Promise<void> {
     // and talks to it again: only one that is gone for good closes it. A failed read decides nothing.
     let gone: boolean
     try {
-      const rec = await getSessionByClaudeId(l.run.parentSid)
+      const rec = await callerOf(l.run)
       gone = !rec || !!rec.archived
       if (!gone && rec?.taskId) {
         const { getTask } = await import('../task-manager.js')
@@ -687,23 +753,180 @@ function armPrune(): void {
   pruneTimer.unref?.()
 }
 
-/**
- * The server stops: stop every run and wait (bounded) for its worker to end, so none
- * runs on with no one in control of it. The host's daemon stops one this misses too
- * (light-subagent-acp.ts: its deadline and no-subscriber grace).
- */
-export async function stopAllLightSubagents(by: string, waitMs: number): Promise<void> {
-  const live = [...runs.values()].filter((l) => !l.settled)
-  if (live.length === 0) return
-  for (const l of live) {
-    if (l.run.status === 'running') { l.run.stoppedBy = by; end(l, 'stopped', { error: `Stopped: ${by}` }) }
-    void closeRun(l, 'subagent_server_stopped')
+// ── Across a restart ──
+
+/** What of each run outlives this server: every one not closed, and a closed one whose end its caller has not heard yet. */
+interface SavedRun {
+  run: LightSubagentRun
+  handle?: SubagentSessionState
+  tells: Array<[number, TurnEnd]>
+  pending: Array<{ turn: number; message: string }>
+  settled: boolean
+}
+
+const STATE_FILE = () => path.join(WALNUT_HOME, 'subagents-open.json')
+let saveTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Write the runs down soon (changes come in bursts); a stopping server writes at once (saveNow). */
+/** This server let every run go (it stops): it writes nothing more, the next one owns the file. */
+let letGo = false
+
+function save(): void {
+  if (saveTimer || letGo) return
+  saveTimer = setTimeout(() => { saveTimer = null; saveNow() }, 50)
+  saveTimer.unref?.()
+}
+
+function saveNow(): void {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
+  if (letGo) return
+  const rows: SavedRun[] = []
+  for (const l of runs.values()) {
+    const untold = [...l.tells.values()].some((t) => !t.told)
+    if (l.settled && !untold) continue
+    const handle = l.handle?.state?.()
+    // Only what the next server needs: ends not told yet, and the latest one (a read of it shows it).
+    const tells = [...l.tells].filter(([turn, t]) => !t.told || turn === l.run.turnsEnded)
+    rows.push({ run: l.run, ...(handle ? { handle } : {}), tells, pending: l.pending, settled: l.settled })
   }
-  await Promise.race([
-    Promise.all(live.map((l) => l.settledP)),
-    new Promise<void>((resolve) => setTimeout(resolve, waitMs).unref?.()),
-  ])
-  log.agent.info('light subagents stopped with the server', { runs: live.length, settled: live.filter((l) => l.settled).length })
+  const f = STATE_FILE()
+  try {
+    if (rows.length === 0) { fs.rmSync(f, { force: true }); return }
+    fs.mkdirSync(path.dirname(f), { recursive: true })
+    const tmp = `${f}.${process.pid}.tmp`
+    fs.writeFileSync(tmp, JSON.stringify(rows))
+    fs.renameSync(tmp, f)
+  } catch (err) {
+    log.agent.warn('light subagents: writing their state failed', { error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
+function readSaved(): SavedRun[] {
+  let text: string
+  try { text = fs.readFileSync(STATE_FILE(), 'utf8') } catch { return [] }
+  try {
+    const raw = JSON.parse(text) as unknown
+    if (!Array.isArray(raw)) throw new Error('not a list')
+    return raw as SavedRun[]
+  } catch (err) {
+    const aside = `${STATE_FILE()}.unreadable-${Date.now()}`
+    try { fs.renameSync(STATE_FILE(), aside) } catch { /* gone meanwhile */ }
+    log.agent.warn('light subagents: their state could not be read; kept aside (the sweep retires their sessions)', { aside, error: err instanceof Error ? err.message : String(err) })
+    return []
+  }
+}
+
+/**
+ * The server stops: every run is written down and let go, never stopped. Its session runs on in
+ * its host's daemon (the session runner detaches sessions on a stop, never kills them), and the
+ * next server takes it up (restoreLightSubagents).
+ */
+export async function detachAllLightSubagents(by: string): Promise<void> {
+  const all = [...runs.values()]
+  if (all.length === 0) return
+  for (const l of all) {
+    l.detached = true
+    if (l.timer) clearTimeout(l.timer)
+    if (l.idleTimer) { clearTimeout(l.idleTimer); l.idleTimer = undefined }
+  }
+  // Written before anything awaits: the process may end at any await from here.
+  const kept = [...runs.values()].filter((l) => !l.settled).length
+  saveNow()
+  letGo = true
+  if (pruneTimer) { clearInterval(pruneTimer); pruneTimer = null }
+  await Promise.all(all.map((l) => l.handle?.detach?.().catch(() => {})))
+  log.agent.info('light subagents written down for the next server', { by, open: kept, running: all.filter((l) => l.run.status === 'running').length })
+}
+
+/**
+ * A new server takes up the runs the one before it wrote down: each is listed again at once (so
+ * the left-runs sweep leaves its session alone), an end its caller has not heard yet is told now,
+ * a turn the restart cut off is asked again of the same session, and the messages that waited
+ * for it follow. A run whose session cannot be found again ends as failed, and its caller is told.
+ */
+export async function restoreLightSubagents(ready: Promise<unknown> = Promise.resolve()): Promise<number> {
+  letGo = false
+  const saved = readSaved()
+  const taken: Array<{ live: Live; s: SavedRun }> = []
+  const setups: Array<Promise<boolean>> = []
+  // Listed at once, before any await: the left-runs sweep leaves a listed run's session alone, and
+  // a message or a stop meanwhile waits in its chain for it to be taken up.
+  for (const s of saved) {
+    if (runs.has(s.run.id)) continue
+    const live = newLive(s.run)
+    live.tells = new Map(s.tells)
+    live.pending = [...s.pending]
+    if (s.settled) { live.settled = true; live.settle(); live.closing = Promise.resolve() }
+    runs.set(s.run.id, live)
+    // The session runner has reattached the sessions and replayed their queues first.
+    const setup = ready.catch(() => {}).then(() => takeUp(live, s)).catch((err: unknown) => {
+      log.agent.warn('light subagent: taking it up failed', { id: live.run.id, error: err instanceof Error ? err.message : String(err) })
+      return false
+    })
+    live.chain = setup.then((go) => (go ? carryOn(live) : undefined)).catch(() => {})
+    setups.push(setup)
+    taken.push({ live, s })
+  }
+  if (taken.length === 0) return 0
+  armPrune()
+  log.agent.info('light subagents taken up from the server before', { runs: taken.length, running: taken.filter((t) => t.live.run.status === 'running').length })
+  // Resolves once each is taken up (its session found again, its ends told): its turn runs on after.
+  await Promise.all(setups)
+  save()
+  return taken.length
+}
+
+/** Its session found again and its untold ends told; true when it carries on (carryOn). */
+async function takeUp(live: Live, s: SavedRun): Promise<boolean> {
+  const { run } = live
+  for (const [turn, tell] of live.tells) if (!tell.told) void tellParent(run, turn, tell)
+  if (live.settled) return false
+  let found = false
+  try {
+    if (runnerOverride) {
+      const runner = runnerOverride
+      const spec = specOf(live, run.parentSid)
+      live.handle = { turn: (prompt, t) => runner({ ...spec, prompt, signal: t.signal, deadlineAt: t.deadlineAt, onProgress: t.onProgress }), close: async () => true }
+      found = true
+    } else if (s.handle) {
+      const { SubagentSession } = await import('./on-host.js')
+      const handle = await SubagentSession.restore(specOf(live, s.handle.callerSid), s.handle)
+      live.handle = handle
+      found = handle.taken
+    }
+  } catch (err) {
+    log.agent.warn('light subagent: its session could not be taken up', { id: run.id, error: err instanceof Error ? err.message : String(err) })
+  }
+  // Stopped while it was being taken up: what it had is closed now.
+  if (live.closing) { await live.closing; await live.handle?.close('subagent_stopped'); return false }
+  if (run.closed) { await closeRun(live, 'subagent_closed'); return false }
+  if (run.status === 'running') {
+    if (!found) {
+      end(live, 'failed', { error: 'Walnut\'s server restarted before its session had started, so it did not run: start it again with subagent_run', errorCode: 'engine_error' })
+      await closeRun(live, 'subagent_failed')
+      return false
+    }
+    if (run.turnDeadlineAt && run.turnDeadlineAt <= Date.now()) {
+      end(live, 'failed', { error: `It ran out of its ${Math.round(run.timeoutMs / 60_000)} minutes and was stopped`, errorCode: 'timed_out' })
+      await closeRun(live, 'subagent_failed')
+      return false
+    }
+  } else if (!found) { await closeRun(live, 'subagent_failed'); return false }
+  emitPanel(run.parentSid)
+  return true
+}
+
+/** A run taken up goes on: the turn the restart cut off, then the messages sent before it, in order. */
+async function carryOn(live: Live): Promise<void> {
+  if (live.run.status === 'running') await runTurn(live, RESUME_PROMPT, false, true)
+  else armIdle(live)
+  for (let n = live.pending.length; n > 0 && !live.closing; n--) await runNext(live)
+}
+
+/** Its caller has subagents answering now: its own process stays alive for their answers (live-sessions.ts mustStay). */
+export function hasRunningLightSubagents(parentSid: string): boolean {
+  for (const l of runs.values()) if (l.run.parentSid === parentSid && !l.settled && (l.run.status === 'running' || l.pending.length > 0)) return true
+  return false
 }
 
 /** The notification a parent gets for a run whose end no call returned. */
@@ -730,7 +953,15 @@ function noticeNext(run: LightSubagentRun, tell: TurnEnd): string {
 export async function parentHearsNothing(target: import('../types.js').SessionRecord | null | undefined): Promise<string | null> {
   if (!target) return 'no session'
   const { isLiveSessionStatus } = await import('../routines/session-target.js')
-  if (target.archived || !isLiveSessionStatus(target.process_status)) return `its session is ${target.archived ? 'archived' : target.process_status ?? 'stopped'}`
+  if (target.archived) return 'its session is archived'
+  // Stopped by a person, its task closed or gone, its team stopped: it stays as it is (the same
+  // check every wait that continues a session by itself makes). Stopped by Walnut (its idle exit,
+  // a restart, the live limit): the notice resumes it, as a message to it would.
+  if (!isLiveSessionStatus(target.process_status)) {
+    const { sessionWaitHoldsOff } = await import('../sessions/endpoint-wait.js')
+    const held = PERSON_STOPS.has(String(target.status_reason ?? '')) ? 'person-stopped' : await sessionWaitHoldsOff(target)
+    if (held) return `its session stays stopped (${held})`
+  }
   if (target.taskId) {
     const { getTask } = await import('../task-manager.js')
     const task = await getTask(target.taskId).catch(() => null)
@@ -739,32 +970,74 @@ export async function parentHearsNothing(target: import('../types.js').SessionRe
   return null
 }
 
+/** A stop that was a person's own: their session is never resumed by a subagent's end. */
+const PERSON_STOPS = new Set(['user_stopped', 'user_terminated'])
+
+/**
+ * The caller's session now: its record by id, or, when that id is gone (a resume that came back
+ * as a new session, an engine switch), its task's session; the run follows it there.
+ */
+async function callerOf(run: LightSubagentRun): Promise<import('../types.js').SessionRecord | null> {
+  const { getSessionByClaudeId } = await import('../session-tracker.js')
+  const rec = await getSessionByClaudeId(run.parentSid)
+  if (rec || !run.parentTaskId) return rec ?? null
+  const { getTask } = await import('../task-manager.js')
+  const sid = (await getTask(run.parentTaskId).catch(() => null))?.session_id
+  if (!sid || sid === run.parentSid) return null
+  const now = await getSessionByClaudeId(sid)
+  if (now) {
+    log.agent.info('light subagent: its caller is its task\'s session now', { id: run.id, from: run.parentSid, to: sid })
+    run.parentSid = sid
+    save()
+  }
+  return now ?? null
+}
+
+/** Ends being told now (told is written down only once the notice is in the caller's queue). */
+const telling = new Set<TurnEnd>()
+
 async function tellParent(run: LightSubagentRun, turn: number, tell: TurnEnd): Promise<void> {
-  if (tell.told) return
-  tell.told = true
+  if (tell.told || telling.has(tell)) return
+  telling.add(tell)
   try {
-    const { getSessionByClaudeId } = await import('../session-tracker.js')
-    const target = await getSessionByClaudeId(run.parentSid)
+    const target = await callerOf(run)
     const quiet = await parentHearsNothing(target)
     if (quiet || !target) {
       log.agent.info('light subagent end not told: its session is not there to hear it', { id: run.id, parentSid: run.parentSid, why: quiet ?? 'no session' })
+      tell.told = true
       return
     }
     const { deliverToSession } = await import('../sessions/session-send-core.js')
     const { NOTICE_SOURCE } = await import('../sessions/subtask-notices.js')
     const { liveDelivery } = await import('../sessions/ask-answer.js')
+    const { isLiveSessionStatus } = await import('../routines/session-target.js')
     const text = `${tell.body}\n\n${noticeNext(run, tell)}`
-    // Only into the session still live as checked: a Stop between the check and the write wins.
-    await deliverToSession(target, {
+    const send = async (to: import('../types.js').SessionRecord, live: boolean) => deliverToSession(to, {
       busText: text, enqueueText: text, source: NOTICE_SOURCE,
-      ...(target.taskId ? { taskId: target.taskId } : {}),
+      ...(to.taskId ? { taskId: to.taskId } : {}),
       // One per turn: a later turn's notice is never taken for an earlier one still queued.
       messageId: `sa-end-${run.id}-${turn}`, endsWait: true,
-      liveOnly: await liveDelivery(target.claudeSessionId),
+      // A live caller: only while it is still live as checked (a person's Stop meanwhile wins). One
+      // Walnut stopped: the row resumes it.
+      ...(live ? { liveOnly: await liveDelivery(to.claudeSessionId) } : {}),
     })
+    try {
+      await send(target, isLiveSessionStatus(target.process_status))
+    } catch (err) {
+      // It went quiet between the check and the write (its idle exit): told again as a stopped one is, unless a person stopped it.
+      const now = await callerOf(run)
+      if (!now || isLiveSessionStatus(now.process_status) || await parentHearsNothing(now)) throw err
+      await send(now, false)
+    }
+    tell.told = true
     log.agent.info('light subagent end told to its session', { id: run.id, parentSid: run.parentSid, turn })
   } catch (err) {
-    log.agent.warn('light subagent: telling the session failed', { id: run.id, parentSid: run.parentSid, error: err instanceof Error ? err.message : String(err) })
+    tell.tries = (tell.tries ?? 0) + 1
+    log.agent.warn('light subagent: telling the session failed', { id: run.id, parentSid: run.parentSid, tries: tell.tries, error: err instanceof Error ? err.message : String(err) })
+    if (tell.tries < TELL_TRIES) setTimeout(() => { if (!runs.get(run.id)?.detached) void tellParent(run, turn, tell) }, TELL_RETRY_MS).unref?.()
+  } finally {
+    telling.delete(tell)
+    save()
   }
 }
 
