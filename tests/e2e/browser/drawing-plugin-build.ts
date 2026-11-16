@@ -59,7 +59,7 @@ async function withLock<T>(lockDir: string, body: () => T): Promise<T> {
 
 /** Builds the Drawing plugin when its dist is missing or older than its source; returns its directory. */
 export async function ensureDrawingPluginBuilt(repoRoot: string, bun: string = process.execPath): Promise<string> {
-  const pluginDir = path.join(repoRoot, 'plugin-store', 'walnut-drawing')
+  const pluginDir = path.join(repoRoot, 'plugin-store/walnut-drawing')
   const outputs = [path.join(pluginDir, 'dist', 'web.mjs'), path.join(pluginDir, 'dist', 'server.mjs')]
   const inputs = [path.join(pluginDir, 'src'), path.join(pluginDir, 'manifest.json'), path.join(pluginDir, 'package.json')]
   const fresh = () => oldestOutput(outputs) >= Math.max(...inputs.map(newestMtime))
