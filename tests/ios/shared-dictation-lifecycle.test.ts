@@ -23,6 +23,23 @@ describe('shared iOS dictation lifecycle', () => {
     expect(source).toContain('.dictationSendGate(sendGate)');
   });
 
+  it('marks newly dictated roots covered without covering their pushed destinations', () => {
+    const task = read('Views/Tasks/TaskDetailSheet.swift');
+    const selector = read('Views/Inbox/InboxItemTaskSelector.swift');
+    for (const source of [task, selector]) expect(source).toContain('@Environment(\\.composerCovered) private var coveredByHost');
+    expect(task).toContain('.environment(\\.composerCovered, coveredByHost || !navPath.isEmpty)');
+    expect(selector).toContain('.environment(\\.composerCovered, coveredByHost || preview != nil)');
+    for (const source of [task, selector]) {
+      const cover = source.indexOf('.environment(\\.composerCovered,');
+      const push = source.indexOf('.navigationDestination(');
+      expect(cover).toBeGreaterThan(0);
+      expect(cover).toBeLessThan(push);
+    }
+    // Root-only coverage must not flow into the active destination's composer.
+    expect(task).toMatch(/SessionConversationView\(session: session\)\s*\}/);
+    expect(selector).toMatch(/InboxItemTaskPreview\([^\n]+\)\s*\}/);
+  });
+
   it('keeps the UI-test capture silent and unavailable to phone/release builds', () => {
     const source = read('Core/DebugDictationCapture.swift');
     expect(source).toMatch(/^#if DEBUG && targetEnvironment\(simulator\)/);

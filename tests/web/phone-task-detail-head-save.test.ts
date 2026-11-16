@@ -15,6 +15,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
 import { parseHTML } from 'linkedom'
 import { createElement, act } from '../../web/node_modules/react/index.js'
 import { createRoot } from '../../web/node_modules/react-dom/client.js'
+import { MemoryRouter } from '../../web/node_modules/react-router-dom/dist/index.js'
 
 const spy = vi.hoisted(() => ({
   fail: null as null | Error,
@@ -29,6 +30,8 @@ vi.mock('@/api/tasks', () => ({
   },
 }))
 vi.mock('@/contexts/TasksContext', () => ({ useTasksContextSafe: () => null }))
+// The shared mic mounts inside the real console's router and reads its capability.
+vi.mock('@/api/stt', () => ({ fetchSttStatus: async () => ({ engine: 'test', configured: true, available: true }) }))
 vi.mock('../../web/src/components/tasks/PhonePhaseSheet', () => ({
   PhonePhaseSheet: ({ onSetPhase }: { onSetPhase: (phase: string) => void }) => {
     spy.setPhase = onSetPhase
@@ -65,7 +68,7 @@ async function mount() {
   const el = doc.createElement('div')
   doc.body.appendChild(el)
   const root = createRoot(el as unknown as Element)
-  await act(async () => { root.render(createElement(PhoneTaskDetailHead, { task })) })
+  await act(async () => { root.render(createElement(MemoryRouter, null, createElement(PhoneTaskDetailHead, { task }))) })
   return { el, root }
 }
 

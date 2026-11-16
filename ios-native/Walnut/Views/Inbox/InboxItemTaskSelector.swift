@@ -8,6 +8,7 @@ struct InboxItemTaskSelector: View {
     var onContinue: (InboxTaskCandidate) -> Void
     private let store = InboxItemStore.shared
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.composerCovered) private var coveredByHost
     @State private var page: InboxTaskPage?
     @State private var candidates: [InboxTaskCandidate] = []
     @State private var loading = false
@@ -122,6 +123,8 @@ struct InboxItemTaskSelector: View {
                     }
                 }
             }.padding(16)
+            // Only the search underneath the preview leaves its dictation gate.
+            .environment(\.composerCovered, coveredByHost || preview != nil)
             .dictationSendGate(sendGate)
             .navigationTitle("Choose a task").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { sendGate.cancelWait(); dismiss() } } }

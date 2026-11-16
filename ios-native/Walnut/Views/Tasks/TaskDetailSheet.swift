@@ -11,6 +11,7 @@ struct TaskDetailSheet: View {
     let task: WalnutTask
     @Environment(\.dismiss) private var dismiss
     @Environment(TasksStore.self) private var tasks
+    @Environment(\.composerCovered) private var coveredByHost
 
     /// Explicit path so a freshly created session can push programmatically.
     @State private var navPath: [WalnutSession] = []
@@ -108,6 +109,8 @@ struct TaskDetailSheet: View {
                 .padding()
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            // Scope this to the root content, not its pushed session's composer.
+            .environment(\.composerCovered, coveredByHost || !navPath.isEmpty)
             .accessibilityIdentifier("task.detail.scroll")
             .task {
                 if detailController.detail == nil || usedInitialDetail { await detailController.load() }
