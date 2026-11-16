@@ -110,20 +110,17 @@ import { approvalsLine, currentApprovalsAsk, currentReplyLanguage, refreshReplyL
 import { TASK_ROUTING_CONTRACT } from '../task-routing-contract.js'
 import { PromptComposer, promptRollback, type PromptBlockId } from './prompt-blocks.js'
 import { IS_DEMO } from '../../constants.js'
-import { FALLBACK_FAMILIES } from './safeguard-stop.js'
 
 /**
  * What a session does when Claude Code answers "API Error: <model>'s safeguards flagged this message":
- * Walnut switches its model after two in a row (safeguard-switch.ts), and its lead can switch it sooner,
- * in the same order (safeguard-stop.ts FALLBACK_FAMILIES): 2026-11-16 a lead switched a refused Opus worker
- * straight to Sonnet, past Fable, by hand.
+ * Walnut switches its model after two in a row (safeguard-switch.ts), and its lead can switch it sooner.
  */
 /** The Demo's line in its session context: its server is reset under a new generation, which a direct request names. */
 export const DEMO_CONTEXT_LINE = '\n\nThis is Walnut Demo. Use the walnut CLI for its API. A direct request to $WALNUT_SERVER_URL needs the header "x-walnut-demo-generation: $WALNUT_DEMO_GENERATION"; never read or adopt a newer generation after reset.'
 
 export const SAFEGUARD_SWITCH_RULE = 'When Claude Code answers "API Error: ...\'s safeguards flagged this message", Walnut moves this '
   + 'session to another model after two in a row and resends what got no answer; sooner, ask your lead to switch you '
-  + `(a lead uses the api op: POST /api/v1/sessions/<session id>/model, with the next model in Walnut's own order: ${FALLBACK_FAMILIES.join(', then ')}).`
+  + '(a lead uses the api op: POST /api/v1/sessions/<session id>/model).'
 
 export interface SessionContext {
   systemPrompt: string

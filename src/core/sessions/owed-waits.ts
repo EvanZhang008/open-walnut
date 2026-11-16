@@ -65,7 +65,8 @@ function waitRes(name?: string): { strict: RegExp[]; broad: RegExp[] } {
     new RegExp(`\\b(?:is|are|stays?|remains?|left (?:to|for)|up to|pending)\\s+(?:${who})(?:'s|\\u2019s)\\s+(?:${OWN_WORDS})\\b`, 'iu'),
     new RegExp(`(?:${who})(?:'s|\\u2019s)\\s+(?:${OWN_WORDS})\\s+(?:is\\s+)?(?:still\\s+)?(?:needed|pending|open|required|outstanding)\\b`, 'iu'),
     new RegExp(`\\b(?:for|to)\\s+(?:${who})\\s+to\\s+(?:decide|choose|pick|confirm|approve|answer|reply|sign|pay)\\b`, 'iu'),
-    new RegExp(`\\b(?:${who})\\s+(?:still\\s+)?(?:to|must|needs? to|has to|is to)\\s+(?:decide|choose|pick|confirm|approve|answer|reply|sign)\\b`, 'iu'),
+    new RegExp(`\\b(?:${who})\\s+(?:still\\s+)?(?:to|must|needs? to|has to|is to)\\s+(?:decide|choose|pick|confirm|approve|answer|reply|sign|review|accept)\\b`, 'iu'),
+    new RegExp(`\\b(?:is|are|it's|left)\\s+up to\\s+(?:${who})(?![\\p{L}-])`, 'iu'),
     // "hand to / left to / ask <user> to decide / answer / reply" (escapes)
     new RegExp(`(?:\\u4ea4(?:\\u7ed9)?|\\u7531|\\u5f85|\\u8bf7)\\s*(?:${zhWho})\\s*\\u6765?\\s*(?:${zhDecide})`, 'u'),
   ];

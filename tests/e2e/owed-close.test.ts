@@ -136,6 +136,14 @@ describe('a session never closes a task the user still has something of', () => 
       it(`${source} x ${route.name}: kept open as Partial and Needs you`, async () => {
         const { task, sid } = await worker('Owed')
         await setUp(task, sid)
+        // Its own conclusion alone is asked once with nothing written (a misread line never flashes
+        // on the user's Needs you); the same conclusion again is held.
+        if (source === 'decision') {
+          const first = await route.close(await getTask(task.id), sid)
+          if (route.name.includes('batch')) expect(((await first.json()) as { failed?: { error: string }[] }).failed?.[0]?.error ?? '').toMatch(/^owed_to_user:/)
+          else expect(first.status).toBe(409)
+          expect((await getTask(task.id)).phase).toBe('IN_PROGRESS')
+        }
         const res = await route.close(await getTask(task.id), sid)
         const body = await res.json() as { code?: string; failed?: { error: string }[] }
         if (route.name.includes('batch')) expect(body.failed?.[0]?.error ?? '').toMatch(/^owed_to_user:/)
@@ -576,7 +584,9 @@ describe('what does not hold, and who settles', () => {
     const { task, sid } = await worker('Owed')
     await SOURCES.decision(task, sid)
     expect((await json('POST', `/api/v1/tasks/${task.id}/complete`, {}, sid)).status).toBe(409)
+    expect((await getTask(task.id)).result_report?.owed).toBeUndefined()
     expect((await json('POST', `/api/v1/tasks/${task.id}/complete`, {}, sid)).status).toBe(409)
+    expect((await getTask(task.id)).phase).toBe('NEED_ACTION')
     const res = await json('POST', `/api/v1/tasks/${task.id}/complete`, { result: 'Reported the invoice; the lead decided not to pay.', not_done: [] }, sid)
     expect(res.status, await res.clone().text()).toBe(200)
   })
@@ -592,16 +602,24 @@ describe('what does not hold, and who settles', () => {
   })
 
   it('another team\'s lead settles nothing of the user with a reason alone; the task\'s own lead does', async () => {
-    const own = await worker('Owed')
+    // Its own project: the same ask in one team folds to one (the matrix above asks it in Owed).
+    const own = await worker('Teams')
     // A lead of another project's team.
     const other = await worker('Elsewhere')
     await updateTaskRaw(other.task.id, { org_role: 'lead' } as never, { emitEvent: true })
-    const { task, sid } = await worker('Owed')
+    const { task, sid } = await worker('Teams')
     await updateTask(task.id, { parent_task_id: own.task.id })
     await SOURCES.progress(task, sid)
     const body = { force: true, reason: 'Settled by a lead: not the user\'s.' }
     // Each is held once (the items named to it), then forces.
     for (let i = 0; i < 3; i++) expect((await json('POST', `/api/v1/tasks/${task.id}/complete`, body, other.sid)).status).toBe(409)
+    // Another team's lead is not its lead: the hold is the user's, on his Needs you, not answered to that lead.
+    const held = await getTask(task.id)
+    expect(held.phase).toBe('NEED_ACTION')
+    expect(held.result_report?.owed?.toCloser).toBeUndefined()
+    await syncUserStatuses(null)
+    const st = (await getTask(task.id)).user_status
+    expect(st?.state, JSON.stringify(st)).toBe('needs')
     expect((await json('POST', `/api/v1/tasks/${task.id}/complete`, body, own.sid)).status).toBe(409)
     expect((await json('POST', `/api/v1/tasks/${task.id}/complete`, body, own.sid)).status).toBe(200)
   }, 60_000)

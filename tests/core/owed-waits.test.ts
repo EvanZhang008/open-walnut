@@ -41,6 +41,7 @@ describe('a line that says the user still has to decide or answer', () => {
       'left for the user to approve', 'waiting for the user\'s answer on the host', 'Needs your decision on the name',
       'You: pick the host', 'until Robin replies', 'The CR stays a draft until Robin reviews it.',
       'the user\'s approval is still needed', 'Whether to merge is Robin\'s call', 'blocked until Robin accepts the agreement',
+      'Robin to review the CR', 'Paying it is up to Robin',
     ]) expect(waitsOnUser(t, 'Robin'), t).toBe(true)
   })
 
@@ -70,6 +71,7 @@ describe('a line that says the user still has to decide or answer', () => {
     ]) expect(waitsOnUser(t, 'Robin', true), t).toBe(false)
     expect(waitsOnUser(RESULT_ZH, 'Robin', true)).toBe(true)
     expect(waitsOnUser('Whether to pay is Robin\'s decision.', 'Robin', true)).toBe(true)
+    expect(waitsOnUser('Paying it is up to Robin.', 'Robin', true)).toBe(true)
     expect(waitsOnUser('Done: nothing waits on Robin.', 'Robin')).toBe(false)
   })
 

@@ -183,14 +183,18 @@ interface Closer { taskId: string; /** The resolved session's own id, never the 
 const LEAD_DEPTH = 8;
 
 /**
- * True when the closing task leads this one: Main or a lead, or a task above it in its parent chain
- * (its own close never is). Unreadable links read as not leading, so the user keeps seeing the items.
+ * True when the closing task leads this one: Main, the lead of its project's team, or a task above it
+ * in its parent chain (its own close never is). Another project's lead does not: its close is held
+ * as the user's, never answered to it (2026-11-16 review: a hold told to another team's lead that it
+ * could not settle hid the items from the user). The one rule for whose hold it is and who settles
+ * with a reason alone. Unreadable links read as not leading, so the user keeps seeing the items.
  */
-export async function leadsTask(task: Pick<Task, 'id' | 'parent_task_id'>, closerTaskId: string,
-  read: (id: string) => Promise<Pick<Task, 'id' | 'org_role' | 'parent_task_id'> | null>): Promise<boolean> {
+export async function leadsTask(task: Pick<Task, 'id' | 'parent_task_id'> & Partial<Pick<Task, 'project'>>, closerTaskId: string,
+  read: (id: string) => Promise<Pick<Task, 'id' | 'org_role' | 'parent_task_id'> & Partial<Pick<Task, 'project'>> | null>): Promise<boolean> {
   if (closerTaskId === task.id) return false;
   const closer = await read(closerTaskId).catch(() => null);
-  if (closer?.org_role === 'main' || closer?.org_role === 'lead') return true;
+  if (closer?.org_role === 'main') return true;
+  if (closer?.org_role === 'lead' && (closer.project ?? '').toLowerCase() === (task.project ?? '').toLowerCase()) return true;
   let parent = task.parent_task_id;
   const seen = new Set([task.id]);
   for (let i = 0; parent && i < LEAD_DEPTH && !seen.has(parent); i++) {
@@ -199,17 +203,6 @@ export async function leadsTask(task: Pick<Task, 'id' | 'parent_task_id'>, close
     parent = (await read(parent).catch(() => null))?.parent_task_id;
   }
   return false;
-}
-
-/** Whether the closer is Main, the lead of its project's team, or a task in its parent chain (never another team's lead). */
-async function isAbove(task: Pick<Task, 'id' | 'parent_task_id' | 'project'>, closerTaskId: string): Promise<boolean> {
-  if (closerTaskId === task.id) return false;
-  const { getTask } = await import('../task-manager.js');
-  const closer = await getTask(closerTaskId).catch(() => null);
-  if (closer?.org_role === 'main') return true;
-  if (closer?.org_role === 'lead' && (closer.project ?? '').toLowerCase() === (task.project ?? '').toLowerCase()) return true;
-  const { leadChain } = await import('./owed-waits.js');
-  return (await leadChain(task, (id) => getTask(id).catch(() => null))).has(closerTaskId);
 }
 
 /** Who is closing: null for a person (never checked), else the closing session's task and session. */
@@ -392,15 +385,21 @@ export async function admitSessionClose(
   const byLead = await leadsTask(task, closer.taskId, (id) => getTask(id)).catch(() => false);
   // Only the user settles what waits on him: a force by its own session or a peer quotes his words,
   // written since the hold named them (2026-11-16, the Walnut VP: "force only when Evan himself said
-  // it is no longer wanted"). A lead above it (its parent chain, or Main) settles its team's items
-  // itself, with a reason; another team's lead does not.
+  // it is no longer wanted"). Its lead (leadsTask: Main, its project's team lead, a task above it)
+  // settles its team's items itself, with a reason; another team's lead does not.
   const forcing = opts.force === true && reason.length >= REASON_MIN && told;
-  const aboveIt = forcing && await isAbove(task, closer.taskId);
   const { userWordsQuoted } = await import('./owed-waits.js');
-  const hisWords = forcing && (aboveIt || await userWordsQuoted(task, opts.userWords, closer.taskId, held!.at).catch(() => false));
+  const hisWords = forcing && (byLead || await userWordsQuoted(task, opts.userWords, closer.taskId, held!.at).catch(() => false));
   if (forcing && hisWords) {
     log.task.info('task closed with items of the user settled by its closer', { taskId, by: closer.taskId, reason, items: items.map((i) => i.source) });
     return { ok: true, settle: { taskId: task.id, items, reason, by: `task:${closer.taskId}`, ...(closer.sessionId ? { sessionId: closer.sessionId } : {}) } };
+  }
+  // Only its own conclusion says so, at its own first close: asked once with nothing written, so a
+  // line misread as the user's never flashes on his Needs you; the same conclusion again is held.
+  if (closer.taskId === task.id && !held && items.every((i) => i.source === 'decision') && !toldConclusion(task.id, items)) {
+    return { ok: false, code: 'owed_to_user', items, message: `Not closed: your conclusion says the user still has to decide or answer: ${itemsText(items)}. `
+      + 'A task is done when what the user wanted has happened, not when his decision was handed on. If it waits on him, keep it open (your own Needs you ask, FOR_USER_ASK or task_report_set) and carry on once he answered. '
+      + 'If that line only describes work, or it is already settled, complete again with a not_done and result that say what is really left. Completing again with the same conclusion holds the task open for him.' };
   }
   let failed: string | undefined;
   try {
@@ -426,6 +425,19 @@ export async function admitSessionClose(
       ? `If they are already done or no longer needed, close it again with force:true and a reason (${REASON_MIN}+ characters) saying so; the reason is kept as how they were settled.`
       : `Once the user answered them (or said they are no longer wanted) and you did what follows, close it again with force:true, a reason (${REASON_MIN}+ characters) and user_words quoting his message; until then end your turn with it open (its own Needs you ask, or WAITING on its lead to relay his answer). An item from your own not_done or result clears when your close no longer says it; others done some other way, ask your lead to settle.`);
   return { ok: false, code: 'owed_to_user', message, items };
+}
+
+/** The conclusion lines each task's own first close was told of (decision-only), by task id. Kept in memory. */
+const toldDecision = new Map<string, Set<string>>();
+
+/** Whether this task's own close was already told these conclusion lines; records them when not. */
+function toldConclusion(taskId: string, items: readonly OwedItem[]): boolean {
+  const told = toldDecision.get(taskId);
+  if (told && items.every((i) => told.has(i.text))) return true;
+  toldDecision.delete(taskId);
+  toldDecision.set(taskId, new Set([...(told ?? []), ...items.map((i) => i.text)]));
+  if (toldDecision.size > 500) toldDecision.delete(toldDecision.keys().next().value!);
+  return false;
 }
 
 /** The open lines each task's own close was already told of (admitOwnNote), by task id. */

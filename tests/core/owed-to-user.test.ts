@@ -215,6 +215,10 @@ describe('leadsTask: whose close is answered to the closer, not the user', () =>
     expect(await leadsTask(tasks.work, 'peer', read)).toBe(false)
     expect(await leadsTask(tasks.work, 'gone', read)).toBe(false)
     expect(await leadsTask(tasks.loopA, 'peer', read)).toBe(false)
+    // A lead of another project's team is not its lead.
+    const lead2 = (project: string) => async (id: string) => (id === 'vp2' ? { id: 'vp2', org_role: 'lead' as const, project } : read(id))
+    expect(await leadsTask({ ...tasks.work, project: 'Garden' }, 'vp2', lead2('Kitchen'))).toBe(false)
+    expect(await leadsTask({ ...tasks.work, project: 'Garden' }, 'vp2', lead2('garden'))).toBe(true)
   })
   it('a lead\'s hold never reads as Needs you and never forces NEED_ACTION', () => {
     const report = { via: 'complete' as const, at: '2026-11-15T00:00:00Z', not_done: ['You: x'],
