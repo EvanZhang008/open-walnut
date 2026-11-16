@@ -23,7 +23,11 @@
  *   - BACKS OFF. A host that keeps failing (a laptop asleep for the weekend)
  *     would otherwise burn a full ssh timeout every resweep, forever. Each
  *     consecutive failure doubles its wait, capped at an hour; a success, a
- *     config edit or a human retry resets it.
+ *     config edit or a human retry resets it. A host-network machine (`cheapDial`)
+ *     costs no login to try, so it is tried every CHEAP_RESWEEP_MS, its wait capped
+ *     at CHEAP_MAX_BACKOFF_MS: one that comes back on is linked within minutes
+ *     (2026-11-16: home-pc came on at 08:05Z, and nothing dialled it again for
+ *     minutes; offline since the night before, its wait had grown toward the hour).
  *   - WAITS FOR CREDENTIALS. An expired SSH certificate, a missing agent or an
  *     SSH proxy's expired login (CREDENTIAL_WAIT_KINDS) is fixed OUTSIDE Walnut,
  *     by a login command, so nobody comes back to click Retry. Those hosts are
@@ -61,6 +65,12 @@ export interface HostWarmupCandidate {
    * address went dark as soon as the Mac slept).
    */
   standing?: boolean
+  /**
+   * Trying it costs no login (a machine on the host network: the dial goes through
+   * this computer's walnut-net). Tried every CHEAP_RESWEEP_MS while not connected,
+   * with a short backoff, instead of the SSH resweep's.
+   */
+  cheapDial?: boolean
 }
 
 export interface HostWarmupEntry {
@@ -123,7 +133,7 @@ const DEFAULTS = {
 } as const
 
 /** Why a sweep is running — decides which hosts it may touch. */
-type SweepReason = 'startup' | 'resweep' | 'config' | 'explicit' | 'credential' | 'soon'
+type SweepReason = 'startup' | 'resweep' | 'cheap' | 'config' | 'explicit' | 'credential' | 'soon'
 
 /** Bus subscriber names are the unsubscribe key, so each instance needs its own. */
 let instanceSeq = 0
@@ -161,6 +171,10 @@ export class HostWarmup {
   static readonly DISCOVERED_CREDENTIAL_WAIT_MS = 24 * 60 * 60_000
   /** The re-dials after a failed connect (connectFailed), in order; then the resweep backoff. */
   static SOON_REDIAL_MS: readonly number[] = [10_000, 30_000, 60_000]
+  /** How often a not-connected `cheapDial` host is tried (its own resweep). */
+  static CHEAP_RESWEEP_MS = 60_000
+  /** The longest a `cheapDial` host's failures hold it off. */
+  static CHEAP_MAX_BACKOFF_MS = 2 * 60_000
   private readonly deps: HostWarmupDeps
   private readonly startupDelayMs: number
   private readonly paceMs: number
@@ -188,6 +202,7 @@ export class HostWarmup {
   /** Resolvers of in-flight pace sleeps, so stop() can release the drain loop. */
   private sleepResolvers = new Set<() => void>()
   private resweepTimer: ReturnType<typeof setInterval> | null = null
+  private cheapTimer: ReturnType<typeof setInterval> | null = null
   private configTimer: ReturnType<typeof setTimeout> | null = null
   private busSubscribed = false
   /** Guards the "one connect at a time" invariant — asserted by the tests. */
@@ -223,6 +238,8 @@ export class HostWarmup {
       if (this.resweepIntervalMs > 0) {
         this.resweepTimer = setInterval(() => { void this.sweep('resweep') }, this.resweepIntervalMs)
         unref(this.resweepTimer)
+        this.cheapTimer = setInterval(() => { void this.sweep('cheap') }, Math.min(HostWarmup.CHEAP_RESWEEP_MS, this.resweepIntervalMs))
+        unref(this.cheapTimer)
       }
     }, this.startupDelayMs)
     unref(t)
@@ -239,6 +256,7 @@ export class HostWarmup {
     for (const t of this.timers) clearTimeout(t)
     this.timers.clear()
     if (this.resweepTimer) { clearInterval(this.resweepTimer); this.resweepTimer = null }
+    if (this.cheapTimer) { clearInterval(this.cheapTimer); this.cheapTimer = null }
     if (this.configTimer) { clearTimeout(this.configTimer); this.configTimer = null }
     // Release a drain loop parked in a pace sleep — otherwise its promise never
     // settles, `draining` stays true, and a later start() can never drain again.
@@ -337,6 +355,9 @@ export class HostWarmup {
 
     for (const host of hosts) {
       if (hostKey && host.key !== hostKey) continue
+      // The minute sweep looks only at host-network machines not connected, and records nothing
+      // else (a "done" for every connected host each minute would push their status each minute).
+      if (reason === 'cheap' && (host.cheapDial !== true || this.isConnected(host.key))) continue
       // A credential re-dial was asked for by a connect that already ran, so
       // the host is as eligible as when a human asked for it.
       const skip = this.skipReason(host, reason === 'explicit' || reason === 'credential')
@@ -353,8 +374,10 @@ export class HostWarmup {
       // Somebody else is already connecting it: theirs to finish.
       if (this.isConnecting(host.key, host.sshTarget)) continue
       // The credential clock alone re-dials a waiting host (else each tier advances twice).
-      if ((reason === 'resweep' || reason === 'soon') && this.credentialWaits.has(host.key)) continue
-      if (reason === 'resweep' && !this.dueForResweep(host.key)) continue
+      if ((reason === 'resweep' || reason === 'cheap' || reason === 'soon') && this.credentialWaits.has(host.key)) continue
+      // Each kind of host has one periodic sweep: a cheap one its own, every other the SSH resweep.
+      if (reason === 'resweep' && host.cheapDial === true) continue
+      if ((reason === 'resweep' || reason === 'cheap') && !this.dueForResweep(host)) continue
       if (reason === 'explicit' || reason === 'config') this.clearCredentialWait(host.key, true)
       if (reason === 'explicit') this.failures.delete(host.key)
       // Already queued (a startup or resweep dial): that dial stands, counted as it is.
@@ -387,10 +410,12 @@ export class HostWarmup {
   }
 
   /** Exponential per-host backoff: interval × 2^(failures-1), capped. */
-  private dueForResweep(key: string): boolean {
-    const f = this.failures.get(key)
+  private dueForResweep(host: HostWarmupCandidate): boolean {
+    const f = this.failures.get(host.key)
     if (!f) return true
-    const wait = Math.min(this.maxBackoffMs, this.resweepIntervalMs * 2 ** Math.max(0, f.count - 1))
+    const wait = host.cheapDial === true
+      ? Math.min(HostWarmup.CHEAP_MAX_BACKOFF_MS, HostWarmup.CHEAP_RESWEEP_MS * 2 ** Math.max(0, f.count - 1))
+      : Math.min(this.maxBackoffMs, this.resweepIntervalMs * 2 ** Math.max(0, f.count - 1))
     return this.now() - f.at >= wait
   }
 

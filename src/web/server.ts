@@ -4788,6 +4788,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
             // A server runs there (its switch, or this computer's tunnel placed on it): dialled
             // even when the host is known only from ~/.ssh/config.
             standing: hostRunsServer(key, config),
+            // A host-network machine: trying it costs no login, so it is tried every minute or two.
+            cheapDial: def.transport === 'net',
           }))
         },
         connect: (key) => link(key),

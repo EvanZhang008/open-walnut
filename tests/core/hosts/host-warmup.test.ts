@@ -438,6 +438,51 @@ describe('HostWarmup', () => {
     await vi.advanceTimersByTimeAsync(20_000);          // resweep at 80s: 9.8s since → skipped; at 90s → dial
     expect(connect).toHaveBeenCalledTimes(6);
   });
+
+  // 2026-11-16: home-pc came on at 08:05Z and nothing dialled it again for minutes; offline since
+  // the night before, its resweep wait had grown toward the hour. A host-network machine costs no
+  // login to try: it is tried every CHEAP_RESWEEP_MS, its wait capped at CHEAP_MAX_BACKOFF_MS.
+  it('tries a host-network machine every minute or two, while an SSH host keeps the long resweep', async () => {
+    let pcOn = false;
+    const connect = vi.fn(async (key: string) => {
+      if (key === 'home-pc' && pcOn) return;
+      throw new Error(`${key} is not online`);
+    });
+    warmup = new HostWarmup({
+      startupDelayMs: 1, paceMs: 1, log: silent,   // the default 10-minute SSH resweep
+      listHosts: async () => [host('home-pc', { cheapDial: true }), host('laptop')],
+      connect, isConnected: () => false,
+    });
+    warmup.start();
+    await vi.advanceTimersByTimeAsync(100);
+    const dials = (key: string) => connect.mock.calls.filter(([k]) => k === key).length;
+    expect(dials('home-pc')).toBe(1);
+    expect(dials('laptop')).toBe(1);
+    // An hour off: tried every one to two minutes, never held off longer; the SSH host far less.
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(dials('home-pc')).toBeGreaterThanOrEqual(30);
+    expect(dials('laptop')).toBeLessThanOrEqual(4);
+    // It comes on: linked within CHEAP_MAX_BACKOFF_MS plus one cheap sweep.
+    pcOn = true;
+    const before = dials('home-pc');
+    await vi.advanceTimersByTimeAsync(HostWarmup.CHEAP_MAX_BACKOFF_MS + HostWarmup.CHEAP_RESWEEP_MS);
+    expect(dials('home-pc')).toBeGreaterThan(before);
+    expect(warmup.snapshot()['home-pc']).toMatchObject({ state: 'done' });
+  });
+
+  it('the minute sweep tells nothing about hosts that are connected', async () => {
+    const changes: string[] = [];
+    warmup = new HostWarmup({
+      startupDelayMs: 1, paceMs: 1, log: silent,
+      listHosts: async () => [host('home-pc', { cheapDial: true }), host('laptop')],
+      connect: async () => {}, isConnected: () => true, onChange: (key) => { changes.push(key); },
+    });
+    warmup.start();
+    await vi.advanceTimersByTimeAsync(100);
+    const atBoot = changes.length;
+    await vi.advanceTimersByTimeAsync(5 * HostWarmup.CHEAP_RESWEEP_MS);
+    expect(changes.length).toBe(atBoot);
+  });
 });
 
 describe('hostWarmupGateReason', () => {
