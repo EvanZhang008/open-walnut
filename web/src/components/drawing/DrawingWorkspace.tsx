@@ -13,7 +13,7 @@
  * (drawing-overlay.ts): the editor is never mounted again, so its view and selection stay.
  * "New drawing" is a sketch until its first content (no empty files).
  */
-import { useEffect, useMemo, useRef, useState, type ComponentType, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState, type ComponentType, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useDraft } from '@/hooks/useDraft';
 import { MicField, MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
@@ -33,6 +33,9 @@ import { isFullscreenShortcut, liftFixedAncestors } from './drawing-overlay';
 import { LibraryBrowser } from './LibraryBrowser';
 import { workspacePlace, workspaceViewKeys } from './workspace-place';
 import type { CanvasMenu, DrawingCanvasHandle, ExcalidrawCanvasProps } from './ExcalidrawCanvas';
+
+// The chat (SessionPanel and its composer) loads only when the assistant is opened.
+const DrawingAssistant = lazy(() => import('./DrawingAssistant'));
 import { usePageTheme } from './usePageTheme';
 import './drawing-workspace.css';
 
@@ -94,6 +97,7 @@ const ICON = {
   close: 'M6 6l12 12M18 6 6 18',
   plus: 'M12 5v14M5 12h14',
   pencil: 'M4 20h4L19 9l-4-4L4 16zM13 7l4 4',
+  assistant: 'M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8zM18 15l.9 2.1L21 18l-2.1.9L18 21l-.9-2.1L15 18l2.1-.9z',
 };
 
 /** The field a name is edited in: Enter or leaving it saves, Escape leaves the name as it was. */
@@ -193,7 +197,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   // The file this place showed last (the App's page, a pane without a document of its own).
   const [lastDocument, setLastDocument] = usePageViewOf<string>('drawing', 'lastDocument', scopeId, '', isText);
   // Each place keeps its own choices (workspace-place.ts); a note's preview shares none with the App page.
-  const view = workspaceViewKeys(workspacePlace({ draftId, sessionId, hasClose: Boolean(onClose), preview }));
+  const place = workspacePlace({ draftId, sessionId, hasClose: Boolean(onClose), preview });
+  const view = workspaceViewKeys(place);
+  // The assistant chat lives in the App's page only: beside a session the session itself is the
+  // assistant, and the composer's dialog and a note's preview are too small for a chat.
+  const [assistantKept, setAssistantShown] = usePageView<boolean>('drawing', 'assistantShown', false, isBoolean);
   const [filesShown, setFilesShown] = usePageView<boolean>('drawing', view.filesKey, view.filesDefault, isBoolean);
   const [keptFullScreen, setKeptFullScreen] = usePageView<boolean>('drawing', view.fullScreenKey ?? 'fullScreenUnkept', false, isBoolean);
   const [previewFullScreen, setPreviewFullScreen] = useState(false);
@@ -579,6 +587,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const currentPath = shownPath;
 
   const canRename = !!currentPath && state !== 'loading' && state !== 'missing' && state !== 'error';
+  const canAssist = place === 'app' && !!currentPath;
+  const assistantShown = canAssist && assistantKept;
 
   return (
     <div ref={root} className="drawing-workspace" data-files-shown={filesShown ? 'true' : 'false'} data-theme-resolved={theme}
@@ -620,6 +630,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           {state && <span className="drawing-workspace-status" data-state={state} role="status" aria-live="polite">{STATUS_TEXT[state]}</span>}
           <span className="drawing-workspace-bar-gap" />
           {onAttach && <button type="button" className="drawing-primary-button drawing-workspace-attach" onClick={() => void attach()} disabled={!!busy || !hasScene || !canAttach || !Canvas} title={canAttach ? 'Add this drawing to your message as a picture' : 'Attachment limit reached'}>{busy === 'attach' ? 'Attaching…' : 'Attach PNG'}</button>}
+          {canAssist && (
+            <button type="button" className="drawing-quiet-button drawing-workspace-assistant-toggle" aria-pressed={assistantShown}
+              title={assistantShown ? 'Hide the assistant' : 'Ask the assistant to change this drawing'}
+              onClick={() => setAssistantShown(!assistantShown)}><Icon d={ICON.assistant} /><span>Assistant</span></button>
+          )}
           <button type="button" className="drawing-icon-button drawing-workspace-fullscreen" aria-pressed={fullScreen}
             aria-label={fullScreen ? 'Exit full screen' : 'Full screen'} title={`${fullScreen ? 'Exit full screen' : 'Full screen'} (${/Mac/.test(globalThis.navigator?.platform ?? '') ? '\u2318\u21e7F' : 'Ctrl+Shift+F'})`}
             // The keys go back to the editor (its tool shortcuts), not to this button.
@@ -707,6 +722,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           <a href="/licenses/excalidraw.txt" target="_blank" rel="noreferrer noopener">License</a>
         </footer>
       </section>
+      {assistantShown && currentPath && (
+        <Suspense fallback={<aside className="drawing-assistant" aria-label="Drawing assistant"><p className="drawing-workspace-files-note">Loading…</p></aside>}>
+          <DrawingAssistant path={currentPath} title={title} onClose={() => { setAssistantShown(false); requestAnimationFrame(() => canvas.current?.focus()); }} />
+        </Suspense>
+      )}
       {libraryDialogOpen && <LibraryBrowser onClose={() => setLibraryDialogOpen(false)} onAdded={() => canvas.current?.openLibrary()} />}
     </div>
   );

@@ -54,6 +54,23 @@ async function addText(page: Page, text: string, x: number, y: number) {
   await expect(workspace(page).locator('.drawing-workspace-status')).toHaveText('Saved', { timeout: 30_000 })
 }
 
+/** Each tool's shortcut as the toolbar draws it: the letter after the hidden digit ('' for none). */
+async function toolbarShortcuts(page: Page): Promise<Record<string, string>> {
+  return workspace(page).evaluate((root) => {
+    const out: Record<string, string> = {}
+    for (const input of root.querySelectorAll<HTMLInputElement>('.App-toolbar input[data-testid^="toolbar-"][name="editor-current-shape"]')) {
+      const label = input.parentElement?.querySelector('.ToolIcon__keybinding')
+      if (!label) continue
+      if (getComputedStyle(label).display === 'none') { out[input.dataset.testid!.slice('toolbar-'.length)] = ''; continue }
+      const digit = getComputedStyle(label).fontSize
+      const after = getComputedStyle(label, '::after').content.replace(/^"|"$/g, '')
+      // The digit itself is sized away; only the letter drawn after it shows.
+      out[input.dataset.testid!.slice('toolbar-'.length)] = digit === '0px' && after !== 'none' ? after : `digit:${label.textContent}`
+    }
+    return out
+  })
+}
+
 async function documentOnScreen(page: Page) {
   const scenePath = await workspace(page).getAttribute('data-drawing-path')
   expect(scenePath).toBeTruthy()
@@ -255,8 +272,15 @@ test.describe('Drawing real plugin acceptance', () => {
     // Quiet header: no PNG or SVG buttons.
     await expect(bar.getByRole('button', { name: /^(PNG|SVG)$/ })).toHaveCount(0)
     await workspace(page).getByRole('button', { name: 'New drawing', exact: true }).first().click()
-    // No shortcut digits under the tools; the tooltip still names the key.
-    await expect(workspace(page).locator('.ToolIcon__keybinding').first()).toBeHidden()
+    // Each tool shows its letter shortcut (V, R, D...), never the editor's digit; Image has no letter.
+    expect(await toolbarShortcuts(page)).toEqual({ selection: 'V', rectangle: 'R', diamond: 'D', ellipse: 'O', arrow: 'A', line: 'L', freedraw: 'P', text: 'T', image: '', eraser: 'E' })
+    // The extra tools menu opens from three dots, drawn in place of the shapes icon.
+    const more = workspace(page).locator('.App-toolbar__extra-tools-trigger')
+    await expect(more.locator('svg')).toBeHidden()
+    expect(await more.evaluate((el) => getComputedStyle(el, '::before').maskImage || getComputedStyle(el, '::before').webkitMaskImage)).toContain('circle')
+    await page.keyboard.press('r')
+    await expect(workspace(page).locator('input[data-testid="toolbar-rectangle"]')).toBeChecked()
+    await page.keyboard.press('v')
     await addText(page, 'Full screen check', 180, 230)
     await shot(page, 'round2-header')
 
@@ -556,5 +580,57 @@ test.describe('Drawing real plugin acceptance', () => {
     await expect(menu.getByText('Generate', { exact: true })).toBeHidden()
     await shot(page, 'extra-tools-menu')
     await page.keyboard.press('Escape')
+  })
+
+  /**
+   * 2026-11-16, the user: "can we add the ai assistant on the side panel, that we can talk to the
+   * assistant to make changes". The App's Assistant button opens a chat beside the canvas; its first
+   * question asks Walnut's own agent about THIS drawing (its path in the context), off the board.
+   */
+  test('the assistant opens beside the canvas and asks Walnut about this drawing, off the board', async ({ page }) => {
+    const errors: string[] = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    await openDrawingApp(page)
+    await workspace(page).getByRole('button', { name: 'New drawing', exact: true }).first().click()
+    await addText(page, 'Assistant check', 180, 230)
+    const drawingPath = await workspace(page).getAttribute('data-drawing-path')
+    expect(drawingPath).toBeTruthy()
+    const toggle = workspace(page).getByRole('button', { name: 'Assistant', exact: true })
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    await toggle.click()
+    const panel = workspace(page).getByRole('complementary', { name: 'Drawing assistant' })
+    await expect(panel).toBeVisible()
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    // Beside the canvas, not over it: the canvas keeps its width minus the panel's.
+    const [canvasBox, panelBox] = await Promise.all([workspace(page).locator('.drawing-workspace-canvas').boundingBox(), panel.boundingBox()])
+    expect(panelBox!.x).toBeGreaterThanOrEqual(canvasBox!.x + canvasBox!.width - 1)
+    expect(panelBox!.width).toBeGreaterThanOrEqual(300)
+    const composer = panel.locator('textarea').first()
+    await expect(composer).toBeVisible({ timeout: 30_000 })
+    await expect(composer).toHaveAttribute('placeholder', /Ask for a change/)
+    await shot(page, 'assistant-open')
+
+    const context = page.waitForRequest((req) => req.method() === 'POST' && new URL(req.url()).pathname === '/api/v1/hints/context')
+    const launch = page.waitForRequest((req) => req.method() === 'POST' && new URL(req.url()).pathname === '/api/sessions/quick-start')
+    await composer.fill('Make the label bigger')
+    await composer.press('Enter')
+    const body = (await launch).postDataJSON() as { agentId?: string; walnutAgent?: boolean; taskMeta?: { pinTier?: unknown }; hints?: unknown; message?: string }
+    expect(body.agentId).toBe('general')
+    expect(body.taskMeta?.pinTier).toBeNull()
+    expect(JSON.stringify(body)).toContain('Make the label bigger')
+    // The drawing goes with the first question: its path and the tools that edit it, as an object context.
+    const sent = (await context).postDataJSON() as { name?: string; text?: string }
+    expect(sent.name).toBe('Drawing you are changing')
+    expect(sent.text).toContain(`Drawing path: ${drawingPath}`)
+    expect(sent.text).toContain('walnut_drawing_update')
+    await expect(panel.getByText('Make the label bigger').first()).toBeVisible({ timeout: 30_000 })
+    await shot(page, 'assistant-asked')
+
+    // Closed and opened again: the same conversation comes back.
+    await panel.getByRole('button', { name: 'Close assistant' }).click()
+    await expect(panel).toBeHidden()
+    await toggle.click()
+    await expect(workspace(page).getByRole('complementary', { name: 'Drawing assistant' }).getByText('Make the label bigger').first()).toBeVisible({ timeout: 30_000 })
+    expect(errors).toEqual([])
   })
 })
