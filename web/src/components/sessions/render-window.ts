@@ -29,6 +29,15 @@
  * a live session kept every row it ever drew (2026-11-10: 630 rows and 23,000 DOM
  * nodes after three hours of a busy session, about 40 KB of JS heap a row in the
  * production build and the main thread's layout cost growing with them).
+ *
+ * The window GROWS upward in steps (`growth`): a pass draws at most `rows` rows
+ * above the ones already drawn, unless the reader asked for them (`mustShow`:
+ * "Load earlier turns", a jump, an older page). The turn window has no row bound
+ * (ten turns of an agent's session can be its whole 400-row tail) and the
+ * server's first screen is 40 rows, so the full read landing after it drew some
+ * 360 rows in one task: 1.8 s on the Mac app beside the Org page (2026-11-16,
+ * task 9bceb9f2), 2.2 s on a 4x slower Chromium. The caller draws the next step
+ * after the frame; `held` says how many rows the window still owes.
  */
 
 export interface RenderWindowAnchor {
@@ -45,6 +54,20 @@ export interface RenderWindow {
   anchor: RenderWindowAnchor | null;
   /** The window was cut back to the tail for a reader following the bottom. */
   trimmed?: boolean;
+  /** Rows the window still owes above `start`, held back by `growth`: drawn in a later pass. */
+  held: number;
+}
+
+/** How far one pass may grow the window above the rows already drawn. */
+export interface RenderWindowGrowth {
+  /** Rows a pass may add above what is drawn. */
+  rows: number;
+  /** Rows a pass draws when its anchor is gone: a fresh view, a rewritten transcript, a slid
+   *  window. A slid window (its newest drawn row still there) keeps as many rows as it drew
+   *  (`prev.drawn`), so nothing drawn unmounts; a rewritten one starts again from `first`. */
+  first: number;
+  /** Rows from the end the reader asked to see: always drawn in this pass. */
+  mustShow: number;
 }
 
 /** A reader parked at the bottom: the window may drop rows above them. */
@@ -61,6 +84,9 @@ export interface RenderWindowFollow {
 export interface RenderWindowState {
   start: number | null;
   anchor: RenderWindowAnchor | null;
+  /** What the previous pass drew, when the caller kept it: how many rows from the end, and the id
+   *  of the newest of them. */
+  drawn?: { rows: number; tailId?: string };
 }
 
 /** How far past the window start we look for a row with a msgId to anchor to.
@@ -81,6 +107,7 @@ export function computeRenderWindow(
   limit: number,
   prev: RenderWindowState,
   follow?: RenderWindowFollow,
+  growth?: RenderWindowGrowth,
 ): RenderWindow {
   const natural = Math.max(0, messages.length - limit);
 
@@ -94,12 +121,19 @@ export function computeRenderWindow(
     ratchet = at >= 0 ? Math.max(0, at - prev.anchor.offset) : null;
   }
 
-  const start = ratchet === null ? natural : Math.min(natural, ratchet);
+  const wanted = ratchet === null ? natural : Math.min(natural, ratchet);
+  // What is drawn starts at the ratchet; with nothing drawn, the pass draws `first` rows.
+  const slid = prev.drawn?.tailId !== undefined && indexOfMsgId(messages, prev.drawn.tailId) >= 0;
+  const lowest = ratchet === null
+    ? messages.length - Math.max(growth?.first ?? 0, slid ? prev.drawn!.rows : 0)
+    : ratchet - (growth?.rows ?? 0);
+  const start = growth ? Math.max(wanted, Math.min(lowest, messages.length - growth.mustShow)) : wanted;
+  const held = start - wanted;
   if (follow) {
     const tail = Math.max(0, messages.length - follow.tailLimit);
-    if (tail - start > follow.slack && (follow.canCut?.(tail) ?? true)) return { start: tail, anchor: anchorAt(messages, tail), trimmed: true };
+    if (tail - start > follow.slack && (follow.canCut?.(tail) ?? true)) return { start: tail, anchor: anchorAt(messages, tail), trimmed: true, held: 0 };
   }
-  return { start, anchor: anchorAt(messages, start) };
+  return { start, anchor: anchorAt(messages, start), held };
 }
 
 function indexOfMsgId(messages: ReadonlyArray<{ msgId?: string }>, msgId: string): number {

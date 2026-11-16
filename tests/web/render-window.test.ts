@@ -195,7 +195,7 @@ describe('computeRenderWindow: a reader following the bottom', () => {
     expect(w.start).toBe(10); // 15 rows past the tail: still inside the slack
     expect(w.trimmed).toBeFalsy();
     w = computeRenderWindow(rows(56), 30, w, follow);
-    expect(w).toEqual({ start: 26, anchor: { msgId: 'm26', offset: 0 }, trimmed: true });
+    expect(w).toEqual({ start: 26, anchor: { msgId: 'm26', offset: 0 }, trimmed: true, held: 0 });
   });
 
   it('rows stay bounded however long the session runs', () => {
@@ -230,4 +230,70 @@ describe('computeRenderWindow: a reader following the bottom', () => {
     const cut = computeRenderWindow(rows(200), 150, { start: null, anchor: null }, { ...follow, canCut: () => true })
     expect(cut.trimmed).toBe(true)
   })
+});
+
+/**
+ * The window opens rows nobody asked for a step a pass (2026-11-16, task 9bceb9f2): the turn
+ * window of an agent's session is its whole 400-row tail, the server's first screen is 40 rows,
+ * and the full read landing after that screen drew some 360 rows in one task (1.8 s in the Mac
+ * app beside the Org page). Each check fails on the window before: it drew them all at once.
+ */
+describe('computeRenderWindow: growth a step a pass', () => {
+  const rows = (n: number, from = 0) => Array.from({ length: n }, (_, i) => ({ msgId: `m${from + i}` }));
+  const step = (rows: number, mustShow = 0) => ({ rows, first: 40, mustShow });
+
+  it('a fresh view draws its first step of rows, and owes the rest', () => {
+    const w = computeRenderWindow(rows(400), 400, { start: null, anchor: null }, undefined, step(40));
+    expect(w.start).toBe(360);
+    expect(w.held).toBe(360);
+  });
+
+  it('the full read landing under a 40-row first screen draws no row above it in its own pass', () => {
+    let w = computeRenderWindow(rows(40, 360), 40, { start: null, anchor: null }, undefined, step(40));
+    expect(w).toMatchObject({ start: 0, held: 0 });
+    w = computeRenderWindow(rows(400), 400, w, undefined, step(0));
+    expect(w.start).toBe(360); // the same 40 rows, re-based onto the full read
+    expect(w.held).toBe(360);
+    // Then a step a pass, down to the turn window.
+    for (const at of [320, 280, 240]) {
+      w = computeRenderWindow(rows(400), 400, w, undefined, step(40));
+      expect(w.start).toBe(at);
+    }
+    while (w.held > 0) w = computeRenderWindow(rows(400), 400, w, undefined, step(40));
+    expect(w.start).toBe(0);
+  });
+
+  it('what the reader asked for opens at once', () => {
+    let w = computeRenderWindow(rows(400), 30, { start: null, anchor: null }, undefined, step(40));
+    expect(w.start).toBe(370);
+    w = computeRenderWindow(rows(400), 300, w, undefined, step(0, 300)); // "Load earlier turns"
+    expect(w).toMatchObject({ start: 100, held: 0 });
+  });
+
+  it('a live row at the end opens nothing above, and leaves the step owed where it was', () => {
+    let w = computeRenderWindow(rows(400), 400, { start: null, anchor: null }, undefined, step(40));
+    w = computeRenderWindow(rows(401), 401, w, undefined, step(0));
+    expect(w).toMatchObject({ start: 360, held: 360 });
+  });
+
+  it('a rewritten transcript (its drawn rows gone) draws a first step again, never nothing', () => {
+    let w = computeRenderWindow(rows(400), 400, { start: null, anchor: null }, undefined, step(40));
+    w = computeRenderWindow(rows(100, 5000), 100, w, undefined, step(0));
+    expect(w).toMatchObject({ start: 60, held: 60 });
+  });
+});
+
+describe('computeRenderWindow: growth keeps what it drew', () => {
+  const rows = (n: number, from = 0) => Array.from({ length: n }, (_, i) => ({ msgId: `m${from + i}` }));
+  it('a window that slid past its anchor keeps as many rows as it drew, never back to a first step', () => {
+    // 400 rows drawn from the top, then a read that dropped the anchored head row.
+    const drawn = computeRenderWindow(rows(400), 400, { start: 0, anchor: { msgId: 'm0', offset: 0 } }, undefined, { rows: 0, first: 40, mustShow: 0 });
+    expect(drawn.start).toBe(0);
+    const slid = computeRenderWindow(rows(398, 2), 398, { ...drawn, drawn: { rows: 400, tailId: 'm399' } }, undefined, { rows: 0, first: 40, mustShow: 0 });
+    expect(slid).toMatchObject({ start: 0, held: 0 });
+  });
+  it('a rewritten transcript (every id new) starts again from a first step, whatever it drew', () => {
+    const w = computeRenderWindow(rows(400, 9000), 400, { start: 0, anchor: { msgId: 'm0', offset: 0 }, drawn: { rows: 400, tailId: 'm399' } }, undefined, { rows: 0, first: 40, mustShow: 0 });
+    expect(w).toMatchObject({ start: 360, held: 360 });
+  });
 });

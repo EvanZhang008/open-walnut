@@ -1,6 +1,6 @@
 import { countRender } from '@/utils/render-count';
 import { useCoalescedRefresh } from '@/hooks/useCoalescedRefresh';
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore, useContext, memo, isValidElement, type MutableRefObject, type ReactNode } from 'react';
+import { startTransition, useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore, useContext, memo, isValidElement, type MutableRefObject, type ReactNode } from 'react';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { pageOfStreamBlock } from '@/utils/stream-block-page';
 import { useDraft } from '@/hooks/useDraft';
@@ -604,6 +604,30 @@ const NO_MID_TURN_LINES: ReadonlySet<string> = new Set();
 const NEAR_BOTTOM_PX = 80;  // px from bottom to consider "at bottom"
 /** Fewest rows past the default tail a following window holds before it is cut. */
 const FOLLOW_TRIM_MIN_SLACK = 40;
+/** What the render window draws when nobody asked for the rows (render-window.ts `growth`): a
+ *  fresh view's first draw, as many rows as the server's first screen (HISTORY_OPEN_SCREEN_ROWS),
+ *  then a step a frame up to the turn window, a dozen rows at a time. */
+const WINDOW_FIRST_ROWS = 40;
+const WINDOW_STEP_ROWS = 12;
+/** The id of the newest row that has one. */
+function newestId(rows: ReadonlyArray<{ msgId?: string }>): string | undefined {
+  for (let i = rows.length - 1; i >= 0; i--) if (rows[i]!.msgId) return rows[i]!.msgId;
+  return undefined;
+}
+/** A step waits until the box has not scrolled for this long. */
+const STEP_SCROLL_QUIET_MS = 150;
+/** The reader's place in a chat box: the row at its top and how far below the top it sits, and the
+ *  distance from the bottom for when that row is gone. */
+function placeIn(el: HTMLElement): { row: Element | null; top: number; dist: number } {
+  const box = el.getBoundingClientRect();
+  let row: Element | null = null;
+  for (const x of [box.left + box.width / 2, box.left + 24]) {
+    const hit = document.elementFromPoint(x, box.top + 8);
+    // The row itself, not a sticky header inside it (a code block's), which keeps its place.
+    if (hit && el.contains(hit) && hit !== el) { row = hit.closest('[data-msg-index], [data-turn-fold-index]'); if (row) break; }
+  }
+  return { row, top: row ? row.getBoundingClientRect().top - box.top : 0, dist: el.scrollHeight - el.scrollTop };
+}
 /** The reader has text selected in this box (a cut would drop what they hold). */
 function selectionInside(el: HTMLElement | null): boolean {
   if (!el || typeof document === 'undefined') return false;
@@ -780,6 +804,20 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // reading position out of view. Bottom distance is invariant to any
   // content inserted above the viewport.
   const pendingBottomDistance = useRef<number | null>(null);
+  // Counts the passes that may grow the window by a step (render-window.ts `growth`); the rows
+  // still owed after a pass are drawn by the next tick, one a frame.
+  const [windowGrowth, setWindowGrowth] = useState(0);
+  const seenWindowGrowth = useRef(0);
+  // Where the reader is before a step opens rows above them, for the session it was taken in: the
+  // row at the box's top and how far below the top it sits (else, no such row, the distance from
+  // the bottom). Kept current by their own scrolling; held until the step's own pass commits, so a
+  // pass that drew the step first (React set the step's render aside) is put back too.
+  const stepPlace = useRef<{ sid: string; row: Element | null; top: number; dist: number; step: number } | null>(null);
+  // The last time a person moved the box (their input) or a jump scrolled it away from the end;
+  // no step lands under one. The box's own writes to the end (following a live turn) are neither.
+  const lastScrollAt = useRef(0);
+  // What the window drew, for the session it drew it in (render-window.ts `drawn`).
+  const renderWindowDrawn = useRef<{ sid: string; rows: number; tailId?: string } | null>(null);
   // Monotonic render-window start: once computed, only ratchets DOWN (older)
   // so already-rendered rows never unmount from the top (see visibleStart).
   // null = fresh session view. Index into messages[], re-derived from its
@@ -1565,6 +1603,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     pendingBottomDistance.current = null;
     renderWindowStart.current = null;
     renderWindowAnchor.current = null;
+    stepPlace.current = null;
     blockIndexMap.current.clear();
     consumedQueueIds.current.clear();
     notifiedConsumedIds.current.clear();
@@ -3403,7 +3442,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // What the pass mints keeps its identity from pass to pass (part-identity.ts),
   // so a page of older rows re-renders the new rows only.
   const partIdentity = useMemo(() => new PartIdentity(), [sessionId]);
-  const { historyParts, hiddenCount } = useMemo(() => {
+  const { historyParts, hiddenCount, heldRows } = useMemo(() => {
     const ids = partIdentity;
     const keyOf = rowThreadKeyRef.current;
     const rawLimit = truncationOffset;
@@ -3416,15 +3455,21 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     // the question pages, a jump in flight, the review pane, a text selection.
     const follows = isAtBottom.current && !stackMode && !pendingJump.current && !reviewHoldsWindow.current
       && !readingPlace.held.current && !selectionInside(containerRef.current);
+    // Rows nobody asked for open a step a pass: a fresh view's first draw and each windowGrowth
+    // tick; any other pass (the full read landing, a live row) adds none above the rows drawn.
+    // What the reader asked for (rawLimit) is always drawn at once.
+    const stepping = windowGrowth !== seenWindowGrowth.current;
+    seenWindowGrowth.current = windowGrowth;
     const window = computeRenderWindow(
       messages,
       limit,
-      { start: renderWindowStart.current, anchor: renderWindowAnchor.current },
+      { start: renderWindowStart.current, anchor: renderWindowAnchor.current, drawn: renderWindowDrawn.current?.sid === sessionId ? renderWindowDrawn.current : undefined },
       follows ? {
         tailLimit: turnLimit,
         slack: Math.max(FOLLOW_TRIM_MIN_SLACK, Math.ceil(turnLimit / 2)),
         canCut: (tailStart) => rowsAboveAreOffscreen(containerRef.current, tailStart),
       } : undefined,
+      { rows: stepping ? WINDOW_STEP_ROWS : 0, first: WINDOW_FIRST_ROWS, mustShow: rawLimit },
     );
     if (window.trimmed) renderWindowTrimmed.current = true;
     const visibleStart = window.start;
@@ -3437,6 +3482,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     // and the whole session rendered, the turn window ignored.
     renderWindowStart.current = messages.length > 0 ? visibleStart : null;
     renderWindowAnchor.current = window.anchor;
+    renderWindowDrawn.current = messages.length > 0 ? { sid: sessionId, rows: messages.length - visibleStart, tailId: newestId(messages) } : null;
     const visibleMessages = messages.slice(visibleStart);
     const parts: HistoryPart[] = [];
     let historyRun: { m: SessionHistoryMessage; globalIndex: number }[] = [];
@@ -3555,9 +3601,59 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     flushSystemRun();
     // Last, once every run is complete (a run's array grows above).
     for (const part of parts) if (part.kind === 'run') part.memberMsgs = ids.list('run', part.memberMsgs);
-    return { historyParts: parts, hiddenCount: visibleStart };
+    return { historyParts: parts, hiddenCount: visibleStart, heldRows: window.held };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- rowThreadKeyRef: see above; windowAnchors stands for it
-  }, [messages, truncationOffset, olderPageSeq, forkBoundaryIndex, gapAt, resolvedSkips, mainLineWindow, windowAnchors, questionIds, partIdentity]);
+  }, [messages, truncationOffset, olderPageSeq, forkBoundaryIndex, gapAt, resolvedSkips, mainLineWindow, windowAnchors, questionIds, partIdentity, windowGrowth, sessionId]);
+  // The window owes rows above what it drew: the next step after this frame paints, so a key or
+  // a click goes between steps, holding the reader's distance from the bottom (the restore above).
+  // A step is a transition, drawn in slices: the step that reaches a turn's own first row draws
+  // every answer of that turn at once (they fold under the rows above until it is there), 730 to
+  // 930 ms on a 4x slower Chromium as one task, 240 to 380 ms in its longest slice. Rows only ever
+  // open in it, so a step React sets aside and draws again loses nothing.
+  // Not while the box scrolls (a person, a jump's smooth scroll: a scroll written under it would
+  // land it wrong) or a jump waits for its rows.
+  useEffect(() => {
+    if (heldRows <= 0) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const step = () => {
+      const since = Date.now() - lastScrollAt.current;
+      if (pendingJump.current || since < STEP_SCROLL_QUIET_MS) { timer = setTimeout(step, STEP_SCROLL_QUIET_MS); return; }
+      const el = containerRef.current;
+      if (el) stepPlace.current = { sid: sessionId, ...placeIn(el), step: windowGrowth + 1 };
+      startTransition(() => setWindowGrowth((n) => n + 1));
+    };
+    const raf = requestAnimationFrame(() => { timer = setTimeout(step, 0); });
+    return () => { cancelAnimationFrame(raf); if (timer) clearTimeout(timer); };
+  }, [historyParts, heldRows, sessionId, windowGrowth]);
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const moved = () => { lastScrollAt.current = Date.now(); };
+    const onScroll = () => {
+      if (!isAtBottom.current && Date.now() >= ignoreScrollUntil.current) moved();
+      const p = stepPlace.current;
+      if (p) Object.assign(p, placeIn(el));
+    };
+    const inputs = ['wheel', 'touchmove', 'keydown', 'pointerdown'] as const;
+    el.addEventListener('scroll', onScroll, { passive: true });
+    for (const e of inputs) el.addEventListener(e, moved, { passive: true });
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      for (const e of inputs) el.removeEventListener(e, moved);
+    };
+  }, [sessionId]);
+  // Rows opened above (the step, or a pass that drew it before the step's own did): the row at the
+  // reader's top goes back where it was before the frame paints.
+  useLayoutEffect(() => {
+    const p = stepPlace.current;
+    if (!p) return;
+    const el = containerRef.current;
+    if (!el || p.sid !== sessionId) { stepPlace.current = null; return; }
+    if (p.row?.isConnected) el.scrollTop += p.row.getBoundingClientRect().top - el.getBoundingClientRect().top - p.top;
+    else el.scrollTop = el.scrollHeight - p.dist;
+    ignoreScrollUntil.current = Date.now() + 100;
+    if (windowGrowth >= p.step) stepPlace.current = null;
+  }, [hiddenCount, sessionId, windowGrowth]);
   // A cut window forgets how far "Load earlier turns" or a jump had widened it,
   // else the next pass after the reader scrolls up would grow it straight back.
   useLayoutEffect(() => {

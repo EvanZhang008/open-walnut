@@ -67,8 +67,8 @@ describe('the history-parts pass mints nothing outside PartIdentity', () => {
   // A new object or array a memoized row receives, minted in the pass without
   // PartIdentity, re-renders that row on every page (and every streaming frame).
   const src = fs.readFileSync(path.join(__dirname, '../../web/src/components/sessions/SessionChatHistory.tsx'), 'utf8');
-  const start = src.indexOf('const { historyParts, hiddenCount } = useMemo(() => {');
-  const end = src.indexOf('return { historyParts: parts, hiddenCount: visibleStart };', start);
+  const start = src.indexOf('const { historyParts, hiddenCount, heldRows } = useMemo(() => {');
+  const end = src.indexOf('return { historyParts: parts, hiddenCount: visibleStart', start);
   const body = src.slice(start, end);
 
   it('finds the pass', () => {
