@@ -917,6 +917,14 @@ show inline after the open ones, other completed hits that show the query fold i
 
 ## Menus & overlays — hard rules (every one is a shipped incident)
 
+- **A press on a menu item never scrolls its menu** (`utils/menu-press-focus.ts`, one window
+  capture listener for every `[role="menu"]`). A capped menu scrolls inside, and macOS WebKit scrolls
+  a row the engine focuses on a press into view, so a row cut by the box's edge moved under the
+  pointer between mousedown and mouseup and the click hit the box (2026-11-09: down on "View project
+  details", up on "Delete project"). The rule prevents the engine's focus and focuses the item itself
+  with `preventScroll` after the press (none when the page prevented the press). Keep items as
+  `role="menuitem*"` inside `role="menu"` so it covers them; a field or a drag source inside an item
+  is exempt. Guard: `tests/e2e/browser/menu-clipped-row-press.spec.ts`.
 - **A menu must NEVER overflow the viewport.** Every `position:fixed` dropdown is placed by
   `useMenuPlacement` (measure real height → flip up/down → clamp to edges → `maxHeight` +
   `overflow-y:auto`). Never hand-roll placement math, never guess a height constant.

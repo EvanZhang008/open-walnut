@@ -101,6 +101,7 @@ const KNOWN_DEFERRED_FOCUS: Array<{ file: string; call: string; why: string }> =
   { file: 'components/settings/sections/cloud/PairQrDialog.tsx', call: '(primaryRef.current ?? boxRef.current)?.focus()', why: 'a button or the dialog box' },
   { file: 'components/tasks/QuickTaskComposer.tsx', call: 'inputRef.current?.focus()', why: "the composer's one input, on open" },
   { file: 'components/tasks/QuickTaskComposer.tsx', call: 'inputRef.current?.focus()', why: "the composer's one input, after a create" },
+  { file: 'utils/menu-press-focus.ts', call: "item.focus({ preventScroll: true })", why: 'the menu item just pressed, only while focus is still where the press found it' },
 ];
 
 /** The whole `setTimeout(...)` call starting at `open`, by its matching parenthesis. */

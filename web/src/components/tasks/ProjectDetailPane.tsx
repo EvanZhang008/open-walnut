@@ -286,7 +286,7 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
       <div className="detail-section" data-testid="project-scripts-section">
         <div className="detail-section-title">
           Scripts
-          <button className="detail-summary-refresh project-scripts-edit" onClick={() => setScriptsOpen(true)} title="Add or edit this project's scripts" data-testid="project-scripts-edit">
+          <button className="project-scripts-edit" onClick={() => setScriptsOpen(true)} title="Add or edit this project's scripts" data-testid="project-scripts-edit">
             Edit
           </button>
         </div>

@@ -661,6 +661,8 @@ export function ContextMenu({
                 aria-checked={row.checked}
                 // OUT of the tab order: Tab is answered above as a step of the same highlight, and a
                 // tabbable item is what let DOM focus and the highlight point at different rows.
+                // A tabindex makes the row mouse-focusable in Safari; a press focuses it only without a
+                // scroll (utils/menu-press-focus.ts), or WebKit moves a cut row from under the click.
                 tabIndex={-1}
                 className={`wn-context-menu-item${row.value !== undefined ? ' setting' : ''}${row.danger ? ' danger' : ''}${focusIndex === index ? ' focused' : ''}`}
                 aria-haspopup={row.value !== undefined ? 'true' : undefined}

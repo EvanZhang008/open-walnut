@@ -14399,7 +14399,10 @@ body.walnut-dragging {
   margin-bottom: 6px;
 }
 
-.detail-summary-refresh {
+/* The small text buttons beside a section title: the summary's ↻ and the scripts row's Edit. Each keeps
+   its own class, so a selector for one never matches the other. */
+.detail-summary-refresh,
+.project-scripts-edit {
   margin-left: 6px;
   border: none;
   background: none;
@@ -14409,7 +14412,8 @@ body.walnut-dragging {
   padding: 0 2px;
   vertical-align: baseline;
 }
-.detail-summary-refresh:hover:not(:disabled) { color: var(--fg); }
+.detail-summary-refresh:hover:not(:disabled),
+.project-scripts-edit:hover:not(:disabled) { color: var(--fg); }
 .detail-summary-refresh:disabled { cursor: default; opacity: 0.6; }
 
 /* Tracking note — the project's vault note, rendered inline. The note body

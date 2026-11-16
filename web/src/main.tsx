@@ -28,6 +28,7 @@ import { initRecapTipStore } from './stores/recap-tip-store';
 import { initTurnSpeedStore } from './stores/turn-speed-store';
 import { installGlobalAutofillSuppression } from './utils/no-autofill';
 import { installEscapeBeepGuard } from './utils/escape-beep-guard';
+import { installMenuPressFocus } from './utils/menu-press-focus';
 import { silenceAutomatedAudio } from './utils/automation-silence';
 import { installImageSizeHold } from './utils/image-size-hold';
 import { installVideoControls } from '../../src/lib/video-controls';
@@ -214,6 +215,9 @@ function bootApp(): void {
   // editors skip their own Escape bindings when it is set). Installed here, before
   // the app mounts, so its window-bubble listener runs ahead of every app handler's.
   installEscapeBeepGuard();
+  // A press on a menu item focuses it without a scroll, so WebKit never moves a capped
+  // menu's cut row out from under the pointer between mousedown and mouseup.
+  installMenuPressFocus();
   // A chat image drawn again (a reply's persisted row replacing its stream blocks)
   // keeps its box while it decodes, so nothing around it moves for a frame.
   installImageSizeHold();
