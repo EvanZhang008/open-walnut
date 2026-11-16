@@ -1,4 +1,5 @@
 import { countRender } from '@/utils/render-count';
+import { useCoalescedRefresh } from '@/hooks/useCoalescedRefresh';
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore, useContext, memo, isValidElement, type MutableRefObject, type ReactNode } from 'react';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { pageOfStreamBlock } from '@/utils/stream-block-page';
@@ -689,6 +690,9 @@ function ownRowsOf(queuedSig: string, tree: ThreadTree): { sentKeys: Set<string>
   return { sentKeys, queuedKeys };
 }
 
+/** How long the history waits for the rest of a moment's signals before it reads (bumpHistory). */
+const HISTORY_BUMP_COALESCE_MS = 150;
+
 export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, queueSync, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession, publishTimeline, readTimeline, readerPane, workingText, emptyHistory }: SessionChatHistoryProps) {
   countRender('SessionChatHistory');
   // Dev-only render counter per session: lets a browser test prove a hot
@@ -723,7 +727,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // A reader (the split's left half) never refetches: the publisher's history is its.
   const readingRef = useRef(!!readTimeline);
   readingRef.current = !!readTimeline;
-  const bumpHistory = useCallback(() => { if (!readingRef.current) setHistoryVersion((v) => v + 1); }, []);
+  // One read for the signals of one moment: a turn's end sends several (the stream stops, the
+  // batch completes, the result lands, 30 to 300 ms apart) and each bump was a history read of
+  // its own, the effect aborting the one before (2026-11-16, task 9bceb9f2: three reads a send;
+  // /history p50 358 ms on the Mac). The read goes when the moment ends, so it sees all of them.
+  const bumps = useCoalescedRefresh(() => {
+    if (!readingRef.current) setHistoryVersion((v) => v + 1);
+  }, HISTORY_BUMP_COALESCE_MS);
+  const bumpHistory = bumps.request;
   const shared = useSyncExternalStore(...shareStoreArgs(readTimeline));
   // Who the assistant bubbles are attributed to — the engine's own label from
   // the catalog, so a newly registered engine names itself in the transcript.
@@ -1542,6 +1553,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     // apart (SessionPanel vs FocusDock vs popout vs second tab). One line per
     // mount/session-switch — negligible volume.
     console.log(`[scroll-mount:${sid8}] mounted path=${window.location.pathname}`);
+    // A bump the last session asked for is not this one's.
+    bumps.cancel();
     setHistoryVersion(0);
     turnWatermark.current = 0;
     watermarkInitialized.current = false;

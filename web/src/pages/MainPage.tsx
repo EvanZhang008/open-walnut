@@ -42,6 +42,7 @@ import { shownTaskOf } from '@/components/sessions/panel-task-copy';
 import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
 import { seedLaunchPrompt } from '@/components/sessions/launch-prompt-seed';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
+import { DraftPanelWarmup } from '@/components/sessions/DraftPanelWarmup';
 import {
   applyDraftParse, ASK_WALNUT_PROJECT, clearAiFields, draftComposerKey, draftStartMessage, followProjectRegistryChange,
   refreshFolderProject, withDirLaunchMemory, suggestDiff,
@@ -3720,6 +3721,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       </div>
 
       <HomeBoardSheet />
+      {/* The first Cmd+N after a load runs the new-task panel cold: warm it once when idle. */}
+      {visible && <DraftPanelWarmup />}
 
       {/* Todo Resize Handle — only shown when todo is visible */}
       {todoShown && <div className="todo-resize-handle" {...todoPanel.handleProps} />}

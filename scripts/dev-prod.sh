@@ -463,6 +463,15 @@ fi
 # publish). Playwright's own runner inside the render check is the one tool that
 # may still pick a node: it names one in its shebang, and finds bun's otherwise.
 JS_BIN="$BUN_BIN"
+# The build's own work (web/'s type check, the dist, the compiled files) runs at nice 10: several
+# deploys and lands run at once on the Mac and each took cores at normal priority beside the app the
+# user types in (2026-11-16, task 9bceb9f2: load 45 on 14 cores). Only those children: this shell
+# and the server it starts stay at nice 0 (the checks above and below refuse a niced one).
+BUILD_NICE="${WALNUT_BUILD_NICE:-10}"
+if ! [[ "$BUILD_NICE" =~ ^[0-9]+$ ]]; then
+  echo "dev-prod: WALNUT_BUILD_NICE must be a whole number from 0 to 20, got '$BUILD_NICE'" >&2
+  exit 1
+fi
 # The extra targets built beside this machine's file, from the same build, for
 # host servers (src/core/host-server/). WALNUT_DEVPROD_FILE_TARGETS="" builds none.
 FILE_TARGETS="${WALNUT_DEVPROD_FILE_TARGETS-linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl}"
@@ -721,7 +730,7 @@ if [[ "${WALNUT_DEVPROD_SKIP_TSC:-0}" != "1" ]]; then
   [[ -x "$WEB_TSC" ]] || WEB_TSC="$REPO_ROOT/node_modules/.bin/tsc"
   if [[ -x "$WEB_TSC" ]]; then
     echo "Type-checking web/ before the build (WALNUT_DEVPROD_SKIP_TSC=1 skips)."
-    if ! (cd "$REPO_ROOT/web" && "$JS_BIN" "$WEB_TSC" --noEmit -p tsconfig.json); then
+    if ! (cd "$REPO_ROOT/web" && nice -n "$BUILD_NICE" "$JS_BIN" "$WEB_TSC" --noEmit -p tsconfig.json); then
       echo "web/ type-check FAILED — deploy aborted, production server on :$PORT untouched." >&2
       echo "A half-edited component ships as a first-paint crash; fix (or wait for the" >&2
       echo "author of) the errors above, or WALNUT_DEVPROD_SKIP_TSC=1 if provably unrelated." >&2
@@ -738,7 +747,7 @@ fi
 # it (build-daemon.sh, bun run) uses the same bun, and --bun runs the build
 # tools that name node in their shebang (tsup, vite) on that bun too, so the
 # build does not change with whether this machine also has a node.
-(cd "$REPO_ROOT" && PATH="$(dirname "$BUN_BIN"):$PATH" "$BUN_BIN" --bun run web:build)
+(cd "$REPO_ROOT" && PATH="$(dirname "$BUN_BIN"):$PATH" nice -n "$BUILD_NICE" "$BUN_BIN" --bun run web:build)
 
 # Then the compiled files from that dist's web assets
 # (--reuse-web: the file and the dist name the same hashed bundles, so the
@@ -752,7 +761,7 @@ build_files() {
   for t in "$@"; do
     if [[ "$t" != "$SELF_TARGET" ]]; then args+=(--target "$t"); fi
   done
-  (cd "$REPO_ROOT" && PATH="$(dirname "$BUN_BIN"):$PATH" "$BUN_BIN" "$REPO_ROOT/scripts/build-binary.mjs" "${args[@]}")
+  (cd "$REPO_ROOT" && PATH="$(dirname "$BUN_BIN"):$PATH" nice -n "$BUILD_NICE" "$BUN_BIN" "$REPO_ROOT/scripts/build-binary.mjs" "${args[@]}")
 }
 BUILT_TARGETS=""
 build_marker=""

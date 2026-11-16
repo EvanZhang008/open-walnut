@@ -129,6 +129,30 @@ export interface ThreadTree {
   topCount: number;
 }
 
+/** Everything a reader of the tree can see, as one string (sameThreadTree). */
+function treeShape(t: ThreadTree): string {
+  let shape = shapes.get(t);
+  if (shape === undefined) {
+    shape = JSON.stringify([t.rootKey, t.latestKey, t.topCount, t.threads, [...t.byRow]]);
+    shapes.set(t, shape);
+  }
+  return shape;
+}
+/** A tree is never changed once built, so the tree a page holds is serialized once, not per rebuild. */
+const shapes = new WeakMap<ThreadTree, string>();
+
+/**
+ * The same tree: every thread and every row's place equal. The timeline rebuilds the tree from
+ * its rows on each render that moves them and published each one; a rebuild after its own
+ * publish (the same rows) handed the threads context a new value again and redrew the chat
+ * history once more for every message sent (2026-11-16, task 9bceb9f2).
+ */
+export function sameThreadTree(a: ThreadTree, b: ThreadTree): boolean {
+  if (a === b) return true;
+  if (a.threads.length !== b.threads.length || a.byRow.size !== b.byRow.size) return false;
+  return treeShape(a) === treeShape(b);
+}
+
 /** The rows this model reads. Structural so a test can pass literals and the
  *  caller can pass SessionHistoryMessage / OptimisticMessage untouched. */
 export interface ThreadTreeMessage {

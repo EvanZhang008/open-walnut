@@ -40,6 +40,7 @@
  * Nothing LAUNCH-critical — working-dirs, list-dirs, tasks, quick-start — is
  * ever touched on open.
  */
+import { countRender } from '@/utils/render-count';
 
 import { formatModelName } from '@/utils/model-name';
 import { usePhoneLayerWithBar } from './phone-session-layer';
@@ -507,6 +508,7 @@ export function DraftSessionPanel({
   onTaskFieldChange, onReturnFieldToWalnut, launchNotice, intro, gateError, onGateErrorClear, restoreImages,
   onCustomizeWalnut, repairTarget, phoneLayer, walnutLabel, plainChat, placeholder, composerBar, composerPill, ownFolder, pickFolder, ownFolderLabel, onClearFolder, saveBusy = false,
 }: Props) {
+  countRender('DraftSessionPanel');
   const rootRef = useRef<HTMLDivElement>(null);
   const phoneDraft = usePhoneLayerWithBar({
     id: `draft:${draft.id}`, kind: 'draft', active: !!phoneLayer, title: 'New session', withAction: false,

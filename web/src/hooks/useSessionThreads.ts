@@ -1,10 +1,11 @@
+import { useLeanCallback } from './useLeanCallback';
 import type { NavRetarget } from '@/utils/tree-split-state';
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type RefObject } from 'react';
 import { fetchSession, updateSession } from '@/api/sessions';
 import type { ImageAttachment } from '@/api/chat';
 import type { SessionPinnedMessage, SessionThreadAnchor, SessionThreadMeta, SessionThreadMetaPatch } from '@/types/session';
 import {
-  EMPTY_DERIVED, type FileCardHost, type SessionThreadsApi, type ThreadCardPlace, type ThreadCardRequest, type ThreadDerived,
+  EMPTY_DERIVED, sameThreadDerived, type FileCardHost, type SessionThreadsApi, type ThreadCardPlace, type ThreadCardRequest, type ThreadDerived,
 } from '@/contexts/SessionThreadsContext';
 import type { ThreadMetaStore, ThreadToastApi } from '@/components/sessions/thread-ui-contract';
 import { keepCommandFirst } from '@/components/chat/leading-command';
@@ -12,7 +13,7 @@ import { useSessionThreadMeta } from '@/hooks/useSessionThreadMeta';
 import { useThreadActions } from '@/hooks/useThreadActions';
 import { useThreadStack, type ComposerProbe, type ThreadStackHandle } from '@/hooks/useThreadStack';
 import {
-  ROOT_THREAD_KEY, composeAnchoredText, composeOrientedText, emptyThreadTree, newUserUuid, threadKeyOf, type ThreadTree,
+  ROOT_THREAD_KEY, composeAnchoredText, composeOrientedText, emptyThreadTree, newUserUuid, sameThreadTree, threadKeyOf, type ThreadTree,
 } from '@/utils/thread-tree';
 import { displayTitleOf, hiddenKeysOf, statusOf } from '@/utils/thread-meta';
 import { counts as threadCounts, type ThreadCounts } from '@/utils/thread-meta-counts';
@@ -385,10 +386,13 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
   const [tree, setTreeState] = useState<ThreadTree>(emptyThreadTree);
   const [historyComplete, setHistoryComplete] = useState(false);
   const setTree = useCallback((next: ThreadTree, complete?: boolean) => {
-    setTreeState(next);
+    // A rebuild with the same threads and rows keeps the held tree: the context stays as it was.
+    setTreeState((prev) => (sameThreadTree(prev, next) ? prev : next));
     setHistoryComplete(complete ?? true);
   }, []);
   const [derived, setDerived] = useState<ThreadDerived>(EMPTY_DERIVED);
+  // A rebuild with the same contents keeps the held value, so the context does not change (sameThreadDerived).
+  const publishDerived = useLeanCallback((next: ThreadDerived) => setDerived((prev) => (sameThreadDerived(prev, next) ? prev : next)), []);
   const [pinJump, setPinJump] = useState<{ pinKey: string; seq: number; at?: number } | null>(null);
   /** Key to when this tab last sent into that question (its mark waits from then). */
   const [askedAt, setAskedAt] = useState<ReadonlyMap<string, number>>(() => new Map());
@@ -806,7 +810,7 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     hiddenKeys,
     actions,
     derived,
-    publishDerived: setDerived,
+    publishDerived,
     unreadKeys,
     markStates,
     openDrawer: stack.drawer.open,

@@ -10,9 +10,12 @@
  * twice as well, though it changes nothing in it. On a Mac whose processor the rest of the
  * machine keeps busy, those draws are what a key or Cmd+N waits behind.
  *
- * Two guards, on the production bundle:
+ * Three guards, on the production bundle:
  *  - what draws: an agent's status write draws the task list once and no open chat; Cmd+N
  *    and typing draw no task list at all (src: web/src/utils/render-count.ts counts draws);
+ *  - what a send asks the server: the chat's history and its session record twice each at
+ *    most (before: three history reads and four or five record reads per send, each history
+ *    read about 360 ms on the Mac, each answer drawing the chat again);
  *  - how long: typing, Cmd+N, a send and a chat's opening against their budgets while the
  *    production mix of socket frames arrives.
  */
@@ -23,6 +26,9 @@ import { draftComposer, loadHome, REAL_PANEL, seedColumns } from './draft-helper
 import { keepTaskFramesTo } from './task-list-stub'
 
 test.use({ viewport: { width: 1440, height: 900 } })
+// One at a time, in one worker: the sends below go to the chat the draw guard holds open, and a send in another
+// worker drew that chat inside the draw guard's window (2026-11-16: 22 panel draws for 20 writes).
+test.describe.configure({ mode: 'default' })
 test.setTimeout(240_000)
 
 /** The Mac app's list on 2026-11-16: 965 tasks, 84% of them completed. */
@@ -122,6 +128,26 @@ async function quiet(page: Page): Promise<void> {
   throw new Error('Home kept drawing with nothing happening')
 }
 
+/**
+ * The draws of one step, at its cleanest of up to three tries. On a busy runner a draw the step
+ * does not cause (a timer, a late response) can land inside any one window (2026-11-16, the deep
+ * test: two Home draws inside a typing window); the draws a regression adds land in every try
+ * (before the fix: two task-list draws on every Cmd+N, two chat draws on every status write).
+ * `settled`: the step waits for quiet itself, after its own setup.
+ */
+async function fewestDraws(page: Page, step: () => Promise<void>, clean: (c: Record<string, number>) => boolean, opts: { settled?: boolean } = {}): Promise<Record<string, number>> {
+  let best: Record<string, number> | null = null
+  const total = (c: Record<string, number>) => Object.values(c).reduce((a, b) => a + b, 0)
+  for (let i = 0; i < 3; i++) {
+    if (!opts.settled) await quiet(page)
+    await step()
+    const c = await draws(page)
+    if (clean(c)) return c
+    if (!best || total(c) < total(best)) best = c
+  }
+  return best!
+}
+
 /** Hand the page's socket frames as the server would, `perSec` a second, with production's mix. */
 async function startTraffic(page: Page, tasks: Array<Record<string, unknown>>, perSec: number): Promise<void> {
   const writes = Array.from({ length: 200 }, (_, n) => statusWrite(tasks, n))
@@ -190,18 +216,23 @@ test('an agent status write draws the task list once and no open chat; Cmd+N and
   // The counter is wired into each component the guard reads: boot drew every one of them.
   const boot = await draws(page)
   for (const name of ['MainPage', 'TodoPanel', 'SessionPanelBody', 'SessionChatHistory']) expect(boot[name] ?? 0, `${name} counts its draws`).toBeGreaterThan(0)
+  // The new-task panel was drawn once, hidden, while the page sat idle (DraftPanelWarmup), so the
+  // first Cmd+N runs code the engine has already compiled.
+  expect(boot.DraftSessionPanel ?? 0, 'the idle warmup drew the new-task panel').toBeGreaterThan(0)
 
   // 20 status writes for tasks no column shows, 100 ms apart.
-  const writes = Array.from({ length: 20 }, (_, n) => statusWrite(tasks, n))
-  await page.evaluate(async (frames) => {
-    const sock = (window as unknown as { __pwSocks: WebSocket[] }).__pwSocks.find((s) => s.readyState === 1)!
-    for (const data of frames) {
-      sock.onmessage!(new MessageEvent('message', { data: JSON.stringify({ type: 'event', name: 'task:updated', seq: 1, data }) }))
-      await new Promise((r) => setTimeout(r, 100))
-    }
-    await new Promise((r) => setTimeout(r, 600))
-  }, writes)
-  const afterWrites = await draws(page)
+  let round = 0
+  const afterWrites = await fewestDraws(page, async () => {
+    const writes = Array.from({ length: 20 }, (_, n) => statusWrite(tasks, n + 20 * round++))
+    await page.evaluate(async (frames) => {
+      const sock = (window as unknown as { __pwSocks: WebSocket[] }).__pwSocks.find((s) => s.readyState === 1)!
+      for (const data of frames) {
+        sock.onmessage!(new MessageEvent('message', { data: JSON.stringify({ type: 'event', name: 'task:updated', seq: 1, data }) }))
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      await new Promise((r) => setTimeout(r, 600))
+    }, writes)
+  }, (c) => (c.TodoPanel ?? 0) <= 22 && (c.SessionPanelBody ?? 0) <= 3 && !c.SessionChatHistory)
   // Once each: before, twice each (two of its states set to what they already held).
   expect(afterWrites.TodoPanel ?? 0, JSON.stringify(afterWrites)).toBeLessThanOrEqual(22)
   // No open chat draws for another task's status (before: its panel twice, its history once, per write).
@@ -212,30 +243,66 @@ test('an agent status write draws the task list once and no open chat; Cmd+N and
   // goes from empty to holding words (its send button wakes), never once a key.
   const box = page.locator(`${REAL_PANEL} textarea.chat-input-textarea`).first()
   await box.click()
-  await quiet(page)
-  await page.keyboard.type('hello there, a line typed fast', { delay: 40 })
-  await page.waitForTimeout(600)
-  const afterTyping = await draws(page)
+  const afterTyping = await fewestDraws(page, async () => {
+    await box.fill('')
+    await quiet(page)
+    await page.keyboard.type('hello there, a line typed fast', { delay: 40 })
+    await page.waitForTimeout(600)
+  }, (c) => !c.MainPage && !c.TodoPanel && (c.SessionPanelBody ?? 0) <= 1, { settled: true })
   expect({ MainPage: afterTyping.MainPage ?? 0, TodoPanel: afterTyping.TodoPanel ?? 0 }, JSON.stringify(afterTyping)).toEqual({ MainPage: 0, TodoPanel: 0 })
   expect(afterTyping.SessionPanelBody ?? 0, JSON.stringify(afterTyping)).toBeLessThanOrEqual(1)
   await box.fill('')
 
   // Cmd+N opens a draft column and leaves the task list as it was (before: two draws).
-  await page.locator('body').click({ position: { x: 5, y: 5 } })
-  await quiet(page)
-  await page.keyboard.press(NEW_TASK)
-  await expect(draftComposer(page)).toBeVisible()
-  await page.waitForTimeout(600)
-  const afterNew = await draws(page)
+  const afterNew = await fewestDraws(page, async () => {
+    await closeDrafts(page)
+    await page.locator('body').click({ position: { x: 5, y: 5 } })
+    await quiet(page)
+    await page.keyboard.press(NEW_TASK)
+    await expect(draftComposer(page)).toBeVisible()
+    await page.waitForTimeout(600)
+  }, (c) => !c.TodoPanel, { settled: true })
   expect(afterNew.TodoPanel ?? 0, JSON.stringify(afterNew)).toBe(0)
 
   // Typing in the draft's composer: nothing outside it either.
   await draftComposer(page).click()
-  await quiet(page)
-  await page.keyboard.type('a new task, typed fast', { delay: 40 })
-  await page.waitForTimeout(600)
-  const afterDraft = await draws(page)
-  expect({ MainPage: afterDraft.MainPage ?? 0, TodoPanel: afterDraft.TodoPanel ?? 0 }).toEqual({ MainPage: 0, TodoPanel: 0 })
+  const afterDraft = await fewestDraws(page, async () => {
+    await draftComposer(page).fill('')
+    await quiet(page)
+    await page.keyboard.type('a new task, typed fast', { delay: 40 })
+    await page.waitForTimeout(600)
+  }, (c) => !c.MainPage && !c.TodoPanel, { settled: true })
+  expect({ MainPage: afterDraft.MainPage ?? 0, TodoPanel: afterDraft.TodoPanel ?? 0 }, JSON.stringify(afterDraft)).toEqual({ MainPage: 0, TodoPanel: 0 })
+})
+
+test('a send reads its chat\'s history and session record at most twice each', async ({ page }) => {
+  await openHome(page, [])
+  const box = page.locator(`${REAL_PANEL} textarea.chat-input-textarea`).first()
+  const history = `/api/sessions/${CHAT}/history`
+  const record = `/api/sessions/${CHAT}`
+  const perSend: Array<{ history: number; record: number; all: string[] }> = []
+  for (let i = 0; i < 3; i++) {
+    await box.fill(`guard send ${i} ${Date.now()}`)
+    await quiet(page)
+    const all: string[] = []
+    let lastAt = Date.now()
+    const on = (r: import('@playwright/test').Request) => { const u = new URL(r.url()); if (u.pathname.startsWith('/api/')) { all.push(`${r.method()} ${u.pathname}`); lastAt = Date.now() } }
+    page.on('request', on)
+    await page.keyboard.press('Enter')
+    // The turn's end signals (stream end, result, the batch's end, the status change) come
+    // within about a second of each other here: count until the chat has read its history and
+    // then asked for nothing for a second (a slower engine just takes longer to get there).
+    const until = Date.now() + 15_000
+    while (Date.now() < until && !(all.includes(`GET ${history}`) && Date.now() - lastAt > 1_000)) await page.waitForTimeout(100)
+    page.off('request', on)
+    perSend.push({ history: all.filter((r) => r === `GET ${history}`).length, record: all.filter((r) => r === `GET ${record}`).length, all })
+  }
+  const seen = JSON.stringify(perSend)
+  // Each send turns the chat over once, so it reads history at least once: a zero would mean
+  // the counter missed the reads, not that the page got faster.
+  for (const s of perSend) expect(s.history, seen).toBeGreaterThan(0)
+  for (const s of perSend) expect(s.history, `history reads per send: ${seen}`).toBeLessThanOrEqual(2)
+  for (const s of perSend) expect(s.record, `session record reads per send: ${seen}`).toBeLessThanOrEqual(2)
 })
 
 test('typing, Cmd+N, a send and a chat opening stay within budget while agents write', async ({ page, browserName }) => {

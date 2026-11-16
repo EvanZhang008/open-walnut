@@ -1,4 +1,7 @@
 import { countRender } from '@/utils/render-count';
+import { useCoalescedRefresh } from '@/hooks/useCoalescedRefresh';
+import { useCommittedRef } from '@/hooks/useCommittedRef';
+import { sameJson } from '@/utils/same-json';
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, Component, lazy, Suspense, type ReactNode, type ErrorInfo, type MouseEvent as ReactMouseEvent, type MutableRefObject, type CSSProperties, memo } from 'react';
 import { stableHtml } from '@/hooks/useStableHtml';
 import { PauseGlyphIcon, PlayGlyphIcon, WarningTriangleIcon } from '@/components/common/PhoneIcons';
@@ -510,6 +513,9 @@ const PLAIN_CHAT_CONTROLS: ReadonlySet<string> = new Set(['mode', 'model']);
  */
 const carriedTitles = new Map<string, string>();
 
+/** How long a chat waits for the rest of a burst of events before it re-reads its record. */
+const RECORD_REREAD_COALESCE_MS = 250;
+
 const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, onClose, onRestoredGone, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onMinimize, onTaskCompleted, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced: onSessionReplacedProp, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill, composerBar, emptyHistory }: SessionPanelProps) {
   countRender('SessionPanelBody');
   // One place decides what "close this panel" means, so every exit (the header
@@ -533,6 +539,15 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // A session this page fetched before draws from that copy in the first frame (peekSessionRecord);
   // the fetch below brings it current.
   const [sessionRecord, setSession] = useState<SessionRecord | null>(() => peekSessionRecord(sessionId));
+  // Event re-reads of the record (status, result, error, reconnect): a send brings several within
+  // half a second, each was a read and a redraw (2026-11-16, task 9bceb9f2: four a send). One read
+  // for a burst, one more if an event lands while it is out, and an unchanged record keeps its object.
+  const recordSidRef = useCommittedRef(sessionId);
+  const rereadRecord = useCoalescedRefresh(async () => {
+    const sid = recordSidRef.current;
+    const s = await fetchSession(sid);
+    if (s && sid === recordSidRef.current) setSession((prev) => (sameJson(prev, s) ? prev : s));
+  }, RECORD_REREAD_COALESCE_MS).request;
   const session = useResolvedSessionRecord(sessionRecord);
   // A host replica with the Mac away: a session that runs on the Mac (or another host) cannot be written to.
   const macSessionAway = useMacSessionAway(session);
@@ -1033,7 +1048,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       // ACP engines report their model as acpModel (the record's `model` field
       // stays empty by design), so the backfill is a native-engine repair.
       if (session && !session.model && !engineUi.isAcp) {
-        fetchSession(sessionId).then((s) => { if (s) setSession(s); }).catch(() => {});
+        rereadRecord();
       }
     }
   });
@@ -1053,14 +1068,14 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   useEvent('session:result', (data) => {
     const d = data as { sessionId?: string };
     if (d.sessionId === sessionId) {
-      fetchSession(sessionId).then((s) => { if (s) setSession(s); }).catch(() => {});
+      rereadRecord();
     }
   });
 
   useEvent('session:error', (data) => {
     const d = data as { sessionId?: string };
     if (d.sessionId === sessionId) {
-      fetchSession(sessionId).then((s) => { if (s) setSession(s); }).catch(() => {});
+      rereadRecord();
     }
   });
 
@@ -1111,7 +1126,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       // Hidden tabs defer until shown — every open tab reconnects at once on a
       // server restart; only the visible one should hit the API immediately.
       runWhenVisible(`session-panel:reconnect:${sessionId}`, () => {
-        fetchSession(sessionId).then((s) => { if (s) setSession(s); }).catch(() => {});
+        rereadRecord();
       });
     }
   });
@@ -2271,15 +2286,12 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const handleRetried = useCallback((taskId: string) => {
     retryTaskIdRef.current = taskId;
   }, []);
-  const reloadRecord = useCallback(() => {
-    fetchSession(sessionId).then((s) => { if (s) setSession(s); }).catch(() => {});
-  }, [sessionId]);
   // Its folder was gone and it moved (FolderGoneBanner): the same session reads its new
   // record; a new conversation for the task takes over the way a retry's fresh start does.
   const handleFolderMoved = useCallback((result: ContinueInNewFolderResult) => {
     if (result.status === 'started') handleRetried(result.taskId);
-    fetchSession(sessionId).then((s) => { if (s) setSession(s); }).catch(() => {});
-  }, [sessionId, handleRetried]);
+    void rereadRecord();
+  }, [rereadRecord, handleRetried]);
 
   // Opening a session that sits in 'error' re-checks its host immediately.
   // A record can stay frozen on a stale "unable to reach remote host" for hours
@@ -3701,7 +3713,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             <PanelNotice
               className={`session-error-banner${spinning ? ' session-error-banner--reconnecting' : provedReachable ? ' session-error-banner--idle' : ''}`}
               icon={spinning ? '\u21BB' : provedReachable ? '\u2139\uFE0E' : <WarningTriangleIcon size={14} />}
-              actions={provedReachable ? null : <SessionRetryButton sessionId={sessionId} host={session?.host} onRetried={handleRetried} onResuming={handleResuming} onFolderGone={reloadRecord} />}
+              actions={provedReachable ? null : <SessionRetryButton sessionId={sessionId} host={session?.host} onRetried={handleRetried} onResuming={handleResuming} onFolderGone={rereadRecord} />}
             >
               {isRemote && session?.host && !checking && !provedReachable
                 ? <SessionHostErrorText host={session.host} label={hostLabel} reconnecting={isReconnecting} fallback={bannerText} />

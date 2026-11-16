@@ -98,6 +98,43 @@ export interface ThreadDerived {
   awaiting?: ReadonlySet<string>;
 }
 
+type Keyed = ReadonlyMap<string, unknown> | ReadonlySet<string> | undefined;
+
+function sameKeyed(a: Keyed, b: Keyed): boolean {
+  if (a === b) return true;
+  const sa = a?.size ?? 0;
+  if (sa !== (b?.size ?? 0)) return false;
+  if (sa === 0) return true;
+  if (a instanceof Map && b instanceof Map) {
+    for (const [k, v] of a) if (!b.has(k) || b.get(k) !== v) return false;
+    return true;
+  }
+  if (a instanceof Set && b instanceof Set) {
+    for (const k of a) if (!b.has(k)) return false;
+    return true;
+  }
+  return false;
+}
+
+/** Every field of ThreadDerived, each a map or a set: a new field fails the type check here until
+ *  it is listed, and one that is neither has no `true` to give, so sameThreadDerived never skips one. */
+const DERIVED_KEYED: { [K in keyof ThreadDerived]-?: ThreadDerived[K] extends Keyed ? true : never } = {
+  live: true, answeredAt: true, lastAnswer: true, lastQuestion: true, answering: true, spoke: true,
+  datedAt: true, sentKeys: true, queuedKeys: true, unsentKeys: true, awaiting: true,
+};
+const DERIVED_FIELDS = Object.keys(DERIVED_KEYED) as Array<keyof ThreadDerived>;
+
+/**
+ * The same marks to draw. The timeline rebuilds these maps whenever a send, a stream edge or a
+ * queue change moves its inputs, mostly to the same contents (a send in the main thread changes
+ * none of them); published anyway, each one handed every reader of the threads context a new
+ * value and redrew the chat history twice a send (2026-11-16, task 9bceb9f2).
+ */
+export function sameThreadDerived(a: ThreadDerived, b: ThreadDerived): boolean {
+  if (a === b) return true;
+  return DERIVED_FIELDS.every((f) => sameKeyed(a[f] as Keyed, b[f] as Keyed));
+}
+
 /** Where a comment card sits inside its host box (left/top relative to the host). */
 export interface ThreadCardPlace {
   top: number;
