@@ -172,7 +172,10 @@ final class PostEraseLogTests: XCTestCase {
         XCTAssertTrue(written, "the setup never reached the disk")
 
         LocalDataReset.purgeHTTPCache(cache)
-        XCTAssertNil(cache.cachedResponse(for: before), "the purge left a response in memory")
+        // URLCache finishes removing after the call returns (iOS 26.0 still answered from it
+        // right after, 2026-11-16 lane B), so both copies are waited out, not read at once.
+        let forgotten = await waitFor(10) { cache.cachedResponse(for: before) == nil }
+        XCTAssertTrue(forgotten, "the purge left a response in memory")
         let erased = await waitFor(10) { !onDisk(before) }
         XCTAssertTrue(erased, "the purge left a response on disk")
         XCTAssertEqual(cache.memoryCapacity, 4 << 20, "the purge shrank the cache for good")

@@ -402,8 +402,6 @@ struct DiffComparePickerView: View {
     @State private var query = ""
     /// The search is active (its field focused, the keyboard up).
     @State private var searching = false
-    /// A pick made while the search was active, made once the search has ended.
-    @State private var pending: DiffCompare?
 
     var body: some View {
         List {
@@ -487,11 +485,6 @@ struct DiffComparePickerView: View {
         // A field under the title, as the app's other searches: left to iOS 26, a sheet
         // folds it into a round bottom-bar button with no glyph that reads as nothing.
         .searchable(text: $query, isPresented: $searching, placement: .navigationBarDrawer(displayMode: .always), prompt: "Branch, commit or message")
-        .onChange(of: searching) { _, active in
-            guard !active, let option = pending else { return }
-            pending = nil
-            pick(option)
-        }
         .navigationTitle("Compare With")
         .navigationBarTitleDisplayMode(.inline)
         .task { if model.refs == nil { await model.loadRefs() } }
@@ -499,13 +492,18 @@ struct DiffComparePickerView: View {
 
     /// A pick pops this page, so the search ends first. Popped while active, its field and
     /// keyboard stayed over the diff the pick led to and took the taps meant for that
-    /// page's selection bar (CI, from 2026-11-11: "Copy said nothing"). The pop waits for
-    /// the search to end (onChange above): ending it and popping in one update dropped the
-    /// pop, and the picker stayed on screen (CI 2026-11-15: "the commit is not the comparison").
+    /// page's selection bar (CI, from 2026-11-11: "Copy said nothing"). The pop waits until
+    /// the search has finished going away: popping in the same update, or in the update that
+    /// saw the search end, dropped the pop while the search bar was still animating out, and
+    /// the picker stayed on screen with the pick made (CI and lane B, 2026-11-15 and 11-16:
+    /// "the commit is not the comparison").
     private func choose(_ option: DiffCompare) {
         guard searching else { pick(option); return }
-        pending = option
-        searching = false
+        withAnimation {
+            searching = false
+        } completion: {
+            pick(option)
+        }
         UIApplication.shared.sendAction(
             #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
         )
