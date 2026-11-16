@@ -1,7 +1,7 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs, showAllSections } from './todo-panel-helpers'
 import { openHome } from './home-navigation-helpers'
-import { expectRestored, expectStill, expectWidensInPlace, fits, followingOf, isOpen, openInRow, peekPill, topsOf } from './truncation-peek-helpers'
+import { expectPeeksInPlace, expectRestored, expectStill, expectWidensInPlace, fits, followingOf, isOpen, openInRow, peekPill, topsOf } from './truncation-peek-helpers'
 
 /**
  * Cut-off text peeks in place (web/src/utils/truncation-peek.ts). A task row widens in place
@@ -274,6 +274,41 @@ test('at the window\'s right edge a row grows to the left, the last row of a scr
   await page.mouse.move(600, 700)
   await expectRestored(lastRow, lastBefore, 'last list row')
   expect((await list.evaluate((el) => el.scrollTop))).toBe(listBefore.top)
+})
+
+// 2026-11-16 (session-panel-narrow R5): a host name cut inside a sentence opened the sentence's
+// inline span, whose placeholder held one line, so the open box stood 86px taller and 2px lower than
+// its place. Every inline box around a cut text (one span in another, a link) is passed over: the
+// block that holds the sentence is what opens, at its own top and height.
+test('a cut name inside a sentence opens the block that holds the sentence, never an inline span around it', async ({ page, baseURL }) => {
+  await isolateUiPrefs(page)
+  await openHome(page, baseURL!)
+  await page.mouse.move(600, 700)
+  const NAME = 'garden-box-example-7f3a9c21.north-3.lab.example.net'
+  await page.evaluate((name) => {
+    const token = `<span class="prose-token" style="display:inline-block;max-width:calc(100% - 20px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom">${name}</span>`
+    const fixture = document.createElement('div')
+    fixture.id = 'peek-prose'
+    fixture.style.cssText = 'position:fixed;left:300px;top:200px;width:220px;z-index:5000;background:var(--bg);font-size:14px;line-height:20px'
+    fixture.innerHTML = [
+      `<div class="prose-block" data-case="span"><span class="prose-inline">${token} is reachable, and this session's process is not running. Send a message to resume it.</span></div>`,
+      `<div class="prose-block" data-case="nested" style="margin-top:12px"><span><em>${token} is reachable, and the words go on for a few more lines below it.</em></span></div>`,
+      `<div class="prose-block" data-case="link" style="margin-top:12px">The host <a href="#peek-prose">${token}</a> answered, and the words go on for a few more lines below it.</div>`,
+    ].join('')
+    document.body.appendChild(fixture)
+  }, NAME)
+  for (const kind of ['span', 'nested', 'link']) {
+    const block = page.locator(`#peek-prose .prose-block[data-case="${kind}"]`)
+    const token = block.locator('.prose-token')
+    const before = await box(block)
+    expect(before.height, `${kind}: the sentence runs over several lines`).toBeGreaterThan(40)
+    await expectPeeksInPlace(token, NAME, `${kind} sentence`)
+    // While open, it is the sentence's block that is in the top layer.
+    await token.hover()
+    await expect.poll(() => token.evaluate((el) => el.closest('[data-peek-expanded]')?.classList.contains('prose-block') ?? null), { timeout: 5_000 }).toBe(true)
+    await page.mouse.move(600, 700)
+    await expectRestored(block, before, `${kind} sentence`)
+  }
 })
 
 test('a task row widens as a whole: the pointer anywhere on a status row opens it; on its ⋮ it stays open, and the ⋮ still opens its menu', async ({ page, baseURL }) => {

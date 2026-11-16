@@ -85,7 +85,10 @@ describe('all truncation peeks widen the real row, never taller, never cloned te
   it('one expandRow path opens the real row in the top layer over an empty placeholder', () => {
     const source = read('utils/truncation-peek.ts');
     expect(source).toContain('state.marked = expandRow(state.key, state.hosts)');
-    expect(source).toContain('const key = host.closest(CONTROL) ?? host.parentElement ?? host');
+    // The container is one that draws its own box: an inline span around the text is passed over
+    // (2026-11-16, session-panel-narrow R5: its placeholder held one line of a sentence).
+    expect(source).toContain('const key = boxOf(host.closest(CONTROL) ?? host.parentElement ?? host)');
+    expect(source).toMatch(/function boxOf\(el: Element\): Element \{[\s\S]*?\^\(inline\|contents\)\$/);
     // No text clone, pill or second renderer beside the row path.
     expect(source).not.toMatch(/createElement|cloneNode|appendChild|renderPill|placePeek|MAX_ROW_HOSTS/);
     // The row module is the only one that opens a row.

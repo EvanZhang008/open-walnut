@@ -145,10 +145,22 @@ export function peekTargetOf(target: EventTarget | null): { key: Element; hosts:
   const host = findCutText(target);
   if (!host) return null;
   // Unmarked components widen through the same whole-container path.
-  const key = host.closest(CONTROL) ?? host.parentElement ?? host;
+  const key = boxOf(host.closest(CONTROL) ?? host.parentElement ?? host);
   const hosts = cutTextsIn(key);
   if (!hosts.includes(host)) hosts.push(host);
   return { key, hosts };
+}
+
+/**
+ * The nearest element from `el` up that draws a box of its own. An inline element (a sentence's
+ * span around a cut host name) has none: its placeholder would hold one line's height and the
+ * words around it would reflow, so the container that opens is the block that holds it
+ * (2026-11-16: a session notice's sentence opened 86px taller than its placeholder).
+ */
+function boxOf(el: Element): Element {
+  let at: Element = el;
+  while (at.parentElement && at.parentElement !== document.body && /^(inline|contents)$/.test(getComputedStyle(at).display)) at = at.parentElement;
+  return at;
 }
 
 /** The container being opened and the attributes to restore on exit. */
