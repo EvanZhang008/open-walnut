@@ -361,6 +361,7 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/providers/daemon-standin-wait-twins-e2e.test.ts", sleep: "await new Promise((r) => setTimeout(r, 4_000))", reason: "negative: behind a stand-in the job's daemon neither exits nor takes the runtime dir" },
   { file: "tests/providers/daemon-stream-compact-twins-e2e.test.ts", sleep: "await new Promise((r) => setTimeout(r, 1500))", reason: "negative: several sweeps pass and a live CLI stream file must not be compacted" },
   { file: "tests/providers/daemon-stream-compact-twins-e2e.test.ts", sleep: "await new Promise((r) => setTimeout(r, 1000))", reason: "negative: the compacted file must not be copied again while it has not grown" },
+  { file: "tests/providers/daemon-trigger-same-daemon.test.ts", sleep: "await new Promise((r) => setTimeout(r, 200))", reason: "negative: while the net link's compile is held, the SSH alias's push must not compile (no event marks a push that waits)" },
   { file: "tests/providers/daemon-triggers-two-walnuts.test.ts", sleep: "await sleep(500)", reason: "negative: neither Walnut hears the other one's fire" },
   { file: "tests/providers/daemon-triggers-two-walnuts.test.ts", sleep: "await sleep(500)", reason: "negative: neither Walnut hears the unnamed set's fire" },
   { file: "tests/providers/daemon-triggers-two-walnuts.test.ts", sleep: "await sleep(3_000)", reason: "negative: the boot run (already awaited) must not run again once per copy" },

@@ -109,10 +109,12 @@ describe('log-error → notification bridge', () => {
     const logger = createSubsystemLogger('session');
     logger.error('DaemonConnection: managed daemon update was deferred; use `walnut daemon install --yes --executable <daemon binary>` on that host.');
     logger.error('Managed local daemon version differs; automatic update was deferred; use walnut daemon install --yes --executable <daemon binary>');
-    await new Promise(r => setTimeout(r, 150));
-    expect((await listNotifications()).feed).toHaveLength(0);
     logger.error('Managed daemon update failed: the readiness check timed out');
+    // The bridge takes errors in order: once the failure's card is in, the two deferrals before it
+    // were judged, and the one card is the failure's.
     await vi.waitFor(async () => expect((await listNotifications()).feed).toHaveLength(1));
+    const { feed } = await listNotifications();
+    expect(feed[0].title).toMatch(/update failed/);
   });
 
   it('notif-subsystem errors are excluded (no self-loop)', async () => {
