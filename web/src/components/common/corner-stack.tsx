@@ -1,17 +1,19 @@
 /**
- * The one place where Walnut's own notices appear: one stack at the top of the window, centered,
- * one fixed width, over the page, like an iOS notification (2026-11-16, the user: "also somehow
- * the notificaiton pill will adopt the width based on other pannel on the right, I think not need,
- * just show like noticiaton overlap on the top nice unified, just like IOS noticficaiton pelase").
+ * The one place where Walnut's own notices appear: one stack at the bottom left of the window,
+ * just right of the sidebar's icon rail, one fixed width, floating over the page (2026-11-16, the
+ * user: "in notificaiton side pannel and as notificaiton on bot let", "the notificaiton pill will
+ * adopt the width based on other pannel on the right, I think not need, just show like noticiaton
+ * overlap ... nice unified", and after it was put at the top by mistake: "I said this notification is bottom left,
+ * bottom left, and you put it on top again" (translated from Chinese)).
  *
  * Every notice that pops up by itself goes through <CornerSlot order={...}>: it portals into one
  * fixed stack, so notices never cover one another and share one width, gap and order. A higher
- * `order` sits nearer the top edge. Where the stack sits and how wide it is never depends on a
- * panel, a composer, a column or a sheet (corner-stack.css): the page reads nothing from it and it
- * reads no geometry from the page. Its one look at the page is about content: with the
- * notification center open it centers in the space right of the center (same width), so it never
- * covers that list. On the phone the same stack spans the top of the screen under the safe area
- * (phone-layout.css), over the top bar.
+ * `order` sits nearer the bottom edge, and more notices stack upward. Its width never depends on
+ * a panel, a composer, a column or a sheet (corner-stack.css), and the page reserves no room for
+ * it. It reads two things from the page's left edge: the sidebar rail's right edge (its left
+ * edge sits 16px past it) and, while the notification center is open, that panel's right edge
+ * instead, so it never covers that list. On the phone the stack spans the top of the screen
+ * under the safe area (phone-layout.css), clear of the chat composer at the bottom.
  *
  * tests/web/corner-stack-guard.test.ts fails on a notice that places itself in a corner of the
  * window instead of coming here, and on this file reading a panel's or composer's geometry again.
@@ -23,7 +25,7 @@ import { RouteShownContext } from '@/contexts/RouteShownContext';
 import '@/styles/corner-stack.css';
 import { STACK_WIDTH_PX } from './corner-stack-width';
 
-/** Where each kind sits in the stack: higher is nearer the top edge. */
+/** Where each kind sits in the stack: higher is nearer the bottom edge (the corner). */
 export const CORNER_ORDER = {
   /** NotificationToaster: Walnut's and plugins' toasts, permission prompts, reminders. */
   toasts: 10,
@@ -34,9 +36,9 @@ export const CORNER_ORDER = {
   /** A one-off line from a pop-out window (openPopout.ts). */
   flash: 25,
   /** A host's first connect running in the background (hosts/HostConnectCard.tsx): it stays
-   *  for minutes, so it sits nearer the edge than the passing toasts, just under the approval card. */
+   *  for minutes, so it sits nearer the corner than the passing toasts, just above the approval card. */
   hostConnect: 28,
-  /** Approval cards: a script waits on them, so they sit nearest the top edge. */
+  /** Approval cards: a script waits on them, so they sit nearest the corner. */
   approvals: 30,
 } as const;
 
@@ -86,11 +88,19 @@ const SHORT_WINDOW_PX = 720;
 /** Where a page's own content lives: the app's main area, or a full-screen sheet over it. */
 const PAGE_AREA = '.main-content, .open-walnut-fullscreen';
 
+/** The desktop sidebar (the icon rail) the stack sits right of: only one in the page's row. */
+function inFlowSidebar(): Element | null {
+  const el = document.querySelector('.app-shell > .sidebar');
+  if (!el) return null;
+  return getComputedStyle(el).position === 'fixed' ? null : el;
+}
+
 /**
- * What the stack reads from the page: content, never a panel's width. The open notification
- * center (it lists the same news, so the stack moves to the middle of the space right of it, its
- * width unchanged), the approval dialog (the card steps aside while it is open: the dialog shows
- * the same request), the phone's drawer, and how many kinds show (crowded: short forms).
+ * What the stack reads from the page: its left edge, never a panel's width. The sidebar rail's
+ * right edge, or the open notification center's (it lists the same news, so the stack moves
+ * right of it, its width unchanged), the approval dialog (the card steps aside while it is open:
+ * the dialog shows the same request), the phone's drawer, and how many kinds show (crowded:
+ * short forms).
  */
 function sync(): void {
   if (!stack) return;
@@ -103,14 +113,15 @@ function sync(): void {
   stack.classList.toggle('approvals-listed', approvalsListed);
   // The center lists every toast already; beside it the stack keeps only what it does not list.
   stack.classList.toggle('beside-center', centerOpen);
-  // Open, the stack centers in the window right of the center so it never covers that list; a
+  // Just right of the sidebar's rail; open, right of the center so it never covers that list. A
   // window with no room for the stack's width there hides it (the center lists the same news).
   // Only then: anywhere else a notice that cannot be seen is a notice lost.
-  const from = centerOpen ? Math.max(0, Math.round(center!.getBoundingClientRect().right)) : 0;
-  if (from > 0) stack.style.setProperty('--corner-stack-from', `${from}px`);
-  else stack.style.removeProperty('--corner-stack-from');
-  const width = Math.min(STACK_WIDTH_PX, window.innerWidth - 32);
-  stack.classList.toggle('is-tucked', centerOpen && window.innerWidth - from < width + 24);
+  const sidebar = inFlowSidebar();
+  const railRight = sidebar ? Math.max(0, Math.round(sidebar.getBoundingClientRect().right)) : 0;
+  const from = centerOpen ? Math.max(railRight, Math.round(center!.getBoundingClientRect().right)) : railRight;
+  if (from > 0) stack.style.setProperty('--corner-stack-rail', `${from}px`);
+  else stack.style.removeProperty('--corner-stack-rail');
+  stack.classList.toggle('is-tucked', centerOpen && window.innerWidth - from < STACK_WIDTH_PX + 32);
   // A crowded stack takes the short forms: every kind at once, or two in a short window, would
   // stand over a third of the page. Counted by the kinds shown, never by the stack's own height,
   // so the short forms do not undo the very reason for them. The phone has its own rules.
@@ -180,22 +191,22 @@ export function CornerSlot({ order, className, children }: { order: number; clas
 
 /**
  * Scrolls what a notice is about out from under the stack when the stack covers it (a board's
- * card under its own "Moved" toast at the top of the window): the nearest scrollers above it move
- * it down clear of the stack, as far as they can.
+ * card under its own "Moved" toast at the bottom left): the nearest scrollers above it move it up
+ * clear of the stack, as far as they can.
  */
 export function keepClearOfCorner(el: Element | null | undefined): void {
   if (!el || !stack || stack.childElementCount === 0) return;
   const s = stack.getBoundingClientRect();
   const r = el.getBoundingClientRect();
   if (r.right <= s.left || r.left >= s.right || r.bottom <= s.top || r.top >= s.bottom) return;
-  let by = Math.ceil(s.bottom - r.top + 12);
+  let by = Math.ceil(r.bottom - s.top + 12);
   for (let p = el.parentElement; p && p !== document.body && by > 0; p = p.parentElement) {
     const oy = getComputedStyle(p).overflowY;
     if (oy !== 'auto' && oy !== 'scroll') continue;
-    const room = p.scrollTop;
+    const room = p.scrollHeight - p.clientHeight - p.scrollTop;
     if (room <= 0) continue;
     const step = Math.min(by, Math.floor(room));
-    p.scrollTop -= step;
+    p.scrollTop += step;
     by -= step;
   }
 }

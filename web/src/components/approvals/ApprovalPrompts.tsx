@@ -3,8 +3,9 @@
  * console shows them. Mounted once in App, it feeds the store (approvals-store.ts) and draws
  * the window-wide parts:
  *
- *  - the card at the top of every console window, on every page, nearest the top edge of the
- *    one stack every notice shares (common/corner-stack.tsx); it holds the request's buttons;
+ *  - the card at the bottom left of every console window, on every page, nearest the bottom
+ *    corner of the one stack every notice shares (common/corner-stack.tsx); it holds the
+ *    request's buttons;
  *  - the dialog that the Needs you line (ApprovalRow: Home, the Org page, the notification
  *    center), the card's title or its "N waiting" or a click on the system notification (approval-notify.ts)
  *    opens, in the order the requests came, so the whole request is read before it is approved; the

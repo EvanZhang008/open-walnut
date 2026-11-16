@@ -556,9 +556,13 @@
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   /* The notice stack (corner-stack.css) holds every notice; on the phone it spans the top of the
      screen just under the safe area, over the top bar, as an iOS notification does (2026-11-16).
-     Nothing reserves room for it: the page never jumps when a notice comes or goes. */
+     Nothing reserves room for it: the page never jumps when a notice comes or goes. The
+     computer's stack hangs from the bottom left with the most important kind lowest; here it
+     hangs from the top with that kind highest (column-reverse: the lowest order is laid out last). */
   html body .corner-stack {
     top: calc(var(--wn-safe-top) + 8px);
+    bottom: auto;
+    flex-direction: column-reverse;
     left: max(8px, var(--wn-safe-left));
     right: max(8px, var(--wn-safe-right));
     width: auto;

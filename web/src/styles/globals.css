@@ -16857,7 +16857,7 @@ a.task-kebab-info:hover {
 
 /* ===== Unified Notification Toaster ===== */
 
-/* Placed by the notice stack at the top of the window (corner-stack.css) with every other notice. */
+/* Placed by the notice stack at the bottom left (corner-stack.css) with every other notice. */
 .notification-toaster {
   display: flex;
   flex-direction: column;
@@ -16889,9 +16889,10 @@ a.task-kebab-info:hover {
   transform: translateY(-1px);
 }
 
-/* Down from the top edge, where the stack sits (corner-stack.css). */
+/* Up from the bottom edge, where the stack sits (corner-stack.css); the phone's stack is at the
+   top and has its own (wn-phone-toast-in, phone-layout.css). */
 @keyframes notification-toast-in {
-  from { opacity: 0; transform: translateY(-12px); }
+  from { opacity: 0; transform: translateY(12px); }
   to { opacity: 1; transform: none; }
 }
 

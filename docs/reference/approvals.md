@@ -153,8 +153,8 @@ that does not read the switch or say why it stays.
     whether or not Walnut is in front, and a click brings Walnut forward with the request open.
     Quiet mode holds it back unless quiet lets permission prompts through, and an answer anywhere
     takes it back.
-  - **A card** at the top of every window, on every page (the one stack every Walnut notice
-    shares, centered), three short lines: "Approve?" with how many wait ("3 waiting", the
+  - **A card** at the bottom left of every window, on every page (the one stack every Walnut
+    notice shares, just right of the sidebar's icon rail, the card nearest the corner), three short lines: "Approve?" with how many wait ("3 waiting", the
     count the Needs you line gives, which opens the list of them) and the time left, what is asked, then who asked (the task,
     or the script and its host) with Deny and Approve. It shows the request that came first and
     stays until that one is answered; the answer shows a moment over the next one. Its title

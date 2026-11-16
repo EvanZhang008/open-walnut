@@ -11,6 +11,7 @@ import { pausePageClock } from './page-clock'
 import { PHONE } from './phone-helpers'
 import { openKebabGroup } from './kebab-group-helpers'
 import { STACK_WIDTH_PX } from '../../../web/src/components/common/corner-stack-width'
+import { BOTTOM_LEFT, stackPlace } from './corner-stack-place'
 
 const SHOTS = '/tmp/notice-full-text'
 const COMMAND = 'walnut daemon install --yes --executable <daemon binary>'
@@ -217,31 +218,22 @@ test.describe('on a phone', () => {
   })
 })
 
-/** The stack's place as one string: at the top, centered in the window, its one width. */
-async function topCenter(page: Page): Promise<string> {
-  // The product's one width (380px until f208c9363 widened it so approval titles fit two lines).
-  return page.evaluate((stackWidth) => {
-    const r = document.querySelector('.corner-stack')!.getBoundingClientRect()
-    const want = Math.min(stackWidth, window.innerWidth - 32)
-    const ok = r.top <= 24 && Math.abs(r.left + r.width / 2 - window.innerWidth / 2) <= 1 && Math.round(r.width) === want
-    return ok ? 'top center' : `stack x${Math.round(r.left)} y${Math.round(r.top)} w${Math.round(r.width)} in ${window.innerWidth}`
-  }, STACK_WIDTH_PX)
-}
-
-// 2026-11-16, the user: "just show like noticiaton overlap on the top nice unified, just like IOS
-// noticficaiton". Home and the Org page: the toast at the top, centered, whole, whatever the page has.
-test('the toast sits at the top of the window, centered, on Home and on the Org page', async ({ page }, info) => {
+// 2026-11-16, the user: "I said this notification is bottom left, bottom left, and you put it on top
+// again" (translated). Home and the Org page: the toast at the bottom left beside the rail, whole,
+// one width, whatever the page has.
+test('the toast sits at the bottom left beside the rail, on Home and on the Org page', async ({ page }, info) => {
   await page.setViewportSize({ width: 1280, height: 800 })
   const sock = await routeSocket(page)
   await boot(page, sock)
   const check = async (shot: string) => {
-    sock()!.send(noticeEvent(`top-${shot}`, { body: BODY }))
+    sock()!.send(noticeEvent(`corner-${shot}`, { body: BODY }))
     const toast = page.locator('.corner-stack .notification-toast', { hasText: 'managed daemon update' }).last()
     await expect(toast).toBeVisible()
     await expect.poll(() => toast.evaluate((el) => el.getAnimations().length)).toBe(0)
-    await expect.poll(() => topCenter(page)).toBe('top center')
+    await expect.poll(() => stackPlace(page)).toBe(BOTTOM_LEFT)
+    expect(Math.round((await toast.boundingBox())!.width), 'the toast has the stack\'s one width').toBe(STACK_WIDTH_PX)
     await expectInside(toast)
-    await page.screenshot({ path: `${SHOTS}/${info.project.name}-top-${shot}.png` })
+    await page.screenshot({ path: `${SHOTS}/${info.project.name}-corner-${shot}.png` })
     await toast.locator('.notification-toast-close').click()
     await expect(toast).toBeHidden()
   }
@@ -266,10 +258,10 @@ async function openFullScreen(page: Page): Promise<Locator> {
   return panel
 }
 
-// A full-screen sheet does not move the stack: it stays at the top of the window, centered, above
+// A full-screen sheet does not move the stack: it stays at the bottom left beside the rail, above
 // the sheet (2026-11-16: one place, whatever is open).
 for (const size of [{ width: 1512, height: 900 }, { width: 2200, height: 1100 }]) {
-  test(`a full-screen session keeps the stack at the top center (${size.width}px)`, async ({ page, request }, info) => {
+  test(`a full-screen session keeps the stack at the bottom left (${size.width}px)`, async ({ page, request }, info) => {
     await page.setViewportSize(size)
     const sock = await routeSocket(page)
     await boot(page, sock)
@@ -282,8 +274,8 @@ for (const size of [{ width: 1512, height: 900 }, { width: 2200, height: 1100 }]
     const toast = page.locator('.corner-stack .notification-toast', { hasText: 'managed daemon update' }).last()
     await expect(toast).toBeVisible()
     await expect.poll(() => toast.evaluate((el) => el.getAnimations().length)).toBe(0)
-    // The same place over a full-screen sheet as anywhere: at the top, centered, above the sheet.
-    await expect.poll(() => topCenter(page)).toBe('top center')
+    // The same place over a full-screen sheet as anywhere: at the bottom left, above the sheet.
+    await expect.poll(() => stackPlace(page)).toBe(BOTTOM_LEFT)
     await expect.poll(() => page.evaluate(() => {
       const cardEl = document.querySelector('.corner-stack [data-testid="approval-card"]')!
       const c = cardEl.getBoundingClientRect()

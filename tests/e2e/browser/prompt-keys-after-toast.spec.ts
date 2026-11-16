@@ -70,7 +70,7 @@ test('a click on a toast over a pane does not hand that pane the number keys', a
   const cards = page.locator('.permission-request-card[data-prompt-pending="true"]')
   await expect(cards).toHaveCount(2)
 
-  // A third session's ask toasts (its pane is not open) at the top right, over the right pane.
+  // A third session's ask toasts (its pane is not open) in the notice stack at the bottom left.
   const elsewhere = { sessionId: OFF_SCREEN, requestId: `req-${OFF_SCREEN}`, toolName: 'Bash', input: { command: `echo ${OFF_SCREEN}` } }
   await inject(page, 'session:permission-request', elsewhere)
   await inject(page, 'notification:new', {

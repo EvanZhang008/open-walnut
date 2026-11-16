@@ -124,7 +124,7 @@ show inline after the open ones, other completed hits that show the query fold i
   DELETE is a hard delete on the server, so it is HELD: the row is hidden (`hideTasks`) and the
   request goes out when the window ends, or when the page goes as one keepalive `POST /api/tasks/batch/delete` (WebKit cancels a page-exit DELETE, keepalive or not); an Undo shows the row
   again with nothing sent. A write the store reports refused (`setPhase` / `toggleComplete` /
-  `update` resolve false) drops its Undo and toast. Undo toasts show in the one notice stack at the top of the window
+  `update` resolve false) drops its Undo and toast. Undo toasts show in the one notice stack at the bottom left of the window
   (`common/corner-stack.tsx`), and only the newest shows the key. mod+z belongs to
   the task undo outside text boxes and in an EMPTY composer only (`undo/undo-key.ts`). Keys:
   `keyboard/shortcuts.ts` is the one table the handlers match and the `?` sheet lists

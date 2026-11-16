@@ -48,12 +48,7 @@ export async function openSheet(page: Page, width = 1440, height = 900): Promise
 }
 
 /** Open a question from the question list (the right page's map: the pages left of it have none). */
-/**
- * Opens `title` from the question list. `byKeyboard` opens the list with the keyboard on its
- * icon (a pop-up that sits top center, the approval card, can cover the icon: a reader then
- * reaches it with Tab and Enter, and Playwright's click waits on the cover until it times out).
- */
-export async function openQuestion(panel: Locator, title: string, opts: { byKeyboard?: boolean } = {}): Promise<void> {
+export async function openQuestion(panel: Locator, title: string): Promise<void> {
   const map = panel.locator('.session-panel-body .thread-map')
   await expect(map.locator('.thread-map-body')).toBeVisible()
   if (await map.getAttribute('data-shape') === 'rail') {
@@ -62,10 +57,7 @@ export async function openQuestion(panel: Locator, title: string, opts: { byKeyb
     await expect(overlay).toBeVisible()
   }
   const icon = map.locator('.thread-map-icon[aria-label="Open the question list"]')
-  if (opts.byKeyboard) {
-    await icon.focus()
-    await panel.page().keyboard.press('Enter')
-  } else await icon.click()
+  await icon.click()
   const drawer = panel.page().locator('.thread-drawer')
   await expect(drawer).toBeVisible()
   await drawer.locator('.thread-drawer-chip', { hasText: /^All\b/ }).click()

@@ -29,7 +29,7 @@ export function useShiftClickGuard(rowSelector: string): {
     // never reads as a move while a list that shrinks toward its anchored edge (a bottom-anchored
     // stack whose lower row left) still does: there the root's own top moves with the row. A row
     // moved when both its edges did; one that only grew or shrank (its note opened) stayed put.
-    // While its own entrance runs (a toast sliding down from the top edge) a row has no place yet:
+    // While its own entrance runs (a toast rising into the stack) a row has no place yet:
     // its edges are first taken once it stands still, so the entrance never reads as a move.
     const edges = new WeakMap<Element, [number, number] | null>();
     const entering = (row: Element) => typeof row.getAnimations === 'function'

@@ -10,7 +10,7 @@
  *    opens the dialog in the order the requests came, the corner card on every page holding the
  *    buttons and staying until it is answered, and
  *    Main's Needs you on the Org page listing it;
- *  - the stack: a card and a toast share the top of the window, centered, one width.
+ *  - the stack: a card and a toast share the bottom left corner, beside the rail, one width.
  *
  * The fixture server marks no test objects, while this automated window has a test-run label,
  * so this also pins that a live card shows there (the window re-reads the server's list).
@@ -25,6 +25,7 @@ import { holdApprovalsLock } from './approvals-lock'
 import { holdVaultLock } from './vault-lock'
 import { isolateUiPrefsContext } from './status-section-helpers'
 import { openSection, openTasksBy, sectionCount, taskSection } from './org-view-helpers'
+import { BOTTOM_LEFT, stackPlace } from './corner-stack-place'
 
 test.use({ video: process.env.APR_VIDEO || process.env.PW_VIDEO ? 'on' : 'off' })
 test.describe.configure({ mode: 'serial' })
@@ -349,9 +350,10 @@ function agentErrorEvent(agentId: string, error: string): string {
 type Box = { x: number; y: number; width: number; height: number }
 const overlaps = (a: Box, b: Box) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
 
-test('the stack: a toast and an approval card share the top of the window, centered, one width', async ({ page, request }) => {
-  // 2026-11-16, the user: "just show like noticiaton overlap on the top nice unified, just like IOS
-  // noticficaiton" (common/corner-stack.tsx; the source half is tests/web/corner-stack-guard.test.ts).
+test('the stack: a toast and an approval card share the bottom left corner, one width', async ({ page, request }) => {
+  // 2026-11-16, the user: "in notificaiton side pannel and as notificaiton on bot let", then "I said
+  // this notification is bottom left, bottom left, and you put it on top again" (translated)
+  // (common/corner-stack.tsx; the source half is tests/web/corner-stack-guard.test.ts).
   await page.setViewportSize({ width: 1280, height: 800 })
   const sock = await routeSocket(page)
   await page.goto('/')
@@ -383,46 +385,40 @@ test('the stack: a toast and an approval card share the top of the window, cente
   const t = (await toast.boundingBox())!
   await page.screenshot({ path: test.info().outputPath('corner.png') })
 
-  /** Where the stack is, as numbers a failure can say. */
-  const placed = async (w: number) => {
-    const b = (await card.boundingBox())!
-    const centered = Math.abs(b.x + b.width / 2 - w / 2) <= 1
-    const ok = b.y <= 24 && centered && Math.round(b.width) === Math.min(440, w - 32)
-    return ok ? 'top center' : `card x${Math.round(b.x)} y${Math.round(b.y)} w${Math.round(b.width)} in ${w}`
-  }
+  await expect.poll(() => stackPlace(page)).toBe(BOTTOM_LEFT)
   for (const [name, b] of [['card', c], ['toast', t]] as const) {
     expect(Math.round(b.width), `${name} has the stack's one width`).toBe(440)
-    expect(Math.abs(b.x + b.width / 2 - vp.width / 2), `${name} is centered in the window`).toBeLessThanOrEqual(1)
+    expect(Math.round(b.x - (sidebar.x + sidebar.width)), `${name} sits 16px right of the sidebar rail`).toBe(16)
     expect(overlaps(b, sidebar), `${name} covers no part of the sidebar`).toBe(false)
   }
-  expect(c.y, 'the card sits at the top').toBeLessThanOrEqual(24)
-  expect(t.y, 'the approval is nearest the top edge, the toast under it').toBeGreaterThanOrEqual(c.y + c.height - 1)
+  expect(Math.round(vp.height - (c.y + c.height)), 'the card sits 16px above the bottom edge').toBe(16)
+  expect(t.y + t.height, 'the approval is nearest the bottom corner, the toast above it').toBeLessThanOrEqual(c.y + 1)
   expect(overlaps(c, t)).toBe(false)
   expect(Math.abs(c.x - t.x), 'one column').toBeLessThanOrEqual(1)
 
-  // Collapsing the sidebar does not move the stack: nothing beside it decides where it is.
+  // Collapsing the sidebar moves the stack with the rail's edge, its width unchanged.
   await page.locator('.sidebar-collapse-btn').first().click()
   await expect.poll(async () => Math.round((await page.locator('.app-shell > .sidebar').boundingBox())!.width)).not.toBe(Math.round(sidebar.width))
-  await expect.poll(() => placed(vp.width)).toBe('top center')
+  await expect.poll(() => stackPlace(page)).toBe(BOTTOM_LEFT)
   await page.locator('.sidebar-collapse-btn').first().click()
-  // A narrow window with the sidebar open: still at the top, centered, inside the window.
+  // A narrow window with the sidebar open: still at the bottom left, inside the window.
   await page.setViewportSize({ width: 800, height: 600 })
-  await expect.poll(() => placed(800)).toBe('top center')
+  await expect.poll(() => stackPlace(page)).toBe(BOTTOM_LEFT)
+  const narrow = (await card.boundingBox())!
+  expect(narrow.x + narrow.width, 'the card stays inside a narrow window').toBeLessThanOrEqual(800)
   await page.setViewportSize(vp)
 
   // The notification center open: it lists the approval (and the toast) itself, so the stack's
-  // card and toast step aside; the stack centers right of it for anything else.
+  // card and toast step aside; the stack sits 16px right of the center for anything else.
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('notification:open-center')))
   const center = page.locator('.notification-panel')
   await expect(center).toBeVisible()
   await expect(center.getByTestId('approval-summary')).toBeVisible()
   await expect(card).toBeHidden()
   await expect(stack.locator('.notification-toast', { hasText: 'corner test notice' })).toBeHidden()
-  await expect.poll(async () => {
-    const p = (await center.boundingBox())!
-    const r = await stack.evaluate((el) => { const b = el.getBoundingClientRect(); return { left: b.left, width: b.width } })
-    return r.left >= p.x + p.width + 8 && Math.round(r.width) === 440
-  }).toBe(true)
+  await expect.poll(() => stackPlace(page)).toBe(BOTTOM_LEFT)
+  const p = (await center.boundingBox())!
+  expect(await stack.evaluate((el) => Math.round(el.getBoundingClientRect().left)), 'right of the open center').toBe(Math.round(p.x + p.width) + 16)
   // Its line opens the request over it; Escape closes that top layer alone, then the center.
   await center.getByTestId('approval-summary').click()
   await expect(page.getByTestId('approval-dialog')).toBeVisible()
@@ -539,7 +535,8 @@ test('the stack: a toast and an approval card share the top of the window, cente
   })).toBe(true)
   await expect(card3.getByRole('button', { name: 'Deny' })).toHaveCount(0)
   await expect(card3.getByText('Approve?')).toBeVisible()
-  // It sits at the top of the screen, as on a computer, across it with 8px each side, over the bar.
+  // On the phone it sits at the top of the screen (a computer keeps it at the bottom left), across
+  // it with 8px each side, over the bar.
   await expect.poll(async () => {
     const line = (await card3.boundingBox())!
     return line.y >= 0 && line.y <= 24 && Math.round(line.x) === 8 && Math.round(line.width) === 390 - 16

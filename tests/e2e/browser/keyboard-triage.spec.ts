@@ -15,6 +15,7 @@ import { isolateUiPrefs, showEverything } from './todo-panel-helpers'
 import { presetPanelDesign } from './status-section-helpers'
 import { holdPanelCountLock } from './panel-count-lock'
 import { watchColumnFades } from './column-fade-watch'
+import { BOTTOM_LEFT, stackPlace } from './corner-stack-place'
 
 const KEYS = ['a', 'b', 'c', 'd', 'e'] as const
 type Key = (typeof KEYS)[number]
@@ -296,13 +297,14 @@ test('Cmd+Shift+D completes the task, opens the next one that needs you, and Cmd
   await expect(done.locator('.notification-toast-body')).toBeVisible()
   await expect(done.locator('.notification-toast-kbd')).toHaveText('\u2318Z')
   await expect.poll(() => phase(page, 'b')).toBe('COMPLETE')
-  // The Undo sits in the one notice stack at the top of the window, over no composer.
+  // The Undo sits in the one notice stack at the bottom left, beside the rail, floating over the
+  // page: nothing reserves room for it, so its corner may lie over the first column's composer
+  // edge (at 1600x900 a few pixels of it do).
+  await expect.poll(() => stackPlace(page)).toBe(BOTTOM_LEFT)
   const box = (await done.boundingBox())!
-  expect(box.y).toBeLessThanOrEqual(24)
-  for (const k of ['a', 'c'] as const) {
-    const r = await col(page, k).locator('.chat-input-box').first().boundingBox()
-    expect(!!r && box.y + box.height > r.y, `${k} composer`).toBe(false)
-  }
+  const rail = (await page.locator('.app-shell > .sidebar').boundingBox())!
+  expect(Math.round(box.x - (rail.x + rail.width)), 'the Undo sits 16px right of the rail').toBe(16)
+  expect(box.y + box.height, 'the Undo sits at the bottom').toBeGreaterThan(page.viewportSize()!.height / 2)
   await page.screenshot({ path: `${SHOTS}/complete-next.png` })
   // A completed column was closed, not minimized: it never becomes a taskbar chip.
   await expect(chip(page, 'b')).toHaveCount(0)

@@ -6,7 +6,7 @@
  * so a toast never slides away from under the button being reached for. A
  * button runs its action and closes its toast. The queue rules are pure, in
  * kanban-toasts.ts; this file runs the one timeout they name. They show in the
- * window's one notice stack at the top with every other notice (corner-stack.tsx).
+ * window's one notice stack at the bottom left with every other notice (corner-stack.tsx).
  */
 import '@/styles/board-kanban-controls.css';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';

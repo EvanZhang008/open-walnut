@@ -458,9 +458,8 @@ test.describe('Tree Mode split screen', () => {
     })
     const panel = await openSheet(page)
     await expect(page.getByTestId('approval-card')).toHaveCount(1, { timeout: 15_000 })
-    // The card sits top center since every pop-up does, over the question list's icon in the
-    // right page: the list opens from the keyboard, as a reader reaches a covered control.
-    await openQuestion(panel, SPLIT_TITLES.Q111, { byKeyboard: true })
+    // The card sits at the bottom left, clear of the question list's icon at the top of the right page.
+    await openQuestion(panel, SPLIT_TITLES.Q111)
     await expectPages(panel, ['L 1', 'M 1.1', 'R 1.1.1'])
   })
 

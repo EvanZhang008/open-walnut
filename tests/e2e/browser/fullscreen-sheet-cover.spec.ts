@@ -8,10 +8,12 @@
  *
  * Each sheet the user opens is checked three ways:
  *   - its box is the shared sheet's (12px top and bottom, the side margin from the page area;
- *     a notice in the stack at the top never moves it);
+ *     a notice in the stack at the bottom left never moves it);
  *   - no stacking context paints it from inside a box that clips smaller than the sheet (the
  *     cause above; a hit test cannot see it, WebKit only cut the paint);
- *   - its corners and its middle answer a hit test with the sheet (over the dim).
+ *   - its corners and its middle answer a hit test with the sheet (over the dim); a notice in the
+ *     stack floats over the sheet's bottom left by design, so a point under the stack may answer
+ *     with the stack, never with anything else.
  * The sheets: a session panel and its Side threads in both of Home's columns, Side threads over a
  * full-screen panel; on the Org page the Org chat's Side threads (the chat itself has no full
  * screen), the Org side bar, and a task opened beside the page with its Side threads.
@@ -114,7 +116,9 @@ async function cover(page: Page): Promise<Cover> {
       ['bottom left', s.left + 16, s.bottom - 16], ['bottom right', s.right - 16, s.bottom - 16],
       ['middle', (s.left + s.right) / 2, (s.top + s.bottom) / 2],
     ]
-    const missed = points.filter(([, x, y]) => { const hit = document.elementFromPoint(x, y); return !hit || !sheet.contains(hit) })
+    // The notice stack floats over every sheet (corner-stack.css, z 9200 over the sheet's 9001).
+    const stack = document.querySelector('[data-testid="corner-stack"]')
+    const missed = points.filter(([, x, y]) => { const hit = document.elementFromPoint(x, y); return !hit || !(sheet.contains(hit) || !!stack?.contains(hit)) })
       .map(([where, x, y]) => `${where} (${Math.round(x)}, ${Math.round(y)}): ${document.elementFromPoint(x, y) ? name(document.elementFromPoint(x, y)!) : 'nothing'}`)
     return { sheet: name(sheet), box: [s.left, s.top, s.right, s.bottom].map((v) => Math.round(v)) as Cover['box'], want: want.map((v) => Math.round(v)) as Cover['want'], cutBy, missed }
   })
@@ -130,7 +134,9 @@ async function expectCovers(page: Page, where: string): Promise<void> {
 }
 
 async function openThreads(panel: Locator): Promise<Locator> {
-  await directControl(panel, 'btw').click()
+  // The notice stack floats over the sheet's bottom left by design (corner-stack.css): a waiting
+  // approval card there may lie over the left end of its composer, so the button is pressed where it is.
+  await directControl(panel, 'btw').evaluate((el) => (el as HTMLElement).click())
   const pop = panel.locator('.side-question-popover').first()
   await expect(pop).toBeVisible()
   return pop
@@ -153,19 +159,14 @@ async function closeThreads(page: Page, panel: Locator): Promise<void> {
   await expect(panel.locator('.side-question-popover')).toHaveCount(0)
 }
 
-/** The panel's own button: a click beside the open pop-up first only closes the pop-up. The
- *  notice stack at the top center (2026-11-16) may lie over the button, so it is pressed where it is. */
+/** The panel's own button: a click beside the open pop-up first only closes the pop-up. */
 async function leavePanelFullScreen(panel: Locator): Promise<void> {
   const button = panel.locator('.session-panel-expand').first()
-  const press = () => button.evaluate((el) => {
-    for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup']) el.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, composed: true }))
-    ;(el as HTMLElement).click()
-  })
   if (await panel.locator('.side-question-popover').count()) {
-    await press()
+    await button.click()
     await expect(panel.locator('.side-question-popover')).toHaveCount(0)
   }
-  if (await panel.evaluate((el) => el.classList.contains('open-walnut-fullscreen'))) await press()
+  if (await panel.evaluate((el) => el.classList.contains('open-walnut-fullscreen'))) await button.click()
   await expect(panel).not.toHaveClass(/open-walnut-fullscreen/)
 }
 
@@ -186,9 +187,7 @@ test('Home: a session panel and its Side threads cover the window from either co
     }
     for (const [label, panel] of [['second column', second], ['first column', first]] as const) {
       await threadsFullScreen(page, panel, `${corner}, Side threads of the ${label}`)
-      // The notice stack sits at the top center over the page (2026-11-16) and may lie over this
-      // column's header: the button is pressed where it is, the sheet is what this test checks.
-      await panel.locator('.session-panel-expand').dispatchEvent('click')
+      await panel.locator('.session-panel-expand').click()
       await expect(panel).toHaveClass(/open-walnut-fullscreen/)
       await expectCovers(page, `${corner}, session panel of the ${label}`)
       // Side threads over the full-screen panel: its own sheet, the panel under it hidden.

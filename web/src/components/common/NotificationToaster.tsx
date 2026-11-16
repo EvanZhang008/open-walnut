@@ -1,5 +1,5 @@
 /**
- * NotificationToaster — the single toast renderer, in the notice stack at the top of the window
+ * NotificationToaster — the single toast renderer, in the notice stack at the bottom left of the window
  * (corner-stack.tsx) with every other notice.
  *
  * Replaces CronToast + PermissionToast + OperationErrorToast (and renders the
@@ -198,7 +198,7 @@ export function NotificationToaster() {
   // line that opens the panel, so the stack never runs off the screen. One the person is
   // using (pointer on it, a note typed) stays; the other places go to the newest asks.
   // An ask nobody touched for ASK_TOAST_UP_MS folds too, so two old asks never sit over
-  // the page's top corner for good.
+  // the page's corner for good.
   const pendingAsks = shown.filter((t) => t.kind === 'permission' && !t.resolved);
   const allAsks = allToasts.filter((t) => t.kind === 'permission' && !t.resolved);
   const now = useAskToastClock(pendingAsks.map((t) => t.id), centerOpen ? allAsks.map((t) => t.id) : []);
@@ -664,7 +664,7 @@ function PermissionToast({ n, onDismiss, onPin, onRead, onLeave, navigate, phone
         /* The whole ask, answerable in the popup: every question, every option,
            multi-select, per-question free text. Height-capped + internally
            scrolled (`scrollable`) so a many-question ask keeps its Submit button
-           on screen inside a 380px top-right toast. */
+           on screen inside the corner's toast. */
         <PermissionAnswerForm
           questions={questionForm}
           disabled={busy}

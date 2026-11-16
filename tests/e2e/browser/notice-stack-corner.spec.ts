@@ -1,8 +1,10 @@
 /**
- * The notice stack sits at the top of the window, centered, one width, whatever the page beside it
- * has open (web/src/components/common/corner-stack.tsx). 2026-11-16, the user: "also somehow the
- * notificaiton pill will adopt the width based on other pannel on the right, I think not need, just
- * show like noticiaton overlap on the top nice unified, just like IOS noticficaiton pelase".
+ * The notice stack sits at the bottom left of the window, 16px right of the sidebar rail, one
+ * width, whatever the page beside it has open (web/src/components/common/corner-stack.tsx).
+ * 2026-11-16, the user: "in notificaiton side pannel and as notificaiton on bot let", "the
+ * notificaiton pill will adopt the width based on other pannel on the right, I think not need",
+ * and after a misreading put it at the top: "I said this notification is bottom left, bottom
+ * left, and you put it on top again" (translated).
  *
  * A toast is raised on Home and measured with Home's right side empty and with a session column
  * open there, at two window widths: its place and width never follow that panel. The source half
@@ -11,7 +13,7 @@
 import { expect, test, type Page, type WebSocketRoute } from '@playwright/test'
 import { pausePageClock } from './page-clock'
 
-const SHOTS = process.env.NOTICE_TOP_SHOTS || '/tmp/notice-stack-top'
+const SHOTS = process.env.NOTICE_CORNER_SHOTS || '/tmp/notice-stack-corner'
 
 async function routeSocket(page: Page): Promise<() => WebSocketRoute | null> {
   let socket: WebSocketRoute | null = null
@@ -27,11 +29,12 @@ function agentErrorEvent(agentId: string, error: string): string {
 async function measure(page: Page) {
   return page.evaluate(() => {
     const r = document.querySelector('[data-testid="corner-stack"]')!.getBoundingClientRect()
+    const rail = document.querySelector('.app-shell > .sidebar')!.getBoundingClientRect()
     const right = document.querySelector('.main-page-right')?.getBoundingClientRect()
     const column = document.querySelector('.main-page-session-column[data-column-id]')?.getBoundingClientRect()
     return {
-      top: Math.round(r.top), left: r.left, width: Math.round(r.width), vw: window.innerWidth,
-      offCenter: Math.abs(r.left + r.width / 2 - window.innerWidth / 2),
+      bottomGap: Math.round(window.innerHeight - r.bottom), left: r.left, width: Math.round(r.width), vw: window.innerWidth,
+      fromRail: Math.round(r.left - rail.right),
       right: Math.round(right?.width ?? 0), column: Math.round(column?.width ?? 0),
     }
   })
@@ -40,7 +43,7 @@ async function measure(page: Page) {
 test.describe.configure({ timeout: 90_000 })
 
 for (const width of [1280, 1100]) {
-  test(`a toast on Home stays at the top center, 440px wide, with the right panel empty or holding a session (${width}px)`, async ({ page }, info) => {
+  test(`a toast on Home stays at the bottom left beside the rail, 440px wide, with the right panel empty or holding a session (${width}px)`, async ({ page }, info) => {
     await page.setViewportSize({ width, height: 800 })
     const sock = await routeSocket(page)
     await page.route('**/api/quiet*', (r) => r.fulfill({ json: { quiet: false } }))
@@ -51,8 +54,8 @@ for (const width of [1280, 1100]) {
     await page.clock.install()
     await pausePageClock(page)
 
-    sock()!.send(agentErrorEvent('agent-notice-top', '401 unauthorized (notice stack top)'))
-    const toast = page.locator('[data-testid="corner-stack"] .notification-toast', { hasText: 'notice stack top' })
+    sock()!.send(agentErrorEvent('agent-notice-corner', '401 unauthorized (notice stack corner)'))
+    const toast = page.locator('[data-testid="corner-stack"] .notification-toast', { hasText: 'notice stack corner' })
     await expect(toast).toBeVisible({ timeout: 10_000 })
     await expect.poll(() => toast.evaluate((el) => el.getAnimations().length)).toBe(0)
 
@@ -76,8 +79,8 @@ for (const width of [1280, 1100]) {
     expect(open.column, 'a session column opened on the right').toBeGreaterThan(200)
     expect(empty.column).toBe(0)
     for (const [name, m] of [['no column', empty], ['session column', open]] as const) {
-      expect(m.top, `${name}: at the top`).toBeLessThanOrEqual(24)
-      expect(m.offCenter, `${name}: centered in the window`).toBeLessThanOrEqual(1)
+      expect(m.bottomGap, `${name}: at the bottom`).toBe(16)
+      expect(m.fromRail, `${name}: 16px right of the sidebar rail`).toBe(16)
       expect(m.width, `${name}: the one width`).toBe(440)
     }
     expect(open.left).toBeCloseTo(empty.left, 0)

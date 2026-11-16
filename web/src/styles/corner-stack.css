@@ -1,7 +1,7 @@
-/* The one place for Walnut's notices (components/common/corner-stack.tsx): the top of the window,
-   centered, one fixed width, over the page, like an iOS notification (2026-11-16). Its place and
-   width never follow a panel, a composer or a sheet. Each kind is a .corner-slot; flex `order`
-   puts a higher one nearer the top edge (column-reverse: the lowest order is laid out last). */
+/* The one place for Walnut's notices (components/common/corner-stack.tsx): the bottom left of the
+   window, just right of the sidebar's icon rail, one fixed width, over the page (2026-11-16). Its
+   width never follows a panel, a composer or a sheet. Each kind is a .corner-slot; flex `order`
+   puts a higher one nearer the bottom edge, and more notices stack upward. */
 .corner-stack {
   /* One look for every card in the stack (toasts, approval cards, board toasts). */
   --corner-card-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.08);
@@ -9,18 +9,16 @@
   --corner-card-pad: 10px 12px 10px 14px;
   --corner-card-pad-compact: 6px 10px 6px 14px;
   position: fixed;
-  top: 12px;
-  /* Centered in the window; with the notification center open, in the space right of it
-     (--corner-stack-from, corner-stack.tsx), the width the same. */
-  left: var(--corner-stack-from, 0px);
-  right: 0;
-  margin: 0 auto;
+  bottom: 16px;
+  /* 16px right of the sidebar's icon rail, or of the notification center while it is open
+     (--corner-stack-rail, corner-stack.tsx); the width the same everywhere. */
+  left: calc(var(--corner-stack-rail, 0px) + 16px);
   width: min(440px, calc(100vw - 32px));
   /* Over a full-screen sheet (9001), under every modal's mask (9300 and up) and menus (9999):
      a dialog dims it, a picker opens over it. */
   z-index: 9200;
   display: flex;
-  flex-direction: column-reverse;
+  flex-direction: column;
   justify-content: flex-end;
   /* Between kinds; each kind keeps its own lines closer together. */
   gap: 10px;
@@ -29,7 +27,7 @@
   pointer-events: none;
 }
 
-/* A new toast slides down from the top edge it sits at (notification-toast-in, globals.css);
+/* A new toast rises from the bottom edge it sits at (notification-toast-in, globals.css);
    a board's toast the same. */
 .corner-stack .kanban-toast { animation: notification-toast-in 0.25s ease-out; }
 @media (prefers-reduced-motion: reduce) {

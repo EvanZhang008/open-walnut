@@ -1,10 +1,11 @@
 /**
- * Every notice Walnut pops up by itself shows in ONE place: the notice stack at the top of the
- * window, centered, one fixed width (web/src/components/common/corner-stack.tsx). 2026-11-04, the
+ * Every notice Walnut pops up by itself shows in ONE place: the notice stack at the bottom left of
+ * the window, just right of the sidebar rail, one fixed width (web/src/components/common/corner-stack.tsx). 2026-11-04, the
  * user: "can we be consistent all notificaiton is bottom left" made it one stack; 2026-11-16,
  * the user: "the notificaiton pill will adopt the width based on other pannel on the right, I
  * think not need, just show like noticiaton overlap on the top nice unified, just like IOS
- * noticficaiton pelase" moved it to the top and took away every width that followed a panel.
+ * noticficaiton pelase" took away every width that followed a panel (it was put at the top by a
+ * misreading; the user put it back: "I said this notification is bottom left, bottom left, and you put it on top again" (translated)).
  *
  * This fails when a NEW notice places itself instead of going through <CornerSlot>:
  *  - any CSS rule in web/src or plugin-store that pins an element to a corner of the window (position: fixed
@@ -160,15 +161,17 @@ describe('one corner for every notice', () => {
     expect(read('web/src/popout/openPopout.ts')).toMatch(/appendToCornerStack\(el, CORNER_ORDER\.flash\)/);
   });
 
-  it('approvals sit nearest the top edge: a script waits on them', () => {
+  it('approvals sit nearest the corner: a script waits on them', () => {
     const src = read('web/src/components/common/corner-stack.tsx');
     const order = (k: string) => Number(src.match(new RegExp(`\\b${k}: (\\d+)`))?.[1]);
     expect(order('approvals')).toBeGreaterThan(Math.max(order('toasts'), order('board'), order('flash'), order('hostConnect')));
     // The background connect card stays for minutes: nearer the edge than the passing toasts, so they never move it.
     expect(order('hostConnect')).toBeGreaterThan(Math.max(order('toasts'), order('board'), order('flash')));
-    // A higher order nearer the top: the stack lays its slots out bottom to top.
+    // A higher order nearer the bottom corner: the stack lays its slots out top to bottom, held
+    // at its bottom edge, so a new notice stacks upward.
     const stack = cssRules('web/src/styles/corner-stack.css').find((r) => r.selector === '.corner-stack')!;
-    expect(stack.body).toMatch(/flex-direction:\s*column-reverse/);
+    expect(stack.body).toMatch(/flex-direction:\s*column;/);
+    expect(stack.body).toMatch(/justify-content:\s*flex-end/);
   });
 
   it('only crowding takes the short forms; only the open notification center hides the stack', () => {
@@ -190,14 +193,15 @@ describe('one corner for every notice', () => {
     // 2026-11-16, the user: "the notificaiton pill will adopt the width based on other pannel on
     // the right, I think not need". What it measured to follow them, and what it wrote back.
     for (const gone of [
-      '.chat-input-container', '.scroll-to-bottom-btn', '.draft-composer-bar', '.app-shell > .sidebar',
+      '.chat-input-container', '.scroll-to-bottom-btn', '.draft-composer-bar', '.todo-panel', '.main-page-chat',
       '--corner-stack-width', '--corner-stack-left', '--corner-stack-bottom', 'elementsFromPoint',
       'corner-sheet-inset', 'cornerRoom', 'cornerFit', '--corner-room', '--corner-fit', 'dataset.over',
       'leftColumnRight', 'syncRoom', 'syncSheetInset',
     ]) expect(src, gone).not.toContain(gone);
-    // Its one look at the page's layout is the open notification center's right edge (the rest:
-    // shown/inSight, and keepClearOfCorner's own rect and its target's).
-    expect(src.match(/getBoundingClientRect\(\)/g)?.length).toBeLessThanOrEqual(5);
+    // Its looks at the page's layout are its left edge: the sidebar rail's right edge and the open
+    // notification center's (the rest: shown/inSight, and keepClearOfCorner's own rect and its target's).
+    expect(src.match(/getBoundingClientRect\(\)/g)?.length).toBeLessThanOrEqual(6);
+    expect(src).toMatch(/sidebar\.getBoundingClientRect\(\)\.right/);
     expect(src).toMatch(/center!\.getBoundingClientRect\(\)\.right/);
     // Nothing in the page makes room for it or reads the room it took.
     const bad = listed(['web/src/**/*.ts', 'web/src/**/*.tsx', 'web/src/**/*.css'])
@@ -212,15 +216,16 @@ describe('one corner for every notice', () => {
     expect(toaster).toMatch(/older > 0 && !moreHost &&/);
   });
 
-  it('the stack sits at the top, centered, one width on desktop, and across the top under the safe area on the phone', () => {
+  it('the stack sits at the bottom left, right of the sidebar rail, one width on desktop, and across the top under the safe area on the phone', () => {
+    // 2026-11-16, the user, after it was put at the top: "I said this notification is bottom left, bottom left, and you put it on top again" (translated).
     const stack = cssRules('web/src/styles/corner-stack.css').find((r) => r.selector === '.corner-stack')!;
-    expect(stack.body).toMatch(/top:\s*12px/);
-    expect(has(stack.body, 'bottom')).toBe(false);
+    expect(stack.body).toMatch(/bottom:\s*16px/);
+    expect(has(stack.body, 'top')).toBe(false);
     expect(stack.body).toMatch(/width:\s*min\(440px, calc\(100vw - 32px\)\)/);
-    // Centered between its left edge (the window's, or the open notification center's right) and the window's right.
-    expect(stack.body).toMatch(/left:\s*var\(--corner-stack-from, 0px\)/);
-    expect(stack.body).toMatch(/right:\s*0/);
-    expect(stack.body).toMatch(/margin:\s*0 auto/);
+    // 16px right of the rail (or of the open notification center), never centered.
+    expect(stack.body).toMatch(/left:\s*calc\(var\(--corner-stack-rail, 0px\) \+ 16px\)/);
+    expect(stack.body).not.toMatch(/margin:\s*0 auto/);
+    expect(has(stack.body, 'right')).toBe(false);
     const phone = cssRules('web/src/styles/phone-layout.css').find((r) => r.selector === 'html body .corner-stack');
     expect(phone?.body).toMatch(/top:\s*calc\(var\(--wn-safe-top\) \+ 8px\)/);
     expect(phone?.body ?? '').not.toMatch(/top:\s*auto/);
