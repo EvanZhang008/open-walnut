@@ -281,6 +281,17 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
 
     let cancelled = false;
     const controller = new AbortController();
+    // A full read the server could not do (5xx) or that timed out is a live read that
+    // failed, not a broken session: keep what is shown and take the stale banner,
+    // whose retry replaces it once the read works (the delta path's rule). Only a
+    // 4xx is an error to show (2026-11-16: a deploy-time tail failure left "Failed to
+    // load history" up with no retry).
+    const failFullRead = (e: Error) => {
+      const status = (e as { status?: unknown }).status;
+      if (e.name === 'TimeoutError' || (typeof status === 'number' && status >= 500)) {
+        setStale(e.name === 'TimeoutError' ? 'history read timed out' : (e.message || 'live read failed'));
+      } else setError(e.message);
+    };
     setError(null);
     setStale(null);
     setLoadingFrom(null);
@@ -547,7 +558,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           // the next delta's promotion.
         })
         .catch((e: Error) => {
-          if (!cancelled) { endP2('error'); setError(e.message); }
+          if (!cancelled) { endP2('error'); failFullRead(e); }
         })
         .finally(() => {
           if (!cancelled) { setPhase2Pending(false); setFirstCheckPending(false); }
@@ -683,7 +694,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
               }
             })
             .catch((e: Error) => {
-              if (!cancelled) { endP2('error'); fallBackToLateCache(shown()); setError(e.message); }
+              if (!cancelled) { endP2('error'); fallBackToLateCache(shown()); failFullRead(e); }
             })
             .finally(() => {
               if (!cancelled) { setLoading(false); setPhase2Pending(false); setFirstCheckPending(false); }

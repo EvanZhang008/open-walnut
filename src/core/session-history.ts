@@ -294,6 +294,12 @@ function sessionJsonlHint(sessionId: string, host: string | undefined): SessionJ
   return hint;
 }
 
+/** A history read that did not happen (as opposed to a conversation with no messages):
+ *  callers answer degraded and keep what they had, never an empty history. */
+export class HistoryReadFailedError extends Error {
+  constructor(message: string) { super(message); this.name = 'HistoryReadFailedError'; }
+}
+
 /**
  * Parses that came from a BOUNDED SLIDING WINDOW rather than the whole file.
  *
@@ -1730,8 +1736,18 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
     }
     const tail = await readSessionHistoryTailWindow(sessionId, cwd, host, undefined, tailParseOpts);
     if (tail) return handOff(tail);
-    // Tail unavailable too — last resort is the previous parse, else empty.
-    return handOff(getCachedSessionHistory(sessionId, host) ?? []);
+    // Tail unavailable too: the previous parse, else a FAILED read. Never an empty
+    // history: the file exists (it is over the ceiling), so [] would answer "this
+    // conversation has no messages" and replace what the client shows (2026-11-16: an
+    // 811 MB local transcript's tail read failed during a deploy and an open chat went
+    // to "No conversation history found" for 8 s). A throw takes the route's degraded
+    // answer (its cached or disk copy, marked stale) and the client keeps its rows.
+    const previous = getCachedSessionHistory(sessionId, host);
+    if (previous) return handOff(previous);
+    log.session.warn('history tail of an over-ceiling transcript could not be read', {
+      sessionId, host: host ?? '__local__', fileSize,
+    });
+    throw new HistoryReadFailedError('This conversation could not be read right now.');
   };
   // The stat already says the whole read would be refused: go straight to the
   // tail instead of spending a round trip on a read that cannot complete.
@@ -1818,6 +1834,9 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
     }
   }
 
+  // Content that would not parse is a failed read, not an empty conversation (the
+  // same rule as the over-ceiling tail above); only a missing source answers [].
+  if (!messages && result) throw new HistoryReadFailedError('This conversation could not be read right now.');
   if (!messages) return handOff([]);
 
   // Attach subagent child messages (works for both local and remote sessions).

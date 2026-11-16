@@ -39,6 +39,8 @@ const ALLOWED_CEILING_WARNS: Record<string, string> = {
   'DaemonFileReader: read exceeded the byte ceiling — refusing': 'bytes moved before the refusal',
   // The tail may show a rewound-away branch as live: a correctness loss.
   'rewound transcript over the byte ceiling — bounded tail is served UNFILTERED': 'served history may be wrong',
+  // The tail itself could not be read and nothing was cached: the request fails.
+  'history tail of an over-ceiling transcript could not be read': 'the read failed outright',
 }
 
 describe('byte ceiling refusals', () => {

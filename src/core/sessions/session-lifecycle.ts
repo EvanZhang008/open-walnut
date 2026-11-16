@@ -1906,7 +1906,17 @@ export async function readSessionRichHistory(sessionId: string, tail?: number): 
     sourceAvailable = history.sourceAvailable;
     historyWindowed = history.windowed;
   } catch (err) {
-    throw new SessionControlError(err instanceof Error ? err.message : String(err), 502);
+    // A read that did not happen (HistoryReadFailedError) keeps the frozen contract:
+    // 200 with the last good copy, else empty with historyUnavailable, never a 502.
+    const { HistoryReadFailedError, getCachedSessionHistory } = await import('../session-history.js');
+    if (!(err instanceof HistoryReadFailedError)) {
+      throw new SessionControlError(err instanceof Error ? err.message : String(err), 502);
+    }
+    const kept = getCachedSessionHistory(sessionId, record.host)
+      ?? (await (await import('../history-disk-cache.js')).readHistoryCache(sessionId))?.messages;
+    if (!kept?.length) return { messages: [], total: 0, historyUnavailable: err.message };
+    messages = kept;
+    sourceAvailable = true;
   }
 
   // "Nothing to show" may ONLY be decided after the fork ancestors are consulted

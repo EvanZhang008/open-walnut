@@ -52,9 +52,10 @@ export interface ActiveContext {
 const tick = () => new Promise<void>((r) => setImmediate(r));
 
 /**
- * The old session's active context as history rows. Never throws for an
- * unreadable transcript: it falls back to the parsed history after the last
- * compaction row (logged), and to nothing at all.
+ * The old session's active context as history rows. A CLI chain that cannot be
+ * read falls back to the parsed history after the last compaction row (logged);
+ * a history that cannot be read either throws (HistoryReadFailedError), so a
+ * switch never carries an empty context in place of the real one.
  */
 export async function readActiveContext(record: SessionRecord): Promise<ActiveContext> {
   if (engineCaps(record.engine).historySource === 'acp-journal') {

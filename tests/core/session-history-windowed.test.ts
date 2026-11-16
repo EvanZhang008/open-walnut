@@ -19,6 +19,7 @@
  * These tests drive readSessionHistory itself (not a helper), with the ceiling lowered
  * so a small fixture takes the same degradation path production takes.
  */
+import fs from 'node:fs';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -28,6 +29,7 @@ import { mockLocalDaemonReader } from '../helpers/mock-local-daemon-reader.js';
 vi.mock('../../src/constants.js', () => createMockConstants());
 const delayedRanges = vi.hoisted(() => ({ small: false, entered: undefined as (() => void) | undefined, release: undefined as Promise<void> | undefined }));
 const wholeReads = vi.hoisted(() => [] as string[]);
+const failRanges = vi.hoisted(() => ({ on: false }));
 vi.mock('../../src/core/daemon-file-reader.js', () => {
   const actual = mockLocalDaemonReader();
   class Reader extends actual.DaemonFileReader {
@@ -36,6 +38,7 @@ vi.mock('../../src/core/daemon-file-reader.js', () => {
       return super.readFile(remotePath);
     }
     async readFileRange(remotePath: string, start: number) {
+      if (failRanges.on) return null;
       const result = await super.readFileRange(remotePath, start);
       if (delayedRanges.small && result && result.fileSize - start <= 2048) {
         delayedRanges.entered?.();
@@ -73,6 +76,7 @@ beforeEach(async () => {
   delayedRanges.entered = undefined;
   delayedRanges.release = undefined;
   wholeReads.length = 0;
+  failRanges.on = false;
 });
 
 afterEach(async () => {
@@ -144,6 +148,44 @@ describe('whale-session bounded tail', () => {
     expect(messages.map(m => m.text)).toContain('latest question');
     expect(wholeReads.filter(p => p.endsWith(`${sid}.jsonl`))).toEqual([]);
     expect(warn.mock.calls.map(c => c[0])).toEqual([]);
+  });
+
+  // The class: a read that did not happen must never answer as an existing, empty
+  // conversation (the client replaces what it shows with "No conversation history
+  // found"). 2026-11-16: an 811 MB transcript's tail read failed during a deploy.
+  it('an over-ceiling tail that cannot be read fails the read instead of answering empty', async () => {
+    const { HistoryReadFailedError } = await import('../../src/core/session-history.js');
+    const sid = 'whale-tail-fails';
+    await writeLines(sid, [...padding(60), userLine('latest question', '2026-01-02T00:00:00.000Z')]);
+    process.env.WALNUT_MAX_FILE_READ_BYTES = '4096';
+    failRanges.on = true;
+    await expect(readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true }))
+      .rejects.toBeInstanceOf(HistoryReadFailedError);
+  });
+
+  it('an over-ceiling tail that cannot be read serves the previous parse when there is one', async () => {
+    const sid = 'whale-tail-fails-cached';
+    await writeLines(sid, [...padding(60), userLine('latest question', '2026-01-02T00:00:00.000Z')]);
+    // A cold tail-bounded read caches its window (the over-ceiling tail itself is not cached).
+    const first = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true, maxColdReadBytes: 4096 });
+    expect(first.map(m => m.text)).toContain('latest question');
+    process.env.WALNUT_MAX_FILE_READ_BYTES = '4096';
+    // The file changes (so the cache is not fresh) and the next tail read fails.
+    await fsp.appendFile(jsonlPath(sid), JSON.stringify(asstLine('later answer', '2026-01-02T00:00:09.000Z')) + '\n');
+    failRanges.on = true;
+    const again = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+    expect(again.map(m => m.text)).toContain('latest question');
+  });
+
+  it('the only empty answer is a missing source: every [] return in the reader is that one', () => {
+    // Enumerated from the source: a new empty return in readSessionHistoryInner fails here
+    // until it is shown to be a missing file, not a failed read.
+    const src = fs.readFileSync(path.resolve(__dirname, '../../src/core/session-history.ts'), 'utf8');
+    const inner = src.slice(src.indexOf('async function readSessionHistoryInner('));
+    const body = inner.slice(0, inner.indexOf('\n}\n'));
+    const empties = [...body.matchAll(/handOff\(\[\]\)|handOff\([^)]*(?:\?\?|\|\|) \[\]\)|return \[\];/g)].map(m => m[0]);
+    expect(empties).toEqual(['handOff([])']);
+    expect(body).toMatch(/if \(!messages && result\) throw new HistoryReadFailedError[^\n]*\n\s*if \(!messages\) return handOff\(\[\]\);/);
   });
 
   it('a full read is NOT marked windowed (the flag is not sticky per session)', async () => {
