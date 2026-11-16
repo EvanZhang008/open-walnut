@@ -400,8 +400,6 @@ struct DiffComparePickerView: View {
     let pick: (DiffCompare) -> Void
 
     @State private var query = ""
-    /// The search is active (its field focused, the keyboard up).
-    @State private var searching = false
 
     var body: some View {
         List {
@@ -484,29 +482,25 @@ struct DiffComparePickerView: View {
         }
         // A field under the title, as the app's other searches: left to iOS 26, a sheet
         // folds it into a round bottom-bar button with no glyph that reads as nothing.
-        .searchable(text: $query, isPresented: $searching, placement: .navigationBarDrawer(displayMode: .always), prompt: "Branch, commit or message")
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Branch, commit or message")
         .navigationTitle("Compare With")
         .navigationBarTitleDisplayMode(.inline)
         .task { if model.refs == nil { await model.loadRefs() } }
     }
 
-    /// A pick pops this page, so the search ends first. Popped while active, its field and
-    /// keyboard stayed over the diff the pick led to and took the taps meant for that
-    /// page's selection bar (CI, from 2026-11-11: "Copy said nothing"). The pop waits until
-    /// the search has finished going away: popping in the same update, or in the update that
-    /// saw the search end, dropped the pop while the search bar was still animating out, and
-    /// the picker stayed on screen with the pick made (CI and lane B, 2026-11-15 and 11-16:
-    /// "the commit is not the comparison").
+    /// A pick makes the comparison and pops this page. The keyboard goes down first: on iOS 26
+    /// an active search field rides on top of it, and popped with it up, the field and keyboard
+    /// stayed over the diff the pick led to and took the taps meant for that page's selection
+    /// bar (CI, from 2026-11-11: "Copy said nothing"). The search itself is left to the pop:
+    /// ending it from code (a bound `isPresented`) made iOS 26 drop the pop that followed, in
+    /// the same update, after its animation or through `dismiss`, and the picker stayed on
+    /// screen with the pick made (CI and lane B, 2026-11-15 and 11-16: "the commit is not the
+    /// comparison").
     private func choose(_ option: DiffCompare) {
-        guard searching else { pick(option); return }
-        withAnimation {
-            searching = false
-        } completion: {
-            pick(option)
-        }
         UIApplication.shared.sendAction(
             #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
         )
+        pick(option)
     }
 
     /// The comparison on the page now (a short sha matches its full one).
