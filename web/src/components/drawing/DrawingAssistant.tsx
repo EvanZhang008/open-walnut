@@ -7,7 +7,8 @@
  * of the first question) in its plain chat mode, as the browser side panel and Mail use it. Its asks
  * are conversations, not work for the board, so their task is not pinned.
  */
-import { useCallback, useRef } from 'react';
+import { useRef } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { AskObjectDrawer } from '@/components/chat/AskObjectDrawer';
 import type { AskSessionLaunch } from '@/components/chat/ask-object-session';
 import { DRAWING_ASSISTANT_AGENT, drawingAssistantContext, drawingAssistantKey } from './drawing-assistant-context';
@@ -21,13 +22,16 @@ export interface DrawingAssistantProps {
   onLeave(): void;
 }
 
+/** Its asks are conversations, not work for the board: their task is not pinned. Module level, so
+ *  it holds no render (useLeanCallback.ts). */
+function unpinned(body: AskSessionLaunch): AskSessionLaunch {
+  return { ...body, taskMeta: { ...body.taskMeta, pinTier: null } };
+}
+
 export function DrawingAssistant({ path, title, onClose, onLeave }: DrawingAssistantProps) {
   const panel = useRef<HTMLElement>(null);
-  const latest = useRef({ path, title });
-  latest.current = { path, title };
   // The first question carries the drawing as it is named then (a rename since opening included).
-  const prepareContext = useCallback(async () => drawingAssistantContext(latest.current.path, latest.current.title), []);
-  const adjustLaunch = useCallback((body: AskSessionLaunch): AskSessionLaunch => ({ ...body, taskMeta: { ...body.taskMeta, pinTier: null } }), []);
+  const prepareContext = useLeanCallback(async () => drawingAssistantContext(path, title), [path, title]);
   const objectKey = drawingAssistantKey(path);
   return (
     <aside ref={panel} className="drawing-assistant" aria-label="Drawing assistant">
@@ -48,7 +52,7 @@ export function DrawingAssistant({ path, title, onClose, onLeave }: DrawingAssis
           contextBlock={drawingAssistantContext(path, title)}
           contextName="Drawing you are changing"
           prepareContext={prepareContext}
-          adjustLaunch={adjustLaunch}
+          adjustLaunch={unpinned}
           // Escape in the chat hands the keys back to the drawing; an Escape anywhere else (the drawer
           // hears every one on the page) is the canvas's own. The panel closes only from its button.
           onClose={() => { if (panel.current?.contains(document.activeElement)) onLeave(); }}
