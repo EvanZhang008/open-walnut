@@ -181,6 +181,7 @@ import {
   MIN_EVERY_MS,
   PENDING_FIRE_REPLAY_MS,
   TRIGGER_STATE_TTL_MS,
+  applyMachineFault,
   checkCallerEnv,
   checkGatewayCall,
   createCheckCallers,
@@ -238,6 +239,7 @@ import {
   resolveGatewayCallerSid,
   SHIM_CORE_BASENAME,
   shimCoreNeedsCopy,
+  gatewayApiAnswerOf,
   type GatewayErrorCode,
   type GatewayResponse,
 } from './gateway-core.js'
@@ -5793,6 +5795,8 @@ function cmdGatewayResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
     relayId?: number; error?: string
     errorCode?: string; detail?: unknown
   }
+  // How Walnut's API answered the op (a server that sends it), for a check run's machine faults.
+  const api = gatewayApiAnswerOf(cmd.api)
   // gateway-result-gz-v1: a big answer's result comes gzipped. Twin of daemon-source.ts.
   let result = cmd.result as Record<string, unknown> | undefined
   if (typeof cmd.resultGz === 'string') {
@@ -5835,6 +5839,7 @@ function cmdGatewayResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
       error: {
         code: (errorCode as GatewayErrorCode) || 'internal',
         message: error || 'gateway request failed',
+        ...(api ? { api } : {}),
       },
     }
     if (detail !== undefined) {
@@ -5938,9 +5943,15 @@ function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => voi
   if (check !== undefined) {
     // A trigger check's call: `external` as before, with the trigger this daemon ran it for.
     const call = checkGatewayCall(req.op, req.args, check)
-    if (call.local) return respond({ ok: true, result: {} })
+    if (call.local) {
+      // The check's own CLI met a machine fault over HTTP (trigger-check-core.ts CHECK_FAULT_OP).
+      if (call.fault !== undefined) checkCallers.noteFault(req.sid, call.fault)
+      return respond({ ok: true, result: {} })
+    }
     logMsg('info', 'gateway: trigger check caller', { op: req.op, ...(check ? { trigger: check.id, kind: check.kind } : { ended: true }) })
-    return sendGatewayRequest(req.op, EXTERNAL_CALLER_SID, call.args, respond, gatewayCallPlan(req.waitMs, gatewayHubTimeoutMs(), Date.now()))
+    // The run hears whether the machine failed this call (trigger-check-core.ts machineFaultOf).
+    const answer = (resp: GatewayResponse) => { checkCallers.noteAnswer(req.sid, resp); respond(resp) }
+    return sendGatewayRequest(req.op, EXTERNAL_CALLER_SID, call.args, answer, gatewayCallPlan(req.waitMs, gatewayHubTimeoutMs(), Date.now()))
   }
   if (pluginJobs.isRunSid(req.sid)) {
     const home = pluginJobs.homeOfRun(req.sid)
@@ -8099,6 +8110,8 @@ async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'qu
     }).finally(() => caller.release())
     const parsed = parseCheckStdout(proc.stdout)
     const error = checkErrorOf(proc, parsed)
+    // A failure the machine caused (one of the run's calls said so) is no strike against the script.
+    const fault = error ? caller.fault() : undefined
     const now = Date.now()
     // A stopping Demo writes no state and sends no event for a run its stop ended.
     if (demoQuiesce.fenced) {
@@ -8110,7 +8123,8 @@ async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'qu
       return { outcome: error ? 'error' : 'quiet', ...(error ? { error } : {}) }
     }
     if (error) {
-      applyCheckError(entry.state, now)
+      if (fault) applyMachineFault(entry.state, now)
+      else applyCheckError(entry.state, now)
       entry.nextRunAtMs = now + triggerCadenceMs(entry)
       entry.state.lastCheck = {
         type: 'trigger.checked', id: entry.def.id, atMs: now, outcome: 'error', error, durationMs: proc.durationMs,
@@ -8120,8 +8134,9 @@ async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'qu
       logMsg('warn', 'trigger run', {
         id: entry.def.id, outcome: 'error', error, durationMs: proc.durationMs,
         consecutiveErrors: entry.state.consecutiveErrors, nextRunAtMs: entry.nextRunAtMs,
+        ...(fault ? { fault } : {}),
       })
-      sendTriggerEvent(entry.home, 'trigger.checked', { ...entry.state.lastCheck })
+      sendTriggerEvent(entry.home, 'trigger.checked', { ...entry.state.lastCheck, ...(fault ? { fault } : {}) })
       return { outcome: 'error', error }
     }
     // checkErrorOf already reported every failed parse above; this is the narrow.

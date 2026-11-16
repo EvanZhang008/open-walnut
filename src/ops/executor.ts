@@ -64,7 +64,9 @@ export type OpOutcome =
       /** The call named no op, or arguments the op does not take: the caller's to fix, nothing ran. */
       invalidArgs?: true
       /** The HTTP status Walnut's API answered this failure with, when it answered one. */
-      status?: number }
+      status?: number
+      /** The error code it answered with beside the status (`disk_full`, `host_reconnecting`), when it named one. */
+      code?: string }
 
 /** Header every op request carries when the caller's session id is known. */
 export const CALLER_SID_HEADER = 'x-walnut-caller-sid'
@@ -113,7 +115,7 @@ const OP_ID_HEADER = 'x-walnut-op-id'
 
 /** An error a handler op's self-call throws, carrying whether its answer was lost. */
 class SelfCallError extends Error {
-  constructor(message: string, readonly lost: boolean, readonly status?: number) { super(message) }
+  constructor(message: string, readonly lost: boolean, readonly status?: number, readonly code?: string) { super(message) }
 }
 
 /**
@@ -228,7 +230,13 @@ async function rawRequest(
     const msg = typeof e === 'object' && typeof e?.message === 'string' ? e.message
       : typeof e === 'string' ? e
         : (text || res.statusText)
-    return { ok: false, status: res.status, message: `Walnut API error (${code}): ${msg}${res.status === 507 ? DISK_FULL_HINT : ''}` }
+    // The answer's own code at any status, kept apart from the words (a 5xx's message names its number).
+    const named = typeof e === 'object' && typeof e?.code === 'string' ? e.code : typeof body?.code === 'string' ? body.code : undefined
+    const apiCode = named && /^[a-z][a-z0-9_]{0,63}$/.test(named) ? named : undefined
+    return {
+      ok: false, status: res.status, ...(apiCode ? { code: apiCode } : {}),
+      message: `Walnut API error (${code}): ${msg}${res.status === 507 ? DISK_FULL_HINT : ''}`,
+    }
   }
   return { ok: true, result: parsed }
 }
@@ -517,6 +525,7 @@ async function withEarlierWrites(outcome: Extract<OpOutcome, { ok: false }>, bas
     message: `${outcome.message} An earlier try of this call (${prov.callId}) already applied ${list}, whose answer was lost; that is what this call did, and likely why running it again now fails. Do not run it again.`,
     result: { ...(isPlainObject(outcome.result) ? outcome.result : {}), call_id: prov.callId, earlier_writes: earlier },
     ...(outcome.status !== undefined ? { status: outcome.status } : {}),
+    ...(outcome.code !== undefined ? { code: outcome.code } : {}),
   }
 }
 
@@ -533,7 +542,7 @@ async function runOp(
         const refused = selfCallRefusal(op.name, method, path, prov.origin)
         if (refused) throw new Error(refused)
         const r = await rawRequest(base, method, path, body, timeoutMs, prov)
-        if (!r.ok) throw new SelfCallError(r.message, r.lost === true, r.status)
+        if (!r.ok) throw new SelfCallError(r.message, r.lost === true, r.status, r.code)
         return r.result
       }
       // A handler that runs another op in-process (a plugin's walnut.ops.call)
@@ -545,7 +554,11 @@ async function runOp(
       // A write of this call whose answer was lost (also inside a handler) may have applied.
       const lost = err instanceof SelfCallError && err.lost
       const status = err instanceof SelfCallError ? err.status : undefined
-      return { ok: false, message: err instanceof Error ? err.message : String(err), ...(lost ? { lost: true as const } : {}), ...(status !== undefined ? { status } : {}) }
+      const code = err instanceof SelfCallError ? err.code : undefined
+      return {
+        ok: false, message: err instanceof Error ? err.message : String(err), ...(lost ? { lost: true as const } : {}),
+        ...(status !== undefined ? { status } : {}), ...(code !== undefined ? { code } : {}),
+      }
     }
   }
 

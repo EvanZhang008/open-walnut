@@ -3678,7 +3678,8 @@ export class DaemonConnection {
             ...(seen.suppressed > 0 ? { suppressed: seen.suppressed } : {}),
           })
         }
-        reply = { relayId, error: outcome.error.message, errorCode: outcome.error.code }
+        const { gatewayErrorReplyFields } = await import('./gateway-core.js')
+        reply = { relayId, ...gatewayErrorReplyFields(outcome.error) }
         const detail: Record<string, unknown> = {
           ...(typeof outcome.error.detail === 'object' && outcome.error.detail !== null ? outcome.error.detail as Record<string, unknown> : {}),
           ...(outcome.error.retryAfterMs !== undefined ? { retryAfterMs: outcome.error.retryAfterMs } : {}),

@@ -316,6 +316,33 @@ export interface GatewayError {
   retryAfterMs?: number;
   /** Extra structured context (e.g. `ambiguous_peer` candidates, `queue_full` depth). */
   detail?: unknown;
+  /**
+   * The op ran and Walnut's API answered it with this HTTP status and error code (a server that
+   * sends it: the relay's `api`). What a trigger check's run reads to tell a fault of the machine
+   * from its script's (trigger-check-core.ts machineFaultOf); older clients ignore it.
+   */
+  api?: GatewayApiAnswer;
+}
+
+/** The HTTP answer of Walnut's API to a relayed op that failed. */
+export interface GatewayApiAnswer { status: number; code?: string }
+
+/**
+ * The error fields of a server's `gateway-result` for a relayed call that failed, built in one place
+ * for every server that answers a host (daemon-connection.ts for the Mac's relay, backup-gateway.ts
+ * for the companion's): the message, the code older daemons read, and the API's answer.
+ */
+export function gatewayErrorReplyFields(e: { code: string; message: string; api?: GatewayApiAnswer }): { error: string; errorCode: string; api?: GatewayApiAnswer } {
+  return { error: e.message, errorCode: e.code, ...(e.api ? { api: e.api } : {}) };
+}
+
+/** A relay reply's `api`, or undefined when it is missing or malformed (never trusted as more). */
+export function gatewayApiAnswerOf(raw: unknown): GatewayApiAnswer | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as { status?: unknown; code?: unknown };
+  if (typeof r.status !== 'number' || !Number.isInteger(r.status) || r.status < 100 || r.status > 599) return undefined;
+  const code = typeof r.code === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(r.code) ? r.code : undefined;
+  return { status: r.status, ...(code ? { code } : {}) };
 }
 
 /** One request line on the unix socket (walnut CLI → daemon). */

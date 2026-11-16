@@ -20,6 +20,7 @@ import { StringDecoder } from 'node:string_decoder';
 import {
   clockSpecKey, clockStartKey, validateClockSpec, validateClockStartSpec, type ClockHostState, type ClockStartSpec, type TriggerClockSpec,
 } from './trigger-clock-core.js';
+import type { GatewayErrorCode } from './gateway-core.js';
 
 // ── Limits (every number is a cron-storm lesson; keep them in one place) ──
 
@@ -332,6 +333,12 @@ export interface TriggerCheckedEvent {
   consecutiveErrors: number;
   /** A quiet run the daemon had to repair (TriggerCheckOutput.warnings). */
   warnings?: string[];
+  /**
+   * An error the machine caused, not the script (machineFaultOf): counted by no one, told to no
+   * one. Sent on the event only, never kept in the host's state file (an older daemon's snapshot
+   * check would call a field it does not know corrupt).
+   */
+  fault?: MachineFaultKind;
   /** Latest host status sent again at configure, not a new check. */
   replay?: true;
 }
@@ -1066,31 +1073,169 @@ export function testCheckCaller(raw: unknown): CheckCaller | undefined {
 }
 
 export interface CheckCallers {
-  /** A token for one run; `release` once the run's process closed. */
-  mint(caller: CheckCaller): { sid: string; release(): void };
+  /**
+   * A token for one run; `release` once the run's process closed. `fault` is the machine fault of
+   * the run's last answer (noteAnswer, noteFault), still readable after the release.
+   */
+  mint(caller: CheckCaller): { sid: string; release(): void; fault(): MachineFaultKind | undefined };
   /**
    * undefined: `sid` is no check's (handle it as before). null: a check's, but its run is over
    * (a child it left behind), so it vouches for nothing. Else what the daemon started it for.
    */
   resolve(sid: unknown): CheckCaller | null | undefined;
+  /**
+   * The gateway answered a call of a live run: the run's fault is its LAST answer's (machineFaultOf),
+   * so a call that worked after a fault clears it (a script that went on and failed on its own is its own).
+   */
+  noteAnswer(sid: unknown, resp: unknown): void;
+  /** The run's own `walnut` reached Walnut over HTTP: the fault it met there, or null for a real answer (CHECK_FAULT_OP). */
+  noteFault(sid: unknown, fault: MachineFaultKind | null): void;
   /** Live runs, for tests. */
   size(): number;
 }
 
 export function createCheckCallers(token: () => string = () => randomBytes(18).toString('hex')): CheckCallers {
-  const live = new Map<string, CheckCaller>();
+  const live = new Map<string, { caller: CheckCaller; fault?: MachineFaultKind }>();
   return {
     mint(caller) {
       const sid = CHECK_CALLER_SID_PREFIX + token();
-      live.set(sid, { kind: caller.kind, id: caller.id });
-      return { sid, release: () => { live.delete(sid); } };
+      const run: { caller: CheckCaller; fault?: MachineFaultKind } = { caller: { kind: caller.kind, id: caller.id } };
+      live.set(sid, run);
+      return { sid, release: () => { live.delete(sid); }, fault: () => run.fault };
     },
     resolve(sid) {
       if (typeof sid !== 'string' || !sid.startsWith(CHECK_CALLER_SID_PREFIX)) return undefined;
-      return live.get(sid) ?? null;
+      return live.get(sid)?.caller ?? null;
+    },
+    noteAnswer(sid, resp) {
+      const run = typeof sid === 'string' ? live.get(sid) : undefined;
+      if (!run) return;
+      const fault = machineFaultOf(resp);
+      if (fault) run.fault = fault;
+      else delete run.fault;
+    },
+    noteFault(sid, fault) {
+      const run = typeof sid === 'string' ? live.get(sid) : undefined;
+      if (!run) return;
+      if (fault === null) delete run.fault;
+      else if (isMachineFaultKind(fault)) run.fault = fault;
     },
     size: () => live.size,
   };
+}
+
+// ── Machine faults: a failed check that is the machine's doing, not its script's ──
+//
+// 2026-11-16 11:36Z: the Mac's data disk reached 99%, the Walnut API answered 507 to every write,
+// and nine triggers' checks (mail watches through `walnut trigger-check`) failed at the same second.
+// Each one woke its task's session with "Trigger check failed", every session answered with one
+// line, and the failures counted toward the five that switch a trigger off. None of those scripts
+// was wrong, and the disk already has its owner (the disk alarm files its own repair task).
+//
+// So the daemon remembers, per run, whether one of the run's `walnut` calls was answered with a
+// fault of the machine: read from the answer's structured fields (the gateway's own error code,
+// the HTTP status and error code Walnut's API answered with), never from the words of an error.
+// A failed run with one is reported with `fault`, and neither the daemon nor the server counts it
+// or tells anyone: the trigger stays armed at its cadence, keeps the items it has not reported
+// (a failed run moves no cursor and marks nothing seen), and the next run after the machine is
+// back reports them. A run that failed with no such answer (a non-zero exit, output that breaks
+// the contract, its own time limit) is the script's, and goes to its owner as before.
+
+/** Every fault of the machine a check's failure can be put down to. A new one needs its source in machineFaultOf. */
+export const MACHINE_FAULT_KINDS = [
+  /** Walnut's API answered 507: its data disk is critically full and writes are paused (disk-guard.ts). */
+  'disk_full',
+  /** No Walnut server took the call: none is connected to this daemon, the daemon is restarting, or the leader is away. */
+  'server_away',
+  /** The call needs another host, and that host's link is down (it is reconnecting, or did not answer). */
+  'host_offline',
+] as const;
+export type MachineFaultKind = (typeof MACHINE_FAULT_KINDS)[number];
+
+export function isMachineFaultKind(v: unknown): v is MachineFaultKind {
+  return typeof v === 'string' && (MACHINE_FAULT_KINDS as readonly string[]).includes(v);
+}
+
+/**
+ * The gateway's own error codes: which are the machine (typed, so a new code must be placed here).
+ * hub_timeout is not: it also means one slow op (a plugin whose upstream hangs, a long host
+ * command), which is the check's to hear about.
+ */
+export const GATEWAY_CODE_FAULT: Readonly<Record<GatewayErrorCode, MachineFaultKind | null>> = {
+  hub_unreachable: 'server_away',
+  hub_timeout: null,
+  unknown_peer: null,
+  ambiguous_peer: null,
+  self_send: null,
+  throttled: null,
+  queue_full: null,
+  target_awaiting_permission: null,
+  target_archived: null,
+  unknown_caller: null,
+  bad_request: null,
+  unsupported_version: null,
+  unsupported_replica: null,
+  internal: null,
+};
+
+/**
+ * The error codes Walnut's API answers a 503 or 504 with that say a machine is away: the leader
+ * (replication/needs-leader.ts, the primary-only routes) or another host's link
+ * (link-failure-answer.ts, the host routes). Any other 503 is the route's own answer.
+ */
+export const API_CODE_FAULT: Readonly<Record<string, MachineFaultKind>> = {
+  needs_leader: 'server_away',
+  primary_unreachable: 'server_away',
+  host_reconnecting: 'host_offline',
+  host_no_answer: 'host_offline',
+  bridge_offline: 'host_offline',
+  bridge_unconfirmed: 'host_offline',
+  bridge_unavailable: 'host_offline',
+};
+
+/** A Walnut API answer (its HTTP status, its error code) that is a fault of the machine, or null. */
+export function apiAnswerFault(status: unknown, code: unknown): MachineFaultKind | null {
+  if (status === 507) return 'disk_full';
+  if (status !== 503 && status !== 504) return null;
+  return typeof code === 'string' && Object.prototype.hasOwnProperty.call(API_CODE_FAULT, code) ? API_CODE_FAULT[code]! : null;
+}
+
+/** The machine fault a gateway answer carries, or null (an ok answer, or the op's own refusal). */
+export function machineFaultOf(resp: unknown): MachineFaultKind | null {
+  if (!resp || typeof resp !== 'object' || (resp as { ok?: unknown }).ok !== false) return null;
+  const error = (resp as { error?: unknown }).error;
+  if (!error || typeof error !== 'object') return null;
+  const e = error as { code?: unknown; api?: unknown };
+  const byCode = typeof e.code === 'string' && Object.prototype.hasOwnProperty.call(GATEWAY_CODE_FAULT, e.code)
+    ? GATEWAY_CODE_FAULT[e.code as GatewayErrorCode] : null;
+  if (byCode) return byCode;
+  const api = e.api && typeof e.api === 'object' ? e.api as { status?: unknown; code?: unknown } : null;
+  return api ? apiAnswerFault(api.status, api.code) : null;
+}
+
+/**
+ * A Walnut API answer as the executor reads it (ops/executor.ts OpOutcome): its machine fault, or
+ * null. No answer at all (the server is not running) is the server away; an answer that was lost
+ * (a timeout) is not, for the reason hub_timeout is not (GATEWAY_CODE_FAULT).
+ */
+export function opOutcomeFault(r: { ok: boolean; status?: number; code?: string; unreachable?: boolean }): MachineFaultKind | null {
+  if (r.ok) return null;
+  if (r.unreachable) return 'server_away';
+  return apiAnswerFault(r.status, r.code);
+}
+
+/**
+ * The op a check's own `walnut` sends its daemon after each call it made over HTTP (the Mac's CLI
+ * calls the API directly, so the daemon never saw that answer): `kind` names the machine fault it
+ * met, `kind: null` says the call got a real answer (which clears the run's fault, as an answer
+ * through the gateway does). Answered by the daemon, never relayed; an older daemon relays it and
+ * the server refuses an op it does not know.
+ */
+export const CHECK_FAULT_OP = 'trigger_check_fault';
+
+/** A failed run whose fault was the machine's: it ran, and it is no strike against the script. */
+export function applyMachineFault(state: TriggerHostState, nowMs: number): void {
+  state.lastRunAtMs = nowMs;
 }
 
 export const CHECK_TOKEN_ENV = 'WALNUT_CHECK_TOKEN';
@@ -1109,9 +1254,13 @@ export function checkCallerEnv(sid: string, gatewaySocket: string | undefined): 
  */
 export function checkGatewayCall(
   op: string, args: Record<string, unknown>, caller: CheckCaller | null,
-): { local: true } | { local: false; args: Record<string, unknown> } {
+): { local: true; fault?: MachineFaultKind | null } | { local: false; args: Record<string, unknown> } {
   const { triggerCaller: _forged, ...rest } = args;
   if (op === 'tools.call' && rest.name === 'op_card_record') return { local: true };
+  if (op === 'tools.call' && rest.name === CHECK_FAULT_OP) {
+    const kind = rest.args && typeof rest.args === 'object' ? (rest.args as { kind?: unknown }).kind : undefined;
+    return { local: true, ...(isMachineFaultKind(kind) ? { fault: kind } : kind === null ? { fault: null } : {}) };
+  }
   if (op !== 'tools.call' || !caller) return { local: false, args: rest };
   return { local: false, args: { ...rest, triggerCaller: { kind: caller.kind, id: caller.id } } };
 }

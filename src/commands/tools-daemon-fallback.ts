@@ -17,6 +17,7 @@
  */
 
 import fs from 'node:fs'
+import net from 'node:net'
 
 /** True when this process runs inside a managed session whose host daemon is listening. */
 function hasHostDaemon(env: NodeJS.ProcessEnv): boolean {
@@ -87,4 +88,42 @@ export async function callServerOpThroughHostDaemon(
   if (!hasHostDaemon(env)) return null
   const { runWalnutCli } = await import('../providers/wn-cli.js')
   return runWalnutCli(['tools', 'call', ...argv])
+}
+
+/** How long a check's `walnut` waits for its daemon to take its report. */
+const CHECK_REPORT_WAIT_MS = 2_000
+
+/**
+ * Inside a trigger check (WALNUT_CHECK_TOKEN, WALNUT_CHECK_SOCKET), what a call this CLI made over
+ * HTTP met is told to the daemon running the check, which saw none of it (trigger-check-core.ts
+ * CHECK_FAULT_OP): a fault of the machine (opOutcomeFault: a 507, no server, a host's link down),
+ * or a real answer, which clears one an earlier call met. A check that then fails on a fault counts
+ * against no one (2026-11-16, a full Mac disk failed nine checks at once). Read from the answer's
+ * status and code, never its words. Never throws, never waits long; outside a check it does nothing.
+ */
+export async function reportCheckOutcome(
+  r: { ok: boolean; status?: number; code?: string; unreachable?: boolean },
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  const sid = (env.WALNUT_CHECK_TOKEN ?? '').trim()
+  const socket = (env.WALNUT_CHECK_SOCKET ?? '').trim()
+  if (!sid || !socket || (env.WALNUT_SESSION_ID ?? '').trim()) return
+  const { CHECK_FAULT_OP, opOutcomeFault } = await import('../providers/trigger-check-core.js')
+  const kind = opOutcomeFault(r)
+  // A refusal that is the script's own (a 404, bad arguments) leaves the run's fault as it is: it is
+  // neither the machine nor proof the machine is back. Only a real answer clears.
+  if (!kind && !r.ok) return
+  await new Promise<void>((resolve) => {
+    let done = false
+    const finish = () => { if (done) return; done = true; clearTimeout(timer); try { conn.destroy() } catch { /* gone */ } resolve() }
+    const timer = setTimeout(finish, CHECK_REPORT_WAIT_MS)
+    timer.unref?.()
+    const conn = net.connect(socket)
+    conn.on('connect', () => {
+      conn.write(JSON.stringify({ v: 1, op: 'tools.call', sid, args: { name: CHECK_FAULT_OP, args: { kind } } }) + '\n')
+    })
+    conn.on('data', finish)
+    conn.on('error', finish)
+    conn.on('close', finish)
+  })
 }

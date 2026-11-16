@@ -20,6 +20,10 @@
  *   - a quiet check whose output the daemon had to repair (an over-long id, a
  *     dropped item) tells a live owner session once a day; a fire's envelope already
  *     carries its own repairs.
+ * A failed check the machine caused (a full disk, no server, a host's link down: trigger-check-core.ts
+ * machineFaultOf) never counts toward the stop and tells nobody for its first 6 hours (trigger-apply.ts
+ * MACHINE_FAULT_QUIET_MAX_MS): the machine's own alarm owns it. Past that the owner, or its lead,
+ * hears it once for the run, so a trigger never stays broken in silence.
  * "Its lead" is the first open task above the owner that has a session, in the order
  * a status move goes up (status-push.ts `statusFollowersOf`: its parent chain, its
  * project's VP, Main last). Nobody to tell is only logged: the trigger shows its
@@ -169,6 +173,26 @@ export function buildCheckFailureNotice(
       ...(applied.checkRun ? [`The check runs: ${clip(applied.checkRun, RUN_TEXT_MAX)}`] : []),
       ...(applied.killedAtLimit ? [limitAdvice(applied.timeLimitSeconds ?? timeLimitSeconds(null))] : []),
       next.join('\n'),
+    ].join('\n\n'),
+  });
+}
+
+/** What the owner (or its lead) reads once the machine has failed a trigger's checks for hours. */
+export function buildMachineFaultNotice(event: TriggerCheckedEvent, applied: Applied, audience: TriggerNoticeAudience = { kind: 'owner' }): string {
+  const name = applied.jobName ?? event.id;
+  const since = applied.tellMachineFault?.sinceMs ?? event.atMs;
+  const hours = Math.max(1, Math.round((event.atMs - since) / 3_600_000));
+  const subject = audience.kind === 'owner' ? `Your trigger "${name}" (${event.id})` : upper(ofOwner(name, event.id, audience));
+  return kit.buildWalnutMessage({
+    kind: 'notification',
+    attrs: { from: `Trigger: ${name}`, title: 'Trigger blocked by the machine', outcome: 'check_machine_fault', note: NOTE_NOTIFICATION },
+    body: [
+      `${subject}: its checks on ${hostLabel(applied.host)} have failed for about ${hours} hours, since ${at(since)}, `
+        + `because of the machine (${applied.fault ?? 'a machine fault'}), not its script. Walnut keeps it running and counts none `
+        + 'of these failures; what it has not reported yet is kept, so the first check after the machine is back reports it.',
+      `Error:\n${errorOf(event, applied)}`,
+      'Next: nothing to fix in the check. If the work cannot wait for the machine, say so in your status report '
+        + '(waiting on the machine); you hear this once for this outage.',
     ].join('\n\n'),
   });
 }
@@ -342,6 +366,10 @@ export async function reportTriggerHealth(event: TriggerCheckedEvent, applied: A
   if (applied.tellFailing) {
     const told = await tellTriggerTeam({ ...base, reach: 'team', text: (a) => buildCheckFailureNotice(event, applied, 'failing', a) });
     log.cron.info('trigger keeps failing: told', { jobId: event.id, told: told.to, toldTask: told.taskId });
+  }
+  if (applied.tellMachineFault) {
+    const told = await tellTriggerTeam({ ...base, reach: 'team', text: (a) => buildMachineFaultNotice(event, applied, a) });
+    log.cron.info('trigger blocked by the machine: told', { jobId: event.id, fault: applied.fault, told: told.to, toldTask: told.taskId });
   }
   if (applied.warningsToTell?.length) {
     const told = await tellTriggerTeam({ ...base, reach: 'live-owner', text: () => buildRepairNotice(event, applied, applied.warningsToTell!) });

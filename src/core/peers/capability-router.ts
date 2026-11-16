@@ -55,7 +55,7 @@ async function defaultDeps(): Promise<CapabilityRouterDeps> {
 function err(
   code: GatewayError['code'],
   message: string,
-  extra?: { retryAfterMs?: number; detail?: unknown },
+  extra?: { retryAfterMs?: number; detail?: unknown; api?: GatewayError['api'] },
 ): CapabilityOutcome {
   return { ok: false, error: { code, message, ...extra } };
 }
@@ -341,8 +341,13 @@ async function handleToolsCall(
   }
   // Arguments the op does not take are the caller's to fix (bad_request), never an internal fault.
   // The code stays what older CLIs already read; `opStatus` tells the relay's log the API answered.
+  // `api` is how the API answered (its status and code), for a trigger check's machine faults
+  // (trigger-check-core.ts machineFaultOf); the code stays what older CLIs already read.
   if (!r.ok) {
-    const out = err(r.invalidArgs ? 'bad_request' : 'internal', r.message, r.result === undefined ? undefined : { detail: r.result });
+    const api = typeof r.status === 'number' ? { status: r.status, ...(r.code ? { code: r.code } : {}) } : undefined;
+    const out = err(r.invalidArgs ? 'bad_request' : 'internal', r.message, {
+      ...(r.result === undefined ? {} : { detail: r.result }), ...(api ? { api } : {}),
+    });
     return typeof r.status === 'number' && !out.ok ? { ...out, opStatus: r.status } : out;
   }
   // GatewayResponse.result must be an object — wrap non-object op results.

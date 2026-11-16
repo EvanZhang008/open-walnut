@@ -120,6 +120,7 @@ export function checkedAuditEntry(input: {
   warnings?: readonly string[];
   killedAtLimit?: boolean;
   limitSeconds?: number;
+  fault?: TriggerAuditEntry['fault'];
 }): TriggerAuditEntry {
   return compact({
     atMs: input.atMs,
@@ -130,6 +131,7 @@ export function checkedAuditEntry(input: {
     warnings: auditWarnings(input.warnings),
     killedAtLimit: input.killedAtLimit ? true : undefined,
     limitSeconds: input.limitSeconds,
+    fault: input.fault,
   });
 }
 

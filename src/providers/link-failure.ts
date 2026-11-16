@@ -21,7 +21,9 @@
  * Zero imports: the routes and the read bound load it without the pool.
  */
 
-export type LinkFailureKind = 'no-link' | 'lost' | 'no-answer'
+/** Every way a host link fails a command (a test walks them all). */
+export const LINK_FAILURE_KINDS = ['no-link', 'lost', 'no-answer'] as const
+export type LinkFailureKind = (typeof LINK_FAILURE_KINDS)[number]
 
 const KIND = Symbol.for('open-walnut.link-failure')
 

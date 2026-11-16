@@ -11,8 +11,8 @@
  * decides bookkeeping — dedup, history, error counting, next check time.
  */
 
-import { MAX_CONSECUTIVE_CHECK_ERRORS, isHostDelivery } from '../../providers/trigger-check-core.js';
-import type { TriggerCheckedEvent, TriggerFiredEvent } from '../../providers/trigger-check-core.js';
+import { MAX_CONSECUTIVE_CHECK_ERRORS, isHostDelivery, isMachineFaultKind } from '../../providers/trigger-check-core.js';
+import type { MachineFaultKind, TriggerCheckedEvent, TriggerFiredEvent } from '../../providers/trigger-check-core.js';
 import type { CronJob, CronServiceState } from './types.js';
 import { ensureLoaded, persist } from './store.js';
 import { applyJobResult, emit, locked } from './timer.js';
@@ -67,6 +67,13 @@ export interface TriggerCheckedApplied {
   errorSinceMs?: number;
   /** A check passed after a run the team was told about (an older Walnut's bell for it is out of date). */
   recovered?: boolean;
+  /** This error was the machine's (trigger-check-core.ts machineFaultOf): recorded, never counted. */
+  fault?: MachineFaultKind;
+  /**
+   * The machine has failed this trigger's checks for MACHINE_FAULT_QUIET_MAX_MS, and the owning task
+   * (or its lead) has not been told about this run of them: since when.
+   */
+  tellMachineFault?: { sinceMs: number };
 }
 
 /** A trigger the fire budget keeps holding is worth one notice a day, not one per check. */
@@ -81,6 +88,14 @@ export const CHECK_ERROR_SESSION_NOTICE_EVERY_MS = 6 * 60 * 60 * 1000;
  */
 export const CHECK_ERROR_USER_AFTER_ERRORS = 3;
 export const CHECK_ERROR_USER_AFTER_MS = 30 * 60 * 1000;
+/**
+ * How long checks the machine failed go untold. The machine's own alarm has a full disk or an away
+ * server; but a 507 or a 503 can also be one route's lasting answer (a remote host's full disk, a
+ * companion that never takes a write), which no alarm owns. Past this the owning task (or its lead)
+ * hears it once for the run, so a trigger never stays broken in silence. It never counts toward the
+ * stop: a trigger the machine failed overnight still runs when the machine is back.
+ */
+export const MACHINE_FAULT_QUIET_MAX_MS = 6 * 60 * 60 * 1000;
 
 /** The task a session-executor routine delivers into, if it has one. */
 export function routineTargetTask(job: CronJob): string | undefined {
@@ -224,10 +239,30 @@ export async function applyTriggerChecked(
     const limitS = timeLimitSeconds(job.check);
     const killedAtLimit = event.outcome === 'error' && isTimeLimitError(event.error);
     const error = checkErrorText(event.error, limitS);
+    // The machine failed this check, not its script (a full disk, no server, a host's link down):
+    // the machine's own alarm has it, so it neither counts toward the stop nor tells anyone. The
+    // daemon kept the trigger's cursor and unseen items, so the next good check reports them.
+    const fault = event.outcome === 'error' && isMachineFaultKind(event.fault) ? event.fault : undefined;
+    // A run of them starts at its first; any other new outcome ends it (a replay changes nothing).
+    if (!event.replay) {
+      if (!fault) job.state.machineFaultSinceMs = undefined;
+      else if (typeof job.state.machineFaultSinceMs !== 'number') job.state.machineFaultSinceMs = atMs;
+    }
+    // Past the quiet window, told once per run of them (trigger-health.ts), and still not counted.
+    const faultSince = job.state.machineFaultSinceMs;
+    let tellMachineFault: TriggerCheckedApplied['tellMachineFault'];
+    if (fault && !event.replay && job.enabled && typeof faultSince === 'number' && atMs - faultSince >= MACHINE_FAULT_QUIET_MAX_MS
+      && job.state.machineFaultToldSinceMs !== faultSince) {
+      job.state.machineFaultToldSinceMs = faultSince;
+      tellMachineFault = { sinceMs: faultSince };
+    }
+    // An error that is no strike against the script: one replayed from before (it may be the outage
+    // itself), or the machine's.
+    const notCounted = event.outcome === 'error' && (event.replay === true || fault !== undefined);
 
     if (event.outcome === 'error') {
-      if (event.replay) {
-        // Historical failures may be the outage itself. Show them, but give the returning host a fresh check.
+      if (notCounted) {
+        // Shown on the card; the error count and the run history are left as they were.
         job.state.lastError = error;
       } else {
         applyJobResult(state, job, {
@@ -242,7 +277,7 @@ export async function applyTriggerChecked(
       job.state.lastError = undefined;
       job.updatedAtMs = atMs;
     }
-    const health = event.replay && event.outcome === 'error' ? {} : checkHealth(job, event.outcome, atMs);
+    const health = notCounted ? {} : checkHealth(job, event.outcome, atMs);
 
     job.state.lastCheck = {
       atMs,
@@ -252,13 +287,14 @@ export async function applyTriggerChecked(
       durationMs,
       ...(killedAtLimit ? { killedAtLimit: true } : {}),
       limitSeconds: limitS,
+      ...(fault ? { fault } : {}),
     };
     // The audit line rides the write lastCheck already does, so recent activity
     // costs no extra persist. Fires are appended in applyTriggerFired instead:
     // the daemon reports a fire through that path, never through checked.
     job.state.checkLog = appendAudit(
       job.state.checkLog,
-      checkedAuditEntry({ atMs, outcome: event.outcome, reason: event.reason, durationMs, error, warnings: event.warnings, limitSeconds: limitS, ...(killedAtLimit ? { killedAtLimit } : {}) }),
+      checkedAuditEntry({ atMs, outcome: event.outcome, reason: event.reason, durationMs, error, warnings: event.warnings, limitSeconds: limitS, ...(killedAtLimit ? { killedAtLimit } : {}), ...(fault ? { fault } : {}) }),
       TRIGGER_CHECK_LOG_MAX,
     );
     const warnings = event.outcome === 'quiet' ? auditWarnings(event.warnings) : undefined;
@@ -287,7 +323,7 @@ export async function applyTriggerChecked(
     let disabled = false;
     // Only a polling trigger can be stopped: a late error from a check that was
     // running when someone paused it leaves the pause as it is, with no notice.
-    if (job.enabled && !event.replay && event.outcome === 'error' && (job.state.consecutiveErrors ?? 0) >= MAX_CONSECUTIVE_CHECK_ERRORS) {
+    if (job.enabled && !notCounted && event.outcome === 'error' && (job.state.consecutiveErrors ?? 0) >= MAX_CONSECUTIVE_CHECK_ERRORS) {
       job.enabled = false;
       job.state.nextRunAtMs = undefined;
       job.state.runningAtMs = undefined;
@@ -322,6 +358,8 @@ export async function applyTriggerChecked(
       checkRun: job.check.run,
       ...(job.schedule.kind === 'every' ? { everyMs: job.schedule.everyMs } : {}),
       ...(warningsToTell ? { warningsToTell } : {}),
+      ...(fault ? { fault } : {}),
+      ...(tellMachineFault ? { tellMachineFault } : {}),
       ...health,
     };
   });
@@ -551,6 +589,11 @@ export async function applyTriggerFired(
     // A fire is a check that worked: a "keeps failing" bell an older Walnut left is out of date.
     const recovered = !clockRun && typeof target.state.checkErrorUserNoticeSinceMs === 'number';
     if (recovered) target.state.checkErrorUserNoticeSinceMs = undefined;
+    // A check that worked ends a run of checks the machine failed: one found after the run began,
+    // never a replay of a fire from before it.
+    if (!clockRun && typeof target.state.machineFaultSinceMs === 'number' && newestEvent.atMs > target.state.machineFaultSinceMs) {
+      target.state.machineFaultSinceMs = undefined;
+    }
     const stamped = { ...auditEntry, ...(identity.epoch ? { epoch: identity.epoch } : {}) };
     target.state.fireLog = mergeFireAttempt(target.state.fireLog, stamped, TRIGGER_FIRE_LOG_MAX);
     // Both lists carry the fire: checkLog is "what has this trigger been doing",

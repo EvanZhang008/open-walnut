@@ -20,6 +20,7 @@ import { log } from '../../logging/index.js'
 import { matchIdRef } from '../../lib/id-ref.js'
 import type { BackupLeader } from './backup-leader.js'
 import { DaemonFrameTooLargeError, tooLargeGatewayReply } from '../../providers/daemon-frame-cap.js'
+import { gatewayErrorReplyFields } from '../../providers/gateway-core.js'
 import { isCallId, messageIdOfCall } from '../../lib/op-call-id.js'
 
 export interface GatewayRequestFrame {
@@ -34,7 +35,7 @@ export interface GatewayRequestFrame {
 
 type Outcome =
   | { ok: true; result: Record<string, unknown> }
-  | { ok: false; code: string; message: string; detail?: unknown }
+  | { ok: false; code: string; message: string; detail?: unknown; api?: { status: number; code?: string } }
 
 export interface BackupGatewayDeps {
   leader: BackupLeader
@@ -43,7 +44,7 @@ export interface BackupGatewayDeps {
   sessions: () => Promise<Array<{ id: string; host: string; task_id?: string; title?: string; task_title?: string; process_status: string; last_active_at?: string }>>
   /** A task of this box's replica by id or unique prefix, with its current session (`sessionId`). */
   findTask: (ref: string) => Promise<{ id: string; title: string; sessionId?: string } | { ambiguous: number } | null>
-  executeOp: (name: string, args: Record<string, unknown>, ctx: { callerSid: string; callerHost: string; callId?: string }) => Promise<{ ok: boolean; result?: unknown; message?: string; lost?: boolean; unreachable?: boolean }>
+  executeOp: (name: string, args: Record<string, unknown>, ctx: { callerSid: string; callerHost: string; callId?: string }) => Promise<{ ok: boolean; result?: unknown; message?: string; lost?: boolean; unreachable?: boolean; status?: number; code?: string }>
 }
 
 /** Ops the companion runs on its replica for a host while it leads. */
@@ -204,7 +205,9 @@ export function createBackupGateway(deps: BackupGatewayDeps) {
     // Its own call went out and got no answer: the caller hears the answer was lost, and names
     // the call. A refused connection ran nothing and stays `internal`.
     const lost = !r.ok && r.lost === true
-    if (!r.ok) return { ok: false, code: lost ? 'hub_timeout' : 'internal', message: r.message ?? `${name} failed`, ...(r.result !== undefined ? { detail: r.result } : {}) }
+    // `api`: how the API answered, for a trigger check's machine faults (trigger-check-core.ts machineFaultOf).
+    const api = !lost && typeof r.status === 'number' ? { status: r.status, ...(r.code ? { code: r.code } : {}) } : undefined
+    if (!r.ok) return { ok: false, code: lost ? 'hub_timeout' : 'internal', message: r.message ?? `${name} failed`, ...(r.result !== undefined ? { detail: r.result } : {}), ...(api ? { api } : {}) }
     const result = r.result && typeof r.result === 'object' && !Array.isArray(r.result) ? r.result as Record<string, unknown> : { value: r.result }
     return { ok: true, result: { ...result, viaLeader: true } }
   }
@@ -225,7 +228,7 @@ export function createBackupGateway(deps: BackupGatewayDeps) {
     })
     const params = out.ok
       ? { relayId, result: out.result }
-      : { relayId, error: out.message, errorCode: out.code, ...(out.detail !== undefined ? { detail: out.detail } : {}) }
+      : { relayId, ...gatewayErrorReplyFields(out), ...(out.detail !== undefined ? { detail: out.detail } : {}) }
     try {
       try {
         await deps.request(host, 'gateway-result', params)

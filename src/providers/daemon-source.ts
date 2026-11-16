@@ -7085,6 +7085,13 @@ function cmdGatewayResult(ws, id, cmd) {
   } else {
     if (pending.call) heldCatalogs.failed(pending.call.home, pending.call.capability, pending.call.payload);
     var errObj = gatewayError(errorCode || 'internal', error || 'gateway request failed');
+    // How Walnut's API answered the op (gateway-core.ts gatewayApiAnswerOf), for a check run's machine faults.
+    var apiAnswer = cmd.api;
+    if (apiAnswer && typeof apiAnswer === 'object' && typeof apiAnswer.status === 'number' && Number.isInteger(apiAnswer.status)
+      && apiAnswer.status >= 100 && apiAnswer.status <= 599) {
+      errObj.error.api = { status: apiAnswer.status };
+      if (typeof apiAnswer.code === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(apiAnswer.code)) errObj.error.api.code = apiAnswer.code;
+    }
     if (detail !== undefined) {
       errObj.error.detail = detail;
       if (detail && typeof detail.retryAfterMs === 'number') errObj.error.retryAfterMs = detail.retryAfterMs;
@@ -7182,9 +7189,18 @@ function handleGatewayLine(line, respond) {
   if (check !== undefined) {
     // A trigger check's call: external as before, with the trigger this daemon ran it for.
     var call = triggerCheckCore.checkGatewayCall(req.op, req.args || {}, check);
-    if (call.local) return respond({ ok: true, result: {} });
+    if (call.local) {
+      // The check's own CLI met a machine fault over HTTP (trigger-check-core.ts CHECK_FAULT_OP).
+      if (call.fault !== undefined && typeof checkCallers.noteFault === 'function') checkCallers.noteFault(req.sid, call.fault);
+      return respond({ ok: true, result: {} });
+    }
     logMsg('info', 'gateway: trigger check caller', check ? { op: req.op, trigger: check.id, kind: check.kind } : { op: req.op, ended: true });
-    return sendGatewayRequest(req.op, EXTERNAL_CALLER_SID, call.args, respond, gatewayCallPlan(req.waitMs, GATEWAY_HUB_TIMEOUT_MS, Date.now()));
+    // The run hears whether the machine failed this call (trigger-check-core.ts machineFaultOf).
+    var checkSid = req.sid;
+    var answer = typeof checkCallers.noteAnswer === 'function'
+      ? function (resp) { checkCallers.noteAnswer(checkSid, resp); respond(resp); }
+      : respond;
+    return sendGatewayRequest(req.op, EXTERNAL_CALLER_SID, call.args, answer, gatewayCallPlan(req.waitMs, GATEWAY_HUB_TIMEOUT_MS, Date.now()));
   }
   if (pluginJobs.isRunSid(req.sid)) {
     var jobHome = pluginJobs.homeOfRun(req.sid);
@@ -9525,6 +9541,8 @@ async function runTrigger(entry) {
     }
     var parsed = triggerCheckCore.parseCheckStdout(proc.stdout);
     var error = triggerCheckCore.checkErrorOf(proc, parsed);
+    // A failure the machine caused (one of the run's calls said so) is no strike against the script.
+    var fault = error ? runCaller.fault() : undefined;
     var now = Date.now();
     // A stopping Demo writes no state and sends no event for a run its stop ended.
     if (demoQuiesce.fenced) {
@@ -9536,7 +9554,8 @@ async function runTrigger(entry) {
       return error ? { outcome: 'error', error: error } : { outcome: 'quiet' };
     }
     if (error) {
-      triggerCheckCore.applyCheckError(entry.state, now);
+      if (fault && typeof triggerCheckCore.applyMachineFault === 'function') triggerCheckCore.applyMachineFault(entry.state, now);
+      else triggerCheckCore.applyCheckError(entry.state, now);
       entry.nextRunAtMs = now + triggerCadenceMs(entry);
       entry.state.lastCheck = {
         type: 'trigger.checked', id: entry.def.id, atMs: now, outcome: 'error', error: error, durationMs: proc.durationMs,
@@ -9545,9 +9564,10 @@ async function runTrigger(entry) {
       persistTriggerState(entry.home, entry.def.id, entry.state);
       logMsg('warn', 'trigger run', {
         id: entry.def.id, outcome: 'error', error: error, durationMs: proc.durationMs,
-        consecutiveErrors: entry.state.consecutiveErrors, nextRunAtMs: entry.nextRunAtMs,
+        consecutiveErrors: entry.state.consecutiveErrors, nextRunAtMs: entry.nextRunAtMs, fault: fault,
       });
-      sendTriggerEvent(entry.home, 'trigger.checked', entry.state.lastCheck);
+      // The fault rides the event only, never the state file (trigger-check-core.ts TriggerCheckedEvent.fault).
+      sendTriggerEvent(entry.home, 'trigger.checked', fault ? Object.assign({}, entry.state.lastCheck, { fault: fault }) : entry.state.lastCheck);
       return { outcome: 'error', error: error };
     }
     // checkErrorOf already reported every failed parse above; this is the narrow.
@@ -14390,9 +14410,11 @@ try { triggerCheckCore = require(path.join(__dirname, 'trigger-check-core.cjs'))
 var checkCallers = triggerCheckCore && typeof triggerCheckCore.createCheckCallers === 'function' ? triggerCheckCore.createCheckCallers() : null;
 // A check run's env: its token and this daemon's socket, so its walnut calls act for its trigger's task.
 function checkRunCaller(caller) {
-  if (!checkCallers || !caller) return { env: {}, release: function () {} };
+  if (!checkCallers || !caller) return { env: {}, release: function () {}, fault: function () { return undefined; } };
   var minted = checkCallers.mint(caller);
-  return { env: triggerCheckCore.checkCallerEnv(minted.sid, GATEWAY_SOCK_PATH), release: minted.release };
+  // fault: the machine fault of this run's last answer (older sidecar: none).
+  var fault = typeof minted.fault === 'function' ? minted.fault : function () { return undefined; };
+  return { env: triggerCheckCore.checkCallerEnv(minted.sid, GATEWAY_SOCK_PATH), release: minted.release, fault: fault };
 }
 
 // ACP supervision sidecar (acp-daemon-core.cjs): the same acp-daemon.ts the binary

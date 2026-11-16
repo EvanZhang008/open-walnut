@@ -113,6 +113,7 @@ export async function handleTriggerChecked(host: string, event: TriggerCheckedEv
     host, jobId: event.id, outcome: event.outcome,
     ...(event.reason ? { reason: event.reason } : {}),
     ...(event.error ? { error: event.error } : {}),
+    ...(applied.fault ? { fault: applied.fault } : {}),
     consecutiveErrors: applied.consecutiveErrors ?? 0,
     disabled: applied.disabled,
   });

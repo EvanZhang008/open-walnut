@@ -356,6 +356,11 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
       if (code !== null) { process.exitCode = code; return }
     }
     answered()
+    // Inside a trigger check, its daemon hears what the machine did to this call (tools-daemon-fallback.ts reportCheckOutcome).
+    if (process.env.WALNUT_CHECK_TOKEN) {
+      const { reportCheckOutcome } = await import('./tools-daemon-fallback.js')
+      await reportCheckOutcome(r)
+    }
     if (!r.ok) {
       if (!r.unreachable) await record(false, r.result, r.message)
       // No answer at all (a timeout, a dropped connection): the call may have run all the same.

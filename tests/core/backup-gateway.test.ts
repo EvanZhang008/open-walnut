@@ -190,6 +190,17 @@ describe('backup gateway', () => {
     expect(LEADER_OPS).not.toContain('session_start')
   })
 
+  it('an op the API refused says how it answered (api), unless the answer was lost: a check run reads it for machine faults', async () => {
+    const h = harness({ executeOp: async (name) => name === 'note_read'
+      ? { ok: false, message: 'Walnut API error (507): Data disk is critically full', status: 507, code: 'disk_full' }
+      : { ok: false, message: 'no answer', lost: true, status: 504 } })
+    await h.gw.handle('devbox', h.frame({ name: 'note_read', args: { path: 'x.md' } }))
+    expect(h.answer()).toMatchObject({ errorCode: 'internal', api: { status: 507, code: 'disk_full' } })
+    await h.gw.handle('devbox', h.frame({ name: 'task_get', args: { id: 'x' } }))
+    expect(h.answer()).toMatchObject({ errorCode: 'hub_timeout' })
+    expect(h.answer()!.api).toBeUndefined()
+  })
+
   it('a frame without a relay id is dropped (nothing to answer), and a throwing dependency still answers', async () => {
     const h = harness({ sessions: async () => { throw new Error('projection unreadable') } })
     await h.gw.handle('devbox', h.frame({ name: 'task_send', args: { to: 'x', text: 'y' } }, { relayId: undefined }))

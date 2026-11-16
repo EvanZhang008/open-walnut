@@ -4,6 +4,7 @@
  */
 
 import type { SubsystemLogger } from '../../logging/index.js';
+import type { MachineFaultKind } from '../../providers/trigger-check-core.js';
 
 // ── Schedule: three kinds ──
 
@@ -112,6 +113,8 @@ export type TriggerAuditEntry = {
   killedAtLimit?: boolean;
   /** The time limit this run ran under, in seconds (the check's limit may change later). */
   limitSeconds?: number;
+  /** Check errors only: the machine failed it, not the check (trigger-check-core.ts MACHINE_FAULT_KINDS). */
+  fault?: MachineFaultKind;
 };
 
 /** The daemon's last report about a check, for the card and the error counter. */
@@ -128,6 +131,8 @@ export type TriggerLastCheck = {
   killedAtLimit?: boolean;
   /** The time limit this check ran under, in seconds (the check's limit may change later). */
   limitSeconds?: number;
+  /** An error the machine caused, not the check (trigger-check-core.ts MACHINE_FAULT_KINDS): not counted. */
+  fault?: MachineFaultKind;
 };
 
 // ── Executor (routines layer) ──
@@ -298,6 +303,13 @@ export type CronJobState = {
   checkErrorSinceMs?: number;
   checkErrorNoticeAtMs?: number;
   checkErrorUserNoticeSinceMs?: number;
+  /**
+   * Check jobs only: when the current run of checks the machine failed began (trigger-apply.ts
+   * MACHINE_FAULT_QUIET_MAX_MS). Any other outcome ends it.
+   */
+  machineFaultSinceMs?: number;
+  /** The run of machine-failed checks (named by its start) the owning task or its lead was told about. */
+  machineFaultToldSinceMs?: number;
   /**
    * Check jobs only: the highest fire already processed, as (epoch, seq). The
    * daemon's seq restarts at 0 whenever its state file is recreated (a reboot
