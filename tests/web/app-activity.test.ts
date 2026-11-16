@@ -4,6 +4,8 @@
  * is the Apps page's own list and never the Sidebar's pin, so the Sidebar preferences are
  * checked to stay exactly as they were.
  */
+import fs from 'node:fs'
+import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AppPlacement, RegisteredApp } from '../../web/src/apps/registry.js'
 import {
@@ -25,6 +27,7 @@ import {
   setAppDisposition,
   setAppPinned,
   tracksAppActivity,
+  type AppDisposition,
 } from '../../web/src/apps/preferences.js'
 import { EXPERIMENTAL_FEATURES, experimentalEnabled } from '../../src/core/experimental.js'
 import { syncable } from '../../web/src/utils/ui-prefs-sync.js'
@@ -174,13 +177,22 @@ describe('resolving the activity against the catalogue', () => {
     expect(keys(resolveAppActivity(opened, NO_PINS, resolved).open)).toEqual([TIME.key, OTHER.key])
   })
 
-  it('leaves out unknown, hidden and locked keys but keeps them in the record', () => {
-    const preferences = setAppDisposition(createAppPreferences(), OTHER.key, 'hidden')
-    const view = resolveAppActivity(opened, NO_PINS, resolveApps(CATALOG, preferences))
-    expect(keys(view.open)).toEqual([TIME.key])
-    expect(keys(view.recent)).toEqual([NOTES.key, TIME.key])
+  it('leaves out unknown and locked keys but keeps them in the record', () => {
+    const view = resolveAppActivity(opened, NO_PINS, resolveApps(CATALOG, createAppPreferences()))
+    expect(keys(view.open)).toEqual([TIME.key, OTHER.key])
     expect(opened.open).toContain('gone:app')
     expect(opened.recent).toContain(HOME.key)
+  })
+
+  it('keeps a hidden app the person opened on the Sidebar, and out of what it offers unasked', () => {
+    const preferences = setAppDisposition(createAppPreferences(), OTHER.key, 'hidden')
+    const view = resolveAppActivity(opened, setAppPinned(createAppPins(), OTHER.key, true), resolveApps(CATALOG, preferences))
+    expect(keys(view.open)).toEqual([TIME.key, OTHER.key])
+    expect(keys(view.recent)).toEqual([NOTES.key, TIME.key])
+    expect(keys(view.pinned)).toEqual([])
+    // Hiding closes it (Sidebar.tsx): closed, it has no row anywhere.
+    const closed = resolveAppActivity(closeAppActivity(opened, OTHER.key), NO_PINS, resolveApps(CATALOG, preferences))
+    expect(keys(closed.open)).toEqual([TIME.key])
   })
 
   it('brings an app back when its plugin is turned on again', () => {
@@ -332,5 +344,83 @@ describe('app activity storage across tabs', () => {
     expect(JSON.parse(storage.getItem(APP_PREFERENCES_KEY)!)).toEqual({ ...createAppPreferences(), unpinned: [NOTES.key] })
     expect(tab.getAppPreferences().unpinned).toEqual([NOTES.key])
     expect(JSON.parse(storage.getItem(APP_ACTIVITY_KEY)!).open).toEqual([TIME.key])
+  })
+})
+
+/**
+ * The system rule, for every app there is: one the person opened keeps a Sidebar row after
+ * they leave it, until they close it, whatever its kind, its declared placement or the
+ * person's earlier pin, unpin, hide or placement choice. Enumerated, so a new kind,
+ * placement or disposition that leaves an opened app with no row fails here.
+ */
+describe('every opened app keeps a Sidebar row after the person switches away', () => {
+  const KINDS: RegisteredApp['kind'][] = ['core', 'native', 'webview']
+  const DISPOSITIONS = ['pinned', 'unpinned', 'hidden'] as const
+  const OVERRIDES: Array<AppPlacement | undefined> = [undefined, ...(['sidebar', 'settings'] as AppPlacement[])]
+  const cases: Array<{ name: string; item: RegisteredApp; disposition: typeof DISPOSITIONS[number]; override?: AppPlacement }> = []
+  for (const kind of KINDS) {
+    for (const placement of ['sidebar', 'settings'] as AppPlacement[]) {
+      for (const disposition of DISPOSITIONS) {
+        for (const override of OVERRIDES) {
+          const item = { ...app(`${kind}-x:main`, 600, { placement }), kind }
+          cases.push({ name: `${kind} declared ${placement}, ${disposition}, override ${override ?? 'none'}`, item, disposition, override })
+        }
+      }
+    }
+  }
+
+  it.each(cases)('$name', ({ item, disposition, override }) => {
+    let preferences = setAppDisposition(createAppPreferences(), item.key, disposition)
+    if (override) preferences = { ...preferences, placement: { ...preferences.placement, [item.key]: override } }
+    const catalog = [...CATALOG, item]
+    const resolved = resolveApps(catalog, preferences)
+    // Opened, then the person went Home: the route that recorded it is gone.
+    const activity = openAppActivity(openAppActivity(createAppActivity(), item.key), HOME.key)
+    const view = resolveAppActivity(activity, NO_PINS, resolved)
+    const rows = [...keys(resolved.sidebar), ...keys(view.open)]
+    expect(rows.filter((key) => key === item.key)).toHaveLength(1)
+  })
+
+  it('covers every disposition the store knows', () => {
+    const known: AppDisposition[] = ['pinned', 'unpinned', 'hidden']
+    expect([...DISPOSITIONS].sort()).toEqual([...known].sort())
+  })
+})
+
+/**
+ * Only the person's own Hide may mark an app hidden: no default, install, migration or
+ * automatic flow. `hideApp` (store.ts) is the one writer, the Sidebar menu's Hide app its one
+ * caller, and every other disposition write names 'pinned' or 'unpinned' outright. A new
+ * writer fails here until it is shown to be a person's click.
+ */
+describe('who may hide an app', () => {
+  const root = path.resolve(__dirname, '../../web/src')
+  const sources: Array<{ rel: string; text: string }> = []
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else if (/\.(ts|tsx)$/.test(entry.name)) sources.push({ rel: path.relative(root, full).split(path.sep).join('/'), text: fs.readFileSync(full, 'utf8') })
+    }
+  }
+  walk(root)
+  const OWNERS = new Set(['apps/preferences.ts', 'apps/store.ts'])
+
+  it('calls hideApp only from the Sidebar menu', () => {
+    const callers = sources.filter(({ rel, text }) => !OWNERS.has(rel) && /\bhideApp\(/.test(text)).map(({ rel }) => rel)
+    expect(callers).toEqual(['components/layout/Sidebar.tsx'])
+  })
+
+  it('names pinned or unpinned outright in every other disposition write', () => {
+    const offenders: string[] = []
+    for (const { rel, text } of sources) {
+      if (OWNERS.has(rel)) continue
+      for (const call of text.matchAll(/\b(?:updateAppDisposition|setAppDisposition)\(([^()]*)\)/g)) {
+        const disposition = call[1].split(',').slice(1).join(',').trim()
+        if (!/^(?:[\w.]+ \? )?'(?:pinned|unpinned)'(?: : '(?:pinned|unpinned)')?$/.test(disposition)) offenders.push(`${rel}: ${call[0]}`)
+      }
+      if (/\.hidden\.push\(|hidden:\s*\[\s*(?:['"`]|\.\.\.)/.test(text)) offenders.push(`${rel}: writes the hidden list`)
+    }
+    expect(offenders).toEqual([])
   })
 })

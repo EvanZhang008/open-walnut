@@ -100,6 +100,23 @@ export function updateAppDisposition(key: string, disposition: AppDisposition): 
   publish((current) => setAppDisposition(current, key, disposition))
 }
 
+/**
+ * The person's Hide, the one way an app becomes hidden: no default, install or automatic flow
+ * calls it (tests/web/app-activity.test.ts holds that). It closes the app too: an app opened
+ * keeps an Open row whether hidden or not (preferences.ts resolveAppActivity), so a Hide that
+ * left it open would bring its row straight back.
+ */
+export function hideApp(key: string): void {
+  updateAppDisposition(key, 'hidden')
+  markAppClosed(key)
+}
+
+/** An Open row made the app's own Sidebar row: it is on the Sidebar now, so no longer "open". */
+export function keepAppOnSidebar(app: Pick<RegisteredApp, 'key' | 'kind'>): void {
+  updateAppOnSidebar(app, true)
+  markAppClosed(app.key)
+}
+
 /** The Apps page's switch, as one write (see `setAppOnSidebar`). */
 export function updateAppOnSidebar(app: Pick<RegisteredApp, 'key' | 'kind'>, on: boolean): void {
   publish((current) => setAppOnSidebar(current, app, on))

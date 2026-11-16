@@ -82,14 +82,14 @@ const NO_ACTIVITY: ResolvedAppActivity = { open: [], recent: [], pinned: [] }
  * the catalogue the caller already reads. Empty while the experiment is off, so every
  * surface draws exactly what it drew before it.
  */
-export function useAppActivity(catalog: Pick<ResolvedApps, 'discoverable' | 'sidebar'>): ResolvedAppActivity {
+export function useAppActivity(catalog: Pick<ResolvedApps, 'all' | 'discoverable' | 'sidebar'>): ResolvedAppActivity {
   const on = useExperimental('apps_stay_open')
   const activity = useSyncExternalStore(subscribeAppActivity, getAppActivity, getAppActivity)
   const pins = useSyncExternalStore(subscribeAppPins, getAppPins, getAppPins)
-  const { discoverable, sidebar } = catalog
+  const { all, discoverable, sidebar } = catalog
   return useMemo(
-    () => (on ? resolveAppActivity(activity, pins, { discoverable, sidebar }) : NO_ACTIVITY),
-    [on, activity, pins, discoverable, sidebar],
+    () => (on ? resolveAppActivity(activity, pins, { all, discoverable, sidebar }) : NO_ACTIVITY),
+    [on, activity, pins, all, discoverable, sidebar],
   )
 }
 
@@ -99,12 +99,12 @@ export function useAppActivity(catalog: Pick<ResolvedApps, 'discoverable' | 'sid
  * reload) has in common. Keyed by the app, not the path, so moving inside an app or a
  * catalogue refresh writes nothing. Closing the app on screen leaves its page (Sidebar.tsx),
  * so the next visit is a new key and records it again; a way in that may land on the page
- * already on screen calls `markAppOpened` itself (AppQuickOpen.tsx). A hidden or locked
- * app is never recorded.
+ * already on screen calls `markAppOpened` itself (AppQuickOpen.tsx). A locked app is never
+ * recorded; a hidden one is, since the person opened it (see `resolveAppActivity`).
  */
-export function useTrackOpenedApp(app: RegisteredApp | undefined, hidden: readonly RegisteredApp[]): void {
+export function useTrackOpenedApp(app: RegisteredApp | undefined): void {
   const on = useExperimental('apps_stay_open')
-  const key = app && tracksAppActivity(app) && !hidden.some((item) => item.key === app.key) ? app.key : ''
+  const key = app && tracksAppActivity(app) ? app.key : ''
   useEffect(() => {
     if (on && key) markAppOpened(key)
   }, [on, key])

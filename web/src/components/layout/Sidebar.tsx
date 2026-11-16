@@ -10,12 +10,14 @@ import { appPathMatches } from '@/apps/registry';
 import { useRailItemsShown } from '@/apps/rail-items';
 import { CalendarIcon, PuzzleIcon } from '@/apps/icons';
 import {
+  hideApp,
+  keepAppOnSidebar,
   markAppClosed,
   moveAppPreference,
   resetAppOrder,
   updateAppDisposition,
-  updateAppOnSidebar,
 } from '@/apps/store';
+import { useExperimental } from '@/hooks/useExperimental';
 import type { RegisteredApp } from '@/apps/registry';
 import { useNotifications, attentionHeld, quietLabel, railBadge, railCount, railDot } from '@/contexts/notifications';
 import '@/styles/notification-quiet.css';
@@ -80,6 +82,7 @@ export function Sidebar({
   const apps = useAppCatalog();
   // Experiment apps_stay_open: apps opened from anywhere, kept here until closed (empty when off).
   const activity = useAppActivity(apps);
+  const appsStayOpen = useExperimental('apps_stay_open');
   // Built-in rail entries the user took off the rail on the Apps page (apps/rail-items.ts).
   const railShown = useRailItemsShown();
   const navigate = useNavigate();
@@ -298,12 +301,14 @@ export function Sidebar({
     { sidebar: apps.sidebar, open: activity.open, phone },
     {
       openWindow: (item) => { openAppWindow(item.key); },
-      keepOnSidebar: (item) => { updateAppOnSidebar(item, true); markAppClosed(item.key); },
+      keepOnSidebar: keepAppOnSidebar,
       closeOpen: (item) => closeOpenApp(item),
       move: moveAppPreference,
       resetOrder: resetAppOrder,
       unpin: (item) => updateAppDisposition(item.key, 'unpinned'),
-      hide: (item) => updateAppDisposition(item.key, 'hidden'),
+      // The person's own Hide (store.ts hideApp closes it as well). While open apps stay on the
+      // Sidebar, hiding the app on screen leaves its page too, like Close.
+      hide: (item) => { hideApp(item.key); if (appsStayOpen) leaveIfOnScreen(item); },
       manage: () => navigate('/apps'),
     },
   );
@@ -371,9 +376,12 @@ export function Sidebar({
   const openApps = activity.open.filter((app) => !(phone && isDesktopOnlyApp(app)));
   // Closing the app on screen also leaves it: its page with no row would be a page you
   // cannot get back to from the rail. The Apps page keeps it under Recently used.
+  const leaveIfOnScreen = (app: RegisteredApp) => {
+    if (appPathMatches(app, window.location.pathname)) navigate('/apps');
+  };
   const closeOpenApp = (app: RegisteredApp) => {
     markAppClosed(app.key);
-    if (appPathMatches(app, window.location.pathname)) navigate('/apps');
+    leaveIfOnScreen(app);
   };
 
   return (

@@ -97,7 +97,7 @@ function AppShellInner({ children }: AppShellProps) {
   const isMainPage = location.pathname === '/';
   const activeApp = apps.findByPath(location.pathname);
   // Experiment apps_stay_open: the app on screen stays on the Sidebar until it is closed.
-  useTrackOpenedApp(activeApp, apps.hidden);
+  useTrackOpenedApp(activeApp);
   const isFullBleed = activeApp?.fullBleed ?? location.pathname.startsWith('/apps/');
   const focusBar = useFocusBarContext();
   const contentRef = useRef<HTMLDivElement>(null);

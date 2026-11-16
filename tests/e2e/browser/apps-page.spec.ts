@@ -591,6 +591,69 @@ test('an opened App stays on the Sidebar until closed, and the Apps page finds i
   }
 })
 
+/**
+ * The system rule for every app (web/src/apps/preferences.ts resolveAppActivity): one the person
+ * opened keeps a Sidebar row after they leave it, a hidden one too, since hidden only keeps an
+ * App out of what Walnut offers unasked. The person's own Hide closes it at once. Then EVERY App
+ * the fixture has installed is opened from its card and left for Home; one with no row fails.
+ */
+test('every App the person opened keeps a Sidebar row after they leave it, a hidden one too', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  // The Hide below is written to this tab only, never to the fixture's prefs another spec reads.
+  await isolateUiPrefs(page)
+  await setAppsStayOpen(page, true)
+  try {
+    await home(page)
+    const openRow = page.getByTestId(`sidebar-open-app-${TIME_APP}`)
+    const menu = page.getByTestId('sidebar-app-ctx-menu')
+
+    // Kept on the Sidebar, then the person hides it from its own row while on it: gone at once.
+    await openApps(page)
+    await page.getByTestId('plugin-card-open-walnut-time').click()
+    await expect(openRow).toBeVisible()
+    await openRow.getByTestId(`sidebar-app-${TIME_APP}`).click({ button: 'right' })
+    await menu.getByRole('menuitem', { name: 'Keep on sidebar' }).click()
+    const ownRow = page.locator(`.sidebar-nav > [data-testid="sidebar-app-${TIME_APP}"]`)
+    await expect(ownRow).toBeVisible()
+    await ownRow.click({ button: 'right' })
+    await menu.getByRole('menuitem', { name: 'Hide app' }).click()
+    await expect(page.getByTestId(`sidebar-app-${TIME_APP}`)).toHaveCount(0)
+    await expect(page).toHaveURL(/\/apps$/)
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('open-walnut-app-preferences-v1') ?? '{}'))
+    expect(stored.hidden).toContain(TIME_APP)
+
+    // Hidden, and opened again by the person: it keeps an Open row after they go Home.
+    await page.getByTestId('plugin-card-open-walnut-time').click()
+    await expect(page).toHaveURL(/\/apps\/walnut-time~main/)
+    await page.getByTestId('sidebar-core-app-home').click()
+    await expect(openRow).toBeVisible()
+    await page.reload()
+    await expect(openRow).toBeVisible({ timeout: 60_000 })
+
+    // Every installed App with a screen, whatever it declared or the person chose before.
+    await openApps(page)
+    const cards = await page.locator('[data-testid^="plugin-card-open-"]').evaluateAll(
+      (nodes) => nodes.map((node) => node.getAttribute('data-testid')!),
+    )
+    expect(cards.length).toBeGreaterThan(0)
+    for (const card of cards) {
+      await openApps(page)
+      await page.getByTestId(card).click()
+      await expect(page).toHaveURL(/\/apps\/[^/]+/)
+      const appPath = new URL(page.url()).pathname
+      await page.getByTestId('sidebar-core-app-home').click()
+      await expect(page).toHaveURL(/\/$/)
+      // Its row links to the app's root or a place inside it, never to another app's page.
+      const row = page.locator(`.sidebar-nav a[href="${appPath}"], .sidebar-nav a[href^="${appPath}/"], .sidebar-nav a[href^="${appPath}?"]`)
+      await expect(row, `${card} keeps a Sidebar row`).toHaveCount(1)
+    }
+    expect(pageErrors).toEqual([])
+  } finally {
+    await setAppsStayOpen(page, false)
+  }
+})
+
 test('a corrupt or stale open-apps record never breaks the rail or the Apps page', async ({ page }) => {
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))

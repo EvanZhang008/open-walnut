@@ -418,21 +418,32 @@ export function setAppPinned(pins: AppPins, key: string, pinned: boolean): AppPi
 
 /**
  * Keys become apps here, and only apps that can be opened now: an unknown key (a plugin
- * turned off or removed, a webview still loading) or a hidden app is left out of every
- * list but kept in the record, so it comes back when its app does.
+ * turned off or removed, a webview still loading) is left out of every list but kept in the
+ * record, so it comes back when its app does.
+ *
+ * The one rule for every app, whoever made it (core, a native plugin, a webview): an app the
+ * person opened keeps a Sidebar row until they close it. Its own row when it has one, else an
+ * Open row here. A hidden app is no exception: hidden keeps an app out of what Walnut OFFERS
+ * unasked (its Sidebar row, Recently used, the Command Palette), never out of what the person
+ * opened themselves (2026-11-16: a plugin App hidden on this device opened, then vanished from
+ * the rail the moment its page was left). Hiding an app also closes it (Sidebar.tsx), so a
+ * Hide still takes its row away at once.
  */
 export function resolveAppActivity(
   activity: AppActivity,
   pins: AppPins,
-  resolved: Pick<ResolvedApps, 'discoverable' | 'sidebar'>,
+  resolved: Pick<ResolvedApps, 'all' | 'discoverable' | 'sidebar'>,
 ): ResolvedAppActivity {
-  const byKey = new Map(resolved.discoverable.filter(tracksAppActivity).map((app) => [app.key, app]))
-  const pick = (keys: string[]) => keys.map((key) => byKey.get(key)).filter((app): app is RegisteredApp => Boolean(app))
+  const index = (apps: RegisteredApp[]) => new Map(apps.filter(tracksAppActivity).map((app) => [app.key, app]))
+  const any = index(resolved.all)
+  const offered = index(resolved.discoverable)
+  const pick = (keys: string[], byKey: Map<string, RegisteredApp>) =>
+    keys.map((key) => byKey.get(key)).filter((app): app is RegisteredApp => Boolean(app))
   const onSidebar = new Set(resolved.sidebar.map((app) => app.key))
   const pinnedKeys = new Set(pins.pinned)
   return {
-    open: pick(activity.open).filter((app) => !onSidebar.has(app.key)),
-    recent: pick(activity.recent).filter((app) => !pinnedKeys.has(app.key)),
-    pinned: pick(pins.pinned),
+    open: pick(activity.open, any).filter((app) => !onSidebar.has(app.key)),
+    recent: pick(activity.recent, offered).filter((app) => !pinnedKeys.has(app.key)),
+    pinned: pick(pins.pinned, offered),
   }
 }
