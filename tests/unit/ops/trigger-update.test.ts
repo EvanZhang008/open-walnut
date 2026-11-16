@@ -152,6 +152,28 @@ describe('class guard: no trigger text says delete and arm again to change one',
     expect(hits).toEqual([])
   })
 
+  it('holds for every source file and shipped skill, with string concatenations joined', () => {
+    // 2026-11-15: the wait-until wake (src/core/task-wait-wake.ts) still said "trigger_delete,
+    // then trigger_create" after the ops, skill and notices were fixed: any text Walnut sends counts.
+    const root = path.resolve(__dirname, '../../../src')
+    const files: string[] = []
+    const walk = (dir: string): void => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name)
+        if (e.isDirectory()) walk(p)
+        else if (/\.(ts|tsx|md|mjs)$/.test(e.name)) files.push(p)
+      }
+    }
+    walk(root)
+    // Narrower than DELETE_AND_REARM: source has other things that are re-created on purpose.
+    const SOURCE_DELETE_AND_REARM = /trigger_delete[^\n]{0,40}\btrigger_create\b|arm the fixed one/
+    const hits = files.filter((f) => {
+      const joined = fs.readFileSync(f, 'utf8').replace(/['"`]\s*\n?\s*\+\s*['"`]/g, '')
+      return SOURCE_DELETE_AND_REARM.test(joined)
+    }).map((f) => path.relative(root, f))
+    expect(hits).toEqual([])
+  })
+
   it('a trigger stopped at its time limit is told the trigger_update call with a larger limit', () => {
     const owner = buildCheckFailureNotice(event(), applied({ killedAtLimit: true, timeLimitSeconds: 30 }), 'disabled')
     expect(owner).toContain('Walnut stopped your trigger "Pipeline watch" (t1)')
