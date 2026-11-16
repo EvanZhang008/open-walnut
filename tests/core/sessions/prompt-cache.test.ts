@@ -86,21 +86,23 @@ describe('when an idle session compacts', () => {
   });
 
   // 2026-11-04, Evan: "it should be 80% of the auto compaction limit defined ... if can't find use max,
-  // if don't know don't do" (85% by default). A 300K session under a 500K window is left alone.
+  // if don't know don't do" (80% by default since 2026-11-16, 85 before). A 300K session under a 500K window is left alone.
   it('only past its share of where it compacts by itself, and never when that is unknown', () => {
     expect(idleCompactionWindow(facts({ tokens: 300_000, compactsAt: 500_000 }), T0)).toBeNull();
     expect(idleCompactionWindow(facts({ tokens: 425_000, compactsAt: 500_000 }), T0)).not.toBeNull();
     expect(idleCompactionWindow(facts({ tokens: 300_000, compactsAt: 500_000 }), T0, { limitPercent: 60 })).not.toBeNull();
     expect(idleCompactionWindow(facts({ compactsAt: undefined }), T0)).toBeNull();
-    expect(idleCompactThreshold({ compactsAt: 500_000 })).toBe(425_000);
+    expect(idleCompactThreshold({ compactsAt: 500_000 })).toBe(400_000);
+    expect(idleCompactionWindow(facts({ tokens: 399_000, compactsAt: 500_000 }), T0)).toBeNull();
+    expect(idleCompactionWindow(facts({ tokens: 400_000, compactsAt: 500_000 }), T0)).not.toBeNull();
     expect(idleCompactThreshold({ compactsAt: 500_000 }, 90)).toBe(450_000);
     expect(idleCompactThreshold({})).toBeNull();
-    // 2026-11-04 review: on a 200K window 85% (170K) comes after Claude Code's own compaction (about
+    // 2026-11-04 review: on a 200K window 80% (160K) comes close to Claude Code's own compaction (about
     // 167K), so the threshold stays 45K under the window there, and a 99% share never passes it.
     expect(idleCompactThreshold({ compactsAt: 200_000 })).toBe(155_000);
     expect(idleCompactThreshold({ compactsAt: 500_000 }, 99)).toBe(455_000);
     expect([resolveIdleCompactLimitPercent(undefined), resolveIdleCompactLimitPercent(null), resolveIdleCompactLimitPercent(40),
-      resolveIdleCompactLimitPercent(100), resolveIdleCompactLimitPercent(90)]).toEqual([85, 85, 85, 85, 90]);
+      resolveIdleCompactLimitPercent(100), resolveIdleCompactLimitPercent(90)]).toEqual([80, 80, 80, 80, 90]);
   });
 
   it('a compaction carries where its session compacts by itself across it', () => {

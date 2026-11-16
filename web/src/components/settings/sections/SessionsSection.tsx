@@ -96,7 +96,7 @@ export function SessionsSection({ config, onSave }: Props) {
     (v) => saveIdleCompaction({ enabled: v }, 'sessions.idle-compaction'),
     { rowKey: 'sessions.idle-compaction' },
   );
-  // The share of where a session compacts by itself. Empty = 85; outside 50..99 it is pulled in on commit.
+  // The share of where a session compacts by itself. Empty = DEFAULT_IDLE_COMPACT_LIMIT_PERCENT (80); outside 50..99 it is pulled in on commit.
   const compactPercent = useCommitField<number | undefined>(
     config.session?.idle_compaction?.limit_percent ?? undefined,
     (v) => saveIdleCompaction({ limit_percent: v ?? null }, 'sessions.idle-compaction-percent'),

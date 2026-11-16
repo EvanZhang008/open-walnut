@@ -135,12 +135,12 @@ describe('when it fires', () => {
     await h.runDue();
     expect(h.sends).toEqual([{ sid: SID, text: IDLE_COMPACT_TEXT, source: IDLE_COMPACT_SOURCE }]);
     expect(isQuietTurn(SID)).toBe(true);
-    expect(h.notes[0]).toBe('Compacting this idle session before its prompt cache expires in about 3 min: 400K tokens, past 85% (383K) of the 450K auto-compaction window this session uses.');
+    expect(h.notes[0]).toBe('Compacting this idle session before its prompt cache expires in about 3 min: 400K tokens, past 80% (360K) of the 450K auto-compaction window this session uses.');
     expect(h.state.rec?.idleCompaction).toMatchObject({ priorTurnEnd: new Date(T0 + 30_000).toISOString(), tokens: 400_000 });
     // Its history row says why: kept by the command line's uuid.
     expect(h.state.rec?.idleCompactionLog).toEqual([{
       lineUuid: expect.stringMatching(/^cc0a1d1e-/), sentAt: new Date(h.now.ms).toISOString(),
-      tokens: 400_000, threshold: 382_500, limitPercent: 85, compactsAt: 450_000, source: 'auto-compact',
+      tokens: 400_000, threshold: 360_000, limitPercent: 80, compactsAt: 450_000, source: 'auto-compact',
     }]);
   });
 
@@ -454,10 +454,10 @@ describe('at boot', () => {
 
 describe('the settings', () => {
   it('reads enabled, the threshold and the test lead', () => {
-    expect(resolveIdleCompactionConfig(undefined, {})).toEqual({ enabled: true, limitPercent: 85, leadMs: IDLE_COMPACT_LEAD_MS });
+    expect(resolveIdleCompactionConfig(undefined, {})).toEqual({ enabled: true, limitPercent: 80, leadMs: IDLE_COMPACT_LEAD_MS });
     expect(resolveIdleCompactionConfig({ idle_compaction: { limit_percent: 90 } }, { WALNUT_IDLE_COMPACT_LEAD_MS: '3590000' }))
       .toEqual({ enabled: true, limitPercent: 90, leadMs: 3_590_000 });
-    expect(resolveIdleCompactionConfig({ idle_compaction: { limit_percent: 20 } }, {}).limitPercent).toBe(85);
+    expect(resolveIdleCompactionConfig({ idle_compaction: { limit_percent: 20 } }, {}).limitPercent).toBe(80);
     expect(resolveIdleCompactionConfig({ idle_compaction: { enabled: false } }, {}).enabled).toBe(false);
     expect(resolveIdleCompactionConfig({}, { WALNUT_IDLE_COMPACTION: '0' }).enabled).toBe(false);
   });

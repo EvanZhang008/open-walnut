@@ -73,7 +73,7 @@ async function startBig(message: string): Promise<{ sid: string; taskId: string 
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   process.env.WALNUT_IDLE_COMPACT_LEAD_MS = String(LEAD_MS)
-  // The model's window the mock reports; no auto-compaction window is set, so the threshold is 85% of it (382.5K).
+  // The model's window the mock reports; no auto-compaction window is set, so the threshold is 80% of it (360K).
   process.env.MOCK_CONTEXT_WINDOW = '450000'
   process.env.MOCK_COMPACT_MS = '2500'
   daemon = await createMockDaemon()
@@ -122,7 +122,7 @@ describe('a big idle session with a 1-hour cache', () => {
     expect(rec!.idleCompaction).toMatchObject({ tokens: 400_040 })
     // Why it ran, by its command line's uuid (the row shows it).
     expect(rec!.idleCompactionLog).toEqual([expect.objectContaining({
-      lineUuid: expect.stringMatching(/^cc0a1d1e-/), tokens: 400_040, threshold: 382_500, limitPercent: 85, compactsAt: 450_000, source: 'model',
+      lineUuid: expect.stringMatching(/^cc0a1d1e-/), tokens: 400_040, threshold: 360_000, limitPercent: 80, compactsAt: 450_000, source: 'model',
     })])
     expect(Date.parse(rec!.idleCompaction!.priorTurnEnd!)).toBeLessThanOrEqual(Date.parse(rec!.idleCompaction!.sentAt))
     await until('quiet end stored', () => getSessionByClaudeId(w.sid), (r) => !!r?.idleCompaction?.endedAt)
@@ -211,7 +211,7 @@ describe('a big idle session with a 1-hour cache', () => {
   }, 90_000)
 
   // 2026-11-04, Evan: a 300K session compacted while idle was "too sensitive"; only one near where it
-  // compacts by itself is (85% of its window here: 382.5K of 450K).
+  // compacts by itself is (80% of its window here: 360K of 450K).
   it('a 5-minute cache, a small session and a 300K one below the threshold are left alone', async () => {
     const short = await startBig('big-context-turn:400000:5m')
     const small = await startBig('big-context-turn:60000:1h')

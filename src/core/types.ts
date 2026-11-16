@@ -1892,7 +1892,7 @@ export interface Config {
       /** Default true. */
       enabled?: boolean;
       /** Compact a session at this share (%) of where it compacts by itself: its auto-compaction
-       *  window, else its model's window (never when neither is known). Default 85; 50 to 99. */
+       *  window, else its model's window (never when neither is known). Default 80; 50 to 99. */
       limit_percent?: number | null;
     };
     /** How many minutes an idle FIFO session stays alive before being auto-killed.

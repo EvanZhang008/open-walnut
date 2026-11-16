@@ -24,16 +24,23 @@ export const FIVE_MINUTES_MS = 5 * 60_000;
 
 /**
  * The idle compaction runs only for a session this full: this share of where it compacts by itself
- * (its auto-compaction window, else the model's). Measured 2026-11-04 on Claude Code 2.1.312, a
- * `/compact` writes the whole conversation to the cache once, warm or cold, so it pays only for a
- * session that would soon compact anyway. Below 90%: the CLI keeps room for its answer and compacts
- * on its own near 93% of a 500K window, and a busy session could get there first.
+ * (its auto-compaction window, else the model's). 2026-11-04, the user, after a 300K session was
+ * compacted while idle: "it should be 80% of the auto compaction limit defined ... if can't find use
+ * max, if don't know don't do". It shipped at 85 then; 80 since 2026-11-16 (the Walnut VP: follow
+ * his words literally). Below 90%: the CLI keeps room for its answer and compacts on its own near
+ * 93% of a 500K window, and a busy session could get there first.
+ *
+ * Cost (measured 2026-11-16 on production, Claude Code's own cost on the results before and after
+ * each idle `/compact`, 36 of them from 11-12 to 11-15): a compaction of a warm 425K to 466K session
+ * cost mostly $0.32 to $0.90, median about $0.70, since it reads the warm cache (the 2026-11-04
+ * measurement on Claude Code 2.1.312 saw it write the whole conversation); a cold wake of the same
+ * session writes it all again, about $3.50 at the 1-hour write price.
  */
-export const DEFAULT_IDLE_COMPACT_LIMIT_PERCENT = 85;
+export const DEFAULT_IDLE_COMPACT_LIMIT_PERCENT = 80;
 /**
  * The threshold stays at least this far under the limit: Claude Code compacts by itself about 33K
  * under its window (room for its answer), and one more turn can add the rest. On a 200K window
- * 85% (170K) would come after the CLI's own compaction (about 167K), so there it is 155K.
+ * 80% (160K) would come close to the CLI's own compaction (about 167K), so there it is 155K.
  */
 export const IDLE_COMPACT_HEADROOM_TOKENS = 45_000;
 /** The share a setting may name; outside it (or unset) the default holds. */

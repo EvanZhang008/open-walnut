@@ -1,6 +1,6 @@
 /**
  * Idle compaction: a Claude Code session left idle that is close to compacting by
- * itself (`session.idle_compaction.limit_percent`, 85% by default, of its
+ * itself (`session.idle_compaction.limit_percent`, 80% by default, of its
  * auto-compaction window, else of the model's window; never when neither is
  * known) is compacted shortly before its prompt cache expires (2026-11-04).
  * Measured on Claude Code 2.1.312, a `/compact` writes the whole conversation to

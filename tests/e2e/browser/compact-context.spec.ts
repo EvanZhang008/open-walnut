@@ -208,10 +208,10 @@ test('Settings has the idle compaction switch and its threshold', async ({ page,
   // No cold-cache line, so no setting for one.
   await expect(page.locator('#cold-offer')).toHaveCount(0)
   await expect(page.locator('#idle-compaction-min')).toHaveCount(0)
-  // On by default, at 85% of where a session compacts by itself; the share is pulled into 50..99.
+  // On by default, at 80% of where a session compacts by itself; the share is pulled into 50..99.
   await expect(page.locator('#idle-compaction')).toBeChecked()
   const pct = page.locator('#idle-compaction-percent')
-  await expect(pct).toHaveAttribute('placeholder', '85')
+  await expect(pct).toHaveAttribute('placeholder', '80')
   await pct.fill('90')
   await pct.press('Enter')
   await expect.poll(async () => (await idleCompactionConfig(request))?.limit_percent ?? null, { timeout: 10_000 }).toBe(90)
@@ -234,7 +234,7 @@ test('Settings has the idle compaction switch and its threshold', async ({ page,
 })
 
 // Needs a server whose idle compaction fires right after a turn (WALNUT_IDLE_COMPACT_LEAD_MS=3580000) and a
-// mock that reports a 450K model window (MOCK_CONTEXT_WINDOW=450000): 400K is then past 85% of it.
+// mock that reports a 450K model window (MOCK_CONTEXT_WINDOW=450000): 400K is then past 80% of it.
 // 2026-11-04, Evan: the row says why it ran, and its setting can be changed "when they see this message".
 test('the idle compaction row says why it ran and changes its setting in place', async ({ page, request }, info) => {
   test.skip(!process.env.WALNUT_IDLE_COMPACT_LEAD_MS || !process.env.MOCK_CONTEXT_WINDOW,
@@ -276,9 +276,9 @@ test('the idle compaction row says why it ran and changes its setting in place',
   await expect(line).toBeVisible()
   await expect(line.locator('.idle-compact-toggle')).toHaveAttribute('aria-expanded', 'true')
   await expect(line.getByTestId('idle-compact-why')).toHaveText(
-    "Why: 400K tokens, past 85% (383K) of the model's 450K context window (no auto-compaction window is set).", { timeout: 15_000 })
+    "Why: 400K tokens, past 80% (360K) of the model's 450K context window (no auto-compaction window is set).", { timeout: 15_000 })
   const pct = line.getByTestId('idle-compact-percent')
-  await expect(pct).toHaveValue('85')
+  await expect(pct).toHaveValue('80')
   // Out of range: kept to the nearest end, as Settings keeps it, and said so.
   await pct.fill('120')
   await pct.press('Enter')
