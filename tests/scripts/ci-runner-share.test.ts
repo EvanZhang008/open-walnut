@@ -45,7 +45,7 @@ describe('ci.yml leaves the runners to the push gate on a push to main', () => {
 
   it('caps every matrix of more than three legs on a push, and keeps a pull request at full width', () => {
     const wide = Object.entries(doc.jobs).filter(([, j]) => legs(j) > 3)
-    expect(wide.map(([n]) => n).sort()).toEqual(['browser', 'ios', 'node-side', 'test', 'test-e2e'])
+    expect(wide.map(([n]) => n).sort()).toEqual(['browser', 'field', 'ios', 'node-side', 'test', 'test-e2e'])
     for (const [name, job] of wide) {
       expect(pushCap(job), `${name}: max-parallel on a push`).toBeLessThanOrEqual(4)
       expect(prCap(job), `${name}: a pull request keeps every leg`).toBeGreaterThanOrEqual(legs(job))
@@ -55,8 +55,11 @@ describe('ci.yml leaves the runners to the push gate on a push to main', () => {
   it('keeps the capped matrices together under half of the 20 jobs', () => {
     // The iOS job's two are not new: it ran two legs, uncapped, before its UI layer took three
     // shards (run 42735468568 ran out of time on one), and on a push it still holds two runners at a time.
+    // The field rehearsal's two are not new either: it ran two legs, uncapped, before its Linux
+    // leg split into three (2026-11-15, 87 of its 90 minutes), and on a push it holds two still.
     const sum = Object.values(doc.jobs).filter((j) => legs(j) > 3).reduce((n, j) => n + pushCap(j), 0)
     expect(pushCap(doc.jobs.ios!)).toBeLessThanOrEqual(2)
-    expect(sum).toBeLessThanOrEqual(11 + 2)
+    expect(pushCap(doc.jobs.field!)).toBeLessThanOrEqual(2)
+    expect(sum).toBeLessThanOrEqual(11 + 2 + 2)
   })
 })

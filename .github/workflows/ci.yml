@@ -586,6 +586,9 @@ jobs:
     needs: build
     timeout-minutes: 90
     strategy:
+      # On a push to main, at most 2 legs at a time (CI_RUNNER_SHARE above), the two it held
+      # before its Linux leg split; a pull request runs all four.
+      max-parallel: ${{ github.event_name == 'push' && 2 || 4 }}
       fail-fast: false
       # Linux splits the start points into legs (run.mjs --field-share): three of them in one job
       # ran 87 of its 90 minutes on 2026-11-15. macOS ran them all in 32.
