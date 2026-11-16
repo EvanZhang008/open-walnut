@@ -16,6 +16,7 @@
  * process loads core ops only, and a plugin declares its ops inside the server.
  */
 
+import { newCallId } from '../lib/op-call-id.js'
 import fs from 'node:fs'
 import net from 'node:net'
 
@@ -120,7 +121,7 @@ export async function reportCheckOutcome(
     timer.unref?.()
     const conn = net.connect(socket)
     conn.on('connect', () => {
-      conn.write(JSON.stringify({ v: 1, op: 'tools.call', sid, args: { name: CHECK_FAULT_OP, args: { kind } } }) + '\n')
+      conn.write(JSON.stringify({ v: 1, op: 'tools.call', sid, args: { name: CHECK_FAULT_OP, args: { kind }, callId: newCallId() } }) + '\n')
     })
     conn.on('data', finish)
     conn.on('error', finish)

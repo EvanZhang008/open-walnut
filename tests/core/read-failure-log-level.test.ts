@@ -30,9 +30,9 @@ describe('readFailureLogLevel', () => {
   }
 
   it('the pool tags exactly the kinds listed above', async () => {
-    const src = await import('node:fs/promises').then(fs => fs.readFile(new URL('../../src/providers/link-failure.ts', import.meta.url), 'utf8'));
-    const declared = src.match(/export type LinkFailureKind = ([^\n]+)/)![1].match(/'([^']+)'/g)!.map(s => s.slice(1, -1));
-    expect(declared.sort()).toEqual(Object.keys(expected).sort());
+    // The kinds the pool declares (LINK_FAILURE_KINDS, the type is derived from it since a4ba56817).
+    const { LINK_FAILURE_KINDS } = await import('../../src/providers/link-failure.js');
+    expect([...LINK_FAILURE_KINDS].sort()).toEqual(Object.keys(expected).sort());
   });
 
   it('this server shutting down is no-link, so debug', () => {
