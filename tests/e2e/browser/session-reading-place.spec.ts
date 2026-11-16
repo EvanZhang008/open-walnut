@@ -184,10 +184,16 @@ test.describe('every chat pane keeps the reader\'s place', () => {
     await expectPages(panel, ['L Main conversation', 'R 1'])
     expectSamePlace(await settledPlace(page, leftHalf(panel)), before, 'Main, moved into the left page')
 
-    // The reader moves on in the left page, then closes the question: Main is
-    // the one page again, where he left it in the left page.
+    // The reader moves on in the left page, then closes the question. A close
+    // closes only that page (2026-11-16, the user: "only close the one I cloed,
+    // not all"): question 1's sibling, question 2 shown above it, takes the right
+    // column, and Main stays where he left it. Closing that one too leaves Main
+    // the one page, where he left it in the left page.
     await wheel(page, leftHalf(panel), 700)
     const inLeft = await settledPlace(page, leftHalf(panel))
+    await rightBody(panel).getByRole('button', { name: 'Close the right page' }).click()
+    await expectPages(panel, ['L Main conversation', 'R 2'])
+    expectSamePlace(await settledPlace(page, leftHalf(panel)), inLeft, 'Main, while the right page closed')
     await rightBody(panel).getByRole('button', { name: 'Close the right page' }).click()
     await expectPages(panel, [])
     expectSamePlace(await settledPlace(page, rightBody(panel)), inLeft, 'Main, back to one page')

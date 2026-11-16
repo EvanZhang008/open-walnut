@@ -136,8 +136,14 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
     let until = startedAt + HOLD_MS;
     let lastTop = Math.round(el.getBoundingClientRect().top);
     // A change of the box's width rewraps its rows: the line on top is useLineAnchor's
-    // to keep then, and this row-share hold would move it (its rAF runs first).
-    const width = el.clientWidth;
+    // to keep then, and this row-share hold would move it. So a frame that sees a new
+    // width only waits: when the anchor puts its line back it stops this hold
+    // (`resized`). When it does not (the anchor was read before this landing moved the
+    // box: a view switch whose new width comes a commit after the rows), the place is
+    // still this landing's, and the hold puts it back in the new width (2026-11-16:
+    // Tree Mode to Conversation Mode kept the scrollTop of the narrower box, and the
+    // reader's message came back at another share of itself).
+    let width = el.clientWidth;
     const stop = () => {
       cancelAnimationFrame(raf);
       for (const t of HOLD_STOPPERS) el.removeEventListener(t, onInput);
@@ -153,7 +159,13 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
         // Stop the initial bottom pin even if this hold was hidden before its first frame.
         el.dispatchEvent(new Event(READER_SCROLL_EVENT));
       }
-      if (!shownRef.current || el.clientWidth !== width) { stop(); return; }
+      if (!shownRef.current) { stop(); return; }
+      if (el.clientWidth !== width) {
+        width = el.clientWidth;
+        if (width === 0) { stop(); return; }
+        raf = requestAnimationFrame(tick);
+        return;
+      }
       isAtBottom.current = false;
       // The bar above the box still settling (a path bar leaving): hold on.
       const top = Math.round(el.getBoundingClientRect().top);
