@@ -47,8 +47,8 @@ export const NOTICE_RIDES: readonly string[] = [
   // A subtask stopped, parked itself or waits on the user (subtask-notices.ts): its lead's work
   // comes back with its completion, its error, or its reply. The parent's own wait note (task-wait-resume.ts).
   'stopped', 'waiting', 'blocked',
-  // Notes that asked for no reply (quiet-notes.ts); a trigger's check that works again.
-  'quiet-notes', 'check_repaired',
+  // Notes that asked for no reply (quiet-notes.ts).
+  'quiet-notes',
   // A write made while the server was away applied, or had nothing to do (offline-handover.ts).
   'applied', 'noop',
   // An engine switch or a move picked earlier expired without running (engine-switch-watch.ts).
@@ -67,6 +67,7 @@ export const NOTICE_WAKES: Readonly<Record<string, string>> = {
   expired: 'an approval the session waits on expired: it must ask again or stop',
   check_failed: 'the session\'s own trigger check fails: only its owner can fix the script',
   check_failing: 'the session\'s own trigger check keeps failing: only its owner can fix the script',
+  check_repaired: 'the session\'s own trigger check broke its output contract and the daemon repaired it: only its owner can fix the script (told at most once a day, trigger-health.ts)',
   trigger_disabled: 'the session\'s own trigger was switched off: only its owner can repair and resume it',
   routine_trouble: 'a routine of the session is in trouble: only its owner can fix it',
   'threads-overdue': 'threads wait on this node\'s decision past their time',

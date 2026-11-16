@@ -68,9 +68,10 @@ describe('subtask notices through the server, queue and CLI stdin', () => {
     const child = (await addTask({ title: 'Notice delivery child', project: 'Test', parent_task_id: taskId })).task
     for (let round = 0; round < 3; round++) {
       await updateSessionRecord(sid, { process_status: 'running' })
+      // An error edge: one that wakes (a waiting, stopped or blocked edge asks nothing and rides the
+      // parent's next message instead, sessions/wake-policy.ts; pinned below).
       await queueSubtaskNotice({
-        parentTaskId: taskId, child: { id: child.id, title: child.title }, kind: 'waiting',
-        waitUntil: `2026-11-01T0${round}:00:00.000Z`,
+        parentTaskId: taskId, child: { id: child.id, title: child.title }, kind: 'error',
         lastWords: { text: `Round ${round}: ${'long evidence '.repeat(100)}${String.fromCodePoint(0x6d88, 0x606f)}` },
       })
       await flushSubtaskNotices()
@@ -88,4 +89,18 @@ describe('subtask notices through the server, queue and CLI stdin', () => {
     expect(res.status).toBe(200)
     expect((await res.json()).sessions.some((s: { claudeSessionId: string }) => s.claudeSessionId === sid)).toBe(true)
   }, 90_000)
+
+  it('a waiting edge into a running parent is held for its next message, never written into the CLI', async () => {
+    const child = (await addTask({ title: 'Notice held child', project: 'Test', parent_task_id: taskId })).task
+    await updateSessionRecord(sid, { process_status: 'running' })
+    await queueSubtaskNotice({
+      parentTaskId: taskId, child: { id: child.id, title: child.title }, kind: 'waiting',
+      waitUntil: '2026-11-01T09:00:00.000Z', lastWords: { text: 'Held round: parked on a review' },
+    })
+    await flushSubtaskNotices()
+    const { heldNoticeKeys } = await import('../../src/core/sessions/held-notices.js')
+    await vi.waitFor(() => expect(heldNoticeKeys(sid)).toContain('riding-notices'), { timeout: 10_000 })
+    expect(daemon.getCommandHistoryFor('send').filter((c) => String(c.payload.message).includes('Held round:'))).toHaveLength(0)
+    expect(await getQueue(sid)).toEqual([])
+  }, 30_000)
 })
