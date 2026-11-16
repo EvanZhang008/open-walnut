@@ -7,11 +7,14 @@
  * (the one its composer and Esc work on). The path bar shows the TRAIL: that
  * path, plus the deeper levels the reader went down to before moving left
  * (Cmd+[ or a segment click), so moving back right (Cmd+]) needs no search.
- * Split, the page left of it is the level right above it on the path (its
- * parent, `Main` for a question on the main conversation): always two pages,
- * the previous and the current (2026-11-10, the user: "we always show current
- * one and previous one"), side by side at equal width with a divider that drags
- * (2026-11-11: "parent and child are equal"); single, the page alone.
+ * Split, the pages left of it are the levels right above it on the path (its
+ * parent, `Main` for a question on the main conversation): up to three pages,
+ * the last levels of the path (2026-11-04, the user: three vertical panels; on
+ * 11-16 again, "please have 3 veirficle pannel, each pannel cna have 2 current
+ * and previous": the previous and the current are the two questions INSIDE a
+ * column, tree-sibling.ts, not two pages). The pages are equal by default, each
+ * divider between them drags (2026-11-11: "parent and child are equal ... also
+ * can adjustable"); single, the page alone.
  *
  *   Main conversation  >  6 title  >  [L] 6.1 title  >  [R] 6.1.2 title
  *
@@ -23,96 +26,184 @@ import { ROOT_THREAD_KEY, type ThreadTree } from '@/utils/thread-tree';
 import type { PageLandings } from '@/utils/thread-stack-state';
 
 /** Narrower than this (the chat area, not the window), Tree Mode shows one page:
- *  from here each page gets at least 300px at the default (equal) split.
- *  A Home column (about 700 to 900px) shows both pages (2026-11-10: under the old
- *  900px it showed the current page alone). */
+ *  from here each of two pages gets at least 300px at the default (equal) split.
+ *  A Home column (about 700 to 900px) shows two pages. */
 export const SPLIT_MIN_WIDTH = 600;
+/** From this chat area width three pages sit side by side, each at least 320px at
+ *  the default split. A Home column stays at two; the full-screen sheet of a
+ *  laptop window and a wide session window (about 1500px) show three. */
+export const THREE_PANES_MIN_WIDTH = 960;
 /** Narrower than this, the path bar shows titles only on the pages on screen. */
 export const PATH_BAR_NARROW = 720;
-/** The most pages Tree Mode shows side by side: the current one and the one before it. */
-export const MAX_PANES = 2;
-/** The most a stored record may name: builds from 2026-11-05 to 2026-11-10 kept up to three. */
-const STORED_PANES_MAX = 3;
+/** The most pages Tree Mode shows side by side. */
+export const MAX_PANES = 3;
 
-/** The left page's share of the two pages' width: half by default (2026-11-11, the
- *  user: "parent and child are equal ... also can adjustable"; only the up/down
- *  sibling box keeps a third), the divider between them moves it within the bounds. */
+/**
+ * The page widths: the dividers' places, as shares of the chat column's width,
+ * left to right (one fewer than the pages). Two pages keep the left page's share
+ * (`treeLeftShare`, half by default); three keep their two dividers
+ * (`treeCols3`, thirds by default). A drag moves one divider between its
+ * neighbours; every page keeps at least its minimum share, and PAGE_MIN_PX when
+ * the column has room for it (a column too narrow for that splits evenly).
+ */
 export const LEFT_SHARE_DEFAULT = 0.5;
 export const LEFT_SHARE_MIN = 0.25;
 export const LEFT_SHARE_MAX = 0.75;
-/** The narrowest either page gets from a drag, when the column has room for it. */
+/** The narrowest page of three, as a share of the column. */
+export const THIRD_SHARE_MIN = 0.15;
+export const THREE_BOUNDS_DEFAULT: readonly number[] = [1 / 3, 2 / 3];
+/** The narrowest any page gets from a drag, when the column has room for it. */
 export const PAGE_MIN_PX = 240;
 
-/** A stored or dragged share, inside the bounds; with the column's width, each
- *  page keeps at least PAGE_MIN_PX (a column under twice that splits evenly). */
+/** The narrowest share a page of `panes` gets in a column `width` wide. */
+function minPaneShare(panes: number, width?: number): number {
+  const floor = panes <= 2 ? LEFT_SHARE_MIN : THIRD_SHARE_MIN;
+  const px = width !== undefined && width > 0 ? Math.min(1 / panes, PAGE_MIN_PX / width) : 0;
+  return Math.min(1 / panes, Math.max(floor, px));
+}
+
+/** The dividers' places by default: equal pages. */
+export function defaultBounds(panes: number): number[] {
+  return Array.from({ length: Math.max(panes, 1) - 1 }, (_, i) => (i + 1) / panes);
+}
+
+/** Divider `i` moved to `share`: every divider in its place, the page each side of it kept wide enough. */
+export function clampBounds(bounds: readonly number[], panes: number, width?: number): number[] {
+  const n = Math.max(panes, 1);
+  if (n < 2) return [];
+  const m = minPaneShare(n, width);
+  const base = bounds.length === n - 1 && bounds.every(Number.isFinite) ? bounds : defaultBounds(n);
+  const out: number[] = [];
+  for (let i = 0; i < n - 1; i++) {
+    const lo = (i === 0 ? 0 : out[i - 1]) + m;
+    const hi = 1 - m * (n - 1 - i);
+    out.push(Math.min(hi, Math.max(lo, base[i])));
+  }
+  return out;
+}
+
+/** Divider `i` dragged to `share`: the other dividers stay where they are (as far as the minimums let them). */
+export function moveBound(bounds: readonly number[], panes: number, i: number, share: number, width?: number): number[] {
+  const n = Math.max(panes, 1);
+  const cur = clampBounds(bounds, n, width);
+  if (i < 0 || i >= cur.length || !Number.isFinite(share)) return cur;
+  const m = minPaneShare(n, width);
+  const lo = (i === 0 ? 0 : cur[i - 1]) + m;
+  const hi = (i === cur.length - 1 ? 1 : cur[i + 1]) - m;
+  const next = [...cur];
+  next[i] = lo > hi ? (lo + hi) / 2 : Math.min(hi, Math.max(lo, share));
+  return next;
+}
+
+/** A stored or dragged share of the left page of two, inside the bounds. */
 export function clampLeftShare(share: number, width?: number): number {
   if (!Number.isFinite(share)) return LEFT_SHARE_DEFAULT;
-  let lo = LEFT_SHARE_MIN;
-  let hi = LEFT_SHARE_MAX;
-  if (width !== undefined && width > 0) {
-    const px = Math.min(0.5, PAGE_MIN_PX / width);
-    lo = Math.max(lo, px);
-    hi = Math.min(hi, 1 - px);
-  }
-  return Math.min(hi, Math.max(lo, share));
+  return clampBounds([share], 2, width)[0];
 }
 
 export const isLeftShare = (v: unknown): v is number =>
   typeof v === 'number' && Number.isFinite(v) && v >= LEFT_SHARE_MIN && v <= LEFT_SHARE_MAX;
 
-/** The split's grid columns: the previous page `share` of the width (half by default), the current page the rest. */
-export function paneColumns(panes: number, share: number = LEFT_SHARE_DEFAULT): string {
+/** A kept pair of dividers for three pages: two places in order inside the column. */
+export const isThreeBounds = (v: unknown): v is number[] =>
+  Array.isArray(v) && v.length === 2 && v.every((x) => typeof x === 'number' && Number.isFinite(x))
+  && v[0] >= THIRD_SHARE_MIN && v[1] - v[0] >= THIRD_SHARE_MIN && v[1] <= 1 - THIRD_SHARE_MIN;
+
+/** The split's grid columns from the dividers' places (equal pages without them). */
+export function paneColumns(panes: number, bounds: readonly number[] = defaultBounds(panes)): string {
   if (panes < 2) return 'minmax(0, 1fr)';
-  const s = clampLeftShare(share);
-  return `minmax(0, ${s.toFixed(4)}fr) minmax(0, ${(1 - s).toFixed(4)}fr)`;
+  const b = clampBounds(bounds, panes);
+  const edges = [0, ...b, 1];
+  return edges.slice(1).map((e, i) => `minmax(0, ${(e - edges[i]).toFixed(4)}fr)`).join(' ');
 }
 
 /**
  * What a panel place keeps (panel-view.ts): how many pages the reader lets the
- * split show (`panes`, 1 or 2: 1 is the one-page view he turned on himself by
- * closing the previous page; an older build's 3 reads as 2),
- * and the trail. `split` is `panes > 1`, written for older builds that read it.
- * A record from before `panes` existed reads as 3: its `split: false` was the
- * old default, not the reader's choice (2026-11-04, the user: a single page "is
- * something the user turns on explicitly, never a side effect").
+ * split show, and the trail. `split` is `panes > 1`, written for older builds
+ * that read it.
+ *
+ * The cap is `pages` (1 to 3). Builds before it kept only `panes`, and the
+ * two-page builds (2026-11-10 to 11-16) wrote `panes: 2` as their default: only
+ * `panes: 1` was the reader's own choice (closing the previous page). So a record
+ * without `pages`, or one whose `panes` an older build changed since (it no
+ * longer equals `pages`), reads `panes: 1` as one page and anything else as the
+ * default (three). This build writes `panes` equal to `pages`: an older build
+ * clamps it to its own most. A record from before `panes` existed reads as the
+ * default too: its `split: false` was the old default, not the reader's choice
+ * (2026-11-04, the user: a single page "is something the user turns on
+ * explicitly, never a side effect").
  */
 export interface TreeSplitRecord {
   split: boolean;
   /** Head ids of the trail below the main conversation, shallowest first. */
   trail: string[];
   panes?: number;
-  /** The sibling question above the right page (tree-sibling.ts): `false` once the
-   *  reader closed it (absent = shown), and its share of the column's height. */
+  pages?: number;
+  /** The sibling box above a page (tree-sibling.ts): `false` once the reader
+   *  closed it on every page (the builds with one box, above the right page, wrote
+   *  it), `siblingOff` the head ids of the pages whose box he closed, and the
+   *  box's share of the column's height (one for every column). */
   sibling?: boolean;
+  siblingOff?: string[];
   siblingShare?: number;
 }
 
-export const NO_TREE_SPLIT: TreeSplitRecord = { split: true, trail: [], panes: MAX_PANES };
+/** The most heads `siblingOff` keeps (the newest). */
+const SIBLING_OFF_MAX = 50;
+
+export const NO_TREE_SPLIT: TreeSplitRecord = { split: true, trail: [], panes: MAX_PANES, pages: MAX_PANES };
+
+const isPaneNumber = (v: unknown): boolean => typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= MAX_PANES;
 
 export function isTreeSplitRecord(v: unknown): v is TreeSplitRecord {
   if (!v || typeof v !== 'object') return false;
   const r = v as Record<string, unknown>;
   return typeof r.split === 'boolean' && Array.isArray(r.trail) && r.trail.every((x) => typeof x === 'string')
-    && (r.panes === undefined || (typeof r.panes === 'number' && Number.isInteger(r.panes) && r.panes >= 1 && r.panes <= STORED_PANES_MAX))
+    && (r.panes === undefined || isPaneNumber(r.panes))
+    && (r.pages === undefined || isPaneNumber(r.pages))
     && (r.sibling === undefined || typeof r.sibling === 'boolean')
+    && (r.siblingOff === undefined || (Array.isArray(r.siblingOff) && r.siblingOff.every((x) => typeof x === 'string')))
     && (r.siblingShare === undefined || (typeof r.siblingShare === 'number' && r.siblingShare > 0 && r.siblingShare < 1));
 }
 
-/** How many pages the reader lets the split show (a record without `panes` is an old default). */
+/** How many pages the reader lets the split show. */
 export function paneCap(r: TreeSplitRecord): number {
-  return Math.min(r.panes ?? MAX_PANES, MAX_PANES);
+  if (r.pages !== undefined && (r.panes === undefined || r.panes === r.pages)) return Math.min(Math.max(r.pages, 1), MAX_PANES);
+  return r.panes === 1 ? 1 : MAX_PANES;
 }
 
-/** The record with a new cap (`split` follows it for older builds). */
+/** The record with a new cap (`panes` and `split` follow it for older builds). */
 export function withPaneCap(r: TreeSplitRecord, panes: number): TreeSplitRecord {
   const p = Math.min(Math.max(Math.round(panes), 1), MAX_PANES);
-  return r.panes === p && r.split === p > 1 ? r : { ...r, panes: p, split: p > 1 };
+  return r.pages === p && r.panes === p && r.split === p > 1 ? r : { ...r, pages: p, panes: p, split: p > 1 };
+}
+
+/** Is the sibling box above the page with head `head` closed? */
+export function siblingOffFor(r: TreeSplitRecord, head: string | undefined): boolean {
+  return r.sibling === false || (head !== undefined && !!r.siblingOff?.includes(head));
+}
+
+/**
+ * The box above `head`'s page closed (`off`) or shown again. Showing one while
+ * the old every-page `sibling: false` holds keeps the others closed: their heads
+ * (`shutHeads`, the pages on screen whose box is shut) go to the list.
+ */
+export function withSiblingOff(r: TreeSplitRecord, head: string, off: boolean, shutHeads: readonly string[] = []): TreeSplitRecord {
+  if (off && siblingOffFor(r, head)) return r;
+  const { sibling: legacy, siblingOff: kept, ...rest } = r;
+  let list = (kept ?? []).filter((h) => h !== head);
+  if (legacy === false) list = [...list, ...shutHeads.filter((h) => h !== head && !list.includes(h))];
+  if (off) list.push(head);
+  list = list.slice(-SIBLING_OFF_MAX);
+  return { ...rest, ...(list.length ? { siblingOff: list } : {}) };
 }
 
 export function sameTreeSplit(a: TreeSplitRecord, b: TreeSplitRecord): boolean {
-  return a.split === b.split && a.panes === b.panes && a.sibling === b.sibling && a.siblingShare === b.siblingShare
-    && a.trail.length === b.trail.length && a.trail.every((h, i) => h === b.trail[i]);
+  return a.split === b.split && a.panes === b.panes && a.pages === b.pages && a.sibling === b.sibling && a.siblingShare === b.siblingShare
+    && sameList(a.trail, b.trail) && sameList(a.siblingOff ?? [], b.siblingOff ?? []);
 }
+
+const sameList = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((h, i) => h === b[i]);
 
 /** `a` is `b` or the start of it. */
 export function isPrefix(a: readonly string[], b: readonly string[]): boolean {
@@ -155,7 +246,7 @@ export function trailHeadsOf(tree: ThreadTree, keys: readonly string[]): string[
 
 /** How many pages fit side by side in a chat area this wide (0 = not measured yet: one). */
 export function roomFor(width: number): number {
-  return width >= SPLIT_MIN_WIDTH ? MAX_PANES : 1;
+  return width >= THREE_PANES_MIN_WIDTH ? 3 : width >= SPLIT_MIN_WIDTH ? 2 : 1;
 }
 
 /**
@@ -238,7 +329,9 @@ export const CUTTING_VIAS: ReadonlySet<string> = new Set([
   'esc', 'back',
   // The question left the screen: archived, done, gone from the transcript, an undo.
   'remove', 'head-gone', 'done', 'done-chain', 'undo',
-  // The right page's close, and an Ask not sent closed (its card, its chip's x).
+  // The right page's close, a page of a split column closed (its sibling takes
+  // the column), and an Ask not sent closed (its card, its chip's x).
+  'close-half',
   'close-right', 'card-close', 'quote-clear',
   // A reload lands where the stored path says.
   'reload',
@@ -293,6 +386,36 @@ export function retargetNav(s: {
 export function closePaneMove(side: 'L' | 'R', shownIndex: number, panes: number): { target: number; panes: number } {
   if (side === 'R') return { target: Math.max(shownIndex - 1, 0), panes: Math.max(panes, 1) };
   return { target: shownIndex, panes: Math.max(panes - 1, 1) };
+}
+
+/**
+ * The x on page `key` (one of `paneKeys`, left to right): what closes, never
+ * more than that page (2026-11-16, the user: "only close the one I cloed, not
+ * all"). The right page with a sibling box above it (`above`, its question)
+ * closes alone: the sibling takes the column at full height and becomes the
+ * page there, every other column stays, and the box above it stays shut (the
+ * closed page would come back into it). Without a box the right page closes its
+ * level. The leftmost page shows one page fewer (closePaneMove): the pages right
+ * of it hang under it, so its sibling cannot take its place without closing them;
+ * its column goes, the others stay. A middle page of three closes nothing: hiding
+ * it would hide the page left of it too.
+ */
+export type PaneClose =
+  | { kind: 'half'; to: string }
+  | { kind: 'right'; target: number }
+  | { kind: 'left'; panes: number };
+
+export function paneCloseMove(s: { paneKeys: readonly string[]; key: string; shownIndex: number; panes: number; above?: string }): PaneClose | null {
+  const at = s.paneKeys.indexOf(s.key);
+  if (at < 0) return null;
+  if (at === s.paneKeys.length - 1) {
+    if (s.above !== undefined && s.above !== s.key) return { kind: 'half', to: s.above };
+    return { kind: 'right', target: closePaneMove('R', s.shownIndex, s.panes).target };
+  }
+  // Only the leftmost page closes as a left one: a middle page hides with every page left of
+  // it (the pages on screen are the path's last few), so it has no close (TreeSplitLeft).
+  if (at > 0) return null;
+  return { kind: 'left', panes: closePaneMove('L', s.shownIndex, s.panes).panes };
 }
 
 /** The questions at the level of segment `j` (siblings under the same parent;

@@ -386,6 +386,9 @@ test.describe('Selection menu: a bar and normal menus over the conversation, in 
     await checkAllStates(page, left, await underTable(left), 'split-left-narrow-under-table')
     await divider.dblclick()
     await expect(divider).toHaveAttribute('aria-valuenow', '50')
+    // The width is the user's choice, kept for every panel: let the reset be saved
+    // before the page closes, or the narrow share stays for the next spec.
+    await page.waitForTimeout(1500)
   })
 
   test('a narrow column: the bar and the menus stay in the viewport', async ({ page }) => {

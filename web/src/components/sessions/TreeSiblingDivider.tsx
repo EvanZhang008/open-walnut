@@ -1,6 +1,6 @@
 /**
- * The divider under Tree Mode's sibling page (tree-sibling.ts; design 8): a
- * drag moves the sibling's share of the right column (1/3 by default, a double
+ * The divider under a Tree Mode sibling page (tree-sibling.ts; design 8): a
+ * drag moves the sibling's share of its column (one share for every column) (1/3 by default, a double
  * click puts it back), the arrow keys move it too, and the knob on it swaps the
  * two questions. The share is kept with the panel's view once the drag ends.
  */
@@ -13,8 +13,11 @@ export const TreeSiblingDivider = memo(function TreeSiblingDivider(p: {
   share: number;
   /** `commit`: the drag (or key) ended, keep it. */
   onShare: (share: number, commit: boolean) => void;
-  onSwap: () => void;
-  /** The page below (the panel's own timeline): the share runs from the sibling's top to its bottom. */
+  /** The swap of the box in page `column`'s column (useTreeSplit's paneKeys index). */
+  onSwap: (column: number) => void;
+  column: number;
+  /** The panel's own timeline: the rows are shared by every column, so the share
+   *  runs from the sibling's top to that page's bottom (above the composers). */
   pageRef: RefObject<HTMLElement | null>;
 }) {
   const { onShare, pageRef, share } = p;
@@ -73,7 +76,7 @@ export const TreeSiblingDivider = memo(function TreeSiblingDivider(p: {
       onDoubleClick={(e) => { if (!(e.target as HTMLElement).closest('.tree-sibling-knob')) onShare(SIBLING_SHARE_DEFAULT, true); }}
       onKeyDown={onKey}
     >
-      <button type="button" className="tree-sibling-knob" title="Swap the two questions" aria-label="Swap the two questions" onClick={p.onSwap}>
+      <button type="button" className="tree-sibling-knob" title="Swap the two questions" aria-label="Swap the two questions" onClick={() => p.onSwap(p.column)}>
         <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <path d="M5 2.5v10M2.5 10 5 12.5 7.5 10M11 13.5v-10M8.5 6 11 3.5 13.5 6" />
         </svg>

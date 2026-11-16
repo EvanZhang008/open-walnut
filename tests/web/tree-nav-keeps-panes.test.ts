@@ -186,10 +186,10 @@ describe('only the main conversation\'s composer is the full one (2026-11-05)', 
 
   it('every Tree Mode page composer offers Stop only for its own page\'s turn', () => {
     const panel = fs.readFileSync(path.join(WEB, 'components/sessions/SessionPanel.tsx'), 'utf8')
-    // The side pages, the sibling and the panel's own composer: three, each by its page.
+    // The side pages, the siblings above them and the panel's own composer: three, each by its page.
     expect(panel.match(/isStreaming=\{pageStreaming\(/g)?.length).toBe(3)
     expect(panel).toMatch(/isStreaming=\{pageStreaming\(key\)\}/)
-    expect(panel).toMatch(/isStreaming=\{pageStreaming\(treeSibling\.key\)\}/)
+    expect(panel).toMatch(/isStreaming=\{pageStreaming\(partner\.key\)\}/)
     expect(panel).toMatch(/isStreaming=\{pageStreaming\(threads\.stack\.api\.currentKey\)\}/)
     // Every <TreeSplitLeft is one of those pages.
     expect(panel.match(/<TreeSplitLeft\b/g)?.length).toBe(2)

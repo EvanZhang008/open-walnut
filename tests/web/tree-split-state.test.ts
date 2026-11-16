@@ -7,10 +7,14 @@
  * it and one off screen slides the pages, a pick from a level's list switches
  * it and cuts the levels right of it, a narrow pane shows one page.
  */
+import fs from 'node:fs';
+import path_ from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   answeringPages,
-  CUTTING_VIAS, LEFT_SHARE_DEFAULT, MAX_PANES, PAGE_MIN_PX, clampLeftShare, isLeftShare, NO_TREE_SPLIT, SPLIT_MIN_WIDTH, askPlacement, paneColumns, barShown, closePaneMove, isPrefix,
+  CUTTING_VIAS, LEFT_SHARE_DEFAULT, MAX_PANES, PAGE_MIN_PX, THIRD_SHARE_MIN, THREE_PANES_MIN_WIDTH, clampBounds, clampLeftShare, defaultBounds,
+  isLeftShare, isThreeBounds, moveBound, NO_TREE_SPLIT, SPLIT_MIN_WIDTH, askPlacement, paneColumns, barShown, closePaneMove, isPrefix,
+  paneCloseMove, siblingOffFor, withSiblingOff,
   isTreeSplitRecord, levelHeading, levelKeys, levelPickMoves, pairChordDir, pairMoveTarget, paneCap, paneCount, readOnlyLandings, retargetNav,
   roomFor, sameTreeSplit, segmentRoles, segmentTarget, splitShown, trailFor, trailHeadsOf, trailKeysOf, withPaneCap,
 } from '@/utils/tree-split-state';
@@ -78,30 +82,104 @@ describe('the trail the path bar shows', () => {
 });
 
 describe('how many pages sit side by side', () => {
-  it('two pages, the current and the one before it, wherever they fit (2026-11-10)', () => {
-    expect(MAX_PANES).toBe(2);
+  it('three pages where the chat area fits them, two in a Home column, one under 600px (2026-11-16)', () => {
+    expect(MAX_PANES).toBe(3);
     expect(roomFor(0)).toBe(1);
     expect(roomFor(SPLIT_MIN_WIDTH - 1)).toBe(1);
     expect(roomFor(SPLIT_MIN_WIDTH)).toBe(2);
-    // A Home column (700 to 900px) and the full-screen sheet show both pages, never three.
-    for (const width of [700, 800, 899, 1100, 1460, 2400]) {
+    // A Home column (700 to 900px) shows two pages.
+    for (const width of [700, 800, 899, THREE_PANES_MIN_WIDTH - 1]) {
       expect(roomFor(width), String(width)).toBe(2);
-      for (const pathLength of [2, 3, 4, 6]) expect(paneCount({ cap: 2, width, pathLength }), `${width} ${pathLength}`).toBe(2);
+      for (const pathLength of [2, 3, 4, 6]) expect(paneCount({ cap: MAX_PANES, width, pathLength }), `${width} ${pathLength}`).toBe(2);
     }
+    // The full-screen sheet and a wide session window: three, each page at least 320px.
+    expect(THREE_PANES_MIN_WIDTH / 3).toBeGreaterThanOrEqual(320);
+    for (const width of [THREE_PANES_MIN_WIDTH, 1100, 1460, 1568, 2400]) {
+      expect(roomFor(width), String(width)).toBe(3);
+      expect(paneCount({ cap: MAX_PANES, width, pathLength: 2 })).toBe(2);
+      for (const pathLength of [3, 4, 6]) expect(paneCount({ cap: MAX_PANES, width, pathLength }), `${width} ${pathLength}`).toBe(3);
+    }
+    expect(paneCount({ cap: 2, width: 1400, pathLength: 4 })).toBe(2);
     expect(paneCount({ cap: 1, width: 1400, pathLength: 4 })).toBe(1);
-    expect(paneCount({ cap: 2, width: 1400, pathLength: 1 })).toBe(1);
-    expect(splitShown({ cap: 2, width: SPLIT_MIN_WIDTH, depth: 1 })).toBe(true);
-    expect(splitShown({ cap: 2, width: SPLIT_MIN_WIDTH - 1, depth: 3 })).toBe(false);
-    expect(splitShown({ cap: 2, width: 1400, depth: 0 })).toBe(false);
+    expect(paneCount({ cap: 3, width: 1400, pathLength: 1 })).toBe(1);
+    expect(splitShown({ cap: 3, width: SPLIT_MIN_WIDTH, depth: 1 })).toBe(true);
+    expect(splitShown({ cap: 3, width: SPLIT_MIN_WIDTH - 1, depth: 3 })).toBe(false);
+    expect(splitShown({ cap: 3, width: 1400, depth: 0 })).toBe(false);
     expect(splitShown({ cap: 1, width: 1400, depth: 2 })).toBe(false);
   });
-  it('the parent and child pages are equal by default, the divider moves them within the bounds', () => {
+  it('his wide window (a 1568px chat area): Main | 1 | 1.1 when he is on 1.1', () => {
+    // 2026-11-16, the user: "3 veirficle pannel" (two-page builds showed 1 | 1.1 only).
+    const path = [ROOT_THREAD_KEY, 'k1', 'k11'];
+    const n = paneCount({ cap: paneCap(NO_TREE_SPLIT), width: 1568, pathLength: path.length });
+    expect(n).toBe(3);
+    expect(path.slice(path.length - n)).toEqual(path);
+    // A record the two-page builds wrote reads the same.
+    expect(paneCount({ cap: paneCap({ split: true, trail: ['h1', 'h11'], panes: 2 }), width: 1568, pathLength: 3 })).toBe(3);
+  });
+  it('closing or stepping back from 1.1 keeps it on the bar, greyed after the page, one click opens it (2026-11-16)', () => {
+    const trail = [ROOT_THREAD_KEY, 'k1', 'k11'];
+    // Main | 1 | 1.1, the right page closed: the path ends at 1, the kept trail still holds 1.1.
+    const move = closePaneMove('R', 2, 3);
+    const path = trail.slice(0, move.target + 1);
+    const bar = trailFor(trail, path);
+    expect(bar).toEqual(trail);
+    const shown = path.length - 1;
+    const panes = paneCount({ cap: MAX_PANES, width: 1568, pathLength: path.length });
+    // 1.1 is right of the page being worked on (no role: the bar greys it).
+    expect(segmentRoles(bar.length, shown, panes)).toEqual(['L', 'R', null]);
+    // One click on it: the right page goes back to it, the three pages again.
+    expect(segmentTarget(bar.length, 2, shown, panes)).toBe(2);
+    expect(pairMoveTarget(bar.length, shown, 1, panes)).toBe(2);
+    // The close itself writes no trail (useTreeSplit's closePane only navigates).
+    const hook = fs.readFileSync(path_.join(process.cwd(), 'web/src/hooks/useTreeSplit.ts'), 'utf8');
+    const close = hook.slice(hook.indexOf('const closePane = useCallback'), hook.indexOf('const openSplit = useCallback'));
+    expect(close).not.toMatch(/trailHeadsOf|\.\.\.prev, trail/);
+  });
+  it('the x on one page of a split column closes that page only (2026-11-16: "only close the one I cloed, not all")', () => {
+    const paneKeys = [ROOT_THREAD_KEY, 'k1', 'k2'];
+    // The right column holds 2 under its sibling 1: closing 2 leaves 1 as the page there.
+    expect(paneCloseMove({ paneKeys: [ROOT_THREAD_KEY, 'k2'], key: 'k2', shownIndex: 1, panes: 2, above: 'k1' })).toEqual({ kind: 'half', to: 'k1' });
+    expect(paneCloseMove({ paneKeys, key: 'k2', shownIndex: 2, panes: 3, above: 'k22' })).toEqual({ kind: 'half', to: 'k22' });
+    // No box above: the right page closes its level (the bar keeps it greyed).
+    expect(paneCloseMove({ paneKeys, key: 'k2', shownIndex: 2, panes: 3 })).toEqual({ kind: 'right', target: 1 });
+    // A left page goes alone (its column), the columns right of it stay, box or not.
+    expect(paneCloseMove({ paneKeys, key: ROOT_THREAD_KEY, shownIndex: 2, panes: 3 })).toEqual({ kind: 'left', panes: 2 });
+    // A middle page never closes two pages (2026-11-16 review): it has no close, and a call does nothing.
+    expect(paneCloseMove({ paneKeys, key: 'k1', shownIndex: 2, panes: 3, above: 'k0' })).toBeNull();
+    expect(paneCloseMove({ paneKeys, key: 'nope', shownIndex: 2, panes: 3 })).toBeNull();
+    // The half close goes as asked (it is a cut, never retargeted onto the trail).
+    expect(CUTTING_VIAS.has('close-half')).toBe(true);
+    // The hook shuts the box above the page that takes the column, so the closed page stays closed.
+    const hook = fs.readFileSync(path_.join(process.cwd(), 'web/src/hooks/useTreeSplit.ts'), 'utf8');
+    expect(hook).toMatch(/move\.kind === 'half'[\s\S]{0,400}withSiblingOff\(prev, head, true\)[\s\S]{0,300}pushTo\(move\.to, 'close-half'\)/);
+  });
+  it('the room alone decides how many pages show: narrow pushes them out, wide brings them back (no cap written)', () => {
+    const path = [ROOT_THREAD_KEY, 'k1', 'k11'];
+    const shownAt = (width: number) => path.slice(path.length - paneCount({ cap: paneCap(NO_TREE_SPLIT), width, pathLength: path.length }));
+    expect(shownAt(1568)).toEqual(path);
+    expect(shownAt(700)).toEqual(['k1', 'k11']);
+    expect(shownAt(500)).toEqual(['k11']);
+    expect(shownAt(1568)).toEqual(path);
+    // The cap is written only by the reader's own acts: closing a left page,
+    // Split, and an Ask showing the pages again. Never from the width.
+    const hook = fs.readFileSync(path_.join(process.cwd(), 'web/src/hooks/useTreeSplit.ts'), 'utf8');
+    expect(hook.match(/withPaneCap\(/g)?.length).toBe(3);
+    expect(hook).toMatch(/setRecord\(\(prev\) => withPaneCap\(prev, move\.panes\)\)/);
+    expect(hook).toMatch(/setRecord\(\(prev\) => withPaneCap\(prev, MAX_PANES\)\)/);
+  });
+  it('the pages are equal by default, each divider moves within its neighbours', () => {
     expect(paneColumns(2)).toBe('minmax(0, 0.5000fr) minmax(0, 0.5000fr)');
-    expect(paneColumns(2, 0.4)).toBe('minmax(0, 0.4000fr) minmax(0, 0.6000fr)');
-    expect(paneColumns(2, 0.1)).toBe('minmax(0, 0.2500fr) minmax(0, 0.7500fr)');
-    expect(paneColumns(2, 0.9)).toBe('minmax(0, 0.7500fr) minmax(0, 0.2500fr)');
+    expect(paneColumns(2, [0.4])).toBe('minmax(0, 0.4000fr) minmax(0, 0.6000fr)');
+    expect(paneColumns(2, [0.1])).toBe('minmax(0, 0.2500fr) minmax(0, 0.7500fr)');
+    expect(paneColumns(2, [0.9])).toBe('minmax(0, 0.7500fr) minmax(0, 0.2500fr)');
+    expect(paneColumns(3)).toBe('minmax(0, 0.3333fr) minmax(0, 0.3333fr) minmax(0, 0.3333fr)');
+    expect(paneColumns(3, [0.25, 0.5])).toBe('minmax(0, 0.2500fr) minmax(0, 0.2500fr) minmax(0, 0.5000fr)');
+    // A stored pair of another length (two pages' share) is not three pages': equal.
+    expect(paneColumns(3, [0.4])).toBe(paneColumns(3));
     expect(paneColumns(1)).toBe('minmax(0, 1fr)');
-    expect(paneColumns(1, 0.3)).toBe('minmax(0, 1fr)');
+    expect(paneColumns(1, [0.3])).toBe('minmax(0, 1fr)');
+    expect(defaultBounds(1)).toEqual([]);
+    expect(defaultBounds(3)).toEqual([1 / 3, 2 / 3]);
     expect(clampLeftShare(Number.NaN)).toBe(LEFT_SHARE_DEFAULT);
     // Each page keeps PAGE_MIN_PX when the column has room for it.
     expect(clampLeftShare(0.25, 800)).toBeCloseTo(PAGE_MIN_PX / 800);
@@ -112,17 +190,80 @@ describe('how many pages sit side by side', () => {
     expect(isLeftShare(0.1)).toBe(false);
     expect(isLeftShare('0.5')).toBe(false);
   });
+  it('three pages: a drag moves one divider, the other stays, every page keeps its minimum', () => {
+    const w = 1500;
+    const m = Math.max(THIRD_SHARE_MIN, PAGE_MIN_PX / w);
+    const start = defaultBounds(3);
+    // The first divider right: the middle page narrows, the third keeps its width.
+    expect(moveBound(start, 3, 0, 0.5, w)).toEqual([0.5, 2 / 3]);
+    // It stops a page's minimum before the second.
+    expect(moveBound(start, 3, 0, 0.9, w)[0]).toBeCloseTo(2 / 3 - m);
+    expect(moveBound(start, 3, 0, 0, w)[0]).toBeCloseTo(m);
+    expect(moveBound(start, 3, 1, 1, w)[1]).toBeCloseTo(1 - m);
+    expect(moveBound(start, 3, 1, 0.4, w)).toEqual([1 / 3, 1 / 3 + m]);
+    // Out of range or not a number: nothing moves.
+    expect(moveBound(start, 3, 5, 0.5, w)).toEqual(start);
+    expect(moveBound(start, 3, 0, Number.NaN, w)).toEqual(start);
+    // A column too narrow for three minimums splits evenly.
+    expect(clampBounds([0.1, 0.2], 3, 600)).toEqual([1 / 3, 2 / 3]);
+    expect(isThreeBounds([1 / 3, 2 / 3])).toBe(true);
+    expect(isThreeBounds([0.5])).toBe(false);
+    expect(isThreeBounds([0.6, 0.5])).toBe(false);
+    expect(isThreeBounds([0.05, 0.5])).toBe(false);
+    expect(isThreeBounds(['a', 'b'])).toBe(false);
+  });
   it('a record from before the cap reads as the most pages (its split:false was the old default, not a choice)', () => {
     expect(paneCap({ split: false, trail: [] })).toBe(MAX_PANES);
     expect(paneCap(NO_TREE_SPLIT)).toBe(MAX_PANES);
-    expect(withPaneCap(NO_TREE_SPLIT, 1)).toEqual({ split: false, trail: [], panes: 1 });
-    expect(withPaneCap({ split: false, trail: ['a'] }, 2)).toEqual({ split: true, trail: ['a'], panes: 2 });
+    expect(withPaneCap(NO_TREE_SPLIT, 1)).toEqual({ split: false, trail: [], panes: 1, pages: 1 });
+    expect(withPaneCap({ split: false, trail: ['a'] }, 2)).toEqual({ split: true, trail: ['a'], panes: 2, pages: 2 });
     expect(withPaneCap(NO_TREE_SPLIT, 9).panes).toBe(MAX_PANES);
   });
-  it('a record an older build kept with three pages is still read, as two', () => {
-    const old = { split: true, trail: ['h1'], panes: 3 };
-    expect(isTreeSplitRecord(old)).toBe(true);
-    expect(paneCap(old)).toBe(2);
+  it('older records: the two-page builds\' panes:2 was their default (three now), panes:1 the reader\'s choice', () => {
+    expect(paneCap({ split: true, trail: ['h1'], panes: 2 })).toBe(3);
+    expect(paneCap({ split: true, trail: ['h1'], panes: 3 })).toBe(3);
+    expect(paneCap({ split: false, trail: ['h1'], panes: 1 })).toBe(1);
+    expect(isTreeSplitRecord({ split: true, trail: ['h1'], panes: 3 })).toBe(true);
+  });
+  it('this build\'s cap is `pages`; its `panes` is what older builds read (they clamp it)', () => {
+    // The reader closed the leftmost of three: two pages, read back as two.
+    const two = withPaneCap(NO_TREE_SPLIT, 2);
+    expect(two).toMatchObject({ pages: 2, panes: 2, split: true });
+    expect(paneCap(two)).toBe(2);
+    expect(isTreeSplitRecord(two)).toBe(true);
+    // A two-page build clamps panes to its most: `Math.min(r.panes ?? 2, 2)`.
+    expect(Math.min(NO_TREE_SPLIT.panes ?? 2, 2)).toBe(2);
+    expect(NO_TREE_SPLIT.panes).toBeLessThanOrEqual(3);
+    // An older build changed panes since (closed to one, or split again): its panes rules.
+    expect(paneCap({ ...NO_TREE_SPLIT, panes: 1, split: false })).toBe(1);
+    expect(paneCap({ ...two, panes: 1, split: false })).toBe(1);
+    expect(paneCap({ ...withPaneCap(NO_TREE_SPLIT, 1), panes: 2, split: true })).toBe(3);
+    expect(isTreeSplitRecord({ split: true, trail: [], pages: 4 })).toBe(false);
+  });
+  it('a sibling box closes on its own page; the old every-page close still reads', () => {
+    const r = withSiblingOff(NO_TREE_SPLIT, 'h1', true);
+    expect(r.siblingOff).toEqual(['h1']);
+    expect(siblingOffFor(r, 'h1')).toBe(true);
+    expect(siblingOffFor(r, 'h11')).toBe(false);
+    expect(siblingOffFor(withSiblingOff(r, 'h1', false), 'h1')).toBe(false);
+    expect(withSiblingOff(r, 'h1', false).siblingOff).toBeUndefined();
+    expect(isTreeSplitRecord(r)).toBe(true);
+    expect(isTreeSplitRecord({ ...r, siblingOff: [1] })).toBe(false);
+    // The one-box builds' `sibling: false`: every box closed, until one is shown again.
+    const legacy = { ...NO_TREE_SPLIT, sibling: false };
+    expect(siblingOffFor(legacy, 'h1')).toBe(true);
+    expect(siblingOffFor(legacy, 'h11')).toBe(true);
+    expect(withSiblingOff(legacy, 'h1', true)).toBe(legacy);
+    const shown = withSiblingOff(legacy, 'h11', false, ['h1', 'h11']);
+    expect(shown.sibling).toBeUndefined();
+    expect(siblingOffFor(shown, 'h11')).toBe(false);
+    expect(siblingOffFor(shown, 'h1')).toBe(true);
+    // The list keeps the newest fifty.
+    let many = NO_TREE_SPLIT;
+    for (let i = 0; i < 60; i++) many = withSiblingOff(many, `h${i}`, true);
+    expect(many.siblingOff).toHaveLength(50);
+    expect(siblingOffFor(many, 'h59')).toBe(true);
+    expect(siblingOffFor(many, 'h0')).toBe(false);
   });
   it('shows the bar in Tree Mode once there is a level besides Main', () => {
     expect(barShown({ stackMode: true, trailLength: 2 })).toBe(true);
@@ -266,9 +407,12 @@ describe('the kept record', () => {
     expect(isTreeSplitRecord(null)).toBe(false);
     expect(isTreeSplitRecord({ split: true, trail: [], panes: 2 })).toBe(true);
     expect(isTreeSplitRecord({ split: true, trail: [], panes: 4 })).toBe(false);
+    expect(isTreeSplitRecord({ split: true, trail: [], panes: 3, pages: 3 })).toBe(true);
     expect(isTreeSplitRecord({ split: true, trail: [], panes: 1.5 })).toBe(false);
-    expect(sameTreeSplit(NO_TREE_SPLIT, { split: true, trail: [], panes: MAX_PANES })).toBe(true);
+    expect(sameTreeSplit(NO_TREE_SPLIT, { split: true, trail: [], panes: MAX_PANES, pages: MAX_PANES })).toBe(true);
+    expect(sameTreeSplit(NO_TREE_SPLIT, { split: true, trail: [], panes: MAX_PANES })).toBe(false);
     expect(sameTreeSplit(NO_TREE_SPLIT, { split: true, trail: [] })).toBe(false);
+    expect(sameTreeSplit({ ...NO_TREE_SPLIT, siblingOff: ['a'] }, { ...NO_TREE_SPLIT, siblingOff: ['b'] })).toBe(false);
     expect(sameTreeSplit({ split: true, trail: ['a'] }, { split: true, trail: ['b'] })).toBe(false);
   });
 });

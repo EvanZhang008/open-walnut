@@ -28,9 +28,9 @@
  * (composerDraftKey). An Ask about a passage here hangs on the left page.
  *
  * The same pane is the sibling page (`side: 'S'`, tree-sibling.ts): a question
- * asked on the same page as the right page's, above it in the right column, its
- * own timeline and composer the same way, with a Swap in its row and the divider
- * under it. Every composer here is the light one (the text box, the mic, send:
+ * asked on the same page as a page on screen, above it in that page's column
+ * (any column, 2026-11-16), its own timeline and composer the same way, with a
+ * Swap in its row and the divider under it. Every composer here is the light one (the text box, the mic, send:
  * 2026-11-05, the user: "only main chat have the + the bypass the model
  * selection, other just voice and send"), except Main's, which gets the panel's
  * full controls (`fullComposer`).
@@ -63,9 +63,14 @@ export interface TreeSplitLeftProps {
   history: HistoryProps;
   /** Remounts the timeline with the panel's (a rewind). */
   historyKey: string;
-  /** Its grid column (1 = the leftmost) and its badge; the sibling page sits in the right column, on top. */
+  /** Its grid column (1 = the leftmost) and its badge; a sibling page sits on top of its page's column. */
   column: number;
   side: 'L' | 'M' | 'S';
+  /** A page left of the right one with a sibling box above it: it takes the column's lower rows. */
+  underSibling?: boolean;
+  /** The sibling page: the side of the page below it, and that page's place (useTreeSplit's column). */
+  siblingOf?: 'L' | 'M' | 'R';
+  siblingColumn?: number;
   /** The page this one shows, and the page right of it (the one asked from it). */
   leftKey: string;
   rightKey: string;
@@ -93,9 +98,12 @@ export interface TreeSplitLeftProps {
   landSeq: number;
   /** Main's page: the panel's full composer controls (the "+" menu, Bypass, the model). */
   fullComposer?: Partial<ComponentProps<typeof ChatInput>>;
-  /** The sibling page: where it stands among its siblings, its swap, and the divider under it. */
+  /** The sibling page: where it stands among its siblings, its swap and close (by `siblingColumn`), and the divider under it. */
   where?: string;
-  onSwap?: () => void;
+  onSwapAt?: (column: number) => void;
+  onCloseAt?: (column: number) => void;
+  /** A page whose sibling box the reader closed: its row shows it again. */
+  onShowSibling?: (column: number) => void;
   divider?: ReactNode;
 }
 
@@ -155,12 +163,15 @@ function usePinnedThreads(base: SessionThreadsApi, leftKey: string, rightKey: st
 export const TreeSplitLeft = memo(function TreeSplitLeft(p: TreeSplitLeftProps) {
   const base = useSessionThreadsApi();
   const pinned = usePinnedThreads(base, p.leftKey, p.rightKey, p.side === 'S', p.landSeq);
-  const { onClose, leftKey: pageKey, onSwap, where } = p;
-  const close = useCallback(() => onClose?.(pageKey), [onClose, pageKey]);
+  const { onClose, onCloseAt, onSwapAt, onShowSibling, siblingColumn = 0, leftKey: pageKey, where } = p;
+  const closes = !!(onClose || onCloseAt);
+  const close = useCallback(() => (onCloseAt ? onCloseAt(siblingColumn) : onClose?.(pageKey)), [onClose, onCloseAt, siblingColumn, pageKey]);
+  const swap = useCallback(() => onSwapAt?.(siblingColumn), [onSwapAt, siblingColumn]);
+  const show = useCallback(() => onShowSibling?.(siblingColumn), [onShowSibling, siblingColumn]);
   const half = useMemo<TreeHalf>(() => ({
-    side: p.side, ...(p.number ? { number: p.number } : {}), ...(onClose ? { onClose: close } : {}),
-    ...(where ? { where } : {}), ...(onSwap ? { onSwap } : {}),
-  }), [p.side, p.number, onClose, close, where, onSwap]);
+    side: p.side, ...(p.number ? { number: p.number } : {}), ...(closes ? { onClose: close } : {}),
+    ...(where ? { where } : {}), ...(onSwapAt ? { onSwap: swap } : {}), ...(onShowSibling ? { onShowSibling: show } : {}),
+  }), [p.side, p.number, closes, close, where, onSwapAt, swap, onShowSibling, show]);
   const [scrollNonce, setScrollNonce] = useState(0);
   const [focusNonce, setFocusNonce] = useState(0);
   const requestFocus = useCallback(() => setFocusNonce((x) => x + 1), []);
@@ -194,7 +205,16 @@ export const TreeSplitLeft = memo(function TreeSplitLeft(p: TreeSplitLeftProps) 
   }, [onSendFor, leftKey]);
   const interruptSend = useCallback((text: string, images?: ImageAttachment[], origin?: DraftOrigin) => onInterruptSendFor(leftKey, text, images, origin), [onInterruptSendFor, leftKey]);
   return (
-    <div className={`tree-split-left${p.side === 'S' ? ' tree-split-sibling' : ''}`} data-tree-half={p.side} data-thread-key={leftKey} ref={rootRef} style={{ gridColumn: p.column }}>
+    <div
+      className={`tree-split-left${p.side === 'S' ? ' tree-split-sibling' : ''}`}
+      data-tree-half={p.side}
+      data-tree-column={p.column}
+      {...(p.siblingOf ? { 'data-sibling-of': p.siblingOf } : {})}
+      {...(p.underSibling ? { 'data-under-sibling': 'true' } : {})}
+      data-thread-key={leftKey}
+      ref={rootRef}
+      style={{ gridColumn: p.column }}
+    >
       <SessionThreadsContext.Provider value={pinned}>
         <TreeHalfContext.Provider value={half}>
           <div className="tree-split-left-body">

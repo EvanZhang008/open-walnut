@@ -2,18 +2,20 @@
  * Tree Mode keeps its pages (2026-11-04, the user: a comment in Tree Mode
  * dropped to one page; "after click here it go to single panel mode, what? tree
  * mode is already multi panel"; a turn in the right page threw the left one to
- * the bottom; 2026-11-10: "we always show current one and previous one";
- * 2026-11-11: "parent and child are equal ... also can adjustable"). On the split fixture (Main > 1 > 1.1 > 1.1.1, siblings 2, 1.2) in
- * the full-screen sheet, with real clicks, keys and mouse selections:
+ * the bottom; 2026-11-11: "parent and child are equal ... also can adjustable";
+ * 2026-11-16: "3 veirficle pannel, each pannel cna have 2 current and previous").
+ * On the split fixture (Main > 1 > 1.1 > 1.1.1, siblings 2, 1.2) in the
+ * full-screen sheet, with real clicks, keys and mouse selections:
  *
- *  - two pages side by side at equal width, the current one and the one before it
- *    on the path, at every depth, and every way along the path
+ *  - three pages side by side at equal width, the last levels of the path, at
+ *    every depth, and every way along the path
  *    (Cmd+[ / Cmd+], a path bar segment, the question list, an "Asked from this
  *    answer" row, a pick between siblings from a level's list) keeps them: a
  *    level on screen only takes the focus, one left of them slides them;
- *  - a narrow sheet (about 780px) still shows both pages;
- *  - the divider between the pages drags (each page keeps 240px), a double click
- *    makes them equal again, the arrow keys move it, and the width is kept across a reload;
+ *  - a narrow sheet (about 780px) shows two pages;
+ *  - each divider between the pages drags (each page keeps 240px, the other
+ *    divider stays), a double click puts it back, the arrow keys move it, and the
+ *    widths are kept across a reload;
  *  - a comment made on either page waits in THAT page's composer and goes with
  *    its question, and nothing of the comment flow moves a page;
  *  - a turn in one page never scrolls the other (a wide sheet and a narrow one);
@@ -21,7 +23,8 @@
  *    come back;
  *  - the right page's sibling sits above it (a third of the column), a regular
  *    page with its own composer; Swap trades the two; it closes and comes back;
- *  - closing the left page shows one page (the view the reader asked for) until Split;
+ *  - closing the left page shows one page fewer, down to one (the view the reader
+ *    asked for) until Split;
  *  - only the main conversation's composer has the "+" menu, the mode and the
  *    model; every other page's is the text box, the mic and send (2026-11-05).
  * The rules behind it: web/src/utils/tree-split-state.ts (retargetNav), and the
@@ -30,24 +33,30 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 import { resetThreadsFixture, test } from './threads-helpers'
 import { leaveFullscreen } from './draft-helpers'
+import { hasMediaRecorder } from './webkit-recorder'
 import { SPLIT_PASSAGES, SPLIT_SESSION, SPLIT_TITLES } from './threads-fixture'
 import {
-  bar, captureSends, commentOn, hintOf, leftHalf, openQuestion, openSheet, pagesOnScreen,
+  bar, captureSends, commentOn, hintOf, leftHalf, middlePage, openQuestion, openSheet, pagesOnScreen,
   rightBody, rightComposer, rightHeader, rowCountOf, scrollBoxOf, scrollTopOf, segments, send, shot, sidePages, siblingPage,
 } from './tree-split-helpers'
 
 const T = SPLIT_TITLES
 const leftComposer = (panel: Locator) => leftHalf(panel).locator('textarea.chat-input-textarea')
-/** The current page and the one before it, at each depth of the fixture's path. */
+const middleComposer = (panel: Locator) => middlePage(panel).locator('textarea.chat-input-textarea')
+/** The last three levels of the fixture's path (the sheet's room), at each depth. */
+const THREE_DEEP = ['L 1', 'M 1.1', 'R 1.1.1']
+const THREE_MID = ['L Main conversation', 'M 1', 'R 1.1']
+/** Two levels on the path: Main beside question 1. */
+const TOP = ['L Main conversation', 'R 1']
+/** A sheet with room for two (under 960px of chat). */
 const TWO_DEEP = ['L 1.1', 'R 1.1.1']
 const TWO_MID = ['L 1', 'R 1.1']
-const TWO_TOP = ['L Main conversation', 'R 1']
 
-/** The left page's share of the two pages' width (half by default). */
-async function leftShare(panel: Locator): Promise<number> {
-  const l = (await leftHalf(panel).boundingBox())!
-  const r = (await rightBody(panel).boundingBox())!
-  return l.width / (l.width + r.width)
+/** Each page's share of the pages' width, left to right. */
+async function shares(panel: Locator): Promise<number[]> {
+  const boxes = await Promise.all([...(await sidePages(panel).all()), rightBody(panel)].map(async (l) => (await l.boundingBox())!.width))
+  const all = boxes.reduce((x, y) => x + y, 0)
+  return boxes.map((w) => w / all)
 }
 
 /** Pick `title` from the list of path bar segment `j`. */
@@ -81,65 +90,65 @@ test.describe('Tree Mode keeps its pages', () => {
   test.describe.configure({ mode: 'serial' })
   test.beforeEach(async ({ request }) => { await resetThreadsFixture(request, SPLIT_SESSION) })
 
-  test('two pages, the current one and the one before it, and every way along the path keeps them', async ({ page }) => {
+  test('three pages, the last levels of the path, and every way along the path keeps them', async ({ page }) => {
+    // A long walk over three timelines and their sibling boxes: about 40s in WebKit on a
+    // quiet host, twice that at a high load with video, past the 60s CI budget (2026-11-16).
+    test.setTimeout(180_000)
     const panel = await openSheet(page)
     await openQuestion(panel, T.Q111)
-    // The last two levels of the path, the question's own page on the right.
-    await expectPages(panel, TWO_DEEP)
-    expect(await segments(panel)).toEqual(['Main conversation', `1 ${T.Q1}`, `1.1 ${T.Q11} [L]`, `1.1.1 ${T.Q111} [R]`])
+    // The last three levels of the path, the question's own page on the right.
+    await expectPages(panel, THREE_DEEP)
+    expect(await segments(panel)).toEqual(['Main conversation', `1 ${T.Q1} [L]`, `1.1 ${T.Q11} [M]`, `1.1.1 ${T.Q111} [R]`])
     // Each page's header names it: its number and its title, readable.
-    for (const [scope, title] of [[leftHalf(panel), T.Q11], [rightHeader(panel), T.Q111]] as const) {
+    for (const [scope, title] of [[leftHalf(panel), T.Q1], [middlePage(panel), T.Q11], [rightHeader(panel), T.Q111]] as const) {
       const t = scope.locator('.thread-half-title').first()
       await expect(t).toHaveText(title)
       expect((await t.boundingBox())!.width).toBeGreaterThan(50)
     }
-    // The previous (parent) page and the current (child) page at equal width.
-    const share = await leftShare(panel)
-    expect(share, `left share ${share}`).toBeGreaterThan(0.47)
-    expect(share, `left share ${share}`).toBeLessThan(0.53)
-    await shot(page, 'two', panel)
+    // The three pages at equal width.
+    for (const share of await shares(panel)) {
+      expect(share, `share ${share}`).toBeGreaterThan(0.3)
+      expect(share, `share ${share}`).toBeLessThan(0.37)
+    }
+    await shot(page, 'three', panel)
 
-    // Cmd+[ slides the two pages one level at a time; Main is at most the left page.
+    // Cmd+[ slides the pages one level at a time; Main is at most the left page.
     await rightComposer(panel).focus()
     await page.keyboard.press('ControlOrMeta+BracketLeft')
-    await expectPages(panel, TWO_MID)
-    expect(await segments(panel)).toEqual(['Main conversation', `1 ${T.Q1} [L]`, `1.1 ${T.Q11} [R]`, `1.1.1 ${T.Q111}`])
-    await page.keyboard.press('ControlOrMeta+BracketLeft')
-    await expectPages(panel, TWO_TOP)
+    await expectPages(panel, THREE_MID)
+    expect(await segments(panel)).toEqual(['Main conversation [L]', `1 ${T.Q1} [M]`, `1.1 ${T.Q11} [R]`, `1.1.1 ${T.Q111}`])
     await page.keyboard.press('ControlOrMeta+BracketLeft')
     await page.waitForTimeout(300)
-    await expectPages(panel, TWO_TOP)
+    await expectPages(panel, THREE_MID)
     await page.keyboard.press('ControlOrMeta+BracketRight')
-    await expectPages(panel, TWO_MID)
-    await page.keyboard.press('ControlOrMeta+BracketRight')
-    await expectPages(panel, TWO_DEEP)
+    await expectPages(panel, THREE_DEEP)
 
     // A segment on screen only takes the focus: nothing moves.
     await bar(panel).locator('.tree-path-seg').nth(2).locator('.tree-path-seg-main').click()
-    await expectPages(panel, TWO_DEEP)
-    await expect(leftComposer(panel)).toBeFocused()
-    // One left of the pages: they slide so it is the left page, still two.
+    await expectPages(panel, THREE_DEEP)
+    await expect(middleComposer(panel)).toBeFocused()
+    // One left of the pages: they slide so it is the left page, still three.
     await bar(panel).locator('.tree-path-seg').nth(0).locator('.tree-path-seg-main').click()
-    await expectPages(panel, TWO_TOP)
-    expect(await segments(panel)).toEqual(['Main conversation [L]', `1 ${T.Q1} [R]`, `1.1 ${T.Q11}`, `1.1.1 ${T.Q111}`])
+    await expectPages(panel, THREE_MID)
+    expect(await segments(panel)).toEqual(['Main conversation [L]', `1 ${T.Q1} [M]`, `1.1 ${T.Q11} [R]`, `1.1.1 ${T.Q111}`])
     // One right of them: it is the right page.
     await bar(panel).locator('.tree-path-seg').nth(3).locator('.tree-path-seg-main').click()
-    await expectPages(panel, TWO_DEEP)
+    await expectPages(panel, THREE_DEEP)
 
     // The question list: a question on screen only takes the focus.
     await openQuestion(panel, T.Q11)
-    await expectPages(panel, TWO_DEEP)
-    await expect(leftComposer(panel)).toBeFocused()
-    // One left of the pages: they slide, still two.
+    await expectPages(panel, THREE_DEEP)
+    await expect(middleComposer(panel)).toBeFocused()
     await openQuestion(panel, T.Q1)
-    await expectPages(panel, TWO_MID)
+    await expectPages(panel, THREE_DEEP)
+    await expect(leftComposer(panel)).toBeFocused()
 
-    // An "Asked from this answer" row in the left page: a sibling of the right
-    // page goes there, the pages stay two.
+    // An "Asked from this answer" row in the left page (1): a sibling of 1.1
+    // goes there, the levels above it beside it.
     const asked = leftHalf(panel).locator('.thread-asked-from .thread-asked-row', { hasText: T.Q12 })
     await asked.scrollIntoViewIfNeeded()
     await asked.click()
-    await expectPages(panel, ['L 1', 'R 1.2'])
+    await expectPages(panel, ['L Main conversation', 'M 1', 'R 1.2'])
 
     // Another question (2, on Main): as asked, Main beside it.
     await openQuestion(panel, T.Q2)
@@ -147,69 +156,77 @@ test.describe('Tree Mode keeps its pages', () => {
     expect(await segments(panel)).toEqual(['Main conversation [L]', `2 ${T.Q2} [R]`])
   })
 
-  test('switching between siblings at one level keeps both pages (2026-11-10)', async ({ page }) => {
+  test('switching between siblings at one level keeps the pages (2026-11-10)', async ({ page }) => {
     // The user's report: going to the third question of a level showed it alone.
     const panel = await openSheet(page)
     await openQuestion(panel, T.Q11)
-    await expectPages(panel, TWO_MID)
-    // Level 2 (questions on 1): 1.1 to its sibling 1.2 and back; 1 stays the left page.
+    await expectPages(panel, THREE_MID)
+    // Level 2 (questions on 1): 1.1 to its sibling 1.2 and back; Main and 1 stay.
     await pickAtLevel(panel, 2, 'Level 2 \u00b7 questions on 1', T.Q12)
-    await expectPages(panel, ['L 1', 'R 1.2'])
-    await expect(sidePages(panel)).toHaveCount(1)
+    await expectPages(panel, ['L Main conversation', 'M 1', 'R 1.2'])
+    await expect(sidePages(panel)).toHaveCount(2)
     await pickAtLevel(panel, 2, 'Level 2 \u00b7 questions on 1', T.Q11)
-    await expectPages(panel, TWO_MID)
+    await expectPages(panel, THREE_MID)
     // Level 1 (questions on Main): 1 to 2 and back; Main stays the left page.
     await pickAtLevel(panel, 1, 'Level 1 \u00b7 questions on Main', T.Q2)
     await expectPages(panel, ['L Main conversation', 'R 2'])
     await pickAtLevel(panel, 1, 'Level 1 \u00b7 questions on Main', T.Q1)
-    await expectPages(panel, TWO_TOP)
+    await expectPages(panel, TOP)
     await shot(page, 'siblings', panel)
   })
 
-  test('the divider between the pages drags, keeps each page wide enough, resets on a double click, and is kept (2026-11-11)', async ({ page }) => {
+  test('each divider between the pages drags, keeps the pages wide enough, resets on a double click, and is kept (2026-11-11)', async ({ page }) => {
+    // A long walk over three timelines and their sibling boxes: about 40s in WebKit on a
+    // quiet host, twice that at a high load with video, past the 60s CI budget (2026-11-16).
+    test.setTimeout(180_000)
     const panel = await openSheet(page)
     await openQuestion(panel, T.Q111)
-    await expectPages(panel, TWO_DEEP)
-    const divider = panel.locator('.tree-split-divider')
-    await expect(divider).toHaveCount(1)
-    // Equal by default (the first test measures it); a run cut short may leave its width kept.
-    await divider.dblclick()
-    await expect(divider).toHaveAttribute('aria-valuenow', '50')
+    await expectPages(panel, THREE_DEEP)
+    const dividers = panel.locator('.tree-split-divider')
+    await expect(dividers).toHaveCount(2)
+    const [first, second] = [dividers.nth(0), dividers.nth(1)]
+    // Equal by default (the first test measures it); a run cut short may leave its widths kept.
+    await first.dblclick()
+    await second.dblclick()
+    await expect(first).toHaveAttribute('aria-valuenow', '33')
+    await expect(second).toHaveAttribute('aria-valuenow', '67')
     const col = (await panel.locator('.session-panel-chat-col').boundingBox())!
-    const grab = async () => {
-      const d = (await divider.boundingBox())!
+    const grab = async (d0: Locator) => {
+      const d = (await d0.boundingBox())!
       await page.mouse.move(d.x + d.width / 2, d.y + d.height / 2)
       await page.mouse.down()
     }
-    // A slow drag to the left: the left page a third of the column.
-    await grab()
-    const to = col.x + col.width / 3
-    await page.mouse.move(to, col.y + col.height / 2, { steps: 12 })
+    // A slow drag of the first divider to the left: the left page a fifth of the
+    // column, the middle one wider, the right one as it was.
+    const rightBefore = (await rightBody(panel).boundingBox())!.width
+    await grab(first)
+    await page.mouse.move(col.x + col.width / 5, col.y + col.height / 2, { steps: 12 })
     await page.mouse.up()
-    await expect.poll(() => leftShare(panel)).toBeGreaterThan(0.31)
-    expect(await leftShare(panel)).toBeLessThan(0.36)
-    await shot(page, 'divider-third', panel)
-    // Far to the right: stopped where the right page keeps its 240px.
-    await grab()
+    await expect.poll(async () => (await shares(panel))[0]).toBeLessThan(0.23)
+    expect((await shares(panel))[0]).toBeGreaterThan(0.17)
+    expect(Math.abs((await rightBody(panel).boundingBox())!.width - rightBefore)).toBeLessThan(4)
+    await shot(page, 'divider-fifth', panel)
+    // The second divider far to the right: stopped where the right page keeps its 240px.
+    await grab(second)
     await page.mouse.move(col.x + col.width - 20, col.y + col.height / 2, { steps: 8 })
     await page.mouse.up()
     await expect.poll(async () => Math.round((await rightBody(panel).boundingBox())!.width)).toBeGreaterThanOrEqual(232)
-    expect(await leftShare(panel)).toBeLessThanOrEqual(0.751)
-    // A double click: equal again.
-    await divider.dblclick()
-    await expect.poll(() => leftShare(panel)).toBeGreaterThan(0.47)
-    expect(await leftShare(panel)).toBeLessThan(0.53)
+    expect(Math.round((await rightBody(panel).boundingBox())!.width)).toBeLessThan(rightBefore - 40)
+    // A double click: each back to its third.
+    await first.dblclick()
+    await second.dblclick()
+    await expect.poll(async () => Math.min(...await shares(panel))).toBeGreaterThan(0.3)
     // The keys move it too.
-    await divider.focus()
+    await first.focus()
     await page.keyboard.press('ArrowLeft')
     await page.keyboard.press('ArrowLeft')
-    await expect(divider).toHaveAttribute('aria-valuenow', '40')
+    await expect(first).toHaveAttribute('aria-valuenow', '23')
     // A quick flick (one move, released at once) lands where it was released.
-    await grab()
-    await page.mouse.move(col.x + col.width * 0.6, col.y + col.height / 2)
+    await grab(first)
+    await page.mouse.move(col.x + col.width * 0.3, col.y + col.height / 2)
     await page.mouse.up()
-    await expect(divider).toHaveAttribute('aria-valuenow', '60')
-    const kept = await leftShare(panel)
+    await expect(first).toHaveAttribute('aria-valuenow', '30')
+    const kept = await shares(panel)
     // Kept across a reload (full screen left first) and for the next session's split.
     await page.waitForTimeout(1500)
     await leaveFullscreen(page)
@@ -218,22 +235,28 @@ test.describe('Tree Mode keeps its pages', () => {
     const again = panel
     await again.getByRole('button', { name: 'Expand session to full screen' }).click()
     await expect(again).toHaveClass(/open-walnut-fullscreen/)
-    // The panel keeps its pages too: the same two come back.
-    await expectPages(again, TWO_DEEP)
-    await expect(again.locator('.tree-split-divider')).toHaveAttribute('aria-valuenow', '60')
-    expect(Math.abs((await leftShare(again)) - kept)).toBeLessThan(0.02)
+    // The panel keeps its pages too: the same three come back.
+    await expectPages(again, THREE_DEEP)
+    await expect(again.locator('.tree-split-divider').nth(0)).toHaveAttribute('aria-valuenow', '30')
+    const back = await shares(again)
+    for (let i = 0; i < 3; i++) expect(Math.abs(back[i] - kept[i])).toBeLessThan(0.02)
     // Back to equal, so the other tests read the default.
-    await again.locator('.tree-split-divider').dblclick()
-    await expect(again.locator('.tree-split-divider')).toHaveAttribute('aria-valuenow', '50')
+    await again.locator('.tree-split-divider').nth(0).dblclick()
+    await again.locator('.tree-split-divider').nth(1).dblclick()
+    await expect(again.locator('.tree-split-divider').nth(0)).toHaveAttribute('aria-valuenow', '33')
     await page.waitForTimeout(1500)
   })
 
-  test('a narrow sheet still shows the current page and the one before it', async ({ page }) => {
-    // About 780px of chat: two pages (one only under 600px, a phone width).
+  test('a narrow sheet shows the current page and the one before it', async ({ page }) => {
+    // About 780px of chat: two pages (three from 960px, one only under 600px, a phone width).
     const panel = await openSheet(page, 800, 800)
     await openQuestion(panel, T.Q111)
     await expectPages(panel, TWO_DEEP)
-    const share = await leftShare(panel)
+    // Equal by default; another spec's drag may have left its width kept (the
+    // choice is the user's, shared by every panel): put it back first.
+    await panel.locator('.tree-split-divider').dblclick()
+    await expect(panel.locator('.tree-split-divider')).toHaveAttribute('aria-valuenow', '50')
+    const share = (await shares(panel))[0]
     expect(share, `left share ${share}`).toBeGreaterThan(0.47)
     expect(share, `left share ${share}`).toBeLessThan(0.53)
     await rightComposer(panel).focus()
@@ -246,13 +269,13 @@ test.describe('Tree Mode keeps its pages', () => {
     const sent = captureSends(page)
     const panel = await openSheet(page)
     await openQuestion(panel, T.Q111)
-    await expectPages(panel, TWO_DEEP)
+    await expectPages(panel, THREE_DEEP)
 
-    // A comment in the left page (1.1).
+    // A comment in the middle page (1.1).
     const leftWords = `Left page note ${Date.now()}`
-    await commentOn(page, leftHalf(panel), SPLIT_PASSAGES.ASK_Q11, leftWords)
-    await expectPages(panel, TWO_DEEP)
-    const leftTray = leftHalf(panel).locator('[data-testid="pending-comments"]')
+    await commentOn(page, middlePage(panel), SPLIT_PASSAGES.ASK_Q11, leftWords)
+    await expectPages(panel, THREE_DEEP)
+    const leftTray = middlePage(panel).locator('[data-testid="pending-comments"]')
     await expect(leftTray.locator('[data-testid="pending-comment-row"]')).toHaveCount(1)
     await expect(panel.locator('[data-testid="pending-comments"]')).toHaveCount(1)
     // Its passage and its note on lines of their own, the note whole (in a third of the sheet).
@@ -265,7 +288,7 @@ test.describe('Tree Mode keeps its pages', () => {
     // A comment in the right page (1.1.1) waits in the right composer only.
     const rightWords = `Right page note ${Date.now()}`
     await commentOn(page, rightBody(panel), SPLIT_PASSAGES.ASK_Q111, rightWords)
-    await expectPages(panel, TWO_DEEP)
+    await expectPages(panel, THREE_DEEP)
     await expect(panel.locator('[data-testid="pending-comments"]')).toHaveCount(2)
     await expect(leftTray.locator('[data-testid="pending-comment-row"]')).toHaveCount(1)
     const rightTray = panel.locator('.session-panel-input:not(.tree-split-input) [data-testid="pending-comments"]')
@@ -273,26 +296,26 @@ test.describe('Tree Mode keeps its pages', () => {
     // The right page has the room: its note is whole.
     expect(await rightTray.locator('.pending-comments-text').evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
 
-    // The left page's message carries its own comment, into 1.1.
+    // The middle page's message carries its own comment, into 1.1.
     const leftAsk = `And who reviews those edits ${Date.now()}?`
-    await send(leftComposer(panel), leftAsk)
+    await send(middleComposer(panel), leftAsk)
     await expect.poll(() => hintOf(sent, leftAsk), { timeout: 10_000 }).toBe('1.1')
     const leftSend = sent.find((x) => x.message.includes(leftAsk))!
     expect(leftSend.message).toContain(leftWords)
     expect(leftSend.message).not.toContain(rightWords)
     await expect(leftTray).toHaveCount(0)
     await expect(rightTray.locator('[data-testid="pending-comment-row"]')).toHaveCount(1)
-    await expectPages(panel, TWO_DEEP)
+    await expectPages(panel, THREE_DEEP)
 
     // The right page's comment goes alone (an empty message) into 1.1.1.
     await rightComposer(panel).click()
     await rightComposer(panel).press('Enter')
     await expect.poll(() => sent.find((x) => x.message.includes(rightWords))?.hints?.question?.arg, { timeout: 10_000 }).toBe('1.1.1')
     await expect(rightTray).toHaveCount(0)
-    await expectPages(panel, TWO_DEEP)
+    await expectPages(panel, THREE_DEEP)
   })
 
-  for (const shape of [{ name: 'wide sheet', width: 1440, height: 640, pages: TWO_DEEP }, { name: 'narrow sheet', width: 800, height: 720, pages: TWO_DEEP }]) {
+  for (const shape of [{ name: 'wide sheet', width: 1440, height: 640, pages: THREE_DEEP }, { name: 'narrow sheet', width: 800, height: 720, pages: TWO_DEEP }]) {
     test(`a turn in one page never scrolls another (${shape.name})`, async ({ page }) => {
       const panel = await openSheet(page, shape.width, shape.height)
       await openQuestion(panel, T.Q111)
@@ -335,11 +358,11 @@ test.describe('Tree Mode keeps its pages', () => {
   test('a file beside the chat narrows the pages for room only; closed, they come back', async ({ page }) => {
     const panel = await openSheet(page)
     await openQuestion(panel, T.Q111)
-    await expectPages(panel, TWO_DEEP)
+    await expectPages(panel, THREE_DEEP)
     await panel.getByRole('button', { name: 'Files', exact: true }).first().click()
     await expect(panel.locator('.session-file-explorer').first()).toBeVisible({ timeout: 15_000 })
     // The chat is narrower; Tree Mode and the path bar stay, the question on the right
-    // (two pages while the chat holds 600px, else the page alone).
+    // (as many pages as the chat holds: three from 960px, two from 600px, else the page alone).
     await expect(bar(panel)).toBeVisible()
     const narrowed = await pagesOnScreen(panel)
     if (narrowed.length) expect(narrowed.at(-1)).toBe('R 1.1.1')
@@ -352,36 +375,39 @@ test.describe('Tree Mode keeps its pages', () => {
     expect(rb.x + rb.width).toBeLessThanOrEqual(bb.x + bb.width + 1)
     await shot(page, 'file-open', panel)
     await panel.getByRole('button', { name: 'Files', exact: true }).first().click()
-    await expectPages(panel, TWO_DEEP)
+    await expectPages(panel, THREE_DEEP)
   })
 
   test('only the page a turn answers offers Stop; the others still send', async ({ page }) => {
     const panel = await openSheet(page)
     await openQuestion(panel, T.Q11)
-    await expectPages(panel, TWO_MID)
-    // A slow answer in the left page (1).
-    await send(leftComposer(panel), 'chunk-delay:2500 stream-partial-long-text')
-    await expect(leftHalf(panel).locator('.session-history')).toContainText('Claude Code is working', { timeout: 20_000 })
+    await expectPages(panel, THREE_MID)
+    // A slow answer in the middle page (1).
+    await send(middleComposer(panel), 'chunk-delay:2500 stream-partial-long-text')
+    await expect(middlePage(panel).locator('.session-history')).toContainText('Claude Code is working', { timeout: 20_000 })
     const stopIn = (scope: Locator) => scope.getByRole('button', { name: 'Stop the running turn' })
-    await expect(stopIn(leftHalf(panel))).toBeVisible()
-    // The sibling and the right page are not answering: their composers send.
-    for (const other of [siblingPage(panel), panel.locator('.session-panel-input:not(.tree-split-input)')]) {
+    await expect(stopIn(middlePage(panel))).toBeVisible()
+    // Main, the siblings and the right page are not answering: their composers send.
+    for (const other of [leftHalf(panel), siblingPage(panel), siblingPage(panel, 'M'), panel.locator('.session-panel-input:not(.tree-split-input)')]) {
       await expect(stopIn(other)).toHaveCount(0)
     }
     await shot(page, 'stop', panel)
   })
 
-  test('closing the left page shows one page until Split brings the two back', async ({ page }) => {
+  test('closing the left page shows one page fewer, down to one, until Split brings them back', async ({ page }) => {
     const panel = await openSheet(page)
     await openQuestion(panel, T.Q111)
+    await expectPages(panel, THREE_DEEP)
+    // The left page closes: one fewer.
+    await leftHalf(panel).getByRole('button', { name: 'Close the left page' }).click()
     await expectPages(panel, TWO_DEEP)
-    // The left page closes: the right page alone, the path bar stays.
+    // Again: the right page alone, the path bar stays.
     await leftHalf(panel).getByRole('button', { name: 'Close the left page' }).click()
     await expect(sidePages(panel)).toHaveCount(0)
     await expect(panel.locator('.thread-stack-header .thread-stack-title')).toHaveText(T.Q111)
     await expect(bar(panel)).toBeVisible()
     await page.getByRole('button', { name: 'Split', exact: true }).click()
-    await expectPages(panel, TWO_DEEP)
+    await expectPages(panel, THREE_DEEP)
   })
 
   test('the sibling sits above the right page with its own composer; Swap trades the two', async ({ page }) => {
@@ -389,7 +415,7 @@ test.describe('Tree Mode keeps its pages', () => {
     const sent = captureSends(page)
     const panel = await openSheet(page)
     await openQuestion(panel, T.Q11)
-    await expectPages(panel, TWO_MID)
+    await expectPages(panel, THREE_MID)
     // 1.1 is the first asked on 1: its sibling above it is the next one, 1.2.
     const sib = siblingPage(panel)
     await expect(sib).toBeVisible()
@@ -423,23 +449,23 @@ test.describe('Tree Mode keeps its pages', () => {
     await expect.poll(() => hintOf(sent, words), { timeout: 10_000 }).toBe('1.2')
     await expect(sib.locator('.session-history')).toContainText(words, { timeout: 20_000 })
     await expect(rightBody(panel).locator('.session-history')).not.toContainText(words)
-    await expectPages(panel, TWO_MID)
+    await expectPages(panel, THREE_MID)
 
-    // Swap: 1.2 is the right page, 1.1 comes up. The left page, scrolled by
+    // Swap: 1.2 is the right page, 1.1 comes up. The middle page, scrolled by
     // the reader, stays where it is (only the two siblings trade places).
-    await wheelUp(page, leftHalf(panel))
+    await wheelUp(page, middlePage(panel))
     await settle(page)
-    const leftTop = await scrollTopOf(leftHalf(panel))
+    const leftTop = await scrollTopOf(middlePage(panel))
     await sib.getByRole('button', { name: 'Swap with the page below' }).click()
-    await expectPages(panel, ['L 1', 'R 1.2'])
+    await expectPages(panel, ['L Main conversation', 'M 1', 'R 1.2'])
     await settle(page)
-    expect(await scrollTopOf(leftHalf(panel))).toBe(leftTop)
+    expect(await scrollTopOf(middlePage(panel))).toBe(leftTop)
     await expect(sib.locator('.thread-half-name')).toHaveText('1.1')
     await expect(sib.locator('.thread-half-title')).toHaveText(T.Q11)
     await expect(sib.locator('.thread-half-where')).toHaveText(/^Previous \u00b7 1 of \d+$/)
     // The knob on the divider swaps back.
     await sib.locator('.tree-sibling-knob').click()
-    await expectPages(panel, TWO_MID)
+    await expectPages(panel, THREE_MID)
     await expect(sib.locator('.thread-half-title')).toHaveText(T.Q12)
 
     // The divider drags (and the share stays after a reload).
@@ -459,7 +485,7 @@ test.describe('Tree Mode keeps its pages', () => {
     // Closed: gone, the right page offers it back.
     await siblingPage(panel).getByRole('button', { name: 'Close the sibling page' }).click()
     await expect(siblingPage(panel)).toHaveCount(0)
-    await expectPages(panel, TWO_MID)
+    await expectPages(panel, THREE_MID)
     await rightHeader(panel).getByRole('button', { name: 'Show the sibling question' }).click()
     await expect(siblingPage(panel)).toBeVisible()
   })
@@ -468,8 +494,11 @@ test.describe('Tree Mode keeps its pages', () => {
     const panel = await openSheet(page)
     // Main on screen as the left page, beside question 1.
     await openQuestion(panel, T.Q1)
-    await expectPages(panel, TWO_TOP)
+    await expectPages(panel, TOP)
     const box = (scope: Locator) => scope.locator('.chat-input-box').last()
+    // The mic shows only where the engine can record (Playwright's Linux WebKit has
+    // no MediaRecorder, and the composer then draws no mic: the same before 2026-11-16).
+    const mic = await hasMediaRecorder(page)
     const main = box(leftHalf(panel))
     await expect(main.locator('.chat-plus-btn')).toBeVisible()
     await expect(main.locator('.session-mode-bar')).toBeVisible()
@@ -480,18 +509,18 @@ test.describe('Tree Mode keeps its pages', () => {
       await expect(light).toHaveAttribute('data-light', 'true')
       await expect(light.locator('.chat-plus-btn')).toHaveCount(0)
       await expect(light.locator('.session-mode-bar')).toHaveCount(0)
-      await expect(light.locator('.mic-btn-wrapper')).toBeVisible()
+      if (mic) await expect(light.locator('.mic-btn-wrapper')).toBeVisible()
       await expect(light.locator('.chat-send-group')).toBeVisible()
     }
     // One set of the session's controls on screen, Main's.
     await expect(panel.locator('.session-mode-bar')).toHaveCount(1)
     await shot(page, 'composers', panel)
-    // Main off screen: the left page (1.1) has a light composer too, one row:
-    // the text, the mic and send side by side, inside its third of the sheet.
+    // Main off screen: the pages beside (1, 1.1) have light composers too, one
+    // row: the text, the mic and send side by side, inside its third of the sheet.
     await openQuestion(panel, T.Q111)
-    await expectPages(panel, TWO_DEEP)
+    await expectPages(panel, THREE_DEEP)
     await expect(panel.locator('.session-mode-bar')).toHaveCount(0)
-    for (const light of [box(leftHalf(panel)), own]) {
+    for (const light of [box(leftHalf(panel)), box(middlePage(panel)), own]) {
       await expect(light).toHaveAttribute('data-light', 'true')
       const b = (await light.boundingBox())!
       expect(b.height).toBeLessThan(60)
@@ -502,8 +531,7 @@ test.describe('Tree Mode keeps its pages', () => {
       // An empty one shows its placeholder on one line, nothing clipped below it.
       expect(await light.locator('textarea').evaluate((el) => el.scrollHeight <= el.clientHeight + 1)).toBe(true)
       // Mic and send inside the card, not spilling past its edge.
-      const mic = (await light.locator('.mic-btn-wrapper').boundingBox())!
-      expect(mic.x).toBeGreaterThan(ta.x + ta.width - 2)
+      if (mic) expect((await light.locator('.mic-btn-wrapper').boundingBox())!.x).toBeGreaterThan(ta.x + ta.width - 2)
       expect(go.x + go.width).toBeLessThanOrEqual(b.x + b.width)
     }
     // Main alone on screen: the panel's own composer is the full one again.

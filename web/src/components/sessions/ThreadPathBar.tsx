@@ -74,16 +74,21 @@ export const ThreadPathBar = memo(function ThreadPathBar(p: ThreadPathBarProps) 
   const sig = p.segments.map((s) => s.key).join('\n');
   useEffect(() => { setOpen(null); }, [sig]);
   const mod = isMacPlatform() ? CMD : 'Ctrl ';
+  const current = p.segments.findIndex((s) => s.role === 'R' || s.role === 'only');
   return (
     <nav className="tree-path-bar" aria-label="Question path" data-narrow={p.narrow ? 'true' : undefined} data-split={p.split ? 'true' : undefined}>
       <ol className="tree-path-segs">
         {p.segments.map((seg, j) => {
           const shownHere = seg.role !== null;
           const label = seg.key === '' ? 'Main conversation' : seg.title;
+          // A level right of the page being worked on: one the reader opened and
+          // closed or stepped back from, greyed, one click opens it again.
+          const ahead = current >= 0 && j > current;
+          const name = seg.number ? `${seg.number} ${label}` : label;
           return (
             <li key={seg.key || 'root'} className="tree-path-seg" data-role={seg.role ?? undefined}
-              data-first={j === 0 ? 'true' : undefined} data-shown={shownHere ? 'true' : undefined}>
-              <button type="button" className="tree-path-seg-main" title={seg.number ? `${seg.number} ${label}` : label}
+              data-first={j === 0 ? 'true' : undefined} data-shown={shownHere ? 'true' : undefined} data-ahead={ahead ? 'true' : undefined}>
+              <button type="button" className="tree-path-seg-main" title={ahead ? `Open again: ${name}` : name}
                 aria-current={seg.role === 'R' || seg.role === 'only' ? 'page' : undefined} onClick={() => p.onSegment(j)}>
                 {seg.number && <span className="tree-path-num">{seg.number}</span>}
                 <span className="tree-path-title">{label}</span>

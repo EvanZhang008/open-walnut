@@ -1243,10 +1243,13 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const treeLeftShown = treeSplit.splitShown;
   /** The pages left of the panel's own, left to right. */
   const sidePaneKeys = treeLeftShown ? treeSplit.paneKeys.slice(0, -1) : [];
-  /** The sibling question above the panel's own page (tree-sibling.ts). */
-  const treeSibling = treeSplit.sibling;
-  /** The chat column is Tree Mode's grid: pages side by side, or a sibling above the page. */
-  const treeGrid = treeLeftShown || !!treeSibling;
+  /** Each page's sibling box (tree-sibling.ts), left to right; the last is above the panel's own page. */
+  const treeSiblings = treeSplit.siblings;
+  const lastColumn = treeSiblings.length - 1;
+  const treeSibling = treeSiblings[lastColumn]?.partner ?? null;
+  const anyTreeSibling = treeSiblings.some((x) => x.partner);
+  /** The chat column is Tree Mode's grid: pages side by side, or a sibling above a page. */
+  const treeGrid = treeLeftShown || anyTreeSibling;
   // A move to a page already on screen: it flashes and its composer takes the
   // focus; the panel's own page asks for its composer as a click on it would.
   const [paneFocus, setPaneFocus] = useState<{ key: string; n: number; flash: boolean; land: boolean } | null>(null);
@@ -1270,7 +1273,12 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const rightNumber = treeSplit.labels.get(treeSplit.rightKey);
   // What the panel's own timeline is in the split: the right page, or (one page,
   // with room for two) the page whose row offers Split.
-  const showTreeSibling = treeSplit.siblingClosed ? treeSplit.showSibling : undefined;
+  const { showSibling: showTreeSiblingAt } = treeSplit;
+  const rightSiblingClosed = treeSiblings[lastColumn]?.closed === true;
+  const showTreeSibling = useMemo(
+    () => (rightSiblingClosed ? () => showTreeSiblingAt(lastColumn) : undefined),
+    [rightSiblingClosed, showTreeSiblingAt, lastColumn],
+  );
   const rightHalf = useMemo<TreeHalf | null>(() => {
     const sib = showTreeSibling ? { onShowSibling: showTreeSibling } : {};
     if (treeLeftShown) return { side: 'R', ...(rightNumber ? { number: rightNumber } : {}), onClose: closeRightHalf, ...sib };
@@ -1296,8 +1304,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     () => pendingCommentsOf(treeMode ? threads.stack.api.currentKey : ROOT_THREAD_KEY),
     [pendingCommentsOf, treeMode, threads.stack.api.currentKey],
   );
-  // The pages beside the panel's own: left of it, and the sibling above it.
-  const besideKeys = treeSibling ? [...sidePaneKeys, treeSibling.key] : sidePaneKeys;
+  // The pages beside the panel's own: left of it, and the siblings above the pages.
+  const besideKeys = [...sidePaneKeys, ...treeSiblings.flatMap((x) => (x.partner ? [x.partner.key] : []))];
   const sidePaneSig = besideKeys.join('\n');
   const sidePending = useMemo(
     () => new Map(besideKeys.map((k) => [k, pendingCommentsOf(k)] as const)),
@@ -2596,15 +2604,15 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // (tree-split.css lays the pages out by it).
   const chatColWidth = splitOpen && !chatCollapsed ? chatPanel.width : undefined;
   const treePanes = treeLeftShown ? treeSplit.paneKeys.length : treeGrid ? 1 : 0;
-  const siblingTop = treeSibling ? siblingRows(treeSplit.siblingShare).top : undefined;
+  const siblingTop = anyTreeSibling ? siblingRows(treeSplit.siblingShare).top : undefined;
   const chatColStyle = useMemo<CSSProperties | undefined>(() => {
     if (chatColWidth === undefined && !treePanes) return undefined;
     return {
       ...(chatColWidth !== undefined ? { width: chatColWidth, flex: `0 0 ${chatColWidth}` } : {}),
-      ...(treePanes ? { ['--tree-panes' as string]: String(treePanes), ['--tree-cols' as string]: paneColumns(treePanes, treeSplit.leftShare) } : {}),
+      ...(treePanes ? { ['--tree-panes' as string]: String(treePanes), ['--tree-cols' as string]: paneColumns(treePanes, treeSplit.bounds) } : {}),
       ...(siblingTop ? { ['--tree-sibling-top' as string]: siblingTop } : {}),
     } as CSSProperties;
-  }, [chatColWidth, treePanes, siblingTop, treeSplit.leftShare]);
+  }, [chatColWidth, treePanes, siblingTop, treeSplit.bounds]);
   // A move to the panel's own page while pages sit side by side: it flashes.
   useEffect(() => {
     if (!paneFocus?.flash || paneFocus.key !== threads.stack.api.currentKey || !treeGrid) return;
@@ -3966,7 +3974,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             <div className="session-panel-chat-resize" {...chatPanel.handleProps} title="Drag to resize chat" />
           )}
           <div
-            className={`session-panel-chat-col${treeSplit.barShown ? ' has-tree-bar' : ''}${treeGrid ? ' is-tree-split' : ''}${treeSibling ? ' has-tree-sibling' : ''}${reader.colClass}`}
+            className={`session-panel-chat-col${treeSplit.barShown ? ' has-tree-bar' : ''}${treeGrid ? ' is-tree-split' : ''}${anyTreeSibling ? ' has-tree-sibling' : ''}${treeSibling ? ' has-right-sibling' : ''}${reader.colClass}`}
             data-time-view="chat"
             onClick={handleServiceLinkClick}
             ref={chatColCallbackRef}
@@ -4014,6 +4022,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   key={`side-${i}`}
                   column={i + 1}
                   side={i === 0 ? 'L' : 'M'}
+                  underSibling={!!treeSiblings[i]?.partner}
+                  {...(treeSiblings[i]?.closed ? { onShowSibling: showTreeSiblingAt, siblingColumn: i } : {})}
                   historyKey={`${sessionId}:${rewindEpoch}:side-${i}`}
                   history={leftHistory}
                   leftKey={key}
@@ -4039,46 +4049,57 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               </MessageAboutContext.Provider>
               </IslandHostContext.Provider>
             )}
-            {treePanes >= 2 && (
-              <TreeSplitDivider share={treeSplit.leftShare} onShare={treeSplit.setLeftShare} />
-            )}
-            {treeSibling && (
+            {treeSplit.bounds.map((share, i) => (
+              <TreeSplitDivider key={`divider-${i}`} index={i} panes={treePanes} share={share} onShare={treeSplit.setBound} />
+            ))}
+            {anyTreeSibling && (
               <IslandHostContext.Provider value={islandHost}>
               <MessageAboutContext.Provider value={sessionTask?.org_role === 'main' || sessionTask?.org_role === 'lead'}>
-                <TreeSplitLeft
-                  key="sibling"
-                  column={treePanes}
-                  side="S"
-                  historyKey={`${sessionId}:${rewindEpoch}:sibling`}
-                  history={leftHistory}
-                  leftKey={treeSibling.key}
-                  rightKey={treeSplit.rightKey}
-                  {...(treeSplit.labels.get(treeSibling.key) ? { number: treeSplit.labels.get(treeSibling.key) } : {})}
-                  where={`${treeSibling.before ? 'Previous' : 'Next'} \u00b7 ${treeSibling.position} of ${treeSibling.count}`}
-                  onSwap={treeSplit.swapSibling}
-                  onClose={treeSplit.closeSibling}
-                  divider={(
-                    <TreeSiblingDivider
-                      share={treeSplit.siblingShare}
-                      onShare={treeSplit.setSiblingShare}
-                      onSwap={treeSplit.swapSibling}
-                      pageRef={bodyRef}
+                {treeSiblings.map(({ partner }, i) => {
+                  if (!partner) return null;
+                  const below = treeSplit.paneKeys[i];
+                  const right = i === lastColumn;
+                  return (
+                    <TreeSplitLeft
+                      // By place too: the right column's box keeps the key it always had.
+                      key={right ? 'sibling' : `sibling-${i}`}
+                      column={i + 1}
+                      side="S"
+                      siblingOf={right ? 'R' : i === 0 ? 'L' : 'M'}
+                      siblingColumn={i}
+                      historyKey={`${sessionId}:${rewindEpoch}:${right ? 'sibling' : `sibling-${i}`}`}
+                      history={leftHistory}
+                      leftKey={partner.key}
+                      rightKey={below}
+                      {...(treeSplit.labels.get(partner.key) ? { number: treeSplit.labels.get(partner.key) } : {})}
+                      where={`${partner.before ? 'Previous' : 'Next'} \u00b7 ${partner.position} of ${partner.count}`}
+                      onSwapAt={treeSplit.swapSibling}
+                      onCloseAt={treeSplit.closeSibling}
+                      divider={(
+                        <TreeSiblingDivider
+                          share={treeSplit.siblingShare}
+                          onShare={treeSplit.setSiblingShare}
+                          onSwap={treeSplit.swapSibling}
+                          column={i}
+                          pageRef={bodyRef}
+                        />
+                      )}
+                      mentionCwd={session?.cwd}
+                      mentionHost={session?.host}
+                      onSendFor={sideSend}
+                      onInterruptSendFor={sideInterruptSend}
+                      onStop={handleStopTurn}
+                      isStreaming={pageStreaming(partner.key)}
+                      sendBlocked={macSessionAway}
+                      pendingComments={sidePending.get(partner.key) ?? NO_COMMENTS}
+                      onJumpComment={commentsStore.requestJump}
+                      onRemoveComment={commentsStore.remove}
+                      focusSeq={paneFocus?.key === partner.key ? paneFocus.n : 0}
+                      flash={paneFocus?.key === partner.key && paneFocus.flash}
+                      landSeq={0}
                     />
-                  )}
-                  mentionCwd={session?.cwd}
-                  mentionHost={session?.host}
-                  onSendFor={sideSend}
-                  onInterruptSendFor={sideInterruptSend}
-                  onStop={handleStopTurn}
-                  isStreaming={pageStreaming(treeSibling.key)}
-                  sendBlocked={macSessionAway}
-                  pendingComments={sidePending.get(treeSibling.key) ?? NO_COMMENTS}
-                  onJumpComment={commentsStore.requestJump}
-                  onRemoveComment={commentsStore.remove}
-                  focusSeq={paneFocus?.key === treeSibling.key ? paneFocus.n : 0}
-                  flash={paneFocus?.key === treeSibling.key && paneFocus.flash}
-                  landSeq={0}
-                />
+                  );
+                })}
               </MessageAboutContext.Provider>
               </IslandHostContext.Provider>
             )}

@@ -66,17 +66,21 @@ export async function openQuestion(panel: Locator, title: string): Promise<void>
 }
 
 export const bar = (panel: Locator) => panel.locator('.tree-path-bar')
-/** The pages left of the right one (the sibling page above it is not one of them). */
+/** The pages left of the right one (the sibling pages above the pages are not among them). */
 export const sidePages = (panel: Locator) => panel.locator('.tree-split-left:not([data-tree-half="S"])')
-export const siblingPage = (panel: Locator) => panel.locator('.tree-split-left[data-tree-half="S"]')
+/** The sibling box above the page whose badge is `of` (the right page's by default). */
+export const siblingPage = (panel: Locator, of: 'L' | 'M' | 'R' = 'R') => panel.locator(`.tree-split-left[data-tree-half="S"][data-sibling-of="${of}"]`)
+/** Every sibling box on screen, whichever page it is above. */
+export const siblingBoxes = (panel: Locator) => panel.locator('.tree-split-left[data-tree-half="S"]')
 export const leftHalf = (panel: Locator) => panel.locator('.tree-split-left[data-tree-half="L"]')
+export const middlePage = (panel: Locator) => panel.locator('.tree-split-left[data-tree-half="M"]')
 export const rightBody = (panel: Locator) => panel.locator('.session-panel-body')
 export const leftHeader = (panel: Locator) => leftHalf(panel).locator('.thread-stack-header[data-half="L"]')
 export const rightHeader = (panel: Locator) => rightBody(panel).locator('.thread-stack-header[data-half="R"]')
 export const rightComposer = (panel: Locator) => panel.locator('.session-panel-input:not(.tree-split-input) textarea.chat-input-textarea')
 export const leftComposer = (panel: Locator) => leftHalf(panel).locator('textarea.chat-input-textarea')
 
-/** The pages on screen, left to right, as `<badge> <name>` (`L Main conversation`, `R 1`). */
+/** The pages on screen, left to right, as `<badge> <name>` (`L Main conversation`, `M 1`, `R 1.1`). */
 export async function pagesOnScreen(panel: Locator): Promise<string[]> {
   const sides = await sidePages(panel).evaluateAll((els) => els.map((el) => {
     const h = el.querySelector('.thread-stack-header[data-half]')

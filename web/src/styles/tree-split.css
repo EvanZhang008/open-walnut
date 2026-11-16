@@ -6,13 +6,16 @@
  * clears it the way the panel's first flow child does), so nothing below it
  * scrolls under the header: the bodies below take no header room
  * (--sp-header-h: 0 for them). Split, the chat column is a grid of
- * --tree-panes columns (2, or 1 with the sibling page alone; set by the panel,
- * with --tree-cols: the previous page and the current, equal by default):
+ * --tree-panes columns (up to 3; set by the panel, with --tree-cols: equal by
+ * default, the dividers move them). A page with a sibling box has the box in
+ * the column's top rows (--tree-sibling-top, a third by default, one share for
+ * every column) and the page under it:
  *
- *   [ chat bar (a view open beside the chat)       ]
- *   [ path bar                                     ]
- *   [ previous page (1/3) | body (own page, 2/3)   ]
- *   [ (timeline + composer) | composer             ]
+ *   [ chat bar (a view open beside the chat)                    ]
+ *   [ path bar                                                  ]
+ *   [ Main         | sibling of 1    | sibling of 1.1           ]
+ *   [ (timeline +  | 1 (timeline +   | body (own page)          ]
+ *   [  composer)   |    composer)    | composer                 ]
  *
  * Single, the chat column stays `display: contents` and the bar is one more
  * flex row of the panel.
@@ -77,6 +80,10 @@
   color: var(--fg);
   font-weight: 600;
 }
+/* A level right of the page being worked on (one the reader closed or stepped
+   back from): greyed, still one click away. */
+.tree-path-seg[data-ahead] { color: var(--fg-muted); }
+.tree-path-seg[data-ahead] .tree-path-num { background: transparent; color: var(--fg-muted); }
 .tree-path-seg-main {
   display: inline-flex;
   align-items: center;
@@ -201,8 +208,11 @@
 .session-panel-chat-col:is(.is-tree-split, .has-reader) > .session-chat-bar { grid-area: 1 / 1 / 2 / -1; }
 .session-panel-chat-col.is-tree-split > .tree-path-bar { grid-area: 2 / 1 / 3 / -1; }
 .session-panel-chat-col.is-tree-split > .tree-split-left { grid-row: 3 / 6; }
-.session-panel-chat-col.is-tree-split > .tree-split-sibling { grid-row: 3; border-right: 0; }
-.session-panel-chat-col.is-tree-split > .session-panel-body { grid-row: 4; grid-column: var(--tree-panes, 2); min-height: 0; }
+.session-panel-chat-col.is-tree-split > .tree-split-left[data-under-sibling] { grid-row: 4 / 6; }
+.session-panel-chat-col.is-tree-split > .tree-split-sibling { grid-row: 3; }
+.session-panel-chat-col.is-tree-split > .tree-split-sibling[data-sibling-of="R"] { border-right: 0; }
+.session-panel-chat-col.is-tree-split > .session-panel-body { grid-row: 3 / 5; grid-column: var(--tree-panes, 2); min-height: 0; }
+.session-panel-chat-col.is-tree-split.has-right-sibling > .session-panel-body { grid-row: 4; }
 .session-panel-chat-col.is-tree-split > .session-panel-input { grid-row: 5; grid-column: var(--tree-panes, 2); }
 
 .tree-split-left {
@@ -387,11 +397,10 @@
   text-overflow: ellipsis;
 }
 
-/* The divider between the two pages (TreeSplitDivider): a thin grab strip on the
-   left page's right edge, over its border; it shows on hover, focus and drag. */
+/* A divider between two pages (TreeSplitDivider): a thin grab strip on the
+   right edge of the page left of it (its grid column, set inline), over its border; it shows on hover, focus and drag. */
 .session-panel-chat-col.is-tree-split > .tree-split-divider {
   grid-row: 3 / 6;
-  grid-column: 1;
   justify-self: end;
   position: relative;
   width: 9px;
