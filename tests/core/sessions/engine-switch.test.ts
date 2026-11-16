@@ -909,9 +909,12 @@ describe('engine switch inside a task', () => {
     expect(sw.message).toBe('Keep me.');
     expect(edges.starts).toHaveLength(0);
     expect(edges.stops).toHaveLength(0);
+    // The notice asks nothing, so it rides the session's next message (sessions/wake-policy.ts).
     await vi.waitFor(async () => {
-      const rows = (await getStore()).queues[sid] ?? [];
-      expect(rows.some((r) => String(r.message).includes('switch-expired'))).toBe(true);
+      const { pendingHeldNotices } = await import('../../../src/core/sessions/held-notices.js');
+      const held = await pendingHeldNotices(sid);
+      held?.release();
+      expect(held?.text ?? '').toContain('switch-expired');
     }, { timeout: 5_000, interval: 100 });
   }, 20_000);
 

@@ -112,8 +112,6 @@ export async function enqueueMessage(
   sessionId: string,
   message: string,
   opts?: { id?: string; userUuid?: string; stopFence?: string | null; relayTaken?: boolean; lineUuid?: string; closesPrompt?: boolean; sentBy?: 'person' | 'agent'; recentText?: string; heldReason?: string;
-    /** It rides the next turn (QueuedMessage.rides). */
-    rides?: boolean;
     /** With heldReason: the readiness kind the row waits on (QueuedMessage.waitsFor). */
     waitsFor?: string },
 ): Promise<QueuedMessage> {
@@ -146,7 +144,6 @@ export async function enqueueMessage(
     ...(inherited ? { lineUuid: inherited, lineTries: 1 } : {}),
     ...(opts?.closesPrompt ? { closesPrompt: true as const } : {}),
     ...(opts?.sentBy ? { sentBy: opts.sentBy } : {}),
-    ...(opts?.rides ? { rides: true as const } : {}),
   };
   // A relayed row is written strictly: on a disk failure the companion is told
   // (QueueNotStoredError) instead of the row living in this process alone.
@@ -244,8 +241,8 @@ export async function sendMessageToSession(
     afterTurn?: boolean;
     /**
      * Why this notice must start a turn although its kind asks nothing (sessions/wake-policy.ts):
-     * e.g. a lead's team note that names a task waiting on it (org/lead-waits.ts). Without it, a row
-     * of notices that ask nothing rides the next turn.
+     * e.g. a lead's team note that names a task waiting on it (org/lead-waits.ts). Without it, a
+     * message of notices that ask nothing is held for the session's next message.
      */
     wakeReason?: string;
   },
@@ -330,13 +327,6 @@ export async function sendMessageToSession(
   const notes = [appState?.text, place?.text, folderMoved?.text, restart?.text, digest?.text, statusNote?.text, heldNotes?.text, withdrawn?.text, waitNote, retiredNote].filter(Boolean).join('\n\n');
   const lead = [notes, switchContext?.text].filter(Boolean).join('\n\n');
   const enqueueText = lead && !slashCommand ? `${lead}\n\n${body}` : body;
-  // Nothing but notices that ask nothing: never a turn of its own (sessions/wake-policy.ts). A turn
-  // running now reads it at once; else it waits, held, for the session's next message. Such a
-  // message carries none of Walnut's other notes or hints: they wait, as they are, for a message
-  // that starts a turn.
-  const { rowRides, holdRidingNotice } = await import('./sessions/wake-policy.js');
-  const rides = !opts?.wakeReason && !opts?.interrupt && !heldForMove && !heldForTurn
-    && !PERSON_SEND_SOURCES.has(opts?.source ?? '') && queueSentBy(opts?.source) !== 'person' && rowRides(framedBody);
   /** Mark told each note `carrier` holds; App state and held notices it does not are put back. */
   const tellCarried = async (carrier: string): Promise<void> => {
     if (place && carrier.startsWith(place.text)) await place.markTold();
@@ -352,18 +342,25 @@ export async function sendMessageToSession(
     }
     if (heldNotes && !carrier.includes(heldNotes.text)) heldNotes.release();
   };
-  if (rides && !(await turnRunningFor(sessionId))) {
+  // Nothing but notices that ask nothing: never written to the CLI on its own, not even into a running
+  // turn (a line that reaches the CLI as its turn ends starts a turn of its own: 2026-11-16, three
+  // waiting / stopped notices into the Walnut VP 1 to 5 s after its last words, each an agent-ack
+  // turn). It is held and rides in front of the session's next message (sessions/wake-policy.ts);
+  // Walnut's other notes and hints wait, as they are, for that message.
+  const { rowRides, holdRidingNotice } = await import('./sessions/wake-policy.js');
+  if (!opts?.wakeReason && !opts?.interrupt && !heldForMove && !heldForTurn
+    && !PERSON_SEND_SOURCES.has(opts?.source ?? '') && queueSentBy(opts?.source) !== 'person' && rowRides(framedBody)) {
     await tellCarried('');
     if (opts?.stillWanted && !opts.stillWanted()) throw new SendNoLongerWantedError();
     holdRidingNotice(sessionId, framedBody);
-    log.session.info('notice rides the next message: it asks nothing and no turn runs', { sessionId, source: opts?.source });
+    log.session.info('notice rides the next message: it asks nothing', { sessionId, source: opts?.source });
     const now = new Date();
-    return { id: opts?.messageId ?? `rides-${now.getTime()}-${Math.random().toString(36).slice(2, 8)}`, sessionId, message: framedBody, status: 'pending', enqueuedAt: now.toISOString(), seq: 0, rides: true };
+    return { id: opts?.messageId ?? `rides-${now.getTime()}-${Math.random().toString(36).slice(2, 8)}`, sessionId, message: framedBody, status: 'pending', enqueuedAt: now.toISOString(), seq: 0 };
   }
   let msg: QueuedMessage;
   try {
     if (opts?.stillWanted && !opts.stillWanted()) throw new SendNoLongerWantedError();
-    msg = await enqueueMessage(sessionId, rides ? framedBody : enqueueText, {
+    msg = await enqueueMessage(sessionId, enqueueText, {
       id: opts?.messageId,
       recentText: message,
       ...(opts?.stopFence !== undefined ? { stopFence: opts.stopFence } : {}),
@@ -373,7 +370,6 @@ export async function sendMessageToSession(
       ...(opts?.closesPrompt || PERSON_SEND_SOURCES.has(opts?.source ?? '') ? { closesPrompt: true } : {}),
       ...(queueSentBy(opts?.source) ? { sentBy: queueSentBy(opts?.source) } : {}),
       ...(heldForMove || heldForTurn ? { heldReason: heldForMove ?? heldForTurn } : {}),
-      ...(rides ? { rides: true } : {}),
     });
   } catch (err) {
     appState?.release();
@@ -470,11 +466,7 @@ export class SendNoLongerWantedError extends Error {
 export async function markProcessing(
   sessionId: string,
   stopFence?: string | null,
-  opts?: {
-    tracked?: boolean; midTurn?: boolean;
-    /** With midTurn: the CLI's turn really runs (its result not out yet). False: notices that ask nothing are held, not written. */
-    inTurn?: boolean;
-  },
+  opts?: { tracked?: boolean; midTurn?: boolean },
 ): Promise<QueuedMessage[]> {
   // A stopping Demo hands no row to a live write or a cold --resume: the rows stay pending (sessions/demo-admission.ts).
   if (demoAdmissionClosed()) return [];
@@ -484,7 +476,6 @@ export async function markProcessing(
   const routing = await pendingTaskRouting(sessionId);
   const liveQuietRow = quietTurnRow(sessionId);
   const dropped: string[] = [];
-  let riding: QueuedMessage[] = [];
   const pending = await mutateStore((s) => {
     if (demoAdmissionClosed()) return [];
     const queue = s.queues[sessionId];
@@ -504,27 +495,15 @@ export async function markProcessing(
         parkRow(message, STOP_PARKED_REASON);
       }
     }
-    // A line of nothing but notices that ask nothing is never written between turns
-    // (sessions/wake-policy.ts): its rows leave for the hold, and the next line is looked at.
-    const holdRiding = !opts?.midTurn || opts.inTurn === false;
-    let head: QueuedMessage | undefined;
-    let batch: QueuedMessage[] = [];
-    for (;;) {
-      const pendingRows = queue.filter((m) => m.status === 'pending');
-      head = pendingRows[0];
-      if (!head) break;
-      const run: QueuedMessage[] = [];
-      for (const m of pendingRows) {
-        if (m.lineUuid !== head.lineUuid) break;
-        run.push(m);
-      }
-      batch = head.lineUuid ? run : splitBatchAtUuid(run);
-      if (!holdRiding || !batch.every(ridesUnsent)) break;
-      for (const m of batch) queue.splice(queue.indexOf(m), 1);
-      riding.push(...batch);
-    }
-    if (queue.length === 0) delete s.queues[sessionId];
+    const pendingRows = queue.filter((m) => m.status === 'pending');
+    const head = pendingRows[0];
     if (!head) return [];
+    const run: QueuedMessage[] = [];
+    for (const m of pendingRows) {
+      if (m.lineUuid !== head.lineUuid) break;
+      run.push(m);
+    }
+    const batch = head.lineUuid ? run : splitBatchAtUuid(run);
     if (routing && isFreshRow(head)) {
       const freshText = staleTriggerText(head.message, head.enqueuedAt, Date.now()) ?? head.message;
       // The whole line counts: Walnut's notes at its head may lead a person's message.
@@ -554,7 +533,6 @@ export async function markProcessing(
     return batch;
   }, stopFence !== undefined || dropped.length > 0);
   if (dropped.length) log.session.info('quiet turn row dropped: something else holds the session', { sessionId, rows: dropped });
-  await holdRidingRows(sessionId, riding);
   if (dropped.includes(liveQuietRow ?? '')) noteQuietTurnDelivery(sessionId, []);
   if (pending.length === 0) return [];
   // The take marker names these rows whichever way the line goes out.
@@ -563,44 +541,6 @@ export async function markProcessing(
   noteQuietTurnDelivery(sessionId, pending.map((m) => m.id));
   log.session.info('messages batched for delivery', { sessionId, count: pending.length });
   return pending;
-}
-
-/**
- * Whether a turn runs in the session now: the live CLI's own word when this server holds it (its
- * result ends the turn, before the runner's bookkeeping catches up), else the runner's turns (an
- * ACP prompt, a turn being started), else the record's Running.
- */
-async function turnRunningFor(sessionId: string): Promise<boolean> {
-  try {
-    const { sessionRunner } = await import('../providers/claude-code-session.js');
-    const live = sessionRunner.isInTurn(sessionId);
-    if (live !== null) return live;
-    if (sessionRunner.isTurnRunning(sessionId)) return true;
-    const { getSessionByClaudeId } = await import('./session-tracker.js');
-    return (await getSessionByClaudeId(sessionId))?.process_status === 'running';
-  } catch {
-    return true; // unknown: queued, and markProcessing still keeps it out of a new turn
-  }
-}
-
-/** A row of notices that ask nothing never written to a CLI (sessions/wake-policy.ts). */
-function ridesUnsent(m: QueuedMessage): boolean {
-  return m.status === 'pending' && m.rides === true && isFreshRow(m);
-}
-
-/** Take those rows out of `queue` (inside its write), for holdRidingRows. */
-function takeRidingRows(queue: QueuedMessage[]): QueuedMessage[] {
-  const out: QueuedMessage[] = [];
-  for (let i = queue.length - 1; i >= 0; i--) if (ridesUnsent(queue[i]!)) out.unshift(...queue.splice(i, 1));
-  return out;
-}
-
-/** Rows of notices that ask nothing, taken between turns, wait, held, for the session's next message. */
-async function holdRidingRows(sessionId: string, rows: QueuedMessage[]): Promise<void> {
-  if (!rows.length) return;
-  const { holdRidingNotice } = await import('./sessions/wake-policy.js');
-  for (const m of rows) holdRidingNotice(sessionId, m.message);
-  log.session.info('notices that ask nothing held for the next message: the turn ended before they went in', { sessionId, rows: rows.map((m) => m.id) });
 }
 
 /** A row never written to the CLI: its bytes are not frozen yet. */
@@ -623,18 +563,14 @@ async function pendingTaskRouting(sessionId: string): Promise<PendingInstruction
  * of the native Claude batching contract above. Returning an array keeps the
  * scoped remove/revert APIs identical while guaranteeing a cardinality of 0–1.
  */
-export async function markNextProcessing(sessionId: string, opts?: { midTurn?: boolean }): Promise<QueuedMessage[]> {
+export async function markNextProcessing(sessionId: string): Promise<QueuedMessage[]> {
   if (demoAdmissionClosed()) return [];
   const routing = await pendingTaskRouting(sessionId);
-  let riding: QueuedMessage[] = [];
   const picked = await mutateStore((s) => {
     if (demoAdmissionClosed()) return null;
     const queue = s.queues[sessionId];
     if (!queue) return null;
     if (queue.some((message) => message.status === 'processing')) return null;
-    // A prompt between turns is never only a notice that asks nothing (sessions/wake-policy.ts).
-    if (!opts?.midTurn) riding = takeRidingRows(queue);
-    if (queue.length === 0) delete s.queues[sessionId];
 
     const next = queue.find((message) => message.status === 'pending');
     if (!next) return null;
@@ -644,7 +580,6 @@ export async function markNextProcessing(sessionId: string, opts?: { midTurn?: b
     if (routing && isFreshRow(next)) next.message = routing.apply(next.message, queue);
     return { next, queueDepth: queue.length };
   });
-  await holdRidingRows(sessionId, riding);
   if (!picked) return [];
   noteQuietTurnDelivery(sessionId, [picked.next.id]);
   log.session.info('next message selected for delivery', {

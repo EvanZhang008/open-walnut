@@ -4,10 +4,8 @@
  *  - every notice kind a producer in src/ writes is classified: it rides, or it wakes with a reason.
  *    A new outcome, or a new notice written with no outcome (which wakes), fails this test until it
  *    is listed, so no notice starts turns by being forgotten;
- *  - a message of notices that ask nothing never starts a turn: sent to an idle session it is held
- *    (no row, no SESSION_SEND) and rides in front of the next message; queued while a turn ran that
- *    ended first, it leaves the queue for the hold when the queue is read between turns; a running
- *    turn reads it at once;
+ *  - a message of notices that ask nothing never goes to the CLI on its own, idle or mid-turn: it
+ *    is held (no row, no SESSION_SEND) and rides in front of the next message;
  *  - a wake reason, a person's words, an unknown outcome or a notice with a `request` always wake.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -25,7 +23,7 @@ import { WALNUT_HOME } from '../../../src/constants.js';
 import { NOTICE_RIDES, NOTICE_WAKES, classifiedOutcomes, noticeWakes, rowRides } from '../../../src/core/sessions/wake-policy.js';
 import { buildWalnutMessage } from '../../../src/core/peers/walnut-message-tag.js';
 import {
-  enqueueMessage, getQueue, markNextProcessing, markProcessing, resetCache, sendMessageToSession,
+  getQueue, resetCache, sendMessageToSession,
 } from '../../../src/core/session-message-queue.js';
 import { createSessionRecord, updateSessionRecord, _resetSessionTrackerForTesting } from '../../../src/core/session-tracker.js';
 import { bus, EventNames } from '../../../src/core/event-bus.js';
@@ -192,14 +190,13 @@ describe('a message that rides starts no turn', () => {
   it('an idle session: held, no row, no kick; the next message that wakes carries each once', async () => {
     const a = await sendMessageToSession(SID, note('status'), { source: 'walnut-notify' });
     const b = await sendMessageToSession(SID, note('org-update'), { source: 'walnut-notify' });
-    expect([a.rides, b.rides]).toEqual([true, true]);
+    expect([a.id, b.id].every((id) => id.startsWith('rides-'))).toBe(true);
     expect(kicks).toEqual([]);
     expect(await getQueue(SID)).toEqual([]);
     expect(heldNoticeKeys(SID)).toEqual(['riding-notices']);
 
     const row = await sendMessageToSession(SID, 'please look at the build', { source: 'walnut-notify' });
     expect(kicks).toEqual([SID]);
-    expect(row.rides).toBeUndefined();
     expect(row.message.match(/outcome="status"/g)).toHaveLength(1);
     expect(row.message.match(/outcome="org-update"/g)).toHaveLength(1);
     expect(row.message.indexOf('outcome="status"')).toBeLessThan(row.message.indexOf('please look at the build'));
@@ -218,67 +215,31 @@ describe('a message that rides starts no turn', () => {
     expect(row.message).toContain('2 older notices that asked nothing dropped');
   });
 
-  it('queued while a turn ran that ended first: read between turns, it leaves the queue for the hold', async () => {
-    const riding = await enqueueMessage(SID, note('waiting'), { rides: true });
-    expect(await markProcessing(SID)).toEqual([]);
+  it('a running turn does not get it either: held, no row, no kick', async () => {
+    // 2026-11-16: notices written into the Walnut VP 1 to 5 s after its last words (its Stop hooks
+    // still running) each started an agent-ack turn.
+    await updateSessionRecord(SID, { process_status: 'running' });
+    const row = await sendMessageToSession(SID, note('waiting'), { source: 'walnut-notify', messageId: 'qm-subtask-1' });
+    expect(row.id).toBe('qm-subtask-1');
+    expect(kicks).toEqual([]);
     expect(await getQueue(SID)).toEqual([]);
-    expect(heldNoticeKeys(SID)).toEqual(['riding-notices']);
-    // Beside a row that wakes it goes in that row's line, free.
-    _clearHeldNotices();
-    const r2 = await enqueueMessage(SID, note('stopped'), { rides: true });
-    const real = await enqueueMessage(SID, 'real work');
-    expect((await markProcessing(SID)).map((m) => m.id)).toEqual([r2.id, real.id]);
-    expect(heldNoticeKeys(SID)).toEqual([]);
-    expect(riding.id).not.toBe(real.id);
-  });
-
-  it('a mid-turn write after the CLI\'s result (its turn is over): held, not written', async () => {
-    await enqueueMessage(SID, note('waiting'), { rides: true });
-    expect(await markProcessing(SID, undefined, { midTurn: true, inTurn: false })).toEqual([]);
     expect(heldNoticeKeys(SID)).toEqual(['riding-notices']);
   });
 
   it('a notice that rides carries none of the other notes waiting: they wait for a message that wakes', async () => {
     const { holdNotice } = await import('../../../src/core/sessions/held-notices.js');
     holdNotice(SID, 'overdue:rq-1', note('timeout'));
-    await updateSessionRecord(SID, { process_status: 'running' });
-    const row = await sendMessageToSession(SID, note('status'), { source: 'walnut-notify' });
-    expect(row.message).not.toContain('outcome="timeout"');
-    expect(heldNoticeKeys(SID)).toEqual(['overdue:rq-1']);
-  });
-
-  it('a running turn reads it at once (mid-turn)', async () => {
-    const row = await enqueueMessage(SID, note('waiting'), { rides: true });
-    expect((await markProcessing(SID, undefined, { midTurn: true })).map((m) => m.id)).toEqual([row.id]);
-  });
-
-  it('a running session: queued with rides and kicked, so its turn reads it', async () => {
-    await updateSessionRecord(SID, { process_status: 'running' });
-    const row = await sendMessageToSession(SID, note('status'), { source: 'walnut-notify' });
-    expect(row.rides).toBe(true);
-    expect((await getQueue(SID)).map((m) => m.id)).toEqual([row.id]);
-    expect(kicks).toEqual([SID]);
-  });
-
-  it('an ACP steer into a running turn takes it; an ACP prompt between turns holds it', async () => {
-    const steer = await enqueueMessage(SID, note('stopped'), { rides: true });
-    expect((await markNextProcessing(SID, { midTurn: true })).map((m) => m.id)).toEqual([steer.id]);
-    resetCache();
-    await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
-    await fsp.mkdir(WALNUT_HOME, { recursive: true });
-    await enqueueMessage(SID, note('stopped'), { rides: true });
-    const real = await enqueueMessage(SID, 'real work');
-    expect((await markNextProcessing(SID)).map((m) => m.id)).toEqual([real.id]);
-    expect(heldNoticeKeys(SID)).toEqual(['riding-notices']);
+    await sendMessageToSession(SID, note('status'), { source: 'walnut-notify' });
+    const row = await sendMessageToSession(SID, 'go on', { source: 'walnut-notify' });
+    expect(row.message.match(/outcome="timeout"/g)).toHaveLength(1);
+    expect(row.message.match(/outcome="status"/g)).toHaveLength(1);
   });
 
   it('a wake reason, a person\'s words and a notice that wakes all start a turn', async () => {
-    const reasoned = await sendMessageToSession(SID, note('org-update'), { source: 'walnut-notify', wakeReason: 'a task of its team waits on the lead' });
-    expect(reasoned.rides).toBeUndefined();
-    const person = await sendMessageToSession(SID, note('status').replace('a status notice', 'a status notice pasted by the person'), { source: 'ui' });
-    expect(person.rides).toBeUndefined();
-    const done = await sendMessageToSession(SID, note('completed'), { source: 'walnut-notify' });
-    expect(done.rides).toBeUndefined();
+    await sendMessageToSession(SID, note('org-update'), { source: 'walnut-notify', wakeReason: 'a task of its team waits on the lead' });
+    await sendMessageToSession(SID, note('status').replace('a status notice', 'a status notice pasted by the person'), { source: 'ui' });
+    await sendMessageToSession(SID, note('completed'), { source: 'walnut-notify' });
     expect(kicks).toEqual([SID, SID, SID]);
+    expect((await getQueue(SID))).toHaveLength(3);
   });
 });

@@ -11,11 +11,12 @@
  * when that turn ended first.
  *
  * One rule, where every message to a session is queued (session-message-queue.ts): a message that
- * is nothing but Walnut notices that ask nothing (NOTICE_RIDES) never starts a turn. A turn running
- * now reads it at once; else it is held (holdRidingNotice) and rides in front of the session's next
- * message (a person's words, a reply, a request, a trigger, a notice in NOTICE_WAKES). One queued
- * while a turn ran that ended before it went in is held the same way when the queue is next read
- * between turns (markProcessing, markNextProcessing), so it starts no turn either. Every notice
+ * is nothing but Walnut notices that ask nothing (NOTICE_RIDES) never goes to the CLI on its own,
+ * not even into a running turn: a line that reaches the CLI as its turn ends starts a turn of its
+ * own (2026-11-16: three such notices reached the Walnut VP 1 to 5 s after its last words, while
+ * its Stop hooks ran, and each was an agent-ack turn). It is held (holdRidingNotice) and rides in
+ * front of the session's next message (a person's words, a reply, a request, a trigger, a notice in
+ * NOTICE_WAKES). Every notice
  * kind is classified here, each one that wakes with its reason; tests/core/sessions/
  * wake-policy-guard.test.ts fails when a producer in src/ writes an outcome this file does not
  * list, so a new notice cannot start turns by being forgotten. An outcome missing here at runtime
@@ -120,7 +121,7 @@ function envelopesOnly(text: string): Array<Record<string, string>> | null {
 
 /**
  * Does this queued row ask nothing, so it rides the next turn instead of starting one? Only a row
- * made of nothing but Walnut notices (and App state, and Walnut's hint blocks) whose outcomes are in NOTICE_RIDES. A
+ * made of nothing but Walnut notices (and Walnut's hint blocks) whose outcomes are in NOTICE_RIDES. A
  * person's words, a reply, a peer's note, a trigger, a notice with a `request` (its asker waits)
  * one with no outcome or one in NOTICE_WAKES wakes, and so does an outcome this file does not know.
  */
@@ -131,7 +132,6 @@ export function rowRides(text: string): boolean {
   const envs = envelopesOnly(rest);
   if (!envs) return false;
   return envs.every((a) => {
-    if (a.kind === 'app-state') return true;
     if (a.kind !== 'notification' || a.request) return false;
     return !noticeWakes(a.outcome);
   });
