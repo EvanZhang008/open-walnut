@@ -1,6 +1,8 @@
+import { countRender } from '@/utils/render-count';
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, Fragment } from 'react';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
+import { useSameSet } from '@/hooks/useSameSet';
 import type { NavigateFunction } from 'react-router-dom';
 import type { SessionEffort, SessionEngine, SessionMode, Task } from '@open-walnut/core';
 import { getEngineCatalog } from '@/hooks/useEngineCatalog';
@@ -426,6 +428,7 @@ interface MainPageProps {
 }
 
 export function MainPage({ visible = true, navigateRef }: MainPageProps) {
+  countRender('MainPage');
   const { health, loading: healthLoading } = useSystemHealth();
   const { notify, dismissToast } = useNotifications();
   const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, completedHidden, toggleComplete, setPhase, create, update, reorder, moveTask, reparentTask, deleteTask, batchSetPhase, batchDelete, bakeOrder, showOperationError, taskGroups, hiddenGroups, folderMeta, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden, createFolder, deleteFolder, setFolderParent, moveFolderToProject } = useTasksContext();
@@ -860,19 +863,23 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // The session finder's recent list, the same way: its first open is whole in its first frame.
   useEffect(() => { warmSessionSearch(); }, []);
 
+  // One task out of its group: one function for the whole life of the page (the task list is memo'd).
+  const ungroupTask = useLeanCallback((taskId: string) => ungroupTasks([taskId]), [ungroupTasks]);
+
   // Set of session IDs currently open in columns — for active pill indicators
-  const openSessionIdSet = useMemo(() => new Set(sessionColumns.map(c => c.id)), [sessionColumns]);
+  // Same members, same object (useSameSet): the task list behind it is memo'd on it.
+  const openSessionIdSet = useSameSet(useMemo(() => new Set(sessionColumns.map(c => c.id)), [sessionColumns]));
 
   // Reverse map: task IDs whose session is currently open on the home page, so the
   // Pinned/Recent cards can highlight them. A task may own several session IDs
   // (plan/exec/legacy/array) — highlight if ANY of them is an open column.
-  const openSessionTaskIds = useMemo(() => {
+  const openSessionTaskIds = useSameSet(useMemo(() => {
     const ids = new Set<string>();
     if (openSessionIdSet.size === 0) return ids;
     const open = (s: string) => openSessionIdSet.has(s);
     for (const t of tasks) if (taskHasSession(t, open)) ids.add(t.id);
     return ids;
-  }, [tasks, openSessionIdSet]);
+  }, [tasks, openSessionIdSet]));
 
   // Task lookup map for resolving task IDs to names in tool call UI
   const taskMap = useMemo(() => new Map(tasks.map(t => [t.id, t])), [tasks]);
@@ -2527,12 +2534,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     outsideTask?.id ?? null,
     ...sessionColumns.map((c) => draftById.get(c.id)?.taskId ?? null),
   ].filter((id): id is string => !!id).join(',');
-  const openInWindowTaskIds = useMemo(() => {
+  const openInWindowTaskIds = useSameSet(useMemo(() => {
     if (!shownTaskIds) return openSessionTaskIds;
     const ids = new Set(openSessionTaskIds);
     for (const id of shownTaskIds.split(',')) ids.add(id);
     return ids;
-  }, [openSessionTaskIds, shownTaskIds]);
+  }, [openSessionTaskIds, shownTaskIds]));
   const loadingRef = useCommittedRef(loading);
   const sessionToOpen = (task: Task, sessionId?: string, openSession?: boolean) =>
     sessionId ?? (openSession ? resolveTaskSessionId(task) ?? undefined : undefined);
@@ -3674,7 +3681,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           folderMeta={folderMeta}
           onGroupTasks={groupTasks}
           onAddToGroup={addToGroup}
-          onUngroupTask={(taskId) => ungroupTasks([taskId])}
+          onUngroupTask={ungroupTask}
           onUngroupTasks={ungroupTasks}
           onRenameGroup={renameGroup}
           onSetGroupHidden={setGroupHidden}
@@ -3684,7 +3691,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onSetFolderParent={setFolderParent}
           onOpenSession={handleToggleSession}
           onStartSession={handleStartSessionForTask}
-          openSessionIds={openSessionIdSet}
           openSessionTaskIds={openSessionTaskIds}
           openInWindowTaskIds={openInWindowTaskIds}
           onOpenTriageForTask={handleOpenTriageForTask}

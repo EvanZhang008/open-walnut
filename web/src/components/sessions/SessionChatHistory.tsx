@@ -1,3 +1,4 @@
+import { countRender } from '@/utils/render-count';
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore, useContext, memo, isValidElement, type MutableRefObject, type ReactNode } from 'react';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { pageOfStreamBlock } from '@/utils/stream-block-page';
@@ -689,6 +690,7 @@ function ownRowsOf(queuedSig: string, tree: ThreadTree): { sentKeys: Set<string>
 }
 
 export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, queueSync, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession, publishTimeline, readTimeline, readerPane, workingText, emptyHistory }: SessionChatHistoryProps) {
+  countRender('SessionChatHistory');
   // Dev-only render counter per session: lets a browser test prove a hot
   // interaction (the pointer over a question mark) never re-renders this tree.
   if (import.meta.env.DEV && typeof window !== 'undefined') {

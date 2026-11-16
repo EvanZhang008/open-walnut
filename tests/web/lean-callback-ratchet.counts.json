@@ -397,7 +397,7 @@
   "web/src/hooks/useSpeechToText.ts": [9, 0],
   "web/src/hooks/useSystemHealth.ts": [2, 0],
   "web/src/hooks/useTaskSearch.ts": [2, 0],
-  "web/src/hooks/useTasks.ts": [38, 0],
+  "web/src/hooks/useTasks.ts": [37, 0],
   "web/src/hooks/useTeamStream.ts": [2, 0],
   "web/src/hooks/useTheme.ts": [1, 0],
   "web/src/hooks/useThreadActions.ts": [20, 0],

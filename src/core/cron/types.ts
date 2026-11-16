@@ -503,6 +503,9 @@ export type CronEvent = {
   error?: string;
   summary?: string;
   nextRunAtMs?: number;
+  /** The job as stored right after this change, when the change says it (a quiet trigger check):
+   *  serialized on the spot by the broadcast, never held. Owner and missed slots are not in it. */
+  job?: CronJob;
 };
 
 // ── Dependency injection ──

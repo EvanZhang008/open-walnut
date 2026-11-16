@@ -1,3 +1,4 @@
+import { countRender } from '@/utils/render-count';
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, Component, lazy, Suspense, type ReactNode, type ErrorInfo, type MouseEvent as ReactMouseEvent, type MutableRefObject, type CSSProperties, memo } from 'react';
 import { stableHtml } from '@/hooks/useStableHtml';
 import { PauseGlyphIcon, PlayGlyphIcon, WarningTriangleIcon } from '@/components/common/PhoneIcons';
@@ -114,7 +115,7 @@ import { buildInvestigationClip } from '@/utils/investigation-clipboard';
 import { fetchTask, updateTask } from '@/api/tasks';
 import { EditableSessionTitle } from './EditableSessionTitle';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
-import { useStoreTask, useTasksContextSafe } from '@/contexts/TasksContext';
+import { useStoreTask, useTaskStoreActions } from '@/contexts/TasksContext';
 import type { FocusTier } from '@/api/focus';
 import { timeAgo } from '@/utils/time';
 import { SessionForkButton } from './SessionForkButton';
@@ -510,6 +511,7 @@ const PLAIN_CHAT_CONTROLS: ReadonlySet<string> = new Set(['mode', 'model']);
 const carriedTitles = new Map<string, string>();
 
 const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, onClose, onRestoredGone, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onMinimize, onTaskCompleted, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced: onSessionReplacedProp, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill, composerBar, emptyHistory }: SessionPanelProps) {
+  countRender('SessionPanelBody');
   // One place decides what "close this panel" means, so every exit (the header
   // button, the error boundary, the missing-session card) goes through the same
   // owner callback.
@@ -816,7 +818,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // fields (`ext`) the minimal list payload drops.
   const [fetchedTask, setFetchedTask] = useState<import('@open-walnut/core').Task | null>(null);
   const storeTask = useStoreTask(session?.taskId);
-  const taskStore = useTasksContextSafe();
+  // Writers and a row lookup only: the whole list would draw this panel again for every task's update.
+  const taskStore = useTaskStoreActions();
   // The pop-out window's mark-read request in flight (it has no task store).
   const readRequestRef = useRef<string | null>(null);
   // The REST copy stands only for the task the session still names (the resolved record's, which a
@@ -1848,6 +1851,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // names a file on another, which then opens from the host that has it.
   const openLocatedFile = useCallback((t: ClickedPathTarget) => {
     traceInteraction('view-open:files-from-path', { sessionId });
+    // From the click, the path's lookup included: what the user waits through.
+    if (t.clickedAt !== undefined) traceInteraction('file-open', { sessionId, locateMs: Math.round(performance.now() - t.clickedAt) }, {}, t.clickedAt);
     const { path, line, endLine, term } = t;
     // A nested column has no Files split: the file opens in a tab of its own (the
     // preview's own "Open in new tab"), so the Board and this chat stay put.
@@ -2480,10 +2485,13 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     : null;
   const deniedPromptId = promptWarning ? (pendingPermission && 'requestId' in pendingPermission ? pendingPermission.requestId : undefined) : undefined;
   const handleSend = useCallback((message: string, images?: ImageAttachment[], origin?: DraftOrigin) => {
+    // Enter (or the send button) to the first frame drawn after it, from the key's own time:
+    // the box clears and the message shows in that frame (the send goes on over the socket).
+    traceInteraction('send', { sessionId }, {}, (window as { event?: Event }).event?.timeStamp);
     // The message denies the open prompt: its card will say so, not "Denied".
     if (deniedPromptId) markDeniedByMessage(deniedPromptId);
     return sendFor(message, images, undefined, origin);
-  }, [sendFor, deniedPromptId]);
+  }, [sendFor, deniedPromptId, sessionId]);
 
   const mainQuickActions = useMainQuickPlusActions(
     onQuestionPage ? null : sessionTask,
@@ -3084,8 +3092,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const markRead = () => {
     const taskId = sessionTask?.id;
     if (!unread || !taskId) return;
-    if (taskStore?.tasks.some((t) => t.id === taskId)) {
-      taskStore.update(taskId, { unread: false });
+    if (taskStore?.has(taskId)) {
+      void taskStore.update(taskId, { unread: false });
       return;
     }
     if (readRequestRef.current === taskId) return;

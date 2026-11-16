@@ -1,8 +1,11 @@
+import { countRender } from '@/utils/render-count';
 import { matchParentRef, refNamesId } from '../../../../src/lib/id-ref';
 import { useState, useMemo, useEffect, useLayoutEffect, useRef, useDeferredValue, memo, startTransition, type CSSProperties, type Dispatch, type SetStateAction, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
 import { MicField, MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation } from '@/hooks/useSendAfterDictation';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
+import { useSameSet } from '@/hooks/useSameSet';
+import { sameOrder } from './useStableOrder';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
 import { useScrollAnchor } from '@/hooks/useScrollAnchor';
 import { manualMoved, orderToDraw } from './draw-order';
@@ -264,8 +267,6 @@ interface TodoPanelProps {
    * and has no sidebar): the person's "Show tab bar" choice is Home's, not this panel's.
    */
   tabBarAlways?: boolean;
-  /** Set of session IDs currently displayed in session columns. */
-  openSessionIds?: Set<string>;
   /** Set of task IDs whose session is open on the home page — highlights their cards. */
   openSessionTaskIds?: Set<string>;
   /** Every task open in this window (a session column, the chat slot's ask, a full-screen detail): Recent greys them. */
@@ -1760,18 +1761,27 @@ function comparePriority(a: Task, b: Task): number {
   return compareDate(a, b);
 }
 
+/** Each task object's parsed times. A sort compares every task about log2(n) times, and
+ *  each comparison parsed both dates again, on every task update; a task object is replaced
+ *  on change and never edited, so its times are read once. */
+const taskTimes = new WeakMap<Task, { created: number; updated: number }>();
+function timesOf(t: Task): { created: number; updated: number } {
+  let v = taskTimes.get(t);
+  if (!v) {
+    v = { created: t.created_at ? new Date(t.created_at).getTime() : 0, updated: t.updated_at ? new Date(t.updated_at).getTime() : 0 };
+    taskTimes.set(t, v);
+  }
+  return v;
+}
+
 /** Sort tasks by created_at descending (newest first) */
 function compareDate(a: Task, b: Task): number {
-  const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
-  const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
-  return tb - ta; // newest first
+  return timesOf(b).created - timesOf(a).created; // newest first
 }
 
 /** Sort tasks by updated_at descending (most recently modified first) */
 function compareUpdated(a: Task, b: Task): number {
-  const ta = a.updated_at ? new Date(a.updated_at).getTime() : 0;
-  const tb = b.updated_at ? new Date(b.updated_at).getTime() : 0;
-  return tb - ta; // most recently updated first
+  return timesOf(b).updated - timesOf(a).updated; // most recently updated first
 }
 
 // ── Type-aware collision detection ──
@@ -2335,7 +2345,8 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isOpe
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier: onSetTierProp, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, tabBarAlways = false, openSessionIds, openSessionTaskIds, openInWindowTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, onOpenSearchSession, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden, folderMeta, onCreateFolder, onDeleteFolder, onMoveFolderToProject, onSetFolderParent, banner }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier: onSetTierProp, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, tabBarAlways = false, openSessionTaskIds, openInWindowTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, onOpenSearchSession, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden, folderMeta, onCreateFolder, onDeleteFolder, onMoveFolderToProject, onSetFolderParent, banner }: TodoPanelProps) {
+  countRender('TodoPanel');
   const pinUndo = useTaskUndo();
   const pinBar = useFocusBarContextSafe();
   // The search keeps a readable width: New task and Display fold to icons first (useToolbarFit.ts).
@@ -2370,7 +2381,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     && (!isHiddenFromTaskLists(t) || (isSearchMode && !!t.org_role && !t.plugin_only))), [rawTasks, isSearchMode]);
   // Every task id this panel holds: a parent reference that is one of them names that task alone,
   // even where a filtered list left it out (src/lib/id-ref.ts matchParentRef).
-  const knownTaskIds = useMemo(() => new Set(rawTasks.map((t) => t.id)), [rawTasks]);
+  // Same ids, same set (useSameSet): the sort order is rebuilt on it, and a task update that
+  // adds or drops no task must not read as new sort settings (an immediate re-sort and a second draw).
+  const knownTaskIds = useSameSet(useMemo(() => new Set(rawTasks.map((t) => t.id)), [rawTasks]));
   // Always-current task list for drag closures (drag handlers freeze their deps).
   const tasksRef = useCommittedRef<Task[]>(tasks);
   const navigate = useNavigate();
@@ -4880,11 +4893,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [holdScrollAnchor, pinnedTaskIds_arr, onReorderPinned, onSetTier, pinIntoTier, clearDragState, folderMeta, onUngroupTask, onUnpinTask, overUnpinZone, pinnedCardIds, tasks, DROP_ZONE_TIERS, tierViewMode, pinnedTaskMap, onOperationError, separators, persistSeparators, sepReanchor, syncCustomSepAnchors, setTierSort, showSortToast, customTiers]);
 
   /** Every live project group key: real project names + '' when Inbox exists. */
-  const liveGroupKeys = useMemo(() => {
+  // Same projects, same set: the prune below runs on a project appearing or leaving, never on
+  // every task update (each one set two states for nothing and drew the panel a second time).
+  const liveGroupKeys = useSameSet(useMemo(() => {
     const keys = new Set<string>();
     for (const t of tasks) keys.add(t.project || '');
     return keys;
-  }, [tasks]);
+  }, [tasks]));
 
   // Prune orphaned collapse keys (same self-heal shape as the ct_* prune above).
   // Two sources of orphans: keys for projects that were renamed/deleted, and
@@ -5528,14 +5543,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const sortSettings = useMemo(() => ({}), [computeSortOrder]);
   const sortSettingsRef = useRef(sortSettings);
   const [sortedWith, setSortedWith] = useState(sortSettings);
+  const sortedWithRef = useRef(sortedWith);
+  sortedWithRef.current = sortedWith;
   const prevFilteredIdsRef = useRef<Set<string>>(new Set(filtered.map((t) => t.id)));
   // Equality check for sort order — prevents no-op re-renders when task data changes
   // but the sorted order is identical (e.g. focus_tier change doesn't affect sort position).
+  // The order drawn now, for the effect below: a set to the same order still drew the panel again.
+  const sortOrderRef = useRef(sortOrder);
+  sortOrderRef.current = sortOrder;
   const stableSortUpdate = useLeanCallback((newOrder: string[]) => {
-    setSortOrder(prev => {
-      if (prev.length === newOrder.length && prev.every((id, i) => id === newOrder[i])) return prev;
-      return newOrder;
-    });
+    if (sameOrder(sortOrderRef.current, newOrder)) return;
+    setSortOrder(prev => (sameOrder(prev, newOrder) ? prev : newOrder));
   }, []);
 
   // The order the tasks sort to now. The effect below decides when `sortOrder` takes it; the
@@ -5557,7 +5575,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const structural = currIds.size !== prevIds.size || !filtered.every((t) => prevIds.has(t.id));
     if (sortSettingsRef.current !== sortSettings || structural) {
       sortSettingsRef.current = sortSettings;
-      setSortedWith(sortSettings);
+      if (sortedWithRef.current !== sortSettings) setSortedWith(sortSettings);
       prevFilteredIdsRef.current = currIds;
       stableSortUpdate(newOrder);
       return;
@@ -5565,7 +5583,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     prevFilteredIdsRef.current = currIds;
 
     // A stray debounced re-sort must never override the user's drag result.
-    if (manualIds.size > 0) setSortOrder((prev) => (manualMoved(prev, newOrder, manualIds) ? newOrder : prev));
+    if (manualIds.size > 0 && manualMoved(sortOrderRef.current, newOrder, manualIds)) setSortOrder((prev) => (manualMoved(prev, newOrder, manualIds) ? newOrder : prev));
 
     // Same set of tasks, just reordered (e.g. priority change): debounce 3s
     const timer = setTimeout(() => stableSortUpdate(newOrder), 3000);

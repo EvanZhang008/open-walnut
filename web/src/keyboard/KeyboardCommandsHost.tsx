@@ -3,6 +3,7 @@
  * hiding Home's task panel. The page-bound ones are handled where their page is (Home's keys in
  * pages/useHomeKeyboard.ts, the task search in TodoSearchBar); each says where in commands.ts.
  */
+import { traceInteraction } from '@/utils/interaction-timer';
 import { useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { hasActiveModalOverlay } from '@/hooks/useModalOverlay';
@@ -27,6 +28,8 @@ export function KeyboardCommandsHost() {
           if (detectKeyEnv() === 'mac-browser' && e.ctrlKey && isTypingTarget(document.activeElement)) return;
           e.preventDefault();
           if (e.repeat) return;
+          // Cmd+N to the first frame drawn after it, from the key's own time (it may have waited).
+          traceInteraction('task-new', { from: onHome ? 'home' : 'other-page' }, {}, e.timeStamp);
           // Home stays mounted behind every other page: its draft column opens there.
           if (!onHome) navigate('/');
           window.dispatchEvent(new CustomEvent('task-composer:open'));

@@ -252,8 +252,14 @@ export async function fetchRoutines(includeDisabled = true): Promise<Routine[]> 
   return res.jobs;
 }
 
-export async function fetchRoutine(id: string): Promise<Routine> {
-  const res = await apiGet<{ job: Routine }>(`/api/routines/${encodeURIComponent(id)}`);
+/**
+ * One routine. `background`: a read after a `cron:job-*` push that nobody asked for (each
+ * trigger check sends one: about 37 a minute on the user's Mac, 2026-11-16). It takes the
+ * low lane, so at most two of them hold a connection and the reads that paint the screen
+ * (a chat's history, a file, a draft's save) never wait behind them.
+ */
+export async function fetchRoutine(id: string, opts: { background?: boolean } = {}): Promise<Routine> {
+  const res = await apiGet<{ job: Routine }>(`/api/routines/${encodeURIComponent(id)}`, undefined, opts.background ? { priority: 'low' } : undefined);
   return res.job;
 }
 

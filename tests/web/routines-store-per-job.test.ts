@@ -208,7 +208,7 @@ describe('routines store: a push reads its own job', () => {
     held.resolve(routine('r-0', { enabled: false }))
     await done
     await settle()
-    expect(mocks.fetchRoutine).toHaveBeenCalledWith('r-0')
+    expect(mocks.fetchRoutine).toHaveBeenCalledWith('r-0', { background: true })
     expect(mocks.fetchRoutines).not.toHaveBeenCalled()
   })
 
@@ -263,6 +263,88 @@ describe('routines store: a push reads its own job', () => {
     await settle()
     expect(mocks.fetchRoutines).not.toHaveBeenCalled()
     expect(mocks.fetchRoutine).toHaveBeenCalledTimes(5)
+  })
+})
+
+// 2026-11-16 (task 9bceb9f2): a quiet trigger check's push carries its job, so the page reads
+// nothing for it; a read per push was about 50 requests a minute from the Mac app.
+describe('routines store: a push that carries its job', () => {
+  beforeEach(async () => {
+    vi.useFakeTimers()
+    __resetRoutinesStore()
+    for (const fn of Object.values(mocks)) fn.mockReset()
+    mocks.fetchRoutines.mockResolvedValue(LIST.map((r) => ({ ...r, owner: { taskId: 't-1', title: 'Owner', project: '' } })))
+    await loadRoutines()
+    mocks.fetchRoutines.mockClear()
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('a minute of quiet checks reads nothing and keeps the derived owner', async () => {
+    for (let i = 0; i < 40; i++) {
+      onRoutinesChanged({ action: 'updated', jobId: `r-${i % 4}`, job: routine(`r-${i % 4}`, { state: { lastRunAtMs: i } }) })
+      await settle()
+    }
+    expect(mocks.fetchRoutine).not.toHaveBeenCalled()
+    expect(mocks.fetchRoutines).not.toHaveBeenCalled()
+    const r3 = getRoutinesSnapshot().routines.find((r) => r.id === 'r-3')
+    expect(r3?.state).toEqual({ lastRunAtMs: 39 })
+    expect((r3 as Routine & { owner?: unknown }).owner).toEqual({ taskId: 't-1', title: 'Owner', project: '' })
+  })
+
+  it('a field the stored job no longer has is gone from the row too', async () => {
+    const { owner: _owner, ...stored } = getRoutinesSnapshot().routines[4] as Routine & { owner?: unknown }
+    onRoutinesChanged({ action: 'updated', jobId: 'r-4', job: routine('r-4', { description: 'old words' } as Partial<Routine>) })
+    await settle()
+    expect((getRoutinesSnapshot().routines[4] as Routine & { description?: string }).description).toBe('old words')
+    onRoutinesChanged({ action: 'updated', jobId: 'r-4', job: stored as Routine })
+    await settle()
+    const row = getRoutinesSnapshot().routines[4] as Routine & { description?: string; owner?: unknown }
+    expect(row.description).toBeUndefined()
+    expect(row.owner).toEqual({ taskId: 't-1', title: 'Owner', project: '' })
+  })
+
+  it('an unchanged pushed job wakes no subscriber', async () => {
+    const before = getRoutinesSnapshot()
+    const woke = vi.fn()
+    const off = subscribeRoutines(woke)
+    const { owner: _owner, ...stored } = before.routines[2] as Routine & { owner?: unknown }
+    onRoutinesChanged({ action: 'updated', jobId: 'r-2', job: stored as Routine })
+    await settle()
+    off()
+    expect(woke).not.toHaveBeenCalled()
+    expect(getRoutinesSnapshot()).toBe(before)
+  })
+
+  it('a read still out when the push lands is dropped', async () => {
+    const out = deferred<Routine>()
+    mocks.fetchRoutine.mockReturnValueOnce(out.promise)
+    onRoutinesChanged({ action: 'updated', jobId: 'r-5' })
+    await settle()
+    onRoutinesChanged({ action: 'updated', jobId: 'r-5', job: routine('r-5', { name: 'pushed' }) })
+    out.resolve(routine('r-5', { name: 'older read' }))
+    await settle()
+    expect(getRoutinesSnapshot().routines.find((r) => r.id === 'r-5')?.name).toBe('pushed')
+  })
+
+  it('a pushed job is read as before during a write, for a job the list lacks, or with another id', async () => {
+    mocks.fetchRoutine.mockImplementation(async (id: string) => routine(id))
+    onRoutinesChanged({ action: 'updated', jobId: 'r-new', job: routine('r-new') })
+    await settle()
+    expect(mocks.fetchRoutine).toHaveBeenLastCalledWith('r-new', { background: true })
+    onRoutinesChanged({ action: 'updated', jobId: 'r-1', job: routine('r-9') })
+    await settle()
+    expect(mocks.fetchRoutine).toHaveBeenLastCalledWith('r-1', { background: true })
+    const held = deferred<Routine>()
+    mocks.toggleRoutine.mockReturnValue(held.promise)
+    const done = toggleRoutine('r-0')
+    mocks.fetchRoutine.mockClear()
+    onRoutinesChanged({ action: 'updated', jobId: 'r-0', job: routine('r-0', { name: 'mid-write' }) })
+    await settle()
+    expect(mocks.fetchRoutine).not.toHaveBeenCalled()
+    held.resolve(routine('r-0', { enabled: false }))
+    await done
+    await settle()
+    expect(mocks.fetchRoutine).toHaveBeenCalledWith('r-0', { background: true })
   })
 })
 

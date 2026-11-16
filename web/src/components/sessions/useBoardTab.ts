@@ -14,7 +14,7 @@ import { refNamesId } from '../../../../src/lib/id-ref';
 import { useEffect, useRef, useState } from 'react';
 import { apiGet } from '@/api/client';
 import { wsClient } from '@/api/ws';
-import { useTasksContextSafe } from '@/contexts/TasksContext';
+import { useTaskListSelect } from '@/contexts/TasksContext';
 import { openSubtasksOf } from '@/components/tasks/subtask-index';
 import { log } from '@/utils/log';
 import { boardTabState, type BoardOwnerFacts, type BoardTabState } from './board-tab-model';
@@ -93,11 +93,14 @@ export function _resetBoardTabCache(): void {
 
 export function useBoardTab(taskId: string | null | undefined): BoardTabState {
   const [, bump] = useState(0);
-  const store = useTasksContextSafe();
   // A store still on its first fetch, or one whose first fetch failed, knows
-  // nothing: the server's count stands in.
-  const storeKnows = !!store && !(store.tasks.length === 0 && (store.loading || !!store.error));
-  const storeOpen = storeKnows ? (taskId ? openSubtasksOf(store!.tasks, taskId).length : 0) : null;
+  // nothing: the server's count stands in. One number from the list (useTaskListSelect),
+  // so another task's update does not draw the chat column holding this tab again.
+  const storeOpen = useTaskListSelect((list) => {
+    const knows = !(list.tasks.length === 0 && (list.loading || !!list.error));
+    return knows ? (taskId ? openSubtasksOf(list.tasks, taskId).length : 0) : -1;
+  });
+  const storeOpenOrNull = storeOpen === null || storeOpen < 0 ? null : storeOpen;
   useEffect(() => {
     subscribeOnce();
     const l = () => bump((n) => n + 1);
@@ -105,13 +108,13 @@ export function useBoardTab(taskId: string | null | undefined): BoardTabState {
     return () => { listeners.delete(l); };
   }, []);
   // Leading now needs no read; ask only when the store cannot already say "shown".
-  const needRead = !!taskId && !(storeOpen != null && storeOpen > 0);
+  const needRead = !!taskId && !(storeOpenOrNull != null && storeOpenOrNull > 0);
   const stale = !!taskId && isStale(taskId);
   useEffect(() => {
     if (needRead && taskId && (!known.has(taskId) || isStale(taskId))) void readOwner(taskId);
   }, [needRead, taskId, stale]);
   const owner = taskId && !isStale(taskId) ? known.get(taskId) : undefined;
-  const state = boardTabState({ taskId, storeOpenSubtasks: storeOpen, owner });
+  const state = boardTabState({ taskId, storeOpenSubtasks: storeOpenOrNull, owner });
   // While an answer is on its way (a lead whose last open subtask just finished,
   // a Board just written) the tab stays as it was rather than blinking.
   const last = useRef<{ taskId: string | null | undefined; state: BoardTabState }>({ taskId, state });

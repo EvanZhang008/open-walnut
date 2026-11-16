@@ -101,15 +101,20 @@ function verdictFor(
 /**
  * Time one user action. Call it in the click handler, BEFORE the state update:
  * the measurement then covers the same span the user is waiting through.
+ * `startedAt` (performance.now() time base): when the action began, if earlier than
+ * the call, such as a key event's timeStamp (the time the key waited for the page counts)
+ * or the click of an action that looked something up first.
  */
 export function traceInteraction(
   name: string,
   meta: Record<string, unknown> = {},
   overrides: Partial<InteractionDeps> = {},
+  startedAt?: number,
 ): void {
   const deps = { ...defaults(), ...overrides };
-  const t0 = deps.now();
-  if (t0 - windowStart > 60_000) { windowStart = t0; countThisWindow = 0; }
+  const called = deps.now();
+  const t0 = startedAt !== undefined && Number.isFinite(startedAt) && startedAt <= called ? startedAt : called;
+  if (called - windowStart > 60_000) { windowStart = called; countThisWindow = 0; }
   if (countThisWindow >= MAX_PER_MIN) return;
   countThisWindow++;
 
@@ -125,8 +130,10 @@ export function traceInteraction(
   let handle: unknown;
   // Not just how MANY beats arrived, but how long the longest silence was: that is
   // what separates a frozen thread from a page nobody is compositing.
-  let lastFrameAt = t0;
-  let lastWakeAt = t0;
+  // Gaps count from the call, not from an earlier start: before the call the page may have
+  // been waiting on the network (a file path's lookup), which is not the thread being stuck.
+  let lastFrameAt = called;
+  let lastWakeAt = called;
   let worstFrameGap = 0;
   let worstWakeGap = 0;
   const beatFrames = () => {

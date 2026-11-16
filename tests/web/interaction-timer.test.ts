@@ -129,6 +129,26 @@ describe('traceInteraction', () => {
     expect(h.reports[0].payload.stalledMs as number).toBeLessThan(2000);
   });
 
+  // 2026-11-16 (task 9bceb9f2): a file opened from a clicked path is timed from the click, and
+  // the path's lookup on the server comes first. That wait is the network, not a stuck thread.
+  it('an earlier start counts in the time but not as a silence', () => {
+    const h = harness(5000);
+    traceInteraction('file-open', {}, h.deps, 1500);
+    for (let i = 0; i < 4; i++) { h.tick(10); h.wake(1); }
+    h.paint();
+    const p = h.reports[0].payload as { ms: number; stalledMs?: number; verdict?: string };
+    expect(p.ms).toBeGreaterThan(3500);
+    expect(p.verdict).not.toBe('main-thread-blocked');
+  });
+
+  it('a start after the call, or not a number, is the call', () => {
+    const h = harness(5000);
+    traceInteraction('file-open', {}, h.deps, 9000);
+    h.setTime(5040);
+    h.paint();
+    expect(h.reports[0].payload.ms).toBe(40);
+  });
+
   it('a long wait that kept painting is slow work, not a stall', () => {
     const h = harness();
     traceInteraction('view-open:files', {}, h.deps);

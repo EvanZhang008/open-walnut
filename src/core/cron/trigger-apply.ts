@@ -296,11 +296,15 @@ export async function applyTriggerChecked(
 
     await persist(state);
     // 'updated' is what the Routines card listens to (cron:job-updated): without
-    // it a quiet check only shows up after a manual reload.
+    // it a quiet check only shows up after a manual reload. A quiet check carries the
+    // job as stored, so a page puts it in place without reading it back: every page
+    // read GET /api/routines/:id for each push, about 50 a minute on the Mac, each a
+    // reload of the whole store under this lock (2026-11-16, task 9bceb9f2). An error
+    // goes through applyJobResult (its run history, its missed slots): pages read it.
     emit(state, {
       jobId: job.id,
       action: 'updated',
-      ...(event.outcome === 'error' ? { status: 'error' as const, error } : {}),
+      ...(event.outcome === 'error' ? { status: 'error' as const, error } : { job }),
       nextRunAtMs: job.state.nextRunAtMs,
     });
 

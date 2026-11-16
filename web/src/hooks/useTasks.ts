@@ -1,5 +1,6 @@
 import { matchParentRef } from '../../../src/lib/id-ref';
 import { useState, useEffect, useCallback, useMemo, useRef, startTransition } from 'react';
+import { useLeanCallback } from './useLeanCallback';
 import { useCommittedRef } from './useCommittedRef';
 import { READ_MARKER_KEYS, defaultWaitUntil } from '@open-walnut/core';
 import type { Task } from '@open-walnut/core';
@@ -1217,7 +1218,9 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       .catch((err) => { settle(); onOpError(err); });
   }, [guardEcho, onOpError]);
 
-  const reparentTask = useCallback((
+  // Lean: it reads the tasks at the call, so a task update does not hand Home's task list a new
+  // function and draw it again (2026-11-16, task 9bceb9f2: every agent status write did).
+  const reparentTask = useLeanCallback((
     taskId: string,
     newParentId: string | null,
     opts?: { insertAfterId?: string }
@@ -1306,7 +1309,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
         });
       })
       .catch(onOpError);
-  }, [tasks, guardEcho, onOpError]);
+  }, [guardEcho, onOpError]);
 
   const bakeOrder = useCallback((orderedIds: string[]) => {
     if (orderedIds.length === 0) return;

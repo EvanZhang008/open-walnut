@@ -375,10 +375,11 @@ export function syncTasks(tasks: readonly TaskLike[]): void {
   for (const task of tasks) {
     if (!task?.id || typeof task.title !== 'string' || !task.title) continue;
     validCount++;
-    const title = shownTaskTitle({ title: task.title, project: task.project, org_role: task.org_role, org_name: task.org_name });
     const existing = taskLabels.get(task.id);
+    // Identity early-out first (steady state): the title is worked out only for a task that changed.
+    if (existing?.src === task) continue;
+    const title = shownTaskTitle({ title: task.title, project: task.project, org_role: task.org_role, org_name: task.org_name });
     if (existing) {
-      if (existing.src === task) continue; // identity early-out (steady state)
       if (indexSessions(task)) dirty = refreshRefs(task) || observedSession(task) || dirty;
       const project = shownProject(task.project);
       if (existing.label.title === title && existing.label.project === project) {

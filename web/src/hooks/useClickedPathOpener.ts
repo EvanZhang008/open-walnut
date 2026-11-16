@@ -24,6 +24,8 @@ export interface ClickedPathTarget {
   line?: number;
   endLine?: number;
   term?: string;
+  /** performance.now() of the click that asked for it: the open is timed from there (file-open). */
+  clickedAt?: number;
 }
 
 export interface ClickedPathContext {
@@ -81,8 +83,9 @@ export function useClickedPathOpener(
   useLayoutEffect(() => () => { seq.current++; }, [host, cwd, sessionId, sourceOnly]);
   return useCallback((path: string, line?: number, term?: string, endLine?: number) => {
     const mine = ++seq.current;
+    const clickedAt = performance.now();
     void locateClickedPath(path, { host, cwd, sessionId, sourceOnly }, { line, endLine, term }).then((target) => {
-      if (mine === seq.current) openRef.current(target);
+      if (mine === seq.current) openRef.current({ ...target, clickedAt });
     });
   }, [host, cwd, sessionId, sourceOnly]);
 }

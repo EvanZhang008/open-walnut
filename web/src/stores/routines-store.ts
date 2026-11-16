@@ -100,8 +100,9 @@ function settleWrite(): void {
   }
 }
 
-/** The fields of a `cron:job-*` push the store reads. */
-export interface RoutineChange { action?: string; jobId?: string }
+/** The fields of a `cron:job-*` push the store reads. `job`: the job as stored after the change,
+ *  sent with a quiet trigger check (cron/trigger-apply.ts); it has no `owner` or `missed`. */
+export interface RoutineChange { action?: string; jobId?: string; job?: Routine }
 
 /** Past this many changed jobs (distinct ids) in one burst, one list fetch is cheaper than one fetch each. */
 const PER_JOB_LIMIT = 20;
@@ -117,6 +118,7 @@ let changed: Map<string, string> | null = new Map();
  */
 export function onRoutinesChanged(change?: RoutineChange): void {
   const jobId = typeof change?.jobId === 'string' && change.jobId ? change.jobId : null;
+  if (jobId && putPushedJob(jobId, change?.job)) return;
   if (changed && jobId) changed.set(jobId, change?.action ?? 'updated');
   else changed = null;
   if (writesInFlight > 0) { pendingRefetch = true; return; }
@@ -156,13 +158,36 @@ function flushChanges(): void {
 /** The newest read of each job: an older answer that lands after it is dropped. */
 const readSeq = new Map<string, number>();
 
+/**
+ * A push that carries its job puts it in place with no read: a read for every quiet trigger
+ * check was about 50 requests a minute from the Mac app, each holding one of the page's six
+ * request slots and reloading the server's whole routine store (2026-11-16, task 9bceb9f2).
+ * Only over a loaded list with no write or list read under way, for a job the list holds; the
+ * rest are read as before. The pushed job has no derived fields: the held row's owner stays.
+ */
+function putPushedJob(id: string, job: Routine | undefined): boolean {
+  if (!job || typeof job !== 'object' || job.id !== id) return false;
+  if (!loaded || inflight || writesInFlight > 0 || snapshot.error) return false;
+  const current = snapshot.routines.find((r) => r.id === id);
+  if (!current) return false;
+  // A read of this job still out is older than this push: its answer is dropped.
+  readSeq.set(id, (readSeq.get(id) ?? 0) + 1);
+  changed?.delete(id);
+  // The pushed job is the whole stored job: a field the server dropped stays dropped. Only
+  // the owner is worked out per read (routine-owner.ts); a trigger has no missed slots.
+  const owner = (current as Routine & { owner?: unknown }).owner;
+  const next = owner === undefined ? job : { ...job, owner } as Routine;
+  if (JSON.stringify(current) !== JSON.stringify(next)) replaceRoutine(next);
+  return true;
+}
+
 /** Read one job and put it in place; an unchanged job keeps its object, so nothing re-renders. */
 async function refreshOne(id: string, action: string): Promise<void> {
   const seq = (readSeq.get(id) ?? 0) + 1;
   readSeq.set(id, seq);
   if (action === 'removed') { dropRoutine(id); return; }
   try {
-    const job = await api.fetchRoutine(id);
+    const job = await api.fetchRoutine(id, { background: true });
     if (readSeq.get(id) !== seq) return;
     if (writesInFlight > 0) { onRoutinesChanged({ action, jobId: id }); return; }
     const current = snapshot.routines.find((r) => r.id === id);

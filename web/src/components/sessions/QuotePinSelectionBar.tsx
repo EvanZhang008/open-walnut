@@ -340,11 +340,14 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
   const fullWidthRef = useRef(0);
   useLayoutEffect(() => {
     const bar = pillRef.current;
+    // No bar on screen, nothing to fit: the reads below force a layout, and this runs after
+    // every render of the chat (each send drew it about 18 times).
+    if (!state || !bar) return;
     // The text column, the box the bar is placed in first.
     const el = containerRef.current;
     const cs = el ? getComputedStyle(el) : null;
     const room = el && cs ? el.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0) : 0;
-    if (!state || !bar || !room) return;
+    if (!room) return;
     if (!compact) fullWidthRef.current = bar.offsetWidth;
     const fits = fullWidthRef.current + 8 <= room;
     if (compact === fits) setCompact(!fits);

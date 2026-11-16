@@ -270,10 +270,14 @@ interface SessionMessageProps {
   onFileOpen?: (path: string, line?: number) => void;
 }
 
+// One formatter for every message: toLocaleTimeString builds a new one per call, and each
+// draw of a chat formats every message's time (the largest single cost of a send's redraw).
+let timeFormat: Intl.DateTimeFormat | null = null;
 function formatTime(ts: string): string {
   const d = new Date(ts);
   if (isNaN(d.getTime())) return '';
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  timeFormat ??= new Intl.DateTimeFormat([], { hour: '2-digit', minute: '2-digit' });
+  return timeFormat.format(d);
 }
 
 /** Muted collapsed "Thinking ›" row — same visual language as merged tool

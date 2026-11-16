@@ -62,7 +62,7 @@ describe('a clicked path lookup belongs to its mounted source', () => {
     open('/repo/a.ts');
     open('/repo/b.ts');
     await act(async () => { second.resolve({ path: '/repo/b.ts', host: 'devbox', found: true }); await second.promise; });
-    expect(sink).toHaveBeenCalledExactlyOnceWith({ path: '/repo/b.ts', host: 'devbox', elsewhere: false });
+    expect(sink).toHaveBeenCalledExactlyOnceWith({ path: '/repo/b.ts', host: 'devbox', elsewhere: false, clickedAt: expect.any(Number) });
     await act(async () => { root.unmount(); });
     root = createRoot(container);
     await act(async () => { first.resolve({ path: '/repo/a.ts', host: 'devbox', found: true }); await first.promise; });
@@ -78,6 +78,6 @@ describe('a clicked path lookup belongs to its mounted source', () => {
     await render({ host: 'devbox' }, latest);
     await act(async () => { late.resolve({ path: '/repo/a.ts', host: 'devbox', found: true }); await late.promise; });
     expect(old).not.toHaveBeenCalled();
-    expect(latest).toHaveBeenCalledExactlyOnceWith({ path: '/repo/a.ts', host: 'devbox', elsewhere: false, line: 4 });
+    expect(latest).toHaveBeenCalledExactlyOnceWith({ path: '/repo/a.ts', host: 'devbox', elsewhere: false, line: 4, clickedAt: expect.any(Number) });
   });
 });

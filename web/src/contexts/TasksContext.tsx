@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useTasks, type CreateHooks, type FolderMeta } from '@/hooks/useTasks';
 import type { Task } from '@open-walnut/core';
 import type { BatchTaskOutcome, CreateTaskInput, PluginFieldRef, UpdateTaskInput } from '@/api/tasks';
@@ -76,7 +76,64 @@ export interface TasksContextValue {
 
 const TasksContext = createContext<TasksContextValue | null>(null);
 
+/**
+ * The same list, read one row at a time. TasksContext changes with every task update, so a
+ * component that reads it re-renders for every task anywhere: each open chat column drew its
+ * whole panel and history again for every agent's status write (about 13 a minute on the
+ * user's Mac, 2026-11-16, task 9bceb9f2). A surface that shows ONE task reads it here
+ * (useStoreTask) and re-renders only when that row changes. The object is the provider's for
+ * its whole life; `latest` is the list its newest render held (set during that render, so a
+ * row read in the same render agrees with the context), and the subscribers hear of a new
+ * list once that render is on screen (a layout effect, before the frame paints).
+ */
+interface TaskRows {
+  latest: readonly Task[];
+  /** The list's own state beside it (useTaskListSelect), set with `latest`. */
+  loading: boolean;
+  error: string | null;
+  indexed: readonly Task[] | null;
+  byId: Map<string, Task>;
+  listeners: Set<() => void>;
+  /** The provider's newest value: for event handlers (update, has), never read during render. */
+  store: TasksContextValue | null;
+  /** Made once with the rows, so a hook hands React the same function every render. */
+  subscribe: (listener: () => void) => () => void;
+  actions: TaskStoreActions;
+}
+
+interface TaskStoreActions { has: (taskId: string) => boolean; update: TasksContextValue['update'] }
+
+/** Module level on purpose: its closures hold the rows, never a render (useLeanCallback.ts). */
+function makeTaskRows(tasks: readonly Task[], loading: boolean, error: string | null): TaskRows {
+  const rows: TaskRows = {
+    latest: tasks, loading, error, indexed: null, byId: new Map(), listeners: new Set(), store: null,
+    subscribe: (listener) => { rows.listeners.add(listener); return () => { rows.listeners.delete(listener); }; },
+    actions: {
+      has: (taskId) => rowOf(rows, taskId) !== null,
+      update: (id, updates) => (rows.store ? rows.store.update(id, updates) : Promise.resolve(false)),
+    },
+  };
+  return rows;
+}
+
+const TaskRowsContext = createContext<TaskRows | null>(null);
+
+function rowOf(rows: TaskRows, id: string): Task | null {
+  if (rows.indexed !== rows.latest) {
+    rows.byId = new Map(rows.latest.map((t) => [t.id, t] as const));
+    rows.indexed = rows.latest;
+  }
+  return rows.byId.get(id) ?? null;
+}
+
 /** Provider that wraps useTasks() into a shared context — one fetch for all consumers. */
+const taskStates = new WeakMap<Task, UserState>();
+function stateOfTask(task: Task): UserState {
+  let state = taskStates.get(task);
+  if (state === undefined) { state = userStateOf(task); taskStates.set(task, state); }
+  return state;
+}
+
 export function TasksProvider({ children }: { children: ReactNode }) {
   const t = useTasks();
 
@@ -109,7 +166,8 @@ export function TasksProvider({ children }: { children: ReactNode }) {
   }, []);
   useEffect(() => {
     if (t.loading) return;
-    statesRef.current.list = new Map(t.tasks.map((task) => [task.id, userStateOf(task)] as const));
+    // A task object never changes: its state is worked out once (stateOfTask), not for every task on every update.
+    statesRef.current.list = new Map(t.tasks.map((task) => [task.id, stateOfTask(task)] as const));
     pillStatus.current?.refresh();
   }, [t.tasks, t.loading]);
 
@@ -122,7 +180,22 @@ export function TasksProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- t's callbacks are stable via useCallback
     [t.tasks, t.taskGroups, t.hiddenGroups, t.folderMeta, t.loading, t.refreshing, t.error, t.operationError]);
 
-  return <TasksContext.Provider value={value}>{children}</TasksContext.Provider>;
+  const rows = useState<TaskRows>(() => makeTaskRows(t.tasks, t.loading, t.error))[0];
+  rows.latest = t.tasks;
+  rows.loading = t.loading;
+  rows.error = t.error;
+  useLayoutEffect(() => {
+    rows.store = value;
+  }, [rows, value]);
+  useLayoutEffect(() => {
+    for (const listener of [...rows.listeners]) listener();
+  }, [rows, t.tasks, t.loading, t.error]);
+
+  return (
+    <TaskRowsContext.Provider value={rows}>
+      <TasksContext.Provider value={value}>{children}</TasksContext.Provider>
+    </TaskRowsContext.Provider>
+  );
 }
 
 /**
@@ -149,11 +222,33 @@ export function useTasksContextSafe(): TasksContextValue | null {
   return useContext(TasksContext);
 }
 
-/** The store's row for `taskId`, or null when there is no store or no row. */
+const NO_SUBSCRIPTION = () => () => {};
+
+/**
+ * The store's row for `taskId`, or null when there is no store or no row. Re-renders only
+ * when that row changes (TaskRows): a task object is replaced on every change and kept
+ * otherwise, so its identity is the change.
+ */
 export function useStoreTask(taskId: string | null | undefined): Task | null {
-  const tasks = useContext(TasksContext)?.tasks;
-  return useMemo(
-    () => (taskId && tasks ? tasks.find((t) => t.id === taskId) ?? null : null),
-    [tasks, taskId],
-  );
+  const rows = useContext(TaskRowsContext);
+  const read = () => (rows && taskId ? rowOf(rows, taskId) : null);
+  return useSyncExternalStore(rows ? rows.subscribe : NO_SUBSCRIPTION, read, read);
+}
+
+/**
+ * One value worked out from the whole list (a count, a flag), re-rendering only when it
+ * changes: the select must return a primitive or an object it keeps. Null outside a provider.
+ */
+export function useTaskListSelect<T>(select: (list: { tasks: readonly Task[]; loading: boolean; error: string | null }) => T): T | null {
+  const rows = useContext(TaskRowsContext);
+  const read = () => (rows ? select({ tasks: rows.latest, loading: rows.loading, error: rows.error }) : null);
+  return useSyncExternalStore(rows ? rows.subscribe : NO_SUBSCRIPTION, read, read);
+}
+
+/**
+ * The store's writers and a row lookup for event handlers, without subscribing to the list
+ * (useTasksContextSafe re-renders on every task update). Null outside a TasksProvider.
+ */
+export function useTaskStoreActions(): TaskStoreActions | null {
+  return useContext(TaskRowsContext)?.actions ?? null;
 }
