@@ -22,6 +22,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants());
 const historyBySid = new Map<string, unknown[]>();
 const finishedIdsBySid = new Map<string, string[]>();
 const windowedSids = new Set<string>();
+const windowStartBySid = new Map<string, { byte: number; epoch?: string }>();
 const olderPages = new Map<string, { messages: unknown[]; reachedStart: boolean }>();
 vi.mock('../../../src/core/session-history-pages.js', () => ({
   readSessionHistoryBefore: vi.fn(async (sid: string) => olderPages.get(sid) ?? null),
@@ -34,6 +35,7 @@ vi.mock('../../../src/core/sessions/session-lifecycle.js', async (importOriginal
       messages: historyBySid.get(sessionId) ?? [],
       sourceAvailable: true,
       windowed: windowedSids.has(sessionId),
+      ...(windowStartBySid.has(sessionId) ? { windowStart: windowStartBySid.get(sessionId) } : {}),
       ...(finishedIdsBySid.has(sessionId) ? { finishedAgentIds: finishedIdsBySid.get(sessionId) } : {}),
     }),
   };
@@ -64,6 +66,7 @@ describe('GET /:sessionId/history?tail=N', () => {
     historyBySid.clear();
     finishedIdsBySid.clear();
     windowedSids.clear();
+    windowStartBySid.clear();
     olderPages.clear();
   });
 
@@ -162,6 +165,19 @@ describe('GET /:sessionId/history?tail=N', () => {
     expect(res.body.messages.map((m: { text: string }) => m.text)).toEqual(['Question', 'Earlier text', 'Later text']);
     expect(res.body.windowed).toBeUndefined();
     expect(res.body.initialUserText).toBe('Question');
+  });
+
+  it('the turn backfill reads only the bytes before the tail window it already holds (2026-11-16)', async () => {
+    const sid = 'tail-turn-end-byte';
+    await createSessionRecord(sid, '', 'p');
+    historyBySid.set(sid, [{ role: 'assistant', text: 'Later text', msgId: 'later', timestamp: '2026-01-01T00:00:02Z' }]);
+    windowedSids.add(sid);
+    windowStartBySid.set(sid, { byte: 48_906_261, epoch: 'e' });
+    olderPages.set(sid, { messages: [{ role: 'user', text: 'Question', msgId: 'q', timestamp: '2026-01-01T00:00:00Z' }], reachedStart: true });
+    const res = await request(createApp()).get(`/api/sessions/${sid}/history?tail=400&turns=10`);
+    expect(res.status).toBe(200);
+    const { readSessionHistoryBefore } = await import('../../../src/core/session-history-pages.js');
+    expect(vi.mocked(readSessionHistoryBefore).mock.calls.at(-1)?.[5]).toEqual({ byte: 48_906_261, epoch: 'e' });
   });
 
   it('rejects malformed turn budgets', async () => {

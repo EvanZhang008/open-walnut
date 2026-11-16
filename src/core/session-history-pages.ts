@@ -10,7 +10,7 @@
  * window's earliest timestamp is remembered: the next page jumps straight to the
  * window it needs instead of reading back from the end again.
  */
-import { readSessionHistoryRange, type SessionHistoryMessage } from './session-history.js';
+import { readSessionHistoryRange, type HistoryWindowStart, type SessionHistoryMessage } from './session-history.js';
 
 const WINDOW_BYTES = 4 * 1024 * 1024;
 /** Most windows one page reads, so a tap costs at most this many bounded reads. */
@@ -70,25 +70,36 @@ export async function readSessionHistoryBefore(
   host: string | undefined,
   before: string,
   want: { minMessages: number; minText: number; isText: (m: SessionHistoryMessage) => boolean },
-): Promise<{ messages: SessionHistoryMessage[]; reachedStart: boolean } | null> {
+  /** Lines starting from here on are already in hand (a tail window's start): read only
+   *  before it. Ignored when the file is no longer the one that window was read from. */
+  held?: HistoryWindowStart,
+): Promise<{ messages: SessionHistoryMessage[]; reachedStart: boolean; windowsRead: number } | null> {
   const key = `${sessionId}@${host ?? '__local__'}`;
   // A zero-length read answers the file's size (and whether it is readable).
   const probe = await readSessionHistoryRange(sessionId, cwd, host, 0, 0);
   if (!probe) return null;
   const idx = indexFor(key, probe.epoch);
   let last: { n: number; messages: SessionHistoryMessage[] } | null = null;
+  const sameFile = held?.epoch === undefined || probe.epoch === undefined || held.epoch === probe.epoch;
+  const cutAt = held && sameFile && held.byte > 0 && held.byte < probe.fileSize ? held.byte : undefined;
+  const stopAt = cutAt ?? probe.fileSize;
+  let windowsRead = 0;
   const read = async (n: number): Promise<SessionHistoryMessage[] | null> => {
     if (last?.n === n) return last.messages;
-    const got = await readSessionHistoryRange(sessionId, cwd, host, n * WINDOW_BYTES, (n + 1) * WINDOW_BYTES);
+    // The window still starts at n * WINDOW_BYTES, so its firstTs keeps its meaning;
+    // only its end is cut where the caller's bytes begin.
+    const got = await readSessionHistoryRange(sessionId, cwd, host, n * WINDOW_BYTES, cutAt === undefined ? (n + 1) * WINDOW_BYTES : Math.min((n + 1) * WINDOW_BYTES, cutAt));
     if (!got || got.epoch !== idx.epoch) return null; // unreadable, or replaced mid-page
-    idx.firstTs.set(n, got.messages[0]?.timestamp ?? null);
+    windowsRead++;
+    // A window cut short may hold no line start at all: that says nothing about the whole window.
+    if (cutAt === undefined || got.messages.length > 0) idx.firstTs.set(n, got.messages[0]?.timestamp ?? null);
     last = { n, messages: got.messages };
     return got.messages;
   };
   // The newest window holding something older than `before`. Time grows with
   // the offset, so a window known to start at or after `before` rules out every
   // window above it too.
-  let k = Math.max(0, Math.floor((probe.fileSize - 1) / WINDOW_BYTES));
+  let k = Math.max(0, Math.floor((stopAt - 1) / WINDOW_BYTES));
   for (const [n, ts] of idx.firstTs) {
     if (typeof ts === 'string' && ts >= before && n <= k) k = Math.max(0, n - 1);
   }
@@ -109,5 +120,5 @@ export async function readSessionHistoryBefore(
     if (k === 0) reachedStart = true;
     if (collected.length >= want.minMessages && collected.filter(want.isText).length >= want.minText) break;
   }
-  return { messages: collected, reachedStart };
+  return { messages: collected, reachedStart, windowsRead };
 }

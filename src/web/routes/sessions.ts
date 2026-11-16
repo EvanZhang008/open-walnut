@@ -903,6 +903,9 @@ import { SessionControlError } from '../../core/sessions/session-controls.js'
 import { historyNotWrittenYet, transcriptNotWrittenYet } from '../../core/sessions/history-not-written.js'
 import { HOST_RECONNECTING, HostReconnectingError, HostStillLoadingError, boundHostRead, boundSharedHostRead, hostReadFailureLevel, isRemoteHost } from '../../core/hosts/remote-read-bound.js'
 
+/** A full history read this slow logs its steps ('history read slow'). */
+const SLOW_HISTORY_READ_MS = 2_000
+
 /** A SessionControlError as the web shape: `{ error }`, plus its `code` when it has one. */
 function sendControlError(res: Response, err: SessionControlError): void {
   const code = typeof err.extra?.code === 'string' ? err.extra.code : undefined
@@ -1714,16 +1717,22 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       // A host still connecting answers at once from the caches below, or
       // degraded: this request never waits out a dial (remote-read-bound.ts).
       const readHistory = async () => {
+        const readAt = Date.now()
         const history = await readProviderSessionHistory(sessionId, record, record?.host, true,
           tail && tail > 0 ? { maxColdReadBytes: HISTORY_COLD_TAIL_READ_BYTES } : undefined)
+        const readMs = Date.now() - readAt
+        const readWindowed = history.windowed
+        let backfill: { ms: number; windows: number; messages: number } | undefined
         if (req.query.since === undefined && turnCount > 0 && history.windowed && record && !record.forkedFromSessionId
           && engineCaps(record.engine).historySource !== 'acp-journal'
           && history.messages.filter(isMainTurn).length < turnCount) {
           const before = history.messages[0]?.timestamp
           if (before) {
             const { readSessionHistoryBefore } = await import('../../core/session-history-pages.js')
+            const backfillAt = Date.now()
             const page = await readSessionHistoryBefore(sessionId, record.cwd, record.host, before,
-              { minMessages: 0, minText: turnCount, isText: isMainTurn })
+              { minMessages: 0, minText: turnCount, isText: isMainTurn }, history.windowStart)
+            backfill = { ms: Date.now() - backfillAt, windows: page?.windowsRead ?? 0, messages: page?.messages.length ?? 0 }
             if (page?.messages.length) {
               const keyOf = (m: SessionHistoryMessage) => m.msgId ? `${m.msgId}|${m.timestamp}|${m.role}` : undefined
               const tailKeys = new Set(history.messages.map(keyOf).filter(Boolean))
@@ -1731,6 +1740,15 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
               if (page.reachedStart) history.windowed = false
             }
           }
+        }
+        // Which step a slow full read waited on (2026-11-16: 10.5 s with nothing to say
+        // where): the read itself, or the older-turns backfill and its windows.
+        if (readMs + (backfill?.ms ?? 0) >= SLOW_HISTORY_READ_MS) {
+          log.web.info('history read slow', {
+            sessionId, host: record?.host ?? '__local__', readMs, windowed: readWindowed, reachedStart: !history.windowed,
+            ...(history.windowStart ? { windowStartByte: history.windowStart.byte } : {}),
+            ...(backfill ? { backfill } : {}), messages: history.messages.length,
+          })
         }
         return history
       }

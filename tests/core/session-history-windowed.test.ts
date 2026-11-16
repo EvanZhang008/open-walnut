@@ -53,8 +53,10 @@ import {
   readSessionHistory,
   readSessionHistoryTail,
   isWindowedHistory,
+  historyWindowStart,
   _resetHistoryCacheForTesting,
 } from '../../src/core/session-history.js';
+import { readSessionHistoryBefore, _resetHistoryPagesForTests } from '../../src/core/session-history-pages.js';
 import { registerEchoClaims, _resetEchoClaimsForTest } from '../../src/core/echo-claims.js';
 import { log } from '../../src/logging/index.js';
 
@@ -224,6 +226,44 @@ describe('whale-session bounded tail', () => {
  * a cold read bigger than it reads only the last window.
  */
 describe('cold tail-bounded read (maxColdReadBytes)', () => {
+  // Both seams: `start` inside a line, and `start` exactly on a line's first byte (the
+  // tail drops that whole line, so the page must own it: review of 2026-11-16).
+  it.each([['inside a line', 0], ['on a line start', 1]])(
+    'a tail window and the bytes before it are every message once, the window starting %s (2026-11-16)', async (_where, onLineStart) => {
+    _resetHistoryPagesForTests();
+    _resetHistoryCacheForTesting();
+    const sid = `cold-tail-seam-${onLineStart}`;
+    const lines = [
+      ...padding(60),
+      userLine('cold newest question', '2026-01-02T00:00:00.000Z'),
+      asstLine('cold newest answer', '2026-01-02T00:00:05.000Z'),
+    ];
+    await writeLines(sid, lines);
+    const size = (await fsp.stat(jsonlPath(sid))).size;
+    let windowBytes = 4096;
+    if (onLineStart) {
+      // Pick the window so its first byte is the first byte of a line.
+      const text = await fsp.readFile(jsonlPath(sid), 'utf8');
+      const lineStart = text.indexOf('\n', size - 4096) + 1;
+      windowBytes = size - lineStart;
+    }
+    const tail = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true, maxColdReadBytes: windowBytes });
+    expect(isWindowedHistory(tail)).toBe(true);
+    expect(historyWindowStart(tail)?.byte).toBe(size - windowBytes + 1);
+    const page = await readSessionHistoryBefore(sid, CWD, undefined, tail[0].timestamp,
+      { minMessages: 0, minText: 10_000, isText: () => true }, historyWindowStart(tail));
+    expect(page?.reachedStart).toBe(true);
+    const full = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+    expect([...page!.messages, ...tail].map(m => m.text)).toEqual(full.map(m => m.text));
+  });
+
+  it('a full read carries no window start', async () => {
+    const sid = 'cold-tail-no-start';
+    await writeLines(sid, [userLine('only question', '2026-01-02T00:00:00.000Z'), asstLine('only answer', '2026-01-02T00:00:05.000Z')]);
+    const full = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+    expect(historyWindowStart(full)).toBeUndefined();
+  });
+
   it('a cold read over the bound serves a windowed tail with the newest messages', async () => {
     const sid = 'cold-tail-1';
     await writeLines(sid, [

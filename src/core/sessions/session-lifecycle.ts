@@ -51,6 +51,8 @@ export async function readProviderSessionHistory(
   messages: SessionHistoryMessage[];
   sourceAvailable: boolean;
   windowed: boolean;
+  /** A tail window's start: older pages need only the bytes before it. */
+  windowStart?: import('../session-history.js').HistoryWindowStart;
   /** Orphan finished-agent toolUseIds (nested agents proven stopped by a
    *  <task-notification> but with NO tool row in the parse) — absorption
    *  evidence the client can't derive from the rows (inc-1786496042099).
@@ -63,7 +65,7 @@ export async function readProviderSessionHistory(
       opts?.maxColdReadBytes ? { maxColdReadBytes: opts.maxColdReadBytes } : {});
     return { messages: state.messages, sourceAvailable: state.journalExists, windowed: state.windowed === true };
   }
-  const { readSessionHistory, isWindowedHistory, isSourceFoundHistory, getOrphanFinishedAgentIds } = await import('../session-history.js');
+  const { readSessionHistory, isWindowedHistory, historyWindowStart, isSourceFoundHistory, getOrphanFinishedAgentIds } = await import('../session-history.js');
   const messages = await readSessionHistory(
     sessionId,
     record?.cwd,
@@ -84,10 +86,12 @@ export async function readProviderSessionHistory(
   // history file not found" on every task launch. Fall back to the length proxy
   // only when the reader gave us no verdict at all (fake/mocked readers in tests).
   const orphanIds = getOrphanFinishedAgentIds(messages);
+  const windowStart = historyWindowStart(messages);
   return {
     messages,
     sourceAvailable: isSourceFoundHistory(messages) || messages.length > 0,
     windowed: isWindowedHistory(messages),
+    ...(windowStart ? { windowStart } : {}),
     ...(orphanIds && orphanIds.size > 0 ? { finishedAgentIds: [...orphanIds].sort() } : {}),
   };
 }

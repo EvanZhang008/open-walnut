@@ -309,10 +309,16 @@ function sessionJsonlHint(sessionId: string, host: string | undefined): SessionJ
  * it was handed. Callers that concatenate (fork ancestors) must therefore read the
  * flag BEFORE building the combined array and propagate it.
  */
-const windowedParses = new WeakSet<object>();
-function markWindowedRead(messages: object): void { windowedParses.add(messages); }
+/** Where a TAIL window's own lines begin: every line STARTING at `byte` or later is in it,
+ *  every line starting before it is not (`epoch`: the file incarnation it was read from). */
+export interface HistoryWindowStart { byte: number; epoch?: string }
+const windowedParses = new WeakMap<object, HistoryWindowStart | undefined>();
+function markWindowedRead(messages: object, start?: HistoryWindowStart): void { windowedParses.set(messages, start); }
 /** True when `messages` is a bounded sliding window — never a valid cursor space. */
 export function isWindowedHistory(messages: object): boolean { return windowedParses.has(messages); }
+/** A tail window's start, so an older page reads only the bytes before it (2026-11-16:
+ *  the 10-turn backfill re-pulled 4 MB the tail had just read, 4.4 s of a 10.5 s open). */
+export function historyWindowStart(messages: object): HistoryWindowStart | undefined { return windowedParses.get(messages); }
 
 /**
  * Parses whose transcript SOURCE was proven to exist (a successful stat, or the
@@ -1221,6 +1227,7 @@ export async function parseHistoryWindowText(
   sessionId: string,
   windowText: string,
   parseOpts?: ParseSessionMessagesOptions,
+  start?: HistoryWindowStart,
 ): Promise<SessionHistoryMessage[]> {
   const merged = await mergeSyntheticUserEvents(sessionId, windowText);
   const parsed = parseSessionMessages(merged, parseOpts);
@@ -1234,7 +1241,7 @@ export async function parseHistoryWindowText(
     const { bindEchoClaims } = await import('./echo-claims.js');
     bindEchoClaims(sessionId, parsed);
   } catch { /* best-effort — text dedup remains the fallback */ }
-  markWindowedRead(parsed);
+  markWindowedRead(parsed, start);
   return parsed;
 }
 
@@ -1298,7 +1305,13 @@ export async function readSessionHistoryTailWindow(
       const nl = res.content.indexOf('\n');
       windowText = nl >= 0 ? res.content.slice(nl + 1) : '';
     }
-    return await parseHistoryWindowText(sessionId, windowText, parseOpts);
+    // The skip above drops whatever runs from `start` to its first newline: a line begun
+    // before `start`, or a WHOLE line when `start` is a line's first byte. Either way the
+    // window owns exactly the lines starting after `start`, so its own lines begin at
+    // start + 1 (and at 0 when it read from the top), which is where a page of the bytes
+    // before it must stop (jsonl-window.ts: a window owns the lines starting inside it).
+    return await parseHistoryWindowText(sessionId, windowText, parseOpts,
+      { byte: start > 0 ? start + 1 : 0, ...(st.epoch !== undefined ? { epoch: st.epoch } : {}) });
   } catch (err) {
     log.session.debug('tail window read failed', {
       sessionId, host: daemonHost,
@@ -1626,11 +1639,12 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
 
   if (options?.maxColdReadBytes && !rewindCuts && statPath && statSize !== undefined
       && statSize > options.maxColdReadBytes) {
+    const windowAt = Date.now();
     const win = await readSessionHistoryTailWindow(sessionId, cwd, host, options.maxColdReadBytes);
     if (win) {
       log.session.info('history cold read bounded to tail window', {
         sessionId, host: host ?? '__local__', fileSize: statSize,
-        windowBytes: options.maxColdReadBytes, messages: win.length,
+        windowBytes: options.maxColdReadBytes, messages: win.length, windowReadMs: Date.now() - windowAt,
       });
       if (mtimeMs !== undefined) {
         // A timed-out preview may finish after the larger refresh. Never replace
