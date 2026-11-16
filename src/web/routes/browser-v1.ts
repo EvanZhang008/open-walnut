@@ -737,6 +737,11 @@ async function uploadGate(req: Request, res: Response, b: Record<string, unknown
       if (state === 'pending') { res.status(202).json(await waitBody(request)); return true }
       if (state === 'approved') { granted.push(...need); need = [] }
     }
+    if (need.length && !request) {
+      const settled = await ug.settledAsk(taskId, site, need)
+      if (settled === 'denied') throw new h.BrowserError('The person said no to uploading these files. Do not ask again for them; tell them in one line what you needed instead.', 403, 'denied')
+      if (settled === 'approved') { granted.push(...need); need = [] }
+    }
     if (need.length) {
       const ask = await ug.askUpload({ taskId, paths: need, site, requester: at.requester, ...(ambientTestRun() ? { testRun: ambientTestRun()! } : {}) })
       log.web.info('browser trusted upload asks the person', { device: at.device, owner: at.owner, files: need.length, site, request: ask.id, reused: ask.reused })

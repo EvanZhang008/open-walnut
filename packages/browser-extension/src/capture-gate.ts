@@ -24,6 +24,8 @@ export class WindowCovered extends AgentError {
 
 /** The browser's own limit, two captures a second, with a margin. */
 export const CAPTURE_GAP_MS = 550
+/** A capture with no answer by then is taken as a window that draws nothing. */
+export const CAPTURE_MS = 10_000
 
 let held: Promise<unknown> | null = null
 let last = 0
@@ -35,12 +37,18 @@ export async function capture(windowId: number, o: { format: 'jpeg' | 'png'; qua
   const wait = last + CAPTURE_GAP_MS - Date.now()
   if (wait > 0) await sleep(wait)
   last = Date.now()
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    return await ext.tabs.captureVisibleTab(windowId, o)
+    // Chrome may never answer for a window it does not draw: the gate never stays held on it.
+    const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new WindowCovered()), CAPTURE_MS) })
+    const shot = ext.tabs.captureVisibleTab(windowId, o)
+    shot.catch(() => undefined)
+    return await Promise.race([shot, late])
   } catch (err) {
     if (/readback failed/i.test(String((err as Error)?.message ?? err))) throw new WindowCovered()
     throw err
   } finally {
+    clearTimeout(timer)
     last = Date.now()
   }
 }

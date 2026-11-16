@@ -134,5 +134,19 @@ export async function answerUpload(input: { id: string; taskId: string; site: st
   }
 }
 
+/**
+ * An ask of this task, into this site, for these files, that the person already answered: claimed
+ * as answerUpload would (a yes the agent never came back for, its call cut off on the way, is not
+ * asked again).
+ */
+export async function settledAsk(taskId: string, site: string, paths: string[]): Promise<AnswerState> {
+  for (const [id, a] of asks) {
+    if (a.taskId !== taskId || a.site !== site || !paths.every((p) => a.paths.includes(p))) continue
+    const state = await answerUpload({ id, taskId, site, paths, holdMs: 0 })
+    if (state === 'approved' || state === 'denied') return state
+  }
+  return 'unknown'
+}
+
 /** Tests: forget every ask and grant. */
 export function _resetUploadGrantsForTesting(): void { grants.clear(); denials.clear(); asks.clear() }

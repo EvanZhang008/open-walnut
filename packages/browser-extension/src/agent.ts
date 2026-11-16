@@ -42,6 +42,7 @@ import { forgetAgentMade, noteAgentMade, tidyLeftovers } from './agent-tidy'
 import { restoreLeftPersonTabs } from './agent-groups-person'
 import { keptReady, startKeep } from './agent-keep'
 import { refuseWhileDialog } from './agent-dialog'
+import { inTurn, STALE_MS } from './tab-turn'
 import { replayStep } from './agent-replay'
 
 export { setTrustedInput, trustedInputState } from './trusted-switch'
@@ -338,8 +339,6 @@ async function act(cmd: WireCommand): Promise<unknown> {
   throw new AgentError(`Unknown action ${c.action}.`, 'bad_action')
 }
 
-/** One command at a time per tab: two at once (a full screenshot and a click, two debugger attaches) would trip each other. */
-const perTab = new Map<number, Promise<unknown>>()
 
 /**
  * Commands that never need their tab on screen: the page is read or driven through its own
@@ -355,15 +354,6 @@ const onScreen = new Map<number, number>()
 const ownerRuns = new Map<string, number>()
 setGroupBusy((owner) => (ownerRuns.get(owner) ?? 0) > 0 || watchedOwner(owner))
 const holdsScreen = (id: number) => (onScreen.get(id) ?? 0) > 0
-function inTurn<T>(tab: unknown, work: () => Promise<T>): Promise<T> {
-  if (typeof tab !== 'number') return work()
-  const before = perTab.get(tab) ?? Promise.resolve()
-  const mine = before.catch(() => undefined).then(work)
-  const tail = mine.catch(() => undefined)
-  perTab.set(tab, tail)
-  void tail.then(() => { if (perTab.get(tab) === tail) perTab.delete(tab) })
-  return mine
-}
 
 /**
  * The person's own commands from the Browser view in Walnut (agent-view.ts): a frame of a tab, and
@@ -429,7 +419,10 @@ async function run(c: WireCommand): Promise<void> {
       : c.action === 'open' && typeof c.args.owner === 'string' ? c.args.owner : undefined
     if (groupOwner) ownerRuns.set(groupOwner, (ownerRuns.get(groupOwner) ?? 0) + 1)
     try {
+      const queued = Date.now()
       body = { id: c.id, ok: true, result: await inTurn(c.args.tab, async () => {
+        // Waited past the server's wait for it (a turn before it hung): the agent was told it failed, so it never runs late.
+        if (Date.now() - queued > STALE_MS) throw new AgentError('The tab was busy past the time this step had: it was not done. Call it again.', 'page_not_ready')
         // Taken over while this command waited for its turn.
         const late = typeof c.args.tab === 'number' ? drivingRefusal(await agentTabs.get(c.args.tab)) : null
         if (late) throw late

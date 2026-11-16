@@ -11,7 +11,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-upload-grants'))
 
 import { answerApproval, getApproval } from '../../../src/core/approvals/store.js'
-import { DENIED_MS, GRANT_MS, _resetUploadGrantsForTesting, answerUpload, askUpload, askWords, deniedOf, grantedOf, isFilePath } from '../../../src/core/browser-control/upload-grants.js'
+import { DENIED_MS, GRANT_MS, _resetUploadGrantsForTesting, answerUpload, askUpload, askWords, deniedOf, grantedOf, isFilePath, settledAsk } from '../../../src/core/browser-control/upload-grants.js'
 
 const requester = { host: 'clouddev', taskId: 't1', taskTitle: 'Upload the demo', sessionId: 's1' }
 const REC = '/Users/evan/Desktop/demo.mov'
@@ -71,5 +71,15 @@ describe('upload grants', () => {
     const { id } = await askUpload({ taskId: 't1', paths: [REC], site: 'example.test', requester })
     setTimeout(() => { void answerApproval(id, { decision: 'approve', device: { name: 'Test phone', kind: 'iphone' } } as never, noKey) }, 100)
     expect(await answerUpload({ id, taskId: 't1', site: 'example.test', paths: [REC], holdMs: 3000 })).toBe('approved')
+  })
+
+  it('a yes the agent never came back for (its call cut off) is claimed by the next call, never asked again', async () => {
+    const { id } = await askUpload({ taskId: 't1', paths: [REC], site: 'example.test', requester })
+    expect(await settledAsk('t1', 'example.test', [REC])).toBe('unknown')
+    await answerApproval(id, { decision: 'approve', device: { name: 'Test phone', kind: 'iphone' } } as never, noKey)
+    expect(await settledAsk('t2', 'example.test', [REC])).toBe('unknown')
+    expect(await settledAsk('t1', 'other.test', [REC])).toBe('unknown')
+    expect(await settledAsk('t1', 'example.test', [REC])).toBe('approved')
+    expect(grantedOf('t1', 'example.test', [REC])).toEqual([REC])
   })
 })

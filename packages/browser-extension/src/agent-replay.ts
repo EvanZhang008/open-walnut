@@ -91,7 +91,9 @@ export async function replayPicture(tabId: number, walnut: string[] | undefined)
 }
 
 type Post = (body: Record<string, unknown>) => Promise<unknown>
-type InTurn = <T>(tab: number, work: () => Promise<T>) => Promise<T>
+type InTurn = <T>(tab: number, work: () => Promise<T>, limitMs?: number) => Promise<T>
+/** The picture's part of the tab's turn at most: the agent's next step waits behind it. */
+export const REPLAY_TURN_MS = 15_000
 
 /**
  * After a step's answer went back: its picture to Walnut with the step's token. Only the picture
@@ -100,7 +102,12 @@ type InTurn = <T>(tab: number, work: () => Promise<T>) => Promise<T>
  */
 export async function replayStep(token: string, tabId: number, answer: { ok: boolean; result?: unknown; error?: { code?: string } }, walnut: string[] | undefined, post: Post, inTurn: InTurn = (_t, w) => w()): Promise<void> {
   try {
-    const pic = await inTurn(tabId, () => replayPicture(tabId, walnut))
+    // The picture's time runs from its own turn, never from its queueing.
+    const pic = await inTurn(tabId, () => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const late = new Promise<null>((r) => { timer = setTimeout(() => r(null), REPLAY_TURN_MS) })
+      return Promise.race([replayPicture(tabId, walnut), late]).finally(() => clearTimeout(timer))
+    }, REPLAY_TURN_MS)
     if (!pic) return
     await post({
       token, tab: tabId, ok: answer.ok, at: new Date().toISOString(),

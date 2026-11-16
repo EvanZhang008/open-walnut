@@ -27,7 +27,7 @@ export const BROWSER_USAGE = [
   '  scroll [up|down|left|right|top|bottom] [<ref> | --at X,Y] [--amount N | --by PX]',
   '  click --at X,Y | click-label <N>;  type <text> --at X,Y [--slowly];  drag <ref|X,Y> <ref|X,Y> [--steps N]',
   '  screenshot [<file>] [--full] [--annotate];  zoom <X> <Y> <W> <H> [<file>]   (default: a .jpg in $WALNUT_TASK_DIR/shots)',
-  '  upload <ref> <file>... | --selector <css> <file>...   (10 MB in all; --trusted --path P: a file on the browser\'s machine, any size, after the person\'s yes)',
+  '  upload <ref>|--selector <css> <file>...   (10 MB; --trusted --path P: on the browser\'s machine, any size, with the person\'s yes)',
   '  downloads [--wait] [--ms N];  resize <width> <height> [--viewport]',
   '  fill-login [--item <id|name>] [--fresh-sign-in];  fill-code [--item <id|name>];  request-sign-in [<what>] [--site S]',
   '  open <url> --record;  network [--url part] [--method M] [--status 4xx] [--type XHR] [--limit N] [--include-static] [--stop]',
@@ -140,6 +140,15 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
   const [verb, ...rest] = words
   if (!verb) return { ok: false, error: 'say what to do' }
   const one = (name: string) => { if (!rest[0]) throw new Error(`${verb} needs ${name}`); return rest[0] }
+  // `--text` is the words of a click, hover or dialog; for wait, find and request-sign-in it is their
+  // text, the same as the words after the verb. Any other verb never sends it on (the op refuses an
+  // unknown key: 2026-11-16, `wait --text` failed on "Unrecognized key: dialogText").
+  if (typeof args.dialogText === 'string' && !TEXT_FLAG_VERBS.has(verb)) {
+    if (!TEXT_WORD_VERBS.has(verb)) return { ok: false, error: `${verb} takes no --text` }
+    if (rest.length) return { ok: false, error: `${verb} takes its words once: after the verb or with --text, not both` }
+    rest.push(args.dialogText)
+    delete args.dialogText
+  }
   try {
     switch (verb) {
       case 'status': return { ok: true, op: 'browser_status', args: {}, json }
@@ -270,7 +279,12 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
   return { ok: false, error: `unknown action ${verb}` }
 }
 
-const REFUSED = new Set(['window_hidden', 'input_dropped', 'site_denied', 'not_your_tab', 'test_run', 'which_tab', 'person_is_here', 'trusted_off', 'denied', 'agents_off', 'agent_never', 'which_login', 'other_site', 'agents_tab_only', 'site_open_in_person_tab', 'not_agent_opened', 'filled_here', 'request_site_not_allowed', 'recording_cancelled', 'person_window', 'person_driving', 'path_not_allowed', 'file_access_off'])
+/** The verbs that read `--text` themselves. */
+const TEXT_FLAG_VERBS = new Set(['click', 'hover', 'dialog'])
+/** The verbs whose words `--text` can give instead. */
+const TEXT_WORD_VERBS = new Set(['wait', 'find', 'request-sign-in', 'request_sign_in'])
+
+const REFUSED = new Set(['window_hidden', 'input_dropped', 'site_denied', 'not_your_tab', 'test_run', 'which_tab', 'person_is_here', 'trusted_off', 'denied', 'agents_off', 'agent_never', 'which_login', 'other_site', 'agents_tab_only', 'site_open_in_person_tab', 'not_agent_opened', 'filled_here', 'request_site_not_allowed', 'recording_cancelled', 'person_window', 'person_driving', 'path_not_allowed', 'file_access_off', 'file_not_found'])
 
 const MIME: Record<string, string> = {
   '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',

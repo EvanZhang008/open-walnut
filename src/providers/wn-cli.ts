@@ -1346,7 +1346,11 @@ function gatewayOpCall(socketPath: string, sid: string) {
     const callId = newCallId()
     let resp: GatewayResponse
     try {
-      resp = await requestOverSocket(socketPath, { v: 1, op: 'tools.call', sid, args: { name, args, callId, ...testRunArg() } })
+      // The daemon holds the call as long as a `walnut tools call` (cliWaitMs): a browser step that
+      // waits for the person holds up to 25 s on the Mac, past the gateway's 20 s default
+      // (2026-11-16: an upload the person approved came back "primary server timed out").
+      const waitMs = cliWaitMs()
+      resp = await requestOverSocket(socketPath, { v: 1, op: 'tools.call', sid, args: { name, args, callId, ...testRunArg() }, waitMs }, waitMs + 10_000)
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : String(err) }
     }

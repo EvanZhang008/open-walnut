@@ -289,9 +289,9 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
         const markId = crypto.randomUUID().replace(/-/g, '')
         const l = await locate({ mark: markId, cursor: 'move', ...(typeof a.selector === 'string' && a.ref === undefined ? { selector: a.selector } : {}) })
         const files = await run(tabId, rec.owner, (send) => cdpSetFiles(send, markId, paths))
-        // A path the browser's machine has no file at reads as an empty file: said, never a success.
+        // A path with no file is refused in cdpSetFiles; an empty file is the person's, and said.
         const empty = files.filter((f) => f.bytes === 0).map((f) => f.name)
-        out = { uploaded: paths, into: l.what, trusted: true, files, ...(empty.length ? { empty, note: `${empty.join(', ')} came to 0 bytes: check the path is right on the browser's machine.` } : {}) }
+        out = { uploaded: paths, into: l.what, trusted: true, files, ...(empty.length ? { empty, note: `${empty.join(', ')} is an empty file (0 bytes).` } : {}) }
         break
       }
       default: throw new AgentError(`${c.action} has no real-input form.`, 'bad_action')

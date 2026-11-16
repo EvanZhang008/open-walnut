@@ -152,6 +152,40 @@ describe('the command sequences', () => {
     }
   })
 
+  it('upload: a path with no file on the browser\'s machine is refused by name, and the page is untouched', async () => {
+    // 2026-11-16: a plain space for the narrow one (U+202F) before PM gave the page a 0-byte file.
+    const f = fakeDebugger({ ...uploadBase, 'Runtime.callFunctionOn': calls([{ name: 'Rec 1.02 PM.mov', bytes: 0, readable: false, missing: true }]) })
+    const err = await withDebugger(f.dbg, 1, (send) => cdpSetFiles(send, 'm', ['/Users/me/Desktop/Rec 1.02 PM.mov'])).catch((e) => e)
+    expect(err.code).toBe('file_not_found')
+    expect(err.message).toContain('/Users/me/Desktop/Rec 1.02 PM.mov')
+    expect(err.message).toMatch(/U\+202F/)
+    expect(f.log.filter((l) => l[0] === 'Runtime.callFunctionOn').map((l) => l[1]!.objectId)).toEqual(['probe-1'])
+    // An empty file that is there still goes, its size said.
+    const empty = fakeDebugger({ ...uploadBase, 'Runtime.callFunctionOn': calls([{ name: 'e.txt', bytes: 0, readable: true, missing: false }]) })
+    expect(await withDebugger(empty.dbg, 1, (send) => cdpSetFiles(send, 'm', ['/Users/me/e.txt']))).toEqual([{ name: 'e.txt', bytes: 0 }])
+  })
+
+  it('upload: the read Chrome runs finds a missing file (an empty entry read whole) apart from an empty one and a folder', async () => {
+    const f = fakeDebugger({ ...uploadBase, 'Runtime.callFunctionOn': calls([{ name: 'a', bytes: 1, readable: true }]) })
+    await withDebugger(f.dbg, 1, (send) => cdpSetFiles(send, 'm', ['/Users/me/a']))
+    const decl = String(f.log.find((l) => l[0] === 'Runtime.callFunctionOn')![1]!.functionDeclaration)
+    const read = new Function(`return (${decl})`)() as (this: unknown) => Promise<unknown>
+    const notFound = Object.assign(new Error('not found'), { name: 'NotFoundError' })
+    // As Chrome's File for a path: size 0 when nothing is there, and only reading it all finds out.
+    const file = (name: string, size: number, whole: 'ok' | 'missing' | 'unreadable') => ({
+      name, size,
+      slice: () => ({ arrayBuffer: async () => { if (whole === 'unreadable') throw new Error('NotReadableError'); return new ArrayBuffer(0) } }),
+      arrayBuffer: async () => { if (whole === 'missing') throw notFound; if (whole === 'unreadable') throw new Error('NotReadableError'); return new ArrayBuffer(size) },
+    })
+    const out = await read.call({ files: [file('gone.mov', 0, 'missing'), file('empty.txt', 0, 'ok'), file('dir', 96, 'unreadable'), file('a.mov', 652487569, 'ok')] })
+    expect(out).toEqual([
+      { name: 'gone.mov', bytes: 0, readable: false, missing: true },
+      { name: 'empty.txt', bytes: 0, readable: true, missing: false },
+      { name: 'dir', bytes: 96, readable: false, missing: false },
+      { name: 'a.mov', bytes: 652487569, readable: true, missing: false },
+    ])
+  })
+
   it('upload: Chrome without file access says how to turn it on, and the page is untouched', async () => {
     const off = fakeDebugger({ ...uploadBase, 'Runtime.callFunctionOn': calls([]), 'DOM.setFileInputFiles': new Error('Not allowed') })
     const err = await withDebugger(off.dbg, 1, (send) => cdpSetFiles(send, 'm', ['/Users/me/a'])).catch((e) => e)

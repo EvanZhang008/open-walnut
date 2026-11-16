@@ -100,6 +100,18 @@ describe('the newer actions', () => {
     expect(parseBrowserArgv(['fill-login', '--item', 'Shop'])).toMatchObject({ args: { action: 'fill_login', item: 'Shop' } })
     expect(parseBrowserArgv(['dialog', 'dismiss'])).toMatchObject({ args: { action: 'dialog', accept: false } })
     expect(parseBrowserArgv(['dialog', 'accept', '--text', 'yes'])).toMatchObject({ args: { action: 'dialog', accept: true, text: 'yes' } })
+    // --text on wait or find is their text; on a verb that reads no words it is refused, never sent on.
+    expect(parseBrowserArgv(['wait', '--text', 'Server received', '--ms', '20000'])).toMatchObject({ ok: true, args: { action: 'wait', text: 'Server received', ms: 20000 } })
+    expect((parseBrowserArgv(['wait', '--text', 'x']) as { args: Record<string, unknown> }).args.dialogText).toBeUndefined()
+    expect(parseBrowserArgv(['find', '--text', 'Sign in'])).toMatchObject({ ok: true, args: { action: 'find', text: 'Sign in' } })
+    expect(parseBrowserArgv(['snapshot', '--text', 'x'])).toMatchObject({ ok: false, error: 'snapshot takes no --text' })
+    expect(parseBrowserArgv(['click-label', '3', '--text', 'x'])).toMatchObject({ ok: false, error: 'click-label takes no --text' })
+    expect(parseBrowserArgv(['wait', 'foo', '--text', 'bar'])).toMatchObject({ ok: false })
+    // The class: no verb ever sends --text on as dialogText (the op refuses an unknown key).
+    for (const verb of ['open', 'snapshot', 'click', 'hover', 'type', 'press', 'text', 'find', 'wait', 'close', 'scroll', 'select', 'upload', 'screenshot', 'dialog', 'click-label', 'drag', 'evaluate', 'tabs', 'downloads', 'fill-login', 'fill-code', 'request-sign-in', 'network', 'console', 'back', 'navigate', 'resize', 'zoom', 'take', 'form-values', 'fill-form']) {
+      const r = parseBrowserArgv([verb, 'e1', '--text', 'w']) as { ok: boolean; args?: Record<string, unknown> }
+      if (r.ok) expect(r.args?.dialogText, verb).toBeUndefined()
+    }
     // Alone (or `read`), it reads the open dialog; any other word is not an answer.
     expect(parseBrowserArgv(['dialog'])).toMatchObject({ ok: true, args: { action: 'dialog', read: true } })
     expect(parseBrowserArgv(['dialog', 'maybe'])).toMatchObject({ ok: false })

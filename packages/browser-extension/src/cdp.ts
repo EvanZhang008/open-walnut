@@ -149,6 +149,9 @@ const busyError = (err: unknown) => {
   return new CdpError(/already attached/i.test(m) ? 'Another debugger (DevTools?) is open on that tab: close it and try again.' : `The browser would not attach its debugger: ${m}`, 'debugger_busy')
 }
 
+/** How long an attach may take. */
+export const ATTACH_MS = 10_000
+
 /** `by` holds the tab's session: the one held already, else a new attach. */
 export async function acquireDebugger(dbg: DebuggerApi, tabId: number, by: string): Promise<Send> {
   // The browser let go by itself (the tab closed, the person cancelled its bar): nobody holds it.
@@ -161,7 +164,13 @@ export async function acquireDebugger(dbg: DebuggerApi, tabId: number, by: strin
   if (e) { e.by.add(by); return e.send }
   const target = { tabId }
   // Set before anything is awaited: a second user arriving now waits for this attach.
-  const attach = dbg.attach(target, '1.3')
+  // An attach Chrome never answers fails at ATTACH_MS, so the tab's next user does not wait on it for
+  // good; one that lands after is let go at once (nobody holds it).
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let gaveUp = false
+  const raw = dbg.attach(target, '1.3')
+  raw.then(() => { if (gaveUp) void dbg.detach(target).catch(() => undefined) }, () => undefined)
+  const attach = Promise.race([raw, new Promise<never>((_, reject) => { timer = setTimeout(() => { gaveUp = true; reject(new Error('the browser did not answer in time')) }, ATTACH_MS) })]).finally(() => clearTimeout(timer))
   attaching.set(tabId, attach.then(() => undefined, () => undefined))
   try {
     await attach
@@ -406,16 +415,20 @@ export async function cdpSetFiles(send: Send, mark: string, paths: string[]): Pr
     if (/not allowed/i.test(String((err as Error)?.message))) throw new CdpError(FILE_ACCESS_WORDS, 'file_access_off')
     throw err
   }
-  // A folder given as a path reads as an entry that cannot be read.
+  // A folder given as a path reads as an entry that cannot be read. A path with no file reads as an
+  // empty file that only a whole read finds missing (2026-11-16: a plain space for the narrow one in
+  // a macOS screen recording's name gave the page a 0-byte file), so an empty entry is read whole.
   const r = await send('Runtime.callFunctionOn', {
     objectId: probe, awaitPromise: true, returnByValue: true,
-    functionDeclaration: 'async function () { const out = []; for (const f of Array.from(this.files || [])) { let readable = true; try { await f.slice(0, 1).arrayBuffer() } catch { readable = false } out.push({ name: f.name, bytes: f.size, readable }) } return out }',
+    functionDeclaration: 'async function () { const out = []; for (const f of Array.from(this.files || [])) { let readable = true, missing = false; try { await (f.size ? f.slice(0, 1) : f).arrayBuffer() } catch (e) { readable = false; missing = !f.size && !!e && e.name === "NotFoundError" } out.push({ name: f.name, bytes: f.size, readable, missing }) } return out }',
   }) as { result?: { value?: unknown } }
   const v = r?.result?.value
-  const read = Array.isArray(v) ? v.filter((f): f is { name: string; bytes: number; readable: boolean } => typeof f?.name === 'string' && typeof f?.bytes === 'number') : []
+  const read = Array.isArray(v) ? v.filter((f): f is { name: string; bytes: number; readable: boolean; missing?: boolean } => typeof f?.name === 'string' && typeof f?.bytes === 'number') : []
   if (read.length !== paths.length || read.map((f) => f.name).sort().join('\n') !== paths.map(baseName).sort().join('\n')) {
     throw new CdpError(`Chrome did not read exactly the files named (it read ${read.length}); nothing was put in the page. Name single files, never a folder.`, 'bad_request')
   }
+  const missing = paths.filter((p, i) => read[i]?.missing && read[i].name === baseName(p))
+  if (missing.length) throw new CdpError(`No file at ${missing.join(', ')} on this computer; nothing was put in the page. Copy the path exactly: a macOS screenshot or screen recording has a narrow no-break space (U+202F) before AM or PM, not a plain one.`, 'file_not_found')
   const unreadable = read.filter((f) => !f.readable).map((f) => f.name)
   if (unreadable.length) throw new CdpError(`${unreadable.join(', ')} cannot be read as a file (a folder, or no such file); nothing was put in the page.`, 'bad_request')
   const moved = await send('Runtime.callFunctionOn', {
