@@ -34,8 +34,16 @@ export function joinedBlankColumns(text: string): number[] {
 
 const SELF = path.relative(ROOT, __filename)
 
+// Every joined form holds `=,`, so only the tracked files git finds it in are read: reading all
+// of them passed the time limit on a loaded machine (flaky twice in seven days, 2026-11-16).
 function trackedFiles(): string[] {
-  const out = execFileSync('git', ['ls-files', '-z', '--', 'src', 'scripts', 'packages', 'tests', 'web/src', 'bin'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 << 20 })
+  let out = ''
+  try {
+    out = execFileSync('git', ['grep', '-l', '-z', '-F', '-e', '=,', '--', 'src', 'scripts', 'packages', 'tests', 'web/src', 'bin'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 << 20 })
+  } catch (e) {
+    // git grep exits 1 when no file holds it.
+    if ((e as { status?: number }).status !== 1) throw e
+  }
   return out.split('\0').filter((f) => f && /\.(ts|tsx|mts|cts|js|mjs|cjs|sh|bash|zsh|py)$/.test(f) && f !== SELF)
 }
 
