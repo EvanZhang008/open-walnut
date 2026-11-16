@@ -472,10 +472,10 @@ test.describe('Settings > Remote Hosts: every button', () => {
       await expect(beta.getByTestId('rh-row-more')).toBeFocused()
       ran('Hosts/button#rh-details-hide')
 
-      // Hidden from the home page: said once, its way back beside it (the review: "You hid this
+      // Hidden from notifications: said once, its way back beside it (the review: "You hid this
       // problem on the home page." with the fix in the row's menu).
       const hiddenLine = beta.getByTestId('rh-banner-hidden')
-      await expect(hiddenLine).toHaveText('Hidden from the home page. Show it there again')
+      await expect(hiddenLine).toHaveText('Hidden from notifications. Show it there again')
       await expect(menu(page)).toHaveCount(0)
       await sweep()
       await hiddenLine.getByTestId('rh-show-again').click()

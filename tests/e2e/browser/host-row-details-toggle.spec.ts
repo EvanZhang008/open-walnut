@@ -1,9 +1,10 @@
 /**
- * A host card's details: ONE toggle, one state.
+ * A host problem row's details (the notification panel's problem list): ONE
+ * toggle, one state.
  *
  * A failure whose raw text is not SSH output (DETAILS_NOT_SSH_KINDS: the
  * daemon did not come up, the cloud companion refusing) used to show two
- * toggles in an open banner row, the row's own fold toggle and the failure
+ * toggles in an open row, the row's own fold toggle and the failure
  * text's inner one, reading "Show details" and "Hide details" at the same time.
  * Now the raw text opens with the row. An SSH failure keeps its inner "Show SSH
  * output" (a different thing, often long) beside the row's "Hide details".
@@ -12,16 +13,16 @@
  * the headline, hint and toggle words are the real shared model's.
  * page.goto only loads the app; everything after is a real click.
  *
- * Run: PW_TEST_PORT=35993 ./node_modules/.bin/playwright test host-card-details-toggle --project=chromium-host-fixture --workers=1
- *      PW_WEBKIT=1 PW_TEST_PORT=35993 ./node_modules/.bin/playwright test host-card-details-toggle --project=webkit --workers=1
+ * Run: walnut-dev run bun x playwright test tests/e2e/browser/host-row-details-toggle.spec.ts --project chromium-host-fixture --retries=0
  */
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test, expect, type Locator } from '@playwright/test'
-import { banner, expandSystemAttention, failed, resetServerHostFixture, row, setup, type HS } from './host-problems-helpers'
+import { failed, resetServerHostFixture, setup, type HS } from './host-problems-helpers'
+import { openProblems, problemHosts, problemRow, seedFeed } from './host-attention-helpers'
 
-const SHOTS = process.env.HOST_CARD_SHOTS ?? path.join(os.tmpdir(), 'walnut-host-card-shots')
+const SHOTS = process.env.HOST_ROW_SHOTS ?? path.join(os.tmpdir(), 'walnut-host-row-shots')
 test.describe.configure({ timeout: 120_000 })
 
 test.beforeAll(async ({ request }) => {
@@ -65,10 +66,9 @@ const CASES: Array<{ name: string; status: HS; headline: string }> = [
 const toggles = (r: Locator): Locator => r.locator('button.hft-details:visible')
 
 /**
- * The card's host list is its one scroll region (banner-scroll.ts), so an open
- * row's tail can sit below the list's fold. Scroll it there as a user would, and
- * prove the toggle is really on screen: toBeInViewport counts the clip of every
- * scrolling ancestor, which :visible does not.
+ * The notification panel scrolls, so an open row's tail can sit below its fold.
+ * Scroll it there as a user would, and prove the toggle is really on screen:
+ * toBeInViewport counts the clip of every scrolling ancestor, which :visible does not.
  */
 async function showToggle(r: Locator): Promise<void> {
   await toggles(r).scrollIntoViewIfNeeded()
@@ -77,15 +77,15 @@ async function showToggle(r: Locator): Promise<void> {
 
 for (const c of CASES) {
   test(`${c.name}: one details toggle, open and closed, and the raw text opens with the row`, async ({ page, browserName }) => {
-    await setup(page, [c.status])
-    // The card sits in the task panel's folded System attention section.
-    await expandSystemAttention(page)
-    const r = row(page, c.status.host)
+    await seedFeed(page, [])
+    await setup(page, [c.status], undefined, { listHosts: true })
+    await openProblems(page)
+    const r = problemRow(page, c.status.host)
     await expect(r).toBeVisible({ timeout: 30_000 })
     await expect(r).toContainText(c.headline)
     await expect(r).toHaveAttribute('data-kind', c.status.kind!)
 
-    // Open it (the first row may already be open).
+    // Open it (a row the user opened before stays open).
     if (await toggles(r).first().innerText() === 'Show details') await toggles(r).first().click()
     await expect(toggles(r)).toHaveCount(1)
     await expect(toggles(r)).toHaveText('Hide details')
@@ -93,7 +93,7 @@ for (const c of CASES) {
     await expect(r).not.toContainText('Show SSH output')
     await showToggle(r)
     await expect(r.locator('pre.hft-summary')).toBeInViewport()
-    await banner(page).screenshot({ path: path.join(SHOTS, `host-card-${c.name}-open-${browserName}.png`) })
+    await problemHosts(page).screenshot({ path: path.join(SHOTS, `host-row-${c.name}-open-${browserName}.png`) })
 
     // Closed: still one toggle, and the details are gone with it.
     await toggles(r).click()
@@ -101,15 +101,16 @@ for (const c of CASES) {
     await expect(toggles(r)).toHaveText('Show details')
     await expect(r.locator('pre.hft-summary')).toHaveCount(0)
     await showToggle(r)
-    await banner(page).screenshot({ path: path.join(SHOTS, `host-card-${c.name}-closed-${browserName}.png`) })
+    await problemHosts(page).screenshot({ path: path.join(SHOTS, `host-row-${c.name}-closed-${browserName}.png`) })
   })
 }
 
 test('an SSH failure keeps its SSH output behind its own toggle (unchanged)', async ({ page }) => {
   const s = failed('netbox', 'Net box', 'unreachable')
-  await setup(page, [s])
-  await expandSystemAttention(page)
-  const r = row(page, 'netbox')
+  await seedFeed(page, [])
+  await setup(page, [s], undefined, { listHosts: true })
+  await openProblems(page)
+  const r = problemRow(page, 'netbox')
   await expect(r).toBeVisible({ timeout: 30_000 })
   if (await toggles(r).first().innerText() === 'Show details') await toggles(r).first().click()
   await expect(toggles(r)).toHaveText(['Show SSH output', 'Hide details'])

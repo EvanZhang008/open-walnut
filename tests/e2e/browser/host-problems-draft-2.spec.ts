@@ -11,26 +11,22 @@
  *                  sentence (C69); off hosts: no chips, an off ring, host_off (C79)
  *   the gate bar   follows the host live and per 2.2 (C80); a removed host's
  *                  history row is refused host_removed (C73)
- *   slot hidden    the compact banner in the draft column (C66) once the task panel and the
- *                  slot are both hidden, without the gate bar's host
- *                  (a signed-out Sign box: an outdated Build box takes no banner row at all)
+ *   no host row    the draft column carries the gate bar only, never a host
+ *                  problem row (those are the notification panel's) (C66)
  *   session        the error bar names the host and the last cause (C70)
  *
- * Run with --workers=1 next to the banner specs (every describe loads its own
+ * Run with --workers=1 next to the host problem row specs (every describe loads its own
  * server fixture). page.goto only loads the app.
  *
- * Run: PW_TEST_PORT=35993 npx playwright test host-problems-draft-2 --project=chromium-host-fixture --workers=1
- *      PW_WEBKIT=1 PW_TEST_PORT=35993 npx playwright test host-problems-draft-2 --project=webkit --workers=1
+ * Run: walnut-dev run bun x playwright test tests/e2e/browser/host-problems-draft-2.spec.ts --project chromium-host-fixture --retries=0
  */
-import fs from 'node:fs'
-import path from 'node:path'
 import { test, expect, type Page } from '@playwright/test'
 import { draftCwdPill, draftQuickChips, openDraft, draftSend } from './draft-helpers'
 import {
   HEALTHY, fixtureCounters, fixtureFile, gateBar, hostFixture, hostTab, isolatePrefs, loadApp, loadFixture, openPicker,
-  pickFolder, picker, resetServerHostFixture, start, startOnHost, tasksBanner, wireHost,
+  pickFolder, picker, resetServerHostFixture, start, startOnHost, wireHost,
 } from './host-problems-fixture-helpers'
-import { expandSystemAttention, hideTaskPanel } from './host-problems-helpers'
+import { hostRowsOutsidePanel, openProblems, problemRow } from './host-attention-helpers'
 import { dropFakes } from './route-teardown'
 
 const SHOTS = '/tmp/walnut-host-problems-slice/fix2'
@@ -236,103 +232,23 @@ test.describe('a host that left Settings, and hosts that are off', () => {
   })
 })
 
-/**
- * host-problems plus a fifth banner problem (Lan box, unreachable), so the cap
- * folds rows: Key box, Cert box, Net box, then 'and 2 more' (Lan box, Sign box).
- * Build box (claude_outdated) takes no banner row and is not one of the five.
- */
-function fiveBannerProblems(): Record<string, unknown> {
-  const file = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'tests/e2e/browser/fixtures/host-problems.json'), 'utf-8')) as { hosts: Record<string, unknown> }
-  file.hosts.lanbox = { label: 'Lan box', hostname: 'lan.example.com', phase: 'failed', error: 'ssh: connect to host lan.example.com port 22: No route to host' }
-  return file
-}
+test.describe('the draft column carries no host row', () => {
+  test.beforeAll(async ({ request }) => { await loadFixture(request, 'host-problems') })
 
-test.describe('the Ask Walnut slot hidden', () => {
-  test.beforeAll(async ({ request }) => { await loadFixture(request, fiveBannerProblems()) })
-
-  test('the draft column carries the compact banner with the task panel\'s rows; no second banner exists (C66)', async ({ page, browser }) => {
-    test.setTimeout(90_000) // two app loads (task panel shown, then hidden) in one test
+  test('a refused Start: the gate bar speaks for its host; no host problem row sits in the draft or anywhere outside the notification panel (C66)', async ({ page }) => {
     await loadApp(page)
-    // The task panel's system attention is a collapsed footer by default (0eacec605).
-    await expandSystemAttention(page)
-    const tasksRows = tasksBanner(page).locator('li.hpb-row[data-host]')
-    await expect(tasksRows.first()).toBeVisible({ timeout: 20_000 })
-    const rowsOf = (els: Element[]) => els.map((e) => `${e.getAttribute('data-host')}|${e.getAttribute('data-type')}|${e.getAttribute('data-kind')}`)
-    const inTasks = await tasksRows.evaluateAll(rowsOf)
-
-    const ctx = await browser.newContext()
-    const hidden = await ctx.newPage()
-    try {
-      await isolatePrefs(hidden)
-      await hidden.addInitScript(() => localStorage.setItem('open-walnut-home-chat-visible', 'false'))
-      await loadApp(hidden)
-      // A draft from the toolbar, then the task panel hidden: the draft column is the one mount left.
-      const draft = await openDraft(hidden)
-      await hideTaskPanel(hidden)
-      const compact = draft.locator('[data-testid="attention-banner"].attention-banner-compact')
-      await expect(compact).toBeVisible({ timeout: 10_000 })
-      await expect(compact).toHaveAttribute('data-mount', 'draft')
-      await expect(hidden.locator('[data-testid="attention-banner"]')).toHaveCount(1)
-      await expect(compact.locator('.setup-banner-title')).toHaveCount(0)
-      expect(await compact.locator('li.hpb-row[data-host]').evaluateAll(rowsOf)).toEqual(inTasks)
-      await expect(compact.locator('.hpb-more')).toHaveText(await tasksBanner(page).locator('.hpb-more').innerText())
-      await expect(hidden.locator('.host-connect-banner')).toHaveCount(0)
-      await draft.screenshot({ path: `${SHOTS}/draft-compact-banner.png` })
-    } finally {
-      await ctx.close()
-    }
-    // The old second implementation is gone from the tree.
-    const web = path.resolve(process.cwd(), 'web/src')
-    expect(fs.existsSync(path.join(web, 'components/common/HostConnectBanner.tsx'))).toBe(false)
-    const hits: string[] = []
-    const walk = (dir: string) => {
-      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-        const p = path.join(dir, e.name)
-        if (e.isDirectory()) walk(p)
-        else if (/\.(tsx?|css)$/.test(e.name) && /host-connect-banner|HostConnectBanner/.test(fs.readFileSync(p, 'utf-8'))) hits.push(p)
-      }
-    }
-    walk(web)
-    expect(hits).toEqual([])
-  })
-
-  test('a refused Start: the compact banner leaves out the host its gate bar speaks for, and keeps the rest (review fix 22)', async ({ browser }) => {
-    test.setTimeout(90_000)
-    const ctx = await browser.newContext()
-    const hidden = await ctx.newPage()
-    try {
-      await isolatePrefs(hidden)
-      await hidden.addInitScript(() => localStorage.setItem('open-walnut-home-chat-visible', 'false'))
-      await loadApp(hidden)
-      // Task panel and slot hidden with a draft open: the compact card in the draft column.
-      const panel = await openDraft(hidden)
-      await hideTaskPanel(hidden)
-      await draftCwdPill(panel).click()
-      await expect(picker(hidden)).toBeVisible({ timeout: 10_000 })
-      await expect(hostTab(hidden, 'devbox')).toBeVisible({ timeout: 20_000 })
-      const compact = panel.locator('[data-testid="attention-banner"].attention-banner-compact')
-      const hostsIn = () => compact.locator('li.hpb-row[data-host]').evaluateAll((els) => els.map((e) => e.getAttribute('data-host')))
-      // Five banner problems: three rows and 'and 2 more' (Sign box is one of the two).
-      await expect(compact.locator('.hpb-more')).toHaveText('and 2 more', { timeout: 20_000 })
-      await expect(hidden.locator('[data-testid="attention-banner"]')).toHaveCount(1)
-      expect(await hostsIn()).not.toContain('signbox')
-      expect(await hostsIn()).not.toContain('buildbox')
-      await pickFolder(hidden, panel, 'signbox', '~/work/api')
-      const res = await start(hidden, panel, 'try the signed-out box')
-      expect(res.status()).toBe(409)
-      expect(await res.json()).toMatchObject({ code: 'host_not_ready', kind: 'claude_not_logged_in', host: 'signbox' })
-      await expect(gateBar(panel)).toHaveAttribute('data-host', 'signbox')
-      // Sign box speaks once, in the bar; the four others fit without 'and N more'.
-      await expect(compact.locator('.hpb-more')).toHaveCount(0)
-      await expect(compact.locator('li.hpb-row[data-host]')).toHaveCount(4)
-      expect(await hostsIn()).not.toContain('signbox')
-      await expect(compact.locator('li.hpb-row[data-host="lanbox"]')).toBeVisible()
-      await expect(compact.locator('li.hpb-row[data-host="keybox"]')).toBeVisible()
-      await expect(hidden.locator('[data-testid="attention-banner"]')).toHaveCount(1)
-      await panel.screenshot({ path: `${SHOTS}/draft-compact-banner-gate.png` })
-    } finally {
-      await ctx.close()
-    }
+    const panel = await openPicker(page)
+    await expect(hostRowsOutsidePanel(page)).toHaveCount(0)
+    await pickFolder(page, panel, 'signbox', '~/work/api')
+    const res = await start(page, panel, 'try the signed-out box')
+    expect(res.status()).toBe(409)
+    expect(await res.json()).toMatchObject({ code: 'host_not_ready', kind: 'claude_not_logged_in', host: 'signbox' })
+    await expect(gateBar(panel)).toHaveAttribute('data-host', 'signbox')
+    await expect(panel.locator('li.hpb-row')).toHaveCount(0)
+    await expect(hostRowsOutsidePanel(page)).toHaveCount(0)
+    // The other problem hosts are still in the notification panel's list.
+    await openProblems(page)
+    await expect(problemRow(page, 'keybox')).toBeVisible({ timeout: 20_000 })
   })
 })
 

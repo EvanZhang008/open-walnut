@@ -7,10 +7,10 @@
  * what it gets. A version floor alone ('outdated') never takes a banner
  * section (localNoticeShows), the same rule as a remote host's.
  *
- * It is the FIRST section of the home attention banner (AttentionBanner): a
+ * It leads the notification panel's problem rows (NotificationProblems): a
  * broken local Claude Code silences Walnut itself, so it sits above the remote
  * hosts. `useLocalClaudeNotice` returns the section without a frame (and its
- * title, which becomes the card title); `SetupBanner` is the framed standalone.
+ * title); `SetupBanner` is the framed standalone (the first-use card).
  * Dismissal is per state and version (host-banner-dismiss.ts), never global.
  */
 import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
@@ -358,9 +358,9 @@ function QuietSection({ header, dismiss, view, pending, error, onFix, onCheck, o
 }
 
 /**
- * The lead in two parts: the state ('... is not signed in.') repeats the title,
- * so a card that also lists hosts hides it (.ab-both) and keeps the fix whole
- * ('Run `claude` in a terminal and sign in.'), never a clipped sentence (N2).
+ * The lead in two parts: the state ('... is not signed in.') and the fix
+ * ('Run `claude` in a terminal and sign in.'), so the fix is never a clipped
+ * sentence (N2).
  */
 function LeadText({ message }: { message: string }) {
   const state = firstSentence(message).trim();

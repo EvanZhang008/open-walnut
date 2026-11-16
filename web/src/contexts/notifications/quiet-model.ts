@@ -71,9 +71,11 @@ export function effectiveQuiet(q: QuietState, now = Date.now()): QuietState {
  * May a toast of this kind interrupt right now? Ephemeral kinds (a sort hint, a
  * voice-capture error) always may: they answer something the human JUST did and
  * have no feed copy, so holding them back would lose them rather than defer them.
+ * A host problem ('host') is the exception: nobody just did anything, and the
+ * notification panel keeps listing it, so quiet holds its toast.
  */
 export function quietAllowsToast(q: QuietState, kind: NotificationKind, now = Date.now()): boolean {
-  if (!IS_PERSISTENT[kind]) return true;
+  if (!IS_PERSISTENT[kind] && kind !== 'host') return true;
   const e = effectiveQuiet(q, now);
   if (!e.active) return true;
   return kind === 'permission' && e.allowPermissions;

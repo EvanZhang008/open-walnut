@@ -14,7 +14,7 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { openBell } from './host-problems-fixture-helpers'
-import { railButton } from './banner-placement-helpers'
+import { railButton } from './host-attention-helpers'
 import { openKebabGroup } from './kebab-group-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)

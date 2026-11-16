@@ -12,7 +12,7 @@
  *            host reads the shared headline and hint (C6, C35, C68)
  *   off      an ephemeral fixture: every remote host is off (C22, C79)
  *
- * Serial, and run with --workers=1 next to the banner specs: those route the
+ * Serial, and run with --workers=1 next to the host problem row specs: those route the
  * same aliases client-side, and a loaded server fixture would push real frames
  * for them. page.goto only loads the app; everything else is a real click.
  *

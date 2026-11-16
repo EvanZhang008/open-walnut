@@ -490,7 +490,7 @@ export async function openFixturePane(page: Page, request: APIRequestContext): P
   await page.context().route(/(downloads\.example\.com|alpha-tunnel\.example\.dev)/, (route) => route.fulfill({ contentType: 'text/html', body: '<title>stub</title>ok' }))
   // WebKit knows no clipboard permission (browser-spec-ratchets.test.ts).
   if (page.context().browser()?.browserType().name() === 'chromium') await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
-  // Beta box was hidden from the home banner earlier: its row offers Show again.
+  // Beta box was hidden from notifications earlier: its row offers Show again.
   await page.addInitScript(() => {
     if (sessionStorage.getItem('rheb-seeded')) return
     localStorage.setItem('open-walnut-host-banner-dismissed', JSON.stringify(['downbox|connect']))

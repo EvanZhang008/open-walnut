@@ -16,7 +16,7 @@ import fs from 'node:fs'
 import { test, expect, type Page, type Locator } from '@playwright/test'
 import { isolatePrefs } from './host-problems-helpers'
 import { loadApp, openBell } from './host-problems-fixture-helpers'
-import { healthyGitSync, pickRail, railButton } from './banner-placement-helpers'
+import { healthyGitSync, pickRail, railButton } from './host-attention-helpers'
 
 const SHOTS = '/tmp/walnut-update/shots'
 test.describe.configure({ timeout: 90_000 })

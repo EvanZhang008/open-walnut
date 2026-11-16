@@ -1,5 +1,5 @@
 /**
- * NotificationToaster — the single toast renderer, in the bottom-left corner stack
+ * NotificationToaster — the single toast renderer, in the notice stack at the top of the window
  * (corner-stack.tsx) with every other notice.
  *
  * Replaces CronToast + PermissionToast + OperationErrorToast (and renders the
@@ -56,7 +56,7 @@ import { sessionsWithPromptCard, usePromptCardsChanged } from '@/components/sess
 import { useNotificationCenterOpen } from '@/stores/notification-center-open';
 import { useShiftClickGuard } from './useShiftClickGuard';
 
-/** Downward travel that dismisses a toast on the phone (it sits at the bottom of the screen). */
+/** Upward travel that dismisses a toast on the phone (it sits at the top of the screen). */
 const SWIPE_DISMISS_PX = 40;
 
 /**
@@ -72,25 +72,25 @@ export function phoneVisibleToasts<T extends { kind?: string; resolved?: unknown
   return first ? [first] : [];
 }
 
-/** Swipe down on a toast dismisses it (phone): toward the edge it came from. */
-function useSwipeDownDismiss(enabled: boolean, onDismiss: () => void) {
+/** Swipe up on a toast dismisses it (phone): toward the top edge it came from. */
+function useSwipeUpDismiss(enabled: boolean, onDismiss: () => void) {
   const start = useRef<{ id: number; y: number } | null>(null);
   if (!enabled) return {};
   return {
     onPointerDownCapture: (e: React.PointerEvent) => { start.current = { id: e.pointerId, y: e.clientY }; },
-    // Capture only once the finger moves down: the finger leaves the toast while
+    // Capture only once the finger moves up: the finger leaves the toast while
     // it swipes, so its pointerup must still land here. Capturing on down
     // would retarget a plain tap's click away from the x and the buttons.
     onPointerMoveCapture: (e: React.PointerEvent) => {
       const s0 = start.current;
       const el = e.currentTarget as HTMLElement;
-      if (!s0 || s0.id !== e.pointerId || e.clientY - s0.y < 8 || el.hasPointerCapture?.(e.pointerId)) return;
+      if (!s0 || s0.id !== e.pointerId || s0.y - e.clientY < 8 || el.hasPointerCapture?.(e.pointerId)) return;
       try { el.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
     },
     onPointerUpCapture: (e: React.PointerEvent) => {
       const s0 = start.current;
       start.current = null;
-      if (s0 && s0.id === e.pointerId && e.clientY - s0.y >= SWIPE_DISMISS_PX) onDismiss();
+      if (s0 && s0.id === e.pointerId && s0.y - e.clientY >= SWIPE_DISMISS_PX) onDismiss();
     },
     onPointerCancelCapture: () => { start.current = null; },
   };
@@ -106,9 +106,9 @@ const SEVERITY_ICON: Record<NotificationSeverity, ReactNode> = {
   error: ICON_CLOSE,
 };
 
-/** Toasts in sight at once on a computer, newest nearest the corner; the corner never outgrows the window. */
+/** Toasts in sight at once on a computer; the stack never outgrows the window. */
 const DESKTOP_TOASTS_SHOWN = 2;
-/** A window shorter than this shows one toast, so the corner still fits. */
+/** A window shorter than this shows one toast, so the stack still fits. */
 const SHORT_WINDOW_PX = 720;
 /** Toasts in sight while an approval card is in the corner: the request a script waits on leads. */
 const WITH_APPROVAL_SHOWN = 1;
@@ -163,7 +163,7 @@ export function NotificationToaster() {
   // Only while the approval card really shows: a Needs you line on screen lists them instead.
   const { approvalsListed } = useCornerState();
   const approvalInCorner = pendingAt(useApprovals(), Date.now()).length > 0 && !approvalsListed;
-  // Over a chat (compact) the toasts keep to their short form but not to fewer of them: two Undos
+  // Crowded (compact) the toasts keep to their short form but not to fewer of them: two Undos
   // from two columns closed back to back both stay in reach.
   const shownCount = approvalInCorner ? WITH_APPROVAL_SHOWN : window.innerHeight < SHORT_WINDOW_PX ? 1 : DESKTOP_TOASTS_SHOWN;
   // A permission a session waits on stays in sight whatever the count; the rest fill what is left.
@@ -367,8 +367,10 @@ function MessageToast({ toast, phone, more, onDismiss, onPin, onRead, navigate, 
   );
   const toolsInHeader = titleOnly && !open && hasMore;
   // Persistent toasts live in the feed too, so the body is a shortcut into
-  // the notification center. Ephemeral ones (sort/audio) aren't — inert body.
-  const opensCenter = toast.persistent;
+  // the notification center. A host problem is listed there live (NotificationProblems),
+  // so its body opens it too: on a phone, where a closed toast shows only its title,
+  // that tap is how Retry is reached. Other ephemeral ones (sort/audio) aren't: inert body.
+  const opensCenter = toast.persistent || toast.kind === 'host';
   return (
     <div
       className={`notification-toast notification-toast--${toast.severity}${opensCenter ? ' notification-toast--clickable' : ''}${open ? ' is-open' : ''}`}
@@ -472,9 +474,9 @@ function MessageToast({ toast, phone, more, onDismiss, onPin, onRead, navigate, 
  * another surface, turn died) — settle and dismiss instead of re-arming buttons
  * the user would click forever.
  */
-/** A wrapper that only adds the phone's swipe-down dismissal. */
+/** A wrapper that only adds the phone's swipe-up dismissal. */
 function SwipeToast({ phone, onDismiss, children }: { phone: boolean; onDismiss: () => void; children: ReactNode }) {
-  const swipe = useSwipeDownDismiss(phone, onDismiss);
+  const swipe = useSwipeUpDismiss(phone, onDismiss);
   if (!phone) return <>{children}</>;
   return <div className="notification-toast-swipe" {...swipe}>{children}</div>;
 }
@@ -570,7 +572,7 @@ function PermissionToast({ n, onDismiss, onPin, onRead, onLeave, navigate, phone
     onPin();
   }, [onPin]);
 
-  const swipe = useSwipeDownDismiss(phone, onDismiss);
+  const swipe = useSwipeUpDismiss(phone, onDismiss);
   const context = [sessionLabelOf(n), n.host].filter(Boolean).join(' · ');
   // A record with no session/requestId can't be answered from here (legacy or a
   // dropped field) — offer the deep link instead of dead buttons. An

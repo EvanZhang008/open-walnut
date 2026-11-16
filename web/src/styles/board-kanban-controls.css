@@ -244,7 +244,7 @@
 .kanban-changes-row { font-variant-numeric: tabular-nums; line-height: 1.35; overflow-wrap: anywhere; }
 .kanban-changes-empty { padding: 8px; color: var(--fg-muted); }
 
-/* ── Toasts (in the window's bottom-left notice corner, corner-stack.css places them) ── */
+/* ── Toasts (in the window's one notice stack at the top, corner-stack.css places them) ── */
 .kanban-toasts {
   display: flex; flex-direction: column; align-items: stretch; gap: 6px; pointer-events: none;
 }

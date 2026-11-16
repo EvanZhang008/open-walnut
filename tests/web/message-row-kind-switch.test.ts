@@ -31,7 +31,7 @@ const doc = dom.document as unknown as Document;
 // whole file before any test ran ("file failed outside its tests").
 const { ChatMessage } = await import('../../web/src/components/chat/ChatMessage');
 const { SessionMessage } = await import('../../web/src/components/sessions/SessionMessage');
-// The same router module the components import (attention-banner-session.test.ts does the same).
+// The same router module the components import (host-problem-rows.test.ts does the same).
 const { MemoryRouter } = await import('../../web/node_modules/react-router-dom');
 const errors: unknown[] = [];
 let root: Root | null = null;

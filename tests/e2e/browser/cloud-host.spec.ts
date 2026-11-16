@@ -10,8 +10,9 @@
  *      the streamed reply: no "may not have been saved" toast.
  *   5. The column offers no Terminal tab: Cloud has no SSH (its status frame
  *      carries terminal: false).
- *   6. The operator turns cloud.exec off: the real Cloud card names it with
- *      ONE details toggle, and Retry after turning it back on reconnects.
+ *   6. The operator turns cloud.exec off: Cloud's problem row in the
+ *      notification panel names it with ONE details toggle, and Retry after
+ *      turning it back on reconnects.
  *   7. Settings › Phones & Cloud lists the other Mac on the companion as a Mac
  *      (no phone wording, no Show QR), and this Mac reported itself as one.
  *
@@ -23,7 +24,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { expandSystemAttention } from './host-problems-helpers'
+import { openBell } from './host-problems-fixture-helpers'
+import { pickRail, problemHosts, problemRow } from './host-attention-helpers'
 import { draftComposer, draftCwdPill, draftPanel, draftSend, loadHome, openDraft, REAL_PANEL, shownHomePath } from './draft-helpers'
 import { backToDevices } from './devices-ways-helpers'
 
@@ -144,53 +146,52 @@ test('the picker offers Cloud, lists the box folders, and a session starts there
   expect(errors).toEqual([])
 })
 
-test('hosting turned off on the box: the Cloud card says so with ONE details toggle, and Retry brings Cloud back', async ({ page, browserName }) => {
+test('hosting turned off on the box: Cloud\'s problem row says so with ONE details toggle, and Retry brings Cloud back', async ({ page, browserName }) => {
   test.setTimeout(360_000)
   const { boxConfig } = await fixture()
   const original = fs.readFileSync(boxConfig, 'utf-8')
   await loadHome(page)
-  const card = page.locator(`[data-testid="attention-banner"] li.hpb-row[data-host="${CLOUD}"]`).first()
-  const toggles = card.locator('button.hft-details:visible')
+  const cloudRow = problemRow(page, CLOUD)
+  const toggles = cloudRow.locator('button.hft-details:visible')
 
   // The operator turns cloud.exec off. The open tunnel closes within one
-  // heartbeat (30s); the Mac's redial hears 403 and the card appears.
+  // heartbeat (30s); the Mac's redial hears 403 and the row appears in the
+  // notification panel's problems (All), which stays open while it waits.
   fs.writeFileSync(boxConfig, original.replace('enabled: true', 'enabled: false'))
   try {
+    await openBell(page)
+    await pickRail(page, 'All')
     // A "Reconnecting to Cloud" row may stand there first; wait for the verdict.
-    // The system attention section starts collapsed: the row is there, hidden,
-    // until the section is opened.
-    await expect(page.locator(`[data-testid="attention-banner"] li.hpb-row[data-host="${CLOUD}"][data-kind="cloud_exec_off"]`).first()).toBeAttached({ timeout: 150_000 })
-    await expandSystemAttention(page)
-    await expect(page.locator(`[data-testid="attention-banner"] li.hpb-row[data-host="${CLOUD}"][data-kind="cloud_exec_off"]`).first()).toBeVisible()
-    await expect(card).toContainText('Cloud companion has session hosting turned off')
-    await expect(card).toContainText('cloud.exec.enabled: true')
+    await expect(page.locator(`.notification-panel [data-testid="nfc-problem-hosts"] li.hpb-row[data-host="${CLOUD}"][data-kind="cloud_exec_off"]`)).toBeVisible({ timeout: 150_000 })
+    await expect(cloudRow).toContainText('Cloud companion has session hosting turned off')
 
+    // A dense row shows its headline and Retry; the hint is one Show details away.
     if (await toggles.first().innerText() === 'Show details') await toggles.first().click()
     await expect(toggles).toHaveCount(1)
     await expect(toggles).toHaveText('Hide details')
-    await expect(card.locator('pre.hft-summary')).toContainText('cloud.exec.enabled is off there')
-    // The host list is the card's one scroll region: scroll the open row's tail
-    // into it as a user would, and prove it is on screen (toBeInViewport counts
-    // every scrolling ancestor's clip; :visible does not).
-    const cardShot = page.locator('[data-testid="attention-banner"]')
-      .filter({ has: page.locator(`li.hpb-row[data-host="${CLOUD}"]`) }).first()
+    await expect(cloudRow).toContainText('cloud.exec.enabled: true')
+    await expect(cloudRow.locator('pre.hft-summary')).toContainText('cloud.exec.enabled is off there')
+    // Scroll the open row's tail into the panel's list as a user would, and prove
+    // it is on screen (toBeInViewport counts every scrolling ancestor's clip;
+    // :visible does not).
+    const listShot = problemHosts(page)
     await toggles.scrollIntoViewIfNeeded()
     await expect(toggles).toBeInViewport()
-    await expect(card.locator('pre.hft-summary')).toBeInViewport()
-    await cardShot.screenshot({ path: path.join(SHOTS, `cloud-card-exec-off-open-${browserName}.png`) })
+    await expect(cloudRow.locator('pre.hft-summary')).toBeInViewport()
+    await listShot.screenshot({ path: path.join(SHOTS, `cloud-row-exec-off-open-${browserName}.png`) })
     await toggles.click()
     await expect(toggles).toHaveCount(1)
     await expect(toggles).toHaveText('Show details')
-    await expect(card.locator('pre.hft-summary')).toHaveCount(0)
+    await expect(cloudRow.locator('pre.hft-summary')).toHaveCount(0)
     await toggles.scrollIntoViewIfNeeded()
     await expect(toggles).toBeInViewport()
-    await cardShot.screenshot({ path: path.join(SHOTS, `cloud-card-exec-off-closed-${browserName}.png`) })
+    await listShot.screenshot({ path: path.join(SHOTS, `cloud-row-exec-off-closed-${browserName}.png`) })
   } finally {
     fs.writeFileSync(boxConfig, original)
   }
   // Hosting back on: the user's Retry re-asks the companion and Cloud connects.
-  await card.getByRole('button', { name: 'Retry' }).click()
-  await expect(card).toHaveCount(0, { timeout: 90_000 })
+  await cloudRow.getByRole('button', { name: 'Retry' }).click()
+  await expect(cloudRow).toHaveCount(0, { timeout: 90_000 })
   await expect.poll(async () => {
     const s = await (await page.request.get('/api/hosts/status')).json() as { hosts: Array<{ host: string; connected: boolean }> }
     return s.hosts.find((h) => h.host === CLOUD)?.connected

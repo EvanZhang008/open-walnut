@@ -14,7 +14,7 @@ import path from 'node:path'
 import { test, expect, type Page } from '@playwright/test'
 import { draftCwdPill, loadHome, openDraft } from './draft-helpers'
 import { openBell, openRemoteHosts } from './host-problems-fixture-helpers'
-import { pickRail } from './banner-placement-helpers'
+import { pickRail } from './host-attention-helpers'
 
 const CLOUD = '__cloudbox__'
 /** PW_SHOTS=<dir> keeps a picture of each surface it checks. */

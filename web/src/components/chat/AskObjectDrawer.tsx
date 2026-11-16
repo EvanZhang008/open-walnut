@@ -549,7 +549,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
           })}
           isKnownProject={askDraft.isKnownProject}
           {...(saveError ? {
-            hostNotice: (
+            launchNotice: (
               <div className="draft-needs-folder" role="alert" data-testid="ask-object-save-error">
                 Could not create the task. {saveError}
               </div>

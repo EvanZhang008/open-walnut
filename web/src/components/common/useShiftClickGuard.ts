@@ -29,7 +29,11 @@ export function useShiftClickGuard(rowSelector: string): {
     // never reads as a move while a list that shrinks toward its anchored edge (a bottom-anchored
     // stack whose lower row left) still does: there the root's own top moves with the row. A row
     // moved when both its edges did; one that only grew or shrank (its note opened) stayed put.
-    const edges = new WeakMap<Element, [number, number]>();
+    // While its own entrance runs (a toast sliding down from the top edge) a row has no place yet:
+    // its edges are first taken once it stands still, so the entrance never reads as a move.
+    const edges = new WeakMap<Element, [number, number] | null>();
+    const entering = (row: Element) => typeof row.getAnimations === 'function'
+      && row.getAnimations().some((a) => a.playState === 'running' && 'animationName' in a);
     function scrolled(): number {
       let sum = 0;
       for (let el: Element | null = root; el && el !== document.documentElement; el = el.parentElement) sum += el.scrollTop;
@@ -69,8 +73,13 @@ export function useShiftClickGuard(rowSelector: string): {
           resize?.observe(row);
           observed.add(row);
           if (inside || now - lastDown < SHIFT_GUARD_MS) guard(row, now);
-        } else if (was[0] !== top && was[1] !== bottom) guard(row, now);
-        edges.set(row, [top, bottom]);
+        } else if (was !== null && was[0] !== top && was[1] !== bottom) guard(row, now);
+        if (!entering(row)) edges.set(row, [top, bottom]);
+        else {
+          edges.set(row, null);
+          // Its place is taken the moment it stands still, before anything can move it.
+          row.addEventListener('animationend', read, { once: true });
+        }
       }
     }
     read();

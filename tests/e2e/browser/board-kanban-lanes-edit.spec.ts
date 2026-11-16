@@ -200,12 +200,12 @@ test('C65: two moves into Resolved inside 8s keep two toasts, each completing it
   // It waits out the 8 s toast hold on purpose (9 s below), so 30 s leaves too little for the rest.
   test.setTimeout(60_000)
   const pane = await openBoard(page)
-  // The first move's toast sits in the window's bottom-left notice corner, which can cover a
-  // lane's last card. Move the lower of the two cards first, so the second one's More is never
+  // The first move's toast sits in the window's notice stack at the top, which can cover a
+  // lane's first card. Move the upper of the two cards first, so the second one's More is never
   // under that toast.
   const pair = [team.all[8], team.all[12]]
   const tops = await Promise.all(pair.map(async (id) => (await card(pane, id).boundingBox())!.y))
-  const [a, b] = tops[0]! > tops[1]! ? pair : [pair[1]!, pair[0]!]
+  const [a, b] = tops[0]! < tops[1]! ? pair : [pair[1]!, pair[0]!]
   for (const id of [a, b]) {
     const c = card(pane, id)
     await c.hover()

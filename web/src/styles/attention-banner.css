@@ -1,31 +1,16 @@
-/* The home attention banner (AttentionBanner + HostProblemRows). The card is
-   the setup banner's (.setup-banner in globals.css); existing variables only. */
+/* Host problem rows (HostProblemRows) and the local Claude Code section (SetupBanner), as the
+   notification panel and the first-use card show them; existing variables only. */
 
 .host-agent-fix { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; max-width: 100%; margin: 4px 0; }
 .host-agent-fix-button { flex: none; }
 .host-agent-fix-error { flex: 1 1 100%; color: var(--error); font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; max-height: 72px; overflow-y: auto; }
 /* On a row's or the local section's action line, beside the other buttons (rowActionsFor). */
-.attention-banner .hpb-row .host-agent-fix,
+.nfc-host-list .hpb-row .host-agent-fix,
 .ab-local .setup-alt .host-agent-fix { flex: 0 1 auto; margin: 0; }
-
-
-.attention-banner {
-  position: relative;
-  container-type: inline-size;
-  container-name: attention;
-  /* The WHOLE card is at most max(40% of its mount's container, 132px) (--ab-cap,
-     set by AttentionBanner). The card itself never scrolls: the host list is the
-     one scroll region and takes what the cap leaves (--hpb-max, useScrollBudget),
-     so the local section and the footer always show whole (N2). */
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
 
 .ab-local { flex: none; }
 .ab-local-alt { margin-top: 10px; }
-.ab-local + .hpb,
-.hpb-undo-row + .hpb { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.ab-local + .hpb { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
 /* The local x is LAST in its section (Tab order: actions, then the x) and ends
    the section's last line: never in the card's top-right corner (spec 5.1). */
 .ab-local-x { margin-left: auto; }
@@ -104,30 +89,6 @@
 .hpb-below:hover { color: var(--fg); text-decoration: underline; }
 /* The cue's kept place while the list is scrolled to its end (N8). */
 .hpb-below-slot { visibility: hidden; display: inline-flex; align-items: center; }
-/* Dismiss all: quieter than any fix (a muted text button, like Show details), after
-   the cue and 'and N more', far from the row x column (24px rule, C53) (N16). */
-.ab-dismiss-all {
-  padding: 0;
-  border: none;
-  background: none;
-  font-size: 12px;
-  color: var(--fg-muted);
-  cursor: pointer;
-  min-height: 24px;
-}
-.ab-dismiss-all:hover { color: var(--fg); text-decoration: underline; }
-
-/* Local section + host rows in one card: the local section keeps to its title,
-   its whole lead (it is the fix) and its controls; the host list scrolls. */
-.ab-both .ab-local { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
-.ab-both .ab-local > .setup-banner-header,
-.ab-both .ab-local > .setup-lead { flex: 0 0 100%; margin: 0; }
-.ab-both .ab-local .setup-alt { margin-top: 0; gap: 6px 8px; flex: 1 1 auto; }
-/* The helper sentence that opens a controls line goes; an action's error text stays. */
-.ab-both .ab-local .setup-alt > .text-muted:first-child { display: none; }
-.ab-both .ab-local + .hpb,
-.ab-both .hpb-undo-row + .hpb { margin-top: 8px; padding-top: 8px; }
-.ab-both .hpb-subhead-row { margin-bottom: 4px; }
 .hpb-rows {
   list-style: none;
   margin: 0;
@@ -173,18 +134,11 @@
 .hpb-rest { color: var(--fg-secondary, var(--fg-muted)); line-height: 1.45; }
 /* Words break between words; a command or a host name never splits mid-token
    unless it cannot fit a line on its own. */
-.attention-banner .hft-hint,
-.attention-banner .hft-headline,
-.attention-banner .hpb-message,
-.attention-banner .hpb-rest,
-.attention-banner .hpb-last,
 .nfc-host-list .hft-hint,
 .nfc-host-list .hft-headline,
 .nfc-host-list .hpb-message,
 .nfc-host-list .hpb-rest,
 .nfc-host-list .hpb-last { overflow-wrap: break-word; }
-.attention-banner code,
-.attention-banner .setup-command,
 .nfc-host-list code,
 .nfc-local-claude .setup-command { overflow-wrap: normal; word-break: normal; }
 
@@ -233,41 +187,6 @@
   text-decoration: underline;
 }
 .hpb-more:hover { color: var(--fg); }
-
-/* ── compact: the draft column mount ── */
-.attention-banner-compact {
-  margin: 0 0 8px;
-  padding: 8px 10px;
-}
-.attention-banner-compact .hpb-row { font-size: 11px; }
-
-/* ── Undo lines: a dismissed entry's place, same height, words first then Undo ── */
-.hpb-undo-row {
-  display: flex;
-  /* The held line reads in the middle of its old space (N3-13). */
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  overflow: hidden;
-  font-size: 12px;
-  color: var(--fg-muted);
-  max-height: 600px;
-  transition: min-height 150ms ease, max-height 150ms ease, opacity 150ms ease;
-}
-.hpb-undo-row.hpb-undo-collapsing { min-height: 0 !important; max-height: 0; opacity: 0; }
-@media (prefers-reduced-motion: reduce) { .hpb-undo-row { transition: none; } }
-.hpb-undo-text { min-width: 0; }
-.hpb-undo {
-  flex: none;
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--accent);
-  font-size: 12px;
-  cursor: pointer;
-  text-decoration: underline;
-}
-.hpb-undo:hover { color: var(--fg); }
 
 /* ── One-line rows (a mount whose cap is at its 132px floor: a phone's task band) ── */
 .hpb-single:not(.hpb-open) .hpb-body,
@@ -340,10 +259,8 @@
 .notification-badge-dot.is-host-warn { background: var(--warning); }
 /* System pane host lines take their dot's tone: red for a failed connect, warn for readiness (N3-15). */
 .notification-detail-value.nfc-daemon-status.error { color: var(--error); }
-/* The Ask Walnut slot is wide: rows keep their x near their words (N3-22). */
-.attention-banner[data-mount="slot"] { max-width: 720px; }
 .sidebar.collapsed .sidebar-host-dot { position: absolute; top: 6px; right: 6px; margin: 0; }
-/* HostBannerAnnouncer: read by screen readers, never seen. */
+/* HostProblemNotices: read by screen readers, never seen. */
 .hb-announcer {
   position: absolute;
   width: 1px;
@@ -361,7 +278,6 @@
    is also failing the same dot speaks for both (N12). `.is-host-warn` only names it. */
 /* One copy control in the card (local section and host rows): the text Copy /
    Copied button, a 24px hit target. */
-.attention-banner .setup-copy-btn,
 .nfc-host-list .setup-copy-btn,
 .nfc-local-claude .setup-copy-btn { min-height: 24px; font-size: 11px; display: inline-flex; align-items: center; }
 /* A row held to its height through an attempt (HostProblemRows useHeightLock): no animation, nothing spills. */

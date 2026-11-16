@@ -258,16 +258,15 @@
 }
 
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  /* N2-15: the host card on the phone home: 44 px targets, 12 px text. */
-  .app-shell-navigation .hpb :is(button, a[href], [role='button']),
-  .app-shell-navigation .hpb .hft-details,
-  .app-shell-navigation .ab-dismiss-all {
+  /* N2-15: a host problem row on the phone (the notification panel's All, Errors and System
+     lists): 44 px targets, 12 px text, over the dense desktop sizes. */
+  .notification-panel li.hpb-row :is(button, a[href], [role='button']),
+  .notification-panel li.hpb-row .hft-details {
     min-height: 44px;
     min-width: 44px;
     box-sizing: border-box;
   }
-  .app-shell-navigation .hpb :is(.hpb-count, .hpb-elapsed, .hpb-receipt, .hpb-subhead, .hpb-step, .hft-when, .hft-hint, .hft-more, .hpb-more),
-  .app-shell-navigation .attention-banner .hft-details {
+  .notification-panel li.hpb-row :is(.hpb-count, .hpb-elapsed, .hpb-receipt, .hpb-subhead, .hpb-step, .hft-when, .hft-hint, .hft-more, .hft-details, .hpb-more) {
     font-size: 12px;
   }
 }

@@ -18,7 +18,7 @@ import { installTimeTracker } from '@/utils/time-tracking';
 import { useAppCatalog, useTrackOpenedApp } from '@/apps/hooks';
 import { hydrateHostStatus } from '@/hooks/useHostStatus';
 import { startHostDismissPruner } from '@/utils/host-banner-dismiss';
-import { HostBannerAnnouncer } from '../common/HostBannerAnnouncer';
+import { HostProblemNotices } from '../common/HostProblemNotices';
 import { TransferDialogHost } from '../transfer/TransferDialogHost';
 import { ContentActionsHost } from '../content/ContentActionsHost';
 import { PHONE_LAYOUT_QUERY } from '@/hooks/usePhoneLayout';
@@ -356,7 +356,7 @@ function AppShellInner({ children }: AppShellProps) {
       </main>
       <NotificationToaster />
       <OperationErrorBridge />
-      <HostBannerAnnouncer />
+      <HostProblemNotices />
       <TransferDialogHost />
       <ContentActionsHost />
     </div>

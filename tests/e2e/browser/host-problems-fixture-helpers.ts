@@ -138,16 +138,6 @@ export async function openMoreGroup(page: Page, testId: string): Promise<Locator
   }
   return group
 }
-/** The Ask Walnut slot's card: only under slotLayout (the task panel hidden, the slot shown). */
-export const slotBanner = (page: Page): Locator => page.locator('.main-page-chat [data-testid="attention-banner"]')
-/** The task panel's card (the default layout). */
-export const tasksBanner = (page: Page): Locator => page.locator('.todo-panel [data-testid="attention-banner"][data-mount="tasks"]')
-/**
- * Any attention card inside the notification panel. There is none, on any
- * section: System lists each host once instead (its Remote hosts block), so
- * specs assert this count stays 0.
- */
-export const panelBanner = (page: Page): Locator => page.locator('.notification-panel [data-testid="attention-banner"]')
 /** The rail's bell (the notification panel's opener and its dot). */
 export const bell = (page: Page): Locator => page.locator('.sidebar-notification-btn')
 
@@ -160,8 +150,6 @@ export async function openBell(page: Page): Promise<Locator> {
   await expect(panel).toBeVisible({ timeout: 10_000 })
   return panel
 }
-/** A host's row in THE banner, wherever it is mounted (the slot, or the draft column while a draft borrows the slot). */
-export const bannerRow = (page: Page, host: string): Locator => page.locator(`[data-testid="attention-banner"] li.hpb-row[data-host="${host}"]`)
 export const picker = (page: Page): Locator => page.locator('.session-path-selector')
 export const hostTab = (page: Page, host: string): Locator => picker(page).locator(`.sps-host-tab[data-host="${host}"]`)
 

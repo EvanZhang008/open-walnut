@@ -1,116 +1,40 @@
 /**
- * Where the attention banner is on screen, and who speaks for it when it is not.
+ * Who speaks for a host or Claude Code problem: never a card on the page. The
+ * problem is a notification: a row at the top of the notification panel's All
+ * and Errors views (NotificationProblems), a toast at the top when it arrives
+ * (HostProblemToasts), a dot on the bell, and a warn dot on the rail's Settings
+ * entry (2026-11-16, the user: "this shoudl not show on top of quick chat
+ * pannel", "please unified, shodl as notificaiton in the notificaiton bar").
+ * tests/web/app-alert-placement-guard.test.ts fails on an alert mounted in a
+ * chat, session or task column.
  *
- * Placement is the IN-PAGE position MainPage publishes: the task panel when it
- * shows (the primary mount), else the Ask Walnut slot, else the leftmost draft
- * column, else nowhere. The owner is the one mount that renders the card right
- * now: the in-page placement on the home route, else none (MainPage stays
- * mounted, hidden, on every other route, so its placement says nothing there).
- * The notification panel never holds the card: a problem host is its card row
- * at the top of All and Errors (NotificationProblems), and System lists every
- * host once (NotificationHostRow).
- *
- * The rail Settings dot and the bell dot read the PAGE rule only (placement +
- * pathname), never whether the panel is open: the panel is a passing overlay
- * and opening it must not make the rail blink.
+ * The dots read the problem and the route only, never whether the panel is
+ * open: the panel is a passing overlay and opening it must not make the rail blink.
  */
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
-import { useLocation } from 'react-router-dom';
 import { getAllHostStatus, serverNow, subscribeHostStatus } from '@/hooks/useHostStatus';
 import { nextBanner, type BannerInput } from '@/utils/attention-banner-model';
 import { getHostDismissed, subscribeHostDismissed } from '@/utils/host-banner-dismiss';
 import { getPromptedHosts, getUserEngagedHosts, subscribeUserRetry } from '@/utils/host-user-retrying';
-
-export type HostBannerPlacement = 'tasks' | 'slot' | 'draft' | 'none';
-export type HostBannerOwner = HostBannerPlacement;
-export type BannerMount = Exclude<HostBannerOwner, 'none'>;
-
-let placement: HostBannerPlacement = 'slot';
-const listeners = new Set<() => void>();
-const notify = (): void => { for (const l of listeners) l(); };
-
-export function setHostBannerPlacement(next: HostBannerPlacement): void {
-  if (next === placement) return;
-  placement = next;
-  notify();
-}
-
-export function getHostBannerPlacement(): HostBannerPlacement {
-  return placement;
-}
-
-function subscribe(cb: () => void): () => void {
-  listeners.add(cb);
-  return () => { listeners.delete(cb); };
-}
-
-/** Placement changes (the owner's store input; the pathname is the router's). */
-export const subscribeHostBannerOwner = subscribe;
-
-export function useHostBannerPlacement(): HostBannerPlacement {
-  return useSyncExternalStore(subscribe, getHostBannerPlacement, getHostBannerPlacement);
-}
-
-// A new host row the card on screen is holding back (the pointer rests where it
-// would move things, spec 5.5): the bell carries the host reason until it lands.
-let deferredRows = false;
-
-export function setBannerRowsDeferred(on: boolean): void {
-  if (on === deferredRows) return;
-  deferredRows = on;
-  notify();
-}
-
-export function getBannerRowsDeferred(): boolean {
-  return deferredRows;
-}
-
-export function useBannerRowsDeferred(): boolean {
-  return useSyncExternalStore(subscribe, getBannerRowsDeferred, getBannerRowsDeferred);
-}
-
-/**
- * Placement rule: the task panel when it shows, else the slot, else the
- * leftmost draft column, else none. The two-argument form is the old
- * (chatVisible, hasDraftColumn) call, kept so a caller mid-migration reads the same.
- */
-export function placementFor(todoVisible: boolean, chatVisible: boolean, hasDraftColumn?: boolean): HostBannerPlacement {
-  if (hasDraftColumn === undefined) return todoVisible ? 'slot' : chatVisible ? 'draft' : 'none';
-  return todoVisible ? 'tasks' : chatVisible ? 'slot' : hasDraftColumn ? 'draft' : 'none';
-}
-
-/** Which mount renders the card: the in-page placement on Home, else none. */
-export function ownerFor(where: HostBannerPlacement, pathname: string): HostBannerOwner {
-  return pathname === '/' ? where : 'none';
-}
-
-export function useHostBannerOwner(): HostBannerOwner {
-  const where = useHostBannerPlacement();
-  const { pathname } = useLocation();
-  return ownerFor(where, pathname);
-}
 
 /** Settings > Remote hosts (or one host's row there): the user is looking at those rows. */
 export function onRemoteHostsPane(pathname: string, hash: string): boolean {
   return pathname === '/settings' && (hash === '#remote-hosts' || hash.startsWith('#rh-host-'));
 }
 
-/**
- * The rail dot shows when a host needs attention and no banner is on screen
- * (another route counts as none), except on the remote hosts pane itself.
- */
-export function railDotShows(attention: boolean, where: HostBannerPlacement, pathname: string, hash = ''): boolean {
-  return attention && (where === 'none' || pathname !== '/') && !onRemoteHostsPane(pathname, hash);
+/** The rail dot shows while a host needs attention, except on the remote hosts pane itself. */
+export function railDotShows(attention: boolean, pathname: string, hash = ''): boolean {
+  return attention && !onRemoteHostsPane(pathname, hash);
 }
 
-// ── The bell: a dot when no card on the page says it ──
+// ── The bell: a dot for a host or Claude Code problem ──
 
 export type BellReason = 'hosts' | 'local' | 'both' | null;
 
-/** hostUncovered / localUncovered: the problem exists and no in-page card shows it (useAttentionDots). */
-export function bellDotReason(hostUncovered: boolean, localUncovered: boolean): BellReason {
-  if (hostUncovered && localUncovered) return 'both';
-  return hostUncovered ? 'hosts' : localUncovered ? 'local' : null;
+/** hosts / local: the problem exists and the user is not on the page that lists it (useAttentionDots). */
+export function bellDotReason(hosts: boolean, local: boolean): BellReason {
+  if (hosts && local) return 'both';
+  return hosts ? 'hosts' : local ? 'local' : null;
 }
 
 const REASON_TEXT: Record<Exclude<BellReason, null>, string> = {
@@ -169,13 +93,13 @@ export function bellPresentation(i: BellPresentationInput): BellPresentation {
   return { ariaLabel, title: i.quiet ? `${i.quietLabel}; ${ariaLabel}` : ariaLabel, dot, cornerDot, dotKind };
 }
 
-// ── Host attention off the card's own model ──
+// ── Host attention off the problem-row model ──
 
 type AttentionInput = Pick<BannerInput, 'statuses' | 'dismissed' | 'now' | 'engaged' | 'prompted'>;
 
 /**
- * Would the banner give any host a row right now? The SAME model the banner
- * runs (from an empty state: no row is on screen for the rail), so a dismissed
+ * Would any host get a problem row right now? The SAME model the notification
+ * panel's rows follow (from an empty state), so a dismissed
  * row, a discovered host nobody reached for, and a reconnect younger than
  * 2 minutes light nothing. `wakeAt` is the next time the answer can flip
  * without a new frame (the 2-minute reconnect line).
@@ -218,7 +142,7 @@ function useAttentionRead<T extends boolean | string>(read: () => T, fallback: T
   return value;
 }
 
-/** The rail's boolean: the card would show a host problem row. */
+/** The rail's and the bell's boolean: some host has a problem row. */
 export function useHostAttentionNeeded(): boolean {
   return useAttentionRead(readOn, false);
 }
@@ -231,11 +155,4 @@ export function useHostAttentionNeeded(): boolean {
  */
 export function landingSectionFor(actionCount: number): 'action' | 'all' {
   return actionCount > 0 ? 'action' : 'all';
-}
-
-/** Test hook. */
-export function __resetHostBannerPlacementForTests(): void {
-  placement = 'slot';
-  deferredRows = false;
-  listeners.clear();
 }

@@ -1,5 +1,5 @@
-/* ApprovalPrompts: a script is blocked on these, so they sit nearest the corner of the one
-   bottom-left stack every notice shares (corner-stack.css places it). */
+/* ApprovalPrompts: a script is blocked on these, so they sit nearest the top edge of the one
+   stack every notice shares at the top of the window (corner-stack.css places it). */
 .approval-stack {
   display: flex;
   flex-direction: column;

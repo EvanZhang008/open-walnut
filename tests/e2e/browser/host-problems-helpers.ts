@@ -1,5 +1,5 @@
 /**
- * Shared helpers for the host-problems specs (banner + draft surfaces).
+ * Shared helpers for the host-problems specs (the notification panel's problem rows, Settings and the draft surfaces).
  * Host statuses are shaped like the server's buildHostStatus frames; the
  * hydrate is answered through page.route and each change is a `host:status`
  * frame dispatched on the app's own captured socket. The aliases here are
@@ -336,19 +336,6 @@ export async function setup(page: Page, hosts: HS[], local?: LocalState, opts: {
   return h
 }
 
-/** THE card on Home: the task panel mount (the default layout shows the task panel). */
-export const banner = (page: Page): Locator => page.locator('[data-testid="attention-banner"][data-mount="tasks"]')
-/** Existing body/action scenarios explicitly open the new default-collapsed section. */
-export async function expandSystemAttention(page: Page): Promise<void> {
-  const disclosure = page.locator('.todo-panel .system-attention-toggle');
-  await expect(disclosure).toBeVisible();
-  if (await disclosure.getAttribute('aria-expanded') === 'false') await disclosure.click();
-}
-/** Every attention banner on the page, wherever it is mounted. */
-export const anyBanner = (page: Page): Locator => page.locator('[data-testid="attention-banner"]')
-/** Host rows only (an undo row in a dismissed row's place carries no data-host). */
-export const rows = (page: Page): Locator => banner(page).locator('li.hpb-row[data-host]')
-export const row = (page: Page, host: string): Locator => banner(page).locator(`li.hpb-row[data-host="${host}"]`)
 export const storedKeys = (page: Page): Promise<string[]> =>
   page.evaluate((k) => JSON.parse(localStorage.getItem(k) ?? '[]') as string[], DISMISS_KEY)
 

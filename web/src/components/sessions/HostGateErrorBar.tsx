@@ -18,7 +18,6 @@ import {
 } from '@open-walnut/host-problem';
 import { serverNow, useHostStatus } from '@/hooks/useHostStatus';
 import { useIsReplicaServer } from '@/hooks/useServerRole';
-import { markGateBarShown } from '@/utils/host-gate-shown';
 import { useHostActions, RETRY_FAILED_TEXT, CHECK_FAILED_TEXT } from '@/hooks/useHostActions';
 import { HostFailureText } from '@/components/hosts/HostFailureText';
 import { InlineCodeText } from '@/components/common/InlineCodeText';
@@ -69,8 +68,6 @@ export function HostGateErrorBar({ gate, draftHost, label, onClear, onStartAnywa
   const actions = useHostActions(alias);
   const replica = useIsReplicaServer();
   const [readyUntil, setReadyUntil] = useState<number | null>(null);
-  // While this bar speaks for the host, the compact banner above it stays quiet about it.
-  useEffect(() => markGateBarShown(alias), [alias]);
 
   // A different host on the draft: this refusal no longer applies.
   useEffect(() => { if ((draftHost ?? '') !== alias) onClear(); }, [draftHost, alias, onClear]);

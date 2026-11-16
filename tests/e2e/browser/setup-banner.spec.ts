@@ -1,7 +1,16 @@
+/**
+ * This machine's Claude Code / AI provider notice: quiet while setup is fine,
+ * pending or unknown, and a notice with its Settings link or its x when it is
+ * not. On Home it lives in the notification panel only (All and Errors lead
+ * with it, nfc-local-claude); `.setup-banner` is the first-use screen's form,
+ * which no page here may show.
+ */
 import fs from 'node:fs/promises'
-import { expect, test, type Page, type TestInfo } from '@playwright/test'
+import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { openAskWalnutDrawer, openChatOnLoad } from './draft-helpers'
 import { showEverything } from './todo-panel-helpers'
+import { openBell } from './host-problems-fixture-helpers'
+import { closePanel, panelLocalCard, pickRail } from './host-attention-helpers'
 
 const ready = { hasReadyProvider: true, claudeCliAvailable: true }
 
@@ -32,6 +41,20 @@ async function settleHealth(page: Page) {
   }))
 }
 
+/** Open the bell on All, where the local notice leads when it shows; returns the notice. */
+async function openLocalNotice(page: Page): Promise<Locator> {
+  await openBell(page)
+  await pickRail(page, 'All')
+  return panelLocalCard(page)
+}
+
+/** No local notice: none on the page, none in the notification panel. */
+async function expectQuiet(page: Page) {
+  await expect(page.locator('.setup-banner')).toHaveCount(0)
+  await expect(await openLocalNotice(page)).toHaveCount(0)
+  await closePanel(page, 'escape')
+}
+
 async function openHome(page: Page, baseURL: string, waitForHealth = true) {
   const healthLoaded = waitForHealth ? page.waitForResponse('**/api/system/health') : undefined
   await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
@@ -54,7 +77,7 @@ test('ready Claude Code stays quiet through an existing session, new chat, and r
   await openHome(page, baseURL!)
   await showEverything(page)
   await screenshot(page, testInfo, 'home')
-  await expect(page.locator('.setup-banner')).toHaveCount(0)
+  await expectQuiet(page)
 
   await page.locator('.todo-search-input').fill('pw-quote-session')
   const task = page.locator('.todo-panel-item[data-task-id="pw-task-quote"]')
@@ -72,7 +95,7 @@ test('ready Claude Code stays quiet through an existing session, new chat, and r
   await (await healthReloaded).finished()
   await settleHealth(page)
   await expect(session).toBeVisible()
-  await expect(page.locator('.setup-banner')).toHaveCount(0)
+  await expectQuiet(page)
   await openAskWalnutDrawer(page)
   await page.getByTestId('ask-walnut-new').click()
   await expect(page.getByTestId('ask-walnut-draft')).toBeVisible()
@@ -86,7 +109,7 @@ test('an auto-detected provider shows no account notice', async ({ page, baseURL
     credentialDetail: 'profile: example-profile-with-a-long-display-name',
   } }))
   await openHome(page, baseURL!)
-  await expect(page.locator('.setup-banner')).toHaveCount(0)
+  await expectQuiet(page)
 })
 
 test('pending health stays quiet and incomplete setup keeps its Settings link', async ({ page, baseURL }, testInfo) => {
@@ -96,19 +119,23 @@ test('pending health stays quiet and incomplete setup keeps its Settings link', 
     await pending
     await route.fulfill({ json: { hasReadyProvider: false, claudeCliAvailable: false } })
   })
+  let local: Locator
   try {
     await openHome(page, baseURL!, false)
     await expect(page.locator('.setup-banner')).toHaveCount(0)
+    // The panel open while the health is still unknown: no notice yet.
+    local = await openLocalNotice(page)
+    await expect(local).toHaveCount(0)
   } finally {
     release()
   }
-  const banner = page.getByTestId('setup-banner-install')
-  // On Home the card sits in the task panel's folded System attention section.
-  const toggle = page.getByTestId('system-attention').locator('.system-attention-toggle')
-  if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click()
-  await expect(banner).toBeVisible()
+  // The answer arrives with the panel open: the notice leads All.
+  const banner = local!.getByTestId('setup-banner-install')
+  await expect(banner).toBeVisible({ timeout: 10_000 })
+  await expect(page.locator('.setup-banner')).toHaveCount(0)
   await screenshot(page, testInfo, 'incomplete-setup')
   await banner.getByRole('button', { name: 'Settings' }).click()
+  await expect(page.locator('.notification-panel')).toHaveCount(0)
   await expect(page).toHaveURL(/\/settings#providers$/)
   await expect(page.locator('.settings-layout')).toBeVisible()
   // Pane mode: the deep link opens Advanced, where the API provider is folded.
@@ -125,36 +152,38 @@ test('a failed health request does not invent a setup warning', async ({ page, b
   await (await healthReloaded).finished()
   await settleHealth(page)
   await expect(page.getByTestId('ask-walnut-slot')).toBeVisible()
-  await expect(page.locator('.setup-banner')).toHaveCount(0)
+  await expectQuiet(page)
 })
 
 // Local models: Walnut's calls on Ollama, sessions on another engine. Claude Code is
-// missing and nothing needs it, so no card asks for it; Ollama down shows its own card.
+// missing and nothing needs it, so no notice asks for it; Ollama down shows its own notice.
 const localModels = {
   hasReadyProvider: true, claudeCliAvailable: false, claudeCodeNeeded: false,
   mainProvider: 'ollama', mainProviderLocal: true, credentialSource: 'config',
   credentialDetail: 'ollama (http://localhost:11434)',
 }
 
-test('local models: no Claude Code card while Ollama answers, a provider card when it stops', async ({ page, baseURL }, testInfo) => {
+test('local models: no Claude Code notice while Ollama answers, a provider notice when it stops', async ({ page, baseURL }, testInfo) => {
   test.setTimeout(120_000)
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   let health: Record<string, unknown> = localModels
   await page.route('**/api/system/health', route => route.fulfill({ json: health }))
   await openHome(page, baseURL!)
+  await openLocalNotice(page)
   await expect(page.getByTestId('setup-banner-install')).toHaveCount(0)
   await expect(page.getByTestId('setup-banner-provider')).toHaveCount(0)
   await screenshot(page, testInfo, 'local-models-ready')
+  await closePanel(page, 'escape')
 
   health = { ...localModels, hasReadyProvider: false, credentialSource: 'none', credentialDetail: 'http://localhost:11434' }
   const reloaded = page.waitForResponse('**/api/system/health')
   await page.reload()
   await (await reloaded).finished()
   await settleHealth(page)
-  const toggle = page.locator('.system-attention-toggle')
-  if (await toggle.count() && await toggle.getAttribute('aria-expanded') === 'false') await toggle.click()
-  const card = page.getByTestId('setup-banner-provider')
+  const local = await openLocalNotice(page)
+  await expect(local).toHaveAttribute('data-kind', 'provider')
+  const card = local.getByTestId('setup-banner-provider')
   await expect(card).toBeVisible()
   await expect(card).toContainText('Walnut runs on Ollama, and it is not answering at http://localhost:11434.')
   await expect(card).not.toContainText('Claude Code')
@@ -163,5 +192,6 @@ test('local models: no Claude Code card while Ollama answers, a provider card wh
 
   await card.getByRole('button', { name: 'Dismiss AI provider notice' }).click()
   await expect(page.getByTestId('setup-banner-provider')).toHaveCount(0)
+  await expect(local).toHaveCount(0)
   expect(errors).toEqual([])
 })

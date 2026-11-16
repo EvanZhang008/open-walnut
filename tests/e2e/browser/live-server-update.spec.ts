@@ -15,7 +15,7 @@ import fs from 'node:fs'
 import { test, expect, type Page, type WebSocketRoute } from '@playwright/test'
 import { isolatePrefs } from './host-problems-helpers'
 import { loadApp, openBell } from './host-problems-fixture-helpers'
-import { healthyGitSync, railButton } from './banner-placement-helpers'
+import { healthyGitSync, railButton } from './host-attention-helpers'
 
 const SHOTS = process.env.LIVE_UPDATE_SHOTS ?? '/tmp/live-server-update/shots'
 test.describe.configure({ timeout: 90_000 })

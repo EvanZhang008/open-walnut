@@ -33,7 +33,6 @@ const PREDATES = new Set([
   'phone-home-r4.spec.ts',
   'phone-pages.spec.ts',
   'show-earlier-scroll-anchor.spec.ts',
-  'system-attention.spec.ts',
   'task-url-restoration.spec.ts',
 ]);
 

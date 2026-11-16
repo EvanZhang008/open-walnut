@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import { test, expect, type Page } from '@playwright/test'
 import { isolatePrefs } from './host-problems-helpers'
 import { loadApp } from './host-problems-fixture-helpers'
-import { healthyGitSync } from './banner-placement-helpers'
+import { healthyGitSync } from './host-attention-helpers'
 
 const SHOTS = '/tmp/mac-update-unified/shots'
 test.use({ viewport: { width: 1280, height: 840 }, deviceScaleFactor: 1 })

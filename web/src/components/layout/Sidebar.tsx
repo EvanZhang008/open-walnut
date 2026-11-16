@@ -29,7 +29,7 @@ import { useRailPeek } from './useRailPeek';
 import { RailItemPill } from './RailItemPill';
 import { sideBarPageOf, toggleSideBarPane, usePageSideBar } from './page-side-bar';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
-import { bellPresentation } from '@/utils/host-banner-placement';
+import { bellPresentation } from '@/utils/host-attention';
 import { useAttentionDots } from '@/hooks/useAttentionDots';
 import { useLocalClaudeRecheck } from '@/utils/local-claude-recheck';
 import { hostSettingsHref } from '@/utils/host-settings-nav';
@@ -82,9 +82,8 @@ export function Sidebar({
   const railShown = useRailItemsShown();
   const navigate = useNavigate();
   const location = useLocation();
-  // No banner on the page (task panel, slot and draft column all hidden, or
-  // another route): a host problem still shows, as a warn dot on the Settings
-  // entry, and the bell carries a dot for hosts or the local Claude Code.
+  // A host problem is a notification, never a card on the page: a warn dot on the
+  // Settings entry, and the bell carries a dot for hosts or the local Claude Code.
   const { railSettingsDot: hostAttention, bellReason } = useAttentionDots({ pathname: location.pathname, hash: location.hash, health, healthLoading });
   // The sign-in re-check lives here, not in a card: it runs whichever surface is on screen.
   useLocalClaudeRecheck(health, healthLoading);

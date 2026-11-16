@@ -89,7 +89,7 @@ function bareEnders(src: string): string[] {
 
 describe('vault lock', () => {
   it('finds the specs it knows of (the matchers still match)', () => {
-    for (const known of ['passwords.spec.ts', 'extension-passwords.spec.ts', 'extension-ask-panel.spec.ts', 'vault-live.spec.ts', 'approvals.spec.ts']) {
+    for (const known of ['passwords.spec.ts', 'extension-passwords.spec.ts', 'extension-ask-panel.spec.ts', 'vault-live.spec.ts']) {
       expect(users, known).toContain(known);
     }
     // Each kind of ender is still found somewhere, so a renamed button or route shows here.

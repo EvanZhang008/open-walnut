@@ -16820,9 +16820,9 @@ a.task-kebab-info:hover {
 
 /* ===== Cron Toast Notifications ===== */
 
-/* ===== Unified Notification Toaster (top-right) ===== */
+/* ===== Unified Notification Toaster ===== */
 
-/* Placed by the corner stack (corner-stack.css) with every other notice. */
+/* Placed by the notice stack at the top of the window (corner-stack.css) with every other notice. */
 .notification-toaster {
   display: flex;
   flex-direction: column;
@@ -16854,9 +16854,10 @@ a.task-kebab-info:hover {
   transform: translateY(-1px);
 }
 
+/* Down from the top edge, where the stack sits (corner-stack.css). */
 @keyframes notification-toast-in {
-  from { opacity: 0; transform: translateX(-40px); }
-  to { opacity: 1; transform: translateX(0); }
+  from { opacity: 0; transform: translateY(-12px); }
+  to { opacity: 1; transform: none; }
 }
 
 .notification-toast-header {

@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { isolatePrefs } from './host-problems-helpers'
 import { loadApp } from './host-problems-fixture-helpers'
-import { healthyGitSync } from './banner-placement-helpers'
+import { healthyGitSync } from './host-attention-helpers'
 
 const SHOTS = 'test-results/update-notice-dock'
 const STATUS = /\/api\/system\/desktop-update(\?|$)/

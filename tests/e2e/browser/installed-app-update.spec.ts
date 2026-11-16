@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import { test, expect, type Page, type Route } from '@playwright/test'
 import { isolatePrefs } from './host-problems-helpers'
 import { loadApp } from './host-problems-fixture-helpers'
-import { healthyGitSync } from './banner-placement-helpers'
+import { healthyGitSync } from './host-attention-helpers'
 
 const SHOTS = '/tmp/mac-update-fix/shots'
 const STATUS = /\/api\/system\/desktop-update(\?|$)/

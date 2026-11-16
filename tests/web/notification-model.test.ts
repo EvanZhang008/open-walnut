@@ -18,7 +18,7 @@ import {
   sectionOf, sectionCounts, effectiveTs, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf, formatRelative,
   linkTargetOf, resolvedLabelOf, categoryOf, presentError, groupErrorsByCategory, actionOf,
-  systemIssueCount, errorsBadgeCount, causeLabelOf, partitionErrorsByCause, attentionBadgeCount, mergeLoadedFeed,
+  systemIssueCount, errorsBadgeCount, causeLabelOf, hostOfCauseKey, partitionErrorsByCause, setCauseHostLabelResolver, attentionBadgeCount, mergeLoadedFeed,
 } from '../../web/src/contexts/notifications/notification-model';
 import { SHOULD_TOAST } from '../../web/src/contexts/notifications/types';
 import type { Notification, NotificationKind, NotificationSeverity } from '../../web/src/contexts/notifications/types';
@@ -729,6 +729,32 @@ describe('causeLabelOf', () => {
     expect(causeLabelOf('plugin:acme')).toBeNull();
     expect(causeLabelOf('host:')).toBeNull();
     expect(causeLabelOf('')).toBeNull();
+  });
+
+  it('names the host by its label, and by its alias when the store does not know it (C57)', () => {
+    const labels: Record<string, string> = { devbox: 'Dev box' };
+    expect(causeLabelOf('host:devbox', (a) => labels[a])).toBe("Can't reach Dev box");
+    expect(causeLabelOf('host:netbox', (a) => labels[a])).toBe("Can't reach netbox");
+    expect(causeLabelOf('host:devbox', () => '  ')).toBe("Can't reach devbox");
+    expect(causeLabelOf('host:devbox', null)).toBe("Can't reach devbox");
+  });
+
+  it('the group label uses the registered host store reader, and the alias without one (C57)', () => {
+    const err = (dedupKey: string, t: number) => n({ kind: 'operation-error', severity: 'error', dedupKey, causeKey: 'host:devbox', timestamp: new Date(t).toISOString() });
+    const items = [err('a', 2_000), err('b', 1_000)];
+    setCauseHostLabelResolver((a) => (a === 'devbox' ? 'Dev box' : undefined));
+    try {
+      expect(partitionErrorsByCause(items).causes.map((c) => c.label)).toEqual(["Can't reach Dev box"]);
+    } finally {
+      setCauseHostLabelResolver(null);
+    }
+    expect(partitionErrorsByCause(items).causes.map((c) => c.label)).toEqual(["Can't reach devbox"]);
+  });
+
+  it('reads the alias out of a host cause key, and nothing out of any other shape', () => {
+    expect(hostOfCauseKey('host:devbox')).toBe('devbox');
+    expect(hostOfCauseKey('host: ')).toBeNull();
+    expect(hostOfCauseKey('route:/api/x')).toBeNull();
   });
 });
 

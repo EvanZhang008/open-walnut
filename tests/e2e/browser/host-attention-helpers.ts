@@ -1,19 +1,17 @@
 /**
- * Shared helpers for the banner-placement specs (BP-C<n>): the attention card
- * lives in the task panel on Home (data-mount="tasks") and falls back to the
- * slot or the draft column only while the task panel is hidden. The
- * notification panel never holds the card. What is broken right now is an
- * error: All and the all-errors view lead with the problems block
- * (nfc-problems): this machine's Claude Code notice while it shows, then the
- * Remote hosts problem card listing each host the Home card has a row for (a
- * row dismissed on the card is left out), as that row (dense, same headline,
- * buttons and Show details, no x) and in the card's order, with the feed
- * errors that host caused right under it; the Errors badge counts each of
+ * Shared helpers for the specs about where a host or Claude Code problem
+ * speaks (host-attention.ts): never a card on the page. What is broken right
+ * now is an error: All and the all-errors view of the notification panel lead
+ * with the problems block (nfc-problems): this machine's Claude Code notice
+ * while it shows, then the Remote hosts problem list, one row per problem host
+ * (dense, headline, Retry, Show details and an x that dismisses it), with the
+ * feed errors that host caused right under it; the Errors badge counts each of
  * them once. The System section still lists every host once (its Remote hosts
- * block, the inventory, which ignores dismissals), a problem host as its card
- * row and every other host as a plain status line, and its badge counts git
- * sync and the search index only. The
- * bell opens the panel on Needs Action when an ask waits, else on All.
+ * block, the inventory, which ignores dismissals and draws no x), a problem
+ * host as its row and every other host as a plain status line, and its badge
+ * counts git sync and the search index only. A new problem is also a toast
+ * (HostProblemNotices). The bell opens the panel on Needs Action when an ask
+ * waits, else on All.
  * Host frames and local health are routed client-side (host-problems-helpers.ts),
  * so no remote host is dialed and nothing reaches a real server beyond the
  * fixture; bpSetup lists the routed hosts in the health, as the server lists
@@ -22,16 +20,15 @@
  */
 import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import {
-  CHAT_VISIBLE_KEY, anyBanner, banner, connected, expandSystemAttention, failed, outdated, setup, signedOut, type HS, type Hosts, type LocalState,
+  CHAT_VISIBLE_KEY, connected, failed, outdated, setup, signedOut, type HS, type Hosts, type LocalState,
 } from './host-problems-helpers'
-import { bell, openBell, panelBanner } from './host-problems-fixture-helpers'
+import { bell, openBell } from './host-problems-fixture-helpers'
 import { presetPanelView } from './todo-panel-helpers'
 
-export const BP_SHOTS = '/tmp/walnut-banner-placement/shots'
 
 /**
  * The fixtures/host-problems.json set as client frames, in Settings order:
- * devbox healthy, buildbox claude_outdated (never a banner row), signbox
+ * devbox healthy, buildbox claude_outdated (never a problem row), signbox
  * signed out, keybox auth, certbox cert_expired, netbox unreachable.
  */
 export function fixtureHosts(): HS[] {
@@ -43,17 +40,17 @@ export function fixtureHosts(): HS[] {
 /** The model's order for fixtureHosts(): connect failures first (Settings order), readiness second. */
 export const FIXTURE_ORDER = ['keybox', 'certbox', 'netbox', 'signbox']
 
-/** Every host row of a card as `host|type|kind` (undo rows carry no data-host). */
-export function triples(card: Locator): Promise<string[]> {
-  return card.locator('li.hpb-row[data-host]').evaluateAll((els) =>
+/** Every host row of a list as `host|type|kind`. */
+export function triples(list: Locator): Promise<string[]> {
+  return list.locator('li.hpb-row[data-host]').evaluateAll((els) =>
     els.map((e) => `${e.getAttribute('data-host')}|${e.getAttribute('data-type')}|${e.getAttribute('data-kind')}`))
 }
-export const hostsOf = (card: Locator): Promise<Array<string | null>> =>
-  card.locator('li.hpb-row[data-host]').evaluateAll((els) => els.map((e) => e.getAttribute('data-host')))
-export const cardRow = (card: Locator, host: string): Locator => card.locator(`li.hpb-row[data-host="${host}"]`)
+export const hostsOf = (list: Locator): Promise<Array<string | null>> =>
+  list.locator('li.hpb-row[data-host]').evaluateAll((els) => els.map((e) => e.getAttribute('data-host')))
+export const cardRow = (list: Locator, host: string): Locator => list.locator(`li.hpb-row[data-host="${host}"]`)
 /** The System section's Remote hosts block (every configured host once). */
 export const systemHosts = (page: Page): Locator => page.locator('.notification-panel [data-testid="nfc-remote-hosts"]')
-/** A problem host's row in the System list: the Home card's row for that host. */
+/** A problem host's row in the System list (the same row the problems block draws, without its x). */
 export const systemHostRow = (page: Page, host: string): Locator => systemHosts(page).locator(`li.hpb-row[data-host="${host}"]`)
 /** A host's plain status line in the System list (healthy, disabled, off, connecting, a version floor). */
 export const systemHostLine = (page: Page, host: string): Locator => systemHosts(page).locator(`li.nfc-daemon-row[data-host="${host}"]`)
@@ -70,15 +67,15 @@ export const panelProblems = (page: Page): Locator => page.locator('.notificatio
  * never holds it.
  */
 export const panelLocalCard = (page: Page): Locator => page.locator('.notification-panel [data-testid="nfc-local-claude"]')
-/** The problems block's Remote hosts card: each host the Home card has a row for (dismissed rows left out). */
+/** The problems block's Remote hosts list: each host with a problem row (dismissed rows left out). */
 export const problemHosts = (page: Page): Locator => page.locator('.notification-panel [data-testid="nfc-problem-hosts"]')
-/** A problem host's row in the problems block: the Home card's row for that host. */
+/** A problem host's row in the problems block. */
 export const problemRow = (page: Page, host: string): Locator => problemHosts(page).locator(`li.hpb-row[data-host="${host}"]`)
 /** The feed errors a problem host caused, right under its row (one collapsed group). */
 export const problemCards = (page: Page, host: string): Locator => problemHosts(page).locator(`li.nfc-problem-cards[data-host-cards="${host}"]`)
 /**
- * The hosts the problems block gives a row, in its order: the Home card's
- * (connect failures first, then readiness, each in Settings order; FIXTURE_ORDER).
+ * The hosts the problems block gives a row, in its order: connect failures
+ * first, then readiness, each in Settings order (FIXTURE_ORDER).
  */
 export const problemRowHosts = (page: Page): Promise<Array<string | null>> => hostsOf(problemHosts(page))
 export const toolbarHide = (page: Page): Locator => page.locator('.todo-panel-toolbar .todo-panel-hide')
@@ -88,27 +85,15 @@ export const railButton = (page: Page, label: string): Locator =>
 export const systemBadge = (page: Page): Locator => railButton(page, 'System').locator('.nfc-rail-badge')
 /** The Errors rail entry's count: the feed's error cards, each problem host, and the local notice while it shows. */
 export const errorsBadge = (page: Page): Locator => railButton(page, 'Errors').locator('.nfc-rail-badge')
-/** Any attention mount inside the notification panel: there is none on any section. */
-export const panelMount = (page: Page): Locator => page.locator('.notification-panel .ab-mount')
+/**
+ * A host problem row anywhere but the notification panel: there is none (no
+ * card in the task panel, the Ask Walnut slot or a draft column, 2026-11-16).
+ */
+export const hostRowsOutsidePanel = (page: Page): Locator => page.locator('li.hpb-row:not(.notification-panel li.hpb-row)')
 export const settingsEntry = (page: Page): Locator => page.getByTestId('sidebar-core-app-settings')
 export const settingsDot = (page: Page): Locator => settingsEntry(page).locator('.sidebar-host-dot')
 export const bellDot = (page: Page): Locator => bell(page).locator('.notification-badge-dot')
 export const bellCount = (page: Page): Locator => bell(page).locator('.notification-badge-count')
-
-/**
- * Record the most attention cards ever in the DOM at once (window.__bpMax),
- * checked on every mutation from the first script on. Call before the first load.
- */
-export async function installMaxCardsProbe(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    const w = window as unknown as { __bpMax: number; __bpNow: () => number }
-    w.__bpMax = 0
-    w.__bpNow = () => document.querySelectorAll('[data-testid="attention-banner"]').length
-    const check = () => { const n = w.__bpNow(); if (n > w.__bpMax) w.__bpMax = n }
-    new MutationObserver(check).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-testid', 'data-mount'] })
-  })
-}
-export const maxCards = (page: Page): Promise<number> => page.evaluate(() => (window as unknown as { __bpMax: number }).__bpMax)
 
 /**
  * Click `target` for real and sample `selector` in the first animation frame
@@ -192,8 +177,6 @@ export interface BpOptions {
   hosts?: HS[]
   local?: LocalState
   feed?: Array<Record<string, unknown>>
-  /** Record the most cards ever on the page at once (maxCards). */
-  probe?: boolean
   /** Before the load: a layout or a style (slotLayout, bareLayout...). */
   before?: (page: Page) => Promise<void>
   /** Open the All section and the All project, so task rows (.todo-panel-item) exist. */
@@ -215,7 +198,6 @@ export async function healthyGitSync(page: Page): Promise<void> {
 /** Home with the routed hosts and health, prefs isolated, optional feed and probe. */
 export async function bpSetup(page: Page, opts: BpOptions = {}): Promise<Hosts> {
   await healthyGitSync(page)
-  if (opts.probe) await installMaxCardsProbe(page)
   await seedFeed(page, opts.feed ?? [])
   if (opts.allTasks) await presetPanelView(page)
   if (opts.before) await opts.before(page)
@@ -227,46 +209,6 @@ export async function bpSetup(page: Page, opts: BpOptions = {}): Promise<Hosts> 
   return h
 }
 
-/** After the bottom card's final stop, focus continues to the next visible control. */
-export async function expectFocusAfterSystemAttention(page: Page): Promise<void> {
-  const state = await page.locator('.todo-panel > .ab-mount').evaluate((mount) => {
-    const active = document.activeElement as HTMLElement | null
-    const stops = Array.from(document.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input, select, textarea, [tabindex]'))
-      .filter((el) => el.tabIndex >= 0 && !el.matches(':disabled') && !el.closest('[hidden], [inert]')
-        && el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0 && getComputedStyle(el).visibility !== 'hidden')
-    // The card is the panel's last element (the filter footer that followed it is gone):
-    // Tab continues to another panel or wraps to the first page control.
-    const after = stops.find((el) => !mount.contains(el)
-      && !!(mount.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING))
-    // Nothing focusable follows (the Ask Walnut slot hidden): Tab may leave the page for the
-    // browser's own controls, which leaves the body active. That is the end of the page, not a trap.
-    const leftPage = !after && active === document.body
-    const next = after ?? stops[0]
-    return {
-      body: active === document.body && !leftPage,
-      inCard: !!active?.closest('[data-testid="attention-banner"]'),
-      hidden: !!active?.closest('[hidden], [inert]'),
-      forbidden: !!active?.closest('.todo-group-action-btn-plus, [class*="filter-chip"], [data-testid="agent-search-panel"] button'),
-      visible: !!active && active.getBoundingClientRect().width > 0 && active.getBoundingClientRect().height > 0,
-      expected: leftPage || (!!next && active === next),
-    }
-  })
-  expect(state).toEqual({ body: false, inCard: false, hidden: false, forbidden: false, visible: true, expected: true })
-}
-
-/**
- * The card is in the task panel, the only one on the page, with the fixture's rows,
- * and on screen: the task panel holds it in the folded System attention section, so
- * this opens the section (a spec about the fold itself reads the toggle directly).
- */
-export async function expectTasksCard(page: Page, order: string[] = FIXTURE_ORDER): Promise<void> {
-  await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
-  await expect(anyBanner(page)).toHaveCount(1)
-  await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(order)
-  await expandSystemAttention(page)
-  await expect(banner(page)).toBeVisible()
-}
-
 /** Pick a rail section with a real click and wait until it is the current one. */
 export async function pickRail(page: Page, label: string): Promise<void> {
   await railButton(page, label).click()
@@ -275,8 +217,7 @@ export async function pickRail(page: Page, label: string): Promise<void> {
 
 /**
  * Open the bell, then the System section with a real click (the bell lands on
- * All or Needs Action, never on System); returns its Remote hosts block. No
- * card in the panel.
+ * All or Needs Action, never on System); returns its Remote hosts block.
  */
 export async function openSystemHosts(page: Page): Promise<Locator> {
   await openBell(page)
@@ -284,37 +225,18 @@ export async function openSystemHosts(page: Page): Promise<Locator> {
   if (await system.getAttribute('aria-current') !== 'true') await system.click()
   await expect(system).toHaveAttribute('aria-current', 'true')
   await expect(systemHosts(page)).toBeVisible({ timeout: 20_000 })
-  await expect(panelBanner(page)).toHaveCount(0)
   return systemHosts(page)
 }
 
 /**
  * Open the bell with no ask waiting: the panel lands on All, whose first block
- * is the problems block; returns its Remote hosts card. No card in the panel.
+ * is the problems block; returns its Remote hosts list.
  */
 export async function openProblems(page: Page): Promise<Locator> {
   await openBell(page)
   await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
   await expect(problemHosts(page)).toBeVisible({ timeout: 20_000 })
-  await expect(panelBanner(page)).toHaveCount(0)
   return problemHosts(page)
-}
-
-export interface CardPlace { y: number; height: number }
-/** Mark the Home card's node (a remount is a new node and loses the mark); returns its place. */
-export async function markHomeCard(page: Page): Promise<CardPlace> {
-  await banner(page).evaluate((el) => { el.setAttribute('data-bp-mark', 'kept') })
-  const b = (await banner(page).boundingBox())!
-  return { y: b.y, height: b.height }
-}
-/** The Home card is the node markHomeCard marked, in the same place at the same height. */
-export async function expectHomeCardStill(page: Page, before: CardPlace, label = ''): Promise<void> {
-  await expect(banner(page), `${label}: the Home card`).toHaveCount(1)
-  await expect(banner(page), `${label}: the same node`).toHaveAttribute('data-bp-mark', 'kept')
-  await expect(anyBanner(page), `${label}: one card`).toHaveCount(1)
-  const b = (await banner(page).boundingBox())!
-  expect(Math.abs(b.y - before.y), `${label}: card top`).toBeLessThanOrEqual(1)
-  expect(Math.abs(b.height - before.height), `${label}: card height`).toBeLessThanOrEqual(1)
 }
 
 /** Box gap between two elements (0 when they touch or overlap). */
@@ -325,9 +247,9 @@ export function boxGap(a: { x: number; y: number; width: number; height: number 
 }
 
 /**
- * Open a card row's details. With more than one entry every row starts closed
- * (dense: headline + primary action, BP-R3-N1), so its secondary actions
- * (Open Settings) and its hint are one Show details away.
+ * Open a host row's details. A dense row starts closed (headline + primary
+ * action, BP-R3-N1), so its secondary actions (Open Settings) and its hint
+ * are one Show details away.
  */
 export async function openRow(r: Locator): Promise<void> {
   if (await r.evaluate((e) => e.classList.contains('hpb-open'))) return

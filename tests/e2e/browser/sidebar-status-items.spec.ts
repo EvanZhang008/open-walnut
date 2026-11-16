@@ -97,8 +97,8 @@ const popover = (page: Page) => page.locator('.status-item-popover')
 
 /**
  * A toast that came up or moved under the pointer ignores a click until it has settled
- * (useShiftClickGuard, d8a7fd515: a click there was meant for what was under it before), and the
- * corner moves a new toast once more as it makes room for it (above System attention). Settled:
+ * (useShiftClickGuard, d8a7fd515: a click there was meant for what was under it before), and a
+ * new toast slides into the stack at the top. Settled:
  * no mark and no move for a whole guard window (SHIFT_GUARD_MS, 450 ms).
  */
 async function settledToast(toast: Locator): Promise<void> {

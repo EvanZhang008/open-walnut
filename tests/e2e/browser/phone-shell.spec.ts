@@ -156,7 +156,7 @@ function agentErrorEvent(agentId: string, error: string): string {
   return JSON.stringify({ type: 'event', name: 'agent:error', data: { agentId, error }, seq: -1 })
 }
 
-test('toasts stay inside the screen at its bottom, one at a time, with a 44 px close and swipe down', async ({ page }, info) => {
+test('toasts stay inside the screen at its top, one at a time, with a 44 px close and swipe up', async ({ page }, info) => {
   const sock = await routeSocket(page)
   await bootHome(page)
   await expect.poll(() => sock() !== null).toBe(true)
@@ -176,9 +176,9 @@ test('toasts stay inside the screen at its bottom, one at a time, with a 44 px c
   const t = (await toasts.first().boundingBox())!
   expect(t.x).toBeGreaterThanOrEqual(8 - 0.5)
   expect(t.x + t.width).toBeLessThanOrEqual(vp.width - 8 + 0.5)
-  // At the bottom, clear of the bar's search and buttons.
-  expect(t.y).toBeGreaterThan(vp.height / 2)
-  expect(t.y + t.height).toBeLessThanOrEqual(vp.height - 8 + 0.5)
+  // At the top, 8px under the safe area (none here), over the bar, as an iOS notification.
+  expect(Math.round(t.y)).toBe(8)
+  expect(t.y + t.height).toBeLessThan(vp.height / 2)
   const close = (await toasts.first().locator('.notification-toast-close').boundingBox())!
   expect(close.width).toBeGreaterThanOrEqual(44)
   expect(close.height).toBeGreaterThanOrEqual(44)
@@ -189,13 +189,14 @@ test('toasts stay inside the screen at its bottom, one at a time, with a 44 px c
   await toasts.first().locator('.notification-toast-close').click()
   await expect(toasts).toHaveCount(1)
   await expect(toasts.first()).toContainText('second test notice')
-  // Swipe down dismisses the next one.
+  // Swipe up, toward the edge it came from, dismisses the next one.
   await expect.poll(async () => (await toasts.first().evaluate((el) => el.getAnimations().length))).toBe(0)
   const t2 = (await toasts.first().boundingBox())!
   const cx = t2.x + t2.width / 2
-  await page.mouse.move(cx, t2.y + 20)
+  const from = t2.y + t2.height - 4
+  await page.mouse.move(cx, from)
   await page.mouse.down()
-  await page.mouse.move(cx, t2.y + 70, { steps: 5 })
+  await page.mouse.move(cx, from - 46, { steps: 5 })
   await page.mouse.up()
   await expect(toasts).toHaveCount(0)
 })

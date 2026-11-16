@@ -1,28 +1,39 @@
-/* The one corner for Walnut's notices (components/common/corner-stack.tsx): bottom left, just
-   right of the sidebar, so the sidebar's own bottom row (bell, update dock, plugin status rows)
-   stays clear. Each kind is a .corner-slot; flex `order` puts a higher one nearer the corner. */
+/* The one place for Walnut's notices (components/common/corner-stack.tsx): the top of the window,
+   centered, one fixed width, over the page, like an iOS notification (2026-11-16). Its place and
+   width never follow a panel, a composer or a sheet. Each kind is a .corner-slot; flex `order`
+   puts a higher one nearer the top edge (column-reverse: the lowest order is laid out last). */
 .corner-stack {
-  /* One look for every card in the corner (toasts, approval cards, board toasts). */
+  /* One look for every card in the stack (toasts, approval cards, board toasts). */
   --corner-card-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.08);
-  /* One padding for every card in the corner; the compact one over a chat. */
+  /* One padding for every card in the stack; the compact one when it is crowded. */
   --corner-card-pad: 10px 12px 10px 14px;
   --corner-card-pad-compact: 6px 10px 6px 14px;
   position: fixed;
-  left: var(--corner-stack-left, 16px);
-  /* Above a chat's composer under it when there is no room beside it (corner-stack.tsx). */
-  bottom: calc(var(--corner-stack-bottom, 16px) + var(--wn-safe-bottom, env(safe-area-inset-bottom, 0px)));
+  top: 12px;
+  /* Centered in the window; with the notification center open, in the space right of it
+     (--corner-stack-from, corner-stack.tsx), the width the same. */
+  left: var(--corner-stack-from, 0px);
+  right: 0;
+  margin: 0 auto;
+  width: min(380px, calc(100vw - 32px));
   /* Over a full-screen sheet (9001), under every modal's mask (9300 and up) and menus (9999):
      a dialog dims it, a picker opens over it. */
   z-index: 9200;
   display: flex;
-  flex-direction: column;
+  flex-direction: column-reverse;
   justify-content: flex-end;
   /* Between kinds; each kind keeps its own lines closer together. */
-  gap: 14px;
-  width: var(--corner-stack-width, min(380px, calc(100vw - var(--corner-stack-left, 16px) - 16px)));
+  gap: 10px;
   /* No overflow here: it would clip every card's shadow and the toasts' slide-in. Each kind
-     keeps its own count small instead (one approval card, three toasts, three board toasts). */
+     keeps its own count small instead (one approval card, two toasts, three board toasts). */
   pointer-events: none;
+}
+
+/* A new toast slides down from the top edge it sits at (notification-toast-in, globals.css);
+   a board's toast the same. */
+.corner-stack .kanban-toast { animation: notification-toast-in 0.25s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .corner-stack :is(.notification-toast, .kanban-toast) { animation: none; }
 }
 
 .corner-stack:empty { display: none; }
@@ -90,8 +101,8 @@
 .corner-stack :is(.notification-toast, .kanban-toast) { padding: var(--corner-card-pad); }
 .corner-stack .approval-card:not(.approval-card-line) { padding: var(--corner-card-pad); }
 
-/* Lifted over a chat (corner-stack.tsx is-compact): every notice in its shortest form, so it
-   covers as little of the chat as it can. The approval card is its two short lines
+/* Crowded (corner-stack.tsx is-compact): every notice in its shortest form, so the stack
+   covers as little of the page as it can. The approval card is its two short lines
    (ApprovalPrompts), a toast its title, one line of what happened and its buttons; a click on it
    opens the notification center with the whole text. A toast over an approval card elsewhere
    keeps the same one line (has-approval): the card is what waits. A permission prompt keeps its words, it is
@@ -109,7 +120,7 @@
   }
 }
 .corner-stack.is-compact .notification-toast-header { margin-bottom: 4px; }
-/* Over a page's work or beside an approval card, a computer's: two rows, its title, then why
+/* Crowded or beside an approval card, a computer's: two rows, its title, then why
    and its button side by side. */
 @media (min-width: 641px) {
   .corner-stack:is(.is-compact, .has-approval) .notification-toast:not(.nfc-perm-toast) {
@@ -243,24 +254,6 @@
 .corner-stack .kanban-toast-text.is-open { display: block; overflow: visible; }
 .corner-stack .kanban-toast-main .notice-details-toggle { margin: 0 auto 0 0; }
 
-/* A row scrolled into view stops above the stack, not behind it (TodoPanel revealBelowHeadings). */
-[data-corner-room]:not([data-corner-room-shrink]) { scroll-padding-bottom: var(--corner-room, 0px); }
-/* A scroller that fills its column ends above the stack: no row sits under it (syncRoom). */
-[data-corner-room][data-corner-room-shrink] { margin-bottom: var(--corner-room, 0px); }
-/* A scroller in a page's left column under the stack, cut to end above it (corner-stack.tsx syncRoom). */
-[data-corner-fit] {
-  max-height: var(--corner-fit, none) !important;
-}
-
-/* The room the stack takes at the end of the scroller under it (corner-stack.tsx syncRoom). */
-[data-corner-room]:not([data-corner-room-shrink])::after {
-  content: '';
-  display: block;
-  flex: none;
-  height: var(--corner-room, 0px);
-  pointer-events: none;
-}
-
 .corner-slot {
   display: flex;
   flex-direction: column;
@@ -289,13 +282,13 @@
 }
 .corner-more:hover { background: var(--bg-hover); }
 
-/* The phone: a toast lies over the bottom of the page while it shows, so it keeps to one row. */
+/* The phone: a toast lies over the top of the page while it shows, so it keeps to one row. */
 @media (max-width: 640px) {
   /* Close together over the page: no strip of it shows between two cards. */
   .corner-stack { gap: 6px; }
   .corner-stack :is(.notification-toast, .kanban-toast) { padding: var(--corner-card-pad-compact); }
   .corner-stack .corner-slot > * { box-sizing: border-box; max-width: 100%; }
-  /* One row (its mark, its title, its close) while it lies over the page at the bottom; a tap
+  /* One row (its mark, its title, its close) while it lies over the page at the top; a tap
      opens the notification center with the whole text and its buttons. A permission prompt
      keeps its words and buttons: it is answered from them. */
   .corner-stack .notification-toast:not(.nfc-perm-toast):not(.is-open) :is(.notification-toast-body, .notification-toast-action, .nfc-notice-actions, .nfc-card-actions) { display: none; }
@@ -316,5 +309,3 @@
   .corner-stack .notification-toast.is-open:not(.nfc-perm-toast) > .notice-tools { margin: 0 0 6px; }
 }
 
-/* A full-screen sheet's content (its chat and composer) starts past the corner when a narrow strip
-   leaves the corner reaching over the sheet (corner-stack.tsx syncSheetInset); 0 otherwise. */

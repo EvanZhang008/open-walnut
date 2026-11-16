@@ -2946,8 +2946,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [flashCard]);
 
   /** scrollIntoView({block:'nearest'}) that also counts a card under the stuck headings, or under
-   *  the corner's notices at the bottom (the list's scroll padding, corner-stack.css), as out of
-   *  view. The card's scroll margin is how much the headings cover; Chromium ignores it for a card
+   *  the list's bottom scroll padding, as out of view. The card's scroll margin is how much the headings cover; Chromium ignores it for a card
    *  that is already on screen, and would leave it hidden under them. */
   const revealBelowHeadings = useLeanCallback((el: Element) => {
     const covered = parseFloat(getComputedStyle(el).scrollMarginTop) || 0;

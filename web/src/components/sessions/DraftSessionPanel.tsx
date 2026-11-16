@@ -451,9 +451,10 @@ interface Props {
   /** The Start Task / Ask Walnut tab switch. The owner rewrites the row
    *  (project/tier seed on enter, restore on leave) — the panel only reports. */
   onWalnutToggle?: (draftId: string, walnut: boolean) => void;
-  /** Rendered directly above the launch bar: the live host-connect banner, on
-   *  the one draft column that hosts it while the chat slot is hidden. */
-  hostNotice?: ReactNode;
+  /** Rendered directly above the launch bar: this draft's own launch error (AskObjectDrawer's
+   *  failed save). Never an app-level alert (a host, Claude Code): those are notifications
+   *  (tests/web/app-alert-placement-guard.test.ts). */
+  launchNotice?: ReactNode;
   /** Rendered at the top of the empty body in place of Walnut's starter suggestions: an ask drawer's
    *  quote of the object being asked about (AskObjectDrawer), where "Plan my day" means nothing. */
   intro?: ReactNode;
@@ -503,7 +504,7 @@ interface Props {
 export function DraftSessionPanel({
   draft, autoFocus, onStart, onSaveAsTask, onClose, headerLeading,
   onPathChange, onProjectChange, onMetaChange, onModeChange, isKnownProject, onAiParse, onWalnutToggle,
-  onTaskFieldChange, onReturnFieldToWalnut, hostNotice, intro, gateError, onGateErrorClear, restoreImages,
+  onTaskFieldChange, onReturnFieldToWalnut, launchNotice, intro, gateError, onGateErrorClear, restoreImages,
   onCustomizeWalnut, repairTarget, phoneLayer, walnutLabel, plainChat, placeholder, composerBar, composerPill, ownFolder, pickFolder, ownFolderLabel, onClearFolder, saveBusy = false,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -1030,7 +1031,7 @@ export function DraftSessionPanel({
       <div className="session-panel-input">
         {/* Why the last Start didn't start. Above the launch bar so it sits
             directly over the folder pill that resolves it. */}
-        {hostNotice}
+        {launchNotice}
         {gateError && (
           <HostGateErrorBar
             gate={gateError}

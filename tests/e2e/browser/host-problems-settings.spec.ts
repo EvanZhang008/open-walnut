@@ -3,12 +3,12 @@
  * that one failure reads the same on every surface:
  *
  *   one sentence   Key box (auth) renders the same HostFailureText in the
- *                  banner row, the picker note and the Settings row, with
+ *                  notification panel's problem row, the picker note and the Settings row, with
  *                  Show SSH output, Retry and a quieter Open Settings (C7, C8, C27);
  *                  the Settings row's own retry says Retry SSH (2026-11-04 review:
  *                  two buttons named Retry on one page meant two things)
  *   the row        label title, alias, row id; Open Settings flashes it every
- *                  time (C68); the hint wraps whole in the host's Details, never
+ *                  time from the problem row (C68); the hint wraps whole in the host's Details, never
  *                  in the row's one state line (C78)
  *   reconnecting   the last cause and an enabled Connect now (C9)
  *   off            an ephemeral fixture: every row is off, nothing to press (C24)
@@ -18,24 +18,22 @@
  *                  Details fold the command under "Update by hand", never a
  *                  second Update
  *   elsewhere      the System pane's host row, an outdated Build box included (C71);
- *                  the rail dot when no banner is on screen (C67), lit by the
- *                  banner's own rows (a signed-out host, not a version floor)
+ *                  the rail Settings dot and the bell dot on Home (C67), lit by the
+ *                  problem rows' hosts (a signed-out host, not a version floor)
  *
- * Run with --workers=1 (the banner specs route the same aliases client-side,
+ * Run with --workers=1 (the problem row specs route the same aliases client-side,
  * and every describe loads its own server fixture).
  * page.goto only loads the app; everything else is a real click or key.
  *
- * Run: PW_TEST_PORT=35993 npx playwright test host-problems-settings --project=chromium-host-fixture --workers=1
- *      PW_WEBKIT=1 PW_TEST_PORT=35993 npx playwright test host-problems-settings --project=webkit --workers=1
+ * Run: walnut-dev run bun x playwright test tests/e2e/browser/host-problems-settings.spec.ts --project chromium-host-fixture --retries=0
  */
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { firstSentence } from '../../../src/core/hosts/host-problem'
 import {
-  HEALTHY, bannerRow, bell, fixtureCounters, fixtureFile, hostFixture, hostRow, hostTab, isolatePrefs, loadApp, loadFixture,
+  HEALTHY, bell, fixtureCounters, openBell, fixtureFile, hostFixture, hostRow, hostTab, isolatePrefs, loadApp, loadFixture,
   openHostDetails, openPicker, openRemoteHosts, picker, resetServerHostFixture, wireHost,
 } from './host-problems-fixture-helpers'
-import { bareLayout, expandSystemAttention } from './host-problems-helpers'
-import { openRow } from './banner-placement-helpers'
+import { closePanel, hostRowsOutsidePanel, openProblems, openRow, problemHosts, problemRow } from './host-attention-helpers'
 
 const SHOTS = '/tmp/walnut-host-problems-slice/fix2'
 /** Key box refuses its key and takes no password: the Settings row leads with the walkthrough's headline (walkthroughOf). */
@@ -71,23 +69,22 @@ const buttonOrder = (scope: Locator): Promise<string[]> =>
 test.describe('one failure, one sentence: Key box on every surface', () => {
   test.beforeAll(async ({ request }) => { await loadFixture(request, 'host-problems') })
 
-  test('banner row, picker note and Settings row render the same HostFailureText, SSH output and Retry (C7, C8, C27)', async ({ page, request }) => {
+  test('problem row, picker note and Settings row render the same HostFailureText, SSH output and Retry (C7, C8, C27)', async ({ page, request }) => {
     const wire = await wireHost(request, 'keybox')
     expect(wire.kind).toBe('auth')
     expect(wire.retryable).toBe(false)
     expect(wire.retryAt).toBeUndefined()
     await loadApp(page)
-    // The card sits in the task panel's folded System attention section.
-    await expandSystemAttention(page)
 
-    // 1. The banner row (the first row: connect failures lead, in Settings order).
-    const row = bannerRow(page, 'keybox')
+    // 1. The notification panel's problem row (the first row: connect failures lead, in Settings order).
+    await openProblems(page)
+    const row = problemRow(page, 'keybox')
     await expect(row).toBeVisible({ timeout: 20_000 })
-    // Several rows start closed (dense); opened, the row reads the same words as the picker and Settings.
+    // Rows start closed (dense); opened, the row reads the same words as the picker and Settings.
     await openRow(row)
-    const inBanner = await readFailure(row, wire.error!)
-    const bannerButtons = await buttonOrder(row.locator('.hpb-actions'))
-    expect(bannerButtons).toEqual(['Retry', 'Open Settings'])
+    const inPanel = await readFailure(row, wire.error!)
+    expect(await buttonOrder(row.locator('.hpb-actions'))).toEqual(['Retry', 'Open Settings'])
+    await closePanel(page, 'escape')
 
     // 2. The picker note for the Key box tab.
     await openPicker(page)
@@ -98,23 +95,22 @@ test.describe('one failure, one sentence: Key box on every surface', () => {
     expect(await buttonOrder(note.locator('.sps-host-note-actions'))).toEqual(['Retry', 'Open Settings'])
     await picker(page).screenshot({ path: `${SHOTS}/picker-keybox.png` })
 
-    // 3. Settings, through the banner's own Open Settings.
-    // A click outside closes the picker (its outside-click path). The card
-    // stays in the task panel while a draft is open: still exactly one.
-    await expect(page.locator('[data-testid="attention-banner"]')).toHaveCount(1)
-    await expect(page.locator('.todo-panel [data-testid="attention-banner"][data-mount="tasks"]')).toHaveCount(1)
+    // 3. Settings, through the problem row's own Open Settings.
+    // A click outside closes the picker (its outside-click path); no host row sits in the draft.
+    await expect(hostRowsOutsidePanel(page)).toHaveCount(0)
     await page.locator('.todo-panel').click({ position: { x: 5, y: 5 } })
     await expect(picker(page)).toBeHidden()
-    // Several rows start closed (dense): Show details puts the row's Open Settings on screen.
+    await openProblems(page)
+    // The row keeps the details the user opened; Show details puts its Open Settings on screen if not.
     await openRow(row)
     await row.getByTestId('hpb-open-settings').click()
     await expect(page).toHaveURL(/\/settings#rh-host-keybox$/)
     const settingsRow = hostRow(page, 'keybox')
     await expect(settingsRow).toBeVisible({ timeout: 20_000 })
     // The row: its one state line and its one action; the whole failure is in its Details. The
-    // row's retry names its way in (the banner's stays Retry: it has one host per row). Its state
+    // row's retry names its way in (the problem row's stays Retry). Its state
     // line is the walkthrough's headline, what to do about it (2026-11-11, the user: Remote Hosts
-    // walks a failed host through like first-run setup); the banner and the picker keep the
+    // walks a failed host through like first-run setup); the problem row and the picker keep the
     // shared sentence, and every surface reads the same hint.
     await expect(settingsRow.getByTestId('rh-row-state')).toHaveText(KEYBOX_WALK_HEADLINE)
     await expect(settingsRow.getByTestId('rh-row-connect')).toHaveText('Retry SSH')
@@ -124,10 +120,10 @@ test.describe('one failure, one sentence: Key box on every surface', () => {
     // The same two sentences: the headline on the row (said once, not again in Details), the rest in Details.
     const inSettings = await readFailure(details.locator('.rh-failure'), wire.error!, settingsRow.getByTestId('rh-row-state'))
 
-    expect(inBanner.headline).toBe('Could not connect to Key box')
-    expect(inPicker).toEqual(inBanner)
-    expect(inSettings).toEqual({ headline: KEYBOX_WALK_HEADLINE, hint: inBanner.hint })
-    expect(inBanner.hint).toBe(wire.hint!.replace(/`/g, ''))
+    expect(inPanel.headline).toBe('Could not connect to Key box')
+    expect(inPicker).toEqual(inPanel)
+    expect(inSettings).toEqual({ headline: KEYBOX_WALK_HEADLINE, hint: inPanel.hint })
+    expect(inPanel.hint).toBe(wire.hint!.replace(/`/g, ''))
     await details.screenshot({ path: `${SHOTS}/settings-keybox-open.png` })
   })
 
@@ -163,11 +159,14 @@ test.describe('the Settings row itself', () => {
     }))
   })
 
-  test('title is the label, then the alias; Open Settings from the banner flashes the row every time (C68)', async ({ page }) => {
+  test('title is the label, then the alias; Open Settings from the problem row flashes the row every time (C68)', async ({ page }) => {
     await loadApp(page)
     const flashOnce = async () => {
-      await expandSystemAttention(page)
-      await bannerRow(page, 'signbox').getByTestId('hpb-open-settings').click()
+      await openProblems(page)
+      const r0 = problemRow(page, 'signbox')
+      await expect(r0).toBeVisible({ timeout: 20_000 })
+      await openRow(r0)
+      await r0.getByTestId('hpb-open-settings').click()
       await expect(page).toHaveURL(/\/settings#rh-host-signbox$/)
       const r = hostRow(page, 'signbox')
       await expect(r).toHaveClass(/rh-row-flash/, { timeout: 5_000 })
@@ -181,7 +180,7 @@ test.describe('the Settings row itself', () => {
     await expect(r.locator('.rh-host-alias')).toHaveText('signbox')
     // Back home and the same Open Settings again: the same hash, a second flash.
     await page.getByTestId('sidebar-core-app-home').click()
-    await expect(bannerRow(page, 'signbox')).toBeAttached({ timeout: 20_000 })
+    await expect(page.locator('.main-page')).toBeVisible({ timeout: 20_000 })
     await flashOnce()
   })
 
@@ -214,9 +213,13 @@ test.describe('the Settings row itself', () => {
 test.describe('an ephemeral fixture: Settings says off and offers nothing', () => {
   test.beforeAll(async ({ request }) => { await loadFixture(request, 'host-problems-ephemeral') })
 
-  test('every row reads Off on this test server, no Connect now, no readiness lines, no host banner (C24)', async ({ page, request }) => {
+  test('every row reads Off on this test server, no Connect now, no readiness lines, no host problem row (C24)', async ({ page, request }) => {
     await loadApp(page)
-    await expect(page.locator('[data-testid="host-problems"]')).toHaveCount(0)
+    await expect(hostRowsOutsidePanel(page)).toHaveCount(0)
+    // The notification panel lists no host problem either: an off host has none.
+    await openBell(page)
+    await expect(problemHosts(page)).toHaveCount(0)
+    await closePanel(page, 'escape')
     await openRemoteHosts(page)
     const hosts = ['devbox', 'buildbox', 'signbox', 'keybox', 'certbox', 'netbox', 'offhost']
     for (const host of hosts) {
@@ -375,23 +378,21 @@ test.describe('where else a host problem shows', () => {
     await expect(panel.locator('.notification-detail-row[data-host="devbox"] .notification-detail-value')).toHaveText('Connected')
   })
 
-  test('task panel, slot and draft column all hidden: the rail Settings entry and the bell wear the warn dot until nothing needs attention (C67)', async ({ page, request }) => {
+  test('on Home the rail Settings entry and the bell wear the warn dot until nothing needs attention; Settings > Remote hosts turns both off (C67)', async ({ page, request }) => {
     await loadFixture(request, fixtureFile({
       keybox: { label: 'Key box', hostname: 'key.example.com', phase: 'failed', error: 'Permission denied (publickey).' },
       signbox: { label: 'Sign box', hostname: 'sign.example.com', phase: 'connected', claude: { version: '2.1.281', auth: 'not-logged-in', installMethod: 'native' } },
     }))
-    await bareLayout(page)
+    // The default Home layout: no card on the page ever covers a dot (host-attention.ts).
     await loadApp(page)
-    await expect(page.locator('.main-page-chat [data-testid="ask-walnut-slot"]')).toHaveCount(0)
-    await expect(page.locator('.main-page-session-column .draft-session-panel')).toHaveCount(0)
-    await expect(page.locator('[data-testid="attention-banner"]')).toHaveCount(0)
+    await expect(hostRowsOutsidePanel(page)).toHaveCount(0)
     const entry = page.getByTestId('sidebar-core-app-settings')
     const dot = entry.locator('.sidebar-host-dot')
     // The link carries the one accessible name; the dot inside it is decorative.
     await expect(entry).toHaveAttribute('aria-label', 'Settings: remote hosts need attention', { timeout: 20_000 })
     await expect(dot).toHaveAttribute('aria-hidden', 'true')
     await expect(dot).toHaveAttribute('data-kind', 'warn')
-    // The bell speaks for the card too: a dot, no number, the reason in its name.
+    // The bell too: a dot, no number, the reason in its name.
     await expect(bell(page)).toHaveAttribute('aria-label', 'Notifications: remote hosts need attention')
     await expect(bell(page).locator('.notification-badge-dot')).toHaveCount(1)
     await expect(bell(page).locator('.notification-badge-count')).toHaveCount(0)

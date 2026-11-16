@@ -1,14 +1,16 @@
 /**
- * Phone home, review round 3 (N2-13, N2-14, N2-15): the first screen shows the
- * work that needs the user at every phone size, even under a host card; the
- * host card and the task rows take a finger and read at 12 px or more.
+ * Phone home, review round 3 (N2-14, N2-15, N2-01): the host problem rows (in
+ * the notification panel, the only place they live) and the task rows take a
+ * finger and read at 12 px or more at every phone size; a needs-you row opens
+ * its task and Back gives the list back. (N2-13, the first screen under a host
+ * card, went with the card on 2026-11-16.)
  * WebKit with devices['iPhone 15'] first, chromium too.
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import { PHONE, PHONE_LANDSCAPE, findSmallTargets, findSmallText } from './phone-helpers'
-import { banner, failed } from './host-problems-helpers'
-import { bpSetup } from './banner-placement-helpers'
+import { failed } from './host-problems-helpers'
+import { bpSetup, problemRow, railButton } from './host-attention-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { presetPanelDesign } from './status-section-helpers'
 
@@ -21,28 +23,8 @@ const SIZES = [
   { name: 'landscape', device: PHONE_LANDSCAPE, viewport: PHONE_LANDSCAPE.viewport },
 ] as const
 
-/** The hosts the card lists: one to Retry, one to fix in Settings. */
-const cardHosts = () => [failed('netbox', 'Net box', 'unreachable'), failed('keybox', 'Key box', 'auth')]
-
-async function phoneLayout(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    try { localStorage.setItem('open-walnut-home-chat-visible', 'false') } catch { /* storage off */ }
-  })
-  // The phone's needs-you strip is drawn by By project; Flat,
-  // the default, shows those tasks in its Needs you section instead.
-  await presetPanelDesign(page, 'project')
-}
-
-/** Needs-you rows wholly on the first screen, a tap at their center reaching them. */
-const rowsOnFirstScreen = (page: Page) => page.evaluate(() => {
-  const vh = window.innerHeight
-  return Array.from(document.querySelectorAll<HTMLElement>('.phone-needs-you-row')).filter((el) => {
-    const r = el.getBoundingClientRect()
-    if (r.height === 0 || r.top < 0 || r.bottom > vh) return false
-    const t = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
-    return !!t && (t === el || el.contains(t))
-  }).length
-})
+/** The problem hosts: one to Retry, one to fix in Settings. */
+const problemHostList = () => [failed('netbox', 'Net box', 'unreachable'), failed('keybox', 'Key box', 'auth')]
 
 for (const size of SIZES) {
   test.describe(`at ${size.name}`, () => {
@@ -55,32 +37,24 @@ for (const size of SIZES) {
       userAgent: size.device.userAgent,
     })
 
-    test(`N2-13, N2-15: under a host card, the first screen still shows work that needs you; the card takes a finger (${size.name})`, async ({ page }, info) => {
-      await bpSetup(page, { hosts: cardHosts(), before: phoneLayout })
-      const card = banner(page)
-      await expect(card).toHaveCount(1, { timeout: 20_000 })
-      await expect(page.locator('.phone-needs-you-row').first()).toBeVisible({ timeout: 20_000 })
+    test(`N2-15: the host problem rows in the notification panel take a finger and read at 12 px, folded and with details open (${size.name})`, async ({ page }, info) => {
+      await bpSetup(page, { hosts: problemHostList() })
+      // A finger on the phone's own bell (the top bar's), as a person opens the panel there.
+      await page.locator('.phone-topbar').getByTestId('phone-bell').tap()
+      await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
+      await expect(problemRow(page, 'netbox')).toBeVisible({ timeout: 20_000 })
+      await expect(problemRow(page, 'keybox')).toBeVisible()
       await page.waitForTimeout(400)
-      const cardBox = (await card.boundingBox())!
-      const firstRow = (await page.locator('.phone-needs-you-row').first().boundingBox())!
-      info.annotations.push({ type: 'layout', description: JSON.stringify({ card: cardBox, firstRow, vh: size.viewport.height }) })
-      await page.screenshot({ path: `${SHOTS}/${info.project.name}-${size.name}-card.png` })
-      expect(await rowsOnFirstScreen(page), 'a needs-you row is whole on the first screen').toBeGreaterThanOrEqual(1)
-      const root = '[data-testid="attention-banner"][data-mount="tasks"]'
-      expect(await findSmallTargets(page, root), 'card targets').toEqual([])
-      expect(await findSmallText(page, 12, root), 'card text').toEqual([])
-      // The footer toggle that folds the card away takes a finger too.
-      const section = '[data-testid="system-attention"]'
-      expect(await findSmallTargets(page, section), 'system attention toggle').toEqual([])
-      expect(await findSmallText(page, 12, section), 'system attention text').toEqual([])
+      const root = '.notification-panel [data-testid="nfc-problem-hosts"]'
+      await page.screenshot({ path: `${SHOTS}/${info.project.name}-${size.name}-host-rows.png` })
+      expect(await findSmallTargets(page, root), 'host row targets').toEqual([])
+      expect(await findSmallText(page, 12, root), 'host row text').toEqual([])
       // Open a row's details: its own controls take a finger too.
-      const show = card.getByRole('button', { name: /Show details|Show SSH output/ }).first()
-      if (await show.count()) {
-        await show.tap()
-        await page.waitForTimeout(300)
-        expect(await findSmallTargets(page, root), 'card targets, details open').toEqual([])
-        expect(await findSmallText(page, 12, root), 'card text, details open').toEqual([])
-      }
+      await problemRow(page, 'keybox').getByRole('button', { name: 'Show details' }).tap()
+      await expect(problemRow(page, 'keybox')).toHaveClass(/hpb-open/)
+      await page.waitForTimeout(300)
+      expect(await findSmallTargets(page, root), 'host row targets, details open').toEqual([])
+      expect(await findSmallText(page, 12, root), 'host row text, details open').toEqual([])
     })
   })
 }

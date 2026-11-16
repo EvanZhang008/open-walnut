@@ -16,16 +16,6 @@ export function tabStops(root: HTMLElement): HTMLElement[] {
     .filter((el) => el.getClientRects().length > 0 && !el.closest('[inert], [aria-hidden="true"]'));
 }
 
-/** Where a Tab from `current` goes to stay inside (null: the browser's own next stop is inside already). */
-export function wrapTarget(stops: readonly HTMLElement[], current: Element | null, back: boolean): HTMLElement | null {
-  if (!stops.length) return null;
-  const i = stops.indexOf(current as HTMLElement);
-  if (i < 0) return back ? stops[stops.length - 1] : stops[0];
-  if (back && i === 0) return stops[stops.length - 1];
-  if (!back && i === stops.length - 1) return stops[0];
-  return null;
-}
-
 /**
  * Where a Tab from `current` goes: the next (or previous) stop, wrapping at
  * the ends. The trap moves focus on EVERY Tab, not only at the ends: WebKit

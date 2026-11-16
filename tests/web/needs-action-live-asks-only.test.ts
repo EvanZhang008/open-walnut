@@ -30,9 +30,9 @@ const read = (rel: string): string => fs.readFileSync(path.join(ROOT, rel), 'utf
 
 /** The kinds that ARE a session asking right now. */
 const LIVE_ASK_KINDS: readonly NotificationKind[] = ['permission'];
-/** Every other kind, each decided NOT to be a live ask. `letter` is Inbox mail. */
+/** Every other kind, each decided NOT to be a live ask. `letter` is Inbox mail; `host` a remote host Walnut cannot use. */
 const NOT_A_LIVE_ASK: readonly NotificationKind[] = [
-  'letter', 'cron', 'operation-error', 'sort', 'audio-error', 'skill', 'hook', 'reminder', 'hint',
+  'letter', 'cron', 'operation-error', 'sort', 'audio-error', 'skill', 'hook', 'reminder', 'hint', 'host',
 ];
 
 /** The members of `export type NotificationKind = ...`, read from the source. */

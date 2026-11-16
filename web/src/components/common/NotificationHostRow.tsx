@@ -2,14 +2,13 @@
  * One host in the notification panel's System list ("Remote hosts"): each host
  * appears once.
  *
- * A host with a problem is the Home card's own row: SingleHostRow in its dense
- * form, built by the card's model (hostRowFor: dismissals ignored, one host
- * per row, never grouped), so the dot, the bold headline, the primary button
- * under it and Show details read exactly as on the card. The expanded flag is
- * the card's (the page session, by row id), so opening details in one place
- * opens it in the other, and the buttons run through the shared attempt store:
- * a Retry here and one on the Home card are ONE attempt. `statusList`: no x
- * and no Dismiss all, this is a status list.
+ * A host with a problem is the same row All and Errors lead with
+ * (NotificationProblems): SingleHostRow in its dense form, built by the
+ * problem-row model (hostRowFor: dismissals ignored, one host per row, never
+ * grouped). The expanded flag is shared by row id (host-row-expanded.ts), so
+ * opening details in one place opens it in the other, and the buttons run
+ * through the shared attempt store: a Retry here and one in All are ONE
+ * attempt. No x here: this is the inventory, a status list.
  *
  * Every other host (healthy, disabled, off, connecting, a version floor) is a
  * plain line: its dot, its name, and the status sentence under it. A host that
@@ -43,8 +42,8 @@ function HostStatusLine({ daemon, disabled }: { daemon: DaemonHealth; disabled: 
   // Claude Code) rides along, in the shared words.
   const problem = hostProblemOf(status);
   const blocking = problem?.type === 'readiness' ? firstSentence(problem.problem.message) : null;
-  // A failed connect says why, in the card's own sentence, not a bare 'Disconnected' (N14):
-  // here only for a host switched off (disabled) or one the card has no row for.
+  // A failed connect says why, in the problem row's own sentence, not a bare 'Disconnected' (N14):
+  // here only for a host switched off (disabled) or one with no problem row.
   const failure = !disabled && !connected && !connecting && (problem?.type === 'connect' || problem?.type === 'reconnecting')
     ? problem.type === 'connect' ? problem.headline : `Reconnecting to ${hostDisplayLabel(daemon.host, status?.label, daemon.label)}`
     : null;

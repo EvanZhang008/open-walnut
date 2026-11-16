@@ -285,11 +285,11 @@ export function useLinkedHostRow({ alias, name, enabled, saved, card, now, boot,
     if (failedFix) lines.push(<Line key={failedFix.key} tone="bad" testId="rh-row-fix-note">{`${failedFix.text}.`}</Line>);
     else if (!justFixed) for (const n of notes.slice(0, 1)) lines.push(<Line key={n.key} tone="note" testId="rh-row-fix-note">{`${n.text}.`}</Line>);
   }
-  // The home page's banner leaves this host out: said once, with the way back beside it.
+  // The notification panel's problem list leaves this host out (its row's x): said once, with the way back beside it.
   if (hidden) {
     lines.push(
       <Line key="hidden" tone="note" testId="rh-banner-hidden">
-        Hidden from the home page.{' '}
+        Hidden from notifications.{' '}
         <button type="button" className="rh-inline-link rh-show-again-btn" data-testid="rh-show-again" onClick={() => restoreHost(alias)}>Show it there again</button>
       </Line>,
     );

@@ -76,8 +76,6 @@ export interface BannerInput {
   pointerInside?: boolean;
   /** The local Claude Code section renders (the host section then gets a subhead). */
   localPresent?: boolean;
-  /** Success rows the user hid with Dismiss all (they carry no stored key). */
-  hiddenIds?: ReadonlySet<string>;
 }
 
 export interface BannerState {
@@ -134,27 +132,6 @@ export function capRows(order: readonly BannerRow[]): { rows: BannerRow[]; more:
     if (r.type !== 'ready') taken++;
   }
   return { rows, more: n - taken };
-}
-
-/** Whether a row draws its own x (success rows and a key-less attempt do not). */
-export function rowHasDismiss(row: BannerRow): boolean {
-  return row.type !== 'ready' && row.dismissKeys.length > 0;
-}
-
-/**
- * Where focus goes after a row x: the index of that row among the rows that
- * draw an x, which is where the NEXT row's x sits once it is gone. Counted on
- * the same list the DOM query sees, or a success row above shifts it by one.
- */
-export function dismissFocusIndex(rows: readonly BannerRow[], rowId: string): number {
-  return rows.filter(rowHasDismiss).findIndex((r) => r.id === rowId);
-}
-
-/** Success rows hidden by Dismiss all, until their own 3s would have ended (then a later heal shows again). */
-export function activeHiddenIds(hidden: ReadonlyMap<string, number>, now: number): ReadonlySet<string> {
-  const out = new Set<string>();
-  for (const [id, until] of hidden) if (until > now) out.add(id);
-  return out;
 }
 
 /** A host with a live attempt: connecting, reconnecting, or connected with Claude Code not yet checked. */
@@ -282,7 +259,6 @@ function collect(input: BannerInput, prev: BannerState): { cands: Ranked[]; read
   };
   const pushReady = (s: HostStatusInput, i: number, group: BannerGroup, until: number, replaces?: string, member = 0) => {
     const row = readyRow(s, group);
-    if (input.hiddenIds?.has(row.id)) return;
     ready[row.id] = until;
     cands.push({ row, settingsIndex: i, ...(replaces ? { replaces } : {}), member });
   };
@@ -377,7 +353,6 @@ function orderDeferred(cands: Ranked[], prev: BannerState, input: BannerInput): 
     if (subs.length) { for (const s of subs) { order.push(s.row); used.add(s.row.id); } continue; }
     // The user's own x is never deferred: that move is the one they asked for.
     if (r.dismissKeys.length && r.dismissKeys.every((k) => dismissed.has(k))) continue;
-    if (input.hiddenIds?.has(r.id)) continue;
     order.push(r);
   }
   const fresh = cands.filter((c) => !used.has(c.row.id)).sort((a, b) => a.settingsIndex - b.settingsIndex);

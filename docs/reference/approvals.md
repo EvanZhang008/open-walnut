@@ -153,21 +153,21 @@ that does not read the switch or say why it stays.
     whether or not Walnut is in front, and a click brings Walnut forward with the request open.
     Quiet mode holds it back unless quiet lets permission prompts through, and an answer anywhere
     takes it back.
-  - **A card** at the bottom left of every window, on every page (the corner every Walnut notice
-    shares, beside the sidebar), three short lines: "Approve?" with how many wait ("3 waiting", the
+  - **A card** at the top of every window, on every page (the one stack every Walnut notice
+    shares, centered), three short lines: "Approve?" with how many wait ("3 waiting", the
     count the Needs you line gives, which opens the list of them) and the time left, what is asked, then who asked (the task,
     or the script and its host) with Deny and Approve. It shows the request that came first and
     stays until that one is answered; the answer shows a moment over the next one. Its title
     opens the whole request (the folder and the detail too) in a dialog that lists every request
     waiting by its title, the one shown marked, and shows another at a click. Its "–" puts it down to two short lines (what is
     asked; how many, the time left and the buttons) until another request comes, and its "+"
-    shows it whole again; above a chat's composer, over a page's work (a note, a task list, a
-    calendar) and beside Home's Needs you line it is those two lines by itself. There its "–"
+    shows it whole again; in a crowded stack and beside Home's Needs you line it is those two
+    lines by itself. There its "–"
     puts it down once more, to one line that opens the request, until another request comes. On
-    a phone it is those two lines at the bottom of the screen, and a tap opens the dialog. It
+    a phone it is those two lines at the top of the screen, and a tap opens the dialog. It
     pops up on every page, Home and the Org page included; while the notification center is
     open, which lists the approvals itself, the card steps aside, and while the dialog is open
-    the whole corner does.
+    the whole stack does.
   The web side is `web/src/components/approvals/` (one store, `approvals-store.ts`, for all of
   them); the Mac app's notification is `desktop/NotificationBridge.swift`.
 - **The iPhone app**: a push with Approve and Deny on the banner for a plain

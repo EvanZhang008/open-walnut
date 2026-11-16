@@ -3,17 +3,17 @@
  * replica behind it (fixture: cloud-host-server.ts with CLOUD_HOST_SECOND_MAC=1).
  *
  *   1. Picking Cloud asks the companion for a machine credential; it answers 409,
- *      and the Cloud card says "Another Mac is connected to this cloud companion.
+ *      and Cloud's problem row (notification panel) says "Another Mac is connected to this cloud companion.
  *      Disconnect it there first." with how to hand it over and ONE details toggle.
- *   2. Retry asks again (the card stays: the companion is still that Mac's).
+ *   2. Retry asks again (the row stays: the companion is still that Mac's).
  *   3. Settings › Phones & Cloud › Remove the other Mac: refused (only that Mac
  *      itself, or the Mac the companion belongs to, may), and the row says so in full, as plain
  *      text, and the page's Saved / Not saved indicator stays away (a refusal is
  *      not an unsaved change). Show QR on it is refused on that same row. This Mac's own record is
  *      "This Mac" under Other entries: no QR, and Unpair warns first (Cancel
- *      here). The handover is what the card says: `walnut device owner
+ *      here). The handover is what the row says: `walnut device owner
  *      mac-second` on the companion.
- *   4. Retry on the card: this Mac mints, Cloud connects, and the box runs a
+ *   4. Retry on the row: this Mac mints, Cloud connects, and the box runs a
  *      daemon of this Mac's own (its own dir, keyed by its device id), never the
  *      other Mac's.
  *   5. Unpair this Mac, confirmed: the companion drops it and what it minted,
@@ -27,7 +27,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { expandSystemAttention } from './host-problems-helpers'
+import { openBell } from './host-problems-fixture-helpers'
+import { closePanel, pickRail, problemHosts, problemRow } from './host-attention-helpers'
 import { draftCwdPill, loadHome, openDraft } from './draft-helpers'
 import { backToDevices, openWay } from './devices-ways-helpers'
 
@@ -84,8 +85,13 @@ function runBoxCli(f: Fixture, args: string[]): string {
 }
 
 const picker = (page: Page): Locator => page.locator('.session-path-selector')
-const banner = (page: Page): Locator => page.locator('[data-testid="attention-banner"]').filter({ has: page.locator(`li.hpb-row[data-host="${CLOUD}"]`) }).first()
-const card = (page: Page): Locator => page.locator(`[data-testid="attention-banner"] li.hpb-row[data-host="${CLOUD}"]`).first()
+/** Cloud's row in the notification panel's problems, while it says another Mac holds the companion. */
+const otherMacRow = (page: Page): Locator => page.locator(`.notification-panel [data-testid="nfc-problem-hosts"] li.hpb-row[data-host="${CLOUD}"][data-kind="cloud_other_mac"]`)
+/** Open the bell on All, where the problem rows are. */
+async function openAll(page: Page): Promise<void> {
+  await openBell(page)
+  await pickRail(page, 'All')
+}
 
 test.beforeAll(() => { fs.mkdirSync(SHOTS, { recursive: true }) })
 
@@ -107,43 +113,42 @@ test('a second Mac hears another Mac is connected, and takes the companion over 
   await picker(page).screenshot({ path: path.join(SHOTS, `picker-cloud-other-mac-${browserName}.png`) })
   // The picker's keys live on its path box (the tab click left focus on the tab):
   // Escape there leaves the path edit first and closes the picker on the next
-  // press. An open picker would sit on top of the card below.
+  // press. An open picker would sit on top of the rail's bell.
   const pathBox = picker(page).locator('.sps-search-input')
   await expect(async () => {
     if (await picker(page).isVisible()) await pathBox.press('Escape')
     await expect(picker(page)).toBeHidden({ timeout: 1_000 })
   }).toPass({ timeout: 15_000 })
 
-  const row = card(page)
-  // The system attention section starts collapsed: the row is there, hidden,
-  // until the section is opened.
-  await expect(page.locator(`[data-testid="attention-banner"] li.hpb-row[data-host="${CLOUD}"][data-kind="cloud_other_mac"]`).first()).toBeAttached({ timeout: 60_000 })
-  await expandSystemAttention(page)
-  await expect(page.locator(`[data-testid="attention-banner"] li.hpb-row[data-host="${CLOUD}"][data-kind="cloud_other_mac"]`).first()).toBeVisible()
+  const row = problemRow(page, CLOUD)
+  await openAll(page)
+  await expect(otherMacRow(page)).toBeVisible({ timeout: 60_000 })
   await expect(row).toContainText('Another Mac is connected to this cloud companion')
-  await expect(row).toContainText('hand it to this Mac on the companion')
-  await expect(row).toContainText('walnut device owner <name>')
+  // A dense row shows its headline and Retry; how to hand it over is one Show details away.
   const toggles = row.locator('button.hft-details:visible')
   if (await toggles.first().innerText() === 'Show details') await toggles.first().click()
   await expect(toggles).toHaveCount(1)
   await expect(toggles).toHaveText('Hide details')
+  await expect(row).toContainText('hand it to this Mac on the companion')
+  await expect(row).toContainText('walnut device owner <name>')
   await expect(row.locator('pre.hft-summary')).toContainText(SENTENCE)
   await toggles.scrollIntoViewIfNeeded()
   await expect(row.locator('pre.hft-summary')).toBeInViewport()
-  await banner(page).screenshot({ path: path.join(SHOTS, `cloud-card-other-mac-open-${browserName}.png`) })
+  await problemHosts(page).screenshot({ path: path.join(SHOTS, `cloud-row-other-mac-open-${browserName}.png`) })
   await toggles.click()
   await expect(toggles).toHaveText('Show details')
 
-  // 2. Retry asks again; the companion is still that Mac's, so the card stays.
+  // 2. Retry asks again; the companion is still that Mac's, so the row stays.
   await row.getByRole('button', { name: 'Retry' }).click()
   await page.waitForTimeout(3_000)
-  await expect(page.locator(`[data-testid="attention-banner"] li.hpb-row[data-host="${CLOUD}"][data-kind="cloud_other_mac"]`).first()).toBeVisible()
+  await expect(otherMacRow(page)).toBeVisible()
   expect(owners(f).map((d) => d.ownerId)).toEqual([f.ids['mac-primary'], f.ids['mac-primary']])
   expect(fs.existsSync(path.join(`${f.tunnelDir}.by-device`, f.ids['mac-primary'], 'daemon', 'daemon.pid'))).toBe(false)
 
   // 3. This Mac may not remove the other one: Settings › Phones & Cloud › Remove is refused, and says why.
   // The other Mac is listed as a Mac (the companion belongs to it), in its own
   // group: no phone wording and no Show QR.
+  await closePanel(page, 'escape')
   let section = await openDevices(page)
   const macs = section.getByTestId('devices-macs')
   const other = macs.locator('.devices-row[data-device-name="mac-primary"]')
@@ -191,17 +196,17 @@ test('a second Mac hears another Mac is connected, and takes the companion over 
   await expect(self.getByTestId('devices-unpair-self')).toBeVisible()
   expect(JSON.parse(fs.readFileSync(f.boxAuth, 'utf-8')).devices.some((d: { name: string }) => d.name === 'mac-second')).toBe(true)
 
-  // The handover, the way the card says: on the companion, `walnut device list` then `owner`.
+  // The handover, the way the row says: on the companion, `walnut device list` then `owner`.
   expect(boxCli(f, 'list')).toMatch(/mac-primary\s+\(owner\)/)
   expect(boxCli(f, 'owner', 'mac-second')).toContain('This cloud companion now belongs to "mac-second".')
   expect(owners(f)).toEqual([])
   expect(boxCli(f, 'list')).toMatch(/mac-second\s+\(owner\)/)
 
-  // 4. Back home: Retry on the card mints for this Mac and Cloud connects.
-  await page.getByTestId('sidebar-core-app-home').click()
-  await expect(page.locator('.main-page')).toBeVisible({ timeout: 20_000 })
-  await card(page).getByRole('button', { name: 'Retry' }).click()
-  await expect(card(page)).toHaveCount(0, { timeout: 90_000 })
+  // 4. The bell, from Settings: Retry on the row mints for this Mac and Cloud connects.
+  await openAll(page)
+  await row.getByRole('button', { name: 'Retry' }).click()
+  await expect(row).toHaveCount(0, { timeout: 90_000 })
+  await closePanel(page, 'escape')
   await expect.poll(async () => {
     const s = await (await page.request.get('/api/hosts/status')).json() as { hosts: Array<{ host: string; connected: boolean }> }
     return s.hosts.find((h) => h.host === CLOUD)?.connected

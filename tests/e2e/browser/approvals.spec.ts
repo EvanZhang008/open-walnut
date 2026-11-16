@@ -10,7 +10,7 @@
  *    opens the dialog in the order the requests came, the corner card on every page holding the
  *    buttons and staying until it is answered, and
  *    Main's Needs you on the Org page listing it;
- *  - the corner: a card and a toast share the bottom left, next to the sidebar.
+ *  - the stack: a card and a toast share the top of the window, centered, one width.
  *
  * The fixture server marks no test objects, while this automated window has a test-run label,
  * so this also pins that a live card shows there (the window re-reads the server's list).
@@ -22,7 +22,6 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fixtureHome } from './engine-settings-helpers'
 import { holdApprovalsLock } from './approvals-lock'
-import { ensureVaultSetUp, VAULT_MASTER } from './vault-session-helper'
 import { holdVaultLock } from './vault-lock'
 import { isolateUiPrefsContext } from './status-section-helpers'
 import { openSection, openTasksBy, sectionCount, taskSection } from './org-view-helpers'
@@ -350,9 +349,9 @@ function agentErrorEvent(agentId: string, error: string): string {
 type Box = { x: number; y: number; width: number; height: number }
 const overlaps = (a: Box, b: Box) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
 
-test('the corner: a toast and an approval card share the bottom left, right of the sidebar', async ({ page, request }) => {
-  // 2026-11-04, the user: "all notificaiton is bottom left" (common/corner-stack.tsx;
-  // the source half is tests/web/corner-stack-guard.test.ts).
+test('the stack: a toast and an approval card share the top of the window, centered, one width', async ({ page, request }) => {
+  // 2026-11-16, the user: "just show like noticiaton overlap on the top nice unified, just like IOS
+  // noticficaiton" (common/corner-stack.tsx; the source half is tests/web/corner-stack-guard.test.ts).
   await page.setViewportSize({ width: 1280, height: 800 })
   const sock = await routeSocket(page)
   await page.goto('/')
@@ -380,45 +379,39 @@ test('the corner: a toast and an approval card share the bottom left, right of t
 
   const vp = page.viewportSize()!
   const sidebar = (await page.locator('.app-shell > .sidebar').boundingBox())!
-  // Settings has its own left column (its nav) beside the sidebar: the stack sits next to the
-  // sidebar over the nav's bottom (2026-11-05, the user: "not on the big right"), reaching past a
-  // nav too narrow to read in.
   const c = (await card.boundingBox())!
   const t = (await toast.boundingBox())!
   await page.screenshot({ path: test.info().outputPath('corner.png') })
 
+  /** Where the stack is, as numbers a failure can say. */
+  const placed = async (w: number) => {
+    const b = (await card.boundingBox())!
+    const centered = Math.abs(b.x + b.width / 2 - w / 2) <= 1
+    const ok = b.y <= 24 && centered && Math.round(b.width) === Math.min(380, w - 32)
+    return ok ? 'top center' : `card x${Math.round(b.x)} y${Math.round(b.y)} w${Math.round(b.width)} in ${w}`
+  }
   for (const [name, b] of [['card', c], ['toast', t]] as const) {
-    expect(b.x, `${name} starts next to the sidebar`).toBe(Math.round(sidebar.x + sidebar.width) + 16)
-    expect(b.x, `${name} is on the left`).toBeLessThan(vp.width / 2)
+    expect(Math.round(b.width), `${name} has the stack's one width`).toBe(380)
+    expect(Math.abs(b.x + b.width / 2 - vp.width / 2), `${name} is centered in the window`).toBeLessThanOrEqual(1)
     expect(overlaps(b, sidebar), `${name} covers no part of the sidebar`).toBe(false)
   }
-  expect(vp.height - (c.y + c.height), 'the card sits at the bottom').toBeLessThanOrEqual(20)
-  expect(c.y, 'the approval is nearest the corner, the toast above it').toBeGreaterThanOrEqual(t.y + t.height - 1)
+  expect(c.y, 'the card sits at the top').toBeLessThanOrEqual(24)
+  expect(t.y, 'the approval is nearest the top edge, the toast under it').toBeGreaterThanOrEqual(c.y + c.height - 1)
   expect(overlaps(c, t)).toBe(false)
   expect(Math.abs(c.x - t.x), 'one column').toBeLessThanOrEqual(1)
 
-  // Collapsing the sidebar moves the stack with it.
+  // Collapsing the sidebar does not move the stack: nothing beside it decides where it is.
   await page.locator('.sidebar-collapse-btn').first().click()
   await expect.poll(async () => Math.round((await page.locator('.app-shell > .sidebar').boundingBox())!.width)).not.toBe(Math.round(sidebar.width))
-  await expect.poll(async () => {
-    const n = (await page.locator('.app-shell > .sidebar').boundingBox())!
-    const b = (await card.boundingBox())!
-    return Math.round(b.x - (n.x + n.width))
-  }).toBe(16)
+  await expect.poll(() => placed(vp.width)).toBe('top center')
   await page.locator('.sidebar-collapse-btn').first().click()
-  // A narrow window with the sidebar open: still next to the sidebar, inside the window.
+  // A narrow window with the sidebar open: still at the top, centered, inside the window.
   await page.setViewportSize({ width: 800, height: 600 })
-  // Polled as its numbers, so a failure says where the card and the column really were.
-  await expect.poll(async () => {
-    const n = (await page.locator('.app-shell > .sidebar').boundingBox())!
-    const b = (await card.boundingBox())!
-    const fits = Math.round(b.x - (n.x + n.width)) === 16 && b.x + b.width <= 800 && b.width >= 160
-    return fits ? 'fits' : `card x${Math.round(b.x)} w${Math.round(b.width)}; nav x${Math.round(n.x)} w${Math.round(n.width)} h${Math.round(n.height)}; stack ${await page.getByTestId('corner-stack').getAttribute('class')}`
-  }).toBe('fits')
+  await expect.poll(() => placed(800)).toBe('top center')
   await page.setViewportSize(vp)
 
-  // The notification center open: it lists the approval (and the toast) itself, so the corner's
-  // card and toast step aside; the stack moves just right of it for anything else.
+  // The notification center open: it lists the approval (and the toast) itself, so the stack's
+  // card and toast step aside; the stack centers right of it for anything else.
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('notification:open-center')))
   const center = page.locator('.notification-panel')
   await expect(center).toBeVisible()
@@ -427,8 +420,8 @@ test('the corner: a toast and an approval card share the bottom left, right of t
   await expect(stack.locator('.notification-toast', { hasText: 'corner test notice' })).toBeHidden()
   await expect.poll(async () => {
     const p = (await center.boundingBox())!
-    const left = await stack.evaluate((el) => parseFloat(getComputedStyle(el).left))
-    return left >= p.x + p.width + 8
+    const r = await stack.evaluate((el) => { const b = el.getBoundingClientRect(); return { left: b.left, width: b.width } })
+    return r.left >= p.x + p.width + 8 && Math.round(r.width) === 380
   }).toBe(true)
   // Its line opens the request over it; Escape closes that top layer alone, then the center.
   await center.getByTestId('approval-summary').click()
@@ -475,7 +468,7 @@ test('the corner: a toast and an approval card share the bottom left, right of t
   // The answer shows in the card's place a moment before anything else takes it.
   await expect(stack.locator(`[data-testid="approval-settled"][data-approval-id="${second.id}"]`)).toContainText('Denied')
 
-  // The phone has no free corner: the request is one line at the bottom, a tap opens it.
+  // The phone keeps the request to one line at the top, a tap opens it.
   const res3 = await request.post('/api/v1/approvals', { data: { cwd: '/work/site', command: 'release.sh', what: `Phone line ${Date.now().toString(36)}` } })
   const { approval: third, waitToken: thirdToken } = await res3.json() as { approval: { id: string }; waitToken: string }
   const card3 = page.locator(`[data-testid="corner-stack"] [data-testid="approval-card"][data-approval-id="${third.id}"]`)
@@ -546,19 +539,19 @@ test('the corner: a toast and an approval card share the bottom left, right of t
   })).toBe(true)
   await expect(card3.getByRole('button', { name: 'Deny' })).toHaveCount(0)
   await expect(card3.getByText('Approve?')).toBeVisible()
-  // It sits at the bottom of the screen, as on a computer: the bar's search and buttons stay clear.
+  // It sits at the top of the screen, as on a computer, across it with 8px each side, over the bar.
   await expect.poll(async () => {
     const line = (await card3.boundingBox())!
-    return line.y > 844 / 2 && line.y + line.height <= 844
+    return line.y >= 0 && line.y <= 24 && Math.round(line.x) === 8 && Math.round(line.width) === 390 - 16
   }).toBe(true)
-  // A toast on the phone is one row above it for its few seconds (a tap opens the center), and the
+  // A toast on the phone is one row under it for its few seconds (a tap opens the center), and the
   // page under the bar does not move.
   const areaTop = (await page.locator('.main-content-row > .app-content-area').boundingBox())!.y
   sock()!.send(agentErrorEvent('agent-phone', '401 unauthorized (phone notice)'))
   const phoneToast = stack.locator('.notification-toast').first()
   await expect(phoneToast).toBeVisible()
   await expect.poll(async () => Math.round((await phoneToast.boundingBox())!.height)).toBeLessThanOrEqual(48)
-  expect((await phoneToast.boundingBox())!.y).toBeGreaterThan(844 / 2)
+  expect((await phoneToast.boundingBox())!.y).toBeLessThan(844 / 2)
   expect((await page.locator('.main-content-row > .app-content-area').boundingBox())!.y).toBe(areaTop)
   await card3.locator('.approval-line-open').click()
   await dialog.getByRole('button', { name: 'Deny' }).click()
@@ -644,136 +637,6 @@ test('an agent\'s browser step on the corner card reads whole, the site and why 
     expect((await text.boundingBox())!.height, `${px}px: more than one line`).toBeGreaterThan(24)
     if (process.env.APR_SHOTS) await card.screenshot({ path: `${process.env.APR_SHOTS}/approval-whole-${px}.png` })
   }
-  const res = await request.post(`/api/v1/approvals/${made.approval.id}/answer`, { data: { decision: 'deny' } })
-  expect(res.ok()).toBe(true)
-})
-
-/**
- * The controls of the page under the corner it can reach: a button, link or field whose middle
- * the corner stack covers. Over a page's left column (the stack's `data-over="column"`) none at
- * all: what the column shows ends above the stack, its scrolling list included (2026-11-06: the
- * card covered Settings' nav rows Inbox Triage .. Phones & Cloud, which this helper used to skip
- * as rows of a list that scrolls). Elsewhere a row of a list that scrolls is left out: that list
- * scrolls its end clear above the stack (corner-stack.tsx syncRoom).
- */
-async function coveredByCorner(page: Page): Promise<string[]> {
-  return await page.evaluate(() => {
-    const stack = document.querySelector<HTMLElement>('[data-testid="corner-stack"]')
-    const main = document.querySelector('.main-content')
-    if (!stack || !main) return []
-    const strict = stack.dataset.over === 'column'
-    const scrolls = (el: Element) => {
-      for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
-        const oy = getComputedStyle(p).overflowY
-        if ((oy === 'auto' || oy === 'scroll') && p.scrollHeight > p.clientHeight + 1) return true
-      }
-      return false
-    }
-    // Scrolled out of its list's view (above or below what the list shows): not on screen, so not covered.
-    const clipped = (el: Element, x: number, y: number) => {
-      for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
-        if (getComputedStyle(p).overflowY === 'visible') continue
-        const b = p.getBoundingClientRect()
-        if (x < b.left || x > b.right || y < b.top || y > b.bottom) return true
-      }
-      return false
-    }
-    const out: string[] = []
-    for (const el of main.querySelectorAll('button, a[href], input, textarea, select, [role="button"]')) {
-      const r = el.getBoundingClientRect()
-      // Home stays mounted under visibility: hidden off its route: its rows are on no page now.
-      if (r.width === 0 || r.height === 0 || !el.checkVisibility({ visibilityProperty: true }) || (!strict && scrolls(el))) continue
-      if (clipped(el, r.left + r.width / 2, r.top + r.height / 2)) continue
-      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
-      if (hit && stack.contains(hit)) out.push((el.textContent || el.getAttribute('aria-label') || el.tagName).trim().slice(0, 40))
-    }
-    return out
-  })
-}
-
-test('the corner never lies over a page\'s own controls: the Passwords rail\'s Import and Lock move up clear of a tall card', async ({ page, request }) => {
-  // 2026-11-06: in the rail's narrow corner the card wraps to its whole action (three lines,
-  // who asks, the buttons on their own row) and lay over the rail's foot, its Import… and Lock.
-  // The rail does not scroll, so it takes the room at its end instead (corner-stack.tsx roomTaker).
-  test.setTimeout(120_000)
-  await page.setViewportSize({ width: 1280, height: 720 })
-  await page.goto('/')
-  await expect(page.locator('.app-shell > .sidebar')).toBeVisible({ timeout: 20_000 })
-  await ensureVaultSetUp(page, new URL(page.url()).origin)
-  const made = await ask(request, { what: `Let a Walnut agent press Enter in the feedback box on shop.example.test (${stamp()})` })
-  const card = page.locator(`[data-testid="corner-stack"] [data-testid="approval-card"][data-approval-id="${made.approval.id}"]`)
-
-  // Settings first: its nav is a left column too, and its rows scroll (the strict check).
-  await offHome(page)
-  await expect(card).toBeVisible({ timeout: 15_000 })
-  await expect.poll(() => page.getByTestId('corner-stack').getAttribute('data-over'), { timeout: 5_000 }).toBe('column')
-  await expect.poll(() => coveredByCorner(page), { timeout: 5_000 }).toEqual([])
-
-  if ((await page.locator('.sidebar.collapsed').count()) > 0) await page.locator('.sidebar-collapse-btn').click()
-  await page.locator('.sidebar-nav a[href="/passwords"]').first().click()
-  const form = page.getByTestId('pw-unlock')
-  await expect(form.or(page.getByTestId('pw-app'))).toBeVisible({ timeout: 20_000 })
-  if (await form.isVisible()) {
-    await page.getByLabel('Master password').fill(VAULT_MASTER)
-    await page.getByRole('button', { name: 'Unlock', exact: true }).click()
-  }
-  await expect(page.getByTestId('pw-app')).toBeVisible({ timeout: 30_000 })
-  await expect(card).toBeVisible()
-  // The narrow corner's tall card (approvals.css, max-width 260px).
-  await expect.poll(async () => (await card.boundingBox())?.height ?? 0).toBeGreaterThan(110)
-  await expect.poll(() => coveredByCorner(page), { timeout: 5_000 }).toEqual([])
-  const stackTop = (await page.getByTestId('corner-stack').boundingBox())!.y
-  for (const name of ['Import…', 'Lock']) {
-    const b = (await page.locator('.pw-side-foot').getByRole('button', { name, exact: true }).boundingBox())!
-    expect(b.y + b.height, `${name} ends above the corner`).toBeLessThanOrEqual(stackTop)
-  }
-  if (process.env.APR_SHOTS) await page.screenshot({ path: `${process.env.APR_SHOTS}/approval-over-rail.png` })
-  // Clickable where it is: Import opens its dialog.
-  await page.locator('.pw-side-foot').getByRole('button', { name: 'Import…', exact: true }).click({ timeout: 5_000 })
-  await expect(page.getByTestId('pw-import')).toBeVisible()
-  await page.keyboard.press('Escape')
-
-  // Answered, the rail's foot goes back down to the bottom.
-  const res = await request.post(`/api/v1/approvals/${made.approval.id}/answer`, { data: { decision: 'deny' } })
-  expect(res.ok()).toBe(true)
-  await expect(card).toHaveCount(0, { timeout: 10_000 })
-  await expect.poll(async () => {
-    const side = (await page.locator('.pw-side').boundingBox())!
-    const lock = (await page.getByTestId('pw-lock').boundingBox())!
-    return Math.round(side.y + side.height - (lock.y + lock.height))
-  }, { timeout: 10_000 }).toBeLessThan(40)
-})
-
-test('the corner never covers a page\'s left column on any page of the sidebar, its scrolling rows included', async ({ page, request }) => {
-  // 2026-11-06 round 2: the card covered Walnut Settings' own nav rows (Inbox Triage .. Phones &
-  // Cloud): room at the end of a list that scrolls leaves its rows under the stack until scrolled.
-  // Every page the sidebar opens is visited, so a new page's column is checked with no listing here.
-  test.setTimeout(300_000)
-  await page.setViewportSize({ width: 1280, height: 720 })
-  await page.goto('/')
-  await expect(page.locator('.app-shell > .sidebar')).toBeVisible({ timeout: 20_000 })
-  if ((await page.locator('.sidebar.collapsed').count()) > 0) await page.locator('.sidebar-collapse-btn').click()
-  const made = await ask(request, { what: `Let a Walnut agent click button "Place order" on shop.example.test (${stamp()})` })
-  const card = page.locator(`[data-testid="corner-stack"] [data-testid="approval-card"][data-approval-id="${made.approval.id}"]`)
-  const stack = page.getByTestId('corner-stack')
-  const pages = [...new Set(await page.locator('.sidebar-nav a[href^="/"]').evaluateAll((els) => els.map((a) => a.getAttribute('href')!)))]
-  expect(pages.length).toBeGreaterThan(3)
-  const seen: string[] = []
-  for (const href of [...pages, 'settings']) {
-    if (href === 'settings') await offHome(page)
-    else await page.locator(`.sidebar-nav a[href="${href}"]`).first().click()
-    await expect(card).toBeVisible({ timeout: 15_000 })
-    // Two looks of the corner (it looks twice a second), so a page that is still laying out settles.
-    await page.waitForTimeout(1_100)
-    const over = await stack.getAttribute('data-over')
-    seen.push(`${href}: ${over ?? 'page'}`)
-    if (over !== 'column') continue
-    await expect.poll(() => coveredByCorner(page), { timeout: 5_000, message: `${href}: controls under the corner` }).toEqual([])
-    if (process.env.APR_SHOTS) await page.screenshot({ path: `${process.env.APR_SHOTS}/corner-column-${href.replace(/\W+/g, '_') || 'home'}.png` })
-  }
-  console.log(`corner over each page: ${seen.join(', ')}`)
-  // The Settings nav is a left column on every window this size: the strict check ran there at least.
-  expect(seen).toContain('settings: column')
   const res = await request.post(`/api/v1/approvals/${made.approval.id}/answer`, { data: { decision: 'deny' } })
   expect(res.ok()).toBe(true)
 })

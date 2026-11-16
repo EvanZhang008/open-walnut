@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import { test, expect, type Page } from '@playwright/test'
 import { isolatePrefs } from './host-problems-helpers'
 import { loadApp } from './host-problems-fixture-helpers'
-import { healthyGitSync } from './banner-placement-helpers'
+import { healthyGitSync } from './host-attention-helpers'
 import { openDraft } from './draft-helpers'
 
 const pill = (page: Page) => page.locator('.stale-build-pill')

@@ -216,60 +216,38 @@ test.describe('on a phone', () => {
   })
 })
 
-// 2026-11-05, the user (a screenshot circling the empty bottom of the left column beside the bell):
-// "the notification should be here not on the big right". Home's task panel and the Org list.
-test('the corner sits next to the sidebar, over the page left column, never out over the big pane', async ({ page }, info) => {
+/** The stack's place as one string: at the top, centered in the window, its one width. */
+async function topCenter(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const r = document.querySelector('.corner-stack')!.getBoundingClientRect()
+    const want = Math.min(380, window.innerWidth - 32)
+    const ok = r.top <= 24 && Math.abs(r.left + r.width / 2 - window.innerWidth / 2) <= 1 && Math.round(r.width) === want
+    return ok ? 'top center' : `stack x${Math.round(r.left)} y${Math.round(r.top)} w${Math.round(r.width)} in ${window.innerWidth}`
+  })
+}
+
+// 2026-11-16, the user: "just show like noticiaton overlap on the top nice unified, just like IOS
+// noticficaiton". Home and the Org page: the toast at the top, centered, whole, whatever the page has.
+test('the toast sits at the top of the window, centered, on Home and on the Org page', async ({ page }, info) => {
   await page.setViewportSize({ width: 1280, height: 800 })
   const sock = await routeSocket(page)
   await boot(page, sock)
-  const sidebar = page.locator('.app-shell > .sidebar')
-  const check = async (column: Locator, pane: Locator, shot: string) => {
-    sock()!.send(noticeEvent(`left-${shot}`, { body: BODY }))
+  const check = async (shot: string) => {
+    sock()!.send(noticeEvent(`top-${shot}`, { body: BODY }))
     const toast = page.locator('.corner-stack .notification-toast', { hasText: 'managed daemon update' }).last()
     await expect(toast).toBeVisible()
     await expect.poll(() => toast.evaluate((el) => el.getAnimations().length)).toBe(0)
-    const s = (await sidebar.boundingBox())!
-    const c = (await column.boundingBox())!
-    const p = (await pane.boundingBox())!
-    // Polled as its numbers, so a failure says where the toast and the column really were.
-    await expect.poll(async () => {
-      const t = (await toast.boundingBox())!
-      const ok = Math.round(t.x) === Math.round(s.x + s.width) + 16 && t.x + t.width <= c.x + c.width - 15 && t.x + t.width <= p.x + 1
-      return ok ? 'inside' : `toast x${Math.round(t.x)} w${Math.round(t.width)}; sidebar r${Math.round(s.x + s.width)}; column r${Math.round(c.x + c.width)}; pane x${Math.round(p.x)}`
-    }).toBe('inside')
-    // The column's foot row (Home's System attention, when there is something to show) stays in sight above nothing: the corner stands on it.
-    await expect.poll(() => page.evaluate(() => {
-      const foot = [...document.querySelectorAll('.main-content .ab-mount')].map((el) => el.getBoundingClientRect()).find((r) => r.height > 0 && r.bottom > window.innerHeight - 80)
-      const stack = document.querySelector('.corner-stack')!.getBoundingClientRect()
-      return !foot || stack.right <= foot.left || stack.bottom <= foot.top + 1 ? 'clear' : `stack bottom ${Math.round(stack.bottom)} over the foot row at ${Math.round(foot.top)}`
-    })).toBe('clear')
-    // No row of the column is under the corner, also before the list is scrolled (2026-11-06
-    // review: Home's bottom Focus rows sat under the card): the list ends above it.
-    await expect.poll(() => page.evaluate(() => {
-      const stack = document.querySelector('.corner-stack')!
-      const r = stack.getBoundingClientRect()
-      for (let x = r.left + 4; x < r.right; x += 24) {
-        for (let y = r.top + 2; y < r.bottom; y += 12) {
-          const hit = document.elementsFromPoint(x, y).find((el) => !stack.contains(el))
-          const row = hit?.closest('[data-task-id], .org-channel, .todo-panel-item')
-          if (row) return `a row is under the corner at ${Math.round(x)},${Math.round(y)}: ${row.className}`
-        }
-      }
-      return 'clear'
-    })).toBe('clear')
+    await expect.poll(() => topCenter(page)).toBe('top center')
     await expectInside(toast)
-    await page.screenshot({ path: `${SHOTS}/${info.project.name}-left-${shot}.png` })
+    await page.screenshot({ path: `${SHOTS}/${info.project.name}-top-${shot}.png` })
     await toast.locator('.notification-toast-close').click()
     await expect(toast).toBeHidden()
   }
-  const todo = page.locator('.main-page-todo')
-  await expect(todo).toBeVisible()
-  await check(todo, page.locator('.main-page-right'), 'home')
+  await expect(page.locator('.main-page-todo')).toBeVisible()
+  await check('home')
   await page.getByTestId('sidebar-org').click()
-  const list = page.locator('.org-list')
-  await expect(list).toBeVisible({ timeout: 30_000 })
-  // The Org page: its list on the left, the node's page beside it.
-  await check(list, page.locator('.org-list + *').first(), 'org')
+  await expect(page.locator('.org-list')).toBeVisible({ timeout: 30_000 })
+  await check('org')
 })
 
 /** The fixture's session, opened in a column and then full screen from its menu, as the user does. */
@@ -286,12 +264,10 @@ async function openFullScreen(page: Page): Promise<Locator> {
   return panel
 }
 
-// 2026-11-06, the user (a full-screen session, the approval card crossed out over its composer, an
-// arrow at the window's bottom left beside System attention): "I said no matter if its full screen
-// or this, fix just here at left". The corner keeps its place over the sheet's backdrop and above
-// the sheet, never over the sheet's composer.
+// A full-screen sheet does not move the stack: it stays at the top of the window, centered, above
+// the sheet (2026-11-16: one place, whatever is open).
 for (const size of [{ width: 1512, height: 900 }, { width: 2200, height: 1100 }]) {
-  test(`a full-screen session keeps the corner at the bottom left beside the sidebar (${size.width}px)`, async ({ page, request }, info) => {
+  test(`a full-screen session keeps the stack at the top center (${size.width}px)`, async ({ page, request }, info) => {
     await page.setViewportSize(size)
     const sock = await routeSocket(page)
     await boot(page, sock)
@@ -304,37 +280,14 @@ for (const size of [{ width: 1512, height: 900 }, { width: 2200, height: 1100 }]
     const toast = page.locator('.corner-stack .notification-toast', { hasText: 'managed daemon update' }).last()
     await expect(toast).toBeVisible()
     await expect.poll(() => toast.evaluate((el) => el.getAnimations().length)).toBe(0)
-    // Measured in one evaluate, polled, so a failure says where everything really was.
+    // The same place over a full-screen sheet as anywhere: at the top, centered, above the sheet.
+    await expect.poll(() => topCenter(page)).toBe('top center')
     await expect.poll(() => page.evaluate(() => {
-      const side = document.querySelector('.app-shell > .sidebar')!.getBoundingClientRect().right
-      const stack = document.querySelector('.corner-stack')!.getBoundingClientRect()
-      const sheet = document.querySelector('.open-walnut-fullscreen')!.getBoundingClientRect()
-      // What one types in and clicks on the sheet's composer stays clear of the corner.
-      const controls = [...document.querySelectorAll('.open-walnut-fullscreen .chat-input-container :is(textarea, button, [contenteditable="true"])')]
-        .filter((el) => el.getBoundingClientRect().width > 0)
       const cardEl = document.querySelector('.corner-stack [data-testid="approval-card"]')!
       const c = cardEl.getBoundingClientRect()
       const hit = document.elementFromPoint(c.left + c.width / 2, c.top + c.height / 2)
-      const fails: string[] = []
-      if (Math.round(stack.left) !== Math.round(side) + 16) fails.push(`stack x${Math.round(stack.left)} not sidebar r${Math.round(side)} + 16`)
-      if (Math.abs(window.innerHeight - stack.bottom - 16) > 1) fails.push(`stack bottom ${Math.round(window.innerHeight - stack.bottom)} from the window bottom`)
-      if (!hit || !cardEl.contains(hit)) fails.push(`card covered by ${hit?.className}`)
-      for (const el of controls) {
-        const r = el.getBoundingClientRect()
-        const over = r.left < stack.right && r.right > stack.left && r.top < stack.bottom && r.bottom > stack.top
-        if (over) fails.push(`stack r${Math.round(stack.right)} over the composer's ${el.tagName.toLowerCase()} at x${Math.round(r.left)}`)
-      }
-      if (stack.right - sheet.left > 16 && sheet.left - side - 32 >= 220) fails.push(`stack r${Math.round(stack.right)} past the sheet x${Math.round(sheet.left)} with room beside it`)
-      // The sheet itself moves past the corner, so it is never under it, and its header, chat and
-      // composer keep one left line (2026-11-06 review: the header stayed put while the chat moved).
-      if (stack.right > sheet.left) fails.push(`stack r${Math.round(stack.right)} over the sheet x${Math.round(sheet.left)}`)
-      const chat = document.querySelector('.open-walnut-fullscreen .session-history')?.getBoundingClientRect()
-      if (chat && chat.left < stack.right && chat.bottom > stack.top) fails.push(`the sheet's chat at x${Math.round(chat.left)} under the stack r${Math.round(stack.right)}`)
-      const head = document.querySelector('.open-walnut-fullscreen .session-panel-header')?.getBoundingClientRect()
-      if (head && Math.abs(head.left - sheet.left) > 1) fails.push(`the sheet's header at x${Math.round(head.left)}, the sheet at x${Math.round(sheet.left)}`)
-      if (stack.width < 219) fails.push(`stack only ${Math.round(stack.width)}px wide`)
-      return fails.join('; ') || 'beside the sidebar'
-    })).toBe('beside the sidebar')
+      return hit && cardEl.contains(hit) ? 'on top' : `card covered by ${hit?.className}`
+    })).toBe('on top')
     // The card's buttons take a click 700ms after it shows (ARM_MS): moved on, as the person sees it.
     await page.clock.runFor(1_000)
     await page.screenshot({ path: `${SHOTS}/${info.project.name}-sheet-${size.width}.png` })
@@ -403,12 +356,6 @@ test('the approval card opens the task that asked, from a full-screen sheet and 
       const r = n.getBoundingClientRect()
       const list = n.closest('.main-page-todo')!.getBoundingClientRect()
       return r.height > 0 && r.top >= list.top && r.bottom <= list.bottom
-    }), { timeout: 10_000 }).toBe(true)
-    // ...and not behind the corner's card (2026-11-06 review: the focused row sat under it).
-    await expect.poll(() => row.evaluate((n) => {
-      const r = n.getBoundingClientRect()
-      const c = document.querySelector('.corner-stack')!.getBoundingClientRect()
-      return c.height === 0 || r.bottom <= c.top || r.left >= c.right || r.right <= c.left
     }), { timeout: 10_000 }).toBe(true)
   }
   // The title opens the whole request; its task name there is a link too.

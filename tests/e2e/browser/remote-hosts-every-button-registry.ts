@@ -35,7 +35,7 @@ export const REGISTRY: Record<string, { check: string; optional?: true }> = {
   'Hosts/button#rh-turn-on': { check: 'saves the host on and dials it: Retrying... until the save lands, then Connected' },
   'Hosts/button#rh-draft-cancel': { check: 'takes a new row away with no confirm' },
   'Hosts/button#rh-add-connect': { check: 'a new row saves only here (or Enter): a bad hostname is refused under its field; then Connecting..., and a failure says why in the words of Add' },
-  'Hosts/button#rh-show-again': { check: 'beside "Hidden from the home page.": the host\'s problem shows there again; the focus stays on the row' },
+  'Hosts/button#rh-show-again': { check: 'beside "Hidden from notifications.": the host\'s problem shows there again; the focus stays on the row' },
   'Hosts/button#rh-details-hide': { check: 'at the top of Details, sticky: closes them, the focus back on More (Escape does the same)' },
   'Hosts/button#rh-details-part-status': { check: 'folds and unfolds Status in Details' },
   'Hosts/button#rh-details-part-this-host': { check: 'folds and unfolds This host in Details (closed by default)' },

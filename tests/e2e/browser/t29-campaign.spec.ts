@@ -19,7 +19,7 @@
 import fs from 'node:fs/promises'
 import { test, expect, type Page } from '@playwright/test'
 import { presetPanelView } from './todo-panel-helpers'
-import { healthyGitSync } from './banner-placement-helpers'
+import { healthyGitSync } from './host-attention-helpers'
 
 const SCREENSHOT_DIR = '/tmp/t29-campaign/shots'
 

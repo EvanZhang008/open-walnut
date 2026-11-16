@@ -128,8 +128,6 @@ export interface AskWalnutSlotProps {
   tasksLoading?: boolean;
   setupReady?: boolean;
   setup?: ReactNode;
-  /** Rendered above the body (the setup banner). */
-  banner?: ReactNode;
   /** Rendered above the body while the inspector is open. */
   inspectorPanel?: ReactNode;
   inspectorOpen: boolean;
@@ -176,7 +174,7 @@ function initialDraftMeta(): QuickStartTaskMeta {
 }
 
 export function AskWalnutSlot({
-  tasks, tasksLoading, setupReady, setup, banner, inspectorPanel,
+  tasks, tasksLoading, setupReady, setup, inspectorPanel,
   inspectorOpen, onToggleInspector, onFixWalnut, onCloseChat, onOpenOrg, onSelectionChange, phoneOpen,
   onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft,
 }: AskWalnutSlotProps) {
@@ -721,7 +719,6 @@ export function AskWalnutSlot({
 
   return (
     <div className="ask-walnut-slot" data-testid="ask-walnut-slot">
-      {banner}
       {inspectorPanel}
 
       <div className="ask-walnut-slot-body">

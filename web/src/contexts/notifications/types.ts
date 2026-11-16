@@ -20,7 +20,11 @@ export type NotificationKind =
    *  column because every panel was pinned) and pointing at the setting behind it.
    *  Answers the human's own click, so ephemeral like `sort`, but long enough to
    *  read a sentence and press the button; never in the feed. */
-  | 'hint';
+  | 'hint'
+  /** A remote host Walnut cannot use, the moment it first appears (HostProblemNotices). The
+   *  notification panel lists the live problem itself (NotificationProblems), so the toast is
+   *  its only copy outside that list: ephemeral, never in the feed, and silenced by quiet mode. */
+  | 'host';
 export type NotificationSeverity = 'info' | 'success' | 'warning' | 'error';
 
 /** One option an ACP provider offered for a permission request. */
@@ -33,7 +37,7 @@ export interface NotificationAcpOption {
 /** A deep-link, callback, plugin op or plugin dialog the toast/feed entry can offer. */
 export interface NotificationAction {
   label: string;
-  /** `navigate` uses react-router; `callback` invokes onAction; `op` POSTs args;
+  /** `navigate` uses react-router; `callback` invokes `run` (else the record's onAction); `op` POSTs args;
    *  `dialog` opens only the owning plugin's named slot in this window. */
   kind: 'navigate' | 'callback' | 'op' | 'dialog';
   to?: string;
@@ -44,6 +48,8 @@ export interface NotificationAction {
   /** kind 'dialog' only: the owner's local dialog slot id. */
   slot?: string;
   args?: Record<string, unknown>;
+  /** kind 'callback', a toast born in this window only: this button's own handler. */
+  run?: () => void;
 }
 
 export interface Notification {
@@ -174,6 +180,8 @@ export const TOAST_DURATION_MS: Record<NotificationKind, number> = {
   reminder: 120_000,
   // A sentence plus a button: the 3s of a sort hint is too short to act on.
   hint: 8000,
+  // Long enough to read the host's sentence and press Retry or Show details.
+  host: 10000,
 };
 
 /**
@@ -195,6 +203,7 @@ export const IS_PERSISTENT: Record<NotificationKind, boolean> = {
   letter: true,
   reminder: true,
   hint: false,
+  host: false,
 };
 
 /**
@@ -226,5 +235,6 @@ export function SHOULD_TOAST(n: { kind: NotificationKind; severity: Notification
     case 'reminder': return true;
     // Ephemeral with no feed copy: the toast is its only surface.
     case 'hint': return true;
+    case 'host': return true;
   }
 }

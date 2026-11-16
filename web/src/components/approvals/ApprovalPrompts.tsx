@@ -3,8 +3,8 @@
  * console shows them. Mounted once in App, it feeds the store (approvals-store.ts) and draws
  * the window-wide parts:
  *
- *  - the card at the bottom left of every console window, on every page, nearest the corner of
- *    the one stack every notice shares (common/corner-stack.tsx); it holds the request's buttons;
+ *  - the card at the top of every console window, on every page, nearest the top edge of the
+ *    one stack every notice shares (common/corner-stack.tsx); it holds the request's buttons;
  *  - the dialog that the Needs you line (ApprovalRow: Home, the Org page, the notification
  *    center), the card's title or its "N waiting" or a click on the system notification (approval-notify.ts)
  *    opens, in the order the requests came, so the whole request is read before it is approved; the
@@ -427,7 +427,7 @@ export function ApprovalPrompts() {
   useEffect(() => () => { if (receiptTimer.current) clearTimeout(receiptTimer.current); }, []);
   const holding = card ? receipt : null;
   // A card made smaller (two short lines) stays so until another request comes (it opens full again, so the
-  // new one is not missed). Lifted over a chat (no free room in the corner) it is that one line
+  // new one is not missed). In a crowded stack (corner-stack.tsx compact) it is that one line
   // too, so it covers as little as it can.
   const [lineFor, setLineFor] = useState<{ id: string; n: number } | null>(null);
   const { compact, summaryInSight } = useCornerState();

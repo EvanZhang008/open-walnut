@@ -1,6 +1,7 @@
 /**
- * One row of the home banner's host section (li.hpb-row), and of the
- * notification panel's System host list (`statusList`: no x). The sentences come
+ * One host problem row (li.hpb-row), as the notification panel shows it: in All
+ * and Errors with an x (NotificationProblems) and in System's host list without
+ * one (NotificationHostRow). The sentences come
  * from the shared model (@open-walnut/host-problem) and the server verbatim;
  * the buttons are hostActionsFor(surface 'banner') and run through
  * useHostActions, the same implementation Settings and the picker use.
@@ -9,16 +10,15 @@
  * the row's buttons right under it (always in view with the headline), the
  * details and their toggle, then the row x (drawn at the headline's line end).
  *
- * A row's expanded flag lives in the banner session (attention-banner-session.ts),
- * keyed by row id: the user's own Show / Hide details survives a remount in
- * another mount. Without a choice, row 1 opens by position (`defaultExpanded`).
+ * A row's expanded flag lives in the page session (host-row-expanded.ts),
+ * keyed by row id: the user's own Show / Hide details holds in both views.
+ * Without a choice, the row's `defaultExpanded` applies.
  */
-import { useCallback, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  DETAILS_NOT_SSH_KINDS, autofixProgressText, autofixVerbFor, firstSentence, formatElapsed, joinLabels, type HostActionId,
+  DETAILS_NOT_SSH_KINDS, autofixProgressText, autofixVerbFor, firstSentence, formatElapsed, type HostActionId,
 } from '@open-walnut/host-problem';
 import { useHostStatus } from '@/hooks/useHostStatus';
-import { getHostActionSnapshot, runHostAction, subscribeHostActions } from '@/utils/host-action-store';
 import { useServerTick } from '@/hooks/useServerTick';
 import { useHostActions, RETRY_FAILED_TEXT, CHECK_FAILED_TEXT, type HostActions } from '@/hooks/useHostActions';
 import { HostFailureText } from '@/components/hosts/HostFailureText';
@@ -28,8 +28,7 @@ import { demoHostMessage } from '@/utils/demo-generation';
 import { HostStatusDot } from '@/components/sessions/path-selector/HostStatusDot';
 import { activeStepLabel } from '@/utils/host-connect';
 import type { BannerRow } from '@/utils/attention-banner-model';
-import { useRowExpanded } from '@/utils/attention-banner-session';
-import { log } from '@/utils/log';
+import { useRowExpanded } from '@/utils/host-row-expanded';
 import { HostFixButton } from './HostFixButton';
 import { SetupProgress } from './SetupProgress';
 
@@ -98,7 +97,6 @@ function useHeightLock(busy: boolean, exact = false): {
 }
 
 const RETRY_LABELS = ['Retry', 'Retrying...'];
-const RETRY_ALL_LABELS = ['Retry all', 'Retrying...'];
 const CHECK_LABELS = ['Check again', 'Checking...', CHECK_FAILED_TEXT];
 const CONNECT_NOW_LABELS = ['Connect now', 'Retrying...'];
 const UPDATE_LABELS = ['Update', 'Updating...', 'Try again'];
@@ -128,8 +126,8 @@ export function rowActionsFor(all: HostActionId[], canFix: boolean,
 }
 
 /** The row's buttons, in spec order; the secondary Open Settings is quieter and last. */
-function ActionButtons({ ids, actions, alias, name, many, fixFailed, onOpenSettings, onLock }: {
-  ids: HostActionId[]; actions: HostActions; alias: string; many?: boolean; fixFailed?: boolean;
+function ActionButtons({ ids, actions, alias, name, fixFailed, onOpenSettings, onLock }: {
+  ids: HostActionId[]; actions: HostActions; alias: string; fixFailed?: boolean;
   /** The host(s) the buttons act on: the group's name, so a screen reader hears 'Key box, Retry' (N3-16). */
   name?: string;
   onOpenSettings: (alias?: string) => void; onLock: () => void;
@@ -139,7 +137,7 @@ function ActionButtons({ ids, actions, alias, name, many, fixFailed, onOpenSetti
   const out: ReactNode[] = [];
   for (const id of ids) {
     if (id === 'retry') {
-      const labels = many ? RETRY_ALL_LABELS : RETRY_LABELS;
+      const labels = RETRY_LABELS;
       out.push(<StableButton key={id} label={pending === 'retry' ? 'Retrying...' : labels[0]} labels={labels}
         disabled={pending !== null} onClick={run(actions.retry)} testId="hpb-retry" />);
     } else if (id === 'connectNow') {
@@ -369,7 +367,7 @@ export function SingleHostRow({ row, defaultExpanded, singleLine, dense, leaving
     <RowFrame
       row={row} lockRef={ref} minHeight={minHeight ?? (leaving ? undefined : selfTry)} maxHeight={maxHeight} leaving={leaving}
       body={body} receipt={hasReceipt}
-      onDismiss={!statusList && onDismiss && row.dismissKeys.length ? () => onDismiss(row) : undefined}
+      onDismiss={onDismiss && row.dismissKeys.length ? () => onDismiss(row) : undefined}
       dot={<HostStatusDot host={alias} label={label} decorative />}
       singleLine={singleLine} dense={dense} open={expanded} statusList={statusList}
     />
@@ -384,94 +382,9 @@ function DetailsToggle({ open, onToggle }: { open: boolean; onToggle: () => void
   );
 }
 
-/** The group's members' attempts, read from the shared store as one value (a stable string while nothing changes). */
-function groupActionKey(hosts: readonly string[]): string {
-  return hosts.map((h) => {
-    const a = getHostActionSnapshot(h);
-    return `${a.pending ?? ''}|${a.failed ?? ''}|${a.receipt ?? ''}`;
-  }).join('\n');
-}
-
-/**
- * Hosts waiting on the same login (cert_expired, agent_missing): one row,
- * 'Retry all' dials each through the SHARED attempt store (host-action-store),
- * the same one every other surface reads: a card that remounts in the other
- * panel shows the same 'Retrying...' and a second click sends nothing (C48).
- * From the click until every member settles the row is the user's own attempt:
- * 'Connecting to Cert box and Cert box 2...' with a disabled 'Retrying...'.
- */
-export function GroupRow({ row, defaultExpanded, singleLine, dense, leaving, onDismiss, onOpenSettings, onNavigate }: HostRowProps) {
-  const [expanded, setExpanded] = useRowExpanded(row.id, defaultExpanded);
-  const hostsKey = row.hosts.join(' ');
-  const key = useSyncExternalStore(subscribeHostActions, () => groupActionKey(row.hosts), () => groupActionKey(row.hosts));
-  const members = key.split('\n').map((m) => m.split('|'));
-  const pending = members.some((m) => m[0] === 'retry');
-  const failed = members.some((m) => m[1] === 'retry');
-  // Same result for every member: the one receipt; any member that changed says so itself.
-  const receipt = !pending && members.every((m) => m[2]) ? members[0][2] : null;
-  const { ref, minHeight, maxHeight, lock } = useHeightLock(pending || !!receipt, pending);
-  const retryAll = useCallback(async () => {
-    const results = await Promise.allSettled(hostsKey.split(' ').map((h) => runHostAction(h, 'retry')));
-    const bad = results.filter((r) => r.status === 'rejected').length;
-    if (bad) log.warn('attention-banner', 'retry all: some connect requests failed', { hosts: hostsKey, failed: bad });
-  }, [hostsKey]);
-  const actions: HostActions = {
-    retry: retryAll, connectNow: retryAll, update: async () => {}, checkAgain: async () => {},
-    pending: pending ? 'retry' : null, failed: failed ? 'retry' : null, failedReason: null, receipt, fixing: null, lastTriedAt: null,
-  };
-  const mine = pending || row.by === 'user';
-  const labels = row.hosts.length > 1 ? RETRY_ALL_LABELS : RETRY_LABELS;
-  const shown = rowActionsFor(row.actions, row.type !== 'trying', { singleLine, dense, expanded });
-  const actionsNode = row.type === 'trying' || pending
-    ? (mine ? <div className="hpb-actions"><StableButton label="Retrying..." labels={labels} disabled onClick={() => {}} testId="hpb-retry" /></div> : null)
-    : (
-      <ActionButtons ids={shown.ids} actions={actions} alias={row.hosts[0]} name={row.labels.join(', ')} many={row.hosts.length > 1}
-        onOpenSettings={onOpenSettings} onLock={lock} />
-    );
-  const after = <>{actionsNode}{shown.fix && <HostFixButton target={{ host: row.hosts.length === 1 ? row.hosts[0] : row.hosts }} name={row.labels.join(', ')} onNavigate={onNavigate} />}<Receipts actions={actions} /></>;
-  const body = row.type === 'trying' || pending
-    ? (
-      <>
-        <div className="hpb-trying" data-testid="hpb-trying">
-          {mine && <span className="hpb-spinner" aria-hidden="true" />}
-          <span className="hpb-trying-text">{mine ? `Connecting to ${joinLabels(row.labels)}...` : 'Trying again...'}</span>
-          {mine && <StepLabel alias={row.hosts[0]} />}
-        </div>
-        {after}
-      </>
-    )
-    : <ConnectBody row={row} expanded={expanded} onToggle={() => setExpanded(!expanded)}
-        singleLine={singleLine} after={after} receipt={!!receipt} more={shown.folds} />;
-  return (
-    <RowFrame
-      row={row} lockRef={ref} minHeight={minHeight} maxHeight={maxHeight} leaving={leaving}
-      body={body}
-      onDismiss={onDismiss ? () => onDismiss(row) : undefined}
-      dot={<HostStatusDot dot={{ kind: row.type === 'trying' || pending ? 'connecting' : 'failed', title: row.headline ?? '' }} decorative />}
-      singleLine={singleLine} dense={dense} open={expanded}
-    />
-  );
-}
-
 /** The shared success sentence without its leading check mark: the row's ok dot carries the state. */
 export function readySentenceText(sentence: string | undefined): string {
   return (sentence ?? '').replace(/^\u2713\s*/, '');
-}
-
-/**
- * 'Build box is ready (Claude Code 2.1.281)' for 3 seconds, after the ok dot.
- * It takes the height the host's problem row had (same-height rule): the rows
- * below never move under the pointer; the row shrinks only as it leaves.
- */
-export function ReadyRow({ row, leaving }: { row: BannerRow; leaving?: boolean }) {
-  const [held] = useState(() => lastRowHeight.get(row.hosts[0]));
-  return (
-    <li className={`hpb-row hpb-ready${leaving ? ' hpb-leaving' : ''}`} data-host={row.hosts.join(' ')} data-type="ready" data-row-id={row.id}
-      style={held && !leaving ? { minHeight: held } : undefined}>
-      <span className="hpb-dot"><HostStatusDot host={row.hosts[0]} label={row.labels[0]} decorative /></span>
-      <div className="hpb-body"><span className="hpb-ready-text">{readySentenceText(row.sentence)}</span></div>
-    </li>
-  );
 }
 
 /** Test seam: forget the per-host row heights. */

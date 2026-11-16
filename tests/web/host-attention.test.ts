@@ -1,42 +1,23 @@
 /**
- * The attention banner's owner store and the dots that speak when no card on
- * the page does (banner placement slice, spec 2.1 + 3; C40, C50, C60):
- *   store      placement writes are synchronous and notify (the panel never holds the card)
- *   landing    the panel opens on Needs Action, else System for a bell reason, else All
+ * Who speaks for a host or Claude Code problem now that no card on the page
+ * carries it (host-attention.ts, useAttentionDots.ts, 2026-11-16):
+ *   landing    the panel opens on Needs Action, else All (which leads with the problems)
  *   bell       bellDotReason + bellPresentation over every input the bell reads
- *   local      localNoticeShows is the card's own rule; outdated never shows
- *   pane       the remote hosts pane silences the host reason
- *   dots       which card covers which reason (C15, C16, C18, C68)
+ *   local      localNoticeShows: outdated never shows; a dismissal for this state hides it
+ *   pane       the remote hosts pane silences the rail dot (the user is looking at the rows)
+ *   dots       a host problem lights the rail and the bell on every page, Home included
+ *   model      the rail's boolean runs the problem-row model: dismissed rows and
+ *              young reconnects light nothing
  */
-import { beforeEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
-  __resetHostBannerPlacementForTests, bellDotReason, bellPresentation, getHostBannerPlacement,
-  landingSectionFor, onRemoteHostsPane, setHostBannerPlacement, subscribeHostBannerOwner, type BellReason,
-} from '../../web/src/utils/host-banner-placement'
+  bellDotReason, bellPresentation, hostAttentionOf, landingSectionFor, onRemoteHostsPane, railDotShows, type BellReason,
+} from '../../web/src/utils/host-attention'
 import { localNoticeShows } from '../../web/src/utils/local-claude-banner'
 import { attentionDotsOf } from '../../web/src/hooks/useAttentionDots'
 import type { SystemHealth } from '../../web/src/hooks/useSystemHealth'
 import type { LocalClaudeStatus } from '../../web/src/api/local-claude'
-
-beforeEach(() => { __resetHostBannerPlacementForTests() })
-
-describe('owner store', () => {
-  it('starts at the slot; writes notify synchronously, repeats do not', () => {
-    expect(getHostBannerPlacement()).toBe('slot')
-    let calls = 0
-    const stop = subscribeHostBannerOwner(() => { calls++ })
-    setHostBannerPlacement('tasks')
-    expect(calls).toBe(1)
-    expect(getHostBannerPlacement()).toBe('tasks')
-    setHostBannerPlacement('tasks')
-    expect(calls).toBe(1)
-    setHostBannerPlacement('draft')
-    expect(calls).toBe(2)
-    stop()
-    setHostBannerPlacement('none')
-    expect(calls).toBe(2)
-  })
-})
+import type { HostStatusInput } from '../../src/core/hosts/host-problem'
 
 describe('landing section', () => {
   it('Needs Action while a decision waits, otherwise All (which leads with what is broken)', () => {
@@ -92,6 +73,15 @@ describe('bell dot reason and presentation (C60 full table)', () => {
       title: 'Notifications, 1 waiting; remote hosts need attention', dot: false, cornerDot: true, dotKind: 'attention',
     })
   })
+
+  it('a host or local reason wears the attention look; the git sync dot alone keeps the system look (N9, N16)', () => {
+    const base = { attentionCount: 0, quiet: false, quietLabel: '', collapsed: false }
+    expect(bellPresentation({ ...base, reason: 'hosts', hasIssues: true }).dotKind).toBe('attention')
+    expect(bellPresentation({ ...base, reason: 'local', hasIssues: false }).dotKind).toBe('attention')
+    expect(bellPresentation({ ...base, reason: null, hasIssues: true }).dotKind).toBe('system')
+    expect(bellPresentation({ ...base, reason: null, hasIssues: false }).dotKind).toBe(null)
+    expect(bellPresentation({ ...base, attentionCount: 2, reason: 'hosts', hasIssues: false })).toMatchObject({ cornerDot: true, dotKind: 'attention' })
+  })
 })
 
 const claude = { found: true, version: '2.1.258', minVersion: '2.1.280', kind: 'native', auth: 'ok', versionOk: true, installMethod: 'native' }
@@ -101,7 +91,7 @@ const OUTDATED = { kind: 'claude_outdated', message: 'Claude Code on this comput
 const SIGN_IN = { kind: 'claude_not_logged_in', message: 'Claude Code is not signed in.', commands: ['claude'] }
 const MISSING = { kind: 'claude_missing', message: 'Claude Code is not installed on this computer.', commands: ['install'] }
 
-describe('localNoticeShows (the card and the bell share it; C50)', () => {
+describe('localNoticeShows (the panel row and the bell share it; C50)', () => {
   it('unknown or loading health says nothing', () => {
     expect(localNoticeShows(undefined, [])).toBeNull()
     expect(localNoticeShows({} as SystemHealth, [])).toBeNull()
@@ -139,21 +129,43 @@ describe('onRemoteHostsPane', () => {
   })
 })
 
-describe('attentionDotsOf: which in-page card covers which reason', () => {
-  const dots = (hostOn: boolean, localOn: boolean, where: 'tasks' | 'slot' | 'draft' | 'none', pathname = '/', hash = '') =>
-    attentionDotsOf({ hostOn, localOn, where, pathname, hash })
-  it('hosts: covered by any in-page card on Home, uncovered elsewhere or with none (C15, C16)', () => {
-    for (const w of ['tasks', 'slot', 'draft'] as const) expect(dots(true, false, w)).toEqual({ railSettingsDot: false, bellReason: null })
-    expect(dots(true, false, 'none')).toEqual({ railSettingsDot: true, bellReason: 'hosts' })
-    expect(dots(true, false, 'tasks', '/notes')).toEqual({ railSettingsDot: true, bellReason: 'hosts' })
-    expect(dots(true, true, 'none', '/settings', '#rh-host-netbox')).toEqual({ railSettingsDot: false, bellReason: 'local' })
+describe('the rail dot and the bell reason (no card covers a host problem any more)', () => {
+  it('railDotShows: on for a host problem on every route but the remote hosts pane', () => {
+    for (const pathname of ['/', '/notes', '/settings']) expect(railDotShows(true, pathname)).toBe(true)
+    expect(railDotShows(true, '/settings', '#remote-hosts')).toBe(false)
+    expect(railDotShows(true, '/settings', '#rh-host-netbox')).toBe(false)
+    expect(railDotShows(true, '/settings', '#engines')).toBe(true)
+    expect(railDotShows(false, '/')).toBe(false)
+    expect(railDotShows(false, '/settings')).toBe(false)
   })
-  it('local: only the task panel and slot cards carry it; the draft card has no local section (C18)', () => {
-    expect(dots(false, true, 'tasks').bellReason).toBeNull()
-    expect(dots(false, true, 'slot').bellReason).toBeNull()
-    expect(dots(false, true, 'draft').bellReason).toBe('local')
-    expect(dots(false, true, 'none').bellReason).toBe('local')
-    expect(dots(true, true, 'draft')).toEqual({ railSettingsDot: false, bellReason: 'local' })
-    expect(dots(true, true, 'none', '/notes')).toEqual({ railSettingsDot: true, bellReason: 'both' })
+
+  it('attentionDotsOf: Home lights both marks for a host problem; the remote hosts pane keeps only the local reason', () => {
+    const dots = (hostOn: boolean, localOn: boolean, pathname = '/', hash = '') => attentionDotsOf({ hostOn, localOn, pathname, hash })
+    expect(dots(true, false)).toEqual({ railSettingsDot: true, bellReason: 'hosts' })
+    expect(dots(true, false, '/notes')).toEqual({ railSettingsDot: true, bellReason: 'hosts' })
+    expect(dots(false, true)).toEqual({ railSettingsDot: false, bellReason: 'local' })
+    expect(dots(true, true)).toEqual({ railSettingsDot: true, bellReason: 'both' })
+    expect(dots(true, true, '/settings', '#rh-host-netbox')).toEqual({ railSettingsDot: false, bellReason: 'local' })
+    expect(dots(false, false)).toEqual({ railSettingsDot: false, bellReason: null })
+  })
+})
+
+describe('hostAttentionOf runs the problem-row model', () => {
+  const NOW = 1_000_000_000
+  const failed = (host: string, label: string): HostStatusInput & { label: string } => ({
+    host, label, connected: false, phase: 'failed', kind: 'unreachable', error: 'ssh: connect failed', hint: 'Check the network, then Retry.',
+    retryable: true, at: NOW,
+  })
+
+  it('a dismissed row lights nothing', () => {
+    const s = [failed('netbox', 'Net box')]
+    expect(hostAttentionOf({ statuses: s, dismissed: new Set(), now: NOW }).on).toBe(true)
+    expect(hostAttentionOf({ statuses: s, dismissed: new Set(['netbox|connect']), now: NOW }).on).toBe(false)
+  })
+
+  it('a reconnect with a cause flips on at 2 minutes, and says when (no new frame needed)', () => {
+    const s: HostStatusInput & { label: string } = { host: 'devbox', label: 'Dev box', connected: false, phase: 'reconnecting', lastKind: 'timeout', reconnectSince: NOW - 60_000, at: NOW }
+    expect(hostAttentionOf({ statuses: [s], dismissed: new Set(), now: NOW })).toEqual({ on: false, wakeAt: NOW + 60_000 })
+    expect(hostAttentionOf({ statuses: [s], dismissed: new Set(), now: NOW + 60_001 }).on).toBe(true)
   })
 })

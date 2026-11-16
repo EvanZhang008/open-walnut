@@ -35,7 +35,7 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, openDraftOnCwd } from './draft-helpers'
 import { holdApprovalsLock } from './approvals-lock'
-import { healthyGitSync } from './banner-placement-helpers'
+import { healthyGitSync } from './host-attention-helpers'
 // The wire shape the panel actually parses — imported, never re-declared here, so
 // a change to the server record can't leave this spec seeding a stale shape.
 import type { FeedRecord } from '../../../web/src/contexts/notifications/NotificationProvider'

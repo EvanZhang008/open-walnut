@@ -1,21 +1,23 @@
 /**
  * What is broken right now, at the top of the notification panel's All and
  * Errors views: this machine's Claude Code (install / sign in) and every remote
- * host the Home card has a row for. They are errors, not ambient status, so the
+ * host with a problem row. They are errors, not ambient status, so the
  * user sees them the moment the panel opens (it lands on All) without picking a
  * section first.
  *
- * A problem host is the Home card's own row (SingleHostRow, dense, no x): same
- * headline, same primary button, same Show details, and the same expanded flag
- * and attempt store, so a Retry here and one on the card are ONE attempt. The
+ * A problem host is one SingleHostRow (dense, with an x that dismisses it): the
+ * headline, the primary button (Retry), Show details, and the shared expanded
+ * flag and attempt store, so a Retry here, on its toast (HostProblemToasts) and
+ * in Settings is ONE attempt. This is the one place a host problem is listed:
+ * no card on the page carries it (host-attention.ts). The
  * feed errors that host caused (causeKey `host:<alias>`) sit right under its row
  * instead of in a second block that names the same host again.
  *
- * The list is the Home card's: a row the user dismissed there ("I know") and a
+ * A row the user dismissed ("I know") and a
  * host found in ~/.ssh/config that nobody reached for are left out here too, and
  * so is a host switched off in Settings. Every host, dismissed or not, is still
- * in System's Remote hosts list, which is the inventory. Unlike the card, every
- * host gets its own row (no credential grouping) and there is no cap.
+ * in System's Remote hosts list, which is the inventory. Every host gets its own
+ * row (no credential grouping) and there is no cap.
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { WarningTriangleIcon } from './PhoneIcons';
@@ -25,7 +27,7 @@ import { serverNow, useAllHostStatus } from '@/hooks/useHostStatus';
 import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { fetchConfig } from '@/api/config';
 import { hostRowFor, type BannerRow } from '@/utils/attention-banner-model';
-import { getHostDismissed, subscribeHostDismissed } from '@/utils/host-banner-dismiss';
+import { dismissHostKeys, getHostDismissed, subscribeHostDismissed } from '@/utils/host-banner-dismiss';
 import { useUserEngagedHosts, useUserRetryingHosts } from '@/utils/host-user-retrying';
 import { openHostSettings } from '@/utils/host-settings-nav';
 import { log } from '@/utils/log';
@@ -54,8 +56,8 @@ export function useDisabledHosts(open: boolean): ReadonlySet<string> {
 export interface ProblemHost { alias: string; row: BannerRow }
 
 /**
- * The configured hosts (the health list) the Home card gives a row right now,
- * in the card's order, by the card's rules (dismissed and unreached discovered
+ * The configured hosts (the health list) with a problem row right now, by the
+ * problem-row model's rules (dismissed and unreached discovered
  * hosts left out, see nextBanner's collect). Each host keeps the row it had
  * through an attempt (hostRowFor's `prev`), so a Retry does not make it jump
  * out and back.
@@ -79,7 +81,7 @@ export function useProblemHosts(daemons: DaemonHealth[] | undefined, disabled: R
     next.set(d.host, row);
   }
   prev.current = next;
-  // The Home card's order: connect failures first, then readiness, each in Settings order.
+  // Connect failures first, then readiness, each in Settings order.
   const rank = (r: BannerRow): number => (r.group === 'connect' ? 0 : 1);
   return out.map((p, i) => ({ p, i })).sort((a, b) => rank(a.p.row) - rank(b.p.row) || a.i - b.i).map((x) => x.p);
 }
@@ -95,9 +97,14 @@ export interface NotificationProblemsProps {
   onNavigate: (to: string) => void;
 }
 
+/** A row's x: "I know". The host leaves this list until its problem changes; System's Remote hosts list still shows it. */
+function dismissRow(row: BannerRow): void {
+  dismissHostKeys(row.dismissKeys);
+}
+
 export function NotificationProblems({ hosts, health, healthLoading, renderHostCards, onLeave, onNavigate }: NotificationProblemsProps): ReactNode {
   const navigate = useNavigate();
-  // Open Settings lands on the host's own Settings row, as the Home card's button does.
+  // Open Settings lands on the host's own Settings row.
   const onOpenSettings = useCallback((alias?: string) => {
     onLeave();
     openHostSettings(navigate, alias);
@@ -129,7 +136,7 @@ export function NotificationProblems({ hosts, health, healthLoading, renderHostC
             {hosts.map(({ alias, row }) => {
               const cards = renderHostCards(alias);
               return [
-                <SingleHostRow key={alias} row={row} defaultExpanded={false} dense statusList onOpenSettings={onOpenSettings} onNavigate={onNavigate} />,
+                <SingleHostRow key={alias} row={row} defaultExpanded={false} dense statusList onDismiss={dismissRow} onOpenSettings={onOpenSettings} onNavigate={onNavigate} />,
                 cards ? <li key={`${alias}:cards`} className="nfc-problem-cards" data-host-cards={alias}>{cards}</li> : null,
               ];
             })}

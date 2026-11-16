@@ -8,7 +8,7 @@
 import { test, expect, type Page } from '@playwright/test'
 import { isolatePrefs } from './host-problems-helpers'
 import { loadApp } from './host-problems-fixture-helpers'
-import { healthyGitSync } from './banner-placement-helpers'
+import { healthyGitSync } from './host-attention-helpers'
 
 test.describe.configure({ timeout: 90_000 })
 

@@ -323,10 +323,9 @@ test.describe('Tree Mode split screen', () => {
   })
 
   test('a notice in the corner as the sheet opens takes no page away', async ({ page }) => {
-    // 2026-11-09, CI: a notice held the corner (another spec's) when the column went full screen,
-    // the sheet moved its left edge past it, and Tree Mode kept the 1037px column's two pages in
-    // the 1107px sheet. A pending approval card, for this page only, holds the corner here.
-    // (The width tiers then were two pages and three; the rule keeps holding for two.)
+    // 2026-11-09, CI: a notice in the stack when the column went full screen left Tree Mode with
+    // the 1037px column's two pages in the 1107px sheet. A pending approval card, for this page
+    // only, is in the stack here; the sheet's width alone picks its pages.
     const now = Date.now()
     await page.route(/\/api\/v1\/approvals(\?|$)/, async (route) => {
       if (route.request().method() !== 'GET') return route.fallback()
@@ -338,7 +337,6 @@ test.describe('Tree Mode split screen', () => {
     })
     const panel = await openSheet(page)
     await expect(page.getByTestId('approval-card')).toHaveCount(1, { timeout: 15_000 })
-    await expect.poll(() => panel.evaluate((el) => parseFloat((el as HTMLElement).style.getPropertyValue('--corner-sheet-inset')) || 0), { timeout: 10_000 }).toBeGreaterThan(0)
     await openQuestion(panel, SPLIT_TITLES.Q111)
     await expectPages(panel, ['L 1.1', 'R 1.1.1'])
   })

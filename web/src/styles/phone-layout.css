@@ -433,7 +433,7 @@
 }
 
 @keyframes wn-phone-toast-in {
-  from { opacity: 0; transform: translateY(8px); }
+  from { opacity: 0; transform: translateY(-8px); }
   to { opacity: 1; transform: none; }
 }
 
@@ -554,18 +554,18 @@
 /* Toasts (spec 4.7): inside the screen, under the bar, one at a time
    (NotificationToaster), a finger-sized close. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  /* The corner stack (corner-stack.css) holds every notice; on the phone it spans the bottom of
-     the screen, as it sits bottom left on a computer: the bar's search and buttons stay clear,
-     and a chat's composer keeps it above (corner-stack.tsx sets --corner-stack-bottom). */
+  /* The notice stack (corner-stack.css) holds every notice; on the phone it spans the top of the
+     screen just under the safe area, over the top bar, as an iOS notification does (2026-11-16).
+     Nothing reserves room for it: the page never jumps when a notice comes or goes. */
   html body .corner-stack {
-    top: auto;
+    top: calc(var(--wn-safe-top) + 8px);
     left: max(8px, var(--wn-safe-left));
     right: max(8px, var(--wn-safe-right));
     width: auto;
+    margin: 0;
   }
 
-  /* It rises from the bottom edge instead of sliding in from the right edge, which
-     ran past the screen while it moved. */
+  /* It drops from the top edge it sits at (a swipe up sends it back, NotificationToaster). */
   html body .notification-toaster .notification-toast {
     max-width: none;
     width: 100%;
@@ -584,6 +584,10 @@
 
   html body .notification-toast-swipe {
     touch-action: pan-x;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html body .notification-toaster .notification-toast { animation: none; }
   }
 }
 

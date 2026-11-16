@@ -10,7 +10,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { EMPTY_BANNER_STATE, nextBanner, type BannerInput } from '../../web/src/utils/attention-banner-model';
-import { hostAttentionOf } from '../../web/src/utils/host-banner-placement';
+import { hostAttentionOf } from '../../web/src/utils/host-attention';
 import { __resetUserRetryForTests, getPromptedHosts, getUserEngagedHosts, markUserRetry, setPromptedHosts } from '../../web/src/utils/host-user-retrying';
 import type { HostStatusInput } from '../../src/core/hosts/host-problem';
 
@@ -65,7 +65,7 @@ describe('a host the found-host prompt shows takes no banner row', () => {
       .map((p) => ({ p: path.relative(web, p), s: readFileSync(p, 'utf8') }))
       .filter((f) => /\bnextBanner\(\{|engaged: getUserEngagedHosts\(\)/.test(f.s));
     expect(callers.map((f) => f.p).sort()).toEqual([
-      'components/common/AttentionBanner.tsx', 'components/common/HostBannerAnnouncer.tsx', 'utils/host-banner-placement.ts',
+      'components/common/HostProblemNotices.tsx', 'utils/host-attention.ts',
     ]);
     for (const f of callers) expect(f.s, f.p).toMatch(/\bprompted\b/);
   });

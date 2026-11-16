@@ -1,25 +1,25 @@
 /**
- * A host nothing uses for sessions takes no attention card for its Claude Code (2026-11-05,
- * the user: "fix all the errors in errors fix the root cause"; the first card in System
- * attention was a fleet Mac with no Claude Code that no project or task ran on). The card
- * is back the moment something uses the host, and goes again by itself when nothing does;
+ * A host nothing uses for sessions takes no problem row for its Claude Code in the
+ * notification panel (2026-11-05, the user: "fix all the errors in errors fix the root
+ * cause"; the first problem listed was a fleet Mac with no Claude Code that no project or
+ * task ran on). The row is back the moment something uses the host, and goes again by
+ * itself when nothing does;
  * Settings keeps the line and its Install for whoever wants sessions there.
  *
  * Against the SERVER's host fixture (src/core/hosts/host-fixture.ts): real frames, the real
  * readiness lines; `usedForSessions` is the fixture's stand-in for host-session-use.ts.
  *
- * Run: PW_WEBKIT=1 npx playwright test host-unused-no-card --project=webkit
+ * Run: walnut-dev run bun x playwright test tests/e2e/browser/host-unused-no-row.spec.ts --project chromium-host-fixture --retries=0
  */
 import fs from 'node:fs'
 import { test, expect, type Page } from '@playwright/test'
-import { expandSystemAttention } from './host-problems-helpers'
 import {
-  HEALTHY, bannerRow, fixtureFile, hostFixture, hostRow, isolatePrefs, loadApp, loadFixture, openBell, openPicker, openRemoteHosts, pickFolder, resetServerHostFixture,
+  HEALTHY, fixtureFile, hostFixture, hostRow, isolatePrefs, loadApp, loadFixture, openPicker, openRemoteHosts, pickFolder, resetServerHostFixture,
 } from './host-problems-fixture-helpers'
 import { closeDraftModelPicker, draftCwdPill, draftEngineButton, draftModelPicker } from './draft-helpers'
-import { pickRail, systemHostLine, systemHostRow, systemHosts } from './banner-placement-helpers'
+import { openProblems, pickRail, problemRow, systemHostLine, systemHostRow, systemHosts } from './host-attention-helpers'
 
-const SHOTS = process.env.PW_SHOTS_DIR ?? 'test-results/host-unused-no-card-shots'
+const SHOTS = process.env.PW_SHOTS_DIR ?? 'test-results/host-unused-no-row-shots'
 const FILE = fixtureFile({
   devbox: { label: 'Dev box', hostname: 'dev.example.com', phase: 'connected', claude: { found: false } },
   fleet: { label: 'Fleet Mac', hostname: 'fleet.example.com', phase: 'connected', platform: 'darwin', claude: { found: false }, usedForSessions: false },
@@ -32,10 +32,11 @@ async function shot(page: Page, name: string): Promise<void> {
   await page.screenshot({ path: `${SHOTS}/${name}.png` })
 }
 
+/** Home, then the notification panel's problem list, where the used Dev box has its row. */
 async function home(page: Page): Promise<void> {
   await loadApp(page)
-  await expandSystemAttention(page)
-  await expect(bannerRow(page, 'devbox')).toHaveAttribute('data-kind', 'claude_missing', { timeout: 20_000 })
+  await openProblems(page)
+  await expect(problemRow(page, 'devbox')).toHaveAttribute('data-kind', 'claude_missing', { timeout: 20_000 })
 }
 
 test.describe('a host nothing uses for sessions', () => {
@@ -46,13 +47,12 @@ test.describe('a host nothing uses for sessions', () => {
   })
   test.afterAll(async ({ request }) => { await resetServerHostFixture(request) })
 
-  test('takes no card; the System list says it quietly; the used host keeps its card', async ({ page }) => {
+  test('takes no problem row; the System list says it quietly; the used host keeps its row', async ({ page }) => {
     await home(page)
-    await expect(bannerRow(page, 'fleet')).toHaveCount(0)
-    await expect(bannerRow(page, 'signbox')).toHaveCount(0)
-    await shot(page, '01-home-card')
+    await expect(problemRow(page, 'fleet')).toHaveCount(0)
+    await expect(problemRow(page, 'signbox')).toHaveCount(0)
+    await shot(page, '01-problem-rows')
 
-    await openBell(page)
     await pickRail(page, 'System')
     await expect(systemHosts(page)).toBeVisible({ timeout: 20_000 })
     await expect(systemHostRow(page, 'devbox')).toHaveAttribute('data-kind', 'claude_missing')
@@ -65,19 +65,17 @@ test.describe('a host nothing uses for sessions', () => {
     await shot(page, '02-system-list')
   })
 
-  test('the card comes back when something uses the host, and goes by itself when nothing does', async ({ page, request }) => {
+  test('the row comes back when something uses the host, and goes by itself when nothing does', async ({ page, request }) => {
     await home(page)
-    await expect(bannerRow(page, 'fleet')).toHaveCount(0)
+    await expect(problemRow(page, 'fleet')).toHaveCount(0)
     await hostFixture(request, { action: 'set-used', host: 'fleet', used: true })
-    await expect(bannerRow(page, 'fleet')).toHaveAttribute('data-kind', 'claude_missing', { timeout: 10_000 })
-    await expect(bannerRow(page, 'fleet').locator('.hpb-message')).toHaveText('Claude Code is not installed on Fleet Mac.')
-    await shot(page, '03-used-card-back')
-    // A row never leaves from under the hand (the card waits up to 10 s for the pointer to go).
-    await page.mouse.move(1000, 300)
+    await expect(problemRow(page, 'fleet')).toHaveAttribute('data-kind', 'claude_missing', { timeout: 10_000 })
+    await expect(problemRow(page, 'fleet').locator('.hpb-message')).toHaveText('Claude Code is not installed on Fleet Mac.')
+    await shot(page, '03-used-row-back')
     await hostFixture(request, { action: 'set-used', host: 'fleet', used: false })
-    await expect(bannerRow(page, 'fleet')).toHaveCount(0, { timeout: 15_000 })
-    await expect(bannerRow(page, 'devbox')).toBeVisible()
-    await shot(page, '04-unused-card-gone')
+    await expect(problemRow(page, 'fleet')).toHaveCount(0, { timeout: 15_000 })
+    await expect(problemRow(page, 'devbox')).toBeVisible()
+    await shot(page, '04-unused-row-gone')
   })
 
   test('a draft on a host without Claude Code says so where the engine is picked', async ({ page }) => {

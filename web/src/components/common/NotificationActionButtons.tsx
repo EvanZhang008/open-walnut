@@ -54,7 +54,7 @@ export function NotificationActionButtons({
       return;
     }
     if (a.kind === 'callback') {
-      n.onAction?.();
+      (a.run ?? n.onAction)?.();
       onDone();
       return;
     }

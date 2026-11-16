@@ -46,7 +46,7 @@ import { NotificationSystemPane, useSearchIndexStatus, searchIndexUnhealthy } fr
 import { updateAvailable, useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { NotificationProblems, useDisabledHosts, useProblemHosts } from './NotificationProblems';
 import { ErrorCategoryTitle } from './ErrorCategoryTitle';
-import { landingSectionFor } from '@/utils/host-banner-placement';
+import { landingSectionFor } from '@/utils/host-attention';
 import { hostOfCauseKey } from '@/contexts/notifications/notification-model';
 import { useLocalDismissed } from '@/utils/host-banner-dismiss';
 import { agentCannotRun, localNoticeIsFailure, localNoticeShows } from '@/utils/local-claude-banner';

@@ -9,12 +9,11 @@ import { expect, test, type Page } from '@playwright/test'
 import { PHONE, findSmallTargets } from './phone-helpers'
 import { isolateUiPrefs, seedRecentOpened } from './todo-panel-helpers'
 import { presetPanelDesign } from './status-section-helpers'
-import { bpSetup } from './banner-placement-helpers'
-import { banner, expandSystemAttention, failed, resetServerHostFixture } from './host-problems-helpers'
+import { resetServerHostFixture } from './host-problems-helpers'
 
 const SHOTS = '/tmp/mobile-web/phone-home-r4'
 test.beforeAll(async () => { await fs.mkdir(SHOTS, { recursive: true }) })
-// A host card a banner spec left on the shared fixture server would fill a small first screen.
+// A host problem a host spec left on the shared fixture server would toast over a small first screen.
 test.beforeEach(async ({ request }) => { await resetServerHostFixture(request) })
 
 test.use({
@@ -74,7 +73,7 @@ async function watchFirstLoad(page: Page): Promise<void> {
           if (!(key in w.__firstTop)) w.__firstTop[key] = r.top
           else if (Math.abs(w.__firstTop[key]! - r.top) > 1 && w.__moved.length < 10) w.__moved.push(`${key} ${Math.round(w.__firstTop[key]!)} -> ${Math.round(r.top)}`)
         })
-        for (const sel of ['.phone-needs-you', '.todo-pinned-wrapper', '[data-testid="attention-banner"]']) {
+        for (const sel of ['.phone-needs-you', '.todo-pinned-wrapper']) {
           if (!(sel in w.__first) && sc.querySelector(sel)) w.__first[sel] = Math.round(performance.now() - t0)
         }
       }
@@ -102,20 +101,6 @@ test('R3-02: nothing lands above rows already painted; the Needs-you strip comes
   // The strip and the tier rows arrive in the same frame (the strip is never late).
   expect(res.first['.phone-needs-you']).toBeLessThanOrEqual(res.first['.todo-pinned-wrapper'] ?? Infinity)
   await page.screenshot({ path: `${SHOTS}/r3-02-${test.info().project.name}.png` })
-})
-
-test('R3-02: a host card in the list holds still too: it comes with the first rows, never before the strip', async ({ page }) => {
-  // The card sits below the Needs-you strip. Painted before the first task list, it was pushed
-  // down 239px when the strip arrived (Retry, Show details and its x moved under the thumb).
-  await watchFirstLoad(page)
-  await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable')], before: phoneHome })
-  const res = await firstLoadResult(page)
-  // The card lives folded in System attention (0eacec605): unfold it to see it.
-  await expandSystemAttention(page)
-  await expect(banner(page)).toBeVisible()
-  expect(res.moved, 'a painted control moved under the thumb').toEqual([])
-  expect(res.first['.phone-needs-you']).toBeLessThanOrEqual(res.first['[data-testid="attention-banner"]'] ?? Infinity)
-  await page.screenshot({ path: `${SHOTS}/r3-02-host-card-${test.info().project.name}.png` })
 })
 
 const TAB_SIZES = [

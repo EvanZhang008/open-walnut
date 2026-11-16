@@ -1,9 +1,10 @@
 /**
- * Every notice Walnut pops up by itself shows in ONE place: the bottom-left corner stack
- * (web/src/components/common/corner-stack.tsx), just right of the sidebar. 2026-11-04, the
- * user: "also the approval is on bot right, can we be consistent all notificaiton is bottom
- * left" (toasts sat top right, approval cards bottom right, a board's toasts at its pane's
- * bottom right).
+ * Every notice Walnut pops up by itself shows in ONE place: the notice stack at the top of the
+ * window, centered, one fixed width (web/src/components/common/corner-stack.tsx). 2026-11-04, the
+ * user: "can we be consistent all notificaiton is bottom left" made it one stack; 2026-11-16,
+ * the user: "the notificaiton pill will adopt the width based on other pannel on the right, I
+ * think not need, just show like noticiaton overlap on the top nice unified, just like IOS
+ * noticficaiton pelase" moved it to the top and took away every width that followed a panel.
  *
  * This fails when a NEW notice places itself instead of going through <CornerSlot>:
  *  - any CSS rule in web/src or plugin-store that pins an element to a corner of the window (position: fixed
@@ -159,58 +160,49 @@ describe('one corner for every notice', () => {
     expect(read('web/src/popout/openPopout.ts')).toMatch(/appendToCornerStack\(el, CORNER_ORDER\.flash\)/);
   });
 
-  it('approvals sit nearest the corner: a script waits on them', () => {
+  it('approvals sit nearest the top edge: a script waits on them', () => {
     const src = read('web/src/components/common/corner-stack.tsx');
     const order = (k: string) => Number(src.match(new RegExp(`\\b${k}: (\\d+)`))?.[1]);
     expect(order('approvals')).toBeGreaterThan(Math.max(order('toasts'), order('board'), order('flash'), order('hostConnect')));
-    // The background connect card stays for minutes: under the passing toasts, so they never move it.
+    // The background connect card stays for minutes: nearer the edge than the passing toasts, so they never move it.
     expect(order('hostConnect')).toBeGreaterThan(Math.max(order('toasts'), order('board'), order('flash')));
+    // A higher order nearer the top: the stack lays its slots out bottom to top.
+    const stack = cssRules('web/src/styles/corner-stack.css').find((r) => r.selector === '.corner-stack')!;
+    expect(stack.body).toMatch(/flex-direction:\s*column-reverse/);
   });
 
-  it('over what the person works in, or over a chat, the corner takes its short form and keeps to that column', () => {
+  it('only crowding takes the short forms; only the open notification center hides the stack', () => {
     const src = read('web/src/components/common/corner-stack.tsx');
-    expect(src).toMatch(/if \(!workCovered && coversWork\(/);
-    expect(src).toMatch(/const compact = [^;]*workCovered/);
+    expect(src).toMatch(/const crowded = kinds >= 3 \|\| \(kinds >= 2 && window\.innerHeight < SHORT_WINDOW_PX\);/);
+    expect(src).toMatch(/const compact = !phone && crowded;/);
+    expect(src).not.toMatch(/coversWork|workCovered/);
     // Never hidden for want of room, except beside the open notification center, which lists the
     // same news (an 800px window hid every toast: engine-matrix.spec.ts).
     expect(src).toMatch(/toggle\('is-tucked', centerOpen && /);
-    // Lifted by the composer's own box (a tall note above it must not throw the stack to the top
-    // of an 800x600 window), never out of the window, and over the jump-to-newest button too.
-    expect(src).not.toMatch(/closest\('\.session-panel-input'\)/);
-    expect(src).toMatch(/COMPOSER_CONTROLS = '\.chat-input-container, \.scroll-to-bottom-btn, \.draft-composer-bar'/);
-    expect(src).toMatch(/bottom = Math\.min\(bottom, Math\.max\(floor \+ 16, Math\.round\(window\.innerHeight - tall - 8\)\)\)/);
-    // Lifted over a composer, never wider than the column the composer is in.
-    expect(src).toMatch(/if \(column >= MIN_BESIDE_PX - 40\) width = Math\.min\(width, column\)/);
     // The short form keeps one line of why a toast is there (it is clamped, never hidden).
     const css = read('web/src/styles/corner-stack.css');
     expect(css).not.toMatch(/\.is-compact[^{]*notification-toast-body\s*\{\s*display:\s*none/);
     expect(css).toMatch(/:is\(\.is-compact, \.has-approval\)[^{]*notification-toast-body\s*\{[^}]*-webkit-line-clamp:\s*1/);
   });
 
-  it('the corner stays at the bottom left next to the sidebar, inside the page left column, and the count is a link', () => {
+  it('the stack reads no panel, composer, column or sheet geometry, and reserves no room in the page', () => {
     const src = read('web/src/components/common/corner-stack.tsx');
-    // 2026-11-05, the user: "the notification should be here not on the big right".
-    expect(src).toMatch(/let left = sidebarRight \+ 16;/);
-    expect(src).not.toMatch(/let left = columnRight \+ 16;/);
-    expect(src).toMatch(/inside >= MIN_INSIDE_PX\) width = Math\.min\(width, inside\)/);
-    // Over that column it keeps its whole form: the column's list makes room at its end.
-    expect(src).toMatch(/if \(x < columnRight\) continue;/);
-    expect(src).toMatch(/const MAX_COLUMNS_PX = 440;/);
-    expect(src).toMatch(/if \(r\.right > sidebarRight \+ MAX_COLUMNS_PX\) continue;/);
-    // 2026-11-06, the user: "no matter if its full screen or this, fix just here at left". A
-    // full-screen sheet never moves the corner into it, never lifts it over the sheet's composer,
-    // and the stack draws above the sheet.
-    expect(src).not.toMatch(/left = Math\.round\(b\.left\) \+ 16/);
-    expect(src).not.toMatch(/sheet\.contains\(el\)/);
-    expect(src).toMatch(/if \(sheet \|\| !shown\(el\)\) continue;/);
-    expect(src).toMatch(/let floor = 0;/);
-    expect(src).not.toMatch(/floor = Math\.max\(0, Math\.round\(window\.innerHeight - b\.bottom\)\)/);
-    // A narrow strip beside the sheet: the sheet's content makes room, the corner keeps a readable width.
-    expect(src).toMatch(/width = Math\.min\(width, Math\.max\(MIN_BESIDE_SHEET_PX, strip\)\)/);
-    // ...by moving the whole sheet's left edge, header included, measured from its edge with no inset.
-    expect(read('web/src/styles/fullscreen-tab.css')).toMatch(/left: calc\(var\(--fullscreen-left, 0px\) \+ var\(--fullscreen-side\) \+ var\(--corner-sheet-inset, 0px\)\);/);
-    expect(read('web/src/styles/corner-stack.css')).not.toMatch(/padding-left: var\(--corner-sheet-inset/);
-    expect(src).not.toMatch(/sheet\.getBoundingClientRect\(\)\.left\) - left - 16/);
+    // 2026-11-16, the user: "the notificaiton pill will adopt the width based on other pannel on
+    // the right, I think not need". What it measured to follow them, and what it wrote back.
+    for (const gone of [
+      '.chat-input-container', '.scroll-to-bottom-btn', '.draft-composer-bar', '.app-shell > .sidebar',
+      '--corner-stack-width', '--corner-stack-left', '--corner-stack-bottom', 'elementsFromPoint',
+      'corner-sheet-inset', 'cornerRoom', 'cornerFit', '--corner-room', '--corner-fit', 'dataset.over',
+      'leftColumnRight', 'syncRoom', 'syncSheetInset',
+    ]) expect(src, gone).not.toContain(gone);
+    // Its one look at the page's layout is the open notification center's right edge (the rest:
+    // shown/inSight, and keepClearOfCorner's own rect and its target's).
+    expect(src.match(/getBoundingClientRect\(\)/g)?.length).toBeLessThanOrEqual(5);
+    expect(src).toMatch(/center!\.getBoundingClientRect\(\)\.right/);
+    // Nothing in the page makes room for it or reads the room it took.
+    const bad = listed(['web/src/**/*.ts', 'web/src/**/*.tsx', 'web/src/**/*.css'])
+      .filter((f) => /data-corner-room|data-corner-fit|--corner-room|--corner-fit|--corner-sheet-inset|corner-sheet-inset|modeBesideCorner/.test(read(f)));
+    expect(bad).toEqual([]);
     const layer = (file: string, sel: string) => Number(/z-index:\s*(\d+)/.exec(cssRules(file).find((r) => r.selector === sel)!.body)![1]);
     expect(layer('web/src/styles/corner-stack.css', '.corner-stack')).toBeGreaterThan(layer('web/src/styles/globals.css', '.open-walnut-fullscreen'));
     expect(layer('web/src/styles/corner-stack.css', '.corner-stack')).toBeGreaterThan(layer('web/src/styles/globals.css', '.open-walnut-fullscreen-backdrop'));
@@ -220,18 +212,22 @@ describe('one corner for every notice', () => {
     expect(toaster).toMatch(/older > 0 && !moreHost &&/);
   });
 
-  it('the stack sits bottom left on desktop and at the bottom of the screen on the phone', () => {
+  it('the stack sits at the top, centered, one width on desktop, and across the top under the safe area on the phone', () => {
     const stack = cssRules('web/src/styles/corner-stack.css').find((r) => r.selector === '.corner-stack')!;
-    expect(stack.body).toMatch(/left:\s*var\(--corner-stack-left/);
-    expect(stack.body).toMatch(/bottom:/);
-    expect(has(stack.body, 'right')).toBe(false);
-    expect(has(stack.body, 'top')).toBe(false);
+    expect(stack.body).toMatch(/top:\s*12px/);
+    expect(has(stack.body, 'bottom')).toBe(false);
+    expect(stack.body).toMatch(/width:\s*min\(380px, calc\(100vw - 32px\)\)/);
+    // Centered between its left edge (the window's, or the open notification center's right) and the window's right.
+    expect(stack.body).toMatch(/left:\s*var\(--corner-stack-from, 0px\)/);
+    expect(stack.body).toMatch(/right:\s*0/);
+    expect(stack.body).toMatch(/margin:\s*0 auto/);
     const phone = cssRules('web/src/styles/phone-layout.css').find((r) => r.selector === 'html body .corner-stack');
-    // At the bottom, as on a computer: the phone's bar (its search and buttons) stays clear.
-    expect(phone?.body).toMatch(/top:\s*auto/);
-    expect(phone?.body ?? '').not.toMatch(/bottom:\s*auto/);
-    expect(phone?.body ?? '').not.toMatch(/flex-direction:\s*column-reverse/);
+    expect(phone?.body).toMatch(/top:\s*calc\(var\(--wn-safe-top\) \+ 8px\)/);
+    expect(phone?.body ?? '').not.toMatch(/top:\s*auto/);
+    expect(has(phone?.body ?? '', 'bottom')).toBe(false);
     // Nothing takes room under the bar for it: the page never jumps when a notice comes or goes.
     expect(read('web/src/styles/phone-layout.css')).not.toMatch(/--phone-topbar-h:[^;]*corner/);
+    // A toast leaves the way it came: a swipe up on the phone.
+    expect(read('web/src/components/common/NotificationToaster.tsx')).toMatch(/s0\.y - e\.clientY >= SWIPE_DISMISS_PX/);
   });
 });

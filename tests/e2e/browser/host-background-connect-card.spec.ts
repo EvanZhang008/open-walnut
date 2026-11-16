@@ -141,11 +141,12 @@ test('Run in background closes the setup and the corner card follows the connect
   await expect(row).toContainText('23 of 67 MB sent')
   await expect(row.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '34')
   await expect(page.getByTestId('host-connect-note')).toHaveText('Keeps going in the background. You can close this window.')
-  // In the corner stack, inside the window.
+  // In the notice stack at the top of the window, inside it.
   const box = (await card(page).boundingBox())!
   const view = page.viewportSize()!
   expect(box.x).toBeGreaterThanOrEqual(0)
   expect(box.y).toBeGreaterThanOrEqual(0)
+  expect(box.y).toBeLessThanOrEqual(view.height / 2)
   expect(box.x + box.width).toBeLessThanOrEqual(view.width)
   expect(box.y + box.height).toBeLessThanOrEqual(view.height)
   expect(await card(page).evaluate((el) => !!el.closest('.corner-stack'))).toBe(true)

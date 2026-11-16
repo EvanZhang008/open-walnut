@@ -85,14 +85,11 @@ import { applyStripChange, onTaskbarClose } from './sessionTaskbarStore';
 import { isRealSessionColumn } from './sessionTaskbar';
 import { onMinimizeToTaskbar } from '@/utils/taskbar-minimize';
 import { FocusDock } from '@/components/dock/FocusDock';
-import { AttentionBannerMount } from '@/components/common/AttentionBannerMount';
 import { FirstUseSetup } from '@/components/common/FirstUseSetup';
 import { FoundHostPrompts } from '@/components/common/FoundHostPrompts';
 import { firstUseCanStartMain, firstUseNeedsSetup } from '@/utils/first-use';
 import { firstUseCardPlace } from './home-first-use-card';
-import { publishBannerHealth } from '@/components/common/banner-mount-hooks';
 import type { DraftGateError } from '@/components/sessions/HostGateErrorBar';
-import { placementFor, setHostBannerPlacement } from '@/utils/host-banner-placement';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
 import {
   type SessionSlot,
@@ -514,10 +511,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // agentId/conversationId form stays on the route for other callers).
   const inspector = useContextInspector(undefined, undefined, askSlotSelection.sessionId ?? undefined);
 
-  const handleNavigateSettings = useLeanCallback((hash?: string) => {
-    navigateRef?.current?.(`/settings${hash ?? ''}`);
-  }, [navigateRef]);
-
   // Chat panel visibility: toggle via the Focus Dock "Walnut" cell or the Sidebar
   // "Ask Walnut" toggle. Hidden until the user opens it.
   const [chatVisible, setChatVisible] = useState<boolean>(
@@ -708,34 +701,21 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   });
   // String[] projection for URL sync (doesn't need lock state — URL carries ids only).
   const sessionColumnIds = useMemo(() => sessionColumns.map(c => c.id), [sessionColumns]);
-  // ONE attention banner on the page: in the task panel when it shows, else in
-  // the chat slot, else on the leftmost draft column (opening a draft borrows the
-  // chat spot, and a launch is exactly when a connecting host matters). None of
-  // them: the rail's Settings entry and the bell wear the warn dot instead.
-  // A layout effect, so hiding the task panel never paints one frame with the
-  // card in both places (or in neither).
-  const hostBannerDraftId = todoShown || chatVisible ? undefined : sessionColumns.find(s => isDraftColumnId(s.id))?.id;
-  useLayoutEffect(() => {
-    setHostBannerPlacement(placementFor(todoShown, chatVisible, !!hostBannerDraftId));
-  }, [todoShown, chatVisible, hostBannerDraftId]);
-  useEffect(() => () => setHostBannerPlacement('none'), []);
-  // The task panel's banner reads health from this channel, so a health frame
-  // never changes the (memo) TodoPanel's props.
-  useLayoutEffect(() => { publishBannerHealth(health, healthLoading); }, [health, healthLoading]);
-  const startDraftFromBanner = useLeanCallback(() => { openDraftColumnRef.current(); }, []);
   const needsFirstSetup = firstUseNeedsSetup(tasks, completedHidden, health, loading || healthLoading);
   // The welcome card (FirstUseSetup) leads the Ask slot while setup is needed. With the slot closed
   // (the rail's Ask Walnut toggle, the slot's ×) it stays on Home at the top of the task panel
   // (home-first-use-card.ts): closing the slot used to take the card away and leave an empty page
-  // (2026-11-11 review, F4). One card at a time, so the attention banner waits behind it.
+  // (2026-11-11 review, F4). Host and Claude Code alerts are never cards on the page: they are
+  // notifications (the bell panel's problem rows and a top toast, HostProblemToasts), so no chat,
+  // session or task column carries one (2026-11-16, the user: "this shoudl not show on top of
+  // quick chat pannel", "please unified, shodl as notificaiton in the notificaiton bar").
   const welcomeIn = firstUseCardPlace(needsFirstSetup, chatVisible, todoShown);
   const tasksBanner = useMemo(() => (
     <>
       {todoShown && <FoundHostPrompts />}
       {welcomeIn === 'tasks' && <div className="first-use-in-tasks" data-testid="first-use-in-tasks"><FirstUseSetup health={health} loading={healthLoading} /></div>}
-      {welcomeIn === null && (!needsFirstSetup || !chatVisible) && <AttentionBannerMount where="tasks" onNavigateSettings={handleNavigateSettings} onStartSession={startDraftFromBanner} />}
     </>
-  ), [handleNavigateSettings, startDraftFromBanner, needsFirstSetup, chatVisible, todoShown, welcomeIn, health, healthLoading]);
+  ), [todoShown, welcomeIn, health, healthLoading]);
   // "The current session" (stores/active-session.ts) must stay inside the open
   // strip: a closed column stops being the target, an empty strip has none.
   useEffect(() => { reconcileActiveSession(sessionColumnIds); }, [sessionColumnIds]);
@@ -3814,18 +3794,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onSessionClick={handleSessionClick}
           onSessionReplaced={handleSessionReplaced}
           onOpenForkDraft={handleOpenForkDraft}
-          banner={(
-            <>
-            {!todoShown && <FoundHostPrompts />}
-            {!needsFirstSetup && <AttentionBannerMount
-              where="slot"
-              health={health}
-              healthLoading={healthLoading}
-              onNavigateSettings={handleNavigateSettings}
-              onStartSession={startDraftFromBanner}
-            />}
-            </>
-          )}
           inspectorPanel={inspector.isOpen ? (
             /* No ask selected = nothing to describe. The inspector used to GET
                /api/context with no params here, which answered for the configured
@@ -3949,11 +3917,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                     // where a plain draft shows them).
                     onTaskFieldChange={handleDraftTaskFieldChange}
                     onReturnFieldToWalnut={handleDraftReturnFieldToWalnut}
-                    // The live host-connect banner, when the chat slot that
-                    // normally carries it is hidden (a draft borrows that spot).
-                    hostNotice={sid === hostBannerDraftId
-                      ? <AttentionBannerMount where="draft" onNavigateSettings={handleNavigateSettings} />
-                      : undefined}
                     gateError={draftGateErrors[sid]}
                     onGateErrorClear={clearDraftGateError}
                     restoreImages={draftRestoreImages[sid]}

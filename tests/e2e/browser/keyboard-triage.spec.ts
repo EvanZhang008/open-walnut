@@ -292,17 +292,16 @@ test('Cmd+Shift+D completes the task, opens the next one that needs you, and Cmd
   const done = toast(page, 'Task completed')
   await expect(done).toContainText(TITLE('b'))
   await expect(done).toContainText(`Next: ${TITLE('c')}`)
-  // Over the columns the corner keeps notices to a line, and an Undo's line names its task.
+  // The Undo's line names its task.
   await expect(done.locator('.notification-toast-body')).toBeVisible()
   await expect(done.locator('.notification-toast-kbd')).toHaveText('\u2318Z')
   await expect.poll(() => phase(page, 'b')).toBe('COMPLETE')
-  // The Undo sits in the notice corner, over no column header or composer (they stay reachable).
+  // The Undo sits in the one notice stack at the top of the window, over no composer.
   const box = (await done.boundingBox())!
-  const covers = (r: { x: number; y: number; width: number; height: number } | null) => !!r
-    && box.x < r.x + r.width && r.x < box.x + box.width && box.y < r.y + r.height && r.y < box.y + box.height
+  expect(box.y).toBeLessThanOrEqual(24)
   for (const k of ['a', 'c'] as const) {
-    expect(covers(await col(page, k).locator('.session-panel-header').first().boundingBox()), `${k} header`).toBe(false)
-    expect(covers(await col(page, k).locator('.chat-input-box').first().boundingBox()), `${k} composer`).toBe(false)
+    const r = await col(page, k).locator('.chat-input-box').first().boundingBox()
+    expect(!!r && box.y + box.height > r.y, `${k} composer`).toBe(false)
   }
   await page.screenshot({ path: `${SHOTS}/complete-next.png` })
   // A completed column was closed, not minimized: it never becomes a taskbar chip.
@@ -1441,7 +1440,7 @@ test('an Undo toast out of sight behind a newer one keeps its time, and comes ba
   await asMacApp(page)
   await resetTasks(page)
   for (const k of ['a', 'b'] as const) await page.request.delete(`/api/focus/tasks/${TID(k)}`).catch(() => {})
-  // A short window: the corner shows one toast, so a newer one hides the older.
+  // A short window: the stack shows one toast, so a newer one hides the older.
   await page.setViewportSize({ width: 1600, height: 700 })
   await openColumns(page, ['a', 'b'], { undoWindow: 'real' })
   try {
