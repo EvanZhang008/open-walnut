@@ -218,7 +218,7 @@ final class ThreadFollowUpVoiceUITests: ThreadPushUITestCase {
             "-walnut.debug.dictationText", "Growth",
             "-walnut.debug.dictationDelay", "1"
         ])
-        let tasks = app.tabBars.buttons["Tasks"]
+        let tasks = app.tab(.tasks)
         XCTAssertTrue(tasks.waitForExistence(timeout: 60))
         tasks.tap()
         let search = app.searchFields["Search tasks & sessions"]
