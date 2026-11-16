@@ -862,6 +862,14 @@ export async function agentReply(id: string, input: AgentReplyInput, opts: { qui
     )
     : null;
   await refuseCredentials(input, richSource, 'reply');
+  if (opts.refuseDuplicate && opts.sender?.taskId) {
+    // A task's thread reply that asks the user to sign in goes the way its letter would (letter-ops).
+    const { refuseSignInLetter } = await import('../same-ask-tree.js');
+    const { SameAskError } = await import('../same-ask.js');
+    await refuseSignInLetter(opts.sender.taskId, '', [text, str(input.markdown), str(input.html)].join('\n'), input as { same_ask_reason?: unknown }).catch((err) => {
+      throw err instanceof SameAskError ? new LetterError(err.message, err.code, err.status) : err;
+    });
+  }
 
   let newItems: AgentReplyInput['items'];
   try { newItems = validateNewItems(input.items); } catch (error) { throw invalid(errMsg(error)); }

@@ -229,6 +229,15 @@ export async function sendLetterAsCallerOnce(
       throw err instanceof SameAskError ? new LetterError(err.message, err.code, err.status) : err;
     });
   }
+  // A sign-in ask anywhere in a letter of any kind is asked once, in one place (sign-in-ask.ts).
+  if (!opts.opKey && senderKey(sender) !== null) {
+    const { refuseSignInLetter } = await import('../same-ask-tree.js');
+    const { SameAskError } = await import('../same-ask.js');
+    const prose = String(input.markdown ?? input.html ?? input.text ?? '');
+    await refuseSignInLetter(sender.taskId, subject, prose, sameAskInput).catch((err) => {
+      throw err instanceof SameAskError ? new LetterError(err.message, err.code, err.status) : err;
+    });
+  }
   let openAsk: OpenAskHint | undefined;
   if (guarded) {
     // The duplicate itself is refused where the letter would be written: in the away thread a

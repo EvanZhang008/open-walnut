@@ -49,14 +49,23 @@ export interface SignInStateFile {
   certificateWarning?: { expiresAt: number; letterId: string };
 }
 
-const MEANING: RegExp[] = [
+/** Asking for a sign-in: do it again, renew it. */
+const ASK_MEANING: RegExp[] = [
   /\b(?:sign|log)(?:ged)?[\s-]?(?:in|on)\s+(?:again|once more)\b/i,
   /\bre-?(?:login|log[\s-]?in|sign[\s-]?in|authenticate|auth)\b/i,
   /\b(?:renew|refresh|redo)\b[^.\n]{0,40}\b(?:login|log-?in|sign-?in|credentials?|cookie|session|certificate|cert|token)s?\b/i,
-  /\b(?:login|log-?in|sign-?in|credentials?|cookie|certificate|cert|token)s?\b[^.\n]{0,30}\b(?:expired|has expired|is invalid|ran out)\b/i,
-  // Chinese: "sign in again", "the login expired", "renew the login / credential".
-  /\u91cd\u65b0\u767b\u5f55|\u91cd\u65b0\u767b\u5165|\u767b\u5f55(?:\u5df2)?(?:\u8fc7\u671f|\u5931\u6548)|\u7eed\u671f(?:\u767b\u5f55|\u51ed\u636e|\u8bc1\u4e66)/u,
+  // Chinese: "sign in again", "renew the login / credential".
+  /\u91cd\u65b0\u767b\u5f55|\u91cd\u65b0\u767b\u5165|\u7eed\u671f(?:\u767b\u5f55|\u51ed\u636e|\u8bc1\u4e66)/u,
 ];
+
+/** Saying a sign-in ran out: an ask in a status, only news in a letter's prose (signInLineOf). */
+const STATE_MEANING: RegExp[] = [
+  /\b(?:login|log-?in|sign-?in|credentials?|cookie|certificate|cert|token)s?\b[^.\n]{0,30}\b(?:expired|has expired|is invalid|ran out)\b/i,
+  // Chinese: "the login expired".
+  /\u767b\u5f55(?:\u5df2)?(?:\u8fc7\u671f|\u5931\u6548)/u,
+];
+
+const MEANING: RegExp[] = [...ASK_MEANING, ...STATE_MEANING];
 
 /**
  * What makes a sign-in this machine's: a host, a box, SSH, a certificate, a dev or build machine
@@ -89,15 +98,59 @@ export function loginCommandWords(hint: string | undefined | null): string[] {
 export function isSignInAsk(text: string | undefined | null, loginWords: readonly string[] = []): boolean {
   const t = (text ?? '').trim();
   if (!t) return false;
-  const lower = t.toLowerCase();
-  if (loginWords.some((w) => new RegExp(`(^|[^a-z0-9_.-])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^a-z0-9_-])`).test(lower))) return true;
+  if (namesLoginCommand(t, loginWords)) return true;
   return MEANING.some((re) => re.test(t)) && MACHINE.test(t);
+}
+
+function namesLoginCommand(text: string, loginWords: readonly string[]): boolean {
+  const lower = text.toLowerCase();
+  return loginWords.some((w) => new RegExp(`(^|[^a-z0-9_.-])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^a-z0-9_-])`).test(lower));
+}
+
+/**
+ * Words that put a step on someone: please, needs, must, can you... (Chinese: please, needs,
+ * "run it first"). A line naming the login command without them ("ran <command> first, then
+ * measured", "no need to run <command>") is news, not an ask.
+ */
+const NEED = /\b(?:please|pls|needs?|needed|requires?|required|must|have to|has to|once you|after you|you(?:'ll| will)? (?:can|could|should|need)|can you|could you|ask(?:s|ing)? (?:you|the user))\b|\u8bf7|\u9700\u8981|\u9ebb\u70e6|\u5148(?:\u8fd0\u884c|\u8dd1|\u6267\u884c|\u767b\u5f55)(?![\u5b8c\u4e86\u8fc7])/iu;
+/** "No need", "not needed", "no longer"; Chinese: "not needed", "no need", "need not". */
+const NOT_NEEDED = /\b(?:no|not|don't|doesn't|without|never)\s+(?:\w+\s+)?(?:need|needed|required|requires?)\b|\bno longer\b|\u4e0d\u9700\u8981|\u65e0\u9700|\u4e0d\u7528|\u4e0d\u5fc5/iu;
+
+/** The sentence starts with the step itself: "Run <login command>", "Sign in again ...". */
+function startsWithStep(line: string, loginWords: readonly string[]): boolean {
+  const rest = /^[-*>\d.)\s]*(?:please\s+)?(.*)$/is.exec(line)?.[1] ?? line;
+  const run = /^(?:run|execute|re-?run)\s+[`'"]?([a-z0-9_.-]+)/i.exec(rest);
+  if (run) return loginWords.includes(run[1]!.toLowerCase());
+  return /^(?:(?:sign|log)[\s-]?(?:in|on)\b|re-?auth|re-?login|renew\b|refresh\b)/i.test(rest);
+}
+
+/**
+ * The sentence of a letter (its subject, then its body) that asks the user to sign in, or null.
+ * It names the login command or asks to sign in again on a machine (ASK_MEANING, MACHINE), AND it
+ * puts the step on someone (NEED, or it starts with the step). A sentence that only says a login
+ * expired, that it ran, or that it is not needed, is news in a report. 2026-11-15: a weekly report
+ * letter said "re-measuring needs <the login command> first" while another task's letter already
+ * asked the user to sign in; only a decision letter's subject was checked.
+ */
+export function signInLineOf(subject: string | undefined | null, body: string | undefined | null, loginWords: readonly string[] = []): string | null {
+  const prose = (body ?? '').replace(/<(?:br|\/p|\/li|\/div|\/h\d|\/tr)\b[^>]*>/gi, '\n').replace(/<[^>]+>/g, ' ');
+  const sentences = [subject ?? '', ...prose.split(/\n|(?<=[.!?])\s+|(?<=[\u3002\uff01\uff1f\uff1b;])/u)];
+  for (const raw of sentences) {
+    const line = raw.replace(/\s+/g, ' ').trim();
+    if (line.length < 4 || NOT_NEEDED.test(line)) continue;
+    if (!NEED.test(line) && !startsWithStep(line, loginWords)) continue;
+    if (namesLoginCommand(line, loginWords) || (ASK_MEANING.some((re) => re.test(line)) && MACHINE.test(line))) return line.slice(0, 300);
+  }
+  return null;
 }
 
 /** What Walnut knows of the user's sign-in now. */
 export interface SignInState {
-  /** A Walnut letter asks the user to sign in now (its id), or a checker found it broken. */
-  broken?: { letterId?: string; by: string };
+  /**
+   * A letter asks the user to sign in now (its id), or a checker found it broken. `taskId` is the
+   * task whose own letter it is, when a task asked (openTaskSignInLetter): that task may follow up.
+   */
+  broken?: { letterId?: string; by: string; taskId?: string };
   /** A checker found it working at `at` (ISO), within SIGN_IN_OK_FRESH_MS. */
   ok?: { at: string; by?: string };
 }
@@ -176,8 +229,9 @@ async function letterOpen(id: string, onError: true | 'throw' = true): Promise<b
  */
 export async function readSignInState(
   nowMs = Date.now(), dir = path.join(WALNUT_HOME, 'local'), isOpen: (letterId: string) => Promise<boolean> = letterOpen,
+  taskLetter: () => Promise<TaskSignInLetter | null> = openTaskSignInLetter,
 ): Promise<SignInState> {
-  let broken: { letterId?: string; by: string; since: number } | null = null;
+  let broken: { letterId?: string; by: string; since: number; taskId?: string } | null = null;
   const auth = await readJson(path.join(dir, 'host-auth-alert.json')) as { episodes?: Array<{ key?: string; letterId?: string; openedAt?: number }> } | null;
   const login = auth?.episodes?.find((e) => e.key === 'login' && e.letterId);
   if (login?.letterId && await isOpen(login.letterId)) broken = { letterId: login.letterId, by: 'the sign-in letter', since: Number(login.openedAt) || 0 };
@@ -187,15 +241,59 @@ export async function readSignInState(
       broken = { letterId: cert.episode.letterId, by: 'the certificate letter', since: Number(cert.episode.expiresAt) || 0 };
     }
   }
+  if (!broken) {
+    const own = await taskLetter().catch(() => null);
+    if (own) broken = { letterId: own.letterId, by: `the letter of "${own.title}" (task ${own.taskId})`, since: own.since, taskId: own.taskId };
+  }
   // A stale word counts for nothing either way: a checker that stopped says nothing of now.
   const fresh = await freshStateFile(nowMs, dir);
   if (fresh?.said.ok === true && (!broken || fresh.at > broken.since)) return { ok: { at: new Date(fresh.at).toISOString(), ...(fresh.by ? { by: fresh.by } : {}) } };
-  if (broken) return { broken: { ...(broken.letterId ? { letterId: broken.letterId } : {}), by: broken.by } };
+  if (broken) return { broken: { ...(broken.letterId ? { letterId: broken.letterId } : {}), by: broken.by, ...(broken.taskId ? { taskId: broken.taskId } : {}) } };
   if (fresh?.said.ok === false) {
     const letterId = typeof fresh.said.letterId === 'string' && fresh.said.letterId ? fresh.said.letterId : undefined;
     return { broken: { ...(letterId ? { letterId } : {}), by: fresh.by ?? 'the sign-in check' } };
   }
   return {};
+}
+
+/** A task's own open decision letter that asks the user to sign in. */
+export interface TaskSignInLetter { letterId: string; taskId: string; title: string; since: number }
+
+/** Per letter id and login command: whether it asks to sign in (a letter's words do not change). */
+const letterAsksSignIn = new Map<string, boolean>();
+
+/**
+ * The oldest open decision letter from a task that asks the user to sign in (signInLineOf on its
+ * subject and body), or null: once a task asked in its letter, that letter is the one place the
+ * user is asked, and any other task's sign-in ask points at it. 2026-11-15: one task's open letter
+ * asked the user to sign in, and a second task asked again in its weekly report.
+ */
+export async function openTaskSignInLetter(): Promise<TaskSignInLetter | null> {
+  const { listLetters, getLetter } = await import('./human-inbox/store.js');
+  const { isOpenDecision } = await import('./human-inbox/duplicate-letter.js');
+  const { getConfig } = await import('./config-manager.js');
+  const words = loginCommandWords((await getConfig().catch(() => ({}) as { ssh_login_hint?: string })).ssh_login_hint);
+  const open = (await listLetters({ archived: false })).letters
+    .filter((l) => isOpenDecision(l) && !!l.sender?.taskId)
+    .sort((a, b) => a.createdAt - b.createdAt);
+  for (const l of open) {
+    const key = `${l.id} ${words.join(',')}`;
+    let asks = letterAsksSignIn.get(key);
+    if (asks === undefined) {
+      // A decision letter's subject is its ask (isSignInAsk, as refuseSameAsk reads it); its body
+      // asks only in a sentence that puts the step on the user (signInLineOf).
+      if (isSignInAsk(l.subject, words)) asks = true;
+      else {
+        const detail = await getLetter(l.id, { inlineMaxBytes: 64_000 }).catch(() => null);
+        if (!detail) continue;
+        asks = signInLineOf(null, typeof detail.body === 'string' ? detail.body : l.textPreview, words) !== null;
+      }
+      if (letterAsksSignIn.size > 2000) letterAsksSignIn.clear();
+      letterAsksSignIn.set(key, asks);
+    }
+    if (asks) return { letterId: l.id, taskId: l.sender.taskId!, title: (l.sender.taskTitle || l.sender.taskId!).slice(0, 80), since: Number(l.createdAt) || 0 };
+  }
+  return null;
 }
 
 /** The time a check ran, as a status line prints it (UTC, to the minute). */
@@ -211,10 +309,13 @@ export function signInWaitWords(state: SignInState): string | null {
 }
 
 /** Why a sign-in ask is not put on the user now, for a refused write, or null to let it through. */
-export function signInRefusal(state: SignInState): string | null {
+export function signInRefusal(state: SignInState, selfTaskId?: string): string | null {
+  // The task whose own letter asks may follow it up; every other task points at that letter.
+  if (state.broken?.taskId && state.broken.taskId === selfTaskId) return null;
   if (state.broken?.letterId) {
     return `Not put on the user: ${state.broken.by} (${state.broken.letterId}) already asks them to sign in, the one place they are asked. `
-      + 'Do not ask again in your own words: wait for it (the hosts come back by themselves once they sign in), or name that letter.';
+      + 'Do not ask again in your own words: wait for it (the hosts come back by themselves once they sign in), or name that letter. '
+      + 'If yours is another sign-in (another account or site), say which in same_ask_reason.';
   }
   if (state.ok) {
     return `Not put on the user: sign-in works (checked ${checkedWords(state.ok.at)}${state.ok.by ? ` by ${state.ok.by}` : ''}). `

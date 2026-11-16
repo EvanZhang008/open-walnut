@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { isSignInAsk, loginCommandWords, readSignInOwner, readSignInOwnerLetter, readSignInState, SIGN_IN_OK_FRESH_MS } from '../../src/core/sign-in-ask.js'
+import { isSignInAsk, loginCommandWords, readSignInOwner, readSignInOwnerLetter, readSignInState, signInLineOf, signInRefusal, SIGN_IN_OK_FRESH_MS } from '../../src/core/sign-in-ask.js'
 import { certLetterHandedOff } from '../../src/core/hosts/ssh-cert-expiry-alert.js'
 
 const WORDS = loginCommandWords('run acmelogin -o on this Mac')
@@ -141,6 +141,65 @@ describe('an outside reminder owns sign-in only while it runs (readSignInOwner, 
     expect(await certLetterHandedOff(undefined, now, dir, 'expired', open)).toBe(true)
     expect(await readSignInOwnerLetter(now + SIGN_IN_OK_FRESH_MS, dir, open)).toBeNull()
     expect(await certLetterHandedOff(false, now, dir, 'expired', open)).toBe(true)
+  })
+})
+
+describe('signInLineOf: a sign-in ask anywhere in a letter, not news about one', () => {
+  it('finds the ask in a report body, in any language, in markdown or html', () => {
+    // 2026-11-15 shape: a weekly report's body line, "re-measuring needs <login command> first".
+    expect(signInLineOf('Weekly cost report', 'Totals are in the table.\n\u8981\u8865\u6d4b\u9700\u8981\u5148\u8fd0\u884c acmelogin\u3002', WORDS))
+      .toBe('\u8981\u8865\u6d4b\u9700\u8981\u5148\u8fd0\u884c acmelogin\u3002')
+    expect(signInLineOf('Cost report', '<p>Totals are ready.</p><p>Please run <code>acmelogin -o</code> so I can re-measure.</p>', WORDS))
+      .toBe('Please run acmelogin -o so I can re-measure.')
+    expect(signInLineOf('Report', 'The numbers are stale. You need to sign in again on the dev box first.', WORDS)).toMatch(/sign in again on the dev box/)
+    expect(signInLineOf('Please run acmelogin on the Mac', '', WORDS)).toBe('Please run acmelogin on the Mac')
+    expect(signInLineOf('Report', 'Numbers are below.\n- Run acmelogin -o on the Mac', WORDS)).toBe('- Run acmelogin -o on the Mac')
+    // The owner's real letter shape (2026-11-15): "what you need to do: run <command> once on the dev host".
+    expect(signInLineOf('Login expired', '\u9700\u8981\u4f60\u505a\uff1a\u5728 clouddev \u4e0a\u8dd1\u4e00\u6b21 `acmelogin -o`\u3002', WORDS)).toMatch(/acmelogin/)
+  })
+
+  it('leaves news and other logins alone', () => {
+    for (const body of [
+      'The certificate on the dev box expired at 09:00, so the report is from yesterday.',
+      'Ran acmelogin at 10:00; every host is back.',
+      'Evan logged in again on the Mac at 10:00 and the hosts came back.',
+      'Please log in to the bank website to download the statement.',
+      'Review the login page copy before it ships.',
+      'No need to run acmelogin again, hosts are fine.',
+      'The weekly job ran acmelogin first, then measured 12 hosts.',
+      'Run 4 used acmelogin credentials and finished.',
+      'Log shows acmelogin succeeded at 10:00.',
+      'The hosts come back after acmelogin on the Mac.',
+      // "No acmelogin needed this time, the result is in."
+      '\u8fd9\u6b21\u4e0d\u9700\u8981 acmelogin\uff0c\u5df2\u7ecf\u53d6\u5f97\u7ed3\u679c\u3002',
+      // "I ran acmelogin first, then measured."
+      '\u6211\u5148\u8dd1\u5b8c\u4e86\u6570\u636e\uff0c\u7136\u540e acmelogin \u4e5f\u6b63\u5e38\u3002',
+    ]) expect(signInLineOf('Weekly report', body, WORDS), body).toBeNull()
+  })
+})
+
+describe('a task letter is the one place a sign-in is asked', () => {
+  let dir: string
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sign-in-letter-')) })
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const open = async () => true
+  const owner = { letterId: 'lt-owner', taskId: 'task-owner', title: 'Restore the dev login', since: 1_000 }
+
+  it('names the owner task\'s letter, and lets only that task follow it up', async () => {
+    const state = await readSignInState(Date.now(), dir, open, async () => owner)
+    expect(state).toEqual({ broken: { letterId: 'lt-owner', by: 'the letter of "Restore the dev login" (task task-owner)', taskId: 'task-owner' } })
+    expect(signInRefusal(state, 'task-report')).toMatch(/the letter of "Restore the dev login" \(task task-owner\) \(lt-owner\) already asks them to sign in/)
+    expect(signInRefusal(state, 'task-owner')).toBeNull()
+    expect(await readSignInState(Date.now(), dir, open, async () => null)).toEqual({})
+  })
+
+  it('a Walnut sign-in letter comes first; a newer working check wins over the task letter', async () => {
+    fs.writeFileSync(path.join(dir, 'host-auth-alert.json'), JSON.stringify({ episodes: [{ key: 'login', letterId: 'lt-login', openedAt: 1 }] }))
+    expect((await readSignInState(Date.now(), dir, open, async () => owner)).broken?.letterId).toBe('lt-login')
+    fs.rmSync(path.join(dir, 'host-auth-alert.json'))
+    const now = Date.now()
+    fs.writeFileSync(path.join(dir, 'sign-in-state.json'), JSON.stringify({ ok: true, checkedAt: new Date(now).toISOString() }))
+    expect((await readSignInState(now, dir, open, async () => ({ ...owner, since: now - 60_000 }))).ok).toBeDefined()
   })
 })
 

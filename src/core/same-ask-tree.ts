@@ -276,7 +276,7 @@ async function refuseSignInAsk(taskId: string, text: string, what: 'letter' | 'r
   const { getConfig } = await import('./config-manager.js');
   const words = loginCommandWords((await getConfig().catch(() => ({}) as { ssh_login_hint?: string })).ssh_login_hint);
   if (!isSignInAsk(text, words)) return;
-  const why = signInRefusal(await readSignInState());
+  const why = signInRefusal(await readSignInState(), taskId);
   const dummy = { taskId, title: '', ask: text, where: 'status' as const, relation: 'elsewhere' as const };
   if (why) {
     log.task.info('same-ask: sign-in ask refused, the sign-in state is known', { taskId, what });
@@ -289,6 +289,35 @@ async function refuseSignInAsk(taskId: string, text: string, what: 'letter' | 'r
   const hit: TreeAsk = { taskId: other.id, title: other.title, ask: other.user_status!.ask!, where: 'status', relation: 'elsewhere' };
   log.task.info('same-ask: sign-in ask refused, another task asks it', { taskId, sameAsTaskId: other.id, what });
   throw new SameAskError(sameAskMessage(hit, what), hit);
+}
+
+/**
+ * A letter or a thread turn of any kind (a report, a completion, a reply) that asks the user to
+ * sign in, anywhere in its words (signInLineOf), goes the same way as a sign-in ask: refused while
+ * another letter already asks it, or while sign-in works. 2026-11-15: while one task's open letter
+ * asked the user to sign in, a second task's weekly report said "re-measuring needs <the login
+ * command> first"; only a decision letter's subject was checked, so the user was asked twice.
+ */
+export async function refuseSignInLetter(
+  taskId: string | undefined, subject: string | undefined, body: string | undefined,
+  input?: { same_ask_reason?: unknown; sameAskReason?: unknown } | null,
+): Promise<void> {
+  if (!taskId) return;
+  try {
+    const { signInLineOf, loginCommandWords } = await import('./sign-in-ask.js');
+    const { getConfig } = await import('./config-manager.js');
+    const words = loginCommandWords((await Promise.resolve().then(getConfig).catch(() => ({}) as { ssh_login_hint?: string })).ssh_login_hint);
+    const line = signInLineOf(subject, body, words);
+    if (!line) return;
+    if (sameAskReasonOf(input)) { log.task.info('same-ask: sign-in asked again on purpose', { taskId }); return; }
+    let everything: Task[] = [];
+    try { everything = await (await import('./task-manager.js')).listTasks(); } catch { /* the letter check alone */ }
+    await refuseSignInAsk(taskId, line, 'letter', everything);
+  } catch (err) {
+    // Only the refusal stops the letter; a check that cannot run lets it through.
+    if (err instanceof SameAskError) throw err;
+    log.task.debug('same-ask: sign-in letter check failed, letter let through', { taskId, error: err instanceof Error ? err.message : String(err) });
+  }
 }
 
 const WHO: Record<TreeAsk['relation'], string> = { descendant: 'your subtask', team: 'your team', ancestor: 'above you', elsewhere: 'another team' };

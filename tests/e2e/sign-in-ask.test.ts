@@ -214,3 +214,56 @@ describe('an ask answered above stays answered (2026-11-05)', () => {
     expect(kept.map((a) => a.text)).toEqual(['Launch month: milestone 9, low confidence. The rest as proposed.', 'Room 4.'])
   })
 })
+
+describe("a sign-in asked in one task's letter is asked there only (2026-11-15)", () => {
+  // The owner's open decision letter asks the user to sign in; a weekly report task then asked
+  // again in its report letter's body ("re-measuring needs <login command> first").
+  let owner: { id: string; sid: string }
+  let reporter: { id: string; sid: string }
+  let ownerLetter = ''
+  const letterIdOf = async (res: Response) => { const b = (await res.json()) as { id?: string; letter?: { id: string } }; return b.letter?.id ?? b.id! }
+
+  beforeAll(async () => {
+    // Earlier cases leave sign-in asks open (shown or folded); this case starts with none.
+    for (const t of await listTasks()) await updateTaskRaw(t.id, { phase: 'COMPLETE' } as never, { source: 'test' })
+    owner = await asking('Restore the dev login', null, 'Ops')
+    reporter = await asking('Weekly cost report', null, 'Insights')
+  })
+
+  it("the owner asks once; another task's report, status or reply that asks again is refused, naming the owner's letter", async () => {
+    const asked = await call('POST', '/api/v1/human-inbox', { type: 'action_required', subject: 'Sign in on the Mac so the hosts come back', markdown: 'Run acmelogin -o on the Mac.', actions: [{ id: 'done', label: 'Done' }], user_kind: 'credentials', user_kind_why: 'Only he can sign in' }, owner.sid)
+    expect(asked.status, await asked.clone().text()).toBe(201)
+    ownerLetter = await letterIdOf(asked)
+    // "Totals are in. Re-measuring needs acmelogin first."
+    const again = await call('POST', '/api/v1/human-inbox', { type: 'completion', subject: 'Weekly cost report', markdown: 'Totals are in the table.\n要补测需要先运行 acmelogin。' }, reporter.sid)
+    expect(again.status).toBe(409)
+    const why = JSON.stringify(await again.json())
+    expect(why).toContain(ownerLetter)
+    expect(why).toContain(owner.id)
+    // A report that only says the login ran out is news, and goes.
+    const news = await call('POST', '/api/v1/human-inbox', { type: 'completion', subject: 'Weekly cost report', markdown: 'The dev box certificate expired at 09:00, so these numbers are from yesterday.' }, reporter.sid)
+    expect(news.status, await news.clone().text()).toBe(201)
+    const newsLetter = await letterIdOf(news)
+    // Its own reply on that letter asking the sign-in, and a status line asking it: refused too.
+    const reply = await call('POST', `/api/v1/human-inbox/${newsLetter}/reply`, { text: 'Please run acmelogin -o first and I will re-measure.' }, reporter.sid)
+    expect(reply.status).toBe(409)
+    expect(JSON.stringify(await reply.json())).toContain(ownerLetter)
+    const line = await call('PUT', `/api/v1/tasks/${reporter.id}/report`, { state: 'needs', ask: 'Please run acmelogin so I can re-measure', user_kind: 'credentials', user_kind_why: 'Only he can sign in' }, reporter.sid)
+    expect(line.status).toBe(409)
+    expect(JSON.stringify(await line.json())).toContain(ownerLetter)
+    // The owner follows up on its own letter.
+    const follow = await call('POST', `/api/v1/human-inbox/${ownerLetter}/reply`, { text: 'Still needed: please run acmelogin -o on the Mac.' }, owner.sid)
+    expect(follow.status, await follow.clone().text()).toBe(200)
+  })
+
+  it("a sign-in ask from another task's session waits on the owner's letter; archived, it is asked again", async () => {
+    await report(reporter.id, 'Please run acmelogin -o so the report can re-measure')
+    await settle()
+    expect(await statusOfId(reporter.id)).toMatchObject({ state: 'waiting' })
+    expect((await statusOfId(reporter.id))?.waitingOn).toContain(ownerLetter)
+    const { setArchived } = await import('../../src/core/human-inbox/store.js')
+    await setArchived(ownerLetter, true)
+    await settle()
+    expect((await statusOfId(reporter.id))?.state, JSON.stringify(await statusOfId(reporter.id))).toBe('needs')
+  })
+})
