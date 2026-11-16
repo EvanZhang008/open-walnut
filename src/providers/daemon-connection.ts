@@ -144,6 +144,8 @@ import { NeedsLeaderError } from '../core/replication/needs-leader.js'
 import { daemonUpdateGapWhy, daemonUpdateMinGapMs, daemonUpdateWaitMs, parseEtimeMs } from './daemon-update-gap.js'
 // The companion's forward on a stream ('bridge-stream-v1', replica plan WP13): the Mac's door.
 import { companionStreamAcceptor } from '../web/v1-forward/stream-door.js'
+// Static: the trigger push asks it on every connect, and a module load there delays the set.
+import * as sameDaemonRecord from '../core/hosts/same-daemon-record.js'
 
 /** `walnut-boot=<epoch s>` in what a host printed, as `{ boot }` (a `started` record's), else {}. */
 function bootOf(said: string): { boot?: number } {
@@ -837,8 +839,13 @@ export class DaemonConnection {
   private _daemonInstanceId: string | null = null
   /** A successful hello on the current transport, not a cached id from the prior link. */
   private _helloConfirmed = false
-  private _helloTargetIdentity: string | null = null
-  get helloTargetIdentity(): string | null { return this._helloConfirmed ? this._helloTargetIdentity : null }
+  private _helloTarget: SshTarget | null = null
+  /** What the link the current hello confirmed actually dials (same-daemon-record.ts); null while not confirmed. */
+  helloTargetIdentity(): Promise<string | null> {
+    if (!this._helloConfirmed) return Promise.resolve(null)
+    const t = this._helloTarget
+    return (t ? sameDaemonRecord.targetIdentityOf(this.hostKey, t) : sameDaemonRecord.configuredIdentityOf(this.hostKey)).catch(() => null)
+  }
   /** Daemon start timestamp from the most recent successful `hello`. */
   private _daemonStartedAt: number | null = null
   /** The daemon's own build, from hello (the fleet view shows it). */
@@ -5958,10 +5965,8 @@ export class DaemonConnection {
           newStartedAt,
         })
       }
-      const record = await import('../core/hosts/same-daemon-record.js')
-      this._helloTargetIdentity = await (this.sshTarget
-        ? record.targetIdentityOf(this.hostKey, this.sshTarget)
-        : record.configuredIdentityOf(this.hostKey)).catch(() => null)
+      // What this hello's link dialled; resolved only when a pair is recorded (never on the hello path).
+      this._helloTarget = this.sshTarget ? { ...this.sshTarget } : null
       this._daemonInstanceId = newInstanceId
       this._helloConfirmed = true
       this._daemonStartedAt = newStartedAt
@@ -10909,9 +10914,9 @@ export async function sameDaemonHostsOf(hostKey: string, live: string | null): P
     }
   }
   try {
-    const record = await import('../core/hosts/same-daemon-record.js')
+    const record = sameDaemonRecord
     if (confirmed.length > 0) {
-      const dialled = new Map([hostKey, ...confirmed].map((h) => [h, pooledFor(h)?.helloTargetIdentity ?? null]))
+      const dialled = new Map(await Promise.all([hostKey, ...confirmed].map(async (h) => [h, (await pooledFor(h)?.helloTargetIdentity()) ?? null] as const)))
       if (live && pooledFor(hostKey)?.liveInstanceId === live && confirmed.every((h) => pooledFor(h)?.liveInstanceId === live)) {
         await record.rememberSameDaemon(hostKey, confirmed, dialled)
       }

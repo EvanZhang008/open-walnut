@@ -331,7 +331,7 @@ describe('two aliases of one daemon push one trigger set', () => {
     a.disconnect()
     owned.lab = ['lab-a']
     const c = await connect('lab')
-    expect(c.helloTargetIdentity).toBe(JSON.stringify(['ssh', 'me', 'lab.example', '22']))
+    expect(await c.helloTargetIdentity()).toBe(JSON.stringify(['ssh', 'me', 'lab.example', '22']))
     expect(await recorded('lab')).toEqual(['studio-net'])
     dropAll()
     _resetSameDaemonRecordForTest()
