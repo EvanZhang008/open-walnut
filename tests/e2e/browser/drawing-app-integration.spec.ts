@@ -539,4 +539,22 @@ test.describe('Drawing real plugin acceptance', () => {
     await shot(page, 'round2-diagram')
     expect(errors).toEqual([])
   })
+
+  /**
+   * The editor's Mermaid dialog is left out of the build (web/bundle-trim.ts), so its entry in the
+   * extra-tools menu must not show: a click would open a dialog that can only fail. 2026-11-16: the
+   * CSS rule that hides it lost the cascade to the editor's own item rule and the row stayed.
+   */
+  test('the extra-tools menu offers no Mermaid dialog and no Generate group', async ({ page }) => {
+    await openDrawingApp(page)
+    await workspace(page).getByRole('button', { name: 'New drawing', exact: true }).first().click()
+    await expect(workspace(page).locator('canvas.excalidraw__canvas.interactive')).toBeVisible({ timeout: 60_000 })
+    await workspace(page).locator('.App-toolbar__extra-tools-trigger').click()
+    const menu = workspace(page).locator('.App-toolbar__extra-tools-dropdown')
+    await expect(menu.getByTestId('toolbar-laser')).toBeVisible()
+    await expect(menu.getByText('Mermaid to Excalidraw')).toBeHidden()
+    await expect(menu.getByText('Generate', { exact: true })).toBeHidden()
+    await shot(page, 'extra-tools-menu')
+    await page.keyboard.press('Escape')
+  })
 })

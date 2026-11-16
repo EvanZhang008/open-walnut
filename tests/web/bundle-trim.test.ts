@@ -93,7 +93,7 @@ describe('web bundle trim', () => {
     expect(mermaid).toBeGreaterThan(laser);
     expect(mermaid - laser).toBeLessThan(1000);
     expect(read(path.join(web, 'src/components/drawing/drawing-workspace.css')))
-      .toContain('.drawing-canvas-host .App-toolbar__extra-tools-dropdown [data-testid="toolbar-laser"] ~ * { display: none; }');
+      .toContain('.drawing-canvas-host .App-toolbar__extra-tools-dropdown [data-testid="toolbar-laser"] ~ * { display: none !important; }');
     expect(read(path.join(web, 'src/components/drawing/ExcalidrawCanvas.tsx'))).toContain('aiEnabled={false}');
   });
 

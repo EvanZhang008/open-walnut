@@ -446,4 +446,6 @@
 /* The editor's "Generate" group in its extra-tools menu (the Mermaid dialog) comes after the laser
    pointer. Walnut leaves Mermaid out of the build (web/bundle-trim.ts) and makes diagrams from the
    drawing menu, so the group is hidden. Guard: tests/web/bundle-trim.test.ts. */
-.drawing-canvas-host .App-toolbar__extra-tools-dropdown [data-testid="toolbar-laser"] ~ * { display: none; }
+/* !important: the editor's own item rule (.excalidraw .dropdown-menu .dropdown-menu-item-base) is as
+   specific and its stylesheet loads after this one, so it won the cascade and the Mermaid row stayed. */
+.drawing-canvas-host .App-toolbar__extra-tools-dropdown [data-testid="toolbar-laser"] ~ * { display: none !important; }
