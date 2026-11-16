@@ -391,15 +391,24 @@ test('the approval card opens the task that asked, from a full-screen sheet and 
     return fails.join('; ') || 'fits'
   })).toBe('fits')
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-jump-org.png` })
+  // On the Org page a task opens on the Org page, beside it (56685857d: every other page still
+  // opens it on Home, as the full-screen sheet above did).
+  const side = page.getByTestId('org-side')
+  const landedOnOrg = async () => {
+    await expect.poll(() => new URL(page.url()).pathname).toBe('/org')
+    await expect(side).toHaveAttribute('data-session-id', 'pw-provenance-session', { timeout: 15_000 })
+    await expect(side).toBeVisible()
+  }
   await card.getByTestId('approval-task-link').click()
-  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
-  await landed()
+  await landedOnOrg()
   // From the request's dialog: the link closes it on the way.
+  await side.locator('.session-panel-close').first().click()
+  await expect(side).toHaveCount(0)
   await card.getByTestId('approval-what').click()
   await expect(dialog).toBeVisible()
   await dialog.getByTestId('approval-task-link').click()
   await expect(dialog).toHaveCount(0)
-  await landed()
+  await landedOnOrg()
 })
 
 // 2026-11-06: the title passed at 1280 with the sidebar shut and was cut 4px sideways with it
