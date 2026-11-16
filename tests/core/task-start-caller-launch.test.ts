@@ -302,3 +302,49 @@ describe('a recorded folder no session ran in is a place only on a host that has
     expect(probe).not.toHaveBeenCalled()
   })
 })
+
+// 2026-11-16: the Walnut project's default host moved to a Linux dev host, but its lead's session
+// ran on the Mac, and every task the lead started landed beside it on the Mac.
+describe('a VP or lead hands on its place only on its project default host', () => {
+  const LEAD = { ...CALLER_TASK, org_role: 'lead' }
+  beforeEach(() => { tasks[CALLER_TASK.id] = LEAD })
+
+  it('a lead on this Mac, project default host devbox: the project default_cwd on devbox', async () => {
+    mocks.getProjectMetadata.mockResolvedValue({ default_host: 'devbox', default_cwd: '/home/me/marina' })
+    expect(await launchOf({ id: 't-lw', title: 'Work', project: 'marina' })).toEqual({ cwd: '/home/me/marina', host: 'devbox' })
+  })
+
+  it('a lead\'s own recorded Mac folder down the parent chain gives way too', async () => {
+    mocks.getProjectMetadata.mockResolvedValue({ default_host: 'devbox', default_cwd: '/home/me/marina' })
+    remoteFolders.add('__local__:/repo/marina')
+    tasks[CALLER_TASK.id] = { ...LEAD, cwd: '/repo/marina' }
+    mocks.getSessionsForTask.mockImplementation(async (id: string) => (id === CALLER_TASK.id
+      ? [{ claudeSessionId: 'sid-caller', taskId: CALLER_TASK.id, host: '__local__', cwd: '/repo/marina', process_status: 'idle', lastActiveAt: '2026-11-16T00:00:00Z' }]
+      : []))
+    expect(await launchOf({ id: 't-lw2', title: 'Work', project: 'marina', parent_task_id: CALLER_TASK.id }))
+      .toEqual({ cwd: '/home/me/marina', host: 'devbox' })
+  })
+
+  it('a lead on the project default host, or a project with none, hands on its place as before', async () => {
+    callerSession({ host: 'devbox', cwd: '/home/me/lead' })
+    mocks.getProjectMetadata.mockResolvedValue({ default_host: 'devbox', default_cwd: '/home/me/marina' })
+    expect(await launchOf({ id: 't-lw3', title: 'Work', project: 'marina' })).toEqual({ cwd: '/home/me/lead', host: 'devbox' })
+    callerSession()
+    mocks.getProjectMetadata.mockResolvedValue({ default_cwd: '/srv/project-default' })
+    expect(await launchOf({ id: 't-lw4', title: 'Work', project: 'marina' })).toEqual({ cwd: '/repo/marina', host: '' })
+  })
+
+  it('a default host with no default_cwd: the task\'s own directory there; a default host gone: beside the lead', async () => {
+    mocks.getProjectMetadata.mockResolvedValue({ default_host: 'devbox' })
+    expect(await launchOf({ id: 't-lw6', title: 'Work', project: 'marina' }))
+      .toEqual({ cwd: '/home/me/.local/state/open-walnut/tasks/t-lw6', host: 'devbox' })
+    mocks.getProjectMetadata.mockResolvedValue({ default_host: 'gonebox', default_cwd: '/home/me/marina' })
+    expect(await launchOf({ id: 't-lw7', title: 'Work', project: 'marina' })).toEqual({ cwd: '/repo/marina', host: '' })
+  })
+
+  it('a worker that is not a lead still keeps its pair off the default host', async () => {
+    tasks[CALLER_TASK.id] = CALLER_TASK
+    mocks.getProjectMetadata.mockResolvedValue({ default_host: 'devbox', default_cwd: '/home/me/marina' })
+    expect(await launchOf({ id: 't-w5', title: 'Work', project: 'marina' })).toEqual({ cwd: '/repo/marina', host: '' })
+  })
+})

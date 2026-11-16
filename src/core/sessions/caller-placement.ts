@@ -455,7 +455,9 @@ export async function createTimeCwd(
  * and has no cwd of its own (task / parent chain), so an explicit or recorded
  * place always wins and the pair never splits across machines. A caller whose
  * folder is only its own task directory gives no cwd: the start takes the new
- * task's own directory on that host.
+ * task's own directory on that host. A VP or lead off its project's default
+ * host hands on that host only: the project's default_cwd, or the task's own
+ * directory there.
  */
 export async function inheritedLaunchPair(
   callerSid: string | undefined,
@@ -475,6 +477,24 @@ export async function inheritedLaunchPair(
     if (!entry || entry.enabled === false) {
       log.session.warn('caller host is not usable, launching from project defaults', { host, taskId: task.id });
       return undefined;
+    }
+  }
+  // A VP or lead coordinates; its own seat is not where its project's work runs. When the project
+  // names a usable default host and the lead sits on another, its workers start on that host: its
+  // default_cwd, else their own directory there (2026-11-16: the Walnut project moved its work to
+  // a Linux dev host, but every task its lead on the Mac started went to the Mac, beside the lead,
+  // and cloned the repository there). A default host that is gone keeps the lead's place.
+  if (caller.task.orgLead) {
+    const { getProjectMetadata } = await import('../task-manager.js');
+    const meta = await getProjectMetadata(task.project || '').catch(() => null);
+    const dh = meta?.default_host ? normalizeHost(meta.default_host) : undefined;
+    if (dh !== undefined && dh !== normalizeHost(host)) {
+      const { getConfig } = await import('../config-manager.js');
+      const entry = dh ? (await getConfig()).hosts?.[dh] : undefined;
+      if (!dh || (entry && entry.enabled !== false)) {
+        log.session.info('lead caller off the project default host: starts there', { host, defaultHost: dh || '__local__', taskId: task.id });
+        return { host: dh };
+      }
     }
   }
   return ownDirOnly ? { host } : { host, cwd: caller.session.cwd };
