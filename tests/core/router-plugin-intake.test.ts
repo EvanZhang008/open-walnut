@@ -29,7 +29,7 @@ vi.mock('../../src/core/routines/routines-core.js', async (importOriginal) => ({
 import { WALNUT_HOME } from '../../src/constants.js'
 import { normalizeRouterAreas, readRouterAreas, ROUTER_ACCOUNT_MAX, ROUTER_MESSAGE_MAX, routerAreasPath, sourceTakes, updateRouterAreas, type RouterAreasFile } from '../../src/core/router/areas.js'
 import { ensureAccountRouter, type AccountRouterDeps } from '../../src/core/router/account-intake.js'
-import { __resetRouterKicks, chatSourcesEnabled, enterArrivals, kickRouterWake, routerIntake, ROUTER_INTAKE_MAX, type RouterIntakeDeps } from '../../src/core/router/plugin-intake.js'
+import { __pendingRouterKicks, __resetRouterKicks, chatSourcesEnabled, enterArrivals, kickRouterWake, routerIntake, ROUTER_INTAKE_MAX, type RouterIntakeDeps } from '../../src/core/router/plugin-intake.js'
 import { routerWakeJobId } from '../../src/core/router/wake.js'
 import type { RouterItem, RouterSource, RouterSourceKind } from '../../src/core/router/types.js'
 import { seedTaskStore } from '../helpers/router-task-store.js'
@@ -366,8 +366,9 @@ describe('the router wake kick (kickRouterWake)', () => {
     expect(routines.runs).toEqual([job])
     // One trailing run for the whole burst, when the gap ends.
     await expect.poll(() => routines.runs.length, { timeout: 5_000, interval: 50 }).toBe(2)
-    await new Promise((resolve) => setTimeout(resolve, 600))
     expect(routines.runs).toEqual([job, job])
+    // Nothing more is armed: the burst got exactly one trailing run.
+    expect(__pendingRouterKicks()).toBe(0)
   })
 
   it('another area has its own gap; the test reset forgets every gap and cancels a pending trailing run', async () => {
@@ -378,8 +379,9 @@ describe('the router wake kick (kickRouterWake)', () => {
     expect(routines.runs).toEqual([job, await routerWakeJobId('r-2')])
     // personal now has a trailing run armed; the reset cancels it.
     await kickRouterWake('personal')
+    expect(__pendingRouterKicks()).toBe(1)
     __resetRouterKicks()
-    await new Promise((resolve) => setTimeout(resolve, 800))
+    expect(__pendingRouterKicks()).toBe(0)
     expect(routines.runs.filter((id) => id === job)).toHaveLength(1)
     await kickRouterWake('personal')
     expect(routines.runs.filter((id) => id === job)).toHaveLength(2)

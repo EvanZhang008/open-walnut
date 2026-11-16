@@ -345,7 +345,7 @@ export function RouterSettingsBody({ id, draftKey: key, area, sources = [], valu
                                 return { ...v, filters: { ...(v.filters ?? {}), [sourceKey(src)]: next } };
                               });
                             }} />
-                          {one.words}
+                          {one.label === 'dm' ? 'Direct messages' : one.label === 'mention' ? 'Mentions of you' : 'Watched channels'}
                         </label>
                       );
                     })}

@@ -162,6 +162,9 @@ export async function kickRouterWake(areaId: string, now = Date.now()): Promise<
   await runRoutineNow(await routerWakeJobId(router.taskId));
 }
 
+/** Test-only: how many trailing kicks are armed. */
+export function __pendingRouterKicks(): number { return trailing.size; }
+
 /** Test-only. */
 export function __resetRouterKicks(): void {
   lastKick.clear();

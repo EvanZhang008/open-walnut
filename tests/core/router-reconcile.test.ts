@@ -254,7 +254,7 @@ describe('reconcileIfDue', () => {
     const gate = new Promise<void>((resolve) => { release = resolve })
     deps.recent = async (kind, account, sinceMs, untilMs) => { calls.recent.push([kind, account, sinceMs, untilMs]); await gate; return [] }
     const both = Promise.all([reconcileIfDue('personal', deps), reconcileIfDue('personal', deps)])
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    await expect.poll(() => calls.recent.length).toBe(1)
     release()
     await both
     expect(calls.recent).toHaveLength(1)
