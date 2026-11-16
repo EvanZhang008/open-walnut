@@ -32,3 +32,33 @@ export function drawingAssistantContext(path: string, title: string): string {
     'After an edit, render again and check it before you say it is done. A stale revision means they just drew something: read again and redo the edit on the new scene.',
   ].join('\n');
 }
+
+/** The ids a tidy request names; past it, the request says how many more (a message stays short). */
+const MAX_NAMED_IDS = 60;
+
+/**
+ * "Make a diagram" and "Text to diagram" in the App page, as a message into this drawing's
+ * assistant conversation: the same agent does them, and the person sees what it looked at and
+ * changed (2026-11-16, the user: "for each diagram use one task session, and even for make diagram
+ * route to there, so it is more visualized"). Elsewhere (the composer's sketch, a note's preview,
+ * beside a session) the editor keeps its one-call diagram.
+ */
+export type DrawingAssistantAsk =
+  | { kind: 'tidy'; selectedIds: string[] | null }
+  | { kind: 'text'; prompt: string };
+
+export function drawingAssistantAsk(ask: DrawingAssistantAsk): string {
+  if (ask.kind === 'text') {
+    return `Text to diagram: draw this as a clean diagram in this drawing, beside what is already there.\n\n${ask.prompt.trim()}`;
+  }
+  const how = 'Look at it first, then in one walnut_drawing_update replace my hand-drawn strokes and rough boxes with clean shapes, labels and connected arrows where I drew them. Keep my typed text and everything else as it is.';
+  if (!ask.selectedIds?.length) return `Make a diagram from this whole drawing. ${how}`;
+  const named = ask.selectedIds.slice(0, MAX_NAMED_IDS).join(', ');
+  const more = ask.selectedIds.length > MAX_NAMED_IDS ? ` and ${ask.selectedIds.length - MAX_NAMED_IDS} more` : '';
+  return `Make a diagram from the shapes I selected (element ids: ${named}${more}). ${how}`;
+}
+
+/** The task of a drawing's conversation is named after the drawing, so it reads as that drawing's. */
+export function drawingTaskTitle(title: string): string {
+  return `Drawing: ${title.trim() || 'Untitled'}`;
+}

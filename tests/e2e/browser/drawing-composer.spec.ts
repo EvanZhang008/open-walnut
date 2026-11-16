@@ -446,4 +446,47 @@ test.describe('Draw in the composer (drawing_app)', () => {
     await shot(page, 'task-in-notes');
     expect(errors).toEqual([]);
   });
+
+  /**
+   * Outside the App page (here the composer's sketch) Make a diagram stays the editor's one call to
+   * the model: its answer lands to the right of the selection as one undo step. In the App page the
+   * same button goes to the drawing's own session (drawing-app-integration.spec.ts).
+   */
+  test('Make a diagram in the composer adds the answer beside the sketch, and one undo takes it out', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    let sent: { mode?: string; elements?: unknown[] } | null = null;
+    await page.route('**/api/drawings/diagram', async (route) => {
+      sent = route.request().postDataJSON();
+      await route.fulfill({ json: { elements: [
+        { type: 'rectangle', id: 'd-order', x: 0, y: 0, width: 160, height: 60, label: { text: 'Order' } },
+        { type: 'rectangle', id: 'd-review', x: 260, y: 0, width: 160, height: 60, label: { text: 'Review' } },
+        { type: 'arrow', x: 160, y: 30, start: { id: 'd-order' }, end: { id: 'd-review' } },
+      ] } });
+    });
+    const panel = await openSession(page);
+    const dialog = await openDraw(page, panel);
+    await focusCanvas(dialog);
+    await drag(page, dialog, 'r', [120, 120], [260, 200]);
+    await drag(page, dialog, 'r', [360, 120], [500, 200]);
+    await saved(dialog);
+    const before = (await onServer(page, dialog)).scene.elements.filter((e) => !e.isDeleted);
+    expect(before).toHaveLength(2);
+    await page.keyboard.press('v');
+    await page.keyboard.press('ControlOrMeta+a');
+    await dialog.getByRole('button', { name: 'Make a diagram' }).click();
+    await expect.poll(async () => (await onServer(page, dialog)).scene.elements.filter((e) => !e.isDeleted).length, { timeout: 30_000 }).toBeGreaterThan(2);
+    expect(sent!.mode).toBe('tidy');
+    expect(sent!.elements).toHaveLength(2);
+    const right = Math.max(...before.map((e) => e.x));
+    const added = (await onServer(page, dialog)).scene.elements.filter((e) => !e.isDeleted && !before.some((b) => b.id === e.id));
+    expect(added.length).toBeGreaterThanOrEqual(3);
+    expect(Math.min(...added.map((e) => e.x))).toBeGreaterThan(right);
+    // No assistant here: the composer's dialog keeps the one call.
+    await expect(dialog.getByRole('complementary', { name: 'Drawing assistant' })).toHaveCount(0);
+    await shot(page, 'composer-diagram');
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect.poll(async () => (await onServer(page, dialog)).scene.elements.filter((e) => !e.isDeleted).length, { timeout: 30_000 }).toBe(2);
+    expect(errors).toEqual([]);
+  });
 });

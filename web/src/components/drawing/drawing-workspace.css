@@ -500,3 +500,5 @@
 .drawing-assistant-intro { padding: 4px 4px 0; color: var(--fg-secondary); font-size: 13px; line-height: 1.5; }
 .drawing-assistant-intro p { margin: 0 0 8px; }
 .drawing-assistant-intro ul { margin: 0; padding-left: 18px; color: var(--fg-muted); }
+.drawing-assistant-head-gap { flex: 1 1 auto; }
+.drawing-assistant-open-task { height: 26px; padding: 0 10px; border-radius: 6px; font-size: 12px; }

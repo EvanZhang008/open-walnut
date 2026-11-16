@@ -471,99 +471,82 @@ test.describe('Drawing real plugin acceptance', () => {
     expect(errors).toEqual([])
   })
 
-  test('round 2: Make a diagram from a selected sketch lands to its right, and one undo takes it out', async ({ page }) => {
+  /**
+   * 2026-11-16, the user: "for each diagram use one task session, and even for make diagram route
+   * to there, so it is more visualized". In the App page Make a diagram and Text to diagram are
+   * messages into the drawing's own assistant session (named "Drawing: <title>"), never the
+   * editor's one-call diagram; the one-call path stays for the composer's sketch
+   * (drawing-composer.spec.ts).
+   */
+  test('Make a diagram and Text to diagram in the App go to the drawing\'s own session, named after it', async ({ page }) => {
     const errors: string[] = []
     page.on('pageerror', (error) => errors.push(error.message))
-    // DRAWING_REAL_SCENE (a GET /api/drawings/file answer) and DRAWING_REAL_REPLY (a model's real
-    // answer, {elements, note?}) run this on a real sketch, kept outside the repo; without them a
-    // small neutral sketch and answer stand in.
-    const realScene = process.env.DRAWING_REAL_SCENE ? JSON.parse(await fs.readFile(process.env.DRAWING_REAL_SCENE, 'utf8')) as { scene: unknown } : null
-    const realReply = process.env.DRAWING_REAL_REPLY ? JSON.parse(await fs.readFile(process.env.DRAWING_REAL_REPLY, 'utf8')) as { elements: unknown[]; note?: string } : null
-    const reply = realReply ?? { elements: [
-      { type: 'rectangle', id: 'd-order', x: 0, y: 0, width: 160, height: 60, label: { text: 'Order' } },
-      { type: 'rectangle', id: 'd-review', x: 260, y: 0, width: 160, height: 60, label: { text: 'Review' } },
-      { type: 'arrow', x: 160, y: 30, start: { id: 'd-order' }, end: { id: 'd-review' } },
-    ] }
-    // The diagram call is mocked: the model's answer, as the server returns it.
-    let diagramBody: { mode?: string; elements?: unknown[] } | null = null
-    await page.route('**/api/drawings/diagram', async (route) => {
-      diagramBody = route.request().postDataJSON()
-      await route.fulfill({ json: reply })
-    })
+    let oneCall = 0
+    await page.route('**/api/drawings/diagram', async (route) => { oneCall += 1; await route.abort() })
 
     // The sketch: made on the server, then opened from the Drawings list.
     const made = await page.request.post('/api/drawings', { data: { title: 'Order review sketch' } })
     expect(made.ok(), await made.text()).toBe(true)
     const doc = await made.json() as { path: string; revision: string }
-    const seeded = realScene
-      ? await page.request.put('/api/drawings/file', { data: { path: doc.path, revision: doc.revision, scene: realScene.scene } })
-      : await page.request.post('/api/drawings/append', { data: { path: doc.path, revision: doc.revision, elements: [
-        { type: 'text', x: 0, y: 0, text: 'Order -> review' },
-        { type: 'rectangle', x: 0, y: 60, width: 140, height: 70, text: 'Order' },
-        { type: 'rectangle', x: 220, y: 60, width: 140, height: 70, text: 'Review' },
-        { type: 'text', x: 400, y: 80, text: 'user' },
-      ] } })
+    const seeded = await page.request.post('/api/drawings/append', { data: { path: doc.path, revision: doc.revision, elements: [
+      { type: 'text', x: 0, y: 0, text: 'Order -> review' },
+      { type: 'rectangle', x: 0, y: 60, width: 140, height: 70, text: 'Order' },
+      { type: 'rectangle', x: 220, y: 60, width: 140, height: 70, text: 'Review' },
+    ] } })
     expect(seeded.ok(), await seeded.text()).toBe(true)
 
     await openDrawingApp(page)
     await workspace(page).locator('.drawing-workspace-file').filter({ hasText: 'Order review sketch' }).click()
     await expect(workspace(page)).toHaveAttribute('data-drawing-path', doc.path, { timeout: 60_000 })
     await expect(workspace(page)).toHaveAttribute('data-save-state', 'saved', { timeout: 30_000 })
-    const original = await documentOnScreen(page)
-    const originalLive = original.scene.elements.filter((e) => !(e as { isDeleted?: boolean }).isDeleted) as unknown as Array<{ id: string; x: number; y: number; width: number }>
-    expect(originalLive.length).toBeGreaterThan(2)
+    const live = (await documentOnScreen(page)).scene.elements.filter((e) => !(e as { isDeleted?: boolean }).isDeleted) as unknown as Array<{ id: string; x: number; width?: number }>
     const canvas = workspace(page).locator('canvas.excalidraw__canvas.interactive')
     await canvas.click({ position: { x: LEFT + 200, y: 860 - 120 } })
     await page.keyboard.press('Escape')
-    await page.keyboard.press('ControlOrMeta+a')
-    await page.waitForTimeout(400)
-    await shot(page, 'round2-diagram-selected')
-    await workspace(page).getByRole('button', { name: 'Make a diagram' }).click()
-    await expect.poll(async () => (await documentOnScreen(page)).scene.elements.filter((e) => !(e as { isDeleted?: boolean }).isDeleted).length, { timeout: 30_000 }).toBeGreaterThan(originalLive.length)
-    expect(diagramBody!.mode).toBe('tidy')
-    expect((diagramBody!.elements ?? []).length).toBe(originalLive.length)
-    const withDiagram = await documentOnScreen(page)
-    const right = Math.max(...originalLive.map((e) => e.x + (e.width ?? 0)))
-    const added = (withDiagram.scene.elements as unknown as Array<{ id: string; x: number; y: number; isDeleted?: boolean }>).filter((e) => !e.isDeleted && !originalLive.some((o) => o.id === e.id))
-    expect(added.length).toBeGreaterThanOrEqual(3)
-    expect(Math.min(...added.map((e) => e.x))).toBeGreaterThan(right)
-    for (const o of originalLive) expect(withDiagram.scene.elements.find((e) => (e as unknown as { id: string }).id === o.id)).toMatchObject({ x: o.x, y: o.y })
-    await shot(page, 'round2-diagram-result')
-    const liveCount = async () => (await documentOnScreen(page)).scene.elements.filter((e) => !(e as { isDeleted?: boolean }).isDeleted).length
-    // One undo takes the whole diagram out; the original is as it was.
-    await page.keyboard.press('ControlOrMeta+z')
-    await expect.poll(liveCount, { timeout: 30_000 }).toBe(originalLive.length)
-    const undone = await documentOnScreen(page)
-    for (const o of originalLive) expect(undone.scene.elements.find((e) => (e as unknown as { id: string }).id === o.id)).toMatchObject({ x: o.x, y: o.y })
-    await page.waitForTimeout(800)
-    await shot(page, 'round2-diagram-undone')
-    // Redo brings it back; then both side by side (deselect and zoom to fit: view only).
-    await page.keyboard.press('ControlOrMeta+Shift+z')
-    await expect.poll(liveCount, { timeout: 30_000 }).toBe(withDiagram.scene.elements.filter((e) => !(e as { isDeleted?: boolean }).isDeleted).length)
-    // No shape of the diagram is out of all proportion (a stray giant breaks zoom to fit).
-    const redone = (await documentOnScreen(page)).scene.elements as unknown as Array<{ x: number; y: number; width?: number; height?: number; isDeleted?: boolean }>
-    const live = redone.filter((e) => !e.isDeleted)
-    const span = (lo: (e: typeof live[number]) => number, hi: (e: typeof live[number]) => number) => Math.max(...live.map(hi)) - Math.min(...live.map(lo))
-    expect(span((e) => e.x, (e) => e.x + (e.width ?? 0))).toBeLessThan(12_000)
-    expect(span((e) => e.y, (e) => e.y + (e.height ?? 0))).toBeLessThan(12_000)
-    // Zoom to fit (Shift+1, and Shift+3 for the selection) puts both in the middle of the free
+    // Zoom to fit (Shift+1, and Shift+3 for the selection) puts the drawing in the middle of the free
     // canvas. The editor's own keys measured its panels as if it sat at the page's top left, which
     // pushed everything into the canvas's right edge.
     const zoomHost = workspace(page).locator('.drawing-canvas-host')
-    const canvasWidth = (await workspace(page).locator('canvas.excalidraw__canvas.interactive').boundingBox())!.width
-    const middle = (live.reduce((m, e) => Math.min(m, e.x), Infinity) + live.reduce((m, e) => Math.max(m, e.x + (e.width ?? 0)), -Infinity)) / 2
-    const middleOnScreen = async () => {
-      const zoom = Number(await zoomHost.getAttribute('data-zoom'))
-      return (middle + Number(await zoomHost.getAttribute('data-scroll-x'))) * zoom / canvasWidth
-    }
+    const canvasWidth = (await canvas.boundingBox())!.width
+    const middle = (Math.min(...live.map((e) => e.x)) + Math.max(...live.map((e) => e.x + (e.width ?? 0)))) / 2
+    const middleOnScreen = async () => (middle + Number(await zoomHost.getAttribute('data-scroll-x'))) * Number(await zoomHost.getAttribute('data-zoom')) / canvasWidth
     for (const key of ['Shift+1', 'Shift+3']) {
       if (key === 'Shift+3') await page.keyboard.press('ControlOrMeta+a')
       await page.keyboard.press(key)
       await expect.poll(middleOnScreen, { timeout: 5_000 }).toBeGreaterThan(0.25)
       expect(await middleOnScreen()).toBeLessThan(0.75)
     }
-    await page.waitForTimeout(1_000)
-    await shot(page, 'round2-diagram')
+    await page.keyboard.press('ControlOrMeta+a')
+    await page.waitForTimeout(400)
+
+    // No conversation yet: the click opens the assistant and launches the drawing's task with the ask.
+    const launch = page.waitForRequest((req) => req.method() === 'POST' && new URL(req.url()).pathname === '/api/sessions/quick-start')
+    await workspace(page).getByRole('button', { name: 'Make a diagram' }).click()
+    const body = (await launch).postDataJSON() as { message?: string; taskMeta?: { pinTier?: unknown } }
+    expect(body.message).toMatch(/^Make a diagram from the shapes I selected \(element ids: /)
+    for (const el of live) expect(body.message).toContain(el.id)
+    expect(body.taskMeta?.pinTier).toBeNull()
+    const panel = workspace(page).getByRole('complementary', { name: 'Drawing assistant' })
+    await expect(panel).toBeVisible()
+    await expect(panel.getByText('Make a diagram from the shapes I selected', { exact: false }).first()).toBeVisible({ timeout: 30_000 })
+    await shot(page, 'diagram-in-session')
+
+    // Its task is the drawing's, by name, and opens from the panel.
+    const openTask = panel.getByRole('button', { name: 'Open task' })
+    await expect(openTask).toBeVisible({ timeout: 60_000 })
+    const tasks = async () => ((await (await page.request.get('/api/tasks')).json()) as { tasks: Array<{ title: string }> }).tasks
+    await expect.poll(async () => (await tasks()).filter((t) => t.title === 'Drawing: Order review sketch').length, { timeout: 30_000 }).toBe(1)
+
+    // Text to diagram goes into the same conversation (no second task).
+    await workspace(page).getByTestId('main-menu-trigger').click()
+    await workspace(page).locator('.dropdown-menu').getByText('Text to diagram', { exact: true }).click()
+    await workspace(page).getByRole('textbox', { name: 'Describe the diagram' }).fill('order service calls payment, then shipping')
+    await workspace(page).getByRole('button', { name: 'Make diagram', exact: true }).click()
+    await expect(workspace(page).getByRole('form', { name: 'Text to diagram' })).toHaveCount(0)
+    await expect(panel.getByText('order service calls payment, then shipping', { exact: false }).first()).toBeVisible({ timeout: 30_000 })
+    expect((await tasks()).filter((t) => t.title.startsWith('Drawing: Order review sketch')).length).toBe(1)
+    expect(oneCall).toBe(0)
+    await shot(page, 'text-diagram-in-session')
     expect(errors).toEqual([])
   })
 

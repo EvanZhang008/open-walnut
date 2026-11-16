@@ -32,7 +32,8 @@ import { addCatalogLibrary, tabLibrary } from './drawing-library';
 import { isFullscreenShortcut, liftFixedAncestors } from './drawing-overlay';
 import { LibraryBrowser } from './LibraryBrowser';
 import { workspacePlace, workspaceViewKeys } from './workspace-place';
-import { followDrawingRename } from './drawing-assistant-context';
+import { drawingAssistantAsk, followDrawingRename } from './drawing-assistant-context';
+import type { DrawingAssistantRequest } from './DrawingAssistant';
 import type { CanvasMenu, DrawingCanvasHandle, ExcalidrawCanvasProps } from './ExcalidrawCanvas';
 
 // The chat (SessionPanel and its composer) loads only when the assistant is opened.
@@ -201,6 +202,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const view = workspaceViewKeys(workspacePlace({ draftId, sessionId, hasClose: Boolean(onClose), preview }));
   // The assistant chat lives in the App's page only (workspace-place.ts `assistantKey`).
   const [assistantKept, setAssistantShown] = usePageView<boolean>('drawing', view.assistantKey ?? 'assistantUnkept', false, isBoolean);
+  // Make a diagram / Text to diagram handed to the assistant (a message, not a view choice).
+  const [assistantRequest, setAssistantRequest] = useState<DrawingAssistantRequest | null>(null);
+  const assistantAsks = useRef(0);
   const [filesShown, setFilesShown] = usePageView<boolean>('drawing', view.filesKey, view.filesDefault, isBoolean);
   const [keptFullScreen, setKeptFullScreen] = usePageView<boolean>('drawing', view.fullScreenKey ?? 'fullScreenUnkept', false, isBoolean);
   const [previewFullScreen, setPreviewFullScreen] = useState(false);
@@ -462,6 +466,19 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     const input = mode === 'tidy' ? handle.diagramInput() : null;
     if (input && !input.elements.length) {
       setDiagram({ phase: 'error', message: 'Draw something first, or select what to turn into a diagram.', retry: () => void makeDiagram(mode, prompt) });
+      return;
+    }
+    // In the App page the drawing's assistant does it, in its own session the person can read.
+    if (canAssist) {
+      await sync.current?.save();
+      if (!mounted.current || canvas.current !== handle) return;
+      const text = drawingAssistantAsk(input
+        ? { kind: 'tidy', selectedIds: input.selected ? input.elements.map((el) => String(el.id)) : null }
+        : { kind: 'text', prompt });
+      setAssistantShown(true);
+      assistantAsks.current += 1;
+      setAssistantRequest({ id: assistantAsks.current, text });
+      if (mode === 'text') { setTextDialogOpen(false); diagramText.clear(); }
       return;
     }
     diagramRun.current?.abort();
@@ -734,7 +751,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       </section>
       {assistantShown && currentPath && (
         <Suspense fallback={<aside className="drawing-assistant" aria-label="Drawing assistant"><p className="drawing-workspace-files-note">Loading…</p></aside>}>
-          <DrawingAssistant path={currentPath} title={title} onLeave={() => canvas.current?.focus()}
+          <DrawingAssistant path={currentPath} title={title} onLeave={() => canvas.current?.focus()} request={assistantRequest}
+            onRequestDone={(id, error) => { if (error && mounted.current) setNotice(error); setAssistantRequest((now) => (now?.id === id ? null : now)); }}
             onClose={() => { setAssistantShown(false); requestAnimationFrame(() => canvas.current?.focus()); }} />
         </Suspense>
       )}
