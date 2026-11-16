@@ -17,12 +17,12 @@ defineOp({
     'NEED ANOTHER HOST FOR ONE STEP (UI tests on clouddev, an iOS build on a Mac, a browser on the user\'s machine): call subagent_run '
       + 'with `host` (an alias from host_list, or a selector like "@ios" or "@browser"), never task_move. Walnut copies your work there '
       + '(your folder\'s git repository: its commits, uncommitted changes and untracked files; your folder itself is left as it is), '
-      + 'runs the subagent in that copy as a session started the way a task\'s session starts there (Claude Code with its own default '
+      + '(`cwd` picks which folder: by default your session\'s working directory), runs the subagent in that copy as a session started the way a task\'s session starts there (Claude Code with its own default '
       + 'model, the same tools, skills, MCP servers and permissions a task session has on that host), and returns its answer plus every '
       + 'file it put in its out folder or named by absolute path (videos, screenshots, logs), copied into your task directory under '
       + 'subagents/<id>/ (`files` lists them). The copy on that host is removed when it ends. Its changes stay there: ask it to describe '
       + 'or return them (a patch file) when you want them. A host other than yours needs this task\'s grant there, the one host_exec uses.',
-    'Without `host` it runs in your working directory on your host. By default the call waits for its answer (up to wait_ms, at most '
+    'Without `host` it runs in your working directory on your host (`cwd` names another folder there). By default the call waits for its answer (up to wait_ms, at most '
       + '10 minutes, less through a host\'s gateway) and returns it as `answer` with state completed. A run still going returns state '
       + 'running with what it is doing: read it again with subagent_read (wait_ms waits), stop it with subagent_stop. background:true '
       + 'returns at once. A run whose end no call returned is told to you as a notification when it ends, as a Claude Code background '
@@ -33,6 +33,7 @@ defineOp({
   input: {
     engine: z.enum(ENGINES).optional().describe('The engine: claude (default), codex (GPT, e.g. Sol/Astra), opencode, goose, pi, gemini, dsh, or custom'),
     host: z.string().min(1).max(120).optional().describe('Run on this other host, in a copy of your work there: an alias (host_list) or a selector like "@ios"; omit for your own host'),
+    cwd: z.string().min(1).max(4096).optional().describe('The folder it runs in, an absolute path on your host (with `host`: the folder whose work is copied there); omit for your session\'s working directory. Name it when your work is in another folder than the one your session started in (a clone in your task directory)'),
     prompt: z.string().min(1).describe('The whole task for the subagent: it sees nothing else of your conversation'),
     model: z.string().min(1).optional().describe('The model id on that engine (e.g. "gpt-6.1-sol" for codex); omit for the engine\'s default'),
     effort: z.string().min(1).optional().describe('Reasoning effort (e.g. low, medium, high, xhigh) where the engine has one; omit for its default'),

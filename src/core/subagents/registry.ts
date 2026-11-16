@@ -109,6 +109,8 @@ export interface StartLightSubagent {
   engine?: string
   /** Another host to run on (an alias or a selector like "@ios"): it works there in a copy of the parent's work. */
   host?: string
+  /** The folder to run in (absolute, on the caller's host; with `host`, the folder whose work is copied). Default: the session's own. */
+  cwd?: string
   model?: string
   effort?: string
   prompt: string
@@ -140,8 +142,12 @@ export async function startLightSubagent(parentSid: string | undefined, req: Sta
   const record = await getSessionByClaudeId(sid)
   if (!record) throw new LightSubagentError('no_session', `Session ${sid} is not one Walnut knows`, 404)
   const ownHost = !record.host || record.host === 'local' ? '__local__' : record.host
-  const cwd = record.cwd
+  const cwd = req.cwd?.trim().replace(/(?<=.)\/+$/, '') || record.cwd
   if (!cwd) throw new LightSubagentError('no_session', `Session ${sid} has no working directory`, 409)
+  // A folder on the caller's own host, named whole: what the session's own shell reaches already.
+  if (req.cwd && (!cwd.startsWith('/') || cwd.split('/').includes('..'))) {
+    throw new LightSubagentError('bad_request', `cwd must be an absolute path without "..": ${req.cwd}`, 400)
+  }
   // Another host: the one host_exec would run on, under the same grant (it is as strong as a command there).
   const away = req.host?.trim() ? await awayHost(sid, req.host.trim(), prompt) : null
   const host = away?.host ?? ownHost

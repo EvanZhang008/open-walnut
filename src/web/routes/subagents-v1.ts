@@ -1,7 +1,7 @@
 /**
  * Light subagents of the calling session (core/subagents). Additive to v1.
  *
- *   POST /api/v1/subagents            { engine?, host?, model?, effort?, prompt, description?, background?, timeout_min?, wait_ms?, tool_use_id? }
+ *   POST /api/v1/subagents            { engine?, host?, cwd?, model?, effort?, prompt, description?, background?, timeout_min?, wait_ms?, tool_use_id? }
  *                                     → the run: its answer when it ended within the wait, else state running
  *   GET  /api/v1/subagents            → { subagents } this session's runs, running and recent
  *   GET  /api/v1/subagents/:id?wait_ms= → the run, after waiting up to wait_ms for it to end
@@ -61,6 +61,7 @@ subagentsV1Router.post('/subagents', (req, res, next) => answer(req, res, next, 
   const run = await reg.startLightSubagent(callerSid(req), {
     ...(str(b.engine) ? { engine: str(b.engine) } : {}),
     ...(str(b.host) ? { host: str(b.host) } : {}),
+    ...(str(b.cwd) ? { cwd: str(b.cwd) } : {}),
     prompt: b.prompt,
     ...(str(b.model) ? { model: str(b.model) } : {}),
     ...(str(b.effort) ? { effort: str(b.effort) } : {}),

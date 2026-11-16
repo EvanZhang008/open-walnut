@@ -101,7 +101,7 @@ import { WALNUT_HOME } from '../../../src/constants.js'
 import { addTask } from '../../../src/core/task-manager.js'
 import { closeDb as closeTaskDb } from '../../../src/core/task-db.js'
 import { closeDb as closeSessionDb } from '../../../src/core/session-db.js'
-import { createSessionRecord, getSessionByClaudeId } from '../../../src/core/session-tracker.js'
+import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../../src/core/session-tracker.js'
 import { bus, EventNames } from '../../../src/core/event-bus.js'
 import { __setTransferConnectionResolverForTesting, type TransferConn } from '../../../src/core/transfer/daemon-transfer-client.js'
 import { createTransferPack, type TransferPackDeps } from '../../../src/providers/transfer-pack-core.js'
@@ -287,8 +287,8 @@ function localRunDirs(): string[] {
   return fs.existsSync(dir) ? fs.readdirSync(dir) : []
 }
 
-async function runToEnd(prompt: string): Promise<ReturnType<typeof getLightSubagent>> {
-  const run = await startLightSubagent(SID, { host: 'cloud', prompt })
+async function runToEnd(prompt: string, more: { cwd?: string } = {}): Promise<ReturnType<typeof getLightSubagent>> {
+  const run = await startLightSubagent(SID, { host: 'cloud', prompt, ...more })
   await waitLightSubagent(run, 60_000)
   await lightSubagentSettled(run.id)
   // Its end reached its caller here: no notification goes into the session after the test.
@@ -340,6 +340,36 @@ describe('subagent_run on another host', () => {
     // The caller's own folder is exactly as it was.
     expect({ files: tree(checkout), status: git(checkout, ['status', '--porcelain']), head: git(checkout, ['rev-parse', 'HEAD']) }).toEqual(before)
   }, 90_000)
+
+  it('copies the folder `cwd` names, not the session\'s start folder, and brings a file named by two spellings back once', async () => {
+    // The session started in its task folder; its work (with the uncommitted edit) is a clone elsewhere.
+    const started = path.join(W.homes.__local__, 'tasks', taskId)
+    fs.mkdirSync(started, { recursive: true })
+    await updateSessionRecord(SID, { cwd: started } as never)
+    // The other host reaches its home by a second path too (clouddev: /home is a link to /local/home).
+    const alias = path.join(W.root, 'cloud-home-link')
+    fs.rmSync(alias, { force: true })
+    fs.symlinkSync(W.homes.cloud, alias)
+    behave = async (start) => {
+      const out = /put .* in (\S+?), or name/i.exec(String(start.message))?.[1]!
+      write(path.join(out, 'video.mp4'), 'mp4 bytes')
+      const viaLink = out.replace(W.homes.cloud, alias)
+      return `Video: ${path.join(out, 'video.mp4')} (also ${path.join(viaLink, 'video.mp4')}).`
+    }
+    const run = await runToEnd('Run the spec.', { cwd: checkout })
+    expect(run.status, run.error).toBe('completed')
+    expect(seen!.b).toBe('b edited, not committed\n')
+    expect(seen!.status).toContain(' M src/b.txt')
+    const back = path.join(W.homes.__local__, 'tasks', taskId, 'subagents', run.id)
+    expect(tree(back)).toEqual(['video.mp4'])
+    expect(cloudRunDirs()).toEqual([])
+    expect(listLeftRuns()).toEqual([])
+  }, 90_000)
+
+  it('refuses a cwd that is not an absolute path', async () => {
+    await expect(startLightSubagent(SID, { host: 'cloud', prompt: 'x', cwd: 'relative/dir' })).rejects.toMatchObject({ code: 'bad_request' })
+    await expect(startLightSubagent(SID, { host: 'cloud', prompt: 'x', cwd: '/a/../b' })).rejects.toMatchObject({ code: 'bad_request' })
+  })
 
   it('starts a full task session there: no profile, the caller\'s full access, the CLI\'s own model', async () => {
     const run = await runToEnd('Check it.')

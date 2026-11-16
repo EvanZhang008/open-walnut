@@ -308,6 +308,17 @@ export function pathsNamed(answer: string): string[] {
   return out
 }
 
+/**
+ * `p` as a path under the run's folder when it names a file there by another spelling: the
+ * same folder reached through a link (clouddev's /home is a link to /local/home), or ~/...
+ * The run's folder name (xf-<uuid>) is its own, so a path holding it is in it.
+ */
+export function inRunDir(p: string, runDir: string): string {
+  const entry = `/${path.posix.basename(runDir)}/`
+  const at = p.indexOf(entry)
+  return at < 0 ? p : `${runDir}/${p.slice(at + entry.length)}`
+}
+
 /** A name under `dir` that `used` does not hold yet: `video.mp4`, `video-2.mp4`, ... */
 export function freeName(name: string, used: Set<string>): string {
   const ext = path.posix.extname(name)
@@ -343,7 +354,7 @@ async function bringBack(spec: LightRunSpec, copy: WorkCopy, answer: string): Pr
   const outside: string[] = []
   // The target's own clock: its out folder was made right before the run began.
   const since = ((await reader.stat(copy.outDir).catch(() => null))?.mtimeMs ?? spec.startedAt ?? Date.now()) - CLOCK_SLACK_MS
-  for (const p of pathsNamed(answer)) {
+  for (const p of pathsNamed(answer).map((x) => inRunDir(x, copy.runDir))) {
     if (named.includes(p)) continue
     if (p.startsWith(`${copy.runDir}/`)) { named.push(p); continue }
     const st = await reader.stat(p).catch(() => null)
