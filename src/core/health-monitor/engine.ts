@@ -338,18 +338,21 @@ export class HealthMonitor {
     const fixAt = inst.actions.find((a) => a.kind === 'auto-fix')?.at
     if (fixAt !== undefined && now - fixAt < graceMin * MINUTE_MS) return
     if (then === 'none') return
+    if (def.action.card) this.card(def, inst, reason, now)
     // A task that owns the problem hears it instead of a new fix task (the user's card still goes out).
     const owner = ownerOf(effectiveOverride(this.state.overrides, inst.id, inst.defId), def.ownerTask)
     if (owner && await this.toOwner(def, inst, owner, reason, now) && then === 'fix-task') return
-    if (then === 'notify') {
-      if (inst.actions.some((a) => a.kind === 'notify')) return
-      const fixed = inst.actions.find((a) => a.kind === 'auto-fix')
-      this.deps.notify?.(inst.id, def.title, [def.description, reason, fixed ? `Walnut tried: ${fixed.detail}` : ''].filter(Boolean).join(' '))
-      inst.actions.push({ at: now, kind: 'notify', ok: true, detail: 'told you in the notification center' })
-      this.deps.onChange?.()
-      return
-    }
+    if (then === 'notify') { this.card(def, inst, reason, now); return }
     await this.fixTask(def, inst, reason, now)
+  }
+
+  /** The user's card in the notification center, once per episode. */
+  private card(def: AlarmDef, inst: AlarmInstanceState, reason: string, now: number): void {
+    if (inst.actions.some((a) => a.kind === 'notify')) return
+    const fixed = inst.actions.find((a) => a.kind === 'auto-fix')
+    this.deps.notify?.(inst.id, def.title, [def.description, reason, fixed ? `Walnut tried: ${fixed.detail}` : ''].filter(Boolean).join(' '))
+    inst.actions.push({ at: now, kind: 'notify', ok: true, detail: 'told you in the notification center' })
+    this.deps.onChange?.()
   }
 
   private briefInput(def: AlarmDef, inst: AlarmInstanceState, reason: string, now: number): BriefInput {

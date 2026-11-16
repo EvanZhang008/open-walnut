@@ -44,6 +44,12 @@ export interface AlarmAction {
    *  - `none`: shown on the Health page only (another part of Walnut already tells the user).
    */
   then: 'fix-task' | 'notify' | 'none'
+  /**
+   * Also a card in the notification center, once per episode, before `then` runs. For an alarm
+   * the user should see that an agent can still fix: a card alone is acted on by nobody when
+   * the user is away (2026-11-16: the disk alarm rang for 30 hours with only its card out).
+   */
+  card?: boolean
   /** Minutes the alarm must stay in ALARM after its auto-fix before `then` runs (default 30). */
   graceMin?: number
 }

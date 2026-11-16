@@ -12,7 +12,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { MinuteCollector } from '../../../src/core/health-monitor/collect.js'
 import { bootOnSameBuild, FIX_TASKS_PER_DAY, HealthMonitor, type FixTaskInput, type TellTaskInput } from '../../../src/core/health-monitor/engine.js'
-import { setCustomAlarms } from '../../../src/core/health-monitor/alarms.js'
+import { BUILTIN_ALARMS, setCustomAlarms } from '../../../src/core/health-monitor/alarms.js'
 import { customAlarmDefs } from '../../../src/core/health-monitor/custom-metrics.js'
 import { DAY_MS, hourStart, signatureId } from '../../../src/core/health-monitor/log-alarms.js'
 import { HealthStore, type ServerEvent } from '../../../src/core/health-monitor/store.js'
@@ -147,7 +147,7 @@ describe('health monitor engine', () => {
     expect(h.m.alarms['host.link{host=devbox}'].actions.find((x) => x.kind === 'fix-task')?.detail).toContain('still open')
   })
 
-  it('disk: the auto-fix runs first, the card only after its grace, and the card is retired on OK', async () => {
+  it('disk: the auto-fix runs first; after its grace the user gets the card AND a task is filed to free space', async () => {
     const h = await harness()
     h.disk.free = 20
     h.disk.usedPct = 96
@@ -155,15 +155,40 @@ describe('health monitor engine', () => {
     expect(h.m.alarms['disk.free'].state).toBe('ALARM')
     expect(h.autoFixes).toEqual(['disk-sweep'])
     expect(h.notified).toEqual([])
+    expect(h.fixes).toHaveLength(0)
     await minutes(h, 31)
     expect(h.notified).toEqual(['disk.free'])
+    // 2026-11-16: a card alone left a 30 GB alarm ringing for 30 hours while the disk filled to 99%
+    expect(h.fixes.map((f) => f.alarmId)).toEqual(['disk.free'])
     expect(h.autoFixes).toEqual(['disk-sweep'])
+    // still ringing: neither the card nor the task repeats
+    await minutes(h, 60)
+    expect(h.notified).toEqual(['disk.free'])
+    expect(h.fixes).toHaveLength(1)
     h.disk.free = 80
     h.disk.usedPct = 70
     await minutes(h, 6)
     expect(h.m.alarms['disk.free'].state).toBe('OK')
     expect(h.recovered).toEqual(['disk.free'])
-    expect(h.fixes).toHaveLength(0)
+  })
+
+  it('disk: an owner task that is closed does not swallow the alarm: a fix task is filed beside the card', async () => {
+    const h = await harness()
+    h.m.setOverride('disk.free', { ownerTask: 'owner-closed' }, 'task:lead')
+    h.disk.free = 20
+    h.disk.usedPct = 96
+    await minutes(h, 50)
+    expect(h.m.alarms['disk.free'].state).toBe('ALARM')
+    expect(h.told.filter((t) => t.taskId === 'owner-closed')).toHaveLength(0)
+    expect(h.notified).toEqual(['disk.free'])
+    expect(h.fixes.map((f) => f.alarmId)).toEqual(['disk.free'])
+  })
+
+  it('no built-in alarm only posts a card: every alarm that acts files a task an agent works on', () => {
+    // A card waits for the user, who may be away for a day; the problem keeps growing meanwhile.
+    // An alarm the user should also see sets `card: true` beside `then: 'fix-task'`.
+    const notifyOnly = BUILTIN_ALARMS.filter((d) => d.action.then === 'notify').map((d) => d.id)
+    expect(notifyOnly).toEqual([])
   })
 
   it('a muted alarm evaluates but does nothing; a lower threshold through an override fires', async () => {

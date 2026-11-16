@@ -33,7 +33,7 @@ export const BUILTIN_ALARMS: readonly AlarmDef[] = [
     metric: 'disk.free_gb', kind: 'gauge', stat: 'min', periodMin: 5, comparison: '<', threshold: 30,
     evaluationPeriods: 3, datapointsToAlarm: 3, missing: 'missing',
     also: { metric: 'disk.used_pct', stat: 'max', comparison: '>', threshold: 85 },
-    unit: 'GB', action: { autoFix: 'disk-sweep', then: 'notify', graceMin: 30 },
+    unit: 'GB', action: { autoFix: 'disk-sweep', then: 'fix-task', card: true, graceMin: 30 },
   },
   {
     id: 'host.link',
