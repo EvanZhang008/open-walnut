@@ -55,6 +55,7 @@ const KNOWN: Record<string, 'defines' | 'builds' | 'calls' | 'reads'> = {
   'core/send-queue.ts': 'calls',
   'core/send-queue-sweep.ts': 'calls',
   'core/leader/host-session-control.ts': 'calls',
+  'lib/composed-framing.ts': 'reads', // splitAttachmentHeaders: the pictures stay ahead of the words, the framing after them comes off
   'core/session-hooks/builtins.ts': 'reads', // a comment about titles
   'core/sessions/transcript-from-jsonl.ts': 'reads', // a comment
   'providers/user-line-images-core.ts': 'reads', // the daemon turns the header's paths into image blocks
