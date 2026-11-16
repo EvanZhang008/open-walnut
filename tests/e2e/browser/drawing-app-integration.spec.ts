@@ -582,6 +582,8 @@ test.describe('Drawing real plugin acceptance', () => {
     const drawingPath = await workspace(page).getAttribute('data-drawing-path')
     expect(drawingPath).toBeTruthy()
     const toggle = workspace(page).getByRole('button', { name: 'Assistant', exact: true })
+    // Shown or not is a kept view choice (an earlier test may have left it open): start from closed.
+    if ((await toggle.getAttribute('aria-pressed')) === 'true') await toggle.click()
     await expect(toggle).toHaveAttribute('aria-pressed', 'false')
     await toggle.click()
     const panel = workspace(page).getByRole('complementary', { name: 'Drawing assistant' })
