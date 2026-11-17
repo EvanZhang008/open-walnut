@@ -8,6 +8,12 @@
  * waited ahead of it. Here forty slow reads hold every shared connection, then the chat opens: its
  * first-screen read goes out at once and its rows are drawn while the slow reads still hang. On the
  * old code the read waits behind them (25 s).
+ *
+ * The class is every read the open's first screen draws from, not only its rows: the session record
+ * draws the header, the mode and model and the note band over them. 2026-11-17 (composer-in-flow,
+ * WebKit): the rows took the kept slot and the record waited behind the boot's forty queued reads,
+ * so the chat was drawn with no note band and the band popped in 0.7 s later. Both reads go out
+ * within the same window here.
  */
 import { expect, test } from '@playwright/test'
 import { loadHome } from './draft-helpers'
@@ -24,6 +30,14 @@ test('a chat opened while every shared connection is busy reads its first screen
     await route.fulfill({ json: {} }).catch(() => undefined)
   })
   let firstScreenAt = 0
+  // The record read the panel draws from goes through the app's request client, which marks every
+  // request it sends as JSON; the stream's own raw read of the same URL (pending prompts,
+  // useSessionStream) skips the client's queue and carries no such header, so it is not counted.
+  let recordAt = 0
+  await page.route(`**/api/sessions/${SID}`, async (route) => {
+    if (!recordAt && route.request().headers()['content-type'] === 'application/json') recordAt = Date.now()
+    await route.fallback()
+  })
   await page.route(`**/api/sessions/${SID}/history**`, async (route) => {
     const streams = new URL(route.request().url()).searchParams.get('source') === 'streams'
     if (streams && !firstScreenAt) firstScreenAt = Date.now()
@@ -47,10 +61,15 @@ test('a chat opened while every shared connection is busy reads its first screen
   expect(stats.queued, 'reads wait behind them').toBeGreaterThan(0)
   // Only the read the open makes counts (the Home page may have read this chat before).
   firstScreenAt = 0
+  recordAt = 0
   const openedAt = Date.now()
   await openBeside(page, `task:${TASK}`)
   await expect(page.getByTestId('org-side').getByText('The kept slot answer is here.').first()).toBeVisible({ timeout: 10_000 })
   expect(firstScreenAt, 'the first-screen read went out').toBeGreaterThan(0)
   expect(firstScreenAt, 'the first-screen read went out after the open').toBeGreaterThanOrEqual(openedAt)
   expect(firstScreenAt - openedAt, 'the first-screen read did not wait for the slow reads').toBeLessThan(5_000)
+  // The record the header and the note band draw from comes with those rows, not after the slow reads.
+  await expect.poll(() => recordAt, { message: 'the session record read went out', timeout: 5_000 }).toBeGreaterThan(0)
+  expect(recordAt, 'the record read went out after the open').toBeGreaterThanOrEqual(openedAt)
+  expect(recordAt - openedAt, 'the record read did not wait for the slow reads').toBeLessThan(5_000)
 })

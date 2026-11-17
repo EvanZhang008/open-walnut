@@ -114,8 +114,15 @@ export type Geometry = {
 const NOTE_BAND = 'note band (top of the input card)';
 const INPUT_CARD = 'input card';
 
+/** Measured in the frame the browser paints next, after that frame's pins (the load window's
+ *  per-frame bottom pin runs in requestAnimationFrame): a read between two tasks can see a commit
+ *  the next pin closes before anything is drawn. Measured 2026-11-17 on a cold WebKit load: right
+ *  after the end check, a commit that drew one more row read a 90px gap and the newest row under
+ *  the composer, closed again 0.1 s later, while the page's next frame came 0.85 s after it, so no
+ *  frame ever showed it. What a reader sees is what is checked. */
 export async function geometry(panel: Locator): Promise<Geometry> {
-  return panel.evaluate((p, { noteBand, inputCard }) => {
+  return panel.evaluate(async (p, { noteBand, inputCard }) => {
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
     const hist = p.querySelector<HTMLElement>('.session-history')!;
     const input = p.querySelector<HTMLElement>('.session-panel-input')!;
     const h = hist.getBoundingClientRect();

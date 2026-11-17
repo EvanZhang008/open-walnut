@@ -679,10 +679,17 @@ export function peekSessionRecord(sessionId: string): SessionRecord | null {
   return lastRecords.get(sessionId) ?? null;
 }
 
-export async function fetchSession(sessionId: string): Promise<SessionRecord | null> {
+/**
+ * `lane`: the read a shown chat's open makes takes the connection kept for what the person waits
+ * on, as its first-screen history does (api/client.ts INTERACTIVE_RESERVED). The record draws the
+ * header, the mode and model and the note band over those rows; left in the shared queue it came
+ * up to 0.7 s after them behind the boot's reads (2026-11-17), so the note band and the title
+ * popped in under a chat already drawn. Its owner may raise the lane while it waits.
+ */
+export async function fetchSession(sessionId: string, opts?: { lane?: FetchLane }): Promise<SessionRecord | null> {
   const cronGeneration = sessionStatusStore.getCronRequestGeneration();
   try {
-    const res = await apiGet<{ session: SessionRecord; cron?: SessionCronMetadata | null }>(`/api/sessions/${sessionId}`);
+    const res = await apiGet<{ session: SessionRecord; cron?: SessionCronMetadata | null }>(`/api/sessions/${sessionId}`, undefined, opts);
     if (res.cron && cronGeneration === sessionStatusStore.getCronRequestGeneration()) sessionStatusStore.applyCron(res.cron, 'rest:session');
     seedSessionStatus(res.session, 'rest:session');
     seedSessionTitle(res.session);

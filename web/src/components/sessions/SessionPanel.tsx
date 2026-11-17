@@ -1,6 +1,7 @@
 import { countRender } from '@/utils/render-count';
 import { useCoalescedRefresh } from '@/hooks/useCoalescedRefresh';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
+import { useShownReadLane } from '@/hooks/useShownReadLane';
 import { sameJson } from '@/utils/same-json';
 import { useState, useContext, useEffect, useLayoutEffect, useCallback, useRef, useMemo, Component, lazy, Suspense, type ReactNode, type ErrorInfo, type MouseEvent as ReactMouseEvent, type MutableRefObject, type CSSProperties, memo } from 'react';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
@@ -944,7 +945,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     pinActions.setTier(id, tier).catch((err) => console.error('Set tier failed:', err));
   }, [pinActions]);
 
-  // Fetch session metadata
+  // Fetch session metadata. A shown chat's record read takes the kept connection with its first
+  // screen (fetchSession's lane): the header, the mode and the note band draw from it.
+  const recordReadLane = useShownReadLane(routeShownForHistory);
   useEffect(() => {
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -954,7 +957,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     setMissing(false);
     setFetchedTask(null);
     const load = (attempt: number) => {
-      fetchSession(sessionId).then((s) => {
+      fetchSession(sessionId, { lane: recordReadLane() }).then((s) => {
         if (!cancelled) {
           // 404 (s === null) is EXPECTED briefly on a freshly launched session:
           // quick-start/fork pre-assign the CLI session id and return it in the
@@ -1022,7 +1025,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     };
     load(0);
     return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
-  }, [sessionId]);
+  }, [sessionId, recordReadLane]);
 
   // A task the store does not hold (a plugin's own task, Task.plugin_only, opened in its
   // plugin's view): the REST copy follows the task's own events instead.
