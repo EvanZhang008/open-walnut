@@ -39,6 +39,7 @@ const WEB_SRC = join(ROOT, 'web/src');
 
 /** View-named state that is a passing thing, by file#name, and why. */
 const PASSING: Record<string, string> = {
+  'components/tasks/ChangeDeployView.tsx#openStages': 'the stages opened in one change card, a popover, for one look',
   'components/org/RouterFolderPicker.tsx#filter': 'the words typed in the folder finder of one open settings dialog',
   'pages/AgentsPage.tsx#showForm': 'the new-agent form, a dialog',
   'pages/CommandsPage.tsx#showForm': 'the new-command form, a dialog',
