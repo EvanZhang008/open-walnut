@@ -448,8 +448,11 @@ async function pushTriggers(host: string): Promise<void> {
  * swallowed (that replay is the retry). A checked event has no ack and no retry,
  * so its copies are simply dropped for a minute.
  */
+/** A queued fire with the host name its link has: the claim and the ack go back over that link. */
+interface LaneEntry { host: string; event: TriggerFiredEvent }
+
 interface FireLane {
-  queue: TriggerFiredEvent[];
+  queue: LaneEntry[];
   keys: Set<string>;
   draining: boolean;
   /** The daemon's answer to this server's claim, asked the moment each fire arrived. */
@@ -575,12 +578,20 @@ const recentChecked = new Map<string, number>();
 const RECENT_CHECKED_TTL_MS = 60_000;
 const RECENT_CHECKED_MAX = 5_000;
 
+/**
+ * A fire is the daemon's (trigger, epoch, seq), whatever host name its link has: one machine set up
+ * under two names (2026-11-16: `newdev` and `clouddev`) sends every fire on both links, and keyed
+ * by name the two copies went down two lanes at once and 24 fires reached their session twice. The
+ * epoch is minted with the daemon's state file, so it already tells one daemon's numbering from
+ * another's. A fire with no epoch (a daemon from before epochs) keeps its host in the key.
+ */
 function fireKey(host: string, e: TriggerFiredEvent): string {
-  return `${host}|${e.id}|${e.epoch ?? ''}|${e.seq}`;
+  return e.epoch ? `${e.id}|${e.epoch}|${e.seq}` : `${host}|${e.id}||${e.seq}`;
 }
 
+/** One lane per trigger, across every link: deliveries of one trigger never overlap (above). */
 function enqueueFire(host: string, event: TriggerFiredEvent): void {
-  const laneKey = `${host}|${event.id}`;
+  const laneKey = event.id;
   let lane = lanes.get(laneKey);
   if (!lane) {
     lane = { queue: [], keys: new Set(), draining: false, verdicts: new Map() };
@@ -592,36 +603,36 @@ function enqueueFire(host: string, event: TriggerFiredEvent): void {
     return;
   }
   lane.keys.add(key);
-  lane.queue.push(event);
+  lane.queue.push({ host, event });
   // Claimed at ARRIVAL, not when the lane reaches it: a fire queued behind a slow
   // delivery would otherwise look unclaimed to the host and be delivered twice.
   lane.verdicts.set(key, claimFire(host, event));
-  if (!lane.draining) void drainLane(host, laneKey, lane);
+  if (!lane.draining) void drainLane(laneKey, lane);
 }
 
-async function drainLane(host: string, laneKey: string, lane: FireLane): Promise<void> {
+async function drainLane(laneKey: string, lane: FireLane): Promise<void> {
   lane.draining = true;
   try {
-    if (lane.queue.some((e) => (e as { replay?: unknown }).replay === true)) {
+    if (lane.queue.some(({ event }) => (event as { replay?: unknown }).replay === true)) {
       await new Promise((resolve) => setTimeout(resolve, REPLAY_SETTLE_MS));
     }
     while (lane.queue.length > 0) {
       const taken = lane.queue.splice(0);
-      const judged = await Promise.all(taken.map(async (event) => ({
-        event,
+      const judged = await Promise.all(taken.map(async ({ host, event }) => ({
+        host, event,
         verdict: await (lane.verdicts.get(fireKey(host, event)) ?? Promise.resolve<FireVerdict>({ kind: 'server' })),
       })));
-      const ready: TriggerFiredEvent[] = [];
-      for (const { event, verdict } of judged) {
+      const ready: LaneEntry[] = [];
+      for (const { host, event, verdict } of judged) {
         if (verdict.kind === 'wait') {
           log.cron.info('trigger fire left to the daemon: no claim verdict', { host, jobId: event.id, seq: event.seq, reason: verdict.reason });
           lane.keys.delete(fireKey(host, event));
           lane.verdicts.delete(fireKey(host, event));
         } else {
-          ready.push(verdict.kind === 'host' ? { ...event, host: verdict.host } : event);
+          ready.push({ host, event: verdict.kind === 'host' ? { ...event, host: verdict.host } : event });
         }
       }
-      for (const group of groupByEpoch(ready)) {
+      for (const { host, group } of groupByLinkAndEpoch(ready)) {
         try {
           await handleTriggerFired(host, group);
         } catch (err) {
@@ -643,21 +654,26 @@ async function drainLane(host: string, laneKey: string, lane: FireLane): Promise
   }
 }
 
-/** The store's dedup window is per epoch, so a batch never mixes two numberings. */
-function groupByEpoch(events: TriggerFiredEvent[]): TriggerFiredEvent[][] {
-  const groups = new Map<string, TriggerFiredEvent[]>();
-  for (const e of events) {
-    const k = e.epoch ?? '';
-    const group = groups.get(k);
-    if (group) group.push(e);
-    else groups.set(k, [e]);
+/**
+ * The store's dedup window is per epoch, so a batch never mixes two numberings; and each batch
+ * goes back over the link it came in on (its claim and acks). A lane holds fires of one trigger
+ * from more than one link only when that trigger moved machines with fires still unacked.
+ */
+function groupByLinkAndEpoch(entries: LaneEntry[]): Array<{ host: string; group: TriggerFiredEvent[] }> {
+  const groups = new Map<string, { host: string; group: TriggerFiredEvent[] }>();
+  for (const { host, event } of entries) {
+    const k = `${host}|${event.epoch ?? ''}`;
+    const entry = groups.get(k);
+    if (entry) entry.group.push(event);
+    else groups.set(k, { host, group: [event] });
   }
   return [...groups.values()];
 }
 
-function checkedSeenBefore(host: string, e: TriggerCheckedEvent): boolean {
+function checkedSeenBefore(e: TriggerCheckedEvent): boolean {
   const now = Date.now();
-  const key = `${host}|${e.id}|${e.atMs}|${e.outcome}`;
+  // The daemon's check, not the name its link has (fireKey): one check is one row under any name.
+  const key = `${e.id}|${e.atMs}|${e.outcome}`;
   const at = recentChecked.get(key);
   if (at !== undefined && now - at < RECENT_CHECKED_TTL_MS) return true;
   if (recentChecked.size >= RECENT_CHECKED_MAX) {
@@ -676,7 +692,7 @@ export function handleTriggerEvent(host: string, event: TriggerEvent): void {
   void (async () => {
     if (event.type === 'trigger.checked') {
       // A replay may carry a newly armed schedule for the same completed check.
-      if (!event.replay && checkedSeenBefore(host, event)) return;
+      if (!event.replay && checkedSeenBefore(event)) return;
       await handleTriggerChecked(host, event);
     } else if (event.type === 'trigger.fired') {
       enqueueFire(host, event);
