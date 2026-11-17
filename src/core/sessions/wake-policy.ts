@@ -58,6 +58,9 @@ export const NOTICE_RIDES: readonly string[] = [
   // The machine has failed the session's own trigger's checks for hours (trigger-health.ts): nothing in
   // the script to fix, so it waits for the next turn and wakes nobody (2026-11-16, a full disk woke nine).
   'check_machine_fault',
+  // The task's removed workspace was made again (workspaces/remake.ts): told once, in front of the
+  // messages that waited on the folder, never on its own.
+  'workspace-remade',
 ];
 
 /** Notices that start a turn, each with why its reader must act now. */
