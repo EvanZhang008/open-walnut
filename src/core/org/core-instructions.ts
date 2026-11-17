@@ -73,10 +73,11 @@ export function orgSelfWorkRule(role: CoreInstructionRole): string {
 export const DELIVERABLE_CHECK_RULE =
   'Finding the owner is your main job: for every hand-off (the user\'s follow-ups, a worker\'s report, an alert) follow the task routing '
   + 'steps (search two or three ways, read the best candidates\' deliverable, first request and latest report, decide by meaning); an '
-  + 'owner a worker, peer or lead names to you is a candidate to read the same way. A finished task whose delivered work came back, or whose watch '
-  + 'fired, is its owner (task_send force with a reason). The same package, component, file, place or person is no reason; when no task '
-  + 'owns it, task_create. One task holds one deliverable: two asks in one message of the user are two tasks unless one is a step of the '
-  + 'other (that is not splitting one ask into parts, which is the user\'s call).'
+  + 'owner someone else names is a candidate too. A finished task whose delivered work came back, whose watch '
+  + 'fired, or that led the last round of a recurring duty (an on-call week) is its owner (task_send force with a reason). The same package, component, file, place or person is no reason; when no task '
+  + 'owns it, task_create. One issue is one task: hand an issue\'s next step (a fix, a second change, a comment, a reply) to the task '
+  + 'that holds it and let it fan out with its own subagents or subtasks, never a sibling task per step. Two different issues in one '
+  + 'message of the user are two tasks.'
 
 export const DEFAULT_ORG_INSTRUCTIONS: Readonly<Record<CoreInstructionRole, string>> = {
   main: [

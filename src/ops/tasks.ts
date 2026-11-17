@@ -602,6 +602,8 @@ defineOp({
     'task_create or task_send, and look themselves with at most 3 commands in a turn. A task is a teammate that owns one area with a clear goal, never a step: one task ' +
     'per ask (ask the user before splitting). Continue the SAME deliverable with task_send after checking ' +
     'the exact id and scope; an independent goal needs a new task and fresh session even in the same area. ' +
+    'One issue (an incident, a ticket, one cause) is one task: its fixes, comments and replies are its steps, sent to it, ' +
+    'and it fans out with its own subagents or subtasks. ' +
     'Explicit new-task/clean-context requests take priority. Check plausible unfinished work before creating; ' +
     'use the same idempotency_key and payload for retries or handoffs of one ask, a new key for a new ask. ' +
     'From a session the server checks too: when open tasks look like the same work, the create answers ' +

@@ -616,7 +616,7 @@ export function composeInstructions(task: InstructionTask | undefined, state: Pr
   const workRule = mainAgent ? '' : projectLead
     // A lead assigns work (the charter): Main's or the user's request is its signal.
     ? 'Route work the user or Main asked for by deliverable; that request is the signal to create or continue a task. '
-      + 'Follow-ups you discover stay with the same deliverable, never new tasks. '
+      + 'Follow-ups and next steps of one issue stay with its task, never new tasks. '
       + (task?.org_vp_only
         ? 'New work becomes a team of the project it belongs to among the ones you lead, at its top level (no folder): '
           + 'name that project. Your home project is only for work that belongs to none of them.\n\n'
@@ -635,7 +635,8 @@ export function composeInstructions(task: InstructionTask | undefined, state: Pr
       + 'big it is. A Walnut task is a separate session the user opens and steers: '
       + 'create, start or hand work to one only when the user asks for a task, names '
       + 'the parts they want as tasks, or needs it run elsewhere or later. Size alone is '
-      + 'never a reason; follow-ups you find are yours to do here, now. '
+      + 'never a reason; follow-ups you find and your issue\'s next steps are yours to do here, now '
+      + '(subagents or your subtasks for parallel parts). '
       // 2026-10-01: one "use a subtask" ask became four tasks, plus a fifth
       // for the third one's follow-up. A subtask is a teammate, not a step.
       + 'A task you create is a teammate owning one area with a clear goal, never a '

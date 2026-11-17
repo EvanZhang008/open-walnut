@@ -579,8 +579,10 @@ when that happened; the task id is unchanged, so nothing else changes for you.
   `task_history` `{"limit":6,"compact":true}`. Decide by meaning: reuse an exact ID
   only for the same deliverable (its continuation, a revision, a check of it, or a
   regression of what it delivered), never for a similar title or a shared package,
-  component, file or place: the fix for another case is a new task, and two owners
-  whose changes depend on each other coordinate with `task_send`. Keep the same `idempotency_key` and payload across retries or a
+  component, file or place. One issue (an incident, a ticket, one cause) is one task:
+  its investigation, fixes, a second change, comments and replies are its steps, and it
+  runs parallel parts with its own subagents or subtasks; another issue is a new task,
+  and two owners whose changes depend on each other coordinate with `task_send`. Keep the same `idempotency_key` and payload across retries or a
   lead handoff of one ask; a new ask gets a new key.
 - Give a fresh task only the current request, valid permissions and prohibitions,
   done condition and necessary facts or evidence pointers. Never copy Main's or

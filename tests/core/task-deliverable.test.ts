@@ -137,12 +137,16 @@ describe('the routing process every session and every dispatcher reads', () => {
       'search matches meaning in open and finished tasks',
       'deliverable, first_request and latest',
       'task_history {limit:6, compact:true} if unclear',
-      'Decide by meaning: the same deliverable is its continuation, a revision, a check of it, or a regression of what it delivered; otherwise task_create.',
-      'Sharing a package, component, file, place or person is not sharing a deliverable',
+      'Decide by meaning: the same issue\'s next step, a revision, a check, or a regression of what it delivered goes to it; otherwise task_create.',
+      'One issue (an incident, a ticket, one cause) is one task',
+      'its investigation, fixes, second change, comments and replies are its steps, never new tasks; it runs parallel parts with its own subagents or subtasks',
     ]) expect(TASK_ROUTING_CONTRACT).toContain(line)
     for (const role of ['main', 'lead'] as const) {
       expect(DEFAULT_ORG_INSTRUCTIONS[role]).toContain('Finding the owner is your main job')
       expect(DEFAULT_ORG_INSTRUCTIONS[role]).toContain('decide by meaning')
+      expect(DEFAULT_ORG_INSTRUCTIONS[role]).toContain('One issue is one task')
+      expect(DEFAULT_ORG_INSTRUCTIONS[role]).toContain('never a sibling task per step')
+      expect(DEFAULT_ORG_INSTRUCTIONS[role]).toContain('that led the last round of a recurring duty')
     }
     expect(`${TASK_ROUTING_CONTRACT}\n${DEFAULT_ORG_INSTRUCTIONS.main}\n${DEFAULT_ORG_INSTRUCTIONS.lead}`).not.toMatch(/scope_mismatch|same_deliverable|CR's fix|ticket's/)
   })

@@ -158,7 +158,7 @@ describe('buildSessionContext (identity note)', () => {
       expect(systemPrompt).toMatch(/a Walnut task is a separate session the user opens and steers/i)
       expect(systemPrompt).toMatch(/only when the user asks for a task, names the parts they want as tasks, or needs it run elsewhere or later/i)
       expect(systemPrompt).toMatch(/size alone is never a reason/i)
-      expect(systemPrompt).toMatch(/follow-ups you find are yours to do here, now/i)
+      expect(systemPrompt).toMatch(/follow-ups you find and your issue's next steps are yours to do here, now/i)
       expect(systemPrompt).not.toMatch(/unless the user asked/i)
     }
   })
@@ -216,6 +216,8 @@ describe('buildSessionContext (identity note)', () => {
     const { systemPrompt } = await buildSessionContext('')
     expect(systemPrompt).toMatch(/a task you create is a teammate owning one area with a clear goal, never a step/i)
     expect(systemPrompt).toMatch(/one per ask \(ask the user before splitting\)\. The same deliverable continues its task \(task_send; task_get it first: the same file or package is not the same deliverable\); when the user asks for a task for an independent goal, make a new one with a fresh session, even in an area a teammate already owns/i)
+    // 2026-11-17: one outage became four sibling tasks; one issue is one task, its steps stay in it.
+    expect(systemPrompt).toMatch(/follow-ups you find and your issue's next steps are yours to do here, now \(subagents or your subtasks for parallel parts\)/)
     // The signal is the user naming the parts, not "talking to each part".
     expect(systemPrompt).toMatch(/names the parts they want as tasks/i)
     expect(systemPrompt).not.toMatch(/talk to each part/i)

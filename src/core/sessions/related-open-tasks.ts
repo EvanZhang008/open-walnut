@@ -232,8 +232,9 @@ export function refusalText(title: string, candidates: RelatedCandidate[]): { me
     ].filter(Boolean).map((l) => `\n   ${l}`).join('');
     return `${i + 1}. ${c.id} "${c.title}" (${where}; ${state}; ${c.reason})${read}`;
   });
-  const hint = 'Read each one\'s deliverable: if, by meaning, your work IS one of them (its continuation, a revision, a check of it, or a '
-    + 'regression of what a finished one delivered), send it there instead: '
+  const hint = 'Read each one\'s deliverable: if, by meaning, your work IS one of them or a step of the issue it holds (its continuation, '
+    + 'a fix, a revision, a check of it, or a regression of what a finished one delivered), send it there instead and let that task fan out '
+    + 'with its own subagents or subtasks: '
     + `walnut tools call task_send '{"to":"<task id>","title":"...","text":"..."}' (it also reaches a task with no session; a COMPLETE one `
     + 'takes "force": true with a "reason"). The same file, component, place or person is not the same deliverable. '
     + 'If yours is a separate deliverable, create it again with "confirm_new": true and "new_reason" '

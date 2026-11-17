@@ -26,6 +26,7 @@ describe('task_create description', () => {
     expect(desc).toMatch(/Continue the SAME deliverable with task_send/i)
     expect(desc).toMatch(/independent goal needs a new task and fresh session even in the same area/i)
     expect(desc).toMatch(/the result lists the other open subtasks you lead/i)
+    expect(desc).toMatch(/One issue \(an incident, a ticket, one cause\) is one task: its fixes, comments and replies are its steps/)
   })
 
   it('no longer reads "talk to or steer each part" as a reason to split', () => {
