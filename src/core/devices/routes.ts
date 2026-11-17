@@ -9,7 +9,7 @@
  */
 
 import { getSelfApiRoot } from '../../lib/self-api-root.js'
-import { detectLanAddress, detectTailnetAddress, tailnetLabel } from '../pairing-targets.js'
+import { detectLanAddress, tailnetLabel, tailnetOrigin } from '../pairing-targets.js'
 
 export type DeviceRouteKind = 'lan' | 'tailnet' | 'cloud'
 
@@ -35,8 +35,8 @@ export async function directRoutes(port: number, instance: string): Promise<Devi
   const routes: DeviceRoute[] = []
   const lan = detectLanAddress()
   if (lan) routes.push({ kind: 'lan', origin: `http://${lan}:${port}`, label: 'This network (Wi-Fi)', instance })
-  const tailnet = detectTailnetAddress()
-  if (tailnet) routes.push({ kind: 'tailnet', origin: `http://${tailnet.address}:${port}`, label: await tailnetLabel(), instance })
+  const tailnet = await tailnetOrigin(port)
+  if (tailnet) routes.push({ kind: 'tailnet', origin: tailnet, label: await tailnetLabel(), instance })
   return routes
 }
 

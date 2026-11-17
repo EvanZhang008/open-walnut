@@ -16,7 +16,7 @@ vi.mock('../../src/integrations/git-sync.js', () => ({
   getCloudRemoteCredentialsAsync: vi.fn(async () => null),
 }))
 
-import { detectLanAddress, getPairingTargets } from '../../src/core/pairing-targets.js'
+import { detectLanAddress, getPairingTargets, tailnetOrigin } from '../../src/core/pairing-targets.js'
 import {
   detectTailnetAddress, isCgnatV4, isTailnetHost, tailscaleStatus, tailscaleSummary, peekTailscaleStatus,
   parseTailscaleStatusJson, _setTailscaleProbeForTesting,
@@ -164,8 +164,30 @@ describe('getPairingTargets with a tailnet', () => {
     fakeCli(async () => ({ stdout: runningJson(), stderr: '' }))
     const targets = await getPairingTargets('http://localhost:3456', 3456)
     expect(targets).toEqual([
-      { kind: 'tailnet', origin: 'http://100.101.102.103:3456', label: 'Tailscale (anywhere this machine is on)', remoteMint: false },
+      { kind: 'tailnet', origin: 'http://studio-mac.tail1234.ts.net:3456', label: 'Tailscale (anywhere this machine is on)', remoteMint: false },
     ])
+  })
+
+  // iOS refuses plain http to a 100.x literal (App Transport Security) and the
+  // app allows it only to *.ts.net, so a running Tailscale hands out its name.
+  it('a running Tailscale gives the MagicDNS name; a stopped one, a non-ts.net name or no CLI the address', async () => {
+    mockIfaces({ utun3: [{ address: '100.101.102.103', family: 'IPv4', internal: false }] })
+    expect(await tailnetOrigin(3456)).toBe('http://100.101.102.103:3456')
+    fakeCli(async () => ({ stdout: stoppedJson(), stderr: '' }))
+    expect(await tailnetOrigin(3456)).toBe('http://100.101.102.103:3456')
+    fakeCli(async () => ({ stdout: runningJson().replaceAll('studio-mac.tail1234.ts.net', 'studio-mac.corp.example'), stderr: '' }))
+    expect(await tailnetOrigin(3456)).toBe('http://100.101.102.103:3456')
+    fakeCli(async () => ({ stdout: runningJson().replace('studio-mac.tail1234.ts.net.', 'Studio-Mac.tail1234.ts.net.'), stderr: '' }))
+    expect(await tailnetOrigin(4000)).toBe('http://studio-mac.tail1234.ts.net:4000')
+    mockIfaces({})
+    expect(await tailnetOrigin(3456)).toBeNull()
+  })
+
+  it('a console opened at the 100.x address hands the phone the MagicDNS name on the same port', async () => {
+    mockIfaces({ utun3: [{ address: '100.101.102.103', family: 'IPv4', internal: false }] })
+    fakeCli(async () => ({ stdout: runningJson(), stderr: '' }))
+    const targets = await getPairingTargets('http://100.101.102.103:3466', 3456)
+    expect(targets.map((t) => [t.kind, t.origin])).toEqual([['tailnet', 'http://studio-mac.tail1234.ts.net:3466']])
   })
 
   it('a console opened over the tailnet fills the tailnet slot, and the LAN is still detected', async () => {

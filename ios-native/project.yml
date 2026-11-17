@@ -77,6 +77,14 @@ targets:
         # cloud servers are HTTPS and unaffected.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+          # Tailscale route: a 100.x tailnet address is not "local" to ATS, so plain
+          # http to it is refused. The server hands the phone its MagicDNS
+          # *.ts.net name instead, and this exception lets the app open that name
+          # over http (the tailnet's WireGuard tunnel already encrypts it).
+          NSExceptionDomains:
+            ts.net:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
         # Multi-route connection: the app asks whether the paired Mac answers
         # directly on this network before it falls back to the cloud companion,
         # which is what raises the iOS local network prompt.

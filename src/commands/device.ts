@@ -14,7 +14,7 @@
 import chalk from 'chalk';
 import { createDevice, revokePairing, listDevices, readDeviceRegistry, setCompanionOwner, setDeviceKind, type DeviceRegistry } from '../core/device-auth.js';
 import { companionOwnerRecord } from '../core/device-actor.js';
-import { detectLanAddress, detectTailnetAddress } from '../core/pairing-targets.js';
+import { detectLanAddress, tailnetOrigin } from '../core/pairing-targets.js';
 import { outputJson } from '../utils/json-output.js';
 import { WALNUT_HOME } from '../constants.js';
 import { deviceAddRefusal } from '../core/device-add-guard.js';
@@ -59,9 +59,9 @@ export async function runDeviceAdd(name: string, globals: GlobalOptions, opts: {
     const server = lan ? `&server=${encodeURIComponent(`http://${lan}:${CLI_DEFAULT_PORT}`)}` : '';
     console.log(`  ${chalk.dim('Pairing URI:')} wn://pair?name=${encodeURIComponent(name)}&token=${token}${server}`);
     // A tailnet address reaches this machine from anywhere the phone is on the same tailnet.
-    const tailnet = detectTailnetAddress();
+    const tailnet = await tailnetOrigin(CLI_DEFAULT_PORT);
     if (tailnet) {
-      const tailnetServer = encodeURIComponent(`http://${tailnet.address}:${CLI_DEFAULT_PORT}`);
+      const tailnetServer = encodeURIComponent(tailnet);
       console.log(`  ${chalk.dim('Tailnet URI:')} wn://pair?name=${encodeURIComponent(name)}&token=${token}&server=${tailnetServer}`);
     }
     if (!lan && !tailnet) {

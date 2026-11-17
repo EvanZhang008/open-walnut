@@ -8,8 +8,12 @@
  *
  * - `lan`   — this Mac's private-network IPv4 (http://192.168.x.y:PORT). Works
  *   on the same Wi-Fi only. iOS allows plain http here via NSAllowsLocalNetworking.
- * - `tailnet`: this Mac's tailnet IPv4 (http://100.x.y.z:PORT, see tailnet.ts).
- *   Works from anywhere the phone is on the same tailnet, straight to this Mac.
+ * - `tailnet`: this Mac's MagicDNS name (http://name.tailXXXX.ts.net:PORT) when
+ *   Tailscale reports one, else its tailnet IPv4 (http://100.x.y.z:PORT, see
+ *   tailnet.ts). Works from anywhere the phone is on the same tailnet. iOS
+ *   refuses plain http to a 100.x literal (NSAllowsLocalNetworking covers only
+ *   local names and private ranges), and allows it to `*.ts.net` through the
+ *   app's ATS exception for that domain: the name is what a phone can open.
  * - `cloud` — the cloud companion's public origin, derived from the data repo's
  *   git remote (the same source cloud-bridge-config.ts already trusts). Works
  *   from anywhere, which is what "connect to Cloud" means.
@@ -22,7 +26,7 @@
 
 import os from 'node:os'
 import { getCloudRemoteCredentials, getCloudRemoteCredentialsAsync } from '../integrations/git-sync.js'
-import { detectTailnetAddress, isTailnetHost, peekTailscaleStatus } from './tailnet.js'
+import { detectTailnetAddress, isCgnatV4, isTailnetHost, peekTailscaleStatus } from './tailnet.js'
 
 export { detectTailnetAddress, isCgnatV4 } from './tailnet.js'
 
@@ -82,6 +86,30 @@ export function isLoopbackOrigin(origin: string): boolean {
   }
 }
 
+/**
+ * The origin a phone opens to reach this machine over its tailnet on `port`, or
+ * null without a tailnet address. The MagicDNS `*.ts.net` name when Tailscale
+ * reports one (an iPhone app may open plain http only to that name, see the top
+ * of this file), else the 100.64/10 address (Headscale, Netbird, or a CLI that
+ * has not answered yet).
+ */
+export async function tailnetOrigin(port: number): Promise<string | null> {
+  const found = detectTailnetAddress()
+  if (!found) return null
+  const status = await peekTailscaleStatus()
+  const name = status?.running && status.dnsName && /\.ts\.net$/i.test(status.dnsName) ? status.dnsName.toLowerCase() : null
+  return `http://${name ?? found.address}:${port}`
+}
+
+function portOf(origin: string, fallback: number): number {
+  try {
+    const u = new URL(origin)
+    return u.port ? Number(u.port) : (u.protocol === 'https:' ? 443 : 80)
+  } catch {
+    return fallback
+  }
+}
+
 /** The tailnet target's label: name Tailscale only when its CLI is known to be here. */
 export async function tailnetLabel(): Promise<string> {
   return (await peekTailscaleStatus())?.installed
@@ -119,10 +147,11 @@ export async function getPairingTargets(consoleOrigin: string, port: number): Pr
     }
   }
 
-  const tailnet = consoleOnTailnet ? consoleOrigin : (() => {
-    const found = detectTailnetAddress()
-    return found ? `http://${found.address}:${port}` : null
-  })()
+  // A console opened at a 100.x literal is reachable, but not from an iPhone
+  // app: the phone gets the MagicDNS name on the same port instead.
+  const tailnet = consoleOnTailnet && !isCgnatV4(hostOf(consoleOrigin))
+    ? consoleOrigin
+    : await tailnetOrigin(consoleOnTailnet ? portOf(consoleOrigin, port) : port)
   if (tailnet) {
     targets.push({ kind: 'tailnet', origin: tailnet, label: await tailnetLabel(), remoteMint: false })
   }
