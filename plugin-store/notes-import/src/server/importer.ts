@@ -239,7 +239,20 @@ export async function runImport(input: {
   const known = new Map(items.map((item) => [item.id, item]))
   const listedAtStart = new Set(known.keys())
   const hasChildren = new Set(items.map((item) => item.parentId).filter((id): id is string => !!id))
-  const planner = new PathPlanner(folder, located, occupied)
+  // Files this importer saved for a page whose note a stopped run never wrote (a restart between
+  // a page's attachments and its note) hold no name: the page gets the same path when the import
+  // runs again, so links written to that path meanwhile still lead to it, and its files are found
+  // again where they are. A folder holds a name only when something else is under it.
+  const ownFiles = new Set([...(await mapping.files(folder, source.id)).values()].map((p) => p.toLowerCase()))
+  const holding = new Set<string>()
+  for (const entry of entries) {
+    if (entry.type === 'folder' || ownFiles.has(entry.path.toLowerCase())) continue
+    for (let dir = dirOf(entry.path); dir && !holding.has(dir); dir = dirOf(dir)) holding.add(dir)
+  }
+  const inFolder = new Set(entries.map((entry) => entry.path))
+  const folders = new Set(entries.filter((entry) => entry.type === 'folder').map((entry) => entry.path))
+  const planned = occupied.filter((p) => !inFolder.has(p) || (folders.has(p) ? holding.has(p) : !ownFiles.has(p.toLowerCase())))
+  const planner = new PathPlanner(folder, located, planned)
   // A new "Title (2)" beside a note of the person's named "Title" (not one an import made).
   const imported = new Set([...located.values()].map((p) => p.toLowerCase()))
   const personsNotes = new Map(occupied.filter((p) => p.endsWith('.md') && !imported.has(p.toLowerCase())).map((p) => [p.toLowerCase(), p]))

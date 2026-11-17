@@ -327,6 +327,37 @@ describe('notion import', () => {
     }
   })
 
+  it('a page whose note a stopped run never wrote keeps its path: its own saved files hold no name', async () => {
+    // A restart between a page's attachments and its note: the next run found the folder holding
+    // only those files, named the page "Title (2)", and links written to "Title" led nowhere.
+    const whole = setup()
+    await run(whole)
+    const expected = [...whole.fake.notes.keys()].sort()
+    let cases = 0
+    for (const at of expected.filter((p) => p.endsWith('.md'))) {
+      const dir = at.slice(0, at.lastIndexOf('/'))
+      const stem = at.slice(at.lastIndexOf('/') + 1, -3)
+      // Every folder note: drop it and the notes under it, leave a file the importer saved there.
+      if (dir.split('/').pop() !== stem || dir === FOLDER) continue
+      cases++
+      const ctx = setup()
+      await run(ctx)
+      const left = `${dir}/_attachment/left-over.png`
+      ctx.fake.notes.set(left, ctx.fake.notes.get(`${FOLDER}/Home/_attachment/photo.png`)!)
+      await ctx.mapping.putFile(FOLDER, 'notion', 'left-over-key', left)
+      for (const p of [...ctx.fake.notes.keys()]) if (p.startsWith(`${dir}/`) && p.endsWith('.md')) ctx.fake.notes.delete(p)
+      // The run that stopped wrote no record of those notes; its saved files are on record.
+      const files = await ctx.mapping.files(FOLDER, 'notion')
+      freshRecords(ctx)
+      for (const [key, path] of files) await ctx.mapping.putFile(FOLDER, 'notion', key, path)
+      const again = await run(ctx)
+      expect(again.counts.failed).toBe(0)
+      const now = [...ctx.fake.notes.keys()].filter((p) => p !== left).sort()
+      expect(now, `the note of ${at} came back at its own path`).toEqual(expected)
+    }
+    expect(cases, Object.keys(Object.fromEntries(whole.fake.notes)).join('\n')).toBeGreaterThan(0)
+  })
+
   it('a run stopped at any point, then run again, ends with the same notes as one that never stopped', async () => {
     const whole = setup()
     await run(whole)
