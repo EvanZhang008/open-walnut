@@ -352,11 +352,11 @@ export async function sendMessageToSession(
   // turn). It is held and rides in front of the session's next message (sessions/wake-policy.ts);
   // Walnut's other notes and hints wait, as they are, for that message.
   const { rowRides, holdRidingNotice } = await import('./sessions/wake-policy.js');
-  if (!opts?.wakeReason && !opts?.interrupt && !heldForMove && !heldForTurn
-    // A person's words, and a browser under automation's (an agent's now, still a message to act on),
-    // are never a notice held for later.
-    && !PERSON_SEND_SOURCES.has(opts?.source ?? '') && opts?.source !== AUTOMATED_SEND_SOURCE
-    && queueSentBy(opts?.source) !== 'person' && rowRides(framedBody)) {
+  // A person's words, and a browser under automation's (an agent's now, still a message to act on),
+  // are never held for later: not as a riding notice, not for a cold session's next wake.
+  const personWords = PERSON_SEND_SOURCES.has(opts?.source ?? '') || opts?.source === AUTOMATED_SEND_SOURCE
+    || queueSentBy(opts?.source) === 'person';
+  if (!opts?.wakeReason && !opts?.interrupt && !heldForMove && !heldForTurn && !personWords && rowRides(framedBody)) {
     await tellCarried('');
     if (opts?.stillWanted && !opts.stillWanted()) throw new SendNoLongerWantedError();
     holdRidingNotice(sessionId, framedBody);
@@ -370,7 +370,7 @@ export async function sendMessageToSession(
   const coldHold = await import('./sessions/cold-hold.js');
   const { waitsWhenCold } = await import('./sessions/wake-policy.js');
   const mayWait = !opts?.wakeReason && !opts?.interrupt && !opts?.closesPrompt && !heldForMove && !heldForTurn && !scopedArea
-    && !slashCommand && !PERSON_SEND_SOURCES.has(opts?.source ?? '') && queueSentBy(opts?.source) !== 'person'
+    && !slashCommand && !personWords
     && !opts?.messageId?.startsWith('qm-inbox-') && !opts?.messageId?.startsWith('qm-route-') && waitsWhenCold(framedBody);
   const heldCold = mayWait && await coldHold.sessionIsCold(sessionId) ? coldHold.COLD_HOLD_REASON : undefined;
   // Not in front of a slash command (it must start its line), nor for a move or a running turn's

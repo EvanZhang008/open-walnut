@@ -192,6 +192,8 @@ export const TRIGGER_FROM_WAITS: Readonly<Record<string, boolean>> = {
   'Walnut: follow-up': true,
   'Walnut: wait until': true,
   'Walnut: pull request watch': true,
+  // News on a change linked to the task (changes/watch.ts: a review, a check, a deploy stage), like a pull request's.
+  'Walnut: change watch': true,
   'Walnut: status check': true,
   // The user is looking at the session now, or still waits for its answer to his words.
   'Walnut: Brief refresh': false,

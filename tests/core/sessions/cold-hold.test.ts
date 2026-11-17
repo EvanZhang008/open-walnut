@@ -175,6 +175,7 @@ describe('a cold session', () => {
       ['a completed subtask', notice('completed'), { source: 'walnut-notify' }],
       ['a wake reason', fyi(), { source: 'peer', wakeReason: 'a task of its team waits on the lead' }],
       ['the user\'s words', 'hello', { source: 'ui' }],
+      ['a browser under automation\'s words', fyi(), { source: 'browser-automation' }],
       ['an unanswered re-check', buildWalnutMessage({ kind: 'trigger', attrs: { from: 'Walnut: unanswered' }, body: 'the user waits' }), { source: 'needs-recheck' }],
     ];
     for (const [what, text, opts] of urgent) {
