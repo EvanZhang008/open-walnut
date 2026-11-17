@@ -16,6 +16,8 @@ const fake = {
   log: [] as string[],
   params: [] as Array<[string, unknown]>,
   hidden: true,
+  /** The page stays hidden even with emulation on (a window Chrome draws nowhere). */
+  stillHidden: false,
   windowCalls: [] as string[],
   tabCalls: [] as string[],
 }
@@ -51,6 +53,7 @@ const tab = (id = 7) => ({ id, windowId: 3, active: true, url: URL_, title: 'Sub
     sendCommand: async (_t: unknown, method: string, params?: unknown) => {
       fake.log.push(method); fake.params.push([method, params])
       if (failEmulation && method.startsWith('Emulation.')) throw new Error('Cannot access a chrome-extension:// URL of different extension')
+      if (method === 'Emulation.setFocusEmulationEnabled') fake.hidden = fake.stillHidden || !(params as { enabled: boolean }).enabled
       return {}
     },
     onEvent: ev(),
@@ -65,13 +68,15 @@ const { AWAKE_MS, NO_WAKE_ACTS, isAwake, wakeForStep } = await import('../../../
 const cdp = await import('../../../packages/browser-extension/src/cdp')
 const { _resetOwnForTesting } = await import('../../../packages/browser-extension/src/agent-window-own')
 
-const step = (action: string, t = 7) => wakeForStep({ id: 'c', action, args: { tab: t }, allow: { any: true, sites: [] } } as never)
+const wake = (action: string, t = 7) => wakeForStep({ id: 'c', action, args: { tab: t }, allow: { any: true, sites: [] } } as never)
+const step = (action: string, t = 7) => wake(action, t).then((r) => r.awake)
 
 beforeEach(() => {
   cdp._resetDebuggerForTesting()
   cdp._setLingerMsForTesting()
   failEmulation = false
   _resetOwnForTesting()
+  fake.stillHidden = false
   fake.log = []; fake.params = []; fake.windowCalls = []; fake.tabCalls = []; fake.hidden = true
   fake.session = { agentWindow: 3, agentTabs: { 7: { owner: 'task:a', who: 'Post the video' } }, agentMade: { 7: 0 } }
 })
@@ -125,9 +130,25 @@ describe('a covered agent window\'s page keeps running for an upload', () => {
 
   it('emulation the browser refused holds nothing: detached at once, not awake', async () => {
     failEmulation = true
-    expect(await step('upload')).toBe(false)
+    expect(await wake('upload')).toEqual({ awake: false, why: 'refused' })
     expect(fake.log).toEqual(['attach', 'Emulation.setFocusEmulationEnabled', 'detach'])
     expect(isAwake(7)).toBe(false)
+  })
+
+  it('emulation that leaves the page hidden (a minimized window) keeps no debugging bar, and says so', async () => {
+    fake.stillHidden = true
+    expect(await wake('upload')).toEqual({ awake: false, why: 'still_hidden' })
+    expect(cdp.debuggerHeld(7)).toBe(false)
+    expect(fake.log.at(-1)).toBe('detach')
+  })
+
+  it('the answer\'s reasons: woke, then kept; a page on screen and a close say nothing', async () => {
+    expect(await wake('upload')).toEqual({ awake: true, why: 'woke' })
+    expect(await wake('snapshot')).toEqual({ awake: true, why: 'kept' })
+    await cdp.endLinger(chrome.debugger as never, 7)
+    fake.hidden = false
+    expect((await wake('snapshot')).why).toBe('on_screen')
+    expect((await wake('close')).why).toBe('no_tab')
   })
 
   it('the hold ending while a recording keeps the session turns emulation off, and the session stays the recording\'s', async () => {

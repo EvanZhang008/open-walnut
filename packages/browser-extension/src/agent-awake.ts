@@ -40,38 +40,51 @@ export const isAwake = (tabId: number): boolean => focusEmulated(tabId)
 const LOOK_MS = 1500
 
 /**
- * Before an agent's step in a tab: wake its page when Chrome counts it as hidden, or keep it awake
- * when it is already. True when the tab is held awake after this.
+ * What became of a step's page (the step's answer says it, `awake`, whenever the page was not
+ * simply on screen): `woke` or `kept` running, or why it was left as Chrome has it.
  */
-export async function wakeForStep(c: WireCommand): Promise<boolean> {
+export type WakeWhy = 'woke' | 'kept' | 'on_screen' | 'no_tab' | 'real_input_off' | 'bar_cancelled' | 'not_agent_window' | 'debugger_busy' | 'refused' | 'still_hidden'
+/** Whys the answer leaves out: nothing was hidden, or the step had no page. */
+export const QUIET_WHYS: ReadonlySet<WakeWhy> = new Set(['on_screen', 'no_tab'])
+
+/**
+ * Before an agent's step in a tab: wake its page when Chrome counts it as hidden, or keep it awake
+ * when it is already.
+ */
+export async function wakeForStep(c: WireCommand): Promise<{ awake: boolean; why: WakeWhy }> {
+  const no = (why: WakeWhy) => ({ awake: false, why })
   const tabId = c.args.tab
-  if (typeof tabId !== 'number') return false
-  if (NO_WAKE_ACTS.has(c.action)) return false
+  if (typeof tabId !== 'number' || NO_WAKE_ACTS.has(c.action)) return no('no_tab')
   const keep = isAwake(tabId)
   const dbg = more.debugger
-  if (!dbg || !(await trustedReady())) return false
+  if (!dbg || !(await trustedReady())) return no('real_input_off')
   await cancelKnown()
-  if (barCancelled(tabId)) return false
+  if (barCancelled(tabId)) return no('bar_cancelled')
   // Only an agent's own tab, not the person's, not while they drive it, in Walnut's own agent window
   // (a tab that left it, dragged out or given back, lets go of its hold now).
   const tab = await ext.tabs.get(tabId).catch(() => null)
   if (!(await lingersIn(tabId)()) || !tab || tab.windowId === undefined || tab.windowId !== await agentWindowId()) {
     if (keep) await endLinger(dbg, tabId)
-    return false
+    return no(keep ? 'not_agent_window' : 'no_tab')
+  }
+  const hidden = async () => {
+    const look = await reachPage(tabId, false, { deadlineMs: LOOK_MS }).catch(() => null)
+    return !!(look?.ok && look.hidden)
   }
   // On screen already: nothing to wake (and no debugging bar for it).
-  if (!keep) {
-    const look = await reachPage(tabId, false, { deadlineMs: LOOK_MS }).catch(() => null)
-    if (!look?.ok || !look.hidden) return false
-  }
+  if (!keep && !(await hidden())) return no('on_screen')
   const by = stepHolder()
   const mark = endMark(tabId)
-  try { await acquireDebugger(dbg, tabId, by) } catch { return false }
+  try { await acquireDebugger(dbg, tabId, by) } catch { return no('debugger_busy') }
+  let why: WakeWhy = keep ? 'kept' : 'woke'
   try {
     // A session another holder attached has none yet; one the browser refused keeps nothing attached for it.
-    if (keep || await emulateFocus(tabId)) await lingerAfter(dbg, tabId, lingersIn(tabId), mark, AWAKE_MS)
+    if (!keep && !(await emulateFocus(tabId))) why = 'refused'
+    // Emulation that leaves the page hidden (a window Chrome draws nowhere) keeps no debugging bar for nothing.
+    else if (!keep && await hidden()) { why = 'still_hidden'; await endLinger(dbg, tabId) }
+    else await lingerAfter(dbg, tabId, lingersIn(tabId), mark, AWAKE_MS)
   } finally {
     await releaseDebugger(dbg, tabId, by)
   }
-  return isAwake(tabId)
+  return { awake: isAwake(tabId), why }
 }

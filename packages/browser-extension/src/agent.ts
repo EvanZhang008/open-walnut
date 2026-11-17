@@ -29,7 +29,7 @@ import { screenshot } from './agent-shot'
 import { downloadsAction, watchDownloads } from './agent-downloads'
 import { DEBUGGER_OPS, TRUSTED_OPS, defaultTrustedAct, trustedAct, trustedByDefault, trustedReady } from './agent-trusted'
 import { fileAccessOn } from './agent-upload'
-import { wakeForStep } from './agent-awake'
+import { QUIET_WHYS, wakeForStep } from './agent-awake'
 import { fillFrames } from './bg-fill'
 import { inHandedReach } from './agent-tab-kind'
 import { noteScreenShare, openInAgentWindow, resizeAgentWindow, windowOf } from './agent-window'
@@ -394,9 +394,11 @@ async function run(c: WireCommand): Promise<void> {
         // A click or a key acts on the tab in front: a folded group left the agent window's page there.
         if (screenTab !== undefined && c.action !== 'screenshot' && c.action !== 'zoom') await bringUpForCommand(screenTab)
         // A page Chrome counts as hidden (the agent window behind the person's) keeps running while the agent works there (agent-awake.ts).
-        await wakeForStep(c).catch(() => false)
+        const wake = await wakeForStep(c).catch(() => ({ awake: false, why: 'refused' as const }))
         // An acting step says what it changed on the page (agent-change.ts).
-        return CHANGE_ACTS.has(c.action) && typeof c.args.tab === 'number' ? withChange(c.args.tab, c.action, c.args, async () => (await act(c)) as Record<string, unknown>) : act(c)
+        const out = await (CHANGE_ACTS.has(c.action) && typeof c.args.tab === 'number' ? withChange(c.args.tab, c.action, c.args, async () => (await act(c)) as Record<string, unknown>) : act(c))
+        // A page Chrome counted as hidden: the answer says whether it runs now, and why not.
+        return !QUIET_WHYS.has(wake.why) && out && typeof out === 'object' && !Array.isArray(out) ? { ...(out as Record<string, unknown>), awake: wake } : out
       }) }
     } finally {
       if (typeof c.args.tab === 'number') noteWorked(c.args.tab)
