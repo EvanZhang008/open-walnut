@@ -1763,12 +1763,17 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
   if (options?.maxColdReadBytes && !rewindCuts && statPath && statSize !== undefined
       && statSize > options.maxColdReadBytes) {
     const windowAt = Date.now();
+    // Why no cached state answered this read (a window read again is the cost the
+    // window's incremental state exists to save): what the cache held for the session.
+    const before = cacheGet(sessionId, host);
+    const prior = !before ? 'none' : !before.windowed ? 'full' : !before.inc ? 'window-no-state' : 'window-state-unused';
     const read = await readHistoryWindow(sessionId, cwd, host, options.maxColdReadBytes);
     const win = read?.messages;
     if (read && win) {
       log.session.info('history cold read bounded to tail window', {
         sessionId, host: host ?? '__local__', fileSize: statSize,
         windowBytes: options.maxColdReadBytes, messages: win.length, windowReadMs: Date.now() - windowAt,
+        prior, ...(read.text.endsWith('\n') ? {} : { partialLastLine: true }),
       });
       if (mtimeMs !== undefined) {
         // No incremental state when a rewind was recorded while the window was read: the
