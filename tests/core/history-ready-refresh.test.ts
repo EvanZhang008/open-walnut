@@ -12,7 +12,8 @@
  *   - nothing runs during the startup delay or under memory pressure, and stop() ends it all.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { HistoryReadyRefresher, type HistoryReadyRefreshOptions } from '../../src/core/history-ready-refresh.js';
+import { HistoryReadyRefresher, RECENT_WINDOW_MS, REMOTE_WINDOW_MS, type HistoryReadyRefreshOptions } from '../../src/core/history-ready-refresh.js';
+import { VIEW_MAX_AGE_MS } from '../../src/core/history-view-snapshot.js';
 import { HISTORY_READY_CAPABILITY, type ReadyViewConnection } from '../../src/core/history-ready-view.js';
 import type { HistoryViewMeta } from '../../src/core/history-view-snapshot.js';
 import { holdHostForOpen, OPEN_QUIET_MS, OPEN_WAIT_MAX_MS, _resetHostOpenHoldsForTesting } from '../../src/core/host-open-hold.js';
@@ -166,7 +167,8 @@ describe('when a host comes back', () => {
     expect(calls.map((c) => c.length)).toEqual([50, 50, 19]);
     expect(calls[0]![0]).toMatchObject({ sid: 'r0', cwd: '/w', turns: 10, rows: 400 });
     expect(typeof calls[0]![0]!.legacyHintCutoffMs).toBe('number');
-    expect(Date.now() - Date.parse(since)).toBeGreaterThan(6 * 24 * 3600_000);
+    // A remote host: every session the store may still keep a view of (30 days, 2026-11-17).
+    expect(Date.now() - Date.parse(since)).toBeGreaterThan(29 * 24 * 3600_000);
     const stale = all.filter((r, i) => i % 3 === 0 && r.claudeSessionId !== 'r5' && i !== 7).map((r) => r.claudeSessionId);
     expect(changed).toBe(stale.length);
     await waitFor(() => h.fetched.length === stale.length, 5000);
@@ -324,5 +326,18 @@ describe('after waiting for an open', () => {
     release();
     await advance(OPEN_QUIET_MS + 500);
     expect(h.fetched).toHaveLength(0);
+  });
+});
+
+describe('which sessions a reconnect pass compares', () => {
+  it('a remote host compares the store age window, the Mac itself the last week (its own reads are fast)', async () => {
+    const seen: Record<string, number> = {};
+    const { conn } = keysConn(() => ({}));
+    const h = harness({ connectionFor: () => conn, listRecentOnHost: async (host, s) => { seen[host] = Date.now() - Date.parse(s); return []; } });
+    await h.refresher.reconnectPass('remote-dev');
+    await h.refresher.reconnectPass('__local__');
+    expect(seen['remote-dev']).toBe(REMOTE_WINDOW_MS);
+    expect(REMOTE_WINDOW_MS).toBe(VIEW_MAX_AGE_MS);
+    expect(seen.__local__).toBe(RECENT_WINDOW_MS);
   });
 });

@@ -6,6 +6,7 @@
  *   - after every turn (SESSION_RESULT, debounced per session) the session's daemon is asked for
  *     its ready view, with the kept view's key: unchanged costs a stat on the host and a few bytes;
  *   - when a host's daemon (re)connects, every session on it active in the last RECENT_WINDOW_MS
+ *     (REMOTE_WINDOW_MS for a remote host)
  *     is compared in batches of KEYS_BATCH (`history.readyKeys`, one stat per session on the host,
  *     no parse), and only the ones whose view changed are fetched. No cap on how many: a host
  *     that ran forty sessions overnight gets forty views, one at a time.
@@ -23,11 +24,18 @@ import { log } from '../logging/index.js';
 import { memoryPressureShedding } from './memory-pressure.js';
 import type { SessionRecord } from './types.js';
 import { fetchReadyView, HISTORY_READY_CAPABILITY, READY_VIEW_ROWS, readyViewEligible, readyViewTurns, wireCut, type ReadyViewConnection } from './history-ready-view.js';
-import { readHistoryViewMeta, type HistoryViewMeta } from './history-view-snapshot.js';
+import { readHistoryViewMeta, VIEW_MAX_AGE_MS, type HistoryViewMeta } from './history-view-snapshot.js';
 import { legacyHintCutoff } from './sessions/legacy-hint-lines.js';
 import { waitForHostOpens } from './host-open-hold.js';
 
 export const RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * A remote host's sessions are kept current for as long as the store keeps a view (its age limit):
+ * a remote first paint without one asks the host over its link, while a Mac-local one reads its own
+ * file's tail in milliseconds (2026-11-17, the user: a chat on any host opens at once, its last
+ * page first). The pass fetches only views that are missing or changed.
+ */
+export const REMOTE_WINDOW_MS = VIEW_MAX_AGE_MS;
 export const KEYS_BATCH = 50;
 
 interface RefreshItem {
@@ -42,6 +50,8 @@ export interface HistoryReadyRefreshOptions {
   startupDelayMs?: number;
   paceMs?: number;
   recentWindowMs?: number;
+  /** The same for a remote host (REMOTE_WINDOW_MS). */
+  remoteWindowMs?: number;
   keysBatch?: number;
   /** Seams for tests. */
   getRecord?: (sessionId: string) => Promise<SessionRecord | null | undefined>;
@@ -76,6 +86,7 @@ export class HistoryReadyRefresher {
       startupDelayMs: options.startupDelayMs ?? 60_000,
       paceMs: options.paceMs ?? 500,
       recentWindowMs: options.recentWindowMs ?? RECENT_WINDOW_MS,
+      remoteWindowMs: options.remoteWindowMs ?? REMOTE_WINDOW_MS,
       keysBatch: options.keysBatch ?? KEYS_BATCH,
       getRecord: options.getRecord ?? (async (sid) => (await import('./session-tracker.js')).getSessionByClaudeId(sid)),
       listRecentOnHost: options.listRecentOnHost ?? (async (host, since) => (await import('./session-tracker.js')).listRecentSessionsOnHost(host, since)),
@@ -147,7 +158,8 @@ export class HistoryReadyRefresher {
     this.hostPasses.add(hostKey);
     let changed = 0;
     try {
-      const since = new Date(this.o.now() - this.o.recentWindowMs).toISOString();
+      const windowMs = hostKey === '__local__' ? this.o.recentWindowMs : this.o.remoteWindowMs;
+      const since = new Date(this.o.now() - windowMs).toISOString();
       const records = (await this.o.listRecentOnHost(hostKey, since))
         .filter((r) => readyViewEligible(r, this.o.isAcpJournal(r)));
       const cutoff = legacyHintCutoff();
