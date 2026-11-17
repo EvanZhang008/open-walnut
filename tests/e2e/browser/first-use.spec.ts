@@ -4,6 +4,7 @@ import type { HostStatus } from '../../../web/src/api/hosts';
 import type { LocalClaudeProblem } from '../../../web/src/api/local-claude';
 import type { SystemHealth } from '../../../web/src/hooks/useSystemHealth';
 import { dropFakes } from './route-teardown';
+import { foreignTaskFrame } from './task-list-stub';
 
 const missing = {
   hasReadyProvider: false, claudeCliAvailable: false, claudeCodeNeeded: true,
@@ -26,6 +27,8 @@ function deferred() {
   return { promise, resolve };
 }
 
+const noTasks: ReadonlySet<string> = new Set();
+
 async function openFresh(page: Page, baseURL: string) {
   let socket: WebSocketRoute | undefined;
   await page.addInitScript(() => {
@@ -44,9 +47,13 @@ async function openFresh(page: Page, baseURL: string) {
     socket = ws;
     const server = ws.connectToServer();
     server.onMessage(message => {
-      const frame = JSON.parse(message.toString());
+      const text = message.toString();
+      // The list above answers no task, so a frame about any task is another spec's on the
+      // shared fixture (a live task:updated is upserted into the store and ends first use).
+      if (foreignTaskFrame(text, noTasks)) return;
+      const frame = JSON.parse(text);
       // Keep the real SPA socket and navigation, but let the test own these snapshots.
-      if (frame.type !== 'event' || !['system:health', 'config:changed', 'task:created', 'host:status'].includes(frame.name)) ws.send(message);
+      if (frame.type !== 'event' || !['system:health', 'config:changed', 'host:status'].includes(frame.name)) ws.send(message);
     });
   });
   await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`);
@@ -62,7 +69,7 @@ async function openFresh(page: Page, baseURL: string) {
       // HTTP health can paint before the replacement WebSocket is ready.
       await expect.poll(() => !!socket && socket !== previous, { timeout: 60_000 }).toBe(true);
     },
-    push(name: 'system:health' | 'host:status' | 'config:changed' | 'task:created', data: unknown) {
+    push(name: 'system:health' | 'host:status' | 'config:changed', data: unknown) {
       expect(socket, 'the real SPA WebSocket is connected').toBeDefined();
       socket!.send(JSON.stringify({ type: 'event', name, data, seq: Date.now() }));
     },
