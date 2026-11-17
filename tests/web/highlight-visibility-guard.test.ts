@@ -147,7 +147,8 @@ const SLOT = 'an empty slot or measuring box: it holds no painted words';
 const HEADER = 'a header or bar: no painter marks its words';
 /** Hides nothing a painter marks (thread marks, pins, comments, find), with why. */
 const NO_PAINTED_WORDS: Record<string, string> = {
-  'web/src/utils/scrollbar-metrics.ts :: inline (1)': SLOT,
+  // The off-screen probes that measure a scrollbar track and a kept gutter (Settings' pane).
+  'web/src/utils/scrollbar-metrics.ts :: inline (2)': SLOT,
   // The calendar grid's hour label next to the now line, hidden so the two times do not overlap.
   'web/src/components/calendar/TimeGrid.tsx :: inline (1)': HEADER,
   // The arrow slot of a notes tree row with nothing under it, kept so names line up.

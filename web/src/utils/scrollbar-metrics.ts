@@ -53,6 +53,28 @@ export function measureScrollbarHeight(doc: Document = document): number {
   return h > 0 && h < 40 ? h : 0;
 }
 
+/**
+ * Width a kept vertical scrollbar gutter (`scrollbar-gutter: stable`) takes in a box of class
+ * `boxClass` inside a host of class `hostClass`, in px: a page that styles its own scrollbar (the
+ * Settings pane's 8px one) is measured with its own rules, not the global 6px. 0 where the engine
+ * keeps no gutter (overlay scrollbars, WebKit 26 beside `::-webkit-scrollbar` styles). The probe is
+ * an off-screen hidden copy, removed before returning; reading the widths forces one layout.
+ */
+export function measureGutterIn(hostClass: string, boxClass: string, doc: Document = document): number {
+  const host = doc.createElement('div');
+  host.className = hostClass;
+  host.setAttribute('aria-hidden', 'true');
+  host.style.cssText = 'position:absolute;top:-9999px;left:-9999px;width:120px;height:60px;visibility:hidden;pointer-events:none';
+  const probe = doc.createElement('div');
+  probe.className = boxClass;
+  probe.style.cssText = 'position:static;width:100px;height:40px;padding:0;border:0;overflow-y:auto;scrollbar-gutter:stable';
+  host.appendChild(probe);
+  (doc.body ?? doc.documentElement).appendChild(host);
+  const width = Math.max(0, probe.offsetWidth - probe.clientWidth);
+  host.remove();
+  return width < 40 ? width : 0;
+}
+
 /** Measure and publish on `<html>`. Safe to call more than once. */
 export function publishScrollbarMetrics(doc: Document = document): number {
   const h = measureScrollbarHeight(doc);

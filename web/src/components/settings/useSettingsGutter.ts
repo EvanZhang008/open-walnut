@@ -1,4 +1,5 @@
 import { useLayoutEffect, type RefObject } from 'react';
+import { measureGutterIn } from '../../utils/scrollbar-metrics';
 
 /**
  * How wide Settings' kept scrollbar gutter is in this window, as `--settings-gutter` on the Settings
@@ -13,18 +14,10 @@ import { useLayoutEffect, type RefObject } from 'react';
  * same scrollbar rules reach it. Measured on mount and again after a resize (a display with
  * another scrollbar setting); set only on the container, so nothing outside Settings restyles.
  */
+/** Settings' gutter: its pane class inside its container class, so Settings' own 8px scrollbar
+ *  rules reach the probe (scrollbar-metrics.ts measureGutterIn). */
 export function measureSettingsGutter(doc: Document = document): number {
-  const host = doc.createElement('div');
-  host.className = 'settings-container';
-  host.style.cssText = 'position:absolute;top:-9999px;left:-9999px;width:120px;height:60px;visibility:hidden;pointer-events:none';
-  const probe = doc.createElement('div');
-  probe.className = 'settings-pane';
-  probe.style.cssText = 'position:static;width:100px;height:40px;padding:0;border:0;overflow-y:auto;scrollbar-gutter:stable';
-  host.appendChild(probe);
-  doc.body.appendChild(host);
-  const width = Math.max(0, probe.offsetWidth - probe.clientWidth);
-  host.remove();
-  return width;
+  return measureGutterIn('settings-container', 'settings-pane', doc);
 }
 
 export function useSettingsGutter(containerRef: RefObject<HTMLElement | null>): void {
