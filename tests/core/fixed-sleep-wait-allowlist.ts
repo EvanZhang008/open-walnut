@@ -656,4 +656,9 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/providers/upload-pace.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50))", reason: "negative: a cut while the whole host link went down must not teach a pace" },
   { file: "tests/providers/upload-pace.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50))", reason: "negative: a bulk forward ending on a ServerAlive timeout must not teach a pace" },
   { file: "tests/providers/upload-pace.test.ts", sleep: "await new Promise((r) => setTimeout(r, 400))", reason: "negative: once both cuts of one outage are rolled back the pace must stay unpaced" },
+  { file: "tests/core/history-view-snapshot-prune.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50));", reason: "negative: a second open inside the window must not touch the disk copy again" },
+  { file: "tests/core/session-history-windowed-incremental.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50));", reason: "negative: a cache write queued a tick after its read must not land for a windowed read" },
+  { file: "tests/web/route-failure-log-only.test.ts", sleep: "await new Promise((r) => setTimeout(r, 25))", reason: "poll step: the loop re-reads the feed until the sentinel card shows, up to 5 s" },
+  { file: "tests/web/routes/drafts.test.ts", sleep: "await new Promise((r) => setTimeout(r, 1500));", reason: "time under test: the lock the test holds for 1500 ms runs out before the next save" },
+  { file: "tests/web/routes/sessions-history-ready-first-paint.test.ts", sleep: "await new Promise((r) => setTimeout(r, OPEN_QUIET_MS + 50));", reason: "time under test: the host stays busy for the quiet spell OPEN_QUIET_MS after the paint" },
 ]
