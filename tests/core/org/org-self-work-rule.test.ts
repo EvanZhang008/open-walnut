@@ -15,7 +15,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-org-self-work-rule'))
 
-import { DEFAULT_ORG_INSTRUCTIONS, ORG_SELF_COMMAND_LIMIT, orgSelfWorkRule } from '../../../src/core/org/core-instructions.js'
+import { DEFAULT_ORG_INSTRUCTIONS, ORG_SELF_COMMAND_LIMIT, SOURCE_CHECK_RULE, orgSelfWorkRule } from '../../../src/core/org/core-instructions.js'
 import { coreInstructionsBlock, defaultInstructions } from '../../../src/core/sessions/session-context.js'
 import { orgRoleOfPrompt } from '../../../src/core/org/org-prompt-role.js'
 import { orgWorkReminder } from '../../../src/providers/org-work-guard-hook.js'
@@ -53,6 +53,15 @@ describe('Main and a VP never do the work themselves', () => {
       expect(orgSelfWorkRule(role)).toMatch(/task_create/)
     }
     expect(orgSelfWorkRule('main')).toMatch(/org_send/)
+  })
+
+  it('both defaults say a team\'s conclusion is no fact until checked at its source, with who a risk hits', () => {
+    // 2026-11-17: four VPs passed a worker's or an adviser's word to the user as fact on one day.
+    for (const role of ['main', 'lead'] as const) {
+      expect(DEFAULT_ORG_INSTRUCTIONS[role].split('\n')).toContain(SOURCE_CHECK_RULE)
+    }
+    expect(SOURCE_CHECK_RULE).toMatch(/checked at its source yourself, or say whose word it is and that you have not checked it/)
+    expect(SOURCE_CHECK_RULE).toMatch(/A risk says who it hits and how much/)
   })
 
   it('an org node reads no line telling it to do the work itself, in every role variant', () => {

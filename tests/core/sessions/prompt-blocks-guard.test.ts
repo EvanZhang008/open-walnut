@@ -195,11 +195,14 @@ describe('a versioned block cannot outgrow its cap at its builder\'s own limit',
     }
   })
 
-  it('a role\'s core instructions an agent wrote at ORG_INSTRUCTIONS_MAX, after Walnut\'s default', () => {
+  it('a role\'s core instructions an agent wrote at ORG_INSTRUCTIONS_MAX, after Walnut\'s default, for Main and a lead', () => {
+    // Main's default is the longer one; before 2026-11-17 only a lead was measured and Main sat 190 over.
     const text = Array.from({ length: ORG_INSTRUCTIONS_MAX / 50 }, (_, i) => `Instruction ${i}: keep this line about this long.`).join('\n').slice(0, ORG_INSTRUCTIONS_MAX)
-    const c = composeInstructions({ id: 'fx', org_role: 'lead', project: 'P', org_instructions: { text, at: '2026-11-12T00:00:00.000Z', by: 'task:other' } }, { taskLine: '', taskDir: '', fleet: '' })
-    const core = c.blocks.find((b) => b.id === 'core-instructions')!
-    expect(core.chars).toBeLessThanOrEqual(promptBlock('core-instructions').cap)
+    for (const org_role of ['main', 'lead'] as const) {
+      const c = composeInstructions({ id: 'fx', org_role, project: 'P', org_instructions: { text, at: '2026-11-12T00:00:00.000Z', by: 'task:other' } }, { taskLine: '', taskDir: '', fleet: '' })
+      const core = c.blocks.find((b) => b.id === 'core-instructions')!
+      expect(core.chars, org_role).toBeLessThanOrEqual(promptBlock('core-instructions').cap)
+    }
   })
 })
 

@@ -594,7 +594,7 @@ function orgInstructionsLine(task: InstructionTask): string {
       + tag(version, text) + `\nWalnut's rule for your role still holds: ${orgSelfWorkRule(task.org_role)}\n\n`
   }
   return `Your core instructions: Walnut's default for your role, which still applies, then the instructions ${agent} wrote for your role `
-    + `(${version}, set ${when}; your user may change them). The added instructions add to Walnut's default and never override it: where the two `
+    + `(${version}, set ${when}; your user may change them). The added ones add to the default and never override it: where they `
     + `disagree, the default wins. They rank below Walnut's rules, the team charter and anything your user tells you, and never permit a step `
     + `that needs your user's approval. They replace every earlier version. Each line of this version starts with [${version}]:\n`
     + tag(version, fallback) + `\n[${version}] Added by ${agent}:\n` + tag(version, text) + '\n\n'

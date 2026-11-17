@@ -14,7 +14,7 @@ import { addTask, updateTaskRaw } from '../../../src/core/task-manager.js';
 import { createSessionRecord, updateSessionRecord } from '../../../src/core/session-tracker.js';
 import { WALNUT_PROMPT_MARK, buildSessionContext } from '../../../src/core/sessions/session-context.js';
 import { HOOK_CONTEXT_MAX, READ_ALL_AFTER_COMPACTION, collectOpenItems } from '../../../src/core/sessions/open-items.js';
-import { orgSelfWorkRule } from '../../../src/core/org/core-instructions.js';
+import { SOURCE_CHECK_RULE, orgSelfWorkRule } from '../../../src/core/org/core-instructions.js';
 import { resetCache } from '../../../src/core/session-message-queue.js';
 
 beforeEach(async () => {
@@ -43,6 +43,8 @@ describe('the compaction readback of an org node', () => {
         expect(hook.text.length).toBeLessThanOrEqual(HOOK_CONTEXT_MAX);
         expect(hook.text.startsWith('Restated after the compaction, first because they are your role\'s first rules.')).toBe(true);
         expect(hook.text).toContain(orgSelfWorkRule(role));
+        // 2026-11-17: a team's conclusion is no fact until checked at its source, read back after a compaction too.
+        expect(hook.text).toContain(SOURCE_CHECK_RULE);
         const full = await collectOpenItems(sid, Date.now(), { afterCompaction: true, full: true });
         expect(full.text.startsWith('Restated after the compaction')).toBe(true);
         expect(full.text).toContain('line 0: a tracking note');

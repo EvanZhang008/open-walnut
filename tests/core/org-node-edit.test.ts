@@ -310,7 +310,7 @@ describe('Walnut\'s default core instructions for the CEO and a VP', () => {
     for (const line of DEFAULT_ORG_INSTRUCTIONS.main.split('\n')) expect(mainPrompt).toContain(`[${v}] ${line}`);
     // 2026-11-03: the 3-command rule leads both defaults (core-instructions.ts orgSelfWorkRule).
     expect(DEFAULT_ORG_INSTRUCTIONS.main.split('\n')[0]).toMatch(/^Never do the work yourself: run at most 3 commands of your own in a turn/);
-    expect(first('main')).toMatch(/^Do not do task work yourself\. Hand each piece of work on: task_send to the task that owns its deliverable/);
+    expect(first('main')).toMatch(/^Do not do task work yourself\. Hand each piece of work on, as above: every investigation/);
     for (const line of DEFAULT_ORG_INSTRUCTIONS.lead.split('\n')) expect(defaultInstructions(lead)).toContain(line);
     expect(defaultInstructions(lead)).not.toContain(first('main'));
     expect(defaultInstructions(plain)).not.toContain('Your core instructions');
@@ -365,7 +365,7 @@ describe('Walnut\'s default core instructions for the CEO and a VP', () => {
     expect(prompt).toContain(first('main'));
     expect(prompt).toMatch(/\[(v[0-9a-f]{8})\] Added by you:\n\[\1\] Quick device checks are fine to run yourself\./);
     expect(prompt).toContain('never permit a step that needs your user\'s approval');
-    expect(prompt).toContain('add to Walnut\'s default and never override it: where the two disagree, the default wins');
+    expect(prompt).toContain('add to the default and never override it: where they disagree, the default wins');
     // Main clears its own words: the prompt says it did.
     const selfCleared = await editOrgNode(main.id, { instructions: '' }, self);
     expect(defaultInstructions(selfCleared)).toContain('You cleared the instructions for your role at ');
