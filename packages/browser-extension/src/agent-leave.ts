@@ -24,6 +24,7 @@ import { barCancelled, cdpDialog } from './cdp'
 import { closeTab } from './tab-close'
 import { ungroupBeforeClose, type GroupApi } from './agent-groups'
 import { forgetAgentMade } from './agent-tidy'
+import { personTabsIn, type OwnApi } from './agent-window-own'
 
 /** What the agent reads with a "Leave site?" its leave opened. */
 export const LEAVE_NOTE = 'The page asks "Leave site?": it says it holds changes that are not saved (a draft, an upload still going). The page stays as it is until you answer: '
@@ -199,7 +200,9 @@ export async function closeAct(c: WireCommand): Promise<Record<string, unknown>>
   }
   // An agent's tab left in front of a window of the person's (agent-window-own.ts gave that
   // window up with it there): closing it would change what their window shows, so it is only let go.
-  if (tab.active && !personsTab(rec) && tab.windowId !== await agentWindowId()) {
+  // A window with no tab of theirs (a popup the agent's page opened) is the agent's: it closes.
+  if (tab.active && !personsTab(rec) && tab.windowId !== undefined && tab.windowId !== await agentWindowId()
+    && (await personTabsIn(ext as unknown as OwnApi, tab.windowId)).length > 0) {
     await release(tabId)
     return { tab: tabId, closed: false, released: true, kept: 'person_window_front' }
   }
