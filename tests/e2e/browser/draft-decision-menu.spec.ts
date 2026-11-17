@@ -175,12 +175,20 @@ test('each chip anchors the one popover on itself, a second trigger re-anchors i
   expect(squash(await litTier.textContent() ?? '')).toBe(squash(await chipLabel(draftDecisionChip(panel, 'pinTier'))))
   await expect(menu.locator('.task-kebab-date-label').filter({ hasText: /^Due/ })).toHaveText(`Due: ${dayWords(3)}`)
   expect(await chipLabel(draftDecisionChip(panel, 'dueDate'))).toBe(`Due ${dayWords(3)}`)
-  // The priority glyph wears the same badge colour as the menu's badge.
-  const glyphColor = await draftDecisionChip(panel, 'priority').evaluate((chip) => {
+  // The priority glyph wears the menu badge's colour rule (one --priority-<value> token). The
+  // chip sits in a chat composer, where the chat palette (styles/chat-palette.css) greys that
+  // token, and the menu sits outside the chat, so the badge's class is read where the glyph is.
+  const badgeClass = await litPriority.getAttribute('class') ?? ''
+  const [glyphColor, badgeHere] = await draftDecisionChip(panel, 'priority').evaluate((chip, cls) => {
     const el = Array.from(chip.querySelectorAll('*')).find((n) => (n.textContent ?? '').trim() === '!!')
-    return el ? getComputedStyle(el).color : 'no glyph'
-  })
-  expect(glyphColor).toBe(await litPriority.evaluate((el) => getComputedStyle(el).color))
+    const probe = document.createElement('span')
+    probe.className = cls
+    chip.appendChild(probe)
+    const here = getComputedStyle(probe).color
+    probe.remove()
+    return [el ? getComputedStyle(el).color : 'no glyph', here]
+  }, badgeClass)
+  expect(glyphColor).toBe(badgeHere)
   // Same tier icon in chip and lit row (C39's DOM half).
   const svg = (loc: Locator) => loc.evaluate((el) => el.querySelector('svg')?.outerHTML ?? 'no svg')
   expect(await svg(draftDecisionChip(panel, 'pinTier'))).toBe(await svg(litTier))

@@ -53,7 +53,17 @@ test('Ask: the brand colour, no bare actions under a bubble, the page quote on t
   await composer.press('Enter')
   await expect(v.getByText('Hello! I processed your message', { exact: false }).first()).toBeVisible({ timeout: 60_000 })
   const bubble = v.locator('.session-msg-user').first()
-  expect(await bubble.evaluate((e) => getComputedStyle(e).backgroundColor)).toBe('rgb(138, 90, 43)')
+  // The person's bubble is the chat palette's quiet grey (styles/chat-palette.css), not a brand hue.
+  const [bubbleBg, paletteBubble] = await bubble.evaluate((e) => {
+    const probe = document.createElement('span')
+    probe.style.backgroundColor = 'var(--chat-user-bubble)'
+    e.appendChild(probe)
+    const want = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return [getComputedStyle(e).backgroundColor, want]
+  })
+  expect(bubbleBg).toBe(paletteBubble)
+  expect(paletteBubble).not.toBe('rgba(0, 0, 0, 0)')
   // A bubble's actions are not drawn until it is hovered (this headless page reports no hover).
   const actions = bubble.locator('.session-msg-actions')
   if (await actions.count()) expect(await actions.first().evaluate((e) => getComputedStyle(e).opacity)).toBe('0')
