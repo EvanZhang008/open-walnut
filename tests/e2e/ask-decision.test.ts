@@ -21,6 +21,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-ask-decision
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { addTask, getTask, updateTask, updateTaskRaw } from '../../src/core/task-manager.js'
+import { userWrote } from '../helpers/user-wrote.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { syncUserStatuses } from '../../src/core/user-status-sync.js'
 import { ensureProjectLead } from '../../src/core/org/org-store.js'
@@ -121,6 +122,7 @@ describe('one decision across rewordings', () => {
     await expect(prepareAskAnswer(vpId, taskId, 'Drop it.', undefined, undefined, { withdraw: true }))
       .rejects.toMatchObject({ code: 'user_words' })
     expect(AskAnswerError).toBeDefined()
+    await userWrote(taskId, 'stop asking me about the alpha account')
     const prepared = await prepareAskAnswer(vpId, taskId, 'Drop it.', 'stop asking me about the alpha account', undefined, { withdraw: true })
     expect(prepared.line).toContain('withdrew this ask for good')
     await prepared.commit()

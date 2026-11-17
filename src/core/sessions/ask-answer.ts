@@ -30,7 +30,7 @@ import { ambiguousIdMessage, matchIdRef, missingIdMessage } from '../../lib/id-r
 import type { SessionRecord, Task } from '../types.js';
 import { isLiveSessionStatus } from '../routines/session-target.js';
 import { briefTeam } from '../user-status.js';
-import { settleCheck, type UserSaid } from './user-spoke.js';
+import { decisionSinceOf, settleCheck, usersWordsLine, verifyUsersWords, type UsersWordsCheck, type UserSaid } from './user-spoke.js';
 import { reportDecision } from '../ask-decision.js';
 import { askAnswerLine, askKey, keptAnswers, type AskAnswer, type SameAskFold } from '../same-ask.js';
 
@@ -90,6 +90,27 @@ function finishedAskOf(t: Pick<Task, 'status_report'>): OpenAsk {
   const r = t.status_report;
   if (r?.state === 'needs' && r.ask) return { ask: r.ask, where: 'report' };
   return { none: 'it is complete and asks the user nothing (a message would reopen it; task_start it only if it must work again)' };
+}
+
+/**
+ * When the ask shown was put to the user: the decision's own start for a report's ask (ask_since),
+ * a letter's sending; null when Walnut keeps no time for it (a Board choice), so his words of the
+ * last week count (user-spoke.ts verifyUsersWords).
+ */
+async function askPutAt(target: Task, where: AskWhere): Promise<string | null> {
+  if (where === 'letter') {
+    try {
+      const { listLetters } = await import('../human-inbox/store.js');
+      const { letters } = await listLetters({ archived: false });
+      const letter = letters.filter((l) => l.type === 'action_required' && !l.answered && !l.archived && l.sender?.taskId === target.id)
+        .sort((a, b) => b.createdAt - a.createdAt)[0];
+      return letter ? new Date(letter.createdAt).toISOString() : null;
+    } catch {
+      return null;
+    }
+  }
+  if (where === 'choice') return null;
+  return decisionSinceOf(target.status_report);
 }
 
 /** Whether `caller` stands above `target`: a task it is under, Main, or a lead or VP whose team holds it. Pure. */
@@ -229,16 +250,21 @@ export async function prepareAskAnswer(
   const localWork = kind === 'outward' && askKey(report?.ask) === askKey(ask) && !report?.ask_options?.length
     && (!report?.ask_kind || report.ask_kind === 'yes_no' || report.ask_kind === 'text')
     && (isLocalDraftAsk(ask, report?.ask_more) || isTeamCodeAsk(ask, report?.ask_own?.why, report?.ask_more));
-  if (caller && kind && !localWork && words.length < 10 && needsUsersWords(kind, askMe)) {
-    throw new AskAnswerError('user_words',
-      `Not sent: "${target.title}" asks the user to approve a step of kind ${kind}, which only the user decides. `
-      + 'Answer it in their place only with their own words: pass user_words quoting what they said (task_history rows with sentBy "person", or their thread message). Otherwise leave it for them.');
+  // His words are checked in Walnut's own record, written after the ask, however short (2026-11-17:
+  // his "cahneg" in the VP's thread was refused as under 10 characters, and the ask stayed on his
+  // Needs you). Found, they go to the task with the answer; not found, the refusal says what to do.
+  let usersWords: Extract<UsersWordsCheck, { ok: true }> | undefined;
+  const putAt = caller && ((kind && !localWork && needsUsersWords(kind, askMe)) || opts.withdraw) ? await askPutAt(target, where) : null;
+  if (caller && kind && !localWork && needsUsersWords(kind, askMe)) {
+    const verdict = await verifyUsersWords(target, caller.id, userWords, everything, `${kind} ask`, putAt);
+    if (!verdict.ok) throw new AskAnswerError('user_words', verdict.refusal);
+    usersWords = verdict;
   }
   // A withdrawal ("don't remind me again") holds for good, so only the user's own words make one.
-  if (opts.withdraw && caller && words.length < 10) {
-    throw new AskAnswerError('user_words',
-      `Not sent: withdrawing "${target.title}"'s ask for good is the user's call. Pass user_words quoting what they said `
-      + '(task_history rows with sentBy "person", or their thread message), or answer it without withdraw_ask.');
+  if (opts.withdraw && caller && !usersWords) {
+    const verdict = await verifyUsersWords(target, caller.id, userWords, everything, 'withdrawal of the ask', putAt);
+    if (!verdict.ok) throw new AskAnswerError('user_words', `${verdict.refusal} Or answer it without withdraw_ask.`);
+    usersWords = verdict;
   }
   // His words in the task come first: an answer in his place never goes against what he already
   // wrote there unseen (2026-11-07, Main's reflection: "local only" after his "submit the cr").
@@ -256,9 +282,10 @@ export async function prepareAskAnswer(
     ...decisionOfAsk(target, ask),
     ...(opts.withdraw ? { withdrawn: true as const } : {}),
   };
-  const line = opts.withdraw
+  const base = opts.withdraw
     ? `${askAnswerLine(ask, byTitle).slice(0, -1)} The user withdrew this ask for good: never put it to them again, in any words, unless they bring it up.]`
     : askAnswerLine(ask, byTitle);
+  const line = usersWords ? `${base.slice(0, -1)} ${usersWordsLine(usersWords)}]` : base;
   const settle = await asAnswerError(() => settlerFor({
     where, target, ...('choice' in open && open.choice ? { choice: open.choice } : {}), text, line, withdraw: opts.withdraw === true, byTitle,
     ...(caller ? { callerTaskId: caller.id } : {}), ...(callerSessionId?.trim() ? { callerSessionId: callerSessionId.trim() } : {}),

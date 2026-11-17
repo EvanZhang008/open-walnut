@@ -22,6 +22,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-same-ask'))
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { addTask, getTask, listTasks, updateTask, updateTaskRaw } from '../../src/core/task-manager.js'
+import { userWrote } from '../helpers/user-wrote.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { syncUserStatuses } from '../../src/core/user-status-sync.js'
 import { ensureProjectLead } from '../../src/core/org/org-store.js'
@@ -319,6 +320,11 @@ describe('answers_ask guards (2026-11-04 review)', () => {
     const bare = await call('POST', '/api/v1/messages', { to: t.id, title: 'Yes', text: 'Buy it.', answers_ask: true, expect_reply: false }, LEAD2_SID)
     expect(bare.status).toBe(409)
     expect(JSON.stringify(await bare.json())).toContain('user_words')
+    // Words he never wrote are no answer of his, however plausible (verifyUsersWords).
+    const made = await call('POST', '/api/v1/messages', { to: t.id, title: 'Yes', text: 'Buy it.', answers_ask: true, expect_reply: false, user_words: 'yes buy the paid plan for meadow' }, LEAD2_SID)
+    expect(made.status).toBe(409)
+    expect(JSON.stringify(await made.json())).toContain('not one message of his')
+    await userWrote(t.id, 'yes buy the paid plan for meadow')
     const quoted = await call('POST', '/api/v1/messages', { to: t.id, title: 'Yes', text: 'Buy it.', answers_ask: true, expect_reply: false, user_words: 'yes buy the paid plan for meadow' }, LEAD2_SID)
     expect(quoted.status, await quoted.clone().text()).toBe(202)
     expect((await getTask(t.id)).ask_answered).toMatchObject({ by: lead2, userWords: 'yes buy the paid plan for meadow' })

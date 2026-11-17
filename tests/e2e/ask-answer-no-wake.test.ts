@@ -27,6 +27,7 @@ vi.mock('../../src/core/session-message-queue.js', async (importOriginal) => {
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { addTask, getTask, updateTask, updateTaskRaw } from '../../src/core/task-manager.js'
+import { userWrote } from '../helpers/user-wrote.js'
 import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { syncUserStatuses } from '../../src/core/user-status-sync.js'
 import { ensureProjectLead } from '../../src/core/org/org-store.js'
@@ -116,6 +117,7 @@ describe('withdrawing an ask through the message route', () => {
   it('a finished target is not reopened, a person needs no quoted words, and a peer cannot withdraw', async () => {
     const done = await asking('Quiet finished', 'Choose the orchard harvest label?', 'stopped');
     await updateTaskRaw(done.id, { phase: 'COMPLETE' } as never, { source: 'test' });
+    await userWrote(done.id, 'Do not ask me about the harvest label again.');
     const r = await answer({ to: done.id, text: 'Do not ask again.', withdraw_ask: true, user_words: 'Do not ask me about the harvest label again.' });
     expect(r.status, JSON.stringify(r.json)).toBe(202);
     expect(r.json).toMatchObject({ delivery: 'recorded', notWoken: 'complete', withdrawn: true });
@@ -144,6 +146,7 @@ describe('withdrawing an ask through the message route', () => {
 
   it('a live target gets one withdrawal line and confirms the permanent result', async () => {
     const t = await asking('Quiet live', 'Choose the orchard truck capacity?', 'idle');
+    await userWrote(t.id, 'Do not ask me about truck capacity again.');
     const r = await answer({ to: t.id, text: 'Do not ask again.', withdraw_ask: true, user_words: 'Do not ask me about truck capacity again.' });
     expect(r.status, JSON.stringify(r.json)).toBe(202);
     expect(r.json).toMatchObject({ delivery: 'queued', withdrawn: true });
@@ -154,6 +157,7 @@ describe('withdrawing an ask through the message route', () => {
 
   it('records a permanent withdrawal without waking a stopped task, and ordinary answers remain ordinary', async () => {
     const t = await asking('Quiet exporter', 'Choose the orchard export format?', 'stopped');
+    await userWrote(t.id, 'Stop asking about the orchard export format.');
     const r = await answer({ to: t.id, text: 'Do not ask again.', withdraw_ask: true, user_words: 'Stop asking about the orchard export format.' });
     expect(r.status, JSON.stringify(r.json)).toBe(202);
     expect(r.json).toMatchObject({ delivery: 'recorded', notWoken: 'stopped' });

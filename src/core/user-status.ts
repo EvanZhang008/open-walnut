@@ -153,6 +153,9 @@ export interface StatusReport {
   /** needs: when the task began asking the user, kept across its reports while each one asks
    *  (sessions/user-spoke.ts needsSinceOf); absent on a report an older Walnut stored. */
   needs_since?: string;
+  /** needs: when this decision (its ask_id) began to be asked without a break, however reworded
+   *  (sessions/user-spoke.ts askSinceStamp): the time the user's own words for it must follow. */
+  ask_since?: string;
   /** The turn it reports on answered a message a person sent (sessions/report-phase.ts
    *  answeredPerson): its words are for the user to read, so it never parks the task. */
   answered_person?: boolean;

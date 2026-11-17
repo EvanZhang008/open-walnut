@@ -11,7 +11,7 @@
 import type { Task } from '../types.js';
 import { userKindVerdict } from '../org/user-kind.js';
 import { ASK_KINDS, ASK_MORE_MAX, ASK_OPTIONS_MAX, type AskKind, type AskOption, type StatusLineBy, type StatusReport, type WaitKind } from '../user-status.js';
-import { needsSinceOf, settleCheck, type UserSaid } from './user-spoke.js';
+import { askSinceStamp, needsSinceOf, settleCheck, type UserSaid } from './user-spoke.js';
 import { stampSaidDecision } from '../ask-decision.js';
 import { withFileLock } from '../../utils/file-lock.js';
 
@@ -188,7 +188,10 @@ async function saveTaskReport(
   const changed: StatusReport = sid ? { ...rest, session_id: sid } : rest;
   const needsSince = needsSinceOf(changed, task.status_report);
   // The decision it asks keeps its id across rewordings, unless the caller says it is new (ask-decision.ts).
-  const report: StatusReport = stampSaidDecision(needsSince ? { ...changed, needs_since: needsSince } : changed, task.status_report);
+  const decided: StatusReport = stampSaidDecision(needsSince ? { ...changed, needs_since: needsSince } : changed, task.status_report);
+  // When that decision began to be asked: the user's words for it must follow (user-spoke.ts).
+  const askSince = askSinceStamp(decided, task.status_report);
+  const report: StatusReport = askSince ? { ...decided, ask_since: askSince } : decided;
   // Another task taking the ask off the user's Needs you (any line but the same ask) reads his words
   // in the task first, and passes back any he wrote since it asked (user-spoke.ts).
   let userSaid: UserSaid | undefined;

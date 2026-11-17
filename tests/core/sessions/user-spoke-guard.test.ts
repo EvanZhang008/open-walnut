@@ -269,3 +269,44 @@ describe('what the caller reads back', () => {
     expect(code('src/ops/tasks.ts')).toContain('user_words: z.string()')
   })
 })
+
+describe('an ask only the user approves stands on his words in Walnut\'s record (2026-11-17, "cahneg")', () => {
+  it('every user_words gate in ask-answer.ts checks the record, never the length of the words', () => {
+    const c = code('src/core/sessions/ask-answer.ts')
+    // A length rule refused his own "cahneg"; a long made-up line passed it.
+    expect(c).not.toMatch(/words\.length\s*<\s*\d+/)
+    const gates = c.match(/new AskAnswerError\('user_words'/g) ?? []
+    const checked = c.match(/verifyUsersWords\(/g) ?? []
+    expect(gates.length).toBeGreaterThan(0)
+    expect(checked.length).toBe(gates.length)
+    // Found, his words go to the task with the answer.
+    expect(c).toMatch(/usersWordsLine\(usersWords\)/)
+  })
+  it('the check reads his words after the ask, from the task, the caller and threads linked to the task', () => {
+    const c = code('src/core/sessions/user-spoke.ts')
+    expect(c).toMatch(/async function hisWordsAbout[\s\S]*?userOwnWordsIn\(t\)[\s\S]*?linkedThreadWords\(n\.id, target\.id\)/)
+    expect(c).toMatch(/export async function verifyUsersWords[\s\S]*?hisWordsAbout\([\s\S]*?quotesHisMessage\(w, given\)[\s\S]*?Date\.parse\(f\.w\.at\) > sinceMs/)
+    // Only threads about the task, and never a message an agent filed there.
+    expect(c).toMatch(/async function linkedThreadWords[\s\S]*?\(t\.tasks \?\? \[\]\)\.includes\(taskId\)[\s\S]*?m\.via !== 'import'/)
+    // The time is the decision's own (ask_since), stamped by both report writers.
+    expect(code('src/core/sessions/ask-answer.ts')).toMatch(/async function askPutAt[\s\S]*?decisionSinceOf\(target\.status_report\)/)
+    for (const f of ['src/core/sessions/status-question.ts', 'src/core/sessions/report-set.ts']) expect(code(f), f).toMatch(/stampSaidDecision\([\s\S]*?askSinceStamp\(/)
+  })
+})
+
+describe('quoting his message for an ask only he approves', () => {
+  it('is his whole message, or most of it, never his short word inside a longer line', async () => {
+    const { quotesHisMessage, askSinceStamp } = await import('../../../src/core/sessions/user-spoke.js')
+    const w = (text: string) => ({ at: T0, text })
+    expect(quotesHisMessage(w('cahneg'), 'cahneg')).toBe(true)
+    expect(quotesHisMessage(w('cahneg'), 'He wrote "cahneg" in the thread')).toBe(true)
+    expect(quotesHisMessage(w('no'), 'no problem, go ahead and buy it')).toBe(false)
+    expect(quotesHisMessage(w('ok'), 'ok')).toBe(true)
+    expect(quotesHisMessage(w('yes rotate the token and the old key too'), 'yes rotate the token and the old key')).toBe(true)
+    expect(quotesHisMessage(w('yes rotate the token and the old key too, and then tell everyone about the change tonight'), 'yes rotate')).toBe(false)
+    // The decision's start: kept while the same decision (ask_id) is asked, reset by a new one.
+    const prev = { state: 'needs' as const, ask: 'A or B?', ask_id: 'ask-1', at: at(5), ask_since: at(1) }
+    expect(askSinceStamp({ state: 'needs', ask: 'A or B, again?', ask_id: 'ask-1', at: at(9) }, prev)).toBe(at(1))
+    expect(askSinceStamp({ state: 'needs', ask: 'Pay $200?', ask_id: 'ask-2', at: at(9) }, prev)).toBe(at(9))
+  })
+})

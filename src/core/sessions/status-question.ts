@@ -92,6 +92,10 @@ async function saveStatusAnswer(
   // The decision it asks keeps its id across rewordings (ask-decision.ts).
   const { stampSaidDecision } = await import('../ask-decision.js');
   report = stampSaidDecision(report, prev);
+  // ...and when that decision began to be asked: his words for it must follow (user-spoke.ts).
+  const { askSinceStamp } = await import('./user-spoke.js');
+  const askSince = askSinceStamp(report, prev);
+  if (askSince) report = { ...report, ask_since: askSince };
   // It asks only what this turn asked: never an older ask a quiet turn brings back (turn-end-ask.ts).
   const { admitTurnEndAsk } = await import('./turn-end-ask.js');
   const admitted = await admitTurnEndAsk(report, prev, { taskId, sessionId, compactedAt: rec?.lastCompactAt, midTurn: opts.midTurn });

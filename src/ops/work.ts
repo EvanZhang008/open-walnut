@@ -96,6 +96,8 @@ defineOp({
       + 'Without answers_ask, bad_request; without their words, user_words. Stopped or finished tasks are not woken.'),
     user_words: z.string().min(1).max(4000).optional().describe(
       'With answers_ask: the user\'s own words you act on, quoted exactly. Needed on an ask of a kind only the user approves (an outward send, spending, credentials, permissions, a cloud delete, an irreversible step), '
+      + 'where Walnut checks them in its record: they must quote a message he wrote after the ask appeared, in the task\'s chat, your own chat, or a thread linked to the task; '
+      + 'however short, typos included ("cahneg" counts); else 409 user_words says what to do next; '
       + `and after 409 user_spoke_since: ${USER_WORDS_BACK} His messages in that task newer than the words you quote must be quoted too (409 user_spoke_since names them).`),
     force: z.boolean().optional().describe('Send to (or answer) a task that is COMPLETE, which reopens it. Needs `reason`'),
     reason: z.string().min(1).max(500).optional().describe('With force: what changed and why the complete task must act again. Shown to that task and the user'),

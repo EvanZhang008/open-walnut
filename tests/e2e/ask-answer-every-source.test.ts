@@ -14,6 +14,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-ask-answer-e
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
 import { addTask, getTask, updateTask, updateTaskRaw } from '../../src/core/task-manager.js';
+import { userWrote } from '../helpers/user-wrote.js';
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js';
 import { getLetter, sendLetter } from '../../src/core/human-inbox/store.js';
 import { getBoard, setBoardHtml } from '../../src/core/boards/board-store.js';
@@ -139,6 +140,7 @@ describe('answers_ask settles any ask the Needs you shows', () => {
       sender: { sessionId: `sess-wd-${n}`, taskId: t.id },
     } as never);
     await statusOf(t.id, (x) => x.user_status!.state === 'needs' && x.user_status!.source === 'letter');
+    await userWrote(t.id, 'drop the mascot question');
     const r = await answer(t.id, 'The mascot is dropped from the launch.', { withdraw_ask: true, user_words: 'drop the mascot question' });
     expect(r.status, JSON.stringify(r.body)).toBe(202);
     expect(r.body).toMatchObject({ settled: { via: 'letter', letterId: letter.id, settled: true, tell: true }, withdrawn: true });
@@ -164,6 +166,7 @@ describe('answers_ask settles any ask the Needs you shows', () => {
     const t = await worker('Choice to withdraw');
     await setBoardHtml(lead.id, `<html><body><walnut-choice id="host2" title="Which host?" options="mac:Mac,cloud:Cloud" task="${t.id}"></walnut-choice></body></html>`, { by: `task:${lead.id}` });
     await statusOf(t.id, (x) => x.user_status!.state === 'needs' && x.user_status!.source === 'choice');
+    await userWrote(t.id, 'drop the host question');
     const r = await answer(t.id, 'Not needed any more.', { withdraw_ask: true, user_words: 'drop the host question' });
     expect(r.status, JSON.stringify(r.body)).toBe(202);
     expect(r.body).toMatchObject({ delivery: 'settled', withdrawn: true });

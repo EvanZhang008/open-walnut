@@ -9,6 +9,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-ask-answer-t
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
 import { addTask, getTask, updateTaskRaw } from '../../src/core/task-manager.js';
+import { userWrote } from '../helpers/user-wrote.js';
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js';
 import { ensureProjectLead } from '../../src/core/org/org-store.js';
 import { APPROVAL_KINDS } from '../../src/core/same-ask.js';
@@ -104,6 +105,7 @@ describe('answers_ask for the team own code', () => {
     } as never, { source: 'test' });
     expect((await answer(id)).status).toBe(409);
     expect((await getTask(id)).ask_answered?.ask).not.toBe(ask);
+    await userWrote(id, 'yes publish that prepared change request now');
     expect((await answer(id, 'yes publish that prepared change request now')).status).toBe(202);
     expect((await getTask(id)).ask_answered?.ask).toBe(ask);
   });
@@ -161,6 +163,7 @@ describe('answers_ask for the team own code', () => {
     expect(refused.status, JSON.stringify(refused.body)).toBe(409);
     expect(JSON.stringify(refused.body)).toContain('user_words');
     expect((await getTask(id)).ask_answered).toBeUndefined();
+    await userWrote(id, 'yes send that customer email');
     const ok = await answer(id, 'yes send that customer email');
     expect(ok.status, JSON.stringify(ok.body)).toBe(202);
     expect((await getTask(id)).ask_answered).toMatchObject({ by: lead, userWords: 'yes send that customer email' });
