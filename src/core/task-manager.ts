@@ -3833,12 +3833,16 @@ export async function queryTasksSlim(
  * projects every row first: 5k rows on a real board); a cold cache reads only the
  * open rows through the phase index. The rows are the cache's own: never mutate them.
  */
-export async function listOpenTaskViews(max: number): Promise<ReadonlyArray<Readonly<Task>>> {
+export async function listOpenTaskViews(max: number, opts: { completedSince?: string } = {}): Promise<ReadonlyArray<Readonly<Task>>> {
   await ensureInit();
   const view = peekStoreView();
+  // `completedSince`: COMPLETE tasks closed since then come too (a watcher that follows a closed
+  // task's deploy, changes/watch.ts).
+  const since = opts.completedSince;
+  const keep = (t: Task) => t.phase !== 'COMPLETE' || (!!since && (t.completed_at ?? '') >= since);
   const open = view
-    ? view.tasks.filter((t) => t.phase !== 'COMPLETE' && !isRetiredSentinelTitle(t.title))
-    : await queryTasks({ phases: ['TODO', 'WAITING', 'IN_PROGRESS', 'NEED_ACTION'] });
+    ? view.tasks.filter((t) => keep(t) && !isRetiredSentinelTitle(t.title))
+    : (await queryTasks({ phases: since ? ['TODO', 'WAITING', 'IN_PROGRESS', 'NEED_ACTION', 'COMPLETE'] : ['TODO', 'WAITING', 'IN_PROGRESS', 'NEED_ACTION'] })).filter(keep);
   return open
     .slice()
     .sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''))

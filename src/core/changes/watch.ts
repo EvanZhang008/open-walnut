@@ -33,6 +33,22 @@ import { abortableDeadline, DEADLINE_MESSAGE } from './deadline.js'
 export const CHANGE_WATCH_SOURCE = 'change-watch'
 export const CHANGE_WATCH_TICK_MS = 30_000
 const MAX_OPEN_TASKS = 5000
+/** A closed task's changes are followed while they still deploy, for at most this long after the
+ *  close: a pull request that merges completes its task, and its deploy is what the person wants
+ *  to see next. */
+export const CLOSED_FOLLOW_MS = 7 * 24 * 60 * 60_000
+
+/** A link of a COMPLETE task still followed: read once after the close (the merge may have closed
+ *  it), then while its change deploys, until it reaches the end, a stage fails, or the week ends. */
+export function followsAfterClose(task: Pick<Task, 'completed_at' | 'change_status'>, url: string, now: number): boolean {
+  const closed = Date.parse(task.completed_at ?? '')
+  if (!Number.isFinite(closed) || now - closed > CLOSED_FOLLOW_MS) return false
+  const snap = task.change_status?.[url]
+  const read = Date.parse(snap?.checkedAt ?? '')
+  if (!snap || !Number.isFinite(read) || read < closed) return true
+  if (changeSettled(snap) || snap.deploy?.stages.some((s) => s.status === 'failed')) return false
+  return snap.review?.state === 'merged' || !!snap.deploy
+}
 const READS_IN_FLIGHT = 3
 /** A news send that failed is tried again this soon. */
 const RETELL_MS = 2 * 60_000
@@ -160,7 +176,9 @@ async function tickOnce(deps: ChangeWatchDeps, opts: ChangeTickOptions): Promise
   const now = deps.now()
   const wanted = opts.taskIds ? new Set(opts.taskIds) : null
   const all = await deps.openTasks()
-  const tasks = all.filter((t) => (!wanted || wanted.has(t.id)) && t.phase !== 'COMPLETE')
+  const closedFollows = (t: Readonly<Task>) => taskChangeLinks(t.tags).some((l) => followsAfterClose(t, l.url, now))
+  const tasks = all.filter((t) => (!wanted || wanted.has(t.id))
+    && (t.phase !== 'COMPLETE' || (opts.force && wanted) || closedFollows(t)))
 
   const due = new Map<RegisteredChangeProvider, Map<string, ReadLink>>()
   const perTask: Array<{ task: Readonly<Task>; links: Array<{ link: ChangeLink; provider?: RegisteredChangeProvider }> }> = []
@@ -171,8 +189,11 @@ async function tickOnce(deps: ChangeWatchDeps, opts: ChangeTickOptions): Promise
     perTask.push({ task, links })
     for (const { link, provider } of links) {
       if (!provider) continue
+      if (task.phase === 'COMPLETE' && !opts.force && !followsAfterClose(task, link.url, now)) continue
       const snap = task.change_status?.[link.url]
-      const at = dueAt(snap, link.url, now)
+      // Read before the close: the close may have been its merge, so it is read again at once.
+      const readBeforeClose = task.phase === 'COMPLETE' && !!snap && !(Date.parse(snap.checkedAt) >= Date.parse(task.completed_at ?? ''))
+      const at = readBeforeClose && !retryAt.has(link.url) ? 0 : dueAt(snap, link.url, now)
       if (!(opts.force || opts.forceUrls?.has(link.url) || (at !== null && at <= now))) continue
       let set = due.get(provider)
       if (!set) { set = new Map(); due.set(provider, set) }
@@ -199,14 +220,15 @@ async function tickOnce(deps: ChangeWatchDeps, opts: ChangeTickOptions): Promise
   for (const { task, links } of perTask) {
     report.tasks++
     try {
-      await settleTask(deps, task, links, results, now, config.wake_agent !== false, report)
+      // A closed task's session is not woken: its card shows the deploy, and a wake would reopen it.
+      await settleTask(deps, task, links, results, now, config.wake_agent !== false && task.phase !== 'COMPLETE', report)
     } catch (err) {
       log.task.warn('change-watch: task pass failed', { taskId: task.id, error: err instanceof Error ? err.message : String(err) })
     }
   }
   if (!wanted) {
-    // Forget what no open task links any more.
-    const held = new Set(all.filter((t) => t.phase !== 'COMPLETE').flatMap((t) => taskChangeLinks(t.tags).map((l) => l.url)))
+    // Forget what no followed task links any more.
+    const held = new Set(tasks.flatMap((t) => taskChangeLinks(t.tags).map((l) => l.url)))
     for (const map of [lastGood, nextDue, retryAt]) for (const url of map.keys()) if (!held.has(url)) map.delete(url)
   }
   if (report.read || report.written || report.woken) log.task.info('change-watch tick', { ...report })
@@ -336,7 +358,7 @@ export function defaultChangeWatchDeps(): ChangeWatchDeps {
   return {
     async openTasks() {
       const { listOpenTaskViews } = await import('../task-manager.js')
-      return listOpenTaskViews(MAX_OPEN_TASKS)
+      return listOpenTaskViews(MAX_OPEN_TASKS, { completedSince: new Date(Date.now() - CLOSED_FOLLOW_MS).toISOString() })
     },
     async writeTask(id, patch) {
       const { updateTaskRaw } = await import('../task-manager.js')

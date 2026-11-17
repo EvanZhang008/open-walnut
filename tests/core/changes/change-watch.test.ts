@@ -446,3 +446,56 @@ describe('review fixes', () => {
     }
   })
 })
+
+describe('a closed task whose change still deploys', () => {
+  const closed = (extra: Partial<Task> = {}) => ({ phase: 'COMPLETE', completed_at: new Date(T0).toISOString(), ...extra } as Partial<Task>)
+
+  it('is read once after the close, then every 15 minutes while it deploys, without waking its session', async () => {
+    // Its last read was the open review, before the merge that completed it.
+    task('t1', [`cr:${CR1}`], closed({ change_status: { [CR1]: { provider: 'acme:reviews', url: CR1, label: 'CR-1001', review: { state: 'open' }, checkedAt: new Date(T0 - 30 * MIN).toISOString() } } }))
+    answers.set(CR1, deploying([{ name: 'beta', status: 'done' }, { name: 'prod', status: 'running' }]))
+    clock = T0 + MIN
+    await tick()
+    expect(reads).toEqual([[CR1]])
+    expect(snap()!.deploy!.stages[1]!.status).toBe('running')
+
+    clock = T0 + 16 * MIN
+    await tick()
+    expect(reads).toHaveLength(2)
+
+    answers.set(CR1, deploying([{ name: 'beta', status: 'done' }, { name: 'prod', status: 'done' }], true))
+    clock = T0 + 31 * MIN
+    await tick()
+    expect(reads).toHaveLength(3)
+    expect(snap()!.deploy!.done).toBe(true)
+    expect(sent).toEqual([])
+
+    // Deployed to the end: read no more.
+    clock = T0 + 60 * MIN
+    await tick()
+    expect(reads).toHaveLength(3)
+  })
+
+  it('stops at a failed stage, at a review that never merged, and a week after the close', async () => {
+    task('t1', [`cr:${CR1}`], closed())
+    answers.set(CR1, deploying([{ name: 'beta', status: 'failed' }]))
+    clock = T0 + MIN
+    await tick()
+    clock = T0 + 20 * MIN
+    await tick()
+    expect(reads).toEqual([[CR1]])
+
+    task('t2', [`cr:${CR2}`], closed())
+    answers.set(CR2, open())
+    await tick()
+    clock = T0 + 40 * MIN
+    await tick()
+    expect(reads.filter((r) => r.includes(CR2))).toHaveLength(1)
+
+    task('t3', [`cr:${CR1}`, `cr:${CR2}`], closed({ completed_at: new Date(T0 - 8 * 24 * 60 * MIN).toISOString() }))
+    const before = reads.length
+    clock = T0 + 60 * MIN
+    await tick()
+    expect(reads.length).toBe(before)
+  })
+})
