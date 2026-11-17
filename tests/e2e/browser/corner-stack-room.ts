@@ -11,7 +11,12 @@ export const SHOTS = process.env.CORNER_ROOM_SHOTS || 'test-results/corner-stack
  * (approvals.spec.ts), and its card would join this test's stack; the page's first read of them
  * answers none too.
  */
-export async function routeSocket(page: Page, drop: string[] = [], approvals: unknown[] = []): Promise<() => WebSocketRoute | null> {
+export async function routeSocket(
+  page: Page, drop: string[] = [], approvals: unknown[] = [],
+  /** A frame this page must not see (a spec that answers the task list passes the shared
+   *  foreignTaskFrame filter from task-list-stub.ts, so another worker's task never lands here). */
+  skip?: (text: string) => boolean,
+): Promise<() => WebSocketRoute | null> {
   let socket: WebSocketRoute | null = null
   const dropped = [...drop, 'approval:changed']
   // This page's own approvals only (none unless a test passes its own): one a parallel spec makes on
@@ -23,6 +28,7 @@ export async function routeSocket(page: Page, drop: string[] = [], approvals: un
     socket = route
     const server = route.connectToServer()
     server.onMessage((message) => {
+      if (skip?.(String(message))) return
       try {
         const frame = JSON.parse(String(message)) as { type?: string; name?: string }
         if (frame.type === 'event' && dropped.includes(frame.name ?? '')) return

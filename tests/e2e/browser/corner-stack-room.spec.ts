@@ -25,6 +25,9 @@ import {
   routeSocket, SHOTS, unreachableUnderStack as unreachable,
 } from './corner-stack-room'
 import { BOTTOM_LEFT, stackPlace, taskbarLift } from './corner-stack-place'
+import { foreignTaskFrame } from './task-list-stub'
+
+const NO_TASKS: ReadonlySet<string> = new Set()
 
 test.describe.configure({ timeout: 300_000 })
 
@@ -147,7 +150,8 @@ for (const height of [800, 560]) {
       await route.fulfill({ json: { tasks: [], groups: [], completedHidden: 0 } })
     })
     await page.route('**/api/system/health', (route) => route.fulfill({ json: MISSING_HEALTH }))
-    const sock = await routeSocket(page, ['system:health', 'task:created', 'task:updated'])
+    // The list answers no task, so every frame about one is another worker's (task-list-stub.ts).
+    const sock = await routeSocket(page, ['system:health'], [], (text) => foreignTaskFrame(text, NO_TASKS))
     await openHome(page, sock, 'overlay', '[data-testid="first-use-in-tasks"] [data-testid="first-use-setup"]')
     const card = page.getByTestId('first-use-in-tasks')
     const cardBox = await card.boundingBox()
