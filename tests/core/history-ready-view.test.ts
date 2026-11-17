@@ -39,7 +39,7 @@ import {
 } from '../../src/core/history-ready-view.js';
 import {
   _resetHistoryViewsForTesting, flushHistoryViewsForTesting, readHistoryView, readHistoryViewMeta,
-  saveHistoryView, deleteHistoryView, historyViewGeneration, beginHistoryViewRead, pruneHistoryViews,
+  saveHistoryView, deleteHistoryView, historyViewGeneration, beginHistoryViewRead, pruneHistoryViews, FIRST_PAINT_SHAPE_GRACE,
 } from '../../src/core/history-view-snapshot.js';
 import { HISTORY_PARSER_VERSION } from '../../src/core/history-parser-version.js';
 import { HISTORY_CACHE_SCHEMA, rewindCutsKey, type SessionHistoryMessage } from '../../src/core/history-parse.js';
@@ -164,6 +164,28 @@ describe('an answer', () => {
     expect(d.rewritten).toEqual([]);
   });
 
+  it('a first paint shows a daemon a little behind (older schema or parser) and keeps nothing of it (2026-11-17)', async () => {
+    for (const over of [{ parser: '0000000000000000' }, { schema: HISTORY_CACHE_SCHEMA - 1, parser: 'older' }, { schema: HISTORY_CACHE_SCHEMA - FIRST_PAINT_SHAPE_GRACE }]) {
+      const out = await fetchReadyView(record(), { interactive: true, deps: deps(fakeConn(() => readyAnswer([row(0)], over))) });
+      expect(out.kind === 'rows' && out.rows.messages[0]!.text).toBe('row 0');
+    }
+    const far = await fetchReadyView(record(), { interactive: true, deps: deps(fakeConn(() => readyAnswer([row(0)], { schema: HISTORY_CACHE_SCHEMA - FIRST_PAINT_SHAPE_GRACE - 1 }))) });
+    expect(far).toEqual({ kind: 'unavailable', reason: 'schema' });
+    await flushHistoryViewsForTesting();
+    expect(await readHistoryView('rv-session')).toBeNull();
+  });
+
+  it('a kept view of a recent older shape still paints first; an older or a newer one does not', async () => {
+    fs.mkdirSync(viewsDir, { recursive: true });
+    const put = (sid: string, schema: number) => fs.writeFileSync(path.join(viewsDir, `${sid}.json`), JSON.stringify({ schema, messages: [row(0)], total: 1, savedAt: new Date().toISOString() }));
+    put('rv-shape-1', HISTORY_CACHE_SCHEMA - 1);
+    put('rv-shape-far', HISTORY_CACHE_SCHEMA - FIRST_PAINT_SHAPE_GRACE - 1);
+    put('rv-shape-new', HISTORY_CACHE_SCHEMA + 1);
+    expect((await readHistoryView('rv-shape-1'))?.messages).toHaveLength(1);
+    expect(await readHistoryView('rv-shape-far')).toBeNull();
+    expect(await readHistoryView('rv-shape-new')).toBeNull();
+  });
+
   it('another schema, another parser, other cuts or a broken payload is never kept', async () => {
     const cases: Array<[Record<string, unknown>, string]> = [
       [readyAnswer([row(0)], { schema: HISTORY_CACHE_SCHEMA + 1 }), 'schema'],
@@ -177,6 +199,12 @@ describe('an answer', () => {
       [{ ok: false, error: 'boom' }, 'boom'],
     ];
     for (const [answer, reason] of cases) {
+      // A background fetch keeps views: never one of another parse.
+      const out = await fetchReadyView(record(), { interactive: false, deps: deps(fakeConn(() => answer)) });
+      expect(out).toEqual({ kind: 'unavailable', reason });
+    }
+    // A first paint (interactive, never kept) refuses a newer shape and anything broken...
+    for (const [answer, reason] of cases.filter(([, r]) => r !== 'parser')) {
       const out = await fetchReadyView(record(), { interactive: true, deps: deps(fakeConn(() => answer)) });
       expect(out).toEqual({ kind: 'unavailable', reason });
     }

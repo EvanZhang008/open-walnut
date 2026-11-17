@@ -209,13 +209,28 @@ async function flush(sessionId: string): Promise<void> {
   if (Date.now() - lastPruneAt > PRUNE_EVERY_MS) { lastPruneAt = Date.now(); void pruneHistoryViews(); }
 }
 
-/** The session's kept view: memory, else disk; null when none or written by another parse shape. */
+/**
+ * Parse shapes a first paint still shows: this one and the FIRST_PAINT_SHAPE_GRACE before it. A
+ * view is only a picture until the full read replaces it, so one a parse change made slightly
+ * wrong (a row the new parse hides, shown for a second) costs far less than an open with nothing
+ * to show (2026-11-17: schema 14 -> 15 made 243 of 603 kept views unreadable at once, and every
+ * remote host's daemon answered in the old shape until it updated). A newer shape (a downgrade) is
+ * never shown.
+ */
+export const FIRST_PAINT_SHAPE_GRACE = 2;
+export function firstPaintShape(schema: unknown): boolean {
+  return typeof schema === 'number' && Number.isInteger(schema)
+    && schema <= HISTORY_CACHE_SCHEMA && schema >= HISTORY_CACHE_SCHEMA - FIRST_PAINT_SHAPE_GRACE;
+}
+
+/** The session's kept view: memory, else disk; null when none or written by a parse shape a first
+ *  paint does not show (firstPaintShape). */
 export async function readHistoryView(sessionId: string): Promise<HistoryViewSnapshot | null> {
   const hot = memory.get(sessionId);
   if (hot) { touchView(sessionId); return hot; }
   try {
     const parsed = JSON.parse(await fsp.readFile(viewPath(sessionId), 'utf-8'));
-    if (parsed?.schema !== HISTORY_CACHE_SCHEMA || !Array.isArray(parsed.messages) || parsed.messages.length === 0) return null;
+    if (!firstPaintShape(parsed?.schema) || !Array.isArray(parsed.messages) || parsed.messages.length === 0) return null;
     const { schema: _schema, ...view } = parsed as HistoryViewSnapshot & { schema: number };
     if (typeof view.total !== 'number') return null;
     remember(sessionId, view);

@@ -27,7 +27,7 @@ import { log } from '../logging/index.js';
 import type { SessionRecord } from './types.js';
 import { HISTORY_CACHE_SCHEMA, rewindCutsKey, type SessionHistoryMessage } from './history-parse.js';
 import { legacyHintCutoff } from './sessions/legacy-hint-lines.js';
-import { beginHistoryViewRead, historyViewGeneration, olderThanKept, readHistoryViewMeta, saveHistoryView, type HistoryViewRead } from './history-view-snapshot.js';
+import { beginHistoryViewRead, firstPaintShape, historyViewGeneration, olderThanKept, readHistoryViewMeta, saveHistoryView, type HistoryViewRead } from './history-view-snapshot.js';
 import { HISTORY_PARSER_VERSION } from './history-parser-version.js';
 import { HISTORY_OPEN_SCREEN_ROWS } from './history-open-preview.js';
 import { isUnsettledRow } from './history-delta.js';
@@ -194,9 +194,13 @@ export async function fetchReadyView(
   if (res.status === 'unchanged' && typeof res.key === 'string') return { kind: 'unchanged', key: res.key };
   if (res.status !== 'ready') return { kind: 'unavailable', reason: `${String(res.status)}:${String(res.reason ?? '')}` };
   // Another parse (a host on an older or newer daemon: shape or behaviour) or other cuts: never a
-  // view of this server's.
-  if (res.schema !== HISTORY_CACHE_SCHEMA) return { kind: 'unavailable', reason: 'schema' };
-  if (res.parser !== HISTORY_PARSER_VERSION) return { kind: 'unavailable', reason: 'parser' };
+  // view of this server's. A first paint (interactive, never kept) still shows a recent older
+  // shape: the full read replaces it, and a host's daemon can lag the server for hours
+  // (firstPaintShape, 2026-11-17).
+  const sameShape = res.schema === HISTORY_CACHE_SCHEMA && res.parser === HISTORY_PARSER_VERSION;
+  if (!sameShape && !(opts.interactive && firstPaintShape(res.schema))) {
+    return { kind: 'unavailable', reason: res.schema !== HISTORY_CACHE_SCHEMA ? 'schema' : 'parser' };
+  }
   if (res.cutsKey !== rewindCutsKey(cuts)) return { kind: 'unavailable', reason: 'cuts' };
   if (typeof res.key !== 'string') return { kind: 'unavailable', reason: 'malformed' };
   const decoded = await decodeReadyRowsCapped(res.rowsGz);
