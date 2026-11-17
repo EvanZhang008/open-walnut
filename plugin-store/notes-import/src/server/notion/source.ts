@@ -9,7 +9,7 @@
  */
 import type { NoteSource, RenderContext, RenderedNote, SourceAccount, SourceItem } from '../types'
 import { BlockRenderer, type NotionBlock } from './blocks'
-import type { NotionClient } from './client'
+import { NotionError, type NotionClient } from './client'
 import { propertyToMarkdown, titleOfProperties, type NotionProperty } from './properties'
 import { dashed, plainText, richTextToMarkdown, type InlineContext, type RichText } from './rich-text'
 
@@ -183,11 +183,34 @@ export class NotionSource implements NoteSource {
   }
 
   async lookup(id: string, signal: AbortSignal): Promise<SourceItem | null> {
-    const page = await this.client.request<NotionPage>('GET', `/v1/pages/${dashed(id)}`, undefined, signal)
+    // A database found only as a block (an inline one, or a view of another database, which a
+    // search for data sources does not list) is asked for as a database: Notion answers its id on
+    // the pages route with a 400 ("is a database, not a page").
+    const page = await this.client.request<NotionPage>('GET', `/v1/pages/${dashed(id)}`, undefined, signal).catch((error) => {
+      if (error instanceof NotionError && error.status === 400) return undefined
+      throw error
+    })
+    if (page === undefined) return this.lookupDatabase(dashed(id), signal)
     if (!page || page.in_trash || page.archived) return null
     this.pages.set(dashed(page.id), page)
     this.titles.set(dashed(page.id), titleOfProperties(page.properties) || 'Untitled')
     return this.pageItem(page, await this.parentOf(page.parent, signal))
+  }
+
+  private async lookupDatabase(id: string, signal: AbortSignal): Promise<SourceItem | null> {
+    const database = await this.client.request<{ title?: RichText[]; parent?: NotionParent; in_trash?: boolean; archived?: boolean; created_time?: string; last_edited_time?: string }>('GET', `/v1/databases/${id}`, undefined, signal)
+    if (!database || database.in_trash || database.archived) return null
+    const title = plainText(database.title ?? []).trim() || this.titles.get(id) || 'Untitled database'
+    this.titles.set(id, title)
+    return {
+      id,
+      kind: 'database',
+      title,
+      parentId: await this.parentOf(database.parent, signal),
+      editedAt: database.last_edited_time ?? '',
+      createdAt: database.created_time ?? '',
+      url: notionUrl(id),
+    }
   }
 
   /** A block's children, with their own children, all the way down (sub-pages are their own notes). */

@@ -43,7 +43,7 @@ export const r = rt
 
 export class FakeNotion {
   pages = new Map<string, FakePage>()
-  dataSources = new Map<string, { id: string; databaseId: string; title: string; parent: Json; edited: string; created: string; schema: Json }>()
+  dataSources = new Map<string, { id: string; databaseId: string; title: string; parent: Json; edited: string; created: string; schema: Json; hidden?: boolean }>()
   blockChildren = new Map<string, Json[]>()
   files = new Map<string, { bytes: Uint8Array; type: string }>()
   calls: string[] = []
@@ -118,7 +118,7 @@ export class FakeNotion {
       const kind = body?.filter?.value
       const cursor = body?.start_cursor
       if (kind === 'data_source') {
-        return { status: 200, json: this.list([...this.dataSources.values()].map((ds) => ({
+        return { status: 200, json: this.list([...this.dataSources.values()].filter((ds) => !ds.hidden).map((ds) => ({
           object: 'data_source', id: ds.id, title: [rt(ds.title)], description: [rt(`About ${ds.title}`)],
           created_time: ds.created, last_edited_time: ds.edited, parent: { type: 'database_id', database_id: ds.databaseId },
           database_parent: ds.parent, properties: ds.schema,
@@ -144,13 +144,17 @@ export class FakeNotion {
     m = /^\/v1\/pages\/([^/]+)$/.exec(path)
     if (method === 'GET' && m) {
       const page = this.pages.get(m[1])
+      if (!page && [...this.dataSources.values()].some((ds) => ds.databaseId === m![1])) {
+        // As Notion answers a database id on the pages route.
+        return { status: 400, json: { object: 'error', code: 'validation_error', message: `Provided ID ${m[1]} is a database, not a page. Use the retrieve database API instead.` } }
+      }
       return page ? { status: 200, json: this.pageObject(page) } : { status: 404, json: { code: 'object_not_found' } }
     }
     m = /^\/v1\/databases\/([^/]+)$/.exec(path)
     if (method === 'GET' && m) {
       const sources = [...this.dataSources.values()].filter((ds) => ds.databaseId === m![1])
       if (!sources.length) return { status: 404, json: {} }
-      return { status: 200, json: { object: 'database', id: m[1], title: [rt(sources[0].title)], data_sources: sources.map((ds) => ({ id: ds.id, name: ds.title })) } }
+      return { status: 200, json: { object: 'database', id: m[1], title: [rt(sources[0].title)], parent: sources[0].parent, created_time: sources[0].created, last_edited_time: sources[0].edited, data_sources: sources.map((ds) => ({ id: ds.id, name: ds.title })) } }
     }
     m = /^\/v1\/data_sources\/([^/]+)$/.exec(path)
     if (method === 'GET' && m) {

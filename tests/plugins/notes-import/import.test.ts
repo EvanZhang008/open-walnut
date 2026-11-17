@@ -328,6 +328,30 @@ describe('notion import', () => {
     }
   })
 
+  it('a database found only as a block, cut off by a restart, comes back on the next run', async () => {
+    // 2026-11-17, a real import: inline databases that a search for data sources does not list were
+    // found while rendering their page; restarts cut the runs before they were written, and later
+    // runs asked for them by id on the pages route, which answers a database id with a 400.
+    const ctx = setup()
+    const ds = ctx.notion.dataSources.get(ctx.ids.ds)!
+    ds.hidden = true
+    for (const id of [ctx.ids.row1, ctx.ids.row2]) ctx.notion.pages.get(id)!.hidden = true
+    await run(ctx)
+    const whole = [...ctx.fake.notes.keys()].sort()
+    const under = `${FOLDER}/Home/Tasks/`
+    expect(whole.filter((p) => p.startsWith(under)).length).toBeGreaterThan(1)
+    // The cut: the database and its rows were never written, and nothing of them is on record.
+    const rows = await ctx.mapping.all(FOLDER, 'notion')
+    const files = await ctx.mapping.files(FOLDER, 'notion')
+    for (const p of whole) if (p.startsWith(under)) ctx.fake.notes.delete(p)
+    freshRecords(ctx)
+    for (const [id, row] of rows) if (!row.path.startsWith(under)) await ctx.mapping.put(FOLDER, 'notion', id, row)
+    for (const [key, path] of files) await ctx.mapping.putFile(FOLDER, 'notion', key, path)
+    const again = await run(ctx)
+    expect(again.counts.failed).toBe(0)
+    expect([...ctx.fake.notes.keys()].sort()).toEqual(whole)
+  })
+
   it('a link written before its page became a folder note leads to the folder note on the next run', async () => {
     // A run found a page's sub-pages while rendering it and made it a folder note, then a restart
     // cut the run before its end-of-run pass pointed the parent's link there.
