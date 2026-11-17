@@ -335,7 +335,7 @@ export function areaIdWords(id: string): string {
   return words ? words[0].toUpperCase() + words.slice(1) : id;
 }
 
-/** A router row's line: its area (by name once known), Paused or Ready, how many VPs it works with first. */
+/** A router row's line: its area (by name once known), Paused or Ready, how many VPs it is shown beside. */
 export function routerLine(task: Pick<Task, 'router_area_id' | 'router_paused' | 'router_links'>, areaNames: Readonly<Record<string, string>> = {}): string {
   const area = task.router_area_id ? areaNames[task.router_area_id] || areaIdWords(task.router_area_id) : 'Area not configured';
   return `${area} · ${routerStateWord(task.router_paused !== false, true)} · ${vpLinkCount(new Set(task.router_links ?? []).size)}`;

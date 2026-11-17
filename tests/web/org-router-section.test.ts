@@ -280,12 +280,13 @@ describe('router settings: what a save sends and what the form says', () => {
     expect(routerSummary('', { name: 'n', links: [], paused: true }, 0)).toBe('Area not configured · Paused · 0 VP links')
   })
 
-  it('says links are collaboration, not ownership or access, and an unpaused router is only ready', () => {
-    expect(ROUTER_LINK_NOTE).toMatch(/no ownership/)
+  it('says links only place it on the Org page, never steer routing or give access, and an unpaused router is only ready', () => {
+    // 2026-11-17: no VP tier in routing; a link only shows the router beside its VPs.
+    expect(ROUTER_LINK_NOTE).toMatch(/never steer where an item goes/)
     expect(ROUTER_LINK_NOTE).toMatch(/no access/)
     // 2026-11-14: the router is the triage and hands each item straight to its owner.
     expect(ROUTER_READY_LINE).toMatch(/^Ready\./)
-    expect(ROUTER_READY_LINE).toMatch(/hands it straight to the task or VP/)
+    expect(ROUTER_READY_LINE).toMatch(/hands it straight to the task that owns it/)
   })
 })
 

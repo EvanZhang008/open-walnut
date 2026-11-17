@@ -139,10 +139,13 @@ export async function sendRoute(route: RouterRoute, text: string): Promise<unkno
   try {
     return await performSessionSend({
       to: taskId, text, title, expectReply: false, messageId: route.messageId,
-      callerSid: 'external', source: ROUTER_SEND_SOURCE, callerLabel: 'Router',
+      callerSid: 'external', source: 'api-agent', callerLabel: 'Router',
     });
   } catch (error) {
     if (!(error instanceof SendError) || error.code !== 'task_has_no_session') throw error;
+    // A live session's send reopens a finished owner itself; a session that starts with the item
+    // does not (its start is no deliberate reopen), so the task would take it and stay finished.
+    await reopenFinishedOwner(taskId);
     // Framed here so its first turn reads "from Walnut (Router)" like every later delivery, never as a person's words.
     const { frameAsWalnut } = await import('../sessions/send-frame.js');
     return await startSessionForTask({
@@ -152,8 +155,16 @@ export async function sendRoute(route: RouterRoute, text: string): Promise<unkno
   }
 }
 
-/** The send source of a delivery: one that reopens a finished task (phase.ts REOPENING_SEND_SOURCES), so a finished owner takes the item up again. */
-export const ROUTER_SEND_SOURCE = 'api-agent';
+/**
+ * A finished owner takes the item up again (2026-11-17: a task found by search owns its item,
+ * open or finished): reopened as a message with more work reopens it. Whether it changed.
+ */
+export async function reopenFinishedOwner(taskId: string): Promise<boolean> {
+  const [{ getTask }, { applySessionPhase }] = await Promise.all([import('../task-manager.js'), import('../phase.js')]);
+  const task = await getTask(taskId).catch(() => undefined);
+  if (task?.phase !== 'COMPLETE') return false;
+  return (await applySessionPhase(taskId, 'session:input', ROUTER_START_SOURCE, { reopenTerminal: true })).changed;
+}
 
 /** The start source of a task the router wakes with its item (never the router wake's own source). */
 export const ROUTER_START_SOURCE = 'router-delivery';

@@ -8,9 +8,9 @@
  * The dialog shows the area (set at creation, read only), the mailboxes it reads, the folders it
  * watches (picked from the mailboxes' own folder lists, RouterFolderPicker), which messages of each
  * chat account it takes (direct messages, mentions, watched channels), its name, Paused, and
- * the VPs it works with first; Save sends PATCH /api/v1/org/routers/:id with the changed fields only.
+ * the VPs it is shown beside; Save sends PATCH /api/v1/org/routers/:id with the changed fields only.
  *
- * A link is preferred collaboration, never ownership and never access to a VP's data. A link that
+ * A link only places it on the Org page: it never steers routing, never ownership and never access to a VP's data. A link that
  * names a task which is no longer an open VP (closed, no longer a VP, or not found) is shown as such,
  * still checked, so the user sees it and can drop it.
  *
@@ -87,7 +87,7 @@ export interface RouterLinkRow {
 
 export const ROUTER_NAME_MAX = 60;
 export const ROUTER_PAUSED_LINE = 'Paused. It reads no incoming items until you turn Paused off.';
-export const ROUTER_READY_LINE = 'Ready. It reads each new item of its accounts and hands it straight to the task or VP that owns it.';
+export const ROUTER_READY_LINE = 'Ready. It reads each new item of its accounts and hands it straight to the task that owns it.';
 /** Window event (detail: the router's task id) that opens that router's settings section. */
 export const ROUTER_SETTINGS_OPEN_EVENT = 'org:router-settings-open';
 
@@ -99,7 +99,7 @@ const SOURCE_KIND_WORDS: Record<string, string> = { mail: 'Mail', slack: 'Slack'
 
 export const ROUTER_NO_FILTER_LINE = 'Tick at least one kind of message for each chat account, or pause the router.';
 
-export const ROUTER_LINK_NOTE = 'Links name the VPs it works with first. A link gives no ownership and no access to a VP\'s data.';
+export const ROUTER_LINK_NOTE = 'Links show it beside these VPs on the Org page. They never steer where an item goes, and give no access to a VP\'s data.';
 
 /** The router's saved settings, as the form's baseline. */
 export function routerBaseline(task: Pick<Task, 'org_name' | 'title' | 'router_links' | 'router_paused'>, folders: readonly string[] = [],

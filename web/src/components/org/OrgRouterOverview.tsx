@@ -52,7 +52,7 @@ const REFRESH_MS = 60_000;
 
 /** What a router is, in its own words (the page's first line). */
 export function routerWhatLine(title: string, area: string): string {
-  return `${title} reads the mail and messages that reach ${area} and hands each one to the task or VP that should own it. It does none of the work itself.`;
+  return `${title} reads the mail and messages that reach ${area} and hands each one to the task that owns it, found by searching all tasks. It does none of the work itself.`;
 }
 
 function everyWords(ms: number | undefined): string {

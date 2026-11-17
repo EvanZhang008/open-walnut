@@ -22,7 +22,7 @@ const base = (extra: Partial<Summary> = {}): Summary => ({
 
 describe('router overview words', () => {
   it('says what a router does in one line, naming its area', () => {
-    expect(routerWhatLine('Personal mail router', 'Personal')).toBe('Personal mail router reads the mail and messages that reach Personal and hands each one to the task or VP that should own it. It does none of the work itself.')
+    expect(routerWhatLine('Personal mail router', 'Personal')).toBe('Personal mail router reads the mail and messages that reach Personal and hands each one to the task that owns it, found by searching all tasks. It does none of the work itself.')
   })
 
   it('reads a running router with nothing assigned as running, with no email and how to give it mail', () => {

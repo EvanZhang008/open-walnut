@@ -1,7 +1,7 @@
 /**
  * The Org page's "New router" form (POST /api/v1/org/routers). A router is its own node beside the
- * VPs, not a VP: it may work closely with none, one or several VPs, and a link is preferred
- * collaboration, never ownership and never access to a VP's data. It is created paused; once made,
+ * VPs, not a VP: it may be shown beside none, one or several VPs. A link only places it on the
+ * Org page: it never steers routing, never ownership and never access to a VP's data. It is created paused; once made,
  * the page selects it and its own settings (OrgRouterSettings) edit its name, links and Paused.
  *
  * The fields are one draft (useDraftValue), so a failed create or a reload keeps what was typed.

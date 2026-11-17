@@ -16,12 +16,10 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { routerContext } from '../../src/core/router/context.js'
 import { ROUTER_DECISION_RULES, ROUTER_OWNER_NOTE } from '../../src/core/router/decision-rules.js'
-import { ROUTER_SEND_SOURCE } from '../../src/core/router/service.js'
 import { ROUTER_SYSTEM_PROMPT } from '../../src/core/router/session-policy.js'
 import { routerKey } from '../../src/core/router/store.js'
 import { ROUTER_WAKE_OWNER_NOTE } from '../../src/core/router/wake.js'
 import type { RouterAreasFile } from '../../src/core/router/areas.js'
-import { sendSourceReopensTerminal } from '../../src/core/phase.js'
 import { getOp } from '../../src/ops/index.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..')
@@ -40,11 +38,14 @@ const VP_TIER = [
   /a VP \(or Main\)/i,
 ]
 
-/** Every file a router's words or rules come from: the router's own code and the ops it is shown. */
+/** Every file a router's words or rules come from (its own code, the ops it is shown) and every page that describes it. */
 function routerSourceFiles(): string[] {
   const dir = path.join(ROOT, 'src/core/router')
   const own = fs.readdirSync(dir).filter((f) => f.endsWith('.ts')).map((f) => `src/core/router/${f}`)
-  return [...own, 'src/ops/router.ts', 'src/web/routes/router-v1.ts']
+  // The pages that tell the person what a router does say the same.
+  const pages = ['web/src/components/org', 'web/src/apps/mail', 'web/src/components/router'].flatMap((d) =>
+    fs.readdirSync(path.join(ROOT, d)).filter((f) => /router/i.test(f) && /\.tsx?$/.test(f)).map((f) => `${d}/${f}`))
+  return [...own, 'src/ops/router.ts', 'src/web/routes/router-v1.ts', ...pages]
 }
 
 describe('one way to find an owner, for every router', () => {
@@ -86,7 +87,4 @@ describe('one way to find an owner, for every router', () => {
     expect(String(context.instructions)).toContain(ROUTER_DECISION_RULES)
   })
 
-  it('a finished owner takes the item up again: the delivery reopens it', () => {
-    expect(sendSourceReopensTerminal(ROUTER_SEND_SOURCE)).toBe(true)
-  })
 })

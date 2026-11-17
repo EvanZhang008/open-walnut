@@ -95,7 +95,7 @@ export function MailRouterSettings() {
   if (!accounts || areasRead === 'pending') return <p className="mail-router-empty" data-testid="mail-router-settings">Reading the mailboxes…</p>;
   return (
     <div className="mail-router-settings" data-testid="mail-router-settings">
-      <p className="mail-router-lead">Each mailbox comes with a router. It reads the new mail in the folders it watches and hands each one to the task or VP that owns it.</p>
+      <p className="mail-router-lead">Each mailbox comes with a router. It reads the new mail in the folders it watches and hands each one to the task that owns it.</p>
       {blocks.length === 0 && unrouted.length === 0 && <p className="mail-router-empty">No mailbox yet. Add one in Mail.</p>}
       {blocks.map((block) => <MailRouterBlockView key={block.routerId} block={block} router={(tasks ?? []).find((t) => t.id === block.routerId)} tasks={tasks ?? []} tasksLoading={!tasks} />)}
       {unrouted.length > 0 && (
