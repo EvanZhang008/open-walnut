@@ -1,8 +1,9 @@
 /**
  * scripts/browser-baseline.mjs: the browser suite's known-failures gate. It fails
- * only on a failure the committed list does not name, or on an error outside a
- * test; a flaky test passes, a test that never ran is neutral, and `record` only
- * adds (a passing known failure leaves only with --prune).
+ * only on a failure the committed list does not name, on an error outside a test,
+ * or on a test a shard that ran out of time never finished; a flaky test passes, a
+ * test that never ran otherwise is neutral, and `record` only adds (a passing known
+ * failure leaves only with --prune).
  */
 import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -10,7 +11,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
-import { isSerialSpec, judge, mergeReports, RECHECK_MAX, recheckLocations, recordBaseline, reportFiles } from '../../scripts/browser-baseline.mjs'
+import { isSerialSpec, judge, mergeReports, RECHECK_MAX, recheckPlan, recordBaseline, reportFiles } from '../../scripts/browser-baseline.mjs'
 
 const ROOT = path.resolve(__dirname, '../..')
 const SCRIPT = path.join(ROOT, 'scripts/browser-baseline.mjs')
@@ -29,6 +30,27 @@ function report(files: Record<string, Record<string, Status>>) {
         tests: [{ status, results: status === 'unexpected' ? [{ error: { message: `\x1b[31mError: ${title} broke\x1b[39m\nstack` } }] : [] }],
       })),
     })),
+  }
+}
+
+/** A shard whose run hit its --global-timeout, in the shape CI's shard 16 left (run 43992779080,
+ *  2026-11-17): the timeout's two lines, a test that failed, one that passed, one skipped by
+ *  test.skip(), two a serial file skipped after a failure, one cut off and two never started. */
+function timedOutShard() {
+  const r = report({
+    'busy.spec.ts': { broke: 'unexpected', ok: 'expected', skippedByCode: 'skipped' },
+    'serial.spec.ts': { after1: 'skipped', after2: 'skipped' },
+    'late.spec.ts': { cut: 'skipped', never1: 'skipped' },
+    'later.spec.ts': { never2: 'skipped' },
+  })
+  const t = (file: string, title: string) => r.suites.find((s) => s.file === file)!.specs.find((sp) => sp.title === title)!.tests[0]! as { results: unknown[]; annotations?: unknown[] }
+  t('busy.spec.ts', 'skippedByCode').results = [{ status: 'skipped' }]
+  t('busy.spec.ts', 'skippedByCode').annotations = [{ type: 'skip' }]
+  for (const title of ['after1', 'after2']) t('serial.spec.ts', title).results = [{ status: 'skipped' }, { status: 'skipped' }]
+  t('late.spec.ts', 'cut').results = [{ status: 'interrupted' }]
+  return {
+    ...r,
+    errors: [{ message: 'Timed out waiting 2700s for the test suite to run' }, { message: 'Timed out waiting 2700s for the teardown for test suite to run' }],
   }
 }
 
@@ -107,6 +129,16 @@ describe('mergeReports', () => {
     expect(mergeReports([r]).tests.get('a.spec.ts :: cut')?.status).toBe('skipped')
   })
 
+  it('names a shard that ran out of time with the tests it never finished, and no other skip', () => {
+    const { timedOut, errors, tests } = mergeReports([report({ 'a.spec.ts': { x: 'unexpected' } }), timedOutShard()], ['browser-1.json', 'browser-16.json'])
+    expect(errors).toEqual([])
+    expect(timedOut).toEqual([{ name: 'browser-16.json', unfinished: ['late.spec.ts :: cut', 'late.spec.ts :: never1', 'later.spec.ts :: never2'] }])
+    expect(tests.get('a.spec.ts :: x')).toMatchObject({ from: 'browser-1.json', failures: 1 })
+    expect(tests.get('busy.spec.ts :: broke')?.from).toBe('browser-16.json')
+    // A shard that finished in time leaves nothing, however many tests it skipped.
+    expect(mergeReports([report({ 'b.spec.ts': { never: 'skipped' } })]).timedOut).toEqual([])
+  })
+
   it('keys a test by the spec file that ran it, not the helper it is written in', () => {
     const shared = (file: string, status: Status) => ({ title: file, file, specs: [{ title: 'records', file: 'stt-helpers.ts', tests: [{ status, results: [] }] }] })
     const { tests } = mergeReports([{ suites: [shared('stt.spec.ts', 'expected'), shared('stt.webkit.spec.ts', 'unexpected')] }])
@@ -115,31 +147,31 @@ describe('mergeReports', () => {
   })
 })
 
-describe('recheckLocations', () => {
+describe('recheckPlan', () => {
   it('names each new failure where it is written, once, and no known one', () => {
     const { tests, errors } = mergeReports([
       report({ 'a.spec.ts': { old: 'unexpected', fresh: 'unexpected', ok: 'expected' }, 'b.spec.ts': { other: 'unexpected' } }),
     ])
-    expect(recheckLocations(['a.spec.ts :: old'], tests, errors)).toEqual(['a.spec.ts:20', 'b.spec.ts:10'])
+    expect(recheckPlan(['a.spec.ts :: old'], tests, errors).locations).toEqual(['a.spec.ts:20', 'b.spec.ts:10'])
   })
 
   it('a test a helper defines is run again by its spec file', () => {
     const r = report({ 'a.spec.ts': { fresh: 'unexpected' } })
     r.suites[0]!.specs[0]!.file = 'helpers/shared.ts'
     const { tests, errors } = mergeReports([r])
-    expect(recheckLocations([], tests, errors)).toEqual(['a.spec.ts'])
+    expect(recheckPlan([], tests, errors).locations).toEqual(['a.spec.ts'])
   })
 
   it('runs a new failure of a serial file again with its whole file, since its tests build on the earlier ones', () => {
     const { tests, errors } = mergeReports([
       report({ 'serial.spec.ts': { connect: 'expected', popup: 'unexpected', png: 'unexpected' }, 'plain.spec.ts': { fresh: 'unexpected' } }),
     ])
-    expect(recheckLocations([], tests, errors, (f) => f === 'serial.spec.ts')).toEqual(['plain.spec.ts:10', 'serial.spec.ts'])
+    expect(recheckPlan([], tests, errors, (f) => f === 'serial.spec.ts').locations).toEqual(['plain.spec.ts:10', 'serial.spec.ts'])
     // A helper's test names its file whole; that file's line-located failures add nothing.
     const h = report({ 'mixed.spec.ts': { shared: 'unexpected', own: 'unexpected' } })
     h.suites[0]!.specs[0]!.file = 'helpers/shared.ts'
     const mixed = mergeReports([h])
-    expect(recheckLocations([], mixed.tests, mixed.errors, () => false)).toEqual(['mixed.spec.ts'])
+    expect(recheckPlan([], mixed.tests, mixed.errors, () => false).locations).toEqual(['mixed.spec.ts'])
   })
 
   it('reads a spec file as serial from its source, in either form', () => {
@@ -159,13 +191,35 @@ describe('recheckLocations', () => {
     expect(isSerialSpec('extension-agent-outward.spec.ts', path.join(ROOT, 'tests/e2e/browser'))).toBe(true)
   })
 
-  it('names none when the suite did not run cleanly, or when more than RECHECK_MAX are new (a real break)', () => {
-    const many = Object.fromEntries(Array.from({ length: RECHECK_MAX + 1 }, (_, i) => [`t${i}`, 'unexpected' as Status]))
-    const broke = mergeReports([report({ 'a.spec.ts': many })])
-    expect(recheckLocations([], broke.tests, broke.errors)).toEqual([])
+  it('names none when the suite did not run cleanly, and leaves every new failure unrechecked', () => {
     const { tests } = mergeReports([report({ 'a.spec.ts': { fresh: 'unexpected' } })])
-    expect(recheckLocations([], tests, ['Error: fixture server did not start'])).toEqual([])
-    expect(recheckLocations([], tests, [])).toEqual(['a.spec.ts:10'])
+    expect(recheckPlan([], tests, ['Error: fixture server did not start'])).toEqual({ locations: [], unrechecked: ['a.spec.ts :: fresh'] })
+    expect(recheckPlan([], tests, [])).toEqual({ locations: ['a.spec.ts:10'], unrechecked: [] })
+  })
+
+  it('a shard that ran out of time keeps the reruns of every other shard\'s failures, and its own', () => {
+    // 2026-11-17: shard 16 hit the 45-minute global timeout; its lines are no error, so nothing is thrown away.
+    const { tests, errors } = mergeReports([report({ 'a.spec.ts': { fresh: 'unexpected' } }), timedOutShard()], ['browser-1.json', 'browser-16.json'])
+    expect(recheckPlan([], tests, errors, () => false)).toEqual({ locations: ['a.spec.ts:10', 'busy.spec.ts:10'], unrechecked: [] })
+  })
+
+  it('over RECHECK_MAX runs the cap again, the shards taking turns, and names the rest unrechecked', () => {
+    // 2026-11-17: 60 new failures were over the old all-or-nothing cap of 40, so none ran again;
+    // run alone, 47 of them passed. One shard that broke whole must not take every rerun either.
+    const many = (n: number, prefix: string) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`${prefix}${i}`, 'unexpected' as Status]))
+    const { tests, errors } = mergeReports(
+      [report({ 'broken.spec.ts': many(RECHECK_MAX + 10, 'b') }), report({ 'one.spec.ts': many(2, 'o') }), report({ 'two.spec.ts': many(1, 't') })],
+      ['browser-2.json', 'browser-10.json', 'browser-3.json'],
+    )
+    const plan = recheckPlan([], tests, errors, () => false)
+    expect(plan.locations).toHaveLength(RECHECK_MAX)
+    expect(plan.locations).toEqual(expect.arrayContaining(['one.spec.ts:10', 'one.spec.ts:20', 'two.spec.ts:10']))
+    expect(plan.locations.filter((l) => l.startsWith('broken.spec.ts'))).toHaveLength(RECHECK_MAX - 3)
+    expect(plan.unrechecked).toHaveLength(13)
+    expect(plan.unrechecked.every((k) => k.startsWith('broken.spec.ts :: '))).toBe(true)
+    // A serial file counts once, however many of its tests failed.
+    const serial = mergeReports([report({ 'serial.spec.ts': many(RECHECK_MAX + 5, 's') }), report({ 'x.spec.ts': { y: 'unexpected' } })], ['a.json', 'b.json'])
+    expect(recheckPlan([], serial.tests, serial.errors, (f) => f === 'serial.spec.ts')).toEqual({ locations: ['serial.spec.ts', 'x.spec.ts:10'], unrechecked: [] })
   })
 })
 
@@ -221,6 +275,36 @@ describe('the CLI', () => {
     const r = run(baseline, 'check', reports)
     expect(r.status).toBe(1)
     expect(r.stdout).toContain('`b.spec.ts :: fresh`: Error: fresh broke')
+  })
+
+  it('a shard that ran out of time fails the check by name, until a rerun runs what it never finished', () => {
+    const { reports, baseline } = setup()
+    fs.writeFileSync(baseline, JSON.stringify({ failures: ['a.spec.ts :: old', 'b.spec.ts :: fresh', 'busy.spec.ts :: broke'] }))
+    fs.writeFileSync(path.join(reports, 'browser-16.json'), JSON.stringify(timedOutShard()))
+    const r = run(baseline, 'check', reports)
+    expect(r.status).toBe(1)
+    expect(r.stdout).toContain('3 of them in a shard that ran out of time')
+    expect(r.stdout).toContain('**browser-16.json ran out of time: 3 tests never finished and ran nowhere else')
+    expect(r.stdout).toContain('- `late.spec.ts` (2)')
+    expect(r.stdout).toContain('- `later.spec.ts` (1)')
+    expect(r.stdout).not.toContain('`serial.spec.ts`')
+    fs.writeFileSync(path.join(reports, 'recheck.json'), JSON.stringify(report({ 'late.spec.ts': { cut: 'expected', never1: 'expected' }, 'later.spec.ts': { never2: 'expected' } })))
+    const after = run(baseline, 'check', reports)
+    expect(after.stdout).not.toContain('ran nowhere else')
+    expect(after.stdout).toContain('the 3 tests it never finished ran in another report')
+    expect(after.status).toBe(0)
+  })
+
+  it('recheck names at most the cap and says on stderr which new failures it left out', () => {
+    const { reports, baseline } = setup()
+    fs.writeFileSync(baseline, JSON.stringify({ failures: ['a.spec.ts :: old'] }))
+    const many = Object.fromEntries(Array.from({ length: RECHECK_MAX + 2 }, (_, i) => [`m${i}`, 'unexpected' as Status]))
+    fs.writeFileSync(path.join(reports, 'browser-3.json'), JSON.stringify(report({ 'many.spec.ts': many })))
+    const r = run(baseline, 'recheck', reports)
+    expect(r.status).toBe(0)
+    expect(r.stdout.trim().split('\n')).toHaveLength(RECHECK_MAX)
+    expect(r.stdout).toContain('b.spec.ts:10\n')
+    expect(r.stderr).toContain(`3 new failure(s) not run again (over the cap of ${RECHECK_MAX} locations); they stay new:`)
   })
 
   it('recheck prints the new failures to run again and exits 0; their rerun passing turns the check green', () => {

@@ -39,9 +39,17 @@ describe('playwright-summary', () => {
       { key: 'tasks.spec.ts :: creates a task', status: 'expected' },
       { key: 'tasks.spec.ts :: drag and drop › reorders', status: 'unexpected' },
       { key: 'tasks.spec.ts :: drag and drop › moves to a folder', status: 'flaky' },
-      { key: 'tasks.spec.ts :: drag and drop › nested › deep', status: 'skipped' },
+      // No results: it never started (the run ended before its turn).
+      { key: 'tasks.spec.ts :: drag and drop › nested › deep', status: 'skipped', unrun: true },
       { key: 'notes.spec.ts :: opens', status: 'expected' },
     ])
+  })
+
+  it('tells a test that never started from one test.skip() skipped', () => {
+    const one = (results: unknown[]) => testsOf({ suites: [{ title: 'a.spec.ts', file: 'a.spec.ts', specs: [{ title: 't', file: 'a.spec.ts', tests: [{ status: 'skipped', results }] }] }] })[0]
+    expect(one([])?.unrun).toBe(true)
+    expect(one([{ status: 'skipped' }])?.unrun).toBeUndefined()
+    expect(one([{ status: 'interrupted' }])).toMatchObject({ interrupted: true })
   })
 
   it('says where to run a test again: its spec line, or its spec file when a helper defines it', () => {

@@ -18,8 +18,12 @@
  * counts:
  * - failed: status `unexpected`, i.e. it failed on every retry.
  * - flaky (failed, then passed on a retry) is a pass here; the verdict lists it.
- * - not run is neutral: skipped, or cut off by a shard's --global-timeout (an
- *   `interrupted` result, even after a failed first try). It proves nothing.
+ * - not run is neutral as a test: skipped, or cut off by a shard's --global-timeout
+ *   (an `interrupted` result, even after a failed first try). It proves nothing.
+ * - a shard that ran out of time (its --global-timeout's lines in `report.errors`)
+ *   fails the check while a test it never finished (never started, or cut off) ran
+ *   in no other report: those tests were not judged, which is never a pass. The
+ *   verdict names the shard and the spec files it did not finish.
  * - an error outside any test fails the check (a spec that does not load, a
  *   fixture server that does not start), except the global timeout's own lines.
  *
@@ -36,8 +40,12 @@
  * main run of 2026-11-10 (a different 15 each time), so the job was red every
  * run. A test that passes alone is judged as flaky (mergeReports: failed only
  * when it failed in every report that ran it); one that fails again stays new.
- * It prints nothing when the suite did not run cleanly or when more than
- * RECHECK_MAX tests are new: that is a real break, and the check fails as it is.
+ * It prints nothing when the suite did not run cleanly (an error outside a test;
+ * a shard's global timeout is none). It names at most RECHECK_MAX locations,
+ * taken in turn from each shard's new failures so one broken shard cannot take
+ * them all, and says on stderr which new failures it left out: they stay new.
+ * (2026-11-17: 60 new failures, over the old all-or-nothing cap, so none ran
+ * again; run alone, 13 of them still failed.)
  * A new failure in a serial spec file is run again with its whole file: its
  * tests build on the ones before them (connect the extension, then act through
  * it), so a test run alone by its line fails on the missing setup, never on what
@@ -67,31 +75,43 @@ export function reportFiles(args) {
 }
 
 /**
- * The reports as one run: key -> { status, error }, an interrupted test counted
- * as not run. A key in two reports (a shard run twice) is failed only when it
- * failed in every one of them that ran it. `errors` are the errors outside a
- * test, without the global timeout's.
+ * The reports as one run: key -> { status, error, from, failures }, an
+ * interrupted test counted as not run. A key in two reports (a shard run twice) is
+ * failed only when it failed in every one of them that ran it; `from` names the
+ * report it first failed in, `failures` how many reports it failed in. `errors`
+ * are the errors outside a test, without the global timeout's. `timedOut` lists
+ * each report whose run hit its global timeout (by `names`, default its place),
+ * with the tests it never finished: never started, or cut off.
  */
-export function mergeReports(reports) {
+export function mergeReports(reports, names = reports.map((_, i) => `report ${i + 1}`)) {
   const tests = new Map()
   const errors = []
-  for (const report of reports) {
+  const timedOut = []
+  reports.forEach((report, i) => {
+    const name = names[i]
+    let outOfTime = false
     for (const e of report.errors ?? []) {
       const line = String(e.message ?? e.value ?? e).replace(/\x1b\[[0-9;]*m/g, '').split('\n')[0].trim().slice(0, 300)
-      if (!GLOBAL_TIMEOUT.test(line)) errors.push(line)
+      if (GLOBAL_TIMEOUT.test(line)) outOfTime = true
+      else errors.push(line)
     }
+    const unfinished = []
     for (const raw of testsOf(report)) {
+      if (outOfTime && (raw.interrupted || raw.unrun)) unfinished.push(raw.key)
       const t = raw.interrupted ? { ...raw, status: 'skipped' } : raw
+      const failed = t.status === 'unexpected'
       const prev = tests.get(t.key)
-      if (!prev || prev.status === 'skipped') tests.set(t.key, t)
+      if (!prev || prev.status === 'skipped') tests.set(t.key, { ...t, ...(failed ? { from: name, failures: 1 } : {}) })
       // Failed in one report and passed in another (the rerun of a new failure): flaky.
-      else if (prev.status === 'unexpected' && t.status !== 'skipped' && t.status !== 'unexpected') tests.set(t.key, { ...t, status: 'flaky' })
+      else if (prev.status === 'unexpected' && t.status !== 'skipped' && !failed) tests.set(t.key, { ...t, status: 'flaky' })
+      else if (prev.status === 'unexpected' && failed) prev.failures += 1
     }
-  }
-  return { tests, errors }
+    if (outOfTime) timedOut.push({ name, unfinished: [...new Set(unfinished)].sort() })
+  })
+  return { tests, errors, timedOut }
 }
 
-/** More new failures than this are a real break, not load: `recheck` names none of them. */
+/** The most locations `recheck` names: the rerun gets the rest of the job's time, one worker. */
 export const RECHECK_MAX = 40
 
 /** Where Playwright's testDir is: report locations are relative to it. */
@@ -107,31 +127,50 @@ export function isSerialSpec(file, testDir = TEST_DIR) {
 }
 
 /**
- * The locations to run again: one per new failure, without duplicates; none when the run broke.
+ * What to run again: `locations`, one per new failure, without duplicates, at most `max`;
+ * `unrechecked`, the new failures they leave out. Nothing to run when the run broke (an
+ * error outside a test). Over the cap, each shard's new failures take turns (`from`, the
+ * report a test failed in), so one shard that broke whole leaves the others their reruns.
  * A failure in a serial file is run again with the whole file (`isSerial`), never by its line.
  */
-export function recheckLocations(known, tests, errors, isSerial = isSerialSpec) {
-  if (errors.length) return []
+export function recheckPlan(known, tests, errors, isSerial = isSerialSpec, max = RECHECK_MAX) {
   const { regressions } = judge(known, tests)
-  if (!regressions.length || regressions.length > RECHECK_MAX) return []
+  if (errors.length) return { locations: [], unrechecked: regressions }
   const locOf = (k) => (isSerial(fileOf(k)) ? fileOf(k) : (tests.get(k)?.loc ?? fileOf(k)))
-  const locs = new Set(regressions.map(locOf))
-  // A file run whole already runs each of its lines: drop `<file>:<line>` when `<file>` is listed.
-  const lineOfWholeFile = (l) => /:\d+$/.test(l) && locs.has(l.replace(/:\d+$/, ''))
-  return [...locs].filter((l) => !lineOfWholeFile(l)).sort()
+  // A file run whole already runs each of its lines: `<file>:<line>` counts as `<file>` when that is listed.
+  const wholeFiles = new Set(regressions.map(locOf).filter((l) => !/:\d+$/.test(l)))
+  const placeOf = (k) => (wholeFiles.has(fileOf(k)) ? fileOf(k) : locOf(k))
+  const byShard = new Map()
+  for (const k of regressions) {
+    const shard = tests.get(k)?.from ?? ''
+    byShard.set(shard, [...(byShard.get(shard) ?? []), k])
+  }
+  const queues = [...byShard.keys()].sort((a, b) => a.localeCompare(b, 'en', { numeric: true })).map((s) => byShard.get(s))
+  const chosen = new Set()
+  for (let round = 0; queues.some((q) => round < q.length); round++) {
+    for (const q of queues) {
+      const k = q[round]
+      if (k !== undefined && (chosen.size < max || chosen.has(placeOf(k)))) chosen.add(placeOf(k))
+    }
+  }
+  return { locations: [...chosen].sort(), unrechecked: regressions.filter((k) => !chosen.has(placeOf(k))) }
 }
 
 const fileOf = (key) => key.split(' :: ')[0]
 const ran = (t) => t && t.status !== 'skipped'
 
-/** What a run means against the known list. */
-export function judge(known, tests) {
+/** What a run means against the known list; `timedOut` is mergeReports' list of shards that ran out of time. */
+export function judge(known, tests, timedOut = []) {
   const knownSet = new Set(known)
   const files = new Set([...tests.keys()].map(fileOf))
   const failed = [...tests].filter(([, t]) => t.status === 'unexpected').map(([k]) => k).sort()
+  // A test a shard never finished counts until another report (the rerun) ran it.
+  const outOfTime = timedOut.map((s) => ({ name: s.name, cut: s.unfinished.length, unfinished: s.unfinished.filter((k) => !ran(tests.get(k))) }))
   return {
     failed,
     regressions: failed.filter((k) => !knownSet.has(k)),
+    outOfTime,
+    unfinished: [...new Set(outOfTime.flatMap((s) => s.unfinished))].sort(),
     // Known entries that ran and did not fail. Advisory: many come and go.
     passing: known.filter((k) => ran(tests.get(k)) && tests.get(k).status !== 'unexpected').sort(),
     // Known entries whose file ran without the test at all: renamed or deleted.
@@ -165,18 +204,32 @@ const list = (title, keys, max = 40) => {
 }
 
 /** The verdict as markdown (CI's step summary reads it as is). */
-export function verdictText(v, knownCount, errors, reasons = new Map()) {
+export function verdictText(v, knownCount, errors, reasons = new Map(), tests = new Map()) {
   const lines = [
     `**Browser baseline:** ${v.failed.length} failing, ${knownCount} known, ${v.regressions.length} new; ` +
-      `${v.passed} passed, ${v.flaky.length} flaky, ${v.skipped} not run.`,
+      `${v.passed} passed, ${v.flaky.length} flaky, ${v.skipped} not run` +
+      `${v.unfinished?.length ? ` (${v.unfinished.length} of them in a shard that ran out of time)` : ''}.`,
   ]
   if (errors.length) {
     lines.push('', '**The suite did not run cleanly (errors outside a test):**', '')
     for (const [e, n] of errors.reduce((m, e) => m.set(e, (m.get(e) ?? 0) + 1), new Map())) lines.push(`- ${e}${n > 1 ? ` (×${n})` : ''}`)
   }
+  for (const s of v.outOfTime ?? []) {
+    if (!s.unfinished.length) {
+      lines.push('', s.cut
+        ? `**${s.name} ran out of time;** the ${s.cut} tests it never finished ran in another report and are judged there.`
+        : `**${s.name} ran out of time** in its teardown, after every test it holds had finished.`)
+      continue
+    }
+    const perFile = s.unfinished.reduce((m, k) => m.set(fileOf(k), (m.get(fileOf(k)) ?? 0) + 1), new Map())
+    lines.push('', `**${s.name} ran out of time: ${s.unfinished.length} tests never finished and ran nowhere else, so they are not judged (a failure):**`, '')
+    for (const [f, n] of [...perFile].sort()) lines.push(`- \`${f}\` (${n})`)
+  }
   if (v.regressions.length) {
-    lines.push('', `**New failures, not in ${DEFAULT_BASELINE} (${v.regressions.length}):**`, '')
-    for (const k of v.regressions) lines.push(`- \`${k}\`${reasons.get(k) ? `: ${reasons.get(k)}` : ''}`)
+    const again = (k) => (tests.get(k)?.failures ?? 1) > 1
+    const alone = v.regressions.filter((k) => !again(k)).length
+    lines.push('', `**New failures, not in ${DEFAULT_BASELINE} (${v.regressions.length}${alone ? `; ${alone} of them not run again alone` : ''}):**`, '')
+    for (const k of v.regressions) lines.push(`- \`${k}\`${again(k) ? ' (failed again alone)' : ''}${reasons.get(k) ? `: ${reasons.get(k)}` : ''}`)
   }
   lines.push(...list('Known failures that passed this run (many come and go; after a fix, `record --prune` a repeated run)', v.passing, 20))
   lines.push(...list('Known failures whose test is gone from its file (the next record removes them)', v.gone))
@@ -225,11 +278,15 @@ function main(argv) {
     process.stderr.write(`No reports in ${args.join(' ')}: nothing to judge.\n`)
     return 1
   }
-  const { tests, errors } = mergeReports(files.map((f) => JSON.parse(fs.readFileSync(f, 'utf8'))))
+  const { tests, errors, timedOut } = mergeReports(files.map((f) => JSON.parse(fs.readFileSync(f, 'utf8'))), files.map((f) => path.basename(f)))
   const baseline = readBaseline(BASELINE)
   if (mode === 'recheck') {
-    const locs = recheckLocations(baseline.failures, tests, errors)
-    if (locs.length) process.stdout.write(`${locs.join('\n')}\n`)
+    const { locations, unrechecked } = recheckPlan(baseline.failures, tests, errors)
+    if (locations.length) process.stdout.write(`${locations.join('\n')}\n`)
+    if (unrechecked.length) {
+      const why = errors.length ? 'the suite did not run cleanly' : `over the cap of ${RECHECK_MAX} locations`
+      process.stderr.write(`${unrechecked.length} new failure(s) not run again (${why}); they stay new:\n${unrechecked.map((k) => `  ${k}`).join('\n')}\n`)
+    }
     return 0
   }
   if (mode === 'record') {
@@ -247,14 +304,14 @@ function main(argv) {
     )
     return 0
   }
-  const v = judge(baseline.failures, tests)
+  const v = judge(baseline.failures, tests, timedOut)
   const reasons = new Map([...tests].map(([k, t]) => [k, t.error]))
-  process.stdout.write(verdictText(v, baseline.failures.length, errors, reasons))
+  process.stdout.write(verdictText(v, baseline.failures.length, errors, reasons, tests))
   if (!tests.size && !errors.length) {
     process.stderr.write(`${files.length} report(s) with no tests: the suite did not run.\n`)
     return 1
   }
-  return v.regressions.length || errors.length ? 1 : 0
+  return v.regressions.length || errors.length || v.unfinished.length ? 1 : 0
 }
 
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(new URL(import.meta.url).pathname)) {

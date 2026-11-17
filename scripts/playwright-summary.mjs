@@ -21,8 +21,9 @@ function errorLine(test) {
 
 /**
  * Every test in the report as { key, status } ('expected' | 'unexpected' | 'flaky' | 'skipped'),
- * plus `error` (its last error's first line) on a failed one that has results, and
- * `interrupted` when a run of it was cut off (the run's --global-timeout).
+ * plus `error` (its last error's first line) on a failed one that has results,
+ * `interrupted` when a run of it was cut off (the run's --global-timeout), and
+ * `unrun` when it never started (the run ended before its turn).
  *
  * The key's file is the spec file Playwright ran (the top-level suite), not the
  * file the test() call sits in: a helper shared by a `.spec.ts` and a
@@ -42,6 +43,8 @@ export function testsOf(report) {
         const error = t.status === 'unexpected' ? errorLine(t) : undefined
         if (error) row.error = error
         if ((t.results ?? []).some((r) => r.status === 'interrupted')) row.interrupted = true
+        // Never started: a run that ended before its turn (a test.skip() has a skipped result).
+        if (t.status === 'skipped' && !(t.results ?? []).length) row.unrun = true
         out.push(row)
       }
     }
