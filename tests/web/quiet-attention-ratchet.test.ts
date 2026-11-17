@@ -151,7 +151,8 @@ function ungatedCallers(file: string, text: string): Finding[] {
 // `walnutNotify`: the Mac app's own macOS notification (desktop/NotificationBridge.swift), posted
 // by the page with `postMessage({ op: 'post', ... })` on that handler.
 const SYSTEM_CALLS = /\bnew Notification\(|\bplayChime\(|\bsetAppBadge\(|\brequestUserAttention\b|\bwalnutNotify\b/g
-const QUIET_GATE = /\b(quietAllowsToast|attentionHeld|quietSuppresses|currentQuiet)\(/
+// systemNoticeAllowed: the web app's one exit for notices outside the window (system-notice.ts).
+const QUIET_GATE = /\b(quietAllowsToast|attentionHeld|quietSuppresses|currentQuiet|systemNoticeAllowed)\(/
 
 /** System attention calls whose enclosing function never consults quiet. */
 export function ungatedSystemCalls(file: string, text: string): Finding[] {
@@ -219,11 +220,17 @@ describe('quiet attention ratchet: outside a page, quiet means no count, dot, so
     expect(findings).toEqual([])
   })
 
-  it('every phone push path checks quietSuppresses', () => {
+  it('every phone push path goes through the one quiet gate (core/push/quiet-hold.ts)', () => {
     const src = sourceFiles(path.join(repoRoot, 'src'), ['.ts'])
     const senders = src.filter((file) => /\bdeliverPush\(/.test(fs.readFileSync(file, 'utf8')) && !rel(file).endsWith('core/push/deliver.ts'))
     expect(senders.length).toBeGreaterThanOrEqual(2)
-    const ungated = senders.filter((file) => !/\bquietSuppresses\(/.test(fs.readFileSync(file, 'utf8'))).map(rel)
+    // A sender asks holdPushForQuiet before it delivers; the gate's own push (the one reminder
+    // after quiet) reads quiet itself before it sends.
+    const gate = 'src/core/push/quiet-hold.ts'
+    const ungated = senders.filter((file) => {
+      const text = fs.readFileSync(file, 'utf8')
+      return rel(file) === gate ? !/\(await getQuiet\(\)\)\.active/.test(text) : !/\bholdPushForQuiet\(/.test(text)
+    }).map(rel)
     expect(ungated).toEqual([])
   })
 
@@ -249,6 +256,7 @@ describe('quiet attention ratchet: outside a page, quiet means no count, dot, so
     const native = `const h = () => window.webkit.messageHandlers.walnutNotify; function f() { h().postMessage({ op: 'post', id: 'a' }) }`
     expect(ungatedSystemCalls('n.ts', native)).toHaveLength(1)
     expect(ungatedSystemCalls('n.ts', native.replace('function f() {', "function f() { if (!quietAllowsToast(currentQuiet(), 'permission')) return;"))).toEqual([])
+    expect(ungatedSystemCalls('n.ts', native.replace('function f() {', 'function f(q) { if (!systemNoticeAllowed(q)) return;'))).toEqual([])
     expect(drawsAttention('<span className="phone-bell-count" />')).toBe(true)
   })
 })

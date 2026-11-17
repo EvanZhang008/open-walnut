@@ -90,6 +90,8 @@ async function stillWaiting(key: string): Promise<boolean> {
 
 async function releaseHeld(): Promise<void> {
   await ensureLoaded()
+  // Quiet came back before this ran (a focus block right after another): keep holding.
+  if ((await getQuiet()).active) return
   const items = [...held.values()]
   const lost = Math.max(0, heldCount - items.length)
   held.clear()

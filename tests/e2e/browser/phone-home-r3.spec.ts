@@ -23,8 +23,11 @@ const SIZES = [
   { name: 'landscape', device: PHONE_LANDSCAPE, viewport: PHONE_LANDSCAPE.viewport },
 ] as const
 
-/** The problem hosts: one to Retry, one to fix in Settings. */
-const problemHostList = () => [failed('netbox', 'Net box', 'unreachable'), failed('keybox', 'Key box', 'auth')]
+/**
+ * The problem hosts: one to Retry, one to fix in Settings. Both are the person's (audience.ts):
+ * a host Walnut reconnects by itself is listed in Walnut Health, not in the bell.
+ */
+const problemHostList = () => [failed('certbox', 'Cert box', 'cert_expired'), failed('keybox', 'Key box', 'auth')]
 
 for (const size of SIZES) {
   test.describe(`at ${size.name}`, () => {
@@ -42,7 +45,7 @@ for (const size of SIZES) {
       // A finger on the phone's own bell (the top bar's), as a person opens the panel there.
       await page.locator('.phone-topbar').getByTestId('phone-bell').tap()
       await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
-      await expect(problemRow(page, 'netbox')).toBeVisible({ timeout: 20_000 })
+      await expect(problemRow(page, 'certbox')).toBeVisible({ timeout: 20_000 })
       await expect(problemRow(page, 'keybox')).toBeVisible()
       await page.waitForTimeout(400)
       const root = '.notification-panel [data-testid="nfc-problem-hosts"]'

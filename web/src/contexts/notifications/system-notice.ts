@@ -54,15 +54,22 @@ const shown = new Map<string, Notification>();
 /** Something was held by real quiet (not only while the state was unknown): the end says what waited. */
 let heldByQuiet = false;
 
-function post(n: SystemNotice): SystemNoticeResult {
+/** The Mac app's post: checks quiet itself, as it may run after a clear (the reminder's id). */
+function postNative(native: Handler, n: SystemNotice, q: QuietState): void {
+  if (!systemNoticeAllowed(q)) return;
+  void native.postMessage({ op: 'post', id: n.nativeId, title: n.title, body: n.body ?? '' })
+    .then((r) => log.info('notifications', 'system notice posted', { tag: n.tag, result: r as Record<string, unknown> }))
+    .catch((err) => log.warn('notifications', 'system notice refused', { tag: n.tag, error: String(err) }));
+}
+
+/** Post now under the quiet state `q` that allows it (every caller passes the state it checked). */
+function post(n: SystemNotice, q: QuietState): SystemNoticeResult {
+  if (!systemNoticeAllowed(q)) return 'held';
   const native = nativeNoticeHandler();
   if (native && n.nativeId) {
-    const send = () => native.postMessage({ op: 'post', id: n.nativeId, title: n.title, body: n.body ?? '' })
-      .then((r) => log.info('notifications', 'system notice posted', { tag: n.tag, result: r as Record<string, unknown> }))
-      .catch((err) => log.warn('notifications', 'system notice refused', { tag: n.tag, error: String(err) }));
     // The app posts an id once per run: the reminder's id is taken back first, so a later one shows.
-    if (n.nativeId === QUIET_CATCHUP_ID) void native.postMessage({ op: 'clear', id: n.nativeId }).catch(() => null).then(send);
-    else void send();
+    if (n.nativeId === QUIET_CATCHUP_ID) void native.postMessage({ op: 'clear', id: n.nativeId }).catch(() => null).then(() => postNative(native, n, q));
+    else postNative(native, n, q);
     return 'shown';
   }
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return 'off';
@@ -91,8 +98,8 @@ export function postSystemNotice(n: SystemNotice): SystemNoticeResult {
     return 'held';
   }
   // Quiet ended while its event was missed (a dropped socket; effectiveQuiet saw the end time).
-  if (held.size > 0) releaseHeldNotices();
-  return post(n);
+  if (held.size > 0) releaseHeldNotices(q);
+  return post(n, q);
 }
 
 /** Its reason is gone (the approval was answered): take it back, or drop it from what waits. */
@@ -129,18 +136,19 @@ export function catchUpNotice(items: readonly SystemNotice[]): SystemNotice | nu
  * Quiet just ended: the one reminder for what it held. Held only while the state was not
  * known yet (the page just loaded, not in quiet): each goes out as itself, as it would have.
  */
-export function releaseHeldNotices(): SystemNoticeResult | null {
+export function releaseHeldNotices(q: QuietState = currentQuiet()): SystemNoticeResult | null {
+  if (!systemNoticeAllowed(q)) return null;
   const items = [...held.values()];
   const summary = heldByQuiet;
   held.clear();
   heldByQuiet = false;
   if (!summary) {
     let last: SystemNoticeResult | null = null;
-    for (const n of items) last = post(n);
+    for (const n of items) last = post(n, q);
     return last;
   }
   const one = catchUpNotice(items);
-  return one ? post(one) : null;
+  return one ? post(one, q) : null;
 }
 
 /** What quiet holds now (tests and the reminder). */
@@ -149,5 +157,5 @@ export function heldSystemNotices(): SystemNotice[] {
 }
 
 onQuietState((state) => {
-  if (held.size > 0 && systemNoticeAllowed(state)) releaseHeldNotices();
+  if (held.size > 0 && systemNoticeAllowed(state)) releaseHeldNotices(state);
 });

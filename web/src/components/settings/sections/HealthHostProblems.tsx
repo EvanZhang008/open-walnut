@@ -6,6 +6,7 @@
  * the full hint (a command to check it by hand included) for whoever investigates
  * (2026-11-17, the user: a machine that is not connected must not ask him to run a command).
  */
+import { HostFailureText } from '@/components/hosts/HostFailureText';
 import { useNavigate } from 'react-router-dom';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
 import { openHostSettings } from '@/utils/host-settings-nav';
@@ -39,7 +40,8 @@ export function HealthHostProblems({ hosts }: { hosts: ProblemHost[] }) {
               <span className="health-errors-title">{row.headline ?? row.problem?.message ?? `${row.labels.join(', ')} cannot be reached`}</span>
             </div>
             <div className="health-errors-detail">
-              {(row.hint || row.summary) && <p className="health-detail-desc">{row.hint || row.summary}</p>}
+              {/* The one rendering of a host failure: the hint, and the captured output behind its toggle. */}
+              <HostFailureText headline="" {...(row.hint ? { hint: row.hint } : {})} {...(row.summary ? { summary: row.summary } : {})} {...(row.kind ? { kind: row.kind } : {})} />
               <div className="health-detail-actions">
                 <SettingsButton onClick={() => openHostSettings(navigate, alias)}>Open host settings</SettingsButton>
               </div>
