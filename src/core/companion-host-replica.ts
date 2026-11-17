@@ -87,7 +87,7 @@ export function companionHostReplicaCommand(cmd: unknown, params: Record<string,
   try {
     switch (cmd) {
       case 'replica.sync':
-        return changed({ ok: true, ...r.sync(home, params.kind, params.entries, params.asOf, params.opts as Record<string, unknown> | undefined, { confirm: params.confirm, confirmFor: params.confirmFor }) })
+        return changed({ ok: true, ...r.sync(home, params.kind, params.entries, params.asOf, params.opts as Record<string, unknown> | undefined, { confirm: params.confirm, confirmFor: params.confirmFor }, params) })
       case 'replica.put':
         return changed({ ok: true, ...r.put(home, params.kind, params.files) })
       case 'replica.drop':

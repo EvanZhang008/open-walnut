@@ -54,7 +54,7 @@ const target: ReplicaTarget = {
     try {
       const home = params.home as string
       if (cmd === 'replica.sync') {
-        const r = daemon.sync(home, params.kind, params.entries, params.asOf, params.opts as Record<string, unknown> | undefined)
+        const r = daemon.sync(home, params.kind, params.entries, params.asOf, params.opts as Record<string, unknown> | undefined, { confirm: params.confirm, confirmFor: params.confirmFor }, oldDaemon ? undefined : params)
         afterSync?.()
         return { ok: true, ...r }
       }
@@ -62,10 +62,13 @@ const target: ReplicaTarget = {
       if (cmd === 'replica.drop') return { ok: true, ...daemon.drop(home, params.kind) }
       return { ok: false, error: `unknown command: ${cmd}` }
     } catch (err) {
-      return { ok: false, error: (err as Error).message }
+      const e = err as Error & { code?: unknown }
+      return { ok: false, error: e.message, ...(typeof e.code === 'string' ? { errorKind: e.code } : {}) }
     }
   },
 }
+/** The daemon is one from before changes-only manifests: it reads `entries` only. */
+let oldDaemon = false
 
 const read = (name: string, args: Record<string, unknown>) => daemon.answer(WALNUT_HOME, name, args, '')
 const cmds = () => calls.map((c) => `${c.cmd}:${String(c.params.kind)}`)
@@ -90,6 +93,7 @@ beforeEach(() => {
   calls = []
   config = {} as Config
   afterSync = null
+  oldDaemon = false
   stageDir = '/stage/one'
   forgetHostReplica('devbox')
 })
@@ -169,8 +173,9 @@ describe('a round', () => {
     calls = []
     await syncHostReplica(target)
     const sync = calls.find((c) => c.cmd === 'replica.sync' && c.params.kind === 'notes')!
-    expect((sync.params.entries as Array<{ k: string }>).map((e) => e.k)).not.toContain('Projects/Retro.md')
-    expect((sync.params.entries as Array<{ k: string }>).map((e) => e.k)).toContain('Projects/Release plan.md')
+    // As the changes since the last list: that note goes, nothing else does.
+    expect(sync.params.removed).toEqual(['Projects/Retro.md'])
+    expect(sync.params.changed).toEqual([])
     expect(sync.params.opts).toMatchObject({ keepExclude: ['projects/retro'] })
     expect(read('note_read', { path: 'Projects/Retro' })).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'not_kept_here' } } })
     expect(read('note_read', { path: 'Projects/Release plan' })).toMatchObject({ ok: true })
@@ -286,6 +291,118 @@ import { MEMORY_DIR, REPOS_MEMORY_DIR } from '../../src/constants.js'
 import { COMPANION_REPLICA_HOST } from '../../src/core/host-replica.js'
 import { createAttachmentCopy } from '../../src/providers/attachment-copy-core.js'
 import { _resetAttachmentReplicaForTesting } from '../../src/core/attachment-replica.js'
+
+describe('a changed manifest goes as its changes since the one the host took', () => {
+  const syncs = () => calls.filter((c) => c.cmd === 'replica.sync' && c.params.kind === 'notes').map((c) => c.params)
+  const newDaemon = () => {
+    daemon = createHostReplica({
+      fs, path, dir: daemonDir, now: () => Date.now(),
+      keyOf: (v) => crypto.createHash('sha1').update(v).digest('hex').slice(0, 16),
+      hash: sha12, log: () => {},
+    })
+  }
+
+  it('an edit sends that entry, a delete its key, never the whole list; the copy is the same as from a whole list', async () => {
+    for (let i = 0; i < 40; i++) write(`Daily/2026-10-${String(i).padStart(2, '0')}.md`, `# Day ${i}\nNotes of the day.`)
+    await syncHostReplica(target)
+    expect(syncs()[0].entries).toHaveLength(43)
+    calls = []
+    write('Projects/Retro.md', '# Retro\nThird time lucky.')
+    fs.rmSync(path.join(NOTES_DIR, 'Daily/2026-10-07.md'))
+    write('Daily/2026-11-17.md', '# Today\nOne new line.')
+    await syncHostReplica(target)
+    const [delta] = syncs()
+    expect(syncs()).toHaveLength(1)
+    expect(delta.entries).toBeUndefined()
+    expect((delta.changed as Array<{ k: string }>).map((e) => e.k).sort()).toEqual(['Daily/2026-11-17.md', 'Projects/Retro.md'])
+    expect(delta.removed).toEqual(['Daily/2026-10-07.md'])
+    expect(read('note_read', { path: 'Projects/Retro' })).toMatchObject({ ok: true, result: { content: '# Retro\nThird time lucky.' } })
+    expect(read('note_read', { path: 'Daily/2026-11-17' })).toMatchObject({ ok: true, result: { content: '# Today\nOne new line.' } })
+    expect(read('note_read', { path: 'Daily/2026-10-07' })).toMatchObject({ ok: false, error: { code: 'not_found' } })
+    // The host's list is the Mac's, key for key: a whole list now finds nothing to fetch or remove.
+    const whole = await noteEntries([])
+    expect(daemon.sync(WALNUT_HOME, 'notes', whole, Date.now())).toMatchObject({ need: [], removed: 0, entries: whole.length })
+  })
+
+  it('a host that restarted (no base) gets the whole list in the same round, then changes again', async () => {
+    await syncHostReplica(target)
+    newDaemon()
+    calls = []
+    write('Projects/Retro.md', '# Retro\nAfter the restart.')
+    await syncHostReplica(target)
+    expect(syncs().map((p) => (p.entries ? 'whole' : 'changes'))).toEqual(['changes', 'whole'])
+    expect(read('note_read', { path: 'Projects/Retro' })).toMatchObject({ ok: true, result: { content: '# Retro\nAfter the restart.' } })
+    calls = []
+    write('Projects/Retro.md', '# Retro\nAnd once more.')
+    await syncHostReplica(target)
+    expect(syncs().map((p) => (p.entries ? 'whole' : 'changes'))).toEqual(['changes'])
+    expect(read('note_read', { path: 'Projects/Retro' })).toMatchObject({ ok: true, result: { content: '# Retro\nAnd once more.' } })
+  })
+
+  it('a daemon from before it refuses the changes without touching its copy, and gets whole lists from then on', async () => {
+    oldDaemon = true
+    await syncHostReplica(target)
+    calls = []
+    write('Projects/Retro.md', '# Retro\nOld daemon.')
+    await syncHostReplica(target)
+    expect(syncs().map((p) => (p.entries ? 'whole' : 'changes'))).toEqual(['changes', 'whole'])
+    expect(read('note_read', { path: 'Projects/Release plan' })).toMatchObject({ ok: true })
+    expect(read('note_read', { path: 'Projects/Retro' })).toMatchObject({ ok: true, result: { content: '# Retro\nOld daemon.' } })
+    calls = []
+    write('Projects/Retro.md', '# Retro\nStill old.')
+    await syncHostReplica(target)
+    expect(syncs().map((p) => (p.entries ? 'whole' : 'changes'))).toEqual(['whole'])
+    // A new connection may be a new daemon: it is asked again.
+    forgetHostReplica('devbox')
+    oldDaemon = false
+    await syncHostReplica(target)
+    calls = []
+    write('Projects/Retro.md', '# Retro\nNew daemon.')
+    await syncHostReplica(target)
+    expect(syncs().map((p) => (p.entries ? 'whole' : 'changes'))).toEqual(['changes'])
+  })
+
+  it('a touched note (its time only) goes as a change; changes sent twice are taken once', async () => {
+    await syncHostReplica(target)
+    calls = []
+    const abs = path.join(NOTES_DIR, 'Projects/Retro.md')
+    const later = new Date(Date.now() + 60_000)
+    fs.utimesSync(abs, later, later)
+    await syncHostReplica(target)
+    const [delta] = syncs()
+    expect((delta.changed as Array<{ k: string }>).map((e) => e.k)).toEqual(['Projects/Retro.md'])
+    expect(calls.some((c) => c.cmd === 'replica.put')).toBe(false)
+    expect(read('note_search', { q: 'Retro' })).toMatchObject({ ok: true })
+    // Its answer lost: the same message again finds the copy as it left it, asks for nothing.
+    const again = daemon.sync(WALNUT_HOME, 'notes', undefined, delta.asOf, delta.opts as Record<string, unknown>, {}, delta)
+    expect(again).toMatchObject({ need: [], removed: 0 })
+    // The host's metadata is the Mac's: its list now is the walk's, entry for entry.
+    const whole = await noteEntries([])
+    const retro = whole.find((e) => e.k === 'Projects/Retro.md')!
+    expect((delta.changed as Array<{ m?: Record<string, unknown> }>)[0].m).toEqual(retro.m)
+    expect(retro.m?.updatedAt).toBe(later.toISOString())
+  })
+
+  it('every way into a copy hands the changes on (both daemon twins, the companion)', () => {
+    const src = (f: string) => fs.readFileSync(path.join(__dirname, '../../src', f), 'utf8')
+    expect(src('providers/daemon-standalone.ts')).toContain('{ confirm: cmd.confirm, confirmFor: cmd.confirmFor }, cmd))')
+    expect(src('providers/daemon-source.ts')).toContain('{ confirm: cmd.confirm, confirmFor: cmd.confirmFor }, cmd));')
+    expect(src('core/companion-host-replica.ts')).toContain('{ confirm: params.confirm, confirmFor: params.confirmFor }, params)')
+  })
+
+  it('the half rule judges the whole list a change set stands for', async () => {
+    // Over the floor (200 notes) a copy refuses a list that removes most of it.
+    for (let i = 0; i < 240; i++) write(`Daily/2026-10-${String(i).padStart(3, '0')}.md`, `# Day ${i}`)
+    await syncHostReplica(target)
+    calls = []
+    fs.rmSync(path.join(NOTES_DIR, 'Daily'), { recursive: true })
+    const [notes] = await syncHostReplica(target)
+    expect(notes).toMatchObject({ kind: 'notes', action: 'failed' })
+    expect(syncs().map((p) => (p.entries ? 'whole' : 'changes'))).toEqual(['changes'])
+    expect(read('note_read', { path: 'Daily/2026-10-003' })).toMatchObject({ ok: true })
+    expect(notes.error).toMatch(/would remove 240 of 243/)
+  })
+})
 
 describe('every target gets the same copy', () => {
   let extraDir = ''

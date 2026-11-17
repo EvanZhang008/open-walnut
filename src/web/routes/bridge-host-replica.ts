@@ -5,7 +5,9 @@
  * the same copy, with its reply shapes, so the Mac's round (core/host-replica.ts
  * syncHostReplica) runs unchanged over it:
  *
- *   {cmd:'replica.sync', params:{home, kind, entries, asOf, opts?, confirm?, confirmFor?}} -> {ok, need, entries, held, removed}
+ *   {cmd:'replica.sync', params:{home, kind, entries, asOf, opts?, confirm?, confirmFor?, manifestId?}} -> {ok, need, entries, held, removed}
+ *     or, the changes since the manifest this copy took last: {..., base, changed, removed, manifestId} with no
+ *     `entries` (providers/host-replica-core.ts ReplicaManifestRef); an unknown base -> errorKind manifest_base_unknown
  *   {cmd:'replica.put',  params:{home, kind, files}}  -> {ok, stored, rejected, remaining}
  *   {cmd:'replica.drop', params:{home, kind}}         -> {ok, dropped}
  *   {cmd:'replica.status'}                            -> {ok, kinds}

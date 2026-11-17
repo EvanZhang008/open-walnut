@@ -53,6 +53,20 @@ export interface ReplicaSyncGuard {
 }
 
 /**
+ * A manifest named by the leader (`manifestId`, a hash of its content), or one given as
+ * the changes since a named one: `base` is the id this host took last, `changed` the
+ * entries added or changed since, `removed` the keys gone since. A changes-only manifest
+ * carries no `entries`, so a daemon from before it refuses it ("bad entries") instead of
+ * taking the few changed entries as the whole list; the leader then sends the whole list.
+ */
+export interface ReplicaManifestRef {
+  manifestId?: unknown
+  base?: unknown
+  changed?: unknown
+  removed?: unknown
+}
+
+/**
  * The journal's view of the notes (WP11), set by the daemon once the offline host
  * exists: what a pending away write changed (read through every copy read here and
  * on the follower link) and which keys a manifest must not replace or remove.
@@ -107,6 +121,8 @@ export function createHostReplica(deps: HostReplicaDeps) {
   }
 
   const states = new Map<string, KindState>()
+  /** The last manifest each copy took whole, by the leader's id: the base of a changes-only one. Memory only. */
+  const manifests = new Map<string, { id: string; rows: Map<string, ReplicaEntry> }>()
   /** Bodies read for a search, kept until that entry changes. */
   const bodies = new Map<string, Map<string, string>>()
 
@@ -200,9 +216,27 @@ export function createHostReplica(deps: HostReplicaDeps) {
     return Object.assign(new Error(`${code}: ${message}`), { code, detail })
   }
 
-  function sync(home: string, kind: unknown, entries: unknown, asOf: unknown, opts?: ReplicaSyncOptions, guard?: ReplicaSyncGuard): { need: string[]; entries: number; held: number; heldKeys?: string[]; removed: number } {
+  /** The whole list a changes-only manifest stands for: the base this copy took, with the changes applied. */
+  function fromBase(home: string, kind: ReplicaKind, ref: ReplicaManifestRef): ReplicaEntry[] {
+    const last = manifests.get(stateKey(home, kind))
+    // The same changes again (their answer was lost, or the link sent them twice): the list is the one taken.
+    if (last && typeof ref.manifestId === 'string' && last.id === ref.manifestId) return [...last.rows.values()]
+    if (!last || typeof ref.base !== 'string' || last.id !== ref.base) {
+      throw refused('manifest_base_unknown', 'this copy does not hold the manifest the changes are based on', {})
+    }
+    if (!Array.isArray(ref.changed) || !Array.isArray(ref.removed) || ref.changed.length + ref.removed.length > MAX_ENTRIES) {
+      throw new Error('replica.sync: bad changes')
+    }
+    const rows = new Map(last.rows)
+    for (const k of ref.removed) if (typeof k === 'string') rows.delete(k)
+    for (const raw of ref.changed as ReplicaEntry[]) if (raw && typeof raw.k === 'string') rows.set(raw.k, raw)
+    return [...rows.values()]
+  }
+
+  function sync(home: string, kind: unknown, entries: unknown, asOf: unknown, opts?: ReplicaSyncOptions, guard?: ReplicaSyncGuard, ref?: ReplicaManifestRef): { need: string[]; entries: number; held: number; heldKeys?: string[]; removed: number } {
     if (typeof home !== 'string' || !home) throw new Error('replica.sync: missing home')
     if (!isKind(kind)) throw new Error(`replica.sync: unknown kind ${String(kind)}`)
+    if (entries === undefined && ref && ref.base !== undefined) entries = fromBase(home, kind, ref)
     if (!Array.isArray(entries) || entries.length > MAX_ENTRIES) throw new Error('replica.sync: bad entries')
     const st = load(home, kind)
     const at = typeof asOf === 'number' && Number.isFinite(asOf) ? asOf : deps.now()
@@ -269,6 +303,10 @@ export function createHostReplica(deps: HostReplicaDeps) {
     if (need.length === 0) { st.asOf = at; st.pendingAsOf = 0 } else st.pendingAsOf = at
     st.off = 0
     persist(home, kind, st)
+    // The next manifest may name this one as its base: keep what it said, as it said it.
+    if (ref && typeof ref.manifestId === 'string' && ref.manifestId) {
+      manifests.set(stateKey(home, kind), { id: ref.manifestId, rows: new Map(rows.map((r) => [r.k, r])) })
+    } else manifests.delete(stateKey(home, kind))
     if (heldKeys.length) deps.log('info', 'host replica: keys an away write holds were kept', { kind, held: heldKeys.length })
     return { need, entries: seen.size, held: heldKeys.length, ...(heldKeys.length ? { heldKeys: heldKeys.slice(0, 100) } : {}), removed: removing.length }
   }
@@ -312,6 +350,7 @@ export function createHostReplica(deps: HostReplicaDeps) {
     const existed = has(home, kind)
     try { fs.rmSync(kindDir(home, kind), { recursive: true, force: true }) } catch { /* nothing kept */ }
     bodies.delete(stateKey(home, kind))
+    manifests.delete(stateKey(home, kind))
     // The mark says the user turned it off here: a read of it is the leader's, not "not copied yet".
     const st: KindState = { index: {}, pending: {}, pendingMeta: {}, asOf: 0, pendingAsOf: 0, opts: {}, off: deps.now() }
     states.set(stateKey(home, kind), st)

@@ -5349,7 +5349,7 @@ function cmdReplica(ws: ServerWebSocket<WsData>, id: number, op: 'sync' | 'put' 
   try {
     const home = cmd.home as string
     // `confirm`/`confirmFor` (note-journal-v1): the leader's override of the half rule, bound to its manifest.
-    if (op === 'sync') return sendOk(ws, id, hostReplica.sync(home, cmd.kind, cmd.entries, cmd.asOf, cmd.opts as Record<string, unknown> | undefined, { confirm: cmd.confirm, confirmFor: cmd.confirmFor }))
+    if (op === 'sync') return sendOk(ws, id, hostReplica.sync(home, cmd.kind, cmd.entries, cmd.asOf, cmd.opts as Record<string, unknown> | undefined, { confirm: cmd.confirm, confirmFor: cmd.confirmFor }, cmd))
     if (op === 'put') return sendOk(ws, id, hostReplica.put(home, cmd.kind, cmd.files))
     if (op === 'drop') return sendOk(ws, id, hostReplica.drop(home, cmd.kind))
     if (typeof home !== 'string' || !home) return sendError(ws, id, 'replica.status: missing home')

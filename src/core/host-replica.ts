@@ -19,7 +19,9 @@
  * One round per kind: `replica.sync` sends the manifest (key, sha256-12 of the
  * body, small metadata); the daemon answers the keys it lacks; `replica.put`
  * sends those bodies in batches. An unchanged manifest is not sent again on the
- * same connection. Every read here is async: a first round reads ~13 MB of notes
+ * same connection, and a changed one goes as its changes since the one the host
+ * took last (sentManifest): an edit of one note was the whole list of 2,000 to
+ * 6,600 notes to each of nine hosts, about 280 times an hour (2026-11-16). Every read here is async: a first round reads ~13 MB of notes
  * (the measured vault), later rounds only stat, and hash what changed.
  *
  * The cloud companion gets the same rounds over HTTPS (syncCompanionHostReplica,
@@ -202,7 +204,11 @@ export interface ReplicaTarget {
   companion?: true
 }
 
-export interface ReplicaRoundResult { kind: ReplicaKind; action: 'synced' | 'unchanged' | 'dropped' | 'failed'; entries?: number; sent?: number; held?: number; error?: string }
+export interface ReplicaRoundResult {
+  kind: ReplicaKind; action: 'synced' | 'unchanged' | 'dropped' | 'failed'; entries?: number; sent?: number; held?: number; error?: string
+  /** Manifest lines the round sent: its changes, or every entry when it went whole. */
+  listed?: number
+}
 
 /**
  * The half rule's leader side for a host copy (section 4): a refused manifest counts
@@ -247,10 +253,46 @@ async function removalGuard(hostKey: string, kind: ReplicaKind, entries: Replica
 /** The manifest last sent per host and kind on its current connection. */
 const lastManifest = new Map<string, string>()
 
-/** A host's connection changed: its next round sends every manifest again. */
+/**
+ * The manifest each host and kind took last (its id, the hash the memo uses, and its
+ * entries by key): the next one goes as the changes since it. The host keeps it under
+ * the same id (host-replica-core.ts ReplicaManifestRef) and says when it does not.
+ */
+const sentManifest = new Map<string, { id: string; entries: Map<string, ReplicaEntry> }>()
+/** Hosts and kinds whose copy refused a changes-only manifest on this connection (a daemon from before it). */
+const wholeOnly = new Set<string>()
+
+/** A host's connection changed: its next round sends every manifest again, whole. */
 export function forgetHostReplica(hostKey: string): void {
-  for (const key of [...lastManifest.keys()]) if (key.startsWith(`${hostKey}\u0000`)) lastManifest.delete(key)
+  const prefix = `${hostKey}\u0000`
+  for (const key of [...lastManifest.keys()]) if (key.startsWith(prefix)) lastManifest.delete(key)
+  for (const key of [...sentManifest.keys()]) if (key.startsWith(prefix)) sentManifest.delete(key)
+  for (const key of [...wholeOnly]) if (key.startsWith(prefix)) wholeOnly.delete(key)
   forgetAttachments(hostKey)
+}
+
+function sameMeta(a: Record<string, unknown> | undefined, b: Record<string, unknown> | undefined): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  const ka = Object.keys(a)
+  if (ka.length !== Object.keys(b).length) return false
+  return ka.every((k) => a[k] === b[k])
+}
+
+/** What changed from `before` to `entries`: the entries added or changed, the keys gone. */
+export function manifestChanges(before: ReadonlyMap<string, ReplicaEntry>, entries: readonly ReplicaEntry[]): { changed: ReplicaEntry[]; removed: string[] } {
+  const changed: ReplicaEntry[] = []
+  const now = new Set<string>()
+  for (const e of entries) {
+    // A key named twice counts once, its first line, as the host takes it.
+    if (now.has(e.k)) continue
+    now.add(e.k)
+    const was = before.get(e.k)
+    if (!was || was.h !== e.h || was.n !== e.n || !sameMeta(was.m, e.m)) changed.push(e)
+  }
+  const removed: string[] = []
+  for (const k of before.keys()) if (!now.has(k)) removed.push(k)
+  return { changed, removed }
 }
 
 // ── WP11: notes written on the host while away (section 4 "held", section 6) ──
@@ -284,6 +326,8 @@ export function _resetHostReplicaForTesting(): void {
   for (const t of heldReruns.values()) clearTimeout(t)
   heldReruns.clear()
   lastManifest.clear()
+  sentManifest.clear()
+  wholeOnly.clear()
   companionMemoAt = 0
   _resetAttachmentReplicaForTesting()
 }
@@ -321,6 +365,7 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
     const r = await target.send('replica.drop', { home, kind })
     if (r.ok !== true) throw new Error(typeof r.error === 'string' ? r.error : 'replica.drop refused')
     lastManifest.set(memoKey, 'dropped')
+    sentManifest.delete(memoKey)
     return { kind, action: 'dropped' }
   }
   let entries: ReplicaEntry[]
@@ -342,12 +387,36 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
   const manifestHash = sha12(JSON.stringify([entries, opts ?? null]))
   if (lastManifest.get(memoKey) === manifestHash) return { kind, action: 'unchanged', entries: entries.length }
   const guard = await removalGuard(target.hostKey, kind, entries)
-  const reply = await target.send('replica.sync', { home, kind, entries, asOf: Date.now(), ...(opts ? { opts } : {}), ...guard.params })
+  const asOf = Date.now()
+  const base = { home, kind, asOf, manifestId: manifestHash, ...(opts ? { opts } : {}), ...guard.params }
+  const last = wholeOnly.has(memoKey) ? undefined : sentManifest.get(memoKey)
+  let reply: Record<string, unknown> | null = null
+  let listed = entries.length
+  if (last) {
+    // The changes only: the host applies them to the manifest it took last and checks the
+    // whole list it gets exactly as before (the half rule, held keys, what it lacks).
+    const { changed, removed } = manifestChanges(last.entries, entries)
+    listed = changed.length + removed.length
+    reply = await target.send('replica.sync', { ...base, base: last.id, changed, removed })
+    if (reply.ok !== true && reply.errorKind !== 'manifest_removes_most_rows') {
+      // A host without that base (restarted), a failed request, or one from before
+      // changes-only manifests ("bad entries": it found no `entries`, so it changed
+      // nothing; only that one gets whole lists for the rest of the connection).
+      if (/bad entries/.test(String(reply.error ?? ''))) wholeOnly.add(memoKey)
+      sentManifest.delete(memoKey)
+      reply = null
+      listed = entries.length
+    }
+  }
+  reply ??= await target.send('replica.sync', { ...base, entries })
   if (reply.ok !== true) {
     if (reply.errorKind === 'manifest_removes_most_rows') await guard.refused(reply)
     throw new Error(typeof reply.error === 'string' ? reply.error : 'replica.sync refused')
   }
   guard.accepted()
+  const took = new Map<string, ReplicaEntry>()
+  for (const e of entries) if (!took.has(e.k)) took.set(e.k, e)
+  sentManifest.set(memoKey, { id: manifestHash, entries: took })
   const held = typeof reply.held === 'number' ? reply.held : 0
   const need = Array.isArray(reply.need) ? (reply.need as unknown[]).filter((k): k is string => typeof k === 'string') : []
   const wanted = new Map(entries.map((e) => [e.k, e.h]))
@@ -378,7 +447,7 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
   if (skipped === 0 && held === 0) lastManifest.set(memoKey, manifestHash)
   else lastManifest.delete(memoKey)
   if (held > 0) scheduleHeldRerun(target, kind, held)
-  return { kind, action: 'synced', entries: entries.length, sent, ...(held ? { held } : {}) }
+  return { kind, action: 'synced', entries: entries.length, listed, sent, ...(held ? { held } : {}) }
 }
 
 const inFlight = new Map<string, { rerun: boolean }>()
@@ -453,7 +522,7 @@ export async function syncHostReplica(target: ReplicaTarget): Promise<ReplicaRou
           // A memo's `unchanged` asked nothing of the host: only a reply proves it is back.
           if (r.action !== 'unchanged') noteRoundReached(log.session, 'host replica', target.hostKey)
           if (r.action !== 'unchanged') {
-            log.session.info('host replica: round', { host: target.hostKey, kind, action: r.action, entries: r.entries, sent: r.sent, ms: Date.now() - startedAt })
+            log.session.info('host replica: round', { host: target.hostKey, kind, action: r.action, entries: r.entries, listed: r.listed, sent: r.sent, ms: Date.now() - startedAt })
           }
         } catch (err) {
           const error = err instanceof Error ? err.message : String(err)
