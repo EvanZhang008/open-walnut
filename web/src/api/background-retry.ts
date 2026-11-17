@@ -28,8 +28,11 @@
 import { ApiError } from './api-error';
 import { writeRetryable } from './write-retry';
 
-/** The waits before each retry; the length is how many retries a request gets (tests shorten it). */
-export const quietRetryTiming: { delaysMs: number[] } = { delaysMs: [600, 2_000] };
+/** Tests set none (tests/setup/quiet-retry-off.ts): a failure they make reaches the code under test at once. */
+const testDelays = (globalThis as { [k: symbol]: number[] | undefined })[Symbol.for('open-walnut.quietRetryDelaysMs')];
+
+/** The waits before each retry; the length is how many retries a request gets (a test of the retries sets it). */
+export const quietRetryTiming: { delaysMs: number[] } = { delaysMs: testDelays ? [...testDelays] : [600, 2_000] };
 
 /** The waits for this request, each with up to a quarter more at random so many tabs do not retry at once. */
 export function quietRetryDelays(random: () => number = Math.random): number[] {
