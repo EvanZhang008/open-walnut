@@ -6,6 +6,25 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.34] - 2026-11-17
+
+### Added
+
+- The release and star-history bots get the Leak gate check before they push main
+- A commit passes the Leak gate on GitHub before it becomes main
+
+### Fixed
+
+- A turn a trigger or another task started is judged by its last reply
+- The compare picker ends its search before it pops, and the chip rail test follows a rail that fits
+- A sideways drag over Threads, Brief or a letter is reading, never Back
+- An open peek row that re-renders under the pointer reopens in the same step
+- Restore latest host checks after reconnect
+- A host's link that keeps failing for one cause is warned once per outage, not on every dial
+- A lead's close held by the user's items answers the lead, never the user's Needs you
+- Pages of agent text scroll only up and down, never sideways
+- A task session that lost its own-prompt profile resumes on Walnut's prompt, and a refused Walnut tool is answered
+
 ## [0.6.33] - 2026-11-16
 
 ### Added
