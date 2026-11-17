@@ -57,7 +57,7 @@ function StageDetail({ state }: { state: DetailState }) {
             <li key={`${i}:${step.name}`} className="change-card-step" data-status={step.status} data-testid="change-stage-step">
               <span className="change-card-step-mark" data-tone={step.status}><StatusIcon status={step.status} label={STAGE_WORDS[step.status]} /></span>
               <span className="change-card-step-name" title={step.url}>{step.name}</span>
-              {step.note && <span className="change-card-step-note" title={step.note}>{step.note}</span>}
+              {step.note && <span className="change-card-step-note">{step.note}</span>}
             </li>
           ))}
         </ul>
