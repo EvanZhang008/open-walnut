@@ -802,6 +802,9 @@ test('the same login saved twice is one row; the same account with another passw
   await expect(rows).toHaveCount(3)
   await expect(rows.filter({ hasText: 'kim@a3lab.test' })).toHaveCount(2)
   await expect(rows.filter({ hasText: 'lee@a3lab.test' })).toHaveCount(1)
+  // The toolbar count agrees with the menu: three logins, not four.
+  const tab = await tabOf(p)
+  await expect.poll(() => sw().evaluate((t: number) => chrome.action.getBadgeText({ tabId: t }), tab), { timeout: 10_000 }).toBe('3')
   await p.close()
 })
 
@@ -824,5 +827,20 @@ test('the popup\'s Fill puts a login into a frame of another host only when the 
   await p.frameLocator('#fr').locator('[name=pw]').click()
   await p.waitForTimeout(1500)
   expect(menuCount(p)).toBe(0)
+  await p.close()
+})
+
+test('the shortcut on a page whose sign-in is framed from the site\'s login host fills that frame, matched to its own page', async () => {
+  const p = await ctx.newPage()
+  await p.goto(site('www.a4lab.test', '/account'))
+  const inner = p.frameLocator('#fr')
+  await expect(inner.locator('[name=email]')).toBeVisible()
+  const tab = await tabOf(p)
+  // The fill-login command, as the keyboard shortcut sends it (Chrome handles the keys outside the page).
+  await expect.poll(async () => {
+    await sw().evaluate(async (t: number) => { (chrome.commands.onCommand as unknown as { dispatch(n: string, tab: chrome.tabs.Tab): void }).dispatch('fill-login', await chrome.tabs.get(t)) }, tab)
+    return inner.locator('[name=email]').inputValue()
+  }, { timeout: 15_000 }).toBe('all@a4lab.test')
+  await expect(inner.locator('[name=password]')).toHaveValue('A4-Site-2727!')
   await p.close()
 })

@@ -10,7 +10,7 @@ import { insecureOnly, siteKey } from '../../../src/core/vault/url-match'
 import type { VaultItemSummary } from '../../../src/core/vault/types'
 import type { FieldRules } from './field-rules'
 import { tabStore } from './tab-store'
-import { recent, tiersFor, view, type MenuItem } from './login-pick'
+import { oneRowPerLogin, recent, tiersFor, view, type MenuItem } from './login-pick'
 
 export { view, type MenuItem }
 
@@ -54,7 +54,8 @@ export async function loginDigest(id: string): Promise<string> {
   const key = `${id}:${at}`
   let p = digests.get(key)
   if (!p) {
-    p = api.item(id).then(async (i) => {
+    // Quiet: a comparison Walnut makes by itself (the toolbar count reads it as the person browses) never keeps the vault unlocked.
+    p = api.item(id, true).then(async (i) => {
       const bytes = new TextEncoder().encode(JSON.stringify([SALT, i.password ?? '', i.totp ?? '']))
       return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (b) => b.toString(16).padStart(2, '0')).join('')
     }, () => { digests.delete(key); return `unread:${id}` })
@@ -92,12 +93,15 @@ async function tryJoin(known?: boolean): Promise<boolean> {
 
 /** Logins offered on a page (tier 1): the same host first, then favorites, then most recently used. */
 export async function matchesFor(page: string): Promise<MenuItem[]> {
-  return tiersFor(await summaries(), page).first
+  return (await tiersOf(page)).first
 }
 
 /** Both tiers: `others` are saved for other parts of the page's site, listed apart, never offered first. */
 export async function tiersOf(page: string): Promise<{ first: MenuItem[]; others: MenuItem[] }> {
-  return tiersFor(await summaries(), page)
+  const t = tiersFor(await summaries(), page)
+  // One row per login saved more than once: the menu, the popup, the toolbar count and the shortcut agree.
+  const [first, others] = await oneRowPerLogin([t.first, t.others], loginDigest)
+  return { first, others }
 }
 
 /** Logins saved for https only, on this plain http page: said, never offered. */

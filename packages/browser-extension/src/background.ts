@@ -22,9 +22,9 @@ import { cursorUp, frameHelloBox } from './agent-cursor'
 import { adoptTab, agentMessage, agentOn, initAgent, isAgentTab, releaseAllTabs, releaseTab, relayState, tabOwnerOf } from './agent'
 import { initSelfUpdate } from './self-update'
 import { injectOpenTabs, reachPage, toPage } from './page-reach'
-import { CODE_PAGE_MS, PENDING_MS, activeTab, fail, forget, insecureFor, isWalnutPage, liveState, loginDigest, matchesFor, originOf, pendingAlive, siteOf, state, stores, summaries, tiersOf, view, walletItems, type Reply } from './bg-vault'
-import { domainOf, frameOnSite, oneRowPerLogin } from './login-pick'
-import { afterLoginFill, credsOf, fillFrames, fillWalletFrame, openUnlock } from './bg-fill'
+import { CODE_PAGE_MS, PENDING_MS, activeTab, fail, forget, insecureFor, isWalnutPage, liveState, matchesFor, originOf, pendingAlive, siteOf, state, stores, summaries, tiersOf, view, walletItems, type Reply } from './bg-vault'
+import { domainOf, frameOnSite } from './login-pick'
+import { afterLoginFill, credsOf, fillFrames, fillWalletFrame, openUnlock, signInFrame } from './bg-fill'
 import { handleMenu } from './bg-menu'
 import { GENERATED_MS, barNonceFor, handleSave, showSaveBar } from './bg-save'
 import { clearLater, initClipboard } from './bg-clipboard'
@@ -462,30 +462,32 @@ ext.storage.onChanged.addListener((changes, area) => {
 })
 
 /**
- * Fill the login for a tab: the one there is, else its menu (in the frame asked, the top page by
- * default). A frame's own page (`frameUrl`, on the tab's site) is what its login is matched to.
+ * Fill the login for a tab: the one there is, else its menu, in the frame asked (the context
+ * menu's), else where the page's sign-in is: the top page, or, when the top page has no login form,
+ * the first frame on its site that has one (a sign-in framed from the site's login host,
+ * idmsa.apple.com in appstoreconnect.apple.com). A frame's own page is what its login is matched to.
  */
 async function fillFromBrowser(t: { id?: number; url?: string } | undefined, frameId?: number, frameUrl?: string): Promise<void> {
   if (t?.id === undefined || !t.url || !/^https?:/.test(t.url) || await isWalnutPage(t.url)) return
-  const page = frameId && frameUrl ? frameUrl : t.url
   // The chosen idle time passed with no use: locked first, as for every message (handle), so the
   // shortcut or the context menu never fills from a session the auto-lock should have ended.
   await lockIfIdle(lockNow).catch(() => false)
   if (!(await connection()) || !(await vaultSession())) { await openUnlock(); return }
   void touch()
-  // One login saved twice is one login: filled, as the menu would show it on one row.
-  const [matches] = await oneRowPerLogin([await matchesFor(page)], loginDigest)
+  const where = frameId !== undefined ? { frameId, page: frameId && frameUrl ? frameUrl : t.url } : await signInFrame(t.id, t.url)
+  const page = where.page
+  const matches = await matchesFor(page)
   if (matches.length === 1) {
     const item = await api.item(matches[0].id)
-    if (await fillFrames(t.id, frameId, credsOf(item), 'login', page, item.urls)) await afterLoginFill(t.id, frameId, item, page)
+    if (await fillFrames(t.id, where.frameId, credsOf(item), 'login', page, item.urls)) await afterLoginFill(t.id, where.frameId, item, page)
   } else {
-    await ext.tabs.sendMessage(t.id, { type: 'open-menu-here', ...(frameId ? { here: true } : {}) }, { frameId: frameId ?? 0 }).catch(() => undefined)
+    await ext.tabs.sendMessage(t.id, { type: 'open-menu-here', ...(where.frameId ? { here: true } : {}) }, { frameId: where.frameId ?? 0 }).catch(() => undefined)
   }
 }
 
 ext.commands?.onCommand.addListener((name, tab) => {
   if (name !== 'fill-login') return
-  // The top page opens its menu; a frame never does from here.
+  // The page's sign-in opens its menu: the top page's, or its site's framed one (signInFrame).
   void (async () => fillFromBrowser(tab ?? await activeTab()))().catch(() => undefined)
 })
 

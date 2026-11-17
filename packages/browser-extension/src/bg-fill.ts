@@ -56,6 +56,17 @@ export async function fillFrames(tabId: number, frameId: number | undefined, cre
   return false
 }
 
+/** Where a tab's sign-in is: the top page (no frame named), unless it has no login form and a frame on its site has one. */
+export async function signInFrame(tabId: number, top: string): Promise<{ frameId?: number; page: string }> {
+  const all = (await stores.frames.get(tabId)) ?? {}
+  if (all['0']) return { page: top }
+  const framed = Object.entries(all)
+    .map(([id, f]) => ({ id: Number(id), url: f.url ?? '' }))
+    .filter((f) => f.id !== 0 && f.url && frameOnSite(f.url, top))
+    .sort((a, b) => a.id - b.id)[0]
+  return framed ? { frameId: framed.id, page: framed.url } : { page: top }
+}
+
 /** A card or address into the menu's frame (or the top frame), whose page is `expected`, on the tab's site. */
 export async function fillWalletFrame(tabId: number, frameId: number, values: Record<string, string>, kind: string, expected: string): Promise<boolean> {
   const tab = await ext.tabs.get(tabId).catch(() => undefined)

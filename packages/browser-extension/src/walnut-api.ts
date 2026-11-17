@@ -273,7 +273,8 @@ export const api = {
 
   // The summaries are read as the person browses: quiet, so browsing never keeps the vault open.
   items: () => call<{ items: VaultItemSummary[] }>('GET', '/vault/items', undefined, { quiet: true }).then((r) => r.items),
-  item: (id: string) => call<{ item: VaultItem }>('GET', `/vault/items/${encodeURIComponent(id)}`).then((r) => r.item),
+  /** `quiet`: read by the extension itself (comparing two saved logins), never a use of the unlock. */
+  item: (id: string, quiet = false) => call<{ item: VaultItem }>('GET', `/vault/items/${encodeURIComponent(id)}`, undefined, { quiet }).then((r) => r.item),
   totp: (id: string) => call<{ code: string; remaining: number }>('GET', `/vault/items/${encodeURIComponent(id)}/totp`),
   create: (item: VaultItemInput) => call<{ item: VaultItem }>('POST', '/vault/items', { item }).then((r) => r.item),
   update: (id: string, item: VaultItemInput, expectedUpdatedAt?: string) =>

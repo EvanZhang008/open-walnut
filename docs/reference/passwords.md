@@ -466,7 +466,9 @@ Lock elsewhere shows within seconds); a content script holds neither. Each kind 
 send it (the popup, the menu, the save bar, a content script). A fill fetches the item and
 sends its username and password only to the top page and frames on its site that reported a
 login form (or to the one frame whose menu was picked), each with its own origin, which the frame
-checks again; it keeps nothing. A fill that names no frame (the popup's Fill, the shortcut) puts
+checks again; it keeps nothing. The shortcut and the context menu on the top page fill where the page's sign-in is: the top page, or,
+when it has no login form, the first frame on its site that has one, matched to that frame's page. A
+fill that names no frame (the popup's Fill) puts
 a login into a frame of another origin only when the item's own sites take that frame's page too:
 a login saved for one host never goes into a sibling host's frame. An agent's `fill_login` fills
 the top page's own origin only.
@@ -501,7 +503,7 @@ sandboxed frame, gets no icon and no fill. A frame of another origin learns from
 (`page-init`) whether it is on the tab's site, and needs every frame between it and the top page
 on that site too (`location.ancestorOrigins`, where the browser has it). Such a frame offers no new
 password: what it sends is not offered for saving, so a password made there would be lost. The
-menu and the shortcut count the same login saved twice (the same username, ignoring case for an
+menu, the popup, the toolbar count and the shortcut count the same login saved twice (the same username, ignoring case for an
 email address, and the same password and code) once; the background compares a salted hash of
 each, read once per item and unlock, never the plain text. Every fill, menu or popup, checks the item against
 the page again in the background. It does nothing on Walnut's own pages (so its master

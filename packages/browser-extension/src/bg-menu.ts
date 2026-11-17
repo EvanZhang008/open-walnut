@@ -14,8 +14,8 @@ import { getSettings } from './settings'
 import { clearLater } from './bg-clipboard'
 import { walletValues } from './bg-wallet'
 import { COVERED, afterLoginFill, credsOf, fillFrames, fillWalletFrame, openUnlock, stillShown } from './bg-fill'
-import { CODE_PAGE_MS, PENDING_MS, insecureFor, isLockedError, loginDigest, matchesFor, nonce, originOf, siteOf, state, stores, tiersOf, walletItems, type MenuOwner, type Reply } from './bg-vault'
-import { cleanAccount, domainOf, namedFirst, oneRowPerLogin, stepOneFirst } from './login-pick'
+import { CODE_PAGE_MS, PENDING_MS, insecureFor, isLockedError, matchesFor, nonce, originOf, siteOf, state, stores, tiersOf, walletItems, type MenuOwner, type Reply } from './bg-vault'
+import { cleanAccount, domainOf, namedFirst, stepOneFirst } from './login-pick'
 
 const WALLET = new Set(['card', 'identity'])
 
@@ -122,9 +122,8 @@ export async function handleMenu(msg: { type: string; [k: string]: unknown }, se
       try {
         if (WALLET.has(owner.role)) return { ...base, state: 'unlocked', items: await walletItems(owner.role as 'card' | 'identity') }
         // The same login saved twice is one row (oneRowPerLogin).
-        if (owner.role === 'totp') return { ...base, state: 'unlocked', items: await withCodes(owner, (await oneRowPerLogin([await matchesFor(owner.url)], loginDigest))[0]) }
-        const tiers = await tiersOf(owner.url)
-        const [first, others] = await oneRowPerLogin([tiers.first, tiers.others], loginDigest)
+        if (owner.role === 'totp') return { ...base, state: 'unlocked', items: await withCodes(owner, await matchesFor(owner.url)) }
+        const { first, others } = await tiersOf(owner.url)
         const insecure = first.length || others.length ? 0 : await insecureFor(owner.url)
         // Logins saved for other parts of this site: listed apart, under their own heading.
         const apart = others.length ? { others, othersDomain: domainOf(owner.url) } : {}
