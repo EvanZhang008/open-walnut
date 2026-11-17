@@ -154,6 +154,8 @@ const NO_PAINTED_WORDS: Record<string, string> = {
   'web/src/styles/globals.css :: .notes-tree-arrow.notes-tree-arrow-empty': SLOT,
   // A column's jump number (JumpBadge), hidden for the frame it measures where its header ends.
   'web/src/pages/MainPage.tsx :: inline (1)': PLACING,
+  // A calendar day grid's hour label ("9 AM"), hidden where the now line's own time label sits.
+  'web/src/components/calendar/TimeGrid.tsx :: inline (1)': HEADER,
   'web/src/styles/plugin-updates.css :: .plugin-update-label::after': SLOT,
   'web/src/styles/plugin-updates.css :: .plugin-update-slot': SLOT,
   'web/src/styles/board-kanban-controls.css :: .kanban-lane-strip-measure': SLOT,

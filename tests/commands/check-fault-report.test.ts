@@ -57,6 +57,9 @@ async function api(status: number, body: unknown): Promise<string> {
   return `http://127.0.0.1:${(server.address() as net.AddressInfo).port}/api/v1`
 }
 
+// Every tools.call carries its own call id (src/lib/op-call-id.ts), so a resend runs it once.
+const CALL_ID = expect.stringMatching(/^oc-[0-9a-f]{32}$/)
+
 const checkEnv = (socket: string): NodeJS.ProcessEnv => ({ WALNUT_CHECK_TOKEN: 'trigger-check:abc', WALNUT_CHECK_SOCKET: socket })
 
 describe('a check\'s HTTP call the machine failed', () => {
@@ -66,7 +69,7 @@ describe('a check\'s HTTP call the machine failed', () => {
     const r = await executeOp('task_update', { id: 'task-1', title: 'x' }, { apiBase: base, origin: LOCAL_ORIGIN })
     expect(r).toMatchObject({ ok: false, status: 507, code: 'disk_full' })
     await reportCheckOutcome(r, checkEnv(d.socket))
-    expect(d.lines).toEqual([{ v: 1, op: 'tools.call', sid: 'trigger-check:abc', args: { name: CHECK_FAULT_OP, args: { kind: 'disk_full' } } }])
+    expect(d.lines).toEqual([{ v: 1, op: 'tools.call', sid: 'trigger-check:abc', args: { name: CHECK_FAULT_OP, args: { kind: 'disk_full' }, callId: CALL_ID } }])
   })
 
   it('no server at all is server_away', async () => {
@@ -83,7 +86,7 @@ describe('a check\'s HTTP call the machine failed', () => {
     const answered = await executeOp('task_get', { id: 'task-1' }, { apiBase: ok, origin: LOCAL_ORIGIN })
     expect(answered.ok).toBe(true)
     await reportCheckOutcome(answered, checkEnv(d.socket))
-    expect(d.lines.map((l) => l.args)).toEqual([{ name: CHECK_FAULT_OP, args: { kind: null } }])
+    expect(d.lines.map((l) => l.args)).toEqual([{ name: CHECK_FAULT_OP, args: { kind: null }, callId: CALL_ID }])
     const base = await api(404, { error: { code: 'not_found', message: 'no such task' } })
     const r = await executeOp('task_get', { id: 'nope' }, { apiBase: base, origin: LOCAL_ORIGIN })
     expect(r).toMatchObject({ ok: false, status: 404 })
@@ -109,7 +112,7 @@ describe('a check\'s HTTP call the machine failed', () => {
       p.on('close', resolve)
     })
     expect(code).not.toBe(0)
-    expect(d.lines.map((l) => l.args)).toEqual([{ name: CHECK_FAULT_OP, args: { kind: 'disk_full' } }])
+    expect(d.lines.map((l) => l.args)).toEqual([{ name: CHECK_FAULT_OP, args: { kind: 'disk_full' }, callId: CALL_ID }])
   }, 60_000)
 
   it('a daemon that is gone costs nothing but the attempt', async () => {
