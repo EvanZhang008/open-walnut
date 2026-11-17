@@ -150,7 +150,7 @@ export function askRecord(i: number, t = Date.now()): Record<string, unknown> {
 /** A connect error event about one host (two share a cause key, so the Errors pane groups them). */
 export function hostErrorRecord(host: string, i: number, t = Date.now()): Record<string, unknown> {
   return {
-    id: `bp-herr-${host}-${i}`, kind: 'operation-error', severity: 'error', title: `Session failed to start ${i}`,
+    id: `bp-herr-${host}-${i}`, kind: 'operation-error', needsYou: 'own-action', severity: 'error', title: `Session failed to start ${i}`,
     body: `ssh: connect to host ${host}.example.com: certificate expired`, timestamp: t - 20_000 + i, read: false,
     dedupKey: `error:bp-${host}-${i}`, recoveryKey: `host:${host}:${i}`, causeKey: `host:${host}`, category: 'Sessions',
   }

@@ -92,13 +92,13 @@ function receiptRecords(t: number): FeedRecord[] {
     {
       // Folded: first-seen an hour ago, still firing 10s ago. `timestamp` stays
       // first-seen, so only effectiveTs (lastTimestamp) keeps it at the top.
-      id: 'nfc-err-fold', kind: 'operation-error', severity: 'error',
+      id: 'nfc-err-fold', kind: 'operation-error', needsYou: 'own-action', severity: 'error',
       title: 'PW NFC folded failure', body: 'ECONNRESET talking to the fixture host',
       timestamp: t - 3_600_000, lastTimestamp: t - 10_000, count: 4,
       read: false, dedupKey: 'error:pw-nfc-fold',
     },
     {
-      id: 'nfc-err-single', kind: 'operation-error', severity: 'error',
+      id: 'nfc-err-single', kind: 'operation-error', needsYou: 'own-action', severity: 'error',
       title: 'PW NFC single failure', body: 'One-off fixture failure',
       timestamp: t - 45_000, read: false, dedupKey: 'error:pw-nfc-single',
     },
@@ -391,7 +391,7 @@ test('rail sorts the feed by what the user has to do, and cards carry the ask', 
   // A re-fire is an UPDATE: the same card grows its count, no second entry and
   // (crucially) no toast — that is the 36-identical-403s problem.
   await injectEvent(page, 'notification:updated', {
-    id: 'nfc-err-fold', kind: 'operation-error', severity: 'error',
+    id: 'nfc-err-fold', kind: 'operation-error', needsYou: 'own-action', severity: 'error',
     title: 'PW NFC folded failure', body: 'ECONNRESET talking to the fixture host (again)',
     timestamp: Date.now() - 3_600_000, lastTimestamp: Date.now(), count: 7,
     read: false, dedupKey: 'error:pw-nfc-fold',
@@ -455,19 +455,19 @@ test('rail sorts the feed by what the user has to do, and cards carry the ask', 
 function categorizedErrorFeed(t: number): FeedRecord[] {
   return [
     {
-      id: 'nfc-cat-a1', kind: 'operation-error', severity: 'error',
+      id: 'nfc-cat-a1', kind: 'operation-error', needsYou: 'own-action', severity: 'error',
       title: 'PW NFC alpha failure one', body: 'First alpha-family failure',
       timestamp: t - 10_000, read: false, dedupKey: 'error:pw-nfc-cat-a1',
       category: 'PW NFC Alpha',
     },
     {
-      id: 'nfc-cat-a2', kind: 'operation-error', severity: 'error',
+      id: 'nfc-cat-a2', kind: 'operation-error', needsYou: 'own-action', severity: 'error',
       title: 'PW NFC alpha failure two', body: 'Second alpha-family failure',
       timestamp: t - 20_000, read: false, dedupKey: 'error:pw-nfc-cat-a2',
       category: 'PW NFC Alpha',
     },
     {
-      id: 'nfc-cat-b1', kind: 'operation-error', severity: 'error',
+      id: 'nfc-cat-b1', kind: 'operation-error', needsYou: 'own-action', severity: 'error',
       title: 'PW NFC beta failure', body: 'The one beta-family failure',
       timestamp: t - 60_000, read: false, dedupKey: 'error:pw-nfc-cat-b1',
       category: 'PW NFC Beta',
@@ -671,13 +671,13 @@ test('permissions and hard errors toast; cron, skills and warnings go to the fee
   })
   // A non-error operation-error is a diagnosis, not an interruption.
   await injectEvent(page, 'notification:new', {
-    id: 'nfc-warn', kind: 'operation-error', severity: 'warning',
+    id: 'nfc-warn', kind: 'operation-error', needsYou: 'own-action', severity: 'warning',
     title: 'PW NFC warning only', body: 'Degraded, not broken',
     timestamp: Date.now(), read: false, dedupKey: 'error:pw-nfc-warning',
   })
   // A hard error does interrupt — twice under one dedupKey is still ONE of each.
   const hardError = {
-    id: 'nfc-hard', kind: 'operation-error', severity: 'error',
+    id: 'nfc-hard', kind: 'operation-error', needsYou: 'own-action', severity: 'error',
     title: 'PW NFC hard error', body: 'Fixture blew up',
     timestamp: Date.now(), read: false, dedupKey: 'error:pw-nfc-hard',
   }

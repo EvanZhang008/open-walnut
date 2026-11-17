@@ -13,6 +13,7 @@ import { SettingsNotice, SettingsLoadingRow } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SectionCard } from '../inputs/SectionCard';
 import { SegmentedControl } from '../inputs/SegmentedControl';
+import { HealthErrorLog } from './HealthErrorLog';
 import '@/styles/settings-sections-addons.css';
 import '@/styles/health-monitor.css';
 
@@ -160,6 +161,7 @@ export function HealthMonitorSection() {
   const actions = <SettingsButton onClick={() => void load()} busy={loading} busyLabel="Refreshing...">Refresh</SettingsButton>;
 
   return (
+    <>
     <SectionCard id="walnut-health" title="Walnut Health" description={HEALTH_BLURB} actions={actions}>
       <div className="settings-addons-contents health-monitor" data-testid="health-monitor">
         {loading && !view && <SettingsLoadingRow>Reading the alarms...</SettingsLoadingRow>}
@@ -189,6 +191,8 @@ export function HealthMonitorSection() {
         )}
       </div>
     </SectionCard>
+    <HealthErrorLog />
+    </>
   );
 }
 

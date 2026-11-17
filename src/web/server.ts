@@ -191,6 +191,7 @@ import { hooksRouter } from './routes/hooks.js'
 import { addNotification as addFeedNotification, upsertNotification as upsertFeedNotification, resolvePermissionNotification, recoverNotifications, expireOwnCardsOfUnloadedPlugins, dismissedConditionKeys } from '../core/notifications/store.js'
 import { createRecoveryTransitionTracker } from '../core/notifications/recovery-transition.js'
 import { humanizeErrorNotification } from '../core/notifications/humanize.js'
+import type { NeedsYou } from '../core/notifications/audience.js'
 import { withOriginNote } from '../core/notifications/origin.js'
 import { causeKeyForError, hostCauseKey } from '../core/notifications/error-cause.js'
 import { taskSyncPushRecoveryKey } from '../core/task-sync-error.js'
@@ -285,6 +286,8 @@ async function publishErrorNotification(input: {
   recoveryKey?: string
   /** The one thing the human can do about it (a "Sign in" button); see NotificationRecord.action. */
   action?: { label: string; to: string }
+  /** Why the person must see it (audience.ts). Absent: Walnut Health only. */
+  needsYou?: NeedsYou
 }): Promise<boolean> {
   const timestamp = Date.now()
   const lastAt = errorNotificationRecentScopes.get(input.dedupScope)
@@ -353,6 +356,7 @@ async function publishErrorNotification(input: {
       ...(input.recoveryKey ? { recoveryKey: input.recoveryKey } : {}),
       ...(causeKey ? { causeKey } : {}),
       ...(input.action ? { action: input.action } : {}),
+      ...(input.needsYou ? { needsYou: input.needsYou } : {}),
     })
     // Armed only after the write landed — a failed persist must not silence this
     // failure for a full TTL window with nothing durable to show for it.
@@ -2127,7 +2131,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     void import('../core/health-monitor/index.js').then((m) => m.startHealthMonitor({
       exitTraceFile: exitTraceFile(),
       notify: (alarmId, title, body) => {
-        void publishErrorNotification({ title, body, dedupScope: `health:${alarmId}`, recoveryKey: `health:${alarmId}` })
+        // An alarm Walnut could not fix itself. The disk one needs the person (only they can
+        // free space Walnut cannot rebuild); every other alarm is Walnut Health's own row.
+        void publishErrorNotification({ title, body, dedupScope: `health:${alarmId}`, recoveryKey: `health:${alarmId}`, ...(alarmId.startsWith('disk.free') ? { needsYou: 'disk-full' as const } : {}) })
       },
       recover: (alarmId) => { void publishRecovery([`health:${alarmId}`]) },
       onChange: () => broadcastEvent('health-monitor:changed', {}),
@@ -3702,7 +3708,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // Both levels share the 'disk' condition: freeing space fixes them
       // together, so one recovery signal retires whichever card is showing.
       notify: (title, body, dedupScope) => {
-        void publishErrorNotification({ title, body, dedupScope, recoveryKey: 'disk' })
+        // Only a full disk stops writes and needs the person; "filling up" is Walnut Health's.
+        void publishErrorNotification({ title, body, dedupScope, recoveryKey: 'disk', ...(dedupScope === 'disk:critical' ? { needsYou: 'disk-full' as const } : {}) })
       },
       // Already an edge (the module only calls this when the level CHANGES to
       // ok), so no transition tracker is needed on this side.
@@ -6567,6 +6574,7 @@ function startGitAutoCommit(
             body: 'git-sync detected a suspicious mass change (possible stale-worktree revert) and stopped auto-committing. Pull-only mode is active. Check open-walnut logs -s git.',
             dedupScope: 'git:safe-mode',
             recoveryKey: 'git',
+            needsYou: 'sync-stopped',
           })
         }
       }
@@ -7074,6 +7082,7 @@ function startPluginSyncPolling(): void {
               dedupScope: `plugin:${plugin.id}:sign-in`,
               recoveryKey: `plugin:${plugin.id}`,
               ...(decision.notice.action ? { action: decision.notice.action } : {}),
+              ...(decision.notice.needsYou ? { needsYou: decision.notice.needsYou } : {}),
             })
             log.web.warn(`${plugin.id} sync: sign-in`, { pluginId: plugin.id, detail: status?.detail })
           } else if (decision.recovered) {
@@ -7110,6 +7119,7 @@ function startPluginSyncPolling(): void {
             dedupScope: `plugin:${plugin.id}:${notice.level}`,
             recoveryKey: `plugin:${plugin.id}`,
             ...(notice.action ? { action: notice.action } : {}),
+            ...(notice.needsYou ? { needsYou: notice.needsYou } : {}),
           })
           // One warn per streak for each card (StreakWarnings): the absorbed repeats
           // and every later republish are debug, or a failing tick fills the log.

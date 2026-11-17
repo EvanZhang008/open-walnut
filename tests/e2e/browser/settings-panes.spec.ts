@@ -65,6 +65,8 @@ test('C2: each nav entry mounts only its own pane', async ({ page }) => {
   const folded: Record<string, string[]> = {
     tasks: ['tasks', 'focus-tiers', 'tags', 'task-providers'],
     advanced: ['advanced', 'providers'],
+    // The alarms and, under them, the background errors (HealthErrorLog).
+    'walnut-health': ['walnut-health', 'walnut-health-errors'],
   }
   const panes = await page.$$eval('.settings-nav button.settings-nav-item[data-testid^="settings-nav-"]',
     (els) => els.map((e) => e.getAttribute('data-testid')!.slice('settings-nav-'.length)))

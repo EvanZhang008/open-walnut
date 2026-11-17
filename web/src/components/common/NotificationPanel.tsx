@@ -46,6 +46,7 @@ import { NotificationSystemPane, useSearchIndexStatus, searchIndexUnhealthy } fr
 import { updateAvailable, useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { NotificationProblems, useDisabledHosts, useProblemHosts } from './NotificationProblems';
 import { ErrorCategoryTitle } from './ErrorCategoryTitle';
+import { HealthErrorsLink } from './HealthErrorsLink';
 import { landingSectionFor } from '@/utils/host-attention';
 import { hostOfCauseKey } from '@/contexts/notifications/notification-model';
 import { useLocalDismissed } from '@/utils/host-banner-dismiss';
@@ -679,6 +680,8 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
           </div>
 
           <div className="nfc-detail">
+            {/* Walnut's own errors are not the person's: one line says where they are. */}
+            {section === 'errors' && !activeErrorCategory && <HealthErrorsLink onNavigate={onNavigate} />}
             {/* A script waiting on an approval needs the person too: the same one line as
                 Home's Needs you, a click opens the request (ApprovalRow). */}
             {(section === 'action' || section === 'all') && approvals.length > 0 && (

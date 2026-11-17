@@ -89,7 +89,7 @@ export async function raisePermissionToast(page: Page, sessionId: string, tag: s
  */
 export async function raiseActionToast(page: Page, tag: string, to: string): Promise<Locator> {
   await injectEvent(page, 'notification:new', {
-    id: `yield-err-${tag}`, kind: 'operation-error', severity: 'error',
+    id: `yield-err-${tag}`, kind: 'operation-error', needsYou: 'own-action', severity: 'error',
     title: `PW yield ${tag}`, body: 'A letter needs you', timestamp: Date.now(), read: false,
     dedupKey: `error:yield-${tag}`, action: { label: 'Open letter', to },
   })

@@ -7,6 +7,8 @@
  * stack, and the persistent feed.
  */
 
+import { audienceOf } from '@open-walnut/notice-audience';
+
 /** Persistent kinds land in the feed + unread count; ephemeral kinds only toast. */
 export type NotificationKind =
   | 'permission' | 'cron' | 'operation-error' | 'sort' | 'audio-error' | 'skill' | 'hook'
@@ -151,6 +153,13 @@ export interface Notification {
   count?: number;
   /** latest occurrence (epoch ms). `timestamp` stays first-seen. */
   lastTimestamp?: number;
+  /** operation-error only: every occurrence reported (Walnut Health's count). */
+  occurrences?: number;
+
+  // ── Audience (src/core/notifications/audience.ts, the one rule) ──
+  /** operation-error only: why the person must see it. Absent on an error = Walnut Health only.
+   *  An error raised in this window for the person's own action gets 'own-action' in notify(). */
+  needsYou?: string;
 }
 
 /**
@@ -216,10 +225,11 @@ export const IS_PERSISTENT: Record<NotificationKind, boolean> = {
  * Ephemeral kinds (sort/audio-error) aren't in the feed at all, so a toast is
  * their only surface — always toast them.
  */
-export function SHOULD_TOAST(n: { kind: NotificationKind; severity: NotificationSeverity }): boolean {
+export function SHOULD_TOAST(n: { kind: NotificationKind; severity: NotificationSeverity; needsYou?: string; dedupKey?: string }): boolean {
   switch (n.kind) {
     case 'permission': return true;
-    case 'operation-error': return n.severity === 'error';
+    // Only an error that needs the person: the rest is Walnut Health's (audience.ts).
+    case 'operation-error': return n.severity === 'error' && audienceOf(n) === 'user';
     case 'hook': return true;
     case 'sort': return true;
     case 'audio-error': return true;

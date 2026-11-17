@@ -1,5 +1,8 @@
 # Notification Lifecycle (the condition system)
 
+Who sees a record (the person, or Walnut Health only) is one rule of its own:
+[notice-audience.md](./notice-audience.md).
+
 Every notification is a projection of a CONDITION, and a condition has a state
 machine — never fire-and-forget:
 

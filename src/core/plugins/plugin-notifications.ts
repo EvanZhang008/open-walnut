@@ -32,6 +32,8 @@ export interface PluginNoticeInput {
   dedupKey: string
   taskId?: string
   sessionId?: string
+  /** error() only: the person must act (PluginNotice.needsYou). */
+  needsYou?: boolean
   kind?: 'skill' | 'reminder'
   actions?: Array<{ label: string; args?: Record<string, unknown> } & (
     | { op: string; dialog?: never }
@@ -144,6 +146,9 @@ export function createPluginNotifications(options: {
         recoveryKey: `plugin:${pluginId}`,
         taskId: notice.taskId,
         sessionId: notice.sessionId,
+        // Who sees it is decided in one place (notifications/audience.ts): the plugin says only
+        // whether its person must act; everything else is Walnut Health's.
+        ...(notice.needsYou === true ? { needsYou: 'plugin-asks' as const } : {}),
       })
       if (outcome !== 'suppressed') bus.emit(outcome === 'inserted' ? 'notification:new' : 'notification:updated', record, ['web-ui'], emitSource)
     },

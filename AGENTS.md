@@ -171,6 +171,7 @@ The org and the inbox (`docs/reference/org-and-inbox.md`):
 - **A thread goes with its work** (`thread-follow.ts`) to the lead whose team now does it. (`docs/reference/org-and-inbox.md`)
 - **Main and every VP never do the work themselves** (at most 3 look-only commands a turn, then hand on); Walnut reminds them and never refuses a call. (`docs/reference/org-and-inbox.md`)
 - **Main and every VP start by themselves, and one switch turns the whole org off** (`org.enabled: false`). (`docs/reference/org-and-inbox.md`)
+- **Only what needs the person pops up; every other error goes to Walnut Health**: one rule, `audienceOf` in `src/core/notifications/audience.ts`, read by the server and the web app. (`docs/reference/notice-audience.md`)
 - **The inbox is for what needs the user**: a decision, a review, or a report he asked for; never progress, a park or an FYI. (`docs/reference/org-and-inbox.md`)
 - **Every letter says who it is from, first** (`letter-origin.ts`); **Inbox Triage keeps standing routing rules** (`triage/routing-rules.ts`). (`docs/reference/org-and-inbox.md`)
 - **One place per update**: a thread's news stays in its thread, never also a letter; **while the user is away**, what needs him goes to his inbox in one thread. (`docs/reference/org-and-inbox.md`)

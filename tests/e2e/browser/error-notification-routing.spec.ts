@@ -1,5 +1,7 @@
 /**
- * Runtime errors belong in the notification center, not the main chat.
+ * A session's runtime error shows in the session's own panel and in Walnut Health, never in
+ * the main chat, as a toast or in the bell (src/core/notifications/audience.ts: it is Walnut's
+ * to fix; 2026-11-17, the user: only the errors he needs to see).
  *
  * This uses the real Homepage Quick Session flow and the real mock-daemon
  * pipeline. The mock Claude CLI exits non-zero for the exact prompt "error",
@@ -51,17 +53,35 @@ async function startFailingQuickSession(page: Page): Promise<void> {
   await quickStartResponse
 }
 
-test('session errors appear only in Notifications, never in main chat', async ({ page }) => {
+/** The bell's Errors view holds no card for it; its one line leads to Walnut Health, which does. */
+async function expectOnlyInWalnutHealth(page: Page, dedupKey: string): Promise<void> {
+  await page.getByRole('button', { name: 'Notifications' }).click()
+  const panel = page.locator('.notification-panel')
+  await expect(panel).toBeVisible()
+  await panel.locator('.nfc-rail-btn', { hasText: 'Errors' }).first().click()
+  await expect(panel.locator('.notification-feed-item-title', { hasText: SESSION_ERROR_CARD })).toHaveCount(0)
+  await panel.getByTestId('nfc-health-link').click()
+  const row = page.locator(`[data-testid=health-errors-row][data-key="${dedupKey}"]`)
+  await expect(row).toBeVisible({ timeout: 20_000 })
+  await expect(row).toContainText(SESSION_ERROR_CARD)
+}
+
+test('session errors appear in their panel and in Walnut Health, never in main chat or the bell', async ({ page }) => {
   await startFailingQuickSession(page)
 
+  let dedupKey = ''
   await expect.poll(async () => {
     const response = await page.request.get('/api/notifications')
     const data = await response.json() as {
-      feed: Array<{ title: string; body?: string; sessionId?: string; taskId?: string }>
+      feed: Array<{ title: string; dedupKey: string; audience?: string; sessionId?: string; taskId?: string; lastTimestamp?: number; timestamp: number }>
     }
-    return data.feed.some((item) =>
-      item.title === SESSION_ERROR_CARD && !!(item.sessionId || item.taskId))
+    const item = data.feed
+      .filter((n) => n.title === SESSION_ERROR_CARD && !!(n.sessionId || n.taskId) && n.audience === 'health')
+      .sort((a, b) => (b.lastTimestamp ?? b.timestamp) - (a.lastTimestamp ?? a.timestamp))[0]
+    dedupKey = item?.dedupKey ?? ''
+    return !!item
   }, { timeout: 15_000 }).toBe(true)
+  await expect(page.locator('.notification-toast', { hasText: SESSION_ERROR_CARD })).toHaveCount(0)
 
   const mainChat = page.locator('.main-page-chat')
   await expect(mainChat.locator('.chat-message-notification-error')).toHaveCount(0)
@@ -77,14 +97,12 @@ test('session errors appear only in Notifications, never in main chat', async ({
   await expect(sessionPanel.locator('.session-error-banner')).toContainText('Claude Code could not start')
   await expect(sessionPanel.locator('.chat-input-textarea')).toBeEditable()
 
-  await page.getByRole('button', { name: 'Notifications' }).click()
-  const panel = page.locator('.notification-panel')
-  await expect(panel).toBeVisible()
-  await expect(panel.locator('.notification-feed-item-title', { hasText: SESSION_ERROR_CARD }).first()).toBeVisible()
+  await expectOnlyInWalnutHealth(page, dedupKey)
 
-  // A refresh reloads persisted chat history and the durable notification feed.
-  // The error must stay out of chat and remain available in Notifications.
-  await page.reload()
+  // A refresh reloads persisted chat history and the durable feed: the error stays out of
+  // chat and the bell, and stays in Walnut Health. (A fresh load of Home: the step above left
+  // the page on Settings.)
+  await page.goto('/')
   await expect(page.locator('.main-page')).toBeVisible({ timeout: 45_000 })
   const reloadedMainChat = page.locator('.main-page-chat')
   await expect(reloadedMainChat.locator('.chat-message-notification-error')).toHaveCount(0)
@@ -92,12 +110,10 @@ test('session errors appear only in Notifications, never in main chat', async ({
   await expect(reloadedMainChat).not.toContainText(SESSION_ERROR_CARD)
   await expect(reloadedMainChat).not.toContainText('Session Delivery Failed')
 
-  await page.getByRole('button', { name: 'Notifications' }).click()
-  await expect(panel).toBeVisible()
-  await expect(panel.locator('.notification-feed-item-title', { hasText: SESSION_ERROR_CARD }).first()).toBeVisible()
+  await expectOnlyInWalnutHealth(page, dedupKey)
 
   await page.screenshot({
-    path: `${SCREENSHOT_DIR}/session-error-notification-only.png`,
+    path: `${SCREENSHOT_DIR}/session-error-walnut-health-only.png`,
     fullPage: true,
   })
 })

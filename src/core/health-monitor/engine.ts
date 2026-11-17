@@ -351,7 +351,7 @@ export class HealthMonitor {
     if (inst.actions.some((a) => a.kind === 'notify')) return
     const fixed = inst.actions.find((a) => a.kind === 'auto-fix')
     this.deps.notify?.(inst.id, def.title, [def.description, reason, fixed ? `Walnut tried: ${fixed.detail}` : ''].filter(Boolean).join(' '))
-    inst.actions.push({ at: now, kind: 'notify', ok: true, detail: 'told you in the notification center' })
+    inst.actions.push({ at: now, kind: 'notify', ok: true, detail: def.id === 'disk.free' ? 'told you in the notification center' : 'listed it under Background errors below' })
     this.deps.onChange?.()
   }
 

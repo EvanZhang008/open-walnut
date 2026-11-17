@@ -90,6 +90,8 @@ export interface SyncFailureNotice {
   action?: { label: string; to: string };
   /** The provider's own code, for the log line only. */
   code?: string;
+  /** Set when only the person can fix it (audience.ts): the card reaches them; otherwise Walnut Health. */
+  needsYou?: 'sign-in';
 }
 
 /** Where the console shows a plugin's account link and config: its page in Apps. */
@@ -120,6 +122,7 @@ export function decideSyncFailureNotice(
       body: `${pluginName} could not renew its credential${auth.authCode ? ` (${auth.authCode})` : ''}. `
         + 'Sync is paused until you sign in; retrying will not fix this.',
       action: { label: 'Sign in', to },
+      needsYou: 'sign-in',
       ...(auth.authCode ? { code: auth.authCode } : {}),
     };
   }
@@ -130,6 +133,7 @@ export function decideSyncFailureNotice(
       title: `${pluginName} is not set up yet`,
       body: firstLine,
       action: { label: 'Open Settings', to },
+      needsYou: 'sign-in',
     };
   }
 
@@ -201,6 +205,7 @@ export function decideConnectionNotice(
         body: status.detail?.trim()
           || `${pluginName} could not renew its credential. Sign in again before sync stops.`,
         action: { label: 'Sign in', to: pluginSettingsPath(pluginId) },
+        needsYou: 'sign-in',
       },
     };
   }

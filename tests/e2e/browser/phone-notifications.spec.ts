@@ -246,7 +246,7 @@ test('C90: pulling the center down 64 px runs the resync in place and says Updat
 
 function failure(n: number): FeedRecord {
   return {
-    id: `pwn-err-${n}`, kind: 'operation-error', severity: 'error',
+    id: `pwn-err-${n}`, kind: 'operation-error', needsYou: 'own-action', severity: 'error',
     title: `Task sync cannot import the reading list number ${n} from the remote service`,
     body: 'The remote service answered 503.', timestamp: Date.now() - n * 30_000, read: false,
     dedupKey: `err:pwn-${n}`, count: 140, resolved: n === 1 ? 'recovered' : undefined,

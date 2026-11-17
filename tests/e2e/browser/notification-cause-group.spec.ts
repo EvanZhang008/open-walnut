@@ -40,7 +40,7 @@ function causeFeed(t: number, opts?: { resolved?: boolean }): FeedRecord[] {
     : {}
   return [
     {
-      id: 'pwc-start', kind: 'operation-error', severity: 'error',
+      id: 'pwc-start', kind: 'operation-error', needsYou: 'own-action', severity: 'error',
       title: `${SEED_TAG} couldn't start a session`,
       body: 'Failed to deploy daemon source to devbox: Command failed: ssh',
       timestamp: t - 40_000, read: true, dedupKey: 'logerr:session:pwc-start',
@@ -48,7 +48,7 @@ function causeFeed(t: number, opts?: { resolved?: boolean }): FeedRecord[] {
       category: 'Sessions', ...resolved,
     },
     {
-      id: 'pwc-route', kind: 'operation-error', severity: 'error',
+      id: 'pwc-route', kind: 'operation-error', needsYou: 'own-action', severity: 'error',
       title: `${SEED_TAG} GET /api/sessions/:id/plan → 500`,
       body: 'This API endpoint is failing (HTTP 500).',
       timestamp: t - 30_000, read: true, dedupKey: 'logerr:web:pwc-route',
@@ -56,7 +56,7 @@ function causeFeed(t: number, opts?: { resolved?: boolean }): FeedRecord[] {
       category: 'API', ...resolved,
     },
     {
-      id: 'pwc-deliver', kind: 'operation-error', severity: 'error',
+      id: 'pwc-deliver', kind: 'operation-error', needsYou: 'own-action', severity: 'error',
       title: `${SEED_TAG} message couldn't be delivered`,
       body: 'Connection to devbox failed 12s ago: connection refused',
       timestamp: t - 10_000, read: true, dedupKey: 'error:session:pwc-s1:delivery',
@@ -66,7 +66,7 @@ function causeFeed(t: number, opts?: { resolved?: boolean }): FeedRecord[] {
     {
       // No causeKey: an ordinary standalone error that must stay in its family
       // block, proving the cause fold doesn't swallow bystanders.
-      id: 'pwc-other', kind: 'operation-error', severity: 'error',
+      id: 'pwc-other', kind: 'operation-error', needsYou: 'own-action', severity: 'error',
       title: `${SEED_TAG} data sync hiccup`,
       body: 'One-off fixture failure',
       timestamp: t - 20_000, read: true, dedupKey: 'error:pwc-other',

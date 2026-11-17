@@ -200,6 +200,8 @@ export async function flagClientIncidents(
         body: buildBody(line, device, batchCount),
         timestamp: windowStart,
         dedupKey,
+        // Walnut's to look into, never the person's popup (audience.ts): grouped in Walnut Health.
+        category: 'Phone app',
       });
       created += 1;
       // Live bell update; the durable write alone only shows after a refresh.

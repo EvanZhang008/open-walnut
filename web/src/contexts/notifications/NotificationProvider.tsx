@@ -44,12 +44,17 @@ import { NotificationContext } from './notification-context';
 import { pendingAt, useApprovals, type ApprovalsState } from '@/components/approvals/approvals-store';
 import { randomId } from '@/utils/random-id';
 import { operationErrorWords } from '@/utils/operation-error-words';
+import { audienceOf } from '@open-walnut/notice-audience';
 
 export interface NotificationContextValue {
   /** Current top-right toast stack. */
   toasts: Notification[];
-  /** Durable feed (persistent notifications), newest-last. */
+  /** Durable feed (persistent notifications), newest-last: only what the person needs
+   *  (audience.ts). Walnut's own errors are in `healthFeed`. */
   feed: Notification[];
+  /** The errors that are Walnut's to fix, for Settings > Walnut Health only: never toasted,
+   *  never in the bell. Same store, same lifecycle (recovery, expiry) as the feed. */
+  healthFeed: Notification[];
   /**
    * true once the initial GET /api/notifications merge has finished — success OR
    * failure. Consumers that make a ONE-TIME decision from the feed (the panel
@@ -143,6 +148,9 @@ export interface FeedRecord {
   project?: string;
   count?: number;
   lastTimestamp?: number;
+  occurrences?: number;
+  /** operation-error only — why the person must see it (audience.ts). */
+  needsYou?: string;
   /** kind 'letter' only — which letter the envelope points at. */
   letterId?: string;
   /** operation-error only — the repair session "Ask AI to fix" started. */
@@ -174,13 +182,19 @@ function enrichmentOf(r: FeedRecord): Partial<Notification> {
     ...(r.fix ? { fix: r.fix } : {}),
     ...(typeof r.count === 'number' ? { count: r.count } : {}),
     ...(typeof r.lastTimestamp === 'number' ? { lastTimestamp: r.lastTimestamp } : {}),
+    ...(typeof r.occurrences === 'number' ? { occurrences: r.occurrences } : {}),
+    ...(r.needsYou ? { needsYou: r.needsYou } : {}),
     ...(wireActionsOf(r.actions).length > 0 ? { actions: wireActionsOf(r.actions) } : {}),
   };
 }
 
 export function NotificationProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Notification[]>([]);
-  const [feed, setFeed] = useState<Notification[]>([]);
+  // Every record the store holds, the person's and Walnut Health's: one list, so a record whose
+  // audience changes between occurrences moves between the two views and never doubles.
+  const [allFeed, setFeed] = useState<Notification[]>([]);
+  const feed = useMemo(() => allFeed.filter(n => audienceOf(n) === 'user'), [allFeed]);
+  const healthFeed = useMemo(() => allFeed.filter(n => audienceOf(n) === 'health'), [allFeed]);
   const [loaded, setLoaded] = useState(false);
   // Read through a ref inside notify(): depending on it would rebuild notify (and
   // the whole context value) on every quiet change.
@@ -192,8 +206,11 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   // dismissFeed's clear-all path is the only such reader: depending on `feed`
   // rebuilt the callback (and so the whole context value) on every notification,
   // re-rendering every consumer of useNotifications.
+  // The person's feed only: "Clear all" in the bell must not wipe Walnut Health.
   const feedRef = useRef<Notification[]>(feed);
   useEffect(() => { feedRef.current = feed; }, [feed]);
+  const allFeedRef = useRef<Notification[]>(allFeed);
+  useEffect(() => { allFeedRef.current = allFeed; }, [allFeed]);
 
   // dedupKeys we've already surfaced as toasts this session — mirrors the old
   // per-component dedup but unified. Feed dedup is keyed separately (below) so a
@@ -248,15 +265,19 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const notify = useCallback((raw: NotificationInput) => {
-    // An error card the web app raises for the person's own action says what happened in
-    // words: a server's raw internals (a JSON body, a stack, a lock's path) stay in the log
+    // An error card the web app raises itself answers the person's own action (every such call
+    // site is listed in tests/web/notice-single-exit.test.ts), and says what happened in words:
+    // a server's raw internals (a JSON body, a stack, a lock's path) stay in the log
     // (operation-error-words.ts). One place for every such card.
-    const input = raw.kind === 'operation-error' && !raw.fromServer && raw.body
-      ? { ...raw, body: operationErrorWords(raw.body) } : raw;
+    const ownError = raw.kind === 'operation-error' && !raw.fromServer;
+    const input = ownError
+      ? { ...raw, needsYou: raw.needsYou ?? 'own-action', ...(raw.body ? { body: operationErrorWords(raw.body) } : {}) }
+      : raw;
     const persistent = input.persistent ?? IS_PERSISTENT[input.kind];
     // Toast policy: only what needs a human NOW interrupts (permissions, hard
     // errors, hooks, the two ephemeral kinds). Routine automation — a cron run,
-    // a new skill — lands in the feed + bell badge with no toast.
+    // a new skill — lands in the feed + bell badge with no toast. An error that is
+    // Walnut's to fix never toasts: it goes to Walnut Health (audience.ts).
     let shouldToast = SHOULD_TOAST(input);
 
     // Same-cause suppression: one outage fans out into several DISTINCT cards
@@ -395,7 +416,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const ac = new AbortController();
     // What the page holds as the load begins: a card of it the server no longer has is gone there.
-    const heldAtStart = new Map(feedRef.current.map(n => [n.dedupKey, n] as const));
+    const heldAtStart = new Map(allFeedRef.current.map(n => [n.dedupKey, n] as const));
     fetch('/api/notifications', { signal: ac.signal })
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then((data: { feed: FeedRecord[]; unreadCount: number; offline?: boolean }) => {
@@ -459,19 +480,23 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // toast auto-dismisses (6s), so a recurring failure — cron retrying every
     // 30min — would toast on every single attempt. One per key per window keeps
     // the signal without training the user to ignore it.
+    // Only a failure the person can fix (the agent's credentials) is theirs. Any other turn
+    // failure shows in its own chat, and the server logs it, so it lands in Walnut Health.
+    if (!isAuth) return;
     const lastAt = errorToastAt.current.get(key) ?? 0;
     if (Date.now() - lastAt < AGENT_ERROR_TOAST_THROTTLE_MS) return;
     errorToastAt.current.set(key, Date.now());
     notify({
       kind: 'operation-error',
-      severity: isAuth ? 'error' : 'warning',
-      title: isAuth ? 'Agent auth failed — every turn will fail' : 'Agent turn failed',
+      severity: 'error',
+      needsYou: 'sign-in',
+      title: 'Agent auth failed — every turn will fail',
       body: error.length > MAX_FEED_BODY_CHARS ? `${error.slice(0, MAX_FEED_BODY_CHARS)}…` : error,
       // Keyed by message (not timestamp) so 36 identical 403s collapse into ONE
       // feed entry — that noise is what makes users tune notifications out.
       dedupKey: key,
       persistent: true,
-      ...(isAuth ? { action: { label: 'Open Settings', kind: 'navigate' as const, to: '/settings#providers' } } : {}),
+      action: { label: 'Open Settings', kind: 'navigate' as const, to: '/settings#providers' },
     });
   });
 
@@ -562,6 +587,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       ...(r.resolved ? { resolved: r.resolved } : {}),
       ...(actionOf(r) ? { action: actionOf(r) } : {}),
       ...enrichmentOf(r),
+      // Who it is for follows the server's latest occurrence, both ways (audience.ts): an
+      // absent reason clears the one this window held, or a card that became Walnut
+      // Health's would stay in the bell until a reload.
+      needsYou: r.needsYou,
       // The server's read state wins when it sent one. Two producers share this
       // frame and they disagree ON PURPOSE: a re-FIRE (upsertNotification) sets
       // read:false server-side because the thing is happening again, while a
@@ -666,9 +695,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const attentionCount = useMemo(() => attentionBadgeCount(feed) + approvalsWaiting, [feed, approvalsWaiting]);
 
   const value = useMemo<NotificationContextValue>(() => ({
-    toasts, feed, loaded, unreadCount, attentionCount, notify, dismissToast, pinToast, markAllRead,
+    toasts, feed, healthFeed, loaded, unreadCount, attentionCount, notify, dismissToast, pinToast, markAllRead,
     markLocalRead, dismissFeed, markReadByKey, quiet,
-  }), [toasts, feed, loaded, unreadCount, attentionCount, notify, dismissToast, pinToast, markAllRead,
+  }), [toasts, feed, healthFeed, loaded, unreadCount, attentionCount, notify, dismissToast, pinToast, markAllRead,
     markLocalRead, dismissFeed, markReadByKey, quiet]);
 
   return (

@@ -19,6 +19,7 @@ import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import { log } from '../../logging/index.js';
 import { conditionKeysOf } from './route-condition.js';
 import { WRITER_ORIGIN, type NotificationOrigin } from './origin.js';
+import { isHealthNotice, type NeedsYou } from './audience.js';
 import { reportOwnCards as reportToMirror, type OwnCardChange } from './mirror.js';
 import { isCompanion } from '../server-role.js';
 import { dismissalKeys, dismissalOf, endDismissals, liveDismissals, type DismissedCondition } from './dismissed-conditions.js';
@@ -180,6 +181,16 @@ export interface NotificationRecord {
   count?: number;
   /** Latest occurrence (epoch ms). `timestamp` stays first-seen. */
   lastTimestamp?: number;
+  /** operation-error only — every occurrence the producer reported, open or not
+   *  (at most one a minute per card: the producers' own storm absorbers). The
+   *  number Walnut Health shows; `count` stays the bell's "came back" fold. */
+  occurrences?: number;
+
+  // ── Audience (audience.ts) ──
+  /** operation-error only — why the person must see this error. Absent: it is
+   *  Walnut's to fix and shows in Walnut Health only (audienceOf). Follows the
+   *  latest occurrence. */
+  needsYou?: NeedsYou;
 
   // ── Repair (operation-error only) ──
   /** The coding session "Ask AI to fix" started for this error (routes/
@@ -327,14 +338,41 @@ export const OPEN_ERROR_RESERVE = 50;
  * (With no letters and no open errors this is byte-for-byte the old `slice(-MAX)`.)
  */
 function capNotifications(records: NotificationRecord[]): NotificationRecord[] {
+  // Walnut Health's records go first (audience.ts): ended ones, then open ones past the
+  // newest OPEN_ERROR_RESERVE, oldest first, so no number of background errors pushes out
+  // what the person needs (a pending ask, a letter, a sign-in card). Its newest open errors
+  // keep their room, so a recovery can still find them (the 2026-11-05 lesson below).
+  let excess = records.length - MAX_NOTIFICATIONS;
+  if (excess <= 0) return records;
+  const health = records.filter(n => isHealthNotice(n));
+  const openHealth = health.filter(h => h.kind === 'operation-error' && !h.resolved);
+  const keptOpen = new Set(openHealth.slice(-OPEN_ERROR_RESERVE));
+  const drop = new Set<NotificationRecord>();
+  for (const n of [...health.filter(h => !openHealth.includes(h)), ...openHealth.filter(h => !keptOpen.has(h))]) {
+    if (excess <= 0) break;
+    drop.add(n);
+    excess--;
+  }
+  const rest = drop.size > 0 ? records.filter(n => !drop.has(n)) : records;
+  if (excess <= 0) return rest;
+  // Still over: the person's records share what Walnut Health's reserve leaves.
+  const healthLeft = rest.filter(n => isHealthNotice(n));
+  const person = capPersonFeed(rest.filter(n => !isHealthNotice(n)), MAX_NOTIFICATIONS - healthLeft.length);
+  const keep = new Set([...healthLeft, ...person]);
+  return rest.filter(n => keep.has(n));
+}
+
+/** The person's feed cut to `max`: ordinary records before letters, letters before open error cards. */
+function capPersonFeed(records: NotificationRecord[], max: number): NotificationRecord[] {
+  if (max <= 0) return [];
   const isOpenError = (n: NotificationRecord) => n.kind === 'operation-error' && !n.resolved;
-  const reserved = new Set(records.filter(isOpenError).slice(-OPEN_ERROR_RESERVE));
+  const reserved = new Set(records.filter(isOpenError).slice(-Math.min(OPEN_ERROR_RESERVE, max)));
   const letters = records.filter(n => n.kind === 'letter');
-  if (letters.length === 0 && reserved.size === 0) return records.slice(-MAX_NOTIFICATIONS);
-  const keepLetters = Math.min(letters.length, MAX_NOTIFICATIONS - reserved.size);
+  if (letters.length === 0 && reserved.size === 0) return records.slice(-max);
+  const keepLetters = Math.max(0, Math.min(letters.length, max - reserved.size));
   // slice(-0) returns the WHOLE array, so the zero cases have to be explicit.
   const kept = new Set([...reserved, ...(keepLetters === 0 ? [] : letters.slice(-keepLetters))]);
-  const keepOthers = MAX_NOTIFICATIONS - kept.size;
+  const keepOthers = max - kept.size;
   const others = records.filter(n => !kept.has(n) && n.kind !== 'letter');
   for (const n of keepOthers <= 0 ? [] : others.slice(-keepOthers)) kept.add(n);
   return records.filter(n => kept.has(n));
@@ -540,6 +578,11 @@ export async function upsertNotification(
     if (stamp.origin) existing.origin = stamp.origin;
     else delete existing.origin;
     existing.lastTimestamp = input.timestamp ?? Date.now();
+    if (isError) existing.occurrences = (existing.occurrences ?? existing.count ?? 1) + 1;
+    // Who the card is for follows the latest occurrence, both ways: a sync that
+    // now fails for another reason than a dead sign-in is no longer the person's.
+    if (input.needsYou !== undefined) existing.needsYou = input.needsYou;
+    else delete existing.needsYou;
     // An ERROR card is one cause, and its count is how many times that cause
     // came BACK, not how often it was seen while it stood: a standing failure
     // re-logged every 60 s (or after every restart) only moves lastTimestamp

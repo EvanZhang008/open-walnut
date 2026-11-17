@@ -486,7 +486,9 @@ describe('SHOULD_TOAST policy', () => {
     // Needs a human NOW → interrupt.
     ['permission', 'warning', true],
     ['hook', 'info', true],
-    ['operation-error', 'error', true],
+    // An error toasts only when it names why it needs the person (audience.ts); without a
+    // reason it is Walnut Health's (the needsYou cases are in notice-single-exit.test.ts).
+    ['operation-error', 'error', false],
     // A warning-level operation error is feed-only: it doesn't mean every
     // subsequent turn fails, so it isn't worth an interruption.
     ['operation-error', 'warning', false],

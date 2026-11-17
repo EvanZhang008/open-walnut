@@ -88,6 +88,8 @@ export function notLinuxCard(alias: string, label: string, os: string | undefine
     recoveryKey: `host:${alias}`,
     category: 'Sessions',
     host: alias,
+    // Raised only for a host the person said Connect to (see the header): their own action.
+    needsYou: 'own-action',
     action: { label: 'Open Remote Hosts', to: SETTINGS_REMOTE_HOSTS },
   }
 }
@@ -103,6 +105,8 @@ export function connectFailedCard(alias: string, label: string, kind: string, hi
     recoveryKey: `host:${alias}`,
     category: 'Sessions',
     host: alias,
+    // Raised only for a host the person said Connect to (see the header): their own action.
+    needsYou: 'own-action',
     action: { label: 'Open Remote Hosts', to: hostRowHref(alias) },
   }
 }

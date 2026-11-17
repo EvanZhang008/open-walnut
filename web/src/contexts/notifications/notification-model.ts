@@ -262,7 +262,11 @@ export function mergeLoadedFeed(
     if (!server && !opts.offline && n.kind === 'operation-error' && n.fromServer && opts.heldAtStart.get(n.dedupKey) === n) continue;
     // A prompt answered elsewhere while this tab slept: the server's stamp wins.
     const resolved = n.resolved ?? server?.resolved;
-    byKey.set(n.dedupKey, server ? { ...n, read: n.read || (server.read ?? false), ...(resolved ? { resolved } : {}) } : n);
+    // Who it is for and how often it happened are the server's (audience.ts): a card the server
+    // moved to Walnut Health while this tab slept leaves the bell on the next load.
+    byKey.set(n.dedupKey, server
+      ? { ...n, read: n.read || (server.read ?? false), ...(resolved ? { resolved } : {}), needsYou: server.needsYou, ...(server.occurrences !== undefined ? { occurrences: server.occurrences } : {}) }
+      : n);
   }
   return [...byKey.values()]
     .filter(n => !opts.dismissed.has(n.dedupKey))

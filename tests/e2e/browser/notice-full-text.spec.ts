@@ -34,7 +34,7 @@ async function routeSocket(page: Page): Promise<() => WebSocketRoute | null> {
 function noticeEvent(key: string, extra: Record<string, unknown> = {}): string {
   return JSON.stringify({
     type: 'event', name: 'notification:new', seq: -1,
-    data: { dedupKey: `notice-full-text:${key}:${Date.now()}`, kind: 'operation-error', severity: 'error', title: TITLE, detail: DETAIL, timestamp: Date.now(), ...extra },
+    data: { dedupKey: `notice-full-text:${key}:${Date.now()}`, kind: 'operation-error', needsYou: 'own-action', severity: 'error', title: TITLE, detail: DETAIL, timestamp: Date.now(), ...extra },
   })
 }
 

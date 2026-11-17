@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import { operationErrorWords } from '@/utils/operation-error-words';
 
 /**
  * App-wide confirm/alert/prompt dialogs — replacing the browser-native
@@ -117,8 +118,11 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
   }, [openRequest]);
 
   const alert = useCallback((opts: AlertOptions) => {
+    // Every alert answers the person's own action; a failure's raw internals (the browser's
+    // network words, a JSON body, a stack) become a sentence here, once, for every caller.
+    const shown = typeof opts.message === 'string' ? { ...opts, message: operationErrorWords(opts.message) } : opts;
     return new Promise<void>((resolve) => {
-      openRequest({ id: ++nextIdRef.current, kind: 'alert', opts, resolve });
+      openRequest({ id: ++nextIdRef.current, kind: 'alert', opts: shown, resolve });
     });
   }, [openRequest]);
 

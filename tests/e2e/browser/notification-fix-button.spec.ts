@@ -47,6 +47,9 @@ function errorRecord(t: number, fix?: FeedRecord['fix']): FeedRecord {
   return {
     id: 'nfc-fix-repo-size',
     kind: 'operation-error',
+    // A card in the bell is one the person must see (audience.ts); Walnut's own
+    // errors are fixed from Walnut Health (test 5).
+    needsYou: 'own-action',
     severity: 'error',
     title: ERROR_TITLE,
     body: 'The data repo is 1.2 GB, which slows every sync. Prune old history or move large files out.',
@@ -102,6 +105,26 @@ async function showErrors(panel: Locator): Promise<void> {
   const errors = panel.locator('.nfc-rail-btn', { hasText: 'Errors' }).first()
   await errors.click()
   await expect(errors).toHaveAttribute('aria-current', 'true')
+}
+
+/** Walnut Health's error log, reached the way a user reaches it: the bell's Errors view points there. */
+async function openHealthErrors(page: Page): Promise<Locator> {
+  const panel = await openCenter(page)
+  await showErrors(panel)
+  await panel.getByTestId('nfc-health-link').click()
+  const log = page.getByTestId('health-errors')
+  await expect(log).toBeVisible({ timeout: 20_000 })
+  return log
+}
+
+/** One error's row in Walnut Health, by its record's key, opened to its details. A row that is
+ *  still happening sits in an open group (HealthErrorLog starts those unfolded). */
+async function healthRow(log: Locator, dedupKey: string): Promise<Locator> {
+  const row = log.locator(`[data-testid=health-errors-row][data-key="${dedupKey}"]`)
+  await expect(row).toBeVisible()
+  await row.locator('.health-errors-row-head').click()
+  await expect(row.getByTestId('health-errors-detail')).toBeVisible()
+  return row
 }
 
 /** The ONE seeded card. Scoped by title — the shared feed carries real errors. */
@@ -300,19 +323,15 @@ test('a real error card hands off to a real repair session filed under Walnut', 
     return !!item
   }, { timeout: 20_000 }).toBe(true)
 
-  const panel = await openCenter(page)
-  await showErrors(panel)
-  // Same-origin cards fold into a group; a fresh session is its own group, and
-  // its card is the one that still offers a start.
-  const card = panel.locator('.nfc-detail .notification-feed-item')
-    .filter({ hasText: cardTitle })
-    .filter({ has: page.locator('[data-testid=nfc-fix-start]') })
-    .first()
-  await expect(card).toBeVisible()
+  // A session's failure is Walnut's to fix (audience.ts): it is not in the bell's Errors list,
+  // whose one line points at Walnut Health, where the error is fixed from.
+  const health = await openHealthErrors(page)
+  const card = await healthRow(health, dedupKey)
+  await expect(card.locator('[data-testid=health-fix-start]')).toBeVisible()
 
   const fixed = page.waitForResponse((r) =>
     r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/notifications/fix')
-  await card.locator('[data-testid=nfc-fix-start]').click()
+  await card.locator('[data-testid=health-fix-start]').click()
   const fixRes = await fixed
   expect(fixRes.status()).toBe(200)
   const fix = await fixRes.json() as {
@@ -347,10 +366,8 @@ test('a real error card hands off to a real repair session filed under Walnut', 
     }
     return data.feed.find((i) => i.dedupKey === dedupKey)?.fix?.sessionId ?? null
   }).toBe(fix.sessionId)
-  const reopened = await openCenter(page)
-  await showErrors(reopened)
-  const sameCard = reopened.locator('.nfc-detail .notification-feed-item')
-    .filter({ hasText: cardTitle })
-    .filter({ has: page.locator('[data-testid=nfc-fix-open]') })
-  await expect(sameCard.first()).toBeVisible()
+  const again = await openHealthErrors(page)
+  const sameRow = await healthRow(again, dedupKey)
+  await expect(sameRow.locator('[data-testid=health-fix-open]')).toBeVisible()
+  await sameRow.screenshot({ path: `${SCREENSHOT_DIR}/real-fix-health-row.png` })
 })

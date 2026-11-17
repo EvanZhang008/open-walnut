@@ -50,7 +50,7 @@ const statusOf = (host: string, over: Row = {}): Row => ({
 
 /** The entry the server raises for a found host that is not Linux (found-host-alert.ts notLinuxCard). */
 const notLinuxEntry = (alias: string): Row => ({
-  id: `found-host-${alias}`, kind: 'operation-error', severity: 'warning',
+  id: `found-host-${alias}`, kind: 'operation-error', needsYou: 'own-action', severity: 'warning',
   title: `${alias} cannot be added over SSH`,
   body: `${alias} is a Mac, and Walnut adds only Linux machines from your SSH config. To add it, open Settings › Remote Hosts › Add host › Join a machine with a link, and run its one command on ${alias}. Walnut will not try it over SSH again.`,
   timestamp: Date.now(), read: false, dedupKey: `found-host:${alias}`, recoveryKey: `host:${alias}`,

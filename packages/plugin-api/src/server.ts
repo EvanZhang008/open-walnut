@@ -345,6 +345,12 @@ export interface PluginNotice {
   dedupKey: string
   taskId?: string
   sessionId?: string
+  /**
+   * `error()` only: true when only the person can fix it (sign in again, finish setup).
+   * Such an error toasts and stays in the notification center. Without it the error is
+   * Walnut's to retry and is listed in Settings > Walnut Health, never shown as a toast.
+   */
+  needsYou?: boolean
 }
 
 /**

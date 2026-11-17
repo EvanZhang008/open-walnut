@@ -15,6 +15,7 @@
  * it answers the Mac's feed from the copy it keeps, with its own newer cards.
  */
 
+import { audienceOf } from '../../core/notifications/audience.js'
 import { randomUUID } from 'node:crypto'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import {
@@ -75,7 +76,8 @@ notificationsRouter.get('/', async (_req: Request, res: Response, next: NextFunc
     // read by the same UI, so an uncapped one would be the hole the cap exists
     // to close. Mirrored in the /api/v1 twin.
     res.json({
-      feed: feed.map(n => ({ ...n, body: sanitizeBody(n.body), detail: sanitizeBody(n.detail) })),
+      // `audience` says who it is for (audience.ts): 'health' = Walnut Health only, never the bell.
+      feed: feed.map(n => ({ ...n, body: sanitizeBody(n.body), detail: sanitizeBody(n.detail), audience: audienceOf(n) })),
       unreadCount,
       ...(offline ? { offline: true } : {}),
     })

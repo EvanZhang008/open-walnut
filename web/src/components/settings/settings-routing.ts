@@ -107,6 +107,8 @@ export const ROW_TARGETS: Readonly<Record<string, { paneId: string; elementId: s
   'session-panels': { paneId: 'general', elementId: 'settings-session-panels' },
   // The Reply language setting, reached from its hint's "What it sends" in Message hints.
   'session-reply-language': { paneId: 'sessions', elementId: 'settings-reply-language' },
+  // Walnut Health's error log, reached from the bell's Errors view (HealthErrorsLink).
+  'walnut-health-errors': { paneId: 'walnut-health', elementId: 'walnut-health-errors' },
 }
 
 /**

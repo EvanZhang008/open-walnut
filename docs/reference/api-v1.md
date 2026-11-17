@@ -3836,8 +3836,10 @@ like the other conversation endpoints (absent → `general`).
   relays via the `session.control` command's `server.*` actions, same failure
   ladder as session lifecycle):
   - `GET /api/v1/notifications` → `{ "feed": [ { id, kind, severity, title,
-    body?, timestamp, read, … } ], "unreadCount" }` (bodies clipped to 600
-    chars).
+    body?, timestamp, read, audience, … } ], "unreadCount" }` (bodies clipped to 600
+    chars; `audience` is `user` or `health`, additive 2026-11: a `health` record is
+    Walnut's own error, for Settings › Walnut Health only, never a toast or a bell row;
+    `docs/reference/notice-audience.md`).
   - `POST /api/v1/notifications/mark-read` body `{ "ids"? }` →
     `{ "unreadCount" }` (no ids = mark ALL read).
   - `POST /api/v1/notifications/dismiss` body `{ "ids"?, "dedupKeys"? }` →

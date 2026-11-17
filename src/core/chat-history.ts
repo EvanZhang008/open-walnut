@@ -823,6 +823,8 @@ export async function recoverOrphanedUserMessage(agentId?: string, conversationI
       severity: 'error',
       title: 'Chat Interrupted',
       body: 'Your previous message was saved, but the response was interrupted by a server restart. You may want to resend it.',
+      // Only the person can resend it: their own message got no answer (audience.ts).
+      needsYou: 'own-action',
       dedupKey: `chat-interrupted:${agentId ?? 'general'}:${conversationId ?? 'unknown'}:${lastAi.turnId}`,
     });
   }, agentId, conversationId);

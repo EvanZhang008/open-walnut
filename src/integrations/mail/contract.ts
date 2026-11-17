@@ -535,7 +535,7 @@ export interface MailSyncHost {
     timeout(handler: () => void | Promise<void>, delayMs: number): Disposable
   }
   readonly notifications: {
-    error(notice: { title: string; body?: string; dedupKey: string }): Promise<void>
+    error(notice: { title: string; body?: string; dedupKey: string; needsYou?: boolean }): Promise<void>
     recover(): Promise<void>
   }
 }

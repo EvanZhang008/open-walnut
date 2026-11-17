@@ -23,6 +23,7 @@
  * this Mac) is never taken from the box.
  */
 
+import { isNeedsYou } from './audience.js'
 import { bus, EventNames } from '../event-bus.js'
 import { log } from '../../logging/index.js'
 import { mutateNotificationStore, REFRESHABLE_DETAIL_KEYS, type NotificationRecord } from './store.js'
@@ -41,6 +42,9 @@ const FIELDS = new Set([
   'id', 'kind', 'severity', 'title', 'body', 'timestamp', 'read', 'dedupKey', 'sessionId', 'taskId',
   'resolved', 'resolvedAt', 'recoveryKey', 'causeKey', 'origin', 'category', 'detail', 'action', 'actions',
   'requestId', 'toolName', 'input', 'reason', 'acpOptions', 'host', 'sessionTitle', 'project', 'count', 'lastTimestamp',
+  // Who the card is for (audience.ts) and Walnut Health's occurrence count: a box's sign-in card
+  // must reach the person on the Mac too.
+  'needsYou', 'occurrences',
 ])
 
 interface Card { key: string; mode: OwnCardMode; fires: number; record: NotificationRecord }
@@ -61,7 +65,8 @@ export function parseCard(raw: unknown): Card | string {
   if (typeof r.title !== 'string' || r.title.length > 4000 || !num(r.timestamp) || typeof r.read !== 'boolean') return 'not a card'
   if (r.resolved !== undefined && !RESOLVED.has(r.resolved as string)) return 'unknown settled stamp'
   if (r.origin !== undefined && r.origin !== 'replica') return 'unknown origin'
-  for (const k of ['count', 'lastTimestamp', 'resolvedAt'] as const) if (r[k] !== undefined && !num(r[k])) return `bad ${k}`
+  for (const k of ['count', 'lastTimestamp', 'resolvedAt', 'occurrences'] as const) if (r[k] !== undefined && !num(r[k])) return `bad ${k}`
+  if (r.needsYou !== undefined && !isNeedsYou(r.needsYou)) return 'unknown needsYou'
   let bytes = 0
   try { bytes = Buffer.byteLength(JSON.stringify(r), 'utf8') } catch { return 'not serializable' }
   if (bytes > MAX_CARD_BYTES) return 'too large'
@@ -95,6 +100,10 @@ function fold(existing: NotificationRecord, card: NotificationRecord, fires: num
   else delete existing.causeKey
   if (card.origin) existing.origin = card.origin
   else delete existing.origin
+  // Who it is for follows the latest occurrence, as in upsertNotification.
+  if (card.needsYou) existing.needsYou = card.needsYou
+  else delete existing.needsYou
+  if (existing.kind === 'operation-error') existing.occurrences = (existing.occurrences ?? existing.count ?? 1) + Math.max(1, fires)
   // The same rule as upsertNotification: an error card still failing is one
   // occurrence (only the stamp moves); one that comes back after it settled counts.
   const standing = existing.kind === 'operation-error' && !existing.resolved

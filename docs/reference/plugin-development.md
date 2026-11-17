@@ -172,7 +172,7 @@ That route answers at `/api/plugins/my-plugin/status`. That WebSocket method is 
 | `walnut.sessionImports` | The importer of outside sessions: the tag and project it files them under, a callback when an import run ends, its idle window, a way to keep its lifecycle on tasks you file elsewhere, and a way to have your own program's runs imported. |
 | `walnut.tags` | Say how your plugin's tags show on tasks: a tag or a `<namespace>:*` can default to hidden (searchable and filterable still, just no pill). |
 | `walnut.config` | Read and patch only `plugins.<id>`, and subscribe to changes. |
-| `walnut.notifications` | Raise notices (including `kind: 'reminder'` with up to three op buttons), `dismiss` your own, report plugin errors and recover from them, and hold Walnut's quiet mode with `quiet.get/set/clear`. |
+| `walnut.notifications` | Raise notices (including `kind: 'reminder'` with up to three op buttons), `dismiss` your own, report plugin errors and recover from them (an `error()` reaches the person only with `needsYou: true`, for a sign-in or setup only they can do; every other error is listed in Settings › Walnut Health, see `docs/reference/notice-audience.md`), and hold Walnut's quiet mode with `quiet.get/set/clear`. |
 | `walnut.ui` | Show a live status item in the console's left rail: a ring the host ticks from a timer, a label, and a popover with up to three op buttons. |
 | `walnut.letters` | Send a letter to the human, hear the answer, reply in its thread, withdraw a stale one. |
 | `walnut.ai` | Ask the user's AI with one call: a direct answer, or an agent run on the daemon when the request needs tools. No key, a per-plugin budget. |

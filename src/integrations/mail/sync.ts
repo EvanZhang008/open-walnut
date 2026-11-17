@@ -1088,6 +1088,7 @@ export class MailSync {
         title: 'Mail sign-in needed',
         body: `Walnut cannot sign in to ${accountId}. Update the password, then refresh the account. ${detail}`,
         dedupKey: `account-auth:${accountId}`,
+        needsYou: true,
       }).catch(() => undefined)
       this.deps.walnut.log.warn('mail account parked, sign-in needed', { accountId })
       return

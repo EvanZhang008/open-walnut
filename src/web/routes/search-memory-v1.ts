@@ -39,6 +39,7 @@
  * Frozen-contract note: everything here is additive (docs/reference/api-v1.md).
  */
 
+import { audienceOf } from '../../core/notifications/audience.js'
 import { logRouteError } from './route-error-log.js'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
@@ -337,7 +338,7 @@ searchMemoryV1Router.get('/notifications', async (_req: Request, res: Response, 
       const { companionFeedAnswer } = await import('../../core/notifications/companion-feed.js')
       const { answer, copyAsOf } = await companionFeedAnswer()
       if (copyAsOf !== null) res.setHeader((await import('../../core/replication/kinds/gate.js')).COPY_AS_OF_HEADER, String(copyAsOf))
-      res.json({ ...answer, feed: answer.feed.map((n) => ({ ...n, body: sanitizeBody(n.body), detail: sanitizeBody(n.detail) })) })
+      res.json({ ...answer, feed: answer.feed.map((n) => ({ ...n, body: sanitizeBody(n.body), detail: sanitizeBody(n.detail), audience: audienceOf(n) })) })
       return
     }
     const { listNotifications } = await import('../../core/notifications/store.js')
@@ -345,7 +346,7 @@ searchMemoryV1Router.get('/notifications', async (_req: Request, res: Response, 
     // `detail` capped alongside `body` — same reasoning as the /api twin in
     // routes/notifications.ts (same producers, same UI, same read-time bound).
     res.json({
-      feed: feed.map((n) => ({ ...n, body: sanitizeBody(n.body), detail: sanitizeBody(n.detail) })),
+      feed: feed.map((n) => ({ ...n, body: sanitizeBody(n.body), detail: sanitizeBody(n.detail), audience: audienceOf(n) })),
       unreadCount,
     })
   } catch (err) {

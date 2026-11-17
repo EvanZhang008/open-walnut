@@ -4,12 +4,11 @@
  * card for a draft save: "can we avoid error unless we really try", "only error useful to
  * customer".
  *
- * The real web client (request() through apiGet/apiPut/apiPost) over a stubbed fetch, and two
- * inventories read from the source, so a new member of the class fails here:
+ * The real web client (request() through apiGet/apiPut/apiPost) over a stubbed fetch, and an
+ * inventory read from the source, so a new member of the class fails here:
  * - every write the browser sends on its own (a draft save, a settings sync, a visit batch)
  *   goes out with `quietRetry: true`;
- * - every place in the web app that raises an error card is a known one that answers a
- *   person's own action, never a request nobody clicked.
+ * - (every place that raises an error card: tests/web/notice-single-exit.test.ts).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
@@ -158,36 +157,5 @@ describe('every write the browser sends on its own is retried quietly', () => {
   })
 })
 
-/**
- * Every place in the web app that raises an error card, and the person's own action it
- * answers. A request nobody clicked never pops up: it is retried, then logged. A new place
- * joins this list only once it answers a click, says in plain words what was not done, and
- * never shows a raw answer for a request the browser sent on its own.
- */
-const ERROR_CARD_SITES: Record<string, string> = {
-  'components/common/OperationErrorBridge.tsx': 'a task change the person made (TasksContext operationError)',
-  'components/common/NotificationActionButtons.tsx': 'a button the person pressed on a card',
-  'components/layout/SidebarStatusItems.tsx': 'a status item action the person clicked',
-  'components/layout/useAppUpdateActions.ts': 'the update button the person pressed',
-  'components/sessions/ComposerModelPill.tsx': 'a model the person picked',
-  'components/sessions/SessionPanel.tsx': 'Open in VS Code, clicked',
-  'components/tasks/NavigationSections.tsx': 'a sidebar section the person dragged',
-  'components/tasks/TaskSyncMenuRows.tsx': 'a sync setting the person changed',
-  'components/tasks/useHomeFilters.ts': 'a filter the person archived',
-  'contexts/notifications/NotificationProvider.tsx': 'an agent turn the person started failed (agent error event)',
-  'hooks/useCalendarEvents.ts': 'a calendar event the person showed, hid or edited',
-  'hooks/useChat.ts': 'a chat message the person sent',
-  'hooks/useNavigationPreference.ts': 'a navigation preference the person set',
-  'hooks/useSessionControls.ts': 'a session setting the person changed',
-  'pages/MainPage.tsx': 'Quick Start, clicked',
-  'popout/PopoutSession.tsx': 'Fork, clicked in a popout',
-  'undo/TaskUndoContext.tsx': 'a pin or an undo the person pressed',
-}
-
-describe('every error card in the web app answers a person\'s own action', () => {
-  const found = FILES.filter(({ text }) => /kind:\s*'operation-error'/.test(text)).map(({ rel }) => rel).sort()
-
-  it('lists every place that raises one (a new one is reviewed and added here)', () => {
-    expect(found).toEqual(Object.keys(ERROR_CARD_SITES).sort())
-  })
-})
+// Every place in the web app that raises an error card is listed with the action it answers
+// in tests/web/notice-single-exit.test.ts (the one rule for every notice).

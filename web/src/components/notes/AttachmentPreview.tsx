@@ -3,6 +3,8 @@ import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 
 const DrawingWorkspace = lazy(() => import('@/components/drawing/DrawingWorkspace').then((module) => ({ default: module.DrawingWorkspace })));
 import { attachmentUrl, revealNote } from '@/api/notes-v2';
+import { useAlert } from '@/hooks/useConfirm';
+import { operationErrorWords } from '@/utils/operation-error-words';
 import { browserCanInlinePdf } from '@/utils/pdf-support';
 import { NOTE_IMAGE_EXTS } from './notes-image-types';
 import { failureOf, knownUndrawable, noteMissing, onPageReturn, retryDue } from './image-load';
@@ -22,6 +24,7 @@ import './notes-editor.css';
  *     /reveal, plus a browser download fallback. Never rendered inline.
  */
 export function AttachmentPreview({ notePath, findQuery }: { notePath: string; findQuery?: string }) {
+  const showAlert = useAlert();
   const name = notePath.split('/').pop() || notePath;
   const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
   const url = attachmentUrl(notePath);
@@ -112,7 +115,10 @@ export function AttachmentPreview({ notePath, findQuery }: { notePath: string; f
             className="notes-attachment-card"
             onClick={() =>
               revealNote(notePath, 'app').catch((err) => {
-                alert(`Could not open ${name} locally (${err instanceof Error ? err.message : 'failed'}). Use the Download link instead.`);
+                void showAlert({
+                  title: `Could not open ${name} locally`,
+                  message: `${err instanceof Error ? operationErrorWords(err.message) : 'It failed.'} Use the Download link instead.`,
+                });
               })
             }
           >

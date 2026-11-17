@@ -92,3 +92,59 @@
   font-size: 13px;
   color: var(--fg-secondary);
 }
+
+/* Background errors (HealthErrorLog.tsx): Walnut's own errors, grouped by category. */
+.health-errors { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.health-errors-group { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.health-errors-group-head, .health-errors-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.health-errors-group-head { background: var(--bg-secondary, transparent); }
+.health-errors-group-head:hover, .health-errors-row-head:hover { background: var(--accent-subtle); }
+.health-errors-cat { font-weight: 600; }
+.health-errors-meta { margin-left: auto; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.health-errors-rows { list-style: none; margin: 0; padding: 0; }
+.health-errors-row { border-top: 1px solid var(--border); }
+.health-errors-title { flex: 1; min-width: 0; color: var(--fg); overflow-wrap: anywhere; }
+.health-errors-times { color: var(--fg-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.health-errors-detail { display: flex; flex-direction: column; gap: 6px; padding: 4px 12px 10px 70px; color: var(--fg-secondary); }
+.health-errors-detail p { margin: 0; }
+.health-sample {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--accent-subtle);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow: auto;
+}
+
+/* The bell's Errors view: one line pointing at Walnut Health (HealthErrorsLink.tsx). */
+.nfc-health-link {
+  display: block;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.nfc-health-link:hover { color: var(--accent-text); border-color: var(--accent); }

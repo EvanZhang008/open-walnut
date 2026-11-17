@@ -41,7 +41,7 @@ async function stubNotifications(page: Page, feed: FeedRecord[]): Promise<void> 
 
 function errorRecord(id: string, t: number): FeedRecord {
   return {
-    id, kind: 'operation-error', severity: 'error',
+    id, kind: 'operation-error', needsYou: 'own-action', severity: 'error',
     title: `PW BADGE error ${id}`, body: 'fixture failure',
     timestamp: t, read: false, dedupKey: `error:pwb-${id}`,
     recoveryKey: 'git', category: 'Data & Sync',

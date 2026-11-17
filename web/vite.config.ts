@@ -47,6 +47,7 @@ export default defineConfig({
       // Same reason: a remote host problem must read the SAME sentence on the
       // banner, the picker, Settings and the server's Start refusal (409 body).
       '@open-walnut/host-problem': path.resolve(__dirname, '../src/core/hosts/host-problem.ts'),
+      '@open-walnut/notice-audience': path.resolve(__dirname, '../src/core/notifications/audience.ts'),
       // Which found hosts Walnut offers: the server's lists and the browser's read one rule.
       '@open-walnut/found-host-offer': path.resolve(__dirname, '../src/core/hosts/found-host-offer.ts'),
       // The asks list (membership, order, title, state): the same module
