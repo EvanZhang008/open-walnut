@@ -15,7 +15,8 @@ import {
 } from '@/api/chat';
 import type { StreamingBlock } from './useSessionStream';
 import { mergeAdjacentErrors, type WithErrorCount } from './mergeAdjacentErrors';
-import { currentQuiet, quietAllowsToast, useNotifications } from '@/contexts/notifications';
+import { useNotifications } from '@/contexts/notifications';
+import { postSystemNotice } from '@/contexts/notifications/system-notice';
 
 const PAGE_SIZE = 100;
 
@@ -639,12 +640,13 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
       }), src, turnId);
     });
 
-    // Desktop notification when agent asks a question
-    // Quiet holds it back like any ask (quiet-model.ts); the session shows the question as usual.
-    if (toolName === 'user_ask' && typeof Notification !== 'undefined' && Notification.permission === 'granted' && quietAllowsToast(currentQuiet(), 'permission')) {
+    // A system notification when the agent asks a question, through the one exit for notices
+    // outside the window (quiet holds it; the session shows the question as usual).
+    if (toolName === 'user_ask') {
       const questions = input?.questions as Array<{ question?: string }> | undefined
       const firstQ = questions?.[0]?.question ?? 'The agent has a question for you'
-      new Notification('Agent has a question', {
+      postSystemNotice({
+        title: 'Agent has a question',
         body: firstQ.slice(0, 120),
         tag: `open-walnut-question-${toolUseId ?? Date.now()}`,
       })

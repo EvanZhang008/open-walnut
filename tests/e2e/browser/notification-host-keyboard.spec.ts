@@ -81,7 +81,8 @@ test.describe('the panel is a dialog for the keyboard', () => {
 
   test('NK-2: in All, Tab goes Close, then the rail from Needs Action to All, then the Claude Code notice, then the first problem row\'s control, and past the problems onto the feed', async ({ page, browserName }) => {
     await bpSetup(page, {
-      hosts: [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')], local: 'sign-in',
+      // dns: a kind the person must clear, so Net box has a row in All (an unreachable host would not).
+      hosts: [failed('netbox', 'Net box', 'dns'), signedOut('signbox', 'Sign box')], local: 'sign-in',
       feed: [hostErrorRecord('devbox', 1)],
     })
     await openProblems(page)
@@ -115,7 +116,8 @@ test.describe('the panel is a dialog for the keyboard', () => {
     await bpSetup(page)
     await openProblems(page)
     const panel = page.locator('.notification-panel')
-    await expect(problemHosts(page).locator('li.hpb-row')).toHaveCount(4)
+    // All lists the person's three; System lists Net box (unreachable, Walnut Health's) too.
+    await expect(problemHosts(page).locator('li.hpb-row')).toHaveCount(FIXTURE_ORDER.length)
     for (const label of ['All', 'System', 'Needs you'] as const) {
       if (label !== 'All') await pickRail(page, label)
       if (label === 'System') await expect(systemHosts(page).locator('li.hpb-row')).toHaveCount(4)
@@ -136,7 +138,8 @@ test.describe('the panel is a dialog for the keyboard', () => {
 
 test.describe('clicks inside the panel', () => {
   test('NK-4: clicks on a problem row\'s headline, the Remote hosts labels and the Claude Code notice (All), and on a System row keep the panel open; Escape with focus in a row closes it', async ({ page }) => {
-    await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable')], local: 'sign-in' })
+    // dns: the person's to clear, so the row is in All as well as System.
+    await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'dns')], local: 'sign-in' })
     await openProblems(page)
     await problemRow(page, 'netbox').locator('.hft-headline').click()
     await problemHosts(page).locator(':scope > .notification-card-row .notification-card-label').click()

@@ -25,7 +25,7 @@ import { bus, eventData, EventNames } from '../event-bus.js'
 import { getConfig } from '../config-manager.js'
 import { log } from '../../logging/index.js'
 import type { PushTokenEntry } from '../types.js'
-import { getQuiet, logQuietSkipOnce, quietSuppresses } from '../quiet/quiet-state.js'
+import { holdPushForQuiet } from './quiet-hold.js'
 import { deliverPush } from './deliver.js'
 import { truncatePreview } from '../human-inbox/preview.js'
 import type { PushContent } from './send.js'
@@ -215,20 +215,6 @@ async function attemptLetterPush(
     return outcome
   }
 
-  // Quiet mode. An `action_required` letter is the permission-style ask (someone
-  // is blocked on the human's decision, the same reason it gets priority 10
-  // below), so it still pushes while the holds allow permissions. The summary
-  // line below stays per letter, as this file promises; logQuietSkipOnce adds
-  // the one "push is quiet because of these holds" line.
-  const quiet = await getQuiet()
-  if (quietSuppresses(quiet, { permission: letter.type === 'action_required' })) {
-    logQuietSkipOnce('letter-push', quiet)
-    return finish({
-      attempted: false, sent: 0, failed: 0, suppressed: 0,
-      reason: 'quiet mode is on',
-    })
-  }
-
   let tokens: PushTokenEntry[] = []
   try {
     tokens = (await getConfig()).push_tokens ?? []
@@ -264,6 +250,17 @@ async function attemptLetterPush(
       attempted: false, sent: 0, failed: 0, suppressed,
       reason: 'all devices are foreground-active or muted this letter type',
     }, { devices: tokens.length, targeted: 0 })
+  }
+
+  // Quiet mode holds every push that would go now, an `action_required` letter too
+  // (quiet-hold.ts): it waits in the inbox, and the one push after quiet says it waited. Asked
+  // after the device choice, so a letter no device takes is never held. The summary line stays
+  // per letter, as this file promises.
+  if (await holdPushForQuiet('letter-push', { key: `letter:${letter.letterId}`, title: letter.subject })) {
+    return finish({
+      attempted: false, sent: 0, failed: 0, suppressed,
+      reason: 'quiet mode is on',
+    }, { devices: tokens.length, targeted: chosen.length })
   }
 
   // One letter = one banner: the content's collapse id makes a redelivered

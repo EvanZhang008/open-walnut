@@ -1,6 +1,8 @@
 /**
- * A host problem row's details (the notification panel's problem list): ONE
- * toggle, one state.
+ * A host problem row's details: ONE toggle, one state. Read in the bell's System
+ * list, which draws the same row for every host: these failures (a daemon, the cloud
+ * companion, an unreachable host) are Walnut Health's, so All's problems block leaves
+ * them out (audience.ts hostProblemNeedsYou).
  *
  * A failure whose raw text is not SSH output (DETAILS_NOT_SSH_KINDS: the
  * daemon did not come up, the cloud companion refusing) used to show two
@@ -20,7 +22,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test, expect, type Locator } from '@playwright/test'
 import { failed, resetServerHostFixture, setup, type HS } from './host-problems-helpers'
-import { openProblems, problemHosts, problemRow, seedFeed } from './host-attention-helpers'
+import { openSystemHosts, seedFeed, systemHostRow, systemHosts } from './host-attention-helpers'
 
 const SHOTS = process.env.HOST_ROW_SHOTS ?? path.join(os.tmpdir(), 'walnut-host-row-shots')
 test.describe.configure({ timeout: 120_000 })
@@ -79,8 +81,8 @@ for (const c of CASES) {
   test(`${c.name}: one details toggle, open and closed, and the raw text opens with the row`, async ({ page, browserName }) => {
     await seedFeed(page, [])
     await setup(page, [c.status], undefined, { listHosts: true })
-    await openProblems(page)
-    const r = problemRow(page, c.status.host)
+    await openSystemHosts(page)
+    const r = systemHostRow(page, c.status.host)
     await expect(r).toBeVisible({ timeout: 30_000 })
     await expect(r).toContainText(c.headline)
     await expect(r).toHaveAttribute('data-kind', c.status.kind!)
@@ -93,7 +95,7 @@ for (const c of CASES) {
     await expect(r).not.toContainText('Show SSH output')
     await showToggle(r)
     await expect(r.locator('pre.hft-summary')).toBeInViewport()
-    await problemHosts(page).screenshot({ path: path.join(SHOTS, `host-row-${c.name}-open-${browserName}.png`) })
+    await systemHosts(page).screenshot({ path: path.join(SHOTS, `host-row-${c.name}-open-${browserName}.png`) })
 
     // Closed: still one toggle, and the details are gone with it.
     await toggles(r).click()
@@ -101,7 +103,7 @@ for (const c of CASES) {
     await expect(toggles(r)).toHaveText('Show details')
     await expect(r.locator('pre.hft-summary')).toHaveCount(0)
     await showToggle(r)
-    await problemHosts(page).screenshot({ path: path.join(SHOTS, `host-row-${c.name}-closed-${browserName}.png`) })
+    await systemHosts(page).screenshot({ path: path.join(SHOTS, `host-row-${c.name}-closed-${browserName}.png`) })
   })
 }
 
@@ -109,8 +111,8 @@ test('an SSH failure keeps its SSH output behind its own toggle (unchanged)', as
   const s = failed('netbox', 'Net box', 'unreachable')
   await seedFeed(page, [])
   await setup(page, [s], undefined, { listHosts: true })
-  await openProblems(page)
-  const r = problemRow(page, 'netbox')
+  await openSystemHosts(page)
+  const r = systemHostRow(page, 'netbox')
   await expect(r).toBeVisible({ timeout: 30_000 })
   if (await toggles(r).first().innerText() === 'Show details') await toggles(r).first().click()
   await expect(toggles(r)).toHaveText(['Show SSH output', 'Hide details'])

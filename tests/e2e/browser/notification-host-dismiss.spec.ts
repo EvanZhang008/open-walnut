@@ -32,15 +32,16 @@ test.describe('the row x in All\'s problems', () => {
     await bpSetup(page)
     await openProblems(page)
     await expect.poll(() => problemRowHosts(page), { timeout: 20_000 }).toEqual(FIXTURE_ORDER)
-    const others = FIXTURE_ORDER.filter((h) => h !== 'netbox')
-    await rowX(page, 'netbox').click()
-    await expect(problemRow(page, 'netbox')).toHaveCount(0)
-    expect(await storedKeys(page)).toContain('netbox|connect')
+    // Key box: Net box (unreachable) is Walnut Health's and has no row here to dismiss.
+    const others = FIXTURE_ORDER.filter((h) => h !== 'keybox')
+    await rowX(page, 'keybox').click()
+    await expect(problemRow(page, 'keybox')).toHaveCount(0)
+    expect(await storedKeys(page)).toContain('keybox|connect')
     await expect.poll(() => problemRowHosts(page)).toEqual(others)
     await expect(errorsBadge(page)).toHaveText(String(others.length))
     await pickRail(page, 'System')
     await expect.poll(() => systemRowHosts(page)).toEqual(['signbox', 'keybox', 'certbox', 'netbox'])
-    await expect(systemHostRow(page, 'netbox').getByRole('button', { name: 'Dismiss Net box' })).toHaveCount(0)
+    await expect(systemHostRow(page, 'keybox').getByRole('button', { name: 'Dismiss Key box' })).toHaveCount(0)
     await closePanel(page, 'escape')
     await page.evaluate(() => sessionStorage.setItem('hp-keep', '1'))
     await page.reload()
@@ -81,8 +82,9 @@ test.describe('the row x in All\'s problems', () => {
 
   test('NH-3: the row x and its neighbours stay apart: every x in the problems list is 24px clear of every other x and of Close, and the Claude Code x keeps 24px from Close', async ({ page }) => {
     await bpSetup(page, {
-      hosts: [failed('keybox', 'Key box', 'auth'), failed('netbox', 'Net box', 'unreachable'), failed('proxybox', 'Proxy box', 'proxy'),
-        failed('lanbox', 'Lan box', 'unreachable'), signedOut('signbox', 'Sign box')],
+      // Five problems of the person's (an unreachable host or a broken proxy has no row here).
+      hosts: [failed('keybox', 'Key box', 'auth'), failed('netbox', 'Net box', 'dns'), failed('proxybox', 'Proxy box', 'proxy_login'),
+        failed('lanbox', 'Lan box', 'host_key'), signedOut('signbox', 'Sign box')],
       local: 'sign-in',
     })
     await openProblems(page)
@@ -127,7 +129,8 @@ test.describe('the row x in All\'s problems', () => {
 test.describe('expiry and the way back', () => {
   test('NH-5: a dismissed connect row stays out of All on /notes, expires there with no panel open, and the next failure lights the bell and leads All again', async ({ page }) => {
     test.setTimeout(150_000) // the pruner's 60s interval is the slow path
-    const h = await bpSetup(page, { hosts: [connected('devbox', 'Dev box'), failed('netbox', 'Net box', 'unreachable')] })
+    // A refused key: the person's to clear, so it has a row to dismiss and lights the bell again.
+    const h = await bpSetup(page, { hosts: [connected('devbox', 'Dev box'), failed('netbox', 'Net box', 'auth')] })
     await openProblems(page)
     await rowX(page, 'netbox').click()
     expect(await storedKeys(page)).toContain('netbox|connect')
@@ -145,7 +148,7 @@ test.describe('expiry and the way back', () => {
     // Connected for 11 minutes: the always-on pruner drops the key on this frame.
     await h.push(connected('netbox', 'Net box', undefined, 11 * 60_000))
     await expect.poll(() => storedKeys(page), { timeout: 65_000 }).not.toContain('netbox|connect')
-    await h.push(failed('netbox', 'Net box', 'unreachable'))
+    await h.push(failed('netbox', 'Net box', 'auth'))
     await expect(bell(page)).toHaveAttribute('aria-label', 'Notifications: remote hosts need attention', { timeout: 10_000 })
     await expect(bellDot(page)).toHaveCount(1)
     await openProblems(page)

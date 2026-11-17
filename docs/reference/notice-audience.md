@@ -19,6 +19,13 @@ The rule (2026-11-17, the user: only the errors he needs to see reach him, the r
 Walnut Health, where whoever investigates finds them):
 
 - Asks, letters, reminders and automation receipts are the person's.
+- A host problem (kind `host`) is judged like an error: the person's only when they must clear
+  it (`HOST_SIGN_IN_KINDS`: a login of theirs, a changed host key, Claude Code signed out there;
+  reason `sign-in`) or it answers their own Retry or Connect (`own-action`), by
+  `hostProblemNeedsYou`. Every other one (a machine that is off or asleep, a network, a daemon
+  that did not start) Walnut reconnects by itself: no toast, no bell row or dot, listed under
+  Walnut Health › Background errors › Remote hosts with its full hint (2026-11-17, the user: a
+  Mac that was not connected asked him to run `walnut net status`).
 - An error is the person's only when it names why it needs them (`needsYou`, a closed list):
   `sign-in` (sign in again or finish setup), `disk-full` (writes stop), `sync-stopped` (data
   sync stopped and waits for a person), `own-action` (an action they took failed for good),
@@ -67,9 +74,9 @@ Web app (`tests/web/notice-single-exit.test.ts` lists every site; a new one fail
 | An app dialog (`useAlert`, 10 files) | Person: an action they took; its message goes through `operationErrorWords` |
 | The agent's credentials failed (`agent:error`, auth) | Person (`sign-in`) |
 | Any other agent turn failure (`agent:error`) | Its chat only; the server logs it (Walnut Health) |
-| A host problem toast (`kind: 'host'`) | Person: a machine their work runs on cannot be used, with Retry |
 | Workspace cleanup and setup notices, sort hints, Undo | Person: they answer the person's own action |
-| A system notification (`new Notification`) | Person: asks only (permission, a question, an approval) |
+| A host problem toast, bell row and bell dot (`kind: 'host'`) | Person only for a login or their own Retry; every other host problem: Walnut Health (Remote hosts) |
+| A system notification (`postSystemNotice`, the one exit) | Person: asks and reminders only (permission, a question, an approval); held whole during quiet |
 | A native `alert()` | Never (only the dialog's own fallback outside its provider) |
 
 iOS (`ios-native/`) reads no notification feed: its banners and alerts answer the person's own
@@ -77,6 +84,50 @@ action on the phone, and its freeze and crash reports reach the server as above.
 system notifications (`desktop/NotificationBridge.swift`) are approvals only. The session daemon
 raises nothing itself; what it reports reaches the server's log or a session's error, both
 Walnut Health's.
+
+## Walnut Health looks into its own errors
+
+Every minute `src/core/notifications/health-investigate.ts` counts, per category, Walnut
+Health's open errors that keep happening (3 times or more, or open for 30 minutes) and reports
+the gauge `health.errors{category=<slug>}`. The health monitor's built-in alarm `health.errors`
+reads it: one alarm instance per category, so one category is one investigation however many
+errors it holds, under the engine's own rules (one fix task per instance, the daily cap, the
+delay before a new one, and `health_monitor.fix_tasks`: `record` files the task, `start` starts
+an agent on it, `off` files none). The brief (`health-monitor/brief.ts`) lists the category's
+errors and the rules: a safe step that can be undone (reconnect, restart a service, clear a
+rebuildable cache, retry, a code fix landed the usual way) the agent takes alone and records; a
+step on the person's data, credentials, permissions, money, someone else's machine, a deletion
+or an outward send it does not take. Then, and when it cannot find a fix, it sets its task to
+`NEED_ACTION` with "Possible problem: what, because why. My pick: the step", which is the only
+way an investigation reaches the person (2026-11-17, the user: "if no risk just fix, if there
+is an issue, then show as a potential error notification").
+
+A remote host that stays down for a reason Walnut has to clear is looked into the same way:
+`src/core/hosts/host-down-gauge.ts` reports `host.down{host=<alias>}` each minute, and the
+built-in alarm `host.down` dials the host again after 30 minutes (auto-fix `host-reconnect`),
+then opens one fix task for that host when that does not hold, with the host's own words in the
+brief. Walnut Health's own errors take at most 3 of the day's 5 fix tasks, so a burst of
+categories never leaves a disk or restart alarm without one.
+
+## Once per problem until it heals
+
+A problem the person sees toasts once, and not again while it lasts (2026-11-17, the user: "if
+it show once don't show it so many times"). A host toasts once until it heals, however its cause
+flips meanwhile (`web/src/utils/host-problem-toasts.ts`); the server's error that names a reason
+toasts once per `dedupKey` until a recovery says it healed
+(`web/src/contexts/notifications/toast-once.ts`). Both memories survive a reload. Healed and
+broken again is a new time. The person's own click that fails is not held to it.
+
+## Notices outside the window, and quiet
+
+A system notification (a macOS notification posted by the Mac app, a web Notification) has one
+exit, `web/src/contexts/notifications/system-notice.ts`; a push to the phone has one gate,
+`src/core/push/quiet-hold.ts`. While quiet holds (a focus block, macOS Focus mirrored by Rhythm,
+the person's own toggle) both hold everything, asks included, and send one notice when quiet
+ends. See [notification-lifecycle.md](./notification-lifecycle.md) for quiet mode itself.
+`tests/web/notice-single-exit.test.ts` fails on a system notification posted anywhere else and
+on a kind of notice with no audience decided; `tests/core/notifications/notice-audience.test.ts`
+on a push sender that skips the gate.
 
 ## Adding a notice
 

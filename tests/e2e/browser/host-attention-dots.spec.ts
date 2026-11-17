@@ -107,7 +107,8 @@ test.describe('the dots speak on every page', () => {
 test.describe('the bell names its reason word for word', () => {
   /** Both, then hosts, then local, each read off the bell on Home. */
   async function sampleReasons(page: Page, count: 0 | 1): Promise<void> {
-    const h = await bpSetup(page, { hosts: [connected('devbox', 'Dev box'), failed('netbox', 'Net box', 'unreachable')], local: 'sign-in', feed: count ? [askRecord(1)] : [] })
+    // An expired certificate is the person's to clear, so it speaks on the bell (an unreachable host would not).
+    const h = await bpSetup(page, { hosts: [connected('devbox', 'Dev box'), failed('netbox', 'Net box', 'cert_expired')], local: 'sign-in', feed: count ? [askRecord(1)] : [] })
     const name = (sentence: string) => count ? sentence.replace('Notifications: ', 'Notifications, 1 waiting; ') : sentence
     for (const [label, step] of [
       [BOTH_REASON, async () => {}],
@@ -136,7 +137,7 @@ test.describe('the bell names its reason word for word', () => {
   test.afterEach(async ({ request }) => { await endServerQuiet(request) })
 
   test('HD-7: Quiet: the bell wears the moon, no dot, and names only the quiet (not the reason); ending it brings the reason and the dot back', async ({ page }) => {
-    await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable')] })
+    await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'cert_expired')] })
     await expect(bell(page)).toHaveAttribute('aria-label', HOSTS_REASON, { timeout: 20_000 })
     await expect(bellDot(page)).toHaveCount(1)
     await openBell(page)
@@ -160,6 +161,26 @@ test.describe('the bell names its reason word for word', () => {
     await expect(bell(page)).toHaveAttribute('aria-label', HOSTS_REASON)
     await expect(bell(page)).toHaveAttribute('title', HOSTS_REASON)
     await expect(bellDot(page)).toHaveCount(1)
+  })
+})
+
+test.describe('a host Walnut is handling', () => {
+  test('HD-11: only an unreachable host: no bell or Settings dot, no toast, no problems block; System lists its row and Errors points to Walnut Health', async ({ page }) => {
+    await bpSetup(page, { hosts: [connected('devbox', 'Dev box'), failed('netbox', 'Net box', 'unreachable')] })
+    // System naming the host proves its frame arrived before the absences below are read.
+    await openSystemHosts(page)
+    await expect(systemHostRow(page, 'netbox')).toBeVisible({ timeout: 20_000 })
+    await expect(systemHostRow(page, 'netbox')).toHaveAttribute('data-kind', 'unreachable')
+    await pickRail(page, 'All')
+    await expect(panelProblems(page)).toHaveCount(0)
+    await expect(problemRow(page, 'netbox')).toHaveCount(0)
+    await pickRail(page, 'Errors')
+    await expect(page.locator('.notification-panel [data-testid="nfc-health-link"]')).toContainText('see Walnut Health')
+    await closePanel(page, 'escape')
+    await expect(bellDot(page)).toHaveCount(0)
+    await expect(bell(page)).toHaveAttribute('aria-label', 'Notifications')
+    await expect(settingsDot(page)).toHaveCount(0)
+    await expect(page.locator('[data-testid="corner-stack"] [data-testid="notification-toast"]', { hasText: /Net box|remote host/ })).toHaveCount(0)
   })
 })
 
@@ -241,8 +262,9 @@ test.describe('local Claude Code: the re-check and the version floor', () => {
     try {
       await bpSetup(page2, { hosts: [signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'unreachable')], local: 'outdated' })
       await openProblems(page2)
-      await expect(problemRow(page2, 'netbox')).toBeVisible()
+      // The unreachable host is Walnut Health's: no row here, only the signed-out one.
       await expect(problemRow(page2, 'signbox')).toBeVisible()
+      await expect(problemRow(page2, 'netbox')).toHaveCount(0)
       await expect(panelLocalCard(page2)).toHaveCount(0)
       await expect(panelProblems(page2).locator('[data-testid="setup-banner-outdated"]')).toHaveCount(0)
       await expect(bell(page2)).toHaveAttribute('aria-label', HOSTS_REASON)

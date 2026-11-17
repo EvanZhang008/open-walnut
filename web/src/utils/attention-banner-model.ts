@@ -187,6 +187,8 @@ function problemRow(s: HostStatusInput, p: HostProblem, input: RowInput): Banner
 function tryingRow(s: HostStatusInput, prevRow: BannerRow, input: RowInput): BannerRow {
   return {
     id: bannerHostRowId(s.host), type: 'trying', group: prevRow.group, hosts: [s.host], labels: [labelOf(s)],
+    // The failure's kind it is retrying: who the row is for (audience.ts) holds through the attempt.
+    ...(prevRow.kind ? { kind: prevRow.kind } : {}),
     // The keys of the failure it is retrying: its x (and Dismiss all) still hide it.
     dismissKeys: prevRow.dismissKeys.filter((k) => k.startsWith(`${s.host}|`)),
     actions: [], by: input.userRetrying?.has(s.host) ? 'user' : 'auto',

@@ -8,9 +8,10 @@ import '@/styles/health-monitor.css';
 
 export const WALNUT_HEALTH_ERRORS_PATH = '/settings#walnut-health-errors';
 
-export function HealthErrorsLink({ onNavigate }: { onNavigate: (to: string) => void }) {
+/** `hosts`: remote hosts Walnut is reconnecting by itself (Walnut Health's, not the bell's). */
+export function HealthErrorsLink({ onNavigate, hosts = 0 }: { onNavigate: (to: string) => void; hosts?: number }) {
   const { healthFeed } = useNotifications();
-  const open = healthFeed.filter(n => !n.resolved).length;
+  const open = healthFeed.filter(n => !n.resolved).length + hosts;
   if (open === 0) return null;
   return (
     <button

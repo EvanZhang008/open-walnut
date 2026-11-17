@@ -13,6 +13,7 @@
  */
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { getAllHostStatus, serverNow, subscribeHostStatus } from '@/hooks/useHostStatus';
+import { hostProblemNeedsYou } from '@open-walnut/notice-audience';
 import { nextBanner, type BannerInput } from '@/utils/attention-banner-model';
 import { getHostDismissed, subscribeHostDismissed } from '@/utils/host-banner-dismiss';
 import { getPromptedHosts, getUserEngagedHosts, subscribeUserRetry } from '@/utils/host-user-retrying';
@@ -98,15 +99,18 @@ export function bellPresentation(i: BellPresentationInput): BellPresentation {
 type AttentionInput = Pick<BannerInput, 'statuses' | 'dismissed' | 'now' | 'engaged' | 'prompted'>;
 
 /**
- * Would any host get a problem row right now? The SAME model the notification
+ * Would any host get a problem row the person must act on right now? The SAME model the notification
  * panel's rows follow (from an empty state), so a dismissed
  * row, a discovered host nobody reached for, and a reconnect younger than
  * 2 minutes light nothing. `wakeAt` is the next time the answer can flip
  * without a new frame (the 2-minute reconnect line).
  */
 export function hostAttentionOf(input: AttentionInput): { on: boolean; wakeAt: number | null } {
-  const { view } = nextBanner(input);
-  return { on: view.rows.some((r) => r.type !== 'ready') || view.more > 0, wakeAt: view.wakeAt };
+  const { view, state } = nextBanner(input);
+  // Only a problem the person must clear lights the bell (audience.ts); Walnut Health keeps the rest.
+  const engaged = input.engaged ?? new Set<string>();
+  const on = state.order.some((r) => r.type !== 'ready' && !!hostProblemNeedsYou(r, engaged));
+  return { on, wakeAt: view.wakeAt };
 }
 
 function inputNow(): AttentionInput {

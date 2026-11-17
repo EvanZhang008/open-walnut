@@ -14,6 +14,8 @@ import {
   bellDotReason, bellPresentation, hostAttentionOf, landingSectionFor, onRemoteHostsPane, railDotShows, type BellReason,
 } from '../../web/src/utils/host-attention'
 import { localNoticeShows } from '../../web/src/utils/local-claude-banner'
+import { hostRowFor } from '../../web/src/utils/attention-banner-model'
+import { hostProblemNeedsYou } from '../../src/core/notifications/audience'
 import { attentionDotsOf } from '../../web/src/hooks/useAttentionDots'
 import type { SystemHealth } from '../../web/src/hooks/useSystemHealth'
 import type { LocalClaudeStatus } from '../../web/src/api/local-claude'
@@ -152,8 +154,8 @@ describe('the rail dot and the bell reason (no card covers a host problem any mo
 
 describe('hostAttentionOf runs the problem-row model', () => {
   const NOW = 1_000_000_000
-  const failed = (host: string, label: string): HostStatusInput & { label: string } => ({
-    host, label, connected: false, phase: 'failed', kind: 'unreachable', error: 'ssh: connect failed', hint: 'Check the network, then Retry.',
+  const failed = (host: string, label: string, kind = 'cert_expired'): HostStatusInput & { label: string } => ({
+    host, label, connected: false, phase: 'failed', kind, error: 'ssh: connect failed', hint: 'Check the network, then Retry.',
     retryable: true, at: NOW,
   })
 
@@ -163,9 +165,28 @@ describe('hostAttentionOf runs the problem-row model', () => {
     expect(hostAttentionOf({ statuses: s, dismissed: new Set(['netbox|connect']), now: NOW }).on).toBe(false)
   })
 
+  it('a host Walnut reconnects by itself lights nothing (Walnut Health lists it); the same host after the person\'s own Retry does', () => {
+    const s = [failed('othermac', 'Other Mac', 'unreachable')]
+    expect(hostAttentionOf({ statuses: s, dismissed: new Set(), now: NOW }).on).toBe(false)
+    expect(hostAttentionOf({ statuses: s, dismissed: new Set(), now: NOW, engaged: new Set(['othermac']) }).on).toBe(true)
+  })
+
   it('a reconnect with a cause flips on at 2 minutes, and says when (no new frame needed)', () => {
     const s: HostStatusInput & { label: string } = { host: 'devbox', label: 'Dev box', connected: false, phase: 'reconnecting', lastKind: 'timeout', reconnectSince: NOW - 60_000, at: NOW }
-    expect(hostAttentionOf({ statuses: [s], dismissed: new Set(), now: NOW })).toEqual({ on: false, wakeAt: NOW + 60_000 })
-    expect(hostAttentionOf({ statuses: [s], dismissed: new Set(), now: NOW + 60_001 }).on).toBe(true)
+    const engaged = new Set(['devbox'])
+    expect(hostAttentionOf({ statuses: [s], dismissed: new Set(), now: NOW, engaged })).toEqual({ on: false, wakeAt: NOW + 60_000 })
+    expect(hostAttentionOf({ statuses: [s], dismissed: new Set(), now: NOW + 60_001, engaged }).on).toBe(true)
+    // Not the person's: Walnut keeps reconnecting it, and the bell stays quiet.
+    expect(hostAttentionOf({ statuses: [s], dismissed: new Set(), now: NOW + 60_001 }).on).toBe(false)
+  })
+
+  it('while Walnut retries a host the person must sign in to, the row keeps its kind, so it stays the person\'s (C61)', () => {
+    const input = { now: NOW }
+    const prev = hostRowFor(failed('signbox', 'Sign box', 'auth'), input)!
+    expect(hostProblemNeedsYou(prev, new Set())).toBe('sign-in')
+    const trying = hostRowFor({ host: 'signbox', label: 'Sign box', connected: false, phase: 'connecting', at: NOW } as HostStatusInput, input, prev)!
+    expect(trying.type).toBe('trying')
+    expect(trying.kind).toBe('auth')
+    expect(hostProblemNeedsYou(trying, new Set())).toBe('sign-in')
   })
 })

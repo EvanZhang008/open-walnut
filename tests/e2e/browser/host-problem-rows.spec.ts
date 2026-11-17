@@ -52,16 +52,18 @@ const signedOutAtFloor = (host: string, label: string, minVersion: string): HS =
 }
 
 test.describe('host problem rows: which hosts, in which order', () => {
-  test('healthy, connecting and merely outdated hosts take no row; connect failures lead; no row outside the panel (C13, C15, C74)', async ({ page }) => {
+  test('healthy, connecting, merely outdated and unreachable hosts take no row; connect failures lead; no row outside the panel (C13, C15, C74)', async ({ page }) => {
+    // Net box fails with a kind the person must clear (dns); Off box is unreachable, which Walnut
+    // Health handles (audience.ts hostProblemNeedsYou), so it takes no row here.
     await load(page, [
       connected('devbox', 'Dev box'), signedOut('signbox', 'Sign box'), outdated('buildbox', 'Build box'),
-      failed('netbox', 'Net box', 'unreachable'), connecting('cbox', 'Connecting box'),
+      failed('netbox', 'Net box', 'dns'), connecting('cbox', 'Connecting box'), failed('offbox', 'Off box', 'unreachable'),
     ])
     await expect(hostRowsOutsidePanel(page)).toHaveCount(0)
     await openProblems(page)
     // Connect failures first, readiness second; a version floor for one model is not a problem (BANNER_READINESS_KINDS).
     await expect.poll(() => problemRowHosts(page)).toEqual(['netbox', 'signbox'])
-    for (const host of ['devbox', 'cbox', 'buildbox']) await expect(problemRow(page, host), host).toHaveCount(0)
+    for (const host of ['devbox', 'cbox', 'buildbox', 'offbox']) await expect(problemRow(page, host), host).toHaveCount(0)
     // The readiness row names its host once (in the server's sentence), with no label chip.
     const sign = problemRow(page, 'signbox')
     const text = await sign.locator('.hpb-body').innerText()
@@ -89,8 +91,9 @@ test.describe('host problem rows: which hosts, in which order', () => {
 
   test('5 problems: 5 rows, one per host, no "and N more" (C16)', async ({ page }) => {
     await load(page, [
-      failed('keybox', 'Key box', 'auth'), failed('netbox', 'Net box', 'unreachable'),
-      failed('proxybox', 'Proxy box', 'proxy'), missing('barebox', 'Bare box'), signedOut('signbox', 'Sign box'),
+      // Five problems the person must clear (an unreachable host or a broken proxy is Walnut Health's).
+      failed('keybox', 'Key box', 'auth'), failed('netbox', 'Net box', 'dns'),
+      failed('proxybox', 'Proxy box', 'proxy_login'), missing('barebox', 'Bare box'), signedOut('signbox', 'Sign box'),
     ])
     await openProblems(page)
     await expect.poll(() => problemRowHosts(page)).toEqual(['keybox', 'netbox', 'proxybox', 'barebox', 'signbox'])
@@ -114,7 +117,8 @@ test.describe('host problem rows: which hosts, in which order', () => {
   test('a real countdown only where Walnut really retries (C21)', async ({ page }) => {
     await load(page, [
       failed('certbox', 'Cert box', 'cert_expired', { retryAt: now() + 192_000 }),
-      failed('netbox', 'Net box', 'unreachable'),
+      // A refused key: a row of the person's that Walnut never retries by itself, so no countdown.
+      failed('netbox', 'Net box', 'auth'),
     ])
     await openProblems(page)
     const when = problemRow(page, 'certbox').locator('.hft-when')
@@ -130,8 +134,9 @@ test.describe('host problem rows: which hosts, in which order', () => {
     expect(await page.locator('body').innerText()).not.toContain('retries by itself')
   })
 
-  test('a reconnect takes a row only after 2 minutes with a known cause (C72)', async ({ page }) => {
-    const h = await load(page, [reconnecting('devbox', 'Dev box', 110_000, 'timeout'), signedOut('signbox', 'Sign box')])
+  test('a reconnect takes a row only after 2 minutes with a known cause of the person\'s (C72)', async ({ page }) => {
+    // A refused key is the person's to clear; a timeout is Walnut Health's and never takes a row here.
+    const h = await load(page, [reconnecting('devbox', 'Dev box', 110_000, 'auth'), signedOut('signbox', 'Sign box')])
     await openProblems(page)
     await expect(problemRow(page, 'signbox')).toBeVisible()
     await expect(problemRow(page, 'devbox')).toHaveCount(0)
@@ -139,19 +144,24 @@ test.describe('host problem rows: which hosts, in which order', () => {
     await h.push(reconnecting('devbox', 'Dev box', 125_000))
     await page.waitForTimeout(300)
     await expect(problemRow(page, 'devbox')).toHaveCount(0)
-    // Past 2 minutes with a cause: the row, its last attempt and Connect now.
+    // Past 2 minutes with a cause Walnut handles (a timeout): still no row.
     await h.push(reconnecting('devbox', 'Dev box', 125_000, 'timeout'))
+    await page.waitForTimeout(300)
+    await expect(problemRow(page, 'devbox')).toHaveCount(0)
+    // Past 2 minutes with a cause of the person's: the row, its last attempt and Connect now.
+    await h.push(reconnecting('devbox', 'Dev box', 125_000, 'auth'))
     const r = problemRow(page, 'devbox')
     await expect(r).toBeVisible({ timeout: 10_000 })
     await expect(r.locator('.hft-headline')).toHaveText('Reconnecting to Dev box')
-    await expect(r.locator('.hpb-last')).toHaveText('Last attempt: Connecting to Dev box timed out')
+    await expect(r.locator('.hpb-last')).toHaveText('Last attempt: Could not connect to Dev box')
     await expect(r.getByRole('button', { name: 'Connect now' })).toBeVisible()
   })
 })
 
 test.describe('host problem rows: dismissal and live clearing', () => {
   test('row x survives a reload; a new floor brings it back; clearing drops the row and the key (C17, C18, C19)', async ({ page }) => {
-    const h = await load(page, [signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'unreachable')])
+    // Net box: a kind the person must clear (dns), so it keeps its row and its count on Errors.
+    const h = await load(page, [signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'dns')])
     await openProblems(page)
     await problemRow(page, 'signbox').getByRole('button', { name: 'Dismiss Sign box' }).click()
     await expect(problemRow(page, 'signbox')).toHaveCount(0)
@@ -179,11 +189,12 @@ test.describe('host problem rows: dismissal and live clearing', () => {
   })
 
   test('a dismissed connect row stays hidden through kind flips and short connections, and returns after 10 connected minutes (C81)', async ({ page }) => {
-    const h = await load(page, [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')])
+    // Kinds of the person's (an unreachable host takes no row to dismiss in the first place).
+    const h = await load(page, [failed('netbox', 'Net box', 'auth'), signedOut('signbox', 'Sign box')])
     await openProblems(page)
     await problemRow(page, 'netbox').getByRole('button', { name: 'Dismiss Net box' }).click()
     await expect(problemRow(page, 'netbox')).toHaveCount(0)
-    for (const kind of ['timeout', 'unreachable', 'timeout']) {
+    for (const kind of ['dns', 'auth', 'dns']) {
       await h.push(failed('netbox', 'Net box', kind))
       await page.waitForTimeout(150)
       await expect(problemRow(page, 'netbox')).toHaveCount(0)
@@ -191,7 +202,7 @@ test.describe('host problem rows: dismissal and live clearing', () => {
     await h.push(connected('netbox', 'Net box', undefined, 5 * 60_000))
     await page.waitForTimeout(200)
     await expect(problemRow(page, 'netbox')).toHaveCount(0)
-    await h.push(failed('netbox', 'Net box', 'unreachable'))
+    await h.push(failed('netbox', 'Net box', 'auth'))
     await page.waitForTimeout(200)
     await expect(problemRow(page, 'netbox')).toHaveCount(0)
     expect(await storedKeys(page)).toContain('netbox|connect')
@@ -199,12 +210,13 @@ test.describe('host problem rows: dismissal and live clearing', () => {
     await h.push(connected('netbox', 'Net box', undefined, 10 * 60_000 + 1000))
     await expect.poll(() => storedKeys(page)).not.toContain('netbox|connect')
     await expect(problemRow(page, 'netbox')).toHaveCount(0)
-    await h.push(failed('netbox', 'Net box', 'unreachable'))
+    await h.push(failed('netbox', 'Net box', 'auth'))
     await expect(problemRow(page, 'netbox')).toBeVisible()
   })
 
   test('a dismissal syncs through ui-prefs: a second browser leaves the row out (one fewer on Errors), while its System list still gives the host its row, with no x (C92)', async ({ page, browser }) => {
-    const hosts = () => [signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'unreachable')]
+    // Net box: a kind the person must clear (dns), so it keeps a row in both browsers.
+    const hosts = () => [signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'dns')]
     await setup(page, hosts(), undefined, { serverPrefs: true, listHosts: true })
     expect(DISMISS_KEY.startsWith('open-walnut-')).toBe(true)
     await openProblems(page)
@@ -258,7 +270,7 @@ test.describe('host problem rows: a version floor takes no row (server fixture)'
   test.beforeEach(async ({ page }) => { await isolatePrefs(page) })
   test.afterAll(async ({ request }) => { await resetServerHostFixture(request) })
 
-  test('Build box (claude_outdated) has no row while /api/hosts/status still reports it; the four problems all show', async ({ page, request }) => {
+  test('Build box (claude_outdated) has no row while /api/hosts/status still reports it; the person\'s three problems show, Net box (unreachable) does not', async ({ page, request }) => {
     await loadFixture(request, 'host-problems')
     await loadApp(page)
     await openProblems(page)
@@ -269,5 +281,7 @@ test.describe('host problem rows: a version floor takes no row (server fixture)'
     expect(wire.connected).toBe(true)
     expect(wire.readiness!.problems.map((p) => p.kind)).toEqual(['claude_outdated'])
     await expect(problemRow(page, 'buildbox')).toHaveCount(0)
+    // Net box is unreachable: Walnut Health's, so no row here (System still lists it).
+    await expect(problemRow(page, 'netbox')).toHaveCount(0)
   })
 })

@@ -145,7 +145,11 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   const { hasIssues, health, loading: healthLoading } = useSystemHealth();
   // What is broken right now: it leads All and Errors, and counts on the Errors badge.
   const disabledHosts = useDisabledHosts(open);
-  const problemHosts = useProblemHosts(health.daemons, disabledHosts);
+  const allProblemHosts = useProblemHosts(health.daemons, disabledHosts);
+  // The bell lists only the hosts the person must act on; Walnut reconnects the rest and
+  // Walnut Health lists them (audience.ts).
+  const problemHosts = useMemo(() => allProblemHosts.filter(p => p.needsYou), [allProblemHosts]);
+  const healthHostCount = allProblemHosts.length - problemHosts.length;
   const localDismissed = useLocalDismissed();
   const localNotice = localNoticeShows(health, localDismissed, healthLoading);
   const localClaude = localNotice !== null;
@@ -681,7 +685,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
 
           <div className="nfc-detail">
             {/* Walnut's own errors are not the person's: one line says where they are. */}
-            {section === 'errors' && !activeErrorCategory && <HealthErrorsLink onNavigate={onNavigate} />}
+            {section === 'errors' && !activeErrorCategory && <HealthErrorsLink onNavigate={onNavigate} hosts={healthHostCount} />}
             {/* A script waiting on an approval needs the person too: the same one line as
                 Home's Needs you, a click opens the request (ApprovalRow). */}
             {(section === 'action' || section === 'all') && approvals.length > 0 && (

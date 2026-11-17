@@ -140,6 +140,35 @@ describe('every reason an error reaches the person is listed', () => {
   })
 })
 
+/**
+ * Every push to the person's phone, and the one quiet gate each asks first (push/quiet-hold.ts).
+ * A new sender fails here until it is listed; one that skips the gate fails too.
+ */
+const PUSH_SENDERS: Record<string, string> = {
+  'core/push/letter-push.ts': 'a letter to the person',
+  'core/push/thread-push.ts': 'a thread of Main or a lead with news for the person',
+  'core/approvals/notify.ts': 'an approval a script waits on',
+  'core/push-notification.ts': 'a routine receipt or a session result while no window is open',
+  'core/push/quiet-hold.ts': 'the one reminder after quiet itself',
+}
+
+describe('every push to the phone goes through the one quiet gate', () => {
+  const senders = FILES.filter(({ rel, text }) => rel !== 'core/push/deliver.ts' && /\bdeliverPush\(/.test(code(text)))
+
+  it('lists every sender', () => {
+    expect(senders.map(f => f.rel).sort()).toEqual(Object.keys(PUSH_SENDERS).sort())
+  })
+
+  it('each asks the gate before it delivers, and none reads quiet itself', () => {
+    for (const { rel, text } of senders) {
+      if (rel === 'core/push/quiet-hold.ts') continue
+      expect(code(text), rel).toMatch(/holdPushForQuiet\(/)
+    }
+    const ownReads = FILES.filter(({ rel, text }) => rel !== 'core/quiet/quiet-state.ts' && /\bquietSuppresses\(/.test(code(text))).map(f => f.rel)
+    expect(ownReads).toEqual([])
+  })
+})
+
 describe('the store keeps the person\'s errors through a Walnut Health storm', () => {
   beforeAll(async () => { await store.dismissNotifications() })
 

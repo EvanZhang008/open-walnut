@@ -29,23 +29,25 @@ test.describe.configure({ timeout: 90_000 })
 test.beforeAll(async ({ request }) => { await resetServerHostFixture(request) })
 test.afterAll(async ({ request }) => { await resetServerHostFixture(request) })
 
+// Six problems of the person's: an unreachable host or a broken proxy is Walnut Health's and takes no row in All.
 const six = () => [
-  failed('keybox', 'Key box', 'auth'), failed('netbox', 'Net box', 'unreachable'), failed('proxybox', 'Proxy box', 'proxy'),
-  failed('lanbox', 'Lan box', 'unreachable'), failed('certbox', 'Cert box', 'cert_expired'), signedOut('signbox', 'Sign box'),
+  failed('keybox', 'Key box', 'auth'), failed('netbox', 'Net box', 'dns'), failed('proxybox', 'Proxy box', 'proxy_login'),
+  failed('lanbox', 'Lan box', 'host_key'), failed('certbox', 'Cert box', 'cert_expired'), signedOut('signbox', 'Sign box'),
 ]
 const box = async (l: Locator) => (await l.boundingBox())!
 
 test.describe('the problems block: which hosts, in which order', () => {
-  test('HP-1: default Home: no host row outside the panel; All leads with each problem host in the model order (healthy and outdated hosts take none); System gives the same rows in Settings order and the others plain lines, each host once', async ({ page }) => {
+  test('HP-1: default Home: no host row outside the panel; All leads with each problem host of the person\'s in the model order (healthy, outdated and unreachable hosts take none); System gives the same rows and the unreachable host\'s in Settings order and the others plain lines, each host once', async ({ page }) => {
     await bpSetup(page)
     await expect(hostRowsOutsidePanel(page)).toHaveCount(0)
     const hosts = await openProblems(page)
     await expect.poll(() => problemRowHosts(page), { timeout: 20_000 }).toEqual(FIXTURE_ORDER)
     await expect(problemHosts(page).locator('li.hpb-row').first()).toBeInViewport()
     const inAll = await triples(hosts)
-    expect(inAll.slice(0, 3).every((t) => t.split('|')[1] === 'connect')).toBe(true)
-    expect(inAll[3]).toBe('signbox|readiness|claude_not_logged_in')
-    for (const host of ['devbox', 'buildbox']) await expect(problemRow(page, host), host).toHaveCount(0)
+    expect(inAll.slice(0, 2).every((t) => t.split('|')[1] === 'connect')).toBe(true)
+    expect(inAll[2]).toBe('signbox|readiness|claude_not_logged_in')
+    // Net box is unreachable: Walnut Health's, so no row in All (System below still lists it).
+    for (const host of ['devbox', 'buildbox', 'netbox']) await expect(problemRow(page, host), host).toHaveCount(0)
     await expect(hostRowsOutsidePanel(page)).toHaveCount(0)
     await closePanel(page, 'escape')
     const system = await openSystemHosts(page)
@@ -56,7 +58,8 @@ test.describe('the problems block: which hosts, in which order', () => {
     expect(new Set(listed).size).toBe(listed.length)
     const inSystem = await triples(system)
     expect(inSystem.map((t) => t.split('|')[0])).toEqual(['signbox', 'keybox', 'certbox', 'netbox'])
-    expect([...inSystem].sort()).toEqual([...inAll].sort())
+    expect(inSystem.filter((t) => !t.startsWith('netbox|')).sort()).toEqual([...inAll].sort())
+    expect(inSystem).toContain('netbox|connect|unreachable')
     for (const host of ['devbox', 'buildbox']) {
       await expect(systemHostRow(page, host), host).toHaveCount(0)
       await expect(systemHostLine(page, host), host).toBeVisible()
@@ -106,7 +109,7 @@ test.describe('the problems block: which hosts, in which order', () => {
 })
 
 test.describe('a problem row reads at a glance', () => {
-  test('HP-4: 1280x800, four problems: each row starts closed as its headline and one action (Retry, or Check again for the sign-in); its hint is one Show details away', async ({ page }) => {
+  test('HP-4: 1280x800, three problems of the person\'s: each row starts closed as its headline and one action (Retry, or Check again for the sign-in); its hint is one Show details away', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 })
     await bpSetup(page, { hosts: fixtureHosts() })
     await openProblems(page)
@@ -117,7 +120,7 @@ test.describe('a problem row reads at a glance', () => {
       buttons: Array.from(li.querySelectorAll<HTMLElement>('.hpb-actions button')).map((b) => (b.textContent ?? '').trim()),
     })))
     for (const r of rows) expect(r, r.host!).toMatchObject({ open: false, dense: true, hint: false })
-    expect(rows.map((r) => r.buttons)).toEqual([['Retry'], ['Retry'], ['Retry'], ['Check again']])
+    expect(rows.map((r) => r.buttons)).toEqual([['Retry'], ['Retry'], ['Check again']])
     await problemRow(page, 'keybox').getByRole('button', { name: 'Show details' }).click()
     await expect(problemRow(page, 'keybox').locator('.hft-hint')).toBeVisible()
   })
@@ -226,7 +229,8 @@ test.describe('a problem row reads at a glance', () => {
 
   test('HP-9: dark theme: problem rows and System rows draw no background of their own; the row CSS has no literal colours', async ({ page }) => {
     await bpSetup(page, {
-      hosts: [failed('netbox', 'Net box', 'unreachable')],
+      // dns: the person's to clear, so the row is drawn in All as well as System.
+      hosts: [failed('netbox', 'Net box', 'dns')],
       before: async (p) => { await p.addInitScript(() => { document.addEventListener('DOMContentLoaded', () => { document.documentElement.dataset.theme = 'dark' }) }) },
     })
     await page.evaluate(() => { document.documentElement.dataset.theme = 'dark' })
@@ -257,7 +261,9 @@ test.describe('this machine\'s Claude Code notice in All', () => {
 
 test.describe('one attempt per host, whichever view starts it', () => {
   test('HP-11: Retry in All\'s row: the new attempt\'s failure replaces the headline; a second Retry with the same answer says Tried again just now: same result in place, the row keeping its height, and the line then goes', async ({ page }) => {
-    const h = await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')] })
+    // Net box starts on a kind of the person's (dns), so All has its row; once the person pressed
+    // Retry, its timeout answers their own action ('own-action') and keeps the row.
+    const h = await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'dns'), signedOut('signbox', 'Sign box')] })
     await openProblems(page)
     const r = problemRow(page, 'netbox')
     await expect(r).toBeVisible({ timeout: 20_000 })
@@ -437,7 +443,7 @@ test.describe('the Errors view and the rail counts', () => {
     await expect(errorsBadge(page)).toHaveText('3')
   })
 
-  test('HP-17 (server fixture): an unreachable host counts 1 on the Errors rail, before and after Errors opens, and leads All as its row; System wears no count and no dot and still lists it under Remote hosts; an outdated host alone counts nothing and leads nothing, but is listed', async ({ page, browser, request }) => {
+  test('HP-17 (server fixture): an unreachable host is Walnut Health\'s: no count on the Errors rail and no row in All, the Errors view points to Walnut Health; System wears no count and no dot and still lists it under Remote hosts; an outdated host alone counts nothing and leads nothing, but is listed', async ({ page, browser, request }) => {
     await loadFixture(request, fixtureFile({
       devbox: { label: 'Dev box', hostname: 'dev.example.com', phase: 'connected', claude: HEALTHY },
       netbox: { label: 'Net box', hostname: 'net.example.com', phase: 'failed', error: 'ssh: connect to host net.example.com port 22: Network is unreachable' },
@@ -450,20 +456,20 @@ test.describe('the Errors view and the rail counts', () => {
     // This machine ready: the count is the host alone.
     await routeHealth(page)
     await loadApp(page)
-    await openProblems(page)
+    await openSystemHosts(page)
     const system = railButton(page, 'System')
-    await expect(problemRow(page, 'netbox')).toBeVisible({ timeout: 20_000 })
-    await expect(errorsBadge(page)).toHaveText('1', { timeout: 20_000 })
+    // System lists it first (proof its frame arrived), then the absences are read.
+    await expect(page.locator('.notification-panel .notification-card-label', { hasText: /^Remote hosts$/ })).toHaveCount(1)
+    await expect(systemHostRow(page, 'netbox')).toHaveAttribute('data-kind', 'unreachable', { timeout: 20_000 })
     await expect(systemBadge(page)).toHaveCount(0)
     await expect(system.locator('.nfc-rail-dot')).toHaveCount(0)
+    await expect(errorsBadge(page)).toHaveCount(0)
+    await pickRail(page, 'All')
+    await expect(panelProblems(page)).toHaveCount(0)
     await pickRail(page, 'Errors')
-    await expect(errorsBadge(page)).toHaveText('1')
-    await expect(problemRow(page, 'netbox')).toBeVisible()
-    await pickRail(page, 'System')
-    await expect(page.locator('.notification-panel .notification-card-label', { hasText: /^Remote hosts$/ })).toHaveCount(1)
-    await expect(systemHostRow(page, 'netbox')).toBeVisible()
-    await expect(systemBadge(page)).toHaveCount(0)
-    await expect(errorsBadge(page)).toHaveText('1')
+    await expect(problemRow(page, 'netbox')).toHaveCount(0)
+    await expect(page.locator('.notification-panel [data-testid="nfc-health-link"]')).toHaveText('1 background error Walnut is handling: see Walnut Health')
+    await expect(errorsBadge(page)).toHaveCount(0)
     await loadFixture(request, fixtureFile({
       devbox: { label: 'Dev box', hostname: 'dev.example.com', phase: 'connected', claude: HEALTHY },
       buildbox: { label: 'Build box', hostname: 'build.example.com', phase: 'connected', claude: { version: '2.1.220', auth: 'ok', installMethod: 'other' } },
@@ -491,7 +497,7 @@ test.describe('the Errors view and the rail counts', () => {
     }
   })
 
-  test('HP-18: two asks and four host problems: the bell lands on Needs Action, the asks alone (no problems block there); the Errors badge counts the four hosts, System nothing; System lists them as dense rows, never the one-line form', async ({ page }) => {
+  test('HP-18: two asks and four host problems: the bell lands on Needs Action, the asks alone (no problems block there); the Errors badge counts the person\'s three hosts (not the unreachable one), System nothing; System lists all four as dense rows, never the one-line form', async ({ page }) => {
     await bpSetup(page, {
       hosts: [failed('keybox', 'Key box', 'auth'), failed('netbox', 'Net box', 'unreachable'), failed('certbox', 'Cert box', 'cert_expired'), signedOut('signbox', 'Sign box')],
       feed: [askRecord(1), askRecord(2)],
@@ -503,16 +509,16 @@ test.describe('the Errors view and the rail counts', () => {
     const askTop = (await box(page.locator('.notification-panel .nfc-perm-card').first())).y
     expect(askTop - panelBox.y).toBeLessThanOrEqual(panelBox.height * 0.6)
     await expect(problemHosts(page)).toHaveCount(0)
-    // The hosts are errors: the Errors rail counts the four (no feed errors, this machine ready);
-    // System (git sync healthy) counts nothing.
-    await expect(errorsBadge(page)).toHaveText('4')
+    // The person's hosts are errors: the Errors rail counts three (no feed errors, this machine ready;
+    // Net box, unreachable, is Walnut Health's); System (git sync healthy) counts nothing.
+    await expect(errorsBadge(page)).toHaveText('3')
     await expect(systemBadge(page)).toHaveCount(0)
     await pickRail(page, 'System')
     const hosts = systemHosts(page)
     await expect(hosts).toBeVisible()
     await expect(hosts.locator('li.hpb-row[data-host]')).toHaveCount(4)
     await expect(systemBadge(page)).toHaveCount(0)
-    await expect(errorsBadge(page)).toHaveText('4')
+    await expect(errorsBadge(page)).toHaveText('3')
     for (const r of await hosts.locator('li.hpb-row[data-host]').all()) {
       await expect(r).toHaveClass(/hpb-dense/)
       await expect(r).not.toHaveClass(/hpb-single/)
@@ -533,10 +539,12 @@ test.describe('the System host list (server fixture)', () => {
       return { kind: dot.getAttribute('data-kind'), dot: getComputedStyle(dot).backgroundColor, head: getComputedStyle(head).color, text: head.innerText }
     })
     const inAll: Record<string, Awaited<ReturnType<typeof look>>> = {}
-    for (const host of ['signbox', 'keybox', 'certbox', 'netbox']) {
+    for (const host of ['signbox', 'keybox', 'certbox']) {
       await expect(problemRow(page, host), host).toBeVisible({ timeout: 20_000 })
       inAll[host] = await look(problemRow(page, host))
     }
+    // Net box (unreachable) is Walnut Health's: a row in System only.
+    await expect(problemRow(page, 'netbox')).toHaveCount(0)
     await pickRail(page, 'System')
     const hosts = systemHosts(page)
     await expect(hosts).toBeVisible({ timeout: 20_000 })
@@ -547,7 +555,7 @@ test.describe('the System host list (server fixture)', () => {
     }
     for (const host of ['signbox', 'keybox', 'certbox', 'netbox']) {
       await expect(hosts.locator(`.nfc-daemon-row[data-host="${host}"]`), host).toHaveCount(0)
-      expect(await look(systemHostRow(page, host)), host).toEqual(inAll[host])
+      if (host !== 'netbox') expect(await look(systemHostRow(page, host)), host).toEqual(inAll[host])
     }
     expect(inAll.certbox.kind).not.toBe(inAll.signbox.kind)
     await expect(systemHostLine(page, 'devbox').locator('.nfc-daemon-status')).toHaveText('Connected')

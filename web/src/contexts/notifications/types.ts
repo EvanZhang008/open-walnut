@@ -245,6 +245,8 @@ export function SHOULD_TOAST(n: { kind: NotificationKind; severity: Notification
     case 'reminder': return true;
     // Ephemeral with no feed copy: the toast is its only surface.
     case 'hint': return true;
-    case 'host': return true;
+    // A host problem the person must clear (a login) or that answers their Retry; Walnut
+    // reconnects the rest itself and lists them in Walnut Health (audience.ts).
+    case 'host': return audienceOf(n) === 'user';
   }
 }

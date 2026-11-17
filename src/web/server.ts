@@ -186,7 +186,7 @@ import { clientEvidenceRouter } from './routes/client-evidence.js'
 import { notificationsRouter } from './routes/notifications.js'
 import { quietRouter } from './routes/quiet.js'
 import { pluginStatusItemsRouter } from './routes/plugin-status-items.js'
-import { initQuiet, stopQuiet } from '../core/quiet/quiet-state.js'
+import { initQuiet, keepQuietThroughShutdown, releaseUnclaimedPluginHolds, stopQuiet } from '../core/quiet/quiet-state.js'
 import { hooksRouter } from './routes/hooks.js'
 import { addNotification as addFeedNotification, upsertNotification as upsertFeedNotification, resolvePermissionNotification, recoverNotifications, expireOwnCardsOfUnloadedPlugins, dismissedConditionKeys } from '../core/notifications/store.js'
 import { createRecoveryTransitionTracker } from '../core/notifications/recovery-transition.js'
@@ -2137,7 +2137,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       },
       recover: (alarmId) => { void publishRecovery([`health:${alarmId}`]) },
       onChange: () => broadcastEvent('health-monitor:changed', {}),
-    })).catch((err) => log.web.warn('health monitor: not started', { error: err instanceof Error ? err.message : String(err) }))
+    })).then(async () => {
+      // Walnut Health's errors that keep happening, per category, for the `health.errors` alarm.
+      const { startHealthErrorWatch } = await import('../core/notifications/health-investigate.js')
+      startHealthErrorWatch()
+      // Remote hosts that stay down for a reason Walnut has to clear, for the `host.down` alarm.
+      const { startHostDownWatch } = await import('../core/hosts/host-down-gauge.js')
+      startHostDownWatch()
+    }).catch((err) => log.web.warn('health monitor: not started', { error: err instanceof Error ? err.message : String(err) }))
   }
 
   // ── Answers to the letters that ask for a task's commands on another host (src/core/hosts/exec-grants.ts).
@@ -6216,6 +6223,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     log.web.error('failed to load integration plugins', { error: err instanceof Error ? err.message : String(err) })
   } finally {
     registry.endLoading()
+    // A quiet hold kept through the restart whose plugin did not load lets go (quiet-state.ts).
+    void releaseUnclaimedPluginHolds(registry.getAll().map(p => p.id))
+      .catch((err) => log.web.warn('quiet: releasing holds of unloaded plugins failed', { error: err instanceof Error ? err.message : String(err) }))
   }
   // The companion runs only some plugins; its cards about the others, from a
   // previous life, wait for a success this box can never have.
@@ -7310,6 +7320,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   await shutdownStep('plugin mutations', () => pluginMutationTail)
   await shutdownStep('plugin sync polling', () => stopPluginSyncPolling())
   // A plugin may take 5 s to deactivate (plugin-manager.ts); the stores below still get their turn.
+  // A focus block's quiet outlives the restart: the plugins' disposal below keeps a timed hold.
+  keepQuietThroughShutdown()
   await shutdownStep('plugins', () => disposeLoadedPlugins(registry), { budgetMs: 3_000 })
   const { disposeRouterWake } = await import('../core/router/wake.js')
   disposeRouterWake()
@@ -7372,6 +7384,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   void import('../core/sessions/status-reconcile.js').then((m) => m.stopStatusReconcile()).catch(() => { /* never started */ })
   void import('../core/status-consistency.js').then((m) => m.stopStatusCheck()).catch(() => { /* never started */ })
   void import('../core/health-monitor/index.js').then((m) => m.stopHealthMonitor()).catch(() => { /* never started */ })
+  void import('../core/notifications/health-investigate.js').then((m) => m.stopHealthErrorWatch()).catch(() => { /* never started */ })
+  void import('../core/hosts/host-down-gauge.js').then((m) => m.stopHostDownWatch()).catch(() => { /* never started */ })
   void import('../core/human-inbox/complete-archive.js').then((m) => m.stopCompleteArchive()).catch(() => { /* never started */ })
   void import('../core/routines/trigger-completion-pause.js').then((m) => m.stopTriggerCompletionPause()).catch(() => { /* never started */ })
   void import('../core/org/lead-waits.js').then((m) => m.stopLeadWaits()).catch(() => { /* never started */ })

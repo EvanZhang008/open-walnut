@@ -10,21 +10,16 @@
  *    someone answers, so this is not a nudge the open tab already covers.
  *
  * A notice is taken back as soon as its approval is answered, anywhere. Quiet mode holds it
- * back unless quiet lets permission prompts through (quietAllowsToast 'permission').
+ * with every other notice outside the window (system-notice.ts): the one reminder after quiet
+ * covers it.
  */
 import type { Approval } from '@/api/approvals';
 import { log } from '@/utils/log';
-import { currentQuiet } from '@/contexts/notifications/quiet';
-import { quietAllowsToast } from '@/contexts/notifications/quiet-model';
+import { nativeNoticeHandler, postSystemNotice, QUIET_CATCHUP_ID, withdrawSystemNotice } from '@/contexts/notifications/system-notice';
 import { getHostStatus } from '@/hooks/useHostStatus';
 import { hostDisplayLabel } from '@/utils/host-display-label';
 
-interface Handler { postMessage(body: unknown): Promise<unknown> }
-
-function nativeHandler(): Handler | null {
-  const w = window as unknown as { webkit?: { messageHandlers?: Record<string, Handler | undefined> } };
-  return w.webkit?.messageHandlers?.walnutNotify ?? null;
-}
+const nativeHandler = nativeNoticeHandler;
 
 export const OPEN_APPROVAL_EVENT = 'walnut:open-approval';
 
@@ -53,7 +48,6 @@ export async function askNoticePermission(): Promise<NoticeAccess> {
   return noticeAccess();
 }
 
-const shown = new Map<string, Notification>();
 let opener: ((id: string) => void) | null = null;
 
 /** The store's openApproval, set once (a module cycle otherwise). */
@@ -61,37 +55,24 @@ export function setApprovalOpener(fn: (id: string) => void): void {
   opener = fn;
 }
 
-/** Raise the notice. false: quiet mode holds it back for now (the page asks again when quiet ends). */
-export function showApprovalNotice(a: Approval): boolean {
-  // Quiet mode (Walnut's Do Not Disturb) lets it through as it lets a permission prompt through:
-  // a script is blocked on it. The row and the card inside the page show it either way.
-  if (!quietAllowsToast(currentQuiet(), 'permission')) return false;
+/**
+ * Raise the notice, through the one exit for notices outside the window (system-notice.ts).
+ * Quiet mode holds it with everything else and the one reminder after quiet covers it, so
+ * it counts as noticed either way; the row and the card inside the page show it meanwhile.
+ */
+export function showApprovalNotice(a: Approval): void {
   const { title, body } = approvalNoticeText(a);
-  const native = nativeHandler();
-  if (native) {
-    native.postMessage({ op: 'post', id: a.id, title, body })
-      .then((r) => log.info('approvals', 'system notice posted', { approvalId: a.id, result: r as Record<string, unknown> }))
-      .catch((err) => log.warn('approvals', 'system notice refused', { approvalId: a.id, error: String(err) }));
-    return true;
-  }
-  if (noticeAccess() !== 'granted') return true;
-  try {
-    const n = new Notification(title, { body, tag: `approval-${a.id}`, requireInteraction: true });
-    n.onclick = () => {
-      window.focus();
-      opener?.(a.id);
-      n.close();
-    };
-    shown.set(a.id, n);
-  } catch {
-    // A browser that refuses notifications from this page.
-  }
-  return true;
+  const result = postSystemNotice({
+    tag: `approval-${a.id}`, nativeId: a.id, title, body, requireInteraction: true,
+    onClick: () => opener?.(a.id),
+  });
+  if (result === 'shown' && nativeHandler()) log.info('approvals', 'system notice posted', { approvalId: a.id });
 }
 
 /** The Mac app: take back every approval notice whose approval is not among `ids` (still waiting). */
 export function keepApprovalNotices(ids: readonly string[]): void {
-  nativeHandler()?.postMessage({ op: 'keep', ids }).catch(() => { /* an older app: no such op */ });
+  // The reminder after quiet shares the app's approval notices: it is kept too.
+  nativeHandler()?.postMessage({ op: 'keep', ids: [...ids, QUIET_CATCHUP_ID] }).catch(() => { /* an older app: no such op */ });
 }
 
 /** The Mac app: the approval whose notice was clicked before this page could hear it, once. */
@@ -107,16 +88,8 @@ export async function takeClickedApproval(): Promise<string | null> {
 }
 
 export function clearApprovalNotice(id: string): void {
-  const native = nativeHandler();
-  if (native) {
-    native.postMessage({ op: 'clear', id }).catch(() => { /* an app quitting */ });
-    return;
-  }
-  const n = shown.get(id);
-  if (n) {
-    shown.delete(id);
-    try { n.close(); } catch { /* already gone */ }
-  }
+  withdrawSystemNotice(`approval-${id}`);
+  nativeHandler()?.postMessage({ op: 'clear', id }).catch(() => { /* an app quitting */ });
 }
 
 /** The Mac app's System Settings pane for its notifications (when the person turned them off). */

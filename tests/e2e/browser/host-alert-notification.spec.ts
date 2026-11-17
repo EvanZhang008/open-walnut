@@ -21,7 +21,10 @@ import { bell, resetServerHostFixture } from './host-problems-fixture-helpers'
 import { bpSetup, hostRowsOutsidePanel, openProblems, problemRow, problemRowHosts } from './host-attention-helpers'
 import { draftPanels, openDraft } from './draft-helpers'
 
-const TWO = () => [failed('netbox', 'Net box', 'unreachable'), failed('keybox', 'Key box', 'unreachable')]
+// Two problems the person must clear (a name that does not resolve, a refused key): an unreachable
+// host is Walnut Health's and never toasts (audience.ts hostProblemNeedsYou). A connect row keeps
+// Retry. Neither is a login kind, so each keeps its own toast key (host:<alias>, not cred:<kind>).
+const TWO = () => [failed('netbox', 'Net box', 'dns'), failed('keybox', 'Key box', 'auth')]
 const DISMISS_KEY = 'open-walnut-host-banner-dismissed'
 const TOASTED_KEY = 'walnut.host-problem-toasted.v1'
 

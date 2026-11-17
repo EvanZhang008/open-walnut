@@ -10,9 +10,14 @@
  *     how often, first and last seen, and its details.
  *  2. The person's own action fails for good (Save as todo, the server answers 500 with its
  *     internals): a toast says in words that it did not go through, with no raw internals.
+ *  3. A host Walnut reconnects by itself (a Mac on the host network that is off) never toasts or
+ *     sits in the bell; Walnut Health lists it. A login only the person can do still reaches them.
+ *  4. During a focus block nothing pops up outside the window, asks included; its end raises
+ *     ONE notice for what waited.
  */
 import fs from 'node:fs/promises'
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Page, type WebSocketRoute } from '@playwright/test'
+import { connected, failed, setup } from './host-problems-helpers'
 import { draftComposer, loadHome, openDraft } from './draft-helpers'
 
 const SHOTS = process.env.NOTICE_SHOT_DIR ?? '/tmp/notice-audience'
@@ -114,4 +119,99 @@ test('the person\'s own action that fails shows a toast in words', async ({ page
   await page.waitForTimeout(1500)
   await page.screenshot({ path: `${SHOTS}/4-own-action-toast.png` })
   await page.unroute(/\/api\/(v1\/)?tasks(\?.*)?$/)
+})
+
+/**
+ * 2026-11-17, the user: a Mac on the host network that was not connected asked him to run
+ * `walnut net status`, during a focus block. A host problem only he can clear (a login) still
+ * reaches him; one Walnut reconnects by itself goes to Walnut Health.
+ */
+test('a host Walnut reconnects by itself is Walnut Health\'s; a login only the person can do still reaches them', async ({ page }) => {
+  const netHint = 'Is Other Mac on, with Walnut running? On it, `walnut net status` says whether it is on the host network.'
+  const seen = await watchToasts(page, async () => {
+    await setup(page, [
+      connected('devbox', 'Dev box'),
+      failed('othermac', 'Other Mac', 'daemon', { hint: netHint, phaseLabel: 'Could not reach Other Mac through the host network' }),
+      failed('certbox', 'Cert box', 'cert_expired'),
+    ], 'ready', { listHosts: true })
+    await page.waitForTimeout(3000)
+  })
+  expect(seen.filter((t) => /Other Mac|net status/.test(t)), 'no toast for a machine Walnut reconnects').toEqual([])
+  expect(seen.some((t) => /Cert box/.test(t)), 'the login the person must do toasts').toBe(true)
+  await page.screenshot({ path: `${SHOTS}/5-host-toasts.png` })
+
+  // The bell lists only the login; one line says what Walnut is handling.
+  await page.getByRole('button', { name: /Notifications/ }).first().click()
+  const panel = page.locator('.notification-panel')
+  await expect(panel).toBeVisible()
+  await panel.locator('.nfc-rail-btn', { hasText: 'Errors' }).first().click()
+  const problems = panel.getByTestId('nfc-problem-hosts')
+  await expect(problems.locator('li.hpb-row[data-host="certbox"]')).toBeVisible()
+  await expect(problems.locator('li.hpb-row[data-host="othermac"]')).toHaveCount(0)
+  await expect(panel).not.toContainText('walnut net status')
+  const link = panel.getByTestId('nfc-health-link')
+  await expect(link).toContainText('Walnut is handling')
+  await page.waitForTimeout(800)
+  await panel.screenshot({ path: `${SHOTS}/6-bell-hosts.png` })
+  await link.click()
+
+  // Walnut Health keeps it, with the full hint, for whoever investigates.
+  const log = page.getByTestId('health-errors')
+  await expect(log).toBeVisible({ timeout: 20_000 })
+  const row = log.getByTestId('health-host-row').filter({ hasText: 'Other Mac' })
+  await expect(row).toBeVisible()
+  await expect(row).toContainText('walnut net status')
+  await expect(log.getByTestId('health-host-row').filter({ hasText: 'Cert box' })).toHaveCount(0)
+  await row.scrollIntoViewIfNeeded()
+  await page.waitForTimeout(1000)
+  await log.screenshot({ path: `${SHOTS}/7-health-hosts.png` })
+})
+
+/** A focus block holds every notice outside the window, asks included; its end raises one. */
+test('during a focus block nothing pops up outside the window, and its end raises one notice', async ({ page }) => {
+  const focus = { active: true, allowPermissions: true, holds: [{ source: 'plugin:walnut-rhythm', since: Date.now() - 60_000, reason: 'Focus block, macOS Focus: Do Not Disturb' }] }
+  let socket: WebSocketRoute | null = null
+  await page.routeWebSocket(/\/ws(?:\?|$)/, (route) => { socket = route; route.connectToServer() })
+  // The server's quiet as this page reads it (a test run's page reads it again on every quiet:changed).
+  let served: Record<string, unknown> = focus
+  await page.route('**/api/quiet', (r) => r.request().method() === 'GET' ? r.fulfill({ json: served }) : r.fallback())
+  await page.addInitScript(() => {
+    const posted: Array<{ title: string; body?: string }> = []
+    ;(window as unknown as { __posted: typeof posted }).__posted = posted
+    class Recorder {
+      static permission = 'granted'
+      static requestPermission = async () => 'granted'
+      onclick: unknown = null
+      constructor(title: string, opts: { body?: string } = {}) { posted.push({ title, body: opts.body }) }
+      close() { /* closed */ }
+    }
+    ;(window as unknown as { Notification: unknown }).Notification = Recorder
+    // The window is in the background, as when the person works in another app.
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true })
+  })
+  await loadHome(page)
+  await expect.poll(() => socket !== null, { timeout: 30_000 }).toBe(true)
+  const posted = () => page.evaluate(() => (window as unknown as { __posted: Array<{ title: string; body?: string }> }).__posted)
+  const event = (name: string, data: unknown) => socket!.send(JSON.stringify({ type: 'event', name, seq: -1, data }))
+
+  // Two asks arrive while the person focuses: permission prompts, which an agent waits on.
+  for (const n of [1, 2]) {
+    event('notification:new', {
+      dedupKey: `perm:focus-${n}-${Date.now()}`, kind: 'permission', severity: 'warning', title: `Bash ${n}`, body: `ls ${n}`,
+      requestId: `focus-r${n}`, toolName: 'Bash', input: { command: `ls ${n}` }, sessionId: `focus-s${n}`, timestamp: Date.now(),
+    })
+  }
+  await page.waitForTimeout(2000)
+  expect(await posted(), 'nothing outside the window during the focus block').toEqual([])
+  await page.screenshot({ path: `${SHOTS}/8-focus-no-system-notice.png` })
+
+  // The block ends: ONE notice says what waited.
+  served = { active: false, allowPermissions: true, holds: [] }
+  event('quiet:changed', served)
+  await expect.poll(async () => (await posted()).length, { timeout: 10_000 }).toBe(1)
+  await page.waitForTimeout(1500)
+  const [one] = await posted()
+  expect(one!.title).toBe('2 things waited for you')
+  expect(one!.body).toContain('Bash 1')
+  expect((await posted()).length).toBe(1)
 })

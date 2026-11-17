@@ -38,9 +38,13 @@ const announcer = (page: Page): Locator => page.getByTestId('host-banner-announc
 
 test.beforeAll(async ({ request }) => { await resetServerHostFixture(request) })
 
+// Net box fails with a name that does not resolve (dns) where a test needs a Retry row: a kind the
+// person must clear, so the bell lists it (an unreachable host is Walnut Health's and has no row here).
 test.describe('host problem rows never move under the hand', () => {
   test('a row that retries by itself stays in place reading Trying again (C61)', async ({ page }) => {
-    const h = await load(page, [failed('keybox', 'Key box', 'auth'), failed('netbox', 'Net box', 'unreachable')])
+    // An expired certificate: the person's to clear (so it has a row here) and a kind Walnut re-dials
+    // by itself. An unreachable host, which also retries by itself, is Walnut Health's and has no row.
+    const h = await load(page, [failed('keybox', 'Key box', 'auth'), failed('netbox', 'Net box', 'cert_expired')])
     const target = problemRow(page, 'netbox')
     await expect(target).toBeVisible()
     const y0 = (await target.boundingBox())!.y
@@ -57,8 +61,8 @@ test.describe('host problem rows never move under the hand', () => {
     await h.push(connecting('netbox', 'Net box'))
     await expect(target).toContainText('Trying again...')
     await page.waitForTimeout(800)
-    await h.push(failed('netbox', 'Net box', 'unreachable'))
-    await expect(target.locator('.hft-headline')).toHaveText('Could not connect to Net box')
+    await h.push(failed('netbox', 'Net box', 'cert_expired'))
+    await expect(target.locator('.hft-headline')).toHaveText('Could not connect to Net box: SSH certificate expired')
     // Keep sampling the settled row a little longer (enough samples on a slow machine too).
     const settledFrom = samples.length
     await expect.poll(() => samples.length - settledFrom).toBeGreaterThanOrEqual(3)
@@ -70,9 +74,9 @@ test.describe('host problem rows never move under the hand', () => {
   })
 
   test('Retry holds the row height until the attempt settles, then its receipt comes and goes (C62)', async ({ page }) => {
-    const h = await load(page, [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')])
+    const h = await load(page, [failed('netbox', 'Net box', 'dns'), signedOut('signbox', 'Sign box')])
     h.connectDelayMs = 1500
-    h.connectAnswer = (host) => failed(host, 'Net box', 'unreachable')
+    h.connectAnswer = (host) => failed(host, 'Net box', 'dns')
     const target = problemRow(page, 'netbox')
     const before = (await target.boundingBox())!.height
     await target.getByRole('button', { name: 'Retry' }).click()
@@ -89,7 +93,7 @@ test.describe('host problem rows never move under the hand', () => {
   })
 
   test('paired labels keep one width: Retry / Retrying..., Check again / Checking..., Copy / Copied (C63)', async ({ page }) => {
-    const h = await load(page, [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')])
+    const h = await load(page, [failed('netbox', 'Net box', 'dns'), signedOut('signbox', 'Sign box')])
     h.connectDelayMs = 1200
     const retry = problemRow(page, 'netbox').getByTestId('hpb-retry')
     const w1 = (await retry.boundingBox())!.width
@@ -122,8 +126,8 @@ async function tabTo(page: Page, target: Locator, max = 60): Promise<void> {
 
 test.describe('host problem rows: buttons and keyboard', () => {
   test('Tab and Enter alone: Retry, Show details, Show SSH output, row x (C44)', async ({ page }) => {
-    const h = await load(page, [failed('netbox', 'Net box', 'unreachable'), failed('keybox', 'Key box', 'auth')])
-    h.connectAnswer = (host) => failed(host, 'Net box', 'unreachable')
+    const h = await load(page, [failed('netbox', 'Net box', 'dns'), failed('keybox', 'Key box', 'auth')])
+    h.connectAnswer = (host) => failed(host, 'Net box', 'dns')
     const first = problemRow(page, 'netbox')
     await tabTo(page, first.getByTestId('hpb-retry'))
     await page.keyboard.press('Enter')
@@ -144,7 +148,7 @@ test.describe('host problem rows: buttons and keyboard', () => {
   })
 
   test('Check again: Checking..., then the row leaves when the re-check clears it, and the ready sentence is said (C55)', async ({ page }) => {
-    const h = await load(page, [signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'unreachable')])
+    const h = await load(page, [signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'dns')])
     h.checkAnswer = (host) => connected(host, 'Sign box')
     await problemRow(page, 'signbox').getByRole('button', { name: 'Check again' }).click()
     await expect(problemRow(page, 'signbox').getByTestId('hpb-check')).toHaveText('Checking...')
@@ -155,8 +159,8 @@ test.describe('host problem rows: buttons and keyboard', () => {
 
   // ('Checked just now: still <version>' is the claude_outdated wording, which takes no row.)
   test('same result still answers: Tried again just now / Checked just now: same result, for about 5s (C77)', async ({ page }) => {
-    const h = await load(page, [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')])
-    h.connectAnswer = (host) => failed(host, 'Net box', 'unreachable')
+    const h = await load(page, [failed('netbox', 'Net box', 'dns'), signedOut('signbox', 'Sign box')])
+    h.connectAnswer = (host) => failed(host, 'Net box', 'dns')
     h.checkAnswer = (host) => ({ ...signedOut(host, 'Sign box'), readiness: { ...signedOut(host, 'Sign box').readiness!, checkedAt: now() } })
     await problemRow(page, 'netbox').getByTestId('hpb-retry').click()
     const receipt = problemRow(page, 'netbox').getByTestId('hpb-receipt')
@@ -169,7 +173,7 @@ test.describe('host problem rows: buttons and keyboard', () => {
   })
 
   test('no Connecting... button, Other ways matches the full list (C94)', async ({ page }) => {
-    const h = await load(page, [signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'unreachable')])
+    const h = await load(page, [signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'dns')])
     h.connectDelayMs = 800
     await problemRow(page, 'netbox').getByTestId('hpb-retry').click()
     await expect(problemHosts(page).getByRole('button', { name: /^Connecting\.\.\.$/ })).toHaveCount(0)

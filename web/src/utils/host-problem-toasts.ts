@@ -1,10 +1,12 @@
 /**
  * Which host problems get a toast now (HostProblemNotices), pure so the rule is
- * testable. A problem row toasts once when it first appears, and stays known
- * until one of its hosts heals; a reload does not toast it again (the memory is
- * in localStorage), so a host that is down for days toasts once, not on every
- * page load. A dismissed row ("I know") never reaches this list (the model
- * leaves it out).
+ * testable. A host toasts once when its problem first appears, and not again
+ * until it heals: a new cause on a host still broken (a connect failure, then a
+ * timeout, then a daemon that did not start) is the same thing and toasts
+ * nothing (2026-11-17, the user: "if it show once don't show it so many times").
+ * A reload does not toast it again (the memory is in localStorage), so a host
+ * that is down for days toasts once, not on every page load. A dismissed row
+ * ("I know") never reaches this list (the model leaves it out).
  */
 import type { BannerRow } from '@/utils/attention-banner-model';
 
@@ -62,7 +64,9 @@ export function decideHostToasts(
     const open = hosts.filter((h) => isKnownHost(h) && !isHealthy(h));
     if (open.length) next.set(id, open);
   }
-  return { toast: problems.filter((r) => !known.has(problemKeyOf(r))), known: next, healed: [...healed] };
+  // Once per host until it heals: a row toasts only for a host no known problem names.
+  const shown = new Set<string>([...known.values()].flat())
+  return { toast: problems.filter((r) => !known.has(problemKeyOf(r)) && r.hosts.some((h) => !shown.has(h))), known: next, healed: [...healed] };
 }
 
 export function readToasted(): ToastedProblems {

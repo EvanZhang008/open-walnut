@@ -29,9 +29,18 @@ export interface QuietState {
   active: boolean;
   allowPermissions: boolean;
   holds: QuietHold[];
+  /**
+   * Not heard from the server yet (the page just loaded, or reconnected to a server that
+   * just restarted). Reads as not quiet; a notice nobody just asked for (a host problem, a
+   * system notification) waits for the real state instead of interrupting a focus block
+   * in the first second (2026-11-17: a host toast during a focus block, right after a deploy).
+   */
+  unknown?: boolean;
 }
 
 export const NOT_QUIET: QuietState = { active: false, allowPermissions: true, holds: [] };
+/** The state before the server's answer: see `unknown`. */
+export const UNKNOWN_QUIET: QuietState = { ...NOT_QUIET, unknown: true };
 
 /** localStorage switch for the reminder chime ('off' mutes it; anything else plays). */
 export const REMINDER_SOUND_KEY = 'open-walnut-reminder-sound';

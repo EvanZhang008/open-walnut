@@ -9,14 +9,18 @@
  *  - a place that raises an error card (kind 'operation-error') or the task store's
  *    operation error, and the action of the person it answers;
  *  - an app dialog (useAlert) and the action it answers;
- *  - a native alert() or a system notification (new Notification) outside the known places.
+ *  - a native alert() outside the known places;
+ *  - a notice outside the window (a web Notification, the Mac app's) anywhere but its one exit
+ *    (contexts/notifications/system-notice.ts), which quiet holds whole;
+ *  - a kind of notice no one decided the audience of, and a host problem surface that skips the rule.
  * Corner placement of every notice is tests/web/corner-stack-guard.test.ts; the server's
  * writers and reasons are tests/core/notifications/notice-audience.test.ts.
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { SHOULD_TOAST } from '../../web/src/contexts/notifications/types'
+import { SHOULD_TOAST, TOAST_DURATION_MS } from '../../web/src/contexts/notifications/types'
+import { audienceOf, hostProblemNeedsYou } from '../../src/core/notifications/audience'
 import { groupHealthErrors } from '../../web/src/components/settings/sections/health-error-log-model'
 import type { Notification } from '../../web/src/contexts/notifications/types'
 
@@ -82,10 +86,13 @@ const ALERT_SITES: Record<string, string> = {
   'pages/NotesPage.tsx': 'a note the person created',
 }
 
-/** A system notification (outside the window): only asks, which hold an agent until answered. */
-const SYSTEM_NOTIFICATION_SITES: Record<string, string> = {
+/** The one exit for a notice outside the window: it alone posts one, and quiet holds them all. */
+const SYSTEM_NOTICE_EXIT = 'contexts/notifications/system-notice.ts'
+
+/** Every caller of that exit: only asks and reminders, which wait on the person. */
+const SYSTEM_NOTICE_CALLERS: Record<string, string> = {
   'contexts/notifications/NotificationProvider.tsx': 'notify() itself, for a permission ask or a reminder while the tab is hidden',
-  'hooks/useChat.ts': 'the agent asks the person a question while the tab is hidden',
+  'hooks/useChat.ts': 'the agent asks the person a question',
   'components/approvals/approval-notify.ts': 'a script waits on the person\'s approval',
 }
 
@@ -102,8 +109,14 @@ describe('every notice the web app raises answers the person', () => {
     expect(filesMatching(/\buseAlert\b/)).toEqual(Object.keys(ALERT_SITES).sort())
   })
 
-  it('lists every system notification', () => {
-    expect(filesMatching(/new Notification\(/)).toEqual(Object.keys(SYSTEM_NOTIFICATION_SITES).sort())
+  it('posts a system notification only through the one exit (a web Notification or the Mac app\'s)', () => {
+    expect(filesMatching(/new Notification\(/)).toEqual([SYSTEM_NOTICE_EXIT])
+    expect(filesMatching(/op:\s*'post'/)).toEqual([SYSTEM_NOTICE_EXIT])
+  })
+
+  it('lists every caller of that exit', () => {
+    const callers = FILES.filter(({ rel, text }) => rel !== SYSTEM_NOTICE_EXIT && /\bpostSystemNotice\(/.test(text)).map(({ rel }) => rel).sort()
+    expect(callers).toEqual(Object.keys(SYSTEM_NOTICE_CALLERS).sort())
   })
 
   it('never opens a native alert (only the dialog\'s own fallback outside its provider)', () => {
@@ -134,6 +147,63 @@ describe('the provider\'s lanes into notify()', () => {
   it('marks a server record as the server\'s, and gives the agent lane its reason', () => {
     expect(lanes.find(l => l.name === 'notification:new')!.body).toMatch(/fromServer: true/)
     expect(lanes.find(l => l.name === 'agent:error')!.body).toMatch(/needsYou: 'sign-in'/)
+  })
+})
+
+/**
+ * Every kind of notice and who it is for. A new kind fails here until it is listed: either it
+ * is judged by its reason (Walnut Health's unless it names why it needs the person), or it is
+ * the person's by nature (an ask, a letter, a receipt, the answer to their own action).
+ */
+const KIND_AUDIENCE: Record<string, 'by-reason' | 'person'> = {
+  'operation-error': 'by-reason',
+  host: 'by-reason',
+  permission: 'person',
+  cron: 'person',
+  sort: 'person',
+  'audio-error': 'person',
+  skill: 'person',
+  hook: 'person',
+  letter: 'person',
+  reminder: 'person',
+  hint: 'person',
+}
+
+describe('every kind of notice goes through the one rule', () => {
+  it('lists every kind (a new one is a decision, made here and in audience.ts)', () => {
+    expect(Object.keys(TOAST_DURATION_MS).sort()).toEqual(Object.keys(KIND_AUDIENCE).sort())
+  })
+
+  it('a kind judged by its reason is Walnut Health\'s without one, the person\'s with one', () => {
+    for (const [kind, how] of Object.entries(KIND_AUDIENCE)) {
+      expect(audienceOf({ kind }), kind).toBe(how === 'by-reason' ? 'health' : 'user')
+      if (how === 'by-reason') expect(audienceOf({ kind, needsYou: 'sign-in' }), kind).toBe('user')
+    }
+  })
+
+  it('a host problem toasts only when the person must clear it or it answers their own Retry', () => {
+    expect(SHOULD_TOAST({ kind: 'host', severity: 'error' })).toBe(false)
+    expect(SHOULD_TOAST({ kind: 'host', severity: 'error', needsYou: 'sign-in' })).toBe(true)
+    const none = new Set<string>()
+    // 2026-11-17: a Mac on the host network that is off asked the person to run `walnut net status`.
+    expect(hostProblemNeedsYou({ kind: 'daemon', hosts: ['other-mac'] }, none)).toBeUndefined()
+    expect(hostProblemNeedsYou({ kind: 'unreachable', hosts: ['devbox'] }, none)).toBeUndefined()
+    expect(hostProblemNeedsYou({ kind: 'cert_expired', hosts: ['devbox'] }, none)).toBe('sign-in')
+    expect(hostProblemNeedsYou({ kind: 'claude_not_logged_in', hosts: ['devbox'] }, none)).toBe('sign-in')
+    expect(hostProblemNeedsYou({ kind: 'unreachable', hosts: ['devbox'] }, new Set(['devbox']))).toBe('own-action')
+  })
+
+  it('every surface of a host problem reads the same rule (toast, bell, bell dot, Walnut Health)', () => {
+    const readers = FILES.filter(({ text }) => /\bhostProblemNeedsYou\(/.test(text)).map(({ rel }) => rel).sort()
+    expect(readers).toEqual([
+      'components/common/HostProblemNotices.tsx',
+      'components/common/NotificationProblems.tsx',
+      'utils/host-attention.ts',
+    ])
+    const health = FILES.find(f => f.rel === 'components/settings/sections/HealthHostProblems.tsx')!.text
+    expect(health).toMatch(/filter\(\(p\) => !p\.needsYou\)/)
+    const panel = FILES.find(f => f.rel === 'components/common/NotificationPanel.tsx')!.text
+    expect(panel).toMatch(/allProblemHosts\.filter\(p => p\.needsYou\)/)
   })
 })
 

@@ -30,7 +30,8 @@ import { presetPanelView } from './todo-panel-helpers'
 /**
  * The fixtures/host-problems.json set as client frames, in Settings order:
  * devbox healthy, buildbox claude_outdated (never a problem row), signbox
- * signed out, keybox auth, certbox cert_expired, netbox unreachable.
+ * signed out, keybox auth, certbox cert_expired, netbox unreachable (Walnut Health's: never a
+ * problems-block row, toast or dot; still a System row).
  */
 export function fixtureHosts(): HS[] {
   return [
@@ -38,8 +39,12 @@ export function fixtureHosts(): HS[] {
     failed('keybox', 'Key box', 'auth'), failed('certbox', 'Cert box', 'cert_expired'), failed('netbox', 'Net box', 'unreachable'),
   ]
 }
-/** The model's order for fixtureHosts(): connect failures first (Settings order), readiness second. */
-export const FIXTURE_ORDER = ['keybox', 'certbox', 'netbox', 'signbox']
+/**
+ * The problems block's order for fixtureHosts(): connect failures first (Settings order), readiness
+ * second. Net box is left out: an unreachable host is Walnut Health's (audience.ts
+ * hostProblemNeedsYou), so it takes a row only in System and Walnut Health, never here.
+ */
+export const FIXTURE_ORDER = ['keybox', 'certbox', 'signbox']
 
 /** Every host row of a list as `host|type|kind`. */
 export function triples(list: Locator): Promise<string[]> {

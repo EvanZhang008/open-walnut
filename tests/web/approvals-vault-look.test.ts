@@ -23,8 +23,8 @@ const h = vi.hoisted(() => ({
 vi.mock('@/api/approvals', () => ({ listApprovals: vi.fn(async () => ({ approvals: [], keys: [] })), answerApproval: h.answer, enrollApprovalKey: vi.fn() }));
 vi.mock('@/api/test-run', () => ({ testRunLabel: () => null }));
 vi.mock('@/utils/log', () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
-vi.mock('@/contexts/notifications/quiet', () => ({ currentQuiet: () => ({ active: false }) }));
-vi.mock('@/contexts/notifications/quiet-model', () => ({ quietAllowsToast: () => true }));
+vi.mock('@/contexts/notifications/quiet', () => ({ currentQuiet: () => ({ active: false, holds: [] }), onQuietState: () => () => undefined }));
+vi.mock('@/contexts/notifications/quiet-model', () => ({ quietAllowsToast: () => true, effectiveQuiet: (q: unknown) => q }));
 vi.mock('@/hooks/useHostStatus', () => ({ getHostStatus: () => undefined }));
 vi.mock('@/api/vault', () => ({
   vaultSession: () => h.session,

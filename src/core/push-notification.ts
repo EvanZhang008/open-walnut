@@ -30,7 +30,7 @@ import { isFollower } from './server-role.js'
 import { getConfig } from './config-manager.js'
 import { clientCount } from '../web/ws/handler.js'
 import { log } from '../logging/index.js'
-import { getQuiet, logQuietSkipOnce, quietSuppresses } from './quiet/quiet-state.js'
+import { holdPushForQuiet, initQuietHold } from './push/quiet-hold.js'
 import { deliverPush } from './push/deliver.js'
 import { isQuietTurn } from './sessions/quiet-turn.js'
 
@@ -43,13 +43,6 @@ async function maybePush(title: string, body: string, data?: Record<string, unkn
   // A cloud box's own `push_tokens` rows are therefore not its to send from —
   // any it still carries are orphans from before that relay existed.
   if (isFollower()) return
-  // Quiet mode (do not disturb): none of these pushes is a permission ask, so a
-  // live hold silences all of them. Logged once per hold, not per event.
-  const quiet = await getQuiet()
-  if (quietSuppresses(quiet)) {
-    logQuietSkipOnce('push', quiet)
-    return
-  }
   // Skip if there are active WebSocket clients (user is viewing)
   if (clientCount() > 0) {
     log.web.debug('push: skipped (WS clients connected)', { title, clients: clientCount() })
@@ -58,6 +51,8 @@ async function maybePush(title: string, body: string, data?: Record<string, unkn
 
   const tokens = (await getConfig()).push_tokens ?? []
   if (tokens.length === 0) return
+  // Quiet mode (do not disturb) holds what would go now (quiet-hold.ts); the one after quiet says what waited.
+  if (await holdPushForQuiet('push', { key: `push:${title}`, title })) return
 
   const out = await deliverPush(tokens, { title, body, ...(data ? { data } : {}) })
   log.web.info('push: delivery', {
@@ -99,6 +94,8 @@ async function laneIdsFor(
  * Initialize push notification service — subscribe to event bus.
  */
 export function initPushNotifications(): void {
+  // The one reminder after quiet, and what a restart in the middle of quiet left held.
+  initQuietHold()
   bus.subscribe('push-notifications', async (event) => {
     try {
       switch (event.name) {

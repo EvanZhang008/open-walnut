@@ -235,6 +235,42 @@ export async function previewQuiet(source: string, hold: PreviewHold | null): Pr
   return snapshot(Date.now(), hold ? [...others, { source, ...hold }] : others)
 }
 
+let stopping = false
+/**
+ * The server is stopping (a deploy, an update): a plugin's hold outlives it, so the next
+ * server starts quiet and a focus block stays quiet through the restart. Without this the
+ * plugin's disposal cleared the hold on the way down, and the new server was loud for the
+ * seconds until the plugin set it again (2026-11-17: a host toast reached the user right after
+ * a deploy, in the middle of a focus block). The plugin reads its kept hold when it starts and
+ * keeps or clears it itself; a hold whose plugin did not load lets go
+ * (`releaseUnclaimedPluginHolds`).
+ */
+export function keepQuietThroughShutdown(): void {
+  stopping = true
+}
+
+/**
+ * After the plugins loaded (or did not): drop each plugin hold kept from before the restart
+ * whose plugin is not among `loadedPluginIds` (removed, turned off, or failed to load), so
+ * nothing keeps Walnut quiet for good. A loaded plugin owns its hold: it reads it on start and
+ * keeps or clears it.
+ */
+export async function releaseUnclaimedPluginHolds(loadedPluginIds: readonly string[]): Promise<string[]> {
+  await ensureLoaded()
+  const loadedSources = new Set(loadedPluginIds.map((id) => `plugin:${id}`))
+  const dropped: string[] = []
+  for (const source of [...holds.keys()]) {
+    if (source.startsWith('plugin:') && !loadedSources.has(source)) { holds.delete(source); dropped.push(source) }
+  }
+  if (dropped.length) {
+    log.notif.info('quiet: released holds of plugins that did not load after the restart', { sources: dropped })
+    await persist()
+    armTimer()
+    publishIfChanged()
+  }
+  return dropped
+}
+
 /**
  * Remove `source`'s hold. With `owner`, only a hold that generation set (or one
  * loaded from disk, which no live generation owns) is removed.
@@ -244,6 +280,8 @@ export async function clearQuiet(source: string, opts: { owner?: string } = {}):
   const existing = holds.get(source)
   if (!existing) return snapshot()
   if (opts.owner && existing.owner && existing.owner !== opts.owner) return snapshot()
+  // A generation's disposal while the server stops: the hold stays (above).
+  if (opts.owner && stopping) return snapshot()
   holds.delete(source)
   await persist()
   armTimer()
@@ -287,6 +325,7 @@ export function logQuietSkipOnce(channel: string, state: QuietState): void {
 
 /** Server teardown + tests: forget the in-memory state and stop the timer. */
 export function stopQuiet(): void {
+  stopping = false
   if (expiryTimer) { clearTimeout(expiryTimer); expiryTimer = null }
   holds.clear()
   loadPromise = null

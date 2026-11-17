@@ -18,9 +18,10 @@ import { taskPath } from '@/utils/task-path';
 import { SectionCard } from '../inputs/SectionCard';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { groupHealthErrors, type HealthErrorGroup, type HealthErrorRow } from './health-error-log-model';
+import { HealthHostProblems, useHealthProblemHosts } from './HealthHostProblems';
 import '@/styles/health-monitor.css';
 
-export const HEALTH_ERRORS_BLURB = 'Errors Walnut retries or fixes on its own. They never pop up or fill the bell; they are kept here, grouped by kind, for anyone who wants to look into them. Only an error you have to act on (sign in, free disk space, an action of yours that failed) reaches you.';
+export const HEALTH_ERRORS_BLURB = 'Errors Walnut retries or fixes on its own. They never pop up or fill the bell; they are kept here, grouped by kind, for anyone who wants to look into them. Walnut looks into the ones that keep happening by itself. Only an error you have to act on (sign in, free disk space, an action of yours that failed) reaches you.';
 
 const STATE_LABEL: Record<HealthErrorRow['state'], string> = { open: 'Happening', recovered: 'Recovered', stale: 'Ended' };
 
@@ -42,6 +43,7 @@ export function HealthErrorLog() {
   const agentBlocked = useLocalAgentBlocked();
   const canFix = repairable && !agentBlocked;
   const groups = useMemo(() => groupHealthErrors(healthFeed), [healthFeed]);
+  const hosts = useHealthProblemHosts();
   const settled = useMemo(() => groups.flatMap(g => g.rows.filter(r => r.state !== 'open').map(r => r.dedupKey)), [groups]);
   const actions = settled.length > 0
     ? <SettingsButton onClick={() => dismissFeed(settled)}>{`Clear ${settled.length} ended`}</SettingsButton>
@@ -49,7 +51,8 @@ export function HealthErrorLog() {
   return (
     <SectionCard id="walnut-health-errors" title="Background errors" description={HEALTH_ERRORS_BLURB} actions={actions}>
       <div className="health-errors" data-testid="health-errors">
-        {groups.length === 0
+        <HealthHostProblems hosts={hosts} />
+        {groups.length === 0 && hosts.length === 0
           ? <p className="health-detail-desc" data-testid="health-errors-empty">{loaded ? 'No background errors.' : 'Reading them...'}</p>
           : groups.map(g => <ErrorGroup key={g.category} group={g} canFix={canFix} onClear={(key) => dismissFeed([key])} />)}
       </div>

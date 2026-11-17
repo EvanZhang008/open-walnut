@@ -29,6 +29,9 @@ export { effectiveOverride, overrideHolds } from './overrides.js'
 export { bootOnSameBuild } from './exit-trace.js'
 
 export const FIX_TASKS_PER_DAY = 5
+/** The share of them Walnut Health's own errors may take (alarm `health.errors`, one per category). */
+export const HEALTH_ERRORS_FIX_TASKS_PER_DAY = 3
+const HEALTH_ERRORS_FIX_PREFIX = 'health.errors'
 const HISTORY_MAX = 50
 const EVENTS_KEEP_MS = 7 * 86_400_000
 /** An OK log alarm with no open fix task is forgotten after this. */
@@ -407,6 +410,13 @@ export class HealthMonitor {
       return
     }
     this.state.fixes = this.state.fixes.filter((f) => f.at > now - 86_400_000)
+    // Walnut Health's own errors take at most a share of the day's fix tasks, so a burst of
+    // categories never leaves the disk or a restart alarm without one.
+    const background = this.state.fixes.filter((f) => f.alarmId.startsWith(`${HEALTH_ERRORS_FIX_PREFIX}{`)).length
+    if (inst.defId === HEALTH_ERRORS_FIX_PREFIX && background >= HEALTH_ERRORS_FIX_TASKS_PER_DAY) {
+      this.record(inst, done, { ok: false, detail: `waiting: ${HEALTH_ERRORS_FIX_TASKS_PER_DAY} background error investigations were already opened in the last 24 hours` }, now)
+      return
+    }
     if (this.state.fixes.length >= FIX_TASKS_PER_DAY) {
       this.record(inst, done, { ok: false, detail: `waiting: ${FIX_TASKS_PER_DAY} fix tasks were already opened in the last 24 hours` }, now)
       return

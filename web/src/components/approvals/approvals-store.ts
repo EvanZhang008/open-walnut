@@ -191,13 +191,9 @@ export function unlockUndecided(s: ApprovalsState, a: Approval): boolean {
 
 function notice(a: Approval): void {
   if (noticed.has(a.id) || a.status !== 'pending' || Date.parse(a.expiresAt) <= Date.now()) return;
-  // Held back by quiet mode: not noticed yet, so the end of quiet raises it (noticePending).
-  if (showApprovalNotice(a)) noticed.add(a.id);
-}
-
-/** Raise the notices quiet mode held back, for the approvals still waiting (quiet just ended). */
-export function noticePending(): void {
-  for (const a of state.items.values()) notice(a);
+  // Quiet mode holds it in the system notice exit, whose one reminder after quiet covers it.
+  showApprovalNotice(a);
+  noticed.add(a.id);
 }
 
 function settle(a: Approval): void {

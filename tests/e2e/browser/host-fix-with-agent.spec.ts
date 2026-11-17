@@ -30,7 +30,8 @@ test('a pending repair is one state in All and System and survives closing the p
       await route.fulfill({ status: 409, json: { error: 'Host has no current failure to repair; recheck its status' } });
     } else await route.fulfill({ json: { taskId: 'attention-returned-task', reused: true } });
   });
-  await setup(page, [failed('alpha', 'Alpha box', 'unreachable')], undefined, { listHosts: true });
+  // An expired certificate is the person's to clear, so it has a row in All (an unreachable host is Walnut Health's).
+  await setup(page, [failed('alpha', 'Alpha box', 'cert_expired')], undefined, { listHosts: true });
   await openProblems(page);
   const allFix = problemRow(page, 'alpha').getByTestId('host-agent-fix');
   await problemRow(page, 'alpha').getByRole('button', fixFor('Alpha box')).click();
@@ -117,7 +118,8 @@ for (const section of ['All', 'System']) {
     const { tasks } = await (await request.get('/api/tasks')).json() as { tasks: Array<{ id: string; phase: string }> };
     const taskId = tasks.find((task) => task.id === 'pw-task-quote' && task.phase !== 'COMPLETE')!.id;
     await page.route('**/api/notifications/fix', (route) => route.fulfill({ json: { taskId, reused: true } }));
-    await setup(page, [failed('alpha', 'Alpha box', 'unreachable')], undefined, { listHosts: true });
+    // A person's kind, so All holds the row too (an unreachable host is only in System).
+    await setup(page, [failed('alpha', 'Alpha box', 'cert_expired')], undefined, { listHosts: true });
     await openBell(page);
     await pickRail(page, section);
     await page.locator('.notification-panel').getByRole('button', { name: 'Fix with agent for Alpha box', exact: true }).click();
@@ -188,8 +190,9 @@ test('a long repair failure stays fully readable in its row: a short scroll box 
 
 for (const phone of [false, true]) {
   test(`real host preflight starts and reuses an actual mock-CLI repair session on ${phone ? 'phone' : 'desktop'}`, async ({ page, request }) => {
+    // A refused key (auth): the person's to clear, so All lists the row; a "No route to host" would be Walnut Health's.
     if (phone) await page.setViewportSize({ width: 390, height: 740 });
-    await loadFixture(request, fixtureFile({ alpha: { label: 'Alpha box', hostname: 'alpha.example.com', phase: 'failed', error: 'ssh: connect to host alpha.example.com port 22: No route to host' } }));
+    await loadFixture(request, fixtureFile({ alpha: { label: 'Alpha box', hostname: 'alpha.example.com', phase: 'failed', error: 'Permission denied (publickey).' } }));
     await healthyGitSync(page);
     await loadApp(page);
     await openBell(page);

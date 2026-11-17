@@ -38,6 +38,8 @@ import { attentionBadgeCount, actionOf, mergeLoadedFeed } from './notification-m
 import { wireActionsOf } from './notification-actions';
 import { useQuietState } from './quiet';
 import { quietAllowsToast, reminderSoundMuted, type QuietState } from './quiet-model';
+import { postSystemNotice } from './system-notice';
+import { firstToastUntilHealed, healedOnce } from './toast-once';
 import { armChime, playChime } from '@/utils/chime';
 // The context lives in a module of its own, so a component can read it without this provider.
 import { NotificationContext } from './notification-context';
@@ -295,6 +297,12 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     const quietAllows = quietAllowsToast(quietRef.current, input.kind);
     if (!quietAllows) shouldToast = false;
 
+    // Once per problem until it heals (toast-once.ts): the server's error reported again
+    // toasts nothing more; the person's own click is not held to it.
+    if (shouldToast && input.kind === 'operation-error' && input.fromServer && !firstToastUntilHealed(input.dedupKey)) {
+      shouldToast = false;
+    }
+
     // Toast-level dedup: don't re-show the same dedupKey while it's live. Only
     // toastable inputs consult/claim the key — a feed-only entry has no toast
     // lifetime to release it, so claiming it would wedge the key for the session.
@@ -342,13 +350,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       timers.current.set(id, timer);
     }
 
-    // Browser notification when the tab is hidden (permission + reminder), and
-    // never during quiet unless it is an allowed permission ask.
-    if (input.browserNotify && quietAllows && typeof document !== 'undefined' && document.hidden
-        && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-      try {
-        new Notification(input.title, { body: input.body, tag: input.dedupKey });
-      } catch { /* best-effort */ }
+    // A system notification while the tab is hidden (permission + reminder), through the one
+    // exit for notices outside the window: quiet holds every one (system-notice.ts).
+    if (input.browserNotify && typeof document !== 'undefined' && document.hidden) {
+      postSystemNotice({ title: input.title, ...(input.body ? { body: input.body } : {}), tag: input.dedupKey });
     }
   }, [dismissToast]);
 
@@ -570,6 +575,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   useEvent('notification:updated', (data) => {
     const r = data as FeedRecord | undefined;
     if (!r?.dedupKey || !r.title) return;
+    // Healed: the next time it breaks is a new time (toast-once.ts).
+    if (r.resolved === 'recovered') healedOnce(r.dedupKey);
     if (dismissedKeys.current.has(r.dedupKey)) return;
     const patch = (base?: Notification): Notification => ({
       ...base,

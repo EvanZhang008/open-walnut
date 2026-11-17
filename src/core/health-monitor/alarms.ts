@@ -140,6 +140,26 @@ export const BUILTIN_ALARMS: readonly AlarmDef[] = [
     unit: 'tasks', action: { autoFix: 'status-recheck', then: 'fix-task', graceMin: 60 },
   },
   {
+    // Walnut Health's own errors (notifications/health-investigate.ts): one instance per
+    // category, so a category is one investigation however many errors it holds.
+    id: 'health.errors',
+    title: 'Background errors keep happening',
+    description: 'Walnut Health\'s errors of one kind that are still open and keep happening (3 times or more, or for 30 minutes). An agent looks into them: it fixes what is safe to undo by itself and tells you only about a possible problem.',
+    metric: 'health.errors{category=*}', kind: 'gauge', stat: 'last', periodMin: 5, comparison: '>=', threshold: 1,
+    evaluationPeriods: 2, datapointsToAlarm: 2, missing: 'notBreaching',
+    unit: 'errors', action: { then: 'fix-task' },
+  },
+  {
+    // A host down for a reason Walnut has to clear (hosts/host-down-gauge.ts). A login of the
+    // person's is theirs to do and has its own notice and letter, so it is not counted here.
+    id: 'host.down',
+    title: 'Remote host stays down',
+    description: 'A configured remote host that has not connected for 30 minutes, for a reason Walnut has to clear (a network, a daemon, a machine that stopped answering). Walnut dials it again; an agent looks into one that stays down.',
+    metric: 'host.down{host=*}', kind: 'gauge', stat: 'last', periodMin: 10, comparison: '>=', threshold: 1,
+    evaluationPeriods: 3, datapointsToAlarm: 3, missing: 'notBreaching',
+    unit: '', action: { autoFix: 'host-reconnect', then: 'fix-task', graceMin: 30 },
+  },
+  {
     id: 'ssh.login',
     title: 'Remote sign-in expires soon',
     description: 'This machine\'s SSH certificate for remote hosts expires within 3 hours. Only you can renew it; its own letter tells you how.',

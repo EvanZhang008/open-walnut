@@ -8,8 +8,8 @@
  *  - a test run's approval never reaches a person's window, nor its notice;
  *  - a notice clicked for one this window has not read yet re-reads the list;
  *  - an Org node lists every approval on Main, only its own work's elsewhere;
- *  - quiet mode holds the notice back unless quiet lets permission prompts through, and the
- *    end of quiet raises it;
+ *  - quiet mode holds the notice back, asks included, and the end of quiet raises ONE notice
+ *    (the approval itself when it is the only one that waited: system-notice.ts);
  *  - a list read that started before an answer never brings the answered one back;
  *  - the notice names the host by its display name, never a raw alias.
  */
@@ -20,8 +20,9 @@ const api = vi.hoisted(() => ({
   list: vi.fn(async () => ({ approvals: [] as Approval[], keys: [] })),
   answer: vi.fn(),
   label: null as string | null,
-  quiet: { active: false, allowPermissions: true } as Record<string, unknown>,
+  quiet: { active: false, allowPermissions: true, holds: [] } as Record<string, unknown>,
   allows: vi.fn(() => true),
+  quietListener: null as null | ((q: Record<string, unknown>) => void),
   hostLabel: undefined as string | undefined,
 }));
 
@@ -34,8 +35,11 @@ vi.mock('@/api/test-run', () => ({ testRunLabel: () => api.label }));
 // The live vault follower (its event socket) is covered by tests/web/approvals-vault-look.test.ts.
 vi.mock('@/api/vault-live', () => ({ checkVault: vi.fn(async () => null), vaultLive: () => false }));
 vi.mock('@/utils/log', () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
-vi.mock('@/contexts/notifications/quiet', () => ({ currentQuiet: () => api.quiet }));
-vi.mock('@/contexts/notifications/quiet-model', () => ({ quietAllowsToast: api.allows }));
+vi.mock('@/contexts/notifications/quiet', () => ({
+  currentQuiet: () => api.quiet,
+  onQuietState: (fn: (q: Record<string, unknown>) => void) => { api.quietListener = fn; return () => undefined; },
+}));
+vi.mock('@/contexts/notifications/quiet-model', () => ({ quietAllowsToast: api.allows, effectiveQuiet: (q: unknown) => q }));
 vi.mock('@/hooks/useHostStatus', () => ({ getHostStatus: () => (api.hostLabel ? { label: api.hostLabel } : undefined) }));
 
 const posts: Array<Record<string, unknown>> = [];
@@ -159,14 +163,15 @@ describe('approvals store: one list for the cards, the rows and the dialog', () 
     expect([...snapshot().items.keys()]).toEqual([b.id]);
   });
 
-  it('quiet mode holds a notice back, and the end of quiet raises it', () => {
-    api.allows.mockReturnValue(false);
+  it('quiet mode holds a notice back, and the end of quiet raises it once', async () => {
+    api.quiet = { active: true, allowPermissions: true, holds: [{ source: 'plugin:walnut-rhythm', since: 1 }] };
     const a = approval();
     store.applyApprovalEvent(a);
     expect(postsOf('post')).toHaveLength(0);
-    api.allows.mockReturnValue(true);
-    store.noticePending();
-    store.noticePending();
+    api.quiet = { active: false, allowPermissions: true, holds: [] };
+    api.quietListener?.(api.quiet);
+    api.quietListener?.(api.quiet);
+    await new Promise((r) => setTimeout(r, 0));
     expect(postsOf('post').map((p) => p.id)).toEqual([a.id]);
   });
 
@@ -174,7 +179,8 @@ describe('approvals store: one list for the cards, the rows and the dialog', () 
     const a = approval();
     api.list.mockResolvedValue({ approvals: [a], keys: [] });
     await store.refreshApprovals();
-    expect(postsOf('keep').at(-1)).toMatchObject({ ids: [a.id] });
+    // The reminder after quiet shares the app's approval notices and is kept with them.
+    expect(postsOf('keep').at(-1)).toMatchObject({ ids: [a.id, 'quiet-catchup'] });
   });
 
   it('an expired one is not listed and raises no notice', () => {
@@ -216,11 +222,11 @@ describe('Org: which node lists an approval', () => {
 });
 
 describe('the system notice', () => {
-  it('quiet mode holds it back unless quiet lets permission prompts through', () => {
-    api.allows.mockReturnValue(false);
+  it('quiet mode holds it back, even while quiet lets permission prompts toast in the window', () => {
+    api.quiet = { active: true, allowPermissions: true, holds: [{ source: 'user', since: 1 }] };
     notify.showApprovalNotice(approval());
     expect(postsOf('post')).toHaveLength(0);
-    expect(api.allows).toHaveBeenCalledWith(api.quiet, 'permission');
+    api.quiet = { active: false, allowPermissions: true, holds: [] };
   });
 
   it('says what to do and names the host by its display name, never the alias', () => {

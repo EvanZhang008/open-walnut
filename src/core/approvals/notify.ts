@@ -54,18 +54,15 @@ async function pushNew(a: ApprovalView): Promise<void> {
   if (a.testRun) return
   const { getConfig } = await import('../config-manager.js')
   const { deliverPush } = await import('../push/deliver.js')
-  const { getQuiet, quietSuppresses, logQuietSkipOnce } = await import('../quiet/quiet-state.js')
+  const { holdPushForQuiet } = await import('../push/quiet-hold.js')
   const { hostDisplayNameFor } = await import('../hosts/host-display-name.js')
   const tokens = (await getConfig()).push_tokens ?? []
   if (tokens.length === 0) {
     log.notif.info('approval push: no phone registered', { approvalId: a.id })
     return
   }
-  const quiet = await getQuiet()
-  if (quietSuppresses(quiet, { permission: true })) {
-    logQuietSkipOnce('push', quiet)
-    return
-  }
+  // Quiet holds it with every push; the one push after quiet says it waited (quiet-hold.ts).
+  if (await holdPushForQuiet('approval-push', { key: `approval:${a.id}`, title: 'An approval waits for you' })) return
   // One push, with the summary when it comes in time: a second push for it would ring the phone again.
   const waited = !a.context?.summary && needsSummary(a)
   const summary = a.context?.summary || (waited ? await summaryWithin(a.id, PUSH_SUMMARY_WAIT_MS) : '')

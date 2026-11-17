@@ -14,6 +14,13 @@
  * Walnut's to fix and goes to Health (2026-11-17, the user: only the errors he
  * needs to see, the rest in Walnut Health).
  *
+ * A host problem (kind `host`: a remote machine Walnut cannot reach or use) follows
+ * the same rule: Walnut reconnects by itself and its health monitor investigates,
+ * so it reaches the person only when only they can clear it (a login, a changed
+ * host key: `HOST_SIGN_IN_KINDS`) or it answers their own Retry or Connect
+ * (2026-11-17, the user: a machine that is not connected must not ask him to run
+ * a command; errors resolve themselves, and only a possible problem reaches him).
+ *
  * Asks, letters, reminders and automation receipts are not errors: they stay the
  * person's, as before.
  *
@@ -74,10 +81,32 @@ export function isNeedsYou(value: unknown): value is NeedsYou {
   return typeof value === 'string' && (NEEDS_YOU_REASONS as readonly string[]).includes(value);
 }
 
-/** The rule. An error without a known reason is Walnut Health's. */
+/** The kinds that are judged by their reason: an error, and a host problem. */
+const REASON_KINDS: readonly string[] = ['operation-error', 'host'];
+
+/** The rule. An error or a host problem without a known reason is Walnut Health's. */
 export function audienceOf(n: AudienceInput): NoticeAudience {
-  if (n.kind !== 'operation-error') return 'user';
+  if (!REASON_KINDS.includes(n.kind)) return 'user';
   return needsYouOf(n) ? 'user' : 'health';
+}
+
+/**
+ * Host problem kinds only the person can clear: a login of theirs expired or is missing
+ * (an SSH certificate, the SSH agent, a proxy's login, a refused key), the host's key changed
+ * (a security call), Claude Code there is signed out, or the machine cannot run Walnut's work
+ * at all and no reconnect heals it (a name that does not resolve, not Linux, Claude Code
+ * missing or broken there). Every other kind (a machine that is off or asleep, a network, a
+ * daemon that did not start) Walnut retries and investigates.
+ */
+export const HOST_SIGN_IN_KINDS: readonly string[] = [
+  'auth', 'host_key', 'cert_expired', 'agent_missing', 'proxy_login', 'claude_not_logged_in',
+  'dns', 'not_linux', 'claude_missing', 'claude_needs_node', 'claude_error',
+];
+
+/** Why a host problem needs the person, or undefined when it is Walnut Health's. */
+export function hostProblemNeedsYou(p: { kind?: string; hosts: readonly string[] }, engaged: ReadonlySet<string>): NeedsYou | undefined {
+  if (p.hosts.some((h) => engaged.has(h))) return 'own-action';
+  return p.kind && HOST_SIGN_IN_KINDS.includes(p.kind) ? 'sign-in' : undefined;
 }
 
 export function isHealthNotice(n: AudienceInput): boolean {

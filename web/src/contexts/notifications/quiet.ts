@@ -7,27 +7,40 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { apiPut } from '@/api/client';
 import { log } from '@/utils/log';
 import { testRunLabel } from '@/api/test-run';
-import { NOT_QUIET, normalizeQuiet, type QuietState } from './quiet-model';
+import { UNKNOWN_QUIET, normalizeQuiet, type QuietState } from './quiet-model';
 
 export * from './quiet-model';
 
 /** The state the console last heard, for a gate outside React (a system notification). */
-let lastQuiet: QuietState = NOT_QUIET;
+let lastQuiet: QuietState = UNKNOWN_QUIET;
 export function currentQuiet(): QuietState {
   return lastQuiet;
 }
 
+const quietListeners = new Set<(state: QuietState) => void>();
+/** Hear every state the console settles on (outside React: the system notice exit). */
+export function onQuietState(fn: (state: QuietState) => void): () => void {
+  quietListeners.add(fn);
+  return () => { quietListeners.delete(fn); };
+}
+
 /** Load once, then follow `quiet:changed`. */
 function loadQuiet(signal: AbortSignal): Promise<QuietState> {
-  return fetch('/api/quiet', { signal })
+  // Bounded: an answer that never comes must not keep the state unknown (and notices held).
+  const timeout = AbortSignal.timeout?.(10_000);
+  const both = timeout && 'any' in AbortSignal ? (AbortSignal as unknown as { any: (s: AbortSignal[]) => AbortSignal }).any([signal, timeout]) : signal;
+  return fetch('/api/quiet', { signal: both })
     .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
     .then(normalizeQuiet);
 }
 
 export function useQuietState(): QuietState {
-  const [quiet, setQuiet] = useState<QuietState>(NOT_QUIET);
+  const [quiet, setQuiet] = useState<QuietState>(UNKNOWN_QUIET);
   // A live event is newer than a GET still in flight: the late GET must not undo it.
   const sawEvent = useRef(false);
+  // Read again on every reconnect: the server may have restarted under the page.
+  const [epoch, setEpoch] = useState(0);
+  useEvent('_ws:reconnected', () => { sawEvent.current = false; setEpoch(e => e + 1); });
   useEffect(() => {
     const ac = new AbortController();
     loadQuiet(ac.signal)
@@ -35,9 +48,11 @@ export function useQuietState(): QuietState {
       .catch((err) => {
         if (err instanceof DOMException && err.name === 'AbortError') return;
         log.warn('notifications', 'quiet state load failed', { error: String(err) });
+        // Known as best it can be: an unreadable state must not hold notices back for good.
+        setQuiet(prev => (prev.unknown ? { ...prev, unknown: false } : prev));
       });
     return () => ac.abort();
-  }, []);
+  }, [epoch]);
   useEvent('quiet:changed', (data) => {
     sawEvent.current = true;
     // A test run's own hold lives only in its copy on the server: the published state lacks it,
@@ -56,6 +71,11 @@ export function useQuietState(): QuietState {
     return () => window.removeEventListener(LOCAL_QUIET_EVENT, onLocal);
   }, []);
   lastQuiet = quiet;
+  useEffect(() => {
+    for (const fn of quietListeners) {
+      try { fn(quiet); } catch (err) { log.warn('notifications', 'quiet listener failed', { error: String(err) }); }
+    }
+  }, [quiet]);
   return quiet;
 }
 

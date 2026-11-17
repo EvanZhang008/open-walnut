@@ -5,6 +5,8 @@
  */
 
 import { fillPattern } from './evaluate.js'
+import { HEALTH_ERRORS_ALARM, healthErrorEvidence } from '../notifications/health-investigate.js'
+import { HOST_DOWN_ALARM, hostDownEvidence } from '../hosts/host-down-gauge.js'
 import { HOUR_MS, hourStart, signatureId, type HourBuckets } from './log-alarms.js'
 import type { AlarmDef, AlarmInstanceState, MinuteRow } from './types.js'
 
@@ -20,6 +22,8 @@ export interface BriefInput {
 
 function evidence({ def, inst, reason, now, rows, hours, sample }: BriefInput): string[] {
   const lines = [
+    ...(def.id === HEALTH_ERRORS_ALARM ? healthErrorEvidence(inst.labels?.category) : []),
+    ...(def.id === HOST_DOWN_ALARM ? hostDownEvidence(inst.labels?.host) : []),
     '## The alarm',
     `What it watches: ${def.description}`,
     inst.signature ? `The log line kind: \`${inst.signature}\`` : `Metric: \`${inst.labels ? fillPattern(def.metric, inst.labels) : def.metric}\``,
@@ -43,6 +47,21 @@ function evidence({ def, inst, reason, now, rows, hours, sample }: BriefInput): 
   return lines
 }
 
+/**
+ * What an agent looking into Walnut Health's errors may do alone, and what goes to the person
+ * (2026-11-17, the user: "if no risk just fix, if there is an issue, then show as a potential
+ * error notification").
+ */
+function healthErrorsRules(): string[] {
+  return [
+    '## What you may do alone, and what goes to the person',
+    'First check the Walnut project for an open task already on the same error (`task_list`); if one is, hand it this note with `task_send` and finish.',
+    'Fix it yourself when the step is safe and can be undone: reconnect a host (its Connect now), restart a service or a daemon, clear a cache Walnut rebuilds, retry what failed, or a code fix landed the usual way. Write what you did in your task note; the error recovers in Walnut Health by itself.',
+    'Do NOT do a step that touches the person\'s data, credentials, permissions, money or someone else\'s machine, deletes anything that cannot be rebuilt, or sends anything outward. Then, and when you cannot find a fix, set this task to NEED_ACTION with one sentence first: "Possible problem: <what>, because <why>. My pick: <the step>." That is the only way this reaches the person.',
+    'An error that is expected and harmless: lower what is logged instead (a warn, not an error), and say why.',
+  ]
+}
+
 function doneMeans(id: string): string[] {
   return [
     '## Done means',
@@ -59,6 +78,7 @@ export function fixBrief(b: BriefInput): string {
     '',
     ...evidence(b),
     '',
+    ...(b.def.id === HEALTH_ERRORS_ALARM || b.def.id === HOST_DOWN_ALARM ? [...healthErrorsRules(), ''] : []),
     ...doneMeans(b.inst.id),
   ].filter((l) => l !== '').join('\n')
 }

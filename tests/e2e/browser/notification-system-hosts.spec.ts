@@ -29,6 +29,7 @@ import { dropFakes } from './route-teardown'
 const SHOTS = '/tmp/walnut-nfc-system/shots'
 /** The Settings order of fixtureHosts(), which is the System list's order. */
 const LISTED = ['devbox', 'buildbox', 'signbox', 'keybox', 'certbox', 'netbox']
+/** System's rows: All's (FIXTURE_ORDER) plus Net box, unreachable, which is Walnut Health's and has no row in All. */
 const PROBLEM_ROWS = ['signbox', 'keybox', 'certbox', 'netbox']
 
 test.describe.configure({ timeout: 90_000 })
@@ -142,8 +143,10 @@ test.describe('a System row is the problem row (b)', () => {
     // The Claude Code card in All keeps its own x.
     await expect(panelLocalCard(page).getByRole('button', { name: 'Dismiss Claude Code notice' })).toBeVisible()
     // System: the same rows (open, one flag per row id), no x, and no Claude Code card at all.
+    // Net box was never in All (Walnut Health's), so its System row stays folded.
     await pickRail(page, 'System')
-    for (const host of PROBLEM_ROWS) await expect(systemHostRow(page, host), host).toHaveClass(/hpb-open/)
+    for (const host of FIXTURE_ORDER) await expect(systemHostRow(page, host), host).toHaveClass(/hpb-open/)
+    await expect(systemHostRow(page, 'netbox')).not.toHaveClass(/hpb-open/)
     await expect(systemHosts(page).locator('.hpb-x')).toHaveCount(0)
     await expect(systemHosts(page).getByRole('button', { name: /^Dismiss / })).toHaveCount(0)
     await expect(panelLocalCard(page)).toHaveCount(0)
@@ -202,7 +205,8 @@ test.describe('one attempt, Open Settings, cards under their host (c, d, e)', ()
   test('NSH-e: in Errors a problem host\'s cards sit under its row, with no cause block of their own; once the host recovers its row leaves and the cards come back as a labelled cause block', async ({ page, browserName }) => {
     await page.setViewportSize({ width: 1280, height: 800 })
     const h = await bpSetup(page, {
-      hosts: [connected('devbox', 'Dev box'), failed('certbox', 'Cert box', 'cert_expired'), failed('netbox', 'Net box', 'unreachable')],
+      // Net box: a kind the person must clear (dns), so it is the second problem host with a row.
+      hosts: [connected('devbox', 'Dev box'), failed('certbox', 'Cert box', 'cert_expired'), failed('netbox', 'Net box', 'dns')],
       feed: [hostErrorRecord('certbox', 1), hostErrorRecord('certbox', 2), hostErrorRecord('certbox', 3)],
     })
     await openBell(page)
@@ -260,7 +264,8 @@ test.describe('one attempt, Open Settings, cards under their host (c, d, e)', ()
 test.describe('this machine\'s Claude Code leads the problems (f)', () => {
   test('NSH-f: the Claude Code card leads All and Errors only while the local notice shows, and counts once on the Errors badge only as a failure; System never holds it', async ({ page, browserName }) => {
     await page.setViewportSize({ width: 1280, height: 800 })
-    const h = await bpSetup(page, { hosts: [connected('devbox', 'Dev box'), failed('netbox', 'Net box', 'unreachable')], local: 'sign-in' })
+    // Net box: a kind the person must clear (dns), so it has a row and one count on Errors.
+    const h = await bpSetup(page, { hosts: [connected('devbox', 'Dev box'), failed('netbox', 'Net box', 'dns')], local: 'sign-in' })
     await openProblems(page)
     const local = panelLocalCard(page)
     const first = () => local.evaluate((el) => el.closest('.nfc-detail')?.querySelector('.notification-card') === el)

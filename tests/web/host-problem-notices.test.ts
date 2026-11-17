@@ -10,6 +10,8 @@
  *   retry     the toast's Retry dials the host; Show details opens the notification panel
  *   heal      a host that heals is said once in the live region, without the check mark
  *   quiet     quiet mode holds the toast; the live region says the problem instead
+ *   health    a host Walnut reconnects by itself never toasts (Walnut Health lists it), nor
+ *             before the quiet state is known
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseHTML } from 'linkedom'
@@ -50,9 +52,11 @@ class MemStorage {
 }
 
 let at = 1_900_000_000_000
-const failing = (host: string, label: string): HostStatus => ({
+// A login only the person can do ('auth': SSH refused the key) toasts; a host Walnut reconnects
+// by itself ('unreachable') is Walnut Health's and never does (audience.ts, 2026-11-17).
+const failing = (host: string, label: string, kind = 'auth'): HostStatus => ({
   host, label, hostname: `${host}.example.com`, connected: false, phase: 'failed', phaseLabel: '', steps: [],
-  phaseElapsedMs: 0, connectElapsedMs: 0, at: ++at, serverNow: at, kind: 'unreachable', error: 'ssh: no route',
+  phaseElapsedMs: 0, connectElapsedMs: 0, at: ++at, serverNow: at, kind, error: 'ssh: no route',
   hint: `${label} is not reachable from this machine.`, retryable: true,
 } as unknown as HostStatus)
 const healthy = (host: string, label: string): HostStatus => ({
@@ -165,6 +169,24 @@ describe('HostProblemNotices', () => {
     expect(JSON.parse(localStorage.getItem(TOASTED_STORAGE_KEY)!)).toEqual({})
     await frame([failing('netbox', 'Net box')])
     expect(notes.sent).toHaveLength(2)
+  })
+
+  it('a host Walnut reconnects by itself never toasts; a login next to it still does', async () => {
+    await frame([failing('othermac', 'Other Mac', 'unreachable'), failing('keybox', 'Key box')])
+    await mount()
+    expect(notes.sent.map((n) => n.title)).toEqual(['Could not connect to Key box'])
+    expect(notes.sent[0]).toMatchObject({ needsYou: 'sign-in' })
+    // Known from here on: a later frame toasts nothing for it either.
+    await frame([failing('othermac', 'Other Mac', 'unreachable'), failing('keybox', 'Key box')])
+    expect(notes.sent).toHaveLength(1)
+    expect(say()).toBe('')
+  })
+
+  it('nothing toasts before the quiet state is known (a reload in a focus block)', async () => {
+    notes.quiet = { ...NOT_QUIET, unknown: true }
+    await frame([failing('keybox', 'Key box')])
+    await mount()
+    expect(notes.sent).toHaveLength(0)
   })
 
   it('quiet mode holds the toast; the live region names the problem instead', async () => {

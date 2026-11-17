@@ -20,7 +20,7 @@
  */
 import { log } from '../../logging/index.js'
 import { getConfig } from '../config-manager.js'
-import { getQuiet, logQuietSkipOnce, quietSuppresses } from '../quiet/quiet-state.js'
+import { holdPushForQuiet } from './quiet-hold.js'
 import { truncatePreview } from '../human-inbox/preview.js'
 import { DECISION_QUIET_MS } from '../human-inbox/away-thread.js'
 import type { LetterRecord } from '../human-inbox/types.js'
@@ -148,11 +148,6 @@ async function buzzOne(taskId: string, thread: OrgThread, now: number): Promise<
   })
   if (!plan.buzz) return done(0, plan.reason, { outcome: 'quiet' })
 
-  const quiet = await getQuiet()
-  if (quietSuppresses(quiet, { permission: true })) {
-    logQuietSkipOnce('thread-push', quiet)
-    return done(0, 'quiet mode is on')
-  }
   const tokens: PushTokenEntry[] = (await getConfig()).push_tokens ?? []
   if (!tokens.length) return done(0, 'no device registered for push', { devices: 0 })
   const chosen = selectDevices(
@@ -166,6 +161,10 @@ async function buzzOne(taskId: string, thread: OrgThread, now: number): Promise<
     'action_required', now, ACTIVE_LEASE_MS,
   )
   if (!chosen.length) return done(0, 'all devices are foreground-active or muted decisions', { devices: tokens.length, targeted: 0 })
+  // Quiet holds it (quiet-hold.ts), asked once a device would take it.
+  if (await holdPushForQuiet('thread-push', { key: `thread:${thread.id}`, title: thread.title })) {
+    return done(0, 'quiet mode is on')
+  }
   const res = await deliverPush(chosen.map(({ device }) => device.entry), threadPushContent(thread, node))
   // Recorded once it was handed to a device service: the absence's buzz, whatever the service said.
   if (res.attempted) await markNeedsBuzzed(taskId, thread.id, new Date(now).toISOString()).catch(() => {})

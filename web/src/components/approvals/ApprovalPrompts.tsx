@@ -26,11 +26,13 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { CORNER_ORDER, CornerSlot, useCornerState } from '@/components/common/corner-stack';
 import { useEvent } from '@/hooks/useWebSocket';
+import { QUIET_CATCHUP_ID } from '@/contexts/notifications/system-notice';
+import { OPEN_CENTER_EVENT } from '@/utils/open-anywhere';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import type { Approval } from '@/api/approvals';
 import {
-  applyApprovalEvent, approveAndStopAsking, dismissStoppedAsking, undoStopAsking, approveKind, closeApproval, decideApproval, noApproveReason, noticePending, openApproval, pendingAt, refreshApprovals,
+  applyApprovalEvent, approveAndStopAsking, dismissStoppedAsking, undoStopAsking, approveKind, closeApproval, decideApproval, noApproveReason, openApproval, pendingAt, refreshApprovals,
   openUnlock, startTouchId, unlockApproves, unlockUndecided, useApprovals, type ApprovalsState,
 } from './approvals-store';
 import { ApprovalUnlock } from './ApprovalUnlock';
@@ -390,15 +392,18 @@ export function ApprovalPrompts() {
   useEffect(() => {
     const onOpen = (e: Event) => {
       const id = (e as CustomEvent<{ id?: string }>).detail?.id;
-      if (typeof id === 'string' && id) openApproval(id);
+      // The one reminder after quiet (system-notice.ts) opens the notification center.
+      if (id === QUIET_CATCHUP_ID) window.dispatchEvent(new CustomEvent(OPEN_CENTER_EVENT));
+      else if (typeof id === 'string' && id) openApproval(id);
       void takeClickedApproval();
     };
     window.addEventListener(OPEN_APPROVAL_EVENT, onOpen);
-    void takeClickedApproval().then((id) => { if (id) openApproval(id); });
+    void takeClickedApproval().then((id) => {
+      if (id === QUIET_CATCHUP_ID) window.dispatchEvent(new CustomEvent(OPEN_CENTER_EVENT));
+      else if (id) openApproval(id);
+    });
     return () => window.removeEventListener(OPEN_APPROVAL_EVENT, onOpen);
   }, []);
-  // The end of quiet mode raises the notices it held back (the page's quiet state settles first).
-  useEvent('quiet:changed', () => { setTimeout(noticePending, 500); });
 
   const now = useNow(1000);
   const phone = usePhoneLayout();

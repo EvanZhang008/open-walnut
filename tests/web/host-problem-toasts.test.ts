@@ -55,15 +55,31 @@ describe('decideHostToasts', () => {
   });
 });
 
-describe('a changed problem is a new problem', () => {
-  it('toasts a host whose cause changed, and a group a host joined', () => {
+describe('once per host until it heals', () => {
+  it('a host whose cause changed while still broken toasts nothing; a host that joins a group toasts', () => {
+    // 2026-11-17, the user: "if it show once don't show it so many times".
     const was = known([['host:home-pc', ['home-pc']]]);
     const readiness = row('home-pc', { type: 'readiness', group: 'readiness', kind: 'claude_missing' });
-    expect(decideHostToasts([readiness], was, all, none).toast).toHaveLength(1);
+    expect(decideHostToasts([readiness], was, all, none).toast).toHaveLength(0);
     const group = (hosts: string[]) => row(hosts[0], { id: 'cred:agent_missing', kind: 'agent_missing', hosts, labels: hosts });
     const one = decideHostToasts([group(['a'])], new Map(), all, none);
     expect(decideHostToasts([group(['a'])], one.known, all, none).toast).toHaveLength(0);
     expect(decideHostToasts([group(['a', 'b'])], one.known, all, none).toast).toHaveLength(1);
+  });
+
+  it('the same problem reported again and again, its cause flapping, toasts once; healed and broken again, once more', () => {
+    let memory = new Map<string, readonly string[]>();
+    let toasts = 0;
+    const kinds = ['daemon', 'timeout', 'unknown', 'daemon', 'unreachable', 'timeout', 'daemon', 'unknown', 'daemon', 'timeout'];
+    for (const kind of kinds) {
+      const d = decideHostToasts([row('chrismac', { kind })], memory, all, none);
+      toasts += d.toast.length;
+      memory = new Map(d.known);
+    }
+    expect(toasts).toBe(1);
+    // It heals (no problem row, the host healthy), then breaks again: a new time.
+    memory = new Map(decideHostToasts([], memory, all, all).known);
+    expect(decideHostToasts([row('chrismac', { kind: 'daemon' })], memory, all, none).toast).toHaveLength(1);
   });
 
   it('sameToasted compares entries and hosts', () => {
@@ -110,8 +126,10 @@ describe('hostToastText', () => {
 });
 
 describe("the 'host' toast kind", () => {
-  it('toasts, stays out of the feed (the panel lists the live problem), and quiet mode holds it', () => {
-    expect(SHOULD_TOAST({ kind: 'host', severity: 'error' })).toBe(true);
+  it('toasts only a problem the person must clear, stays out of the feed (the panel lists the live problem), and quiet mode holds it', () => {
+    // audience.ts: a host Walnut reconnects by itself is Walnut Health's (2026-11-17).
+    expect(SHOULD_TOAST({ kind: 'host', severity: 'error' })).toBe(false);
+    expect(SHOULD_TOAST({ kind: 'host', severity: 'error', needsYou: 'sign-in' })).toBe(true);
     expect(IS_PERSISTENT.host).toBe(false);
     const quiet: QuietState = { active: true, allowPermissions: false, holds: [{ source: 'user' } as QuietState['holds'][number]] };
     expect(quietAllowsToast(NOT_QUIET, 'host')).toBe(true);

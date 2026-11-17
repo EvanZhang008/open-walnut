@@ -32,6 +32,7 @@ import { useUserEngagedHosts, useUserRetryingHosts } from '@/utils/host-user-ret
 import { openHostSettings } from '@/utils/host-settings-nav';
 import { log } from '@/utils/log';
 import { SingleHostRow } from './HostProblemRows';
+import { hostProblemNeedsYou, type NeedsYou } from '@open-walnut/notice-audience';
 import { useLocalClaudeNotice } from './SetupBanner';
 import '@/styles/attention-banner.css';
 import '@/styles/attention-banner-dense.css';
@@ -53,7 +54,8 @@ export function useDisabledHosts(open: boolean): ReadonlySet<string> {
   return off;
 }
 
-export interface ProblemHost { alias: string; row: BannerRow }
+/** `needsYou` set: the person's to clear (the bell lists it); unset: Walnut Health's (audience.ts). */
+export interface ProblemHost { alias: string; row: BannerRow; needsYou?: NeedsYou }
 
 /**
  * The configured hosts (the health list) with a problem row right now, by the
@@ -77,7 +79,8 @@ export function useProblemHosts(daemons: DaemonHealth[] | undefined, disabled: R
     if (!status || disabled.has(d.host) || (status.discovered && !engaged.has(d.host))) continue;
     const row = hostRowFor(status, { now: serverNow(), replica, userRetrying }, prev.current.get(d.host) ?? null);
     if (!row || (row.dismissKeys.length > 0 && row.dismissKeys.every((k) => dismissed.has(k)))) continue;
-    out.push({ alias: d.host, row });
+    const needsYou = hostProblemNeedsYou(row, engaged);
+    out.push({ alias: d.host, row, ...(needsYou ? { needsYou } : {}) });
     next.set(d.host, row);
   }
   prev.current = next;

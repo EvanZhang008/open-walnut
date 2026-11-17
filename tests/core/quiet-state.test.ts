@@ -12,6 +12,9 @@
  *     token is never written.
  *   - `quiet:changed` fires on every change of the public state and never twice
  *     for the same state.
+ *   - a plugin's hold outlives a server restart: its disposal while the server stops keeps it,
+ *     and a plugin that does not set it again after the restart lets it go (2026-11-17: the
+ *     new server was loud for the seconds before Rhythm set its hold again, mid focus block).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
@@ -23,7 +26,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('quiet-state-test'))
 import { WALNUT_HOME } from '../../src/constants.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
 import {
-  clearQuiet, getQuiet, peekQuiet, quietSuppresses, setQuiet, stopQuiet, type QuietState,
+  clearQuiet, getQuiet, keepQuietThroughShutdown, peekQuiet, quietSuppresses, releaseUnclaimedPluginHolds, setQuiet, stopQuiet, type QuietState,
 } from '../../src/core/quiet/quiet-state.js';
 
 const FILE = path.join(WALNUT_HOME, 'quiet.json');
@@ -127,6 +130,43 @@ describe('expiry', () => {
     await setQuiet({ source: 'user', until: Date.now() + 40 });
     await new Promise(r => setTimeout(r, 60));
     expect(peekQuiet().active).toBe(false);
+    expect((await getQuiet()).active).toBe(false);
+  });
+});
+
+describe('a plugin\'s hold through a restart', () => {
+  it('stays while the server stops, so the next server starts quiet', async () => {
+    // Rhythm mirrors macOS Focus with a hold that has no end time.
+    await setQuiet({ source: 'plugin:walnut-rhythm', reason: 'Focus block, macOS Focus: Do Not Disturb', owner: 'rhythm#1' });
+    keepQuietThroughShutdown();
+    // The plugin's disposal on the way down (plugin-notifications.ts holdCleanup).
+    await clearQuiet('plugin:walnut-rhythm', { owner: 'rhythm#1' });
+    expect((await getQuiet()).active).toBe(true);
+
+    stopQuiet(); // the restart
+    const after = await getQuiet();
+    expect(after.active).toBe(true);
+    expect(after.holds.map((h) => h.source)).toEqual(['plugin:walnut-rhythm']);
+  });
+
+  it('a loaded plugin keeps its kept hold without setting it again; one that did not load lets it go', async () => {
+    await setQuiet({ source: 'plugin:walnut-rhythm', owner: 'rhythm#1' });
+    await setQuiet({ source: 'plugin:gone', owner: 'gone#1' });
+    await setQuiet({ source: 'user' });
+    stopQuiet();
+    await getQuiet();
+    // After the restart Rhythm loads and finds its hold as it wants it, so it sets nothing
+    // (runtime.ts syncHold: the same hold); the hold must stay for the rest of the block.
+    expect(await releaseUnclaimedPluginHolds(['walnut-rhythm', 'calendar'])).toEqual(['plugin:gone']);
+    expect((await getQuiet()).holds.map((h) => h.source).sort()).toEqual(['plugin:walnut-rhythm', 'user']);
+    // The plugins did not load at all: no plugin hold keeps Walnut quiet for good.
+    expect(await releaseUnclaimedPluginHolds([])).toEqual(['plugin:walnut-rhythm']);
+    expect((await getQuiet()).holds.map((h) => h.source)).toEqual(['user']);
+  });
+
+  it('a plugin turned off while the server runs still clears its hold', async () => {
+    await setQuiet({ source: 'plugin:walnut-rhythm', owner: 'rhythm#1' });
+    await clearQuiet('plugin:walnut-rhythm', { owner: 'rhythm#1' });
     expect((await getQuiet()).active).toBe(false);
   });
 });
