@@ -42,6 +42,7 @@ import '@/styles/phone-session-r3.css';
 import '@/styles/phone-pages-r3.css';
 import '@/styles/phone-fixes-r4.css';
 import { installInputModality } from '@/utils/input-modality';
+import { contentAreaStyle } from './content-area-style';
 
 installInputModality();
 
@@ -349,7 +350,7 @@ function AppShellInner({ children }: AppShellProps) {
           <div
             ref={contentRef}
             className="app-content-area"
-            style={isFullBleed ? { padding: 0, overflow: 'hidden' } : undefined}
+            style={contentAreaStyle(isFullBleed)}
           >
             {children}
           </div>

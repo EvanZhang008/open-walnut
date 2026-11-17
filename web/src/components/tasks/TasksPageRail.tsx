@@ -215,6 +215,33 @@ export function TasksPageRail({
   return (
     <aside className="tp-rail" data-testid="tasks-rail" style={{ width }}>
       <div className="tp-rail-title"><span>Projects</span>{titleAction}</div>
+      {/* Right under the title, outside the list: always in reach without scrolling, and never a
+          footer under the list, where the notice stack sits (corner-stack.css). */}
+      <div className="tp-rail-newproj-wrap">
+        {creating ? (
+          <>
+            <MicInput
+              ref={inputRef}
+              className="tp-rail-newproj-input"
+              data-draft-key={nameDraft.key ?? undefined}
+              placeholder="Project name…"
+              value={draft}
+              setText={setDraft}
+              onKeyDown={handleCreateKey}
+              onEnter={createNow}
+              target={nameDraft.key}
+              onBlur={() => setCreating(false)}
+            />
+            {/* provider claim for the new project; chips preventDefault on
+                pointerdown so picking one doesn't blur-cancel the input */}
+            <ProjectSourcePicker value={draftSource} onChange={setDraftSource} />
+          </>
+        ) : (
+          <button type="button" className="tp-rail-newproj-btn" onClick={() => setCreating(true)}>
+            ＋ New Project
+          </button>
+        )}
+      </div>
       <div className="tp-rail-scroll">
         <button type="button" className={itemClass(null)} onClick={() => onSelect(null)}>
           <span className="tp-ri-icon">☰</span>
@@ -244,32 +271,6 @@ export function TasksPageRail({
           <span className="tp-ri-name">Inbox</span>
           <span className="tp-ri-count">{inboxOpenCount}</span>
         </button>
-      </div>
-
-      <div className="tp-rail-newproj-wrap">
-        {creating ? (
-          <>
-            <MicInput
-              ref={inputRef}
-              className="tp-rail-newproj-input"
-              data-draft-key={nameDraft.key ?? undefined}
-              placeholder="Project name…"
-              value={draft}
-              setText={setDraft}
-              onKeyDown={handleCreateKey}
-              onEnter={createNow}
-              target={nameDraft.key}
-              onBlur={() => setCreating(false)}
-            />
-            {/* provider claim for the new project; chips preventDefault on
-                pointerdown so picking one doesn't blur-cancel the input */}
-            <ProjectSourcePicker value={draftSource} onChange={setDraftSource} />
-          </>
-        ) : (
-          <button type="button" className="tp-rail-newproj-btn" onClick={() => setCreating(true)}>
-            ＋ New Project
-          </button>
-        )}
       </div>
 
       {/* resize handle — right edge of the rail */}

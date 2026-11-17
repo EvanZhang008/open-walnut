@@ -73,7 +73,12 @@
    column 12px in from the panel edge (the toolbar's search field starts there too), task
    circles sit at 22px whether or not a dot is showing, titles at 46px, folder members one
    16px step deeper. Hover backgrounds start at 8px. */
-.home-navigation-scroll { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow: auto; padding: 0 8px 16px 8px; }
+.home-navigation-scroll { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow: auto; padding: 0 8px 16px 8px; padding-bottom: max(16px, var(--corner-stack-room, 0px)); scrollbar-gutter: stable; }
+/* Below the welcome card (first-use.css) the room is a spacer after the last row instead: padding
+   floors the list's own size, so in a short window it would shrink the card whenever a notice
+   comes. Only then, as the spacer's variable restyles the whole list (the list is empty then). */
+.first-use-in-tasks ~ .home-navigation-scroll { padding-bottom: 16px; }
+.first-use-in-tasks ~ .home-navigation-scroll::after { content: ''; flex: none; height: var(--corner-stack-spacer, 0px); }
 /* Anchored by hand (useScrollAnchor in TodoPanel), every box that scrolls the list: WebKit, which
    the Mac app runs, has no scroll anchoring, so both engines run the one mechanism and never two
    corrections of one move. */

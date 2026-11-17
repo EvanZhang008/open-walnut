@@ -25,7 +25,7 @@ import { holdApprovalsLock } from './approvals-lock'
 import { holdVaultLock } from './vault-lock'
 import { isolateUiPrefsContext } from './status-section-helpers'
 import { openSection, openTasksBy, sectionCount, taskSection } from './org-view-helpers'
-import { BOTTOM_LEFT, stackPlace } from './corner-stack-place'
+import { BOTTOM_LEFT, stackPlace, taskbarLift } from './corner-stack-place'
 
 test.use({ video: process.env.APR_VIDEO || process.env.PW_VIDEO ? 'on' : 'off' })
 test.describe.configure({ mode: 'serial' })
@@ -391,7 +391,7 @@ test('the stack: a toast and an approval card share the bottom left corner, one 
     expect(Math.round(b.x - (sidebar.x + sidebar.width)), `${name} sits 16px right of the sidebar rail`).toBe(16)
     expect(overlaps(b, sidebar), `${name} covers no part of the sidebar`).toBe(false)
   }
-  expect(Math.round(vp.height - (c.y + c.height)), 'the card sits 16px above the bottom edge').toBe(16)
+  expect(Math.round(vp.height - (c.y + c.height)), 'the card sits 16px above the bottom edge (or the session taskbar)').toBe(16 + await taskbarLift(page))
   expect(t.y + t.height, 'the approval is nearest the bottom corner, the toast above it').toBeLessThanOrEqual(c.y + 1)
   expect(overlaps(c, t)).toBe(false)
   expect(Math.abs(c.x - t.x), 'one column').toBeLessThanOrEqual(1)

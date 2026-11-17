@@ -10,8 +10,12 @@
 .first-use-card { width: min(100%, 440px); }
 /* The card in the task panel while the Ask slot is closed (home-first-use-card.ts): it takes the
    room the (still empty) list leaves, and scrolls on a short window. */
-.first-use-in-tasks { flex: 1 1 auto; min-height: 0; overflow: auto; border-top: 1px solid var(--border); }
-.first-use-in-tasks .first-use-setup { height: auto; min-height: 100%; padding: 16px 12px; align-items: start; }
+.first-use-in-tasks { flex: 1 1 auto; min-height: 0; overflow: auto; scrollbar-gutter: stable; border-top: 1px solid var(--border); }
+.first-use-in-tasks .first-use-setup { position: relative; overflow: visible; height: auto; min-height: 100%; padding: 16px 12px; align-items: start; }
+/* The notice stack's room after the card's end (corner-stack-room.ts), for a short window where the
+   card reaches the bottom left. Out of flow, so it adds scroll room and never changes the card's own
+   size (a flex basis of auto), which would move the list below it. */
+.first-use-in-tasks .first-use-setup::after { content: ''; position: absolute; top: 100%; left: 0; width: 1px; height: var(--corner-stack-spacer, 0px); }
 .first-use-in-tasks .first-use-card h1 { font-size: 20px; }
 .first-use-card h1 { margin: 0 0 12px; font-size: 26px; font-weight: 600; }
 .first-use-intro { color: var(--fg-muted); line-height: 1.6; margin: 0 0 28px; }

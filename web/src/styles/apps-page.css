@@ -7,6 +7,9 @@
 .apps-page {
   height: 100%;
   overflow: auto;
+  /* Its end clears the notice stack while one shows (--corner-stack-room, corner-stack.css). */
+  padding-bottom: var(--corner-stack-room, 0px);
+  scrollbar-gutter: stable;
   background: var(--settings-pane-bg);
   /* Contrast-safe muted grey, as inside Settings (settings-shell.css). */
   --fg-muted: var(--settings-help-fg);

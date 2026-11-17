@@ -233,7 +233,8 @@ export function VaultBrowser({ status, onLocked }: { status: VaultStatus; onLock
             </button>
           ))}
         </nav>
-        <div className="pw-side-foot">
+        {/* Right under the sections, never pinned to the bottom, where the notice stack sits. */}
+        <div className="pw-side-tools">
           {(status.hasRecovery === false || status.recoveryUnsaved) && (
             // No working kit in the person's hands: a forgotten master password would lock the vault for good.
             <div className="pw-side-warn" role="note" data-testid="pw-no-recovery">

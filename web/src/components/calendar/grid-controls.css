@@ -23,7 +23,8 @@
 .cal-side-header { flex-wrap: wrap; }
 .cal-side-header .cal-grid-controls { margin-left: auto; }
 .cal-side-header .cal-side-title { margin-right: 0; min-width: 40px; }
-.cal-grid-scroll { padding: 6px 0; }
+/* Its end clears the notice stack while one shows (--corner-stack-room, corner-stack.css). */
+.cal-grid-scroll { padding: 6px 0 6px; padding-bottom: max(6px, var(--corner-stack-room, 0px)); scrollbar-gutter: stable; }
 .cal-grid .cal-grid-cols {
   flex-shrink: 0;
   /* One light line an hour, as a desktop calendar draws it (no half-hour lines). */

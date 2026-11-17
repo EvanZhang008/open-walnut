@@ -308,6 +308,9 @@
   min-height: 0;
   overflow-y: auto;
   padding: 8px 0;
+  /* Its end clears the notice stack while one shows (--corner-stack-room, corner-stack.css). */
+  padding-bottom: max(8px, var(--corner-stack-room, 0px));
+  scrollbar-gutter: stable;
   /* Anchored by hand (`useScrollAnchor` in MailAccountsPane): WebKit has no CSS scroll anchoring, so
      the native one is off to keep the engines alike and never to correct the same move twice. */
   overflow-anchor: none;
@@ -440,8 +443,8 @@
   font-weight: 500;
 }
 
-/* The pane's LAST-CHECKED line. One 11.5px line in the flow above `+ Add account`, so the space comes
-   out of the scroller and no folder row moves (this pane's own rule). Ellipsed with the whole sentence
+/* The pane's LAST-CHECKED line. One 11.5px line under the pane's head, above `+ Add account`, out of
+   the scroller and away from the notice stack at the bottom left (MailAccountsPane.tsx). Ellipsed with the whole sentence
    in `title`: the words that matter are at the front, so the half that survives the clip is the half
    that answers the question. `text-align: left` because a button centres its label by default and this
    one reads as a line of text, not as a control in the middle of the pane. */
@@ -450,7 +453,6 @@
   margin: 0;
   padding: 4px 12px 5px;
   border: none;
-  border-top: 1px solid var(--border);
   background: none;
   color: var(--fg-muted);
   font-size: 11.5px;
@@ -469,10 +471,11 @@
 .mail-sync-line[data-state='degraded'] { color: var(--warning); }
 
 .mail-add-account {
+  flex: 0 0 auto;
   margin: 0;
-  padding: 12px;
+  padding: 8px 12px 10px;
   border: none;
-  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   background: none;
   color: var(--accent);
   font-size: 13px;
@@ -683,6 +686,9 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* Its end clears the notice stack while one shows (--corner-stack-room, corner-stack.css). */
+  padding-bottom: var(--corner-stack-room, 0px);
+  scrollbar-gutter: stable;
 }
 
 /* One row is three lines with a tight rhythm: who, what, and the first words of it. The 2px accent

@@ -7,7 +7,9 @@
  * actions — no separate batch menu to drift out of sync.
  */
 
-import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
+import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import type { FocusTier } from '@/api/focus';
 import { TaskActionMenuItems, MoveToProjectSection } from './TaskKebabMenu';
 import * as ICONS from '../common/Icons';
@@ -39,72 +41,30 @@ interface TaskBatchMenuProps {
 
 export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPinAllToTier, onSetDateAll, onSetStartDateAll, onMoveAllToProject, onCompleteAll, onReopenAll, doneCount, onDeleteAll }: TaskBatchMenuProps) {
   const [open, setOpen] = useState(false);
-  // Fixed-position coords for the dropdown. The selection bar is position:sticky at the
-  // bottom of the .todo-panel-list scroll container (overflow:auto), so a plain
-  // position:absolute dropdown anchored to it gets clipped by that scroll box (verified:
-  // ~137px of a 280px-tall menu cut off in a short panel). Mirror the kebab's escape
-  // hatch: render the dropdown position:fixed with coords measured from the caret, so it
-  // floats above all clipping ancestors. It opens UPWARD (the bar lives at the bottom).
-  const [menuPos, setMenuPos] = useState<{ bottom: number; right: number } | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const caretRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setOpen(false), []);
-
-  const toggle = useCallback(() => {
-    setOpen((wasOpen) => {
-      if (!wasOpen && caretRef.current) {
-        const r = caretRef.current.getBoundingClientRect();
-        // Anchor the menu's bottom just above the caret, right-aligned to it. The left-edge
-        // clamp happens in useLayoutEffect once the menu's real width is known.
-        setMenuPos({ bottom: window.innerHeight - r.top + 6, right: window.innerWidth - r.right });
-      }
-      return !wasOpen;
-    });
-  }, []);
-
-  // After the menu mounts, its real width is known — clamp `right` so the (right-aligned)
-  // menu can't push its left edge off-screen inside the narrow Todo panel (8px gutter).
-  useLayoutEffect(() => {
-    if (!open || !menuRef.current || !menuPos) return;
-    const w = menuRef.current.offsetWidth;
-    const maxRight = Math.max(8, window.innerWidth - w - 8);
-    if (menuPos.right > maxRight) setMenuPos((p) => (p ? { ...p, right: maxRight } : p));
-  }, [open, menuPos]);
+  const toggle = useCallback(() => setOpen((wasOpen) => !wasOpen), []);
+  // Placed like every other menu (web/src/AGENTS.md "Menus & overlays"): measured, flipped to the
+  // side with room, clamped to the window and capped with its own scroll. The bar sits right under
+  // the task panel's toolbar, so it opens down; it follows the button while the page scrolls.
+  const menuPos = useMenuPlacement(open, caretRef, menuRef, { onAnchorLost: close });
 
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
-        // The Project picker's list is its own portal (MoveToProjectSection).
-        if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout')) return;
-        setOpen(false);
-      }
+      if (wrapRef.current?.contains(e.target as Node) || menuRef.current?.contains(e.target as Node)) return;
+      // The Project picker's list is its own portal (MoveToProjectSection).
+      if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout')) return;
+      setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    // A scroll/resize moves the button out from under the position:fixed menu, so the
-    // menu has to react. It must NOT blanket-close though: clicking the button itself
-    // scrolls it into view (a scroll on .todo-panel fires in the SAME tick as the
-    // opening click), which made a plain `setOpen(false)` here close the menu
-    // instantly — it never appeared at all. Instead REPOSITION to follow the button,
-    // and only close once the button has actually left the viewport.
-    const onScrollOrResize = () => {
-      const btn = caretRef.current;
-      if (!btn) return;
-      const r = btn.getBoundingClientRect();
-      const offscreen = r.bottom < 0 || r.top > window.innerHeight;
-      if (offscreen) { setOpen(false); return; }
-      setMenuPos({ bottom: window.innerHeight - r.top + 6, right: window.innerWidth - r.right });
-    };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
-    window.addEventListener('scroll', onScrollOrResize, true);
-    window.addEventListener('resize', onScrollOrResize);
     return () => {
       document.removeEventListener('mousedown', onDown);
       document.removeEventListener('keydown', onKey);
-      window.removeEventListener('scroll', onScrollOrResize, true);
-      window.removeEventListener('resize', onScrollOrResize);
     };
   }, [open]);
 
@@ -169,12 +129,15 @@ export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPi
         <span className="task-batch-more-caret" aria-hidden="true">▾</span>
       </button>
 
-      {open && (
+      {/* Portalled to <body>, as the row kebab's: no ancestor's clip or layer caps it, and a press
+          inside it never reaches a row's drag sensors. */}
+      {open && createPortal(
         <div
           ref={menuRef}
           className="task-kebab-menu task-batch-dropdown"
           role="menu"
-          style={menuPos ? { position: 'fixed', bottom: menuPos.bottom, right: menuPos.right, zIndex: 9999 } : undefined}
+          style={menuPlacementStyle(menuPos)}
+          onPointerDown={(e) => e.stopPropagation()}
         >
           <div className="task-kebab-section-label">
             {count} task{count === 1 ? '' : 's'} selected
@@ -199,7 +162,8 @@ export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPi
             onMove={onMoveAllToProject}
             afterAction={close}
           />
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

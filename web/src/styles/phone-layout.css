@@ -542,7 +542,7 @@
 
   /* Menus (web/src/AGENTS.md "Menus & overlays"): never past the screen, the
      notch or the home indicator. */
-  html body .task-kebab-menu:not(.task-batch-dropdown),
+  html body .task-kebab-menu,
   html body .dp-popover,
   html body .cal-cals-popover,
   html body .cal-item-popover {

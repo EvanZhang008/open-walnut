@@ -13,13 +13,14 @@ import {
   showAllMail,
 } from './mail-review-helpers'
 import { pausePageClock } from './page-clock'
+import { closeToast, raiseToast, routeSocket, unreachableUnderStack } from './corner-stack-room'
 import { dropFakes } from './route-teardown'
 
 // Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
 test.beforeEach(async ({ page }) => { await showAllMail(page) })
 
 /**
- * The mail pane's last line: "Checked 2 min ago" (S1).
+ * The mail pane's last-checked line: "Checked 2 min ago" (S1).
  *
  * Graded against the DENSE fixture (two accounts, 64 folders against 6, the same roles under different
  * mailbox ids) because every claim here is only interesting at that density: one account cannot show a
@@ -30,9 +31,10 @@ test.beforeEach(async ({ page }) => { await showAllMail(page) })
  *   a. IT DATES THE FOLDER ON SCREEN, and the `title` adds the absolute local time plus one clause per
  *      account. A merged row takes the NEWEST of its members, which is the freshest thing that list can
  *      honestly claim.
- *   b. IT IS IN THE FLOW between the pane's answer strip and `+ Add account`, so changing its words
- *      moves no folder row and spends no scroll offset. Floated, this pane has already shipped a footer
- *      that covered a whole second account.
+ *   b. IT IS IN THE FLOW under the pane's head, above `+ Add account` and the scroller, so changing its
+ *      words moves no folder row and spends no scroll offset. Floated, this pane has already shipped a
+ *      footer that covered a whole second account; as the pane's foot it sat under the notice stack at
+ *      the bottom left (2026-11-17).
  *   c. A FOLDER NOBODY HAS FETCHED SAYS SO, and a folder off the inbox cadence reports its real age
  *      rather than borrowing the inbox's.
  *   d. AN ACCOUNT THAT NEEDS A PASSWORD ASKS FOR ONE instead of printing an age that stopped being true.
@@ -92,7 +94,7 @@ async function stubMailboxes(
   })
 }
 
-test('the pane foot dates the folder on screen and the title names both accounts', async ({ page }) => {
+test('the last-checked line dates the folder on screen and the title names both accounts', async ({ page }) => {
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
   await openMail(page, port)
@@ -145,8 +147,9 @@ test('the line is in the flow, and changing its words moves no folder row', asyn
   const reference = folderRow(page, HARBOUR, TAIL_ROW)
   await expect(reference).toBeVisible()
 
-  // IN THE FLOW: below the scroller, above `+ Add account`, and a sibling of both rather than an overlay
-  // over either. Floated, three of this pane's earlier footers hid a whole second account.
+  // IN THE FLOW: under the head, above `+ Add account` and the scroller, and a sibling of both rather
+  // than an overlay over either. Floated, three of this pane's earlier footers hid a whole second
+  // account; at the pane's foot it sat under the notice stack (2026-11-17).
   const shape = await page.locator(PANE).evaluate((pane) => {
     const children = Array.from(pane.children)
     const at = (selector: string) => children.findIndex((el) => el.matches(selector))
@@ -174,15 +177,16 @@ test('the line is in the flow, and changing its words moves no folder row', asyn
     }
   })
   expect(shape.order.scroll).toBeGreaterThanOrEqual(0)
-  expect(shape.order.line, 'after the scroller').toBeGreaterThan(shape.order.scroll)
-  expect(shape.order.add, 'before + Add account').toBeGreaterThan(shape.order.line)
+  expect(shape.order.line, 'before + Add account').toBeLessThan(shape.order.add)
+  expect(shape.order.add, 'before the scroller').toBeLessThan(shape.order.scroll)
+  expect(shape.order.line).toBeGreaterThanOrEqual(0)
   expect(shape.position, 'never an overlay').toBe('static')
-  expect(shape.lineBox.top, 'below the scroller').toBeGreaterThanOrEqual(shape.scrollBox.bottom - 1)
   expect(shape.lineBox.bottom, 'above + Add account').toBeLessThanOrEqual(shape.addBox.top + 1)
+  expect(shape.addBox.bottom, 'and both above the scroller').toBeLessThanOrEqual(shape.scrollBox.top + 1)
   expect(Math.round(shape.lines), 'one line').toBe(1)
-  expect(shape.lineBox.height, 'a footer, not a card').toBeLessThanOrEqual(26)
+  expect(shape.lineBox.height, 'a line, not a card').toBeLessThanOrEqual(26)
 
-  // Now make it change its words, which is the moment a footer that grew would shove the list.
+  // Now make it change its words, which is the moment a line that grew would shove the list.
   const scrollBefore = await scroll.evaluate((el) => el.scrollTop)
   const rowBefore = Math.round((await reference.boundingBox())!.y)
   const heightBefore = shape.lineBox.height
@@ -195,7 +199,7 @@ test('the line is in the flow, and changing its words moves no folder row', asyn
     .toBe(heightBefore)
 
   // And back, once the refresh lands. The row is STILL where it was: the pane holds its shape while the
-  // pointer is inside it, and this footer is not a row.
+  // pointer is inside it, and this line is not a row.
   await expect(line).toHaveText(/^Checked /, { timeout: 90_000 })
   expect(await scroll.evaluate((el) => el.scrollTop)).toBe(scrollBefore)
 })
@@ -350,4 +354,31 @@ test('clicking the line checks every account once, and a second click does not',
   // Polled: a Refresh polls the folder on screen first, so its `/refresh` goes out a moment after the
   // line already says `Checking…`.
   await expect.poll(() => refreshes.length - before, { timeout: 30_000 }).toBe(2)
+})
+
+test('with a notice up, both lists scroll clear of the stack and the pane\'s controls stay in reach', async ({ page }) => {
+  // The notice stack overlaps the bottom left of the page (corner-stack.tsx): the folders and the
+  // message list take room at their ends (corner-stack-room.ts), and the last-checked line and
+  // + Add account sit under the pane's head, never under the stack (2026-11-17, review).
+  const sock = await routeSocket(page)
+  await openMail(page, port)
+  await expect(tailToggle(page, HARBOUR)).toBeVisible({ timeout: 90_000 })
+  // 58 folders open, so the pane is a full list; the inbox's messages fill the list beside it.
+  await tailToggle(page, HARBOUR).click()
+  await folderRow(page, HARBOUR, 'INBOX').click()
+  await expect(page.locator('.mail-rows .mail-row').first()).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId(LINE)).toHaveAttribute('data-state', 'checked', { timeout: 60_000 })
+  const toast = await raiseToast(page, sock, 'mail')
+  const under = await unreachableUnderStack(page)
+  expect(under.bad).toEqual([])
+  for (const list of ['div.mail-accounts-scroll', 'div.mail-rows']) {
+    expect(under.checked.some((n) => n === list || n.startsWith(`${list}.`)), `${list} judged: ${under.checked.join(', ')}`).toBe(true)
+  }
+  const stackTop = (await page.getByTestId('corner-stack').boundingBox())!.y
+  for (const id of [LINE, 'mail-add-account']) {
+    const box = (await page.getByTestId(id).boundingBox())!
+    expect(box.y + box.height, `${id} ends above the stack`).toBeLessThanOrEqual(stackTop)
+  }
+  await page.getByTestId('mail-add-account').click({ trial: true })
+  await closeToast(page, toast)
 })

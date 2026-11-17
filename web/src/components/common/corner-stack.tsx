@@ -9,11 +9,18 @@
  * Every notice that pops up by itself goes through <CornerSlot order={...}>: it portals into one
  * fixed stack, so notices never cover one another and share one width, gap and order. A higher
  * `order` sits nearer the bottom edge, and more notices stack upward. Its width never depends on
- * a panel, a composer, a column or a sheet (corner-stack.css), and the page reserves no room for
- * it. It reads two things from the page's left edge: the sidebar rail's right edge (its left
- * edge sits 16px past it) and, while the notification center is open, that panel's right edge
- * instead, so it never covers that list. On the phone the stack spans the top of the screen
- * under the safe area (phone-layout.css), clear of the chat composer at the bottom.
+ * a panel, a composer, a column or a sheet (corner-stack.css). It reads two things from the
+ * page's left edge: the sidebar rail's right edge (its left edge sits 16px past it) and, while
+ * the notification center is open, that panel's right edge instead, so it never covers that
+ * list. On the phone the stack spans the top of the screen under the safe area
+ * (phone-layout.css), clear of the chat composer at the bottom.
+ *
+ * It overlaps the page like a system notification, and what it covers can still be scrolled out
+ * from under it: it measures how much of the window's bottom it takes now (from its own box only,
+ * 0 while it covers nothing) and gives that much extra room at its end to each scroller whose CSS
+ * rule asks for it (corner-stack-room.ts), so nothing moves when a notice comes or goes
+ * (tests/e2e/browser/corner-stack-room.spec.ts finds a scroller that misses it, or anything that
+ * moved). Nothing here reads a panel to do it.
  *
  * tests/web/corner-stack-guard.test.ts fails on a notice that places itself in a corner of the
  * window instead of coming here, and on this file reading a panel's or composer's geometry again.
@@ -24,6 +31,7 @@ import { PHONE_LAYOUT_QUERY } from '@/hooks/usePhoneLayout';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
 import '@/styles/corner-stack.css';
 import { STACK_WIDTH_PX } from './corner-stack-width';
+import { giveStackRoom } from './corner-stack-room';
 
 /** Where each kind sits in the stack: higher is nearer the bottom edge (the corner). */
 export const CORNER_ORDER = {
@@ -63,6 +71,8 @@ export function useCornerState(): CornerState {
 }
 let stack: HTMLDivElement | null = null;
 let listening = false;
+let roomObserver: ResizeObserver | null = null;
+let roomWatched: HTMLDivElement | null = null;
 
 /** Shown on this page now (Home stays mounted under visibility: hidden off its route). */
 function shown(el: Element): boolean {
@@ -142,6 +152,64 @@ function sync(): void {
   stack.classList.toggle('approval-dialog-open', dialogOpen);
   // An approval card in sight: the toasts with it keep to their title and buttons.
   stack.classList.toggle('has-approval', !approvalsListed && !dialogOpen && !!stack.querySelector('.corner-slot-approvals [data-testid="approval-card"]'));
+  // Home's taskbar along the bottom of the page (SessionTaskbar.tsx): the stack stands on it, so
+  // the chips of minimized sessions at its left stay in reach. From the taskbar's top edge, written
+  // to the stack only.
+  const bar = phone ? null : document.querySelector('.session-taskbar');
+  const lift = bar && shown(bar) ? Math.max(0, Math.round(window.innerHeight - bar.getBoundingClientRect().top)) : 0;
+  if (lift !== liftPx) {
+    liftPx = lift;
+    if (lift > 0) stack.style.setProperty('--corner-stack-lift', `${lift}px`);
+    else stack.style.removeProperty('--corner-stack-lift');
+  }
+  publishRoom();
+}
+
+/** Air between the stack's top and what ends above it. */
+const ROOM_AIR_PX = 8;
+/** The stack's own margin from the window's top and bottom edges (corner-stack.css). */
+const EDGE_PX = 16;
+let publishedRoom = 0;
+/** How far Home's taskbar lifts the stack now (sync). */
+let liftPx = 0;
+
+/**
+ * How much of the window's bottom the stack covers now, given to the rules that ask for it
+ * (corner-stack-room.ts) and shown on the stack as data-room for a test or a look in DevTools:
+ * from its own box only, so it never reads (or follows) a panel. 0 while it covers nothing: empty (every
+ * slot empty is a zero-height stack), hidden (tucked, under the phone's drawer), or on the phone,
+ * where it sits at the top of the screen. Kept while an approval dialog hides it
+ * (approval-dialog-open), on purpose: the dialog is modal, so nothing scrolls under it, and the
+ * stack comes back the moment it closes; taking the room away and back would only clamp a list
+ * scrolled to its end twice. Runs after every sync and on every change of the stack's own size (a
+ * ResizeObserver: a toast coming, going, opening its details).
+ */
+function publishRoom(): void {
+  if (!stack) return;
+  // Taller than the window holds (a notice opened to its whole text in a short window): it scrolls
+  // itself (is-overfull), so every notice's x stays in reach. Judged by its content's height, which
+  // the cap leaves alone, so it never flips back and forth.
+  const overfull = stack.childElementCount > 0 && !window.matchMedia(PHONE_LAYOUT_QUERY).matches
+    && stack.scrollHeight > window.innerHeight - 2 * EDGE_PX - liftPx;
+  stack.classList.toggle('is-overfull', overfull);
+  const box = stack.getBoundingClientRect();
+  const hidden = stack.classList.contains('is-tucked') || stack.classList.contains('under-drawer');
+  const covers = box.height > 0 && !hidden && !window.matchMedia(PHONE_LAYOUT_QUERY).matches;
+  const room = covers ? Math.max(0, Math.ceil(window.innerHeight - box.top)) + ROOM_AIR_PX : 0;
+  // While it covers something every look gives it again: a box a route mounted since gets it too
+  // (only a box whose value differs is written).
+  if (room === publishedRoom && room === 0) return;
+  publishedRoom = room;
+  giveStackRoom(room);
+  if (room > 0) stack.dataset.room = String(room);
+  else delete stack.dataset.room;
+}
+
+let roomFrame = 0;
+/** publishRoom on the next frame, once however many sizes changed before it. */
+function publishRoomSoon(): void {
+  if (roomFrame) return;
+  roomFrame = requestAnimationFrame(() => { roomFrame = 0; publishRoom(); });
 }
 
 /** The stack element, made once per window and kept for its life. */
@@ -169,6 +237,16 @@ export function cornerStackElement(): HTMLDivElement {
     // While it holds anything, look again twice a second: the notification center comes and goes,
     // a page's list of approvals scrolls into sight (a few reads, no layout writes).
     window.setInterval(() => { if (stack && stack.childElementCount > 0) sync(); }, 500);
+  }
+  // The room it publishes follows its own size on the next frame, the last notice leaving (height
+  // 0) too. Never inside the observer's callback: publishRoom toggles is-overfull, which changes
+  // the very box observed, and a change there in the same pass is what a browser reports as
+  // 'ResizeObserver loop completed with undelivered notifications' (as useTitleRowTight.ts).
+  if (stack !== roomWatched && typeof ResizeObserver !== 'undefined') {
+    roomObserver ??= new ResizeObserver(publishRoomSoon);
+    roomObserver.disconnect();
+    roomObserver.observe(stack);
+    roomWatched = stack;
   }
   sync();
   return stack;

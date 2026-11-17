@@ -479,6 +479,43 @@ export function MailAccountsPane({
         />
       )}
 
+      {/* WHEN THIS CONSOLE LAST HEARD FROM THE MAIL, in one line under the pane's head, then
+          `+ Add account`: both at the top, outside the scroller, so neither is ever under the notice
+          stack at the bottom left (2026-11-17, review: as the pane's foot they sat right under it).
+          Both are there from the first render that has an account, so no folder row moves when they
+          come, and the line keeps one height while its words change. It is a BUTTON because the
+          sentence and the verb are the same thing here: the answer to "is this up to date?" is
+          followed by "then check it now". A second click while the first is on the wire is a no-op,
+          and the line says `Checking…` for the duration, so it is never a control that looks idle
+          while busy. */}
+      {syncLine && (
+        <button
+          type="button"
+          className="mail-sync-line"
+          data-testid="mail-sync-line"
+          data-state={syncLine.state}
+          {...(syncLine.at === undefined ? {} : { 'data-at': String(syncLine.at) })}
+          title={syncLine.title}
+          /* The visible words are a time, so the accessible name has to carry the VERB too, or a
+             screen reader reaches a button called "Checked 2 min ago" with nothing saying what it
+             does. Deliberately NOT `aria-live`: this text changes by itself every minute, and a live
+             region would announce a relative time over whatever the person was reading. */
+          aria-label={`${syncLine.text}. Check every account for new mail.`}
+          onClick={() => { if (!refreshing) void requestMailRefresh(); }}
+        >
+          {syncLine.text}
+        </button>
+      )}
+
+      <button
+        type="button"
+        className="mail-add-account"
+        data-testid="mail-add-account"
+        onClick={onAddAccount}
+      >
+        + Add account
+      </button>
+
       {refreshNote && (
         <p className="mail-refresh-note" data-testid="mail-refresh-note">{refreshNote}</p>
       )}
@@ -573,41 +610,6 @@ export function MailAccountsPane({
           </button>
         </div>
       )}
-
-      {/* WHEN THIS CONSOLE LAST HEARD FROM THE MAIL, in one line at the foot of the pane.
-          IN THE FLOW between the answer strip and `+ Add account`, for the same reason the strip is:
-          the space comes out of the scroller above (`flex: 1`), so no folder row moves and none is
-          covered. It is a BUTTON because the sentence and the verb are the same thing here: the answer
-          to "is this up to date?" is followed by "then check it now", and the pane's own Refresh icon
-          is 200px away at the top. A second click while the first is on the wire is a no-op, and the
-          line says `Checking…` for the duration, so it is never a control that looks idle while busy. */}
-      {syncLine && (
-        <button
-          type="button"
-          className="mail-sync-line"
-          data-testid="mail-sync-line"
-          data-state={syncLine.state}
-          {...(syncLine.at === undefined ? {} : { 'data-at': String(syncLine.at) })}
-          title={syncLine.title}
-          /* The visible words are a time, so the accessible name has to carry the VERB too, or a
-             screen reader reaches a button called "Checked 2 min ago" with nothing saying what it
-             does. Deliberately NOT `aria-live`: this text changes by itself every minute, and a live
-             region would announce a relative time over whatever the person was reading. */
-          aria-label={`${syncLine.text}. Check every account for new mail.`}
-          onClick={() => { if (!refreshing) void requestMailRefresh(); }}
-        >
-          {syncLine.text}
-        </button>
-      )}
-
-      <button
-        type="button"
-        className="mail-add-account"
-        data-testid="mail-add-account"
-        onClick={onAddAccount}
-      >
-        + Add account
-      </button>
     </aside>
   );
 }

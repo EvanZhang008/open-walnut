@@ -8,6 +8,7 @@ import { useSameSet } from '@/hooks/useSameSet';
 import { sameOrder } from './useStableOrder';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
 import { useScrollAnchor } from '@/hooks/useScrollAnchor';
+import { useRowsStillUnderBar } from './useRowsStillUnderBar';
 import { manualMoved, orderToDraw } from './draw-order';
 import { useDraft } from '@/hooks/useDraft';
 import { useIntegrations } from '@/hooks/useIntegrations';
@@ -328,7 +329,9 @@ interface TodoPanelProps {
   /** Nest a folder under another (null = make it top-level); the pinned tiers' chip
    *  drop uses it. Same-project only, as the server rules. */
   onSetFolderParent?: (groupId: string, parentId: string | null) => void;
-  /** The attention banner mount, placed right under the toolbar (outside every scroll container). */
+  /** What Home adds to the panel (its found computers' Connect / Not now, the welcome card),
+   *  placed right under the toolbar, outside every scroll container: never under the notice stack
+   *  at the bottom left. */
   banner?: ReactNode;
 }
 
@@ -7925,6 +7928,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   useScrollAnchor(panelListRef, HOME_LIST_ROWS, dragging);
   useScrollAnchor(pinnedWrapperRef, HOME_LIST_ROWS, dragging);
   useScrollAnchor(recentListRef, HOME_LIST_ROWS, dragging);
+  // The multi-select bar under the toolbar comes and goes above these boxes: they scroll by its
+  // height, so no row moves under the pointer between two Cmd/Ctrl-clicks.
+  const selectionBarShown = !!onGroupTasks && (selectMode || selectionInfo.tasks.length >= 2);
+  const selectionBarRef = useRef<HTMLDivElement | null>(null);
+  useRowsStillUnderBar(selectionBarRef, selectionBarShown, [listScrollRef, panelListRef, pinnedWrapperRef, recentListRef]);
   // 6.8: the project heading's "Filter to this project" replaces the Project set.
   const filterToProject = useLeanCallback(
     (project: string) => homeFilters.apply({ ...homeFilters.state, projects: [project] }, 'board'),
@@ -8094,6 +8102,49 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         </button>
       </div>
       </div>
+
+      {/* What Home adds to the panel (its found computers' Connect / Not now, the welcome card),
+          right under the toolbar, outside every scroll container: the notice stack sits at the
+          bottom left, so nothing up here is ever under it (2026-11-16: as a footer under the list,
+          the host connect card covered a found computer's Not now). */}
+      {banner}
+
+      {/* Multi-select action bar, right under the toolbar (2026-11-16: as a footer under the list,
+          the notice stack at the bottom left covered Group, the batch verbs and Cancel). Shown in
+          explicit select mode, or whenever ≥2 tasks
+          are selected (incl. the Cmd/Ctrl-click path). "Group" is enabled once ≥2 tasks
+          are picked (no project scope rule). "Cancel" abandons the selection and
+          leaves select mode (it used to be a confusing "Done"). */}
+      {selectionBarShown && (
+        <div className="task-selection-bar" ref={selectionBarRef}>
+          <span className="task-selection-count">
+            {selectionInfo.tasks.length > 0
+              ? `${selectionInfo.tasks.length} selected`
+              : 'Select tasks to group'}
+          </span>
+          {/* Group split-button + side dropdown of batch actions (reuses the kebab panel). */}
+          <TaskBatchMenu
+            count={selectionInfo.tasks.length}
+            canGroup={selectionInfo.canGroup}
+            onGroup={handleGroupSelected}
+            onSetPriorityAll={batchSetPriority}
+            onPinAllToTier={batchPinToTier}
+            onSetDateAll={batchSetDate}
+            onSetStartDateAll={batchSetStartDate}
+            onMoveAllToProject={batchMoveToProject}
+            onCompleteAll={() => batchSetPhase('COMPLETE')}
+            onReopenAll={() => batchSetPhase('TODO')}
+            doneCount={selectionInfo.doneCount}
+            onDeleteAll={batchDelete}
+          />
+          <button
+            className="task-selection-clear-btn"
+            onClick={() => (selectMode ? exitSelectMode() : setSelectedIds(new Set()))}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
 
       {/* ✦ AI lane: an in-process agent searches tasks AND session transcripts,
           streaming its progress live. Anchored here — directly under the search
@@ -8890,41 +8941,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           input detached from the list couldn't answer "which project does this
           land in". Creation now lives IN the list — each group's ghost add row
           (title-aligned) — plus the header "+" composer for richer input. */}
-      {/* Multi-select action bar — shown in explicit select mode, or whenever ≥2 tasks
-          are selected (incl. the Cmd/Ctrl-click path). "Group" is enabled once ≥2 tasks
-          are picked (no project scope rule). "Cancel" abandons the selection and
-          leaves select mode (it used to be a confusing "Done"). */}
-      {onGroupTasks && (selectMode || selectionInfo.tasks.length >= 2) && (
-        <div className="task-selection-bar">
-          <span className="task-selection-count">
-            {selectionInfo.tasks.length > 0
-              ? `${selectionInfo.tasks.length} selected`
-              : 'Select tasks to group'}
-          </span>
-          {/* Group split-button + side dropdown of batch actions (reuses the kebab panel). */}
-          <TaskBatchMenu
-            count={selectionInfo.tasks.length}
-            canGroup={selectionInfo.canGroup}
-            onGroup={handleGroupSelected}
-            onSetPriorityAll={batchSetPriority}
-            onPinAllToTier={batchPinToTier}
-            onSetDateAll={batchSetDate}
-            onSetStartDateAll={batchSetStartDate}
-            onMoveAllToProject={batchMoveToProject}
-            onCompleteAll={() => batchSetPhase('COMPLETE')}
-            onReopenAll={() => batchSetPhase('TODO')}
-            doneCount={selectionInfo.doneCount}
-            onDeleteAll={batchDelete}
-          />
-          <button
-            className="task-selection-clear-btn"
-            onClick={() => (selectMode ? exitSelectMode() : setSelectedIds(new Set()))}
-          >
-            Cancel
-          </button>
-        </div>
-      )}
-      {banner}
     </div>
   );
 });

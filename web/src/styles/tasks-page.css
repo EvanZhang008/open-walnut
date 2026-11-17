@@ -9,6 +9,8 @@
    negative margin would over-pull there. */
 .app-content-area:has(> .tasks-page) {
   padding: 0;
+  /* Its rail and table scroll, not the area: no gutter kept for a scrollbar it never shows. */
+  scrollbar-gutter: auto;
 }
 
 .tasks-page {
@@ -71,6 +73,9 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* Its end clears the notice stack while one shows (--corner-stack-room, corner-stack.css). */
+  padding-bottom: var(--corner-stack-room, 0px);
+  scrollbar-gutter: stable;
 }
 
 .tp-rail-item {
@@ -166,12 +171,12 @@
 }
 .tp-rail-kebab-btn:hover { background: var(--bg-tertiary); color: var(--fg); }
 
-/* pinned New Project region below a hairline */
+/* New Project, under the rail's title and above the list, over a hairline */
 .tp-rail-newproj-wrap {
   flex: none;
-  border-top: 1px solid var(--border);
-  margin-top: 8px;
-  padding-top: 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+  padding-bottom: 6px;
 }
 .tp-rail-newproj-btn {
   width: 100%;
@@ -300,6 +305,9 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* Its end clears the notice stack while one shows (--corner-stack-room, corner-stack.css). */
+  padding-bottom: var(--corner-stack-room, 0px);
+  scrollbar-gutter: stable;
   /* This table renders EVERY task, so on a real dataset it is enormous: measured
      2,923 rows, 79,073 elements, 107,240px of content. WebKit was rasterising that
      whole height and scrolled it at 6-8 fps with frame gaps up to 522ms; Blink does

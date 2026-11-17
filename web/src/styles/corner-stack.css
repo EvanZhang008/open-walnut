@@ -9,7 +9,9 @@
   --corner-card-pad: 10px 12px 10px 14px;
   --corner-card-pad-compact: 6px 10px 6px 14px;
   position: fixed;
-  bottom: 16px;
+  /* 16px above the window's bottom, or above Home's taskbar while it shows (--corner-stack-lift,
+     corner-stack.tsx), whose chips sit at the left under it otherwise. */
+  bottom: calc(16px + var(--corner-stack-lift, 0px));
   /* 16px right of the sidebar's icon rail, or of the notification center while it is open
      (--corner-stack-rail, corner-stack.tsx); the width the same everywhere. */
   left: calc(var(--corner-stack-rail, 0px) + 16px);
@@ -23,7 +25,8 @@
   /* Between kinds; each kind keeps its own lines closer together. */
   gap: 10px;
   /* No overflow here: it would clip every card's shadow and the toasts' slide-in. Each kind
-     keeps its own count small instead (one approval card, two toasts, three board toasts). */
+     keeps its own count small instead (one approval card, two toasts, three board toasts); only a
+     stack taller than the window scrolls (is-overfull, below). */
   pointer-events: none;
 }
 
@@ -35,6 +38,51 @@
 }
 
 .corner-stack:empty { display: none; }
+
+/* Opened to its whole text, a notice's words scroll inside it past a quarter of the window, so in a
+   short window the stack keeps clear of the page's top and its x in reach. */
+.corner-stack .notification-toast.is-open :is(.notification-toast-title, .notification-toast-body) {
+  max-height: 25vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Taller than the window holds (corner-stack.tsx is-overfull, a notice opened to its whole text in
+   a short window): it scrolls itself from its top, so every notice's x stays in reach. Only then:
+   a scroller clips the cards' shadows and slide-in. */
+.corner-stack.is-overfull {
+  max-height: calc(100dvh - 32px - var(--corner-stack-lift, 0px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  justify-content: flex-start;
+  pointer-events: auto;
+}
+
+@property --corner-stack-room {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+
+/* What the stack covers can be scrolled out from under it, and nothing moves when a notice comes
+   or goes: the stack overlaps the page like a system notification. Every scroller beside the rail
+   asks, in its own rule, for as much extra room at its END as the stack covers of the window's
+   bottom: var(--corner-stack-room, 0px) in its padding-bottom (alone or in max() with its old
+   padding) or in its last grid row. The property is not inherited, 0px until set: while a notice
+   shows, corner-stack-room.ts sets it inline on the asking boxes (ROOM_BOXES) and nowhere else, so
+   only they restyle. Where bottom padding would lift a control stuck to the box's bottom edge or
+   change the box's own size, a spacer after its last row reads var(--corner-stack-spacer, 0px)
+   instead, an ordinary variable set on its box (SPACER_BOXES; WebKit 26 gives a pseudo-element
+   nothing of a property that is not inherited). Each such scroller also keeps its scrollbar's gutter (scrollbar-gutter: stable), so
+   a list that starts to scroll when the room comes gets no scrollbar that narrows it (a
+   classic-scrollbar engine: WebKit with a mouse, Windows). Its last row scrolls clear, and no
+   row, column or footer changes place or size.
+   A control that must stay reachable lives inside a scroller, never in a footer under one (Home's
+   found computers, TodoPanel banner; the Tasks rail's New project). What does not scroll (a hint
+   line, a full-screen sheet) is overlapped by design, as a system notification
+   overlaps a window. tests/e2e/browser/corner-stack-room.spec.ts walks the app with a notice up,
+   names a scroller whose end stays under it or a control nothing can bring out, and fails when
+   anything moved. */
 
 /* No room right of a wide notification center, or the phone's drawer open: the stack waits until it closes. */
 .corner-stack.is-tucked,

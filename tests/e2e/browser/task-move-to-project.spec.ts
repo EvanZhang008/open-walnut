@@ -33,7 +33,9 @@ async function seedTask(title: string, project: string): Promise<{ id: string }>
   const res = await fetch(`${API}/api/tasks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title, project }),
+    // Off the pinned board: a REST create lands in Satellite by default (newTaskPinDefault,
+    // task-manager.ts), and these rows are read in the project list.
+    body: JSON.stringify({ title, project, pinned: false }),
   })
   if (!res.ok) throw new Error(`seed failed: ${res.status} ${await res.text()}`)
   const body = (await res.json()) as { task: { id: string } }

@@ -58,7 +58,10 @@
   flex: 1 1 auto;
   min-height: 0;
   margin: 0 -8px;
+  /* Its end clears the notice stack while one shows (--corner-stack-room, corner-stack.css). */
   padding: 0 8px 16px;
+  padding-bottom: max(16px, var(--corner-stack-room, 0px));
+  scrollbar-gutter: stable;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -387,7 +390,10 @@
   box-sizing: border-box;
   min-width: 0;
   min-height: 0;
+  /* Its end clears the notice stack while one shows (--corner-stack-room, corner-stack.css). */
   padding: var(--settings-pane-pad-top) 40px 64px;
+  padding-bottom: max(64px, var(--corner-stack-room, 0px));
+  scrollbar-gutter: stable;
   overflow-x: hidden;
   overflow-y: auto;
   background: var(--settings-pane-bg);
@@ -467,6 +473,8 @@
     --settings-pane-pad-x: 28px;
     --settings-pane-pad-top: 24px;
     padding: var(--settings-pane-pad-top) 28px 48px;
+    padding-bottom: max(48px, var(--corner-stack-room, 0px));
+    scrollbar-gutter: stable;
   }
 
   .settings-container .settings-pane-inner {
@@ -544,4 +552,6 @@
 .app-content-area:has(.settings-container) {
   padding: 0;
   overflow: hidden;
+  /* Its panes scroll, not the area: no gutter kept for a scrollbar it never shows. */
+  scrollbar-gutter: auto;
 }

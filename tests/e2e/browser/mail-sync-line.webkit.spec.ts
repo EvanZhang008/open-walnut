@@ -18,7 +18,7 @@ import { dropFakes } from './route-teardown'
 test.beforeEach(async ({ page }) => { await showAllMail(page) })
 
 /**
- * The same footer in WEBKIT, which is the engine the Mac app is.
+ * The same line in WEBKIT, which is the engine the Mac app is.
  *
  * Only what an engine can disagree about: the line's own geometry inside a 204px column whose scrollbar
  * takes layout width here, and whether the 30 s tick fires in WKWebView at all. The wording, the states
@@ -52,7 +52,7 @@ test('really runs in WebKit', async ({ browserName }) => {
   expect(browserName).toBe('webkit')
 })
 
-test('one line at the pane foot, in the flow, saying the same thing', async ({ page }) => {
+test('one line under the pane head, in the flow, saying the same thing', async ({ page }) => {
   await openMail(page, port)
   await expect(folderRow(page, MARINA, 'inbox')).toBeVisible({ timeout: 90_000 })
   await folderRow(page, HARBOUR, 'INBOX').click()
@@ -63,7 +63,7 @@ test('one line at the pane foot, in the flow, saying the same thing', async ({ p
   await expect(line).toHaveAttribute('title', /^Last checked .+ · Harbour mail: .+ · Marina mail: /)
 
   // The engine whose scrollbar takes 15px out of a 204px column: still ONE line, nothing cut off, and a
-  // footer's height rather than a card's. A ratio line-height rounds DOWN here, which is how a capped box
+  // line's height rather than a card's. A ratio line-height rounds DOWN here, which is how a capped box
   // gains half a row in the Mac app and nowhere else.
   const box = await line.evaluate((el) => {
     const style = getComputedStyle(el)
@@ -77,7 +77,7 @@ test('one line at the pane foot, in the flow, saying the same thing', async ({ p
     }
   })
   expect(box.lines, 'one line at 204px').toBe(1)
-  expect(box.height, 'a footer, not a card').toBeLessThanOrEqual(26)
+  expect(box.height, 'a line, not a card').toBeLessThanOrEqual(26)
   expect(box.cut, 'the sentence fits, or is ellipsed rather than overflowing').toBeLessThanOrEqual(1)
   expect(box.position, 'never an overlay').toBe('static')
 

@@ -69,7 +69,7 @@ async function openFresh(page: Page, baseURL: string) {
       // HTTP health can paint before the replacement WebSocket is ready.
       await expect.poll(() => !!socket && socket !== previous, { timeout: 60_000 }).toBe(true);
     },
-    push(name: 'system:health' | 'host:status' | 'config:changed', data: unknown) {
+    push(name: 'system:health' | 'host:status' | 'config:changed' | 'agent:error', data: unknown) {
       expect(socket, 'the real SPA WebSocket is connected').toBeDefined();
       socket!.send(JSON.stringify({ type: 'event', name, data, seq: Date.now() }));
     },
@@ -289,6 +289,32 @@ test('double-clicking Connect sends one consent POST and does not answer another
   } finally {
     heldAnswer.resolve();
   }
+});
+
+// 2026-11-16: the background connect card in the notice stack at the bottom left covered the next
+// found host's Not now, a footer under the task list then (the test above failed on it). The rows
+// sit right under the toolbar now: with the connect card AND a notice in the stack, in a short
+// window, Not now takes a real click (Playwright clicks only what the pointer reaches there).
+test('with the connect card and a notice in the stack, the next found host answers a real click on Not now (1100x560)', async ({ page, baseURL }) => {
+  await page.setViewportSize({ width: 1100, height: 560 });
+  // Notices show whatever the clock says (quiet hours hold them back).
+  await page.route('**/api/quiet*', route => route.fulfill({ json: { quiet: false } }));
+  const fixture = await mockFoundHosts(page, { count: 3 });
+  const events = await openFresh(page, baseURL!);
+  await foundRow(page, 'devbox-1').getByRole('button', { name: 'Connect', exact: true }).click();
+  await expect(foundRow(page, 'devbox-1')).toHaveCount(0);
+  const stack = page.getByTestId('corner-stack');
+  await expect(stack.getByTestId('host-connect-card')).toBeVisible({ timeout: 15_000 });
+  events.push('agent:error', { agentId: 'agent-found-host-room', error: '401 unauthorized (found host room): the provider refused the request' });
+  await expect(stack.locator('.notification-toast', { hasText: 'found host room' })).toBeVisible({ timeout: 10_000 });
+  for (const host of ['devbox-2', 'devbox-3']) {
+    await foundRow(page, host).getByRole('button', { name: 'Not now', exact: true }).click({ timeout: 5_000 });
+    await expect(foundRow(page, host)).toHaveCount(0);
+  }
+  expect(fixture.answers).toEqual([
+    { host: 'devbox-1', answer: 'yes' }, { host: 'devbox-2', answer: 'not_now' }, { host: 'devbox-3', answer: 'not_now' },
+  ]);
+  await expect(stack.getByTestId('host-connect-card')).toBeVisible();
 });
 
 // 2026-11-13, the user, of a host that read "Could not connect" here after every reload: "I don't

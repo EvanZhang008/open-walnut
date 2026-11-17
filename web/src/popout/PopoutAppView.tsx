@@ -24,6 +24,7 @@ import { useAppCatalog } from '@/apps/hooks';
 import type { RegisteredApp } from '@/apps/registry';
 import { useWebPluginRuntime } from '@/plugins/runtime-store';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { contentAreaStyle } from '@/components/layout/content-area-style';
 import { NotificationToaster } from '@/components/common/NotificationToaster';
 import { OperationErrorBridge } from '@/components/common/OperationErrorBridge';
 import { TransferDialogHost } from '@/components/transfer/TransferDialogHost';
@@ -83,7 +84,7 @@ function AppWindow({ appKey }: { appKey: string }) {
       className="popout-app app-content-area"
       data-testid="popout-app"
       data-app-key={app.key}
-      style={app.fullBleed ? { padding: 0, overflow: 'hidden' } : undefined}
+      style={contentAreaStyle(!!app.fullBleed)}
     >
       <Suspense fallback={null}>
         <AppRouter key={app.key} app={app} leave={leave} />

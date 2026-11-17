@@ -1290,7 +1290,11 @@ select {
   display: flex;
   flex-direction: column;
   overflow-y: auto;
-  padding: 24px;
+  /* A page that scrolls here ends above the notice stack while one shows (--corner-stack-room,
+     corner-stack.css); a page that fills the area sets its own padding and scrollers. */
+  padding: 24px 24px 24px;
+  padding-bottom: max(24px, var(--corner-stack-room, 0px));
+  scrollbar-gutter: stable;
   min-width: 0;
   min-height: 0;
 }
@@ -5158,6 +5162,10 @@ select {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  /* No room of its own: what it shows that scrolls is the note editor, whose end already clears the
+     notice stack (.notes-editor-content::after). Room here as well shrank the open editor by the
+     same amount again (2026-11-17, review). */
+  scrollbar-gutter: stable;
 }
 
 /* Tree panel */
@@ -5206,7 +5214,9 @@ select {
 .memory-tree-sections {
   flex: 1;
   overflow-y: auto;
-  padding-bottom: 16px;
+  /* Its end clears the notice stack while one shows (--corner-stack-room, corner-stack.css). */
+  padding-bottom: max(16px, var(--corner-stack-room, 0px));
+  scrollbar-gutter: stable;
 }
 
 /* Section headers */
@@ -12506,9 +12516,10 @@ body.walnut-dragging {
   background: var(--accent);
   border-color: var(--accent);
 }
+/* Right under the panel's toolbar (TodoPanel), never a footer under the list: the notice stack at
+   the bottom left covered its verbs there (2026-11-16, corner-stack.css). */
 .task-selection-bar {
-  position: sticky;
-  bottom: 12px;
+  flex: none;
   align-self: center;
   display: flex;
   align-items: center;
@@ -12520,7 +12531,7 @@ body.walnut-dragging {
      overflowed the ~300px panel — the count and Complete were clipped off the left
      edge and More/Cancel vanished. Cap the width and let the row wrap instead. */
   max-width: calc(100% - 16px);
-  margin: 8px auto 12px;
+  margin: 6px auto;
   padding: 7px 10px;
   background: var(--bg-elevated, #fff);
   border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
@@ -12603,10 +12614,8 @@ body.walnut-dragging {
 .task-batch-more { gap: 3px; }
 .task-batch-more-caret { font-size: 9px; opacity: 0.7; }
 .task-selection-action-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-/* Dropdown opens ABOVE the bar. Positioned via inline position:fixed coords (computed
-   from the caret in TaskBatchMenu) so it escapes the .todo-panel-list overflow:auto clip
-   box — a plain position:absolute child of the sticky bar gets cut off in a short panel.
-   This rule only carries sizing; the fixed coords + z-index come from the inline style. */
+/* The batch menu: placed by useMenuPlacement like every kebab menu (TaskBatchMenu.tsx); this
+   rule only carries its width. */
 .task-batch-dropdown {
   min-width: 210px;
 }
@@ -13513,6 +13522,8 @@ body.walnut-dragging {
 .global-notes-body {
   padding: 0 16px 8px;
   overflow-y: auto;
+  /* Its document takes the notice stack's room (below): no scrollbar comes and narrows it then. */
+  scrollbar-gutter: stable;
   display: flex;
   flex-direction: column;
 }
@@ -13739,6 +13750,11 @@ body.walnut-dragging {
   padding: 8px 12px;
   line-height: 1.5;
 }
+/* In the scratchpad's scroller (.global-notes-body) the editor box is the scroller's height and a
+   long document overflows it, so the document's own end is the scroller's: it clears the notice
+   stack while one shows (--corner-stack-room, corner-stack.css). Within the box's min-height, so
+   a short note and the mic stuck to the bottom edge never move. */
+.global-notes-body .global-notes-editor-inline .tiptap { padding-bottom: max(8px, var(--corner-stack-room, 0px)); }
 
 /* Popup variant — reset spacious notes-page styles */
 .global-notes-editor-popup .tiptap {
@@ -15546,16 +15562,14 @@ body.walnut-dragging {
 /* Height cap + internal scrolling, scoped to the FIXED-positioned kebab menus
    (the ones useMenuPlacement measures and places). The .task-kebab-menu class is
    shared by TaskQuickActions (session panel), TaskKebabMenu (task rows), and the
-   two ProjectHeaderMenus menus ("+"/"⋮" on project group headers) — all four are
-   viewport-anchored via useMenuPlacement, so the cap applies to all of them.
-   The one EXCLUSION is .task-batch-dropdown: `100vh` is the wrong frame of
-   reference for it (position:fixed but anchored by `bottom`, growing upward from
-   the selection bar) and it can't overflow the way the bug did.
+   two ProjectHeaderMenus menus ("+"/"⋮" on project group headers), and the
+   multi-select bar's More menu (TaskBatchMenu): all viewport-anchored via
+   useMenuPlacement, so the cap applies to all of them.
    `overflow-y` is the actual fix: a position:fixed menu sits in NO scroll
    container, so without it the items past the viewport edge aren't merely
    scrolled away — they're unreachable (no scrollbar, no wheel target).
    Keep the 16px in step with useMenuPlacement's `margin = 8` (8px per edge). */
-.task-kebab-menu:not(.task-batch-dropdown) {
+.task-kebab-menu {
   max-height: calc(100vh - 16px);
   /* A toggling scrollbar changes shrink-to-fit width and feeds back into placement. */
   overflow-y: scroll;
@@ -23790,11 +23804,16 @@ a.tag-chip:focus-visible,
 .notes-editor-pane {
   flex: 1;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   display: flex;
   flex-direction: column;
   min-width: 0;
   position: relative;
 }
+/* With no note open the pane itself scrolls (its start page): its end clears the notice stack
+   while one shows (--corner-stack-room, corner-stack.css). With a note open the editor scrolls
+   instead (.notes-editor-content), and room here would shrink it. */
+.notes-split-view:not(.notes-has-active) > .notes-editor-pane { padding-bottom: var(--corner-stack-room, 0px); }
 
 /* ─── AI assistant column (#6) ─── */
 /* In-strip button (see NotesTabStrip `trailing`) — deliberately NOT absolutely
@@ -24182,7 +24201,10 @@ a.tag-chip:focus-visible,
 .notes-tree-body {
   flex: 1;
   overflow-y: auto;
-  padding: 6px 0;
+  /* Its end clears the notice stack while one shows (--corner-stack-room, corner-stack.css). */
+  padding: 6px 0 6px;
+  padding-bottom: max(6px, var(--corner-stack-room, 0px));
+  scrollbar-gutter: stable;
 }
 
 .notes-tree-empty {
@@ -24558,9 +24580,14 @@ a.tag-chip:focus-visible,
 .notes-editor-content {
   flex: 1;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: 0;
   background: var(--bg);
 }
+/* Its end clears the notice stack while one shows (--corner-stack-room, corner-stack.css): a
+   spacer, not padding, since bottom padding would lift the mic that sticks to its bottom edge
+   (editor-mic.css) whenever a notice came. */
+.notes-editor-content::after { content: ''; display: block; height: var(--corner-stack-spacer, 0px); }
 
 .notes-editor-content .tiptap {
   min-height: calc(100vh - 200px);
@@ -30288,6 +30315,10 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   min-height: 0;
   padding: 0 4px;
 }
+/* Its rail and grid take the notice stack's room themselves (.cal-rail, .cal-grid-scroll): the
+   page area keeps its plain padding, so the calendar does not shrink while a notice shows, and the
+   room is not taken twice. */
+.app-content-area:has(> .cal-page) { padding-bottom: 24px; }
 
 /* --- toolbar -------------------------------------------------------------- */
 .cal-toolbar {
@@ -30482,7 +30513,11 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .cal-rail-scroll {
   flex: 1;
   overflow-y: auto;
+  /* Its end clears the notice stack while one shows (--corner-stack-room, corner-stack.css); the
+     hint line under it is overlapped by design. */
   padding: 0 8px 8px;
+  padding-bottom: max(8px, var(--corner-stack-room, 0px));
+  scrollbar-gutter: stable;
 }
 
 .cal-rail-group-label {
@@ -33034,7 +33069,11 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   min-width: 0;
   min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
 }
+/* An App's box is the page's scroller (its route fills the content area): the notice stack's room
+   after the App's own content (corner-stack-room.ts), a spacer so the App keeps its size. */
+.plugin-native-app::after { content: ''; display: block; height: var(--corner-stack-spacer, 0px); }
 
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .plugin-native-app {
