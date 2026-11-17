@@ -6,11 +6,12 @@
  * row stays with an open lock until the page closes, and a second click puts back exactly what the
  * first one took.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import type { SessionSlot } from '@/pages/sessionColumns';
 import { HOME_OFF_MAX, homeSlotKey, type OrgPin } from './org-side-columns';
 import { slotTask } from './org-task-tabs';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 
 interface Undone { pins: OrgPin[]; home: string[]; node?: string }
 
@@ -34,9 +35,9 @@ export function useKeptLockToggle({ tasks, locked, pins, setPins, homeLocks, hom
   useEffect(() => {
     setUndone((prev) => (locked.some((id) => prev.has(id)) ? new Map([...prev].filter(([id]) => !locked.includes(id))) : prev));
   }, [locked]);
-  const ofTask = useCallback((id: string, taskId: string) => slotTask(id, tasks)?.id === taskId, [tasks]);
+  const ofTask = useLeanCallback((id: string, taskId: string) => slotTask(id, tasks)?.id === taskId, [tasks]);
 
-  const toggle = useCallback((taskId: string) => {
+  const toggle = useLeanCallback((taskId: string) => {
     const mine = pins.filter((p) => ofTask(p.id, taskId));
     const home = homeLocks.filter((s) => s.locked && ofTask(s.id, taskId)).map((s) => homeSlotKey(s.id));
     if (mine.length || home.length) {
