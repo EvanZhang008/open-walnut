@@ -22,6 +22,12 @@ vi.mock('../../src/core/session-message-queue.js', async (importOriginal) => {
       sentTo.push({ sid, text })
       return (real.sendMessageToSession as (...a: unknown[]) => unknown)(sid, text, ...rest)
     }) as typeof real.sendMessageToSession,
+    // This file plays each session's CLI itself (drain, reports, asksAgain), so the server's runner
+    // takes no row here: otherwise every send woke the stand-in CLI (tests/setup/claude-stand-in.ts),
+    // which took the same queue and ran a turn of its own, and the result hung on which came first
+    // (2026-11-16: on a slow spawn its running turn read Working where the answered ask waits; on a
+    // fast one it took the user's message, and the note it carried, before the test read the queue).
+    markProcessing: (async () => []) as typeof real.markProcessing,
   }
 })
 
