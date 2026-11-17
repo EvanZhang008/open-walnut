@@ -8,12 +8,11 @@
  * A plugin that is a part of another (`slack-mcp` of Slack) has a page too, reached from
  * its parent's Parts, and says whose part it is.
  */
-import { useSyncExternalStore, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Config } from '@open-walnut/core'
 import { useAppCatalog, useAppPagePins } from '@/apps/hooks'
-import { appOnSidebar } from '@/apps/preferences'
-import { getAppPreferences, subscribeAppPreferences, updateAppOnSidebar, updateAppPinned } from '@/apps/store'
+import { updateAppOnSidebar, updateAppPinned } from '@/apps/store'
 import { SettingsGroup, SettingsLoadingRow, SettingsRow, SettingsTag } from '@/components/settings/SettingsSection'
 import { SettingsButton } from '@/components/settings/inputs/SettingsButton'
 import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch'
@@ -95,7 +94,8 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
 }) {
   const navigate = useNavigate()
   const catalog = useAppCatalog()
-  const preferences = useSyncExternalStore(subscribeAppPreferences, getAppPreferences, getAppPreferences)
+  // The switch reads the catalogue's own Sidebar list, so it can never disagree with the rail.
+  const onSidebar = new Set(catalog.sidebar.map((app) => app.key))
   const pagePins = useAppPagePins()
   const tints = pluginTileTints(store.rows)
   const parentOf = partParents(store.installed)
@@ -181,7 +181,7 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
   const appsSection = apps.length > 0 ? (
     <SettingsGroup heading={apps.length === 1 ? 'App' : 'Apps'} className="apps-detail-group" data-testid={`plugin-apps-${row.id}`}>
       {apps.map((app) => {
-        const shown = appOnSidebar(app, preferences)
+        const shown = onSidebar.has(app.key)
         return (
           <SettingsRow
             key={app.key}

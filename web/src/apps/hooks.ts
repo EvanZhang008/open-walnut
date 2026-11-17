@@ -12,6 +12,7 @@ import {
   tracksAppActivity,
   type ResolvedAppActivity,
   type ResolvedApps,
+  type SidebarDefault,
 } from './preferences'
 import {
   activePluginKey,
@@ -37,6 +38,15 @@ export interface AppCatalog extends ResolvedApps {
   findByRouteId(routeId: string): RegisteredApp | undefined
 }
 
+/**
+ * Where a plugin App the person never placed goes (preferences.ts `SidebarDefault`): only
+ * their own pin puts it on the Sidebar while open apps stay there (experiment apps_stay_open).
+ * Every surface that asks whether an App is on the Sidebar reads it from here.
+ */
+export function useSidebarDefault(): SidebarDefault {
+  return useExperimental('apps_stay_open') ? 'by-hand' : 'declared'
+}
+
 export function useAppCatalog(): AppCatalog {
   const registrySnapshot = useSyncExternalStore(
     appRegistry.subscribe,
@@ -52,20 +62,21 @@ export function useAppCatalog(): AppCatalog {
   // The plugin gate belongs HERE, not in a surface: Sidebar, the Settings "Manage" group and
   // the Command Palette all read this catalogue, so filtering once is what keeps them agreed.
   const activeKey = activePluginKey(useWebPluginRuntime())
+  const sidebarDefault = useSidebarDefault()
 
   return useMemo(() => {
     const combined = filterAppsByPlugin(
       [...registrySnapshot.apps, ...adaptWebviewApps(webviews.apps)],
       activeKey,
     ).sort((a, b) => a.order - b.order || a.key.localeCompare(b.key))
-    const resolved = resolveApps(combined, preferences)
+    const resolved = resolveApps(combined, preferences, sidebarDefault)
     return {
       ...resolved,
       loadingWebviews: webviews.loading,
       findByPath: (pathname: string) => findAppByPath(resolved.all, pathname),
       findByRouteId: (routeId: string) => findHostedAppByRouteId(resolved.all, routeId),
     }
-  }, [preferences, registrySnapshot, webviews.apps, webviews.loading, activeKey])
+  }, [preferences, registrySnapshot, webviews.apps, webviews.loading, activeKey, sidebarDefault])
 }
 
 /** The keys pinned on the Apps page, or null while the experiment `apps_stay_open` is off. */

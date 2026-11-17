@@ -241,6 +241,19 @@ export function activate() { throw new Error('tau web fixture fails on purpose')
 `)
 
 /**
+ * `rho` asks for a Sidebar row of its own (`placement: 'sidebar'`), as many real plugins do.
+ * While open apps stay on the Sidebar (experiment apps_stay_open) that must not pin it: only
+ * the person's own pin does (apps-page.spec.ts).
+ */
+await writeFixturePlugin('rho', { name: 'Rho', description: 'A plugin whose App asks for a sidebar row.', web: 'dist/web.mjs' })
+await fs.writeFile(path.join(tmpBase, 'plugins', 'rho', 'dist', 'web.mjs'), `
+export function activate(walnut) {
+  const h = globalThis.__WALNUT_PLUGIN_HOST__.React.createElement
+  walnut.ui.app({ id: 'main', title: 'Rho', placement: 'sidebar', component: () => h('main', { 'data-testid': 'rho-app' }, h('h1', null, 'Rho page')) })
+}
+`)
+
+/**
  * A plugin pack in a real git repo (one plugin per folder), the shape a team keeps its
  * own plugins in: what an install link points at. `file://` so nothing leaves the machine.
  */

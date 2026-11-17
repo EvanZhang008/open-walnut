@@ -146,26 +146,38 @@ export function setAppDisposition(
 /**
  * Whether the user may move this app's row at all.
  *
- * Only a native plugin App can be moved. Core screens ARE the Sidebar (their only
- * switch is pin / unpin, and Home, Apps and Settings are locked), and a legacy webview has no
- * placement concept to override. Enforced here rather than in the UI so a stale or
- * hand-edited override cannot do what the missing button wouldn't.
+ * Every plugin App can (native and webview). Core screens ARE the Sidebar (their only
+ * switch is pin / unpin, and Home, Apps and Settings are locked). Enforced here rather than
+ * in the UI so a stale or hand-edited override cannot do what the missing button wouldn't.
  */
 export function supportsPlacementOverride(app: Pick<RegisteredApp, 'kind'>): boolean {
-  return app.kind === 'native'
+  return app.kind !== 'core'
 }
 
 /**
- * WHERE the row actually goes: the user's override if they made one, else what the
- * app declared. Every consumer must ask this rather than reading `app.placement`,
+ * Where a plugin App goes when the person never placed it.
+ *
+ * - `'declared'` (today's rule): what the plugin declared, so a plugin that asks for
+ *   `placement: 'sidebar'` gets a row the moment it is installed.
+ * - `'by-hand'` (experiment apps_stay_open): off the Sidebar, whatever the plugin declared.
+ *   Only the person pins an App (the Apps page switch, the rail's Keep on sidebar), and until
+ *   then it keeps an Open row while it is open (resolveAppActivity). 2026-11-17: a newly
+ *   installed plugin's App showed up pinned on the rail with nobody having pinned it.
+ */
+export type SidebarDefault = 'declared' | 'by-hand'
+
+/**
+ * WHERE the row actually goes: the user's override if they made one, else the default
+ * `sidebarDefault` names. Every consumer must ask this rather than reading `app.placement`,
  * or the Sidebar and the Apps page's switch can disagree about the same row.
  */
 export function effectiveAppPlacement(
   app: Pick<RegisteredApp, 'key' | 'kind' | 'placement'>,
   preferences: AppPreferences,
+  sidebarDefault: SidebarDefault = 'declared',
 ): AppPlacement {
   if (!supportsPlacementOverride(app)) return app.placement
-  return preferences.placement[app.key] ?? app.placement
+  return preferences.placement[app.key] ?? (sidebarDefault === 'by-hand' ? 'settings' : app.placement)
 }
 
 /**
@@ -187,15 +199,17 @@ export function setAppPlacement(
 export function appOnSidebar(
   app: Pick<RegisteredApp, 'key' | 'kind' | 'placement' | 'lockVisibility'>,
   preferences: AppPreferences,
+  sidebarDefault: SidebarDefault = 'declared',
 ): boolean {
   if (app.lockVisibility) return true
   if (preferences.hidden.includes(app.key) || preferences.unpinned.includes(app.key)) return false
-  return effectiveAppPlacement(app, preferences) === 'sidebar'
+  return effectiveAppPlacement(app, preferences, sidebarDefault) === 'sidebar'
 }
 
 /**
  * The Apps page's one switch. On pins the App and, when it may be moved, places it on
- * the Sidebar (an App whose plugin declared `'settings'` would otherwise stay off). Off
+ * the Sidebar (an App whose plugin declared `'settings'`, or any plugin App under the
+ * `'by-hand'` default, would otherwise stay off). Off
  * unpins it: the App stays on the Apps page and in the Command Palette, and an older
  * window reads the same answer, since unpinned has always meant "not on the Sidebar".
  */
@@ -264,7 +278,7 @@ export function moveApp(
   return { ...preferences, order }
 }
 
-export function resolveApps(apps: RegisteredApp[], preferences: AppPreferences): ResolvedApps {
+export function resolveApps(apps: RegisteredApp[], preferences: AppPreferences, sidebarDefault: SidebarDefault = 'declared'): ResolvedApps {
   const defaultOrder = [...apps].sort((a, b) => a.order - b.order || a.key.localeCompare(b.key))
   const byKey = new Map(defaultOrder.map((app) => [app.key, app]))
   const all = mergedOrder(defaultOrder, preferences.order)
@@ -277,14 +291,14 @@ export function resolveApps(apps: RegisteredApp[], preferences: AppPreferences):
 
   const pinned = all.filter((app) => !isHidden(app) && !isUnpinned(app))
   const discoverable = all.filter((app) => !isHidden(app))
-  const offSidebar = (app: RegisteredApp) => effectiveAppPlacement(app, preferences) === 'settings'
 
   return {
     all,
     pinned,
     discoverable,
     hidden: all.filter(isHidden),
-    sidebar: pinned.filter((app) => !offSidebar(app)),
+    // The one Sidebar rule (appOnSidebar), never a second copy of it here.
+    sidebar: all.filter((app) => appOnSidebar(app, preferences, sidebarDefault)),
   }
 }
 

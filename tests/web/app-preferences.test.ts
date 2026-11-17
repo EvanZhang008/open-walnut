@@ -150,13 +150,16 @@ describe('App preferences', () => {
     }
   })
 
-  it('switches an App that cannot be moved by pin alone, and never writes it a placement', () => {
+  it('switches a legacy webview App like any plugin App, recording the person\'s pin as its placement', () => {
     const webview = { ...app('webview:legacy', 600), kind: 'webview' as const }
     const off = setAppOnSidebar(createAppPreferences(), webview, false)
     expect(appOnSidebar(webview, off)).toBe(false)
     const on = setAppOnSidebar(off, webview, true)
     expect(appOnSidebar(webview, on)).toBe(true)
-    expect(on.placement).toEqual({})
+    expect(on.placement).toEqual({ 'webview:legacy': 'sidebar' })
+    // The pin is what keeps it there when nothing but a pin may (the 'by-hand' default).
+    expect(appOnSidebar(webview, on, 'by-hand')).toBe(true)
+    expect(appOnSidebar(webview, off, 'by-hand')).toBe(false)
   })
 
   it('makes a placement of sidebar show an unpinned App there, and leaves a hidden one hidden', () => {
@@ -183,13 +186,13 @@ describe('App preferences', () => {
     expect(resolved.hidden.map((item) => item.key)).toEqual(['plugin-a:main'])
   })
 
-  it('ignores a placement override for Apps that cannot honour one', () => {
+  it('ignores a placement override for core apps, and honours one for every plugin App', () => {
     const webview = { ...app('webview:legacy', 600), kind: 'webview' as const }
     const catalog = [...apps, webview]
     let preferences = setAppPlacement(createAppPreferences(), 'core:tasks', 'settings')
     preferences = setAppPlacement(preferences, 'webview:legacy', 'settings')
 
-    expect(supportsPlacementOverride(webview)).toBe(false)
+    expect(supportsPlacementOverride(webview)).toBe(true)
     expect(supportsPlacementOverride(app('core:tasks', 20))).toBe(false)
     expect(supportsPlacementOverride(app('plugin-a:main', 30))).toBe(true)
 
@@ -197,7 +200,6 @@ describe('App preferences', () => {
       'core:home',
       'core:tasks',
       'plugin-a:main',
-      'webview:legacy',
       'core:settings',
     ])
   })

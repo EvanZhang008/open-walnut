@@ -26,9 +26,13 @@ import {
   resolveApps,
   setAppDisposition,
   setAppPinned,
+  setAppOnSidebar,
   tracksAppActivity,
   type AppDisposition,
+  type SidebarDefault,
 } from '../../web/src/apps/preferences.js'
+
+const SIDEBAR_DEFAULTS: SidebarDefault[] = ['declared', 'by-hand']
 import { EXPERIMENTAL_FEATURES, experimentalEnabled } from '../../src/core/experimental.js'
 import { syncable } from '../../web/src/utils/ui-prefs-sync.js'
 
@@ -357,23 +361,25 @@ describe('every opened app keeps a Sidebar row after the person switches away', 
   const KINDS: RegisteredApp['kind'][] = ['core', 'native', 'webview']
   const DISPOSITIONS = ['pinned', 'unpinned', 'hidden'] as const
   const OVERRIDES: Array<AppPlacement | undefined> = [undefined, ...(['sidebar', 'settings'] as AppPlacement[])]
-  const cases: Array<{ name: string; item: RegisteredApp; disposition: typeof DISPOSITIONS[number]; override?: AppPlacement }> = []
-  for (const kind of KINDS) {
-    for (const placement of ['sidebar', 'settings'] as AppPlacement[]) {
-      for (const disposition of DISPOSITIONS) {
-        for (const override of OVERRIDES) {
-          const item = { ...app(`${kind}-x:main`, 600, { placement }), kind }
-          cases.push({ name: `${kind} declared ${placement}, ${disposition}, override ${override ?? 'none'}`, item, disposition, override })
+  const cases: Array<{ name: string; item: RegisteredApp; disposition: typeof DISPOSITIONS[number]; override?: AppPlacement; sidebarDefault: SidebarDefault }> = []
+  for (const sidebarDefault of SIDEBAR_DEFAULTS) {
+    for (const kind of KINDS) {
+      for (const placement of ['sidebar', 'settings'] as AppPlacement[]) {
+        for (const disposition of DISPOSITIONS) {
+          for (const override of OVERRIDES) {
+            const item = { ...app(`${kind}-x:main`, 600, { placement }), kind }
+            cases.push({ name: `${sidebarDefault}: ${kind} declared ${placement}, ${disposition}, override ${override ?? 'none'}`, item, disposition, override, sidebarDefault })
+          }
         }
       }
     }
   }
 
-  it.each(cases)('$name', ({ item, disposition, override }) => {
+  it.each(cases)('$name', ({ item, disposition, override, sidebarDefault }) => {
     let preferences = setAppDisposition(createAppPreferences(), item.key, disposition)
     if (override) preferences = { ...preferences, placement: { ...preferences.placement, [item.key]: override } }
     const catalog = [...CATALOG, item]
-    const resolved = resolveApps(catalog, preferences)
+    const resolved = resolveApps(catalog, preferences, sidebarDefault)
     // Opened, then the person went Home: the route that recorded it is gone.
     const activity = openAppActivity(openAppActivity(createAppActivity(), item.key), HOME.key)
     const view = resolveAppActivity(activity, NO_PINS, resolved)
@@ -384,6 +390,43 @@ describe('every opened app keeps a Sidebar row after the person switches away', 
   it('covers every disposition the store knows', () => {
     const known: AppDisposition[] = ['pinned', 'unpinned', 'hidden']
     expect([...DISPOSITIONS].sort()).toEqual([...known].sort())
+  })
+})
+
+/**
+ * Only the person pins an App (experiment apps_stay_open, the 'by-hand' default): no plugin
+ * App is on the Sidebar because its plugin declared `placement: 'sidebar'`, because it was
+ * just installed, or because of any default. Enumerated over every plugin kind, declared
+ * placement and disposition, so a new one that pins by itself fails here.
+ */
+describe('no plugin App is pinned on the Sidebar unless the person pinned it', () => {
+  const PLUGIN_KINDS: RegisteredApp['kind'][] = ['native', 'webview']
+  const cases: Array<{ name: string; item: RegisteredApp; disposition: AppDisposition }> = []
+  for (const kind of PLUGIN_KINDS) {
+    for (const placement of ['sidebar', 'settings'] as AppPlacement[]) {
+      for (const disposition of ['pinned', 'unpinned', 'hidden'] as AppDisposition[]) {
+        cases.push({ name: `${kind} declared ${placement}, ${disposition}`, item: { ...app(`${kind}-y:main`, 600, { placement }), kind }, disposition })
+      }
+    }
+  }
+
+  it.each(cases)('$name: not pinned until the person pins it', ({ item, disposition }) => {
+    const preferences = setAppDisposition(createAppPreferences(), item.key, disposition)
+    expect(keys(resolveApps([...CATALOG, item], preferences, 'by-hand').sidebar)).not.toContain(item.key)
+    // The person's pin (the Apps page switch, the rail's Keep on sidebar) is what pins it.
+    const pinned = setAppOnSidebar(preferences, item, true)
+    expect(keys(resolveApps([...CATALOG, item], pinned, 'by-hand').sidebar)).toContain(item.key)
+    // Unpinned again by the person: off again.
+    expect(keys(resolveApps([...CATALOG, item], setAppOnSidebar(pinned, item, false), 'by-hand').sidebar)).not.toContain(item.key)
+  })
+
+  it('leaves the built-in screens where they are: they are the Sidebar, never installed', () => {
+    expect(keys(resolveApps(CATALOG, createAppPreferences(), 'by-hand').sidebar)).toEqual([HOME.key, NOTES.key, APPS.key, SETTINGS.key])
+  })
+
+  it('keeps today\'s rail while the experiment is off: a declared sidebar App has its row', () => {
+    const declared = app('decl:main', 600, { placement: 'sidebar' })
+    expect(keys(resolveApps([...CATALOG, declared], createAppPreferences(), 'declared').sidebar)).toContain(declared.key)
   })
 })
 
@@ -409,6 +452,25 @@ describe('who may hide an app', () => {
   it('calls hideApp only from the Sidebar menu', () => {
     const callers = sources.filter(({ rel, text }) => !OWNERS.has(rel) && /\bhideApp\(/.test(text)).map(({ rel }) => rel)
     expect(callers).toEqual(['components/layout/Sidebar.tsx'])
+  })
+
+  it('pins an App on the Sidebar only from a person\'s click: the rail\'s Keep on sidebar and the Apps page switch', () => {
+    const callers = sources
+      .filter(({ rel, text }) => !OWNERS.has(rel) && /\b(?:updateAppOnSidebar|keepAppOnSidebar|setAppOnSidebar|setAppPlacement)\b/.test(text))
+      .map(({ rel }) => rel)
+    expect(callers.sort()).toEqual(['components/apps-page/PluginDetail.tsx', 'components/layout/Sidebar.tsx'])
+    expect(sources.filter(({ rel, text }) => !OWNERS.has(rel) && /\bplacement:\s*\{\s*\.\.\./.test(text)).map(({ rel }) => rel)).toEqual([])
+  })
+
+  it('asks every Sidebar question with the one default, so no surface disagrees with the rail', () => {
+    const offenders: string[] = []
+    for (const { rel, text } of sources) {
+      if (OWNERS.has(rel)) continue
+      for (const call of text.matchAll(/\b(?:resolveApps|appOnSidebar|effectiveAppPlacement)\(([^()]*)\)/g)) {
+        if (call[1].split(',').length < 3) offenders.push(`${rel}: ${call[0]}`)
+      }
+    }
+    expect(offenders).toEqual([])
   })
 
   it('names pinned or unpinned outright in every other disposition write', () => {

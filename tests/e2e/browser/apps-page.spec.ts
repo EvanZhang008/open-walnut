@@ -654,6 +654,68 @@ test('every App the person opened keeps a Sidebar row after they leave it, a hid
   }
 })
 
+/**
+ * While open apps stay on the Sidebar, only the person pins an App: Rho asks for a Sidebar
+ * row (`placement: 'sidebar'`, plugin-store-server.ts) and still has none until its switch is
+ * turned on. Every installed App is checked: none sits in the pinned rows above the Open
+ * group by itself, and each one opened lands under Open. With the experiment off, Rho's own
+ * request gives it its row as before.
+ */
+test('no installed App is pinned on the Sidebar until the person pins it', async ({ page }) => {
+  const RHO = 'rho:main'
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  await isolateUiPrefs(page)
+  await setAppsStayOpen(page, true)
+  // The rows above the Open group: what is pinned there.
+  const pinnedPluginRows = page.locator('.sidebar-nav > a[data-app-kind="native"], .sidebar-nav > a[data-app-kind="webview"]')
+  try {
+    await home(page)
+    await expect(page.getByTestId('sidebar-core-app-home')).toBeVisible()
+    await expect(pinnedPluginRows).toHaveCount(0)
+
+    // Every installed App, opened and left: under Open, never pinned.
+    await openApps(page)
+    const cards = await page.locator('[data-testid^="plugin-card-open-"]').evaluateAll(
+      (nodes) => nodes.map((node) => node.getAttribute('data-testid')!),
+    )
+    expect(cards).toContain('plugin-card-open-rho')
+    for (const card of cards) {
+      await openApps(page)
+      await page.getByTestId(card).click()
+      await expect(page).toHaveURL(/\/apps\/[^/]+/)
+      await page.getByTestId('sidebar-core-app-home').click()
+      await expect(page).toHaveURL(/\/$/)
+      await expect(pinnedPluginRows, `${card} is not pinned by opening it`).toHaveCount(0)
+    }
+    await expect(page.getByTestId(`sidebar-open-app-${RHO}`)).toBeVisible()
+
+    // The person pins Rho with its switch: now it is pinned, and out of Open.
+    await openApps(page)
+    await openPluginDetail(page, 'rho')
+    const toggle = page.getByTestId(`apps-app-toggle-${RHO}`)
+    await expect(page.getByTestId(`apps-app-${RHO}`)).toHaveAttribute('data-shown', 'false')
+    await toggle.click()
+    await expect(page.getByTestId(`apps-app-${RHO}`)).toHaveAttribute('data-shown', 'true')
+    await expect(page.locator(`.sidebar-nav > [data-testid="sidebar-app-${RHO}"]`)).toBeVisible()
+    await expect(page.getByTestId(`sidebar-open-app-${RHO}`)).toHaveCount(0)
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('open-walnut-app-preferences-v1') ?? '{}'))
+    expect(stored.placement[RHO]).toBe('sidebar')
+    // Off again by the person: unpinned.
+    await toggle.click()
+    await expect(page.locator(`.sidebar-nav > [data-testid="sidebar-app-${RHO}"]`)).toHaveCount(0)
+
+    // Experiment off: Rho's own request gives it its row, as before.
+    await page.evaluate(() => localStorage.removeItem('open-walnut-app-preferences-v1'))
+    await setAppsStayOpen(page, false)
+    await page.reload()
+    await expect(page.locator(`.sidebar-nav > [data-testid="sidebar-app-${RHO}"]`)).toBeVisible({ timeout: 60_000 })
+    expect(pageErrors).toEqual([])
+  } finally {
+    await setAppsStayOpen(page, false)
+  }
+})
+
 test('a corrupt or stale open-apps record never breaks the rail or the Apps page', async ({ page }) => {
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))

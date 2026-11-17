@@ -27,7 +27,7 @@ export const EXPERIMENTAL_FEATURES = [
   {
     id: 'apps_stay_open',
     name: 'Open apps stay on the sidebar',
-    description: 'An app you open keeps a row on the sidebar until you close it, wherever you go next. The Apps page shows the apps you used recently and the ones you pinned there, to open again in one click.',
+    description: 'An app you open keeps a row on the sidebar until you close it, wherever you go next. A plugin app is pinned on the sidebar only when you pin it, never by itself when it is installed. The Apps page shows the apps you used recently and the ones you pinned there, to open again in one click.',
     default: false,
   },
   {

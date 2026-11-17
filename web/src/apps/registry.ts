@@ -77,8 +77,9 @@ export interface RegisteredApp {
   order: number
   fullBleed: boolean
   /**
-   * The app's DECLARED placement, i.e. the default. The user can override it per app,
-   * so read `effectiveAppPlacement(app, preferences)` instead of this field anywhere
+   * The app's DECLARED placement, the default while the person never placed it (and only
+   * while open apps do not stay on the Sidebar: see `SidebarDefault`). The user can override it per app,
+   * so read `effectiveAppPlacement(app, preferences, sidebarDefault)` instead of this field anywhere
    * the answer decides what a surface renders.
    */
   placement: AppPlacement
