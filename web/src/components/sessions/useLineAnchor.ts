@@ -173,7 +173,7 @@ export function useLineAnchor({ containerRef, isAtBottom, shown, selectionActive
         return;
       }
       // A follow read before another writer took the box off the end is stale (followsAtResize).
-      const follows = followsAtResize({ following, atBottom: isAtBottom.current, clamped, top, topAtRead, offEnd: offEnd() });
+      const follows = followsAtResize({ following, atBottom: isAtBottom.current, clamped, offEnd: offEnd() });
       if (follows) {
         if (widthChanged && !selectionActive()) chase(() => { el.scrollTop = el.scrollHeight; isAtBottom.current = true; });
         else readSoon(); // a height change alone: Path B-2 owns it

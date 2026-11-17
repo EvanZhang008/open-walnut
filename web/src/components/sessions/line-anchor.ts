@@ -191,11 +191,14 @@ export function lineAnchorDrift(el: HTMLElement, a: LineAnchor): number | null {
  * scroll of a shrink's clamp to the end before the ResizeObserver, and the follow
  * paths take that clamp for the reader arriving there, so a box that did not follow
  * keeps its line (`clamped`). A follow read before another writer took the box off
- * the end since (a kept reading place restored in a box that just mounted, before
- * its first read) is stale: that place stands. A box mounts following, and its size
- * settles a frame or two after its page is shown (Main moving into Tree Mode's left
- * page, a reload): in WebKit that resize came before the first read, and the stale
- * follow sent every such box to its end (2026-11-16, session-reading-place.spec.ts).
+ * the end since is stale: that writer's place stands. The follow paths' own state
+ * says so (`atBottom` false while the box is off its end and the resize did not
+ * clamp it); a rewrap alone changes no scrollTop and fires no scroll, so it never
+ * clears that state. Never judged by scrollTop: a kept place restored in a box that
+ * just mounted (2026-11-16, WebKit) moves it, but a restore and then the question
+ * page's landing put it at 349 and back to 0 before any read, the very scrollTop of
+ * the stale read (2026-11-17, a reload in session-reading-place.spec.ts: question 1
+ * went to its end when its box narrowed into the right page).
  */
 export function followsAtResize(s: {
   /** The box followed its end at the last read. */
@@ -204,12 +207,9 @@ export function followsAtResize(s: {
   atBottom: boolean;
   /** The resize only lowered scrollTop to the new maximum. */
   clamped: boolean;
-  /** scrollTop now and at the last read. */
-  top: number;
-  topAtRead: number;
   /** The box is more than 2px from its end now. */
   offEnd: boolean;
 }): boolean {
-  const leftEnd = s.following && !s.atBottom && !s.clamped && Math.abs(s.top - s.topAtRead) > 1 && s.offEnd;
+  const leftEnd = s.following && !s.atBottom && !s.clamped && s.offEnd;
   return !leftEnd && (s.following || (s.atBottom && !s.clamped));
 }

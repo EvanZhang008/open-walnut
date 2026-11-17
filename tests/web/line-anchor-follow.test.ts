@@ -16,36 +16,42 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { followsAtResize } from '@/components/sessions/line-anchor'
 
-const base = { following: false, atBottom: false, clamped: false, top: 0, topAtRead: 0, offEnd: true }
+const base = { following: false, atBottom: false, clamped: false, offEnd: true }
 
 describe('followsAtResize', () => {
   it('a kept place restored before the first read stands: the stale follow does not send the box to its end', () => {
-    // Mounted following at scrollTop 0, then the place put it at 294 of 6034.
-    expect(followsAtResize({ ...base, following: true, atBottom: false, top: 294, topAtRead: 0, offEnd: true })).toBe(false)
+    // Mounted following at scrollTop 0, then the place put it at 294 of 6034 (2026-11-16). Or
+    // the place put it at 349 and the question page's landing back at 0 before any read, the
+    // scrollTop of the stale read (2026-11-17, a reload): only the follow paths' state tells.
+    expect(followsAtResize({ ...base, following: true, atBottom: false, offEnd: true })).toBe(false)
+  })
+
+  it('a following box a narrower width rewrapped off its end still follows (nothing cleared the follow)', () => {
+    expect(followsAtResize({ ...base, following: true, atBottom: true, offEnd: true })).toBe(true)
   })
 
   it('a box that followed and still sits at its end keeps following (a rewrap goes to the new end)', () => {
-    expect(followsAtResize({ ...base, following: true, atBottom: true, top: 5000, topAtRead: 5000, offEnd: false })).toBe(true)
+    expect(followsAtResize({ ...base, following: true, atBottom: true, offEnd: false })).toBe(true)
   })
 
   it('a follow path that moved the box to its new end keeps it following', () => {
-    expect(followsAtResize({ ...base, following: true, atBottom: true, top: 5400, topAtRead: 5000, offEnd: false })).toBe(true)
+    expect(followsAtResize({ ...base, following: true, atBottom: true, offEnd: false })).toBe(true)
   })
 
   it('a following box the resize only clamped stays following (WebKit dispatches the clamp first)', () => {
-    expect(followsAtResize({ ...base, following: true, atBottom: false, clamped: true, top: 4800, topAtRead: 5000, offEnd: false })).toBe(true)
+    expect(followsAtResize({ ...base, following: true, atBottom: false, clamped: true, offEnd: false })).toBe(true)
   })
 
   it('a box that did not follow is not made to follow by the clamp\'s echo', () => {
-    expect(followsAtResize({ ...base, following: false, atBottom: true, clamped: true, top: 4800, topAtRead: 5000, offEnd: false })).toBe(false)
+    expect(followsAtResize({ ...base, following: false, atBottom: true, clamped: true, offEnd: false })).toBe(false)
   })
 
   it('a box set to follow since its read with no scroll (End at the end) follows', () => {
-    expect(followsAtResize({ ...base, following: false, atBottom: true, top: 5000, topAtRead: 5000, offEnd: false })).toBe(true)
+    expect(followsAtResize({ ...base, following: false, atBottom: true, offEnd: false })).toBe(true)
   })
 
   it('a box mid-history that nobody moved does not follow', () => {
-    expect(followsAtResize({ ...base, top: 1200, topAtRead: 1200 })).toBe(false)
+    expect(followsAtResize({ ...base })).toBe(false)
   })
 })
 
