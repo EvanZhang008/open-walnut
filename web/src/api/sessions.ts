@@ -1,5 +1,6 @@
 import { INITIAL_HISTORY_TURNS } from '@open-walnut/history-turn-window';
 import { apiGet, apiPatch, apiPost, apiPut, ApiError, fetchLaneRaised, type FetchLane } from './client';
+import { readSessionRecord, type SessionRecordReadOptions } from './session-record-read';
 import type { SessionSummary, SessionRecord, SessionEffort, SessionModelCatalogEntry, SessionEngine, SessionCronMetadata, Task } from '@open-walnut/core';
 import type { ImageAttachment } from './chat';
 import type { SessionHistoryMessage } from '@/types/session';
@@ -680,16 +681,17 @@ export function peekSessionRecord(sessionId: string): SessionRecord | null {
 }
 
 /**
- * `lane`: the read a shown chat's open makes takes the connection kept for what the person waits
- * on, as its first-screen history does (api/client.ts INTERACTIVE_RESERVED). The record draws the
- * header, the mode and model and the note band over those rows; left in the shared queue it came
- * up to 0.7 s after them behind the boot's reads (2026-11-17), so the note band and the title
- * popped in under a chat already drawn. Its owner may raise the lane while it waits.
+ * The session's record, through the one shared read of it (session-record-read.ts). `lane`: the
+ * read a shown chat's open makes takes the connection kept for what the person waits on, as its
+ * first-screen history does (api/client.ts INTERACTIVE_RESERVED). The record draws the header, the
+ * mode and model and the note band over those rows; left in the shared queue it came up to 0.7 s
+ * after them behind the boot's reads (2026-11-17), so the note band and the title popped in under
+ * a chat already drawn. `signal`: the caller stops waiting (a panel that moved to another session).
  */
-export async function fetchSession(sessionId: string, opts?: { lane?: FetchLane }): Promise<SessionRecord | null> {
+export async function fetchSession(sessionId: string, opts?: Pick<SessionRecordReadOptions, 'lane' | 'signal'>): Promise<SessionRecord | null> {
   const cronGeneration = sessionStatusStore.getCronRequestGeneration();
   try {
-    const res = await apiGet<{ session: SessionRecord; cron?: SessionCronMetadata | null }>(`/api/sessions/${sessionId}`, undefined, opts);
+    const res = await readSessionRecord(sessionId, opts);
     if (res.cron && cronGeneration === sessionStatusStore.getCronRequestGeneration()) sessionStatusStore.applyCron(res.cron, 'rest:session');
     seedSessionStatus(res.session, 'rest:session');
     seedSessionTitle(res.session);
@@ -697,6 +699,8 @@ export async function fetchSession(sessionId: string, opts?: { lane?: FetchLane 
     return res.session;
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) { lastRecords.delete(sessionId); return null; }
+    // The caller stopped waiting (its signal): nothing failed.
+    if (err instanceof DOMException && err.name === 'AbortError' && opts?.signal?.aborted) throw err;
     log.warn('session', 'fetchSession failed (transient — NOT treating as missing)', {
       sessionId,
       error: String(err),

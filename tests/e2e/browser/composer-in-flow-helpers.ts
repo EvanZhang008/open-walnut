@@ -114,12 +114,15 @@ export type Geometry = {
 const NOTE_BAND = 'note band (top of the input card)';
 const INPUT_CARD = 'input card';
 
-/** Measured in the frame the browser paints next, after that frame's pins (the load window's
- *  per-frame bottom pin runs in requestAnimationFrame): a read between two tasks can see a commit
- *  the next pin closes before anything is drawn. Measured 2026-11-17 on a cold WebKit load: right
- *  after the end check, a commit that drew one more row read a 90px gap and the newest row under
- *  the composer, closed again 0.1 s later, while the page's next frame came 0.85 s after it, so no
- *  frame ever showed it. What a reader sees is what is checked. */
+/** Measured inside an animation frame, after that frame's own pins, which is what the frame then
+ *  paints: SessionChatHistory's load-window pin (Path A-3) runs in requestAnimationFrame every frame
+ *  until the load settles and closes any gap before paint, and a callback registered from a task
+ *  runs after it (callbacks run in the order they were registered, and the pin re-registers in its
+ *  own callback). A read between two tasks is not a frame: 2026-11-17, a cold WebKit load, a commit
+ *  of the full read's rows left a 90px gap for one task; an instrumented run (every frame sampled,
+ *  every scrollTop write logged with its caller) showed it closed by that pin or by a layout effect
+ *  in the same frame, and no frame ever drawn with a gap. `maxGapOverFrames` below holds that line:
+ *  every frame of a window, not one read. */
 export async function geometry(panel: Locator): Promise<Geometry> {
   return panel.evaluate(async (p, { noteBand, inputCard }) => {
     await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
@@ -156,12 +159,29 @@ export async function geometry(panel: Locator): Promise<Geometry> {
   }, { noteBand: NOTE_BAND, inputCard: INPUT_CARD });
 }
 
+/** The largest gap under the newest row over `frames` animation frames, each read after that
+ *  frame's pins (see geometry): a gap any drawn frame shows counts. */
+export async function maxGapOverFrames(panel: Locator, frames = 30): Promise<number> {
+  return panel.evaluate(async (p, n) => {
+    const hist = p.querySelector<HTMLElement>('.session-history')!;
+    let max = 0;
+    for (let i = 0; i < n; i++) {
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      max = Math.max(max, hist.scrollHeight - hist.scrollTop - hist.clientHeight);
+    }
+    return max;
+  }, frames);
+}
+
 export async function expectAtEnd(panel: Locator): Promise<void> {
   await expect.poll(async () => (await geometry(panel)).gap, { timeout: 10_000 }).toBeLessThanOrEqual(1);
 }
 
 /** Row 1 of the matrix: the box the scrollbar is drawn along ends at the composer. */
 export async function expectScrollerEndsAtComposer(panel: Locator): Promise<Geometry> {
+  // Every frame of the window stays at the end, not only the one read below (the load may still
+  // be drawing its full read into the transcript).
+  expect(await maxGapOverFrames(panel), 'no frame shows a gap under the newest row').toBeLessThanOrEqual(1);
   const g = await geometry(panel);
   expect(g.composerPosition, 'the composer is a flow sibling, not an overlay').not.toBe('absolute');
   expect(Math.abs(g.scrollerBottom - g.composerTop), `scroller bottom ${g.scrollerBottom} vs composer top ${g.composerTop}`).toBeLessThanOrEqual(1);

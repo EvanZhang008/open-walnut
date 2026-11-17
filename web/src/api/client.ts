@@ -47,7 +47,13 @@ type FetchPriority = 'interactive' | 'urgent' | 'normal' | 'low';
 
 /** A read's claim to the kept slot, which its owner may raise while it waits (a read the person
  *  now waits on joined it: api/sessions.ts coalescing); `fetchLaneRaised()` then looks again. */
-export interface FetchLane { interactive: boolean }
+export interface FetchLane {
+  interactive: boolean;
+  /** Waits for the kept slot behind the first screens waiting for it: a chat's record (its header
+   *  and note band) draws over rows that come first. Four Home columns opened at once put four
+   *  record reads ahead of four first-screen reads and drew the rows about 1 s later (2026-11-17). */
+  yields?: boolean;
+}
 
 interface FetchAdmission {
   deadline: number;
@@ -130,9 +136,10 @@ function pumpFetchQueue(): void {
       break;
     }
   }
-  // The kept slot: the first waiting read the person waits on.
+  // The kept slot: the first waiting read the person waits on, first screens before what yields.
   while (keptSlotFree()) {
-    const interactive = eligibleIndex(fetchQueue, true);
+    const first = fetchQueue.findIndex((entry) => (!entry.read || !readsSuspended()) && entry.lane.interactive && !entry.lane.yields);
+    const interactive = first >= 0 ? first : eligibleIndex(fetchQueue, true);
     if (interactive < 0) break;
     startQueued(fetchQueue.splice(interactive, 1)[0], false);
   }

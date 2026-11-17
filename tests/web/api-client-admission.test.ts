@@ -732,6 +732,30 @@ describe('fetch admission control', () => {
       await Promise.all([...hold, ahead, read]);
     });
 
+    it('a first screen waiting for the reserved slot goes before a read that yields, whichever came first', async () => {
+      const hold = Array.from({ length: SHARED_FETCH_SLOTS }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
+      const busy = interactive('/api/chat/busy').catch(() => {});
+      await tick();
+      // A chat's record (it yields) queues first, then a first screen.
+      const record = apiGet('/api/sessions/a', undefined, { lane: { interactive: true, yields: true } }).catch(() => {});
+      const screen = interactive('/api/chat/first-screen').catch(() => {});
+      await tick();
+      expect(urls()).not.toContain('/api/sessions/a');
+      expect(urls()).not.toContain('/api/chat/first-screen');
+
+      release('/api/chat/busy');
+      await tick();
+      expect(urls()[SHARED_FETCH_SLOTS + 1]).toBe('/api/chat/first-screen');
+      expect(urls()).not.toContain('/api/sessions/a');
+      release('/api/chat/first-screen');
+      await tick();
+      expect(urls()[SHARED_FETCH_SLOTS + 2], 'the record follows once no first screen waits').toBe('/api/sessions/a');
+
+      for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+      await tick();
+      await Promise.all([...hold, busy, record, screen]);
+    });
+
     it('aborting a queued interactive GET removes it and leaks no slot', async () => {
       const hold = Array.from({ length: SHARED_FETCH_SLOTS }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
       const first = interactive('/api/chat/a').catch(() => {});

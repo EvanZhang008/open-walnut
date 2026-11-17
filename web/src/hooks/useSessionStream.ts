@@ -35,6 +35,8 @@ import {
 import { splitPendingMarkup } from '@open-walnut/pending-markup';
 import { useSessionStatus } from './useSessionStatus';
 import { seedSessionStatus } from '@/stores/session-status-store';
+import { readSessionRecord, type SessionRecordAnswer } from '@/api/session-record-read';
+import { ApiError } from '@/api/api-error';
 
 // Block types + accumulation semantics live in stream-reducer — the SINGLE copy
 // shared with session-cache (formerly three divergent mirrors). Re-exported so
@@ -212,27 +214,15 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
   // so the subscribe effect and the resync listener below share one copy.
   const blocksNowRef = useRef(blocks);
   blocksNowRef.current = blocks;
+  // It is the panel's own record read (session-record-read.ts): one request per session for both,
+  // through the connection gate. `fresh`: the answer comes from a request sent after this call,
+  // so it postdates the subscribe it follows and the resync's "already pending" set. A resync is
+  // the person back in front (C62's 2 s budget): it takes the kept connection.
   const refetchPendingRef = useRef((sessionId: string, knownAtStart: Set<string> | null): void => {
-    fetch(`/api/sessions/${sessionId}`)
-      .then(r => {
-        if (r.ok) return r.json()
-        // Release a refused answer (a 404 for a session that is gone): Chromium
-        // keeps a response whose body is never read open, so the request never
-        // finishes and holds its connection until the page is collected.
-        void r.body?.cancel().catch(() => {})
-        return null
-      })
-      .then((data: {
-        session?: unknown;
-        pendingPermissions?: Array<{
-          requestId: string;
-          toolName?: string;
-          input?: Record<string, unknown>;
-          reason?: string;
-          acpOptions?: Array<{ optionId?: string; kind?: string; name?: string; detail?: string; takesNote?: boolean; savedTo?: string }>;
-          toolUseId?: string;
-        }>;
-      } | null) => {
+    readSessionRecord(sessionId, { fresh: true, ...(knownAtStart ? { lane: { interactive: true } } : {}) })
+      // A refused answer (a 404 for a session that is gone) reads as "nothing pending", as before.
+      .catch((err: unknown) => { if (err instanceof ApiError) return null; throw err; })
+      .then((data: SessionRecordAnswer | null) => {
         if (activeSessionId.current !== sessionId) return;
         if (data?.session) seedSessionStatus(data.session, 'rest:session');
         const perms = data?.pendingPermissions ?? [];

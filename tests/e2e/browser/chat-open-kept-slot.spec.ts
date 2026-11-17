@@ -12,8 +12,10 @@
  * The class is every read the open's first screen draws from, not only its rows: the session record
  * draws the header, the mode and model and the note band over them. 2026-11-17 (composer-in-flow,
  * WebKit): the rows took the kept slot and the record waited behind the boot's forty queued reads,
- * so the chat was drawn with no note band and the band popped in 0.7 s later. Both reads go out
- * within the same window here.
+ * so the chat was drawn with no note band and the band popped in 0.7 s later. So when the rows show,
+ * no read of this chat may still wait in the client's queue, except the ones named in MAY_WAIT,
+ * each with the reason it is not part of the first screen. A new read of the open lands here red
+ * until it takes the kept slot or earns a line there.
  */
 import { expect, test } from '@playwright/test'
 import { loadHome } from './draft-helpers'
@@ -23,6 +25,19 @@ import { openBeside } from './org-view-helpers'
 const SID = 'pw-history-turns-session'
 const TASK = 'pw-task-history-turns'
 
+/** Reads of this chat that may wait for a shared connection: none draws the first screen (its
+ *  rows, the header, the composer and its note band). Measured 2026-11-17 on this fixture. */
+const MAY_WAIT: Array<[RegExp, string]> = [
+  [/^GET \/api\/sessions\/[^/?]+\/history\?(?!.*source=streams)/, 'the full read: it replaces rows the first screen already drew'],
+  [/^GET \/api\/sessions\/[^/?]+\/permission-decisions$/, 'the answer lines under past tool prompts: notes on rows already drawn'],
+  [/^GET \/api\/usage\/sessions\//, 'the cost and budget figures of the usage dialog and pill'],
+  [/^GET \/api\/sessions\/[^/?]+\/supervision$/, 'the supervision bar, shown only for a supervised session'],
+  [/^GET \/api\/sessions\/[^/?]+\/workflow$/, 'workflow progress, a low-priority read by design'],
+  [/^GET \/api\/sessions\/[^/?]+\/slash-commands/, 'the "/" palette, read before it is opened, low priority'],
+  [/^GET \/api\/sessions\/[^/?]+\/servers$/, 'the dev servers the session started'],
+  [/^GET \/api\/sessions\/git-status\?/, 'the git glance chip'],
+]
+
 test('a chat opened while every shared connection is busy reads its first screen at once', async ({ page }) => {
   test.setTimeout(90_000)
   await page.route('**/api/held-read/**', async (route) => {
@@ -30,14 +45,6 @@ test('a chat opened while every shared connection is busy reads its first screen
     await route.fulfill({ json: {} }).catch(() => undefined)
   })
   let firstScreenAt = 0
-  // The record read the panel draws from goes through the app's request client, which marks every
-  // request it sends as JSON; the stream's own raw read of the same URL (pending prompts,
-  // useSessionStream) skips the client's queue and carries no such header, so it is not counted.
-  let recordAt = 0
-  await page.route(`**/api/sessions/${SID}`, async (route) => {
-    if (!recordAt && route.request().headers()['content-type'] === 'application/json') recordAt = Date.now()
-    await route.fallback()
-  })
   await page.route(`**/api/sessions/${SID}/history**`, async (route) => {
     const streams = new URL(route.request().url()).searchParams.get('source') === 'streams'
     if (streams && !firstScreenAt) firstScreenAt = Date.now()
@@ -61,15 +68,14 @@ test('a chat opened while every shared connection is busy reads its first screen
   expect(stats.queued, 'reads wait behind them').toBeGreaterThan(0)
   // Only the read the open makes counts (the Home page may have read this chat before).
   firstScreenAt = 0
-  recordAt = 0
   const openedAt = Date.now()
   await openBeside(page, `task:${TASK}`)
   await expect(page.getByTestId('org-side').getByText('The kept slot answer is here.').first()).toBeVisible({ timeout: 10_000 })
   expect(firstScreenAt, 'the first-screen read went out').toBeGreaterThan(0)
   expect(firstScreenAt, 'the first-screen read went out after the open').toBeGreaterThanOrEqual(openedAt)
   expect(firstScreenAt - openedAt, 'the first-screen read did not wait for the slow reads').toBeLessThan(5_000)
-  // The record the header and the note band draw from comes with those rows, not after the slow reads.
-  await expect.poll(() => recordAt, { message: 'the session record read went out', timeout: 5_000 }).toBeGreaterThan(0)
-  expect(recordAt, 'the record read went out after the open').toBeGreaterThanOrEqual(openedAt)
-  expect(recordAt - openedAt, 'the record read did not wait for the slow reads').toBeLessThan(5_000)
+  // Still waiting behind the slow reads as the rows show: only what MAY_WAIT names.
+  const waiting = await page.evaluate(`(async () => (await import('/src/api/client.ts')).queuedFetchLabels())()`) as string[]
+  const firstScreenWaiting = waiting.filter((label) => label.includes(SID) && !MAY_WAIT.some(([pattern]) => pattern.test(label)))
+  expect(firstScreenWaiting, `reads of this chat waiting in the shared queue as its rows show (all of this chat's: ${JSON.stringify(waiting.filter((l) => l.includes(SID)))})`).toEqual([])
 })

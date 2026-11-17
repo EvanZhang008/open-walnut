@@ -946,10 +946,12 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   }, [pinActions]);
 
   // Fetch session metadata. A shown chat's record read takes the kept connection with its first
-  // screen (fetchSession's lane): the header, the mode and the note band draw from it.
-  const recordReadLane = useShownReadLane(routeShownForHistory);
+  // screen (fetchSession's lane): the header, the mode and the note band draw from it. A panel
+  // that moves on lets go of it (`signal`), so a stale read never holds the kept connection.
+  const recordReadLane = useShownReadLane(routeShownForHistory, sessionId);
   useEffect(() => {
     let cancelled = false;
+    const letGo = new AbortController();
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const known = peekSessionRecord(sessionId);
     setSession(known);
@@ -957,7 +959,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     setMissing(false);
     setFetchedTask(null);
     const load = (attempt: number) => {
-      fetchSession(sessionId, { lane: recordReadLane() }).then((s) => {
+      fetchSession(sessionId, { lane: recordReadLane(), signal: letGo.signal }).then((s) => {
         if (!cancelled) {
           // 404 (s === null) is EXPECTED briefly on a freshly launched session:
           // quick-start/fork pre-assign the CLI session id and return it in the
@@ -1024,7 +1026,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       });
     };
     load(0);
-    return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
+    return () => { cancelled = true; letGo.abort(); if (retryTimer) clearTimeout(retryTimer); };
   }, [sessionId, recordReadLane]);
 
   // A task the store does not hold (a plugin's own task, Task.plugin_only, opened in its
