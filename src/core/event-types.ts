@@ -554,6 +554,9 @@ export interface SessionMessageQueuedEvent {
   /** Queue row's enqueue time (server clock): the bubble's time floor for
    *  history matching, see web optimistic-dedup.ts. */
   enqueuedAt?: string;
+  /** Held for the session's next wake (sessions/cold-hold.ts): why, and when it goes at the latest. */
+  heldReason?: string;
+  heldRetryAt?: string;
 }
 
 /** ACP dialect: ≈ session/request_permission (request side). Previously emitted

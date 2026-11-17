@@ -514,6 +514,8 @@ export function registerSessionChatRpc(): void {
     const { heldWaitOf } = await import('../../core/sessions/held-wait.js')
     const waitOf = await heldWaitOf(data.sessionId)
     const { presentAfterTurn } = await import('../../core/sessions/queue-after-turn.js')
+    // A row held for a cold session's next wake reads as queued, with why and until when (cold-hold.ts).
+    const { presentColdHolds } = await import('../../core/sessions/cold-hold.js')
     // Walnut's own quiet commands (its /compact) are no message of the person's: a reloaded panel
     // would draw one as his bubble (sessions/walnut-commands.ts).
     const { withoutWalnutRows } = await import('../../core/sessions/session-extras.js')
@@ -525,7 +527,7 @@ export function registerSessionChatRpc(): void {
     // Read after the rows: a row taken and answered in between is still listed and
     // reads waiting for this one read (queue-row-view.ts liveLineWordsOf).
     const live = await liveLineWordsOf(sid)
-    const messages = rows.map(presentAfterTurn).map((m) => {
+    const messages = presentColdHolds(rows.map(presentAfterTurn)).map((m) => {
       const why = held?.get(m.id)
       const holds = why !== undefined && (m.status === 'processing' || (m.status === 'pending' && why === PROMPT_HOLD_REASON))
       // An App's AI-only brief riding the row shows its fold (lib/ai-only-envelope.ts); an edit keeps the real one (editMessage).

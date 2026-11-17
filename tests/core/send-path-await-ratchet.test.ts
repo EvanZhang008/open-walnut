@@ -59,6 +59,7 @@ const ALLOWED_MODULES: Record<string, string> = {
   './human-inbox/item-execution.js': 'inbox item boundary check against the local inbox store (inbox item sends only)',
   './sessions/session-stop.js': 'stop fence read from the local session record',
   './sessions/wake-policy.js': 'pure check of the row\'s notice envelopes, and the in-memory hold for one that asks nothing',
+  './sessions/cold-hold.js': 'cache-aware delivery: reads the session record and this queue file, and writes this queue file',
 }
 
 /** Calls awaited on the path to SESSION_SEND, each with why it stays local. */
@@ -96,6 +97,9 @@ const ALLOWED_AWAITS: Record<string, string> = {
   'switchContext.markTold': 'engine-switch-io.ts: local store write',
   'outputMode.commit': 'hint-send.ts: records the hints told in the local session record',
   'tellCarried': 'this file: the markTold writes listed here, for the notes the row or the hold carries',
+  'coldHold.sessionIsCold': 'cold-hold.ts: the session record\'s prompt cache facts and the runner\'s in-memory turn state',
+  'coldHold.releaseColdHolds': 'cold-hold.ts: puts this session\'s held rows back in line, one write of this queue file',
+  'coldHold.heldViewOf': 'cold-hold.ts: reads this queue file for the held row\'s note',
   'refreshWalnutSessionProfile': 'personal-ai-lane.ts: one indexed local record read, TTL-bounded rebuild from local config',
 }
 

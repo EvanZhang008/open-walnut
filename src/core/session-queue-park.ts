@@ -10,7 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import { log } from '../logging/index.js';
 import { compareEnqueueOrder, mutateStore, readQueueFileFresh, type QueuedMessage } from './session-queue-store.js';
-import { AFTER_TURN_REASON, START_RECOVERY_HELD_REASON, STOP_PARKED_REASON } from './relay-fates.js';
+import { AFTER_TURN_REASON, COLD_HOLD_REASON, START_RECOVERY_HELD_REASON, STOP_PARKED_REASON } from './relay-fates.js';
 import { leaveParked, parkRow } from './queue-held-spans.js';
 
 /**
@@ -344,7 +344,7 @@ export async function settleStartRecoveryHeld(sessionId: string, how: 'deliver' 
 }
 
 /**
- * Rows lined up for after the running turn that a Stop came ahead of: parked under the
+ * Rows lined up for after the running turn, or held for a cold session's next wake, that a Stop came ahead of: parked under the
  * stop's reason, like every other row a stop sets aside. With `keepFence` given (even
  * null), only the rows queued before the latest stop are set aside.
  */
@@ -353,7 +353,8 @@ export async function setAsideHeld(sessionId: string, keepFence?: string | null)
   const n = await mutateStore((s) => {
     let count = 0;
     for (const row of s.queues[sessionId] ?? []) {
-      if (row.status !== 'parked' || row.parkedReason !== AFTER_TURN_REASON) continue;
+      // Rows held for a cold session's next wake (sessions/cold-hold.ts) are held the same way.
+      if (row.status !== 'parked' || (row.parkedReason !== AFTER_TURN_REASON && row.parkedReason !== COLD_HOLD_REASON)) continue;
       if (keepFence !== undefined && (row.stopFence ?? null) === keepFence) continue;
       parkRow(row, STOP_PARKED_REASON, parkedAt);
       count++;

@@ -370,7 +370,7 @@ interface SessionChatHistoryProps {
   onDeliveryWaiting?: (messageIds: string[]) => void;
   onEditQueued?: (queueId: string, newText: string) => void;
   onDeleteQueued?: (queueId: string) => void;
-  onAgentQueued?: (msg: { queueId: string; text: string; enqueuedAt?: string; sentBy?: 'person' | 'agent'; queuedText?: string }) => void;
+  onAgentQueued?: (msg: { queueId: string; text: string; enqueuedAt?: string; sentBy?: 'person' | 'agent'; queuedText?: string; heldReason?: string; heldRetryAt?: string }) => void;
   onRetryFailed?: (queueId: string) => void;
   onDismissFailed?: (queueId: string) => void;
   /** A row that failed because the session's folder is gone offers to continue in a new
@@ -658,6 +658,12 @@ function rowsAboveAreOffscreen(el: HTMLElement | null, tailStart: number): boole
 const HELD_DEFAULT_REASON = 'Waiting to confirm the previous message';
 /** The server's words for a message the host did not take in time (slowHostReason). */
 const isSlowHostReason = (reason: string): boolean => reason.startsWith('Not sent yet:') || reason.startsWith('Not confirmed yet:');
+/** " · 2 held" for a fold whose queued rows the server holds back (their heldReason), else "". */
+function heldCountPhrase(rows: ReadonlyArray<{ queueId: string; heldReason?: string; status: string }>, heldIds: ReadonlyMap<string, string>): string {
+  // The same test as the held note under each row (renderQueuedRow).
+  const n = rows.filter((r) => (heldIds.has(r.queueId) || !!r.heldReason) && (r.status === 'pending' || r.status === 'received')).length;
+  return n ? ` · ${n} held` : '';
+}
 /** "Next try at 5:41 PM." (or "in a moment" once that time has passed). */
 function nextTryLabel(iso: string): string {
   const at = Date.parse(iso);
@@ -1467,7 +1473,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // request): history hides those lines on purpose, so minting a "You" bubble for one
   // would paint a raw machine prompt into the timeline that nothing later removes.
   useEvent('session:message-queued', (data) => {
-    const d = data as { sessionId?: string; messageId?: string; message?: string; source?: string; enqueuedAt?: string; sentBy?: 'person' | 'agent'; queuedText?: string };
+    const d = data as { sessionId?: string; messageId?: string; message?: string; source?: string; enqueuedAt?: string; sentBy?: 'person' | 'agent'; queuedText?: string; heldReason?: string; heldRetryAt?: string };
     const plumbing = d.source === 'ui' || (d.source ?? '').startsWith('side-thread-');
     if (d.sessionId === sessionId && !plumbing && d.messageId && d.message) {
       onAgentQueued?.({
@@ -1475,6 +1481,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         ...(d.enqueuedAt ? { enqueuedAt: d.enqueuedAt } : {}),
         ...(d.sentBy === 'person' || d.sentBy === 'agent' ? { sentBy: d.sentBy } : {}),
         ...(typeof d.queuedText === 'string' ? { queuedText: d.queuedText } : {}),
+        // Held for the session's next wake (sessions/cold-hold.ts): the bubble says so at once, as a reload does.
+        ...(typeof d.heldReason === 'string' ? { heldReason: d.heldReason, ...(typeof d.heldRetryAt === 'string' ? { heldRetryAt: d.heldRetryAt } : {}) } : {}),
       });
     }
   });
@@ -5285,6 +5293,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
     return out;
   };
+  /** " · N held" for a live step group whose cards the server holds back (heldCountPhrase). */
+  const streamHeldPhrase = (group: StepGroup): string => heldCountPhrase(group.members.flatMap((k) => {
+    const item = timeline[k];
+    return stepKinds[k] === 'card' && item.kind === 'user' ? [item.msg] : [];
+  }), heldIds);
   /** A live step group's steps, in order: its cards and its stream blocks. */
   const streamFoldStepsOf = (group: StepGroup): FoldStep[] => group.members.flatMap((k): FoldStep[] => {
     const item = timeline[k];
@@ -5823,7 +5836,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         const tailFailed = failedOf(tail);
         const failed: FoldFailures = { calls: tailFailed.calls + streamFailedOf(members), errors: tailFailed.errors + streamErrorLinesOf(group) };
         const live = isThinkingTail(stepIdx[stepIdx.length - 1] ?? -1);
-        const phrase = foldStepsPhrase([...(tailCarry ? envelopeSteps(tailCarry.riders) : []), ...tail.flatMap(foldStepsOf), ...streamFoldStepsOf(group)], waitingTools);
+        const phrase = foldStepsPhrase([...(tailCarry ? envelopeSteps(tailCarry.riders) : []), ...tail.flatMap(foldStepsOf), ...streamFoldStepsOf(group)], waitingTools) + streamHeldPhrase(group);
         // Keyed like the answered turn's fold, so the row and its open state carry
         // over when the turn ends and history takes the tools. A step that stopped on
         // the person stands above it while the turn runs too.
@@ -6315,7 +6328,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           // The stream's blocks are no saved rows yet: the find counts their history twins.
           findMembers={undefined}
           running={live || (isStreaming && streamRunHasCallingTool(members))}
-          phrase={foldStepsPhrase(streamFoldStepsOf(group), waitingTools)}>
+          phrase={foldStepsPhrase(streamFoldStepsOf(group), waitingTools) + streamHeldPhrase(group)}>
           {renderGroupBody(group)}
         </ProcessFoldRow>
       </div>
@@ -6611,7 +6624,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           <ProcessFoldRow foldId={m.queueId} foldKey={`queued:${m.queueId}`} testId="received-fold"
             // Queued messages are no saved rows yet.
             findMembers={undefined}
-            phrase={foldStepsPhrase(rows.flatMap((r) => receivedSteps(r.text ?? '')))}>
+            // Held ones say so on the folded row too (a cold session's hold, sessions/cold-hold.ts).
+            phrase={foldStepsPhrase(rows.flatMap((r) => receivedSteps(r.text ?? ''))) + heldCountPhrase(rows, heldIds)}>
             {rows.map(renderQueuedRow)}
           </ProcessFoldRow>
         </div>

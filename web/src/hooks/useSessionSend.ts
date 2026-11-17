@@ -68,7 +68,7 @@ interface UseSessionSendReturn {
   handleDeliveryWaiting: (messageIds: string[]) => void;
   handleEditQueued: (sessionId: string, queueId: string, newText: string) => void;
   handleDeleteQueued: (sessionId: string, queueId: string) => void;
-  addExternalQueued: (msg: { queueId: string; text: string; enqueuedAt?: string; sentBy?: 'person' | 'agent'; queuedText?: string }) => void;
+  addExternalQueued: (msg: { queueId: string; text: string; enqueuedAt?: string; sentBy?: 'person' | 'agent'; queuedText?: string; heldReason?: string; heldRetryAt?: string }) => void;
   /** History shows these rows: a bubble whose uuid one carries was delivered (a send whose acknowledgement was lost). */
   settleShownInHistory: (rows: ReadonlyArray<RowWithSendUuids & { text: string }>) => void;
   clearOptimistic: () => void;
@@ -722,7 +722,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
   // Handle messages queued externally (e.g. by the agent via send_to_session)
   // These arrive via bus event after the server has already enqueued the message,
   // so we go straight to 'received' (shows "Queued" badge immediately).
-  const addExternalQueued = useCallback((msg: { queueId: string; text: string; enqueuedAt?: string; sentBy?: 'person' | 'agent'; queuedText?: string }) => {
+  const addExternalQueued = useCallback((msg: { queueId: string; text: string; enqueuedAt?: string; sentBy?: 'person' | 'agent'; queuedText?: string; heldReason?: string; heldRetryAt?: string }) => {
     // An agent's row as the queue stores it (a peer's note in its envelope):
     // shown as a reload shows it (queuedRowText), so it folds as the card it is.
     const shown = msg.queuedText !== undefined ? queuedRowText(msg.queuedText) : { text: msg.text };
@@ -737,6 +737,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         timestamp: msg.enqueuedAt ?? new Date().toISOString(),
         status: 'received' as const,
         ...(msg.sentBy ? { sentBy: msg.sentBy } : {}),
+        ...(msg.heldReason ? { heldReason: msg.heldReason, ...(msg.heldRetryAt ? { heldRetryAt: msg.heldRetryAt } : {}) } : {}),
       }];
     });
   }, []);

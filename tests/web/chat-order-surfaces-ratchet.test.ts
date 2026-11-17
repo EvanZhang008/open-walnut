@@ -111,6 +111,8 @@ Place its bubbles with bubbleIndexOf / cardLiveRounds (or mount SessionChatHisto
 const WAITING_ONLY_SPECS: Record<string, string> = {
   // Checks how a card folds the moment it arrives, before any take.
   'tests/e2e/browser/session-queued-card-fold.spec.ts': 'folds on arrival',
+  // A row held for a cold session's next wake: an idle session, no turn takes it while it is held.
+  'tests/e2e/browser/cold-hold-note.spec.ts': 'held, never taken while it is checked',
 };
 
 describe('ratchet: a mocked live turn says where its queued lines were taken', () => {

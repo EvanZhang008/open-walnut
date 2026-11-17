@@ -2188,6 +2188,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // a companion never drains, an ephemeral server only what it queued itself.
     // A message lined up for after a running turn goes out when that turn ends (src/core/sessions/queue-after-turn.ts).
     if (role() === 'leader') void import('../core/sessions/queue-after-turn.js').then((m) => m.startQueueAfterTurn()).catch(() => {})
+    // Messages held for a cold session's next wake go out by their max hold, a restart's included (src/core/sessions/cold-hold.ts).
+    if (role() === 'leader') void import('../core/sessions/cold-hold.js').then((m) => m.startColdHold()).catch(() => {})
     if (role() === 'leader') void import('../core/sessions/start-queue.js').then((m) => m.startStartQueue({ ephemeral: IS_EPHEMERAL })).catch(() => {})
     // A status answer a turn end missed is asked again while its session is alive (src/core/sessions/status-reconcile.ts).
     if (role() === 'leader') void import('../core/sessions/status-reconcile.js').then((m) => m.startStatusReconcile()).catch(() => {})

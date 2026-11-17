@@ -156,3 +156,69 @@ export function holdRidingNotice(sessionId: string, text: string, now = Date.now
     ...(dropped > 0 ? [`(${dropped} older notice${dropped === 1 ? '' : 's'} that asked nothing dropped: the newest say where things stand.)`] : []),
   ].join('\n\n'), { now });
 }
+
+/**
+ * Cache-aware delivery (2026-11-16, the user: "如果这个东西是在 cache 在 warm 的时候，OK，你可以去
+ * reply，但是如果这个东西已经是啊 cold 了。那我觉得我们是不是应该 buffer 一下？"). A message to a
+ * session whose prompt cache is still warm goes at once: its turn reads the context at a tenth of the
+ * price. One to a session gone cold (idle past its cache lifetime) pays the whole context again, so
+ * a message that can wait is held (sessions/cold-hold.ts) and every held message goes in ONE wake:
+ * with the next message that cannot wait, when the session wakes anyway, or when the oldest held one
+ * reaches COLD_HOLD_MAX_MS. Nothing that someone waits on now waits: the user's own words, an ask
+ * (a `request`) or the reply to one, a notice outside NOTICE_WAITS_COLD, a trigger outside
+ * TRIGGER_FROM_WAITS, a script's note (a land's revert alert is one), anything not an envelope.
+ */
+
+/** Notices that start a turn (NOTICE_WAKES) but can wait for a cold session's next wake. */
+export const NOTICE_WAITS_COLD: readonly string[] = [
+  // The session's own trigger or routine is in trouble: its owner fixes the script when it next works.
+  'check_failed', 'check_failing', 'check_repaired', 'trigger_disabled', 'routine_trouble',
+  // Threads past their time: the node answers them with its next turn.
+  'threads-overdue',
+];
+
+/**
+ * Walnut's `trigger` envelopes, by their `from`, and whether each can wait for a cold session
+ * (true) or must go at once (false, with the person who waits). A `Trigger: <name>` sender (a
+ * trigger's fire, a scheduled routine) can wait. The guard test fails when a producer in src/
+ * writes a sender this map does not list.
+ */
+export const TRIGGER_FROM_WAITS: Readonly<Record<string, boolean>> = {
+  'Walnut: re-check': true,
+  'Walnut: follow-up': true,
+  'Walnut: wait until': true,
+  'Walnut: pull request watch': true,
+  'Walnut: status check': true,
+  // The user is looking at the session now, or still waits for its answer to his words.
+  'Walnut: Brief refresh': false,
+  'Walnut: unanswered': false,
+  // A machine the task waited on is fixed (machine-wake.ts): the work goes on now.
+  Walnut: false,
+  // A triage run's batch (triage/batch.ts): the run's own first message.
+  'Inbox Triage': false,
+};
+
+const WAITS_COLD = new Set(NOTICE_WAITS_COLD);
+
+/**
+ * Can this message wait while its session is cold? Only a message made of nothing but envelopes
+ * (and Walnut's hint blocks), each of them: a trigger fire whose sender can wait, a task's note
+ * that asks nothing (a peer-note with no `request`, not a script's), or a notice that rides or is in
+ * NOTICE_WAITS_COLD. Everything else goes at once: an unknown shape is never held by mistake.
+ */
+export function waitsWhenCold(text: string): boolean {
+  let rest = text;
+  for (const block of hintBlocksIn(text)) rest = rest.replace(block, '');
+  const envs = envelopesOnly(rest);
+  if (!envs) return false;
+  return envs.every((a) => {
+    if (a.request) return false;
+    if (a.kind === 'trigger') {
+      const from = a.from ?? '';
+      return from.startsWith('Trigger: ') || TRIGGER_FROM_WAITS[from] === true;
+    }
+    if (a.kind === 'peer-note') return a.anonymous !== 'true' && !!(a['from-task'] || a['from-session']);
+    if (a.kind === 'notification') return !!a.outcome && (RIDES.has(a.outcome) || WAITS_COLD.has(a.outcome));
+    return false;
+  });
+}

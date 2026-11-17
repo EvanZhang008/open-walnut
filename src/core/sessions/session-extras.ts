@@ -582,7 +582,9 @@ export async function getSessionQueuePayload(sessionId: string): Promise<{ messa
   const { queueRowView, liveLineWordsOf } = await import('./queue-row-view.js');
   const rows = await withoutWalnutRows(await getQueue(sessionId));
   const live = await liveLineWordsOf(sessionId);
-  return { messages: rows.map(presentAfterTurn).map((row) => queueRowView(row, sessionId, live)) };
+  // A row held for a cold session's next wake reads as queued, with why and until when (cold-hold.ts).
+  const { presentColdHolds } = await import('./cold-hold.js');
+  return { messages: presentColdHolds(rows.map(presentAfterTurn)).map((row) => queueRowView(row, sessionId, live)) };
 }
 
 /** Edit a still-pending queued message's text. */

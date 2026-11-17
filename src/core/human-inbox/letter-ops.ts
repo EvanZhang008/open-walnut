@@ -442,6 +442,8 @@ export async function deliverLetterToOrigin(
       sendMessageToSession(sid, text, {
         // A task's answer for the user is another task's message, not the person's words.
         source: human.by ? 'peer' : 'human-inbox',
+        // The answer its letter waits on: never held for a cold session's next wake (sessions/cold-hold.ts).
+        wakeReason: 'an answer to the session\'s letter to the user',
         ...(options.messageId ? { messageId: options.messageId } : {}),
         ...(record.taskId ? { taskId: record.taskId } : {}),
       }),

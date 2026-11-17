@@ -41,6 +41,12 @@ export interface QueuedMessage {
    */
   waitsFor?: string;
   /**
+   * Held for a cold session's next wake (sessions/cold-hold.ts COLD_HOLD_REASON): the send's own
+   * source and whether it ends the task's wait, so the delivery that releases it moves the task's
+   * phase as the send would have. Cleared when the row leaves the hold.
+   */
+  coldSend?: { source: string; endsWait?: true };
+  /**
    * Process-monotonic enqueue counter: the tiebreaker for messages that share
    * an `enqueuedAt` millisecond. Optional: rows persisted before this field
    * existed don't have it. See compareEnqueueOrder.

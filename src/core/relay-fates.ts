@@ -55,6 +55,9 @@ export const START_RECOVERY_HELD_REASON = 'Waiting for Walnut to start the sessi
 
 export const AFTER_TURN_REASON = 'Waiting for the running turn to finish';
 
+/** Why a message that can wait is held for an idle session whose prompt cache expired (core/sessions/cold-hold.ts). */
+export const COLD_HOLD_REASON = 'Held for the session\'s next wake: it is idle and its prompt cache has expired';
+
 /** The slice of the queue store the fates work on. */
 export interface FateStore {
   queues: Record<string, Array<{ id: string; status: string; parkedReason?: string; lineInDoubt?: true }>>;

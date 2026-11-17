@@ -137,8 +137,12 @@ export interface SessionSendInput {
   /** An anonymous caller that named itself: a script or scheduled job (the CLI's `x-walnut-sender`). */
   callerLabel?: string;
   /** false: the note asks nothing, so it starts no turn; it rides the target's next message
-   *  (sessions/quiet-notes.ts). A script's note that ends "No reply needed" is read so too. */
+   *  (sessions/quiet-notes.ts). A script's note that ends "No reply needed" is read so too.
+   *  true: it goes now, also to a session whose prompt cache expired, where a note that asks for
+   *  no reply otherwise waits for that session's next wake (sessions/cold-hold.ts). */
   wake?: boolean;
+  /** Why this send must start a turn now (sendMessageToSession's wakeReason): an answer its asker waits on. */
+  wakeReason?: string;
 }
 
 export interface SessionSendResult {
@@ -882,6 +886,8 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     // An answer is always delivered: wake=false was refused above. Never held, so never 'held'.
     result = await performPlainSend({
       ...input, answersAsk: false, wake: undefined, ...(liveOnly ? { liveOnly } : {}),
+      // Its task waits on the user's answer: it never waits for a cold session's next wake (cold-hold.ts).
+      wakeReason: 'an answer to the session\'s ask of the user',
       text: input.text?.trim() ? `${prepared.line}\n\n${input.text}` : prepared.line,
     }) as DeliveredSendResult;
   } catch (err) {
@@ -1119,9 +1125,12 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
   let messageId: string | undefined;
   try {
     const fromLeader = await callerLeads(caller, taskId);
+    // wake=true, or an answer the asker waits on, goes now even to a cold session (sessions/cold-hold.ts).
+    const wakeReason = input.wakeReason ?? (input.wake === true ? 'the sender asked to wake it now (wake=true)' : undefined);
     const deliver = () => deliverToSession(target.session, {
       busText: body, enqueueText, source, taskId, messageId: rowId, fromLeader,
       ...(input.liveOnly ? { liveOnly: input.liveOnly } : {}),
+      ...(wakeReason ? { wakeReason } : {}),
     });
     ({ delivery, messageId } = await deliver());
   } catch (err) {

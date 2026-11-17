@@ -65,6 +65,8 @@ export function leaveParked(row: QueuedMessage, now: number = Date.now()): void 
   delete row.parkedReason;
   // What an agent-wait park waited on (QueuedMessage.waitsFor) goes with the park.
   delete row.waitsFor;
+  // So does what a cold hold kept of its send (QueuedMessage.coldSend).
+  delete row.coldSend;
 }
 
 /** The same as leaveParked, on a copy. */

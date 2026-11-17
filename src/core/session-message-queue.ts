@@ -113,7 +113,9 @@ export async function enqueueMessage(
   message: string,
   opts?: { id?: string; userUuid?: string; stopFence?: string | null; relayTaken?: boolean; lineUuid?: string; closesPrompt?: boolean; sentBy?: 'person' | 'agent'; recentText?: string; heldReason?: string;
     /** With heldReason: the readiness kind the row waits on (QueuedMessage.waitsFor). */
-    waitsFor?: string },
+    waitsFor?: string;
+    /** With heldReason: a cold hold's send (QueuedMessage.coldSend). */
+    coldSend?: { source: string; endsWait?: true } },
 ): Promise<QueuedMessage> {
   // A stopping Demo queues nothing more (sessions/demo-admission.ts); checked again inside the write.
   assertDemoAdmission();
@@ -135,7 +137,7 @@ export async function enqueueMessage(
     sessionId,
     message,
     status: opts?.heldReason ? 'parked' : 'pending',
-    ...(opts?.heldReason ? { parkedAt: new Date().toISOString(), parkedReason: opts.heldReason, ...(opts.waitsFor ? { waitsFor: opts.waitsFor } : {}) } : {}),
+    ...(opts?.heldReason ? { parkedAt: new Date().toISOString(), parkedReason: opts.heldReason, ...(opts.waitsFor ? { waitsFor: opts.waitsFor } : {}), ...(opts.coldSend ? { coldSend: opts.coldSend } : {}) } : {}),
     enqueuedAt: new Date().toISOString(),
     seq: nextEnqueueSeq(),
     // Additive: absent ⇒ the key never lands on the row, so an old-shaped row and
@@ -362,6 +364,18 @@ export async function sendMessageToSession(
     const now = new Date();
     return { id: opts?.messageId ?? `rides-${now.getTime()}-${Math.random().toString(36).slice(2, 8)}`, sessionId, message: framedBody, status: 'pending', enqueuedAt: now.toISOString(), seq: 0 };
   }
+  // Cache-aware delivery (sessions/cold-hold.ts): a message that can wait, to a session gone cold, is
+  // held for its next wake. Any other send first puts the held ones back in line in front of it, so
+  // they go out with it in one line.
+  const coldHold = await import('./sessions/cold-hold.js');
+  const { waitsWhenCold } = await import('./sessions/wake-policy.js');
+  const mayWait = !opts?.wakeReason && !opts?.interrupt && !opts?.closesPrompt && !heldForMove && !heldForTurn && !scopedArea
+    && !slashCommand && !PERSON_SEND_SOURCES.has(opts?.source ?? '') && queueSentBy(opts?.source) !== 'person'
+    && !opts?.messageId?.startsWith('qm-inbox-') && !opts?.messageId?.startsWith('qm-route-') && waitsWhenCold(framedBody);
+  const heldCold = mayWait && await coldHold.sessionIsCold(sessionId) ? coldHold.COLD_HOLD_REASON : undefined;
+  // Not in front of a slash command (it must start its line), nor for a move or a running turn's
+  // hold: those rows wait for the next line that goes, or the sweep sends them.
+  const released = heldCold || heldForMove || heldForTurn || slashCommand ? null : await coldHold.releaseColdHolds(sessionId, 'a message that goes now');
   let msg: QueuedMessage;
   try {
     if (opts?.stillWanted && !opts.stillWanted()) throw new SendNoLongerWantedError();
@@ -375,10 +389,13 @@ export async function sendMessageToSession(
       ...(opts?.closesPrompt || isPersonSendSource(opts?.source) ? { closesPrompt: true } : {}),
       ...(queueSentBy(opts?.source) ? { sentBy: queueSentBy(opts?.source) } : {}),
       ...(heldForMove || heldForTurn ? { heldReason: heldForMove ?? heldForTurn } : {}),
+      ...(heldCold ? { heldReason: heldCold, coldSend: { source: opts?.source ?? 'unknown', ...(opts?.endsWait ? { endsWait: true as const } : {}) } } : {}),
     });
   } catch (err) {
     appState?.release();
     heldNotes?.release();
+    // Held rows this send put back in line go out on their own.
+    if (released?.count) coldHold.sendReleased(sessionId, released);
     throw err;
   }
   const source = opts?.source ?? 'unknown';
@@ -410,15 +427,23 @@ export async function sendMessageToSession(
   // A repeat collapsed onto a row already queued is no hold of this call.
   const holdsRow = heldForTurn !== undefined && msg.status === 'parked' && msg.parkedReason === heldForTurn;
   if (holdsRow) noteAfterTurnHold(sessionId);
+  const holdsCold = heldCold !== undefined && coldHold.isColdHold(msg);
+  const heldShown = holdsCold ? await coldHold.heldViewOf(sessionId, msg.id) : undefined;
+  if (holdsCold) {
+    coldHold.noteColdHold(sessionId);
+    log.session.info('cold hold: message held for the session\'s next wake', { sessionId, messageId: msg.id, source });
+  }
 
-  // Tell session-runner to process the queued message (a row held for a move or for the turn's end waits for it)
-  if (!heldForMove && !holdsRow && !demoAdmissionClosed()) bus.emit(EventNames.SESSION_SEND, {
+  // Tell session-runner to process the queued message (a row held for a move, for the turn's end or
+  // for a cold session's next wake waits for it). Held rows that went back in line in front of it and
+  // end the task's wait (a trigger's fire) end it with this send.
+  if (!heldForMove && !holdsRow && !holdsCold && !demoAdmissionClosed()) bus.emit(EventNames.SESSION_SEND, {
   sessionId,
   taskId: opts?.taskId,
   message,
   mode: opts?.mode,
   interrupt: opts?.interrupt || undefined,
-  ...(opts?.endsWait ? { endsWait: true } : {}),
+  ...(opts?.endsWait || released?.endsWait ? { endsWait: true } : {}),
 }, ['session-runner'], { source });
 
   // Tell UI so the message appears immediately in the session panel. A quiet turn's row is Walnut's
@@ -436,6 +461,7 @@ export async function sendMessageToSession(
     // The send's user line: the proof the row is that send's when its answer is lost (web api/session-send.ts).
     ...(msg.userUuid ? { userUuid: msg.userUuid } : {}),
     enqueuedAt: msg.enqueuedAt,
+    ...(heldShown?.heldReason ? { heldReason: heldShown.heldReason, ...(heldShown.heldRetryAt ? { heldRetryAt: heldShown.heldRetryAt } : {}) } : {}),
   }, ['main-ai'], { source });
 
   return msg;

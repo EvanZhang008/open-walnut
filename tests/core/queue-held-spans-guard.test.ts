@@ -37,6 +37,7 @@ const PARK_BY_HAND = /\.parkedAt\s*=(?!=)/
 const ALLOWED: Record<string, string> = {
   'src/core/queue-held-spans.ts': 'the helper itself',
   'src/core/sessions/queue-after-turn.ts': 'presentAfterTurn shows a held row as pending in a copy for a reader; the row stays parked',
+  'src/core/sessions/cold-hold.ts': 'presentColdHold shows a row held for a cold session\'s next wake as pending in a copy for a reader; the row stays parked',
 }
 
 describe('every way a queued row leaves parked records its held time', () => {

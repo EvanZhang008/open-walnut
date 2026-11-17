@@ -36,6 +36,12 @@ export async function deliveryWaitOf(messageId: string): Promise<DeliveryWait | 
   const row = await findQueuedMessage(messageId);
   if (!row) return null;
   const { sessionId } = row;
+  // Held for a cold session's next wake (cold-hold.ts): it waits, and says until when at the latest.
+  const { isColdHold, heldViewOf } = await import('./cold-hold.js');
+  if (isColdHold(row)) {
+    const shown = await heldViewOf(sessionId, messageId);
+    return { state: 'waiting', messageId, sessionId, reason: shown?.heldReason ?? row.parkedReason ?? '', ...(shown?.heldRetryAt ? { retryAt: shown.heldRetryAt } : {}) };
+  }
   if (row.status === 'parked') return { state: 'parked', messageId, sessionId, ...(row.parkedReason ? { reason: row.parkedReason } : {}) };
   const r = await runner();
   // The row's own note, else the session's clock: while it runs, every pending row goes
@@ -61,6 +67,18 @@ export async function sendQueuedNow(input: {
 }): Promise<SendNowResult> {
   const row = await findQueuedMessage(input.messageId);
   if (!row || (input.sessionId && row.sessionId !== input.sessionId)) return { sent: false, why: 'gone' };
+  // A row held for a cold session's next wake goes now, every held row of its session with it, in
+  // one line, for anyone's Send now (cold-hold.ts).
+  const { isColdHold, releaseColdHolds } = await import('./cold-hold.js');
+  // Released already (the sweep, another send) counts too: the row is in line, this only asks for the drain.
+  const cold = isColdHold(row) ? await releaseColdHolds(row.sessionId, 'send now') : null;
+  if (cold) {
+    bus.emit(EventNames.SESSION_SEND, {
+      sessionId: row.sessionId, taskId: input.taskId, message: input.message || row.message,
+      ...(input.interrupt ? { interrupt: true } : {}), ...(cold.endsWait ? { endsWait: true } : {}),
+    }, ['session-runner'], { source: input.source });
+    return { sent: true, sessionId: row.sessionId };
+  }
   if (row.status === 'parked' && !input.unpark) return { sent: false, why: 'parked', ...(row.parkedReason ? { reason: row.parkedReason } : {}) };
   const unparked = row.status === 'parked' ? await unparkMessage(row.sessionId, row.id) : false;
   log.web.info('send now: re-draining the queued row (no duplicate enqueue)', {
