@@ -24,6 +24,7 @@ import { frontDriven } from './agent-takeover'
 import { base64, cropPicture, drawLabels } from './agent-picture'
 import type { LabelBox } from './input-math'
 import { AgentError, WALNUT_PAGE, agentWindowId, checkPage, frameOp, mark, personsTab, reached, sleep, where, type AgentTab, type WireCommand } from './agent-shared'
+import { frontInWindow } from './agent-window'
 
 export const FULL_MAX_PX = 12_000
 /** The browser takes at most two captures a second. */
@@ -206,7 +207,10 @@ export async function screenshot(c: WireCommand, tabId: number, tab: Tab, rec: A
     if (!(await ext.tabs.get(tabId).catch(() => tab)).active && (await ext.windows.get(tab.windowId!).catch(() => null) as { focused?: boolean } | null)?.focused) {
       throw new AgentError('The person is looking at another tab in the agent window: use snapshot for this tab, or try again in a moment.', 'person_looking')
     }
-    await ext.tabs.update(tabId, { active: true })
+    // In front of the agent window only (frontInWindow: never a window the person is in or uses).
+    if (!(await ext.tabs.get(tabId).catch(() => tab)).active && !(await frontInWindow(ext, tab.windowId, tabId))) {
+      throw new AgentError('That tab is not on screen, and Walnut never switches a window the person uses: use snapshot for this tab.', 'tab_hidden')
+    }
     const out = await take(shooter(tabId, tab.windowId!, liveOk))
     // What was on screen must still be that tab on that page (not a window the page opened).
     const [shown] = await ext.tabs.query({ active: true, windowId: tab.windowId })

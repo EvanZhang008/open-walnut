@@ -34,6 +34,7 @@ import { itemDetail, secretField } from './popup-item-data'
 import { getSettings, pageFillOn } from './settings'
 import { BROWSER_KEY_MESSAGE, handBrowserKey, handPanelBrowserKey, initHandBrowserKey } from './hand-browser-key'
 import { migrateRealInput } from './trusted-switch'
+import { revealForPerson } from './agent-window'
 
 const { pendingSave, pendingPrev, seenUsername, connecting, menus, frames, generated, lastLogin } = stores
 
@@ -76,8 +77,8 @@ async function openWalnutTab(url: string): Promise<void> {
     const t = onIt.find((x) => x.windowId === mine?.windowId) ?? onIt[0]
     if (t?.id !== undefined) {
       // An item to show: that tab goes to it; the list itself stays as the person left it.
-      await ext.tabs.update(t.id, { active: true, ...(want.search && t.url !== url ? { url } : {}) })
-      if (t.windowId !== undefined) await ext.windows.update?.(t.windowId, { focused: true }).catch(() => undefined)
+      if (want.search && t.url !== url) await ext.tabs.update(t.id, { url })
+      await revealForPerson(ext, t, 'walnut-tab')
       return
     }
   }

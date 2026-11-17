@@ -148,16 +148,20 @@ describe('the agent window', () => {
     expect(calls.some((c) => c.fn === 'windows.update')).toBe(false)
   })
 
-  // The one exception: the person's own Take over in the Browser view (agent-takeover.ts takeOver),
-  // which the server sends only for a person's request (browser-view-v1.ts personTab).
-  it('no agent code minimizes a window or brings one forward, except the person\'s Take over', () => {
+  // The one exception: the person's own click (agent-window.ts revealForPerson: Take over, Show it
+  // live, Open vault), which the server sends only for a person's request (browser-view-v1.ts personTab).
+  it('no agent code minimizes a window or brings one forward, except the person\'s own click', () => {
     const dir = path.resolve(__dirname, '../../../packages/browser-extension/src')
     const offenders: string[] = []
     for (const f of fs.readdirSync(dir).filter((x) => /^(agent|capture|page-agent|cdp)/.test(x) && x.endsWith('.ts'))) {
       const text = fs.readFileSync(path.join(dir, f), 'utf8')
       text.split('\n').forEach((line, i) => {
         if (/^\s*(\/\/|\*|\/\*)/.test(line)) return
-        if (f === 'agent-takeover.ts' && line.trim() === 'await ext.windows.update?.(tab.windowId, { focused: true })') return
+        if (f === 'agent-window.ts' && line.trim() === 'if (windowId !== undefined) await api.windows.update?.(windowId, { focused: true }).catch(() => undefined)') return
+        // While this machine's screen is shared the agent window goes to the Dock, and one made then is made there (noteScreenShare, makeAgentWindow).
+        if (f === 'agent-window.ts' && line.trim() === "return !!(await api.windows.update?.(id, { state: 'minimized' }).catch(() => null))") return
+        if (f === 'agent-window-own.ts' && line.trim() === "? await api.windows.create({ url: own ?? 'about:blank', type: 'normal', focused: false, state: 'minimized' })") return
+        if (f === 'agent-window-own.ts' && line.trim() === "if (sharing && w.id !== undefined && w.state !== 'minimized') await api.windows.update?.(w.id, { state: 'minimized' }).catch(() => undefined)") return
         if (/state:\s*['"]minimized['"]|focused:\s*true|drawAttention/.test(line)) offenders.push(`${f}:${i + 1}: ${line.trim()}`)
         // A window is updated in one place only, with a size (agent-window.ts resizeAgentWindow).
         if (/windows\.update\??\.?\(/.test(line) && !(f === 'agent-window.ts' && /\{ \.\.\.plain, width, height \}/.test(line))) offenders.push(`${f}:${i + 1}: ${line.trim()}`)
@@ -174,16 +178,18 @@ describe('the agent window', () => {
     const dir = path.resolve(__dirname, '../../../packages/browser-extension/src')
     const allowed = new Map<string, string>([
       // The agent's window: made unfocused (AGENT_WINDOW), sized, its tabs opened inside it.
-      ['agent-window.ts: const w = await api.windows.create({ url: own ?? \'about:blank\', ...AGENT_WINDOW })', 'agent window, unfocused'],
+      ['agent-window-own.ts: : await api.windows.create({ url: own ?? \'about:blank\', ...AGENT_WINDOW })', 'agent window, unfocused (makeAgentWindow)'],
+      ['agent-window-own.ts: ? await api.windows.create({ url: own ?? \'about:blank\', type: \'normal\', focused: false, state: \'minimized\' })', 'agent window during a screen share: unfocused and minimized (makeAgentWindow)'],
+      ['agent-window-own.ts: if (sharing && w.id !== undefined && w.state !== \'minimized\') await api.windows.update?.(w.id, { state: \'minimized\' }).catch(() => undefined)', 'a window made as a share began: to the Dock too (makeAgentWindow)'],
+      ['agent-window.ts: return !!(await api.windows.update?.(id, { state: \'minimized\' }).catch(() => null))', 'the agent window to the Dock when a screen share starts (noteScreenShare); never shown again'],
       ['agent-window.ts: await api.windows.update?.(agentWindow, { ...plain, width, height })', 'agent window size only'],
       ['agent-window.ts: const tab = await api.tabs.create({ url: \'about:blank\', windowId, active: false })', 'agent window, in the background (newAgentTab)'],
       ['agent-groups.ts: const t = await api.tabs.create({ url: api.runtime.getURL(AGENT_PAGE), windowId, active: false, index: 0 }).catch(() => null)', 'agent window page, not active'],
       ['agent-page.ts: const t = await more.tabs.create({ url: href, windowId: tab.windowId, active: false, openerTabId: tabId }).finally(() => linking.delete(tabId))', 'a link the page opened, in its own window, in the background'],
-      // The person's Take over in the Browser view (browser-view-v1.ts sends it only for a person).
-      ['agent-takeover.ts: await ext.windows.update?.(tab.windowId, { focused: true })', 'Take over'],
+      // The person's own click, the one call that focuses a window (revealForPerson; its callers are listed below).
+      ['agent-window.ts: if (windowId !== undefined) await api.windows.update?.(windowId, { focused: true }).catch(() => undefined)', 'revealForPerson: the person\'s click'],
       // The person's own clicks and keys: the toolbar popup, the side panel, the fill shortcut, Connect.
       ['background.ts: const tab = await ext.tabs.create({ url: `${origin}/connect-extension`, active: true })', 'Connect button'],
-      ['background.ts: if (t.windowId !== undefined) await ext.windows.update?.(t.windowId, { focused: true }).catch(() => undefined)', 'Open vault'],
       ['background.ts: await ext.tabs.create({ url })', 'Open Walnut'],
       ['background.ts: if (ext.sidePanel && windowId !== undefined) void ext.sidePanel.open({ windowId }).catch(() => undefined)', 'side panel shortcut'],
       ['bg-fill.ts: try { await ext.action.openPopup() } finally { await ext.action.setPopup?.({ popup: \'popup-ask.html\' })?.catch(() => undefined) }', 'unlock, from a fill the person asked for'],
@@ -195,7 +201,6 @@ describe('the agent window', () => {
       // "Show it live" in a task's Browser view (grant-open.ts): the person's own click brings the
       // grant page up in their window; anyone else's opens it there in the background.
       ['grant-open.ts: const tab = await ext.tabs.create({ url, windowId, active: person })', 'Show it live: in front only for the person\'s click, never in the agent window'],
-      ['grant-open.ts: if (tab.windowId !== undefined) await ext.windows.update?.(tab.windowId, { focused: true }).catch(() => undefined)', 'Show it live, the person\'s click'],
     ])
     const RAISES = /windows\.(create|update)\??\.?\(|tabs\.create\(|sidePanel\.open\(|openPopup\(|focused:\s*true|drawAttention|state:\s*['"]minimized['"]/
     const found: string[] = []
@@ -230,19 +235,17 @@ describe('the agent window', () => {
   })
 
   // Review 2026-11-08: a tab switch is as visible as a raised window when the person looks at that
-  // window. Every switch is listed with the check that keeps it out of the person's view.
-  it('every tab switch is listed, with what keeps it from the person\'s view', () => {
+  // window. 2026-11-17: nine switches each guarded themselves with "the window is not focused" and
+  // "it is the agent window"; the agent window had become the user's own main window, and every
+  // agent step put an agent's tab or the agent page in front of his window while he was in another
+  // app. Now a tab is switched in exactly two places: frontInWindow (an agent's step: Walnut's own
+  // agent window only, never one the person uses, never while they are in it) and revealForPerson
+  // (the person's own click). A third fails here.
+  it('a tab is put in front in two places only: frontInWindow for agents, revealForPerson for the person', () => {
     const dir = path.resolve(__dirname, '../../../packages/browser-extension/src')
     const allowed = new Map<string, string>([
-      ['background.ts: await ext.tabs.update(t.id, { active: true, ...(want.search && t.url !== url ? { url } : {}) })', 'Open vault, the person\'s click'],
-      ['agent-takeover.ts: await ext.tabs.update(tabId, { active: true })', 'Take over, the person\'s click'],
-      ['agent-shot.ts: await ext.tabs.update(tabId, { active: true })', 'agent window only, never over a taken-over tab or in a focused window'],
-      ['agent-groups.ts: await api.tabs.update(page, { active: true })', 'the fold: agent window only, never focused or under a taken-over tab'],
-      ['agent-view.ts: await ext.tabs.update(tabId, { active: true }).catch(() => undefined)', 'bringUpForCommand: agent window only, never focused or under a taken-over tab'],
-      ['agent-view.ts: await ext.tabs.update(tabId, { active: true })', 'a picture: agent window only, never focused or under a taken-over tab'],
-      ['agent-view.ts: await ext.tabs.update(back, { active: true }).catch(() => undefined)', 'put back after a picture: only while nobody came in'],
-      ['agent-window.ts: await api.tabs.update(tabId, { active: true }).catch(() => undefined)', 'frontInWindow: a new agent tab, never in a window the person is in'],
-      ['grant-open.ts: if (tab.id !== undefined) await ext.tabs.update(tab.id, { active: true }).catch(() => undefined)', 'Show it live, the person\'s click (bringUp runs only when the person asked)'],
+      ['agent-window.ts: return api.tabs.update(tabId, { active: true }).then(() => true, () => false)', 'frontInWindow'],
+      ['agent-window.ts: const t = await api.tabs.update(tabId, { active: true }).catch(() => null)', 'revealForPerson'],
     ])
     const found: string[] = []
     const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith('.ts') ? [path.join(d, e.name)] : [])
@@ -255,6 +258,37 @@ describe('the agent window', () => {
     }
     expect(found.filter((k) => !allowed.has(k))).toEqual([])
     expect([...allowed.keys()].filter((k) => !found.includes(k))).toEqual([])
+  })
+
+  // Every caller of revealForPerson, the one call that focuses a window, with the person's click it serves.
+  it('revealForPerson runs only for the person\'s own click, each caller listed', () => {
+    const dir = path.resolve(__dirname, '../../../packages/browser-extension/src')
+    const allowed = new Set([
+      'agent-takeover.ts: takeover', // Take over in the Browser view (browser-view-v1.ts sends it only for a person)
+      'grant-open.ts: grant-open', // Show it live, bringUp runs only for args.person
+      'background.ts: walnut-tab', // Open vault in the toolbar popup
+    ])
+    const found: string[] = []
+    for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.ts') && x !== 'agent-window.ts')) {
+      for (const m of fs.readFileSync(path.join(dir, f), 'utf8').matchAll(/revealForPerson\([^)]*'([a-z-]+)'\)/g)) found.push(`${f}: ${m[1]}`)
+    }
+    expect(found.filter((k) => !allowed.has(k))).toEqual([])
+    expect([...allowed].filter((k) => !found.includes(k))).toEqual([])
+  })
+
+  // Which window is the agent's is asked in one place (agent-window-own.ts ownAgentWindow), so no
+  // reader can act on a window the person took for their own (2026-11-17).
+  it('the agent window id is read only through ownAgentWindow', () => {
+    const dir = path.resolve(__dirname, '../../../packages/browser-extension/src')
+    // agent.ts forgets a closed window; agent-keep.ts mirrors every kept key for a reload.
+    const OK = new Set(['agent-window-own.ts', 'agent.ts'])
+    const bad: string[] = []
+    for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.ts') && !OK.has(x))) {
+      fs.readFileSync(path.join(dir, f), 'utf8').split('\n').forEach((line, i) => {
+        if (/session\.get\(\s*'agentWindow'/.test(line)) bad.push(`${f}:${i + 1}: ${line.trim()}`)
+      })
+    }
+    expect(bad).toEqual([])
   })
 
   // 2026-11-08: CDP Page.bringToFront restored a minimized window and brought Chrome to the front of

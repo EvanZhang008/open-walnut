@@ -37,6 +37,7 @@ import { WindowCovered, capture, tryCapture } from './capture-gate'
 import { endLive, liveHeld, livePicture, liveState, type LiveState } from './agent-live'
 import { frontDriven } from './agent-takeover'
 import { noteGroupUse, type GroupApi } from './agent-groups'
+import { frontInWindow } from './agent-window'
 
 /** The picture's width at most, in pixels: a frame stays small (tens of KB). */
 export const FRAME_MAX_W = 960
@@ -86,7 +87,7 @@ export async function bringUpForCommand(tabId: number): Promise<void> {
   if (!tab || tab.active || tab.windowId === undefined) return
   if (tab.windowId !== await agentWindowId() || personsTab(await agentTabs.get(tabId))) return
   if (await windowFocused(tab.windowId) || await frontDriven(tab.windowId)) return
-  await ext.tabs.update(tabId, { active: true }).catch(() => undefined)
+  await frontInWindow(ext, tab.windowId, tabId)
 }
 
 /** Why a frame has no picture this time. */
@@ -228,7 +229,7 @@ async function frameOf(c: WireCommand, busy: (tabId: number) => boolean, full: b
       // Its command took the screen while this frame waited for the gate.
       if (front?.id !== undefined && busy(front.id)) return 'busy' as const
       if (worked(front?.id)) back = front?.id
-      await ext.tabs.update(tabId, { active: true })
+      if (!(await frontInWindow(ext, tab.windowId, tabId))) return 'behind' as const
       switched = true
       switchedAt.set(tabId, Date.now())
       if (switchedAt.size > 50) for (const [id, at] of switchedAt) if (Date.now() - at > WORKED_MS) switchedAt.delete(id)
@@ -241,7 +242,7 @@ async function frameOf(c: WireCommand, busy: (tabId: number) => boolean, full: b
       if (back !== undefined && back !== tabId) {
         const [shownNow] = await ext.tabs.query({ active: true, windowId: tab.windowId }).catch(() => [])
         if (shownNow?.id === tabId && !(await frontDriven(tab.windowId)) && !(await windowFocused(tab.windowId))) {
-          await ext.tabs.update(back, { active: true }).catch(() => undefined)
+          await frontInWindow(ext, tab.windowId, back)
         }
       }
     }

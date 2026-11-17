@@ -217,7 +217,25 @@ extension's Settings, reached from the key's popover in the side panel or the to
 - **Never your focus.** No call in the extension brings a window forward or focuses one except your
   own Take over, the toolbar popup, the side panel, Open vault and Connect; the agent window is
   made unfocused. `tests/core/browser-control/extension-agent-window.test.ts` lists every such call
-  with its reason and fails on a new one.
+  with its reason and fails on a new one. A tab is put in front in two places only:
+  `frontInWindow` (an agent's step: Walnut's own agent window only, while you are not in it) and
+  `revealForPerson` (your own click, the one call that focuses a window), both in `agent-window.ts`.
+- **Never a window of yours.** The agent window is Walnut's only while you do not use it
+  (`agent-window-own.ts`): the moment it holds a page of yours (a New Tab you typed into, a link
+  from another app that Chrome put there, a tab you dragged in), Walnut gives it up, closes its
+  own "Walnut agent window" page there, and moves its agents' tabs to a new agent window behind
+  yours; your tabs stay as they are. 2026-11-17: the agent window had become the user's main
+  window, and every agent step switched his front tab to an agent's tab or that page while he was
+  in another app (a check of "the window is focused" is false then), so it kept appearing in front
+  of him. `tests/core/browser-control/extension-agent-window-own.test.ts`.
+- **Out of a screen share** (experiment `agent_window_hides_while_sharing`, Settings, Experimental).
+  Sharing Chrome as an application shares every Chrome window on screen, the agent window behind
+  yours too. With the switch on, while the Mac shares or records its screen the browser on that
+  Mac keeps the agent window minimized: it is minimized when a share starts, and one made during a
+  share is made minimized. Walnut never shows it again by itself (showing a minimized window on
+  macOS brings it to the front): open it from the Dock. The server reads macOS's screen-watcher
+  flag (`CGSIsScreenWatcherPresent`, no permission needed) with one `osascript` and tells only an
+  extension polling from that same machine (`src/core/browser-control/screen-share.ts`).
   The phone has no Browser view yet: it would need the same frame route polled from the iOS
   session screen.
 - **Never a second sign-in behind your back.** An `open` or `navigate` to a site you already have

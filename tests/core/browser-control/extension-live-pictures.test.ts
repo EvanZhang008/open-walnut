@@ -48,7 +48,7 @@ const tab = (id = 7) => ({ id, windowId: 3, active: id === 7 ? fake.active : !fa
 ;(globalThis as any).chrome = {
   runtime: { id: 'test', getURL: (p: string) => `chrome-extension://walnut/${p}`, onMessage: ev() },
   storage: {
-    session: { get: async (k: string) => ({ [k]: fake.session[k] }), set: async (o: Record<string, unknown>) => { Object.assign(fake.session, o) } },
+    session: { get: async (k: string) => ({ [k]: fake.session[k] }), set: async (o: Record<string, unknown>) => { Object.assign(fake.session, o) }, remove: async (k: string | string[]) => { for (const x of [k].flat()) delete fake.session[x] } },
     local: {
       get: async (k: string | string[]) => Object.fromEntries((Array.isArray(k) ? k : [k]).filter((x) => x in fake.local).map((x) => [x, fake.local[x]])),
       set: async (o: Record<string, unknown>) => {
@@ -132,7 +132,8 @@ async function watch(n: number, onPost?: (b: Record<string, unknown>, i: number)
 }
 
 beforeEach(() => {
-  fake.session = { agentTabs: { 7: { owner: OWNER, grant: 'g1', who: 'Order paper' } }, agentWindow: 3 }
+  // Tab 8, the other tab of the agent window, is another agent's (agent-window-own.ts: a tab no agent made is the person's).
+  fake.session = { agentTabs: { 7: { owner: OWNER, grant: 'g1', who: 'Order paper' } }, agentMade: { 8: 0 }, agentWindow: 3 }
   fake.local = { realInput: true }
   fake.captureError = ''
   fake.captures = 0

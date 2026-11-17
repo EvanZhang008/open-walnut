@@ -31,7 +31,7 @@ import { DEBUGGER_OPS, TRUSTED_OPS, defaultTrustedAct, trustedAct, trustedByDefa
 import { fileAccessOn } from './agent-upload'
 import { fillFrames } from './bg-fill'
 import { inHandedReach } from './agent-tab-kind'
-import { openInAgentWindow, resizeAgentWindow, windowOf } from './agent-window'
+import { noteScreenShare, openInAgentWindow, resizeAgentWindow, windowOf } from './agent-window'
 import { bringUpForCommand, noteWorked, viewFrame, viewWatch, watchedOwner, type PushAnswer } from './agent-view'
 import { drivingRefusal, handBack, takeOver } from './agent-takeover'
 import { openGrant, watchGrantClose } from './grant-open'
@@ -255,6 +255,15 @@ async function act(cmd: WireCommand): Promise<unknown> {
           await forgetAgentMade(tabId)
           return { tab: tabId, closed: false, released: true }
         }
+      }
+      // An agent's tab left in front of a window of the person's (agent-window-own.ts gave that
+      // window up with it there): closing it would change what their window shows, so it is only let go.
+      if (tab.active && !personsTab(rec) && tab.windowId !== await agentWindowId()) {
+        await agentTabs.delete(tabId)
+        await stopRecording(tabId)
+        await mark(tabId, false)
+        await forgetAgentMade(tabId)
+        return { tab: tabId, closed: false, released: true, kept: 'person_window_front' }
       }
       await agentTabs.delete(tabId)
       await stopRecording(tabId)
@@ -502,10 +511,13 @@ export async function agentLoop(): Promise<void> {
           // the page that turns them on (agent-live.ts, grant-open.ts); Chrome only (the debugger).
           ...(isFirefox ? [] : ['live-pictures']),
         ]
-        const r = await call<{ commands: WireCommand[] }>('POST', '/browser/poll', {
+        const r = await call<{ commands: WireCommand[]; screenShared?: boolean }>('POST', '/browser/poll', {
           browser: isFirefox ? 'firefox' : 'chrome', version: ext.runtime.getManifest().version, build: buildOf(ext.runtime.getManifest().version_name) ?? undefined, caps, tabs: await report(), waitMs: 25_000,
         }, { noSession: true, timeoutMs: 40_000 })
         backoff = 1000
+        // This machine's screen shared: the agent window goes to the Dock (agent-window.ts).
+        // No word (the experiment off, an older Walnut): not shared, so no new window is made minimized.
+        void noteScreenShare(ext, r.screenShared === true).catch(() => undefined)
         for (const c of r.commands ?? []) void run(c)
       } catch (err) {
         if (err instanceof ApiError && (err.code === 'not_connected' || err.code === 'token_refused' || err.code === 'not_paired' || err.code === 'not_extension')) break

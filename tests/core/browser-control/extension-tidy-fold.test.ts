@@ -23,7 +23,7 @@ const fake = {
 ;(globalThis as any).chrome = {
   runtime: { id: 'test', getURL: (p: string) => `chrome-extension://walnut/${p}`, onMessage: ev() },
   storage: {
-    session: { get: async (k: string) => ({ [k]: fake.session[k] }), set: async (o: Record<string, unknown>) => { Object.assign(fake.session, o) } },
+    session: { get: async (k: string) => ({ [k]: fake.session[k] }), set: async (o: Record<string, unknown>) => { Object.assign(fake.session, o) }, remove: async (k: string | string[]) => { for (const x of [k].flat()) delete fake.session[x] } },
     local: { get: async () => ({}), set: async () => {} },
   },
   tabs: {
@@ -68,7 +68,7 @@ function groupApi() {
     },
     runtime: { getURL: (p: string) => `chrome-extension://walnut/${p}` },
     windows: { get: async () => ({ ...win }) },
-    storage: { session: { get: async (k: string) => ({ [k]: session[k] }), set: async (o: Record<string, unknown>) => { Object.assign(session, o) } } },
+    storage: { session: { get: async (k: string) => ({ [k]: session[k] }), set: async (o: Record<string, unknown>) => { Object.assign(session, o) }, remove: async (k: string | string[]) => { for (const x of [k].flat()) delete session[x] } } },
   }
   return { api, groups, tabs, made, session, win }
 }

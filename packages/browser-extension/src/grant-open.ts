@@ -20,6 +20,7 @@
 import { ext, type Tab } from './ext'
 import { more } from './agent-api'
 import { agentWindowId } from './agent-shared'
+import { revealForPerson } from './agent-window'
 import { debuggerGranted, livePicturesOn } from './trusted-switch'
 
 export const GRANT_PAGE = 'grant.html'
@@ -108,6 +109,5 @@ export function _resetGrantOpenForTesting(): void { watching = false }
 
 /** The person's click: the page in front of their window, and that window forward. */
 async function bringUp(tab: Tab): Promise<void> {
-  if (tab.id !== undefined) await ext.tabs.update(tab.id, { active: true }).catch(() => undefined)
-  if (tab.windowId !== undefined) await ext.windows.update?.(tab.windowId, { focused: true }).catch(() => undefined)
+  await revealForPerson(ext, tab, 'grant-open')
 }

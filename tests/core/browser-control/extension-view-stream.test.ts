@@ -34,7 +34,7 @@ const tab = (id = 7) => ({ id, windowId: 3, active: id === fake.front, url: 'htt
 ;(globalThis as any).chrome = {
   runtime: { id: 'test', getURL: (p: string) => p, onMessage: ev() },
   storage: {
-    session: { get: async (k: string) => ({ [k]: fake.session[k] }), set: async (o: Record<string, unknown>) => { Object.assign(fake.session, o) } },
+    session: { get: async (k: string) => ({ [k]: fake.session[k] }), set: async (o: Record<string, unknown>) => { Object.assign(fake.session, o) }, remove: async (k: string | string[]) => { for (const x of [k].flat()) delete fake.session[x] } },
     local: { get: async () => ({}), set: async () => {} },
   },
   tabs: {
@@ -285,7 +285,7 @@ describe('the task\'s tab group', () => {
         get: async (id: number) => { const g = groups.get(id); if (!g) throw new Error('No group'); return g },
         update: async (id: number, o: { title?: string; collapsed?: boolean }) => { if ('collapsed' in o) folds++; groups.get(id)!.title = o.title },
       },
-      storage: { session: { get: async (k: string) => ({ [k]: session[k] }), set: async (o: Record<string, unknown>) => { Object.assign(session, o) } } },
+      storage: { session: { get: async (k: string) => ({ [k]: session[k] }), set: async (o: Record<string, unknown>) => { Object.assign(session, o) }, remove: async (k: string | string[]) => { for (const x of [k].flat()) delete session[x] } } },
     }
     await groupAgentTab(api as never, 7, OWNER, 'Order printer paper', 3)
     await groupAgentTab(api as never, 8, OWNER, 'Order printer paper', 3)

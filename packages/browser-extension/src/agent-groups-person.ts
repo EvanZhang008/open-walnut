@@ -28,6 +28,7 @@
  *     grouped (Chrome would unpin it).
  */
 import { AGENT_PAGE, GROUP_COLOR, groupTitle, inGroupChain, type GroupApi } from './agent-groups'
+import { ownAgentWindow, type OwnApi } from './agent-window-own'
 
 const GROUPS = 'agentPersonGroups'
 export const BEFORE = 'agentGroupBefore'
@@ -60,7 +61,7 @@ export function groupPersonTab(api: GroupApi, tabId: number, owner: string, who:
     // A pinned tab stays pinned: Chrome would unpin it to group it.
     if (!tab || tab.windowId === undefined || tab.pinned) return
     // The agent window has its own groups (agent-groups.ts groupAgentTab).
-    if (tab.windowId === (await api.storage.session.get('agentWindow')).agentWindow) return
+    if (tab.windowId === await ownAgentWindow(api as unknown as OwnApi)) return
     const groups = await readGroups(api)
     const key = groupKey(owner, tab.windowId)
     const title = groupTitle(who)
@@ -237,7 +238,7 @@ export function restoreLeftPersonTabs(api: GroupApi, held: (tabId: number) => Pr
 /** Walnut's agent window, by its id this session and by its own page (a restored one after a restart). */
 async function agentWindowsNow(api: GroupApi): Promise<Set<number>> {
   const out = new Set<number>()
-  const id = (await api.storage.session.get('agentWindow')).agentWindow
+  const id = await ownAgentWindow(api as unknown as OwnApi)
   if (typeof id === 'number') out.add(id)
   const page = api.runtime?.getURL(AGENT_PAGE)
   if (page && api.tabs.query) for (const t of await api.tabs.query({}).catch(() => [])) if (t.url?.startsWith(page) && t.windowId !== undefined) out.add(t.windowId)

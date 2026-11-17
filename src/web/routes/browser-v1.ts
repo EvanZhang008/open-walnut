@@ -127,6 +127,12 @@ async function deviceLabel(device: string): Promise<string> {
   } catch { return device }
 }
 
+/** One share-change waker per local browser (screen-share.ts). */
+const shareWakers = new Map<string, () => void>()
+function localShareWake(device: string, wake: () => void, on: (fn: () => void) => () => void): void {
+  if (!shareWakers.has(device)) shareWakers.set(device, on(wake))
+}
+
 browserV1Router.post('/browser/poll', (req, res, next) => {
   const device = extensionOf(req, res)
   if (!device) return
@@ -149,6 +155,12 @@ browserV1Router.post('/browser/poll', (req, res, next) => {
         ...(t.driving === true ? { driving: true } : {}),
       })).slice(0, 200) : undefined
     const label = await deviceLabel(device)
+    const local = requestOrigin(req) === LOCAL_ORIGIN
+    // A change of the share state answers this browser's waiting poll at once.
+    const share = await import('../../core/browser-control/screen-share.js')
+    if (local) localShareWake(device, () => h.wake(device), share.onScreenShareChange)
+    // The reader starts with the first poll, not after its wait (a share then is heard at once).
+    void share.shareStateForPoll(local).catch(() => undefined)
     let gone = false
     let polling: Promise<import('../../core/browser-control/hub.js').WireCommand[]> | undefined
     res.on('close', () => { if (!res.writableFinished) { gone = true; if (polling) h.dropPoll(device, polling) } })
@@ -165,7 +177,9 @@ browserV1Router.post('/browser/poll', (req, res, next) => {
     const commands = await polling
     // The extension stopped listening (its background was stopped): the next poll takes them.
     if (gone) { h.requeue(device, commands); return undefined }
-    return { commands }
+    // A browser on this machine hears whether its screen is shared (screen-share.ts): it keeps the agent window minimized then.
+    const shared = await share.shareStateForPoll(local)
+    return { commands, ...(shared === undefined ? {} : { screenShared: shared }) }
   })
 })
 
@@ -907,4 +921,6 @@ export function _resetBrowserRoutesForTesting(): void {
   handed.clear()
   _stopTabTidyForTesting()
   _resetBrowserViewForTesting()
+  for (const off of shareWakers.values()) off()
+  shareWakers.clear()
 }

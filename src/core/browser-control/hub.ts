@@ -255,6 +255,12 @@ export function poll(info: ControllerInfo, waitMs = POLL_MAX_MS): Promise<WireCo
   return promise
 }
 
+/** A waiting poll of the device answers now, with no command (it brings fresh state: screen-share.ts). */
+export function wake(device: string): void {
+  const c = controllers.get(device)
+  if (c?.waiter) { const w = c.waiter; c.waiter = undefined; clearTimeout(w.timer); w.resolve([]) }
+}
+
 /** The extension's answer to one command. Only the device the command went to may answer it. */
 export function answer(device: string, id: string, ok: boolean, result: unknown, error?: { message?: string; code?: string; extra?: Record<string, unknown> }): boolean {
   const p = pending.get(id)

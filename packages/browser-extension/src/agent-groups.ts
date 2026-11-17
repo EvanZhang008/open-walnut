@@ -9,6 +9,8 @@
  * works as before.
  */
 import type { Tab } from './ext'
+import { AGENT_PAGE, ownAgentWindow, type OwnApi } from './agent-window-own'
+import { frontInWindow } from './agent-window'
 
 /** The calls grouping needs, loosely typed (Chrome's tabs.group and tabGroups). */
 export interface GroupApi {
@@ -104,7 +106,7 @@ export function groupAgentTab(api: GroupApi, tabId: number, owner: string, who: 
  * (agent-window.html, AGENT_PAGE) comes in front first.
  */
 export const FOLD_IDLE_MS = 8000
-export const AGENT_PAGE = 'agent-window.html'
+export { AGENT_PAGE }
 const usedAt = new Map<string, number>()
 const foldTimers = new Map<string, ReturnType<typeof setTimeout>>()
 /** Whether a command of the owner's runs now (agent.ts says): a group never folds under one. */
@@ -147,7 +149,7 @@ export function foldIdleGroup(api: GroupApi, owner: string, now = Date.now()): P
     const g = await api.tabGroups.get(gid).catch(() => null)
     if (!g || g.collapsed) return false
     // Only in the agent window: a group the person dragged into a window of theirs is theirs to fold.
-    if (g.windowId !== (await api.storage.session.get('agentWindow')).agentWindow) return false
+    if (g.windowId !== await ownAgentWindow(api as unknown as OwnApi)) return false
     const [front] = await api.tabs.query({ active: true, windowId: g.windowId })
     // The person is in the agent window, or has its front tab (Take over): their view is never switched.
     const looking = (await api.windows?.get(g.windowId).catch(() => null))?.focused === true
@@ -158,8 +160,8 @@ export function foldIdleGroup(api: GroupApi, owner: string, now = Date.now()): P
     }
     if (front?.groupId === gid) {
       const page = await agentPageTab(api, g.windowId)
-      if (page === undefined) return false
-      await api.tabs.update(page, { active: true })
+      // Its page in front first (frontInWindow: never in a window the person is in or uses).
+      if (page === undefined || !(await frontInWindow(api as never, g.windowId, page))) return false
     }
     await api.tabGroups.update(gid, { collapsed: true })
     return true

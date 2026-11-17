@@ -12,6 +12,7 @@ import { keptReady } from './agent-keep'
 import { walnutAddress } from './walnut-address'
 import { injectContent, pageCheck, reachPage, toPage, type ReachError } from './page-reach'
 import { windowOf } from './agent-window'
+import { ownAgentWindow, type OwnApi } from './agent-window-own'
 import { more } from './agent-api'
 import { endLinger } from './cdp'
 
@@ -86,8 +87,8 @@ export const nearPerson = (rec: AgentTab | undefined) => personsTab(rec) || !!re
 /** The agent window, where an agent's own tabs open. */
 export async function agentWindowId(): Promise<number | undefined> {
   await keptReady()
-  const { agentWindow } = await ext.storage.session.get('agentWindow')
-  return typeof agentWindow === 'number' ? agentWindow : undefined
+  // Never a window the person works in (agent-window-own.ts gives such a window up).
+  return ownAgentWindow(ext as unknown as OwnApi)
 }
 
 /**

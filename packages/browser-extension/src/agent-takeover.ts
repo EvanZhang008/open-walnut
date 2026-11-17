@@ -16,6 +16,7 @@ import { ext } from './ext'
 import { more } from './agent-api'
 import { endLinger } from './cdp'
 import { AgentError, agentTabs, agentWindowId, mark, personsTab, where, type AgentTab, type WireCommand } from './agent-shared'
+import { revealForPerson } from './agent-window'
 
 /** The person has the tab: since when (ms). */
 export const drivingSince = (rec: AgentTab | undefined): number | undefined => (typeof rec?.driving === 'number' ? rec.driving : undefined)
@@ -64,9 +65,8 @@ export async function takeOver(c: WireCommand): Promise<Record<string, unknown>>
   // Only the agent's own window is brought forward. A tab of the person's (handed over, or taken
   // in their window) is already where they work: their window is never switched or focused.
   if (!personsTab(rec) && tab.windowId === await agentWindowId()) {
-    await ext.tabs.update(tabId, { active: true })
     // The person's own click on Take over, never an agent's command: the window comes forward for them.
-    await ext.windows.update?.(tab.windowId, { focused: true })
+    await revealForPerson(ext, tab, 'takeover')
   }
   await mark(tabId, true, rec?.who, 'driving')
   return { ...(await where(tabId)), driving: true, since: new Date(drivingSince(rec) ?? since).toISOString() }

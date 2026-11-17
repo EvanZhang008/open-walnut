@@ -25,7 +25,7 @@
  *   - Nothing here focuses a window or changes a tab: it reads ids and writes storage.
  */
 import { ext } from './ext'
-import { AGENT_PAGE } from './agent-groups'
+import { AGENT_PAGE } from './agent-window-own'
 import { siteKey } from '../../../src/core/vault/url-match'
 import { KEPT_KEYS, type KeptKey } from './session-keys'
 

@@ -803,6 +803,49 @@ test('fill_code types the saved login\'s one-time code into the page; the agent 
   expect((await act(page, { action: 'navigate', url: site('shop.example.test', '/order') })).status).toBe(200)
 })
 
+// 2026-11-17, the user's Chrome: the agent window had become his own main window, and every agent
+// step put an agent's tab or Walnut's page in front of it. A page of the person's in the agent
+// window makes it theirs (agent-window-own.ts): the agents' tabs move to a new window, Walnut's page
+// there closes, and the tab the person is on stays in front.
+test('a page of the person\'s in the agent window makes it theirs: the next open goes to a new agent window, their front tab stays', async () => {
+  const page = agentPage()!
+  const sw = ctx.serviceWorkers()[0]
+  // An agent's tab in the agent window, and that window.
+  const first = await act(page, { action: 'open', url: site('shop.example.test', '/order') })
+  expect(first.status, JSON.stringify(first.body)).toBe(200)
+  const held = first.body.tab as number
+  const before = await sw.evaluate(async (tab: number) => (await chrome.tabs.get(tab)).windowId, held)
+  // The person opens a page of their own in that window (as Chrome does for a link from another app) and is on it.
+  const mine = await sw.evaluate(async (a: { w: number; url: string }) => (await chrome.tabs.create({ windowId: a.w, url: a.url, active: true })).id!, { w: before, url: site('mine.other.test', '/mine') })
+  await expect.poll(() => sw.evaluate(async (id: number) => (await chrome.tabs.get(id)).status, mine)).toBe('complete')
+  const opened = await act(page, { action: 'open', url: site('shop.example.test', '/order') })
+  expect(opened.status, JSON.stringify(opened.body)).toBe(200)
+  const now = await sw.evaluate(async (a: { w: number; held: number; fresh: number }) => {
+    const inOld = await chrome.tabs.query({ windowId: a.w })
+    return {
+      held: (await chrome.tabs.get(a.held)).windowId,
+      fresh: (await chrome.tabs.get(a.fresh)).windowId,
+      front: inOld.find((t) => t.active)?.id,
+      oldUrls: inOld.map((t) => t.url ?? ''),
+      newType: (await chrome.windows.get((await chrome.tabs.get(a.fresh)).windowId)).type,
+    }
+  }, { w: before, held, fresh: opened.body.tab as number })
+  // A new agent window: the new tab and the agent's earlier one are there, not in the person's.
+  expect(now.fresh).not.toBe(before)
+  expect(now.held).toBe(now.fresh)
+  expect(now.newType).toBe('normal')
+  expect(opened.body.window).toBe('agent')
+  // The person's window: their page still in front, no agent's tab and no Walnut page left there.
+  expect(now.front).toBe(mine)
+  expect(now.oldUrls).toContain(site('mine.other.test', '/mine'))
+  expect(now.oldUrls.filter((u) => u.includes('agent-window.html') || u.startsWith(site('shop.example.test', '')))).toEqual([])
+  // The agent works on in its tab where it is now.
+  const snap = await act(page, { action: 'snapshot', tab: held })
+  expect(snap.status, JSON.stringify(snap.body)).toBe(200)
+  await sw.evaluate(async (id: number) => { await chrome.tabs.remove(id) }, mine)
+  for (const tab of [held, opened.body.tab]) expect((await act(page, { action: 'close', tab })).status).toBe(200)
+})
+
 test('the cursor goes by itself once the agent stops acting, and gets out of the person\'s way (2026-11-15)', async () => {
   test.setTimeout(150_000)
   const tab = agentPage()!

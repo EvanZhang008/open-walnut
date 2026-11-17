@@ -48,6 +48,12 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'An editable hand-drawn whiteboard saved in Notes, as an app and beside a session.',
     default: false,
   },
+  {
+    id: 'agent_window_hides_while_sharing',
+    name: 'Hide the agent window while you share your screen',
+    description: 'While this Mac shares or records its screen (a meeting app sharing a window, an app or the whole screen), the browser on this Mac keeps Walnut\'s agent window minimized, so an agent\'s pages never show in the share. It stays minimized after the share: open it from the Dock.',
+    default: false,
+  },
 ] as const;
 
 export type ExperimentalFeatureId = typeof EXPERIMENTAL_FEATURES[number]['id'];

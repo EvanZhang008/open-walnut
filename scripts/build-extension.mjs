@@ -65,6 +65,7 @@ const AGENT_WINDOW_PAGE = `<!doctype html>
 <h1>Walnut agent window</h1>
 <p>Walnut's agents open their pages in this window. Each task's tabs sit in one tab group named walnut-&lt;task name&gt;, folded while no agent uses them.</p>
 <p>It stays behind your own windows: Walnut never brings it forward. Watch a task's tabs in the task's Browser view in Walnut, or take one over from there.</p>
+<p>Keep your own pages in your own windows. If you open one here, this window becomes yours: Walnut leaves it, closes this page, and moves its agents' tabs to a new window of its own.</p>
 </body>
 </html>
 `

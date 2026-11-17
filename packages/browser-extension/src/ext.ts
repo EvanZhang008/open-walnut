@@ -44,11 +44,11 @@ export interface ExtApi {
     onActivated: Event<(info: { tabId: number; windowId: number }) => void>
   }
   windows: {
-    create(o: { url: string; type?: string; width?: number; height?: number; focused?: boolean }): Promise<Win>
+    create(o: { url: string; type?: string; width?: number; height?: number; focused?: boolean; state?: 'minimized' }): Promise<Win>
     get(id: number, o?: { populate?: boolean }): Promise<Win>
     getCurrent(): Promise<Win>
     /** focused only for the person's own click (background.ts openWalnutTab); agent code sets a size alone (agent-window.ts resizeAgentWindow). */
-    update?(windowId: number, o: { focused?: boolean; width?: number; height?: number; state?: 'normal' }): Promise<Win>
+    update?(windowId: number, o: { focused?: boolean; width?: number; height?: number; state?: 'normal' | 'minimized' }): Promise<Win>
     onRemoved: Event<(windowId: number) => void>
   }
   permissions: {
