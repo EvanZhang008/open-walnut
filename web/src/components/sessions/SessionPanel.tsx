@@ -166,7 +166,7 @@ import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
 import { useResolvedSessionRecord, useSessionSettings, useSessionStatus } from '@/hooks/useSessionStatus';
 import { ComposerThreadPill } from './ComposerThreadPill';
 import { useHostStatus } from '@/hooks/useHostStatus';
-import { applySessionSettings, clearSessionSettings } from '@/stores/session-status-store';
+import { applySessionSettings, clearSessionSettings, sessionReplaced } from '@/stores/session-status-store';
 import { useSessionControls } from '@/hooks/useSessionControls';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { useEngineSettingsEntry } from './useEngineSettingsEntry';
@@ -546,6 +546,10 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const recordSidRef = useCommittedRef(sessionId);
   const rereadRecord = useCoalescedRefresh(async () => {
     const sid = recordSidRef.current;
+    // Replaced while the read waited (a Codex thread that failed to load got a new one, and its
+    // old record is deleted): the panel moves to the new id and reads that itself; the old id
+    // would only answer 404.
+    if (sessionReplaced(sid)) return;
     const s = await fetchSession(sid);
     if (s && sid === recordSidRef.current) setSession((prev) => (sameJson(prev, s) ? prev : s));
   }, RECORD_REREAD_COALESCE_MS).request;

@@ -49,7 +49,7 @@ describe('the left half reads the panel\'s timeline and fetches nothing', () => 
     // The one call left is bumpHistory's own.
     expect(direct.length).toBe(1);
     // One coalesced read a moment (useCoalescedRefresh); the read itself skips a reader.
-    expect(SCH).toMatch(/const bumps = useCoalescedRefresh\(\(\) => \{\s*if \(!readingRef\.current\) setHistoryVersion\(\(v\) => v \+ 1\);\s*\}, HISTORY_BUMP_COALESCE_MS\);\s*const bumpHistory = bumps\.request;/);
+    expect(SCH).toMatch(/const bumps = useCoalescedRefresh\(\(\) => \{\s*if \(!readingRef\.current && !sessionReplaced\(bumpSidRef\.current\)\) setHistoryVersion\(\(v\) => v \+ 1\);[^]*?\}, HISTORY_BUMP_COALESCE_MS\);\s*const bumpHistory = bumps\.request;/);
   });
 
   it('a hidden-tab reconnect refetches in every mounted timeline (its key is per mount)', () => {

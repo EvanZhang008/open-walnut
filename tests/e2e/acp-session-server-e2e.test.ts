@@ -944,8 +944,10 @@ rl.on('line', line => {
 
     await waitForAsync(async () => (await getQueue(previousSessionId)).length === 0
       && (await getQueue(newSessionId)).length === 0, 10_000, 'fallback delivery queue settled')
-    expect((await getSessionsForTask(taskId))
-      .find((record) => record.claudeSessionId === previousSessionId)).toBeUndefined()
+    // The old id's archived redirect is retired a moment after the replacement event
+    // (ACP_REDIRECT_RETIRE_MS), so a read a page sent before that event is still answered.
+    await waitForAsync(async () => !(await getSessionsForTask(taskId))
+      .find((record) => record.claudeSessionId === previousSessionId), 15_000, 'old id retired')
     const settled = (await getSessionsForTask(taskId))
       .find((record) => record.claudeSessionId === newSessionId)!
     expect(settled.messageCount).toBe(beforeRecord.messageCount + 1)

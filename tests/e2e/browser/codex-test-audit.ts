@@ -248,6 +248,10 @@ export async function installBrowserAudit(page: Page, walnutHome: string): Promi
               // before its answer cancels the read, so the low-priority lane gets its
               // slot back. A pick that closes the picker at once does that (CI run 41614274036).
               || /^\/api\/sessions\/[^/]+\/cost(?:\/compare)?$/.test(pathname)
+              // A draft's launch-mode label (hooks/useClaudeLaunchMode.ts): a draft that
+              // sends, closes or changes folder cancels its read, so a late answer never
+              // labels another draft.
+              || pathname === '/api/engines/claude/launch-mode'
               // Who-am-I, read at every page load: a reload cuts the previous one.
               || pathname === '/api/v1/me'
               // The sign-in cookie refresh, also sent at every page load (web/src/api/device-token.ts).

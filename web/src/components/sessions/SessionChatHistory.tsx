@@ -1,5 +1,7 @@
 import { countRender } from '@/utils/render-count';
 import { useCoalescedRefresh } from '@/hooks/useCoalescedRefresh';
+import { sessionReplaced } from '@/stores/session-status-store';
+import { useCommittedRef } from '@/hooks/useCommittedRef';
 import { startTransition, useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore, useContext, memo, isValidElement, type MutableRefObject, type ReactNode } from 'react';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { pageOfStreamBlock } from '@/utils/stream-block-page';
@@ -756,8 +758,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // batch completes, the result lands, 30 to 300 ms apart) and each bump was a history read of
   // its own, the effect aborting the one before (2026-11-16, task 9bceb9f2: three reads a send;
   // /history p50 358 ms on the Mac). The read goes when the moment ends, so it sees all of them.
+  // A session replaced while the bump waited is read under its new id once the view moves.
+  const bumpSidRef = useCommittedRef(sessionId);
   const bumps = useCoalescedRefresh(() => {
-    if (!readingRef.current) setHistoryVersion((v) => v + 1);
+    if (!readingRef.current && !sessionReplaced(bumpSidRef.current)) setHistoryVersion((v) => v + 1);
   }, HISTORY_BUMP_COALESCE_MS);
   const bumpHistory = bumps.request;
   const shared = useSyncExternalStore(...shareStoreArgs(readTimeline));

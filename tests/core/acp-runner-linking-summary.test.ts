@@ -21,6 +21,7 @@ import * as taskManager from '../../src/core/task-manager.js';
 import {
   _resetSessionTrackerForTesting,
   createSessionRecord,
+  getAcpIdentityReplacementTarget,
   getSessionByClaudeId,
   stageAcpSessionIdMigration,
   updateSessionRecord,
@@ -382,7 +383,10 @@ describe('ACP task linking and fork routing', () => {
       adoptSessionResponse(response: unknown): Promise<void>;
     }).adoptSessionResponse({ sessionId: newId });
 
-    expect(await getSessionByClaudeId(oldId)).toBeNull();
+    // The old id stays an archived redirect to the new one a moment (ACP_REDIRECT_RETIRE_MS), so a
+    // read a page sent before it heard of the new id is answered; then it is retired.
+    expect(getAcpIdentityReplacementTarget((await getSessionByClaudeId(oldId))!)).toBe(newId);
+    await vi.waitFor(async () => expect(await getSessionByClaudeId(oldId)).toBeNull(), { timeout: 10_000, interval: 200 });
     expect(await getSessionByClaudeId(newId)).toMatchObject({
       claudeSessionId: newId,
       acpRuntimeId: 'acp-fallback-runtime',
@@ -966,6 +970,9 @@ describe('ACP engine identity (non-codex engines)', () => {
       engine: 'gemini',
       acpRuntimeId: RUNTIME,
     });
-    expect(await getSessionByClaudeId(oldId)).toBeNull();
+    // The old id stays an archived redirect to the new one a moment (ACP_REDIRECT_RETIRE_MS), so a
+    // read a page sent before it heard of the new id is answered; then it is retired.
+    expect(getAcpIdentityReplacementTarget((await getSessionByClaudeId(oldId))!)).toBe(newId);
+    await vi.waitFor(async () => expect(await getSessionByClaudeId(oldId)).toBeNull(), { timeout: 10_000, interval: 200 });
   });
 });

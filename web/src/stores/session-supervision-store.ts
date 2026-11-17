@@ -1,5 +1,6 @@
 import { fetchSessionSupervision, setSessionSupervision, terminateSession, type SessionSupervision } from '@/api/sessions';
 import { isBrowserNetworkMessage, readErrorWords } from '@/utils/operation-error-words';
+import { sessionReplaced } from '@/stores/session-status-store';
 
 export interface SupervisionSnapshot {
   value: SessionSupervision | null;
@@ -128,7 +129,8 @@ export function refreshSessionSupervisionSoon(sid: string): void {
   if (entry.soon) clearTimeout(entry.soon);
   entry.soon = setTimeout(() => {
     entry.soon = null;
-    if (entry.listeners.size) void refreshSessionSupervision(sid);
+    // Replaced while the read waited (its record is gone): the bar follows the new id.
+    if (entry.listeners.size && !sessionReplaced(sid)) void refreshSessionSupervision(sid);
   }, EVENT_REREAD_MS);
 }
 

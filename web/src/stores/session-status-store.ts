@@ -1066,6 +1066,12 @@ export class SessionStatusStore {
 
 export const sessionStatusStore = new SessionStatusStore();
 
+/** The session was replaced by another (its id is an alias now): reads of it answer 404. */
+export function sessionReplaced(sessionId: string): boolean {
+  const current = sessionStatusStore.resolveSessionId(sessionId);
+  return current !== null && current !== sessionId;
+}
+
 export function seedSessionStatus(record: SessionRecord | unknown, source?: SessionStatusSource): void {
   sessionStatusStore.seedSessionRecord(record, source);
 }

@@ -733,6 +733,36 @@ interface PendingPermission {
   meta?: Record<string, unknown>
 }
 
+/** How long the archived redirect of a replaced ACP session id stays readable after the clients were told its new id. */
+export const ACP_REDIRECT_RETIRE_MS = 5_000
+
+/**
+ * Delete the row `previousSessionId` left by an identity replacement (its archived redirect),
+ * once ACP_REDIRECT_RETIRE_MS has passed: only while it is still this runtime's (`ours`) and
+ * redirects nowhere else. A failure leaves the redirect, which the next attach of that id finishes.
+ */
+function retireAcpRedirectLater(
+  previousSessionId: string,
+  replacementId: string,
+  ours: (record: import('../core/types.js').SessionRecord) => boolean,
+): void {
+  const timer = setTimeout(() => {
+    void (async () => {
+      const { getAcpIdentityReplacementTarget } = await import('../core/session-tracker.js')
+      const redirect = await getSessionByClaudeId(previousSessionId)
+      if (!redirect || !ours(redirect)) return
+      const target = getAcpIdentityReplacementTarget(redirect)
+      if (target !== null && target !== replacementId) return
+      await deleteSessionRecords(new Set([previousSessionId]), 'acp-identity-replaced')
+    })().catch((err) => {
+      log.session.warn('ACP identity replacement: the old id\'s redirect stays until its next attach', {
+        previousSessionId, replacementId, error: err instanceof Error ? err.message : String(err),
+      })
+    })
+  }, ACP_REDIRECT_RETIRE_MS)
+  timer.unref?.()
+}
+
 export class AcpSession {
   readonly runtimeId: string
   readonly taskId: string
@@ -2293,16 +2323,10 @@ export class AcpSession {
           // at the replacement AND every queue row is durably reachable through
           // the new identity. Reattach can finish this protocol after a crash.
           const previousRecord = await getSessionByClaudeId(previousSessionId)
-          if (previousRecord) {
-            if (!this.isSameDurableIdentity(previousRecord)) {
-              throw new Error(
-                `ACP prior session ID ${previousSessionId} no longer belongs to this runtime`,
-              )
-            }
-            const removed = await deleteSessionRecords(new Set([previousSessionId]), 'acp-identity-replaced')
-            if (removed !== 1 && await getSessionByClaudeId(previousSessionId)) {
-              throw new Error(`ACP prior session record ${previousSessionId} could not be retired`)
-            }
+          if (previousRecord && !this.isSameDurableIdentity(previousRecord)) {
+            throw new Error(
+              `ACP prior session ID ${previousSessionId} no longer belongs to this runtime`,
+            )
           }
         } catch (error) {
           const rollbackErrors: string[] = []
@@ -2362,6 +2386,12 @@ export class AcpSession {
           ['*'],
           { source: 'session-runner', urgency: 'urgent' },
         )
+        // The redirect is retired only after the clients were told the new id, and a moment
+        // later: a read of the old id a page sent before that word reached it (a record, a
+        // history delta, the supervision bar) is still answered, by the redirect, instead of
+        // with a 404 (2026-11-17, codex-interrupt-send). Until then the redirect is the state
+        // the protocol already allows after a crash, which an attach of the old id finishes.
+        retireAcpRedirectLater(previousSessionId, replacementId, (r) => this.isSameDurableIdentity(r))
       }
       this._providerSessionId = resp.sessionId
     }
