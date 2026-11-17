@@ -500,13 +500,13 @@ struct DiffComparePickerView: View {
     /// screen with the pick made (CI and lane B, 2026-11-15 and 11-16: "the commit is not the
     /// comparison").
     private func choose(_ option: DiffCompare) {
-        // Focus, not presentation: iOS 26.5 kept the keyboard up after a resign sent to the
-        // responder chain alone (CI 2026-11-16: "the picker's search stayed active after the pick").
+        // Focus, not presentation, and the pop only once the keyboard is down: iOS 26.5 kept the
+        // field and keyboard up when the resign and the pop came in one update, with the focus
+        // binding cleared too (CI 2026-11-16: "the picker's search stayed active after the pick").
+        // KeyboardAway looks for the focused field before the binding lets it go.
+        let pick = self.pick
+        KeyboardAway.then { pick(option) }
         searchFocused = false
-        UIApplication.shared.sendAction(
-            #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
-        )
-        pick(option)
     }
 
     /// The comparison on the page now (a short sha matches its full one).

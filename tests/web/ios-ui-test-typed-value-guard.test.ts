@@ -11,6 +11,11 @@
  * A button's state that follows the typing lags the same way (RoutinesUITests: Save still on
  * right after the name was deleted), so `XCTAssertTrue/False(<any>.isEnabled` within two lines
  * after a `typeText` is the same mistake: wait with `waitToMatch(button, "isEnabled == ...")`.
+ *
+ * Typing moves the page too: the keyboard it raises slides a sheet up, and a tap at a point of an
+ * element read while it moved hit nothing (ThreadPushCalendarDraftUITests on CI, iOS 26.5,
+ * 2026-11-16: "the all-day switch did not change"). So a `<el>.coordinate(...).tap()` within eight
+ * lines after a `typeText` comes after `waitStill(<el>)`.
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
@@ -37,6 +42,21 @@ export function typedThenReadAtOnce(src: string): number[] {
   return found
 }
 
+/** Each point tap on an element (not the app) within eight lines after typing, with no `waitStill` of it first. */
+export function pointTapWhileMoving(src: string): number[] {
+  const lines = src.split('\n')
+  const found: number[] = []
+  lines.forEach((line, i) => {
+    if (!/\.typeText\(/.test(line)) return
+    for (let j = i + 1; j <= i + 8 && j < lines.length; j++) {
+      const tap = /([\w.\[\]"]+)\.coordinate\(withNormalizedOffset:.*\)\.tap\(\)/.exec(lines[j])
+      if (!tap || tap[1] === 'app') continue
+      if (!lines.slice(i + 1, j).some((l) => l.includes(`waitStill(${tap[1]})`))) found.push(j + 1)
+    }
+  })
+  return [...new Set(found)]
+}
+
 describe('iOS UI tests: a typed field is read by waiting for its value', () => {
   it('finds the read-at-once form and leaves the waited one', () => {
     expect(typedThenReadAtOnce('input.typeText("a")\nXCTAssertEqual(input.value as? String, "a")')).toEqual([2])
@@ -51,6 +71,17 @@ describe('iOS UI tests: a typed field is read by waiting for its value', () => {
   it('no UI test reads a field at once after typing into it', () => {
     const found = files.flatMap((f) => typedThenReadAtOnce(read(f)).map((n) => `${f}:${n}`))
     expect(found, 'wait for it: XCTAssertTrue(waitForValue(field, expected), ...) (WalnutUITests/ElementWaits.swift)').toEqual([])
+  })
+
+  it('finds a point tap right after typing, and leaves one after waitStill', () => {
+    expect(pointTapWhileMoving('t.typeText("a")\nlet s = app.switches["x"]\ns.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()')).toEqual([3])
+    expect(pointTapWhileMoving('t.typeText("a")\nwaitStill(s)\ns.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()')).toEqual([])
+    expect(pointTapWhileMoving('t.typeText("a")\napp.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1)).tap()')).toEqual([])
+  })
+
+  it('no UI test taps a point of an element the typing may still be moving', () => {
+    const found = files.flatMap((f) => pointTapWhileMoving(read(f)).map((n) => `${f}:${n}`))
+    expect(found, 'call waitStill(element) first (WalnutUITests/ElementWaits.swift)').toEqual([])
   })
 
   it('the waits are defined once, in the shared helper', () => {

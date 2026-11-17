@@ -1035,6 +1035,7 @@ final class ModelPillHealUITests: XCTestCase {
         field.typeText("hello")
         let send = app.buttons["chat.send"]
         XCTAssertTrue(send.waitForExistence(timeout: 10), "no send button")
+        waitStill(send)
         send.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertTrue(waitUntil(timeout: 30) {
             ((try? self.syncRequests(stub)) ?? []).contains { $0.method == "POST" && $0.path.hasSuffix("/messages") }

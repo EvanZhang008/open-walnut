@@ -48,7 +48,10 @@ final class ThreadPushCalendarDraftUITests: ThreadPushUITestCase {
         let allDay = app.switches["calendar.create.allDay"]
         XCTAssertTrue(allDay.waitForExistence(timeout: 5), "the create sheet has no all-day switch")
         let before = allDay.value as? String
-        // The switch itself, at the row's trailing end (a tap on its label does not flip it).
+        // The switch itself, at the row's trailing end (a tap on its label does not flip it), once
+        // the sheet has settled: the keyboard the title raised moves it, and a point read while it
+        // moved missed the switch on CI (iOS 26.5, 2026-11-16).
+        waitStill(allDay)
         allDay.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
         XCTAssertTrue(poll(5) { (allDay.value as? String) != before }, "the all-day switch did not change")
         let changed = allDay.value as? String

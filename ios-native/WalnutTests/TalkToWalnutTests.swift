@@ -1108,9 +1108,10 @@ final class TalkSessionTests: XCTestCase {
         try await talk.toggle(source: "test", to: .ceo)
         await talk.finishing?.value
         XCTAssertEqual(talk.phase, .notSent(TalkReason.serverUnavailable, kept: true))
-        try await waitUntil { self.sender.sent.count == 1 }
+        // The take leaves the list after its send returns, a step after the sender saw it
+        // (CI on iOS 26.5, 2026-11-16: the list still held it): wait for both.
+        try await waitUntil { self.sender.sent.count == 1 && self.outbox.entries.isEmpty }
         XCTAssertEqual(sender.sent.map(\.text), ["hello"])
-        XCTAssertTrue(outbox.entries.isEmpty)
     }
 
     /// A page the last process left open opens on its page at the next launch, never as a list.
