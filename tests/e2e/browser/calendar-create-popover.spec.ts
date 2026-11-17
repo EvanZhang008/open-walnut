@@ -21,7 +21,7 @@ if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices[
 test.use({ viewport: { width: 1280, height: 860 } })
 // CAL_SHOTS=<dir>: keep a screenshot of each state, and a video of each test.
 const SHOTS = process.env.CAL_SHOTS
-if (SHOTS) test.use({ video: { mode: 'on', size: { width: 1280, height: 860 } } })
+if (SHOTS) test.use({ video: 'on' })
 async function shot(page: Page, name: string) {
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/${page.context().browser()?.browserType().name()}-${name}.png` })
 }
