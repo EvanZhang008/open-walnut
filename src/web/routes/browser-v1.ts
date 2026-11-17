@@ -628,7 +628,7 @@ browserV1Router.post('/browser/act', (req, res, next) => {
       const hold = err instanceof h.BrowserError && err.code === 'outward_needs_ok' && tab !== undefined ? outward.holdOf(err.extra) : null
       if (!hold) return null
       const askMe = await import('../../core/approvals/ask-me.js')
-      if (!(await askMe.asksPerson()) && args.outward_ok !== hold.sig) {
+      if (!(await askMe.asksPerson(hold.kind === 'buy' ? 'payment' : undefined)) && args.outward_ok !== hold.sig) {
         const words = outward.askWords(hold, requester.taskTitle)
         await askMe.goAheadUnasked('browserOutward', { what: words.what, detail: words.detail, requester, testRun: ambientTestRun() })
         log.web.info('browser act goes ahead unasked: approvals are off', { action, device: c.device, owner, tab, kind: hold.kind })
@@ -743,6 +743,18 @@ async function uploadGate(req: Request, res: Response, b: Record<string, unknown
   const granted = paths.filter((p) => !need.includes(p) && taskId && ug.grantedOf(taskId, site, [p]).length)
   if (need.length) {
     if (!taskId) throw new h.BrowserError('A trusted upload of a file on the browser\'s machine is for a task\'s session, which the person can see asking: this caller is no task\'s.', 403, 'path_not_allowed')
+    // Approvals off (the default): the upload goes ahead, recorded where the person reads what went
+    // ahead unasked (2026-11-17, the user: "don't ask me ... Only as me for payment, that is it.").
+    const askMe = await import('../../core/approvals/ask-me.js')
+    if (!(await askMe.asksPerson())) {
+      const words = ug.askWords(need, site, at.requester.taskTitle)
+      await askMe.goAheadUnasked('browserUpload', { what: words.what, detail: words.detail, requester: at.requester, ...(ambientTestRun() ? { testRun: ambientTestRun()! } : {}) })
+      ug.grantUnasked(taskId, site, need)
+      log.web.info('browser trusted upload goes ahead unasked: approvals are off', { device: at.device, owner: at.owner, files: need.length, site })
+      granted.push(...need); need = []
+    }
+  }
+  if (need.length && taskId) {
     if (ug.deniedOf(taskId, site, need).length) throw new h.BrowserError('The person said no to uploading these files here within the hour. Do not ask again for them; tell them in one line what you needed instead.', 403, 'denied')
     const request = typeof b.request === 'string' ? b.request.slice(0, 100) : undefined
     if (request) {

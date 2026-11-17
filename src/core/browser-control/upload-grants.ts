@@ -3,17 +3,19 @@
  * the extension's agent-upload.ts takes only these and the task's own downloads). A trusted upload
  * hands the browser a path on its own machine and the browser reads the file there, any size, with
  * no bytes crossing to the session's machine (2026-11-16: a 652 MB screen recording on the Mac, a
- * session on a cloud box). A file on that machine is the person's, so an agent never picks one by
- * itself: Walnut asks the person (an approval on their Mac and phone, naming the task, the files and
- * the site), and their yes lets that task send those files into that site for a day. A no holds for
- * an hour: the same ask is refused at once, never put to them again and again.
+ * session on a cloud box).
+ *
+ * The Approvals switch decides, as for every other step (2026-11-17, the user: "don't ask me ...
+ * Only as me for payment, that is it."): off (the default), the upload goes ahead and is recorded
+ * where the person reads what went ahead unasked (`grantUnasked`; routes/browser-v1.ts). On, Walnut
+ * asks the person (an approval on their Mac and phone, naming the task, the files and the site), and
+ * their yes lets that task send those files into that site for a day. A no holds for an hour: the
+ * same ask is refused at once, never put to them again and again.
  *
  * Why an ask and not the person's chat: a session's transcript lives on the session's host, where
- * the agent can write it, so a "person" row there proves nothing (review 2026-11-16). The ask sits
- * outside the Approvals switch (`outsideSwitch`), as a new site does: it widens what an agent may
- * read on the person's machine, and approvals off never answers that. A plain tap from this machine
- * is no proof (any process here can send one, the asking agent too): Face ID or Touch ID where a
- * device signs, else the window's Passwords unlock (`guard: 'person'`, as outward-asks.ts).
+ * the agent can write it, so a "person" row there proves nothing (review 2026-11-16). A plain tap
+ * from this machine is no proof (any process here can send one, the asking agent too): Face ID or
+ * Touch ID where a device signs, else the window's Passwords unlock (`guard: 'person'`).
  */
 import type { ApprovalRequester } from '../approvals/types.js'
 import { signerKinds, whereAsked } from '../approvals/signer-words.js'
@@ -97,7 +99,7 @@ export async function askUpload(input: { taskId: string; paths: string[]; site: 
   const { approval } = await createApproval({
     what: words.what, detail: words.detail, detailRole: 'summary',
     mode: signerKinds(await activeKeys()).length ? 'biometric' : 'tap', guard: 'person', timeoutMs: ASK_MS,
-    requester: input.requester, outsideSwitch: true, ...(input.testRun ? { testRun: input.testRun } : {}),
+    requester: input.requester, ...(input.testRun ? { testRun: input.testRun } : {}),
   })
   asks.set(approval.id, { taskId: input.taskId, site: input.site, paths: [...input.paths], at: now })
   return { id: approval.id, reused: false }
@@ -146,6 +148,11 @@ export async function settledAsk(taskId: string, site: string, paths: string[]):
     if (state === 'approved' || state === 'denied') return state
   }
   return 'unknown'
+}
+
+/** Approvals off: these files went ahead unasked (recorded by the caller), and hold as a yes would. */
+export function grantUnasked(taskId: string, site: string, paths: string[], now = Date.now()): void {
+  for (const p of paths) grants.set(key(taskId, site, p), now + GRANT_MS)
 }
 
 /** Tests: forget every ask and grant. */

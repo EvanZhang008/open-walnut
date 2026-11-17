@@ -241,7 +241,7 @@ defineOp({
     format: z.enum(['jpeg', 'png']).optional().describe('screenshot / zoom: the image format (default jpeg)'),
     files: z.array(z.object({ name: z.string().max(255), type: z.string().max(200).optional(), base64: z.string().max(14_000_000) })).max(20).optional()
       .describe('upload: the files, their bytes as base64 (10 MB in all)'),
-    paths: z.array(z.string().max(4000)).max(20).optional().describe('upload with trusted: full paths of files on the browser\'s own machine, any size; one this task did not download waits for the person\'s yes (needs_ok)'),
+    paths: z.array(z.string().max(4000)).max(20).optional().describe('upload with trusted: full paths of files on the browser\'s own machine, any size; it goes ahead and is recorded (with approvals on, a file this task did not download waits for the person\'s yes: needs_ok)'),
     all: z.boolean().optional().describe('tabs: every tab of the browser (the user\'s too), title and address only; snapshot / text: the whole page, not only what is on screen or the main content'),
     wait: z.boolean().optional().describe('downloads: wait for the next one to finish'),
     request: z.string().max(100).optional().describe('fill_login, fill_code, request_sign_in, or a click / press / type that waits for the user: the request id from needs_ok, to wait for their answer'),

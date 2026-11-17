@@ -43,11 +43,17 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
-    id: 'drawing_app',
-    name: 'Drawing app',
-    description: 'An editable hand-drawn whiteboard saved in Notes, as an app and beside a session.',
+    id: 'payments_always_ask',
+    name: 'A step that pays always asks',
+    description: 'With approvals off, an agent\'s browser step that buys or pays (a Pay, Buy or Place order button, a form with card details) still waits for your yes. Everything else goes ahead and is listed under Approvals.',
     default: false,
   },
+  {
+  id: 'drawing_app',
+  name: 'Drawing app',
+  description: 'An editable hand-drawn whiteboard saved in Notes, as an app and beside a session.',
+  default: false,
+},
   {
     id: 'agent_window_hides_while_sharing',
     name: 'Hide the agent window while you share your screen',

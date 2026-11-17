@@ -215,3 +215,37 @@ describe('a trusted upload of a file on the browser\'s machine', () => {
     expect(r.ok).toBe(false)
   }, 60_000)
 })
+
+describe('with approvals off (the default), an upload goes ahead and only a payment asks', () => {
+  it('a file on the browser\'s machine goes into the page unasked, and is recorded', async () => {
+    const { updateConfig } = await import('../../src/core/config-manager.js')
+    const { setAskMe } = await import('../../src/core/approvals/ask-me.js')
+    await setAskMe(false, { person: true })
+    try {
+      const tab = (await viewTabs())[0]
+      const GIF = '/Users/evan/promo/make-diagram-demo.gif'
+      const r = await relayed('devbox', { action: 'upload', tab, selector: '#file', trusted: true, paths: [GIF] })
+      expect(r.ok, JSON.stringify(r)).toBe(true)
+      expect((r as { result: Record<string, any> }).result.status).toBeUndefined()
+      expect(ext.seen.filter((c) => c.action === 'upload').at(-1)?.args).toMatchObject({ paths: [GIF], granted_paths: [GIF] })
+      const { listApprovals } = await import('../../src/core/approvals/store.js')
+      const rec = (await listApprovals({ status: 'all' }) as Array<{ unasked?: string; what: string; status: string }>).filter((a) => a.unasked === 'browserUpload')
+      expect(rec.map((a) => a.status)).toEqual(['approved'])
+      expect(rec[0].what).toContain('make-diagram-demo.gif')
+      // Once a day per file: the same upload again records nothing new.
+      await relayed('devbox', { action: 'upload', tab, selector: '#file', trusted: true, paths: [GIF] })
+      expect((await listApprovals({ status: 'all' }) as Array<{ unasked?: string }>).filter((a) => a.unasked === 'browserUpload')).toHaveLength(1)
+      // A payment still asks while the person turned that experiment on, and only then.
+      const { asksPerson } = await import('../../src/core/approvals/ask-me.js')
+      expect(await asksPerson()).toBe(false)
+      expect(await asksPerson('payment')).toBe(false)
+      await updateConfig({ experimental: { payments_always_ask: true } })
+      expect(await asksPerson('payment')).toBe(true)
+      expect(await asksPerson()).toBe(false)
+    } finally {
+      await setAskMe(true, { person: true })
+      await updateConfig({ experimental: { payments_always_ask: false } })
+    }
+  }, 60_000)
+})
+

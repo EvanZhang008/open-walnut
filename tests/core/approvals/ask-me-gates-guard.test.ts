@@ -12,7 +12,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { askMeOf } from '../../../src/core/approvals/ask-me';
+import { askMeOf, ASKS_WITH_APPROVALS_OFF } from '../../../src/core/approvals/ask-me';
 
 const ROOT = path.resolve(__dirname, '../../..');
 const SRC = path.join(ROOT, 'src');
@@ -35,7 +35,7 @@ const GATES: Record<string, Gate> = {
   'src/web/routes/test-host-fixture.ts': { asks: 2, reads: 'self' },
   'src/web/routes/browser-v1.ts': { asks: 1, kept: 'the site gate: only when the person set Browser extension to approved sites only, their own list of where agents may go (the outward steps and the fresh sign-in in this file read the switch)' },
   'src/core/browser-control/outward-asks.ts': { asks: 1, readBy: 'src/web/routes/browser-v1.ts', why: 'askIfHeld reads the switch before it calls askOutward' },
-  'src/core/browser-control/upload-grants.ts': { asks: 1, kept: 'a trusted upload of a file on the browser\'s machine the task did not download: it widens what an agent reads on the person\'s computer, so it always asks, as the site gate does (outsideSwitch, guard person; 2026-11-16)' },
+  'src/core/browser-control/upload-grants.ts': { asks: 1, readBy: 'src/web/routes/browser-v1.ts', why: 'uploadGate reads the switch and goes ahead unasked (grantUnasked) before it calls askUpload (2026-11-17)' },
   'src/core/browser-control/fresh-sign-in.ts': { asks: 1, readBy: 'src/web/routes/browser-v1.ts', why: 'the fill_login route asks with unasked:true when the switch is off' },
   'src/core/vault/agent.ts': { asks: 1, reads: 'self' },
   'src/core/hosts/host-exec-grant.ts': { asks: 1, reads: 'self' },
@@ -101,3 +101,43 @@ describe('every approval wait reads the Approvals switch', () => {
     expect(askMeOf({ approvals: { ask_me: false } }, { WALNUT_APPROVALS_ASK: '1' })).toBe(false);
   });
 });
+
+/**
+ * With approvals off, only a payment waits for the person (2026-11-17, the user: "don't ask me ...
+ * Only as me for payment, that is it."; a trusted upload had asked with Touch ID all the same). An
+ * ask made outside the switch (`outsideSwitch`) is never an agent's step: each is listed with why.
+ * A new one, or a second step that still asks, fails here until it is a payment or says why.
+ */
+describe('with approvals off, only a payment asks', () => {
+  const OUTSIDE: Record<string, string> = {
+    'src/core/approvals/keys.ts': 'a new signing device without its app\'s proof: the trust root of every signed approval, not an agent\'s step',
+    'src/core/approvals/ask-me.ts': 'turning approvals off, which a device signs: the person\'s own switch',
+    'src/web/routes/approvals-v1.ts': 'an explicit walnut approve or approval_request the person put in a script to be asked',
+    'src/web/routes/browser-v1.ts': 'a new site, only when the person chose Ask me first for sites in Settings (their own list)',
+    'src/web/routes/test-host-fixture.ts': 'the test fixture\'s signed single-use approval',
+  };
+
+  it('the steps that ask with approvals off are payments, and nothing else', () => {
+    expect(Object.keys(ASKS_WITH_APPROVALS_OFF)).toEqual(['payment']);
+  });
+
+  it('every ask outside the switch is listed with why, and none is an agent\'s step', () => {
+    const found: Record<string, number> = {};
+    for (const file of sourceFiles(SRC)) {
+      if (NOT_ASKS.has(file)) continue;
+      const n = (code(file).match(/outsideSwitch\s*:\s*true/g) ?? []).length;
+      if (n) found[file] = n;
+    }
+    expect(Object.keys(found).sort()).toEqual(Object.keys(OUTSIDE).sort());
+  });
+
+  it('a step names itself to the switch only as a payment, and only a buy is one', () => {
+    const named: string[] = [];
+    for (const file of sourceFiles(SRC)) {
+      if (file === 'src/core/approvals/ask-me.ts') continue;
+      for (const m of code(file).matchAll(/\basksPerson\(([^)]+)\)/g)) named.push(`${file}: ${m[1].trim()}`);
+    }
+    expect(named).toEqual(["src/web/routes/browser-v1.ts: hold.kind === 'buy' ? 'payment' : undefined"]);
+  });
+});
+

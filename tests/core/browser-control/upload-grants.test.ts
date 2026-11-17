@@ -26,7 +26,7 @@ describe('upload grants', () => {
       '/Users/evan/\u202evom.exe', '/Users/evan/a\u200b.mov', '/Users/evan/a\n.mov']) expect(isFilePath(p), JSON.stringify(p)).toBe(false)
   })
 
-  it('the ask says which task, which files and which site, and the switch never answers it', async () => {
+  it('the ask says which task, which files and which site (asked only with approvals on: routes/browser-v1.ts)', async () => {
     expect(askWords([REC], 'example.test', 'Upload the demo')).toEqual({
       what: 'Upload ~/Desktop/demo.mov from this computer into example.test',
       detail: `Task "Upload the demo" asks to put this file into a file field on example.test. Allow lets that task send it into example.test for a day.\n${REC}`,
@@ -35,7 +35,8 @@ describe('upload grants', () => {
     expect(askWords(['/1', '/2', '/3', '/4'], 's.test', undefined).what).toBe('Upload 4 files from this computer into s.test')
     const { id } = await askUpload({ taskId: 't1', paths: [REC], site: 'example.test', requester })
     const rec = await getApproval(id)
-    expect(rec).toMatchObject({ status: 'pending', mode: 'tap', guard: 'person', outsideSwitch: true, detailRole: 'summary' })
+    expect(rec).toMatchObject({ status: 'pending', mode: 'tap', guard: 'person', detailRole: 'summary' })
+    expect(rec?.outsideSwitch).toBeUndefined()
     expect(rec?.unasked).toBeUndefined()
     // The same task and files again: the same ask.
     expect(await askUpload({ taskId: 't1', paths: [REC], site: 'example.test', requester })).toEqual({ id, reused: true })

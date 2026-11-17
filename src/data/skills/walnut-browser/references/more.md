@@ -35,10 +35,11 @@ The task's session panel shows a live picture of your tab (the Browser view) wit
   button of its own (snapshot does not list it).
 - A bigger file, or one on the browser's machine (the Mac when you work on a cloud box):
   `upload --selector '#file' --trusted --path '/Users/name/Desktop/demo.mov'`. The browser reads
-  it there, any size, and nothing crosses to your machine. A file your task did not download
-  waits for the user's yes (a notification naming your task, the file and the site; the shell
-  command waits for it); their yes holds for a day for that file. One file per path, never a
-  folder. The answer lists each file with its size (`files`); 0 bytes means the path was wrong.
+  it there, any size, and nothing crosses to your machine. It goes ahead and is recorded; only a
+  user who turned approvals on is asked (a notification naming your task, the file and the site;
+  the shell command waits for it, and their yes holds for a day for that file). One file per
+  path, never a folder; a path with no file answers `file_not_found` (copy the path exactly: a
+  macOS screen recording's name has a narrow no-break space, U+202F, before AM or PM).
 - `resize 1280 900` sizes Walnut's agent window (`--viewport`: the page itself gets that size),
   never the user's own window.
 - `downloads --wait` waits for the download your click started and gives its file path.

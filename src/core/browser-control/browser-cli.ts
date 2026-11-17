@@ -27,7 +27,7 @@ export const BROWSER_USAGE = [
   '  scroll [up|down|left|right|top|bottom] [<ref> | --at X,Y] [--amount N | --by PX]',
   '  click --at X,Y | click-label <N>;  type <text> --at X,Y [--slowly];  drag <ref|X,Y> <ref|X,Y> [--steps N]',
   '  screenshot [<file>] [--full] [--annotate];  zoom <X> <Y> <W> <H> [<file>]   (default: a .jpg in $WALNUT_TASK_DIR/shots)',
-  '  upload <ref>|--selector <css> <file>...   (10 MB; --trusted --path P: on the browser\'s machine, any size, with the person\'s yes)',
+  '  upload <ref>|--selector <css> <file>...   (10 MB; --trusted --path P: a file on the browser\'s machine, any size)',
   '  downloads [--wait] [--ms N];  resize <width> <height> [--viewport]',
   '  fill-login [--item <id|name>] [--fresh-sign-in];  fill-code [--item <id|name>];  request-sign-in [<what>] [--site S]',
   '  open <url> --record;  network [--url part] [--method M] [--status 4xx] [--type XHR] [--limit N] [--include-static] [--stop]',

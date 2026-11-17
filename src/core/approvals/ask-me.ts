@@ -51,6 +51,7 @@ export const ASK_ME_GATES = {
   hostExec: 'Running commands on a host',
   calendarWrite: 'Changing a calendar event Walnut did not create',
   vaultUse: 'An agent using a saved password',
+  browserUpload: 'Uploading a file from this computer into a web page',
   pluginStep: 'A plugin’s outward step (a post, a send)',
 } as const
 export type AskMeGate = keyof typeof ASK_ME_GATES
@@ -225,9 +226,26 @@ export function _resetAskMeLatchForTesting(): void {
   latch = null
 }
 
-/** Whether a step waits for the person now. */
-export async function asksPerson(): Promise<boolean> {
-  return askMeOf(await getConfig())
+/**
+ * The steps that still wait for the person's yes with approvals off: this list and nothing else
+ * (2026-11-17, the user: "Only as me for payment, that is it."). A new one fails
+ * tests/core/approvals/ask-me-gates-guard.test.ts until it is named here. A payment asks while the
+ * person turned on the experiment `payments_always_ask` (Settings, Experimental).
+ */
+export const ASKS_WITH_APPROVALS_OFF = {
+  payment: 'A step that buys or pays',
+} as const
+export type AlwaysAsked = keyof typeof ASKS_WITH_APPROVALS_OFF
+
+/** Whether this step waits for the person: approvals on, or a step on ASKS_WITH_APPROVALS_OFF. */
+export async function asksPerson(step?: AlwaysAsked): Promise<boolean> {
+  const config = await getConfig()
+  if (askMeOf(config)) return true
+  if (step === 'payment') {
+    const { experimentalEnabled } = await import('../experimental.js')
+    return experimentalEnabled(config.experimental, 'payments_always_ask')
+  }
+  return false
 }
 
 /**
