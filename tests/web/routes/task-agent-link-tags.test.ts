@@ -14,7 +14,7 @@ import express from 'express';
 import request from 'supertest';
 import { tasksRouter } from '../../../src/web/routes/tasks.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
-import { addTask, getTask, _resetForTesting } from '../../../src/core/task-manager.js';
+import { addTask, getTask, updateTask, _resetForTesting } from '../../../src/core/task-manager.js';
 import { droppedLinkTags } from '../../../src/core/link-tags.js';
 import { closeDb } from '../../../src/core/task-db.js';
 import { closeDb as closeSessionDb } from '../../../src/core/session-db.js';
@@ -70,6 +70,24 @@ describe('PATCH /api/tasks/:id link tags by caller', () => {
     const after = await getTask(task.id);
     expect(after.auto_links).toEqual(['https://review.acme.dev/CR-1001']);
     expect(droppedLinkTags(after, [])).toEqual([CR]);
+  });
+
+  it('a link a session writes through the API v1 path (actorSid) is the agent\'s too', async () => {
+    const { task } = await addTask({ title: 'V1 links' });
+    await updateTask(task.id, { add_tags: [TICKET] }, { source: 'api', actorSid: 'sess-agent-3' });
+    const after = await getTask(task.id);
+    expect(after.auto_links).toEqual(['https://tickets.acme.dev/T-2002']);
+  });
+
+  it('a link Walnut added, removed and then added again by the person, is the person\'s own', async () => {
+    const { task } = await addTask({ title: 'Re-added link' });
+    expect((await patch(task.id, { add_tags: [CR] }, 'sess-agent-4')).status).toBe(200);
+    expect((await patch(task.id, { remove_tags: [CR] })).status).toBe(200);
+    expect((await getTask(task.id)).auto_links).toEqual(['https://review.acme.dev/CR-1001']);
+    expect((await patch(task.id, { add_tags: [CR] })).status).toBe(200);
+    const after = await getTask(task.id);
+    expect(after.auto_links).toEqual([]);
+    expect(droppedLinkTags(after, [])).toEqual([]);
   });
 
   it("the web console's link (no caller session) stays the user's and is never dropped", async () => {

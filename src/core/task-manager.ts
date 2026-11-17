@@ -4528,8 +4528,9 @@ export async function updateTask(
   // too: addToGroup's `move` files the moved task into that folder in this write.
   eventOptions?: {
     source?: string; extraTargets?: string[]; ifPhase?: TaskPhase; asyncPush?: boolean; keepGroupId?: boolean; joinGroupId?: string; actorSid?: string
-    /** INTERNAL, set by the REST route for a session caller: the link tags this write adds are an
-     *  agent's, never the user's own, so they join Task.auto_links and a later LINKS list may drop them. */
+    /** INTERNAL, set by the web console's REST route for a session caller (the API v1 route sets
+     *  `actorSid`, which means the same): the link tags this write adds are an agent's, never the
+     *  user's own, so they join Task.auto_links and a later LINKS list may drop them. */
     tagsByAgent?: boolean
   },
 ): Promise<{ task: Task }> {
@@ -4868,7 +4869,8 @@ export async function updateTask(
   // Tag mutations. Every tag is key:value (tag-model.ts): a plain word from an older client, an
   // agent or a plugin is the label it is stored as, so adding or removing `oncall` means
   // `label:oncall`.
-  const linkTargetsBefore = eventOptions?.tagsByAgent ? new Set(linkTargetsOf(task.tags)) : null;
+  const byAgent = !!(eventOptions?.tagsByAgent || eventOptions?.actorSid);
+  const linkTargetsBefore = updates.add_tags?.length || updates.set_tags !== undefined ? new Set(linkTargetsOf(task.tags)) : null;
   if (updates.set_tags !== undefined) {
     // Replace all
     const deduped = normalizeTags(updates.set_tags);
@@ -4895,9 +4897,16 @@ export async function updateTask(
   }
   if (linkTargetsBefore) {
     // An agent's new link is Walnut's to keep or drop (link-tags.ts droppedLinkTags), like one a
-    // LINKS list named; only a person's own link is never dropped.
-    const fresh = linkTargetsOf(task.tags).filter((target) => !linkTargetsBefore.has(target) && !task.auto_links?.includes(target));
-    if (fresh.length) task.auto_links = [...(task.auto_links ?? []), ...fresh].slice(-MAX_AUTO_LINKS);
+    // LINKS list named; a link a person adds is their own, never dropped, even one Walnut added
+    // and they removed before.
+    const fresh = linkTargetsOf(task.tags).filter((target) => !linkTargetsBefore.has(target));
+    if (byAgent) {
+      const add = fresh.filter((target) => !task.auto_links?.includes(target));
+      if (add.length) task.auto_links = [...(task.auto_links ?? []), ...add].slice(-MAX_AUTO_LINKS);
+    } else if (fresh.length && task.auto_links?.length) {
+      const own = new Set(fresh);
+      task.auto_links = task.auto_links.filter((target) => !own.has(target));
+    }
   }
   if (updates.remove_link_tags?.length) {
     const drop = new Set(updates.remove_link_tags);
