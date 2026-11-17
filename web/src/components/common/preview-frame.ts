@@ -14,6 +14,9 @@
  *  - ⌘F: the page finds and paints, the console's bar drives it;
  *  - the scroll position, remembered per file and restored on each load (a chase, since a page
  *    that is still laying out clamps an early scroll);
+ *  - the page's own state (its storage, hash, tabs, picks, open sections, typed values, boxes'
+ *    scroll), which the page keeps across a reload itself (src/web/preview-state-script.ts); a
+ *    copy kept here names a new frame of the file (previewFrameName);
  *  - link clicks: another file on this host opens in the panel (onOpenPath), a link a plugin
  *    handles opens there, another website opens in a new tab (the page does that itself, inside
  *    the click), anything else stays where it is; a right-click on a link a plugin handles
@@ -34,6 +37,7 @@ import { loadFileScroll, placeForView, saveFileScroll } from '@/utils/file-view-
 import type { ReadingSeen } from './use-file-reading-place';
 import { log } from '@/utils/log';
 import { readFrameMsg, type FrameMsg, type PreviewRect } from './preview-messages';
+import { PREVIEW_STATE_PREFIX } from '../../../../src/lib/preview-state-envelope';
 
 /** What the console asks of the page (the bridge checks each the same way). */
 export type ConsoleMsg =
@@ -63,6 +67,25 @@ export interface PreviewChannel {
 }
 
 const READY_WAIT_MS = 1500;
+
+/**
+ * Each file's page state as its page last reported it (src/web/preview-state-script.ts): the
+ * frame's own name carries it from one document to the next, and this copy names a NEW frame of
+ * the file (the file opened again, the panel built again) so its page starts where it was left.
+ * This window only, the most recently written first to stay.
+ */
+const PAGE_STATES_MAX = 40;
+const pageStates = new Map<string, string>();
+function keepPageState(key: string, state: string): void {
+  pageStates.delete(key);
+  pageStates.set(key, state);
+  while (pageStates.size > PAGE_STATES_MAX) pageStates.delete(pageStates.keys().next().value as string);
+}
+/** The name a new preview frame of this file is given: its page's last state, or nothing. */
+export function previewFrameName(host: string | undefined, filePath: string): string | undefined {
+  const s = pageStates.get(`${host ?? 'local'} ${filePath}`);
+  return s ? PREVIEW_STATE_PREFIX + s : undefined;
+}
 const CHASE_MS = 5000;
 
 export interface PreviewFrameOptions {
@@ -182,10 +205,14 @@ export function usePreviewFrame(o: PreviewFrameOptions) {
           readyAt = Date.now();
           const nav = classifyPreviewNavigation(docHref, current);
           p.same = nav === 'same-file';
-          if (nav === 'same-file') { setStrayed(null); startChase(m.top); }
+          // A page that put its own place back is not chased to the console's older one.
+          if (nav === 'same-file') { setStrayed(null); if (!m.restored) startChase(m.top); }
           else setStrayed({ path: nav ? nav.path : undefined });
           return;
         }
+        case 'page-state':
+          if (p.same) keepPageState(key, m.state);
+          return;
         case 'text':
           p.text = m.over || !p.same ? null : { v: m.v, text: m.text };
           return;

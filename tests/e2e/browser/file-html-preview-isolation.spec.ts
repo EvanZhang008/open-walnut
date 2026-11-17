@@ -4,6 +4,7 @@
  * Passwords unlock and the device token live. Before, the frame had `allow-same-origin` and no CSP,
  * so an agent-written report could read `localStorage['walnut.vault.session']` of the console.
  */
+import { goToSessionFolder } from './todo-panel-helpers'
 import { test, expect, type Page, type Locator, type Frame } from '@playwright/test'
 
 const SESSION_ID = 'pw-vscode-session'
@@ -20,6 +21,8 @@ async function openExplorer(page: Page): Promise<Locator> {
   await panel.getByRole('button', { name: 'Files' }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
+  // The tree may open at another root (the last one used, home): go to the session's folder.
+  await goToSessionFolder(explorer)
   return explorer
 }
 
@@ -89,14 +92,18 @@ test('a script in the preview cannot read the console\'s storage or cookies', as
     return {
       parentStorage: tryRead(() => window.parent.localStorage.getItem('walnut.vault.session')),
       parentDocument: tryRead(() => window.parent.document.title),
+      // The page's own storage is a stand-in of its own (src/web/preview-state-script.ts), with
+      // nothing of the console's in it.
       ownStorage: tryRead(() => localStorage.getItem('walnut.vault.session')),
+      ownKeys: tryRead(() => localStorage.length),
       cookie: tryRead(() => document.cookie),
       origin: self.origin,
     }
   })
   expect(seen.parentStorage).toMatch(/^blocked:/)
   expect(seen.parentDocument).toMatch(/^blocked:/)
-  expect(seen.ownStorage).toMatch(/^blocked:/)
+  expect(seen.ownStorage).toBe('null')
+  expect(seen.ownKeys).toBe('0')
   expect(seen.cookie).not.toContain('walnut')
   expect(seen.origin).toBe('null')
   // The console itself still has its unlock.

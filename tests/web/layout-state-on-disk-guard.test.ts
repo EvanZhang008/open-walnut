@@ -43,7 +43,6 @@ const SESSION_FILES: Record<string, string> = {
   'components/settings/sections/ssh-draft-store.ts': 'a new SSH host typed and not saved yet, kept for this tab so leaving Remote Hosts loses nothing; Save or Cancel clears it',
   'components/settings/sections/join-link-store.ts': 'the id and end of a join link this tab made, so Remote Hosts can still call it back after leaving the pane; the link itself is the server\'s',
   'components/board/kanban/useKanbanLayout.ts': 'done rails opened for this visit (spec 3.2)',
-  'components/chat/island-runtime.ts': 'blocks storage inside a sandboxed island, touches no key',
   'components/drawing/drawing-store.ts': "the id a tab keys its unsaved drawing edits by (the edits themselves are in localStorage); a relaunch that drops it gets a new id, and the new tab takes over the drafts of tabs whose heartbeat stopped, never a live tab's",
   'hooks/usePhoneRestore.ts': 'the scroll anchor of one reload; the strip itself is phoneColumns',
   'pages/MainPage.tsx': 'the todo list scroll offset, and the legacy single-session key it migrates',

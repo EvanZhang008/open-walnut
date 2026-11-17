@@ -81,7 +81,7 @@ import {
 } from '@/utils/dom-text-search';
 import { CodeContextMenu, buildCodeContextTarget, type CodeContextTarget } from '@/components/common/CodeContextMenu';
 import { copyTextRobust } from '@/utils/clipboard';
-import { usePreviewFrame } from '@/components/common/preview-frame';
+import { previewFrameName, usePreviewFrame } from '@/components/common/preview-frame';
 import { openPopout } from '@/popout/openPopout';
 import { log } from '@/utils/log';
 import { useHidesHighlights } from '@/hooks/useHidesHighlights';
@@ -396,6 +396,8 @@ export function FileContentView({
   // new bytes reseeds the editor) — deliberately NOT on save, which would
   // remount mid-typing and yank the caret/scroll to the top on every ⌘S.
   const [baseHash, setBaseHash] = useState<string | undefined>(undefined);
+  // The bytes the HTML preview shows (host and path, and their hash): see noteBytesOnDisk.
+  const shownHashRef = useRef<{ key: string; hash: string } | null>(null);
   // The CURRENT optimistic-lock token — what PUT sends as expectedHash. A ref,
   // not state: it advances on every successful save without touching the key.
   const lockHashRef = useRef<string | undefined>(undefined);
@@ -776,6 +778,7 @@ export function FileContentView({
       // always live, so it goes out like the keystrokes that made it would have.
       if (plan.seed != null && !opts.provisional) armOnMountRef.current = true;
       setBaseHash(d.contentHash);
+      shownHashRef.current = d.contentHash ? { key: `${host ?? ''} ${filePath}`, hash: d.contentHash } : null;
       setLoading(false);
       if (!opts.provisional) setReloading(false);
     };
@@ -1108,9 +1111,14 @@ export function FileContentView({
    */
   // Bumped whenever new bytes are on disk (our write, another writer's adopted):
   // the HTML preview loads the file by URL, so it must be told to load again.
+  // Only for bytes that differ from the ones it shows: a write of the same bytes (an agent
+  // writing the file again unchanged, a Save with no change) does not reload the page.
   const [diskVersion, setDiskVersion] = useState(0);
   const noteBytesOnDisk = useCallback((content: string, contentHash: string, size: number) => {
-    setDiskVersion((n) => n + 1);
+    const key = `${host ?? ''} ${filePath}`;
+    const shown = shownHashRef.current;
+    if (!(contentHash && shown?.key === key && shown.hash === contentHash)) setDiskVersion((n) => n + 1);
+    shownHashRef.current = contentHash ? { key, hash: contentHash } : null;
     const base = filePath.slice(filePath.lastIndexOf('/') + 1);
     const dot = base.lastIndexOf('.');
     void setCachedFileContent(host, filePath, {
@@ -1713,6 +1721,14 @@ export function FileContentView({
   // The preview's URL version. Frozen while the reader has followed a link away
   // from the file: a write to the file must not pull them back on its own.
   const previewRevRef = useRef(0);
+  // Taken when a frame is about to be created (or the file changes): Chromium applies a changed
+  // name to the live page, which keeps its own state on by itself from there.
+  const frameNameRef = useRef<{ key: string; name: string | undefined } | null>(null);
+  const frameKey = `${host ?? ''} ${filePath}`;
+  if (!htmlFrameRef.current || frameNameRef.current?.key !== frameKey) {
+    frameNameRef.current = { key: frameKey, name: previewFrameName(host, filePath) };
+  }
+  const frameName = frameNameRef.current.name;
   if (!strayed) previewRevRef.current = reloadToken + diskVersion;
 
   // Live selection rect for the pill, translated to top-viewport coords when
@@ -2657,6 +2673,9 @@ export function FileContentView({
           // which made Refresh a silent no-op on the rendered HTML preview. So
           // does the disk version: a save shows in the page it saved.
           src={rawFileContentUrl(filePath, host, previewRevRef.current)}
+          // A new frame starts with its page's last state (preview-frame.ts); the page keeps it
+          // from one document to the next in this name itself.
+          name={frameName}
           title={filePath}
         />
       )}

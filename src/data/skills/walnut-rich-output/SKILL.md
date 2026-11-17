@@ -156,6 +156,10 @@ The frame can be built again at any time: the reply re-renders, a folded questio
 - Give the reader a way to start over (a "Restart" button that resets the state and redraws). Never `location.reload()`: the frame reloads with the state it was built with, not the latest.
 - `sessionStorage` is the same store. Keep the state small: up to 48 KB is kept (a larger write is refused and the last one stays).
 
+### An HTML file the user reads in the Files preview
+
+A page you write to a file (a report, a step-by-step walkthrough) loads again in the preview every time you write the file again, while the user may be on its third tab. The preview keeps its scroll, the tab or item marked selected, open `<details>`, checked boxes and typed values on its own, and gives the page a `localStorage` and URL hash that survive the reload. State that lives only in your script's variables does not: save it on every change (`localStorage.setItem('<page>', JSON.stringify(state))`, or the step in `location.hash`) and draw from it at the top of your script. Write the file again only when its content changed.
+
 ### Hand a result back: `walnut.report(text)`
 
 When the island produces something the AI should see (a quiz score, the options picked, a form the reader filled), call `walnut.report(text)`. Walnut shows that exact text under the island with a **Send to AI** button; nothing is sent unless the reader presses it, and what they press sends the text exactly as shown, as their own message. A string is sent as written; anything else is sent as pretty JSON.

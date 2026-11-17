@@ -397,7 +397,9 @@ new MutationObserver(function(){
   if (!mt) mt = setTimeout(function(){ mt = 0; pushText(); repaint(); }, 150);
 }).observe(D.documentElement, { childList: true, subtree: true, characterData: true });
 function ready(){
-  post({ type: 'ready', href: location.href, top: scrollY });
+  // restored: the page's own state script (preview-state-script.ts) puts its place back itself.
+  var ps = window.__walnutPreviewState;
+  post({ type: 'ready', href: location.href, top: scrollY, restored: !!(ps && ps.restored) });
   pushText();
   laidOut();
   if (window.ResizeObserver) { var ro = new ResizeObserver(laidOut); ro.observe(D.documentElement); if (D.body) ro.observe(D.body); }

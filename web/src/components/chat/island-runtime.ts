@@ -21,6 +21,7 @@
  */
 
 import { AUTOMATION_SILENCE_JS } from '../../utils/automation-silence';
+import { PAGE_STORAGE_SHIM_JS } from '../../../../src/lib/page-storage-shim';
 
 /** Message types the frame posts. Keep in step with the iOS twin. */
 export const ISLAND_STATE_MSG = 'wn-island-state';
@@ -87,26 +88,8 @@ export function islandRuntimeScript(key: string, seed: IslandItems): string {
     + 'var P=typeof Promise==="function"?Promise.resolve():null;'
     + 'function dirty(){if(t===null){t=1;if(P)P.then(function(){if(t!==null)post()});else setTimeout(function(){if(t!==null)post()},0)}}'
     + 'function flush(){if(t!==null)post();}'
-    + 'var api={'
-    + 'getItem:function(k){k=String(k);return k in m?m[k]:null},'
-    + 'setItem:function(k,v){m[String(k)]=String(v);dirty()},'
-    + 'removeItem:function(k){k=String(k);if(k in m){delete m[k];dirty()}},'
-    + 'clear:function(){var n=0;for(var k in m){delete m[k];n++}if(n)dirty()},'
-    + 'key:function(i){var ks=Object.keys(m);return i>=0&&i<ks.length?ks[i]:null}};'
-    + "Object.defineProperty(api,'length',{get:function(){return Object.keys(m).length}});"
-    // `localStorage.score = 3` and `localStorage.score` work on a real page too.
-    // The proxy's target is an empty object: a target holding the methods would make
-    // `Object.keys(localStorage)` break the proxy invariants on its own `length`.
-    + 'var store=api;if(typeof Proxy==="function"){store=new Proxy({},{'
-    + 'get:function(o,p){if(p in api||typeof p!=="string")return api[p];return p in m?m[p]:undefined},'
-    + 'set:function(o,p,v){if(p in api||typeof p!=="string")return false;api.setItem(p,v);return true},'
-    + 'deleteProperty:function(o,p){api.removeItem(p);return true},'
-    + 'has:function(o,p){return p in api||p in m},'
-    + 'ownKeys:function(){return Object.keys(m)},'
-    + 'getOwnPropertyDescriptor:function(o,p){return p in m?{value:m[p],writable:true,enumerable:true,configurable:true}:undefined}'
-    + '})}'
-    + "['localStorage','sessionStorage'].forEach(function(n){"
-    + 'try{Object.defineProperty(window,n,{value:store,configurable:true})}catch(e){}});'
+    + PAGE_STORAGE_SHIM_JS
+    + 'wnInstallStorage(m,dirty);'
     + "addEventListener('pagehide',flush);"
     + "document.addEventListener('visibilitychange',function(){if(document.visibilityState==='hidden')flush()});"
     + 'var w=window.walnut||{};'
