@@ -251,16 +251,23 @@ struct SessionFileDiffView: View {
             .padding(.vertical, 12)
             .background(.bar)
             .overlay(alignment: .top) { Divider() }
-        } else if let notice {
-            Text(notice)
-                .font(.subheadline.weight(.medium))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(.bar)
-                .overlay(alignment: .top) { Divider() }
-                .accessibilityIdentifier("diff.notice")
-        } else if !review.comments.isEmpty {
-            ReviewBar(count: review.comments.count, open: openReview)
+        } else if notice != nil || !review.comments.isEmpty {
+            // A passing notice sits above the review bar, never in its place: the Review
+            // button stays where it was while "Copied" or "Sent to the agent" shows.
+            VStack(spacing: 0) {
+                if let notice {
+                    Text(notice)
+                        .font(.subheadline.weight(.medium))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(.bar)
+                        .overlay(alignment: .top) { Divider() }
+                        .accessibilityIdentifier("diff.notice")
+                }
+                if !review.comments.isEmpty {
+                    ReviewBar(count: review.comments.count, open: openReview)
+                }
+            }
         }
     }
 
@@ -502,7 +509,7 @@ struct SessionFileDiffView: View {
         composer = nil
         selection = nil
         selectionAnchor = nil
-        flash("Added to your review")
+        // No notice: the review bar's count is the confirmation, and it shows at once.
     }
 
     /// True when the agent has it, or a bubble holds it to retry (the box then

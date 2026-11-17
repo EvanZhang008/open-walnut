@@ -222,9 +222,21 @@ final class PresentationLoweringGuardTests: XCTestCase {
     /// Every search says where it sits. Left to iOS 26, a search in a sheet becomes a round
     /// bottom-bar button with no glyph and no words (2026-11-11: the Changed page's
     /// branch-or-commit picker), which reads as a button that does nothing.
+    ///
+    /// The app searches two ways: a system `.searchable`, which must name its placement, and a
+    /// plain field marked `.isSearchField`, drawn in the page itself (a page a pick pops: the
+    /// compare picker since 2026-11-17, see tests/web/ios-searchable-pop-guard.test.ts). A plain
+    /// one sits where the page puts it, so its page must carry no system search beside it: one
+    /// page, one search field.
     func testEverySearchNamesItsPlace() throws {
         var searches = 0
         for (path, code) in try appSources() {
+            let plain = Self.count(".isSearchField", in: code)
+            if plain > 0 {
+                searches += plain
+                XCTAssertEqual(Self.count(".searchable(", in: code), 0,
+                               "\(path): a page that draws its own search field (.isSearchField) also carries a .searchable: two search fields on one page. Keep one")
+            }
             let text = Array(code.joined(separator: "\n"))
             let needle = Array(".searchable(")
             var i = 0
@@ -243,6 +255,8 @@ final class PresentationLoweringGuardTests: XCTestCase {
                 i = j
             }
         }
+        // 5 on 2026-11-17: four .searchable (Tasks, Notes, two in Passwords) and the compare
+        // picker's plain field.
         XCTAssertGreaterThanOrEqual(searches, 5, "the walk finds the app's searches")
     }
 
