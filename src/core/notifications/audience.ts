@@ -94,13 +94,18 @@ export function audienceOf(n: AudienceInput): NoticeAudience {
  * Host problem kinds only the person can clear: a login of theirs expired or is missing
  * (an SSH certificate, the SSH agent, a proxy's login, a refused key), the host's key changed
  * (a security call), Claude Code there is signed out, or the machine cannot run Walnut's work
- * at all and no reconnect heals it (a name that does not resolve, not Linux, Claude Code
- * missing or broken there). Every other kind (a machine that is off or asleep, a network, a
- * daemon that did not start) Walnut retries and investigates.
+ * at all and no reconnect heals it (a name that does not resolve, not Linux, a login shell that
+ * does not run commands, no bun or node, Claude Code missing or broken there, a cloud companion
+ * that is too old, has session hosting off or belongs to another Mac). Every other kind (a
+ * machine that is off or asleep, a network, a daemon that did not start) Walnut retries and
+ * investigates. Every kind no retry heals is here (host-connect-hint.ts RETRYABLE false), or
+ * Walnut Health would hold a problem nobody but the person can clear
+ * (tests/core/notifications/host-problem-audience.test.ts).
  */
 export const HOST_SIGN_IN_KINDS: readonly string[] = [
   'auth', 'host_key', 'cert_expired', 'agent_missing', 'proxy_login', 'claude_not_logged_in',
-  'dns', 'not_linux', 'claude_missing', 'claude_needs_node', 'claude_error',
+  'dns', 'not_linux', 'shell_noise', 'runtime', 'claude_missing', 'claude_needs_node', 'claude_error',
+  'cloud_update', 'cloud_exec_off', 'cloud_other_mac',
 ];
 
 /** Why a host problem needs the person, or undefined when it is Walnut Health's. */
