@@ -400,10 +400,46 @@ struct DiffComparePickerView: View {
     let pick: (DiffCompare) -> Void
 
     @State private var query = ""
-    /// The search field has the keyboard (its focus, not whether the search is presented).
+    /// The search field has the keyboard.
     @FocusState private var searchFocused: Bool
 
     var body: some View {
+        VStack(spacing: 0) {
+            searchField
+            list
+        }
+        .navigationTitle("Compare With")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { if model.refs == nil { await model.loadRefs() } }
+    }
+
+    /// A plain field under the title, never `.searchable`: a pick pops this page, and on iOS 26.5
+    /// the system search it popped while active stayed on screen over the diff the pick led to,
+    /// at the bottom, on the selection bar, and took the taps meant for Copy (CI, from 2026-11-11:
+    /// "Copy said nothing"). Ending that search from code first made iOS 26 drop the pop instead
+    /// ("the commit is not the comparison"). A plain field leaves with its page.
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            // No mic: it matches exact branch names and commit ids (ios-compose-voice-guard).
+            TextField("Branch, commit or message", text: $query)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+                .focused($searchFocused)
+                .accessibilityAddTraits(.isSearchField)
+                .accessibilityIdentifier("compare.search")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    private var list: some View {
         List {
             if let refs = model.refs {
                 if refs.repoRoot == nil {
@@ -482,28 +518,12 @@ struct DiffComparePickerView: View {
                 HStack { Spacer(); ProgressView(); Spacer() }
             }
         }
-        // A field under the title, as the app's other searches: left to iOS 26, a sheet
-        // folds it into a round bottom-bar button with no glyph that reads as nothing.
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Branch, commit or message")
-        .searchFocused($searchFocused)
-        .navigationTitle("Compare With")
-        .navigationBarTitleDisplayMode(.inline)
-        .task { if model.refs == nil { await model.loadRefs() } }
     }
 
-    /// A pick makes the comparison and pops this page. The keyboard goes down first: on iOS 26
-    /// an active search field rides on top of it, and popped with it up, the field and keyboard
-    /// stayed over the diff the pick led to and took the taps meant for that page's selection
-    /// bar (CI, from 2026-11-11: "Copy said nothing"). The search itself is left to the pop:
-    /// ending it from code (a bound `isPresented`) made iOS 26 drop the pop that followed, in
-    /// the same update, after its animation or through `dismiss`, and the picker stayed on
-    /// screen with the pick made (CI and lane B, 2026-11-15 and 11-16: "the commit is not the
-    /// comparison").
+    /// A pick makes the comparison and pops this page, once the keyboard is down, so the keyboard
+    /// never rides over the diff the pick leads to. KeyboardAway looks for the focused field before
+    /// the binding lets it go.
     private func choose(_ option: DiffCompare) {
-        // Focus, not presentation, and the pop only once the keyboard is down: iOS 26.5 kept the
-        // field and keyboard up when the resign and the pop came in one update, with the focus
-        // binding cleared too (CI 2026-11-16: "the picker's search stayed active after the pick").
-        // KeyboardAway looks for the focused field before the binding lets it go.
         let pick = self.pick
         KeyboardAway.then { pick(option) }
         searchFocused = false

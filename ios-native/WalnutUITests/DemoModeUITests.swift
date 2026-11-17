@@ -508,9 +508,7 @@ final class DemoModeUITests: XCTestCase {
         let send = element(app, "chat.send")
         send.tap()
         XCTAssertTrue(app.navigationBars["Starting session…"].waitForNonExistence(timeout: 15))
-        let restored = expectation(for: NSPredicate(format: "value == %@", message.trimmingCharacters(in: .whitespaces)),
-                                   evaluatedWith: composer)
-        XCTAssertEqual(XCTWaiter().wait(for: [restored], timeout: 15), .completed)
+        XCTAssertTrue(waitForValue(composer, message.trimmingCharacters(in: .whitespaces)))
         XCTAssertEqual(composer.value as? String, message.trimmingCharacters(in: .whitespaces))
         XCTAssertTrue(send.isHittable)
         XCTAssertLessThanOrEqual(send.frame.maxY, app.keyboards.firstMatch.frame.minY,

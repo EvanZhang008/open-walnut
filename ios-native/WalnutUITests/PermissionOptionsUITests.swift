@@ -86,8 +86,7 @@ final class PermissionOptionsUITests: XCTestCase {
         note.tap()
         note.typeText("Use pnpm here")
         let session = id("session.permission.option.allow_session", in: app)
-        let off = expectation(for: NSPredicate(format: "isEnabled == false"), evaluatedWith: session)
-        wait(for: [off], timeout: 5)
+        XCTAssertTrue(waitToMatch(session, "isEnabled == false"), "a typed note left Allow for this session on")
         XCTAssertFalse(id("session.permission.option.allow_always", in: app).isEnabled)
         XCTAssertTrue(id("session.permission.option.reject_once", in: app).isEnabled)
     }
@@ -99,8 +98,7 @@ final class PermissionOptionsUITests: XCTestCase {
         note.tap()
         note.typeText("Use pnpm here")
         let deny = id("session.permission.option.reject_once", in: app)
-        let relabeled = expectation(for: NSPredicate(format: "label == %@", "Deny with note"), evaluatedWith: deny)
-        wait(for: [relabeled], timeout: 5)
+        XCTAssertTrue(waitToMatch(deny, NSPredicate(format: "label == %@", "Deny with note")), "a typed note did not turn Deny into Deny with note")
         shot("permission-deny-with-note", app)
         // Return in the note sends that deny, with the note as the agent reads it.
         note.typeText("\n")
@@ -115,8 +113,7 @@ final class PermissionOptionsUITests: XCTestCase {
         plainNote.tap()
         plainNote.typeText("Fetch the docs page instead")
         let plainDeny = id("session.permission.deny", in: app)
-        let plainRelabeled = expectation(for: NSPredicate(format: "label == %@", "Deny with note"), evaluatedWith: plainDeny)
-        wait(for: [plainRelabeled], timeout: 5)
+        XCTAssertTrue(waitToMatch(plainDeny, NSPredicate(format: "label == %@", "Deny with note")), "a typed note did not turn the plain Deny into Deny with note")
         plainDeny.tap()
         XCTAssertEqual(
             answer("perm-claude-plain", in: app),

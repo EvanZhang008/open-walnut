@@ -98,7 +98,7 @@ enum UITestLaunch {
     }
 }
 
-/// On a test's first failure, attach what the screen showed and the app's element tree, so a
+/// On a test's first failure (not a warning), attach what the screen showed and the app's element tree, so a
 /// failure on a CI runner can tell "the test could not tap or read it" from "the app dropped
 /// it" (ios-native/tests/ui-failure-evidence.py keeps both). XCTest records a screen video
 /// but no screenshot at the failure. Installed by every launch through `UITestLaunch`.
@@ -115,9 +115,12 @@ final class FailureEvidence: NSObject, XCTestObservation {
     func testCaseWillStart(_ testCase: XCTestCase) { captured = false }
 
     func testCase(_ testCase: XCTestCase, didRecord issue: XCTIssue) {
+        // Only an issue that fails the test: a warning (Xcode's priority-inversion note as "Try
+        // the demo" was tapped) took the one capture 90 s before the real failure, and the
+        // pairing screen it showed read as the app signed out (CI, iOS 26.5, 2026-11-16).
         // Once per test: the captures below query the app, and a failed query records an
         // issue of its own.
-        guard !captured else { return }
+        guard issue.isFailure, !captured else { return }
         captured = true
         let screen = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         screen.name = "failure-screen"

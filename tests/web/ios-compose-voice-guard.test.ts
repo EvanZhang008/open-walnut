@@ -76,6 +76,7 @@ const EXCLUSIONS: Record<string, string> = {
   'Views/Settings/RoutineEditor.swift|TextField("sh ~/check.sh", text: $draft.checkRun, axis: .vertical)': 'This is executable shell code whose spelling must stay exact.',
   'Views/Settings/RoutineEditor.swift|TextField("30", text: intervalText)': 'A numeric interval is not speech prose.',
   'Views/Settings/RoutineEditor.swift|TextField("minute hour day month weekday", text: $draft.cronExpr)': 'A cron expression is exact scheduling syntax.',
+  'Views/Sessions/Changes/DiffReviewViews.swift|TextField("Branch, commit or message", text: $query)': 'The compare filter matches exact branch names and commit identifiers, not a request to Walnut.',
 };
 
 /** Custom input implementations already owned by the shared recorder/editor. */
@@ -93,7 +94,6 @@ const inventory = files.flatMap(({ file, source }) => fields(source, file));
 
 const SEARCH_EXCLUSIONS: Record<string, string> = {
   'Views/Passwords/PasswordsHomeView.swift': 'Password searches can contain secrets or account identifiers and must stay outside speech transcription.',
-  'Views/Sessions/Changes/DiffReviewViews.swift': 'This filter matches exact branch names and commit identifiers, not a request to Walnut.',
 };
 
 describe('every iOS compose field uses the shared voice input', () => {

@@ -239,7 +239,7 @@ final class SessionChangesUITests: XCTestCase {
         XCTAssertTrue(element(app, "changes.file.\(Self.tablePath)").waitForExistence(timeout: 20))
         element(app, "changes.compare").tap()
         element(app, "changes.compare.other").tap()
-        let search = app.searchFields.firstMatch
+        let search = element(app, "compare.search")
         XCTAssertTrue(search.waitForExistence(timeout: 10), "no search in the picker")
         // The field shows under the title as it opens, not folded into a blank round
         // button at the bottom (2026-11-11 acceptance, shot a17).
@@ -258,6 +258,9 @@ final class SessionChangesUITests: XCTestCase {
         let keyboardGone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.keyboards.firstMatch)
         XCTAssertEqual(XCTWaiter().wait(for: [keyboardGone], timeout: 5), .completed,
                        "the picker's search stayed active after the pick")
+        // Nor does the field stay behind: iOS 26.5 left a popped `.searchable` field at the foot
+        // of the next pages, over the selection bar, and Copy's tap landed on it (CI, 2026-11-16).
+        XCTAssertTrue(search.waitForNonExistence(timeout: 5), "the picker's search stayed on screen after the pick")
         let table = element(app, "changes.file.\(Self.tablePath)")
         XCTAssertTrue(table.waitForExistence(timeout: 20))
         table.tap()

@@ -16,6 +16,12 @@
  * element read while it moved hit nothing (ThreadPushCalendarDraftUITests on CI, iOS 26.5,
  * 2026-11-16: "the all-day switch did not change"). So a `<el>.coordinate(...).tap()` within eight
  * lines after a `typeText` comes after `waitStill(<el>)`.
+ *
+ * A private wait after typing is the same mistake with its own deadline: PermissionOptionsUITests
+ * waited 5 s with `expectation(for:evaluatedWith:)` for "Deny with note", and on CI (iOS 26.5,
+ * 2026-11-16) one query of the card took 4 s of them; the label was right a moment after the
+ * timeout. So within four lines after a `typeText`, a predicate wait goes through `waitToMatch` or
+ * `waitForValue`, never a private `expectation(for:`.
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
@@ -57,6 +63,17 @@ export function pointTapWhileMoving(src: string): number[] {
   return [...new Set(found)]
 }
 
+/** Each private predicate expectation within four lines after typing (the shared waits own the deadline). */
+export function privateWaitAfterTyping(src: string): number[] {
+  const lines = src.split('\n')
+  const found: number[] = []
+  lines.forEach((line, i) => {
+    if (!/\.typeText\(/.test(line)) return
+    for (let j = i + 1; j <= i + 4 && j < lines.length; j++) if (/\bexpectation\(\s*for:/.test(lines[j])) found.push(j + 1)
+  })
+  return [...new Set(found)]
+}
+
 describe('iOS UI tests: a typed field is read by waiting for its value', () => {
   it('finds the read-at-once form and leaves the waited one', () => {
     expect(typedThenReadAtOnce('input.typeText("a")\nXCTAssertEqual(input.value as? String, "a")')).toEqual([2])
@@ -82,6 +99,17 @@ describe('iOS UI tests: a typed field is read by waiting for its value', () => {
   it('no UI test taps a point of an element the typing may still be moving', () => {
     const found = files.flatMap((f) => pointTapWhileMoving(read(f)).map((n) => `${f}:${n}`))
     expect(found, 'call waitStill(element) first (WalnutUITests/ElementWaits.swift)').toEqual([])
+  })
+
+  it('finds a private wait right after typing, and leaves the shared one', () => {
+    expect(privateWaitAfterTyping('n.typeText("a")\nlet d = id("x")\nlet r = expectation(for: NSPredicate(format: "label == %@", "b"), evaluatedWith: d)')).toEqual([3])
+    expect(privateWaitAfterTyping('n.typeText("a")\nXCTAssertTrue(waitToMatch(d, NSPredicate(format: "label == %@", "b")))')).toEqual([])
+    expect(privateWaitAfterTyping('let e = expectation(for: p, evaluatedWith: d)\nn.typeText("a")')).toEqual([])
+  })
+
+  it('no UI test waits after typing with a private deadline', () => {
+    const found = files.flatMap((f) => privateWaitAfterTyping(read(f)).map((n) => `${f}:${n}`))
+    expect(found, 'wait with waitToMatch(element, predicate) or waitForValue (WalnutUITests/ElementWaits.swift)').toEqual([])
   })
 
   it('the waits are defined once, in the shared helper', () => {
