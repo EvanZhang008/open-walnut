@@ -126,6 +126,20 @@ describe('every notice kind is classified', () => {
     expect(unlisted).toEqual([]);
   });
 
+  it('a notice written as a literal envelope (no builder) is classified too', () => {
+    // 2026-11-16: task-dir-size-notice.ts writes its tag by hand; the scan above never saw it, and
+    // production logged it as an outcome this file does not classify.
+    const known = new Set(classifiedOutcomes());
+    const literal: string[] = [];
+    for (const p of srcFiles(path.join(ROOT, 'src'))) {
+      const s = fs.readFileSync(p, 'utf8');
+      for (const m of s.matchAll(/walnut-message kind=\\?"notification"[^>`]*?outcome=\\?"([a-z_-]+)/g)) literal.push(`${path.relative(ROOT, p)}:${m[1]}`);
+      for (const m of s.matchAll(/NOTICE_OUTCOME_ATTR = 'outcome="([a-z_-]+)"'/g)) literal.push(`${path.relative(ROOT, p)}:${m[1]}`);
+    }
+    expect(literal.length).toBeGreaterThanOrEqual(3);
+    expect(literal.filter((x) => !known.has(x.split(':').pop()!))).toEqual([]);
+  });
+
   it('the outcomes held in constants are classified too', () => {
     const known = new Set(classifiedOutcomes());
     const read = (f: string) => fs.readFileSync(path.join(ROOT, f), 'utf8');

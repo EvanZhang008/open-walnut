@@ -83,6 +83,8 @@ export const NOTICE_WAKES: Readonly<Record<string, string>> = {
   refused: 'a write the session made while the server was away was refused: it must redo it',
   'given-up': 'a write the session made while the server was away was given up: it must redo it',
   'test-run': 'the person pressed a test of Talk to CEO and waits to see it answer',
+  'host-exec-granted': 'the user allowed the command on another host the session waits on: it runs it now',
+  'task-dir-size': 'the host\'s disk is low and this task\'s directory is large: only its owner knows what to delete',
 };
 
 const RIDES = new Set(NOTICE_RIDES);
@@ -175,6 +177,8 @@ export const NOTICE_WAITS_COLD: readonly string[] = [
   'check_failed', 'check_failing', 'check_repaired', 'trigger_disabled', 'routine_trouble',
   // Threads past their time: the node answers them with its next turn.
   'threads-overdue',
+  // Its task directory is large on a host low on disk: cleaned up with its next turn.
+  'task-dir-size',
 ];
 
 /**
