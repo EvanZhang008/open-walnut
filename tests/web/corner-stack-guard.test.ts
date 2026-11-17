@@ -276,6 +276,16 @@ describe('one corner for every notice', () => {
     const gutters = new Set(rules.filter((r) => /scrollbar-gutter\s*:\s*stable/.test(r.body)).flatMap((r) => subjects(r.selector)));
     const scrollerOf = (selector: string) => documents[selector] ? [documents[selector]!.scroller] : subjects(selector);
     expect(uses.filter(({ r }) => !scrollerOf(r.selector).every((sub) => gutters.has(sub))).map(({ r }) => `${r.file}:${r.line} ${r.selector}`)).toEqual([]);
+    // Settings lays its words out to its width, so its nav list and pane take the kept gutter out of
+    // their own right padding (useSettingsGutter.ts measures it): on top of the padding it took 8px
+    // from every row and wrapped six descriptions at 660px (2026-11-17).
+    const settings = rules.filter((r) => r.file === 'web/src/styles/settings-nav.css' && /scrollbar-gutter\s*:\s*stable/.test(r.body));
+    expect(settings.length).toBeGreaterThanOrEqual(3);
+    expect(settings.filter((r) => !/padding-right:\s*(max\(0px, calc\(\d+px - var\(--settings-gutter, 0px\)\)\)|var\(--settings-pane-pad-right\))/.test(r.body)).map((r) => `${r.file}:${r.line} ${r.selector}`)).toEqual([]);
+    expect(read('web/src/styles/settings-nav.css')).toMatch(/--settings-pane-pad-right: max\(0px, calc\(var\(--settings-pane-pad-x\) - var\(--settings-gutter, 0px\)\)\);/);
+    // The sticky bar ends at the pane's padding edge, so it never scrolls the pane sideways.
+    expect(read('web/src/styles/settings-shell.css')).toMatch(/right: calc\(-1 \* var\(--settings-pane-pad-right, var\(--settings-pane-pad-x, 0px\)\)\);/);
+    expect(read('web/src/pages/SettingsPage.tsx')).toMatch(/useSettingsGutter\(containerRef\)/);
     // Which scrollers sit at the bottom left, under the stack, is a matter of layout, which no source
     // scan can tell: tests/e2e/browser/corner-stack-room.spec.ts walks every page and side bar of the
     // rail in a real page and names a new scroller that misses the room.

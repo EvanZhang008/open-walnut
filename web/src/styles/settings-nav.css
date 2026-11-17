@@ -58,8 +58,12 @@
   flex: 1 1 auto;
   min-height: 0;
   margin: 0 -8px;
-  /* Its end clears the notice stack while one shows (--corner-stack-room, corner-stack.css). */
+  /* Its end clears the notice stack while one shows (--corner-stack-room, corner-stack.css), and it
+     keeps its scrollbar's gutter so a scrollbar that comes with that room never narrows it, paid
+     for out of its own right padding (--settings-gutter, useSettingsGutter.ts) so at rest it is as
+     wide as before. */
   padding: 0 8px 16px;
+  padding-right: max(0px, calc(8px - var(--settings-gutter, 0px)));
   padding-bottom: max(16px, var(--corner-stack-room, 0px));
   scrollbar-gutter: stable;
   overflow-x: hidden;
@@ -384,14 +388,21 @@
 .settings-container .settings-pane.settings-content {
   --settings-pane-pad-x: 40px;
   --settings-pane-pad-top: 28px;
+  /* The right padding less the kept scrollbar gutter (--settings-gutter, useSettingsGutter.ts),
+     so text and the sticky bar end where they did before the gutter was kept. */
+  --settings-pane-pad-right: max(0px, calc(var(--settings-pane-pad-x) - var(--settings-gutter, 0px)));
   grid-column: 2;
   grid-row: 1;
   position: relative;
   box-sizing: border-box;
   min-width: 0;
   min-height: 0;
-  /* Its end clears the notice stack while one shows (--corner-stack-room, corner-stack.css). */
+  /* Its end clears the notice stack while one shows (--corner-stack-room, corner-stack.css). Its
+     gutter is kept like the nav list's and paid for out of its right padding: a gutter on top of
+     the padding took 8px from every row and wrapped the descriptions at 660px
+     (settings-polish-panes.spec.ts, 2026-11-17). */
   padding: var(--settings-pane-pad-top) 40px 64px;
+  padding-right: var(--settings-pane-pad-right);
   padding-bottom: max(64px, var(--corner-stack-room, 0px));
   scrollbar-gutter: stable;
   overflow-x: hidden;
@@ -473,6 +484,7 @@
     --settings-pane-pad-x: 28px;
     --settings-pane-pad-top: 24px;
     padding: var(--settings-pane-pad-top) 28px 48px;
+    padding-right: var(--settings-pane-pad-right);
     padding-bottom: max(48px, var(--corner-stack-room, 0px));
     scrollbar-gutter: stable;
   }

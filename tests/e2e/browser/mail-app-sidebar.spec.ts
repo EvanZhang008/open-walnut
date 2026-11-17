@@ -819,7 +819,14 @@ test.describe('the installs that must not change', () => {
 
     // The ring is drawn inside the row instead, so it survives the clip. Reached with the KEYBOARD,
     // because `:focus-visible` is exactly the state a programmatic focus does not enter.
+    // Tab follows what the eye reads top to bottom: the head's ··· menu, then the last-checked line
+    // and + Add account under the head (out of the notice stack's corner since 2026-11-17), then
+    // the first folder row.
     await page.getByTestId('mail-pane-menu').focus()
+    for (const id of ['mail-sync-line', 'mail-add-account']) {
+      await page.keyboard.press('Tab')
+      await expect(page.getByTestId(id), `Tab reaches ${id} next`).toBeFocused()
+    }
     await page.keyboard.press('Tab')
     const focused = page.locator(`${PANE} .mail-mailbox:focus-visible`)
     await expect(focused, 'Tab reaches the folder rows').toHaveCount(1)

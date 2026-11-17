@@ -55,6 +55,7 @@ import { usePhoneSettingsPane } from '@/components/settings/usePhoneSettingsPane
 import '@/styles/phone-settings.css'
 import { announceSettingsAnchor } from '@/components/settings/settings-anchor-event'
 import { recordVisit, settingsVisitKey } from '@/api/page-visits'
+import { useSettingsGutter } from '@/components/settings/useSettingsGutter'
 
 /** Any of these means the person took the wheel: hash anchoring lets go. */
 const USER_TAKEOVER_EVENTS = ['wheel', 'touchmove', 'keydown', 'pointerdown'] as const
@@ -276,6 +277,9 @@ function SettingsPageLayout({ model, paneId, targetId, rowTarget, hash }: Layout
   const { notifySaved, notifySaveFailed } = useSettingsSaveNotifier()
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null)
   const layoutRef = useRef<HTMLDivElement>(null)
+  // The nav list and pane keep their scrollbar gutter out of their own right padding (settings-nav.css).
+  const containerRef = useRef<HTMLDivElement>(null)
+  useSettingsGutter(containerRef)
   const meta = model.metaFor(paneId) ?? model.metaFor(DEFAULT_PANE_ID)!
 
   // Saves are booked to the pane that was showing when the save STARTED:
@@ -418,7 +422,7 @@ function SettingsPageLayout({ model, paneId, targetId, rowTarget, hash }: Layout
   }
 
   return (
-    <div className="settings-container">
+    <div className="settings-container" ref={containerRef}>
       <div
         className="settings-layout"
         ref={layoutRef}

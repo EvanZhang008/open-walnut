@@ -294,7 +294,8 @@
   position: absolute;
   top: 0;
   left: calc(-1 * var(--settings-pane-pad-x, 0px));
-  right: calc(-1 * var(--settings-pane-pad-x, 0px));
+  /* To the pane's padding edge: its right padding less the kept gutter (settings-nav.css). */
+  right: calc(-1 * var(--settings-pane-pad-right, var(--settings-pane-pad-x, 0px)));
   display: flex;
   align-items: center;
   gap: 12px;
