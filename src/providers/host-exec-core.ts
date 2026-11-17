@@ -29,26 +29,27 @@
  * pattern runs in a matcher process the twin starts (`matcher`, host-exec-matcher.ts).
  * It never signals a process itself: the twin hands in `killGroup`. How a run ends, and what its
  * shell left running in its process group is stopped with it when the server asks (exec.run
- * `endGroup`, 'host-exec-group-v1', `version` 4): host-exec-group.ts.
+ * `endGroup`, 'host-exec-group-v1', `version` 4): host-exec-group.ts. A run the caller marks
+ * `resumable` (it only waits or reads) never holds a daemon update (`holding`, `version` 6).
  */
 import fs from 'node:fs'
-import { randomBytes } from 'node:crypto'
 import path from 'node:path'
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import { ensureTaskDir } from './task-dir-core.js'
 import { permissionMessage, permissionRisk } from './host-exec-guards.js'
 import { cltInstalled, cltMessage, cltStubRun, loginPath, type CltFs } from './host-exec-clt.js'
 import { IDLE_WINDOW_MS, createPromptWatcher, macPromptProbe, type PromptBlock, type PromptProbe } from './host-exec-watch.js'
-import { bad, commandLine, findBash, openRunLog, readLogLines, resolveCwd, shellPlan, shellQuote, tailLines, type ExecError } from './host-exec-line.js'
+import { bad, commandLine, findBash, openRunLog, readLogLines, resolveCwd, shellPlan, tailLines, type ExecError } from './host-exec-line.js'
 import { waitBefore, waitOnJob, type HeldBefore, type WaitedFor } from './host-exec-wait.js'
 import { createMatcher, type MatcherStart } from './host-exec-matcher.js'
 import { stuckFileLooks } from './host-exec-probe.js'
 import { watchShellEnd } from './host-exec-group.js'
-import { jobView, type Job, type JobView, type RunReply } from './host-exec-job.js'
+import { jobView, untilEndedByDaemon, type Job, type JobView, type RunReply, type RunRequest } from './host-exec-job.js'
 import { createRecall } from './host-exec-recall.js'
-import { checkScriptInput, runBoundedScript, SCRIPT_REMOTE_MAX_OUTPUT, type ScriptResult } from './host-script-core.js'
+import type { ScriptResult } from './host-script-core.js'
+import { createScriptRunner } from './host-exec-script.js'
 
-export type { JobView, RunReply } from './host-exec-job.js'
+export type { JobView, RunReply, RunRequest } from './host-exec-job.js'
 
 export { runWaitMatcher, type MatcherStart } from './host-exec-matcher.js'
 export { BASH_CANDIDATES, LINE_ENV, commandLine, findBash, lineSpan, shellPlan, shellQuote, type ExecError } from './host-exec-line.js'
@@ -104,38 +105,13 @@ export interface HostExecDeps {
   pidAlive?: (pid: number) => boolean
 }
 
-export interface RunRequest {
-  jobId?: unknown
-  taskId?: unknown
-  command?: unknown
-  argv?: unknown
-  cwd?: unknown
-  timeoutMs?: unknown
-  background?: unknown
-  maxOutputBytes?: unknown
-  /** The asking Walnut's data home: the owner a new task directory's marker names (task-dir-core.ts). */
-  home?: unknown
-  /** The user agreed this command may show a dialog on this host's screen: no macOS guard, no idle check. */
-  allowPrompts?: unknown
-  /** Who asked, for the audit line only: the caller's task and host. */
-  caller?: { task?: unknown; host?: unknown }
-  /** The wait_for the server waits on next (exec.read `until`): one that could never hold here runs nothing. */
-  until?: unknown
-  /**
-   * Stop what the shell leaves running in the job's process group when it exits (host-exec-group.ts,
-   * 'host-exec-group-v1'). The server asks on each run, so a server older than that, whose help says
-   * only that a child still holding the job's output is stopped, keeps exactly that.
-   */
-  endGroup?: unknown
-}
-
 /**
  * Bumped when exec.* changes what a server may rely on: 2 = bash after the login shell,
  * WALNUT_TASK_DIR; 3 = exec.read `until` (host-exec-wait.ts, 'host-exec-wait-v1'); 4 = exec.run
  * `endGroup` (host-exec-group.ts, 'host-exec-group-v1'); 5 = exec.script (host-script-core.ts,
- * 'host-script-v1').
+ * 'host-script-v1'); 6 = exec.run `resumable` (`holding`: such a run never holds a daemon update).
  */
-export const HOST_EXEC_VERSION = 5
+export const HOST_EXEC_VERSION = 6
 
 export function createHostExec(deps: HostExecDeps) {
   const now = deps.now ?? Date.now
@@ -153,6 +129,8 @@ export function createHostExec(deps: HostExecDeps) {
     return bash
   }
   const mac = (deps.platform ?? process.platform) === 'darwin'
+  // Plugin scripts (exec.script): no job, no log (host-exec-script.ts).
+  const scripts = createScriptRunner({ spawn: deps.spawn, killGroup: deps.killGroup, shell: deps.shell, bash: bashPath, home: deps.home, env: deps.env, mac })
   // One watcher for every job here: one `ps` and at most one log read per look, whatever the number of jobs.
   const probe = deps.promptProbe === undefined ? (mac ? macPromptProbe(now) : null) : deps.promptProbe
   const watcher = probe ? createPromptWatcher(probe, { everyMs: deps.promptCheckMs ?? IDLE_WINDOW_MS, now }) : null
@@ -200,13 +178,17 @@ export function createHostExec(deps: HostExecDeps) {
 
   const view = (j: Job): JobView => jobView(j, now())
 
-  function stop(j: Job, why: 'timeout' | 'asked' | 'blocked'): void {
+  /** `daemon`: this daemon is going (endForUpdate); `atOnce` sends SIGKILL at once (a run that only waits). */
+  function stop(j: Job, why: 'timeout' | 'asked' | 'blocked' | 'daemon', atOnce = false): void {
     if (j.endedAt !== null || j.pid === null) return
     // Its shell already exited by itself: the run ended, so this only stops what it left, at once.
     if (j.shellExitedAt !== null) { j.stopLeft?.(); return }
     if (why === 'timeout') j.timedOut = true
     else if (why === 'asked') j.killed = true
+    else if (why === 'daemon') j.endedByDaemon = true
     const pid = j.pid
+    // The fallback below dies with a daemon that exits first: one that must end now gets SIGKILL.
+    if (atOnce) { try { deps.killGroup(pid, 'SIGKILL') } catch { /* gone */ } return }
     try { deps.killGroup(pid, 'SIGTERM') } catch { /* already gone */ }
     const hard = setTimeout(() => { if (j.endedAt === null) { try { deps.killGroup(pid, 'SIGKILL') } catch { /* gone */ } } }, KILL_GRACE_MS)
     hard.unref?.()
@@ -284,14 +266,14 @@ export function createHostExec(deps: HostExecDeps) {
       id, pid: null, startedAt: now(), endedAt: null, shellExitedAt: null, exitCode: null, signal: null, timedOut: false, killed: false,
       cwd, logFile, taskId: typeof req.taskId === 'string' ? req.taskId : null, bytes: 0, tail: [], tailBytes: 0, tailMax, waiters: [], timer: null,
       shell: plan.shell, loginShell: plan.loginShell, taskDir, command: line.slice(0, 200), blocked: null, leftBehind: false, outputCut: false,
-      before, unwatch: null, stopLeft: null, timeoutMs, waits: 0,
+      before, unwatch: null, stopLeft: null, timeoutMs, waits: 0, ...(req.resumable === true ? { resumable: true as const } : {}),
     }
     const caller = req.caller ?? {}
     const who = { task: typeof caller.task === 'string' ? caller.task.slice(0, 128) : null, host: typeof caller.host === 'string' ? caller.host.slice(0, 200) : null }
     // What a later daemon needs to answer for this run (host-exec-recall.ts): whose it is and where its log is.
     audit({
       event: 'start', jobId: id, ...who, taskId: job.taskId, startedAt: job.startedAt, daemonPid: process.pid, cwd, command: line.slice(0, 2000), background, timeoutMs,
-      shell: plan.shell, loginShell: plan.loginShell, taskDir, logFile,
+      shell: plan.shell, loginShell: plan.loginShell, taskDir, logFile, ...(job.resumable ? { resumable: true } : {}),
     })
 
     let child: ChildProcess
@@ -448,20 +430,23 @@ export function createHostExec(deps: HostExecDeps) {
   /**
    * A forced daemon update (daemon-update-behind.ts) is about to end the runs: each run's log
    * and the audit say so, and the run is stopped, so a later read of the log tells its task
-   * why it ended instead of stopping mid-line. Returns how many it stopped.
+   * why it ended instead of stopping mid-line. With `only: 'resumable'` (a plain update, which
+   * waited for every other run) it ends only the resumable runs, at once (SIGKILL: they only wait), and
+   * no script. A run it ends reads `daemonEnded`, never as a host_exec_stop. Returns how many it stopped.
    */
-  function endForUpdate(note: string): number {
+  function endForUpdate(note: string, only?: 'resumable'): number {
     let n = 0
     for (const j of jobs.values()) {
-      // Ended, or already asked to stop (its line is written): one line per run.
-      if (j.endedAt !== null || j.killed) continue
+      // Ended, asked to stop, or noted already (a forced update, then the stop): one line per run.
+      if (j.endedAt !== null || j.killed || j.noted || (only === 'resumable' && !j.resumable)) continue
+      j.noted = true
       try { fs.appendFileSync(j.logFile, `\n[walnut] ${note}\n`) } catch { /* the log is gone */ }
       audit({ event: 'ended-by-update', jobId: j.id, taskId: j.taskId })
-      stop(j, 'asked')
+      stop(j, 'daemon', only === 'resumable')
       n++
     }
     // A plugin's script keeps no log: it is only stopped (its answer says timedOut).
-    for (const s of [...scripts]) { s(); n++ }
+    if (only !== 'resumable') n += scripts.stopAll()
     return n
   }
 
@@ -469,6 +454,13 @@ export function createHostExec(deps: HostExecDeps) {
   function running(): number {
     let n = 0
     for (const j of jobs.values()) if (j.endedAt === null) n++
+    return n
+  }
+
+  /** Running jobs a daemon update waits for: all but the resumable ones (plugin scripts are `scripts`). */
+  function holding(): number {
+    let n = 0
+    for (const j of jobs.values()) if (j.endedAt === null && !j.resumable) n++
     return n
   }
 
@@ -482,56 +474,29 @@ export function createHostExec(deps: HostExecDeps) {
     return v as T
   }
 
-  /**
-   * exec.script ('host-script-v1'): a plugin's short script (`walnut.hosts.run`, through
-   * src/core/hosts/host-script.ts), run as host_exec runs a line (the login shell first, then
-   * bash) but bounded in memory with its stdout and stderr apart: no job, no log file, no audit
-   * line, so a plugin that polls neither fills the disk nor pushes a task's jobs out of `jobs`.
-   */
-  const scripts = new Set<() => void>()
-  async function script(req: Record<string, unknown>): Promise<ScriptResult | ExecError> {
-    const input = checkScriptInput(req)
-    if ('error' in input) return bad(input.error)
-    const cwd = resolveCwd(req.cwd, deps.home)
-    if (typeof cwd !== 'string') return cwd
-    // A place macOS guards shows a dialog on this Mac's screen, and the script waits on it.
-    if (mac && req.allowPrompts !== true) {
-      const risk = permissionRisk(input.script, cwd, deps.home)
-      if (risk) return bad(permissionMessage(risk, 'this Mac'), 'may_prompt')
-    }
-    // What the login profile prints comes before the mark, and is not the script's stdout.
-    const mark = `walnut-script-${randomBytes(9).toString('hex')}`
-    const login = deps.shell || '/bin/sh'
-    // The script comes on fd 3, so the profile, which has no stdin, never reads it; the script reads it as its stdin, as with ssh.
-    const plan = shellPlan(login, bashPath(), `printf '%s\\n' ${mark}; exec sh -s --${input.args.map((a) => ` ${shellQuote(a)}`).join('')} <&3 3<&-`)
-    let stopIt: (() => void) | null = null
-    const run = runBoundedScript({
-      spawn: deps.spawn, command: login, argv: plan.args, env: { ...deps.env, ...plan.env }, cwd,
-      killGroup: deps.killGroup, stdoutAfter: mark, scriptOnFd3: true, onStop: (s) => { stopIt = s },
-    }, { ...input, maxOutputBytes: Math.min(input.maxOutputBytes, SCRIPT_REMOTE_MAX_OUTPUT) })
-    const stopper = () => stopIt?.()
-    scripts.add(stopper)
-    try { return await run } finally { scripts.delete(stopper) }
-  }
-
   return {
     version: HOST_EXEC_VERSION,
     run: (req: RunRequest) => thrown<RunReply>(run(req)),
-    script: (req: Record<string, unknown>) => thrown<ScriptResult>(script(req)),
+    script: (req: Record<string, unknown>) => thrown<ScriptResult>(scripts.script(req)),
     /** Plugin scripts running now (exec.script): a handover waits for them as for jobs. */
-    scripts: () => scripts.size,
+    scripts: scripts.count,
     read: (req: Parameters<typeof read>[0]) => thrown(read(req)),
     kill: (req: { jobId?: unknown; taskId?: unknown }) => thrown<JobView>(stopJob(req)),
     list: async (req: { taskId?: unknown } = {}) => ({ jobs: list(req) }),
     running,
+    holding,
+    /** A run marked resumable that this daemon runs: a read of it holds no handover (the twins' dispatch). */
+    resumableJob: (jobId: unknown): boolean => typeof jobId === 'string' && jobs.get(jobId)?.resumable === true,
     /** The running jobs' task and folder, read at once (task directory cleanup keeps what they work in). */
     active: (): Array<{ taskId: string | null; cwd: string }> =>
       [...jobs.values()].filter((j) => j.endedAt === null).map((j) => ({ taskId: j.taskId ?? null, cwd: j.cwd })),
     endForUpdate,
+    /** The runs endForUpdate stopped have ended (their reads answered), or `ms` passed: the twins' stopDaemon drains it. */
+    untilEnded: (ms: number) => untilEndedByDaemon(jobs.values(), ms),
     /** File looks in flight `minAgeMs` or more (default STUCK_LOOK_MS; 0: any) in the thread pool: node's exit would wait on them (daemon-source.ts). */
     stuck: (minAgeMs?: number) => stuckFileLooks(Date.now(), minAgeMs) > 0,
     /** End the matcher process (the daemon's shutdown, tests). */
-    close: () => { for (const s of [...scripts]) s(); matcher?.close() },
+    close: () => { scripts.stopAll(); matcher?.close() },
   }
 }
 

@@ -8,9 +8,10 @@
  * request is refused, asked again, and handed over once that command is done; the daemon then
  * writes its handover snapshot and exits.
  *
- * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths; the command it runs is
- * `sleep`; the only signals are signal 0 to the daemon this file started, and SIGKILL to it after
- * each twin.
+ * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths; the commands it runs are
+ * `sleep`, `cat` of a FIFO it made and `mkfifo`; the only signals are signal 0 and SIGTERM to the
+ * daemon this file started, SIGKILL to it after each twin, and SIGKILL to the process group of a
+ * run this file started (its pid recorded by the run itself) when that run still lives at the end.
  */
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
@@ -31,6 +32,8 @@ afterAll(() => { if (root.includes('walnut-handover-busy-twins-')) fs.rmSync(roo
 const scriptPath = path.join(root, 'daemon.cjs')
 fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 const BUN: string | undefined = testBun()
+/** What a resumable run's log ends with when the daemon stops (RESUMABLE_RUN_ENDED in both twins). */
+const RESUMABLE_NOTE = '[walnut] the daemon on this host stopped (an update or a restart); this run was marked resumable, so run it again to go on waiting.'
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
 // The source twin finds its sidecars next to it, as deployed: the handover needs the cron runtime.
 if (BUN) {
@@ -102,8 +105,23 @@ function rpc(cmd: Record<string, unknown>, timeoutMs = 60_000): Promise<Record<s
       if (msg.id === id) { clearTimeout(timer); sock.off('message', onMessage); resolve(msg) }
     }
     sock.on('message', onMessage)
+    // The daemon went (a handover): an answer still owed never comes.
+    sock.once('close', () => { clearTimeout(timer); reject(new Error('socket closed: ' + String(cmd.cmd))) })
     sock.send(JSON.stringify({ id, ...cmd }))
   })
+}
+
+function prepState(home: string): string {
+  const stateDir = daemonInstallRoot(process.platform === 'darwin' ? 'darwin' : 'linux', home)
+  fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  fs.chmodSync(stateDir, 0o700)
+  return stateDir
+}
+
+/** Whether a process still runs (a zombie waiting for its reaper does not). */
+function alive(pid: number): boolean {
+  try { process.kill(pid, 0) } catch { return false }
+  try { return !/^\d+ \(.*\) Z/.test(fs.readFileSync(`/proc/${pid}/stat`, 'utf8')) } catch { return true }
 }
 
 describe.each(TWINS)('$name', (twin) => {
@@ -157,5 +175,114 @@ describe.each(TWINS)('$name', (twin) => {
     // The run went to its end before the daemon left.
     const logFile = path.join(dir, 'state', 'tasks', taskId, 'host-exec', 'hx-handover-bg.log')
     expect(fs.readFileSync(logFile, 'utf8')).toContain('finished')
+  }, 90_000)
+
+  it('a resumable run (it only waits; its caller runs it again) does not hold the handover, and its log says to run it again (2026-11-17)', async () => {
+    // A chain of 2-hour waits on one host kept its daemon about 3 h behind production.
+    const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-resumable')
+    const { home, daemonDir } = await boot(twin, dir)
+    const stateDir = daemonInstallRoot(process.platform === 'darwin' ? 'darwin' : 'linux', home)
+    fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+    fs.chmodSync(stateDir, 0o700)
+    const taskId = 'handover-resumable-task'
+    const started = await rpc({ cmd: 'exec.run', jobId: 'hx-handover-res', taskId, command: 'sleep 60', cwd: '~', background: true, resumable: true, caller: { task: taskId, host: 'devbox' } })
+    expect(started).toMatchObject({ ok: true, running: true, resumable: true })
+    expect(await rpc({ cmd: 'hello' })).toMatchObject({ ok: true, execRunning: 1, execHolding: 0 })
+
+    const notes: string[] = []
+    const asked = Date.now()
+    expect(await requestDaemonServiceHandover(daemonDir, stateDir, { pauseMs: 300, note: (text) => notes.push(text) })).toBe(true)
+    expect(notes.filter((n) => n.includes('running host_exec jobs must finish first'))).toEqual([])
+    // Not the run's 60 s: the handover went ahead at once.
+    expect(Date.now() - asked).toBeLessThan(30_000)
+    const logFile = path.join(dir, 'state', 'tasks', taskId, 'host-exec', 'hx-handover-res.log')
+    expect(fs.readFileSync(logFile, 'utf8')).toContain(RESUMABLE_NOTE)
+  }, 90_000)
+
+  it('a resumable run beside one that is not: the handover is refused, and the resumable one is not ended', async () => {
+    const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-mixed')
+    const { home } = await boot(twin, dir)
+    const stateDir = prepState(home)
+    const taskId = 'handover-mixed-task'
+    const run = (jobId: string, resumable: boolean) => rpc({ cmd: 'exec.run', jobId, taskId, command: 'sleep 60', cwd: '~', background: true, ...(resumable ? { resumable: true } : {}), caller: { task: taskId, host: 'devbox' } })
+    expect(await run('hx-mixed-wait', true)).toMatchObject({ ok: true, resumable: true })
+    expect(await run('hx-mixed-work', false)).toMatchObject({ ok: true, running: true })
+    const hello = await rpc({ cmd: 'hello' })
+    expect(hello).toMatchObject({ execRunning: 2, execHolding: 1 })
+    const refused = await rpc({ cmd: 'service.handover', instanceId: hello.instanceId, stateDir })
+    expect(String(refused.error)).toContain('running host_exec jobs must finish first')
+    const wait = await rpc({ cmd: 'exec.read', jobId: 'hx-mixed-wait', taskId })
+    expect(wait).toMatchObject({ ok: true, running: true, resumable: true })
+    expect(fs.readFileSync(String(wait.logFile), 'utf8')).not.toContain('[walnut]')
+    for (const jobId of ['hx-mixed-wait', 'hx-mixed-work']) await rpc({ cmd: 'exec.kill', jobId, taskId })
+  }, 90_000)
+
+  it('a waiting read of a resumable run does not hold the handover, and no run starts while it drains', async () => {
+    // The caller of a resumable run reads it with long waits, almost always in flight: had that read
+    // held the pause ("has active operations"), the update would still wait out the overdue bound.
+    const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-drain')
+    const { home } = await boot(twin, dir)
+    const stateDir = prepState(home)
+    const taskId = 'handover-drain-task'
+    const started = await rpc({ cmd: 'exec.run', jobId: 'hx-drain-wait', taskId, command: 'sleep 60', cwd: '~', background: true, resumable: true, caller: { task: taskId, host: 'devbox' } })
+    expect(started).toMatchObject({ ok: true, resumable: true })
+    const reading = rpc({ cmd: 'exec.read', jobId: 'hx-drain-wait', taskId, wait: 30_000 }, 60_000).catch((error: Error) => ({ lost: error.message }))
+    const fifo = path.join(home, 'drain.fifo')
+    expect(spawnSync('mkfifo', [fifo]).status).toBe(0)
+    const hello = await rpc({ cmd: 'hello' })
+    // A file write the drain waits for, until the FIFO is read. One socket keeps the order: the write
+    // is under way when the handover pauses, and the run is asked for after the pause.
+    const write = rpc({ cmd: 'fs.write', path: fifo, data: 'drained' }, 60_000).catch(() => null)
+    const handover = rpc({ cmd: 'service.handover', instanceId: hello.instanceId, stateDir }, 60_000)
+    const during = await rpc({ cmd: 'exec.run', jobId: 'hx-drain-work', taskId, command: 'sleep 60', cwd: '~', background: true, caller: { task: taskId, host: 'devbox' } })
+    expect(String(during.error)).toContain('Daemon is shutting down')
+    const reader = spawn('cat', [fifo], { stdio: ['ignore', 'pipe', 'ignore'] })
+    try {
+      const answer = await handover
+      expect(answer, JSON.stringify(answer)).toMatchObject({ ok: true, prepared: true })
+    } finally { reader.kill() }
+    await write
+    // The waiting read is answered as the going daemon ends the run: by the daemon, never as the
+    // caller's own host_exec_stop (which would say nothing more comes).
+    const read = await reading
+    expect(read, JSON.stringify(read)).toMatchObject({ ok: true, running: false, killed: false, daemonEnded: true, resumable: true })
+    const exited = proc!.exitCode !== null || proc!.signalCode !== null
+      || await new Promise<boolean>((r) => { const t = setTimeout(() => r(false), 10_000); proc!.once('exit', () => { clearTimeout(t); r(true) }) })
+    expect(exited).toBe(true)
+    expect(fs.readFileSync(String(started.logFile), 'utf8')).toContain(RESUMABLE_NOTE)
+  }, 90_000)
+
+  it('a SIGTERM stop ends a resumable run with its note and leaves the others running, as before', async () => {
+    // The unmanaged stop path (stopUnmanagedDaemon, a service restart): runs are their own process
+    // groups, so a resumable waiter would outlive the daemon with no deadline.
+    const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-sigterm')
+    const { home } = await boot(twin, dir)
+    const taskId = 'sigterm-task'
+    const pidOf = (name: string) => path.join(home, `${name}.pid`)
+    const run = (jobId: string, resumable: boolean) => rpc({ cmd: 'exec.run', jobId, taskId, command: `echo $$ > '${pidOf(jobId)}'; exec sleep 60`, cwd: '~', background: true, ...(resumable ? { resumable: true } : {}), caller: { task: taskId, host: 'devbox' } })
+    const wait = await run('hx-sigterm-wait', true)
+    await run('hx-sigterm-work', false)
+    const recorded = async (jobId: string) => {
+      for (const t0 = Date.now(); Date.now() - t0 < 10_000; await new Promise((r) => setTimeout(r, 50))) {
+        try { const n = Number(fs.readFileSync(pidOf(jobId), 'utf8').trim()); if (n > 1) return n } catch { /* not written yet */ }
+      }
+      return 0
+    }
+    const waitPid = await recorded('hx-sigterm-wait')
+    const workPid = await recorded('hx-sigterm-work')
+    expect(waitPid).toBeGreaterThan(1)
+    expect(workPid).toBeGreaterThan(1)
+    try {
+      const exited = new Promise<void>((r) => proc!.once('exit', () => r()))
+      proc!.kill('SIGTERM')
+      await exited
+      expect(fs.readFileSync(String(wait.logFile), 'utf8')).toContain(RESUMABLE_NOTE)
+      const t0 = Date.now()
+      while (alive(waitPid) && Date.now() - t0 < 5_000) await new Promise((r) => setTimeout(r, 100))
+      expect(alive(waitPid), 'the resumable run ended with the daemon').toBe(false)
+      expect(alive(workPid), 'the other run keeps running, as before').toBe(true)
+    } finally {
+      for (const pid of [waitPid, workPid]) if (pid > 1 && alive(pid)) { try { process.kill(-pid, 'SIGKILL') } catch { /* gone */ } }
+    }
   }, 90_000)
 })

@@ -1,9 +1,41 @@
 /**
- * A host_exec job as the daemon keeps it (host-exec-core.ts) and as an answer shows it (JobView).
+ * A host_exec job as the daemon keeps it (host-exec-core.ts), the exec.run request that starts it
+ * (RunRequest), and how an answer shows it (JobView).
  * Bundled into host-exec-core (the binary daemon and the host-exec-core.cjs sidecar).
  */
 import type { PromptBlock } from './host-exec-watch.js'
 import type { HeldBefore } from './host-exec-wait.js'
+
+export interface RunRequest {
+  jobId?: unknown
+  taskId?: unknown
+  command?: unknown
+  argv?: unknown
+  cwd?: unknown
+  timeoutMs?: unknown
+  background?: unknown
+  maxOutputBytes?: unknown
+  /** The asking Walnut's data home: the owner a new task directory's marker names (task-dir-core.ts). */
+  home?: unknown
+  /** The user agreed this command may show a dialog on this host's screen: no macOS guard, no idle check. */
+  allowPrompts?: unknown
+  /** Who asked, for the audit line only: the caller's task and host. */
+  caller?: { task?: unknown; host?: unknown }
+  /** The wait_for the server waits on next (exec.read `until`): one that could never hold here runs nothing. */
+  until?: unknown
+  /**
+   * Stop what the shell leaves running in the job's process group when it exits (host-exec-group.ts,
+   * 'host-exec-group-v1'). The server asks on each run, so a server older than that, whose help says
+   * only that a child still holding the job's output is stopped, keeps exactly that.
+   */
+  endGroup?: unknown
+  /**
+   * The run only waits or reads, and its caller runs it again if it ends: a daemon update does not
+   * wait for it (`holding`) and ends it with a note in its log. An older daemon ignores the field
+   * and its answer has no `resumable`, so there the run holds an update as every run does.
+   */
+  resumable?: unknown
+}
 
 export interface JobView {
   jobId: string
@@ -47,6 +79,11 @@ export interface JobView {
    * reads ended, as of its log's last write (host-exec-recall.ts).
    */
   daemonEnded?: true
+  /**
+   * The caller said the run only waits or reads (exec.run `resumable`): a daemon update never waits
+   * for it, ends it with a note in its log, and the caller runs it again (exec-runs-hold.ts).
+   */
+  resumable?: true
 }
 
 export interface RunReply extends JobView {
@@ -94,6 +131,12 @@ export interface Job {
   waits: number
   /** Read back from the audit with no end line (host-exec-recall.ts): it ended with the daemon that ran it. */
   daemonEnded?: true
+  /** A daemon update does not wait for it (JobView `resumable`). */
+  resumable?: true
+  /** Its log and the audit say a daemon update or stop ended it (endForUpdate): written once. */
+  noted?: true
+  /** Stopped because this daemon is going (endForUpdate): it reads `daemonEnded`, never as a host_exec_stop. */
+  endedByDaemon?: true
 }
 
 export function jobView(j: Job, now: number): JobView {
@@ -105,6 +148,22 @@ export function jobView(j: Job, now: number): JobView {
     leftBehind: j.leftBehind, ...(j.leftCommands ? { leftCommands: j.leftCommands } : {}), ...(j.outputCut ? { outputCut: true as const } : {}),
     ...(running && j.shellExitedAt !== null ? { shellExited: true as const } : {}),
     ...(running && j.shellExitedAt === null ? { deadlineInMs: Math.max(0, j.startedAt + j.timeoutMs - now) } : {}),
-    ...(j.daemonEnded ? { daemonEnded: true as const } : {}),
+    ...(j.daemonEnded || (!running && j.endedByDaemon) ? { daemonEnded: true as const } : {}),
+    ...(j.resumable ? { resumable: true as const } : {}),
   }
+}
+
+/**
+ * Resolves once every job here that a going daemon stopped (endForUpdate) has ended, or after `ms`:
+ * the reads waiting on them are answered before the daemon closes its sockets.
+ */
+export function untilEndedByDaemon(jobs: Iterable<Job>, ms: number): Promise<void> {
+  const open = [...jobs].filter((j) => j.endedByDaemon && j.endedAt === null)
+  if (!open.length) return Promise.resolve()
+  return new Promise((resolve) => {
+    const t = setTimeout(resolve, ms)
+    t.unref?.()
+    let left = open.length
+    for (const j of open) j.waiters.push(() => { if (--left === 0) { clearTimeout(t); resolve() } })
+  })
 }

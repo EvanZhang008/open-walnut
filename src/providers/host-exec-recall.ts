@@ -98,6 +98,7 @@ function jobOf(jobId: string, start: Line, end: Line | null, blocked: PromptBloc
     bytes: end ? (num(end.bytes) ?? 0) : (() => { try { return fs.statSync(logFile).size } catch { return 0 } })(),
     tail: [], tailBytes: 0, tailMax: 0, waiters: [], timer: null, waits: 0,
     ...(daemonEnded ? { daemonEnded: true as const } : {}),
+    ...(start.resumable === true ? { resumable: true as const } : {}),
   }
 }
 

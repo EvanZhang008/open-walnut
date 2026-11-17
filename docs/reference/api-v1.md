@@ -2077,7 +2077,7 @@ A task's session runs one command on ANOTHER host (ops `host_exec`, `host_exec_r
 `host_exec_stop`), through the Mac's link to it; the host's daemon runs it (capability
 `host-exec-v1`). The caller is the session in `x-walnut-caller-sid`.
 
-- `POST /api/v1/hosts/:host/exec { command | argv, cwd?, timeout_ms?, background?, strict?, keep?, wait_for?, wait_ms? }` →
+- `POST /api/v1/hosts/:host/exec { command | argv, cwd?, timeout_ms?, background?, strict?, resumable?, keep?, wait_for?, wait_ms? }` →
   `200 { host, jobId, running, exitCode, signal, timedOut, ms, cwd, output, truncated,
   outputBytes, logFile, redactedLines? }`. `command` runs in the user's login shell; `argv`
   runs a program with no shell parsing. A run ends by `timeout_ms` (default 120000, at
@@ -2105,8 +2105,11 @@ A task's session runs one command on ANOTHER host (ops `host_exec`, `host_exec_r
   waited for a slot or the host answers `403 exec_grant_revoked` or `403 exec_host_closed`
   with nothing run (also for `host_mcp`, `host_http`, `host_copy` and `host_daemon_update`).
   A body with `grant_id` is refused (`400 bad_request`): a run under one grant has its own route.
+  `resumable: true` (additive, 2026-11-17): the run only waits or reads, so a daemon update on that
+  host does not wait for it and ends it, its log saying so; the answer carries `resumable: true`
+  when the host took it (an older daemon ignores the field, and its run holds the update as before).
 - `POST /api/v1/host-exec/grants/:grantId/exec { host, command | argv, cwd?, timeout_ms?,
-  background?, allow_prompts?, strict?, keep?, job_id? }` (op `host_exec_pinned`, additive,
+  background?, allow_prompts?, strict?, resumable?, keep?, job_id? }` (op `host_exec_pinned`, additive,
   2026-11-04; the server lists `host-exec-pinned-v1` in `GET /api/v1/status` `capabilities`,
   and an older one answers `404`) → the same run and answer as `POST /hosts/:host/exec`, under
   that grant only. Walnut makes no grant (not the own-host one either) and sends no letter. The

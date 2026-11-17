@@ -391,6 +391,24 @@ describe('host_exec', () => {
     expect(String(done.next)).toContain('host_exec_read')
   }, 60_000)
 
+  it('resumable: the op sends it to the host, and the answer says the host took it; without it neither does (2026-11-17)', async () => {
+    const opts = { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: SID }
+    const viaOp = await executeOp('host_exec', { host: 'macbox', command: 'sleep 30', background: true, resumable: true }, opts) as { ok: boolean; result: Record<string, unknown> }
+    expect(viaOp.ok).toBe(true)
+    expect(viaOp.result).toMatchObject({ running: true, resumable: true })
+    expect(sent.filter((m) => m.cmd === 'exec.run').at(-1)!.params).toMatchObject({ resumable: true })
+    const plain = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 30', background: true }, SID)
+    expect(plain.body.resumable).toBeUndefined()
+    expect(sent.filter((m) => m.cmd === 'exec.run').at(-1)!.params.resumable).toBeUndefined()
+    // The REST way in takes the field too, and the list names it.
+    const viaRest = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 30', background: true, resumable: true }, SID)
+    expect(viaRest.body).toMatchObject({ running: true, resumable: true })
+    for (const id of [viaOp.result.jobId, plain.body.jobId, viaRest.body.jobId]) {
+      await executeOp('host_exec_stop', { host: 'macbox', job_id: String(id) }, opts)
+      await until(async () => (await api('GET', `/api/v1/hosts/macbox/exec/${String(id)}?wait_ms=0`, undefined, SID)).body.running === false, 'the stopped job to end')
+    }
+  }, 60_000)
+
   it('a call that reached the server itself, with no gateway deadline, waits as long as it asks, whatever host its session is on (2026-11-05 review)', async () => {
     const t0 = Date.now()
     const ran = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 14; echo done', timeout_ms: 60_000 }, SID, { 'x-walnut-answer-by': '' })

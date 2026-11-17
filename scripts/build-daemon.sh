@@ -131,6 +131,7 @@ SOURCES=(
   src/providers/host-exec-group.ts
   src/providers/host-exec-job.ts
   src/providers/host-script-core.ts
+  src/providers/host-exec-script.ts
   src/providers/host-exec-recall.ts
   src/providers/host-exec-run-id.ts
   src/providers/net-core.ts

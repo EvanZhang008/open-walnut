@@ -311,6 +311,12 @@ host that is never quiet a forced swap can come about every 3 hours while builds
 update not done with no clock to ask again is listed in `DAEMON_UPDATE_STOPS` with why. `DAEMON_UPDATE_HOLDS` lists every place an update is put off;
 `tests/providers/daemon-update-holds-ratchet.test.ts` fails on one not listed.
 
+A host_exec run marked `resumable` (it only waits or reads, and its caller runs it again) never
+holds the update (`src/providers/exec-runs-hold.ts` `holdingJobs`, the daemon's `holding()`; 2026-11-17:
+a chain of 2-hour waits kept one host's daemon about 3 hours behind), and neither does a waiting read
+of it. The daemon's stop (a handover's or a SIGTERM's) ends it, its log saying to run it again; other
+runs outlive a SIGTERM stop as before. An older daemon ignores the field, so its runs still hold.
+
 ## A service's swap reconnects when the new daemon answers
 
 A reconnect waits for a daemon swap this connection runs, so it never deploys, starts, stops or

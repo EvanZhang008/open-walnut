@@ -174,6 +174,8 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/host-exec-job.ts',
   // A plugin script (exec.script): the bounded runner, the same on the server for this machine.
   'src/providers/host-script-core.ts',
+  // The exec.script runner on a host: the login shell, the macOS guards, the stop a handover waits for.
+  'src/providers/host-exec-script.ts',
   // A job an earlier daemon here ran, read back from the audit.
   'src/providers/host-exec-recall.ts',
   // The id of a host_exec run, chosen by the CLI and the MCP server bundled into the binary.

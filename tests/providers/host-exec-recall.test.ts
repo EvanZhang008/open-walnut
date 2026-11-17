@@ -87,6 +87,14 @@ describe('a job read back after a daemon swap', () => {
     expect(after.running()).toBe(0)
   })
 
+  it('answers a resumable run (exec.run resumable) field for field too: it still says resumable', async () => {
+    const before = daemon()
+    await before.run({ jobId: 'hx-recall-resumable-01', taskId: TASK, command: 'echo waited; exit 0', background: true, resumable: true })
+    const old = await ended(before, 'hx-recall-resumable-01')
+    expect(old).toMatchObject({ running: false, exitCode: 0, resumable: true })
+    expect(await daemon().read({ jobId: 'hx-recall-resumable-01', taskId: TASK })).toEqual(old)
+  })
+
   it('answers a run that hit its deadline, and one host_exec_stop ended, field for field too', async () => {
     const before = daemon()
     await before.run({ jobId: 'hx-recall-deadline-01', taskId: TASK, command: 'echo started; sleep 30', background: true, timeoutMs: 300 })

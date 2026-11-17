@@ -624,7 +624,7 @@ describe('LocalDaemon — unmanaged hosts keep their on-demand behavior', () => 
       }
       vi.spyOn(internals, 'readBinaryVersion').mockReturnValue('new-version')
       vi.spyOn(internals, 'readPortFile').mockReturnValue(32100)
-      vi.spyOn(internals, 'ping').mockResolvedValue({ alive: true, version: 'old-version', capabilities: [], execRunning: 1 })
+      vi.spyOn(internals, 'ping').mockResolvedValue({ alive: true, version: 'old-version', capabilities: [], execHolding: 1 })
       vi.spyOn(internals, 'auditOwnerOnAdopt').mockImplementation(() => {})
       vi.spyOn(log.session, 'warn').mockImplementation(() => {})
       vi.spyOn(internals, 'readAcpBusySids').mockReturnValue(['acp-1'])

@@ -14,6 +14,13 @@
  * the foreground, 2 h in the background), and a host that kept runs going for
  * EXEC_UPGRADE_HOLD_MAX_MS (one after another, or one stuck past its kill) gets its
  * update anyway, on the per-host clock acp-upgrade-hold.ts keeps on disk.
+ *
+ * A run its caller marks `resumable` does not hold an update (2026-11-17): on one Linux host a
+ * script elsewhere kept a chain of 2-hour runs going there that only waited for a result, and
+ * started the next wait itself whenever one was cut, so that host's daemon always ran about
+ * 3 h (the overdue bound) behind production. The daemon ends such a run with a note in its log
+ * when it hands over. An older daemon ignores the field and lists no `resumable`, so its runs
+ * still hold; hello `execHolding` and the daemon's own refusal count the same runs.
  */
 import { upgradeHoldClock } from './acp-upgrade-hold.js'
 import { log } from '../logging/index.js'
@@ -38,10 +45,21 @@ export function daemonBusyRefusal(error: unknown): boolean {
   return /must finish first|has active operations; retry after they finish|Service preparation timed out/.test(text)
 }
 
+type ListedJob = { running?: unknown; resumable?: unknown } | null
+
+function countJobs(reply: unknown, counts: (j: ListedJob) => boolean): number {
+  const jobs = (reply as { jobs?: unknown } | null)?.jobs
+  return Array.isArray(jobs) ? jobs.filter((j) => counts(j as ListedJob)).length : 0
+}
+
 /** How many jobs an exec.list reply names as running. */
 export function runningJobs(reply: unknown): number {
-  const jobs = (reply as { jobs?: unknown } | null)?.jobs
-  return Array.isArray(jobs) ? jobs.filter((j) => (j as { running?: unknown } | null)?.running === true).length : 0
+  return countJobs(reply, (j) => j?.running === true)
+}
+
+/** How many of those hold a daemon update: all but the resumable ones. */
+export function holdingJobs(reply: unknown): number {
+  return countJobs(reply, (j) => j?.running === true && j.resumable !== true)
 }
 
 /**
@@ -77,8 +95,8 @@ export interface ExecRunsLink {
 }
 
 /**
- * Ask a live daemon whether host_exec runs are going on there (exec.list), through the
- * wait's limit. Null when none runs, the daemon has no host_exec, or the ask fails: the
+ * Ask a live daemon whether host_exec runs that hold an update are going on there (exec.list),
+ * through the wait's limit. Null when none runs, the daemon has no host_exec, or the ask fails: the
  * update is not held on a guess, and a service daemon still refuses its own handover
  * while one runs.
  */
@@ -86,7 +104,7 @@ export async function execRunsHold(link: ExecRunsLink, host: string, timeoutMs =
   if (!link.connected || !link.hasCapability('host-exec-v1')) return null
   let n = 0
   try {
-    n = runningJobs(await link.send('exec.list', {}, timeoutMs))
+    n = holdingJobs(await link.send('exec.list', {}, timeoutMs))
   } catch {
     return null
   }

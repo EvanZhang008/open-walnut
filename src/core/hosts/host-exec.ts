@@ -102,6 +102,11 @@ export interface ExecParams {
   allow_prompts?: boolean
   /** Stop at the first failing command, pipes included, and name it in the answer (host-exec-strict.ts). */
   strict?: boolean
+  /**
+   * The run only waits or reads, and the caller runs it again if it ends: a daemon update there
+   * does not wait for it (src/providers/exec-runs-hold.ts). An older daemon ignores it.
+   */
+  resumable?: boolean
   /** Start where this task's last keep call on this host ended, and carry this one's end to the next (host-exec-keep.ts). */
   keep?: boolean
   /**
@@ -405,6 +410,8 @@ export async function jobAnswer(host: string, jobId: string, reply: Record<strin
     ...(reply.running !== true && reply.killed === true ? { stoppedByCall: true } : {}),
     // The daemon that ran it stopped first (an update or a crash): no exit was kept (host-exec-recall.ts).
     ...(reply.running !== true && reply.daemonEnded === true ? { daemonEnded: true } : {}),
+    // The host took exec.run `resumable`: an update there does not wait for it (an older daemon never says so).
+    ...(reply.resumable === true ? { resumable: true } : {}),
     ...(reply.running === true && typeof reply.deadlineInMs === 'number' ? { deadlineInMs: reply.deadlineInMs } : {}),
     ...(named ? { failedStep: named } : {}),
   }
@@ -537,6 +544,8 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
     ...(cwd ? { cwd } : {}),
     // The user agreed to a dialog there: the host neither refuses the line nor stops it at one.
     ...(params.allow_prompts === true ? { allowPrompts: true } : {}),
+    // It only waits: a daemon update there does not wait for it, and ends it (the answer says resumable).
+    ...(params.resumable === true ? { resumable: true } : {}),
     // A foreground run keeps its own deadline on the host; only our wait for it is bounded.
     timeoutMs, background: true, caller: { task: caller.taskId, host: caller.host },
     // The host refuses a wait_for that could never hold there before it runs anything.

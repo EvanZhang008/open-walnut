@@ -4295,7 +4295,10 @@ function handleCommand(ws, msg) {
   try {
     // An answer to a relay is not new work: taken while the daemon pauses or drains (twin of daemon-standalone.ts).
     const work = function () { return dispatchCommand(ws, id, cmd); };
-    const out = cmd.cmd === 'gateway-result' ? work() : daemonCommands.admit(work);
+    // A read of a resumable host_exec run (one that only waits; it holds no update) neither holds a
+    // handover's pause nor is turned away by it: its caller reads again from the next daemon.
+    const free = cmd.cmd === 'gateway-result' || (cmd.cmd === 'exec.read' && hostExec && typeof hostExec.resumableJob === 'function' && hostExec.resumableJob(cmd.jobId));
+    const out = free ? work() : daemonCommands.admit(work);
     if (out && typeof out.then === 'function') out.catch(replyError);
     return;
   } catch (err) {
@@ -4765,6 +4768,8 @@ function dispatchCommand(ws, id, cmd) {
       ...(ISOLATED_FOR ? { isolatedFor: ISOLATED_FOR } : {}),
       // host_exec runs a stop would end: every update path waits for them (exec-runs-hold.ts).
       ...(hostExec ? { execRunning: hostExec.running() } : {}),
+      // Of those, the ones an update waits for: a resumable run does not hold it (an older sidecar has no holding).
+      ...(hostExec && typeof hostExec.holding === 'function' ? { execHolding: hostExec.holding() } : {}),
       });
       // A server is here: the calls waiting for one go now.
       if (isServerClient(ws)) setTimeout(wakeGatewayCalls, 0);
@@ -4773,6 +4778,15 @@ function dispatchCommand(ws, id, cmd) {
     case 'logs.tail': return cmdLogsTail(ws, id, cmd);
     default: return sendError(ws, id, 'unknown command: ' + cmd.cmd);
   }
+}
+
+// The line a resumable host_exec run's log ends with when this daemon stops (stopDaemon; twin of daemon-standalone.ts).
+const RESUMABLE_RUN_ENDED = 'the daemon on this host stopped (an update or a restart); this run was marked resumable, so run it again to go on waiting.';
+// The host_exec work a handover waits for: every run but a resumable one (it only waits, and its caller
+// runs it again; an older sidecar has no holding, so all its runs), and plugin scripts.
+function execHolds() {
+  if (!hostExec) return 0;
+  return (typeof hostExec.holding === 'function' ? hostExec.holding() : hostExec.running()) + (typeof hostExec.scripts === 'function' ? hostExec.scripts() : 0);
 }
 
 async function cmdServiceHandover(ws, id, cmd) {
@@ -4795,7 +4809,7 @@ async function cmdServiceHandover(ws, id, cmd) {
     return sendError(ws, id, 'service.handover: active ACP workers or relay requests must finish first');
   }
   // A host_exec run shares this daemon's pipes and ends with it (each ends by its own deadline).
-  if (!force && hostExec && (hostExec.running() || (typeof hostExec.scripts === 'function' && hostExec.scripts()))) return sendError(ws, id, 'service.handover: running host_exec jobs must finish first');
+  if (!force && execHolds()) return sendError(ws, id, 'service.handover: running host_exec jobs must finish first');
   if (process.platform !== 'linux' && process.platform !== 'darwin') return sendError(ws, id, 'service.handover: unsupported platform');
   // Pause before the first await so the handover RPC does not count itself in the wait set.
   // A Claude Code install in flight (up to 45 minutes) is not waited for: the shutdown
@@ -4820,7 +4834,7 @@ async function cmdServiceHandover(ws, id, cmd) {
     clearRestartMark();
     throw error;
   } finally { clearTimeout(timer); }
-  // Drained, the swap goes ahead: each run it ends says why in its own log (an older sidecar has no endForUpdate).
+  // Drained, the swap goes ahead: each run it ends says why in its own log (an older sidecar has no endForUpdate; the resumable ones: stopDaemon).
   if (force && hostExec && (hostExec.running() || (typeof hostExec.scripts === 'function' && hostExec.scripts())) && typeof hostExec.endForUpdate === 'function') hostExec.endForUpdate('the daemon on this host is being replaced by an update that had waited hours for its work to end, and this run was stopped with it. Run it again if it is still needed.');
   const location = { stateDir: cmd.stateDir, uid: os.userInfo().uid, instanceId: DAEMON_INSTANCE_ID };
   if (updating) serviceUpdateRequested = true;
@@ -17211,6 +17225,10 @@ async function startDaemon() {
       // A Claude Code install may run 45 minutes (a slow line): stop it now, or close()
       // waits for it. Its download stays and the next Install resumes it.
       try { hostFix.cancel(); } catch (error) { logMsg('warn', 'host fix cancel failed', { error: String(error) }); }
+      // A resumable host_exec run only waits: its process group is its own, so it would outlive this
+      // daemon with no deadline while its caller starts the next. End it, its log saying to run it
+      // again. Every other run is left as before. An older sidecar (no holding) would end them all: skip it.
+      try { if (hostExec && typeof hostExec.holding === 'function') hostExec.endForUpdate(RESUMABLE_RUN_ENDED, 'resumable'); } catch (error) { logMsg('warn', 'ending resumable host_exec runs failed', { error: String(error) }); }
       // Before any call is turned away: the mark is what tells it to wait for the successor.
       noteRestarting();
       releaseGatewayWaiters();
@@ -17218,7 +17236,8 @@ async function startDaemon() {
       // intake closed, never exiting) for good; the CLI sessions are not this process's to wait for.
       let drainTimer;
       const drainCap = new Promise(function (resolve) { drainTimer = setTimeout(function () { resolve('cap'); }, SHUTDOWN_DRAIN_MAX_MS); });
-      const settled = await Promise.race([Promise.allSettled([daemonCommands.close(), cronRuntime && cronRuntime.close(), netSupervisor && netSupervisor.stop()]), drainCap]);
+      // The resumable runs it ended answer the reads waiting on them before the sockets close (an older sidecar has no untilEnded).
+      const settled = await Promise.race([Promise.allSettled([daemonCommands.close(), cronRuntime && cronRuntime.close(), netSupervisor && netSupervisor.stop(), hostExec && typeof hostExec.untilEnded === 'function' ? hostExec.untilEnded(3000) : null]), drainCap]);
       clearTimeout(drainTimer);
       if (settled === 'cap') logMsg('warn', 'daemon shutdown: work still running after the drain limit; exiting without it', { limitMs: SHUTDOWN_DRAIN_MAX_MS });
       const drained = settled === 'cap' ? [] : settled;

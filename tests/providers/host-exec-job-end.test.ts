@@ -155,3 +155,46 @@ describe('a run from a server that does not ask to end its group (older than hos
     }
   }, 20_000)
 })
+
+describe('a resumable run (exec.run `resumable`, 2026-11-17): it only waits, so a daemon update does not wait for it', () => {
+  it('says so, is not holding, and the plain update ends only it, its log saying to run it again', async () => {
+    // A core of its own: the other tests' runs must not move the counts.
+    const own = createHostExec({
+      spawn, killGroup: (pid, signal) => { if (pid > 1) process.kill(-pid, signal) },
+      shell: '/bin/sh', home: root, taskDirRoot: null, stateDir: path.join(root, 'state-resumable'),
+      env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: root }, promptProbe: null,
+    })
+    try {
+      const wait = await own.run({ jobId: 'hx-job-end-res1', command: 'sleep 41', background: true, cwd: root, resumable: true })
+      const work = await own.run({ jobId: 'hx-job-end-res2', command: 'sleep 42', background: true, cwd: root })
+      expect(wait).toMatchObject({ running: true, resumable: true })
+      expect(work.resumable).toBeUndefined()
+      expect((await own.list()).jobs.find((j) => j.jobId === 'hx-job-end-res1')).toMatchObject({ running: true, resumable: true })
+      // Every run still counts as running (hello execRunning, a Demo reset's proof); only one holds.
+      expect(own.running()).toBe(2)
+      expect(own.holding()).toBe(1)
+      expect(own.endForUpdate('NOTE-resumable', 'resumable')).toBe(1)
+      const ended = await own.read({ jobId: 'hx-job-end-res1', wait: 10_000 })
+      // Ended by the daemon that is going, at once: never read as the caller's own host_exec_stop.
+      expect(ended).toMatchObject({ running: false, killed: false, daemonEnded: true, signal: 'SIGKILL', resumable: true })
+      expect(fs.readFileSync(ended.logFile, 'utf8')).toContain('[walnut] NOTE-resumable')
+      // The other run goes on, and still holds.
+      expect((await own.read({ jobId: 'hx-job-end-res2' })).running).toBe(true)
+      expect(own.holding()).toBe(1)
+      const audit = fs.readFileSync(path.join(root, 'state-resumable', 'host-exec-audit.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>)
+      expect(audit.find((l) => l.event === 'start' && l.jobId === 'hx-job-end-res1')).toMatchObject({ resumable: true })
+      expect(audit.find((l) => l.event === 'start' && l.jobId === 'hx-job-end-res2')?.resumable).toBeUndefined()
+      // Its shell exited and a child still holds its output: a forced update, then the stop, note it once.
+      await own.run({ jobId: 'hx-job-end-res3', command: 'sleep 43 & echo started', background: true, cwd: root, resumable: true })
+      const t0 = Date.now()
+      while ((await own.read({ jobId: 'hx-job-end-res3' })).shellExited !== true && Date.now() - t0 < 5_000) await new Promise((r) => setTimeout(r, 20))
+      own.endForUpdate('NOTE-forced')
+      own.endForUpdate('NOTE-forced', 'resumable')
+      const twice = await own.read({ jobId: 'hx-job-end-res3', wait: 10_000 })
+      expect(fs.readFileSync(twice.logFile, 'utf8').split('[walnut] NOTE-forced')).toHaveLength(2)
+    } finally {
+      for (const j of (await own.list()).jobs) if (j.running) await own.kill({ jobId: j.jobId }).catch(() => {})
+      own.close()
+    }
+  }, 20_000)
+})

@@ -33,7 +33,7 @@ import { WebSocket } from '#ws'
 import { log } from '../logging/index.js'
 import { HoldNews, holdLog } from './daemon-hold-news.js'
 import { acpUpgradeHolds } from './acp-upgrade-hold.js'
-import { execRunsReason, execRunsWait, runningJobs } from './exec-runs-hold.js'
+import { execRunsReason, execRunsWait, holdingJobs } from './exec-runs-hold.js'
 import { daemonUpdateOverdue } from './daemon-update-behind.js'
 import { fenceDaemonFileChanges } from './daemon-file-fence.js'
 import { OVER_BUSY_FLAG } from './daemon-over-busy.js'
@@ -966,8 +966,8 @@ export class LocalDaemon {
    * host_exec runs in the running daemon end with it (exec-runs-hold.ts): keep it serving
    * and ask again on the upgrade clock. True when the upgrade waits.
    */
-  private deferForExecRuns(hello: { version?: string; instanceId?: string; execRunning?: number }, port: number, expected: string): boolean {
-    const why = execRunsWait('__local__', execRunsReason(hello.execRunning))
+  private deferForExecRuns(hello: { version?: string; instanceId?: string; execHolding?: number }, port: number, expected: string): boolean {
+    const why = execRunsWait('__local__', execRunsReason(hello.execHolding))
     if (!why) { this._holdNews.forget(/host_exec/); return false }
     // Overdue: the update goes over them (daemon-update-behind.ts).
     if (this._overdueMs) return false
@@ -1433,8 +1433,11 @@ export class LocalDaemon {
     alive: boolean; version?: string; capabilities?: string[]; instanceId?: string
     /** hello `served`: the Walnuts it serves (daemon-shared.ts); absent from an older daemon. */
     served?: DaemonServes | null
-    /** host_exec runs going on in it (exec-runs-hold.ts); absent from a daemon older than that. */
-    execRunning?: number
+    /**
+     * host_exec runs going on in it that hold an update (exec-runs-hold.ts): hello `execHolding`, else
+     * `execRunning` from a daemon older than resumable runs; absent from a daemon older than both.
+     */
+    execHolding?: number
     /** Set when not alive: a timeout means something accepted or is holding the
      *  connection without answering; an error means nothing is listening. */
     failure?: 'timeout' | 'error' | 'bad-reply'
@@ -1456,12 +1459,12 @@ export class LocalDaemon {
           socket.send(JSON.stringify({ id: 1, cmd: 'hello' }))
         })
         socket.on('message', (data) => {
-          let msg: { id?: unknown; ok?: boolean; version?: string; capabilities?: string[]; instanceId?: string; execRunning?: number; jobs?: unknown; served?: { twin?: unknown; walnuts?: unknown } } | null = null
+          let msg: { id?: unknown; ok?: boolean; version?: string; capabilities?: string[]; instanceId?: string; execRunning?: number; execHolding?: number; jobs?: unknown; served?: { twin?: unknown; walnuts?: unknown } } | null = null
           try { msg = JSON.parse(data.toString()) } catch { /* not JSON: a bad reply */ }
           if (hello && msg && msg.id === 2) {
             clearTimeout(timeout)
             socket.close()
-            resolve(msg.ok === true ? { ...hello, execRunning: runningJobs(msg) } : hello)
+            resolve(msg.ok === true ? { ...hello, execHolding: holdingJobs(msg) } : hello)
             return
           }
           // The daemon pushes its events (a session's state, cron metadata) to
@@ -1479,11 +1482,11 @@ export class LocalDaemon {
             ...(msg.served && typeof msg.served === 'object'
               ? { served: parseServes({ version: msg.version ?? '', twin: msg.served.twin, capabilities: msg.capabilities ?? [], walnuts: msg.served.walnuts }) }
               : {}),
-            ...(typeof msg.execRunning === 'number' ? { execRunning: msg.execRunning } : {}),
+            ...(typeof msg.execHolding === 'number' ? { execHolding: msg.execHolding } : typeof msg.execRunning === 'number' ? { execHolding: msg.execRunning } : {}),
             ...(msg.ok === true ? {} : { failure: 'bad-reply' as const }),
           }
           // A daemon older than the count in its hello still lists its host_exec runs (exec-runs-hold.ts).
-          if (answer.alive && answer.execRunning === undefined && answer.capabilities?.includes('host-exec-v1')) {
+          if (answer.alive && answer.execHolding === undefined && answer.capabilities?.includes('host-exec-v1')) {
             hello = answer
             socket.send(JSON.stringify({ id: 2, cmd: 'exec.list' }))
             return

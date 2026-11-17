@@ -17,7 +17,7 @@ const { needsPrewarm } = vi.hoisted(() => ({ needsPrewarm: vi.fn() }))
 vi.mock('../../src/providers/fold-prewarm.js', () => ({ registryNeedsFoldPrewarm: needsPrewarm, runFoldPrewarm: vi.fn() }))
 
 import { WebSocketServer } from 'ws'
-import { EXEC_UPGRADE_HOLD_MAX_MS, daemonBusyRefusal, execRunsHold, execRunsProven, execRunsReason, execRunsWait } from '../../src/providers/exec-runs-hold.js'
+import { EXEC_UPGRADE_HOLD_MAX_MS, daemonBusyRefusal, execRunsHold, execRunsProven, execRunsReason, execRunsWait, holdingJobs } from '../../src/providers/exec-runs-hold.js'
 import { setAcpUpgradeHoldFileForTest } from '../../src/providers/acp-upgrade-hold.js'
 import { LocalDaemon } from '../../src/providers/local-daemon.js'
 import { log } from '../../src/logging/index.js'
@@ -49,6 +49,18 @@ describe('execRunsReason, execRunsHold', () => {
     expect(await execRunsHold({ connected: false, hasCapability: () => true, send: never }, 'h')).toBeNull()
     expect(await execRunsHold({ connected: true, hasCapability: () => false, send: never }, 'h')).toBeNull()
     expect(never).not.toHaveBeenCalled()
+  })
+
+  it('a resumable run (it only waits; its caller runs it again) never holds: only the others count (2026-11-17)', async () => {
+    const hold = (jobs: unknown[]) => execRunsHold({ connected: true, hasCapability: () => true, send: async () => ({ ok: true, jobs }) }, 'h')
+    // A host whose only runs wait for a result elsewhere is updated now, not 3 h later.
+    expect(await hold([{ running: true, resumable: true }, { running: true, resumable: true }, { running: false }])).toBeNull()
+    // Mixed: the count is the runs that would be lost.
+    expect(await hold([{ running: true, resumable: true }, { running: true }, { running: true, resumable: false }])).toBe('2 host_exec runs on the host would end with the daemon')
+    // An older daemon's list has no field: each running job holds, as before.
+    expect(await hold([{ jobId: 'hx-old', running: true, exitCode: null }])).toBe('1 host_exec run on the host would end with the daemon')
+    expect(holdingJobs({ jobs: [{ running: false, resumable: true }, null, 'x'] })).toBe(0)
+    expect(holdingJobs(null)).toBe(0)
   })
 
   it('the wait has an end: a host that kept runs going for EXEC_UPGRADE_HOLD_MAX_MS is updated anyway, and its clock starts over once none runs', () => {
@@ -124,20 +136,20 @@ describe('LocalDaemon upgrade', () => {
   }
 
   it('keeps an older daemon with a host_exec run serving and asks again on the clock; goes ahead once none runs', async () => {
-    const f = fixture({ execRunning: 1 })
+    const f = fixture({ execHolding: 1 })
     await expect(f.daemon.ensureRunning()).resolves.toBe(32100)
     expect(f.daemon.port).toBe(32100)
     expect(f.stop).not.toHaveBeenCalled()
     expect(f.start).not.toHaveBeenCalled()
     expect(f.recheck).toHaveBeenCalledTimes(1)
 
-    f.ping.mockResolvedValue({ alive: true, version: 'old-version', capabilities: [], execRunning: 0 })
+    f.ping.mockResolvedValue({ alive: true, version: 'old-version', capabilities: [], execHolding: 0 })
     await expect(f.daemon.ensureRunning()).resolves.toBe(32200)
     expect(f.stop).toHaveBeenCalledTimes(1)
   })
 
   it('a managed daemon with a run is not asked to update either', async () => {
-    const f = fixture({ execRunning: 2, capabilities: ['cron-supervision-v1'] })
+    const f = fixture({ execHolding: 2, capabilities: ['cron-supervision-v1'] })
     await expect(f.daemon.ensureRunning()).resolves.toBe(32100)
     expect(f.managed).not.toHaveBeenCalled()
     expect(f.recheck).toHaveBeenCalledTimes(1)
@@ -149,6 +161,26 @@ describe('LocalDaemon upgrade', () => {
     expect(f.managed).toHaveBeenCalledTimes(1)
   })
 
+  it('hello execHolding wins over execRunning: a daemon whose only run is resumable is updated; one older than execHolding holds on execRunning', async () => {
+    const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' })
+    let hello: Record<string, unknown> = { execRunning: 1, execHolding: 0 }
+    wss.on('connection', (sock) => sock.on('message', (raw) => {
+      const m = JSON.parse(String(raw)) as { id: number; cmd: string }
+      if (m.cmd === 'hello') sock.send(JSON.stringify({ id: m.id, ok: true, version: 'old-version', capabilities: ['host-exec-v1'], ...hello }))
+    }))
+    await new Promise<void>((r) => wss.once('listening', () => r()))
+    try {
+      const daemon = new LocalDaemon({ daemonDir: tmpDir, binaryPath: path.join(tmpDir, 'bin', 'daemon-new') })
+      const ping = (daemon as unknown as { ping(port: number, ms?: number): Promise<{ alive: boolean; execHolding?: number }> }).ping.bind(daemon)
+      const port = (wss.address() as { port: number }).port
+      expect(await ping(port)).toMatchObject({ alive: true, execHolding: 0 })
+      hello = { execRunning: 2 }
+      expect(await ping(port)).toMatchObject({ alive: true, execHolding: 2 })
+    } finally {
+      await new Promise<void>((r) => wss.close(() => r()))
+    }
+  })
+
   it('a daemon without host_exec (no count, no exec.list) is updated as before', async () => {
     const f = fixture({})
     await expect(f.daemon.ensureRunning()).resolves.toBe(32200)
@@ -156,7 +188,7 @@ describe('LocalDaemon upgrade', () => {
   })
 
   it('a managed update the daemon refused as busy keeps it serving and asks again on the clock', async () => {
-    const f = fixture({ execRunning: 0, capabilities: ['cron-supervision-v1'] })
+    const f = fixture({ execHolding: 0, capabilities: ['cron-supervision-v1'] })
     f.managed.mockResolvedValue('busy' as never)
     await expect(f.daemon.ensureRunning()).resolves.toBe(32100)
     await f.daemon.managedUpdatePending
@@ -181,11 +213,14 @@ describe('LocalDaemon upgrade', () => {
     const port = (wss.address() as { port: number }).port
     try {
       const daemon = new LocalDaemon({ daemonDir: tmpDir, binaryPath: path.join(tmpDir, 'bin', 'daemon-new') })
-      const ping = (daemon as unknown as { ping(port: number, ms?: number): Promise<{ alive: boolean; execRunning?: number; version?: string }> }).ping.bind(daemon)
-      expect(await ping(port)).toMatchObject({ alive: true, version: 'old-version', execRunning: 1 })
+      const ping = (daemon as unknown as { ping(port: number, ms?: number): Promise<{ alive: boolean; execHolding?: number; version?: string }> }).ping.bind(daemon)
+      expect(await ping(port)).toMatchObject({ alive: true, version: 'old-version', execHolding: 1 })
       expect(asked).toEqual(['hello', 'exec.list'])
+      // A resumable run in the list does not hold.
+      jobs = [{ jobId: 'hx-wait', running: true, resumable: true }]
+      expect(await ping(port)).toMatchObject({ alive: true, execHolding: 0 })
       jobs = undefined
-      expect(await ping(port)).toMatchObject({ alive: true, execRunning: 0 })
+      expect(await ping(port)).toMatchObject({ alive: true, execHolding: 0 })
     } finally {
       await new Promise<void>((r) => wss.close(() => r()))
     }
@@ -200,10 +235,10 @@ describe('LocalDaemon upgrade', () => {
     await new Promise<void>((r) => wss.once('listening', () => r()))
     try {
       const daemon = new LocalDaemon({ daemonDir: tmpDir, binaryPath: path.join(tmpDir, 'bin', 'daemon-new') })
-      const ping = (daemon as unknown as { ping(port: number, ms?: number): Promise<{ alive: boolean; execRunning?: number }> }).ping.bind(daemon)
+      const ping = (daemon as unknown as { ping(port: number, ms?: number): Promise<{ alive: boolean; execHolding?: number }> }).ping.bind(daemon)
       const r = await ping((wss.address() as { port: number }).port, 300)
       expect(r.alive).toBe(true)
-      expect(r.execRunning).toBeUndefined()
+      expect(r.execHolding).toBeUndefined()
     } finally {
       await new Promise<void>((r) => wss.close(() => r()))
     }
@@ -215,11 +250,30 @@ describe('the daemon twins', () => {
   it.each(twins)('%s: hello says how many host_exec runs go on, and a service handover refuses while one runs', (file) => {
     const src = fs.readFileSync(path.join(__dirname, '../..', file), 'utf8')
     expect(src).toMatch(/execRunning: hostExec\.running\(\)/)
+    expect(src).toMatch(/execHolding: hostExec\.holding\(\)/)
     const handover = src.slice(src.search(/function cmdServiceHandover\(/))
     const refusal = handover.search(/running host_exec jobs must finish first/)
     expect(refusal).toBeGreaterThan(0)
     // Before the drain pauses anything: a refusal changes nothing.
     expect(refusal).toBeLessThan(handover.search(/daemonCommands\.pause\(/))
+    // The plain refusal counts the runs that hold (a resumable one does not). No run starts while
+    // the pause drains (every command but a relay answer and a read of a resumable run is admitted,
+    // and admission is closed), so no second look is needed after it.
+    const refusalLine = handover.slice(0, refusal).split('\n').at(-1)!
+    expect(refusalLine).toMatch(/execHolds\(\)/)
+    const holds = src.slice(src.search(/(const execHolds|function execHolds)/))
+    expect(holds.slice(0, 400)).toMatch(/hostExec\.holding\(\)/)
+    const body = handover.slice(0, handover.search(/\n}\n/))
+    // A waiting read of a resumable run is not admitted work: it neither holds the pause nor is refused.
+    expect(src).toMatch(/const free = cmd\.cmd === 'gateway-result' \|\| \(cmd\.cmd === 'exec\.read' && hostExec[^\n]*resumableJob\(cmd\.jobId\)\)/)
+    // The resumable runs end only when the daemon stops (stopDaemon, which a committed handover and a
+    // SIGTERM both reach), before its drain: a handover that fails keeps them.
+    expect(body).not.toMatch(/RESUMABLE_RUN_ENDED/)
+    const stop = src.slice(src.search(/const stopDaemon = /))
+    const ending = stop.search(/endForUpdate\(RESUMABLE_RUN_ENDED, 'resumable'\)/)
+    expect(ending).toBeGreaterThan(0)
+    expect(ending).toBeLessThan(stop.search(/daemonCommands\.close\(\)/))
+    expect(src).toContain("RESUMABLE_RUN_ENDED = 'the daemon on this host stopped (an update or a restart); this run was marked resumable, so run it again to go on waiting.'")
   })
 
   it('the refusal reads as a busy daemon to every caller that waits one out', async () => {
@@ -234,8 +288,9 @@ describe('execRunsProven (a stop that must prove nothing runs)', () => {
     return { send, hasCapability: (cap: string) => caps.includes(cap) }
   }
 
-  it('counts the running jobs a daemon with host_exec lists', async () => {
+  it('counts the running jobs a daemon with host_exec lists, a resumable one too (the stop must end nothing)', async () => {
     await expect(execRunsProven(link(['host-exec-v1'], { jobs: [{ running: true }, { running: false }] }), 1_000)).resolves.toBe(1)
+    await expect(execRunsProven(link(['host-exec-v1'], { jobs: [{ running: true, resumable: true }, { running: true }] }), 1_000)).resolves.toBe(2)
     await expect(execRunsProven(link(['host-exec-v1'], { jobs: [] }), 1_000)).resolves.toBe(0)
   })
 
