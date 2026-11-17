@@ -4511,6 +4511,11 @@ function movedHoldReason(target: TaskSource, from?: TaskSource): string {
   return `${MOVED_HOLD_PREFIX}${from ? ` from ${name(from)}` : ''}: it syncs to ${name(target)} only when you choose Sync`;
 }
 
+/** The link targets a task's tags hold, in order. */
+function linkTargetsOf(tags: readonly string[] | undefined): string[] {
+  return (tags ?? []).map((tag) => linkTargetOfTag(tag)).filter((target): target is string => !!target);
+}
+
 /**
  * Update fields on a task by partial ID match.
  */
@@ -4521,7 +4526,12 @@ export async function updateTask(
   // auto-unfolder below for the one caller that legitimately needs it,
   // moveFolderToProject — see the comment at that line. `joinGroupId` is internal
   // too: addToGroup's `move` files the moved task into that folder in this write.
-  eventOptions?: { source?: string; extraTargets?: string[]; ifPhase?: TaskPhase; asyncPush?: boolean; keepGroupId?: boolean; joinGroupId?: string; actorSid?: string },
+  eventOptions?: {
+    source?: string; extraTargets?: string[]; ifPhase?: TaskPhase; asyncPush?: boolean; keepGroupId?: boolean; joinGroupId?: string; actorSid?: string
+    /** INTERNAL, set by the REST route for a session caller: the link tags this write adds are an
+     *  agent's, never the user's own, so they join Task.auto_links and a later LINKS list may drop them. */
+    tagsByAgent?: boolean
+  },
 ): Promise<{ task: Task }> {
   // Lock-internal phase: validate + mutate + persist. Returns enough state for
   // the post-lock push. Push runs OUTSIDE the lock because autoPushIfConfigured
@@ -4858,6 +4868,7 @@ export async function updateTask(
   // Tag mutations. Every tag is key:value (tag-model.ts): a plain word from an older client, an
   // agent or a plugin is the label it is stored as, so adding or removing `oncall` means
   // `label:oncall`.
+  const linkTargetsBefore = eventOptions?.tagsByAgent ? new Set(linkTargetsOf(task.tags)) : null;
   if (updates.set_tags !== undefined) {
     // Replace all
     const deduped = normalizeTags(updates.set_tags);
@@ -4881,6 +4892,12 @@ export async function updateTask(
         delete task.tags;
       }
     }
+  }
+  if (linkTargetsBefore) {
+    // An agent's new link is Walnut's to keep or drop (link-tags.ts droppedLinkTags), like one a
+    // LINKS list named; only a person's own link is never dropped.
+    const fresh = linkTargetsOf(task.tags).filter((target) => !linkTargetsBefore.has(target) && !task.auto_links?.includes(target));
+    if (fresh.length) task.auto_links = [...(task.auto_links ?? []), ...fresh].slice(-MAX_AUTO_LINKS);
   }
   if (updates.remove_link_tags?.length) {
     const drop = new Set(updates.remove_link_tags);

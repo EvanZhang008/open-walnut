@@ -1684,7 +1684,7 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
     if (!pinPatch || Object.keys(fields).length > 0) {
       // A settle of the user's items rides with the close and is put back if it fails (owed-to-user.ts).
       const { closeWithSettle } = await import('../../core/sessions/owed-to-user.js')
-      result = await closeWithSettle(owedSettle, null, () => updateTask(id, fields, { source: 'api', asyncPush: true }))
+      result = await closeWithSettle(owedSettle, null, () => updateTask(id, fields, { source: 'api', asyncPush: true, ...(callerSid ? { tagsByAgent: true } : {}) }))
       if (fields.phase === 'NEED_ACTION') {
         // A person's NEED_ACTION is their own ask (core/sessions/person-needs.ts); an Undo's is
         // what it was before the move it takes back (the mark is not touched by that move).
