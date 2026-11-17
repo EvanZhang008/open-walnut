@@ -314,7 +314,8 @@ test('attachments do not offer Start Claude Code session', async ({ page, baseUR
   // flip expansion UNDER the test right after load. Retry-expand until the
   // attachment is actually visible instead of trusting one instant check.
   const folderEl = page.locator('.notes-tree-folder', { hasText: 'CCTest' })
-  const attachFolder = page.locator('.notes-tree-folder', { hasText: '_attachment' })
+  // The tree shows the folder as "Attachments"; its path names it.
+  const attachFolder = page.locator('.notes-tree-folder[data-node-path="CCTest/_attachment"]')
   const attachment = page.locator('.notes-tree-file.notes-tree-attachment, .notes-tree-file', { hasText: '.png' }).first()
   for (let i = 0; i < 5 && !(await attachment.isVisible().catch(() => false)); i++) {
     if (!(await attachFolder.isVisible().catch(() => false))) await folderEl.click().catch(() => {})

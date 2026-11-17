@@ -103,14 +103,16 @@ test('pasting an image auto-refreshes the sidebar tree — no manual refresh nee
 
   // Before paste: the note's folder has no _attachment/ child yet.
   const folderNode = page.locator(`[data-drop-folder="${folder}"]`)
-  await expect(folderNode.locator('.notes-tree-item', { hasText: '_attachment' })).toHaveCount(0)
+  // The tree shows the folder as "Attachments"; its path names it.
+  const attachRow = folderNode.locator(`.notes-tree-folder[data-node-path="${folder}/_attachment"]`)
+  await expect(attachRow).toHaveCount(0)
 
   await pasteImage(page)
 
   // No manual tree refresh — the notes:tree-changed WS event should reveal
   // the new _attachment/ folder + pasted file on its own.
-  await expect(folderNode.locator('.notes-tree-item', { hasText: '_attachment' })).toBeVisible({ timeout: 5000 })
-  await folderNode.locator('.notes-tree-folder', { hasText: '_attachment' }).click()
+  await expect(attachRow).toBeVisible({ timeout: 5000 })
+  await attachRow.click()
   await expect(page.locator('.notes-tree-file', { hasText: /^pasted-image-/ })).toBeVisible({ timeout: 5000 })
 })
 
