@@ -53,11 +53,17 @@ const items = Array.from({ length: 30 }, (_, n) => ({ id: `mail-${n}`, subject: 
     ] : []),
   ] as InboxItemAction[],
 }))
+// These email cards exercise the confirmed find/create task path that stored letters and older
+// phones still run. A new item never keeps a task intent (item-schema.ts LEGACY_TASK_INTENTS), so
+// the letter is written the way an older Walnut wrote it, as content-actions-server.ts does.
+Object.assign(process.env, { VITEST: '1', WALNUT_TEST_LEGACY_TASK_INTENTS: '1' })
 const letter = await sendLetter({ subject: 'Email item fixture', type: 'review', markdown: 'Mailbox snapshot at 2026-10-21T10:00:00Z', items,
   sender: { sessionId: 'external', host: '__local__' },
 })
 await agentReply(letter.id, { text: 'One additional email', markdown: 'Thread snapshot', items: [{ ...items[0], id: 'thread-mail', source: { kind: 'mail', account: 'account-one', message: 'thread-message' },
   actions: [{ id: 'thread-read', kind: 'op', intent: 'mark_read' }] }] })
+delete process.env.VITEST
+delete process.env.WALNUT_TEST_LEGACY_TASK_INTENTS
 const server = await startServer({ port: 0, dev: true })
 // Startup installs the real mail cache service. Replace it only after that has settled.
 sourceDispose = registerInboxMailSource({ resolve: async source => ({ source,
