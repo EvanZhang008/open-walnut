@@ -31,6 +31,7 @@ import { createHash } from 'node:crypto'
 import { log } from '../../logging/index.js'
 import type { Task } from '../types.js'
 import { linkUrlOfTag } from '../link-tags.js'
+import { followTaskLinks, sendTaskNews, taskNewsTarget } from '../task-news.js'
 import type { PrSnapshot, PrWatchState } from './model.js'
 import { prRefOf, type PrProvider, type PrReadResult, type PrRef } from './providers.js'
 import { evaluatePrWatch, prWakeBody, prWakeSummary, type PrWatchReport } from './watch-eval.js'
@@ -359,17 +360,8 @@ export function defaultPrWatchDeps(): PrWatchDeps {
       const { updateTaskRaw } = await import('../task-manager.js')
       await updateTaskRaw(id, patch, { emitEvent: true, source: PR_WATCH_SOURCE })
     },
-    async deliveryTarget(taskId) {
-      const { getSessionsForTask } = await import('../session-tracker.js')
-      const { pickDeliverySession } = await import('../routines/session-target.js')
-      const target = pickDeliverySession(await getSessionsForTask(taskId).catch(() => []))
-      return target ? { sessionId: target.claudeSessionId, running: target.process_status === 'running' } : null
-    },
-    async send(sessionId, text, taskId, messageId) {
-      const { sendMessageToSession } = await import('../session-message-queue.js')
-      // endsWait: a task parked on its pull request waited for exactly this.
-      await sendMessageToSession(sessionId, text, { source: PR_WATCH_SOURCE, taskId, endsWait: true, messageId })
-    },
+    deliveryTarget: taskNewsTarget,
+    send: (sessionId, text, taskId, messageId) => sendTaskNews(PR_WATCH_SOURCE, sessionId, text, taskId, messageId),
     async complete(taskId, why) {
       const { completeTask, addNote } = await import('../task-manager.js')
       const { bus, EventNames } = await import('../event-bus.js')
@@ -403,32 +395,18 @@ let started: { stop(): void; kick(taskIds?: readonly string[], force?: boolean):
 export async function startPrWatch(deps: PrWatchDeps = defaultPrWatchDeps()): Promise<typeof started> {
   if (started) return started
   const { runPeriodic } = await import('../periodic-task.js')
-  const { bus, EventNames } = await import('../event-bus.js')
   const handle = runPeriodic('pr-watch', PR_WATCH_TICK_MS, 90_000, async () => {
     await prWatchTick(deps).catch((err) => log.task.warn('pr-watch tick failed', { error: err instanceof Error ? err.message : String(err) }))
   })
-  const pending = new Set<string>()
-  let timer: ReturnType<typeof setTimeout> | null = null
-  const flush = () => {
-    timer = null
-    const ids = [...pending]
-    pending.clear()
-    void prWatchTick(deps, { taskIds: ids }).catch(() => undefined)
-  }
-  bus.subscribe('pr-watch', (event) => {
-    if (event.source === PR_WATCH_SOURCE) return
-    const task = (event.data as { task?: Task } | undefined)?.task
-    if (!task || task.phase === 'COMPLETE') return
+  const unfollow = await followTaskLinks(PR_WATCH_SOURCE, (task) => {
     const refs = linkedPrRefs(task)
     const known = task.pr_status ?? {}
     // A newly linked pull request, or an unlinked one whose snapshot should go.
     const fresh = refs.some((r) => !known[r.ref.url]) || Object.keys(known).some((url) => !refs.some((r) => r.ref.url === url))
-    if (!fresh) return
-    pending.add(task.id)
-    if (!timer) { timer = setTimeout(flush, 3_000); timer.unref?.() }
-  }, { global: true, interest: [EventNames.TASK_UPDATED, EventNames.TASK_CREATED] })
+    return fresh ? [] : null
+  }, (taskIds) => { void prWatchTick(deps, { taskIds }).catch(() => undefined) })
   started = {
-    stop() { handle.stop(); bus.unsubscribe('pr-watch'); if (timer) clearTimeout(timer); started = null },
+    stop() { handle.stop(); unfollow(); started = null },
     kick: (taskIds, force) => prWatchTick(deps, { ...(taskIds ? { taskIds } : {}), ...(force ? { force } : {}) }),
   }
   return started

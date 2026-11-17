@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { type RefObject } from 'react';
 import { linkKindGroup, linkPathOfTag, linkTagKey, linkTagName, linkUrlOfTag } from '../../../../src/core/link-tags';
 import { useLinkHoverCard } from './LinkHoverCard';
 import { LinkKindIcon } from './LinkKindIcon';
@@ -25,6 +25,15 @@ interface TagChipProps {
   /** A link tag's name among its task's links (linkTagNames: distinct on one task); without it
    *  the pill reads the name the tag makes on its own. */
   linkName?: string;
+  /** A change link with a status (ChangePill.tsx): a dot in its tone and a few words after the
+   *  name (`CR-1001 · prod-w1 baking`). */
+  status?: { tone: string; text: string };
+  /** The pill opens a card of its own instead of the link (a change's status card); `expanded`
+   *  says the card is open, and the hover card stays away meanwhile. */
+  onActivate?: () => void;
+  expanded?: boolean;
+  /** Set to the pill's element, for a card placed beside it. */
+  anchorRef?: RefObject<HTMLElement | null>;
 }
 
 function hostOf(href: string): string {
@@ -39,7 +48,7 @@ const keepToLink = (e: React.SyntheticEvent) => { e.stopPropagation(); };
  * Reusable tag pill component.
  * Parses "key:value" format for visual prefix distinction.
  */
-export function TagChip({ tag, inline, onRemove, onClick, active, hiddenOnTasks, whole, valueOnly, href, onOpenPath, linkName }: TagChipProps) {
+export function TagChip({ tag, inline, onRemove, onClick, active, hiddenOnTasks, whole, valueOnly, href, onOpenPath, linkName, status, onActivate, expanded, anchorRef }: TagChipProps) {
   const colonIdx = tag.indexOf(':');
   const hasPrefix = colonIdx > 0 && colonIdx < tag.length - 1;
   // A link tag reads as its name (`Fix plan r5b`, a ticket's id) after an icon for its kind,
@@ -53,13 +62,14 @@ export function TagChip({ tag, inline, onRemove, onClick, active, hiddenOnTasks,
   const openPath = ownPath && onOpenPath && !onClick ? () => onOpenPath(ownPath) : undefined;
   // A link tag names its target in a hover card; the tag editor, where the pill has a remove
   // button, keeps the plain tooltip.
-  const hover = useLinkHoverCard(isLink && !onRemove ? {
+  const activate = onActivate && !onRemove ? onActivate : undefined;
+  const hover = useLinkHoverCard(isLink && !onRemove && !expanded ? {
     kind: kind!.replace(/-/g, ' '),
     name: value,
     target: (ownUrl ?? ownPath)!,
-    opens: ownUrl ? `Opens in a new tab \u00b7 ${hostOf(ownUrl)}` : openPath ? 'Opens in Files' : 'A file on this task',
+    opens: activate ? 'Click for its status' : ownUrl ? `Opens in a new tab \u00b7 ${hostOf(ownUrl)}` : openPath ? 'Opens in Files' : 'A file on this task',
   } : undefined);
-  const hoverRef = (el: HTMLElement | null) => { hover.anchorRef.current = el; };
+  const hoverRef = (el: HTMLElement | null) => { hover.anchorRef.current = el; if (anchorRef) anchorRef.current = el; };
 
   const className = [
     'tag-chip',
@@ -71,6 +81,7 @@ export function TagChip({ tag, inline, onRemove, onClick, active, hiddenOnTasks,
     valueOnly && hasPrefix && !isLink && 'tag-chip-value-only',
     (href || openPath) && 'tag-chip-linked',
     isLink && 'tag-chip-link-tag',
+    status && 'tag-chip-change',
   ].filter(Boolean).join(' ');
   const title = hiddenOnTasks ? `${tag} (not shown on tasks; Settings, Tasks, Tags)`
     : isLink ? `${value}, ${kind!.replace(/-/g, ' ')}: ${ownUrl ?? ownPath}` : tag;
@@ -79,12 +90,44 @@ export function TagChip({ tag, inline, onRemove, onClick, active, hiddenOnTasks,
       {isLink && <LinkKindIcon group={linkKindGroup(kind!)} />}
       {prefix && <span className="tag-chip-prefix">{prefix}:</span>}
       <span className="tag-chip-value">{value}</span>
+      {status && (
+        <span className="tag-chip-change-status" data-testid="change-pill-status">
+          <span className="tag-chip-change-sep">{' \u00b7 '}</span>
+          <span className="tag-chip-change-dot" data-tone={status.tone} aria-hidden="true" />
+          {status.text}
+        </span>
+      )}
     </>
   );
   const linkProps = href ? {
     href, target: '_blank', rel: 'noopener noreferrer', draggable: false,
     onClick: keepToLink, onPointerDown: keepToLink, onMouseDown: keepToLink,
   } : null;
+
+  // A pill with a card of its own (a change's status) opens it; the card links to the target.
+  if (activate) {
+    return (
+      <span
+        ref={hoverRef}
+        {...hover.handlers}
+        className={`${className} tag-chip-activatable`}
+        role="button"
+        tabIndex={0}
+        aria-haspopup="dialog"
+        aria-expanded={!!expanded}
+        aria-label={status ? `${title}: ${status.text}` : title}
+        data-tag={tag}
+        data-tone={status?.tone}
+        onClick={(e) => { e.stopPropagation(); activate(); }}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); activate(); } }}
+        onPointerDown={keepToLink}
+        onMouseDown={keepToLink}
+      >
+        {text}
+        {hover.card}
+      </span>
+    );
+  }
 
   // A file-path link opens in the session's Files view, never the row under it.
   if (openPath && !onRemove) {

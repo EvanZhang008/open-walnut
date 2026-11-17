@@ -60,6 +60,12 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'While this Mac shares or records its screen (a meeting app sharing a window, an app or the whole screen), the browser on this Mac keeps Walnut\'s agent window minimized, so an agent\'s pages never show in the share. It stays minimized after the share: open it from the Dock.',
     default: false,
   },
+  {
+    id: 'change_status',
+    name: 'Change status in link tags',
+    description: 'A task\'s change links (pull requests, code reviews, commits) show how far each got inside its link pill: in review, approved, merged, deploying, deployed or blocked. Click the pill for the review and every deploy stage; Walnut tells the task\'s session when a change is approved, fails, is blocked or finishes deploying.',
+    default: false,
+  },
 ] as const;
 
 export type ExperimentalFeatureId = typeof EXPERIMENTAL_FEATURES[number]['id'];

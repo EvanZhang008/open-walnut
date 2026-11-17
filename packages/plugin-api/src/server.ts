@@ -1446,6 +1446,74 @@ export interface PluginLinkKindDefinition {
   }
 }
 
+/** A change link a task holds (`cr:https://review.acme.dev/r/1001`): its tag key and URL. */
+export interface PluginChangeLink {
+  key: string
+  url: string
+}
+
+export type PluginChangeStageStatus = 'done' | 'running' | 'waiting' | 'blocked' | 'failed' | 'pending'
+
+/** Why a stage is not moving. `bake` and `window` end by themselves and never wake the session. */
+export interface PluginChangeBlocker {
+  kind: 'bake' | 'window' | 'approval' | 'alarm' | 'failure' | 'hold'
+  /** In your service's words, one line. */
+  text: string
+  /** ISO time it ends by itself, when known: the next read is then. */
+  until?: string
+}
+
+/** What a read found for one change. Walnut adds the provider, the URL and the read times. */
+export interface PluginChangeSnapshot {
+  /** What the pill reads (`CR-1001`). */
+  label: string
+  title?: string
+  review?: {
+    state: 'draft' | 'open' | 'approved' | 'changes_requested' | 'merged' | 'closed'
+    revision?: number
+    approvals?: { got: number; need?: number }
+    approvedBy?: string[]
+    checks?: { passed: number; failed: number; pending: number }
+    waitingOn?: string
+  }
+  deploy?: {
+    pipeline: string
+    url?: string
+    commit?: string
+    /** Every stage in pipeline order, at most 60. */
+    stages: Array<{ name: string; target?: string; status: PluginChangeStageStatus; at?: string; note?: string; blocker?: PluginChangeBlocker; prod?: boolean }>
+    last?: string
+    next?: string
+    /** It reached the end: Walnut reads it no more. */
+    done: boolean
+  }
+}
+
+export type PluginChangeReadResult =
+  | { ok: true; snapshot: PluginChangeSnapshot; nextInMs?: number }
+  | { ok: false; code: 'signed-out' | 'not-found' | 'unreachable' | 'failed'; message: string }
+
+/**
+ * A service whose changes (code reviews, commits) Walnut follows in the task's link pills.
+ * `handles` picks the links it reads (cheap, synchronous); `read` answers many at once, one result
+ * per link URL, before `ctx.signal` aborts (90 s); `stageDetail` answers one stage's steps when the
+ * card opens it (15 s). Walnut reads each change when it is due (a review every 10 minutes, a deploy
+ * every 15, a blocker's `until`, or your `nextInMs`), stores only what changed, and tells the task's
+ * session on news. Absent on Walnut before 2026-11-17: call it as `registry.changeProvider?.(...)`.
+ */
+export interface PluginChangeProviderDefinition {
+  /** A local id the host prefixes with the plugin id. */
+  id: string
+  handles(link: PluginChangeLink): boolean
+  read(links: ReadonlyArray<PluginChangeLink & { prev?: unknown }>, ctx: { signal: AbortSignal }): Promise<Map<string, PluginChangeReadResult>>
+  stageDetail?(link: PluginChangeLink, stage: string, ctx: { signal: AbortSignal }): Promise<{
+    stage: string
+    steps: Array<{ name: string; status: PluginChangeStageStatus; note?: string; url?: string }>
+    blockers: PluginChangeBlocker[]
+    url?: string
+  } | null>
+}
+
 /**
  * A source for the composer's "@" picker: its own tab ("@<keyword> " jumps to it), and a
  * few rows in the mixed "All" view, under tasks, notes and files, added when it answers.
@@ -1581,6 +1649,9 @@ export interface RegistryService {
   /** Add a kind of link tasks hold (see PluginLinkKindDefinition). Absent on Walnut before
    *  2026-11-17: call it as `registry.linkKind?.(...)`. */
   linkKind?(definition: PluginLinkKindDefinition): Disposable
+  /** Follow your service's changes in the task's link pills (see PluginChangeProviderDefinition).
+   *  Absent on Walnut before 2026-11-17: call it as `registry.changeProvider?.(...)`. */
+  changeProvider?(definition: PluginChangeProviderDefinition): Disposable
   /** Serve one channel's items to the inbound router (see PluginRouterSourceAdapter). The
    *  latest registration of a kind answers; disposing an earlier one leaves it in place.
    *  Absent on Walnut before 2026-11-07: call it as `registry.routerSource?.(...)`. */

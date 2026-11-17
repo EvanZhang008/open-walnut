@@ -13,6 +13,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { TagChip } from './TagChip';
+import { ChangePill } from './ChangePill';
+import { changeOfTag, type ChangeTask } from './change-status';
+import { useExperimental } from '@/hooks/useExperimental';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useTagDisplay } from '@/stores/tag-display-store';
 import { shownTags, tagValue, type CompiledTagDisplay } from '../../../../src/core/tag-display-rules';
@@ -22,7 +25,7 @@ import '@/styles/session-header-pills.css';
 import '@/styles/row-pills.css';
 import { effectiveTags } from '../../../../src/core/tag-model';
 
-type TaggedTask = { tags?: readonly string[]; created_at?: string; updated_at?: string; link_names?: Record<string, string> };
+type TaggedTask = ChangeTask & { tags?: readonly string[]; created_at?: string; updated_at?: string; link_names?: Record<string, string> };
 
 /** The tags a task list shows, in order (the /tasks cards and table filter through this).
  *  Given the task, its own dates (`created:` / `updated:`) count too, for a rule that shows them.
@@ -35,8 +38,9 @@ export function useShownTags(tags: readonly string[] | undefined, task?: TaggedT
 /** Tags this short keep their whole text when the pills are squeezed; longer ones give way. */
 const WHOLE_TAG_MAX = 8;
 
-/** What the pills of one task know about its links: each one's name (distinct on the task). */
-interface LinkInfo { names: Map<string, string> }
+/** What the pills of one task know about its links: each one's name (distinct on the task), and,
+ *  with the `change_status` experiment on, the task whose change snapshots its change links show. */
+interface LinkInfo { names: Map<string, string>; changes?: ChangeTask }
 const NO_LINKS: LinkInfo = { names: new Map() };
 
 /** The text a tag's pill reads under the rules. A link reads its name. */
@@ -47,6 +51,8 @@ export function pillText(tag: string, compiled: CompiledTagDisplay, links: LinkI
 }
 
 function Pill({ tag, compiled, onOpenPath, full, links }: { tag: string; compiled: CompiledTagDisplay; onOpenPath?: (path: string) => void; full?: boolean; links: LinkInfo }) {
+  const change = links.changes?.id ? changeOfTag(links.changes, tag) : undefined;
+  if (change) return <ChangePill tag={tag} snap={change} taskId={links.changes!.id!} inline={!full} linkName={links.names.get(tag)} />;
   const text = pillText(tag, compiled, links);
   return (
     <TagChip tag={tag} inline={!full} valueOnly={compiled.valueOnly(tag)} whole={isLinkTag(tag) || text.length <= WHOLE_TAG_MAX}
@@ -127,12 +133,13 @@ export function TaskTagPills({ tags, task, max = 1, className, linksFirst, menu,
   pathHost?: string;
 }) {
   const { compiled } = useTagDisplay();
+  const changesOn = useExperimental('change_status');
   const ordered = shownTags(task ? effectiveTags(task) : tags, compiled);
   const linkTags = linksFirst ? ordered.filter((tag) => isLinkTag(tag)) : [];
   const paths = linkTags.map((tag) => linkPathOfTag(tag)).filter((p): p is string => !!p);
   const { hidden, checked } = useGoneLinkPaths(paths, pathHost, !!linksFirst);
   // Names come from every link, so a link whose file returns keeps the name it had.
-  const links: LinkInfo = { names: linkTagNames(linkTags, task?.link_names) };
+  const links: LinkInfo = { names: linkTagNames(linkTags, task?.link_names), ...(changesOn && linksFirst ? { changes: task } : {}) };
   const isShownLink = (tag: string) => { const p = linkPathOfTag(tag); return !p || !hidden.has(p); };
   const shown = linksFirst
     ? [...linkTags.filter(isShownLink), ...ordered.filter((tag) => !isLinkTag(tag))]

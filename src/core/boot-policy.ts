@@ -131,6 +131,7 @@ export const BOOT_POLICY = [
   { job: 'title-reconciler', leader: true, replica: false, why: 'titles are written on the Mac' },
   { job: 'link-tags', leader: true, replica: false, why: 'link tags are written on the Mac' },
   { job: 'pr-watch', leader: true, replica: false, why: 'pull request status is written on the Mac, which holds the GitHub sign-in' },
+  { job: 'change-watch', leader: true, replica: false, why: 'change status is written on the Mac, which holds the sign-ins its providers read with' },
   { job: 'notes-indexer', leader: true, replica: false, why: 'notes live in the copy (WP6; the companion searches its copy since 4d)' },
   { job: 'stt-auto-setup', leader: true, replica: false, why: 'voice is answered by the Mac or the companion' },
 ] as const satisfies readonly BootRow[]

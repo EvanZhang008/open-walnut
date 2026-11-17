@@ -3469,6 +3469,21 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     })()
   }
 
+  // Change links' status (core/changes/watch.ts): off unless the `change_status` experiment is on,
+  // which every look asks. Same rule for a test or ephemeral server as the pull request watch.
+  if (bootPolicy('change-watch') && !process.env.VITEST && (!isEphemeral || process.env.WALNUT_GH_BIN)) {
+    void (async () => {
+      try {
+        const { startChangeWatch } = await import('../core/changes/watch.js')
+        await startChangeWatch()
+      } catch (err) {
+        log.web.warn('change watch wiring failed; change links show no live status', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    })()
+  }
+
   if (bootPolicy('session-auto-recover') && !isEphemeral) {
     const { getConfig } = await import('../core/config-manager.js')
     const { startSessionAutoRecover } = await import('../core/session-auto-recover.js')

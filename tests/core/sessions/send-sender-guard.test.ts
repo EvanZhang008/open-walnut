@@ -153,7 +153,8 @@ const CALL_SITES: Record<string, number> = {
   'src/core/subagents/registry.ts': 1,
   // A low disk: one Walnut notice (walnut-notify) asking an open task to clear its own folder.
   'src/core/task-dir-size-notice.ts': 1,
-  'src/core/pull-requests/pr-watch.ts': 1,       // pull request news: a Walnut envelope, source pr-watch
+  // A link watcher's news (pull requests: source pr-watch; changes: source change-watch), a Walnut envelope.
+  'src/core/task-news.ts': 1,
   'src/core/task-wait-until.ts': 1,
   'src/core/transfer/transfer.ts': 1,
   'src/core/workspaces/manager.ts': 3,              // workspace launch and its folder fallback keep the start's original source
@@ -202,7 +203,7 @@ const SOURCE_SENDER: Record<string, 'person' | 'agent'> = {
   'routine-trigger': 'agent', 'routine-watcher': 'agent', 'router-runtime': 'agent', 'brief-refresh': 'agent', 'side-thread-digest': 'agent',
   'app-state': 'agent', subagent: 'agent', 'notification-fix': 'agent', 'session-start': 'agent', 'task-description': 'agent',
   'api-agent': 'agent', 'board-reminder': 'agent', 'auto-continue': 'agent', 'hook:abc': 'agent',
-  'brand-new-source': 'agent', 'background-work-ended': 'agent', 'idle-compact': 'agent', 'context-compact': 'agent', 'context-recovery': 'agent', 'safeguard-switch': 'agent', 'pr-watch': 'agent',
+  'brand-new-source': 'agent', 'background-work-ended': 'agent', 'idle-compact': 'agent', 'context-compact': 'agent', 'context-recovery': 'agent', 'safeguard-switch': 'agent', 'pr-watch': 'agent', 'change-watch': 'agent',
   // Bus tags of emits that are attributed on their own (START_EMITTERS), not send sources a person types into.
   'web-ui': 'agent', 'subagent-runner': 'agent',
   // A person's source sent by a browser under automation (sessions/automated-client.ts, sendSourceOf).

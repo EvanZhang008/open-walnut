@@ -1,0 +1,139 @@
+/* A change link's status (ChangePill.tsx, ChangeCard.tsx, ChangeStageRows.tsx): the dot and words
+   in its pill, and the card a click opens. Five tones everywhere (changePillState): done green,
+   running blue, waiting amber, blocked red, closed and unknown grey. Selectors pair two classes:
+   this file can load before globals.css. */
+:root {
+  --change-done: #1a7f37;
+  --change-running: #0969da;
+  --change-waiting: #9a6700;
+  --change-blocked: #d1242f;
+  --change-closed: #6e7781;
+}
+:root[data-theme="dark"] { --change-done: #56d364; --change-running: #58a6ff; --change-waiting: #e3b341; --change-blocked: #ff7b72; --change-closed: #8b949e; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) { --change-done: #56d364; --change-running: #58a6ff; --change-waiting: #e3b341; --change-blocked: #ff7b72; --change-closed: #8b949e; }
+}
+
+:is(.change-card, .tag-chip-change)[data-tone="done"], :is(.change-card, .tag-chip-change) [data-tone="done"] { --change-tone: var(--change-done); }
+:is(.change-card, .tag-chip-change)[data-tone="running"], :is(.change-card, .tag-chip-change) [data-tone="running"] { --change-tone: var(--change-running); }
+:is(.change-card, .tag-chip-change)[data-tone="waiting"], :is(.change-card, .tag-chip-change) [data-tone="waiting"] { --change-tone: var(--change-waiting); }
+:is(.change-card, .tag-chip-change)[data-tone="blocked"], :is(.change-card, .tag-chip-change) [data-tone="blocked"] { --change-tone: var(--change-blocked); }
+:is(.change-card, .tag-chip-change):is([data-tone="closed"], [data-tone="unknown"]),
+:is(.change-card, .tag-chip-change) :is([data-tone="closed"], [data-tone="unknown"]) { --change-tone: var(--change-closed); }
+
+/* ── The pill ── */
+.tag-chip.tag-chip-activatable { cursor: pointer; }
+.tag-chip.tag-chip-activatable:focus-visible { outline: 2px solid color-mix(in srgb, var(--change-tone, var(--accent)) 50%, transparent); outline-offset: 1px; }
+.tag-chip.tag-chip-activatable[aria-expanded="true"] { background: color-mix(in srgb, var(--change-tone, var(--accent)) 14%, var(--bg-elevated, transparent)); }
+.tag-chip.tag-chip-change .tag-chip-change-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  color: var(--change-tone, var(--fg-secondary));
+}
+.tag-chip.tag-chip-change .tag-chip-change-sep { color: var(--fg-muted); margin-left: 3px; }
+.change-card .change-card-dot,
+.tag-chip.tag-chip-change .tag-chip-change-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--change-tone, var(--change-closed));
+}
+
+/* ── The card ── */
+.change-card.change-card {
+  position: fixed;
+  z-index: 9500;
+  box-sizing: border-box;
+  width: min(440px, calc(100vw - 16px));
+  max-height: min(600px, calc(100vh - 16px));
+  padding: 12px 14px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.change-card .change-card-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.change-card .change-card-label { font-weight: 600; font-size: 13px; }
+.change-card .change-card-badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--change-tone);
+  background: color-mix(in srgb, var(--change-tone) 14%, transparent);
+}
+.change-card .change-card-title { margin-top: 4px; color: var(--fg); overflow-wrap: anywhere; }
+.change-card .change-card-facts { display: flex; flex-wrap: wrap; gap: 2px 10px; margin-top: 4px; color: var(--fg-secondary); }
+.change-card .change-card-waiting { margin-top: 4px; color: var(--change-waiting); }
+.change-card .change-card-error { margin-top: 8px; padding: 6px 8px; border-radius: 6px; color: var(--change-blocked); background: color-mix(in srgb, var(--change-blocked) 10%, transparent); }
+.change-card .change-card-muted { color: var(--fg-muted); }
+.change-card .change-card-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.change-card .change-card-deploy { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
+.change-card .change-card-deploy[data-stale="true"] { opacity: 0.75; }
+.change-card .change-card-deploy-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.change-card .change-card-deploy-name { font-weight: 600; }
+.change-card .change-card-commit { font-size: 11px; color: var(--fg-secondary); }
+.change-card .change-card-deploy-none { margin-top: 8px; }
+
+.change-card .change-card-stages,
+.change-card .change-card-steps,
+.change-card .change-card-blockers { list-style: none; margin: 0; padding: 0; }
+.change-card .change-card-stage-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.change-card .change-card-stage-row:hover,
+.change-card .change-card-stage-row:focus-visible { background: var(--bg-hover, color-mix(in srgb, var(--fg) 6%, transparent)); outline: none; }
+.change-card .change-card-stage[data-open="true"] > .change-card-stage-row { background: color-mix(in srgb, var(--fg) 5%, transparent); }
+.change-card .change-card-stage-name { flex: 0 0 auto; font-weight: 500; }
+.change-card .change-card-prod { flex: 0 0 auto; padding: 0 4px; border-radius: 4px; font-size: 10px; color: var(--fg-secondary); background: color-mix(in srgb, var(--fg) 8%, transparent); }
+.change-card .change-card-stage-target { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); }
+.change-card .change-card-stage-words { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-secondary); }
+.change-card .change-card-stage-words[data-tone] { color: var(--change-tone); }
+.change-card .change-card-stage-at { flex: 0 0 auto; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.change-card .change-card-stage[data-status="pending"] .change-card-stage-name { color: var(--fg-secondary); font-weight: 400; }
+
+.change-card .change-card-detail { margin: 2px 0 6px 17px; padding: 4px 8px; border-left: 2px solid var(--border); }
+.change-card .change-card-step,
+.change-card .change-card-blocker { display: flex; align-items: baseline; gap: 6px; padding: 1px 0; overflow-wrap: anywhere; }
+.change-card .change-card-mark { flex: 0 0 auto; width: 12px; text-align: center; font-weight: 700; color: var(--change-tone); }
+.change-card .change-card-blocker-kind { flex: 0 0 auto; font-weight: 600; color: var(--change-waiting); }
+.change-card .change-card-blocker[data-kind="failure"] .change-card-blocker-kind,
+.change-card .change-card-blocker[data-kind="alarm"] .change-card-blocker-kind { color: var(--change-blocked); }
+.change-card .change-card-detail-link { display: inline-block; margin-top: 2px; }
+
+.change-card .change-card-foot { display: flex; align-items: center; gap: 12px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
+.change-card .change-card-read { margin-left: auto; }
+.change-card .change-card-refresh {
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+.change-card .change-card-refresh:disabled { opacity: 0.6; cursor: default; }
+.change-card a { color: var(--accent); text-decoration: none; }
+.change-card a:hover { text-decoration: underline; }

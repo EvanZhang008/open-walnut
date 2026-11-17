@@ -4,6 +4,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
+import { registerTaskChangeRoutes } from './task-changes.js'
 import { matchParentRef, refNamesId } from '../../lib/id-ref.js'
 import { VALID_PHASES } from '../../core/phase.js'
 import {
@@ -1772,6 +1773,9 @@ tasksRouter.post('/:id/pull-requests/refresh', async (req: Request, res: Respons
     next(err)
   }
 })
+
+// The task's change links and their live status (core/changes/watch.ts): routes/task-changes.ts.
+registerTaskChangeRoutes(tasksRouter)
 
 // POST /api/tasks/:id/merge — merge duplicate tasks INTO :id (the survivor).
 // Session links are the point: victims' session_ids/slots union into the

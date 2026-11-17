@@ -70,6 +70,7 @@ import { countOwnerOps, definePluginOp, listOpEntries, type HttpBinding, type Wa
 import { registerTimelineSource } from '../time-tracking/timeline/registry.js'
 import { registerMentionSource, type MentionSourceSpec } from '../mention-sources/registry.js'
 import { registerLinkKind, type LinkKindSpec } from '../link-kinds.js'
+import { registerChangeProvider, type ChangeProviderSpec } from '../changes/registry.js'
 import { ensureCoreMentionSources } from '../mention-sources/notes-source.js'
 import { assertRouterSource, registerRouterSource, type RouterSourceAdapter } from '../router/source-registry.js'
 import type { RouterSource, RouterSourceKind } from '../router/types.js'
@@ -1435,6 +1436,13 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         assertLive(`registry.linkKind("${String(spec?.id)}")`)
         const id = namespacePluginId(pluginId, String(spec?.id ?? ''))
         return own(registerLinkKind(pluginId, { ...spec, id }))
+      },
+      // One more service whose change links' status Walnut follows (core/changes/registry.ts): it
+      // reads the links it handles, and the card's stage details. Its id is namespaced.
+      changeProvider(spec: ChangeProviderSpec) {
+        assertLive(`registry.changeProvider("${String(spec?.id)}")`)
+        const id = namespacePluginId(pluginId, String(spec?.id ?? ''))
+        return own(registerChangeProvider(pluginId, { ...spec, id }))
       },
       // One channel's cache-only source for the inbound router (core/router/source-registry.ts).
       // The latest registration of a kind answers; its disposer removes only its own entry.

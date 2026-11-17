@@ -940,6 +940,9 @@ export interface Task {
   /** Live status of the pull requests the task links (its `pr:` link tags a provider reads),
    *  keyed by URL: written only by the pull request watcher (core/pull-requests/pr-watch.ts). */
   pr_status?: Record<string, import('./pull-requests/model.js').PrSnapshot>;
+  /** Live status of the task's change links (`pr:`, `mr:`, `cr:`, `commit:` ... a change provider
+   *  reads), keyed by URL: written only by the change watcher (core/changes/watch.ts). */
+  change_status?: Record<string, import('./changes/model.js').ChangeSnapshot>;
   /** Complete this task when its pull request merges. Unset = the config default (on). */
   pr_auto_complete?: boolean;
   /** Wake this task's session when a check fails, someone comments or reviews, or the branch

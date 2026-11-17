@@ -1023,6 +1023,7 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
       },
       timelineSource: () => disposable(),
       linkKind: () => disposable(),
+      changeProvider: () => disposable(),
       wsMethod: () => disposable(),
       agent: () => disposable(),
       provider: () => disposable(),

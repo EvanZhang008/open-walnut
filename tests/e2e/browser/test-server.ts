@@ -253,6 +253,37 @@ await fs.writeFile(
   JSON.stringify({ 'open-walnut-home-chat-visible': { v: 'false', ts: 1 } }, null, 2),
 )
 
+// The change watcher's snapshots for `pw-task-changes` (change-status.spec.ts, the shape of
+// src/core/changes/model.ts): a merged code review whose prod-w1 bakes with eight production
+// stages still ahead (folded on the card), and a pull request waiting for its one approval.
+function changeStatusFixture(): Record<string, unknown> {
+  const read = new Date(Date.now() - 2 * 60_000).toISOString()
+  const at = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString()
+  return {
+    'https://review.acme.dev/CR-1001': {
+      provider: 'acme:reviews', url: 'https://review.acme.dev/CR-1001', label: 'CR-1001',
+      title: 'Move the controller onto the new instance type',
+      review: { state: 'merged', revision: 1, approvals: { got: 1, need: 1 }, approvedBy: ['rivera'], checks: { passed: 4, failed: 0, pending: 0 } },
+      deploy: {
+        pipeline: 'acme-deployer', url: 'https://pipelines.acme.dev/acme-deployer', commit: 'e138767', done: false, last: 'prod-w1', next: 'prod-w2',
+        stages: [
+          { name: 'beta-w1', target: 'beta-c01', status: 'done', at: at(20) },
+          { name: 'gamma-w1', target: 'gamma-c01', status: 'done', at: at(16) },
+          { name: 'prod-w1', target: 'prod-c01', status: 'waiting', at: at(5), prod: true, note: 'approval running', blocker: { kind: 'bake', text: 'Bake Time: 6 hours 59 minutes left' } },
+          { name: 'prod-w2', status: 'pending', prod: true, note: 'waits for prod-w1, then the working hours window' },
+          ...Array.from({ length: 8 }, (_, i) => ({ name: `prod-w${i + 3}`, status: 'pending', prod: true })),
+        ],
+      },
+      checkedAt: read,
+    },
+    'https://github.com/acme/app/pull/41': {
+      provider: 'github', url: 'https://github.com/acme/app/pull/41', label: 'app#41', title: 'Add the CSV export button',
+      review: { state: 'open', revision: 1, approvals: { got: 0, need: 1 }, checks: { passed: 3, failed: 0, pending: 0 }, waitingOn: 'team approval needs 1' },
+      checkedAt: read,
+    },
+  }
+}
+
 // Link tags in the session header (session-link-tag-names.spec.ts): three plans whose kind
 // alone reads "plan" three times, two files that exist and one that is gone; and, one per
 // browser, a task whose only links are gone (`pw-task-links-gone-<browser>`), which draws no tag
@@ -577,6 +608,29 @@ await fs.writeFile(
         note: '',
         subtasks: [],
       })),
+      {
+        // Change links with their status (change-status.spec.ts): a code review deploying through
+        // a long pipeline and a pull request in review, as the change watcher stores them.
+        id: 'pw-task-changes',
+        title: 'Change status fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        tags: ['cr:https://review.acme.dev/CR-1001', 'pr:https://github.com/acme/app/pull/41'],
+        change_status: changeStatusFixture(),
+        session_ids: ['pw-changes-session'],
+        active_session_ids: [],
+        session_id: 'pw-changes-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
       {
         // The chat content session (entity-refs.spec.ts and its neighbours).
         id: 'pw-task-chat-content',
@@ -4150,6 +4204,19 @@ await fs.writeFile(
         messageCount: 1,
         cwd: process.cwd(),
         title: 'Linked plans fixture session',
+      },
+      {
+        claudeSessionId: 'pw-changes-session',
+        taskId: 'pw-task-changes',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(sessionFixtureNow - 30_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 20_000).toISOString(),
+        messageCount: 1,
+        cwd: process.cwd(),
+        title: 'Change status fixture session',
       },
       ...['chromium', 'webkit'].map((browser) => ({
         claudeSessionId: `pw-links-gone-session-${browser}`,

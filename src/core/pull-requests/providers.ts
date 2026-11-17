@@ -47,10 +47,16 @@ const GH_TIMEOUT_MS = 60_000
 const GH_BATCH = 25
 
 export type ExecResult = { code: number; stdout: string; stderr: string; missing?: boolean }
-export type ExecFn = (file: string, args: string[], opts: { timeoutMs: number; env: NodeJS.ProcessEnv }) => Promise<ExecResult>
+export type ExecFn = (file: string, args: string[], opts: { timeoutMs: number; env: NodeJS.ProcessEnv; signal?: AbortSignal }) => Promise<ExecResult>
 
-const realExec: ExecFn = (file, args, opts) => new Promise((resolve) => {
-  execFile(file, args, { timeout: opts.timeoutMs, killSignal: 'SIGKILL', env: opts.env, maxBuffer: 32 * 1024 * 1024, encoding: 'utf8' }, (err, stdout, stderr) => {
+/** gh's environment for an unattended call: no prompt, no colour, no update notice. */
+export function ghEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, GH_PROMPT_DISABLED: '1', NO_COLOR: '1', GH_NO_UPDATE_NOTIFIER: '1' }
+}
+
+/** Runs gh (or its stand-in) for every GitHub reader: the pull request watch, the change watch. */
+export const realGhExec: ExecFn = (file, args, opts) => new Promise((resolve) => {
+  execFile(file, args, { timeout: opts.timeoutMs, killSignal: 'SIGKILL', env: opts.env, maxBuffer: 32 * 1024 * 1024, encoding: 'utf8', ...(opts.signal ? { signal: opts.signal } : {}) }, (err, stdout, stderr) => {
     const e = err as (NodeJS.ErrnoException & { code?: string | number }) | null
     if (e && e.code === 'ENOENT') { resolve({ code: 127, stdout: '', stderr: '', missing: true }); return }
     const code = e ? (typeof e.code === 'number' ? e.code : 1) : 0
@@ -224,7 +230,7 @@ export function githubRead(ref: PrRef, pr: Record<string, any>): PrRead {
 }
 
 /** Why a whole call failed, from what gh printed. */
-function ghFailure(r: ExecResult): { code: PrErrorCode; message: string } {
+export function ghFailure(r: ExecResult): { code: PrErrorCode; message: string } {
   if (r.missing) return { code: 'cli-missing', message: 'gh is not installed' }
   const text = `${r.stderr}\n${r.stdout}`
   if (/gh auth login|not logged in|Bad credentials|HTTP 401|authentication/i.test(text)) {
@@ -237,7 +243,7 @@ function firstLine(text: string): string {
   return text.split('\n').map((l) => l.trim()).find(Boolean)?.slice(0, 300) ?? ''
 }
 
-export function createGithubProvider(exec: ExecFn = realExec): PrProvider {
+export function createGithubProvider(exec: ExecFn = realGhExec): PrProvider {
   return {
     id: 'github',
     parse(url) {
@@ -252,7 +258,7 @@ export function createGithubProvider(exec: ExecFn = realExec): PrProvider {
         const batch = refs.slice(i, i + GH_BATCH)
         const r = await exec(ghBinary(), ['api', 'graphql', '-f', `query=${githubQuery(batch)}`], {
           timeoutMs: GH_TIMEOUT_MS,
-          env: { ...process.env, GH_PROMPT_DISABLED: '1', NO_COLOR: '1', GH_NO_UPDATE_NOTIFIER: '1' },
+          env: ghEnv(),
         })
         let body: { data?: Record<string, any> | null; errors?: Array<{ path?: unknown[]; message?: string; type?: string }> } | null = null
         try { body = r.stdout.trim() ? JSON.parse(r.stdout) : null } catch { body = null }
