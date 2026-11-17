@@ -327,6 +327,17 @@ test('a compressed three hours of pushes keep the page\'s fetches, heap and DOM 
   }
   const settle = () => expect.poll(() => Date.now() - traffic.lastResponseAt, { timeout: 60_000 }).toBeGreaterThan(3_000)
   const chatRows = () => column.locator('.session-msg').count()
+  /** A column under another page reads its turns once Home shows it again (useSessionHistory
+   *  `enabled`): Home, its reads in, its rows counted; then the Routines page on top again. */
+  const rowsOnHome = async (drewBefore: number) => {
+    await page.getByTestId('sidebar-core-app-home').click()
+    // Its reads start now: the rows come first, then the traffic goes quiet.
+    await expect.poll(chatRows, { message: 'the column draws the turns it missed', timeout: 60_000 }).toBeGreaterThan(drewBefore)
+    await settle()
+    const rows = await chatRows()
+    await openRoutines()
+    return rows
+  }
 
   await openColumn()
   await openRoutines()
@@ -340,7 +351,7 @@ test('a compressed three hours of pushes keep the page\'s fetches, heap and DOM 
   const warm = await replay(WARM_HOURS)
   expect(warm, 'the warm-up replay finished').not.toBeNull()
   await settle()
-  const rowsPerTurn = ((await chatRows()) - rowsAtStart) / Math.max(1, warm!.turns ?? 1)
+  const rowsPerTurn = ((await rowsOnHome(rowsAtStart)) - rowsAtStart) / Math.max(1, warm!.turns ?? 1)
   expect(rowsPerTurn, 'a replay turn adds chat rows to the open column').toBeGreaterThan(0)
   // The baseline of what outlives the view: the column closed, the Routines page on top.
   await closeColumn()
@@ -364,13 +375,15 @@ test('a compressed three hours of pushes keep the page\'s fetches, heap and DOM 
   await settle()
   traffic.counting = false
   const loadsDuringReplay = loads.slice(loadsAtBaseline)
+  // The column draws the replay's turns once Home shows it; then what it holds is read.
+  const rowsAfter = await rowsOnHome(rowsBefore)
+  await settle()
   const openAfter = await reading(page, cdp)
   if (snapOpenBefore) {
     // A snapshot past V8's longest string (about 512 MB of JSON) cannot be read whole here.
     const diff = await heapByConstructor(cdp!).then((snap) => heapGrowth(snapOpenBefore, snap), (err: Error) => `not read: ${err.message}`)
     console.log(`[page-memory-soak] open column heap growth by constructor:\n${diff}`)
   }
-  const rowsAfter = await chatRows()
   const rowsGained = counts.turns * rowsPerTurn
   await closeColumn()
   await openRoutines()

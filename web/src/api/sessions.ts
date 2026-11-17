@@ -370,13 +370,21 @@ export async function fetchSessionHistory(
   live.subscribers++;
   const onAbort = () => {
     live.subscribers--;
-    if (live.subscribers <= 0) {
+    if (live.subscribers > 0) return;
+    // The last reader let go. When an effect re-runs (a dependency changed: the page's
+    // shown flag turning on as a column opened from another route, a version bump), React
+    // runs its cleanup and then its new body in one go: that body asks for the same read
+    // and must find it still running, not cancelled and sent again (2026-11-17: two
+    // first-screen reads per open, session-open-instant). So the read is cancelled once
+    // the commit is over, unless someone took it back meanwhile.
+    queueMicrotask(() => {
+      if (live.subscribers > 0) return;
       // Drop the entry BEFORE aborting: the .finally delete only runs on settle,
       // and a remount inside that window would adopt the rejected promise and
       // surface a spurious "signal is aborted" error (fast thread-chip switching).
       if (inflightHistory.get(key) === live) inflightHistory.delete(key);
       live.controller.abort();
-    }
+    });
   };
   if (opts?.signal) {
     if (opts.signal.aborted) { onAbort(); }

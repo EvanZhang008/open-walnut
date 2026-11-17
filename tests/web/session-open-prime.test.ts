@@ -59,6 +59,6 @@ describe('history started at the open click', () => {
 
   it("a shown chat's own first-screen read (no click began one) takes it too", () => {
     const hook = fs.readFileSync(path.join(__dirname, '..', '..', 'web/src/hooks/useSessionHistory.ts'), 'utf8');
-    expect(hook).toMatch(/const startFirstScreen = \(\) => firstScreenRead\s*\?\?= fetchSessionHistory\(sessionId, \{[^}]*source: 'streams'[^}]*interactive: enabled[^}]*\}\)/);
+    expect(hook).toMatch(/const startFirstScreen = \(\) => firstScreenRead\s*\?\?= fetchSessionHistory\(sessionId, \{[^}]*source: 'streams'[^}]*interactive: shown\(\)[^}]*\}\)/);
   });
 });

@@ -1,4 +1,5 @@
 import { withRecentHumanInput } from '@/utils/recent-opened';
+import { isHomePath } from './utils/home-path';
 import { memo, useEffect, useRef } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
 import { FirstRunHost } from './components/first-run/FirstRunHost';
@@ -162,11 +163,11 @@ export function App() {
   const navigateRef = useRef<NavigateFunction>(navigate);
   navigateRef.current = navigate;
   // Home stays mounted under visibility: hidden off its route; its chats' marks must not paint on this page.
-  useHidesHighlights(location.pathname !== '/');
+  useHidesHighlights(!isHomePath(location.pathname));
 
   if (isPopoutPath(location.pathname)) return <><StaleBuildPill /><LinkCaptureHost /><PluginDialogHost /><PasswordsUnlockHost /><SessionRawViewHost /><AnywhereFileViewer /><PopoutRoot /></>;
 
-  const isHome = location.pathname === '/';
+  const isHome = isHomePath(location.pathname);
 
   return (
     <AppShell>

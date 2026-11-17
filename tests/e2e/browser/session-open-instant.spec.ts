@@ -226,6 +226,30 @@ test.describe('session open — instant (idb tier + coalescing)', () => {
 
 /** Holds the history cache's IndexedDB open (its onsuccess) until the page calls
  *  window.__releaseHistoryDb(): storage that is late without blocking the page. */
+/**
+ * The session's copy is in IndexedDB (web/src/cache/history-idb.ts): written after the
+ * full read lands, through an 800 ms debounce. A fixed wait after the first screen raced
+ * that full read (2026-11-17: it landed 1.3 s after the first screen on a busy runner).
+ * Opens the database only once the app made it, so the check never creates it empty.
+ */
+async function waitForSavedCopy(page: Page, sid: string) {
+  await expect.poll(() => page.evaluate(async (id) => {
+    const dbs = await indexedDB.databases();
+    if (!dbs.some((d) => d.name === 'walnut-history-cache')) return 0;
+    return new Promise<number>((resolve) => {
+      const req = indexedDB.open('walnut-history-cache');
+      req.onerror = () => resolve(0);
+      req.onsuccess = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains('history')) { db.close(); resolve(0); return; }
+        const get = db.transaction('history').objectStore('history').get(id);
+        get.onsuccess = () => { db.close(); resolve(Array.isArray(get.result?.messages) ? get.result.messages.length : 0); };
+        get.onerror = () => { db.close(); resolve(0); };
+      };
+    });
+  }, sid), { message: 'the session\'s copy is saved in IndexedDB', timeout: 15_000 }).toBeGreaterThan(0);
+}
+
 async function holdHistoryDbOpen(page: Page) {
   await page.addInitScript(() => {
     // Patched on the prototype and on the real request (no Proxy around a native
@@ -310,8 +334,7 @@ test('a late IndexedDB copy fills in when the full read fails after the first sc
   await page.setContent(`<a href="${url}">Open saved session</a>`);
   await page.getByRole('link', { name: 'Open saved session', exact: true }).click();
   await expect(page.locator('.session-history')).toContainText('instant question 0', { timeout: 30_000 });
-  // The debounced IndexedDB write-through (800 ms) lands.
-  await page.waitForTimeout(1600);
+  await waitForSavedCopy(page, SESSION_ID);
 
   await page.unroute(pattern);
   let fullFailed = 0;
@@ -362,7 +385,7 @@ test('a refetch before the first load lands still shows the cached copy first', 
   await page.setContent(`<a href="${url}">Open saved session</a>`);
   await page.getByRole('link', { name: 'Open saved session', exact: true }).click();
   await expect(page.locator('.session-history')).toContainText('instant answer 29', { timeout: 30_000 });
-  await page.waitForTimeout(1600); // the debounced IndexedDB write-through lands
+  await waitForSavedCopy(page, SESSION_ID);
 
   // Every history read is held from here: whatever shows next came from IndexedDB.
   await page.unroute(pattern);

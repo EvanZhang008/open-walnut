@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useCommittedRef } from './useCommittedRef';
 import { fetchSessionHistory, fetchSessionHistoryBefore, HISTORY_TAIL_LIMIT } from '@/api/sessions';
 import { perf } from '@/utils/perf-logger';
 import { hasReadableOpenRows, rowsChange, noteSessionOpenSource, sessionOpenCurrentRecorder, sessionOpenStageRecorder } from '@/utils/session-open-latency';
@@ -155,6 +156,10 @@ const STALE_EARLY_RETRY_MS = [1_500, 3_000, 4_500, 6_000, 7_500];
  * remote SSH history pull that would saturate the browser's ~5 HTTP/1.1 lanes
  * during the home fan-out. Flip it true when the column becomes visible to
  * trigger the full fetch. Default true preserves existing callers unchanged.
+ * The flip never restarts the open: the read it held back runs then, on its own
+ * (a column opened from another route mounts while the route still names that
+ * page, shown false, and shows a moment later: 2026-11-17, a restarted open sent
+ * its first-screen read twice and its full history landed late).
  */
 export function useSessionHistory(sessionId: string | null, version = 0, enabled = true): UseSessionHistoryReturn {
   const [messages, setMessages] = useState<SessionHistoryMessage[]>([]);
@@ -188,6 +193,12 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   // messages[] mirror so the delta-append updater has the current base without a
   // stale closure (version-effect reads it synchronously).
   const messagesRef = useRef<SessionHistoryMessage[]>([]);
+  // `enabled` as the page shows it, read by the load when it decides (not one of its deps).
+  const enabledRef = useCommittedRef(enabled);
+  /** The read the load held back while not shown; run once it is (the effect after the load). */
+  const heldReadRef = useRef<(() => void) | null>(null);
+  /** A held delta is the load run again, once shown: its first screen is already in. */
+  const [heldDeltaRun, setHeldDeltaRun] = useState(0);
   messagesRef.current = messages;
   // Lazy tail load: how many messages exist BEFORE messages[0] at the source
   // (`?tail=` slice). cursor space includes them; planDeltaMerge gets this as
@@ -289,6 +300,13 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
 
     let cancelled = false;
     const controller = new AbortController();
+    const shown = () => enabledRef.current;
+    /** Hold `read` back until the page shows this chat; dropped with this load. */
+    let held: (() => void) | null = null;
+    const holdUntilShown = (read: () => void) => {
+      held = () => { if (!cancelled) read(); };
+      heldReadRef.current = held;
+    };
     // A full read the server could not do (5xx) or that timed out is a live read that
     // failed, not a broken session: keep what is shown and take the stale banner,
     // whose retry replaces it once the read works (the delta path's rule). Only a
@@ -337,7 +355,11 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     // Phase 1 and Phase 2 (a turn end, an error) is still the first load too.
     const holdsHistory = cursorRef.current > 0;
     if (version > 0 && holdsHistory) {
-      if (!enabled) { setFirstCheckPending(false); return () => { cancelled = true; controller.abort(); }; }
+      if (!shown()) {
+        setFirstCheckPending(false);
+        holdUntilShown(() => setHeldDeltaRun((n) => n + 1));
+        return () => { cancelled = true; if (heldReadRef.current === held) heldReadRef.current = null; controller.abort(); };
+      }
       setLoading(true);
       setPhase2Pending(true);
       const endP2 = perf.start(`session:delta:${sid}`);
@@ -496,7 +518,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     // own read when it began one, else a fresh one.
     let firstScreenRead: Promise<SessionHistoryResult> | null = takeSessionOpenHistory(sessionId);
     const startFirstScreen = () => firstScreenRead
-      ??= fetchSessionHistory(sessionId, { source: 'streams', tail: HISTORY_TAIL_LIMIT, signal: controller.signal, interactive: enabled });
+      ??= fetchSessionHistory(sessionId, { source: 'streams', tail: HISTORY_TAIL_LIMIT, signal: controller.signal, interactive: shown() });
 
     // Adopt a cached entry (memory or IndexedDB) for instant display, then
     // background-verify against the server. One body for both tiers so their
@@ -521,7 +543,10 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     const adoptCachedAndVerify = (cached: NonNullable<ReturnType<typeof getHistoryCache>>) => {
       adoptCachedRows(cached);
       // Offscreen column: show cache, skip the background SSH re-verify until visible.
-      if (!enabled) { setPhase2Pending(false); setFirstCheckPending(false); return; }
+      if (!shown()) { setPhase2Pending(false); setFirstCheckPending(false); holdUntilShown(() => verifyCached(cached)); return; }
+      verifyCached(cached);
+    };
+    const verifyCached = (cached: NonNullable<ReturnType<typeof getHistoryCache>>) => {
       setPhase2Pending(true);
 
       const endP2 = perf.start(`session:full:${sid}`);
@@ -650,8 +675,15 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           if (cancelled) return;
           // Offscreen column: Phase 1 (local streams) already gave instant
           // content; skip the expensive Phase 2 SSH fetch until visible.
-          if (!enabled) { setLoading(false); setPhase2Pending(false); setFirstCheckPending(false); return; }
-          // Phase 2: Full fetch (source of truth, may SSH for remote sessions).
+          if (!shown()) {
+            setLoading(false); setPhase2Pending(false); setFirstCheckPending(false);
+            holdUntilShown(() => { setPhase2Pending(true); fullRead(); });
+            return;
+          }
+          fullRead();
+        });
+      // Phase 2: Full fetch (source of truth, may SSH for remote sessions).
+      const fullRead = () => {
           // Lazy: only the last HISTORY_TAIL_LIMIT messages — a whale session used
           // to pin one of the browser's 6 connections for 35-150s here.
           const endP2 = perf.start(`session:full:${sid}`);
@@ -724,7 +756,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
             .finally(() => {
               if (!cancelled) { setLoading(false); setPhase2Pending(false); setFirstCheckPending(false); }
             });
-        });
+      };
     };
 
     // Initial load (version === 0): memory cache → persistent tier → network.
@@ -733,7 +765,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       // Memory hit → 0ms instant display, then background Phase 2 verification.
       if (hasReadableOpenRows(cached.messages)) noteSessionOpenSource(sessionId, 'memory');
       adoptCachedAndVerify(cached);
-      return () => { cancelled = true; controller.abort(); };
+      return () => { cancelled = true; if (heldReadRef.current === held) heldReadRef.current = null; controller.abort(); };
     }
 
     // Memory miss → the reload-surviving tier (IndexedDB), raced against the
@@ -765,7 +797,9 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     // Even a click's own read waits out the grace: it often lands before a fast
     // IndexedDB, and a short screen would then beat the whole cached transcript.
     // An offscreen column keeps the plain wait: it reads no server until visible.
-    const graceTimer = enabled ? setTimeout(raceScreen, IDB_FIRST_SCREEN_GRACE_MS) : undefined;
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    const armGrace = () => { if (!chosen && !cancelled) graceTimer = setTimeout(raceScreen, IDB_FIRST_SCREEN_GRACE_MS); };
+    if (shown()) armGrace(); else holdUntilShown(armGrace);
     // A storage open that never answers must not hold the panel empty forever.
     const deadline = setTimeout(() => { if (choose('network')) startNetworkLoad(firstScreenRead ?? undefined); }, IDB_GIVE_UP_MS);
     // The click's own screen, once it answered: a copy that lacks its newest row is behind it.
@@ -807,8 +841,18 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       })
       .catch(() => { if (choose('network')) startNetworkLoad(firstScreenRead ?? undefined); });
 
-    return () => { cancelled = true; clearTimeout(graceTimer); clearTimeout(deadline); controller.abort(); };
-  }, [sessionId, version, enabled]);
+    return () => { cancelled = true; if (heldReadRef.current === held) heldReadRef.current = null; clearTimeout(graceTimer); clearTimeout(deadline); controller.abort(); };
+    // `enabled` is read through enabledRef: its flip runs the held read (below), never the open again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, version, heldDeltaRun]);
+
+  // The page shows this chat now: the read its load held back goes, once.
+  useEffect(() => {
+    if (!enabled) return;
+    const read = heldReadRef.current;
+    heldReadRef.current = null;
+    read?.();
+  }, [enabled]);
 
   useEffect(() => {
     if (!stale) { staleSinceRef.current = 0; setStaleBanner(null); return; }

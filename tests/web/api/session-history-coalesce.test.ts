@@ -155,6 +155,8 @@ describe('fetchSessionHistory coalescing', () => {
     ac1.abort();
     expect(calls[0].signal?.aborted).toBe(false);
     ac2.abort();
+    // Once the commit that let go of it is over.
+    await Promise.resolve();
     expect(calls[0].signal?.aborted).toBe(true);
 
     // Simulate the transport honoring the abort.
@@ -177,6 +179,27 @@ describe('fetchSessionHistory coalescing', () => {
     await expect(dead).resolves.toBeTruthy();
   });
 
+  it('an effect that re-runs (cleanup, then the same read again in one commit) keeps its one read', async () => {
+    // 2026-11-17, session-open-instant: a column opened from another route mounts while the
+    // route still names that page (its shown flag false), then shows; the history effect
+    // re-ran, its cleanup cancelled the first-screen read and its new body sent it again.
+    const calls = deferApiGet();
+    mocks.fetchLaneRaised.mockClear();
+    const first = new AbortController();
+    const p1 = fetchSessionHistory('sess-1', { tail: 400, signal: first.signal });
+    first.abort();
+    const again = new AbortController();
+    const p2 = fetchSessionHistory('sess-1', { tail: 400, signal: again.signal, interactive: true });
+    await Promise.resolve();
+    expect(mocks.apiGet).toHaveBeenCalledTimes(1);
+    expect(calls[0].signal?.aborted).toBe(false);
+    // The read the person now waits on raised the one in flight to the kept connection.
+    expect(mocks.fetchLaneRaised).toHaveBeenCalled();
+    calls[0].resolve(RESPONSE);
+    await expect(p2).resolves.toBeTruthy();
+    await expect(p1).resolves.toBeTruthy();
+  });
+
   it('a remount inside the abort window gets a FRESH request, not the doomed promise', async () => {
     // The eager delete-on-abort exists exactly for this: fast thread-chip
     // switching unmounts + remounts the same history shape before the aborted
@@ -185,6 +208,7 @@ describe('fetchSessionHistory coalescing', () => {
     const ac = new AbortController();
     const doomed = fetchSessionHistory('sess-1', { tail: 400, signal: ac.signal });
     ac.abort();
+    await Promise.resolve();
     expect(calls[0].signal?.aborted).toBe(true);
 
     // Remount BEFORE the doomed request settles → a second network call.
