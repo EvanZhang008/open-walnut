@@ -95,6 +95,9 @@ interface Marks {
 const NO_MARKS: Marks = { drawn: new Set(), elsewhere: new Set(), gone: new Set() };
 const sameSet = (a: ReadonlySet<string>, b: ReadonlySet<string>) => a.size === b.size && [...a].every((x) => b.has(x));
 
+/** How long the pointer rests on commented words before their card shows. */
+const PEEK_DWELL_MS = 300;
+
 export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function DocCommentsLayer(
   { filePath, host, sessionId, rootRef, surfaceNonce, surface, channel, editor, getDocText }, ref,
 ) {
@@ -108,6 +111,8 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
   const [listOpen, setListOpen] = useState(false);
   /** The saved comment whose words the pointer is on: its card shows there to read. */
   const [peekId, setPeekId] = useState<string | null>(null);
+  const peekRef = useRef(peekId);
+  peekRef.current = peekId;
   const [marks, setMarks] = useState<Marks>(NO_MARKS);
   const anchored = marks.drawn;
   const layerRef = useRef<HTMLDivElement | null>(null);
@@ -393,60 +398,92 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
       setListOpen(false);
     };
     // The pointer on commented words shows that comment's card there, to read; it
-    // goes a beat after the pointer leaves the words and the card.
+    // goes a beat after the pointer leaves the words and the card, and at once on a press
+    // anywhere else, a scroll or Escape (2026-11-17, the user: "comment somehow stick, and
+    // won't go even if i click somewhere else": the card sits outside the doc's element, so
+    // a pointer that went from the words on out of the view was heard nowhere). It is there to
+    // read and the pointer goes through it (.is-peek), and it shows once the pointer rests on the
+    // words, not as it passes over them on its way to the next passage (2026-11-17).
     let hideTimer = 0;
+    let showTimer = 0;
+    let showing: string | null = null;
+    const stop = () => { window.clearTimeout(hideTimer); window.clearTimeout(showTimer); showing = null; };
+    const hideSoon = () => { stop(); hideTimer = window.setTimeout(() => setPeekId(null), 300); };
+    const hideNow = () => { stop(); setPeekId(null); };
+    const showSoon = (id: string) => {
+      window.clearTimeout(hideTimer);
+      if (peekRef.current === id) { window.clearTimeout(showTimer); showing = null; return; }
+      if (showing === id) return;
+      window.clearTimeout(showTimer);
+      showing = id;
+      showTimer = window.setTimeout(() => { showing = null; setPeekId(id); }, PEEK_DWELL_MS);
+    };
+    const onWords = (x: number, y: number): string | null => {
+      for (const [id, r] of ranges.current) if (id !== DRAFT_KEY && pointInRangeRects(r, x, y)) return id;
+      return null;
+    };
     // Pointer events, not mouse ones: drag-gesture-invariants keeps mousemove out of web/src,
-    // and a finger scrolling the doc is no hover.
+    // and a finger scrolling the doc is no hover. The window's, not the doc's: the cards and
+    // the rest of the page are outside the doc's element.
     const onMove = (e: PointerEvent) => {
       if (e.buttons || e.pointerType === 'touch') return;
-      if (layerRef.current?.contains(e.target as Node)) { window.clearTimeout(hideTimer); return; }
-      for (const [id, r] of ranges.current) {
-        if (id !== DRAFT_KEY && pointInRangeRects(r, e.clientX, e.clientY)) {
-          window.clearTimeout(hideTimer);
-          setPeekId(id);
-          return;
-        }
-      }
-      window.clearTimeout(hideTimer);
-      hideTimer = window.setTimeout(() => setPeekId(null), 300);
+      const inRoot = e.target instanceof Node && root.contains(e.target);
+      // Nothing shown and nothing to show: a move over the rest of the page costs nothing.
+      if (!inRoot && !peekRef.current) return;
+      const id = !inFrame && inRoot ? onWords(e.clientX, e.clientY) : null;
+      if (id) { showSoon(id); return; }
+      // Over the HTML preview's frame the page reports its own hovers (a 'hover' below).
+      hideSoon();
     };
-    // Off the doc altogether (the composer, the sidebar): it goes too.
-    const onLeave = () => { window.clearTimeout(hideTimer); hideTimer = window.setTimeout(() => setPeekId(null), 300); };
+    const onPress = (e: PointerEvent) => {
+      if (!inFrame && e.target instanceof Node && root.contains(e.target) && onWords(e.clientX, e.clientY)) return;
+      hideNow();
+    };
+    const onScroll = () => { if (peekRef.current) hideNow(); };
+    // Off the window altogether: it goes too.
+    const onLeave = () => hideSoon();
     root.addEventListener('click', onClick);
-    root.addEventListener('pointermove', onMove);
-    root.addEventListener('mouseleave', onLeave);
+    window.addEventListener('pointermove', onMove, { capture: true, passive: true });
+    window.addEventListener('pointerdown', onPress, true);
+    root.addEventListener('scroll', onScroll, { capture: true, passive: true });
+    document.documentElement.addEventListener('mouseleave', onLeave);
     const off = inFrame ? channel?.on((m) => {
+      if (m.type === 'scroll') { hideNow(); return; }
       if (m.type !== 'click' && m.type !== 'hover') return;
       const id = group?.hit(m.hits) ?? null;
-      window.clearTimeout(hideTimer);
       if (m.type === 'hover') {
-        if (id) setPeekId(id); else hideTimer = window.setTimeout(() => setPeekId(null), 300);
+        if (id) showSoon(id); else hideSoon();
       } else if (id) {
+        stop();
         setCurrentId(id);
         log.info('doc-comments', 'comment opened from its words', { path: filePath, id, surface });
       } else {
+        hideNow();
         setCurrentId(null);
         setListOpen(false);
       }
     }) : undefined;
     return () => {
-      window.clearTimeout(hideTimer);
+      stop();
       root.removeEventListener('click', onClick);
-      root.removeEventListener('pointermove', onMove);
-      root.removeEventListener('mouseleave', onLeave);
+      window.removeEventListener('pointermove', onMove, true);
+      window.removeEventListener('pointerdown', onPress, true);
+      root.removeEventListener('scroll', onScroll, true);
+      document.documentElement.removeEventListener('mouseleave', onLeave);
       off?.();
     };
   }, [rootRef, filePath, inFrame, channel, group, surface, surfaceNonce]);
   // One Escape closes the card and only it, ahead of the sheet's own exit (utils/file-card-escape.ts);
   // in its reply box the box's own handler takes it.
+  // The card the pointer shows goes on it too.
   useEffect(() => {
-    if (!currentId && !draft) return;
+    if (!currentId && !draft && !peekId) return;
     return claimFileCardEscape(
-      () => ({ card: layerRef.current?.querySelector('.doc-comment-card.is-current') ?? null, scope: rootRef.current?.closest('.session-panel') ?? rootRef.current ?? null }),
-      () => { setCurrentId(null); setDraft(null); },
+      () => ({ card: layerRef.current?.querySelector('.doc-comment-card.is-current, .doc-comments-inplace .doc-comment-card') ?? null, scope: rootRef.current?.closest('.session-panel') ?? rootRef.current ?? null }),
+      () => { setCurrentId(null); setDraft(null); setPeekId(null); },
       'textarea',
     );
-  }, [currentId, draft, rootRef]);
+  }, [currentId, draft, peekId, rootRef]);
   useEffect(() => { setCurrentId(null); setDraft(null); setListOpen(false); setPeekId(null); revealRef.current = null; scrolledFor.current = null; }, [filePath]);
   // A new file or a reload: the doc's text is read afresh.
   useEffect(() => { docText.current.at = 0; docText.current.text = null; }, [filePath, surfaceNonce]);
@@ -584,7 +621,9 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
   // The card shown changed (opened, the pointer on other words): placed before the paint.
   useLayoutEffect(() => { place(); }, [place, shownId, draft]);
   const card = (c: DocComment) => (
-    <div key={c.id} ref={setCardEl(c.id)} className="doc-comment-slot">
+    // Shown by the pointer, it is there to read: a press over it goes to the words under it (the
+    // next passage a selection starts on); a click on its own words opens it to reply.
+    <div key={c.id} ref={setCardEl(c.id)} className={`doc-comment-slot${c.id === currentId ? '' : ' is-peek'}`}>
       <DocCommentCard
         docPath={filePath}
         comment={c}

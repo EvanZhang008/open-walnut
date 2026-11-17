@@ -121,6 +121,10 @@
   visibility: hidden;
   pointer-events: auto;
 }
+/* The card the pointer shows, to read: the pointer and its presses go to the doc under it. */
+.doc-comment-slot.is-peek {
+  pointer-events: none;
+}
 
 .doc-comment-card {
   padding: 8px 10px;

@@ -17,8 +17,8 @@
 import { hasActiveModalOverlay } from '@/hooks/useModalOverlay';
 import { escapeWasConsumedByOthers } from '@/utils/escape-beep-guard';
 
-/** A card open over a file: the Ask card, the current comment or a comment draft. */
-export const FILE_CARD_SELECTOR = '.thread-card, .doc-comment-card.is-current';
+/** A card open over a file: the Ask card, the current comment, a comment draft, or the comment the pointer shows. */
+export const FILE_CARD_SELECTOR = '.thread-card, .doc-comment-card.is-current, .doc-comments-inplace .doc-comment-card';
 
 /** Menus and editor panels that close themselves on Escape before any card does. */
 const OWN_ESCAPE = '.wn-context-menu, .app-modal-overlay, .cm-panels, .cm-tooltip, .fv-search-bar';

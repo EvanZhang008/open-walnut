@@ -139,12 +139,21 @@ async function dragSelect(page: Page, root: Locator, needle: string): Promise<vo
   await page.mouse.up()
 }
 
-/** Drag from the start of `from` to the end of `to` (two text nodes: across markup). */
-async function dragBetween(page: Page, root: Locator, from: string, to: string, offset = { x: 0, y: 0 }): Promise<void> {
+/** Drag from the start of `from` to the end of `to` (two text nodes: across markup). `from` is
+ *  where the pointer starts it: with `approach`, it gets there from where it is at a hand's pace
+ *  (a step a frame, so a page that hit-tests a frame's moves sees the words on the way). */
+async function dragBetween(page: Page, root: Locator, from: string, to: string, offset = { x: 0, y: 0 }, approach?: { x: number; y: number }): Promise<void> {
   const a = (await textRects(root, from))[0]
   const bs = await textRects(root, to)
   const b = bs[bs.length - 1]
-  await page.mouse.move(a.left + offset.x + 1, a.top + offset.y + a.height / 2)
+  const start = { x: a.left + offset.x + 1, y: a.top + offset.y + a.height / 2 }
+  if (approach) {
+    for (let k = 1; k <= 12; k++) {
+      await page.mouse.move(approach.x + ((start.x - approach.x) * k) / 12, approach.y + ((start.y - approach.y) * k) / 12)
+      await page.waitForTimeout(20)
+    }
+  }
+  await page.mouse.move(start.x, start.y)
   await page.mouse.down()
   await page.mouse.move((a.left + b.right) / 2 + offset.x, (a.top + b.top) / 2 + offset.y + a.height / 2, { steps: 4 })
   await page.mouse.move(b.right + offset.x - 1, b.top + offset.y + b.height / 2, { steps: 4 })
@@ -415,8 +424,14 @@ test.describe('Doc comments: at their words, in their sidecar, to the AI with th
     await shot(view, '02-resolved-in-list')
     await chip(view).click()
 
-    // The user answers the AI on the open one: the reply joins the thread and waits for the next send.
-    await open.click()
+    // The clicks on the chip let the card the pointer showed go; the pointer on its words shows it again.
+    await expect(cards(view)).toHaveCount(0)
+    await page.mouse.move(0, 0)
+    await hoverWords(page, editor, MIDDLE)
+    await expect(open).toBeVisible()
+    // The user answers the AI on the open one (a click on its words opens it): the reply joins
+    // the thread and waits for the next send.
+    await clickWords(page, editor, MIDDLE)
     await expect(open).toHaveClass(/is-current/)
     await expect(open.locator('[data-author="AI"]')).toHaveText(/The on-call engineer/)
     const reply = open.getByTestId('doc-comment-reply')
@@ -632,6 +647,205 @@ test.describe('Doc comments: at their words, in their sidecar, to the AI with th
     await chip(view).click()
     await expect(view.getByTestId('doc-comments-list-row')).toHaveCount(2)
     await expect(view.getByTestId('doc-comments-list-row')).not.toContainText(['Words changed'])
+  })
+
+  test('a card the pointer shows goes again: off it into the page, a click elsewhere, Escape, a scroll (the HTML and the Markdown preview)', async ({ page }) => {
+    // 2026-11-17, the user: "bug, comment somehow stick, and won't go even if i click somewhere
+    // else" (the HTML preview, a card shown by the pointer on its words, the pointer then on the card).
+    await page.setViewportSize({ width: 1720, height: 960 })
+    let { panel, view } = await openDoc(page, HTML_DOC)
+    const frameEl = view.locator('.fv-html-preview')
+    const body = view.frameLocator('.fv-html-preview').locator('body')
+    await expect(body).toContainText('412 million', { timeout: 15_000 })
+    const at = async () => { const b = (await frameEl.boundingBox())!; return { x: b.x, y: b.y } }
+    await dragBetween(page, body, '412 million', 'reads this week', await at())
+    await page.getByTestId('file-comment').click()
+    const input = view.getByTestId('doc-comment-draft-input')
+    await expect(input).toBeFocused()
+    await input.fill('Is that a weekly record?')
+    await input.press('Enter')
+    await page.keyboard.press('Escape')
+    const fb = await at()
+    const point = async (needle: string, dx = 20) => {
+      const r = (await textRects(body, needle))[0]
+      return { x: fb.x + r.left + dx, y: fb.y + r.top + r.height / 2 }
+    }
+    const plain = await point('Checksum mismatches')
+    await page.mouse.click(plain.x, plain.y)
+    await expect(cards(view)).toHaveCount(0)
+    const peekIn = async (via: string) => {
+      // The page hit-tests the pointer once a frame: a frame where it was before, as for a hand.
+      await page.waitForTimeout(200)
+      const p = await point('412 million')
+      await page.mouse.move(p.x, p.y, { steps: 4 })
+      await expect(cards(view), `${via}: the pointer on the words shows the card`).toHaveCount(1)
+      await expect(cards(view).first()).not.toHaveClass(/is-current/)
+    }
+    // Off the words, over the card (it is there to read, the page is under it): it goes.
+    await peekIn('over the card')
+    const b = (await cards(view).first().boundingBox())!
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 6 })
+    await expect(cards(view), 'over the card, off its words').toHaveCount(0)
+    // Off the words into the page on words with no comment.
+    await peekIn('back into the page')
+    await page.mouse.move(plain.x, plain.y, { steps: 6 })
+    await expect(cards(view), 'off the words into the page').toHaveCount(0)
+    // A click elsewhere in the page.
+    await peekIn('a click elsewhere')
+    await page.mouse.click(plain.x, plain.y)
+    await expect(cards(view), 'a click elsewhere in the page').toHaveCount(0)
+    // Escape.
+    await peekIn('Escape')
+    await page.keyboard.press('Escape')
+    await expect(cards(view), 'Escape').toHaveCount(0)
+    // Off the words and back, it shows again; off them it goes.
+    await page.mouse.move(plain.x, plain.y, { steps: 6 })
+    await peekIn('after Escape')
+    await page.mouse.move(plain.x, plain.y, { steps: 6 })
+    await expect(cards(view), 'after Escape, off the words').toHaveCount(0)
+    // A click outside the doc (the composer).
+    await peekIn('a click outside')
+    await panel.locator('.session-panel-input .chat-input-textarea').click()
+    await expect(cards(view), 'a click on the composer').toHaveCount(0)
+    // A press over the card starts a selection on the words under it: the next comment.
+    await peekIn('a selection under the card')
+    const box = (await cards(view).first().boundingBox())!
+    // A point on the page's text that the card covers.
+    const inFrame = await body.evaluate((_, b) => {
+      const doc = document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
+      for (let y = b.top + 6; y < b.bottom - 6; y += 4) {
+        const r = doc.caretRangeFromPoint?.(b.left + 30, y)
+        if (!r || r.startContainer.nodeType !== Node.TEXT_NODE) continue
+        const t = r.startContainer as Text
+        if (r.startOffset + 12 > t.data.length) continue
+        const w = document.createRange(); w.setStart(t, r.startOffset); w.setEnd(t, r.startOffset + 1)
+        const rr = w.getBoundingClientRect()
+        if (y >= rr.top && y <= rr.bottom) return { x: b.left + 30, y }
+      }
+      return null
+    }, { left: box.x - fb.x, top: box.y - fb.y, bottom: box.y - fb.y + box.height })
+    expect(inFrame, 'the card covers some of the page\'s text').not.toBeNull()
+    const under = { x: fb.x + inFrame!.x, y: fb.y + inFrame!.y }
+    await page.mouse.move(under.x, under.y)
+    await page.mouse.down()
+    await page.mouse.move(under.x + 160, under.y, { steps: 6 })
+    await page.mouse.up()
+    await expect(page.getByTestId('file-comment'), 'a selection made over the card gets its pill').toBeVisible({ timeout: 5_000 })
+    await page.keyboard.press('Escape')
+
+    // The Markdown preview: the pointer on the words, then Escape, then a scroll.
+    ;({ panel, view } = await openDoc(page))
+    const editor = view.locator('.fv-wysiwyg-editor .ProseMirror')
+    await expect(editor).toContainText(END)
+    await commentInEditor(page, view, MIDDLE, 'Who copies the ledger?')
+    await page.keyboard.press('Escape')
+    await expect(cards(view)).toHaveCount(0)
+    await hoverWords(page, editor, MIDDLE)
+    await expect(cards(view), 'Markdown: the pointer on the words').toHaveCount(1)
+    await page.keyboard.press('Escape')
+    await expect(cards(view), 'Markdown: Escape').toHaveCount(0)
+    await page.mouse.move(0, 0)
+    await hoverWords(page, editor, MIDDLE)
+    await expect(cards(view), 'Markdown: the pointer on the words again').toHaveCount(1)
+    await page.mouse.wheel(0, 240)
+    await expect(cards(view), 'Markdown: a scroll').toHaveCount(0)
+  })
+
+  test('the HTML preview takes comment after comment: five in a row, the page rewritten and reloaded between them', async ({ page }) => {
+    // 2026-11-17, the user: "after 2 comment somehow 3rd in the doc doens't work in file" (an
+    // HTML page an agent had just rewritten, so its preview had reloaded).
+    await page.setViewportSize({ width: 1720, height: 960 })
+    const htmlPath = path.join(path.dirname(docPath), HTML_DOC)
+    const htmlOriginal = await fs.readFile(htmlPath, 'utf8')
+    try {
+      const { panel, view } = await openDoc(page, HTML_DOC)
+      const frameEl = view.locator('.fv-html-preview')
+      const body = view.frameLocator('.fv-html-preview').locator('body')
+      await expect(body).toContainText('412 million', { timeout: 15_000 })
+      const at = async () => { const b = (await frameEl.boundingBox())!; return { x: b.x, y: b.y } }
+      const sidecarPath = path.join(path.dirname(docPath), HTML_SIDECAR)
+      // The pointer ends each drag at the end of its words and starts the next from there, over
+      // them: passing over them shows no card there to catch the next press.
+      let last: { x: number; y: number } | undefined
+      const comment = async (n: number, from: string, to: string, words: string) => {
+        const fb = await at()
+        await dragBetween(page, body, from, to, fb, last)
+        const end = (await textRects(body, to)).at(-1)!
+        last = { x: fb.x + end.right - 1, y: fb.y + end.top + end.height / 2 }
+        await expect(page.getByTestId('file-comment'), `comment ${n}: the selection got its pill (no card caught the press)`).toBeVisible({ timeout: 5_000 })
+        await page.getByTestId('file-comment').click()
+        const input = view.getByTestId('doc-comment-draft-input')
+        await expect(input, `comment ${n}: its draft opens`).toBeFocused()
+        await input.fill(words)
+        await input.press('Enter')
+        await expect.poll(async () => fs.readFile(sidecarPath, 'utf8').catch(() => ''), { message: `comment ${n} is saved` }).toContain(words)
+        await expect(chip(view)).toContainText(`${n} comment${n === 1 ? '' : 's'}`)
+        await expect(trayRows(panel)).toHaveCount(n)
+        // A click elsewhere lets the card go, as a reader moves on to the next passage.
+        await page.keyboard.press('Escape')
+      }
+      await comment(1, '412 million', 'reads this week', 'First: a weekly record?')
+      await comment(2, 'Median flush latency', 'stayed at 14 ms', 'Second: since when?')
+      await comment(3, 'Checksum mismatches', 'by a reread', 'Third: which readers?')
+      // An agent rewrites the page, taking out the words the second comment is on (it
+      // answered it by deleting them): the preview reloads with the new file.
+      await fs.writeFile(htmlPath, htmlOriginal
+        .replace('Median flush latency stayed at 14 ms. ', '')
+        .replace('</body>', '<p>An appendix the writer added at the end.</p>\n</body>'))
+      await panel.locator('.session-file-explorer').getByRole('button', { name: 'Refresh' }).first().click()
+      await expect(body).toContainText('An appendix the writer added', { timeout: 15_000 })
+      await comment(4, 'Lower the batch cap', 'watch the p99', 'Fourth: why 48?')
+      await comment(5, 'Decide whether a reader', 'of its slot', 'Fifth: who decides?')
+      await shot(view, '10-html-five-comments')
+    } finally {
+      await fs.writeFile(htmlPath, htmlOriginal)
+    }
+  })
+
+  test('the HTML preview of a page its own script writes, slow to finish loading: Comment still opens, first time and after a reload', async ({ page }) => {
+    // The page builds its text from a script as it is parsed, then waits on an image: its text
+    // reached the console before its 'ready' did, and the 'ready' wiped it. Nothing sent it again,
+    // so every Comment (and Ask here) on that load did nothing (2026-11-17, the user's diff page,
+    // its third comment after an agent rewrote it).
+    await page.setViewportSize({ width: 1720, height: 960 })
+    const dir = path.dirname(docPath)
+    const name = 'scripted-report.html'
+    const htmlPath = path.join(dir, name)
+    const html = (extra: string) => `<!doctype html><html><head><meta charset="utf-8"><title>Scripted</title></head><body>
+<div id="main"></div><img src="slow-figure.png" alt="" width="1" height="1">
+<script>document.getElementById('main').innerHTML = '<p>The scripted report opens with a sentence to comment on.</p>'
+  + '<p>A second sentence sits under the first one for the next comment.</p>${extra}';</script></body></html>`
+    await fs.writeFile(htmlPath, html(''))
+    // The image answers late: the page's load (the bridge's 'ready') comes well after its text.
+    await page.route('**/slow-figure.png**', async (route) => { await new Promise((r) => setTimeout(r, 900)); await route.fulfill({ status: 404, body: '' }) })
+    try {
+      const { panel, view } = await openDoc(page, name)
+      const frameEl = view.locator('.fv-html-preview')
+      const body = view.frameLocator('.fv-html-preview').locator('body')
+      await expect(body).toContainText('The scripted report opens', { timeout: 15_000 })
+      const at = async () => { const b = (await frameEl.boundingBox())!; return { x: b.x, y: b.y } }
+      const sidecarPath = htmlPath + '.comments.md'
+      const comment = async (from: string, to: string, words: string) => {
+        await page.waitForTimeout(1200) // past the late load
+        await dragBetween(page, body, from, to, await at())
+        await page.getByTestId('file-comment').click()
+        const input = view.getByTestId('doc-comment-draft-input')
+        await expect(input, `"${words}": its draft opens`).toBeFocused()
+        await input.fill(words)
+        await input.press('Enter')
+        await expect.poll(async () => fs.readFile(sidecarPath, 'utf8').catch(() => '')).toContain(words)
+        await page.keyboard.press('Escape')
+      }
+      await comment('The scripted report', 'to comment on', 'On first open.')
+      await fs.writeFile(htmlPath, html('<p>An appendix the agent wrote.</p>'))
+      await panel.locator('.session-file-explorer').getByRole('button', { name: 'Refresh' }).first().click()
+      await expect(body).toContainText('An appendix the agent wrote', { timeout: 15_000 })
+      await comment('A second sentence', 'the next comment', 'After the reload.')
+      await expect(chip(view)).toContainText('2 comments')
+    } finally {
+      await fs.rm(htmlPath, { force: true })
+      await fs.rm(htmlPath + '.comments.md', { force: true })
+    }
   })
 
   test('the HTML preview: Comment on a selection in its frame, painted there beside its card, and seen in its source', async ({ page }) => {

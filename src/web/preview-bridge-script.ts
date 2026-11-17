@@ -206,7 +206,7 @@ addEventListener('click', function(e){
   if (h.some(function(x){ return x.stop; })) { e.preventDefault(); e.stopPropagation(); }
   post({ type: 'click', hits: bare(h) });
 }, true);
-var hoverKey = '', hv = 0, hp = null;
+var hoverKey = null, hv = 0, hp = null;
 function hover(h){
   var key = h.map(function(x){ return x.group + ' ' + x.id; }).join('\n');
   if (key === hoverKey) return;
@@ -219,7 +219,16 @@ addEventListener('pointermove', function(e){
   hp = [e.clientX, e.clientY];
   if (!hv) hv = requestAnimationFrame(function(){ hv = 0; hover(hits(hp[0], hp[1])); });
 }, { passive: true, capture: true });
-D.addEventListener('mouseout', function(e){ if (!e.relatedTarget) hover([]); });
+/* Off the page (onto the console's card over it, or away): none, and a hit test the last move
+   still had waiting is dropped, or it named the words again once the pointer was gone and their
+   card stayed up with nothing left to say it went (2026-11-17). Back on the page, the next move
+   reports what it is on, whatever was said last. */
+D.addEventListener('mouseout', function(e){
+  if (e.relatedTarget) return;
+  if (hv) { cancelAnimationFrame(hv); hv = 0; }
+  hover([]);
+  hoverKey = null;
+});
 
 /* Find (⌘F), painted under the console's search highlight names. */
 var F = { q: '', cs: false, ranges: [], active: -1 };
@@ -400,6 +409,11 @@ function ready(){
   // restored: the page's own state script (preview-state-script.ts) puts its place back itself.
   var ps = window.__walnutPreviewState;
   post({ type: 'ready', href: location.href, top: scrollY, restored: !!(ps && ps.restored) });
+  /* The console forgets the text on 'ready' (a new document): a page whose script wrote its
+     text before load (the mutation timer) had it sent already, and the send went unrepeated, so
+     the console had no text for that load and every Comment and Ask here on it did nothing
+     (2026-11-17). Always send it after 'ready'. */
+  sentV = -1;
   pushText();
   laidOut();
   if (window.ResizeObserver) { var ro = new ResizeObserver(laidOut); ro.observe(D.documentElement); if (D.body) ro.observe(D.body); }
