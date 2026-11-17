@@ -260,6 +260,10 @@ test('a locked session panel hangs its task under the row with a lock; eye and l
   // Unlocked and not watched: gone at once.
   await side.locator('.session-panel-lock').click()
   await expect(kept).toHaveCount(0)
+  // Closed: a panel left open beside the node would come back with it (org-free-panel-kept.spec.ts);
+  // from here on the panel beside the node is the one Home locks.
+  await side.locator('.session-panel-close').first().click()
+  await expect(side).toHaveCount(0)
 
   // On Home: a locked column of the task's session hangs it under its row the same way.
   // One column of the task's session on Home (the saved layout record, written once).

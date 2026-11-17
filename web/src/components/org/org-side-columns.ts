@@ -194,3 +194,30 @@ export function releaseHomeTakeoff(columnId: string): void {
   const off = storedView(shownText(key), null, isStringArray) ?? [];
   if (off.includes(id)) writeView(key, null, off.filter((x) => x !== id));
 }
+
+/**
+ * Each node's free panel (the unlocked one `?open=` names), kept per node (2026-11-17, the user: "I
+ * have this task open, but I did not lock it. Then I switch to other chat, and come back, it should
+ * be there ... whether it is locked or not"). Picking a node used to clear `?open=`, so the panel
+ * left open beside a node was gone when the user came back to it. Now leaving a node keeps its
+ * free panel here, and coming back opens it again; only the user's × (or another task opened beside
+ * that same node) changes it. The last VIEW_IDS_MAX nodes written are kept.
+ */
+// This device's, as the page's place (org-place.ts) and the URL that names the free panel are: a
+// `tab.` view is never mirrored to the server (ui-prefs-sync EXCLUDE_PREFIXES), so a new browser
+// opens each node on its pins alone.
+export const NODE_OPEN_KEY = viewKey('tab', 'orgNodeOpen');
+const isOpenId = (v: unknown): v is string | null => v === null || (typeof v === 'string' && v.length > 0);
+
+/** The free panel kept beside `node`, if any. */
+export function readNodeOpen(node: string): string | null {
+  return storedView(shownText(NODE_OPEN_KEY), node, isOpenId) ?? null;
+}
+
+/** Keep `open` (null: none) as `node`'s free panel. */
+export function writeNodeOpen(node: string, open: string | null): void {
+  const key = NODE_OPEN_KEY;
+  // A node that never had one writes nothing for "none".
+  if (open === null && storedView(shownText(key), node, isOpenId) === undefined) return;
+  writeView(key, node, open);
+}

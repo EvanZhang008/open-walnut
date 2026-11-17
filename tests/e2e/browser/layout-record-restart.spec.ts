@@ -383,9 +383,10 @@ test.describe('Org', () => {
     // Unlocking under one VP leaves the other's pin standing.
     await side(page).locator('.session-panel-lock').click()
     await expect.poll(() => stripTargets(page)).toEqual([`task:${ids.alpha}`])
+    // The second VP keeps beta open beside its pin, as it was left (unlocked there, not closed).
     await pickNode(page, rowKeyB, PROJECT_B)
-    await expect.poll(() => stripTargets(page)).toEqual([`task:${ids.gamma}*`])
-    await side(page).getByTestId('org-side-lock').click()
+    await expect.poll(() => stripTargets(page)).toEqual([`task:${ids.beta}`, `task:${ids.gamma}*`])
+    await page.locator(`[data-testid="org-side"][data-target="task:${ids.gamma}"]`).getByTestId('org-side-lock').click()
     await expect.poll(() => stripTargets(page)).toEqual([`task:${ids.gamma}`])
   })
 

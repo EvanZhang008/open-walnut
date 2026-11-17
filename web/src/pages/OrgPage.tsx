@@ -51,8 +51,8 @@ import { OrgNodeDetail, type OrgAnswers, type OrgTab } from '@/components/org/Or
 import type { AnswerFailure } from '@/components/org/OrgInlineAnswer';
 import { OrgSidePanel, parseSideTarget, sideTargetParam, type OrgSideTarget } from '@/components/org/OrgSidePanel';
 import {
-  adoptLegacyPins, homeLocksFor, HOME_OFF_MAX, HOME_OFF_VIEW, orgStripToggleLock, orgStripView, pinsOfNode, setNodePins,
-  type OrgPin, type SameSession,
+  adoptLegacyPins, homeLocksFor, HOME_OFF_MAX, HOME_OFF_VIEW, orgStripToggleLock, orgStripView, pinsOfNode, readNodeOpen,
+  setNodePins, writeNodeOpen, type OrgPin, type SameSession,
 } from '@/components/org/org-side-columns';
 import { usePageView } from '@/utils/view-memory';
 import { isStringArray } from '@/hooks/usePersistentState';
@@ -377,6 +377,21 @@ export function OrgPage() {
     restoring.current = false;
     writeOrgPlace({ node: nodeParam ?? undefined, tab: tabParam ?? undefined, open: openParam ?? undefined });
   }, [nodeParam, tabParam, openParam, urlPlaced]);
+  // Each node keeps its free panel (readNodeOpen): leaving it for another node and coming back shows
+  // it again, and so does a link that names the node alone. Only the user's x lets it go (closeSide).
+  // Only for the node the URL names, once it is the one shown: a link to a row the list has not
+  // brought yet shows the default node meanwhile, and a project its VP leads shows that VP.
+  const nodePlaced = !phone && !nodeArriving && !(restoring.current && !urlPlaced) && (!nodeParam || nodeParam === selected.key);
+  useEffect(() => {
+    if (!nodePlaced) return;
+    if (openParam) { writeNodeOpen(selected.key, openParam); return; }
+    // Kept for when the window is wide again: laid over the node, it would cover the chat unasked.
+    const kept = overlays ? null : readNodeOpen(selected.key);
+    if (!kept) return;
+    restoredSide.current?.add(kept);
+    setParams(() => { const next = liveParams(); next.set('open', kept); return next; },
+      { replace: true, state: (window.history.state as { usr?: unknown } | null)?.usr ?? null });
+  }, [nodePlaced, overlays, selected.key, openParam, setParams]);
 
   // A phone pushes the pick (Back returns to the list); the desktop replaces it. A new pick
   // closes the side panel: what it showed belonged to the node the user left.
@@ -394,10 +409,13 @@ export function OrgPage() {
       next.set('node', key);
       next.delete('router_setup');
       if (tab) next.set('tab', tab); else next.delete('tab');
-      next.delete('open');
+      // The node's own free panel comes back with it (readNodeOpen); a phone shows the node alone, and
+      // a window that lays side panels over the node never covers its chat with one unasked.
+      const kept = phone || overlays || rowOf(channelsRef.current, key)?.key !== key ? null : readNodeOpen(key);
+      if (kept) { restoredSide.current?.add(kept); next.set('open', kept); } else next.delete('open');
       return next;
     }, phone ? { state: { orgPick: true } } : { replace: true });
-  }, [setParams, phone, channelsRef, tasks]);
+  }, [setParams, phone, overlays, channelsRef, tasks]);
   const back = useCallback(() => {
     if ((window.history.state as { usr?: { orgPick?: boolean } } | null)?.usr?.orgPick) { navigate(-1); return; }
     // Opened straight on a node (a link, a reload): the list is this page's own way back.
@@ -486,10 +504,13 @@ export function OrgPage() {
     closing.current = true;
     sideOpen.current = false;
     setSideInbox(null);
+    // The user closed the node's free panel: it no longer comes back with the node. (A phone keeps
+    // none, and its × never closes the one a wide window keeps.)
+    if (!phone) writeNodeOpen(shownKey.current, null);
     if ((window.history.state as { usr?: { orgSide?: boolean } } | null)?.usr?.orgSide) { navigate(-1); return; }
     setParams(() => { const next = liveParams(); next.delete('open'); return next; },
       { replace: true, state: (window.history.state as { usr?: unknown } | null)?.usr ?? null });
-  }, [navigate, setParams]);
+  }, [navigate, setParams, phone]);
 
   /** The Home locks a panel of the strip shows (one, or none for the page's own). */
   const homeIdsOf = useLeanCallback((id: string) => fromHome.filter((h) => h.id === id || sameSession(h.id, id)).map((h) => h.id), [fromHome, sameSession]);

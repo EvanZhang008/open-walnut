@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { fetchTask } from '@/api/tasks';
+import { ApiError } from '@/api/api-error';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { ICON_LOCK, ICON_UNLOCK } from '@/components/common/Icons';
 import { locateTaskOnHome, openSessionOnHome } from '@/utils/open-session';
@@ -67,8 +68,15 @@ export function OrgSidePanel({ target, tasks, onClose, onOpenSession, onStartCha
     let live = true;
     fetchTask(target.id)
       .then((t) => { if (live) setFetched({ id: target.id, task: t as Task }); })
-      .catch(() => { if (live) setFetched({ id: target.id, task: null }); });
+      .catch((err: unknown) => {
+        if (!live) return;
+        setFetched({ id: target.id, task: null });
+        // A restored panel (a pin, a node's kept free panel) whose task was deleted closes itself, as
+        // a session's does; a failed read (offline, a deploy) keeps it, saying the task is gone.
+        if (err instanceof ApiError && err.status === 404) onRestoredGone?.();
+      });
     return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- read once per task; the close is the latest
   }, [target.kind, target.id, stored]);
   const task = stored ?? (fetched?.id === target.id ? fetched.task ?? undefined : undefined);
   const loading = target.kind === 'task' && !stored && fetched?.id !== target.id;
