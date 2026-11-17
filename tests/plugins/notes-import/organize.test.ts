@@ -15,7 +15,7 @@ import { rewriteLinks } from '../../../plugin-store/notes-import/src/server/link
 import { Mapping } from '../../../plugin-store/notes-import/src/server/mapping'
 import { NotionClient } from '../../../plugin-store/notes-import/src/server/notion/client'
 import { NotionSource } from '../../../plugin-store/notes-import/src/server/notion/source'
-import { applyPlan, checkSteps, type PlanStep } from '../../../plugin-store/notes-import/src/server/organize'
+import { applyPlan, checkSteps, describeFolder, TREE_BUDGET, type PlanStep } from '../../../plugin-store/notes-import/src/server/organize'
 import { Journal, undoRun, type JournalEntry } from '../../../plugin-store/notes-import/src/server/undo'
 import type { NotesService } from '../../../packages/plugin-api/src/server'
 import { para, standardWorkspace } from './fake-notion'
@@ -464,3 +464,26 @@ function expectSame(fake: ReturnType<typeof createFakeWalnut>, before: Map<strin
   expect([...now.keys()].sort(), label).toEqual([...before.keys()].sort())
   for (const [p, v] of before) expect(now.get(p), `${label} ${p}`).toEqual(v)
 }
+
+describe('the folder picture for a plan', () => {
+  it('fits one AI request for a big import with long names, and lists every folder', async () => {
+    // 2026-11-17, a real 4567-note import: the plan request was over ai.run's 200,000 characters.
+    const name = '\u4e3b\u89c2\u7684\u6211 - Idea - Feeling - My Output - Routine'
+    const entries: Array<{ path: string; type: 'folder' | 'note'; size: number }> = []
+    for (let d = 0; d < 300; d++) {
+      entries.push({ path: `${F}/${name} ${d}`, type: 'folder', size: 0 })
+      for (let n = 0; n < 20; n++) entries.push({ path: `${F}/${name} ${d}/Daily Review (${n}) of a long day.md`, type: 'note', size: 8000 })
+    }
+    const notes = { list: async () => entries } as unknown as NotesService
+    const { text, noteCount } = await describeFolder(notes, F)
+    expect(noteCount).toBe(6000)
+    expect(JSON.stringify({ folder: F, notes: noteCount, tree: text }).length).toBeLessThan(TREE_BUDGET + 1000)
+    for (let d = 0; d < 300; d++) expect(text).toContain(`${name} ${d}/\n`)
+    expect(text).toMatch(/… and \d+ more entries/)
+  })
+
+  it('lists a small folder whole', async () => {
+    const notes = { list: async () => [{ path: `${F}/A`, type: 'folder', size: 0 }, { path: `${F}/A/B.md`, type: 'note', size: 3 }] } as unknown as NotesService
+    expect((await describeFolder(notes, F)).text).toBe('A/\nA/B.md  (3 bytes)')
+  })
+})

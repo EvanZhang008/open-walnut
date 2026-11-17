@@ -78,20 +78,40 @@ function safeRel(rel: string): boolean {
 
 const asNote = (p: string) => (p.endsWith('.md') ? p : `${p}.md`)
 
-/** A compact picture of the folder for the AI: every folder with its note count, and the notes. */
+/**
+ * Room for the folder picture in one plan request: ai.run takes at most 200,000 characters of
+ * prompt and context together (src/core/ai/ai-run.ts), counted on the context as JSON.
+ */
+export const TREE_BUDGET = 150_000
+
+/**
+ * A compact picture of the folder for the AI: every folder first, then the notes with their
+ * sizes, until TREE_BUDGET. A big import (thousands of notes with long names) lists what fits
+ * and says how many more there are; the AI can still read anything in the folder.
+ */
 export async function describeFolder(notes: NotesService, folder: string): Promise<{ text: string; noteCount: number }> {
   const entries = await notes.list(folder)
-  const lines: string[] = []
-  let noteCount = 0
+  const folders: string[] = []
+  const files: string[] = []
   for (const entry of entries) {
     const rel = entry.path.slice(folder.length + 1)
     if (rel.split('/').includes('_attachment')) continue
-    if (entry.type === 'folder') lines.push(`${rel}/`)
-    if (entry.type === 'note') { noteCount++; lines.push(`${rel}  (${entry.size ?? 0} bytes)`) }
+    if (entry.type === 'folder') folders.push(`${rel}/`)
+    if (entry.type === 'note') files.push(`${rel}  (${entry.size ?? 0} bytes)`)
   }
-  // Big imports: the AI can still read anything in the folder; the list stays readable.
-  const text = lines.length > 3000 ? `${lines.slice(0, 3000).join('\n')}\n… and ${lines.length - 3000} more entries` : lines.join('\n')
-  return { text, noteCount }
+  const lines = [...folders, ...files]
+  const shown: string[] = []
+  let used = 0
+  for (const line of lines) {
+    // Each line as it counts inside the JSON context: escapes and its newline.
+    const cost = JSON.stringify(line).length
+    if (used + cost > TREE_BUDGET - 200) break
+    shown.push(line)
+    used += cost
+  }
+  const more = lines.length - shown.length
+  const text = more ? `${shown.join('\n')}\n… and ${more} more entries (list the folder to see them)` : shown.join('\n')
+  return { text, noteCount: files.length }
 }
 
 export async function makePlan(walnut: WalnutServerApi, notes: NotesService, folder: string, signal: AbortSignal): Promise<OrganizePlan> {
