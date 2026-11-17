@@ -27,7 +27,7 @@ import type {
   TaskHookContext,
 } from './types.js';
 import { engineCaps, isAcpEngine } from '../agents/engine-registry.js';
-import { prLinkHook } from '../pull-requests/pr-link-hook.js';
+import { linkMadeHook } from '../link-made-hook.js';
 import { toDisplayedUserText } from '../sessions/reference-cards.js';
 import { isAwaitingTurnEnd } from '../sessions/self-complete-stop.js';
 import { agentMemoryPrompt, applyAgentMemoryAnswer, keepsAgentMemory, readAgentMemoryField, splitAgentMemory } from '../sessions/agent-memory.js';
@@ -324,9 +324,14 @@ export function buildSelfReportPrompt(
     /** Ask the FOR_USER_* status lines too (default). False when the turn-end status question
      *  asked them already (sessions/status-question.ts). */
     status?: boolean;
+    /** The task's link tags now, so LINKS can keep, drop or replace them. */
+    links?: readonly { kind: string; target: string; name: string; user: boolean }[];
   },
 ): string {
   const withStatus = opts?.status !== false;
+  const linksNow = opts?.links?.length
+    ? `\nThe task's links now:\n${opts.links.map((l) => `- ${l.kind}: ${l.target} (${l.name})${l.user ? ' [added by the user, kept]' : ''}`).join('\n')}`
+    : '';
   const existing = existingNote?.trim() ?? '';
   const reorg = existing.length > NOTE_REORG_CAP;
   const title = currentTitle?.trim() ?? '';
@@ -364,7 +369,7 @@ NEVER delete facts: when something is superseded, update it in place and keep an
 Then these status fields (same plain-label format):
 ${title ? `TITLE: The task's current title is: "${title}". Default answer: \`unchanged\` — a title should almost never change, and when it must, PREFER \`topic:\` over \`rewrite:\`: the original name is usually good, so keep it and add to it. Three exceptions: (a) the work CHANGED DIRECTION or gained a focus the title doesn't cover, or what the task DELIVERS now (your EXEC_SUMMARY, every workstream) is something a person describing it would not find under this title → answer \`topic: <1-3 words>\` naming that deliverable as a whole, never this turn's step (a task that grew from an API inventory into keeping the app up while the main computer sleeps is "· Sleep Failover", not "· Live E2E Isolation") (English Title Case, one word if it's enough). A SECOND deliverable someone handed you (another incident's fix, another review or ticket, another case that only shares a file, a package or a place) is no topic of this task: answer \`unchanged\` and tell its sender it belongs in a task of its own. It lands at the END as "<original title> · New Topic"; a title carries at most ONE such topic, so a newer one REPLACES the previous one, and the original head is NEVER dropped — it is the keyword people find the task by — so brevity is everything; (b) the title is VAGUE and you now know the real subject — it names only an activity or a source ("Handle Slack thread request", "Investigate the issue") because the first message was just a pointer, and this turn revealed what it's actually about → answer \`rewrite: <new title>\` naming the specific subject ("CoreDNS OOM Slack thread"), 2-6 words, no filler verbs like Handle/Process/Address. Do this the FIRST turn you know — a vague title is a bug, not something to preserve; (c) the title has grown long/stale/confusing as a whole → answer \`rewrite: <new title>\` (short, plain, still findable by someone searching for the ORIGINAL work). Never rewrite a title the human just set; when in doubt (except case b), \`unchanged\`.
 ` : ''}OVERVIEW: 1-2 short sentences — what this WHOLE session is about and where it stands overall, for a user re-opening it after a while ("Reworking the composer layout so the scrollbar ends at the last row; fix landed, waiting on review"). Always answer this; never "unchanged".
-LINKS: At most 3, the most important first, and only the links the user will come back to across turns: the external links this task is ABOUT or PRODUCED (the issue or ticket driving it, a pull request or code review it opened, its design doc or thread), and the documents the user reviews (an HTML explainer, a design doc, a plan, a report) by ABSOLUTE path, one per line: "- <kind>: <url or /absolute/path> (<name>)", kind says what it is in one lowercase word, two at most joined by a hyphen (issue, pr, cr, ticket, incident, thread, design-doc, report, plan, notes), never a bare "file", "link" or file type; name says which one it is in 1 to 3 words that tell it from the task's other links ("Test matrix r5", "Fix plan r5b", "Retry design"). Never a screenshot or image, a log, a script, a config or a data file. Only links new since your last report; not every page you read or file you touched along the way. \`unchanged\` when none are new.
+LINKS: The task's WHOLE list of links as it should read now, at most 3 (the user's own count too), the most important first: a code review or pull request it made or is driving and the ticket or issue behind it come first, then its design doc or thread and the documents the user reviews (an HTML explainer, a design doc, a plan, a report) by ABSOLUTE path, one per line: "- <kind>: <url or /absolute/path> (<name>)", kind says what it is in one lowercase word, two at most joined by a hyphen (issue, pr, cr, commit, ticket, incident, thread, design-doc, report, plan, notes), never a bare "file", "link" or file type; name says which one it is in 1 to 3 words that tell it from the task's other links ("Test matrix r5", "Fix plan r5b", "Retry design"). Never a screenshot or image, a log, a script, a config or a data file. Keep only links that still matter: drop one that no longer helps (a code review merged and deployed, a document a newer one replaced) to make room for one that does. Walnut removes the links it added that your list leaves out (never one the user added). Not every page you read or file you touched along the way. \`unchanged\` when the list stays as it is.${linksNow}
 RECAP: ONE line, as simple as possible — what just happened in your latest turn(s), for a user re-opening this session ("Fixed the timeout bug, tests green, awaiting commit approval"). Always answer this; never "unchanged".${tipLanguage}
 PHASE_SIGNAL: one of — plan-written | implement-done | reconfirmed | verify-pass | verify-fail | review-done | committed(<hash>) | conversational(user-asked-question).
 STATUS: <succeeded|failed|blocked|waiting> — one sentence on what works / what doesn't.
@@ -918,6 +923,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
 
     let existingNote = '';
     let promptedTitle = '';
+    let links: { kind: string; target: string; name: string; user: boolean }[] = [];
     let taskPhase = '';
     let selfReport = '';
     let uiLanguage: string | undefined;
@@ -936,6 +942,9 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
         const taskRow = await getTask(taskId);
         existingNote = (taskRow.note ?? '').trim();
         promptedTitle = (taskRow.title ?? '').trim();
+        const { linkTagViews } = await import('../link-tags.js');
+        const auto = new Set(taskRow.auto_links ?? []);
+        links = linkTagViews(taskRow.tags, taskRow.link_names).map((v) => ({ kind: v.kind, target: v.target, name: v.name, user: !auto.has(v.target) }));
         taskPhase = taskRow.phase;
         mainAgent = taskRow.org_role === 'main';
         // Main, every lead and every leader keep their own MEMORY.md (sessions/agent-memory.ts).
@@ -964,7 +973,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
         ? await import('../same-ask-tree.js').then((m) => m.sameAskQuestionFor(p.taskId!)).catch(() => '') : '';
       selfReport = (await sessionRunner.requestTurnCompleteSelfReport(
         p.sessionId,
-        buildSelfReportPrompt(existingNote, promptedTitle, { uiLanguage, mainAgent, complete: taskPhase === 'COMPLETE', status: !statusOwned, ...(memory ? { memory } : {}) }) + sameAsk, SELF_REPORT_TIMEOUT_MS,
+        buildSelfReportPrompt(existingNote, promptedTitle, { uiLanguage, mainAgent, complete: taskPhase === 'COMPLETE', status: !statusOwned, ...(memory ? { memory } : {}), ...(links.length ? { links } : {}) }) + sameAsk, SELF_REPORT_TIMEOUT_MS,
       ).catch((err: unknown) => {
         // The model reached for a tool and the question was ended (an ACP engine): the labels
         // it wrote first still parse below, and a text with none is skipped there.
@@ -2584,5 +2593,5 @@ export const builtinHooks: SessionHookDefinition[] = [
   sessionErrorNotifyHook,
   cwdRenameDetectorHook,
   sessionRequestWatchHook,
-  prLinkHook,
+  linkMadeHook,
 ];

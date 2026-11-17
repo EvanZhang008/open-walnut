@@ -387,6 +387,7 @@ Every local id is validated and namespaced by the host. Register a Tool with a l
 - `provider`: a runtime model provider adapter.
 - `command`: a namespaced slash command whose `content` is sent to the Personal AI.
 - `skill`: an extra absolute directory holding one or more `SKILL.md` files.
+- `linkKind`: one kind of link tasks hold under a tag key (your code reviews as `cr`, your commits as `commit`): a regex for its URLs where people paste them, and `made`, which reads a session's Bash commands (your review tool's CLI, a push to the main line, with the pushes Walnut parsed from git's output) and names the URLs each made, so the task is tagged with what it changed. Its links share the task's three link places with the rest: the session's turn-end LINKS list says which stay, a code review or ticket first. Example: `walnut.registry.linkKind?.({ id: 'reviews', key: 'cr', match: String.raw\`https?://review\.acme\.dev/r/\d+\`, made: { command: String.raw\`(?:^|\s)acme-review\s+post\b\`, links: (run) => run.output.match(/https:\/\/review\.acme\.dev\/r\/\d+/g) ?? [] } })`.
 - `mentionSource`: a tab in the composer's "@" picker (people, channels, messages, anything the user may want to point the AI at). See "@" sources below.
 - `agentContext`: **deprecated, reaches no model.** It fed a system prompt Walnut no longer builds; register a skill instead. The call still succeeds so plugin loading never breaks, and each plugin that uses it gets one warning per load.
 - `sync`, `sourceClaim`, `display`, `migration`, `extIndex`: task integration registration.

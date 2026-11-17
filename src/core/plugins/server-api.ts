@@ -69,6 +69,7 @@ import { executeOp } from '../../ops/executor.js'
 import { countOwnerOps, definePluginOp, listOpEntries, type HttpBinding, type WalnutOp } from '../../ops/registry.js'
 import { registerTimelineSource } from '../time-tracking/timeline/registry.js'
 import { registerMentionSource, type MentionSourceSpec } from '../mention-sources/registry.js'
+import { registerLinkKind, type LinkKindSpec } from '../link-kinds.js'
 import { ensureCoreMentionSources } from '../mention-sources/notes-source.js'
 import { assertRouterSource, registerRouterSource, type RouterSourceAdapter } from '../router/source-registry.js'
 import type { RouterSource, RouterSourceKind } from '../router/types.js'
@@ -1427,6 +1428,13 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         // Core's own sources first, so a plugin activating at boot never takes Notes' keywords.
         ensureCoreMentionSources()
         return own(registerMentionSource(pluginId, { ...spec, id }))
+      },
+      // One more kind of link a task can hold (core/link-kinds.ts): the URLs of the plugin's
+      // service it recognises in text, and the ones a session's command made (a code review).
+      linkKind(spec: LinkKindSpec) {
+        assertLive(`registry.linkKind("${String(spec?.id)}")`)
+        const id = namespacePluginId(pluginId, String(spec?.id ?? ''))
+        return own(registerLinkKind(pluginId, { ...spec, id }))
       },
       // One channel's cache-only source for the inbound router (core/router/source-registry.ts).
       // The latest registration of a kind answers; its disposer removes only its own entry.

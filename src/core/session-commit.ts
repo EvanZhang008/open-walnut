@@ -165,8 +165,8 @@ const realDeps: SessionCommitDeps = {
     }
   },
   async linkPullRequest(taskId, url) {
-    const { tagCreatedPullRequest } = await import('./link-tags-apply.js')
-    await tagCreatedPullRequest(taskId, url, 'commit-pr')
+    const { tagLinksInText } = await import('./link-tags-apply.js')
+    await tagLinksInText(taskId, url, 'commit-pr')
   },
 }
 

@@ -8,6 +8,7 @@ import { describe, it, expect } from 'vitest'
 import {
   DEFAULT_LINK_PATTERNS,
   MAX_LINK_TAGS,
+  droppedLinkTags,
   canonicalLinkUrl,
   effectiveLinkPatterns,
   linkLabel,
@@ -150,6 +151,13 @@ describe('linkTagsFromField (self-report LINKS)', () => {
     expect(field).toBe('- cr: https://reviews.example.com/r/RV-1')
     expect(extractField(report, 'RECAP')).toBe('Did it.')
     expect(buildSelfReportPrompt('', 'T')).toMatch(/\nLINKS: .*"- <kind>: <url or \/absolute\/path> \(<name>\)"/)
+    // The session sees the list it keeps, drops or replaces, and which links are the user's.
+    const withLinks = buildSelfReportPrompt('', 'T', { links: [
+      { kind: 'report', target: '/home/u/REPORT.md', name: 'Rerun', user: false },
+      { kind: 'ticket', target: 'https://tracker.example.com/T-1', name: 'T-1', user: true },
+    ] })
+    expect(withLinks).toContain("The task's links now:\n- report: /home/u/REPORT.md (Rerun)\n- ticket: https://tracker.example.com/T-1 (T-1) [added by the user, kept]")
+    expect(withLinks).toMatch(/LINKS: The task's WHOLE list of links .*at most 3/)
   })
 })
 
@@ -171,16 +179,18 @@ describe('newLinkTags', () => {
     expect(newLinkTags({}, [long, 'pr:https://a.example.com/1'])).toEqual(['pr:https://a.example.com/1'])
   })
 
-  it('stops at the cap of link tags per task', () => {
+  it('stops at the cap of link tags per task, whatever their kind', () => {
     const tags = Array.from({ length: MAX_LINK_TAGS - 1 }, (_, i) => `link:https://a.example.com/${i}`)
-    expect(newLinkTags({ tags }, ['pr:https://b.example.com/1', 'pr:https://b.example.com/2'])).toEqual(['pr:https://b.example.com/1'])
+    expect(newLinkTags({ tags }, ['pr:https://b.example.com/1', 'doc:https://b.example.com/2'])).toEqual(['pr:https://b.example.com/1'])
   })
 
-  it('a link the task made itself (its own pull request) goes past the cap, still once', () => {
-    const tags = Array.from({ length: MAX_LINK_TAGS }, (_, i) => `link:https://a.example.com/${i}`)
-    expect(newLinkTags({ tags }, ['pr:https://github.com/acme/app/pull/9'])).toEqual([])
-    expect(newLinkTags({ tags }, ['pr:https://github.com/acme/app/pull/9'], { uncapped: true })).toEqual(['pr:https://github.com/acme/app/pull/9'])
-    expect(newLinkTags({ tags, auto_links: ['https://github.com/acme/app/pull/9'] }, ['pr:https://github.com/acme/app/pull/9'], { uncapped: true })).toEqual([])
+  it('the links Walnut added that a whole list leaves out are what it drops; the user\'s never', () => {
+    const task = {
+      tags: ['notes:/home/u/a-short.md', 'report:/home/u/REPORT.md', 'ticket:https://tracker.example.com/T-1', 'sev:2'],
+      auto_links: ['/home/u/a-short.md', '/home/u/REPORT.md'],
+    }
+    expect(droppedLinkTags(task, ['cr:https://review.acme.dev/reviews/CR-1', 'report:/home/u/REPORT.md'])).toEqual(['notes:/home/u/a-short.md'])
+    expect(droppedLinkTags(task, [])).toEqual(['notes:/home/u/a-short.md', 'report:/home/u/REPORT.md'])
   })
 })
 

@@ -93,6 +93,33 @@ describe('link tags on a task', () => {
     ])
   })
 
+  // 2026-11-17: a task that made five code reviews kept showing the three report files it named
+  // first, since a full task took no new link. LINKS is now the whole list: it can swap them.
+  it('a self-report\'s whole list replaces the links Walnut added, so a code review takes a stale document\'s place', async () => {
+    const id = await newTask(['sev:2'])
+    await tagLinksFromReportField(id, '- notes: /home/u/drafts/a-short.md (A notes)\n- notes: /home/u/drafts/b-short.md (B notes)\n- report: /home/u/eval/REPORT.md (Rerun)')
+    expect(await tagLinksFromReportField(id, [
+      '- cr: https://review.acme.dev/reviews/CR-1001 (Parser fix)',
+      '- cr: https://review.acme.dev/reviews/CR-1002 (Retry)',
+      '- report: /home/u/eval/REPORT.md (Rerun)',
+    ].join('\n'))).toEqual(['cr:https://review.acme.dev/reviews/CR-1001', 'cr:https://review.acme.dev/reviews/CR-1002'])
+    const task = await getTask(id)
+    expect(task.tags).toEqual(['sev:2', 'report:/home/u/eval/REPORT.md', 'cr:https://review.acme.dev/reviews/CR-1001', 'cr:https://review.acme.dev/reviews/CR-1002'])
+    expect(task.link_names).toEqual({ '/home/u/eval/REPORT.md': 'Rerun', 'https://review.acme.dev/reviews/CR-1001': 'Parser fix', 'https://review.acme.dev/reviews/CR-1002': 'Retry' })
+    // `unchanged` keeps the list; a dropped link may come back in a later list.
+    expect(await tagLinksFromReportField(id, 'unchanged')).toEqual([])
+    expect(await tagLinksFromReportField(id, '- notes: /home/u/drafts/a-short.md\n- cr: https://review.acme.dev/reviews/CR-1002')).toEqual(['notes:/home/u/drafts/a-short.md'])
+    expect((await getTask(id)).tags).toEqual(['sev:2', 'cr:https://review.acme.dev/reviews/CR-1002', 'notes:/home/u/drafts/a-short.md'])
+  })
+
+  it('a whole list never drops a link the user added, and it counts toward the three', async () => {
+    const id = await newTask(['ticket:https://tracker.example.com/T-9'])
+    await tagLinksFromReportField(id, '- doc: https://docs.example.com/d/1\n- doc: https://docs.example.com/d/2\n- doc: https://docs.example.com/d/3')
+    expect((await getTask(id)).tags).toEqual(['ticket:https://tracker.example.com/T-9', 'doc:https://docs.example.com/d/1', 'doc:https://docs.example.com/d/2'])
+    await tagLinksFromReportField(id, '- cr: https://review.acme.dev/reviews/CR-1')
+    expect((await getTask(id)).tags).toEqual(['ticket:https://tracker.example.com/T-9', 'cr:https://review.acme.dev/reviews/CR-1'])
+  })
+
   it('a better kind for a link Walnut tagged generically renames it in place', async () => {
     const id = await newTask(['sev:2'])
     await addLinkTags(id, ['link:https://docs.example.com/d/sync', 'file:/tmp/run/out.md'], 'test')

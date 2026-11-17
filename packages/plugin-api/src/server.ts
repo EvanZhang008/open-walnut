@@ -1410,6 +1410,42 @@ export interface PluginMentionItem {
   keys?: string[]
 }
 
+/** One ref a `git push` moved, as git printed it (see PluginLinkKindDefinition.made). */
+export interface PluginGitPush {
+  /** The remote as git printed it after "To " (`github.com:acme/app.git`, `ssh://host/pkg/App`). */
+  remote: string
+  branch: string
+  /** The commit it moved to (short, as printed), and from when git said. */
+  to: string
+  from?: string
+  /** The branch is the remote's main line (main, master, mainline, trunk). */
+  main: boolean
+}
+
+/**
+ * One kind of link a task can hold, under a tag key: your service's code reviews (`cr`), its
+ * commits (`commit`), its tickets. `match` recognises its URLs wherever a person pastes one or a
+ * session names one; `made` reads the Bash commands a session runs (your review tool's CLI, a
+ * `git push` to the main line) and names the URLs each one made, so the task is linked to what it
+ * changed without the session saying so. Its links share the task's three places with the rest;
+ * the session's turn-end LINKS list decides which stay. Absent on Walnut before 2026-11-17: call it as
+ * `registry.linkKind?.(...)`.
+ */
+export interface PluginLinkKindDefinition {
+  /** A local id the host prefixes with the plugin id. */
+  id: string
+  /** The tag key its links get: lowercase, like `cr`. */
+  key: string
+  /** A regex source whose whole match is one of its URLs (case-insensitive, anchored at a URL). */
+  match?: string
+  made?: {
+    /** A regex source over a Bash command line: only these runs are read. */
+    command: string
+    /** The URLs the run made, from its command, its output and the git pushes Walnut read there. */
+    links(run: { command: string; output: string; pushes: PluginGitPush[] }): readonly string[] | null | undefined
+  }
+}
+
 /**
  * A source for the composer's "@" picker: its own tab ("@<keyword> " jumps to it), and a
  * few rows in the mixed "All" view, under tasks, notes and files, added when it answers.
@@ -1542,6 +1578,9 @@ export interface RegistryService {
   /** Add a source to the composer's "@" picker (see PluginMentionSourceDefinition). Absent on
    *  Walnut before 2026-10-31: call it as `registry.mentionSource?.(...)`. */
   mentionSource?(definition: PluginMentionSourceDefinition): Disposable
+  /** Add a kind of link tasks hold (see PluginLinkKindDefinition). Absent on Walnut before
+   *  2026-11-17: call it as `registry.linkKind?.(...)`. */
+  linkKind?(definition: PluginLinkKindDefinition): Disposable
   /** Serve one channel's items to the inbound router (see PluginRouterSourceAdapter). The
    *  latest registration of a kind answers; disposing an earlier one leaves it in place.
    *  Absent on Walnut before 2026-11-07: call it as `registry.routerSource?.(...)`. */

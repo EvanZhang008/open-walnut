@@ -21,6 +21,7 @@ export interface LinkPattern {
 
 export const DEFAULT_LINK_PATTERNS: readonly LinkPattern[] = [
   { key: 'pr', match: String.raw`https?://github\.com/[\w.-]+/[\w.-]+/pull/\d+` },
+  { key: 'commit', match: String.raw`https?://github\.com/[\w.-]+/[\w.-]+/commit/[0-9a-f]{7,40}` },
   { key: 'issue', match: String.raw`https?://github\.com/[\w.-]+/[\w.-]+/issues/\d+` },
   { key: 'mr', match: String.raw`https?://gitlab\.com/[\w.-]+(?:/[\w.-]+)+/-/merge_requests/\d+` },
   { key: 'issue', match: String.raw`https?://gitlab\.com/[\w.-]+(?:/[\w.-]+)+/-/issues/\d+` },
@@ -36,7 +37,7 @@ const URL_RE = /^https?:\/\/[^\s]+$/i
 const TRAILING_NOISE_RE = /[.,;:!?'"`*_)\]}>]+$/
 
 /** The patterns in force: Walnut's, with a user entry replacing Walnut's for its key. */
-export function effectiveLinkPatterns(user: Record<string, string> | undefined): LinkPattern[] {
+export function effectiveLinkPatterns(user: Record<string, string> | undefined, plugins: readonly LinkPattern[] = []): LinkPattern[] {
   const overridden = new Set<string>()
   const own: LinkPattern[] = []
   for (const [rawKey, rawMatch] of Object.entries(user ?? {})) {
@@ -45,7 +46,8 @@ export function effectiveLinkPatterns(user: Record<string, string> | undefined):
     overridden.add(key)
     if (typeof rawMatch === 'string' && rawMatch.trim()) own.push({ key, match: rawMatch.trim() })
   }
-  return [...own, ...DEFAULT_LINK_PATTERNS.filter((p) => !overridden.has(p.key))]
+  // A plugin's patterns (link-kinds.ts) go before Walnut's: they know their own service's hosts.
+  return [...own, ...[...plugins, ...DEFAULT_LINK_PATTERNS].filter((p) => !overridden.has(p.key))]
 }
 
 /** A URL in the form two mentions of one link share: no fragment, no trailing slash or
@@ -249,7 +251,7 @@ export function isLinkTag(tag: string): boolean {
 /** The short label a link tag's pill reads after its key: a URL's label, a path's file name. */
 /** Kinds whose id is how a person tells two of them apart (`ticket:ENG-12`, `pr:app#7`). Every
  *  other link pill shows its kind alone (`report`, `design-doc`); the tooltip has the target. */
-const ID_LINK_KEYS: ReadonlySet<string> = new Set(['ticket', 'issue', 'cr', 'pr', 'mr'])
+const ID_LINK_KEYS: ReadonlySet<string> = new Set(['ticket', 'issue', 'cr', 'pr', 'mr', 'commit'])
 
 export function linkTagShowsId(tag: string): boolean {
   return ID_LINK_KEYS.has(linkTagKey(tag) ?? '')
@@ -283,9 +285,12 @@ export function linkLabel(rawUrl: string): string {
   const segments = url.pathname.split('/').filter(Boolean).map(decode)
   const forge = /^(?:pull|pulls|issues|merge_requests)$/
   for (let i = segments.length - 2; i >= 1; i--) {
-    if (forge.test(segments[i]!) && /^\d+$/.test(segments[i + 1]!)) {
-      const repo = segments[i - 1] === '-' ? segments[i - 2] : segments[i - 1]
-      return clipLabel(`${repo ?? url.host}#${segments[i + 1]}`)
+    const repo = segments[i - 1] === '-' ? segments[i - 2] : segments[i - 1]
+    if (forge.test(segments[i]!) && /^\d+$/.test(segments[i + 1]!)) return clipLabel(`${repo ?? url.host}#${segments[i + 1]}`)
+    // A commit reads by its short hash (`app@1a2b3c4`), the way git prints it.
+    if (/^commits?$/.test(segments[i]!) && /^[0-9a-f]{7,40}$/i.test(segments[i + 1]!)) {
+      const sha = segments[i + 1]!.slice(0, 7)
+      return repo && repo.length + 8 <= MAX_LABEL ? `${repo}@${sha}` : sha
     }
   }
   // A chat permalink's ids (`archives/C0123/p1726…`) mean nothing to read: name the workspace.
@@ -307,7 +312,9 @@ function clipLabel(text: string): string {
 /** URLs a task remembers having been tagged by Walnut (Task.auto_links), newest kept. */
 export const MAX_AUTO_LINKS = 200
 /** Link tags a task holds before Walnut stops adding more on its own: only the few that matter
- *  (the user, 2026-10-23: "only most important, max 3"). */
+ *  (the user, 2026-10-23: "only most important, max 3"; 2026-11-17: "It shoudl just 3 link, anuy
+ *  link is fine"). Which three is the session's call each turn (its LINKS field, prompted to put a
+ *  code review or ticket first and drop what no longer matters), not a rule here. */
 export const MAX_LINK_TAGS = 3
 
 /** The candidates worth adding to a task: a URL the task already holds under any key, or one
@@ -315,8 +322,6 @@ export const MAX_LINK_TAGS = 3
 export function newLinkTags(
   task: { tags?: readonly string[]; auto_links?: readonly string[] },
   candidates: readonly string[],
-  /** uncapped: links the task made itself (its own pull request), added past MAX_LINK_TAGS. */
-  opts: { uncapped?: boolean } = {},
 ): string[] {
   const held = new Set<string>(task.auto_links ?? [])
   let count = 0
@@ -328,7 +333,7 @@ export function newLinkTags(
   for (const tag of candidates) {
     const target = linkTargetOfTag(tag)
     // A tag past the stored length would be clipped, and a clipped URL opens the wrong page.
-    if (!target || tag.length > MAX_TAG_LENGTH || held.has(target) || (count >= MAX_LINK_TAGS && !opts.uncapped)) continue
+    if (!target || tag.length > MAX_TAG_LENGTH || held.has(target) || count >= MAX_LINK_TAGS) continue
     const path = linkPathOfTag(tag)
     if (path && !isReviewablePath(path)) continue
     held.add(target)
@@ -336,6 +341,20 @@ export function newLinkTags(
     out.push(tag)
   }
   return out
+}
+
+/** The task's link tags Walnut added (their target is in auto_links) that a session's whole list of
+ *  links no longer names: what that list drops. A link the user added is never among them. */
+export function droppedLinkTags(
+  task: { tags?: readonly string[]; auto_links?: readonly string[] },
+  listed: readonly string[],
+): string[] {
+  const auto = new Set(task.auto_links ?? [])
+  const keep = new Set(listed.map((tag) => linkTargetOfTag(tag)).filter((t): t is string => !!t))
+  return (task.tags ?? []).filter((tag) => {
+    const target = linkTargetOfTag(tag)
+    return !!target && auto.has(target) && !keep.has(target)
+  })
 }
 
 /** Link tags Walnut added under a generic key (`file:/…/plan.md`) that a candidate now names
@@ -408,7 +427,7 @@ function siteWord(url: string): string | undefined {
 export type LinkKindGroup = 'doc' | 'review' | 'ticket' | 'thread' | 'link'
 
 export function linkKindGroup(kind: string): LinkKindGroup {
-  if (/^(?:pr|mr|cr|review|code-review|diff|commit)$/.test(kind)) return 'review'
+  if (/^(?:pr|mr|cr|review|code-review|diff|commit|change)$/.test(kind)) return 'review'
   if (/^(?:ticket|issue|incident|bug|sim|task)$/.test(kind)) return 'ticket'
   if (/^(?:thread|chat|slack|message|email|mail)$/.test(kind)) return 'thread'
   if (/^(?:link|url|site|page|dashboard)$/.test(kind)) return 'link'

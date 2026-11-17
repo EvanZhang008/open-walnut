@@ -10,7 +10,8 @@
 
 import { bus, eventData, EventNames } from './event-bus.js'
 import { log } from '../logging/index.js'
-import { effectiveLinkPatterns, linkEntriesFromField, linkTagsInText, linkTargetOfTag, mergeLinkNames, newLinkTags, relabelLinkTags, type LinkPattern } from './link-tags.js'
+import { pluginLinkPatterns } from './link-kinds.js'
+import { droppedLinkTags, effectiveLinkPatterns, linkEntriesFromField, linkTagsInText, linkTargetOfTag, mergeLinkNames, newLinkTags, relabelLinkTags, type LinkPattern } from './link-tags.js'
 
 /** Send sources a person typed (phase.ts REOPENING_SEND_SOURCES minus the peer and letter paths). */
 const HUMAN_SEND_SOURCES: ReadonlySet<string> = new Set(['ui', 'mobile', 'cli', 'web-api', 'api-v1', 'chat'])
@@ -20,32 +21,43 @@ const HUMAN_SEND_SOURCES: ReadonlySet<string> = new Set(['ui', 'mobile', 'cli', 
 const HUMAN_START_SOURCES: ReadonlySet<string> = new Set(['quick-start', 'web-ui', 'web-api'])
 
 async function linkPatterns(): Promise<LinkPattern[]> {
+  const plugins = pluginLinkPatterns()
   try {
     const { getConfig } = await import('./config-manager.js')
-    return effectiveLinkPatterns((await getConfig()).link_tags)
+    return effectiveLinkPatterns((await getConfig()).link_tags, plugins)
   } catch {
-    return effectiveLinkPatterns(undefined)
+    return effectiveLinkPatterns(undefined, plugins)
   }
 }
 
-/** Add the candidates the task does not hold yet, and the names a session gave them (target to
- *  name). Returns the tags added. */
-export async function addLinkTags(taskId: string, candidates: readonly string[], source: string, names?: Record<string, string>, opts: { made?: boolean } = {}): Promise<string[]> {
+/** Add the candidates (`key:url` link tags) the task does not hold yet, and the names a session
+ *  gave them (target to name). `whole`: the candidates are the session's whole list of the task's
+ *  links, so the links Walnut added that it leaves out are dropped first (droppedLinkTags) and the
+ *  list takes their places. Returns the tags added. */
+export async function addLinkTags(taskId: string, candidates: readonly string[], source: string, names?: Record<string, string>, opts: { whole?: boolean } = {}): Promise<string[]> {
   if (candidates.length === 0) return []
   try {
     const { getTask, updateTask } = await import('./task-manager.js')
     // Checked before the write so a mention of a known link costs no task write.
     const current = await getTask(taskId)
-    const added = newLinkTags(current, candidates, { uncapped: opts.made === true })
+    const dropped = opts.whole ? droppedLinkTags(current, candidates) : []
+    const gone = new Set(dropped.map((tag) => linkTargetOfTag(tag)))
+    const kept = {
+      tags: (current.tags ?? []).filter((tag) => !dropped.includes(tag)),
+      auto_links: (current.auto_links ?? []).filter((target) => !gone.has(target)),
+    }
+    const added = newLinkTags(kept, candidates)
     const named = names && Object.keys(names).length
-      ? mergeLinkNames({ ...current, tags: [...(current.tags ?? []), ...added] }, names)
+      ? mergeLinkNames({ ...current, tags: [...kept.tags, ...added] }, names)
       : undefined
-    if (added.length === 0 && relabelLinkTags(current, candidates).length === 0 && !named) return []
+    if (added.length === 0 && dropped.length === 0 && relabelLinkTags(current, candidates).length === 0 && !named) return []
     const before = new Set(current.tags ?? [])
     const { task } = await updateTask(taskId, {
-      add_link_tags: [...candidates], ...(opts.made ? { link_tags_made: true } : {}), ...(named ? { add_link_names: names } : {}),
+      ...(dropped.length ? { remove_link_tags: dropped } : {}),
+      add_link_tags: [...candidates], ...(named ? { add_link_names: names } : {}),
     }, { source: 'link-tags' })
     const tagged = (task.tags ?? []).filter((tag) => !before.has(tag))
+    if (dropped.length) log.task.info('link tags dropped', { taskId, source, dropped })
     if (named) log.task.info('link names set', { taskId, source, names: task.link_names })
     if (tagged.length === 0) return []
     log.task.info('link tags added', { taskId, source, added: tagged })
@@ -54,13 +66,6 @@ export async function addLinkTags(taskId: string, candidates: readonly string[],
     log.task.debug('link tags skipped', { taskId, source, error: err instanceof Error ? err.message : String(err) })
     return []
   }
-}
-
-/** A pull request the task's own session opened (`gh pr create`, the Changed tab's Open PR): tagged
- *  even past MAX_LINK_TAGS, so the pull request watcher (pull-requests/pr-watch.ts) follows it. */
-export async function tagCreatedPullRequest(taskId: string, url: string, source: string): Promise<string[]> {
-  const tags = linkTagsInText(url, await linkPatterns())
-  return addLinkTags(taskId, tags, source, undefined, { made: true })
 }
 
 export async function tagLinksInText(taskId: string, text: string, source: string): Promise<string[]> {
@@ -74,7 +79,9 @@ export async function tagLinksFromReportField(taskId: string, field: string): Pr
   const entries = linkEntriesFromField(text, await linkPatterns())
   const names: Record<string, string> = {}
   for (const { tag, name } of entries) if (name) names[linkTargetOfTag(tag)!] = name
-  return addLinkTags(taskId, entries.map((e) => e.tag), 'self-report', names)
+  // The field is the task's whole list of links now (the prompt asks for it so): what it leaves
+  // out, Walnut drops, if Walnut added it.
+  return addLinkTags(taskId, entries.map((e) => e.tag), 'self-report', names, { whole: true })
 }
 
 async function taskOfSession(sessionId: string): Promise<string | undefined> {

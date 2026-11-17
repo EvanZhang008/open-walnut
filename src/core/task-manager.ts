@@ -4234,9 +4234,10 @@ export interface UpdateTaskInput {
   /** Link tags Walnut found (link-tags-apply.ts): each is added unless the task already
    *  holds its URL under any key or Walnut tagged that URL before (Task.auto_links). */
   add_link_tags?: string[];
-  /** The add_link_tags are links this task made itself (a pull request its session opened): they
-   *  are added past MAX_LINK_TAGS, since the task's own pull request is always one that matters. */
-  link_tags_made?: boolean;
+  /** Link tags Walnut added that a session's LINKS list no longer names (link-tags.ts
+   *  droppedLinkTags): removed, and their URLs forgotten from auto_links so a later list may name
+   *  them again. Applied before add_link_tags, so the new links take the places freed. */
+  remove_link_tags?: string[];
   /** Names a session gave its links (target to 1 to 3 words, link-tags.ts): each is kept for a
    *  link the task holds that has no name yet. */
   add_link_names?: Record<string, string>;
@@ -4881,13 +4882,20 @@ export async function updateTask(
       }
     }
   }
+  if (updates.remove_link_tags?.length) {
+    const drop = new Set(updates.remove_link_tags);
+    const targets = new Set(updates.remove_link_tags.map((tag) => linkTargetOfTag(tag)).filter(Boolean));
+    const remaining = (task.tags ?? []).filter((tag) => !drop.has(tag));
+    if (remaining.length) task.tags = remaining; else delete task.tags;
+    if (task.auto_links) task.auto_links = task.auto_links.filter((target) => !targets.has(target));
+  }
   if (updates.add_link_tags?.length) {
     // Not normalized first: normalizing clips a long tag, and a clipped URL opens the wrong page.
     // A generic kind Walnut gave earlier (`file:`) gives way to the better one named now.
     for (const { from, to } of relabelLinkTags(task, updates.add_link_tags)) {
       task.tags = (task.tags ?? []).map((tag) => (tag === from ? to : tag));
     }
-    const added = newLinkTags(task, updates.add_link_tags, { uncapped: updates.link_tags_made === true });
+    const added = newLinkTags(task, updates.add_link_tags);
     if (added.length) {
       task.tags = [...(task.tags ?? []), ...added];
       task.auto_links = [...(task.auto_links ?? []), ...added.map((tag) => linkTargetOfTag(tag)!)].slice(-MAX_AUTO_LINKS);
@@ -5007,7 +5015,7 @@ export async function updateTask(
   // blindness, not an edit). Input aliases map to their Task field.
   const touchedFields = Object.keys(updates)
     .filter((k) => (updates as Record<string, unknown>)[k] !== undefined)
-    .map((k) => (k === 'set_tags' || k === 'add_tags' || k === 'remove_tags' || k === 'add_link_tags' || k === 'link_tags_made') ? 'tags'
+    .map((k) => (k === 'set_tags' || k === 'add_tags' || k === 'remove_tags' || k === 'add_link_tags' || k === 'remove_link_tags') ? 'tags'
       : k === 'add_link_names' ? 'link_names'
       : (k === 'set_depends_on' || k === 'add_depends_on' || k === 'remove_depends_on') ? 'depends_on'
       : k);
