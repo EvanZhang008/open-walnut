@@ -115,7 +115,9 @@ describe('notifications B-relay on a REPLICA', () => {
     bridgeRequestMock.mockResolvedValue({ ok: true, result })
     const res = await request(createApp()).get('/api/v1/notifications')
     expect(res.status).toBe(200)
-    expect(res.body).toEqual(result)
+    // Each relayed record says who it is for (audience.ts), as the leader's own feed does: an
+    // older leader's records get it here.
+    expect(res.body).toEqual({ ...result, feed: result.feed.map((n) => ({ ...n, audience: 'user' })) })
     expect(res.headers['x-walnut-copy-as-of']).toBeUndefined()
     expect(bridgeRequestMock).toHaveBeenCalledWith(
       '__local__', 'session.control',
