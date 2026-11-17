@@ -10,13 +10,14 @@
  * both heard in the capture phase (the pills beside it stop their own). Inside the session
  * header's tags flyout the card is that flyout's child portal: it closes first on Escape.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ChangeSnapshot } from '../../../../src/core/changes/model';
 import { changePillState } from '../../../../src/core/changes/model';
 import { apiPost } from '@/api/client';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { log } from '@/utils/log';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { ChangeCard } from './ChangeCard';
 import { TagChip } from './TagChip';
 import '@/styles/change-card.css';
@@ -43,7 +44,7 @@ export function ChangePill({ tag, snap, taskId, inline, linkName }: {
     align: 'start', preferSide: 'down', minHeight: 160, onAnchorLost: () => setOpen(false),
   });
 
-  const close = useCallback((restoreFocus: boolean) => {
+  const close = useLeanCallback((restoreFocus: boolean) => {
     setOpen(false);
     if (restoreFocus) pillRef.current?.focus();
   }, []);
@@ -70,7 +71,7 @@ export function ChangePill({ tag, snap, taskId, inline, linkName }: {
     };
   }, [open, close]);
 
-  const refresh = useCallback(() => {
+  const refresh = useLeanCallback(() => {
     setRefreshing(true);
     setRefreshError(null);
     apiPost<ChangesAnswer>(`/api/tasks/${encodeURIComponent(taskId)}/changes/refresh`, {}, { timeoutMs: REFRESH_MS })
