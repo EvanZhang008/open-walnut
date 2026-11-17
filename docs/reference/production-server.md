@@ -211,6 +211,16 @@ running server, or a check that runs out of time only warns. Knobs:
 `WALNUT_DEVPROD_SKIP_PLUGIN_CHECK=1`, `WALNUT_DEVPROD_PLUGIN_CHECK_SECS` (120),
 `WALNUT_DEVPROD_PLUGIN_STRICT=1`. Ratchet: `tests/scripts/dev-prod-plugin-check.test.ts`.
 
+**Plugins load from the stage's own copy, never the checkout.** An external plugin is bundled
+at load time onto Walnut's source, and the npm packages it and that source import resolve from
+the node_modules beside it. Each stage carries `plugin-source/` (the built `src/`, `packages/`,
+`package.json` and a snapshot of the build's node_modules, copy-on-write on APFS) named by
+`.walnut-plugin-source`, and the LKG carries its own copy. It used to link the checkout's
+node_modules, so a plugin reload while another task reinstalled there failed (2026-11-17: an
+external tracker plugin could not find chalk and a plugin store update rolled back). A rollback
+stage, made while production is down, borrows the LKG's copy, and the LKG is kept while it runs.
+Ratchet: `tests/scripts/dev-prod-lkg-stages.test.ts`.
+
 ## What a deploy runs: the compiled file, and nothing else
 
 **What a deploy runs: the compiled file, and nothing else.** After `bun run web:build` (the dist: the

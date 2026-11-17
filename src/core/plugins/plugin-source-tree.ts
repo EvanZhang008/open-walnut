@@ -60,7 +60,8 @@ export const PLUGIN_SOURCE_MARKER = '.walnut-plugin-source';
  * 2026-10-30 a plugin check refused a deploy because the checkout's engine-switch.ts
  * imported a module not written yet, and a server restarted in that minute would have
  * loaded no external plugin. scripts/dev-prod.sh stages the deployed commit's own src/
- * (with the checkout's node_modules) and names it here.
+ * with its own snapshot of the build's node_modules (never a link to the checkout's, which
+ * another task may be reinstalling: 2026-11-17) and names it here.
  */
 function committedPluginSource(packageRoot: string): string | null {
   let dir = packageRoot;

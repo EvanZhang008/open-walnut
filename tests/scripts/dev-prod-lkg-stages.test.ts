@@ -10,6 +10,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { resolvePluginSourceTree } from '../../src/core/plugins/plugin-source-tree.js'
 
 const SCRIPT = path.join(import.meta.dirname, '..', '..', 'scripts', 'dev-prod.sh')
 const script = fs.readFileSync(SCRIPT, 'utf-8')
@@ -18,6 +19,11 @@ function fn(name: string): string {
   const m = new RegExp(`^${name}\\(\\) \\{\\n[\\s\\S]*?^\\}\\n`, 'm').exec(script)
   expect(m, `function ${name} in dev-prod.sh`).not.toBeNull()
   return m![0]
+}
+
+/** The functions that copy a stage's plugin dependencies (clone_deps and what it calls). */
+function depsFns(): string {
+  return [fn('clone_dir'), fn('clone_deps')].join('\n')
 }
 
 /** The stage reap loop (top-level code), from its `for` to its `done`. */
@@ -90,8 +96,9 @@ describe('snapshot_lkg', () => {
     fs.mkdirSync(path.join(stage, 'dist-bin'), { recursive: true })
     fs.writeFileSync(path.join(stage, 'dist-bin', 'walnut-x'), 'new build')
     fs.mkdirSync(path.join(stage, 'runtime', 'id-new'), { recursive: true })
-    return [fn('clone_copy'), fn('carry_plugin_source'), fn('dir_has_live_process'), fn('snapshot_lkg'),
-      `STAGE_DIR='${stage}'`, `LKG_DIR='${lkg}'`, `SERVE_ROOT='${root}'`, `REPO_ROOT='${root}'`,
+    return [fn('clone_copy'), depsFns(), fn('carry_plugin_source'), fn('dir_has_live_process'), fn('stage_has_live_process'),
+      fn('unborrow_lkg_deps'), fn('snapshot_lkg'),
+      `STAGE_DIR='${stage}'`, `STAGE_ROOT='${root}'`, `LKG_DIR='${lkg}'`, `SERVE_ROOT='${root}'`, `REPO_ROOT='${root}'`,
       'snapshot_lkg'].join('\n')
   }
 
@@ -120,31 +127,190 @@ describe('snapshot_lkg', () => {
   })
 
   // stage_plugin_source: the committed src/ plugins import from rides into the LKG, its
-  // marker renamed to the LKG's own copy (a rollback server never reads the checkout's).
-  it("carries the stage's committed plugin source, marker pointing at the LKG's copy", () => {
+  // marker renamed to the LKG's own copy (a rollback server never reads the checkout's),
+  // with its own copy of the dependencies: the LKG outlives the stage it came from.
+  it("carries the stage's plugin source and its own copy of the dependencies, marker pointing at the LKG's copy", () => {
+    const root = tmp()
+    const lkg = path.join(root, 'open-walnut-lkg')
+    const script = harness(root, lkg)
+    const stage = path.join(root, 'open-walnut-stage.9.9')
+    const copy = path.join(stage, 'plugin-source')
+    fs.mkdirSync(path.join(copy, 'src', 'integrations'), { recursive: true })
+    fs.writeFileSync(path.join(copy, 'src', 'integrations', 'x.ts'), 'committed')
+    fs.mkdirSync(path.join(copy, 'packages', 'plugin-api'), { recursive: true })
+    fs.writeFileSync(path.join(copy, 'packages', 'plugin-api', 'index.js'), "export const api = 'staged'\n")
+    fakePackage(path.join(copy, 'node_modules'), 'chalkish')
+    fs.mkdirSync(path.join(copy, 'node_modules', '@open-walnut'))
+    fs.symlinkSync('../../packages/plugin-api', path.join(copy, 'node_modules', '@open-walnut', 'plugin-api'))
+    fs.writeFileSync(path.join(stage, '.walnut-plugin-source'), `${copy}\n`)
+    fs.mkdirSync(path.join(copy, '.plugin-cache'))
+    fs.writeFileSync(path.join(copy, '.plugin-cache', 'old-bundle.mjs'), '')
+    const r = bash(script)
+    expect(r.status, r.stderr).toBe(0)
+    const carried = path.join(lkg, 'plugin-source')
+    expect(fs.readFileSync(path.join(carried, 'src', 'integrations', 'x.ts'), 'utf-8')).toBe('committed')
+    // Bundles are rebuilt per process; the stage's old ones are not carried.
+    expect(fs.existsSync(path.join(carried, '.plugin-cache'))).toBe(false)
+    expect(fs.lstatSync(path.join(carried, 'node_modules')).isSymbolicLink()).toBe(false)
+    expect(fs.readFileSync(path.join(lkg, '.walnut-plugin-source'), 'utf-8').trim()).toBe(carried)
+    // The stage goes (the next deploy reaps it); the LKG's plugins still resolve.
+    fs.rmSync(stage, { recursive: true, force: true })
+    expect(runBundle(carried, "import { mark } from 'chalkish'\nimport { api } from '@open-walnut/plugin-api'\nconsole.log(mark, api)\n"))
+      .toEqual({ stdout: 'chalkish staged', stderr: '' })
+    expect(fs.realpathSync(path.join(carried, 'node_modules', '@open-walnut', 'plugin-api'))).toBe(path.join(carried, 'packages', 'plugin-api'))
+  })
+
+  // An LKG an older deploy left links the checkout's node_modules: its next carry copies it.
+  it('copies the dependencies an older stage linked in, so the copy no longer reads the checkout', () => {
     const root = tmp()
     const lkg = path.join(root, 'open-walnut-lkg')
     const script = harness(root, lkg)
     const stage = path.join(root, 'open-walnut-stage.9.9')
     fs.mkdirSync(path.join(stage, 'plugin-source', 'src', 'integrations'), { recursive: true })
-    fs.writeFileSync(path.join(stage, 'plugin-source', 'src', 'integrations', 'x.ts'), 'committed')
-    fs.mkdirSync(path.join(root, 'node_modules'))
-    fs.symlinkSync(path.join(root, 'node_modules'), path.join(stage, 'plugin-source', 'node_modules'))
-    fs.writeFileSync(path.join(stage, '.walnut-plugin-source'), `${path.join(stage, 'plugin-source')}\n`)
-    fs.mkdirSync(path.join(stage, 'plugin-source', '.plugin-cache'))
-    fs.writeFileSync(path.join(stage, 'plugin-source', '.plugin-cache', 'old-bundle.mjs'), '')
+    fakePackage(path.join(root, 'checkout', 'node_modules'), 'chalkish')
+    fs.symlinkSync(path.join(root, 'checkout', 'node_modules'), path.join(stage, 'plugin-source', 'node_modules'))
     const r = bash(script)
     expect(r.status, r.stderr).toBe(0)
-    expect(fs.readFileSync(path.join(lkg, 'plugin-source', 'src', 'integrations', 'x.ts'), 'utf-8')).toBe('committed')
-    // Bundles are rebuilt per process; the stage's old ones are not carried.
-    expect(fs.existsSync(path.join(lkg, 'plugin-source', '.plugin-cache'))).toBe(false)
-    expect(fs.lstatSync(path.join(lkg, 'plugin-source', 'node_modules')).isSymbolicLink()).toBe(true)
-    expect(fs.readFileSync(path.join(lkg, '.walnut-plugin-source'), 'utf-8').trim()).toBe(path.join(lkg, 'plugin-source'))
+    fs.rmSync(path.join(root, 'checkout'), { recursive: true, force: true })
+    expect(runBundle(path.join(lkg, 'plugin-source'), "import { mark } from 'chalkish'\nconsole.log(mark)\n").stdout).toBe('chalkish')
+  })
+
+  // A rollback stage borrows the LKG's dependencies (production is down while it is made).
+  // Its server is gone by the next snapshot, but the daemon and session children it left
+  // may live for days: they get their own copy, and the LKG is still replaced.
+  it('gives a rollback stage something still runs from its own copy of the borrowed dependencies, then replaces the LKG', async () => {
+    const root = tmp()
+    const lkg = path.join(root, 'open-walnut-lkg')
+    fakePackage(path.join(lkg, 'plugin-source', 'node_modules'), 'chalkish')
+    fs.mkdirSync(path.join(lkg, 'plugin-source', 'packages', 'plugin-api'), { recursive: true })
+    fs.mkdirSync(path.join(lkg, 'plugin-source', 'node_modules', '@open-walnut'))
+    fs.symlinkSync('../../packages/plugin-api', path.join(lkg, 'plugin-source', 'node_modules', '@open-walnut', 'plugin-api'))
+    const borrowing = (name: string) => {
+      const stage = path.join(root, name)
+      fs.mkdirSync(path.join(stage, 'plugin-source', 'packages', 'plugin-api'), { recursive: true })
+      fs.symlinkSync(path.join(lkg, 'plugin-source', 'node_modules'), path.join(stage, 'plugin-source', 'node_modules'))
+      return stage
+    }
+    const live = borrowing('open-walnut-stage.rollback.1.1')
+    const dead = borrowing('open-walnut-stage.rollback.2.2')
+    await runFrom(program(path.join(live, 'dist-bin', 'walnut-x')), ['__daemon', '--start'])
+    const r = bash(harness(root, lkg))
+    expect(r.status, r.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(lkg, 'dist-bin', 'walnut-x'), 'utf-8')).toBe('new build')
+    const own = path.join(live, 'plugin-source', 'node_modules')
+    expect(fs.lstatSync(own).isSymbolicLink()).toBe(false)
+    expect(fs.readFileSync(path.join(own, 'chalkish', 'index.js'), 'utf-8')).toContain('chalkish')
+    expect(fs.realpathSync(path.join(own, '@open-walnut', 'plugin-api'))).toBe(path.join(live, 'plugin-source', 'packages', 'plugin-api'))
+    expect(fs.existsSync(path.join(live, 'plugin-source', 'node_modules.new'))).toBe(false)
+    // Nothing runs from the other: the stage reaper takes it, no copy is made.
+    expect(fs.lstatSync(path.join(dead, 'plugin-source', 'node_modules')).isSymbolicLink()).toBe(true)
+  })
+
+  it('writes no marker for a plugin source whose dependencies are gone, so the loader reads the serve root', () => {
+    const root = tmp()
+    const lkg = path.join(root, 'open-walnut-lkg')
+    const stage = path.join(root, 'open-walnut-stage.9.9')
+    fs.mkdirSync(path.join(stage, 'plugin-source', 'src', 'integrations'), { recursive: true })
+    fs.symlinkSync(path.join(root, 'gone', 'node_modules'), path.join(stage, 'plugin-source', 'node_modules'))
+    const r = bash(harness(root, lkg))
+    expect(r.status, r.stderr).toBe(0)
+    expect(fs.existsSync(path.join(lkg, '.walnut-plugin-source'))).toBe(false)
+    expect(fs.existsSync(path.join(lkg, 'plugin-source'))).toBe(false)
+    expect(fs.readFileSync(path.join(lkg, '.walnut-source-root'), 'utf-8').trim()).toBe(root)
   })
 })
 
+/** A package `name` in node_modules `nm` whose module exports `mark = name`. */
+function fakePackage(nm: string, name: string): void {
+  fs.mkdirSync(path.join(nm, name), { recursive: true })
+  fs.writeFileSync(path.join(nm, name, 'package.json'), JSON.stringify({ name, type: 'module', main: 'index.js' }))
+  fs.writeFileSync(path.join(nm, name, 'index.js'), `export const mark = '${name}'\n`)
+}
+
+/** Runs `code` as a plugin bundle in `sourceRoot`/.plugin-cache, where the loader writes one (integration-loader.ts). */
+function runBundle(sourceRoot: string, code: string): { stdout: string; stderr: string } {
+  fs.mkdirSync(path.join(sourceRoot, '.plugin-cache'), { recursive: true })
+  const bundle = path.join(sourceRoot, '.plugin-cache', `p-${Math.random().toString(36).slice(2)}.mjs`)
+  fs.writeFileSync(bundle, code)
+  const run = spawnSync(process.execPath, [bundle], { encoding: 'utf-8' })
+  return { stdout: run.stdout.trim(), stderr: run.stderr }
+}
+
 describe('stage_plugin_source', () => {
   const dirsLine = () => /^PLUGIN_SOURCE_DIRS=.*$/m.exec(script)![0]
+  const stageScript = (repo: string, serve: string, stage: string, extra = '') =>
+    [fn('clone_copy'), depsFns(), dirsLine(), fn('stage_plugin_source'), extra, `REPO_ROOT='${repo}'`, `SERVE_ROOT='${serve}'`,
+      `stage_plugin_source '${stage}'`].join('\n')
+
+  // 2026-11-17 22:39 UTC: the stage's node_modules linked the checkout's; another task's
+  // cleanup removed that node_modules, the loader fell back to the compiled file's runtime
+  // tree, and a plugin store update rolled back ("Cannot find package 'chalk'"). The stage
+  // now holds its own copy of the build's dependencies: with the checkout's node_modules,
+  // the deploy mirror and the build clone all gone, the plugins still load.
+  it("keeps loading plugins when the checkout's node_modules is gone: the stage holds its own copy", () => {
+    const root = tmp()
+    const repo = path.join(root, 'clone')
+    const serve = path.join(root, 'serve')
+    const mirror = path.join(root, 'deploy-deps', 'abc', 'node_modules')
+    const stage = path.join(root, 'open-walnut-stage.2.2')
+    fs.mkdirSync(path.join(repo, 'src', 'integrations'), { recursive: true })
+    fs.mkdirSync(path.join(repo, 'packages', 'plugin-api'), { recursive: true })
+    fs.writeFileSync(path.join(repo, 'packages', 'plugin-api', 'index.js'), "export const api = 'committed'\n")
+    fs.writeFileSync(path.join(repo, 'packages', 'plugin-api', 'package.json'), JSON.stringify({ name: '@open-walnut/plugin-api', type: 'module', main: 'index.js' }))
+    fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ name: 'x', type: 'module' }))
+    fakePackage(path.join(serve, 'node_modules'), 'chalkish')
+    // A committed deploy's clone: each entry links into the deploy's mirror, the
+    // workspace package into the clone's own packages/ (scripts/deploy-committed.sh).
+    fakePackage(mirror, 'chalkish')
+    fakePackage(path.join(mirror, '@scope'), 'scoped')
+    fs.mkdirSync(path.join(mirror, '.bin'))
+    fs.symlinkSync('../chalkish/index.js', path.join(mirror, '.bin', 'chalkish'))
+    fs.mkdirSync(path.join(repo, 'node_modules', '@open-walnut'), { recursive: true })
+    for (const e of ['chalkish', '@scope', '.bin']) fs.symlinkSync(path.join(mirror, e), path.join(repo, 'node_modules', e))
+    fs.symlinkSync(path.join(repo, 'packages', 'plugin-api'), path.join(repo, 'node_modules', '@open-walnut', 'plugin-api'))
+    fs.mkdirSync(stage)
+    const r = bash(stageScript(repo, serve, stage))
+    expect(r.status, r.stderr).toBe(0)
+    const copy = path.join(stage, 'plugin-source')
+
+    // Nothing in the copy leads out of the stage.
+    const outward: string[] = []
+    const walk = (d: string) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name)
+        if (e.isSymbolicLink()) { if (!fs.realpathSync(p).startsWith(`${stage}/`)) outward.push(p) }
+        else if (e.isDirectory()) walk(p)
+      }
+    }
+    walk(copy)
+    expect(outward).toEqual([])
+    // One copy of a workspace package: the staged packages/ that src/ imports by path.
+    expect(fs.realpathSync(path.join(copy, 'node_modules', '@open-walnut', 'plugin-api'))).toBe(path.join(copy, 'packages', 'plugin-api'))
+
+    // The checkout's install goes (a reinstall, a cleanup), and so do the mirror and the clone.
+    for (const d of [path.join(serve, 'node_modules'), path.join(root, 'deploy-deps'), repo]) fs.rmSync(d, { recursive: true, force: true })
+    // The loader still picks the stage's copy, from the compiled file's runtime tree under it...
+    const runtime = path.join(stage, 'runtime', '0.0.0-abc')
+    fs.mkdirSync(runtime, { recursive: true })
+    expect(resolvePluginSourceTree(runtime, null)).toEqual({ srcIntegrationsDir: path.join(copy, 'src', 'integrations'), nodeModulesRoot: copy })
+    // ...and a bundle written there resolves every package.
+    const code = "import { mark } from 'chalkish'\nimport { mark as s } from '@scope/scoped'\nimport { api } from '@open-walnut/plugin-api'\nconsole.log(mark, s, api)\n"
+    expect(runBundle(copy, code)).toEqual({ stdout: 'chalkish scoped committed', stderr: '' })
+  })
+
+  it('stages nothing, and says so, when the dependencies cannot be copied (plugins read the serve root as before)', () => {
+    const root = tmp()
+    const repo = path.join(root, 'clone')
+    fs.mkdirSync(path.join(repo, 'src', 'integrations'), { recursive: true })
+    fs.writeFileSync(path.join(repo, 'package.json'), '{}')
+    fakePackage(path.join(repo, 'node_modules'), 'chalkish')
+    const stage = path.join(root, 'stage')
+    fs.mkdirSync(stage)
+    const r = bash(stageScript(repo, root, stage, 'clone_dir() { return 1; }'))
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stderr).toContain(`could not stage the built source and dependencies for plugins; they read ${root}/src and its node_modules`)
+    expect(fs.readdirSync(stage)).toEqual([])
+  })
   // ca9bfc2bc review: the staged copy had src/ alone, so a bundle written in its
   // .plugin-cache found no package.json above it, and a `#ws` import (package.json
   // `imports`) failed at load time ("Cannot find package '#ws'").
@@ -159,14 +325,13 @@ describe('stage_plugin_source', () => {
     fs.writeFileSync(path.join(repo, 'src', 'probe.ts'), "export { binding } from '../packages/plugin-api/src/binding.ts'\nexport const probe = 'committed'\n")
     const imports = { '#probe': { bun: './src/probe.ts', default: './src/probe.ts' } }
     fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ name: 'x', type: 'module', imports }))
+    fs.mkdirSync(path.join(repo, 'node_modules'), { recursive: true })
     fs.mkdirSync(path.join(serve, 'node_modules'), { recursive: true })
     fs.mkdirSync(stage)
-    const r = bash([fn('clone_copy'), dirsLine(), fn('stage_plugin_source'), `REPO_ROOT='${repo}'`, `SERVE_ROOT='${serve}'`,
-      `stage_plugin_source '${stage}'`].join('\n'))
+    const r = bash(stageScript(repo, serve, stage))
     expect(r.status, r.stderr).toBe(0)
     const copy = path.join(stage, 'plugin-source')
     expect(fs.readFileSync(path.join(stage, '.walnut-plugin-source'), 'utf-8').trim()).toBe(copy)
-    expect(fs.realpathSync(path.join(copy, 'node_modules'))).toBe(fs.realpathSync(path.join(serve, 'node_modules')))
     fs.mkdirSync(path.join(copy, '.plugin-cache'))
     const bundle = path.join(copy, '.plugin-cache', 'p.mjs')
     fs.writeFileSync(bundle, "import { probe, binding } from '#probe'\nconsole.log(probe, binding)\n")
@@ -177,7 +342,7 @@ describe('stage_plugin_source', () => {
 
   // ca9bfc2bc's first deploy: src/lib/sqlite.ts imports ../../packages/plugin-api, which
   // the copy lacked, so an installed plugin failed its pre-kill check. Every top-level dir
-  // a src/ file reaches by a relative import must be staged (node_modules is linked).
+  // a src/ file reaches by a relative import must be staged (node_modules is copied).
   it('stages every top-level directory src/ imports from', () => {
     const repoRoot = path.join(import.meta.dirname, '..', '..')
     const reached = new Set<string>()
@@ -200,23 +365,28 @@ describe('stage_plugin_source', () => {
     for (const top of reached) expect(staged, `src/ imports from ${top}/`).toContain(top)
   })
 
-  it('stages nothing when the deploy builds the serve root itself', () => {
+  // `bun run dev:prod` builds the serve root itself: its plugins get the same snapshot.
+  it('stages a snapshot too when the deploy builds the serve root itself', () => {
     const root = tmp()
     fs.mkdirSync(path.join(root, 'src', 'integrations'), { recursive: true })
-    fs.mkdirSync(path.join(root, 'node_modules'))
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'x', type: 'module' }))
+    fs.mkdirSync(path.join(root, 'packages'))
+    fakePackage(path.join(root, 'node_modules'), 'chalkish')
     const stage = path.join(root, 'stage')
     fs.mkdirSync(stage)
-    const r = bash([fn('clone_copy'), dirsLine(), fn('stage_plugin_source'), `REPO_ROOT='${root}'`, `SERVE_ROOT='${root}'`,
-      `stage_plugin_source '${stage}'`].join('\n'))
+    const r = bash(stageScript(root, root, stage))
     expect(r.status, r.stderr).toBe(0)
-    expect(fs.readdirSync(stage)).toEqual([])
+    const copy = path.join(stage, 'plugin-source')
+    expect(fs.readFileSync(path.join(stage, '.walnut-plugin-source'), 'utf-8').trim()).toBe(copy)
+    fs.rmSync(path.join(root, 'node_modules'), { recursive: true, force: true })
+    expect(runBundle(copy, "import { mark } from 'chalkish'\nconsole.log(mark)\n").stdout).toBe('chalkish')
   })
 })
 
 describe('rollback_to_lkg', () => {
   function harness(root: string, lkg: string): string {
     const checker = program(path.join(root, 'check-runtime'), 'printf "CHECK %s\\n" "$*"; exit "${ROLLBACK_CHECK_EXIT:-0}"')
-    return [fn('clone_copy'), fn('carry_plugin_source'), fn('stage_lkg_for_rollback'), fn('lkg_file'), fn('rollback_to_lkg'),
+    return [fn('clone_copy'), depsFns(), fn('carry_plugin_source'), fn('stage_lkg_for_rollback'), fn('lkg_file'), fn('rollback_to_lkg'),
       'launch_server() { printf "LAUNCH %s\\n" "$*"; }',
       'wait_for_config_ready() { return 0; }',
       `BUN_BIN='${checker}'`, `REPO_ROOT='${root}/repo'`, `REHEARSAL_HOME='${root}/data'`,
@@ -230,6 +400,8 @@ describe('rollback_to_lkg', () => {
     program(path.join(lkg, 'dist-bin', 'walnut-darwin-arm64'))
     program(path.join(lkg, 'dist-bin', 'walnut-linux-x64'))
     fs.mkdirSync(path.join(lkg, 'runtime', 'id-1', 'dist'), { recursive: true })
+    fs.mkdirSync(path.join(lkg, 'plugin-source', 'src', 'integrations'), { recursive: true })
+    fakePackage(path.join(lkg, 'plugin-source', 'node_modules'), 'chalkish')
     const r = bash(harness(root, lkg))
     expect(r.status, r.stderr).toBe(0)
     const m = /^LAUNCH (.+)$/m.exec(r.stdout)
@@ -242,6 +414,10 @@ describe('rollback_to_lkg', () => {
     expect(fs.existsSync(path.join(stage, 'runtime', 'id-1', 'dist'))).toBe(true)
     expect(fs.existsSync(path.join(stage, 'dist-bin', 'walnut-linux-x64'))).toBe(true)
     expect(fs.readFileSync(path.join(stage, '.walnut-source-root'), 'utf-8').trim()).toBe(`${root}/serve`)
+    // Production is down: the plugin dependencies are borrowed from the LKG, not copied
+    // (unborrow_lkg_deps gives it its own copy before the LKG is replaced).
+    expect(fs.readFileSync(path.join(stage, '.walnut-plugin-source'), 'utf-8').trim()).toBe(path.join(stage, 'plugin-source'))
+    expect(fs.readlinkSync(path.join(stage, 'plugin-source', 'node_modules'))).toBe(path.join(lkg, 'plugin-source', 'node_modules'))
   })
 
   it('reads the old temp snapshot until the first one lands off the temp dir, and stages it too', () => {

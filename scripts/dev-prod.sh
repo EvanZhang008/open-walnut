@@ -827,19 +827,23 @@ stage_source_root() {
   stage_plugin_source "$STAGE_DIR"
 }
 
-# External plugins import Walnut's own modules from source (plugin-source-tree.ts).
-# From the serve root they read whatever is on disk there, other agents' half-
-# written files included (2026-10-30: a plugin check refused a deploy because the
-# checkout's engine-switch.ts imported a module not written yet; a restart in that
-# minute would have loaded no external plugin). A committed deploy (REPO_ROOT is
-# its clean clone, removed afterwards) stages its own src/ for them (and the
-# packages/ src/ imports from), with its package.json (a bundle's `#ws` import and the version resolve through it) and the
-# serve root's node_modules, and names it in .walnut-plugin-source. Best effort: without
-# it plugins read the serve root as before.
+# External plugins import Walnut's own modules from source (plugin-source-tree.ts), and
+# the npm packages that source and the plugins import from the node_modules beside it.
+# From the serve root they read whatever is on disk there, other agents' half-written
+# files included (2026-10-30: a plugin check refused a deploy because the checkout's
+# engine-switch.ts imported a module not written yet; a restart in that minute would
+# have loaded no external plugin), and a node_modules another task reinstalls at any
+# time (2026-11-17 22:39 UTC: a plugin store update reloaded an external tracker plugin
+# while the checkout ran an install, chalk was missing, and the whole update rolled
+# back). So every deploy stages its own copy: the built src/ (and the packages/ src/
+# imports from), its package.json (a bundle's `#ws` import and the version resolve
+# through it), and a snapshot of the build's own node_modules (clone_deps), and names it
+# in .walnut-plugin-source. Nothing in it links back to a working directory. Best effort:
+# without it plugins read the serve root as before.
 PLUGIN_SOURCE_DIRS="src packages"
 stage_plugin_source() {
   local dir="$1"
-  [[ "$REPO_ROOT" != "$SERVE_ROOT" && -d "$REPO_ROOT/src/integrations" && -d "$SERVE_ROOT/node_modules" ]] || return 0
+  [[ -d "$REPO_ROOT/src/integrations" && -d "$REPO_ROOT/node_modules" ]] || return 0
   rm -rf "$dir/plugin-source" "$dir/.walnut-plugin-source" 2>/dev/null || true
   local part ok=1
   mkdir -p "$dir/plugin-source" || ok=0
@@ -851,25 +855,101 @@ stage_plugin_source() {
   done
   if [[ "$ok" == 1 ]] \
     && cp "$REPO_ROOT/package.json" "$dir/plugin-source/package.json" \
-    && ln -s "$SERVE_ROOT/node_modules" "$dir/plugin-source/node_modules" \
+    && clone_deps "$REPO_ROOT/node_modules" "$dir/plugin-source/node_modules" "$REPO_ROOT/packages" \
     && printf '%s\n' "$dir/plugin-source" > "$dir/.walnut-plugin-source"; then
     return 0
   fi
   rm -rf "$dir/plugin-source" "$dir/.walnut-plugin-source" 2>/dev/null || true
-  echo "Warning: could not stage the commit's source for plugins; they read $SERVE_ROOT/src." >&2
+  echo "Warning: could not stage the built source and dependencies for plugins; they read $SERVE_ROOT/src and its node_modules." >&2
   return 0
 }
 
-# The staged plugin source of $1 (a stage or the LKG) carried into $2, renamed to it.
+# A copy of the node_modules $1 at $2 that nothing else changes. Each top-level entry is
+# followed to the real package (a committed deploy's node_modules links into its
+# dependency mirror, which scripts/deploy-committed.sh prunes), except a workspace
+# package of $3 (packages/), which links to the staged packages/ beside it: one copy, the
+# one src/ imports by relative path. Copy-on-write on APFS (about 20 s for 48k files on
+# the maintainer's Mac) and where Linux can reflink, hard links elsewhere on one volume
+# (an install unlinks and rewrites files, never edits them in place), else a full copy.
+clone_deps() {
+  local src="$1" dst="$2" pkgs up="${4:-}" e name real
+  pkgs="$(cd -P "$3" 2>/dev/null && pwd -P || printf '%s' "$3")"
+  mkdir "$dst" || return 1
+  for e in "$src"/* "$src"/.bin; do
+    [[ -d "$e" ]] || continue   # a broken link, a stray file, an empty glob
+    name="${e##*/}"
+    if [[ "$name" == @* && ! -L "$e" ]]; then
+      clone_deps "$e" "$dst/$name" "$pkgs" "../$up" || return 1
+      continue
+    fi
+    real="$(cd -P "$e" && pwd -P)" || return 1
+    if [[ "$real" == "$pkgs"/* ]]; then
+      ln -s "../${up}packages/${real#"$pkgs"/}" "$dst/$name" || return 1
+    else
+      clone_dir "$real" "$dst/$name" || return 1
+    fi
+  done
+}
+
+clone_dir() {
+  if [[ "${CLONE_OS:=$(uname -s)}" == "Darwin" ]]; then
+    cp -Rc "$1" "$2" 2>/dev/null && return 0
+    rm -rf "$2"; cp -R "$1" "$2"; return
+  fi
+  cp -a --reflink=always "$1" "$2" 2>/dev/null && return 0
+  rm -rf "$2"
+  cp -al "$1" "$2" 2>/dev/null && return 0
+  rm -rf "$2"; cp -a "$1" "$2"
+}
+
+# The staged plugin source of $1 (a stage or the LKG) carried into $2, renamed to $3 (or
+# $2). Its dependencies are copied again (clone_deps), so the copy outlives $1; with
+# $4 = borrow they are linked instead: a rollback stage, made while production is down,
+# borrows the LKG's, and snapshot_lkg gives it its own before replacing the LKG (unborrow_lkg_deps).
 carry_plugin_source() {
   [[ -d "$1/plugin-source/src" ]] || return 0
-  if clone_copy "$1/plugin-source" "$2/plugin-source" \
-    && rm -rf "$2/plugin-source/.plugin-cache" \
-    && printf '%s\n' "${3:-$2}/plugin-source" > "$2/.walnut-plugin-source"; then
+  local from="$1/plugin-source" to="$2/plugin-source" e ok=1
+  mkdir -p "$to" || ok=0
+  for e in "$from"/*; do
+    [[ "$ok" == 1 ]] || break
+    [[ "${e##*/}" == node_modules ]] && continue
+    clone_copy "$e" "$to/${e##*/}" || ok=0
+  done
+  # No dependencies (an old stage's link whose checkout is gone): no marker either, so the
+  # loader reads the serve root instead of a copy that resolves no package.
+  [[ -d "$from/node_modules" ]] || ok=0
+  if [[ "$ok" == 1 ]]; then
+    if [[ "${4:-}" == borrow ]]; then
+      ln -s "$from/node_modules" "$to/node_modules" || ok=0
+    else
+      clone_deps "$from/node_modules" "$to/node_modules" "$from/packages" || ok=0
+    fi
+  fi
+  if [[ "$ok" == 1 ]] && printf '%s\n' "${3:-$2}/plugin-source" > "$2/.walnut-plugin-source"; then
     return 0
   fi
-  rm -rf "$2/plugin-source" "$2/.walnut-plugin-source" 2>/dev/null || true
+  rm -rf "$to" "$2/.walnut-plugin-source" 2>/dev/null || true
   return 0
+}
+
+# A rollback stage borrows the LKG's plugin dependencies (carry_plugin_source borrow,
+# only stage_lkg_for_rollback does). Before the LKG is replaced, each such stage that
+# something still runs from (its server, or the daemon and session children it left,
+# which can live for days) gets its own copy in place of the link.
+unborrow_lkg_deps() {
+  local s link lkg_nm
+  lkg_nm="$(cd -P "$LKG_DIR/plugin-source/node_modules" 2>/dev/null && pwd -P)" || return 0
+  for s in "$STAGE_ROOT"/open-walnut-stage.rollback.*; do
+    link="$s/plugin-source/node_modules"
+    [[ -L "$link" && "$(cd -P "$link" 2>/dev/null && pwd -P)" == "$lkg_nm" ]] || continue
+    stage_has_live_process "$s" >/dev/null || continue   # nothing runs: the reaper takes it
+    rm -rf "$link.new"
+    if clone_deps "$link" "$link.new" "$LKG_DIR/plugin-source/packages" && rm "$link" && mv "$link.new" "$link"; then
+      continue
+    fi
+    rm -rf "$link.new"
+    return 1
+  done
 }
 
 # The compiled files this deploy built (only those newer than the build's
@@ -2004,6 +2084,10 @@ snapshot_lkg() {
     echo "Keeping the last-known-good build at $LKG_DIR: process $live still runs from it, so this build is not snapshotted." >&2
     return 0
   fi
+  if ! unborrow_lkg_deps; then
+    echo "Keeping the last-known-good build at $LKG_DIR: a rollback stage that runs on its plugin dependencies could not get its own copy, so this build is not snapshotted." >&2
+    return 0
+  fi
   rm -rf "$LKG_DIR.tmp" 2>/dev/null || true
   mkdir -p "$LKG_DIR.tmp" || return 1
   clone_copy "$STAGE_DIR/dist-bin" "$LKG_DIR.tmp/dist-bin" || return 1
@@ -2065,7 +2149,9 @@ stage_lkg_for_rollback() {
   fi
   # Keeps "Fix Walnut" pointed at this checkout, as from the snapshot itself.
   printf '%s\n' "$SERVE_ROOT" > "$dir/.walnut-source-root" || { rm -rf "$dir"; return 1; }
-  carry_plugin_source "$src" "$dir"
+  # Production is down here: the rollback borrows the LKG's dependencies instead of
+  # copying 48k files (unborrow_lkg_deps copies them before the LKG is replaced).
+  carry_plugin_source "$src" "$dir" "" borrow
   printf '%s' "$dir"
 }
 
