@@ -60,6 +60,9 @@ export interface UseSessionHistoryReturn {
    *  a degraded payload, an error), and at once for an offscreen column, which
    *  skips the server read until it is visible. */
   firstCheckPending: boolean;
+  /** An older page the reader asked for ("Load earlier turns") is on its way, or waits for
+   *  the open's own full read to land first. The button reads this, never phase2Pending. */
+  olderLoading: boolean;
   error: string | null;
   /** Non-null when the rendered history is the server's LAST-GOOD parse (live
    *  read failed — SSH down / daemon timeout). Value = underlying reason.
@@ -157,6 +160,11 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   const [messages, setMessages] = useState<SessionHistoryMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [phase2Pending, setPhase2Pending] = useState(false);
+  const phase2PendingRef = useRef(false);
+  phase2PendingRef.current = phase2Pending;
+  const [olderLoading, setOlderLoading] = useState(false);
+  /** "Load earlier turns" clicked while the open's full read was still on its way. */
+  const olderQueuedRef = useRef(false);
   const [firstCheckPending, setFirstCheckPending] = useState(sessionId !== null);
   const [error, setError] = useState<string | null>(null);
   // Server served its last-good parse because the live read failed (SSH down /
@@ -872,13 +880,17 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   const olderWindowedRef = useRef(false);
   olderWindowedRef.current = olderWindowed;
   const loadFullHistory = useCallback(() => {
-    if (!sessionId || loadingFullRef.current
-      || (baseOffsetRef.current === 0 && !olderWindowedRef.current)) return;
+    if (!sessionId || loadingFullRef.current) return;
+    // The open's full read first: what it brings decides where "older" starts. The click is
+    // kept and runs when that read lands (the effect below), so the button never waits disabled.
+    if (phase2PendingRef.current) { olderQueuedRef.current = true; setOlderLoading(true); return; }
+    if (baseOffsetRef.current === 0 && !olderWindowedRef.current) { setOlderLoading(false); return; }
     loadingFullRef.current = true;
+    setOlderLoading(true);
     setPhase2Pending(true);
     const settle = () => {
       loadingFullRef.current = false;
-      if (sessionIdRef.current === sessionId) { setPhase2Pending(false); setFirstCheckPending(false); }
+      if (sessionIdRef.current === sessionId) { setPhase2Pending(false); setFirstCheckPending(false); setOlderLoading(false); }
     };
     // A transcript past the full read's byte ceiling has no "whole history" to
     // fetch: the server only ever serves its tail. Its older part comes a page at
@@ -1032,5 +1044,12 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   // Only the gaps still inside the rows, with their sides read from them.
   const shownGaps = useMemo(() => liveGaps(messages, gaps), [messages, gaps]);
 
-  return { messages, loading, phase2Pending, firstCheckPending, error, stale: staleBanner, forkBoundaryIndex, olderHidden, olderWindowed, olderUnavailable, olderUnavailableWhy, olderPageSeq, loadFullHistory, initialUserText, gaps: shownGaps, gapStatus, fillHistoryGap, loadingFrom };
+  useEffect(() => { olderQueuedRef.current = false; setOlderLoading(false); }, [sessionId]);
+  useEffect(() => {
+    if (phase2Pending || !olderQueuedRef.current) return;
+    olderQueuedRef.current = false;
+    loadFullHistory();
+  }, [phase2Pending, loadFullHistory]);
+
+  return { messages, loading, phase2Pending, firstCheckPending, olderLoading, error, stale: staleBanner, forkBoundaryIndex, olderHidden, olderWindowed, olderUnavailable, olderUnavailableWhy, olderPageSeq, loadFullHistory, initialUserText, gaps: shownGaps, gapStatus, fillHistoryGap, loadingFrom };
 }

@@ -883,7 +883,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // A reader shows the publisher's history; until the publisher's first commit it
   // is still loading (never an empty session).
   const history = readTimeline ? (shared?.history ?? { ...ownHistory, loading: true, firstCheckPending: true }) : ownHistory;
-  const { messages: historyRows, loading, phase2Pending, firstCheckPending, error, stale, loadingFrom, forkBoundaryIndex: loadedForkBoundary, olderHidden, olderWindowed, olderUnavailable, olderUnavailableWhy, olderPageSeq, loadFullHistory, gaps, gapStatus, fillHistoryGap } = history;
+  const { messages: historyRows, loading, phase2Pending, firstCheckPending, olderLoading, error, stale, loadingFrom, forkBoundaryIndex: loadedForkBoundary, olderHidden, olderWindowed, olderUnavailable, olderUnavailableWhy, olderPageSeq, loadFullHistory, gaps, gapStatus, fillHistoryGap } = history;
   // Rows still in Claude Code's queue have no place yet (stream/chat-order.ts):
   // the bubbles show them, after the live output, until the CLI takes them.
   const { rows: loadedMessages, queued: queuedRows } = useMemo(() => splitQueuedTail(historyRows), [historyRows]);
@@ -929,7 +929,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     ? { history: ownHistory, stream: { blocks: ownStream.blocks, isStreaming: ownStream.isStreaming, completedLen: ownStream.completedLen } }
     : null),
   // eslint-disable-next-line react-hooks/exhaustive-deps -- the fields, not the hook's fresh object
-  [publishTimeline, ownHistory.messages, ownHistory.loading, ownHistory.phase2Pending, ownHistory.firstCheckPending, ownHistory.error,
+  [publishTimeline, ownHistory.messages, ownHistory.loading, ownHistory.phase2Pending, ownHistory.firstCheckPending, ownHistory.olderLoading, ownHistory.error,
     ownHistory.stale, ownHistory.loadingFrom, ownHistory.forkBoundaryIndex, ownHistory.olderHidden, ownHistory.olderWindowed,
     ownHistory.olderUnavailable, ownHistory.olderUnavailableWhy, ownHistory.olderPageSeq, ownHistory.gaps, ownHistory.gapStatus,
     ownStream.blocks, ownStream.isStreaming, ownStream.completedLen]);
@@ -1519,6 +1519,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const shrinkOwed = useRef(0);
   const firstScrollDone = useRef(false);
   const initialLoadDone = useRef(false);  // true after Phase 2 completes for the first time
+  /** The reader scrolled, dragged, touched or keyed in this open's timeline while its first
+   *  refresh ran: the refresh no longer forces the bottom (2026-11-17, the user: after a click it
+   *  "spends many seconds to refresh"; the forced follow pulled a reader who had scrolled up back
+   *  down when the refresh landed). */
+  const readerTookOver = useRef(false);
   const prevOptimisticLen = useRef(0);
   // Read only by the pills at the bottom (TimelineBottomPills), never by this render.
   const scrollArrow = useFlagStore();
@@ -1621,6 +1626,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     resetSidRef.current = sessionId;
     firstScrollDone.current = false;
     initialLoadDone.current = false;
+    readerTookOver.current = false;
     ignoreScrollUntil.current = 0;
     setShowScrollArrow(false);
     if (scrollRafId.current !== null) { cancelAnimationFrame(scrollRafId.current); scrollRafId.current = null; }
@@ -2938,7 +2944,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const phase2PendingRef = useRef(phase2Pending);
   useEffect(() => { phase2PendingRef.current = phase2Pending; }, [phase2Pending]);
   const debouncedScroll = useCallback((reason: string) => {
-    const forceScroll = phase2PendingRef.current && !initialLoadDone.current && !landingOwnedRef.current();
+    const forceScroll = phase2PendingRef.current && !initialLoadDone.current && !landingOwnedRef.current() && !readerTookOver.current;
     if (!forceScroll && !isAtBottom.current) return;
     // Suppress resize-induced scroll events during debounce window
     ignoreScrollUntil.current = Date.now() + 350;
@@ -2946,7 +2952,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     resizeTimerRef.current = setTimeout(() => {
       resizeTimerRef.current = null;
       const el = containerRef.current;
-      const force = phase2PendingRef.current && !initialLoadDone.current && !landingOwnedRef.current();
+      const force = phase2PendingRef.current && !initialLoadDone.current && !landingOwnedRef.current() && !readerTookOver.current;
       if (!el || (!force && !isAtBottom.current)) {
         if (!isAtBottom.current && !force) scrollLog('debounced', `SKIP(${reason})`, el);
         return;
@@ -2993,22 +2999,24 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const el0 = containerRef.current;
     let stopped = false;
     // Wheel-down at the bottom is not reading intent; only an upward tick is.
-    const onWheel = (e: WheelEvent) => { if (e.deltaY < 0) stop(); };
+    const onWheel = (e: WheelEvent) => { if (e.deltaY < 0) takeOver(); };
+    // Real input: the reader owns the place from now on, for the forced follows too.
+    function takeOver() { readerTookOver.current = true; stop(); }
     function stop() {
       stopped = true;
       if (raf !== null) { cancelAnimationFrame(raf); raf = null; }
       el0?.removeEventListener('wheel', onWheel);
-      el0?.removeEventListener('touchmove', stop);
-      el0?.removeEventListener('pointerdown', stop);
-      el0?.removeEventListener('keydown', stop);
+      el0?.removeEventListener('touchmove', takeOver);
+      el0?.removeEventListener('pointerdown', takeOver);
+      el0?.removeEventListener('keydown', takeOver);
       el0?.removeEventListener(READER_SCROLL_EVENT, stop);
     }
     // A landing the reader owns (the phone's turn start, a restored place).
     el0?.addEventListener(READER_SCROLL_EVENT, stop);
     el0?.addEventListener('wheel', onWheel, { passive: true });
-    el0?.addEventListener('touchmove', stop, { passive: true });
-    el0?.addEventListener('pointerdown', stop, { passive: true }); // scrollbar drag
-    el0?.addEventListener('keydown', stop, { passive: true });
+    el0?.addEventListener('touchmove', takeOver, { passive: true });
+    el0?.addEventListener('pointerdown', takeOver, { passive: true }); // scrollbar drag
+    el0?.addEventListener('keydown', takeOver, { passive: true });
     const pin = () => {
       raf = null;
       if (stopped) return;
@@ -3127,7 +3135,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // stuck at the top. During initial loading, user hasn't meaningfully scrolled up.
   useLayoutEffect(() => {
     if (!containerRef.current || messages.length === 0) return;
-    const forceScroll = phase2Pending && !initialLoadDone.current && !landingOwnedRef.current(); // initial load only
+    const forceScroll = phase2Pending && !initialLoadDone.current && !landingOwnedRef.current() && !readerTookOver.current; // initial load only, until the reader moves
     if (!forceScroll && !isAtBottom.current) return;
     // Selection wins over follow-bottom even on forced initial-load scrolls —
     // the user selecting means they're reading, not waiting for the bottom.
@@ -6955,7 +6963,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         {!onQuestionPage && hiddenOnPage === 0 && (olderHidden > 0 || olderWindowed) && (
           <button
             className="session-show-earlier-btn"
-            disabled={phase2Pending}
+            // Clickable while the open's own refresh runs (2026-11-17): the hook keeps the
+            // click and fetches the older page once that refresh lands.
+            disabled={olderLoading}
             onClick={() => {
               isAtBottom.current = false;
               const el = containerRef.current;
@@ -6963,7 +6973,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               loadFullHistory();
             }}
           >
-            {phase2Pending
+            {olderLoading
               ? 'Loading earlier turns…'
               : 'Load earlier turns'}
           </button>

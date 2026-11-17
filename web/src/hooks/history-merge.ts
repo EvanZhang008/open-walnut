@@ -113,17 +113,33 @@ function rowKey(m: RowIdentity): string | undefined {
 }
 
 /**
- * Keep what the reader loaded ABOVE a fresh windowed tail. The incoming head is
- * looked up in what is held: found means the two touch, so the held rows before
- * it are the tail's true predecessors and stay; not found (the window slid past
- * everything held, or history was rewritten) means the gap is unknown and the
- * tail stands alone, which only costs a click on "Load earlier".
+ * Keep what the reader loaded ABOVE a fresh windowed tail. The first incoming row that is
+ * also held marks where the two touch: the held rows before it are the tail's true
+ * predecessors and stay. No incoming row held (the window slid past everything held, or
+ * history was rewritten) means the gap is unknown and the tail stands alone, which only
+ * costs a click on "Load earlier".
+ *
+ * The match is not only the head (2026-11-17: an open of a 49 MB session showed 207 rows, its
+ * full read answered a 126-row window and the 81 rows above it vanished). A message the
+ * window's start cuts through is parsed from its later lines only, so the tail's head row
+ * carries another timestamp than the held one: its key is held nowhere. Rows of the tail
+ * before the first match are those halves; held rows of the same messages just above the
+ * match give way to them, so nothing shows twice.
  */
 export function stitchHeldOlder<T extends RowIdentity>(held: readonly T[], incoming: readonly T[]): T[] {
-  const head = incoming.length > 0 ? rowKey(incoming[0]) : undefined;
-  if (!head) return incoming as T[];
-  const at = held.findIndex((m) => rowKey(m) === head);
-  return at > 0 ? [...held.slice(0, at), ...incoming] : incoming as T[];
+  if (held.length === 0 || incoming.length === 0) return incoming as T[];
+  const heldAt = new Map<string, number>();
+  held.forEach((m, i) => { const k = rowKey(m); if (k && !heldAt.has(k)) heldAt.set(k, i); });
+  for (let j = 0; j < incoming.length; j++) {
+    const k = rowKey(incoming[j]);
+    const at = k ? heldAt.get(k) : undefined;
+    if (at === undefined) continue;
+    const headIds = new Set(incoming.slice(0, j).map((m) => m.msgId).filter((id): id is string => !!id));
+    let cut = at;
+    while (cut > 0 && headIds.has(held[cut - 1].msgId ?? '')) cut--;
+    return cut > 0 ? [...held.slice(0, cut), ...incoming] : incoming as T[];
+  }
+  return incoming as T[];
 }
 
 export function mergeHistoryBackfill<T extends RowIdentity>(held: readonly T[], incoming: T[]): T[] {

@@ -96,4 +96,59 @@ test.describe('First open — scroll up while the full history is still loading'
     const gapAfterPhase2 = await history.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
     expect(gapAfterPhase2).toBeGreaterThan(200);
   });
+
+  test('a reopen whose refresh is slow: Load earlier stays clickable and the refresh never pulls a reader who scrolled up (2026-11-17)', async ({ page }) => {
+    // The first visit keeps the last 200 of 320 rows (IndexedDB); the reopen paints them at
+    // once and refreshes in the background, and that refresh is held until the test lets it go.
+    const all = Array.from({ length: TOTAL + 5 }, (_, i) => row(i));
+    // The session record (and a history route this test's own, registered after it, overrides).
+    await mockSession(page, Promise.resolve());
+    let visit = 0;
+    let releaseRefresh: (() => void) | null = null;
+    const refreshGate = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    let refreshAsked: () => void = () => {};
+    const refreshStarted = new Promise<void>((resolve) => { refreshAsked = resolve; });
+    await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
+      const isStreams = route.request().url().includes('source=streams');
+      if (isStreams) {
+        await route.fulfill({ json: { messages: all.slice(TOTAL - 40, TOTAL), total: TOTAL, delta: false } });
+        return;
+      }
+      if (visit > 0) { refreshAsked(); await refreshGate; }
+      // The refresh brings 5 new rows at the bottom.
+      const end = visit > 0 ? TOTAL + 5 : TOTAL;
+      await route.fulfill({ json: { messages: all.slice(end - 200, end), total: end, cursor: end, delta: false } });
+    });
+
+    await page.goto(`/sessions?id=${SESSION_ID}`);
+    const history = page.locator('.session-history');
+    await expect(history).toContainText(`History message ${TOTAL - 1}`, { timeout: 15000 });
+    await expect(history.locator('.session-show-earlier-btn')).toHaveText('Load earlier turns', { timeout: 15000 });
+    // Let the visit's copy reach IndexedDB, then reopen.
+    await page.waitForTimeout(1500);
+    visit = 1;
+    await page.reload();
+    await expect(history).toContainText(`History message ${TOTAL - 1}`, { timeout: 15000 });
+
+    // The refresh is on its way (asked, not answered): the button can be clicked.
+    await refreshStarted;
+    const earlier = history.locator('.session-show-earlier-btn');
+    await expect(earlier).toBeVisible();
+    await expect(earlier).toBeEnabled();
+
+    const box = (await history.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    for (let i = 0; i < 12; i++) {
+      await page.mouse.wheel(0, -40);
+      await page.waitForTimeout(40);
+    }
+    await expect.poll(() => history.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeGreaterThan(200);
+
+    // The refresh lands with new rows: the reader stays up where they were reading.
+    releaseRefresh!();
+    await expect(history).toContainText(`History message ${TOTAL + 4}`, { timeout: 15000 });
+    await page.waitForTimeout(600);
+    const gapAfter = await history.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+    expect(gapAfter).toBeGreaterThan(200);
+  });
 });

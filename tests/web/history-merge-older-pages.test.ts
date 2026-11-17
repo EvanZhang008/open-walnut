@@ -146,3 +146,50 @@ describe('foldFullPayload', () => {
     if (plan.kind === 'merged') expect(plan.messages).toHaveLength(302);
   });
 });
+
+describe('a full read never takes away rows already shown (2026-11-17)', () => {
+  // The shape of the open that lost rows: 207 rows shown (81 older-page rows above a
+  // 126-row window), the full read's 126-row window opens with the later half of a message
+  // its start cut through, parsed with another timestamp than the held row of that message.
+  function shapes() {
+    const held = range(0, 207);
+    const cutMsg = held[81]!;
+    const half = { ...cutMsg, timestamp: new Date(Date.parse(cutMsg.timestamp!) + 500).toISOString(), text: 'later half' };
+    return { held, windowAt81: [half, ...range(82, 207)], windowAt81Grown: [half, ...range(82, 212)] };
+  }
+
+  it('the seam half heading the window still finds where it touches the held rows', () => {
+    const { held, windowAt81 } = shapes();
+    const out = stitchHeldOlder(held, windowAt81);
+    expect(out).toHaveLength(207);
+    expect(ids(out)).toEqual(ids(held));
+    expect(out[81]!.text).toBe('later half');
+  });
+
+  it.each([
+    ['the same window', 'windowAt81'],
+    ['a window grown by a turn', 'windowAt81Grown'],
+  ] as const)('a windowed full read of %s keeps every shown row (foldFullPayload)', (_name, key) => {
+    const s = shapes();
+    const incoming = s[key];
+    const folded = foldFullPayload(s.held, { messages: incoming, cursor: incoming.length, windowed: true });
+    expect(folded.messages.length).toBeGreaterThanOrEqual(s.held.length);
+    const shown = new Set(folded.messages.map((m) => m.msgId));
+    expect(s.held.every((m) => shown.has(m.msgId))).toBe(true);
+    expect(folded.kept).toBe(81);
+  });
+
+  it('for every window start inside what is held, and every head row cut or not, no shown row is lost', () => {
+    const held = range(0, 120);
+    for (let start = 1; start < 110; start++) {
+      for (const cut of [false, true]) {
+        const head = cut ? { ...held[start]!, timestamp: new Date(Date.parse(held[start]!.timestamp!) + 250).toISOString() } : held[start]!;
+        const incoming = [head, ...range(start + 1, 125)];
+        const folded = foldFullPayload(held, { messages: incoming, cursor: incoming.length, windowed: true });
+        const shown = new Set(folded.messages.map((m) => m.msgId));
+        expect(held.filter((m) => !shown.has(m.msgId)).map((m) => m.msgId), `start ${start} cut ${cut}`).toEqual([]);
+        expect(new Set(folded.messages.map((m) => `${m.msgId}|${m.timestamp}`)).size).toBe(folded.messages.length);
+      }
+    }
+  });
+});
