@@ -1,6 +1,8 @@
 /**
  * Playwright browser test (WebKit, the Mac app's engine): a session the model's safeguards refuse
- * twice in a row moves to another model by itself, and its chat says which model and why.
+ * twice in a row moves to another model by itself, and its chat says which model and why. That model
+ * is for the turn it was switched in for (2026-11-16, model-restore.ts): once the switched model has
+ * answered, the session goes back to its own model and says so.
  *
  * Reported 2026-11-11: "API Error: Opus 5.5's safeguards flagged this message" came back turn after
  * turn and the session stayed stuck until the user typed /model. The fixture's mock CLI refuses
@@ -32,10 +34,19 @@ test('two refused turns: Walnut switches the model, says so in the chat, and the
   const { sessionId } = (await launch).postDataJSON() as { sessionId: string }
   const session = page.locator(`.session-panel[data-session-id="${sessionId}"]`)
   await expect(session).toBeVisible({ timeout: 30_000 })
+  const currentModel = async () => {
+    const r = await page.request.get(`/api/v1/sessions/${sessionId}/model-options`)
+    return ((await r.json()) as { current?: string | null }).current ?? ''
+  }
 
   // The first refusal: Claude Code's own error line, nothing switched yet.
   await expect(session.getByText(/safeguards flagged this message/).first()).toBeVisible({ timeout: 30_000 })
   await expect(session.getByText(/Walnut switched this session/)).toHaveCount(0)
+  // The session's own model, the one it goes back to. It never picked one: its own is the
+  // engine's default, which reads as the model the CLI reports now.
+  await expect.poll(currentModel, { timeout: 15_000 }).not.toBe('')
+  const own = await currentModel()
+  expect(own).not.toMatch(/opus/i)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/01-first-refusal.png` })
 
   // The person tries again in the composer: refused a second time, and Walnut moves the session.
@@ -46,11 +57,13 @@ test('two refused turns: Walnut switches the model, says so in the chat, and the
   await expect(session.getByText(/Walnut switched this session from .+ to Opus/).first()).toBeVisible({ timeout: 45_000 })
   await page.screenshot({ path: `${SCREENSHOT_DIR}/02-switched.png` })
 
-  // The new model answers the resent words: the session ends its turn clean, and its record says Opus.
-  await expect.poll(async () => {
-    const r = await page.request.get(`/api/v1/sessions/${sessionId}/model-options`)
-    return ((await r.json()) as { current?: string }).current ?? ''
-  }, { timeout: 45_000 }).toMatch(/opus/i)
+  // Opus answers the resent words: that turn ends clean on Opus (the switch back follows only a
+  // clean turn on the model it switched to), and the session says it is back on its own model.
+  await expect(session.getByText(/Walnut moved this session back to .+: \S*opus\S* was for one turn only/i).first()).toBeVisible({ timeout: 45_000 })
   await expect(session.getByText(/continue with the flag registry/).first()).toBeVisible()
   await page.screenshot({ path: `${SCREENSHOT_DIR}/03-answered.png` })
+  // Its record follows: back on the session's own model, not Opus. The switch back asks for the
+  // engine's default by the menu's Default row ('default', model-restore.ts ENGINE_DEFAULT_MODEL).
+  const ownAgain = new RegExp(`^(?:default|${own.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})$`)
+  await expect.poll(currentModel, { timeout: 45_000 }).toMatch(ownAgain)
 })
