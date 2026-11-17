@@ -246,8 +246,10 @@ describe('one rule in every reader: the TS CLI, the JS twin CLI and both user sh
       expect(twin).toMatch(/drain failed[^\n]*\n\s+\/\/[^\n]*\n\s+releaseGatewayRelays\(\);?\n\s+persistRegistry\(\)/)
       // ...with the mark fresh again when there is one to answer, and only then (a handover has none).
       expect(twin).toMatch(/function releaseGatewayRelays\(\)[^{]*\{\n\s+if \(gatewayRelayPending\.size === 0\) return;?\n\s+\/\/[^\n]*\n\s+noteRestarting\(\)/)
-      // A relay's answer is taken while it drains, never refused as new work.
-      expect(twin).toMatch(/cmd\.cmd === 'gateway-result' \? work\(\) : daemonCommands\.admit\(work\)/)
+      // A relay's answer, and a read of a resumable host_exec run, are taken while it drains,
+      // never refused as new work.
+      expect(twin).toMatch(/const free = cmd\.cmd === 'gateway-result' \|\| \(cmd\.cmd === 'exec\.read' && [^\n]*hostExec\.resumableJob\(cmd\.jobId\)\)/)
+      expect(twin).toMatch(/\(?free \? work\(\) : daemonCommands\.admit\(work\)\)?/)
     }
   })
 

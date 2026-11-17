@@ -93,6 +93,8 @@ function compileHandle(source: string, environment: Record<string, unknown>): (w
     servedWalnuts: { note: vi.fn() }, walnutScope: { askedHome: () => '' }, gatewayClientHomes: new WeakMap(),
     BRIDGE_ALLOWED_COMMANDS: new Set(), BRIDGE_SESSION_COMMANDS: new Set(), FOLLOWER_ALLOWED_COMMANDS: new Set(), LANE_ALLOWED_COMMANDS: new Set(),
     bridgeHearsSession: () => true, followerScope: () => false, safeSend: vi.fn(), sendError: vi.fn(), logMsg: vi.fn(),
+    // host_exec runs: none here is resumable, so every read is admitted like other work.
+    hostExec: { resumableJob: () => false },
     ...environment,
   }
   expect(missingNames(text, [...Object.keys(env), 'dispatchCommand']), 'names handleCommand reads that this run lacks').toEqual([])

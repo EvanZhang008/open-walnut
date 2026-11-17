@@ -91,6 +91,8 @@ function buildTwin(kind: Twin, initial: Pending | null = pending(), owner = '') 
     servedWalnuts: { note: vi.fn() },
     walnutScope: { askedHome: () => '' },
     gatewayClientHomes: new WeakMap(),
+    // host_exec runs: handleCommand asks whether an exec.read is a resumable run's; none here.
+    hostExec: { resumableJob: () => false },
   }
   const names = ['handleCommand', 'dispatchCommand', 'cmdSessionPermission', 'answerPermission', 'isJournalSid', 'sendOk', 'sendError', 'bridgeSpeaksFor', 'bridgeHomeOf', 'bridgeHearsSession', 'isServerClient']
   const code = names.map((name) => functionText(sources[kind], name)).join('\n')

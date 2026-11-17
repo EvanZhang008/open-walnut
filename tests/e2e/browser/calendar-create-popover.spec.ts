@@ -16,6 +16,7 @@
 import { devices, test, expect, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { calendarEmptySlotPoint, calendarHourPx } from './calendar-helpers'
+import { withCssColor } from './css-color'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.use({ viewport: { width: 1280, height: 860 } })
@@ -411,19 +412,11 @@ for (const theme of ['light', 'dark'] as const) {
     await page.mouse.click(slot.x, slot.y)
     await expect(popover(page)).toBeVisible()
     await page.locator('.cal-event-form-title').fill('Design review')
-    const report = await page.evaluate(() => {
+    const report = await page.evaluate(withCssColor((toRgba) => () => {
+      // Channels in 0..1 for the contrast sums below; the shared parser reads every form an engine computes.
       const parse = (c: string): [number, number, number, number] => {
-        const m = c.match(/rgba?\(([^)]+)\)/)
-        if (m) {
-          const p = m[1].split(/[\s,/]+/).filter(Boolean).map(Number)
-          return [p[0] / 255, p[1] / 255, p[2] / 255, p[3] ?? 1]
-        }
-        const s = c.match(/color\(srgb\s+([^)]+)\)/)
-        if (s) {
-          const p = s[1].split(/[\s/]+/).filter(Boolean).map(Number)
-          return [p[0], p[1], p[2], p[3] ?? 1]
-        }
-        return [0, 0, 0, 0]
+        const [r, g, b, a] = toRgba(c)
+        return [r / 255, g / 255, b / 255, a]
       }
       const over = (top: number[], base: number[]) => [0, 1, 2].map((i) => top[i] * top[3] + base[i] * (1 - top[3]))
       const lum = (c: number[]) => {
@@ -470,7 +463,7 @@ for (const theme of ['light', 'dark'] as const) {
         thumb: active.backgroundColor,
         thumbShadow: active.boxShadow,
       }
-    })
+    }))
     expect(report.dark).toBe(theme === 'dark')
     expect(report.blur).toMatch(/blur\(30px\)/)
     expect(report.arrowBlur).toMatch(/blur\(30px\)/)
