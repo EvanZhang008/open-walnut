@@ -92,7 +92,7 @@ export const SOURCE_CHECK_RULE =
 
 /** Which decisions are the user's, as both defaults say it. */
 const USER_KINDS_RULE =
-  'Only the user\'s own go to them: an outward message or post, spending, credentials, permissions, deleting cloud resources or data, '
+  'Just the user\'s own go to them: an outward message or post, spending, credentials, permissions, deleting cloud resources or data, '
   + 'a hard-to-reverse choice no rule covers, and a fact only they have; when you bring one, say which kind (Walnut checks). Undoing '
   + 'what an agent broke, choosing between reasonable options and anything reversible are never theirs.';
 

@@ -756,7 +756,7 @@ describe('/api/v1/org', () => {
       expect(siloPrompt).toContain('then the instructions the task "Sort the barn" wrote for your role (v')
       expect(siloPrompt).toMatch(/UTC; your user may change them\)/)
       expect(siloPrompt).toContain(firstLead)
-      expect(siloPrompt).toContain('where the two disagree, the default wins')
+      expect(siloPrompt).toContain('where they disagree, the default wins')
       expect(siloPrompt).toContain('rank below Walnut\'s rules, the team charter and anything your user tells you')
       // The CEO writes its own too, and its prompt says it wrote them.
       const main = (await api<{ task: { id: string } }>('POST', '/org/main', {})).json.task
