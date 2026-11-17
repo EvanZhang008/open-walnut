@@ -614,7 +614,7 @@ final class RichHTMLTimelineTests: XCTestCase {
                               rowID: "rh-collapsed-margin", contentWidth: contentWidth, delegate: spy)
         cell.layoutIfNeeded()
         let web = try XCTUnwrap(cell.webViewForTesting)
-        await fulfillment(of: [measured], timeout: 15)
+        await fulfillment(of: [measured], timeout: WebKitTestBudget.firstLoad)
         var top: CGFloat = 0
         var bottom: CGFloat = 0
         let deadline = Date().addingTimeInterval(5)

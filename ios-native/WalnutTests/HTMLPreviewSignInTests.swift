@@ -282,7 +282,7 @@ final class HTMLPreviewSignInTests: XCTestCase {
     }
 
     @MainActor
-    private func waitUntil(timeout: TimeInterval = 15, _ condition: () -> Bool) async throws {
+    private func waitUntil(timeout: TimeInterval = WebKitTestBudget.firstLoad, _ condition: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() {
             if Date() > deadline {

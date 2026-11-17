@@ -362,7 +362,7 @@ final class IslandStateTests: XCTestCase {
         let nav = Nav { loaded.fulfill() }
         webView.navigationDelegate = nav
         webView.loadHTMLString(page, baseURL: nil)
-        await fulfillment(of: [loaded], timeout: 10)
+        await fulfillment(of: [loaded], timeout: WebKitTestBudget.firstLoad)
 
         let shown = try await webView.evaluateJavaScript("document.getElementById('out').textContent")
         XCTAssertEqual(shown as? String, "step 7", "the model's first line must see its saved state")
