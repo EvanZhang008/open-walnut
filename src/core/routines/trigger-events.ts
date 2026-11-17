@@ -610,6 +610,14 @@ function enqueueFire(host: string, event: TriggerFiredEvent): void {
   if (!lane.draining) void drainLane(laneKey, lane);
 }
 
+/**
+ * Whether a fire of this trigger is still queued or being delivered. A copy that duplicates one in
+ * the lane is dropped as it arrives, so once this is false every copy handed in so far is settled.
+ */
+export function fireLaneBusy(triggerId: string): boolean {
+  return lanes.has(triggerId);
+}
+
 async function drainLane(laneKey: string, lane: FireLane): Promise<void> {
   lane.draining = true;
   try {

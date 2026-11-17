@@ -24,7 +24,7 @@ vi.mock('../../../src/core/routines/registry.js', async (orig) => ({
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { CronService } from '../../../src/core/cron/service.js'
-import { handleTriggerEvent } from '../../../src/core/routines/trigger-events.js'
+import { fireLaneBusy, handleTriggerEvent } from '../../../src/core/routines/trigger-events.js'
 import { setTriggerDaemonLookupForTest } from '../../../src/core/routines/trigger-daemon.js'
 import type { TriggerFiredEvent } from '../../../src/providers/trigger-check-core.js'
 
@@ -88,8 +88,8 @@ describe('one fire arriving under several names of one daemon', () => {
     const event = fire(id, 1)
     // The daemon's fan-out: the same event on every link, a moment apart.
     for (const host of NAMES) handleTriggerEvent(host, { ...event })
-    await until(() => acks.length >= 1)
-    await new Promise((r) => setTimeout(r, 600))
+    // Every copy is settled once the trigger's lane is empty: a duplicate is dropped as it arrives.
+    await until(() => acks.length >= 1 && !fireLaneBusy(id))
     expect(runs).toBe(1)
     // Acked once, over the link whose copy arrived first.
     expect(acks).toEqual([{ host: 'newdev', seq: 1 }])
@@ -104,8 +104,7 @@ describe('one fire arriving under several names of one daemon', () => {
     for (const host of NAMES) handleTriggerEvent(host, fire(id, 1))
     await until(() => runs === 1)
     for (const host of NAMES) handleTriggerEvent(host, fire(id, 2))
-    await until(() => acks.length >= 2)
-    await new Promise((r) => setTimeout(r, 600))
+    await until(() => acks.length >= 2 && !fireLaneBusy(id))
     expect(runs).toBe(2)
     expect(acks.map((a) => a.seq).sort()).toEqual([1, 2])
   })
@@ -134,13 +133,12 @@ describe('one fire arriving under several names of one daemon', () => {
       return { status: 'ok', summary: 'sent' }
     }
     for (const host of NAMES) handleTriggerEvent(host, fire(id, 1))
-    await until(() => runs === 1)
-    await new Promise((r) => setTimeout(r, 400))
+    // The failed delivery has ended once the lane is empty.
+    await until(() => runs === 1 && !fireLaneBusy(id))
     // Not acked: the daemon keeps it and replays it on every link.
     expect(acks).toEqual([])
     for (const host of ['clouddev', 'newdev']) handleTriggerEvent(host, { ...fire(id, 1), replay: true } as TriggerFiredEvent)
-    await until(() => acks.length === 1)
-    await new Promise((r) => setTimeout(r, 600))
+    await until(() => acks.length === 1 && !fireLaneBusy(id))
     expect(runs).toBe(2)
     expect(acks).toEqual([{ host: 'clouddev', seq: 1 }])
   })
@@ -152,8 +150,7 @@ describe('one fire arriving under several names of one daemon', () => {
     // The old machine still replays a fire of its own numbering while the new one fires.
     handleTriggerEvent('olddev', fire(id, 7, 'old-epoch'))
     handleTriggerEvent('clouddev', fire(id, 1, 'new-epoch'))
-    await until(() => acks.length === 2)
-    await new Promise((r) => setTimeout(r, 600))
+    await until(() => acks.length === 2 && !fireLaneBusy(id))
     expect(runs).toBe(2)
     expect(acks.sort((a, b) => a.host.localeCompare(b.host))).toEqual([{ host: 'clouddev', seq: 1 }, { host: 'olddev', seq: 7 }])
   })
