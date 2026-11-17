@@ -21,9 +21,12 @@
 import { promisify } from 'node:util'
 import zlib from 'node:zlib'
 import { log } from '../logging/index.js'
-import { fetchErrorCode, fetchErrorText, isFetchAbort } from '../lib/fetch-error.js'
+import { fetchErrorCode, fetchErrorDetail, fetchErrorText, isFetchAbort } from '../lib/fetch-error.js'
+import { answered, noteRoundFailure, noteRoundReached } from './replication/round-outage.js'
 
 const gzip = promisify(zlib.gzip)
+/** The outage scope of this lane's pushes (round-outage.ts): its lines read `cloud ingest: ...`. */
+const INGEST_SCOPE = 'cloud ingest'
 
 /**
  * 'unread': delivered, and the companion said it no longer reads this payload (a
@@ -142,6 +145,7 @@ export async function postToCloudIngest(
       signal: AbortSignal.timeout(timeoutMs),
     }), brokenInTransit)
     status = res.status
+    if (answered(res)) noteRoundReached(log.session, INGEST_SCOPE, ep.url)
     // Read whole (it also releases the socket): a few bytes of JSON.
     const answer = await res.text().catch(() => '')
     if (res.ok) return unreadAnswer(answer) ? 'unread' : 'sent'
@@ -154,9 +158,11 @@ export async function postToCloudIngest(
     log.session.warn('cloud ingest: push refused', { kind, status, ms: Date.now() - started })
     return 'failed'
   } catch (err) {
-    log.session.warn('cloud ingest: push failed', {
-      kind, status, ms: Date.now() - started, error: err instanceof Error ? err.message : String(err),
-    })
+    // A companion this Mac cannot reach (no DNS, no route, nothing listening) is
+    // a wait: one info line when it starts and one when it answers again, never
+    // a warn per push (2026-11-17: the Mac's DNS was down for over an hour and
+    // every projection and transcript push wrote one, 31 an hour).
+    noteRoundFailure(log.session, INGEST_SCOPE, ep.url, fetchErrorDetail(err), { kind, status, ms: Date.now() - started }, { message: 'cloud ingest: push failed' })
     return 'failed'
   } finally {
     releaseSlot()

@@ -41,6 +41,7 @@ describe('targetUnreachable', () => {
     'no server on this host follows that Walnut',
     'getaddrinfo ENOTFOUND wn.example.dev',
     'connect ECONNREFUSED 127.0.0.1:443',
+    'ECONNREFUSED: Unable to connect. Is the computer able to access the url?', // bun's fetch
     'replica.sync: the upload channel to olddev is not up (its own SSH connection will not open: its SSH forward did not open) (waited 10s); nothing was sent, try again',
     'DaemonConnection not connected to olddev',
     'DaemonConnection not connected to home-pc: the link stopped answering',
@@ -303,9 +304,13 @@ describe('every replication round reports its failures through round-outage', ()
       'copies: scheduler round failed',
       'search replica: round crashed',
       'task replica: the user confirmed a removal of most rows',
+      // The companion answered and refused the push (a 5xx): it was reached, so a fault.
+      'cloud ingest: push refused',
     ])
+    // The rounds, and the background push lanes to the companion (2026-11-17:
+    // "cloud ingest: push failed" logged a warn per push while the Mac's DNS was down).
     const DRIVERS = ['src/core/host-replica.ts', 'src/core/replication/device-replica.ts', 'src/core/replication/kinds/copy-kind.ts',
-      'src/core/replication/search-replica.ts', 'src/core/replication/task-replica.ts']
+      'src/core/replication/search-replica.ts', 'src/core/replication/task-replica.ts', 'src/core/cloud-ingest.ts']
     const extra: string[] = []
     for (const rel of DRIVERS) {
       const src = fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -319,7 +324,8 @@ describe('every replication round reports its failures through round-outage', ()
 
   it('every round driver imports round-outage', () => {
     // A driver posts steps to a follower: a kind round, a delta, a put of its own, or the host replica's sends.
-    const DRIVES = /\brunKindRound\(|\brunCopyRound\(|\btarget\.post\(\{|\btarget\.send\('replica\./
+    // A background push lane posts to the companion's endpoint (cloud-ingest.ts resolveEndpoint).
+    const DRIVES = /\brunKindRound\(|\brunCopyRound\(|\btarget\.post\(\{|\btarget\.send\('replica\.|\bawait resolveEndpoint\(\)/
     // The library the drivers call: it throws, and its callers report.
     const LIBRARY = new Set(['src/core/replication/kind-leader.ts', 'src/core/replication/kind-delta.ts'])
     const drivers = files.filter((f) => DRIVES.test(f.src) && !LIBRARY.has(f.rel)).map((f) => f.rel).sort()

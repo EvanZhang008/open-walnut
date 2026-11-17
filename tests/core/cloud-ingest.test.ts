@@ -59,6 +59,8 @@ import {
   ingestUrlFromBridgeUrl, postToCloudIngest, runLatestPerKey, cloudIngestResting, _resetCloudIngestForTesting,
   postToCloudReplica, cloudReplicaAvailable, postToCloudSessionSend, postToCloudSessionPermission,
 } from '../../src/core/cloud-ingest.js'
+import { _resetRoundOutagesForTesting } from '../../src/core/replication/round-outage.js'
+import { log } from '../../src/logging/index.js'
 
 let status = 200
 let responseBody: string | null = null
@@ -108,6 +110,7 @@ afterEach(() => {
   vi.useRealTimers()
   replica.closeAllConnections() // a hung or held request must not leak into the next case
   _resetCloudIngestForTesting()
+  _resetRoundOutagesForTesting()
   seen.length = 0; held.length = 0; status = 200; answerMode = 'now'; open = 0; maxOpen = 0; htmlBody = false; resets = 0
   bridgeCfg = { enabled: false }; cfgCalls = 0; cfgDelayMs = 0; responseBody = null; recoveredToken = null; recoverCalls = 0
 })
@@ -212,6 +215,51 @@ describe('postToCloudIngest', () => {
     bridgeCfg = { enabled: true, url: `ws://127.0.0.1:${deadPort}/bridge`, token: 'machine-token-local' }
     expect(await postToCloudIngest('projection-upsert', '{"which":"sessions","data":{}}')).toBe('failed')
     expect(cloudIngestResting()).toBe(false)
+  })
+
+  it('a companion this Mac cannot reach is one info line, not a warn per push; its first answer ends it', async () => {
+    // 2026-11-17: the Mac's DNS was down for over an hour and every push wrote
+    // "cloud ingest: push failed" (31 an hour, a health alarm). A refused
+    // connection is the same kind of wait (round-outage.ts UNREACHABLE_SIGNATURES).
+    const dead = http.createServer()
+    await new Promise<void>((r) => dead.listen(0, '127.0.0.1', r))
+    const deadPort = (dead.address() as AddressInfo).port
+    await new Promise<void>((r) => dead.close(() => r()))
+    bridgeCfg = { enabled: true, url: `ws://127.0.0.1:${deadPort}/bridge`, token: 'machine-token-local' }
+    const warn = vi.spyOn(log.session, 'warn')
+    const info = vi.spyOn(log.session, 'info')
+    try {
+      for (let i = 0; i < 5; i++) expect(await postToCloudIngest('transcript-upsert', tail(`away-${i}`))).toBe('failed')
+      expect(warn.mock.calls.filter(([m]) => String(m).startsWith('cloud ingest:'))).toEqual([])
+      expect(info.mock.calls.filter(([m]) => m === 'cloud ingest: a target is not reachable, its rounds wait for it')).toHaveLength(1)
+
+      // The companion is back on the same address: its answer ends the outage once.
+      const back = http.createServer((req, res) => { req.resume(); req.on('end', () => { res.writeHead(200, { 'Content-Type': 'application/json', Connection: 'close' }); res.end('{"ok":true}') }) })
+      await new Promise<void>((r) => back.listen(deadPort, '127.0.0.1', r))
+      try {
+        expect(await postToCloudIngest('transcript-upsert', tail('back'))).toBe('sent')
+        expect(await postToCloudIngest('transcript-upsert', tail('back-2'))).toBe('sent')
+      } finally {
+        back.closeAllConnections()
+        await new Promise<void>((r) => back.close(() => r()))
+      }
+      expect(info.mock.calls.filter(([m]) => m === 'cloud ingest: a target is reachable again')).toHaveLength(1)
+    } finally {
+      warn.mockRestore(); info.mockRestore()
+    }
+  })
+
+  it('a failure on the way (the companion was reached) is still a warn on every push', async () => {
+    _resetCloudIngestForTesting({ timeoutMs: 200, stepRetryMs: [5, 5] })
+    point()
+    answerMode = 'hang'
+    const warn = vi.spyOn(log.session, 'warn')
+    try {
+      for (let i = 0; i < 2; i++) expect(await postToCloudIngest('projection-upsert', '{"which":"sessions","data":{}}')).toBe('failed')
+      expect(warn.mock.calls.filter(([m]) => m === 'cloud ingest: push failed')).toHaveLength(2)
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('a connection that breaks under the upload goes again on a fresh one, with the same bytes', async () => {

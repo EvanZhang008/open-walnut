@@ -12,6 +12,9 @@
  * already says why it is down ("stream lane: dial failed"), so here an outage is
  * one info line when it starts and one when the target answers again, per round
  * kind and target. Any other failure is still a warn on every round.
+ *
+ * The same holds for a background push lane to the companion (cloud-ingest.ts):
+ * 2026-11-17 the Mac's DNS was down and each push wrote "cloud ingest: push failed".
  */
 
 /**
@@ -40,6 +43,8 @@ export const UNREACHABLE_SIGNATURES: ReadonlyArray<{ re: RegExp; producer: strin
   { re: /^DaemonConnection not connected to [\w.-]+(?::.*)?$/, producer: 'src/providers/daemon-connection.ts', literal: 'DaemonConnection not connected to ' },
   // The companion over the network: no name, no route, nothing listening.
   { re: /^(?:getaddrinfo E(?:NOTFOUND|AI_AGAIN)|connect E(?:CONNREFUSED|HOSTUNREACH|NETUNREACH)) \S+$/, producer: 'node:net', literal: '' },
+  // The same under bun's fetch, which words a refused or unroutable connection its own way.
+  { re: /^E(?:CONNREFUSED|HOSTUNREACH|NETUNREACH): Unable to connect\. Is the computer able to access the url\?$/, producer: 'bun:fetch', literal: '' },
 ]
 
 /** True when a round's error says the target is not reachable now (UNREACHABLE_SIGNATURES). */
