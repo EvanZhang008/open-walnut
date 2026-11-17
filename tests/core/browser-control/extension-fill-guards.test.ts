@@ -123,3 +123,23 @@ describe('fill_login after an agent touched the page (page_tampered)', () => {
     expect(src('content.ts')).toMatch(/case 'agent-check':.*doc: DOC_ID/)
   })
 })
+
+/**
+ * Walnut's menu and save bar refuse a click while anything is drawn over them (frame-guard.ts,
+ * IntersectionObserver v2), and the browser counts any box over them, pointer-events: none or
+ * not. So nothing Walnut draws into a page may span it: on 2026-11-17 the agent's frame around a
+ * tab (one box the size of the page) covered a menu in an Apple sign-in frame, and every pick in
+ * it did nothing. Every file that draws into pages (makeHost) is read for a box that spans the
+ * viewport; a new full-page overlay fails here.
+ */
+describe('nothing Walnut draws into a page covers its own menu', () => {
+  const files = fs.readdirSync(DIR).filter((f) => f.endsWith('.ts') && /\bmakeHost\(/.test(src(f)))
+  it('finds the files that draw into pages', () => {
+    expect(files).toEqual(expect.arrayContaining(['content.ts', 'content-ui.ts', 'page-cursor.ts']))
+  })
+  it.each(files)('%s draws no box the size of the page', (f) => {
+    const text = src(f)
+    const spans = [/\binset\s*:\s*0\b/, /\b(?:width|min-width)\s*:\s*100v[wh]\b/, /\b(?:height|min-height)\s*:\s*100v[hw]\b/, /\bwidth\s*:\s*100%[^;]*;[^`'"]*\bheight\s*:\s*100%/]
+    for (const re of spans) expect(re.test(text), `${f} matches ${re}`).toBe(false)
+  })
+})

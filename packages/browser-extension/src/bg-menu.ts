@@ -14,8 +14,8 @@ import { getSettings } from './settings'
 import { clearLater } from './bg-clipboard'
 import { walletValues } from './bg-wallet'
 import { COVERED, afterLoginFill, credsOf, fillFrames, fillWalletFrame, openUnlock, stillShown } from './bg-fill'
-import { CODE_PAGE_MS, PENDING_MS, insecureFor, isLockedError, matchesFor, nonce, originOf, siteOf, state, stores, tiersOf, walletItems, type MenuOwner, type Reply } from './bg-vault'
-import { cleanAccount, domainOf, namedFirst, stepOneFirst } from './login-pick'
+import { CODE_PAGE_MS, PENDING_MS, insecureFor, isLockedError, loginDigest, matchesFor, nonce, originOf, siteOf, state, stores, tiersOf, walletItems, type MenuOwner, type Reply } from './bg-vault'
+import { cleanAccount, domainOf, namedFirst, oneRowPerLogin, stepOneFirst } from './login-pick'
 
 const WALLET = new Set(['card', 'identity'])
 
@@ -77,6 +77,16 @@ async function stepOneHint(owner: MenuOwner): Promise<{ itemId?: string; usernam
   return b ? { username: b.username } : undefined
 }
 
+/**
+ * The menu is on the top page's own origin: the only place a new password is made, since only
+ * there is the sign-up saved when it is sent (content.ts sending); one made in a frame of another
+ * origin would be lost.
+ */
+async function onTopOrigin(owner: { tabId: number; url: string }): Promise<boolean> {
+  const top = (await ext.tabs.get(owner.tabId).catch(() => undefined))?.url ?? ''
+  return !!originOf(owner.url) && originOf(owner.url) === originOf(top)
+}
+
 export async function handleMenu(msg: { type: string; [k: string]: unknown }, sender: Sender): Promise<Reply> {
   const tabId = sender.tab?.id
   switch (msg.type) {
@@ -111,14 +121,16 @@ export async function handleMenu(msg: { type: string; [k: string]: unknown }, se
       // Walnut ended this browser's unlock (Lock all, a Lock elsewhere): the menu's lock view, never an error.
       try {
         if (WALLET.has(owner.role)) return { ...base, state: 'unlocked', items: await walletItems(owner.role as 'card' | 'identity') }
-        if (owner.role === 'totp') return { ...base, state: 'unlocked', items: await withCodes(owner, await matchesFor(owner.url)) }
-        const { first, others } = await tiersOf(owner.url)
+        // The same login saved twice is one row (oneRowPerLogin).
+        if (owner.role === 'totp') return { ...base, state: 'unlocked', items: await withCodes(owner, (await oneRowPerLogin([await matchesFor(owner.url)], loginDigest))[0]) }
+        const tiers = await tiersOf(owner.url)
+        const [first, others] = await oneRowPerLogin([tiers.first, tiers.others], loginDigest)
         const insecure = first.length || others.length ? 0 : await insecureFor(owner.url)
         // Logins saved for other parts of this site: listed apart, under their own heading.
         const apart = others.length ? { others, othersDomain: domainOf(owner.url) } : {}
         // The login the page names first (its account), else step one's on step two.
         const named = namedFirst(first, owner.account)
-        if (owner.role === 'new-password') {
+        if (owner.role === 'new-password' && await onTopOrigin(owner)) {
           owner.suggestion ??= await suggest(owner.rules)
           await stores.menus.set(owner.tabId, owner)
           return { ...base, state: 'unlocked', items: named ? [...named.items, ...named.more] : first, suggestion: owner.suggestion }
@@ -166,6 +178,7 @@ export async function handleMenu(msg: { type: string; [k: string]: unknown }, se
     }
     case 'menu-generate': {
       if (!(await stillShown(owner.tabId, owner.frameId, 'menu'))) return COVERED
+      if (!(await onTopOrigin(owner))) return { ok: false, error: 'Walnut makes a new password only on the page itself, where it can save it.' }
       const value = owner.suggestion ?? await suggest(owner.rules)
       // Kept until the sign-up is sent: it is saved then, typed or not.
       await stores.generated.set(owner.tabId, { password: value, url: owner.url, at: Date.now() })

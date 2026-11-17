@@ -6,8 +6,9 @@
  * password only for a fill, and they go straight into the fields.
  *
  * What a page cannot make it do:
- * - fill in a frame on another origin than the top page (a login embedded by another site is
- *   how a page would phish one), or a sandboxed frame;
+ * - fill in a frame of another site than the top page (a login embedded by another site is
+ *   how a page would phish one), or a sandboxed frame; a frame of another origin on the same
+ *   site (the site's own sign-in host) fills once the background says it is on that site;
  * - open the menu by focusing a field from script: it opens by itself only right after the
  *   person clicked or tabbed into the field;
  * - offer to save a password it put in a field itself: only what the person typed (or the one
@@ -27,7 +28,7 @@
 import { ext, ask } from './ext'
 import { findLoginGroups, groupOfField, readGroup, type LoginGroup } from './form-detect'
 import { findWalletGroups, walletGroupOf } from './wallet-detect'
-import { MAY_FILL, SELF, asFill, cs } from './content-state'
+import { MAY_ASK_FILL, MAY_FILL, SELF, asFill, cs, overlay } from './content-state'
 import { dropHost, extFrame, hostHooks, hostStyle, hosts, makeHost, tampered, type Host } from './content-host'
 import { closeMenu, focusMoved, hideIcon, menu, onFieldKey, openingFor, openMenu, reposition, roleOf, setMenuHeight, showIcon, toast, typedInField } from './content-ui'
 import { fillCode, fillLogin, fillNewPassword, fillWalletForm } from './content-fill'
@@ -39,6 +40,7 @@ import { cursorMask, cursorOff, listenCursor } from './page-cursor'
 import { wayMaker } from './mark-way'
 import { walnutAddress } from './walnut-address'
 import { siteKey } from '../../../src/core/vault/url-match'
+import { frameOnSite } from './login-pick'
 import { initPageBrowserKey } from './page-browser-key'
 
 /**
@@ -61,7 +63,7 @@ function rescan(): void {
   cs.groups = findLoginGroups(document)
   cs.wallets = findWalletGroups(document)
   const hasLogin = cs.groups.length > 0
-  if (!cs.off && MAY_FILL && hasLogin !== reported) {
+  if (!cs.off && cs.mayFill && hasLogin !== reported) {
     reported = hasLogin
     void ask({ type: 'frame-ready', hasLogin })
   }
@@ -116,7 +118,7 @@ document.addEventListener('input', (e) => {
 
 /** The menu again for a username the person is typing, when this site has logins to offer. */
 async function reopenTyping(t: HTMLInputElement): Promise<void> {
-  if (cs.off || !cs.pageFill || !MAY_FILL || openingFor(t) || !t.value) return
+  if (cs.off || !cs.pageFill || !cs.mayFill || openingFor(t) || !t.value) return
   const st = await ask<PageState>({ type: 'page-init' })
   if (!st.ok || !st.connected || !st.unlocked || (st.count ?? 0) === 0) return
   if (menu || document.activeElement !== t || openingFor(t)) return
@@ -138,7 +140,7 @@ async function onFocus(e: { target: EventTarget | null }): Promise<void> {
   const t = e.target
   // The focus moves a fill makes are Walnut's own: the menu that asked for the fill stays until it is done.
   if (!cs.filling) focusMoved(t)
-  if (cs.off || !MAY_FILL || !(t instanceof HTMLInputElement)) return
+  if (cs.off || !cs.mayFill || !(t instanceof HTMLInputElement)) return
   if (!live()) { cs.off = true; closeAll(); return }
   rescan()
   const what = roleOf(t)
@@ -159,7 +161,9 @@ async function onFocus(e: { target: EventTarget | null }): Promise<void> {
   // Already open for this field, or on its way (an arrow key opened it meanwhile).
   if ((menu && cs.active?.field === t) || openingFor(t)) return
   // Something to pick for this field: a login, a code, a card, an address, or a new password to make.
-  const offer = what.role === 'new-password' ? true
+  // A new password is made only where its sign-up can be saved: a frame of another origin sends
+  // nothing to save (sending), so a password made there would be lost.
+  const offer = what.role === 'new-password' ? SELF !== 'other'
     : what.role === 'totp' ? (st.codes ?? 0) > 0
       : what.role === 'card' ? (st.cards ?? 0) > 0
         : what.role === 'identity' ? (st.identities ?? 0) > 0
@@ -175,7 +179,7 @@ async function onFocus(e: { target: EventTarget | null }): Promise<void> {
 let codeOffered = false
 let offerCode = false
 function maybeOfferCode(): void {
-  if (!offerCode || codeOffered || cs.off || !cs.pageFill || !MAY_FILL) return
+  if (!offerCode || codeOffered || cs.off || !cs.pageFill || !cs.mayFill) return
   const g = cs.groups.find((x) => x.kind === 'totp' && x.totp)
   if (!g?.totp || g.totp.value) return
   if (document.activeElement === g.totp || g.totpBoxes?.includes(document.activeElement as HTMLInputElement)) {
@@ -190,7 +194,7 @@ function maybeOfferCode(): void {
 
 // ── fills: only into this frame's own login, and only when this is the origin the fill is for ──
 
-const fillsHere = (origin: unknown) => !cs.off && MAY_FILL && origin === location.origin
+const fillsHere = (origin: unknown) => !cs.off && cs.mayFill && origin === location.origin
 
 // ── a login being sent: offer to save or update it ──
 
@@ -332,14 +336,19 @@ function showBar(nonce: string): void {
   frame.setAttribute('allowtransparency', 'true')
   root.appendChild(frame)
   bar = { host, frame, nonce }
+  overlay.shown()
 }
 function hideBar(): void {
-  if (bar) { dropHost(bar.host); bar = null }
+  if (bar) { dropHost(bar.host); bar = null; overlay.shown() }
 }
 
 // ── an agent's tab: the frame around it says so, and Stop gives it back to the person ──
 
 let agentMark: Host | null = null
+/** The mark's edges and pill, hidden (`quiet`) while Walnut's menu or save bar is shown in the tab. */
+let markBox: HTMLElement | null = null
+/** The agent frame's host: a point at the corner, its edges and pill drawn outside it (as the agent's cursor is). */
+const AGENT_MARK_HOST = 'z-index: 2147483645 !important; top: 0 !important; left: 0 !important; width: 0 !important; height: 0 !important; overflow: visible !important; pointer-events: none !important;'
 /** Ends the pill's moving out of the agent's way (pageAgent.makeWayFor). */
 let markWay: (() => void) | null = null
 /** What the pill shows now: the agent's tab, or the person's while they took it over. */
@@ -349,18 +358,24 @@ function showAgentMark(on: boolean, who?: string, mode?: string): void {
   if (mode === 'driving') cursorOff()
   if (SELF !== 'top') return
   const key = `${mode === 'driving' ? 'driving' : 'agent'}\0${who ?? ''}`
-  if (!on || (agentMark && agentMarkKey !== key)) { if (agentMark) { dropHost(agentMark); agentMark = null; markWay?.(); markWay = null } }
+  if (!on || (agentMark && agentMarkKey !== key)) { if (agentMark) { dropHost(agentMark); agentMark = null; markBox = null; markWay?.(); markWay = null } }
   if (!on) return
   if (agentMark) return
   agentMarkKey = key
   const driving = mode === 'driving'
   const { host, root } = makeHost(2147483645)
-  // The frame lets every click through; only its Stop button takes one.
-  hostStyle(host, 'z-index: 2147483645 !important; inset: 0 !important; pointer-events: none !important;')
+  // The frame lets every click through; only its Stop button takes one. It covers nothing but its
+  // own four edges and the pill: no box of it spans the page (AGENT_MARK_HOST), since the browser
+  // counts any box drawn over Walnut's menu and save bar as covering them, pointer-events or not,
+  // and they then refuse every click (frame-guard.ts; 2026-11-17, a menu in an agent's tab did nothing).
+  hostStyle(host, AGENT_MARK_HOST)
   const style = document.createElement('style')
-  style.textContent = `.edge{position:fixed;inset:0;border:3px solid #8a5a2b;border-radius:2px;pointer-events:none;box-sizing:border-box}
+  style.textContent = `.edge{position:fixed;background:#8a5a2b;pointer-events:none}
+.edge.t{top:0;left:0;right:0;height:3px}.edge.b{bottom:0;left:0;right:0;height:3px}
+.edge.l{top:0;bottom:0;left:0;width:3px}.edge.r{top:0;bottom:0;right:0;width:3px}
 .pill.up{top:14px;bottom:auto}
 .pill.away{visibility:hidden}
+.quiet{visibility:hidden}
 .pill{position:fixed;right:14px;bottom:14px;display:flex;gap:10px;align-items:center;padding:7px 8px 7px 12px;background:#2b2118;color:#fff;font:600 12.5px/1.2 -apple-system,system-ui,"Segoe UI",sans-serif;border-radius:999px;box-shadow:0 6px 20px rgba(0,0,0,.25);pointer-events:auto}
 .stop{all:unset;cursor:pointer;background:#fff;color:#2b2118;border-radius:999px;padding:4px 10px;font:700 12px/1.2 -apple-system,system-ui,sans-serif}
 .stop:focus-visible{outline:2px solid #e8b46a}`
@@ -384,9 +399,11 @@ function showAgentMark(on: boolean, who?: string, mode?: string): void {
   // Only the person's own click: an agent's synthetic one is not trusted.
   stop.addEventListener('click', (e) => { if (e.isTrusted) void ask({ type: 'agent-stop' }).then(() => { cursorOff(); showAgentMark(false) }) })
   pill.append(stop)
-  const edge = document.createElement('div')
-  edge.className = 'edge'
-  root.append(style, edge, pill)
+  const edges = ['t', 'r', 'b', 'l'].map((side) => { const e = document.createElement('div'); e.className = `edge ${side}`; return e })
+  markBox = document.createElement('div')
+  markBox.className = shownIn.size ? 'quiet' : ''
+  markBox.append(...edges, pill)
+  root.append(style, markBox)
   agentMark = host
   // A step of the agent's at the pill: the pill moves out of its way first (mark-way.ts).
   markWay = pageAgent.makeWayFor(host.el, wayMaker(() => pill.getBoundingClientRect(), (p) => {
@@ -395,6 +412,59 @@ function showAgentMark(on: boolean, who?: string, mode?: string): void {
   }))
   // The page may take the frame away: it comes back while the tab is an agent's.
   markWatch.observe(document.documentElement, { childList: true })
+}
+
+/**
+ * The frames (by id, this one is 0) showing Walnut's menu or save bar now, and when each last said
+ * so: the mark and the agent's cursor make way. A frame says it again every SHOWN_BEAT_MS while it
+ * shows one; a frame not heard from for SHOWN_LOST_MS (removed, crashed, gone with its menu open)
+ * no longer counts, so the mark and its Stop button always come back.
+ */
+const shownIn = new Map<number, number>()
+const SHOWN_BEAT_MS = 3_000
+const SHOWN_LOST_MS = 8_000
+let shownSweep: ReturnType<typeof setInterval> | null = null
+function makeWay(frame: number, on: boolean): void {
+  if (on) shownIn.set(frame, Date.now())
+  else shownIn.delete(frame)
+  quietNow()
+  if (shownIn.size && !shownSweep) {
+    shownSweep = setInterval(() => {
+      for (const [f, at] of shownIn) if (f !== 0 && Date.now() - at > SHOWN_LOST_MS) shownIn.delete(f)
+      quietNow()
+    }, 1_000)
+  }
+}
+function quietNow(): void {
+  if (shownIn.size) cursorOff()
+  else if (shownSweep) { clearInterval(shownSweep); shownSweep = null }
+  markBox?.classList.toggle('quiet', shownIn.size > 0)
+}
+let shownHere = false
+let shownBeat: ReturnType<typeof setInterval> | null = null
+overlay.shown = () => {
+  const on = !!menu || !!bar
+  if (on === shownHere) return
+  shownHere = on
+  if (SELF === 'top') { makeWay(0, on); return }
+  void ask({ type: 'agent-mark-quiet', on })
+  if (shownBeat) { clearInterval(shownBeat); shownBeat = null }
+  if (on) shownBeat = setInterval(() => { void ask({ type: 'agent-mark-quiet', on: true }) }, SHOWN_BEAT_MS)
+}
+// A frame that goes with its menu still open: the mark comes back.
+addEventListener('pagehide', () => { if (shownHere && SELF !== 'top') void ask({ type: 'agent-mark-quiet', on: false }) })
+
+/**
+ * Every document between this frame and the top page is on the top page's site too (where the
+ * browser says, Chrome and Safari): a sign-in framed by another site's frame inside the site's
+ * page is not the site's own.
+ */
+function ancestorsOnSite(): boolean {
+  const list = (location as Location & { ancestorOrigins?: DOMStringList }).ancestorOrigins
+  if (!list?.length) return true
+  const all = Array.from({ length: list.length }, (_, i) => list.item(i) ?? 'null')
+  const top = all[all.length - 1]
+  return all.every((o) => frameOnSite(o, top))
 }
 
 const markWatch = new MutationObserver(() => {
@@ -437,6 +507,7 @@ ext.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       setMenuHeight(Number(msg.height))
       sendResponse({ ok: true }); return
     case 'show-savebar': showBar(String(msg.nonce ?? '')); sendResponse({ ok: true }); return
+    case 'agent-mark-quiet': if (SELF === 'top' && typeof msg.frame === 'number') makeWay(msg.frame, msg.on === true); sendResponse({ ok: true }); return
     case 'agent-mark': showAgentMark(msg.on === true, typeof msg.who === 'string' ? msg.who : undefined, typeof msg.mode === 'string' ? msg.mode : undefined); sendResponse({ ok: true }); return
     // `hidden`: the page is not drawn (its window covered or minimized, or a tab behind): Chrome drops
     // the debugger's real input there (agent-trusted.ts), so a step takes the page's events instead.
@@ -475,7 +546,7 @@ ext.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       sendResponse({ ok: true }); return
     case 'open-menu-here': {
       // The shortcut asks the top page; the context menu asks the frame the person right-clicked in.
-      if (cs.off || !MAY_FILL || (SELF !== 'top' && msg.here !== true)) { sendResponse({ ok: false }); return }
+      if (cs.off || !cs.mayFill || (SELF !== 'top' && msg.here !== true)) { sendResponse({ ok: false }); return }
       rescan()
       const focused = document.activeElement instanceof HTMLInputElement && groupOfField(cs.groups, document.activeElement) ? document.activeElement : undefined
       const g = cs.groups.find((x) => x.kind === 'login' || x.kind === 'username-step')
@@ -510,9 +581,11 @@ if (SELF === 'top') {
 
 function start(): void {
   if (isWalnutApp()) return
-  void ask<{ off?: boolean; barNonce?: string; agent?: { who?: string; driving?: boolean }; offerCode?: boolean; pageFill?: boolean }>({ type: 'page-init', top: SELF === 'top' }).then((r) => {
+  void ask<{ off?: boolean; barNonce?: string; agent?: { who?: string; driving?: boolean }; offerCode?: boolean; pageFill?: boolean; frameFill?: boolean }>({ type: 'page-init', top: SELF === 'top' }).then((r) => {
     if (!r.ok || r.off) return
     cs.off = false
+    // A frame of another origin: fills here only when the background says it is on the top page's site.
+    if (SELF === 'other') cs.mayFill = MAY_ASK_FILL && r.frameFill === true && ancestorsOnSite()
     cs.pageFill = r.pageFill !== false
     offerCode = r.offerCode === true
     if (r.agent) showAgentMark(true, r.agent.who, r.agent.driving ? 'driving' : undefined)

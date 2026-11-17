@@ -17,7 +17,7 @@ import { ask } from './ext'
 import { groupOfField } from './form-detect'
 import { readRules } from './field-rules'
 import { walletGroupOf } from './wallet-detect'
-import { cs } from './content-state'
+import { cs, overlay } from './content-state'
 import { dropHost, extFrame, hostStyle, makeHost, type Host } from './content-host'
 import { menuSpot } from './content-place'
 
@@ -164,6 +164,7 @@ export async function openMenu(field: HTMLInputElement, focus?: 'first' | 'last'
   const typed = !all && what.role === 'username' && field.value && cs.typed.has(field) ? field.value : undefined
   menu = { host, frame, height: 120, loaded: false, ...(keys ? { focus: keys } : {}), ...(mine.pick ? { pick: true } : {}), ...(mine.steps ? { steps: mine.steps } : {}), ...(typed !== undefined ? { filter: typed } : {}) }
   place(host, field, 'menu', menu.height)
+  overlay.shown()
 }
 
 /**
@@ -212,6 +213,7 @@ export function closeMenu(refocus = false): void {
   // keyboard), which does not open the menu again by itself.
   if ((refocus || hadFocus) && cs.active?.field.isConnected) cs.active.field.focus({ preventScroll: true })
   dropHost(host)
+  overlay.shown()
 }
 
 /** The height the menu needs; 0 when nothing in it fits what was typed (it is drawn nowhere then). */

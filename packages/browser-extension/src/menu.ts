@@ -25,7 +25,7 @@ import { currentNonce, onNonce, onUnlockChange } from './nonce'
 
 /** The nonce the content script hands this frame (nonce.ts): every message carries it. */
 const ask = <T = Record<string, unknown>>(msg: { type: string; [k: string]: unknown }) => askBackground<T>({ ...msg, nonce: currentNonce() })
-const guard = frameGuard()
+const guard = frameGuard(() => covered())
 
 interface Totp { code: string; period: number; remaining: number }
 interface Item { id: string; title: string; username?: string; site?: string; hasTotp: boolean; sub?: string; totp?: Totp | null; tier?: number }
@@ -240,6 +240,13 @@ async function fill(id: string): Promise<void> {
     rows = []
     size()
   }
+}
+
+/** A click refused because something on the page is drawn over the menu: said at the menu's foot (the rows stay where they are), and the menu stays. */
+function covered(): void {
+  if (root.querySelector('[data-testid=menu-covered]')) return
+  root.append(h('div', { class: 'menu-note err wrap', role: 'alert', 'data-testid': 'menu-covered' }, 'Something on the page is drawn over this menu, so Walnut did nothing. Move it out of the way, or use the Walnut button in the toolbar.'))
+  size()
 }
 
 function focusList(where: 'first' | 'last'): void {

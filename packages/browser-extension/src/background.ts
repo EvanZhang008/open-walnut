@@ -4,9 +4,10 @@
  * the sender's own tab and frame, never from what a message claims about where it came from,
  * and each kind of message only from the page that may send it (senderKind).
  *
- * Secrets: a fill fetches the item and sends its username and password only to frames on the
- * top page's origin that said they hold a login form (or to the one frame whose menu was
- * picked), with that origin, which the frame checks again; it keeps nothing. The summaries
+ * Secrets: a fill fetches the item and sends its username and password only to the top page
+ * and frames on its site that said they hold a login form (or to the one frame whose menu was
+ * picked), each with its own origin, which the frame checks again (login-pick.ts frameOnSite); it
+ * keeps nothing. The summaries
  * (titles, usernames, sites) are cached for 5 s while unlocked (bg-vault.ts).
  *
  * Its parts: bg-vault.ts (summaries, per-tab state), bg-menu.ts (the in-page menu), bg-save.ts
@@ -21,8 +22,8 @@ import { cursorUp, frameHelloBox } from './agent-cursor'
 import { adoptTab, agentMessage, agentOn, initAgent, isAgentTab, releaseAllTabs, releaseTab, relayState, tabOwnerOf } from './agent'
 import { initSelfUpdate } from './self-update'
 import { injectOpenTabs, reachPage, toPage } from './page-reach'
-import { CODE_PAGE_MS, PENDING_MS, activeTab, fail, forget, insecureFor, isWalnutPage, liveState, matchesFor, originOf, pendingAlive, siteOf, state, stores, summaries, tiersOf, view, walletItems, type Reply } from './bg-vault'
-import { domainOf } from './login-pick'
+import { CODE_PAGE_MS, PENDING_MS, activeTab, fail, forget, insecureFor, isWalnutPage, liveState, loginDigest, matchesFor, originOf, pendingAlive, siteOf, state, stores, summaries, tiersOf, view, walletItems, type Reply } from './bg-vault'
+import { domainOf, frameOnSite, oneRowPerLogin } from './login-pick'
 import { afterLoginFill, credsOf, fillFrames, fillWalletFrame, openUnlock } from './bg-fill'
 import { handleMenu } from './bg-menu'
 import { GENERATED_MS, barNonceFor, handleSave, showSaveBar } from './bg-save'
@@ -131,6 +132,8 @@ const ALLOWED: Record<string, SenderKind | SenderKind[]> = {
   'agent-get': ['popup', 'sidepanel'], 'agent-on': ['popup', 'sidepanel'], 'agent-off': ['popup', 'sidepanel'], 'agent-stop': 'content', 'agent-handback': 'content',
   // A frame's step: its point for the agent's cursor in the top document (agent-cursor.ts).
   'agent-cursor-up': 'content',
+  // A frame's menu or save bar came or went: the agent's mark in the top document makes way (content.ts makeWay).
+  'agent-mark-quiet': 'content',
   'agent-frame-hello-box': 'content',
   'relay-state': 'sidepanel', 'relay-stop-all': 'sidepanel',
   'page-selection': 'content',
@@ -179,6 +182,11 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
     case 'agent-get': case 'agent-on': case 'agent-off': case 'agent-stop': case 'agent-handback': return agentMessage(msg.type, sender)
     // A step in a frame: the agent's cursor is drawn in the top document at the frame's place (agent-cursor.ts).
     case 'agent-cursor-up': return cursorUp(msg, sender)
+    case 'agent-mark-quiet': {
+      if (tabId === undefined || !sender.frameId) return { ok: false }
+      await ext.tabs.sendMessage(tabId, { type: 'agent-mark-quiet', on: msg.on === true, frame: sender.frameId }, { frameId: 0 }).catch(() => undefined)
+      return { ok: true }
+    }
     // The document holding a frame says where that frame starts (agent-cursor.ts helloOrigin).
     case 'agent-frame-hello-box': return frameHelloBox(msg, sender)
     // the side panel
@@ -322,7 +330,7 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
         return filled ? { ok: true } : { ok: false, error: item.type === 'card' ? 'No card form found on this page.' : 'No address form found on this page.' }
       }
       if (!matchItem(item.urls, tab.url)) return { ok: false, code: 'other_site', error: `"${item.title}" is saved for another site; Walnut fills a login only on its own site.` }
-      const filled = await fillFrames(tab.id, undefined, credsOf(item), 'login', tab.url)
+      const filled = await fillFrames(tab.id, undefined, credsOf(item), 'login', tab.url, item.urls)
       if (!filled) return { ok: false, error: 'No login form found on this page.' }
       return { ok: true, ...(await afterLoginFill(tab.id, undefined, item, tab.url)) }
     }
@@ -370,11 +378,10 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
       const pageFill = await pageFillOn()
       if (tabId !== undefined && sender.frameId === 0) {
         if (msg.top) {
-          // A new top page: frames of another origin can no longer be filled. The rest stay (a
-          // frame of this page may have registered first); a stale one refuses a fill itself.
-          const o = originOf(page)
+          // A new top page: frames off its site can no longer be filled. The rest stay (a frame of
+          // this page may have registered first); a stale one refuses a fill itself.
           const all = (await frames.get(tabId)) ?? {}
-          for (const [id, f] of Object.entries(all)) if (f.origin !== o) delete all[id]
+          for (const [id, f] of Object.entries(all)) if (!frameOnSite(f.origin, page)) delete all[id]
           await frames.set(tabId, all)
           void setBadge(tabId, count)
         }
@@ -387,15 +394,19 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
       }
       // An agent's tab wears its frame and Stop button (top frame only).
       const agent = sender.frameId === 0 ? await isAgentTab(tabId) : undefined
-      return { ok: true, pageFill, connected: st.connected, unlocked: st.unlocked, count, ...(others ? { others } : {}), codes, cards, identities, ...(offerCode ? { offerCode } : {}), ...(barNonce ? { barNonce } : {}), ...(agent ? { agent: { who: agent.who, ...(typeof agent.driving === 'number' ? { driving: true } : {}) } } : {}) }
+      // A frame of another origin learns here whether it is on the tab's site, so its fills work (frameOnSite).
+      // A sandboxed frame keeps its URL but has no origin of its own ('null'): never.
+      const frameFill = sender.frameId !== undefined && sender.frameId !== 0 && sender.origin !== 'null' && frameOnSite(page, sender.tab?.url ?? '')
+      return { ok: true, pageFill, connected: st.connected, unlocked: st.unlocked, count, ...(frameFill ? { frameFill } : {}), ...(others ? { others } : {}), codes, cards, identities, ...(offerCode ? { offerCode } : {}), ...(barNonce ? { barNonce } : {}), ...(agent ? { agent: { who: agent.who, ...(typeof agent.driving === 'number' ? { driving: true } : {}) } } : {}) }
     }
     case 'frame-ready': {
       if (tabId === undefined || sender.frameId === undefined) return { ok: false }
       const top = sender.frameId === 0 ? String(sender.url ?? '') : (await ext.tabs.get(tabId).catch(() => undefined))?.url ?? ''
       const origin = originOf(String(sender.url ?? ''))
-      if (!origin || origin !== originOf(top) || await isWalnutPage(origin)) return { ok: false }
+      // The top page, and frames on its site (frameOnSite): the ones a fill may go to.
+      if (!origin || !frameOnSite(String(sender.url ?? ''), top) || await isWalnutPage(origin)) return { ok: false }
       const all = (await frames.get(tabId)) ?? {}
-      if (msg.hasLogin) all[String(sender.frameId)] = { origin, at: Date.now() }
+      if (msg.hasLogin) all[String(sender.frameId)] = { origin, url: String(sender.url ?? ''), at: Date.now() }
       else delete all[String(sender.frameId)]
       await frames.set(tabId, all)
       return { ok: true }
@@ -450,18 +461,23 @@ ext.storage.onChanged.addListener((changes, area) => {
   }
 })
 
-/** Fill the login for a tab: the one there is, else its menu (in the frame asked, the top page by default). */
-async function fillFromBrowser(t: { id?: number; url?: string } | undefined, frameId?: number): Promise<void> {
+/**
+ * Fill the login for a tab: the one there is, else its menu (in the frame asked, the top page by
+ * default). A frame's own page (`frameUrl`, on the tab's site) is what its login is matched to.
+ */
+async function fillFromBrowser(t: { id?: number; url?: string } | undefined, frameId?: number, frameUrl?: string): Promise<void> {
   if (t?.id === undefined || !t.url || !/^https?:/.test(t.url) || await isWalnutPage(t.url)) return
+  const page = frameId && frameUrl ? frameUrl : t.url
   // The chosen idle time passed with no use: locked first, as for every message (handle), so the
   // shortcut or the context menu never fills from a session the auto-lock should have ended.
   await lockIfIdle(lockNow).catch(() => false)
   if (!(await connection()) || !(await vaultSession())) { await openUnlock(); return }
   void touch()
-  const matches = await matchesFor(t.url)
+  // One login saved twice is one login: filled, as the menu would show it on one row.
+  const [matches] = await oneRowPerLogin([await matchesFor(page)], loginDigest)
   if (matches.length === 1) {
     const item = await api.item(matches[0].id)
-    if (await fillFrames(t.id, frameId, credsOf(item), 'login', t.url)) await afterLoginFill(t.id, frameId, item, t.url)
+    if (await fillFrames(t.id, frameId, credsOf(item), 'login', page, item.urls)) await afterLoginFill(t.id, frameId, item, page)
   } else {
     await ext.tabs.sendMessage(t.id, { type: 'open-menu-here', ...(frameId ? { here: true } : {}) }, { frameId: frameId ?? 0 }).catch(() => undefined)
   }
@@ -503,7 +519,8 @@ ext.contextMenus?.onClicked.addListener((info, tab) => {
   if (info.menuItemId === 'walnut-fill') {
     // The login for the page (the one, or the list in the frame the person right-clicked in).
     if (!(tab?.id !== undefined && tab.url)) return
-    if (info.frameId === undefined || info.frameId === 0 || originOf(info.frameUrl ?? '') === originOf(tab.url)) void fillFromBrowser(tab, info.frameId || undefined).catch(() => undefined)
+    if (info.frameId === undefined || info.frameId === 0) void fillFromBrowser(tab).catch(() => undefined)
+    else if (frameOnSite(info.frameUrl ?? '', tab.url)) void fillFromBrowser(tab, info.frameId, info.frameUrl).catch(() => undefined)
     return
   }
   if (info.menuItemId !== 'walnut-ask-selection' && info.menuItemId !== 'walnut-ask-page') return

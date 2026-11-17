@@ -1,12 +1,13 @@
 /**
  * Which saved logins the extension offers (packages/browser-extension/src/login-pick.ts): the
  * two tiers of a page's logins, step two of a two-step sign in, the login a changed password
- * updates, a new login's default name, and what a "Never for this site" entry covers.
+ * updates, a new login's default name, what a "Never for this site" entry covers, which frames of
+ * a tab Walnut fills, and one row per login when the same login is saved twice.
  */
 import { describe, expect, it } from 'vitest'
 import type { VaultItemSummary } from '../../../src/core/vault/types'
 import {
-  cleanAccount, defaultLoginName, namedFirst, neverCovers, neverEntry, pickUpdate, siteNameFromTitle, stepOneFirst, tiersFor, view, type MenuItem,
+  cleanAccount, defaultLoginName, frameOnSite, namedFirst, neverCovers, neverEntry, oneRowPerLogin, pickUpdate, siteNameFromTitle, stepOneFirst, tiersFor, view, type MenuItem,
 } from '../../../packages/browser-extension/src/login-pick'
 
 const at = '2026-11-01T00:00:00.000Z'
@@ -153,5 +154,56 @@ describe('Never for this site', () => {
     expect(neverCovers(['lab.test'], 'http://lab.test/')).toBe(true)
     expect(neverCovers(['lab.test'], 'http://lab-shop.test/')).toBe(false)
     expect(neverCovers([], 'http://lab.test/')).toBe(false)
+  })
+})
+
+describe('frameOnSite: the frames of a tab a fill may go to', () => {
+  it('the top page and frames of its origin', () => {
+    expect(frameOnSite('https://shop.example.com/a', 'https://shop.example.com/b')).toBe(true)
+  })
+  it('a frame of another origin on the same site: the site\'s own sign-in host (2026-11-17, idmsa.apple.com)', () => {
+    expect(frameOnSite('https://idmsa.apple.com/appleauth/auth/signin', 'https://appstoreconnect.apple.com/login')).toBe(true)
+    expect(frameOnSite('https://idmsa.apple.com/x', 'https://developer.apple.com/account')).toBe(true)
+    expect(frameOnSite('https://login.example.co.uk/', 'https://www.example.co.uk/')).toBe(true)
+  })
+  it('never another site, another scheme, a sandboxed or a non-web frame', () => {
+    expect(frameOnSite('https://accounts.google.com/', 'https://evil.example/')).toBe(false)
+    // A public suffix is no site of its own: two sites under it are two sites.
+    expect(frameOnSite('https://a.github.io/', 'https://b.github.io/')).toBe(false)
+    expect(frameOnSite('https://a.example.co.uk/', 'https://b.other.co.uk/')).toBe(false)
+    expect(frameOnSite('http://login.example.com/', 'https://www.example.com/')).toBe(false)
+    expect(frameOnSite('data:text/html,<form>', 'https://www.example.com/')).toBe(false)
+    expect(frameOnSite('about:blank', 'https://www.example.com/')).toBe(false)
+    expect(frameOnSite('not a url', 'https://www.example.com/')).toBe(false)
+    expect(frameOnSite('https://www.example.com/', '')).toBe(false)
+  })
+})
+
+describe('oneRowPerLogin: the same login saved twice is one row', () => {
+  const secrets: Record<string, string> = { a1: 'p1', a2: 'p1', a3: 'p2', b1: 'p1', c1: 'p1', c2: 'p1', o1: 'p1', r1: 'p1', r2: 'p1' }
+  const asked: string[] = []
+  const digestOf = async (x: string) => { asked.push(x); return secrets[x] }
+  const row = (id: string, username?: string) => ({ id, ...(username ? { username } : {}) })
+
+  it('keeps the first of each username and password, across lists; another password, another user or no user stay', async () => {
+    asked.length = 0
+    const [first, others] = await oneRowPerLogin([
+      [row('a1', 'zc@example.com'), row('a2', ' ZC@example.com '), row('a3', 'zc@example.com'), row('b1', 'evan@example.com'), row('c1'), row('c2')],
+      [row('o1', 'zc@example.com')],
+    ], digestOf)
+    expect(first.map((r) => r.id)).toEqual(['a1', 'a3', 'b1', 'c1', 'c2'])
+    expect(others.map((r) => r.id)).toEqual([])
+    // Only rows that share a username are read.
+    expect(asked.sort()).toEqual(['a1', 'a2', 'a3', 'o1'])
+  })
+  it('a username that is not an email keeps its case: Admin and admin are two accounts', async () => {
+    const [rows] = await oneRowPerLogin([[row('r1', 'Admin'), row('r2', 'admin')]], digestOf)
+    expect(rows.map((r) => r.id)).toEqual(['r1', 'r2'])
+  })
+  it('nothing alike: every row stays, in order, and nothing is read', async () => {
+    asked.length = 0
+    const lists = [[row('a1', 'x@e.com'), row('b1', 'y@e.com')]]
+    expect((await oneRowPerLogin(lists, digestOf))[0].map((r) => r.id)).toEqual(['a1', 'b1'])
+    expect(asked).toEqual([])
   })
 })

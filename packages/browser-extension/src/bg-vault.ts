@@ -21,16 +21,47 @@ export const fail = (err: unknown): Reply => err instanceof ApiError
 
 // Kept per unlock: a list read under a session that has ended is never shown again.
 let cache: { at: number; token: string; items: VaultItemSummary[] } | null = null
+/** The read on its way, which every caller meanwhile shares (a menu asks for many items at once). */
+let reading: Promise<VaultItemSummary[]> | null = null
 export async function summaries(): Promise<VaultItemSummary[]> {
   const token = await vaultSession()
   if (cache && token && cache.token === token && Date.now() - cache.at < 5_000) return cache.items
   cache = null
-  const items = (await api.items()).filter((i) => !i.trashedAt)
-  const now = await vaultSession()
-  if (now) cache = { at: Date.now(), token: now, items }
-  return items
+  reading ??= (async () => {
+    try {
+      const items = (await api.items()).filter((i) => !i.trashedAt)
+      const now = await vaultSession()
+      if (now) cache = { at: Date.now(), token: now, items }
+      return items
+    } finally { reading = null }
+  })()
+  return reading
 }
-export const forget = () => { cache = null; lastJoinTry = 0 }
+export const forget = () => { cache = null; lastJoinTry = 0; digests.clear() }
+
+/**
+ * What a saved login holds, as a salted hash, for telling two saved copies of one login apart
+ * from two logins (login-pick.ts oneRowPerLogin): read from the vault once per item and unlock,
+ * never kept in plain. The salt is this background's own, so the hash means nothing anywhere else.
+ */
+const digests = new Map<string, Promise<string>>()
+let digestToken = ''
+const SALT = Array.from(crypto.getRandomValues(new Uint8Array(16))).join('.')
+export async function loginDigest(id: string): Promise<string> {
+  const token = (await vaultSession()) ?? ''
+  if (token !== digestToken) { digests.clear(); digestToken = token }
+  const at = (await summaries()).find((i) => i.id === id)?.updatedAt ?? ''
+  const key = `${id}:${at}`
+  let p = digests.get(key)
+  if (!p) {
+    p = api.item(id).then(async (i) => {
+      const bytes = new TextEncoder().encode(JSON.stringify([SALT, i.password ?? '', i.totp ?? '']))
+      return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (b) => b.toString(16).padStart(2, '0')).join('')
+    }, () => { digests.delete(key); return `unread:${id}` })
+    digests.set(key, p)
+  }
+  return p
+}
 
 /** A refusal that means this browser is locked (Walnut ended its unlock). */
 export const isLockedError = (err: unknown): boolean => err instanceof ApiError && !!err.code && LOCKED_CODES.has(err.code)
@@ -187,7 +218,7 @@ export const stores = {
   connecting: tabStore<string>('connecting'),
   menus: tabStore<MenuOwner>('menus'),
   /** Frames that may be filled: on the top page's origin, holding a login form. */
-  frames: tabStore<Record<string, { origin: string; at: number }>>('frames'),
+  frames: tabStore<Record<string, { origin: string; url?: string; at: number }>>('frames'),
   /** The strong password the menu last made on a tab: a sign-up sent with it is saved without typing. */
   generated: tabStore<{ password: string; url: string; at: number }>('generated'),
   /** The login last filled or sent on a tab: its code page offers that login's code. */

@@ -464,9 +464,12 @@ screen: `popup-view.ts`), `tests/e2e/browser/extension-one-unlock.spec.ts`.
 IndexedDB, which content scripts cannot open) and, for 5 s while unlocked, the item summaries (so a
 Lock elsewhere shows within seconds); a content script holds neither. Each kind of message is accepted only from the page that may
 send it (the popup, the menu, the save bar, a content script). A fill fetches the item and
-sends its username and password only to frames on the top page's origin that reported a login
-form (or to the one frame whose menu was picked), with that origin, which the frame checks
-again; it keeps nothing.
+sends its username and password only to the top page and frames on its site that reported a
+login form (or to the one frame whose menu was picked), each with its own origin, which the frame
+checks again; it keeps nothing. A fill that names no frame (the popup's Fill, the shortcut) puts
+a login into a frame of another origin only when the item's own sites take that frame's page too:
+a login saved for one host never goes into a sibling host's frame. An agent's `fill_login` fills
+the top page's own origin only.
 
 **The in-page menu and save bar** are the extension's own pages framed into the site, inside
 closed shadow roots, so the site cannot read them. Each open has a one-time nonce that every
@@ -479,15 +482,28 @@ host, or an element put after one (it would paint on top), closes it. Before a f
 the page is checked once more: the page faded or hidden around them, or something in the top
 layer (a popover, a modal dialog, full screen) over them, and Walnut does nothing and closes
 them. Their buttons act only after the frame has been on screen for half a second and, in
-Chrome, only while nothing covers or fades it (IntersectionObserver v2); Firefox has no such
-signal, so there the wait and the checks before acting hold. The menu
+Chrome, only while nothing covers or fades it (IntersectionObserver v2); a click refused for
+that says so in the menu or bar instead of doing nothing. The browser counts any box drawn over
+them as covering them, pointer-events or not, so nothing Walnut draws into a page spans it: the
+frame around an agent's tab is four edges and its pill (2026-11-17: one page-size box made every
+pick in a framed menu do nothing), and while a menu or save bar is shown in any frame of the tab,
+the edges, the pill and the agent's cursor are hidden. Firefox has no such signal, so there the wait and the checks
+before acting hold. The menu
 opens by itself only right after the person clicked or tabbed into an empty field, never on a
 focus a script made or a fill moved; typing your own value closes it.
 
 **What it fills.** Only a login whose saved site has the page's registrable domain (the
 same rule as everywhere, `url-match.ts`: an https login never fills an http page), and only in
-the top page or a frame on the top page's origin: a login form framed in from another site, or
-a sandboxed frame, gets no icon and no fill. Every fill, menu or popup, checks the item against
+the top page or a frame on the top page's site and scheme (`frameOnSite` in `login-pick.ts`): a
+site's own sign-in host framed into its pages (idmsa.apple.com in appstoreconnect.apple.com) fills,
+and no page can read a frame of another origin; a login form framed in from another site, or a
+sandboxed frame, gets no icon and no fill. A frame of another origin learns from the background
+(`page-init`) whether it is on the tab's site, and needs every frame between it and the top page
+on that site too (`location.ancestorOrigins`, where the browser has it). Such a frame offers no new
+password: what it sends is not offered for saving, so a password made there would be lost. The
+menu and the shortcut count the same login saved twice (the same username, ignoring case for an
+email address, and the same password and code) once; the background compares a salted hash of
+each, read once per item and unlock, never the plain text. Every fill, menu or popup, checks the item against
 the page again in the background. It does nothing on Walnut's own pages (so its master
 password is never offered for saving): every Walnut page carries `<meta name="walnut-app">`,
 under whatever address it is opened (a mark a page can only use to turn the extension off),

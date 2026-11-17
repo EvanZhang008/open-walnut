@@ -163,3 +163,49 @@ export function neverCovers(list: readonly string[], url: string): boolean {
     return !!x && (host === x || host.endsWith(`.${x}`))
   })
 }
+
+/** Whose login a row is: its username without spaces, and for an email address, without case. */
+export function accountOf(username: string | undefined): string {
+  const u = username?.trim() ?? ''
+  return u.includes('@') ? u.toLowerCase() : u
+}
+
+/**
+ * One row per login (2026-11-17: an Apple sign-in listed the same account twice, from the same
+ * login saved twice): rows of one account (accountOf) whose `digestOf` (what the login holds: its
+ * password and one-time code) is the same show once, in the first place they come, across every
+ * list in order (a login in the first list is not listed again in a later one). Rows with no
+ * username are never merged, and `digestOf` is asked, all at once, only about rows that share one.
+ */
+export async function oneRowPerLogin<T extends { id: string; username?: string }>(lists: readonly (readonly T[])[], digestOf: (id: string) => Promise<string>): Promise<T[][]> {
+  const rows = lists.flat()
+  const count = new Map<string, number>()
+  for (const r of rows) { const who = accountOf(r.username); if (who) count.set(who, (count.get(who) ?? 0) + 1) }
+  const shared = rows.filter((r) => (count.get(accountOf(r.username)) ?? 0) > 1)
+  const digest = new Map(await Promise.all(shared.map(async (r) => [r.id, await digestOf(r.id)] as const)))
+  const seen = new Set<string>()
+  return lists.map((list) => list.filter((row) => {
+    const d = digest.get(row.id)
+    if (d === undefined) return true
+    const key = JSON.stringify([accountOf(row.username), d])
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  }))
+}
+
+/**
+ * A frame Walnut fills on a tab: the top page itself, or a frame on the top page's site (its
+ * registrable domain) and scheme, of its own origin or another: a sign-in a site embeds from its
+ * own login host (idmsa.apple.com inside appstoreconnect.apple.com). Never another site's frame:
+ * a page embedding someone's login is how a page would phish one. No page can read a frame of
+ * another origin, so what Walnut puts there only that origin reads.
+ */
+export function frameOnSite(frameUrl: string, topUrl: string): boolean {
+  try {
+    const f = new URL(frameUrl)
+    const t = new URL(topUrl)
+    if (!/^https?:$/.test(f.protocol) || f.protocol !== t.protocol || f.origin === 'null') return false
+    return f.origin === t.origin || (siteKey(frameUrl)?.domain ?? f.hostname) === (siteKey(topUrl)?.domain ?? t.hostname)
+  } catch { return false }
+}

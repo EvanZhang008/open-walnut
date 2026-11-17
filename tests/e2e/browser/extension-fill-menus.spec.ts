@@ -6,9 +6,12 @@
  * fast; the menu opens under the field whenever it fits there (the form's button under it or
  * not), above it only when it does not, opens on the code page only when the person is in the
  * field, closes on an outside click, a submit and Escape, and filters as the person
- * types; logins saved for another part of the site are listed under their own heading.
+ * types; logins saved for another part of the site are listed under their own heading; a sign-in
+ * framed from another host of the site fills, another site's never; in an agent's tab (its frame
+ * on the page) a pick fills, and a pick refused because something covers the menu says so; the
+ * same login saved twice is one row.
  *
- * Sites are *.a2lab.test (mapped to this machine), so nothing the other specs save matches them.
+ * Sites are *.a2lab.test and *.a3lab.test (mapped to this machine), so nothing the other specs save matches them.
  */
 import { expect, test, chromium, type BrowserContext, type Frame, type Page } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
@@ -73,7 +76,26 @@ const SITES: Record<string, Record<string, string>> = {
     '/frame': page('Sign in (framed)', `<p>The sign-in form below is inside a frame from the same site.</p><iframe id="fr" src="/signin" style="width:100%;height:340px;border:1px solid #ccc"></iframe>`),
   },
   // A site with no login saved anywhere on it, and another part of a2lab.test with none of its own.
-  'solo.a2site.test': { '/signin': signinPage },
+  // Its /idp-frame embeds another site's sign-in: never filled there.
+  'solo.a2site.test': { '/signin': signinPage, '/idp-frame': page('Another site', `<p>Another site's page with a3lab's sign-in inside.</p><iframe id="fr" src="http://idp.a3lab.test:__PORT__/signin" style="width:100%;height:340px;border:1px solid #ccc"></iframe>`) },
+  // A site whose sign-in is its own login host, framed in its pages (as idmsa.apple.com is in Apple's),
+  // and a page whose logins are saved twice.
+  'www.a3lab.test': {
+    '/account': page('Your a3lab account', `<p>Sign in to see your account.</p><iframe id="fr" src="http://idp.a3lab.test:__PORT__/signin" style="width:100%;height:340px;border:1px solid #ccc"></iframe>`),
+    '/signin': signinPage,
+  },
+  'idp.a3lab.test': { '/signin': signinPage },
+  // A site whose page frames its sign-in host, for the whole-page fill (the popup's Fill) and a framed sign-up.
+  'www.a4lab.test': {
+    '/account': page('Your a4lab account', `<iframe id="fr" src="http://idp.a4lab.test:__PORT__/signin" style="width:100%;height:340px;border:1px solid #ccc"></iframe>`),
+    '/join': page('Join a4lab', `<iframe id="fr" src="http://idp.a4lab.test:__PORT__/join" style="width:100%;height:340px;border:1px solid #ccc"></iframe>`),
+  },
+  'idp.a4lab.test': {
+    '/signin': signinPage,
+    '/join': page('Create your a4lab account', `<form method="post" action="/joined"><label>Email <input name="email" type="email" autocomplete="username"></label>
+<label>New password <input name="pw" type="password" autocomplete="new-password"></label><button>Create account</button></form>`),
+  },
+  'dup.a3lab.test': { '/signin': signinPage },
   'blog.a2lab.test': { '/signin': signinPage },
   'accounts.a2lab.test': {
     '/email': page('Sign in: step 1 of 3', `<form method="get" action="/password"><label>Email <input name="identifier" type="email" autocomplete="username"></label><button>Next</button></form>`),
@@ -87,7 +109,7 @@ function startSites(): Promise<void> {
   sites = http.createServer((req, res) => {
     const host = String(req.headers.host ?? '').split(':')[0]
     const html = SITES[host]?.[new URL(req.url ?? '/', 'http://x').pathname]
-    const send = () => { res.writeHead(html ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' }); res.end(html ?? 'not found') }
+    const send = () => { res.writeHead(html ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' }); res.end((html ?? 'not found').replaceAll('__PORT__', String(port))) }
     if (req.method === 'POST') { req.resume(); req.on('end', send) } else send()
   })
   return new Promise((resolve) => sites.listen(0, '127.0.0.1', () => { port = (sites.address() as AddressInfo).port; resolve() }))
@@ -174,7 +196,7 @@ test.beforeAll(async ({}, info) => {
     args: [
       `--disable-extensions-except=${path.join(dir, 'chrome')}`,
       `--load-extension=${path.join(dir, 'chrome')}`,
-      '--host-resolver-rules=MAP *.a2lab.test 127.0.0.1, MAP solo.a2site.test 127.0.0.1',
+      '--host-resolver-rules=MAP *.a2lab.test 127.0.0.1, MAP *.a3lab.test 127.0.0.1, MAP *.a4lab.test 127.0.0.1, MAP solo.a2site.test 127.0.0.1',
     ],
   })
   let worker = ctx.serviceWorkers()[0]
@@ -187,6 +209,14 @@ test.beforeAll(async ({}, info) => {
   await seed(p, { type: 'login', title: `Shop ${stamp}`, username: 'alex@a2lab.test', password: 'Shop-Pass-4821!', urls: [site('shop.a2lab.test', '/')] })
   await seed(p, { type: 'login', title: `Shop work ${stamp}`, username: 'alex.work@a2lab.test', password: 'Work-Pass-9930!', urls: [site('shop.a2lab.test', '/')] })
   await seed(p, { type: 'login', title: `Accounts ${stamp}`, username: 'sam@a2lab.test', password: 'Accounts-Pass-7710!', totp: SEED, urls: [site('accounts.a2lab.test', '/')] })
+  // A sign-in host framed in its site's pages, and one login saved twice (with the same account's older password beside it).
+  await seed(p, { type: 'login', title: `Idp ${stamp}`, username: 'pat@a3lab.test', password: 'Idp-Pass-5150!', urls: [site('idp.a3lab.test', '/')] })
+  for (const [t, u, pw] of [['Dup A', 'kim', 'Dup-Pass-1!'], ['Dup B', 'kim', 'Dup-Pass-1!'], ['Dup old', 'kim', 'Dup-Pass-0!'], ['Dup other', 'lee', 'Dup-Pass-1!']]) {
+    await seed(p, { type: 'login', title: `${t} ${stamp}`, username: `${u}@a3lab.test`, password: pw, urls: [site('dup.a3lab.test', '/')] })
+  }
+  // One login saved for the a4lab page's own host only, one for the whole a4lab site.
+  wwwOnly = await seed(p, { type: 'login', title: `A4 www only ${stamp}`, username: 'www@a4lab.test', password: 'Www-Only-3131!', urls: [`${site('www.a4lab.test', '/')}#walnut-match=host`] })
+  wholeSite = await seed(p, { type: 'login', title: `A4 site ${stamp}`, username: 'all@a4lab.test', password: 'A4-Site-2727!', urls: [site('a4lab.test', '/')] })
   await seed(p, { type: 'card', title: `Lab Visa ${stamp}`, card: { holder: 'Alex Rivera', number: '4111 1111 1111 1111', expMonth: '08', expYear: '2029', code: '123' } })
   await seed(p, { type: 'card', title: `No code ${stamp}`, card: { holder: 'Alex Rivera', number: '5555555555554444', expMonth: '01', expYear: '2030' } })
   await seed(p, {
@@ -643,5 +673,156 @@ test('"Never for this site" says so in the bar, with Undo, then closes', async (
   await expect.poll(() => sw().evaluate(() => chrome.storage.local.get('neverSave').then((r) => r.neverSave ?? []))).not.toContain('solo.a2site.test')
   // And the bar goes by itself.
   await expect.poll(() => p.frames().some((x) => x.url().includes('/savebar.html') && !x.isDetached()), { timeout: 10_000 }).toBe(false)
+  await p.close()
+})
+
+let wwwOnly = ''
+let wholeSite = ''
+
+/**
+ * Every box Walnut draws into a page (its walnut-ext hosts and what is in their closed shadow
+ * roots, read through CDP, which sees those), and whether the agent's mark is making way (quiet).
+ */
+async function walnutDrawn(p: Page): Promise<{ quiet: boolean; boxes: { w: number; h: number; what: string }[] }> {
+  const cdp = await p.context().newCDPSession(p)
+  try {
+    type N = { nodeType: number; localName?: string; backendNodeId: number; attributes?: string[]; children?: N[]; shadowRoots?: N[] }
+    const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true }) as { root: N }
+    const mine: N[] = []
+    const walk = (n: N, inside: boolean) => {
+      const here = inside || n.localName === 'walnut-ext'
+      if (here && n.nodeType === 1) mine.push(n)
+      for (const c of [...(n.children ?? []), ...(n.shadowRoots ?? [])]) walk(c, here)
+    }
+    walk(root, false)
+    const out = { quiet: false, boxes: [] as { w: number; h: number; what: string }[] }
+    for (const n of mine) {
+      const a = n.attributes ?? []
+      const cls = a[a.indexOf('class') + 1] ?? ''
+      if (a.includes('class') && cls.split(' ').includes('quiet')) out.quiet = true
+      const b = await cdp.send('DOM.getBoxModel', { backendNodeId: n.backendNodeId }).catch(() => null) as { model: { width: number; height: number } } | null
+      if (b) out.boxes.push({ w: b.model.width, h: b.model.height, what: `${n.localName}.${cls}` })
+    }
+    return out
+  } finally { await cdp.detach() }
+}
+
+/** The popup's Fill for an item, on the page `p` shows (its window's active tab). */
+async function popupFill(p: Page, id: string): Promise<{ ok: boolean; error?: string }> {
+  const tab = await tabOf(p)
+  const win = await sw().evaluate(async (t: number) => (await chrome.tabs.get(t)).windowId, tab)
+  const pop = await ctx.newPage()
+  await pop.goto(`chrome-extension://${extId}/popup.html`)
+  await sw().evaluate((t: number) => chrome.tabs.update(t, { active: true }), tab)
+  const r = await pop.evaluate(([i, w]) => chrome.runtime.sendMessage({ type: 'fill-tab', id: i, windowId: w }), [id, win] as const) as { ok: boolean; error?: string }
+  await pop.close()
+  return r
+}
+
+/** The tab id of a page, read by the background. */
+const tabOf = (p: Page) => sw().evaluate(async (u: string) => (await chrome.tabs.query({})).find((t) => t.url === u)!.id!, p.url())
+
+test('a sign-in framed from the site\'s own login host (another origin) fills from its menu; another site\'s frame offers nothing (2026-11-17, idmsa.apple.com)', async () => {
+  const p = await ctx.newPage()
+  await p.goto(site('www.a3lab.test', '/account'))
+  const inner = p.frameLocator('#fr')
+  await inner.locator('[name=email]').click()
+  const menu = await menuOf(p)
+  await menu.getByTestId('menu-item').filter({ hasText: `Idp ${stamp}` }).click()
+  await expect(inner.locator('[name=email]')).toHaveValue('pat@a3lab.test')
+  await expect(inner.locator('[name=password]')).toHaveValue('Idp-Pass-5150!')
+  await noMenu(p)
+  // Another site embedding that sign-in: no menu, nothing filled.
+  await p.goto(site('solo.a2site.test', '/idp-frame'))
+  await p.frameLocator('#fr').locator('[name=email]').click()
+  await p.waitForTimeout(1500)
+  expect(menuCount(p)).toBe(0)
+  await expect(p.frameLocator('#fr').locator('[name=email]')).toHaveValue('')
+  await p.close()
+})
+
+test('in an agent\'s tab, with its frame on the page, a pick fills, in the page and in a frame; a menu something covers says so and fills nothing', async () => {
+  const p = await ctx.newPage()
+  await p.goto(site('shop.a2lab.test', '/frame'))
+  const tab = await tabOf(p)
+  const mark = (on: boolean, mode?: string) => sw().evaluate(([t, on, mode]) => chrome.tabs.sendMessage(t as number, { type: 'agent-mark', on, who: 'Spec', ...(mode ? { mode } : {}) }, { frameId: 0 }), [tab, on, mode] as const)
+  await mark(true)
+  await expect.poll(() => p.evaluate(() => document.querySelectorAll('walnut-ext').length)).toBeGreaterThan(0)
+  // Nothing of the mark spans the page: the browser counts any box over the menu as covering it.
+  const view = p.viewportSize()!
+  const drawn = await walnutDrawn(p)
+  expect(drawn.boxes.length).toBeGreaterThan(0)
+  for (const b of drawn.boxes) expect(b.w * b.h, b.what).toBeLessThan(view.width * view.height * 0.25)
+  expect(drawn.quiet).toBe(false)
+  const inner = p.frameLocator('#fr')
+  await inner.locator('[name=email]').click()
+  let menu = await menuOf(p)
+  // A frame's menu is open: the mark and its pill make way until it closes.
+  await expect.poll(async () => (await walnutDrawn(p)).quiet).toBe(true)
+  await menu.getByTestId('menu-item').filter({ hasText: `Shop ${stamp}` }).first().click()
+  await expect(inner.locator('[name=email]')).toHaveValue(/alex(\.work)?@a2lab\.test/)
+  await noMenu(p)
+  await expect.poll(async () => (await walnutDrawn(p)).quiet).toBe(false)
+  // A frame that goes with its menu still open: the mark and its Stop button come back by themselves.
+  await p.goto(site('shop.a2lab.test', '/frame'))
+  await mark(true)
+  await p.frameLocator('#fr').locator('[name=email]').click()
+  await menuOf(p)
+  await expect.poll(async () => (await walnutDrawn(p)).quiet).toBe(true)
+  await p.evaluate(() => document.getElementById('fr')!.remove())
+  await expect.poll(async () => (await walnutDrawn(p)).quiet, { timeout: 15_000 }).toBe(false)
+  // The person took the tab over: the frame says so, and a pick still fills.
+  await p.goto(site('shop.a2lab.test', '/signin'))
+  await mark(true, 'driving')
+  await p.locator('[name=email]').click()
+  menu = await menuOf(p)
+  await menu.getByTestId('menu-item').filter({ hasText: `Shop ${stamp}` }).first().click()
+  await expect(p.locator('[name=email]')).toHaveValue(/alex(\.work)?@a2lab\.test/)
+  await noMenu(p)
+  // Something of the page's own drawn over the framed menu: the pick is refused, and the menu says why.
+  await p.goto(site('shop.a2lab.test', '/frame'))
+  await p.frameLocator('#fr').locator('[name=email]').click()
+  menu = await menuOf(p)
+  await p.evaluate(() => { const d = document.createElement('div'); d.style.cssText = 'position:fixed;inset:0;z-index:2147483640;pointer-events:none'; document.body.appendChild(d) })
+  await p.waitForTimeout(400)
+  await menu.getByTestId('menu-item').first().click()
+  await expect(menu.getByTestId('menu-covered')).toBeVisible()
+  await expect(p.frameLocator('#fr').locator('[name=email]')).toHaveValue('')
+  await mark(false)
+  await p.close()
+})
+
+test('the same login saved twice is one row; the same account with another password stays its own row', async () => {
+  const p = await ctx.newPage()
+  await p.goto(site('dup.a3lab.test', '/signin'))
+  await p.locator('[name=email]').click()
+  const menu = await menuOf(p)
+  // This host's logins (the sign-in host's are listed apart, tier 2).
+  const rows = menu.locator('[data-testid=menu-item]:not([data-tier="2"])')
+  await expect(rows).toHaveCount(3)
+  await expect(rows.filter({ hasText: 'kim@a3lab.test' })).toHaveCount(2)
+  await expect(rows.filter({ hasText: 'lee@a3lab.test' })).toHaveCount(1)
+  await p.close()
+})
+
+test('the popup\'s Fill puts a login into a frame of another host only when the login is saved for that host too; a framed sign-up offers no new password', async () => {
+  const p = await ctx.newPage()
+  await p.goto(site('www.a4lab.test', '/account'))
+  const inner = p.frameLocator('#fr')
+  await expect(inner.locator('[name=email]')).toBeVisible()
+  // Saved for www alone ("this host only"): never into the idp host's frame.
+  const only = await popupFill(p, wwwOnly)
+  expect(only.ok).toBe(false)
+  await expect(inner.locator('[name=email]')).toHaveValue('')
+  await expect(inner.locator('[name=password]')).toHaveValue('')
+  // Saved for the whole site: it fills the framed sign-in.
+  expect((await popupFill(p, wholeSite)).ok).toBe(true)
+  await expect(inner.locator('[name=email]')).toHaveValue('all@a4lab.test')
+  await expect(inner.locator('[name=password]')).toHaveValue('A4-Site-2727!')
+  // A sign-up framed from another origin: nothing there saves what is sent, so no password is made there.
+  await p.goto(site('www.a4lab.test', '/join'))
+  await p.frameLocator('#fr').locator('[name=pw]').click()
+  await p.waitForTimeout(1500)
+  expect(menuCount(p)).toBe(0)
   await p.close()
 })

@@ -12,7 +12,13 @@ import { distinctName } from './savebar-name'
 
 /** The nonce the content script hands this frame (nonce.ts): every message carries it. */
 const ask = <T = Record<string, unknown>>(msg: { type: string; [k: string]: unknown }) => askBackground<T>({ ...msg, nonce: currentNonce() })
-const guard = frameGuard()
+const guard = frameGuard(() => covered())
+/** A click refused because something on the page is drawn over the bar: said in the bar. */
+function covered(): void {
+  if (root.querySelector('[data-testid=savebar-covered]')) return
+  root.append(h('p', { class: 'err wrap', role: 'alert', 'data-testid': 'savebar-covered' }, 'Something on the page is drawn over this bar, so Walnut did nothing. Move it out of the way and try again.'))
+  size()
+}
 
 interface Choice { id: string; title: string; username?: string }
 /** `elsewhere`: the host of the page the bar is on now, when the login was made on another (`site`). */

@@ -57,6 +57,7 @@ body.menu { background: var(--bg); border: 1px solid var(--line); border-radius:
 .menu-list { padding: 2px 4px 6px; max-height: 300px; overflow: auto; }
 .menu-state { display: flex; align-items: center; gap: 10px; padding: 12px; }
 .menu-state .row-text { gap: 1px; }
+.menu-note { padding: 0 12px 8px; margin: 0; }
 
 /* ── the save bar ── */
 body.bar { background: var(--bg); border: 1px solid var(--line); border-radius: 14px; }

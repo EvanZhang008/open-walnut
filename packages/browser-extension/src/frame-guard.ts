@@ -9,11 +9,15 @@ const SETTLE_MS = 500
 export interface FrameGuard {
   /** True when a click on this frame may act now. */
   allowed(): boolean
-  /** Wrap a click handler: refused clicks do nothing. */
+  /** Wrap a click handler: refused clicks do nothing, and one refused because something covers the frame calls `onCovered`. */
   wrap<E extends Event>(f: (e: E) => void): (e: E) => void
 }
 
-export function frameGuard(): FrameGuard {
+/**
+ * `onCovered`: the person's click was refused because something is drawn over the frame (or it
+ * is faded): the frame says so, since a click that does nothing reads as broken (2026-11-17).
+ */
+export function frameGuard(onCovered?: () => void): FrameGuard {
   let since = Date.now()
   let visible = true
   try {
@@ -31,6 +35,10 @@ export function frameGuard(): FrameGuard {
   const allowed = () => visible && document.visibilityState === 'visible' && Date.now() - since >= SETTLE_MS
   return {
     allowed,
-    wrap: (f) => (e) => { if (allowed() && e.isTrusted) f(e) },
+    wrap: (f) => (e) => {
+      if (!e.isTrusted) return
+      if (allowed()) { f(e); return }
+      if (!visible && document.visibilityState === 'visible') onCovered?.()
+    },
   }
 }
