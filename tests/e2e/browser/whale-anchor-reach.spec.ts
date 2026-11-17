@@ -45,6 +45,16 @@ test('a turn bigger than the tail window keeps the earlier replies and arrives b
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   const panel = await openWhale(page, baseURL!);
+  // The first reply shows from the snapshot (its last few rows); the full history lands after it
+  // and adds the earlier replies above, a step a frame. Read "earlier" once the count holds, or the
+  // comparison below is shifted by the rows that were still arriving (CI, 2026-11-16).
+  let seen = -1;
+  await expect.poll(async () => {
+    const n = (await replies(panel)).length;
+    const held = n === seen;
+    seen = n;
+    return held;
+  }, { timeout: 30_000, intervals: [1500] }).toBe(true);
   const earlier = await replies(panel);
   expect(earlier.length, 'earlier replies are on screen').toBeGreaterThan(0);
 

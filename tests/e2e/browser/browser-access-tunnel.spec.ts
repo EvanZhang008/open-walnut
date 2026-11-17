@@ -299,8 +299,10 @@ test.describe('Open from a browser', () => {
     await expect.poll(() => walnutSockets().some((ws) => ws.answered), { timeout: 30_000 }).toBe(true)
     for (const ws of walnutSockets()) {
       const query = new URL(ws.url).searchParams
-      // The lean signature is public protocol negotiation, never a sign-in credential.
-      expect([...query.entries()]).toEqual([['lean', LEAN_SIGNATURE]])
+      // The lean signature is public protocol negotiation, never a sign-in credential; `automated`
+      // says a browser under automation drives this window (web/src/api/ws.ts), so its sends are
+      // framed as an agent's, never the person's.
+      expect([...query.entries()]).toEqual([['lean', LEAN_SIGNATURE], ['automated', 'webdriver']])
       expect(ws.url).not.toContain('token=')
       const token = await phone.evaluate(() => localStorage.getItem('walnut.deviceToken'))
       expect(token).toBeTruthy()
