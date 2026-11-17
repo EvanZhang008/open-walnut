@@ -15,6 +15,7 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import { AUTOMATION_SILENCE_JS } from '../../../src/lib/automation-silence.js'
 import { PASTEBOARD_GUARDED, guardWebkitPasteboard } from './pw-pasteboard.js'
+import { QUIET_RETRY_OFF_JS } from './pw-quiet-retry.js'
 
 interface ContextLike { addInitScript(script: { content: string }): Promise<void> }
 interface Instrumentation { addListener(listener: { runAfterCreateBrowserContext?: (c: ContextLike) => Promise<void> }): void }
@@ -55,6 +56,19 @@ if (!g[FLAG]) {
   } catch (e) {
     console.warn(`[pw-silence] could not silence test browsers: ${(e as Error).message}`)
   }
+}
+
+// A failed request is sent once, so a spec's one failure reaches the page (pw-quiet-retry.ts).
+// Outside the silence flag, with its own: a runner's preload may have set that one first.
+const QUIET_FLAG = Symbol.for('walnut.pwQuietRetryOff')
+const gq = globalThis as { [QUIET_FLAG]?: boolean }
+if (!gq[QUIET_FLAG]) {
+  gq[QUIET_FLAG] = true
+  const core = createRequire(import.meta.url)('playwright-core') as { _instrumentation?: Instrumentation }
+  if (!core._instrumentation) throw new Error('[pw-quiet-retry] playwright-core has no instrumentation hook: test browsers would retry failed requests')
+  core._instrumentation.addListener({
+    runAfterCreateBrowserContext: async (context) => { await context.addInitScript({ content: QUIET_RETRY_OFF_JS }) },
+  })
 }
 
 // Nor does a WebKit test browser on a Mac ever write the person's clipboard (pw-pasteboard.ts).
