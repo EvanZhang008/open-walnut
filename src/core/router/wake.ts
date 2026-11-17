@@ -1,4 +1,5 @@
 // The router's wake: a daemon trigger (template router:pending) whose fire wakes one area router.
+import { ROUTER_OWNER_NOTE } from './decision-rules.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { WALNUT_HOME } from '../../constants.js';
 import type { CronJob } from '../cron/types.js';
@@ -27,7 +28,7 @@ export const ROUTER_WAKE_RETRY_NOTE = 'An item whose route shows failed (its del
  * Rides each wake message: a router session started by an older build still holds its old prompt,
  * which told it to create tasks (2026-11-14: the router is the triage and creates none).
  */
-export const ROUTER_WAKE_OWNER_NOTE = 'You are the triage: hand each item straight to its owner with task_id (the open task that owns its matter: search all tasks with search and read one with task_get; else, when only the person can act, for_user; else the VP of its project from router_context owners, else Main), with your brief. Never create a task: new_task_title is refused.';
+export const ROUTER_WAKE_OWNER_NOTE = `You are the triage. ${ROUTER_OWNER_NOTE} new_task_title is refused.`;
 export const ROUTER_WAKE_BATCH = 50;
 export const ROUTER_WAKE_EVERY_MS = 5 * 60_000;
 const LOOKUP_BATCH = 200;

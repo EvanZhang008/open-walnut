@@ -43,22 +43,26 @@ describe('routerAreaProfile', () => {
 
   it('tells the router it is the triage and never creates tasks', () => {
     const prompt = routerAreaProfile('personal').systemPrompt ?? ''
-    expect(prompt).toMatch(/you are the triage/)
+    expect(prompt).toMatch(/the triage that hands each item straight to the task that owns it/)
     expect(prompt).toMatch(/you never create tasks/)
     expect(prompt).not.toMatch(/new_task_title/)
   })
 
-  // 2026-11-16: a DoorDash interview invitation went to the person as a letter while the open
-  // "Interview" task owned it ("this is fucking the interview why not route to interview").
-  it('tells the router to search for the open task that owns the matter, and to prefer it over a letter', () => {
+  // 2026-11-16: a DoorDash interview invitation went to the person as a letter while the
+  // "Interview" task owned it ("this is fucking the interview why not route to interview");
+  // 2026-11-17: one search for every task alike, checked one by one ("if not keep looking").
+  it('tells the router to search every task, check each candidate and keep looking before a letter', () => {
     const prompt = routerAreaProfile('personal').systemPrompt ?? ''
-    expect(prompt).toContain('search')
-    expect(prompt).toContain('task_get')
-    const owner = prompt.indexOf('1) An open task that owns this matter')
-    const letter = prompt.indexOf('2) With no such task, when only the person can act')
-    expect(owner).toBeGreaterThan(0)
-    expect(letter).toBeGreaterThan(owner)
-    expect(prompt).toMatch(/even when only the person can act in the end/)
+    const search = prompt.indexOf('1) Search all of the person\'s tasks')
+    const check = prompt.indexOf('2) Take the candidates most relevant first and read each with task_get')
+    const next = prompt.indexOf('It is not: check the next candidate')
+    const letter = prompt.indexOf('4) Only when no task is this item\'s matter: for_user')
+    expect(search).toBeGreaterThan(0)
+    expect(check).toBeGreaterThan(search)
+    expect(next).toBeGreaterThan(check)
+    expect(letter).toBeGreaterThan(next)
+    expect(prompt).toMatch(/Every task counts alike, whatever its role, open or finished/)
+    expect(prompt).not.toMatch(/\bVP\b/)
     expect(prompt).toMatch(/Never add a conflict, mistake or risk you have not checked/)
   })
 

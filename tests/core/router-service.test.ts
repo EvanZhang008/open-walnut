@@ -197,13 +197,12 @@ describe('who may route an item', () => {
 })
 
 describe('which target a route may name', () => {
-  // Any open task, VP or Main may own an item (router-direct-owner.test.ts covers those); only a
-  // router (a loop) and complete or gone work are refused.
+  // Any task may own an item, whatever its role, open or finished (router-direct-owner.test.ts
+  // covers those); only a router (a loop) and gone work are refused.
   const refusals: Array<[string, Partial<RouteItemInput>, string, number]> = [
     ['the active router itself', { taskId: 'task-p-router', byTaskId: 'task-p-router' }, 'router_loop', 409],
     ['another router of the Area (paused)', { taskId: 'task-p-router-paused', byTaskId: 'task-p-router' }, 'router_loop', 409],
     ['the router of another Area', { taskId: 'task-w-router' }, 'router_loop', 409],
-    ['a completed task', { taskId: 'task-p-done' }, 'target_unavailable', 409],
     ['a task that does not exist', { taskId: 'task-gone' }, 'target_unavailable', 409],
   ]
   for (const [label, extra, code, status] of refusals) {
@@ -389,15 +388,15 @@ describe('a delivery that did not go through', () => {
     expect(f.send.mock.calls[1]![0].taskId).toBe('task-p-worker')
   })
 
-  it('a retry whose original target completed meanwhile is refused and sends nothing', async () => {
+  // A finished owner still owns the item (2026-11-17): the retry delivers, and the delivery reopens it.
+  it('a retry whose original target completed meanwhile still delivers to it', async () => {
     const f = fakes()
     const d = deps(f)
     f.send.mockRejectedValueOnce(Object.assign(new Error('throttled'), { code: 'throttled' }))
     expect((await routeItem(input(), d)).route.status).toBe('failed')
     f.tasks.set('task-p-worker', task('task-p-worker', { phase: 'COMPLETE' }))
-    await expectRefusal(() => routeItem(input({ retry: true }), d), 'target_unavailable', 409)
-    expect(f.send).toHaveBeenCalledTimes(1)
-    expect(await store().get(routerKey(P_ITEM))).toMatchObject({ status: 'failed' })
+    expect((await routeItem(input({ retry: true }), d)).route).toMatchObject({ status: 'routed', taskId: 'task-p-worker' })
+    expect(f.send).toHaveBeenCalledTimes(2)
   })
 
   it('an uncertain delivery is recorded as unknown and may not retry', async () => {

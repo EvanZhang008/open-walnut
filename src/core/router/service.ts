@@ -58,7 +58,7 @@ export async function routeViews(routes: RouterRoute[], opts: { home?: string } 
 
 export interface RouteItemInput {
   source: RouterSource;
-  /** The open task or VP (Main too) that owns the item now. Never a router. */
+  /** The task that owns the item, whatever its role, open or finished. Never a router. */
   taskId?: string;
   reason: string;
   byTaskId?: string;
@@ -112,16 +112,17 @@ export function isRouterTask(areas: RouterAreasFile, task: Pick<Task, 'id' | 'or
 
 /**
  * The router hands an item straight to whoever owns it (2026-11-14, the user: "he goes straight to
- * the right person and gives them the original text and a reference"): any open task, a VP or
- * Main. Never a router (a loop), never complete or gone work.
+ * the right person and gives them the original text and a reference"): any task, whatever its role.
+ * A finished one too (2026-11-17: a task found by search is the owner, open or finished): the
+ * delivery reopens it, as any task's message does. Never a router (a loop), never gone work.
  */
 async function assertRouteTarget(areas: RouterAreasFile, targetId: string, deps: RouterDeliveryDeps): Promise<Task> {
   const getTask = deps.getTask ?? (await import('../task-manager.js')).getTask;
   const target = await getTask(targetId).catch(() => undefined);
-  if (!target || target.id !== targetId || target.phase === 'COMPLETE') {
-    throw new RouterError('target_unavailable', 'Route to open work: this task is complete or gone. Pick the open task that owns it, or the VP of its project.', 409);
+  if (!target || target.id !== targetId) {
+    throw new RouterError('target_unavailable', 'This task is gone. Search all tasks again for the one whose matter this item is.', 409);
   }
-  if (isRouterTask(areas, target)) throw new RouterError('router_loop', 'Route to the task or VP that owns the item, never to a router.', 409);
+  if (isRouterTask(areas, target)) throw new RouterError('router_loop', 'Route to the task that owns the item, never to a router.', 409);
   return target;
 }
 
@@ -138,7 +139,7 @@ export async function sendRoute(route: RouterRoute, text: string): Promise<unkno
   try {
     return await performSessionSend({
       to: taskId, text, title, expectReply: false, messageId: route.messageId,
-      callerSid: 'external', source: 'api-agent', callerLabel: 'Router',
+      callerSid: 'external', source: ROUTER_SEND_SOURCE, callerLabel: 'Router',
     });
   } catch (error) {
     if (!(error instanceof SendError) || error.code !== 'task_has_no_session') throw error;
@@ -150,6 +151,9 @@ export async function sendRoute(route: RouterRoute, text: string): Promise<unkno
     });
   }
 }
+
+/** The send source of a delivery: one that reopens a finished task (phase.ts REOPENING_SEND_SOURCES), so a finished owner takes the item up again. */
+export const ROUTER_SEND_SOURCE = 'api-agent';
 
 /** The start source of a task the router wakes with its item (never the router wake's own source). */
 export const ROUTER_START_SOURCE = 'router-delivery';
@@ -256,7 +260,7 @@ export async function routeItem(input: RouteItemInput, deps: RouterDeliveryDeps 
   if (input.notRouted && (input.retry || input.taskId)) throw new RouterError('bad_decision', 'Not routed cannot name a target or retry delivery.');
   if (!input.reason.trim() || input.reason.length > 500) throw new RouterError('reason_required', 'Every route needs a reason of 1 to 500 characters.');
   if (input.text !== undefined && input.text.length > 20000) throw new RouterError('text_too_large', 'The receiving brief is at most 20000 characters.');
-  if (!input.notRouted && !input.taskId) throw new RouterError('task_required', 'Name the open task or VP that owns the item (task_id), send it to the person (for_user), or record why it is not routed.');
+  if (!input.notRouted && !input.taskId) throw new RouterError('task_required', 'Name the task that owns the item (task_id: search all tasks for it), send it to the person (for_user), or record why it is not routed.');
   if (!input.notRouted && !input.text?.trim()) throw new RouterError('text_required', 'A routed item needs the brief for its owner.');
   const named = sourceArea(deps.areas ?? await readRouterAreas(WALNUT_HOME), input.source);
   // No area, no ledger to write: the checks inside refuse it in their usual order (access first).

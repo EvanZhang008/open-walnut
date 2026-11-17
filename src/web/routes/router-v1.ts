@@ -304,7 +304,7 @@ routerV1Router.post('/router/route', async (req: Request, res: Response, next: N
     // The router never makes tasks or waits on the person to clear a hand-off (2026-11-14, the user:
     // "it does not need to create a triage in between, it just asks the VP or that task").
     if (b.new_task_title !== undefined) {
-      throw new RouterError('no_new_work', 'The router does not create tasks. Hand the item to the VP of its project (task_id: a VP id from router_context owners), who decides what work it needs.');
+      throw new RouterError('no_new_work', 'The router does not create tasks. Search all tasks for the one whose matter this item is and hand it over with task_id, or send it to the person (for_user).');
     }
     if (b.rule_id !== undefined || b['approval' + '_id'] !== undefined) {
       throw new RouterError('bad_decision', 'Rules and per-item hand-off confirmations are gone: name the owner with task_id.');

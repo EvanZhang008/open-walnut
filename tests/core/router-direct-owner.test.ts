@@ -91,7 +91,8 @@ afterEach(async () => {
 })
 
 describe('who may own a routed item', () => {
-  for (const [label, taskId, at] of [['an open task in no area', 'owner', 0], ['a VP', 'vp', 1], ['Main', 'main', 2]] as const) {
+  // Every task counts alike, whatever its role, open or finished (2026-11-17: "every router can route to any task").
+  for (const [label, taskId, at] of [['an open task in no area', 'owner', 0], ['a VP', 'vp', 1], ['Main', 'main', 2], ['a finished task (the delivery reopens it)', 'done', 0]] as const) {
     it(`hands the item to ${label}`, async () => {
       const f = fakes()
       const result = await routeItem(decide(ITEMS[at]!, taskId), deps(f))
@@ -104,7 +105,6 @@ describe('who may own a routed item', () => {
   for (const [label, taskId, code] of [
     ['the router itself', 'router', 'router_loop'],
     ['a task whose role is router', 'other-router', 'router_loop'],
-    ['a complete task', 'done', 'target_unavailable'],
     ['a task that does not exist', 'gone', 'target_unavailable'],
   ] as const) {
     it(`refuses ${label} with ${code}, leaving no receipt and sending nothing`, async () => {

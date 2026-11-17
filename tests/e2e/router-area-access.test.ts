@@ -267,6 +267,20 @@ describe('area routing on the real server', () => {
     }
   });
 
+  // 2026-11-17 (the user: "every router can route to any task, just need to search it up"): the
+  // owner of an interview invitation is an ordinary task, not a VP, and a finished one counts too.
+  it('a router session finds the ordinary task that owns an item, a finished one too, with no VP in between', async () => {
+    const interviewId = (await addTask({ title: 'Interview loop: Maple Delivery onsite', project: 'Career' })).task.id;
+    const screenId = (await addTask({ title: 'Maple Delivery recruiter screen', project: 'Career' })).task.id;
+    await updateTaskRaw(screenId, { phase: 'COMPLETE' } as Partial<Task>);
+    const found = await call('GET', `/api/v1/search?q=${encodeURIComponent('Maple Delivery')}&types=task`, personalSid);
+    expect(found.status).toBe(200);
+    const ids = ((await found.json()).results as Array<{ taskId?: string }>).map((one) => one.taskId);
+    expect(ids).toEqual(expect.arrayContaining([interviewId, screenId]));
+    // Each candidate is read whole, to check whether the item is its matter.
+    for (const id of [interviewId, screenId]) expect((await call('GET', `/api/tasks/${id}`, personalSid)).status, id).toBe(200);
+  });
+
   it('refuses an area session widening its own registry and leaves it unchanged', async () => {
     const before = await readRouterAreas(WALNUT_HOME);
     const response = await call('PUT', '/api/v1/router/areas', workSid, { ...before, items: [] });
