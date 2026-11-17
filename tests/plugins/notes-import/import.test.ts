@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import { createFakeWalnut } from '../../../packages/plugin-api/src/testing.js'
 import { runImport } from '../../../plugin-store/notes-import/src/server/importer'
+import { bodyOf, withBody } from '../../../plugin-store/notes-import/src/server/note-file'
 import { Mapping } from '../../../plugin-store/notes-import/src/server/mapping'
 import { NotionClient } from '../../../plugin-store/notes-import/src/server/notion/client'
 import { NotionSource } from '../../../plugin-store/notes-import/src/server/notion/source'
@@ -325,6 +326,26 @@ describe('notion import', () => {
     } finally {
       Date.now = realNow
     }
+  })
+
+  it('a link written before its page became a folder note leads to the folder note on the next run', async () => {
+    // A run found a page's sub-pages while rendering it and made it a folder note, then a restart
+    // cut the run before its end-of-run pass pointed the parent's link there.
+    const ctx = setup()
+    await run(ctx)
+    const home = `${FOLDER}/Home/Home.md`
+    const note = await ctx.fake.api.notes!.read(home)
+    expect(note!.content).toContain(`[[${FOLDER}/Home/Child A/Child A|`)
+    const stale = note!.content.replace(`[[${FOLDER}/Home/Child A/Child A|`, () => `[[${FOLDER}/Home/Child A|`)
+    const written = await ctx.fake.api.notes!.write(home, withBody(stale, 'notion', bodyOf(stale)), { expectedHash: note!.hash })
+    const [id, row] = [...(await ctx.mapping.all(FOLDER, 'notion'))].find(([, r]) => r.path === home)!
+    await ctx.mapping.put(FOLDER, 'notion', id, { ...row, hash: written.hash })
+    const again = await run(ctx)
+    expect(again.counts.failed).toBe(0)
+    const after = (await ctx.fake.api.notes!.read(home))!.content
+    expect(after).toContain(`[[${FOLDER}/Home/Child A/Child A|`)
+    expect(after).not.toContain(`[[${FOLDER}/Home/Child A|`)
+    expect(again.counts.kept).toBe(0)
   })
 
   it('a page whose note a stopped run never wrote keeps its path: its own saved files hold no name', async () => {

@@ -542,6 +542,16 @@ export async function runImport(input: {
     const now = located.get(id)
     if (now && now !== row.path) relocated.set(row.path, now)
   }
+  // A page that became a folder note in a run a restart cut short: its parent was written with a
+  // link to `dir/Name`, and the end-of-run pass that points it at `dir/Name/Name` never ran. Every
+  // link the import wrote to a folder note's plain-note path leads to the folder note.
+  for (const path of planner.paths.values()) {
+    const dir = dirOf(path)
+    const stem = stemOf(path)
+    if (!dir || dir.slice(dir.lastIndexOf('/') + 1) !== stem || !existingFile.has(path)) continue
+    const flat = `${dirOf(dir) ? `${dirOf(dir)}/` : ''}${stem}.md`
+    if (!existingFile.has(flat) && !relocated.has(flat)) relocated.set(flat, path)
+  }
   if (relocated.size) {
     for (const [id, row] of await mapping.all(folder, source.id)) {
       signal.throwIfAborted()
