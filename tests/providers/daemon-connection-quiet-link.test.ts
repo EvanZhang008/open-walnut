@@ -414,8 +414,7 @@ describe('what a silent link writes to the log', () => {
       // The connect's own pushes answered first: one still in flight when a link closes fails, as
       // any command on a closed link does, and that is not the recheck's line.
       for (const l of [net, ssh]) await wireQuiet(l.conn)
-      for (const l of [net, ssh]) l.proxy.setMode('blackhole')
-      await sleep(300)
+      for (const l of [net, ssh]) await blackhole(l.proxy)
       const info = vi.spyOn(log.session, 'info').mockImplementation(() => {})
       let seen: Record<string, string> = {}
       expect(await warnsNaming(['pcbox', 'devbox'], async () => { seen = await recheckQuietLinks({ quietMs: 0, deadlineMs: 300 }) })).toEqual([])
