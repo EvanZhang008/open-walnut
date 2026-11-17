@@ -238,6 +238,15 @@ extension's Settings, reached from the key's popover in the side panel or the to
   extension polling from that same machine (`src/core/browser-control/screen-share.ts`).
   The phone has no Browser view yet: it would need the same frame route polled from the iOS
   session screen.
+- **A covered window's page keeps running while an agent works in it.** Chrome counts the pages
+  of a covered or minimized window as hidden: no animation frame runs and a video a site makes
+  from a picked file never loads, so a video upload sat at "Uploading" and a Post button's checks
+  never finished (2026-11-17). Any step of an agent's in its own tab of the agent window, on a
+  hidden page, holds the tab's debugger session with `Emulation.setFocusEmulationEnabled` on for
+  three minutes, and each later step there keeps it that long again: the page counts as on screen,
+  with no window shown, raised or focused. It ends like the step linger (Stop, Take over, Cancel
+  on Chrome's bar, real input off), and Chrome's debugging bar shows while it lasts
+  (`packages/browser-extension/src/agent-awake.ts`).
 - **Never a second sign-in behind your back.** An `open` or `navigate` to a site you already have
   open in one of your own tabs (the same registrable domain, the vault's site key) lists those
   tabs in its answer and tells the agent to ask you for that tab ("Act in tab" in the side panel)

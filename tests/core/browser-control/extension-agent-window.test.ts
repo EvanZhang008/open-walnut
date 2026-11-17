@@ -303,6 +303,10 @@ describe('the agent window', () => {
       // page draw off screen (Chromium's IncrementCapturerCount with stay_hidden); it does not show,
       // raise or focus the window, nor switch a tab.
       'Page.captureScreenshot',
+      // Emulation.setFocusEmulationEnabled (agent-awake.ts): a covered agent window's page counts as on
+      // screen and in focus inside the renderer, so an upload's video loads; measured in Chromium, it
+      // shows, raises and focuses no window and switches no tab.
+      'Emulation.setFocusEmulationEnabled',
       // A trusted upload (cdp.ts cdpSetFiles): the frame's id, an isolated world in the page, a node
       // resolved into it and a function run on it; all inside the renderer, nothing shown or focused.
       'Page.getFrameTree', 'Page.createIsolatedWorld', 'DOM.resolveNode', 'Runtime.callFunctionOn',

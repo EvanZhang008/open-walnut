@@ -155,6 +155,17 @@ export function classifyLocalRequest(req: RequestLike): LocalTrust {
   return { trusted: true }
 }
 
+/**
+ * The request comes from a program on this machine, whatever page or extension sent it: loopback,
+ * not a tunnel or a proxy, addressed by a loopback name. A browser extension's request carries its
+ * own `chrome-extension://` origin, so it is never `trusted` above, yet it runs here. A fact about
+ * where it runs, never a grant (screen-share.ts: only a browser here hears this screen's share).
+ */
+export function fromThisMachine(req: RequestLike): boolean {
+  const t = classifyLocalRequest(req)
+  return t.trusted || t.reason === 'foreign-origin'
+}
+
 /** The request is a browser page from another site or a rebound name, not a remote device. */
 export function isCrossSiteRefusal(t: LocalTrust): boolean {
   return !t.trusted && (t.reason === 'foreign-host' || t.reason === 'foreign-origin')

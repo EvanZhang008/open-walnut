@@ -72,6 +72,8 @@ export function dropDebugger(tabId: number, by?: string): boolean {
   held.delete(tabId)
   clearTimeout(lingering.get(tabId))
   lingering.delete(tabId)
+  lingerEnds.delete(tabId)
+  emulated.delete(tabId)
   return true
 }
 export const debuggerHeld = (tabId: number): boolean => held.has(tabId)
@@ -90,14 +92,45 @@ export const holdersOf = (tabId: number): string[] => [...(held.get(tabId)?.by ?
 export const LINGER_MS = 30_000
 let lingerMs = LINGER_MS
 
-/** The session stays a while after this step (joined as `linger`), unless the person cancelled the bar. */
-export function linger(dbg: DebuggerApi | undefined, tabId: number): void {
+/** When each tab's lingering hold ends (a longer one, agent-awake.ts, is never cut short by a step's). */
+const lingerEnds = new Map<number, number>()
+/** Tabs whose session has focus emulation on (agent-awake.ts): it is the session's, and ends with its lingering hold. */
+const emulated = new Set<number>()
+
+/**
+ * Turn focus emulation on in the tab's held session: the page counts as on screen and in focus
+ * (agent-awake.ts). True when the browser took it.
+ */
+export async function emulateFocus(tabId: number): Promise<boolean> {
   const e = held.get(tabId)
-  if (!e || !dbg || lingerMs <= 0 || barCancelled(tabId)) return
-  e.by.add('linger')
-  clearTimeout(lingering.get(tabId))
-  lingering.set(tabId, setTimeout(() => { lingering.delete(tabId); void releaseDebugger(dbg, tabId, 'linger') }, lingerMs))
+  if (!e) return false
+  const ok = await e.send('Emulation.setFocusEmulationEnabled', { enabled: true }).then(() => true, () => false)
+  if (ok && held.get(tabId) === e) emulated.add(tabId)
+  return ok && emulated.has(tabId)
 }
+/** Whether the tab's session has focus emulation on now. */
+export const focusEmulated = (tabId: number): boolean => emulated.has(tabId) && held.has(tabId)
+/** The lingering hold ended while another holder keeps the session (a recording, live pictures): emulation goes off. */
+async function endEmulation(tabId: number): Promise<void> {
+  if (!emulated.delete(tabId)) return
+  await held.get(tabId)?.send('Emulation.setFocusEmulationEnabled', { enabled: false }).catch(() => undefined)
+}
+
+/**
+ * The session stays a while after this step (joined as `linger`), unless the person cancelled the
+ * bar: `ms` from now (LINGER_MS by default), or longer when the tab's hold already lasts longer.
+ */
+export function linger(dbg: DebuggerApi | undefined, tabId: number, ms = lingerMs): void {
+  const e = held.get(tabId)
+  if (!e || !dbg || lingerMs <= 0 || ms <= 0 || barCancelled(tabId)) return
+  e.by.add('linger')
+  const end = Math.max(Date.now() + ms, lingerEnds.get(tabId) ?? 0)
+  lingerEnds.set(tabId, end)
+  clearTimeout(lingering.get(tabId))
+  lingering.set(tabId, setTimeout(() => { lingering.delete(tabId); lingerEnds.delete(tabId); void endEmulation(tabId).then(() => releaseDebugger(dbg, tabId, 'linger')) }, end - Date.now()))
+}
+/** How long the tab's lingering hold has left, in ms (0: none). */
+export const lingerLeft = (tabId: number, now = Date.now()): number => lingering.has(tabId) ? Math.max(0, (lingerEnds.get(tabId) ?? 0) - now) : 0
 
 /**
  * Whether a step's session lingers: `true`, or a check run once the step went through (the agent
@@ -115,11 +148,11 @@ export const endMark = (tabId: number) => `${allEnds}:${endsOf.get(tabId) ?? 0}`
  * Stop, a let-go or a take-over that comes while the step runs, or while its check is on its way,
  * leaves nothing attached behind it (review 2026-11-09).
  */
-export async function lingerAfter(dbg: DebuggerApi, tabId: number, when: LingerIf | undefined, mark: string): Promise<void> {
+export async function lingerAfter(dbg: DebuggerApi, tabId: number, when: LingerIf | undefined, mark: string, ms?: number): Promise<void> {
   if (!when) return
   if (when !== true && !(await when().catch(() => false))) return
   if (endMark(tabId) !== mark) return
-  linger(dbg, tabId)
+  linger(dbg, tabId, ms)
 }
 
 /** Every lingering hold goes now, and no step running lingers after it (the person turned real input off). */
@@ -134,6 +167,8 @@ export async function endLinger(dbg: DebuggerApi | undefined, tabId: number): Pr
   if (!lingering.has(tabId)) return
   clearTimeout(lingering.get(tabId))
   lingering.delete(tabId)
+  lingerEnds.delete(tabId)
+  await endEmulation(tabId)
   await releaseDebugger(dbg, tabId, 'linger')
 }
 
@@ -195,6 +230,8 @@ export function _resetDebuggerForTesting(): void {
   attaching.clear()
   for (const t of lingering.values()) clearTimeout(t)
   lingering.clear()
+  lingerEnds.clear()
+  emulated.clear()
   endsOf.clear()
   cancelledAt = 0
 }

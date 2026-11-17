@@ -98,7 +98,15 @@ describe('fill_login after an agent touched the page (page_tampered)', () => {
       // Live pictures of a covered agent window (and an agent's screenshot of one): a picture of
       // the page, no input and no script, so it marks nothing (checked below).
       'agent-live.ts: take',
+      // A covered agent window's page kept running (agent-awake.ts): focus emulation only, no input
+      // and no script, so it marks nothing (checked below).
+      'agent-awake.ts: wakeForStep',
     ].sort())
+    // The awake holder sends nothing itself; its one command is cdp.ts emulateFocus's.
+    expect(src('agent-awake.ts')).not.toMatch(/\bsend(?:Command)?\(/)
+    const cdpSrc = src('cdp.ts')
+    const emulate = cdpSrc.slice(cdpSrc.indexOf('export async function emulateFocus'), cdpSrc.indexOf('export const focusEmulated'))
+    expect([...emulate.matchAll(/\bsend\(\s*'([\w.]+)'/g)].map((m) => m[1])).toEqual(['Emulation.setFocusEmulationEnabled'])
     // The picture holder sends Page.captureScreenshot and nothing else.
     const live = src('agent-live.ts')
     const sent = [...live.matchAll(/\bsend(?:Command)?\(\s*'([\w.]+)'/g)].map((m) => m[1])

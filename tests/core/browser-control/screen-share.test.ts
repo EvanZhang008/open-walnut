@@ -39,4 +39,13 @@ describe('the screen-share reader', () => {
     _setScreenSharedForTesting(true)
     expect(n).toBe(2)
   })
+
+  // 2026-11-17: the route judged "this machine" by the trusted-caller check, which an extension's
+  // own origin always fails, so the user's Chrome never heard a share.
+  it('the poll route judges a local browser by where it runs, not by the trusted-caller check', async () => {
+    const fs = await import('node:fs')
+    const src = fs.readFileSync(new URL('../../../src/web/routes/browser-v1.ts', import.meta.url), 'utf8')
+    const line = src.split('\n').find((l) => /const local = /.test(l)) ?? ''
+    expect(line).toMatch(/fromThisMachine\(req\)/)
+  })
 })

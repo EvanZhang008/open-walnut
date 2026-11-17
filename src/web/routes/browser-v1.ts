@@ -18,6 +18,7 @@
  */
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { requestOrigin } from '../middleware/request-origin.js'
+import { fromThisMachine } from '../middleware/local-trust.js'
 import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js'
 import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
 import { ambientTestRun } from '../../core/test-run.js'
@@ -155,7 +156,8 @@ browserV1Router.post('/browser/poll', (req, res, next) => {
         ...(t.driving === true ? { driving: true } : {}),
       })).slice(0, 200) : undefined
     const label = await deviceLabel(device)
-    const local = requestOrigin(req) === LOCAL_ORIGIN
+    // The extension's own origin keeps it from being a trusted local caller; only where it runs counts here.
+    const local = fromThisMachine(req)
     // A change of the share state answers this browser's waiting poll at once.
     const share = await import('../../core/browser-control/screen-share.js')
     if (local) localShareWake(device, () => h.wake(device), share.onScreenShareChange)

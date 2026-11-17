@@ -29,6 +29,7 @@ import { screenshot } from './agent-shot'
 import { downloadsAction, watchDownloads } from './agent-downloads'
 import { DEBUGGER_OPS, TRUSTED_OPS, defaultTrustedAct, trustedAct, trustedByDefault, trustedReady } from './agent-trusted'
 import { fileAccessOn } from './agent-upload'
+import { wakeForStep } from './agent-awake'
 import { fillFrames } from './bg-fill'
 import { inHandedReach } from './agent-tab-kind'
 import { noteScreenShare, openInAgentWindow, resizeAgentWindow, windowOf } from './agent-window'
@@ -437,6 +438,8 @@ async function run(c: WireCommand): Promise<void> {
         if (late) throw late
         // A click or a key acts on the tab in front: a folded group left the agent window's page there.
         if (screenTab !== undefined && c.action !== 'screenshot' && c.action !== 'zoom') await bringUpForCommand(screenTab)
+        // A page Chrome counts as hidden (the agent window behind the person's) keeps running while the agent works there (agent-awake.ts).
+        await wakeForStep(c).catch(() => false)
         // An acting step says what it changed on the page (agent-change.ts).
         return CHANGE_ACTS.has(c.action) && typeof c.args.tab === 'number' ? withChange(c.args.tab, c.action, c.args, async () => (await act(c)) as Record<string, unknown>) : act(c)
       }) }

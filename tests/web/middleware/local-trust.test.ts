@@ -4,7 +4,7 @@
  * from elsewhere reaches a loopback socket or pretends to be local.
  */
 import { describe, it, expect } from 'vitest'
-import { classifyLocalRequest, isCrossSiteRefusal, isLoopbackName, isOwnOrigin, rateLimitClientIp } from '../../../src/web/middleware/local-trust.js'
+import { classifyLocalRequest, fromThisMachine, isCrossSiteRefusal, isLoopbackName, isOwnOrigin, markTunnelPort, rateLimitClientIp, unmarkTunnelPort } from '../../../src/web/middleware/local-trust.js'
 
 /** A request that arrived on the server's port 3456. */
 function req(remoteAddress: string, headers: Record<string, string> = {}) {
@@ -124,5 +124,25 @@ describe('rateLimitClientIp', () => {
     expect(rateLimitClientIp(req('127.0.0.1'))).toBe('127.0.0.1')
     expect(rateLimitClientIp(req('127.0.0.1', { 'x-forwarded-for': '' }))).toBe('127.0.0.1')
     expect(rateLimitClientIp({ headers: { 'x-forwarded-for': '203.0.113.9' } })).toBe('unknown')
+  })
+})
+
+// 2026-11-17: the Walnut extension in the user's Chrome on the Mac polls with its own
+// chrome-extension:// origin, so the screen-share state (screen-share.ts) never reached it while the
+// poll route asked whether it was a trusted local caller. Where a request runs is a separate fact.
+describe('fromThisMachine', () => {
+  it('a browser extension on this machine runs here, though it is no trusted local caller', () => {
+    const ext = req('127.0.0.1', { host: 'localhost:3456', origin: 'chrome-extension://iocnbninfocllkemfgenchemlmiijkmp' })
+    expect(classifyLocalRequest(ext).trusted).toBe(false)
+    expect(fromThisMachine(ext)).toBe(true)
+    expect(fromThisMachine(req('::1', { host: '127.0.0.1:3456', origin: 'moz-extension://5d1f' }))).toBe(true)
+    expect(fromThisMachine(req('127.0.0.1', { host: 'localhost:3456' }))).toBe(true)
+  })
+  it('a request from elsewhere never does: another address, a proxy, a tunnel port, a rebound name', () => {
+    expect(fromThisMachine(req('192.0.2.7', { host: 'localhost:3456', origin: 'chrome-extension://x' }))).toBe(false)
+    expect(fromThisMachine(req('127.0.0.1', { host: 'localhost:3456', origin: 'chrome-extension://x', 'x-forwarded-for': '203.0.113.9' }))).toBe(false)
+    expect(fromThisMachine(req('127.0.0.1', { host: 'evil.example:3456', origin: 'chrome-extension://x' }))).toBe(false)
+    markTunnelPort(3456)
+    try { expect(fromThisMachine(req('127.0.0.1', { host: 'localhost:3456', origin: 'chrome-extension://x' }))).toBe(false) } finally { unmarkTunnelPort(3456) }
   })
 })
