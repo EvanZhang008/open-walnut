@@ -22,14 +22,16 @@ export interface PluginNoteEntry {
 
 /**
  * What `notes.write` throws on a changed note (`expectedHash` no longer matches, code
- * `note_conflict`) or, with `createOnly`, on a note already there (code `note_exists`).
+ * `note_conflict`), on a note deleted since it was read (`expectedHash` given, no note there any
+ * more, code `note_deleted`, `currentHash` ''), or, with `createOnly`, on a note already there
+ * (code `note_exists`).
  */
 export class NoteConflictError extends Error {
-  readonly code: 'note_conflict' | 'note_exists'
-  constructor(readonly path: string, readonly currentHash: string, exists = false) {
-    super(exists ? `A note is already at ${path}` : `The note ${path} changed since it was read`)
+  readonly code: 'note_conflict' | 'note_exists' | 'note_deleted'
+  constructor(readonly path: string, readonly currentHash: string, kind: boolean | 'deleted' = false) {
+    super(kind === 'deleted' ? `The note ${path} was deleted since it was read` : kind ? `A note is already at ${path}` : `The note ${path} changed since it was read`)
     this.name = 'NoteConflictError'
-    this.code = exists ? 'note_exists' : 'note_conflict'
+    this.code = kind === 'deleted' ? 'note_deleted' : kind ? 'note_exists' : 'note_conflict'
   }
 }
 
@@ -118,7 +120,7 @@ export function createPluginNotes() {
       const target = rel(notePathOf(inside(notePath)))
       const { writeNoteContent } = await routes()
       const result = await writeNoteContent(target, content, options.expectedHash, { createOnly: options.createOnly })
-      if (!result.ok) throw new NoteConflictError(target, result.conflict, result.exists)
+      if (!result.ok) throw new NoteConflictError(target, result.conflict, result.deleted ? 'deleted' : result.exists)
       return { path: result.path, hash: result.contentHash, id: result.id, created: result.created }
     },
 

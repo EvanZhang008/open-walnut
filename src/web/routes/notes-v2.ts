@@ -630,7 +630,8 @@ notesV2Router.get('/content/*path', async (req: Request, res: Response, next: Ne
  * Create or update one note: the body of PUT /content/*path, shared with the plugin notes
  * service (src/core/plugins/notes-service.ts) so a plugin's write stamps the id, takes the
  * file lock, honours `expectedHash` and announces the change exactly as the editor's does.
- * Throws NotesOpError (400 path, 413 size); a hash mismatch answers `{ conflict }`.
+ * Throws NotesOpError (400 path, 413 size); a hash mismatch answers `{ conflict }`, and a hash
+ * for a note that is no longer there `{ deleted }` (the PUT answers 410): it is never recreated.
  */
 export async function writeNoteContent(
   notePath: string,
@@ -640,7 +641,7 @@ export async function writeNoteContent(
   options: { createOnly?: boolean } = {},
 ): Promise<
   | { ok: true; path: string; updatedAt: string; contentHash: string; id: string; created: boolean }
-  | { ok: false; conflict: string; exists?: true }
+  | { ok: false; conflict: string; exists?: true; deleted?: true }
 > {
   ensureIndexBootstrap()
   if (typeof content !== 'string') throw new NotesOpError('content (string) is required', 400)
@@ -663,9 +664,9 @@ export async function writeNoteContent(
   // expectedHash accept last-write-wins semantics.
   // check+write run under the file lock — the agent's writeFileChecked path
   // locks too, so an agent write can't slip between our check and write.
-  await fsp.mkdir(path.dirname(filePath), { recursive: true })
   let created = false
   let exists = false
+  let deleted = false
   const conflict = await withUserFileLock(filePath, async () => {
     if (options.createOnly) {
       try {
@@ -685,6 +686,11 @@ export async function writeNoteContent(
         currentContent = await fsp.readFile(filePath, 'utf-8')
       } catch (err: any) {
         if (err.code !== 'ENOENT') throw err
+        // A save that names the bytes it replaces (`expectedHash`) is an edit of a note that was
+        // there: once that note is deleted, writing would bring it back with the edit, so it is
+        // refused instead (2026-11-16, CI: a tab restored from a deleted note saved into it and
+        // recreated it). Without a hash the write makes a new note, as before.
+        if (expected) { deleted = true; return '' }
         created = true // file doesn't exist: no conflict possible
       }
     } else {
@@ -699,9 +705,12 @@ export async function writeNoteContent(
       finalContent = stamped.content
       id = stamped.id
     }
+    // Made only for a write: a refused save into a deleted folder must not bring the folder back.
+    await fsp.mkdir(path.dirname(filePath), { recursive: true })
     await fsp.writeFile(filePath, finalContent, 'utf-8')
     return null
   })
+  if (deleted) return { ok: false, conflict: '', deleted: true }
   if (conflict) return exists ? { ok: false, conflict, exists: true } : { ok: false, conflict }
 
   if (created) invalidateNotesTree()
@@ -721,6 +730,10 @@ notesV2Router.put('/content/*path', async (req: Request, res: Response, next: Ne
     if (!notePath) { res.status(400).json({ error: 'path required' }); return }
     const { content, expectedHash } = req.body
     const result = await writeNoteContent(notePath, content, expectedHash)
+    if (!result.ok && result.deleted) {
+      res.status(410).json({ error: 'The note was deleted', deleted: true })
+      return
+    }
     if (!result.ok) {
       res.status(409).json({ error: 'Content was modified externally', currentHash: result.conflict })
       return

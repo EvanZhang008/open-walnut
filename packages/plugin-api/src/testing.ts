@@ -223,6 +223,9 @@ function fakeNotes(): { service: NotesService; entries: Map<string, string | Uin
       if (opts.createOnly && current !== undefined) {
         throw Object.assign(new Error(`A note is already at ${p}`), { code: 'note_exists', currentHash: typeof current === 'string' ? hashOf(current) : '' })
       }
+      if (opts.expectedHash && current === undefined) {
+        throw Object.assign(new Error(`The note ${p} was deleted since it was read`), { code: 'note_deleted', currentHash: '' })
+      }
       if (opts.expectedHash && typeof current === 'string' && hashOf(current) !== opts.expectedHash) {
         throw Object.assign(new Error(`The note ${p} changed since it was read`), { code: 'note_conflict', currentHash: hashOf(current) })
       }

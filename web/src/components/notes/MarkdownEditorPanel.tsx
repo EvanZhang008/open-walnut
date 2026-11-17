@@ -693,6 +693,21 @@ function ReloadBanner({
       </div>
     );
   }
+  if (kind === 'deleted') {
+    // Deleted since it was read: the save was refused rather than recreating it; the text stays.
+    // Unsaved work for the page (utils/unsaved-work.ts): a deploy's reload waits for it.
+    return (
+      <div className="notes-reload-banner conflict" role="status" data-testid="notes-deleted-banner" data-walnut-unsaved="A deleted note's text, not saved">
+        <span className="notes-reload-banner-text">
+          {message ? `Could not save it as a new note: ${message} ` : 'This note was deleted or moved. '}
+          Your text stays here, unsaved.
+        </span>
+        <div className="notes-reload-banner-actions">
+          <button className="notes-reload-banner-btn primary" onClick={onApply}>{message ? 'Try again' : 'Save as a new note'}</button>
+        </div>
+      </div>
+    );
+  }
   const conflict = kind === 'conflict';
   return (
     <div className={`notes-reload-banner ${conflict ? 'conflict' : ''}`} role="status">

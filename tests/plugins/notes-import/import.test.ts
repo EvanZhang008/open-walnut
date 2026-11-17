@@ -439,6 +439,33 @@ describe('notion import', () => {
     expect(ctx.fake.notes.has(notesTwo)).toBe(true)
   })
 
+  it('a note the person deletes while a run updates it counts as deleted, and is not made again', async () => {
+    const ctx = setup()
+    await run(ctx)
+    const homePath = `${FOLDER}/Home/Home.md`
+    const home = ctx.notion.pages.get(ctx.ids.home)!
+    ctx.notion.setBlocks(ctx.ids.home, [para('New home text'), ...home.blocks.slice(-4)], '2024-05-01T00:00:00.000Z')
+    const real = ctx.fake.api.notes!
+    // The person deletes the note between the run's read of it and its update (a 410 on the
+    // server: note_deleted).
+    const racing = new Proxy(real, {
+      get(target, key) {
+        const value = Reflect.get(target, key)
+        if (key !== 'write') return typeof value === 'function' ? value.bind(target) : value
+        return async (path: string, content: string, options?: { expectedHash?: string }) => {
+          if (path === homePath && options?.expectedHash) await real.remove(homePath)
+          return (value as (...a: unknown[]) => unknown).call(target, path, content, options)
+        }
+      },
+    })
+    const client = new NotionClient(ctx.notion.token, { fetch: ctx.notion.fetch, sleep: async () => undefined })
+    const outcome = await runImport({ source: new NotionSource(client), notes: racing, mapping: ctx.mapping, folder: FOLDER, download: (u, m, s) => client.download(u, m, s), signal: new AbortController().signal, onProgress: () => undefined })
+    expect(outcome.counts).toMatchObject({ failed: 0, deleted: 1, updated: 0 })
+    expect(outcome.errors).toEqual([])
+    expect(outcome.deletedPaths).toEqual([homePath])
+    expect(ctx.fake.notes.has(homePath)).toBe(false)
+  })
+
   it('a 429 that comes while a request waits its turn holds that request back too', async () => {
     const ctx = setup()
     ctx.notion.token = fakeSecret('pause_test')

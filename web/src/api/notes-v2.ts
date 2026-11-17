@@ -179,8 +179,11 @@ export async function saveNoteContent(
 ): Promise<{ updatedAt: string; contentHash: string; id?: string }> {
   // `id` is the stamped-at-create-time frontmatter id; returned so the FE can refresh
   // its expected hash without a spurious 409 (§2 identity contract).
+  // A save that names the hash it was edited from has two designed refusals, both handled by the
+  // editor: 409 (changed meanwhile, merged) and 410 (deleted meanwhile, its text held).
   const res = await apiPut<{ ok: boolean; updatedAt: string; contentHash: string; id?: string }>(
     `/api/notes-v2/content/${notePath}`, { content, expectedHash },
+    expectedHash ? { quietStatuses: [409, 410] } : undefined,
   );
   // Every note write goes through here, so this is where the other mounted views
   // of the SAME note learn about it (see stores/file-save-signal.ts). Note: the

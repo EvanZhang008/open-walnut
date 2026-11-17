@@ -902,7 +902,8 @@ export interface NoteEntry {
  * path may leave out `.md`); `..` and absolute paths are refused. Writes go through the notes
  * routes' own path, so a note gets its `id` frontmatter stamped, the tree, search and every open
  * editor hear about it, and `expectedHash` refuses to overwrite a note that changed since it was
- * read (`write` then rejects with `code: 'note_conflict'` and `currentHash`). Change only what your
+ * read (`write` then rejects with `code: 'note_conflict'` and `currentHash`) and refuses to bring back
+ * a note deleted since it was read (`code: 'note_deleted'`, read it again: it is null). Change only what your
  * plugin made or the person asked it to: everything here is the person's own writing. Absent on an
  * older Walnut: check `walnut.notes` before use. On a replica every write rejects.
  */
@@ -913,7 +914,8 @@ export interface NotesService {
   list(folder?: string): Promise<NoteEntry[]>
   read(path: string): Promise<{ path: string; content: string; hash: string } | null>
   /**
-   * `expectedHash`: fail (code `note_conflict`) when the note changed since it was read.
+   * `expectedHash`: fail (code `note_conflict`) when the note changed since it was read, or
+   * (code `note_deleted`) when it was deleted since: a write naming a hash never recreates a note.
    * `createOnly`: only make a new note; fail (code `note_exists`) when one is already there.
    */
   write(path: string, content: string, options?: { expectedHash?: string; createOnly?: boolean }): Promise<{ path: string; hash: string; id: string; created: boolean }>

@@ -643,6 +643,43 @@ describe('PUT /api/notes-v2/content/*path', () => {
 
     expect([400, 404]).toContain(res.status);
   });
+
+  // 2026-11-16, CI: a tab restored from a deleted note saved into it with the hash it had read,
+  // and the write brought the note back. A save naming the bytes it replaces is an edit, never
+  // a create.
+  it('refuses a save with a hash for a note deleted since it was read, and never brings it (or its folder) back', async () => {
+    await writeNote('trip/plan.md', '---\nid: n_plan\n---\nfirst');
+    const app = createApp();
+    const read = await request(app).get('/api/notes-v2/content/trip/plan.md');
+    expect(read.status).toBe(200);
+    await fs.rm(path.join(NOTES_DIR, 'trip'), { recursive: true, force: true });
+
+    const res = await request(app)
+      .put('/api/notes-v2/content/trip/plan.md')
+      .send({ content: '---\nid: n_plan\n---\nfirst, and more', expectedHash: read.body.contentHash });
+    expect(res.status).toBe(410);
+    expect(res.body.deleted).toBe(true);
+    expect(await fileExists('trip/plan.md')).toBe(false);
+    expect(await fileExists('trip')).toBe(false);
+
+    // Saved on purpose with no hash, it is made again.
+    const again = await request(app)
+      .put('/api/notes-v2/content/trip/plan.md')
+      .send({ content: '---\nid: n_plan\n---\nfirst, and more' });
+    expect(again.status).toBe(200);
+    expect(await readNote('trip/plan.md')).toBe('---\nid: n_plan\n---\nfirst, and more');
+  });
+
+  it('a plugin write with the hash of a deleted note rejects with code note_deleted and writes nothing', async () => {
+    const { createPluginNotes } = await import('../../../src/core/plugins/notes-service.js');
+    const notes = createPluginNotes();
+    await writeNote('gone.md', '---\nid: n_gone\n---\nbefore');
+    const read = await notes.read('gone.md');
+    expect(read).not.toBeNull();
+    await fs.rm(path.join(NOTES_DIR, 'gone.md'));
+    await expect(notes.write('gone.md', 'after', { expectedHash: read!.hash })).rejects.toMatchObject({ code: 'note_deleted', currentHash: '' });
+    expect(await fileExists('gone.md')).toBe(false);
+  });
 });
 
 // ─── DELETE /content/*path — Delete Note ──────────────────────────────

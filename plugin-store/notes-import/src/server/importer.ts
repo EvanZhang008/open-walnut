@@ -12,7 +12,7 @@
  */
 import type { NotesService } from '@open-walnut/plugin-api/server'
 import { containerOf, safeName, dirOf, PathPlanner, stemOf } from './paths'
-import { bodyIsAsWritten, bodyOf, composeNote, frontmatterValue, importedIdOf, withBody } from './note-file'
+import { bodyIsAsWritten, bodyOf, changedMeanwhile, composeNote, frontmatterValue, importedIdOf, withBody } from './note-file'
 import type { Mapping, MappingRow } from './mapping'
 import type { NoteSource, SourceItem } from './types'
 import { linkOutside, OUTSIDE_MARK, rewriteLinks } from './links'
@@ -446,6 +446,12 @@ export async function runImport(input: {
         written = await notes.write(path, content, current ? { expectedHash: current.hash } : { createOnly: true })
         break
       } catch (error) {
+        // Deleted by the person between the read and this update: their choice, as above.
+        if (current && (error as { code?: string })?.code === 'note_deleted') {
+          counts.deleted++
+          if (deletedPaths.length < MAX_LISTED) { deletedPaths.push(path); pathIds[path] = item.id }
+          return
+        }
         if (current || (error as { code?: string })?.code !== 'note_exists' || attempt >= 5) throw error
         path = planner.replan(item)
       }
@@ -531,7 +537,7 @@ export async function runImport(input: {
         const written = await notes.write(path, withBody(note.content, source.id, nextBody), { expectedHash: note.hash })
         await mapping.put(folder, source.id, id!, { ...row, hash: written.hash })
       } catch (error) {
-        if ((error as { code?: string })?.code !== 'note_conflict') throw error
+        if (!changedMeanwhile(error)) throw error
       }
     }
   }
@@ -565,7 +571,7 @@ export async function runImport(input: {
         await mapping.put(folder, source.id, id, { ...row, hash: written.hash })
         if (!writtenThisRun.has(row.path) && !relinked.has(row.path)) { relinked.add(row.path); counts.relinked = relinked.size }
       } catch (error) {
-        if ((error as { code?: string })?.code !== 'note_conflict') throw error
+        if (!changedMeanwhile(error)) throw error
       }
     }
   }
@@ -590,7 +596,7 @@ export async function runImport(input: {
         await mapping.put(folder, source.id, id, { ...row, hash: written.hash })
         if (!writtenThisRun.has(row.path) && !relinked.has(row.path)) { relinked.add(row.path); counts.relinked = relinked.size }
       } catch (error) {
-        if ((error as { code?: string })?.code !== 'note_conflict') throw error
+        if (!changedMeanwhile(error)) throw error
       }
     }
   }

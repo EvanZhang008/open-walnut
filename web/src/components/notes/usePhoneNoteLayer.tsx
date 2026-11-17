@@ -44,7 +44,12 @@ export interface PhoneNoteLayer {
  * (a new note taking its title as its name) stays in Edit; another note starts read only.
  * Without it, the path is the note.
  */
-export function usePhoneNoteLayer(activePath: string | null, onBack: () => void, noteKey?: string | null): PhoneNoteLayer {
+export function usePhoneNoteLayer(
+  activePath: string | null,
+  /** `breakpoint`: the window left the phone layout, nobody pressed Back. */
+  onBack: (info: { breakpoint: boolean }) => void,
+  noteKey?: string | null,
+): PhoneNoteLayer {
   const phone = usePhoneLayout();
   const [editing, setEditing] = useState(false);
   const identity = noteKey === undefined ? activePath : noteKey;
@@ -68,7 +73,7 @@ export function usePhoneNoteLayer(activePath: string | null, onBack: () => void,
     kind: 'note',
     open: phone && !!activePath,
     bar: { title: noteTitleOf(activePath), action },
-    onClose: () => { setEditing(false); onBackRef.current(); },
+    onClose: (info) => { setEditing(false); onBackRef.current({ breakpoint: !!info.breakpoint }); },
   });
 
   // The tree keeps its scroll across a note: its pane is display:none while a

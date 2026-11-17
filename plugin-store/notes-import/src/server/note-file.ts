@@ -94,3 +94,12 @@ export function bodyOf(content: string): string {
   if (end < 0) return content
   return content.slice(content.indexOf('\n', end + 1) + 1)
 }
+
+/**
+ * A write that named the hash it replaces was refused: the note changed (`note_conflict`) or was
+ * deleted (`note_deleted`) since it was read. Either way the note is the person's now.
+ */
+export function changedMeanwhile(error: unknown): boolean {
+  const code = (error as { code?: string } | null)?.code
+  return code === 'note_conflict' || code === 'note_deleted'
+}

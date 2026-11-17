@@ -44,6 +44,7 @@ const SESSION_FILES: Record<string, string> = {
   'components/settings/sections/join-link-store.ts': 'the id and end of a join link this tab made, so Remote Hosts can still call it back after leaving the pane; the link itself is the server\'s',
   'components/board/kanban/useKanbanLayout.ts': 'done rails opened for this visit (spec 3.2)',
   'components/drawing/drawing-store.ts': "the id a tab keys its unsaved drawing edits by (the edits themselves are in localStorage); a relaunch that drops it gets a new id, and the new tab takes over the drafts of tabs whose heartbeat stopped, never a live tab's",
+  'hooks/useNoteGone.ts': 'the text of a note deleted under the person, kept for this tab across a reload until they save it as a new note or close it; never synced, so another device never shows words it did not type',
   'hooks/usePhoneRestore.ts': 'the scroll anchor of one reload; the strip itself is phoneColumns',
   'pages/MainPage.tsx': 'the todo list scroll offset, and the legacy single-session key it migrates',
   'popout/PopoutAppView.tsx': "where an app's own window is inside the app, kept across that window's reload; a new window opens at the app's start",

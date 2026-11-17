@@ -11,7 +11,7 @@
 import fsp from 'node:fs/promises'
 import nodePath from 'node:path'
 import type { NotesService, WalnutServerApi } from '@open-walnut/plugin-api/server'
-import { bodyIsAsWritten, bodyOf, importedIdOf, withBody } from './note-file'
+import { bodyIsAsWritten, bodyOf, changedMeanwhile, importedIdOf, withBody } from './note-file'
 import type { JournalEntry } from './undo'
 import { isAttachmentPath } from './attachments'
 import { dirOf, stemOf } from './paths'
@@ -425,7 +425,9 @@ export async function applyPlan(input: {
     } catch (error) {
       if ((error as { stopRun?: boolean })?.stopRun) throw error
       const code = (error as { code?: string })?.code
-      const message = code === 'note_exists' ? 'A note was made there meanwhile' : error instanceof Error ? error.message : String(error)
+      const message = code === 'note_exists' ? 'A note was made there meanwhile'
+        : code === 'note_deleted' ? 'The note was deleted meanwhile'
+        : error instanceof Error ? error.message : String(error)
       skipped.push({ why: step.why, problem: message })
     }
   }
@@ -453,8 +455,10 @@ export async function applyPlan(input: {
         const written = await rewrite(entry.path, note, next, pristine && recorded ? { itemId: itemId!, folder: rec!.folder } : undefined)
         if (pristine && recorded) await mapping.put(rec!.folder, sourceId, itemId!, { ...rec!.row, hash: written.hash })
       } catch (error) {
-        if ((error as { code?: string })?.code !== 'note_conflict') throw error
-        skipped.push({ why: 'Fix links', problem: `${entry.path} changed while organizing; its links were left as they were` })
+        if (!changedMeanwhile(error)) throw error
+        skipped.push({ why: 'Fix links', problem: (error as { code?: string }).code === 'note_deleted'
+          ? `${entry.path} was deleted while organizing; it was left deleted`
+          : `${entry.path} changed while organizing; its links were left as they were` })
       }
     }
   }

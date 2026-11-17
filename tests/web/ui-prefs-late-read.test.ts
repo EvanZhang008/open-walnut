@@ -382,3 +382,127 @@ describe('unchanged paths', () => {
     expect(putKeys()).not.toContain(COLUMNS)
   })
 })
+
+// 2026-11-16, CI: the Notes page opened a new note before the first read came back; the late read
+// put an older workspace (a deleted note in it) back over that choice. A claimed key is the
+// person's own value: an older server value never replaces it, a newer one still does.
+describe('a key the person claimed before the late read', () => {
+  const TABS = 'open-walnut-notes-tabs'
+  const OLD_TABS = JSON.stringify({ tabs: [{ path: 'Gone.md', kind: 'note' }], activePath: 'Gone.md' })
+  const MOUNT_TABS = JSON.stringify({ tabs: [], activePath: null })
+  const MY_TABS = JSON.stringify({ tabs: [{ path: 'Untitled.md', kind: 'note' }], activePath: 'Untitled.md' })
+
+  it('keeps the person\'s value over an older server value and sends it up; an unclaimed default still loses', async () => {
+    server.prefs[TABS] = { v: OLD_TABS, ts: 1_000 }
+    await boot()
+    // The page mounts and saves its default, then the person opens a note.
+    localStorage.setItem(TABS, MOUNT_TABS)
+    localStorage.setItem(WEIGHTS, '[1,1]')
+    mod.claimPrefKey(TABS)
+    localStorage.setItem(TABS, MY_TABS)
+    await vi.advanceTimersByTimeAsync(500)
+    expect(server.puts).toHaveLength(0)
+
+    const remount = vi.fn()
+    mod.setLatePrefsHost({ remount, canRemount: () => true })
+    server.mode = 'ok'
+    await vi.advanceTimersByTimeAsync(mod.RETRY_PLAN[0].waitMs)
+    expect(local.getItem(TABS)).toBe(MY_TABS)
+    expect(server.prefs[TABS].v).toBe(MY_TABS)
+    expect(server.prefs[TABS].ts).toBeGreaterThan(1_000)
+    // The default nobody chose still takes the server's value.
+    expect(local.getItem(WEIGHTS)).toBe('[2,1]')
+    expect(storageEvents).not.toContain(TABS)
+  })
+
+  it('a key the server does not hold yet goes up', async () => {
+    await boot()
+    mod.claimPrefKey(TABS)
+    localStorage.setItem(TABS, MY_TABS)
+    server.mode = 'ok'
+    await vi.advanceTimersByTimeAsync(mod.RETRY_PLAN[0].waitMs)
+    expect(server.prefs[TABS]?.v).toBe(MY_TABS)
+  })
+
+  it('a value another device wrote after the person\'s choice still wins', async () => {
+    await boot()
+    mod.claimPrefKey(TABS)
+    localStorage.setItem(TABS, MY_TABS)
+    server.prefs[TABS] = { v: OLD_TABS, ts: Date.now() + 5_000 }
+    server.mode = 'ok'
+    await vi.advanceTimersByTimeAsync(mod.RETRY_PLAN[0].waitMs)
+    expect(local.getItem(TABS)).toBe(OLD_TABS)
+  })
+
+  it('after a late merge not shown yet, a claimed write is sent rather than put back', async () => {
+    server.prefs[TABS] = { v: OLD_TABS, ts: 1_000 }
+    await boot()
+    localStorage.setItem(TABS, MOUNT_TABS)
+    mod.setLatePrefsHost({ remount: vi.fn(), canRemount: () => true })
+    win.dispatchEvent(new Event('wheel'))
+    server.mode = 'ok'
+    await vi.advanceTimersByTimeAsync(mod.RETRY_PLAN[0].waitMs)
+    expect(local.getItem(TABS)).toBe(OLD_TABS)
+    server.puts = []
+    // No press or key since the merge (a programmatic open): without the claim this write was
+    // taken for a default re-saved and put back.
+    mod.claimPrefKey(TABS)
+    localStorage.setItem(TABS, MY_TABS)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(local.getItem(TABS)).toBe(MY_TABS)
+    expect(putKeys()).toContain(TABS)
+    expect(server.prefs[TABS].v).toBe(MY_TABS)
+  })
+
+  it('a read landing between the claim and its write: the write after it is the person\'s, kept and sent', async () => {
+    server.prefs[TABS] = { v: OLD_TABS, ts: 1_000 }
+    await boot()
+    localStorage.setItem(TABS, MOUNT_TABS)
+    const remount = vi.fn()
+    mod.setLatePrefsHost({ remount, canRemount: () => true })
+    win.dispatchEvent(new Event('wheel'))
+    // The person opens a note: claimed in the click, written by the page's effect a moment later,
+    // and the late read answers in between.
+    mod.claimPrefKey(TABS)
+    server.mode = 'ok'
+    await vi.advanceTimersByTimeAsync(mod.RETRY_PLAN[0].waitMs)
+    server.puts = []
+    localStorage.setItem(TABS, MY_TABS)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(local.getItem(TABS)).toBe(MY_TABS)
+    expect(server.prefs[TABS].v).toBe(MY_TABS)
+    expect(remount).not.toHaveBeenCalled()
+  })
+
+  it('a claim nothing was written for (a click that changed nothing) does not hide the late read', async () => {
+    server.prefs[TABS] = { v: OLD_TABS, ts: 1_000 }
+    await boot()
+    localStorage.setItem(TABS, MOUNT_TABS)
+    mod.claimPrefKey(TABS)
+    server.mode = 'ok'
+    await vi.advanceTimersByTimeAsync(mod.RETRY_PLAN[0].waitMs)
+    // Storage and the page agree: both have the server's value (the page is told, a storage event).
+    expect(local.getItem(TABS)).toBe(OLD_TABS)
+    expect(storageEvents).toContain(TABS)
+  })
+
+  it('a claim not written yet never sends the mount default over the server\'s entry, even one stamped 0', async () => {
+    server.prefs[TABS] = { v: OLD_TABS, ts: 0 }
+    await boot()
+    localStorage.setItem(TABS, MOUNT_TABS)
+    mod.claimPrefKey(TABS)
+    server.mode = 'ok'
+    await vi.advanceTimersByTimeAsync(mod.RETRY_PLAN[0].waitMs)
+    expect(putKeys()).not.toContain(TABS)
+    expect(server.prefs[TABS].v).toBe(OLD_TABS)
+  })
+
+  it('a key that never syncs is not claimed', async () => {
+    await boot()
+    mod.claimPrefKey('walnut.deviceToken')
+    localStorage.setItem('walnut.deviceToken', 'x')
+    server.mode = 'ok'
+    await vi.advanceTimersByTimeAsync(mod.RETRY_PLAN[0].waitMs)
+    expect(putKeys()).not.toContain('walnut.deviceToken')
+  })
+})

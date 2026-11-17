@@ -221,7 +221,8 @@ if (!notes) throw new Error('This needs a newer Walnut') // absent on an older o
 await notes.mkdir('Imports')
 const note = await notes.read('Imports/Hello.md')
 // expectedHash makes a write fail (code 'note_conflict') when the note changed since you read it,
-// so a person's edit is never overwritten.
+// so a person's edit is never overwritten, and (code 'note_deleted') when it was deleted since,
+// so a note the person deleted is never brought back.
 await notes.write('Imports/Hello.md', '# Hello\n', { expectedHash: note?.hash })
 await notes.writeFile('Imports/_attachment/photo.png', bytes) // images, PDF and office files, up to 50 MB
 ```

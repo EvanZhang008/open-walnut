@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
+import { useNoteGone, trackSave } from '@/hooks/useNoteGone';
 import { fetchNoteContent, saveNoteContent } from '@/api/notes-v2';
 import { useEvent } from '@/hooks/useWebSocket';
 import {
@@ -50,18 +51,34 @@ async function noteExists(path: string): Promise<boolean | null> {
 export interface PendingExternalChange {
   /**
    * Source: a WS notes:updated event, a true write-write 409 conflict (one the
-   * three-way merge could not resolve), or a save the host refused while the Mac
-   * is away (`needs-leader`, WP11: `message` says why in plain words).
+   * three-way merge could not resolve), a save the host refused while the Mac
+   * is away (`needs-leader`, WP11: `message` says why in plain words), or a save
+   * refused because the note was deleted since it was read (`deleted`, a 410: the
+   * text stays in the editor, unsaved, until the person saves it as a new note).
    */
-  kind: 'external' | 'conflict' | 'needs-leader';
+  kind: 'external' | 'conflict' | 'needs-leader' | 'deleted';
   /** The note path the change applies to (guards against stale applies after switch). */
   path: string;
-  /** needs-leader: the reason (NEEDS_LEADER_REASONS words). */
+  /** needs-leader: the reason (NEEDS_LEADER_REASONS words). deleted: why "Save as a new note" failed. */
   message?: string;
 }
 
-export function useNoteContent(notePath: string | null) {
+export interface NoteContentOptions {
+  /**
+   * The person is making this note (a link they followed, a capture whose create failed): a
+   * read that finds nothing opens it empty, and the first save creates it. Any other note that
+   * is not there (one opened from the saved tabs, Back, a deep link, or deleted while open)
+   * reads as `missing` instead: an empty editor for it would recreate it on the next keystroke.
+   */
+  mayCreate?: (path: string) => boolean;
+  /** Held text of a deleted note was saved under another name (its own was taken): open that one. */
+  onSavedAs?: (from: string, to: string) => void;
+}
+
+export function useNoteContent(notePath: string | null, options: NoteContentOptions = {}) {
   wireNoteContentCacheEvents();
+  const mayCreateRef = useRef(options.mayCreate);
+  mayCreateRef.current = options.mayCreate;
   /**
    * The loaded body, tagged with the path it belongs to. Tagging is what lets the
    * render that follows a click show the right thing at once: the click render
@@ -129,6 +146,42 @@ export function useNoteContent(notePath: string | null) {
    * waiting so the auto-apply (on idle+clean) can fire it.
    */
   const pendingExternalRef = useRef<PendingExternalChange | null>(null);
+  /** Show (or clear) the banner for the open note. Every change of it goes through here. */
+  const showPending = useLeanCallback((next: PendingExternalChange | null) => {
+    const prev = pendingExternalRef.current;
+    pendingExternalRef.current = next;
+    setPendingExternal(next);
+    gone.pendingChanged(prev, next);
+  }, []);
+  // A note that is not there: missing on open, or deleted under its text (useNoteGone.ts).
+  const gone = useNoteGone(notePath, {
+    currentPathRef,
+    pendingExternalRef,
+    showPending,
+    adoptBytes: (path, md, contentHash, at) => {
+      if (currentPathRef.current !== path) return;
+      const { frontmatter, body } = splitFrontmatter(md);
+      frontmatterRef.current = frontmatter;
+      lastWrittenRef.current = md;
+      contentHashRef.current = contentHash;
+      dirtyRef.current = false;
+      putCachedNote(path, { content: md, updatedAt: at ?? new Date().toISOString(), contentHash });
+      setContent(body);
+      setUpdatedAt(at);
+      setSaveStatus('idle');
+    },
+    showHeld: (path, draft) => {
+      if (currentPathRef.current !== path) return;
+      const { frontmatter, body } = splitFrontmatter(draft.md);
+      frontmatterRef.current = frontmatter;
+      lastWrittenRef.current = draft.base;
+      // The read's own hash, so a save once the hold ends never writes over a note made meanwhile.
+      contentHashRef.current = draft.hash;
+      dirtyRef.current = true;
+      setContent(body);
+      setUpdatedAt(null);
+    },
+  });
   /**
    * SELF-ECHO suppression. Every save the server makes emits a notes:updated
    * WS event back to US — and it can arrive BEFORE our PUT response updates
@@ -271,8 +324,8 @@ export function useNoteContent(notePath: string | null) {
         if (contentHash != null && contentHash === contentHashRef.current) {
           // Disk matches what we have — nothing pending to apply; dismiss the
           // affordance so a user-clicked "reload" doesn't leave the banner stuck.
-          pendingExternalRef.current = null;
-          setPendingExternal(null);
+          showPending(null);
+          gone.clearGone(targetPath);
           return;
         }
         // Another writer's bytes: it holds this path, so the note keeps its name.
@@ -288,27 +341,16 @@ export function useNoteContent(notePath: string | null) {
         setUpdatedAt(u);
         setSaveStatus('idle');
         // The on-disk version is now applied — clear any pending affordance.
-        pendingExternalRef.current = null;
-        setPendingExternal(null);
+        showPending(null);
+        // There after all (written while it showed as not here, or made again): read it.
+        gone.clearGone(targetPath);
       })
       .catch(() => {});
   }, []);
 
-  /**
-   * User-initiated (or auto-on-idle) apply of a deferred external change:
-   * reload the on-disk content and dismiss the banner. Maps to the
-   * "reload" affordance + the §6.2 auto-apply once idle+clean.
-   */
-  const applyExternalChange = useCallback(() => {
-    const p = currentPathRef.current;
-    if (!p) return;
-    reloadContent(p);
-  }, [reloadContent]);
-
   /** Dismiss the reload affordance without applying (user keeps editing). */
   const dismissExternalChange = useCallback(() => {
-    pendingExternalRef.current = null;
-    setPendingExternal(null);
+    showPending(null);
   }, []);
 
   /**
@@ -385,8 +427,7 @@ export function useNoteContent(notePath: string | null) {
       if (dirtyRef.current) {
         log.info('notes', 'External note update deferred (editor dirty)', { path, contentHash });
         const pending: PendingExternalChange = { kind: 'external', path };
-        pendingExternalRef.current = pending;
-        setPendingExternal(pending);
+        showPending(pending);
         return;
       }
       log.info('notes', 'Note updated externally, reloading', { path, contentHash });
@@ -421,8 +462,7 @@ export function useNoteContent(notePath: string | null) {
         // Same §6.2 dirty-guard as the WS path: never blow live typing away.
         log.info('notes', 'Note saved in another view — deferred (editor dirty)', { path: notePath });
         const pending: PendingExternalChange = { kind: 'external', path: notePath };
-        pendingExternalRef.current = pending;
-        setPendingExternal(pending);
+        showPending(pending);
         return;
       }
       if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
@@ -440,8 +480,8 @@ export function useNoteContent(notePath: string | null) {
       frontmatterRef.current = frontmatter;
       setContent(body);
       setSaveStatus('idle');
-      pendingExternalRef.current = null;
-      setPendingExternal(null);
+      showPending(null);
+      gone.clearGone(notePath);
     });
   }, [notePath, reloadContent]);
 
@@ -493,7 +533,9 @@ export function useNoteContent(notePath: string | null) {
       dirtyRef.current = false;
     }
 
-    // Switching notes invalidates any deferred external change for the old note.
+    // Switching notes invalidates any deferred external change for the old note (a held
+    // deleted note keeps its text in useNoteGone for when the person comes back).
+    const heldPrev = gone.keepIfHeld(prevPath, prevPath ? departingMarkdown(prevPath) : null);
     pendingExternalRef.current = null;
     setPendingExternal(null);
     pendingEchoRef.current = null;
@@ -529,20 +571,23 @@ export function useNoteContent(notePath: string | null) {
     if (timerRef.current) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
-      if (!wasMovedAway && dirtyRef.current && prevPath) {
+      if (!wasMovedAway && !heldPrev && dirtyRef.current && prevPath) {
         const md = departingMarkdown(prevPath);
         if (md != null && md !== lastWrittenRef.current) {
-          const hash = contentHashRef.current ?? undefined;
-          saveNoteContent(prevPath, md, hash, surfaceIdRef.current)
+          const sentHash = contentHashRef.current;
+          const base = lastWrittenRef.current;
+          trackSave(prevPath, saveNoteContent(prevPath, md, sentHash ?? undefined, surfaceIdRef.current))
             // The cache must learn the write too, or coming back paints the
             // pre-edit bytes for a moment before the revalidation catches up.
             .then((r) => { putCachedNote(prevPath, { content: md, updatedAt: r.updatedAt, contentHash: r.contentHash }); })
-            .catch(() => {});
+            // Deleted meanwhile: the text waits for the person to come back to the note.
+            .catch((e) => { if (e?.status === 410) gone.keepDeparted(prevPath, md, base, sentHash); });
         }
       }
     }
 
     departedEditRef.current = null;
+    gone.resetMissing();
     setSaveStatus('idle');
     dirtyRef.current = false;
     contentHashRef.current = null;
@@ -561,15 +606,24 @@ export function useNoteContent(notePath: string | null) {
       setUpdatedAt(u);
     };
 
-    // 404 = new file (or one moved/deleted since we last saw it): start empty.
+    // 404: a note the person is making starts empty (its first save, with no hash, creates
+    // it); any other shows as not here (useNoteGone).
     const startEmpty = () => {
       dropCachedNote(notePath);
-      frontmatterRef.current = '';
-      lastWrittenRef.current = '';
-      setContent('');
       setUpdatedAt(null);
       contentHashRef.current = null;
+      if (mayCreateRef.current?.(notePath)) {
+        frontmatterRef.current = '';
+        lastWrittenRef.current = '';
+        setContent('');
+        return;
+      }
+      setContent(null);
+      gone.markMissing(notePath);
     };
+
+    // Text held for this note when it was deleted under it: shown again, with its banner.
+    if (gone.restoreHeld(notePath)) return;
 
     // Cache hit: the render that followed the click already shows these bytes
     // (see `doc`); adopt them as the baseline, then check the disk quietly. A
@@ -586,8 +640,7 @@ export function useNoteContent(notePath: string | null) {
           forgetAutoName(notePath);
           if (dirtyRef.current) {
             const pending: PendingExternalChange = { kind: 'external', path: notePath };
-            pendingExternalRef.current = pending;
-            setPendingExternal(pending);
+            showPending(pending);
             return;
           }
           adopt(c, u, contentHash);
@@ -597,6 +650,7 @@ export function useNoteContent(notePath: string | null) {
           // Gone from disk while cached (moved or deleted elsewhere): the cached
           // bytes must not stand in for a note that is not there.
           if (err?.status === 404 && !dirtyRef.current) startEmpty();
+          // Dirty: the editor keeps the text, and its save is refused (410) instead of recreating it.
           /* any other failure: the cached bytes stand; the next open re-checks */
         });
       return () => { cancelled = true; };
@@ -626,6 +680,8 @@ export function useNoteContent(notePath: string | null) {
     const pathToSave = currentPathRef.current;
     // A rename in place is on the server: the edit is written once its path is known.
     if (!pathToSave || savingRef.current || renamingRef.current) return;
+    // Deleted since it was read: the text is held, never sent, until the person saves it as a new note.
+    if (gone.keepIfHeld(pathToSave, departingMarkdown(pathToSave))) return;
 
     // Re-attach the preserved frontmatter so the saved bytes are
     // `frontmatter + editedBody` — keeps the id stable (no re-stamp) and the
@@ -663,12 +719,16 @@ export function useNoteContent(notePath: string | null) {
     beginDocSave(docKey);
 
     const editSeq = editSeqRef.current;
+    // What this save was made from, read before it goes out: by its answer the person may be on
+    // another note, and these refs then hold that note's.
+    const sentHash = contentHashRef.current;
+    const base = lastWrittenRef.current;
     try {
-      const hash = contentHashRef.current ?? undefined;
+      const hash = sentHash ?? undefined;
       // saveNoteContent announces the write on the shared doc-saved signal (and
       // registers its hash), so every other mounted view of this note converges
       // without waiting for the server's echo.
-      const result = await saveNoteContent(pathToSave, md, hash, surfaceIdRef.current);
+      const result = await trackSave(pathToSave, saveNoteContent(pathToSave, md, hash, surfaceIdRef.current));
       // An echo parked while this save was in flight: if it matches what we
       // just wrote — or any other save this browser made meanwhile — it was
       // ours. Otherwise it's a REAL external write that raced our save; surface
@@ -680,8 +740,7 @@ export function useNoteContent(notePath: string | null) {
           && currentPathRef.current === pathToSave) {
           forgetAutoName(pathToSave);
           const pending: PendingExternalChange = { kind: 'external', path: pathToSave };
-          pendingExternalRef.current = pending;
-          setPendingExternal(pending);
+          showPending(pending);
         }
       }
       mergeTriesRef.current = 0;
@@ -689,8 +748,7 @@ export function useNoteContent(notePath: string | null) {
       if (currentPathRef.current === pathToSave) {
         // A save that lands lifts a refusal shown for this note (WP11).
         if (pendingExternalRef.current?.kind === 'needs-leader' && pendingExternalRef.current.path === pathToSave) {
-          pendingExternalRef.current = null;
-          setPendingExternal(null);
+          showPending(null);
         }
         setUpdatedAt(result.updatedAt);
         contentHashRef.current = result.contentHash;
@@ -739,6 +797,15 @@ export function useNoteContent(notePath: string | null) {
       // finally below saves the merge.
       // Another writer changed the note since our base: it holds this path, so the
       // note keeps its name from now on (useNoteAutoName).
+      if (err?.status === 410) {
+        // Deleted since it was read (the server never recreates a note a save names by hash):
+        // the text is held, and the banner offers to save it as a new note. The person may have
+        // moved to another note while it was out: then it waits for them to come back.
+        if (currentPathRef.current !== pathToSave) { gone.keepDeparted(pathToSave, md, base, sentHash, true); return; }
+        gone.holdDeleted(pathToSave, md, base, sentHash);
+        setSaveStatus('idle');
+        return;
+      }
       if (err?.status === 409) forgetAutoName(pathToSave);
       if (err?.status === 409 && currentPathRef.current === pathToSave && await mergeAfterConflict(pathToSave, err)) {
         setSaveStatus('idle');
@@ -748,8 +815,7 @@ export function useNoteContent(notePath: string | null) {
         mergeTriesRef.current = 0;
         log.warn('notes', 'Note save conflict (write-write), surfacing before reload', { path: pathToSave });
         const conflict: PendingExternalChange = { kind: 'conflict', path: pathToSave };
-        pendingExternalRef.current = conflict;
-        setPendingExternal(conflict);
+        showPending(conflict);
         setSaveStatus('idle');
         // Stop treating local edits as savable — the agent's write wins; the user
         // applies (reload) from the surfaced affordance. Bound the loss here.
@@ -761,8 +827,7 @@ export function useNoteContent(notePath: string | null) {
       if (away && currentPathRef.current === pathToSave) {
         log.warn('notes', 'Note save needs the Mac', { path: pathToSave, message: away });
         const blocked: PendingExternalChange = { kind: 'needs-leader', path: pathToSave, message: away };
-        pendingExternalRef.current = blocked;
-        setPendingExternal(blocked);
+        showPending(blocked);
         setSaveStatus('error');
         return;
       }
@@ -785,6 +850,29 @@ export function useNoteContent(notePath: string | null) {
       }
     }
   }, [reloadContent, mergeAfterConflict]);
+
+  /**
+   * User-initiated (or auto-on-idle) apply of a deferred external change: reload the on-disk
+   * content and dismiss the banner ("reload" + the §6.2 auto-apply once idle+clean). For a note
+   * deleted under its text (`deleted`): save the held text as a new note (useNoteGone).
+   */
+  const applyExternalChange = useCallback(() => {
+    const p = currentPathRef.current;
+    if (!p) return;
+    if (gone.isHeld(p)) { void gone.saveHeldAsNew(); return; }
+    reloadContent(p);
+  }, [reloadContent]);
+
+  // useNoteGone's way into the editor, set once per commit.
+  useLayoutEffect(() => {
+    gone.actionsRef.current = {
+      reload: reloadContent,
+      mergeWithServer: (path) => mergeAfterConflict(path, {}),
+      saveNow: () => { const e = editorRef.current; if (e && !e.isDestroyed) void doSave(e); },
+      editorMarkdown: () => (currentPathRef.current ? departingMarkdown(currentPathRef.current) : null),
+      onSavedAs: options.onSavedAs,
+    };
+  });
 
   // Debounced editor update handler.
   //
@@ -897,8 +985,7 @@ export function useNoteContent(notePath: string | null) {
         const pend = pendingExternalRef.current as PendingExternalChange | null;
         if (pend && pend.path === from) {
           const moved = { ...pend, path: to };
-          pendingExternalRef.current = moved;
-          setPendingExternal(moved);
+          showPending(moved);
         }
       }
       onMoved(to);
@@ -938,12 +1025,16 @@ export function useNoteContent(notePath: string | null) {
         if (dirtyRef.current) renaming.departed = departingMarkdown(pathToSave);
         return;
       }
+      // Deleted under its text: held for when the person comes back, never sent.
+      if (gone.keepIfHeld(pathToSave, pathToSave ? departingMarkdown(pathToSave) : null)) return;
       if (dirtyRef.current && pathToSave) {
         // Fire-and-forget save
         const md = departingMarkdown(pathToSave);
         if (md != null) {
-          const hash = contentHashRef.current ?? undefined;
-          saveNoteContent(pathToSave, md, hash, surfaceIdRef.current).catch((e) => {
+          const sentHash = contentHashRef.current;
+          const base = lastWrittenRef.current;
+          trackSave(pathToSave, saveNoteContent(pathToSave, md, sentHash ?? undefined, surfaceIdRef.current)).catch((e) => {
+            if (e?.status === 410) { gone.keepDeparted(pathToSave, md, base, sentHash); return; }
             log.warn('notes', 'Unmount flush failed', { error: e instanceof Error ? e.message : String(e) });
           });
         }
@@ -989,5 +1080,9 @@ export function useNoteContent(notePath: string | null) {
     ownSave,
     /** Whether the open note holds edits not saved yet (typed, or waiting for the autosave). */
     hasUnsavedEdits,
+    /** The note is not there (deleted, or never made) and the person did not ask to make it. */
+    missing: gone.missing,
+    /** Write the missing note on purpose, create-only: a note someone wrote meanwhile is opened instead. */
+    createMissing: gone.writeMissing,
   };
 }

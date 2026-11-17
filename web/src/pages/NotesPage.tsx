@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
-import { useNavigationType, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigationType, useSearchParams } from 'react-router-dom';
 import { useNotesTree, isNotesTreeCacheCurrent } from '@/hooks/useNotesTree';
 import { useNoteContent } from '@/hooks/useNoteContent';
 import { prefetchNoteOnHover } from '@/stores/note-content-cache';
@@ -23,7 +23,10 @@ import { createNote, moveNote, treeFilePaths, fetchNoteContent, type NoteTreeNod
 import { quickStartSession, fetchSession } from '@/api/sessions';
 import { fetchNotesDir } from '@/api/config';
 import { log } from '@/utils/log';
+import { claimPrefKey } from '@/utils/ui-prefs-sync';
 import { usePhoneNoteLayer, replaceUrlKeepingState } from '@/components/notes/usePhoneNoteLayer';
+import { NoteMissingState } from '@/components/notes/NoteMissingState';
+import { hasHeldText } from '@/hooks/useNoteGone';
 import { primaryDoc, requestPageFind } from '@/utils/find-doc';
 import { useAlert } from '@/hooks/useConfirm';
 import { useNoteAutoName } from '@/hooks/useNoteAutoName';
@@ -31,6 +34,23 @@ import { fileBaseFromTitle, followAutoName, forgetAutoName, markAutoNamed, pickU
 
 const LS_WIDTH_KEY = 'open-walnut-notes-tree-width';
 const LS_TABS_KEY = 'open-walnut-notes-tabs';
+/**
+ * The history state the page's own URL mirror writes (`?path=` follows the active tab). The
+ * router applies a URL change as a transition, so under load the page's own write of an earlier
+ * tab can land after the tabs moved on; this marks it as the page's, never a navigation.
+ */
+const NOTES_URL_MIRROR = { notesUrlMirror: true } as const;
+function isNotesUrlMirror(state: unknown): boolean {
+  return !!state && typeof state === 'object' && (state as Record<string, unknown>).notesUrlMirror === true;
+}
+/**
+ * The person changed the open tabs (opened, closed, created, renamed, deleted): from now on the
+ * saved workspace is their choice, not the page's default, so the server's prefs read late (the
+ * first read timed out) keep it instead of putting an older workspace back (ui-prefs-sync.ts
+ * claimPrefKey). Called by the person's own actions only: the restore checks that close a gone
+ * note's tab, and other writes nobody made, never claim.
+ */
+function choseTabs(): void { claimPrefKey(LS_TABS_KEY); }
 const LS_CHAT_OPEN_KEY = 'open-walnut-notes-chat-open';
 // Persisted CC tab set: JSON array of {key,label,taskId?,sessionId?} (older
 // formats — single {taskId,sessionId} object or a plain sid — still migrate).
@@ -117,6 +137,11 @@ function isValidTab(t: unknown): t is OpenTab {
  * The URL must NOT replace the whole workspace: the page itself mirrors the
  * active tab into `?path=`, so a plain refresh always carries one — treating it
  * as a sole-tab deep link silently dropped every other open tab on reload.
+ * `restored` lists only the saved workspace's notes: those wait for the tree to
+ * list them before they open. A URL note that is not among them (a deep link, a
+ * pop-out, or a reload of a URL the mirror had not rewritten yet) opens at once;
+ * if it is gone, its read answers 404 and the editor shows it as deleted
+ * (useNoteContent `missing`), never as an empty note that typing would recreate.
  */
 function hydrateTabs(searchParams: URLSearchParams): PersistedTabs {
   const urlAttachment = searchParams.get('attachment');
@@ -219,6 +244,7 @@ const JUMP_FLASH_CLASS = 'notes-jump-flash';
 export function NotesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigationType = useNavigationType();
+  const location = useLocation();
   // A link followed inside a note adds a history entry, so Back returns to the note it was in
   // (every other tab change replaces the entry). 2026-11-04: imported notes are read by following
   // links, and Back left Notes.
@@ -406,10 +432,16 @@ export function NotesPage() {
   // A tab from the saved workspace opens once a tree says its note is still there (an organize
   // Undo, an agent or another window may have removed it while this page was closed): a note
   // that is gone closes its tab without being asked for (2026-11-04: a reload asked for it, 404).
+  // Only a tree that lists the note lets it open: the render in which a fetched tree without it
+  // arrives (the effect below closes the tab right after) used to open it for that one render, so
+  // the note was asked for, and an empty editor for it was one step from saving it back.
   const unconfirmedRef = useRef(new Set(initial.current.restored ?? []));
+  // Notes the person set out to make by opening them (a link followed, a capture whose create
+  // failed): only these open empty when not found; any other missing note shows as deleted.
+  const createPathsRef = useRef(new Set<string>());
   const [cacheCurrentAtMount] = useState(isNotesTreeCacheCurrent);
-  const holding = activeTab?.kind === 'note' && unconfirmedRef.current.has(activeTab.path) && !treeFetched
-    && !(cacheCurrentAtMount && notePathsOf(tree).has(activeTab.path));
+  const holding = activeTab?.kind === 'note' && unconfirmedRef.current.has(activeTab.path) && !hasHeldText(activeTab.path)
+    && !((treeFetched || cacheCurrentAtMount) && notePathsOf(tree).has(activeTab.path));
   const activeNotePath = activeTab?.kind === 'note' && !holding ? activeTab.path : null;
 
   const {
@@ -426,12 +458,19 @@ export function NotesPage() {
     remountKey,
     ownSave,
     hasUnsavedEdits,
-  } = useNoteContent(activeNotePath);
+    missing,
+    createMissing,
+  } = useNoteContent(activeNotePath, {
+    mayCreate: (p) => createPathsRef.current.has(p),
+    // Held text of a deleted note saved beside a note made meanwhile: its tab follows it there.
+    onSavedAs: (from, to) => { retargetTab(from, to); void refreshTree(); },
+  });
   // Phone: the open note is a layer (Back = the tree) and reads until Edit. A note
   // renamed after its title is the same note (its editor's remount key), so Edit stays on.
   const noteLayer = usePhoneNoteLayer(
     activeTab ? activePath : null,
-    () => setActivePath(null),
+    // Back is the person's; leaving the phone layout (a resize) is nobody's choice.
+    ({ breakpoint }) => { if (!breakpoint) choseTabs(); setActivePath(null); },
     activeNotePath ? remountKey : activePath,
   );
 
@@ -543,12 +582,17 @@ export function NotesPage() {
   }, [activePath, revealInTree]);
 
   // ── URL sync: mirror the active tab into ?path= / ?attachment= (replace, never push) ──
-  useEffect(() => {
+  // Judged against the address bar itself, never the router's `searchParams`: the router applies
+  // a URL write as a transition, so under load its value still names a tab the page already
+  // closed (a restored note found deleted), and a mirror that read it saw no notes param to clear
+  // and left `?path=<deleted note>` in the address bar, where a reload opened it as a deep link.
+  const mirrorUrl = useLeanCallback(() => {
+    const urlNow = new URLSearchParams(window.location.search);
     if (!activeTab) {
       // Only clear if a notes param is present (avoid clobbering unrelated params).
       if (noteLayer.phone) { replaceUrlKeepingState({}); return; }
-      if (searchParams.get('path') || searchParams.get('attachment')) {
-        setSearchParams({}, { replace: true });
+      if (urlNow.get('path') || urlNow.get('attachment')) {
+        setSearchParams({}, { replace: true, state: NOTES_URL_MIRROR });
       }
       return;
     }
@@ -558,21 +602,32 @@ export function NotesPage() {
     followedLinkRef.current = false;
     // A phone layer's history entry carries its marker: keep that state.
     if (noteLayer.phone) { replaceUrlKeepingState(next); return; }
-    const already = activeTab.kind === 'attachment' ? searchParams.get('attachment') === activeTab.path : searchParams.get('path') === activeTab.path;
-    setSearchParams(next, { replace: !followed || already || (!searchParams.get('path') && !searchParams.get('attachment')) });
-  // setSearchParams is stable; intentionally exclude searchParams to avoid a sync loop.
+    const already = activeTab.kind === 'attachment' ? urlNow.get('attachment') === activeTab.path : urlNow.get('path') === activeTab.path;
+    setSearchParams(next, { replace: !followed || already || (!urlNow.get('path') && !urlNow.get('attachment')), state: NOTES_URL_MIRROR });
+  }, [activeTab, noteLayer.phone, setSearchParams]);
+  // Intentionally not on searchParams, to avoid a sync loop.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]);
+  useEffect(() => { mirrorUrl(); }, [activeTab]);
 
   // ── Inbound URL navigation while already MOUNTED: hydrateTabs only runs once,
   //    so a navigate('/notes?path=…') fired from inside this page (note link
   //    clicked in a chat-column session panel) must be handled here. The mirror
   //    effect above keeps the URL equal to the active tab, so only a param that
-  //    points elsewhere is a real navigation. ──
+  //    points elsewhere is a real navigation. Not the mirror's own write coming back, though: the
+  //    router applies it as a transition, and under load it landed after the tabs had moved on (a
+  //    restored tab closed as gone, a New note opened), so the old note opened again and the next
+  //    keystrokes were saved into it, writing a deleted note back (2026-11-16, CI). Back and
+  //    Forward (POP) still open the entry they reach. ──
   useEffect(() => {
     const urlAttachment = searchParams.get('attachment');
     const urlPath = searchParams.get('path');
     const target = urlAttachment ?? urlPath;
+    if (navigationType !== 'POP' && isNotesUrlMirror(location.state)) {
+      // An older write: the tab it named is gone or no longer active, so the URL is written again
+      // (left as it was, a reload opened that note as a deep link).
+      if (target !== (activeTab?.path ?? null)) mirrorUrl();
+      return;
+    }
     if (target && target !== activePath) {
       // Back or Forward through followed links opens the note where the reader is.
       openInTab(target, urlAttachment ? 'attachment' : 'note', { newTab: navigationType !== 'POP' });
@@ -584,6 +639,7 @@ export function NotesPage() {
   // ── Single source of truth for opening a path (§1.3). All programmatic opens
   //    (tree click, Cmd+K, bookmark click, create, rename follow) funnel here. ──
   const openInTab = useCallback((path: string, kind: TabKind, opts?: { newTab?: boolean }) => {
+    choseTabs();
     setTabs((prev) => {
       const existingIdx = prev.findIndex((t) => t.path === path);
       // Already open → activate it (ignore newTab; never duplicate).
@@ -629,27 +685,34 @@ export function NotesPage() {
   }, [openInTab]);
   const handleFollowLink = useLeanCallback((path: string) => {
     if (path !== activePath) followedLinkRef.current = true;
+    // A link to a note not written yet opens it to write (the wiki way).
+    createPathsRef.current.add(path);
     handleSelect(path);
   }, [handleSelect, activePath]);
 
-  const handleActivateTab = useCallback((path: string) => { setActivePath(path); }, []);
+  const handleActivateTab = useCallback((path: string) => { choseTabs(); setActivePath(path); }, []);
 
-  const handleCloseTab = useCallback((path: string) => {
+  // Drop every tab `gone` matches (a closed tab, a deleted note, attachment or folder). If the
+  // active tab goes, the right neighbor of the first dropped tab takes the slot, else the left,
+  // else none (empty state); otherwise the active tab stays.
+  const dropTabs = useLeanCallback((gone: (tab: OpenTab) => boolean) => {
     setTabs((prev) => {
-      const idx = prev.findIndex((t) => t.path === path);
+      const idx = prev.findIndex(gone);
       if (idx === -1) return prev;
-      const next = prev.filter((t) => t.path !== path);
-      // If we closed the active tab, activate the right neighbor, else the left,
-      // else null (empty state). Closing a non-active tab leaves active untouched.
+      const next = prev.filter((t) => !gone(t));
       setActivePath((cur) => {
-        if (cur !== path) return cur;
-        if (next.length === 0) return null;
+        const active = prev.find((t) => t.path === cur);
+        if (!active || !gone(active)) return cur;
         const neighbor = next[idx] ?? next[idx - 1] ?? next[0];
         return neighbor ? neighbor.path : null;
       });
       return next;
     });
   }, []);
+  const handleCloseTab = useLeanCallback((path: string) => {
+    choseTabs();
+    dropTabs((t) => t.path === path);
+  }, [dropTabs]);
 
   // A note removed outside this page (an organize Undo, an agent, another window) closes its
   // tab, as deleting it in the tree does: an open tab used to show it as an empty note to type
@@ -658,9 +721,20 @@ export function NotesPage() {
   // the note is gone, so a tab opened for a note not written yet (a new link) stays, and a tree
   // a moment behind a save never closes one.
   const existedRef = useRef(new Set(initial.current.restored ?? []));
+  // `updatedAt` still holds the previous note's in the render that switches notes, so only a
+  // note shown loaded counts (a note opened by Back after it was deleted was counted as having
+  // loaded, and its tab closed under the person writing it again).
   useEffect(() => {
-    if (activeNotePath && updatedAt) existedRef.current.add(activeNotePath);
-  }, [activeNotePath, updatedAt]);
+    if (activeNotePath && updatedAt && !contentLoading && !missing) {
+      existedRef.current.add(activeNotePath);
+      // Made (or found): from now on a 404 for it means deleted, never "open it empty".
+      createPathsRef.current.delete(activeNotePath);
+    }
+  }, [activeNotePath, updatedAt, contentLoading, missing]);
+  // A note the person set out to make and left before it was: no longer theirs to make.
+  useEffect(() => {
+    for (const p of [...createPathsRef.current]) if (p !== activeNotePath) createPathsRef.current.delete(p);
+  }, [activeNotePath]);
   useEffect(() => {
     if (!treeFetched) return;
     const present = notePathsOf(tree);
@@ -668,23 +742,27 @@ export function NotesPage() {
     if (unconfirmedRef.current.size) {
       for (const path of [...unconfirmedRef.current]) {
         unconfirmedRef.current.delete(path);
-        if (!present.has(path) && tabs.some((t) => t.kind === 'note' && t.path === path)) {
+        // A note deleted under text this page still holds keeps its tab: the text is shown there.
+        if (!present.has(path) && !hasHeldText(path) && tabs.some((t) => t.kind === 'note' && t.path === path)) {
           existedRef.current.delete(path);
-          handleCloseTab(path);
+          dropTabs((t) => t.path === path);
         }
       }
       return;
     }
-    const gone = tabs.filter((t) => t.kind === 'note' && existedRef.current.has(t.path) && !present.has(t.path));
+    const gone = tabs.filter((t) => t.kind === 'note' && existedRef.current.has(t.path) && !present.has(t.path) && !hasHeldText(t.path));
     if (!gone.length) return;
     let cancelled = false;
     for (const tab of gone) {
       fetchNoteContent(tab.path).then(() => undefined, (err) => {
         if (cancelled || err?.status !== 404) return;
-        // Words typed into it and not saved yet stay on screen: their save writes the note again.
+        // Held meanwhile, or a save of it still out (refused, 410, it holds its text): the tab stays.
+        if (hasHeldText(tab.path)) return;
+        // Words typed into it and not saved yet stay on screen: their save is refused (410), and
+        // the editor offers to save them as a new note.
         if (tab.path === activeNotePath && hasUnsavedEdits()) return;
         existedRef.current.delete(tab.path);
-        handleCloseTab(tab.path);
+        dropTabs((t) => t.path === tab.path);
       });
     }
     return () => { cancelled = true; };
@@ -696,11 +774,13 @@ export function NotesPage() {
   // go through the same setTabs+setActivePath pair as handleCloseTab so the
   // active slot can never point at a tab that is gone.
   const handleCloseOtherTabs = useCallback((path: string) => {
+    choseTabs();
     setTabs((prev) => prev.filter((t) => t.path === path));
     setActivePath(path);
   }, []);
 
   const handleCloseAllTabs = useCallback(() => {
+    choseTabs();
     setTabs([]);
     setActivePath(null);
   }, []);
@@ -766,6 +846,7 @@ export function NotesPage() {
   // '+' → a fresh place to pick/create a note: clear the active tab (shows the
   // empty state) and open the Cmd+K quick-switcher (§1.3 "New / empty").
   const handleNewTab = useCallback(() => {
+    choseTabs();
     setActivePath(null);
     // Defer so the empty state renders before the palette steals focus.
     setTimeout(() => {
@@ -834,6 +915,7 @@ export function NotesPage() {
   // A note renamed or moved: its open tab follows in place (position and active
   // state kept), so flush-on-switch is not triggered spuriously (§1.6).
   const retargetTab = useLeanCallback((from: string, to: string) => {
+    choseTabs();
     setTabs((prev) => prev.map((t) => (t.path === from ? { ...t, path: to } : t)));
     setActivePath((cur) => (cur === from ? to : cur));
   }, []);
@@ -892,6 +974,7 @@ export function NotesPage() {
           log.warn('notes', 'Quick-capture create failed (opening anyway)', {
             notePath, error: err instanceof Error ? err.message : String(err),
           });
+          createPathsRef.current.add(notePath);
         }
       }
       await refreshTree();
@@ -934,40 +1017,20 @@ export function NotesPage() {
         await markMovedAway(notePath);
       }
       await removeNote(notePath);
-      setTabs((prev) => {
-        const idx = prev.findIndex((t) => t.path === notePath);
-        if (idx === -1) return prev;
-        const next = prev.filter((t) => t.path !== notePath);
-        setActivePath((cur) => {
-          if (cur !== notePath) return cur;
-          if (next.length === 0) return null;
-          const neighbor = next[idx] ?? next[idx - 1] ?? next[0];
-          return neighbor ? neighbor.path : null;
-        });
-        return next;
-      });
+      choseTabs();
+      dropTabs((t) => t.path === notePath);
     },
-    [removeNote, activeNotePath, markMovedAway],
+    [removeNote, activeNotePath, markMovedAway, dropTabs],
   );
 
   // Deleted attachment open in a preview tab → same tab-drop rule as notes.
   const handleDeleteAttachment = useCallback(
     async (attachmentPath: string) => {
       await removeAttachment(attachmentPath);
-      setTabs((prev) => {
-        const idx = prev.findIndex((t) => t.path === attachmentPath);
-        if (idx === -1) return prev;
-        const next = prev.filter((t) => t.path !== attachmentPath);
-        setActivePath((cur) => {
-          if (cur !== attachmentPath) return cur;
-          if (next.length === 0) return null;
-          const neighbor = next[idx] ?? next[idx - 1] ?? next[0];
-          return neighbor ? neighbor.path : null;
-        });
-        return next;
-      });
+      choseTabs();
+      dropTabs((t) => t.path === attachmentPath);
     },
-    [removeAttachment],
+    [removeAttachment, dropTabs],
   );
 
   // Deleted folder → drop EVERY tab living under it (notes and attachments alike).
@@ -980,20 +1043,10 @@ export function NotesPage() {
         await markMovedAway(activeNotePath);
       }
       await removeFolder(folderPath);
-      setTabs((prev) => {
-        const idx = prev.findIndex((t) => t.path.startsWith(prefix));
-        if (idx === -1) return prev;
-        const next = prev.filter((t) => !t.path.startsWith(prefix));
-        setActivePath((cur) => {
-          if (!cur || !cur.startsWith(prefix)) return cur;
-          if (next.length === 0) return null;
-          const neighbor = next[idx] ?? next[idx - 1] ?? next[0];
-          return neighbor ? neighbor.path : null;
-        });
-        return next;
-      });
+      choseTabs();
+      dropTabs((t) => t.path.startsWith(prefix));
     },
-    [removeFolder, activeNotePath, markMovedAway],
+    [removeFolder, activeNotePath, markMovedAway, dropTabs],
   );
 
   // Renamed/moved from the tree: a name the user gave (or a place they chose) ends
@@ -1114,6 +1167,8 @@ export function NotesPage() {
             <LoadingSpinner />
           ) : !activeNotePath ? (
             <NotesEmptyState onNewNote={() => void handleNewNote('')} />
+          ) : missing ? (
+            <NoteMissingState path={activeNotePath} onCreate={() => { existedRef.current.delete(activeNotePath); createMissing(); }} onClose={() => handleCloseTab(activeNotePath)} />
           ) : contentLoading ? (
             <LoadingSpinner />
           ) : (

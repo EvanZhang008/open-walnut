@@ -729,6 +729,18 @@ mark.notes-search-mark {
   cursor: pointer;
 }
 .notes-empty-state-cta:hover { background: var(--accent-hover, #5457e0); }
+/* The quiet second choice beside the CTA (NoteMissingState's Close). */
+.notes-empty-state-secondary {
+  margin-top: 4px;
+  padding: 8px 16px;
+  border: 1px solid var(--border, #d4d4d8);
+  border-radius: var(--radius-md, 8px);
+  background: transparent;
+  color: var(--fg, inherit);
+  font-size: 14px;
+  cursor: pointer;
+}
+.notes-empty-state-secondary:hover { background: var(--bg-hover, rgba(0, 0, 0, 0.04)); }
 
 /* ── External/AI-write reload banner (§6.2 dirty-guard) ────────────────── */
 .notes-reload-banner {

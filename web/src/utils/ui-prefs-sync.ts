@@ -307,6 +307,16 @@ function queue(key: string, value: string | null) {
   // would then lose to older server values on the next boot merge).
   meta = readMeta();
   if (!serverRead) {
+    if (claimedKeys.has(key)) {
+      // The person's own choice (claimPrefKey): a write of now, kept over an older server
+      // value when the read comes back, and sent up then. Only from this write on: until it,
+      // the page's value is still what it mounted with.
+      meta[key] = Date.now();
+      persistMeta();
+      heldKeys.delete(key);
+      claimedWritten.add(key);
+      return;
+    }
     // Not read yet (the first read timed out): stamped weakest and never sent, so it can
     // never win over the server's value, now or at the next boot merge (mergeServerPrefs).
     meta[key] = 0;
@@ -314,6 +324,8 @@ function queue(key: string, value: string | null) {
     heldKeys.add(key);
     return;
   }
+  // Claimed before the read and written only now: the person's write, never a default re-saved.
+  if (lateClaims.delete(key)) forgetStale(key);
   const shownAs = staleValueOf(key);
   if (shownAs !== undefined) {
     // Read late, not shown yet (ui-prefs-remount.ts): untouched, this is a default re-saved.
@@ -357,7 +369,11 @@ function flushKeepalive() {
  * own layout could reach the page), so the server's value wins whenever it holds the key, and
  * only a key it does not hold is sent up.
  */
-function mergeServerPrefs(server: Record<string, PrefEntry>, held: ReadonlySet<string>): { changed: string[]; push: Record<string, PrefEntry> } {
+function mergeServerPrefs(
+  server: Record<string, PrefEntry>,
+  held: ReadonlySet<string>,
+  claimed: ReadonlySet<string> = new Set(),
+): { changed: string[]; push: Record<string, PrefEntry> } {
   const push: Record<string, PrefEntry> = {};
   const changed: string[] = [];
   // Under browser automation the shared fixture server's layout record belongs to
@@ -402,7 +418,8 @@ function mergeServerPrefs(server: Record<string, PrefEntry>, held: ReadonlySet<s
       push[key] = { v: localVal, ts };
     }
   }
-  for (const key of held) {
+  // A key the server does not hold yet: this page's value goes up.
+  for (const key of new Set([...held, ...claimed])) {
     if (key in server || !syncable(key)) continue;
     const value = localGet(key);
     if (value === null) continue;
@@ -428,6 +445,37 @@ function mergeServerPrefs(server: Record<string, PrefEntry>, held: ReadonlySet<s
 let serverRead = false;
 /** Syncable keys written in this page before `serverRead`. */
 const heldKeys = new Set<string>();
+/** Keys the person set before `serverRead` (claimPrefKey): theirs, never a default. */
+const claimedKeys = new Set<string>();
+/** Of those, the ones written since: only these keep the page's value over a late read. */
+const claimedWritten = new Set<string>();
+/** Claimed before the read but not written by then: their first write after it is the person's. */
+const lateClaims = new Set<string>();
+
+/**
+ * The page's value of this key is now the person's own choice, not a default a component saved
+ * as it mounted. Call it from the person's action, before the write it leads to (the Notes page
+ * does when a tab is opened, closed or created), never from a write nobody made: after a late
+ * merge not shown yet, such a write is put back (a newer value from another device stays).
+ *
+ * Before the server's prefs were read (the first read timed out), a write is held as a default
+ * and the server's value replaces it when the read comes back: right for what a component saves
+ * as it mounts, wrong for a choice. 2026-11-16, CI: a page opened a new note before the read came
+ * back, the read put an older workspace back in storage, and the next mount of the page restored
+ * it, a deleted note among it. A claimed key's next write is stamped as written now instead, so
+ * an older server value never replaces it and it is sent up once read; a newer one (another device
+ * wrote it since) still lands in storage. Either way the late read is not shown for a key written
+ * since its claim, so the person's tabs stay on screen. A claim not written yet when the read lands
+ * (the click's write still to come, or a click that changed nothing) takes the read like any key,
+ * and its first write after it is the person's: sent, never put back as a default re-saved. After
+ * the read, a late merge this page has not shown yet stops standing for the key
+ * (ui-prefs-remount.ts).
+ */
+export function claimPrefKey(key: string): void {
+  if (!syncable(key)) return;
+  if (serverRead) { forgetStale(key); return; }
+  claimedKeys.add(key);
+}
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
 let retryStep = 0;
 let reading = false;
@@ -455,6 +503,8 @@ async function readServerPrefs(timeoutMs: number): Promise<Record<string, PrefEn
 function giveUpReading(): void {
   serverRead = true;
   heldKeys.clear();
+  claimedKeys.clear();
+  claimedWritten.clear();
   clearTimeout(retryTimer);
   listenUntilRead(false);
   watchInteraction(false);
@@ -490,20 +540,30 @@ async function attemptLateRead(timeoutMs: number): Promise<void> {
 
 function applyLatePrefs(prefs: Record<string, PrefEntry>): void {
   meta = readMeta();
-  const { changed, push } = mergeServerPrefs(prefs, heldKeys);
+  const { changed, push } = mergeServerPrefs(prefs, heldKeys, claimedKeys);
+  // The page never shows the server's value of a key the person set in this visit: it keeps
+  // what they chose (rule: a late read never replaces it), and their next write is sent as
+  // usual. Only a claim that was written counts (a click that changed nothing wrote nothing,
+  // so storage and the page both take the read); one still to be written is the person's
+  // when it comes (lateClaims), never put back as a default re-saved (ui-prefs-remount.ts).
+  const claimed = new Set(claimedWritten);
+  for (const key of claimedKeys) if (!claimedWritten.has(key)) lateClaims.add(key);
   persistMeta();
   serverRead = true;
   heldKeys.clear();
+  claimedKeys.clear();
+  claimedWritten.clear();
   clearTimeout(retryTimer);
   listenUntilRead(false);
   if (Object.keys(push).length > 0) void apiPut('/api/ui-prefs', { prefs: push }, { background: true, quietRetry: true }).catch(() => {});
   for (const key of changed) {
+    if (claimed.has(key)) continue;
     try { window.dispatchEvent(new StorageEvent('storage', { key, newValue: localGet(key) })); } catch { /* no DOM */ }
   }
   // The UI reads these keys in useState initializers: ui-prefs-remount.ts mounts the app again
   // (at once on a young untouched page, else once it is hidden). The lists both sides add to
   // (MERGED_KEYS) are read through their storage listeners and need no remount.
-  const shown = showLatePrefs(changed.filter((k) => !MERGED_KEYS[k]).map((k) => [k, localGet(k)] as const));
+  const shown = showLatePrefs(changed.filter((k) => !MERGED_KEYS[k] && !claimed.has(k)).map((k) => [k, localGet(k)] as const));
   log.info('ui-prefs', 'late prefs applied', { changed: changed.length, pushed: Object.keys(push).length, shown, tries: retryStep + 1 });
 }
 
@@ -565,6 +625,9 @@ export function __resetUiPrefsSyncForTests(): void {
   clearTimeout(retryTimer);
   serverRead = false;
   heldKeys.clear();
+  claimedKeys.clear();
+  claimedWritten.clear();
+  lateClaims.clear();
   retryStep = 0;
   reading = false;
   __resetLateRemountForTests();
