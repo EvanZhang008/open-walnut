@@ -55,7 +55,9 @@ function census() {
     const p = path.join(REPO, f)
     if (!fs.existsSync(p) || !fs.statSync(p).isFile() || fs.statSync(p).size > 2_000_000) continue
     for (const l of fs.readFileSync(p, 'utf8').split('\n')) {
-      if (/^\s*(#|\/\/|\*)/.test(l)) continue
+      // A comment line: `#`, `//`, a `*` of a block, or a one-line `/** ... */` (2026-11-17: two such
+      // docs in src/core/link-kinds.ts that name `git push` read as a new push site).
+      if (/^\s*(#|\/\/|\/?\*)/.test(l)) continue
       if (PUSH_RE.some((r) => r.test(l))) push[f] = (push[f] ?? 0) + 1
       if (l.includes('--no-verify')) noVerify[f] = (noVerify[f] ?? 0) + 1
     }
