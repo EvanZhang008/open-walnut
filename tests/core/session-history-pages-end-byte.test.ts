@@ -37,6 +37,13 @@ describe('readSessionHistoryBefore endByte', () => {
     expect(page?.messages.map(m => m.text)).toEqual(['w1']);
   });
 
+  it('with the tail in hand it reads the window before it and no window heads', async () => {
+    const page = await readSessionHistoryBefore('s', undefined, 'h', '2026-01-03T00:00:00Z', { ...want, maxWindows: 1 }, { byte: 9 * MB - 1, epoch: 'e1' });
+    // The size probe, then that one window: no head reads to find it.
+    expect(ranges.filter(([a, b]) => b > a)).toEqual([[8 * MB, 9 * MB - 1]]);
+    expect(page?.windowsRead).toBe(1);
+  });
+
   it('without endByte it still starts at the file\'s last window (the phone\'s before= pages)', async () => {
     await readSessionHistoryBefore('s', undefined, 'h', '2026-01-09T00:00:00Z', want);
     expect(windowReads()[0]).toEqual([8 * MB, 12 * MB]);

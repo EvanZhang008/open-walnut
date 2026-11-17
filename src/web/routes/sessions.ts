@@ -906,6 +906,13 @@ import { HOST_RECONNECTING, HostReconnectingError, HostStillLoadingError, boundH
 
 /** A full history read this slow logs its steps ('history read slow'). */
 const SLOW_HISTORY_READ_MS = 2_000
+/**
+ * A tail read this slow says the host link is slow: the older turns of a windowed answer
+ * would cost about as much again, inside the read the person waits on. They are left to
+ * "Load earlier" (the answer stays windowed). 2026-11-17: a 119 MB session on clouddev,
+ * 14.6 s for the tail and 65 s more for the backfill, 60 s before the chat was current.
+ */
+const BACKFILL_AFTER_SLOW_READ_MS = 3_000
 
 /** A SessionControlError as the web shape: `{ error }`, plus its `code` when it has one. */
 function sendControlError(res: Response, err: SessionControlError): void {
@@ -1750,10 +1757,12 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
           tail && tail > 0 ? { maxColdReadBytes: HISTORY_COLD_TAIL_READ_BYTES } : undefined)
         const readMs = Date.now() - readAt
         const readWindowed = history.windowed
-        let backfill: { ms: number; windows: number; messages: number } | undefined
-        if (req.query.since === undefined && turnCount > 0 && history.windowed && record
+        let backfill: { ms: number; windows: number; messages: number } | { skipped: 'slow-read' } | undefined
+        const wantsBackfill = req.query.since === undefined && turnCount > 0 && history.windowed && record
           && engineCaps(record.engine).historySource !== 'acp-journal'
-          && history.messages.filter(isMainTurn).length < turnCount) {
+          && history.messages.filter(isMainTurn).length < turnCount
+        if (wantsBackfill && readMs >= BACKFILL_AFTER_SLOW_READ_MS) backfill = { skipped: 'slow-read' }
+        else if (wantsBackfill && record) {
           const before = history.messages[0]?.timestamp
           if (before) {
             const { readSessionHistoryBefore } = await import('../../core/session-history-pages.js')
@@ -1775,7 +1784,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
         }
         // Which step a slow full read waited on (2026-11-16: 10.5 s with nothing to say
         // where): the read itself, or the older-turns backfill and its windows.
-        if (readMs + (backfill?.ms ?? 0) >= SLOW_HISTORY_READ_MS) {
+        if (readMs + (backfill && 'ms' in backfill ? backfill.ms : 0) >= SLOW_HISTORY_READ_MS) {
           log.web.info('history read slow', {
             sessionId, host: record?.host ?? '__local__', readMs, windowed: readWindowed, reachedStart: !history.windowed,
             ...(history.windowStart ? { windowStartByte: history.windowStart.byte } : {}),

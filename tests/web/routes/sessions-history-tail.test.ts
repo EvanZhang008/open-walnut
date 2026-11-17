@@ -24,6 +24,8 @@ const finishedIdsBySid = new Map<string, string[]>();
 const windowedSids = new Set<string>();
 const windowStartBySid = new Map<string, { byte: number; epoch?: string }>();
 const olderPages = new Map<string, { messages: unknown[]; reachedStart: boolean }>();
+/** Sessions whose tail read takes this long (the clock moves on while it reads). */
+const readTakesMs = new Map<string, number>();
 vi.mock('../../../src/core/session-history-pages.js', () => ({
   readSessionHistoryBefore: vi.fn(async (sid: string) => olderPages.get(sid) ?? null),
 }));
@@ -31,13 +33,17 @@ vi.mock('../../../src/core/sessions/session-lifecycle.js', async (importOriginal
   const actual = await importOriginal<typeof import('../../../src/core/sessions/session-lifecycle.js')>();
   return {
     ...actual,
-    readProviderSessionHistory: async (sessionId: string) => ({
+    readProviderSessionHistory: async (sessionId: string) => {
+      const took = readTakesMs.get(sessionId);
+      if (took) { const now = Date.now(); vi.spyOn(Date, 'now').mockReturnValue(now + took); }
+      return {
       messages: historyBySid.get(sessionId) ?? [],
       sourceAvailable: true,
       windowed: windowedSids.has(sessionId),
       ...(windowStartBySid.has(sessionId) ? { windowStart: windowStartBySid.get(sessionId) } : {}),
       ...(finishedIdsBySid.has(sessionId) ? { finishedAgentIds: finishedIdsBySid.get(sessionId) } : {}),
-    }),
+      };
+    },
   };
 });
 
@@ -180,6 +186,28 @@ describe('GET /:sessionId/history?tail=N', () => {
     expect(vi.mocked(readSessionHistoryBefore).mock.calls.at(-1)?.[5]).toEqual({ byte: 48_906_261, epoch: 'e' });
     // One window of older bytes at most: the cold read's budget.
     expect(vi.mocked(readSessionHistoryBefore).mock.calls.at(-1)?.[4]).toMatchObject({ maxWindows: 1 });
+  });
+
+  it('after a slow tail read the older turns wait for "Load earlier": the answer goes at once, windowed (2026-11-17)', async () => {
+    const sid = 'tail-turn-slow-link';
+    await createSessionRecord(sid, '', 'p');
+    historyBySid.set(sid, [{ role: 'assistant', text: 'Later text', msgId: 'later', timestamp: '2026-01-01T00:00:02Z' }]);
+    windowedSids.add(sid);
+    windowStartBySid.set(sid, { byte: 119_398_440, epoch: 'e' });
+    olderPages.set(sid, { messages: [{ role: 'user', text: 'Question', msgId: 'q', timestamp: '2026-01-01T00:00:00Z' }], reachedStart: true });
+    readTakesMs.set(sid, 14_575);
+    const { readSessionHistoryBefore } = await import('../../../src/core/session-history-pages.js');
+    vi.mocked(readSessionHistoryBefore).mockClear();
+    try {
+      const res = await request(createApp()).get(`/api/sessions/${sid}/history?tail=400&turns=10`);
+      expect(res.status).toBe(200);
+      expect(vi.mocked(readSessionHistoryBefore)).not.toHaveBeenCalled();
+      expect(res.body.windowed).toBe(true);
+      expect(res.body.messages.map((m: { text: string }) => m.text)).toEqual(['Later text']);
+    } finally {
+      vi.mocked(Date.now).mockRestore?.();
+      readTakesMs.delete(sid);
+    }
   });
 
   it('rejects malformed turn budgets', async () => {

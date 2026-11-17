@@ -110,8 +110,9 @@ export async function readSessionHistoryBefore(
     /** Fewer windows than MAX_WINDOWS_PER_PAGE for this page (a byte budget). */
     maxWindows?: number;
   },
-  /** Lines starting from here on are already in hand (a tail window's start): read only
-   *  before it. Ignored when the file is no longer the one that window was read from. */
+  /** Lines starting from here on are already in hand (a tail window's start, `before` its
+   *  first row's time): read only before it, starting with the window that ends there.
+   *  Ignored when the file is no longer the one that window was read from. */
   held?: HistoryWindowStart,
   budgetMs = PAGE_READ_BUDGET_MS,
 ): Promise<{ messages: SessionHistoryMessage[]; reachedStart: boolean; windowsRead: number } | null> {
@@ -161,8 +162,13 @@ export async function readSessionHistoryBefore(
   // window up to it and none after. A window without timestamps counts as older,
   // which can only start the page a window too new (it holds no rows), never
   // skip one. Window 0 always holds the start of the file.
-  let lo = 0;
+  //
+  // With the caller's tail in hand that window is the one ending where the tail begins:
+  // every byte before it is older than the tail's first row. No search, so no head reads
+  // over the tunnel (2026-11-17: a 119 MB session on a slow host link spent 65 s of a 60 s
+  // full read in this backfill, a head without a timestamp read whole on the way).
   let hi = Math.max(0, Math.floor((stopAt - 1) / WINDOW_BYTES));
+  let lo = cutAt !== undefined ? hi : 0;
   while (lo < hi) {
     const mid = Math.ceil((lo + hi) / 2);
     const ts = await head(mid);
