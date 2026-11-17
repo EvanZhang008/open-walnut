@@ -102,6 +102,9 @@ function compileHandle(source: string, environment: Record<string, unknown>): (w
 }
 
 const standalone = fs.readFileSync(path.resolve('src/providers/daemon-standalone.ts'), 'utf8')
+/** A daemon's host_exec side with no run: stopDaemon ends the resumable ones (none) and waits for them (no wait). */
+const idleHostExec = () => ({ stuck: () => false, endForUpdate: vi.fn(), untilEnded: async () => {} })
+
 /**
  * stopDaemon as its source runs it: the template ends through exitDaemon (a host_exec file look
  * still in flight gets its grace first), the standalone through process.exit.
@@ -352,7 +355,7 @@ describe.each([
       if (fault === 'published') throw Object.assign(new Error('snapshot sync failed'), { code: 'handover-published' })
     })
     const result = compile<{ handle: (ws: unknown, id: number, cmd: unknown) => Promise<void>; prepared: () => boolean; dispatch: (ws: unknown, id: number, cmd: unknown) => unknown }>(
-      `let handoverPrepared = false; let serviceUpdateRequested = false; let hostFixWork; ${extract(source, 'cmdServiceHandover')};
+      `let handoverPrepared = false; let serviceUpdateRequested = false; let hostFixWork; const execHolds = ${extract(source, 'execHolds')}; ${extract(source, 'cmdServiceHandover')};
       ${extract(source, 'dispatchCommand')}
       return { handle: cmdServiceHandover, prepared: () => handoverPrepared, dispatch: dispatchCommand };`, {
         daemonCommands, SERVICE_MODE: updating, DAEMON_INSTANCE_ID: 'old-instance', HOME_DIR: '/fixture', REGISTRY_FILE: '/fixture/sessions.json',
@@ -366,7 +369,7 @@ describe.each([
         acp: { workers: new Map() }, sttRelayPending: new Map(), launchRelayPending: new Map(),
         controlRelayPending: new Map(), messageRelayPending: new Map(), gatewayRelayPending: new Map(), gatewayWaiting: new Set(),
         // No host_exec run here; a running one refuses the handover (daemon-service-handover-busy-twins-e2e.test.ts).
-        hostExec: { running: () => 0 },
+        hostExec: { running: () => 0, holding: () => 0 },
         noteRestarting: mark.note, clearRestartMark: mark.clear,
         prepareDaemonServiceHandover: prepare, cronRuntimeCore: { prepareDaemonServiceHandover: prepare },
         persistRegistry: (strict: boolean) => {
@@ -594,7 +597,7 @@ describe.each([
     const exit = vi.fn((code: number) => { order.push(`exit:${code}`); exited.resolve(code) })
     const hostFix = { cancel: vi.fn(() => false) }
     const stop = compile<() => void>(stopDaemonSource(source), {
-      daemonCommands, hostFix, hostExec: { stuck: () => false }, releaseGatewayWaiters: vi.fn(),
+      daemonCommands, hostFix, hostExec: idleHostExec(), RESUMABLE_RUN_ENDED: 'resumable run ended', releaseGatewayWaiters: vi.fn(),
       releaseGatewayRelays: () => { order.push('relays') },
       noteRestarting: () => { order.push('mark') },
       cronRuntime: { close: vi.fn(() => cron.promise) },
@@ -630,7 +633,7 @@ describe.each([
     const order: string[] = []
     const logMsg = vi.fn()
     const stop = compile<() => void>(stopDaemonSource(source), {
-      daemonCommands, hostFix: { cancel: vi.fn(() => false) }, hostExec: { stuck: () => false }, releaseGatewayWaiters: vi.fn(),
+      daemonCommands, hostFix: { cancel: vi.fn(() => false) }, hostExec: idleHostExec(), RESUMABLE_RUN_ENDED: 'resumable run ended', releaseGatewayWaiters: vi.fn(),
       releaseGatewayRelays: () => { order.push('relays') }, noteRestarting: () => { order.push('mark') },
       cronRuntime: { close: vi.fn(async () => {}) }, netSupervisor: { stop: vi.fn(async () => {}) },
       persistRegistry: () => { order.push('persist') }, cleanup: () => { order.push('cleanup') },
@@ -658,7 +661,7 @@ describe.each([
     const logMsg = vi.fn()
     const hostFix = throws ? { cancel: () => { throw new Error('cancel exploded') } } : claude.fix
     const stop = compile<() => void>(stopDaemonSource(source), {
-      daemonCommands, hostFix, hostExec: { stuck: () => false }, releaseGatewayWaiters: vi.fn(), noteRestarting: vi.fn(), releaseGatewayRelays: vi.fn(),
+      daemonCommands, hostFix, hostExec: idleHostExec(), RESUMABLE_RUN_ENDED: 'resumable run ended', releaseGatewayWaiters: vi.fn(), noteRestarting: vi.fn(), releaseGatewayRelays: vi.fn(),
       cronRuntime: { close: async () => {} }, netSupervisor: { stop: async () => {} },
       persistRegistry: () => {}, cleanup: () => {}, server: { stop: () => {} }, httpServer: { close: () => {} },
       daemonInstanceLock: { release: async () => {} },
