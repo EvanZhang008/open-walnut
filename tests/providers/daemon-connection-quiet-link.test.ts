@@ -20,6 +20,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-quiet-link')
 import { DaemonConnection, recheckQuietLinks, setPooledConnectionForTest } from '../../src/providers/daemon-connection.js'
 import { noteHostSignal, resetHostSignalForTest } from '../../src/providers/daemon-reconnect-cause.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
+import { log } from '../../src/logging/index.js'
 import { startSilentLinkProxy } from '../helpers/silent-link-proxy.js'
 
 let daemon: MockDaemon
@@ -383,4 +384,58 @@ describe('after a wake or a network change', () => {
       } finally { await done() }
     }, 20_000)
   })
+})
+
+// 2026-11-17: the Mac woke three times with its network still down; the wake's recheck found every
+// link silent and wrote two warns per host each time (39 in an hour), and the log-spike alarm rang.
+// A link that has not answered since the wake being silent is what the recheck looks for, not news.
+describe('what a silent link writes to the log', () => {
+  /** The warn and error lines written while `run` runs that name one of `hosts`. */
+  async function warnsNaming(hosts: string[], run: () => Promise<unknown>): Promise<string[]> {
+    const lines: string[] = []
+    const take = (msg: unknown, meta?: unknown) => {
+      const { host, error } = (meta ?? {}) as { host?: unknown; error?: unknown }
+      if (typeof host === 'string' && hosts.includes(host)) lines.push(`${host}: ${String(msg)}${typeof error === 'string' ? ` (${error})` : ''}`)
+    }
+    vi.spyOn(log.session, 'warn').mockImplementation(take)
+    vi.spyOn(log.session, 'error').mockImplementation(take)
+    await run()
+    return lines
+  }
+
+  it('after a wake, finding links silent writes no warn or error for any of them, SSH or host network', async () => {
+    const net = await linked('pcbox', true)
+    const ssh = await linked('devbox')
+    const local = await linked('__local__')
+    setPooledConnectionForTest('pcbox', net.conn)
+    setPooledConnectionForTest('devbox', ssh.conn)
+    setPooledConnectionForTest('__local__', local.conn)
+    try {
+      // The connect's own pushes answered first: one still in flight when a link closes fails, as
+      // any command on a closed link does, and that is not the recheck's line.
+      for (const l of [net, ssh]) await wireQuiet(l.conn)
+      for (const l of [net, ssh]) l.proxy.setMode('blackhole')
+      await sleep(300)
+      const info = vi.spyOn(log.session, 'info').mockImplementation(() => {})
+      let seen: Record<string, string> = {}
+      expect(await warnsNaming(['pcbox', 'devbox'], async () => { seen = await recheckQuietLinks({ quietMs: 0, deadlineMs: 300 }) })).toEqual([])
+      expect(seen).toEqual({ pcbox: 'dropped', devbox: 'silent' })
+      // Still in the log, at info: the probe's line for each host.
+      const told = info.mock.calls.filter(([m]) => m === 'DaemonConnection: no answer to a liveness probe').map(([, meta]) => (meta as { host: string }).host)
+      expect(new Set(told)).toEqual(new Set(['pcbox', 'devbox']))
+    } finally {
+      for (const h of ['pcbox', 'devbox', '__local__']) setPooledConnectionForTest(h, null)
+      for (const l of [net, ssh, local]) await l.done()
+    }
+  }, 20_000)
+
+  it('a link that answered since the last signal and then goes silent is still a warn', async () => {
+    const { conn, proxy, done } = await linked()
+    try {
+      await wireQuiet(conn)
+      await blackhole(proxy)
+      expect(await warnsNaming(['devbox'], () => conn.recheckQuiet({ quietMs: 0, deadlineMs: 300 })))
+        .toEqual(['devbox: DaemonConnection: no answer to a liveness probe'])
+    } finally { await done() }
+  }, 20_000)
 })

@@ -9653,7 +9653,13 @@ export class DaemonConnection {
       const closing = this.noSsh && !superseded && !relayQuiet && !heardSome && !sending
       // Unproven since a signal, the deadline came from the old path's round trips: one more window.
       const confirm = closing && !confirmed && !this.provenSinceSignal()
-      log.session.warn('DaemonConnection: no answer to a liveness probe', {
+      // A link that has not answered since this machine's latest wake or network change: finding it
+      // silent is what the recheck is for, not news (2026-11-17: three wakes with the network still
+      // down wrote two such warns per host each, 39 in an hour, and the log-spike alarm rang). The
+      // verdict is told once per signal ("host links rechecked after a signal"), and a drop by its
+      // reconnect; a silent link that had answered since stays a warn.
+      const level = this.provenSinceSignal() ? 'warn' : 'info'
+      log.session[level]('DaemonConnection: no answer to a liveness probe', {
         host: this.hostKey, kind, deadlineMs, roundTripMs: this.roundTripMs, closing: closing && !confirm, extended, pongOnly,
         ...(confirm ? { confirming: true } : {}), ...(confirmed ? { confirmed: true } : {}), ...(superseded ? { superseded: true } : {}),
         ...(relay ? { relayAnswered: !relayQuiet } : {}), ...(heardSome ? { otherSocketHeard: true } : {}),
