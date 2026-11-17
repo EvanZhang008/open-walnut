@@ -74,40 +74,66 @@ function scrollBox(frame: Element): HTMLElement {
 }
 
 /** A block that fits in half the visible timeline: its header need not stick. */
-function markShort(frame: Element): void {
-  const short = frame.getBoundingClientRect().height <= scrollBox(frame).clientHeight / 2;
-  if (frame.hasAttribute(SHORT_ATTR) !== short) frame.toggleAttribute(SHORT_ATTR, short);
+function isShort(frame: Element): boolean {
+  return frame.getBoundingClientRect().height <= scrollBox(frame).clientHeight / 2;
 }
 const SHORT_ATTR = 'data-short';
 
-function markFit(frame: Element): void {
-  markShort(frame);
-  const pre = frame.querySelector('pre');
-  if (!pre) return;
-  if (frame.hasAttribute(WRAP_ATTR)) {
-    // Wrapped: its Wrap stays (to undo it), nothing scrolls sideways.
-    setTabStop(pre, false);
-    if (pre.style.paddingRight) pre.style.paddingRight = '';
-    return;
+function markFit(frame: Element): void { markFits([frame]); }
+
+/**
+ * Whether each block's lines fit, and the header and keyboard state that
+ * follow. A batch puts back, reads, then writes, so a whole batch costs one
+ * layout, not one per block.
+ *
+ * A line that only reaches into the right padding is whole on screen: no Wrap,
+ * and that padding gives up the few pixels so nothing scrolls (a scrollbar for
+ * 2px). It is measured at the stylesheet's padding, never with our trim in
+ * place: in a box that shrinks to fit (the person's bubble, `width:
+ * fit-content`) the trim narrows the box too, so a measure taken with it saw
+ * the same overflow again, trimmed a pixel more each frame and, past half the
+ * padding, gave it all back: the bubble pulsed about 10px wider and narrower,
+ * over and over (2026-11-17). Put back, read, set again: the box ends the size
+ * it was, so the observer has no new size to report and the next measure
+ * decides the same.
+ */
+function markFits(frames: Iterable<Element>): void {
+  const blocks: { frame: Element; pre: HTMLElement | null; ours: string }[] = [];
+  for (const frame of frames) {
+    const pre = frame.querySelector('pre');
+    const ours = pre?.style.paddingRight ?? '';
+    if (pre && ours) pre.style.paddingRight = '';
+    blocks.push({ frame, pre, ours });
   }
-  // A line that only reaches into the right padding is whole on screen: no
-  // Wrap, and that padding gives up the few pixels so nothing scrolls (a
-  // scrollbar for 2px). The stylesheet's padding is read once, before any of
-  // ours; the width it changes is inside the box, never the block's height.
-  let pad = basePad.get(pre);
-  if (pad === undefined) {
-    pad = parseFloat(getComputedStyle(pre).paddingRight) || 0;
-    basePad.set(pre, pad);
-  }
-  const ours = pre.style.paddingRight ? parseFloat(pre.style.paddingRight) : pad;
-  const over = pre.scrollWidth - pre.clientWidth + (pad - ours);
-  const fits = over <= Math.max(1, pad / 2);
-  const want = fits && over > 0 ? `${Math.max(0, Math.floor(pad - over - 1))}px` : '';
-  if (pre.style.paddingRight !== want) pre.style.paddingRight = want;
-  if (frame.hasAttribute(FITS_ATTR) !== fits) frame.toggleAttribute(FITS_ATTR, fits);
-  // A Tab stop only where the keyboard has something to scroll.
-  setTabStop(pre, !fits);
-  if (!fits && frame.hasAttribute('data-long')) keepRail(frame, pre);
+  const read = blocks.map(({ frame, pre }) => {
+    const short = isShort(frame);
+    if (!pre || frame.hasAttribute(WRAP_ATTR)) return { short, fits: true, want: '' };
+    // The stylesheet's padding, read once, before any of ours; the width it
+    // changes is inside the box, never the block's height.
+    let pad = basePad.get(pre);
+    if (pad === undefined) {
+      pad = parseFloat(getComputedStyle(pre).paddingRight) || 0;
+      basePad.set(pre, pad);
+    }
+    const over = pre.scrollWidth - pre.clientWidth;
+    const fits = over <= Math.max(1, pad / 2);
+    return { short, fits, want: fits && over > 0 ? `${Math.max(0, Math.floor(pad - over - 1))}px` : '' };
+  });
+  blocks.forEach(({ frame, pre }, i) => {
+    const { short, fits, want } = read[i];
+    if (frame.hasAttribute(SHORT_ATTR) !== short) frame.toggleAttribute(SHORT_ATTR, short);
+    if (!pre) return;
+    if (frame.hasAttribute(WRAP_ATTR)) {
+      // Wrapped: its Wrap stays (to undo it), nothing scrolls sideways.
+      setTabStop(pre, false);
+      return;
+    }
+    if (want) pre.style.paddingRight = want;
+    if (frame.hasAttribute(FITS_ATTR) !== fits) frame.toggleAttribute(FITS_ATTR, fits);
+    // A Tab stop only where the keyboard has something to scroll.
+    setTabStop(pre, !fits);
+    if (!fits && frame.hasAttribute('data-long')) keepRail(frame, pre);
+  });
 }
 
 /** A long block's sideways scrollbar that stays in sight (code-block.css):
@@ -514,8 +540,10 @@ export function installCodeBlockActions(): () => void {
           // the block's own height, which this observer would have to report
           // again in this same frame (the "loop" error): next frame instead.
           if (refits.size === 0) requestAnimationFrame(() => {
-            for (const f of refits) if (f.isConnected) { markFit(f); placeWhy(f); }
+            const live = [...refits].filter((f) => f.isConnected);
             refits.clear();
+            markFits(live);
+            for (const f of live) placeWhy(f);
           });
           refits.add(e.target);
         }
@@ -615,7 +643,10 @@ export function installCodeBlockActions(): () => void {
     if (resizing) return;
     resizing = requestAnimationFrame(() => {
       resizing = 0;
-      document.querySelectorAll(`.md-code[${KEY_ATTR}]`).forEach(markShort);
+      // All reads, then all writes: one layout for every block on the page.
+      const frames = Array.from(document.querySelectorAll(`.md-code[${KEY_ATTR}]`));
+      const short = frames.map(isShort);
+      frames.forEach((f, i) => { if (f.hasAttribute(SHORT_ATTR) !== short[i]) f.toggleAttribute(SHORT_ATTR, short[i]); });
     });
   };
   window.addEventListener('resize', onResize);
