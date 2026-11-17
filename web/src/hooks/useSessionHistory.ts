@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { fetchSessionHistory, fetchSessionHistoryBefore, HISTORY_TAIL_LIMIT } from '@/api/sessions';
 import { perf } from '@/utils/perf-logger';
-import { hasReadableOpenRows, keptRowCount, noteSessionOpenCurrent, noteSessionOpenSource, sessionOpenStageRecorder } from '@/utils/session-open-latency';
+import { hasReadableOpenRows, keptRowCount, noteSessionOpenSource, sessionOpenCurrentRecorder, sessionOpenStageRecorder } from '@/utils/session-open-latency';
 import { takeSessionOpenHistory } from '@/api/session-open-prime';
 import { log } from '@/utils/log';
 import type { SessionHistoryMessage } from '@/types/session';
@@ -472,6 +472,8 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     }
 
     const stage = sessionOpenStageRecorder(sessionId);
+    // Bound to this open as the stages are: a later reopen or another surface is not this read.
+    const current = sessionOpenCurrentRecorder(sessionId);
     stage('historyEffect');
     const noteReady = (rows: SessionHistoryMessage[], source?: Parameters<typeof noteSessionOpenSource>[1]) => {
       const readable = hasReadableOpenRows(rows);
@@ -531,7 +533,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           if (result.stale) {
             setStale(result.staleReason ?? 'live read failed');
             const held = messagesRef.current.length;
-            noteSessionOpenCurrent(sessionId, { rowsBefore: held, rowsAfter: held, keptRows: held, outcome: 'stale' });
+            current({ rowsBefore: held, rowsAfter: held, keptRows: held, outcome: 'stale' });
             return;
           }
           setStale(null);
@@ -553,7 +555,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           adoptOffset(folded.messages.length, folded.cursor, result.windowed, folded.kept);
           const before = messagesRef.current;
           setMessages(folded.messages);
-          noteSessionOpenCurrent(sessionId, { rowsBefore: before.length, rowsAfter: folded.messages.length, keptRows: keptRowCount(before, folded.messages), outcome: 'current' });
+          current({ rowsBefore: before.length, rowsAfter: folded.messages.length, keptRows: keptRowCount(before, folded.messages), outcome: 'current' });
           setForkBoundaryIndex(shiftedForkBoundary(result.forkBoundaryIndex, folded.kept));
           if (readable) stage('historyAdopted');
           // NOTE: turn-boundary block cleanup is driven by the version-bump delta
@@ -565,7 +567,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           if (!cancelled) {
             endP2('error'); failFullRead(e);
             const held = messagesRef.current.length;
-            noteSessionOpenCurrent(sessionId, { rowsBefore: held, rowsAfter: held, keptRows: held, outcome: 'error' });
+            current({ rowsBefore: held, rowsAfter: held, keptRows: held, outcome: 'error' });
           }
         })
         .finally(() => {
@@ -676,7 +678,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                   }
                   fallBackToLateCache(shown());
                   setStale(result.staleReason ?? 'live read failed');
-                  noteSessionOpenCurrent(sessionId, { rowsBefore: shown(), rowsAfter: shown(), keptRows: shown(), outcome: 'stale' });
+                  current({ rowsBefore: shown(), rowsAfter: shown(), keptRows: shown(), outcome: 'stale' });
                   return;
                 }
                 setStale(null);
@@ -686,7 +688,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                 const folded = foldFullPayload(before, result);
                 const readable = noteReady(folded.messages, 'network');
                 setMessages(folded.messages);
-                noteSessionOpenCurrent(sessionId, { rowsBefore: before.length, rowsAfter: folded.messages.length, keptRows: keptRowCount(before, folded.messages), outcome: 'current' });
+                current({ rowsBefore: before.length, rowsAfter: folded.messages.length, keptRows: keptRowCount(before, folded.messages), outcome: 'current' });
                 if (readable) stage('historyAdopted');
                 setForkBoundaryIndex(shiftedForkBoundary(result.forkBoundaryIndex, folded.kept));
                 adoptInitialUserText(result.initialUserText);
@@ -707,7 +709,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
             .catch((e: Error) => {
               if (!cancelled) {
                 endP2('error'); fallBackToLateCache(shown()); failFullRead(e);
-                noteSessionOpenCurrent(sessionId, { rowsBefore: shown(), rowsAfter: shown(), keptRows: shown(), outcome: 'error' });
+                current({ rowsBefore: shown(), rowsAfter: shown(), keptRows: shown(), outcome: 'error' });
               }
             })
             .finally(() => {

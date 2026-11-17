@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 vi.mock('../../web/src/utils/log', () => ({ log: { info: vi.fn() } }));
 import { log } from '../../web/src/utils/log';
-import { beginSessionOpen, noteSessionOpenSource, observeSessionOpen, hasVisibleSessionContent, hasReadableOpenRows, sessionOpenStageRecorder, noteSessionOpenCurrent, keptRowCount } from '../../web/src/utils/session-open-latency';
+import { beginSessionOpen, noteSessionOpenSource, observeSessionOpen, hasVisibleSessionContent, hasReadableOpenRows, sessionOpenStageRecorder, sessionOpenCurrentRecorder, keptRowCount } from '../../web/src/utils/session-open-latency';
 
 const stops: Array<() => void> = [];
 afterEach(() => { stops.splice(0).forEach(stop => stop()); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.clearAllMocks(); vi.useRealTimers(); });
@@ -311,30 +311,52 @@ describe('chat open: click to current', () => {
   it('logs a current row after first content, with the click-to-current time and what the full read kept', () => {
     const h = harness();
     beginSessionOpen('metric-current', 'home-column');
+    const current = sessionOpenCurrentRecorder('metric-current');
     noteSessionOpenSource('metric-current', 'snapshot');
     stops.push(observeSessionOpen(h.panel, 'metric-current', () => 'claude'));
     h.show(); h.paint(100); h.paint(116);
     h.paint(2400);
-    noteSessionOpenCurrent('metric-current', { rowsBefore: 40, rowsAfter: 400, keptRows: 40, outcome: 'current' });
+    current({ rowsBefore: 40, rowsAfter: 400, keptRows: 40, outcome: 'current' });
     expect(log.info).toHaveBeenCalledWith('session-open', expect.stringContaining('current metric-current open'), expect.objectContaining({
       ms: 2400, firstMs: 116, source: 'snapshot', rowsBefore: 40, rowsAfter: 400, keptRows: 40, outcome: 'current',
     }));
-    // Once per open.
     vi.mocked(log.info).mockClear();
-    noteSessionOpenCurrent('metric-current', { rowsBefore: 1, rowsAfter: 1, keptRows: 1, outcome: 'current' });
+    current({ rowsBefore: 1, rowsAfter: 1, keptRows: 1, outcome: 'current' });
     expect(log.info).not.toHaveBeenCalled();
   });
 
-  it('a full read that lands before first content is a stage of the open', () => {
+  it('a full read that lands before first content is a stage, and no later read logs a current row for that open', () => {
     const h = harness();
     beginSessionOpen('metric-current-early', 'home-column');
+    const first = sessionOpenCurrentRecorder('metric-current-early');
     h.paint(300);
-    noteSessionOpenCurrent('metric-current-early', { rowsBefore: 0, rowsAfter: 10, keptRows: 0, outcome: 'current' });
+    first({ rowsBefore: 0, rowsAfter: 10, keptRows: 0, outcome: 'current' });
+    // A second surface's read of the same session, started while the open is in progress.
+    const second = sessionOpenCurrentRecorder('metric-current-early');
     stops.push(observeSessionOpen(h.panel, 'metric-current-early', () => 'claude'));
     h.show(); h.paint(320); h.paint(336);
     expect(log.info).toHaveBeenCalledWith('session-open', expect.stringContaining('first content '), expect.objectContaining({
       stages: expect.objectContaining({ historyCurrent: 300 }),
     }));
+    vi.mocked(log.info).mockClear();
+    h.paint(5000);
+    second({ rowsBefore: 10, rowsAfter: 10, keptRows: 10, outcome: 'current' });
+    expect(log.info).not.toHaveBeenCalled();
+  });
+
+  it("a read started for an earlier open never speaks for a reopen; a recorder made with no open is silent", () => {
+    const h = harness();
+    beginSessionOpen('metric-current-reopen', 'home-column');
+    const old = sessionOpenCurrentRecorder('metric-current-reopen');
+    stops.push(observeSessionOpen(h.panel, 'metric-current-reopen', () => 'claude'));
+    h.show(); h.paint(100); h.paint(116);
+    beginSessionOpen('metric-current-reopen', 'home-column');
+    h.paint(200); h.paint(216);
+    vi.mocked(log.info).mockClear();
+    old({ rowsBefore: 1, rowsAfter: 2, keptRows: 1, outcome: 'current' });
+    expect(log.info).not.toHaveBeenCalled();
+    sessionOpenCurrentRecorder('metric-current-none')({ rowsBefore: 1, rowsAfter: 1, keptRows: 1, outcome: 'current' });
+    expect(log.info).not.toHaveBeenCalled();
   });
 
   it('kept rows count shown rows the new list still holds by id', () => {

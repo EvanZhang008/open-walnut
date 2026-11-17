@@ -182,6 +182,9 @@ describe('an answer', () => {
     put('rv-shape-far', HISTORY_CACHE_SCHEMA - FIRST_PAINT_SHAPE_GRACE - 1);
     put('rv-shape-new', HISTORY_CACHE_SCHEMA + 1);
     expect((await readHistoryView('rv-shape-1'))?.messages).toHaveLength(1);
+    // Shown, never kept: a pending write of this session cannot stamp it with the new schema.
+    await flushHistoryViewsForTesting();
+    expect(JSON.parse(fs.readFileSync(path.join(viewsDir, 'rv-shape-1.json'), 'utf8')).schema).toBe(HISTORY_CACHE_SCHEMA - 1);
     expect(await readHistoryView('rv-shape-far')).toBeNull();
     expect(await readHistoryView('rv-shape-new')).toBeNull();
   });

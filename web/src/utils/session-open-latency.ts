@@ -39,8 +39,11 @@ function finishAttempt(sessionId: string, attempt: OpenAttempt, outcome: 'conten
   });
   clearTimeout(attempt.timeout);
   attempts.delete(sessionId);
-  settled.set(sessionId, { at: attempt.at, id: attempt.id, firstMs: Math.round(performance.now() - attempt.at), entry: attempt.entry, source, outcome: measuredOutcome });
-  while (settled.size > 50) settled.delete(settled.keys().next().value!);
+  // Its full read already landed (the historyCurrent stage): no later read is this open's.
+  if (attempt.stages.historyCurrent === undefined) {
+    settled.set(sessionId, { at: attempt.at, id: attempt.id, firstMs: Math.round(performance.now() - attempt.at), entry: attempt.entry, source, outcome: measuredOutcome });
+    while (settled.size > 50) settled.delete(settled.keys().next().value!);
+  }
   attempt.settle?.();
 }
 
@@ -51,21 +54,30 @@ export interface OpenCurrentChange { rowsBefore: number; rowsAfter: number; kept
 /**
  * The open's history is current (its full read answered): one more row, `current <sid> open <n>`,
  * with click-to-current time beside the first-content time (2026-11-17, the user: after a click
- * "it spends many seconds to refresh"). Only for an open whose first content was already logged,
- * within CURRENT_WAIT_MS; a full read that lands before first content is a stage of the open.
+ * "it spends many seconds to refresh"). Bound like sessionOpenStageRecorder: made when the read
+ * starts, it speaks only for the open in progress then, never a reopen or another surface's open.
+ * A full read that lands before first content is that open's historyCurrent stage instead.
  */
-export function noteSessionOpenCurrent(sessionId: string, change: OpenCurrentChange): void {
+export function sessionOpenCurrentRecorder(sessionId: string): (change: OpenCurrentChange) => void {
   const attempt = attempts.get(sessionId);
-  if (attempt) { if (attempt.stages.historyCurrent === undefined) attempt.stages.historyCurrent = Math.round(performance.now() - attempt.at); return; }
-  const open = settled.get(sessionId);
-  if (!open) return;
-  settled.delete(sessionId);
-  const ms = Math.round(performance.now() - open.at);
-  if (ms > CURRENT_WAIT_MS) return;
-  log.info('session-open', `current ${sessionId} open ${open.id}`, {
-    sessionId, ms, firstMs: open.firstMs, entry: open.entry, source: open.source, firstOutcome: open.outcome,
-    ...change, client: detectInputClient(), measurementVersion: 2,
-  });
+  let done = false;
+  return (change) => {
+    if (!attempt || done) return;
+    done = true;
+    if (attempts.get(sessionId) === attempt) {
+      if (change.outcome === 'current' && attempt.stages.historyCurrent === undefined) attempt.stages.historyCurrent = Math.round(performance.now() - attempt.at);
+      return;
+    }
+    const open = settled.get(sessionId);
+    if (!open || open.id !== attempt.id) return;
+    settled.delete(sessionId);
+    const ms = Math.round(performance.now() - open.at);
+    if (ms > CURRENT_WAIT_MS) return;
+    log.info('session-open', `current ${sessionId} open ${open.id}`, {
+      sessionId, ms, firstMs: open.firstMs, entry: open.entry, source: open.source, firstOutcome: open.outcome,
+      ...change, client: detectInputClient(), measurementVersion: 2,
+    });
+  };
 }
 
 /** How many rows of `before` `after` still holds by id (a row without an id never counts). */

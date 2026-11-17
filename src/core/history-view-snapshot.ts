@@ -214,8 +214,8 @@ async function flush(sessionId: string): Promise<void> {
  * view is only a picture until the full read replaces it, so one a parse change made slightly
  * wrong (a row the new parse hides, shown for a second) costs far less than an open with nothing
  * to show (2026-11-17: schema 14 -> 15 made 243 of 603 kept views unreadable at once, and every
- * remote host's daemon answered in the old shape until it updated). A newer shape (a downgrade) is
- * never shown.
+ * remote host's daemon answered in the old shape until it updated). A newer schema (a downgrade) is
+ * never shown; a same-schema answer of another parser version may be older or newer.
  */
 export const FIRST_PAINT_SHAPE_GRACE = 2;
 export function firstPaintShape(schema: unknown): boolean {
@@ -233,7 +233,8 @@ export async function readHistoryView(sessionId: string): Promise<HistoryViewSna
     if (!firstPaintShape(parsed?.schema) || !Array.isArray(parsed.messages) || parsed.messages.length === 0) return null;
     const { schema: _schema, ...view } = parsed as HistoryViewSnapshot & { schema: number };
     if (typeof view.total !== 'number') return null;
-    remember(sessionId, view);
+    // An older shape is shown, never kept in memory: flush() would write it back as this one.
+    if (parsed.schema === HISTORY_CACHE_SCHEMA) remember(sessionId, view);
     touchView(sessionId);
     return view;
   } catch {
