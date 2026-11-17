@@ -172,6 +172,14 @@ test.describe('First open — scroll up while the full history is still loading'
     expect(Math.abs(await history.evaluate((el) => el.scrollTop) - readingAt)).toBeLessThan(150);
 
     // A click while the refresh runs is kept: the button says it is loading, nothing is asked yet.
+    // The reader wheels up to the button first, as a person does (browser-spec-ratchets).
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    const buttonInView = () => earlier.evaluate((el) => {
+      const r = el.getBoundingClientRect(); const s = el.closest('.session-history')!.getBoundingClientRect();
+      return r.top >= s.top && r.bottom <= s.bottom;
+    });
+    for (let i = 0; i < 30 && !(await buttonInView()); i++) await page.mouse.wheel(0, -300);
+    await expect.poll(buttonInView).toBe(true);
     await earlier.click();
     await expect(earlier).toHaveText('Loading earlier turns…');
     expect(wholeReads).toEqual([]);
