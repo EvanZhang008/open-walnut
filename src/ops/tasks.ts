@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { LIST_MAX } from '../lib/zod-rules.js'
 import { REVIEW_SCORE_INPUT } from './review-score-input.js'
 import { handOffLine, type HandOffResult } from '../core/org/thread-follow.js'
-import { defineOp, type HttpBinding } from './registry.js'
+import { defineOp } from './registry.js'
 import { materializeBinding } from './executor.js'
 import { taskRefTag } from '../utils/entity-refs.js'
 import { dispatchHint, withOutcome } from './outcome.js'
@@ -17,8 +17,9 @@ import { USER_KINDS, USER_KIND_PARAM, USER_KIND_WHY_PARAM } from '../core/org/us
 import { laneById, normalizeLanes, placeCard } from '../core/boards/board-lanes.js'
 import { agentMemoryWriterNote, type AgentMemory } from '../core/sessions/agent-memory.js'
 import { USER_SPOKE_TEXT, USER_WORDS_BACK, userSaidLine, type UserSaid } from '../core/sessions/user-spoke.js'
-import { deliverableLine } from '../core/task-deliverable.js'
-import type { OpCall } from './core.js'
+import { routingView } from '../core/task-deliverable.js'
+import { fullTaskRows, TASK_LIST_BINDING } from './task-routing-rows.js'
+import { SEARCH_SEMANTIC_WAIT_MS, type OpCall } from './core.js'
 import {
   BULK_GET_FIELDS,
   BULK_GET_FIELD_GROUPS,
@@ -172,9 +173,6 @@ export function leanTaskRow(row: unknown): unknown {
   return out
 }
 
-// Server-root-absolute: /api/tasks is the canonical composable-query route (the
-// same engine the web UI filters ride), not the frozen /api/v1 mobile projection.
-const TASK_LIST_BINDING: HttpBinding = { method: 'GET', path: '/api/tasks' }
 
 /** GET /api/v1/me — where the calling session stands (src/core/sessions/caller-placement.ts). */
 interface CallerMe {
@@ -380,7 +378,7 @@ defineOp({
       scopeNote ?? '',
       body?.visibility_note ?? '',
       byMeaning.length
-        ? `q matches title words only; by_meaning lists ${byMeaning.length} open task(s) search finds by meaning (any language) that q missed: `
+        ? `q matches title words only; by_meaning lists ${byMeaning.length} open task(s) search finds by meaning (any language) that q missed, each with its deliverable: `
           + 'task_get them before you create a task or decide none owns this.'
         : '',
       widenedFrom
@@ -423,16 +421,14 @@ async function openTasksByMeaning(call: OpCall, q: string, rows: unknown[]): Pro
   const late = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), BY_MEANING_DEADLINE_MS); timer.unref?.() })
   try {
     const work = (async () => {
-      const found = await call('GET', `/search?q=${encodeURIComponent(q)}&types=task&limit=12&semanticWaitMs=2500`) as { results?: Array<{ type?: string; taskId?: string }> } | undefined
+      const found = await call('GET', `/search?q=${encodeURIComponent(q)}&types=task&limit=12&semanticWaitMs=${SEARCH_SEMANTIC_WAIT_MS}`) as { results?: Array<{ type?: string; taskId?: string }> } | undefined
       const ids = [...new Set((found?.results ?? []).filter((r) => r.type === 'task' && r.taskId && !seen.has(r.taskId)).map((r) => r.taskId!))]
       if (!ids.length) return []
-      const { path } = materializeBinding(TASK_LIST_BINDING, { ids, limit: ids.length })
-      const listed = await call('GET', path) as { tasks?: Array<Record<string, unknown>> } | undefined
-      const byId = new Map((listed?.tasks ?? []).map((t) => [String(t.id), t] as const))
+      const byId = await fullTaskRows(call, ids)
       // Search's order, open tasks only: a finished one owns nothing new, and Main or a VP owns no deliverable.
       return ids.map((id) => byId.get(id))
         .filter((t): t is Record<string, unknown> => !!t && t.phase !== 'COMPLETE' && t.org_role !== 'main' && t.org_role !== 'lead')
-        .slice(0, BY_MEANING_MAX).map((t) => leanTaskRow(t) as Record<string, unknown>)
+        .slice(0, BY_MEANING_MAX).map((t) => ({ ...(leanTaskRow(t) as Record<string, unknown>), ...routingView(t) }))
     })()
     return (await Promise.race([work, late])) ?? []
   } catch {
@@ -449,8 +445,10 @@ defineOp({
     'Full detail for one task, including description, note, summary, execution, and ' +
     'dependency/child/parent decorations that the list view omits. The id accepts a unique prefix. ' +
     `What it asks the user now is task.user_status; ${SUMMARY_IS_HISTORY} ` +
-    'The task is under `task`; its id, title and phase are repeated at the top level, with `deliverable`: one line of what it was made to produce ' +
-    '(its note\'s User Request, else its description). Hand it new work only when that line is this work.',
+    'The task is under `task`; its id, title and phase are repeated at the top level, with the lines that tell whether new work is its own: ' +
+    '`deliverable` (what it was made to produce: its note\'s User Request, else its description), `first_request` (the words it was created ' +
+    'with, when they differ) and `latest` (its newest report). Hand it new work only when, by meaning, that work is this deliverable; ' +
+    'when these lines leave it unclear, read task_history {"limit":6,"compact":true} for its latest conversation.',
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
   },
@@ -465,10 +463,9 @@ defineOp({
     const view = taskView(task)
     const execution = view.execution as { state: string }
     const id = taskId(task) || String(args.id ?? '')
-    // What it was made to produce, beside its title: hand it new work only when this is that work.
-    const deliverable = deliverableLine(task)
+    // What it was made to produce, what it was first asked and where it stands: hand it new work only when that work is this.
     return withOutcome(
-      { ...headline(view), ...(deliverable ? { deliverable } : {}), ...b, task: view },
+      { ...headline(view), ...routingView(task), ...b, task: view },
       `Task phase: ${phase}. Execution: ${execution.state}.`,
       execution.state === 'not_started'
         ? dispatchHint(id)

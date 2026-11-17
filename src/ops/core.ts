@@ -16,6 +16,10 @@ import { withOutcome } from './outcome.js'
 import { z } from 'zod'
 import { sessionHandle } from '../core/peers/walnut-message-tag.js'
 import { defineOp } from './registry.js'
+import { withTaskRouting } from './task-routing-rows.js'
+
+/** How long an agent's search waits for the meaning lane's query embedding. */
+export const SEARCH_SEMANTIC_WAIT_MS = 2500
 
 // ── Reads (ported from the original MCP tools) ──────────────────────────────
 
@@ -26,13 +30,25 @@ defineOp({
     'Global search across the user\'s tasks, memory, AND session transcripts (string + semantic ' +
     'legs; sessions are searched by default). Session transcripts are the ground truth for "who ' +
     'did X / which task changed Y" questions — task titles and summaries routinely under-describe ' +
-    'the actual work. Also use this to check whether something already exists before creating a task.',
+    'the actual work. Also use this to find the task that owns a piece of work before you hand it on or create one: it covers open and ' +
+    'finished tasks and matches meaning across languages. Search two or three ways (the asker\'s own words, a short restatement, the ' +
+    'other language), then judge the candidates: each task row carries its phase, `deliverable`, `first_request` and `latest` report.',
   input: {
     q: z.string().min(1).describe('Search query'),
     types: z.string().optional().describe('Comma-separated subset of: task,memory,session (default: all three)'),
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default 20)'),
   },
-  bind: { method: 'GET', path: '/search' },
+  // An agent is not typing: give the meaning lane time for the query's embedding (the library's
+  // default is sized for a search box), so a query in one language still finds a task titled in another.
+  handler: async ({ q, types, limit }, call) => {
+    const query = new URLSearchParams({
+      q: String(q),
+      ...(typeof types === 'string' && types ? { types } : {}),
+      ...(typeof limit === 'number' ? { limit: String(limit) } : {}),
+      semanticWaitMs: String(SEARCH_SEMANTIC_WAIT_MS),
+    })
+    return withTaskRouting(await call('GET', `/search?${query.toString()}`), call)
+  },
   // Cold embedding model + three semantic legs measured >10s; the default
   // 10s timeout made "search is broken" out of "search is warming up".
   timeoutMs: 30_000,

@@ -12,7 +12,7 @@ import { getOp } from '../../../src/ops/index.js'
 // "bakery" in Chinese, as the lead typed it.
 const Q = '\u9762\u5305\u5e97'
 const OLD = { id: 'mold0001-aaaa', title: `2024 ${Q} menu`, project: 'Design', phase: 'COMPLETE' }
-const OPEN = { id: 'mopen001-aaaa', title: 'Logo redesign · Bakery Website Launch', project: 'Design', phase: 'IN_PROGRESS' }
+const OPEN = { id: 'mopen001-aaaa', title: 'Logo redesign · Bakery Website Launch', project: 'Design', phase: 'IN_PROGRESS', note: '## User Request\nRedesign the bakery logo.' }
 const VP = { id: 'mvp00001-aaaa', title: 'Design VP', project: 'Design', phase: 'IN_PROGRESS', org_role: 'lead' }
 const DONE_TOO = { id: 'mdone001-aaaa', title: 'Old bakery menu print', project: 'Design', phase: 'COMPLETE' }
 
@@ -46,6 +46,8 @@ describe('task_list q adds the open tasks search finds by meaning', () => {
     const { result, paths } = await list({ q: Q })
     expect(result.tasks.map((t: { id: string }) => t.id)).toEqual([OLD.id])
     expect(result.by_meaning.map((t: { id: string }) => t.id)).toEqual([OPEN.id])
+    // Each row carries its deliverable: here it shows the logo is this task's work, the launch a second topic.
+    expect(result.by_meaning[0].deliverable).toBe('Redesign the bakery logo.')
     expect(result.hint).toContain('q matches title words only; by_meaning lists 1 open task(s)')
     expect(paths.find((p) => p.startsWith('/search'))).toBe(`/search?q=${encodeURIComponent(Q)}&types=task&limit=12&semanticWaitMs=2500`)
   })

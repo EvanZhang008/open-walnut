@@ -64,16 +64,19 @@ export function orgSelfWorkRule(role: CoreInstructionRole): string {
 
 /**
  * Hand work by deliverable, never by component (2026-11-16, the user: a VP's most important job is to understand which
- * task a piece of work belongs to, and to create one when none owns it): a lead gave a new incident's fix to an open task that owned an older code review in the same file,
- * and another merged a website launch into a logo redesign's task. Both defaults carry it; task_send's scope check
- * (sessions/send-scope.ts) and task_get's `deliverable` line back it.
+ * task a piece of work belongs to, and to create one when none owns it): a lead gave a new incident's fix to an open task that owned an
+ * older code review in the same file, and another merged a website launch into a logo redesign's task. The steps (search several ways,
+ * read the candidates' deliverable, first request and latest report, decide by meaning) are the task routing contract's, which every
+ * session reads; this line makes them the dispatcher's main job. No check matches numbers or formats in a message (2026-11-17, the user:
+ * "not generic"); the tools put each candidate's deliverable in front of the sender instead (task-deliverable.ts).
  */
 export const DELIVERABLE_CHECK_RULE =
-  'Before you give an existing task new work, task_get it and read its deliverable (its User Request, else its description): it must be '
-  + 'this very work. The same package, component, file or place is no reason: the fix for another incident, ticket or CR, or another '
-  + 'case, gets task_create; two owners whose CRs depend on each other coordinate with task_send. Find an owner with search, which '
-  + 'matches meaning in any language (task_list q matches title words only); when no task owns it, create one. One task holds one '
-  + 'deliverable: two asks in one message of the user are two tasks unless one is a step of the other.'
+  'Finding the owner is your main job: for every hand-off (the user\'s follow-ups, a worker\'s report, an alert) follow the task routing '
+  + 'steps (search two or three ways, read the best candidates\' deliverable, first request and latest report, decide by meaning); an '
+  + 'owner a worker, peer or lead names to you is a candidate to read the same way. A finished task whose delivered work came back, or whose watch '
+  + 'fired, is its owner (task_send force with a reason). The same package, component, file, place or person is no reason; when no task '
+  + 'owns it, task_create. One task holds one deliverable: two asks in one message of the user are two tasks unless one is a step of the '
+  + 'other (that is not splitting one ask into parts, which is the user\'s call).'
 
 export const DEFAULT_ORG_INSTRUCTIONS: Readonly<Record<CoreInstructionRole, string>> = {
   main: [

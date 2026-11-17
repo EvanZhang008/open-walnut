@@ -70,8 +70,8 @@ import { TASK_ROUTING_CONTRACT } from './task-routing-contract.js';
 // message the user says reached the wrong chat is forwarded, never sent back to him. It renders 10,588.
 //
 // Raised to 11,150 on 2026-11-16 for the task routing contract's deliverable check: sharing a
-// package or file is not sharing a deliverable, task_get before handing, task_send's 409
-// scope_mismatch, and search (meaning, any language) to find an owner (a lead handed an outage
+// package or file is not sharing a deliverable, task_get before handing, a since removed scope
+// check, and search (meaning, any language) to find an owner (a lead handed an outage
 // fix to an older code review's task in the same file; another missed an English-titled owner).
 //
 // Raised to 11,400 on 2026-11-16 for the charter's done line: a look that turned into work is a

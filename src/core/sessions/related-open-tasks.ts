@@ -9,6 +9,9 @@
  * server's, on the create itself:
  *
  *   session create, no confirm ──► related open tasks? ── none ──► create as before
+ *     (shared words, related-open-rank.ts; for a lead's or Main's create also what search
+ *      finds by meaning, open or finished lately, related-by-meaning.ts; each listed with its
+ *      deliverable, first request and latest report, so the caller judges by meaning)
  *                                         │
  *                                        yes ──► 409 related_open_tasks {candidates, hint}
  *                                                  nothing created
@@ -43,6 +46,7 @@
 import { log } from '../../logging/index.js';
 import type { CallerPlacement, PlacementDecision } from './caller-placement.js';
 import { rankSteps, blockingOnly, withoutNamedPartners, type RankableTask } from './related-open-rank.js';
+import { routingView } from '../task-deliverable.js';
 
 /** How long the lookup may take before the create goes ahead without it. */
 export const RELATED_CHECK_DEADLINE_MS = 300;
@@ -69,6 +73,12 @@ export interface RelatedCandidate {
   reason: string;
   /** The caller's own subtask. */
   your_subtask?: boolean;
+  /** What it was made to produce, the words it was created with, its newest report (task-deliverable.ts). */
+  deliverable?: string;
+  first_request?: string;
+  latest?: string;
+  /** Listed by search's meaning, not shared words (related-by-meaning.ts): a lead's or Main's create. */
+  found_by?: 'meaning';
 }
 
 export type RelatedGate =
@@ -97,13 +107,19 @@ const isSession = (caller: CallerPlacement): caller is Extract<CallerPlacement, 
 export const RELATED_LIST_SEEN_MS = 30 * 60 * 1000;
 const listShownAt = new Map<string, number>();
 
-function noteRelatedListShown(sessionId: string, now = Date.now()): void {
-  listShownAt.set(sessionId, now);
-  for (const [sid, at] of listShownAt) if (now - at > RELATED_LIST_SEEN_MS) listShownAt.delete(sid);
+/**
+ * A list is shown for one create: confirm_new answers the list of THAT title, so one confirm never
+ * waves the session's next, different create through (a lead's every create meets the second leg).
+ */
+const shownKey = (sessionId: string, title: string) => `${sessionId}\n${title.replace(/\s+/g, ' ').trim().toLowerCase()}`;
+
+function noteRelatedListShown(sessionId: string, title: string, now = Date.now()): void {
+  listShownAt.set(shownKey(sessionId, title), now);
+  for (const [key, at] of listShownAt) if (now - at > RELATED_LIST_SEEN_MS) listShownAt.delete(key);
 }
 
-function sawRelatedList(sessionId: string, now = Date.now()): boolean {
-  const at = listShownAt.get(sessionId);
+function sawRelatedList(sessionId: string, title: string, now = Date.now()): boolean {
+  const at = listShownAt.get(shownKey(sessionId, title));
   return at !== undefined && now - at <= RELATED_LIST_SEEN_MS;
 }
 
@@ -147,7 +163,7 @@ export async function relatedOpenTasksGate(args: {
   // confirm_new answers a list the caller has read: only after this session met the 409 lately.
   // Sent blind (2026-11-16: a lead's FIRST create of an on-call task carried it, and last week's
   // owner was never shown), the check runs anyway and a found list is shown first.
-  if (confirm.confirm && sawRelatedList(args.caller.session.id)) {
+  if (confirm.confirm && sawRelatedList(args.caller.session.id, args.title)) {
     log.web.info('related open tasks check: confirmed as new work', { callerSid: args.caller.session.id, newReason: confirm.reason });
     return { kind: 'proceed', footer: newReasonFooter(confirm.reason) };
   }
@@ -176,20 +192,25 @@ export async function relatedOpenTasksGate(args: {
     }
     const lookup = injectedLookup ?? findRelatedOpenTasks;
     const stop = { stopped: false };
-    const result = await Promise.race([
-      lookup(input, stop),
-      new Promise<'timeout'>((resolve) => { timer = setTimeout(() => resolve('timeout'), deadline); timer.unref?.(); }),
+    const [result, meaning] = await Promise.all([
+      Promise.race([
+        lookup(input, stop),
+        // Stop the ranking at its deadline, not when the slower second leg ends.
+        new Promise<'timeout'>((resolve) => { timer = setTimeout(() => { stop.stopped = true; resolve('timeout'); }, deadline); timer.unref?.(); }),
+      ]),
+      meaningLeg(input),
     ]);
     if (result === 'timeout') {
-      stop.stopped = true;
-      log.web.warn('related open tasks check timed out; creating without it', { callerSid: caller.session.id, deadlineMs: deadline });
-      return proceed({ kind: 'proceed', skipped: 'timeout' });
+      log.web.warn('related open tasks check timed out; judging by meaning alone', { callerSid: caller.session.id, deadlineMs: deadline, meaning: meaning.length });
+      if (!meaning.length) return proceed({ kind: 'proceed', skipped: 'timeout' });
     }
-    log.web.info('related open tasks check', { callerSid: caller.session.id, candidates: result.length, ms: Date.now() - started, blind });
-    if (result.length === 0) return proceed();
-    noteRelatedListShown(caller.session.id);
-    const text = refusalText(args.title, result);
-    return { kind: 'refuse', candidates: result, ...text,
+    const words = result === 'timeout' ? [] : result;
+    const listed = [...words, ...meaning.filter((m) => !words.some((w) => w.id === m.id))];
+    log.web.info('related open tasks check', { callerSid: caller.session.id, candidates: words.length, byMeaning: meaning.length, ms: Date.now() - started, blind });
+    if (listed.length === 0) return proceed();
+    noteRelatedListShown(caller.session.id, args.title);
+    const text = refusalText(args.title, listed);
+    return { kind: 'refuse', candidates: listed, ...text,
       ...(blind ? { message: `confirm_new counts only after you have read the related open tasks, and this create had not seen them yet. ${text.message}` } : {}) };
   } catch (err) {
     log.web.warn('related open tasks check failed; creating without it', { error: err instanceof Error ? err.message : String(err) });
@@ -204,15 +225,67 @@ export function refusalText(title: string, candidates: RelatedCandidate[]): { me
   const lines = candidates.map((c, i) => {
     const where = c.folder ? `${c.project || 'Inbox'} / ${c.folder}` : (c.project || 'Inbox');
     const state = [c.user_status ?? c.phase, c.session_running ? 'session running' : 'no session running'].join(', ');
-    return `${i + 1}. ${c.id} "${c.title}" (${where}; ${state}; ${c.reason})`;
+    const read = [
+      c.deliverable ? `deliverable: "${c.deliverable}"` : '',
+      c.first_request ? `first asked: "${c.first_request}"` : '',
+      c.latest ? `latest: ${c.latest}` : '',
+    ].filter(Boolean).map((l) => `\n   ${l}`).join('');
+    return `${i + 1}. ${c.id} "${c.title}" (${where}; ${state}; ${c.reason})${read}`;
   });
-  const hint = 'If one of them already owns this work, send it there instead: '
-    + `walnut tools call task_send '{"to":"<task id>","title":"...","text":"..."}' (it also reaches a task with no session). `
+  const hint = 'Read each one\'s deliverable: if, by meaning, your work IS one of them (its continuation, a revision, a check of it, or a '
+    + 'regression of what a finished one delivered), send it there instead: '
+    + `walnut tools call task_send '{"to":"<task id>","title":"...","text":"..."}' (it also reaches a task with no session; a COMPLETE one `
+    + 'takes "force": true with a "reason"). The same file, component, place or person is not the same deliverable. '
     + 'If yours is a separate deliverable, create it again with "confirm_new": true and "new_reason" '
     + `(at least ${NEW_REASON_MIN} characters saying why it is not one of them).`;
-  const message = `Not created: "${title}" looks like work already open in ${candidates.length === 1 ? 'this task' : 'these tasks'}:\n`
-    + `${lines.join('\n')}\n${hint}`;
+  const byMeaning = candidates.some((c) => c.found_by === 'meaning')
+    ? 'The rows "search finds it by meaning" are the nearest tasks search found, often only neighbours: read them and judge. ' : '';
+  const message = `Not created: "${title}" may be work ${candidates.length === 1 ? 'this task already owns' : 'one of these tasks already owns'}:\n`
+    + `${lines.join('\n')}\n${byMeaning}${hint}`;
   return { message, hint };
+}
+
+/** The caller and every task above it, COMPLETE ones included, plus `extra`: never a place to send its new task. */
+async function callerLineage(callerTaskId: string | undefined, extra: readonly string[]): Promise<Set<string>> {
+  const tm = await import('../task-manager.js');
+  const skip = new Set<string>(extra);
+  let id = callerTaskId;
+  for (let depth = 0; id && !skip.has(id) && depth <= MAX_ANCESTORS; depth++) {
+    skip.add(id);
+    id = (await tm.getTask(id).catch(() => undefined))?.parent_task_id;
+  }
+  return skip;
+}
+
+/** The second leg: for a lead's or Main's create, what search finds by meaning (related-by-meaning.ts). Never throws. */
+async function meaningLeg(input: LookupInput): Promise<RelatedCandidate[]> {
+  try {
+    if (!input.callerTaskId || process.env.WALNUT_RELATED_BY_MEANING === '0') return [];
+    const tm = await import('../task-manager.js');
+    const caller = await tm.getTask(input.callerTaskId).catch(() => undefined);
+    if (caller?.org_role !== 'main' && caller?.org_role !== 'lead') return [];
+    const { findByMeaningInTime } = await import('./related-by-meaning.js');
+    const found = await findByMeaningInTime({
+      title: input.title, ...(input.description ? { description: input.description } : {}),
+      skip: await callerLineage(input.callerTaskId, input.excludeIds),
+    });
+    if (!found.length) return [];
+    const { listSessionsForTasks } = await import('../session-tracker.js');
+    const live = new Set((await listSessionsForTasks(new Set(found.map((f) => f.task.id))).catch(() => []))
+      .filter((s) => !s.archived && (s.process_status === 'running' || s.process_status === 'idle')).map((s) => s.taskId));
+    return found.map(({ task, done }) => ({
+      id: task.id, title: task.title, project: task.project ?? '', phase: task.phase,
+      ...(task.user_status?.state && !done ? { user_status: task.user_status.state } : {}),
+      session_running: live.has(task.id),
+      ...(task.updated_at ? { updated_at: task.updated_at } : {}),
+      reason: done ? `search finds it by meaning; finished ${(task.completed_at ?? task.updated_at ?? '').slice(0, 10)}` : 'search finds it by meaning',
+      ...routingView(task),
+      found_by: 'meaning' as const,
+    }));
+  } catch (err) {
+    log.web.warn('related tasks by meaning failed', { error: err instanceof Error ? err.message : String(err) });
+    return [];
+  }
 }
 
 type OpenRow = RankableTask & { phase: string; parent_task_id?: string; updated_at?: string; user_status?: { state?: string } };
@@ -226,12 +299,7 @@ export async function findRelatedOpenTasks(input: LookupInput, stop: { stopped: 
   const { isAskTask } = await import('./caller-placement.js');
   // The caller and every task above it, COMPLETE ones included: the new task is filed
   // in their tree, so they are the work it serves, never a place to send it.
-  const skip = new Set<string>(input.excludeIds);
-  let id = input.callerTaskId;
-  for (let depth = 0; id && !skip.has(id) && depth <= MAX_ANCESTORS; depth++) {
-    skip.add(id);
-    id = (await tm.getTask(id).catch(() => undefined))?.parent_task_id;
-  }
+  const skip = await callerLineage(input.callerTaskId, input.excludeIds);
   const rows = await tm.listOpenTaskViews(RELATED_MAX_ROWS);
   const open: OpenRow[] = [];
   for (const t of rows) {
@@ -265,6 +333,8 @@ export async function findRelatedOpenTasks(input: LookupInput, stop: { stopped: 
   const live = new Set(sessions
     .filter((s) => !s.archived && (s.process_status === 'running' || s.process_status === 'idle'))
     .map((s) => s.taskId));
+  // Each one's deliverable, first request and latest report: the caller decides by meaning, not by the shared words.
+  const full = new Map((await tm.listTasksByIds([...ids]).catch(() => [])).map((t) => [t.id, t] as const));
   const labels = ranked.some((r) => r.task.group_id)
     ? await tm.listFolderLabels().catch(() => new Map<string, string>())
     : new Map<string, string>();
@@ -286,6 +356,7 @@ export async function findRelatedOpenTasks(input: LookupInput, stop: { stopped: 
       ...(task.updated_at ? { updated_at: task.updated_at } : {}),
       reason: why.join('; '),
       ...(mine ? { your_subtask: true } : {}),
+      ...(full.has(task.id) ? routingView(full.get(task.id)!) : {}),
     };
   });
 }
