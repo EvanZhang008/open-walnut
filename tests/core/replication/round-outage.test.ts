@@ -295,6 +295,8 @@ describe('every replication round reports its failures through round-outage', ()
     const ALLOWED = new Set([
       'host replica: the host refused a manifest that removes most of its copy',
       'host replica: the user confirmed a removal of most of a host copy',
+      // The leader's own record of what each host took (a cache: the next round sends whole lists).
+      'host replica: the manifests the hosts took could not be kept on disk',
       'device replica: the pairings could not be read, nothing sent this round',
       'copies: could not read the leader rows of a kind',
       'copies: the user confirmed a removal of most rows',

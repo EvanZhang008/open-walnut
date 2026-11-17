@@ -28,7 +28,7 @@ vi.mock('../../src/core/skill-store.js', () => ({
 }))
 
 import { NOTES_DIR, MEMORY_FILE, WALNUT_HOME } from '../../src/constants.js'
-import { hostKeepFor, noteEntries, syncHostReplica, forgetHostReplica, sha12, type ReplicaTarget } from '../../src/core/host-replica.js'
+import { hostKeepFor, noteEntries, syncHostReplica, forgetHostReplica, sha12, _resetHostReplicaForTesting, _hostReplicaSavedForTesting, type ReplicaTarget } from '../../src/core/host-replica.js'
 import { createHostReplica } from '../../src/providers/host-replica-core.js'
 import type { Config } from '../../src/core/types.js'
 
@@ -95,6 +95,8 @@ beforeEach(() => {
   afterSync = null
   oldDaemon = false
   stageDir = '/stage/one'
+  _resetHostReplicaForTesting()
+  fs.rmSync(path.join(WALNUT_HOME, 'cache', 'host-replica'), { recursive: true, force: true })
   forgetHostReplica('devbox')
 })
 afterEach(() => { fs.rmSync(daemonDir, { recursive: true, force: true }) })
@@ -337,6 +339,34 @@ describe('a changed manifest goes as its changes since the one the host took', (
     await syncHostReplica(target)
     expect(syncs().map((p) => (p.entries ? 'whole' : 'changes'))).toEqual(['changes'])
     expect(read('note_read', { path: 'Projects/Retro' })).toMatchObject({ ok: true, result: { content: '# Retro\nAnd once more.' } })
+  })
+
+  it('a new connection to a daemon that kept running goes on with changes', async () => {
+    await syncHostReplica(target)
+    forgetHostReplica('devbox')
+    calls = []
+    write('Projects/Retro.md', '# Retro\nAfter a reconnect.')
+    await syncHostReplica(target)
+    expect(syncs().map((p) => (p.entries ? 'whole' : 'changes'))).toEqual(['changes'])
+    expect(read('note_read', { path: 'Projects/Retro' })).toMatchObject({ ok: true, result: { content: '# Retro\nAfter a reconnect.' } })
+  })
+
+  it('a restart of this server goes on with changes too: what each host took is kept on disk', async () => {
+    await syncHostReplica(target)
+    await _hostReplicaSavedForTesting()
+    // A restart: nothing in memory, the disk as it was; the host's daemon still runs.
+    _resetHostReplicaForTesting()
+    calls = []
+    write('Projects/Retro.md', '# Retro\nAfter a restart.')
+    await syncHostReplica(target)
+    expect(syncs().map((p) => (p.entries ? 'whole' : 'changes'))).toEqual(['changes'])
+    expect((syncs()[0].changed as Array<{ k: string }>).map((e) => e.k)).toEqual(['Projects/Retro.md'])
+    expect(read('note_read', { path: 'Projects/Retro' })).toMatchObject({ ok: true, result: { content: '# Retro\nAfter a restart.' } })
+    // One file per manifest the hosts hold, and the index: the old lists are gone.
+    await _hostReplicaSavedForTesting()
+    const kept = fs.readdirSync(path.join(WALNUT_HOME, 'cache', 'host-replica')).sort()
+    expect(kept).toContain('taken.json')
+    expect(kept.filter((f) => f !== 'taken.json')).toHaveLength(3)
   })
 
   it('a daemon from before it refuses the changes without touching its copy, and gets whole lists from then on', async () => {

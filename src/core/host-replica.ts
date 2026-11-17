@@ -259,14 +259,103 @@ const lastManifest = new Map<string, string>()
  * the same id (host-replica-core.ts ReplicaManifestRef) and says when it does not.
  */
 const sentManifest = new Map<string, { id: string; entries: Map<string, ReplicaEntry> }>()
+
+// ── The manifests the hosts took, across this server's restarts ──
+// A deploy restarts the server about every quarter hour on a busy day, and each restart
+// sent every host its whole notes list again (2026-11-17: 6,646 entries to nine hosts at
+// 09:27, 09:41 and 09:54, 97 s a round to newdev). The hosts' daemons keep the manifest they
+// took while they run, so the leader keeps it too: one file per manifest id (hosts with the
+// same list share it) and an index of which id each host and kind took.
+const takenDir = (): string => path.join(WALNUT_HOME, 'cache', 'host-replica')
+const TAKEN_INDEX = 'taken.json'
+const takenOnDisk = new Map<string, string>()
+let takenLoaded: Promise<void> | null = null
+let takenSaving: Promise<void> = Promise.resolve()
+
+function loadTaken(): Promise<void> {
+  takenLoaded ??= (async () => {
+    try {
+      const raw = JSON.parse(await fsp.readFile(path.join(takenDir(), TAKEN_INDEX), 'utf8')) as Record<string, unknown>
+      for (const [k, id] of Object.entries(raw)) if (typeof id === 'string' && /^[0-9a-f]{12}$/.test(id)) takenOnDisk.set(k, id)
+    } catch { /* none kept yet */ }
+  })()
+  return takenLoaded
+}
+
+/** The manifest `memoKey`'s host took last: in memory, else as this server kept it before a restart. */
+async function lastTaken(memoKey: string): Promise<{ id: string; entries: Map<string, ReplicaEntry> } | undefined> {
+  const held = sentManifest.get(memoKey)
+  if (held) return held
+  await loadTaken()
+  const id = takenOnDisk.get(memoKey)
+  if (!id) return undefined
+  try {
+    const list = JSON.parse(await fsp.readFile(path.join(takenDir(), `${id}.json`), 'utf8')) as ReplicaEntry[]
+    const entries = new Map<string, ReplicaEntry>()
+    for (const e of list) if (e && typeof e.k === 'string' && !entries.has(e.k)) entries.set(e.k, e)
+    const got = { id, entries }
+    sentManifest.set(memoKey, got)
+    return got
+  } catch {
+    forgetTaken(memoKey)
+    return undefined
+  }
+}
+
+async function writeAtomic(file: string, data: string): Promise<void> {
+  const tmp = `${file}.${process.pid}.tmp`
+  await fsp.writeFile(tmp, data)
+  await fsp.rename(tmp, file)
+}
+
+/** Keep the index (and a new manifest's file) on disk; drop the files no host took. */
+function saveTaken(manifest?: { id: string; entries: Map<string, ReplicaEntry> }): void {
+  const index = JSON.stringify(Object.fromEntries(takenOnDisk))
+  const keep = new Set([...takenOnDisk.values()].map((id) => `${id}.json`))
+  takenSaving = takenSaving.then(async () => {
+    const dir = takenDir()
+    await fsp.mkdir(dir, { recursive: true })
+    if (manifest) {
+      const file = path.join(dir, `${manifest.id}.json`)
+      const there = await fsp.access(file).then(() => true, () => false)
+      if (!there) await writeAtomic(file, JSON.stringify([...manifest.entries.values()]))
+    }
+    await writeAtomic(path.join(dir, TAKEN_INDEX), index)
+    for (const name of await fsp.readdir(dir)) {
+      if (name.endsWith('.json') && name !== TAKEN_INDEX && !keep.has(name)) await fsp.rm(path.join(dir, name), { force: true })
+    }
+  }).catch((err) => {
+    log.session.warn('host replica: the manifests the hosts took could not be kept on disk', { error: err instanceof Error ? err.message : String(err) })
+  })
+}
+
+function rememberTaken(memoKey: string, manifest: { id: string; entries: Map<string, ReplicaEntry> }): void {
+  sentManifest.set(memoKey, manifest)
+  if (takenOnDisk.get(memoKey) === manifest.id) return
+  takenOnDisk.set(memoKey, manifest.id)
+  saveTaken(manifest)
+}
+
+function forgetTaken(memoKey: string): void {
+  sentManifest.delete(memoKey)
+  if (takenOnDisk.delete(memoKey)) saveTaken()
+}
+
+/** Tests: what this server kept on disk is written. */
+export function _hostReplicaSavedForTesting(): Promise<void> {
+  return takenSaving
+}
 /** Hosts and kinds whose copy refused a changes-only manifest on this connection (a daemon from before it). */
 const wholeOnly = new Set<string>()
 
-/** A host's connection changed: its next round sends every manifest again, whole. */
+/**
+ * A host's connection changed: its next round sends every manifest again. As the changes
+ * since the one it took, still: a daemon that kept running holds that base, and one that
+ * restarted says it does not (manifest_base_unknown), and gets the whole list that round.
+ */
 export function forgetHostReplica(hostKey: string): void {
   const prefix = `${hostKey}\u0000`
   for (const key of [...lastManifest.keys()]) if (key.startsWith(prefix)) lastManifest.delete(key)
-  for (const key of [...sentManifest.keys()]) if (key.startsWith(prefix)) sentManifest.delete(key)
   for (const key of [...wholeOnly]) if (key.startsWith(prefix)) wholeOnly.delete(key)
   forgetAttachments(hostKey)
 }
@@ -328,6 +417,9 @@ export function _resetHostReplicaForTesting(): void {
   lastManifest.clear()
   sentManifest.clear()
   wholeOnly.clear()
+  // As a restart leaves it: what is on disk stays (a test removes the dir for a clean slate).
+  takenOnDisk.clear()
+  takenLoaded = null
   companionMemoAt = 0
   _resetAttachmentReplicaForTesting()
 }
@@ -365,7 +457,7 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
     const r = await target.send('replica.drop', { home, kind })
     if (r.ok !== true) throw new Error(typeof r.error === 'string' ? r.error : 'replica.drop refused')
     lastManifest.set(memoKey, 'dropped')
-    sentManifest.delete(memoKey)
+    forgetTaken(memoKey)
     return { kind, action: 'dropped' }
   }
   let entries: ReplicaEntry[]
@@ -389,7 +481,7 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
   const guard = await removalGuard(target.hostKey, kind, entries)
   const asOf = Date.now()
   const base = { home, kind, asOf, manifestId: manifestHash, ...(opts ? { opts } : {}), ...guard.params }
-  const last = wholeOnly.has(memoKey) ? undefined : sentManifest.get(memoKey)
+  const last = wholeOnly.has(memoKey) ? undefined : await lastTaken(memoKey)
   let reply: Record<string, unknown> | null = null
   let listed = entries.length
   if (last) {
@@ -403,7 +495,7 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
       // changes-only manifests ("bad entries": it found no `entries`, so it changed
       // nothing; only that one gets whole lists for the rest of the connection).
       if (/bad entries/.test(String(reply.error ?? ''))) wholeOnly.add(memoKey)
-      sentManifest.delete(memoKey)
+      forgetTaken(memoKey)
       reply = null
       listed = entries.length
     }
@@ -416,7 +508,7 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
   guard.accepted()
   const took = new Map<string, ReplicaEntry>()
   for (const e of entries) if (!took.has(e.k)) took.set(e.k, e)
-  sentManifest.set(memoKey, { id: manifestHash, entries: took })
+  rememberTaken(memoKey, { id: manifestHash, entries: took })
   const held = typeof reply.held === 'number' ? reply.held : 0
   const need = Array.isArray(reply.need) ? (reply.need as unknown[]).filter((k): k is string => typeof k === 'string') : []
   const wanted = new Map(entries.map((e) => [e.k, e.h]))
