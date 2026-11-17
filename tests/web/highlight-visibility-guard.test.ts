@@ -148,6 +148,8 @@ const HEADER = 'a header or bar: no painter marks its words';
 /** Hides nothing a painter marks (thread marks, pins, comments, find), with why. */
 const NO_PAINTED_WORDS: Record<string, string> = {
   'web/src/utils/scrollbar-metrics.ts :: inline (1)': SLOT,
+  // The calendar grid's hour label next to the now line, hidden so the two times do not overlap.
+  'web/src/components/calendar/TimeGrid.tsx :: inline (1)': HEADER,
   // The arrow slot of a notes tree row with nothing under it, kept so names line up.
   'web/src/styles/globals.css :: .notes-tree-arrow.notes-tree-arrow-empty': SLOT,
   // A column's jump number (JumpBadge), hidden for the frame it measures where its header ends.
