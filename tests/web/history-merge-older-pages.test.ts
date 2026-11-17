@@ -179,6 +179,23 @@ describe('a full read never takes away rows already shown (2026-11-17)', () => {
     expect(folded.kept).toBe(81);
   });
 
+  it('a window that slid forward as the transcript grew keeps the rows that fell off its top (40697029 shape)', () => {
+    // 2026-11-17 03:01Z, a 140 MB local session served as its 4 MB tail: the open showed 214 rows
+    // (the 212-row window of 02:39 plus the 2 rows a delta appended), the file had grown 37 KB, so
+    // the window start moved forward and now cut through a message (its later tool_use line, parsed
+    // with that line's timestamp). The full read answered 212 rows and the 2 rows above them vanished.
+    const held = range(0, 214);
+    const cutMsg = held[2]!;
+    const half = { ...cutMsg, timestamp: new Date(Date.parse(cutMsg.timestamp!) + 900).toISOString(), text: 'tool_use line' };
+    const incoming = [half, ...range(3, 214)];
+    expect(incoming).toHaveLength(212);
+    const folded = foldFullPayload(held, { messages: incoming, cursor: incoming.length, windowed: true });
+    expect(folded.messages).toHaveLength(214);
+    expect(ids(folded.messages)).toEqual(ids(held));
+    expect(folded.kept).toBe(2);
+    expect(folded.cursor).toBe(214);
+  });
+
   it('for every window start inside what is held, and every head row cut or not, no shown row is lost', () => {
     const held = range(0, 120);
     for (let start = 1; start < 110; start++) {
