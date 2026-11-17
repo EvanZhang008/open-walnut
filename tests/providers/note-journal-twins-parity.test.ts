@@ -38,7 +38,8 @@ describe('note-journal-v1: both twins', () => {
   for (const [name, src] of Object.entries(twins)) {
     it(`${name}: replica.sync takes the leader's confirmation and answers a refusal with its code`, () => {
       const body = fnBody(src, 'cmdReplica')
-      expect(body).toMatch(/hostReplica\.sync\(home, cmd\.kind, cmd\.entries, cmd\.asOf, cmd\.opts( as Record<string, unknown> \| undefined)?, \{ confirm: cmd\.confirm, confirmFor: cmd\.confirmFor \}\)/)
+      // The command rides along as the 7th argument: a changes-only manifest (host-replica-core.ts ReplicaManifestRef).
+      expect(body).toMatch(/hostReplica\.sync\(home, cmd\.kind, cmd\.entries, cmd\.asOf, cmd\.opts( as Record<string, unknown> \| undefined)?, \{ confirm: cmd\.confirm, confirmFor: cmd\.confirmFor \}, cmd\)/)
       expect(body).toMatch(/errorKind: (e|err)\.code/)
     })
 
