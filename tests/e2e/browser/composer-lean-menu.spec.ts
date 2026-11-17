@@ -1,6 +1,6 @@
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import fs from 'node:fs/promises';
-import { mockControlsSession, CTRL_SESSION } from './composer-controls-overflow-helpers';
+import { barOf, controlOf, mockControlsSession, CTRL_SESSION } from './composer-controls-overflow-helpers';
 import { openDraft } from './draft-helpers';
 
 test.use({ viewport: { width: 1200, height: 760 }, deviceScaleFactor: 1 });
@@ -132,6 +132,10 @@ test('short draft menu and phone composer retain reachable direct controls and s
   const composer = panel.locator('.session-panel-input').last();
   await expect(composer.locator('.composer-direct-control[data-add-control="btw"]')).toBeVisible();
   await expect(composer.locator('.composer-direct-control[data-add-control="note"]')).toBeVisible();
+  // On a phone the model pill's percentage gives way before Note and btw (44 px finger
+  // targets) fold: they stay on the row beside Bypass and the model's name (foldDirectButtons).
+  await expect(barOf(panel)).not.toHaveAttribute('data-direct-folded', 'true');
+  await expect(controlOf(panel, 'model').locator('.composer-model-pill-short')).toHaveText('Fable');
   await composer.locator('.chat-plus-btn').first().click();
   await composer.getByRole('menuitem', { name: 'More', exact: true }).click();
   await fits(page, page.getByRole('menu', { name: 'More composer actions' }));

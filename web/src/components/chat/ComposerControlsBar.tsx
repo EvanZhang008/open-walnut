@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useImperativeHandle,
 import { createPortal } from 'react-dom';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { detailFits, foldDirectButtons, pickVisibleControls, rowExcess, type ControlFitInput, type RowShape } from './composer-controls-fit';
 import '@/styles/composer-controls.css';
 
@@ -106,6 +107,8 @@ function rowRoom(bar: HTMLElement, spacer: HTMLElement | null, hint: HTMLElement
 
 export function ComposerControlsBar({ controls, className, handleRef }: ComposerControlsBarProps) {
   const routeShown = useContext(RouteShownContext) !== false;
+  // On a phone the model pill's percentage gives way before Note and btw fold (foldDirectButtons).
+  const phone = usePhoneLayout();
   const shownRef = useRef(routeShown);
   shownRef.current = routeShown;
   const present = useMemo(() => controls.filter((c) => !!c.node), [controls]);
@@ -216,7 +219,7 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
     const foldedShape = directRoom > 0 ? shapeIn(roomFolded) : shown;
     // A row with no room (not laid out yet, or hidden for a moment by a reflow) decides
     // nothing: its shape there means "show all", so the buttons keep where they are.
-    const fold = roomFolded > 0 ? directRoom > 0 && foldDirectButtons(shown, foldedShape) : folded;
+    const fold = roomFolded > 0 ? directRoom > 0 && foldDirectButtons(shown, foldedShape, { detailFirst: phone }) : folded;
     const next = fold ? foldedShape : shown;
     setFolded((prev) => prev === fold ? prev : fold);
     setCondensed((prev) => prev === next.compact ? prev : next.compact);
@@ -226,7 +229,7 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
     // Everything fits again: drop the pin, so a column that grew goes back to
     // the plain priority order instead of remembering one menu click forever.
     if (next.overflow.length === 0) setPinned((p) => (p === null ? p : null));
-  }, [inline, pinned, condensed, showDetail, folded]);
+  }, [inline, pinned, condensed, showDetail, folded, phone]);
 
   useLayoutEffect(() => {
     if (!routeShown) return;

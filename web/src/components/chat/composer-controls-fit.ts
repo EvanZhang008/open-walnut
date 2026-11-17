@@ -118,17 +118,23 @@ export interface RowShape {
 
 /**
  * Whether the composer's direct buttons (Note, btw) fold back into the "+" menu.
- * They give their room up before a control on the row gives up anything: its
- * place (it would move into the "..." menu) or its detail. Without this, a 900px
- * window with two columns on macOS fonts put the model pill behind "..." the day
- * the buttons arrived (2026-11-12). Both shapes are taken at the same total room,
- * the room the row has with the buttons folded, never from what is shown now, so
- * folding cannot free the room that then unfolds them.
+ * They give their room up before a control on the row gives up its place (it
+ * would move into the "..." menu). Without this, a 900px window with two columns
+ * on macOS fonts put the model pill behind "..." the day the buttons arrived
+ * (2026-11-12). Both shapes are taken at the same total room, the room the row has
+ * with the buttons folded, never from what is shown now, so folding cannot free
+ * the room that then unfolds them.
+ *
+ * The model pill's detail (its context percentage) weighs differently by layout.
+ * On a desktop the buttons fold to keep it too. On a phone (`detailFirst`) the
+ * buttons are the row's finger targets, 44px each (phone-session.css C19), and the
+ * percentage goes first: from 2026-11-15, when they got that width, a 390px phone
+ * folded them to keep "45%" (composer-lean-menu.spec.ts, red on every run).
  */
-export function foldDirectButtons(shown: RowShape, folded: RowShape): boolean {
+export function foldDirectButtons(shown: RowShape, folded: RowShape, opts: { detailFirst?: boolean } = {}): boolean {
   if (folded.overflow.length !== shown.overflow.length) return folded.overflow.length < shown.overflow.length;
   if (folded.excess !== shown.excess) return folded.excess < shown.excess;
-  return folded.withDetail && !shown.withDetail;
+  return !opts.detailFirst && folded.withDetail && !shown.withDetail;
 }
 
 /** How many px a row of `room` lacks for `result`'s visible controls, the gaps

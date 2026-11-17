@@ -202,4 +202,44 @@ describe('foldDirectButtons', () => {
   it('never folds them in a row wider than the one that keeps everything beside them', () => {
     for (let total = 122 + DIRECT; total <= 600; total++) expect(decide(total)).toBe(false);
   });
+
+  describe('on a phone, the percentage goes first', () => {
+    // A 390px phone (composer-lean-menu.spec.ts, Linux Chromium): Bypass 59, "Fable" about 41,
+    // " 45%" 27; Note and btw are 44px finger targets (phone-session.css C19) with a 2px
+    // gap each, 92px of room. The bar and its spacer leave 220px.
+    const PHONE: ControlFitInput[] = [
+      { id: 'mode', priority: 1, width: 59 },
+      { id: 'model', priority: 2, width: 41 },
+    ];
+    const PHONE_DIRECT = 92;
+    const phoneShape = (room: number) => {
+      const withDetail = detailFits(59 + 4 + 41, 27, room);
+      const input = PHONE.map((c) => (c.id === 'model' && withDetail ? { ...c, width: 41 + 27 } : c));
+      const result = pickVisibleControls(input, room, OPTS);
+      return { withDetail, overflow: result.overflow, excess: rowExcess(input, result, room, OPTS) };
+    };
+    const onPhone = (total: number, detailFirst: boolean) =>
+      foldDirectButtons(phoneShape(Math.max(1, total - PHONE_DIRECT)), phoneShape(total), { detailFirst });
+
+    it('keeps Note and btw at 390px and lets the percentage go, where a desktop row would fold them', () => {
+      expect(phoneShape(220 - PHONE_DIRECT)).toMatchObject({ withDetail: false, overflow: [], excess: 0 });
+      expect(onPhone(220, true)).toBe(false);
+      expect(onPhone(220, false)).toBe(true);
+    });
+
+    it('still folds them before the model leaves the row or the row overflows', () => {
+      // A 320px phone: beside the buttons Bypass and "Fable" no longer fit.
+      expect(onPhone(150, true)).toBe(true);
+      expect(onPhone(PHONE_DIRECT, true)).toBe(true);
+    });
+
+    it('never folds them on a phone only to keep the percentage', () => {
+      // Every room where the buttons' room keeps both pills whole: folding would buy back the detail alone.
+      for (let total = 59 + 4 + 41 + PHONE_DIRECT; total <= 600; total++) {
+        const shown = phoneShape(total - PHONE_DIRECT);
+        expect(shown.overflow, `${total}px`).toEqual([]);
+        expect(onPhone(total, true), `${total}px`).toBe(false);
+      }
+    });
+  });
 });
