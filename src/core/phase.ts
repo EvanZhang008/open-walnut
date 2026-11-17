@@ -907,12 +907,20 @@ export async function handBackTaskOnSessionEnd(
       },
     })
     if (res.changed) {
-      log.session.warn(parks ? 'standing routine parked after Walnut stopped its session'
-        : res.newPhase === 'WAITING'
-        ? 'interrupted wait restored after out-of-band session end'
-        : 'task handed back after out-of-band session end', {
-        taskId, sessionId, source, oldPhase: res.oldPhase,
-      })
+      const fields = { taskId, sessionId, source, oldPhase: res.oldPhase }
+      if (opts?.turnEnd === true && !parks) {
+        // A clean turn end is routine: a daemon's snapshot of the settled turn usually lands before
+        // the server's own result handler writes the same phase (2026-11-16: 85% of 280 "out-of-band"
+        // warns were that race, and the count grew with the day's turns until the spike alarm fired).
+        log.session.info(res.newPhase === 'WAITING'
+          ? 'interrupted wait restored at its turn end'
+          : 'task handed back at its turn end', fields)
+      } else {
+        log.session.warn(parks ? 'standing routine parked after Walnut stopped its session'
+          : res.newPhase === 'WAITING'
+          ? 'interrupted wait restored after out-of-band session end'
+          : 'task handed back after out-of-band session end', fields)
+      }
     }
     return res.changed
   } catch (err) {

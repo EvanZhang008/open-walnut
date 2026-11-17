@@ -26,6 +26,7 @@ import { startSessionAutoRecover, recoverAfterBoot, resolveAutoRecoverConfig } f
 import { RESUME_MESSAGE } from '../../src/core/sessions/restart-loss.js'
 import { closeDb } from '../../src/core/session-db.js'
 import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js'
+import { log } from '../../src/logging/index.js'
 
 const HANDBACK_PHASE = sessionResultPhase('IN_PROGRESS')!
 
@@ -70,6 +71,30 @@ describe('handBackTaskOnSessionEnd', () => {
 
     expect(await handBackTaskOnSessionEnd(taskId, 'sid-inp', 'test')).toBe(true)
     expect((await getTask(taskId)).phase).toBe(HANDBACK_PHASE)
+  })
+
+  it('a clean turn end logs as routine; only a real end (death, reap, missed result) warns', async () => {
+    // 2026-11-16: a daemon's snapshot of a settled turn usually lands before the server's own
+    // result handler, so most turn ends came through here as an "out-of-band" warn and tripped
+    // the log-spike alarm. A clean turn end is info; anything else stays a warn.
+    const warns: string[] = []
+    const infos: string[] = []
+    vi.spyOn(log.session, 'warn').mockImplementation((msg: string) => { warns.push(msg) })
+    vi.spyOn(log.session, 'info').mockImplementation((msg: string) => { infos.push(msg) })
+    const clean = await seedTask('turn ended cleanly')
+    await updateTask(clean, { phase: 'IN_PROGRESS' })
+    await createSessionRecord('sid-clean', clean, 'proj')
+    await updateSessionRecord('sid-clean', { process_status: 'idle' })
+    expect(await handBackTaskOnSessionEnd(clean, 'sid-clean', 'snapshot-apply:daemon-push', { turnEnd: true })).toBe(true)
+    expect(infos).toContain('task handed back at its turn end')
+    expect(warns.filter((m) => /out-of-band/.test(m))).toEqual([])
+
+    const died = await seedTask('process died')
+    await updateTask(died, { phase: 'IN_PROGRESS' })
+    await createSessionRecord('sid-died', died, 'proj')
+    await updateSessionRecord('sid-died', { process_status: 'stopped' })
+    expect(await handBackTaskOnSessionEnd(died, 'sid-died', 'snapshot-apply:daemon-push')).toBe(true)
+    expect(warns).toContain('task handed back after out-of-band session end')
   })
 
   it('never regresses a COMPLETE task', async () => {

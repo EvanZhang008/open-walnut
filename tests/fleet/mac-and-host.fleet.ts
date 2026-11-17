@@ -65,7 +65,7 @@ describe.skipIf(!!unavailable)('the fleet: a Mac and a Linux host over real SSH'
   afterAll(async () => {
     process.stdout.write(`[fleet] times (ms): ${JSON.stringify(times)}\n`)
     // What the Mac did with a turn that ended while it was away (read for the report, not asserted).
-    const handBacks = f?.mac.logLines(/task handed back after out-of-band session end/).map((l) => { const j = JSON.parse(l); return `${j.source} ${j.oldPhase} ${j.taskId}` }) ?? []
+    const handBacks = f?.mac.logLines(/task handed back (after out-of-band session end|at its turn end)/).map((l) => { const j = JSON.parse(l); return `${j.source} ${j.oldPhase} ${j.taskId}` }) ?? []
     if (handBacks.length) process.stdout.write(`[fleet] hand-backs: ${handBacks.join(' | ')}\n`)
     await f?.stop()
   }, 120_000)
