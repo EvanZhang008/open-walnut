@@ -9,7 +9,7 @@
  * (driven here through express with the real notification bridge), and every router's own
  * error funnel (read from the source, so a new router that logs its own error card fails).
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -53,11 +53,11 @@ describe('a failed request is logged, never carded', () => {
     for (const code of [500, 502, 503, 504, 507, 599]) expect((await request(server).get(`/api/status/${code}`)).status).toBe(code)
     expect((await request(server).get('/api/v1/test/boom')).status).toBe(500)
     createSubsystemLogger('route-log-only').error('Sentinel failure')
-    let feed: Awaited<ReturnType<typeof listNotifications>>['feed'] = []
-    for (let i = 0; i < 200 && !feed.some((n) => n.title === 'Sentinel failure'); i++) {
-      await new Promise((r) => setTimeout(r, 25))
-      feed = (await listNotifications()).feed
-    }
+    const feed = await vi.waitFor(async () => {
+      const now = (await listNotifications()).feed
+      if (!now.some((n) => n.title === 'Sentinel failure')) throw new Error('the sentinel card is not in the feed yet')
+      return now
+    }, { timeout: 5000, interval: 25 })
     expect(feed.map((n) => n.title)).toEqual(['Sentinel failure'])
   })
 })

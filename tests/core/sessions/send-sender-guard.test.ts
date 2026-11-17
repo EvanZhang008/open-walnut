@@ -118,6 +118,7 @@ const CALL_SITES: Record<string, number> = {
   'src/core/sessions/safeguard-switch.ts': 1,
   'src/core/session-message-queue.ts': 1,          // the queue's own enqueue inside sendMessageToSession
   'src/core/sessions/adopt-notice.ts': 1,
+  'src/core/sessions/title-topic-notice.ts': 1,       // a task whose title gained a topic is told, as Walnut's notice
   // A teammate's folded ask answered elsewhere: one Walnut note, source wait-until like needs-recheck.
   'src/core/sessions/ask-answer.ts': 1,
   // An answer given for the user taken back: one Walnut note into a running turn (ask-withdraw.ts tellNow).

@@ -70,7 +70,8 @@ describe('dist/cli-fast.js as bun builds it', () => {
     expect(first).toBe(CLI_FAST_PRAGMA)
     // Strict, as an ES bundle is (tests/scripts/cli-fast-build-ratchet.test.ts runs a fixture of it).
     expect(second).toMatch(/^\(function\(exports, require, module, __filename, __dirname\) \{"use strict";var __walnutBundleUrl = /)
-    expect(built.get('cli-fast.js.jsc')!.length).toBeGreaterThan(1024 * 1024)
+    // The bytecode is there and real (about 250 KB since the bundle stopped taking in the server).
+    expect(built.get('cli-fast.js.jsc')!.length).toBeGreaterThan(128 * 1024)
     expect(js.endsWith('//# sourceMappingURL=cli-fast.js.map\n')).toBe(true)
     const roots = [ROOT, fs.realpathSync(ROOT), ...moduleRoots(ROOT).map((r: { real: string }) => r.real), os.homedir()]
     expect([...buildPathsIn(built.get('cli-fast.js')!, roots).keys()]).toEqual([])
@@ -79,7 +80,12 @@ describe('dist/cli-fast.js as bun builds it', () => {
   it('has no top-level await in any Walnut module it takes in (CommonJS has none)', () => {
     const map = JSON.parse(built.get('cli-fast.js.map')!.toString('utf8')) as { sources: string[] }
     const own = map.sources.filter((s) => /^(src|packages)\/.*\.(ts|tsx|js|mjs)$/.test(s))
-    expect(own.length).toBeGreaterThan(500)
+    // About 200 of Walnut's own modules. It took in over 2,000 (the whole server) until
+    // src/core/task-progress.ts read parseNoteSections from session-hooks/builtins.ts; it reads
+    // src/core/note-sections.ts now (2026-11-16). A static import that drags the server back in
+    // fails here: keep cli-fast's imports slim (src/cli-fast.ts).
+    expect(own.length).toBeGreaterThan(150)
+    expect(own.length).toBeLessThan(500)
     expect(own).toContain('src/cli-fast.ts')
     expect(own.flatMap((rel) => topLevelAwaits(path.join(ROOT, rel), ROOT))).toEqual([])
   })

@@ -755,6 +755,8 @@ describe('task_list scope', () => {
       'GET /api/tasks?q=login+bug&group_id=g_f1&limit=50',
       'GET /api/tasks?q=login+bug&limit=50&project=marina',
       'GET /api/tasks?q=login+bug&limit=50',
+      // by_meaning: open tasks search finds that the title filter missed (task-list-by-meaning.test.ts)
+      'GET /search?q=login%20bug&types=task&limit=12&semanticWaitMs=2500',
     ])
     expect(listed.scope).toBe('all')
     expect(listed.count).toBe(1)
@@ -772,7 +774,8 @@ describe('task_list scope', () => {
     const asked = runner('task_list', async (_method, path) => (path === '/me' ? FOLDERED : { tasks: [], total: 0 }))
     const strict = rec(await asked.invoke({ q: 'fixture', scope: 'folder' }))
     expect(strict).toMatchObject({ scope: 'folder', count: 0 })
-    expect(asked.paths()).toHaveLength(2)
+    // One folder listing, never a wider one (the by_meaning search beside it is not a ring).
+    expect(asked.paths().filter((p) => p.startsWith('GET /api/tasks'))).toEqual(['GET /api/tasks?q=fixture&group_id=g_f1&limit=50'])
   })
 
   it('the default hint rides along with the truncation warning, never replaces it', async () => {

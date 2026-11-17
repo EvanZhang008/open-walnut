@@ -10,13 +10,14 @@
  * The Event side is EventCreateForm; the Task side is QuickTaskComposer with the
  * slot's dates pre-seeded. Event shows only while a writable calendar exists.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task } from '@open-walnut/core';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import type { PlacementArrow } from '@/hooks/menu-placement-beside';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { QuickTaskComposer } from '@/components/tasks/QuickTaskComposer';
 import type { CreateTaskInput } from '@/api/tasks';
 import { usePageView } from '@/utils/view-memory';
@@ -96,7 +97,7 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
   // so the hook's layout pass already finds it.
   const [preview, setPreview] = useState<EventPreview | null>(null);
   // No calendar can take an event: open on Task this time (the kept choice stays).
-  const onNoCalendar = useCallback(() => setOpenedAs((cur) => cur ?? 'task'), []);
+  const onNoCalendar = useLeanCallback(() => setOpenedAs((cur) => cur ?? 'task'), []);
   const placement = useMenuPlacement(true, seed.placeholder ? blockRef : anchorRef, menuRef, {
     anchorPoint,
     beside: !anchorPoint,
@@ -107,7 +108,7 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
     anchorKey: preview ? `${preview.day}|${preview.allDay}|${preview.startMin}` : undefined,
   });
 
-  const onPreview = useCallback((p: EventPreview) => setPreview(p), []);
+  const onPreview = useLeanCallback((p: EventPreview) => setPreview(p), []);
 
   // Window-level Escape: the composer/form inputs handle Escape only while
   // focused; after clicking non-focusable popover chrome focus sits on <body>.

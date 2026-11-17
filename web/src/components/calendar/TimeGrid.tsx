@@ -25,6 +25,7 @@ import { useDroppable } from '@dnd-kit/core';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { useDragGesture } from '@/hooks/useDragGesture';
 import { useResizableHeight } from '@/hooks/useResizableHeight';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import {
   SLOT_MINUTES,
   SNAP_MINUTES,
@@ -534,7 +535,7 @@ export const TimeGrid = memo(function TimeGrid({
   const [keptKind] = usePageView<CreateKind>('calendar', 'createKind', 'event', isCreateKind);
   const createKind: CreateKind = canCreateEvent ? keptKind : 'task';
   /** Where the popover draws the block being created: the day's column, minute → px. */
-  const timedPlaceholder = useCallback(
+  const timedPlaceholder = useLeanCallback(
     (day: string) => {
       const host = colsRef.current?.querySelector<HTMLElement>(`.cal-day-col[data-day="${day}"]`);
       return host ? { host, day, minuteToPx: (m: number) => gridY(m, startMinute, slotPx) } : undefined;

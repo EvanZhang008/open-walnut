@@ -138,11 +138,12 @@ describe('drafts saves while the file is busy', () => {
   afterEach(() => { Object.assign(draftsSaveTiming, timing); vi.restoreAllMocks(); });
 
   /** Hold drafts.json's lock as another writer would, for `ms`. */
-  function holdLock(ms: number): Promise<void> {
+  /** Resolves once the lock is taken; `released` resolves once the holder lets it go. */
+  function holdLock(ms: number): Promise<void> & { released: Promise<unknown> } {
     let held!: () => void;
     const taken = new Promise<void>((r) => { held = r; });
-    void withFileLock(DRAFTS_FILE(), () => { held(); return new Promise((r) => setTimeout(r, ms)); });
-    return taken;
+    const released = withFileLock(DRAFTS_FILE(), () => { held(); return new Promise((r) => setTimeout(r, ms)); });
+    return Object.assign(taken, { released });
   }
 
   it('forty saves that arrive while the lock is held all land, in one or two writes, none failing', async () => {
@@ -199,13 +200,14 @@ describe('drafts saves while the file is busy', () => {
 
   it('a lock busy past the deadline answers 503 with Retry-After, not 500, and the next save works', async () => {
     Object.assign(draftsSaveTiming, { lockWaitMs: 100, deadlineMs: 250, backoffMs: [50] });
-    await holdLock(1500);
+    const hold = holdLock(1500);
+    await hold;
     await expect(saveDrafts({ 'draft:x': { v: 'a', ts: 1 } })).rejects.toBeInstanceOf(DraftsBusyError);
     const res = await request(createApp()).put('/api/drafts').send({ drafts: { 'draft:y': { v: 'b', ts: 2 } } });
     expect(res.status).toBe(503);
     expect(res.headers['retry-after']).toBe('5');
     expect(res.body.retry).toBe(true);
-    await new Promise((r) => setTimeout(r, 1500));
+    await hold.released;
     const ok = await request(createApp()).put('/api/drafts').send({ drafts: { 'draft:z': { v: 'c', ts: 3 } } });
     expect(ok.status).toBe(200);
     expect(JSON.parse(await fs.readFile(DRAFTS_FILE(), 'utf8'))['draft:z'].v).toBe('c');

@@ -8,10 +8,11 @@
  * It reports what it would create (`onPreview`) so the popover can draw the
  * placeholder block in the grid as the user edits.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { listCalendarSources, type CalendarInfo } from '@/api/calendar';
 import { useDraft } from '@/hooks/useDraft';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { draftKey } from '@/utils/drafts';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
@@ -320,7 +321,7 @@ function CalendarPicker({ calendars, value, onChange }: { calendars: CalendarInf
   const btnRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const placement = useMenuPlacement(open, btnRef, listRef, { align: 'start', minHeight: 120 });
-  useFlyoutEscape(open, useCallback(() => setOpen(false), []));
+  useFlyoutEscape(open, useLeanCallback(() => setOpen(false), []));
   const current = calendars?.find((c) => c.id === value);
   const label = calendars === null
     ? 'Loading calendars…'
@@ -409,7 +410,7 @@ function DayButton({ day, onChange, label }: { day: string; onChange: (day: stri
   const btnRef = useRef<HTMLButtonElement>(null);
   const flyRef = useRef<HTMLDivElement>(null);
   const placement = useMenuPlacement(open, btnRef, flyRef, { align: 'start' });
-  useFlyoutEscape(open, useCallback(() => setOpen(false), []));
+  useFlyoutEscape(open, useLeanCallback(() => setOpen(false), []));
   return (
     <>
       <button ref={btnRef} type="button" className="cal-when-part cal-when-day" aria-label={label} data-day={day} onClick={() => setOpen((v) => !v)}>
