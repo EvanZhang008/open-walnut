@@ -3,6 +3,7 @@ import { isolateUiPrefs, selectProject } from './todo-panel-helpers';
 import { arrange, chooseViewOption, openHome, setShowCompleted } from './home-navigation-helpers';
 import { displayButton, setStatus } from './filter-bar-helpers';
 import { openKebabGroup } from './kebab-group-helpers';
+import { pickCalendarTaskSide } from './calendar-helpers';
 
 test.use({ viewport: { width: 1280, height: 840 }, deviceScaleFactor: 1 });
 test.setTimeout(90_000);
@@ -74,7 +75,7 @@ test('calendar day and task scheduling survive closing the panel without leaked 
   await calendar.locator('.cal-allday-cell').click({ position: { x: 8, y: 8 } });
   const creator = page.locator('.cal-create-popover');
   await expect(creator).toBeVisible();
-  await creator.getByRole('tab', { name: 'Task', exact: true }).click();
+  await pickCalendarTaskSide(page);
   await creator.getByPlaceholder('Task title', { exact: true }).fill('Companion scheduled task');
   const saved = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/tasks');
   await creator.getByRole('button', { name: 'Create', exact: true }).click();

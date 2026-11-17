@@ -21,7 +21,7 @@ import { centreInHistory, openThreadsSession, resetThreadsFixture, selectPassage
 import { TAGGED_PASSAGE, TAGGED_READY, TAGGED_SESSION, TAGGED_TASK, TAGGED_TITLES } from './threads-fixture'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { draftPanel, openDraft } from './draft-helpers'
-import { calendarEmptySlotPoint } from './calendar-helpers'
+import { openCalendarTaskCreator } from './calendar-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const NONCE = Date.now().toString(36)
@@ -295,12 +295,7 @@ test.describe('Every input box keeps its unsent draft', () => {
       const today = new Date()
       const pad = (n: number) => String(n).padStart(2, '0')
       const day = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`
-      const slot = await calendarEmptySlotPoint(page, day)
-      await page.mouse.click(slot.x, slot.y)
-      await page.locator('.cal-create-popover').getByRole('tab', { name: 'Task', exact: true }).click()
-      const composer = page.locator('.cal-create-popover .quick-task-composer')
-      await expect(composer).toBeVisible()
-      return composer
+      return (await openCalendarTaskCreator(page, day)).composer
     }
     await page.goto('/')
     await page.waitForLoadState('networkidle')

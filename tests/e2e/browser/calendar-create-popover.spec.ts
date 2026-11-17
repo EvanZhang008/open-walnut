@@ -15,7 +15,7 @@
  */
 import { devices, test, expect, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { calendarEmptySlotPoint, calendarHourPx } from './calendar-helpers'
+import { calendarEmptySlotPoint, calendarHourPx, pickCalendarTaskSide } from './calendar-helpers'
 import { withCssColor } from './css-color'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
@@ -83,8 +83,7 @@ test('a new item is an Event by default, and the side picked last is kept across
   await expect(placeholder(page)).toContainText('New Event')
 
   // Pick Task: the placeholder says so, and the choice is stored.
-  await tab(page, 'Task').click()
-  await expect(popover(page).locator('.quick-task-composer')).toBeVisible()
+  await pickCalendarTaskSide(page)
   await expect(placeholder(page)).toContainText('New Task')
   await shot(page, 'task-side')
   await expect.poll(() => page.evaluate((k) => localStorage.getItem(k), KIND_KEY)).toBe('"task"')
@@ -321,8 +320,7 @@ test('Task side: a press on the popover padding keeps it open; switching sides k
   const pad = (n: number) => String(n).padStart(2, '0')
   const moved = `${pad((h + 1) % 24)}:${pad(m)}`
   await start.fill(moved)
-  await tab(page, 'Task').click()
-  await expect(popover(page).locator('.quick-task-composer')).toBeVisible()
+  await pickCalendarTaskSide(page)
   // The popover's own padding is not "outside the composer".
   const p = await box(popover(page))
   // Mid-height on the left padding: clear of the rounded corners, which are not the popover.

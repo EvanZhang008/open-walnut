@@ -75,33 +75,6 @@ describe('Tree Mode pages', () => {
   })
 })
 
-describe('calendar time grid positions', () => {
-  // The grid's hour height is `--cal-hour-px` (fitted to the window, zoomable), and it
-  // starts at `data-start-minute`. A spec that moved the mouse or the scroll by a fixed
-  // 48 px per hour clicked hours away from the time it meant (2026-10-31: eleven
-  // quick-task-composer tests opened another event's popover). calendar-helpers.ts
-  // reads the grid instead: calendarSlotPoint, calendarHourPx.
-  const fixedHour = /\b48\b|\b96\b/
-  const positional = /mouse\.|scrollTop|boundingBox|\.y \+|\.y\+/
-
-  it('no spec that drives the time grid moves by a fixed 48 px hour', () => {
-    const offenders: string[] = []
-    for (const { file, text } of sources) {
-      if (file === 'calendar-helpers.ts' || !/cal-day-col|cal-grid|cal-chip/.test(text)) continue
-      text.split('\n').forEach((line, i) => {
-        if (line.trim().startsWith('//') || line.trim().startsWith('*')) return
-        if (fixedHour.test(line) && positional.test(line)) offenders.push(`${file}:${i + 1}: ${line.trim()}`)
-      })
-    }
-    expect(offenders).toEqual([])
-  })
-
-  it('catches the shape it was written for', () => {
-    const line = 'await page.mouse.click(box.x + box.width / 2, box.y + 14 * 48 + 12)'
-    expect(fixedHour.test(line) && positional.test(line)).toBe(true)
-  })
-})
-
 describe('a measured turn read live', () => {
   // The speed readout's live row lasts as long as the mock turn (`stream-partial-speed`, about
   // 9 s). Started with the session, before the page that reads it had loaded, the turn was over
@@ -375,26 +348,6 @@ describe('specs that import Vite\'s optimized deps', () => {
   it('catches the shape it was written for', () => {
     expect(readsHashFromSource("const src = await (await fetch('/src/main.tsx')).text()\nimport('/node_modules/.vite/deps/react.js?v=' + v)")).toBe(true)
     expect(readsHashFromSource("performance.getEntriesByType('resource')\n.startsWith('/node_modules/.vite/deps/' + file)")).toBe(false)
-  })
-})
-
-describe('calendar columns of another day', () => {
-  // The week grid draws only the shown week, so a fixed offset from today (tomorrow, two
-  // days on) has no column near a week's end: 2026-11-01 was a Sunday, and the quick-create
-  // test's tomorrow was next week's on all five CI runs that day. Pick a day the grid shows
-  // (its `.cal-day-col` data-day values), as the late-night slot test does.
-  const fixedDayColumn = /localDay\(\s*-?[1-9]\d*\s*\)[\s\S]{0,300}?\b(?:columnPoint|calendarSlotPoint)\(/g
-
-  it('no spec aims a time-grid point at a fixed offset from today', () => {
-    const offenders = sources.flatMap(({ file, text }) =>
-      [...text.matchAll(fixedDayColumn)].map((m) => `${file}:${text.slice(0, m.index).split('\n').length}`))
-    expect(offenders).toEqual([])
-  })
-
-  it('catches the shape it was written for, and lets today and a shown day through', () => {
-    expect('const day = localDay(1)\n    const point = await columnPoint(page, day, 11)'.match(fixedDayColumn)).toHaveLength(1)
-    expect('const point = await columnPoint(page, localDay(0), 22)'.match(fixedDayColumn)).toBeNull()
-    expect("const day = days.find((d) => d !== localDay(0))\nconst point = await columnPoint(page, day, 11)".match(fixedDayColumn)).toBeNull()
   })
 })
 

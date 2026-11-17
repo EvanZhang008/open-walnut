@@ -7,9 +7,9 @@
  * `hour * 48` px down a day column landed hours late: on a 30 px grid "2 PM" was a
  * click near 11 PM, on whatever event a test had put there (quick-task-composer.spec.ts,
  * 2026-10-31: the item popover opened instead of the create popover).
- * tests/scripts/browser-spec-ratchets.test.ts keeps the fixed 48 out of the specs.
+ * tests/scripts/calendar-spec-ratchets.test.ts keeps the fixed 48 out of the specs.
  */
-import type { Locator, Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 
 /** The pixel height of one hour on the time grid inside `scope`. */
 export async function calendarHourPx(scope: Page | Locator): Promise<number> {
@@ -73,4 +73,34 @@ export async function calendarEmptySlotPoint(
     if (free) return { ...p, hour, minute }
   }
   throw new Error(`no empty half hour in ${day}`)
+}
+
+/**
+ * Switch the calendar's open new-item popover to its Task side and return the task
+ * composer in it. The popover opens on Event and keeps the side picked last
+ * (6974c18ae4, usePageView calendar.createKind), so a spec about the task composer
+ * picks Task itself, whatever an earlier spec left. Two specs that read the composer
+ * right after the slot click failed on every run once Event became the default
+ * (private-tasks, voice-field-commit, 2026-11-17); tests/scripts/calendar-spec-ratchets.test.ts
+ * keeps every spec that creates a task from the popover on this helper.
+ */
+export async function pickCalendarTaskSide(page: Page): Promise<Locator> {
+  const popover = page.locator('.cal-create-popover')
+  const task = popover.getByRole('tab', { name: 'Task', exact: true })
+  await task.click()
+  await expect(task).toHaveAttribute('aria-selected', 'true')
+  const composer = popover.locator('.quick-task-composer')
+  await expect(composer).toBeVisible()
+  return composer
+}
+
+/** Click an empty half hour of `day` (from `fromHour` on) and open the popover's Task side. */
+export async function openCalendarTaskCreator(
+  page: Page,
+  day: string,
+  fromHour?: number,
+): Promise<{ composer: Locator; slot: { x: number; y: number; hour: number; minute: number } }> {
+  const slot = await calendarEmptySlotPoint(page, day, fromHour)
+  await page.mouse.click(slot.x, slot.y)
+  return { composer: await pickCalendarTaskSide(page), slot }
 }

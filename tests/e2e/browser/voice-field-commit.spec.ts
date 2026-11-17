@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import { loadHome } from './draft-helpers';
 import { isolateUiPrefs, presetPanelView, showEverything } from './todo-panel-helpers';
-import { calendarEmptySlotPoint } from './calendar-helpers';
+import { openCalendarTaskCreator } from './calendar-helpers';
 import { useSyntheticMic } from './stt-failure-helpers';
 import { DRAFTED, FULL, stubEngine, type Lane } from './send-waits-helpers';
 
@@ -163,8 +163,7 @@ test('task Create waits for the title field mic, not only the sentence mic', asy
   const today = new Date();
   const pad = (n: number) => String(n).padStart(2, '0');
   const day = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
-  const point = await calendarEmptySlotPoint(page, day);
-  await page.mouse.click(point.x, point.y);
+  await openCalendarTaskCreator(page, day);
   const panel = page.locator('.qtc-confirm-panel');
   await expect(panel).toBeVisible();
   const input = panel.locator('.qtc-confirm-title');

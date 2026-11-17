@@ -26,7 +26,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { stubSttStatus } from './voice-selection-helpers'
-import { calendarEmptySlotPoint } from './calendar-helpers'
+import { openCalendarTaskCreator } from './calendar-helpers'
 import { FAKE_MIC_ARGS } from './fake-mic'
 import { showTasks } from './org-view-helpers'
 import { openManualRoutineForm, openRoutineComposer } from './routines-page-helpers'
@@ -580,12 +580,7 @@ test.describe('Tasks', () => {
     const d = new Date()
     const pad = (n: number) => String(n).padStart(2, '0')
     const today = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-    const hour = 14
-    const slot = await calendarEmptySlotPoint(page, today, hour)
-    await page.mouse.click(slot.x, slot.y)
-    await page.locator('.cal-create-popover').getByRole('tab', { name: 'Task', exact: true }).click()
-    const composer = page.locator('.cal-create-popover .quick-task-composer')
-    await expect(composer).toBeVisible()
+    const { composer } = await openCalendarTaskCreator(page, today, 14)
     await expectMicField(page, 'calendar-quick-create', composer.locator('.qtc-mic-field'))
   })
 })

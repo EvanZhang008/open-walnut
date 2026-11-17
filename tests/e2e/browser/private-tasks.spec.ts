@@ -24,7 +24,7 @@ import {
   discoverFixtureRoot, draftMenuProject, draftMoreButton, loadHome, openDraftOnCwd,
 } from './draft-helpers'
 import { createTaskForLater } from './draft-outcome-helpers'
-import { calendarEmptySlotPoint } from './calendar-helpers'
+import { openCalendarTaskCreator } from './calendar-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { openPluginDetail } from './apps-store-helpers'
 import { openKebabGroup } from './kebab-group-helpers'
@@ -177,8 +177,7 @@ test('the calendar quick add creates a task Local when asked', async ({ page }) 
   await expect(page.locator('.cal-toolbar')).toBeVisible()
   const now = new Date()
   const pad = (n: number) => String(n).padStart(2, '0')
-  const slot = await calendarEmptySlotPoint(page, `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`)
-  await page.mouse.click(slot.x, slot.y)
+  await openCalendarTaskCreator(page, `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`)
   const panel = page.locator('.qtc-confirm-panel')
   const title = `Garden plan ${stamp()}`
   await page.locator('.qtc-input').fill(title)

@@ -13,7 +13,7 @@
  */
 import { devices, test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test'
 import { PHONE, openDrawer } from './phone-helpers'
-import { calendarEmptySlotPoint } from './calendar-helpers'
+import { calendarEmptySlotPoint, pickCalendarTaskSide } from './calendar-helpers'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.use({ viewport: { width: 1280, height: 860 } })
@@ -113,7 +113,7 @@ test('every calendar setting holds after a reload and on another device', async 
   await a.getByRole('button', { name: 'Zoom in calendar' }).click()
   await a.getByRole('button', { name: 'Show full day' }).click()
   await clickEmptySlot(a)
-  await a.locator('.cal-create-popover .cal-create-tabs').getByRole('tab', { name: 'Task', exact: true }).click()
+  await pickCalendarTaskSide(a)
   await a.keyboard.press('Escape')
 
   // A reload of a bare /calendar: the link names no view, the kept one shows.

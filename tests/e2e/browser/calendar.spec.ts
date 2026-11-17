@@ -8,7 +8,7 @@
  */
 import { test, expect, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { calendarEmptySlotPoint, calendarHourPx, calendarSlotPoint } from './calendar-helpers'
+import { calendarEmptySlotPoint, calendarHourPx, calendarSlotPoint, pickCalendarTaskSide } from './calendar-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
@@ -227,9 +227,7 @@ test.describe('Calendar view', () => {
 
     await page.mouse.click(point.x, point.y)
     // The popover opens on Event (the default); a task is one switch away.
-    await page.locator('.cal-create-popover').getByRole('tab', { name: 'Task', exact: true }).click()
-    const composer = page.locator('.cal-create-popover .quick-task-composer')
-    await expect(composer).toBeVisible()
+    const composer = await pickCalendarTaskSide(page)
 
     const title = `CalSlotCreate ${Date.now()}`
     await composer.locator('.qtc-input').fill(title)
@@ -1230,7 +1228,7 @@ test.describe('Calendar view', () => {
     await page.mouse.move(col.x + col.width / 2, scroll.y + 196, { steps: 8 })
     await page.mouse.up()
 
-    await page.locator('.cal-create-popover').getByRole('tab', { name: 'Task', exact: true }).click()
+    await pickCalendarTaskSide(page)
     const chips = page.locator('.cal-create-popover .qtc-chip')
     await expect(chips.first()).toBeVisible()
     const labels = await chips.allTextContents()
