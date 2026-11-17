@@ -212,7 +212,8 @@ export const IMPORTED_PHASE = 'NEED_ACTION' as const;
 async function fileAsStarted(taskId: string, emitEvent: boolean): Promise<boolean> {
   const { updateTaskRaw } = await import('../task-manager.js');
   const res = await updateTaskRaw(taskId, { phase: IMPORTED_PHASE, ...readMarkerForPhase(IMPORTED_PHASE) }, {
-    emitEvent, push: false, source: EXTERNAL_IMPORT_EVENT_SOURCE,
+    // shouldUpdate writes only over the minted TODO, never a WAITING task: leaveHeld changes nothing here.
+    emitEvent, push: false, source: EXTERNAL_IMPORT_EVENT_SOURCE, leaveHeld: true,
     shouldUpdate: (current) => current.phase === 'TODO' && !current.phase_changed_at && !!current.session_id,
   });
   return res.changed;
