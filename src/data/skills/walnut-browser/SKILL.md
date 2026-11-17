@@ -78,6 +78,7 @@ frames, real input, dialogs, recording a tab's requests, uploads, taking a tab o
 | `person_driving` | They have the tab now: work elsewhere or wait. |
 | `trusted_off`, `extension_outdated` | Pass the message on as it is; do the step without that feature. |
 | `window_hidden`, `input_dropped` | Run it again without `--trusted`. |
+| `unsaved_work`, "Leave site?", `page_held` | You decide, not the user: save it, `dialog dismiss`, or `--discard`. |
 
 Exit codes: 0 done; 1 refused or a choice to make (the message lists the choices); 2 Walnut or the
 browser did not answer in time (run it again); 3 an error, or a `wait` whose text or address did

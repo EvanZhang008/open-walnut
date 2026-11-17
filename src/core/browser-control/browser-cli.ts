@@ -17,7 +17,7 @@ export const BROWSER_USAGE = [
   '  text [<ref> | --selector css] [--max N] [--all]   the main content (no menus, header, footer); 4000 chars',
   '  find <words> [--role button] [--exact] [--limit N]   the best few matches, with refs',
   '  wait <text> | --url <part or /regex/> | --gone <text> [--ms N]   10 s unless --ms (up to 30000)',
-  '  close                             when you are done',
+  '  close [--discard]                 when you are done (--discard: lose unsent work)',
   '  e.g.  open https://example.com/issues --read;  click --text "Login fails" --read;  close',
   '  e.g.  open https://example.com/pricing --read --max 800      a short read: the first 800 characters of its main text',
   '  Two or more tabs, or subagents in the browser at once: every command names its tab with --tab N (open prints N).',
@@ -125,6 +125,7 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
       else if (w === '--slowly') args.slowly = true
       else if (w === '--steps') args.steps = Number(val())
       else if (w === '--site') args.site = val()
+      else if (w === '--discard') args.discard = true
       else if (w === '--file' || w === '--path') {
         const key = w === '--file' ? 'files' : 'paths'
         args[key] = [...((args[key] as string[] | undefined) ?? []), val()]
@@ -452,6 +453,8 @@ function render(action: string | undefined, b: Record<string, unknown>): string 
   }
   if (b.dialog && typeof b.dialog === 'object') {
     const d = b.dialog as { type?: string; message?: string }
+    // A leave the page's "Leave site?" holds up (agent-leave.ts): still on the page.
+    if (d.type === 'beforeunload') return `not yet: the page asks "${d.message ?? 'Leave site?'}" and you are still on it\n(dialog dismiss stays; dialog accept leaves and loses those changes)`
     return `ok, and it opened a ${d.type ?? 'dialog'}: ${d.message ?? ''}\n(dialog accept [--text T] or dialog dismiss answers it)`
   }
   if (action === 'snapshot') return typeof b.snapshot === 'string' ? b.snapshot : JSON.stringify(b)

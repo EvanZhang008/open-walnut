@@ -1,9 +1,11 @@
 /**
- * Accepting a page's confirm or prompt is the step it asks about: "Delete this project?" OK deletes
- * it, "Place your order for $42?" OK buys. So an agent's accept is judged by the dialog's words with
- * the same rules as a click (page-agent-outward.ts), and one that buys, sends or deletes waits for
- * the person's yes (routes/browser-v1.ts asks). An alert has only OK, and Cancel never acts: neither
- * is judged. Here in the background, apart from any page: the page is held by its dialog.
+ * Accepting a page's confirm or prompt is the step it asks about: "Place your order for $42?" OK
+ * buys. So an agent's accept is judged by the dialog's words with the same rules as a click
+ * (page-agent-outward.ts), and only one that buys or pays waits for the person's yes
+ * (routes/browser-v1.ts asks): every other dialog is the agent's to decide, "Delete this draft?"
+ * and "Send it now?" included (2026-11-17, the user: "Only ask me for payment, that is it"). An
+ * alert has only OK, and Cancel never acts: neither is judged. Here in the background, apart from
+ * any page: the page is held by its dialog.
  */
 import { judgeOutward, type Outward, type OutwardKind } from './page-agent-outward'
 
@@ -28,13 +30,12 @@ function judgeWords(message: string): Outward | null {
 export function dialogOutward(d: { type: string; message: string }, accept: boolean, text: string | undefined, pageUrl: string): DialogHold | null {
   if (!accept || (d.type !== 'confirm' && d.type !== 'prompt')) return null
   const o = judgeWords(d.message)
-  if (!o) return null
+  if (!o || o.kind !== 'buy') return null
   const what = `accept the ${d.type} "${clip(d.message, 80)}"`
   let at = ''
   try { const u = new URL(pageUrl); at = `${u.origin}${u.pathname}` } catch { at = pageUrl }
-  const message = o.kind === 'send' && text?.trim() ? clip(text, 300) : undefined
   return {
-    kind: o.kind, why: o.why, what, url: pageUrl.split('#')[0], ...(message ? { message } : {}),
+    kind: o.kind, why: o.why, what, url: pageUrl.split('#')[0],
     sig: `${o.kind}|${what}|${at}|${text ?? ''}|`.slice(0, 400),
   }
 }

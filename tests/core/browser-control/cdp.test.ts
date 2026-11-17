@@ -96,10 +96,10 @@ describe('the command sequences', () => {
     expect(() => parseCombo('Hyper+a')).toThrow(/Unknown modifier/)
   })
 
-  it('dialog: answers the open one; none open says no_dialog', async () => {
+  it('dialog: answers the open one with nothing before it (Page.enable waits on an open dialog); none open says no_dialog', async () => {
     const f = fakeDebugger()
     await withDebugger(f.dbg, 1, (send) => cdpDialog(send, false, 'my answer'))
-    expect(f.log.slice(1, -1)).toEqual([['Page.enable', {}], ['Page.handleJavaScriptDialog', { accept: false, promptText: 'my answer' }]])
+    expect(f.log.slice(1, -1)).toEqual([['Page.handleJavaScriptDialog', { accept: false, promptText: 'my answer' }]])
     const g = fakeDebugger({ 'Page.handleJavaScriptDialog': new Error('No dialog is showing') })
     const err = await withDebugger(g.dbg, 1, (send) => cdpDialog(send, true)).catch((e) => e)
     expect(err.code).toBe('no_dialog')

@@ -13,6 +13,7 @@ import { ext } from './ext'
 import { agentTabs, agentWindowId } from './agent-shared'
 import { ungroupBeforeClose, type GroupApi } from './agent-groups'
 import { keptReady } from './agent-keep'
+import { closeTab } from './tab-close'
 
 export const LEFT_MS = 10 * 60_000
 const KEY = 'agentMade'
@@ -65,7 +66,8 @@ export function tidyLeftovers(now = Date.now()): Promise<number[]> {
       const w = tab.active ? await ext.windows.get(tab.windowId!).catch(() => null) as { focused?: boolean } | null : null
       if (w?.focused) continue
       await ungroupBeforeClose(ext as unknown as GroupApi, id)
-      await ext.tabs.remove(id).catch(() => undefined)
+      // Its page's "Leave site?" never holds the pass (nor every open behind it): no agent wanted what it holds.
+      if (!(await closeTab(id, { orForce: true }))) { made[k] = now; continue }
       delete made[k]
       closed.push(id)
     }

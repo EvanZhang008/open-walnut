@@ -15,6 +15,7 @@ import { noteAgentMade } from './agent-tidy'
 import { frontInWindow } from './agent-window'
 import { holdersOf } from './cdp'
 import { whenDialog } from './agent-dialog'
+import { closeTab } from './tab-close'
 import {
   ACTING_MS, AgentError, WALNUT_PAGE, acting, agentTabs, allowed, checkPage, frameOp, loaded, mark, originOf, personsTab, settled, sleep, where,
   walnutCheck, type AgentTab, type WireCommand,
@@ -285,7 +286,7 @@ async function adoptOpened(tabId: number, rec: AgentTab, url?: string): Promise<
   await muteAgentTab(tabId)
   await loaded(tabId)
   // What loaded may be Walnut itself: never an agent's.
-  if ((await pageCheck(tabId))?.walnut) { await agentTabs.delete(tabId); await ext.tabs.remove(tabId).catch(() => undefined); return }
+  if ((await pageCheck(tabId))?.walnut) { await agentTabs.delete(tabId); await closeTab(tabId); return }
   await mark(tabId, true, rec.who)
 }
 

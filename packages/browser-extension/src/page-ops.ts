@@ -13,6 +13,7 @@ import { annotate, refOfLabel } from './page-annotate'
 import { onScreenMiddle, pointAt, type CursorKind } from './page-cursor'
 import { armProbe, deepActive, markWatches, readProbe } from './page-probe'
 import { submitFrom } from './page-enter'
+import { unsaved } from './page-unsaved'
 
 /** position:fixed and sticky elements hidden after the first slice of a full screenshot, so they are drawn once. */
 let hiddenFixed: Array<{ el: HTMLElement; v: string }> = []
@@ -372,6 +373,8 @@ export async function runPageOp(op: string, args: Record<string, unknown>): Prom
     case 'capture': return capture(args)
     case 'locate': return armedLocate(args)
     case 'probe_read': return readProbe(args.probe, args.done === true)
+    // Before an agent leaves the page (agent-leave.ts): what leaving would lose.
+    case 'unsaved': return unsaved()
   }
   throw new pa.PageError(`Unknown page action ${op}.`, 'bad_action')
 }

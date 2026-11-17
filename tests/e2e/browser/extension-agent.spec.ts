@@ -688,7 +688,10 @@ test('real input is on by default; once the person turns it off, trusted, dialog
   await expect(p.getByTestId('popup-trusted')).not.toBeChecked()
   await p.close()
   const page = ctx.pages()[0]
-  const nav = await act(page, { action: 'navigate', url: site('shop.example.test', '/order') })
+  // The files the upload test above chose were never sent: leaving says so first (agent-leave.ts); discard leaves.
+  const kept = await act(page, { action: 'navigate', url: site('shop.example.test', '/order') })
+  expect(kept.body.code, JSON.stringify(kept.body)).toBe('unsaved_work')
+  const nav = await act(page, { action: 'navigate', url: site('shop.example.test', '/order'), discard: true })
   expect(nav.status, JSON.stringify(nav.body)).toBe(200)
   const s = (await act(page, { action: 'snapshot' })).body.snapshot as string
   for (const body of [

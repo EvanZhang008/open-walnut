@@ -9,8 +9,8 @@
  *   - a click by its words finds the best match across frames; text all_frames gives each frame;
  *   - a page dialog a trusted step opened is read and answered, the debugger held until then, and
  *     nothing else reaches the page meanwhile; the step stops where the dialog cut it (no more
- *     keys, a drag's button let go); a dialog whose hold ran out is the person's to answer;
- *   - a drag, and OK on a confirm that deletes, wait for the person's yes.
+ *     keys, a drag's button let go); one nobody answered in time Walnut answers the safe way;
+ *   - a drag that deletes, and OK on a confirm that pays, wait for the person's yes.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -71,6 +71,9 @@ const tab = () => ({ id: 7, windowId: 3, active: true, url: PAGE_URL, title: 'Ch
     sendCommand: async (_t: unknown, method: string, params?: Record<string, unknown>) => {
       fake.log.push([method, params])
       fake.order.push(`${method} ${String(params?.type ?? '')}`)
+      // As in Chromium (2026-11-17): while a dialog is up, Page.enable waits for the page, which waits for the dialog.
+      if (method === 'Page.enable' && dialogUp) return new Promise(() => {})
+      if (method === 'Page.handleJavaScriptDialog') dialogUp = false
       return (await fake.onSend(method, params)) ?? {}
     },
     onEvent: { addListener: (fn: Listener) => fake.events.push(fn), removeListener() {} },
@@ -88,7 +91,11 @@ walnutCheck.isWalnutPage = async () => false
 
 const act = (action: string, args: Record<string, unknown> = {}) => agent._actForTesting({ id: 'c', action, args: { tab: 7, ...args }, allow: { any: true, sites: [] } }) as Promise<Record<string, any>>
 const code = async (p: Promise<unknown>) => p.then(() => 'ok', (e: { code?: string }) => e.code)
-const emit = (method: string, params: Record<string, unknown>) => fake.events.forEach((fn) => fn({ tabId: 7 }, method, params))
+let dialogUp = false
+const emit = (method: string, params: Record<string, unknown>) => {
+  if (method === 'Page.javascriptDialogOpening') dialogUp = true
+  fake.events.forEach((fn) => fn({ tabId: 7 }, method, params))
+}
 const methods = () => fake.log.map((l) => l[0])
 const mouse = () => fake.log.filter((l) => l[0] === 'Input.dispatchMouseEvent').map((l) => l[1]!)
 const pageOps = (op: string) => fake.pageLog.filter((p) => p.op === op)
@@ -103,6 +110,7 @@ beforeEach(() => {
   fake.trusted = true
   fake.checkAnswers = true
   fake.order = []
+  dialogUp = false
   dialogs._resetDialogsForTesting()
   dropDebugger(7)
   // Each step's own attach and detach (the 30 s linger after a step: extension-default-trusted.test.ts).
@@ -399,42 +407,60 @@ describe('a step a dialog cut short stops there', () => {
   })
 })
 
-describe('a dialog left unanswered is the person\'s', () => {
-  const opensPrompt = () => {
+describe('a dialog nobody answers never stays: Walnut answers it the safe way (2026-11-17)', () => {
+  const opens = (type: string, message: string) => {
     fake.page = (op) => (op === 'locate' ? { x: 20, y: 30, what: 'button "Rename"' } : {})
     fake.onSend = (method, p) => {
       if (method === 'Input.dispatchMouseEvent' && p?.type === 'mouseReleased') {
-        emit('Page.javascriptDialogOpening', { type: 'prompt', message: 'New name?', url: PAGE_URL })
+        emit('Page.javascriptDialogOpening', { type, message, url: PAGE_URL })
         return new Promise(() => {})
       }
       return undefined
     }
   }
 
-  it('each look at it starts the hold again; once it runs out the debugger lets go, and only the person can answer', async () => {
+  it.each([
+    ['prompt', 'New name?', false],
+    ['confirm', 'Discard this draft?', false],
+    ['alert', 'Saved.', true],
+    ['beforeunload', '', false],
+  ] as const)('a %s: each look starts the hold again; once it runs out Walnut answers it (accept %s), and the next look says so', async (type, message, accept) => {
     dialogs._setHoldMsForTesting(1000)
-    opensPrompt()
-    expect((await act('click', { trusted: true, ref: 'e8' })).dialog).toBeDefined()
+    opens(type, message)
+    expect((await act('click', { trusted: true, ref: 'e8' })).dialog).toMatchObject({ type })
     await sleep(600)
     expect((await act('dialog', { read: true })).open).toBe(true)
     await sleep(600)
     // 1200 ms after it opened, 600 after the look: still held, the look started the hold again.
     expect(debuggerHeld(7)).toBe(true)
     await vi.waitFor(() => expect(debuggerHeld(7)).toBe(false), { timeout: 5000 })
+    expect(fake.log.filter((l) => l[0] === 'Page.handleJavaScriptDialog').map((l) => l[1])).toEqual([{ accept }])
     expect(methods().at(-1)).toBe('detach')
-    expect(dialogs.orphanOf(7)).toMatchObject({ type: 'prompt', message: 'New name?' })
+    expect(dialogs.orphanOf(7)).toBeUndefined()
+    const r = await act('dialog', { read: true })
+    expect(r).toMatchObject({ open: false, walnut_answered: { type, answer: accept ? 'accepted' : 'dismissed' } })
+    expect(r.note).toMatch(/safe way/)
+    // Nothing is held: the page answers again.
+    fake.page = (op) => (op === 'text' ? { text: 'Page', url: PAGE_URL } : {})
+    expect(await code(act('text'))).toBe('ok')
+    expect(await code(act('dialog', { accept: true }))).toBe('no_dialog')
+  })
 
-    // The page still does not answer: everything that needs it is refused at once, saying who can answer.
+  it('one whose debugger let go before an answer (a recording ended) cannot be answered: refused at once, with the way out', async () => {
+    opens('prompt', 'New name?')
+    expect((await act('click', { trusted: true, ref: 'e8' })).dialog).toBeDefined()
+    await dialogs.leaveDialog(7)
+    expect(dialogs.orphanOf(7)).toMatchObject({ type: 'prompt', message: 'New name?' })
     fake.checkAnswers = false
     const err = await act('snapshot').catch((e) => e)
     expect(err.code).toBe('dialog_open')
     expect(err.extra).toMatchObject({ only_person: true })
-    expect(err.message).toMatch(/only the person can answer/)
+    expect(err.message).toMatch(/close \{discard: true\}/)
     expect(await act('dialog', { read: true })).toMatchObject({ open: true, only_person: true })
     expect(await code(act('dialog', { accept: true, text: 'x' }))).toBe('dialog_person')
     expect(fake.log.find((l) => l[0] === 'Page.handleJavaScriptDialog')).toBeUndefined()
 
-    // The person answered it: the page answers again, and the mark is gone.
+    // Answered in the tab after all: the page answers again, and the mark is gone.
     fake.checkAnswers = true
     fake.page = (op) => (op === 'text' ? { text: 'Renamed', url: PAGE_URL } : {})
     expect(await code(act('text'))).toBe('ok')
@@ -498,18 +524,21 @@ describe('steps that delete wait for the person', () => {
     expect(pageOps('drag_points').at(-1)!.args.outward_ok).toBe(hold.sig)
   })
 
-  it('OK on a confirm that deletes waits; Cancel, an alert, or a confirm that does nothing do not', async () => {
-    dialogs.foldDialogEvent(7, 'Page.javascriptDialogOpening', { type: 'confirm', message: 'Delete this project? This cannot be undone.' })
+  it('OK on a confirm that pays waits; one that deletes, Cancel, an alert, or a confirm that does nothing do not', async () => {
+    dialogs.foldDialogEvent(7, 'Page.javascriptDialogOpening', { type: 'confirm', message: 'Place your order for $42? Your card will be charged.' })
     const err = await act('dialog', { accept: true }).catch((e) => e)
     expect(err.code).toBe('outward_needs_ok')
-    expect(err.extra.hold).toMatchObject({ kind: 'delete', what: 'accept the confirm "Delete this project? This cannot be undone."', url: PAGE_URL })
+    expect(err.extra.hold).toMatchObject({ kind: 'buy', what: 'accept the confirm "Place your order for $42? Your card will be charged."', url: PAGE_URL })
     expect(fake.log.find((l) => l[0] === 'Page.handleJavaScriptDialog')).toBeUndefined()
     // The yes for exactly that answer lets it go.
     const ok = await act('dialog', { accept: true, outward_ok: err.extra.hold.sig })
     expect(ok.dialog).toBe('accepted')
     expect(fake.log.find((l) => l[0] === 'Page.handleJavaScriptDialog')?.[1]).toEqual({ accept: true })
 
-    dialogs.foldDialogEvent(7, 'Page.javascriptDialogOpening', { type: 'confirm', message: 'Delete this project?' })
+    // Deleting is the agent's to decide (2026-11-17, the user: "Only ask me for payment, that is it").
+    dialogs.foldDialogEvent(7, 'Page.javascriptDialogOpening', { type: 'confirm', message: 'Delete this project? This cannot be undone.' })
+    expect((await act('dialog', { accept: true })).dialog).toBe('accepted')
+    dialogs.foldDialogEvent(7, 'Page.javascriptDialogOpening', { type: 'confirm', message: 'Place your order?' })
     expect((await act('dialog', { accept: false })).dialog).toBe('dismissed')
     dialogs.foldDialogEvent(7, 'Page.javascriptDialogOpening', { type: 'alert', message: 'Deleted.' })
     expect((await act('dialog', { accept: true })).dialog).toBe('accepted')

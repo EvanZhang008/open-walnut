@@ -311,6 +311,9 @@ describe('the agent window', () => {
       // A trusted upload (cdp.ts cdpSetFiles): the frame's id, an isolated world in the page, a node
       // resolved into it and a function run on it; all inside the renderer, nothing shown or focused.
       'Page.getFrameTree', 'Page.createIsolatedWorld', 'DOM.resolveNode', 'Runtime.callFunctionOn',
+      // A close with discard, or Walnut's tidy (tab-close.ts): the tab goes as tabs.remove would take
+      // it, without its beforeunload; its window gets its next tab in front, nothing raised or focused.
+      'Target.closeTarget',
       'Page.enable', 'Page.handleJavaScriptDialog', 'Runtime.enable', 'Runtime.evaluate', 'Network.enable', 'Network.disable', 'Network.getResponseBody', 'Network.getRequestPostData', 'Log.enable'])
     const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith('.ts') ? [path.join(d, e.name)] : [])
     const sent: string[] = []

@@ -62,17 +62,21 @@ The task's session panel shows a live picture of your tab (the Browser view) wit
   a tab you opened) are always real input. All of it is on unless the user turned off "Let agents
   use real mouse and keys" in the extension's Settings; then `trusted_off`, whose message says
   where to turn it back on (the extension's icon, the gear, the switch): pass it on as it is.
-- **Page dialogs** (an alert, confirm or prompt): do a step that may open one with `--trusted`.
-  Its answer then says a dialog opened and what it says, and the page waits for you: `dialog`
-  reads it again, `dialog accept --text "Ana"` answers a prompt, `dialog accept` is OK, `dialog
-  dismiss` is Cancel. Answer within 2 minutes (each `dialog` read starts that again). OK on a
-  confirm that deletes, buys or sends waits for the user's yes, like the click that would do it.
-  Anything else on the page answers `dialog_open` until then. A dialog Walnut did not see open
-  (a page action without trusted opened it, so it timed out with `page_not_ready`), or one left
-  unanswered past the 2 minutes (`dialog_open` with `only_person`), only the user can answer:
-  ask them in your chat to answer it in that tab and say what it asks, and do not retry the step
-  meanwhile, with `--trusted` or not (every step waits for the page). A tab that records (below)
-  sees its dialogs with any action.
+- **Page dialogs** (an alert, confirm, prompt or "Leave site?"): do a step that may open one with
+  `--trusted`. Its answer then says a dialog opened and what it says, and the page waits for you:
+  `dialog` reads it again, `dialog accept --text "Ana"` answers a prompt, `dialog accept` is OK,
+  `dialog dismiss` is Cancel. You decide every dialog yourself; never ask the user, except that OK
+  on a confirm that buys or pays waits for the user's yes, like the click that would do it. Anything
+  else on the page answers `dialog_open` until then. One nobody answers within 5 minutes Walnut
+  answers the safe way (OK on an alert, otherwise Cancel or Stay), and `dialog` then says so.
+- **Leaving a page** (`navigate`, `back`, `close`): a page holding a draft you typed into a text box
+  or editor and did not send, or files chosen for an upload, answers `unsaved_work` naming them; a page that asks "Leave site?"
+  answers with that dialog while you stay on the page and the tab stays yours. Decide: send or save
+  the work (or wait for the upload to finish) and leave again, `dialog dismiss` to stay, `dialog
+  accept` to leave and lose it, or `--discard` to leave without asking. `page_held` means the page
+  does not answer (a dialog Walnut never saw holds it, opened by a page action without trusted, or
+  the page hangs): do not retry steps there; `close --discard` closes it, then open the page again.
+  A tab that records (below) sees its dialogs with any action.
 - `extension_outdated`: the user's extension is older than what you asked (drag, zoom, labels,
   typing at a point or slowly, reading a dialog, scrolling inside a box): ask them to update it,
   and do the step without it meanwhile.

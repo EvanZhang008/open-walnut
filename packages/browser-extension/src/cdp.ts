@@ -395,7 +395,10 @@ export async function cdpDrag(send: Send, from: Point, to: Point, opts: { steps?
 
 /** Answer the page's alert, confirm or prompt. */
 export async function cdpDialog(send: Send, accept: boolean, promptText?: string): Promise<void> {
-  await send('Page.enable')
+  // No Page.enable first: the session that saw the dialog has Page on already, and while a dialog is
+  // open Page.enable waits for the page, which waits for the dialog (measured in Chromium,
+  // 2026-11-17: every answer timed out after 30 s; a session attached after the dialog opened
+  // cannot answer it anyway).
   try {
     await send('Page.handleJavaScriptDialog', { accept, ...(promptText !== undefined ? { promptText } : {}) })
   } catch (err) {

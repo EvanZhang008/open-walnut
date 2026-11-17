@@ -15,6 +15,16 @@ const ACTIONS = [
   'network', 'network_body', 'network_request_body', 'console', 'resize', 'request_sign_in', 'drag', 'zoom', 'click_label',
 ] as const
 
+/** A leave (navigate, back, close) the page's "Leave site?" holds up: the agent is still on the page and decides. */
+function leaveHeld(body: Record<string, unknown>, tab: string): { outcome: string; next: string } | null {
+  const d = body.dialog as { type?: string; message?: string } | undefined
+  if (!d || typeof d !== 'object' || d.type !== 'beforeunload') return null
+  return {
+    outcome: `Not left yet${tab}: the page asks "${String(d.message ?? 'Leave site?')}" (it holds changes not saved: a draft, an upload still going), and stays as it is.`,
+    next: 'Decide yourself (never ask the user): dialog {accept: false} stays on the page (then save, send or wait for the upload, and leave again); dialog {accept: true} leaves and loses those changes.',
+  }
+}
+
 /** A step that opened a page dialog says what it says. */
 function dialogLine(body: Record<string, unknown>): string {
   const d = body.dialog as { type?: string; message?: string } | undefined
@@ -66,6 +76,8 @@ function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>)
       ? { outcome: `${(body.tabs as unknown[] | undefined)?.length ?? 0} tab(s) in the browser (owner: mine, other task, person).`, next: 'take {tab} to act in one of the person\'s tabs (never the one they are on), or open a page.' }
       : { outcome: `${(body.tabs as unknown[] | undefined)?.length ?? 0} tab(s) of this task.`, next: 'Act in one with its tab id, or open a page.' }
     case 'open': case 'navigate': case 'back': {
+      const held = leaveHeld(body, tab)
+      if (held) return held
       const where = typeof body.where === 'string' ? body.where : `At ${body.url ?? '?'}${tab}: ${body.title ?? ''}`
       const theirs = typeof body.person_tabs_note === 'string' ? ` ${body.person_tabs_note}` : ''
       const refused = body.record_refused as { message?: string } | undefined
@@ -104,11 +116,13 @@ function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>)
       if (args.read) {
         const d = body.dialog as { type?: string; message?: string; default_prompt?: string } | undefined
         return body.open && d
-          ? { outcome: `A ${d.type ?? 'dialog'} is open${tab}: "${d.message ?? ''}"${d.default_prompt !== undefined ? ` (its box holds "${d.default_prompt}")` : ''}.${body.only_person ? ' Only the person can answer it now.' : ''}`,
-            next: body.only_person ? String(body.note ?? 'Ask the person in your chat to answer it in that tab.') : d.type === 'prompt' ? 'dialog {accept: true, text} answers it with your text; accept: false cancels.' : 'dialog {accept: true} is OK; accept: false is Cancel.' }
-          : { outcome: `No dialog Walnut saw open${tab}.`, next: String(body.note ?? 'Do the step that opens it with trusted, then read it.') }
+          ? { outcome: `A ${d.type ?? 'dialog'} is open${tab}: "${d.message ?? ''}"${d.default_prompt !== undefined ? ` (its box holds "${d.default_prompt}")` : ''}.${body.only_person ? ' Walnut can no longer answer it.' : ''}`,
+            next: body.only_person ? String(body.note ?? 'Close the tab (close {discard: true}) and open the page again.') : d.type === 'prompt' ? 'dialog {accept: true, text} answers it with your text; accept: false cancels.' : d.type === 'beforeunload' ? 'dialog {accept: false} stays on the page; accept: true leaves it and loses its unsaved changes.' : 'dialog {accept: true} is OK; accept: false is Cancel.' }
+          : { outcome: `No dialog open${tab}.${body.walnut_answered ? ' Walnut answered the last one itself the safe way, since nobody answered it in time.' : ''}`, next: String(body.note ?? 'Do the step that opens it with trusted, then read it.') }
       }
-      return { outcome: `The dialog was ${String(body.dialog ?? 'answered')}${tab}.`, next: 'snapshot to see the page now.' }
+      if (body.closed === true) return { outcome: `The dialog was ${String(body.dialog ?? 'answered')}, and tab${tab ? tab.replace(/[()]/g, '') : ''} closed.`, next: 'No further action is required.' }
+      if (body.stayed === true) return { outcome: `Stayed on the page${tab}: nothing was lost.`, next: 'Save, send or finish what the page holds (or wait for its upload), then leave again; snapshot to see it.' }
+      return { outcome: `The dialog was ${String(body.dialog ?? 'answered')}${tab}${body.left === true && typeof body.url === 'string' ? `; now at ${body.url}` : ''}.`, next: 'snapshot to see the page now.' }
     }
     case 'click': case 'type': case 'press': case 'click_label': case 'select': case 'hover': case 'scroll': {
       if (body.dialog) return { outcome: `Done${tab}.${dialogLine(body)}`, next: 'dialog accept (with text for a prompt) or dialog dismiss answers it; nothing else works on the page until then.' }
@@ -135,6 +149,8 @@ function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>)
     case 'fill_code': return { outcome: `Filled the one-time code of "${(body.item as { title?: string } | undefined)?.title ?? ''}"${tab}; you never see the code.`, next: 'click the verify or continue button (snapshot for its ref).' }
     case 'evaluate': return { outcome: `The script ran${tab}${body.cut ? '; its result was cut at 50 KB' : ''}.`, next: 'No further action is required.' }
     case 'close': {
+      const held = leaveHeld(body, tab)
+      if (held) return held
       const which = body.tab ?? args.tab
       const n = which !== undefined ? ` ${which}` : ''
       return { outcome: body.released ? `Gave tab${n} back to the person (it stays open).` : `Closed tab${n}.`, next: 'No further action is required.' }
@@ -183,7 +199,9 @@ defineOp({
     + 'downloads {wait?, ms?}; fill_login {item?} (signs in with the user\'s saved login for the page: you never see the password; needs_ok waits for their approval: call again with request); fill_code {item?} (on the page that asks for a sign-in\'s one-time code: fills the code of the saved login\'s two-step setup, you never see it; the same approvals). '
     + 'Real input (Chrome only; on unless the user turned it off in the extension: trusted_off): click, hover, type and press in your own tab in the agent window use it by default (trusted: false for the page\'s events; a covered or minimized agent window gets the page\'s events, and the answer says trusted: false and why; a frame, a link to a new tab, a picker, a shortcut with Control, Meta or Alt, or long text stay the page\'s); trusted: true asks for it by name on click, hover, type, press, scroll (the wheel), upload {paths on the browser\'s machine}; '
     + 'drag {ref or x, y; to_ref or to_x, to_y; steps?} (always real input, top frame); a trusted step that opens an alert, confirm or prompt answers with it (dialog), and the page waits: '
-    + 'dialog {read: true} reads it (type, message, default_prompt), dialog {accept, text?} answers it (text: a prompt\'s answer); evaluate {expression} runs page JavaScript in a tab you opened (result JSON, 50 KB). '
+    + 'dialog {read: true} reads it (type, message, default_prompt), dialog {accept, text?} answers it (text: a prompt\'s answer). You decide every dialog yourself, never the user, except an OK that pays (needs_ok). '
+    + 'navigate, back and close never lose a page\'s work silently: one whose page holds text typed and not sent or files chosen answers unsaved_work (naming them), and a page that asks "Leave site?" answers with that dialog while you stay on the page: '
+    + 'dialog {accept: false} stays, dialog {accept: true} leaves; discard: true leaves anyway. Walnut answers a dialog nobody answered within 5 minutes the safe way (OK on an alert, else Cancel or Stay). evaluate {expression} runs page JavaScript in a tab you opened (result JSON, 50 KB). '
     + 'Recording, in a tab you opened, also with that switch (Chrome shows its debugging bar there): network {url?, method?, status?: 404 or "4xx", type?, limit?, include_static?, stop?} lists the requests the page made '
     + '(id, url, method, status, type, ms, size) since recording began (open {url, record: true} records from before the page loads; the first network or console starts it otherwise); '
     + 'network_body {request_id, max_chars?} a response body (200,000 characters, base64 for bytes); network_request_body {request_id} what the request sent; console {level?, limit?}. '
@@ -248,7 +266,8 @@ defineOp({
     site: z.string().max(200).optional().describe('request_sign_in: the site to sign in to (default the tab\'s)'),
     fresh_sign_in: z.boolean().optional().describe('fill_login, fill_code: ask the person to approve a new sign-in here, although they have this site open in a tab of their own (only their yes fills)'),
     trusted: z.boolean().optional().describe('click / hover / type / press / scroll / upload: true asks for real mouse and keys through the browser\'s debugger by name; false for the page\'s events; unset: real input by default for click, hover, type and press in your own tab'),
-    accept: z.boolean().optional().describe('dialog: OK (true, default) or Cancel (false); text is a prompt\'s answer'),
+    accept: z.boolean().optional().describe('dialog: OK (true, default) or Cancel (false); text is a prompt\'s answer; on a "Leave site?" true leaves and false stays'),
+    discard: z.boolean().optional().describe('navigate / back / close: leave even though the page holds unsent work or asks "Leave site?" (that work is lost)'),
     item: z.string().max(200).optional().describe('fill_login, fill_code: the login (its id, name or username) when the site has several'),
     purpose: z.string().max(200).optional().describe('fill_login, fill_code: why, in a few words the user reads on the approval'),
     expression: z.string().max(100_000).optional().describe('evaluate: JavaScript to run in the page (its value comes back as JSON)'),

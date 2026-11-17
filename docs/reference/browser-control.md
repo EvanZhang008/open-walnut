@@ -417,7 +417,7 @@ walnut browser close                          # closes a tab it opened, gives ba
 | `fill_login` | `item?`, `purpose?`, `request?` | signs in with the saved login for the tab's site; several (`which_login`) list `{ id, title, username }`; an approval answers `needs_ok` with `request`: call again with it |
 | `tabs` | `all?` | this task's tabs, or with `all` every tab of the browser and whose it is |
 | `take` | `tab` | one of the person's tabs becomes this task's (`person_is_here` when they are on it) |
-| `dialog` | `read?`, `accept`, `text?` | real input: `read` gives the open dialog (`type`: alert, confirm, prompt or beforeunload, `message`, `default_prompt`); `accept` OK or Cancel, `text` a prompt's answer; the answer names the dialog it `answered`. Only a dialog the debugger saw open: see "Page dialogs" below |
+| `dialog` | `read?`, `accept`, `text?` | real input: `read` gives the open dialog (`type`: alert, confirm, prompt or beforeunload, `message`, `default_prompt`), or the one Walnut answered itself (`walnut_answered`); `accept` OK or Cancel (Leave or Stay on a beforeunload), `text` a prompt's answer; the answer names the dialog it `answered`. Only a dialog the debugger saw open: see "Page dialogs" below |
 | `evaluate` | `expression` | real input, a tab the agent opened only: the value as JSON, cut at 50 KB |
 | any of click, hover, type, press, scroll | `trusted: true` | real input through the debugger (top frame only); `scroll` is the wheel at the element, point or the middle of the page; `type {x, y}` clicks the point first; `slowly` puts 50 ms between keys. A click, hover, type or press in the agent's own tab takes real input without it (see above); `trusted: false` asks for the page's events |
 | `upload` | `trusted: true, paths` | real input: files already on the browser's machine (a download, say) |
@@ -483,30 +483,74 @@ own download from elsewhere at that moment is never the agent's.
 
 ### Page dialogs
 
-Chrome hands an alert, confirm or prompt to the debugger only when its Page domain was on as the
-dialog opened (Chromium's `PageHandler` keeps the dialog's answer only then; one that opened
-before an attach is "No dialog is showing"). So every real-input step that may open one (`click`,
-`press`, `type`, `drag` with `trusted`) runs with Page on, and when a dialog opens meanwhile the
-step answers at once with `dialog: { type, message, default_prompt?, url }` and a `note`; the
-debugger stays on the tab until the agent answers (`dialog accept|dismiss`), 2 minutes from its
-last look at the dialog (`dialog` read), or as long as an accept waits for the person's yes, 11
-minutes at most. The step stops where the dialog cut
+Chrome hands an alert, confirm, prompt or "Leave site?" (beforeunload) to the debugger only when
+its Page domain was on as the dialog opened (Chromium's `PageHandler` keeps the dialog's answer
+only then; one that opened before an attach is "No dialog is showing", and even `Page.enable`
+waits on it). So every real-input step that may open one (`click`, `press`, `type`, `drag` with
+`trusted`) and every leave of a page (`navigate`, `back`, `close`) runs with Page on, and when a
+dialog opens meanwhile the step answers at once with `dialog: { type, message, default_prompt?,
+url }` and a `note`; the debugger stays on the tab until the agent answers (`dialog
+accept|dismiss`), 5 minutes from its last look at the dialog (`dialog` read), or as long as an
+accept waits for the person's yes, 11 minutes at most. The step stops where the dialog cut
 it: the debugger refuses whatever it would send next (the next key), a drag lets the mouse button
 go where the pointer is, and slow typing on the page stops before its next key.
 A tab that records (`network`, `console`) has Page on all along, so a page action there answers
 with the dialog it opened too. While a dialog is open every action that needs the page answers
-`dialog_open` with the dialog (it would only wait for the page and time out). OK on a confirm or
-prompt whose words buy, send or delete ("Delete this project?") is judged as the click that would
-do it (packages/browser-extension/src/dialog-outward.ts) and waits for the person's yes.
+`dialog_open` with the dialog (it would only wait for the page and time out).
 
-A dialog no debugger holds any more (the 2 minutes ran out, a recording stopped) is the person's
-to answer: Chrome never hands it to a debugger again. Walnut keeps it marked, and every action
-that needs the page answers `dialog_open` with `only_person` (after a quick look whether the page
-answers again, which means the person answered it) until the dialog closes or the tab loads
-another page or closes. A page action without trusted in a tab that does not record cannot see
-its dialog at all: the page stops answering and the action times out (`page_not_ready`); only the
-person can answer that one too, and a retry, with trusted or not, would wait for the page the same
-way (packages/browser-extension/src/agent-dialog.ts).
+The agent decides every dialog, and Walnut never asks the person to answer one (2026-11-17, the
+user: "Only ask me for payment, that is it"): only OK on a confirm or prompt whose words buy or
+pay ("Place your order for $42?") is judged as the click that would do it
+(packages/browser-extension/src/dialog-outward.ts) and waits for the person's yes. A dialog nobody
+answered within the 5 minutes Walnut answers itself the safe way (OK on an alert, Cancel on a
+confirm or prompt, Stay on a "Leave site?"), and the next `dialog` read says so
+(`walnut_answered`), so a tab is never left stuck.
+
+### Leaving a page: unsaved work and "Leave site?"
+
+One rule for `navigate`, `back` and `close` (packages/browser-extension/src/agent-leave.ts), so an
+agent never loses a page's work without deciding to and never hangs on a dialog it cannot see:
+
+1. Work the page holds that leaving would lose stops the leave first with `unsaved_work`, naming it
+   (packages/browser-extension/src/page-unsaved.ts): a text box or editor typed into since the page
+   loaded that still holds a draft of 20 characters or more (one-line fields, search boxes and
+   passwords never count, a sent form no longer does, a value a script set never does), and a file
+   field whose files were chosen. `discard: true` (`--discard`) leaves anyway.
+2. The leave runs with the debugger watching, so the page's own "Leave site?" comes back to the
+   agent at once (`dialog: { type: "beforeunload", message: "Leave site? Changes you made may not be
+   saved." }`) while the page stays as it is and the tab stays the agent's: `dialog dismiss` stays,
+   `dialog accept` leaves (the tab closes, or the next page loads, and the answer says so).
+   `discard: true` leaves without asking; a `close` with it closes the tab without running the
+   page's beforeunload at all (`Target.closeTarget`), which also closes a tab a dialog Walnut never
+   saw holds.
+3. A page held by a dialog Walnut never saw (or a hung page) answers `page_held` within 3 s, naming
+   `close {discard: true}` as the way out: the watch's `Page.enable` waits on such a dialog, so it
+   gets a deadline. A page whose script merely never loaded (a network error page) leaves as usual.
+4. The unsaved probe counts only input events since the page loaded, and forgets a field once its
+   form is sent or a Save, Send, Post or Submit button near it is clicked (pages that save with a
+   fetch send no submit); the answer says discard is safe when the work is already saved.
+
+Walnut's own tidy of a tab no agent holds closes it plainly first and, only if it is still there
+after 3 s (its "Leave site?" up), without its beforeunload; a tab it could not close stays listed
+for the next pass. The watch follows the default real input's rules: never in a tab of the
+person's, nor while their Cancel on Chrome's debugging bar is fresh.
+
+Before 2026-11-17 a close waited on `chrome.tabs.remove`, which never ends while the page's "Leave
+site?" is up: the server gave up after 30 s with a 504 that said nothing of a dialog, and the close
+had already let the tab go, so it read as the person's. Every close the extension makes goes
+through packages/browser-extension/src/tab-close.ts, which never waits on that dialog (ratchet:
+tests/core/browser-control/extension-tab-close.test.ts); only the agent's own watched close waits on
+its tab. A dialog shows in the tab it belongs to, in Walnut's agent window, which is never a window
+the person uses (agent-window-own.ts): nothing here brings it in front of them or takes focus.
+
+A dialog no debugger holds any more because the debugger let go of the tab (the person cancelled
+Chrome's debugging bar, a recording stopped as the tab was given back) cannot be answered by
+Walnut: Chrome never hands it to a debugger again. Walnut keeps it marked, and every action that
+needs the page answers `dialog_open` with `only_person` (after a quick look whether the page
+answers again) until the dialog closes or the tab loads another page or closes; `close {discard:
+true}` closes it. A page action without trusted in a tab that does not record cannot see its
+dialog at all: the page stops answering and the action times out (`page_not_ready`), and the
+next leave answers `page_held` (packages/browser-extension/src/agent-dialog.ts).
 
 ### Older extensions
 

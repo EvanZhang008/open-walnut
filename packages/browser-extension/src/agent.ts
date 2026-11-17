@@ -20,7 +20,7 @@ import { buildOf } from './self-update'
 import { siteKey } from '../../../src/core/vault/url-match'
 import { pageCheck, reachPage } from './page-reach'
 import {
-  AgentError, WALNUT_PAGE, agentTabs, agentWindowId, agentsOffCount, allowFor, checkPage, forgetTampered, loaded, mark, newGrant, noteAgentsOff, noteFilled, ownTab, personsTab, reached, sleep, tabLoading, tamperedNow, walnutCheck, where,
+  AgentError, WALNUT_PAGE, agentTabs, agentsOffCount, allowFor, checkPage, forgetTampered, loaded, mark, newGrant, noteAgentsOff, noteFilled, ownTab, personsTab, reached, sleep, tabLoading, tamperedNow, walnutCheck, where,
   type AgentTab, type WireCommand,
 } from './agent-shared'
 import { PAGE_OPS, pageOp, watchOpened } from './agent-page'
@@ -39,11 +39,13 @@ import { reveal } from './agent-reveal'
 import { openGrant, watchGrantClose } from './grant-open'
 import { NET_OPS, netAct, startRecording, stopRecording } from './agent-net'
 import { watchMedia } from './agent-media'
-import { noteGroupUse, setGroupBusy, ungroupBeforeClose, type GroupApi } from './agent-groups'
+import { noteGroupUse, setGroupBusy, type GroupApi } from './agent-groups'
 import { forgetAgentMade, noteAgentMade, tidyLeftovers } from './agent-tidy'
 import { restoreLeftPersonTabs } from './agent-groups-person'
 import { keptReady, startKeep } from './agent-keep'
 import { refuseWhileDialog } from './agent-dialog'
+import { backAct, closeAct, navigateAct } from './agent-leave'
+import { closeTab } from './tab-close'
 import { inTurn, STALE_MS } from './tab-turn'
 import { replayStep } from './agent-replay'
 
@@ -197,7 +199,7 @@ async function act(cmd: WireCommand): Promise<unknown> {
       // What loaded may be Walnut itself under another address (its tunnel, a host's own server).
       if ((await pageCheck(t.id))?.walnut) {
         await agentTabs.delete(t.id)
-        await ext.tabs.remove(t.id).catch(() => undefined)
+        await closeTab(t.id)
         throw new AgentError(WALNUT_PAGE, 'walnut_page')
       }
       await mark(t.id, true, who)
@@ -213,68 +215,10 @@ async function act(cmd: WireCommand): Promise<unknown> {
         throw new AgentError(err instanceof Error ? err.message : String(err), (err as { code?: string }).code ?? 'resize_failed')
       }
     }
-    case 'navigate': {
-      const { tabId, tab } = await ownTab(a)
-      const url = String(a.url ?? '')
-      await checkPage(c.allow, url)
-      await checkPage(c.allow, tab.url ?? '')
-      await ext.tabs.update(tabId, { url })
-      await sleep(100)
-      await loaded(tabId)
-      return where(tabId)
-    }
-    case 'back': {
-      const { tabId, tab } = await ownTab(a)
-      const went = await ext.tabs.goBack(tabId).then(() => true, () => false)
-      if (!went) {
-        // Chrome skips, on Back, a page that moved on without a person's gesture (an agent's
-        // click is not one): go to the address before this one in the tab's own list.
-        const rec = await agentTabs.get(tabId)
-        const list = rec?.history ?? []
-        const i = list.lastIndexOf(tab.url ?? '')
-        const prev = i > 0 ? list[i - 1] : undefined
-        if (!prev) throw new AgentError('There is no page to go back to.', 'no_history')
-        await checkPage(c.allow, prev)
-        await agentTabs.update(tabId, (r) => ({ ...r, history: list.slice(0, i) }))
-        await ext.tabs.update(tabId, { url: prev })
-      }
-      await sleep(100)
-      await loaded(tabId)
-      return where(tabId)
-    }
-    case 'close': {
-      const { tabId, tab, rec } = await ownTab(a)
-      if (a.tidy === true) {
-        // Walnut's tidy-up of a finished task (browser-tab-tidy.ts): only that task's holding, and
-        // never under the person's eyes or in their own window (there it is only let go).
-        if (typeof a.owner === 'string' && rec.owner !== a.owner) throw new AgentError('That tab is another task\'s now.', 'not_your_tab')
-        const w = await ext.windows.get(tab.windowId!).catch(() => null) as { focused?: boolean } | null
-        if (tab.active && w?.focused) return { tab: tabId, closed: false, kept: 'person_looking' }
-        if (tab.windowId !== await agentWindowId() && !personsTab(rec)) {
-          await agentTabs.delete(tabId)
-          await stopRecording(tabId)
-          await mark(tabId, false)
-          await forgetAgentMade(tabId)
-          return { tab: tabId, closed: false, released: true }
-        }
-      }
-      // An agent's tab left in front of a window of the person's (agent-window-own.ts gave that
-      // window up with it there): closing it would change what their window shows, so it is only let go.
-      if (tab.active && !personsTab(rec) && tab.windowId !== await agentWindowId()) {
-        await agentTabs.delete(tabId)
-        await stopRecording(tabId)
-        await mark(tabId, false)
-        await forgetAgentMade(tabId)
-        return { tab: tabId, closed: false, released: true, kept: 'person_window_front' }
-      }
-      await agentTabs.delete(tabId)
-      await stopRecording(tabId)
-      // The person's own tab is given back, never closed.
-      if (personsTab(rec)) { await mark(tabId, false); return { tab: tabId, closed: false, released: true } }
-      await ungroupBeforeClose(ext as unknown as GroupApi, tabId)
-      await ext.tabs.remove(tabId).catch(() => undefined)
-      return { tab: tabId, closed: true }
-    }
+    // Leaving a page: what it would lose and its "Leave site?" go to the agent (agent-leave.ts).
+    case 'navigate': return navigateAct(c)
+    case 'back': return backAct(c)
+    case 'close': return closeAct(c)
     case 'screenshot': case 'zoom': {
       const { tabId, tab, rec } = await ownTab(a)
       return screenshot(c, tabId, tab, rec)

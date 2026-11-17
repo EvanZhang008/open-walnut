@@ -44,11 +44,11 @@ export async function run<T>(tabId: number, owner: string, work: (send: Send) =>
  * A step that may open a dialog (agent-dialog.ts): its dialog, if one opened, else nothing. A
  * dialog stops the step where it is; `onInterrupt` puts right what it left half done.
  */
-export async function watched(tabId: number, owner: string, work: (send: Send) => Promise<unknown>, onInterrupt?: OnInterrupt, opts: { taint?: boolean } = {}): Promise<DialogInfo | undefined> {
+export async function watched(tabId: number, owner: string, work: (send: Send) => Promise<unknown>, onInterrupt?: OnInterrupt, opts: { taint?: boolean; enableMs?: number } = {}): Promise<DialogInfo | undefined> {
   if (opts.taint !== false) await noteTampered(tabId, owner)
   await cancelKnown()
   try {
-    const r = await runWatching(tabId, work, onInterrupt, { linger: lingersIn(tabId) })
+    const r = await runWatching(tabId, work, onInterrupt, { linger: lingersIn(tabId), ...(opts.enableMs !== undefined ? { enableMs: opts.enableMs } : {}) })
     return 'dialog' in r ? r.dialog : undefined
   } catch (err) {
     if (err instanceof CdpError) throw new AgentError(err.message, err.code)

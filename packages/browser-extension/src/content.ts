@@ -33,6 +33,7 @@ import { closeMenu, focusMoved, hideIcon, menu, onFieldKey, openingFor, openMenu
 import { fillCode, fillLogin, fillNewPassword, fillWalletForm } from './content-fill'
 import * as pageAgent from './page-agent'
 import { runPageOp } from './page-ops'
+import { watchUnsaved } from './page-unsaved'
 import { pageDigest } from './page-probe'
 import { cursorMask, cursorOff, listenCursor } from './page-cursor'
 import { wayMaker } from './mark-way'
@@ -560,6 +561,8 @@ ext.storage.onChanged.addListener((changes, area) => {
 // Password fields as the page first draws them, and any focused later: one shown as text stays a secret.
 pageAgent.notePasswords()
 addEventListener('focusin', (e) => pageAgent.notePassword(e.target), true)
+// What an agent leaving the page would lose is known from the page's start (page-unsaved.ts).
+watchUnsaved()
 start()
 initPageBrowserKey(isWalnutApp, live)
 // Back from the back/forward cache: no script runs again, so this page registers its frame anew.
