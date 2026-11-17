@@ -22,6 +22,7 @@ import { createHash } from 'node:crypto'
 import { log } from '../../logging/index.js'
 import type { Task } from '../types.js'
 import { linkLabel } from '../link-tags.js'
+import { watchablePrUrls } from '../pull-requests/model.js'
 import { followTaskLinks, sendTaskNews, taskNewsTarget } from '../task-news.js'
 import { changeSettled, taskChangeLinks, type ChangeLink, type ChangeSnapshot } from './model.js'
 import { changeProviderFor, type ChangeReadResult, type RegisteredChangeProvider } from './registry.js'
@@ -175,7 +176,10 @@ async function tickOnce(deps: ChangeWatchDeps, opts: ChangeTickOptions): Promise
       if (!(opts.force || opts.forceUrls?.has(link.url) || (at !== null && at <= now))) continue
       let set = due.get(provider)
       if (!set) { set = new Map(); due.set(provider, set) }
-      if (!set.has(link.url)) set.set(link.url, { ...link, ...(snap ? { prev: snap } : {}), ...(task.pr_status?.[link.url] ? { pr: task.pr_status[link.url] } : {}) })
+      // The pull request watch keys its snapshot by the canonical URL; any task that has one lends it.
+      const pr = task.pr_status?.[link.url] ?? task.pr_status?.[watchablePrUrls([`pr:${link.url}`])[0] ?? '']
+      const held = set.get(link.url)
+      if (!held || (pr && !held.pr)) set.set(link.url, { ...link, ...(snap ? { prev: snap } : {}), ...(pr ? { pr } : {}) })
     }
   }
 

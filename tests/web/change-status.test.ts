@@ -14,7 +14,7 @@ vi.mock('@/hooks/useMenuPlacement', () => ({
 const apiGet = vi.fn();
 const apiPost = vi.fn();
 vi.mock('@/api/client', () => ({ apiGet: (...a: unknown[]) => apiGet(...a), apiPost: (...a: unknown[]) => apiPost(...a) }));
-const { stageRows, changeOfTag, reviewFacts, FOLD_RUN } = await import('../../web/src/components/tasks/change-status');
+const { stageRows, changeOfTag, reviewFacts, changeHeadline, deployCounts, stageTime, trackGroups, FOLD_AT } = await import('../../web/src/components/tasks/change-status');
 const { ChangePill } = await import('../../web/src/components/tasks/ChangePill');
 
 const URL_CR = 'https://review.acme.dev/CR-1001';
@@ -48,26 +48,78 @@ describe('change-status rules', () => {
     expect(changeOfTag({ id: 't', change_status: { [URL_CR]: snap } }, 'cr:CR-1001')).toBeUndefined();
   });
 
-  it('folds a run of more than FOLD_RUN stages not reached, keeping the next stage', () => {
-    const rows = stageRows(pipeline());
-    expect(rows.map((r) => r.kind === 'stage' ? r.stage.name : `fold:${r.stages.length}`)).toEqual(['beta-w1', 'prod-w1', 'prod-w2', 'fold:8']);
+  it('never gives a GitHub pull request a change pill: the pull request pill shows it', () => {
+    const pr = 'https://github.com/acme/app/pull/41';
+    expect(changeOfTag({ id: 't', change_status: { [pr]: snapshot({ url: pr }) } }, `pr:${pr}`)).toBeUndefined();
+  });
+
+  it('keeps the stages that ask for a look and folds every other run of two or more', () => {
+    const rows = stageRows(pipeline(), 'prod-w1');
+    expect(rows.map((r) => r.kind === 'stage' ? r.stage.name : `fold:${r.status}:${r.stages.length}`)).toEqual(['beta-w1', 'prod-w1', 'prod-w2', 'fold:pending:8']);
     // Opened, the fold draws its stages again.
     const fold = rows.at(-1)!;
     expect(fold.kind).toBe('fold');
-    const opened = stageRows(pipeline(), new Set([fold.kind === 'fold' ? fold.from : -1]));
-    expect(opened).toHaveLength(11);
-    expect(opened.every((r) => r.kind === 'stage')).toBe(true);
+    const opened = stageRows(pipeline(), 'prod-w1', new Set([fold.kind === 'fold' ? fold.stages[0]!.name : '']));
+    // An opened fold leads with the row that folds it again.
+    expect(opened.map((r) => r.kind === 'stage' ? r.stage.name : `${r.kind}:${r.status}`).slice(0, 5)).toEqual(['beta-w1', 'prod-w1', 'prod-w2', 'hide:pending', 'prod-w3']);
+    expect(opened.filter((r) => r.kind === 'stage')).toHaveLength(11);
   });
 
-  it('keeps a run of FOLD_RUN or fewer whole', () => {
-    const stages = [st('a', 'done'), ...Array.from({ length: FOLD_RUN }, (_, i) => st(`p${i}`, 'pending')), st('z', 'done')];
+  it('folds runs of deployed stages too, around a stuck one (a long real pipeline)', () => {
+    const stages = [
+      ...Array.from({ length: 5 }, (_, i) => st(`build-w${i}`, 'done')),
+      st('build-w5', 'blocked', { blocker: { kind: 'failure', text: 'Deployment failed for target c03' } }),
+      st('build-w6', 'pending'),
+      ...Array.from({ length: 5 }, (_, i) => st(`beta-w${i}`, 'done')),
+      st('prod-w1', 'done', { prod: true }),
+      st('prod-w2', 'waiting', { prod: true, blocker: { kind: 'window', text: 'Waits for the working hours window', until: '2026-11-17T16:00:00Z' } }),
+      ...Array.from({ length: 14 }, (_, i) => st(`prod-w${i + 3}`, 'pending', { prod: true })),
+    ];
+    const rows = stageRows(stages, 'prod-w1');
+    expect(rows.map((r) => r.kind === 'stage' ? r.stage.name : `fold:${r.status}:${r.stages.length}`))
+      .toEqual(['fold:done:5', 'build-w5', 'build-w6', 'fold:done:5', 'prod-w1', 'prod-w2', 'fold:pending:14']);
+    expect(deployCounts({ stages, last: 'prod-w1' })).toEqual({ done: 11, total: 28, last: 'prod-w1' });
+  });
+
+  it('groups a long track by the first word of its stage names, and a short or flat one not at all', () => {
+    const names = ['GlobalTargets', 'build-a', 'build-b', 'build-c', 'beta-w0', 'beta-w1', 'prod-w1', 'prod-w2', 'prod-w3'];
+    expect(trackGroups(names.map((n) => st(n, 'pending')))).toEqual([
+      { label: 'GlobalTargets', from: 0, size: 1 }, { label: 'build', from: 1, size: 3 }, { label: 'beta', from: 4, size: 2 }, { label: 'prod', from: 6, size: 3 },
+    ]);
+    expect(trackGroups(['a-1', 'b-1'].map((n) => st(n, 'done')))).toEqual([]);
+    expect(trackGroups(Array.from({ length: 12 }, (_, i) => st(`env${i}`, 'done')))).toEqual([]);
+  });
+
+  it(`keeps a pipeline of fewer than FOLD_AT stages whole`, () => {
+    const stages = [st('a', 'done'), ...Array.from({ length: FOLD_AT - 2 }, (_, i) => st(`p${i}`, 'pending'))];
     expect(stageRows(stages).every((r) => r.kind === 'stage')).toBe(true);
   });
 
   it('says the review facts it has, leaving out the rest', () => {
     expect(reviewFacts({ state: 'open', revision: 1, approvals: { got: 0, need: 1 }, checks: { passed: 3, failed: 1, pending: 0 } }))
-      .toEqual(['Revision 1', '0/1 approvals', 'Checks: 3 passed, 1 failed']);
+      .toEqual(['0/1 approvals', '1 of 4 checks failed']);
+    expect(reviewFacts({ state: 'open', revision: 3, checks: { passed: 7, failed: 0, pending: 0 } })).toEqual(['7 checks passed', 'Revision 3']);
     expect(reviewFacts({ state: 'open' })).toEqual([]);
+  });
+
+  it('heads the card with where it stands, what holds it and who moves next', () => {
+    const now = Date.parse('2026-11-17T09:00:00Z');
+    const stuck = snapshot({ deploy: { pipeline: 'p', done: false, last: 'prod-w1', stages: [
+      st('build-w2', 'blocked', { blocker: { kind: 'failure', text: 'Deployment failed for target c03' } }),
+      st('prod-w1', 'done'),
+      st('prod-w2', 'waiting', { blocker: { kind: 'window', text: 'Waits for the working hours window', until: '2026-11-17T16:00:00Z' } }),
+    ] } });
+    expect(changeHeadline(stuck, now)).toEqual({
+      tone: 'blocked', title: 'Stuck at build-w2', detail: 'Deployment failed for target c03', stage: 'build-w2',
+      next: { person: true, text: 'Needs someone to look' },
+      also: [`prod-w2: Waits for the working hours window, opens ${stageTime('2026-11-17T16:00:00Z', now)} (in 7 h)`],
+    });
+    const baking = changeHeadline(snapshot(), now);
+    expect(baking.title).toBe('Baking at prod-w1');
+    expect(baking.next).toEqual({ person: false, text: 'Moves on by itself' });
+    expect(changeHeadline(snapshot({ deploy: undefined, review: { state: 'open', approvals: { got: 0, need: 1 }, waitingOn: 'team approval needs 1' } }), now))
+      .toEqual({ tone: 'waiting', title: 'Waiting for 1 more approval', also: [] });
+    expect(changeHeadline(snapshot({ deploy: { pipeline: 'p', done: true, stages: [st('a', 'done'), st('b', 'done')] } }), now).title).toBe('Deployed to all 2 stages');
   });
 });
 
@@ -112,12 +164,14 @@ describe('the change pill and its card', () => {
     expect(c.querySelector('[data-testid="change-card-facts"]')!.textContent).toContain('1/1 approvals');
     expect([...c.querySelectorAll('[data-testid="change-stage"]')].map((r) => r.getAttribute('data-stage'))).toEqual(['beta-w1', 'prod-w1', 'prod-w2']);
     const fold = c.querySelector('[data-testid="change-stage-fold"]')!;
-    expect(fold.textContent).toContain('8 more stages');
+    expect(fold.textContent).toContain('8 not reached');
+    expect(c.querySelector('[data-testid="change-card-now"]')!.textContent).toContain('Baking at prod-w1');
+    expect(c.querySelector('[data-testid="change-deploy-count"]')!.textContent).toBe('1 of 11 deployed');
     await click(fold);
     expect(c.querySelectorAll('[data-testid="change-stage"]')).toHaveLength(11);
     expect(c.querySelector('[data-testid="change-card-open"]')!.getAttribute('href')).toBe(URL_CR);
     expect(c.querySelector('[data-testid="change-card-open-pipeline"]')!.getAttribute('href')).toBe('https://pipelines.acme.dev/acme-deployer');
-    expect(c.querySelector('[data-testid="change-card-read"]')!.textContent).toBe('read 2 min ago');
+    expect(c.querySelector('[data-testid="change-card-read"]')!.textContent).toBe('Read 2 min ago');
   });
 
   it('opens a stage with its steps, read live, and says a timeout in words', async () => {
@@ -128,7 +182,7 @@ describe('the change pill and its card', () => {
     expect(apiGet).toHaveBeenCalledWith('/api/tasks/task-1/changes/stage', { url: URL_CR, stage: 'prod-w1' }, expect.anything());
     await act(async () => { await Promise.resolve(); });
     const steps = [...card()!.querySelectorAll('[data-testid="change-stage-step"]')].map((s) => s.textContent);
-    expect(steps).toEqual(['✓Integration Test 6 passed', '…Bake Time']);
+    expect(steps).toEqual(['Integration Test6 passed', 'Bake Time']);
     expect(card()!.querySelector('.change-card-blocker')!.textContent).toContain('6 hours 59 minutes left');
 
     apiGet.mockResolvedValueOnce({ detail: null, error: 'timeout' });

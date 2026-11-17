@@ -40,8 +40,12 @@ export function ChangePill({ tag, snap, taskId, inline, linkName }: {
   const cardRef = useRef<HTMLDivElement>(null);
   const shown = fresh && fresh.checkedAt > snap.checkedAt ? fresh : snap;
   const { tone, text } = changePillState(shown);
+  // Inside the session header's tags list the card opens under the whole list, never over the
+  // other pills; elsewhere under the pill.
+  const listRef = useRef<HTMLElement | null>(null);
+  listRef.current = open ? pillRef.current?.closest<HTMLElement>('.session-header-labels-flyout') ?? null : null;
   const placement = useMenuPlacement(open, pillRef, cardRef, {
-    align: 'start', preferSide: 'down', minHeight: 160, onAnchorLost: () => setOpen(false),
+    align: 'start', preferSide: 'down', minHeight: 160, gap: 6, verticalAnchorRef: listRef, onAnchorLost: () => setOpen(false),
   });
 
   const close = useLeanCallback((restoreFocus: boolean) => {
@@ -101,7 +105,7 @@ export function ChangePill({ tag, snap, taskId, inline, linkName }: {
       {open && createPortal(
         <div
           ref={cardRef}
-          className="change-card"
+          className="change-card change-card-popover"
           role="dialog"
           aria-label={`${shown.label}: ${text}`}
           data-testid="change-card"

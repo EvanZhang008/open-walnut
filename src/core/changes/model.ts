@@ -161,7 +161,8 @@ export function changePillState(snap: Pick<ChangeSnapshot, 'review' | 'deploy' |
     if (review.state === 'approved') return { tone: 'done', text: 'Approved' }
     if (review.state === 'draft') return { tone: 'waiting', text: 'Draft' }
     const a = review.approvals
-    return { tone: 'running', text: a?.need ? `In review ${a.got}/${a.need}` : 'In review' }
+    // In review waits on a person, the reviewers: the same tone as any wait on someone.
+    return { tone: 'waiting', text: a?.need ? `In review ${a.got}/${a.need}` : 'In review' }
   }
   return { tone: 'unknown', text: 'No status' }
 }

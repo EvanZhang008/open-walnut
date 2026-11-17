@@ -29,7 +29,11 @@ import { useStoreTask } from '@/contexts/TasksContext';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { timeAgo } from '@/utils/time';
 import { log } from '@/utils/log';
+import { useExperimental } from '@/hooks/useExperimental';
+import type { ChangeSnapshot } from '../../../../src/core/changes/model';
+import { ChangeDeployView } from './ChangeDeployView';
 import '@/styles/pr-pill.css';
+import '@/styles/change-card.css';
 
 /** A pull request as the card has it: when it was last read, and last read without an error. */
 type CardPr = PrSnapshot & { lastReadAt?: string; lastGoodAt?: string };
@@ -54,6 +58,16 @@ function reopenFor(taskId: string): boolean {
   const at = openAtUnmount.get(taskId);
   openAtUnmount.delete(taskId);
   return at !== undefined && Date.now() - at < REOPEN_MS;
+}
+
+/** A pull request's change snapshot: keyed by its link tag's URL, which may differ from the
+ *  canonical one the pull request watch uses (`http://`, a capital in the host). */
+function changeOfPr(task: Task, url: string): ChangeSnapshot | undefined {
+  const status = task.change_status;
+  if (!status) return undefined;
+  if (status[url]) return status[url];
+  const key = Object.keys(status).find((k) => watchablePrUrls([`pr:${k}`])[0] === url);
+  return key ? status[key] : undefined;
 }
 
 /** The last answer per task, so a card opened again draws whole at once. */
@@ -164,8 +178,11 @@ function PrError({ error, seen }: { error: NonNullable<PrSnapshot['error']>; see
   );
 }
 
-function PrSection({ pr, alone, onComplete, completing, done, errorAbove, waitingOn, completeOn }: {
+function PrSection({ pr, alone, onComplete, completing, done, errorAbove, waitingOn, completeOn, change, taskId }: {
   pr: CardPr; alone: boolean; onComplete?: () => void; completing?: boolean;
+  /** Its deploy, once merged (experiment `change_status`, the change watcher's snapshot): the
+   *  same view a change link's card draws (ChangeDeployView.tsx), so a pull request reads once. */
+  change?: ChangeSnapshot; taskId: string;
   /** The task is complete. */
   done: boolean;
   /** The card says the read error once, above every pull request. */
@@ -273,6 +290,11 @@ function PrSection({ pr, alone, onComplete, completing, done, errorAbove, waitin
           Opened by {pr.author}, not by the GitHub account Walnut reads with, so it never wakes the agent or completes this task.
         </div>
       )}
+      {change?.deploy && (
+        <div className="change-card pr-card-deploy" data-testid="pr-card-deploy">
+          <ChangeDeployView deploy={change.deploy} taskId={taskId} url={pr.url} stale={!!change.error} />
+        </div>
+      )}
       {pr.state === 'merged' && pr.mine && !w?.mergeSeen && !w?.completedAt && (
         <div className="pr-card-note pr-card-muted" data-testid="pr-card-note">
           {done
@@ -333,6 +355,7 @@ export function PrPill({ task: given, className, compact = false }: { task: Task
   const live = useStoreTask(given.id);
   const task = live ?? given;
   const urls = watchablePrUrls(task.tags);
+  const changesOn = useExperimental('change_status');
   // A row that is drawn anew (it moves to another section when its session starts a turn)
   // mounts its pill anew: a card open on it a moment ago opens again on the new one rather than
   // vanish under the pointer. The new pill renders before the old one's cleanup runs, and the
@@ -435,6 +458,12 @@ export function PrPill({ task: given, className, compact = false }: { task: Task
       const next = await apiPost<PrView>(`/api/tasks/${encodeURIComponent(given.id)}/pull-requests/refresh`, {}, { timeoutMs: 90_000 });
       lastViews.set(given.id, next);
       setView(next);
+      // The deploy of a merged one is the change watcher's: read it now too (the snapshot arrives
+      // with task:updated). A failure there leaves the pull request's own answer standing.
+      if (changesOn && next.prs.some((p) => p.state === 'merged')) {
+        void apiPost(`/api/tasks/${encodeURIComponent(given.id)}/changes/refresh`, {}, { timeoutMs: 30_000 })
+          .catch((err: unknown) => log.warn('tasks', 'change refresh after a pull request refresh failed', { taskId: given.id, error: String(err) }));
+      }
     } catch (err) {
       setFailure('Could not read GitHub just now. Try again in a moment.');
       log.warn('tasks', 'pull request refresh failed', { taskId: given.id, error: String(err) });
@@ -582,6 +611,7 @@ export function PrPill({ task: given, className, compact = false }: { task: Task
               {sharedError && <PrError error={sharedError} seen={cardPrs.map((p) => p.lastGoodAt ?? p.checkedAt).filter((x): x is string => !!x).sort().at(-1)} />}
               {cardPrs.map((pr) => (
                 <PrSection key={pr.url} pr={pr} alone={cardPrs.length === 1} done={task.phase === 'COMPLETE'} errorAbove={!!sharedError}
+                  taskId={task.id} change={changesOn ? changeOfPr(task, pr.url) : undefined}
                   waitingOn={cardPrs.filter((p) => p.url !== pr.url && p.state === 'open').map((p) => p.number)} completeOn={completeOn}
                   onComplete={() => void completeNow()} completing={busy === 'complete'} />
               ))}

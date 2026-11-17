@@ -1,13 +1,16 @@
 /**
  * Change status in link tags (experiment `change_status`; web ChangePill.tsx, ChangeCard.tsx):
  *   - off, a change link pill is the plain link it always was;
- *   - on (switched while the page is open), the session header's change pills read their status
- *     after the name, a dot in its tone (`CR-1001 · prod-w1 baking`, `app#41 · In review 0/1`);
- *   - a click opens the card instead of the link: the review, every stage of the pipeline with
- *     the long run not reached folded into one row that opens on a click, Open review and Open
- *     pipeline, when it was read;
- *   - a click on a stage reads its steps and blockers (the stage route is stubbed: the fixture has
- *     no provider for the review service), and Escape closes the card first, then the tags list.
+ *   - on (switched while the page is open), the session header's change pill reads its status
+ *     after the name, a dot in its tone (`CR-1001 · prod-w1 baking`); a GitHub pull request stays
+ *     the plain link, since its own pull request pill on the title row shows it;
+ *   - a click opens the card under the tags list instead of the link: the review, what to read
+ *     first (where it stands and who moves next), the track and the stages that ask for a look,
+ *     the runs of deployed and not-reached stages folded into rows that open on a click, the way
+ *     out, when it was read;
+ *   - a click on a stage, or on its segment of the track, reads its steps and blockers (the stage
+ *     route is stubbed: the fixture has no provider for the review service), and Escape closes the
+ *     card first, then the tags list.
  *
  * The fixture task `pw-task-changes` (test-server.ts) holds the links and the watcher's snapshots.
  */
@@ -115,8 +118,9 @@ test('change link pills read their status, and the card opens a stage', async ({
   await expect(crPill).toHaveText('CR-1001 · prod-w1 baking')
   await expect(crPill).toHaveAttribute('data-tone', 'waiting')
   await expect(crPill).toHaveAttribute('role', 'button')
-  await expect(prPill).toHaveText('app#41 · In review 0/1')
-  await expect(prPill).toHaveAttribute('data-tone', 'running')
+  await expect(prPill).toHaveText('app#41')
+  expect(await prPill.evaluate((el) => el.tagName)).toBe('A')
+  await expect(prPill.locator('[data-testid="change-pill-status"]')).toHaveCount(0)
   await shot(page, 'pills', flyout)
 
   // A click opens the card, not the link.
@@ -128,28 +132,43 @@ test('change link pills read their status, and the card opens a stage', async ({
   await expect(card.locator('[data-testid="change-card-state"]')).toHaveText('Merged')
   await expect(card.locator('[data-testid="change-card-title"]')).toHaveText('Move the controller onto the new instance type')
   await expect(card.locator('[data-testid="change-card-facts"]')).toContainText('1/1 approvals')
-  await expect(card.locator('[data-testid="change-card-facts"]')).toContainText('Checks: 4 passed')
+  await expect(card.locator('[data-testid="change-card-facts"]')).toContainText('4 checks passed')
+  await expect(card.locator('[data-testid="change-card-now"]')).toContainText('Baking at prod-w1')
+  await expect(card.locator('[data-testid="change-card-next"]')).toHaveText('Moves on by itself')
+  await expect(card.locator('[data-testid="change-deploy-count"]')).toHaveText('2 of 12 deployed')
+  await expect(card.locator('[data-testid="change-track"] button')).toHaveCount(12)
   const stages = card.locator('[data-testid="change-stage"]')
-  await expect(stages).toHaveCount(4)
-  await expect(stages.nth(2)).toContainText('Bake Time: 6 hours 59 minutes left')
+  await expect(stages).toHaveCount(2)
+  await expect(stages.first()).toContainText('Baking')
+  await expect(stages.first().locator('button')).toHaveAttribute('title', 'Bake Time: 6 hours 59 minutes left')
   const fold = card.locator('[data-testid="change-stage-fold"]')
-  await expect(fold).toContainText('8 more stages')
+  await expect(fold).toHaveCount(2)
+  await expect(fold.first()).toContainText('2 deployed')
+  await expect(fold.last()).toContainText('8 not reached')
   await expect(card.locator('[data-testid="change-card-open"]')).toHaveAttribute('href', 'https://review.acme.dev/CR-1001')
   await expect(card.locator('[data-testid="change-card-open-pipeline"]')).toHaveAttribute('href', 'https://pipelines.acme.dev/acme-deployer')
-  await expect(card.locator('[data-testid="change-card-read"]')).toHaveText('read 2 min ago')
+  await expect(card.locator('[data-testid="change-card-read"]')).toHaveText('Read 2 min ago')
   // A full commit hash (what a provider stores) reads short, the whole one on hover.
   await expect(card.locator('.change-card-commit')).toHaveText('a1b2c3d')
   await expect(card.locator('.change-card-commit')).toHaveAttribute('title', 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678')
-  // Inside the window, never over its edge.
+  // Under the tags list (never over its other pills), inside the window.
   const box = (await card.boundingBox())!
+  const list = (await flyout.boundingBox())!
+  expect(box.y).toBeGreaterThanOrEqual(list.y + list.height)
   expect(box.x).toBeGreaterThanOrEqual(0)
   expect(box.y + box.height).toBeLessThanOrEqual(900)
   await shot(page, 'card', card)
 
-  // The fold opens on a click.
-  await fold.click()
+  // The folds open on a click.
+  await fold.first().click()
+  await expect(fold).toHaveCount(1)
+  await fold.first().click()
   await expect(fold).toHaveCount(0)
   await expect(stages).toHaveCount(12)
+  // An opened run folds again from its first row.
+  await card.locator('[data-testid="change-stage-hide"]').first().click()
+  await expect(fold).toHaveCount(1)
+  await expect(stages).toHaveCount(10)
 
   // A stage opens its steps and blockers, read live.
   await card.locator('[data-stage="prod-w1"] > button').click()
@@ -157,7 +176,7 @@ test('change link pills read their status, and the card opens a stage', async ({
   await expect(detail).toBeVisible()
   await expect(detail.locator('[data-testid="change-stage-step"]')).toHaveCount(2)
   await expect(detail.locator('[data-testid="change-stage-step"]').first()).toContainText('Integration Test prod-c01')
-  await expect(detail.locator('[data-testid="change-stage-step"]').first().locator('a')).toHaveAttribute('href', 'https://tests.acme.dev/run/1')
+  await expect(detail.locator('[data-testid="change-stage-step"] .change-card-step-name').first()).toHaveAttribute('title', 'https://tests.acme.dev/run/1')
   await expect(detail.locator('.change-card-blocker')).toContainText('6 hours 59 minutes left')
   expect(stageAsks).toEqual(['https://review.acme.dev/CR-1001|prod-w1'])
   await shot(page, 'stage', card)
@@ -176,13 +195,13 @@ test('change link pills read their status, and the card opens a stage', async ({
   await expect(openLabelsFlyout(panel)).toHaveCount(0)
   await expect(headerLabelsButton(panel)).toHaveAttribute('aria-expanded', 'false')
 
-  // The other pill's card, closed by a press outside.
+  // A segment of the track opens its stage; a press outside closes the card, not the list.
   await openHeaderLabels(panel)
-  await prPill.click()
+  await crPill.click()
   await expect(card).toBeVisible()
-  await expect(card.locator('[data-testid="change-card-state"]')).toHaveText('In review')
-  await expect(card.locator('[data-testid="change-card-waiting"]')).toHaveText('Waiting on team approval needs 1')
-  await expect(card).toContainText('Deploy starts once it is merged.')
+  await card.locator('[data-testid="change-track"] button').nth(6).click()
+  await expect(card.locator('[data-stage="prod-w5"] [data-testid="change-stage-detail"]')).toBeVisible()
+  expect(stageAsks.at(-1)).toBe('https://review.acme.dev/CR-1001|prod-w5')
   await flyout.click({ position: { x: 3, y: 3 } })
   await expect(card).toHaveCount(0)
   await expect(flyout).toHaveCount(1)

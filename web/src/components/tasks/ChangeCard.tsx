@@ -1,15 +1,19 @@
 /**
- * A change link's status card (ChangePill.tsx opens it): the review on top (its state, title,
- * revision, approvals, checks and what holds it), then the deploy, one row per pipeline stage
- * (ChangeStageRows.tsx), then the way out (the review and the pipeline, opened in a new tab),
- * when it was read and Refresh. Drawn from the generic shape alone (src/core/changes/model.ts):
- * the card knows no service.
+ * A change link's status card (ChangePill.tsx opens it), read top down:
+ *   head      the change's name, its review state and facts, its title
+ *   now       the one thing to read first (change-status.ts changeHeadline): where it stands, what
+ *             holds it, and who moves it next (a person, or time), with the other stages that ask
+ *             for a look under it
+ *   deploy    the pipeline, its track and its stages (ChangeDeployView.tsx)
+ *   foot      when it was read, Refresh, and the ways out (the review, the pipeline)
+ * Drawn from the generic shape alone (src/core/changes/model.ts): the card knows no service.
  */
+import { useState } from 'react';
 import type { ChangeSnapshot } from '../../../../src/core/changes/model';
-import { changePillState } from '../../../../src/core/changes/model';
 import { timeAgo } from '@/utils/time';
-import { ChangeStageRows } from './ChangeStageRows';
-import { REVIEW_TONES, REVIEW_WORDS, reviewFacts } from './change-status';
+import { ChangeDeployView } from './ChangeDeployView';
+import { OutIcon } from './ChangeIcons';
+import { REVIEW_TONES, REVIEW_WORDS, changeHeadline, reviewFacts } from './change-status';
 
 const ERROR_WORDS: Record<NonNullable<ChangeSnapshot['error']>['code'], string> = {
   'signed-out': 'Walnut is signed out of this service.',
@@ -18,54 +22,80 @@ const ERROR_WORDS: Record<NonNullable<ChangeSnapshot['error']>['code'], string> 
   failed: 'The last read failed.',
 };
 
+/** A read older than this says so: the watcher reads a moving change every 10 to 15 minutes, so
+ *  half an hour means it missed two reads. */
+const STALE_MS = 30 * 60_000;
+
 export function ChangeCard({ snap, taskId, refreshing, refreshError, onRefresh }: {
   snap: ChangeSnapshot; taskId: string; refreshing: boolean; refreshError: string | null; onRefresh(): void;
 }) {
   const { review, deploy } = snap;
-  const headTone = review ? REVIEW_TONES[review.state] : changePillState(snap).tone;
+  const now = changeHeadline(snap);
+  const [focus, setFocus] = useState<{ stage: string; ask: number } | undefined>();
+  const stale = !!snap.checkedAt && Date.now() - Date.parse(snap.checkedAt) > STALE_MS;
+  const facts = review ? reviewFacts(review) : [];
+  if (review?.approvedBy?.length) facts.push(`by ${review.approvedBy.join(', ')}`);
   return (
     <>
-      <div className="change-card-head">
-        <span className="change-card-label">{snap.label}</span>
-        {review && <span className="change-card-badge" data-tone={headTone} data-testid="change-card-state">{REVIEW_WORDS[review.state]}</span>}
-      </div>
-      {snap.title && <div className="change-card-title" data-testid="change-card-title">{snap.title}</div>}
-      {review && (
-        <div className="change-card-facts" data-testid="change-card-facts">
-          {reviewFacts(review).map((fact) => <span key={fact} className="change-card-fact">{fact}</span>)}
-          {review.approvedBy?.length ? <span className="change-card-fact">Approved by {review.approvedBy.join(', ')}</span> : null}
+      <header className="change-card-head">
+        {snap.title && <div className="change-card-title" data-testid="change-card-title" title={snap.title}>{snap.title}</div>}
+        <div className="change-card-head-line">
+          <a className="change-card-label" href={snap.url} target="_blank" rel="noopener noreferrer" title="Open the review">{snap.label}</a>
+          {review && <span className="change-card-state" data-tone={REVIEW_TONES[review.state]} data-testid="change-card-state">{REVIEW_WORDS[review.state]}</span>}
+          {facts.length > 0 && <span className="change-card-facts" data-testid="change-card-facts">{facts.join(' · ')}</span>}
         </div>
-      )}
-      {review?.waitingOn && <div className="change-card-waiting" data-testid="change-card-waiting">Waiting on {review.waitingOn}</div>}
+      </header>
+
       {snap.error && (
         <div className="change-card-error" role="status" data-testid="change-card-error">
           {ERROR_WORDS[snap.error.code]} {snap.error.message}
           {snap.checkedAt && <> Below is what it showed {timeAgo(snap.checkedAt, { long: true })}.</>}
         </div>
       )}
-      {!snap.checkedAt && !snap.error && <div className="change-card-muted">Not read yet.</div>}
-      {deploy ? (
-        <section className="change-card-deploy" data-stale={snap.error ? 'true' : undefined}>
-          <div className="change-card-deploy-head">
-            <span className="change-card-deploy-name">{deploy.pipeline}</span>
-            {deploy.commit && <code className="change-card-commit" title={deploy.commit}>{deploy.commit.slice(0, 7)}</code>}
-            <span className="change-card-muted">{deploy.stages.length} {deploy.stages.length === 1 ? 'stage' : 'stages'}</span>
-          </div>
-          {deploy.stages.length > 0 && <ChangeStageRows stages={deploy.stages} taskId={taskId} url={snap.url} />}
+
+      {snap.checkedAt ? (
+        <section className="change-card-now" data-tone={now.tone} data-testid="change-card-now">
+          <div className="change-card-now-title">{now.title}</div>
+          {now.detail && <div className="change-card-now-detail" data-testid="change-card-now-detail">{now.detail}</div>}
+          {now.next && (
+            <div className="change-card-next-row">
+              <span className="change-card-next" data-person={now.next.person ? 'true' : undefined} data-testid="change-card-next">{now.next.text}</span>
+              {now.stage && now.next.person && deploy && (
+                <button type="button" className="change-card-action" data-testid="change-card-look" onClick={() => setFocus((f) => ({ stage: now.stage!, ask: (f?.ask ?? 0) + 1 }))}>
+                  Open {now.stage}
+                </button>
+              )}
+            </div>
+          )}
+          {!deploy && review && review.state !== 'closed' && review.state !== 'merged' && (
+            <div className="change-card-next-row">
+              <span className="change-card-now-sub">Deploy starts once it is merged</span>
+              <a className="change-card-action" href={snap.url} target="_blank" rel="noopener noreferrer" data-testid="change-card-open-review">Open review <OutIcon /></a>
+            </div>
+          )}
+          {now.also.length > 0 && (
+            <div className="change-card-also">
+              <span className="change-card-also-label">Meanwhile</span>
+              <ul>{now.also.map((line) => <li key={line}>{line}</li>)}</ul>
+            </div>
+          )}
         </section>
-      ) : review && review.state !== 'closed' && review.state !== 'merged' ? (
-        <div className="change-card-muted change-card-deploy-none">Deploy starts once it is merged.</div>
-      ) : null}
-      <div className="change-card-foot">
-        <a href={snap.url} target="_blank" rel="noopener noreferrer" data-testid="change-card-open">Open review</a>
-        {deploy?.url && <a href={deploy.url} target="_blank" rel="noopener noreferrer" data-testid="change-card-open-pipeline">Open pipeline</a>}
-        <span className="change-card-muted change-card-read" data-testid="change-card-read">
-          {refreshError ?? (snap.checkedAt ? `read ${timeAgo(snap.checkedAt, { long: true })}` : '')}
+      ) : !snap.error && <div className="change-card-now change-card-muted">Not read yet</div>}
+
+      {deploy && <ChangeDeployView deploy={deploy} taskId={taskId} url={snap.url} stale={!!snap.error} focus={focus} now={now.stage} />}
+
+      <footer className="change-card-foot">
+        <span className="change-card-read" data-stale={stale ? 'true' : undefined} data-testid="change-card-read">
+          {refreshError ?? (snap.checkedAt ? `Read ${timeAgo(snap.checkedAt, { long: true })}` : '')}
         </span>
         <button type="button" className="change-card-refresh" data-testid="change-card-refresh" disabled={refreshing} onClick={onRefresh}>
           {refreshing ? 'Reading…' : 'Refresh'}
         </button>
-      </div>
+        <span className="change-card-links">
+          {deploy?.url && <a href={deploy.url} target="_blank" rel="noopener noreferrer" data-testid="change-card-open-pipeline">Pipeline <OutIcon /></a>}
+          {(deploy || review?.state === 'closed' || review?.state === 'merged') && <a href={snap.url} target="_blank" rel="noopener noreferrer" data-testid="change-card-open">Review <OutIcon /></a>}
+        </span>
+      </footer>
     </>
   );
 }
