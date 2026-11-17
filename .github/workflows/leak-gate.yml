@@ -87,7 +87,7 @@ jobs:
           elif [ "$EVENT" = push ] || [ -n "$COMMIT" ]; then
             # a new branch or tag, or a commit to check before main gets it: from the parent of
             # its oldest commit no branch holds
-            first=$(git rev-list --reverse --topo-order "$head" --not $(git for-each-ref --format='%(objectname)' refs/remotes/origin | grep -vx "$head" || true) | head -1)
+            first=$(git rev-list --reverse --topo-order "$head" --not $(git for-each-ref --format='%(objectname)' refs/remotes/origin | grep -vx "$head" || true) | sed -n 1p)
             if [ -z "$first" ]; then base=$head; elif git rev-parse -q --verify "$first^" >/dev/null; then base=$(git rev-parse "$first^"); else base=$zero; fi
           fi
           echo "head=$head" >> "$GITHUB_OUTPUT"
