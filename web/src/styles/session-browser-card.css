@@ -272,3 +272,21 @@
 .session-browser-replay-days { margin-top: 6px; color: var(--fg-muted); font-size: 11px; }
 /* The ended line above a replay: a gap between them. */
 .session-browser-card--ended + .session-browser-replay { margin-top: 10px; }
+
+/* Open in Chrome that could not open (BrowserRevealButton.tsx): its reason, small, beside it. */
+.session-browser-reveal-trouble {
+  font-size: 11px;
+  color: var(--error, #c0392b);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-browser-reveal-choices {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}

@@ -88,6 +88,8 @@ const tabOwners = new Map<string, string>()
 const tabSetAt = new Map<string, number>()
 /** When an agent last acted in each tab (the tidy-up closes a task's tabs it left unused). */
 const tabActedAt = new Map<string, number>()
+/** When the person last brought each tab up themselves (Open in Chrome): kept a while even for a finished task. */
+const tabPersonAt = new Map<string, number>()
 /**
  * Each holding of a tab, numbered: a new owner, or the same owner holding it again after a
  * release (the extension's `grant` in its reports tells a re-handover the hub never saw end), gets
@@ -186,6 +188,12 @@ export function noteActed(device: string, tabId: number, now = Date.now()): void
   if (tabOwners.has(k)) tabActedAt.set(k, now)
 }
 
+/** The person brought the tab up themselves just now (Open in Chrome). */
+export function notePersonOpened(device: string, tabId: number, now = Date.now()): void {
+  const k = `${device}:${tabId}`
+  if (tabOwners.has(k)) tabPersonAt.set(k, now)
+}
+
 /** Whether a command to the tab is on its way or running. */
 export function tabBusy(device: string, tabId: number): boolean {
   for (const p of pending.values()) if (p.device === device && p.tab === tabId) return true
@@ -193,11 +201,11 @@ export function tabBusy(device: string, tabId: number): boolean {
 }
 
 /** Every tab some owner holds, with when it was taken and last used, for the tidy-up. */
-export function heldTabs(): Array<{ device: string; tab: number; owner: string; usedAt: number; driving: boolean }> {
-  const out: Array<{ device: string; tab: number; owner: string; usedAt: number; driving: boolean }> = []
+export function heldTabs(): Array<{ device: string; tab: number; owner: string; usedAt: number; driving: boolean; personAt?: number }> {
+  const out: Array<{ device: string; tab: number; owner: string; usedAt: number; driving: boolean; personAt?: number }> = []
   for (const [k, owner] of tabOwners) {
     const i = k.lastIndexOf(':')
-    out.push({ device: k.slice(0, i), tab: Number(k.slice(i + 1)), owner, usedAt: Math.max(tabSetAt.get(k) ?? 0, tabActedAt.get(k) ?? 0), driving: tabFacts.get(k)?.driving === true })
+    out.push({ device: k.slice(0, i), tab: Number(k.slice(i + 1)), owner, usedAt: Math.max(tabSetAt.get(k) ?? 0, tabActedAt.get(k) ?? 0), driving: tabFacts.get(k)?.driving === true, ...(tabPersonAt.has(k) ? { personAt: tabPersonAt.get(k) } : {}) })
   }
   return out
 }
@@ -430,6 +438,7 @@ function forgetTab(k: string, fallback: TabEndWhy = 'gone'): void {
   tabOwners.delete(k)
   tabSetAt.delete(k)
   tabActedAt.delete(k)
+  tabPersonAt.delete(k)
   tabGens.delete(k)
   tabGrants.delete(k)
   tabReported.delete(k)
@@ -522,6 +531,16 @@ export function tabEndOf(device: string, tabId: number, now = Date.now()): { own
   return { owner: e.owner, why: e.why }
 }
 
+/** The browser of the owner's tab that ended most recently (the last half hour), for a reopen of its page. */
+export function lastDeviceOf(owner: string, now = Date.now()): string | undefined {
+  let best: { device: string; at: number } | undefined
+  for (const [k, e] of tabEnds) {
+    if (e.owner !== owner || now - e.at > ENDED_MS) continue
+    if (!best || e.at > best.at) best = { device: k.slice(0, k.lastIndexOf(':')), at: e.at }
+  }
+  return best?.device
+}
+
 export function tabsOf(device: string, owner: string): number[] {
   const out: number[] = []
   for (const [k, o] of tabOwners) if (o === owner && k.startsWith(`${device}:`)) out.push(Number(k.slice(device.length + 1)))
@@ -536,6 +555,7 @@ export function _resetBrowserHubForTesting(): void {
   tabOwners.clear()
   tabSetAt.clear()
   tabActedAt.clear()
+  tabPersonAt.clear()
   tabGens.clear()
   tabGrants.clear()
   tabReported.clear()

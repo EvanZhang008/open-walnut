@@ -14,6 +14,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fsp from 'node:fs/promises'
+import path from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { WebSocket } from 'ws'
 import { createMockConstants } from '../helpers/mock-constants.js'
@@ -43,12 +44,14 @@ interface Seen { action: string; args: Record<string, any> }
 const PIXEL = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ=='
 
 /** A browser with the person's own tabs, and agent tabs in Walnut's agent window. */
-function fakeExtension(token: string, opts: { start?: number; image?: string; seed?: Array<[number, { url: string; owner: string; title: string; window: 'agent' | 'person' }]> } = {}) {
+function fakeExtension(token: string, opts: { start?: number; image?: string; caps?: string[]; seed?: Array<[number, { url: string; owner: string; title: string; window: 'agent' | 'person' }]> } = {}) {
   const seen: Seen[] = []
   const tabs = new Map<number, { url: string; owner: string; title: string; window: 'agent' | 'person' }>(opts.seed ?? [])
   const image = opts.image ?? PIXEL
   /** How the browser answers the list of every tab: as it should, an error, a list of the agents' tabs only, or one without the asking tab. */
   const list = { mode: 'ok' as 'ok' | 'fail' | 'partial' | 'missing' }
+  /** Tabs the browser still reports but that closed just now: a reveal of one is refused. */
+  const closing = new Set<number>()
   const persons = [
     { id: 11, url: 'https://www.bank.example.test/accounts', title: 'Accounts', active: true },
     { id: 12, url: 'https://news.other.test/', title: 'News' },
@@ -88,6 +91,16 @@ function fakeExtension(token: string, opts: { start?: number; image?: string; se
         return { ok: true, result: { tab: c.args.tab, stopped: had } }
       }
       case 'close': tabs.delete(c.args.tab); return { ok: true, result: { tab: c.args.tab, closed: true } }
+      // Open in Chrome: the task's tab comes forward, or its last page opens in the agent window first.
+      case 'view_reveal': {
+        if (typeof c.args.tab === 'number') {
+          const t = closing.has(c.args.tab) ? undefined : tabs.get(c.args.tab)
+          return t && t.owner === c.args.owner ? { ok: true, result: { tab: c.args.tab, revealed: true } } : { ok: false, error: { message: 'gone', code: 'not_your_tab' } }
+        }
+        const id = next++
+        tabs.set(id, { url: c.args.url, owner: c.args.owner, title: 'Reopened', window: 'agent' })
+        return { ok: true, result: { tab: id, url: c.args.url, title: 'Reopened', window: 'agent', revealed: true, reopened: true } }
+      }
       case 'network': return { ok: true, result: { tab: c.args.tab, recording: true, since: '2026-11-07T08:00:00.000Z', total: 1, matched: 1, requests: [{ id: '31.2', url: 'https://login.bank.example.test/api/accounts', method: 'GET', type: 'Fetch', status: 200 }] } }
       case 'network_body': return { ok: true, result: { tab: c.args.tab, request_id: c.args.request_id, body: '{"accounts":2}', length: 14 } }
       case 'resize': return { ok: true, result: { tab: c.args.tab, width: c.args.width, height: c.args.height, viewport: { width: c.args.width - 16, height: c.args.height - 120 } } }
@@ -98,7 +111,7 @@ function fakeExtension(token: string, opts: { start?: number; image?: string; se
   const loop = (async () => {
     while (on) {
       const report = [...tabs].map(([id, t]) => ({ id, owner: t.owner, ...(reportTitles ? { url: t.url, title: t.title, window: t.window } : {}) }))
-      const r = await http('POST', '/browser/poll', { browser: 'chrome', version: '9.9', caps: ['screenshot'], tabs: report, waitMs: 300 }, auth)
+      const r = await http('POST', '/browser/poll', { browser: 'chrome', version: '9.9', caps: opts.caps ?? ['screenshot', 'reveal'], tabs: report, waitMs: 300 }, auth)
       if (r.status !== 200) { await new Promise((res) => setTimeout(res, 50)); continue }
       for (const c of r.body.commands as Array<Seen & { id: string }>) {
         seen.push(c)
@@ -108,7 +121,7 @@ function fakeExtension(token: string, opts: { start?: number; image?: string; se
       }
     }
   })()
-  return { seen, tabs, persons, auth, list, quiet: () => { reportTitles = false }, stop: async () => { on = false; await loop } }
+  return { seen, tabs, persons, auth, list, closing, quiet: () => { reportTitles = false }, stop: async () => { on = false; await loop } }
 }
 
 async function pair(): Promise<{ token: string; name: string }> {
@@ -341,6 +354,21 @@ describe('a session in the person\'s browser', () => {
     expect((await http('GET', `/browser/view/frame?task=${taskId}&tab=${agentTab}`)).body.shown).toBe(true)
   })
 
+  it('Open in Chrome brings the task\'s tab forward: the person\'s click only, never an agent\'s or a test run\'s', async () => {
+    const before = ext.seen.length
+    for (const caller of [SESSION(), { 'x-walnut-test-run': 'webdriver-probe' }]) {
+      const r = await http('POST', '/browser/view/reveal', { task: taskId, tab: agentTab }, caller)
+      expect(r.status, JSON.stringify(r.body)).toBe('x-walnut-caller-sid' in caller ? 403 : 409)
+    }
+    expect(ext.seen.slice(before).some((c) => c.action === 'view_reveal')).toBe(false)
+    const r = await http('POST', '/browser/view/reveal', { task: taskId, tab: agentTab })
+    expect(r.status, JSON.stringify(r.body)).toBe(200)
+    expect(r.body).toMatchObject({ ok: true, tab: agentTab, revealed: true })
+    expect(r.body.reopened).toBeUndefined()
+    expect(ext.seen.at(-1)).toMatchObject({ action: 'view_reveal', args: { tab: agentTab, owner: `task:${taskId}` } })
+    expect(ext.seen.at(-1)!.args.url).toBeUndefined()
+  })
+
   it('Stop ends the agent\'s use, the view says why, and the agent\'s next command is refused', async () => {
     const ws = listen()
     await ws.ready
@@ -363,6 +391,57 @@ describe('a session in the person\'s browser', () => {
     expect((await http('GET', `/browser/view?task=${taskId}`)).body.ended).toBeUndefined()
     await http('POST', '/browser/act', { action: 'close', tab: r.body.tab }, SESSION())
     expect((await http('GET', `/browser/view?task=${taskId}`)).body).toMatchObject({ tabs: [], ended: { why: 'closed' } })
+  })
+
+  it('Open in Chrome with the tab gone opens the task\'s last page (or the step picked) in the agent window, then brings it forward', async () => {
+    const owner = `task:${taskId}`
+    const devA = hub.connected()[0].device
+    expect((await http('GET', `/browser/view?task=${taskId}`)).body.tabs).toEqual([])
+    // No step with an address: nothing to open, and nothing goes to the browser.
+    const none = await http('POST', '/browser/view/reveal', { task: taskId, tab: 999 })
+    expect(none.status).toBe(404)
+    expect(none.body.code).toBe('no_page')
+    // The replay's steps (as the extension's pictures record them): the last one has no address.
+    const dir = path.join(WALNUT_HOME, 'browser', 'replays', taskId)
+    await fsp.mkdir(dir, { recursive: true })
+    const at = (s: number) => new Date(Date.now() - s * 1000).toISOString()
+    const steps = [
+      { id: 'st-1', at: at(30), action: 'open', label: 'Open', ok: true, url: 'https://login.bank.example.test/', tab: 1, bytes: 0 },
+      { id: 'st-2', at: at(20), action: 'navigate', label: 'Go', ok: true, url: 'https://news.other.test/today', tab: 1, bytes: 0 },
+      { id: 'st-3', at: at(10), action: 'snapshot', label: 'Read', ok: true, tab: 1, bytes: 0 },
+    ]
+    await fsp.writeFile(path.join(dir, 'index.jsonl'), steps.map((x) => JSON.stringify(x)).join('\n') + '\n')
+    const before = ext.seen.length
+    expect((await http('POST', '/browser/view/reveal', { task: taskId }, SESSION())).status).toBe(403)
+    expect(ext.seen.length).toBe(before)
+    // The last page with an address, from the replay (never an address the request names).
+    const r = await http('POST', '/browser/view/reveal', { task: taskId, tab: 999, url: 'https://evil.test/' })
+    expect(r.status, JSON.stringify(r.body)).toBe(200)
+    expect(r.body).toMatchObject({ ok: true, reopened: true, revealed: true, url: 'https://news.other.test/today', device: devA })
+    expect(ext.seen.at(-1)).toMatchObject({ action: 'view_reveal', args: { url: 'https://news.other.test/today', owner } })
+    // The reopened tab is the task's: the Browser view shows it live again.
+    const v = (await http('GET', `/browser/view?task=${taskId}`)).body
+    expect(v.tabs).toEqual([expect.objectContaining({ tab: r.body.tab, url: 'https://news.other.test/today', window: 'agent' })])
+    // A step picked in the replay opens that step's page.
+    const picked = await http('POST', '/browser/view/reveal', { task: taskId, step: 'st-1' })
+    expect(picked.body).toMatchObject({ reopened: true, url: 'https://login.bank.example.test/' })
+    // The person opened them: the tidy-up keeps them even once the task is done (browser-tab-tidy.ts).
+    expect(hub.heldTabs().filter((t) => t.owner === owner).every((t) => typeof t.personAt === 'number')).toBe(true)
+    // The view's tab id went stale (closed) while the task has one live tab: that one comes up, no third tab.
+    await http('POST', '/browser/act', { action: 'close', tab: picked.body.tab }, SESSION())
+    const stale = await http('POST', '/browser/view/reveal', { task: taskId, tab: picked.body.tab })
+    expect(stale.body).toMatchObject({ tab: r.body.tab, revealed: true })
+    expect(stale.body.reopened).toBeUndefined()
+    // Gone in the browser while Walnut still lists it: its page opens again instead of an error.
+    ext.closing.add(r.body.tab)
+    const gone = await http('POST', '/browser/view/reveal', { task: taskId, tab: r.body.tab })
+    expect(gone.status, JSON.stringify(gone.body)).toBe(200)
+    expect(gone.body).toMatchObject({ reopened: true, url: 'https://news.other.test/today' })
+    expect(ext.seen.slice(-2).map((c) => c.args.tab ?? c.args.url)).toEqual([r.body.tab, 'https://news.other.test/today'])
+    ext.closing.clear()
+    for (const t of [r.body.tab, gone.body.tab]) await http('POST', '/browser/act', { action: 'close', tab: t }, SESSION())
+    // The browser reports the vanished tab gone on its next poll.
+    await expect.poll(async () => (await http('GET', `/browser/view?task=${taskId}`)).body.tabs?.length ?? -1, { timeout: 5000 }).toBe(0)
   })
 
   it('two browsers with the same tab id: a frame or Stop names the browser, and each goes to its own', async () => {
@@ -393,6 +472,30 @@ describe('a session in the person\'s browser', () => {
       expect((await http('GET', `/browser/view?task=${taskId}`)).body.tabs).toEqual([expect.objectContaining({ tab: id, device: devA })])
     } finally {
       await second.stop()
+    }
+  })
+
+  // Last: the old browser stays listed as connected for a while after it stops polling.
+  it('a browser whose extension is older than Open in Chrome is told so, and nothing goes to it', async () => {
+    const old = fakeExtension((await pair()).token, { caps: ['screenshot'] })
+    const olds = () => hub.connected().filter((c) => !c.caps.includes('reveal'))
+    try {
+      await expect.poll(() => olds().length, { timeout: 5000 }).toBe(1)
+      const devB = olds()[0].device
+      const refused = await http('POST', '/browser/view/reveal', { task: taskId, step: 'st-1', device: devB })
+      expect(refused.status, JSON.stringify(refused.body)).toBe(409)
+      expect(refused.body.code).toBe('old_extension')
+      expect(old.seen.some((c) => c.action === 'view_reveal')).toBe(false)
+      // Two browsers and none the task used in the last half hour: the person is asked which.
+      hub._resetBrowserHubForTesting()
+      await expect.poll(() => hub.connected().length, { timeout: 5000 }).toBeGreaterThan(1)
+      const which = await http('POST', '/browser/view/reveal', { task: taskId, step: 'st-1' })
+      expect(which.status, JSON.stringify(which.body)).toBe(409)
+      expect(which.body.code).toBe('which_browser')
+      expect(which.body.devices).toEqual(expect.arrayContaining([devB]))
+    } finally {
+      await old.stop()
+      await fsp.rm(path.join(WALNUT_HOME, 'browser', 'replays', taskId), { recursive: true, force: true })
     }
   })
 })

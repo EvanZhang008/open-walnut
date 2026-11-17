@@ -22,6 +22,9 @@
  *
  * Replay (SessionBrowserReplay.tsx, 2026-11-14): the task's recorded steps played back, from the
  * Replay button beside Larger, and on its own once the task has no tab left.
+ *
+ * Open in Chrome (BrowserRevealButton.tsx) sits beside Larger in every state: the tab comes to the
+ * front in Chrome, and the agent keeps it (Take over is the one that makes the agent wait).
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiGet, apiPost } from '@/api/client';
@@ -29,6 +32,7 @@ import { usePageViewOf } from '@/utils/view-memory';
 import { log } from '@/utils/log';
 import { useBrowserView } from './useBrowserView';
 import { SessionBrowserReplay } from './SessionBrowserReplay';
+import { BrowserRevealButton } from './BrowserRevealButton';
 import {
   FRAME_EVERY_MS, FRAME_RETRY_MS, UNCHANGED_AGAIN_MS, agoLine, lateLine, endedLine, followedTab, handLine, liveGrantOffer, noPictureLine, tabKey, windowLine,
   type BrowserFrame,
@@ -265,7 +269,8 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
     return (
       <>
         {null}
-        <SessionBrowserReplay key="replay" taskId={taskId} large={prefs.large} onLarge={large} onBack={() => setReplaying(false)} onClose={onClose} />
+        <SessionBrowserReplay key="replay" taskId={taskId} large={prefs.large} onLarge={large} onBack={() => setReplaying(false)} onClose={onClose}
+          liveTab={{ tab: followed.tab, device: followed.device }} />
       </>
     );
   }
@@ -340,6 +345,7 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
           <button type="button" className="session-browser-btn" onClick={() => setReplaying(true)}
             title="Play back the agent's steps in the browser" data-testid="session-browser-replay-open">Replay</button>
         )}
+        <BrowserRevealButton taskId={taskId} tab={followed.tab} device={followed.device} />
         <button type="button" className="session-browser-btn" onClick={large}
           aria-pressed={prefs.large} data-testid="session-browser-size">{prefs.large ? 'Smaller' : 'Larger'}</button>
         {driving

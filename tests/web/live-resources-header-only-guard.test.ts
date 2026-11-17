@@ -54,6 +54,7 @@ const ALLOWED: Record<string, string> = {
   'components/sessions/SessionBrowserChip.tsx': 'the browser header pill and its popover',
   'components/sessions/SessionBrowserCard.tsx': 'the Browser view, drawn only in the browser pill popover',
   'components/sessions/SessionBrowserReplay.tsx': 'the Browser replay, drawn only inside the Browser view (the browser pill popover)',
+  'components/sessions/BrowserRevealButton.tsx': 'the Open in Chrome button, drawn only inside the Browser view and its replay (the browser pill popover)',
   'components/sessions/SessionWebView.tsx': 'the Web split view the person opens beside the chat, not in it',
   'components/sessions/SessionPanel.tsx': 'mounts the pills in headerPills and the phone kebab slot (checked below)',
   'components/sessions/SessionKebabSection.tsx': 'the session menu row that opens the Web view',

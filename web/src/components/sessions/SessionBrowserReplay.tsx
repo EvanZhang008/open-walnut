@@ -25,6 +25,7 @@
 import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { apiGet } from '@/api/client';
+import { BrowserRevealButton } from './BrowserRevealButton';
 import { log } from '@/utils/log';
 import {
   NO_REPLAY, NO_STEP_PICTURE, REPLAY_REREAD_MS, REPLAY_SPEEDS, agoLine, pictureIndex, replayRuler, replayStepWords, replayTimeLine, spanLine, stepTimeLine,
@@ -115,8 +116,10 @@ const Row = memo(function Row({ k, on, failed, icon: kind, title, detail, time, 
   );
 });
 
-export function SessionBrowserReplay({ taskId, large, onLarge, onBack, onClose }: {
+export function SessionBrowserReplay({ taskId, large, onLarge, onBack, onClose, liveTab }: {
   taskId: string;
+  /** The task's tab while it still has one: Open in Chrome brings it forward (else the step's page opens again). */
+  liveTab?: { tab: number; device: string };
   large: boolean;
   onLarge: () => void;
   /** Back to the live view (only while the task still has a tab). */
@@ -226,6 +229,10 @@ export function SessionBrowserReplay({ taskId, large, onLarge, onBack, onClose }
   const shownAt = steps ? pictureIndex(steps, i) : -1;
   const step = steps && i >= 0 ? steps[i] : undefined;
   const shownStep = steps && shownAt >= 0 ? steps[shownAt] : undefined;
+  // Open in Chrome opens the page this step happened on: its own address, else the last one before
+  // it (a read or a close has none); with none before it, the task's last page (the server's pick).
+  const pageStep = steps && i >= 0 ? steps.slice(0, i + 1).reverse().find((s) => !!s.url) : undefined;
+  const anyPage = !!steps?.some((s) => !!s.url);
 
   // The picture shown (once the step rests a moment: a run of arrow keys through hundreds of
   // steps asks for one, not each), and the next few while playing.
@@ -306,6 +313,9 @@ export function SessionBrowserReplay({ taskId, large, onLarge, onBack, onClose }
         {onBack
           ? <button type="button" className="session-browser-btn" onClick={onBack} data-testid="session-browser-replay-back" title="The live picture of the agent's tab">Live</button>
           : null}
+        {(liveTab || anyPage) && (
+          <BrowserRevealButton taskId={taskId} tab={liveTab?.tab} device={liveTab?.device} step={liveTab ? undefined : pageStep?.id} testId="session-browser-replay-reveal" />
+        )}
         <button type="button" className="session-browser-btn" onClick={onLarge} aria-pressed={large} data-testid="session-browser-replay-size">{large ? 'Smaller' : 'Larger'}</button>
         <button type="button" className="session-browser-btn session-browser-btn--icon" aria-label="Close the Browser view" title="Close"
           onClick={onClose} data-testid="session-browser-replay-hide">{CLOSE_GLYPH}</button>

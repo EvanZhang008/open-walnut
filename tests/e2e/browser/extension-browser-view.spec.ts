@@ -142,6 +142,22 @@ test.beforeAll(async ({ browser }, info) => {
   await api.close()
 })
 
+/** Whether `tab` is in front of its window, and that window is the focused one (the person's view). */
+async function frontOf(tab: number): Promise<{ active: boolean; focused: boolean }> {
+  return ctx.serviceWorkers()[0].evaluate(async (id: number) => {
+    const t = await chrome.tabs.get(id)
+    const w = await chrome.windows.getLastFocused()
+    return { active: t.active, focused: w.id === t.windowId }
+  }, tab)
+}
+
+/** What Chrome shows in that tab now, for the proof video. */
+async function shotOfTab(tab: number, name: string): Promise<void> {
+  const url = await ctx.serviceWorkers()[0].evaluate(async (id: number) => (await chrome.tabs.get(id)).url ?? '', tab)
+  const p = ctx.pages().filter((x) => x.url() === url).at(-1)
+  if (p) await p.screenshot({ path: path.join(SHOTS, name) })
+}
+
 test.afterAll(async () => {
   await ctx?.close()
   await new Promise<void>((r) => sites?.close(() => r()) ?? r())
@@ -260,6 +276,15 @@ test('the Browser view shows itself when the task\'s session opens a page, follo
   }, agentTab)
   expect(group).toBe('walnut-pay-the-electricity-bill')
 
+  // Open in Chrome (2026-11-17): one click brings the task's tab to the front of the agent window
+  // and that window forward, with the agent still driving it.
+  await mine.bringToFront()
+  await press(page, card(page).getByTestId('session-browser-reveal'))
+  await expect(card(page).getByTestId('session-browser-reveal')).toHaveText('Opened in Chrome', { timeout: 20_000 })
+  expect(await frontOf(agentTab)).toEqual({ active: true, focused: true })
+  await shotOfTab(agentTab, 'reveal-live-chrome.png')
+  expect((await act(page, { action: 'snapshot', tab: agentTab })).status).toBe(200)
+
   // Take over: the tab is the person's, the agent waits; Hand back gives it to the agent again.
   await press(page, card(page).getByTestId('session-browser-takeover'))
   await expect(card(page).getByTestId('session-browser-hand')).toContainText('You have this tab in your browser', { timeout: 20_000 })
@@ -303,5 +328,52 @@ test('the Browser view shows itself when the task\'s session opens a page, follo
   await expect(popover(page)).toHaveCount(0)
   await expect(chip(page)).toHaveText('Replay')
   await expect(chip(page)).toHaveAttribute('data-tone', 'ended')
+  await mine.close()
+})
+
+test('Open in Chrome after the agent closed its tab opens the task\'s last page in the agent window and brings it forward', async ({ page }) => {
+  test.setTimeout(240_000)
+  await page.setViewportSize({ width: 1280, height: 860 })
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+  await seedColumns(page, [sid])
+  await loadHome(page)
+  await expect(column(page)).toBeVisible({ timeout: 30_000 })
+  // The agent opens the statement, then closes its own tab.
+  const opened = await act(page, { action: 'open', url: site('login.bank.test', '/statement') })
+  expect(opened.status, JSON.stringify(opened.body)).toBe(200)
+  await expect(chip(page)).toHaveText('Browser', { timeout: 20_000 })
+  expect((await act(page, { action: 'close', tab: opened.body.tab })).status).toBe(200)
+  await expect(chip(page)).not.toHaveText('Browser', { timeout: 20_000 })
+  // The person's own tab is in front, as it is while they work.
+  const mine = await ctx.newPage()
+  await mine.goto(site('www.bank.test', '/home'))
+  await mine.bringToFront()
+  await press(page, chip(page))
+  await expect(popover(page).getByTestId('session-browser-ended')).toContainText('The agent closed its browser tab', { timeout: 20_000 })
+  const replay = popover(page).getByTestId('session-browser-replay')
+  await expect(replay).toBeVisible({ timeout: 20_000 })
+  await page.screenshot({ path: path.join(SHOTS, 'reveal-closed-before.png') })
+  const reveal = replay.getByTestId('session-browser-replay-reveal')
+  await press(page, reveal)
+  // The tab is the task's again: the popover's replay gives way to the live view of it.
+  await expect(card(page).getByTestId('session-browser-title')).toHaveText('Statement for October', { timeout: 30_000 })
+  // A new tab of the task's (Walnut lists it), in Walnut's agent window, on the last page, in front and focused.
+  const view = await (await page.request.get(`/api/v1/browser/view?task=${taskId}`)).json() as { tabs: Array<{ tab: number; url?: string; window?: string }> }
+  expect(view.tabs).toEqual([expect.objectContaining({ url: site('login.bank.test', '/statement'), window: 'agent' })])
+  const again = view.tabs[0].tab
+  expect(again).not.toBe(opened.body.tab)
+  const inAgentWindow = await ctx.serviceWorkers()[0].evaluate(async (id: number) => {
+    const { agentWindow } = await chrome.storage.session.get('agentWindow')
+    return (await chrome.tabs.get(id)).windowId === agentWindow
+  }, again)
+  expect(inAgentWindow).toBe(true)
+  expect(await frontOf(again)).toEqual({ active: true, focused: true })
+  await shotOfTab(again, 'reveal-closed-chrome.png')
+  // Its pill reads Browser again, and the agent may use the tab.
+  await expect(chip(page)).toHaveText('Browser', { timeout: 20_000 })
+  expect((await act(page, { action: 'snapshot', tab: again })).status).toBe(200)
+  await page.screenshot({ path: path.join(SHOTS, 'reveal-closed-after.png') })
+  await act(page, { action: 'close', tab: again })
   await mine.close()
 })

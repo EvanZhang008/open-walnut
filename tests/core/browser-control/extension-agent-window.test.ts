@@ -267,6 +267,7 @@ describe('the agent window', () => {
       'agent-takeover.ts: takeover', // Take over in the Browser view (browser-view-v1.ts sends it only for a person)
       'grant-open.ts: grant-open', // Show it live, bringUp runs only for args.person
       'background.ts: walnut-tab', // Open vault in the toolbar popup
+      'agent-reveal.ts: reveal', // Open in Chrome in the Browser view (browser-view-v1.ts sends it only for a person)
     ])
     const found: string[] = []
     for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.ts') && x !== 'agent-window.ts')) {

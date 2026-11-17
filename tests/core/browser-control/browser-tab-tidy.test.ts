@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest'
 import { IDLE_MS, tidyTabs, type TidyDeps } from '../../../src/web/routes/browser-tab-tidy'
 
-type Held = { device: string; tab: number; owner: string; usedAt: number; driving: boolean }
+type Held = { device: string; tab: number; owner: string; usedAt: number; driving: boolean; personAt?: number }
 const NOW = 10 * IDLE_MS
 
 function world(held: Held[], phases: Record<string, string | undefined | Error>, opts: { asks?: number[]; offline?: string[]; refuse?: number[]; givenBack?: number[]; busy?: number[]; looking?: number[] } = {}) {
@@ -84,6 +84,15 @@ describe('the tidy-up of tasks\' tabs', () => {
     expect(w.sent.map((x) => x.args.tab)).toEqual([2])
     expect(w.released).toEqual([])
     expect(w.ending.size).toBe(0)
+  })
+
+  it('a tab the person brought up with Open in Chrome stays IDLE_MS, a finished task\'s too, then goes', async () => {
+    const w = world([
+      held(1, 'task:done', NOW - 5 * IDLE_MS, { personAt: NOW - 60_000 }),      // a finished task's replay, opened just now: kept
+      held(2, 'task:idle', NOW - 5 * IDLE_MS, { personAt: NOW - 60_000 }),      // an unused tab the person opened: kept
+      held(3, 'task:done', NOW - 5 * IDLE_MS, { personAt: NOW - IDLE_MS - 1 }), // opened long ago: closed
+    ], { 'done': 'COMPLETE', 'idle': 'IN_PROGRESS' })
+    expect((await tidyTabs(w.deps, NOW)).map((o) => [o.tab, o.why])).toEqual([[3, 'done']])
   })
 
   it('a task Walnut cannot read now keeps its tabs (never closed on a guess)', async () => {

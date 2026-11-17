@@ -35,6 +35,7 @@ import { inHandedReach } from './agent-tab-kind'
 import { noteScreenShare, openInAgentWindow, resizeAgentWindow, windowOf } from './agent-window'
 import { bringUpForCommand, noteWorked, viewFrame, viewWatch, watchedOwner, type PushAnswer } from './agent-view'
 import { drivingRefusal, handBack, takeOver } from './agent-takeover'
+import { reveal } from './agent-reveal'
 import { openGrant, watchGrantClose } from './grant-open'
 import { NET_OPS, netAct, startRecording, stopRecording } from './agent-net'
 import { watchMedia } from './agent-media'
@@ -371,13 +372,23 @@ const holdsScreen = (id: number) => (onScreen.get(id) ?? 0) > 0
  * The server sends them only for a person's request, except view_grant, which an agent may ask for
  * too (`person: false`): it only opens a page in the background, the grant stays the person's clicks.
  */
-const VIEW_ACTS = new Set(['view_frame', 'view_watch', 'view_stop', 'view_takeover', 'view_handback', 'view_grant'])
+const VIEW_ACTS = new Set(['view_frame', 'view_watch', 'view_stop', 'view_takeover', 'view_handback', 'view_grant', 'view_reveal'])
 const push = (body: Record<string, unknown>) => call<PushAnswer>('POST', '/browser/view/push', body, { noSession: true, timeoutMs: 10_000 })
 
 async function viewAct(c: WireCommand): Promise<unknown> {
   if (c.action === 'view_frame') return viewFrame(c, holdsScreen)
   if (c.action === 'view_watch') return viewWatch(c, holdsScreen, push)
   if (c.action === 'view_takeover') return takeOver(c)
+  // Open in Chrome (agent-reveal.ts): the tab to the front; a closed one's page opens again as an
+  // agent's open does, so only while agents may open tabs in this browser.
+  if (c.action === 'view_reveal') {
+    return reveal(c, async (url, owner) => {
+      // Its group and pill take the task's name (`who`), as an agent's open names them.
+      const open: WireCommand = { ...c, action: 'open', args: { url, owner, ...(typeof c.args.who === 'string' ? { who: c.args.who } : {}) } }
+      await tabOnlyCheck(open)
+      return act(open)
+    })
+  }
   // "Show it live": the page where the person allows live pictures of a covered window
   // (grant-open.ts). An agent may ask for it too (the server says whose ask it is): then only while
   // agents may use this browser, for a tab that is an agent's, and the page opens in the background.
@@ -506,6 +517,8 @@ export async function agentLoop(): Promise<void> {
           // The Browser view's picture stream and Take over (agent-view.ts, agent-takeover.ts); drag,
           // zoom, labels, typing at a point or slowly, dialog read, scroll in a box (input-v2.ts on the server).
           'view-stream', 'takeover', 'input-v2',
+          // Open in Chrome from the Browser view (agent-reveal.ts).
+          'reveal',
           // A trusted upload takes a file the person said yes to (agent-upload.ts), and can hand the
           // page a file from disk only with "Allow access to file URLs" on.
           'upload-granted',

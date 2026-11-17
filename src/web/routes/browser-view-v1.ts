@@ -9,6 +9,8 @@
  *   POST /api/v1/browser/view/takeover { task, tab, device }  Take over: the tab comes forward for the person, agents wait (a person's request only)
  *   POST /api/v1/browser/view/handback { task, tab, device }  Hand back: the agent may use the tab again (a person's request only)
  *   POST /api/v1/browser/view/grant { task, tab, device }     "Show it live": the extension opens its page that turns live pictures on
+ *   POST /api/v1/browser/view/reveal { task, tab?, device?, step? }  Open in Chrome: the task's tab comes to the front for the person;
+ *        with no tab left, the address of a replay step (default the last) opens in the agent window first (a person's request only)
  *   POST /api/v1/browser/view/push   the extension's pictures while someone watches (browser-view-stream.ts)
  *   POST /api/v1/browser/handback    the extension: the person pressed Hand back on the tab's own pill
  *   GET  /api/v1/browser/view/replay?task=<id>          the task's recorded steps, oldest first (a person's request only)
@@ -262,6 +264,72 @@ export function mountBrowserView(r: Router, d: ViewDeps): void {
       h.ownerChanged(owner)
       log.web.info('browser view hand back', { device: known.device, owner, tab, by: 'person', signIn: !!ask })
       return { ok: true, ...out, tab, device: known.device, driving: false, ...(ask ? { signIn: 'done' } : {}) }
+    })
+  })
+
+  // Open in Chrome (the extension's agent-reveal.ts): the person's own click brings the task's tab
+  // to the front in their browser, the one way besides Take over that the agent window comes forward
+  // (2026-11-17, the user: "any time it can jump there"). Unlike Take over the agent keeps the tab.
+  // With no tab left (the agent closed it), the page of a replay step opens again in the agent
+  // window as the task's tab, then comes forward. The address is read here from the task's own
+  // replay, never taken from the request.
+  r.post('/browser/view/reveal', (req, res, next) => {
+    void d.run(res, next, async () => {
+      const h = await hub()
+      if (!d.personCaller(req)) throw new h.BrowserError('Open in Chrome is the person\'s own click: an agent never brings a window forward.', 403, 'human_only')
+      if (ambientTestRun()) throw new h.BrowserError('A test run does not use the person\'s browser.', 409, 'test_run')
+      const b = (req.body ?? {}) as { task?: unknown; tab?: unknown; device?: unknown; step?: unknown }
+      const taskId = taskOf(b.task)
+      if (!taskId) throw new h.BrowserError('Which task: { task }.', 400, 'bad_request')
+      const owner = `task:${taskId}`
+      const tab = tabOf(b.tab)
+      const s = await sites()
+      const allow = { ...s.allowOf(await s.readSites()), walnut: await d.walnutAddresses(req) }
+      const ready = (device: string, browser: string) => {
+        if (!h.connected().some((c) => c.device === device)) throw new h.BrowserError(`${browser} does not answer right now.`, 409, 'browser_not_connected')
+        if (!h.hasCap(device, 'reveal')) throw new h.BrowserError('This browser\'s Walnut extension is older than Open in Chrome: update it (Settings, Browser extension).', 409, 'old_extension')
+      }
+      // The tab the view follows; else, unless a replay step was picked, the task's one live tab
+      // (the followed one closed while another is open: never a third tab for it).
+      const asked = deviceOf(b.device)
+      const tabs = h.viewOf(owner).tabs.filter((t) => t.connected && (!asked || t.device === asked))
+      const live = (tab === undefined ? undefined : tabs.find((t) => t.tab === tab)) ?? (b.step === undefined && tabs.length === 1 ? tabs[0] : undefined)
+      if (live) {
+        ready(live.device, live.browser)
+        try {
+          const out = (await h.send(live.device, 'view_reveal', { tab: live.tab, owner }, allow, 10_000) ?? {}) as Record<string, unknown>
+          h.notePersonOpened(live.device, live.tab)
+          log.web.info('browser view reveal', { device: live.device, owner, tab: live.tab, by: 'person' })
+          return { ok: true, ...out, tab: live.tab, device: live.device, revealed: true }
+        } catch (err) {
+          // The tab went just now (closed, or Stop): open its page again below.
+          if (!(err instanceof h.BrowserError) || err.code !== 'not_your_tab') throw err
+        }
+      }
+      // No tab of the task's open: the page of the step the person picked, else the last with an address.
+      const steps = await (await replays()).listSteps(taskId)
+      const want = typeof b.step === 'string' ? b.step.slice(0, 40) : undefined
+      const step = want ? steps.find((x) => x.id === want) : [...steps].reverse().find((x) => !!x.url)
+      const url = step?.url
+      if (!url || !/^https?:\/\//i.test(url)) throw new h.BrowserError('There is no page of this task to open: its tab is gone and no step has an address.', 404, 'no_page')
+      const browsers = h.connected()
+      const last = h.lastDeviceOf(owner)
+      const device = asked ?? (last && browsers.some((c) => c.device === last) ? last : browsers.length === 1 ? browsers[0].device : undefined)
+      if (!device) {
+        if (!browsers.length) throw new h.BrowserError('No browser lets agents in right now: open Chrome with the Walnut extension.', 409, 'browser_not_connected')
+        throw new h.BrowserError('More than one browser is connected: say which (device).', 409, 'which_browser', { devices: browsers.map((c) => c.device) })
+      }
+      ready(device, browsers.find((c) => c.device === device)?.label ?? device)
+      // Named as an agent's open is: its tab group and pill read the task's name.
+      const who = await import('../../core/task-manager.js').then((m) => m.getTask(taskId)).then((t) => t.title?.slice(0, 80), () => undefined)
+      const out = (await h.send(device, 'view_reveal', { url, owner, ...(who ? { who } : {}) }, allow, 30_000) ?? {}) as Record<string, unknown>
+      const opened = typeof out.tab === 'number' ? out.tab : undefined
+      if (opened !== undefined) {
+        h.ownTab(device, opened, owner, { url, ...(typeof out.title === 'string' ? { title: out.title } : {}), window: 'agent' })
+        h.notePersonOpened(device, opened)
+      }
+      log.web.info('browser view reveal', { device, owner, tab: opened, by: 'person', reopened: true, step: step?.id })
+      return { ok: true, ...out, device, url, reopened: true, revealed: true }
     })
   })
 

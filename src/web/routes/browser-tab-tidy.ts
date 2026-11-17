@@ -6,6 +6,7 @@
  *   - a task that is done (COMPLETE, or gone) has its tabs closed at once;
  *   - a task whose tabs no agent used for IDLE_MS has them closed, unless it waits for the person
  *     (its status reads Needs you: it may have left a page for them to look at);
+ *   - a tab the person brought up with Open in Chrome stays IDLE_MS, a finished task's too;
  *   - a tab the person has (Take over), watches, or looks at in the agent window, the agent waits
  *     on (a sign-in ask), or a command is on its way to, is never closed;
  *   - a tab of the person's own (handed over, or taken from their window) is given back, never
@@ -45,7 +46,10 @@ export async function tidyTabs(d: TidyDeps, now = Date.now()): Promise<Array<{ d
     if (!tasks.has(taskId)) tasks.set(taskId, await d.taskOf(taskId).catch(() => 'unknown' as const))
     const task = tasks.get(taskId)
     if (task === 'unknown') continue
-    const why = task === undefined || task.done ? 'done' as const
+    // A tab the person opened themselves (Open in Chrome, a finished task's replay too) stays as an unused one would.
+    const personNow = t.personAt !== undefined && now - t.personAt < IDLE_MS
+    const why = personNow ? undefined
+      : task === undefined || task.done ? 'done' as const
       : !task.needsYou && now - t.usedAt > IDLE_MS ? 'idle' as const : undefined
     if (!why) continue
     const gen = h.tabGen(t.device, t.tab)
