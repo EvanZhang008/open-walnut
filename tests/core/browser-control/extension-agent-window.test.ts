@@ -269,6 +269,9 @@ describe('the agent window', () => {
       // page draw off screen (Chromium's IncrementCapturerCount with stay_hidden); it does not show,
       // raise or focus the window, nor switch a tab.
       'Page.captureScreenshot',
+      // A trusted upload (cdp.ts cdpSetFiles): the frame's id, an isolated world in the page, a node
+      // resolved into it and a function run on it; all inside the renderer, nothing shown or focused.
+      'Page.getFrameTree', 'Page.createIsolatedWorld', 'DOM.resolveNode', 'Runtime.callFunctionOn',
       'Page.enable', 'Page.handleJavaScriptDialog', 'Runtime.enable', 'Runtime.evaluate', 'Network.enable', 'Network.disable', 'Network.getResponseBody', 'Network.getRequestPostData', 'Log.enable'])
     const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith('.ts') ? [path.join(d, e.name)] : [])
     const sent: string[] = []
