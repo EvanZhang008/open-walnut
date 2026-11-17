@@ -30,7 +30,6 @@ const ALLOWED: Record<string, string> = {
   'src/core/sessions/engine-switch-context.ts': 'engine defaults for engines that are not Claude; Claude goes through knownModelWindow',
   'src/core/agents/pi-gateway.ts': 'the 200K fallback of knownModelWindow for an id it cannot name',
   'web/src/api/paste-spill.ts': 'a paste size threshold, not a model window',
-  'src/lib/preview-state-envelope.ts': 'a character cap on a preview page\'s saved state (kept in window.name), not a model window',
   'web/src/components/sessions/compact-offer.ts': 'formats a token count as "1.2M", not a model window',
   'src/core/event-loop-monitor.ts': 'nanoseconds to milliseconds, not a model window',
   'src/providers/claude-code-session.ts': 'comments quoting what the CLI reported',

@@ -7,4 +7,4 @@
 /** The mark an envelope in the frame's `window.name` starts with. */
 export const PREVIEW_STATE_PREFIX = '\u0001walnut-preview-state:'
 /** The most an envelope may hold (characters); past it the page's storage is left out. */
-export const PREVIEW_STATE_MAX = 1_000_000
+export const PREVIEW_STATE_MAX = 1024 * 1024
