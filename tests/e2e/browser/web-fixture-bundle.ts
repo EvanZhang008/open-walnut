@@ -8,11 +8,35 @@
  * Vite always sets one of them; esbuild sets neither unless asked, and every spec whose component
  * reached the editor (ChatInput, through the composer's Draw) failed to build (2026-11-16).
  *
+ * Vite's `?raw` import (a file's text as the default export: the Board's frame scripts in
+ * TaskBoardPane.tsx) loads as text too; esbuild alone has no such suffix, and every spec whose
+ * component reached the Board failed to build ("No matching export ... for import default",
+ * 2026-11-16). `VITE_IMPORT_SUFFIXES` lists the suffixes handled here.
+ *
  * Guard: tests/scripts/web-fixture-bundle-ratchet.test.ts (every spec that bundles web/src with
  * esbuild builds through this).
  */
+import fs from 'node:fs/promises'
 import path from 'node:path'
-import { build, type BuildOptions, type BuildResult } from 'esbuild'
+import { build, type BuildOptions, type BuildResult, type Plugin } from 'esbuild'
+
+/** The Vite import suffixes (`./file?raw`) a fixture build understands, as the app's build does. */
+export const VITE_IMPORT_SUFFIXES = ['raw'] as const
+
+const WEB_SRC = path.resolve('web/src')
+
+/** `import text from './x.js?raw'`: the file's text as its default export. */
+const viteRaw: Plugin = {
+  name: 'vite-raw',
+  setup(b) {
+    b.onResolve({ filter: /\?raw$/ }, (args) => {
+      const spec = args.path.slice(0, -'?raw'.length)
+      const file = spec.startsWith('@/') ? path.join(WEB_SRC, spec.slice(2)) : path.resolve(args.resolveDir, spec)
+      return { path: file, namespace: 'vite-raw' }
+    })
+    b.onLoad({ filter: /.*/, namespace: 'vite-raw' }, async (args) => ({ contents: await fs.readFile(args.path, 'utf8'), loader: 'text' }))
+  },
+}
 
 export interface WebFixtureBundle {
   /** The fixture page's script: what it imports from web/src (`./src/...`, `@/...`) is bundled. */
@@ -40,6 +64,7 @@ export function webFixtureBuildOptions(fixture: WebFixtureBundle): BuildOptions 
       ...fixture.alias,
     },
     define: { 'process.env.NODE_ENV': '"production"', 'import.meta.env.DEV': 'false', ...fixture.define },
+    plugins: [viteRaw],
     logLevel: 'silent',
   }
 }

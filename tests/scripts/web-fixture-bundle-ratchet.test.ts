@@ -12,7 +12,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { build } from 'esbuild'
 import { describe, expect, it } from 'vitest'
-import { webFixtureBuildOptions } from '../e2e/browser/web-fixture-bundle'
+import { execFileSync } from 'node:child_process'
+import { VITE_IMPORT_SUFFIXES, webFixtureBuildOptions } from '../e2e/browser/web-fixture-bundle'
 
 const ROOT = path.resolve(__dirname, '../..')
 const BROWSER = path.join(ROOT, 'tests/e2e/browser')
@@ -31,4 +32,24 @@ describe('specs that bundle web/src into a fixture page', () => {
     const result = await build({ ...options, metafile: true })
     expect(Object.keys(result.metafile!.inputs).some((f) => f.includes('excalidraw/dist/prod/index.css'))).toBe(true)
   }, 30_000)
+
+  it("load a Vite `?raw` import as the file's text, as the app's build does", async () => {
+    const options = webFixtureBuildOptions({
+      contents: "import text from './src/components/board/board-items.frame.js?raw'; import viaAlias from '@/components/board/board-items.frame.js?raw'; (globalThis as any).out = [text, viaAlias];",
+      sourcefile: 'raw-probe.tsx',
+    })
+    const result = await build(options)
+    const frame = fs.readFileSync(path.join(ROOT, 'web/src/components/board/board-items.frame.js'), 'utf8')
+    // A long name from the frame script: it is in the bundle only as the text the import gave.
+    const marker = frame.match(/[A-Za-z_]{14,}/)![0]
+    expect(result.outputFiles[0]!.text).toContain(marker)
+    expect(result.outputFiles[0]!.text).not.toMatch(/No matching export/)
+  }, 30_000)
+
+  it('handle every Vite import suffix web/src uses', () => {
+    const used = execFileSync('git', ['grep', '-hoE', "from ['\"][^'\"]*\\?[a-z]+['\"]", '--', 'web/src'], { cwd: ROOT, encoding: 'utf8' })
+      .split('\n').filter(Boolean).map((l) => l.replace(/^.*\?([a-z]+)['"]$/, '$1'))
+    expect(used.length).toBeGreaterThan(0)
+    expect([...new Set(used)].filter((s) => !(VITE_IMPORT_SUFFIXES as readonly string[]).includes(s)), 'teach tests/e2e/browser/web-fixture-bundle.ts this suffix').toEqual([])
+  })
 })
