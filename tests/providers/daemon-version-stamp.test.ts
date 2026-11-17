@@ -18,6 +18,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  bundledSidecarVersion,
   readSidecarDaemonVersion,
   resolveDaemonSourceVersion,
 } from '../../src/providers/daemon-source.js'
@@ -61,6 +62,19 @@ describe('readSidecarDaemonVersion', () => {
     fs.mkdirSync(binDir, { recursive: true })
     fs.writeFileSync(path.join(binDir, 'daemon-linux-x64.version'), '  \n')
     expect(readSidecarDaemonVersion(path.join(tmp, 'dist', 'cli.js'))).toBeNull()
+  })
+})
+
+describe('bundledSidecarVersion', () => {
+  it('reads the sidecar once a process: the loop thread never walks the disk again for it', () => {
+    const binDir = path.join(tmp, 'dist', 'daemon-binaries')
+    fs.mkdirSync(binDir, { recursive: true })
+    fs.writeFileSync(path.join(binDir, 'daemon-darwin-arm64.version'), 'walnut-daemon-111111111111')
+    const here = path.join(tmp, 'dist', 'cli.js')
+    expect(bundledSidecarVersion(here)).toBe('walnut-daemon-111111111111')
+    // Gone from disk: the answer stands (it describes the bundle in memory, not the disk).
+    fs.rmSync(binDir, { recursive: true, force: true })
+    expect(bundledSidecarVersion(here)).toBe('walnut-daemon-111111111111')
   })
 })
 

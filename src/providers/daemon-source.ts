@@ -133,7 +133,7 @@ export function resolveDaemonSourceVersion(): string {
   const here = fileURLToPath(import.meta.url)
   const bundled = here.split(path.sep).includes('dist')
   if (bundled) {
-    const sidecar = readSidecarDaemonVersion(here)
+    const sidecar = bundledSidecarVersion(here)
     if (sidecar) return sidecar
   }
   const computed = computeExpectedDaemonVersion()
@@ -155,6 +155,20 @@ export function resolveDaemonSourceVersion(): string {
     dir = parent
   }
   return 'dev-source'
+}
+
+/** The sidecar answer per bundle path, read once a process. */
+const sidecarByBundle = new Map<string, string | null>()
+
+/**
+ * The .version sidecar of the bundle at `here`, read once a process: a bundle's sidecar is
+ * written by its own build before the server starts and never changes under it, and the read is
+ * synchronous on the loop thread (a 2.3 s hold in readdirSync on the Mac under load, stall profile
+ * 2026-11-16T16:20:48Z), asked again on every daemon handshake and host file build.
+ */
+export function bundledSidecarVersion(here: string): string | null {
+  if (!sidecarByBundle.has(here)) sidecarByBundle.set(here, readSidecarDaemonVersion(here))
+  return sidecarByBundle.get(here)!
 }
 
 /**
