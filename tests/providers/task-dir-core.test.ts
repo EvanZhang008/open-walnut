@@ -349,6 +349,31 @@ describe('removeTaskDirs: nothing that exists only here is ever deleted', () => 
       expect(await unmergedWork(path.dirname(work))).toEqual([])
     })
 
+    it('keeps it when the patch landed only on a backup branch the clone tracks', async () => {
+      const { work, main } = landedClone('tracked')
+      git(main, 'branch', '-q', 'backup-x')
+      git(work, 'fetch', '-q', 'origin')
+      git(work, 'checkout', '-qb', 'feat', 'origin/backup-x')
+      git(work, 'cherry-pick', 'main')
+      git(main, 'checkout', '-q', 'backup-x')
+      land(main, work, undefined, ['feat'])
+      git(main, 'checkout', '-q', 'main')
+      expect(await unmergedWork(path.dirname(work))).toEqual(['walnut: commits not on any remote'])
+    })
+
+    it('keeps it when the clone came from a linked worktree whose HEAD sits on its own task branch', async () => {
+      const { main } = landedClone('twinseed')
+      const twin = path.join(tmp, 'twin')
+      git(main, 'worktree', 'add', '-q', '-b', 'wt/task', twin)
+      const dir = ensureTaskDir(root, 'fromtwin')!
+      const work = path.join(dir, 'walnut')
+      git(dir, 'clone', '-q', '--shared', twin, work)
+      fs.writeFileSync(path.join(work, 'fix2.txt'), 'fix2\n')
+      git(work, 'add', '.'); git(work, 'commit', '-qm', 'fix2')
+      land(twin, work)
+      expect(await unmergedWork(dir)).toEqual(['walnut: commits not on any remote'])
+    })
+
     it('never trusts a main checkout inside the task root', async () => {
       const { work, main } = landedClone('inroot')
       land(main, work)

@@ -234,38 +234,30 @@ async function exactPatchId(repo: string, commit: string, git: GitRunner): Promi
 }
 
 /**
- * The branch each commit here would have been landed on, in each trusted LOCAL remote: the
- * remote branch a local branch tracks, and the branch the remote's own HEAD names. Never the
- * remote's other branches (backups, unmerged work, a rebase's copies) nor a detached HEAD there.
+ * The branch commits here would have been landed on, in each trusted LOCAL remote: the branch
+ * the remote's own HEAD names, and only when that remote is a repository's main working tree
+ * (or a bare repo). Never a branch a local branch merely tracks (it can track a backup branch),
+ * the remote's other branches (backups, unmerged work, a rebase's copies), a detached HEAD there,
+ * nor a linked worktree's HEAD (a twin on its own task branch that is released when it is done).
  */
 async function landingHeads(repo: string, locals: Array<{ name: string; path: string }>, git: GitRunner): Promise<string[]> {
   const heads: string[] = []
-  const config = await git(repo, ['config', '--get-regexp', '^branch\\..*\\.(remote|merge)$']).catch(() => '')
-  const upstream = new Map<string, { remote?: string; merge?: string }>()
-  for (const line of lines(config)) {
-    const m = /^branch\.(.+)\.(remote|merge) (.+)$/.exec(line)
-    if (!m) continue
-    const e = upstream.get(m[1]) ?? {}
-    if (m[2] === 'remote') e.remote = m[3]; else e.merge = m[3]
-    upstream.set(m[1], e)
-  }
-  for (const { name, path: remote } of locals) {
-    const refs = new Set<string>()
-    for (const e of upstream.values()) if (e.remote === name && e.merge?.startsWith('refs/heads/')) refs.add(e.merge)
+  for (const { path: remote } of locals) {
+    const gitDir = real(path.resolve(remote, (await git(remote, ['rev-parse', '--git-dir'])).trim()))
+    const common = real(path.resolve(remote, (await git(remote, ['rev-parse', '--git-common-dir'])).trim()))
+    if (gitDir !== common) continue
     const sym = (await git(remote, ['symbolic-ref', '-q', 'HEAD']).catch(() => '')).trim()
-    if (sym.startsWith('refs/heads/')) refs.add(sym)
-    for (const ref of refs) {
-      const h = (await git(remote, ['rev-parse', '--verify', '-q', `${ref}^{commit}`]).catch(() => '')).trim()
-      if (!SHA.test(h) || heads.includes(h)) continue
-      // Only a head whose commits this repo can read (a --shared clone sees the remote's objects).
-      if (await git(repo, ['cat-file', '-e', `${h}^{commit}`]).then(() => true, () => false)) heads.push(h)
-    }
+    if (!sym.startsWith('refs/heads/')) continue
+    const h = (await git(remote, ['rev-parse', '--verify', '-q', `${sym}^{commit}`]).catch(() => '')).trim()
+    if (!SHA.test(h) || heads.includes(h)) continue
+    // Only a head whose commits this repo can read (a --shared clone sees the remote's objects).
+    if (await git(repo, ['cat-file', '-e', `${h}^{commit}`]).then(() => true, () => false)) heads.push(h)
   }
   return heads
 }
 
 /** Whether every commit `tip` has beyond `not` holds an exactly equal change on `head`'s side since they forked. */
-async function landedOn(repo: string, tip: string, head: string, not: string[], git: GitRunner): Promise<boolean> {
+async function landedOn(repo: string, tip: string, head: string, not: string[], git: GitRunner, ids: Map<string, string>): Promise<boolean> {
   const ours = lines(await git(repo, ['rev-list', '--no-merges', `--max-count=${MAX_LANDED_CHECK + 1}`, tip, '--not', head, ...not.slice(1)]))
   if (ours.length === 0) return true
   if (ours.length > MAX_LANDED_CHECK) return false
@@ -275,10 +267,11 @@ async function landedOn(repo: string, tip: string, head: string, not: string[], 
     const files = (await git(repo, ['diff-tree', '--no-commit-id', '--name-only', '--no-renames', '-r', '-z', '--root', c])).split('\0').filter(Boolean)
     // A commit that changes nothing (only its message) matches any other empty one: it stays unique.
     if (files.length === 0) return false
-    const mine = await exactPatchId(repo, c, git)
+    const idOf = async (x: string) => { let v = ids.get(x); if (!v) { v = await exactPatchId(repo, x, git); ids.set(x, v) } return v }
+    const mine = await idOf(c)
     const candidates = lines(await git(repo, ['--literal-pathspecs', 'rev-list', '--no-merges', `--max-count=${MAX_CANDIDATES}`, head, `^${base}`, '--', ...files]))
     let found = false
-    for (const m of candidates) if (await exactPatchId(repo, m, git) === mine) { found = true; break }
+    for (const m of candidates) if (await idOf(m) === mine) { found = true; break }
     if (!found) return false
   }
   return true
@@ -306,11 +299,12 @@ async function landedOnLocalRemote(repo: string, trusted: string[], locals: Arra
     const tips = new Set(lines(await git(repo, ['for-each-ref', '--format=%(objectname)', 'refs/heads'])))
     const head = (await git(repo, ['rev-parse', '--verify', '-q', 'HEAD']).catch(() => '')).trim()
     if (head) tips.add(head)
+    const ids = new Map<string, string>()
     for (const tip of tips) {
       // Nothing of this tip is unique: no landing branch is needed for it.
       if (!(await git(repo, ['log', tip, ...not, '-n', '1', '--format=%h'])).trim()) continue
       let landed = false
-      for (const h of heads) if (await landedOn(repo, tip, h, not, git)) { landed = true; break }
+      for (const h of heads) if (await landedOn(repo, tip, h, not, git, ids)) { landed = true; break }
       if (!landed) return false
     }
     return true
