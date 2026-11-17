@@ -86,7 +86,21 @@ describe('session control relay payloads on a REPLICA', () => {
     expect(res.body).toEqual(result)
     expect(bridgeRequestMock).toHaveBeenCalledWith(
       '__local__', 'session.control',
-      { action: 'model', sessionId: SID, params: { model: 'opus-1m' } },
+      { action: 'model', sessionId: SID, params: { model: 'opus-1m', choice: 'person' } },
+      30_000,
+    )
+  })
+
+  it('POST model from a session relays it as an agent\'s pick (it holds one turn on the primary)', async () => {
+    bridgeRequestMock.mockResolvedValue({ ok: true, result: { model: 'sonnet', cliModel: 'sonnet', appliedLive: true } })
+    const res = await request(createApp())
+      .post(`/api/v1/sessions/${SID}/model`)
+      .set('x-walnut-caller-sid', 'lead-session')
+      .send({ model: 'sonnet' })
+    expect(res.status).toBe(200)
+    expect(bridgeRequestMock).toHaveBeenCalledWith(
+      '__local__', 'session.control',
+      { action: 'model', sessionId: SID, params: { model: 'sonnet', choice: 'agent' } },
       30_000,
     )
   })
