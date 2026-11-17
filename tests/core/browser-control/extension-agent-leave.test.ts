@@ -10,8 +10,12 @@
  *   - discard: true leaves without asking (a close goes through Target.closeTarget, no beforeunload);
  *   - work the page holds (page-unsaved.ts) stops the leave first, naming it, unless discard;
  *   - a page that does not answer is page_held at once; close discard still closes it.
+ * The page is asked first whether it would ask "Leave site?" (page-leave-ask.ts, in its own world),
+ * so Chrome never shows the dialog, which brings the agent's window to the front over the person's
+ * work (measured in Chromium): `asks` below. The native dialog tests are of a page that asks only on
+ * a real event, which that first ask misses.
  */
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 type Listener = (source: { tabId?: number }, method: string, params?: Record<string, unknown>) => void
 type Updated = (tabId: number, change: { status?: string; url?: string }) => void
@@ -33,6 +37,12 @@ const fake = {
   pendingLeave: undefined as undefined | (() => void),
   /** The "Leave site?" event comes this long after the call that starts the leave answered (a busy page). */
   lateMs: 0,
+  /** The page answers Walnut's own ask that it would ask "Leave site?" (page-leave-ask.ts). */
+  asks: false,
+  /** Walnut quieted the page's beforeunload for the leave under way. */
+  quieted: false,
+  winState: 'normal',
+  winUpdates: [] as unknown[],
 }
 const ev = () => ({ addListener() {}, removeListener() {} })
 const tab = () => ({ id: 7, windowId: 3, active: false, url: fake.url, title: 'Submit', status: 'complete' })
@@ -45,7 +55,7 @@ const emit = (method: string, params: Record<string, unknown>) => {
 const update = (change: { status?: string; url?: string }) => fake.updated.slice().forEach((fn) => fn(7, change))
 /** A leave of the page: through its "Leave site?" when it has one. */
 function leavePage(then: () => void): void {
-  if (!fake.beforeunload) { then(); return }
+  if (!fake.beforeunload || fake.quieted) { then(); return }
   fake.pendingLeave = then
   const open = () => emit('Page.javascriptDialogOpening', { type: 'beforeunload', message: '', defaultPrompt: '', url: fake.url, hasBrowserHandler: true })
   if (fake.lateMs) setTimeout(open, fake.lateMs); else open()
@@ -77,8 +87,15 @@ const navigateTo = (url: string) => () => { setTimeout(() => { fake.url = url; u
       return { ok: true, result: {} }
     },
   },
-  scripting: { executeScript: async () => (fake.answers ? [{ frameId: 0, result: {} }] : new Promise(() => {})) },
-  windows: { get: async () => ({ state: 'normal', focused: false }), onRemoved: ev() },
+  scripting: {
+    executeScript: async (o: { world?: string; args?: unknown[] }) => {
+      if (!fake.answers) return new Promise(() => {})
+      if (o.world === 'MAIN' && o.args?.[0] === 'ask') return [{ frameId: 0, result: { asks: fake.asks, frame: fake.url } }]
+      if (o.world === 'MAIN' && o.args?.[0] === 'quiet') { fake.quieted = true; return [{ frameId: 0, result: { asks: false } }] }
+      return [{ frameId: 0, result: {} }]
+    },
+  },
+  windows: { get: async () => ({ state: fake.winState, focused: false }), update: async (id: number, o: unknown) => { fake.winUpdates.push([id, o]) }, onRemoved: ev() },
   permissions: { contains: async () => true, onRemoved: ev() },
   debugger: {
     attach: async () => { fake.log.push(['attach', undefined]) },
@@ -108,6 +125,7 @@ const agent = await import('../../../packages/browser-extension/src/agent')
 const { walnutCheck, agentTabs } = await import('../../../packages/browser-extension/src/agent-shared')
 const { debuggerHeld, dropDebugger, _setLingerMsForTesting } = await import('../../../packages/browser-extension/src/cdp')
 const dialogs = await import('../../../packages/browser-extension/src/agent-dialog')
+const { _inPageForTesting: inPage } = await import('../../../packages/browser-extension/src/page-leave-ask')
 walnutCheck.isWalnutPage = async () => false
 
 const act = (action: string, args: Record<string, unknown> = {}) => agent._actForTesting({ id: 'c', action, args: { tab: 7, ...args }, allow: { any: true, sites: [] } }) as Promise<Record<string, any>>
@@ -125,6 +143,10 @@ beforeEach(() => {
   fake.url = PAGE_URL
   fake.pendingLeave = undefined
   fake.lateMs = 0
+  fake.asks = false
+  fake.quieted = false
+  fake.winState = 'normal'
+  fake.winUpdates = []
   dialogUp = false
   dialogs._resetDialogsForTesting()
   dropDebugger(7)
@@ -194,11 +216,12 @@ describe('navigate and back', () => {
     expect(await act('dialog', { accept: true })).toMatchObject({ dialog: 'accepted', left: true, url: 'https://forum.example.test/other' })
   })
 
-  it('navigate with discard leaves without asking', async () => {
+  it('navigate with discard leaves without asking (the page is quieted first, so no "Leave site?" opens)', async () => {
     fake.beforeunload = true
     const r = await act('navigate', { url: 'https://forum.example.test/other', discard: true })
-    expect(r).toMatchObject({ url: 'https://forum.example.test/other', left_anyway: LEAVE })
-    expect(answers()).toEqual([{ accept: true }])
+    expect(r).toMatchObject({ url: 'https://forum.example.test/other' })
+    expect(fake.quieted).toBe(true)
+    expect(answers()).toEqual([])
   })
 
   it('back answers with the "Leave site?" too', async () => {
@@ -258,5 +281,103 @@ describe('a "Leave site?" already up when the agent leaves again', () => {
     fake.lateMs = 400
     expect(await act('back')).toMatchObject({ dialog: { ...LEAVE, leaving: 'back' } })
     expect(debuggerHeld(7)).toBe(true)
+  })
+})
+
+describe('the page is asked before Chrome is', () => {
+  const dialogsSeen = () => fake.log.filter((l) => l[0] === 'Page.handleJavaScriptDialog').length
+
+  it('close, navigate and back on a page that would ask "Leave site?" stay, with no dialog shown, naming it', async () => {
+    fake.beforeunload = true
+    fake.asks = true
+    for (const [action, args] of [['close', {}], ['navigate', { url: 'https://forum.example.test/x' }], ['back', {}]] as const) {
+      const err = await act(action, args).catch((e) => e)
+      expect(err.code).toBe('unsaved_work')
+      expect(err.message).toMatch(/the page itself asks "Leave site\?"/)
+      expect(err.message).toMatch(/showed no dialog/)
+      expect(err.extra.dialog).toMatchObject({ type: 'beforeunload', shown: false, url: PAGE_URL })
+    }
+    expect(dialogUp).toBe(false)
+    expect(fake.pendingLeave).toBeUndefined()
+    expect(fake.removed).toBe(false)
+    expect(await agentTabs.get(7)).toBeTruthy()
+  })
+
+  it('discard: true on navigate quiets the page first: it leaves with no dialog at all', async () => {
+    fake.beforeunload = true
+    fake.asks = true
+    const r = await act('navigate', { url: 'https://forum.example.test/other', discard: true })
+    expect(fake.quieted).toBe(true)
+    expect(r.url).toBe('https://forum.example.test/other')
+    expect(r.left_anyway).toBeUndefined()
+    expect(dialogsSeen()).toBe(0)
+  })
+
+  it('a "Leave site?" the ask missed, in the agent window in the Dock: the window goes back to the Dock', async () => {
+    fake.beforeunload = true
+    fake.winState = 'minimized'
+    expect((await act('close')).dialog).toMatchObject({ type: 'beforeunload' })
+    expect(fake.winUpdates).toEqual([[3, { state: 'minimized' }]])
+  })
+
+  it('a window not in the Dock is left as it is', async () => {
+    fake.beforeunload = true
+    await act('close')
+    expect(fake.winUpdates).toEqual([])
+  })
+})
+
+describe('the in-page ask and quiet (page-leave-ask.ts inPage, on a stand-in window)', () => {
+  const g = globalThis as any
+  const withWindow = (handlers: Array<(e: any) => unknown>, onbeforeunload?: (e: any) => unknown) => {
+    class BeforeUnloadEvent {}
+    Object.defineProperty(BeforeUnloadEvent.prototype, 'returnValue', { configurable: true, get: () => '', set: () => undefined })
+    const w: any = {
+      onbeforeunload: onbeforeunload ?? null,
+      BeforeUnloadEvent,
+      dispatchEvent(e: any) { for (const h of handlers) h(e); if (typeof w.onbeforeunload === 'function') w.onbeforeunload(e); return true },
+    }
+    g.window = w
+    g.location = { href: 'https://forum.example.test/submit' }
+    return w
+  }
+  const restore = { window: g.window, location: g.location }
+  afterEach(() => { g.window = restore.window; g.location = restore.location; vi.useRealTimers() })
+
+  it.each([
+    ['preventDefault', (e: any) => { e.preventDefault() }],
+    ['returnValue = \'\'', (e: any) => { e.returnValue = '' }],
+  ])('a handler that asks with %s is read as asking; one that does nothing is not', (_n, h) => {
+    withWindow([h])
+    expect(inPage('ask', Date.now() + 2000).asks).toBe(true)
+    withWindow([() => undefined])
+    expect(inPage('ask', Date.now() + 2000).asks).toBe(false)
+  })
+
+  it('an onbeforeunload that returns words asks, and it is still the page\'s afterwards', () => {
+    const h = () => 'Unsaved'
+    const w = withWindow([], h)
+    expect(inPage('ask', Date.now() + 2000).asks).toBe(true)
+    expect(w.onbeforeunload).toBe(h)
+  })
+
+  it('quiet lasts 20 s: then the page\'s onbeforeunload and the event\'s own returnValue are as they were', () => {
+    vi.useFakeTimers()
+    const h = () => 'Unsaved'
+    const w = withWindow([], h)
+    const before = Object.getOwnPropertyDescriptor(w.BeforeUnloadEvent.prototype, 'returnValue')
+    inPage('quiet', Date.now() + 2000)
+    expect(w.onbeforeunload).toBeNull()
+    vi.advanceTimersByTime(20_000)
+    expect(w.onbeforeunload).toBe(h)
+    expect(Object.getOwnPropertyDescriptor(w.BeforeUnloadEvent.prototype, 'returnValue')).toEqual(before)
+    expect(Object.getOwnPropertyDescriptor(w.BeforeUnloadEvent.prototype, 'preventDefault')).toBeUndefined()
+  })
+
+  it('a call that comes after Walnut stopped waiting does nothing', () => {
+    const h = () => 'Unsaved'
+    const w = withWindow([], h)
+    expect(inPage('quiet', Date.now() - 1)).toEqual({ asks: false })
+    expect(w.onbeforeunload).toBe(h)
   })
 })

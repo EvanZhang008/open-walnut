@@ -38,6 +38,9 @@ let server: Server
 let base = ''
 let timer: ReturnType<typeof setInterval> | undefined
 let seen: Array<{ action: string; args: Record<string, unknown> }> = []
+/** What the browser answers a close with. */
+let closeAnswer: Record<string, unknown> = { closed: true }
+let dialogAnswer: Record<string, unknown> = {}
 
 async function act(body: Record<string, unknown>) {
   const r = await fetch(`${base}/browser/act`, { method: 'POST', headers: { 'content-type': 'application/json', ...AGENT }, body: JSON.stringify(body) })
@@ -64,12 +67,14 @@ beforeEach(async () => {
   h._resetBrowserHubForTesting()
   _resetBrowserRoutesForTesting()
   seen = []
+  closeAnswer = { closed: true }
+  dialogAnswer = {}
   await h.poll(A, 0)
   timer = setInterval(async () => {
     for (const cmd of await h.poll(A, 0)) {
       seen.push({ action: cmd.action, args: cmd.args })
       const tab = typeof cmd.args.tab === 'number' ? cmd.args.tab : 0
-      h.answer(A.device, cmd.id, true, { tab, url: 'https://shop.example.test/board', ...(cmd.action === 'close' ? { closed: true } : {}) })
+      h.answer(A.device, cmd.id, true, { tab, url: 'https://shop.example.test/board', ...(cmd.action === 'close' ? closeAnswer : cmd.action === 'dialog' ? dialogAnswer : {}) })
     }
   }, 10)
 })
@@ -139,6 +144,26 @@ describe('one tab: no --tab needed', () => {
     expect(seen.at(-1)).toMatchObject({ action: 'text', args: { tab: 41 } })
     expect((await act({ action: 'close' })).status).toBe(200)
     expect(seen.at(-1)).toMatchObject({ action: 'close', args: { tab: 41 } })
+    expect(h.tabsOf(A.device, 'agent')).toEqual([])
+  })
+
+  it('a close the page\'s "Leave site?" holds (closed: false, not let go) leaves the tab the task\'s, to answer that dialog', async () => {
+    own(41, 'Submit', 'https://forum.example.test/submit')
+    closeAnswer = { closed: false, dialog: { type: 'beforeunload', message: 'Leave site? Changes you made may not be saved.' } }
+    expect((await act({ action: 'close', tab: 41 })).body).toMatchObject({ closed: false, dialog: { type: 'beforeunload' } })
+    expect(h.tabsOf(A.device, 'agent')).toEqual([41])
+    expect((await act({ action: 'dialog', tab: 41, accept: false })).status).toBe(200)
+    expect(h.tabsOf(A.device, 'agent')).toEqual([41])
+    // Leave on it: the close went through, and this task closed the tab.
+    closeAnswer = { closed: true }
+    dialogAnswer = { dialog: 'accepted', closed: true }
+    expect((await act({ action: 'dialog', tab: 41, accept: true })).status).toBe(200)
+    expect(h.tabsOf(A.device, 'agent')).toEqual([])
+    expect((await act({ action: 'text', tab: 41 })).body.error).toMatch(/^This task closed tab 41 earlier/)
+    own(41, 'Submit', 'https://forum.example.test/submit')
+    // Let go (the tidy-up's, or the person's own tab): no longer the task's.
+    closeAnswer = { closed: false, released: true }
+    await act({ action: 'close', tab: 41 })
     expect(h.tabsOf(A.device, 'agent')).toEqual([])
   })
 

@@ -6,8 +6,11 @@
  * this". One test page opens, in turn, an alert, a confirm, a prompt and a "Leave site?"
  * (beforeunload): the agent gets each in the answer of the step that opened it, answers it with one
  * dialog call, and the page never stays stuck. Then the leave rules: work typed and not sent stops a
- * close (unsaved_work) until discard; a "Leave site?" on close and navigate comes back to the agent
- * at once with the tab still its own; Stay keeps the page, Leave goes.
+ * close (unsaved_work) until discard; a page that would ask "Leave site?" is asked first, so Chrome
+ * never shows that dialog (it brings the agent's window to the front over the person's for it) and
+ * the leave stops the same way until discard; a "Leave site?" that first ask misses (a page that asks
+ * only on a real event) comes back to the agent at once with the tab still its own; Stay keeps the
+ * page, Leave goes.
  *
  * The agent acts through the API, as `walnut browser` and the `browser` op do. Every dialog is held
  * open for the extension's own debugger: the test's Playwright connection listens for dialogs
@@ -35,6 +38,10 @@ let sites: http.Server
 let port = 0
 let base = ''
 let device = ''
+/** Every dialog Chrome showed, by type. */
+const shown: string[] = []
+/** Which window has the focus: the person's, or the agent's. */
+const focusedWindow = () => sw.evaluate(async () => (await chrome.windows.getLastFocused()).id)
 const site = (host: string, p: string) => `http://${host}:${port}${p}`
 const beat = (ms = 1200) => (HEADED ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve())
 /** The recording's log of the agent's calls (headed only). */
@@ -68,13 +75,16 @@ const SUBMIT = `<h1>New post</h1>
     // The page asks "Leave site?" while its upload runs, as a forum's submit page does.
     addEventListener('beforeunload', (e) => { if (uploading) { e.preventDefault(); e.returnValue = '' } })
   </script>`
+/** A page that asks only on the browser's own beforeunload, so Walnut's first ask misses it and Chrome shows the dialog. */
+const STRICT = `<h1>Strict editor</h1><button onclick="document.getElementById('out').textContent = 'editing'">Edit</button><p id="out">ready</p>
+  <script>addEventListener('beforeunload', (e) => { if (e.isTrusted) { e.preventDefault(); e.returnValue = '' } })</script>`
 const DRAFT = '<h1>Reply</h1><label>Reply <textarea id="reply"></textarea></label>'
 const LOG = '<style>li{margin:0 0 10px;list-style:none}b{color:#1d4ed8;font-size:14px}pre{margin:2px 0;font-size:13px;white-space:pre-wrap;color:#111}</style><h2>Agent calls (Walnut browser API)</h2><ul id="log" style="padding:0"></ul>'
 
 function startSites(): Promise<void> {
   sites = http.createServer((req, res) => {
     const p = new URL(req.url ?? '/', 'http://x').pathname
-    const body = p === '/submit' ? SUBMIT : p === '/draft' ? DRAFT : p === '/home' ? '<h1>Forum home</h1>' : p === '/log' ? LOG : ''
+    const body = p === '/submit' ? SUBMIT : p === '/draft' ? DRAFT : p === '/strict' ? STRICT : p === '/home' ? '<h1>Forum home</h1>' : p === '/log' ? LOG : ''
     res.writeHead(body ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' })
     res.end(body ? `<!doctype html><html><head><title>Forum</title></head><body style="font:18px sans-serif;margin:24px">${body}</body></html>` : 'not found')
   })
@@ -127,7 +137,7 @@ test.beforeAll(async ({ browser }, info) => {
       ...(HEADED ? ['--window-position=0,0', '--window-size=1000,900'] : [])],
   })
   // Seen, never answered: Playwright would dismiss a dialog nobody listens for.
-  ctx.on('dialog', () => undefined)
+  ctx.on('dialog', (d) => { shown.push(d.type()) })
   sw = ctx.serviceWorkers()[0] ?? await ctx.waitForEvent('serviceworker')
   sw.on('console', (msg) => { if (msg.type() === 'error') console.log(`[background error] ${msg.text()}`) })
   const extId = new URL(sw.url()).host
@@ -202,36 +212,62 @@ test('an alert, a confirm, a prompt and a "Leave site?" each reach the agent, wh
   expect((await act(page, { action: 'dialog', tab, accept: true, text: 'Launch notes' })).body).toMatchObject({ dialog: 'accepted', answered: { with: 'Launch notes' } })
   await expect.poll(read).toContain('prompt: Launch notes')
 
-  // An upload under way: the page asks "Leave site?" on a close. The close answers at once with
-  // it, the tab still the agent's (before 2026-11-17: a 504 after 30 s, and the tab read as the person's).
+  // An upload under way: the page would ask "Leave site?" on a close. Walnut asks the page first:
+  // the close answers at once that the page holds work, the tab still the agent's, and Chrome shows
+  // no dialog, so the agent's window never comes to the front (before 2026-11-17: a 504 after 30 s,
+  // the tab read as the person's, and Chrome's "Leave site?" over the person's screen).
   await click(/button "Upload video"/)
   await expect.poll(read).toContain('uploading video')
+  const looking = await focusedWindow()
   const t0 = Date.now()
   const shut = await act(page, { action: 'close', tab })
-  expect(shut.status, JSON.stringify(shut.body)).toBe(200)
   expect(Date.now() - t0).toBeLessThan(15_000)
+  expect(shut.body.code, JSON.stringify(shut.body)).toBe('unsaved_work')
+  expect(String(shut.body.error)).toMatch(/the page itself asks "Leave site\?"/)
+  expect(shut.body.dialog).toMatchObject({ type: 'beforeunload', shown: false })
+  await beat(2500)
+  expect(shown).not.toContain('beforeunload')
+  expect(await focusedWindow()).toBe(looking)
+  const tabs = (await act(page, { action: 'tabs' })).body.tabs as Array<{ id: number }>
+  expect(tabs.map((t) => t.id)).toContain(tab)
+  expect(await read()).toContain('uploading video')
+  // A navigate is stopped the same way; with discard the agent leaves, and no dialog opens.
+  expect((await act(page, { action: 'navigate', tab, url: site('www.forum.test', '/home') })).body.code).toBe('unsaved_work')
+  await beat()
+  const went = await act(page, { action: 'navigate', tab, url: site('www.forum.test', '/home'), discard: true })
+  expect(String(went.body.url), JSON.stringify(went.body)).toContain('/home')
+  expect((await act(page, { action: 'text', tab })).body.text).toContain('Forum home')
+  expect(shown).not.toContain('beforeunload')
+  expect(await focusedWindow()).toBe(looking)
+  await beat()
+  expect((await act(page, { action: 'close', tab })).body).toMatchObject({ closed: true })
+  expect(await tabAlive(tab)).toBe(false)
+})
+
+test('a "Leave site?" the first ask misses comes back to the agent at once; Stay keeps the page, Leave goes', async () => {
+  test.setTimeout(180_000)
+  const page = ctx.pages()[0]
+  const tab = (await act(page, { action: 'open', url: site('www.forum.test', '/strict') })).body.tab as number
+  await arrange(tab)
+  // Chrome asks only on a page a person (or trusted input) touched.
+  const s = (await act(page, { action: 'snapshot', tab })).body.snapshot as string
+  expect((await act(page, { action: 'click', tab, ref: refOf(s, /button "Edit"/) })).status).toBe(200)
+  const shut = await act(page, { action: 'close', tab })
+  expect(shut.status, JSON.stringify(shut.body)).toBe(200)
   expect(shut.body).toMatchObject({ closed: false, dialog: { type: 'beforeunload', message: 'Leave site? Changes you made may not be saved.' } })
   expect(String(shut.body.note)).toMatch(/dialog dismiss stays on the page/)
   await beat(2500)
-  const tabs = (await act(page, { action: 'tabs' })).body.tabs as Array<{ id: number }>
-  expect(tabs.map((t) => t.id)).toContain(tab)
-  // Stay: the page is as it was, and answers again.
   expect((await act(page, { action: 'dialog', tab, accept: false })).body).toMatchObject({ dialog: 'dismissed', stayed: true })
-  expect(await read()).toContain('uploading video')
   expect(await tabAlive(tab)).toBe(true)
+  expect(String((await act(page, { action: 'text', tab })).body.text)).toContain('editing')
   await beat()
-
-  // A navigate meets it too; this time the agent decides to leave.
   const nav = await act(page, { action: 'navigate', tab, url: site('www.forum.test', '/home') })
   expect(nav.body).toMatchObject({ dialog: { type: 'beforeunload' } })
   await beat(2500)
   const went = await act(page, { action: 'dialog', tab, accept: true })
   expect(went.body).toMatchObject({ dialog: 'accepted', left: true })
   expect(String(went.body.url)).toContain('/home')
-  expect((await act(page, { action: 'text', tab })).body.text).toContain('Forum home')
-  await beat()
   expect((await act(page, { action: 'close', tab })).body).toMatchObject({ closed: true })
-  expect(await tabAlive(tab)).toBe(false)
 })
 
 test('a reply typed and not sent stops a close until the agent discards it; a close with discard skips the "Leave site?"', async () => {

@@ -36,7 +36,7 @@ interface MoreApi {
   }
   windows: { get(id: number): Promise<{ id?: number; type?: string; incognito?: boolean }> }
   scripting?: {
-    executeScript(o: { target: { tabId: number; allFrames?: boolean }; func: () => unknown; injectImmediately?: boolean }): Promise<Array<{ frameId: number; result?: unknown }>>
+    executeScript<A extends unknown[]>(o: { target: { tabId: number; allFrames?: boolean }; func: (...args: A) => unknown; args?: A; world?: 'MAIN' | 'ISOLATED'; injectImmediately?: boolean }): Promise<Array<{ frameId: number; result?: unknown }>>
   }
   downloads?: {
     onCreated: Ev<(item: DownloadItem) => void>

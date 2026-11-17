@@ -3,9 +3,14 @@
  *   1. Work the page holds that leaving would lose (page-unsaved.ts: text typed and not sent,
  *      files chosen for an upload) stops the leave first with `unsaved_work`, naming it, unless
  *      the agent says discard: true.
- *   2. The leave runs with the debugger watching (agent-dialog.ts runWatching), so the page's own
- *      "Leave site?" (beforeunload) comes back to the agent at once while the page stays as it is:
- *      dialog accept leaves, dialog dismiss stays, and discard: true leaves without asking.
+ *      A page whose own beforeunload would ask "Leave site?" is asked first (page-leave-ask.ts) and
+ *      stops the leave the same way, so Chrome never shows that dialog: it brings the agent's
+ *      window to the front over the person's work for it. discard: true leaves without the page
+ *      asking at all.
+ *   2. The leave runs with the debugger watching (agent-dialog.ts runWatching), so a "Leave site?"
+ *      the first ask missed (a page that asks only on a real event) comes back to the agent at
+ *      once while the page stays as it is: dialog accept leaves, dialog dismiss stays; the agent's
+ *      window goes back to the Dock when it was there.
  * Before 2026-11-17 a close waited on chrome.tabs.remove, which never ends while that dialog is up,
  * and the server gave up after 30 s with a 504 that said nothing about a dialog (an agent posting
  * on a forum, its video still uploading); its holding was already gone, so the tab read as the
@@ -14,7 +19,7 @@
  */
 import { ext } from './ext'
 import { AgentError, agentTabs, agentWindowId, checkPage, frameOp, loaded, mark, ownTab, personsTab, sleep, where, type AgentTab, type WireCommand } from './agent-shared'
-import { DIALOG_OPEN, PAGE_HELD_WORDS, dialogOf, noteLeaving, orphanOf, releaseDialogHold, type DialogInfo, type LeaveKind } from './agent-dialog'
+import { DIALOG_OPEN, LEAVE_WORDS, PAGE_HELD_WORDS, dialogOf, noteLeaving, orphanOf, releaseDialogHold, type DialogInfo, type LeaveKind } from './agent-dialog'
 import { run, watched } from './agent-debugger'
 import type { Unsaved } from './page-unsaved'
 import { afterLeave, whenStarted } from './leave-end'
@@ -25,6 +30,7 @@ import { closeTab } from './tab-close'
 import { ungroupBeforeClose, type GroupApi } from './agent-groups'
 import { forgetAgentMade } from './agent-tidy'
 import { personTabsIn, type OwnApi } from './agent-window-own'
+import { leaveAsks, quietLeave } from './page-leave-ask'
 
 /** What the agent reads with a "Leave site?" its leave opened. */
 export const LEAVE_NOTE = 'The page asks "Leave site?": it says it holds changes that are not saved (a draft, an upload still going). The page stays as it is until you answer: '
@@ -32,13 +38,32 @@ export const LEAVE_NOTE = 'The page asks "Leave site?": it says it holds changes
 
 const unsavedLine = (u: Unsaved) => (u.kind === 'file' ? `${u.what} (files chosen: ${(u.files ?? []).join(', ')})` : `${u.what} (${u.chars ?? 0} characters typed)`)
 
-/** Work the page would lose: refused with what it is, unless the agent said discard. A page that does not answer is not asked. */
+/**
+ * Work the page would lose: refused with what it is, unless the agent said discard. Both what
+ * Walnut saw typed or chosen and the page's own word (its "Leave site?", asked of it without Chrome
+ * showing the dialog). A page that does not answer is not asked.
+ */
 export async function checkUnsaved(c: WireCommand, tabId: number): Promise<void> {
   if (c.args.discard === true) return
-  const r = await frameOp(tabId, 0, 'unsaved', {}, c.allow, 2000).catch(() => null) as { unsaved?: Unsaved[]; count?: number } | null
-  if (!r?.count || !r.unsaved?.length) return
-  throw new AgentError(`The page holds work that is not sent or saved yet: ${r.unsaved.map(unsavedLine).join('; ')}. ${c.action} would lose it. `
-    + `Send or save it first (or wait for an upload to finish); to leave anyway (or when it is already sent or saved), call ${c.action} again with discard: true.`, 'unsaved_work', { unsaved: r.unsaved })
+  const [r, ask] = await Promise.all([
+    frameOp(tabId, 0, 'unsaved', {}, c.allow, 2000).catch(() => null) as Promise<{ unsaved?: Unsaved[]; count?: number } | null>,
+    leaveAsks(tabId),
+  ])
+  const list = r?.count && r.unsaved?.length ? r.unsaved : []
+  if (!list.length && !ask) return
+  const parts = list.map(unsavedLine)
+  if (ask) parts.push('the page itself asks "Leave site?" (it says changes are not saved: a draft, an upload still going)')
+  throw new AgentError(`The page holds work that is not sent or saved yet: ${parts.join('; ')}. ${c.action} would lose it; Walnut stayed on the page and showed no dialog. `
+    + `Send or save it first (or wait for an upload to finish); to leave anyway (or when it is already sent or saved), call ${c.action} again with discard: true.`, 'unsaved_work',
+  { unsaved: list, ...(ask ? { dialog: { type: 'beforeunload', message: LEAVE_WORDS, url: ask.frame ?? '', shown: false } } : {}) })
+}
+
+/** The agent's window, when it is in the Dock: a "Leave site?" Chrome shows brings it out, and it goes back. */
+async function dockedWindow(tabId: number): Promise<number | undefined> {
+  const t = await ext.tabs.get(tabId).catch(() => null)
+  if (t?.windowId === undefined || t.windowId !== await agentWindowId()) return undefined
+  const w = await ext.windows.get(t.windowId).catch(() => null) as { state?: string } | null
+  return w?.state === 'minimized' ? t.windowId : undefined
 }
 
 /** Answers the dialog open on the tab (accept: Leave on a "Leave site?"), and the debugger held for it lets go. */
@@ -92,6 +117,8 @@ export async function leave(c: WireCommand, tabId: number, rec: AgentTab, kind: 
   // A close the agent chose to lose the page's work for: gone without its "Leave site?" at all.
   if (watch && await closeNow()) return { left: true }
   await checkUnsaved(c, tabId)
+  // The agent chose to lose what the page holds: it leaves without the page asking.
+  if (discard) await quietLeave(tabId)
   const unwatched = async (): Promise<LeaveResult> => {
     const done = await Promise.race([go().then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), UNWATCHED_MS))])
     if (!done) throw new AgentError(NOT_WATCHED, 'leave_not_seen')
@@ -99,6 +126,7 @@ export async function leave(c: WireCommand, tabId: number, rec: AgentTab, kind: 
   }
   if (!watch) return unwatched()
   let d: DialogInfo | undefined
+  const docked = await dockedWindow(tabId)
   try {
     d = await watched(tabId, rec.owner, go, undefined, { taint: false, enableMs: ENABLE_MS })
   } catch (err) {
@@ -109,6 +137,7 @@ export async function leave(c: WireCommand, tabId: number, rec: AgentTab, kind: 
     throw err
   }
   if (!d) return { left: true }
+  if (docked !== undefined) await ext.windows.update?.(docked, { state: 'minimized' }).catch(() => undefined)
   if (d.type === 'beforeunload' && discard) {
     await answer(tabId, rec, true)
     // The leave goes on: done once the tab is gone or the next page loaded.

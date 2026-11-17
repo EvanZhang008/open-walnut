@@ -516,13 +516,25 @@ agent never loses a page's work without deciding to and never hangs on a dialog 
    loaded that still holds a draft of 20 characters or more (one-line fields, search boxes and
    passwords never count, a sent form no longer does, a value a script set never does), and a file
    field whose files were chosen. `discard: true` (`--discard`) leaves anyway.
-2. The leave runs with the debugger watching, so the page's own "Leave site?" comes back to the
-   agent at once (`dialog: { type: "beforeunload", message: "Leave site? Changes you made may not be
+   A page whose own beforeunload would ask "Leave site?" stops the leave the same way, with
+   `dialog: { type: "beforeunload", shown: false }` in the answer
+   (packages/browser-extension/src/page-leave-ask.ts): Walnut runs the page's beforeunload handlers
+   once, in every frame and in the page's own world, on an event of its own, and reads whether one
+   asked (cancelled it, set `returnValue`, or returned a value), as Chrome would after a page was
+   touched. Chrome itself is never asked, because Chrome brings the window of a tab whose
+   beforeunload asks to the front and gives it the focus (out of the Dock when minimized; measured in
+   Chromium for close and navigate, not for an alert or a confirm in a window behind): the agent's
+   window came up over the person's work every time an agent left a forum post with a video still
+   uploading. With `discard: true` what would make Chrome ask does nothing for that leave (cancelling
+   the event, setting `returnValue`, an `onbeforeunload` return; a capturing listener that stops the
+   page's own was measured not to), so it leaves without a dialog.
+2. The leave runs with the debugger watching, so a "Leave site?" the first ask missed (a page that
+   asks only on the browser's own event) comes back to the agent at once (`dialog: { type: "beforeunload", message: "Leave site? Changes you made may not be
    saved." }`) while the page stays as it is and the tab stays the agent's: `dialog dismiss` stays,
    `dialog accept` leaves (the tab closes, or the next page loads, and the answer says so).
    `discard: true` leaves without asking; a `close` with it closes the tab without running the
    page's beforeunload at all (`Target.closeTarget`), which also closes a tab a dialog Walnut never
-   saw holds.
+   saw holds. When Chrome took the agent's window out of the Dock for it, the window goes back.
 3. A page held by a dialog Walnut never saw (or a hung page) answers `page_held` within 3 s, naming
    `close {discard: true}` as the way out: the watch's `Page.enable` waits on such a dialog, so it
    gets a deadline. A page whose script merely never loaded (a network error page) leaves as usual.

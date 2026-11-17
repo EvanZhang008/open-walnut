@@ -70,8 +70,10 @@ The task's session panel shows a live picture of your tab (the Browser view) wit
   else on the page answers `dialog_open` until then. One nobody answers within 5 minutes Walnut
   answers the safe way (OK on an alert, otherwise Cancel or Stay), and `dialog` then says so.
 - **Leaving a page** (`navigate`, `back`, `close`): a page holding a draft you typed into a text box
-  or editor and did not send, or files chosen for an upload, answers `unsaved_work` naming them; a page that asks "Leave site?"
-  answers with that dialog while you stay on the page and the tab stays yours. Decide: send or save
+  or editor and did not send, or files chosen for an upload, or a page that would ask "Leave site?"
+  (Walnut asks it first, so no dialog shows), answers `unsaved_work` naming them while you stay on the
+  page (its `dialog` there says `shown: false`: nothing is open, only `--discard` leaves). A "Leave
+  site?" that shows anyway answers with that dialog, the tab still yours. Decide: send or save
   the work (or wait for the upload to finish) and leave again, `dialog dismiss` to stay, `dialog
   accept` to leave and lose it, or `--discard` to leave without asking. `page_held` means the page
   does not answer (a dialog Walnut never saw holds it, opened by a page action without trusted, or

@@ -672,10 +672,16 @@ browserV1Router.post('/browser/act', (req, res, next) => {
         }
       } else { undoEnd?.(); throw err }
     }
-    const r = (result ?? {}) as { tab?: number; url?: string; title?: string; window?: 'agent' | 'person'; windowState?: string; tabs?: Array<{ id: number; owner?: string; url?: string; title?: string }>; released?: boolean; opened?: { tab?: unknown; url?: unknown } }
+    const r = (result ?? {}) as { tab?: number; url?: string; title?: string; window?: 'agent' | 'person'; windowState?: string; tabs?: Array<{ id: number; owner?: string; url?: string; title?: string }>; released?: boolean; closed?: boolean; opened?: { tab?: unknown; url?: unknown } }
     const facts = { url: r.url, title: r.title, window: r.window, windowState: r.windowState }
     if ((action === 'open' || action === 'take') && typeof r.tab === 'number') h.ownTab(c.device, r.tab, owner, { ...facts, window: r.window ?? (action === 'open' ? 'agent' : 'person') })
-    if (action === 'close' && tab !== undefined) { h.releaseTab(c.device, tab, r.released ? 'given_back' : 'closed'); handed.delete(tabKey(c.device, tab)) }
+    if (action === 'close' && tab !== undefined) {
+      // Not closed and not let go: the page's "Leave site?" holds it, and it stays the agent's to answer.
+      if (r.closed === false && !r.released) undoEnd?.()
+      else { h.releaseTab(c.device, tab, r.released ? 'given_back' : 'closed'); handed.delete(tabKey(c.device, tab)) }
+    }
+    // Leave on that "Leave site?": the close went through, so the task closed it.
+    if (action === 'dialog' && tab !== undefined && r.closed === true) { h.releaseTab(c.device, tab, 'closed'); handed.delete(tabKey(c.device, tab)) }
     // A tab the agent's tab opened (a link to a new tab, a popup window) is the same agent's.
     if (typeof r.opened?.tab === 'number') h.ownTab(c.device, r.opened.tab, owner, typeof r.opened.url === 'string' ? { url: r.opened.url } : undefined)
     const used = action === 'open' || action === 'take' ? r.tab : tab
