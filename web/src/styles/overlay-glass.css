@@ -103,3 +103,79 @@ html:root {
     backdrop-filter: none;
   }
 }
+
+/* --- Legible glass: the one see-through material, for overlays named below ----
+   2026-11-17, the user: "calendar should be glass view please". Everything above
+   stays solid. This material is glass that still reads: a raised surface at 84%
+   over a strong blur, so the page behind shows as colour and light, never as
+   words, with a hairline highlight on its top edge and a soft lifted shadow. It
+   is only for overlays portalled to <body> (WebKit blurs up to the nearest
+   backdrop root, and <body> has none), and each one is listed in
+   tests/web/overlays-opaque.test.ts (GLASS_OVERLAYS), which also checks the
+   floor of the tint, the blur, and the solid fallbacks below. Another page takes
+   it by adding `wn-glass` to its overlay and listing that overlay there.
+   `wn-glass-fill` is the material alone, with no frame (a popover's arrow). */
+html:root {
+  --glass-legible-bg: color-mix(in srgb, var(--bg-elevated, var(--card-bg)) 84%, transparent);
+  --glass-legible-blur: blur(30px) saturate(1.8);
+  --glass-legible-border: rgba(0, 0, 0, 0.1);
+  --glass-legible-highlight: rgba(255, 255, 255, 0.75);
+  --glass-legible-shadow: 0 18px 44px rgba(0, 0, 0, 0.16), 0 2px 8px rgba(0, 0, 0, 0.08);
+  /* A control's track on glass (a segmented switch) and its raised thumb. */
+  --glass-legible-track: rgba(118, 118, 128, 0.14);
+  --glass-legible-thumb: rgba(255, 255, 255, 0.92);
+}
+
+html:root[data-theme="dark"] {
+  --glass-legible-border: rgba(255, 255, 255, 0.14);
+  --glass-legible-highlight: rgba(255, 255, 255, 0.16);
+  --glass-legible-shadow: 0 18px 44px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.35);
+  --glass-legible-track: rgba(118, 118, 128, 0.26);
+  --glass-legible-thumb: rgba(99, 99, 102, 0.9);
+}
+
+@media (prefers-color-scheme: dark) {
+  html:root:not([data-theme]) {
+    --glass-legible-border: rgba(255, 255, 255, 0.14);
+    --glass-legible-highlight: rgba(255, 255, 255, 0.16);
+    --glass-legible-shadow: 0 18px 44px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.35);
+    --glass-legible-track: rgba(118, 118, 128, 0.26);
+    --glass-legible-thumb: rgba(99, 99, 102, 0.9);
+  }
+}
+
+html .wn-glass {
+  border: 1px solid var(--glass-legible-border);
+  box-shadow: inset 0 1px 0 var(--glass-legible-highlight), var(--glass-legible-shadow);
+}
+
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) and (background: color-mix(in srgb, red 50%, transparent)) {
+  html .wn-glass,
+  html .wn-glass.wn-glass,
+  html .wn-glass-fill.wn-glass-fill {
+    background: var(--glass-legible-bg);
+    -webkit-backdrop-filter: var(--glass-legible-blur);
+    backdrop-filter: var(--glass-legible-blur);
+  }
+}
+
+/* Solid wherever glass would not read or would cost too much: an engine with no
+   backdrop blur (the rule above never applies, so the overlay keeps its own solid
+   background), the system setting "Reduce transparency", and a low-end device
+   (utils/glass-capability.ts sets data-glass="solid" on <html>). */
+@media (prefers-reduced-transparency: reduce) {
+  html .wn-glass,
+  html .wn-glass.wn-glass,
+  html .wn-glass-fill.wn-glass-fill {
+    background: var(--bg-elevated, var(--card-bg));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+html[data-glass="solid"] .wn-glass.wn-glass,
+html[data-glass="solid"] .wn-glass-fill.wn-glass-fill {
+  background: var(--bg-elevated, var(--card-bg));
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}

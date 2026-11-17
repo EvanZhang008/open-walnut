@@ -355,7 +355,7 @@ function CalendarPicker({ calendars, value, onChange }: { calendars: CalendarInf
           <FlyoutBackdrop onClose={() => setOpen(false)} />
           <div
             ref={listRef}
-            className="cal-cal-list"
+            className="cal-cal-list wn-glass"
             role="listbox"
             aria-label="Calendars"
             style={menuPlacementStyle(placement)}
@@ -421,7 +421,7 @@ function DayButton({ day, onChange, label }: { day: string; onChange: (day: stri
           <FlyoutBackdrop onClose={() => setOpen(false)} />
           <div
             ref={flyRef}
-            className="dp-popover cal-day-flyout"
+            className="dp-popover cal-day-flyout wn-glass"
             style={menuPlacementStyle(placement)}
             onPointerDown={(e) => e.stopPropagation()}
             onMouseDown={(e) => e.stopPropagation()}

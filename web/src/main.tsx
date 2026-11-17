@@ -35,6 +35,7 @@ import { installVideoControls } from '../../src/lib/video-controls';
 import { installHighlightRules } from './utils/highlight-rules';
 import { installCodeBlockActions } from './utils/code-block-actions';
 import { installTruncationPeek } from './utils/truncation-peek';
+import { installGlassCapability } from './utils/glass-capability';
 import { hasUnsavedWork, initStaleAssetRecovery, initStaleBuildUpgrade } from './utils/stale-assets';
 import { installDesktopBridge } from './utils/desktop-bridge';
 import { installPluginHostRuntime } from './plugins/runtime';
@@ -229,6 +230,7 @@ function bootApp(): void {
   // the saved wrap preference on <html> before the first message paints.
   installCodeBlockActions();
   installTruncationPeek();
+  installGlassCapability();
 
   // Clear text selection instantly on mousedown to avoid macOS inactive-selection pink flash.
   // Scoped (was unconditional, which broke copy entirely): never on right/middle click —

@@ -235,7 +235,7 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
         }}
       />
       <div
-        className="cal-item-popover"
+        className="cal-item-popover wn-glass"
         ref={menuRef}
         style={menuPlacementStyle(placement)}
         role="dialog"

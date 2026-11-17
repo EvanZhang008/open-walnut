@@ -34,6 +34,7 @@ import { useCalendarEvents } from '@/hooks/useCalendarEvents';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { usePhoneOverlay } from '@/hooks/usePhoneOverlayHistory';
 import { CalendarToolbar, type CalendarViewKind } from '@/components/calendar/CalendarToolbar';
+import { usePageView } from '@/utils/view-memory';
 import { CalendarTaskList, TaskListChip } from '@/components/calendar/CalendarTaskList';
 import { MonthView } from '@/components/calendar/MonthView';
 import { TimeGrid, type DropPreview, type GridMetrics } from '@/components/calendar/TimeGrid';
@@ -47,6 +48,7 @@ import { gridLocalIso, gridSnapMinute } from '@/components/calendar/calendar-gri
 import { emptyDayLine, isDayEmpty } from '@/components/calendar/phone-empty-day';
 
 const VALID_VIEWS = new Set<CalendarViewKind>(['day', 'week', 'month']);
+const isCalendarView = (v: unknown): v is CalendarViewKind => typeof v === 'string' && VALID_VIEWS.has(v as CalendarViewKind);
 const LS_RAIL_KEY = 'open-walnut-calendar-rail-open';
 
 /** Parse the drop target id minted by the views: day:… | allday:… | col:… */
@@ -63,14 +65,20 @@ export function CalendarPage() {
 
   // A phone opens on one day: seven columns at phone width are 45px each.
   const phoneLayout = usePhoneLayout();
-  const rawView = searchParams.get('view') as CalendarViewKind | null;
-  const view: CalendarViewKind = rawView && VALID_VIEWS.has(rawView) ? rawView : phoneLayout ? 'day' : 'week';
+  // The view the user last picked is kept (synced with the rest of the UI prefs):
+  // a link's ?view wins, a bare /calendar opens on the kept one. A phone keeps its
+  // own (it opens on one day; seven columns at phone width are 45px each).
+  const [keptView, setKeptView] = usePageView<CalendarViewKind>('calendar', 'view', 'week', isCalendarView);
+  const [keptPhoneView, setKeptPhoneView] = usePageView<CalendarViewKind>('calendar', 'phoneView', 'day', isCalendarView);
+  const rawView = searchParams.get('view');
+  const view: CalendarViewKind = isCalendarView(rawView) ? rawView : phoneLayout ? keptPhoneView : keptView;
   const rawDay = searchParams.get('d');
   const anchorDay = rawDay && /^\d{4}-\d{2}-\d{2}$/.test(rawDay) ? rawDay : formatDateOnly(new Date());
   const anchor = useMemo(() => parseDateLocal(anchorDay), [anchorDay]);
 
   const setParam = useCallback(
     (patch: { view?: CalendarViewKind; d?: string }) => {
+      if (patch.view) (phoneLayout ? setKeptPhoneView : setKeptView)(patch.view);
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev);
@@ -81,7 +89,7 @@ export function CalendarPage() {
         { replace: true }
       );
     },
-    [setSearchParams]
+    [setSearchParams, phoneLayout, setKeptPhoneView, setKeptView]
   );
 
   const [railOpen, setRailOpen] = useState(() => localStorage.getItem(LS_RAIL_KEY) !== 'false');

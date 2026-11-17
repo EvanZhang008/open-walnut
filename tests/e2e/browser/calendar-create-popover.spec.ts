@@ -395,3 +395,111 @@ test('Enter before the calendars are read still creates the event, once they arr
   await fetch(`${API}/api/calendar/events/${encodeURIComponent(id)}`, { method: 'DELETE' })
   await page.unrouteAll({ behavior: 'ignoreErrors' })
 })
+
+/**
+ * The popover and the switches are glass (2026-11-17, the user: "calendar should be glass view
+ * please"): a backdrop blur over a tint of at least 84%, and every text in the popover keeps
+ * 4.5:1 over the worst backdrop the blur can give it in each theme. The backdrop is the
+ * page's own background pulled halfway to the opposite pole (a bright event block behind a
+ * dark popover, a dark one behind a light popover), then the tint, then each card's own tint.
+ */
+for (const theme of ['light', 'dark'] as const) {
+  test(`glass, ${theme}: the popover and the view switch blur what is behind them, and every text reads 4.5:1`, async ({ page }) => {
+    await page.addInitScript((t) => localStorage.setItem('open-walnut-theme', t), theme)
+    await openCalendar(page)
+    const slot = await calendarEmptySlotPoint(page, localDay(0), 10)
+    await page.mouse.click(slot.x, slot.y)
+    await expect(popover(page)).toBeVisible()
+    await page.locator('.cal-event-form-title').fill('Design review')
+    const report = await page.evaluate(() => {
+      const parse = (c: string): [number, number, number, number] => {
+        const m = c.match(/rgba?\(([^)]+)\)/)
+        if (m) {
+          const p = m[1].split(/[\s,/]+/).filter(Boolean).map(Number)
+          return [p[0] / 255, p[1] / 255, p[2] / 255, p[3] ?? 1]
+        }
+        const s = c.match(/color\(srgb\s+([^)]+)\)/)
+        if (s) {
+          const p = s[1].split(/[\s/]+/).filter(Boolean).map(Number)
+          return [p[0], p[1], p[2], p[3] ?? 1]
+        }
+        return [0, 0, 0, 0]
+      }
+      const over = (top: number[], base: number[]) => [0, 1, 2].map((i) => top[i] * top[3] + base[i] * (1 - top[3]))
+      const lum = (c: number[]) => {
+        const f = (v: number) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
+        return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2])
+      }
+      const ratio = (a: number[], b: number[]) => {
+        const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p)
+        return (x + 0.05) / (y + 0.05)
+      }
+      const pop = document.querySelector('.cal-create-popover') as HTMLElement
+      const dark = document.documentElement.dataset.theme === 'dark'
+      const pageBg = parse(getComputedStyle(document.body).backgroundColor).slice(0, 3)
+      const pole = dark ? [1, 1, 1] : [0, 0, 0]
+      const backdrop = over([...pole, 0.5], pageBg)
+      const popStyle = getComputedStyle(pop)
+      const popBg = parse(popStyle.backgroundColor)
+      const surface = over(popBg, backdrop)
+      const low: string[] = []
+      let checked = 0
+      const walker = document.createTreeWalker(pop, NodeFilter.SHOW_ELEMENT)
+      for (let el = walker.currentNode as HTMLElement | null; el; el = walker.nextNode() as HTMLElement | null) {
+        const own = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent!.trim()) || (el instanceof HTMLInputElement && el.type === 'text' && el.value)
+        if (!own || !el.getClientRects().length || getComputedStyle(el).visibility === 'hidden') continue
+        const chain: HTMLElement[] = []
+        for (let a: HTMLElement | null = el; a && a !== pop; a = a.parentElement) chain.unshift(a)
+        let bg = surface
+        for (const a of chain) bg = over(parse(getComputedStyle(a).backgroundColor), bg)
+        const fg = parse(getComputedStyle(el).color)
+        const r = ratio(over(fg, bg), bg)
+        checked++
+        if (r < 4.5) low.push(`${el.className || el.tagName} "${(el.textContent || (el as HTMLInputElement).value).trim().slice(0, 24)}" ${r.toFixed(2)}`)
+      }
+      const sw = getComputedStyle(document.querySelector('.cal-view-switch')!)
+      const active = getComputedStyle(document.querySelector('.cal-view-switch .cal-view-btn.active')!)
+      return {
+        dark,
+        blur: popStyle.backdropFilter || (popStyle as unknown as Record<string, string>).webkitBackdropFilter,
+        alpha: popBg[3],
+        arrowBlur: getComputedStyle(document.querySelector('.cal-create-arrow')!).backdropFilter,
+        low,
+        checked,
+        track: sw.backgroundColor,
+        thumb: active.backgroundColor,
+        thumbShadow: active.boxShadow,
+      }
+    })
+    expect(report.dark).toBe(theme === 'dark')
+    expect(report.blur).toMatch(/blur\(30px\)/)
+    expect(report.arrowBlur).toMatch(/blur\(30px\)/)
+    expect(report.alpha).toBeGreaterThanOrEqual(0.84)
+    expect(report.alpha).toBeLessThan(1)
+    expect(report.checked).toBeGreaterThanOrEqual(6)
+    expect(report.low, 'text under 4.5:1 on the glass').toEqual([])
+    // The view switch: a see-through track and a raised thumb.
+    expect(parse01(report.track)).toBeLessThan(0.5)
+    expect(report.thumbShadow).not.toBe('none')
+    await shot(page, `glass-${theme}`)
+  })
+}
+
+test('glass: Reduce transparency paints the popover solid, with no blur', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'only Chromium can emulate prefers-reduced-transparency')
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-transparency', value: 'reduce' }] })
+  await openCalendar(page)
+  const slot = await calendarEmptySlotPoint(page, localDay(0), 10)
+  await page.mouse.click(slot.x, slot.y)
+  await expect(popover(page)).toBeVisible()
+  const s = await popover(page).evaluate((el) => ({ bg: getComputedStyle(el).backgroundColor, blur: getComputedStyle(el).backdropFilter }))
+  expect(s.blur).toBe('none')
+  expect(parse01(s.bg)).toBe(1)
+})
+
+/** The alpha of a computed colour (rgb/rgba/color(srgb …)). */
+function parse01(c: string): number {
+  const a = c.match(/\/\s*([\d.]+)\)/)?.[1] ?? c.match(/rgba\([^)]*,\s*([\d.]+)\)/)?.[1]
+  return a === undefined ? 1 : Number(a)
+}

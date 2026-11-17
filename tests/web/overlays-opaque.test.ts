@@ -7,6 +7,13 @@
  * found from the source (the first two elements a component portals out, and every overlay the
  * glass lists name), and every style rule for it must paint an opaque background with no
  * backdrop blur. A full-window scrim (`inset: 0`) behind a panel may stay see-through.
+ *
+ * One material is see-through on purpose: the legible glass (`wn-glass`, overlay-glass.css;
+ * 2026-11-17, the user: "calendar should be glass view please"). It is a raised surface at 84%
+ * or more over a strong blur, so the page behind reads as colour, never as words; it is only for
+ * overlays portalled to <body> (WebKit blurs up to the nearest backdrop root), only for the
+ * ones listed in GLASS_OVERLAYS, and solid without blur support, with Reduce transparency and on
+ * a low-end device. The second describe block checks each of those.
  */
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
@@ -15,6 +22,22 @@ import { seeThrough } from './helpers/css-see-through';
 
 const WEB = path.resolve(__dirname, '../../web/src');
 const STYLES = path.join(WEB, 'styles');
+
+/** The legible glass's own classes: the material, never an overlay. */
+const GLASS_CLASSES = ['wn-glass', 'wn-glass-fill'];
+/** The overlays that take the legible glass, with why each one may. */
+const GLASS_OVERLAYS: Record<string, string> = {
+  'cal-create-popover': 'the calendar\'s new-item popover beside the block it creates',
+  'cal-create-arrow': 'that popover\'s arrow (wn-glass-fill: the material without its frame)',
+  'cal-item-popover': 'an event or task opened from the calendar',
+  'cal-ctx-menu': 'the calendar\'s right-click menu',
+  'cal-cals-popover': 'the calendar list (which calendars show) and its hidden events',
+  'cal-overflow-popover': 'a month cell\'s "+N more" list',
+  'cal-cal-list': 'the new-event form\'s calendar picker',
+  'cal-day-flyout': 'the new-event form\'s mini month (date picker)',
+};
+/** The tint floor: the raised surface's share of the glass. */
+const GLASS_TINT_MIN = 84;
 
 function files(dir: string, ext: string): string[] {
   const out: string[] = [];
@@ -105,7 +128,7 @@ function resolveTokens(value: string): string {
 }
 
 describe('overlays are solid', () => {
-  const classes = new Set([...portalledClasses(), ...glassListed()]);
+  const classes = new Set([...portalledClasses(), ...glassListed()].filter((c) => !GLASS_CLASSES.includes(c)));
   const all = rules();
 
   it('finds the overlays it guards', () => {
@@ -169,5 +192,76 @@ describe('overlays are solid', () => {
       }
     }
     expect(bad, 'an overlay paints var(--bg); give it var(--bg-elevated, var(--card-bg))').toEqual([]);
+  });
+});
+
+describe('the legible glass stays legible, and only where it is listed', () => {
+  const glassCss = strip(fs.readFileSync(path.join(STYLES, 'overlay-glass.css'), 'utf8'));
+  const allCss = files(STYLES, '.css').map((f) => strip(fs.readFileSync(f, 'utf8'))).join('\n');
+
+  /** Every element that carries a glass class, with the classes beside it and its file. */
+  function carriers(): { file: string; classes: string[] }[] {
+    const out: { file: string; classes: string[] }[] = [];
+    for (const file of files(WEB, '.tsx')) {
+      const text = fs.readFileSync(file, 'utf8');
+      for (const m of text.matchAll(/className=(?:"([^"]+)"|\{`([^`]+)`\})/g)) {
+        const tokens = (m[1] ?? m[2]).replace(/\$\{[^}]*\}/g, ' ').split(/\s+/).filter(Boolean);
+        if (tokens.some((t) => GLASS_CLASSES.includes(t))) out.push({ file: path.relative(WEB, file), classes: tokens });
+      }
+    }
+    return out;
+  }
+
+  it('only the listed overlays carry it, each one portalled to <body>', () => {
+    const found = carriers();
+    const bad: string[] = [];
+    for (const c of found) {
+      const named = c.classes.filter((t) => GLASS_OVERLAYS[t]);
+      if (!named.length) bad.push(`${c.file}: ${c.classes.join(' ')} (not in GLASS_OVERLAYS)`);
+      const text = fs.readFileSync(path.join(WEB, c.file), 'utf8');
+      if (!/createPortal\([\s\S]*document\.body/.test(text)) bad.push(`${c.file}: ${c.classes.join(' ')} is not portalled to <body>`);
+    }
+    expect(bad).toEqual([]);
+    const carried = new Set(found.flatMap((c) => c.classes));
+    expect(Object.keys(GLASS_OVERLAYS).filter((o) => !carried.has(o)), 'a GLASS_OVERLAYS entry no element carries: drop it').toEqual([]);
+  });
+
+  it('its tint never falls under the floor, over a strong blur', () => {
+    const tints = [...allCss.matchAll(/--glass-legible-bg\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+    expect(tints.length).toBeGreaterThan(0);
+    for (const t of tints) {
+      const m = t.match(/^color-mix\(in srgb,\s*(.+?)\s+(\d+(?:\.\d+)?)%\s*,\s*transparent\)$/);
+      expect(m, t).not.toBeNull();
+      expect(seeThrough(m![1]), `the tinted surface itself is solid: ${t}`).toBe(false);
+      expect(Number(m![2]), t).toBeGreaterThanOrEqual(GLASS_TINT_MIN);
+    }
+    for (const m of allCss.matchAll(/--glass-legible-blur\s*:\s*([^;]+);/g)) {
+      const px = Number(m[1].match(/blur\((\d+)px\)/)?.[1] ?? 0);
+      expect(px, m[1]).toBeGreaterThanOrEqual(20);
+    }
+  });
+
+  it('it is see-through only where the engine blurs, and solid with Reduce transparency or on a low-end device', () => {
+    // Every rule that paints the glass tint sits in an @supports block for backdrop blur.
+    const blocks = [...glassCss.matchAll(/@supports[^{]*backdrop-filter[^{]*\{((?:[^{}]*\{[^{}]*\})+)\s*\}/g)].map((m) => m[1]);
+    const supports = blocks.join('\n');
+    const outside = blocks.reduce((css, b) => css.replace(b, ''), allCss);
+    const painted = [...outside.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter((m) => /background(?:-color)?\s*:\s*var\(--glass-legible-bg\)/.test(m[2]));
+    expect(painted.map((m) => m[1].trim()), 'the glass tint is painted outside its @supports block').toEqual([]);
+    expect(supports).toMatch(/background\s*:\s*var\(--glass-legible-bg\)/);
+    expect(supports).toMatch(/backdrop-filter\s*:\s*var\(--glass-legible-blur\)/);
+
+    const solidFor = (block: string) => {
+      for (const cls of GLASS_CLASSES) expect(block, cls).toMatch(new RegExp(`\\.${cls}`));
+      const bg = block.match(/background\s*:\s*([^;]+);/)?.[1] ?? '';
+      expect(seeThrough(resolveTokens(bg)), bg).toBe(false);
+      expect(block).toMatch(/(?:^|[^-])backdrop-filter\s*:\s*none/);
+    };
+    const reduce = glassCss.match(/@media\s*\(prefers-reduced-transparency:\s*reduce\)\s*\{((?:[^{}]*\{[^{}]*\})+)\s*\}/);
+    expect(reduce, 'a prefers-reduced-transparency block').not.toBeNull();
+    solidFor(reduce![1]);
+    const lowEnd = glassCss.match(/html\[data-glass="solid"\][^{]*\{[^{}]*\}/);
+    expect(lowEnd, 'an html[data-glass="solid"] rule').not.toBeNull();
+    solidFor(lowEnd![0]);
   });
 });

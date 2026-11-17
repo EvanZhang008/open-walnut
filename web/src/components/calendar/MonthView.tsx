@@ -348,7 +348,7 @@ export const MonthView = memo(function MonthView({
         createPortal(
           <>
             <div className="cal-popover-backdrop" onClick={() => setOverflowDay(null)} />
-            <div className="cal-overflow-popover" ref={overflowMenuRef} style={menuPlacementStyle(overflowPlacement)}>
+            <div className="cal-overflow-popover wn-glass" ref={overflowMenuRef} style={menuPlacementStyle(overflowPlacement)}>
               <div className="cal-overflow-title">{overflowDay}</div>
               {overflowItems.map((it) => (
                 <CalendarChip

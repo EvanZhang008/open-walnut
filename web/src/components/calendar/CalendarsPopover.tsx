@@ -44,7 +44,7 @@ function HiddenEventsFlyout({ anchorRef, events, onShow, onClose }: {
   return createPortal(
     <div
       ref={listRef}
-      className="cal-cals-popover cal-hidden-events"
+      className="cal-cals-popover cal-hidden-events wn-glass"
       style={{ ...menuPlacementStyle(placement), zIndex: 10001 }}
       role="dialog"
       aria-label="Hidden events"
@@ -99,7 +99,7 @@ export function CalendarsPopover({ anchorEl, onClose, hiddenEvents = [], onShowE
     <>
       <div className="cal-popover-backdrop" onClick={onClose} />
       <div
-        className="cal-cals-popover"
+        className="cal-cals-popover wn-glass"
         ref={menuRef}
         style={menuPlacementStyle(placement)}
         data-testid="cal-cals-popover"

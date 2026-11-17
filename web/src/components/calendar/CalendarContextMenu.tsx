@@ -86,7 +86,7 @@ export function CalendarContextMenu({
     <>
       <div className="cal-popover-backdrop" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
       <div
-        className="cal-ctx-menu"
+        className="cal-ctx-menu wn-glass"
         ref={menuRef}
         style={menuPlacementStyle(placement)}
         role="menu"

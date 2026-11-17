@@ -30484,29 +30484,42 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   background: var(--bg-secondary);
 }
 
-.cal-view-switch {
+/* Segmented switches on the calendar (Day | Week | Month here, Event | Task in
+   the new-item popover): a see-through track and a raised glass thumb
+   (overlay-glass.css, --glass-legible-*). */
+.cal-view-switch,
+.cal-create-tabs {
   display: inline-flex;
   padding: 2px;
   border-radius: 9px;
-  background: var(--bg-secondary);
+  background: var(--glass-legible-track, var(--bg-secondary));
 }
 
-.cal-view-btn {
+.cal-view-btn,
+.cal-create-tabs button {
   height: 26px;
   padding: 0 14px;
   border: none;
   border-radius: 7px;
   background: transparent;
-  color: var(--fg-muted);
+  color: var(--fg);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.cal-view-btn.active {
-  background: var(--card-bg);
+.cal-view-btn:not(.active):hover,
+.cal-create-tabs button:not(.active):hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+
+.cal-view-btn.active,
+.cal-create-tabs button.active {
+  background: var(--glass-legible-thumb, var(--card-bg));
   color: var(--fg);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  font-weight: 600;
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.06), 0 3px 8px rgba(0, 0, 0, 0.12), 0 1px 1px rgba(0, 0, 0, 0.04);
 }
 
 /* --- permission banner ----------------------------------------------------- */
@@ -31293,21 +31306,39 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 }
 
 /* The arrow: a square turned 45°, its outer half outside the popover's edge,
-   in the popover's colour, with the popover's border on its two outer sides. */
+   in the popover's material, with the popover's border on its two outer sides.
+   Only the outer half (plus 2px over the popover's border, so no line crosses
+   its base) is drawn: glass laid twice would show a darker diamond inside. */
 .cal-create-arrow {
   width: 14px;
   height: 14px;
   box-sizing: border-box;
   background: var(--overlay-glass-bg, var(--card-bg));
-  border: 0 solid color-mix(in srgb, var(--fg) 13%, transparent);
+  border: 0 solid var(--glass-legible-border, color-mix(in srgb, var(--fg) 13%, transparent));
   transform: translate(-50%, -50%) rotate(45deg);
   pointer-events: none;
 }
 
-.cal-create-arrow[data-edge='left'] { border-left-width: 1px; border-bottom-width: 1px; }
-.cal-create-arrow[data-edge='right'] { border-top-width: 1px; border-right-width: 1px; }
-.cal-create-arrow[data-edge='top'] { border-top-width: 1px; border-left-width: 1px; }
-.cal-create-arrow[data-edge='bottom'] { border-right-width: 1px; border-bottom-width: 1px; }
+.cal-create-arrow[data-edge='left'] {
+  border-left-width: 1px;
+  border-bottom-width: 1px;
+  clip-path: polygon(0 0, 2px 0, 100% calc(100% - 2px), 100% 100%, 0 100%);
+}
+.cal-create-arrow[data-edge='right'] {
+  border-top-width: 1px;
+  border-right-width: 1px;
+  clip-path: polygon(0 0, 100% 0, 100% 100%, calc(100% - 2px) 100%, 0 2px);
+}
+.cal-create-arrow[data-edge='top'] {
+  border-top-width: 1px;
+  border-left-width: 1px;
+  clip-path: polygon(0 0, 100% 0, 100% 2px, 2px 100%, 0 100%);
+}
+.cal-create-arrow[data-edge='bottom'] {
+  border-right-width: 1px;
+  border-bottom-width: 1px;
+  clip-path: polygon(100% 0, 100% 100%, 0 100%, 0 calc(100% - 2px), calc(100% - 2px) 0);
+}
 
 /* --- homepage day-agenda side panel ------------------------------------------- */
 .cal-side-panel {
@@ -31436,30 +31467,14 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 }
 
 /* --- new-item popover: Event | Task switch + event form ---------------------- */
+/* The track and thumb are the calendar's shared segmented switch (.cal-view-switch). */
 .cal-create-tabs {
   display: flex;
   flex-shrink: 0;
-  padding: 2px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--fg) 7%, transparent);
 }
 
 .cal-create-tabs button {
   flex: 1;
-  height: 26px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--fg);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.cal-create-tabs button.active {
-  background: var(--accent);
-  color: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
 }
 
 .cal-event-form {
@@ -31596,7 +31611,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
 /* The current calendar is shown by colour, never a checkmark. */
 .cal-cal-option[aria-selected='true'] {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated, var(--card-bg)));
   color: var(--accent);
   font-weight: 600;
 }
@@ -31702,7 +31717,8 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 }
 
 .cal-when-dash {
-  color: var(--fg-muted);
+  /* --fg-secondary, not --fg-muted: muted grey reads 3.1:1 on the glass (4.5:1 needed). */
+  color: var(--fg-secondary);
 }
 
 .cal-when-allday {
@@ -31711,7 +31727,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   gap: 6px;
   min-height: 30px;
   font-size: 12.5px;
-  color: var(--fg-muted);
+  color: var(--fg-secondary);
   cursor: pointer;
 }
 
@@ -31745,8 +31761,11 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 }
 
 .cal-event-form-create {
-  border-color: var(--accent);
-  background: var(--accent);
+  /* The accent a shade deeper: white on the plain accent reads 4.0:1 (light) and
+     3.7:1 (dark), this one 6.3:1 and 5.5:1. */
+  --cal-create-fill: color-mix(in srgb, var(--accent) 78%, #000);
+  border-color: var(--cal-create-fill);
+  background: var(--cal-create-fill);
   color: #fff;
   font-weight: 600;
 }

@@ -172,7 +172,7 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
         />
       )}
       <div
-        className="cal-create-popover"
+        className="cal-create-popover wn-glass"
         ref={menuRef}
         style={menuPlacementStyle(placement)}
         data-kind={shown}
@@ -236,7 +236,7 @@ function PopoverArrow({ arrow }: { arrow?: PlacementArrow }) {
   if (!arrow) return null;
   return (
     <div
-      className="cal-create-arrow"
+      className="cal-create-arrow wn-glass-fill"
       data-edge={arrow.edge}
       style={{ position: 'fixed', left: arrow.x, top: arrow.y, zIndex: 9999 }}
       aria-hidden="true"
