@@ -141,8 +141,7 @@ describe('a remote session', () => {
     expect(readyMock.mock.calls[0]![1]).toBe(HISTORY_OPEN_PREVIEW_MS);
     expect(heldWhileAsking).toBe(true);
     // Released once the paint answered; only the short quiet spell for the full read is left.
-    await new Promise((r) => setTimeout(r, OPEN_QUIET_MS + 50));
-    expect(hostOpenBusy('remote-dev')).toBe(false);
+    await vi.waitFor(() => expect(hostOpenBusy('remote-dev')).toBe(false), { timeout: OPEN_QUIET_MS + 1_000 });
   });
 
   it('a host with no ready view in time: the preview is the first paint, readable or not', async () => {

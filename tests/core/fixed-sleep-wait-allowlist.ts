@@ -65,6 +65,7 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/core/fork-sibling-task.test.ts", sleep: "await new Promise((r) => setTimeout(r, 30));", reason: "negative: no group refine may run on an established folder" },
   { file: "tests/core/fork-sibling-task.test.ts", sleep: "await new Promise((r) => setTimeout(r, 60));", reason: "negative: the title refine must not run when titlePrefix is given" },
   { file: "tests/core/health-scan-active-set.test.ts", sleep: "await new Promise(r => setTimeout(r, 200));", reason: "negative: no tick may overlap (runs is counted synchronously by kick)" },
+  { file: "tests/core/history-view-snapshot-prune.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50));", reason: "negative: a second open inside the touch window must not touch the view (the touch is fire-and-forget, nothing to await)" },
   { file: "tests/core/host-server-manager.test.ts", sleep: "await new Promise((r) => setTimeout(r, 20))", reason: "negative: a failed tunnel release leaves no unhandled rejection" },
   { file: "tests/core/host-server-manager.test.ts", sleep: "await new Promise((r) => setTimeout(r, 80))", reason: "negative: a non-login setup failure is not retried (upload count stays 1)" },
   { file: "tests/core/host-server-manager.test.ts", sleep: "await new Promise((r) => setTimeout(r, 30))", reason: "negative: a poll seeing the same server tells nothing again" },
