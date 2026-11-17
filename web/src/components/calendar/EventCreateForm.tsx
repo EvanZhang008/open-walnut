@@ -210,8 +210,9 @@ export function EventCreateForm({
   useEffect(() => {
     if (calendars === null || !submitWhenReady.current) return;
     submitWhenReady.current = false;
-    if (calendarId) void submitNow();
-    // submitNow reads the current form; it runs once, when the calendars arrive.
+    // Through the gate like every press: it runs once, when the calendars arrive,
+    // and still waits for a title being dictated.
+    if (calendarId) gate.send();
   }, [calendars, calendarId]);
   const onFieldKey = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); gate.send(); }
