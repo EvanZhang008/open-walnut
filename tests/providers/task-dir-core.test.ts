@@ -307,6 +307,48 @@ describe('removeTaskDirs: nothing that exists only here is ever deleted', () => 
       expect(await unmergedWork(path.dirname(work))).toEqual(['walnut: commits not on any remote'])
     })
 
+    it('keeps it when the same patch sits only on another branch of the main checkout, not the one it lands on', async () => {
+      const { work, main } = landedClone('otherbranch')
+      git(main, 'checkout', '-qb', 'wt/other')
+      land(main, work)
+      git(main, 'checkout', '-q', 'main')
+      expect(await unmergedWork(path.dirname(work))).toEqual(['walnut: commits not on any remote'])
+    })
+
+    it('keeps it when the main checkout\'s detached HEAD holds the patch (a replay half done)', async () => {
+      const { work, main } = landedClone('detachedmain')
+      git(main, 'checkout', '-q', '--detach')
+      land(main, work)
+      expect(await unmergedWork(path.dirname(work))).toEqual(['walnut: commits not on any remote'])
+    })
+
+    it('keeps it when main holds the change with different whitespace (indentation is content)', async () => {
+      const { work, main } = landedClone('whitespace')
+      fs.writeFileSync(path.join(work, 'p.py'), 'def f():\n    if x:\n        return 1\n')
+      git(work, 'add', '.'); git(work, 'commit', '-qm', 'py')
+      land(main, work, undefined, ['HEAD~1'])
+      fs.writeFileSync(path.join(main, 'p.py'), 'def f():\n    if x:\n    return 1\n')
+      git(main, 'add', '.'); git(main, 'commit', '-qm', 'py')
+      expect(git(main, 'log', '--oneline').split('\n').filter(Boolean).length).toBe(4)
+      expect(await unmergedWork(path.dirname(work))).toEqual(['walnut: commits not on any remote'])
+    })
+
+    it('keeps it when the clone holds an empty commit (only its message), even if main has one too', async () => {
+      const { work, main } = landedClone('empty')
+      land(main, work)
+      git(work, 'commit', '-q', '--allow-empty', '-m', 'a note only here')
+      git(main, 'commit', '-q', '--allow-empty', '-m', 'an unrelated empty commit')
+      expect(await unmergedWork(path.dirname(work))).toEqual(['walnut: commits not on any remote'])
+    })
+
+    it('counts a landed commit on the clone\'s detached HEAD as pushed too', async () => {
+      const { work, main } = landedClone('detachedclone')
+      git(work, 'checkout', '-q', '--detach')
+      git(work, 'branch', '-q', '-f', 'main', 'origin/main')
+      land(main, work)
+      expect(await unmergedWork(path.dirname(work))).toEqual([])
+    })
+
     it('never trusts a main checkout inside the task root', async () => {
       const { work, main } = landedClone('inroot')
       land(main, work)

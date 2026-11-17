@@ -14,8 +14,8 @@
  * everything; and when any git call errors or times out. A remote is trusted
  * when it is not a local path, or is a local path that exists outside the task
  * root and the temp dirs (a leader that fetched a worker's task-dir clone must
- * not make both look pushed). A commit landed on a trusted local remote under another hash (same
- * patch, no merge of our own) counts as pushed. Only a directory carrying this task's marker,
+ * not make both look pushed). A commit landed under another hash on the branch it tracks in a
+ * trusted local remote (the exact same patch, no merge or empty commit of our own) counts as pushed. Only a directory carrying this task's marker,
  * under the root, unused since the server looked, with no live session of the
  * task on this host, is ever removed, and its marker goes last, so a removal
  * that fails halfway is listed and retried.
@@ -87,7 +87,8 @@ export async function listTaskDirs(root: string): Promise<TaskDirEntry[]> {
   return out
 }
 
-export type GitRunner = (cwd: string, args: string[]) => Promise<string>
+/** `input`, when given, is written to git's stdin (`git patch-id`). */
+export type GitRunner = (cwd: string, args: string[], input?: string) => Promise<string>
 
 const GIT_TIMEOUT_MS = 20_000
 const MAX_REPOS = 40
@@ -113,12 +114,16 @@ const isDerivedData = (entries: fs.Dirent[]): boolean =>
 const DERIVED_PARTS = new Set(['Build', 'ModuleCache.noindex', 'Index.noindex', 'CompilationCache.noindex', 'SDKStatCaches.noindex'])
 
 /** git with a clean env: an inherited GIT_DIR outranks cwd (src/lib/git-env.ts). */
-export const defaultGitRunner: GitRunner = (cwd, args) => new Promise((resolve, reject) => {
+export const defaultGitRunner: GitRunner = (cwd, args, input) => new Promise((resolve, reject) => {
   const env = { ...process.env }
   for (const k of Object.keys(env)) if (k.startsWith('GIT_')) delete env[k]
-  execFile('git', args, { cwd, env, timeout: GIT_TIMEOUT_MS, maxBuffer: 4 << 20 }, (err, stdout) => {
+  const child = execFile('git', args, { cwd, env, timeout: GIT_TIMEOUT_MS, maxBuffer: 16 << 20 }, (err, stdout) => {
     if (err) reject(err); else resolve(String(stdout))
   })
+  if (input !== undefined) {
+    child.stdin?.on('error', () => { /* git ended early: its exit code says why */ })
+    child.stdin?.end(input)
+  }
 })
 
 /** Temp dirs: a remote there is gone after the next boot (WALNUT_TASK_DIR_VOLATILE replaces the list, colon-separated; tests). */
@@ -181,10 +186,10 @@ async function hasLocalChanges(repo: string, git: GitRunner): Promise<boolean> {
 }
 
 /** Remotes whose copy will still be there tomorrow: `--remotes=<name>` args, and the paths of the local ones. */
-async function trustedRemotes(repo: string, root: string, volatile: string[], git: GitRunner): Promise<{ args: string[]; localPaths: string[] }> {
+async function trustedRemotes(repo: string, root: string, volatile: string[], git: GitRunner): Promise<{ args: string[]; locals: Array<{ name: string; path: string }> }> {
   const names = (await git(repo, ['remote'])).split('\n').map((s) => s.trim()).filter(Boolean)
   const args: string[] = []
-  const localPaths: string[] = []
+  const locals: Array<{ name: string; path: string }> = []
   for (const name of names) {
     const url = (await git(repo, ['remote', 'get-url', name]).catch(() => '')).trim()
     if (!url) continue
@@ -194,11 +199,11 @@ async function trustedRemotes(repo: string, root: string, volatile: string[], gi
       if (!fs.existsSync(abs)) continue
       const r = real(abs)
       if (within(r, root) || volatile.some((v) => within(r, real(v)) || within(abs, v))) continue
-      localPaths.push(r)
+      locals.push({ name, path: r })
     }
     args.push(`--remotes=${name}`)
   }
-  return { args, localPaths }
+  return { args, locals }
 }
 
 /** Commits reachable from the branches (and HEAD) that no trusted remote has; retried without HEAD when it has none (an orphan branch). */
@@ -212,8 +217,72 @@ async function unpushed(repo: string, trusted: string[], git: GitRunner, withHea
   }
 }
 
-/** At most this many branch heads of a local remote are compared (its default branch first). */
-const MAX_REMOTE_HEADS = 20
+/** Commits of one tip checked against the landing branch at most; past it the clone simply stays. */
+const MAX_LANDED_CHECK = 50
+/** Commits on the landing branch since the fork that touch the same files, tried per clone commit. */
+const MAX_CANDIDATES = 200
+
+const SHA = /^[0-9a-f]{40,64}$/
+const lines = (out: string) => out.split('\n').map((x) => x.trim()).filter(Boolean)
+
+/** The commit's change as one exact patch id: whitespace kept (`--verbatim`), binary content in it, no rename guessing. */
+async function exactPatchId(repo: string, commit: string, git: GitRunner): Promise<string> {
+  const patch = await git(repo, ['-c', 'core.quotePath=false', 'diff-tree', '-p', '--binary', '--full-index', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', '--root', commit])
+  const id = (await git(repo, ['patch-id', '--verbatim'], patch)).trim().split(/\s+/)[0] ?? ''
+  if (!SHA.test(id)) throw new Error(`no patch id for ${commit}`)
+  return id
+}
+
+/**
+ * The branch each commit here would have been landed on, in each trusted LOCAL remote: the
+ * remote branch a local branch tracks, and the branch the remote's own HEAD names. Never the
+ * remote's other branches (backups, unmerged work, a rebase's copies) nor a detached HEAD there.
+ */
+async function landingHeads(repo: string, locals: Array<{ name: string; path: string }>, git: GitRunner): Promise<string[]> {
+  const heads: string[] = []
+  const config = await git(repo, ['config', '--get-regexp', '^branch\\..*\\.(remote|merge)$']).catch(() => '')
+  const upstream = new Map<string, { remote?: string; merge?: string }>()
+  for (const line of lines(config)) {
+    const m = /^branch\.(.+)\.(remote|merge) (.+)$/.exec(line)
+    if (!m) continue
+    const e = upstream.get(m[1]) ?? {}
+    if (m[2] === 'remote') e.remote = m[3]; else e.merge = m[3]
+    upstream.set(m[1], e)
+  }
+  for (const { name, path: remote } of locals) {
+    const refs = new Set<string>()
+    for (const e of upstream.values()) if (e.remote === name && e.merge?.startsWith('refs/heads/')) refs.add(e.merge)
+    const sym = (await git(remote, ['symbolic-ref', '-q', 'HEAD']).catch(() => '')).trim()
+    if (sym.startsWith('refs/heads/')) refs.add(sym)
+    for (const ref of refs) {
+      const h = (await git(remote, ['rev-parse', '--verify', '-q', `${ref}^{commit}`]).catch(() => '')).trim()
+      if (!SHA.test(h) || heads.includes(h)) continue
+      // Only a head whose commits this repo can read (a --shared clone sees the remote's objects).
+      if (await git(repo, ['cat-file', '-e', `${h}^{commit}`]).then(() => true, () => false)) heads.push(h)
+    }
+  }
+  return heads
+}
+
+/** Whether every commit `tip` has beyond `not` holds an exactly equal change on `head`'s side since they forked. */
+async function landedOn(repo: string, tip: string, head: string, not: string[], git: GitRunner): Promise<boolean> {
+  const ours = lines(await git(repo, ['rev-list', '--no-merges', `--max-count=${MAX_LANDED_CHECK + 1}`, tip, '--not', head, ...not.slice(1)]))
+  if (ours.length === 0) return true
+  if (ours.length > MAX_LANDED_CHECK) return false
+  const base = (await git(repo, ['merge-base', head, tip]).catch(() => '')).trim()
+  if (!SHA.test(base)) return false
+  for (const c of ours) {
+    const files = (await git(repo, ['diff-tree', '--no-commit-id', '--name-only', '--no-renames', '-r', '-z', '--root', c])).split('\0').filter(Boolean)
+    // A commit that changes nothing (only its message) matches any other empty one: it stays unique.
+    if (files.length === 0) return false
+    const mine = await exactPatchId(repo, c, git)
+    const candidates = lines(await git(repo, ['--literal-pathspecs', 'rev-list', '--no-merges', `--max-count=${MAX_CANDIDATES}`, head, `^${base}`, '--', ...files]))
+    let found = false
+    for (const m of candidates) if (await exactPatchId(repo, m, git) === mine) { found = true; break }
+    if (!found) return false
+  }
+  return true
+}
 
 /**
  * Whether every commit only this repo has was landed on a trusted LOCAL remote under another hash.
@@ -221,40 +290,28 @@ const MAX_REMOTE_HEADS = 20
  * A land replays a task clone's commits onto the main checkout (new hashes), and the clone never
  * fetches again, so its remote-tracking refs stay where they were and every landed clone read
  * "commits not on any remote" forever (2026-11-17: 16 of 29 clones in the Mac's task dirs held
- * only landed commits). This reads the remote's own branch heads (read only, nothing is fetched)
- * and asks git, for each branch tip here, whether a head there holds an equivalent change for
- * every commit (`--cherry-pick`, by patch id). Fail-safe: a merge commit of our own (it can carry
- * a conflict resolution no patch id shows), a head whose objects this repo cannot see, or any
- * error leaves the work counted as unique.
+ * only landed commits). This reads the landing branch in the remote (read only, nothing is
+ * fetched: see landingHeads) and needs, for every commit here, a commit there since the fork with
+ * the same exact patch (whitespace and binary content included). Fail-safe: a merge commit of our
+ * own (a conflict resolution no patch shows), an empty commit, a head this repo cannot read, more
+ * than MAX_LANDED_CHECK commits, or any error leaves the work counted as unique.
  */
-async function landedOnLocalRemote(repo: string, trusted: string[], localPaths: string[], git: GitRunner): Promise<boolean> {
-  if (localPaths.length === 0) return false
+async function landedOnLocalRemote(repo: string, trusted: string[], locals: Array<{ name: string; path: string }>, git: GitRunner): Promise<boolean> {
+  if (locals.length === 0) return false
   const not = trusted.length ? ['--not', ...trusted] : []
   try {
     if ((await git(repo, ['log', '--merges', '--branches', 'HEAD', ...not, '-n', '1', '--format=%h'])).trim()) return false
-    const heads: string[] = []
-    for (const remote of localPaths) {
-      const def = (await git(remote, ['rev-parse', '--verify', '-q', 'HEAD']).catch(() => '')).trim()
-      const all = (await git(remote, ['for-each-ref', `--count=${MAX_REMOTE_HEADS}`, '--format=%(objectname)', 'refs/heads'])).split('\n').map((x) => x.trim())
-      for (const h of [def, ...all]) {
-        if (!/^[0-9a-f]{40,64}$/.test(h) || heads.includes(h)) continue
-        // Only a head whose commits this repo can read (a --shared clone sees the remote's objects).
-        if (await git(repo, ['cat-file', '-e', `${h}^{commit}`]).then(() => true, () => false)) heads.push(h)
-      }
-    }
+    const heads = await landingHeads(repo, locals, git)
     if (heads.length === 0) return false
-    const tips = new Set((await git(repo, ['for-each-ref', '--format=%(objectname)', 'refs/heads'])).split('\n').map((x) => x.trim()).filter(Boolean))
+    const tips = new Set(lines(await git(repo, ['for-each-ref', '--format=%(objectname)', 'refs/heads'])))
     const head = (await git(repo, ['rev-parse', '--verify', '-q', 'HEAD']).catch(() => '')).trim()
     if (head) tips.add(head)
     for (const tip of tips) {
-      // Nothing of this tip is unique: no remote head is needed for it.
+      // Nothing of this tip is unique: no landing branch is needed for it.
       if (!(await git(repo, ['log', tip, ...not, '-n', '1', '--format=%h'])).trim()) continue
-      let found = false
-      for (const h of heads) {
-        const left = await git(repo, ['log', '--cherry-pick', '--right-only', '--no-merges', '-n', '1', '--format=%h', `${h}...${tip}`])
-        if (!left.trim()) { found = true; break }
-      }
-      if (!found) return false
+      let landed = false
+      for (const h of heads) if (await landedOn(repo, tip, h, not, git)) { landed = true; break }
+      if (!landed) return false
     }
     return true
   } catch {
@@ -303,7 +360,7 @@ export async function inspectTaskDir(
         if (outside.length > 0) reasons.push(`${name}: a worktree of it lives outside (${outside[0]})`)
       }
       const trusted = await trustedRemotes(repo.dir, root, volatile, git)
-      if (await unpushed(repo.dir, trusted.args, git) && !(await landedOnLocalRemote(repo.dir, trusted.args, trusted.localPaths, git))) {
+      if (await unpushed(repo.dir, trusted.args, git) && !(await landedOnLocalRemote(repo.dir, trusted.args, trusted.locals, git))) {
         reasons.push(`${name}: commits not on any remote`)
       }
     } catch (err) {
