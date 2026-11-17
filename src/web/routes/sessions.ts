@@ -25,7 +25,8 @@ import {
 } from '../../core/session-tracker.js'
 import { readSessionHistory, extractPlanContent, rewriteHistoryRemoteImages, isWindowedHistory, HISTORY_COLD_TAIL_READ_BYTES } from '../../core/session-history.js'
 import { resolveDeltaStart, deltaCursor, collectRequestedRevisions, isUnsettledRow } from '../../core/history-delta.js'
-import { firstPaintRace, readyViewEligible, readyViewWithin, type ReadyViewRows } from '../../core/history-ready-view.js'
+import { firstPaintRace, readyViewEligible, readyViewWithin, type FirstPaintPick, type ReadyViewRows } from '../../core/history-ready-view.js'
+import { holdHostForOpen } from '../../core/host-open-hold.js'
 import { isReadableView } from '../../providers/history-ready-core.js'
 import { historyOpenScreen } from '../../core/history-open-preview.js'
 import { computeSessionChanges, peekSessionChanges } from '../../core/session-changes.js'
@@ -1579,7 +1580,12 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       // as soon as it has something to read (firstPaintRace), so a slow or missing ready view
       // never makes the first paint wait longer than it did; only a preview with nothing to read
       // waits for it. Forks and ACP sessions keep the paths below.
-      const readyP = screenOnly && record && !localWarm && readyViewEligible(record, false) ? readyViewWithin(record) : null
+      // A remote host's ready view is the first screen when nothing else is kept: on a busy link it
+      // may take past READY_VIEW_DEADLINE_MS, so a remote first paint waits for it as long as for its
+      // own preview (2026-11-16: it missed 900 ms, the paint came back empty and the full read took 11 s).
+      const readyP = screenOnly && record && !localWarm && readyViewEligible(record, false)
+        ? readyViewWithin(record, record.host ? (await import('../../core/history-open-preview.js')).HISTORY_OPEN_PREVIEW_MS : undefined)
+        : null
       const answerReady = (ready: ReadyViewRows): void => {
         const readySlice = screen(sliceHistory(ready.messages))
         res.json({
@@ -1589,18 +1595,25 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
         })
       }
       if (record?.host) {
-        // No saved view yet: first paint must not wait for the full cold read and
-        // its older-turn backfill. A small, deadline-bound tail gives it live rows.
-        const { boundHistoryPreview, HISTORY_OPEN_PREVIEW_BYTES } = await import('../../core/history-open-preview.js')
-        const { readSessionHistoryTailWindow, hasInPlaceRewinds } = await import('../../core/session-history.js')
-        const previewP = boundHistoryPreview(sessionId, async () => {
-          // Cut anchors can lie outside a preview window. Leave rewound sessions
-          // to the existing filtered full read instead of exposing an abandoned branch.
-          if (await hasInPlaceRewinds(sessionId)) return null
-          const rows = await readSessionHistoryTailWindow(sessionId, record.cwd, record.host, HISTORY_OPEN_PREVIEW_BYTES)
-          return rows ? rewriteHistoryRemoteImages(rows, record.host!, sessionId, record.cwd) : null
-        })
-        const first = await firstPaintRace(readyP, previewP, (rows) => !!rows && isReadableView(rows))
+        // Background asks to this host (the ready-view refresher) wait until this paint answered.
+        const releaseHost = holdHostForOpen(record.host)
+        let first: FirstPaintPick<SessionHistoryMessage[] | null>
+        try {
+          // No saved view yet: first paint must not wait for the full cold read and
+          // its older-turn backfill. A small, deadline-bound tail gives it live rows.
+          const { boundHistoryPreview, HISTORY_OPEN_PREVIEW_BYTES } = await import('../../core/history-open-preview.js')
+          const { readSessionHistoryTailWindow, hasInPlaceRewinds } = await import('../../core/session-history.js')
+          const previewP = boundHistoryPreview(sessionId, async () => {
+            // Cut anchors can lie outside a preview window. Leave rewound sessions
+            // to the existing filtered full read instead of exposing an abandoned branch.
+            if (await hasInPlaceRewinds(sessionId)) return null
+            const rows = await readSessionHistoryTailWindow(sessionId, record.cwd, record.host, HISTORY_OPEN_PREVIEW_BYTES)
+            return rows ? rewriteHistoryRemoteImages(rows, record.host!, sessionId, record.cwd) : null
+          })
+          first = await firstPaintRace(readyP, previewP, (rows) => !!rows && isReadableView(rows))
+        } finally {
+          releaseHost()
+        }
         if (first.kind === 'ready') { answerReady(first.ready); return }
         const messages = first.preview ?? []
         res.json({ messages: markUnsettled(screen(messages)), total: messages.length, firstPaintSource: 'preview', ...(messages.length ? { windowed: true } : {}) })

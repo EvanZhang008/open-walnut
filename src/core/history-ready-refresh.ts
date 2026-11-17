@@ -11,7 +11,8 @@
  *     that ran forty sessions overnight gets forty views, one at a time.
  *
  * Strictly serial and paced, like the Changed-tab prewarmer (session-changes-prewarm.ts): one
- * fetch at a time, a gap between them, nothing at boot, nothing under memory pressure. A turn
+ * fetch at a time, a gap between them, nothing at boot, nothing under memory pressure, and
+ * nothing to a host while someone opens a conversation there (host-open-hold.ts). A turn
  * whose view is kept already is skipped: one read after the turn ended (an open window's delta,
  * the meta's `contentAt`), never one only WRITTEN after it (a slow answer to an older ask). Never-opened
  * old sessions are not swept: their first open asks the host then (the route's first paint).
@@ -24,6 +25,7 @@ import type { SessionRecord } from './types.js';
 import { fetchReadyView, HISTORY_READY_CAPABILITY, READY_VIEW_ROWS, readyViewEligible, readyViewTurns, wireCut, type ReadyViewConnection } from './history-ready-view.js';
 import { readHistoryViewMeta, type HistoryViewMeta } from './history-view-snapshot.js';
 import { legacyHintCutoff } from './sessions/legacy-hint-lines.js';
+import { waitForHostOpens } from './host-open-hold.js';
 
 export const RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 export const KEYS_BATCH = 50;
@@ -52,6 +54,8 @@ export interface HistoryReadyRefreshOptions {
   subscribeHosts?: (onHost: (hostKey: string) => void) => () => void;
   now?: () => number;
   shedding?: () => boolean;
+  /** Resolves once no one is opening a conversation on the host (host-open-hold.ts). */
+  waitForOpens?: (hostKey: string) => Promise<void>;
 }
 
 export class HistoryReadyRefresher {
@@ -81,6 +85,7 @@ export class HistoryReadyRefresher {
       isAcpJournal: options.isAcpJournal ?? defaultIsAcpJournal,
       now: options.now ?? Date.now,
       shedding: options.shedding ?? memoryPressureShedding,
+      waitForOpens: options.waitForOpens ?? waitForHostOpens,
       subscribeTurns: options.subscribeTurns,
       subscribeHosts: options.subscribeHosts,
     };
@@ -197,6 +202,11 @@ export class HistoryReadyRefresher {
       try {
         const record = await this.o.getRecord(item.sessionId);
         if (!record || !readyViewEligible(record, this.o.isAcpJournal(record))) continue;
+        // A person opening a conversation on this host goes first: this answer can be MB-scale
+        // on the same socket as that open's first screen. Read the meta after: that open's
+        // full read may have kept a newer view meanwhile.
+        await this.o.waitForOpens(record.host ?? '__local__');
+        if (this.stopped) return;
         const meta = await this.o.readMeta(item.sessionId);
         // A view read after this turn ended is kept (an open window's delta): nothing to do.
         if (item.after > 0 && meta?.contentAt !== undefined && meta.contentAt >= item.after) continue;

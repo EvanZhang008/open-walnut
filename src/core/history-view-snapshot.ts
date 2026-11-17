@@ -14,7 +14,11 @@
  * It never seeds a cursor: the first paint carries none, and the full fetch that follows replaces it.
  *
  * Files: <HISTORY_CACHE_DIR>/views/<sessionId>.json, stamped with HISTORY_CACHE_SCHEMA (a parse shape
- * change drops them like the disk cache), coalesced writes, bounded by count and age.
+ * change drops them like the disk cache), coalesced writes, bounded by count, bytes and age, the
+ * least recently used going first: an open touches its view, so the background refresher's writes
+ * never push out what the user opens (2026-11-16: at 600 files the store held only the last 6.5 h
+ * while 645 sessions were refreshed, so a session opened after a few idle hours had no copy and
+ * waited 11 s for its host).
  *
  * Two writers since 2026-11-11: the history route (what it served, `origin` absent) and the
  * session's daemon (`origin: 'ready'`, its ready view, history-ready-view.ts), which also carries
@@ -73,7 +77,12 @@ export interface HistoryViewRead {
 export const VIEW_MAX_MESSAGES = 1200;
 const MEMORY_MAX = 40;
 const WRITE_COALESCE_MS = 2_000;
-export const VIEW_MAX_FILES = 600;
+/**
+ * Room for every session the refresher keeps current (history-ready-refresh.ts RECENT_WINDOW_MS:
+ * about 650 on the maintainer's Mac in 2026-11) with a margin; the byte budget bounds the disk.
+ */
+export const VIEW_MAX_FILES = 3000;
+export const VIEW_MAX_TOTAL_BYTES = 768 * 1024 * 1024;
 export const VIEW_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const PRUNE_EVERY_MS = 60 * 60 * 1000;
 
@@ -203,17 +212,32 @@ async function flush(sessionId: string): Promise<void> {
 /** The session's kept view: memory, else disk; null when none or written by another parse shape. */
 export async function readHistoryView(sessionId: string): Promise<HistoryViewSnapshot | null> {
   const hot = memory.get(sessionId);
-  if (hot) return hot;
+  if (hot) { touchView(sessionId); return hot; }
   try {
     const parsed = JSON.parse(await fsp.readFile(viewPath(sessionId), 'utf-8'));
     if (parsed?.schema !== HISTORY_CACHE_SCHEMA || !Array.isArray(parsed.messages) || parsed.messages.length === 0) return null;
     const { schema: _schema, ...view } = parsed as HistoryViewSnapshot & { schema: number };
     if (typeof view.total !== 'number') return null;
     remember(sessionId, view);
+    touchView(sessionId);
     return view;
   } catch {
     return null;
   }
+}
+
+/** An open read this view: it is the last to go at a prune (ranked by mtime). Never awaited;
+ *  at most once per TOUCH_EVERY_MS a session, so a column re-reading it costs no file op. */
+const TOUCH_EVERY_MS = 10 * 60 * 1000;
+const touchedAt = new Map<string, number>();
+function touchView(sessionId: string): void {
+  const now = Date.now();
+  if (now - (touchedAt.get(sessionId) ?? 0) < TOUCH_EVERY_MS) return;
+  touchedAt.delete(sessionId);
+  touchedAt.set(sessionId, now);
+  while (touchedAt.size > 2000) touchedAt.delete(touchedAt.keys().next().value as string);
+  const at = new Date(now);
+  void fsp.utimes(viewPath(sessionId), at, at).catch(() => { /* not written yet, or vanished */ });
 }
 
 /**
@@ -240,22 +264,28 @@ export async function deleteHistoryView(sessionId: string): Promise<void> {
   try { await fsp.unlink(metaPath(sessionId)); } catch { /* already gone */ }
 }
 
-/** Drop views older than `maxAgeMs`, then the oldest past `maxFiles`. Never throws. */
-export async function pruneHistoryViews(opts: { maxAgeMs?: number; maxFiles?: number; now?: number } = {}): Promise<number> {
+/**
+ * Drop views older than `maxAgeMs`, then the least recently used (written or opened) past
+ * `maxFiles` or past `maxTotalBytes` together. Never throws.
+ */
+export async function pruneHistoryViews(opts: { maxAgeMs?: number; maxFiles?: number; maxTotalBytes?: number; now?: number } = {}): Promise<number> {
   const maxAgeMs = opts.maxAgeMs ?? VIEW_MAX_AGE_MS;
   const maxFiles = opts.maxFiles ?? VIEW_MAX_FILES;
+  const maxTotalBytes = opts.maxTotalBytes ?? VIEW_MAX_TOTAL_BYTES;
   const now = opts.now ?? Date.now();
   let removed = 0;
   try {
-    const entries: Array<{ file: string; mtimeMs: number }> = [];
+    const entries: Array<{ file: string; mtimeMs: number; size: number }> = [];
     for (const name of await fsp.readdir(viewsDir())) {
       if (!name.endsWith('.json') && !name.endsWith('.tmp')) continue;
       const file = path.join(viewsDir(), name);
-      try { entries.push({ file, mtimeMs: (await fsp.stat(file)).mtimeMs }); } catch { /* vanished */ }
+      try { const st = await fsp.stat(file); entries.push({ file, mtimeMs: st.mtimeMs, size: st.size }); } catch { /* vanished */ }
     }
     entries.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    let bytes = 0;
     for (const [i, e] of entries.entries()) {
-      if (i < maxFiles && now - e.mtimeMs <= maxAgeMs) continue;
+      bytes += e.size;
+      if (i < maxFiles && bytes <= maxTotalBytes && now - e.mtimeMs <= maxAgeMs) continue;
       try { await fsp.unlink(e.file); removed++; } catch { /* vanished */ }
       if (e.file.endsWith('.json')) await fsp.unlink(e.file.slice(0, -'.json'.length) + '.meta').catch(() => {});
     }
@@ -272,6 +302,7 @@ export async function pruneHistoryViews(opts: { maxAgeMs?: number; maxFiles?: nu
 /** Tests: drop memory and pending writes. */
 export function _resetHistoryViewsForTesting(): void {
   memory.clear();
+  touchedAt.clear();
   for (const t of pending.values()) clearTimeout(t);
   pending.clear();
   generations.clear();

@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { HistoryReadyRefresher, type HistoryReadyRefreshOptions } from '../../src/core/history-ready-refresh.js';
 import { HISTORY_READY_CAPABILITY, type ReadyViewConnection } from '../../src/core/history-ready-view.js';
 import type { HistoryViewMeta } from '../../src/core/history-view-snapshot.js';
+import { holdHostForOpen, OPEN_QUIET_MS, OPEN_WAIT_MAX_MS, _resetHostOpenHoldsForTesting } from '../../src/core/host-open-hold.js';
 import type { SessionRecord } from '../../src/core/types.js';
 import fs from 'node:fs';
 
@@ -268,5 +269,60 @@ describe('brakes', () => {
     expect(h.fetched.map((f) => f.sid)).toEqual(['x1']);
     h.refresher.enqueue({ sessionId: 'x2', after: 0 });
     expect(h.refresher._queueLength()).toBe(0);
+  });
+});
+
+describe('a person opening a conversation goes first', () => {
+  afterEach(() => _resetHostOpenHoldsForTesting());
+
+  it('no view is fetched from a host while an open there is in progress, and resumes after it (2026-11-16)', async () => {
+    const h = harness({ records: new Map([['s-open', rec('s-open')], ['s-other', rec('s-other', { host: 'other-dev' })]]) });
+    const release = holdHostForOpen('remote-dev');
+    h.turn('s-other');
+    await waitFor(() => h.fetched.length === 1);
+    h.turn('s-open');
+    await advance(500);
+    expect(h.fetched.map((f) => f.sid)).toEqual(['s-other']);
+    release();
+    // The open's full read starts right after its first paint: a short quiet spell for it too.
+    await advance(OPEN_QUIET_MS - 100);
+    expect(h.fetched.map((f) => f.sid)).toEqual(['s-other']);
+    await waitFor(() => h.fetched.length === 2);
+    expect(h.fetched.map((f) => f.sid)).toEqual(['s-other', 's-open']);
+  });
+
+  it('a host held for longer than OPEN_WAIT_MAX_MS is asked anyway (background work never starves)', async () => {
+    const h = harness({ records: new Map([['s-held', rec('s-held')]]) });
+    holdHostForOpen('remote-dev');
+    h.turn('s-held');
+    await advance(OPEN_WAIT_MAX_MS - 1000);
+    expect(h.fetched).toHaveLength(0);
+    await advance(2000);
+    expect(h.fetched.map((f) => f.sid)).toEqual(['s-held']);
+  });
+
+  it('every background ready-view fetch in src waits for opens first (guard for new callers)', () => {
+    // A ready view fetched with interactive:false is MB-scale on the host's main socket. Each file
+    // that fetches one must wait for opens on that host (host-open-hold.ts), or name why not here.
+    const files = fs.readdirSync('src', { recursive: true, encoding: 'utf8' })
+      .filter((f) => f.endsWith('.ts')).map((f) => `src/${f}`);
+    const background = files.filter((f) => /fetchReadyView\([^)]*interactive:\s*false/.test(fs.readFileSync(f, 'utf8')));
+    expect(background).toEqual(['src/core/history-ready-refresh.ts']);
+    for (const f of background) expect(fs.readFileSync(f, 'utf8')).toMatch(/waitForHostOpens|waitForOpens\(/);
+  });
+});
+
+describe('after waiting for an open', () => {
+  afterEach(() => _resetHostOpenHoldsForTesting());
+  it('a view the open kept meanwhile (read after the turn) skips the fetch', async () => {
+    const metas = new Map<string, HistoryViewMeta>();
+    const h = harness({ records: new Map([['s-kept', rec('s-kept')]]), metas });
+    const release = holdHostForOpen('remote-dev');
+    h.turn('s-kept');
+    await advance(200);
+    metas.set('s-kept', { savedAt: new Date().toISOString(), contentAt: Date.now() });
+    release();
+    await advance(OPEN_QUIET_MS + 500);
+    expect(h.fetched).toHaveLength(0);
   });
 });

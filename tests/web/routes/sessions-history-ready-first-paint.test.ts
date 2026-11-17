@@ -37,6 +37,8 @@ import { sessionsRouter } from '../../../src/web/routes/sessions.js';
 import { createSessionRecord, updateSessionRecord, _resetSessionTrackerForTesting } from '../../../src/core/session-tracker.js';
 import { _resetHistoryViewsForTesting, saveHistoryView, beginHistoryViewRead } from '../../../src/core/history-view-snapshot.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
+import { hostOpenBusy, OPEN_QUIET_MS } from '../../../src/core/host-open-hold.js';
+import { HISTORY_OPEN_PREVIEW_MS } from '../../../src/core/history-open-preview.js';
 
 function app() { const a = express(); a.use('/api/sessions', sessionsRouter); return a; }
 const row = (id: string, role: 'user' | 'assistant' = 'assistant') => ({ role, text: `text ${id}`, timestamp: '2026-01-01T00:00:01Z', msgId: id });
@@ -121,6 +123,26 @@ describe('a remote session', () => {
     expect(res.body.cursor).toBeUndefined();
     expect(readyMock).toHaveBeenCalledTimes(1);
     expect(previewStartedFirst).toBe(true);
+  });
+
+  it('a remote first paint waits for the host as long as for its preview, and holds the host meanwhile (2026-11-16)', async () => {
+    const sid = 'ready-route-remote-busy-link';
+    await createSessionRecord(sid, '', 'p', '/w', { host: 'remote-dev' });
+    let heldWhileAsking = false;
+    readyMock.mockImplementation(() => new Promise((resolve) => setTimeout(() => {
+      heldWhileAsking = hostOpenBusy('remote-dev');
+      resolve(readyRows(['late1', 'late2']));
+    }, 30)));
+    previewRead.mockResolvedValue(null);
+    const res = await request(app()).get(`/api/sessions/${sid}/history?source=streams&screen=1&tail=400&turns=10`);
+    expect(res.body.firstPaintSource).toBe('ready');
+    expect(ids(res.body)).toEqual(['late1', 'late2']);
+    // Past READY_VIEW_DEADLINE_MS (900): a busy link's ready view is still the first paint.
+    expect(readyMock.mock.calls[0]![1]).toBe(HISTORY_OPEN_PREVIEW_MS);
+    expect(heldWhileAsking).toBe(true);
+    // Released once the paint answered; only the short quiet spell for the full read is left.
+    await new Promise((r) => setTimeout(r, OPEN_QUIET_MS + 50));
+    expect(hostOpenBusy('remote-dev')).toBe(false);
   });
 
   it('a host with no ready view in time: the preview is the first paint, readable or not', async () => {
