@@ -90,7 +90,7 @@ export interface ChangeDeploy {
   pipeline: string
   /** Where a person follows it (a tracking page). */
   url?: string
-  /** The commit it tracks, short. */
+  /** The commit it tracks (a provider may store the whole hash; the card shows its first 7). */
   commit?: string
   /** Every stage in pipeline order, at most MAX_CHANGE_STAGES. */
   stages: ChangeStage[]

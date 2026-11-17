@@ -265,7 +265,7 @@ function changeStatusFixture(): Record<string, unknown> {
       title: 'Move the controller onto the new instance type',
       review: { state: 'merged', revision: 1, approvals: { got: 1, need: 1 }, approvedBy: ['rivera'], checks: { passed: 4, failed: 0, pending: 0 } },
       deploy: {
-        pipeline: 'acme-deployer', url: 'https://pipelines.acme.dev/acme-deployer', commit: 'e138767', done: false, last: 'prod-w1', next: 'prod-w2',
+        pipeline: 'acme-deployer', url: 'https://pipelines.acme.dev/acme-deployer', commit: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678', done: false, last: 'prod-w1', next: 'prod-w2',
         stages: [
           { name: 'beta-w1', target: 'beta-c01', status: 'done', at: at(20) },
           { name: 'gamma-w1', target: 'gamma-c01', status: 'done', at: at(16) },

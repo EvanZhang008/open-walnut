@@ -48,7 +48,7 @@ export function ChangeCard({ snap, taskId, refreshing, refreshError, onRefresh }
         <section className="change-card-deploy" data-stale={snap.error ? 'true' : undefined}>
           <div className="change-card-deploy-head">
             <span className="change-card-deploy-name">{deploy.pipeline}</span>
-            {deploy.commit && <code className="change-card-commit">{deploy.commit}</code>}
+            {deploy.commit && <code className="change-card-commit" title={deploy.commit}>{deploy.commit.slice(0, 7)}</code>}
             <span className="change-card-muted">{deploy.stages.length} {deploy.stages.length === 1 ? 'stage' : 'stages'}</span>
           </div>
           {deploy.stages.length > 0 && <ChangeStageRows stages={deploy.stages} taskId={taskId} url={snap.url} />}

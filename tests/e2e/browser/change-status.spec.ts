@@ -137,6 +137,9 @@ test('change link pills read their status, and the card opens a stage', async ({
   await expect(card.locator('[data-testid="change-card-open"]')).toHaveAttribute('href', 'https://review.acme.dev/CR-1001')
   await expect(card.locator('[data-testid="change-card-open-pipeline"]')).toHaveAttribute('href', 'https://pipelines.acme.dev/acme-deployer')
   await expect(card.locator('[data-testid="change-card-read"]')).toHaveText('read 2 min ago')
+  // A full commit hash (what a provider stores) reads short, the whole one on hover.
+  await expect(card.locator('.change-card-commit')).toHaveText('a1b2c3d')
+  await expect(card.locator('.change-card-commit')).toHaveAttribute('title', 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678')
   // Inside the window, never over its edge.
   const box = (await card.boundingBox())!
   expect(box.x).toBeGreaterThanOrEqual(0)
