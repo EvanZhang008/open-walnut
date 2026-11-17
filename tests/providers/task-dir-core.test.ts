@@ -232,6 +232,88 @@ describe('removeTaskDirs: nothing that exists only here is ever deleted', () => 
     expect(await unmergedWork(dir, undefined, { root, volatile: [] })).toEqual(['app: commits not on any remote'])
   })
 
+  describe('a clone whose commits were landed on its main checkout under new hashes', () => {
+    /** The real shape: a main checkout outside the task root, a `--shared` clone of it in the task dir, one commit. */
+    function landedClone(id: string, opts: { shared?: boolean } = {}): { work: string; main: string } {
+      const main = path.join(tmp, `main-${id}`)
+      fs.mkdirSync(main)
+      git(main, 'init', '-q')
+      fs.writeFileSync(path.join(main, 'a.txt'), 'a\n')
+      git(main, 'add', '.'); git(main, 'commit', '-qm', 'seed')
+      const dir = ensureTaskDir(root, id)!
+      const work = path.join(dir, 'walnut')
+      git(dir, 'clone', '-q', ...(opts.shared === false ? [] : ['--shared']), main, work)
+      fs.writeFileSync(path.join(work, 'fix.txt'), 'fix\n')
+      git(work, 'add', '.'); git(work, 'commit', '-qm', 'fix')
+      return { work, main }
+    }
+    /** What a land does: replay the clone's commit onto the checkout's main (a new hash), the clone never fetches. */
+    function land(main: string, work: string, edit?: (main: string) => void, revs = ['HEAD']): void {
+      fs.writeFileSync(path.join(main, 'other.txt'), 'someone else\n')
+      git(main, 'add', '.'); git(main, 'commit', '-qm', 'another land first')
+      for (const rev of revs) {
+        const sha = git(work, 'rev-parse', rev).trim()
+        git(main, 'fetch', '-q', work, sha)
+        git(main, 'cherry-pick', sha)
+      }
+      if (edit) { edit(main); git(main, 'add', '.'); git(main, 'commit', '-q', '--amend', '--no-edit') }
+    }
+
+    it('counts the landed commit as pushed, so the directory is removed', async () => {
+      const { work, main } = landedClone('landed')
+      expect(await unmergedWork(path.dirname(work))).toEqual(['walnut: commits not on any remote'])
+      land(main, work)
+      expect(git(work, 'log', '--branches', '--not', '--remotes', '--format=%h').trim()).not.toBe('')
+      expect(await unmergedWork(path.dirname(work))).toEqual([])
+      expect((await removeTaskDirs(root, ['landed'])).removed).toEqual(['landed'])
+      expect(fs.existsSync(path.join(main, 'fix.txt'))).toBe(true)
+    })
+
+    it('keeps it when the change on main differs from the clone\'s (a reworked land)', async () => {
+      const { work, main } = landedClone('reworked')
+      land(main, work, (m) => fs.writeFileSync(path.join(m, 'fix.txt'), 'fix, reworked\n'))
+      expect(await unmergedWork(path.dirname(work))).toEqual(['walnut: commits not on any remote'])
+    })
+
+    it('keeps it when only one of two commits was landed', async () => {
+      const { work, main } = landedClone('half')
+      land(main, work)
+      fs.writeFileSync(path.join(work, 'more.txt'), 'more\n')
+      git(work, 'add', '.'); git(work, 'commit', '-qm', 'not landed')
+      expect(await unmergedWork(path.dirname(work))).toEqual(['walnut: commits not on any remote'])
+    })
+
+    it('keeps it when unique work sits on another local branch', async () => {
+      const { work, main } = landedClone('branch')
+      land(main, work)
+      git(work, 'checkout', '-qb', 'side'); fs.writeFileSync(path.join(work, 's.txt'), 's\n'); git(work, 'add', '.'); git(work, 'commit', '-qm', 'side')
+      git(work, 'checkout', '-q', 'main')
+      expect(await unmergedWork(path.dirname(work))).toEqual(['walnut: commits not on any remote'])
+    })
+
+    it('keeps it when the clone has a merge commit of its own', async () => {
+      const { work, main } = landedClone('merge')
+      git(work, 'checkout', '-qb', 'side'); fs.writeFileSync(path.join(work, 's.txt'), 's\n'); git(work, 'add', '.'); git(work, 'commit', '-qm', 'side')
+      git(work, 'checkout', '-q', 'main'); git(work, 'merge', '-q', '--no-ff', '-m', 'merge side', 'side')
+      git(work, 'branch', '-q', '-D', 'side')
+      // every plain commit landed; only the merge itself exists nowhere else
+      land(main, work, undefined, ['HEAD^1', 'HEAD^2'])
+      expect(await unmergedWork(path.dirname(work))).toEqual(['walnut: commits not on any remote'])
+    })
+
+    it('keeps it when the clone cannot read the main checkout\'s new commits (not a --shared clone)', async () => {
+      const { work, main } = landedClone('unshared', { shared: false })
+      land(main, work)
+      expect(await unmergedWork(path.dirname(work))).toEqual(['walnut: commits not on any remote'])
+    })
+
+    it('never trusts a main checkout inside the task root', async () => {
+      const { work, main } = landedClone('inroot')
+      land(main, work)
+      expect(await unmergedWork(path.dirname(work), undefined, { root: tmp, volatile: [] })).toEqual(['walnut: commits not on any remote'])
+    })
+  })
+
   it('an orphan branch with no commit yet does not hide unpushed work on another branch', async () => {
     const dir = ensureTaskDir(root, 'orphan')!
     const w = cloneInto(dir)

@@ -14,7 +14,8 @@
  * everything; and when any git call errors or times out. A remote is trusted
  * when it is not a local path, or is a local path that exists outside the task
  * root and the temp dirs (a leader that fetched a worker's task-dir clone must
- * not make both look pushed). Only a directory carrying this task's marker,
+ * not make both look pushed). A commit landed on a trusted local remote under another hash (same
+ * patch, no merge of our own) counts as pushed. Only a directory carrying this task's marker,
  * under the root, unused since the server looked, with no live session of the
  * task on this host, is ever removed, and its marker goes last, so a removal
  * that fails halfway is listed and retried.
@@ -179,10 +180,11 @@ async function hasLocalChanges(repo: string, git: GitRunner): Promise<boolean> {
   return false
 }
 
-/** `--remotes=<name>` for each remote whose copy will still be there tomorrow. */
-async function trustedRemoteArgs(repo: string, root: string, volatile: string[], git: GitRunner): Promise<string[]> {
+/** Remotes whose copy will still be there tomorrow: `--remotes=<name>` args, and the paths of the local ones. */
+async function trustedRemotes(repo: string, root: string, volatile: string[], git: GitRunner): Promise<{ args: string[]; localPaths: string[] }> {
   const names = (await git(repo, ['remote'])).split('\n').map((s) => s.trim()).filter(Boolean)
-  const out: string[] = []
+  const args: string[] = []
+  const localPaths: string[] = []
   for (const name of names) {
     const url = (await git(repo, ['remote', 'get-url', name]).catch(() => '')).trim()
     if (!url) continue
@@ -192,10 +194,11 @@ async function trustedRemoteArgs(repo: string, root: string, volatile: string[],
       if (!fs.existsSync(abs)) continue
       const r = real(abs)
       if (within(r, root) || volatile.some((v) => within(r, real(v)) || within(abs, v))) continue
+      localPaths.push(r)
     }
-    out.push(`--remotes=${name}`)
+    args.push(`--remotes=${name}`)
   }
-  return out
+  return { args, localPaths }
 }
 
 /** Commits reachable from the branches (and HEAD) that no trusted remote has; retried without HEAD when it has none (an orphan branch). */
@@ -206,6 +209,56 @@ async function unpushed(repo: string, trusted: string[], git: GitRunner, withHea
   } catch (err) {
     if (withHead && isNoHead((err as Error).message || '')) return unpushed(repo, trusted, git, false)
     throw err
+  }
+}
+
+/** At most this many branch heads of a local remote are compared (its default branch first). */
+const MAX_REMOTE_HEADS = 20
+
+/**
+ * Whether every commit only this repo has was landed on a trusted LOCAL remote under another hash.
+ *
+ * A land replays a task clone's commits onto the main checkout (new hashes), and the clone never
+ * fetches again, so its remote-tracking refs stay where they were and every landed clone read
+ * "commits not on any remote" forever (2026-11-17: 16 of 29 clones in the Mac's task dirs held
+ * only landed commits). This reads the remote's own branch heads (read only, nothing is fetched)
+ * and asks git, for each branch tip here, whether a head there holds an equivalent change for
+ * every commit (`--cherry-pick`, by patch id). Fail-safe: a merge commit of our own (it can carry
+ * a conflict resolution no patch id shows), a head whose objects this repo cannot see, or any
+ * error leaves the work counted as unique.
+ */
+async function landedOnLocalRemote(repo: string, trusted: string[], localPaths: string[], git: GitRunner): Promise<boolean> {
+  if (localPaths.length === 0) return false
+  const not = trusted.length ? ['--not', ...trusted] : []
+  try {
+    if ((await git(repo, ['log', '--merges', '--branches', 'HEAD', ...not, '-n', '1', '--format=%h'])).trim()) return false
+    const heads: string[] = []
+    for (const remote of localPaths) {
+      const def = (await git(remote, ['rev-parse', '--verify', '-q', 'HEAD']).catch(() => '')).trim()
+      const all = (await git(remote, ['for-each-ref', `--count=${MAX_REMOTE_HEADS}`, '--format=%(objectname)', 'refs/heads'])).split('\n').map((x) => x.trim())
+      for (const h of [def, ...all]) {
+        if (!/^[0-9a-f]{40,64}$/.test(h) || heads.includes(h)) continue
+        // Only a head whose commits this repo can read (a --shared clone sees the remote's objects).
+        if (await git(repo, ['cat-file', '-e', `${h}^{commit}`]).then(() => true, () => false)) heads.push(h)
+      }
+    }
+    if (heads.length === 0) return false
+    const tips = new Set((await git(repo, ['for-each-ref', '--format=%(objectname)', 'refs/heads'])).split('\n').map((x) => x.trim()).filter(Boolean))
+    const head = (await git(repo, ['rev-parse', '--verify', '-q', 'HEAD']).catch(() => '')).trim()
+    if (head) tips.add(head)
+    for (const tip of tips) {
+      // Nothing of this tip is unique: no remote head is needed for it.
+      if (!(await git(repo, ['log', tip, ...not, '-n', '1', '--format=%h'])).trim()) continue
+      let found = false
+      for (const h of heads) {
+        const left = await git(repo, ['log', '--cherry-pick', '--right-only', '--no-merges', '-n', '1', '--format=%h', `${h}...${tip}`])
+        if (!left.trim()) { found = true; break }
+      }
+      if (!found) return false
+    }
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -249,7 +302,10 @@ export async function inspectTaskDir(
           .filter((p) => p !== real(repo.dir) && !within(p, dir))
         if (outside.length > 0) reasons.push(`${name}: a worktree of it lives outside (${outside[0]})`)
       }
-      if (await unpushed(repo.dir, await trustedRemoteArgs(repo.dir, root, volatile, git), git)) reasons.push(`${name}: commits not on any remote`)
+      const trusted = await trustedRemotes(repo.dir, root, volatile, git)
+      if (await unpushed(repo.dir, trusted.args, git) && !(await landedOnLocalRemote(repo.dir, trusted.args, trusted.localPaths, git))) {
+        reasons.push(`${name}: commits not on any remote`)
+      }
     } catch (err) {
       const msg = (err as Error).message || ''
       reasons.push(`${name}: could not check (${msg.split('\n')[0].slice(0, 120)})`)
