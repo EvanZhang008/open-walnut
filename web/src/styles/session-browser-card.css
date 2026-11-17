@@ -288,5 +288,5 @@
   align-items: center;
   gap: 4px;
   font-size: 11px;
-  color: var(--text-secondary);
+  color: var(--fg-muted);
 }
