@@ -60,7 +60,7 @@ export function BrowserRevealButton({ taskId, tab, device, step, testId = 'sessi
           ))}
         </span>
       )}
-      {trouble && <span className="session-browser-reveal-trouble" role="alert" title={trouble} data-testid={`${testId}-trouble`}>{trouble}</span>}
+      {trouble && <span className="session-browser-reveal-trouble" role="alert" data-testid={`${testId}-trouble`}>{trouble}</span>}
     </>
   );
 }
