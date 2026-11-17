@@ -4,6 +4,7 @@
  * user: an error (its red is allowed anywhere) and an ask waiting on him (KEEPS_COLOUR).
  */
 import type { Locator } from '@playwright/test'
+import { withCssColor } from './css-color'
 
 export interface Painted { cls: string; prop: string; value: string; text: string }
 
@@ -12,24 +13,12 @@ export const KEEPS_COLOUR = ['.permission-request-card.is-pending']
 
 /** Every element inside `root` whose text, fill or border is not grey. */
 export async function paintedElements(root: Locator): Promise<Painted[]> {
-  return root.evaluate((el, keeps) => {
+  return root.evaluate(withCssColor((toRgba) => (el: Element, keeps: string[]) => {
     const out: Array<{ cls: string; prop: string; value: string; text: string }> = []
     /** A hue the eye sees (not grey), leaving out the error red, which a chat keeps. */
     const hued = (v: string): boolean => {
-      let rgb: number[] | null = null
-      let a = 1
-      const m = v.match(/rgba?\(([^)]+)\)/)
-      const c = v.match(/color\(srgb ([\d.]+) ([\d.]+) ([\d.]+)(?: \/ ([\d.]+))?\)/)
-      if (m) {
-        const parts = m[1].split(/[ ,/]+/).filter(Boolean).map(Number)
-        rgb = parts.slice(0, 3)
-        if (parts.length > 3) a = parts[3]
-      } else if (c) {
-        rgb = [c[1], c[2], c[3]].map((x) => Number(x) * 255)
-        if (c[4] !== undefined) a = Number(c[4])
-      }
-      if (!rgb || a < 0.06) return false
-      const [r, g, b] = rgb
+      const [r, g, b, a] = toRgba(v)
+      if (a < 0.06) return false
       const max = Math.max(r, g, b)
       const chroma = max - Math.min(r, g, b)
       if (chroma <= 14) return false
@@ -70,7 +59,7 @@ export async function paintedElements(root: Locator): Promise<Painted[]> {
       }
     }
     return out
-  }, KEEPS_COLOUR)
+  }), KEEPS_COLOUR)
 }
 
 /** One line per distinct (class, property, value), most frequent first. */

@@ -16,6 +16,7 @@
  * Runs in Chromium; `PW_WEBKIT=1 … --project webkit` for the Mac app's engine.
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
+import { cssColorToRgba } from './css-color'
 
 const SESSION_ID = 'pw-idref-session'
 const TASK_ID = 'pw-task-idref'
@@ -158,15 +159,16 @@ test('an id in code in the user bubble stays readable', async ({ page }, info) =
   await expect(link).toHaveText(OPEN_ID, { timeout: 20_000 })
   // Blue on the blue bubble was the 2026-08-15 invisible-pill trap; the bubble is grey since
   // 2026-11-17 (chat-palette.css), and the id still reads on it at 4.5:1 or more.
-  const ratio = await link.evaluate((a) => {
-    const lum = (c: string) => {
-      const [r, g, b] = (c.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number).map((v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4 })
-      return 0.2126 * r + 0.7152 * g + 0.0722 * b
-    }
-    const bubble = a.closest('.session-msg-user') as HTMLElement
-    const [hi, lo] = [lum(getComputedStyle(a).color), lum(getComputedStyle(bubble).backgroundColor)].sort((x, y) => y - x)
-    return (hi + 0.05) / (lo + 0.05)
-  })
+  const look = await link.evaluate((a) => ({
+    ink: getComputedStyle(a).color,
+    bubble: getComputedStyle(a.closest('.session-msg-user') as HTMLElement).backgroundColor,
+  }))
+  const lum = (c: string) => {
+    const [r, g, b] = cssColorToRgba(c).slice(0, 3).map((v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4 })
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+  }
+  const [hi, lo] = [lum(look.ink), lum(look.bubble)].sort((x, y) => y - x)
+  const ratio = (hi + 0.05) / (lo + 0.05)
   expect(ratio).toBeGreaterThanOrEqual(4.5)
   await bubble.screenshot({ path: `${SHOTS}/${info.project.name}-03-user-bubble.png` })
 })
