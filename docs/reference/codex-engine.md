@@ -269,7 +269,13 @@ session:
 ```
 
 Every session Walnut starts then sends the header `x-walnut-session: <task id>` with each model
-request, wherever the session works:
+request, and `x-walnut-project: <the task's project>` when the task has a project, so a proxy can
+route by project too. The project header names the task's project at each start or resume of its
+session (a task moved to another project names the new one from its next start). Its value is the
+project's name percent-encoded as UTF-8 (JavaScript's `encodeURIComponent`): `Walnut` stays
+`Walnut`, `Home Lab` is `Home%20Lab`, and a non-ASCII name arrives as its `%XX` bytes. Decode it
+with `decodeURIComponent` or Python's `urllib.parse.unquote`. A task in the Inbox sends no project
+header. Both headers go out wherever the session works:
 
 - Claude Code sessions send it through `ANTHROPIC_CUSTOM_HEADERS`. Header lines you set in this
   Mac's `~/.claude/settings.json` are kept beside it. On another host, a value set there in that
@@ -280,6 +286,7 @@ request, wherever the session works:
 - Other ACP engines (dsh, and any engine on the Anthropic SDK) get the same
   `ANTHROPIC_CUSTOM_HEADERS`, beside any header lines their `engines.<id>.env` sets.
 - Walnut's own one-shot calls (titles, summaries, placement, quick answers, inline subagents)
-  send `x-walnut-session: walnut`, since they belong to no one task.
+  and the server's own model calls send `x-walnut-session: walnut` and no project header, since
+  they belong to no one task.
 
 It is off by default, so nothing extra leaves the machine unless you ask for it.

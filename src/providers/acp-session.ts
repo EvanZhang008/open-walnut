@@ -57,6 +57,7 @@ import { AcpStreamNormalizer } from './acp-stream-normalizer.js'
 import { AcpTurnSpeedMeter } from '../core/sessions/acp-turn-speed.js'
 import { walnutApiEnvForSession } from '../lib/self-api-root.js'
 import { requestTagOn, requestTagValue, withRequestTagHeaders } from '../core/sessions/request-tag.js'
+import { requestTagProject } from '../core/sessions/request-tag-project.js'
 import { singleFile, type SingleFile } from '../lib/single-file.js'
 import type {
   AcpCapabilitySnapshot,
@@ -1651,7 +1652,7 @@ export class AcpSession {
       // A null there is '' in the overlay (engineEnvOverlayFromConfig): none of the server's lines.
       const ownHeaders = overlay?.ANTHROPIC_CUSTOM_HEADERS ?? (this.remote ? undefined : process.env.ANTHROPIC_CUSTOM_HEADERS)
       const tagged = requestTagOn(await (await import('./codex-engine-source.js')).codexWalnutConfig().catch(() => ({})))
-        ? { ANTHROPIC_CUSTOM_HEADERS: withRequestTagHeaders(ownHeaders, requestTagValue(this.taskId)) }
+        ? { ANTHROPIC_CUSTOM_HEADERS: withRequestTagHeaders(ownHeaders, requestTagValue(this.taskId), await requestTagProject(this.taskId, this.project)) }
         : undefined
       return { ...(overlay ?? {}), ...(provider ?? {}), ...(managed ?? {}), ...(tagged ?? {}) }
     }
@@ -1667,8 +1668,8 @@ export class AcpSession {
       overlay && Object.hasOwn(overlay, 'CODEX_CONFIG') ? overlay.CODEX_CONFIG : (this.remote ? undefined : process.env.CODEX_CONFIG),
       {
         pick: pick ? { model: pick.model, reasoning_effort: pick.reasoning_effort } : undefined,
-        // session.tag_requests (sessions/request-tag.ts): this task's id on every request.
-        ...(requestTagOn(walnutConfig) ? { tag: requestTagValue(this.taskId) } : {}),
+        // session.tag_requests (sessions/request-tag.ts): this task's id and project on every request.
+        ...(requestTagOn(walnutConfig) ? { tag: { session: requestTagValue(this.taskId), project: await requestTagProject(this.taskId, this.project) } } : {}),
       },
     )
     // Startup approval preset (acp-permission-posture.ts resolveCodexStartPreset): the

@@ -1,14 +1,16 @@
 /**
  * `session.tag_requests` (config.yaml, default off): every model request of a session
- * Walnut starts carries `x-walnut-session: <task id>`, so a proxy the user runs in front
- * of their provider can tell Walnut's sessions from their other ones, wherever the
- * session works (docs/reference/codex-engine.md). Claude Code sends it through
- * ANTHROPIC_CUSTOM_HEADERS, Codex through the http_headers of the provider it uses.
+ * Walnut starts carries `x-walnut-session: <task id>`, and `x-walnut-project: <the task's
+ * project>` when it has one, so a proxy the user runs in front of their provider can tell
+ * Walnut's sessions from their other ones and route by project, wherever the session works
+ * (docs/reference/codex-engine.md). Claude Code sends them through ANTHROPIC_CUSTOM_HEADERS,
+ * Codex through the http_headers of the provider it uses.
  *
  * The send path that builds a Claude Code spawn is synchronous, so the switch is kept
  * here from every config read (getConfig), which runs long before any session starts.
  */
 export const REQUEST_TAG_HEADER = 'x-walnut-session'
+export const REQUEST_PROJECT_HEADER = 'x-walnut-project'
 
 let tagging = false
 
@@ -34,13 +36,32 @@ export function requestTagValue(taskId: string | undefined): string {
 }
 
 /**
- * ANTHROPIC_CUSTOM_HEADERS with the tag in it: one `Name: value` per line, as Claude
- * Code reads it, every line the user set kept (an older tag line is replaced).
+ * The project header's value: the project's name percent-encoded as UTF-8
+ * (encodeURIComponent), so a space, a colon or a non-ASCII letter rides a header line
+ * as it is meant; a proxy decodes it with decodeURIComponent (urllib.parse.unquote).
+ * '' for a task in the Inbox, which sends no project header.
  */
-export function withRequestTagHeaders(existing: string | undefined, value: string): string {
+export function requestProjectValue(project: string | undefined): string {
+  const name = (project ?? '').trim()
+  return name ? encodeURIComponent(name) : ''
+}
+
+/** The tag's own header lines: the session's, then its project's when it has one. */
+function tagLines(value: string, project: string | undefined): string[] {
+  const encoded = requestProjectValue(project)
+  return [`${REQUEST_TAG_HEADER}: ${value}`, ...(encoded ? [`${REQUEST_PROJECT_HEADER}: ${encoded}`] : [])]
+}
+
+/**
+ * ANTHROPIC_CUSTOM_HEADERS with the tag in it: one `Name: value` per line, as Claude
+ * Code reads it, every line the user set kept (an older tag or project line is replaced).
+ * `project` is the task's project, or undefined for a call that belongs to no task.
+ */
+export function withRequestTagHeaders(existing: string | undefined, value: string, project: string | undefined): string {
+  const ours = [REQUEST_TAG_HEADER, REQUEST_PROJECT_HEADER].map((h) => `${h}:`)
   const own = (existing ?? '').split('\n').map((l) => l.trim()).filter(Boolean)
-    .filter((l) => !l.toLowerCase().startsWith(`${REQUEST_TAG_HEADER}:`))
-  return [...own, `${REQUEST_TAG_HEADER}: ${value}`].join('\n')
+    .filter((l) => !ours.some((h) => l.toLowerCase().startsWith(h)))
+  return [...own, ...tagLines(value, project)].join('\n')
 }
 
 /**
@@ -55,7 +76,9 @@ export function walnutRequestTagHeaders(config?: unknown): Record<string, string
  * A Codex config with the tag on the provider its threads go to (`model_provider`),
  * when the config defines that provider; codex's built-in providers take no header here.
  */
-export function withCodexRequestTag(config: Record<string, unknown> | undefined, value: string): Record<string, unknown> | undefined {
+export function withCodexRequestTag(
+  config: Record<string, unknown> | undefined, value: string, project: string | undefined,
+): Record<string, unknown> | undefined {
   if (!config) return config
   const id = config.model_provider
   const providers = config.model_providers
@@ -63,7 +86,10 @@ export function withCodexRequestTag(config: Record<string, unknown> | undefined,
   const def = (providers as Record<string, unknown>)[id]
   if (!def || typeof def !== 'object' || Array.isArray(def)) return config
   const headers = (def as { http_headers?: unknown }).http_headers
-  const own = headers && typeof headers === 'object' && !Array.isArray(headers) ? headers as Record<string, unknown> : {}
+  const own = Object.fromEntries(Object.entries(headers && typeof headers === 'object' && !Array.isArray(headers) ? headers : {})
+    .filter(([name]) => ![REQUEST_TAG_HEADER, REQUEST_PROJECT_HEADER].includes(name.toLowerCase())))
+  const encoded = requestProjectValue(project)
+  if (encoded) own[REQUEST_PROJECT_HEADER] = encoded
   return {
     ...config,
     model_providers: {
@@ -75,7 +101,7 @@ export function withCodexRequestTag(config: Record<string, unknown> | undefined,
 
 /**
  * A Walnut one-shot `claude -p` (titles, summaries, placement, micro-Claude, inline
- * subagents) with the tag on: in its env, and in its `--settings` env too, because a
+ * subagents) with the tag on (`walnut`, no project: it belongs to no one task): in its env, and in its `--settings` env too, because a
  * settings.json env that names ANTHROPIC_CUSTOM_HEADERS is applied over the process env.
  * `userHeaders` is that settings value, kept beside the tag. A `--settings` that is not
  * inline JSON is left as it is.
@@ -83,7 +109,7 @@ export function withCodexRequestTag(config: Record<string, unknown> | undefined,
 export function withOneShotRequestTag<T extends { args: string[]; env: Record<string, string | undefined> }>(
   spec: T, userHeaders: string | undefined,
 ): T {
-  const headers = withRequestTagHeaders(userHeaders ?? spec.env.ANTHROPIC_CUSTOM_HEADERS, 'walnut')
+  const headers = withRequestTagHeaders(userHeaders ?? spec.env.ANTHROPIC_CUSTOM_HEADERS, 'walnut', undefined)
   const args = [...spec.args]
   const at = args.indexOf('--settings')
   if (at < 0) {

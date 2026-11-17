@@ -254,11 +254,12 @@ export interface CodexEngineResolution {
 export function resolveCodexEngine(
   config: unknown,
   rawCodexConfig: string | undefined,
-  options: { pick?: CodexSessionPick; tag?: string } = {},
+  options: { pick?: CodexSessionPick; tag?: { session: string; project: string | undefined } } = {},
 ): CodexEngineResolution {
   const resolved = resolveUntagged(config, rawCodexConfig, options)
-  // session.tag_requests: the provider the threads go to carries the session's tag header.
-  return options.tag ? { ...resolved, baseConfig: withCodexRequestTag(resolved.baseConfig, options.tag) } : resolved
+  // session.tag_requests: the provider the threads go to carries the session's tag headers.
+  const tag = options.tag
+  return tag ? { ...resolved, baseConfig: withCodexRequestTag(resolved.baseConfig, tag.session, tag.project) } : resolved
 }
 
 function resolveUntagged(

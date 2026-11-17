@@ -39,6 +39,7 @@ import { readUserSettingsEnv, slimChildSettingsArg } from './inline-subagent.js'
 import { isRouterAreaSession, routerAreaProfile, routerLaunchTools } from '../core/router/session-policy.js'
 import { idRefErrorStatus } from '../lib/id-ref.js'
 import { requestTagOn, requestTagValue, withRequestTagHeaders } from '../core/sessions/request-tag.js'
+import { requestTagProject } from '../core/sessions/request-tag-project.js'
 import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, COMPACTION_FAILED_MESSAGE, COMPACTION_STOPPED_DETAIL, COMPACTION_STOPPED_MESSAGE, compactedDetail, firstSightingOfLine } from '../core/stream/compaction-notice.js'
 import { HOOK_LIFECYCLE_SUBTYPES, hookFailureNotice } from '../core/stream/hook-notice.js'
 import { SILENT_SYSTEM_SUBTYPES, systemEventView } from '../core/stream/system-event-view.js'
@@ -3043,10 +3044,12 @@ export class ClaudeCodeSession {
       if (!slim) throw new Error('Area sessions require a local slim profile')
       Object.assign(slimEnv, { CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' })
     }
-    // session.tag_requests: the task's id rides every model request as a header, beside any
-    // the user set in this machine's settings (another host's own are not known here).
+    // session.tag_requests: the task's id and project ride every model request as headers, beside
+    // any the user set in this machine's settings (another host's own are not known here). The
+    // project is the one this session was made in; applySpawnRequestProject puts in the task's
+    // project now before the spawn.
     const tagEnv: Record<string, string> = requestTagOn()
-      ? { ANTHROPIC_CUSTOM_HEADERS: withRequestTagHeaders(host ? undefined : readUserSettingsEnv().ANTHROPIC_CUSTOM_HEADERS, requestTagValue(this.taskId)) }
+      ? { ANTHROPIC_CUSTOM_HEADERS: withRequestTagHeaders(host ? undefined : readUserSettingsEnv().ANTHROPIC_CUSTOM_HEADERS, requestTagValue(this.taskId), this.taskId ? this.project : undefined) }
       : {}
     if (Object.keys(walnutEnv).length + Object.keys(slimEnv).length + Object.keys(tagEnv).length > 0) sessionSettings.env = { ...slimEnv, ...walnutEnv, ...tagEnv }
     const slimOverrides = slim ? slimChildSettingsArg() : undefined
@@ -3391,6 +3394,7 @@ export class ClaudeCodeSession {
         await this.applySpawnClaudeScope(args)
         stepDone('scopeMs')
       }
+      await this.applySpawnRequestProject(args)
       await this.applySpawnWalnutMount(args, profile, host)
       log.session.info('spawn: pre-spawn steps', {
         taskId: this.taskId, sessionId: tmpId, host: host ?? '__local__', resume: isResume && resumeNow,
@@ -10400,6 +10404,29 @@ export class ClaudeCodeSession {
       hostServesMcp: getConnectedDaemonConnection(hostKey)?.hasCapability(WALNUT_MCP_CAPABILITY) ?? false,
       local: hostKey === '__local__',
       hubMount: walnutMcpProfile,
+    }
+  }
+
+  /**
+   * session.tag_requests: the `x-walnut-project` line of this spawn's `--settings` env names the
+   * task's project now (it may have moved since this session was made). Never fails the spawn:
+   * a failed lookup keeps the project the session was made in.
+   */
+  private async applySpawnRequestProject(args: string[]): Promise<void> {
+    const at = args.indexOf('--settings')
+    if (at < 0 || !requestTagOn()) return
+    try {
+      const settings = JSON.parse(args[at + 1]) as { env?: Record<string, unknown> }
+      const headers = settings.env?.ANTHROPIC_CUSTOM_HEADERS
+      if (typeof headers !== 'string') return
+      const project = await requestTagProject(this.taskId, this.project)
+      if (project === (this.taskId ? this.project : undefined)) return
+      settings.env = { ...settings.env, ANTHROPIC_CUSTOM_HEADERS: withRequestTagHeaders(headers, requestTagValue(this.taskId), project) }
+      args[at + 1] = JSON.stringify(settings)
+    } catch (err) {
+      log.session.warn('request tag: could not name the task\'s project now; the spawn keeps the one it was made in', {
+        taskId: this.taskId, error: err instanceof Error ? err.message : String(err),
+      })
     }
   }
 

@@ -1812,7 +1812,7 @@ export interface Config {
     cron_policy?: 'unrestricted' | 'session-only';
 
     /** Tag every model request of a session Walnut starts with `x-walnut-session: <task id>`
-     *  (Claude Code through ANTHROPIC_CUSTOM_HEADERS, Codex through its provider's
+     *  and `x-walnut-project: <the task's project, percent-encoded>` (Claude Code through ANTHROPIC_CUSTOM_HEADERS, Codex through its provider's
      *  http_headers), so a proxy in front of the provider can tell Walnut's sessions from
      *  the user's other ones. Default off (src/core/sessions/request-tag.ts). */
     tag_requests?: boolean;
