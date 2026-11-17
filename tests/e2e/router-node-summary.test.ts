@@ -52,7 +52,7 @@ describe('the router node summary', () => {
     const body = await response.json();
     expect(body).toMatchObject({
       areaId: 'garden', areaName: 'Garden', paused: true, sources: 0, assigned: 0, waiting: 0,
-      counts: { routed: 0, not_routed: 0, routing: 0, failed: 0, unknown: 0 },
+      counts: { routed: 0, not_routed: 0, routing: 0, failed: 0, unknown: 0, letters: 0 },
       session: { started: false },
     });
     expect(body.latest).toBeUndefined();
@@ -66,11 +66,22 @@ describe('the router node summary', () => {
     await ledger.claim(item(mail('m2')), { status: 'not_routed', reason: 'newsletter' }, 2_000);
     await ledger.settle(first.route.key, routerMessageId('workshop', first.route.key, target.task.id), { status: 'routed' }, 3_000);
     const body = await (await summary(id)).json();
-    expect(body.counts).toEqual({ routed: 1, not_routed: 1, routing: 0, failed: 0, unknown: 0 });
+    expect(body.counts).toEqual({ routed: 1, not_routed: 1, routing: 0, failed: 0, unknown: 0, letters: 0 });
     expect(body.latest).toEqual({ at: 3_000, status: 'routed', taskId: target.task.id, taskTitle: 'Fix the dock schedule' });
     const text = JSON.stringify(body);
     expect(text).not.toContain('Dock schedule');
     expect(text).not.toContain('marina-desk');
+  });
+
+  it('counts a not_routed item as a letter only once its letter is known', async () => {
+    const id = await createRouter('pantry');
+    const ledger = routerStore('pantry', WALNUT_HOME);
+    const told = await ledger.claim(item(mail('p1')), { status: 'not_routed', reason: 'for the person', letter: true }, 1_000);
+    await ledger.claim(item(mail('p2')), { status: 'not_routed', reason: 'newsletter' }, 2_000);
+    // A letter still being written is not counted yet.
+    expect((await (await summary(id)).json()).counts).toMatchObject({ not_routed: 2, letters: 0 });
+    await ledger.noteLetter([told.route.key], 'letter-fixture-1');
+    expect((await (await summary(id)).json()).counts).toMatchObject({ not_routed: 2, letters: 1 });
   });
 
   it('answers 404 not_router for a task that is no router, and refuses a session caller', async () => {
