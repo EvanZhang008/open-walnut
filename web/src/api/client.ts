@@ -51,7 +51,11 @@ export interface FetchLane {
   interactive: boolean;
   /** Waits for the kept slot behind the first screens waiting for it: a chat's record (its header
    *  and note band) draws over rows that come first. Four Home columns opened at once put four
-   *  record reads ahead of four first-screen reads and drew the rows about 1 s later (2026-11-17). */
+   *  record reads ahead of four first-screen reads and drew the rows about 1 s later (2026-11-17).
+   *  It orders only reads queued together: it never holds the kept slot free. A read that finds the
+   *  slot idle takes it, so on an open with no first screen queued yet (a cold or restored page, no
+   *  click prefetch, its history read still in the IndexedDB grace) the record read can go first
+   *  and the history read waits for it like any other. */
   yields?: boolean;
 }
 
@@ -136,7 +140,8 @@ function pumpFetchQueue(): void {
       break;
     }
   }
-  // The kept slot: the first waiting read the person waits on, first screens before what yields.
+  // The kept slot: the first waiting read the person waits on, first screens before what yields
+  // (only among reads waiting now: FetchLane.yields).
   while (keptSlotFree()) {
     const first = fetchQueue.findIndex((entry) => (!entry.read || !readsSuspended()) && entry.lane.interactive && !entry.lane.yields);
     const interactive = first >= 0 ? first : eligibleIndex(fetchQueue, true);

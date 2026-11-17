@@ -92,6 +92,22 @@ describe('fetchSessionHistory coalescing', () => {
     await Promise.all([behind, clicked]);
   });
 
+  // The history read keeps a claim its caller left behind (shared-read.ts keepClaims): the chat's
+  // other reader of the same first screen still waits on it.
+  it('a read the person waited on keeps the kept connection after that caller lets go', async () => {
+    const calls = deferApiGet();
+    const left = new AbortController();
+    const other = fetchSessionHistory('kept-claim', { source: 'streams', tail: 400 });
+    void fetchSessionHistory('kept-claim', { source: 'streams', tail: 400, interactive: true, signal: left.signal }).catch(() => {});
+    const lane = mocks.apiGet.mock.calls[0][2].lane;
+    left.abort();
+    await Promise.resolve();
+    expect(lane.interactive).toBe(true);
+    expect(calls[0].signal?.aborted).toBe(false);
+    calls[0].resolve(RESPONSE);
+    await other;
+  });
+
   it('two concurrent identical requests share ONE network call and both resolve', async () => {
     const calls = deferApiGet();
     const p1 = fetchSessionHistory('sess-1', { tail: 400 });

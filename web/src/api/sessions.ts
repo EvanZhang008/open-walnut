@@ -1,5 +1,6 @@
 import { INITIAL_HISTORY_TURNS } from '@open-walnut/history-turn-window';
-import { apiGet, apiPatch, apiPost, apiPut, ApiError, fetchLaneRaised, type FetchLane } from './client';
+import { apiGet, apiPatch, apiPost, apiPut, ApiError, type FetchLane } from './client';
+import { SharedReads } from './shared-read';
 import { readSessionRecord, type SessionRecordReadOptions } from './session-record-read';
 import type { SessionSummary, SessionRecord, SessionEffort, SessionModelCatalogEntry, SessionEngine, SessionCronMetadata, Task } from '@open-walnut/core';
 import type { ImageAttachment } from './chat';
@@ -272,15 +273,11 @@ export const HISTORY_TAIL_LIMIT = 400;
 // aborts only when EVERY subscriber has aborted — an aborted subscriber simply
 // stops caring (callers already guard with `cancelled` flags), it must not
 // kill the request for the others.
-interface InflightHistory {
-  promise: Promise<SessionHistoryResult>;
-  subscribers: number;
-  controller: AbortController;
-  /** Its claim to the connection kept for a read the person waits on: raised when such a caller
-   *  joins it while it still waits (else that caller would wait behind the shared slots). */
-  lane: FetchLane;
-}
-const inflightHistory = new Map<string, InflightHistory>();
+// The shared-read rules (shared-read.ts): an aborted subscriber still gets the answer, the
+// request is cancelled once the last one left (after the commit), and a caller the person waits
+// on raises the read's claim to the kept connection while it waits. The claim stays when that
+// caller leaves: the chat's other reader of the same screen still waits on it.
+const inflightHistory = new SharedReads<SessionHistoryResult>({ joinSent: true, keepClaims: true });
 
 // A read asked for because the session moved on (its turn ended, a notice rewrote a
 // row, it erred) never joins a read that started before that event: the older read
@@ -348,52 +345,11 @@ export async function fetchSessionHistory(
 
   const epoch = `${historyEpochAll}.${historyEpochs.get(sessionId) ?? 0}`;
   const key = `${sessionId}#${epoch}?${new URLSearchParams(params).toString()}`;
-  let entry = inflightHistory.get(key);
-  if (!entry) {
-    const controller = new AbortController();
-    const created: InflightHistory = {
-      controller,
-      lane: { interactive: opts?.interactive === true },
-      subscribers: 0,
-      promise: undefined as unknown as Promise<SessionHistoryResult>,
-    };
-    // Identity-guarded settle-delete: the eager delete-on-abort below means a
-    // SUCCESSOR entry can occupy this key before this promise settles — an
-    // unconditional delete here would evict that live successor and break
-    // coalescing for every caller after it (duplicate whale fetches).
-    created.promise = fetchSessionHistoryRaw(sessionId, params, opts?.source, opts?.tail, controller.signal, created.lane)
-      .finally(() => { if (inflightHistory.get(key) === created) inflightHistory.delete(key); });
-    inflightHistory.set(key, created);
-    entry = created;
-  } else if (opts?.interactive && !entry.lane.interactive) {
-    entry.lane.interactive = true;
-    fetchLaneRaised();
-  }
-  const live = entry;
-  live.subscribers++;
-  const onAbort = () => {
-    live.subscribers--;
-    if (live.subscribers > 0) return;
-    // The last reader let go. When an effect re-runs (a dependency changed: the page's
-    // shown flag turning on as a column opened from another route, a version bump), React
-    // runs its cleanup and then its new body in one go: that body asks for the same read
-    // and must find it still running, not cancelled and sent again (2026-11-17: two
-    // first-screen reads per open, session-open-instant). So the read is cancelled once
-    // the commit is over, unless someone took it back meanwhile.
-    queueMicrotask(() => {
-      if (live.subscribers > 0) return;
-      // Drop the entry BEFORE aborting: the .finally delete only runs on settle,
-      // and a remount inside that window would adopt the rejected promise and
-      // surface a spurious "signal is aborted" error (fast thread-chip switching).
-      if (inflightHistory.get(key) === live) inflightHistory.delete(key);
-      live.controller.abort();
-    });
-  };
-  if (opts?.signal) {
-    if (opts.signal.aborted) { onAbort(); }
-    else opts.signal.addEventListener('abort', onAbort, { once: true });
-  }
-  return live.promise;
+  return inflightHistory.read(
+    key,
+    (signal, lane) => fetchSessionHistoryRaw(sessionId, params, opts?.source, opts?.tail, signal, lane),
+    { lane: { interactive: opts?.interactive === true }, signal: opts?.signal },
+  );
 }
 
 async function fetchSessionHistoryRaw(
@@ -687,6 +643,10 @@ export function peekSessionRecord(sessionId: string): SessionRecord | null {
  * mode and model and the note band over those rows; left in the shared queue it came up to 0.7 s
  * after them behind the boot's reads (2026-11-17), so the note band and the title popped in under
  * a chat already drawn. `signal`: the caller stops waiting (a panel that moved to another session).
+ * Every caller gets an answer from a request sent after its call (the shared read joins only one
+ * not sent yet): a reread after a status change or a turn's end, and a read-then-write such as
+ * the thread anchors, never get state from before it. So the cron generation taken here at the
+ * call is older than the answer, and a cron request made since still wins.
  */
 export async function fetchSession(sessionId: string, opts?: Pick<SessionRecordReadOptions, 'lane' | 'signal'>): Promise<SessionRecord | null> {
   const cronGeneration = sessionStatusStore.getCronRequestGeneration();

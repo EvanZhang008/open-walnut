@@ -215,11 +215,23 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
   const blocksNowRef = useRef(blocks);
   blocksNowRef.current = blocks;
   // It is the panel's own record read (session-record-read.ts): one request per session for both,
-  // through the connection gate. `fresh`: the answer comes from a request sent after this call,
-  // so it postdates the subscribe it follows and the resync's "already pending" set. A resync is
-  // the person back in front (C62's 2 s budget): it takes the kept connection.
+  // through the connection gate. It joins only a read not sent yet, so the answer postdates the
+  // subscribe it follows and the resync's "already pending" set. A resync is the person back in
+  // front (C62's 2 s budget): it takes the kept connection, and lets go of it (and of the read)
+  // once the stream moves to another session or unmounts.
+  const recordReadLetGo = useRef<{ sessionId: string; controller: AbortController } | null>(null);
+  const letGoRecordRead = useRef((): void => {
+    recordReadLetGo.current?.controller.abort();
+    recordReadLetGo.current = null;
+  }).current;
+  useEffect(() => letGoRecordRead, [letGoRecordRead]);
   const refetchPendingRef = useRef((sessionId: string, knownAtStart: Set<string> | null): void => {
-    readSessionRecord(sessionId, { fresh: true, ...(knownAtStart ? { lane: { interactive: true } } : {}) })
+    if (recordReadLetGo.current?.sessionId !== sessionId) {
+      letGoRecordRead();
+      recordReadLetGo.current = { sessionId, controller: new AbortController() };
+    }
+    const signal = recordReadLetGo.current!.controller.signal;
+    readSessionRecord(sessionId, { signal, ...(knownAtStart ? { lane: { interactive: true } } : {}) })
       // A refused answer (a 404 for a session that is gone) reads as "nothing pending", as before.
       .catch((err: unknown) => { if (err instanceof ApiError) return null; throw err; })
       .then((data: SessionRecordAnswer | null) => {
@@ -271,7 +283,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
   useEffect(() => {
     // A session switch forgets the old session's unflushed reasoning; a
     // reconnect on the same session lands it (it is still this session's).
-    if (activeSessionId.current !== sessionId) dropPendingThinking();
+    if (activeSessionId.current !== sessionId) { dropPendingThinking(); letGoRecordRead(); }
     else flushPendingThinking();
     activeSessionId.current = sessionId;
 
