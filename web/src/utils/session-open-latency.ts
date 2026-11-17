@@ -49,7 +49,12 @@ function finishAttempt(sessionId: string, attempt: OpenAttempt, outcome: 'conten
 
 /** What the open's full read changed on screen: rows shown before and after, and how many of
  *  the shown rows it kept by id (fewer kept = rows redrawn under the reader). */
-export interface OpenCurrentChange { rowsBefore: number; rowsAfter: number; keptRows: number; outcome: 'current' | 'stale' | 'error' }
+export interface OpenCurrentChange {
+  rowsBefore: number; rowsAfter: number; keptRows: number; outcome: 'current' | 'stale' | 'error';
+  /** Up to 3 shown rows the read did not keep: where they sat and what they were, so a loss in
+   *  the log names its rows (2026-11-17: 325 to 324 on a lead's session said only "one"). */
+  lost?: Array<{ at: number; role?: string; msgId?: string; timestamp?: string }>;
+}
 
 /**
  * The open's history is current (its full read answered): one more row, `current <sid> open <n>`,
@@ -80,10 +85,20 @@ export function sessionOpenCurrentRecorder(sessionId: string): (change: OpenCurr
   };
 }
 
-/** How many rows of `before` `after` still holds by id (a row without an id never counts). */
-export function keptRowCount(before: readonly { msgId?: string }[], after: readonly { msgId?: string }[]): number {
+type ShownRow = { msgId?: string; role?: string; timestamp?: string };
+
+/** What a full read did to the shown rows: counts, rows `after` still holds by id (a row without
+ *  an id never counts as kept), and the first rows it lost. */
+export function rowsChange(before: readonly ShownRow[], after: readonly ShownRow[], outcome: OpenCurrentChange['outcome']): OpenCurrentChange {
   const ids = new Set(after.map((m) => m.msgId).filter(Boolean));
-  return before.filter((m) => m.msgId && ids.has(m.msgId)).length;
+  let keptRows = 0;
+  const lost: NonNullable<OpenCurrentChange['lost']> = [];
+  before.forEach((m, at) => {
+    if (m.msgId && ids.has(m.msgId)) { keptRows++; return; }
+    // A row with no id (optimistic, streamed) only takes its real id: not named as lost.
+    if (m.msgId && lost.length < 3) lost.push({ at, role: m.role, msgId: m.msgId, timestamp: m.timestamp });
+  });
+  return { rowsBefore: before.length, rowsAfter: after.length, keptRows, outcome, ...(lost.length ? { lost } : {}) };
 }
 
 /**

@@ -222,3 +222,14 @@ export function foldFullPayload<T extends RowIdentity>(
   }
   return { messages, cursor, kept: 0, gaps: [] };
 }
+
+/**
+ * A cached copy is behind the server's screen when the screen's newest row is not in it. The
+ * open then shows the screen, not the copy (2026-11-17: an IndexedDB copy 5 h old won the race at
+ * 77 ms; its last 75 rows were machine turns folded out of sight, so the chat showed nothing for
+ * 5.8 s while the click's own screen, answered in 5 ms, went unused).
+ */
+export function cacheBehindScreen(cached: readonly RowIdentity[], screen: readonly RowIdentity[]): boolean {
+  const newest = [...screen].reverse().find((m) => m.msgId)?.msgId;
+  return !!newest && !cached.some((m) => m.msgId === newest);
+}

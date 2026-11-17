@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { fetchSessionHistory, fetchSessionHistoryBefore, HISTORY_TAIL_LIMIT } from '@/api/sessions';
 import { perf } from '@/utils/perf-logger';
-import { hasReadableOpenRows, keptRowCount, noteSessionOpenSource, sessionOpenCurrentRecorder, sessionOpenStageRecorder } from '@/utils/session-open-latency';
+import { hasReadableOpenRows, rowsChange, noteSessionOpenSource, sessionOpenCurrentRecorder, sessionOpenStageRecorder } from '@/utils/session-open-latency';
 import { takeSessionOpenHistory } from '@/api/session-open-prime';
 import { log } from '@/utils/log';
 import type { SessionHistoryMessage } from '@/types/session';
@@ -12,7 +12,7 @@ import {
 } from '@/cache/session-cache';
 import { idbGetHistory } from '@/cache/history-idb';
 import { computeHistoryAnchor, collectUnsettledIds } from './history-anchor';
-import { planDeltaMerge, foldFullPayload, shiftedForkBoundary, prependOlderPage, mergeHistoryBackfill, sourceCountOf } from './history-merge';
+import { planDeltaMerge, foldFullPayload, shiftedForkBoundary, prependOlderPage, mergeHistoryBackfill, sourceCountOf, cacheBehindScreen } from './history-merge';
 import { fillGap, gapIndex, liveGaps, type HistoryGap } from './history-gap';
 import { isPageHidden, visibleInterval } from '@/utils/page-visibility';
 import type { SessionHistoryResult } from '@/api/sessions';
@@ -563,7 +563,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           adoptOffset(folded.messages.length, folded.cursor, result.windowed, folded.kept);
           const before = messagesRef.current;
           setMessages(folded.messages);
-          current({ rowsBefore: before.length, rowsAfter: folded.messages.length, keptRows: keptRowCount(before, folded.messages), outcome: 'current' });
+          current(rowsChange(before, folded.messages, 'current'));
           setForkBoundaryIndex(shiftedForkBoundary(result.forkBoundaryIndex, folded.kept));
           if (readable) stage('historyAdopted');
           // NOTE: turn-boundary block cleanup is driven by the version-bump delta
@@ -594,7 +594,8 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       const held = lateCache;
       lateCache = null;
       if (!held) { cacheWanted = shownRows; return; }
-      if (cancelled || held.messages.length <= shownRows) return;
+      // Never a copy older than what is shown (it lacks the newest row on screen), however long.
+      if (cancelled || held.messages.length <= shownRows || cacheBehindScreen(held.messages, messagesRef.current)) return;
       setHistoryCache(sessionId, held);
       adoptCachedRows(held);
     };
@@ -696,7 +697,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                 const folded = foldFullPayload(before, result);
                 const readable = noteReady(folded.messages, 'network');
                 setMessages(folded.messages);
-                current({ rowsBefore: before.length, rowsAfter: folded.messages.length, keptRows: keptRowCount(before, folded.messages), outcome: 'current' });
+                current(rowsChange(before, folded.messages, 'current'));
                 if (readable) stage('historyAdopted');
                 setForkBoundaryIndex(shiftedForkBoundary(result.forkBoundaryIndex, folded.kept));
                 adoptInitialUserText(result.initialUserText);
@@ -767,11 +768,27 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     const graceTimer = enabled ? setTimeout(raceScreen, IDB_FIRST_SCREEN_GRACE_MS) : undefined;
     // A storage open that never answers must not hold the panel empty forever.
     const deadline = setTimeout(() => { if (choose('network')) startNetworkLoad(firstScreenRead ?? undefined); }, IDB_GIVE_UP_MS);
+    // The click's own screen, once it answered: a copy that lacks its newest row is behind it.
+    let clickScreen: SessionHistoryResult | null = null;
+    firstScreenRead?.then((r) => { clickScreen = r; }, () => {});
     stage('idbStart');
     idbGetHistory(sessionId)
       .then((persisted) => {
         if (cancelled) return;
         stage('idbReady');
+        const screen: SessionHistoryResult | null = clickScreen;
+        if (persisted && persisted.messages.length > 0 && screen && hasReadableOpenRows(screen.messages)
+          && cacheBehindScreen(persisted.messages, screen.messages)) {
+          // Older than what the click already read: show that, not the copy. This also turns down a
+          // whole copy for a short screen (the grace below is for a screen not answered yet); the
+          // copy stays as the fallback, which never replaces newer rows on screen.
+          if (choose('network')) startNetworkLoad(firstScreenRead ?? undefined);
+          if (chosen === 'network') {
+            lateCache = persisted;
+            if (cacheWanted !== null) fallBackToLateCache(cacheWanted);
+          }
+          return;
+        }
         if (persisted && persisted.messages.length > 0) {
           if (!choose('cache')) {
             if (chosen === 'network') {

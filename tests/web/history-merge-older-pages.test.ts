@@ -8,7 +8,8 @@
  * client holds, which the next anchored delta extends) moves with the pages.
  */
 import { describe, it, expect } from 'vitest';
-import { stitchHeldOlder, prependOlderPage, foldFullPayload, planDeltaMerge, mergeHistoryBackfill } from '../../web/src/hooks/history-merge';
+import fs from 'node:fs';
+import { stitchHeldOlder, prependOlderPage, foldFullPayload, planDeltaMerge, mergeHistoryBackfill, cacheBehindScreen } from '../../web/src/hooks/history-merge';
 
 interface Row { msgId?: string; timestamp?: string; role?: string; text?: string }
 
@@ -208,5 +209,30 @@ describe('a full read never takes away rows already shown (2026-11-17)', () => {
         expect(new Set(folded.messages.map((m) => `${m.msgId}|${m.timestamp}`)).size).toBe(folded.messages.length);
       }
     }
+  });
+});
+
+describe('a cached copy behind the click\'s own screen is not what the open shows (2026-11-17)', () => {
+  // 3cad5ec9: the IndexedDB copy ended 5 h before the open, its last rows machine turns folded out
+  // of sight; it won the race at 77 ms and the chat showed nothing until the 5.8 s full read.
+  it('the screen\'s newest row missing from the copy means the copy is behind', () => {
+    const copy = range(0, 400);
+    expect(cacheBehindScreen(copy, range(420, 460))).toBe(true);
+    expect(cacheBehindScreen(copy, range(360, 400))).toBe(false);
+    expect(cacheBehindScreen(range(0, 460), range(420, 460))).toBe(false);
+    expect(cacheBehindScreen(copy, [])).toBe(false);
+    expect(cacheBehindScreen(copy, [{ role: 'user', text: 'no id' }])).toBe(false);
+  });
+
+  it('the IndexedDB race asks before it adopts the copy, and keeps the copy as the fallback', () => {
+    const hook = fs.readFileSync('web/src/hooks/useSessionHistory.ts', 'utf8');
+    const race = hook.slice(hook.indexOf("stage('idbReady')"));
+    const check = race.indexOf('cacheBehindScreen(persisted.messages, screen.messages)');
+    expect(check).toBeGreaterThan(-1);
+    expect(check).toBeLessThan(race.indexOf("choose('cache')"));
+    expect(race.slice(check, race.indexOf("choose('cache')"))).toMatch(/startNetworkLoad\(firstScreenRead[\s\S]*lateCache = persisted/);
+    // The fallback after a failed full read never puts that older copy over newer rows on screen.
+    const fallback = hook.slice(hook.indexOf('const fallBackToLateCache'), hook.indexOf('adoptCachedRows(held)'));
+    expect(fallback).toContain('cacheBehindScreen(held.messages, messagesRef.current)');
   });
 });

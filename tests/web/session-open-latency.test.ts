@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 vi.mock('../../web/src/utils/log', () => ({ log: { info: vi.fn() } }));
 import { log } from '../../web/src/utils/log';
-import { beginSessionOpen, noteSessionOpenSource, observeSessionOpen, hasVisibleSessionContent, hasReadableOpenRows, sessionOpenStageRecorder, sessionOpenCurrentRecorder, keptRowCount } from '../../web/src/utils/session-open-latency';
+import { beginSessionOpen, noteSessionOpenSource, observeSessionOpen, hasVisibleSessionContent, hasReadableOpenRows, sessionOpenStageRecorder, sessionOpenCurrentRecorder, rowsChange } from '../../web/src/utils/session-open-latency';
 
 const stops: Array<() => void> = [];
 afterEach(() => { stops.splice(0).forEach(stop => stop()); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.clearAllMocks(); vi.useRealTimers(); });
@@ -359,7 +359,10 @@ describe('chat open: click to current', () => {
     expect(log.info).not.toHaveBeenCalled();
   });
 
-  it('kept rows count shown rows the new list still holds by id', () => {
-    expect(keptRowCount([{ msgId: 'a' }, { msgId: 'b' }, {}], [{ msgId: 'b' }, { msgId: 'c' }])).toBe(1);
+  it('kept rows count shown rows the new list still holds by id, and the lost ones are named', () => {
+    const change = rowsChange([{ msgId: 'a', role: 'user', timestamp: 't0' }, { msgId: 'b' }, {}], [{ msgId: 'b' }, { msgId: 'c' }], 'current');
+    expect(change).toEqual({ rowsBefore: 3, rowsAfter: 2, keptRows: 1, outcome: 'current',
+      lost: [{ at: 0, role: 'user', msgId: 'a', timestamp: 't0' }] });
+    expect(rowsChange([{ msgId: 'a' }], [{ msgId: 'a' }], 'current')).not.toHaveProperty('lost');
   });
 });
