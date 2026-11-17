@@ -334,7 +334,11 @@ test('a compressed three hours of pushes keep the page\'s fetches, heap and DOM 
     // Its reads start now: the rows come first, then the traffic goes quiet.
     await expect.poll(chatRows, { message: 'the column draws the turns it missed', timeout: 60_000 }).toBeGreaterThan(drewBefore)
     await settle()
-    const rows = await chatRows()
+    // It draws them in steps (render-window.ts `growth`, a follow cut after the draw): counted once still.
+    let last = -1
+    await expect.poll(async () => { const n = await chatRows(); const still = n === last; last = n; return still },
+      { message: 'the column stops drawing', intervals: [1_000], timeout: 30_000 }).toBe(true)
+    const rows = last
     await openRoutines()
     return rows
   }

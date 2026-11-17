@@ -641,8 +641,11 @@ function selectionInside(el: HTMLElement | null): boolean {
 /**
  * Every row above `tailStart` is above the box's top edge, so a cut removes nothing the
  * reader sees (ten short turns in a tall column leave older rows on screen at the bottom).
+ * `null`: not known yet. Rows are drawn, but none from `tailStart` on: the whole tail is new
+ * (a column that comes back to Home after many turns takes them in one read), so where it
+ * puts the rows above it is known once it is drawn.
  */
-function rowsAboveAreOffscreen(el: HTMLElement | null, tailStart: number): boolean {
+export function rowsAboveAreOffscreen(el: HTMLElement | null, tailStart: number): boolean | null {
   if (!el) return false;
   // A grouped row carries its first member's index, so the tail's own index may be on no row.
   let row: HTMLElement | null = null;
@@ -651,7 +654,7 @@ function rowsAboveAreOffscreen(el: HTMLElement | null, tailStart: number): boole
     const i = Number(r.dataset.msgIndex);
     if (i >= tailStart && i < best) { best = i; row = r; }
   }
-  if (!row) return false;
+  if (!row) return el.querySelector('[data-msg-index]') ? null : false;
   return row.getBoundingClientRect().top <= el.getBoundingClientRect().top;
 }
 /** The note a held queued message shows when its hold named no reason. */
@@ -819,6 +822,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // still owed after a pass are drawn by the next tick, one a frame.
   const [windowGrowth, setWindowGrowth] = useState(0);
   const seenWindowGrowth = useRef(0);
+  // A follow cut that could not be judged yet (rowsAboveAreOffscreen null): the pass after the
+  // new rows are drawn judges it. Once per message list, so it never loops.
+  const [trimCheck, setTrimCheck] = useState(0);
+  const trimCheckFor = useRef<unknown>(null);
+  const trimCheckWanted = useRef(false);
   // Where the reader is before a step opens rows above them, for the session it was taken in: the
   // row at the box's top and how far below the top it sits (else, no such row, the distance from
   // the bottom). Kept current by their own scrolling; held until the step's own pass commits, so a
@@ -3491,7 +3499,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       follows ? {
         tailLimit: turnLimit,
         slack: Math.max(FOLLOW_TRIM_MIN_SLACK, Math.ceil(turnLimit / 2)),
-        canCut: (tailStart) => rowsAboveAreOffscreen(containerRef.current, tailStart),
+        canCut: (tailStart) => {
+          const offscreen = rowsAboveAreOffscreen(containerRef.current, tailStart);
+          if (offscreen === null && trimCheckFor.current !== messages) { trimCheckFor.current = messages; trimCheckWanted.current = true; }
+          return offscreen === true;
+        },
       } : undefined,
       { rows: stepping ? WINDOW_STEP_ROWS : 0, first: WINDOW_FIRST_ROWS, mustShow: rawLimit },
     );
@@ -3627,7 +3639,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     for (const part of parts) if (part.kind === 'run') part.memberMsgs = ids.list('run', part.memberMsgs);
     return { historyParts: parts, hiddenCount: visibleStart, heldRows: window.held };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- rowThreadKeyRef: see above; windowAnchors stands for it
-  }, [messages, truncationOffset, olderPageSeq, forkBoundaryIndex, gapAt, resolvedSkips, mainLineWindow, windowAnchors, questionIds, partIdentity, windowGrowth, sessionId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- trimCheck asks for one more pass
+  }, [messages, truncationOffset, olderPageSeq, forkBoundaryIndex, gapAt, resolvedSkips, mainLineWindow, windowAnchors, questionIds, partIdentity, windowGrowth, sessionId, trimCheck]);
+  useEffect(() => {
+    if (!trimCheckWanted.current) return;
+    // After the frame that drew the new rows; a commit before it schedules it again.
+    const frame = requestAnimationFrame(() => { trimCheckWanted.current = false; setTrimCheck((n) => n + 1); });
+    return () => cancelAnimationFrame(frame);
+  });
   // The window owes rows above what it drew: the next step after this frame paints, so a key or
   // a click goes between steps, holding the reader's distance from the bottom (the restore above).
   // A step is a transition, drawn in slices: the step that reaches a turn's own first row draws
