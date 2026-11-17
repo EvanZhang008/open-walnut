@@ -29,9 +29,12 @@ final class InboxItemActionsUITests: XCTestCase {
     }
     @MainActor static func reveal(_ app: XCUIApplication, _ element: XCUIElement) {
         for _ in 0..<40 {
-            let visibleCenter = element.frame.midY
-            if element.isHittable, visibleCenter > app.frame.height * 0.2, visibleCenter < app.frame.height * 0.72 { break }
-            let upwards = !element.exists || visibleCenter > app.frame.midY
+            // A lazy list has not built a row below the fold yet: reading its frame fails the test,
+            // so scroll down until it exists before measuring it.
+            let present = element.exists
+            let visibleCenter = present ? element.frame.midY : 0
+            if present, element.isHittable, visibleCenter > app.frame.height * 0.2, visibleCenter < app.frame.height * 0.72 { break }
+            let upwards = !present || visibleCenter > app.frame.midY
             let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: upwards ? 0.65 : 0.35))
             let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: upwards ? 0.35 : 0.65))
             start.press(forDuration: 0.05, thenDragTo: end)
