@@ -147,6 +147,7 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/core/self-update/background-install.test.ts", sleep: "await new Promise((r) => setTimeout(r, 300))", reason: "negative: no record written for a gone pid" },
   { file: "tests/core/send-queue-drain-r3.test.ts", sleep: "await sleep(300)", reason: "negative: an announcement for another host must send nothing" },
   { file: "tests/core/session-health-monitor-budget.test.ts", sleep: "await new Promise((r) => setTimeout(r, 120)) // let the loser settle + macrotask drain", reason: "negative: the late rejection must not become an unhandled rejection" },
+  { file: "tests/core/session-history-windowed-incremental.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50));", reason: "negative: no disk-cache file may appear for a windowed entry after its appended rounds" },
   { file: "tests/core/session-request-notify.test.ts", sleep: "await new Promise((r) => setTimeout(r, 20));", reason: "negative: nothing decided while the report is pending" },
   { file: "tests/core/session-rewind-pending-resume.test.ts", sleep: "await new Promise((r) => setTimeout(r, 20));", reason: "negative: a never-rewound session must not be patched" },
   { file: "tests/core/session-send-core.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50));", reason: "ordering only: overlaps the two sends; outcome awaited via Promise.all and holds either order (holdAnswer serializes)" },
