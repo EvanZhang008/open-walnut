@@ -37,9 +37,10 @@ vi.mock('../../src/core/daemon-file-reader.js', () => {
       wholeReads.push(remotePath);
       return super.readFile(remotePath);
     }
-    async readFileRange(remotePath: string, start: number) {
+    // The window read takes bytes (its start is kept as a file offset), and readFileRange rides on it.
+    async readFileRangeBuffer(remotePath: string, start: number) {
       if (failRanges.on) return null;
-      const result = await super.readFileRange(remotePath, start);
+      const result = await super.readFileRangeBuffer(remotePath, start);
       if (delayedRanges.small && result && result.fileSize - start <= 2048) {
         delayedRanges.entered?.();
         await delayedRanges.release;
@@ -291,7 +292,9 @@ describe('cold tail-bounded read (maxColdReadBytes)', () => {
     }
     const tail = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true, maxColdReadBytes: windowBytes });
     expect(isWindowedHistory(tail)).toBe(true);
-    expect(historyWindowStart(tail)?.byte).toBe(size - windowBytes + 1);
+    // The window's own lines begin right after the first newline at or past its first byte.
+    const bytes = await fsp.readFile(jsonlPath(sid));
+    expect(historyWindowStart(tail)?.byte).toBe(bytes.indexOf(0x0a, size - windowBytes) + 1);
     const page = await readSessionHistoryBefore(sid, CWD, undefined, tail[0].timestamp,
       { minMessages: 0, minText: 10_000, isText: () => true }, historyWindowStart(tail));
     expect(page?.reachedStart).toBe(true);

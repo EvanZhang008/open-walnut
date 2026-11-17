@@ -156,6 +156,11 @@ interface HistoryIncrementalState {
    *  — the tail re-parse suppresses Pattern-B enqueues whose identity key
    *  (queueEnqueueKey) is in the set. */
   queueDeadKeys: Set<string>;
+  /** Set only on a state seeded from a tail WINDOW (a bounded cold read) instead of the
+   *  whole file: the bytes before `startByte` were never parsed, so every offset above
+   *  is still an absolute file offset but the prefix starts there, not at 0. The entry
+   *  stays `windowed` however many appends it takes (it never gains the head). */
+  window?: { startByte: number; epoch?: string; /** The window size the read was asked for (maxColdReadBytes). */ bytes: number };
 }
 
 /** Tail segment re-parsed on every delta; rolled into the prefix past this. */
@@ -684,12 +689,15 @@ export interface ReadHistoryOptions {
    *  than this reads only its last `maxColdReadBytes` (marked windowed) instead
    *  of transferring + parsing the whole JSONL. inc-1786572252481: ?tail=400
    *  bounded the RESPONSE but the server still pulled a 9.5 MB remote JSONL
-   *  over SSH on every cold panel open (10–16 s). One-shot by design — the
-   *  windowed cache entry only satisfies same-mtime tail-bounded requests, so
-   *  the next read (turn append / full request) takes the normal full path and
-   *  re-seeds full + incremental state. */
+   *  over SSH on every cold panel open (10 to 16 s). The
+   *  windowed cache entry only answers tail-bounded requests (never a full read),
+   *  and it grows by the appended bytes like a full entry does (HistoryIncrementalState.window),
+   *  so a turn append reads only what the turn wrote. */
   maxColdReadBytes?: number;
 }
+
+/** A windowed incremental state is dropped once it covers this many windows (its memory bound). */
+const WINDOW_STATE_GROWTH = 2;
 
 /** Default bounded-window size for cold tail-bounded reads (see maxColdReadBytes). */
 export const HISTORY_COLD_TAIL_READ_BYTES = 4 * 1024 * 1024;
@@ -828,15 +836,28 @@ async function tryIncrementalHistoryRead(
     // window inside it), so it must not be added to newTailText.length — that
     // would double-count the tail. The retained dead set rides the entry too:
     // ~40 chars per uuid (36-char uuid + Set overhead).
-    const approxChars = inc.parsedBytes + (inc.deadUuids?.size ?? 0) * 40;
+    //
+    // A windowed state covers only [window.startByte, parsedBytes): it is charged for
+    // that, never lower than the window it was asked for (the cache-hit rule for a
+    // windowed entry compares `approxChars` with the caller's window, windowedEntryServes).
+    const covered = inc.window ? Math.max(inc.window.bytes, inc.parsedBytes - inc.window.startByte) : inc.parsedBytes;
+    const approxChars = covered + (inc.deadUuids?.size ?? 0) * 40;
+    // The merged array is new each round: it is as much a bounded window as the read it grew from.
+    if (cached.windowed && inc.window) markWindowedRead(messages, { byte: inc.window.startByte, ...(inc.window.epoch !== undefined ? { epoch: inc.window.epoch } : {}) });
+    // A full parse landed while this window grew (the cold read's warm-up): it stays,
+    // or the session would live on in the window regime and never warm up again.
+    const now = cacheGet(sessionId, host);
+    if (cached.windowed && now && now !== cached && !now.windowed) return messages;
     cacheSet(sessionId, {
       mtimeMs: newMtimeMs, ...(newSize !== undefined ? { size: newSize } : {}), messages, approxChars, inc,
+      ...(cached.windowed ? { windowed: true } : {}),
       ...(orphanUnion.size > 0 ? { orphanFinishedIds: [...orphanUnion] } : {}),
     }, host);
 
     // Keep the restart-survival disk cache fresh (same as the full-read path).
-    // mtime included so the post-restart mtime fast-path can validate it.
-    if (messages.length > 0) {
+    // mtime included so the post-restart mtime fast-path can validate it. NEVER a
+    // windowed entry: that store feeds full-read fallbacks, which must not adopt a partial parse.
+    if (messages.length > 0 && !cached.windowed) {
       // The state as of THIS read, taken now: the next read advances the same object.
       const incForDisk = incrementalStateForDisk(inc);
       import('./history-disk-cache.js').then(({ writeHistoryCache }) => {
@@ -869,7 +890,7 @@ async function rollIncrementalTail(
   const tailParse = parseSessionMessages(content, { chainFilter: { deadUuids: inc.deadUuids, queueDeadKeys: inc.queueDeadKeys } });
   chainFilterMarks.set(tailParse, { deadUuids: inc.deadUuids, queueDeadKeys: inc.queueDeadKeys, droppedCount: inc.deadUuids?.size ?? 0 });
   const why: { reason?: string } = {};
-  const st = seedIncrementalState(sessionId, { content, source: 'local', canonicalChars: tailText.length, resolvedRemotePath: inc.filePath }, tailParse, inc.filePath, why);
+  const st = seedIncrementalStateAt(sessionId, inc.tailStartByte, content, tailText.length, tailParse, inc.filePath, why);
   if (!st) {
     log.session.debug('incremental tail roll found no boundary — full read', { sessionId, reason: why.reason });
     return undefined;
@@ -878,16 +899,39 @@ async function rollIncrementalTail(
   return {
     inc: {
       ...st,
-      tailStartByte: inc.tailStartByte + st.tailStartByte,
-      parsedBytes: inc.tailStartByte + st.parsedBytes,
-      lastLineStart: inc.tailStartByte + st.lastLineStart,
       prefixMessages: [...inc.prefixMessages, ...st.prefixMessages],
       pendingToolIds: [...inc.pendingToolIds, ...st.pendingToolIds],
       deadUuids: inc.deadUuids,
       queueDeadKeys: inc.queueDeadKeys,
       ...(inc.cutsKey !== undefined ? { cutsKey: inc.cutsKey } : {}),
+      ...(inc.window ? { window: inc.window } : {}),
     },
     orphanIds,
+  };
+}
+
+/**
+ * seedIncrementalState over a slice of the file that begins at absolute byte `base`
+ * (the first `canonicalChars` chars of `content` are the slice, the rest synthetic
+ * lines): the state's offsets come back as file offsets. A rolled tail is such a slice
+ * (it starts at the old boundary), and so is a tail window read (it starts at its
+ * first whole line).
+ */
+function seedIncrementalStateAt(
+  sessionId: string,
+  base: number,
+  content: string,
+  canonicalChars: number,
+  messages: SessionHistoryMessage[],
+  filePath: string,
+  why?: { reason?: string },
+): HistoryIncrementalState | undefined {
+  const st = seedIncrementalState(sessionId, { content, source: 'local', canonicalChars, resolvedRemotePath: filePath }, messages, filePath, why);
+  return st && {
+    ...st,
+    tailStartByte: base + st.tailStartByte,
+    parsedBytes: base + st.parsedBytes,
+    lastLineStart: base + st.lastLineStart,
   };
 }
 
@@ -1235,6 +1279,16 @@ export async function parseHistoryWindowText(
   parseOpts?: ParseSessionMessagesOptions,
   start?: HistoryWindowStart,
 ): Promise<SessionHistoryMessage[]> {
+  return (await parseHistoryWindow(sessionId, windowText, parseOpts, start)).messages;
+}
+
+/** parseHistoryWindowText, with the text it parsed (the injected lines merged in), which a state seed needs. */
+async function parseHistoryWindow(
+  sessionId: string,
+  windowText: string,
+  parseOpts?: ParseSessionMessagesOptions,
+  start?: HistoryWindowStart,
+): Promise<{ messages: SessionHistoryMessage[]; merged: string }> {
   const merged = await mergeSyntheticUserEvents(sessionId, windowText);
   const parsed = parseSessionMessages(merged, parseOpts);
   // Echo-claim binding — same as the full-read path (:1572). Its absence here
@@ -1248,7 +1302,7 @@ export async function parseHistoryWindowText(
     bindEchoClaims(sessionId, parsed);
   } catch { /* best-effort — text dedup remains the fallback */ }
   markWindowedRead(parsed, start);
-  return parsed;
+  return { messages: parsed, merged };
 }
 
 /**
@@ -1287,6 +1341,29 @@ export async function readSessionHistoryTailWindow(
   maxTailBytes = 4 * 1024 * 1024,
   parseOpts?: ParseSessionMessagesOptions,
 ): Promise<SessionHistoryMessage[] | null> {
+  return (await readHistoryWindow(sessionId, cwd, host, maxTailBytes, parseOpts))?.messages ?? null;
+}
+
+/** A tail window as read: its parse, and the bytes the parse came from (for seeding incremental state). */
+interface HistoryWindowRead {
+  messages: SessionHistoryMessage[];
+  /** The window's own lines, whole lines from the first line start, through the end of the read (may end in a partial line). */
+  text: string;
+  /** `text` with the injected lines merged in, as parsed. */
+  merged: string;
+  /** Absolute byte where `text` begins. */
+  startByte: number;
+  path: string;
+  epoch?: string;
+}
+
+async function readHistoryWindow(
+  sessionId: string,
+  cwd: string | undefined,
+  host: string | undefined,
+  maxTailBytes: number,
+  parseOpts?: ParseSessionMessagesOptions,
+): Promise<HistoryWindowRead | null> {
   const daemonHost = host ?? '__local__';
   try {
     const { DaemonFileReader } = await import('./daemon-file-reader.js');
@@ -1302,22 +1379,23 @@ export async function readSessionHistoryTailWindow(
     const window = Math.min(maxTailBytes, DaemonFileReader.maxReadBytes());
     const start = Math.max(0, st.size - window);
     // Shared with a read of the same window already in flight (the transcript
-    // sweep's, say): one transfer for both.
-    const res = await reader.readFileRange(statPath, start, st);
+    // sweep's, say): one transfer for both. Read as BYTES: the window's first byte
+    // is kept as a file offset, which a decoded string cannot give (a character
+    // cut at `start` decodes to a replacement of another length).
+    const res = await reader.readFileRangeBuffer(statPath, start, st);
     if (res === null) return null;
     // Skip the first (almost certainly partial) line when we didn't start at 0.
-    let windowText = res.content;
-    if (start > 0) {
-      const nl = res.content.indexOf('\n');
-      windowText = nl >= 0 ? res.content.slice(nl + 1) : '';
-    }
-    // The skip above drops whatever runs from `start` to its first newline: a line begun
+    // The skip drops whatever runs from `start` to its first newline: a line begun
     // before `start`, or a WHOLE line when `start` is a line's first byte. Either way the
-    // window owns exactly the lines starting after `start`, so its own lines begin at
-    // start + 1 (and at 0 when it read from the top), which is where a page of the bytes
+    // window owns exactly the lines starting after it, so its own lines begin where that
+    // newline ends (and at 0 when it read from the top), which is where a page of the bytes
     // before it must stop (jsonl-window.ts: a window owns the lines starting inside it).
-    return await parseHistoryWindowText(sessionId, windowText, parseOpts,
-      { byte: start > 0 ? start + 1 : 0, ...(st.epoch !== undefined ? { epoch: st.epoch } : {}) });
+    const skipped = start > 0 ? (res.buf.indexOf(0x0a) + 1 || res.buf.length) : 0;
+    const text = res.buf.subarray(skipped).toString('utf-8');
+    const startByte = start + skipped;
+    const { messages, merged } = await parseHistoryWindow(sessionId, text, parseOpts,
+      { byte: startByte, ...(st.epoch !== undefined ? { epoch: st.epoch } : {}) });
+    return { messages, text, merged, startByte, path: statPath, ...(st.epoch !== undefined ? { epoch: st.epoch } : {}) };
   } catch (err) {
     log.session.debug('tail window read failed', {
       sessionId, host: daemonHost,
@@ -1325,6 +1403,35 @@ export async function readSessionHistoryTailWindow(
     });
     return null;
   }
+}
+
+/**
+ * Incremental state for a window read, so the window's next growth reads only the new
+ * bytes (the sliding-window regime re-pulled and re-parsed the whole 4 MB on every
+ * change: 93 to 133 reads an hour on one server, 2026-11-16). The window is just a
+ * slice of the file whose first line starts at `startByte`; the state is seeded over it
+ * like any rolled tail, and its offsets are file offsets. Undefined when the seed's own
+ * gate declines (a trailing partial line, a boundary that splits a pair): the entry then
+ * stays a plain window, and the next change reads a fresh one.
+ */
+function seedWindowIncrementalState(sessionId: string, win: HistoryWindowRead, windowBytes: number): HistoryIncrementalState | undefined {
+  if (!win.text || !win.text.endsWith('\n')) return undefined;
+  const st = seedIncrementalStateAt(sessionId, win.startByte, win.merged, win.text.length, win.messages, win.path);
+  if (!st) return undefined;
+  // A window read never filters rewinds (a session with in-place rewinds skips it).
+  st.cutsKey = rewindCutsKey(undefined);
+  st.window = { startByte: win.startByte, bytes: windowBytes, ...(win.epoch !== undefined ? { epoch: win.epoch } : {}) };
+  return st;
+}
+
+/**
+ * Whether a cache entry may answer this caller. A windowed entry (bounded cold tail)
+ * lacks the head of the history, so it answers only a caller that is itself
+ * tail-bounded and no wider than the window it holds; a full-read caller (Load
+ * earlier, fork ancestor read) must reach the real full read, which overwrites the entry.
+ */
+function windowedEntryServes(entry: ParsedHistoryCacheEntry, options: ReadHistoryOptions | undefined): boolean {
+  return !entry.windowed || (!!options?.maxColdReadBytes && entry.approxChars >= options.maxColdReadBytes);
 }
 
 /**
@@ -1543,11 +1650,9 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
           sourceFound = true;
           const cached = cacheGet(sessionId, host);
           if (cached && isFresh(cached, mtimeMs, statSize)) {
-            // A windowed entry (bounded cold tail) may only answer callers that
-            // are themselves tail-bounded — a full-read caller (Load earlier,
-            // fork ancestor read) falls through to the real full read below,
-            // which overwrites this entry with the full parse.
-            if (!cached.windowed || (options?.maxColdReadBytes && cached.approxChars >= options.maxColdReadBytes)) {
+            // A windowed entry answers only the callers windowedEntryServes names; the
+            // rest fall through to the real full read below, which overwrites it.
+            if (windowedEntryServes(cached, options)) {
               // Cache hit — return cached messages (skipSubagents is the common path
               // now, so cached messages don't include childMessages; no mutation concern).
               return handOff(cached.messages);
@@ -1601,7 +1706,16 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
           }
           // mtime CHANGED but incremental state exists and the file only grew:
           // read + parse just the appended bytes instead of the whole file.
-          if (cached?.inc && options?.skipSubagents && statResult.size >= cached.inc.parsedBytes) {
+          // A windowed state grows only for the callers its entry may answer, and only
+          // while it covers no more than WINDOW_STATE_GROWTH windows: past that it is
+          // dropped (the window read below seeds a fresh one), so its memory stays the
+          // size of a window or two, as the window entry's always was. It is dropped
+          // too when the file is another incarnation (replaced, then grown past it).
+          if (cached?.inc?.window && (statResult.size - cached.inc.window.startByte > WINDOW_STATE_GROWTH * cached.inc.window.bytes
+              || (cached.inc.window.epoch !== undefined && statResult.epoch !== undefined && statResult.epoch !== cached.inc.window.epoch))) {
+            cached.inc = undefined;
+          }
+          if (cached?.inc && options?.skipSubagents && windowedEntryServes(cached, options) && statResult.size >= cached.inc.parsedBytes) {
             const incMessages = await tryIncrementalHistoryRead(
               sessionId, host, cached, statResult.mtimeMs, reader, statResult.size,
               statResult.path === cached.inc.filePath ? { mtimeMs: statResult.mtimeMs, size: statResult.size, epoch: statResult.epoch } : undefined,
@@ -1634,8 +1748,10 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
   // needs the tail, read just the last window instead and mark it windowed (the
   // delta route then refuses anchorless cursors against it, same contract as the
   // byte-ceiling degradation). The windowed cache entry is quarantined: only
-  // same-mtime tail-bounded requests hit it, so the next turn append or a
-  // full-read caller does the normal full read and re-seeds everything.
+  // tail-bounded requests hit it (windowedEntryServes); a full-read caller does the
+  // normal full read and re-seeds everything. The window is seeded with incremental
+  // state, so a turn append reads only its new bytes; one past the ceiling has no
+  // full read to wait for, and would otherwise pull a fresh 4 MB on every change.
   // A session with recorded in-place rewinds skips the window: the cut anchors
   // resolve against the FULL file, and a window that can't resolve them would
   // serve the rewound-away branch as live — take the full read below instead.
@@ -1647,20 +1763,29 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
   if (options?.maxColdReadBytes && !rewindCuts && statPath && statSize !== undefined
       && statSize > options.maxColdReadBytes) {
     const windowAt = Date.now();
-    const win = await readSessionHistoryTailWindow(sessionId, cwd, host, options.maxColdReadBytes);
-    if (win) {
+    const read = await readHistoryWindow(sessionId, cwd, host, options.maxColdReadBytes);
+    const win = read?.messages;
+    if (read && win) {
       log.session.info('history cold read bounded to tail window', {
         sessionId, host: host ?? '__local__', fileSize: statSize,
         windowBytes: options.maxColdReadBytes, messages: win.length, windowReadMs: Date.now() - windowAt,
       });
       if (mtimeMs !== undefined) {
+        // No incremental state when a rewind was recorded while the window was read: the
+        // growth path does not look for cuts, so it would keep serving the rewound-away
+        // branch (the next read without state takes the filtered full read instead).
+        const rewoundMeanwhile = !!(await getInPlaceRewinds(sessionId));
         // A timed-out preview may finish after the larger refresh. Never replace
         // that fresh, more complete parse with its smaller window.
         const current = cacheGet(sessionId, host);
         if (!current || !isFresh(current, mtimeMs, statSize)
             || (current.windowed && current.approxChars < options.maxColdReadBytes)) {
+          // The window's own incremental state: its next growth reads only the new bytes.
+          const inc = rewoundMeanwhile ? undefined : seedWindowIncrementalState(sessionId, read, options.maxColdReadBytes);
           cacheSet(sessionId, {
-            mtimeMs, size: statSize, messages: win, approxChars: options.maxColdReadBytes, windowed: true,
+            mtimeMs, size: statSize, messages: win, windowed: true,
+            approxChars: inc ? Math.max(options.maxColdReadBytes, inc.parsedBytes - read.startByte) : options.maxColdReadBytes,
+            ...(inc ? { inc } : {}),
             ...(getOrphanFinishedAgentIds(win)?.size
               ? { orphanFinishedIds: [...getOrphanFinishedAgentIds(win)!] } : {}),
           }, host);

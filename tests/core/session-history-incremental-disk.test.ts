@@ -326,7 +326,8 @@ describe('a kept state that must not be resumed', () => {
     const tail = await readSessionHistory(sid, CWD, undefined, undefined, { ...opts, maxColdReadBytes: 1024 * 1024 })
     // The bounded window answered, not a resume from the kept state.
     expect(_historyCacheGetForTesting(sid)?.windowed).toBe(true)
-    expect(_historyCacheGetForTesting(sid)?.inc).toBeUndefined()
+    // Its own state, seeded over the window (not the kept one): it starts past the file's head.
+    expect(_historyCacheGetForTesting(sid)?.inc?.window?.startByte).toBeGreaterThan(0)
     expect(tail.map((m) => m.text)).toContain('long run done')
   })
 })
