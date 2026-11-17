@@ -16,7 +16,7 @@
 import { devices, test, expect, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { calendarEmptySlotPoint, calendarHourPx, pickCalendarTaskSide } from './calendar-helpers'
-import { withCssColor } from './css-color'
+import { cssColorToRgba, withCssColor } from './css-color'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.use({ viewport: { width: 1280, height: 860 } })
@@ -470,7 +470,7 @@ for (const theme of ['light', 'dark'] as const) {
     expect(report.checked).toBeGreaterThanOrEqual(6)
     expect(report.low, 'text under 4.5:1 on the glass').toEqual([])
     // The view switch: a see-through track and a raised thumb.
-    expect(parse01(report.track)).toBeLessThan(0.5)
+    expect(cssColorToRgba(report.track)[3]).toBeLessThan(0.5)
     expect(report.thumbShadow).not.toBe('none')
     await shot(page, `glass-${theme}`)
   })
@@ -486,11 +486,6 @@ test('glass: Reduce transparency paints the popover solid, with no blur', async 
   await expect(popover(page)).toBeVisible()
   const s = await popover(page).evaluate((el) => ({ bg: getComputedStyle(el).backgroundColor, blur: getComputedStyle(el).backdropFilter }))
   expect(s.blur).toBe('none')
-  expect(parse01(s.bg)).toBe(1)
+  expect(cssColorToRgba(s.bg)[3]).toBe(1)
 })
 
-/** The alpha of a computed colour (rgb/rgba/color(srgb …)). */
-function parse01(c: string): number {
-  const a = c.match(/\/\s*([\d.]+)\)/)?.[1] ?? c.match(/rgba\([^)]*,\s*([\d.]+)\)/)?.[1]
-  return a === undefined ? 1 : Number(a)
-}
