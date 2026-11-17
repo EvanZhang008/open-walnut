@@ -198,7 +198,8 @@ export async function readFindableHistory(
   let rows = own.messages
   let partial = false
   if (own.windowed) {
-    const pageable = !!record && !record.forkedFromSessionId && engineCaps(record.engine).historySource !== 'acp-journal'
+    // A fork pages its own transcript like any session; its ancestors join above (below).
+    const pageable = !!record && engineCaps(record.engine).historySource !== 'acp-journal'
     const head = rows.find((m) => m.timestamp)?.timestamp
     if (pageable && head && record) {
       const older = await readOlder(sessionId, record, head, deps)

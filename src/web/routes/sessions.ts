@@ -1676,9 +1676,9 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       }
       // A fork prepends its ancestors' transcript and an ACP session reads a journal,
       // neither of which is a byte range of this one file: say so instead of paging wrong.
+      // A fork pages its own transcript; the page that reaches its start carries the ancestors.
       const unavailable = !record ? 'session-not-found'
-        : record.forkedFromSessionId ? 'fork'
-          : engineCaps(record.engine).historySource === 'acp-journal' ? 'journal' : undefined
+        : engineCaps(record.engine).historySource === 'acp-journal' ? 'journal' : undefined
       if (unavailable || !record) {
         res.json({ messages: [], reachedStart: false, ...(unavailable ? { unavailable } : {}) })
         return
@@ -1694,10 +1694,25 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
           res.json({ messages: [], reachedStart: false, unavailable: 'unreadable' })
           return
         }
-        const rows = record.host
+        let rows = record.host
           ? await rewriteHistoryRemoteImages(page.messages, record.host, sessionId, record.cwd)
           : page.messages
-        res.json({ messages: rows, reachedStart: page.reachedStart })
+        let forkBoundary: number | undefined
+        if (page.reachedStart && record.forkedFromSessionId) {
+          // An ancestor read as a window joins as that window: its older part is the oldest of
+          // all, above the rows shown. Ancestors that cannot be read leave the fork's own page.
+          try {
+            const { readForkPrefix, joinForkPrefix } = await import('../../core/sessions/fork-prefix.js')
+            const joined = joinForkPrefix((await readForkPrefix(record, sessionId)).messages, rows)
+            rows = joined.messages
+            forkBoundary = joined.forkBoundaryIndex
+          } catch (err) {
+            log.web.warn('older page: fork ancestors unreadable, serving the fork alone', {
+              sessionId, error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        }
+        res.json({ messages: rows, reachedStart: page.reachedStart, ...(forkBoundary != null ? { forkBoundaryIndex: forkBoundary } : {}) })
       } catch (err) {
         if (err instanceof HostReconnectingError) { sendControlError(res, err); return }
         const msg = err instanceof Error ? err.message : String(err)
@@ -1736,7 +1751,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
         const readMs = Date.now() - readAt
         const readWindowed = history.windowed
         let backfill: { ms: number; windows: number; messages: number } | undefined
-        if (req.query.since === undefined && turnCount > 0 && history.windowed && record && !record.forkedFromSessionId
+        if (req.query.since === undefined && turnCount > 0 && history.windowed && record
           && engineCaps(record.engine).historySource !== 'acp-journal'
           && history.messages.filter(isMainTurn).length < turnCount) {
           const before = history.messages[0]?.timestamp
@@ -1913,115 +1928,33 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       messages = await rewriteHistoryRemoteImages(messages, record.host, sessionId, record.cwd)
     }
 
-    // Fork-aware: prepend source session history when this session was forked.
-    // Follows the fork chain (A forked from B forked from C) with cycle detection.
+    // Fork-aware: the ancestors' history goes above the fork's own (history-fork-prefix.ts),
+    // only when the own read holds the fork's start. A windowed own read is a later stretch of
+    // the fork: the ancestors are older than all of it and stay one "Load earlier" away.
     let forkedFromSessionId: string | undefined
     let forkBoundaryIndex: number | undefined
     let forkLoadFailed = false
     if (record?.forkedFromSessionId) {
       forkedFromSessionId = record.forkedFromSessionId
-      try {
-        // Two-phase to avoid serializing SSH round-trips:
-        //  1) Walk the fork pointers (getSessionByClaudeId — a LOCAL, now-cached
-        //     SQLite lookup) to collect ancestor records in chain order. The
-        //     next id depends on the current record, so this walk stays serial
-        //     but is cheap.
-        //  2) Fetch + image-rewrite every ancestor's history in PARALLEL (the
-        //     expensive SSH/JSONL part). Previously this was a serial
-        //     await-per-ancestor loop, so a 3-deep remote chain meant 3
-        //     sequential SSH pulls (~24s); parallel collapses that to ~1 pull.
-        const MAX_FORK_DEPTH = 5 // backstop against pathological/cyclic chains
-        const ancestors: import('../../core/types.js').SessionRecord[] = []
-        const visited = new Set<string>([sessionId])
-        let currentForkId: string | undefined = record.forkedFromSessionId
-        while (currentForkId && !visited.has(currentForkId) && ancestors.length < MAX_FORK_DEPTH) {
-          visited.add(currentForkId)
-          const sourceRecord = await getSessionByClaudeId(currentForkId)
-          if (!sourceRecord) break
-          ancestors.push(sourceRecord)
-          currentForkId = sourceRecord.forkedFromSessionId
+      if (!historyWindowed) {
+        try {
+          const { readForkPrefix, joinForkPrefix } = await import('../../core/sessions/fork-prefix.js')
+          const prefix = await readForkPrefix(record, sessionId)
+          // A windowed ANCESTOR shifts the combined cursor space under the client too.
+          if (prefix.windowed) historyWindowed = true
+          // A fork inherits the parent's lane blocks via replayed streams: their absorption
+          // proof survives the join.
+          for (const id of prefix.finishedAgentIds) finishedAgentIdSet.add(id)
+          const joined = joinForkPrefix(prefix.messages, messages)
+          messages = joined.messages
+          forkBoundaryIndex = joined.forkBoundaryIndex
+        } catch (err) {
+          forkLoadFailed = true
+          log.web.warn('failed to load fork source history', {
+            sessionId, forkedFrom: record.forkedFromSessionId,
+            error: err instanceof Error ? err.message : String(err),
+          })
         }
-
-        // ancestors[0] is the immediate parent … ancestors[n-1] the root.
-        // History order must be root-first (oldest → newest), so reverse.
-        const ordered = [...ancestors].reverse()
-        const fetched = await Promise.all(
-          ordered.map(async (sourceRecord) => {
-            const src = await readProviderSessionHistory(
-              sourceRecord.claudeSessionId,
-              sourceRecord,
-              sourceRecord.host,
-            )
-            let sourceMessages = src.messages
-            if (sourceRecord.host) {
-              sourceMessages = await rewriteHistoryRemoteImages(sourceMessages, sourceRecord.host, sourceRecord.claudeSessionId, sourceRecord.cwd)
-            }
-            return { messages: sourceMessages, windowed: src.windowed, finishedAgentIds: src.finishedAgentIds }
-          }),
-        )
-
-        // A windowed ANCESTOR poisons the combined cursor space just as badly as a
-        // windowed own-session read: the prefix length shifts under the client.
-        if (fetched.some(f => f.windowed)) historyWindowed = true
-        // Ancestor orphan finished-agent ids ride the combined payload too — a
-        // fork inherits the parent's lane blocks via replayed streams, so their
-        // absorption proof must survive the concatenation.
-        for (const f of fetched) {
-          for (const id of f.finishedAgentIds ?? []) finishedAgentIdSet.add(id)
-        }
-        let allSourceMessages = fetched.flatMap(f => f.messages)
-        // ── REWIND cut ──
-        // A rewound session IS a fork, so the block above just pulled in the
-        // parent's FULL transcript, including the turns the human rewound away (the
-        // parent's JSONL is never edited). Reconcile the two views here — the one
-        // place they are concatenated. See cutAncestorHistoryAtRewindPoint.
-        if (record.rewoundAtMessageUuid) {
-          const { cutAncestorHistoryAtRewindPoint } = await import('../../core/sessions/session-rewind.js')
-          const cut = cutAncestorHistoryAtRewindPoint(allSourceMessages, record.rewoundAtMessageUuid)
-          allSourceMessages = cut.messages
-          if (cut.found) {
-            if (cut.dropped > 0) {
-              log.web.debug('rewind: trimmed ancestor transcript at the rewind point', {
-                sessionId, rewoundAt: record.rewoundAtMessageUuid, dropped: cut.dropped,
-              })
-            }
-          } else {
-            log.web.warn('rewind: rewind point not found in the ancestor transcript — history may show rewound turns', {
-              sessionId, rewoundAt: record.rewoundAtMessageUuid, ancestorMessages: allSourceMessages.length,
-            })
-          }
-        }
-        // ── EMBED detection ──
-        // `claude --resume X --fork-session` COPIES the resumed prefix into the
-        // fork's own JSONL (message uuids preserved, sessionId rewritten), so a
-        // fork that has run a turn already CONTAINS its ancestors — prepending
-        // them again rendered the parent conversation twice (measured live:
-        // 2-msg parent → 6-msg thread history). Detect the embed by looking for
-        // the ancestors' last message id inside the fork's own transcript; when
-        // found, skip the prepend and put the boundary AT the embedded copy.
-        // Streams-source reads and not-yet-turned forks don't embed → prepend
-        // as before.
-        let embeddedBoundary = -1
-        if (allSourceMessages.length > 0 && messages.length > 0) {
-          for (let a = allSourceMessages.length - 1; a >= 0 && a >= allSourceMessages.length - 3; a--) {
-            const anchorId = allSourceMessages[a]?.msgId
-            if (!anchorId) continue
-            const idx = messages.findIndex((m) => m.msgId === anchorId)
-            if (idx >= 0) { embeddedBoundary = idx + (allSourceMessages.length - 1 - a); break }
-          }
-        }
-        if (embeddedBoundary >= 0) {
-          forkBoundaryIndex = embeddedBoundary + 1
-        } else if (allSourceMessages.length > 0) {
-          messages = [...allSourceMessages, ...messages]
-          forkBoundaryIndex = allSourceMessages.length
-        }
-      } catch (err) {
-        forkLoadFailed = true
-        log.web.warn('failed to load fork source history', {
-          sessionId, forkedFrom: record.forkedFromSessionId,
-          error: err instanceof Error ? err.message : String(err),
-        })
       }
     }
 

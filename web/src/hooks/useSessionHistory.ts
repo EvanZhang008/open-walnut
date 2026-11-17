@@ -13,7 +13,7 @@ import {
 } from '@/cache/session-cache';
 import { idbGetHistory } from '@/cache/history-idb';
 import { computeHistoryAnchor, collectUnsettledIds } from './history-anchor';
-import { planDeltaMerge, foldFullPayload, shiftedForkBoundary, prependOlderPage, mergeHistoryBackfill, sourceCountOf, cacheBehindScreen } from './history-merge';
+import { planDeltaMerge, foldFullPayload, shiftedForkBoundary, prependOlderPage, mergeHistoryBackfill, sourceCountOf, cacheBehindScreen, heldForkPrefixIsStale, boundaryAfterFold } from './history-merge';
 import { fillGap, gapIndex, liveGaps, type HistoryGap } from './history-gap';
 import { isPageHidden, visibleInterval } from '@/utils/page-visibility';
 import type { SessionHistoryResult } from '@/api/sessions';
@@ -185,6 +185,8 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   const staleSinceRef = useRef(0);
   const [loadingFrom, setLoadingFrom] = useState<string | null>(null);
   const [forkBoundaryIndex, setForkBoundaryIndex] = useState<number | undefined>(undefined);
+  const forkBoundaryRef = useRef<number | undefined>(undefined);
+  forkBoundaryRef.current = forkBoundaryIndex;
 
   // Cursor = combined-message count the client has synced to. Advances on every
   // successful full/delta fetch; reset on session switch. Held in a ref so a
@@ -264,6 +266,13 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   };
   // What every full-payload fold passes: hold on across a gap, and the gaps held.
   const foldOpts = () => ({ acrossGap: true, gaps: gapsRef.current });
+  // Held rows of an older server's [ancestors][window] fork answer never stay above a fresh one.
+  const heldFor = (result: SessionHistoryResult): SessionHistoryMessage[] => {
+    const sid = sessionIdRef.current;
+    return heldForkPrefixIsStale(result, forkBoundaryRef.current, !!sid && pagedToStart.has(sid)) ? [] : messagesRef.current;
+  };
+  const foldedBoundary = (result: { forkBoundaryIndex?: number }, folded: { kept: number }): number | undefined =>
+    boundaryAfterFold(result.forkBoundaryIndex, folded.kept, forkBoundaryRef.current);
   // Before adoptOffset: rows held from the transcript's start that a window was
   // laid after (a gap fold) still start there, so no "Load earlier" above them.
   const noteGapFold = (folded: { kept: number; gaps: HistoryGap[] }, heldLen: number) => {
@@ -390,16 +399,16 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
             if (full.stale) { setStale(full.staleReason ?? 'live read failed'); return; }
             setStale(null);
             const heldLen = messagesRef.current.length;
-            const folded = foldFullPayload(messagesRef.current, full, foldOpts());
+            const folded = foldFullPayload(heldFor(full), full, foldOpts());
             setMessages(folded.messages);
-            setForkBoundaryIndex(shiftedForkBoundary(full.forkBoundaryIndex, folded.kept));
+            setForkBoundaryIndex(foldedBoundary(full, folded));
             adoptInitialUserText(full.initialUserText);
             cursorRef.current = folded.cursor;
             noteGapFold(folded, heldLen);
             adoptOffset(folded.messages.length, folded.cursor, full.windowed, folded.kept);
             setHistoryCache(sessionId, {
               messages: folded.messages,
-              forkBoundaryIndex: shiftedForkBoundary(full.forkBoundaryIndex, folded.kept),
+              forkBoundaryIndex: foldedBoundary(full, folded),
               msgCount: folded.cursor,
               baseOffset: Math.max(0, folded.cursor - folded.messages.length),
               initialUserText: full.initialUserText ?? initialUserTextRef.current,
@@ -458,16 +467,16 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
             // Server rebuilt (since out of range) → full replace (tail-sliced).
             diagnoseOrdering('refetch-full', sid, result.messages);
             const heldLen = messagesRef.current.length;
-            const folded = foldFullPayload(messagesRef.current, result, foldOpts());
+            const folded = foldFullPayload(heldFor(result), result, foldOpts());
             setMessages(folded.messages);
-            setForkBoundaryIndex(shiftedForkBoundary(result.forkBoundaryIndex, folded.kept));
+            setForkBoundaryIndex(foldedBoundary(result, folded));
             adoptInitialUserText(result.initialUserText);
             cursorRef.current = folded.cursor;
             noteGapFold(folded, heldLen);
             adoptOffset(folded.messages.length, folded.cursor, result.windowed, folded.kept);
             setHistoryCache(sessionId, {
               messages: folded.messages,
-              forkBoundaryIndex: shiftedForkBoundary(result.forkBoundaryIndex, folded.kept),
+              forkBoundaryIndex: foldedBoundary(result, folded),
               msgCount: folded.cursor,
               baseOffset: Math.max(0, folded.cursor - folded.messages.length),
               initialUserText: result.initialUserText ?? initialUserTextRef.current,
@@ -573,11 +582,11 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           diagnoseOrdering('cache-verify', sid, result.messages);
           adoptInitialUserText(result.initialUserText);
           const heldLen = messagesRef.current.length;
-          const folded = foldFullPayload(messagesRef.current, result, foldOpts());
+          const folded = foldFullPayload(heldFor(result), result, foldOpts());
           const readable = noteReady(folded.messages);
           setHistoryCache(sessionId, {
             messages: folded.messages,
-            forkBoundaryIndex: shiftedForkBoundary(result.forkBoundaryIndex, folded.kept),
+            forkBoundaryIndex: foldedBoundary(result, folded),
             msgCount: folded.cursor,
             baseOffset: Math.max(0, folded.cursor - folded.messages.length),
             initialUserText: result.initialUserText ?? initialUserTextRef.current,
@@ -589,7 +598,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           const before = messagesRef.current;
           setMessages(folded.messages);
           current(rowsChange(before, folded.messages, 'current'));
-          setForkBoundaryIndex(shiftedForkBoundary(result.forkBoundaryIndex, folded.kept));
+          setForkBoundaryIndex(foldedBoundary(result, folded));
           if (readable) stage('historyAdopted');
           // NOTE: turn-boundary block cleanup is driven by the version-bump delta
           // path (evidence-based), not here. A plain cache re-verify only refreshes
@@ -726,12 +735,12 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                 // Held here is Phase 1's streams-file parse, not the transcript's:
                 // never lay a window after it across a gap.
                 const before = messagesRef.current;
-                const folded = foldFullPayload(before, result);
+                const folded = foldFullPayload(heldFor(result), result);
                 const readable = noteReady(folded.messages, 'network');
                 setMessages(folded.messages);
                 current(rowsChange(before, folded.messages, 'current'));
                 if (readable) stage('historyAdopted');
-                setForkBoundaryIndex(shiftedForkBoundary(result.forkBoundaryIndex, folded.kept));
+                setForkBoundaryIndex(foldedBoundary(result, folded));
                 adoptInitialUserText(result.initialUserText);
                 cursorRef.current = folded.cursor;
                 setGaps(folded.gaps);
@@ -739,7 +748,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                 // Write to cache for next visit
                 setHistoryCache(sessionId, {
                   messages: folded.messages,
-                  forkBoundaryIndex: shiftedForkBoundary(result.forkBoundaryIndex, folded.kept),
+                  forkBoundaryIndex: foldedBoundary(result, folded),
                   msgCount: folded.cursor,
                   baseOffset: Math.max(0, folded.cursor - folded.messages.length),
                   initialUserText: result.initialUserText ?? initialUserTextRef.current,
@@ -904,16 +913,16 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           // Live read recovered → adopt the fresh parse and drop the banner.
           setStale(null);
           const heldLen = messagesRef.current.length;
-          const folded = foldFullPayload(messagesRef.current, result, foldOpts());
+          const folded = foldFullPayload(heldFor(result), result, foldOpts());
           setMessages(folded.messages);
-          setForkBoundaryIndex(shiftedForkBoundary(result.forkBoundaryIndex, folded.kept));
+          setForkBoundaryIndex(foldedBoundary(result, folded));
           adoptInitialUserText(result.initialUserText);
           cursorRef.current = folded.cursor;
           noteGapFold(folded, heldLen);
           adoptOffset(folded.messages.length, folded.cursor, result.windowed, folded.kept);
           setHistoryCache(sessionId, {
             messages: folded.messages,
-            forkBoundaryIndex: shiftedForkBoundary(result.forkBoundaryIndex, folded.kept),
+            forkBoundaryIndex: foldedBoundary(result, folded),
             msgCount: folded.cursor,
             baseOffset: Math.max(0, folded.cursor - folded.messages.length),
             initialUserText: result.initialUserText ?? initialUserTextRef.current,
@@ -977,12 +986,16 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           const cursor = cursorRef.current + (merged.length - held.length);
           cursorRef.current = cursor;
           setMessages(merged);
+          // A fork's page that reached its start carries the ancestors: mark where the fork begins.
+          const forkRow = page.forkBoundaryIndex != null ? page.messages[page.forkBoundaryIndex] : undefined;
+          const forkAt = forkRow ? merged.indexOf(forkRow) : -1;
+          if (forkAt >= 0) setForkBoundaryIndex(forkAt);
           if (page.reachedStart) pagedToStart.add(sessionId); else pagedToStart.delete(sessionId);
           setOlderWindowed(!page.reachedStart);
           setOlderPageSeq((n) => n + 1);
           setHistoryCache(sessionId, {
             messages: merged,
-            forkBoundaryIndex: undefined,
+            forkBoundaryIndex: forkAt >= 0 ? forkAt : undefined,
             msgCount: cursor,
             baseOffset: 0,
             initialUserText: initialUserTextRef.current,

@@ -9,7 +9,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
-import { stitchHeldOlder, prependOlderPage, foldFullPayload, planDeltaMerge, mergeHistoryBackfill, cacheBehindScreen } from '../../web/src/hooks/history-merge';
+import { stitchHeldOlder, prependOlderPage, foldFullPayload, planDeltaMerge, mergeHistoryBackfill, cacheBehindScreen, heldForkPrefixIsStale, boundaryAfterFold } from '../../web/src/hooks/history-merge';
 
 interface Row { msgId?: string; timestamp?: string; role?: string; text?: string }
 
@@ -234,5 +234,24 @@ describe('a cached copy behind the click\'s own screen is not what the open show
     // The fallback after a failed full read never puts that older copy over newer rows on screen.
     const fallback = hook.slice(hook.indexOf('const fallBackToLateCache'), hook.indexOf('adoptCachedRows(held)'));
     expect(fallback).toContain('cacheBehindScreen(held.messages, messagesRef.current)');
+  });
+});
+
+describe('a windowed fork\'s refresh (2026-11-17)', () => {
+  // fe01eb83, 2f146a91: an older server answered [parent][4 MB window], the fix answers the window.
+  it('rows held from the older [ancestors][window] answer are not kept above the fork\'s own window', () => {
+    const fresh = { windowed: true, forkedFromSessionId: 'parent' };
+    expect(heldForkPrefixIsStale(fresh, 3, false)).toBe(true);
+    // Paged to the fork's start: the ancestors above are whole, they stay.
+    expect(heldForkPrefixIsStale(fresh, 3, true)).toBe(false);
+    expect(heldForkPrefixIsStale({ ...fresh, forkBoundaryIndex: 3 }, 3, false)).toBe(false);
+    expect(heldForkPrefixIsStale({ windowed: true }, 3, false)).toBe(false);
+    expect(heldForkPrefixIsStale(fresh, undefined, false)).toBe(false);
+  });
+
+  it('a fork start paged in keeps its divider through the next refresh', () => {
+    expect(boundaryAfterFold(undefined, 40, 12)).toBe(12);
+    expect(boundaryAfterFold(undefined, 10, 12)).toBeUndefined();
+    expect(boundaryAfterFold(5, 40, 12)).toBe(45);
   });
 });

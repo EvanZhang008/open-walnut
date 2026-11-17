@@ -257,7 +257,7 @@ describe('turn-end delta whose anchor slid out of the 4 MB tail', () => {
     expect(res.body.delta).toBe(false);
   });
 
-  it('a fork reaches back in its own transcript; the parent prefix is untouched', async () => {
+  it('a windowed fork reaches back in its own transcript, with no parent rows above its window', async () => {
     const PARENT = 'anchor-reach-parent';
     const dir = path.dirname(jsonlPath());
     await fsp.writeFile(path.join(dir, `${PARENT}.jsonl`), [
@@ -272,9 +272,12 @@ describe('turn-end delta whose anchor slid out of the 4 MB tail', () => {
     const app = createApp();
     const first = await request(app).get(`/api/sessions/${WHALE_SESSION}/history`).query({ tail: 400 });
     expect(first.body.windowed).toBe(true);
-    expect(first.body.forkBoundaryIndex, 'the parent prefix is in the payload').toBe(2);
+    // A window of the fork is a later stretch of it: the parent is older than all of it, one
+    // "Load earlier" away (2026-11-17: [parent][window] left months of the fork out between).
+    expect(first.body.forkBoundaryIndex).toBeUndefined();
+    expect(first.body.forkedFromSessionId).toBe(PARENT);
     const held: Row[] = first.body.messages;
-    expect(held[0].text).toBe('parent ask 0');
+    expect(held.some((m) => m.text.startsWith('parent '))).toBe(false);
     await appendTurn(WHALE_TURNS, { shots: 5, shotBytes: 1.2 * MB });
     const res = await request(app).get(`/api/sessions/${WHALE_SESSION}/history`).query(deltaQuery(held));
     expect(res.body.delta).toBe(true);

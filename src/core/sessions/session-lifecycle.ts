@@ -1841,9 +1841,6 @@ export interface RichHistoryResult {
   windowed?: boolean;
 }
 
-/** Backstop against pathological/cyclic fork chains. */
-const MAX_FORK_DEPTH = 5;
-
 /**
  * Grace window for "the transcript doesn't exist YET". Matches the two other
  * clocks that govern a pid-less/just-spawned row — api-v1's SPAWN_GRACE_MS and
@@ -1938,52 +1935,29 @@ export async function readSessionRichHistory(sessionId: string, tail?: number): 
     messages = await rewriteHistoryRemoteImages(messages, record.host, sessionId, record.cwd);
   }
 
-  // Fork-aware: prepend ancestor history in chain order (root-first). The
-  // pointer walk is a cheap local lookup; the expensive history fetches run
-  // in parallel (same two-phase strategy the web /history route uses).
+  // Fork-aware: the ancestors go above the fork's own rows only when the own read holds the
+  // fork's start (fork-prefix.ts); a windowed own read is a later stretch of the fork.
   let forkedFromSessionId: string | undefined;
   let forkBoundaryIndex: number | undefined;
   if (record.forkedFromSessionId) {
     forkedFromSessionId = record.forkedFromSessionId;
-    try {
-      const ancestors: SessionRecord[] = [];
-      const visited = new Set<string>([sessionId]);
-      let currentForkId: string | undefined = record.forkedFromSessionId;
-      while (currentForkId && !visited.has(currentForkId) && ancestors.length < MAX_FORK_DEPTH) {
-        visited.add(currentForkId);
-        const sourceRecord = await getSessionByClaudeId(currentForkId);
-        if (!sourceRecord) break;
-        ancestors.push(sourceRecord);
-        currentForkId = sourceRecord.forkedFromSessionId;
+    if (!historyWindowed) {
+      try {
+        const { readForkPrefix, joinForkPrefix } = await import('./fork-prefix.js');
+        const prefix = await readForkPrefix(record, sessionId);
+        if (prefix.windowed) historyWindowed = true;
+        const joined = joinForkPrefix(prefix.messages, messages);
+        messages = joined.messages;
+        forkBoundaryIndex = joined.forkBoundaryIndex;
+      } catch (err) {
+        // Snapshot API: a transient ancestor failure degrades to own-session
+        // history only (no cursor space to poison — unlike the delta route).
+        log.session.warn('rich history: failed to load fork source history', {
+          sessionId, forkedFrom: record.forkedFromSessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        forkedFromSessionId = undefined;
       }
-      const ordered = [...ancestors].reverse();
-      const fetched = await Promise.all(
-        ordered.map(async (sourceRecord) => {
-          const src = await readProviderSessionHistory(
-            sourceRecord.claudeSessionId, sourceRecord, sourceRecord.host,
-          );
-          let sourceMessages = src.messages;
-          if (sourceRecord.host) {
-            sourceMessages = await rewriteHistoryRemoteImages(
-              sourceMessages, sourceRecord.host, sourceRecord.claudeSessionId, sourceRecord.cwd,
-            );
-          }
-          return sourceMessages;
-        }),
-      );
-      const allSourceMessages = fetched.flat();
-      if (allSourceMessages.length > 0) {
-        messages = [...allSourceMessages, ...messages];
-        forkBoundaryIndex = allSourceMessages.length;
-      }
-    } catch (err) {
-      // Snapshot API: a transient ancestor failure degrades to own-session
-      // history only (no cursor space to poison — unlike the delta route).
-      log.session.warn('rich history: failed to load fork source history', {
-        sessionId, forkedFrom: record.forkedFromSessionId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      forkedFromSessionId = undefined;
     }
   }
 
@@ -1997,8 +1971,11 @@ export async function readSessionRichHistory(sessionId: string, tail?: number): 
 
   const total = messages.length;
   const sliced = tail && tail > 0 ? messages.slice(-tail) : messages;
-  const adjustedForkBoundary = forkBoundaryIndex != null && tail && tail > 0
-    ? (forkBoundaryIndex >= total - tail ? forkBoundaryIndex - (total - tail) : undefined)
+  // Rows the tail slice dropped from the head: never negative (a tail longer than the history
+  // dropped none, and must not push the boundary past the end; the web route had this bug too).
+  const dropped = total - sliced.length;
+  const adjustedForkBoundary = forkBoundaryIndex != null
+    ? (forkBoundaryIndex >= dropped ? forkBoundaryIndex - dropped : undefined)
     : forkBoundaryIndex;
 
   // Stamp `unsettled: true` so a client that loads mid-flight knows which rows

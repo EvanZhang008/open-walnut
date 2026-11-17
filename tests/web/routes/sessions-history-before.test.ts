@@ -9,8 +9,8 @@
  * (tests/core/session-projection-paging.test.ts). Pinned here is the route contract:
  *   · a page is {messages, reachedStart} and never carries the tail-sized `windowed`
  *     payload, cursor, or `unsettled` stamps;
- *   · a fork, a journal session and an unknown session answer `unavailable`, not an
- *     error and not a wrong page;
+ *   · a journal session and an unknown session answer `unavailable`, not an error and
+ *     not a wrong page (a fork pages its own transcript: sessions-history-fork-window.test.ts);
  *   · a transcript the window reader cannot read answers `unavailable: unreadable`;
  *   · a bad `before` is a 400; a reader failure is a 502 the client retries.
  */
@@ -129,18 +129,6 @@ describe('GET /:sessionId/history?before=', () => {
     expect(isText(row(1, { role: 'assistant', text: 'Done.' }))).toBe(true);
     expect(isText(row(2, { role: 'assistant', text: '   ' }))).toBe(false);
     expect(isText(row(3, { role: 'user', text: 'x', ...{ injected: true } } as Partial<Row>))).toBe(false);
-  });
-
-  it('a fork answers unavailable (its history is its ancestors plus this file), never a wrong page', async () => {
-    const sid = 'before-fork-001';
-    await createSessionRecord(sid, `task-${sid}`, 'p');
-    await updateSessionRecord(sid, { forkedFromSessionId: 'some-parent' });
-
-    const res = await request(createApp()).get(`/api/sessions/${sid}/history`).query({ before: BEFORE });
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ messages: [], reachedStart: false, unavailable: 'fork' });
-    expect(calls).toHaveLength(0);
   });
 
   it('an unknown session answers unavailable, not a 500', async () => {

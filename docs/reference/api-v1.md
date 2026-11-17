@@ -3695,7 +3695,10 @@ an id outside `[A-Za-z0-9_-]`.
   blocks], "total", "forkedFromSessionId"?, "forkBoundaryIndex"?,
   "historyUnavailable"? }` — the FULL rich-block history (tool detail +
   results, subagent-lane markers, fork-ancestor prefix in chain order),
-  tail-windowed (`tail` ≤ 2000). This supersedes `transcript`'s slim 100-row
+  tail-windowed (`tail` ≤ 2000). A fork whose own transcript is too large to
+  read whole (2026-11) answers its own latest part only: no ancestor rows and
+  no `forkBoundaryIndex`, so its rows never have a hole between the ancestors
+  and the fork's latest turns. This supersedes `transcript`'s slim 100-row
   tail for full parity chat rendering; `transcript` remains frozen and
   untouched. Snapshot API: no delta cursors — live rendering rides the SSE
   stream. Rows whose content can still change carry `unsettled: true`. When

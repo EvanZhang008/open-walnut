@@ -214,6 +214,8 @@ export interface SessionHistoryResult {
    *  a phantom Agent box sits at the bottom of the timeline (inc-1785965937858). */
   revisedMessages?: SessionHistoryMessage[];
   forkBoundaryIndex?: number;
+  /** The session this one was forked from (its rows come first in a whole read). */
+  forkedFromSessionId?: string;
   /** Orphan finished-agent toolUseIds (inc-1786496042099): nested background
    *  agents proven STOPPED by a canonical <task-notification>, whose tool_use
    *  row never reaches the canonical JSONL (it exists only in the daemon
@@ -475,9 +477,12 @@ export interface SessionHistoryPage {
   messages: SessionHistoryMessage[];
   /** The first bytes of the transcript were read: nothing older exists. */
   reachedStart: boolean;
-  /** Set when this session's older history cannot be paged (a fork, a journal,
-   *  a rewound transcript): the caller must stop offering "Load earlier". */
+  /** Set when this session's older history cannot be paged (a journal, a rewound
+   *  transcript): the caller must stop offering "Load earlier". */
   unavailable?: string;
+  /** A fork's page that reached the start of its own transcript carries its ancestors
+   *  above it: the index of the fork's first own row in `messages`. */
+  forkBoundaryIndex?: number;
 }
 
 /** One page of history older than `before` (ISO timestamp of the oldest row held),
@@ -491,7 +496,7 @@ export async function fetchSessionHistoryBefore(
   const res = await apiGet<SessionHistoryPage>(
     `/api/sessions/${sessionId}/history`, { before, turns: '20' }, { signal, timeoutMs: 90_000 },
   );
-  return { messages: res.messages ?? [], reachedStart: !!res.reachedStart, unavailable: res.unavailable };
+  return { messages: res.messages ?? [], reachedStart: !!res.reachedStart, unavailable: res.unavailable, forkBoundaryIndex: res.forkBoundaryIndex };
 }
 
 /** One row of the whole transcript holding a find query (GET /:id/find). */

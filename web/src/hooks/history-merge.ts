@@ -233,3 +233,27 @@ export function cacheBehindScreen(cached: readonly RowIdentity[], screen: readon
   const newest = [...screen].reverse().find((m) => m.msgId)?.msgId;
   return !!newest && !cached.some((m) => m.msgId === newest);
 }
+
+/**
+ * Whether the rows held above a fork boundary must not stay above a fresh payload. A windowed
+ * fork's payload is its own window alone (the server's fork-prefix.ts); held rows above a boundary
+ * that did not come from paging to the fork's start are an older server's [ancestors][window]
+ * answer, months missing between the two (2026-11-17), so the payload replaces them.
+ */
+export function heldForkPrefixIsStale(
+  result: { windowed?: boolean; forkedFromSessionId?: string; forkBoundaryIndex?: number },
+  heldBoundary: number | undefined, pagedToForkStart: boolean,
+): boolean {
+  return !!result.windowed && !!result.forkedFromSessionId && result.forkBoundaryIndex == null
+    && heldBoundary != null && !pagedToForkStart;
+}
+
+/**
+ * The fork boundary after a fold: the payload's own, moved down by the rows kept above it; with
+ * none in the payload, the held one when it sits among those kept rows (a paged-in fork start
+ * survives the next refresh).
+ */
+export function boundaryAfterFold(payloadBoundary: number | undefined, kept: number, heldBoundary: number | undefined): number | undefined {
+  if (payloadBoundary != null) return shiftedForkBoundary(payloadBoundary, kept);
+  return heldBoundary != null && heldBoundary < kept ? heldBoundary : undefined;
+}
