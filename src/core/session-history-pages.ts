@@ -16,10 +16,12 @@ const WINDOW_BYTES = 4 * 1024 * 1024;
 /** Most windows one page reads, so a tap costs at most this many bounded reads. */
 const MAX_WINDOWS_PER_PAGE = 4;
 /**
- * Past this, a page that holds a row stops reading more windows. Under the
- * transcript route's 5 s deadline with room for the window it is reading.
+ * A page that holds a row reads no window expected to end past this: under the
+ * transcript route's 5 s deadline with room for a window slower than the last.
+ * 2026-11-16: with the check made only after each read, a `visible=200` page of a
+ * 49 MB session went on into another window over the tunnel and missed the deadline.
  */
-const PAGE_READ_BUDGET_MS = 2_500;
+const PAGE_READ_BUDGET_MS = 3_000;
 /** What a window's first timestamp is read from: a head, far less than the window. */
 const HEAD_BYTES = 64 * 1024;
 const MAX_INDEXED_SESSIONS = 50;
@@ -86,7 +88,7 @@ export function _resetHistoryPagesForTests(): void {
  * History messages strictly older than `before`, oldest first, enough for one
  * page: at least `minMessages` of them and `minText` a reader sees as text, or
  * everything back to the start of the file, or what MAX_WINDOWS_PER_PAGE
- * windows hold, or what was read by PAGE_READ_BUDGET_MS. `reachedStart` says the
+ * windows hold, or what fits in PAGE_READ_BUDGET_MS. `reachedStart` says the
  * first window was read. null = this session cannot be read in windows (see
  * readSessionHistoryRange).
  *
@@ -173,14 +175,20 @@ export async function readSessionHistoryBefore(
   let windows = 0;
   let reachedStart = false;
   const windowCap = Math.max(1, Math.min(want.maxWindows ?? MAX_WINDOWS_PER_PAGE, MAX_WINDOWS_PER_PAGE));
+  /** The slowest window read of this page: what the next one may cost too. */
+  let slowest = 0;
   for (; k >= 0 && windows < windowCap; k--) {
+    const readAt = Date.now();
     const messages = await read(k);
     if (!messages) return null;
+    slowest = Math.max(slowest, Date.now() - readAt);
     windows++;
     collected = messages.filter((m) => m.timestamp < before).concat(collected);
     if (k === 0) reachedStart = true;
     if (collected.length >= want.minMessages && collected.filter(want.isText).length >= want.minText) break;
-    if (collected.length > 0 && Date.now() - startedAt >= budgetMs) break;
+    // A page that holds a row starts no window that would end past the budget:
+    // kept windows cost nothing and go on, one more read over the tunnel may not.
+    if (collected.length > 0 && Date.now() - startedAt + slowest >= budgetMs) break;
   }
   return { messages: collected, reachedStart, windowsRead };
 }

@@ -337,6 +337,33 @@ describe('an older page costs the windows it returns, not the depth', () => {
   }, 120_000);
 });
 
+describe('an older page starts no window that would end past its budget', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env.WALNUT_MAX_FILE_READ_BYTES;
+  });
+
+  it('a slow window read ends the page when the next one would overrun', async () => {
+    // 2026-11-16: the check ran only after each read, so a page under budget after
+    // its first slow window started another and missed the route's 5 s deadline.
+    const lines = busySession(36, 100, 'v'.repeat(6000));
+    await writeJsonl('s-slow', lines);
+    process.env.WALNUT_MAX_FILE_READ_BYTES = String(6 * 1024 * 1024);
+    const real = DaemonFileReader.prototype.readRangeBytes;
+    vi.spyOn(DaemonFileReader.prototype, 'readRangeBytes').mockImplementation(async function (this: DaemonFileReader, p, start, length) {
+      // A 1 MB chunk over a slow link: a whole window is about half a second.
+      if (length >= 512 * 1024) await new Promise((r) => setTimeout(r, 100));
+      return real.call(this, p, start, length);
+    });
+    const { readSessionHistoryBefore } = await import('../../src/core/session-history-pages.js');
+    const before = (lines[Math.floor(lines.length * 0.9)] as { timestamp: string }).timestamp;
+    const page = await readSessionHistoryBefore('s-slow', CWD, undefined, before,
+      { minMessages: 100_000, minText: 0, isText: () => true }, undefined, 800);
+    expect(page!.messages.length).toBeGreaterThan(0);
+    expect(page!.windowsRead).toBe(1);
+  }, 120_000);
+});
+
 describe('olderPageRead: which read an older page takes', () => {
   it('a large file on another host pages in windows; a local one or a small one reads whole', async () => {
     const { olderPageReadFor } = await import('../../src/core/session-history-pages.js');
