@@ -8,7 +8,7 @@
  * and when that does not hold it opens one fix task for that host (the engine's own rules,
  * `health_monitor.fix_tasks`). The brief carries the host's own words (`hostDownEvidence`).
  */
-import { CLOUD_MODE } from '../../constants.js'
+import { isFollower } from '../server-role.js'
 import { log } from '../../logging/index.js'
 import { reportGauge } from '../health-monitor/gauges.js'
 import { hostProblemNeedsYou } from '../notifications/audience.js'
@@ -43,7 +43,7 @@ export function hostDownEvidence(alias: string | undefined): string[] {
 }
 
 export async function reportHostDownGauges(): Promise<string[]> {
-  if (CLOUD_MODE) return []
+  if (isFollower()) return []
   const { getConfig } = await import('../config-manager.js')
   const { buildHostStatus, listStatusHosts } = await import('./host-status.js')
   const { getDaemonConnectState } = await import('../../providers/daemon-connection.js')
