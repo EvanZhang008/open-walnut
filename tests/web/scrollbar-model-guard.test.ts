@@ -19,96 +19,14 @@
  * code-block rule or a new component that renders code blocks is checked too.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { walk, scanCss } from './css-scan';
 import { join, relative } from 'node:path';
 
 const ROOT = join(__dirname, '..', '..');
 const CSS_ROOTS = ['web/src', 'examples/plugins'];
 /** The one @supports condition that keeps a standard value to Firefox. Exact, so `or` / `not (not ...)` fail. */
 const FIREFOX_ONLY = '@supports not selector(::-webkit-scrollbar)';
-
-function walk(dir: string, exts: string[], out: string[] = []): string[] {
-  let names: string[];
-  try { names = readdirSync(dir); } catch { return out; }
-  for (const name of names) {
-    if (name === 'node_modules' || name === 'dist') continue;
-    const p = join(dir, name);
-    if (statSync(p).isDirectory()) walk(p, exts, out);
-    else if (exts.some((e) => name.endsWith(e))) out.push(p);
-  }
-  return out;
-}
-
-interface Decl {
-  file: string;
-  line: number;
-  prop: string;
-  value: string;
-  /** Selector list of the innermost style rule holding the declaration. */
-  selectors: string[];
-  /** Preludes of every enclosing at-rule, outermost first, whitespace-normalised. */
-  atRules: string[];
-}
-
-const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
-
-/** Split on top-level commas (not the ones inside `:is(a, b)`). */
-function splitTopLevel(s: string): string[] {
-  const out: string[] = [];
-  let depth = 0;
-  let from = 0;
-  for (let i = 0; i < s.length; i++) {
-    if (s[i] === '(') depth++;
-    else if (s[i] === ')') depth--;
-    else if (s[i] === ',' && depth === 0) { out.push(norm(s.slice(from, i))); from = i + 1; }
-  }
-  out.push(norm(s.slice(from)));
-  return out.filter(Boolean);
-}
-
-/**
- * A small CSS scanner, enough for these checks (no parser dependency): every
- * declaration with its enclosing style rule and at-rules. Comments are blanked
- * keeping their newlines; quotes and parentheses are respected, so a `;` inside
- * `url("data:...;...")` does not end a declaration.
- */
-function scanCss(file: string, raw: string): Decl[] {
-  const text = raw.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, ' '));
-  const decls: Decl[] = [];
-  const frames: string[] = [];
-  let from = 0;
-  let paren = 0;
-  let quote = '';
-  const lineAt = (i: number) => text.slice(0, i).split('\n').length;
-  const flush = (to: number) => {
-    const chunk = text.slice(from, to);
-    const colon = chunk.indexOf(':');
-    const rule = [...frames].reverse().find((f) => !f.startsWith('@'));
-    if (rule !== undefined && colon > 0 && chunk.trim()) {
-      const lead = chunk.length - chunk.trimStart().length;
-      decls.push({
-        file,
-        line: lineAt(from + lead),
-        prop: chunk.slice(0, colon).trim().toLowerCase(),
-        value: norm(chunk.slice(colon + 1)),
-        selectors: splitTopLevel(rule),
-        atRules: frames.filter((f) => f.startsWith('@')),
-      });
-    }
-  };
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (quote) { if (c === '\\') i++; else if (c === quote) quote = ''; continue; }
-    if (c === '"' || c === "'") { quote = c; continue; }
-    if (c === '(') { paren++; continue; }
-    if (c === ')') { paren--; continue; }
-    if (paren > 0) continue;
-    if (c === '{') { frames.push(norm(text.slice(from, i))); from = i + 1; }
-    else if (c === ';') { flush(i); from = i + 1; }
-    else if (c === '}') { flush(i); frames.pop(); from = i + 1; }
-  }
-  return decls;
-}
 
 const cssFiles = CSS_ROOTS.flatMap((r) => walk(join(ROOT, r), ['.css']));
 const decls = cssFiles.flatMap((f) => scanCss(relative(ROOT, f), readFileSync(f, 'utf8')));
@@ -190,8 +108,13 @@ describe('dark code blocks get a light scrollbar thumb', () => {
       .filter((sel) => isCodeBlockSelector(sel) && !/data-theme=["']dark["']/.test(sel))
       .map((sel) => `${d.file}|${sel}`));
 
-  it('found the chat code blocks (the reported surface)', () => {
-    expect(darkBlocks.map((b) => b.split('|')[1])).toContain('.session-msg-assistant .markdown-body pre');
+  // The chat's code blocks (the reported surface) are a grey panel since 2026-11-17
+  // (chat-palette.css), so no light-theme block is dark today; the scan still reads them.
+  it('reads the chat code blocks\' backgrounds (the reported surface), so the scan cannot silently go empty', () => {
+    const chatPre = decls.filter((d) => /^background(-color)?$/.test(d.prop) && d.selectors.includes('.session-msg-assistant .markdown-body pre'));
+    expect(chatPre.length).toBeGreaterThan(0);
+    expect(isDarkLiteral('#16191f')).toBe(true);
+    expect(isDarkLiteral('var(--chat-panel)')).toBe(false);
   });
 
   it('every code block dark in the light theme sets --wn-scrollbar-thumb', () => {

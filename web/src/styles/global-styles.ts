@@ -5,6 +5,7 @@
  * cascade still depends on that: a global rule wins over a component rule just as specific.
  */
 import './globals.css';
+import './chat-palette.css';
 import './home-navigation.css';
 import './overlay-glass.css';
 import './fullscreen-tab.css';

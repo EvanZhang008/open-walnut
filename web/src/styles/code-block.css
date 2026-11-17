@@ -69,31 +69,18 @@
   }
 }
 
-/* What each surface paints its <pre> with (globals.css), for the sticky header. */
-.session-msg-assistant .md-code { --md-code-bg: #1e1e2e; }
-[data-theme="dark"] .session-msg-assistant .md-code { --md-code-bg: #0d1117; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .session-msg-assistant .md-code { --md-code-bg: #0d1117; }
-}
-/* The person's bubble: a shade darker than globals.css's rgba(0, 0, 0, 0.25),
-   so its code colors keep 4.5:1 on the dark theme's lighter accent too. The
-   header paints it opaque. */
-.session-msg-user .markdown-body .md-code.md-code > pre {
-  background: rgba(0, 0, 0, 0.32);
-  --wn-scrollbar-thumb: var(--md-code-thumb);
-  --wn-scrollbar-thumb-hover: var(--md-code-thumb-hover);
-}
+/* What each surface paints its <pre> with (globals.css), for the sticky header. A chat's
+   code is a grey panel in both themes (chat-palette.css), in the agent's answer and in
+   the person's own bubble alike, so it takes the theme's own code palette. */
+.session-msg-assistant .md-code,
+.session-msg-user .md-code { --md-code-bg: var(--chat-panel); }
 .markdown-body .md-code.md-code > pre,
 .md-code > .md-code-rail {
   --wn-scrollbar-thumb: var(--md-code-thumb);
   --wn-scrollbar-thumb-hover: var(--md-code-thumb-hover);
 }
-.session-msg-user .md-code { --md-code-bg: color-mix(in srgb, var(--accent) 68%, #000); }
 
-/* Surfaces whose code is dark in both themes (globals.css: assistant replies and
-   the person's own bubble), and the dark theme itself. */
-.session-msg-assistant .md-code,
-.session-msg-user .md-code,
+/* The dark theme. */
 [data-theme="dark"] .md-code {
   --md-code-ink: rgba(230, 237, 243, 0.6);
   --md-code-ink-strong: #e6edf3;
@@ -111,72 +98,6 @@
   --tk-function: #d2a8ff;
   --tk-variable: #ffa657;
   --tk-tag: #7ee787;
-}
-/* The light theme's assistant block is #1e1e2e with #cdd6f4 text
-   (globals.css): its colors are that palette's (Catppuccin Mocha), so code
-   and block read as one set. Each is at least 5:1 on the block. */
-.session-msg-assistant .md-code {
-  --md-code-ink: rgba(205, 214, 244, 0.62);
-  --md-code-ink-strong: #cdd6f4;
-  --tk-comment: #9399b2;
-  --tk-keyword: #cba6f7;
-  /* A removed diff line reads red, as in the other palettes (keyword is
-     purple here). */
-  --tk-deleted: #f38ba8;
-  --tk-string: #a6e3a1;
-  --tk-number: #fab387;
-  --tk-function: #89b4fa;
-  --tk-variable: #f5c2e7;
-  --tk-tag: #94e2d5;
-}
-[data-theme="dark"] .session-msg-assistant .md-code {
-  --md-code-ink: rgba(230, 237, 243, 0.6);
-  --md-code-ink-strong: #e6edf3;
-  --tk-comment: #8b949e;
-  --tk-keyword: #ff7b72;
-  --tk-deleted: #ff7b72;
-  --tk-string: #a5d6ff;
-  --tk-number: #79c0ff;
-  --tk-function: #d2a8ff;
-  --tk-variable: #ffa657;
-  --tk-tag: #7ee787;
-}
-/* The person's own bubble is blue, not near-black: GitHub Dark's reds and
-   blues fall under 3:1 on it. Pale tints of the same hues, each at least
-   4.5:1 on the bubble's code background. (Tripled class: above the
-   prefers-color-scheme rule below, whatever the theme.) */
-.session-msg-user .md-code.md-code.md-code {
-  --md-code-ink: rgba(255, 255, 255, 0.8);
-  --md-code-ink-strong: #fff;
-  --md-code-rule: rgba(255, 255, 255, 0.18);
-  --md-code-hover: rgba(255, 255, 255, 0.16);
-  --md-code-link: #fff;
-  --md-code-ok: #fff;
-  --md-code-warn: #ffe08a;
-  --md-code-focus: #fff;
-  --md-code-thumb: rgba(255, 255, 255, 0.45);
-  --md-code-thumb-hover: rgba(255, 255, 255, 0.62);
-  --tk-comment: rgba(255, 255, 255, 0.8);
-  --tk-keyword: #ffd5d0;
-  --tk-string: #fff1b8;
-  --tk-number: #d8f1ff;
-  --tk-function: #f0deff;
-  --tk-variable: #ffe0c2;
-  --tk-tag: #d5ffd9;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .session-msg-assistant .md-code {
-    --md-code-ink: rgba(230, 237, 243, 0.6);
-    --md-code-ink-strong: #e6edf3;
-    --tk-comment: #8b949e;
-    --tk-keyword: #ff7b72;
-    --tk-deleted: #ff7b72;
-    --tk-string: #a5d6ff;
-    --tk-number: #79c0ff;
-    --tk-function: #d2a8ff;
-    --tk-variable: #ffa657;
-    --tk-tag: #7ee787;
-  }
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) .md-code {
@@ -324,9 +245,6 @@
 .markdown-body .md-code.md-code[data-why-below] > pre {
   padding-top: calc(var(--md-code-head-h) + 10px + var(--md-code-why-h, 30px));
 }
-
-/* On the person's blue bubble, a selection the default tint barely shows. */
-.session-msg-user .md-code pre ::selection { background: rgba(255, 255, 255, 0.38); color: #fff; }
 
 /* Paths and URLs in code stay links, in a blue that reads on the block. */
 .markdown-body .md-code pre a {

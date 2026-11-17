@@ -2,7 +2,6 @@ import { StepIcon } from './StepIcon';
 import { useRowDisclosure } from './row-disclosure';
 import { AgentText } from '@/components/common/AgentText';
 import type { InjectedBanner } from '@open-walnut/history-injected-banner';
-import '@/styles/injected-banner.css';
 
 /**
  * One folded `[Banner]…[/Banner]` block that Walnut prepended to a user turn.

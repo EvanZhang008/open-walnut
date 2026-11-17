@@ -13,6 +13,8 @@
   --accent: #007AFF;
   --accent-hover: #0066D6;
   --accent-subtle: rgba(0, 122, 255, 0.08);
+  /* A hovered accent-subtle fill (task pills in tool output). */
+  --accent-subtle-hover: rgba(0, 122, 255, 0.16);
   /* Text-safe twins for SMALL TEXT on the secondary card: the fill colours above measure
      3.7:1 (accent) and 2.0:1 (amber) against #F5F5F7, under WCAG's 4.5:1; these clear it
      (5.4:1 and 5.2:1). Dark surfaces do not need them, there the twins equal the originals. */
@@ -2951,64 +2953,11 @@ select {
   margin-bottom: 6px;
   margin-left: auto;
   width: fit-content;
-  background: var(--accent);
-  color: #fff;
-  border-bottom-right-radius: 4px;
-}
-
-/* Selection highlight visible on blue background (default accent-subtle is invisible on blue) */
-.session-msg-user ::selection {
-  background: rgba(255, 255, 255, 0.3);
-  color: #fff;
-}
-
-/* Code blocks inside user messages: translucent dark bg for readability */
-.session-msg-user .markdown-body code {
-  background: rgba(0, 0, 0, 0.2);
-  color: #fff;
-}
-
-.session-msg-user .markdown-body pre {
-  background: rgba(0, 0, 0, 0.25);
-  color: #f0f0f0;
-  border-radius: 8px;
-}
-
-.session-msg-user .markdown-body pre code {
-  background: none;
-  color: inherit;
-}
-
-.session-msg-user .markdown-body a {
-  color: rgba(255, 255, 255, 0.9);
-  text-decoration: underline;
-}
-
-/* Entity-ref pills INSIDE the blue user bubble. The default pill rules
-   (.markdown-body a.task-link, later in this file) paint accent text on an
-   accent-subtle background — on the solid-accent bubble that is blue-on-blue,
-   i.e. an invisible-but-clickable pill (the "Re: <task>" quote prefix rendered
-   as blank space, 2026-08-15). Higher specificity (3 classes) so source order
-   no longer matters: white-tint the pill so it reads on the accent background.
-   .chat-message-user is the legacy chat engine's bubble — same hazard. */
-.session-msg-user .markdown-body a.task-link,
-.session-msg-user .markdown-body a.session-link,
-.session-msg-user .markdown-body a.project-link,
-.chat-message-user .markdown-body a.task-link,
-.chat-message-user .markdown-body a.session-link,
-.chat-message-user .markdown-body a.project-link {
-  background: rgba(255, 255, 255, 0.22);
-  color: #fff;
-  text-decoration: none;
-}
-
-.session-msg-user .markdown-body a.task-link:hover,
-.session-msg-user .markdown-body a.session-link:hover,
-.session-msg-user .markdown-body a.project-link:hover,
-.chat-message-user .markdown-body a.task-link:hover,
-.chat-message-user .markdown-body a.session-link:hover,
-.chat-message-user .markdown-body a.project-link:hover {
-  background: rgba(255, 255, 255, 0.34);
+  /* A light grey bubble with the theme's ink (chat-palette.css): everything in it (code,
+     links, pills, the copy and time buttons) wears the chat's ordinary greys, so the
+     bubble needs no rules of its own for them. */
+  background: var(--chat-user-bubble);
+  color: var(--fg);
 }
 
 /* ── Session provenance card (a Walnut session envelope) ───────────────────────
@@ -3331,36 +3280,14 @@ select {
   padding: 2px 0;
 }
 
-/* Code blocks in assistant messages: dark bg regardless of theme */
-.session-msg-assistant .markdown-body pre {
-  background: #1e1e2e;
-  color: #cdd6f4;
-  border-radius: 8px;
-  border: 1px solid rgba(0, 0, 0, 0.1);
-}
-
-/* Code blocks dark in both themes: their own scrollbar gets a light thumb (the
-   page's dark-on-light one would vanish on them). Read by ::-webkit-scrollbar-thumb
-   and Firefox's scrollbar-color (Thin Scrollbars, top of this file). */
+/* Code blocks in a chat, the agent's and the person's: a grey panel in both themes
+   (chat-palette.css), the theme's ink and scrollbar. */
 .session-msg-assistant .markdown-body pre,
-.session-msg-user .markdown-body pre,
-.bash-tool-pre {
-  --wn-scrollbar-thumb: rgba(255, 255, 255, 0.22);
-  --wn-scrollbar-thumb-hover: rgba(255, 255, 255, 0.4);
-}
-
-[data-theme="dark"] .session-msg-assistant .markdown-body pre {
-  background: #0d1117;
-  color: #e6edf3;
-  border-color: rgba(255, 255, 255, 0.08);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .session-msg-assistant .markdown-body pre {
-    background: #0d1117;
-    color: #e6edf3;
-    border-color: rgba(255, 255, 255, 0.08);
-  }
+.session-msg-user .markdown-body pre {
+  background: var(--chat-panel);
+  color: var(--fg);
+  border-radius: 8px;
+  border: 1px solid var(--chat-panel-border);
 }
 
 .session-msg-header {
@@ -5204,16 +5131,6 @@ select {
   padding: 8px 12px 2px;
 }
 
-/* On the blue user bubble, muted greys are invisible — use translucent white. */
-.session-msg-user .msg-copy-btn {
-  color: rgba(255, 255, 255, 0.75);
-}
-.session-msg-user .msg-copy-btn:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.18);
-  border-color: rgba(255, 255, 255, 0.3);
-}
-
 /* Sessions page (legacy — kept for compatibility) */
 /* ===== Memory Browser ===== */
 
@@ -5798,15 +5715,8 @@ select {
 
 .chat-message-user {
   align-self: flex-end;
-  background: var(--accent);
-  color: #fff;
-  border-bottom-right-radius: 4px;
-}
-
-/* Selection highlight visible on blue background (default accent-subtle is invisible on blue) */
-.chat-message-user ::selection {
-  background: rgba(255, 255, 255, 0.3);
-  color: #fff;
+  background: var(--chat-user-bubble);
+  color: var(--fg);
 }
 
 .chat-message-assistant {
@@ -5838,34 +5748,17 @@ select {
   letter-spacing: 0;
 }
 
-/* Cron (scheduled job) messages */
+/* Cron (scheduled job) messages: a quiet grey rule, like the chat's other cards (chat-palette.css). */
 .chat-message-cron {
   background: var(--bg-secondary);
-  border-left: 3px solid #f59e0b;
+  border-left: 3px solid var(--border-strong);
   padding: 8px 12px;
   border-radius: 8px;
   margin-bottom: 8px;
 }
 
 .chat-message-cron .chat-message-role {
-  color: #f59e0b;
-}
-
-[data-theme="dark"] .chat-message-cron {
-  border-left-color: #fbbf24;
-}
-
-[data-theme="dark"] .chat-message-cron .chat-message-role {
-  color: #fbbf24;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .chat-message-cron {
-    border-left-color: #fbbf24;
-  }
-  :root:not([data-theme]) .chat-message-cron .chat-message-role {
-    color: #fbbf24;
-  }
+  color: var(--fg-muted);
 }
 
 /* Heartbeat messages — compact system line for HEARTBEAT_OK / trigger */
@@ -6174,11 +6067,6 @@ select {
   background: var(--accent-subtle, rgba(0, 122, 255, 0.08));
   color: var(--accent);
 }
-.session-msg-user .markdown-body span.source-link,
-.chat-message-user .markdown-body span.source-link {
-  background: rgba(255, 255, 255, 0.22);
-  color: #fff;
-}
 /* The source's name leads the pill ("Slack · Bob Stone"), drawn from data-source-name
    so a copy of the message keeps only the row's own words. */
 .markdown-body span.source-link[data-source-name]::before {
@@ -6223,22 +6111,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   background: none;
   border-bottom-style: solid;
   border-bottom-color: var(--accent);
-}
-
-/* ...and in the blue user bubble, where accent text is blue on blue (the
-   2026-08-15 invisible-pill trap): white like the bubble's other links. One
-   class more than the rule above, so source order does not matter. */
-.session-msg-user .markdown-body code a.task-link.task-link-code,
-.chat-message-user .markdown-body code a.task-link.task-link-code {
-  background: none;
-  color: #fff;
-  border-bottom-color: rgba(255, 255, 255, 0.6);
-}
-
-.session-msg-user .markdown-body code a.task-link.task-link-code:hover,
-.chat-message-user .markdown-body code a.task-link.task-link-code:hover {
-  background: none;
-  border-bottom-color: #fff;
 }
 
 .markdown-body a.session-link {
@@ -6754,16 +6626,16 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   word-break: break-word;
 }
 
-/* ===== Bash tool call — terminal-style rendering =====
-   Command + output render like a terminal: dark panel in both themes (GitHub
-   Actions log look), monospace, REAL newlines (white-space: pre-wrap on plain
-   text, never JSON-escaped). */
+/* ===== Bash tool call: command and output =====
+   A grey panel like the chat's code (chat-palette.css), monospace, REAL newlines
+   (white-space: pre-wrap on plain text, never JSON-escaped). */
 .bash-tool-pre {
   font-family: 'SF Mono', 'Fira Code', monospace;
   font-size: 11.5px;
   line-height: 1.5;
-  color: #d4d8de;
-  background: #16191f;
+  color: var(--fg);
+  background: var(--chat-panel);
+  border: 1px solid var(--chat-panel-border);
   padding: 8px 10px;
   border-radius: 6px;
   overflow-x: auto;
@@ -6775,7 +6647,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
 }
 
 .bash-tool-prompt {
-  color: #7ee787;
+  color: var(--fg-muted);
   user-select: none;
 }
 
@@ -8334,10 +8206,12 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   width: 34px;
   height: 34px;
   padding: 0;
-  background: var(--accent);
+  /* The theme's ink, as a quiet chat sends (chat-palette.css): near black on light,
+     near white on dark. */
+  background: var(--fg);
   border: none;
   border-radius: 50%;
-  color: #fff;
+  color: var(--bg);
   cursor: pointer;
   transition: filter 0.15s, opacity 0.15s, transform 0.1s;
 }
@@ -9604,11 +9478,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   margin-top: 4px;
 }
 
-.chat-message-user .inline-image-path,
-.session-msg-user .inline-image-path {
-  color: #fff;
-}
-
 /* Clickable images — cursor pointer for lightbox */
 img[data-lightbox-src],
 .chat-message-image {
@@ -10194,7 +10063,7 @@ body.walnut-dragging {
 
 /* Session header buttons — inherits pill base from .task-action-btn */
 .session-panel-close:hover { color: var(--error); background: rgba(255, 59, 48, 0.08); }
-.session-panel-pin.pinned { color: var(--accent); background: rgba(0, 122, 255, 0.12); }
+.session-panel-pin.pinned { color: var(--accent); background: var(--accent-subtle); }
 .session-panel-pin:disabled { cursor: default; opacity: 0.3; }
 
 /* Lock button — toggles panel between the rotating region and the locked right region */
@@ -34108,16 +33977,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   z-index: 20;
 }
 .msg-time:hover::after { display: block; }
-
-/* Inside the blue user bubble the muted greys are unreadable. */
-.session-msg-user .msg-copy-btn,
-.session-msg-user .msg-time { color: rgba(255, 255, 255, 0.8); }
-.session-msg-user .msg-copy-btn:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.18);
-  border-color: rgba(255, 255, 255, 0.28);
-}
-.session-msg-user .msg-pin-btn.is-pinned { color: #fff; }
 
 /* ── Rewind confirm dialog ── */
 /* Rewind dialog: the app confirm skin (.app-modal-*) plus its option rows. The

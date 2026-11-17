@@ -171,14 +171,8 @@
   color: var(--fg-muted);
 }
 
-/* No dedicated Ask button — the composer's send arrow is the ONE send
-   affordance in walnut mode, tinted amber so the mode reads at the point of
-   action. Two-class descendant selector beats globals' single-class
-   .chat-send-btn-icon{background:var(--accent)} on specificity (bundle order
-   is not guaranteed). The stop variant keeps its own color. */
-.draft-session-panel-walnut .chat-send-btn-icon:not(.chat-stop-btn-icon) {
-  background: var(--walnut-accent);
-}
+/* No dedicated Ask button: the composer's send arrow is the ONE send affordance in
+   walnut mode, in the chat's ink like every composer's (chat-palette.css). */
 
 /* ── Task lists: amber TITLE TEXT is the only marker of an Ask-Walnut task. ──
    Keyed on the per-task flag (task.walnut_agent), NEVER on the project name —

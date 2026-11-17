@@ -1,0 +1,134 @@
+/* The chat's palette: grey, quiet, one set for every chat (2026-11-17, the user: "change
+   our color code for the chat to like chatgpt, grey, no color, very clean").
+
+   The person's words sit in a light grey bubble, the agent's answer is plain text, tool
+   calls and code are grey panels, and links, pills, badges, status icons and borders are
+   grey too. Colour stays only on what needs the person: an error (--error is never greyed)
+   and an ask that waits on him (the pending permission or question card below).
+
+   Every chat reads it: a session panel (Home's columns, the Ask Walnut slot, an Org chat),
+   the timeline wherever it is drawn alone (SessionChatHistory's .session-history: the side
+   question drawer, the focus dock, notes, search follow-ups) and every composer
+   (.chat-input-container). Inside them the theme's coloured tokens are mapped to greys, so a
+   rule that paints with var(--accent) or var(--success) is grey there with no rule of its
+   own. A colour literal in a chat rule is refused by tests/web/chat-palette-guard.test.ts. */
+
+:root {
+  --chat-user-bubble: #f0f0f0;
+  --chat-panel: #f7f7f7;
+  --chat-panel-border: rgba(0, 0, 0, 0.07);
+  /* What the theme's accent becomes in a chat: text, an icon, a filled button with white on
+     it (4.5:1 or more each way in the light theme; in the dark one 6.7:1 as text on the page,
+     3.3:1 under white, as the theme's blue was 3.6:1). */
+  --chat-grey-strong: #3a3a3c;
+  --chat-grey-hover: #1d1d1f;
+  --chat-grey-text: #3a3a3c;
+  --chat-grey-subtle: rgba(0, 0, 0, 0.05);
+  --chat-grey-subtle-hover: rgba(0, 0, 0, 0.09);
+  --chat-grey-outline: rgba(0, 0, 0, 0.2);
+  /* Status colours (done, waiting, a tier, a priority) become one soft grey: in the light
+     theme 4.5:1 as text on the page and under white text (an interrupt button filled with it). */
+  --chat-grey-soft: #757579;
+  /* The theme's own colours, resolved here before a chat greys them: what waits on the
+     person takes them back. */
+  --chat-hue-accent: var(--accent);
+  --chat-hue-accent-subtle: var(--accent-subtle);
+  --chat-hue-warning: var(--warning);
+  --chat-hue-success: var(--success);
+}
+
+:root[data-theme="dark"] {
+  --chat-user-bubble: #2c2c2e;
+  --chat-panel: #1c1c1e;
+  --chat-panel-border: rgba(255, 255, 255, 0.08);
+  --chat-grey-strong: #8e8e93;
+  --chat-grey-hover: #aeaeb2;
+  --chat-grey-text: #d1d1d6;
+  --chat-grey-subtle: rgba(255, 255, 255, 0.08);
+  --chat-grey-subtle-hover: rgba(255, 255, 255, 0.14);
+  --chat-grey-outline: rgba(255, 255, 255, 0.28);
+  --chat-grey-soft: #8e8e93;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --chat-user-bubble: #2c2c2e;
+    --chat-panel: #1c1c1e;
+    --chat-panel-border: rgba(255, 255, 255, 0.08);
+    --chat-grey-strong: #8e8e93;
+    --chat-grey-hover: #aeaeb2;
+    --chat-grey-text: #d1d1d6;
+    --chat-grey-subtle: rgba(255, 255, 255, 0.08);
+    --chat-grey-subtle-hover: rgba(255, 255, 255, 0.14);
+    --chat-grey-outline: rgba(255, 255, 255, 0.28);
+    --chat-grey-soft: #8e8e93;
+  }
+}
+
+/* Every chat: the theme's coloured tokens are greys here. --error stays red. */
+.session-panel,
+.session-history,
+.chat-input-container,
+.chat-panel {
+  --accent: var(--chat-grey-strong);
+  --accent-hover: var(--chat-grey-hover);
+  --accent-subtle: var(--chat-grey-subtle);
+  --accent-subtle-hover: var(--chat-grey-subtle-hover);
+  --accent-text: var(--chat-grey-text);
+  --group-outline: var(--chat-grey-outline);
+  --session-ref: var(--chat-grey-strong);
+  --session-ref-subtle: var(--chat-grey-subtle);
+  --session-ref-subtle-hover: var(--chat-grey-subtle-hover);
+  --success: var(--chat-grey-soft);
+  --warning: var(--chat-grey-soft);
+  --heartbeat: var(--chat-grey-soft);
+  --priority-immediate: var(--chat-grey-soft);
+  --priority-important: var(--chat-grey-soft);
+  --priority-important-text: var(--chat-grey-text);
+  --priority-backlog: var(--chat-grey-soft);
+  --priority-high: var(--chat-grey-soft);
+  --priority-medium: var(--chat-grey-soft);
+  --priority-low: var(--chat-grey-soft);
+  --tier-focus: var(--chat-grey-soft);
+  --tier-satellite: var(--chat-grey-soft);
+  --tier-backlog: var(--chat-grey-soft);
+  --tier-wait: var(--chat-grey-soft);
+  --tier-custom: var(--chat-grey-soft);
+  --walnut-accent: var(--chat-grey-strong);
+  --walnut-accent-strong: var(--chat-grey-hover);
+}
+
+/* An ask that waits on the person keeps the theme's colours: it is where his eye must go. */
+.permission-request-card.is-pending {
+  --accent: var(--chat-hue-accent);
+  --accent-subtle: var(--chat-hue-accent-subtle);
+  --warning: var(--chat-hue-warning);
+  --success: var(--chat-hue-success);
+}
+
+/* A link in grey reads as a link by its underline, shown at rest, not only on hover. */
+.session-history .markdown-body a:not(.task-link):not(.session-link):not(.project-link):not(.file-link),
+.chat-panel .markdown-body a:not(.task-link):not(.session-link):not(.project-link):not(.file-link) {
+  text-decoration-color: var(--chat-grey-outline);
+  text-underline-offset: 2px;
+}
+
+/* Paths and URLs inside a chat's code: grey too (code-block.css sets the theme's blue on
+   the block itself, so this one names the block). */
+.session-history .md-code.md-code,
+.chat-panel .md-code.md-code {
+  --md-code-link: var(--fg-secondary);
+}
+
+/* Inline code in the person's bubble: the bubble is the theme's tertiary grey in the dark
+   theme, the same as inline code's own fill, so the code takes a tint over the bubble. */
+.session-msg-user .markdown-body :not(pre) > code,
+.chat-message-user .markdown-body :not(pre) > code {
+  background: var(--chat-grey-subtle-hover);
+}
+
+/* The bubble's time and copy buttons: muted grey reads under 4.5:1 on the bubble's grey. */
+.session-msg-user .msg-copy-btn,
+.session-msg-user .msg-time {
+  color: var(--fg-secondary);
+}

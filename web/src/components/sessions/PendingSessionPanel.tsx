@@ -196,7 +196,7 @@ export function PendingSessionPanel({ cwd, host, hostLabel, label, message, real
               </span>
             )}
             <span className="session-panel-badge" style={{
-              color: phase === 'slow' ? 'var(--color-warning, #ff9500)' : 'var(--fg-muted)',
+              color: phase === 'slow' ? 'var(--warning)' : 'var(--fg-muted)',
             }}>{headerStatus}</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
@@ -216,7 +216,7 @@ export function PendingSessionPanel({ cwd, host, hostLabel, label, message, real
         </div>
         <div className="pending-session-info">
           <span className="pending-session-label" style={{
-            color: phase === 'slow' ? 'var(--color-warning, #ff9500)' : undefined,
+            color: phase === 'slow' ? 'var(--warning)' : undefined,
           }}>{statusLabel}</span>
           <span className="pending-session-path">{cwd}</span>
         </div>

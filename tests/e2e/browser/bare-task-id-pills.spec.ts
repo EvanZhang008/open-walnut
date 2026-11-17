@@ -156,8 +156,18 @@ test('an id in code in the user bubble stays readable', async ({ page }, info) =
   const bubble = panel.locator('.session-msg-user .markdown-body', { hasText: 'walnut task show' }).first()
   const link = bubble.locator(`code a.task-link.task-link-code[data-task-id="${OPEN_ID}"]`)
   await expect(link).toHaveText(OPEN_ID, { timeout: 20_000 })
-  // Blue on the blue bubble was the 2026-08-15 invisible-pill trap.
-  expect(await link.evaluate((a) => getComputedStyle(a).color)).toBe('rgb(255, 255, 255)')
+  // Blue on the blue bubble was the 2026-08-15 invisible-pill trap; the bubble is grey since
+  // 2026-11-17 (chat-palette.css), and the id still reads on it at 4.5:1 or more.
+  const ratio = await link.evaluate((a) => {
+    const lum = (c: string) => {
+      const [r, g, b] = (c.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number).map((v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4 })
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    }
+    const bubble = a.closest('.session-msg-user') as HTMLElement
+    const [hi, lo] = [lum(getComputedStyle(a).color), lum(getComputedStyle(bubble).backgroundColor)].sort((x, y) => y - x)
+    return (hi + 0.05) / (lo + 0.05)
+  })
+  expect(ratio).toBeGreaterThanOrEqual(4.5)
   await bubble.screenshot({ path: `${SHOTS}/${info.project.name}-03-user-bubble.png` })
 })
 

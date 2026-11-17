@@ -11,7 +11,9 @@
  * `--wn-wait`, `--wn-done`, `--wn-link`, `--wn-accent-bg` / `--wn-accent-fg` for
  * the user's bubble, `--wn-thread-max-height` for a thread's message area), so a
  * board sets its own palette in one `:root` rule. The thread copies the few
- * values of the app's chat it needs (the frame cannot load the app's CSS).
+ * values of the app's chat it needs (the frame cannot load the app's CSS): grey,
+ * like every chat (web/src/styles/chat-palette.css): the user's words in a grey
+ * bubble, the other side's as plain text, code in a grey panel.
  */
 export const BOARD_RUNTIME_CSS = `
 walnut-task, walnut-thread, walnut-mark, walnut-strip, walnut-unread,
@@ -62,12 +64,12 @@ walnut-thread, walnut-mark, walnut-strip, walnut-check, walnut-choice { display:
   background: var(--wn-need, #d93025); vertical-align: 1px;
 }
 .wn-text {
-  box-sizing: border-box; max-width: 100%; padding: 8px 12px; border-radius: 16px; border-bottom-left-radius: 5px;
-  background: var(--wn-bubble-bg, rgba(128,128,128,.12)); line-height: 1.55; overflow-wrap: anywhere;
+  box-sizing: border-box; max-width: 100%; padding: 2px 6px; border-radius: 16px;
+  background: var(--wn-bubble-bg, transparent); line-height: 1.55; overflow-wrap: anywhere;
 }
 .wn-msg[data-author="user"] .wn-text {
-  border-radius: 16px; border-bottom-right-radius: 5px;
-  background: var(--wn-accent-bg, var(--wn-accent, #007aff)); color: var(--wn-accent-fg, #fff);
+  padding: 8px 12px;
+  background: var(--wn-accent-bg, rgba(128,128,128,.14)); color: var(--wn-accent-fg, inherit);
 }
 .wn-text p { margin: 4px 0; }
 .wn-text > :first-child { margin-top: 0; }
@@ -79,16 +81,13 @@ walnut-thread, walnut-mark, walnut-strip, walnut-check, walnut-choice { display:
   font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; font-size: .9em;
 }
 .wn-text pre {
-  margin: 6px 0; padding: 8px 10px; border-radius: 8px; background: #1e1e2e; color: #cdd6f4;
+  margin: 6px 0; padding: 8px 10px; border-radius: 8px; background: rgba(128,128,128,.1); color: inherit;
+  border: 1px solid rgba(128,128,128,.16);
   overflow-x: auto; max-height: 320px; white-space: pre; overflow-wrap: normal;
 }
 .wn-text pre code { padding: 0; background: none; color: inherit; font-size: .88em; }
 .wn-text blockquote { margin: 4px 0; padding-left: 10px; border-left: 3px solid rgba(128,128,128,.45); opacity: .85; }
 .wn-text .wn-md-h { margin: 6px 0 2px; font-weight: 700; }
-.wn-msg[data-author="user"] .wn-text code { background: rgba(0,0,0,.2); color: inherit; }
-.wn-msg[data-author="user"] .wn-text pre { background: rgba(0,0,0,.25); color: #f0f0f0; }
-.wn-msg[data-author="user"] .wn-text .wn-link { color: inherit; text-decoration: underline; }
-.wn-msg[data-author="user"] .wn-text blockquote { border-left-color: rgba(255,255,255,.55); }
 .wn-del {
   padding: 0 5px; border: 0; border-radius: 4px; background: transparent;
   color: inherit; font: inherit; line-height: 1.4; cursor: pointer; opacity: 0;
@@ -100,11 +99,12 @@ walnut-thread, walnut-mark, walnut-strip, walnut-check, walnut-choice { display:
 .wn-del.wn-armed { opacity: 1; color: #fff; background: var(--wn-need, #d93025); font-weight: 600; }
 .wn-del.wn-deleting { cursor: default; }
 .wn-link { color: var(--wn-link, #2f6feb); }
-.wn-file, .wn-letter, .wn-text a.file-link, .wn-text a.letter-link, .wn-text a.task-link, .wn-text a.session-link { color: var(--wn-link, #2f6feb); cursor: pointer; border-bottom: 1px dashed currentColor; text-decoration: none; }
+.wn-file, .wn-letter, .wn-text a.file-link, .wn-text a.letter-link, .wn-text a.task-link, .wn-text a.session-link { cursor: pointer; border-bottom: 1px dashed currentColor; text-decoration: none; }
+.wn-file, .wn-letter { color: var(--wn-link, #2f6feb); }
 .wn-text a { overflow-wrap: anywhere; }
 .wn-text h1, .wn-text h2, .wn-text h3, .wn-text h4, .wn-text h5, .wn-text h6 { font-size: inherit; margin: 6px 0 2px; }
-.wn-msg[data-author="user"] .wn-text a { color: inherit; }
-.wn-msg[data-author="user"] .wn-text .wn-file, .wn-msg[data-author="user"] .wn-text .wn-letter { color: inherit; }
+/* A thread is grey like the app's chat: its links are the text's own ink, told by their underline. */
+.wn-text a, .wn-text .wn-link, .wn-text .wn-file, .wn-text .wn-letter { color: var(--wn-thread-link, inherit); }
 .wn-msg.wn-pending .wn-text { opacity: .6; }
 .wn-msg.wn-failed .wn-text { box-shadow: 0 0 0 1.5px var(--wn-need, #d93025); }
 .wn-msg.wn-failed .wn-msg-meta, .wn-saved.wn-failed, .wn-check-hint.wn-failed,
@@ -125,8 +125,8 @@ walnut-thread, walnut-mark, walnut-strip, walnut-check, walnut-choice { display:
   border: 1px solid rgba(128,128,128,.4); border-radius: 12px; background: transparent;
   color: inherit; font: inherit; font-size: .95em; opacity: .75; cursor: text;
 }
-.wn-reply:hover, .wn-reply:focus-visible { opacity: 1; border-color: var(--wn-accent, #007aff); outline: none; }
-.wn-reply.wn-on { opacity: 1; border-color: var(--wn-accent, #007aff); border-style: dashed; cursor: pointer; }
+.wn-reply:hover, .wn-reply:focus-visible { opacity: 1; border-color: rgba(128,128,128,.75); outline: none; }
+.wn-reply.wn-on { opacity: 1; border-color: rgba(128,128,128,.75); border-style: dashed; cursor: pointer; }
 
 /* ── <walnut-mark>: the user's note, one small "Add note" button until it has text ── */
 walnut-mark { flex: 1 0 100%; grid-column: 1 / -1; clear: both; }
@@ -252,8 +252,8 @@ walnut-check[data-read]:hover { opacity: 1; }
 .wn-choice-words[hidden] { display: none; }
 .wn-choice-words .wn-msg-meta { padding: 0 2px 2px; }
 .wn-choice-words .wn-text {
-  border-radius: 16px; border-bottom-right-radius: 5px;
-  background: var(--wn-accent-bg, var(--wn-accent, #007aff)); color: var(--wn-accent-fg, #fff);
+  padding: 8px 12px;
+  background: var(--wn-accent-bg, rgba(128,128,128,.14)); color: var(--wn-accent-fg, inherit);
 }
 .wn-choice-own { margin-top: 6px; }
 .wn-choice-own .wn-reply[disabled] { cursor: default; opacity: .5; }

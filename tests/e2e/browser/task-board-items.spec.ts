@@ -242,12 +242,13 @@ test('a thread reads like the chat, and Reply docks Walnut\'s composer', async (
   expect(first.composerBelow).toBe(true)
   await expect.poll(async () => (await layout()).gap).toBeLessThanOrEqual(2)
 
-  // Bubbles: the user's on the right in the accent colour, the leader's on the left with its name; markdown typography.
+  // Bubbles: the user's on the right in a grey bubble, the leader's on the left as plain text
+  // with its name (grey like the app's chat, chat-palette.css); markdown typography.
   const styleOf = (row: Locator) => row.evaluate((el) => ({
     align: getComputedStyle(el).alignSelf, bg: getComputedStyle(el.querySelector('.wn-text')!).backgroundColor,
   }))
-  expect(await styleOf(rows.last())).toEqual({ align: 'flex-end', bg: 'rgb(0, 122, 255)' })
-  expect((await styleOf(rows.first())).align).toBe('flex-start')
+  expect(await styleOf(rows.last())).toEqual({ align: 'flex-end', bg: 'rgba(128, 128, 128, 0.14)' })
+  expect(await styleOf(rows.first())).toEqual({ align: 'flex-start', bg: 'rgba(0, 0, 0, 0)' })
   await expect(rows.first().locator('.wn-who')).toHaveText('Leader')
   const md = rows.nth(6)
   await expect(md.locator('.wn-text strong')).toHaveText('seven')

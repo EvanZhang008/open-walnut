@@ -3349,7 +3349,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                               </button>
                             </>
                           )}
-                          {executeStarted && <span style={{ fontSize: '11px', color: '#0d9488' }}>Started</span>}
+                          {executeStarted && <span style={{ fontSize: '11px', color: 'var(--success)' }}>Started</span>}
                           {executeError && <span style={{ fontSize: '11px', color: 'var(--error)' }}>{executeError}</span>}
                           <button
                             className="plan-preview-refresh"
