@@ -148,7 +148,9 @@ export function taskRowKey(main: ChannelRow | null, rows: readonly ChannelRow[])
 }
 
 /** A task hung under a row of the Org list, and why: the user watches it, its session panel is locked, or both. */
-export interface KeptTask { task: Task; watched: boolean; locked: boolean }
+/** A task hung under a row of the Org list, and why. `relock`: its lock was undone from the list on this
+ *  page, so its row stays with an open lock that locks it again (useKeptLockToggle). */
+export interface KeptTask { task: Task; watched: boolean; locked: boolean; relock?: boolean }
 
 /**
  * The tasks hung under each row of the Org list (2026-11-02, the user: "if a taks is lock also show here,
@@ -165,21 +167,33 @@ export function keptByRow(
   locked: readonly string[] = [],
   /** The row a task is locked beside on the Org page (its pin's node): a task only locked hangs there. */
   lockedAt: ReadonlyMap<string, string> = new Map(),
+  /** Tasks unlocked from the list on this page, with the row they were locked beside: they stay, to lock again. */
+  relockable: ReadonlyMap<string, string | undefined> = new Map(),
 ): Map<string, KeptTask[]> {
   const rowKeyOf = taskRowKey(main, rows);
   const lockedSet = new Set(locked);
-  const byId = locked.length ? new Map(tasks.map((t) => [t.id, t])) : new Map<string, Task>();
+  const byId = locked.length || relockable.size ? new Map(tasks.map((t) => [t.id, t])) : new Map<string, Task>();
   const watched = sortSectionTasks('watching', tasks.filter((x) => isWatched(x) && !x.plugin_only));
-  const lockedOnly = locked.map((id) => byId.get(id))
+  const lockedOnly = [...locked, ...[...relockable.keys()].filter((id) => !lockedSet.has(id))].map((id) => byId.get(id))
     .filter((t): t is Task => !!t && !isWatched(t) && !t.plugin_only && !t.org_role);
   const out = new Map<string, KeptTask[]>();
   const rowKeys = new Set([main?.key, ...rows.map((r) => r.key)]);
   for (const t of [...watched, ...lockedOnly]) {
-    const at = isWatched(t) ? undefined : lockedAt.get(t.id);
+    const at = isWatched(t) ? undefined : lockedAt.get(t.id) ?? relockable.get(t.id);
     const key = at && rowKeys.has(at) ? at : rowKeyOf(t);
-    if (key) out.set(key, [...(out.get(key) ?? []), { task: t, watched: isWatched(t), locked: lockedSet.has(t.id) }]);
+    const locked = lockedSet.has(t.id);
+    const relock = !locked && relockable.has(t.id);
+    if (key) out.set(key, [...(out.get(key) ?? []), { task: t, watched: isWatched(t), locked, ...(relock ? { relock } : {}) }]);
   }
   return out;
+}
+
+/** The mark a kept row wears (OrgKeptWhy): why it hangs there, and whether its lock is undone here. */
+export type KeptWhyKind = 'eye' | 'lock' | 'both' | 'unlocked' | 'eye-unlocked';
+export function keptWhyKind(watched: boolean, locked: boolean, relock = false): KeptWhyKind {
+  if (locked) return watched ? 'both' : 'lock';
+  if (relock) return watched ? 'eye-unlocked' : 'unlocked';
+  return 'eye';
 }
 
 /** The status tab a task's own state belongs to (a watched row wears its dot and its line): To

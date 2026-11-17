@@ -35,7 +35,7 @@ import { useOrgSettings } from './useOrgSettings';
 import { USER_STATE_LABELS, stateCountLabel } from '@open-walnut/user-status';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { TAB_DOT, stateTab, type KeptTask } from './org-task-tabs';
-import { ICON_EYE, ICON_LOCK } from '@/components/common/Icons';
+import { KeptWhy } from './OrgKeptWhy';
 import { MicInput } from '@/components/common/BoxMic';
 
 const STATE_LABEL: Record<ChannelState, string> = {
@@ -117,44 +117,22 @@ function Row({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; select
   );
 }
 
-/** Watched and locked in one glyph: the eye, with a small lock on its lower right (cut out of the eye). */
-const ICON_EYE_LOCK = (
-  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M1 7S3.5 3 7 3s6 4 6 4-2.5 4-6 4-6-4-6-4z" />
-    <circle cx="7" cy="7" r="1.8" />
-    <rect x="8.6" y="7.6" width="7.4" height="8.4" rx="1.6" stroke="none" style={{ fill: 'var(--bg-secondary)' }} />
-    <rect x="9.9" y="11.2" width="5.4" height="4" rx="0.9" stroke="none" fill="currentColor" />
-    <path d="M11.2 11.2v-1.1a1.4 1.4 0 012.8 0v1.1" strokeWidth="1.3" />
-  </svg>
-);
-
-/** Why a task hangs under a row, sitting on the row's guide line like a tree's node: an eye (watched), a
- *  lock (its session panel is locked), or the two in one glyph. Its own small mark, apart from the dot. */
-function KeptWhy({ watched, locked }: { watched: boolean; locked: boolean }) {
-  const why = [watched && 'Watched', locked && 'Its session panel is locked'].filter(Boolean).join(' · ');
-  const kind = watched && locked ? 'both' : watched ? 'eye' : 'lock';
-  return (
-    <span className="org-watched-why" data-testid="org-watched-why" data-why={kind} title={why} aria-hidden="true">
-      {kind === 'both' ? ICON_EYE_LOCK : kind === 'eye' ? ICON_EYE : ICON_LOCK}
-    </span>
-  );
-}
-
 /** The tasks kept in view under one row (keptByRow), as its own children. Inside the list's listbox each
  *  is an option of a group (all a listbox may hold): Enter opens it (useOpenTask: beside the page); on a watched one Delete stops
  *  watching it, and the × is the pointer's way to the same. A task only locked goes once its panel is
- *  unlocked, where it was locked. */
-function KeptChildren({ row, kept, open, onUnwatch }: { row: ChannelRow; kept: readonly KeptTask[]; open?: ReadonlySet<string>; onUnwatch: (taskId: string) => void }) {
+ *  unlocked at the panel; unlocked with its lock here, it stays to be locked again (OrgKeptWhy). */
+function KeptChildren({ row, kept, open, onUnwatch, onToggleLock }: { row: ChannelRow; kept: readonly KeptTask[]; open?: ReadonlySet<string>; onUnwatch: (taskId: string) => void; onToggleLock?: (taskId: string) => void }) {
   const openTask = useOpenTask();
   if (!kept.length) return null;
   return (
     <div className="org-watched" role="group" aria-label={`Kept in view, under ${row.vpName ?? row.name}`} data-testid="org-watched" data-key={row.key}>
-      {kept.map(({ task: t, watched, locked }) => {
+      {kept.map(({ task: t, watched, locked, relock }) => {
         const st = stateTab(t);
         const title = orgDisplayTitle(t);
         const why = [watched && 'watched', locked && 'locked'].filter(Boolean).join(' and ');
         return (
-          <div key={t.id} className="org-watched-item" role="presentation" data-testid="org-watched-item" data-peek-row="" data-task-id={t.id} data-state={st} data-watched={watched || undefined} data-locked={locked || undefined} data-open={open?.has(t.id) || undefined}>
+          <div key={t.id} className="org-watched-item" role="presentation" data-testid="org-watched-item" data-peek-row="" data-task-id={t.id} data-state={st} data-watched={watched || undefined} data-locked={locked || undefined} data-relock={relock || undefined} data-open={open?.has(t.id) || undefined}>
+            <KeptWhy watched={watched} locked={locked} relock={!!relock} {...(onToggleLock ? { onToggleLock: () => onToggleLock(t.id) } : {})} />
             <button
               type="button"
               role="option"
@@ -168,7 +146,6 @@ function KeptChildren({ row, kept, open, onUnwatch }: { row: ChannelRow; kept: r
               onClick={() => openTask(t.id)}
               onKeyDown={(e) => { if (watched && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); onUnwatch(t.id); } }}
             >
-              <KeptWhy watched={watched} locked={locked} />
               <i style={{ background: TAB_DOT[st] }} aria-hidden="true" />
               <span className="org-watched-title">{title}</span>
             </button>
@@ -251,10 +228,12 @@ interface Props {
   /** The tasks open beside the page: their rows wear a light tint. */
   openTaskIds?: ReadonlySet<string>;
   onUnwatch?: (taskId: string) => void;
+  /** A kept row's lock: unlock its session panel, or lock it again (useKeptLockToggle). */
+  onToggleLock?: (taskId: string) => void;
   now: number;
 }
 
-export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, total, vps, selectedKey, query, onQuery, onSelect, onOpenChart, onNewRouter, keptOf, openTaskIds, onUnwatch, now }: Props) {
+export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, total, vps, selectedKey, query, onQuery, onSelect, onOpenChart, onNewRouter, keptOf, openTaskIds, onUnwatch, onToggleLock, now }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   const orgName = useOrgSettings();
   // A right-click selects a word in WebKit before the menu opens: that selection is the
@@ -285,7 +264,7 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
   // Up and Down walk the CEO, the VPs, then the routers, in the order they are drawn.
   const keys = [main.key, ...shown.map((r) => r.key), ...routers.map((r) => r.key)];
   const keptUnder = (r: ChannelRow) => (keptOf && onUnwatch
-    ? <KeptChildren row={r} kept={keptOf(r)} open={openTaskIds} onUnwatch={onUnwatch} />
+    ? <KeptChildren row={r} kept={keptOf(r)} open={openTaskIds} onUnwatch={onUnwatch} {...(onToggleLock ? { onToggleLock } : {})} />
     : null);
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;

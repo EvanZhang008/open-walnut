@@ -25,6 +25,7 @@ import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { ICON_LOCK } from '@/components/common/Icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
+import { useKeptLockToggle } from '@/components/org/useKeptLockToggle';
 import { keptByRow, lockedTaskIds, slotTask, slotTaskIds, taskRowKey } from '@/components/org/org-task-tabs';
 import { buildOrgTree } from '@open-walnut/org-tree';
 import { useTasksContext } from '@/contexts/TasksContext';
@@ -51,7 +52,7 @@ import { OrgNodeDetail, type OrgAnswers, type OrgTab } from '@/components/org/Or
 import type { AnswerFailure } from '@/components/org/OrgInlineAnswer';
 import { OrgSidePanel, parseSideTarget, sideTargetParam, type OrgSideTarget } from '@/components/org/OrgSidePanel';
 import {
-  adoptLegacyPins, homeLocksFor, HOME_OFF_MAX, HOME_OFF_VIEW, orgStripToggleLock, orgStripView, pinsOfNode, readNodeOpen,
+  adoptLegacyPins, homeLocksFor, homeSlotKey, HOME_OFF_MAX, HOME_OFF_VIEW, orgStripToggleLock, orgStripView, pinsOfNode, readNodeOpen,
   setNodePins, writeNodeOpen, type OrgPin, type SameSession,
 } from '@/components/org/org-side-columns';
 import { usePageView } from '@/utils/view-memory';
@@ -343,7 +344,7 @@ export function OrgPage() {
     [fromHome, shownPins, openParam, sameSession],
   );
   // A Home lock taken off this page is no longer listed here as kept either.
-  const homeLocksHere = useMemo(() => homeLocks.filter((s) => !homeOff.includes(s.id.startsWith('task:') || s.id.startsWith('session:') ? s.id : `session:${s.id}`)), [homeLocks, homeOff]);
+  const homeLocksHere = useMemo(() => homeLocks.filter((s) => !homeOff.includes(homeSlotKey(s.id))), [homeLocks, homeOff]);
   const docked = useMemo(() => (!overlays ? [] : homeHere
     .filter((h) => !strip.some((c) => c.id === h.id || sameSession(c.id, h.id)))
     .flatMap((slot) => { const task = slotTask(slot.id, tasks); return task ? [{ slot, task }] : []; })),
@@ -355,8 +356,7 @@ export function OrgPage() {
     for (const p of pins) { const task = p.node ? slotTask(p.id, shownTasks) : undefined; if (task && !at.has(task.id)) at.set(task.id, p.node!); }
     return at;
   }, [pins, shownTasks]);
-  const kept = useMemo(() => keptByRow(channels.main, channels.rows, shownTasks, lockedIds, lockedAt), [channels.main, channels.rows, shownTasks, lockedIds, lockedAt]);
-  const keptOf = useCallback((row: ChannelRow) => kept.get(row.key) ?? [], [kept]);
+
   // A kept row whose task is open beside this page wears a light tint (2026-11-03, the user: no frame,
   // "if this page shows it, highlight its background a little ... very elegant").
   const openTaskIds = useMemo(() => new Set(slotTaskIds(phone ? (openParam ? [{ id: openParam, locked: false }] : []) : strip, shownTasks)), [phone, openParam, strip, shownTasks]);
@@ -537,6 +537,15 @@ export function OrgPage() {
     if (wasPinned && target && id !== openParam && !(openParam && sameSession(id, openParam))) openSide(target);
   }, [shownPins, strip, openParam, sameSession, openSide, homeIdsOf, closePanel, selected.key]);
 
+  // A kept row's lock unlocks and locks again like the panel's own (useKeptLockToggle); a row
+  // unlocked there stays, with an open lock, until the page closes.
+  const keptLock = useKeptLockToggle({ tasks: shownTasks, locked: lockedIds, pins, setPins, homeLocks: homeLocksHere, homeOff, setHomeOff, strip, togglePanelLock });
+  const kept = useMemo(
+    () => keptByRow(channels.main, channels.rows, shownTasks, lockedIds, lockedAt, keptLock.relockable),
+    [channels.main, channels.rows, shownTasks, lockedIds, lockedAt, keptLock.relockable],
+  );
+  const keptOf = useCallback((row: ChannelRow) => kept.get(row.key) ?? [], [kept]);
+
   /** Talk to a task off this page: its session on home, or a composer bound to it (MainPage). */
   const chatOnHome = useCallback((taskId: string) => {
     log.info('org-page', 'open on home', { taskId });
@@ -630,6 +639,7 @@ export function OrgPage() {
           onNewRouter={() => setRouterSetup(true)}
           keptOf={keptOf}
           openTaskIds={openTaskIds}
+          onToggleLock={keptLock.toggle}
           onUnwatch={unwatch}
           now={now}
         />

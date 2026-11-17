@@ -198,10 +198,15 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
    and muted: it reads as a label, and the dot stays the state. */
 .org-watched-why {
   flex: none; display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 15px;
-  margin: 0 -3px 0 -14.25px; background: var(--bg-secondary); color: var(--fg-muted); opacity: .85;
+  margin: 0 0 0 -11.25px; padding: 0; border: 0; border-radius: 4px; background: var(--bg-secondary); color: var(--fg-muted); opacity: .85;
 }
+/* A lock is a button: it unlocks the panel, and an open lock locks it again. */
+.org-watched-why.is-lock { cursor: pointer; font: inherit; }
+.org-watched-why.is-lock:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.org-watched-item[data-relock] .org-watched-why { opacity: .6; }
 .org-watched-why svg { width: 12px; height: 12px; }
 .org-watched-item:hover .org-watched-why { color: var(--fg); opacity: 1; }
+.org-watched-item .org-watched-why.is-lock:hover { color: var(--accent, #0a84ff); }
 .org-watched-title { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .org-watched-item[data-state="done"] .org-watched-title { color: var(--fg-muted); text-decoration: line-through; }
 .org-watched-open:focus-visible, .org-watched-stop:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 5px; }

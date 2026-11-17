@@ -170,12 +170,15 @@ export function homeLocksFor(
     if (!s.locked || isPlaceholderColumnId(s.id)) continue;
     const task = s.id.startsWith('task:') ? byId.get(s.id.slice(5)) : bySession.get(s.id.startsWith('session:') ? s.id.slice(8) : s.id);
     if (!task || task.org_role || task.plugin_only || rowKeyOf(task) !== rowKey) continue;
-    const id = s.id.startsWith('task:') || s.id.startsWith('session:') ? s.id : `session:${s.id}`;
+    const id = homeSlotKey(s.id);
     if (off.has(id) || out.some((c) => c.id === id)) continue;
     out.push({ id, locked: true });
   }
   return out;
 }
+
+/** A Home column's id as the Org page keys it (`session:<sid>` for a bare session id). */
+export const homeSlotKey = (id: string): string => (id.startsWith('task:') || id.startsWith('session:') ? id : `session:${id}`);
 
 /** The Org page's view name for the Home locks taken off it (OrgPage homeOff). */
 export const HOME_OFF_VIEW = 'homeLocksOff';
@@ -189,7 +192,7 @@ export const HOME_OFF_MAX = 64;
  * the Org page kept it away for good, whatever Home did after).
  */
 export function releaseHomeTakeoff(columnId: string): void {
-  const id = columnId.startsWith('task:') || columnId.startsWith('session:') ? columnId : `session:${columnId}`;
+  const id = homeSlotKey(columnId);
   const key = viewKey('org', HOME_OFF_VIEW);
   const off = storedView(shownText(key), null, isStringArray) ?? [];
   if (off.includes(id)) writeView(key, null, off.filter((x) => x !== id));

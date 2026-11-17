@@ -13,7 +13,7 @@ import { ORG_MAIN_NODE, buildOrgTree, orgProjectNode } from '../../src/core/org/
 import { resolvePinNode, watchNodeOf } from '../../src/core/org/org-pins.js'
 import { USER_STATE_LABELS } from '../../src/core/user-status.js'
 import { MAIN_KEY, buildChannels, projectRowKey, type AlertProbe } from '../../web/src/components/org/org-channels-model.js'
-import { ORG_RAIL_TABS, ORG_RAIL_TAB_LABELS, ORG_TASK_TABS, TAB_DOT, allTasksSections, orgTaskTabs, stateTab, keptByRow, lockedTaskIds, slotTaskIds } from '../../web/src/components/org/org-task-tabs.js'
+import { ORG_RAIL_TABS, ORG_RAIL_TAB_LABELS, ORG_TASK_TABS, TAB_DOT, allTasksSections, orgTaskTabs, stateTab, keptByRow, keptWhyKind, lockedTaskIds, slotTaskIds } from '../../web/src/components/org/org-task-tabs.js'
 import { STATUS_SECTION_LABELS } from '../../web/src/components/tasks/status-sections.js'
 
 const NOW = Date.UTC(2026, 9, 31, 12, 0)
@@ -203,6 +203,27 @@ describe('a task whose session panel is locked hangs under its row too', () => {
     const by = keptByRow(main, rows, tasks, [])
     expect(by.get(walnut.key)?.map((x) => [x.task.id, x.locked])).toEqual([['both', false], ['w', false]])
     expect([...by.values()].flat().map((x) => x.task.id)).toEqual(['both', 'w'])
+  })
+
+  // 2026-11-17, the user: "when I click this little lock in the sidebar, it can unlock".
+  it('keeps a row unlocked from the list, with an open lock, under the node it was locked beside', () => {
+    const by = keptByRow(main, rows, tasks, [], new Map(), new Map([['org', walnut.key], ['both', undefined], ['plug', undefined], ['gone', undefined]]))
+    expect(by.get(walnut.key)?.map((x) => [x.task.id, x.watched, x.locked, !!x.relock])).toEqual([
+      ['both', true, false, true], ['w', true, false, false], ['org', false, false, true],
+    ])
+    // Locked again (at the panel or the list): a lock, not an open one.
+    const again = keptByRow(main, rows, tasks, ['org'], new Map(), new Map([['org', walnut.key]]))
+    expect(again.get(walnut.key)?.find((x) => x.task.id === 'org')).toMatchObject({ locked: true })
+    expect(again.get(walnut.key)?.find((x) => x.task.id === 'org')?.relock).toBeUndefined()
+  })
+
+  it('names the mark by why the row is there', () => {
+    expect(keptWhyKind(true, false)).toBe('eye')
+    expect(keptWhyKind(false, true)).toBe('lock')
+    expect(keptWhyKind(true, true)).toBe('both')
+    expect(keptWhyKind(false, false, true)).toBe('unlocked')
+    expect(keptWhyKind(true, false, true)).toBe('eye-unlocked')
+    expect(keptWhyKind(true, true, true)).toBe('both')
   })
 })
 
