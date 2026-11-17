@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { fetchSessionHistory, fetchSessionHistoryBefore, HISTORY_TAIL_LIMIT } from '@/api/sessions';
 import { perf } from '@/utils/perf-logger';
-import { hasReadableOpenRows, noteSessionOpenSource, sessionOpenStageRecorder } from '@/utils/session-open-latency';
+import { hasReadableOpenRows, keptRowCount, noteSessionOpenCurrent, noteSessionOpenSource, sessionOpenStageRecorder } from '@/utils/session-open-latency';
 import { takeSessionOpenHistory } from '@/api/session-open-prime';
 import { log } from '@/utils/log';
 import type { SessionHistoryMessage } from '@/types/session';
@@ -530,6 +530,8 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           // from the next healthy fetch, not from stale data.
           if (result.stale) {
             setStale(result.staleReason ?? 'live read failed');
+            const held = messagesRef.current.length;
+            noteSessionOpenCurrent(sessionId, { rowsBefore: held, rowsAfter: held, keptRows: held, outcome: 'stale' });
             return;
           }
           setStale(null);
@@ -549,7 +551,9 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           cursorRef.current = folded.cursor;
           noteGapFold(folded, heldLen);
           adoptOffset(folded.messages.length, folded.cursor, result.windowed, folded.kept);
+          const before = messagesRef.current;
           setMessages(folded.messages);
+          noteSessionOpenCurrent(sessionId, { rowsBefore: before.length, rowsAfter: folded.messages.length, keptRows: keptRowCount(before, folded.messages), outcome: 'current' });
           setForkBoundaryIndex(shiftedForkBoundary(result.forkBoundaryIndex, folded.kept));
           if (readable) stage('historyAdopted');
           // NOTE: turn-boundary block cleanup is driven by the version-bump delta
@@ -558,7 +562,11 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           // the next delta's promotion.
         })
         .catch((e: Error) => {
-          if (!cancelled) { endP2('error'); failFullRead(e); }
+          if (!cancelled) {
+            endP2('error'); failFullRead(e);
+            const held = messagesRef.current.length;
+            noteSessionOpenCurrent(sessionId, { rowsBefore: held, rowsAfter: held, keptRows: held, outcome: 'error' });
+          }
         })
         .finally(() => {
           if (!cancelled) { setPhase2Pending(false); setFirstCheckPending(false); }
@@ -668,14 +676,17 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                   }
                   fallBackToLateCache(shown());
                   setStale(result.staleReason ?? 'live read failed');
+                  noteSessionOpenCurrent(sessionId, { rowsBefore: shown(), rowsAfter: shown(), keptRows: shown(), outcome: 'stale' });
                   return;
                 }
                 setStale(null);
                 // Held here is Phase 1's streams-file parse, not the transcript's:
                 // never lay a window after it across a gap.
-                const folded = foldFullPayload(messagesRef.current, result);
+                const before = messagesRef.current;
+                const folded = foldFullPayload(before, result);
                 const readable = noteReady(folded.messages, 'network');
                 setMessages(folded.messages);
+                noteSessionOpenCurrent(sessionId, { rowsBefore: before.length, rowsAfter: folded.messages.length, keptRows: keptRowCount(before, folded.messages), outcome: 'current' });
                 if (readable) stage('historyAdopted');
                 setForkBoundaryIndex(shiftedForkBoundary(result.forkBoundaryIndex, folded.kept));
                 adoptInitialUserText(result.initialUserText);
@@ -694,7 +705,10 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
               }
             })
             .catch((e: Error) => {
-              if (!cancelled) { endP2('error'); fallBackToLateCache(shown()); failFullRead(e); }
+              if (!cancelled) {
+                endP2('error'); fallBackToLateCache(shown()); failFullRead(e);
+                noteSessionOpenCurrent(sessionId, { rowsBefore: shown(), rowsAfter: shown(), keptRows: shown(), outcome: 'error' });
+              }
             })
             .finally(() => {
               if (!cancelled) { setLoading(false); setPhase2Pending(false); setFirstCheckPending(false); }

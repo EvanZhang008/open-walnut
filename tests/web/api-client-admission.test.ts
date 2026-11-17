@@ -565,7 +565,8 @@ describe('fetch admission control', () => {
   });
 
   it('aborting or failing low GETs returns both lanes to zero', async () => {
-    // One low read fails on the wire (HTTP 500), one is aborted while queued
+    // One low read fails on the wire (HTTP 404: a 500 is quietly retried since
+    // background-retry.ts, which would hold the slot for its retry waits), one is aborted while queued
     // behind the cap: neither may leak a general or a low slot.
     const ctrl = new AbortController();
     const a = apiGet('/api/low-a', undefined, { priority: 'low' }).catch(() => 'failed');
@@ -578,7 +579,7 @@ describe('fetch admission control', () => {
     await expect(aborted).rejects.toMatchObject({ name: 'AbortError' });
     expect(getLowFetchQueueStats()).toEqual({ inFlight: 2, queued: 0 });
 
-    pending.find((p) => p.url === '/api/low-a')!.resolve(new Response('boom', { status: 500 }));
+    pending.find((p) => p.url === '/api/low-a')!.resolve(new Response('boom', { status: 404 }));
     pending.find((p) => p.url === '/api/low-b')!.resolve(jsonResponse({}));
     pending.splice(0);
     expect(await a).toBe('failed');

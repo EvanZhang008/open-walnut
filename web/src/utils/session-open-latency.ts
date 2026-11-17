@@ -5,9 +5,13 @@ import { readTurnMarker } from './turn-end-marker';
 import type { SessionHistoryMessage } from '@/types/session';
 
 export type OpenHistorySource = 'memory' | 'idb' | 'snapshot' | 'ready' | 'preview' | 'network' | 'stream' | 'unknown';
-export type OpenHistoryStage = 'historyEffect' | 'idbStart' | 'idbReady' | 'historyReady' | 'historyAdopted' | 'contentDetected';
+export type OpenHistoryStage = 'historyEffect' | 'idbStart' | 'idbReady' | 'historyReady' | 'historyAdopted' | 'contentDetected' | 'historyCurrent';
 interface OpenAttempt { at: number; source?: OpenHistorySource; entry: string; id: number; stages: Partial<Record<OpenHistoryStage, number>>; timeout?: ReturnType<typeof setTimeout>; engine?: () => string; settle?: () => void; hiddenDuringOpen?: boolean; viewportSeen?: boolean; outsideViewportAtAttach?: boolean; viewportEnteredMs?: number; longestFrameGap?: { ms: number; endedMs: number }; notVisible?: NotVisibleProbe; chatHiddenNow?: () => boolean; hiddenByPage?: boolean }
 const attempts = new Map<string, OpenAttempt>();
+/** Opens whose first content was logged, kept until their full read lands (noteSessionOpenCurrent). */
+interface SettledOpen { at: number; id: number; firstMs: number; entry: string; source: OpenHistorySource; outcome: string }
+const settled = new Map<string, SettledOpen>();
+const CURRENT_WAIT_MS = 120_000;
 const sources = new Map<string, OpenHistorySource>();
 const OPEN_EVENT = 'walnut:session-open-measure';
 const MAX_OPEN_WAIT_MS = 30_000;
@@ -35,7 +39,39 @@ function finishAttempt(sessionId: string, attempt: OpenAttempt, outcome: 'conten
   });
   clearTimeout(attempt.timeout);
   attempts.delete(sessionId);
+  settled.set(sessionId, { at: attempt.at, id: attempt.id, firstMs: Math.round(performance.now() - attempt.at), entry: attempt.entry, source, outcome: measuredOutcome });
+  while (settled.size > 50) settled.delete(settled.keys().next().value!);
   attempt.settle?.();
+}
+
+/** What the open's full read changed on screen: rows shown before and after, and how many of
+ *  the shown rows it kept by id (fewer kept = rows redrawn under the reader). */
+export interface OpenCurrentChange { rowsBefore: number; rowsAfter: number; keptRows: number; outcome: 'current' | 'stale' | 'error' }
+
+/**
+ * The open's history is current (its full read answered): one more row, `current <sid> open <n>`,
+ * with click-to-current time beside the first-content time (2026-11-17, the user: after a click
+ * "it spends many seconds to refresh"). Only for an open whose first content was already logged,
+ * within CURRENT_WAIT_MS; a full read that lands before first content is a stage of the open.
+ */
+export function noteSessionOpenCurrent(sessionId: string, change: OpenCurrentChange): void {
+  const attempt = attempts.get(sessionId);
+  if (attempt) { if (attempt.stages.historyCurrent === undefined) attempt.stages.historyCurrent = Math.round(performance.now() - attempt.at); return; }
+  const open = settled.get(sessionId);
+  if (!open) return;
+  settled.delete(sessionId);
+  const ms = Math.round(performance.now() - open.at);
+  if (ms > CURRENT_WAIT_MS) return;
+  log.info('session-open', `current ${sessionId} open ${open.id}`, {
+    sessionId, ms, firstMs: open.firstMs, entry: open.entry, source: open.source, firstOutcome: open.outcome,
+    ...change, client: detectInputClient(), measurementVersion: 2,
+  });
+}
+
+/** How many rows of `before` `after` still holds by id (a row without an id never counts). */
+export function keptRowCount(before: readonly { msgId?: string }[], after: readonly { msgId?: string }[]): number {
+  const ids = new Set(after.map((m) => m.msgId).filter(Boolean));
+  return before.filter((m) => m.msgId && ids.has(m.msgId)).length;
 }
 
 /**
@@ -69,6 +105,7 @@ function watchFrames(sessionId: string, attempt: OpenAttempt): void {
 
 function startAttempt(sessionId: string, entry: string, source?: OpenHistorySource): OpenAttempt {
   clearTimeout(attempts.get(sessionId)?.timeout);
+  settled.delete(sessionId);
   sources.delete(sessionId);
   const attempt: OpenAttempt = { at: performance.now(), entry, id: ++sequence, source, stages: {},
     hiddenDuringOpen: document.visibilityState === 'hidden' };

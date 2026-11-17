@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 vi.mock('../../web/src/utils/log', () => ({ log: { info: vi.fn() } }));
 import { log } from '../../web/src/utils/log';
-import { beginSessionOpen, noteSessionOpenSource, observeSessionOpen, hasVisibleSessionContent, hasReadableOpenRows, sessionOpenStageRecorder } from '../../web/src/utils/session-open-latency';
+import { beginSessionOpen, noteSessionOpenSource, observeSessionOpen, hasVisibleSessionContent, hasReadableOpenRows, sessionOpenStageRecorder, noteSessionOpenCurrent, keptRowCount } from '../../web/src/utils/session-open-latency';
 
 const stops: Array<() => void> = [];
 afterEach(() => { stops.splice(0).forEach(stop => stop()); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.clearAllMocks(); vi.useRealTimers(); });
@@ -304,5 +304,40 @@ describe('chat open measurement', () => {
     h.paint(200); h.paint(216);
     expect(log.info).toHaveBeenCalledTimes(2);
     expect(vi.mocked(log.info).mock.calls[1][2]).toMatchObject({ ms: 100, source: 'memory', cache: 'cached' });
+  });
+});
+
+describe('chat open: click to current', () => {
+  it('logs a current row after first content, with the click-to-current time and what the full read kept', () => {
+    const h = harness();
+    beginSessionOpen('metric-current', 'home-column');
+    noteSessionOpenSource('metric-current', 'snapshot');
+    stops.push(observeSessionOpen(h.panel, 'metric-current', () => 'claude'));
+    h.show(); h.paint(100); h.paint(116);
+    h.paint(2400);
+    noteSessionOpenCurrent('metric-current', { rowsBefore: 40, rowsAfter: 400, keptRows: 40, outcome: 'current' });
+    expect(log.info).toHaveBeenCalledWith('session-open', expect.stringContaining('current metric-current open'), expect.objectContaining({
+      ms: 2400, firstMs: 116, source: 'snapshot', rowsBefore: 40, rowsAfter: 400, keptRows: 40, outcome: 'current',
+    }));
+    // Once per open.
+    vi.mocked(log.info).mockClear();
+    noteSessionOpenCurrent('metric-current', { rowsBefore: 1, rowsAfter: 1, keptRows: 1, outcome: 'current' });
+    expect(log.info).not.toHaveBeenCalled();
+  });
+
+  it('a full read that lands before first content is a stage of the open', () => {
+    const h = harness();
+    beginSessionOpen('metric-current-early', 'home-column');
+    h.paint(300);
+    noteSessionOpenCurrent('metric-current-early', { rowsBefore: 0, rowsAfter: 10, keptRows: 0, outcome: 'current' });
+    stops.push(observeSessionOpen(h.panel, 'metric-current-early', () => 'claude'));
+    h.show(); h.paint(320); h.paint(336);
+    expect(log.info).toHaveBeenCalledWith('session-open', expect.stringContaining('first content '), expect.objectContaining({
+      stages: expect.objectContaining({ historyCurrent: 300 }),
+    }));
+  });
+
+  it('kept rows count shown rows the new list still holds by id', () => {
+    expect(keptRowCount([{ msgId: 'a' }, { msgId: 'b' }, {}], [{ msgId: 'b' }, { msgId: 'c' }])).toBe(1);
   });
 });
