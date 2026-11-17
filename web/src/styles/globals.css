@@ -10236,6 +10236,14 @@ body.walnut-dragging {
   background: var(--overlay-bg);
 }
 
+/* The size of a full-screen sheet: a session window promoted to full screen, and every dialog
+   that should open as wide as one (the composer's Draw dialog). One rule, so they never drift. */
+:root {
+  --sheet-width: 95vw;
+  --sheet-height: 95vh;
+  --sheet-max-width: 1400px;
+}
+
 .open-walnut-fullscreen {
   position: fixed !important;
   top: 2.5vh;
@@ -10245,9 +10253,9 @@ body.walnut-dragging {
      (the panel body pushes its first child below the header, which shoved a
      fullscreen workflow card down and off the bottom of the window). */
   margin: 0 auto !important;
-  width: 95vw;
-  height: 95vh;
-  max-width: 1400px;
+  width: var(--sheet-width);
+  height: var(--sheet-height);
+  max-width: var(--sheet-max-width);
   z-index: 9001;
   border-radius: 12px;
   overflow: hidden;

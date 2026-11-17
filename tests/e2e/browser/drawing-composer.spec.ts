@@ -295,6 +295,40 @@ test.describe('Draw in the composer (drawing_app)', () => {
     expect(doc.scene.elements.map((e) => e.type).sort()).toEqual(['ellipse', 'rectangle']);
     await shot(page, 'recovered-after-reload');
   });
+  // 2026-11-17, the user: "the drawing should be wider by default, like a regular session window".
+  test('the Draw dialog opens as wide and tall as a session window in full screen, and fits a phone', async ({ page }) => {
+    const panel = await openSession(page);
+    const dialog = await openDraw(page, panel);
+    // The session window's full-screen size (globals.css --sheet-*): 95% of the window, at most 1400 wide.
+    const sheet = async () => page.evaluate(() => {
+      const probe = document.createElement('div');
+      probe.className = 'open-walnut-fullscreen';
+      probe.style.animation = 'none';
+      document.body.appendChild(probe);
+      const r = probe.getBoundingClientRect();
+      probe.remove();
+      return { width: Math.round(r.width), height: Math.round(r.height) };
+    });
+    const size = async () => { const b = (await dialog.boundingBox())!; return { width: Math.round(b.width), height: Math.round(b.height) }; };
+    expect(await size()).toEqual(await sheet());
+    expect((await size()).width).toBe(Math.round(1280 * 0.95));
+    await focusCanvas(dialog);
+    await drag(page, dialog, 'r', [120, 120], [420, 300]);
+    await drag(page, dialog, 'o', [560, 140], [820, 320]);
+    await drag(page, dialog, 'a', [430, 210], [560, 220]);
+    await saved(dialog);
+    await shot(page, 'dialog-wide');
+    // A wide screen: as wide as the session sheet, which stops at 1400.
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await expect.poll(size).toEqual(await sheet());
+    expect((await size()).width).toBe(1400);
+    await shot(page, 'dialog-wide-1920');
+    // A phone: the whole screen, nothing past its edges.
+    await page.setViewportSize({ width: 390, height: 760 });
+    await expect.poll(async () => { const b = (await dialog.boundingBox())!; return b.x >= 0 && b.x + b.width <= 390 && b.y >= 0 && b.y + b.height <= 760; }).toBe(true);
+    await page.setViewportSize({ width: 1280, height: 900 });
+  });
+
   test('full screen in the dialog keeps the editor and its view, both ways', async ({ page }) => {
     const panel = await openSession(page);
     const dialog = await openDraw(page, panel);

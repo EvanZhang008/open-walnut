@@ -101,8 +101,10 @@
   background: rgb(0 0 0 / 35%);
 }
 .drawing-app-dialog {
-  width: min(1200px, 100%);
-  height: min(820px, calc(100dvh - 40px));
+  /* As wide and tall as a session window in full screen (globals.css --sheet-*), never past the
+     overlay's padding on a small window. */
+  width: min(var(--sheet-width), var(--sheet-max-width), 100%);
+  height: min(var(--sheet-height), calc(100dvh - 40px));
   display: flex;
   border: 1px solid var(--border);
   border-radius: 14px;
