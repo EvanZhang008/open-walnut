@@ -7,8 +7,9 @@ import { describe, expect, it } from 'vitest'
 
 const ROOT = path.resolve(__dirname, '../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
+// The selector's own top-level rule (a media query's or a modifier's indented copy is another).
 const rule = (css: string, selector: string) => {
-  const at = css.indexOf(`${selector} {`)
+  const at = css.indexOf(`\n${selector} {`)
   expect(at, `${selector} is defined`).toBeGreaterThanOrEqual(0)
   return css.slice(at, css.indexOf('}', at))
 }

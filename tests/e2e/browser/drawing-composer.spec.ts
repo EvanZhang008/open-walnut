@@ -299,11 +299,11 @@ test.describe('Draw in the composer (drawing_app)', () => {
   test('the Draw dialog opens as wide and tall as a session window in full screen, and fits a phone', async ({ page }) => {
     const panel = await openSession(page);
     const dialog = await openDraw(page, panel);
-    // The session window's full-screen size (globals.css --sheet-*): 95% of the window, at most 1400 wide.
+    // The session window's full-screen size (globals.css --sheet-*, which .open-walnut-fullscreen
+    // reads: tests/web/sheet-size-one-rule.test.ts): 95% of the window, at most 1400 wide.
     const sheet = async () => page.evaluate(() => {
       const probe = document.createElement('div');
-      probe.className = 'open-walnut-fullscreen';
-      probe.style.animation = 'none';
+      probe.style.cssText = 'position:fixed;left:0;top:0;width:min(var(--sheet-width),var(--sheet-max-width));height:var(--sheet-height)';
       document.body.appendChild(probe);
       const r = probe.getBoundingClientRect();
       probe.remove();
