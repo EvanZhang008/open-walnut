@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import net from 'node:net'
 import { expect, test, type Page } from '@playwright/test'
 import { bunRuntime } from '../../helpers/bun-runtime.js'
-import { backToApps, openBuiltinDetail, openPluginDetail } from './apps-store-helpers'
+import { backToApps, openApp, openBuiltinDetail, openPluginDetail } from './apps-store-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 
 /**
@@ -624,8 +624,7 @@ test('every App the person opened keeps a Sidebar row after they leave it, a hid
     expect(stored.hidden).toContain(TIME_APP)
 
     // Hidden, and opened again by the person: it keeps an Open row after they go Home.
-    await page.getByTestId('plugin-card-open-walnut-time').click()
-    await expect(page).toHaveURL(/\/apps\/walnut-time~main/)
+    expect(await openApp(page, page.getByTestId('plugin-card-open-walnut-time'))).toBe('/apps/walnut-time~main')
     await page.getByTestId('sidebar-core-app-home').click()
     await expect(openRow).toBeVisible()
     await page.reload()
@@ -639,9 +638,7 @@ test('every App the person opened keeps a Sidebar row after they leave it, a hid
     expect(cards.length).toBeGreaterThan(0)
     for (const card of cards) {
       await openApps(page)
-      await page.getByTestId(card).click()
-      await expect(page).toHaveURL(/\/apps\/[^/]+/)
-      const appPath = new URL(page.url()).pathname
+      const appPath = await openApp(page, page.getByTestId(card))
       await page.getByTestId('sidebar-core-app-home').click()
       await expect(page).toHaveURL(/\/$/)
       // Its row links to the app's root or a place inside it, never to another app's page.
@@ -682,8 +679,7 @@ test('no installed App is pinned on the Sidebar until the person pins it', async
     expect(cards).toContain('plugin-card-open-rho')
     for (const card of cards) {
       await openApps(page)
-      await page.getByTestId(card).click()
-      await expect(page).toHaveURL(/\/apps\/[^/]+/)
+      await openApp(page, page.getByTestId(card))
       await page.getByTestId('sidebar-core-app-home').click()
       await expect(page).toHaveURL(/\/$/)
       await expect(pinnedPluginRows, `${card} is not pinned by opening it`).toHaveCount(0)

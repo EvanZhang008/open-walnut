@@ -3,7 +3,7 @@
  * the switch, the settings, the parts, where the code comes from and Update. These open a
  * plugin's (or a built-in app's) detail page the way a person does, by clicking its card.
  */
-import { expect, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 
 /**
  * Open the Apps page the way a person does: its own row in the side bar. Settings holds no
@@ -43,4 +43,22 @@ export async function backToApps(page: Page): Promise<void> {
   await expect(page.getByTestId('plugin-detail')).toHaveCount(0)
   await expect(page.getByTestId('builtin-detail')).toHaveCount(0)
   await expect(page.getByTestId('apps-plugins')).toBeVisible()
+}
+
+/**
+ * Open an App the way a person does (`trigger`: its card's Open, a tile, a rail row) and wait
+ * until the shell has drawn it, which is when it counts as opened (useTrackOpenedApp,
+ * web/src/apps/hooks.ts). Never only until the URL moves: the router moves the URL at once and
+ * draws the route in a transition, and a click away before that transition lands merges with
+ * it, so the App is never drawn and never recorded (2026-11-17: apps-page.spec.ts clicked Home
+ * about 200 ms after the URL moved, and on a busy host the App's Open row was missing in 2 runs
+ * of 4). tests/web/browser-spec-app-drawn-guard.test.ts fails on a spec that leaves right after a
+ * URL wait. Returns the App's path (`/apps/<id>`).
+ */
+export async function openApp(page: Page, trigger: Locator): Promise<string> {
+  await trigger.click()
+  await expect(page).toHaveURL(/\/apps\/[^/?#]+/)
+  const appPath = /^\/apps\/[^/?#]+/.exec(new URL(page.url()).pathname)![0]
+  await expect(page.locator(`main[data-app-path="${appPath}"]`)).toHaveCount(1)
+  return appPath
 }

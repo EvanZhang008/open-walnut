@@ -331,7 +331,11 @@ function AppShellInner({ children }: AppShellProps) {
           tabIndex={-1}
         />
       )}
-      <main ref={mainRef} className="main-content" inert={sidebarOpen && isMobileSidebar}>
+      {/* data-app-path: the app the shell has drawn, the one useTrackOpenedApp records. It trails
+          the URL while a navigation renders (the router draws a route in a transition), so a
+          browser test waits on it, not on the URL, before it leaves an app (openApp in
+          tests/e2e/browser/apps-store-helpers.ts). */}
+      <main ref={mainRef} className="main-content" inert={sidebarOpen && isMobileSidebar} data-app-path={activeApp?.path}>
         {/* A host replica's console while the Mac is away (nothing otherwise). */}
         <AwayLine />
         {/* This console's own server is not answering (the phone says it under its top bar). */}
