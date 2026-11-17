@@ -13,7 +13,7 @@ import type { ChangeSnapshot } from '../../../../src/core/changes/model';
 import { timeAgo } from '@/utils/time';
 import { ChangeDeployView } from './ChangeDeployView';
 import { OutIcon } from './ChangeIcons';
-import { REVIEW_TONES, REVIEW_WORDS, changeHeadline, reviewFacts } from './change-status';
+import { REVIEW_TONES, REVIEW_WORDS, changeHeadline, deployIssueWords, reviewFacts } from './change-status';
 
 const ERROR_WORDS: Record<NonNullable<ChangeSnapshot['error']>['code'], string> = {
   'signed-out': 'Walnut is signed out of this service.',
@@ -53,6 +53,12 @@ export function ChangeCard({ snap, taskId, refreshing, refreshError, onRefresh }
         </div>
       )}
 
+      {!snap.error && snap.deployIssue && deploy && (
+        <div className="change-card-error" role="status" data-testid="change-card-deploy-issue">
+          {deployIssueWords(snap.deployIssue)}. Below is the last deploy it read.
+        </div>
+      )}
+
       {snap.checkedAt ? (
         <section className="change-card-now" data-tone={now.tone} data-testid="change-card-now">
           <div className="change-card-now-title">{now.title}</div>
@@ -82,7 +88,7 @@ export function ChangeCard({ snap, taskId, refreshing, refreshError, onRefresh }
         </section>
       ) : !snap.error && <div className="change-card-now change-card-muted">Not read yet</div>}
 
-      {deploy && <ChangeDeployView deploy={deploy} taskId={taskId} url={snap.url} stale={!!snap.error} focus={focus} now={now.stage} />}
+      {deploy && <ChangeDeployView deploy={deploy} taskId={taskId} url={snap.url} stale={!!snap.error || !!snap.deployIssue} focus={focus} now={now.stage} />}
 
       <footer className="change-card-foot">
         <span className="change-card-read" data-stale={stale ? 'true' : undefined} data-testid="change-card-read">

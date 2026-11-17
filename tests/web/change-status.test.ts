@@ -121,6 +121,18 @@ describe('change-status rules', () => {
       .toEqual({ tone: 'waiting', title: 'Waiting for 1 more approval', also: [] });
     expect(changeHeadline(snapshot({ deploy: { pipeline: 'p', done: true, stages: [st('a', 'done'), st('b', 'done')] } }), now).title).toBe('Deployed to all 2 stages');
   });
+
+  // 2026-11-17: a CR merged 12 days earlier read only "Merged": its pipeline read had failed and
+  // nothing said so. Every kind of deploy issue says why.
+  it('says why a merged change shows no deploy, for every kind of issue', () => {
+    const merged = { review: { state: 'merged' as const }, deploy: undefined };
+    for (const code of ['none', 'signed-out', 'not-found', 'unreachable', 'failed'] as const) {
+      const h = changeHeadline({ ...merged, deployIssue: { code, message: 'the reason' } });
+      expect(h.title).toBe('Merged');
+      expect(h.detail).toBe(code === 'none' ? 'No deploy found: the reason' : 'Could not read the deploy: the reason');
+    }
+    expect(changeHeadline(merged).detail).toBeUndefined();
+  });
 });
 
 let root: ReturnType<typeof createRoot>;
@@ -137,7 +149,18 @@ beforeAll(() => {
   Object.assign(dom.window, { innerHeight: 800, innerWidth: 1280 });
   Object.assign(globalThis, { window: dom.window, document: dom.document, HTMLElement: dom.window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true });
 });
-beforeEach(() => { apiGet.mockReset(); apiPost.mockReset(); host = document.createElement('div'); document.body.append(host); root = createRoot(host); });
+/** The answers of the stage route, in order; the open card's read of the watcher's answer
+ *  (GET /changes) answers `watcher`. */
+let stageAnswers: unknown[] = [];
+let watcher: { enabled: boolean; changes: ChangeSnapshot[] } = { enabled: true, changes: [] };
+beforeEach(() => {
+  stageAnswers = [];
+  watcher = { enabled: true, changes: [] };
+  apiGet.mockReset();
+  apiGet.mockImplementation(async (path: string) => (String(path).endsWith('/changes') ? watcher : stageAnswers.shift()));
+  apiPost.mockReset();
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+});
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); });
 
 describe('the change pill and its card', () => {
@@ -175,7 +198,7 @@ describe('the change pill and its card', () => {
   });
 
   it('opens a stage with its steps, read live, and says a timeout in words', async () => {
-    apiGet.mockResolvedValueOnce({ detail: { stage: 'prod-w1', steps: [{ name: 'Integration Test', status: 'done', note: '6 passed', url: 'https://tests.acme.dev/1' }, { name: 'Bake Time', status: 'waiting' }], blockers: [{ kind: 'bake', text: '6 hours 59 minutes left' }] } });
+    stageAnswers.push({ detail: { stage: 'prod-w1', steps: [{ name: 'Integration Test', status: 'done', note: '6 passed', url: 'https://tests.acme.dev/1' }, { name: 'Bake Time', status: 'waiting' }], blockers: [{ kind: 'bake', text: '6 hours 59 minutes left' }] } });
     await click(await draw());
     const row = card()!.querySelector('[data-stage="prod-w1"] button')!;
     await click(row);
@@ -185,11 +208,29 @@ describe('the change pill and its card', () => {
     expect(steps).toEqual(['Integration Test6 passed', 'Bake Time']);
     expect(card()!.querySelector('.change-card-blocker')!.textContent).toContain('6 hours 59 minutes left');
 
-    apiGet.mockResolvedValueOnce({ detail: null, error: 'timeout' });
+    stageAnswers.push({ detail: null, error: 'timeout' });
     const other = card()!.querySelector('[data-stage="beta-w1"] button')!;
     await click(other);
     await act(async () => { await Promise.resolve(); });
     expect(card()!.querySelector('[data-testid="change-stage-error"]')!.textContent).toContain('did not answer in time');
+  });
+
+  it('takes the watcher\'s newer read when it opens: the task keeps only reads with news', async () => {
+    const stored = snapshot();
+    watcher = { enabled: true, changes: [{ ...stored, checkedAt: new Date(Date.now() - 5_000).toISOString() }] };
+    await click(await draw(stored));
+    await act(async () => { await Promise.resolve(); });
+    expect(apiGet).toHaveBeenCalledWith('/api/tasks/task-1/changes', undefined, expect.anything());
+    expect(card()!.querySelector('[data-testid="change-card-read"]')!.textContent).not.toBe('Read 2 min ago');
+    // A later read that failed keeps the stored read time: its error still shows.
+    await act(async () => { root.render(createElement(ChangePill, { tag: TAG, snap: { ...stored, error: { code: 'signed-out', message: 'Sign in again.' } }, taskId: 'task-1', inline: true })); });
+    expect(card()!.querySelector('[data-testid="change-card-error"]')!.textContent).toContain('signed out');
+  });
+
+  it('says a pipeline read that failed above the last deploy it read', async () => {
+    await click(await draw(snapshot({ deployIssue: { code: 'unreachable', message: 'the host did not answer' } })));
+    expect(card()!.querySelector('[data-testid="change-card-deploy-issue"]')!.textContent).toBe('Could not read the deploy: the host did not answer. Below is the last deploy it read.');
+    expect(card()!.querySelector('[data-testid="change-deploy"]')!.getAttribute('data-stale')).toBe('true');
   });
 
   it('shows the read error and what the read before found', async () => {

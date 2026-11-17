@@ -3,7 +3,9 @@
  * its tone and a few words (`CR-1001 · prod-w1 baking`, changePillState), and on a click its
  * status card (ChangeCard.tsx) instead of the link; the card's "Open review" is the old click.
  * The task's snapshot (Task.change_status, written by the server's watcher) arrives with every
- * task:updated; Refresh asks the server to read the task's changes now.
+ * task:updated; the watcher writes it only when a read finds news, so an open card also takes the
+ * watcher's last answer (GET /api/tasks/:id/changes) for the real read time. Refresh asks the
+ * server to read the task's changes now.
  *
  * Overlay rules (web/src/AGENTS.md): the card is portalled to <body>, placed by useMenuPlacement,
  * stops pointerdown (rows are dnd-kit draggables), and closes on an outside pointerdown or Escape,
@@ -14,7 +16,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ChangeSnapshot } from '../../../../src/core/changes/model';
 import { changePillState } from '../../../../src/core/changes/model';
-import { apiPost } from '@/api/client';
+import { apiGet, apiPost } from '@/api/client';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { log } from '@/utils/log';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
@@ -38,7 +40,9 @@ export function ChangePill({ tag, snap, taskId, inline, linkName }: {
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const pillRef = useRef<HTMLElement | null>(null);
   const cardRef = useRef<HTMLDivElement>(null);
-  const shown = fresh && fresh.checkedAt > snap.checkedAt ? fresh : snap;
+  // A failed read keeps the stored read time, so a newer `fresh` would hide its error: the task's
+  // own snapshot wins once it carries an error the fresher read did not.
+  const shown = fresh && fresh.checkedAt > snap.checkedAt && !(snap.error && !fresh.error) ? fresh : snap;
   const { tone, text } = changePillState(shown);
   // Inside the session header's tags list the card opens under the whole list, never over the
   // other pills; elsewhere under the pill.
@@ -52,6 +56,20 @@ export function ChangePill({ tag, snap, taskId, inline, linkName }: {
     setOpen(false);
     if (restoreFocus) pillRef.current?.focus();
   }, []);
+
+  // The task holds the snapshot as last written, which the watcher skips when a read found nothing
+  // new: the card takes the watcher's own last answer, so its read time is the real one.
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    apiGet<ChangesAnswer>(`/api/tasks/${encodeURIComponent(taskId)}/changes`, undefined, { timeoutMs: REFRESH_MS })
+      .then((answer) => {
+        const next = answer.changes.find((c) => c.url === snap.url);
+        if (live && next) setFresh((f) => (f && f.checkedAt >= next.checkedAt ? f : next));
+      })
+      .catch((err: unknown) => log.warn('tasks', 'change status read failed', { taskId, url: snap.url, error: String(err) }));
+    return () => { live = false; };
+  }, [open, taskId, snap.url]);
 
   useEffect(() => {
     if (!open) return;

@@ -92,6 +92,9 @@ export interface ChangeDeploy {
   url?: string
   /** The commit it tracks (a provider may store the whole hash; the card shows its first 7). */
   commit?: string
+  /** The provider's own handle for what it follows (a build number): handed back with the next
+   *  read, so the provider need not find it again. */
+  build?: string
   /** Every stage in pipeline order, at most MAX_CHANGE_STAGES. */
   stages: ChangeStage[]
   /** The last stage it reached and the next one. */
@@ -120,7 +123,12 @@ export interface ChangeSnapshot {
   followedSince?: string
   /** The last read failed: the rest is what the read before it found. */
   error?: { code: ChangeErrorCode; message: string }
+  /** The review read fine, but its deploy could not be shown: nothing deploys it (`none`), or the
+   *  deploy's read failed (with `deploy` kept, that is the last one read). The card says which. */
+  deployIssue?: ChangeDeployIssue
 }
+
+export interface ChangeDeployIssue { code: ChangeErrorCode | 'none'; message: string }
 
 /** What one stage holds when the card opens it: its steps and what blocks it, read live. */
 export interface ChangeStageDetail {

@@ -208,3 +208,52 @@ test('change link pills read their status, and the card opens a stage', async ({
 
   expect(errors).toEqual([])
 })
+
+// 2026-11-17: a CR merged 12 days earlier showed only "Merged" and "Read 3 h ago". Its pipeline
+// read failed, and the plugin dropped why; the watcher had read it minutes before, but the task
+// keeps the snapshot as last written (a read with no news writes nothing). The card now takes the
+// watcher's own last answer when it opens, and says why a merged change shows no deploy.
+test('the card shows the watcher\'s latest read, and why a merged change has no deploy', async ({ page, request }) => {
+  test.setTimeout(90_000)
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  restore ??= await setFlag(request, true)
+  await setFlag(request, true)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  const asks: string[] = []
+  await page.route('**/api/tasks/*/changes', async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    asks.push(route.request().url())
+    await route.fulfill({
+      json: {
+        enabled: true,
+        changes: [{
+          provider: 'acme:reviews', url: 'https://review.acme.dev/CR-1001', label: 'CR-1001',
+          title: 'Move the controller onto the new instance type',
+          review: { state: 'merged', revision: 1, approvals: { got: 1, need: 1 }, checks: { passed: 4, failed: 0, pending: 0 } },
+          deployIssue: { code: 'failed', message: 'the pipeline did not answer' },
+          checkedAt: new Date(Date.now() - 5_000).toISOString(),
+        }],
+      },
+    })
+  })
+
+  const panel = await openSession(page)
+  const flyout = openLabelsFlyout(panel)
+  const crPill = flyout.locator(`[data-tag="${CR}"]`)
+  await expect(panel.locator('[data-testid="pr-pill"]')).toBeVisible({ timeout: 20_000 })
+  await expect(async () => {
+    await openHeaderLabels(panel)
+    await expect(crPill.locator('[data-testid="change-pill-status"]')).toBeVisible({ timeout: 2_000 })
+  }).toPass({ timeout: 20_000 })
+  await crPill.click()
+  const card = page.locator('[data-testid="change-card"]')
+  await expect(card).toBeVisible()
+  await expect(card.locator('[data-testid="change-card-now"]')).toContainText('Merged')
+  await expect(card.locator('[data-testid="change-card-now-detail"]')).toHaveText('Could not read the deploy: the pipeline did not answer')
+  await expect(card.locator('[data-testid="change-card-read"]')).not.toHaveText('Read 2 min ago')
+  await expect(card.locator('[data-testid="change-card-read"]')).not.toHaveAttribute('data-stale', 'true')
+  expect(asks.length).toBeGreaterThan(0)
+  await shot(page, 'deploy-issue', card)
+  expect(errors).toEqual([])
+})

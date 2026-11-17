@@ -5,7 +5,7 @@
  * the card folds. Pure, so the rules are tested without a browser (tests/web/change-status.test.ts).
  */
 import {
-  type ChangeBlocker, type ChangeBlockerKind, type ChangeDeploy, type ChangeReview, type ChangeReviewState,
+  type ChangeBlocker, type ChangeBlockerKind, type ChangeDeploy, type ChangeDeployIssue, type ChangeReview, type ChangeReviewState,
   type ChangeSnapshot, type ChangeStage, type ChangeStageStatus, type ChangeTone,
 } from '../../../../src/core/changes/model';
 import { linkUrlOfTag } from '../../../../src/core/link-tags';
@@ -126,7 +126,12 @@ function stageLine(stage: ChangeStage, now: number): string {
   return `${stage.name}: ${what}${when}`;
 }
 
-export function changeHeadline(snap: Pick<ChangeSnapshot, 'review' | 'deploy'>, now = Date.now()): ChangeHeadline {
+/** Why a change shows no deploy, or an older one, in words (ChangeSnapshot.deployIssue). */
+export function deployIssueWords(issue: ChangeDeployIssue): string {
+  return issue.code === 'none' ? `No deploy found: ${issue.message}` : `Could not read the deploy: ${issue.message}`;
+}
+
+export function changeHeadline(snap: Pick<ChangeSnapshot, 'review' | 'deploy' | 'deployIssue'>, now = Date.now()): ChangeHeadline {
   const { review, deploy } = snap;
   if (deploy && deploy.stages.length) {
     const stages = deploy.stages;
@@ -150,7 +155,8 @@ export function changeHeadline(snap: Pick<ChangeSnapshot, 'review' | 'deploy'>, 
   }
   if (!review) return { tone: 'unknown', title: 'No status yet', also: [] };
   switch (review.state) {
-    case 'merged': return { tone: 'done', title: 'Merged', also: [] };
+    // A merged change whose deploy is missing says why, never only "Merged".
+    case 'merged': return { tone: 'done', title: 'Merged', ...(snap.deployIssue ? { detail: deployIssueWords(snap.deployIssue) } : {}), also: [] };
     case 'closed': return { tone: 'closed', title: 'Closed without merging', also: [] };
     case 'changes_requested': return { tone: 'blocked', title: 'Changes requested', next: { person: true, text: 'Waits for the author' }, also: [] };
     case 'draft': return { tone: 'waiting', title: 'Draft', next: { person: true, text: 'Waits for the author to send it' }, also: [] };
