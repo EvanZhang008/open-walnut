@@ -128,6 +128,8 @@ describe('every surface that holds a session id stays on the task\'s current con
   // waits on that session), and the server hands a replaced session's message to the current one.
   const ONE_SHOT_SENDERS = [
     'web/src/components/chat/AskObjectDrawer.tsx',
+    // The drawing's Make a diagram ask, into its remembered assistant session (shown by AskObjectDrawer).
+    'web/src/components/drawing/DrawingAssistant.tsx',
     'web/src/components/board/kanban/KanbanCardComposer.tsx',
     'web/src/components/org/ask-main.ts',
     'web/src/popout/PopoutExtTasks.tsx',
