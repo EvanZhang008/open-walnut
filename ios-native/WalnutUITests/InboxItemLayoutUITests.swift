@@ -252,7 +252,7 @@ final class InboxItemLayoutUITests: XCTestCase {
         let preview = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "inbox.item.tasks.preview.")).firstMatch
         XCTAssertTrue(preview.waitForExistence(timeout: 15)); preview.tap()
         InboxItemActionsUITests.element(app, "inbox.item.taskPreview.open").tap()
-        XCTAssertTrue(app.navigationBars["Task details"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.navigationBars["Task"].waitForExistence(timeout: 15), "the task page did not open")
         app.navigationBars.buttons["Done"].tap()
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertEqual(search.value as? String, "Review the update")
