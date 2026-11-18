@@ -25,6 +25,14 @@
  * keeps writing an unmarked write from a browser page section by section whole
  * (`wholeSections`, exactly as before), and merges every other write: an agent's,
  * the CLI's, and a web client's that says so with CONFIG_MERGE_HEADER.
+ *
+ * Writes that are not from a page (`mergeEntries`: an agent's script, the CLI) merge
+ * a `replace` map too, entry by entry and key by key inside each entry, and remove
+ * only what is sent as `null`. Only an editor that holds the whole map (a Settings
+ * page, an in-process read-modify-write) removes an entry by leaving it out.
+ * 2026-11-18: an agent's script sent `{ plugins: { wechat: { send_host, send_enabled } } }`
+ * and the replace dropped every other plugin's settings (both mail accounts, Slack,
+ * the calendar choice): mail stopped polling until the file was restored.
  */
 import type { Config } from './types.js';
 
@@ -32,6 +40,13 @@ import type { Config } from './types.js';
 export const CONFIG_MERGE_HEADER = 'x-walnut-config-write';
 
 export type ConfigSectionWrite = 'merge' | 'replace';
+
+export interface ConfigWriteOptions {
+  /** An older web client's write: each section is stored as sent. */
+  wholeSections?: boolean;
+  /** A write from a writer that does not hold whole maps (not a page): maps merge too. */
+  mergeEntries?: boolean;
+}
 
 /** Every top-level key of Config, classified (a new key is a type error until it is). */
 export const CONFIG_SECTION_WRITE: { readonly [K in keyof Required<Config>]: ConfigSectionWrite } = {
@@ -127,12 +142,26 @@ export function configSectionWrite(key: string): ConfigSectionWrite {
  * `wholeSections`: an older client's write, where the section sent is the new
  * section, exactly as it was stored before this rule.
  */
-export function writeConfigSection(key: string, stored: unknown, sent: unknown, opts: { wholeSections?: boolean } = {}): unknown {
+export function writeConfigSection(key: string, stored: unknown, sent: unknown, opts: ConfigWriteOptions = {}): unknown {
   if (opts.wholeSections || !isPlainObject(sent)) return sent;
-  const out: Record<string, unknown> = {};
-  if (configSectionWrite(key) === 'merge' && isPlainObject(stored)) {
-    for (const [k, v] of Object.entries(stored)) setOwn(out, k, v);
+  const mode = configSectionWrite(key);
+  if (mode === 'replace' && opts.mergeEntries && isPlainObject(stored)) {
+    // A map from a writer that does not hold it whole: each entry sent merges into its stored one.
+    const out = mergeKeys(stored, {});
+    for (const [name, entry] of Object.entries(sent)) {
+      const was = out[name];
+      if (entry === null || entry === undefined) delete out[name];
+      else setOwn(out, name, isPlainObject(entry) && isPlainObject(was) ? mergeKeys(was, entry) : entry);
+    }
+    return out;
   }
+  return mergeKeys(mode === 'merge' && isPlainObject(stored) ? stored : {}, sent);
+}
+
+/** `base` with `sent` on top: a key sent as `null`/`undefined` is removed, objects below are replaced whole. */
+function mergeKeys(base: Record<string, unknown>, sent: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(base)) setOwn(out, k, v);
   for (const [k, v] of Object.entries(sent)) {
     if (v === null || v === undefined) delete out[k];
     else setOwn(out, k, v);

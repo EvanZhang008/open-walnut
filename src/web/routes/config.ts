@@ -603,7 +603,7 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
     // `push_tokens` is left out first: the push registry is its only writer (below), and
     // a phone may change its row between this client's read and its write.
     const { push_tokens: ignoredPushTokens, ...sent } = req.body ?? {}
-    const sections = { wholeSections: wholeSectionsOf(req) }
+    const sections = { wholeSections: wholeSectionsOf(req), mergeEntries: !fromPage(req) }
     const storedConfig = await getConfig()
     const body = restoreMaskedSecrets(sent, sent.backup === undefined ? storedConfig
       : { ...storedConfig, backup: storedBackupLike(sent.backup, storedConfig.backup) })
@@ -767,6 +767,12 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
         // that does not know the field never turns Walnut's own yes into the person's.
         const was = (current as Record<string, { discovered?: unknown; connect?: unknown; connect_by?: unknown }>)[key]
         const row = sent[key]
+        // A partial row (an agent's write, merged into the stored one) that changes the answer
+        // drops who gave the old one, as a whole row that leaves the field out does below.
+        if (sections.mergeEntries && row && typeof row === 'object' && was?.discovered === true && row.discovered === undefined
+          && row.connect !== undefined && row.connect !== was.connect && !('connect_by' in row) && was.connect_by !== undefined) {
+          sent[key] = { ...row, connect_by: null }
+        }
         if (row && typeof row === 'object' && was?.discovered === true && row.discovered === true) {
           let next = row
           if (row.connect === undefined && was.connect !== undefined) next = { ...next, connect: was.connect, ...(was.connect === 'yes' ? {} : { enabled: false }) }
@@ -782,7 +788,12 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
       // which also takes it off the companion's list.
       const { keepNetHosts, NetHostAliasTaken } = await import('../../core/net/net-hosts.js')
       try {
-        body.hosts = keepNetHosts(sent, current) as typeof body.hosts
+        const kept = keepNetHosts(sent, current)
+        // A merged write touches only the hosts it names: a net row it left out stays as the
+        // write lock finds it, never as this earlier read saw it.
+        body.hosts = (sections.mergeEntries
+          ? Object.fromEntries(Object.entries(kept).filter(([key]) => Object.hasOwn(sent, key)))
+          : kept) as typeof body.hosts
       } catch (err) {
         if (!(err instanceof NetHostAliasTaken)) throw err
         res.status(409).json({ error: err.message, code: 'host_alias_taken', field: `hosts.${err.alias}` })
@@ -794,7 +805,8 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
     if (body.hosts !== undefined && !isPersonAtThisMachine(req)) {
       const servers = (hosts: unknown) => JSON.stringify(Object.entries((hosts && typeof hosts === 'object' ? hosts : {}) as Record<string, { server?: unknown }>)
         .map(([k, h]) => [k, h?.server ?? null]).filter(([, v]) => v !== null).sort())
-      if (servers(body.hosts) !== servers((await getConfig()).hosts)) {
+      const current = (await getConfig()).hosts
+      if (servers(writeConfigSection('hosts', current, body.hosts, sections)) !== servers(current)) {
         res.status(403).json({ error: 'Only you, at this computer, can change which hosts run a Walnut server (Settings, Hosts).', code: 'person_at_this_machine' })
         return
       }
@@ -837,6 +849,15 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
  */
 function wholeSectionsOf(req: Request): boolean {
   if (req.get(CONFIG_MERGE_HEADER) === 'merge') return false
+  return fromPage(req)
+}
+
+/**
+ * A browser page's write (it carries Origin or Sec-Fetch-Mode, and a forward through a replica
+ * keeps both). Only a page's editor holds a whole map (`hosts`, `plugins`) and removes an entry by
+ * leaving it out; every other writer's map merges by entry (core/config-section-write.ts).
+ */
+function fromPage(req: Request): boolean {
   return !!(req.get('origin') || req.get('sec-fetch-mode'))
 }
 

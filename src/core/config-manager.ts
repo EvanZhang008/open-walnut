@@ -18,7 +18,7 @@ import { applyFoundHostAnswers, askingAboutFoundHosts, mergeFoundHosts } from '.
 import { keepNotOfferedRows } from './hosts/found-host-offer.js';
 import { noteRequestTagConfig } from './sessions/request-tag.js';
 import { firstRunStampAllowed, homeHoldsWork, stampFirstRun } from './first-run.js';
-import { writeConfigSection } from './config-section-write.js';
+import { writeConfigSection, type ConfigWriteOptions } from './config-section-write.js';
 import {
   dumpConfig,
   modifyConfigDoc,
@@ -329,7 +329,8 @@ export async function saveConfig(config: Config): Promise<void> {
  * the keys sent replace the stored ones, keys left out are kept, and a key sent
  * as `null` (or `undefined`) is removed; objects below that level are replaced
  * whole. A map of named entries (`hosts`, `providers`, `plugins`, ...) is replaced
- * by the map sent. The table and its reasons: config-section-write.ts.
+ * by the map sent, unless `mergeEntries` (a writer that does not hold the whole map)
+ * merges it by entry. The table and its reasons: config-section-write.ts.
  * `wholeSections` writes each section as sent (an older web client's write).
  *
  * The base is config.yaml as it stands after any save in flight lands (modifyConfigDoc):
@@ -337,7 +338,7 @@ export async function saveConfig(config: Config): Promise<void> {
  * unmentioned section (stt, hosts, plugins, tools) dropped, or roll back an edit the
  * user had just saved. A file that does not parse is refused, never replaced.
  */
-export async function updateConfig(partial: Partial<Config>, opts: { wholeSections?: boolean } = {}): Promise<void> {
+export async function updateConfig(partial: Partial<Config>, opts: ConfigWriteOptions = {}): Promise<void> {
   return modifyConfigDoc((existing) => {
     // The companion's keep choice where an older build kept it moves to cloud_bridge
     // first, so a partial that replaces `hosts` or `cloud_bridge` never drops it.

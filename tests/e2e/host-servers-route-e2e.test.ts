@@ -170,8 +170,11 @@ describe('a host\'s Walnut, as a setting', () => {
     await api('/api/host-servers/devbox', { method: 'PUT', headers: PERSON, body: JSON.stringify({ enabled: true }) })
     const phase = async () => ((await (await api('/api/host-servers')).json()) as { hosts: Array<{ hostKey: string }> }).hosts
     await expect.poll(async () => (await import('../../src/core/host-server/index.js')).getHostServerManager()?.view('devbox').phase, { timeout: 5_000 }).toBe('waiting-for-host')
-    // The person removes it in the Remote Hosts editor: the whole map, without it.
-    expect((await api('/api/config', { method: 'PUT', headers: PERSON, body: JSON.stringify({ hosts: {} }) })).status).toBe(200)
+    // The person removes it in the Remote Hosts editor: the whole map, without it. Only a page
+    // removes an entry by leaving it out (core/config-section-write.ts), so this write carries
+    // what the Settings page sends (web/src/api/config.ts).
+    const page = { ...PERSON, origin: `http://localhost:${port}`, 'sec-fetch-mode': 'cors', 'x-walnut-config-write': 'merge' }
+    expect((await api('/api/config', { method: 'PUT', headers: page, body: JSON.stringify({ hosts: {} }) })).status).toBe(200)
     expect(await phase()).toEqual([])
     await expect.poll(async () => (await import('../../src/core/host-server/index.js')).getHostServerManager()?.view('devbox').phase, { timeout: 5_000 }).toBe('off')
   })

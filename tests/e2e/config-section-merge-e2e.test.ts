@@ -17,7 +17,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-e2e-config-s
 
 import { WALNUT_HOME, CONFIG_FILE } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
-import { CONFIG_SECTION_WRITE } from '../../src/core/config-section-write.js'
+import { CONFIG_MERGE_HEADER, CONFIG_SECTION_WRITE } from '../../src/core/config-section-write.js'
 
 let server: HttpServer
 let port = 0
@@ -110,19 +110,68 @@ describe('PUT /api/config with a map of named entries', () => {
   const replaced = Object.entries(CONFIG_SECTION_WRITE)
     .filter(([, mode]) => mode === 'replace')
     .map(([key]) => key)
+  /** The page's own write (web/src/api/config.ts): it holds the whole map. */
+  const page = () => ({ ...browser(), [CONFIG_MERGE_HEADER]: 'merge' })
 
-  it('hosts: a host left out of the map is deleted (the Remote Hosts editor\'s Remove)', async () => {
+  it('hosts: the page removes a host by leaving it out (the Remote Hosts editor\'s Remove)', async () => {
     expect(replaced).toContain('hosts')
-    await put({ hosts: { a: { hostname: 'a.example.test', enabled: false }, b: { hostname: 'b.example.test', enabled: false } } })
+    await put({ hosts: { a: { hostname: 'a.example.test', enabled: false }, b: { hostname: 'b.example.test', enabled: false } } }, page())
     expect(Object.keys((await stored()).hosts).sort()).toEqual(['a', 'b'])
-    await put({ hosts: { a: { hostname: 'a.example.test', enabled: false } } })
+    await put({ hosts: { a: { hostname: 'a.example.test', enabled: false } } }, page())
     expect(Object.keys((await stored()).hosts)).toEqual(['a'])
     // The same removal sent as null (what Settings sends now) works too.
-    await put({ hosts: { a: null } })
+    await put({ hosts: { a: null } }, page())
     expect((await stored()).hosts).toEqual({})
   })
 
-  it('every other map section: an entry left out is deleted', async () => {
+  it('hosts: an agent writing one host keeps every other host, net rows included, as stored', async () => {
+    const { updateConfig } = await import('../../src/core/config-manager.js')
+    await put({ hosts: { a: { hostname: 'a.example.test', enabled: false } } }, page())
+    // A machine on the host network is written by the network only (core/net/net-hosts.ts).
+    await updateConfig({ hosts: { net1: { hostname: 'net1', transport: 'net', endpoint: 'e1', enabled: true } } } as never, { mergeEntries: true })
+    await put({ hosts: { a: { label: 'A' } } }, AGENT)
+    expect((await stored()).hosts).toEqual({
+      a: { hostname: 'a.example.test', enabled: false, label: 'A' },
+      net1: { hostname: 'net1', transport: 'net', endpoint: 'e1', enabled: true },
+    })
+    await put({ hosts: { a: null, net1: null } }, page())
+  })
+
+  it('hosts: an agent changing a found host\'s answer drops who gave the old one', async () => {
+    await put({ hosts: { f: { hostname: 'f.example.test', discovered: true, connect: 'yes', connect_by: 'walnut', enabled: true } } }, page())
+    await put({ hosts: { f: { connect: 'not_now' } } }, AGENT)
+    const f = (await stored()).hosts.f
+    expect(f.connect).toBe('not_now')
+    expect(f.connect_by).toBeUndefined()
+    expect(f.hostname).toBe('f.example.test')
+    await put({ hosts: { f: null } }, page())
+  })
+
+  it('plugins: an agent writing one plugin keeps every other plugin and that plugin\'s other keys (the 2026-11-18 incident body)', async () => {
+    const plugins = {
+      wechat: { enabled: true, node_id: 'n1', account_id: 'acct-1' },
+      'mail-imap': { accounts: { a1: { address: 'a@example.test', imap_host: 'imap.example.test' } } },
+      slack: { enabled: true, letters_enabled: false },
+    }
+    await put({ plugins }, page())
+    await put({ plugins: { wechat: { send_host: 'home', send_enabled: true } } }, AGENT)
+    expect((await stored()).plugins).toEqual({
+      ...plugins,
+      wechat: { ...plugins.wechat, send_host: 'home', send_enabled: true },
+    })
+    // A script with no headers at all (the incident's Python urllib) merges the same way.
+    await put({ plugins: { slack: { letters_enabled: true } } })
+    expect((await stored()).plugins.slack).toEqual({ enabled: true, letters_enabled: true })
+    expect((await stored()).plugins['mail-imap']).toEqual(plugins['mail-imap'])
+    // null removes a key of an entry, or a whole entry, and nothing else.
+    await put({ plugins: { wechat: { send_host: null }, slack: null } }, AGENT)
+    expect((await stored()).plugins).toEqual({
+      'mail-imap': plugins['mail-imap'],
+      wechat: { ...plugins.wechat, send_enabled: true },
+    })
+  })
+
+  it('every map section: the page removes an entry by leaving it out, any other writer keeps it', async () => {
     const samples: Record<string, [Record<string, unknown>, string]> = {
       providers: [{ x: { api: 'openai-chat' }, y: { api: 'openai-chat' } }, 'x'],
       engines: [{ x: { enabled: false }, y: { enabled: false } }, 'x'],
@@ -142,10 +191,14 @@ describe('PUT /api/config with a map of named entries', () => {
     expect(replaced.filter((k) => k !== 'hosts' && !notObjects.includes(k)).sort()).toEqual(Object.keys(samples).sort())
     for (const key of objectMaps) {
       const [both, keep] = samples[key]
-      await put({ [key]: both })
+      await put({ [key]: both }, page())
       expect(Object.keys((await stored())[key]).sort(), key).toEqual(['x', 'y'])
-      await put({ [key]: { [keep]: both[keep] } })
-      expect((await stored())[key], key).toEqual({ [keep]: both[keep] })
+      // An agent's write of one entry keeps the other.
+      await put({ [key]: { [keep]: both[keep] } }, AGENT)
+      expect(Object.keys((await stored())[key]).sort(), `${key} (agent)`).toEqual(['x', 'y'])
+      // The page holds the whole map: what it leaves out is removed.
+      await put({ [key]: { [keep]: both[keep] } }, page())
+      expect((await stored())[key], `${key} (page)`).toEqual({ [keep]: both[keep] })
     }
   })
 })

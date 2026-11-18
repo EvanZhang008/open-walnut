@@ -123,3 +123,55 @@ describe('writeConfigSection for an older web client (wholeSections)', () => {
     expect(writeConfigSection('session', stored, { reply_language: null }, { wholeSections: true })).toEqual({ reply_language: null })
   })
 })
+
+/**
+ * A writer that does not hold the whole map (an agent's script, the CLI): `mergeEntries`.
+ * 2026-11-18: `{ plugins: { wechat: { send_host, send_enabled } } }` from a script replaced the
+ * whole plugins map and dropped both mail accounts, Slack and the calendar settings.
+ * Enumerated from the table, so a NEW map section is covered the moment it is listed.
+ */
+describe('writeConfigSection for a writer that does not hold whole maps (mergeEntries)', () => {
+  const maps = Object.entries(CONFIG_SECTION_WRITE).filter(([, m]) => m === 'replace').map(([k]) => k)
+    .filter((k) => !NOT_OBJECTS.includes(k))
+
+  it('covers every map section', () => {
+    expect(maps.sort()).toEqual([...REPLACED_MAPS].sort())
+  })
+
+  it('every map section keeps the entries it leaves out, and the keys an entry leaves out', () => {
+    for (const key of maps) {
+      const stored = { a: { x: 1, y: { deep: 1 } }, b: { x: 2 }, c: 'scalar' }
+      const out = writeConfigSection(key, stored, { a: { z: 3, y: { other: 1 } }, d: { x: 4 } }, { mergeEntries: true })
+      expect({ key, out }).toEqual({ key, out: { a: { x: 1, z: 3, y: { other: 1 } }, b: { x: 2 }, c: 'scalar', d: { x: 4 } } })
+    }
+  })
+
+  it('null removes a key of an entry, or a whole entry, and nothing else', () => {
+    const stored = { wechat: { enabled: true, send_host: 'h' }, slack: { enabled: true }, mail: { enabled: true } }
+    expect(writeConfigSection('plugins', stored, { wechat: { send_host: null }, slack: null }, { mergeEntries: true }))
+      .toEqual({ wechat: { enabled: true }, mail: { enabled: true } })
+  })
+
+  it('an entry that is not an object, sent or stored, is replaced as sent', () => {
+    expect(writeConfigSection('stt_corrections', { x: ['a'], y: ['b'] }, { x: ['c'] }, { mergeEntries: true })).toEqual({ x: ['c'], y: ['b'] })
+    expect(writeConfigSection('plugins', { x: 'broken' }, { x: { enabled: true } }, { mergeEntries: true })).toEqual({ x: { enabled: true } })
+  })
+
+  it('without it (a page editor, an in-process read-modify-write) a map is still the map sent', () => {
+    expect(writeConfigSection('plugins', { a: { x: 1 }, b: { x: 2 } }, { a: { x: 1 } })).toEqual({ a: { x: 1 } })
+    expect(writeConfigSection('plugins', { a: { x: 1 } }, { a: { y: 1 } }, { wholeSections: true, mergeEntries: true })).toEqual({ a: { y: 1 } })
+  })
+
+  it('a merge section and a non-object section are unchanged by it', () => {
+    expect(writeConfigSection('session', { a: 1, b: { c: 1 } }, { b: { d: 1 } }, { mergeEntries: true })).toEqual({ a: 1, b: { d: 1 } })
+    expect(writeConfigSection('api_keys', [{ id: 'x' }], [], { mergeEntries: true })).toEqual([])
+  })
+
+  it('a `__proto__` entry stays an own key', () => {
+    const sent = JSON.parse('{"__proto__": {"polluted": true}}') as Record<string, unknown>
+    const out = writeConfigSection('plugins', { a: { x: 1 } }, sent, { mergeEntries: true }) as Record<string, unknown>
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype)
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+    expect(Object.hasOwn(out, '__proto__')).toBe(true)
+  })
+})

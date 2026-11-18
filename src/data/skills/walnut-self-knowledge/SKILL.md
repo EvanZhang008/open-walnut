@@ -55,7 +55,7 @@ Use the current tool schema for exact arguments. This skill explains decisions, 
 
 ## Change settings
 
-- `PUT /api/config` with one section (`{"session": {"reply_language": "en"}}`) changes only the keys you send in it: keys you leave out are kept, a key sent as `null` is removed (except `approvals.ask_me`, which only takes true or false), and an object one level down (`session.turn_retry`) is replaced whole. Sections that are lists of named entries (`hosts`, `providers`, `plugins`, `engines` and the like) are replaced by what you send, so read the section first and send it back whole with your change.
+- `PUT /api/config` with one section (`{"session": {"reply_language": "en"}}`) changes only the keys you send in it: keys you leave out are kept, a key sent as `null` is removed (except `approvals.ask_me`, which only takes true or false), and an object one level down (`session.turn_retry`) is replaced whole. Sections that are maps of named entries (`hosts`, `providers`, `plugins`, `engines` and the like) merge one level deeper: an entry you leave out is kept, the keys you send into an entry change only those keys, and `null` removes a key or a whole entry (`{"plugins": {"wechat": {"send_host": null}}}`). A plugin's own settings go through `plugin_settings_set`.
 
 ## Where to get facts
 
