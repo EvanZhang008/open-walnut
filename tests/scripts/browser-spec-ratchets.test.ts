@@ -1359,6 +1359,8 @@ describe('a test that loads a page again after it opened full screen or a split 
     // The Files view that comes back holds what they check: the recent files, a
     // replayed draft, the newer words a reload must bring back.
     'file-doc-bar.spec.ts': ['nothing open lists the files read last', 'a draft replayed on open reaches disk on its own', 'an older write landing keeps the newer', 'text typed and reloaded at once comes back'],
+    // A previewed page's storage after a reload of Walnut is the check, read in the Files view that comes back.
+    'file-html-preview-storage.spec.ts': ['every storage API keeps what the page wrote'],
     'first-use-files.spec.ts': ['Files starts at the host home and preserves a chosen file across reopening'],
     // The full screen Source view and the reading mode that come back after a reload are the check.
     'files-changed-ask-here.spec.ts': ['Files: saved questions in the full screen Source view survive reloads', 'Files: an unscrolled reading mode is kept immediately across reloads'],

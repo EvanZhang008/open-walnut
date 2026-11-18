@@ -83,10 +83,12 @@ const ENSURE_SITES: Record<string, Site> = {
 function walk(dir: string, out: string[] = []): string[] {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, e.name)
-    if (e.isDirectory()) { if (e.name !== 'node_modules') walk(p, out) } else if (/\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name)) out.push(p)
+    if (e.isDirectory()) { if (e.name !== 'node_modules') walk(p, out) } else if (/\.tsx?$/.test(e.name) && !/\.(?:test|generated)\.tsx?$/.test(e.name)) out.push(p)
   }
   return out
 }
+
+// A `*.generated.ts` file is a bundled third-party library (scripts/build-*.mjs), never a task write.
 
 /** The file without its comment lines (a doc line quoting a write is no write). */
 function code(text: string): string {
