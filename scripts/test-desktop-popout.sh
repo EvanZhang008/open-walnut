@@ -56,3 +56,5 @@ PY
 codesign --force --sign - "$APP"
 "$APP/Contents/MacOS/popout-tests" | tee "$OUT/result.log"
 grep -q 'PopoutWindowTests: .* passed' "$OUT/result.log"
+# The page a recycle replaces, in a pop-out or the main window, ends with its graphics memory.
+bash "$ROOT/scripts/test-desktop-replaced-page.sh"

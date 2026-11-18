@@ -5,6 +5,11 @@
  * where one may already be must hand the old one to WebContentProcess.retireReplacedPage, which
  * unloads its page and ends its process once the new page has loaded.
  *
+ * 2026-11-18: ending the old page with WebKit's `_killWebContentProcess` left the process running
+ * (logged as "ended") until it died hours later in a batch, and kernel_task kept its graphics
+ * memory. The retire closes the page (`_close`) and reports what really happened; the native test
+ * tests/desktop/replaced-page-process-tests.swift proves the process ends.
+ *
  * Enumerated from the source: every `contentView = <web view>` in the Mac app, by the function it
  * sits in. A new place that swaps a web view in fails here until it retires the old one, or is
  * listed below as one that only ever fills a new window.
@@ -56,5 +61,20 @@ describe('a web view the Mac app replaces is retired', () => {
   it('the list names only functions that exist', () => {
     const names = new Set(sites().map((s) => `${s.file}:${s.fn}`))
     expect(Object.keys(NEW_WINDOW_ONLY).filter((n) => !names.has(n))).toEqual([])
+  })
+})
+
+describe('a retired page is closed, never "killed"', () => {
+  const stripped = (file: string) => fs.readFileSync(path.join(ROOT, file), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+
+  it('no Mac app source calls _killWebContentProcess, which leaves the process running', () => {
+    expect(swiftFiles.filter((f) => stripped(f).includes('_killWebContentProcess'))).toEqual([])
+  })
+
+  it('the retire closes the page and reports the checked outcome', () => {
+    const src = stripped('desktop/WebContentProcess.swift')
+    const retire = src.slice(src.indexOf('static func retireReplacedPage'), src.indexOf('static func close('))
+    expect(retire).toContain('close(old)')
+    expect(retire).toContain('endIfStillRunning(')
   })
 })
