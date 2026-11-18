@@ -6,6 +6,266 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.35] - 2026-11-18
+
+### Added
+
+- A calm change card that says where a deploy stands, and one pull request status per row
+- A task's change links show their review and deploy status, behind an experiment
+- Every chat is grey and quiet, one palette for all of them
+- A session's LINKS list is the task's whole set of three, and plugins add link kinds
+- Quiet holds every notice outside the window; Walnut Health looks into its own errors
+- Tag a task's model requests with its project
+- Main and every VP tell the user a team's conclusion only once checked at its source
+- The Draw dialog opens as wide and tall as a session window in full screen
+- Open in Chrome from the task's Browser view, live, idle or replay
+- One issue is one task, and its steps stay in it
+- Every router finds an item's owner by one search process, with no VP tier
+- Glass overlays and switches, and every calendar setting is kept
+- The lock on a kept row unlocks its session panel, and locks it again
+- One rule for every notice; Walnut's own errors go to Walnut Health
+- Find a work's owner by search and meaning, never by the format of what a message names
+- Each open logs when its history is current
+- Desktop-calendar style grid and new-item popover, Event by default
+- Each drawing has one task and session for its assistant, and Make a diagram and Text to diagram go there in the App
+- The Agenda and the Scratchpad are two side bars side by side, each its own width
+- A route line says which router processed an item, then what it decided
+- A session on another machine uploads a file from the browser's machine with the person's yes, and its tabs are its task's
+- Every plugin is configurable by talking with an AI
+- Hand work by deliverable, and check it on the server
+- The assistant's empty chat says what it does, with drawing asks, not Walnut's general starters
+- An assistant beside the canvas that changes this drawing
+- The toolbar shows each tool's letter shortcut, and More tools opens from three dots
+- Talk to the router, the CEO or any VP about a mail, from its reader
+- Import Notion pages into Walnut notes, keep them current, and organize them with undo
+- Full screen, close on outside click, real names, libraries, AI diagrams in the canvas, apps in their own window
+- Chat messages go through the same router as mail
+- Three pages side by side, every column with its sibling, closes that close one page
+- A Tree Mode send's framing folds under one marker and names the question's id
+- Host alerts are notifications, and every pop-up sits top center at one width
+- A Walnut subagent works like a native one
+- An editable whiteboard app the agent can see and edit, an App beside a session, and open/recent/pinned apps
+- Subagent_run takes a host and runs the step there in a copy of the caller's work
+- Replay as picture, filmstrip, time ruler and an always-visible step list
+- The session note is the top band of the composer card
+- A temp-dir draft path handed to the user or a lead gets a note
+- Adopt existing hosts onto the network link
+- Share dictation across text fields and wait before saving
+- An Org node keeps the panels locked on Home beside its chat
+- Trigger_update changes a trigger in place, and every fix hint points to it
+
+### Fixed
+
+- The card's title and a step's result drop the native title that only repeats them; the in-place peek shows cut-off text
+- The preview state cap reads as a byte size, so the window-number list drops it
+- The quiet ratchets know the one exit and the push gate; Health host rows use the shared failure text
+- A reconnect or a restart of the server goes on sending each host its notes' changes
+- The shortcut finds a framed sign-in, and the toolbar count counts a login saved twice once
+- A slow host link answers a chat's full read with its tail, and the turn backfill finds its window without a search
+- A closed task's change is followed while it still deploys, for up to a week
+- The Open in Chrome error line carries no title repeating its own text
+- A session's link through the v1 route is the agent's too, and a person's own add takes a link back
+- A link tag a session writes through task_update is the agent's, so a later LINKS list may drop it
+- A pick in an agent's tab and in a site's framed sign-in fills; a login saved twice is one row
+- A windowed fork is its own window, never [ancestors][hole][window]
+- A column back on Home after many turns cuts to the live end once they are drawn
+- The change pill's handlers use useLeanCallback, so the lean-callback ratchet holds
+- A stale tab layout never reopens a deleted note, and a save never recreates one
+- Every Comment works on an HTML preview, and the card the pointer shows goes again
+- The card shows a commit's short hash, the whole one on hover
+- The newest read of the experiment switches always wins
+- The browser baseline reruns new failures up to its cap, shard by shard, and fails on tests a timed-out shard never finished
+- On a phone the model's percentage gives way before Note and btw fold into the + menu
+- The browser picker beside Open in Chrome uses the defined muted text color
+- A chat opened from another page reads its first screen once, and a deep link to Home counts as Home
+- Guards and pinned tests follow the call id, the drawing assistant, the calendar form and the workspace notice
+- Chrome never shows "Leave site?" for an agent's leave, so the agent window stays where it was
+- One fire reaching a daemon under several host names is delivered once
+- A rewritten HTML file keeps the reader's tab, picks, scroll and the page's own state
+- An event created once the calendars arrive still waits for dictation
+- A stale IndexedDB copy no longer hides the click's fresh screen
+- A step's answer says whether its hidden page runs, and a wake that cannot help lets go
+- The compare picker searches in a plain field; failure evidence is taken at the failure
+- Answers_ask on an ask only the user approves stands on his own words in the record
+- A changed notes list goes to each host as its changes, not whole
+- A close shuts a popup window the agent's page opened (carried into agent-leave.ts)
+- A page's "Leave site?" and other dialogs reach the agent, which answers them
+- The workspace-remade notice rides the messages it comes with, so the wake guard is green
+- The kept-row lock toggle's callbacks keep no render alive
+- A database found only as a block comes back by its id
+- A covered agent window's page keeps running while an agent works in it
+- A replaced Codex thread's old id answers reads for a moment after the switch
+- With approvals off, an upload from the person's computer goes ahead; only a payment asks
+- A finished owner with no session is reopened before it starts with the item; no VP tier in router pages
+- An open's refresh never takes away shown rows, and Load earlier stays clickable while it runs
+- A landed clone counts only against the main working tree's checked-out branch
+- Judge a landed clone only against its landing branch, by exact patch
+- A clone whose commits were landed under new hashes can be swept
+- The started move of an import says it never writes over a held wait
+- A run marked resumable never holds a daemon update
+- A link written before its page became a folder note leads to it
+- The compare pick pops once the keyboard is down; two CI UI waits follow the work
+- Main's guard and pinned-path tests follow the routing and calendar changes
+- The agent window is never a window the person uses, and hides during a screen share
+- A surface asking by message id alone finds the item's route; RouteLine keeps no render alive
+- The current row speaks only for its own open; an older-shape view is never kept
+- A parse change no longer leaves every chat without a first screen
+- A panel left open beside a VP, locked or not, is there again when the user comes back
+- A plugin App is pinned on the sidebar only when the person pins it
+- A remote host's sessions keep a first screen for as long as the store keeps views
+- A code block in a shrink-to-fit bubble no longer pulses its width
+- The organize plan fits one AI request for a big import
+- A bundle's daemon version sidecar is read once a process
+- A transcript over the read ceiling grows by its new bytes, not a 4 MB window a change
+- A page whose note a restart cut off keeps its path
+- An older page starts no window that would end past its budget
+- A clean turn end handed back by a session snapshot logs as routine, not an out-of-band warn
+- A chat's first screen takes a connection kept for it
+- A remote session's first screen no longer waits behind background refreshes
+- No pipe into head under errexit and pipefail
+- A woken task whose workspace a cleanup removed runs in it made again
+- A diagram ask reaches the drawing it was made on, once, after the file holds the canvas
+- A read that failed never answers as an empty conversation
+- A failed request is retried or logged, never a raw card; drafts saves queue on a busy lock
+- A held step from another machine is not cut at 20 s, a missing file is refused, and one hung step never wedges its tab
+- The machine-fault report carries a call id; the log-level test reads the kinds list
+- A passing notice outlasts a UI test's slow tap; routine rows hold still before a tap
+- Request paths read only the known account name; keep-awake offers no line without one
+- Every reader of the account name asks the passwd entry
+- A same-size change inside one clock tick is seen, not kept stale
+- A task with a session is never Not started; imports are filed as started and titled by their prompt
+- An older page of a large session goes straight to its windows
+- A line the CLI files for a setting Walnut changed is nobody's words
+- Every app the person opened keeps its sidebar row after they leave it, a hidden one too
+- The assistant's callbacks hold no render (lean callback and a module-level launch adjuster)
+- A Home column behind another page makes its full history read once Home shows it
+- The one-turn model counts only a turn after the switch, and keeps a model moved elsewhere
+- A model Walnut or a lead switched to holds for one turn, then the session goes back to its own
+- A needs report brings a parked task back to Needs you
+- An older transcript page of a large remote session answers within its deadline
+- Task_list's by_meaning leaves out Main and the VPs, which own no deliverable
+- The machine-fault notice rides the next turn, and LinkFailureKind keeps its literal type
+- A cold read's turn backfill reads at most one older window
+- Only a task's own lead settles what waits on the user with a reason
+- A task still waiting on the user cannot be completed
+- The idle compaction line's two new callbacks keep no render alive
+- The scope check holds a target's own answers and earlier refs, and reads fewer look-alikes
+- A renamed drawing keeps its assistant conversation, and Escape in the chat returns to the canvas
+- The assistant's shown choice is a key of the App place, as every workspace view choice is
+- Open in new window no longer shows Finder's -50 dialog in the Mac app
+- A panel locked beside one node stands only beside that node
+- A read probe never closes a host network link this Mac is still sending on
+- The workflow read warns of a timeout only when it really timed out
+- A long chat's turn backfill reads only the bytes before the tail it holds
+- A long chat's full read opens its rows a step a frame
+- Every pop-up sits bottom left beside the rail, stacking upward
+- A lead off its project's default host starts its workers on that host
+- A browser under automation never sends as the person
+- Shared mics keep a phone-sized target, and history inserts only into a field the user chose
+- A lost mouse release no longer stops rows widening, and the peek placeholder copies nothing of its row
+- A check the machine failed wakes no session and never counts toward the stop
+- Scan release assets on Linux, unpacking the Mac app's .dmg with 7-Zip
+- A short term in a binary is measured by its letters, not the bytes it spans
+- An opened compaction run stays open when its saved rows replace it; the idle setting keeps what it said
+- Meet the deep test's guards
+- A message a session sends another task is judged for the reply language too
+- A letter to the person says it was sent, so the router does not doubt a not_routed status
+- A press on a menu item never scrolls its menu, so a clipped menu's row gets its click
+- A long press waits for its element to hold still; a state read after typing waits for it
+- IsoWeekKey takes its time zone as an option, not a positional flag
+- A typed field is read by waiting for its value; the compare pick drops the search's focus
+- A folder recorded before any start goes only to a host that has it
+- Hosts.run reaches every host through its link, so hosts on the host network work
+- The popovers above the composer stop at the window's top
+- A cut name inside a sentence opens the block that holds it, not an inline span
+- The web build gets a 4 GB heap wherever it starts; check-publish keeps 20 MB under the limit and refuses copies
+- Record recovered private copies relative to the resolved data folder
+- The boot draws in slices and lays nothing out mid-render
+- Another writer's value in storage is storage's again, and a restored column count gets its width when none is kept
+- The drawings body funnel hands a link failure to the app handler; the pop-out reads its start once
+- Pack the data repo's loose objects between weekly gcs
+- Built-in plugins ship no bundle of their own, so the npm package holds each server bundle once per entry
+- The low-disk alarm files a task beside its card
+- The editor's Mermaid entry stays hidden; its own menu item rule had won the cascade
+- The mic on every box a person writes in, the library store lock listed, the pop-out spec keeps its prefs
+- A pop-out window of one app loads only that app and shows no launch logo
+- The web build leaves out code Walnut never reaches, so Node no longer runs out of memory
+- The chat-source land keeps the deep test's guards
+- A log line another alarm judges never rings the log alarms
+- A host_exec job outlives the daemon that ran it
+- A send's status changes read the chat's supervision once
+- A local session dials the local daemon where it serves now
+- A send reads its chat once a moment; the first Cmd+N runs warm code; builds yield the CPU
+- The agent tab's pill moves out of the agent's way
+- A box that mounts following its end keeps the reading place restored in it
+- A stopped subagent holds its slot until its session is gone
+- A view switch keeps the reader's line in the new width; specs follow the one-page close
+- The compare picker drops its bound search; a pick lowers the keyboard and pops
+- The compare picker pops once its search has gone away; the purge test waits out URLCache
+- Six intermittent iOS test failures, by cause
+- A pick made while the compare picker searches pops once the search has ended
+- A Claude subagent given a model that does not exist fails at once
+- Tree Mode's split keeps no render alive through its handlers
+- The subagent smoke runs under bun, reads its caller's session, and never takes an end by reading it first
+- A release Mac app lists its Spotlight actions under the module its binary holds
+- An Approve this phone cannot use reads as a button, on one line
+- Home stops redrawing for other tasks' updates; routine pushes need no read
+- A Walnut subagent outlives the server and always tells its caller
+- The agent cursor stays 40 s after the last step, not 10
+- Try a host-network machine every minute or two, not on the SSH backoff
+- The notice stack is 440px wide, so an approval's title reads in two lines
+- Load the link layer lazily from the same-daemon record
+- The approval sheet's reason and end lines carry their own identifier, so a test reads their words
+- A wait-until wake says change the trigger in place, not delete and arm again
+- The web build resolves Excalidraw under Node, and three guards hold again
+- The shared upload retry loads the socket client only while an upload waits
+- The session note editor's thin scrollbar is Firefox-only
+- The field rehearsal holds two runners on a push, as before its split
+- A subagent's session reads no open items of its own
+- The session note's finish and collapse and the reading split's resize are lean callbacks
+- Cover pushed native composers and wire save test router
+- Keep same-daemon lookups off the connect path
+- Subagent_run takes a cwd, and a file named by two paths comes back once
+- A new item keeps its input line on a short or cut title; seen stamps never stay in the future
+- An item the script keeps reporting is never told twice
+- The Org page's open-a-task handler is a lean callback, so OrgPage stays at its pin of 17
+- Approve and Deny always come together, and an ended request says so
+- The work-place test and the skill's op table follow the Write|Bash note and open_items tmp_paths
+- The reading split keeps its top line through fullscreen and every resize; the divider is a grip band
+- List the widened hover row in the corner, visibility and CSS-variable guards
+- Count only real relay refusals, one line per looping caller
+- The spawn-window barrier test waits on the spawn, not a 1 s clock
+- The Home task panel's search stays readable; New task and Display fold to icons when the row is tight
+- A session lookup never rebuilds a record from a transcript
+- Settings, Your browsers keeps no stale read error once the list reads again
+- A write that changes nothing leaves config.yaml alone
+- A daemon update hold asked again every minute warns once, not at every ask
+- Editor specs follow prosemirror-view 1.42, and Note and btw take a finger on a phone
+- A pending move says who asked and why, and keeps the session's model picks
+- Stop three log-spike alarms at their source
+- The iOS UI tests run in six shards, so the longest fits its step again
+- The Linux field rehearsal runs its start points in three legs
+- A task clicked on the Org page opens on the Org page; every other page still opens it on Home
+- Aliases of one daemon push one armed set
+- The agent cursor goes when the agent stops; Settings shows each browser's status
+- Keep managed update deferrals quiet and retry automatically
+- A page keeps what it wrote when the browser's storage drops the write
+- Attachment uploads wait out a dropped connection and retry by themselves
+- The own-job check expands $HOME with a replacer function, not a computed string
+- A plugin source that changes while it is copied is copied again, not a failed load
+- Triage large messages from bounded plain-text evidence
+- Widen whole hovered cards without changing row height
+- The check before a push of main tries a failed read of GitHub again
+- The Org page's locked dock keeps the lean callback pin and names why its label does not peek
+- Trigger_update is a watch-script change, not a message card
+- A session's own background job needs no trigger; trigger_create warns on one
+- Type sharp one way that holds under 0.34 and 0.35
+- A failing plugin sync logs one warn per streak, not one a minute
+- Zod 4.6.7 with the rules Walnut's schemas and saved data rely on
+- Keep zod on 4.3.x, whose string rules the stores rely on
+- Images on sharp 0.35.5, audio capture on ws 8.21.0
+- Patch high and critical advisories in the lockfiles
+
 ## [0.6.34] - 2026-11-17
 
 ### Added
