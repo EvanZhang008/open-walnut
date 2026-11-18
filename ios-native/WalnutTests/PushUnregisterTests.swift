@@ -162,7 +162,7 @@ final class PushUnregisterTests: XCTestCase {
         let source = try String(contentsOf: URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Walnut/Stores/ConnectionStore.swift"), encoding: .utf8)
-        let body = try XCTUnwrap(source.components(separatedBy: "func disconnect() {").dropFirst().first)
+        let body = try XCTUnwrap(source.components(separatedBy: "func disconnect(").dropFirst().first)
         let ask = try XCTUnwrap(body.range(of: "PushRegistration.shared.unregisterFromServer()"))
         let clear = try XCTUnwrap(body.range(of: "AppConfig.clear()"))
         XCTAssertLessThan(ask.lowerBound, clear.lowerBound)

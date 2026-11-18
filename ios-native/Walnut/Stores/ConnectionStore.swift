@@ -20,6 +20,12 @@ final class ConnectionStore {
     var serverURL: String = AppConfig.serverURL?.absoluteString ?? ""
     var deviceName: String = AppConfig.deviceName ?? ""
     var status: ServerStatus?
+    /// Set when this phone was signed out because the server removed it (a confirmed
+    /// 401): the pairing screen says so once, instead of a silent return to setup.
+    var removedNotice: String?
+    /// The saved logins the pairing screen lists (`SavedLogins`). Read when that screen
+    /// appears (`loadSavedLogins`) and after every change here, never per keystroke or request.
+    private(set) var savedLogins: [SavedLogin] = []
     /// false only after two consecutive REST transport failures.
     var online = true
 
@@ -83,20 +89,55 @@ final class ConnectionStore {
             AppLog.info("auth", "device token refused on one route; switched to another", [:])
         } else if revoked {
             AppLog.error("auth", "device token confirmed revoked — returning to setup", [:])
-            disconnect()
+            disconnect(removedByServer: true)
         } else {
             AppLog.info("auth", "ignored transient 401 — token still valid", [:])
         }
     }
 
     /// Setup flow: probe /status with the candidate URL + token, persist on success.
-    func connect(serverURL rawURL: String, token: String, deviceName name: String?) async throws {
+    ///
+    /// `routes`: a saved login's known routes (`reconnect`), kept so the phone can move
+    /// to another of them before the server has listed its routes again.
+    ///
+    /// `instance`: what the box at `rawURL` already named itself (a reconnect probed it);
+    /// otherwise it is asked alongside the status check, without the token.
+    func connect(
+        serverURL rawURL: String, token: String, deviceName name: String?, routes: [ServerRoute] = [],
+        instance knownInstance: String? = nil
+    ) async throws {
         // A real server never runs on the demo's pinned clock (Debug builds only),
         // whatever left the pin set.
-        if !DemoMode.isDemoURL(rawURL) { AppClock.clearDemoPin() }
+        let isDemo = DemoMode.isDemoURL(rawURL)
+        if !isDemo { AppClock.clearDemoPin() }
         let started = Date()
-        let probed = try await api.testStatus(serverURL: rawURL, token: token)
+        let identity: Task<ProbeOutcome, Never>? = isDemo || knownInstance != nil
+            ? nil : Task { await InstanceProbe.probe(.custom(rawURL)) }
+        let probed: ServerStatus
+        do {
+            probed = try await api.testStatus(serverURL: rawURL, token: token)
+        } catch {
+            identity?.cancel()
+            throw error
+        }
         AppConfig.save(serverURL: rawURL, token: token, deviceName: name)
+        if !routes.isEmpty {
+            // The saved routes as they were (the user's own typed ones included), with the
+            // origin just used added when it is not one of them.
+            var kept = routes
+            if !kept.contains(where: { ServerRoute.sameOrigin($0.origin, rawURL) }) { kept.insert(.custom(rawURL), at: 0) }
+            AppConfig.storeRoutes(AppConfig.ordered(kept), anchor: rawURL)
+        }
+        // Every pairing is remembered from its first minute, so Disconnect, a crash or a
+        // confirmed revocation all find it in the list (`SavedLogins`). The box's own name
+        // for itself is what tells it from another Walnut at the same LAN address.
+        if !isDemo {
+            var instance = knownInstance
+            if instance == nil, case let .ok(named, _)? = await identity?.value { instance = named }
+            SavedLogins.remember(
+                serverURL: rawURL, routes: AppConfig.routes, token: token, deviceName: name, instance: instance)
+        }
+        removedNotice = nil
         routing.reset()
         status = probed
         self.serverURL = AppConfig.serverURL?.absoluteString ?? rawURL
@@ -210,7 +251,82 @@ final class ConnectionStore {
         }
     }
 
-    /// Wipe the keychain token + prefs and return to setup.
+    /// What a tap on a saved login came to.
+    enum ReconnectOutcome: Equatable {
+        case connected
+        /// A route whose box named itself as this Walnut refused the token: the server
+        /// removed this phone.
+        case removedByServer
+        /// Refused only where the box never said who it is (a server older than
+        /// `/api/v1/instance`): maybe removed, maybe another box. Nothing is marked.
+        case refused
+        /// No route answered (the Walnut is off, or this phone cannot reach it now).
+        case unreachable(String)
+    }
+
+    /// Sign in again with a saved login. Identity before credential: every route is first
+    /// asked who is there, without the token (`RouteCoordinator.probeAll`), and the token goes
+    /// only to a route that named itself as this Walnut (`ReconnectPlan`). One pass, no retry
+    /// loop: a token refused there is marked, and never tried again on its own.
+    func reconnect(_ login: SavedLogin) async -> ReconnectOutcome {
+        let probes = await RouteCoordinator.probeAll(login.candidateRoutes) { await InstanceProbe.probe($0) }
+        var refusedVerified = false
+        var refusedUnverified = false
+        var lastError: Error?
+        for route in ReconnectPlan.routes(for: login, probes: probes) {
+            var named: String?
+            if case let .ok(instance, _)? = probes[route.normalizedOrigin] { named = instance }
+            do {
+                try await connect(
+                    serverURL: route.origin, token: login.token, deviceName: login.deviceName, routes: login.routes,
+                    instance: named)
+                return .connected
+            } catch APIError.unauthorized {
+                if ReconnectPlan.refusalIsVerified(route) { refusedVerified = true } else { refusedUnverified = true }
+            } catch {
+                lastError = error
+            }
+        }
+        if refusedUnverified, !refusedVerified { return .refused }
+        if refusedVerified {
+            SavedLogins.markRemovedByServer(id: login.id)
+            refreshSavedLogins()
+            AppLog.warn("auth", "saved login refused by its server", ["routes": String(login.candidateRoutes.count)])
+            return .removedByServer
+        }
+        return .unreachable(lastError?.localizedDescription ?? "")
+    }
+
+    /// When the pairing screen appears. Off the main thread: a cold launch straight onto it
+    /// meets securityd at its busiest, and the read can take seconds.
+    func loadSavedLogins() {
+        Task {
+            let list = await Task.detached(priority: .userInitiated) { SavedLogins.all() }.value
+            savedLogins = list
+        }
+    }
+
+    /// After a change the person just made (Disconnect, Forget Login, a refusal): read at
+    /// once, so the screen it lands on already shows the list instead of filling in late.
+    private func refreshSavedLogins() {
+        savedLogins = SavedLogins.all()
+    }
+
+    func forgetSavedLogin(_ login: SavedLogin) {
+        SavedLogins.forget(id: login.id)
+        refreshSavedLogins()
+    }
+
+    /// The words for a phone the server removed (the console's Remove signs a phone out
+    /// of every way at once, so a new QR code is the only way back).
+    static func removedMessage(_ title: String) -> String {
+        "This phone was removed from \(title). Its saved login no longer works: scan a new QR code from its console to connect."
+    }
+
+    /// Return to setup, wiping the cached data; the login itself is KEPT in
+    /// `SavedLogins` so a tap reconnects, unless `forgetLogin` (Disconnect and
+    /// Forget Login). `removedByServer`: the token was refused, so the kept login
+    /// is marked and the pairing screen says why.
     ///
     /// Disconnect must TEAR DOWN every other subsystem too, not just clear this
     /// store: ChatStore's SSE stream, an open session stream, and the recovery
@@ -224,9 +340,20 @@ final class ConnectionStore {
     ///
     /// `DiskCache.clearAll()` is a recursive directory delete — it now hops to
     /// the cache's own IO queue instead of running on the MainActor here.
-    func disconnect() {
+    func disconnect(forgetLogin: Bool = false, removedByServer: Bool = false) {
         probeTask?.cancel()
         probeTask = nil
+        // Kept (or dropped) before anything is cleared: this is the only copy of the token.
+        if forgetLogin {
+            SavedLogins.forgetCurrentPairing()
+            removedNotice = nil
+        } else if !DemoMode.isActive {
+            let kept = SavedLogins.rememberCurrentPairing(removedByServer: removedByServer)
+            // Said only when there was a login to keep: a 401 with no token left to send is
+            // not the server removing the phone.
+            removedNotice = removedByServer ? kept.map { Self.removedMessage($0.title) } : nil
+        }
+        refreshSavedLogins()
         // First, while the pairing still exists: the server is asked (in the
         // background, under a short deadline) to drop this install's push token,
         // and APNs delivery to this install stops.
@@ -246,6 +373,9 @@ final class ConnectionStore {
         status = nil
         consecutiveFailures = 0
         online = true
+        AppLog.info("auth", "disconnected", [
+            "forgotLogin": forgetLogin ? "true" : "false", "removedByServer": removedByServer ? "true" : "false",
+        ])
         // This store itself must stay live: SetupView drives connect() through
         // it, and the fan-out above just told every participant (us included)
         // to stand down.

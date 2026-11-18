@@ -95,26 +95,33 @@ struct SettingsView: View {
                 }
             }
             .confirmationDialog(
-                "Disconnect from this server?",
+                "Disconnect from this Walnut?",
                 isPresented: $showDisconnectConfirm,
                 titleVisibility: .visible
             ) {
-                Button("Disconnect", role: .destructive) {
+                Button("Disconnect") {
                     chat.closeStream()
                     connection.disconnect()
                 }
+                .accessibilityIdentifier("settings.disconnect.keepLogin")
+                Button("Disconnect and Forget Login", role: .destructive) {
+                    chat.closeStream()
+                    connection.disconnect(forgetLogin: true)
+                }
+                .accessibilityIdentifier("settings.disconnect.forgetLogin")
+                Button("Cancel", role: .cancel) {}
             } message: {
                 Text(Self.disconnectMessage)
             }
         }
     }
 
-    /// What Disconnect does, said before it does it. The last sentence is the
-    /// one limit: Disconnect asks the server to stop notifying this phone, and a
-    /// server that cannot be reached at that moment never hears it. The app keeps
-    /// no credential to try again later, by design, so revoking the phone on the
-    /// server is what removes the registration.
-    static let disconnectMessage = "Removes the server address and device token, and erases what Walnut keeps on this phone: drafts, unsent messages, downloaded images, voice recordings and logs. If the server can't be reached right now, it keeps this phone's notification registration until you revoke the phone in the Devices section of your Walnut console's Settings."
+    /// What Disconnect does, said before it does it. Disconnect keeps the login
+    /// (`SavedLogins`): the pairing screen reconnects with one tap, no QR code. Only
+    /// "Forget Login" deletes it, and only the console's Remove signs the phone out on
+    /// the server. The last sentence is the one limit: Disconnect asks the server to stop
+    /// notifying this phone, and a server that cannot be reached then never hears it.
+    static let disconnectMessage = "Its login stays saved on this phone: reconnect with one tap, no QR code. Drafts, unsent messages, downloaded images, voice recordings and logs on this phone are erased. Forget Login also deletes the saved login. If the server can't be reached now, it keeps this phone's notifications until you reconnect or Remove the phone in its console."
 
     /// The Address row's value. The demo is not a server, so its placeholder
     /// address is never shown as one.

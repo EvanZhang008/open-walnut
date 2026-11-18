@@ -104,6 +104,14 @@ enum LocalDataReset {
     }
     #endif
 
+    /// The preferences that are not this pairing's data and outlive Disconnect: the install
+    /// marker (without it the next launch reads as a fresh install and deletes the Keychain's
+    /// saved logins, `InstallMarker`), and the saved logins' own copy on a build whose Keychain
+    /// is unavailable (`KeychainHelper` falls back to preferences).
+    static var keptAcrossErase: [String] {
+        [InstallMarker.key, KeychainHelper.fallbackPrefix + SavedLogins.key]
+    }
+
     /// Erase it all. Returns the top-level names the sweep removed (tests, log).
     ///
     /// `scope` says whose preferences go: `.real` (Disconnect) removes every
@@ -187,6 +195,13 @@ enum LocalDataReset {
         // 5. Every preference, mic route and board filters included. The demo's
         // erase leaves the real app's preferences alone.
         if scope == .real {
+            // Read from the persistent domain only: a launch argument of the same name must
+            // not be written into it.
+            let persistent = locations.defaultsDomain.flatMap { locations.defaults.persistentDomain(forName: $0) }
+            let survivors: [(String, Any)] = keptAcrossErase.compactMap { key in
+                let value = locations.defaultsDomain == nil ? locations.defaults.object(forKey: key) : persistent?[key]
+                return value.map { (key, $0) }
+            }
             if let domain = locations.defaultsDomain {
                 locations.defaults.removePersistentDomain(forName: domain)
             } else {
@@ -194,6 +209,7 @@ enum LocalDataReset {
                     locations.defaults.removeObject(forKey: key)
                 }
             }
+            for (key, value) in survivors { locations.defaults.set(value, forKey: key) }
         }
 
         // 6. Apple Health: stop background delivery and forget every sync

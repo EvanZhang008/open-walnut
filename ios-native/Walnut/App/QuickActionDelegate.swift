@@ -107,6 +107,9 @@ final class QuickActionDelegate: NSObject, UIApplicationDelegate {
                 AppLog.info("launch", "install marker", ["outcome": outcome.rawValue])
             }
         }
+        #if DEBUG
+        SavedLogins.applyFreshArgument()
+        #endif
         // Route notification taps into the letter mailbox. Must happen here:
         // UNUserNotificationCenter drops a cold-launch tap if its delegate isn't
         // set by the time this method returns.

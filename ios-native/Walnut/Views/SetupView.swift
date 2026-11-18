@@ -27,6 +27,7 @@ struct SetupView: View {
             ScrollView {
                 VStack(spacing: 28) {
                     hero
+                    SavedLoginsSection(busy: $busy, alertMessage: $alertMessage)
                     form
                 }
                 .padding(24)
@@ -42,6 +43,13 @@ struct SetupView: View {
             // a tab of the tab view it replaced. A ROOT screen, because those
             // retained tabs can still run their appear hooks after this one.
             .freezeRootScreen("setup")
+            .onAppear { connection.loadSavedLogins() }
+            // Signed out because the server removed this phone: said once, here.
+            .onChange(of: connection.removedNotice, initial: true) { _, notice in
+                guard let notice else { return }
+                alertMessage = notice
+                connection.removedNotice = nil
+            }
             .alert("Walnut", isPresented: .init(
                 get: { alertMessage != nil },
                 set: { if !$0 { alertMessage = nil } }

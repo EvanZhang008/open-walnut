@@ -50,10 +50,12 @@ enum KeychainHelper {
     private static let service = "dev.openwalnut.ios"
     /// UserDefaults key prefix for the fallback store (namespaced to avoid
     /// colliding with the app's other prefs).
-    private static let fallbackPrefix = "walnut.keychainFallback."
+    static let fallbackPrefix = "walnut.keychainFallback."
     #endif
 
-    static func set(_ value: String, forKey key: String) {
+    /// `accessible`: `kSecAttrAccessibleAfterFirstUnlock` by default; a credential that must
+    /// never move to another phone through a backup passes the `ThisDeviceOnly` variant.
+    static func set(_ value: String, forKey key: String, accessible: CFString = kSecAttrAccessibleAfterFirstUnlock) {
         let data = Data(value.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -64,7 +66,7 @@ enum KeychainHelper {
         SecItemDelete(query as CFDictionary)
         var attributes = query
         attributes[kSecValueData as String] = data
-        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        attributes[kSecAttrAccessible as String] = accessible
         let status = SecItemAdd(attributes as CFDictionary, nil)
         if status == errSecSuccess {
             // Keychain took it — clear any stale fallback so reads prefer it.
@@ -100,6 +102,38 @@ enum KeychainHelper {
         }
         // Fall back to the UserDefaults copy written when the Keychain failed.
         return UserDefaults.standard.string(forKey: fallbackPrefix + key)
+    }
+
+    /// What a read found, telling "nothing stored" from "stored but not readable now" (the
+    /// Keychain locked before the first unlock, securityd busy): a caller that rewrites the
+    /// whole value must not treat the second as empty.
+    enum ReadResult: Equatable {
+        case value(String)
+        case missing
+        case unreadable(OSStatus)
+    }
+
+    static func read(_ key: String) -> ReadResult {
+        #if DEBUG
+        keychainReads.withLock { $0 += 1 }
+        #endif
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecSuccess {
+            guard let data = result as? Data, let value = String(data: data, encoding: .utf8) else {
+                return .unreadable(status)
+            }
+            return .value(value)
+        }
+        if let fallback = UserDefaults.standard.string(forKey: fallbackPrefix + key) { return .value(fallback) }
+        return status == errSecItemNotFound || status == errSecMissingEntitlement ? .missing : .unreadable(status)
     }
 
     static func delete(_ key: String) {

@@ -344,7 +344,10 @@ final class RouteCoordinator {
         }
     }
 
-    private nonisolated static func probeAll(
+    /// Every route's unauthenticated identity probe, in parallel, classified against the
+    /// instance each route names. Also used by a saved login's reconnect
+    /// (`ConnectionStore.reconnect`): no token goes anywhere before this says who is there.
+    nonisolated static func probeAll(
         _ routes: [ServerRoute],
         probe: @escaping @Sendable (ServerRoute) async -> ProbeOutcome
     ) async -> [String: ProbeOutcome] {

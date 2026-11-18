@@ -229,7 +229,7 @@ final class DemoPolishTests: XCTestCase {
     /// Disconnect says what it cannot do: an unreachable server keeps its row.
     func testTheDisconnectConfirmationNamesTheUnreachableServerLimit() {
         XCTAssertTrue(SettingsView.disconnectMessage.contains("can't be reached"))
-        XCTAssertTrue(SettingsView.disconnectMessage.contains("revoke the phone"))
+        XCTAssertTrue(SettingsView.disconnectMessage.contains("Remove the phone"))
     }
 
     // MARK: - The calendar in the demo

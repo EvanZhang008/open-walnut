@@ -53,6 +53,12 @@ enum UITestLaunch {
     /// outlive a launch on purpose, and tests reuse one simulator and the same thread ids.
     static let freshDraftArguments = ["-walnut.resetThreadFollowUps", "YES"]
 
+    /// Every launch starts with no saved login (`SavedLogins`): pairing through the setup form
+    /// saves one in the test Keychain namespace, which outlives the app. A test of the list
+    /// across a relaunch passes `keepSavedLoginsArgument` instead.
+    static let freshSavedLoginsArguments = ["-walnut.uiTestFreshSavedLogins", "YES"]
+    static let keepSavedLoginsArgument = "-walnut.uiTestKeepSavedLogins"
+
     /// An app configured to reach nothing, plus whatever this test asked for.
     ///
     /// Not launched yet: a caller may still want to set `launchEnvironment` or take a
@@ -64,8 +70,10 @@ enum UITestLaunch {
         // for one key in the argument domain and make the winner an ordering detail.
         let pinsItsOwnServer = arguments.contains(serverURLArgument)
         let keepsViews = arguments.contains(keepViewsArgument)
+        let keepsLogins = arguments.contains(keepSavedLoginsArgument)
         app.launchArguments =
             (pinsItsOwnServer ? [] : [serverURLArgument, blackholeURL]) + (keepsViews ? [] : freshViewsArguments)
+            + (keepsLogins ? [] : freshSavedLoginsArguments)
             + freshDraftArguments + keychainArguments + silentAudioArguments + arguments
         return app
     }

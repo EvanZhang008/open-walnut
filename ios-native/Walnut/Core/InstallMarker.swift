@@ -4,8 +4,8 @@ import Foundation
 /// token would outlive a deleted Walnut, and a reinstall would find it. Its
 /// preferences are deleted with it. So a marker in the preferences tells a first
 /// launch after an install from every later one, and the first launch of a fresh
-/// install removes what an earlier install left in the Keychain: the token, and
-/// the Apple Health characteristic salt (`HealthCharacteristicSalt`).
+/// install removes what an earlier install left in the Keychain: the token, the
+/// saved logins (`SavedLogins`), and the Apple Health characteristic salt (`HealthCharacteristicSalt`).
 ///
 /// An update keeps the token: the marker is new in this version, so a phone that
 /// updates has no marker yet, but it has its server address, and that is how an
@@ -86,6 +86,7 @@ enum InstallMarker {
     /// left in the Keychain go. A new salt is made the first time Health syncs.
     static func removeKeychainItemsLeftByEarlierInstall() {
         AppConfig.removeTokenLeftByEarlierInstall()
+        SavedLogins.removeAll()
         HealthCharacteristicSalt.shared.delete()
     }
 
