@@ -390,7 +390,10 @@ describe('buildSessionContext (identity note)', () => {
     // handed a payment decision to its lead and closed, leaving nobody to pay once he answered).
     // 11350 → 11450 (2026-11-16) for the safeguard line's order and one-turn rule: a lead moved a task to
     // Sonnet and nothing moved it back, so the task woke on Sonnet hours later.
-    expect(systemPrompt.length).toBeLessThan(11450)
+    // 11450 → 12050 (2026-11-17) for the charter's user's-own-yes rule (approval-kinds.ts): anything that
+    // involves other people, speaks in the user's name or cannot be undone waits for his own yes, whatever
+    // the Approvals switch says (a lead signed him up for a colleague's office hour in his name).
+    expect(systemPrompt.length).toBeLessThan(12050)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {
