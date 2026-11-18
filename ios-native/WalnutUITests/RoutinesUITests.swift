@@ -56,48 +56,22 @@ final class RoutinesUITests: XCTestCase {
         app.tab(.settings).tap()
         let entry = app.buttons["settings.routines"].firstMatch
         // Under the server's sections and Passwords: screens down at the largest text sizes,
-        // where one swipe did not reach it. A drag of part of a screen at a time, so a swipe's
-        // fling never carries it past between two looks.
+        // where one swipe did not reach it.
         _ = entry.waitForExistence(timeout: 5)
-        var drags = 0
-        while !(entry.exists && entry.isHittable), drags < 12 {
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
-                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)))
-            drags += 1
-        }
+        revealInList(app, entry)
         XCTAssertTrue(entry.exists && entry.isHittable, "no Routines row in Settings")
         entry.tap()
         XCTAssertTrue(element(app, "routines.group.global").waitForExistence(timeout: 20), "the routines never loaded")
     }
 
-    /// Scroll a little at a time until the element is above the tab bar (a swipe goes a
-    /// page, which carries what is just above it out of the shot).
-    private func nudge(_ app: XCUIApplication, _ target: XCUIElement) {
-        let bottom = app.tabBars.firstMatch.exists ? app.tabBars.firstMatch.frame.minY : app.frame.maxY
-        var tries = 0
-        while target.exists, target.frame.maxY > bottom - 8, tries < 8 {
-            let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
-            from.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55)))
-            tries += 1
-        }
-    }
-
-    /// Drag a little at a time until the element's top is between `low` and `high` points
-    /// under the navigation bar: clear of the bar, and high enough that what opens under
-    /// it fits above the tab bar (so a check for a jump does not meet the reveal).
-    private func place(_ app: XCUIApplication, _ target: XCUIElement, low: CGFloat = 60, high: CGFloat = 160) {
-        var drags = 0
-        while target.exists, drags < 8 {
+    /// Scroll until the element's top is `low` to `high` points under the navigation bar: clear
+    /// of the bar, and high enough that what opens under it fits above the tab bar (so a check
+    /// for a jump does not meet the reveal). True when it got there.
+    @discardableResult
+    private func place(_ app: XCUIApplication, _ target: XCUIElement, low: CGFloat = 60, high: CGFloat = 160) -> Bool {
+        scrollList(app, target) { frame in
             let bar = app.navigationBars.firstMatch.frame.maxY
-            let y = target.frame.minY
-            if y < bar + low {
-                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
-                    .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.53)))
-            } else if y > bar + high {
-                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.53))
-                    .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)))
-            } else { break }
-            drags += 1
+            return frame.minY >= bar + low && frame.minY <= bar + high ? 0 : bar + (low + high) / 2 - frame.minY
         }
     }
 
@@ -125,13 +99,11 @@ final class RoutinesUITests: XCTestCase {
         add(attachment)
     }
 
-    /// Scroll until the element is on screen (a long list), at most a few pages.
+    /// Scroll until the element is whole between the navigation bar and the tab bar, moving the
+    /// list as little as that takes (`revealInList`); a long list is searched downward, or
+    /// upward with `up`, until the element is built.
     private func reveal(_ app: XCUIApplication, _ target: XCUIElement, up: Bool = false) {
-        var tries = 0
-        while !(target.exists && target.isHittable), tries < 12 {
-            if up { app.swipeDown() } else { app.swipeUp() }
-            tries += 1
-        }
+        revealInList(app, target, up: up)
     }
 
     func testGroupedFirstScreenOpenAndActions() throws {
@@ -257,6 +229,9 @@ final class RoutinesUITests: XCTestCase {
             if said.contains("Ran just now") { break }
         }
         XCTAssertTrue(said.contains("Ran just now"), "Run now never said how the run ended: \"\(said)\"")
+        // The list brings it above the tab bar by itself, a moment after it is said (150 ms, then
+        // an animated scroll): read once it holds still, as `settle` does for Run now above.
+        waitStill(backupOutcome, timeout: 3)
         XCTAssertLessThanOrEqual(backupOutcome.frame.maxY, tabTop(app), "\"Ran just now\" is under the tab bar")
         shot("26-ran-just-now")
         let cleared = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: backupOutcome)
@@ -331,7 +306,7 @@ final class RoutinesUITests: XCTestCase {
         let edit = app.buttons["routines.edit.r-router"]
         let delete = app.buttons["routines.delete.r-router"]
         reveal(app, edit)
-        nudge(app, delete)
+        reveal(app, delete)
         settle()
         XCTAssertTrue(waitToMatch(edit, "isHittable == true"), "Edit is not tappable at this size")
         XCTAssertLessThanOrEqual(delete.frame.maxY, tabTop(app), "Delete is under the tab bar")
@@ -393,7 +368,7 @@ final class RoutinesUITests: XCTestCase {
         let first = history.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "The check failed (exit code 2)")).firstMatch
         let last = history.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "Quiet: the check found nothing")).firstMatch
         XCTAssertTrue(first.exists && last.exists, "the history rows are missing")
-        nudge(app, last)
+        reveal(app, last)
         XCTAssertLessThan(first.frame.minY, last.frame.minY, "the history is not newest first")
         settle()
         shot("11-history-fold-open")
@@ -547,7 +522,7 @@ final class RoutinesUITests: XCTestCase {
         let row = element(app, "routines.row.\(id)")
         reveal(app, row)
         let toggle = app.switches["routines.toggle.\(id)"]
-        nudge(app, toggle)
+        reveal(app, toggle)
         settle()
         let top = row.frame.minY
         XCTAssertEqual(toggle.value as? String, "1")
@@ -577,7 +552,7 @@ final class RoutinesUITests: XCTestCase {
         XCTAssertEqual(store.deleted, [id])
         XCTAssertTrue(row.exists, "the refused delete took the row away")
         XCTAssertTrue(delete.waitForExistence(timeout: 5), "the row is not open again")
-        nudge(app, delete)
+        reveal(app, delete)
         settle()
         shot("28-delete-refused")
         // Dismissed, it goes.
@@ -667,6 +642,13 @@ final class RoutinesUITests: XCTestCase {
         shot("32-task-saved")
     }
 
+    /// A tap where the row is now, as a finger would: `XCUIElement.tap()` first scrolls an element
+    /// it does not call visible, and that scroll read as the app moving the row (2026-11-17, lane
+    /// B: "Scroll element to visible", then the row 327 pt lower). `place` has put it in view.
+    private func tapInPlace(_ row: XCUIElement) {
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.5)).tap()
+    }
+
     /// Opening a row below an open one: the open one closes and the tapped row stays where
     /// it was under the finger; its details then come into view.
     func testTappedRowStaysPut() throws {
@@ -674,23 +656,21 @@ final class RoutinesUITests: XCTestCase {
         openRoutines(app)
         let upper = element(app, "routines.row.r-acme-1")
         reveal(app, upper)
-        nudge(app, upper)
         waitStill(upper)
         upper.tap()
         XCTAssertTrue(app.buttons["routines.edit.r-acme-1"].waitForExistence(timeout: 15), "the tapped row did not open")
         settle()
         let lower = element(app, "routines.row.r-acme-3")
         reveal(app, lower)
-        nudge(app, lower)
         // Clear of the bar, and high enough that its details fit: a row under the bar, or
         // one whose details run under the tab bar, is moved into view once opened, which
         // is the reveal, not the jump this checks for.
-        place(app, lower)
+        XCTAssertTrue(place(app, lower), "the row to tap was not placed under the bar: \(lower.frame)")
         settle()
         XCTAssertTrue(app.buttons["routines.edit.r-acme-1"].exists, "the upper row closed before the tap")
         let before = lower.frame.minY
         shot("33-row-stays-before")
-        lower.tap()
+        tapInPlace(lower)
         // Read as fast as the frames come: no read may find it moved (QA saw one frame off).
         var reads: [CGFloat] = []
         for _ in 0..<6 { reads.append(lower.frame.minY) }
@@ -717,30 +697,26 @@ final class RoutinesUITests: XCTestCase {
         openRoutines(app)
         let tall = element(app, "routines.row.\(RoutineFixtures.tallFailure)")
         reveal(app, tall)
-        nudge(app, tall)
         tall.tap()
         let fullError = element(app, "routines.errorFold.\(RoutineFixtures.tallFailure)")
         XCTAssertTrue(fullError.waitForExistence(timeout: 5), "the long error has no fold")
         reveal(app, fullError)
-        nudge(app, fullError)
         fullError.tap()
         let sends = element(app, "routines.sendsFold.\(RoutineFixtures.tallFailure)")
         reveal(app, sends)
-        nudge(app, sends)
         sends.tap()
         XCTAssertTrue(element(app, "routines.sends.\(RoutineFixtures.tallFailure)").waitForExistence(timeout: 5))
         settle()
         shot("33a-tall-row-open")
         let lower = element(app, "routines.row.r-acme-3")
         reveal(app, lower)
-        nudge(app, lower)
-        place(app, lower)
+        XCTAssertTrue(place(app, lower), "the row to tap was not placed under the bar: \(lower.frame)")
         settle()
         XCTAssertFalse(tall.isHittable, "the tall row's line is on screen: the row tapped is not far below it")
         waitStill(lower)
         let before = lower.frame.minY
         shot("33b-tall-row-before")
-        lower.tap()
+        tapInPlace(lower)
         var reads: [CGFloat] = []
         for _ in 0..<6 { reads.append(lower.frame.minY) }
         // A tap on CI returns only once the app is idle (5.7 s there), so the row's details get the
@@ -848,7 +824,7 @@ final class RoutinesUITests: XCTestCase {
         let row = element(app, "routines.row.r-briefing")
         // The failing routine leads its group: at this size it fills the first screen.
         reveal(app, row)
-        nudge(app, app.switches["routines.toggle.r-briefing"])
+        reveal(app, app.switches["routines.toggle.r-briefing"])
         XCTAssertTrue(row.exists)
         let toggle = app.switches["routines.toggle.r-briefing"]
         XCTAssertTrue(toggle.exists)
@@ -874,7 +850,7 @@ final class RoutinesUITests: XCTestCase {
         let edit = app.buttons["routines.edit.r-router"]
         let delete = app.buttons["routines.delete.r-router"]
         reveal(app, edit)
-        nudge(app, delete)
+        reveal(app, delete)
         settle()
         // Two to a line where two fit, else one each: never three and Delete alone.
         let openTask = app.buttons["routines.openTask.r-router"]
@@ -890,12 +866,10 @@ final class RoutinesUITests: XCTestCase {
         // A long error at this size: its head and a fold, then the whole of it.
         let tall = element(app, "routines.row.\(RoutineFixtures.tallFailure)")
         reveal(app, tall, up: true)
-        nudge(app, tall)
         tall.tap()
         let fold = element(app, "routines.errorFold.\(RoutineFixtures.tallFailure)")
         XCTAssertTrue(fold.waitForExistence(timeout: 5), "a long error is not folded at this size")
         reveal(app, fold)
-        nudge(app, fold)
         settle()
         XCTAssertTrue(tall.isHittable || fold.isHittable)
         shot("25a-ax-long-error")
@@ -916,7 +890,6 @@ final class RoutinesUITests: XCTestCase {
         reveal(app, header)
         let row = element(app, "routines.row.r-acme-1")
         reveal(app, row)
-        nudge(app, row)
         XCTAssertTrue(row.exists, "Acme's routines are not listed")
         // The header clear of the bar: under it the tap went to the bar.
         place(app, header, low: 20, high: 300)
