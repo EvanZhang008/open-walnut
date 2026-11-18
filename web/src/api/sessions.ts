@@ -444,14 +444,17 @@ export interface SessionHistoryPage {
 
 /** One page of history older than `before` (ISO timestamp of the oldest row held),
  *  for a transcript past the full read's byte ceiling. User-initiated, so a slow
- *  remote read is allowed its time; the server bounds it to a few 4 MB windows. */
+ *  remote read is allowed its time; the server bounds it to a few 4 MB windows.
+ *  `beforeId` (that row's msgId) lets the server end the page at the row's place in the
+ *  file, not at its stamp: a row before it stamped later is still older. */
 export async function fetchSessionHistoryBefore(
   sessionId: string,
   before: string,
+  beforeId?: string,
   signal?: AbortSignal,
 ): Promise<SessionHistoryPage> {
   const res = await apiGet<SessionHistoryPage>(
-    `/api/sessions/${sessionId}/history`, { before, turns: '20' }, { signal, timeoutMs: 90_000 },
+    `/api/sessions/${sessionId}/history`, { before, ...(beforeId ? { beforeId } : {}), turns: '20' }, { signal, timeoutMs: 90_000 },
   );
   return { messages: res.messages ?? [], reachedStart: !!res.reachedStart, unavailable: res.unavailable, forkBoundaryIndex: res.forkBoundaryIndex };
 }

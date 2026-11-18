@@ -1692,10 +1692,12 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       }
       try {
         const { readSessionHistoryBefore } = await import('../../core/session-history-pages.js')
+        // The held first row's id: the page ends at its place in the file, not at its stamp.
+        const beforeId = typeof req.query.beforeId === 'string' && req.query.beforeId ? req.query.beforeId : undefined
         const page = await boundHostRead(record.host, () => readSessionHistoryBefore(
           sessionId, record.cwd, record.host, beforeRaw,
-          turnCount > 0 ? { minMessages: 0, minText: turnCount, isText: isMainTurn }
-            : { minMessages: HISTORY_PAGE_MIN_MESSAGES, minText: HISTORY_PAGE_MIN_TEXT, isText: isProseRow },
+          turnCount > 0 ? { minMessages: 0, minText: turnCount, isText: isMainTurn, beforeId }
+            : { minMessages: HISTORY_PAGE_MIN_MESSAGES, minText: HISTORY_PAGE_MIN_TEXT, isText: isProseRow, beforeId },
         ))
         if (!page) {
           res.json({ messages: [], reachedStart: false, unavailable: 'unreadable' })
@@ -1772,7 +1774,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
               // session's ten turns spanned more than 16 MB, so every page load of its (hidden)
               // column pulled four windows, 5 s on the host link, and still fell short. What is
               // older stays one "Load earlier" away (the answer stays windowed).
-              { minMessages: 0, minText: turnCount, isText: isMainTurn, maxWindows: 1 }, history.windowStart)
+              { minMessages: 0, minText: turnCount, isText: isMainTurn, maxWindows: 1, beforeId: history.messages[0]?.msgId }, history.windowStart)
             backfill = { ms: Date.now() - backfillAt, windows: page?.windowsRead ?? 0, messages: page?.messages.length ?? 0 }
             if (page?.messages.length) {
               const keyOf = (m: SessionHistoryMessage) => m.msgId ? `${m.msgId}|${m.timestamp}|${m.role}` : undefined

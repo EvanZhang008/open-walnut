@@ -99,6 +99,13 @@ export function _resetHistoryPagesForTests(): void {
  * twenty minutes). Now it binary-searches the windows by their first timestamp,
  * read from a head of each window, and stops adding windows past the budget once
  * it holds a row; a short page is still a page, and the next one goes on from it.
+ *
+ * Which rows are "older" is decided by their place in the file whenever the caller knows it,
+ * never by their timestamps: file order is not time order (2026-11-18: a compaction's boundary
+ * line stamped 06:39:03 sits before a summary stamped 06:39:00, so a page cut at that summary's
+ * timestamp dropped the boundary, and a refresh took it off the reader's screen). `held` (a tail
+ * window's start) cuts at its byte; `want.beforeId` (the msgId of the held row stamped `before`)
+ * cuts at that row. Only a caller with neither falls back to the timestamp.
  */
 export async function readSessionHistoryBefore(
   sessionId: string,
@@ -109,6 +116,9 @@ export async function readSessionHistoryBefore(
     minMessages: number; minText: number; isText: (m: SessionHistoryMessage) => boolean;
     /** Fewer windows than MAX_WINDOWS_PER_PAGE for this page (a byte budget). */
     maxWindows?: number;
+    /** The msgId of the row the caller holds first (stamped `before`): the page ends at its
+     *  place in the file, so a row before it with a later stamp is still older. */
+    beforeId?: string;
   },
   /** Lines starting from here on are already in hand (a tail window's start, `before` its
    *  first row's time): read only before it, starting with the window that ends there.
@@ -173,7 +183,9 @@ export async function readSessionHistoryBefore(
     const mid = Math.ceil((lo + hi) / 2);
     const ts = await head(mid);
     if (ts === 'unreadable') return null;
-    if (ts === null || ts < before) lo = mid;
+    // With the held row's id, a window that starts AT its stamp may start with that row: the
+    // page begins there, so the lines just before it (the previous window's end) are read whole.
+    if (ts === null || ts < before || (want.beforeId !== undefined && ts === before)) lo = mid;
     else hi = mid - 1;
   }
   let k = lo;
@@ -181,6 +193,17 @@ export async function readSessionHistoryBefore(
   let windows = 0;
   let reachedStart = false;
   const windowCap = Math.max(1, Math.min(want.maxWindows ?? MAX_WINDOWS_PER_PAGE, MAX_WINDOWS_PER_PAGE));
+  // Where the page ends: at the cut byte (every row read is older), at the held first row once a
+  // window holds it (the rows read from windows after it are newer: dropped), else by stamp.
+  let placed = cutAt !== undefined;
+  const older = (messages: SessionHistoryMessage[]): SessionHistoryMessage[] => {
+    if (placed) return messages;
+    const at = want.beforeId ? messages.findIndex((m) => m.msgId === want.beforeId && m.timestamp === before) : -1;
+    if (at < 0) return messages.filter((m) => m.timestamp < before);
+    placed = true;
+    collected = [];
+    return messages.slice(0, at);
+  };
   /** The slowest window read of this page: what the next one may cost too. */
   let slowest = 0;
   for (; k >= 0 && windows < windowCap; k--) {
@@ -189,7 +212,7 @@ export async function readSessionHistoryBefore(
     if (!messages) return null;
     slowest = Math.max(slowest, Date.now() - readAt);
     windows++;
-    collected = messages.filter((m) => m.timestamp < before).concat(collected);
+    collected = older(messages).concat(collected);
     if (k === 0) reachedStart = true;
     if (collected.length >= want.minMessages && collected.filter(want.isText).length >= want.minText) break;
     // A page that holds a row starts no window that would end past the budget:

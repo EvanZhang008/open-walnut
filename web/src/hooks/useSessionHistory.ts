@@ -966,9 +966,10 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     // fetch: the server only ever serves its tail. Its older part comes a page at
     // a time, each page starting where the oldest row held ends.
     if (baseOffsetRef.current === 0 && olderWindowedRef.current) {
-      const head = messagesRef.current.find((m) => m.timestamp)?.timestamp;
+      const headRow = messagesRef.current.find((m) => m.timestamp);
+      const head = headRow?.timestamp;
       if (!head) { settle(); return; }
-      fetchSessionHistoryBefore(sessionId, head)
+      fetchSessionHistoryBefore(sessionId, head, headRow?.msgId)
         .then((page) => {
           if (sessionIdRef.current !== sessionId) return;
           if (page.unavailable) {
@@ -1061,7 +1062,9 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       for (let page = 0; page < GAP_FILL_PAGES; page++) {
         const gap = gapsRef.current.find((g) => g.afterKey === key);
         if (!gap?.afterTs) return null;
-        const older = await fetchSessionHistoryBefore(sid0, gap.afterTs);
+        const afterRow = messagesRef.current[gapIndex(messagesRef.current, gap)];
+        const older = await fetchSessionHistoryBefore(sid0, gap.afterTs,
+          afterRow?.timestamp === gap.afterTs ? afterRow.msgId : undefined);
         if (sessionIdRef.current !== sid0) return null;
         if (older.unavailable) return 'unavailable';
         const held = messagesRef.current;
