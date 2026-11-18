@@ -52,6 +52,7 @@ const ON_SESSION_LINK: Record<string, string> = {
   'http.request': "host_http's request body, a person's API call: small; ordered with the call that asked for it",
   'oneshot.run': 'a one-shot prompt, a few KB',
   'turns.guard': 'its files are paths a rewind would touch, not their bytes',
+  'jobs.http': "a plugin page's request to its serving job: the request body is capped at 256 KB (plugin-http-rules.ts MAX_PLUGIN_JOB_REQUEST_BODY_BYTES) and answered within 9 s; the reply, up to 2 MB, is a download",
 }
 
 function sourceFiles(dir: string): string[] {
