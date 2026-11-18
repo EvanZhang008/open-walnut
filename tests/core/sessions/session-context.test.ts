@@ -393,7 +393,9 @@ describe('buildSessionContext (identity note)', () => {
     // 11450 → 12050 (2026-11-17) for the charter's user's-own-yes rule (approval-kinds.ts): anything that
     // involves other people, speaks in the user's name or cannot be undone waits for his own yes, whatever
     // the Approvals switch says (a lead signed him up for a colleague's office hour in his name).
-    expect(systemPrompt.length).toBeLessThan(12050)
+    // 12050 → 12300 (2026-11-18) for the ack line's limit: a turn with work left or waiting on the
+    // session's own job ends in words, never the ack line (40 of 108 overnight acks followed work). 12,240.
+    expect(systemPrompt.length).toBeLessThan(12300)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {
@@ -404,9 +406,24 @@ describe('buildSessionContext (identity note)', () => {
     for (const id of ['', await seedTask('Ask Walnut')]) {
       const { systemPrompt } = await buildSessionContext(id)
       expect(systemPrompt).toContain(`answer it with this one line and nothing else: ${NO_ACTION_TAG}.`)
-      expect(systemPrompt).toMatch(/When a message from another task or from Walnut \(a peer note, a notice, a reply, a trigger\) needs nothing the user should hear about/)
+      expect(systemPrompt).toMatch(/When a message from another task or from Walnut \(a peer note, a notice, a reply, a trigger\) needs no work and nothing the user should hear about/)
       expect(systemPrompt).toMatch(/never in a turn the user started, and never after words of yours/)
       expect(systemPrompt).not.toContain('status="no-action"')
+    }
+  })
+
+  it('tells worker, lead and Main that a turn waiting on its own work ends in words, never the ack line', async () => {
+    // 2026-11-18, the org reflection: 40 of 108 overnight ack turns followed work or words ("the build
+    // runs in the background, it wakes me"); one task acked twice with an hour-limited fix undone.
+    const { OWN_WAIT_TURN_END } = await import('../../../src/lib/turn-end-marker')
+    expect(OWN_WAIT_TURN_END).toMatch(/one plain sentence on what you wait for, never the agent-ack line/)
+    const { task: main } = await addTask({ title: 'Main', project: 'Ask Walnut', walnut_agent: true, org_role: 'main' })
+    const { task: lead } = await addTask({ title: 'Marina VP', project: 'marina', org_role: 'lead' })
+    for (const id of [main.id, lead.id, await seedTask('marina')]) {
+      const { systemPrompt } = await buildSessionContext(id)
+      expect(systemPrompt).toMatch(/needs no work and nothing the user should hear about, answer it with this one line/)
+      expect(systemPrompt).toContain('Nor does it end a turn with work left: do what waits on nothing now; while your own '
+        + `background command or subagent runs, ${OWN_WAIT_TURN_END}.`)
     }
   })
 

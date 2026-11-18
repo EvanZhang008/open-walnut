@@ -26,6 +26,14 @@
 import { readAboutTag, stripAboutTag } from '../core/org/message-about.js';
 
 export const NO_ACTION_TAG = '<walnut-turn status="agent-ack"/>';
+/**
+ * How a session ends a turn while its own work still runs (a background command, a subagent, an
+ * approval or a reply it waits for): words, never the line above. 2026-11-18, the org reflection:
+ * 40 of 108 overnight ack turns came after real work or words, as a "waiting on my build" mark,
+ * and one task acked twice with an hour-limited fix still undone. Every op or notice that tells a
+ * session to end its turn on such a wait uses this (tests/core/sessions/own-wait-turn-end.test.ts).
+ */
+export const OWN_WAIT_TURN_END = 'end your turn with one plain sentence on what you wait for, never the agent-ack line';
 /** The line's first name, still written by sessions spawned on the old prompt. */
 export const LEGACY_NO_ACTION_TAG = '<walnut-turn status="no-action"/>';
 const TAGS = [NO_ACTION_TAG, LEGACY_NO_ACTION_TAG];

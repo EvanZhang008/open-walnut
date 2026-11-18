@@ -12,6 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { getOp } from '../../../src/ops/index.js'
 import { ownJobWatchWarning } from '../../../src/core/routines/own-job-watch.js'
+import { OWN_WAIT_TURN_END } from '../../../src/lib/turn-end-marker.js'
 
 const SID = '6fe655c9-c650-444c-86c0-765eb0cbb822'
 const OTHER = 'aaaaaaaa-1111-4111-8111-111111111111'
@@ -64,7 +65,7 @@ describe('trigger_create: a check on this session\'s own background job', () => 
     const out = create({ run: `python3 ${script}`, every: '20m' })
     expect(out.outcome).toContain('WARNING: This check reads a background job of this session')
     expect(out.ownJobWarning).toMatch(/Claude Code already wakes this session when that job finishes/)
-    expect(out.next).toBe(`Unless it also watches something outside this session, delete it now: walnut tools call trigger_delete '{"id":"rt_9"}', and end your turn; this session's own background job wakes it when it finishes.`)
+    expect(out.next).toBe(`Unless it also watches something outside this session, delete it now: walnut tools call trigger_delete '{"id":"rt_9"}', and ${OWN_WAIT_TURN_END}; this session's own background job wakes it when it finishes.`)
   })
 
   it('reads a script named relative to cwd, under ~ too, and a check whose run line names the file', () => {

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
+import { OWN_WAIT_TURN_END } from '../lib/turn-end-marker.js';
 
 const ENGINES = ['codex', 'opencode', 'goose', 'pi', 'gemini', 'dsh', 'custom', 'claude'] as const;
 
@@ -19,7 +20,7 @@ defineOp({
     'YOU NEVER WAIT ON IT OR POLL IT. By default the call waits for its answer (up to wait_ms, at most 10 minutes, less through a '
       + 'host\'s gateway). background:true returns at once. A run still going when the call returns, or a background one, sends its '
       + 'answer into this session by itself when it ends, which wakes this session if it is idle, the way a background Agent\'s '
-      + 'completion does: carry on with other work or end your turn.',
+      + 'completion does: carry on with other work, or ' + OWN_WAIT_TURN_END + '.',
     'It keeps its context after it answers: subagent_send {id, message} tells it more, and its answer comes back the same way. It is '
       + 'closed after an hour with no message, when you stop it (subagent_stop), or when this session ends.',
     'With `host`, Walnut copies your work there (your folder\'s git repository: its commits, uncommitted changes and untracked files; '
@@ -112,7 +113,7 @@ export function runOutcome(body: unknown): unknown {
   if (b.state === 'running') {
     // Never a read to wait with: the answer comes by itself (registry.ts tellParent), as a background Agent's does.
     return withOutcome(b, `Subagent ${id} is working (${b.tool_uses ?? 0} tool uses so far).`,
-      'Its answer comes into this session by itself when it ends. Do nothing to wait for it: carry on with other work, or end your turn.');
+      'Its answer comes into this session by itself when it ends. Do nothing to wait for it: carry on with other work, or ' + OWN_WAIT_TURN_END + '.');
   }
   if (b.state === 'stopped') return withOutcome(b, `Subagent ${id} was stopped.`, 'Run it again with subagent_run if you still need it.');
   return withOutcome(b, `Subagent ${id} failed: ${String(b.error ?? 'unknown error')}`, 'Fix what the error names, or try another engine or model.');

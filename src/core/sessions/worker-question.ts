@@ -19,6 +19,7 @@
  */
 
 import { log } from '../../logging/index.js';
+import { OWN_WAIT_TURN_END } from '../../lib/turn-end-marker.js';
 
 export interface AskUserQuestionInput {
   questions?: Array<{
@@ -96,7 +97,7 @@ async function route(sessionId: string, taskId: string, input: AskUserQuestionIn
       message: `In this team your questions go to your leader, "${leader.title}" (task ${leader.id}), not to the user. `
         + `Your question was sent to it${sent.requestId ? ` as request ${sent.requestId}` : ''}, and its answer `
         + 'arrives in this session as a reply. Do not ask the user. Carry on with what does not depend on the '
-        + 'answer, or end your turn.',
+        + 'answer, or ' + OWN_WAIT_TURN_END + '.',
     };
   } catch (err) {
     // No leader session, throttled, archived: the user answers, as before.

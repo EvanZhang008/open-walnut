@@ -15,6 +15,7 @@
 
 import type { PrCheck, PrRemark, PrSnapshot, PrWatchState } from './model.js'
 import { oneLine } from './model.js'
+import { OWN_WAIT_TURN_END } from '../../lib/turn-end-marker.js'
 
 /** Wakes in a row that carried only comments before the watcher stops waking for comments
  *  (a bot answering the agent answering the bot). A check, a conflict or a push resets it. */
@@ -179,6 +180,6 @@ export function prWakeBody(pr: Pick<PrSnapshot, 'number' | 'url' | 'base' | 'hea
   lines.push('')
   lines.push(report.exhausted
     ? `This was the ${PR_COMMENT_WAKE_LIMIT}th update in a row with only comments, so comments alone no longer wake this task; a failed check, a conflict or a new push still does.`
-    : 'Handle what this task needs from the items above, then end your turn. Walnut keeps watching this pull request on its own (no trigger needed) and writes again when something else changes; when it merges, the task is completed unless the user switched that off.')
+    : `Handle what this task needs from the items above, then ${OWN_WAIT_TURN_END}. Walnut keeps watching this pull request on its own (no trigger needed) and writes again when something else changes; when it merges, the task is completed unless the user switched that off.`)
   return lines.join('\n')
 }

@@ -17,6 +17,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { macPlace } from '../hosts/mac-places.js'
+import { OWN_WAIT_TURN_END } from '../../lib/turn-end-marker.js'
 
 const SCRIPT_MAX_BYTES = 64 * 1024
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
@@ -96,6 +97,6 @@ export function ownJobWatchWarning(input: { run?: unknown; cwd?: unknown; sid?: 
   if (looksOutside(all)) return null
   return 'This check reads a background job of this session (its run_in_background output or a subagent). '
     + 'Claude Code already wakes this session when that job finishes, so this trigger only wakes it for nothing. '
-    + 'Unless it also watches something outside this session, delete it (trigger_delete) and end your turn; '
+    + 'Unless it also watches something outside this session, delete it (trigger_delete) and ' + OWN_WAIT_TURN_END + '; '
     + 'arm a trigger only on what runs outside this session (CI, a deploy, another host, a person).'
 }

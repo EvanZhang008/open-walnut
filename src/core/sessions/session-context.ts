@@ -63,7 +63,9 @@
  *      about is answered with one fixed line alone, and the panel hides that turn
  *      (2026-10-24: the user read every report at the weight of one that waited
  *      on them; 2026-10-25: the line was put under answers to the user's own
- *      questions, so it is now for agent messages only and never after words).
+ *      questions, so it is now for agent messages only and never after words;
+ *      2026-11-18: sessions ended turns with work still running or undone on it, so a
+ *      wait on the session's own job ends in words, OWN_WAIT_TURN_END).
  *      A line, not wording: src/lib/turn-end-marker.ts reads only that
  *      exact line. It is text, so Claude Code's thinking-only nudge ("[Your
  *      previous response had no visible output. Please continue and produce a
@@ -98,6 +100,7 @@ import { PROOF_IN_PLACE_RULE, THREAD_ONE_PLACE_RULE, THREADS_KNOWN_RULE, THREADS
 import { TEAM_CHARTER } from '../team-charter.js'
 import { WORK_PLACE_RULE, taskDirLine } from '../work-place.js'
 import { PRIVATE_TASK_RULE } from '../private-tasks/rule.js'
+import { OWN_WAIT_TURN_END } from '../../lib/turn-end-marker.js'
 import { taskDirForHost } from './task-dir-place.js'
 import { isAskPlacement, isAskTask } from './caller-placement.js'
 import { createHash } from 'node:crypto'
@@ -712,12 +715,15 @@ export function composeInstructions(task: InstructionTask | undefined, state: Pr
     // the old wording ("a turn that only reports work") put the line under answers
     // to the user's own questions.
     + ('When a message from another task or from Walnut (a peer note, a notice, a '
-      + 'reply, a trigger) needs nothing the user should hear about, answer it with this one '
+      + 'reply, a trigger) needs no work and nothing the user should hear about, answer it with this one '
       // Exactly the panel's NO_ACTION_TAG (tests/web/turn-end-marker.test.ts pins it).
       + 'line and nothing else: <walnut-turn status="agent-ack"/>. Walnut then hides that turn. '
       + 'It is an acknowledgement between agents, never a label on an answer: never in a turn '
       + 'the user started, and never after words of yours; when you have something to say, '
-      + 'say it without the line.\n\n')
+      // 2026-11-18, the org reflection: 40 of 108 overnight ack turns came after work or words
+      // ("the build runs in the background, it wakes me"), one with an hour-limited fix undone.
+      + 'say it without the line. Nor does it end a turn with work left: do what waits on nothing '
+      + 'now; while your own background command or subagent runs, ' + OWN_WAIT_TURN_END + '.\n\n')
     // 2026-11-06, the org reflection: a person's words in a turn full of notices waited behind them.
     + 'When one message holds a person\'s words and routine notices or work, answer the person first.\n\n'
     // 2026-11-11: refused sessions kept retrying ("I can't switch models directly myself") until the user typed /model.

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
+import { OWN_WAIT_TURN_END } from '../lib/turn-end-marker.js';
 
 /**
  * Approvals (core/approvals/): ask a person to say yes before a step goes on. A script
@@ -27,7 +28,7 @@ defineOp({
     'Ask the user to approve one step before it goes on: a notification reaches their Mac and their phone with `what` (one line) '
     + 'and `detail`, and they Approve or Deny. `mode: "biometric"` needs Face ID or Touch ID on a device that signs approvals, '
     + 'so no agent and no click-through can say yes (with no such device yet it asks for a tap and says why in `downgraded`). '
-    + 'Returns the approval and a `waitToken`; then call approval_wait with both until it is decided, or end your turn: once it is '
+    + 'Returns the approval and a `waitToken`; then call approval_wait with both until it is decided, or ' + OWN_WAIT_TURN_END + '. Once it is '
     + 'approved, denied or expired, Walnut tells your session (a Walnut note that wakes it), so no trigger is needed to watch it. In a shell script use '
     + '`walnut approve "<what>" [--why <sentence>] [--biometric] [--timeout 10m] [--detail <file>]` instead: it waits and exits 0 only on Approve '
     + '(`--request-only` asks and exits 4, then `walnut approve --approval <id>` runs it once approved). The person sees why, the task, its last steps '
@@ -51,7 +52,7 @@ defineOp({
     terminal_session: z.string().max(120).optional().describe('Set by the walnut CLI in a task terminal Walnut opened; checked against the terminal\'s own process'),
   },
   bind: { method: 'POST', path: '/approvals' },
-  mapResult: ({ body }) => withOutcome(body as Record<string, unknown>, stateLine(body), 'approval_wait with id and token (waitToken) until status is approved, denied, expired or canceled, or end your turn: Walnut tells this session the answer.'),
+  mapResult: ({ body }) => withOutcome(body as Record<string, unknown>, stateLine(body), 'approval_wait with id and token (waitToken) until status is approved, denied, expired or canceled, or ' + OWN_WAIT_TURN_END + ': Walnut tells this session the answer.'),
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 

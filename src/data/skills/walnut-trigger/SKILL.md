@@ -373,7 +373,8 @@ of your own change, which you act on when it ends, is not a wait: the user reads
 the task as Working (2026-11-02, the user: "wait is just actually waiting, if it
 is running it should be in progress"). One that runs in this session (a
 `run_in_background` command, a subagent) needs no trigger and no `wait_until`:
-Claude Code wakes the session when it finishes, so just end the turn (2026-11-15:
+Claude Code wakes the session when it finishes, so just end the turn with one plain
+sentence on what runs, never the agent-ack line (2026-11-15:
 a 20-minute trigger on a session's own acceptance run woke it four times for
 nothing). Arm a trigger only on what runs outside this session (CI, a deploy
 queue, another host, a person), park as usual so the session can go idle, and

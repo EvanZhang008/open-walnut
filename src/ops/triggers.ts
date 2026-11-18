@@ -15,6 +15,7 @@ import { triggerRunState } from '../core/cron/trigger-run-state.js'
 import { TIME_LIMIT_DEFAULT_S, TIME_LIMIT_MAX_S, testCallTimeoutMs } from '../core/cron/trigger-time-limit.js'
 import { TRIGGER_DESCRIPTION_MAX, parseEveryMs } from '../core/routines/trigger-fields.js'
 import { ownJobWatchWarning } from '../core/routines/own-job-watch.js'
+import { OWN_WAIT_TURN_END } from '../lib/turn-end-marker.js'
 import {
   byActivity, compactRow, everyLabel, filterWords, fullRow, matchesFilter, pageLimit, MAX_LIMIT,
   type ListedJob, type ListFilter,
@@ -195,7 +196,7 @@ defineOp({
       { ...(id ? { id } : {}), ...(b.job?.name ? { name: b.job.name } : {}), ...b, ...(ownJob ? { ownJobWarning: ownJob } : {}) },
       `${armed}${parked}${timeWarning}${ownJobWarning}`,
       ownJob
-        ? `Unless it also watches something outside this session, delete it now: walnut tools call trigger_delete '{"id":"${id}"}'${w?.parked ? ', then take the task out of Waiting (task_update phase=IN_PROGRESS): your own job is your work' : ''}, and end your turn; this session's own background job wakes it when it finishes.`
+        ? `Unless it also watches something outside this session, delete it now: walnut tools call trigger_delete '{"id":"${id}"}'${w?.parked ? ', then take the task out of Waiting (task_update phase=IN_PROGRESS): your own job is your work' : ''}, and ${OWN_WAIT_TURN_END}; this session's own background job wakes it when it finishes.`
         : `${timeWarning ? `Fix the time limit first: trigger_test, then trigger_update '{"id":"${id}","timeoutSeconds":<seconds>}' (same id, nothing it saw is lost). ` : ''}${next} See its last check with trigger_list.`,
     )
   },

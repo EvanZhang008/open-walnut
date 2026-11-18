@@ -769,7 +769,8 @@ walnut tools call subagent_run '{"host":"clouddev","prompt":"Run tests/e2e/brows
 - **Its answer comes back by itself.** The call waits for it (up to 10 minutes); a run
   still going when the call returns, or one started with `background: true`, sends its
   answer into your session when it ends and wakes it if it is idle. Never poll it:
-  carry on or end your turn.
+  carry on, or end your turn with one plain sentence on what you wait for (never the
+  agent-ack line: it answers only a message that needs no work).
 - **Talk to it.** It keeps its context after it answers:
   `walnut tools call subagent_send '{"id":"sa-...","message":"Now run it in Chromium too"}'`
   answers the same way. It is closed after an hour with no message, by `subagent_stop`,
