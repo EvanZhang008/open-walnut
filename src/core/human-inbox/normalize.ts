@@ -23,6 +23,7 @@ import {
 import { cleanLegacyPreview } from './preview.js';
 import { normalizeItems, disableDuplicateItems } from './item-schema.js';
 import { cleanPictureNames } from '../answer-pictures.js';
+import { normalizeCredentialAsk } from './credential-ask.js';
 
 /** `lt-<timestamp36>-<rand>` — the only id shape that can name a body file. */
 export const LETTER_ID_RE = /^lt-[0-9a-z]{1,12}-[0-9a-z]{4,12}$/;
@@ -222,6 +223,7 @@ function normalizeRecord(raw: unknown): LetterRecord | null {
     ...(typeof r.createdByOp === 'string' && r.createdByOp ? { createdByOp: r.createdByOp } : {}),
     // A rewrite must keep it: it is how the node's next update of the absence finds its thread.
     ...awayThreadOf(r.awayThread),
+    ...(normalizeCredentialAsk(r.credentialAsk) ? { credentialAsk: normalizeCredentialAsk(r.credentialAsk)! } : {}),
   });
 }
 

@@ -83,7 +83,8 @@ export interface CertExpiryAlertDeps {
   /** One fresh SSH sign-in to `host`, sharing no connection: ok, refused (what ssh said), or unknown (the host did not answer). */
   freshSignIn: (host: string) => Promise<{ ok: boolean; error?: string; unknown?: boolean }>
   /** Send the letter, idempotent by `opKey`; resolves with its id. */
-  send: (letter: { subject: string; markdown: string; opKey: string }) => Promise<string>
+  send: (letter: { subject: string; markdown: string; opKey: string; expiresAt: number }) => Promise<string>
+  ownerLabel?: () => Promise<string>
   /** Add a turn to the letter (flips it unread). */
   addTurn: (letterId: string, text: string) => Promise<void>
   /** Archive the letter: by id, or (a send cut short by a crash) by its op key. */
@@ -214,6 +215,7 @@ export function createCertExpiryAlert(deps: CertExpiryAlertDeps): CertExpiryAler
     if (!ep?.letterId || ep.expiredTold) return
     await deps.addTurn(ep.letterId, sshCertExpiredTurn(await lang(), {
       hosts: ep.labels.length ? ep.labels : ep.hosts, expiresAt: ep.expiresAt, ...(error ? { error } : {}), hint: await hint(),
+      owner: await deps.ownerLabel?.(),
     }))
     ep.expiredTold = true
     await save()
@@ -228,9 +230,10 @@ export function createCertExpiryAlert(deps: CertExpiryAlertDeps): CertExpiryAler
     const ep = episode!
     const { subject, markdown } = SSH_CERT_EXPIRY.render(await lang(), {
       hosts: ep.labels.length ? ep.labels : ep.hosts, expiresAt: ep.expiresAt, now: now(), hint: await hint(),
+      owner: await deps.ownerLabel?.(),
       ...(expired ? { expired: true, ...(expired.error ? { error: expired.error } : {}) } : {}),
     })
-    ep.letterId = await deps.send({ subject, markdown, opKey: ep.opKey })
+    ep.letterId = await deps.send({ subject, markdown, opKey: ep.opKey, expiresAt: ep.expiresAt })
     if (expired) ep.expiredTold = true
     await save()
     log.session.warn(expired ? 'ssh certificate expired: letter sent' : 'ssh certificate expires soon: letter sent', { letterId: ep.letterId, hosts: ep.hosts, expiresAt: new Date(ep.expiresAt).toISOString() })
@@ -266,6 +269,7 @@ export function createCertExpiryAlert(deps: CertExpiryAlertDeps): CertExpiryAler
     if (episode) {
       // A host gone from Settings leaves it; with none left, nothing waits on the letter.
       episode.hosts = episode.hosts.filter((h) => byHost.has(h))
+      episode.labels = [...new Set(episode.hosts.map(h => byHost.get(h)!.label || h))]
       if (episode.hosts.length === 0) { await close('its hosts left Settings'); arm(CHECK_EVERY_MS); return }
       // Renewed: the certificate its hosts use now outlives the one the letter is about.
       // A host whose certificate could not be read says nothing either way.
@@ -283,7 +287,7 @@ export function createCertExpiryAlert(deps: CertExpiryAlertDeps): CertExpiryAler
       if (retired.includes(opKey)) { arm(CHECK_EVERY_MS); return }
       episode = {
         opKey,
-        expiresAt: soonest, hosts: same.map((h) => h.host), labels: same.map((h) => h.label || h.host), openedAt: now(),
+        expiresAt: soonest, hosts: same.map((h) => h.host), labels: [...new Set(same.map((h) => h.label || h.host))], openedAt: now(),
       }
       await save()
     }
@@ -409,16 +413,18 @@ export async function startCertExpiryAlert(opts: { enabled?: boolean }): Promise
     return t.via === 'net' || !t.hostname ? null : t
   }
   const { readCertificateWarning } = await import('../sign-in-ask.js')
+  const { credentialHost } = await import('./credential-host.js')
   let alert: CertExpiryAlert
   const presence = watchCertificatePresence(Date.now, () => { void alert?.check() })
   alert = createCertExpiryAlert({
     warningLetter: (expiresAt) => readCertificateWarning(expiresAt),
     online: presence.online,
+    ownerLabel: async () => (await credentialHost('__local__', await getConfig())).label,
     hosts: async () => {
-      const hosts = (await getConfig()).hosts ?? {}
-      return Object.entries(hosts)
+      const config = await getConfig()
+      return Promise.all(Object.entries(config.hosts ?? {})
         .filter(([key, def]) => key !== '__local__' && key !== CLOUD_BOX_HOST_ALIAS && def.enabled !== false && (def as { transport?: string }).transport !== 'net')
-        .map(([key, def]) => ({ host: key, label: (def as { label?: string }).label || key }))
+        .map(async ([key]) => ({ host: key, label: (await credentialHost(key, config)).label })))
     },
     certExpiry: async (host) => {
       const t = await targetOf(host)
@@ -437,8 +443,9 @@ export async function startCertExpiryAlert(opts: { enabled?: boolean }): Promise
         })
       })
     },
-    send: async ({ subject, markdown, opKey }) => (await sendLetterOnce({
+    send: async ({ subject, markdown, opKey, expiresAt }) => (await sendLetterOnce({
       subject, type: 'review', markdown, sender: { sessionId: 'external', host: 'local' },
+      credentialAsk: { host: '__local__', kind: 'ssh-certificate', expiresAt },
     }, { opKey })).letter.id,
     // Walnut's own turn, written by this primary process: the same sender as the letter it adds to.
     addTurn: async (letterId, text) => { await agentReply(letterId, { text }, { sender: { sessionId: 'external', host: 'local' } }) },

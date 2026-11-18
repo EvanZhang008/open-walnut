@@ -51,6 +51,7 @@ describe('the class: every list of hosts to pick from goes through pickableHosts
   const NOT_A_CHOICE: Record<string, string> = {
     'src/core/hosts/joined-twins.ts': 'the one place',
     'src/core/hosts/ssh-cert-expiry-alert.ts': 'reads the SSH certificate of every SSH row',
+    'src/core/human-inbox/credential-ask.ts': 'matches every existing alias or label in a renewal sentence, not a host picker',
     'src/core/diagnostics/local-probes.ts': 'a count for diagnostics',
     'src/core/hosts/cloud-box-host.ts': 'finds the cloud box row',
     'src/core/hosts/host-status.ts': 'connection state of every row (Settings hides the twin itself)',

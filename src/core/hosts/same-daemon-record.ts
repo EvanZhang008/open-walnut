@@ -13,6 +13,7 @@
  */
 import { readHostProfile, updateHostProfile } from './host-profile.js';
 import type { SshTarget } from '../../providers/session-io.js';
+import type { Config } from '../types.js';
 
 type HostRow = { hostname?: unknown; user?: unknown; port?: unknown; transport?: unknown; endpoint?: unknown } | undefined;
 
@@ -72,9 +73,12 @@ export async function configuredIdentityOf(host: string): Promise<string | null>
   return rows ? linkIdentityOf(host, rows[host]) : null;
 }
 
-/** The aliases recorded as reaching `host`'s daemon whose rows, and `host`'s own, still connect where they did. */
-export async function recordedSameDaemon(host: string): Promise<string[]> {
-  const rows = await rowsNow();
+/**
+ * The aliases recorded as reaching `host`'s daemon whose rows, and `host`'s own, still connect where they did.
+ * `config`: check against these rows instead of config.yaml's (a caller that already holds the config).
+ */
+export async function recordedSameDaemon(host: string, config?: Pick<Config, 'hosts'>): Promise<string[]> {
+  const rows = config ? ((config.hosts ?? {}) as Record<string, HostRow>) : await rowsNow();
   const mine = rows && await linkIdentityOf(host, rows[host]);
   if (!rows || !mine) return [];
   const pairs = (await readHostProfile(host)).sameDaemon ?? {};

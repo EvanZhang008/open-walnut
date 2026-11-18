@@ -229,7 +229,7 @@ export async function refuseSameAsk(
   parts: readonly string[] = [],
   /** The decision the ask carries as it will be stored (a report: ask-decision.ts), so an answer to it
    *  holds or gives way as it does on the status (a new fact named since asks it again). */
-  decision?: AnswerDecision | null,
+  decision?: (AnswerDecision & { credentialAsk?: import('./human-inbox/credential-ask.js').CredentialAsk }) | null,
 ): Promise<void> {
   if (!taskId || !text?.trim()) return;
   const reason = sameAskReasonOf(input);
@@ -264,7 +264,7 @@ export async function refuseSameAsk(
       throw new SameAskError(answeredAskMessage(answer, what), { taskId, title: self?.title ?? taskId, ask: answer.ask, where: 'status', relation: 'ancestor' });
     }
   }
-  await refuseSignInAsk(taskId, text, what, everything);
+  if (!decision?.credentialAsk || (decision.credentialAsk.host === '__local__' && decision.credentialAsk.kind !== 'login-cookie')) await refuseSignInAsk(taskId, text, what, everything);
 }
 
 /**
@@ -283,8 +283,16 @@ async function refuseSignInAsk(taskId: string, text: string, what: 'letter' | 'r
     throw new SameAskError(why, dummy);
   }
   const self = everything.find((t) => t.id === taskId) ?? { id: taskId };
-  const other = everything.find((t) => t.id !== taskId && sameTaskArea(self, t) && t.phase !== 'COMPLETE' && t.status !== 'done'
-    && t.user_status?.state === 'needs' && t.user_status.source === 'session' && isSignInAsk(t.user_status.ask, words));
+  const { resolveCredentialAsk } = await import('./human-inbox/credential-ask.js');
+  let other: Task | undefined;
+  for (const candidate of everything) {
+    if (candidate.id === taskId || !sameTaskArea(self, candidate) || candidate.phase === 'COMPLETE' || candidate.status === 'done'
+      || candidate.user_status?.state !== 'needs' || candidate.user_status.source !== 'session' || !isSignInAsk(candidate.user_status.ask, words)) continue;
+    const scope = await resolveCredentialAsk({ subject: '', markdown: candidate.user_status.ask });
+    if (scope && (scope.host !== '__local__' || scope.kind === 'login-cookie')) continue;
+    other = candidate;
+    break;
+  }
   if (!other) return;
   const hit: TreeAsk = { taskId: other.id, title: other.title, ask: other.user_status!.ask!, where: 'status', relation: 'elsewhere' };
   log.task.info('same-ask: sign-in ask refused, another task asks it', { taskId, sameAsTaskId: other.id, what });
@@ -300,9 +308,10 @@ async function refuseSignInAsk(taskId: string, text: string, what: 'letter' | 'r
  */
 export async function refuseSignInLetter(
   taskId: string | undefined, subject: string | undefined, body: string | undefined,
-  input?: { same_ask_reason?: unknown; sameAskReason?: unknown } | null,
+  input?: { same_ask_reason?: unknown; sameAskReason?: unknown; credentialAsk?: import('./human-inbox/credential-ask.js').CredentialAsk } | null,
 ): Promise<void> {
-  if (!taskId) return;
+  // Typed asks use the credential-scoped store lock, not the old machine-wide sign-in guess.
+  if (!taskId || (input?.credentialAsk && (input.credentialAsk.host !== '__local__' || input.credentialAsk.kind === 'login-cookie'))) return;
   try {
     const { signInLineOf, loginCommandWords } = await import('./sign-in-ask.js');
     const { getConfig } = await import('./config-manager.js');

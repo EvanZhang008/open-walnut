@@ -104,6 +104,11 @@ defineOp({
     items: inboxItemsSchema.optional().describe('Independent email items. Supply exact account/message and safe display data for every email in a summary, with a mark_read action where it applies. Walnut adds Talk to CEO and New task to every item itself; task intents are dropped, and no tool, args, label or target on op actions. These do not answer the whole letter.'),
     task_refs: z.array(z.string()).max(LIST_MAX).optional().describe('Task ids this letter is about; rendered as clickable pills'),
     pin: z.boolean().optional().describe('Pin it to the top of the inbox (digests, standing reports)'),
+    credential_ask: z.object({
+      host: z.string().min(1).max(200).describe('The machine holding the credential and where renewal must run, not the login target. Use __local__ for this computer.'),
+      kind: z.enum(['ssh-certificate', 'login-cookie', 'login']),
+      expiresAt: z.number().finite().positive().optional().describe('Credential expiry as epoch milliseconds, when known'),
+    }).optional().describe('For a credential renewal letter: identify its machine and kind, and state where to run the exact renewal command in the body. Same credential requests from any task reuse the existing letter.'),
     user_asked: z.boolean().optional().describe(
       'The user themself asked this task for this letter or report. Only then does a report letter go out '
       + 'while this task answers another task\'s request, or a letter of Main or a lead about one of its open threads '

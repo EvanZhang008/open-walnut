@@ -190,6 +190,14 @@ describe('letter-check: one set of rules for the store and the host', () => {
     for (const f of ['html', 'markdown', 'text', 'subject']) expect(check.maxBytes(f)).toBe(letterFieldMaxBytes(f));
   });
 
+  it('validates credential identity the same way on offline hosts', () => {
+    const input = { subject: 'Renew credential', type: 'review', markdown: 'Renew on the named host.' };
+    expect(check.opArgs({ ...input, credential_ask: { host: 'box', kind: 'ssh-certificate', expiresAt: 1000 } })).toBeNull();
+    for (const credential_ask of [null, {}, { host: '', kind: 'login' }, { host: 'box', kind: 'wrong' }, { host: 'box', kind: 'login', expiresAt: -1 }]) {
+      expect(check.opArgs({ ...input, credential_ask })).toContain('credential_ask');
+    }
+  });
+
   it('names exactly the inputs of human_inbox_send', () => {
     const op = getOp('human_inbox_send');
     expect(op).toBeDefined();

@@ -17,6 +17,8 @@ export interface SshCertExpiryParams {
   now: number;
   /** config `ssh_login_hint`, as the user wrote it. */
   hint?: string;
+  /** The credential is stored and renewed here, not on hosts. */
+  owner?: string;
   /**
    * First written past the expiry, after a fresh sign-in was refused (no warning went out ahead:
    * another reminder held it, or the server was down): the letter says it ran out.
@@ -80,15 +82,29 @@ function stepOf(hint: string | undefined, generic: string): string {
   return h || generic;
 }
 
+function ownerLabel(lang: LetterLang, owner: string | undefined): string | undefined {
+  return lang === 'zh' ? owner === 'your Mac' ? '你的 Mac' : owner === 'this computer' ? '本机' : owner : owner;
+}
+
+function ownerWords(lang: LetterLang, owner: string | undefined, hosts: string[], hint?: string): string | undefined {
+  owner = ownerLabel(lang, owner);
+  if (!owner) return undefined;
+  const targets = hosts.join(', ');
+  return lang === 'zh'
+    ? `凭据所在机器：${owner}。凭据种类：SSH 证书，用于从 ${owner} 登录 ${targets}。${hint ? `续期位置：${owner}，操作：${stepOf(hint, '')}。` : `请在 ${owner} 续期 SSH 登录凭据，不是在登录目标上操作。`} ${owner} 的续期不会更新其他机器上的凭据。`
+    : `Credential location: ${owner}. Credential kind: SSH certificate, used to sign in from ${owner} to ${targets}. ${hint ? `Renew on ${owner}: ${stepOf(hint, '')}.` : `Renew SSH login credentials on ${owner}, not on the login targets.`} Renewal here does not update credentials on other machines.`;
+}
+
 function named(w: Words, hosts: readonly string[], bold: boolean): string {
   const labels = bold ? hosts.map((h) => `**${h}**`) : [...hosts];
   return labels.length <= 1 ? (labels[0] ?? w.someHost) : w.names(labels);
 }
 
 /** The turn the letter gets when the certificate has run out and a fresh sign-in fails: plain text (a thread turn reads as written). */
-export function sshCertExpiredTurn(lang: LetterLang, p: { hosts: string[]; expiresAt: number; hint?: string; error?: string }): string {
+export function sshCertExpiredTurn(lang: LetterLang, p: { hosts: string[]; expiresAt: number; hint?: string; error?: string; owner?: string }): string {
   const w = WORDS[lang];
-  const lines = [w.expired(named(w, p.hosts, false), certTimeWords(p.expiresAt), stepOf(p.hint, w.genericStep))];
+  const location = ownerWords(lang, p.owner, p.hosts, p.hint);
+  const lines = [w.expired(named(w, p.hosts, false), certTimeWords(p.expiresAt), stepOf(p.hint, w.genericStep)), ...(location ? [location] : [])];
   if (p.error) lines.push(`${w.sshSaid} ${p.error.replace(/\s+/g, ' ').slice(0, 300)}`);
   lines.push(w.closes);
   return lines.join('\n\n');
@@ -99,19 +115,24 @@ export const SSH_CERT_EXPIRY = letterKind<SshCertExpiryParams>({
   type: 'review',
   callers: ['src/core/hosts/ssh-cert-expiry-alert.ts'],
   marked: true,
-  render: (lang, { hosts, expiresAt, now, hint, expired, error }) => {
+  render: (lang, { hosts, expiresAt, now, hint, expired, error, owner }) => {
     const w = WORDS[lang];
     const at = certTimeWords(expiresAt);
+    const location = ownerWords(lang, owner, hosts, hint);
+    owner = ownerLabel(lang, owner);
+    const ownerSubject = (expired: boolean): string => lang === 'zh'
+      ? `${owner} 上的 SSH 证书${expired ? '已于' : '将于'} ${at} 过期（登录 ${hosts.join(', ')}）`
+      : `SSH certificate on ${owner} ${expired ? 'expired' : 'expires'} at ${at} (sign-in to ${hosts.join(', ')})`;
     if (expired) {
-      const subject = w.expiredSubject(named(w, hosts, false), at);
-      const lines = [w.expired(named(w, hosts, true), at, stepOf(hint, w.genericStep)), w.why];
+      const subject = owner ? ownerSubject(true) : w.expiredSubject(named(w, hosts, false), at);
+      const lines = [w.expired(named(w, hosts, true), at, stepOf(hint, w.genericStep)), ...(location ? [location] : []), w.why];
       if (error) lines.push(`${w.sshSaid} ${error.replace(/\s+/g, ' ').slice(0, 300)}`);
       lines.push(w.closes);
       return { subject: subject.length > 200 ? `${subject.slice(0, 199)}…` : subject, markdown: lines.join('\n\n') };
     }
-    const subject = w.subject(named(w, hosts, false), at);
+    const subject = owner ? ownerSubject(false) : w.subject(named(w, hosts, false), at);
     const minutes = Math.round((expiresAt - now) / 60_000);
-    const markdown = [w.soon(named(w, hosts, true), at, w.inAbout(minutes), stepOf(hint, w.genericStep)), w.why, w.closes].join('\n\n');
+    const markdown = [w.soon(named(w, hosts, true), at, w.inAbout(minutes), stepOf(hint, w.genericStep)), ...(location ? [location] : []), w.why, w.closes].join('\n\n');
     return { subject: subject.length > 200 ? `${subject.slice(0, 199)}…` : subject, markdown };
   },
   samples: [

@@ -274,9 +274,16 @@ export async function openTaskSignInLetter(): Promise<TaskSignInLetter | null> {
   const { getConfig } = await import('./config-manager.js');
   const words = loginCommandWords((await getConfig().catch(() => ({}) as { ssh_login_hint?: string })).ssh_login_hint);
   const open = (await listLetters({ archived: false })).letters
-    .filter((l) => isOpenDecision(l) && !!l.sender?.taskId)
+    .filter((l) => isOpenDecision(l) && !!l.sender?.taskId && (!l.credentialAsk || (l.credentialAsk.host === '__local__' && l.credentialAsk.kind !== 'login-cookie')))
     .sort((a, b) => a.createdAt - b.createdAt);
+  const { storedCredentialAskOf, credentialAskContext } = await import('./human-inbox/credential-ask.js');
+  const context = await credentialAskContext();
   for (const l of open) {
+    if (!l.credentialAsk) {
+      const detail = await getLetter(l.id, { inlineMaxBytes: 64_000 });
+      const scope = await storedCredentialAskOf(l, typeof detail?.body === 'string' ? detail.body : l.textPreview, context);
+      if (scope && (scope.host !== '__local__' || scope.kind === 'login-cookie')) continue;
+    }
     const key = `${l.id} ${words.join(',')}`;
     let asks = letterAsksSignIn.get(key);
     if (asks === undefined) {

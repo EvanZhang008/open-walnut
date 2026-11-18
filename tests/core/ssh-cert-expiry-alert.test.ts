@@ -189,6 +189,19 @@ describe('the SSH certificate letter', () => {
     expect(archived).toHaveLength(1)
   })
 
+  it('an old episode refreshes target names and removes duplicate daemon labels before its expired turn', async () => {
+    clock = EXPIRES - HOUR
+    await createCertExpiryAlert(deps()).check()
+    hosts = [{ host: 'dev', label: 'Cloud workstation' }, { host: 'build', label: 'Cloud workstation' }]
+    const again = createCertExpiryAlert(deps({ ownerLabel: async () => 'your Mac' }))
+    clock = EXPIRES + 60_000
+    await again.check()
+    expect((await again.episode())?.labels).toEqual(['Cloud workstation'])
+    expect(turns[0]!.text).toContain('Cloud workstation')
+    expect(turns[0]!.text).not.toContain('Dev box')
+    expect(turns[0]!.text).toContain('Credential location: your Mac')
+  })
+
   it('a restart neither sends it again nor forgets it', async () => {
     clock = EXPIRES - HOUR
     await createCertExpiryAlert(deps()).check()

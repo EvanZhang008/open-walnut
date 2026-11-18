@@ -33,7 +33,7 @@ export function createLetterCheck() {
   const MAX_TASK_REFS = 50
   const TASK_REF_MAX_CHARS = 200
   /** human_inbox_send's inputs (src/ops/human-inbox.ts): the op refuses any other key. */
-  const OP_INPUTS = ['subject', 'type', 'markdown', 'html', 'text', 'actions', 'items', 'task_refs', 'pin', 'user_asked', 'snooze_reason', 'user_kind', 'user_kind_why', 'resend_reason', 'same_ask_reason']
+  const OP_INPUTS = ['subject', 'type', 'markdown', 'html', 'text', 'actions', 'items', 'task_refs', 'pin', 'user_asked', 'snooze_reason', 'user_kind', 'user_kind_why', 'resend_reason', 'same_ask_reason', 'credential_ask']
 
   const str = (v: unknown): string => (typeof v === 'string' ? v : '')
   const filled = (v: unknown): boolean => typeof v === 'string' && v.length > 0
@@ -248,6 +248,15 @@ export function createLetterCheck() {
           if (!filled(o.label)) issues.push(`actions.${i}.label: a non-empty string is required`)
           if (o.description !== undefined && typeof o.description !== 'string') issues.push(`actions.${i}.description: must be a string`)
         })
+      }
+    }
+    if (args.credential_ask !== undefined) {
+      const r = args.credential_ask as Record<string, unknown> | null
+      if (!r || typeof r !== 'object' || Array.isArray(r)) issues.push('credential_ask: must be an object')
+      else {
+        if (typeof r.host !== 'string' || !r.host.trim() || r.host.length > 200) issues.push('credential_ask.host: must be a non-empty host name of at most 200 chars')
+        if (['ssh-certificate', 'login-cookie', 'login'].indexOf(r.kind as string) === -1) issues.push('credential_ask.kind: invalid credential kind')
+        if (r.expiresAt !== undefined && (typeof r.expiresAt !== 'number' || !Number.isFinite(r.expiresAt) || r.expiresAt <= 0)) issues.push('credential_ask.expiresAt: must be a positive expiry timestamp')
       }
     }
     const itemError = itemsError(args.items)

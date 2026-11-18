@@ -12,6 +12,7 @@
 // @ts-ignore Shared type-only package contract is outside the server emit root.
 import type { InboxLetterItem } from '../../../packages/plugin-api/src/inbox-items.js';
 import type { LetterOrigin } from './letter-origin.js';
+import type { CredentialAsk } from './credential-ask.js';
 export type { LetterOrigin, LetterOriginKind } from './letter-origin.js';
 export type * from '../../../packages/plugin-api/src/inbox-items.js';
 
@@ -240,6 +241,8 @@ export interface LetterRecord {
    * `sender` on every read of the store, never written by a sender.
    */
   origin?: LetterOrigin;
+  /** Credential owner and kind, independent of its login targets or the sending task. */
+  credentialAsk?: CredentialAsk;
 }
 
 export interface AwayThreadMark {
@@ -249,6 +252,9 @@ export interface AwayThreadMark {
 
 /** What a caller supplies to sendLetter. id/createdAt/state are stamped here. */
 export interface NewLetter {
+  /** Explicit credential location. The store canonicalizes host aliases before deduplication. */
+  credentialAsk?: CredentialAsk;
+  credential_ask?: CredentialAsk;
   subject: string;
   type: LetterType;
   /** Exactly one of html | markdown | htmlRef — see letterFieldMaxBytes. */

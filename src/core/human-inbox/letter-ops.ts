@@ -186,6 +186,14 @@ export async function sendLetterAsCallerOnce(
     if (first) return { letter: first, duplicate: true };
   }
   const sender = await resolveLetterSender(callerSid);
+  const { resolveCredentialAsk } = await import('./credential-ask.js');
+  const credentialAsk = await resolveCredentialAsk(input);
+  if (credentialAsk) {
+    input = { ...input, credentialAsk };
+    const { findLetterForCredential } = await import('./store.js');
+    const first = await findLetterForCredential(credentialAsk);
+    if (first) return sendLetterOnce({ ...input, sender }, opts);
+  }
   // A deliberate resend says why (duplicate-letter.ts); the reason is never stored.
   const resendReason = resendReasonOf(input);
   { const { resendReason: _a, resend_reason: _b, ...rest } = input; input = rest; }
@@ -225,7 +233,7 @@ export async function sendLetterAsCallerOnce(
     const { SameAskError } = await import('../same-ask.js');
     // Each numbered or bulleted item of the letter too: one of them may be an ask already answered.
     const parts = String(input.markdown ?? '').split('\n').map((l) => /^\s*(?:\d+[.)]|[-*])\s+(.+)$/.exec(l)?.[1]?.trim() ?? '').filter((l) => l.length >= 12).slice(0, 20);
-    await refuseSameAsk(sender.taskId, subject, 'letter', sameAskInput, parts, { more: String(input.markdown ?? ''), options: input.actions }).catch((err) => {
+    await refuseSameAsk(sender.taskId, subject, 'letter', sameAskInput, parts, { more: String(input.markdown ?? ''), options: input.actions, ...(credentialAsk ? { credentialAsk } : {}) }).catch((err) => {
       throw err instanceof SameAskError ? new LetterError(err.message, err.code, err.status) : err;
     });
   }
@@ -234,7 +242,7 @@ export async function sendLetterAsCallerOnce(
     const { refuseSignInLetter } = await import('../same-ask-tree.js');
     const { SameAskError } = await import('../same-ask.js');
     const prose = String(input.markdown ?? input.html ?? input.text ?? '');
-    await refuseSignInLetter(sender.taskId, subject, prose, sameAskInput).catch((err) => {
+    await refuseSignInLetter(sender.taskId, subject, prose, { ...sameAskInput, ...(credentialAsk ? { credentialAsk } : {}) }).catch((err) => {
       throw err instanceof SameAskError ? new LetterError(err.message, err.code, err.status) : err;
     });
   }
@@ -258,7 +266,7 @@ export async function sendLetterAsCallerOnce(
   }
   // Main or a lead the user is away from: one thread per absence, one buzz (away-thread.ts). A
   // host's journal op is sent as written.
-  if (!opts.opKey) {
+  if (!opts.opKey && !credentialAsk) {
     const { sendAway } = await import('./away-thread.js');
     const sent = await sendAway(input, sender, async (away) => (await sendLetterOnce({ ...input, sender }, { ...opts, ...away })).letter,
       Date.now(), guarded ? { refuseDuplicate: refuseIfDuplicate } : {});

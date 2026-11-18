@@ -42,6 +42,8 @@ import { cleanPictureNames } from '../answer-pictures.js';
 import type { AwayThreadMark, InboxItemReceipt } from './types.js';
 import { letterOriginOf } from './letter-origin.js';
 import { kindOfLetter } from './walnut-letters/registry.js';
+import { resolveCredentialAsk, findCredentialLetter, storedCredentialAskOf, credentialAskContext } from './credential-ask.js';
+import { isSignInAsk, loginCommandWords } from '../sign-in-ask.js';
 import {
   LETTER_INLINE_BODY_MAX_BYTES,
   letterFieldMaxBytes,
@@ -542,6 +544,31 @@ export async function findLetterIdsByOps(opKeys: readonly string[]): Promise<Map
   return found;
 }
 
+/** Read older letter scopes before admission. A failed read is retried, never "no prior ask". */
+async function credentialCandidates(ask: import('./credential-ask.js').CredentialAsk): Promise<Map<string, import('./credential-ask.js').CredentialAsk>> {
+  const raw = await readJsonFile<unknown>(INDEX_FILE, null, { readErrors: 'throw' });
+  const letters = normalizeStore(raw).letters.filter(l => !l.archived || (ask.expiresAt !== undefined && !!l.createdByOp));
+  const context = await credentialAskContext();
+  const out = new Map<string, import('./credential-ask.js').CredentialAsk>();
+  for (const letter of letters) {
+    if (!letter.credentialAsk && !letter.createdByOp?.startsWith('ssh-cert-expiry:')
+      && !isSignInAsk(`${letter.subject}\n${letter.textPreview}`, loginCommandWords(context.hint))) continue;
+    const body = letter.credentialAsk || letter.createdByOp?.startsWith('ssh-cert-expiry:') ? ''
+      : await fsp.readFile(path.join(BODIES_DIR, `${letter.id}.${bodyExt(letter.bodyFormat)}`), 'utf8')
+        .catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return letter.textPreview; throw error; });
+    const scope = await storedCredentialAskOf(letter, body, context);
+    if (scope) out.set(letter.id, scope);
+  }
+  return out;
+}
+
+/** Existing credential request from any sender, including old letters without typed metadata. */
+export async function findLetterForCredential(ask: import('./credential-ask.js').CredentialAsk): Promise<LetterRecord | null> {
+  const scopes = await credentialCandidates(ask);
+  const letters = (await readStore()).letters.map(l => ({ ...l, ...(scopes.has(l.id) ? { credentialAsk: scopes.get(l.id) } : {}) }));
+  return findCredentialLetter(ask, letters) ?? null;
+}
+
 /** The letter a journal op already sent (`createdByOp`), or null. */
 
 export async function findLetterByOp(opKey: string): Promise<LetterRecord | null> {
@@ -572,6 +599,8 @@ export async function sendLetterOnce(
   if (!checked.ok) throw invalid(checked.message);
   const { subject, lane, format: bodyFormat } = checked.shape;
   const actions = input.actions;
+  const credentialAsk = await resolveCredentialAsk(input);
+  const oldScopes = credentialAsk ? await credentialCandidates(credentialAsk) : new Map();
   const opKey = typeof opts.opKey === 'string' && opts.opKey ? opts.opKey : undefined;
   if (opKey) {
     const first = await findLetterByOp(opKey);
@@ -643,6 +672,7 @@ export async function sendLetterOnce(
     ...(refs.length > 0 ? { taskRefs: refs } : {}),
     ...(opKey ? { createdByOp: opKey } : {}),
     ...(opts.awayThread ? { awayThread: { ...opts.awayThread } } : {}),
+    ...(credentialAsk ? { credentialAsk } : {}),
   };
   record.origin = letterOriginOf(record, !!kindOfLetter(record));
 
@@ -651,11 +681,32 @@ export async function sendLetterOnce(
   const bodyFile = path.join(BODIES_DIR, `${id}.${bodyExt(bodyFormat)}`);
   await commitBodySource(`${id}.${bodyExt(bodyFormat)}`, bodySource);
   let first: LetterRecord | null = null;
+  let credentialUpdated = false;
   try {
     await withWriteLock(() => withStore((store) => {
       // The same op sent meanwhile (checked again under the lock): keep that one.
       const sent = opKey ? store.letters.find(l => l.createdByOp === opKey) : undefined;
       if (sent) { first = { ...sent }; return; }
+      const credentialLetter = credentialAsk ? findCredentialLetter(credentialAsk, store.letters.map(l => ({
+        ...l, ...(oldScopes.has(l.id) ? { credentialAsk: {
+          ...oldScopes.get(l.id)!, ...l.credentialAsk, host: oldScopes.get(l.id)!.host,
+        } } : {}),
+      }))) : undefined;
+      if (credentialLetter) {
+        const kept = store.letters.find(l => l.id === credentialLetter.id)!;
+        // An old ask with no expiry is not proof that this certificate was announced. Update
+        // that same thread once under the lock and notify, instead of silently swallowing it.
+        if (credentialAsk?.expiresAt !== undefined && credentialLetter.credentialAsk?.expiresAt === undefined) {
+          kept.credentialAsk = credentialAsk;
+          kept.read = false;
+          kept.readAt = Date.now();
+          kept.thread.push({ from: 'agent', text: record.textPreview, at: Date.now(), sender: record.sender,
+            bodyFile: `${id}.${bodyExt(bodyFormat)}`, bodyFormat, bodyBytes: bodySource.bytes });
+          credentialUpdated = true;
+        }
+        first = { ...kept };
+        return;
+      }
       if (opts.refuseDuplicate && !opKey) {
         const now = Date.now();
         const dup = findDuplicateLetter(record, store.letters, now);
@@ -669,7 +720,8 @@ export async function sendLetterOnce(
   }
   if (first) {
     const kept: LetterRecord = first;
-    if (kept.id !== id) await fsp.rm(bodyFile, { force: true }).catch(() => {});
+    if (kept.id !== id && !credentialUpdated) await fsp.rm(bodyFile, { force: true }).catch(() => {});
+    if (credentialUpdated) emitLetterEvent(kept, 'reply', record.textPreview, opts.quiet === true);
     return { letter: kept, duplicate: true };
   }
 
