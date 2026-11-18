@@ -131,13 +131,30 @@ type SweepConn = { host: string; hasCapability?: (c: string) => boolean; send: (
 
 type SweepRow = { host: string } & Partial<RemoveResult> & { pruned?: PruneResult['pruned']; buildsPruned?: PruneResult['pruned']; toldSize?: string[]; cachesPruned?: { files: number; bytes: number } }
 
-/** True while the disk Walnut's data lives on is low (disk-watermark.ts warn or critical). */
-/** This machine's disk is low: free space under the floor new work already moves away at, or the watermark says so. */
-export async function localDiskLow(statfs: (dir: string) => Promise<{ bavail: number | bigint; bsize: number | bigint }> = (d) => fsp.statfs(d)): Promise<boolean> {
+/** An alarm whose auto-fix is this sweep (alarms.ts `disk-sweep`, disk.free) rings now. */
+export async function sweepAlarmRinging(isRinging?: (alarmId: string) => boolean): Promise<boolean> {
+  const { allAlarms } = await import('./health-monitor/alarms.js')
+  const ringing = isRinging ?? (await import('./health-monitor/index.js')).alarmRinging
+  return allAlarms().some((a) => a.action.autoFix === 'disk-sweep' && ringing(a.id))
+}
+
+/**
+ * This machine's disk is low: free space under the floor new work already moves away at,
+ * the watermark says so, or an alarm whose auto-fix is this sweep rings. The disk alarm's
+ * line (30 GB) sits above the floor (20 GB): read alone, the floor left the sweep calm while
+ * the alarm rang, so its auto-fix freed nothing (2026-11-18, 29 GB free, 0.0 GB freed).
+ */
+export async function localDiskLow(
+  statfs: (dir: string) => Promise<{ bavail: number | bigint; bsize: number | bigint }> = (d) => fsp.statfs(d),
+  ringing: () => Promise<boolean> = () => sweepAlarmRinging(),
+): Promise<boolean> {
   try {
     const { getDiskWatermarkState } = await import('./disk-watermark.js')
     if (getDiskWatermarkState().level !== 'ok') return true
   } catch { /* not measured yet */ }
+  try {
+    if (await ringing()) return true
+  } catch { /* no monitor here */ }
   try {
     const { WALNUT_HOME } = await import('../constants.js')
     const f = await statfs(WALNUT_HOME)
@@ -251,13 +268,23 @@ export async function sweepTaskDirsOnce(deps?: {
   return results
 }
 
-let sweepInFlight: Promise<SweepRow[]> | null = null
+let sweepInFlight: { rows: Promise<SweepRow[]>; lowDisk: boolean } | null = null
 
-/** One round now, joined by every caller while it runs (the timers below, the health monitor's disk fix). */
-export function sweepTaskDirsNow(): Promise<SweepRow[]> {
+/**
+ * One round now, joined by every caller while it runs (the timers below, the health monitor's
+ * disk fix). `lowDisk` (the disk alarm's auto-fix) never joins a calm round: it runs its own
+ * low-disk round after that one, or the fix would free only what a calm round frees.
+ */
+export function sweepTaskDirsNow(opts: { lowDisk?: boolean } = {}): Promise<SweepRow[]> {
+  const lowDisk = opts.lowDisk === true
+  const cur = sweepInFlight
+  if (cur && (cur.lowDisk || !lowDisk)) return cur.rows
   // Transfer packs ride the same rounds: their own prune ran only when a new transfer started.
-  sweepInFlight ??= Promise.all([sweepTaskDirsOnce(), pruneTransfersQuietly(), sweepLeftSubagentRuns()]).then(([rows]) => rows).finally(() => { sweepInFlight = null })
-  return sweepInFlight
+  const round = () => Promise.all([sweepTaskDirsOnce(lowDisk ? { lowDisk } : undefined), pruneTransfersQuietly(), sweepLeftSubagentRuns()]).then(([rows]) => rows)
+  const rows: Promise<SweepRow[]> = (cur ? cur.rows.catch(() => []).then(round) : round())
+    .finally(() => { if (sweepInFlight?.rows === rows) sweepInFlight = null })
+  sweepInFlight = { rows, lowDisk }
+  return rows
 }
 
 async function pruneTransfersQuietly(): Promise<void> {

@@ -3,9 +3,10 @@
  * because each only redoes what Walnut already does on its own clock (sooner)
  * and touches nothing but Walnut's own rebuildable files and records.
  *
- *  - `disk-sweep`: the task-directory sweep now (finished tasks' directories and
- *    their build output, never a repo with work found nowhere else), with the
- *    space it freed measured on the data disk.
+ *  - `disk-sweep`: the task-directory sweep now, as a low-disk round (finished
+ *    tasks' directories and their build output, idle build output of tasks in
+ *    use, rebuildable tool caches; never a repo with work found nowhere else),
+ *    with the space it freed measured on the data disk.
  *  - `status-recheck`: the status check now, which re-derives what it can.
  *  - `host-reconnect`: a host link that is down and waiting out its backoff dials
  *    now (the human's Connect now). It never tears down a working link or its
@@ -23,7 +24,8 @@ export async function runAutoFix(id: string, dataDir: string, labels?: Record<st
     const free = async () => { const s = await fsp.statfs(dataDir); return s.bavail * s.bsize }
     const before = await free()
     const { sweepTaskDirsNow } = await import('../task-dir-sweep.js')
-    const rows = await sweepTaskDirsNow()
+    // The alarm rings, so the disk is low whatever the sweep's own floor says (task-dir-sweep.ts localDiskLow).
+    const rows = await sweepTaskDirsNow({ lowDisk: true })
     const after = await free()
     const removed = rows.reduce((n, r) => n + (Array.isArray(r.removed) ? r.removed.length : 0), 0)
     const freed = Math.max(0, after - before) / GiB

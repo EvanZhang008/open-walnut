@@ -27,6 +27,20 @@ export function runningHealthMonitor(): HealthMonitor | null {
   return running
 }
 
+/**
+ * A built-in alarm rings here now: one of its instances is in ALARM and its actions
+ * are not held (Turn off, Mute). What an alarm's auto-fix asks for reads this, so a
+ * reclaim never waits for a floor below the alarm's own line (2026-11-18: disk.free
+ * rang at 29 GB while the task-dir sweep counted the disk low only under 20 GB, and
+ * its auto-fix freed 0.0 GB).
+ */
+export function alarmRinging(defId: string, m: Pick<HealthMonitor, 'alarms' | 'overrides' | 'now'> | null = running): boolean {
+  if (!m) return false
+  const now = m.now()
+  return Object.values(m.alarms).some((i) => i.defId === defId && i.state === 'ALARM'
+    && !overrideHolds(effectiveOverride(m.overrides, i.id, i.defId), now))
+}
+
 /** Isolated servers act only when asked. */
 export async function healthActionsOn(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
   if (env.WALNUT_HEALTH_ACTIONS === '1') return true
