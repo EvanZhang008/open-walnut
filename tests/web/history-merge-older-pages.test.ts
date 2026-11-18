@@ -255,3 +255,45 @@ describe('a windowed fork\'s refresh (2026-11-17)', () => {
     expect(boundaryAfterFold(5, 40, 12)).toBe(45);
   });
 });
+
+describe('a send seen from both sides of a seam is one row', () => {
+  // A window that starts between a mid-turn send's enqueue and its take names the send by the
+  // take's own time, often 1 to 3 ms before the enqueue's; the page before it holds the enqueue
+  // alone (history-same-send.ts). Neither join may show the message twice.
+  const sentAt = Date.UTC(2026, 0, 1, 0, 0, 30, 500);
+  const send = (ms: number, extra: Partial<Row> = {}): Row => ({
+    msgId: `queue-${new Date(sentAt + ms).toISOString()}`, role: 'user', text: 'show me the summary',
+    timestamp: new Date(sentAt + ms).toISOString(), ...extra,
+  });
+
+  it('prependOlderPage drops the page\'s enqueue-only copy of a send held at its take', () => {
+    const held = [...range(31, 34), send(-2), ...range(34, 40)];
+    const page = [...range(20, 31), send(0)];
+    const out = prependOlderPage(held, page);
+    expect(out.filter((m) => m.text === 'show me the summary')).toHaveLength(1);
+    expect(out).toHaveLength(page.length - 1 + held.length);
+  });
+
+  it('two sends of the same text far apart in time stay two', () => {
+    const held = [...range(31, 34), send(0), ...range(34, 40)];
+    const page = [...range(20, 31), send(-60_000)];
+    expect(prependOlderPage(held, page).filter((m) => m.text === 'show me the summary')).toHaveLength(2);
+  });
+
+  it('stitchHeldOlder: a window whose first line is the take replaces the held copy', () => {
+    const held = [...range(0, 30), send(0), ...range(30, 40)];
+    const incoming = [send(-1), ...range(30, 42)];
+    const out = stitchHeldOlder(held, incoming);
+    expect(out.filter((m) => m.text === 'show me the summary')).toHaveLength(1);
+    expect(ids(out).slice(0, 30)).toEqual(ids(range(0, 30)));
+    expect(out).toHaveLength(30 + incoming.length);
+  });
+
+  it('stitchHeldOlder: a window that starts before the take replaces the held copy too', () => {
+    const held = [...range(0, 30), send(0), ...range(30, 40)];
+    const incoming = [...range(25, 30), send(-3), ...range(30, 42)];
+    const out = stitchHeldOlder(held, incoming);
+    expect(out.filter((m) => m.text === 'show me the summary')).toHaveLength(1);
+    expect(out).toHaveLength(25 + incoming.length);
+  });
+});

@@ -431,7 +431,8 @@ export async function buildReadyView(job: ReadyJob, onProgress?: (answer: ReadyA
     if (bytes === null) return { status: 'none', reason: 'read-failed' };
     const capped = lastLines(windowText(bytes, start === 0), PARSE_MAX_LINES);
     const t0 = Date.now();
-    const parsed = parseSessionMessages(capped.text, parseOpts);
+    // Not from the file's top: a send taken here whose enqueue was cut off still has its row.
+    const parsed = parseSessionMessages(capped.text, start > 0 || capped.cut ? { ...parseOpts, startsMidFile: true } : parseOpts);
     parseMs += Date.now() - t0;
     const reachedStart = start === 0 && !capped.cut;
     const userTurns = parsed.filter(isHistoryUserTurn).length;

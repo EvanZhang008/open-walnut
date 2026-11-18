@@ -320,7 +320,7 @@ export interface RawJsonlLine {
   content?: string;
   /** type='attachment' lines; `queued_command` carries a mid-turn send as the model saw it,
    *  and `source_uuid` is the uuid the line was sent under (the CLI writes no user line). */
-  attachment?: { type?: string; prompt?: unknown; source_uuid?: unknown; content?: unknown; hookEvent?: unknown };
+  attachment?: { type?: string; prompt?: unknown; source_uuid?: unknown; content?: unknown; hookEvent?: unknown; timestamp?: unknown };
   message?: {
     id?: string;
     role?: string;
@@ -468,6 +468,10 @@ export function groupInlineChildren(
 }
 
 export interface ParseSessionMessagesOptions {
+  /** The text starts at a window's (or a page's) first line, not the file's: a mid-turn take
+   *  whose enqueue lies before it still makes its row (emitCutAwayTake). Off for a whole file
+   *  and for the incremental read's segments, whose prefix holds the enqueue. */
+  startsMidFile?: boolean;
   /** In-place rewind filter (see transcript-chain.ts computeRewindDeadSet),
    *  three modes:
    *  - `'auto'`: replay `rewindCuts` against THIS content (the full-read path).
@@ -1053,6 +1057,38 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
     });
   };
 
+  /** Each text's first enqueue in this parse: a take after it is that enqueue's (a later resend's
+   *  enqueue says nothing about a take before it). */
+  const firstEnqueueOf = new Map<string, number>();
+  for (let k = 0; k < rawMessages.length; k++) {
+    const e = rawMessages[k];
+    if (e.type !== 'queue-operation' || e.operation !== 'enqueue') continue;
+    const t = (e.content || textOfBlocksEnqueue.get(k))?.trim();
+    if (t && !firstEnqueueOf.has(t)) firstEnqueueOf.set(t, k);
+  }
+  /** A mid-turn take whose enqueue is not in this parse: a window or page of the transcript
+   *  starts between the two (2026-11-18: a 125 MB session's tail began 28 lines after the
+   *  enqueue of the user's "show me summary…" and before its take, so the refresh dropped the
+   *  message the reader saw). The attachment carries the enqueue's time, so the row is the one
+   *  a parse holding the enqueue makes: the same `queue-<time>` id, here where it was taken. */
+  const emitCutAwayTake = (i: number): void => {
+    const att = rawMessages[i].attachment;
+    const at = typeof att?.timestamp === 'string' ? att.timestamp : undefined;
+    const text = queuedCommandText(att?.prompt);
+    const enqueuedAt = text ? firstEnqueueOf.get(text.trim()) : undefined;
+    if (!opts?.startsMidFile || !at || !text || (enqueuedAt !== undefined && enqueuedAt < i)) return;
+    const syntheticId = `queue-${at}`;
+    if (messageMap.has(syntheticId)) return;
+    if (queueDeadKeys.size > 0 && queueDeadKeys.has(queueEnqueueKey({ timestamp: at, content: text }))) return;
+    const sourceUuid = typeof att?.source_uuid === 'string' && att.source_uuid ? att.source_uuid : undefined;
+    messageMap.set(syntheticId, {
+      role: 'user',
+      timestamp: at,
+      ...(sourceUuid ? { sourceUuid } : {}),
+      contentBlocks: [{ type: 'text' as const, text }],
+    });
+  };
+
   for (let i = 0; i < rawMessages.length; i++) {
     const raw = rawMessages[i];
 
@@ -1165,6 +1201,7 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
     if (raw.type === 'attachment' && raw.attachment?.type === 'queued_command') {
       const j = enqueueOfAttachment.get(i);
       if (j !== undefined) emitQueueRow(j);
+      else emitCutAwayTake(i);
       continue;
     }
 

@@ -925,8 +925,10 @@ function seedIncrementalStateAt(
   messages: SessionHistoryMessage[],
   filePath: string,
   why?: { reason?: string },
+  /** `content` is a window: it starts at the window's first line (parseHistoryWindow). */
+  window = false,
 ): HistoryIncrementalState | undefined {
-  const st = seedIncrementalState(sessionId, { content, source: 'local', canonicalChars, resolvedRemotePath: filePath }, messages, filePath, why);
+  const st = seedIncrementalState(sessionId, { content, source: 'local', canonicalChars, resolvedRemotePath: filePath }, messages, filePath, why, window);
   return st && {
     ...st,
     tailStartByte: base + st.tailStartByte,
@@ -948,6 +950,8 @@ function seedIncrementalState(
   fullMessages: SessionHistoryMessage[],
   statPath: string | undefined,
   why?: { reason?: string },
+  /** The content starts at a window's first line: its prefix segment parses as the window did. */
+  startsMidFile = false,
 ): HistoryIncrementalState | undefined {
   const skip = (reason: string): undefined => { if (why) why.reason = reason; return undefined; };
   const filePath = result.resolvedRemotePath ?? statPath;
@@ -989,7 +993,8 @@ function seedIncrementalState(
     let prefixMessages: SessionHistoryMessage[];
     let tailMessages: SessionHistoryMessage[];
     try {
-      prefixMessages = at > 0 ? parseSessionMessages(canonical.slice(0, at), segFilter) : [];
+      // A window's prefix starts where the window does, as its full parse did (parseHistoryWindow).
+      prefixMessages = at > 0 ? parseSessionMessages(canonical.slice(0, at), startsMidFile ? { ...segFilter, startsMidFile } : segFilter) : [];
       tailMessages = parseSessionMessages(canonical.slice(at) + syntheticSuffix, segFilter);
     } catch {
       return { reason: 'parse-error' };
@@ -1290,7 +1295,7 @@ async function parseHistoryWindow(
   start?: HistoryWindowStart,
 ): Promise<{ messages: SessionHistoryMessage[]; merged: string }> {
   const merged = await mergeSyntheticUserEvents(sessionId, windowText);
-  const parsed = parseSessionMessages(merged, parseOpts);
+  const parsed = parseSessionMessages(merged, { ...parseOpts, startsMidFile: true });
   // Echo-claim binding — same as the full-read path (:1572). Its absence here
   // silently killed the STRONGEST absorption evidence on exactly the sessions
   // that need it most: a whale transcript always degrades to this window, so
@@ -1416,7 +1421,7 @@ async function readHistoryWindow(
  */
 function seedWindowIncrementalState(sessionId: string, win: HistoryWindowRead, windowBytes: number): HistoryIncrementalState | undefined {
   if (!win.text || !win.text.endsWith('\n')) return undefined;
-  const st = seedIncrementalStateAt(sessionId, win.startByte, win.merged, win.text.length, win.messages, win.path);
+  const st = seedIncrementalStateAt(sessionId, win.startByte, win.merged, win.text.length, win.messages, win.path, undefined, win.startByte > 0);
   if (!st) return undefined;
   // A window read never filters rewinds (a session with in-place rewinds skips it).
   st.cutsKey = rewindCutsKey(undefined);
@@ -1476,7 +1481,7 @@ export async function readSessionHistoryRange(
     });
     if (injected.length > 0) merged = text + '\n' + injected.join('\n');
   }
-  const messages = parseSessionMessages(merged);
+  const messages = parseSessionMessages(merged, start > 0 ? { startsMidFile: true } : undefined);
   try {
     const { bindEchoClaims } = await import('./echo-claims.js');
     bindEchoClaims(sessionId, messages);

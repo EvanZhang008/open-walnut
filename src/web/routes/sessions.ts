@@ -1779,7 +1779,9 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
             if (page?.messages.length) {
               const keyOf = (m: SessionHistoryMessage) => m.msgId ? `${m.msgId}|${m.timestamp}|${m.role}` : undefined
               const tailKeys = new Set(history.messages.map(keyOf).filter(Boolean))
-              history.messages = [...page.messages.filter(m => !keyOf(m) || !tailKeys.has(keyOf(m))), ...history.messages]
+              const { withoutHeldSends } = await import('../../core/history-same-send.js')
+              const older = withoutHeldSends(page.messages.filter(m => !keyOf(m) || !tailKeys.has(keyOf(m))), history.messages)
+              history.messages = [...older, ...history.messages]
               if (page.reachedStart) history.windowed = false
             }
           }

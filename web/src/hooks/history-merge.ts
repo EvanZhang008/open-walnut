@@ -26,6 +26,7 @@
 import type { SessionHistoryMessage } from '@/types/session';
 import { applyRevisedMessages } from './history-anchor';
 import { appendAcrossGap, gapIndex, liveGaps, type HistoryGap } from './history-gap';
+import { isSameSend, withoutHeldSends } from '../../../src/core/history-same-send';
 
 export interface DeltaResultLike {
   messages: SessionHistoryMessage[];
@@ -104,7 +105,7 @@ export function planDeltaMerge(
 // REPLACES the server's window but must not throw away pages the reader already
 // loaded above it, and pages only join the array where the two provably touch.
 
-type RowIdentity = { msgId?: string; timestamp?: string; role?: string };
+type RowIdentity = { msgId?: string; timestamp?: string; role?: string; text?: string };
 
 /** One parsed row's identity. A message split across the seam of two windows
  *  shares its msgId but not its timestamp, so the pair tells the halves apart. */
@@ -134,9 +135,11 @@ export function stitchHeldOlder<T extends RowIdentity>(held: readonly T[], incom
     const k = rowKey(incoming[j]);
     const at = k ? heldAt.get(k) : undefined;
     if (at === undefined) continue;
-    const headIds = new Set(incoming.slice(0, j).map((m) => m.msgId).filter((id): id is string => !!id));
+    const head = incoming.slice(0, j);
+    const headIds = new Set(head.map((m) => m.msgId).filter((id): id is string => !!id));
     let cut = at;
-    while (cut > 0 && headIds.has(held[cut - 1].msgId ?? '')) cut--;
+    // A send taken at the window's first line is named by its take's time there: the same send.
+    while (cut > 0 && (headIds.has(held[cut - 1].msgId ?? '') || head.some((m) => isSameSend(m, held[cut - 1])))) cut--;
     return cut > 0 ? [...held.slice(0, cut), ...incoming] : incoming as T[];
   }
   return incoming as T[];
@@ -154,11 +157,12 @@ export function mergeHistoryBackfill<T extends RowIdentity>(held: readonly T[], 
 }
 
 /** Add one older page above what is held. Rows already held are skipped, so a
- *  page fetched twice cannot double a row. */
+ *  page fetched twice cannot double a row, and so is a send the held rows hold where it
+ *  was taken while the page has only its enqueue (history-same-send.ts). */
 export function prependOlderPage<T extends RowIdentity>(held: readonly T[], page: readonly T[]): T[] {
   const have = new Set<string>();
   for (const m of held) { const k = rowKey(m); if (k) have.add(k); }
-  const fresh = page.filter((m) => { const k = rowKey(m); return !k || !have.has(k); });
+  const fresh = withoutHeldSends(page.filter((m) => { const k = rowKey(m); return !k || !have.has(k); }), held);
   return fresh.length === 0 ? held as T[] : [...fresh, ...held];
 }
 

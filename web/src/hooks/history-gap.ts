@@ -14,8 +14,10 @@
  * pages are added above or deltas below, and it is gone once that row is.
  */
 
+import { withoutHeldSends } from '../../../src/core/history-same-send';
+
 /** The identity history-merge uses for a row (msgId + timestamp + role). */
-type Keyed = { msgId?: string; timestamp?: string; role?: string };
+type Keyed = { msgId?: string; timestamp?: string; role?: string; text?: string };
 
 export function gapRowKey(m: Keyed): string | undefined {
   return m.msgId ? `${m.msgId}|${m.timestamp ?? ''}|${m.role ?? ''}` : undefined;
@@ -88,7 +90,8 @@ export function fillGap<T extends Keyed>(
   for (const m of messages) { const k = gapRowKey(m); if (k) held.add(k); }
   let reached = reachedStart;
   const fresh: T[] = [];
-  for (const m of page) {
+  // A send the held rows hold where it was taken, here only as its enqueue: the same send.
+  for (const m of withoutHeldSends(page, messages)) {
     const k = gapRowKey(m);
     const ts = m.timestamp ?? '';
     if ((k && held.has(k)) || (ts && ts < beforeTs)) { reached = true; continue; }

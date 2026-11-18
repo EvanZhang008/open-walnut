@@ -171,3 +171,77 @@ describe('a sent message sits where Claude Code took it', () => {
     expect(parents).toEqual([undefined, undefined, 'py', 'p1', 'p2']);
   });
 });
+
+describe('a window that starts between a send and its take keeps the send', () => {
+  // 2026-11-18 (the Mac app, a 125 MB session): the tail window began after the enqueue of the
+  // user's mid-turn send and before its take, the window's parse had no row for it, and the
+  // refresh dropped the message the reader saw. The CLI's attachment carries the enqueue's time.
+  const takenAt = (uuid: string, parent: string, prompt: string, s: number, sentAt: number) => ({
+    ...taken(uuid, parent, prompt, s),
+    attachment: { type: 'queued_command', prompt, commandMode: 'prompt', source_uuid: `src-${uuid}`, timestamp: T(sentAt) },
+  });
+  const LINES = [
+    ...START,
+    tool('t1', 'uQ', 'tu1', 1),
+    enqueue(F, 2),
+    said('a1', 't1', A1, 3),
+    result('r1', 'a1', 'tu1', 4),
+    takenAt('q1', 'r1', F, 4, 2),
+    remove(F, 4),
+    said('a2', 'q1', A2, 5),
+  ];
+  const key = (m: SessionHistoryMessage) => `${m.msgId}|${m.timestamp}|${m.role}`;
+  /** A window's parse: its text starts at the window's first line. */
+  const parseWindow = (lines: unknown[]) => parseSessionMessages(lines.map((l) => JSON.stringify(l)).join('\n'), { startsMidFile: true });
+
+  it('every cut between the enqueue and the take keeps the same row where it was taken', () => {
+    const whole = parse(LINES);
+    const sent = whole.find((m) => m.text === F)!;
+    const enqueueAt = LINES.findIndex((l) => (l as { operation?: string }).operation === 'enqueue' && (l as { content?: string }).content === F);
+    const takeAt = LINES.findIndex((l) => (l as { type?: string }).type === 'attachment');
+    for (let cut = enqueueAt + 1; cut <= takeAt; cut++) {
+      const rows = parseWindow(LINES.slice(cut));
+      const got = rows.filter((m) => m.text === F);
+      expect(got.map(key), `cut at line ${cut}`).toEqual([key(sent)]);
+      expect(got[0].sourceUuid).toBe('src-q1');
+      expect(order(rows).indexOf(`user:${F}`), `cut at line ${cut}`).toBe(order(rows).indexOf(`assistant:${A2}`) - 1);
+    }
+  });
+
+  it('with the enqueue in the parse there is still one row', () => {
+    expect(parse(LINES).filter((m) => m.text === F)).toHaveLength(1);
+  });
+
+  it('a take whose attachment names no send time makes no row (its id would not match)', () => {
+    const lines = LINES.map((l) => ((l as { type?: string }).type === 'attachment' ? taken('q1', 'r1', F, 4) : l));
+    const cut = lines.findIndex((l) => (l as { operation?: string }).operation === 'enqueue' && (l as { content?: string }).content === F) + 1;
+    expect(parseWindow(lines.slice(cut)).filter((m) => m.text === F)).toHaveLength(0);
+  });
+
+  it('a resend of the same text later in the window does not hide the first send\'s take', () => {
+    const cut = LINES.findIndex((l) => (l as { operation?: string }).operation === 'enqueue' && (l as { content?: string }).content === F) + 1;
+    const rows = parseWindow([...LINES.slice(cut), enqueue(F, 9)]);
+    expect(rows.filter((m) => m.text === F).length).toBeGreaterThanOrEqual(1);
+    expect(rows.some((m) => m.text === F && m.sourceUuid === 'src-q1')).toBe(true);
+  });
+
+  it('a text that is not a window\'s (an incremental segment, whose prefix holds the enqueue) makes no row', () => {
+    const cut = LINES.findIndex((l) => (l as { operation?: string }).operation === 'enqueue' && (l as { content?: string }).content === F) + 1;
+    expect(parse(LINES.slice(cut)).filter((m) => m.text === F)).toHaveLength(0);
+    expect(parseWindow(LINES).filter((m) => m.text === F)).toHaveLength(1);
+  });
+
+  it('a take stamped a few ms before its enqueue (the CLI does, about half the time) is the same send', async () => {
+    const { isSameSend } = await import('../../src/core/history-same-send.js');
+    const skewed = LINES.map((l) => ((l as { type?: string }).type === 'attachment'
+      ? { ...(l as object), attachment: { ...(l as { attachment: object }).attachment, timestamp: new Date(Date.parse(T(2)) - 2).toISOString() } } : l));
+    const whole = parse(skewed).find((m) => m.text === F)!;
+    const cut = skewed.findIndex((l) => (l as { operation?: string }).operation === 'enqueue' && (l as { content?: string }).content === F) + 1;
+    const windowRow = parseWindow(skewed.slice(cut)).find((m) => m.text === F)!;
+    expect(key(windowRow)).not.toBe(key(whole));
+    expect(isSameSend(windowRow, whole)).toBe(true);
+    // The page before the window holds the enqueue alone: still one send.
+    const pageRow = parse(skewed.slice(0, cut)).find((m) => m.text === F)!;
+    expect(isSameSend(pageRow, windowRow)).toBe(true);
+  });
+});
