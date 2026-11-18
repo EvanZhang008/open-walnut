@@ -122,6 +122,10 @@ beforeEach(() => {
   try { fs.rmSync(NOTIFICATIONS_FILE.replace(/\.json$/, '.backup.json'), { force: true }); } catch { /* noop */ }
   bus.clear();
   broadcastEvent.mockClear();
+  // The store resolves credential asks from config, even for ordinary letters.
+  // A first-run config has no login hint or hosts, but is still an object.
+  getConfig.mockReset();
+  getConfig.mockResolvedValue({});
   uninstallLetterBridge();
 });
 
@@ -232,6 +236,7 @@ describe('letter store → envelope (the bridge installs itself)', () => {
       sender: SENDER,
     });
 
+    expect(letter.credentialAsk).toBeUndefined();
     const rec = await envelopeWhen(letter.id);
     expect(rec).toBeDefined();
     // Who it is from leads the card and the desktop notification (letter-origin.ts).
