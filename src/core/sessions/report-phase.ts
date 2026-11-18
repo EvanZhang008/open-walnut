@@ -23,12 +23,16 @@
  *
  * Never over a move made after the turn ended (a person's pick, its leader's, a new turn), never
  * while its session runs a turn, never on a finished task. A parked task moves only when its report
- * says it is stopped on the user: a standing routine's fire turn ends back in WAITING (phase.ts),
- * and when that turn found something only the user can give, its report is how the user hears it.
+ * asks the user something concrete (FOR_USER_ASK): a standing routine's fire turn ends back in
+ * WAITING (phase.ts), and when that turn found something only the user can give, its report is how
+ * the user hears it. A turn that parked its task on a wait of its own and only answered the user
+ * (needs-you with no ask: their answer to read) stays parked (2026-11-18, the user: "if this task
+ * already ahve a trigger and just wating wh not it self mark it as snoozed, waiting"): the park is
+ * its own word that nothing else is left for them, and its answer stays unread on its row.
  */
 import { log } from '../../logging/index.js';
 import type { Task, TaskPhase } from '../types.js';
-import type { StatusReport } from '../user-status.js';
+import { reportAsksUser, type StatusReport } from '../user-status.js';
 import { openOwed } from '../peers/structured-reply.js';
 import { OUTSIDE_WAIT_KINDS, outsideWaitEvidence, parksOnlyOnTrigger, reportNamesOutsideWait, waitWordsNameUser } from './outside-wait.js';
 
@@ -110,11 +114,11 @@ export function reportNeedsEvidence(report: Pick<StatusReport, 'state' | 'waitin
 
 /** Whether a phase write to `next` may follow the report of the turn that ended at `turnEndedAt`. */
 export function reportMayMovePhase(
-  task: Pick<Task, 'phase' | 'phase_changed_at'>, turnEndedAt: number, next?: TaskPhase | null, state?: StatusReport['state'],
+  task: Pick<Task, 'phase' | 'phase_changed_at'>, turnEndedAt: number, next?: TaskPhase | null, report?: Pick<StatusReport, 'state' | 'ask'> | null,
 ): boolean {
-  // A parked task only for a real stop on the user: a routine whose turn left something for the
-  // user to read "when you have time" stays waiting on its next run.
-  const from = task.phase === 'NEED_ACTION' || task.phase === 'IN_PROGRESS' || (task.phase === 'WAITING' && next === 'NEED_ACTION' && state === 'needs');
+  // A parked task only for a real ask of the user: a routine whose turn left something for the user
+  // to read "when you have time", or a turn that answered them and parked, stays waiting.
+  const from = task.phase === 'NEED_ACTION' || task.phase === 'IN_PROGRESS' || (task.phase === 'WAITING' && next === 'NEED_ACTION' && reportAsksUser(report));
   if (!from) return false;
   const moved = task.phase_changed_at ? Date.parse(task.phase_changed_at) : NaN;
   return !Number.isFinite(moved) || moved <= turnEndedAt + SLACK_MS;
@@ -141,7 +145,7 @@ export async function applyReportPhase(
     log.session.info('a wait_until wake answered with only an ack: not parked again', { taskId, sessionId });
     next = task.org_role ? null : 'NEED_ACTION';
   }
-  if (!next || next === task.phase || !reportMayMovePhase(task, turnEndedAt, next, report.state)) return null;
+  if (!next || next === task.phase || !reportMayMovePhase(task, turnEndedAt, next, report)) return null;
   const { readMarkerForPhase } = await import('../phase.js');
   // leaveHeld: the turn's own report is the session machine's exit from a wait (reportMayMovePhase
   // lets a parked task out only for a stop on the user). Without it the raw write's held-phase
@@ -150,7 +154,7 @@ export async function applyReportPhase(
   // three draft CRs sat there for hours). The stored phase is what counts, not `changed`.
   const res = await updateTaskRaw(taskId, { phase: next, ...readMarkerForPhase(next) }, {
     emitEvent: true, push: true, source: 'status-report', leaveHeld: true,
-    shouldUpdate: (cur) => reportMayMovePhase(cur, turnEndedAt, next, report.state) && cur.phase === task.phase,
+    shouldUpdate: (cur) => reportMayMovePhase(cur, turnEndedAt, next, report) && cur.phase === task.phase,
   });
   if (!res?.changed || res.task?.phase !== next) return null;
   log.session.info('status report moved the phase', { taskId, sessionId, from: task.phase, to: next, state: report.state });
@@ -203,7 +207,7 @@ export async function applyStoredReports(): Promise<number> {
     const ended = Date.parse(report.turn_ended_at ?? '');
     const turnEndedAt = Number.isFinite(ended) ? ended : at;
     const next = phaseForReport(report, task, false, 'unknown');
-    if (!next || next === task.phase || !reportMayMovePhase(task, turnEndedAt, next, report.state)) continue;
+    if (!next || next === task.phase || !reportMayMovePhase(task, turnEndedAt, next, report)) continue;
     if (await applyReportPhase(task.id, task.session_id ?? '', report, turnEndedAt).catch(() => null)) moved++;
   }
   if (moved) log.task.info('status reports moved phases at start', { moved });

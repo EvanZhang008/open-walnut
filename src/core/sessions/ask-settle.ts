@@ -14,6 +14,7 @@
  */
 import type { Task } from '../types.js';
 import type { AskWhere } from './ask-answer.js';
+import { awaitsUserDecision } from '../human-inbox/open-decision.js';
 
 export type SettledVia = (
   | { via: 'board_choice'; board: string; choice: string; delivery: string }
@@ -149,7 +150,7 @@ async function letterSettler(input: SettleInput): Promise<() => Promise<SettledV
   const { listLetters, settleLetter, LetterError } = await import('../human-inbox/store.js');
   const { letters } = await listLetters({ archived: false });
   const letter = letters
-    .filter((l) => l.type === 'action_required' && !l.answered && !l.archived && l.sender?.taskId === input.target.id)
+    .filter((l) => awaitsUserDecision(l) && l.sender?.taskId === input.target.id)
     .sort((a, b) => b.createdAt - a.createdAt)[0];
   if (!letter) throw new SettleError('no_open_ask', `Not sent: "${input.target.title}" has no open decision letter now (it was answered or settled).`);
   const { answeredByCaller, answerLetterAndDeliver, withUserWords } = await import('../human-inbox/letter-ops.js');

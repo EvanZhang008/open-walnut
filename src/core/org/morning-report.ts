@@ -20,6 +20,7 @@ import { ORG_REPORT } from '../human-inbox/walnut-letters/org-report.js';
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
 import { briefSectionOf } from '../sessions/brief-structure.js';
 import { sameAreaTasks, sameTaskArea } from '../router/same-area.js';
+import { awaitsUserDecision } from '../human-inbox/open-decision.js';
 
 const SCHEDULE_FILE = path.join(WALNUT_HOME, 'org', 'report-schedule.json');
 /** A report the clock could not send this long after its time is dropped, with a log line. */
@@ -68,7 +69,7 @@ export function buildMorningReport(owner: Task, tasks: readonly Task[], letters:
     if (!from) { withheldDecisions++; return false; }
     return sameTaskArea(owner, from);
   };
-  const decisions = letters.filter((l) => l.type === 'action_required' && !l.answered && !l.archived && !l.settled && letterInArea(l));
+  const decisions = letters.filter((l) => awaitsUserDecision(l) && letterInArea(l));
   const refs = new Set<string>();
   const needs = scope.filter((t) => briefSectionOf(t) === 'needs').sort((a, b) => atOf(b) - atOf(a));
   const done = scope.filter((t) => t.phase === 'COMPLETE' && atOf(t) >= since).sort((a, b) => atOf(b) - atOf(a));

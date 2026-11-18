@@ -33,6 +33,7 @@ import { briefTeam } from '../user-status.js';
 import { decisionSinceOf, settleCheck, usersWordsLine, verifyUsersWords, type UsersWordsCheck, type UserSaid } from './user-spoke.js';
 import { reportDecision } from '../ask-decision.js';
 import { askAnswerLine, askKey, keptAnswers, type AskAnswer, type SameAskFold } from '../same-ask.js';
+import { awaitsUserDecision } from '../human-inbox/open-decision.js';
 
 export class AskAnswerError extends Error {
   constructor(readonly code: 'not_above' | 'no_open_ask' | 'user_words' | 'user_spoke_since' | 'bad_request' | 'human_approval' | 'not_confirmed', message: string, readonly status = 409) {
@@ -102,7 +103,7 @@ async function askPutAt(target: Task, where: AskWhere): Promise<string | null> {
     try {
       const { listLetters } = await import('../human-inbox/store.js');
       const { letters } = await listLetters({ archived: false });
-      const letter = letters.filter((l) => l.type === 'action_required' && !l.answered && !l.archived && l.sender?.taskId === target.id)
+      const letter = letters.filter((l) => awaitsUserDecision(l) && l.sender?.taskId === target.id)
         .sort((a, b) => b.createdAt - a.createdAt)[0];
       return letter ? new Date(letter.createdAt).toISOString() : null;
     } catch {

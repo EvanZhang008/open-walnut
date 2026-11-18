@@ -45,6 +45,7 @@ import { openOwed, type StructuredReply, type TaskOwed, type TaskResultReport } 
 import type { UserStatus } from '../user-status.js';
 import { userSaidLine } from './user-spoke.js';
 import type { OpenLineKind } from './stale-note.js';
+import { awaitsUserDecision } from '../human-inbox/open-decision.js';
 
 /** Every kind of thing a close owes the user. tests/e2e/owed-close.test.ts holds a close by each one. */
 export type OwedSource = 'progress' | 'ask' | 'letter' | 'choice' | 'thread' | 'decision' | 'held';
@@ -137,7 +138,7 @@ export async function owedToUser(task: Task, fields?: StructuredReply | null): P
     const { listLetters } = await import('../human-inbox/store.js');
     const { letters } = await listLetters({ archived: false });
     for (const l of letters) {
-      if (l.type === 'action_required' && !l.answered && !l.archived && l.sender?.taskId === task.id) add('letter', `Answer the letter "${l.subject}"`);
+      if (awaitsUserDecision(l) && l.sender?.taskId === task.id) add('letter', `Answer the letter "${l.subject}"`);
     }
   } catch { /* unread: nothing */ }
   try {

@@ -39,6 +39,7 @@ import { snoozedUntil } from './snooze.js';
 import { isQuietTurn } from './sessions/quiet-turn.js';
 import { workspaceHoldAsk } from './workspaces/decisions.js';
 import { orgEnabledCached } from './org/org-enabled.js';
+import { decisionAnswered } from './human-inbox/open-decision.js';
 
 const SUBSCRIBER = 'user-status-sync';
 const OWN_SOURCE = 'user-status';
@@ -225,7 +226,9 @@ async function readLetters(): Promise<StatusFacts['letters']> {
     const now = Date.now();
     for (const l of [...list].sort((a, b) => a.createdAt - b.createdAt)) {
       const tid = l.sender?.taskId;
-      if (l.answered || l.archived || !tid) continue;
+      // A decision is answered by a pick or by words written back (open-decision.ts); a review by its pick.
+      const done = l.type === 'review' ? !!l.answered : decisionAnswered(l);
+      if (done || l.archived || !tid) continue;
       // A letter the user read a while ago is no news, as for a decision.
       if (l.read && !(typeof l.readAt === 'number' && now < l.readAt + DECISION_SEEN_GRACE_MS)) continue;
       if (l.type === 'review') reviews.set(tid, l.subject);

@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest'
 import { checkTaskAnswer, isBareYes, stepsIn } from '../../src/core/human-inbox/answer-approval.js'
 import { ANSWERED_RECENTLY_MS, OPEN_REQUEST_MS, replyInsteadOf } from '../../src/core/human-inbox/reply-instead.js'
-import { completionSettleReason, isOpenDecision, letterActivityAt } from '../../src/core/human-inbox/decision-settle.js'
+import { completionSettleReason, isLeftBehindDecision, letterActivityAt } from '../../src/core/human-inbox/decision-settle.js'
 import type { SessionRequest } from '../../src/core/session-requests.js'
 import type { LetterRecord } from '../../src/core/human-inbox/types.js'
 
@@ -129,7 +129,7 @@ describe('a completed task\'s decision letters', () => {
   const task = { id: 't1', title: 'TestFlight 140', completed_at: '2026-10-29T06:50:00Z' }
 
   it('the 10-29 letter is settled, with the task and when it completed', () => {
-    expect(isOpenDecision(letter)).toBe(true)
+    expect(isLeftBehindDecision(letter)).toBe(true)
     expect(letterActivityAt(letter)).toBe(Date.parse('2026-10-29T06:43:00Z'))
     expect(completionSettleReason(letter, task)).toBe('Its task "TestFlight 140" was completed on 2026-10-29 06:50 UTC with this unanswered, so nothing waits on the answer.')
   })

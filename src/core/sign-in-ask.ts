@@ -270,11 +270,11 @@ const letterAsksSignIn = new Map<string, boolean>();
  */
 export async function openTaskSignInLetter(): Promise<TaskSignInLetter | null> {
   const { listLetters, getLetter } = await import('./human-inbox/store.js');
-  const { isOpenDecision } = await import('./human-inbox/duplicate-letter.js');
+  const { awaitsUserDecision } = await import('./human-inbox/open-decision.js');
   const { getConfig } = await import('./config-manager.js');
   const words = loginCommandWords((await getConfig().catch(() => ({}) as { ssh_login_hint?: string })).ssh_login_hint);
   const open = (await listLetters({ archived: false })).letters
-    .filter((l) => isOpenDecision(l) && !!l.sender?.taskId && (!l.credentialAsk || (l.credentialAsk.host === '__local__' && l.credentialAsk.kind !== 'login-cookie')))
+    .filter((l) => awaitsUserDecision(l) && !!l.sender?.taskId && (!l.credentialAsk || (l.credentialAsk.host === '__local__' && l.credentialAsk.kind !== 'login-cookie')))
     .sort((a, b) => a.createdAt - b.createdAt);
   const { storedCredentialAskOf, credentialAskContext } = await import('./human-inbox/credential-ask.js');
   const context = await credentialAskContext();

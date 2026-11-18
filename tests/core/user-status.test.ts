@@ -193,11 +193,15 @@ describe('a turn\'s report moves its phase (sessions/report-phase.ts)', () => {
   it('a parked task moves only to Needs you (a routine\'s fire turn that found something for the user)', () => {
     const end = NOW - 60_000
     const parked = { phase: 'WAITING' as const, phase_changed_at: new Date(end).toISOString() }
-    expect(reportMayMovePhase(parked, end, 'NEED_ACTION', 'needs')).toBe(true)
+    const asks = { state: 'needs' as const, ask: 'Approve the prod deploy?' }
+    expect(reportMayMovePhase(parked, end, 'NEED_ACTION', asks)).toBe(true)
     // "When you have time" leaves a routine on its next run.
-    expect(reportMayMovePhase(parked, end, 'NEED_ACTION', 'waiting')).toBe(false)
-    expect(reportMayMovePhase(parked, end, 'IN_PROGRESS', 'working')).toBe(false)
-    expect(reportMayMovePhase({ ...parked, phase_changed_at: new Date(end + 30_000).toISOString() }, end, 'NEED_ACTION', 'needs')).toBe(false)
+    expect(reportMayMovePhase(parked, end, 'NEED_ACTION', { state: 'waiting' })).toBe(false)
+    expect(reportMayMovePhase(parked, end, 'IN_PROGRESS', { state: 'working' })).toBe(false)
+    // A turn that only answered the user (needs-you with no ask) leaves its own park alone.
+    expect(reportMayMovePhase(parked, end, 'NEED_ACTION', { state: 'needs' })).toBe(false)
+    expect(reportMayMovePhase(parked, end, 'NEED_ACTION', { state: 'needs', ask: 'none' })).toBe(false)
+    expect(reportMayMovePhase({ ...parked, phase_changed_at: new Date(end + 30_000).toISOString() }, end, 'NEED_ACTION', asks)).toBe(false)
   })
 })
 

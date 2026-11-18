@@ -63,9 +63,9 @@ export async function runLetterRecheck(
   const out = { settled: [] as string[], woken: [] as string[] };
   try {
     const { listLetters, settleLettersWhere } = await import('../human-inbox/store.js');
-    const { isOpenDecision, letterActivityAt, completionSettleReason } = await import('../human-inbox/decision-settle.js');
+    const { isLeftBehindDecision, letterActivityAt, completionSettleReason } = await import('../human-inbox/decision-settle.js');
     const { listTasks, listTasksByIds, updateTaskRaw } = await import('../task-manager.js');
-    const open = (await listLetters({ archived: false })).letters.filter(isOpenDecision);
+    const open = (await listLetters({ archived: false })).letters.filter(isLeftBehindDecision);
     const ids = [...new Set(open.map((l) => l.sender.taskId!))];
     const tasks = new Map((ids.length ? await listTasksByIds(ids) : []).map((t) => [t.id, t]));
 

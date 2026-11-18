@@ -716,6 +716,12 @@ const none = (s: string | null | undefined): boolean => {
   return !v || v === 'none' || v === 'n/a' || v === '-' || v === 'unchanged';
 };
 
+/** The report asks the user something concrete: a Needs you with its words, not a turn that only
+ *  answered them (FOR_USER_STATE needs-you with no FOR_USER_ASK: their answer to read). */
+export function reportAsksUser<R extends Pick<StatusReport, 'state' | 'ask'>>(report: R | null | undefined): report is R & { ask: string } {
+  return report?.state === 'needs' && !none(report.ask);
+}
+
 function words(report: StatusReport | null | undefined, nowMs: number, running: boolean): Pick<UserStatus, 'now' | 'next' | 'at' | 'stale' | 'reportBy' | 'reportSessionId'> {
   if (!report) return {};
   const at = report.at;
@@ -1035,7 +1041,7 @@ function snoozeOf(input: UserStatusInput, s: UserStatus, nowMs: number): UserSta
 
 /** The ask a report makes of the user, in the words derive() shows. */
 function reportAsk(report: StatusReport | null | undefined, hasLeader: boolean): string | undefined {
-  if (report?.state === 'needs' && !none(report.ask)) return clean(report.ask);
+  if (reportAsksUser(report)) return clean(report.ask);
   if (waitIsUsers(report, hasLeader) && !none(report!.waiting_on)) return clean(report!.waiting_on);
   return undefined;
 }
@@ -1188,7 +1194,7 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   if (input.phase === 'NEED_ACTION') {
     // The task's own words come first (2026-10-31, the user: what it needs is the task's to say; a
     // letter or a Board choice is a place he can answer, never what overrides it).
-    if (report?.state === 'needs' && !none(report.ask)) return strip({ state: 'needs', source: 'session', ask: clean(report.ask), ...w, ...src });
+    if (reportAsksUser(report)) return strip({ state: 'needs', source: 'session', ask: clean(report.ask), ...w, ...src });
     if (!none(input.openLetter)) return strip({ state: 'needs', source: 'letter', ask: clean(input.openLetter), ...w });
     if (!none(input.openChoice) && !choiceOverruled(input, anyReport)) {
       return strip({ state: 'needs', source: 'choice', ask: clean(input.openChoice), ...(input.openChoiceRef ? { choice: { ...input.openChoiceRef } } : {}), ...w });
@@ -1225,7 +1231,7 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     if (Number.isFinite(stoppedAt) && !running && !asksUser && !(anyReport && Date.parse(anyReport.at) > stoppedAt)) {
       return strip({ state: 'waiting', kind: input.hasLeader ? 'lead' : 'you', waitingOn: 'Its team was stopped: Resume the team, or a message to it, starts it again', ...w });
     }
-    if (report?.state === 'needs' && !none(report.ask)) return strip({ state: 'needs', source: 'session', ask: clean(report.ask), ...w, ...src });
+    if (reportAsksUser(report)) return strip({ state: 'needs', source: 'session', ask: clean(report.ask), ...w, ...src });
     // A wait that is the user's (2026-10-30: "other: the meeting notes") is their ask, in its words.
     if (waitIsUsers(report, hasAbove(input)) && !none(report!.waiting_on)) {
       return strip({ state: 'needs', source: 'session', ask: clean(report!.waiting_on), ...w, ...src });

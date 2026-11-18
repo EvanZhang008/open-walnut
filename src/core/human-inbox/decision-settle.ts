@@ -22,8 +22,10 @@ import { TRIAGE_AGENT_ID } from '../triage/types.js';
 import type { LetterLang } from './walnut-letters/languages.js';
 import { COMPLETION_SETTLE_WORDS } from './walnut-letters/thread-words.js';
 
-/** A decision the user can still answer: the kind both rules look at. */
-export function isOpenDecision(letter: LetterRecord): boolean {
+/** A decision letter still in the inbox, no option picked: the kind both rules tidy up. Wider
+ *  than open-decision.ts on purpose: one the user wrote back in no longer asks him anything, yet its
+ *  task's completion still settles it, so a finished task leaves no decision letter behind. */
+export function isLeftBehindDecision(letter: LetterRecord): boolean {
   return letter.type === 'action_required' && !letter.answered && !letter.archived
     && !letter.sender?.pluginId && !letter.items?.length && !!letter.sender?.taskId;
 }
@@ -43,7 +45,7 @@ export function completionSettleReason(
   task: { id: string; title?: string; completed_at?: string; agent_id?: string },
   lang: LetterLang = 'en',
 ): string | null {
-  if (!isOpenDecision(letter) || letter.pinned || letter.sender.taskId !== task.id) return null;
+  if (!isLeftBehindDecision(letter) || letter.pinned || letter.sender.taskId !== task.id) return null;
   // An Inbox Triage run completes when its run ends and leaves its decisions for the user: an
   // answer cold-resumes that run, and the next run takes back what is left (triage/runs.ts).
   if (task.agent_id === TRIAGE_AGENT_ID) return null;

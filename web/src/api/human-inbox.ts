@@ -16,6 +16,7 @@ import { apiGet, apiPost } from './client';
 import type { InboxLetterItem } from './human-inbox-items';
 import type { ImageAttachment } from './chat';
 import { buildImageRefsPayload } from './image-upload';
+import { awaitsUserDecision } from '../../../src/core/human-inbox/open-decision';
 
 export type LetterType = 'completion' | 'action_required' | 'review' | 'info';
 export type LetterBodyFormat = 'html' | 'markdown';
@@ -372,7 +373,9 @@ export function compareLetters(a: LetterEnvelope, b: LetterEnvelope): number {
 
 /** An action_required letter nobody has answered yet — a real to-do. */
 export function isAwaitingDecision(l: LetterEnvelope): boolean {
-  return l.type === 'action_required' && !l.answered && !l.archived;
+  // The server's one rule (an option picked or words written back answer it), so the inbox, the
+  // Org page and the task's own status agree.
+  return awaitsUserDecision(l);
 }
 
 /**

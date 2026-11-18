@@ -189,9 +189,9 @@ export function treeAsksOf(
 
 async function readOpenLetters(): Promise<OpenLetter[]> {
   const { listLetters } = await import('./human-inbox/store.js');
-  const { isOpenDecision } = await import('./human-inbox/duplicate-letter.js');
+  const { awaitsUserDecision } = await import('./human-inbox/open-decision.js');
   const { letters } = await listLetters({ archived: false });
-  return letters.filter(isOpenDecision).map((l) => ({ id: l.id, subject: l.subject, taskId: l.sender?.taskId }));
+  return letters.filter(awaitsUserDecision).map((l) => ({ id: l.id, subject: l.subject, taskId: l.sender?.taskId }));
 }
 
 /** The tree's open asks, read from the store; the inbox only when the task has a tree at all. */

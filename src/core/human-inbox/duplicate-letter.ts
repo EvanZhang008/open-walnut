@@ -16,6 +16,7 @@
  * Pure functions; the callers read the store.
  */
 import type { LetterRecord, LetterSender } from './types.js';
+import { awaitsUserDecision } from './open-decision.js';
 
 /** A repeat inside this window is a duplicate, not a new question. */
 export const DUPLICATE_WINDOW_MS = 10 * 60_000;
@@ -70,11 +71,6 @@ export function textSimilarity(a: string, b: string): number {
   return sizeA + sizeB === 0 ? 0 : (2 * shared) / (sizeA + sizeB);
 }
 
-/** A decision letter still waiting on the user: not answered, settled or archived. */
-export function isOpenDecision(l: LetterRecord): boolean {
-  return l.type === 'action_required' && !l.answered && !l.settled && !l.archived;
-}
-
 /** The sender's letter with the same subject sent inside the window, newest first, or null. */
 export function findDuplicateLetter(
   input: { subject: string; sender: LetterSender },
@@ -105,7 +101,7 @@ export function findOpenSameAsk(
   if (!key || !normalizeText(input.subject)) return null;
   let best: { letter: LetterRecord; similarity: number } | null = null;
   for (const l of letters) {
-    if (senderKey(l.sender) !== key || !isOpenDecision(l)) continue;
+    if (senderKey(l.sender) !== key || !awaitsUserDecision(l)) continue;
     const similarity = textSimilarity(input.subject, l.subject);
     if (similarity < SIMILAR_SUBJECT_MIN) continue;
     if (!best || similarity > best.similarity || (similarity === best.similarity && l.createdAt > best.letter.createdAt)) {

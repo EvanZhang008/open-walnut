@@ -31,6 +31,7 @@ import { log } from '../../logging/index.js';
 import { TRIAGE_AGENT_ID } from '../triage/types.js';
 import { LetterError } from './store.js';
 import type { LetterRecord, LetterSender } from './types.js';
+import { decisionAnswered } from './open-decision.js';
 
 /** Summary letters a run may send. The run's ONE document for the human to read. */
 export const TRIAGE_SUMMARY_LETTERS_PER_RUN = 1;
@@ -432,7 +433,7 @@ export async function withdrawSupersededTriageLetters(
   const result: WithdrawSupersededResult = { withdrawn: [], kept: 0, failed: 0 };
   const { letters } = await list();
   for (const letter of letters) {
-    if (letter.type !== 'action_required' || letter.answered) continue;
+    if (letter.type !== 'action_required' || decisionAnswered(letter)) continue;
     // Cheap shape checks first; the task-stamp lookup only runs for a letter that
     // could plausibly be one of ours.
     if (!await isTriageSender(letter.sender, deps)) continue;
