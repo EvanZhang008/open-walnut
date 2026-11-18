@@ -10,6 +10,8 @@ import { OVER_BUSY_FLAG } from './daemon-over-busy.js'
 import type { UpdateTail } from './daemon-update-tail.js'
 import { runDetachedUpdate, type NetUpdateIoOptions } from './daemon-net-update-io.js'
 import { judgeServiceUpdate, sshUpdateHost } from './daemon-update-readback.js'
+import { log } from '../logging/index.js'
+import { MKTEMP_STAGING, STAGING, STAGING_PREFIX } from './daemon-update-staging.js'
 
 // Judged and read in daemon-update-readback.ts, which tests do not replace with a double.
 export { judgeServiceUpdate, sshUpdateHost }
@@ -33,7 +35,6 @@ export interface RemoteDaemonUpdateIo {
 }
 
 const VERSION = /^walnut-daemon-[a-zA-Z0-9]+$/
-const STAGING = /^\/tmp\/open-walnut-update\.[a-zA-Z0-9]+$/
 const REMOTE_PATH = /^\/[A-Za-z0-9._/-]+$/
 
 /**
@@ -67,60 +68,145 @@ function* slices(gz: Buffer): Generator<Buffer> {
   for (let at = 0; at < gz.length; at += CHUNK_BYTES) yield gz.subarray(at, at + CHUNK_BYTES)
 }
 
+/** The prefix of a chunk dir named by its payload (chunkDirCommand). */
+const RESUMABLE = `${STAGING_PREFIX}r`
+
+/** A try's staging dir of this user's older than this is a dead update's: the next upload removes it. */
+const STALE_STAGING_MINUTES = 24 * 60
+/** Another build's chunk dir: an upload in progress writes into its dir every few seconds. */
+const STALE_CHUNKS_MINUTES = 60
+/** The find pattern of a chunk dir's name (a mktemp dir's 10 random characters never match it). */
+const CHUNK_DIR_GLOB = `open-walnut-update.r${'[0-9a-f]'.repeat(24)}`
+/** Printed by the reassembly line when the chunks do not add up to the payload. */
+const STAGE_MISMATCH = 'WALNUT_STAGE_MISMATCH'
+
+/**
+ * The upload's chunks go into a dir named by the payload's sha256, kept when the link drops
+ * mid-upload, so the next try sends only the chunks the host does not hold yet (2026-11-18:
+ * home-pc's link carried about 30 KB/s; each try of a 30 MB daemon dropped after 5 minutes
+ * and began again from the first chunk, so the update never landed). Each chunk file appears
+ * only once the host checked its size and sha256 (fs-write-part-v1), so one of the right size
+ * is whole. A dir someone else made, or a link in its place, is never used: a fresh mktemp dir
+ * then, as before. The same line removes this user's chunk dirs of other builds an hour old,
+ * and the try dirs of updates a day old.
+ */
+export function chunkDirCommand(dir: string): string {
+  // `/tmp/`: on a Mac /tmp is a link, which find does not enter without the slash.
+  const sweep = (match: string, minutes: number) => `find /tmp/ -maxdepth 1 ${match} -user "$(id -u)" -mmin +${minutes} ! -name "\${d##*/}" -exec rm -rf {} + 2>/dev/null`
+  return [
+    `d=${dir}; umask 077`,
+    sweep(`-name '${CHUNK_DIR_GLOB}'`, STALE_CHUNKS_MINUTES),
+    sweep(`-name 'open-walnut-update.*' ! -name '${CHUNK_DIR_GLOB}'`, STALE_STAGING_MINUTES),
+    `mkdir "$d" 2>/dev/null`,
+    `if [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] && chmod 700 "$d"; then echo "DIR $d"; for f in "$d"/chunk_*; do [ -f "$f" ] && echo "HAVE \${f##*/} $(wc -c < "$f")"; done; else echo "DIR $(mktemp -d ${STAGING_PREFIX}XXXXXXXXXX)"; fi`,
+    // A dir with no chunks yet ends the loop on a false test: the line still answered.
+    'true',
+  ].join('; ')
+}
+
+/** The chunk dir the line answered and the size of each chunk file already in it. */
+export function parseChunkDir(output: string): { directory: string; have: Map<string, number> } {
+  const lines = output.split('\n').map((line) => line.trim())
+  const directory = [...lines].reverse().find((line) => line.startsWith('DIR '))?.slice(4).trim() ?? ''
+  const have = new Map<string, number>()
+  for (const line of lines) {
+    const m = /^HAVE (chunk_\d{4}) +(\d+)$/.exec(line)
+    if (m) have.set(m[1], Number(m[2]))
+  }
+  return { directory, have }
+}
+
+const chunkName = (index: number) => `chunk_${String(index).padStart(4, '0')}`
+
+/** A chunk at a time, with a turn between, so a 30 MB payload never holds the event loop. */
+async function sha256Of(payload: { file: string } | { gz: Buffer }): Promise<string> {
+  const hash = createHash('sha256')
+  const parts: AsyncIterable<unknown> | Iterable<Buffer> = 'gz' in payload ? slices(payload.gz) : fs.createReadStream(payload.file, { highWaterMark: CHUNK_BYTES })
+  for await (const data of parts) {
+    hash.update(data as Buffer)
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  return hash.digest('hex')
+}
+
+/** Whether a failed reassembly proved the chunks wrong (else the link failed, and they stay). */
+function provedMismatch(error: unknown): boolean {
+  const e = error as { message?: unknown; stdout?: unknown; stderr?: unknown } | null
+  return [e?.message, e?.stdout, e?.stderr].some((said) => typeof said === 'string' && said.includes(STAGE_MISMATCH))
+}
+
 /**
  * Put this build's daemon binary (or its gz) on the host in a private temp dir,
  * checked byte for byte and by its own `--version`. The service command then copies
- * it into the install root's versions, so the dir is removed afterwards.
+ * it into the install root's versions, so the dir is removed afterwards. The chunks
+ * travel through their own dir (chunkDirCommand), which outlives a dropped link.
  */
-async function stageRemoteDaemonBinary(payload: { binary: string } | { gz: Buffer }, expectedVersion: string, io: RemoteDaemonUpdateIo): Promise<{ executable: string; directory: string }> {
+async function stageRemoteDaemonBinary(payload: { binary: string } | { gz: Buffer }, expectedVersion: string, io: RemoteDaemonUpdateIo): Promise<{ executable: string; directory: string; chunks: string | null }> {
   const temporary = 'binary' in payload ? await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-service-update-')) : null
   try {
     let chunks: AsyncIterable<unknown> | Iterable<Buffer>
+    let checksum: string
     if ('binary' in payload) {
       const compressed = path.join(temporary!, 'daemon.gz')
       await pipeline(fs.createReadStream(payload.binary), createGzip(), fs.createWriteStream(compressed, { mode: 0o600, flags: 'wx' }))
+      checksum = await sha256Of({ file: compressed })
       // Opened when the upload reads it: a staging dir refused first removes `temporary`,
       // and a stream opened already would then fail with no one listening.
       chunks = { [Symbol.asyncIterator]: () => fs.createReadStream(compressed, { highWaterMark: CHUNK_BYTES })[Symbol.asyncIterator]() }
     } else {
+      checksum = await sha256Of({ gz: payload.gz })
       chunks = slices(payload.gz)
     }
-    const directory = (await io.run('umask 077; mktemp -d /tmp/open-walnut-update.XXXXXXXXXX')).trim()
-    if (!STAGING.test(directory)) throw new Error('Invalid daemon update staging directory')
-    try {
-      const hash = createHash('sha256')
-      const files: string[] = []
-      let index = 0
-      for await (const data of chunks) {
-        const chunk = data as Buffer
-        hash.update(chunk)
-        let sent = false
-        for (let attempt = 0; attempt < 3; attempt++) {
-          const slot = index++
-          if (await io.chunk(chunk, directory, slot)) {
-            files.push(`${directory}/chunk_${String(slot).padStart(4, '0')}`)
-            sent = true
-            break
-          }
-        }
-        if (!sent) throw new Error('Daemon update upload failed; the installed service was not changed')
+    const named = `${RESUMABLE}${checksum.slice(0, 24)}`
+    const { directory: chunkDir, have } = parseChunkDir(await io.run(chunkDirCommand(named)))
+    if (!STAGING.test(chunkDir)) throw new Error('Invalid daemon update staging directory')
+    // Not this name: a mktemp dir (the name was another user's), used as one try's dir as before.
+    const resumable = chunkDir === named
+    const files: string[] = []
+    let index = 0, kept = 0
+    for await (const data of chunks) {
+      const chunk = data as Buffer
+      const name = chunkName(index)
+      files.push(`${chunkDir}/${name}`)
+      if (have.get(name) === chunk.length) { kept++; index++; continue }
+      let sent = false
+      // The same name on a retry: a write that lands late holds the same bytes.
+      for (let attempt = 0; attempt < 3 && !sent; attempt++) sent = await io.chunk(chunk, chunkDir, index)
+      if (!sent) {
+        // The chunks sent so far stay on the host for the next try; a plain mktemp dir does not.
+        if (!resumable) await removeStaging(io, chunkDir)
+        throw new Error('Daemon update upload failed; the installed service was not changed')
       }
-      const payload = `${directory}/daemon.gz`
-      const executable = `${directory}/daemon`
-      const checksum = hash.digest('hex')
-      // A Mac has no sha256sum (a host that joined over the host network may be one): shasum then.
-      const line = `printf '%s  %s\\n' '${checksum}' '${payload}'`
-      const verify = `{ if command -v sha256sum >/dev/null 2>&1; then ${line} | sha256sum -c - >/dev/null; else ${line} | shasum -a 256 -c - >/dev/null; fi; }`
+      index++
+    }
+    if (kept) log.session.info('DaemonConnection: daemon upload resumed', { kept, of: index })
+    const directory = resumable ? (await io.run(MKTEMP_STAGING)).trim() : chunkDir
+    if (!STAGING.test(directory)) throw new Error('Invalid daemon update staging directory')
+    const gz = `${directory}/daemon.gz`
+    const executable = `${directory}/daemon`
+    // A Mac has no sha256sum (a host that joined over the host network may be one): shasum then.
+    const line = `printf '%s  %s\\n' '${checksum}' '${gz}'`
+    const check = `{ if command -v sha256sum >/dev/null 2>&1; then ${line} | sha256sum -c - >/dev/null; else ${line} | shasum -a 256 -c - >/dev/null; fi; }`
+    const verify = `{ ${check} || { echo ${STAGE_MISMATCH}; echo ${STAGE_MISMATCH} >&2; exit 1; }; }`
+    let wrong = false
+    try {
       const version = await io.run(
-        `cat ${files.join(' ')} > ${payload} && ${verify} && gzip -dc ${payload} > ${executable} && rm -f ${payload} ${directory}/chunk_* && chmod 700 ${executable} && ${executable} ${DAEMON_VERSION_ARGS}`,
+        `cat ${files.join(' ')} > ${gz} && ${verify} && gzip -dc ${gz} > ${executable} && rm -f ${gz} && chmod 700 ${executable} && ${executable} ${DAEMON_VERSION_ARGS}`,
         30_000,
-      )
-      if (version.trim().split('\n').pop()?.trim() !== expectedVersion) throw new Error('Uploaded daemon version differs; the installed service was not changed')
-      return { executable, directory }
+      ).catch((error: unknown) => { wrong = provedMismatch(error); throw error })
+      if (version.trim().split('\n').pop()?.trim() !== expectedVersion) {
+        wrong = true
+        throw new Error('Uploaded daemon version differs; the installed service was not changed')
+      }
     } catch (error) {
       await removeStaging(io, directory)
+      // Chunks that do not add up to this build are of no use to the next try; a link that
+      // dropped during the check leaves them for it (2026-11-18 review).
+      if (resumable && wrong) await removeStaging(io, chunkDir)
       throw error
     }
+    // The chunks stay until the update is applied: a refused or held update sends nothing again.
+    return { executable, directory, chunks: resumable ? chunkDir : null }
   } finally {
     if (temporary) await fsp.rm(temporary, { recursive: true, force: true })
   }
@@ -133,7 +219,7 @@ async function removeStaging(io: RemoteDaemonUpdateIo, directory: string): Promi
 /** The executable to hand the service command: the one on the host when it is this build, else an upload. */
 async function serviceExecutable(
   source: ServiceDaemonSource, expectedVersion: string, io: RemoteDaemonUpdateIo,
-): Promise<{ executable: string; directory: string | null }> {
+): Promise<{ executable: string; directory: string | null; chunks?: string | null }> {
   if (source.existing && REMOTE_PATH.test(source.existing)) {
     const said = await io.run(`${source.existing} ${DAEMON_VERSION_ARGS} 2>/dev/null || true`, 30_000).catch(() => '')
     if (said.trim().split('\n').pop()?.trim() === expectedVersion) return { executable: source.existing, directory: null }
@@ -164,11 +250,11 @@ export async function updateRemoteDaemonService(
 ): Promise<'applied' | 'held'> {
   if (!VERSION.test(expectedVersion)) throw new Error('Invalid daemon build version')
   if (scope !== 'user' && scope !== 'cron') throw new Error(`Walnut does not update a ${scope} service from the server`)
-  const { executable, directory } = await serviceExecutable(source, expectedVersion, io).catch((error: unknown) => {
+  const { executable, directory, chunks } = await serviceExecutable(source, expectedVersion, io).catch((error: unknown) => {
     throw new DaemonUpdateStageError(error instanceof Error ? error.message : String(error))
   })
   // The host network's runner keeps its record in the staging dir until the server read it.
-  let keep = false
+  let keep = false, applied = false
   try {
     if (opts.onStaged && !(await opts.onStaged())) return 'held'
     // An overdue update goes over the daemon's own work (daemon-update-behind.ts).
@@ -178,7 +264,9 @@ export async function updateRemoteDaemonService(
       keep = (error as { keepStaging?: unknown } | null)?.keepStaging === true
       throw error
     })
-    return judgeServiceUpdate(answer.output, answer.tail)
+    const verdict = judgeServiceUpdate(answer.output, answer.tail)
+    applied = true
+    return verdict
   } catch (error) {
     // The build's hold is written before its record (the staging dir) goes: a server killed in
     // between keeps one of them, never neither (2026-11-04 review 5).
@@ -186,6 +274,7 @@ export async function updateRemoteDaemonService(
     throw error
   } finally {
     if (directory && !keep) await removeStaging(io, directory)
+    if (chunks && applied) await removeStaging(io, chunks)
   }
 }
 
@@ -200,7 +289,7 @@ async function updateOverSsh(
   io: RemoteDaemonUpdateIo, update: ServiceUpdateSpec,
 ): Promise<{ output: string; tail: UpdateTail | null }> {
   const own = !update.directory
-  const directory = update.directory ?? (await io.run('umask 077; mktemp -d /tmp/open-walnut-update.XXXXXXXXXX').catch(() => '')).trim()
+  const directory = update.directory ?? (await io.run(MKTEMP_STAGING).catch(() => '')).trim()
   if (!STAGING.test(directory)) throw new Error('the update could not make a dir of its own on the host, so nothing was changed')
   let keep = false
   try {
@@ -239,7 +328,7 @@ export async function installRemoteDaemonService(
   source: ServiceDaemonSource, expectedVersion: string, io: RemoteDaemonUpdateIo,
 ): Promise<RemoteInstallResult> {
   if (!VERSION.test(expectedVersion)) throw new Error('Invalid daemon build version')
-  const { executable, directory } = await serviceExecutable(source, expectedVersion, io)
+  const { executable, directory, chunks } = await serviceExecutable(source, expectedVersion, io)
   const uploaded = directory !== null
   // `|| true`: a refusal exits 1 with its JSON on stdout, which is the answer to keep.
   const cli = async (args: string, timeoutMs: number): Promise<ServiceReply | null> => {
@@ -252,7 +341,10 @@ export async function installRemoteDaemonService(
     if (reply && reply.ok !== true && (reply.failure?.code === 'handoverPending' || /retry install/i.test(reply.failure?.rollback ?? ''))) {
       reply = await cli(`install --yes --executable ${executable}`, 600_000)
     }
-    if (reply?.ok === true) return { ok: true, scope: reply.status?.scope, startup: reply.status?.startup, uploaded }
+    if (reply?.ok === true) {
+      if (chunks) await removeStaging(io, chunks)
+      return { ok: true, scope: reply.status?.scope, startup: reply.status?.startup, uploaded }
+    }
     // Never leave a config with no daemon behind it: the server will not start one beside a service.
     const left = await cli('status', 60_000).catch(() => null)
     let removed = ''

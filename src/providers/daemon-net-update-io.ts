@@ -34,6 +34,7 @@ import type { RemoteDaemonUpdateIo } from './daemon-service-update.js'
 import { installRootLine, laterLines, RUNNER_BEAT_SECONDS, servicePreamble } from './daemon-update-shell.js'
 import { PROBATION_FAILED_NAME, PROBATION_REFUSE_SECONDS, probationRecordLines, SNAPSHOT_DIR } from './daemon-update-probation.js'
 import { parseUpdateTail, TAIL_FILE, tailSteppedIn, updateSnapshotLines, updateTailLines, type UpdateTail, type UpdateTailOptions } from './daemon-update-tail.js'
+import { STAGING } from './daemon-update-staging.js'
 
 export interface NetUpdateConn {
   send(cmd: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>
@@ -85,7 +86,6 @@ export const UPDATE_WAIT_MS = 15 * 60_000
 const ARGV_WORD_MAX = 8 * 1024
 /** exec.run's own cap on a foreground run (host-exec-core.ts FOREGROUND_MAX_MS). */
 const FOREGROUND_MAX_MS = 10 * 60_000
-const STAGING = /^\/tmp\/open-walnut-update\.[a-zA-Z0-9]+$/
 const HOLD_WAIT_MS = 2 * 60_000
 export const LAUNCHED = 'walnut-update-started'
 /** The launcher found another update's runner still at work on the host, and started nothing. */

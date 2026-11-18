@@ -21,12 +21,12 @@ import { log } from '../logging/index.js'
 import { netReadText, readNetUpdateRecord, type NetUpdateConn } from './daemon-net-update-io.js'
 import { tailSteppedIn } from './daemon-update-tail.js'
 import { judgeUpdateRecord, unreadUpdates, UPDATE_RUNNER_MAX_MS } from './daemon-update-readback.js'
+import { STAGING } from './daemon-update-staging.js'
 
 /** Away this long during its update (the swap and the tail take a few minutes at worst): it has not come back yet. */
 export const NET_UPDATE_LOST_AFTER_MS = 10 * 60_000
 /** A runner with no done line this long after its launch died: its record never comes (daemon-update-readback.ts). */
 export const NET_UPDATE_RUNNER_MAX_MS = UPDATE_RUNNER_MAX_MS
-const STAGING = /^\/tmp\/open-walnut-update\.[a-zA-Z0-9]+$/
 
 /** What a host's status says about its daemon update (DaemonConnectState.daemonUpdate). */
 export interface DaemonUpdateView {

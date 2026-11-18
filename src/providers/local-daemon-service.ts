@@ -30,9 +30,9 @@ import { laterLines, LOCK_WAIT_SECONDS } from './daemon-update-shell.js'
 import { parseProbing, probingCheckScript } from './daemon-update-probation.js'
 import { daemonBusyRefusal } from './exec-runs-hold.js'
 import { OVER_BUSY_FLAG } from './daemon-over-busy.js'
+import { STAGING_PREFIX } from './daemon-update-staging.js'
 
 /** The runner's own dir: the name every update path checks (daemon-net-update-io.ts STAGING). */
-const STAGING_PREFIX = '/tmp/open-walnut-update.'
 /** How long the revive waits for a daemon after it loaded the service. */
 export const REVIVE_WAIT_SECONDS = 30
 

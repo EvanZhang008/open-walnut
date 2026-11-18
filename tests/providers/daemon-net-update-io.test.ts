@@ -8,7 +8,7 @@
  * reaches is a fake script.
  *
  * Proven here: the chunks land in order and the host checks each one; a chunk the host
- * finds corrupt is sent again, and one that never arrives whole fails the update before
+ * finds corrupt is sent again under its own name, and one that never arrives whole fails the update before
  * the service is touched; the final update runs detached (it outlives the group signal),
  * is retried while the old daemon says it has active operations, and not for any other
  * refusal; a launch that could not detach stops the script before it changed anything;
@@ -45,6 +45,15 @@ const VERSION = 'walnut-daemon-288f4bee1ea6'
 const STAGING = /\/tmp\/open-walnut-update\.[a-zA-Z0-9]+/
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-net-update-io-')))
 const made = new Set<string>()
+/** The upload's chunk dir, named by the payload's sha256 (kept until an update is applied). */
+const CHUNK_DIR = /^\/tmp\/open-walnut-update\.r[0-9a-f]{24}$/
+/** The staging dirs this case left on the host. */
+const left = () => [...made].filter((dir) => fs.existsSync(dir))
+// Every case sends the same fake daemon, so one case's kept chunks would feed the next.
+afterEach(() => {
+  for (const dir of made) if (STAGING.test(dir)) fs.rmSync(dir, { recursive: true, force: true })
+  made.clear()
+})
 afterAll(() => {
   for (const dir of made) if (STAGING.test(dir)) fs.rmSync(dir, { recursive: true, force: true })
   fs.rmSync(root, { recursive: true, force: true })
@@ -174,12 +183,12 @@ describe('the host network update io', () => {
     }
   }, 60_000)
 
-  it('sends a chunk the host found corrupt again, under a new name', async () => {
+  it('sends a chunk the host found corrupt again, under its own name (a late write holds the same bytes)', async () => {
     const binary = fakeDaemon()
     let damaged = 0
     const host = miniHost({ corrupt: (p) => /chunk_0000$/.test(p) && damaged++ === 0 })
     await updateRemoteDaemonService({ binary }, VERSION, createNetUpdateIo(host, fast()), 'user')
-    expect(host.writes.filter((p) => /chunk_\d{4}$/.test(p)).slice(0, 2).map((p) => p.slice(-4))).toEqual(['0000', '0001'])
+    expect(host.writes.filter((p) => /chunk_\d{4}$/.test(p)).map((p) => p.slice(-4))).toEqual(['0000', '0000'])
     expect(calls()).toHaveLength(1)
   }, 60_000)
 
@@ -191,7 +200,10 @@ describe('the host network update io', () => {
     expect(host.writes.filter((p) => /chunk_\d{4}$/.test(p))).toHaveLength(3)
     expect(calls()).toEqual([])
     expect(host.lines.some((l) => l.includes('daemon update') || l.includes('update.sh'))).toBe(false)
-    for (const dir of made) expect(fs.existsSync(dir)).toBe(false)
+    // Only the chunk dir stays, for the next try, and it holds no damaged chunk.
+    expect(left()).toHaveLength(1)
+    expect(left()[0]).toMatch(CHUNK_DIR)
+    expect(fs.readdirSync(left()[0]).filter((f) => /^chunk_\d{4}$/.test(f))).toEqual([])
   }, 60_000)
 
   it('asks again while the old daemon has active operations, and reads the answer after the link comes back', async () => {
@@ -232,7 +244,7 @@ describe('the host network update io', () => {
     expect(chunks.length).toBe(Math.ceil(gz.length / 262_144))
     expect(chunks.length).toBeGreaterThan(1)
     expect(calls()).toHaveLength(1)
-    for (const dir of made) expect(fs.existsSync(dir)).toBe(false)
+    expect(left()).toEqual([])
   }, 60_000)
 
   it('a walnut file whose daemon version differs is refused before the service is touched', async () => {
@@ -243,7 +255,8 @@ describe('the host network update io', () => {
     expect(calls()).toEqual([])
     expect(host.writes.some((p) => p.endsWith('/update.sh'))).toBe(false)
     expect(host.lines.some((l) => l.includes('walnut daemon update'))).toBe(false)
-    for (const dir of made) expect(fs.existsSync(dir)).toBe(false)
+    // The chunks proved to be another build: none of them is kept.
+    expect(left()).toEqual([])
   }, 60_000)
 
   it('what the login profile prints never reaches the answers it reads', async () => {
@@ -348,7 +361,9 @@ describe('the host network update io', () => {
       .rejects.toThrow('1 send in flight')
     expect(calls()).toEqual([])
     expect(host.lines.some((l) => l.includes('update.sh'))).toBe(false)
-    for (const dir of made) expect(fs.existsSync(dir)).toBe(false)
+    // The try's dir is gone; the chunks stay so the next try sends nothing again.
+    expect(left()).toHaveLength(1)
+    expect(left()[0]).toMatch(CHUNK_DIR)
   }, 60_000)
 })
 
@@ -483,7 +498,9 @@ describe('the runner\'s tail after the update', () => {
     expect(String(err)).toContain('the update answered ok, but afterwards on the host: no daemon answered within 2 s, so the previous service config was put back, and its daemon answers')
     expect(fs.readFileSync(config(), 'utf8')).toBe(before)
     expect(stubs.daemonUp()).toBe(true)
-    for (const dir of made) expect(fs.existsSync(dir)).toBe(false)
+    // Not applied: only the chunk dir stays, for the next try.
+    expect(left()).toHaveLength(1)
+    expect(left()[0]).toMatch(CHUNK_DIR)
   }, 60_000)
 })
 

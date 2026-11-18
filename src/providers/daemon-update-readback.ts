@@ -17,6 +17,7 @@ import { LAUNCHD_NOT_SPAWNING } from './daemon-service-launchd.js'
 import { tailSteppedIn, type UpdateTail } from './daemon-update-tail.js'
 import { answerOfRecord, readNetUpdateRecord, type DetachedUpdateHost, type NetUpdateRecord } from './daemon-net-update-io.js'
 import { KeyedUpdateStore } from './daemon-update-store.js'
+import { STAGING } from './daemon-update-staging.js'
 
 /**
  * A runner whose script is there and whose done line is not, this long after its launch,
@@ -24,7 +25,6 @@ import { KeyedUpdateStore } from './daemon-update-store.js'
  * never comes. Its tries, its update's own waits and its tail fit well inside.
  */
 export const UPDATE_RUNNER_MAX_MS = 45 * 60_000
-const STAGING = /^\/tmp\/open-walnut-update\.[a-zA-Z0-9]+$/
 const REMOTE_PATH = /^\/[A-Za-z0-9._/-]+$/
 const NO_FILE = '__walnut_no_file__'
 

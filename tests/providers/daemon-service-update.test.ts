@@ -5,7 +5,7 @@ import path from 'node:path'
 import { randomBytes, createHash } from 'node:crypto'
 import { gunzipSync } from 'node:zlib'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { installRemoteDaemonService, updateRemoteDaemonService } from '../../src/providers/daemon-service-update.js'
+import { chunkDirCommand, installRemoteDaemonService, parseChunkDir, updateRemoteDaemonService } from '../../src/providers/daemon-service-update.js'
 import { RemoteCommandError, runRemoteSh } from '../../src/providers/remote-sh.js'
 import { daemonBusyRefusal } from '../../src/providers/exec-runs-hold.js'
 import { guardedPath } from '../setup/exec-guard.js'
@@ -25,7 +25,7 @@ beforeEach(async () => {
 })
 afterEach(async () => { await fs.rm(root, { recursive: true, force: true }) })
 
-type UploadFault = 'chunk' | 'version' | 'checksum' | 'path'
+type UploadFault = 'chunk' | 'version' | 'checksum' | 'path' | 'checkLost'
 
 const TAILS = {
   serving: 'outcome=serving\na daemon answers\n',
@@ -37,13 +37,16 @@ type TailOutcome = keyof typeof TAILS
 /** Quick clocks for the detached runner (daemon-net-update-io.ts runDetachedUpdate). */
 const FAST = { pollMs: 1, settleSeconds: 0 }
 
-/** The remote side of the upload: confirmed chunks, the reassembly check, and the staging dir's removal. */
-function uploads(fault?: UploadFault) {
-  const chunks = new Map<number, Buffer>()
+/**
+ * The remote side of the upload: the chunk dir named by the payload (with the chunks a
+ * dropped try left there, `held`), confirmed chunks, the reassembly check, and the removals.
+ */
+function uploads(fault?: UploadFault, held: Map<number, Buffer> = new Map()) {
+  const chunks = held
   const slots: number[] = []
-  let retried = false
+  let retried = false, chunkDir = ''
   const chunk = vi.fn(async (data: Buffer, directory: string, index: number) => {
-    expect(directory).toBe(remote)
+    expect(directory).toBe(chunkDir)
     expect(data.length).toBeLessThanOrEqual(262_144)
     slots.push(index)
     if (fault === 'chunk' || !retried) { retried = true; return false }
@@ -51,10 +54,18 @@ function uploads(fault?: UploadFault) {
     return true
   })
   const answer = async (command: string): Promise<string | null> => {
-    if (command.includes('mktemp -d')) return fault === 'path' ? `${remote}; unwanted` : remote
+    if (command.includes('echo "HAVE ')) {
+      chunkDir = /^d=(\/tmp\/open-walnut-update\.r[0-9a-f]{24}); umask 077; /.exec(command)![1]
+      if (fault === 'path') return `DIR ${chunkDir}; unwanted`
+      return [`DIR ${chunkDir}`, ...[...chunks].map(([i, b]) => `HAVE chunk_${String(i).padStart(4, '0')}    ${b.length}`)].join('\n')
+    }
+    if (command.includes('mktemp -d')) return remote
     if (command.includes('sha256sum')) {
-      if (fault === 'checksum') throw new Error('checksum mismatch')
-      const indices = [...command.matchAll(/chunk_(\d+)/g)].map((match) => Number(match[1]))
+      if (fault === 'checksum') throw new Error('the command on the host stopped at exit 1: WALNUT_STAGE_MISMATCH')
+      if (fault === 'checkLost') throw new Error('daemon command lost: exec.run: connection closed')
+      expect(command).toContain(`> ${remote}/daemon.gz`)
+      const indices = [...command.matchAll(/open-walnut-update\.r[0-9a-f]{24}\/chunk_(\d+)/g)].map((match) => Number(match[1]))
+      expect(indices).toEqual(indices.map((_, i) => i))
       expect(indices.every((index) => chunks.has(index))).toBe(true)
       const payload = Buffer.concat(indices.map((index) => chunks.get(index)!))
       expect(command).toContain(createHash('sha256').update(payload).digest('hex'))
@@ -62,9 +73,10 @@ function uploads(fault?: UploadFault) {
       return fault === 'version' ? 'different-build' : version
     }
     if (command === RM) return ''
+    if (chunkDir && command === `rm -rf ${chunkDir}`) { chunks.clear(); return '' }
     return null
   }
-  return { chunk, slots, answer }
+  return { chunk, slots, answer, chunks, chunkDir: () => chunkDir }
 }
 
 /**
@@ -105,8 +117,8 @@ const isScriptWrite = (command: string) => command.startsWith('umask 077; cat > 
 const isRead = (command: string) => command.startsWith('if [ -f ')
 const isLaunch = (command: string) => command.includes('update.go')
 
-function lab(fault?: UploadFault | 'service' | 'stopped' | 'transport', scope: 'user' | 'cron' = 'user', tail: TailOutcome = 'serving', extra = '') {
-  const upload = uploads(fault === 'service' || fault === 'stopped' || fault === 'transport' ? undefined : fault)
+function lab(fault?: UploadFault | 'service' | 'stopped' | 'transport', scope: 'user' | 'cron' = 'user', tail: TailOutcome = 'serving', extra = '', held?: Map<number, Buffer>) {
+  const upload = uploads(fault === 'service' || fault === 'stopped' || fault === 'transport' ? undefined : fault, held)
   const refusal = fault === 'service' ? { message: 'busy', rollback: 'unchanged' }
     : fault === 'stopped' ? { message: 'the new daemon did not answer', rollback: 'restored', stopped: true } : null
   const host = runnerHost((line) => {
@@ -121,7 +133,7 @@ function lab(fault?: UploadFault | 'service' | 'stopped' | 'transport', scope: '
     if (answered === null) throw new Error(`unexpected command: ${command}`)
     return answered
   })
-  return { run, chunk: upload.chunk, calls, slots: upload.slots, host, detached: { ...FAST, waitMs: 50 } }
+  return { run, chunk: upload.chunk, calls, slots: upload.slots, host, held: upload.chunks, chunkRm: () => `rm -rf ${upload.chunkDir()}`, detached: { ...FAST, waitMs: 50 } }
 }
 
 describe('managed daemon upload and update', () => {
@@ -129,11 +141,13 @@ describe('managed daemon upload and update', () => {
     const l = lab()
     await updateRemoteDaemonService({ binary }, version, l)
     expect(l.chunk.mock.calls.length).toBeGreaterThan(3)
-    expect(new Set(l.slots).size).toBe(l.slots.length)
-    // mktemp, the reassembly check, the runner script, the launch, the record's reads, the removal.
-    expect(l.calls.slice(0, 4).map((c, i) => [c.includes('mktemp'), c.includes('sha256sum'), isScriptWrite(c), isLaunch(c)][i])).toEqual([true, true, true, true])
-    expect(l.calls.slice(4, -1).every(isRead)).toBe(true)
-    expect(l.calls.at(-1)).toBe(RM)
+    // Chunk i goes to slot i; the first one's retry writes the same slot again.
+    expect(l.slots).toEqual([0, ...l.slots.slice(1).map((_, i) => i)])
+    // The chunk dir, mktemp, the reassembly check, the runner script, the launch, the record's reads, the removals.
+    expect(l.calls.slice(0, 5).map((c, i) => [c.includes('echo "HAVE '), c.includes('mktemp -d /tmp'), c.includes('sha256sum'), isScriptWrite(c), isLaunch(c)][i])).toEqual([true, true, true, true, true])
+    expect(l.calls.slice(5, -2).every(isRead)).toBe(true)
+    // The update applied: its dir goes, then the chunks.
+    expect(l.calls.slice(-2)).toEqual([RM, l.chunkRm()])
     expect(l.host.updates).toEqual([`${staged} walnut daemon update --yes --scope user --executable ${staged}`])
     // The script on the host copies the config aside, tries once (a busy daemon is asked again from the server), and runs the tail.
     const script = l.host.files.get(`${remote}/update.sh`)!
@@ -154,7 +168,7 @@ describe('managed daemon upload and update', () => {
     await updateRemoteDaemonService({ binary }, version, l, 'cron')
     expect(l.host.updates).toEqual([`${staged} walnut daemon update --yes --scope cron --executable ${staged}`])
     expect(l.host.files.get(`${remote}/update.sh`)).toContain('tk=cron')
-    expect(l.calls.at(-1)).toBe(RM)
+    expect(l.calls.slice(-2)).toEqual([RM, l.chunkRm()])
   })
 
   // 2026-11-04: an update that answered and left no daemon serving. The tail runs on the
@@ -181,6 +195,52 @@ describe('managed daemon upload and update', () => {
     expect(l.calls).not.toContain(RM)
   })
 
+  // 2026-11-18: home-pc's link carried about 30 KB/s and dropped every few minutes; each try
+  // began again from the first chunk, so a 30 MB daemon never got there.
+  it('a try after a dropped or refused one sends only the chunks the host does not hold yet', async () => {
+    const first = lab('service')
+    await expect(updateRemoteDaemonService({ binary }, version, first)).rejects.toThrow('busy')
+    // Refused: its dir went, the chunks stayed.
+    expect(first.calls.at(-1)).toBe(RM)
+    const all = new Map(first.held)
+    expect(all.size).toBeGreaterThan(3)
+    const partial = new Map([...all].slice(0, 2))
+    const second = lab(undefined, 'user', 'serving', '', partial)
+    await expect(updateRemoteDaemonService({ binary }, version, second)).resolves.toBe('applied')
+    const sent = [...new Set(second.slots)]
+    expect(sent).toEqual([...all.keys()].slice(2))
+    expect(second.calls.slice(-2)).toEqual([RM, second.chunkRm()])
+    // All of them held: nothing is sent at all.
+    const third = lab(undefined, 'user', 'serving', '', new Map(all))
+    await expect(updateRemoteDaemonService({ binary }, version, third)).resolves.toBe('applied')
+    expect(third.chunk).not.toHaveBeenCalled()
+  })
+
+  it('a link lost during the reassembly check keeps the chunks for the next try', async () => {
+    const l = lab('checkLost')
+    await expect(updateRemoteDaemonService({ binary }, version, l)).rejects.toThrow('connection closed')
+    expect(l.calls.at(-1)).toBe(RM)
+    expect(l.calls).not.toContain(l.chunkRm())
+    expect(l.held.size).toBeGreaterThan(3)
+  })
+
+  it('a held update keeps the chunks too', async () => {
+    const l = lab()
+    await expect(updateRemoteDaemonService({ binary }, version, l, 'user', { onStaged: () => false })).resolves.toBe('held')
+    expect(l.calls.at(-1)).toBe(RM)
+    expect(l.calls).not.toContain(l.chunkRm())
+  })
+
+  it('a chunk on the host of another size is sent again', async () => {
+    const first = lab('service')
+    await expect(updateRemoteDaemonService({ binary }, version, first)).rejects.toThrow('busy')
+    const held = new Map(first.held)
+    held.set(1, held.get(1)!.subarray(0, 100))
+    const second = lab(undefined, 'user', 'serving', '', held)
+    await expect(updateRemoteDaemonService({ binary }, version, second)).resolves.toBe('applied')
+    expect([...new Set(second.slots)]).toEqual([1])
+  })
+
   it('refuses a system service update before any remote operation', async () => {
     const l = lab()
     await expect(updateRemoteDaemonService({ binary }, version, l, 'system')).rejects.toThrow('does not update a system service')
@@ -193,12 +253,17 @@ describe('managed daemon upload and update', () => {
     await expect(updateRemoteDaemonService({ binary }, version, l)).rejects.toThrow()
     expect(l.host.updates).toEqual([])
     expect(l.calls.some(isLaunch)).toBe(false)
-    if (fault === 'chunk') expect(l.chunk).toHaveBeenCalledTimes(3)
-    if (fault === 'path') {
+    if (fault === 'chunk') {
+      // Three tries of the same slot; what was sent stays on the host for the next try.
+      expect(l.chunk).toHaveBeenCalledTimes(3)
+      expect(new Set(l.slots)).toEqual(new Set([0]))
+      expect(l.calls.some((command) => command.startsWith('rm '))).toBe(false)
+    } else if (fault === 'path') {
       expect(l.chunk).not.toHaveBeenCalled()
       expect(l.calls.some((command) => command.startsWith('rm '))).toBe(false)
     } else {
-      expect(l.calls.at(-1)).toBe(RM)
+      // Chunks that did not add up to this build go too.
+      expect(l.calls.slice(-2)).toEqual([RM, l.chunkRm()])
     }
   })
 
@@ -468,3 +533,54 @@ describe('a compiled Mac\'s source: the walnut file in the daemon slot, no daemo
     // Nothing was uploaded, so the runner got a dir of its own, removed afterwards.
     expect(l.calls.at(-1)).toBe(RM)
   })})
+
+// The line runs in a real sh (the host's): it answers with exit 0 on an empty dir, lists
+// what a dropped try left, sweeps old staging dirs of this user, and never uses a name
+// that is a link or another user's.
+describe('the chunk dir line in a real shell', () => {
+  const run = async (line: string) => {
+    const { execFileSync } = await import('node:child_process')
+    return execFileSync('/bin/sh', ['-c', line], { encoding: 'utf8' })
+  }
+  const name = (tag: string) => `/tmp/open-walnut-update.r${createHash('sha256').update(tag + process.pid + Date.now()).digest('hex').slice(0, 24)}`
+  const made: string[] = []
+  afterEach(async () => { for (const d of made.splice(0)) await fs.rm(d, { recursive: true, force: true }) })
+
+  it('makes the dir private, answers on an empty one, then lists the chunks a try left', async () => {
+    const d = name('empty'); made.push(d)
+    expect(parseChunkDir(await run(chunkDirCommand(d)))).toEqual({ directory: d, have: new Map() })
+    expect((await fs.stat(d)).mode & 0o777).toBe(0o700)
+    await fs.writeFile(`${d}/chunk_0000`, Buffer.alloc(262_144))
+    await fs.writeFile(`${d}/chunk_0001`, Buffer.alloc(7))
+    await fs.writeFile(`${d}/chunk_0001.walnut-part`, Buffer.alloc(3))
+    expect(parseChunkDir(await run(chunkDirCommand(d))).have).toEqual(new Map([['chunk_0000', 262_144], ['chunk_0001', 7]]))
+  })
+
+  it('a link in its place is not used: a fresh mktemp dir instead', async () => {
+    const d = name('link'); made.push(d)
+    const target = await fs.mkdtemp(path.join(os.tmpdir(), 'walnut-link-target-')); made.push(target)
+    await fs.symlink(target, d)
+    const { directory, have } = parseChunkDir(await run(chunkDirCommand(d)))
+    made.push(directory)
+    expect(directory).not.toBe(d)
+    expect(directory).toMatch(/^\/tmp\/open-walnut-update\.[A-Za-z0-9]{10}$/)
+    expect(have.size).toBe(0)
+  })
+
+  it('removes this user\'s chunk dirs of other builds an hour old and try dirs a day old, and keeps the rest', async () => {
+    const d = name('keep'); made.push(d)
+    const oldChunks = name('old-chunks'), newChunks = name('new-chunks')
+    const oldTry = `/tmp/open-walnut-update.T${process.pid}old`, youngTry = `/tmp/open-walnut-update.T${process.pid}new`
+    for (const dir of [oldChunks, newChunks, oldTry, youngTry]) { await fs.mkdir(dir); made.push(dir) }
+    const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000)
+    await fs.utimes(oldChunks, ago(90), ago(90))
+    await fs.utimes(oldTry, ago(25 * 60), ago(25 * 60))
+    await fs.utimes(youngTry, ago(90), ago(90))
+    await run(chunkDirCommand(d))
+    expect(existsSync(oldChunks)).toBe(false)
+    expect(existsSync(oldTry)).toBe(false)
+    expect(existsSync(newChunks)).toBe(true)
+    expect(existsSync(youngTry)).toBe(true)
+    expect(existsSync(d)).toBe(true)
+  })
+})
