@@ -46,6 +46,7 @@ import { secretsRoot } from '../../providers/secrets-core.js'
 import { masterRoot } from '../../core/secrets/fleet-secrets.js'
 import { sandboxUntrustedDoc } from '../untrusted-doc.js'
 import { takesPreviewBridge, withPreviewBridge } from '../preview-bridge.js'
+import { readPreviewSeed } from './preview-storage.js'
 import { sshDirs } from '../../lib/ssh-home.js'
 
 /** Why a remote read failed, as the viewer says it: in the host's own name, never its alias. */
@@ -216,10 +217,14 @@ export function rawTextMime(ext: string): string {
  * relay and its copy). An HTML or SVG document runs sandboxed in an origin of its own, never with
  * Walnut's (untrusted-doc.ts), and an HTML one carries the Files preview's bridge (preview-bridge.ts).
  */
-export function sendRawText(res: Response, ext: string, content: string): void {
+export function sendRawText(res: Response, ext: string, content: string, req?: Request): void | Promise<void> {
   const ctype = rawTextMime(ext)
   sandboxUntrustedDoc(res, ctype)
-  res.type(ctype).send(takesPreviewBridge(ext) ? withPreviewBridge(content) : content)
+  if (!takesPreviewBridge(ext)) { res.type(ctype).send(content); return }
+  if (!req) { res.type(ctype).send(withPreviewBridge(content)); return }
+  // The page gets back what it kept the way a browser keeps a site's storage
+  // (routes/preview-storage.ts), named by the URL path the browser asked for.
+  return readPreviewSeed(req.originalUrl.split('?')[0]!).then((seed) => { res.type(ctype).send(withPreviewBridge(content, seed)) })
 }
 
 /** Per-write chunk when streaming remote bytes (matches DaemonFileReader.CHUNK_SIZE —
@@ -1106,8 +1111,9 @@ export async function serveRawFileContent(
   // An HTML/SVG document never runs with the server's origin: its CSP sandbox gives it
   // an origin of its own (web: the preview iframe without allow-same-origin; iOS: the
   // WKWebView). An agent writes these files, and a script on Walnut's origin would read
-  // the Passwords unlock and the device token.
-  sendRawText(res, ext, content)
+  // the Passwords unlock and the device token. An HTML page gets back what it kept the way a
+  // browser keeps a site's storage (routes/preview-storage.ts).
+  await sendRawText(res, ext, content, req)
 }
 
 /**

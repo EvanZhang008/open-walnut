@@ -361,7 +361,7 @@ export async function serveCloudFileContent(req: Request, res: Response, target?
       res.end(buf)
       return
     }
-    sendRawText(res, ext, buf.toString('utf-8'))
+    await sendRawText(res, ext, buf.toString('utf-8'), req)
     return
   }
 
@@ -419,7 +419,7 @@ async function serveReplicaCopy(
     const inlineType = Object.hasOwn(RAW_INLINE_MIME, opts.ext) ? RAW_INLINE_MIME[opts.ext] : undefined
     const ctype = opts.download || inlineType ? (inlineType ?? 'application/octet-stream') : rawTextMime(opts.ext)
     if (!opts.download && !inlineType && copy.size <= MAX_BRIDGE_FILE_BYTES) {
-      sendRawText(res, opts.ext, await fsp.readFile(copy.localPath, 'utf-8'))
+      await sendRawText(res, opts.ext, await fsp.readFile(copy.localPath, 'utf-8'), req)
       return
     }
     await serveRawBytes(req, res, copy.localPath, undefined, ctype, opts.download)

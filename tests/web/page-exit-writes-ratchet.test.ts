@@ -27,6 +27,9 @@ const KNOWN: Record<string, 'client' | 'raw' | 'local'> = {
   'utils/ui-prefs-sync.ts': 'raw',
   'utils/time-tracking.ts': 'raw',
   'utils/browser-logger.ts': 'raw',
+  // A preview page's state for the disk: keepalive when it fits the browser's keepalive body limit (about
+  // 64 KB); a larger one written at unload is lost only for its last WRITE_MS of changes.
+  'components/common/preview-page-storage.ts': 'raw',
   'components/chat/island-store.ts': 'local',
   'components/chat/island-runtime.ts': 'local',
   'hooks/usePhoneRestore.ts': 'local',
@@ -82,6 +85,6 @@ describe('page-exit writes outlive the page', () => {
     const src = fs.readFileSync(path.join(ROOT, file), 'utf8')
     const bad = fetchCalls(src).filter((c) => /method:\s*['"`](POST|PUT|PATCH|DELETE)/.test(c) && !/keepalive/.test(c))
     expect(bad).toEqual([])
-    if (KNOWN[file] === 'raw') expect(/keepalive:\s*true|sendBeacon\(/.test(src)).toBe(true)
+    if (KNOWN[file] === 'raw') expect(/keepalive:\s*(?!false\b)\S|sendBeacon\(/.test(src)).toBe(true)
   })
 })

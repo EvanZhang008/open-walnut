@@ -37,6 +37,7 @@ const SESSION_FILES: Record<string, string> = {
   'api/vault.ts': 'the Passwords unlock of this tab: a secret that must end with the tab, never be kept on disk',
   'components/common/AppErrorBoundary.tsx': 'a debug switch that crashes this tab once',
   'components/common/UnpairedNotice.tsx': 'a sign-out notice for this tab only',
+  'components/common/preview-page-storage.ts': "what a page in the Files preview keeps for its tab (its sessionStorage, session cookies), ended with this window as a browser ends a tab's; what it keeps for the site goes to disk",
   'components/common/server-update-pill.ts': 'the Walnut version this tab last saw, so a restart into a new one is announced once per tab',
   'components/settings/sections/cloud/OwnDeviceSignOut.tsx': 'sets the sign-out notice flag',
   'components/settings/SettingsSection.tsx': 'the settings hash target of this visit',

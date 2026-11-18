@@ -4,7 +4,7 @@
  * can), so a message is taken only when it is one of these types with every field of the
  * kind and size that type has; anything else is dropped (readFrameMsg returns null).
  */
-import { PREVIEW_STATE_MAX } from '../../../../src/lib/preview-state-envelope';
+import { PREVIEW_SESSION_MAX, PREVIEW_STATE_MAX } from '../../../../src/lib/preview-state-envelope';
 
 export type PreviewRect = { left: number; top: number; width: number; height: number };
 /** A mark's rects in the frame's viewport: its client rects, and for a line under it its
@@ -15,8 +15,9 @@ export type FrameHit = { group: string; id: string };
 export type FrameMsg =
   /** restored: the page put its own place and state back (src/web/preview-state-script.ts). */
   | { type: 'ready'; href: string; top: number; restored?: boolean }
-  /** The page's state, kept for the next document of this file (preview-frame.ts). */
-  | { type: 'page-state'; state: string }
+  /** The page's state: what a browser keeps for a site (persist) and for a tab (session), as JSON
+   *  text, '' for a part too big to send (preview-page-storage.ts keeps them). */
+  | { type: 'page-state'; persist: string; session: string }
   | { type: 'scroll'; top: number; rect: PreviewRect | null }
   | { type: 'selection'; text: string; rect: PreviewRect | null; x: number; y: number; v?: number; start?: number; end?: number }
   | { type: 'text'; v: number; text: string; over: boolean }
@@ -106,7 +107,8 @@ export function readFrameMsg(data: unknown): FrameMsg | null {
       if (!str(d.href, MAX_HREF) || !num(d.top)) return null;
       return { type: 'ready', href: d.href, top: d.top, ...(d.restored === true ? { restored: true } : {}) };
     case 'page-state':
-      return str(d.state, PREVIEW_STATE_MAX) ? { type: 'page-state', state: d.state } : null;
+      return str(d.persist, PREVIEW_STATE_MAX) && str(d.session, PREVIEW_SESSION_MAX)
+        ? { type: 'page-state', persist: d.persist, session: d.session } : null;
     case 'scroll': {
       const r = rect(d.rect);
       return num(d.top) && r !== undefined ? { type: 'scroll', top: d.top, rect: r } : null;

@@ -81,7 +81,8 @@ import {
 } from '@/utils/dom-text-search';
 import { CodeContextMenu, buildCodeContextTarget, type CodeContextTarget } from '@/components/common/CodeContextMenu';
 import { copyTextRobust } from '@/utils/clipboard';
-import { previewFrameName, usePreviewFrame } from '@/components/common/preview-frame';
+import { usePreviewFrame } from '@/components/common/preview-frame';
+import { previewFrameName } from '@/components/common/preview-page-storage';
 import { openPopout } from '@/popout/openPopout';
 import { log } from '@/utils/log';
 import { useHidesHighlights } from '@/hooks/useHidesHighlights';

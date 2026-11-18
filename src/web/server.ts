@@ -46,6 +46,8 @@ import { projectsRouter } from './routes/projects.js'
 import { favoritesRouter } from './routes/favorites.js'
 import { uiPrefsRouter } from './routes/ui-prefs.js'
 import { draftsRouter } from './routes/drafts.js'
+import { previewStorageRouter } from './routes/preview-storage.js'
+import { PREVIEW_STATE_MAX } from '../lib/preview-state-envelope.js'
 import { devicesRouter } from './routes/devices.js'
 import { deviceAdoptionRouter } from './routes/devices-adopt.js'
 import { devicesTailscaleRouter } from './routes/devices-tailscale.js'
@@ -1811,6 +1813,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // scene is parsed once, off the event loop when it is large (core/drawings/scene-codec.ts),
   // each route under its own byte cap.
   app.use('/api/drawings', (await import('./routes/drawings.js')).drawingBodyParsers)
+  // A Files preview page's kept state: up to 8 MB of JSON, stored as text, never parsed here
+  // (routes/preview-storage.ts).
+  // The cap counts characters; a body counts UTF-8 bytes, up to three per character.
+  app.use('/api/preview-storage', express.text({ type: () => true, limit: PREVIEW_STATE_MAX * 3 + 1024 }))
   app.use(express.json({ limit: '15mb' }))
   // Default API responses to no-store so the browser HTTP cache never
   // revalidates/synthesizes them (see the etag note above — same incident).
@@ -2379,6 +2385,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/favorites', favoritesRouter)
   app.use('/api/ui-prefs', uiPrefsRouter)
   app.use('/api/drafts', draftsRouter)
+  app.use('/api/preview-storage', previewStorageRouter)
   app.use('/api/devices/tailscale', devicesTailscaleRouter)
   app.use('/api/devices', deviceAdoptionRouter)
   // The browser sign-in code, and this server's tunnel (docs/plan/walnut-servers-everywhere.md).

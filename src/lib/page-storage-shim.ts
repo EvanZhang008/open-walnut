@@ -6,14 +6,15 @@
  * preview, src/web/preview-state-script.ts), so the page's own storage throws. This is ONE
  * store both of them put in its place: reads are synchronous from a map the caller seeded
  * before the page's first script, every write calls the caller's `dirty()`, and the caller
- * keeps the map wherever it can survive the frame being built again. Both names are one store:
- * a reload of a real page keeps both.
+ * keeps the map wherever it can survive the frame being built again.
  *
  * Plain ES5 in a string: it runs in whatever engine renders the frame. It defines
- * `wnInstallStorage(m, dirty)`, which installs the store over the window's two names and
- * returns it; `m` is an `Object.create(null)` map of strings.
+ * `wnStore(m, dirty)`, one Storage over the `Object.create(null)` map of strings `m`;
+ * `wnPutStorage(name, store)`, which puts it over one of the window's two names; and
+ * `wnInstallStorage(m, dirty)`, one store under both names (an island: its two names are one
+ * store), returned. The Files preview gives each name a store of its own, as a browser does.
  */
-export const PAGE_STORAGE_SHIM_JS = 'function wnInstallStorage(m,dirty){'
+export const PAGE_STORAGE_SHIM_JS = 'function wnStore(m,dirty){'
   + 'var api={'
   + 'getItem:function(k){k=String(k);return k in m?m[k]:null},'
   + 'setItem:function(k,v){m[String(k)]=String(v);dirty()},'
@@ -32,6 +33,6 @@ export const PAGE_STORAGE_SHIM_JS = 'function wnInstallStorage(m,dirty){'
   + 'ownKeys:function(){return Object.keys(m)},'
   + 'getOwnPropertyDescriptor:function(o,p){return p in m?{value:m[p],writable:true,enumerable:true,configurable:true}:undefined}'
   + '})}'
-  + "['localStorage','sessionStorage'].forEach(function(n){"
-  + 'try{Object.defineProperty(window,n,{value:store,configurable:true})}catch(e){}});'
   + 'return store}'
+  + 'function wnPutStorage(n,store){try{Object.defineProperty(window,n,{value:store,configurable:true})}catch(e){}}'
+  + 'function wnInstallStorage(m,dirty){var s=wnStore(m,dirty);wnPutStorage("localStorage",s);wnPutStorage("sessionStorage",s);return s}'
