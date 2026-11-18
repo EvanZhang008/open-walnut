@@ -57,7 +57,7 @@ function uploads(fault?: UploadFault, held: Map<number, Buffer> = new Map()) {
     if (command.includes('echo "HAVE ')) {
       chunkDir = /^d=(\/tmp\/open-walnut-update\.r[0-9a-f]{24}); umask 077; /.exec(command)![1]
       if (fault === 'path') return `DIR ${chunkDir}; unwanted`
-      return [`DIR ${chunkDir}`, ...[...chunks].map(([i, b]) => `HAVE chunk_${String(i).padStart(4, '0')}    ${b.length}`)].join('\n')
+      return [`DIR ${chunkDir}`, ...[...chunks].map(([i, b]) => `HAVE chunk_${String(i).padStart(4, '0')}    ${b.length} ${createHash('sha256').update(b).digest('hex')}`)].join('\n')
     }
     if (command.includes('mktemp -d')) return remote
     if (command.includes('sha256sum')) {
@@ -239,6 +239,22 @@ describe('managed daemon upload and update', () => {
     const second = lab(undefined, 'user', 'serving', '', held)
     await expect(updateRemoteDaemonService({ binary }, version, second)).resolves.toBe('applied')
     expect([...new Set(second.slots)]).toEqual([1])
+  })
+
+  // 2026-11-18: two builds of one daemon version need not hold the same bytes (bun's compile
+  // stamps one, a Walnut file carries the whole server), and a deploy rebuilt it mid-upload.
+  it('another build of the same version keeps the chunks that match and sends only the ones that differ', async () => {
+    const first = lab('service')
+    await expect(updateRemoteDaemonService({ binary }, version, first)).rejects.toThrow('busy')
+    const held = new Map(first.held)
+    const other = Buffer.from(held.get(2)!)
+    other[0] ^= 0xff
+    held.set(2, other)
+    const second = lab(undefined, 'user', 'serving', '', held)
+    await expect(updateRemoteDaemonService({ binary }, version, second)).resolves.toBe('applied')
+    expect([...new Set(second.slots)]).toEqual([2])
+    // Both tries used one dir, named by the version.
+    expect(second.chunkRm()).toBe(first.chunkRm())
   })
 
   it('refuses a system service update before any remote operation', async () => {
@@ -553,7 +569,11 @@ describe('the chunk dir line in a real shell', () => {
     await fs.writeFile(`${d}/chunk_0000`, Buffer.alloc(262_144))
     await fs.writeFile(`${d}/chunk_0001`, Buffer.alloc(7))
     await fs.writeFile(`${d}/chunk_0001.walnut-part`, Buffer.alloc(3))
-    expect(parseChunkDir(await run(chunkDirCommand(d))).have).toEqual(new Map([['chunk_0000', 262_144], ['chunk_0001', 7]]))
+    const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex')
+    expect(parseChunkDir(await run(chunkDirCommand(d))).have).toEqual(new Map([
+      ['chunk_0000', { size: 262_144, sha256: sha(Buffer.alloc(262_144)) }],
+      ['chunk_0001', { size: 7, sha256: sha(Buffer.alloc(7)) }],
+    ]))
   })
 
   it('a link in its place is not used: a fresh mktemp dir instead', async () => {

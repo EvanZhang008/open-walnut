@@ -68,12 +68,12 @@ function* slices(gz: Buffer): Generator<Buffer> {
   for (let at = 0; at < gz.length; at += CHUNK_BYTES) yield gz.subarray(at, at + CHUNK_BYTES)
 }
 
-/** The prefix of a chunk dir named by its payload (chunkDirCommand). */
+/** The prefix of a chunk dir named by the daemon version it carries (chunkDirCommand). */
 const RESUMABLE = `${STAGING_PREFIX}r`
 
 /** A try's staging dir of this user's older than this is a dead update's: the next upload removes it. */
 const STALE_STAGING_MINUTES = 24 * 60
-/** Another build's chunk dir: an upload in progress writes into its dir every few seconds. */
+/** Another version's chunk dir: an upload in progress writes into its dir every few seconds. */
 const STALE_CHUNKS_MINUTES = 60
 /** The find pattern of a chunk dir's name (a mktemp dir's 10 random characters never match it). */
 const CHUNK_DIR_GLOB = `open-walnut-update.r${'[0-9a-f]'.repeat(24)}`
@@ -81,14 +81,16 @@ const CHUNK_DIR_GLOB = `open-walnut-update.r${'[0-9a-f]'.repeat(24)}`
 const STAGE_MISMATCH = 'WALNUT_STAGE_MISMATCH'
 
 /**
- * The upload's chunks go into a dir named by the payload's sha256, kept when the link drops
- * mid-upload, so the next try sends only the chunks the host does not hold yet (2026-11-18:
- * home-pc's link carried about 30 KB/s; each try of a 30 MB daemon dropped after 5 minutes
- * and began again from the first chunk, so the update never landed). Each chunk file appears
- * only once the host checked its size and sha256 (fs-write-part-v1), so one of the right size
- * is whole. A dir someone else made, or a link in its place, is never used: a fresh mktemp dir
- * then, as before. The same line removes this user's chunk dirs of other builds an hour old,
- * and the try dirs of updates a day old.
+ * The upload's chunks go into a dir named by the daemon version they carry, kept when the link
+ * drops mid-upload, so the next try sends only the chunks the host does not hold yet (2026-11-18:
+ * home-pc's link carried about 30 KB/s; each try of a 50 MB daemon was cut, and began again from
+ * the first chunk, so the update never landed). The line answers each chunk's size and sha256,
+ * and only a chunk whose both match is kept: two builds of one daemon version need not hold the
+ * same bytes (bun's compile stamps one, and a Walnut file carries the whole server, which every
+ * commit changes), so a rebuild keeps what still matches and sends the rest again.
+ * A dir someone else made, or a link in its place, is never used: a fresh mktemp dir then, as
+ * before. The same line removes this user's chunk dirs of other versions an hour old, and the
+ * try dirs of updates a day old.
  */
 export function chunkDirCommand(dir: string): string {
   // `/tmp/`: on a Mac /tmp is a link, which find does not enter without the slash.
@@ -98,22 +100,32 @@ export function chunkDirCommand(dir: string): string {
     sweep(`-name '${CHUNK_DIR_GLOB}'`, STALE_CHUNKS_MINUTES),
     sweep(`-name 'open-walnut-update.*' ! -name '${CHUNK_DIR_GLOB}'`, STALE_STAGING_MINUTES),
     `mkdir "$d" 2>/dev/null`,
-    `if [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] && chmod 700 "$d"; then echo "DIR $d"; for f in "$d"/chunk_*; do [ -f "$f" ] && echo "HAVE \${f##*/} $(wc -c < "$f")"; done; else echo "DIR $(mktemp -d ${STAGING_PREFIX}XXXXXXXXXX)"; fi`,
+    // A Mac has no sha256sum: shasum there, as the reassembly check does.
+    'h() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi; }',
+    `if [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] && chmod 700 "$d"; then echo "DIR $d"; for f in "$d"/chunk_*; do [ -f "$f" ] && echo "HAVE \${f##*/} $(wc -c < "$f") $(h "$f" | cut -c1-64)"; done; else echo "DIR $(mktemp -d ${STAGING_PREFIX}XXXXXXXXXX)"; fi`,
     // A dir with no chunks yet ends the loop on a false test: the line still answered.
     'true',
   ].join('; ')
 }
 
-/** The chunk dir the line answered and the size of each chunk file already in it. */
-export function parseChunkDir(output: string): { directory: string; have: Map<string, number> } {
+/** A chunk file already on the host: its size and sha256. */
+export interface HeldChunk { size: number; sha256: string }
+
+/** The chunk dir the line answered and each chunk file already in it. */
+export function parseChunkDir(output: string): { directory: string; have: Map<string, HeldChunk> } {
   const lines = output.split('\n').map((line) => line.trim())
   const directory = [...lines].reverse().find((line) => line.startsWith('DIR '))?.slice(4).trim() ?? ''
-  const have = new Map<string, number>()
+  const have = new Map<string, HeldChunk>()
   for (const line of lines) {
-    const m = /^HAVE (chunk_\d{4}) +(\d+)$/.exec(line)
-    if (m) have.set(m[1], Number(m[2]))
+    const m = /^HAVE (chunk_\d{4}) +(\d+) +([0-9a-f]{64})$/.exec(line)
+    if (m) have.set(m[1], { size: Number(m[2]), sha256: m[3] })
   }
   return { directory, have }
+}
+
+/** Whether the host's chunk holds exactly these bytes. */
+function holds(held: HeldChunk | undefined, chunk: Buffer): boolean {
+  return held?.size === chunk.length && held.sha256 === createHash('sha256').update(chunk).digest('hex')
 }
 
 const chunkName = (index: number) => `chunk_${String(index).padStart(4, '0')}`
@@ -157,7 +169,10 @@ async function stageRemoteDaemonBinary(payload: { binary: string } | { gz: Buffe
       checksum = await sha256Of({ gz: payload.gz })
       chunks = slices(payload.gz)
     }
-    const named = `${RESUMABLE}${checksum.slice(0, 24)}`
+    // Named by the version and the payload's kind, not its checksum: one dir per version on the
+    // host whatever the build, and holds() keeps only the chunks that match this one.
+    const key = createHash('sha256').update(`${expectedVersion}\0${'binary' in payload ? 'binary' : 'gz'}`).digest('hex')
+    const named = `${RESUMABLE}${key.slice(0, 24)}`
     const { directory: chunkDir, have } = parseChunkDir(await io.run(chunkDirCommand(named)))
     if (!STAGING.test(chunkDir)) throw new Error('Invalid daemon update staging directory')
     // Not this name: a mktemp dir (the name was another user's), used as one try's dir as before.
@@ -168,7 +183,7 @@ async function stageRemoteDaemonBinary(payload: { binary: string } | { gz: Buffe
       const chunk = data as Buffer
       const name = chunkName(index)
       files.push(`${chunkDir}/${name}`)
-      if (have.get(name) === chunk.length) { kept++; index++; continue }
+      if (holds(have.get(name), chunk)) { kept++; index++; continue }
       let sent = false
       // The same name on a retry: a write that lands late holds the same bytes.
       for (let attempt = 0; attempt < 3 && !sent; attempt++) sent = await io.chunk(chunk, chunkDir, index)
