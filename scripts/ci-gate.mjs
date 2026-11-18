@@ -90,7 +90,8 @@ export { isTransientGhFailure }
 const GH_ATTEMPTS = 4
 const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 
-function gh(endpoint) {
+/** `gh api <endpoint>`, tried again on a transient failure. */
+export function gh(endpoint) {
   // 3 s, 6 s, 12 s between tries; CI_GATE_RETRY_MS shortens it for tests.
   const baseMs = Number(process.env.CI_GATE_RETRY_MS) || 3000
   for (let attempt = 1; ; attempt++) {

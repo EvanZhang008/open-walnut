@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { MIN_GAP_HOURS, allowedScripts, bumpFor, generatedNotes, holdReason, planRelease, rollReleased, soakedNightly } from '../../scripts/stable-promote.mjs'
+import { MIN_GAP_HOURS, allowedScripts, bumpFor, generatedNotes, holdReason, planRelease, promoteInFlight, rollReleased, soakedNightly } from '../../scripts/stable-promote.mjs'
 import { releaseNotes } from '../../scripts/release-notes.mjs'
 import { managerArgv } from '../../src/core/self-update/install-kind.js'
 
@@ -283,5 +283,66 @@ describe('allow-scripts', () => {
     const flag = managerArgv('npm', 'open-walnut@latest').args.find((a) => a.startsWith('--allow-scripts='))
     expect(flag).toBeDefined()
     expect(out.trim().split(',').sort()).toEqual(flag!.slice('--allow-scripts='.length).split(',').sort())
+  })
+})
+
+describe('a promotion already on its way', () => {
+  // 2026-11-18: run 44352216275 planned 0.6.35 while 44349409517 was building and
+  // rehearsing it, ran the whole matrix again and failed on a runner GitHub never gave it.
+  const run = (id: number, status: string) => ({ id, status, html_url: `https://github.example/runs/${id}` })
+  const job = (name: string, status: string, conclusion: string | null = null) => ({ name, status, conclusion })
+  const jobs: Record<number, ReturnType<typeof job>[]> = {
+    100: [job('Pick the nightly to promote', 'completed', 'success'), job('Build 0.6.35 from 0.6.35-nightly.20261117.1509', 'in_progress')],
+    101: [job('Pick the nightly to promote', 'completed', 'success'), job('Build 0.6.35 from 0.6.35-nightly.20261117.1509', 'completed', 'success')],
+    // A plan that found nothing: its build is skipped, its name never filled in.
+    102: [job('Pick the nightly to promote', 'completed', 'success'), job('Build ${{ needs.promote-plan.outputs.version }} from ${{ needs.promote-plan.outputs.nightly }}', 'completed', 'skipped')],
+    103: [job('Build 0.6.35 from 0.6.35-nightly.20261117.1509', 'completed', 'failure')],
+    104: [job('Pick the nightly to promote', 'in_progress')],
+    // Built, but a leg already failed: it can never publish, though it still runs.
+    105: [job('Build 0.6.35 from 0.6.35-nightly.20261117.1509', 'completed', 'success'), job('The files of 0.6.35 on every system / macos-15 (walnut-darwin-arm64)', 'completed', 'cancelled'), job('The files of 0.6.35 on every system / macos-26-intel (walnut-darwin-x64)', 'in_progress')],
+    106: [job('Build 0.6.35 from 0.6.35-nightly.20261117.1509', 'completed', 'success'), job('0.6.35-nightly.20261117.1509 installs and starts (macos-26)', 'completed', 'failure')],
+    // A leg of the nightly's own files failing says nothing about the promotion.
+    107: [job('Build 0.6.35 from 0.6.35-nightly.20261117.1509', 'in_progress'), job("The nightly's files on every system / macos-15 (walnut-darwin-arm64)", 'completed', 'failure')],
+  }
+  const jobsOf = (id: number) => jobs[id] ?? []
+
+  it('names an older run that is building or has built the stable and has not finished', () => {
+    expect(promoteInFlight([run(100, 'in_progress')], jobsOf, 200)).toBe('https://github.example/runs/100')
+    expect(promoteInFlight([run(101, 'in_progress')], jobsOf, 200)).toBe('https://github.example/runs/101')
+  })
+
+  it('ignores a run that planned nothing, failed its build, is still planning, has finished, or is newer', () => {
+    expect(promoteInFlight([run(102, 'in_progress'), run(103, 'in_progress'), run(104, 'in_progress')], jobsOf, 200)).toBeNull()
+    expect(promoteInFlight([run(105, 'in_progress'), run(106, 'in_progress')], jobsOf, 200)).toBeNull()
+    expect(promoteInFlight([run(107, 'in_progress')], jobsOf, 200)).toBe('https://github.example/runs/107')
+    expect(promoteInFlight([run(101, 'completed')], jobsOf, 200)).toBeNull()
+    // Two runs never wait for each other: only the older one counts.
+    expect(promoteInFlight([run(101, 'in_progress')], jobsOf, 50)).toBeNull()
+    expect(promoteInFlight([run(200, 'in_progress')], jobsOf, 200)).toBeNull()
+  })
+
+  it('the plan stands down for it, and asks only when it would publish', () => {
+    const inFlight = vi.fn(() => 'https://github.example/runs/100')
+    const plan = planRelease(deps({ inFlight }))
+    expect(plan).toEqual({ publish: false, reason: 'an older Release run is promoting already: https://github.example/runs/100' })
+    const held = vi.fn(() => 'x')
+    expect(planRelease(deps({ ciVerdict: () => 'red', inFlight: held })).publish).toBe(false)
+    expect(held).not.toHaveBeenCalled()
+    expect(planRelease(deps({ inFlight: () => null })).publish).toBe(true)
+  })
+
+  it('matches the name release.yml gives promote-build', () => {
+    const yml = fs.readFileSync(path.resolve(import.meta.dirname, '../../.github/workflows/release.yml'), 'utf8')
+    const name = /\n  promote-build:\n    name: (.+)\n/.exec(yml)?.[1]
+    expect(name).toBe('Build ${{ needs.promote-plan.outputs.version }} from ${{ needs.promote-plan.outputs.nightly }}')
+    const filled = name!.replace('${{ needs.promote-plan.outputs.version }}', '0.6.35').replace('${{ needs.promote-plan.outputs.nightly }}', '0.6.35-nightly.20261117.1509')
+    expect(promoteInFlight([run(1, 'in_progress')], () => [job(filled, 'in_progress')], 2)).not.toBeNull()
+    // And the names of the legs `promote` needs.
+    for (const [key, filledName] of [['promote-files', 'The files of 0.6.35 on every system / macos-15 (walnut-darwin-arm64)'], ['promote-smoke', '0.6.35-nightly.20261117.1509 installs and starts (macos-26)']]) {
+      expect(yml, key).toContain(`\n  ${key}:\n`)
+      expect(promoteInFlight([run(1, 'in_progress')], () => [job(filled, 'completed', 'success'), job(filledName, 'completed', 'failure')], 2), key).toBeNull()
+    }
+    expect(/\n  promote-files:\n    name: (.+)\n/.exec(yml)?.[1]).toBe('The files of ${{ needs.promote-plan.outputs.version }} on every system')
+    expect(/\n  promote-smoke:\n    name: (.+)\n/.exec(yml)?.[1]).toBe('${{ needs.promote-plan.outputs.nightly }} installs and starts (${{ matrix.os }})')
   })
 })

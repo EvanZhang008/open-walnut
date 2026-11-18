@@ -27,7 +27,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { commitVerdict } from './ci-gate.mjs'
+import { commitVerdict, gh } from './ci-gate.mjs'
 import { launcherManifest } from './npm-packages.mjs'
 import { nextVersion, setManifestVersion } from './release.mjs'
 import { releaseNotes } from './release-notes.mjs'
@@ -111,8 +111,36 @@ export function holdReason(holdUntil, now) {
   return now.getTime() < at ? `automatic stable releases are held until ${new Date(at).toISOString()} (STABLE_HOLD_UNTIL)` : null
 }
 
+/** promote-build's name (release.yml): `Build <version> from <nightly>`, the version filled in. */
+const PROMOTE_BUILD = /^Build \d+\.\d+\.\d+\S* from \S/
+/** promote-files' matrix legs and promote-smoke's: `promote` needs them all. */
+const PROMOTE_NEEDS = /^(The files of \d+\.\d+\.\d+\S* on every system \/ |\S+ installs and starts \()/
+const BROKEN = new Set(['failure', 'cancelled', 'timed_out', 'startup_failure'])
+
+/**
+ * An older Release run still on its way to promoting a stable, or null. Every CI
+ * success on main starts a Release run, and a promotion takes about half an hour, so a
+ * second run planned the same version while the first was still building and rehearsing
+ * it, ran the whole matrix again and failed on a runner (2026-11-18: run 44352216275
+ * planned 0.6.35 while 44349409517 published it). Only an OLDER run counts, so two runs
+ * never wait for each other; when that run fails, the next one plans again. A run one of
+ * whose legs already failed can never publish, though it stays in progress while its other
+ * legs wait for a runner, so it does not count.
+ */
+export function promoteInFlight(runs, jobsOf, selfRunId) {
+  for (const run of runs) {
+    if (run.status === 'completed' || !(Number(run.id) < Number(selfRunId))) continue
+    const jobs = jobsOf(run.id)
+    const build = jobs.find((j) => PROMOTE_BUILD.test(j.name ?? ''))
+    if (!build || (build.status === 'completed' && build.conclusion !== 'success')) continue
+    if (jobs.some((j) => PROMOTE_NEEDS.test(j.name ?? '') && BROKEN.has(j.conclusion))) continue
+    return run.html_url ?? String(run.id)
+  }
+  return null
+}
+
 /** Everything the plan needs, gathered by the caller (the CLI asks git, npm and GitHub). */
-export function planRelease({ packument, now, soakHours = SOAK_HOURS, minGapHours = MIN_GAP_HOURS, holdUntil = null, lastStableSha, isAncestor, commitsSince, changelogAt, ciVerdict }) {
+export function planRelease({ packument, now, soakHours = SOAK_HOURS, minGapHours = MIN_GAP_HOURS, holdUntil = null, lastStableSha, isAncestor, commitsSince, changelogAt, ciVerdict, inFlight = () => null }) {
   const held = holdReason(holdUntil, now)
   if (held) return { publish: false, reason: held }
   const latest = packument['dist-tags']?.latest
@@ -130,6 +158,8 @@ export function planRelease({ packument, now, soakHours = SOAK_HOURS, minGapHour
   if (!bump) return { publish: false, reason: `nothing a user would notice since ${latest} (${commits.length} commits)` }
   const verdict = ciVerdict(candidate.sha)
   if (verdict !== 'green') return { publish: false, reason: `CI on ${candidate.sha.slice(0, 8)} is ${verdict}` }
+  const other = inFlight()
+  if (other) return { publish: false, reason: `an older Release run is promoting already: ${other}` }
   const notes = written ?? generatedNotes(commits)
   return { publish: true, sha: candidate.sha, version: nextVersion(latest, bump), bump, from: latest, nightly: candidate.version, notes, written: Boolean(written) }
 }
@@ -222,6 +252,14 @@ async function main() {
         .map((r) => { const [subject, body = ''] = r.split('\x1f'); return { subject, body } }),
       changelogAt: (sha) => git(root, ['show', `${sha}:CHANGELOG.md`]),
       ciVerdict: (sha) => commitVerdict(sha).verdict,
+      // Outside a workflow run (a person trying the plan) there is no run to stand down for.
+      inFlight: () => {
+        const self = process.env.GITHUB_RUN_ID
+        if (!self) return null
+        const runs = ['in_progress', 'queued'].flatMap((status) =>
+          gh(`repos/{owner}/{repo}/actions/workflows/release.yml/runs?status=${status}&per_page=20`).workflow_runs)
+        return promoteInFlight(runs, (id) => gh(`repos/{owner}/{repo}/actions/runs/${id}/jobs?per_page=100`).jobs, self)
+      },
     })
     if (plan.publish && notesFile) fs.writeFileSync(notesFile, `${plan.notes}\n`)
     process.stderr.write(plan.publish
