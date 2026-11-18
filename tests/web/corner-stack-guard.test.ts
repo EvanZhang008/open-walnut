@@ -298,6 +298,41 @@ describe('one corner for every notice', () => {
     expect(toaster).toMatch(/older > 0 && !moreHost &&/);
   });
 
+  it("Settings' right edges read the pane's right padding, never the side padding", () => {
+    // The pane's right padding is its side padding less the kept gutter (--settings-pane-pad-right,
+    // settings-nav.css). A box that lines up with the pane's right edge from --settings-pane-pad-x
+    // sits a gutter off it: the compact bar's actions stood 8px left of the page's own with classic
+    // scrollbars (2026-11-17, settings-layout-fields F12 and the Remote Hosts wide window). The side
+    // padding may set the left side only, or stand as the fallback of the right padding.
+    const offRight = (r: Rule) => r.body.replace(/var\(--settings-pane-pad-right, var\(--settings-pane-pad-x, 0px\)\)/g, '')
+      .split(';').map((d) => d.trim()).filter((d) => /--settings-pane-pad-x\b/.test(d)).filter((d) => {
+        const prop = d.slice(0, d.indexOf(':')).trim();
+        if (['--settings-pane-pad-x', '--settings-pane-pad-right', 'left', 'padding-left', 'margin-left', 'inset-inline-start'].includes(prop)) return false;
+        // A padding or margin shorthand may name it in its fourth (left) value only.
+        if (prop === 'padding' || prop === 'margin') {
+          const values: string[] = [];
+          let depth = 0, cur = '';
+          for (const ch of d.slice(d.indexOf(':') + 1).trim()) {
+            if (ch === '(') depth++;
+            if (ch === ')') depth--;
+            if (/\s/.test(ch) && depth === 0) { if (cur) values.push(cur); cur = ''; } else cur += ch;
+          }
+          if (cur) values.push(cur);
+          return !(values.length === 4 && values.slice(0, 3).every((v) => !/--settings-pane-pad-x\b/.test(v)));
+        }
+        return true;
+      }).map((d) => `${r.file}:${r.line} ${r.selector} { ${d} }`);
+    const rules = listed(['web/src/**/*.css']).flatMap(cssRules);
+    expect(rules.flatMap(offRight)).toEqual([]);
+    // The check catches the bar's old right padding, and the bar still reads the page's one column.
+    const rule = (body: string): Rule => ({ file: 'x.css', line: 1, selector: '.x', body });
+    expect(offRight(rule('padding: 0 max(var(--settings-pane-pad-x, 0px), calc(100% - 680px)) 0 var(--settings-pane-pad-x, 0px);'))).toHaveLength(1);
+    expect(offRight(rule('left: calc(-1 * var(--settings-pane-pad-x, 0px)); right: calc(-1 * var(--settings-pane-pad-right, var(--settings-pane-pad-x, 0px)));'))).toHaveLength(0);
+    const bar = cssRules('web/src/styles/settings-shell.css').find((r) => r.selector === '.settings-pane-stickybar-inner')!;
+    expect(bar.body).toMatch(/var\(--settings-pane-column, 680px\)/);
+    expect(read('web/src/styles/settings-nav.css')).toMatch(/max-width: var\(--settings-pane-column, 680px\);/);
+  });
+
   it('every scroller and footer of a page names where it stands against the stack', () => {
     // The stack overlaps the bottom left of every page, so a page's own sheets are read here: each
     // box that scrolls, and each footer (a `-foot`/`-footer` class, a box pushed down by

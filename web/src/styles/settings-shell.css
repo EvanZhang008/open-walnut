@@ -301,9 +301,12 @@
   gap: 12px;
   box-sizing: border-box;
   height: 44px;
-  /* The right edge stays on the 680px content column, so actions do not jump
-     to the pane edge when the header turns compact (F12). */
-  padding: 0 max(var(--settings-pane-pad-x, 0px), calc(100% + var(--settings-pane-pad-x, 0px) - 680px)) 0 var(--settings-pane-pad-x, 0px);
+  /* The right edge stays on the page's column (--settings-pane-column), so actions do not jump
+     to the pane edge when the header turns compact (F12). The bar reaches past the content by the
+     pane's right padding, which is less the kept gutter: the same amount comes back off here, or
+     the actions sit a gutter left of the page's own (2026-11-17). */
+  --settings-pane-stickybar-pad-right: var(--settings-pane-pad-right, var(--settings-pane-pad-x, 0px));
+  padding: 0 max(var(--settings-pane-stickybar-pad-right), calc(100% + var(--settings-pane-stickybar-pad-right) - var(--settings-pane-column, 680px))) 0 var(--settings-pane-pad-x, 0px);
   background: var(--settings-pane-bg);
   border-bottom: 1px solid var(--settings-hairline);
   /* The surface is opaque from its first frame: only the title and actions

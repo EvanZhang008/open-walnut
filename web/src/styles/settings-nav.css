@@ -391,6 +391,8 @@
   /* The right padding less the kept scrollbar gutter (--settings-gutter, useSettingsGutter.ts),
      so text and the sticky bar end where they did before the gutter was kept. */
   --settings-pane-pad-right: max(0px, calc(var(--settings-pane-pad-x) - var(--settings-gutter, 0px)));
+  /* The page's column: its content and the compact bar's actions end on it (settings-shell.css). */
+  --settings-pane-column: 680px;
   grid-column: 2;
   grid-row: 1;
   position: relative;
@@ -411,7 +413,7 @@
 }
 
 .settings-container .settings-pane-inner {
-  max-width: 680px;
+  max-width: var(--settings-pane-column, 680px);
   animation: settings-pane-in 120ms ease-out both;
 }
 

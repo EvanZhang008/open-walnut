@@ -281,10 +281,7 @@ a.settings-button.rh-join-fix { display: inline-flex; align-items: center; text-
 /* ── Desktop: the page may grow past the 680 px column (2026-11-04 review: Details and More
    settings wrapped in 680 px with half the window empty). 700 px keeps the column. ── */
 @media (min-width: 1100px) {
-  .settings-container .settings-pane-inner:has(#remote-hosts) { max-width: 920px; }
-  .settings-container .settings-pane:has(#remote-hosts) .settings-pane-stickybar-inner {
-    padding-right: max(var(--settings-pane-pad-x, 0px), calc(100% + var(--settings-pane-pad-x, 0px) - 920px));
-  }
+  .settings-container .settings-pane.settings-content:has(#remote-hosts) { --settings-pane-column: 920px; }
 }
 
 /* ── 700 px and under: one column; the action and More stay on the name line, 44 px tall ── */
