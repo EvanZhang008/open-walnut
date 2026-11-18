@@ -71,6 +71,22 @@ describe('every window of the Mac app swallows a key nobody handles', () => {
     })
   }
 
+  // 2026-11-18: replaced-page-process-tests.swift made a plain NSWindow; its build compiled
+  // WebContentProcess.swift alone, so a QuietKeyWindow there needs the file passed too.
+  it('every build of a native test that makes a QuietKeyWindow compiles it', () => {
+    const scripts = execFileSync('git', ['ls-files', 'scripts/*.sh'], { cwd: ROOT, encoding: 'utf8' }).split('\n').filter(Boolean)
+    const users = swiftFiles.filter((f) => f.startsWith('tests/desktop/') && /\bQuietKeyWindow\s*\(/.test(read(f)))
+    expect(users).toContain('tests/desktop/replaced-page-process-tests.swift')
+    for (const test of users) {
+      const builds = scripts.filter((s) => fs.readFileSync(path.join(ROOT, s), 'utf8').includes(test))
+      expect(builds.length, `no script builds ${test}`).toBeGreaterThan(0)
+      for (const s of builds) {
+        const text = fs.readFileSync(path.join(ROOT, s), 'utf8')
+        expect(text.includes('/QuietKeyWindow.swift"') || text.includes('desktop-app-sources.sh'), `${s} builds ${test} without desktop/QuietKeyWindow.swift`).toBe(true)
+      }
+    }
+  })
+
   it('lists nothing that no longer needs it', () => {
     for (const f of Object.keys(OTHER_WINDOWS)) expect(makesWindow.test(read(f)), f).toBe(true)
     for (const f of Object.keys(KEY_MAKERS)) expect(makesKeys.test(read(f)), f).toBe(true)

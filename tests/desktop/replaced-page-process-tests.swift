@@ -47,7 +47,7 @@ final class Tests: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
     func applicationDidFinishLaunching(_ notification: Notification) {
         testEndOutcomes()
         let screen = NSScreen.main?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        window = NSWindow(contentRect: NSRect(x: screen.minX + 40, y: screen.minY + 40, width: 900, height: 600),
+        window = QuietKeyWindow(contentRect: NSRect(x: screen.minX + 40, y: screen.minY + 40, width: 900, height: 600),
                           styleMask: [.borderless], backing: .buffered, defer: false)
         window.alphaValue = 0.01
         window.ignoresMouseEvents = true

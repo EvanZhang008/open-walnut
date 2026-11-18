@@ -10,7 +10,7 @@ trap 'rm -rf "$OUT"' EXIT
 cp "$ROOT/tests/desktop/replaced-page-process-tests.swift" "$OUT/main.swift"
 APP="$OUT/ReplacedPageTests.app"
 mkdir -p "$APP/Contents/MacOS"
-swiftc "$ROOT/desktop/WebContentProcess.swift" "$OUT/main.swift" \
+swiftc "$ROOT/desktop/WebContentProcess.swift" "$ROOT/desktop/QuietKeyWindow.swift" "$OUT/main.swift" \
     -framework Cocoa -framework WebKit -o "$APP/Contents/MacOS/replaced-page-tests"
 python3 - "$APP/Contents/Info.plist" <<'PY'
 import plistlib, sys
