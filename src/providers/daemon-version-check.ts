@@ -350,6 +350,8 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/plugin-job-harness.ts',
   // Streams between servers through the daemon (stream-relay-v1): same rule.
   'src/providers/stream-relay-core.ts',
+  // Terminal streams through the daemon (pty-stream-v1): same rule.
+  'src/providers/pty-stream-core.ts',
   'src/providers/feature-relay-core.ts',
   // A stopped session resumed on its host for a trigger fire (trigger-host-resume-v1): same rule.
   'src/providers/host-resume-core.ts',

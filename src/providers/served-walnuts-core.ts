@@ -28,6 +28,8 @@ export interface ServedWalnutsDeps {
   /** 'binary' (daemon-standalone.ts, compiled or run by bun) or 'source' (daemon-source.ts). */
   twin: 'binary' | 'source'
   capabilities: () => string[]
+  /** Whether this daemon's runtime can have a pty at all (pty-stream-v1): a source twin on Node cannot. */
+  pty?: () => boolean
   now: () => number
   log?: (level: string, msg: string, data?: Record<string, unknown>) => void
 }
@@ -63,7 +65,8 @@ export function createServedWalnuts(deps: ServedWalnutsDeps): ServedWalnuts {
     const cutoff = deps.now() - KEEP_MS
     for (const k of Object.keys(seen)) if (seen[k]! <= cutoff) { delete seen[k]; delete written[k] }
     for (const k of Object.keys(seen)) written[k] = seen[k]!
-    const body = JSON.stringify({ v: 1, version: deps.version, twin: deps.twin, capabilities: deps.capabilities(), walnuts: seen, at: deps.now() })
+    const pty = deps.pty ? deps.pty() === true : undefined
+    const body = JSON.stringify({ v: 1, version: deps.version, twin: deps.twin, capabilities: deps.capabilities(), ...(pty === undefined ? {} : { pty }), walnuts: seen, at: deps.now() })
     const tmp = `${deps.file}.${process.pid}.tmp`
     try {
       deps.fs.writeFileSync(tmp, body, { mode: 0o600 })

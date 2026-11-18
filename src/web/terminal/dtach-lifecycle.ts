@@ -19,15 +19,15 @@
  * ends such a shell through the TerminalManager, which holds its only process.
  */
 
-import { execFile } from 'node:child_process'
 import type { SessionRecord } from '../../core/types.js'
-import { resolveSshTarget, dtachSocketPath, dtachPidPath, dtachOwnerMarkerPath, DTACH_SOCKET_DIR, REMOTE_DTACH_SOCKET_DIR, REMOTE_TEST_ROOT, sshControlMasterArgs } from './spawn.js'
+import { dtachSocketPath, dtachPidPath, dtachOwnerMarkerPath, DTACH_SOCKET_DIR, REMOTE_DTACH_SOCKET_DIR, REMOTE_TEST_ROOT } from './spawn.js'
+import { hostLinkRunsScripts, runOnTerminalHost } from './host-shell.js'
 import { buildIsolatedRetireScript } from '../../providers/remote-isolation.js'
 import { chooseDtachMaster, dtachProbeScript, parseDtachProbe, stopDtachMaster, type StopOutcome } from './dtach-master.js'
 import { WALNUT_HOME } from '../../constants.js'
 import { listSessions } from '../../core/session-tracker.js'
 import { getConfig } from '../../core/config-manager.js'
-import { shellQuote, sshAliasOptions, sshDestination } from '../../providers/session-io.js'
+import { shellQuote } from '../../providers/session-io.js'
 import { log } from '../../logging/index.js'
 import { parseTerminalKey, terminalKeyFor } from '../../core/terminal-key.js'
 
@@ -60,28 +60,13 @@ const SHELL_COMMANDS = new Set([
   'dtach', 'login',
 ])
 
-function run(cmd: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    execFile(cmd, args, { timeout: CMD_TIMEOUT_MS, encoding: 'utf-8' }, (err, stdout, stderr) => {
-      const code = err && typeof (err as { code?: unknown }).code === 'number' ? (err as { code: number }).code : err ? 1 : 0
-      resolve({ code, stdout: stdout ?? '', stderr: stderr ?? '' })
-    })
-  })
-}
-
 /**
- * Run a shell snippet locally, or wrapped in ssh for a remote host. Reuses the
- * shared ControlMaster socket (warmed by the probe/spawn) so lifecycle calls
- * don't each pay a fresh proxied SSH connection.
+ * Run a shell snippet locally, or on the terminal's host the terminal's way
+ * (host-shell.ts: ssh over the shared ControlMaster warmed by the probe and the
+ * spawn, or the host's daemon link where it has no SSH route).
  */
-async function runShell(host: string | undefined, script: string): Promise<{ code: number; stdout: string; stderr: string }> {
-  if (!host) return run('bash', ['-c', script])
-  const target = await resolveSshTarget(host)
-  const hostString = sshDestination(target)
-  const sshArgs = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', ...sshAliasOptions(target), ...sshControlMasterArgs(host)]
-  if (target.port) sshArgs.push('-p', String(target.port))
-  sshArgs.push(hostString, script)
-  return run('ssh', sshArgs)
+function runShell(host: string | undefined, script: string): Promise<{ code: number; stdout: string; stderr: string }> {
+  return runOnTerminalHost(host, script, { timeoutMs: CMD_TIMEOUT_MS, ssh: 'command' })
 }
 
 /**
@@ -90,7 +75,7 @@ async function runShell(host: string | undefined, script: string): Promise<{ cod
  * unquoted `$owners` into words, so a pid list would read as one bad word.
  */
 function runPosix(host: string | undefined, script: string): Promise<{ code: number; stdout: string; stderr: string }> {
-  return runShell(host, host ? `/bin/sh -c ${shellQuote(script)}` : script)
+  return runOnTerminalHost(host, script, { timeoutMs: CMD_TIMEOUT_MS, ssh: 'posix' })
 }
 
 /**
@@ -453,15 +438,15 @@ export async function reapOrphanDtach(opts: { remoteHosts?: boolean } = {}): Pro
     try {
       const config = await getConfig()
       for (const h of Object.keys(config.hosts ?? {})) hosts.add(h)
-      // A host that cannot open a terminal (the cloud box: no SSH) has no dtach
-      // sockets to sweep, and listing them would only fail on every start.
-      const { hostOffersTerminal } = await import('../../core/hosts/host-status.js')
+      // A host with no SSH route is swept over its daemon link, only while that link is
+      // up and can run a script: the sweep never dials one, nor fails on every start.
+      const { hostHasSshRoute } = await import('../../core/hosts/host-status.js')
       // A found host waiting for the person's yes is never dialled (core/hosts/found-hosts.ts);
       // a live session there would have made it a yes.
       const { foundHostWaits } = await import('../../core/hosts/found-hosts.js')
       const live = new Set(sessions.map((s) => s.host).filter(Boolean))
       for (const [h, def] of Object.entries(config.hosts ?? {})) {
-        if (def && !hostOffersTerminal(def)) hosts.delete(h)
+        if (def && !hostHasSshRoute(def) && !(await hostLinkRunsScripts(h))) hosts.delete(h)
         else if (def && foundHostWaits(def) && !live.has(h)) hosts.delete(h)
       }
     } catch (err) {

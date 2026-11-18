@@ -30,12 +30,13 @@ import {
   refreshHostReadiness,
   resetHostAutofixAttempts,
   type AutofixOptions,
+  type HostContext,
   type PreflightConnection,
 } from '../../src/core/hosts/host-readiness.js'
 import { autofixDisabledReason, describeFixOutcome, fixActionFor, isTransportError, nextFixAction, withFixState } from '../../src/core/hosts/host-autofix.js'
 import type { HostFixAction } from '../../src/core/hosts/host-autofix.js'
 import { FIX_RETRY_AFTER_MS, recentFailedFixes, reloadHostFixMemoryForTest } from '../../src/core/hosts/host-fix-memory.js'
-import { AGENTS_ASK_MS, agentsAsked, attempted } from '../../src/core/hosts/host-readiness-store.js'
+import { AGENTS_ASK_MS, agentsAsked, attempted, fixesAsked } from '../../src/core/hosts/host-readiness-store.js'
 
 interface HostState {
   claude: Record<string, unknown>
@@ -733,3 +734,32 @@ describe('the coding agent waits for a person', () => {
 })
 
 afterEach(() => { vi.restoreAllMocks() })
+
+describe('terminal fixes on a host with no SSH route (its terminal rides the daemon link)', () => {
+  const refreshWith = async (host: string, conn: PreflightConnection, ctx: HostContext) => {
+    await refreshHostReadiness(host, { getConnection: () => conn, autofix: autofix(), force: true, findPrebuilt: (p, a) => prebuilt(p, a), hostContext: async () => ctx })
+    await hostAutofixRound(host)
+  }
+
+  it('a host-network host (the user\'s own machine) installs gcc and dtach by itself, as an SSH host does', async () => {
+    const h = fakeHost({ claude: NATIVE })
+    await refreshWith('olddev', h.conn, { label: 'olddev', floor: null })
+    expect(h.sent).toEqual(['preflight', 'fix:install-compiler', 'preflight', 'fix:build-dtach', 'preflight'])
+  })
+
+  it('the cloud box installs them only after a person\'s click, and that click is used up by the fix', async () => {
+    const h = fakeHost({ claude: NATIVE })
+    const ctx = { label: 'Cloud', terminalFixes: 'asked' as const, floor: null }
+    await refreshWith('__cloudbox__', h.conn, ctx)
+    expect(h.sent).toEqual(['preflight'])
+    // The line still says what is missing, for the person to act on.
+    expect(getHostReadiness('__cloudbox__')!.problems.map((p) => p.kind)).toEqual(['compiler_missing'])
+
+    // Connect now / Retry on Cloud (connectHostNow) stamps the click.
+    resetHostAutofixAttempts('__cloudbox__')
+    fixesAsked.set('__cloudbox__', Date.now())
+    await refreshWith('__cloudbox__', h.conn, ctx)
+    expect(h.sent).toEqual(['preflight', 'preflight', 'fix:install-compiler', 'preflight', 'fix:build-dtach', 'preflight'])
+    expect(fixesAsked.has('__cloudbox__')).toBe(false)
+  })
+})

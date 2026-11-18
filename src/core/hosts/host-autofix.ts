@@ -337,6 +337,8 @@ export interface AutofixIo {
   agents?: boolean | (() => boolean)
   /** The host's automatic fixes are off: only the asked agent fix runs. */
   agentsOnly?: boolean
+  /** false: no terminal fix (compiler, dtach) here now; read at each step (nextFixAction's `terminals`). */
+  terminals?: () => false | undefined
   /** The terminal's provisioning, forced fresh: upload a prebuilt or compile, over ssh. */
   provisionDtach: () => Promise<DtachProvisionOutcome>
   /** The prebuilt was offered and did not run there: plan as if there were none. */
@@ -415,7 +417,8 @@ export async function runHostAutofix(first: HostPreflightResult, io: AutofixIo):
   // Four fixes exist; build-dtach may run a second time after gcc arrived.
   for (let step = 0; step < 5; step++) {
     const agents = typeof io.agents === 'function' ? io.agents() : io.agents === true
-    const action = nextFixAction(current, io.tried, { prebuiltDtach: io.prebuiltDtach(), agents, agentsOnly: io.agentsOnly })
+    const terminals = io.terminals?.()
+    const action = nextFixAction(current, io.tried, { prebuiltDtach: io.prebuiltDtach(), agents, agentsOnly: io.agentsOnly, ...(terminals === false ? { terminals } : {}) })
     if (!action) return
     io.tried.add(action)
     io.onStart({ action, startedAt: io.now(), text: fixingText(action) })

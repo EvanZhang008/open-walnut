@@ -18,9 +18,11 @@
  *      from step 1 once it passes `--help` there
  *   4. compile the vendored source into the path from step 1
  *   5. none: `no_compiler`, or `build_failed` with the compiler's stderr
- * Remote steps 1, 2 and the compiler check share ONE ssh round trip; steps 3
- * and 4 share the second. See dtach-probe-script.ts for the scripts and the
- * ssh-vs-compiler rule.
+ * Remote steps 1, 2 and the compiler check share ONE round trip; steps 3
+ * and 4 share the second. Each is a script run on the host the terminal's way
+ * (host-shell.ts: ssh `sh -s` for an SSH host, exec.script over the daemon link
+ * for any other). See dtach-probe-script.ts for the scripts and the
+ * transport-vs-compiler rule.
  *
  * The local cache lives under tmp/ because it is a platform-specific COMPILED
  * artifact: rebuildable in ~1s from the embedded source, and actively wrong for
@@ -36,10 +38,9 @@ import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs/promises'
 import { constants as fsConstants } from 'node:fs'
-import { execFile } from 'node:child_process'
 import { TMP_DIR } from '../../constants.js'
-import { REMOTE_DTACH_OWN_BIN, REMOTE_TEST_ROOT, resolveSshTarget, sshControlMasterArgs } from './spawn.js'
-import { sshAliasOptions, sshDestination } from '../../providers/session-io.js'
+import { REMOTE_DTACH_OWN_BIN, REMOTE_TEST_ROOT } from './spawn.js'
+import { runOnTerminalHost, runProgram } from './host-shell.js'
 import { DTACH_SOURCES, DTACH_VERSION } from './dtach-sources.js'
 import {
   ALL_FILES,
@@ -72,29 +73,14 @@ const LOCAL_OS = toHostOs(process.platform)
 /** Fixed dirs that back up `which dtach` when the server's PATH is minimal. */
 const LOCAL_SYSTEM_CANDIDATES = ['/opt/homebrew/bin/dtach', '/usr/local/bin/dtach', '/usr/bin/dtach']
 
-function run(cmd: string, args: string[], opts: { timeout?: number; input?: string; cwd?: string } = {}): Promise<ScriptRun> {
-  return new Promise((resolve) => {
-    const execOpts = { timeout: opts.timeout ?? PROVISION_TIMEOUT_MS, encoding: 'utf-8' as const, maxBuffer: 8 * 1024 * 1024, cwd: opts.cwd }
-    let child: ReturnType<typeof execFile>
-    try {
-      child = execFile(cmd, args, execOpts, (err, stdout, stderr) => {
-        const e = err as (Error & { code?: unknown; killed?: boolean }) | null
-        const code = e && typeof e.code === 'number' ? e.code : e ? 1 : 0
-        resolve({ code, stdout: stdout ?? '', stderr: stderr ?? '', timedOut: Boolean(e?.killed) })
-      })
-    } catch (err) {
-      // execFile THROWS (instead of calling back) for a file the kernel can't
-      // exec, e.g. `spawn ENOEXEC` on a corrupt prebuilt: an answer, not a crash.
-      resolve({ code: 1, stdout: '', stderr: err instanceof Error ? err.message : String(err) })
-      return
-    }
-    if (opts.input !== undefined) {
-      // ssh can exit before draining stdin (auth failure); an EPIPE on this
-      // stream is then expected and must not become an uncaught error.
-      child.stdin?.on('error', () => {})
-      child.stdin?.end(opts.input)
-    }
-  })
+/** A local program (which, cc, a dtach --help), bounded: host-shell.ts's one runner. */
+function run(cmd: string, args: string[], opts: { cwd?: string } = {}): Promise<ScriptRun> {
+  return runProgram(cmd, args, { timeoutMs: PROVISION_TIMEOUT_MS, ...opts })
+}
+
+/** One provisioning script on a remote host, the terminal's way (host-shell.ts). */
+function runRemote(host: string, script: string): Promise<ScriptRun> {
+  return runOnTerminalHost(host, script, { timeoutMs: PROVISION_TIMEOUT_MS, ssh: 'stdin' })
 }
 
 export class DtachProvisionError extends Error {
@@ -292,7 +278,7 @@ export function resolveRemoteDtach(host: string, opts: { fresh?: boolean } = {})
     try {
       return await provisionRemote(host)
     } catch (err) {
-      // resolveSshTarget throws for an unknown alias: that is an ssh problem
+      // resolveTerminalRoute throws for an unknown alias: a transport problem
       // (nothing ran on the host), so it must not read as a compiler problem.
       return { kind: 'ssh_failed', exitCode: -1, stderr: err instanceof Error ? err.message : String(err) }
     }
@@ -304,20 +290,9 @@ export async function remoteDtachPath(host: string): Promise<string> {
   return unwrap(await resolveRemoteDtach(host), host)
 }
 
-/** ssh argv for `sh -s` on a host, over the shared ControlMaster. */
-async function sshArgsFor(host: string): Promise<string[]> {
-  const target = await resolveSshTarget(host)
-  const hostString = sshDestination(target)
-  const args = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', ...sshAliasOptions(target), ...sshControlMasterArgs(host)]
-  if (target.port) args.push('-p', String(target.port))
-  args.push(hostString, 'sh -s')
-  return args
-}
-
 async function provisionRemote(host: string): Promise<DtachResolution> {
-  const args = await sshArgsFor(host)
-  // Round trip 1 (also warms the ControlMaster the spawn reuses).
-  const probeRun = await run('ssh', args, { input: buildProbeScript({ ownBin: REMOTE_DTACH_OWN_BIN, ownRoot: REMOTE_TEST_ROOT }) })
+  // Round trip 1 (also warms the ControlMaster, or the link, the spawn reuses).
+  const probeRun = await runRemote(host, buildProbeScript({ ownBin: REMOTE_DTACH_OWN_BIN, ownRoot: REMOTE_TEST_ROOT }))
   const probe = classifyScriptRun(probeRun)
   if (probe.kind !== 'need_build' && probe.kind !== 'no_compiler') {
     logRemote(host, probe)
@@ -334,7 +309,7 @@ async function provisionRemote(host: string): Promise<DtachResolution> {
   const cc = probe.kind === 'need_build' ? probe.cc : undefined
   // Round trip 2, once per host: ship the prebuilt and/or the source.
   const script = buildInstallScript({ prebuilt: prebuilt?.bytes, cc, sources: DTACH_SOURCES, ownBin: REMOTE_DTACH_OWN_BIN, ownRoot: REMOTE_TEST_ROOT })
-  const installRun = await run('ssh', args, { input: script })
+  const installRun = await runRemote(host, script)
   const installed = classifyScriptRun(installRun)
   const result: DtachResolution = installed.kind === 'need_build'
     ? { kind: 'build_failed', stderr: 'install script asked for another build', os: 'unknown' }

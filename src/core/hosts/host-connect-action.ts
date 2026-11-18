@@ -20,7 +20,7 @@ import {
 import { buildHostStatus, type HostDef, type HostStatus } from './host-status.js'
 import { getHostWarmup } from './host-warmup-registry.js'
 import { getHostReadiness, refreshHostReadiness, resetHostAutofixAttempts, type HostReadiness } from './host-readiness.js'
-import { agentsAsked } from './host-readiness-store.js'
+import { agentsAsked, fixesAsked } from './host-readiness-store.js'
 import { REMOTE_OFF_NOTE } from './host-problem.js'
 import { clearLinkDrops } from '../../providers/daemon-link-drops.js'
 import {
@@ -153,6 +153,8 @@ export async function connectHostNow(host: string, opts: { deadlineMs?: number; 
   clearDaemonFailureCache(host)
   resetHostAutofixAttempts(host)
   if (opts.agents) agentsAsked.set(host, Date.now())
+  // A person's click: a host whose terminal fixes wait for one (the cloud box) may run them now.
+  fixesAsked.set(host, Date.now())
   // A person's Retry on Cloud may mint a new machine credential now: the
   // cloudBox re-mint window only paces the automatic redials.
   const cloudBox = def.cloud_box === true

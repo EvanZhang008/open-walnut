@@ -35,7 +35,9 @@ export const SERVES_FILE = 'daemon.serves.json'
  * adds in its hello beyond ADVERTISED_DAEMON_CAPABILITIES belongs here
  * (tests/providers/daemon-shared-host-dependent.test.ts): 2026-11-12, caller-proof-v1 was
  * missing, so a dev host's daemon read as having something every newer build "lacks" and was
- * kept for good, and none of the day's daemon fixes reached it.
+ * kept for good, and none of the day's daemon fixes reached it. pty-stream-v1 is not one: it
+ * is advertised, and a daemon lacking it counts as missing it (sharedDaemonVerdict) unless it
+ * says its runtime has no pty (`pty: false`, a source twin on Node).
  */
 export const HOST_DEPENDENT_CAPABILITIES: ReadonlySet<string> = new Set(['service-handover-v1', 'cron-supervision-v1', 'service-update-v1', 'service-update-force-v1', 'acp-host-v1', 'caller-proof-v1'])
 const HOST_DEPENDENT = HOST_DEPENDENT_CAPABILITIES
@@ -49,6 +51,8 @@ export interface DaemonServes {
   capabilities: string[]
   /** Walnut key ('-' = a server that names no home) → last seen, ms. */
   walnuts: Record<string, number>
+  /** Whether its runtime can have a pty (pty-stream-v1); null or absent when it says nothing (a build older than this field). */
+  pty?: boolean | null
 }
 
 /**
@@ -90,6 +94,7 @@ export function parseServes(input: unknown): DaemonServes | null {
     twin: o.twin === 'binary' || o.twin === 'source' ? o.twin : null,
     capabilities: o.capabilities.filter((c): c is string => typeof c === 'string'),
     walnuts,
+    pty: typeof o.pty === 'boolean' ? o.pty : null,
   }
 }
 
@@ -128,7 +133,10 @@ export function sharedDaemonVerdict(args: {
   if (!others.length) return { keep: false, why: 'only this Walnut uses it' }
   const has = new Set(running.capabilities)
   const ours = ourDaemonCapabilities(running.twin)
-  const missing = ours.filter((c) => !has.has(c))
+  // A twin that says its runtime has no pty (a source twin on Node) lacks pty-stream-v1 in every
+  // build, so that one is not missing; a daemon that says nothing (an older build) still is.
+  const noPty = (c: string) => c === 'pty-stream-v1' && running.pty === false
+  const missing = ours.filter((c) => !has.has(c) && !noPty(c))
   const kept = (why: string): SharedVerdict => ({ keep: true, others, why: `another Walnut uses it (${others.length}) and ${why}` })
   if (!missing.length) return kept('it has every capability this build\'s daemon has')
   // It has something this build would take away: neither build covers the other, and

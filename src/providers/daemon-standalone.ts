@@ -106,6 +106,7 @@ import { createFollowerReads } from './follower-reads-core.js'
 import { createHostServerSupervisor } from './host-server-core.js'
 import { createPluginJobSupervisor } from './plugin-jobs-core.js'
 import { createStreamRelay } from './stream-relay-core.js'
+import { createPtyStreams, type PtyChild, type PtySpawnOptions } from './pty-stream-core.js'
 import { createHostResume } from './host-resume-core.js'
 import { createCliOwner } from './cli-owner-core.js'
 import { createCliArgvFiles } from './cli-argv-files-core.js'
@@ -559,6 +560,8 @@ const servedWalnuts = createServedWalnuts({
   fs, file: SERVES_FILE,
   keyOf: (value) => crypto.createHash('sha1').update(value).digest('hex').slice(0, 16),
   version: DAEMON_VERSION, twin: 'binary', capabilities: () => helloCapabilities(), now: () => Date.now(),
+  // Bun's own pty is built into the bun this twin runs on (pty-stream-v1).
+  pty: () => true,
   log: (level, msg, data) => logMsg(level, msg, data),
 })
 const AGENT_POLL_INTERVAL_MS = 2000
@@ -2983,6 +2986,8 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'stream.lane': return cmdStreamLane(ws, id as number, cmd)
     case 'client.role': return cmdClientRole(ws, id as number, cmd)
     case 'stream.accept': case 'stream.data': case 'stream.ack': case 'stream.end': case 'stream.close':
+    // A terminal's new size ('pty-stream-v1'): a frame of a stream on this socket, like the rest.
+    case 'stream.resize':
       return streamRelay.frame(ws, (cmd.cmd as string).slice('stream.'.length), cmd)
     case 'server.configure': return cmdServerConfigure(ws, id as number, cmd)
     case 'server.status': return cmdServerStatus(ws, id as number, cmd)
@@ -3079,7 +3084,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       version: DAEMON_VERSION,
       capabilities: helloCapabilities(),
       // The Walnuts this daemon served lately (served-walnuts-core.ts).
-      served: { twin: 'binary', walnuts: servedWalnuts.recent() },
+      served: { twin: 'binary', walnuts: servedWalnuts.recent(), pty: true },
       cronSupervision: { managed: !!cronRuntime, startup: SERVICE_MODE ? 'service' : 'on-demand' },
       instanceId: DAEMON_INSTANCE_ID,
       ...(SERVICE_MODE ? { serviceExecutable: process.execPath } : {}),
@@ -4502,11 +4507,33 @@ function cmdFollowerReport(ws: ServerWebSocket<WsData>, cmd: Record<string, unkn
 // A host server's browser reaches the leader (or the companion) and the leader
 // reaches the host server through this daemon, on the links each already has.
 // Keep in sync with daemon-source.ts.
+// Terminal streams ('pty-stream-v1', pty-stream-core.ts): bun's own pty (the bun this twin
+// is built with has it), so this twin always advertises it.
+const PTY_SPAWN = (argv: string[], opts: PtySpawnOptions): PtyChild => Bun.spawn(argv, opts as never) as unknown as PtyChild
+const ptyStreams = createPtyStreams<ServerWebSocket<WsData>>({
+  send: (ws, ev, data) => sendEvent(ws, ev, data),
+  log: (level, msg, data) => logMsg(level, msg, data),
+  spawn: PTY_SPAWN,
+  user: () => { const u = os.userInfo(); return { shell: u.shell, home: u.homedir, name: u.username } },
+  env: process.env,
+  executable: (p) => { try { fs.accessSync(p, fs.constants.X_OK); return fs.statSync(p).isFile() } catch { return false } },
+  foregroundGroup: (pid, cb) => psGroupField(pid, 'tpgid', cb),
+  ownGroup: (cb) => psGroupField(process.pid, 'pgid', cb),
+  killGroup: (pgid, signal) => { process.kill(-pgid, signal as NodeJS.Signals) },
+})
+/** One process's `ps -o <field>=` as an integer (tpgid, pgid), or null; Linux and macOS ps both take it. */
+function psGroupField(pid: number, field: 'tpgid' | 'pgid', cb: (n: number | null) => void): void {
+  execFile('ps', ['-o', `${field}=`, '-p', String(pid)], { timeout: 2_000 }, (err, stdout) => {
+    const n = err ? NaN : Number.parseInt(String(stdout).trim(), 10)
+    cb(Number.isInteger(n) ? n : null)
+  })
+}
 const streamRelay = createStreamRelay<ServerWebSocket<WsData>>({
   send: (ws, ev, data) => sendEvent(ws, ev, data),
   log: (level, msg, data) => logMsg(level, msg, data),
   // Port streams ('port-stream-v1'): the relay picks the loopback address.
   connect: (port, host) => net.connect({ port, host, allowHalfOpen: true }),
+  ptys: ptyStreams,
 })
 
 /** The primary's socket for `home` that was heard last. */
@@ -4668,6 +4695,11 @@ function openStreamNow(ws: ServerWebSocket<WsData>, cmd: Record<string, unknown>
   if (cmd.to === 'port') {
     if (!isServerClient(ws)) return streamRelay.open(ws, cmd.sid, null, {}, 'only the Walnut server linked here opens a port stream')
     return streamRelay.openPort(ws, cmd.sid, cmd.port, cmd.host)
+  }
+  // A terminal on this host ('pty-stream-v1'): the primary's own socket only, as a port stream.
+  if (cmd.to === 'pty') {
+    if (!isServerClient(ws)) return streamRelay.open(ws, cmd.sid, null, {}, 'only the Walnut server linked here opens a terminal stream')
+    return streamRelay.openPty(ws, cmd.sid, cmd)
   }
   const target = streamTarget(ws, cmd.to)
   const purpose = typeof cmd.purpose === 'string' ? cmd.purpose.slice(0, 32) : undefined

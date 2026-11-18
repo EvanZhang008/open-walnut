@@ -26,7 +26,7 @@ import {
 import { configuredClaudeCliFloor, type ClaudeCliFloor } from './claude-version-floor.js'
 import { FIX_RETRY_AFTER_MS, recentFailedFixes, rememberFixOutcome } from './host-fix-memory.js'
 import {
-  agentsAsked, agentsAskedNow, attempted, fixState, getHostReadiness, inFlight, markCheckFailed, notifyReadiness as notify, onHostReadinessChange,
+  agentsAsked, agentsAskedNow, attempted, fixesAsked, fixesAskedNow, fixState, getHostReadiness, inFlight, markCheckFailed, notifyReadiness as notify, onHostReadinessChange,
   prebuiltFor, prebuiltUnusable, problemCtx, readinessProbeSkipped, rounds, setFixState, store, type HostReadiness,
 } from './host-readiness-store.js'
 import { wireHostSessionUse } from './host-session-use.js'
@@ -64,8 +64,13 @@ export interface HostContext {
   label?: string
   /** What follows `ssh` to reach the host; none for a host with no SSH route (the host network, the cloud box). */
   sshTarget?: string
-  /** This host can open a terminal (hostOffersTerminal); false: dtach is moot there. */
+  /** false: this server opens no terminal there, so dtach is moot. */
   terminals?: boolean
+  /**
+   * 'asked': the host's compiler and dtach are installed only after a person's click (the cloud
+   * box: Walnut's own machine, not the user's); its other fixes and every line stay as they are.
+   */
+  terminalFixes?: 'asked'
   floor: ClaudeCliFloor | null
   /** config.hosts[].shell_setup: the preflight runs it first, as a session spawn does. */
   shellSetup?: string
@@ -106,9 +111,13 @@ async function defaultHostContext(host: string): Promise<HostContext> {
     const shellSetup = typeof def?.shell_setup === 'string' && def.shell_setup.trim() ? def.shell_setup : undefined
     const wsl = await probedWsl(host)
     const { hostHasSshRoute } = await import('./host-status.js')
-    // Not configured here (a replica's copy may not list a host): SSH as before.
+    // Not configured here (a replica's copy may not list a host): SSH as before. A host with no
+    // SSH route still opens terminals (over its daemon link), so its dtach still matters.
     const ssh = !def || hostHasSshRoute(def)
-    return { label, ...(ssh ? { sshTarget: sshTargetText(def, host) } : { terminals: false }), floor, ...(shellSetup ? { shellSetup } : {}), ...(wsl ? { wsl } : {}) }
+    // A host-network host is the user's own machine, fixed as an SSH host is; the cloud box's
+    // compiler and dtach wait for a person's click.
+    const askFirst = def?.cloud_box === true
+    return { label, ...(ssh ? { sshTarget: sshTargetText(def, host) } : {}), ...(askFirst ? { terminalFixes: 'asked' as const } : {}), floor, ...(shellSetup ? { shellSetup } : {}), ...(wsl ? { wsl } : {}) }
   } catch {
     return { label: host, sshTarget: host, floor }
   }
@@ -169,9 +178,11 @@ function defaultOnFixed(host: string, action: HostFixAction): void {
     .catch(() => { /* no terminal module in this process */ })
 }
 
-/** A host with no terminal (no SSH route) gets no dtach fix. */
+/** A host this server opens no terminal on gets no dtach fix, nor one whose terminal fixes wait for a click nobody made. */
 function terminalsOf(host: string): { terminals?: false } {
-  return problemCtx.get(host)?.terminals === false ? { terminals: false } : {}
+  const ctx = problemCtx.get(host)
+  if (ctx?.terminals === false) return { terminals: false }
+  return ctx?.terminalFixes === 'asked' && !fixesAskedNow(host) ? { terminals: false } : {}
 }
 
 /**
@@ -222,6 +233,10 @@ function maybeStartAutofix(host: string, conn: PreflightConnection, answer: Host
     // The floor rides the install too, and a host with no claude has none in its answer.
     const floor = answer.claude.minVersion
       ?? (await (context ?? defaultHostContext)(host).catch(() => null))?.floor?.minVersion
+    // A host whose terminal fixes wait for a click: this round may run them (gcc, then dtach)
+    // only when one was made, and uses it up, so a later connect installs nothing by itself.
+    const terminalsNow = terminalsOf(host).terminals
+    if (terminalsNow === undefined && problemCtx.get(host)?.terminalFixes === 'asked') fixesAsked.delete(host)
     await runHostAutofix(answer, {
       conn,
       tried: triedNow,
@@ -231,6 +246,7 @@ function maybeStartAutofix(host: string, conn: PreflightConnection, answer: Host
       ...(floor ? { minClaudeVersion: floor } : {}),
       preflight: () => refreshHostReadiness(host, { getConnection: () => conn, now, force: true, autofix: false, findPrebuilt, hostContext: context }),
       prebuiltDtach,
+      terminals: () => terminalsNow,
       provisionDtach: () => (opts.provisionDtach ?? defaultProvisionDtach)(host),
       onPrebuiltUnusable: () => {
         log.session.warn('host prebuilt dtach did not run, planning for a compiler', { host })
@@ -376,7 +392,7 @@ export function refreshHostReadiness(
         && !!(await (opts.findPrebuilt ?? defaultFindPrebuilt)(parsed.platform, parsed.arch).catch(() => null))
       if (superseded()) { recheck = true; return null }
       prebuiltFor.set(host, prebuilt)
-      problemCtx.set(host, { prebuiltDtach: prebuilt, hostLabel: ctx.label, sshTarget: ctx.sshTarget, ...(ctx.terminals === false ? { terminals: false } : {}) })
+      problemCtx.set(host, { prebuiltDtach: prebuilt, hostLabel: ctx.label, sshTarget: ctx.sshTarget, ...(ctx.terminals === false ? { terminals: false } : {}), ...(ctx.terminalFixes ? { terminalFixes: ctx.terminalFixes } : {}) })
       store.set(host, {
         ...parsed, checkedAt: now(), probeEpoch: epoch,
         problems: readinessProblems(parsed, { prebuiltDtach: prebuilt, hostLabel: ctx.label, sshTarget: ctx.sshTarget, floorModel: ctx.floor?.model, ...(ctx.terminals === false ? { terminals: false } : {}) }),

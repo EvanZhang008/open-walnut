@@ -55,4 +55,27 @@ describe('capabilities a twin adds by its host are host-dependent', () => {
     })
     expect(verdict.keep).toBe(false)
   })
+
+  it('a shared daemon lacking pty-stream-v1 needs the update unless it says its runtime has no pty', () => {
+    const ours = ourDaemonCapabilities('source')
+    const lacking = ours.filter((c) => c !== 'pty-stream-v1')
+    const verdict = (pty: boolean | undefined) => sharedDaemonVerdict({
+      ourKey: 'aaaaaaaaaaaaaaaa', runningVersion: 'walnut-daemon-old', now: 1_000_000,
+      running: { version: 'walnut-daemon-old', twin: 'source', capabilities: lacking, walnuts: { bbbbbbbbbbbbbbbb: 999_000 }, ...(pty === undefined ? {} : { pty }) },
+      env: {},
+    })
+    // A build from before the terminal streams says nothing about a pty: it lacks them, it is updated.
+    expect(verdict(undefined)).toMatchObject({ keep: false, missing: ['pty-stream-v1'] })
+    // A daemon on bun that still lacks them is behind too.
+    expect(verdict(true)).toMatchObject({ keep: false, missing: ['pty-stream-v1'] })
+    // A source twin on Node can never have them: every build there lacks them, so it is kept.
+    expect(verdict(false).keep).toBe(true)
+    // Every other capability is still missing when lacked, pty or not.
+    const other = sharedDaemonVerdict({
+      ourKey: 'aaaaaaaaaaaaaaaa', runningVersion: 'walnut-daemon-old', now: 1_000_000,
+      running: { version: 'walnut-daemon-old', twin: 'source', capabilities: lacking.slice(1), walnuts: { bbbbbbbbbbbbbbbb: 999_000 }, pty: false },
+      env: {},
+    })
+    expect(other).toMatchObject({ keep: false, missing: [lacking[0]] })
+  })
 })

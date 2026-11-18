@@ -7,6 +7,7 @@
  */
 
 import type { DaemonConnectPhase, DaemonConnectState } from '../../providers/daemon-connection.js'
+import { ptyStreamMissingSentence } from './terminal-link.js'
 import type { RemoteRuntime } from '../../providers/remote-runtime.js'
 import { MIN_DAEMON_FREE_MB, daemonDirWarning, displayDaemonDir } from '../../providers/remote-daemon-dir.js'
 import type { Config } from '../types.js'
@@ -117,8 +118,13 @@ export interface HostStatus {
   daemonDir?: { path: string; display: string; fallback: boolean; reason?: string; freeMb?: number }
   /** Lines worth saying even when nothing is broken ("Using ~/.cache/open-walnut … because /tmp is read-only"). */
   warnings?: string[]
-  /** false: this host cannot open a terminal (hostOffersTerminal), so a session there shows no Terminal tab. */
+  /**
+   * false: this host cannot open a terminal now, so a session there shows no Terminal tab:
+   * its daemon has no terminal streams (an older build, or one on Node) and the Mac has no
+   * SSH route to it (hostTerminalNow). `terminalWhy` says so.
+   */
   terminal?: false
+  terminalWhy?: string
   /** When this snapshot was taken (ms epoch) — the client orders pushes by it. */
   at: number
 }
@@ -255,7 +261,8 @@ export function buildHostStatus(
     if (status.lastHint) status.lastHint = hint
   }
   foldDaemonUpdate(status, state, label)
-  if (!hostOffersTerminal(hostDef)) status.terminal = false
+  const terminal = hostTerminalNow(hostDef, state, label)
+  if (terminal !== true) { status.terminal = false; status.terminalWhy = terminal }
   // A readiness answer describes the daemon we are talking to now; while the
   // host is down the connect error is the thing to show.
   if (readiness && state.connected) {
@@ -328,17 +335,34 @@ function offHostStatus(hostKey: string, def: HostDef, now: number): HostStatus {
     host: hostKey, label: def.label ?? hostKey, hostname: def.hostname, ...(def.user ? { user: def.user } : {}),
     connected: false, phase: 'off', phaseLabel: OFF_PHASE_LABEL, steps: describeConnectSteps('idle'),
     phaseElapsedMs: 0, connectElapsedMs: 0, at: now, serverNow: now,
-    ...(hostOffersTerminal(def) ? {} : { terminal: false as const }),
   }
 }
 
 /**
- * Can a session on this host open a terminal? A terminal is an ssh + dtach
- * session to the host (web/terminal/spawn.ts), so a host Walnut reaches any
- * other way (the cloud box, through the companion's daemon tunnel) cannot.
+ * Every kind of host this Mac reaches opens a terminal: over SSH where it has an SSH
+ * route, else as a terminal stream on the host's daemon link ('pty-stream-v1',
+ * web/terminal/link-route.ts). A connection is an abstraction; a terminal never depends
+ * on which one (the user, 2026-11-18: "it should always have ... no matter what
+ * connection"). One row per transport: a new one fails to compile until it is given its
+ * terminal, and the class guard (tests/web/terminal/terminal-every-host-kind.test.ts)
+ * reads every transport from the source and fails for one missing here.
  */
-export function hostOffersTerminal(def: HostDef): boolean {
-  return hostHasSshRoute(def)
+export const TERMINAL_ROUTE_BY_TRANSPORT = { ssh: 'ssh', net: 'link' } as const satisfies Record<NonNullable<HostDef['transport']>, 'ssh' | 'link'>
+
+/** How a terminal reaches a host of this kind: ssh where it has an SSH route, else its daemon link (the cloud box always). */
+export function terminalRouteKind(def: Pick<HostDef, 'cloud_box' | 'transport'>): 'ssh' | 'link' {
+  if (def.cloud_box === true) return 'link'
+  const row = (TERMINAL_ROUTE_BY_TRANSPORT as Record<string, 'ssh' | 'link' | undefined>)[def.transport ?? 'ssh']
+  return row ?? (hostHasSshRoute(def) ? 'ssh' : 'link')
+}
+
+/**
+ * Can a session there open a terminal right now: true, or the sentence why not. Only a
+ * link terminal depends on the daemon: one connected without terminal streams cannot.
+ */
+export function hostTerminalNow(def: HostDef, state: Pick<DaemonConnectState, 'noPtyStream'>, label: string): true | string {
+  if (terminalRouteKind(def) === 'link' && state.noPtyStream) return ptyStreamMissingSentence(label)
+  return true
 }
 
 /**

@@ -47,7 +47,7 @@ const DIAL_ALLOWED: Record<string, string> = {
 const SSH_SPAWN_ALLOWED: Record<string, string> = {
   'src/providers/daemon-connection.ts': 'the SSH route: the tunnel and its probes',
   'src/providers/stream-lane.ts': 'the SSH route: the stream lane beside the tunnel',
-  'src/web/terminal/spawn.ts': 'the terminal, SSH by nature until it rides the link',
+  'src/web/terminal/spawn.ts': 'the terminal\'s pty for a host with an SSH route (`ssh -tt`); every other host\'s rides the link (link-pty.ts)',
 }
 
 /** Files that may import remote-sh.js (ssh one-shots), and why. */
@@ -70,8 +70,7 @@ const SSH_PROCESS_ALLOWED: Record<string, string> = {
   ...SSH_SPAWN_ALLOWED,
   'src/providers/remote-sh.ts': 'the SSH route: its one-shots',
   'src/providers/transfer-core.ts': 'on a host\'s daemon, the direct copy from a peer over SSH; never offered for a net host (transfer/workspace.ts sshTargetOf)',
-  'src/web/terminal/dtach-provision.ts': 'the terminal\'s dtach, SSH by nature (resolveSshTarget refuses a host without a terminal)',
-  'src/web/terminal/dtach-lifecycle.ts': 'the terminal\'s dtach, SSH by nature (resolveSshTarget refuses a host without a terminal)',
+  'src/web/terminal/host-shell.ts': 'the terminal\'s scripts (dtach, its lifecycle) on a host with an SSH route; every other host\'s go through runScriptOnHost (resolveTerminalRoute decides)',
   'src/core/hosts/ssh-cert-expiry-alert.ts': 'does an SSH host\'s sign-in work (net hosts are filtered out)',
   'src/providers/ssh-credential-evidence.ts': '`ssh -G`: this machine\'s ssh config, no connection',
   'src/core/hosts/ssh-key-of.ts': '`ssh -G`: this machine\'s ssh config, no connection',
@@ -105,7 +104,7 @@ const PROCESS_FIELD_RE = /^(cmd|command|bin|binary|file|program|executable)$/i
 const SSH_LINE_RE = /^\s*(\S*\/)?(ssh|scp)\s/
 const HOST_COMMANDS = new Set(['exec.run', 'exec.script'])
 /** Calls that start a process from an argv or a shell line (a helper named `run` included). */
-const PROCESS_CALLS = new Set(['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'run', 'execa', 'fork'])
+const PROCESS_CALLS = new Set(['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'run', 'runProgram', 'execa', 'fork'])
 
 function scan(file: string): Hits {
   const text = fs.readFileSync(file, 'utf8')

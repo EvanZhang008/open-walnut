@@ -1459,7 +1459,7 @@ export class LocalDaemon {
           socket.send(JSON.stringify({ id: 1, cmd: 'hello' }))
         })
         socket.on('message', (data) => {
-          let msg: { id?: unknown; ok?: boolean; version?: string; capabilities?: string[]; instanceId?: string; execRunning?: number; execHolding?: number; jobs?: unknown; served?: { twin?: unknown; walnuts?: unknown } } | null = null
+          let msg: { id?: unknown; ok?: boolean; version?: string; capabilities?: string[]; instanceId?: string; execRunning?: number; execHolding?: number; jobs?: unknown; served?: { twin?: unknown; walnuts?: unknown; pty?: unknown } } | null = null
           try { msg = JSON.parse(data.toString()) } catch { /* not JSON: a bad reply */ }
           if (hello && msg && msg.id === 2) {
             clearTimeout(timeout)
@@ -1480,7 +1480,7 @@ export class LocalDaemon {
             capabilities: msg.capabilities,
             instanceId: msg.instanceId,
             ...(msg.served && typeof msg.served === 'object'
-              ? { served: parseServes({ version: msg.version ?? '', twin: msg.served.twin, capabilities: msg.capabilities ?? [], walnuts: msg.served.walnuts }) }
+              ? { served: parseServes({ version: msg.version ?? '', twin: msg.served.twin, capabilities: msg.capabilities ?? [], walnuts: msg.served.walnuts, pty: msg.served.pty }) }
               : {}),
             ...(typeof msg.execHolding === 'number' ? { execHolding: msg.execHolding } : typeof msg.execRunning === 'number' ? { execHolding: msg.execRunning } : {}),
             ...(msg.ok === true ? {} : { failure: 'bad-reply' as const }),

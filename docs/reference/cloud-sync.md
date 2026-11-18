@@ -603,9 +603,13 @@ Mac server ──wss /daemon-tunnel (machine token)──▶ Caddy ──▶ rep
   way: the box daemon dials the companion's `/bridge` as `__cloudbox__`.
 - **Limits.** Two running and three idle sessions by default, as a small box
   that also runs the companion (`session_limits.__cloudbox__` on the Mac
-  overrides). No terminal and no port forwarding on Cloud: both need SSH. Its
-  host status carries `terminal: false`, so a Cloud session shows no Terminal
-  tab.
+  overrides). No port forwarding on Cloud. Its terminal rides the daemon tunnel
+  as a terminal stream (`pty-stream-v1`, `src/providers/pty-stream-core.ts`), like
+  every host without an SSH route; only a box daemon without that capability makes
+  its host status carry `terminal: false` (with `terminalWhy`: it needs an update).
+  The box's service user has `/usr/sbin/nologin` in passwd, so its terminal runs the
+  service's `$SHELL` (bash). Walnut installs a compiler or dtach on the box only after
+  a person's Connect now or Retry on Cloud, never on its own.
 - **A companion that stops answering.** Session history, Changes, the Files
   tab, file content, the folder picker, path links, the slash command list,
   images, the plan, the service preview and the code-server view never wait

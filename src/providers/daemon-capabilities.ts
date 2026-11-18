@@ -460,6 +460,19 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // uses `ssh -L`. Both twins. Optional: without it the Mac says the daemon
   // there needs an update.
   'port-stream-v1',
+  // 'pty-stream-v1' (pty-stream-core.ts, through stream-relay-core.ts openPty): the
+  // primary, on its own server socket (never the bridge, a follower, a lane or a
+  // probe), may open `stream.open {sid, to: 'pty', command, cols, rows, env?}`: the
+  // daemon runs `<login shell> -c <command>` on a pty in the user's home, as sshd
+  // does for `ssh -tt host CMD`, and carries its bytes as a stream; `stream.resize
+  // {sid, cols, rows}` sets its size, and `stream-end {sid, exit: {code, signal}}`
+  // follows its last output. A close or a link drop hangs it up (SIGHUP). Every
+  // host's terminal rides it where the Mac has no SSH route (the host network, the
+  // cloud box). At most 32 per link. Only where the runtime has a pty: the binary
+  // twin, and the source twin under bun (never under Node), so it is host-dependent
+  // (daemon-shared.ts). Optional: without it the host shows no terminal and the
+  // Mac says the daemon there needs an update.
+  'pty-stream-v1',
   // 'client-role-v1': a test server (an ephemeral one attached read only to a host it
   // shares with the real Walnut) may say `client.role {role: 'probe'}` on each of its
   // sockets. A probe keeps its commands but is never taken for the Walnut's server:

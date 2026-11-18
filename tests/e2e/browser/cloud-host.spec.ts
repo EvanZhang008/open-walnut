@@ -8,8 +8,9 @@
  *      box's mock CLI answers in it.
  *   4. The server's history re-read after the turn (through the tunnel) finds
  *      the streamed reply: no "may not have been saved" toast.
- *   5. The column offers no Terminal tab: Cloud has no SSH (its status frame
- *      carries terminal: false).
+ *   5. The column offers a Terminal tab: Cloud has no SSH, and its terminal rides
+ *      the daemon tunnel ('pty-stream-v1'), so its status frame carries no
+ *      `terminal: false`.
  *   6. The operator turns cloud.exec off: Cloud's problem row in the
  *      notification panel names it with ONE details toggle, and Retry after
  *      turning it back on reconnects.
@@ -114,13 +115,18 @@ test('the picker offers Cloud, lists the box folders, and a session starts there
   await expect(column.getByText('Claude Code is working')).toHaveCount(0, { timeout: 30_000 })
   const record = await (await page.request.get(`/api/sessions/${sessionId}`)).json() as { host?: string; session?: { host?: string } }
   expect(record.host ?? record.session?.host).toBe(CLOUD)
-  // Cloud has no SSH, so no terminal: its status frame says so and the tab is gone.
+  // Cloud has no SSH, and still a terminal: it rides the daemon tunnel, so the tab is there.
   const chips = column.locator('.session-action-chip')
   await expect(chips.filter({ hasText: 'Files' })).toBeVisible()
-  await expect(chips.filter({ hasText: 'Terminal' })).toHaveCount(0)
+  await expect(chips.filter({ hasText: 'Terminal' })).toBeVisible()
   const status = await (await page.request.get('/api/hosts/status')).json() as { hosts: Array<{ host: string; terminal?: boolean }> }
-  expect(status.hosts.find((h) => h.host === CLOUD)?.terminal).toBe(false)
+  expect(status.hosts.find((h) => h.host === CLOUD)?.terminal).toBeUndefined()
   await column.screenshot({ path: path.join(SHOTS, `session-on-cloud-${browserName}.png`) })
+
+  // Opening it is not tried here: a test server reaches its cloud box read only
+  // (remote-isolation.ts 'attach'), so the box's daemon opens it no terminal. The
+  // terminal stream itself runs on a real daemon in
+  // tests/providers/daemon-pty-stream-twins-e2e.test.ts.
 
   // 15s after a turn the server re-reads the history (through the tunnel, for
   // Cloud) and checks every streamed message is in it; a miss shows a toast.

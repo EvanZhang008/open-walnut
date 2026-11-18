@@ -28,6 +28,10 @@
  * both ways (half close); a socket error, an abort or a link drop closes the
  * stream, and a connected socket is reset then, never ended as if the request were done.
  *
+ * A terminal stream ('pty-stream-v1', `stream.open {sid, to: 'pty', ...}`) has a
+ * pty on this host as its other end: pty-stream-core.ts, handed in as `ptys`, so
+ * every stream on a link shares one id space, one frame dispatch and one drop.
+ *
  * Shared by both daemon twins: daemon-standalone.ts imports it, daemon-source.ts
  * inlines its `toString()` through `__CREATE_STREAM_RELAY__`. So the factory
  * body references NOTHING at module scope.
@@ -55,6 +59,14 @@ export interface StreamRelayDeps<L> {
   connect?: (port: number, host: string) => PortSocket
   /** How long a port stream waits for its connection (default 8s, under the opener's 10s). */
   connectTimeoutMs?: number
+  /** Terminal streams (pty-stream-core.ts createPtyStreams). Without them, terminal streams are refused. */
+  ptys?: {
+    open(from: L, sid: string, msg: Record<string, unknown>): void
+    frame(link: L, kind: string, msg: Record<string, unknown>): void
+    dropLink(link: L): void
+    has(link: L, sid: string): boolean
+    count(link?: L): number
+  }
 }
 
 export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
@@ -94,9 +106,9 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
     return null
   }
 
-  /** One id space per link: a pair's id and a port stream's id never meet. */
+  /** One id space per link: a pair's, a port stream's and a terminal's ids never meet. */
   function sidInUse(link: L, sid: string): boolean {
-    return (byLink.get(link)?.has(sid) ?? false) || (portsByLink.get(link)?.has(sid) ?? false)
+    return (byLink.get(link)?.has(sid) ?? false) || (portsByLink.get(link)?.has(sid) ?? false) || (deps.ptys?.has(link, sid) ?? false)
   }
 
   function portTracked(end: PortEnd): boolean {
@@ -214,6 +226,17 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
     dialPort(end, hosts, 0)
   }
 
+  /**
+   * `from` (the primary, checked by the caller) asks for a terminal on this host
+   * (`msg`: command, cols, rows, env). Refused for a daemon without `ptys`.
+   */
+  function openPty(from: L, sid: unknown, msg: Record<string, unknown>): void {
+    if (typeof sid !== 'string' || !OPENER_SID.test(sid)) return
+    if (sidInUse(from, sid)) { deps.send(from, 'stream-close', { sid, error: 'that stream id is already in use' }); return }
+    if (!deps.ptys) { deps.send(from, 'stream-close', { sid, error: 'this daemon opens no terminal streams' }); return }
+    deps.ptys.open(from, sid, msg)
+  }
+
   /** A frame from the link for one of its port streams. */
   function portFrame(end: PortEnd, kind: string, msg: Record<string, unknown>): void {
     const sock = end.sock
@@ -309,6 +332,7 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
     if (typeof sid !== 'string') return
     const port = portsByLink.get(from)?.get(sid)
     if (port) { portFrame(port, kind, msg); return }
+    if (deps.ptys?.has(from, sid)) { deps.ptys.frame(from, kind, msg); return }
     const hit = find(from, sid)
     if (!hit) {
       // A late frame for a stream that is gone: say so, except to a close (no echo loop).
@@ -353,6 +377,7 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
 
   /** A link closed: every stream on it ends at its other side too. */
   function dropLink(link: L): void {
+    deps.ptys?.dropLink(link)
     const ports = portsByLink.get(link)
     if (ports) {
       portsByLink.delete(link)
@@ -373,16 +398,18 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
   return {
     open,
     openPort,
+    openPty,
     frame,
     dropLink,
-    /** Open streams, on one link or in all (a port stream counts once). */
+    /** Open streams, on one link or in all (a port stream and a terminal count once). */
     count: (link?: L): number => {
-      if (link !== undefined) return (byLink.get(link)?.size ?? 0) + (portsByLink.get(link)?.size ?? 0)
+      const ptys = deps.ptys?.count(link) ?? 0
+      if (link !== undefined) return (byLink.get(link)?.size ?? 0) + (portsByLink.get(link)?.size ?? 0) + ptys
       let n = 0
       for (const m of byLink.values()) n += m.size
       let ports = 0
       for (const m of portsByLink.values()) ports += m.size
-      return n / 2 + ports
+      return n / 2 + ports + ptys
     },
   }
 }

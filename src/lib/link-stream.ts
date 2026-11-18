@@ -47,6 +47,33 @@ export interface StreamEndpointOptions {
   sent?: (purpose: string, bytes: number) => void
 }
 
+/** How a terminal's process ended, as the daemon saw it ('pty-stream-v1'). */
+export interface PtyStreamExit {
+  /** Its exit code; null when a signal ended it. */
+  code: number | null
+  /** The signal's name (`SIGHUP`), or null. */
+  signal: string | null
+}
+
+/**
+ * A terminal on the host (pty-stream-core.ts): its bytes both ways as a Duplex,
+ * its size, and how it ended once its stream ended.
+ */
+export interface PtyStream extends Duplex {
+  /** The process on the host's pty (its pid there). */
+  readonly remotePid: number
+  /** Set once the stream ended with the process's exit, after its last output. */
+  readonly exit: PtyStreamExit | null
+  resize(cols: number, rows: number): void
+}
+
+export interface PtyOpenOptions {
+  cols: number
+  rows: number
+  /** LANG / LC_* for the shell, as ssh's SendEnv passes them; the daemon keeps only those. */
+  env?: Record<string, string>
+}
+
 export interface StreamEndpoint {
   open(to: StreamPeer, opts?: { purpose?: string }): Promise<Duplex>
   /**
@@ -55,6 +82,11 @@ export interface StreamEndpoint {
    * 127.x, ::1 or localhost; the daemon refuses anything else.
    */
   openPort(port: number, host: string): Promise<Duplex>
+  /**
+   * A terminal on the daemon's host running `command` under the login shell
+   * ('pty-stream-v1'): what `ssh -tt host CMD` gives, through the link.
+   */
+  openPty(command: string, opts: PtyOpenOptions): Promise<PtyStream>
   /** One frame from the link; true when it was a stream frame. */
   handle(msg: Record<string, unknown>): boolean
   /** The link went down: every stream on it ends. */
@@ -75,6 +107,8 @@ class LinkStream extends Duplex {
   localEnded = false
   remoteEnded = false
   remoteClosed = false
+  remotePid = 0
+  exit: PtyStreamExit | null = null
 
   constructor(private readonly ep: Endpoint, readonly sid: string, readonly purpose = '') {
     super({ allowHalfOpen: true })
@@ -165,7 +199,17 @@ class LinkStream extends Duplex {
     }
   }
 
-  onEnd(): void {
+  /** A terminal's size ('pty-stream-v1'); dropped once the stream is gone. */
+  resize(cols: number, rows: number): void {
+    if (this.destroyed || this.remoteEnded) return
+    try { this.ep.send({ cmd: 'stream.resize', sid: this.sid, cols, rows }) } catch { /* gone */ }
+  }
+
+  onEnd(exit?: unknown): void {
+    if (exit && typeof exit === 'object') {
+      const e = exit as { code?: unknown; signal?: unknown }
+      this.exit = { code: typeof e.code === 'number' ? e.code : null, signal: typeof e.signal === 'string' ? e.signal : null }
+    }
     this.remoteEnded = true
     this.push(null)
     if (this.localEnded) this.ep.forget(this.sid)
@@ -190,7 +234,7 @@ class Endpoint implements StreamEndpoint {
   readonly window: number
   private readonly openTimeoutMs: number
   private readonly streams = new Map<string, LinkStream>()
-  private readonly opening = new Map<string, { resolve: (s: Duplex) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout>; stream: LinkStream }>()
+  private readonly opening = new Map<string, { resolve: (s: LinkStream) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout>; stream: LinkStream }>()
   private counter = 0
 
   constructor(private readonly opts: StreamEndpointOptions) {
@@ -224,11 +268,16 @@ class Endpoint implements StreamEndpoint {
     return this.openFrame({ to: 'port', port, host }, `port ${port} on the host`, '')
   }
 
-  private openFrame(fields: Record<string, unknown>, what: string, purpose: string): Promise<Duplex> {
+  openPty(command: string, opts: PtyOpenOptions): Promise<PtyStream> {
+    const fields = { to: 'pty', command, cols: opts.cols, rows: opts.rows, ...(opts.env ? { env: opts.env } : {}) }
+    return this.openFrame(fields, 'the terminal on the host', '') as Promise<LinkStream>
+  }
+
+  private openFrame(fields: Record<string, unknown>, what: string, purpose: string): Promise<LinkStream> {
     const sid = `o${++this.counter}`
     const stream = new LinkStream(this, sid, purpose)
     this.streams.set(sid, stream)
-    return new Promise<Duplex>((resolve, reject) => {
+    return new Promise<LinkStream>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.opening.delete(sid)
         stream.destroy()
@@ -259,7 +308,11 @@ class Endpoint implements StreamEndpoint {
     if (pending) {
       this.opening.delete(sid)
       clearTimeout(pending.timer)
-      if (ev === 'stream-accept') { pending.resolve(pending.stream); return true }
+      if (ev === 'stream-accept') {
+        if (typeof msg.pid === 'number' && Number.isInteger(msg.pid)) pending.stream.remotePid = msg.pid
+        pending.resolve(pending.stream)
+        return true
+      }
       pending.stream.remoteClosed = true
       pending.stream.destroy()
       pending.reject(new Error(typeof msg.error === 'string' && msg.error ? msg.error : 'the stream was refused'))
@@ -269,7 +322,7 @@ class Endpoint implements StreamEndpoint {
     if (!stream) return true
     if (ev === 'stream-data') stream.onData(msg.d)
     else if (ev === 'stream-ack') stream.onAck(msg.n)
-    else if (ev === 'stream-end') stream.onEnd()
+    else if (ev === 'stream-end') stream.onEnd(msg.exit)
     else if (ev === 'stream-close') stream.onClose(msg.error)
     return true
   }

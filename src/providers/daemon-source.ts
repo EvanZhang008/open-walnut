@@ -68,6 +68,7 @@ import { createHostServerSupervisor } from './host-server-core.js'
 import { createPluginJobSupervisor } from './plugin-jobs-core.js'
 import { createPluginJobHarness } from './plugin-job-harness.js'
 import { createStreamRelay } from './stream-relay-core.js'
+import { createPtyStreams } from './pty-stream-core.js'
 import { createHostResume } from './host-resume-core.js'
 import { createCliOwner } from './cli-owner-core.js'
 import { createCliArgvFiles } from './cli-argv-files-core.js'
@@ -248,7 +249,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'ports-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'transcript-archive-v1', 'host-cache-prune-v1', 'host-exec-v1', 'host-exec-v2', 'host-exec-wait-v1', 'host-exec-group-v1', 'host-script-v1', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'history-ready-v1', 'history-ready-subagent-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'trigger-caller-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'acp-model-catalog-v1', 'acp-light-bounds-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'ports-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'transcript-archive-v1', 'host-cache-prune-v1', 'host-exec-v1', 'host-exec-v2', 'host-exec-wait-v1', 'host-exec-group-v1', 'host-script-v1', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'history-ready-v1', 'history-ready-subagent-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'trigger-caller-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'acp-model-catalog-v1', 'acp-light-bounds-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1', 'pty-stream-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -306,6 +307,7 @@ export function getDaemonSource(): string {
     ['__CREATE_PLUGIN_JOB_HARNESS__', createPluginJobHarness.toString()],
     ['__CREATE_FEATURE_RELAY__', createFeatureRelay.toString()],
     ['__CREATE_STREAM_RELAY__', createStreamRelay.toString()],
+    ['__CREATE_PTY_STREAMS__', createPtyStreams.toString()],
     ['__CREATE_HOST_RESUME__', createHostResume.toString()],
     ['__CREATE_CLI_OWNER__', createCliOwner.toString()],
     ['__CREATE_CLI_ARGV_FILES__', createCliArgvFiles.toString()],
@@ -576,6 +578,14 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       // A port stream of a relay without `connect` is refused, never dialled.
       relay.openPort('a', 'o2', 8080, '127.0.0.1')
       if (sent.join(',') !== 'b:stream-open,a:stream-close,a:stream-close' || relay.count() !== 1) throw new Error('stream relay did not build')
+    }
+    // Terminal streams smoke: a reconstructed copy without a pty refuses an open, never spawns.
+    const createPtys = reconstructed['__CREATE_PTY_STREAMS__'] as typeof createPtyStreams | undefined
+    if (createPtys) {
+      const sent: string[] = []
+      const ptys = createPtys<string>({ send: (link, ev) => sent.push(`${link}:${ev}`), log: () => {}, user: () => ({ home: '/' }), env: {} })
+      ptys.open('a', 'o1', { command: 'true', cols: 80, rows: 24 })
+      if (sent.join(',') !== 'a:stream-close' || ptys.count() !== 0) throw new Error('terminal streams did not build')
     }
     // Leader book smoke: a reconstructed book must refuse a companion claim for
     // a Walnut it does not know, without touching disk.
@@ -2046,6 +2056,8 @@ var servedWalnuts = (__CREATE_SERVED_WALNUTS__)({
   fs: fs, file: SERVES_FILE,
   keyOf: function (value) { return crypto.createHash('sha1').update(value).digest('hex').slice(0, 16); },
   version: DAEMON_VERSION, twin: 'source', capabilities: function () { return daemonCapabilities(); }, now: function () { return Date.now(); },
+  // Whether this twin can have a pty (bun's, pty-stream-v1): asked at write time, PTY_SPAWN is set further down.
+  pty: function () { return !!PTY_SPAWN; },
   log: function (level, msg, data) { logMsg(level, msg, data); },
 });
 const AGENT_POLL_INTERVAL_MS = 2000;
@@ -4623,6 +4635,8 @@ function dispatchCommand(ws, id, cmd) {
     case 'stream.lane': return cmdStreamLane(ws, id, cmd);
     case 'client.role': return cmdClientRole(ws, id, cmd);
     case 'stream.accept': case 'stream.data': case 'stream.ack': case 'stream.end': case 'stream.close':
+    // A terminal's new size (pty-stream-v1): a frame of a stream on this socket, like the rest.
+    case 'stream.resize':
       return streamRelay.frame(ws, cmd.cmd.slice('stream.'.length), cmd);
     case 'server.configure': return cmdServerConfigure(ws, id, cmd);
     case 'server.status': return cmdServerStatus(ws, id, cmd);
@@ -4751,7 +4765,7 @@ function dispatchCommand(ws, id, cmd) {
       version: DAEMON_VERSION,
       capabilities: daemonCapabilities(),
       // The Walnuts this daemon served lately (served-walnuts-core.ts).
-      served: { twin: 'source', walnuts: servedWalnuts.recent() },
+      served: { twin: 'source', walnuts: servedWalnuts.recent(), pty: !!PTY_SPAWN },
       cronSupervision: {
         managed: !!cronRuntime,
         startup: SERVICE_MODE ? 'service' : 'on-demand',
@@ -5854,11 +5868,36 @@ function cmdFollowerReport(ws, cmd) {
 }
 
 // Streams between servers (stream-relay-v1). Twin of daemon-standalone.ts.
+// Terminal streams (pty-stream-v1, pty-stream-core.ts, inlined): only under bun, whose
+// pty is built in; on Node this twin has none and does not advertise the capability.
+// Twin of daemon-standalone.ts.
+var PTY_SPAWN = (typeof Bun !== 'undefined' && Bun && typeof Bun.spawn === 'function' && typeof Bun.Terminal === 'function')
+  ? function (argv, opts) { return Bun.spawn(argv, opts); }
+  : undefined;
+var ptyStreams = (__CREATE_PTY_STREAMS__)({
+  send: function (ws, ev, data) { sendEvent(ws, ev, data); },
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+  spawn: PTY_SPAWN,
+  user: function () { var u = os.userInfo(); return { shell: u.shell, home: u.homedir, name: u.username }; },
+  env: process.env,
+  executable: function (p) { try { fs.accessSync(p, fs.constants.X_OK); return fs.statSync(p).isFile(); } catch (e) { return false; } },
+  foregroundGroup: function (pid, cb) { psGroupField(pid, 'tpgid', cb); },
+  ownGroup: function (cb) { psGroupField(process.pid, 'pgid', cb); },
+  killGroup: function (pgid, signal) { process.kill(-pgid, signal); },
+});
+// One process's ps -o <field>= as an integer (tpgid, pgid), or null. Twin of daemon-standalone.ts.
+function psGroupField(pid, field, cb) {
+  execFile('ps', ['-o', field + '=', '-p', String(pid)], { timeout: 2000 }, function (err, stdout) {
+    var n = err ? NaN : parseInt(String(stdout).trim(), 10);
+    cb(Number.isInteger(n) ? n : null);
+  });
+}
 var streamRelay = (__CREATE_STREAM_RELAY__)({
   send: function (ws, ev, data) { sendEvent(ws, ev, data); },
   log: function (level, msg, data) { logMsg(level, msg, data); },
   // Port streams (port-stream-v1): the relay picks the loopback address.
   connect: function (port, host) { return net.connect({ port: port, host: host, allowHalfOpen: true }); },
+  ptys: ptyStreams,
 });
 
 function primaryClientFor(home) {
@@ -6011,6 +6050,11 @@ function openStreamNow(ws, cmd) {
   if (cmd.to === 'port') {
     if (!isServerClient(ws)) return streamRelay.open(ws, cmd.sid, null, {}, 'only the Walnut server linked here opens a port stream');
     return streamRelay.openPort(ws, cmd.sid, cmd.port, cmd.host);
+  }
+  // A terminal on this host (pty-stream-v1): the primary's own socket only, as a port stream.
+  if (cmd.to === 'pty') {
+    if (!isServerClient(ws)) return streamRelay.open(ws, cmd.sid, null, {}, 'only the Walnut server linked here opens a terminal stream');
+    return streamRelay.openPty(ws, cmd.sid, cmd);
   }
   var target = streamTarget(ws, cmd.to);
   var purpose = typeof cmd.purpose === 'string' ? cmd.purpose.slice(0, 32) : undefined;
@@ -14528,6 +14572,7 @@ function daemonCapabilities() {
   if (hostHttp) caps.push('host-http-v1');
   if (secretStore) caps.push('secrets-v1');
   if (vscodeServerCore) caps.push('vscode-v1');
+  if (PTY_SPAWN) caps.push('pty-stream-v1');
   if (transcriptRewindCore) caps.push('rewind-probe-v1');
   if (historyReadyCore && typeof historyReadyCore.createHistoryReady === 'function') caps.push('history-ready-v1');
   // A subagent's view ('history-ready-subagent-v1'), only from a sidecar that knows agentId.

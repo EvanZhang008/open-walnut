@@ -4,8 +4,8 @@
  * 2026-11-16: plugin hosts.run ssh'd to that placeholder and failed every time; the same
  * assumption sat in a few more places, each checked here for a net host and, beside it, for
  * an SSH one (which keeps its ssh words):
- *   - readiness: the sign-in line names an `ssh -t <host> claude` the user cannot run, and
- *     dtach lines and fixes (build a compiler, build dtach) for a terminal that cannot exist;
+ *   - readiness: the sign-in line names an `ssh -t <host> claude` the user cannot run; its
+ *     dtach lines (its terminal rides the daemon link, 2026-11-18) name no ssh either;
  *   - connect hints: "run `ssh <host>` from a terminal", "SSH works but the daemon ...";
  *   - the session's "Open in VS Code" link: a Remote-SSH URI to the placeholder.
  * The plugin run and the copy route have their own tests (host-script.test.ts,
@@ -37,10 +37,11 @@ const conn = () => ({ hasCapability: (c: string) => c === 'preflight-v1', send: 
 beforeEach(() => clearHostReadiness())
 
 describe('a host on the host network is never told to use ssh', () => {
-  it('readiness: sign in on the machine itself, and no dtach lines or dtach fixes', async () => {
+  it('readiness: sign in on the machine itself, and its dtach line (it has a terminal, over the link) names no ssh', async () => {
     const r = await refreshHostReadiness('clouddev', { getConnection: conn, autofix: false })
-    expect(r?.problems.map((p) => p.kind)).toEqual(['claude_not_logged_in'])
+    expect(r?.problems.map((p) => p.kind)).toEqual(['claude_not_logged_in', 'compiler_missing'])
     expect(r?.problems[0]).toMatchObject({ message: expect.stringContaining('Run `claude` on Cloud dev'), commands: ['claude'] })
+    expect(r?.problems[1]!.message).toContain('No C compiler on Cloud dev')
     expect(JSON.stringify(r?.problems)).not.toMatch(/ssh|walnut-net\.invalid/)
     expect(nextFixAction(r!, new Set(), { terminals: false })).toBeNull()
 

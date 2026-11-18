@@ -57,6 +57,18 @@ export const attempted = new Map<string, Set<HostFixAction>>()
  */
 export const agentsAsked = new Map<string, number>()
 export const AGENTS_ASK_MS = 10 * 60_000
+/**
+ * Hosts where a person clicked Connect now, Retry or Install, with when: on a host whose
+ * terminal fixes wait for a person (the cloud box: `terminalFixes: 'asked'`), the next
+ * round within AGENTS_ASK_MS may install its compiler or dtach, and only that round.
+ */
+export const fixesAsked = new Map<string, number>()
+
+/** Did a person ask for this host's fixes recently (fixesAsked)? */
+export function fixesAskedNow(host: string, now: number = Date.now()): boolean {
+  const at = fixesAsked.get(host)
+  return at !== undefined && now - at >= 0 && now - at < AGENTS_ASK_MS
+}
 
 /** Did a person ask for the coding agent's fixes on `host` recently? */
 export function agentsAskedNow(host: string, now: number = Date.now()): boolean {
@@ -71,7 +83,7 @@ export const prebuiltFor = new Map<string, boolean>()
 /** Hosts where the prebuilt was offered and did not run (an older glibc, say). */
 export const prebuiltUnusable = new Set<string>()
 /** Per host: how its lines were worded (label, target, prebuilt), so a floor change rewords with no RPC. */
-export const problemCtx = new Map<string, { prebuiltDtach: boolean; hostLabel?: string; sshTarget?: string; terminals?: false }>()
+export const problemCtx = new Map<string, { prebuiltDtach: boolean; hostLabel?: string; sshTarget?: string; terminals?: false; terminalFixes?: 'asked' }>()
 
 /** The stored answer with the fix state merged in, as every surface reads it. */
 export function getHostReadiness(host: string, now: number = Date.now()): HostReadiness | undefined {
@@ -151,7 +163,7 @@ export function notifyReadiness(host: string): void {
  */
 export function clearHostReadiness(host?: string, opts: { keepFixMemory?: boolean } = {}): void {
   if (host === undefined) {
-    store.clear(); inFlight.clear(); fixState.clear(); attempted.clear(); rounds.clear(); agentsAsked.clear()
+    store.clear(); inFlight.clear(); fixState.clear(); attempted.clear(); rounds.clear(); agentsAsked.clear(); fixesAsked.clear()
     prebuiltFor.clear(); prebuiltUnusable.clear(); problemCtx.clear()
     if (!opts.keepFixMemory) void forgetAllHostFixes()
     return
@@ -162,6 +174,7 @@ export function clearHostReadiness(host?: string, opts: { keepFixMemory?: boolea
   fixState.delete(host)
   attempted.delete(host)
   agentsAsked.delete(host)
+  fixesAsked.delete(host)
   rounds.delete(host)
   prebuiltFor.delete(host)
   prebuiltUnusable.delete(host)

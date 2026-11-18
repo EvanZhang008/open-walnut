@@ -73,18 +73,16 @@ function plainMode(reason: PlainReason, host: string | undefined, os: HostOs, de
   return { persistent: false, reason, host, installHint, installCommand: command, ...(detail ? { detail } : {}) }
 }
 
-function sshFailed(host: string, r: Extract<DtachResolution, { kind: 'ssh_failed' }>): SshFailedResult {
-  return {
-    ok: false,
-    code: 'SSH_FAILED',
-    host,
-    detail: r.stderr,
-    hint: `Walnut couldn't run a command on ${host} over ssh${r.exitCode >= 0 ? ` (exit ${r.exitCode})` : ''}. Check that \`ssh ${host}\` works from this machine without a prompt (key loaded, VPN connected, host reachable), then Retry.`,
-  }
+function sshFailed(host: string, r: Extract<DtachResolution, { kind: 'ssh_failed' }>, via: 'ssh' | 'link'): SshFailedResult {
+  // A host with no SSH route ran nothing because its daemon link could not: never an ssh hint.
+  const hint = via === 'link'
+    ? `Walnut couldn't run a command on ${host} through its connection. Check that ${host} is on and connected (Settings > Remote Hosts), then Retry.`
+    : `Walnut couldn't run a command on ${host} over ssh${r.exitCode >= 0 ? ` (exit ${r.exitCode})` : ''}. Check that \`ssh ${host}\` works from this machine without a prompt (key loaded, VPN connected, host reachable), then Retry.`
+  return { ok: false, code: 'SSH_FAILED', host, detail: r.stderr, hint }
 }
 
-/** Map a dtach resolution to a terminal mode (pure; exported for tests). */
-export function decideTerminalMode(r: DtachResolution, host?: string): TerminalModeDecision {
+/** Map a dtach resolution to a terminal mode (pure; exported for tests). `via`: how the host is reached. */
+export function decideTerminalMode(r: DtachResolution, host?: string, via: 'ssh' | 'link' = 'ssh'): TerminalModeDecision {
   switch (r.kind) {
     case 'ok': return { ok: true, mode: { persistent: true } }
     case 'no_compiler': return { ok: true, mode: plainMode('no_compiler', host, r.os, undefined, r.packageManager) }
@@ -92,33 +90,30 @@ export function decideTerminalMode(r: DtachResolution, host?: string): TerminalM
     case 'ssh_failed':
       // Locally there is no ssh; treat an unexpected local failure as a build failure.
       return host
-        ? sshFailed(host, r)
+        ? sshFailed(host, r, via)
         : { ok: true, mode: plainMode('build_failed', host, toHostOs(process.platform), r.stderr || undefined) }
   }
 }
 
 /**
- * A host that cannot open a terminal at all (the cloud box: no SSH door, its
- * sessions ride the companion's daemon tunnel) is refused with its own words.
- * Its session panel shows no Terminal tab; this answers an older window or an
- * API caller, which would otherwise hear "check that `ssh __cloudbox__` works".
+ * How a terminal reaches `host` (spawn.ts resolveTerminalRoute's kind), and the
+ * refusal when it cannot now: a host reached over its daemon link whose connected
+ * daemon has no terminal streams ('pty-stream-v1': an older build, or one on Node).
+ * Its session panel shows no Terminal tab; this answers an older window or an API
+ * caller, in the daemon's words, never "check that `ssh <host>` works".
  */
-async function noTerminalOn(host: string): Promise<SshFailedResult | null> {
-  const [{ getConfig }, { hostOffersTerminal }] = await Promise.all([
-    import('../../core/config-manager.js'), import('../../core/hosts/host-status.js'),
+async function terminalWay(host: string): Promise<{ via: 'ssh' | 'link'; refused: SshFailedResult | null }> {
+  const [{ getConfig }, { terminalRouteKind, hostTerminalNow }, { getDaemonConnectState }] = await Promise.all([
+    import('../../core/config-manager.js'), import('../../core/hosts/host-status.js'), import('../../providers/daemon-connection.js'),
   ])
-  let def: Parameters<typeof hostOffersTerminal>[0] | undefined
-  try { def = (await getConfig()).hosts?.[host] } catch { return null }
-  if (!def || hostOffersTerminal(def)) return null
+  let def: Parameters<typeof hostTerminalNow>[0] | undefined
+  try { def = (await getConfig()).hosts?.[host] } catch { return { via: 'ssh', refused: null } }
+  if (!def) return { via: 'ssh', refused: null }
+  const via = terminalRouteKind(def)
   const label = def.label ?? host
-  const via = def.transport === 'net' ? 'the host network' : 'the cloud companion'
-  return {
-    ok: false,
-    code: 'SSH_FAILED',
-    host,
-    detail: `A terminal is not available on ${label}: this Mac reaches it through ${via}, not SSH`,
-    hint: `${label} runs this session through ${via}, which has no SSH, so there is no terminal there. Files and Changes still work.`,
-  }
+  const now = hostTerminalNow(def, getDaemonConnectState(host), label)
+  if (now === true) return { via, refused: null }
+  return { via, refused: { ok: false, code: 'SSH_FAILED', host, detail: now, hint: `${now}. Files and Changes still work meanwhile.` } }
 }
 
 /**
@@ -127,10 +122,10 @@ async function noTerminalOn(host: string): Promise<SshFailedResult | null> {
  */
 export async function probeTerminalMode(record: SessionRecord, opts: { fresh?: boolean } = {}): Promise<TerminalModeDecision> {
   const host = record.host && record.host !== '__local__' ? record.host : undefined
-  const refused = host ? await noTerminalOn(host) : null
-  if (refused) return refused
+  const way = host ? await terminalWay(host) : { via: 'ssh' as const, refused: null }
+  if (way.refused) return way.refused
   const r = host ? await resolveRemoteDtach(host, opts) : await resolveLocalDtach(opts)
-  const decision = decideTerminalMode(r, host)
+  const decision = decideTerminalMode(r, host, way.via)
   if (r.kind !== 'ok') {
     log.web.warn('terminal dtach probe failed', {
       sessionId: record.claudeSessionId,

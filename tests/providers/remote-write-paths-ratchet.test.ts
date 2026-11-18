@@ -86,9 +86,8 @@ const FILES: Record<string, Entry> = {
   'src/core/hosts/ssh-resolve.ts': { count: 1, kind: 'local', why: '`ssh -G <alias>`: reads this machine\'s ssh config to prefill Add host' },
   'src/providers/stream-lane.ts': { count: 2, kind: 'transport', why: 'a port forward to the connection\'s daemon (`cat >/dev/null`); one spawn, the other call its test seam (deps.spawn)' },
   'src/providers/transfer-core.ts': { count: 2, kind: 'user-directed', why: 'a task transfer the person asked for: `ssh true` and an scp read into a local temp file' },
-  'src/web/terminal/dtach-lifecycle.ts': { count: 1, kind: 'gated', why: 'its socket dir is the test server\'s term dir (REMOTE_DTACH_SOCKET_DIR)' },
-  'src/web/terminal/dtach-provision.ts': { count: 2, kind: 'gated', why: 'probe and install use REMOTE_DTACH_OWN_BIN under the test server\'s root' },
-  'src/web/terminal/spawn.ts': { count: 2, kind: 'gated', why: 'resolveSshTarget refuses a host that is off; sockets in the test server\'s term dir' },
+  'src/web/terminal/host-shell.ts': { count: 2, kind: 'gated', why: 'every terminal script (dtach probe and install with REMOTE_DTACH_OWN_BIN, the lifecycle in REMOTE_DTACH_SOCKET_DIR) goes through resolveTerminalRoute, which refuses a host that is off and every link host for a test server' },
+  'src/web/terminal/spawn.ts': { count: 2, kind: 'gated', why: 'resolveTerminalRoute refuses a host that is off (and a link host for a test server); sockets in the test server\'s term dir' },
 }
 
 function codeLines(file: string): string[] {
@@ -149,7 +148,8 @@ describe('remote write paths ratchet', () => {
     expect(helped.length, 'an update record read that is not through ownUpdateRecord').toBe(reads.length)
     expect(dc).toMatch(/opts\.isolated = \{ root, runtimeDir: isolatedLayout\(root\)\.runtimeDir \}/)
     expect(fs.readFileSync(path.join(ROOT, 'src/core/plugin-jobs/index.ts'), 'utf-8')).toMatch(/plugin jobs do not run on a test server/)
-    expect(fs.readFileSync(path.join(ROOT, 'src/web/terminal/spawn.ts'), 'utf-8')).toMatch(/remoteIsolationFor\(/)
+    // Every terminal step's route (terminal-route.ts, re-exported by spawn.ts) applies the test server's isolation.
+    expect(fs.readFileSync(path.join(ROOT, 'src/web/terminal/terminal-route.ts'), 'utf-8')).toMatch(/remoteIsolationFor\(/)
     // A test daemon's identity never reaches its sessions (a nested test server's daemon would claim it).
     for (const twin of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
       const src = fs.readFileSync(path.join(ROOT, twin), 'utf-8')

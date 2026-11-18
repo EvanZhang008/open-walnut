@@ -18,12 +18,16 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-term-iso', { IS_EPHEMERAL: true }))
 vi.mock('../../../src/core/config-manager.js', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
-  getConfig: async () => ({ hosts: { devbox: { hostname: 'devbox.example.com', user: 'tester' } } }),
+  getConfig: async () => ({ hosts: {
+    devbox: { hostname: 'devbox.example.com', user: 'tester' },
+    joined: { hostname: 'joined.walnut-net.invalid', transport: 'net', endpoint: 'ab'.repeat(32) },
+    __cloudbox__: { hostname: '127.0.0.1:9', cloud_box: true },
+  } }),
 }))
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { isolationKey } from '../../../src/providers/remote-isolation.js'
-import { REMOTE_DTACH_OWN_BIN, REMOTE_DTACH_SOCKET_DIR, resolveSshTarget } from '../../../src/web/terminal/spawn.js'
+import { REMOTE_DTACH_OWN_BIN, REMOTE_DTACH_SOCKET_DIR, resolveTerminalRoute } from '../../../src/web/terminal/spawn.js'
 import { buildInstallScript, buildProbeScript } from '../../../src/web/terminal/dtach-probe-script.js'
 import { DTACH_SOURCES } from '../../../src/web/terminal/dtach-sources.js'
 import { REMOTE_TEST_ROOT, dtachOwnerClaimScript, testServerTerminalHosts } from '../../../src/web/terminal/spawn.js'
@@ -64,10 +68,19 @@ describe('a test server\'s remote terminals stay in its own root', () => {
 
   it('a host that is off for test servers refuses the terminal; the opt-in lets it through', async () => {
     delete process.env.WALNUT_EPHEMERAL_REMOTE_HOSTS
-    await expect(resolveSshTarget('devbox')).rejects.toThrow(/ephemeral server: remote host 'devbox' is off for test servers/)
+    await expect(resolveTerminalRoute('devbox')).rejects.toThrow(/ephemeral server: remote host 'devbox' is off for test servers/)
     process.env.WALNUT_EPHEMERAL_REMOTE_HOSTS = '1'
-    await expect(resolveSshTarget('devbox')).resolves.toMatchObject({ hostname: 'devbox.example.com' })
+    await expect(resolveTerminalRoute('devbox')).resolves.toMatchObject({ via: 'ssh', target: { hostname: 'devbox.example.com' } })
     // Its exit ends that host's terminals and removes its root there, daemon or not.
+    expect(testServerTerminalHosts()).toEqual(['devbox'])
+  })
+
+  it('a host reached over its daemon link gets no terminal from a test server, even with remote hosts on', async () => {
+    process.env.WALNUT_EPHEMERAL_REMOTE_HOSTS = '1'
+    // The host network: its daemon is the host's own, which a test server never talks to.
+    await expect(resolveTerminalRoute('joined')).rejects.toThrow(/remote host 'joined' is not reached over ssh/)
+    // The cloud box: attached read only, and a terminal would write there.
+    await expect(resolveTerminalRoute('__cloudbox__')).rejects.toThrow(/attached read only here, so this server opens no terminal there/)
     expect(testServerTerminalHosts()).toEqual(['devbox'])
   })
 

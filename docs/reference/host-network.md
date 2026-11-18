@@ -48,6 +48,19 @@ without that capability reports that it needs an update. Existing SSH hosts keep
 using their SSH forwards. Host-server installation scripts and checked file uploads
 also use the daemon on network hosts, not a second SSH connection.
 
+The in-app terminal rides the same link with `pty-stream-v1`: the daemon runs the
+terminal's remote command (the dtach attach, or a plain login shell) on a pty under
+the user's login shell with `-c`, as sshd would for `ssh -tt`: the passwd shell, unless
+it is no login shell (`nologin`, `false`, not an executable file), then the daemon's
+`$SHELL`, then `/bin/sh`. A close or a link drop hangs it up while its dtach master
+keeps the shell. Past a 256 KiB unacked window the daemon stops the terminal's
+foreground process group (read with `ps -o tpgid=`) until the server acks; 16 MiB
+unacked still ends the stream. dtach's probe and install and the terminal's cleanup
+run as scripts over `exec.script`, and a host-network machine gets the same automatic
+compiler and dtach fixes as an SSH host. A daemon without `pty-stream-v1`
+(an older build, or the JS twin on Node) shows no Terminal tab, and its status says
+it needs an update.
+
 ## Joining a machine
 
 1. Settings > Remote Hosts > Machines that joined with a link > Add a machine. The Mac

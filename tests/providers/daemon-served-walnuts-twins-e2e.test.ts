@@ -113,11 +113,13 @@ describe.each(TWINS)('$name', (twin) => {
     expect(hello.ok).toBe(true)
     await until(() => fs.existsSync(servesFile))
     const atBoot = JSON.parse(fs.readFileSync(servesFile, 'utf8'))
-    expect(atBoot).toMatchObject({ v: 1, version: hello.version, twin: twin.twin, walnuts: {} })
+    // Whether its runtime can have a pty (pty-stream-v1): the binary always, the source twin under bun only.
+    const pty = twin.twin === 'binary' || SOURCE_TWIN.runtime === 'bun'
+    expect(atBoot).toMatchObject({ v: 1, version: hello.version, twin: twin.twin, pty, walnuts: {} })
     expect(fs.readFileSync(path.join(dir, 'daemon', 'daemon.version'), 'utf8')).toBe(hello.version)
     // The binary says all this build's daemon has (the source twin adds the rest as its sidecars load).
     if (twin.twin === 'binary') for (const c of ourDaemonCapabilities('binary')) expect(hello.capabilities).toContain(c)
-    expect(hello.served).toEqual({ twin: twin.twin, walnuts: {} })
+    expect(hello.served).toEqual({ twin: twin.twin, walnuts: {}, pty })
 
     // Walnut A names its home; an older server pushes with none; a test server's probe is never noted.
     const HOME_A = path.join(dir, 'walnut-a')
@@ -126,7 +128,7 @@ describe.each(TWINS)('$name', (twin) => {
     // A bridge push naming no home (also a new server whose hello failed) is not another Walnut.
     const unnamedBridge = await open(port)
     await rpc(unnamedBridge, { cmd: 'bridge.configure', enabled: false })
-    expect((await rpc(unnamedBridge, { cmd: 'hello' })).served).toEqual({ twin: twin.twin, walnuts: { [walnutKeyOf(HOME_A)]: expect.any(Number) } })
+    expect((await rpc(unnamedBridge, { cmd: 'hello' })).served).toEqual({ twin: twin.twin, walnuts: { [walnutKeyOf(HOME_A)]: expect.any(Number) }, pty })
     // A home written with a trailing slash is the same Walnut.
     await rpc(a, { cmd: 'triggers.configure', home: HOME_A + '/', triggers: [] })
     const older = await open(port)

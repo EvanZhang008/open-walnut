@@ -23,7 +23,7 @@ import { getConfig, saveConfig, updateConfig } from '../../../src/core/config-ma
 import { classifyHostConnectError } from '../../../src/core/sessions/host-connect-hint.js'
 import { hostActionsFor, hostFailureHeadline, hostProblemOf } from '../../../src/core/hosts/host-problem.js'
 import { hostStatusFrame } from '../../../src/core/hosts/host-connect-action.js'
-import { buildHostStatus, hostOffersTerminal } from '../../../src/core/hosts/host-status.js'
+import { buildHostStatus, terminalRouteKind } from '../../../src/core/hosts/host-status.js'
 import { computeLaunchOptions } from '../../../src/core/sessions/mobile-launch.js'
 import { describeTunnelRefusal, isLoopbackDomain } from '../../../src/core/hosts/cloud-box-probe.js'
 
@@ -211,19 +211,25 @@ describe('an older or hosting-off companion on the surfaces', () => {
     expect(frame.error ?? '').toMatch(/^Cloud companion has session hosting turned off/)
   })
 
-  it('offers no terminal (no SSH), in every state, while an SSH host keeps it', async () => {
+  it('offers a terminal over its link in every state, and says so only when its daemon has no terminal streams', async () => {
     const idle = { connected: false, phase: 'idle', phaseElapsedMs: 0, connectElapsedMs: 0 } as never
+    const oldDaemon = { connected: true, phase: 'connected', phaseElapsedMs: 0, connectElapsedMs: 0, noPtyStream: true } as never
     for (const cap of ['ready', 'needs_update', 'exec_off'] as const) {
       pair(cap)
       const def = (await getConfig()).hosts![CLOUD_BOX_HOST_ALIAS]
-      expect(hostOffersTerminal(def as never)).toBe(false)
-      expect(hostStatusFrame(CLOUD_BOX_HOST_ALIAS, def as never).terminal, cap).toBe(false)
-      expect(buildHostStatus(CLOUD_BOX_HOST_ALIAS, def as never, idle, undefined, Date.now(), undefined, { off: true }).terminal).toBe(false)
+      expect(terminalRouteKind(def as never)).toBe('link')
+      expect(hostStatusFrame(CLOUD_BOX_HOST_ALIAS, def as never), cap).not.toHaveProperty('terminal')
+      expect(buildHostStatus(CLOUD_BOX_HOST_ALIAS, def as never, idle, undefined, Date.now(), undefined, { off: true })).not.toHaveProperty('terminal')
+      const old = buildHostStatus(CLOUD_BOX_HOST_ALIAS, def as never, oldDaemon)
+      expect(old.terminal).toBe(false)
+      expect(old.terminalWhy).toMatch(/needs an update before it can open a terminal/)
+      expect(old.terminalWhy).not.toMatch(/ssh/i)
     }
     const ssh = { hostname: 'devbox.example.com', label: 'Dev box' }
-    expect(hostOffersTerminal(ssh)).toBe(true)
+    expect(terminalRouteKind(ssh)).toBe('ssh')
     expect(buildHostStatus('devbox', ssh, idle)).not.toHaveProperty('terminal')
-    expect(buildHostStatus('devbox', ssh, idle, undefined, Date.now(), undefined, { off: true })).not.toHaveProperty('terminal')
+    // An SSH host's terminal is ssh's, whatever its daemon says.
+    expect(buildHostStatus('devbox', ssh, oldDaemon)).not.toHaveProperty('terminal')
   })
 
   it('the phone launch list offers Cloud only while the companion can host', async () => {

@@ -15,8 +15,7 @@ const repoRoot = path.resolve(__dirname, '../..')
 const SSH_RUNNERS: Record<string, string> = {
   'src/providers/daemon-connection.ts': 'the session link: tunnel, master, commands, uploads',
   'src/web/terminal/spawn.ts': 'the terminal shell',
-  'src/web/terminal/dtach-lifecycle.ts': 'the terminal\'s dtach lifecycle commands',
-  'src/web/terminal/dtach-provision.ts': 'the terminal\'s dtach install',
+  'src/web/terminal/host-shell.ts': 'the terminal\'s scripts on an SSH host: dtach\'s probe and install, its lifecycle commands',
   'src/core/hosts/ssh-cert-expiry-alert.ts': 'the fresh sign-in check',
 }
 
@@ -39,7 +38,7 @@ const INLINE_DEST_ALLOWED: Record<string, string> = {
 }
 
 const EXEMPT = new Set(['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts'])
-const SSH_CALLEES = new Set(['spawn', 'execFile', 'execFileSync', 'spawnSync', 'run'])
+const SSH_CALLEES = new Set(['spawn', 'execFile', 'execFileSync', 'spawnSync', 'run', 'runProgram'])
 const INLINE_DEST = /\$\{[^}]*\buser\b[^}]*\}@\$\{[^}]*\bhost(name)?\b[^}]*\}/
 
 function sourceFiles(dir: string, out: string[] = []): string[] {

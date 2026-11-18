@@ -37,7 +37,8 @@ import net from 'node:net'
 import type { Duplex } from 'node:stream'
 import { log } from '../logging/index.js'
 import { HoldNews, holdLog } from './daemon-hold-news.js'
-import { createStreamEndpoint, listenLoopback, spliceStream, type StreamEndpoint } from '../lib/link-stream.js'
+import { PTY_STREAM_CAPABILITY, ptyStreamMissingSentence } from '../core/hosts/terminal-link.js'
+import { createStreamEndpoint, listenLoopback, spliceStream, type PtyOpenOptions, type PtyStream, type StreamEndpoint } from '../lib/link-stream.js'
 import { bareHost, isLoopbackHostname } from '../core/service-url.js'
 import { registerForwardSocket } from '../lib/forward-lane-ports.js'
 import { bulkForwardHook, laneForwardForTesting, sshLaneForward, StreamLane, type LaneForward } from './stream-lane.js'
@@ -3868,6 +3869,21 @@ export class DaemonConnection {
   private static LANE_WAIT_MS = 10_000
 
   /**
+   * A terminal on this host through its daemon link ('pty-stream-v1',
+   * pty-stream-core.ts): what `ssh -tt host CMD` gives an SSH host, for any link.
+   * On the session link (a lane is never the server's own socket there).
+   */
+  openPtyStream(command: string, opts: PtyOpenOptions): Promise<PtyStream> {
+    if (!this.hasCapability(PTY_STREAM_CAPABILITY)) return Promise.reject(new Error(ptyStreamMissingSentence(this.hostKey)))
+    return this.streamEndpoint().openPty(command, opts)
+  }
+
+  /** Connected to a daemon that said it opens no terminal ('pty-stream-v1'): an older build, or the source twin on Node. */
+  get lacksPtyStream(): boolean {
+    return this._connected && this.capabilitiesKnown && !this.hasCapability(PTY_STREAM_CAPABILITY)
+  }
+
+  /**
    * Keep a stream lane to this host's daemon (stream-lane.ts) while a server
    * this Mac keeps there wants one. A lane is its own SSH connection, so only a
    * host reached over SSH with a daemon that has 'stream-lane-v1' gets one.
@@ -5960,9 +5976,9 @@ export class DaemonConnection {
       // wanted serving ends the failure.
       const failed = this._updateFailure
       if (failed) this._updateFailure = this._daemonVersion === failed.expected ? null : { ...failed, down: false }
-      const served = res.served as { twin?: unknown; walnuts?: unknown } | undefined
+      const served = res.served as { twin?: unknown; walnuts?: unknown; pty?: unknown } | undefined
       this._daemonServes = served && typeof served === 'object'
-        ? parseServes({ version: this._daemonVersion ?? '', twin: served.twin, capabilities: caps, walnuts: served.walnuts })
+        ? parseServes({ version: this._daemonVersion ?? '', twin: served.twin, capabilities: caps, walnuts: served.walnuts, pty: served.pty })
         : null
       const startup = (res.cronSupervision as { startup?: unknown } | undefined)?.startup
       this._daemonStartup = typeof startup === 'string' && ['boot', 'login', 'on-demand', 'service'].includes(startup) ? startup : 'on-demand'
@@ -10666,6 +10682,8 @@ export interface DaemonConnectState {
   transfer?: ConnectTransfer
   /** The host's first connect is running (DaemonConnection.firstConnectRunning). */
   firstConnect?: true
+  /** Connected to a daemon without 'pty-stream-v1' (DaemonConnection.lacksPtyStream). */
+  noPtyStream?: true
 }
 
 export function getDaemonConnectState(hostKey: string): DaemonConnectState {
@@ -10682,6 +10700,7 @@ export function getDaemonConnectState(hostKey: string): DaemonConnectState {
   const transfer = conn?.connectTransfer
   if (transfer && state.phase === 'upload') state.transfer = { ...transfer }
   if (conn?.firstConnectRunning) state.firstConnect = true
+  if (conn?.lacksPtyStream) state.noPtyStream = true
   const dir = conn?.remoteDirChoice
   if (dir) state.daemonDir = { ...dir, ...(conn?.remoteHome ? { home: conn.remoteHome } : {}) }
   const failure = failureCache.get(hostKey)
