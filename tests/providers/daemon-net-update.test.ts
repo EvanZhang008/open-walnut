@@ -13,7 +13,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  MAX_AUTO_FAILURES, NetDaemonUpdater, decideNetUpdate, localDaemonBinary, netDaemonSource, scopeFromStatus,
+  LINK_CUTS_BEFORE_FAILURE, MAX_AUTO_FAILURES, NetDaemonUpdater, decideNetUpdate, localDaemonBinary, netDaemonSource, scopeFromStatus,
   type NetUpdateFacts, type NetUpdaterDeps, type NetUpdateLink,
 } from '../../src/providers/daemon-net-update.js'
 import { NetUpdateHeldError } from '../../src/providers/daemon-net-update-io.js'
@@ -474,6 +474,78 @@ describe('NetDaemonUpdater', () => {
     u.stop()
     await vi.advanceTimersByTimeAsync(60_000)
     expect(update).toHaveBeenCalledTimes(3)
+  })
+
+  // 2026-11-18 (Walnut Health "Background errors keep happening"): every "update failed" error of 3
+  // days on a dev host was its link dropping during the ~100 MB upload, in the same millisecond.
+  // Nothing changed on the host and the next connection tried again, so it is a postponement, as the
+  // SSH path's stage failures are; a link that cuts LINK_CUTS_BEFORE_FAILURE tries in a row is a failure.
+  it('an upload the link cut is postponed, not an error, until the link cuts it again and again', async () => {
+    vi.useFakeTimers()
+    const error = vi.spyOn(log.session, 'error')
+    const conn = link()
+    const update = vi.fn(async () => {
+      ;(conn as { connected: boolean }).connected = false
+      throw Object.assign(new Error('Daemon update upload failed; the installed service was not changed'), { name: 'DaemonUpdateStageError' })
+    })
+    const { u } = updater({ update, cooldownMs: 1_000 }, conn)
+    const failedLines = () => error.mock.calls.filter(([m]) => String(m).startsWith('DaemonConnection: host network daemon update failed'))
+    u.schedule(0)
+    for (let cut = 1; cut < LINK_CUTS_BEFORE_FAILURE; cut++) {
+      await vi.advanceTimersByTimeAsync(5)
+      expect(update).toHaveBeenCalledTimes(cut)
+      expect(u.state.phase).toBe('postponed')
+      expect(u.state.message).toContain('the link dropped')
+      expect(failedLines()).toHaveLength(0)
+      // The link comes back; the next try waits out the cooldown (each try uploads the file again).
+      ;(conn as { connected: boolean }).connected = true
+      u.schedule(0)
+      await vi.advanceTimersByTimeAsync(5)
+      expect(update).toHaveBeenCalledTimes(cut)
+      // The cooldown skip asks again when it ends (and 5 s more).
+      await vi.advanceTimersByTimeAsync(6_100)
+    }
+    await vi.advanceTimersByTimeAsync(5)
+    expect(update).toHaveBeenCalledTimes(LINK_CUTS_BEFORE_FAILURE)
+    expect(u.state.phase).toBe('failed')
+    expect(failedLines()).toHaveLength(1)
+    u.stop()
+  })
+
+  it('a stage failure while the link is up (the upload checked wrong, no daemon to send) stays a failure', async () => {
+    const error = vi.spyOn(log.session, 'error')
+    const update = vi.fn(async () => {
+      throw Object.assign(new Error('Uploaded daemon version differs; the installed service was not changed'), { name: 'DaemonUpdateStageError' })
+    })
+    const { u } = updater({ update })
+    u.schedule(0)
+    await vi.waitFor(() => expect(u.state.phase).toBe('failed'))
+    expect(error.mock.calls.filter(([m]) => String(m).startsWith('DaemonConnection: host network daemon update failed'))).toHaveLength(1)
+    u.stop()
+  })
+
+  it('a try that goes through after cut uploads updates the host, with no failure on the way', async () => {
+    vi.useFakeTimers()
+    const conn = link()
+    let calls = 0
+    const update = vi.fn(async () => {
+      calls += 1
+      // Cut, cut, then applied.
+      if (calls === 3) return 'applied' as const
+      ;(conn as { connected: boolean }).connected = false
+      throw Object.assign(new Error('Daemon update upload failed; the installed service was not changed'), { name: 'DaemonUpdateStageError' })
+    })
+    const { u } = updater({ update: update as unknown as NetUpdaterDeps['update'], cooldownMs: 1_000 }, conn)
+    const phases: string[] = []
+    u.schedule(0)
+    for (let i = 0; i < 3; i++) {
+      await vi.advanceTimersByTimeAsync(5)
+      phases.push(u.state.phase)
+      ;(conn as { connected: boolean }).connected = true
+      await vi.advanceTimersByTimeAsync(1_100)
+    }
+    expect(phases).toEqual(['postponed', 'postponed', 'updated'])
+    u.stop()
   })
 
   // 2026-11-04 review: a build that stopped the host's daemon and then did not start was tried

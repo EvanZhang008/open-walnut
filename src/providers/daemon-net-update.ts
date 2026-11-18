@@ -40,7 +40,7 @@ import { sharedDaemonVerdict, walnutKeyOf, type DaemonServes } from './daemon-sh
 import { WALNUT_HOME } from '../constants.js'
 import { createNetUpdateIo, NetUpdateHeldError, NetUpdateUnansweredError, shq, type NetUpdateConn, type NetUpdateIoOptions } from './daemon-net-update-io.js'
 import { LaunchedNetUpdate, type DaemonUpdateView } from './daemon-net-update-record.js'
-import { afterUpdateFailure } from './daemon-update-readback.js'
+import { afterUpdateFailure, stageCutByLink } from './daemon-update-readback.js'
 import { BUILD_BACKOFF_MS, buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
 import type { DaemonLinkKind } from './daemon-update-paths.js'
 import { netDaemonSource, type NetUpdateSource } from './daemon-net-update-source.js'
@@ -205,6 +205,8 @@ export type NetUpdatePhase = 'idle' | 'checking' | 'running' | 'updated' | 'fail
 export interface NetUpdateState { phase: NetUpdatePhase; host: string; running: string | null; expected: string | null; message: string; at: number; skip?: NetUpdateSkip }
 
 const MAX_BACKOFF_MS = 6 * 3600_000
+/** Uploads the link cut while the host stays on one build before the next cut is a failure (Walnut Health's "3 times or more"). */
+export const LINK_CUTS_BEFORE_FAILURE = 3
 /** Answers that need no word in the log: nothing to do, or not this path's host. */
 /** Why another build's daemon on this link is kept (daemon-shared.ts), or null. */
 function sharedWhy(c: NetUpdateLink, expected: string | null, now: number): string | null {
@@ -229,6 +231,8 @@ export class NetDaemonUpdater {
   private lastAttempt: { expected: string; at: number } | null = null
   /** Failed tries of one build, counted per build. */
   private failed: { expected: string; count: number } | null = null
+  /** Uploads the link cut (stageCutByLink) while the host ran `from`: a postponement until LINK_CUTS_BEFORE_FAILURE. */
+  private linkCuts: { from: string | null; count: number } | null = null
   /** The build this server put on the host (its update answered ok). */
   private installed: string | null = null
   /** No automatic try before this (ms epoch, wall clock: it must run out across sleep): the backoff after a failed one. */
@@ -477,6 +481,20 @@ export class NetDaemonUpdater {
         return this.postpone(`the host's daemon is busy (${msg.split('\n')[0].slice(0, 200)})`,
           goesOver ? (this.d.recheckMs ?? 60_000) : this.d.cooldownMs)
       }
+      // The link dropped while the new daemon was put on the host (a cut upload, a command lost
+      // with the link): nothing changed there and the next connection tries again, as the SSH path
+      // postpones its stage failures. 2026-11-18: all 13 "update failed" errors of 3 days were such
+      // cuts, each in the same millisecond as the link's drop. A link that cuts every try is a failure.
+      if (!buildFailed && stageCutByLink(err, c.connected)) {
+        // Counted per running build, not per new one: a host whose link cuts every upload stays
+        // behind across deploys, and that is still said as a failure after a few.
+        const cuts = this.linkCuts?.from === from ? this.linkCuts.count + 1 : 1
+        this.linkCuts = { from, count: cuts }
+        if (cuts < LINK_CUTS_BEFORE_FAILURE) {
+          this.launched.outcome(expected, null)
+          return this.postpone(`the link dropped while the new daemon was put on the host, so nothing changed there (${msg.split('\n')[0].slice(0, 200)})`, this.d.cooldownMs)
+        }
+      }
       this.failed = { expected, count: this.failed?.expected === expected ? this.failed.count + 1 : 1 }
       const count = this.failed.count
       this.launched.outcome(expected, msg)
@@ -489,6 +507,7 @@ export class NetDaemonUpdater {
       return this.set('failed', msg)
     } finally { release?.() }
     this.failed = null
+    this.linkCuts = null
     this.retryAt = 0
     this.installed = expected
     this.launched.answered()

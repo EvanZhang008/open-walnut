@@ -80,6 +80,15 @@ export function afterUpdateFailure(error: unknown): string {
 }
 
 /**
+ * The update failed while the new daemon was put on the host (DaemonUpdateStageError: the service
+ * and the running daemon untouched) and the link is down: the drop cut it, not the host or the build.
+ * By name: tests replace daemon-service-update.ts with a double.
+ */
+export function stageCutByLink(error: unknown, connected: boolean): boolean {
+  return !connected && (error as { name?: unknown } | null)?.name === 'DaemonUpdateStageError'
+}
+
+/**
  * A record read back: did the new build come to serve, and is the build itself at fault (the day's
  * hold)? `nothingDone`: the host held or deferred it before it changed anything (a probation or
  * another runner at work, the install lock, launchd starting no jobs): no failure, asked again.
