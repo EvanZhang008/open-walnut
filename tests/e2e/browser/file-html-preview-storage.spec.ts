@@ -170,6 +170,8 @@ async function writeEverything(frame: FrameLocator) {
 test.beforeEach(async ({ page, baseURL }) => { await openApp(page, baseURL!) })
 
 test('every storage API keeps what the page wrote: rewrite, reopen, Walnut reload, app restart', async ({ page, browser, baseURL }) => {
+  // Four loads of Walnut and a second browser: past CI's 60 s on a busy runner (2026-11-18, 60 s exceeded).
+  test.setTimeout(180_000)
   const name = `storage-${Date.now()}.html`
   const abs = await scratchHtml(page, name, pageHtml(1))
   let explorer = await openFiles(page)
